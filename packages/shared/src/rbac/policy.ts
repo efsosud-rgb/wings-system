@@ -1,4 +1,4 @@
-import { PROTECTED_ROLES, ROLES, type RoleKey } from './roles.js';
+import { PROTECTED_ROLES, ROLE_KEYS, ROLES, type RoleKey } from './roles.js';
 import {
   ROLE_PERMISSIONS,
   SECTOR_MANAGER_GRANTS,
@@ -107,6 +107,15 @@ export function roleAssignmentDenial(
   if (PROTECTED_ROLES.includes(targetRole)) return 'protected_role';
   if (ROLES[targetRole].rank >= ROLES[actor.role].rank) return 'role_rank_too_high';
   return null;
+}
+
+/**
+ * Roles this actor may grant, in rank order. The form uses it to build the
+ * dropdown; the API checks the same rule again on submit, so a tampered form
+ * gains nothing.
+ */
+export function assignableRoles(actor: Actor, targetEmployeeId?: string): RoleKey[] {
+  return ROLE_KEYS.filter((role) => roleAssignmentDenial(actor, role, targetEmployeeId) === null);
 }
 
 /** Whether login/logout of this role generates RH/DP time-clock entries. */

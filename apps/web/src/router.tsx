@@ -1,6 +1,7 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { AppShell } from './components/AppShell.js';
 import { ProtectedRoute } from './components/ProtectedRoute.js';
+import { EmployeeFormPage } from './pages/EmployeeFormPage.js';
 import { EmployeesPage } from './pages/EmployeesPage.js';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage.js';
 import { LoginPage } from './pages/LoginPage.js';
@@ -23,6 +24,8 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="/funcionarios" replace /> },
       { path: 'funcionarios', element: <EmployeesPage /> },
+      { path: 'funcionarios/novo', element: <EmployeeFormPage /> },
+      { path: 'funcionarios/:id', element: <EmployeeFormPage /> },
     ],
   },
   { path: '*', element: <NotFoundPage /> },

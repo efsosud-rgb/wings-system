@@ -303,3 +303,204 @@ a {
   border-radius: 8px;
   padding: 20px;
 }
+
+/* ---------- list, filters and table ---------- */
+.page-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.btn-inline {
+  width: auto;
+  text-decoration: none;
+  display: inline-block;
+}
+
+.filters {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+  background: var(--wings-card);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th {
+  text-align: left;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--wings-faint);
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--wings-border);
+}
+
+.table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--wings-border);
+  vertical-align: top;
+}
+
+.table tr:last-child td {
+  border-bottom: none;
+}
+
+.table a {
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.cell-sub {
+  color: var(--wings-faint);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.tag {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(233, 82, 40, 0.14);
+  color: var(--wings-accent);
+}
+
+.status {
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 3px 8px;
+  border: 1px solid;
+}
+
+.status-active {
+  color: var(--wings-success);
+  background: rgba(52, 211, 153, 0.1);
+  border-color: rgba(52, 211, 153, 0.3);
+}
+
+.status-inactive {
+  color: var(--wings-faint);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--wings-border);
+}
+
+.status-on_leave {
+  color: var(--wings-accent);
+  background: rgba(233, 82, 40, 0.12);
+  border-color: rgba(233, 82, 40, 0.3);
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 16px;
+  font-size: 13px;
+}
+
+.pagination .btn {
+  width: auto;
+}
+
+/* ---------- form blocks ---------- */
+.block {
+  border: 1px solid var(--wings-border);
+  background: var(--wings-card);
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.block legend {
+  padding: 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--wings-accent);
+  font-weight: 700;
+}
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0 20px;
+}
+
+.grid-3 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.readonly p {
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+.input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.input-row .btn {
+  width: auto;
+  white-space: nowrap;
+}
+
+.reveal {
+  color: var(--wings-success);
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.checkbox-field input {
+  margin-top: 3px;
+}
+
+.checkbox-field small {
+  display: block;
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.form-actions .btn {
+  width: auto;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assertMatrixComplete, type PermissionKey } from './permissions.js';
-import { can, roleAssignmentDenial, tracksTime, type Actor } from './policy.js';
+import { assignableRoles, can, roleAssignmentDenial, tracksTime, type Actor } from './policy.js';
 import { ROLE_KEYS, type RoleKey } from './roles.js';
 import type { SectorSlug } from './sectors.js';
 
@@ -147,5 +147,30 @@ describe('time tracking exemptions', () => {
   it('exempts Admin Master and Diretoria only', () => {
     const exempt = ROLE_KEYS.filter((role) => !tracksTime(role));
     expect(exempt).toEqual(['admin_master', 'diretoria']);
+  });
+});
+
+describe('assignableRoles', () => {
+  it('lets Admin Master grant anything except their own record', () => {
+    expect(assignableRoles(adminMaster)).toHaveLength(12);
+    expect(assignableRoles(adminMaster, adminMaster.employeeId)).toHaveLength(0);
+  });
+
+  it('never offers Admin Master or Diretoria to anyone else', () => {
+    for (const role of assignableRoles(gerente)) {
+      expect(['admin_master', 'diretoria']).not.toContain(role);
+    }
+  });
+
+  it('offers only roles below the actor rank', () => {
+    const offered = assignableRoles(gerente);
+    expect(offered).toContain('vendedor_expansao');
+    expect(offered).not.toContain('gerente_comercial');
+  });
+
+  it('offers nothing to someone without the permission to assign', () => {
+    // A plain employee has no roles.assign grant; the form would be empty and
+    // the API would refuse anyway.
+    expect(assignableRoles(juridico)).not.toContain('admin_master');
   });
 });
