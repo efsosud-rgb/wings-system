@@ -1,0 +1,6 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+allowBuilds:
+  # esbuild ships a prebuilt binary and needs its install script to run (used by Vite).
+  esbuild: true

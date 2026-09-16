@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Secrets — never commit real values. Only .env.example belongs in git.
+.env
+.env.*
+!.env.example
+
+.DS_Store
+*.log
+.vite/
+.pnpm-store/

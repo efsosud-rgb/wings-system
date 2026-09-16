@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "noEmit": true,
+    "types": ["node"]
+  },
+  // @wings/shared is consumed through its built dist/ types (pnpm build is topological),
+  // so no TS project reference is needed here.
+  "include": ["src/**/*.ts"]
+}

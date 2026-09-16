@@ -1,0 +1,24 @@
+# Local development database only.
+# Staging and production use a separate PostgreSQL instance managed by Coolify,
+# which is never the n8n database.
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: wings-system-db-dev
+    environment:
+      POSTGRES_USER: wings
+      POSTGRES_PASSWORD: wings_dev_only
+      POSTGRES_DB: wings_system
+    # Bound to localhost only: never expose a database port on 0.0.0.0.
+    ports:
+      - '127.0.0.1:5433:5432'
+    volumes:
+      - wings-dev-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U wings -d wings_system']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  wings-dev-db:

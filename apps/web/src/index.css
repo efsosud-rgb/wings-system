@@ -1,0 +1,27 @@
+/* Wings Company brand basics: black surfaces, orange accent. */
+:root {
+  --wings-black: #000000;
+  --wings-surface: #0a0a0a;
+  --wings-card: #121212;
+  --wings-border: #262626;
+  --wings-text: #e5e5e5;
+  --wings-muted: #a3a3a3;
+  --wings-accent: #e95228;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--wings-black);
+  color: var(--wings-text);
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+  min-height: 100vh;
+}
