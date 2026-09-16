@@ -49,9 +49,9 @@ beforeEach(() => {
   outbox = [];
 });
 
-type Role = Parameters<typeof createEmployee>[1] extends { role?: infer R } ? R : never;
+type EmployeeOptions = NonNullable<Parameters<typeof createEmployee>[1]>;
 
-async function sessionFor(options: Parameters<typeof createEmployee>[1]) {
+async function sessionFor(options: EmployeeOptions) {
   const employee = await createEmployee(db, options);
   const login = await app.inject({
     method: 'POST',

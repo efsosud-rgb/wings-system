@@ -334,18 +334,19 @@ export async function updateEmployee(
   const patch: Record<string, unknown> = { updatedAt: new Date() };
   const changed: string[] = [];
 
-  if (input.fullName !== undefined) ((patch.fullName = input.fullName), changed.push('fullName'));
-  if (input.birthDate !== undefined)
-    ((patch.birthDate = input.birthDate), changed.push('birthDate'));
-  if (input.phone !== undefined) ((patch.phone = input.phone), changed.push('phone'));
-  if (input.email !== undefined) ((patch.email = input.email), changed.push('email'));
-  if (input.cargo !== undefined) ((patch.cargo = input.cargo), changed.push('cargo'));
-  if (input.admissionDate !== undefined) {
-    ((patch.admissionDate = input.admissionDate), changed.push('admissionDate'));
-  }
-  if (input.isSectorManager !== undefined) {
-    ((patch.isSectorManager = input.isSectorManager), changed.push('isSectorManager'));
-  }
+  /** Records a column change and remembers the field name for the audit entry. */
+  const setField = (column: string, value: unknown): void => {
+    patch[column] = value;
+    changed.push(column);
+  };
+
+  if (input.fullName !== undefined) setField('fullName', input.fullName);
+  if (input.birthDate !== undefined) setField('birthDate', input.birthDate);
+  if (input.phone !== undefined) setField('phone', input.phone);
+  if (input.email !== undefined) setField('email', input.email);
+  if (input.cargo !== undefined) setField('cargo', input.cargo);
+  if (input.admissionDate !== undefined) setField('admissionDate', input.admissionDate);
+  if (input.isSectorManager !== undefined) setField('isSectorManager', input.isSectorManager);
   if (input.cpf !== undefined) {
     patch.cpfEncrypted = cpfCrypto.encrypt(input.cpf);
     patch.cpfIndex = nextCpfIndex;
