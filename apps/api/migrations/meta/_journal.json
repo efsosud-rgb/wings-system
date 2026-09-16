@@ -43,6 +43,13 @@
       "when": 1789585878297,
       "tag": "0005_ads_budget_guardrails",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789591901436,
+      "tag": "0006_ad_sets",
+      "breakpoints": true
     }
   ]
 }

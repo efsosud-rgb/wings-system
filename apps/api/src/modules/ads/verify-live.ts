@@ -76,6 +76,7 @@ async function main() {
 
   // --- 2. campaigns ---------------------------------------------------------
   const campaigns = await client.listCampaigns();
+  const platformAdSets = await client.listAdSets();
   const active = campaigns.filter((c) => c.status === 'ACTIVE');
   console.warn(`\n[2] campaigns: ${campaigns.length} total, ${active.length} active`);
   for (const campaign of campaigns.slice(0, 10)) {
@@ -88,6 +89,23 @@ async function main() {
     console.warn(`    ${campaign.status.padEnd(8)} ${budget.padEnd(28)} ${campaign.name}`);
   }
   if (campaigns.length > 10) console.warn(`    … and ${campaigns.length - 10} more`);
+
+  const activeCampaignIds = new Set(active.map((c) => c.id));
+  const deliveringAdSets = platformAdSets.filter(
+    (adSet) => adSet.status === 'ACTIVE' && activeCampaignIds.has(adSet.campaignId),
+  );
+  console.warn(
+    `\n[2b] ad sets: ${platformAdSets.length} total, ${deliveringAdSets.length} able to deliver (active under an active campaign)`,
+  );
+  for (const adSet of deliveringAdSets.slice(0, 8)) {
+    const budget =
+      adSet.dailyBudgetCents === null
+        ? adSet.lifetimeBudgetCents === null
+          ? 'sem orçamento'
+          : `lifetime ${formatBrl(adSet.lifetimeBudgetCents)}`
+        : `${formatBrl(adSet.dailyBudgetCents)}/dia`;
+    console.warn(`    ${budget.padEnd(22)} ${adSet.name.slice(0, 44)}`);
+  }
 
   // --- 3. insights ----------------------------------------------------------
   const periodStart = `${new Date().toISOString().slice(0, 7)}-01`;
@@ -120,6 +138,7 @@ async function main() {
     const state = await getPeriodState(harness.db, row.id, periodStart);
 
     console.warn(`    campaigns synced:    ${result.campaignsSynced}`);
+    console.warn(`    ad sets synced:      ${result.adSetsSynced}`);
     console.warn(`    spend rows recorded: ${result.spendRowsRecorded}`);
     console.warn(`    spent:               ${formatBrl(result.spentCents)}`);
     console.warn(`    committed (exposure):${formatBrl(result.committedCents)}`);

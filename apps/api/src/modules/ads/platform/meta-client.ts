@@ -9,6 +9,7 @@ import type {
   CampaignStatus,
   MutationOutcome,
   PlatformAccount,
+  PlatformAdSet,
   PlatformCampaign,
   SpendRow,
 } from './types.js';
@@ -170,6 +171,42 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
         dailyBudgetCents: daily === 0 ? null : daily,
         lifetimeBudgetCents: lifetime === 0 ? null : lifetime,
         spendCents: 0,
+      };
+    });
+  }
+
+  async listAdSets(): Promise<PlatformAdSet[]> {
+    const body = await this.get<{
+      data: {
+        id: string;
+        name: string;
+        status: string;
+        campaign_id: string;
+        daily_budget?: string;
+        lifetime_budget?: string;
+      }[];
+    }>(`${this.accountId}/adsets`, {
+      fields: 'id,name,status,campaign_id,daily_budget,lifetime_budget',
+      limit: '500',
+    });
+
+    return body.data.map((adSet) => {
+      const daily =
+        adSet.daily_budget === undefined
+          ? null
+          : centsFromMinorUnitString(adSet.daily_budget, 'adset.daily_budget');
+      const lifetime =
+        adSet.lifetime_budget === undefined
+          ? null
+          : centsFromMinorUnitString(adSet.lifetime_budget, 'adset.lifetime_budget');
+      return {
+        id: adSet.id,
+        campaignId: adSet.campaign_id,
+        name: adSet.name,
+        status: adSet.status as CampaignStatus,
+        // Meta reports "0" for a budget that lives at the other level.
+        dailyBudgetCents: daily === 0 ? null : daily,
+        lifetimeBudgetCents: lifetime === 0 ? null : lifetime,
       };
     });
   }

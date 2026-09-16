@@ -4,10 +4,16 @@ import {
   adAccounts,
   adCampaigns,
   adGuardrailEvents,
+  adSets,
   adSpendSnapshots,
   budgetPeriods,
 } from '../../db/schema/index.js';
-import { applyReportedSpend, engageKillSwitch, exposureOf, remainingDays } from './budget-guard.js';
+import {
+  applyReportedSpend,
+  campaignExposure,
+  engageKillSwitch,
+  remainingDays,
+} from './budget-guard.js';
 import type { AdsPlatformClient } from './platform/types.js';
 
 /**
@@ -32,6 +38,7 @@ export function periodMonthOf(now: Date, timezone = 'America/Sao_Paulo'): string
 
 export interface ReconcileResult {
   campaignsSynced: number;
+  adSetsSynced: number;
   spendRowsRecorded: number;
   spentCents: number;
   committedCents: number;
@@ -40,14 +47,27 @@ export interface ReconcileResult {
   outOfBandChangeDetected: boolean;
 }
 
-/** Mirrors the platform's campaigns into our tables. Read-only against Meta. */
+/**
+ * Mirrors campaigns and their ad sets. Read-only against the platform.
+ *
+ * The budget level is recorded per campaign, because an account mixes CBO and
+ * ABO campaigns and the exposure calculation must follow the money.
+ */
 export async function syncCampaigns(
   db: Database,
   client: AdsPlatformClient,
   adAccountId: string,
   now = new Date(),
-): Promise<number> {
+): Promise<{ campaigns: number; adSets: number }> {
   const campaigns = await client.listCampaigns();
+  const platformAdSets = await client.listAdSets();
+
+  const adSetsByCampaign = new Map<string, typeof platformAdSets>();
+  for (const adSet of platformAdSets) {
+    const list = adSetsByCampaign.get(adSet.campaignId) ?? [];
+    list.push(adSet);
+    adSetsByCampaign.set(adSet.campaignId, list);
+  }
 
   for (const campaign of campaigns) {
     await db
@@ -59,6 +79,7 @@ export async function syncCampaigns(
         status: campaign.status,
         dailyBudgetCents: campaign.dailyBudgetCents ?? 0,
         lifetimeBudgetCents: campaign.lifetimeBudgetCents,
+        budgetLevel: budgetLevelOf(campaign, adSetsByCampaign.get(campaign.id) ?? []),
         lastSyncedAt: now,
       })
       .onConflictDoUpdate({
@@ -68,12 +89,63 @@ export async function syncCampaigns(
           status: campaign.status,
           dailyBudgetCents: campaign.dailyBudgetCents ?? 0,
           lifetimeBudgetCents: campaign.lifetimeBudgetCents,
+          budgetLevel: budgetLevelOf(campaign, adSetsByCampaign.get(campaign.id) ?? []),
           lastSyncedAt: now,
           updatedAt: now,
         },
       });
   }
-  return campaigns.length;
+
+  // Ad sets are stored under the campaign row we just upserted.
+  const stored = await db.query.adCampaigns.findMany({
+    where: eq(adCampaigns.adAccountId, adAccountId),
+  });
+  const idByExternal = new Map(stored.map((campaign) => [campaign.externalId, campaign.id]));
+
+  let adSetCount = 0;
+  for (const adSet of platformAdSets) {
+    const campaignId = idByExternal.get(adSet.campaignId);
+    if (!campaignId) continue; // ad set of a campaign outside this account
+    await db
+      .insert(adSets)
+      .values({
+        campaignId,
+        externalId: adSet.id,
+        name: adSet.name,
+        status: adSet.status,
+        dailyBudgetCents: adSet.dailyBudgetCents ?? 0,
+        lifetimeBudgetCents: adSet.lifetimeBudgetCents,
+        lastSyncedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [adSets.campaignId, adSets.externalId],
+        set: {
+          name: adSet.name,
+          status: adSet.status,
+          dailyBudgetCents: adSet.dailyBudgetCents ?? 0,
+          lifetimeBudgetCents: adSet.lifetimeBudgetCents,
+          lastSyncedAt: now,
+          updatedAt: now,
+        },
+      });
+    adSetCount += 1;
+  }
+
+  return { campaigns: campaigns.length, adSets: adSetCount };
+}
+
+/** CBO when the campaign holds a budget, ABO when its ad sets do. */
+function budgetLevelOf(
+  campaign: { dailyBudgetCents: number | null; lifetimeBudgetCents: number | null },
+  adSetsOfCampaign: { dailyBudgetCents: number | null; lifetimeBudgetCents: number | null }[],
+): 'campaign' | 'ad_set' | 'none' {
+  if ((campaign.dailyBudgetCents ?? 0) > 0 || (campaign.lifetimeBudgetCents ?? 0) > 0) {
+    return 'campaign';
+  }
+  const adSetHasBudget = adSetsOfCampaign.some(
+    (adSet) => (adSet.dailyBudgetCents ?? 0) > 0 || (adSet.lifetimeBudgetCents ?? 0) > 0,
+  );
+  return adSetHasBudget ? 'ad_set' : 'none';
 }
 
 /**
@@ -98,7 +170,7 @@ export async function reconcileAccount(
   });
   if (!period) throw new Error(`no budget period open for ${periodMonth}`);
 
-  const campaignsSynced = await syncCampaigns(db, client, adAccountId, now);
+  const synced = await syncCampaigns(db, client, adAccountId, now);
   const spendRows = await client.getSpend(periodMonth);
 
   const campaigns = await db.query.adCampaigns.findMany({
@@ -134,9 +206,29 @@ export async function reconcileAccount(
   // Re-derive commitment from what is really running on the platform. If
   // someone changed budgets directly in Ads Manager, this is where we find out.
   const daysLeft = remainingDays(now, account.timezone);
-  const desiredCommitted = campaigns
-    .filter((campaign) => campaign.status === 'ACTIVE')
-    .reduce((total, campaign) => total + exposureOf(campaign.dailyBudgetCents, daysLeft), 0);
+  const allAdSets = await db.query.adSets.findMany();
+  const adSetsByCampaignId = new Map<string, typeof allAdSets>();
+  for (const adSet of allAdSets) {
+    const list = adSetsByCampaignId.get(adSet.campaignId) ?? [];
+    list.push(adSet);
+    adSetsByCampaignId.set(adSet.campaignId, list);
+  }
+
+  // Exposure follows the budget, whether it sits on the campaign (CBO) or on
+  // its ad sets (ABO).
+  const desiredCommitted = campaigns.reduce(
+    (total, campaign) =>
+      total +
+      campaignExposure(
+        {
+          campaignStatus: campaign.status,
+          campaignDailyBudgetCents: campaign.dailyBudgetCents,
+          adSets: adSetsByCampaignId.get(campaign.id) ?? [],
+        },
+        daysLeft,
+      ),
+    0,
+  );
 
   const allowed = Math.min(period.usableCents, Math.max(0, period.capCents - spentCents));
   const outOfBandChangeDetected = desiredCommitted > allowed;
@@ -166,7 +258,8 @@ export async function reconcileAccount(
   }
 
   return {
-    campaignsSynced,
+    campaignsSynced: synced.campaigns,
+    adSetsSynced: synced.adSets,
     spendRowsRecorded: spendRows.length,
     spentCents,
     committedCents,

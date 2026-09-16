@@ -60,7 +60,7 @@ describe('syncing campaigns from the platform', () => {
     });
 
     const synced = await syncCampaigns(db, client, id, NOW);
-    expect(synced).toBe(2);
+    expect(synced.campaigns).toBe(2);
 
     const stored = await db.query.adCampaigns.findMany({ where: eq(adCampaigns.adAccountId, id) });
     expect(stored).toHaveLength(2);
@@ -204,5 +204,85 @@ describe('dead-man switch', () => {
       now: new Date(NOW.getTime() + 30 * 60_000),
     });
     expect(stale.some((entry) => entry.accountId === id)).toBe(false);
+  });
+});
+
+describe('ABO campaigns: the budget lives in the ad sets', () => {
+  it('counts ad-set budgets as exposure when the campaign has none', async () => {
+    const id = await account();
+    const client = new FakeMetaClient({
+      campaigns: [{ id: 'abo1', name: 'ABO Institucional', status: 'ACTIVE' }],
+      adSets: [
+        { id: 'as1', campaignId: 'abo1', name: 'Interesses Franquia', dailyBudgetCents: 2000 },
+        { id: 'as2', campaignId: 'abo1', name: 'Alto Padrão', dailyBudgetCents: 1500 },
+      ],
+    });
+
+    const result = await reconcileAccount(db, client, id, NOW);
+
+    expect(result.adSetsSynced).toBe(2);
+    // R$35,00/day across two ad sets, not the R$0 the old model reported.
+    expect(result.committedCents).toBe(3500 * remainingDays(NOW) * 1.25);
+  });
+
+  it('records where each campaign keeps its budget', async () => {
+    const id = await account();
+    const client = new FakeMetaClient({
+      campaigns: [
+        { id: 'cbo1', name: 'CBO', status: 'ACTIVE', dailyBudgetCents: 4000 },
+        { id: 'abo1', name: 'ABO', status: 'ACTIVE' },
+        { id: 'none1', name: 'Sem orçamento', status: 'PAUSED' },
+      ],
+      adSets: [{ id: 'as1', campaignId: 'abo1', name: 'Conjunto', dailyBudgetCents: 1000 }],
+    });
+
+    await reconcileAccount(db, client, id, NOW);
+    const stored = await db.query.adCampaigns.findMany({ where: eq(adCampaigns.adAccountId, id) });
+    const level = (external: string) =>
+      stored.find((campaign) => campaign.externalId === external)?.budgetLevel;
+
+    expect(level('cbo1')).toBe('campaign');
+    expect(level('abo1')).toBe('ad_set');
+    expect(level('none1')).toBe('none');
+  });
+
+  it('ignores ad sets under a paused campaign, which cannot deliver', async () => {
+    const id = await account();
+    const client = new FakeMetaClient({
+      campaigns: [{ id: 'abo1', name: 'ABO pausada', status: 'PAUSED' }],
+      adSets: [
+        // Exactly the shape found on the real account: ACTIVE ad sets beneath
+        // a PAUSED campaign, which spend nothing.
+        { id: 'as1', campaignId: 'abo1', name: 'Ativo', status: 'ACTIVE', dailyBudgetCents: 2000 },
+      ],
+    });
+
+    const result = await reconcileAccount(db, client, id, NOW);
+    expect(result.adSetsSynced).toBe(1);
+    expect(result.committedCents).toBe(0);
+  });
+
+  it('prefers the campaign budget when the campaign owns it', async () => {
+    const id = await account();
+    const client = new FakeMetaClient({
+      campaigns: [{ id: 'cbo1', name: 'CBO', status: 'ACTIVE', dailyBudgetCents: 3000 }],
+      adSets: [{ id: 'as1', campaignId: 'cbo1', name: 'Conjunto', dailyBudgetCents: 9999 }],
+    });
+
+    const result = await reconcileAccount(db, client, id, NOW);
+    // The CBO budget governs; ad-set figures must not be added on top.
+    expect(result.committedCents).toBe(3000 * remainingDays(NOW) * 1.25);
+  });
+
+  it('detects an ad-set budget raised outside the system', async () => {
+    const id = await account();
+    const client = new FakeMetaClient({
+      campaigns: [{ id: 'abo1', name: 'ABO', status: 'ACTIVE' }],
+      adSets: [{ id: 'as1', campaignId: 'abo1', name: 'Conjunto', dailyBudgetCents: 60_000 }],
+    });
+
+    const result = await reconcileAccount(db, client, id, NOW);
+    expect(result.outOfBandChangeDetected).toBe(true);
+    expect(result.killSwitchEngaged).toBe(true);
   });
 });

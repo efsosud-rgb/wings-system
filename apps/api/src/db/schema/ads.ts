@@ -35,6 +35,9 @@ export const adCampaignStatusEnum = pgEnum('ad_campaign_status', [
   'ARCHIVED',
 ]);
 
+/** Where a campaign's budget actually lives: CBO (campaign) or ABO (ad set). */
+export const budgetLevelEnum = pgEnum('ad_budget_level', ['campaign', 'ad_set', 'none']);
+
 export const changeKindEnum = pgEnum('ad_change_kind', [
   'set_daily_budget',
   'pause_campaign',
@@ -142,6 +145,12 @@ export const adCampaigns = pgTable(
     status: adCampaignStatusEnum('status').notNull().default('PAUSED'),
     dailyBudgetCents: bigint('daily_budget_cents', { mode: 'number' }).notNull().default(0),
     lifetimeBudgetCents: bigint('lifetime_budget_cents', { mode: 'number' }),
+    /**
+     * Which level owns the money. Meta accounts mix both: a CBO campaign
+     * carries its own budget, while an ABO campaign has none and its ad sets
+     * do. Exposure must follow the budget, or an ABO campaign would look free.
+     */
+    budgetLevel: budgetLevelEnum('budget_level').notNull().default('none'),
     lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -149,6 +158,30 @@ export const adCampaigns = pgTable(
   (table) => [
     uniqueIndex('ad_campaigns_account_external_uq').on(table.adAccountId, table.externalId),
   ],
+);
+
+/**
+ * Ad sets (ABO). An ad set only delivers when both it and its campaign are
+ * active, which is why the live account showed ACTIVE ad sets spending
+ * nothing under PAUSED campaigns.
+ */
+export const adSets = pgTable(
+  'ad_sets',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    campaignId: uuid('campaign_id')
+      .notNull()
+      .references(() => adCampaigns.id, { onDelete: 'cascade' }),
+    externalId: text('external_id').notNull(),
+    name: text('name').notNull(),
+    status: adCampaignStatusEnum('status').notNull().default('PAUSED'),
+    dailyBudgetCents: bigint('daily_budget_cents', { mode: 'number' }).notNull().default(0),
+    lifetimeBudgetCents: bigint('lifetime_budget_cents', { mode: 'number' }),
+    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex('ad_sets_campaign_external_uq').on(table.campaignId, table.externalId)],
 );
 
 /**

@@ -4,6 +4,7 @@ import type {
   AdsPlatformClient,
   MutationOutcome,
   PlatformAccount,
+  PlatformAdSet,
   PlatformCampaign,
   SpendRow,
 } from './types.js';
@@ -28,6 +29,16 @@ export interface FakeCampaignSeed {
   id: string;
   name: string;
   status?: 'ACTIVE' | 'PAUSED';
+  /** Campaign-level budget (CBO). Omit for an ABO campaign. */
+  dailyBudgetCents?: Cents;
+}
+
+export interface FakeAdSetSeed {
+  id: string;
+  campaignId: string;
+  name: string;
+  status?: 'ACTIVE' | 'PAUSED';
+  /** Ad-set level budget (ABO). */
   dailyBudgetCents?: Cents;
 }
 
@@ -43,6 +54,7 @@ export interface FakeMetaOptions {
   accountId?: string;
   spendCapCents?: Cents | null;
   campaigns?: FakeCampaignSeed[];
+  adSets?: FakeAdSetSeed[];
   /** Fraction of the daily budget actually delivered, default 1.0 (max 1.25). */
   overdeliveryFactor?: number;
   /** How long reported spend trails actual spend. */
@@ -68,6 +80,7 @@ export class FakeMetaClient implements AdsPlatformClient {
   private readonly overdeliveryFactor: number;
   private readonly reportingLagMinutes: number;
   private readonly now: () => Date;
+  private readonly adSets = new Map<string, PlatformAdSet & { actualSpendCents: Cents }>();
   private readonly failures: InjectedFailure[] = [];
   private capReached = false;
 
@@ -97,6 +110,18 @@ export class FakeMetaClient implements AdsPlatformClient {
         dailySpend: new Map(),
       });
     }
+
+    for (const seed of options.adSets ?? []) {
+      this.adSets.set(seed.id, {
+        id: seed.id,
+        campaignId: seed.campaignId,
+        name: seed.name,
+        status: seed.status ?? 'ACTIVE',
+        dailyBudgetCents: seed.dailyBudgetCents ?? null,
+        lifetimeBudgetCents: null,
+        actualSpendCents: 0,
+      });
+    }
   }
 
   /** Queues a failure for the next mutating call. */
@@ -111,7 +136,13 @@ export class FakeMetaClient implements AdsPlatformClient {
   simulateDay(date: string): void {
     for (const campaign of this.campaigns.values()) {
       if (campaign.status !== 'ACTIVE' || this.capReached) continue;
-      const budget = campaign.dailyBudgetCents ?? 0;
+      // A campaign without its own budget (ABO) delivers through its ad sets;
+      // an ad set only spends while its campaign is active.
+      const ownBudget = campaign.dailyBudgetCents ?? 0;
+      const adSetBudget = [...this.adSets.values()]
+        .filter((adSet) => adSet.campaignId === campaign.id && adSet.status === 'ACTIVE')
+        .reduce((total, adSet) => total + (adSet.dailyBudgetCents ?? 0), 0);
+      const budget = ownBudget > 0 ? ownBudget : adSetBudget;
       if (budget <= 0) continue;
 
       let delivered = Math.round(budget * this.overdeliveryFactor);
@@ -187,6 +218,11 @@ export class FakeMetaClient implements AdsPlatformClient {
       amountSpentCents: this.reportedTotalSpendCents(),
       capReached: this.capReached,
     };
+  }
+
+  async listAdSets(): Promise<PlatformAdSet[]> {
+    this.calls.push({ method: 'listAdSets', args: [] });
+    return [...this.adSets.values()].map(({ actualSpendCents: _ignored, ...adSet }) => adSet);
   }
 
   async listCampaigns(): Promise<PlatformCampaign[]> {

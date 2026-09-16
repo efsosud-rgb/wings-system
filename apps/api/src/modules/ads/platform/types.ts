@@ -21,6 +21,16 @@ export interface PlatformCampaign {
   spendCents: Cents;
 }
 
+export interface PlatformAdSet {
+  id: string;
+  campaignId: string;
+  name: string;
+  status: CampaignStatus;
+  /** Ad-set level budget in cents (ABO). Null when the campaign owns it (CBO). */
+  dailyBudgetCents: Cents | null;
+  lifetimeBudgetCents: Cents | null;
+}
+
 export interface PlatformAccount {
   id: string;
   currency: string;
@@ -58,6 +68,8 @@ export interface AdsPlatformClient {
 
   getAccount(): Promise<PlatformAccount>;
   listCampaigns(): Promise<PlatformCampaign[]>;
+  /** Every ad set in the account, with the campaign each belongs to. */
+  listAdSets(): Promise<PlatformAdSet[]>;
   getCampaign(campaignId: string): Promise<PlatformCampaign | null>;
   /** Reported spend per campaign per day, for reconciliation. */
   getSpend(sinceDate: string): Promise<SpendRow[]>;

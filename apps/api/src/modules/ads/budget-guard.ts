@@ -6,6 +6,7 @@ import {
   adCampaigns,
   adChangeRequests,
   adGuardrailEvents,
+  adSets,
   budgetCapHistory,
   budgetPeriods,
 } from '../../db/schema/index.js';
@@ -28,6 +29,7 @@ import { META_DAILY_OVERDELIVERY_FACTOR } from './platform/fixtures.js';
 export const OVERDELIVERY_FACTOR = META_DAILY_OVERDELIVERY_FACTOR;
 
 export type GuardRefusal =
+  | 'budget_not_at_campaign_level'
   | 'kill_switch_engaged'
   | 'cap_would_be_exceeded'
   | 'usable_would_be_exceeded'
@@ -70,6 +72,42 @@ export function remainingDays(now: Date, timezone = 'America/Sao_Paulo'): number
  */
 export function exposureOf(dailyBudgetCents: Cents, daysLeft: number): Cents {
   return Math.round(dailyBudgetCents * daysLeft * OVERDELIVERY_FACTOR);
+}
+
+export interface ExposureInput {
+  campaignStatus: string;
+  campaignDailyBudgetCents: number;
+  adSets: { status: string; dailyBudgetCents: number; lifetimeBudgetCents?: number | null }[];
+}
+
+/**
+ * Exposure of one campaign for the rest of the period.
+ *
+ * Meta accounts mix two budget models, and the money follows whichever one the
+ * campaign uses:
+ *   - CBO: the campaign carries the budget;
+ *   - ABO: the campaign carries none and its ad sets do.
+ *
+ * An ad set only delivers while its campaign is active, so a paused campaign
+ * contributes nothing no matter how many active ad sets sit beneath it. Reading
+ * only the campaign budget — as the first version did — would report an ABO
+ * campaign as free while it spent real money.
+ */
+export function campaignExposure(input: ExposureInput, daysLeft: number): Cents {
+  if (input.campaignStatus !== 'ACTIVE') return 0;
+
+  if (input.campaignDailyBudgetCents > 0) {
+    return exposureOf(input.campaignDailyBudgetCents, daysLeft);
+  }
+
+  return input.adSets
+    .filter((adSet) => adSet.status === 'ACTIVE')
+    .reduce((total, adSet) => {
+      if (adSet.dailyBudgetCents > 0) return total + exposureOf(adSet.dailyBudgetCents, daysLeft);
+      // A lifetime budget is counted in full: the worst case is that all of it
+      // is spent before the period ends.
+      return total + (adSet.lifetimeBudgetCents ?? 0);
+    }, 0);
 }
 
 export function payloadHash(input: {
@@ -274,6 +312,35 @@ export async function reserveChange(
     }
 
     const daysLeft = remainingDays(now, account.timezone);
+    const campaignAdSets = await tx.query.adSets.findMany({
+      where: eq(adSets.campaignId, campaign.id),
+    });
+
+    const currentExposure = campaignExposure(
+      {
+        campaignStatus: campaign.status,
+        campaignDailyBudgetCents: campaign.dailyBudgetCents,
+        adSets: campaignAdSets,
+      },
+      daysLeft,
+    );
+
+    // ABO campaigns hold no budget of their own, so a campaign-level change
+    // would silently do nothing on the platform. Refuse it plainly until
+    // ad-set targeting exists.
+    if (input.kind === 'set_daily_budget' && campaign.budgetLevel === 'ad_set') {
+      await recordGuardrailEvent(db, input.adAccountId, 'implausible_amount', {
+        campaignId: input.campaignId,
+        note: 'campanha ABO: o orçamento fica no conjunto de anúncios',
+      });
+      return {
+        ok: false as const,
+        reason: 'budget_not_at_campaign_level' as const,
+        message:
+          'Esta campanha usa orçamento por conjunto de anúncios (ABO). Alterar o orçamento da campanha não teria efeito.',
+      };
+    }
+
     const fromBudget = campaign.status === 'ACTIVE' ? campaign.dailyBudgetCents : 0;
     let toBudget: number;
 
@@ -305,7 +372,19 @@ export async function reserveChange(
         break;
     }
 
-    const exposureDeltaCents = exposureOf(toBudget, daysLeft) - exposureOf(fromBudget, daysLeft);
+    // The "after" exposure: a pause zeroes the campaign, including its ad sets.
+    const nextExposure =
+      input.kind === 'pause_campaign'
+        ? 0
+        : campaignExposure(
+            {
+              campaignStatus: 'ACTIVE',
+              campaignDailyBudgetCents: toBudget,
+              adSets: campaignAdSets,
+            },
+            daysLeft,
+          );
+    const exposureDeltaCents = nextExposure - currentExposure;
     const newCommitted = current.committedCents + exposureDeltaCents;
 
     // Pre-checks give a precise reason; the constraints below are what

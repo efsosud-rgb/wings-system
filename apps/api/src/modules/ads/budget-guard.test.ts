@@ -6,6 +6,7 @@ import { adAccounts, adCampaigns, adGuardrailEvents } from '../../db/schema/inde
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import {
   applyReportedSpend,
+  campaignExposure,
   engageKillSwitch,
   exposureOf,
   getPeriodState,
@@ -432,4 +433,86 @@ describe('month boundaries', () => {
 
 beforeEach(async () => {
   // Each test builds its own accounts; nothing is shared between them.
+});
+
+describe('exposure follows the budget level', () => {
+  it('uses the campaign budget for CBO', () => {
+    expect(
+      campaignExposure(
+        { campaignStatus: 'ACTIVE', campaignDailyBudgetCents: 4000, adSets: [] },
+        10,
+      ),
+    ).toBe(exposureOf(4000, 10));
+  });
+
+  it('sums active ad sets for ABO', () => {
+    expect(
+      campaignExposure(
+        {
+          campaignStatus: 'ACTIVE',
+          campaignDailyBudgetCents: 0,
+          adSets: [
+            { status: 'ACTIVE', dailyBudgetCents: 2000 },
+            { status: 'ACTIVE', dailyBudgetCents: 1500 },
+            { status: 'PAUSED', dailyBudgetCents: 9999 },
+          ],
+        },
+        10,
+      ),
+    ).toBe(exposureOf(3500, 10));
+  });
+
+  it('returns zero for a paused campaign however many ad sets are active', () => {
+    expect(
+      campaignExposure(
+        {
+          campaignStatus: 'PAUSED',
+          campaignDailyBudgetCents: 0,
+          adSets: [{ status: 'ACTIVE', dailyBudgetCents: 5000 }],
+        },
+        10,
+      ),
+    ).toBe(0);
+  });
+
+  it('counts a lifetime budget in full, the worst case', () => {
+    expect(
+      campaignExposure(
+        {
+          campaignStatus: 'ACTIVE',
+          campaignDailyBudgetCents: 0,
+          adSets: [{ status: 'ACTIVE', dailyBudgetCents: 0, lifetimeBudgetCents: 25_000 }],
+        },
+        10,
+      ),
+    ).toBe(25_000);
+  });
+});
+
+describe('ABO campaigns refuse campaign-level budget changes', () => {
+  it('explains that the budget lives in the ad sets', async () => {
+    const meta = await makeAccount('meta');
+    const [campaign] = await db
+      .insert(adCampaigns)
+      .values({
+        adAccountId: meta,
+        externalId: `abo_${randomBytes(3).toString('hex')}`,
+        name: 'ABO',
+        status: 'ACTIVE',
+        dailyBudgetCents: 0,
+        budgetLevel: 'ad_set',
+      })
+      .returning({ id: adCampaigns.id });
+
+    const result = await reserveChange(db, {
+      adAccountId: meta,
+      campaignId: campaign?.id ?? '',
+      kind: 'set_daily_budget',
+      toDailyBudgetCents: 2000,
+      now: NOW,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe('budget_not_at_campaign_level');
+  });
 });
