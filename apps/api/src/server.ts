@@ -10,7 +10,10 @@ export function buildServer() {
     trustProxy: true,
   });
 
-  app.get('/api/health', async () => ({
+  // Routes are registered WITHOUT the /api prefix: Traefik (Coolify path
+  // routing) strips it before forwarding, and the Vite dev proxy rewrites it
+  // the same way. The public URL is always https://<host>/api/...
+  app.get('/health', async () => ({
     status: 'ok',
     service: 'wings-system-api',
     time: new Date().toISOString(),

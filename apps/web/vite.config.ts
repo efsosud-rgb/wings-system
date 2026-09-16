@@ -12,7 +12,11 @@ export default defineConfig({
     // In development the API runs separately; in staging/production Traefik
     // routes /api on the same domain, so the frontend never needs CORS.
     proxy: {
-      '/api': 'http://127.0.0.1:3000',
+      // Mirrors production: the edge strips /api before the API sees it.
+      '/api': {
+        target: 'http://127.0.0.1:3000',
+        rewrite: (path) => path.replace(/^\/api/, ''),
+      },
     },
   },
 });
