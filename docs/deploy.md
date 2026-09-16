@@ -14,13 +14,13 @@ mesmo em desenvolvimento).
 
 ## Recursos no Coolify
 
-| Recurso                         | UUID                       | Observações                                            |
-| ------------------------------- | -------------------------- | ------------------------------------------------------ |
-| Projeto `Wings System`          | `tshq8o8gltyp3snhknwqiq56` | ambientes: production, staging                         |
-| Banco `wings-system-db-staging` | `q5kvm2ygakmm34rjwwir4rhj` | postgres:17-alpine, sem porta pública, separado do n8n |
-| App `wings-api-staging`         | `39k6fbobdibfx96xz1p8gqkv` | `docker/api.Dockerfile`, porta 3000                    |
-| App `wings-web-staging`         | `yxa9bjwbbekricwldlipvipg` | `docker/web.Dockerfile`, porta 80                      |
-| Deploy key                      | `kubejvsr5wlqu9xvf495ignn` | chave somente-leitura no repositório do GitHub         |
+| Recurso                         | UUID                       | Observações                                                 |
+| ------------------------------- | -------------------------- | ----------------------------------------------------------- |
+| Projeto `Wings System`          | `tshq8o8gltyp3snhknwqiq56` | ambientes: production, staging                              |
+| Banco `wings-system-db-staging` | `q5kvm2ygakmm34rjwwir4rhj` | postgres:17-alpine, sem porta pública, separado do n8n      |
+| App `wings-api-staging`         | `39k6fbobdibfx96xz1p8gqkv` | `docker/api.Dockerfile`, porta 3000                         |
+| App `wings-web-staging`         | `yxa9bjwbbekricwldlipvipg` | `docker/web.Dockerfile`, porta 80                           |
+| Deploy key                      | `iajyod5szl1vjnyfhwgpsccg` | chave somente-leitura no GitHub (rotacionada em 2026-09-16) |
 
 O container da API roda `db:migrate` e `db:seed` antes de servir tráfego.
 
