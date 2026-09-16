@@ -1,9 +1,12 @@
 import {
   EMPLOYEE_STATUS,
+  INVITE_FAILURE_MESSAGE,
   SECTOR_SLUGS,
   employeeCreateSchema,
   employeeUpdateSchema,
   type EmployeeStatus,
+  type InviteFailureCode,
+  type InviteOutcome,
   type SectorSlug,
 } from '@wings/shared';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
@@ -59,6 +62,31 @@ const idParamSchema = z.object({ id: z.string().uuid() });
 export const employeeRoutes: FastifyPluginAsync = async (app) => {
   const { db, cpfCrypto, mailer, env } = app.wings;
 
+  function inviteFailure(code: InviteFailureCode): InviteOutcome {
+    return { sent: false, error: { code, message: INVITE_FAILURE_MESSAGE[code] } };
+  }
+
+  /** Never throws: a mail problem must not undo a completed registration. */
+  async function attemptInvite(
+    employeeId: string,
+    request: FastifyRequest,
+  ): Promise<InviteOutcome> {
+    if (!mailer.enabled) return inviteFailure('email_not_configured');
+    try {
+      const result = await sendInvite(db, mailer, {
+        employeeId,
+        baseUrl: env.APP_BASE_URL,
+        actorId: request.session.actor.employeeId,
+        ctx: requestContext(request),
+      });
+      // sendInvite only declines for an employee who cannot receive one.
+      return result.sent ? { sent: true } : inviteFailure('employee_inactive');
+    } catch (error) {
+      request.log.error({ err: error }, 'invite e-mail failed after employee creation');
+      return inviteFailure('send_failed');
+    }
+  }
+
   app.get(
     '/employees',
     { preHandler: app.requirePermission('employees.read') },
@@ -104,22 +132,10 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
     );
     if (!created.ok) return fail(reply, created.reason);
 
-    let inviteSent = false;
-    try {
-      if (mailer.enabled) {
-        const invite = await sendInvite(db, mailer, {
-          employeeId: created.value.id,
-          baseUrl: env.APP_BASE_URL,
-          actorId: request.session.actor.employeeId,
-          ctx: requestContext(request),
-        });
-        inviteSent = invite.sent;
-      }
-    } catch (error) {
-      request.log.error({ err: error }, 'invite e-mail failed after employee creation');
-    }
-
-    return reply.status(201).send({ employee: created.value, inviteSent });
+    // The registration is complete either way; the operator must be told
+    // plainly whether the invite actually went out.
+    const invite = await attemptInvite(created.value.id, request);
+    return reply.status(201).send({ employee: created.value, invite, inviteSent: invite.sent });
   });
 
   app.patch('/employees/:id', { preHandler: app.requireAuth }, async (request, reply) => {

@@ -191,6 +191,112 @@ describe('POST /employees', () => {
     expect(res.json().employee.createdByName).toBeTruthy();
   });
 
+  it('says clearly when SMTP is not configured, instead of implying success', async () => {
+    const offline = await buildApp({
+      env: loadEnv({
+        NODE_ENV: 'test',
+        DATABASE_URL: harness.url,
+        SESSION_SECRET: randomBytes(48).toString('base64'),
+        CPF_ENCRYPTION_KEY: TEST_CPF_KEY,
+        CPF_INDEX_KEY: TEST_INDEX_KEY,
+        APP_BASE_URL: 'https://staging.wingssystem.online',
+      }),
+      db,
+      mailer: {
+        enabled: false,
+        send: async () => {
+          throw new Error('must not be called');
+        },
+      },
+    });
+
+    const actor = await createEmployee(db, { role: 'admin_master', sector: 'diretoria' });
+    const login = await offline.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: actor.email, password: actor.password },
+    });
+    const cookies = {
+      [SESSION_COOKIE]: login.cookies.find((c) => c.name === SESSION_COOKIE)?.value ?? '',
+    };
+
+    const res = await offline.inject({
+      method: 'POST',
+      url: '/employees',
+      cookies,
+      payload: newEmployeePayload(),
+    });
+
+    // The employee is still created — but the operator is told the truth.
+    expect(res.statusCode).toBe(201);
+    expect(res.json().invite).toMatchObject({
+      sent: false,
+      error: { code: 'email_not_configured' },
+    });
+    expect(res.json().invite.error.message).toContain('NÃO foi enviado');
+    expect(res.json().employee.id).toBeTruthy();
+    await offline.close();
+  });
+
+  it('reports a mail server failure without losing the registration', async () => {
+    const flaky = await buildApp({
+      env: loadEnv({
+        NODE_ENV: 'test',
+        DATABASE_URL: harness.url,
+        SESSION_SECRET: randomBytes(48).toString('base64'),
+        CPF_ENCRYPTION_KEY: TEST_CPF_KEY,
+        CPF_INDEX_KEY: TEST_INDEX_KEY,
+        APP_BASE_URL: 'https://staging.wingssystem.online',
+      }),
+      db,
+      mailer: {
+        enabled: true,
+        send: async () => {
+          throw new Error('smtp connection refused');
+        },
+      },
+    });
+
+    const actor = await createEmployee(db, { role: 'admin_master', sector: 'diretoria' });
+    const login = await flaky.inject({
+      method: 'POST',
+      url: '/auth/login',
+      payload: { email: actor.email, password: actor.password },
+    });
+    const cookies = {
+      [SESSION_COOKIE]: login.cookies.find((c) => c.name === SESSION_COOKIE)?.value ?? '',
+    };
+
+    const payload = newEmployeePayload();
+    const res = await flaky.inject({ method: 'POST', url: '/employees', cookies, payload });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json().invite.error.code).toBe('send_failed');
+
+    // The employee really exists and can be invited again later.
+    const found = await app.inject({
+      method: 'GET',
+      url: `/employees?search=${encodeURIComponent(payload.email)}`,
+      cookies: (await sessionFor({ role: 'admin_master', sector: 'diretoria' })).cookies,
+    });
+    expect(found.json().total).toBe(1);
+    await flaky.close();
+  });
+
+  it('does not invite an employee created as inactive, and says so', async () => {
+    const { cookies } = await sessionFor({ role: 'admin_master', sector: 'diretoria' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/employees',
+      cookies,
+      payload: newEmployeePayload({ status: 'inactive' }),
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json().invite).toMatchObject({ sent: false, error: { code: 'employee_inactive' } });
+    expect(outbox).toHaveLength(0);
+  });
+
   it('rejects an invalid CPF before touching the database', async () => {
     const { cookies } = await sessionFor({ role: 'admin_master', sector: 'diretoria' });
     const res = await app.inject({

@@ -78,6 +78,33 @@ export interface EmployeeView {
   lastLoginAt: string | null;
 }
 
+/**
+ * Outcome of the automatic invite that follows a registration.
+ *
+ * Creating an employee always attempts the invite. If it cannot be sent, the
+ * employee is still created and this says exactly why, so the operator can be
+ * told plainly instead of assuming the e-mail went out.
+ */
+export type InviteFailureCode = 'email_not_configured' | 'send_failed' | 'employee_inactive';
+
+export interface InviteOutcome {
+  sent: boolean;
+  error?: {
+    code: InviteFailureCode;
+    /** Ready to show to the operator, in Portuguese. */
+    message: string;
+  };
+}
+
+export const INVITE_FAILURE_MESSAGE: Record<InviteFailureCode, string> = {
+  email_not_configured:
+    'Funcionário cadastrado, mas o e-mail de convite NÃO foi enviado: o envio de e-mails ainda não está configurado. Gere o link manualmente ou reenvie o convite depois.',
+  send_failed:
+    'Funcionário cadastrado, mas o e-mail de convite NÃO foi enviado: falha no servidor de e-mail. Tente reenviar o convite.',
+  employee_inactive:
+    'Funcionário cadastrado como inativo, portanto o convite NÃO foi enviado. Ative o cadastro e reenvie o convite.',
+};
+
 /** Filters accepted by GET /employees. */
 export interface EmployeeListQuery {
   search?: string;
