@@ -44,13 +44,18 @@ export function createMailer(env: Env, log?: { info: (msg: string) => void }): M
   return {
     enabled: true,
     send: async (mail) => {
-      await transporter.sendMail({
+      const info = await transporter.sendMail({
         from: env.SMTP_FROM,
         to: mail.to,
         subject: mail.subject,
         text: mail.text,
         html: mail.html,
       });
+      // Delivery evidence without personal data: no recipient address is
+      // logged, only what the SMTP server answered.
+      log?.info(
+        `mail accepted by smtp: messageId=${info.messageId} accepted=${info.accepted?.length ?? 0} rejected=${info.rejected?.length ?? 0} response=${String(info.response ?? '').trim()}`,
+      );
     },
   };
 }
