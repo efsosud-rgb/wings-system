@@ -18,7 +18,14 @@ pnpm build              # builds shared -> api -> web (topological)
 pnpm typecheck && pnpm lint && pnpm test
 pnpm --filter @wings/api test                          # one workspace
 pnpm --filter @wings/api exec vitest run src/x.test.ts # one test file
+
+# database (apps/api)
+pnpm --filter @wings/api db:generate   # generate a migration from schema changes
+pnpm --filter @wings/api db:migrate    # apply pending migrations
+pnpm --filter @wings/api db:seed       # reference data (sectors, roles, matrix, schedule); idempotent
 ```
+
+The API container runs `db:migrate` then `db:seed` before serving, so both must stay safe to re-run. A hand-written migration goes in via `drizzle-kit generate --custom` so the journal stays consistent; never edit an applied migration. Drizzle tracks applied migrations in the separate `drizzle` schema — dropping only `public` leaves it thinking everything is applied.
 
 `@wings/shared` compiles to `dist/`, so run `pnpm --filter @wings/shared build` (or `pnpm build`) after changing it, or the API and web builds will use stale types.
 

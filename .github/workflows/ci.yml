@@ -8,6 +8,25 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: wings
+          POSTGRES_PASSWORD: wings_ci
+          POSTGRES_DB: wings_system
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wings -d wings_system"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://wings:wings_ci@127.0.0.1:5432/wings_system
+
     steps:
       - uses: actions/checkout@v4
 
@@ -24,3 +43,9 @@ jobs:
       - run: pnpm lint
       - run: pnpm format:check
       - run: pnpm test
+
+      # Migrations and seeds must stay runnable from scratch.
+      - run: pnpm --filter @wings/api db:migrate
+      - run: pnpm --filter @wings/api db:seed
+      # Re-running the seed must be a no-op, not a duplicate-key error.
+      - run: pnpm --filter @wings/api db:seed

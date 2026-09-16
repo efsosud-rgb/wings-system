@@ -2,5 +2,8 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false
-  }
+  },
+  // Tests are not shipped; migrate.ts and seed.ts are, because the container
+  // runs them on start.
+  "exclude": ["src/**/*.test.ts"]
 }

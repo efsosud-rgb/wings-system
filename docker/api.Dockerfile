@@ -24,12 +24,17 @@ WORKDIR /app
 USER node
 
 COPY --from=builder --chown=node:node /app/node_modules ./node_modules
+# packages/shared has its own runtime dependencies (zod), so its node_modules
+# must travel with it.
+COPY --from=builder --chown=node:node /app/packages/shared/node_modules ./packages/shared/node_modules
 COPY --from=builder --chown=node:node /app/packages/shared/dist ./packages/shared/dist
 COPY --from=builder --chown=node:node /app/packages/shared/package.json ./packages/shared/package.json
 COPY --from=builder --chown=node:node /app/apps/api/node_modules ./apps/api/node_modules
 COPY --from=builder --chown=node:node /app/apps/api/dist ./apps/api/dist
+COPY --from=builder --chown=node:node /app/apps/api/migrations ./apps/api/migrations
 COPY --from=builder --chown=node:node /app/apps/api/package.json ./apps/api/package.json
 
 EXPOSE 3000
 WORKDIR /app/apps/api
-CMD ["node", "dist/server.js"]
+# Migrations and reference-data seeding run before the API accepts traffic.
+CMD ["sh", "-c", "node dist/db/migrate.js && node dist/db/seed.js && node dist/server.js"]
