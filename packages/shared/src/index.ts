@@ -5,6 +5,7 @@
 
 export const APP_NAME = 'Wings System';
 
+export * from './auth/credentials.js';
 export * from './auth/schema.js';
 export * from './cpf.js';
 export * from './employees/schema.js';

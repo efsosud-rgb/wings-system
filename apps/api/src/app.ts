@@ -3,18 +3,24 @@ import rateLimit from '@fastify/rate-limit';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Database } from './db/client.js';
 import type { Env } from './env.js';
+import { createMailer, type Mailer } from './lib/mailer.js';
 import { authRoutes } from './modules/auth/routes.js';
 import { authPlugin } from './plugins/auth.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
-    wings: { env: Env; db: Database };
+    wings: { env: Env; db: Database; mailer: Mailer };
   }
 }
 
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
-export async function buildApp(deps: { env: Env; db: Database }): Promise<FastifyInstance> {
+export async function buildApp(deps: {
+  env: Env;
+  db: Database;
+  /** Overridable so tests can capture messages instead of sending them. */
+  mailer?: Mailer;
+}): Promise<FastifyInstance> {
   const app = Fastify({
     // Personal data must never reach the logs (LGPD), so request bodies are
     // never logged and only a minimal request line is kept.
@@ -31,7 +37,11 @@ export async function buildApp(deps: { env: Env; db: Database }): Promise<Fastif
     trustProxy: true,
   });
 
-  app.decorate('wings', deps);
+  app.decorate('wings', {
+    env: deps.env,
+    db: deps.db,
+    mailer: deps.mailer ?? createMailer(deps.env, { info: (msg) => app.log.info(msg) }),
+  });
 
   await app.register(cookie, { secret: deps.env.SESSION_SECRET });
   await app.register(rateLimit, { global: false });

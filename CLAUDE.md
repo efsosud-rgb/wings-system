@@ -44,6 +44,8 @@ The API container runs `db:migrate` then `db:seed` before serving, so both must 
 - Sessions expire after 30 idle minutes or 12 hours absolute. An idle expiry writes the RH/DP clock-out **at the last activity time**, never at "now".
 - Unsafe methods reject a foreign `Origin` (CSRF), on top of `SameSite=Lax`.
 - API integration tests create a **throwaway database per run** from `DATABASE_URL` (`src/test/db.ts`), so append-only rows never pollute a shared database.
+- **Nobody sets anyone else's password.** Employees get an invite link and choose their own; `credential_tokens` stores only the SHA-256 of each link, single-use and always expiring (invite 7 days, reset 60 minutes). Setting a password revokes every session of that employee.
+- `POST /auth/forgot-password` always answers 202, so account existence never leaks. When SMTP is unconfigured, e-mail routes return **503**, never a fake success. See `docs/auth.md`.
 
 ## Non-negotiables
 

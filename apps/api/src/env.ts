@@ -12,6 +12,13 @@ const base64Key32 = z
     }
   }, 'must be 32 bytes, base64-encoded');
 
+const optionalString = z
+  .string()
+  .trim()
+  .min(1)
+  .optional()
+  .or(z.literal('').transform(() => undefined));
+
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   API_PORT: z.coerce.number().int().positive().default(3000),
@@ -19,6 +26,16 @@ const schema = z.object({
   SESSION_SECRET: z.string().min(32),
   CPF_ENCRYPTION_KEY: base64Key32,
   CPF_INDEX_KEY: base64Key32,
+
+  /** Public base URL, used to build invite and password-reset links. */
+  APP_BASE_URL: z.string().url().default('http://localhost:5173'),
+
+  /** Google Workspace SMTP. Optional in development; required in production. */
+  SMTP_HOST: optionalString,
+  SMTP_PORT: z.coerce.number().int().positive().default(587),
+  SMTP_USER: optionalString,
+  SMTP_PASSWORD: optionalString,
+  SMTP_FROM: optionalString,
 });
 
 export type Env = z.infer<typeof schema>;

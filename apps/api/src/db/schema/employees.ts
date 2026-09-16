@@ -72,8 +72,6 @@ export const employeeCredentials = pgTable('employee_credentials', {
   /** Argon2id. Null until the employee accepts the invite and sets a password. */
   passwordHash: text('password_hash'),
   passwordSetAt: timestamp('password_set_at', { withTimezone: true }),
-  inviteTokenHash: text('invite_token_hash'),
-  inviteExpiresAt: timestamp('invite_expires_at', { withTimezone: true }),
   failedAttempts: integer('failed_attempts').notNull().default(0),
   lockedUntil: timestamp('locked_until', { withTimezone: true }),
   /** Reserved for TOTP in a later phase (Admin Master and PII viewers). */

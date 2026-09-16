@@ -25,3 +25,6 @@ export const adjustmentStatusEnum = pgEnum('adjustment_status', [
 ]);
 
 export const holidayScopeEnum = pgEnum('holiday_scope', ['national', 'state', 'city']);
+
+/** One-time credential links: the initial invite, or a password reset. */
+export const credentialTokenPurposeEnum = pgEnum('credential_token_purpose', ['invite', 'reset']);
