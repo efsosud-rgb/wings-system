@@ -34,10 +34,25 @@ variável para deploys de preview (mesmo valor).
 > ⚠️ Faça backup de `CPF_ENCRYPTION_KEY` fora do servidor. Sem ela, os CPFs
 > armazenados são irrecuperáveis. Copie o valor pela interface do Coolify.
 
+## Backups do banco (staging)
+
+Duas rotinas diárias no Coolify, sobre o banco `wings-system-db-staging`:
+
+| Rotina        | UUID                       | Agendamento (UTC)        | Destino                                      | Retenção           |
+| ------------- | -------------------------- | ------------------------ | -------------------------------------------- | ------------------ |
+| Local         | `bsdnwcdritapetq1behm51it` | `0 3 * * *` (00:00 BRT)  | `/data/coolify/backups/databases/...` no VPS | 7 cópias / 7 dias  |
+| Cloudflare R2 | `owzy1ppxwjra8ty1csrmic21` | `30 3 * * *` (00:30 BRT) | storage `r2-wings-backups`                   | 30 no R2, 2 locais |
+
+As credenciais do R2 ficam em `/etc/wings-crm/r2-backup.env` (modo 600) e no
+registro de storage do Coolify — nunca no repositório. O formato é `pg_dump`
+custom (`.dmp`); restaure com `pg_restore`.
+
+Retenção e execução manual não são expostas pela API do Coolify nesta versão
+(4.3.18): use a interface, ou o próprio modelo via
+`docker exec coolify php artisan tinker`.
+
 ## Pendências
 
-1. **Backups automáticos do banco** ainda não configurados — exigem credenciais
-   S3 (ou equivalente) para armazenar fora deste servidor.
-2. **Produção** continua no container manual `wings-crm-web`; a migração para o
+1. **Produção** continua no container manual `wings-crm-web`; a migração para o
    Coolify será feita em etapa própria, com rollback documentado.
-3. Apenas o `coolify-proxy` pode publicar as portas 80/443 do host.
+2. Apenas o `coolify-proxy` pode publicar as portas 80/443 do host.
