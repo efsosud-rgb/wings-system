@@ -17,7 +17,14 @@ const phone = z
   .transform((value) => value.replace(/\D/g, ''))
   .refine((value) => value.length === 10 || value.length === 11, 'Telefone inválido');
 
-export const employeeCreateSchema = z.object({
+/**
+ * Field definitions without defaults.
+ *
+ * Defaults belong to creation only: if the update schema inherited them, a
+ * PATCH of one field would silently reset `status` (reactivating a deactivated
+ * employee) and clear `isSectorManager`.
+ */
+const employeeFields = z.object({
   // Bloco 1 — Dados pessoais
   fullName: z.string().trim().min(3, 'Nome completo obrigatório').max(160),
   cpf: z.string().transform(normalizeCpf).refine(isValidCpf, 'CPF inválido'),
@@ -30,6 +37,11 @@ export const employeeCreateSchema = z.object({
   sector: z.enum(SECTOR_SLUGS as [SectorSlug, ...SectorSlug[]]),
   role: z.enum(ROLE_KEYS as [RoleKey, ...RoleKey[]]),
   admissionDate: isoDate,
+  status: z.enum(EMPLOYEE_STATUS),
+  isSectorManager: z.boolean(),
+});
+
+export const employeeCreateSchema = employeeFields.extend({
   status: z.enum(EMPLOYEE_STATUS).default('active'),
   isSectorManager: z.boolean().default(false),
 });
@@ -37,8 +49,8 @@ export const employeeCreateSchema = z.object({
 export type EmployeeCreateInput = z.input<typeof employeeCreateSchema>;
 export type EmployeeCreate = z.output<typeof employeeCreateSchema>;
 
-/** Updates carry the same fields, all optional; CPF and email changes are audited. */
-export const employeeUpdateSchema = employeeCreateSchema.partial();
+/** Updates carry the same fields, all optional and with no defaults applied. */
+export const employeeUpdateSchema = employeeFields.partial();
 export type EmployeeUpdate = z.output<typeof employeeUpdateSchema>;
 
 /**
@@ -60,6 +72,24 @@ export interface EmployeeView {
   status: EmployeeStatus;
   isSectorManager: boolean;
   createdBy: string | null;
+  /** Name of whoever created the record, for the read-only System block. */
+  createdByName: string | null;
   createdAt: string;
   lastLoginAt: string | null;
+}
+
+/** Filters accepted by GET /employees. */
+export interface EmployeeListQuery {
+  search?: string;
+  sector?: SectorSlug;
+  status?: EmployeeStatus;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface EmployeeListResult {
+  employees: EmployeeView[];
+  total: number;
+  page: number;
+  pageSize: number;
 }

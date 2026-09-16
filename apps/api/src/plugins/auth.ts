@@ -15,6 +15,8 @@ declare module 'fastify' {
   }
   interface FastifyInstance {
     requireAuth: preHandlerHookHandler;
+    /** Permission check for an already-authenticated request. */
+    can: (request: FastifyRequest, permission: PermissionKey, target?: Target) => boolean;
     requirePermission: (
       permission: PermissionKey,
       target?: (request: FastifyRequest) => Target,
@@ -50,6 +52,12 @@ const plugin: FastifyPluginAsync = async (app) => {
   };
 
   app.decorate('requireAuth', requireAuth);
+
+  app.decorate(
+    'can',
+    (request: FastifyRequest, permission: PermissionKey, target: Target = {}) =>
+      can(request.session.actor, permission, target).allowed,
+  );
 
   /**
    * Authorization for a route. Every check goes through can() in @wings/shared;

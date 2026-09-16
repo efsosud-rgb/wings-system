@@ -3,13 +3,15 @@ import rateLimit from '@fastify/rate-limit';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Database } from './db/client.js';
 import type { Env } from './env.js';
+import { createCpfCrypto, type CpfCrypto } from './lib/cpf-crypto.js';
 import { createMailer, type Mailer } from './lib/mailer.js';
 import { authRoutes } from './modules/auth/routes.js';
+import { employeeRoutes } from './modules/employees/routes.js';
 import { authPlugin } from './plugins/auth.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
-    wings: { env: Env; db: Database; mailer: Mailer };
+    wings: { env: Env; db: Database; mailer: Mailer; cpfCrypto: CpfCrypto };
   }
 }
 
@@ -41,6 +43,7 @@ export async function buildApp(deps: {
     env: deps.env,
     db: deps.db,
     mailer: deps.mailer ?? createMailer(deps.env, { info: (msg) => app.log.info(msg) }),
+    cpfCrypto: createCpfCrypto(deps.env.CPF_ENCRYPTION_KEY, deps.env.CPF_INDEX_KEY),
   });
 
   await app.register(cookie, { secret: deps.env.SESSION_SECRET });
@@ -80,6 +83,7 @@ export async function buildApp(deps: {
   }));
 
   await app.register(authRoutes);
+  await app.register(employeeRoutes);
 
   return app;
 }
