@@ -13,15 +13,18 @@ export const auditLog = pgTable(
   {
     id: bigserial('id', { mode: 'bigint' }).primaryKey(),
     at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+    // RESTRICT, not SET NULL: an employee referenced by the audit trail can
+    // never be hard-deleted. LGPD erasure anonymises the employee record
+    // instead, so accountability survives (see docs/lgpd.md).
     actorEmployeeId: uuid('actor_employee_id').references(() => employees.id, {
-      onDelete: 'set null',
+      onDelete: 'restrict',
     }),
     /** e.g. employee.created, employee.cpf_revealed, role.assigned, session.login */
     action: text('action').notNull(),
     entity: text('entity').notNull(),
     entityId: text('entity_id'),
     targetEmployeeId: uuid('target_employee_id').references(() => employees.id, {
-      onDelete: 'set null',
+      onDelete: 'restrict',
     }),
     ip: text('ip'),
     userAgent: text('user_agent'),

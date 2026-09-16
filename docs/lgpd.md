@@ -39,5 +39,10 @@ do Coolify e precisam ser diferentes entre si (validado na inicialização).
 
 - Desligamento: `status = 'inactive'` com `deactivated_at` obrigatório
   (constraint no banco). O registro não é apagado.
+- **Exclusão física é impossível por desenho:** as chaves estrangeiras de
+  `audit_log` usam `ON DELETE RESTRICT`, então um funcionário já auditado não
+  pode ser apagado. O direito de eliminação é atendido por **anonimização** do
+  registro (nome, e-mail, telefone e CPF), preservando a trilha de
+  responsabilização exigida pelo art. 37 da LGPD.
 - Anonimização após o prazo de retenção: **a definir com o Jurídico**.
 - Backups do banco são criptografados e mantidos fora do servidor.

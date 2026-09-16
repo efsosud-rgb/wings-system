@@ -309,6 +309,46 @@ describe('audit trail', () => {
   });
 });
 
+describe('audited employees cannot be erased by deletion', () => {
+  it('refuses a hard delete and expects anonymisation instead', async () => {
+    const employee = await createEmployee(db);
+    await loginAs(employee.email, employee.password); // creates audit rows
+
+    // Drizzle wraps driver errors, so the Postgres text sits on the cause.
+    const error: unknown = await db
+      .execute(sql`delete from employees where id = ${employee.id}`)
+      .then(() => null)
+      .catch((e: unknown) => e);
+    const message = [
+      error instanceof Error ? error.message : String(error),
+      error instanceof Error && error.cause instanceof Error ? error.cause.message : '',
+    ].join(' ');
+    expect(message).toMatch(/violates foreign key constraint/i);
+
+    // The LGPD path is anonymising the record, which must still work.
+    await db.execute(sql`
+      update employees
+         set full_name = 'Anonimizado',
+             email = ${'anon-' + employee.id + '@invalid.local'},
+             phone = '00000000000',
+             status = 'inactive',
+             deactivated_at = now()
+       where id = ${employee.id}
+    `);
+
+    const after = await db.execute<{ full_name: string }>(
+      sql`select full_name from employees where id = ${employee.id}`,
+    );
+    expect(after.rows[0]?.full_name).toBe('Anonimizado');
+
+    // The audit trail still points at the (now anonymous) employee.
+    const trail = await db.query.auditLog.findMany({
+      where: eq(auditLog.targetEmployeeId, employee.id),
+    });
+    expect(trail.length).toBeGreaterThan(0);
+  });
+});
+
 describe('CSRF protection', () => {
   it('rejects an unsafe request from a foreign origin', async () => {
     const employee = await createEmployee(db);
