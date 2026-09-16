@@ -2,5 +2,7 @@ packages:
   - 'apps/*'
   - 'packages/*'
 allowBuilds:
+  # argon2 needs its install script to fetch/build the native binding.
+  argon2: true
   # esbuild ships a prebuilt binary and needs its install script to run (used by Vite).
   esbuild: true

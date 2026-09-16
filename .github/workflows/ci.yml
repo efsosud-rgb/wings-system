@@ -42,10 +42,13 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm lint
       - run: pnpm format:check
-      - run: pnpm test
 
-      # Migrations and seeds must stay runnable from scratch.
+      # Migrations and seeds must stay runnable from scratch. These run before
+      # the tests because the API integration tests create their own throwaway
+      # database from DATABASE_URL.
       - run: pnpm --filter @wings/api db:migrate
       - run: pnpm --filter @wings/api db:seed
       # Re-running the seed must be a no-op, not a duplicate-key error.
       - run: pnpm --filter @wings/api db:seed
+
+      - run: pnpm test

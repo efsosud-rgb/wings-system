@@ -36,6 +36,15 @@ The API container runs `db:migrate` then `db:seed` before serving, so both must 
 - **`apps/web`** (Vite + React) builds to `dist/`, which is the only thing the nginx image serves.
 - Same origin in every environment: Traefik routes `/api/*` to the API and everything else to the web container, so there is no CORS and session cookies stay simple.
 
+## Authentication
+
+- **Server-side sessions, not JWT.** The cookie holds a random token; the database stores only its SHA-256 hash. Deactivating an employee or changing a role calls `revokeAllSessions()` so access ends at once.
+- Passwords are **Argon2id** (19 MiB, t=2, p=1). Only hashes are stored, in `employee_credentials`, never in `employees`.
+- Login failures are indistinguishable from outside: unknown e-mail, wrong password and credential-less accounts all return `invalid_credentials` after comparable work (`fakeVerify()` keeps the timing similar). Account lockout is 5 failures → 15 minutes, on top of a per-IP rate limit.
+- Sessions expire after 30 idle minutes or 12 hours absolute. An idle expiry writes the RH/DP clock-out **at the last activity time**, never at "now".
+- Unsafe methods reject a foreign `Origin` (CSRF), on top of `SameSite=Lax`.
+- API integration tests create a **throwaway database per run** from `DATABASE_URL` (`src/test/db.ts`), so append-only rows never pollute a shared database.
+
 ## Non-negotiables
 
 - **Secrets never enter the repository.** Real values live in Coolify environment variables; `.env.example` documents the names only.
