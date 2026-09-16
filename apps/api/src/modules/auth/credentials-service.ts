@@ -75,37 +75,46 @@ function buildLink(baseUrl: string, token: string, purpose: CredentialTokenPurpo
  * created, and again if the link needs re-sending. Admins never choose or see
  * anyone's password.
  */
-export async function sendInvite(
+export async function createInviteLink(
   db: Database,
-  mailer: Mailer,
-  args: { employeeId: string; baseUrl: string; actorId: string; ctx?: RequestContext },
-): Promise<{ sent: boolean }> {
+  args: { employeeId: string; baseUrl: string; actorId?: string | null },
+): Promise<{ link: string; email: string; name: string; expiresAt: Date } | null> {
   const employee = await findContact(db, 'id', args.employeeId);
-  if (!employee || employee.status === 'inactive') return { sent: false };
+  if (!employee || employee.status === 'inactive') return null;
 
   const expiresAt = new Date(Date.now() + INVITE_EXPIRY_DAYS * 24 * 3600_000);
   const token = await issueToken(db, {
     employeeId: employee.id,
     purpose: 'invite',
     expiresAt,
-    createdBy: args.actorId,
+    createdBy: args.actorId ?? null,
   });
 
-  await mailer.send(
-    inviteMail({
-      to: employee.email,
-      name: employee.full_name,
-      link: buildLink(args.baseUrl, token, 'invite'),
-      days: INVITE_EXPIRY_DAYS,
-    }),
-  );
+  return {
+    link: buildLink(args.baseUrl, token, 'invite'),
+    email: employee.email,
+    name: employee.full_name,
+    expiresAt,
+  };
+}
+
+export async function sendInvite(
+  db: Database,
+  mailer: Mailer,
+  args: { employeeId: string; baseUrl: string; actorId: string; ctx?: RequestContext },
+): Promise<{ sent: boolean }> {
+  const invite = await createInviteLink(db, args);
+  if (!invite) return { sent: false };
+  const { link, email, name, expiresAt } = invite;
+
+  await mailer.send(inviteMail({ to: email, name, link, days: INVITE_EXPIRY_DAYS }));
 
   await writeAudit(db, {
     actorEmployeeId: args.actorId,
     action: 'credentials.invite_sent',
     entity: 'employee',
-    entityId: employee.id,
-    targetEmployeeId: employee.id,
+    entityId: args.employeeId,
+    targetEmployeeId: args.employeeId,
     ip: args.ctx?.ip,
     userAgent: args.ctx?.userAgent,
     metadata: { expiresAt: expiresAt.toISOString() },
