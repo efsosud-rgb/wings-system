@@ -727,3 +727,104 @@ a {
 .error-text {
   color: var(--wings-danger);
 }
+
+/* ---------- simulator, diff and grouped approvals ---------- */
+.scenario-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.scenario {
+  background: var(--wings-surface);
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.scenario-breach {
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
+.scenario dl {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.scenario dl div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.scenario dt {
+  color: var(--wings-muted);
+  font-size: 12px;
+}
+
+.scenario dd {
+  font-size: 13px;
+}
+
+.diff-before {
+  color: var(--wings-muted);
+}
+
+.diff-after {
+  color: var(--wings-text);
+}
+
+.simulate-box {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.simulate-box .field {
+  flex: 1;
+  max-width: 320px;
+}
+
+.simulate-box .btn {
+  width: auto;
+}
+
+.group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.approval-group header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.group-total {
+  text-align: right;
+}
+
+.group-total p {
+  font-size: 16px;
+}
+
+.group-items {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-left: 0;
+}
+
+.group-items li {
+  border-left: 2px solid var(--wings-border);
+  padding-left: 12px;
+}

@@ -4,9 +4,11 @@ import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { adApprovalRequests, auditLog } from '../../db/schema/index.js';
 import { decideApproval } from './approvals.js';
+import { nextPendingInGroup, pendingGroups } from './batches.js';
 import { executeApprovedChange } from './executor.js';
 import { createApprovalNotifier } from './notifiers/factory.js';
 import { createMetaClient } from './platform/factory.js';
+import { simulateChange } from './simulate.js';
 
 /**
  * HTTP surface for the approvals panel.
@@ -17,6 +19,11 @@ import { createMetaClient } from './platform/factory.js';
  */
 
 const idParamSchema = z.object({ id: z.string().uuid() });
+
+/** An alternative daily budget to explore, in cents. Exploration only. */
+const simulationQuerySchema = z.object({
+  dailyBudgetCents: z.coerce.number().int().min(0).max(100_000_000).optional(),
+});
 
 function requestContext(request: FastifyRequest) {
   return { ip: request.ip, userAgent: request.headers['user-agent'] ?? null };
@@ -198,6 +205,68 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
       };
 
       return reply.send({ approval: detail });
+    },
+  );
+
+  /**
+   * Scenario simulator: what this change would mean against the month's cap.
+   *
+   * Read-only. `dailyBudgetCents` explores an alternative value — it never
+   * edits the request, which can only ever be approved as it was made.
+   */
+  app.get(
+    '/ads/approvals/:id/simulation',
+    { preHandler: app.requirePermission('ads.read') },
+    async (request, reply) => {
+      const params = idParamSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply
+          .status(404)
+          .send({ error: 'not_found', message: 'Solicitação não encontrada.' });
+      }
+
+      const query = simulationQuerySchema.safeParse(request.query);
+      if (!query.success) {
+        return reply.status(400).send({
+          error: 'invalid_request',
+          message: query.error.issues[0]?.message ?? 'Valor inválido para simulação.',
+        });
+      }
+
+      const approval = await db.query.adApprovalRequests.findFirst({
+        where: eq(adApprovalRequests.id, params.data.id),
+      });
+      if (!approval) {
+        return reply
+          .status(404)
+          .send({ error: 'not_found', message: 'Solicitação não encontrada.' });
+      }
+
+      const simulation = await simulateChange(db, approval.changeRequestId, {
+        alternativeDailyBudgetCents: query.data.dailyBudgetCents,
+      });
+      if (!simulation) {
+        return reply
+          .status(404)
+          .send({ error: 'not_found', message: 'Solicitação não encontrada.' });
+      }
+
+      const next = await nextPendingInGroup(db, approval.id);
+      return reply.send({ simulation, nextPending: next });
+    },
+  );
+
+  /**
+   * Waiting approvals grouped by campaign.
+   *
+   * A view only: there is no bulk decision here and never will be. Each item
+   * links to its own screen, where the decision is taken and recorded alone.
+   */
+  app.get(
+    '/ads/approvals-groups',
+    { preHandler: app.requirePermission('ads.read') },
+    async (_request, reply) => {
+      return reply.send({ groups: await pendingGroups(db) });
     },
   );
 

@@ -3,10 +3,12 @@ import {
   CHANGE_KIND_LABEL,
   type ApprovalListItem,
   type ApprovalStatus,
+  type PendingGroup,
 } from '@wings/shared';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useApprovals } from '../api/ads.js';
-import { Alert } from '../components/ui.js';
+import { useApprovalGroups, useApprovals } from '../api/ads.js';
+import { Alert, Button } from '../components/ui.js';
 
 function formatBrl(cents: number): string {
   return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -98,8 +100,91 @@ function Section({
   );
 }
 
+/**
+ * Waiting approvals gathered by campaign.
+ *
+ * A reading aid, not a shortcut: several requests on one campaign are shown
+ * with their combined weight so nobody approves the fourth increase without
+ * noticing the first three. Every decision is still taken on its own screen
+ * and recorded on its own — there is no bulk approval, by design.
+ */
+function GroupedPending({ groups }: { groups: PendingGroup[] }) {
+  if (groups.length === 0) {
+    return (
+      <section className="approvals-section">
+        <h2>Por campanha</h2>
+        <p className="muted">Nada aguardando no momento.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="approvals-section">
+      <h2>
+        Por campanha <span className="muted">({groups.length})</span>
+      </h2>
+      <p className="field-hint">
+        Cada solicitação é decidida e registrada individualmente. O total abaixo é a exposição que
+        estas solicitações já reservam no orçamento do mês.
+      </p>
+
+      <div className="group-list">
+        {groups.map((group) => (
+          <article key={group.campaignId} className="card approval-group">
+            <header>
+              <div>
+                <strong>{group.campaignName}</strong>
+                <div className="cell-sub">
+                  {group.platform.toUpperCase()} — {group.accountName} · {group.campaignExternalId}
+                </div>
+              </div>
+              <div className="group-total">
+                <span className="field-label">Reservado por estas solicitações</span>
+                <p className="mono">{formatBrl(group.totalExposureDeltaCents)}</p>
+                <span className="cell-sub">
+                  {group.shareOfUsablePercent}% do utilizável ({formatBrl(group.usableCents)})
+                </span>
+              </div>
+            </header>
+
+            {group.anyEscalated && (
+              <p className="error-text">Há solicitação escalada para a Diretoria neste grupo.</p>
+            )}
+
+            <ol className="group-items">
+              {group.items.map((item) => (
+                <li key={item.approvalId}>
+                  <Link to={`/trafego-pago/aprovacoes/${item.approvalId}`}>
+                    {CHANGE_KIND_LABEL[item.changeKind] ?? item.changeKind}
+                    {item.changeKind === 'set_daily_budget' &&
+                      ` · ${formatBrl(item.fromValueCents ?? 0)} → ${formatBrl(item.toValueCents ?? 0)}/dia`}
+                  </Link>
+                  <span className="cell-sub">
+                    {formatBrl(item.amountCents)} · {waitingFor(item.requestedAt)} ·{' '}
+                    {item.requestedByAgent ? 'agente' : (item.requestedByName ?? '—')}
+                    {item.status === 'escalated' && ' · escalada'}
+                  </span>
+                </li>
+              ))}
+            </ol>
+
+            <Link
+              to={`/trafego-pago/aprovacoes/${group.items[0]?.approvalId ?? ''}`}
+              className="btn btn-ghost btn-inline"
+            >
+              Decidir uma a uma
+            </Link>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function ApprovalsPage() {
   const list = useApprovals();
+  const groups = useApprovalGroups();
+  const [byCampaign, setByCampaign] = useState(false);
   const approvals = list.data?.approvals ?? [];
 
   const pending = approvals.filter((a) => a.status === 'pending');
@@ -113,15 +198,25 @@ export function ApprovalsPage() {
           <h1>Tráfego pago — aprovações</h1>
           <p>Nenhuma alteração de orçamento é executada sem uma decisão registrada aqui.</p>
         </div>
-        <Link to="/trafego-pago" className="btn btn-ghost btn-inline">
-          Ver cockpit
-        </Link>
+        <div className="window-picker">
+          <Button variant={byCampaign ? 'ghost' : 'primary'} onClick={() => setByCampaign(false)}>
+            Lista
+          </Button>
+          <Button variant={byCampaign ? 'primary' : 'ghost'} onClick={() => setByCampaign(true)}>
+            Por campanha
+          </Button>
+          <Link to="/trafego-pago" className="btn btn-ghost btn-inline">
+            Ver cockpit
+          </Link>
+        </div>
       </header>
 
       {list.isError && <Alert kind="error">Não foi possível carregar as solicitações.</Alert>}
       {list.isLoading && <p className="muted">Carregando…</p>}
 
-      {!list.isLoading && (
+      {byCampaign && !groups.isLoading && <GroupedPending groups={groups.data?.groups ?? []} />}
+
+      {!byCampaign && !list.isLoading && (
         <>
           <Section title="Aguardando decisão" items={pending} empty="Nada aguardando no momento." />
           <Section

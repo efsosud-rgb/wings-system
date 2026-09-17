@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { SESSION_COOKIE } from '@wings/shared';
+import { SESSION_COOKIE, type ChangeSimulation, type PendingGroup } from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -317,5 +317,120 @@ describe('POST /ads/approvals/:id/execute', () => {
     const after = await app.inject({ method: 'GET', url: `/ads/approvals/${approvalId}`, cookies });
     expect(after.json().approval.changeStatus).toBe('approved');
     expect(after.json().approval.lastExecutionOutcome).toBeNull();
+  });
+});
+
+describe('GET /ads/approvals/:id/simulation', () => {
+  it('requires ads.read', async () => {
+    const { approvalId } = await pendingApproval();
+    const { cookies } = await sessionFor('vendedor_expansao');
+    const res = await app.inject({
+      method: 'GET',
+      url: `/ads/approvals/${approvalId}/simulation`,
+      cookies,
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('projects the requested change against the month', async () => {
+    const { approvalId } = await pendingApproval();
+    const { cookies } = await sessionFor('marketing');
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/ads/approvals/${approvalId}/simulation`,
+      cookies,
+    });
+    expect(res.statusCode).toBe(200);
+
+    const { simulation } = res.json() as { simulation: ChangeSimulation };
+    expect(simulation.requested.dailyBudgetCents).toBe(2000);
+    expect(simulation.requested.campaignExposureCents).toBeGreaterThan(0);
+    expect(simulation.period.capCents).toBe(400_000);
+    expect(simulation.period.usableCents).toBe(280_000);
+    // The reservation is already held, so these two must differ by its size.
+    expect(
+      simulation.period.committedWithRequestCents - simulation.period.committedWithoutRequestCents,
+    ).toBe(simulation.requested.campaignExposureCents);
+  });
+
+  it('answers a what-if without changing the request', async () => {
+    const { approvalId } = await pendingApproval();
+    const { cookies } = await sessionFor('marketing');
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/ads/approvals/${approvalId}/simulation?dailyBudgetCents=500`,
+      cookies,
+    });
+    const { simulation } = res.json() as { simulation: ChangeSimulation };
+    expect(simulation.simulated?.dailyBudgetCents).toBe(500);
+
+    // The request itself is untouched: still pending, still asking for R$20,00.
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/ads/approvals/${approvalId}`,
+      cookies,
+    });
+    expect(detail.json().approval.status).toBe('pending');
+    expect(detail.json().approval.toValueCents).toBe(2000);
+  });
+
+  it('refuses a nonsense what-if value', async () => {
+    const { approvalId } = await pendingApproval();
+    const { cookies } = await sessionFor('marketing');
+    const res = await app.inject({
+      method: 'GET',
+      url: `/ads/approvals/${approvalId}/simulation?dailyBudgetCents=-5`,
+      cookies,
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('GET /ads/approvals-groups', () => {
+  it('requires ads.read', async () => {
+    const { cookies } = await sessionFor('vendedor_expansao');
+    const res = await app.inject({ method: 'GET', url: '/ads/approvals-groups', cookies });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('groups what is waiting, and offers no way to decide it in bulk', async () => {
+    const { approvalId } = await pendingApproval();
+    const { cookies } = await sessionFor('marketing');
+
+    const res = await app.inject({ method: 'GET', url: '/ads/approvals-groups', cookies });
+    expect(res.statusCode).toBe(200);
+
+    const { groups } = res.json() as { groups: PendingGroup[] };
+    const group = groups.find((entry) => entry.items.some((i) => i.approvalId === approvalId));
+    expect(group?.items).toHaveLength(1);
+    expect(group?.campaignName).toBe('Institucional');
+    expect(group?.totalAmountCents).toBeGreaterThan(0);
+
+    // There is deliberately no endpoint that decides a whole group at once.
+    const bulk = await app.inject({
+      method: 'POST',
+      url: '/ads/approvals-groups/decision',
+      cookies,
+      payload: { decision: 'approved' },
+    });
+    expect(bulk.statusCode).toBe(404);
+  });
+
+  it('drops a request out of the group once it is decided', async () => {
+    const { approvalId } = await pendingApproval();
+    const { cookies } = await sessionFor('admin_master');
+
+    await app.inject({
+      method: 'POST',
+      url: `/ads/approvals/${approvalId}/decision`,
+      cookies,
+      payload: { decision: 'rejected', reason: 'fora do plano do mês' },
+    });
+
+    const res = await app.inject({ method: 'GET', url: '/ads/approvals-groups', cookies });
+    const { groups } = res.json() as { groups: PendingGroup[] };
+    expect(groups.some((g) => g.items.some((i) => i.approvalId === approvalId))).toBe(false);
   });
 });

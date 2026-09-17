@@ -10,6 +10,7 @@ import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../api/auth.js';
 import { useApproval, useDecideApproval, useExecuteApproval } from '../api/ads.js';
 import { ApiError } from '../api/client.js';
+import { ApprovalSimulator } from '../components/ApprovalSimulator.js';
 import { Alert, Button, Field, Input } from '../components/ui.js';
 
 function formatBrl(cents: number | null): string {
@@ -189,6 +190,7 @@ export function ApprovalDetailPage() {
 
       <Summary approval={approval} />
       <PeriodContext approval={approval} />
+      {id && <ApprovalSimulator approvalId={id} />}
 
       {open && canDecide && (
         <section className="block">

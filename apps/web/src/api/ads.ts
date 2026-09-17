@@ -2,7 +2,10 @@ import type {
   ApprovalDecisionInput,
   ApprovalDetail,
   ApprovalListItem,
+  ChangeSimulation,
   CockpitSnapshot,
+  NextPendingLink,
+  PendingGroup,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
@@ -68,5 +71,34 @@ export function useAcknowledgeAlert() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['ads', 'cockpit'] });
     },
+  });
+}
+
+/**
+ * Scenario simulation for one pending change.
+ *
+ * `alternativeDailyBudgetCents` is exploration only — the server never edits
+ * the request from here, and there is no path that approves from this view.
+ */
+export function useSimulation(id: string | undefined, alternativeDailyBudgetCents?: number) {
+  const query =
+    alternativeDailyBudgetCents === undefined
+      ? ''
+      : `?dailyBudgetCents=${alternativeDailyBudgetCents}`;
+  return useQuery({
+    queryKey: ['ads', 'simulation', id, alternativeDailyBudgetCents ?? null],
+    enabled: Boolean(id),
+    queryFn: () =>
+      api.get<{ simulation: ChangeSimulation; nextPending: NextPendingLink | null }>(
+        `/ads/approvals/${id ?? ''}/simulation${query}`,
+      ),
+  });
+}
+
+/** Waiting approvals grouped by campaign. A view; decisions stay individual. */
+export function useApprovalGroups() {
+  return useQuery({
+    queryKey: ['ads', 'approval-groups'],
+    queryFn: () => api.get<{ groups: PendingGroup[] }>('/ads/approvals-groups'),
   });
 }

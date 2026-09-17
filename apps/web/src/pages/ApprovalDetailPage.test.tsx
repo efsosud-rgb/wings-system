@@ -1,5 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { ApprovalDetail, SessionUser } from '@wings/shared';
+import type {
+  ApprovalDetail,
+  ChangeSimulation,
+  ExposureScenario,
+  SessionUser,
+} from '@wings/shared';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,6 +17,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const session: { current: SessionUser | null } = { current: null };
 const approval: { current: ApprovalDetail } = { current: buildApproval() };
+const simulation: { current: { simulation: ChangeSimulation; nextPending: null } } = {
+  current: { simulation: buildSimulation(), nextPending: null },
+};
 const decide = vi.fn().mockResolvedValue({ ok: true, status: 'approved' });
 const execute = vi.fn().mockResolvedValue({ ok: true, outcome: 'applied' });
 
@@ -32,6 +40,9 @@ vi.mock('../api/ads.js', () => ({
     error: null,
   }),
   useApprovals: () => ({ data: { approvals: [] }, isLoading: false, isError: false }),
+  // The simulator has its own test file; here it only needs to render.
+  useSimulation: () => ({ data: simulation.current, isLoading: false, isError: false }),
+  useApprovalGroups: () => ({ data: { groups: [] }, isLoading: false, isError: false }),
 }));
 
 const { ApprovalDetailPage } = await import('./ApprovalDetailPage.js');
@@ -82,6 +93,52 @@ function buildApproval(overrides: Partial<ApprovalDetail> = {}): ApprovalDetail 
   };
 }
 
+function buildScenario(
+  label: ExposureScenario['label'],
+  dailyBudgetCents: number,
+  committedCents: number,
+): ExposureScenario {
+  return {
+    label,
+    dailyBudgetCents,
+    campaignExposureCents: committedCents,
+    committedCents,
+    availableCents: 280_000 - committedCents,
+    usedOfUsablePercent: Math.round((committedCents / 280_000) * 100),
+    usedOfCapPercent: Math.round((committedCents / 400_000) * 100),
+    withinUsable: committedCents <= 280_000,
+    withinCap: committedCents <= 400_000,
+    runwayDays: dailyBudgetCents > 0 ? 7 : null,
+  };
+}
+
+function buildSimulation(overrides: Partial<ChangeSimulation> = {}): ChangeSimulation {
+  return {
+    changeRequestId: 'cr-1',
+    kind: 'set_daily_budget',
+    campaignName: 'Institucional',
+    campaignExternalId: '23851234567890123',
+    budgetLevel: 'campaign',
+    daysLeftInPeriod: 15,
+    overdeliveryFactorMilli: 1250,
+    period: {
+      periodMonth: '2026-09-01',
+      capCents: 400_000,
+      usableCents: 280_000,
+      spentCents: 20_000,
+      committedWithRequestCents: 37_500,
+      committedWithoutRequestCents: 0,
+    },
+    current: buildScenario('current', 2000, 0),
+    requested: buildScenario('requested', 3000, 37_500),
+    simulated: null,
+    simulationAvailable: true,
+    drift: null,
+    campaignSyncedAt: '2026-09-17T11:00:00.000Z',
+    ...overrides,
+  };
+}
+
 function makeUser(overrides: Partial<SessionUser>): SessionUser {
   return {
     employeeId: 'emp-1',
@@ -115,6 +172,7 @@ function renderDetail() {
 beforeEach(() => {
   session.current = makeUser({});
   approval.current = buildApproval();
+  simulation.current = { simulation: buildSimulation(), nextPending: null };
   decide.mockClear();
   execute.mockClear();
 });
@@ -130,9 +188,10 @@ describe('what the approver sees', () => {
     expect(screen.getByText(/R\$\s?20,00 → R\$\s?30,00 por dia/)).toBeTruthy();
     expect(screen.getAllByText(/375,00/).length).toBeGreaterThan(0);
     expect(screen.getByText(/META — Wings Matriz/)).toBeTruthy();
-    // Budget context: cap, usable, spent, committed.
-    expect(screen.getByText(/4\.000,00/)).toBeTruthy();
-    expect(screen.getByText(/2\.800,00/)).toBeTruthy();
+    // Budget context: cap, usable, spent, committed. The simulator repeats some
+    // of these figures in its scenarios, so more than one match is expected.
+    expect(screen.getAllByText(/4\.000,00/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/2\.800,00/).length).toBeGreaterThan(0);
   });
 
   it('says where the budget lives, since ABO and CBO behave differently', () => {
