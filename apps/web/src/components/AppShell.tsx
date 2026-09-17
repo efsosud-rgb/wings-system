@@ -6,6 +6,7 @@ import { Button } from './ui.js';
 /** Menu entries appear only when the viewer holds the permission behind them. */
 const MENU = [
   { to: '/funcionarios', label: 'Funcionários', icon: '👥', permission: 'employees.read' },
+  { to: '/trafego-pago/aprovacoes', label: 'Tráfego pago', icon: '🚀', permission: 'ads.read' },
   { to: '/ponto', label: 'Ponto (RH/DP)', icon: '🕒', permission: 'timeclock.read' },
   { to: '/configuracoes', label: 'Configurações', icon: '⚙️', permission: 'settings.manage' },
 ] as const;

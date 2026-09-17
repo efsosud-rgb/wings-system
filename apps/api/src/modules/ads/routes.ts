@@ -1,0 +1,229 @@
+import { approvalDecisionSchema, type ApprovalDetail, type ApprovalListItem } from '@wings/shared';
+import { and, eq, sql } from 'drizzle-orm';
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
+import { z } from 'zod';
+import { auditLog } from '../../db/schema/index.js';
+import { decideApproval } from './approvals.js';
+import { createApprovalNotifier } from './notifiers/factory.js';
+
+/**
+ * HTTP surface for the approvals panel.
+ *
+ * Thin by design: these routes read the approval tables and call the decision
+ * logic built in Stage 4. No spending rule lives here — the gate and the
+ * budget guard remain the only authorities.
+ */
+
+const idParamSchema = z.object({ id: z.string().uuid() });
+
+function requestContext(request: FastifyRequest) {
+  return { ip: request.ip, userAgent: request.headers['user-agent'] ?? null };
+}
+
+type ListRow = {
+  id: string;
+  status: ApprovalListItem['status'];
+  trigger: ApprovalListItem['trigger'];
+  amount_cents: string;
+  account_name: string;
+  platform: ApprovalListItem['platform'];
+  campaign_name: string;
+  change_kind: string;
+  requested_at: Date | string;
+  escalated_at: Date | string | null;
+  decided_at: Date | string | null;
+  requested_by_name: string | null;
+  requested_by_agent: boolean;
+} & Record<string, unknown>;
+
+function iso(value: Date | string | null): string | null {
+  if (value === null) return null;
+  return (value instanceof Date ? value : new Date(value)).toISOString();
+}
+
+function toListItem(row: ListRow): ApprovalListItem {
+  return {
+    id: row.id,
+    status: row.status,
+    trigger: row.trigger,
+    amountCents: Number(row.amount_cents),
+    accountName: row.account_name,
+    platform: row.platform,
+    campaignName: row.campaign_name,
+    changeKind: row.change_kind,
+    requestedAt: iso(row.requested_at) ?? new Date(0).toISOString(),
+    escalatedAt: iso(row.escalated_at),
+    decidedAt: iso(row.decided_at),
+    requestedByName: row.requested_by_name,
+    requestedByAgent: row.requested_by_agent,
+  };
+}
+
+export const adsRoutes: FastifyPluginAsync = async (app) => {
+  const { db, env } = app.wings;
+
+  /** Pending first, then escalated, then decided as history. */
+  app.get(
+    '/ads/approvals',
+    { preHandler: app.requirePermission('ads.read') },
+    async (_request, reply) => {
+      const rows = await db.execute<ListRow>(sql`
+        select ar.id, ar.status, ar.trigger, ar.amount_cents::text as amount_cents,
+               acc.name as account_name, acc.platform,
+               c.name as campaign_name, cr.kind as change_kind,
+               ar.requested_at, ar.escalated_at, ar.decided_at,
+               req.full_name as requested_by_name, ar.requested_by_agent
+          from ad_approval_requests ar
+          join ad_change_requests cr on cr.id = ar.change_request_id
+          join ad_accounts acc on acc.id = ar.ad_account_id
+          join ad_campaigns c on c.id = cr.campaign_id
+          left join employees req on req.id = ar.requested_by
+         order by
+           case ar.status when 'pending' then 0 when 'escalated' then 1 else 2 end,
+           ar.requested_at desc
+         limit 200
+      `);
+      return reply.send({ approvals: rows.rows.map(toListItem) });
+    },
+  );
+
+  app.get(
+    '/ads/approvals/:id',
+    { preHandler: app.requirePermission('ads.read') },
+    async (request, reply) => {
+      const params = idParamSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply
+          .status(404)
+          .send({ error: 'not_found', message: 'Solicitação não encontrada.' });
+      }
+
+      const rows = await db.execute<
+        ListRow & {
+          account_external_id: string;
+          campaign_external_id: string;
+          budget_level: ApprovalDetail['budgetLevel'];
+          from_value_cents: string | null;
+          to_value_cents: string | null;
+          exposure_delta_cents: string;
+          request_reason: string | null;
+          decision_reason: string | null;
+          decided_by_name: string | null;
+          cap_cents: string;
+          usable_cents: string;
+          committed_cents: string;
+          spent_cents: string;
+          notified_at: Date | string | null;
+          notification_error: string | null;
+        }
+      >(sql`
+        select ar.id, ar.status, ar.trigger, ar.amount_cents::text as amount_cents,
+               acc.name as account_name, acc.platform, acc.external_id as account_external_id,
+               c.name as campaign_name, c.external_id as campaign_external_id, c.budget_level,
+               cr.kind as change_kind, cr.from_value_cents::text as from_value_cents,
+               cr.to_value_cents::text as to_value_cents,
+               cr.exposure_delta_cents::text as exposure_delta_cents, cr.reason as request_reason,
+               ar.requested_at, ar.escalated_at, ar.decided_at, ar.decision_reason,
+               ar.notified_at, ar.notification_error,
+               req.full_name as requested_by_name, ar.requested_by_agent,
+               dec.full_name as decided_by_name,
+               p.cap_cents::text as cap_cents, p.usable_cents::text as usable_cents,
+               p.committed_cents::text as committed_cents, p.spent_cents::text as spent_cents
+          from ad_approval_requests ar
+          join ad_change_requests cr on cr.id = ar.change_request_id
+          join ad_accounts acc on acc.id = ar.ad_account_id
+          join ad_campaigns c on c.id = cr.campaign_id
+          join ad_budget_periods p on p.id = cr.budget_period_id
+          left join employees req on req.id = ar.requested_by
+          left join employees dec on dec.id = ar.decided_by
+         where ar.id = ${params.data.id}
+      `);
+
+      const row = rows.rows[0];
+      if (!row) {
+        return reply
+          .status(404)
+          .send({ error: 'not_found', message: 'Solicitação não encontrada.' });
+      }
+
+      // The audit trail of this specific request, newest last.
+      const trail = await db
+        .select({
+          at: auditLog.at,
+          action: auditLog.action,
+          metadata: auditLog.metadata,
+          actorName: sql<string | null>`actor.full_name`,
+        })
+        .from(auditLog)
+        .leftJoin(sql`employees as actor`, sql`actor.id = ${auditLog.actorEmployeeId}`)
+        .where(and(eq(auditLog.entity, 'ad_approval_request'), eq(auditLog.entityId, row.id)))
+        .orderBy(auditLog.at);
+
+      const detail: ApprovalDetail = {
+        ...toListItem(row),
+        accountExternalId: row.account_external_id,
+        campaignExternalId: row.campaign_external_id,
+        budgetLevel: row.budget_level,
+        fromValueCents: row.from_value_cents === null ? null : Number(row.from_value_cents),
+        toValueCents: row.to_value_cents === null ? null : Number(row.to_value_cents),
+        exposureDeltaCents: Number(row.exposure_delta_cents),
+        requestReason: row.request_reason,
+        decisionReason: row.decision_reason,
+        decidedByName: row.decided_by_name,
+        periodCapCents: Number(row.cap_cents),
+        periodUsableCents: Number(row.usable_cents),
+        periodCommittedCents: Number(row.committed_cents),
+        periodSpentCents: Number(row.spent_cents),
+        notifiedAt: iso(row.notified_at),
+        notificationError: row.notification_error,
+        auditTrail: trail.map((entry) => ({
+          at: entry.at.toISOString(),
+          action: entry.action,
+          actorName: entry.actorName,
+          metadata: (entry.metadata ?? {}) as Record<string, unknown>,
+        })),
+      };
+
+      return reply.send({ approval: detail });
+    },
+  );
+
+  /** Approve or reject. The service re-checks the approver's role itself. */
+  app.post(
+    '/ads/approvals/:id/decision',
+    { preHandler: app.requirePermission('ads.approve') },
+    async (request, reply) => {
+      const params = idParamSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply
+          .status(404)
+          .send({ error: 'not_found', message: 'Solicitação não encontrada.' });
+      }
+
+      const parsed = approvalDecisionSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: 'invalid_request',
+          message: parsed.error.issues[0]?.message ?? 'Dados inválidos',
+        });
+      }
+
+      const result = await decideApproval(db, {
+        approvalId: params.data.id,
+        approverEmployeeId: request.session.actor.employeeId,
+        decision: parsed.data.decision,
+        reason: parsed.data.reason,
+        notifier: createApprovalNotifier(env, db, (message) => request.log.info(message)),
+        ...requestContext(request),
+      });
+
+      if (!result.ok) {
+        const status =
+          result.reason === 'not_found' ? 404 : result.reason === 'already_decided' ? 409 : 403;
+        return reply.status(status).send({ error: result.reason, message: result.message });
+      }
+
+      return reply.send({ ok: true, status: result.status });
+    },
+  );
+};
