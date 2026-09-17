@@ -30,6 +30,15 @@ const schema = z.object({
   /** Public base URL, used to build invite and password-reset links. */
   APP_BASE_URL: z.string().url().default('http://localhost:5173'),
 
+  /** Z-API (WhatsApp) for approval notifications. Optional: without it the
+   * gate falls back to logging, and requests still wait for a decision. */
+  ZAPI_INSTANCE_ID: optionalString,
+  ZAPI_INSTANCE_TOKEN: optionalString,
+  ZAPI_CLIENT_TOKEN: optionalString,
+  /** Numbers of approvers who are not employees in the system yet. */
+  ADS_APPROVAL_ADMIN_PHONES: optionalString,
+  ADS_APPROVAL_DIRETORIA_PHONES: optionalString,
+
   /** Google Workspace SMTP. Optional in development; required in production. */
   SMTP_HOST: optionalString,
   SMTP_PORT: z.coerce.number().int().positive().default(587),
