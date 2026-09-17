@@ -30,6 +30,19 @@ const schema = z.object({
   /** Public base URL, used to build invite and password-reset links. */
   APP_BASE_URL: z.string().url().default('http://localhost:5173'),
 
+  /**
+   * Meta write credentials, kept separate from the read-only token so that
+   * revoking writes never breaks reading. Writes stay OFF until
+   * ADS_WRITES_ENABLED is explicitly set to true: having the token is not the
+   * same as being allowed to use it.
+   */
+  META_WRITE_TOKEN: optionalString,
+  META_WRITE_ACCOUNT_ID: optionalString,
+  ADS_WRITES_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+
   /** Z-API (WhatsApp) for approval notifications. Optional: without it the
    * gate falls back to logging, and requests still wait for a decision. */
   ZAPI_INSTANCE_ID: optionalString,

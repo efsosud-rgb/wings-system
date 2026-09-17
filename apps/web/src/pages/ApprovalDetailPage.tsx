@@ -2,12 +2,13 @@ import {
   APPROVAL_STATUS_LABEL,
   APPROVAL_TRIGGER_LABEL,
   CHANGE_KIND_LABEL,
+  CHANGE_STATUS_LABEL,
   type ApprovalDetail,
 } from '@wings/shared';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../api/auth.js';
-import { useApproval, useDecideApproval } from '../api/ads.js';
+import { useApproval, useDecideApproval, useExecuteApproval } from '../api/ads.js';
 import { ApiError } from '../api/client.js';
 import { Alert, Button, Field, Input } from '../components/ui.js';
 
@@ -129,6 +130,7 @@ export function ApprovalDetailPage() {
   const { data: user } = useSession();
   const query = useApproval(id);
   const decide = useDecideApproval(id ?? '');
+  const execute = useExecuteApproval(id ?? '');
   const [reason, setReason] = useState('');
   const [reasonError, setReasonError] = useState<string | null>(null);
 
@@ -239,6 +241,58 @@ export function ApprovalDetailPage() {
           {approval.decidedAt && ` em ${formatDateTime(approval.decidedAt)}`}
           {approval.decisionReason && ` — “${approval.decisionReason}”`}
         </Alert>
+      )}
+
+      {approval.status === 'approved' && (
+        <section className="block">
+          <legend>Execução na plataforma</legend>
+          <p className="field-hint">
+            Situação da alteração: <strong>{CHANGE_STATUS_LABEL[approval.changeStatus]}</strong>
+            {approval.executedAt && ` · ${formatDateTime(approval.executedAt)}`}
+          </p>
+
+          {approval.changeStatus === 'approved' && canDecide && (
+            <>
+              {!approval.executionAvailable && (
+                <Alert kind="info">
+                  A execução em contas reais está desligada nesta configuração. A aprovação fica
+                  registrada e nada é enviado ao Meta.
+                </Alert>
+              )}
+              {execute.isError && (
+                <Alert kind="error">
+                  {execute.error instanceof ApiError
+                    ? execute.error.message
+                    : 'Não foi possível executar.'}
+                </Alert>
+              )}
+              {execute.isSuccess && <Alert kind="success">Alteração aplicada na plataforma.</Alert>}
+              <div className="form-actions">
+                <Button
+                  type="button"
+                  disabled={execute.isPending || !approval.executionAvailable}
+                  onClick={() => void execute.mutateAsync()}
+                >
+                  {execute.isPending ? 'Executando…' : 'Executar no Meta'}
+                </Button>
+                <span className="field-hint">
+                  Esta ação altera a campanha real e movimenta dinheiro.
+                </span>
+              </div>
+            </>
+          )}
+
+          {approval.changeStatus === 'unknown' && (
+            <Alert kind="error">
+              A plataforma não confirmou o resultado da última tentativa. A conta foi congelada:
+              verifique no Gerenciador de Anúncios antes de tentar de novo.
+            </Alert>
+          )}
+
+          {approval.changeStatus === 'executed' && (
+            <Alert kind="success">Alteração já aplicada na plataforma.</Alert>
+          )}
+        </section>
       )}
 
       <section className="block">

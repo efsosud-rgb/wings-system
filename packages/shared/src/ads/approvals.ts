@@ -60,7 +60,39 @@ export interface ApprovalAuditEntry {
   metadata: Record<string, unknown>;
 }
 
+/** Lifecycle of the underlying change, which drives the Executar button. */
+export const CHANGE_STATUSES = [
+  'pending_approval',
+  'approved',
+  'rejected',
+  'executing',
+  'executed',
+  'failed',
+  'unknown',
+  'expired',
+  'superseded',
+] as const;
+export type ChangeStatus = (typeof CHANGE_STATUSES)[number];
+
+export const CHANGE_STATUS_LABEL: Record<ChangeStatus, string> = {
+  pending_approval: 'Aguardando aprovação',
+  approved: 'Aprovada, pronta para executar',
+  rejected: 'Recusada',
+  executing: 'Executando…',
+  executed: 'Executada na plataforma',
+  failed: 'Falhou na plataforma',
+  unknown: 'Resultado desconhecido — conta congelada',
+  expired: 'Expirada',
+  superseded: 'Substituída',
+};
+
 export interface ApprovalDetail extends ApprovalListItem {
+  /** State of the change itself, not of the decision. */
+  changeStatus: ChangeStatus;
+  executedAt: string | null;
+  lastExecutionOutcome: 'applied' | 'rejected' | 'unknown' | null;
+  /** False when the server has no write credentials or writes are disabled. */
+  executionAvailable: boolean;
   accountExternalId: string;
   campaignExternalId: string;
   /** Where the budget lives: campaign (CBO) or ad set (ABO). */

@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const session: { current: SessionUser | null } = { current: null };
 const approval: { current: ApprovalDetail } = { current: buildApproval() };
 const decide = vi.fn().mockResolvedValue({ ok: true, status: 'approved' });
+const execute = vi.fn().mockResolvedValue({ ok: true, outcome: 'applied' });
 
 vi.mock('../api/auth.js', () => ({
   useSession: () => ({ data: session.current, isLoading: false }),
@@ -23,6 +24,13 @@ vi.mock('../api/auth.js', () => ({
 vi.mock('../api/ads.js', () => ({
   useApproval: () => ({ data: { approval: approval.current }, isLoading: false, isError: false }),
   useDecideApproval: () => ({ mutateAsync: decide, isPending: false, error: null }),
+  useExecuteApproval: () => ({
+    mutateAsync: execute,
+    isPending: false,
+    isError: false,
+    isSuccess: false,
+    error: null,
+  }),
   useApprovals: () => ({ data: { approvals: [] }, isLoading: false, isError: false }),
 }));
 
@@ -58,6 +66,10 @@ function buildApproval(overrides: Partial<ApprovalDetail> = {}): ApprovalDetail 
     periodSpentCents: 20_000,
     notifiedAt: '2026-09-17T12:00:05.000Z',
     notificationError: null,
+    changeStatus: 'pending_approval',
+    executedAt: null,
+    lastExecutionOutcome: null,
+    executionAvailable: true,
     auditTrail: [
       {
         at: '2026-09-17T12:00:00.000Z',
@@ -104,6 +116,7 @@ beforeEach(() => {
   session.current = makeUser({});
   approval.current = buildApproval();
   decide.mockClear();
+  execute.mockClear();
 });
 
 afterEach(() => {
@@ -199,5 +212,79 @@ describe('deciding', () => {
       decision: 'rejected',
       reason: 'custo por lead muito alto',
     });
+  });
+});
+
+describe('the Executar button', () => {
+  it('is absent while the request is still pending a decision', () => {
+    renderDetail();
+    expect(screen.queryByRole('button', { name: /Executar/ })).toBeNull();
+  });
+
+  it('appears once approved, and says plainly that it moves money', () => {
+    approval.current = buildApproval({
+      status: 'approved',
+      changeStatus: 'approved',
+      decidedAt: '2026-09-17T13:00:00.000Z',
+      decidedByName: 'Eric',
+    });
+    renderDetail();
+
+    expect(screen.getByRole('button', { name: 'Executar no Meta' })).toBeTruthy();
+    expect(screen.getByText(/altera a campanha real e movimenta dinheiro/)).toBeTruthy();
+  });
+
+  it('calls the executor when pressed', () => {
+    approval.current = buildApproval({ status: 'approved', changeStatus: 'approved' });
+    renderDetail();
+    fireEvent.click(screen.getByRole('button', { name: 'Executar no Meta' }));
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('is disabled when the server has writes switched off', () => {
+    approval.current = buildApproval({
+      status: 'approved',
+      changeStatus: 'approved',
+      executionAvailable: false,
+    });
+    renderDetail();
+
+    expect(screen.getByRole('button', { name: 'Executar no Meta' })).toHaveProperty(
+      'disabled',
+      true,
+    );
+    expect(screen.getByText(/execução em contas reais está desligada/i)).toBeTruthy();
+  });
+
+  it('is hidden from someone who may only read', () => {
+    session.current = makeUser({ role: 'marketing', permissions: { 'ads.read': 'all' } });
+    approval.current = buildApproval({ status: 'approved', changeStatus: 'approved' });
+    renderDetail();
+    expect(screen.queryByRole('button', { name: /Executar/ })).toBeNull();
+  });
+
+  it('shows the change as already applied instead of offering it again', () => {
+    approval.current = buildApproval({
+      status: 'approved',
+      changeStatus: 'executed',
+      executedAt: '2026-09-17T13:05:00.000Z',
+    });
+    renderDetail();
+
+    expect(screen.queryByRole('button', { name: /Executar/ })).toBeNull();
+    expect(screen.getByText(/já aplicada na plataforma/i)).toBeTruthy();
+  });
+
+  it('warns and offers nothing when the last attempt ended unknown', () => {
+    approval.current = buildApproval({
+      status: 'approved',
+      changeStatus: 'unknown',
+      lastExecutionOutcome: 'unknown',
+    });
+    renderDetail();
+
+    expect(screen.queryByRole('button', { name: /Executar/ })).toBeNull();
+    expect(screen.getByText(/não confirmou o resultado/i)).toBeTruthy();
+    expect(screen.getByText(/conta foi congelada/i)).toBeTruthy();
   });
 });

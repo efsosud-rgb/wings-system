@@ -254,3 +254,68 @@ describe('POST /ads/approvals/:id/decision', () => {
     expect(second.statusCode).toBe(409);
   });
 });
+
+describe('POST /ads/approvals/:id/execute', () => {
+  it('refuses while writes are switched off, without touching the platform', async () => {
+    const { approvalId } = await pendingApproval();
+    const { cookies } = await sessionFor('admin_master');
+    await app.inject({
+      method: 'POST',
+      url: `/ads/approvals/${approvalId}/decision`,
+      cookies,
+      payload: { decision: 'approved' },
+    });
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/ads/approvals/${approvalId}/execute`,
+      cookies,
+    });
+
+    // No write credentials in the test environment: the honest answer is 409,
+    // never a pretend success.
+    expect(res.statusCode).toBe(409);
+    expect(['no_credentials', 'writes_disabled']).toContain(res.json().error);
+  });
+
+  it('refuses someone without ads.approve', async () => {
+    const { approvalId } = await pendingApproval();
+    const { cookies } = await sessionFor('marketing');
+    const res = await app.inject({
+      method: 'POST',
+      url: `/ads/approvals/${approvalId}/execute`,
+      cookies,
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('requires a session', async () => {
+    const { approvalId } = await pendingApproval();
+    const res = await app.inject({ method: 'POST', url: `/ads/approvals/${approvalId}/execute` });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('reports the change state so the UI knows whether to offer execution', async () => {
+    const { approvalId } = await pendingApproval();
+    const { cookies } = await sessionFor('admin_master');
+
+    const before = await app.inject({
+      method: 'GET',
+      url: `/ads/approvals/${approvalId}`,
+      cookies,
+    });
+    expect(before.json().approval.changeStatus).toBe('pending_approval');
+    expect(before.json().approval.executionAvailable).toBe(false);
+
+    await app.inject({
+      method: 'POST',
+      url: `/ads/approvals/${approvalId}/decision`,
+      cookies,
+      payload: { decision: 'approved' },
+    });
+
+    const after = await app.inject({ method: 'GET', url: `/ads/approvals/${approvalId}`, cookies });
+    expect(after.json().approval.changeStatus).toBe('approved');
+    expect(after.json().approval.lastExecutionOutcome).toBeNull();
+  });
+});

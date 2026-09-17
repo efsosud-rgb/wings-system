@@ -17,6 +17,21 @@ export function useApproval(id: string | undefined) {
   });
 }
 
+/**
+ * Executes an approved change. Deliberately a separate, explicit action: the
+ * decision and the write are two different moments, each with a person behind
+ * them.
+ */
+export function useExecuteApproval(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<{ ok: true; outcome: 'applied' }>(`/ads/approvals/${id}/execute`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ads'] });
+    },
+  });
+}
+
 export function useDecideApproval(id: string) {
   const queryClient = useQueryClient();
   return useMutation({

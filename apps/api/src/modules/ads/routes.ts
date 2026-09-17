@@ -2,9 +2,11 @@ import { approvalDecisionSchema, type ApprovalDetail, type ApprovalListItem } fr
 import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { auditLog } from '../../db/schema/index.js';
+import { adApprovalRequests, auditLog } from '../../db/schema/index.js';
 import { decideApproval } from './approvals.js';
+import { executeApprovedChange } from './executor.js';
 import { createApprovalNotifier } from './notifiers/factory.js';
+import { createMetaClient } from './platform/factory.js';
 
 /**
  * HTTP surface for the approvals panel.
@@ -115,6 +117,9 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
           spent_cents: string;
           notified_at: Date | string | null;
           notification_error: string | null;
+          change_status: ApprovalDetail['changeStatus'];
+          executed_at: Date | string | null;
+          last_execution_outcome: 'applied' | 'rejected' | 'unknown' | null;
         }
       >(sql`
         select ar.id, ar.status, ar.trigger, ar.amount_cents::text as amount_cents,
@@ -123,6 +128,10 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
                cr.kind as change_kind, cr.from_value_cents::text as from_value_cents,
                cr.to_value_cents::text as to_value_cents,
                cr.exposure_delta_cents::text as exposure_delta_cents, cr.reason as request_reason,
+               cr.status as change_status, cr.executed_at,
+               (select ex.outcome from ad_executions ex
+                 where ex.change_request_id = cr.id
+                 order by ex.started_at desc limit 1) as last_execution_outcome,
                ar.requested_at, ar.escalated_at, ar.decided_at, ar.decision_reason,
                ar.notified_at, ar.notification_error,
                req.full_name as requested_by_name, ar.requested_by_agent,
@@ -176,6 +185,10 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         periodSpentCents: Number(row.spent_cents),
         notifiedAt: iso(row.notified_at),
         notificationError: row.notification_error,
+        changeStatus: row.change_status,
+        executedAt: iso(row.executed_at),
+        lastExecutionOutcome: row.last_execution_outcome,
+        executionAvailable: createMetaClient(env).canWrite,
         auditTrail: trail.map((entry) => ({
           at: entry.at.toISOString(),
           action: entry.action,
@@ -224,6 +237,69 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
       }
 
       return reply.send({ ok: true, status: result.status });
+    },
+  );
+
+  /**
+   * Executes an approved change against the real platform.
+   *
+   * Triggered by a person pressing a button, never by a worker: the first real
+   * writes happen with someone watching. The executor re-checks every guarantee
+   * itself; this route only carries the request to it.
+   */
+  app.post(
+    '/ads/approvals/:id/execute',
+    { preHandler: app.requirePermission('ads.approve') },
+    async (request, reply) => {
+      const params = idParamSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply
+          .status(404)
+          .send({ error: 'not_found', message: 'Solicitação não encontrada.' });
+      }
+
+      const approval = await db.query.adApprovalRequests.findFirst({
+        where: eq(adApprovalRequests.id, params.data.id),
+      });
+      if (!approval) {
+        return reply
+          .status(404)
+          .send({ error: 'not_found', message: 'Solicitação não encontrada.' });
+      }
+
+      const { client, canWrite, reason } = createMetaClient(env);
+      if (!client || !canWrite) {
+        return reply.status(409).send({
+          error: reason ?? 'writes_disabled',
+          message:
+            reason === 'no_credentials'
+              ? 'Sem credenciais de escrita configuradas para esta conta.'
+              : 'A execução em contas reais está desligada. Habilite ADS_WRITES_ENABLED para liberar.',
+        });
+      }
+
+      const result = await executeApprovedChange(db, client, approval.changeRequestId, {
+        allowWrites: true,
+        actorEmployeeId: request.session.actor.employeeId,
+      });
+
+      if (result.outcome === 'applied') return reply.send({ ok: true, outcome: 'applied' });
+
+      if (result.outcome === 'refused') {
+        return reply.status(409).send({ error: result.reason, message: result.message });
+      }
+      if (result.outcome === 'rejected') {
+        return reply
+          .status(422)
+          .send({ error: 'platform_rejected', message: result.message, code: result.code });
+      }
+      // Unknown: the account is frozen and reconciliation must resolve it.
+      return reply.status(202).send({
+        error: 'unknown_outcome',
+        message:
+          'A plataforma não confirmou o resultado. A conta foi congelada; verifique no Gerenciador de Anúncios antes de tentar novamente.',
+        reason: result.reason,
+      });
     },
   );
 };
