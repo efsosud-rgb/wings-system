@@ -50,6 +50,13 @@
       "when": 1789591901436,
       "tag": "0006_ad_sets",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789649194729,
+      "tag": "0007_ad_approvals",
+      "breakpoints": true
     }
   ]
 }

@@ -56,6 +56,21 @@ export const changeStatusEnum = pgEnum('ad_change_status', [
   'superseded',
 ]);
 
+/** Lifecycle of a human decision on a money-moving change. */
+export const approvalStatusEnum = pgEnum('ad_approval_status', [
+  'pending',
+  'escalated',
+  'approved',
+  'rejected',
+]);
+
+/** Why the gate demanded a human decision. */
+export const approvalTriggerEnum = pgEnum('ad_approval_trigger', [
+  'policy_always',
+  'above_single_threshold',
+  'cumulative_24h',
+]);
+
 export const guardrailEventKindEnum = pgEnum('ad_guardrail_event_kind', [
   'cap_would_be_exceeded',
   'usable_would_be_exceeded',
@@ -224,6 +239,12 @@ export const adChangeRequests = pgTable(
     executedAt: timestamp('executed_at', { withTimezone: true }),
     /** True while this request holds exposure in committed_cents. */
     reservationActive: boolean('reservation_active').notNull().default(true),
+    /**
+     * Set when the change was allowed to proceed without a human decision.
+     * Only possible under the threshold policy; it also feeds the rolling
+     * 24h cumulative rule, so small changes cannot add up unnoticed.
+     */
+    autoApproved: boolean('auto_approved').notNull().default(false),
   },
   (table) => [
     index('ad_change_requests_account_status_idx').on(table.adAccountId, table.status),
@@ -277,3 +298,46 @@ export const adExecutions = pgTable('ad_executions', {
 
 /** Convenience: the SQL used by the guard to lock a period row. */
 export const LOCK_PERIOD_SQL = sql`select id from ad_budget_periods where id = $1 for update`;
+
+/**
+ * The approvals gate.
+ *
+ * Kept separate from ad_change_requests on purpose: the change request tracks
+ * what should happen to a budget, this tracks the human decision about it.
+ * One row per decision needed, never edited into a different meaning — the
+ * status moves forward only.
+ */
+export const adApprovalRequests = pgTable(
+  'ad_approval_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    changeRequestId: uuid('change_request_id')
+      .notNull()
+      .references(() => adChangeRequests.id)
+      .unique(),
+    adAccountId: uuid('ad_account_id')
+      .notNull()
+      .references(() => adAccounts.id),
+    /** Size of the money movement being judged, in cents (absolute). */
+    amountCents: bigint('amount_cents', { mode: 'number' }).notNull(),
+    trigger: approvalTriggerEnum('trigger').notNull(),
+    status: approvalStatusEnum('status').notNull().default('pending'),
+    /** Null when the agent asked; set when a person did. */
+    requestedBy: uuid('requested_by').references(() => employees.id),
+    requestedByAgent: boolean('requested_by_agent').notNull().default(false),
+    requestedAt: timestamp('requested_at', { withTimezone: true }).notNull().defaultNow(),
+    /** Moment it was escalated to Diretoria. Escalation never expires it. */
+    escalatedAt: timestamp('escalated_at', { withTimezone: true }),
+    decidedAt: timestamp('decided_at', { withTimezone: true }),
+    decidedBy: uuid('decided_by').references(() => employees.id),
+    decisionReason: text('decision_reason'),
+    /** Bound to the exact change; a drifted payload voids the approval. */
+    payloadHash: text('payload_hash').notNull(),
+    notifiedAt: timestamp('notified_at', { withTimezone: true }),
+    notificationError: text('notification_error'),
+  },
+  (table) => [
+    index('ad_approval_requests_status_idx').on(table.status, table.requestedAt),
+    index('ad_approval_requests_account_idx').on(table.adAccountId),
+  ],
+);
