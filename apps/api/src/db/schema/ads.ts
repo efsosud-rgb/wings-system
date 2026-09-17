@@ -493,3 +493,54 @@ export const adMetricsDaily = pgTable(
     index('ad_metrics_daily_account_day_idx').on(table.adAccountId, table.day),
   ],
 );
+
+export const alertKindEnum = pgEnum('ad_alert_kind', [
+  'ad_rejected',
+  'budget_pacing',
+  'creative_fatigue',
+  'quality_below_average',
+  'conversion_silence',
+]);
+
+export const alertSeverityEnum = pgEnum('ad_alert_severity', ['info', 'warning', 'critical']);
+
+/**
+ * Cockpit alerts.
+ *
+ * One open row per (account, kind, entity): a condition that persists updates
+ * `lastSeenAt` rather than piling up duplicates, so a rejected ad does not
+ * produce a new alert every hour. Critical alerts also reach WhatsApp; the
+ * rest live in the in-app feed.
+ */
+export const adAlerts = pgTable(
+  'ad_alerts',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    adAccountId: uuid('ad_account_id')
+      .notNull()
+      .references(() => adAccounts.id),
+    kind: alertKindEnum('kind').notNull(),
+    severity: alertSeverityEnum('severity').notNull(),
+    /** Which entity triggered it, at the platform's own id. */
+    entityLevel: metricsLevelEnum('entity_level'),
+    entityExternalId: text('entity_external_id'),
+    title: text('title').notNull(),
+    detail: jsonb('detail').notNull().default({}),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    /** Set when the condition stops holding. */
+    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true }),
+    acknowledgedBy: uuid('acknowledged_by').references(() => employees.id),
+    notifiedAt: timestamp('notified_at', { withTimezone: true }),
+    notificationError: text('notification_error'),
+  },
+  (table) => [
+    index('ad_alerts_account_idx').on(table.adAccountId, table.resolvedAt),
+    // At most one OPEN alert per condition per entity.
+    uniqueIndex('ad_alerts_open_uq')
+      .on(table.adAccountId, table.kind, table.entityExternalId)
+      .where(sql`resolved_at is null`),
+  ],
+);

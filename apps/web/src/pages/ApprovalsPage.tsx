@@ -108,9 +108,14 @@ export function ApprovalsPage() {
 
   return (
     <>
-      <header className="page-header">
-        <h1>Tráfego pago — aprovações</h1>
-        <p>Nenhuma alteração de orçamento é executada sem uma decisão registrada aqui.</p>
+      <header className="page-header page-header-row">
+        <div>
+          <h1>Tráfego pago — aprovações</h1>
+          <p>Nenhuma alteração de orçamento é executada sem uma decisão registrada aqui.</p>
+        </div>
+        <Link to="/trafego-pago" className="btn btn-ghost btn-inline">
+          Ver cockpit
+        </Link>
       </header>
 
       {list.isError && <Alert kind="error">Não foi possível carregar as solicitações.</Alert>}

@@ -1,4 +1,9 @@
-import type { ApprovalDecisionInput, ApprovalDetail, ApprovalListItem } from '@wings/shared';
+import type {
+  ApprovalDecisionInput,
+  ApprovalDetail,
+  ApprovalListItem,
+  CockpitSnapshot,
+} from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
 
@@ -42,6 +47,26 @@ export function useDecideApproval(id: string) {
       ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['ads'] });
+    },
+  });
+}
+
+/** The cockpit snapshot: performance, pacing and open alerts in one read. */
+export function useCockpit(days: number) {
+  return useQuery({
+    queryKey: ['ads', 'cockpit', days],
+    queryFn: () => api.get<{ cockpit: CockpitSnapshot }>(`/ads/cockpit?days=${days}`),
+    // The ingest job runs hourly; refetching faster only adds noise.
+    staleTime: 60_000,
+  });
+}
+
+export function useAcknowledgeAlert() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (alertId: string) => api.post<{ ok: true }>(`/ads/alerts/${alertId}/acknowledge`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ads', 'cockpit'] });
     },
   });
 }

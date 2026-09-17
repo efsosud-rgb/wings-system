@@ -3,7 +3,9 @@ import { createDb } from '../../db/client.js';
 import { loadDotEnv } from '../../db/load-env.js';
 import { adAccounts } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
+import { runAlerts } from './alerts.js';
 import { getPeriodState, openPeriod } from './budget-guard.js';
+import { createAlertNotifier } from './notifiers/factory.js';
 import { ensureAdAccount, ingestMetrics, syncAds } from './metrics.js';
 import { formatBrl } from './platform/money.js';
 import { createMetaClient } from './platform/factory.js';
@@ -97,6 +99,16 @@ async function main() {
             `gasto ${formatBrl(result.spendCents)}, conversões ${result.conversions}`,
         );
       }
+
+      const alerts = await runAlerts(db, account.id, {
+        notifier: createAlertNotifier(env, db),
+        now,
+      });
+      console.warn(
+        `  alertas: ${alerts.detected} detectados (${alerts.opened} novos, ${alerts.resolved} resolvidos), ` +
+          `${alerts.notified} notificados` +
+          (alerts.notificationErrors > 0 ? `, ${alerts.notificationErrors} FALHAS DE ENVIO` : ''),
+      );
 
       const state = await getPeriodState(db, account.id, periodMonthOf(now));
       if (state) {

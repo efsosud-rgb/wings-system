@@ -556,3 +556,174 @@ a {
   display: block;
   font-size: 13px;
 }
+
+/* ---------- cockpit ---------- */
+.window-picker {
+  display: flex;
+  gap: 8px;
+}
+
+.window-picker .btn {
+  width: auto;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.cockpit-counters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.cockpit-counters .card {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cockpit-counters strong {
+  font-size: 22px;
+}
+
+.cockpit-budget {
+  margin-bottom: 24px;
+}
+
+.cockpit-budget-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.cockpit-budget-head h2 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* The bar shows spend; the marker shows where an even-spend month would be. */
+.pacing-bar {
+  position: relative;
+  height: 10px;
+  border-radius: 5px;
+  background: var(--wings-surface);
+  border: 1px solid var(--wings-border);
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+
+.pacing-spent {
+  height: 100%;
+  background: var(--wings-accent);
+}
+
+.pacing-expected {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: var(--wings-text);
+}
+
+.cockpit-figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.cockpit-figures dt {
+  color: var(--wings-muted);
+  font-size: 12px;
+}
+
+.cockpit-figures dd {
+  font-size: 15px;
+  margin-top: 2px;
+}
+
+.alert-feed {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.alert-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  background: var(--wings-card);
+  border: 1px solid var(--wings-border);
+  border-left-width: 3px;
+  border-radius: 8px;
+}
+
+.alert-row.severity-critical {
+  border-left-color: var(--wings-danger);
+}
+
+.alert-row.severity-warning {
+  border-left-color: #fbbf24;
+}
+
+.alert-row.severity-info {
+  border-left-color: var(--wings-muted);
+}
+
+.alert-actions .btn {
+  width: auto;
+  white-space: nowrap;
+}
+
+.severity-tag-critical {
+  color: var(--wings-danger);
+  background: rgba(248, 113, 113, 0.1);
+  border-color: rgba(248, 113, 113, 0.3);
+}
+
+.severity-tag-warning {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.3);
+}
+
+.severity-tag-info {
+  color: var(--wings-muted);
+  background: rgba(163, 163, 163, 0.1);
+  border-color: var(--wings-border);
+}
+
+.alert-badge {
+  display: inline-block;
+  margin-left: 6px;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: rgba(248, 113, 113, 0.15);
+  color: var(--wings-danger);
+  font-size: 11px;
+  text-align: center;
+}
+
+.campaign-active {
+  color: var(--wings-success);
+  background: rgba(52, 211, 153, 0.1);
+  border-color: rgba(52, 211, 153, 0.3);
+}
+
+.campaign-paused,
+.campaign-archived,
+.campaign-deleted {
+  color: var(--wings-muted);
+  background: rgba(163, 163, 163, 0.08);
+  border-color: var(--wings-border);
+}
+
+.error-text {
+  color: var(--wings-danger);
+}
