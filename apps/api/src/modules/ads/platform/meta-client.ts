@@ -77,6 +77,10 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
 
   private readonly token: string;
   private readonly accountId: string;
+  /** Exposed for the write client, which posts to the same account path. */
+  protected get adAccountPath(): string {
+    return this.accountId;
+  }
   private readonly version: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;

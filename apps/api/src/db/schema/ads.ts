@@ -16,6 +16,31 @@ import {
 import { employees } from './employees.js';
 
 /**
+ * The single tenant every row currently belongs to.
+ *
+ * Wings System is single-tenant today. Diretoria is considering offering it
+ * to other companies later, and adding this column now — while staging holds
+ * a handful of rows — costs nothing, whereas retrofitting it across live data
+ * later would be painful. Nothing routes by tenant yet: there is one row, and
+ * all logic still assumes it.
+ */
+export const WINGS_TENANT_ID = '00000000-0000-0000-0000-000000000001';
+
+export const tenants = pgTable('tenants', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull(),
+  slug: text('slug').notNull().unique(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Every ads table carries this, so scoping later needs no migration. */
+const tenantId = () =>
+  uuid('tenant_id')
+    .notNull()
+    .default(WINGS_TENANT_ID)
+    .references(() => tenants.id);
+
+/**
  * Paid traffic (Marketing module).
  *
  * Every cap is **per ad account**, never pooled: Meta R$4.000, Google R$4.000
@@ -85,6 +110,7 @@ export const guardrailEventKindEnum = pgEnum('ad_guardrail_event_kind', [
 export const adAccounts = pgTable(
   'ad_accounts',
   {
+    tenantId: tenantId(),
     id: uuid('id').primaryKey().defaultRandom(),
     platform: adPlatformEnum('platform').notNull(),
     /** Platform's own account id, e.g. act_123456789 for Meta. */
@@ -109,6 +135,7 @@ export const adAccounts = pgTable(
 export const budgetPeriods = pgTable(
   'ad_budget_periods',
   {
+    tenantId: tenantId(),
     id: uuid('id').primaryKey().defaultRandom(),
     adAccountId: uuid('ad_account_id')
       .notNull()
@@ -135,6 +162,7 @@ export const budgetPeriods = pgTable(
 
 /** Append-only record of cap changes. Caps are never edited silently. */
 export const budgetCapHistory = pgTable('ad_budget_cap_history', {
+  tenantId: tenantId(),
   id: bigserial('id', { mode: 'bigint' }).primaryKey(),
   adAccountId: uuid('ad_account_id')
     .notNull()
@@ -151,6 +179,7 @@ export const budgetCapHistory = pgTable('ad_budget_cap_history', {
 export const adCampaigns = pgTable(
   'ad_campaigns',
   {
+    tenantId: tenantId(),
     id: uuid('id').primaryKey().defaultRandom(),
     adAccountId: uuid('ad_account_id')
       .notNull()
@@ -183,6 +212,7 @@ export const adCampaigns = pgTable(
 export const adSets = pgTable(
   'ad_sets',
   {
+    tenantId: tenantId(),
     id: uuid('id').primaryKey().defaultRandom(),
     campaignId: uuid('campaign_id')
       .notNull()
@@ -210,6 +240,7 @@ export const adSets = pgTable(
 export const adChangeRequests = pgTable(
   'ad_change_requests',
   {
+    tenantId: tenantId(),
     id: uuid('id').primaryKey().defaultRandom(),
     adAccountId: uuid('ad_account_id')
       .notNull()
@@ -256,6 +287,7 @@ export const adChangeRequests = pgTable(
 export const adGuardrailEvents = pgTable(
   'ad_guardrail_events',
   {
+    tenantId: tenantId(),
     id: bigserial('id', { mode: 'bigint' }).primaryKey(),
     adAccountId: uuid('ad_account_id').references(() => adAccounts.id),
     kind: guardrailEventKindEnum('kind').notNull(),
@@ -269,6 +301,7 @@ export const adGuardrailEvents = pgTable(
 export const adSpendSnapshots = pgTable(
   'ad_spend_snapshots',
   {
+    tenantId: tenantId(),
     id: bigserial('id', { mode: 'bigint' }).primaryKey(),
     adAccountId: uuid('ad_account_id')
       .notNull()
@@ -284,6 +317,7 @@ export const adSpendSnapshots = pgTable(
 
 /** Append-only log of platform calls. `unknown` is a real outcome, not an error. */
 export const adExecutions = pgTable('ad_executions', {
+  tenantId: tenantId(),
   id: uuid('id').primaryKey().defaultRandom(),
   changeRequestId: uuid('change_request_id')
     .notNull()
@@ -310,6 +344,7 @@ export const LOCK_PERIOD_SQL = sql`select id from ad_budget_periods where id = $
 export const adApprovalRequests = pgTable(
   'ad_approval_requests',
   {
+    tenantId: tenantId(),
     id: uuid('id').primaryKey().defaultRandom(),
     changeRequestId: uuid('change_request_id')
       .notNull()
