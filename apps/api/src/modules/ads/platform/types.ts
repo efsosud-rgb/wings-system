@@ -42,6 +42,47 @@ export interface PlatformAccount {
   capReached: boolean;
 }
 
+export interface PlatformAd {
+  id: string;
+  campaignId: string;
+  adSetId: string;
+  name: string;
+  status: CampaignStatus;
+  /** Meta's effective_status: DISAPPROVED, WITH_ISSUES, CAMPAIGN_PAUSED… */
+  effectiveStatus: string | null;
+  creative: {
+    id: string;
+    name: string | null;
+    thumbnailUrl: string | null;
+    title: string | null;
+    body: string | null;
+  } | null;
+  /** The real rejection reason, when the ad was disapproved. */
+  reviewFeedback: unknown;
+  issuesInfo: unknown;
+}
+
+export type MetricsLevel = 'campaign' | 'ad_set' | 'ad';
+
+/** One day of performance for one entity, normalised across platforms. */
+export interface InsightRow {
+  level: MetricsLevel;
+  entityId: string;
+  date: string;
+  spendCents: Cents;
+  impressions: number;
+  clicks: number;
+  reach: number;
+  /** Percentage x1000, integer — no floats on metrics. */
+  ctrMilli: number;
+  frequencyMilli: number;
+  /** Every action type the platform reported, by type. */
+  actions: Record<string, number>;
+  qualityRanking: string | null;
+  engagementRateRanking: string | null;
+  conversionRateRanking: string | null;
+}
+
 export interface SpendRow {
   campaignId: string;
   /** YYYY-MM-DD in the account's timezone. */
@@ -70,6 +111,10 @@ export interface AdsPlatformClient {
   listCampaigns(): Promise<PlatformCampaign[]>;
   /** Every ad set in the account, with the campaign each belongs to. */
   listAdSets(): Promise<PlatformAdSet[]>;
+  /** Every ad, with its creative and review state. */
+  listAds(): Promise<PlatformAd[]>;
+  /** Daily performance rows for the window, at the requested level. */
+  getInsights(level: MetricsLevel, sinceDate: string, untilDate?: string): Promise<InsightRow[]>;
   getCampaign(campaignId: string): Promise<PlatformCampaign | null>;
   /** Reported spend per campaign per day, for reconciliation. */
   getSpend(sinceDate: string): Promise<SpendRow[]>;

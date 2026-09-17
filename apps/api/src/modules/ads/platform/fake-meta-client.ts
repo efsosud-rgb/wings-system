@@ -2,8 +2,11 @@ import { assertCents, type Cents } from './money.js';
 import { META_DAILY_OVERDELIVERY_FACTOR } from './fixtures.js';
 import type {
   AdsPlatformClient,
+  InsightRow,
+  MetricsLevel,
   MutationOutcome,
   PlatformAccount,
+  PlatformAd,
   PlatformAdSet,
   PlatformCampaign,
   SpendRow,
@@ -50,11 +53,24 @@ export type InjectedFailure =
   /** The nastiest real-world case: the change lands, then the response is lost. */
   | { kind: 'timeout_after_apply' };
 
+export interface FakeAdSeed {
+  id: string;
+  campaignId: string;
+  adSetId: string;
+  name: string;
+  status?: 'ACTIVE' | 'PAUSED';
+  effectiveStatus?: string;
+  /** Set to simulate a disapproved ad carrying a real rejection reason. */
+  reviewFeedback?: unknown;
+  issuesInfo?: unknown;
+}
+
 export interface FakeMetaOptions {
   accountId?: string;
   spendCapCents?: Cents | null;
   campaigns?: FakeCampaignSeed[];
   adSets?: FakeAdSetSeed[];
+  ads?: FakeAdSeed[];
   /** Fraction of the daily budget actually delivered, default 1.0 (max 1.25). */
   overdeliveryFactor?: number;
   /** How long reported spend trails actual spend. */
@@ -81,6 +97,7 @@ export class FakeMetaClient implements AdsPlatformClient {
   private readonly reportingLagMinutes: number;
   private readonly now: () => Date;
   private readonly adSets = new Map<string, PlatformAdSet & { actualSpendCents: Cents }>();
+  private readonly ads: FakeAdSeed[] = [];
   private readonly failures: InjectedFailure[] = [];
   private capReached = false;
 
@@ -110,6 +127,8 @@ export class FakeMetaClient implements AdsPlatformClient {
         dailySpend: new Map(),
       });
     }
+
+    this.ads.push(...(options.ads ?? []));
 
     for (const seed of options.adSets ?? []) {
       this.adSets.set(seed.id, {
@@ -218,6 +237,57 @@ export class FakeMetaClient implements AdsPlatformClient {
       amountSpentCents: this.reportedTotalSpendCents(),
       capReached: this.capReached,
     };
+  }
+
+  async listAds(): Promise<PlatformAd[]> {
+    this.calls.push({ method: 'listAds', args: [] });
+    return this.ads.map((ad) => ({
+      id: ad.id,
+      campaignId: ad.campaignId,
+      adSetId: ad.adSetId,
+      name: ad.name,
+      status: (ad.status ?? 'ACTIVE') as PlatformAd['status'],
+      effectiveStatus: ad.effectiveStatus ?? ad.status ?? 'ACTIVE',
+      creative: {
+        id: `cr_${ad.id}`,
+        name: `${ad.name} — criativo`,
+        thumbnailUrl: `https://example.invalid/${ad.id}.jpg`,
+        title: 'Título',
+        body: 'Corpo do anúncio',
+      },
+      reviewFeedback: ad.reviewFeedback ?? null,
+      issuesInfo: ad.issuesInfo ?? null,
+    }));
+  }
+
+  /** Daily rows derived from what the simulator has actually "spent". */
+  async getInsights(level: MetricsLevel, sinceDate: string): Promise<InsightRow[]> {
+    this.calls.push({ method: 'getInsights', args: [level, sinceDate] });
+    const rows: InsightRow[] = [];
+
+    for (const campaign of this.campaigns.values()) {
+      for (const [date, spendCents] of campaign.dailySpend) {
+        if (date < sinceDate || campaign.reportedSpendCents === 0) continue;
+        const impressions = Math.max(1, Math.round(spendCents / 5));
+        const clicks = Math.round(impressions / 50);
+        rows.push({
+          level,
+          entityId: campaign.id,
+          date,
+          spendCents,
+          impressions,
+          clicks,
+          reach: Math.round(impressions / 1.3),
+          ctrMilli: Math.round((clicks / impressions) * 100 * 1000),
+          frequencyMilli: 1300,
+          actions: { link_click: clicks, video_view: impressions },
+          qualityRanking: null,
+          engagementRateRanking: null,
+          conversionRateRanking: null,
+        });
+      }
+    }
+    return rows;
   }
 
   async listAdSets(): Promise<PlatformAdSet[]> {

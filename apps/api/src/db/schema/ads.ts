@@ -376,3 +376,120 @@ export const adApprovalRequests = pgTable(
     index('ad_approval_requests_account_idx').on(table.adAccountId),
   ],
 );
+
+/** Level an insights row belongs to. */
+export const metricsLevelEnum = pgEnum('ad_metrics_level', ['campaign', 'ad_set', 'ad']);
+
+/**
+ * Ads (the creative-carrying layer) and the minimum creative detail the
+ * cockpit shows. Deliberately small: the builder is out of scope, so there is
+ * no ad-creation machinery here, only a mirror of what exists.
+ */
+export const adAds = pgTable(
+  'ad_ads',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    adAccountId: uuid('ad_account_id')
+      .notNull()
+      .references(() => adAccounts.id),
+    adSetId: uuid('ad_set_id').references(() => adSets.id, { onDelete: 'cascade' }),
+    campaignId: uuid('campaign_id').references(() => adCampaigns.id, { onDelete: 'cascade' }),
+    externalId: text('external_id').notNull(),
+    name: text('name').notNull(),
+    status: adCampaignStatusEnum('status').notNull().default('PAUSED'),
+    /** Meta's effective_status: DISAPPROVED, WITH_ISSUES, CAMPAIGN_PAUSED… */
+    effectiveStatus: text('effective_status'),
+    creativeExternalId: text('creative_external_id'),
+    /**
+     * The real rejection reason. The spike found ad_review_feedback carries it
+     * while issues_info is empty on disapproved ads, so both are stored and
+     * the UI prefers review feedback.
+     */
+    reviewFeedback: jsonb('review_feedback'),
+    issuesInfo: jsonb('issues_info'),
+    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex('ad_ads_account_external_uq').on(table.adAccountId, table.externalId)],
+);
+
+export const adCreatives = pgTable(
+  'ad_creatives',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    adAccountId: uuid('ad_account_id')
+      .notNull()
+      .references(() => adAccounts.id),
+    externalId: text('external_id').notNull(),
+    name: text('name'),
+    thumbnailUrl: text('thumbnail_url'),
+    title: text('title'),
+    body: text('body'),
+    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('ad_creatives_account_external_uq').on(table.adAccountId, table.externalId),
+  ],
+);
+
+/**
+ * Daily performance, one row per entity per day per level.
+ *
+ * Upserted rather than append-only: platforms revise these figures for days
+ * afterwards, and the cockpit should show the current truth. Money stays in
+ * ad_spend_snapshots, which IS append-only — analytics and the guardrail must
+ * not share a table.
+ *
+ * Ratios are stored as integers (x1000) so no float ever touches a metric.
+ * CPL and CPA are deliberately NOT stored: with no conversion events on this
+ * account, a derived number would be fiction. They are computed at query time
+ * when conversions exist.
+ */
+export const adMetricsDaily = pgTable(
+  'ad_metrics_daily',
+  {
+    tenantId: tenantId(),
+    id: bigserial('id', { mode: 'bigint' }).primaryKey(),
+    adAccountId: uuid('ad_account_id')
+      .notNull()
+      .references(() => adAccounts.id),
+    level: metricsLevelEnum('level').notNull(),
+    /** The platform's id for the entity this row measures. */
+    entityExternalId: text('entity_external_id').notNull(),
+    campaignId: uuid('campaign_id').references(() => adCampaigns.id, { onDelete: 'cascade' }),
+    adSetId: uuid('ad_set_id').references(() => adSets.id, { onDelete: 'cascade' }),
+    adId: uuid('ad_id').references(() => adAds.id, { onDelete: 'cascade' }),
+    day: date('day').notNull(),
+    spendCents: bigint('spend_cents', { mode: 'number' }).notNull().default(0),
+    impressions: bigint('impressions', { mode: 'number' }).notNull().default(0),
+    clicks: bigint('clicks', { mode: 'number' }).notNull().default(0),
+    reach: bigint('reach', { mode: 'number' }).notNull().default(0),
+    /** CTR percentage x1000 (1.425% -> 1425). */
+    ctrMilli: bigint('ctr_milli', { mode: 'number' }).notNull().default(0),
+    /** Frequency x1000 (1.27 -> 1270). */
+    frequencyMilli: bigint('frequency_milli', { mode: 'number' }).notNull().default(0),
+    /** Conversions of the account's lead action type, when one exists. */
+    conversions: bigint('conversions', { mode: 'number' }).notNull().default(0),
+    /** Every action type reported, kept raw so the lead type can be chosen later. */
+    actions: jsonb('actions').notNull().default({}),
+    qualityRanking: text('quality_ranking'),
+    engagementRateRanking: text('engagement_rate_ranking'),
+    conversionRateRanking: text('conversion_rate_ranking'),
+    fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Scoped by account: entity ids are unique within a platform, but the
+    // guarantee we want is per account, and a cross-account collision would
+    // silently overwrite another account's numbers.
+    uniqueIndex('ad_metrics_daily_entity_day_uq').on(
+      table.adAccountId,
+      table.level,
+      table.entityExternalId,
+      table.day,
+    ),
+    index('ad_metrics_daily_account_day_idx').on(table.adAccountId, table.day),
+  ],
+);

@@ -7,8 +7,11 @@ import type { Cents } from './money.js';
 import type {
   AdsPlatformClient,
   CampaignStatus,
+  InsightRow,
+  MetricsLevel,
   MutationOutcome,
   PlatformAccount,
+  PlatformAd,
   PlatformAdSet,
   PlatformCampaign,
   SpendRow,
@@ -240,6 +243,101 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       if (error instanceof MetaApiError && error.code === 100) return null;
       throw error;
     }
+  }
+
+  async listAds(): Promise<PlatformAd[]> {
+    const body = await this.get<{
+      data: {
+        id: string;
+        name: string;
+        status: string;
+        effective_status?: string;
+        campaign_id: string;
+        adset_id: string;
+        issues_info?: unknown;
+        ad_review_feedback?: unknown;
+        creative?: {
+          id: string;
+          name?: string;
+          thumbnail_url?: string;
+          title?: string;
+          body?: string;
+        };
+      }[];
+    }>(`${this.accountId}/ads`, {
+      // ad_review_feedback carries the real rejection reason; issues_info is
+      // empty on disapproved ads (Stage 6.0 spike).
+      fields:
+        'id,name,status,effective_status,campaign_id,adset_id,issues_info,ad_review_feedback,creative{id,name,thumbnail_url,title,body}',
+      limit: '200',
+    });
+
+    return body.data.map((ad) => ({
+      id: ad.id,
+      campaignId: ad.campaign_id,
+      adSetId: ad.adset_id,
+      name: ad.name,
+      status: ad.status as CampaignStatus,
+      effectiveStatus: ad.effective_status ?? null,
+      creative: ad.creative
+        ? {
+            id: ad.creative.id,
+            name: ad.creative.name ?? null,
+            thumbnailUrl: ad.creative.thumbnail_url ?? null,
+            title: ad.creative.title ?? null,
+            body: ad.creative.body ?? null,
+          }
+        : null,
+      reviewFeedback: ad.ad_review_feedback ?? null,
+      issuesInfo: ad.issues_info ?? null,
+    }));
+  }
+
+  async getInsights(
+    level: MetricsLevel,
+    sinceDate: string,
+    untilDate = new Date().toISOString().slice(0, 10),
+  ): Promise<InsightRow[]> {
+    const metaLevel = level === 'ad_set' ? 'adset' : level;
+    const idField =
+      level === 'campaign' ? 'campaign_id' : level === 'ad_set' ? 'adset_id' : 'ad_id';
+
+    const body = await this.get<{
+      data: Record<string, unknown>[];
+    }>(`${this.accountId}/insights`, {
+      level: metaLevel,
+      fields: `${idField},spend,impressions,clicks,ctr,reach,frequency,actions,quality_ranking,engagement_rate_ranking,conversion_rate_ranking`,
+      time_range: JSON.stringify({ since: sinceDate, until: untilDate }),
+      time_increment: '1',
+      limit: '500',
+    });
+
+    return body.data.map((row) => {
+      const actions: Record<string, number> = {};
+      for (const action of (row.actions ?? []) as { action_type: string; value: string }[]) {
+        actions[action.action_type] = Number(action.value);
+      }
+      // A ranking of UNKNOWN means "not enough volume"; store it as absent
+      // rather than pretending it is a verdict.
+      const ranking = (value: unknown): string | null =>
+        typeof value === 'string' && value !== 'UNKNOWN' ? value : null;
+
+      return {
+        level,
+        entityId: String(row[idField] ?? ''),
+        date: String(row.date_start ?? sinceDate),
+        spendCents: centsFromDecimalCurrencyString(String(row.spend ?? '0'), 'insights.spend'),
+        impressions: Number(row.impressions ?? 0),
+        clicks: Number(row.clicks ?? 0),
+        reach: Number(row.reach ?? 0),
+        ctrMilli: Math.round(Number(row.ctr ?? 0) * 1000),
+        frequencyMilli: Math.round(Number(row.frequency ?? 0) * 1000),
+        actions,
+        qualityRanking: ranking(row.quality_ranking),
+        engagementRateRanking: ranking(row.engagement_rate_ranking),
+        conversionRateRanking: ranking(row.conversion_rate_ranking),
+      };
+    });
   }
 
   async getSpend(sinceDate: string): Promise<SpendRow[]> {
