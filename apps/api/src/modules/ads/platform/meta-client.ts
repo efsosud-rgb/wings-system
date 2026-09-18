@@ -76,14 +76,25 @@ interface MetaErrorBody {
 /**
  * How many days of insights to ask for at a time, per level.
  *
- * Measured against the live account: 30 days at ad level (660 ads) times out
- * server-side, while campaign level over the same window returns comfortably.
+ * Measured against the live account (660 ads), not guessed:
+ *
+ *   ad level, 1 day  -> 11,4s for 5 rows
+ *   ad level, 3 days -> 16,7s for 21 rows
+ *   ad level, 7 days -> HTTP 500 after 30,2s
+ *
+ * The cost is Meta's aggregation across every ad in the account, not the rows
+ * returned: five rows still take eleven seconds, and a smaller page size barely
+ * moves it. So the window has to be one day at ad level, and the request needs
+ * longer than the default timeout to survive.
  */
 export const INSIGHT_WINDOW_DAYS: Record<MetricsLevel, number> = {
   campaign: 30,
   ad_set: 15,
-  ad: 3,
+  ad: 1,
 };
+
+/** Insights are slow by nature; the default timeout is for ordinary reads. */
+export const INSIGHTS_TIMEOUT_MS = 45_000;
 
 /**
  * Splits an inclusive date range into consecutive windows of at most `days`.
@@ -159,6 +170,7 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
     path: string,
     params: Record<string, string> = {},
     maxPages = 50,
+    timeoutMs?: number,
   ): Promise<T[]> {
     const collected: T[] = [];
     let after: string | undefined;
@@ -168,7 +180,7 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       const body = await this.get<{
         data: T[];
         paging?: { next?: string; cursors?: { after?: string } };
-      }>(path, { ...params, ...(after ? { after } : {}) });
+      }>(path, { ...params, ...(after ? { after } : {}) }, timeoutMs);
 
       collected.push(...(body.data ?? []));
 
@@ -183,7 +195,11 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
     return collected;
   }
 
-  private async get<T>(path: string, params: Record<string, string> = {}): Promise<T> {
+  private async get<T>(
+    path: string,
+    params: Record<string, string> = {},
+    timeoutMs = this.timeoutMs,
+  ): Promise<T> {
     const url = new URL(`https://graph.facebook.com/${this.version}/${path}`);
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
     // The token travels in a header, never in the query string, so it cannot
@@ -191,7 +207,7 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
     const response = await this.fetchImpl(url.toString(), {
       method: 'GET',
       headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/json' },
-      signal: AbortSignal.timeout(this.timeoutMs),
+      signal: AbortSignal.timeout(timeoutMs),
     });
 
     const body: unknown = await response.json();
@@ -403,15 +419,20 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
     const idField =
       level === 'campaign' ? 'campaign_id' : level === 'ad_set' ? 'adset_id' : 'ad_id';
 
-    const data = await this.getAllPages<Record<string, unknown>>(`${this.accountId}/insights`, {
-      level: metaLevel,
-      fields: `${idField},spend,impressions,clicks,ctr,reach,frequency,actions,quality_ranking,engagement_rate_ranking,conversion_rate_ranking`,
-      time_range: JSON.stringify({ since: sinceDate, until: untilDate }),
-      time_increment: '1',
-      // Daily rows across hundreds of entities add up fast; small pages are
-      // what keep Meta from refusing the request.
-      limit: '100',
-    });
+    const data = await this.getAllPages<Record<string, unknown>>(
+      `${this.accountId}/insights`,
+      {
+        level: metaLevel,
+        fields: `${idField},spend,impressions,clicks,ctr,reach,frequency,actions,quality_ranking,engagement_rate_ranking,conversion_rate_ranking`,
+        time_range: JSON.stringify({ since: sinceDate, until: untilDate }),
+        time_increment: '1',
+        // Daily rows across hundreds of entities add up fast; small pages are
+        // what keep Meta from refusing the request.
+        limit: '100',
+      },
+      50,
+      INSIGHTS_TIMEOUT_MS,
+    );
 
     return data.map((row) => {
       const actions: Record<string, number> = {};
@@ -447,13 +468,18 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       campaign_id: string;
       date_start: string;
       spend: string;
-    }>(`${this.accountId}/insights`, {
-      level: 'campaign',
-      fields: 'campaign_id,spend',
-      time_increment: '1',
-      time_range: JSON.stringify({ since: sinceDate, until }),
-      limit: '100',
-    });
+    }>(
+      `${this.accountId}/insights`,
+      {
+        level: 'campaign',
+        fields: 'campaign_id,spend',
+        time_increment: '1',
+        time_range: JSON.stringify({ since: sinceDate, until }),
+        limit: '100',
+      },
+      50,
+      INSIGHTS_TIMEOUT_MS,
+    );
 
     return data.map((row) => ({
       campaignId: row.campaign_id,

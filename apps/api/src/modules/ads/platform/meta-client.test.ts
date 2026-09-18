@@ -325,10 +325,11 @@ describe('slicing the insights window', () => {
 
     await meta.getInsights('ad', '2026-09-01', '2026-09-09');
 
-    // 9 days at 3 days per window.
-    expect(ranges).toHaveLength(3);
-    expect(JSON.parse(ranges[0] ?? '{}')).toEqual({ since: '2026-09-01', until: '2026-09-03' });
-    expect(JSON.parse(ranges[2] ?? '{}')).toEqual({ since: '2026-09-07', until: '2026-09-09' });
+    // One day per window at ad level: measured, a 3-day window takes 16,7s
+    // against the live account and blows the request timeout.
+    expect(ranges).toHaveLength(9);
+    expect(JSON.parse(ranges[0] ?? '{}')).toEqual({ since: '2026-09-01', until: '2026-09-01' });
+    expect(JSON.parse(ranges[8] ?? '{}')).toEqual({ since: '2026-09-09', until: '2026-09-09' });
   });
 
   it('does not slice campaign level, which returns comfortably', async () => {
