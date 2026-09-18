@@ -22,6 +22,12 @@ export interface StudioLayoutProps {
    * which is deliberately not part of this phase.
    */
   conversation?: ReactNode;
+  /**
+   * What the operator works on, e.g. the campaign builder. When present it
+   * takes the large pane and the conversation moves to the side column, above
+   * the tools.
+   */
+  workspace?: ReactNode;
 }
 
 function ConversationPlaceholder() {
@@ -41,7 +47,28 @@ function ConversationPlaceholder() {
   );
 }
 
-export function StudioLayout({ title, subtitle, tools, notice, conversation }: StudioLayoutProps) {
+export function StudioLayout({
+  title,
+  subtitle,
+  tools,
+  notice,
+  conversation,
+  workspace,
+}: StudioLayoutProps) {
+  const chat = (
+    <section
+      className={workspace ? 'studio-chat studio-chat-compact' : 'studio-chat'}
+      aria-label="Conversa com o agente"
+    >
+      {conversation ?? <ConversationPlaceholder />}
+    </section>
+  );
+  const toolsPanel = (
+    <aside className="studio-tools" aria-label="Ferramentas do agente">
+      {tools}
+    </aside>
+  );
+
   return (
     <>
       <header className="page-header">
@@ -51,14 +78,22 @@ export function StudioLayout({ title, subtitle, tools, notice, conversation }: S
 
       {notice}
 
-      <div className="studio">
-        <section className="studio-chat" aria-label="Conversa com o agente">
-          {conversation ?? <ConversationPlaceholder />}
-        </section>
-        <aside className="studio-tools" aria-label="Ferramentas do agente">
-          {tools}
-        </aside>
-      </div>
+      {workspace ? (
+        <div className="studio">
+          <section className="studio-workspace" aria-label="Área de trabalho">
+            {workspace}
+          </section>
+          <div className="studio-side">
+            {chat}
+            {toolsPanel}
+          </div>
+        </div>
+      ) : (
+        <div className="studio">
+          {chat}
+          {toolsPanel}
+        </div>
+      )}
     </>
   );
 }

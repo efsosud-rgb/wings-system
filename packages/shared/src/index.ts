@@ -6,6 +6,7 @@
 export const APP_NAME = 'Wings System';
 
 export * from './ads/approvals.js';
+export * from './ads/campaign-builder.js';
 export * from './ads/cockpit.js';
 export * from './ads/simulation.js';
 export * from './auth/credentials.js';
