@@ -1406,3 +1406,17 @@ textarea.control {
   margin-bottom: 8px;
   white-space: pre-wrap;
 }
+
+.site-posts {
+  list-style: none;
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.site-posts li {
+  display: flex;
+  flex-direction: column;
+}

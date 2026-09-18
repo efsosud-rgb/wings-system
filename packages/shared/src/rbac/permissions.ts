@@ -24,6 +24,7 @@ export const PERMISSIONS = {
   'audit.read': 'Consultar log de auditoria',
   'ads.read': 'Ver campanhas e gastos de tráfego pago',
   'ads.request': 'Pedir a criação de campanhas de tráfego pago',
+  'site.publish': 'Criar rascunhos de post no site da Wings',
   'ads.approve': 'Aprovar alterações de orçamento de tráfego pago',
 } as const;
 
@@ -65,6 +66,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'ads.read': 'all',
     'ads.request': 'all',
     'ads.approve': 'all',
+    'site.publish': 'all',
   },
   diretoria: {
     'employees.read': 'all',
@@ -76,6 +78,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'ads.request': 'all',
     // Either Admin Master or Diretoria may approve a budget change.
     'ads.approve': 'all',
+    'site.publish': 'all',
   },
   gerente_comercial: {
     'employees.read': 'sector',
@@ -87,7 +90,12 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'leads.write': 'all',
   },
   // Marketing builds and asks; only Admin Master or Diretoria approve.
-  marketing: { ...SECTOR_STAFF, 'ads.read': 'all', 'ads.request': 'all' },
+  marketing: {
+    ...SECTOR_STAFF,
+    'ads.read': 'all',
+    'ads.request': 'all',
+    'site.publish': 'all',
+  },
   formatacao_juridico: { ...SECTOR_STAFF },
   formatacao_financeiro: { ...SECTOR_STAFF },
   formatacao_processos_projetos: { ...SECTOR_STAFF },

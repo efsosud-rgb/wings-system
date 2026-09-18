@@ -10,6 +10,9 @@ import type {
   CreativeUpload,
   NextPendingLink,
   PendingGroup,
+  SitePostInput,
+  SitePostRecord,
+  SiteStatus,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
@@ -147,6 +150,34 @@ export function useSaveAudienceProfile() {
       api.put<{ ok: true; updatedAt: string }>('/ads/audience-profile', input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['ads', 'audience-profile'] });
+    },
+  });
+}
+
+/** Whether the server can reach Wings' WordPress site at all. */
+export function useSiteStatus() {
+  return useQuery({
+    queryKey: ['site', 'status'],
+    queryFn: () => api.get<{ status: SiteStatus }>('/marketing/site/status'),
+  });
+}
+
+export function useSitePosts() {
+  return useQuery({
+    queryKey: ['site', 'posts'],
+    queryFn: () => api.get<{ posts: SitePostRecord[] }>('/marketing/site/posts'),
+  });
+}
+
+/** Creates a DRAFT post on the site. Publishing happens inside WordPress. */
+export function useCreateSiteDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: SitePostInput) =>
+      api.post<{ outcome: 'draft_created'; editUrl: string }>('/marketing/site/posts', input),
+    // Refused and unconfirmed attempts are recorded too, so refresh either way.
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['site', 'posts'] });
     },
   });
 }

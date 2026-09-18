@@ -268,6 +268,28 @@ export const marketingAudienceProfiles = pgTable('marketing_audience_profiles', 
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * Append-only log of drafts the studio sent to Wings' own site. The content
+ * itself lives in WordPress; this records that it was sent, by whom, and what
+ * the site answered — `unknown` included, so nobody resends blindly.
+ */
+export const sitePosts = pgTable(
+  'site_posts',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    title: text('title').notNull(),
+    outcome: text('outcome').notNull(),
+    wordpressPostId: bigint('wordpress_post_id', { mode: 'number' }),
+    editUrl: text('edit_url'),
+    /** The site's error code or the transport reason; never the content. */
+    detail: text('detail'),
+    createdBy: uuid('created_by').references(() => employees.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('site_posts_created_idx').on(table.createdAt)],
+);
+
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType: () => 'bytea',
 });

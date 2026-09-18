@@ -10,6 +10,7 @@ import { audienceRoutes } from './modules/ads/audience-routes.js';
 import { cockpitRoutes } from './modules/ads/cockpit-routes.js';
 import { creativeRoutes } from './modules/ads/creative-routes.js';
 import { adsRoutes } from './modules/ads/routes.js';
+import { siteRoutes } from './modules/site/routes.js';
 import { employeeRoutes } from './modules/employees/routes.js';
 import { authPlugin } from './plugins/auth.js';
 
@@ -26,6 +27,8 @@ export async function buildApp(deps: {
   db: Database;
   /** Overridable so tests can capture messages instead of sending them. */
   mailer?: Mailer;
+  /** Overridable so tests never reach a real WordPress site. */
+  wordpressFetch?: typeof fetch;
 }): Promise<FastifyInstance> {
   const app = Fastify({
     // Personal data must never reach the logs (LGPD), so request bodies are
@@ -92,6 +95,7 @@ export async function buildApp(deps: {
   await app.register(cockpitRoutes);
   await app.register(creativeRoutes);
   await app.register(audienceRoutes);
+  await app.register(siteRoutes, { wordpressFetch: deps.wordpressFetch });
 
   return app;
 }
