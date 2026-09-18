@@ -73,6 +73,49 @@ interface MetaErrorBody {
   error?: { message?: string; code?: number; error_subcode?: number; fbtrace_id?: string };
 }
 
+/**
+ * How many days of insights to ask for at a time, per level.
+ *
+ * Measured against the live account: 30 days at ad level (660 ads) times out
+ * server-side, while campaign level over the same window returns comfortably.
+ */
+export const INSIGHT_WINDOW_DAYS: Record<MetricsLevel, number> = {
+  campaign: 30,
+  ad_set: 15,
+  ad: 3,
+};
+
+/**
+ * Splits an inclusive date range into consecutive windows of at most `days`.
+ *
+ * Both ends are inclusive, matching Meta's `time_range`, so a 3-day window
+ * starting on the 1st ends on the 3rd and the next starts on the 4th.
+ */
+export function sliceDateRange(
+  sinceDate: string,
+  untilDate: string,
+  days: number,
+): [string, string][] {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const start = Date.parse(`${sinceDate}T00:00:00Z`);
+  const end = Date.parse(`${untilDate}T00:00:00Z`);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    throw new Error(`invalid date range: ${sinceDate}..${untilDate}`);
+  }
+  if (end < start) return [];
+  const size = Math.max(1, Math.floor(days));
+
+  const windows: [string, string][] = [];
+  for (let from = start; from <= end; from += size * dayMs) {
+    const to = Math.min(from + (size - 1) * dayMs, end);
+    windows.push([
+      new Date(from).toISOString().slice(0, 10),
+      new Date(to).toISOString().slice(0, 10),
+    ]);
+  }
+  return windows;
+}
+
 export class MetaReadOnlyClient implements AdsPlatformClient {
   readonly platform = 'meta' as const;
   /** Points at a real ad account: treat every call as consequential. */
@@ -328,10 +371,33 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
     }));
   }
 
+  /**
+   * Daily performance, fetched in windows small enough for Meta to compute.
+   *
+   * Paging alone is not enough here. Asking for 30 days of ad-level insights
+   * across 660 ads makes Meta spend longer building the FIRST page than the
+   * request timeout allows — it is the aggregation that is slow, not the
+   * transfer, so a smaller page does not help. Slicing the date range does:
+   * each request covers fewer days, and the rows are concatenated.
+   *
+   * Window sizes are per level because cost scales with entity count.
+   */
   async getInsights(
     level: MetricsLevel,
     sinceDate: string,
     untilDate = new Date().toISOString().slice(0, 10),
+  ): Promise<InsightRow[]> {
+    const rows: InsightRow[] = [];
+    for (const [since, until] of sliceDateRange(sinceDate, untilDate, INSIGHT_WINDOW_DAYS[level])) {
+      rows.push(...(await this.fetchInsightWindow(level, since, until)));
+    }
+    return rows;
+  }
+
+  private async fetchInsightWindow(
+    level: MetricsLevel,
+    sinceDate: string,
+    untilDate: string,
   ): Promise<InsightRow[]> {
     const metaLevel = level === 'ad_set' ? 'adset' : level;
     const idField =

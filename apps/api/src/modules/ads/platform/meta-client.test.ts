@@ -6,7 +6,12 @@ import {
   ERROR_RATE_LIMIT,
   INSIGHTS_RESPONSE,
 } from './fixtures.js';
-import { MetaApiError, MetaReadOnlyClient, MetaWritesDisabledError } from './meta-client.js';
+import {
+  MetaApiError,
+  MetaReadOnlyClient,
+  MetaWritesDisabledError,
+  sliceDateRange,
+} from './meta-client.js';
 import {
   centsFromDecimalCurrencyString,
   centsFromMinorUnitString,
@@ -257,5 +262,93 @@ describe('cursor paging', () => {
 
     await meta.listCampaigns();
     expect(calls).toBe(2); // first page, then the repeat is detected
+  });
+});
+
+describe('slicing the insights window', () => {
+  it('splits an inclusive range into consecutive windows', () => {
+    // Both ends inclusive, as Meta's time_range is: a 3-day window starting on
+    // the 1st ends on the 3rd, and the next starts on the 4th.
+    expect(sliceDateRange('2026-09-01', '2026-09-07', 3)).toEqual([
+      ['2026-09-01', '2026-09-03'],
+      ['2026-09-04', '2026-09-06'],
+      ['2026-09-07', '2026-09-07'],
+    ]);
+  });
+
+  it('returns a single window when the range fits', () => {
+    expect(sliceDateRange('2026-09-01', '2026-09-30', 30)).toEqual([['2026-09-01', '2026-09-30']]);
+  });
+
+  it('handles a one-day range', () => {
+    expect(sliceDateRange('2026-09-18', '2026-09-18', 3)).toEqual([['2026-09-18', '2026-09-18']]);
+  });
+
+  it('covers every day exactly once, with no gap or overlap', () => {
+    const windows = sliceDateRange('2026-08-19', '2026-09-18', 3);
+    const days = new Set<string>();
+    for (const [since, until] of windows) {
+      for (
+        let d = Date.parse(`${since}T00:00:00Z`);
+        d <= Date.parse(`${until}T00:00:00Z`);
+        d += 86_400_000
+      ) {
+        const key = new Date(d).toISOString().slice(0, 10);
+        expect(days.has(key)).toBe(false); // no overlap
+        days.add(key);
+      }
+    }
+    expect(days.size).toBe(31); // 19 Aug to 18 Sep inclusive
+  });
+
+  it('returns nothing when the range is inverted', () => {
+    expect(sliceDateRange('2026-09-18', '2026-09-01', 3)).toEqual([]);
+  });
+
+  it('asks Meta for one window per slice at ad level', async () => {
+    const ranges: string[] = [];
+    const meta = new MetaReadOnlyClient({
+      accessToken: 'token',
+      adAccountId: 'act_1',
+      fetchImpl: ((url: unknown) => {
+        const parsed = new URL(String(url));
+        const range = parsed.searchParams.get('time_range');
+        if (range) ranges.push(range);
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      }) as typeof fetch,
+    });
+
+    await meta.getInsights('ad', '2026-09-01', '2026-09-09');
+
+    // 9 days at 3 days per window.
+    expect(ranges).toHaveLength(3);
+    expect(JSON.parse(ranges[0] ?? '{}')).toEqual({ since: '2026-09-01', until: '2026-09-03' });
+    expect(JSON.parse(ranges[2] ?? '{}')).toEqual({ since: '2026-09-07', until: '2026-09-09' });
+  });
+
+  it('does not slice campaign level, which returns comfortably', async () => {
+    const ranges: string[] = [];
+    const meta = new MetaReadOnlyClient({
+      accessToken: 'token',
+      adAccountId: 'act_1',
+      fetchImpl: ((url: unknown) => {
+        const range = new URL(String(url)).searchParams.get('time_range');
+        if (range) ranges.push(range);
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: [] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      }) as typeof fetch,
+    });
+
+    await meta.getInsights('campaign', '2026-08-19', '2026-09-18');
+    expect(ranges).toHaveLength(2); // 31 days at 30 per window
   });
 });
