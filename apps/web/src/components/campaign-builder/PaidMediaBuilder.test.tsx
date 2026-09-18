@@ -148,6 +148,19 @@ describe('the paid-media builder', () => {
     expect(screen.queryByText(/passa do que a conta ainda permite/)).toBeNull();
   });
 
+  it('opens every section with what the choice changes in practice', () => {
+    render(<PaidMediaBuilder canRequest />);
+    const sections = screen.getAllByRole('region').filter((el) => el.matches('.builder-section'));
+    expect(sections).toHaveLength(13);
+    for (const section of sections) {
+      expect(section.querySelector('.builder-why')?.textContent?.length).toBeGreaterThan(40);
+    }
+    expect(screen.getByText(/Define como a Meta cobra e para quem mostra/)).toBeTruthy();
+    expect(screen.getByText(/o lead chega no CRM com a origem certa/)).toBeTruthy();
+    // The how-to hints under the fields are still there.
+    expect(screen.getByText('A Meta pode gastar até 25% acima disto num dia.')).toBeTruthy();
+  });
+
   it('says which field the estimate is waiting for, never a bare dash', () => {
     render(<PaidMediaBuilder canRequest />);
     const cost = () => screen.getByText('Custo total estimado', { selector: 'span' }).parentElement;

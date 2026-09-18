@@ -59,6 +59,10 @@ function WordPressChannel({ canPublish }: { canPublish: boolean }) {
           <span className="tag coming-soon-tag">{status.data.status.siteHost}</span>
         )}
       </h2>
+      <p className="builder-why">
+        O site é de onde o lead orgânico vem e para onde os anúncios levam. Conteúdo aqui não custa
+        mídia e continua trazendo gente depois que a campanha acaba.
+      </p>
       <p className="muted">
         Cria um <strong>rascunho</strong> de post no blog. Nada fica público: alguém revisa e
         publica dentro do WordPress. O studio não edita nem apaga o que já está no site.

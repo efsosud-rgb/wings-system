@@ -66,10 +66,16 @@ function addDays(date: string, days: number): string {
 function BuilderSection({
   step,
   title,
+  why,
   children,
 }: {
   step: number;
   title: string;
+  /**
+   * What this choice changes in practice, in a media buyer's words. The hints
+   * under the fields say how to fill them in; this says why it matters.
+   */
+  why: string;
   children: ReactNode;
 }) {
   return (
@@ -78,6 +84,7 @@ function BuilderSection({
         <span className="builder-step">{step}</span>
         {title}
       </h2>
+      <p className="builder-why">{why}</p>
       {children}
     </section>
   );
@@ -377,7 +384,11 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         })(event);
       }}
     >
-      <BuilderSection step={1} title="Plataforma">
+      <BuilderSection
+        step={1}
+        title="Plataforma"
+        why="Onde o anúncio aparece. O nome é como você vai achar esta campanha no Gerenciador de Anúncios e nos relatórios — capriche nele."
+      >
         <div className="builder-options" role="radiogroup" aria-label="Plataforma">
           {PAID_PLATFORMS.map((platform) => (
             <label
@@ -404,7 +415,11 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         </Field>
       </BuilderSection>
 
-      <BuilderSection step={2} title="Objetivo">
+      <BuilderSection
+        step={2}
+        title="Objetivo"
+        why="Define como a Meta cobra e para quem mostra: dentro do seu público, ela procura quem tem mais chance de fazer exatamente isto."
+      >
         <div className="builder-options" role="radiogroup" aria-label="Objetivo">
           {CAMPAIGN_OBJECTIVES.map((key) => (
             <label key={key} className="builder-option">
@@ -418,7 +433,11 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         </div>
       </BuilderSection>
 
-      <BuilderSection step={3} title="Perfil do cliente ideal">
+      <BuilderSection
+        step={3}
+        title="Perfil do cliente ideal"
+        why="É o retrato de quem você quer atrair. Guia a copy e o criativo agora e vira a segmentação quando o conjunto de anúncios for criado."
+      >
         <Field
           label="Quem é o cliente ideal desta campanha"
           error={errors.idealCustomerProfile?.message}
@@ -434,7 +453,11 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         </Field>
       </BuilderSection>
 
-      <BuilderSection step={4} title="Área de alcance">
+      <BuilderSection
+        step={4}
+        title="Área de alcance"
+        why="Onde o anúncio pode aparecer. Área grande demais espalha a verba; pequena demais encarece o lead."
+      >
         <fieldset className="builder-states">
           <legend className="field-label">Estados inteiros</legend>
           {BRAZIL_STATES.map((state) => (
@@ -538,7 +561,11 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         </div>
       </BuilderSection>
 
-      <BuilderSection step={5} title="Criativo">
+      <BuilderSection
+        step={5}
+        title="Criativo"
+        why="A imagem é o que faz a pessoa parar de rolar o feed. Uma por variação, para a Meta descobrir qual segura mais gente."
+      >
         <div className="form-actions">
           <Button type="button" variant="ghost" disabled title="Integração com o Drive em breve">
             Escolher do Drive (em breve)
@@ -564,7 +591,11 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         ))}
       </BuilderSection>
 
-      <BuilderSection step={6} title="Formato e dimensão">
+      <BuilderSection
+        step={6}
+        title="Formato e dimensão"
+        why="Cada posicionamento tem um corte. Imagem fora da proporção é cortada pela Meta — e pode perder o rosto ou o texto."
+      >
         <Field
           label="Formato"
           error={errors.formatKey?.message}
@@ -584,7 +615,11 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         </Field>
       </BuilderSection>
 
-      <BuilderSection step={7} title="Copy">
+      <BuilderSection
+        step={7}
+        title="Copy"
+        why="É o que convence depois que a imagem chamou atenção. Promessa de ganho reprova o anúncio e pode restringir a conta — por isso o bloqueio."
+      >
         <Field
           label="Página de destino"
           error={errors.destinationUrl?.message}
@@ -599,7 +634,11 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         {copyFields(0)}
       </BuilderSection>
 
-      <BuilderSection step={8} title="Variações">
+      <BuilderSection
+        step={8}
+        title="Variações"
+        why="A Meta testa as versões entre si e entrega mais a que dá mais resultado. Com uma só, não há o que comparar."
+      >
         <p className="field-hint">
           De {MIN_VARIATIONS} a {MAX_VARIATIONS} por campanha, para a plataforma ter o que comparar.
         </p>
@@ -627,7 +666,11 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         )}
       </BuilderSection>
 
-      <BuilderSection step={9} title="Duração">
+      <BuilderSection
+        step={9}
+        title="Duração"
+        why="Por quanto tempo o anúncio roda. Nos primeiros dias a Meta ainda está aprendendo quem responde; campanha muito curta termina antes disso."
+      >
         <div className="input-row">
           <Field label="Início" error={errors.startDate?.message}>
             <Input type="date" min={today} {...register('startDate')} />
@@ -641,7 +684,11 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         </p>
       </BuilderSection>
 
-      <BuilderSection step={10} title="Verba diária">
+      <BuilderSection
+        step={10}
+        title="Verba diária"
+        why="É quanto você autoriza por dia. A Meta pode gastar até 25% a mais num dia, então o custo real é o estimado abaixo — e ele precisa caber no teto da conta."
+      >
         <div className="builder-budget">
           <div>
             <Field
@@ -699,7 +746,11 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         </label>
       </BuilderSection>
 
-      <BuilderSection step={11} title="UTMs">
+      <BuilderSection
+        step={11}
+        title="UTMs"
+        why="É assim que o lead chega no CRM com a origem certa. Sem UTM ele aparece como “direto” e ninguém sabe qual campanha pagou por ele."
+      >
         <p className="field-hint">Gerados a partir do nome e do objetivo. Edite se precisar.</p>
         <div className="builder-utms">
           {UTM_KEYS.map((key) => (
@@ -714,7 +765,11 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         </p>
       </BuilderSection>
 
-      <BuilderSection step={12} title="Pré-visualização">
+      <BuilderSection
+        step={12}
+        title="Pré-visualização"
+        why="O anúncio como a pessoa vai ver, com o corte do formato. É a última chance de pegar texto cortado ou imagem mal enquadrada."
+      >
         <div className="ad-preview-row">
           {values.variations.map((variation, index) => (
             <AdPreview
@@ -732,7 +787,11 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         <ApproximatePreviewNote />
       </BuilderSection>
 
-      <BuilderSection step={13} title="Resumo — confira tudo">
+      <BuilderSection
+        step={13}
+        title="Resumo — confira tudo"
+        why="É exatamente o que o aprovador vai ler. Depois de lançado o pedido não pode ser editado — para mudar, faz-se outro."
+      >
         <dl className="builder-summary">
           <dt>Plataforma</dt>
           <dd>Meta (Facebook + Instagram)</dd>
