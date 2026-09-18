@@ -1,184 +1,161 @@
 # Etapa Google 0 — spike (somente leitura)
 
-Executado contra a conta real com o refresh token gerado em 2026-09-17.
-Reexecutado em 2026-09-17 após a correção dos papéis das contas e a vinculação
-aceita pela Thais. Nenhum objeto foi criado, alterado ou gasto.
+Executado contra a conta real **4268586278 ("Wings")** em 2026-09-18, após o
+nível de acesso da API ser elevado de **Teste** para **Exploração** no projeto
+GCP `openclaw-traffic-508320`. Nenhum objeto foi criado, alterado ou gasto.
 
-## Papéis das contas (corrigido)
+**As sete perguntas foram respondidas com dado real.** Nada neste documento
+continua marcado como "não verificado".
 
-| Conta          | Papel                                                                  |
-| -------------- | ---------------------------------------------------------------------- |
-| **4268586278** | conta de anúncios real — é ela que gasta e que o cockpit deve espelhar |
-| **6693183441** | MCC Wings Company — onde vive o developer token                        |
+## ⚠️ Achado urgente, antes de tudo
 
-Vinculação confirmada hoje: a MCC consta como **Administrador** de 4268586278
-(Proprietário = Não). No `.env`: `GOOGLE_ADS_CUSTOMER_ID=4268586278`,
-`GOOGLE_ADS_LOGIN_CUSTOMER_ID=6693183441`.
+> **Restam R$ 20,76 de saldo pré-pago.** A única campanha ativa gastou
+> R$ 33,13 ontem e R$ 40,40 anteontem. **A conta fica sem fundo em menos de um
+> dia** e as campanhas param sozinhas.
 
-## Resumo executivo
+Isso não é uma questão de projeto — é operacional e é para hoje. A conta de
+pagamentos é "Wings" (`9891-4652-2694-7009`).
 
-**O spike continua sem conseguir ler dados da conta.** A vinculação não
-destravou o acesso, e a suspeita de que o `ACTION_NOT_PERMITTED` era
-consequência da conta não vinculada **não se confirmou**: o erro persiste,
-idêntico, depois da vinculação aceita.
+## Papéis das contas e como conectar
 
-O bloqueio real é um só, e é o nível do developer token.
+| Conta          | Papel                                                    |
+| -------------- | -------------------------------------------------------- |
+| **4268586278** | conta de anúncios real — "Wings", BRL, America/Sao_Paulo |
+| **6693183441** | MCC Wings Company — onde vive o developer token          |
 
-## A matriz que resolve a questão
-
-Seis combinações de conta-alvo × cabeçalho `login-customer-id`, todas com o
-mesmo token:
+**O cabeçalho `login-customer-id` NÃO deve ser enviado.** Testado nas duas
+formas, hoje:
 
 ```
-target=4268586278  login=(nenhum)     -> 403 ACTION_NOT_PERMITTED
-target=4268586278  login=4268586278   -> 403 ACTION_NOT_PERMITTED
-target=4268586278  login=6693183441   -> 403 USER_PERMISSION_DENIED
-target=6693183441  login=(nenhum)     -> 403 USER_PERMISSION_DENIED
-target=6693183441  login=4268586278   -> 403 USER_PERMISSION_DENIED
-target=6693183441  login=6693183441   -> 403 USER_PERMISSION_DENIED
-
-customers:listAccessibleCustomers -> customers/4268586278   (apenas)
+SEM login-customer-id  -> 200 OK
+COM login-customer-id=6693183441 -> 403 USER_PERMISSION_DENIED
 ```
 
-Lendo a matriz:
+O usuário Google que autorizou o token tem acesso **direto** à conta de
+anúncios (`listAccessibleCustomers` devolve só ela) e **não é usuário da MCC**.
+O cabeçalho só faz falta quando o acesso é _através_ do gerenciador — aqui ele
+quebra a chamada. `GOOGLE_ADS_LOGIN_CUSTOMER_ID` fica no `.env` como
+documentação, mas o cliente não deve usá-lo enquanto o acesso for direto.
 
-1. **Todo caminho que chega à conta de anúncios pelo contexto do próprio token
-   devolve `ACTION_NOT_PERMITTED`** — _"The Google Cloud project is only
-   approved for use with test accounts. To access non-test accounts, apply for
-   Explorer, Basic or Standard access."_ A vinculação de hoje não mudou isso.
-   O nível do developer token é um bloqueio real e independente.
+### Correção do que estava documentado
 
-2. **Todo caminho que passa pela MCC devolve `USER_PERMISSION_DENIED`** — o
-   usuário Google que autorizou o token **não é usuário da MCC 6693183441**.
-   Por isso `login-customer-id=6693183441` falha antes mesmo de o token ser
-   avaliado.
+O nível de acesso nunca foi "Acesso às Análises": era **Teste**, e é por isso
+que o `ACTION_NOT_PERMITTED` persistiu mesmo depois da vinculação da Thais. A
+Central de API do Google Ads exibe essa informação de forma obsoleta — a própria
+tela avisa que os níveis passaram a ser gerenciados no Google Cloud Console.
+**Conclusão para o futuro: conferir o nível no GCP, não na Central de API.**
 
-3. **`listAccessibleCustomers` devolve só `4268586278`** — ou seja, o usuário
-   que autorizou tem acesso **direto** à conta de anúncios, e nenhum acesso à
-   MCC.
+## Conciliação com o painel ✅
 
-### O que isso significa na prática
+Mesma janela que você leu na tela (19/08 → 15/09/2026):
 
-O ponto 3 é boa notícia: como o usuário tem acesso direto à conta de anúncios,
-**o cabeçalho `login-customer-id` nem é necessário** — ele só faz falta quando
-o acesso é _através_ do gerenciador. Assim que o token tiver Basic access, o
-caminho `target=4268586278` sem cabeçalho deve funcionar.
+| Métrica              | Painel   | API       | Bate?                 |
+| -------------------- | -------- | --------- | --------------------- |
+| Custo                | R$ 928   | R$ 928,47 | ✅                    |
+| Cliques              | 327      | 327       | ✅                    |
+| Impressões           | 2,11 mil | 2.108     | ✅ (painel arredonda) |
+| CPC médio            | R$ 2,84  | R$ 2,84   | ✅                    |
+| Pontuação otimização | 83,7%    | 0,8373014 | ✅                    |
+| Campanhas            | 8        | 8         | ✅                    |
 
-Ou seja, resta **uma única pendência**:
+A API é fiel ao painel. Mesma barra de verificação da Etapa 3 na Meta.
 
-> **Solicitar Basic access para o developer token**, no API Center da MCC
-> 6693183441 (Ferramentas → Configuração → API Center). É obrigatório para
-> qualquer conta de produção, com ou sem vinculação.
+## Pergunta 1 — o cliente lê dados reais ✅
 
-Opcionalmente, dar acesso do usuário Google autorizador à MCC destravaria
-também o caminho via `login-customer-id` — útil no dia em que houver mais de
-uma conta cliente, mas **não é o que bloqueia hoje**.
+Conta: `Wings`, moeda **BRL**, fuso **America/Sao_Paulo**, `status=ENABLED`,
+`manager=false`, `test_account=false`. API **v22**. 8 campanhas, 8 orçamentos,
+27 grupos de anúncios, 29 anúncios, 8 ações de conversão — tudo legível.
 
-## Situação de cada pergunta
+## Pergunta 2 — modelo de orçamento ✅ confirmado
 
-| #   | Pergunta                            | Situação                                   |
-| --- | ----------------------------------- | ------------------------------------------ |
-| 1   | Cliente lê dados reais              | ❌ bloqueado (Basic access)                |
-| 2   | Orçamento só no nível de campanha   | ⏸️ não verificado                          |
-| 3   | Sobreentrega 2× vs 1,25× da Meta    | ✅ desenhado (valor a confirmar)           |
-| 4   | Tipos de conversão desta conta      | ❌ bloqueado                               |
-| 5   | Campos de revisão/política          | ⏸️ não verificado                          |
-| 6   | Campanhas entregando hoje e gasto   | ❌ bloqueado pela API — **mas ver abaixo** |
-| 7   | Saldo pré-pago / faturamento (novo) | ❌ bloqueado — desenho abaixo              |
+**Orçamento só no nível de campanha.** A prova por rejeição:
 
-Nada foi promovido de "não verificado" para "verificado": **nenhuma linha de
-dado da conta chegou pela API nesta execução.**
+```
+SELECT ad_group.budget_micros FROM ad_group
+-> UNRECOGNIZED_FIELD: Unrecognized field in the query: 'ad_group.budget_micros'
+```
 
-## Pergunta 6 — o que já se sabe pelo Ads Manager
+O campo simplesmente não existe. Não há equivalente ao ABO da Meta: `ad_group`
+carrega lance (`cpc_bid_micros`), não orçamento. **Isso simplifica o modelo em
+relação à Meta**, onde a exposição tem de seguir o nível do orçamento.
 
-Estes números vieram da tela, não da API. Ficam registrados como **alvo de
-conciliação** para quando o acesso for liberado — a mesma disciplina da Meta na
-Etapa 3, onde o `spend_cap` e o gasto foram conferidos contra o painel.
+### Orçamentos compartilhados: existem, mas não nesta conta
 
-| Métrica              | Ads Manager (19/08 → 15/09/2026) |
-| -------------------- | -------------------------------- |
-| Campanhas            | 8                                |
-| Cliques              | 327                              |
-| Impressões           | 2,11 mil                         |
-| CPC médio            | R$ 2,84                          |
-| Custo                | R$ 928                           |
-| Pontuação otimização | 83,7%                            |
-| Campanha exemplo     | "Search - Wings - Geral"         |
+Todos os 8 orçamentos: `explicitly_shared = false`, `reference_count = 1`,
+`period = DAILY`, `delivery_method = STANDARD`, `type = STANDARD`. Relação
+**1:1 entre campanha e orçamento** hoje.
 
-Os números são internamente consistentes: 327 × R$ 2,84 = R$ 928,68 ≈ R$ 928. A
-conciliação da API terá de bater com isso dentro do arredondamento de micros.
+| Campanha                                     | Canal           | Orçamento/dia | Status  |
+| -------------------------------------------- | --------------- | ------------- | ------- |
+| Search - Wings - Geral                       | SEARCH          | R$ 30,00      | ENABLED |
+| SEARCH \| Geral                              | SEARCH          | R$ 50,00      | PAUSED  |
+| SEARCH \| Franquear Negócio \| Alta Intenção | SEARCH          | R$ 56,00      | PAUSED  |
+| SEARCH \| Cauda Longa \| Processo/Dúvida     | SEARCH          | R$ 50,00      | PAUSED  |
+| SEARCH \| Marca \| Wings Company             | SEARCH          | R$ 13,00      | PAUSED  |
+| Search leads - Wings site                    | SEARCH          | R$ 50,00      | PAUSED  |
+| Campanha de youtube                          | DEMAND_GEN      | R$ 50,00      | PAUSED  |
+| P-max 01 - cadastro site                     | PERFORMANCE_MAX | R$ 10,00      | PAUSED  |
 
-**Diferença central em relação à Meta: esta conta ESTÁ entregando.** O cockpit
-terá dados reais desde o primeiro dia — CTR, CPC e custo diário —, ao contrário
-da conta Meta, que não entrega nada. Isso também significa que os alertas de
-ritmo e de desgaste passam a ter matéria-prima de verdade.
+**Mesmo assim o adaptador precisa tratar compartilhamento**: o campo existe, e
+um orçamento compartilhado criado amanhã faria a soma por campanha contar o
+mesmo dinheiro duas vezes. A regra continua valendo: **para o Google, exposição
+por orçamento, não por campanha.**
 
-## Pergunta 7 (nova) — conta pré-paga: o saldo é o teto real
+### Performance Max: orçamento igual, estrutura diferente
 
-O painel alerta **"Há pouco fundo pré-pago na conta"**. Isso muda a natureza do
-guardrail, e a observação está certa:
+A P-max usa `campaign_budget` normal (R$ 10,00/dia, não compartilhado) — **o
+modelo de orçamento não muda**. O que muda é abaixo da campanha:
 
-> Hoje o teto que o sistema conhece é o nosso limite interno (R$ 4.000/mês).
-> Numa conta pré-paga, o teto real é **o saldo**. Se o saldo zerar, as
-> campanhas param sozinhas — e o sistema atual leria isso como
-> `budget_pacing` (gasto abaixo do previsto), que é o diagnóstico errado.
+```
+ad_group_ad em campanha PERFORMANCE_MAX -> 0 linhas
+asset_group                             -> 2 ("Restaurantes e Afins", "rmkt")
+```
 
-É o mesmo erro de leitura da conta Meta parada, com um agravante: lá "parado" é
-o estado normal; aqui seria **uma conta que estava entregando e parou por falta
-de dinheiro**, sem ninguém ser avisado do motivo certo.
+**P-max não tem anúncios em `ad_group_ad`.** Tem `asset_group`, com
+`status=ENABLED` mas `primary_status=NOT_ELIGIBLE`. Consequência direta para o
+alerta de anúncio reprovado (item 17 / Etapa 6.6): **uma varredura só por
+`ad_group_ad` ignora silenciosamente toda campanha P-max.** Terá de ler também
+`asset_group` e as políticas de `asset_group_asset`.
 
-### O que precisa ser descoberto (quando houver acesso)
+(Os dois grupos "type=undefined" vistos na varredura são da campanha
+DEMAND_GEN de YouTube, não da P-max.)
 
-Recursos a sondar, em ordem de preferência:
+## Pergunta 3 — sobreentrega ✅ medida na conta
 
-| Recurso          | O que se espera                                                                                                                           |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `billing_setup`  | vínculo com o perfil de pagamentos (`payments_account_info`)                                                                              |
-| `account_budget` | limites de gasto (`approved_spending_limit_micros`, `amount_served_micros`) — existe sobretudo em contas faturadas, pode não existir aqui |
-| `customer`       | `status` (ENABLED/SUSPENDED/CLOSED)                                                                                                       |
-| `campaign`       | `primary_status` e `primary_status_reasons` — é onde um motivo do tipo "sem fundos" apareceria por campanha                               |
+Medida real, dia a dia, na campanha ativa. **Atenção ao método**: o GAQL junta o
+orçamento **atual** às métricas históricas, então a primeira leitura acusou
+4,87× em 20/08. Era artefato. O `change_event` mostrou 4 mudanças de orçamento
+no período:
 
-**Ressalva honesta:** é bem possível que a Google Ads API **não exponha o saldo
-pré-pago**, que vive no perfil de Pagamentos e não no Ads. Se for esse o caso, o
-sinal detectável não será o saldo em si, mas as campanhas **pararem com um
-motivo específico** em `primary_status_reasons`. O spike precisa descobrir qual
-dos dois caminhos existe antes de qualquer decisão de schema — supor que há um
-campo de saldo seria repetir o erro de assumir que `issues_info` traria o motivo
-da reprovação na Meta.
+```
+2026-09-04 11:56  R$ 20,00 -> R$ 30,00
+2026-09-04 11:51  R$ 15,00 -> R$ 20,00
+2026-08-31 18:33  R$ 10,00 -> R$ 15,00
+2026-08-21 11:34  R$ 140,00 -> R$ 10,00
+```
 
-### Implicação de projeto (a decidir depois, nada implementado)
+Recalculando com o orçamento **vigente em cada dia**:
 
-- Um alerta próprio, **`account_out_of_funds`**, crítico e com aviso no
-  WhatsApp — separado de `budget_pacing`.
-- `budget_pacing` deve ser **suprimido** quando a causa for falta de fundo:
-  dois alertas para o mesmo fato treinam a equipe a ignorar os dois.
-- O guardrail passa a ter **dois tetos**: o nosso limite mensal e o saldo. O
-  menor vence. Comprometer R$ 2.800 num saldo de R$ 300 é uma reserva que a
-  plataforma não honra.
+| Janela   | Orçamento | Razão observada   |
+| -------- | --------- | ----------------- |
+| 20/08    | R$ 140,00 | 1,04×             |
+| 22–25/08 | R$ 10,00  | 0,00× – 1,17×     |
+| 01–03/09 | R$ 15,00  | 1,04× – 1,17×     |
+| 05–17/09 | R$ 30,00  | 0,78× – **1,35×** |
 
-## Perguntas 2 e 5 — ainda só documentação
+**Máximo real observado: 1,35× (16/09). Nunca chegou perto de 2×.** Em 13 dos
+22 dias limpos o gasto passou do orçamento diário — sobreentrega é rotina, não
+exceção.
 
-Sem mudanças desde a primeira execução; **nada verificado na conta**.
+### O que isso muda no desenho
 
-- **Orçamento (2):** vive em `campaign_budget`; não existe orçamento por grupo
-  de anúncios. Orçamentos **compartilhados** (`explicitly_shared`,
-  `reference_count`) fazem com que somar exposição por campanha conte o mesmo
-  dinheiro duas vezes — para o Google, a exposição tem de ser por orçamento.
-- **Política (5):** `ad_group_ad.policy_summary` com `approval_status`,
-  `review_status` e `policy_topic_entries[]`, equivalente funcional do
-  `ad_review_feedback` da Meta.
-
-## Pergunta 3 — sobreentrega por plataforma (desenho mantido)
-
-Hoje `budget-guard.ts` tem uma constante única de 1,25 (Meta). Aplicá-la ao
-Google subestimaria o risco; aplicar 2,0 a tudo bloquearia orçamentos legítimos.
-São **dois fatores**, porque o Google faz duas promessas diferentes:
-
-- **por dia**, pode entregar até **2× o orçamento diário**;
-- **no mês**, garante não cobrar mais que `diário × 30,4`.
+O **2,0× da documentação continua sendo o valor certo para o guardrail** — é o
+teto contratual do Google, e um guardrail se dimensiona pelo pior caso, não pela
+média observada. Mas agora está registrado que o comportamento real desta conta
+fica em ~1,35×, próximo do 1,25× da Meta.
 
 ```ts
-// apps/api/src/modules/ads/platform/budget-model.ts
+// apps/api/src/modules/ads/platform/budget-model.ts  (proposta, NÃO implementada)
 export interface PlatformBudgetModel {
   dailyOverdeliveryFactor: number; // rajada de um dia
   periodOverdeliveryFactor: number; // multiplicador do período restante
@@ -205,32 +182,143 @@ export const PLATFORM_BUDGET_MODELS = {
 };
 ```
 
-Duas verificações no guard, não uma: o **compromisso do período**
-(`diário × dias restantes × periodOverdeliveryFactor`) e a **rajada de um dia**
-(`diário × dailyOverdeliveryFactor` tem de caber no disponível). A reserva
-precisa gravar com que fator foi calculada — proposta: coluna
-`overdelivery_factor_milli` em `ad_change_requests`.
+Dois fatores porque o Google faz duas promessas: até **2× num dia**, mas no mês
+não cobra mais que `diário × 30,4`. Usar o fator diário no mês inteiro exigiria
+o dobro do teto sem necessidade.
 
-O valor 2,0 vem da documentação, **não desta conta**. Como a conta entrega de
-verdade, dá para medir: comparar `metrics.cost_micros` diário contra
-`campaign_budget.amount_micros` em dias de entrega cheia.
+### Achado de método que vale para a ingestão
+
+> O GAQL devolve o **orçamento atual** junto de métricas antigas. Qualquer
+> análise histórica de "gastou acima do orçamento?" fica errada depois de uma
+> mudança de orçamento.
+
+Consequência prática: **a ingestão diária precisa gravar o orçamento vigente no
+dia**, junto das métricas. `change_event` não substitui isso — só cobre 30 dias
+e exige limite inferior **e** superior na consulta (`CHANGE_DATE_RANGE_INFINITE`
+caso contrário).
+
+## Pergunta 4 — conversões ✅ esta conta TEM leads
+
+Ao contrário da Meta (zero eventos de lead), aqui há conversão de verdade.
+
+**8 ações configuradas**; as que contam (`primary_for_goal = true`,
+`status = ENABLED`):
+
+| Ação                                                | Tipo                      | Categoria        | Contagem       |
+| --------------------------------------------------- | ------------------------- | ---------------- | -------------- |
+| `Wings Site - Site institucional (web) form_submit` | GOOGLE_ANALYTICS_4_CUSTOM | SUBMIT_LEAD_FORM | ONE_PER_CLICK  |
+| `WhatsApp_clique`                                   | WEBPAGE                   | REQUEST_QUOTE    | MANY_PER_CLICK |
+| `Contato_WhatsApp`                                  | WEBPAGE                   | SIGNUP           | ONE_PER_CLICK  |
+
+**O que realmente disparou nos últimos 30 dias: só `form_submit`, 18
+conversões.** As duas de WhatsApp estão ativas e marcadas como primárias, mas
+não registraram nada. Três ações estão `HIDDEN` (GA4 importadas) e uma
+`REMOVED`.
+
+Isso resolve a pergunta "o que conta como lead aqui": **`form_submit`**, com
+`WhatsApp_clique` e `Contato_WhatsApp` a observar. Diferente da Meta, **CPL é
+calculável**: R$ 1.002,00 ÷ 18 = **R$ 55,67** nos últimos 30 dias.
+
+## Pergunta 5 — revisão/política ✅ campos funcionam
+
+`ad_group_ad.policy_summary` responde com `approval_status`, `review_status` e
+`policy_topic_entries[]`. Estado atual dos 29 anúncios:
+
+```
+APPROVED / REVIEWED            28
+UNKNOWN  / REVIEW_IN_PROGRESS   1
+```
+
+Nenhuma reprovação hoje — o alerta `ad_rejected` teria zero disparos, ao
+contrário da Meta (2 reprovados). **Ressalva já registrada na pergunta 2: P-max
+não aparece aqui.** Cobertura completa exige `asset_group` também.
+
+## Pergunta 6 — entrega hoje ✅
+
+**Apenas 1 das 8 campanhas está ativa** — "Search - Wings - Geral". As outras 7
+estão `PAUSED` (`primary_status_reasons: ["CAMPAIGN_PAUSED"]`).
+
+| Janela          | Custo       | Impressões | Cliques | Conversões |
+| --------------- | ----------- | ---------- | ------- | ---------- |
+| Últimos 30 dias | R$ 1.002,00 | 2.188      | 347     | 18         |
+| Este mês        | R$ 540,17   | 614        | 151     | 6          |
+| Hoje (18/09)    | R$ 10,11    | 21         | 3       | 0          |
+
+A campanha ativa está **`primary_status = LIMITED`, motivo
+`BUDGET_CONSTRAINED`** — o orçamento diário está segurando a entrega. É um sinal
+que o cockpit pode exibir diretamente, sem inferir nada.
+
+A P-max gastou R$ 97,43 nos últimos 30 dias (2 conversões) antes de ser pausada.
+
+## Pergunta 7 (nova) — conta pré-paga ✅ a API EXPÕE o saldo
+
+**Correção do que eu havia suposto:** eu havia registrado que a API talvez não
+expusesse saldo pré-pago. **Expõe**, via `account_budget`:
+
+```json
+{
+  "id": "8108783231",
+  "status": "APPROVED",
+  "approvedSpendingLimitMicros": "12600000000", // R$ 12.600,00
+  "totalAdjustmentsMicros": "139570000", // R$    139,57
+  "adjustedSpendingLimitMicros": "12739570000", // R$ 12.739,57
+  "amountServedMicros": "12718810000" // R$ 12.718,81
+}
+```
+
+> **saldo restante = `adjusted_spending_limit` − `amount_served`
+> = R$ 12.739,57 − R$ 12.718,81 = R$ 20,76**
+
+Janela do orçamento: `2025-12-14` → `FOREVER`. `billing_setup` (status
+`APPROVED`) traz a conta de pagamentos: `Wings`, id `9891-4652-2694-7009`,
+perfil `0664-6327-2050`.
+
+### O que isso significa para o guardrail
+
+O teto interno de R$ 4.000/mês é **165× maior que o saldo real**. Comprometer
+R$ 2.800 de "utilizável" numa conta com R$ 20,76 é uma reserva que a plataforma
+não honra.
+
+Desenho a decidir (nada implementado):
+
+1. **Dois tetos, o menor vence**: limite interno do mês e saldo pré-pago.
+2. **Alerta próprio `account_out_of_funds`**, crítico e com WhatsApp,
+   disparando por limiar de saldo (ex.: menos de 2 dias de gasto médio).
+3. **`budget_pacing` suprimido** quando a causa for falta de fundo — dois
+   alertas para o mesmo fato treinam a equipe a ignorar os dois.
+4. Ingerir `account_budget` junto das métricas; é uma consulta barata.
+
+`campaign.primary_status_reasons` é o sinal complementar por campanha
+(`CAMPAIGN_PAUSED`, `BUDGET_CONSTRAINED` observados hoje).
 
 ## Micros
 
-O Google reporta dinheiro em micros (1 real = 1.000.000). `centavos = micros ÷
-10.000`, nem sempre inteiro. Recomendação: guardar `amount_micros` bruto ao lado
-do valor em centavos e arredondar só na exibição.
+Confirmado na prática: valores vêm em micros (1 real = 1.000.000). `centavos =
+micros ÷ 10.000`. Os valores desta conta são todos múltiplos exatos de 10.000
+micros, mas `total_adjustments_micros = 139570000` mostra que ajustes chegam em
+centavos quebrados. **Guardar `micros` bruto ao lado dos centavos.**
 
-## Próximos passos
+## Resumo das sete perguntas
 
-1. **Solicitar Basic access** no API Center da MCC 6693183441. É o único
-   bloqueio.
-2. (Opcional) dar ao usuário autorizador acesso à MCC, para liberar também o
-   caminho via `login-customer-id`.
-3. Reexecutar o spike — o script cobre as sete perguntas e já lê
-   `GOOGLE_ADS_LOGIN_CUSTOMER_ID`.
-4. Conciliar a saída da API com os números do Ads Manager acima.
-5. Só então decidir schema, `ad_budgets`, alertas de saldo e mudanças no guard.
+| #   | Pergunta                   | Resposta                                                                               |
+| --- | -------------------------- | -------------------------------------------------------------------------------------- |
+| 1   | Lê dados reais?            | ✅ sim, v22, sem `login-customer-id`                                                   |
+| 2   | Orçamento só por campanha? | ✅ sim (`ad_group.budget_micros` não existe); compartilhados possíveis mas nenhum hoje |
+| 3   | Sobreentrega 2×?           | ✅ documentada 2×, **observada máx. 1,35×**; usar 2,0 no guardrail                     |
+| 4   | Tipos de conversão?        | ✅ `form_submit` (18 em 30d); WhatsApp ativas mas sem eventos; **CPL = R$ 55,67**      |
+| 5   | Campos de política?        | ✅ `policy_summary` funciona; 28 aprovados, 1 em revisão; **P-max fora**               |
+| 6   | Entregando hoje?           | ✅ 1 de 8 campanhas; R$ 10,11 hoje; `LIMITED / BUDGET_CONSTRAINED`                     |
+| 7   | Saldo pré-pago?            | ✅ `account_budget` → **R$ 20,76 restantes**                                           |
+
+## Próximos passos (depois da sua revisão)
+
+1. **Repor o saldo pré-pago** — operacional, hoje.
+2. Decidir schema: `ad_budgets` (por orçamento, não por campanha), snapshot
+   diário do orçamento vigente, ingestão de `account_budget`.
+3. `budget-guard.ts`: dois fatores por plataforma + teto duplo (limite interno
+   vs saldo).
+4. Alerta `account_out_of_funds` e supressão de `budget_pacing`.
+5. Cobertura de P-max no alerta de reprovação (`asset_group`).
 
 Script do spike: `/tmp/.../scratchpad/google-ads-spike.mjs` (temporário, fora do
-repositório), mantido para a reexecução.
+repositório).
