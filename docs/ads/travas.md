@@ -110,7 +110,13 @@ saudável.
    ligada.** Ele só chama leituras, então nada aconteceria — mas agora é
    estrutural: a ingestão monta sempre um leitor, mesmo com a flag ligada.
 
-### Uma questão de desenho, não corrigida: reservas e reconciliação não se conhecem
+### 🚫 Bloqueador de automação: reservas e reconciliação não se conhecem
+
+> **Enquanto isto não for corrigido, nada de automação sobre gasto:** nenhum
+> agente pedindo alteração, nenhuma aprovação automática, nenhum worker
+> executando. Decisão de 18/09/2026. Com uma pessoa aprovando e executando uma
+> alteração por vez, o risco é aceitável; no dia em que não for uma pessoa, é
+> um bug de dinheiro. A regra também está nos não-negociáveis do `CLAUDE.md`.
 
 O comprometido do mês (`committed_cents`) tem **dois donos que não conversam**:
 
