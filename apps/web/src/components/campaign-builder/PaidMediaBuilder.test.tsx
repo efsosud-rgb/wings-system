@@ -1,4 +1,4 @@
-import type { AudienceProfile, PacingSummary } from '@wings/shared';
+import type { AudienceProfile, CustomLocation, PacingSummary } from '@wings/shared';
 import { cleanup, fireEvent, render as renderBare, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -58,6 +58,38 @@ vi.mock('../../api/ads.js', () => ({
     error: null,
     ...launchState.current,
   }),
+}));
+
+// Leaflet needs a real layout engine; the builder only cares what the map
+// reports, so a stand-in reports a click and a radius change.
+vi.mock('./RadiusMap.js', () => ({
+  RadiusMap: ({
+    value,
+    onChange,
+  }: {
+    value: CustomLocation[];
+    onChange: (next: CustomLocation[]) => void;
+  }) => (
+    <div>
+      <button
+        type="button"
+        onClick={() =>
+          onChange([
+            ...value,
+            { latitude: -22.9056, longitude: -47.0608, radiusKm: 15, label: 'Campinas' },
+          ])
+        }
+      >
+        clicar no mapa
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange(value.map((item) => ({ ...item, radiusKm: 40 })))}
+      >
+        raio 40
+      </button>
+    </div>
+  ),
 }));
 
 const render = (ui: ReactElement) => renderBare(<MemoryRouter>{ui}</MemoryRouter>);
@@ -262,7 +294,11 @@ describe('the paid-media builder', () => {
   it('starts from the audience Wings saved, and leaves it editable', () => {
     savedAudience.current = {
       idealCustomerProfile: 'Empreendedor com capital próprio e perfil de gestão.',
-      reach: { states: ['SP', 'PR'], cities: [{ name: 'Goiânia', state: 'GO' }] },
+      reach: {
+        states: ['SP', 'PR'],
+        cities: [{ name: 'Goiânia', state: 'GO' }],
+        customLocations: [],
+      },
       updatedAt: '2026-09-18T12:00:00.000Z',
       updatedByName: 'Eric',
     };
@@ -275,6 +311,26 @@ describe('the paid-media builder', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Remover Goiânia' }));
     expect(screen.getByText('Nenhuma cidade adicionada.')).toBeTruthy();
+  });
+
+  it('takes a radius on the map into the summary and into the request', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    fillValidCampaign();
+    // The map alone is a valid reach: no state, no city.
+    fireEvent.click(screen.getByRole('checkbox', { name: 'SP' }));
+    fireEvent.click(screen.getByRole('button', { name: 'clicar no mapa' }));
+    fireEvent.click(screen.getByRole('button', { name: 'raio 40' }));
+    expect(screen.getByText('40 km ao redor de Campinas')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
+    expect(requestCampaign.mock.calls[0]?.[0].reach).toEqual({
+      states: [],
+      cities: [],
+      customLocations: [
+        { latitude: -22.9056, longitude: -47.0608, radiusKm: 40, label: 'Campinas' },
+      ],
+    });
   });
 
   it('adds cities, and saves profile and reach as the Wings default', () => {
@@ -292,7 +348,7 @@ describe('the paid-media builder', () => {
     fireEvent.click(screen.getByRole('button', { name: /Salvar perfil e alcance/ }));
     expect(saveAudience).toHaveBeenCalledWith({
       idealCustomerProfile: 'Empreendedor com perfil de gestão.',
-      reach: { states: [], cities: [{ name: 'Curitiba', state: 'PR' }] },
+      reach: { states: [], cities: [{ name: 'Curitiba', state: 'PR' }], customLocations: [] },
     });
   });
 
@@ -331,7 +387,7 @@ describe('the paid-media builder', () => {
       name: 'Sacrifício — teste de escrita',
       dailyBudgetCents: 600,
       startPaused: true,
-      reach: { states: ['SP'], cities: [] },
+      reach: { states: ['SP'], cities: [], customLocations: [] },
       variations: [
         { creativeId: '00000001-0000-4000-8000-000000000000' },
         { creativeId: '00000002-0000-4000-8000-000000000000' },

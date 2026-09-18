@@ -77,7 +77,7 @@ nome repetido no pedido. Motivo: um create que dá timeout não devolve id, ent�
   página do Facebook e a imagem por URL pública ou já dentro da Meta.
 - [ ] Rodar `spike-preview.ts` (somente leitura, só GETs) com o token em mãos:
       `pnpm --filter @wings/api exec tsx src/modules/ads/spike-preview.ts
-  <id-da-página> <url-https-pública-de-uma-imagem>`. Responde se
+<id-da-página> <url-https-pública-de-uma-imagem>`. Responde se
       `generatepreviews` aceita criativo inline, imagem por URL e o token de
       leitura. Anotar aqui o resultado antes de construir a integração.
 
@@ -88,6 +88,18 @@ do cliente ideal + `reach` em JSON com UFs inteiras e cidades digitadas). O
 builder começa do padrão salvo; cada pedido guarda a **sua cópia** no rascunho,
 então editar o padrão depois não reescreve um pedido já aprovado. Salvar o
 padrão exige `ads.request` e fica na auditoria.
+
+**Raio no mapa** (onda 3b): além de estados e cidades, o operador clica num
+ponto e ajusta um raio. Entra no rascunho como `reach.customLocations`
+(`latitude`, `longitude`, `radiusKm` inteiro de 1 a 80, `label` opcional, até 5
+pontos) — o formato de `geo_locations.custom_locations` da Meta. Os limites de
+raio são os documentados pela Meta, **não verificados na conta**. O mapa é
+Leaflet sobre tiles do OpenStreetMap, sem chave e sem custo. Saem do navegador
+para o OpenStreetMap os tiles da área na tela e uma consulta (Nominatim) das
+coordenadas clicadas, só para dar ao ponto um nome legível; nada sobre a
+campanha vai junto, e se a consulta falhar o ponto fica "Ponto N". Alcances e
+rascunhos gravados antes do mapa não têm o campo: a API preenche `[]` ao
+devolver, sem tocar no payload guardado (o hash da aprovação é sobre ele).
 
 Cidades são nomes digitados, não ids de uma base: hoje só uma pessoa lê isso.
 **Nada de público ou localização chega à Meta nesta onda** — segmentação mora

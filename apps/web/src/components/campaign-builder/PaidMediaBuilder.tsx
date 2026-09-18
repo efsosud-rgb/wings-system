@@ -48,6 +48,7 @@ import {
 import { Alert, Button, Field, Input, Select } from '../ui.js';
 import { AdPreviewGallery, creativeUrl } from './AdPreview.js';
 import { formatBrl, formatDate, parseBrlToCents, todayInSaoPaulo } from './format.js';
+import { RadiusMap } from './RadiusMap.js';
 
 /**
  * The paid-media tab of the campaign builder.
@@ -234,7 +235,7 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
       name: '',
       objective: 'lead',
       idealCustomerProfile: '',
-      reach: { states: [], cities: [] },
+      reach: { states: [], cities: [], customLocations: [] },
       formatKey: 'feed_square',
       destinationUrl: '',
       variations: Array.from({ length: MIN_VARIATIONS }, () => ({
@@ -273,6 +274,7 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
     setValue('reach.states', savedAudience.reach.states);
     // A field array only follows its own methods, not setValue.
     replaceCities(savedAudience.reach.cities);
+    setValue('reach.customLocations', savedAudience.reach.customLocations);
   }, [
     savedAudience,
     audienceLoaded,
@@ -521,6 +523,15 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
             </Button>
           </div>
         </div>
+        <RadiusMap
+          value={values.reach.customLocations ?? []}
+          onChange={(next) =>
+            setValue('reach.customLocations', next, {
+              shouldDirty: true,
+              shouldValidate: submitCount > 0,
+            })
+          }
+        />
         {(errors.reach?.message ?? errors.reach?.root?.message) && (
           <p className="field-error" role="alert">
             {errors.reach?.message ?? errors.reach?.root?.message}

@@ -1466,3 +1466,37 @@ textarea.control {
   background: var(--wings-accent);
   color: #fff;
 }
+
+/* ---------- alcance por raio no mapa ---------- */
+.radius-map {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.radius-map-canvas {
+  height: 420px;
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+  /* Leaflet's panes use high z-indexes; keep them inside this box. */
+  position: relative;
+  z-index: 0;
+  cursor: crosshair;
+}
+
+.radius-map-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13.5px;
+}
+
+.radius-map-slider input[type='range'] {
+  width: 100%;
+  accent-color: var(--wings-accent);
+}
+
+.radius-map-list .is-selected {
+  color: var(--wings-text);
+  font-weight: 600;
+}

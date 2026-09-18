@@ -418,12 +418,38 @@ export const ICP_MAX = 2000;
 export const MAX_REACH_CITIES = 50;
 
 /**
- * Where the campaign should reach: whole states, single cities, or both.
+ * Where the campaign should reach: whole states, single cities, a radius
+ * around a point on the map, or any mix of them.
  *
  * Minimal on purpose. Cities are names the operator types, not ids from a
  * gazetteer: nothing consumes them yet except a person reading the request, and
  * mapping them to a platform's location keys belongs with ad-set creation.
  */
+/**
+ * A point on the map and a radius around it — Meta's
+ * `geo_locations.custom_locations` (latitude, longitude, radius, kilometres).
+ * The radius bounds are Meta's documented ones for a custom location; like
+ * everything about targeting, they are unverified on the live account until
+ * ad-set creation exists.
+ */
+export const MIN_RADIUS_KM = 1;
+export const MAX_RADIUS_KM = 80;
+export const DEFAULT_RADIUS_KM = 15;
+export const MAX_CUSTOM_LOCATIONS = 5;
+
+export const customLocationSchema = z.object({
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+  radiusKm: z
+    .number()
+    .int()
+    .min(MIN_RADIUS_KM, `O raio mínimo é ${MIN_RADIUS_KM} km`)
+    .max(MAX_RADIUS_KM, `O raio máximo é ${MAX_RADIUS_KM} km`),
+  /** A place name for people to read; the coordinates are what counts. */
+  label: z.string().trim().max(80).optional(),
+});
+export type CustomLocation = z.output<typeof customLocationSchema>;
+
 export const reachSchema = z
   .object({
     states: z.array(z.enum(BRAZIL_STATES)).max(BRAZIL_STATES.length),
@@ -435,9 +461,14 @@ export const reachSchema = z
         }),
       )
       .max(MAX_REACH_CITIES, `No máximo ${MAX_REACH_CITIES} cidades`),
+    /** Absent in reaches saved before the map existed, hence the default. */
+    customLocations: z
+      .array(customLocationSchema)
+      .max(MAX_CUSTOM_LOCATIONS, `No máximo ${MAX_CUSTOM_LOCATIONS} pontos no mapa`)
+      .default([]),
   })
-  .refine((reach) => reach.states.length + reach.cities.length > 0, {
-    message: 'Escolha pelo menos um estado ou uma cidade',
+  .refine((reach) => reach.states.length + reach.cities.length + reach.customLocations.length > 0, {
+    message: 'Escolha pelo menos um estado, uma cidade ou um ponto no mapa',
   });
 export type Reach = z.output<typeof reachSchema>;
 
@@ -460,10 +491,21 @@ export interface AudienceProfile extends AudienceProfileInput {
   updatedByName: string | null;
 }
 
-export function describeReach(reach: Reach): string {
+export function describeCustomLocation(location: CustomLocation, index: number): string {
+  const place =
+    location.label ??
+    `Ponto ${index + 1} (${location.latitude.toFixed(3)}, ${location.longitude.toFixed(3)})`;
+  return `${location.radiusKm} km ao redor de ${place}`;
+}
+
+/** Tolerates a reach stored before the map existed, read back without parsing. */
+export function describeReach(
+  reach: Omit<Reach, 'customLocations'> & { customLocations?: CustomLocation[] },
+): string {
   const parts = [
     ...reach.states.map((state) => `${state} (estado todo)`),
     ...reach.cities.map((city) => `${city.name}/${city.state}`),
+    ...(reach.customLocations ?? []).map(describeCustomLocation),
   ];
   return parts.join(' · ') || '—';
 }

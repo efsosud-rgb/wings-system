@@ -355,7 +355,13 @@ describe('a request to create a campaign', () => {
     name: 'Sacrifício — teste de escrita',
     objective: 'lead',
     idealCustomerProfile: 'Empreendedor de 30 a 50 anos, com experiência em gestão.',
-    reach: { states: ['SP'], cities: [{ name: 'Curitiba', state: 'PR' }] },
+    reach: {
+      states: ['SP'],
+      cities: [{ name: 'Curitiba', state: 'PR' }],
+      customLocations: [
+        { latitude: -22.9056, longitude: -47.0608, radiusKm: 25, label: 'Campinas' },
+      ],
+    },
     formatKey: 'feed_square',
     destinationUrl: 'https://wingscompany.com.br/franquia',
     variations: [
