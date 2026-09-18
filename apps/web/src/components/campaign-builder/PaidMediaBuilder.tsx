@@ -12,6 +12,7 @@ import {
   HEADLINE_MAX,
   ICP_MAX,
   MAX_VARIATIONS,
+  MIN_DAILY_BUDGET_CENTS,
   MIN_VARIATIONS,
   PAID_PLATFORMS,
   PRIMARY_TEXT_RECOMMENDED,
@@ -276,8 +277,27 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
 
   const values = watch();
   const days = campaignDays(values.startDate, values.endDate);
-  const dailyBudgetCents = Number.isFinite(values.dailyBudgetCents) ? values.dailyBudgetCents : 0;
+  // The estimate reads what is in the box, as typed. It must never wait on
+  // the form library's copy of the value to show a number the operator is
+  // about to commit money against.
+  const [budgetText, setBudgetText] = useState('');
+  const typedBudgetCents = parseBrlToCents(budgetText);
+  const dailyBudgetCents = Number.isFinite(typedBudgetCents) ? typedBudgetCents : 0;
   const totalCostCents = days ? estimateCostCents(dailyBudgetCents, days) : null;
+  // Why there is no estimate yet, in the operator's terms — never a bare dash.
+  const costMissing =
+    budgetText.trim() === ''
+      ? 'Falta a verba por dia.'
+      : !Number.isFinite(typedBudgetCents)
+        ? `Não entendi “${budgetText.trim()}”. Digite só o valor, como 20,00.`
+        : dailyBudgetCents < MIN_DAILY_BUDGET_CENTS
+          ? 'A verba por dia precisa ser de pelo menos R$ 1,00.'
+          : !values.startDate || !values.endDate
+            ? 'Falta escolher o início e o fim da campanha.'
+            : days === null
+              ? 'O fim da campanha está antes do início.'
+              : null;
+  const budgetField = register('dailyBudgetCents', { setValueAs: parseBrlToCents });
   const daysThisMonth = campaignDaysInMonth(values.startDate, values.endDate, today);
   const costThisMonthCents = estimateCostCents(dailyBudgetCents, daysThisMonth);
   const overCeiling =
@@ -340,6 +360,10 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
     <form
       className="builder"
       noValidate
+      // Browsers restore typed values after a reload or a "back" without
+      // telling the page, which would show filled boxes over an empty form
+      // state — a budget on screen and no estimate. Off means: do not restore.
+      autoComplete="off"
       onSubmit={(event) => {
         // Which button was pressed: checking never sends anything.
         const submitter = (event.nativeEvent as SubmitEvent).submitter;
@@ -628,15 +652,23 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
               <Input
                 inputMode="decimal"
                 placeholder="20,00"
-                {...register('dailyBudgetCents', { setValueAs: parseBrlToCents })}
+                {...budgetField}
+                onChange={(event) => {
+                  setBudgetText(event.target.value);
+                  void budgetField.onChange(event);
+                }}
               />
             </Field>
             <div className="builder-cost">
               <span className="field-label">Custo total estimado</span>
-              <p className="mono builder-ceiling-figure">
-                {totalCostCents && dailyBudgetCents > 0 ? formatBrl(totalCostCents) : '—'}
-              </p>
-              {days !== null && dailyBudgetCents > 0 && (
+              {costMissing === null && totalCostCents !== null ? (
+                <p className="mono builder-ceiling-figure">{formatBrl(totalCostCents)}</p>
+              ) : (
+                <p className="builder-cost-missing" role="status">
+                  {costMissing}
+                </p>
+              )}
+              {costMissing === null && days !== null && (
                 <p className="field-hint">
                   {formatBrl(dailyBudgetCents)} × {days} dias × 1,25 de margem da plataforma
                   {daysThisMonth !== days &&
@@ -731,8 +763,10 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
           <dt>Verba diária</dt>
           <dd className="mono">{dailyBudgetCents > 0 ? formatBrl(dailyBudgetCents) : '—'}</dd>
           <dt>Custo total estimado</dt>
-          <dd className="mono">
-            {totalCostCents && dailyBudgetCents > 0 ? formatBrl(totalCostCents) : '—'}
+          <dd className={costMissing === null ? 'mono' : 'muted'}>
+            {costMissing === null && totalCostCents !== null
+              ? formatBrl(totalCostCents)
+              : costMissing}
           </dd>
           <dt>Nasce</dt>
           <dd>{values.startPaused ? 'Pausada' : 'Ativa, assim que aprovada e executada'}</dd>

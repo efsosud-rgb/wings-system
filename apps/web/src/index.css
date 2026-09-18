@@ -1420,3 +1420,9 @@ textarea.control {
   display: flex;
   flex-direction: column;
 }
+
+.builder-cost-missing {
+  color: var(--wings-muted);
+  font-size: 13px;
+  padding: 6px 0;
+}

@@ -148,6 +148,39 @@ describe('the paid-media builder', () => {
     expect(screen.queryByText(/passa do que a conta ainda permite/)).toBeNull();
   });
 
+  it('says which field the estimate is waiting for, never a bare dash', () => {
+    render(<PaidMediaBuilder canRequest />);
+    const cost = () => screen.getByText('Custo total estimado', { selector: 'span' }).parentElement;
+    expect(cost()?.textContent).toContain('Falta a verba por dia.');
+
+    type(screen.getByLabelText(/Verba por dia/), '20 reais');
+    expect(cost()?.textContent).toContain('Não entendi “20 reais”');
+
+    type(screen.getByLabelText(/Verba por dia/), '0,50');
+    expect(cost()?.textContent).toContain('pelo menos R$ 1,00');
+
+    type(screen.getByLabelText(/Verba por dia/), '20');
+    type(screen.getByLabelText(/^Fim/), '');
+    expect(cost()?.textContent).toContain('Falta escolher o início e o fim');
+
+    type(screen.getByLabelText(/^Início/), '2026-09-20');
+    type(screen.getByLabelText(/^Fim/), '2026-09-19');
+    expect(cost()?.textContent).toContain('O fim da campanha está antes do início.');
+
+    type(screen.getByLabelText(/^Fim/), '2026-09-26');
+    // toLocaleString puts a non-breaking space after R$.
+    expect(cost()?.textContent).toMatch(/R\$\s175,00/);
+    expect(cost()?.textContent).not.toContain('—');
+  });
+
+  it('reads a dot as a decimal mark, not as a hundred times the budget', () => {
+    render(<PaidMediaBuilder canRequest />);
+    type(screen.getByLabelText(/^Início/), '2026-09-20');
+    type(screen.getByLabelText(/^Fim/), '2026-09-26');
+    type(screen.getByLabelText(/Verba por dia/), '20.00');
+    expect(screen.getAllByText('R$ 175,00').length).toBeGreaterThan(0);
+  });
+
   it('warns when the campaign would not fit under the ceiling', () => {
     pacing.current = buildPacing({ availableCents: 10_000 });
     render(<PaidMediaBuilder canRequest />);
