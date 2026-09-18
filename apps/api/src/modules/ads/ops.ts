@@ -2,6 +2,7 @@ import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   adAccounts,
+  adCampaignDrafts,
   adCampaigns,
   adChangeRequests,
   adGuardrailEvents,
@@ -188,13 +189,18 @@ export async function resolveUnknownExecution(
   const account = await db.query.adAccounts.findFirst({
     where: eq(adAccounts.id, change.adAccountId),
   });
-  const campaign = await db.query.adCampaigns.findFirst({
-    where: eq(adCampaigns.id, change.campaignId),
-  });
-  if (!account || !campaign) return refuse('campaign_not_found', 'Campanha não encontrada.');
+  if (!account) return refuse('campaign_not_found', 'Campanha não encontrada.');
   if (client.accountExternalId !== account.externalId) {
     return refuse('account_not_found', 'O cliente da plataforma não pertence a esta conta.');
   }
+  if (change.kind === 'create_campaign') {
+    return resolveUnknownCreation(db, client, { change, accountId: account.id, now });
+  }
+
+  const campaign = change.campaignId
+    ? await db.query.adCampaigns.findFirst({ where: eq(adCampaigns.id, change.campaignId) })
+    : undefined;
+  if (!campaign) return refuse('campaign_not_found', 'Campanha não encontrada.');
 
   const live = await client.getCampaign(campaign.externalId);
   if (!live) {
@@ -251,6 +257,84 @@ export async function resolveUnknownExecution(
     entity: 'ad_change_request',
     entityId: change.id,
     metadata: { via: 'ops-cli', resolution, observedStatus: live.status },
+  });
+
+  return { ok: true, value: { resolution, observed } };
+}
+
+/**
+ * A create that timed out left no id behind, so the campaign is looked for by
+ * name — which is why the guard refuses a name already in use on the account.
+ */
+async function resolveUnknownCreation(
+  db: Database,
+  client: AdsPlatformClient,
+  input: { change: typeof adChangeRequests.$inferSelect; accountId: string; now: Date },
+): Promise<OpsResult<{ resolution: UnknownResolution; observed: string }>> {
+  const { change, accountId, now } = input;
+  const draft = change.draftId
+    ? await db.query.adCampaignDrafts.findFirst({ where: eq(adCampaignDrafts.id, change.draftId) })
+    : undefined;
+  if (!draft) return refuse('campaign_not_found', 'Rascunho da campanha não encontrado.');
+
+  const live = (await client.listCampaigns()).find((item) => item.name === draft.name);
+  const resolution: UnknownResolution = live ? 'applied' : 'not_applied';
+  const observed = live
+    ? `campanha ${live.id} existe, status ${live.status}`
+    : 'nenhuma campanha com este nome na plataforma';
+
+  if (live) {
+    const [created] = await db
+      .insert(adCampaigns)
+      .values({
+        adAccountId: accountId,
+        externalId: live.id,
+        name: live.name,
+        status: live.status,
+        dailyBudgetCents: live.dailyBudgetCents ?? 0,
+        budgetLevel: 'campaign',
+        lastSyncedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [adCampaigns.adAccountId, adCampaigns.externalId],
+        set: { status: live.status, lastSyncedAt: now, updatedAt: now },
+      })
+      .returning({ id: adCampaigns.id });
+    if (!created) throw new Error('failed to mirror the created campaign');
+
+    await db
+      .update(adCampaignDrafts)
+      .set({ campaignId: created.id })
+      .where(eq(adCampaignDrafts.id, draft.id));
+    await db
+      .update(adChangeRequests)
+      .set({ status: 'executed', executedAt: now, campaignId: created.id })
+      .where(eq(adChangeRequests.id, change.id));
+  } else {
+    await releaseReservation(db, change.id, 'failed');
+    await db
+      .update(adChangeRequests)
+      .set({ status: 'failed' })
+      .where(eq(adChangeRequests.id, change.id));
+  }
+
+  await db.insert(adGuardrailEvents).values({
+    adAccountId: accountId,
+    kind: 'unknown_execution_outcome',
+    detail: {
+      note: 'Resultado desconhecido resolvido pela leitura da plataforma',
+      changeRequestId: change.id,
+      resolution,
+      observedCampaignExternalId: live?.id ?? null,
+      observedStatus: live?.status ?? null,
+    },
+  });
+  await writeAudit(db, {
+    actorEmployeeId: null,
+    action: 'ads.unknown_outcome_resolved',
+    entity: 'ad_change_request',
+    entityId: change.id,
+    metadata: { via: 'ops-cli', resolution, observedStatus: live?.status ?? null },
   });
 
   return { ok: true, value: { resolution, observed } };

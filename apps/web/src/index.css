@@ -1205,3 +1205,11 @@ textarea.control {
   resize: vertical;
   font-family: inherit;
 }
+
+.draft-variations {
+  margin: 14px 0 0 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+}

@@ -2,6 +2,7 @@ import type {
   ApprovalDecisionInput,
   ApprovalDetail,
   ApprovalListItem,
+  CampaignDraft,
   ChangeSimulation,
   CockpitSnapshot,
   NextPendingLink,
@@ -100,5 +101,23 @@ export function useApprovalGroups() {
   return useQuery({
     queryKey: ['ads', 'approval-groups'],
     queryFn: () => api.get<{ groups: PendingGroup[] }>('/ads/approvals-groups'),
+  });
+}
+
+/**
+ * "Lançar campanha": asks for the campaign to be created. The answer is an
+ * approval to wait on, never a campaign — nothing is published from here.
+ */
+export function useRequestCampaign() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (draft: CampaignDraft) =>
+      api.post<{ approvalId: string | null; changeRequestId: string; exposureDeltaCents: number }>(
+        '/ads/campaign-requests',
+        draft,
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ads'] });
+    },
   });
 }

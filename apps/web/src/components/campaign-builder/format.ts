@@ -11,7 +11,10 @@ export function formatBrl(cents: number): string {
 export function parseBrlToCents(value: unknown): number {
   if (typeof value === 'number') return value;
   if (typeof value !== 'string') return Number.NaN;
-  const cleaned = value.replace(/[R$\s]/g, '').replace(/\./g, '').replace(',', '.');
+  const cleaned = value
+    .replace(/[R$\s]/g, '')
+    .replace(/\./g, '')
+    .replace(',', '.');
   if (!/^\d+(\.\d{1,2})?$/.test(cleaned)) return Number.NaN;
   return Math.round(Number(cleaned) * 100);
 }

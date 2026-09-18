@@ -28,7 +28,8 @@ import {
 } from '@wings/shared';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useFieldArray, useForm, type Resolver } from 'react-hook-form';
-import { useCockpit } from '../../api/ads.js';
+import { Link } from 'react-router-dom';
+import { useCockpit, useRequestCampaign } from '../../api/ads.js';
 import { Alert, Button, Field, Input, Select } from '../ui.js';
 import { formatBrl, formatDate, parseBrlToCents, todayInSaoPaulo } from './format.js';
 
@@ -121,9 +122,10 @@ function AccountCeiling({ pacing }: { pacing: PacingSummary | null | undefined }
   );
 }
 
-export function PaidMediaBuilder() {
+export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
   const today = todayInSaoPaulo();
   const cockpit = useCockpit(7);
+  const launch = useRequestCampaign();
   const pacing = cockpit.isLoading ? undefined : (cockpit.data?.cockpit.pacing ?? null);
 
   const {
@@ -222,8 +224,16 @@ export function PaidMediaBuilder() {
       className="builder"
       noValidate
       onSubmit={(event) => {
+        // Which button was pressed: checking never sends anything.
+        const submitter = (event.nativeEvent as SubmitEvent).submitter;
+        const launching = submitter instanceof HTMLButtonElement && submitter.value === 'launch';
         setChecked(null);
-        void handleSubmit((draft) => setChecked(draft as CampaignDraft))(event);
+        launch.reset();
+        void handleSubmit((values) => {
+          const draft = values as CampaignDraft;
+          if (launching && canRequest) launch.mutate(draft);
+          else setChecked(draft);
+        })(event);
       }}
     >
       <BuilderSection step={1} title="Plataforma">
@@ -470,7 +480,9 @@ export function PaidMediaBuilder() {
         </dl>
 
         {hasComplianceProblem && (
-          <Alert kind="error">Há texto bloqueado pelo compliance. Corrija as variações acima.</Alert>
+          <Alert kind="error">
+            Há texto bloqueado pelo compliance. Corrija as variações acima.
+          </Alert>
         )}
         {submitCount > 0 && !isSubmitSuccessful && !hasComplianceProblem && (
           <Alert kind="error">Há campos para corrigir acima.</Alert>
@@ -480,18 +492,36 @@ export function PaidMediaBuilder() {
             Tudo conferido: a campanha “{checked.name}” está pronta para virar um pedido.
           </Alert>
         )}
+        {launch.isError && <Alert kind="error">{launch.error.message}</Alert>}
+        {launch.isSuccess && (
+          <Alert kind="success">
+            Pedido criado. Nada foi publicado: a campanha só existe na Meta depois que alguém
+            aprovar e executar.{' '}
+            {launch.data.approvalId && (
+              <Link to={`/marketing/trafego-pago-wings/aprovacoes/${launch.data.approvalId}`}>
+                Abrir o pedido nas Aprovações
+              </Link>
+            )}
+          </Alert>
+        )}
 
         <div className="form-actions">
-          <Button type="submit" variant="ghost">
+          <Button type="submit" variant="ghost" value="check">
             Conferir campanha
           </Button>
-          <Button type="button" disabled title="Entra na etapa 2 desta onda">
-            Lançar campanha
+          <Button
+            type="submit"
+            value="launch"
+            disabled={!canRequest || launch.isPending || launch.isSuccess}
+            title={canRequest ? undefined : 'Seu perfil não pode pedir campanhas'}
+          >
+            {launch.isPending ? 'Enviando…' : 'Lançar campanha'}
           </Button>
         </div>
         <p className="field-hint">
-          “Lançar campanha” não publica nada: cria um pedido que cai nas Aprovações. O botão é
-          ligado na próxima etapa desta onda.
+          “Lançar campanha” não publica nada: cria um pedido que cai nas Aprovações, e só Admin
+          Master ou Diretoria decidem.
+          {!canRequest && ' Seu perfil pode montar a campanha, mas não enviar o pedido.'}
         </p>
       </BuilderSection>
     </form>

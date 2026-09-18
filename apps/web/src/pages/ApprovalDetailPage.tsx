@@ -1,9 +1,16 @@
 import {
   APPROVAL_STATUS_LABEL,
   APPROVAL_TRIGGER_LABEL,
+  CALL_TO_ACTION_LABEL,
+  CAMPAIGN_OBJECTIVE_LABEL,
   CHANGE_KIND_LABEL,
   CHANGE_STATUS_LABEL,
+  CREATIVE_FORMATS,
+  applyUtms,
+  campaignDays,
+  estimateCostCents,
   type ApprovalDetail,
+  type CampaignDraft,
 } from '@wings/shared';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
@@ -85,6 +92,70 @@ function Summary({ approval }: { approval: ApprovalDetail }) {
       {approval.requestReason && (
         <p className="field-hint">Justificativa: {approval.requestReason}</p>
       )}
+    </section>
+  );
+}
+
+/**
+ * The campaign being asked for, whole. An approval of a creation is bound to
+ * exactly this, so the approver reads everything the requester submitted.
+ */
+function DraftCampaign({ draft }: { draft: CampaignDraft }) {
+  const days = campaignDays(draft.startDate, draft.endDate) ?? 0;
+  const format = CREATIVE_FORMATS[draft.platform].find((item) => item.key === draft.formatKey);
+  const date = (value: string) => value.split('-').reverse().join('/');
+
+  return (
+    <section className="block">
+      <legend>A campanha que será criada</legend>
+      {draft.startPaused ? (
+        <Alert kind="info">
+          Nasce <strong>pausada</strong> e vazia: só o objeto campanha é criado, sem conjunto de
+          anúncios e sem anúncio. Não entrega e não gasta. Ativar depois é outro pedido.
+        </Alert>
+      ) : (
+        <Alert kind="error">
+          Nasce <strong>ativa</strong>. Nesta fase só o objeto campanha é criado — sem conjunto de
+          anúncios ela ainda não entrega —, mas a verba abaixo já fica reservada no mês.
+        </Alert>
+      )}
+      <div className="grid-3 readonly">
+        <div>
+          <span className="field-label">Objetivo</span>
+          <p>{CAMPAIGN_OBJECTIVE_LABEL[draft.objective]}</p>
+        </div>
+        <div>
+          <span className="field-label">Duração</span>
+          <p>
+            {date(draft.startDate)} a {date(draft.endDate)}
+          </p>
+          <span className="cell-sub">{days} dias</span>
+        </div>
+        <div>
+          <span className="field-label">Verba diária</span>
+          <p className="mono">{formatBrl(draft.dailyBudgetCents)}</p>
+          <span className="cell-sub">
+            custo total estimado {formatBrl(estimateCostCents(draft.dailyBudgetCents, days))}
+          </span>
+        </div>
+        <div>
+          <span className="field-label">Formato</span>
+          <p>{format ? `${format.label} (${format.ratio})` : draft.formatKey}</p>
+        </div>
+        <div>
+          <span className="field-label">Destino com UTMs</span>
+          <p className="mono builder-url">{applyUtms(draft.destinationUrl, draft.utms, 0)}</p>
+        </div>
+      </div>
+      <ol className="draft-variations">
+        {draft.variations.map((variation, index) => (
+          <li key={index}>
+            <strong>{variation.headline}</strong>
+            <p>{variation.primaryText}</p>
+            <span className="cell-sub">Botão: {CALL_TO_ACTION_LABEL[variation.callToAction]}</span>
+          </li>
+        ))}
+      </ol>
     </section>
   );
 }
@@ -189,8 +260,10 @@ export function ApprovalDetailPage() {
       )}
 
       <Summary approval={approval} />
+      {approval.draft && <DraftCampaign draft={approval.draft} />}
       <PeriodContext approval={approval} />
-      {id && <ApprovalSimulator approvalId={id} />}
+      {/* The simulator explores budgets of a campaign that exists; a draft has none yet. */}
+      {id && !approval.draft && <ApprovalSimulator approvalId={id} />}
 
       {open && canDecide && (
         <section className="block">

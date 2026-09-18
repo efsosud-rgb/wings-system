@@ -81,6 +81,7 @@ function buildApproval(overrides: Partial<ApprovalDetail> = {}): ApprovalDetail 
     executedAt: null,
     lastExecutionOutcome: null,
     executionAvailable: true,
+    draft: null,
     auditTrail: [
       {
         at: '2026-09-17T12:00:00.000Z',
@@ -345,5 +346,55 @@ describe('the Executar button', () => {
     expect(screen.queryByRole('button', { name: /Executar/ })).toBeNull();
     expect(screen.getByText(/não confirmou o resultado/i)).toBeTruthy();
     expect(screen.getByText(/conta foi congelada/i)).toBeTruthy();
+  });
+});
+
+describe('a request to create a campaign', () => {
+  const draft: NonNullable<ApprovalDetail['draft']> = {
+    platform: 'meta',
+    name: 'Sacrifício — teste de escrita',
+    objective: 'lead',
+    formatKey: 'feed_square',
+    destinationUrl: 'https://wingscompany.com.br/franquia',
+    variations: [
+      { headline: 'Leve a Wings', primaryText: 'Fale com a gente.', callToAction: 'LEARN_MORE' },
+      { headline: 'Seja franqueado', primaryText: 'Suporte completo.', callToAction: 'CONTACT_US' },
+    ],
+    startDate: '2026-09-20',
+    endDate: '2026-09-29',
+    dailyBudgetCents: 2_000,
+    utms: { utm_source: 'meta', utm_medium: 'paid_social', utm_campaign: 'x', utm_content: 'lead' },
+    startPaused: true,
+  };
+
+  it('shows the whole campaign, and that it is born paused and empty', () => {
+    approval.current = buildApproval({
+      changeKind: 'create_campaign',
+      campaignName: draft.name,
+      campaignExternalId: '',
+      budgetLevel: 'campaign',
+      fromValueCents: null,
+      toValueCents: 2_000,
+      amountCents: 0,
+      draft,
+    });
+    renderDetail();
+
+    expect(screen.getByText('Criar campanha')).toBeTruthy();
+    expect(screen.getByText(/Não entrega e não gasta/)).toBeTruthy();
+    expect(screen.getByText('Seja franqueado')).toBeTruthy();
+    // R$ 20 × 10 days × 1.25.
+    expect(screen.getByText(/custo total estimado R\$\s250,00/)).toBeTruthy();
+    // There is no existing budget to explore alternatives of.
+    expect(screen.queryByText(/Simul/)).toBeNull();
+  });
+
+  it('says so in red when the campaign would be born active', () => {
+    approval.current = buildApproval({
+      changeKind: 'create_campaign',
+      draft: { ...draft, startPaused: false },
+    });
+    renderDetail();
+    expect(screen.getByText(/já fica reservada no mês/)).toBeTruthy();
   });
 });

@@ -95,13 +95,16 @@ export async function pendingGroups(db: Database): Promise<PendingGroup[]> {
            cr.to_value_cents::text as to_value_cents,
            ar.requested_at, ar.escalated_at,
            req.full_name as requested_by_name, ar.requested_by_agent,
-           c.id as campaign_id, c.name as campaign_name, c.external_id as campaign_external_id,
+           -- A campaign still to be created is its own group, under its draft.
+           coalesce(c.id, d.id) as campaign_id, coalesce(c.name, d.name) as campaign_name,
+           coalesce(c.external_id, '') as campaign_external_id,
            acc.id as account_id, acc.name as account_name, acc.platform,
            p.period_month, p.cap_cents::text as cap_cents, p.usable_cents::text as usable_cents,
            p.committed_cents::text as committed_cents, p.spent_cents::text as spent_cents
       from ad_approval_requests ar
       join ad_change_requests cr on cr.id = ar.change_request_id
-      join ad_campaigns c on c.id = cr.campaign_id
+      left join ad_campaigns c on c.id = cr.campaign_id
+      left join ad_campaign_drafts d on d.id = cr.draft_id
       join ad_accounts acc on acc.id = ar.ad_account_id
       join ad_budget_periods p on p.id = cr.budget_period_id
       left join employees req on req.id = ar.requested_by

@@ -144,7 +144,9 @@ export async function simulateChange(
   const change = await db.query.adChangeRequests.findFirst({
     where: eq(adChangeRequests.id, changeRequestId),
   });
-  if (!change) return null;
+  // Nothing to simulate for a campaign that does not exist yet: its cost is on
+  // the approval screen already, taken from the draft.
+  if (!change || !change.campaignId) return null;
 
   const [account, campaign, period] = await Promise.all([
     db.query.adAccounts.findFirst({ where: eq(adAccounts.id, change.adAccountId) }),

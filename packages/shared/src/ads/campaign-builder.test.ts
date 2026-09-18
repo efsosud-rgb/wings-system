@@ -65,14 +65,14 @@ describe('UTMs', () => {
   });
 
   it('generates defaults from the form', () => {
-    expect(
-      buildUtms({ platform: 'meta', objective: 'lead', campaignName: 'Expansão SP' }),
-    ).toEqual({
-      utm_source: 'meta',
-      utm_medium: 'paid_social',
-      utm_campaign: 'expansao-sp',
-      utm_content: 'lead',
-    });
+    expect(buildUtms({ platform: 'meta', objective: 'lead', campaignName: 'Expansão SP' })).toEqual(
+      {
+        utm_source: 'meta',
+        utm_medium: 'paid_social',
+        utm_campaign: 'expansao-sp',
+        utm_content: 'lead',
+      },
+    );
   });
 
   it('applies them to the destination, one content value per variation', () => {
@@ -110,13 +110,26 @@ describe('the draft schema', () => {
     formatKey: 'feed_square',
     destinationUrl: 'https://wingscompany.com.br/franquia',
     variations: [
-      { headline: 'Leve a Wings para sua cidade', primaryText: 'Fale com a gente.', callToAction: 'LEARN_MORE' },
-      { headline: 'Seja um franqueado Wings', primaryText: 'Suporte completo.', callToAction: 'CONTACT_US' },
+      {
+        headline: 'Leve a Wings para sua cidade',
+        primaryText: 'Fale com a gente.',
+        callToAction: 'LEARN_MORE',
+      },
+      {
+        headline: 'Seja um franqueado Wings',
+        primaryText: 'Suporte completo.',
+        callToAction: 'CONTACT_US',
+      },
     ],
     startDate: '2026-09-20',
     endDate: '2026-09-27',
     dailyBudgetCents: 600,
-    utms: { utm_source: 'meta', utm_medium: 'paid_social', utm_campaign: 'sacrificio', utm_content: 'lead' },
+    utms: {
+      utm_source: 'meta',
+      utm_medium: 'paid_social',
+      utm_campaign: 'sacrificio',
+      utm_content: 'lead',
+    },
     startPaused: true,
   };
 
@@ -134,12 +147,16 @@ describe('the draft schema', () => {
   });
 
   it('demands two to three variations', () => {
-    expect(campaignDraftSchema.safeParse({ ...valid, variations: [valid.variations[0]] }).success).toBe(false);
+    expect(
+      campaignDraftSchema.safeParse({ ...valid, variations: [valid.variations[0]] }).success,
+    ).toBe(false);
   });
 
   it('refuses an end before the start, an http destination and an unknown format', () => {
     expect(campaignDraftSchema.safeParse({ ...valid, endDate: '2026-09-19' }).success).toBe(false);
-    expect(campaignDraftSchema.safeParse({ ...valid, destinationUrl: 'http://x.com' }).success).toBe(false);
+    expect(
+      campaignDraftSchema.safeParse({ ...valid, destinationUrl: 'http://x.com' }).success,
+    ).toBe(false);
     expect(campaignDraftSchema.safeParse({ ...valid, formatKey: 'banner' }).success).toBe(false);
   });
 });

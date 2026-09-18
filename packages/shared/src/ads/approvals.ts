@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { CampaignDraft } from './campaign-builder.js';
 
 /**
  * Contract for the approvals panel.
@@ -35,6 +36,7 @@ export const CHANGE_KIND_LABEL: Record<string, string> = {
   set_daily_budget: 'Alterar orçamento diário',
   pause_campaign: 'Pausar campanha',
   resume_campaign: 'Retomar campanha',
+  create_campaign: 'Criar campanha',
 };
 
 export interface ApprovalListItem {
@@ -94,7 +96,10 @@ export interface ApprovalDetail extends ApprovalListItem {
   /** False when the server has no write credentials or writes are disabled. */
   executionAvailable: boolean;
   accountExternalId: string;
+  /** Empty while the campaign is still to be created. */
   campaignExternalId: string;
+  /** The whole campaign being asked for; null for a change to an existing one. */
+  draft: CampaignDraft | null;
   /** Where the budget lives: campaign (CBO) or ad set (ABO). */
   budgetLevel: 'campaign' | 'ad_set' | 'none';
   fromValueCents: number | null;

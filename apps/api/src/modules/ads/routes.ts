@@ -1,9 +1,16 @@
-import { approvalDecisionSchema, type ApprovalDetail, type ApprovalListItem } from '@wings/shared';
-import { and, eq, sql } from 'drizzle-orm';
+import {
+  approvalDecisionSchema,
+  campaignDraftSchema,
+  type ApprovalDetail,
+  type ApprovalListItem,
+  type CampaignDraft,
+} from '@wings/shared';
+import { and, asc, eq, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { adAccounts, adApprovalRequests, auditLog } from '../../db/schema/index.js';
-import { decideApproval } from './approvals.js';
+import { decideApproval, gateChange } from './approvals.js';
+import { reserveCampaignCreation } from './budget-guard.js';
 import { nextPendingInGroup, pendingGroups } from './batches.js';
 import { executeApprovedChange } from './executor.js';
 import { createApprovalNotifier } from './notifiers/factory.js';
@@ -79,13 +86,14 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
       const rows = await db.execute<ListRow>(sql`
         select ar.id, ar.status, ar.trigger, ar.amount_cents::text as amount_cents,
                acc.name as account_name, acc.platform,
-               c.name as campaign_name, cr.kind as change_kind,
+               coalesce(c.name, d.name) as campaign_name, cr.kind as change_kind,
                ar.requested_at, ar.escalated_at, ar.decided_at,
                req.full_name as requested_by_name, ar.requested_by_agent
           from ad_approval_requests ar
           join ad_change_requests cr on cr.id = ar.change_request_id
           join ad_accounts acc on acc.id = ar.ad_account_id
-          join ad_campaigns c on c.id = cr.campaign_id
+          left join ad_campaigns c on c.id = cr.campaign_id
+          left join ad_campaign_drafts d on d.id = cr.draft_id
           left join employees req on req.id = ar.requested_by
          order by
            case ar.status when 'pending' then 0 when 'escalated' then 1 else 2 end,
@@ -127,11 +135,14 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
           change_status: ApprovalDetail['changeStatus'];
           executed_at: Date | string | null;
           last_execution_outcome: 'applied' | 'rejected' | 'unknown' | null;
+          draft_payload: CampaignDraft | null;
         }
       >(sql`
         select ar.id, ar.status, ar.trigger, ar.amount_cents::text as amount_cents,
                acc.name as account_name, acc.platform, acc.external_id as account_external_id,
-               c.name as campaign_name, c.external_id as campaign_external_id, c.budget_level,
+               coalesce(c.name, d.name) as campaign_name,
+               coalesce(c.external_id, '') as campaign_external_id,
+               coalesce(c.budget_level, 'campaign') as budget_level, d.payload as draft_payload,
                cr.kind as change_kind, cr.from_value_cents::text as from_value_cents,
                cr.to_value_cents::text as to_value_cents,
                cr.exposure_delta_cents::text as exposure_delta_cents, cr.reason as request_reason,
@@ -148,7 +159,8 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
           from ad_approval_requests ar
           join ad_change_requests cr on cr.id = ar.change_request_id
           join ad_accounts acc on acc.id = ar.ad_account_id
-          join ad_campaigns c on c.id = cr.campaign_id
+          left join ad_campaigns c on c.id = cr.campaign_id
+          left join ad_campaign_drafts d on d.id = cr.draft_id
           join ad_budget_periods p on p.id = cr.budget_period_id
           left join employees req on req.id = ar.requested_by
           left join employees dec on dec.id = ar.decided_by
@@ -196,6 +208,7 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         executedAt: iso(row.executed_at),
         lastExecutionOutcome: row.last_execution_outcome,
         executionAvailable: createMetaClient(env, row.account_external_id).canWrite,
+        draft: row.change_kind === 'create_campaign' ? row.draft_payload : null,
         auditTrail: trail.map((entry) => ({
           at: entry.at.toISOString(),
           action: entry.action,
@@ -306,6 +319,62 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
       }
 
       return reply.send({ ok: true, status: result.status });
+    },
+  );
+
+  /**
+   * Asks for a campaign to be created. This is the whole of "Lançar campanha":
+   * the draft is validated, its exposure reserved, and the request put in
+   * front of an approver. Nothing here can reach an ad platform — there is no
+   * client in this handler to reach it with.
+   */
+  app.post(
+    '/ads/campaign-requests',
+    { preHandler: app.requirePermission('ads.request') },
+    async (request, reply) => {
+      // The same schema the form uses, compliance rules included: blocked copy
+      // is refused here even if a client skipped the on-screen warning.
+      const parsed = campaignDraftSchema.safeParse(request.body);
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0];
+        return reply.status(400).send({
+          error: 'invalid_request',
+          message: issue?.message ?? 'Dados inválidos',
+          path: issue?.path ?? [],
+        });
+      }
+
+      // The account the studio works on: the same one the cockpit shows.
+      const account = await db.query.adAccounts.findFirst({
+        where: and(eq(adAccounts.platform, 'meta'), isNull(adAccounts.archivedAt)),
+        orderBy: asc(adAccounts.createdAt),
+      });
+      if (!account) {
+        return reply
+          .status(409)
+          .send({ error: 'account_not_found', message: 'Nenhuma conta Meta ativa.' });
+      }
+
+      const reserved = await reserveCampaignCreation(db, {
+        adAccountId: account.id,
+        draft: parsed.data,
+        requestedBy: request.session.actor.employeeId,
+        reason: 'Campanha montada no studio',
+      });
+      if (!reserved.ok) {
+        return reply.status(409).send({ error: reserved.reason, message: reserved.message });
+      }
+
+      const gate = await gateChange(db, {
+        changeRequestId: reserved.value.changeRequestId,
+        notifier: createApprovalNotifier(env, db, (message) => request.log.info(message)),
+      });
+
+      return reply.status(201).send({
+        approvalId: gate.approvalId ?? null,
+        changeRequestId: reserved.value.changeRequestId,
+        exposureDeltaCents: reserved.value.exposureDeltaCents,
+      });
     },
   );
 

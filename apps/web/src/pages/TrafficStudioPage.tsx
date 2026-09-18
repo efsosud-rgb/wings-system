@@ -24,6 +24,7 @@ type TabKey = (typeof TABS)[number]['key'];
 export function TrafficStudioPage() {
   const { data: user } = useSession();
   const canApprove = hasPermission(user, 'ads.approve');
+  const canRequest = hasPermission(user, 'ads.request');
   const [tab, setTab] = useState<TabKey>('paid');
 
   return (
@@ -55,7 +56,7 @@ export function TrafficStudioPage() {
             ))}
           </div>
           <div role="tabpanel" id={`studio-panel-${tab}`} aria-labelledby={`studio-tab-${tab}`}>
-            {tab === 'paid' ? <PaidMediaBuilder /> : <OwnedChannelsPanel />}
+            {tab === 'paid' ? <PaidMediaBuilder canRequest={canRequest} /> : <OwnedChannelsPanel />}
           </div>
         </>
       }

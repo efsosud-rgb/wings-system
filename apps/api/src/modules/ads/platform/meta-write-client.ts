@@ -1,6 +1,6 @@
 import { MetaApiError, MetaReadOnlyClient, type MetaClientOptions } from './meta-client.js';
 import type { Cents } from './money.js';
-import type { MutationOutcome } from './types.js';
+import type { CreateCampaignSpec, MutationOutcome } from './types.js';
 
 /**
  * Meta client that can actually change things.
@@ -46,6 +46,15 @@ export class MetaWriteClient extends MetaReadOnlyClient {
     path: string,
     params: Record<string, string>,
   ): Promise<MutationOutcome | null> {
+    const result = await this.send(path, params);
+    return 'failure' in result ? result.failure : null; // success; the caller re-reads the entity
+  }
+
+  /** As `post`, but hands back the response body — a create needs the new id. */
+  private async send(
+    path: string,
+    params: Record<string, string>,
+  ): Promise<{ failure: MutationOutcome } | { body: string }> {
     const url = `https://graph.facebook.com/${this.writeVersion}/${path}`;
     const body = new URLSearchParams(params);
 
@@ -62,8 +71,10 @@ export class MetaWriteClient extends MetaReadOnlyClient {
       });
     } catch (error) {
       return {
-        status: 'unknown',
-        reason: `transport failure: ${error instanceof Error ? error.name : 'unknown'}`,
+        failure: {
+          status: 'unknown',
+          reason: `transport failure: ${error instanceof Error ? error.name : 'unknown'}`,
+        },
       };
     }
 
@@ -78,16 +89,18 @@ export class MetaWriteClient extends MetaReadOnlyClient {
       const code = parsed.error?.code ?? response.status;
       // 5xx means the request may or may not have taken effect.
       if (response.status >= 500) {
-        return { status: 'unknown', reason: `platform error ${response.status}` };
+        return { failure: { status: 'unknown', reason: `platform error ${response.status}` } };
       }
       return {
-        status: 'rejected',
-        code: String(code),
-        message: parsed.error?.message ?? `Meta rejected the change (${response.status})`,
+        failure: {
+          status: 'rejected',
+          code: String(code),
+          message: parsed.error?.message ?? `Meta rejected the change (${response.status})`,
+        },
       };
     }
 
-    return null; // success; the caller re-reads the entity
+    return { body: text };
   }
 
   override async setDailyBudget(
@@ -116,6 +129,46 @@ export class MetaWriteClient extends MetaReadOnlyClient {
     if (failure) return failure;
     const campaign = await this.getCampaign(campaignId);
     if (!campaign) return { status: 'unknown', reason: 'campaign unreadable after the change' };
+    return { status: 'applied', campaign };
+  }
+
+  /**
+   * Creates an empty campaign — the object only, nothing under it.
+   *
+   * One POST, so an `unknown` outcome leaves exactly one thing to look for.
+   * Without an ad set a campaign cannot deliver whatever its status, which is
+   * what makes a paused one safe to use as the first real write.
+   *
+   * NOT yet verified against the live API: that campaign-level `daily_budget`
+   * is accepted with no ad set, and the account's real minimum budget. The
+   * sacrifice-campaign test is where both get answered.
+   */
+  override async createCampaign(spec: CreateCampaignSpec): Promise<MutationOutcome> {
+    const result = await this.send(`${this.accountPath()}/campaigns`, {
+      name: spec.name,
+      objective: spec.objective,
+      status: spec.status,
+      // Required by Meta on every campaign. Franchising is none of the special
+      // categories (credit, employment, housing, politics).
+      special_ad_categories: '[]',
+      daily_budget: String(spec.dailyBudgetCents),
+      bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
+    });
+    if ('failure' in result) return result.failure;
+
+    let id: unknown;
+    try {
+      id = (JSON.parse(result.body) as { id?: unknown }).id;
+    } catch {
+      id = undefined;
+    }
+    // Meta said yes but we cannot tell what it made: it exists, id unknown.
+    if (typeof id !== 'string' || id === '') {
+      return { status: 'unknown', reason: 'campaign created but the response carried no id' };
+    }
+
+    const campaign = await this.getCampaign(id);
+    if (!campaign) return { status: 'unknown', reason: 'campaign unreadable after creation' };
     return { status: 'applied', campaign };
   }
 
