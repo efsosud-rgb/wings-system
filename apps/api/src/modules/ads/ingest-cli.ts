@@ -44,8 +44,7 @@ async function main() {
   const { db, pool } = createDb(env.DATABASE_URL);
 
   try {
-    const { client } = createMetaClient(env);
-    if (!client) {
+    if (!env.META_WRITE_TOKEN) {
       // Fail loudly: a scheduled task that quietly does nothing is worse than
       // one that fails visibly.
       throw new Error('No Meta credentials configured — nothing to ingest.');
@@ -97,6 +96,14 @@ async function main() {
 
     for (const account of accounts) {
       console.warn(`\n${account.platform}:${account.externalId}`);
+
+      // One client per account. Reusing a single client across accounts is how
+      // one account's campaigns ended up filed under another.
+      const { client } = createMetaClient(env, account.externalId);
+      if (!client) {
+        console.warn('  sem credenciais para esta conta — pulando');
+        continue;
+      }
 
       const reconciled = await reconcileAccount(db, client, account.id, now);
       console.warn(

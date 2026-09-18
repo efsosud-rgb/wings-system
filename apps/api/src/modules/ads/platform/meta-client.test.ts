@@ -172,3 +172,90 @@ describe('client configuration', () => {
     expect(seen[0]).not.toContain('super-secret-token');
   });
 });
+
+describe('cursor paging', () => {
+  /**
+   * The live account has 84 campaigns, 202 ad sets and 660 ads. Asking for all
+   * of it at once makes Meta answer "Please reduce the amount of data you're
+   * asking for" rather than truncating, so paging is what makes the call work
+   * at all.
+   */
+  it('follows paging.next across pages and concatenates them', async () => {
+    const pages = [
+      {
+        data: [{ id: '1', name: 'A', status: 'ACTIVE' }],
+        paging: { next: 'https://graph.facebook.com/next', cursors: { after: 'cursor-1' } },
+      },
+      {
+        data: [{ id: '2', name: 'B', status: 'PAUSED' }],
+        // No `next`: this is the last page, even though a cursor is present.
+        paging: { cursors: { after: 'cursor-2' } },
+      },
+    ];
+    const seen: string[] = [];
+    const meta = new MetaReadOnlyClient({
+      accessToken: 'token',
+      adAccountId: 'act_1',
+      fetchImpl: ((url: unknown) => {
+        seen.push(String(url));
+        const page = pages.shift();
+        return Promise.resolve(
+          new Response(JSON.stringify(page ?? { data: [] }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      }) as typeof fetch,
+    });
+
+    const campaigns = await meta.listCampaigns();
+
+    expect(campaigns.map((c) => c.id)).toEqual(['1', '2']);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toContain('after=cursor-1');
+  });
+
+  it('stops at a page that carries a cursor but no next, instead of looping', async () => {
+    // Exactly the shape that spun to the page limit before: every response
+    // carries a cursor, so the cursor cannot be the stop signal.
+    const meta = new MetaReadOnlyClient({
+      accessToken: 'token',
+      adAccountId: 'act_1',
+      fetchImpl: (() =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({
+              data: [{ id: 'same', name: 'Same', status: 'ACTIVE' }],
+              paging: { cursors: { after: 'always-the-same' } },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        )) as typeof fetch,
+    });
+
+    expect(await meta.listCampaigns()).toHaveLength(1);
+  });
+
+  it('stops if the platform repeats a cursor, rather than paging forever', async () => {
+    let calls = 0;
+    const meta = new MetaReadOnlyClient({
+      accessToken: 'token',
+      adAccountId: 'act_1',
+      fetchImpl: (() => {
+        calls += 1;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              data: [{ id: String(calls), name: 'X', status: 'ACTIVE' }],
+              paging: { next: 'https://graph.facebook.com/next', cursors: { after: 'stuck' } },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        );
+      }) as typeof fetch,
+    });
+
+    await meta.listCampaigns();
+    expect(calls).toBe(2); // first page, then the repeat is detected
+  });
+});

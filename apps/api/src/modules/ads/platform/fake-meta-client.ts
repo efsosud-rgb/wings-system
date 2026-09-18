@@ -86,6 +86,10 @@ interface InternalCampaign extends PlatformCampaign {
 }
 
 export class FakeMetaClient implements AdsPlatformClient {
+  get accountExternalId(): string {
+    return this.accountId;
+  }
+
   readonly platform = 'meta' as const;
   /** Always false. A fake client must never be mistaken for a live one. */
   readonly isLive = false;

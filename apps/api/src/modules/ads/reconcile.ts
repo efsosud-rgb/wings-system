@@ -38,6 +38,31 @@ export function periodMonthOf(now: Date, timezone = 'America/Sao_Paulo'): string
   return `${month}-01`;
 }
 
+/**
+ * Refuses to mirror one account's data into another's row.
+ *
+ * A platform client is bound to a single ad account, but nothing in the type
+ * system stopped a caller looping over accounts while reusing one client. The
+ * result was silent and expensive: 84 campaigns from the live account were
+ * filed under an account that had never run anything, along with its spend.
+ * Loud failure is the only acceptable behaviour here.
+ */
+export function assertClientServesAccount(
+  client: AdsPlatformClient,
+  accountExternalId: string,
+): void {
+  // Only live clients can do real damage, and only they are bound to a real
+  // account. A test double's binding is the test's own business.
+  if (!client.isLive) return;
+
+  if (client.accountExternalId !== accountExternalId) {
+    throw new Error(
+      `client is bound to ${client.accountExternalId} but was asked to mirror ` +
+        `${accountExternalId} — refusing to file one account's data under another`,
+    );
+  }
+}
+
 export interface ReconcileResult {
   campaignsSynced: number;
   adSetsSynced: number;
@@ -166,6 +191,7 @@ export async function reconcileAccount(
 ): Promise<ReconcileResult> {
   const account = await db.query.adAccounts.findFirst({ where: eq(adAccounts.id, adAccountId) });
   if (!account) throw new Error('ad account not found');
+  assertClientServesAccount(client, account.externalId);
 
   const periodMonth = periodMonthOf(now, account.timezone);
   const period = await db.query.budgetPeriods.findFirst({

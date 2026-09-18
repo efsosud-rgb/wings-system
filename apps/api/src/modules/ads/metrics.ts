@@ -8,6 +8,7 @@ import {
   adCreatives,
   adMetricsDaily,
 } from '../../db/schema/index.js';
+import { assertClientServesAccount } from './reconcile.js';
 import type { AdsPlatformClient, MetricsLevel } from './platform/types.js';
 
 /**
@@ -42,6 +43,17 @@ export function conversionsFrom(actions: Record<string, number>): number {
   return 0;
 }
 
+/** Same protection as reconciliation: a client may only write its own account. */
+async function assertMirrorTarget(
+  db: Database,
+  client: AdsPlatformClient,
+  adAccountId: string,
+): Promise<void> {
+  const account = await db.query.adAccounts.findFirst({ where: eq(adAccounts.id, adAccountId) });
+  if (!account) throw new Error('ad account not found');
+  assertClientServesAccount(client, account.externalId);
+}
+
 export interface SyncAdsResult {
   ads: number;
   creatives: number;
@@ -55,6 +67,7 @@ export async function syncAds(
   adAccountId: string,
   now = new Date(),
 ): Promise<SyncAdsResult> {
+  await assertMirrorTarget(db, client, adAccountId);
   const platformAds = await client.listAds();
 
   const campaigns = await db.query.adCampaigns.findMany({
@@ -145,6 +158,7 @@ export async function ingestMetrics(
   sinceDate: string,
   now = new Date(),
 ): Promise<IngestResult> {
+  await assertMirrorTarget(db, client, adAccountId);
   const rows = await client.getInsights(level, sinceDate);
 
   const campaigns = await db.query.adCampaigns.findMany({

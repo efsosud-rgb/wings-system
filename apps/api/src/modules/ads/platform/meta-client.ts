@@ -80,6 +80,10 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
 
   private readonly token: string;
   private readonly accountId: string;
+  /** Which account this client is bound to; checked before any mirroring. */
+  get accountExternalId(): string {
+    return this.accountId;
+  }
   /** Exposed for the write client, which posts to the same account path. */
   protected get adAccountPath(): string {
     return this.accountId;
@@ -98,6 +102,42 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
     this.version = options.apiVersion ?? 'v23.0';
     this.timeoutMs = options.timeoutMs ?? 15_000;
     this.fetchImpl = options.fetchImpl ?? fetch;
+  }
+
+  /**
+   * Follows Meta's cursor paging and concatenates `data`.
+   *
+   * The live account has 84 campaigns, 202 ad sets and 660 ads; asking for all
+   * of it in one page makes Meta answer "Please reduce the amount of data
+   * you're asking for" rather than truncating, so paging is not an
+   * optimisation here, it is the only way the call succeeds.
+   */
+  protected async getAllPages<T>(
+    path: string,
+    params: Record<string, string> = {},
+    maxPages = 50,
+  ): Promise<T[]> {
+    const collected: T[] = [];
+    let after: string | undefined;
+    const seenCursors = new Set<string>();
+
+    for (let page = 0; page < maxPages; page += 1) {
+      const body = await this.get<{
+        data: T[];
+        paging?: { next?: string; cursors?: { after?: string } };
+      }>(path, { ...params, ...(after ? { after } : {}) });
+
+      collected.push(...(body.data ?? []));
+
+      // `cursors.after` is present even on the LAST page — only `paging.next`
+      // tells you another page exists. Reading the cursor alone loops forever.
+      if (!body.paging?.next) break;
+
+      after = body.paging.cursors?.after;
+      if (!after || seenCursors.has(after)) break;
+      seenCursors.add(after);
+    }
+    return collected;
   }
 
   private async get<T>(path: string, params: Record<string, string> = {}): Promise<T> {
@@ -149,20 +189,18 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
   }
 
   async listCampaigns(): Promise<PlatformCampaign[]> {
-    const body = await this.get<{
-      data: {
-        id: string;
-        name: string;
-        status: string;
-        daily_budget?: string;
-        lifetime_budget?: string;
-      }[];
+    const data = await this.getAllPages<{
+      id: string;
+      name: string;
+      status: string;
+      daily_budget?: string;
+      lifetime_budget?: string;
     }>(`${this.accountId}/campaigns`, {
       fields: 'id,name,status,daily_budget,lifetime_budget',
-      limit: '200',
+      limit: '50',
     });
 
-    return body.data.map((campaign) => {
+    return data.map((campaign) => {
       const daily =
         campaign.daily_budget === undefined
           ? null
@@ -183,21 +221,19 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
   }
 
   async listAdSets(): Promise<PlatformAdSet[]> {
-    const body = await this.get<{
-      data: {
-        id: string;
-        name: string;
-        status: string;
-        campaign_id: string;
-        daily_budget?: string;
-        lifetime_budget?: string;
-      }[];
+    const data = await this.getAllPages<{
+      id: string;
+      name: string;
+      status: string;
+      campaign_id: string;
+      daily_budget?: string;
+      lifetime_budget?: string;
     }>(`${this.accountId}/adsets`, {
       fields: 'id,name,status,campaign_id,daily_budget,lifetime_budget',
-      limit: '500',
+      limit: '50',
     });
 
-    return body.data.map((adSet) => {
+    return data.map((adSet) => {
       const daily =
         adSet.daily_budget === undefined
           ? null
@@ -246,33 +282,32 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
   }
 
   async listAds(): Promise<PlatformAd[]> {
-    const body = await this.get<{
-      data: {
+    const data = await this.getAllPages<{
+      id: string;
+      name: string;
+      status: string;
+      effective_status?: string;
+      campaign_id: string;
+      adset_id: string;
+      issues_info?: unknown;
+      ad_review_feedback?: unknown;
+      creative?: {
         id: string;
-        name: string;
-        status: string;
-        effective_status?: string;
-        campaign_id: string;
-        adset_id: string;
-        issues_info?: unknown;
-        ad_review_feedback?: unknown;
-        creative?: {
-          id: string;
-          name?: string;
-          thumbnail_url?: string;
-          title?: string;
-          body?: string;
-        };
-      }[];
+        name?: string;
+        thumbnail_url?: string;
+        title?: string;
+        body?: string;
+      };
     }>(`${this.accountId}/ads`, {
       // ad_review_feedback carries the real rejection reason; issues_info is
       // empty on disapproved ads (Stage 6.0 spike).
       fields:
         'id,name,status,effective_status,campaign_id,adset_id,issues_info,ad_review_feedback,creative{id,name,thumbnail_url,title,body}',
-      limit: '200',
+      // 660 ads with creatives is more than Meta will serve in one page.
+      limit: '25',
     });
 
-    return body.data.map((ad) => ({
+    return data.map((ad) => ({
       id: ad.id,
       campaignId: ad.campaign_id,
       adSetId: ad.adset_id,
@@ -302,17 +337,17 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
     const idField =
       level === 'campaign' ? 'campaign_id' : level === 'ad_set' ? 'adset_id' : 'ad_id';
 
-    const body = await this.get<{
-      data: Record<string, unknown>[];
-    }>(`${this.accountId}/insights`, {
+    const data = await this.getAllPages<Record<string, unknown>>(`${this.accountId}/insights`, {
       level: metaLevel,
       fields: `${idField},spend,impressions,clicks,ctr,reach,frequency,actions,quality_ranking,engagement_rate_ranking,conversion_rate_ranking`,
       time_range: JSON.stringify({ since: sinceDate, until: untilDate }),
       time_increment: '1',
-      limit: '500',
+      // Daily rows across hundreds of entities add up fast; small pages are
+      // what keep Meta from refusing the request.
+      limit: '100',
     });
 
-    return body.data.map((row) => {
+    return data.map((row) => {
       const actions: Record<string, number> = {};
       for (const action of (row.actions ?? []) as { action_type: string; value: string }[]) {
         actions[action.action_type] = Number(action.value);
@@ -342,17 +377,19 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
 
   async getSpend(sinceDate: string): Promise<SpendRow[]> {
     const until = new Date().toISOString().slice(0, 10);
-    const body = await this.get<{
-      data: { campaign_id: string; date_start: string; spend: string }[];
+    const data = await this.getAllPages<{
+      campaign_id: string;
+      date_start: string;
+      spend: string;
     }>(`${this.accountId}/insights`, {
       level: 'campaign',
       fields: 'campaign_id,spend',
       time_increment: '1',
       time_range: JSON.stringify({ since: sinceDate, until }),
-      limit: '500',
+      limit: '100',
     });
 
-    return body.data.map((row) => ({
+    return data.map((row) => ({
       campaignId: row.campaign_id,
       date: row.date_start,
       // Insights uses decimal reais, NOT the cents used by budgets.

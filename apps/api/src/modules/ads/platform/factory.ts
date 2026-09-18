@@ -18,14 +18,20 @@ export interface PlatformClientResult {
   reason?: 'writes_disabled' | 'no_write_token' | 'no_credentials';
 }
 
-export function createMetaClient(env: Env): PlatformClientResult {
-  const writeReady = Boolean(env.META_WRITE_TOKEN && env.META_WRITE_ACCOUNT_ID);
+/**
+ * @param accountExternalId overrides the configured account, so a caller
+ * looping over several accounts builds one client per account instead of
+ * reusing a client bound to whichever account the environment happens to name.
+ */
+export function createMetaClient(env: Env, accountExternalId?: string): PlatformClientResult {
+  const adAccountId = accountExternalId ?? env.META_WRITE_ACCOUNT_ID;
+  const writeReady = Boolean(env.META_WRITE_TOKEN && adAccountId);
 
   if (writeReady && env.ADS_WRITES_ENABLED) {
     return {
       client: new MetaWriteClient({
         accessToken: env.META_WRITE_TOKEN as string,
-        adAccountId: env.META_WRITE_ACCOUNT_ID as string,
+        adAccountId: adAccountId as string,
         confirmWrites: true,
       }),
       canWrite: true,
@@ -37,7 +43,7 @@ export function createMetaClient(env: Env): PlatformClientResult {
     return {
       client: new MetaReadOnlyClient({
         accessToken: env.META_WRITE_TOKEN as string,
-        adAccountId: env.META_WRITE_ACCOUNT_ID as string,
+        adAccountId: adAccountId as string,
       }),
       canWrite: false,
       reason: 'writes_disabled',

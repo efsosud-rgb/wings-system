@@ -173,6 +173,10 @@ campo da API devolve esse número.** Sondados um a um na conta real:
 | `funding_source_details` | ❌ Permission Denied             |
 
 Ou seja: o teto mensal da conta é legível e está implementado; **o limite
-diário não é exposto pela API** e não foi inventado. Se ele precisar entrar no
-guardrail, terá de ser configurado à mão — e isso é uma decisão sua, não uma
-suposição minha.
+diário não é exposto pela API** e não foi inventado.
+
+> 🔒 **Decidido: não configurar esse número à mão.** O teto mensal já vincula, e
+> um valor fixo que a plataforma pode mudar sem avisar é exatamente o tipo de
+> constante que esta onda existe para remover. O painel mostra R$ 354,52; a API
+> não expõe esse campo em nenhuma versão testada. **Não procure de novo** — se
+> um dia a Meta publicar o campo, ele entra por aqui, lido, nunca fixado.

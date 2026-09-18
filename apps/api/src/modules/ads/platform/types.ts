@@ -106,6 +106,15 @@ export interface AdsPlatformClient {
   readonly platform: 'meta' | 'google' | 'tiktok';
   /** True only for a client wired to a real ad account. */
   readonly isLive: boolean;
+  /**
+   * The platform's own id for the account this client talks to.
+   *
+   * Every mirroring function checks this against the account row it is writing
+   * into. A client is bound to one account, and reusing one across accounts
+   * silently files one account's campaigns under another — which is exactly
+   * what happened the first time a second account existed.
+   */
+  readonly accountExternalId: string;
 
   getAccount(): Promise<PlatformAccount>;
   listCampaigns(): Promise<PlatformCampaign[]>;

@@ -9,6 +9,7 @@ import { applyPlatformLimit, getPeriodState, openPeriod, reserveChange } from '.
 import { activeAdAccounts, archiveAdAccount, ensureAdAccount, ingestMetrics } from './metrics.js';
 import { effectiveHeadroomCents, limitFrom } from './platform/limits.js';
 import { FakeMetaClient } from './platform/fake-meta-client.js';
+import { MetaReadOnlyClient } from './platform/meta-client.js';
 import { reconcileAccount } from './reconcile.js';
 
 /**
@@ -357,5 +358,60 @@ describe('archiving an account', () => {
 
   it('reports nothing for an account that does not exist', async () => {
     expect(await archiveAdAccount(db, 'act_does_not_exist', 'x', NOW)).toBeNull();
+  });
+});
+
+describe('a client may only write its own account', () => {
+  /**
+   * The incident this prevents: the ingest loop built one client from the
+   * environment and reused it for every account row, so the live account's 84
+   * campaigns, 202 ad sets and R$636,93 of spend were filed under an account
+   * that had never run anything.
+   *
+   * Exercised with a real client (isLive) and an injected fetch, because the
+   * check deliberately applies only to live clients.
+   */
+  function liveClientFor(externalId: string) {
+    return new MetaReadOnlyClient({
+      accessToken: 'test-token',
+      adAccountId: externalId,
+      // Never called: the guard refuses before any request goes out.
+      fetchImpl: (() => Promise.reject(new Error('network reached'))) as typeof fetch,
+    });
+  }
+
+  it('refuses to mirror one account into another’s row', async () => {
+    const accountA = await account();
+    const client = liveClientFor('act_999999999');
+
+    await expect(reconcileAccount(db, client, accountA, NOW)).rejects.toThrow(
+      /refusing to file one account/,
+    );
+
+    // Nothing leaked into the account's row, and no call was even attempted.
+    const campaigns = await db.query.adCampaigns.findMany({
+      where: eq(adCampaigns.adAccountId, accountA),
+    });
+    expect(campaigns).toHaveLength(0);
+  });
+
+  it('refuses on the metrics path too, not only reconciliation', async () => {
+    const id = await account();
+    const client = liveClientFor('act_888888888');
+
+    await expect(ingestMetrics(db, client, id, 'campaign', PERIOD, NOW)).rejects.toThrow(
+      /refusing to file one account/,
+    );
+  });
+
+  it('names both accounts, so the mistake is obvious in a log', async () => {
+    const id = await account();
+    const external = (await db.query.adAccounts.findFirst({ where: eq(adAccounts.id, id) }))
+      ?.externalId;
+    const client = liveClientFor('act_777777777');
+
+    await expect(reconcileAccount(db, client, id, NOW)).rejects.toThrow(
+      new RegExp(`act_777777777.*${external}`),
+    );
   });
 });
