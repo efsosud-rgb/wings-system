@@ -110,15 +110,48 @@ saudável.
    ligada.** Ele só chama leituras, então nada aconteceria — mas agora é
    estrutural: a ingestão monta sempre um leitor, mesmo com a flag ligada.
 
-### Uma questão de desenho, não corrigida
+### Uma questão de desenho, não corrigida: reservas e reconciliação não se conhecem
 
-Um pedido que **reduz** exposição (pausa, corte de orçamento) libera o espaço
-no comprometido **na hora do pedido**, não na execução. Entre o pedido e a
-execução, esse espaço poderia ser usado por um aumento em outra campanha. O
-efeito é limitado — toda alteração exige aprovação humana e a reconciliação
-seguinte recalcula o comprometido a partir da plataforma — e mexer nisso às
-vésperas da primeira escrita seria trocar um risco conhecido por código novo.
-Fica registrado para decisão depois do teste.
+O comprometido do mês (`committed_cents`) tem **dois donos que não conversam**:
+
+- `reserveChange` soma o delta de cada pedido **na hora do pedido**;
+- `reconcileAccount` **sobrescreve** o número a cada ciclo com a exposição que
+  está de fato na plataforma, sem olhar as reservas ativas
+  (`reservation_active`).
+
+Disso saem dois efeitos, espelhados:
+
+1. **Reduções liberam espaço antes de existir.** Uma pausa pedida e nunca
+   executada baixa o comprometido na hora. Cinco pausas pedidas = o espaço de
+   cinco campanhas "livre" no sistema, com as cinco ainda gastando. Um aumento
+   pedido nessa janela passa no teto contra um espaço que não existe. Dura até
+   a reconciliação seguinte, que recalcula pela plataforma e devolve o número
+   real — mas o aumento já reservado e aprovado continua aprovado.
+2. **Aumentos aprovados somem do comprometido.** Um aumento reservado e ainda
+   não executado não está na plataforma, então a reconciliação seguinte o
+   apaga do comprometido. Dois aumentos que sozinhos cabem, mas juntos não,
+   podem ser ambos aprovados e ambos executados. O executor só confere
+   `comprometido ≤ permitido`, não que o delta _desta_ alteração ainda esteja
+   contado.
+
+Nada faz um pedido pendente expirar: o status `expired` existe, mas nenhum
+código de produção o aplica, e `escalateStaleApprovals` também não tem
+chamador. Pedidos esquecidos ficam pendentes para sempre.
+
+**O que segura hoje:** toda alteração exige aprovação humana
+(`mode: 'always'`); a reconciliação que roda _depois_ de um excesso o detecta
+("orçamentos excedem o plano") e congela a conta; e o `spend_cap` da Meta é o
+muro externo. Ou seja: **detecção depois do fato, não prevenção.** Aceitável
+com uma pessoa aprovando uma alteração por vez; **não aceitável antes de
+qualquer automação** (agente pedindo alterações, aprovação automática abaixo de
+limiar, execução por worker).
+
+**Conserto provável:** a reconciliação passa a calcular
+`comprometido = exposição na plataforma + soma dos deltas positivos com reserva
+ativa`, reduções só contam quando executadas, e o executor revalida o delta da
+própria alteração contra o teto no instante da escrita. Mais um job que expira
+pedidos velhos. Fica para depois da primeira escrita: o teste é uma pausa
+única, supervisionada, e não passa por nenhum dos dois efeitos.
 
 ## Evidência
 
