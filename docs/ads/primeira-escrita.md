@@ -56,10 +56,11 @@ comando do `ops-cli` escreve na Meta** — o único caminho de escrita é o bot�
      decidirmos antes da sessão.
    - As três contas vazias podem aparecer com `reconciliação: NUNCA`. É normal
      e não afeta a Fly High.
-3. `ops-cli preflight --expect-user 61594384923826` — precisa terminar com
+3. `ops-cli preflight --expect-user 122100843567479497` — precisa terminar com
    **"token apto a escrever"** e **"pertence ao usuário esperado"**. O id é o do
-   usuário de sistema `wingstrafficwrite`, criado no BM: um token emitido por
-   ele não morre quando o acesso do gestor for removido. Se `ads_management`
+   usuário de sistema `wingstrafficwrite`, criado no BM (é o que `/me` devolve
+   para o token dele; confira em Usuários do sistema no BM): um token emitido
+   por ele não morre quando o acesso do gestor for removido. Se `ads_management`
    estiver AUSENTE, a Meta recusaria a escrita na hora; se o dono for outro, o
    token pode depender de uma pessoa. Nos dois casos, gere um token novo antes
    da sessão.
