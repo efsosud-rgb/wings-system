@@ -516,3 +516,23 @@ describe('ABO campaigns refuse campaign-level budget changes', () => {
     if (!result.ok) expect(result.reason).toBe('budget_not_at_campaign_level');
   });
 });
+
+describe('a pause on a campaign the period never counted', () => {
+  it('is accepted, with the commitment floored at zero', async () => {
+    const accountId = await makeAccount('meta');
+    // Mirrored from the platform but never reconciled into the commitment.
+    const campaignId = await makeCampaign(accountId, 5000);
+
+    const result = await reserveChange(db, {
+      adAccountId: accountId,
+      campaignId,
+      kind: 'pause_campaign',
+      now: NOW,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.exposureDeltaCents).toBeLessThan(0);
+    expect(result.value.period.committedCents).toBe(0);
+  });
+});

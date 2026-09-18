@@ -1,20 +1,14 @@
 import { createDb } from '../../db/client.js';
 import { loadDotEnv } from '../../db/load-env.js';
 import { loadEnv } from '../../env.js';
-import { runAlerts } from './alerts.js';
 import { applyPlatformLimit, getPeriodState, openPeriod } from './budget-guard.js';
+import { runIngestionCycle } from './ingest-cycle.js';
 import { createAlertNotifier } from './notifiers/factory.js';
-import {
-  activeAdAccounts,
-  archiveAdAccount,
-  ensureAdAccount,
-  ingestMetrics,
-  syncAds,
-} from './metrics.js';
+import { activeAdAccounts, archiveAdAccount, ensureAdAccount } from './metrics.js';
 import { createGoogleClient } from './platform/google-client.js';
 import { formatBrl } from './platform/money.js';
 import { createMetaClient } from './platform/factory.js';
-import { periodMonthOf, reconcileAccount } from './reconcile.js';
+import { enforceReconciliationFreshness, periodMonthOf } from './reconcile.js';
 
 /**
  * The job the Coolify scheduled task runs.
@@ -94,83 +88,114 @@ async function main() {
       throw new Error('No active ad accounts configured. Run once with --seed --account act_…');
     }
 
-    for (const account of accounts) {
-      console.warn(`\n${account.platform}:${account.externalId}`);
-
+    // Each account is its own failure domain: one that throws is reported and
+    // the rest are still served. See ingest-cycle.ts.
+    const cycle = await runIngestionCycle(db, accounts, {
       // One client per account. Reusing a single client across accounts is how
       // one account's campaigns ended up filed under another.
-      const { client } = createMetaClient(env, account.externalId);
-      if (!client) {
-        console.warn('  sem credenciais para esta conta — pulando');
-        continue;
-      }
+      // Always a reader, even while the write switch is on for a supervised
+      // session: this job has no business holding a client that can spend.
+      clientFor: (account) =>
+        createMetaClient({ ...env, ADS_WRITES_ENABLED: false }, account.externalId).client,
+      since,
+      now,
+      notifier: createAlertNotifier(env, db),
+      onAccountDone: async (result) => {
+        console.warn(`\n${result.account.platform}:${result.account.externalId}`);
+        if (result.status === 'skipped') {
+          console.warn('  sem credenciais para esta conta — pulando');
+          return;
+        }
+        if (result.status === 'failed') {
+          console.error(`  FALHOU em ${result.step}: ${result.error}`);
+          console.error('  as demais contas seguem; esta fica sem reconciliar neste ciclo');
+          return;
+        }
 
-      const reconciled = await reconcileAccount(db, client, account.id, now);
-      console.warn(
-        `  reconcile: ${reconciled.campaignsSynced} campanhas, ${reconciled.adSetsSynced} conjuntos, ` +
-          `gasto ${formatBrl(reconciled.spentCents)}, comprometido ${formatBrl(reconciled.committedCents)}` +
-          (reconciled.killSwitchEngaged ? ' [TRAVA ACIONADA]' : ''),
-      );
-
-      const ads = await syncAds(db, client, account.id, now);
-      console.warn(
-        `  ads: ${ads.ads} anúncios, ${ads.creatives} criativos` +
-          (ads.disapproved > 0 ? `, ${ads.disapproved} REPROVADOS` : ''),
-      );
-
-      for (const level of ['campaign', 'ad_set', 'ad'] as const) {
-        const result = await ingestMetrics(db, client, account.id, level, since, now);
+        const { reconciled, ads, metrics, alerts } = result;
         console.warn(
-          `  métricas ${level.padEnd(8)}: ${result.rows} linhas desde ${since}, ` +
-            `gasto ${formatBrl(result.spendCents)}, conversões ${result.conversions}`,
+          `  reconcile: ${reconciled.campaignsSynced} campanhas, ${reconciled.adSetsSynced} conjuntos, ` +
+            `gasto ${formatBrl(reconciled.spentCents)}, comprometido ${formatBrl(reconciled.committedCents)}` +
+            (reconciled.killSwitchEngaged ? ' [TRAVA ACIONADA]' : ''),
         );
-      }
-
-      const alerts = await runAlerts(db, account.id, {
-        notifier: createAlertNotifier(env, db),
-        now,
-      });
-      console.warn(
-        `  alertas: ${alerts.detected} detectados (${alerts.opened} novos, ${alerts.resolved} resolvidos), ` +
-          `${alerts.notified} notificados` +
-          (alerts.notificationErrors > 0 ? `, ${alerts.notificationErrors} FALHAS DE ENVIO` : ''),
-      );
-
-      const state = await getPeriodState(db, account.id, periodMonthOf(now));
-      if (state) {
         console.warn(
-          `  orçamento: teto ${formatBrl(state.capCents)}, utilizável ${formatBrl(state.usableCents)}, ` +
-            `disponível ${formatBrl(state.availableCents)}`,
+          `  ads: ${ads.ads} anúncios, ${ads.creatives} criativos` +
+            (ads.disapproved > 0 ? `, ${ads.disapproved} REPROVADOS` : ''),
         );
-        if (state.platformRemainingCents !== null) {
-          const binding = state.platformRemainingCents < state.usableCents - state.committedCents;
+        for (const level of ['campaign', 'ad_set', 'ad'] as const) {
           console.warn(
-            `  plataforma: ainda permite ${formatBrl(state.platformRemainingCents)} ` +
-              `(${state.platformLimitSource ?? 'fonte desconhecida'})` +
-              (binding ? ' [TETO REAL — menor que o interno]' : ''),
+            `  métricas ${level.padEnd(8)}: ${metrics[level].rows} linhas desde ${since}, ` +
+              `gasto ${formatBrl(metrics[level].spendCents)}, conversões ${metrics[level].conversions}`,
           );
         }
-      }
-    }
+        console.warn(
+          `  alertas: ${alerts.detected} detectados (${alerts.opened} novos, ${alerts.resolved} resolvidos), ` +
+            `${alerts.notified} notificados` +
+            (alerts.notificationErrors > 0 ? `, ${alerts.notificationErrors} FALHAS DE ENVIO` : ''),
+        );
+
+        const state = await getPeriodState(db, result.account.id, periodMonthOf(now));
+        if (state) {
+          console.warn(
+            `  orçamento: teto ${formatBrl(state.capCents)}, utilizável ${formatBrl(state.usableCents)}, ` +
+              `disponível ${formatBrl(state.availableCents)}`,
+          );
+          if (state.platformRemainingCents !== null) {
+            const binding = state.platformRemainingCents < state.usableCents - state.committedCents;
+            console.warn(
+              `  plataforma: ainda permite ${formatBrl(state.platformRemainingCents)} ` +
+                `(${state.platformLimitSource ?? 'fonte desconhecida'})` +
+                (binding ? ' [TETO REAL — menor que o interno]' : ''),
+            );
+          }
+        }
+      },
+    });
+    let failures = cycle.failed;
+
     // Google: only the spending ceiling for now. Mirroring campaigns and
     // metrics from Google needs decisions this wave does not take.
     const googleClient = createGoogleClient(env);
     if (googleClient) {
       const googleAccounts = await activeAdAccounts(db, 'google');
       for (const account of googleAccounts) {
-        const limit = await googleClient.getSpendLimit();
-        await applyPlatformLimit(db, {
-          adAccountId: account.id,
-          periodMonth: periodMonthOf(now),
-          limit,
-          now,
-        });
-        console.warn(
-          `\ngoogle:${account.externalId}\n  saldo/limite: ` +
-            `${limit.remainingCents === null ? 'sem limite' : formatBrl(limit.remainingCents)} ` +
-            `(${limit.source})`,
-        );
+        try {
+          const limit = await googleClient.getSpendLimit();
+          await applyPlatformLimit(db, {
+            adAccountId: account.id,
+            periodMonth: periodMonthOf(now),
+            limit,
+            now,
+          });
+          console.warn(
+            `\ngoogle:${account.externalId}\n  saldo/limite: ` +
+              `${limit.remainingCents === null ? 'sem limite' : formatBrl(limit.remainingCents)} ` +
+              `(${limit.source})`,
+          );
+        } catch (error) {
+          failures += 1;
+          console.error(
+            `\ngoogle:${account.externalId}\n  FALHOU: ` +
+              (error instanceof Error ? `${error.name}: ${error.message}` : String(error)),
+          );
+        }
       }
+    }
+
+    // Dead-man switch. Accounts served a moment ago are fresh by construction;
+    // what this catches is the account that has been failing cycle after cycle
+    // while the others carried on. It is frozen until a person looks.
+    const stale = await enforceReconciliationFreshness(db);
+    for (const entry of stale) {
+      console.error(
+        `\nTRAVA ACIONADA: conta ${entry.accountId} sem reconciliar há ${entry.ageMinutes} min ` +
+          `— gasto real desconhecido. Libere com ops-cli release-kill-switch depois de verificar.`,
+      );
+    }
+
+    if (failures > 0) {
+      // Every account had its turn; now fail visibly so the scheduler shows it.
+      throw new Error(`${failures} conta(s) falharam neste ciclo — veja acima.`);
     }
   } finally {
     await pool.end();

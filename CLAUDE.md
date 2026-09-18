@@ -54,6 +54,7 @@ The API container runs `db:migrate` then `db:seed` before serving, so both must 
 - **Personal data must never be logged** (no CPF, full name, email or phone in logs or error messages).
 - **Diretoria is fully blocked from TI sector employee records** — a deny rule evaluated before any allow rule.
 - **Privilege escalation guards:** a sector manager (`is_sector_manager` flag on the employee) may only create or edit employees inside their own sector, may only assign roles below their own rank, and may never assign Admin Master or Diretoria.
+- **No automation on ad spend until reservations and reconciliation agree.** No agent requesting changes, no auto-approval, no worker executing — a person approves and executes one change at a time. `reserveChange` and `reconcileAccount` both own `committed_cents` and neither knows about the other, so with automation two increases can both pass the cap: a money bug. See "Bloqueador de automação" in `docs/ads/travas.md`; lifting this rule means fixing that first.
 - **Time entries are append-only.** Corrections are new adjustment rows with a reason and an approver; nothing is ever updated in place.
 
 > ⚠️ Portaria MTP 671/2021 compliance for the time clock is **not yet legally confirmed**. Keep the model compliance-ready (append-only, sourced entries, exportable) and keep this warning visible until Jurídico signs off.

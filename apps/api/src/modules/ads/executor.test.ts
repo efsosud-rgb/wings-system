@@ -9,6 +9,7 @@ import {
   adChangeRequests,
   adExecutions,
   adGuardrailEvents,
+  budgetPeriods,
 } from '../../db/schema/index.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee } from '../../test/factories.js';
@@ -64,12 +65,14 @@ async function scenario(
   options: { fromBudget?: number; toBudget?: number; client?: FakeMetaClient } = {},
 ): Promise<Scenario & { client: FakeMetaClient }> {
   const externalCampaignId = `c_${randomBytes(4).toString('hex')}`;
+  const externalAccountId = `act_${randomBytes(4).toString('hex')}`;
   const fromBudget = options.fromBudget ?? 2000;
   const toBudget = options.toBudget ?? 3000;
 
   const client =
     options.client ??
     liveFake({
+      accountId: externalAccountId,
       campaigns: [
         {
           id: externalCampaignId,
@@ -84,7 +87,7 @@ async function scenario(
     .insert(adAccounts)
     .values({
       platform: 'meta',
-      externalId: `act_${randomBytes(4).toString('hex')}`,
+      externalId: options.client?.accountExternalId ?? externalAccountId,
       name: 'Wings Matriz',
     })
     .returning({ id: adAccounts.id });
@@ -96,6 +99,11 @@ async function scenario(
     capCents: CAP,
     usablePercent: 70,
   });
+  // The executor only writes to an account whose spend is freshly known.
+  await db
+    .update(budgetPeriods)
+    .set({ lastReconciledAt: new Date() })
+    .where(eq(budgetPeriods.adAccountId, account.id));
 
   const [campaign] = await db
     .insert(adCampaigns)
@@ -206,6 +214,66 @@ describe('the guardrails still apply at the moment of writing', () => {
       allowWrites: true,
     });
     expect(result).toMatchObject({ outcome: 'refused', reason: 'kill_switch_engaged' });
+  });
+
+  it('refuses when the account never reconciled — the dead-man switch, seen from the write path', async () => {
+    const s = await scenario();
+    await approve(s.approvalId);
+    await db
+      .update(budgetPeriods)
+      .set({ lastReconciledAt: null })
+      .where(eq(budgetPeriods.adAccountId, s.accountId));
+
+    const result = await executeApprovedChange(db, s.client, s.changeRequestId, {
+      allowWrites: true,
+    });
+    expect(result).toMatchObject({ outcome: 'refused', reason: 'reconciliation_stale' });
+    expect(s.client.calls.filter((call) => call.method === 'setDailyBudget')).toHaveLength(0);
+  });
+
+  it('refuses when the last reconciliation is older than the window', async () => {
+    const s = await scenario();
+    await approve(s.approvalId);
+    await db
+      .update(budgetPeriods)
+      .set({ lastReconciledAt: new Date(Date.now() - 121 * 60_000) })
+      .where(eq(budgetPeriods.adAccountId, s.accountId));
+
+    const result = await executeApprovedChange(db, s.client, s.changeRequestId, {
+      allowWrites: true,
+    });
+    expect(result).toMatchObject({ outcome: 'refused', reason: 'reconciliation_stale' });
+
+    // A refusal is evidence, and it is reversible: nothing was frozen, the
+    // change is still approved, and a fresh reconciliation lets it through.
+    const events = await db.query.adGuardrailEvents.findMany({
+      where: eq(adGuardrailEvents.adAccountId, s.accountId),
+    });
+    expect(events.some((event) => event.kind === 'reconciliation_stale')).toBe(true);
+
+    await db
+      .update(budgetPeriods)
+      .set({ lastReconciledAt: new Date() })
+      .where(eq(budgetPeriods.adAccountId, s.accountId));
+    const retry = await executeApprovedChange(db, s.client, s.changeRequestId, {
+      allowWrites: true,
+    });
+    expect(retry).toMatchObject({ outcome: 'applied' });
+  });
+
+  it('refuses a client bound to a different account', async () => {
+    const s = await scenario();
+    await approve(s.approvalId);
+    const stranger = liveFake({
+      accountId: 'act_someone_else',
+      campaigns: [{ id: s.externalCampaignId, name: 'Institucional', dailyBudgetCents: 2000 }],
+    });
+
+    const result = await executeApprovedChange(db, stranger, s.changeRequestId, {
+      allowWrites: true,
+    });
+    expect(result).toMatchObject({ outcome: 'refused', reason: 'wrong_account' });
+    expect(stranger.calls.filter((call) => call.method === 'setDailyBudget')).toHaveLength(0);
   });
 
   it('refuses once reported spend has eaten the month', async () => {

@@ -201,8 +201,10 @@ segue com **alvo único** (Fly High). Para as outras três entrarem:
 3. **Conta sem dados é estado normal**: três das quatro contas estão zeradas.
    A ingestão já trata `metrics_rows=0` como normal — isso precisa continuar
    valendo por conta, sem que uma conta vazia derrube o ciclo das outras. O
-   laço já isola cada conta; falta garantir que um erro numa não aborte as
-   demais (hoje aborta).
+   laço já isola cada conta; ~~falta garantir que um erro numa não aborte as
+   demais (hoje aborta)~~ **feito na onda 2** (`ingest-cycle.ts`): cada conta é
+   seu próprio domínio de falha, e o job só termina com erro depois de servir
+   todas.
 4. **Cockpit multi-conta**: a rota já aceita `?accountId=`, mas a tela não tem
    seletor.
 5. **Alertas e aprovações** já são por conta — sem mudança prevista.

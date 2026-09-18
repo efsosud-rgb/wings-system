@@ -2,7 +2,7 @@ import { approvalDecisionSchema, type ApprovalDetail, type ApprovalListItem } fr
 import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { adApprovalRequests, auditLog } from '../../db/schema/index.js';
+import { adAccounts, adApprovalRequests, auditLog } from '../../db/schema/index.js';
 import { decideApproval } from './approvals.js';
 import { nextPendingInGroup, pendingGroups } from './batches.js';
 import { executeApprovedChange } from './executor.js';
@@ -195,7 +195,7 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         changeStatus: row.change_status,
         executedAt: iso(row.executed_at),
         lastExecutionOutcome: row.last_execution_outcome,
-        executionAvailable: createMetaClient(env).canWrite,
+        executionAvailable: createMetaClient(env, row.account_external_id).canWrite,
         auditTrail: trail.map((entry) => ({
           at: entry.at.toISOString(),
           action: entry.action,
@@ -336,7 +336,18 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
           .send({ error: 'not_found', message: 'Solicitação não encontrada.' });
       }
 
-      const { client, canWrite, reason } = createMetaClient(env);
+      // The client is built for the account this change belongs to, never for
+      // whichever account the environment happens to name.
+      const account = await db.query.adAccounts.findFirst({
+        where: eq(adAccounts.id, approval.adAccountId),
+      });
+      if (!account) {
+        return reply
+          .status(404)
+          .send({ error: 'not_found', message: 'Solicitação não encontrada.' });
+      }
+
+      const { client, canWrite, reason } = createMetaClient(env, account.externalId);
       if (!client || !canWrite) {
         return reply.status(409).send({
           error: reason ?? 'writes_disabled',
