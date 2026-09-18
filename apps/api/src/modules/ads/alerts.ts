@@ -436,6 +436,11 @@ export async function detectAlerts(
 ): Promise<DetectedAlert[]> {
   const found: DetectedAlert[] = [];
 
+  // An archived account is not watched. Its past alerts stay resolved and its
+  // rows stay put; it simply stops generating new ones.
+  const account = await db.query.adAccounts.findFirst({ where: eq(adAccounts.id, adAccountId) });
+  if (!account || account.archivedAt !== null) return found;
+
   if (config.adRejected.enabled) found.push(...(await detectRejectedAds(db, adAccountId)));
   if (config.budgetPacing.enabled) {
     found.push(...(await detectBudgetPacing(db, adAccountId, config.budgetPacing, now)));

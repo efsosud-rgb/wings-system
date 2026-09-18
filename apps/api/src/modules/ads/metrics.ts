@@ -1,8 +1,9 @@
-import { and, eq, gte, sql } from 'drizzle-orm';
+import { and, eq, gte, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   adAccounts,
   adAds,
+  adAlerts,
   adCampaigns,
   adCreatives,
   adMetricsDaily,
@@ -155,6 +156,25 @@ export async function ingestMetrics(
   const storedAds = await db.query.adAds.findMany({ where: eq(adAds.adAccountId, adAccountId) });
   const adByExternal = new Map(storedAds.map((a) => [a.externalId, a.id]));
 
+  // Budget in force per entity, captured now. The platform APIs join the
+  // CURRENT budget to historical metrics, so a ratio computed later from
+  // whatever the budget happens to be then is wrong the moment someone edits
+  // it — this is the only chance to record the real one.
+  const budgetByExternalId = new Map<string, number | null>();
+  if (level === 'campaign') {
+    for (const campaign of campaigns) {
+      budgetByExternalId.set(campaign.externalId, campaign.dailyBudgetCents || null);
+    }
+  } else if (level === 'ad_set') {
+    for (const adSet of storedAdSets) {
+      budgetByExternalId.set(adSet.externalId, adSet.dailyBudgetCents || null);
+    }
+  }
+
+  // Only today's budget is knowable; for a past day we record nothing rather
+  // than a number that would look authoritative and be wrong.
+  const todayInAccountTz = now.toISOString().slice(0, 10);
+
   let spendCents = 0;
   let conversions = 0;
 
@@ -173,6 +193,8 @@ export async function ingestMetrics(
         adSetId: level === 'ad_set' ? (adSetByExternal.get(row.entityId) ?? null) : null,
         adId: level === 'ad' ? (adByExternal.get(row.entityId) ?? null) : null,
         day: row.date,
+        dailyBudgetCents:
+          row.date === todayInAccountTz ? (budgetByExternalId.get(row.entityId) ?? null) : null,
         spendCents: row.spendCents,
         impressions: row.impressions,
         clicks: row.clicks,
@@ -195,6 +217,12 @@ export async function ingestMetrics(
           adMetricsDaily.day,
         ],
         set: {
+          // A day that has closed keeps the budget it was ingested with; only
+          // the current day may still be corrected.
+          dailyBudgetCents:
+            row.date === todayInAccountTz
+              ? (budgetByExternalId.get(row.entityId) ?? null)
+              : sql`${adMetricsDaily.dailyBudgetCents}`,
           spendCents: row.spendCents,
           impressions: row.impressions,
           clicks: row.clicks,
@@ -316,4 +344,55 @@ export async function ensureAdAccount(
     .returning({ id: adAccounts.id });
   if (!row) throw new Error('failed to create ad account');
   return row.id;
+}
+
+/**
+ * Archives an ad account: it stops being ingested, stops appearing in the
+ * cockpit and stops producing alerts, while every row it ever produced stays
+ * exactly where it is.
+ *
+ * Deliberately not a delete. Approvals, change requests, guardrail events and
+ * the append-only audit trail all reference the account, and two of its ads
+ * carry real rejection reasons from the platform. Deleting would destroy
+ * evidence to tidy a list; migrating the rows to another account would be
+ * worse, inventing a history that account never had.
+ *
+ * Open alerts are resolved with the reason recorded on them, so nobody is left
+ * with a red badge for an account nobody watches any more.
+ */
+export async function archiveAdAccount(
+  db: Database,
+  externalId: string,
+  reason: string,
+  now = new Date(),
+): Promise<{ accountId: string; alertsResolved: number } | null> {
+  const account = await db.query.adAccounts.findFirst({
+    where: eq(adAccounts.externalId, externalId),
+  });
+  if (!account) return null;
+
+  await db
+    .update(adAccounts)
+    .set({ archivedAt: now, archivedReason: reason, updatedAt: now })
+    .where(eq(adAccounts.id, account.id));
+
+  const resolved = await db
+    .update(adAlerts)
+    .set({
+      resolvedAt: now,
+      detail: sql`${adAlerts.detail} || ${JSON.stringify({ resolvedBecause: reason })}::jsonb`,
+    })
+    .where(and(eq(adAlerts.adAccountId, account.id), isNull(adAlerts.resolvedAt)))
+    .returning({ id: adAlerts.id });
+
+  return { accountId: account.id, alertsResolved: resolved.length };
+}
+
+/** Accounts the system should still mirror: everything not archived. */
+export async function activeAdAccounts(db: Database, platform?: 'meta' | 'google' | 'tiktok') {
+  return db.query.adAccounts.findMany({
+    where: platform
+      ? and(isNull(adAccounts.archivedAt), eq(adAccounts.platform, platform))
+      : isNull(adAccounts.archivedAt),
+  });
 }

@@ -56,9 +56,14 @@ export const cockpitRoutes: FastifyPluginAsync = async (app) => {
       }
       const { days, accountId } = parsed.data;
 
+      // Archived accounts are history: reachable by explicit id, never the
+      // default the cockpit opens on.
       const account = accountId
         ? await db.query.adAccounts.findFirst({ where: eq(adAccounts.id, accountId) })
-        : await db.query.adAccounts.findFirst({ orderBy: asc(adAccounts.createdAt) });
+        : await db.query.adAccounts.findFirst({
+            where: isNull(adAccounts.archivedAt),
+            orderBy: asc(adAccounts.createdAt),
+          });
 
       if (!account) {
         return reply

@@ -1,12 +1,17 @@
-import { eq } from 'drizzle-orm';
 import { createDb } from '../../db/client.js';
 import { loadDotEnv } from '../../db/load-env.js';
-import { adAccounts } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { runAlerts } from './alerts.js';
-import { getPeriodState, openPeriod } from './budget-guard.js';
+import { applyPlatformLimit, getPeriodState, openPeriod } from './budget-guard.js';
 import { createAlertNotifier } from './notifiers/factory.js';
-import { ensureAdAccount, ingestMetrics, syncAds } from './metrics.js';
+import {
+  activeAdAccounts,
+  archiveAdAccount,
+  ensureAdAccount,
+  ingestMetrics,
+  syncAds,
+} from './metrics.js';
+import { createGoogleClient } from './platform/google-client.js';
 import { formatBrl } from './platform/money.js';
 import { createMetaClient } from './platform/factory.js';
 import { periodMonthOf, reconcileAccount } from './reconcile.js';
@@ -21,6 +26,7 @@ import { periodMonthOf, reconcileAccount } from './reconcile.js';
  *   node dist/modules/ads/ingest-cli.js            # ingest everything
  *   node dist/modules/ads/ingest-cli.js --seed     # create the account row first
  *   node dist/modules/ads/ingest-cli.js --days 30  # wider metrics window
+ *   node dist/modules/ads/ingest-cli.js --archive act_… --reason "…"
  */
 
 function arg(name: string): string | undefined {
@@ -43,6 +49,19 @@ async function main() {
       // Fail loudly: a scheduled task that quietly does nothing is worse than
       // one that fails visibly.
       throw new Error('No Meta credentials configured — nothing to ingest.');
+    }
+
+    const archiveTarget = arg('archive');
+    if (archiveTarget) {
+      const reason = arg('reason');
+      if (!reason) throw new Error('--archive requires --reason "…"');
+      const result = await archiveAdAccount(db, archiveTarget, reason);
+      if (!result) throw new Error(`conta ${archiveTarget} não encontrada`);
+      console.warn(
+        `arquivada ${archiveTarget}: ${result.alertsResolved} alerta(s) resolvido(s). ` +
+          `Motivo: ${reason}\nNenhuma linha foi apagada — a conta some da ingestão, do cockpit e dos alertas.`,
+      );
+      return;
     }
 
     const now = new Date();
@@ -71,9 +90,9 @@ async function main() {
       );
     }
 
-    const accounts = await db.query.adAccounts.findMany({ where: eq(adAccounts.platform, 'meta') });
+    const accounts = await activeAdAccounts(db, 'meta');
     if (accounts.length === 0) {
-      throw new Error('No ad accounts configured. Run once with --seed --account act_…');
+      throw new Error('No active ad accounts configured. Run once with --seed --account act_…');
     }
 
     for (const account of accounts) {
@@ -115,6 +134,34 @@ async function main() {
         console.warn(
           `  orçamento: teto ${formatBrl(state.capCents)}, utilizável ${formatBrl(state.usableCents)}, ` +
             `disponível ${formatBrl(state.availableCents)}`,
+        );
+        if (state.platformRemainingCents !== null) {
+          const binding = state.platformRemainingCents < state.usableCents - state.committedCents;
+          console.warn(
+            `  plataforma: ainda permite ${formatBrl(state.platformRemainingCents)} ` +
+              `(${state.platformLimitSource ?? 'fonte desconhecida'})` +
+              (binding ? ' [TETO REAL — menor que o interno]' : ''),
+          );
+        }
+      }
+    }
+    // Google: only the spending ceiling for now. Mirroring campaigns and
+    // metrics from Google needs decisions this wave does not take.
+    const googleClient = createGoogleClient(env);
+    if (googleClient) {
+      const googleAccounts = await activeAdAccounts(db, 'google');
+      for (const account of googleAccounts) {
+        const limit = await googleClient.getSpendLimit();
+        await applyPlatformLimit(db, {
+          adAccountId: account.id,
+          periodMonth: periodMonthOf(now),
+          limit,
+          now,
+        });
+        console.warn(
+          `\ngoogle:${account.externalId}\n  saldo/limite: ` +
+            `${limit.remainingCents === null ? 'sem limite' : formatBrl(limit.remainingCents)} ` +
+            `(${limit.source})`,
         );
       }
     }

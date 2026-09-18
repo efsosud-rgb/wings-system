@@ -10,6 +10,7 @@ import {
   budgetCapHistory,
   budgetPeriods,
 } from '../../db/schema/index.js';
+import { effectiveHeadroomCents, type PlatformSpendLimit } from './platform/limits.js';
 import { assertPlausibleAmount, type Cents } from './platform/money.js';
 import { META_DAILY_OVERDELIVERY_FACTOR } from './platform/fixtures.js';
 
@@ -29,6 +30,7 @@ import { META_DAILY_OVERDELIVERY_FACTOR } from './platform/fixtures.js';
 export const OVERDELIVERY_FACTOR = META_DAILY_OVERDELIVERY_FACTOR;
 
 export type GuardRefusal =
+  | 'platform_limit_would_be_exceeded'
   | 'budget_not_at_campaign_level'
   | 'kill_switch_engaged'
   | 'cap_would_be_exceeded'
@@ -46,7 +48,13 @@ export interface PeriodState {
   usableCents: Cents;
   committedCents: Cents;
   spentCents: Cents;
-  /** What may still be planned: the smaller of the two headrooms. */
+  /**
+   * What the platform itself still allows, as last read from its API. Null
+   * when never synced or when the platform sets no limit.
+   */
+  platformRemainingCents: Cents | null;
+  platformLimitSource: string | null;
+  /** What may still be planned: the smallest of the headrooms, platform included. */
   availableCents: Cents;
 }
 
@@ -127,16 +135,35 @@ function periodState(row: {
   usableCents: number;
   committedCents: number;
   spentCents: number;
+  platformRemainingCents?: number | null;
+  platformLimitSource?: string | null;
 }): PeriodState {
   const capHeadroom = Math.max(0, row.capCents - row.spentCents - row.committedCents);
   const usableHeadroom = Math.max(0, row.usableCents - row.committedCents);
+  const platformRemainingCents = row.platformRemainingCents ?? null;
+
+  // Three ceilings now: our cap, our usable slice, and what the platform will
+  // actually allow. The smallest wins — a cap above the platform's own limit
+  // is a number with no power behind it.
+  const internalHeadroom = Math.min(capHeadroom, usableHeadroom);
+
+  // The platform's remaining allowance is a TOTAL for what is still to be
+  // spent, and exposure already committed will eat into it. So the headroom
+  // for new plans is what is left after the existing commitment, not the raw
+  // figure — otherwise a balance of R$20 would look plannable while R$325 of
+  // exposure was already queued against it.
+  const platformHeadroom =
+    platformRemainingCents === null ? null : platformRemainingCents - row.committedCents;
+
   return {
     id: row.id,
     capCents: row.capCents,
     usableCents: row.usableCents,
     committedCents: row.committedCents,
     spentCents: row.spentCents,
-    availableCents: Math.min(capHeadroom, usableHeadroom),
+    platformRemainingCents,
+    platformLimitSource: row.platformLimitSource ?? null,
+    availableCents: effectiveHeadroomCents(internalHeadroom, platformHeadroom),
   };
 }
 
@@ -274,9 +301,12 @@ export async function reserveChange(
         usable_cents: string;
         committed_cents: string;
         spent_cents: string;
+        platform_remaining_cents: string | null;
+        platform_limit_source: string | null;
       } & Record<string, unknown>
     >(sql`
-      select id, cap_cents, usable_cents, committed_cents, spent_cents
+      select id, cap_cents, usable_cents, committed_cents, spent_cents,
+             platform_remaining_cents, platform_limit_source
         from ad_budget_periods
        where ad_account_id = ${input.adAccountId} and period_month = ${periodMonth}
          and closed_at is null
@@ -298,6 +328,11 @@ export async function reserveChange(
       usableCents: Number(periodRow.usable_cents),
       committedCents: Number(periodRow.committed_cents),
       spentCents: Number(periodRow.spent_cents),
+      platformRemainingCents:
+        periodRow.platform_remaining_cents === null
+          ? null
+          : Number(periodRow.platform_remaining_cents),
+      platformLimitSource: periodRow.platform_limit_source,
     });
 
     const campaign = await tx.query.adCampaigns.findFirst({
@@ -402,6 +437,33 @@ export async function reserveChange(
         message: 'A alteração ultrapassa a parcela utilizável do orçamento do mês.',
       };
     }
+    // The platform's own ceiling. Checked here rather than by a database
+    // constraint because this number moves on its own: Meta raises a cap,
+    // Google's prepaid balance drains. A CHECK would refuse to record a limit
+    // that had already dropped below what is committed, which is exactly when
+    // knowing about it matters most.
+    if (
+      current.platformRemainingCents !== null &&
+      exposureDeltaCents > 0 &&
+      newCommitted > current.platformRemainingCents
+    ) {
+      await recordGuardrailEvent(db, input.adAccountId, 'usable_would_be_exceeded', {
+        campaignId: input.campaignId,
+        exposureDeltaCents,
+        newCommittedCents: newCommitted,
+        platformRemainingCents: current.platformRemainingCents,
+        platformLimitSource: current.platformLimitSource,
+        note: 'bloqueado pelo limite da própria plataforma, não pelo teto interno',
+      });
+      return {
+        ok: false as const,
+        reason: 'platform_limit_would_be_exceeded' as const,
+        message:
+          `A alteração ultrapassa o que a própria plataforma ainda permite gastar ` +
+          `(${current.platformRemainingCents} centavos restantes, fonte ${current.platformLimitSource ?? 'desconhecida'}).`,
+      };
+    }
+
     if (newCommitted > Math.max(0, current.capCents - current.spentCents)) {
       await recordGuardrailEvent(db, input.adAccountId, 'cap_would_be_exceeded', {
         campaignId: input.campaignId,
@@ -597,9 +659,12 @@ export async function getPeriodState(
       usable_cents: string;
       committed_cents: string;
       spent_cents: string;
+      platform_remaining_cents: string | null;
+      platform_limit_source: string | null;
     } & Record<string, unknown>
   >(sql`
-    select id, cap_cents, usable_cents, committed_cents, spent_cents
+    select id, cap_cents, usable_cents, committed_cents, spent_cents,
+           platform_remaining_cents, platform_limit_source
       from ad_budget_periods
      where ad_account_id = ${adAccountId} and period_month = ${periodMonth}
   `);
@@ -611,5 +676,94 @@ export async function getPeriodState(
     usableCents: Number(row.usable_cents),
     committedCents: Number(row.committed_cents),
     spentCents: Number(row.spent_cents),
+    platformRemainingCents:
+      row.platform_remaining_cents === null ? null : Number(row.platform_remaining_cents),
+    platformLimitSource: row.platform_limit_source,
   });
+}
+
+export interface PlatformLimitResult {
+  periodId: string;
+  platformRemainingCents: Cents | null;
+  /** True when the platform allows less than our own cap would. */
+  platformIsBinding: boolean;
+  /** True when what is already committed exceeds what the platform allows. */
+  committedExceedsPlatform: boolean;
+}
+
+/**
+ * Records what the platform itself still allows for a period.
+ *
+ * Deliberately never rejects and never mutates committed exposure. Reading a
+ * lower limit than expected is information, not an emergency: existing
+ * reservations stay as they are and a person decides what to do. What it does
+ * guarantee is that the next reservation is judged against the real number,
+ * and that a binding platform limit leaves a guardrail event behind.
+ */
+export async function applyPlatformLimit(
+  db: Database,
+  input: {
+    adAccountId: string;
+    periodMonth: string;
+    limit: PlatformSpendLimit;
+    now?: Date;
+  },
+): Promise<PlatformLimitResult | null> {
+  const now = input.now ?? new Date();
+
+  const rows = await db.execute<
+    {
+      id: string;
+      cap_cents: string;
+      usable_cents: string;
+      committed_cents: string;
+      spent_cents: string;
+    } & Record<string, unknown>
+  >(sql`
+    select id, cap_cents, usable_cents, committed_cents, spent_cents
+      from ad_budget_periods
+     where ad_account_id = ${input.adAccountId} and period_month = ${input.periodMonth}
+  `);
+
+  const row = rows.rows[0];
+  if (!row) return null;
+
+  const remaining = input.limit.remainingCents;
+  const committed = Number(row.committed_cents);
+  const usableHeadroom = Math.max(0, Number(row.usable_cents) - committed);
+
+  await db
+    .update(budgetPeriods)
+    .set({
+      platformRemainingCents: remaining,
+      platformLimitSource: input.limit.source,
+      platformLimitSyncedAt: now,
+      updatedAt: now,
+    })
+    .where(eq(budgetPeriods.id, row.id));
+
+  const platformIsBinding = remaining !== null && remaining < usableHeadroom;
+  const committedExceedsPlatform = remaining !== null && committed > remaining;
+
+  if (platformIsBinding) {
+    await recordGuardrailEvent(db, input.adAccountId, 'cap_change', {
+      periodMonth: input.periodMonth,
+      platformRemainingCents: remaining,
+      platformLimitCents: input.limit.limitCents,
+      platformSpentCents: input.limit.spentCents,
+      internalUsableHeadroomCents: usableHeadroom,
+      committedCents: committed,
+      source: input.limit.source,
+      note: committedExceedsPlatform
+        ? 'a plataforma permite menos do que já está comprometido'
+        : 'o limite da plataforma é menor que o teto interno',
+    });
+  }
+
+  return {
+    periodId: row.id,
+    platformRemainingCents: remaining,
+    platformIsBinding,
+    committedExceedsPlatform,
+  };
 }

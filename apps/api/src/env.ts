@@ -49,6 +49,20 @@ const schema = z.object({
   ZAPI_INSTANCE_TOKEN: optionalString,
   ZAPI_CLIENT_TOKEN: optionalString,
   /** Numbers of approvers who are not employees in the system yet. */
+  /**
+   * Google Ads, read-only for now (the spending ceiling on a prepaid account).
+   *
+   * GOOGLE_ADS_LOGIN_CUSTOMER_ID is recorded for documentation only: it names
+   * the MCC that owns the developer token. The client must NOT send it while
+   * the authorising user has direct access to the ad account — doing so makes
+   * Google check the MCC instead and refuse with USER_PERMISSION_DENIED.
+   */
+  GOOGLE_ADS_CLIENT_ID: optionalString,
+  GOOGLE_ADS_CLIENT_SECRET: optionalString,
+  GOOGLE_ADS_REFRESH_TOKEN: optionalString,
+  GOOGLE_ADS_DEVELOPER_TOKEN: optionalString,
+  GOOGLE_ADS_CUSTOMER_ID: optionalString,
+  GOOGLE_ADS_LOGIN_CUSTOMER_ID: optionalString,
   ADS_APPROVAL_ADMIN_PHONES: optionalString,
   ADS_APPROVAL_DIRETORIA_PHONES: optionalString,
 

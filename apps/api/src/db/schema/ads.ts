@@ -121,6 +121,14 @@ export const adAccounts = pgTable(
     /** When engaged, no change of any kind may be reserved or executed. */
     killSwitchEngaged: boolean('kill_switch_engaged').notNull().default(false),
     killSwitchReason: text('kill_switch_reason'),
+    /**
+     * Set when an account stops being the operation we mirror. Archived
+     * accounts keep every row they ever produced — the approvals, the audit
+     * trail and the guardrail events still reference them — but they are
+     * excluded from ingestion, the cockpit and the alert engine.
+     */
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    archivedReason: text('archived_reason'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -142,6 +150,17 @@ export const budgetPeriods = pgTable(
       .references(() => adAccounts.id),
     /** First day of the month this period covers. */
     periodMonth: date('period_month').notNull(),
+    /**
+     * What the platform itself still allows, read from its API — Meta's
+     * spend_cap minus amount_spent, Google's account budget minus amount
+     * served. Null when never synced or when the platform sets no limit.
+     *
+     * The effective ceiling is the SMALLER of this and our internal cap: an
+     * internal cap above what the platform permits is fiction.
+     */
+    platformRemainingCents: bigint('platform_remaining_cents', { mode: 'number' }),
+    platformLimitSource: text('platform_limit_source'),
+    platformLimitSyncedAt: timestamp('platform_limit_synced_at', { withTimezone: true }),
     /** Hard ceiling for the account this month. */
     capCents: bigint('cap_cents', { mode: 'number' }).notNull(),
     /** Portion the agent may plan against (70%); the rest absorbs overdelivery. */
@@ -475,6 +494,13 @@ export const adMetricsDaily = pgTable(
     conversions: bigint('conversions', { mode: 'number' }).notNull().default(0),
     /** Every action type reported, kept raw so the lead type can be chosen later. */
     actions: jsonb('actions').notNull().default({}),
+    /**
+     * The daily budget in force for this entity on this day, captured at
+     * ingest. The platform APIs join the CURRENT budget to historical metrics,
+     * so without this snapshot any later "did it overdeliver?" question is
+     * unanswerable after the first budget change.
+     */
+    dailyBudgetCents: bigint('daily_budget_cents', { mode: 'number' }),
     qualityRanking: text('quality_ranking'),
     engagementRateRanking: text('engagement_rate_ranking'),
     conversionRateRanking: text('conversion_rate_ranking'),

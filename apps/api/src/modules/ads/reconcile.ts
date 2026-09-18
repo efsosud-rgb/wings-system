@@ -9,11 +9,13 @@ import {
   budgetPeriods,
 } from '../../db/schema/index.js';
 import {
+  applyPlatformLimit,
   applyReportedSpend,
   campaignExposure,
   engageKillSwitch,
   remainingDays,
 } from './budget-guard.js';
+import { effectiveHeadroomCents, limitFrom } from './platform/limits.js';
 import type { AdsPlatformClient } from './platform/types.js';
 
 /**
@@ -45,6 +47,10 @@ export interface ReconcileResult {
   killSwitchEngaged: boolean;
   /** Set when platform budgets imply more exposure than the plan allows. */
   outOfBandChangeDetected: boolean;
+  /** What the platform itself still allows; null when it sets no limit. */
+  platformRemainingCents: number | null;
+  /** True when the platform allows less than our own cap would. */
+  platformIsBinding: boolean;
 }
 
 /**
@@ -171,6 +177,23 @@ export async function reconcileAccount(
   if (!period) throw new Error(`no budget period open for ${periodMonth}`);
 
   const synced = await syncCampaigns(db, client, adAccountId, now);
+
+  // What the platform itself allows, read from its own API rather than assumed.
+  // Meta reports spend_cap and amount_spent on the account; a prepaid Google
+  // account reports the same shape through its account budget.
+  const platformAccount = await client.getAccount();
+  const platformLimit = limitFrom(
+    platformAccount.spendCapCents,
+    platformAccount.amountSpentCents,
+    `${client.platform}.spend_cap`,
+  );
+  const limitResult = await applyPlatformLimit(db, {
+    adAccountId,
+    periodMonth,
+    limit: platformLimit,
+    now,
+  });
+
   const spendRows = await client.getSpend(periodMonth);
 
   const campaigns = await db.query.adCampaigns.findMany({
@@ -230,7 +253,10 @@ export async function reconcileAccount(
     0,
   );
 
-  const allowed = Math.min(period.usableCents, Math.max(0, period.capCents - spentCents));
+  const internalAllowed = Math.min(period.usableCents, Math.max(0, period.capCents - spentCents));
+  // Three ceilings, smallest wins: usable slice, hard cap, and what the
+  // platform will actually let us spend.
+  const allowed = effectiveHeadroomCents(internalAllowed, platformLimit.remainingCents);
   const outOfBandChangeDetected = desiredCommitted > allowed;
   const committedCents = Math.min(desiredCommitted, allowed);
 
@@ -265,6 +291,8 @@ export async function reconcileAccount(
     committedCents,
     killSwitchEngaged: applied.killSwitchEngaged || outOfBandChangeDetected,
     outOfBandChangeDetected,
+    platformRemainingCents: platformLimit.remainingCents,
+    platformIsBinding: limitResult?.platformIsBinding ?? false,
   };
 }
 
