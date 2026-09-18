@@ -22,7 +22,7 @@ import { formatBrl } from './platform/money.js';
  * of an approver; executing it stays a button a person presses.
  *
  *   node dist/modules/ads/ops-cli.js status
- *   node dist/modules/ads/ops-cli.js preflight
+ *   node dist/modules/ads/ops-cli.js preflight [--expect-user <id na Meta>]
  *   node dist/modules/ads/ops-cli.js alerts
  *   node dist/modules/ads/ops-cli.js request --account act_… --campaign 1202… \
  *        --kind pause_campaign --reason "…"
@@ -94,6 +94,22 @@ async function main() {
         if (!granted.has('ads_management')) {
           throw new Error('o token não tem ads_management — a Meta vai recusar qualquer escrita');
         }
+
+        // Who the token belongs to. A token minted by a person dies when that
+        // person loses access; one minted by a BM system user does not.
+        const me = await fetch('https://graph.facebook.com/v23.0/me?fields=id', {
+          headers: { Authorization: `Bearer ${env.META_WRITE_TOKEN}` },
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (!me.ok) throw new Error(`Meta respondeu ${me.status} ao ler o dono do token`);
+        const owner = (await me.json()) as { id?: string };
+        console.warn(`  dono do token (id na Meta): ${owner.id ?? 'desconhecido'}`);
+        const expected = arg('expect-user');
+        if (expected && owner.id !== expected) {
+          throw new Error(`o token NÃO pertence ao usuário esperado (${expected})`);
+        }
+        if (expected) console.warn('  pertence ao usuário esperado');
+
         console.warn('token apto a escrever. Nada foi escrito.');
         return;
       }
