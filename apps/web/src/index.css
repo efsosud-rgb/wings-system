@@ -1329,3 +1329,80 @@ textarea.control {
   font-weight: 600;
   white-space: nowrap;
 }
+
+/* ---------- público: cliente ideal e alcance ---------- */
+.builder-states {
+  border: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.builder-states legend {
+  margin-bottom: 8px;
+}
+
+.builder-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 1px solid var(--wings-border);
+  border-radius: 6px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.builder-state:has(input:checked) {
+  border-color: var(--wings-accent);
+  color: var(--wings-accent);
+}
+
+.builder-cities {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 6px 0 10px;
+  font-size: 13px;
+}
+
+.builder-cities li {
+  display: inline-flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.builder-city-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 90px max-content;
+  gap: 8px;
+}
+
+.builder-audience-save {
+  border-top: 1px solid var(--wings-border);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.builder-summary-clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.draft-audience {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.draft-audience p {
+  margin-bottom: 8px;
+  white-space: pre-wrap;
+}

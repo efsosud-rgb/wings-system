@@ -77,9 +77,22 @@ nome repetido no pedido. Motivo: um create que dá timeout não devolve id, ent�
   página do Facebook e a imagem por URL pública ou já dentro da Meta.
 - [ ] Rodar `spike-preview.ts` (somente leitura, só GETs) com o token em mãos:
       `pnpm --filter @wings/api exec tsx src/modules/ads/spike-preview.ts
-    <id-da-página> <url-https-pública-de-uma-imagem>`. Responde se
+  <id-da-página> <url-https-pública-de-uma-imagem>`. Responde se
       `generatepreviews` aceita criativo inline, imagem por URL e o token de
       leitura. Anotar aqui o resultado antes de construir a integração.
+
+## Cliente ideal e área de alcance
+
+Modelo mínimo: `marketing_audience_profiles`, **uma linha por tenant** (texto
+do cliente ideal + `reach` em JSON com UFs inteiras e cidades digitadas). O
+builder começa do padrão salvo; cada pedido guarda a **sua cópia** no rascunho,
+então editar o padrão depois não reescreve um pedido já aprovado. Salvar o
+padrão exige `ads.request` e fica na auditoria.
+
+Cidades são nomes digitados, não ids de uma base: hoje só uma pessoa lê isso.
+**Nada de público ou localização chega à Meta nesta onda** — segmentação mora
+no conjunto de anúncios, que o adapter não cria. Mapear cidade → chave de
+localização da Meta pertence a essa etapa futura.
 
 ## O que falta para o sacrifício fechar
 

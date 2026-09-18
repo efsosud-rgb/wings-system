@@ -2,6 +2,8 @@ import type {
   ApprovalDecisionInput,
   ApprovalDetail,
   ApprovalListItem,
+  AudienceProfile,
+  AudienceProfileInput,
   CampaignDraft,
   ChangeSimulation,
   CockpitSnapshot,
@@ -127,5 +129,24 @@ export function useRequestCampaign() {
 export function useUploadCreative() {
   return useMutation({
     mutationFn: (file: File) => api.upload<{ creative: CreativeUpload }>('/ads/creatives', file),
+  });
+}
+
+/** The tenant's standing ideal-customer profile and reach; null until saved. */
+export function useAudienceProfile() {
+  return useQuery({
+    queryKey: ['ads', 'audience-profile'],
+    queryFn: () => api.get<{ profile: AudienceProfile | null }>('/ads/audience-profile'),
+  });
+}
+
+export function useSaveAudienceProfile() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: AudienceProfileInput) =>
+      api.put<{ ok: true; updatedAt: string }>('/ads/audience-profile', input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ads', 'audience-profile'] });
+    },
   });
 }

@@ -1,5 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
+  BRAZIL_STATES,
   CALLS_TO_ACTION,
   CALL_TO_ACTION_LABEL,
   CAMPAIGN_OBJECTIVES,
@@ -9,21 +10,25 @@ import {
   COMPLIANCE_RULE_LABEL,
   CREATIVE_FORMATS,
   HEADLINE_MAX,
+  ICP_MAX,
   MAX_VARIATIONS,
   MIN_VARIATIONS,
   PAID_PLATFORMS,
   PRIMARY_TEXT_RECOMMENDED,
   UTM_KEYS,
   applyUtms,
+  audienceProfileSchema,
   buildUtms,
   campaignDays,
   campaignDaysInMonth,
   campaignDraftSchema,
   checkCopyCompliance,
+  describeReach,
   estimateCostCents,
   matchesFormat,
   type CampaignDraft,
   type CampaignDraftInput,
+  type BrazilState,
   type ComplianceFinding,
   type CreativeFormat,
   type CreativeUpload,
@@ -32,7 +37,13 @@ import {
 import { useEffect, useState, type ReactNode } from 'react';
 import { useFieldArray, useForm, type Resolver } from 'react-hook-form';
 import { Link } from 'react-router-dom';
-import { useCockpit, useRequestCampaign, useUploadCreative } from '../../api/ads.js';
+import {
+  useAudienceProfile,
+  useCockpit,
+  useRequestCampaign,
+  useSaveAudienceProfile,
+  useUploadCreative,
+} from '../../api/ads.js';
 import { Alert, Button, Field, Input, Select } from '../ui.js';
 import { AdPreview, ApproximatePreviewNote, creativeUrl } from './AdPreview.js';
 import { formatBrl, formatDate, parseBrlToCents, todayInSaoPaulo } from './format.js';
@@ -69,10 +80,6 @@ function BuilderSection({
       {children}
     </section>
   );
-}
-
-function PendingInThisWave({ children }: { children: ReactNode }) {
-  return <p className="builder-pending muted">🚧 {children}</p>;
 }
 
 /** Shown on screen, not just refused: the operator must see why copy is blocked. */
@@ -218,6 +225,8 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
       platform: 'meta',
       name: '',
       objective: 'lead',
+      idealCustomerProfile: '',
+      reach: { states: [], cities: [] },
       formatKey: 'feed_square',
       destinationUrl: '',
       variations: Array.from({ length: MIN_VARIATIONS }, () => ({
@@ -233,7 +242,37 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
     },
   });
   const variations = useFieldArray({ control, name: 'variations' });
+  const cities = useFieldArray({ control, name: 'reach.cities' });
   const [checked, setChecked] = useState<CampaignDraft | null>(null);
+
+  // The builder starts from what Wings saved as its standing audience. Once
+  // loaded it is the operator's to edit: this campaign keeps its own copy.
+  const audience = useAudienceProfile();
+  const saveAudience = useSaveAudienceProfile();
+  const savedAudience = audience.data?.profile;
+  const [audienceLoaded, setAudienceLoaded] = useState(false);
+  const [audienceProblem, setAudienceProblem] = useState<string | null>(null);
+  const [newCity, setNewCity] = useState<{ name: string; state: BrazilState | '' }>({
+    name: '',
+    state: '',
+  });
+  const { replace: replaceCities } = cities;
+  useEffect(() => {
+    if (!savedAudience || audienceLoaded) return;
+    setAudienceLoaded(true);
+    if (dirtyFields.idealCustomerProfile || dirtyFields.reach) return;
+    setValue('idealCustomerProfile', savedAudience.idealCustomerProfile);
+    setValue('reach.states', savedAudience.reach.states);
+    // A field array only follows its own methods, not setValue.
+    replaceCities(savedAudience.reach.cities);
+  }, [
+    savedAudience,
+    audienceLoaded,
+    dirtyFields.idealCustomerProfile,
+    dirtyFields.reach,
+    setValue,
+    replaceCities,
+  ]);
 
   const values = watch();
   const days = campaignDays(values.startDate, values.endDate);
@@ -356,13 +395,123 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
       </BuilderSection>
 
       <BuilderSection step={3} title="Perfil do cliente ideal">
-        <PendingInThisWave>
-          Texto editável salvo para a Wings — entra na etapa 4 desta onda.
-        </PendingInThisWave>
+        <Field
+          label="Quem é o cliente ideal desta campanha"
+          error={errors.idealCustomerProfile?.message}
+          hint={`${(values.idealCustomerProfile ?? '').length}/${ICP_MAX} · começa do perfil salvo para a Wings; o que você mudar aqui vale para esta campanha.`}
+        >
+          <textarea
+            className="control"
+            rows={5}
+            maxLength={ICP_MAX}
+            placeholder="Ex.: empreendedor de 30 a 50 anos, com experiência em gestão, que busca um negócio com suporte…"
+            {...register('idealCustomerProfile')}
+          />
+        </Field>
       </BuilderSection>
 
       <BuilderSection step={4} title="Área de alcance">
-        <PendingInThisWave>Cidades e estados — entra na etapa 4 desta onda.</PendingInThisWave>
+        <fieldset className="builder-states">
+          <legend className="field-label">Estados inteiros</legend>
+          {BRAZIL_STATES.map((state) => (
+            <label key={state} className="builder-state">
+              <input type="checkbox" value={state} {...register('reach.states')} />
+              <span>{state}</span>
+            </label>
+          ))}
+        </fieldset>
+
+        <div>
+          <span className="field-label">Cidades</span>
+          {cities.fields.length === 0 && <p className="field-hint">Nenhuma cidade adicionada.</p>}
+          <ul className="builder-cities">
+            {cities.fields.map((city, index) => (
+              <li key={city.id}>
+                {values.reach.cities[index]?.name}/{values.reach.cities[index]?.state}
+                <button
+                  type="button"
+                  className="link-button"
+                  aria-label={`Remover ${values.reach.cities[index]?.name ?? 'cidade'}`}
+                  onClick={() => cities.remove(index)}
+                >
+                  Remover
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className="builder-city-add">
+            <Input
+              aria-label="Cidade"
+              placeholder="Cidade"
+              value={newCity.name}
+              onChange={(event) => setNewCity({ ...newCity, name: event.target.value })}
+            />
+            <Select
+              aria-label="UF da cidade"
+              value={newCity.state}
+              onChange={(event) =>
+                setNewCity({ ...newCity, state: event.target.value as BrazilState | '' })
+              }
+            >
+              <option value="">UF</option>
+              {BRAZIL_STATES.map((state) => (
+                <option key={state} value={state}>
+                  {state}
+                </option>
+              ))}
+            </Select>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={newCity.name.trim().length < 2 || newCity.state === ''}
+              onClick={() => {
+                if (newCity.state === '') return;
+                cities.append({ name: newCity.name.trim(), state: newCity.state });
+                setNewCity({ name: '', state: '' });
+              }}
+            >
+              Adicionar cidade
+            </Button>
+          </div>
+        </div>
+        {(errors.reach?.message ?? errors.reach?.root?.message) && (
+          <p className="field-error" role="alert">
+            {errors.reach?.message ?? errors.reach?.root?.message}
+          </p>
+        )}
+
+        <div className="builder-audience-save">
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={!canRequest || saveAudience.isPending}
+            onClick={() => {
+              setAudienceProblem(null);
+              const parsed = audienceProfileSchema.safeParse({
+                idealCustomerProfile: values.idealCustomerProfile,
+                reach: values.reach,
+              });
+              if (!parsed.success) {
+                setAudienceProblem(parsed.error.issues[0]?.message ?? 'Dados inválidos');
+                return;
+              }
+              saveAudience.mutate(parsed.data);
+            }}
+          >
+            Salvar perfil e alcance como padrão da Wings
+          </Button>
+          <p className="field-hint">
+            {savedAudience
+              ? `Padrão atual salvo por ${savedAudience.updatedByName ?? '—'} em ${new Date(
+                  savedAudience.updatedAt,
+                ).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })}.`
+              : 'Ainda não há um padrão salvo para a Wings.'}{' '}
+            As próximas campanhas começam dele.
+          </p>
+          {audienceProblem && <Alert kind="error">{audienceProblem}</Alert>}
+          {saveAudience.isError && <Alert kind="error">{saveAudience.error.message}</Alert>}
+          {saveAudience.isSuccess && <Alert kind="success">Padrão da Wings atualizado.</Alert>}
+        </div>
       </BuilderSection>
 
       <BuilderSection step={5} title="Criativo">
@@ -559,6 +708,10 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
           <dd>{values.name || '—'}</dd>
           <dt>Objetivo</dt>
           <dd>{CAMPAIGN_OBJECTIVE_LABEL[values.objective]}</dd>
+          <dt>Cliente ideal</dt>
+          <dd className="builder-summary-clamp">{values.idealCustomerProfile || '—'}</dd>
+          <dt>Alcance</dt>
+          <dd>{describeReach(values.reach)}</dd>
           <dt>Formato</dt>
           <dd>{format ? `${format.label} (${format.ratio})` : '—'}</dd>
           <dt>Variações</dt>

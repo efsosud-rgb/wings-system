@@ -46,6 +46,8 @@ function draftOf(overrides: Partial<CampaignDraft> = {}): CampaignDraft {
     platform: 'meta',
     name: `Sacrifício ${randomBytes(3).toString('hex')}`,
     objective: 'lead',
+    idealCustomerProfile: 'Empreendedor de 30 a 50 anos, com experiência em gestão.',
+    reach: { states: ['SP'], cities: [{ name: 'Curitiba', state: 'PR' }] },
     formatKey: 'feed_square',
     destinationUrl: 'https://wingscompany.com.br/franquia',
     variations: [

@@ -251,6 +251,23 @@ export const adSets = pgTable(
   (table) => [uniqueIndex('ad_sets_campaign_external_uq').on(table.campaignId, table.externalId)],
 );
 
+/**
+ * The tenant's standing audience: who the ideal customer is and where to reach
+ * them. One row per tenant — the minimum model. The campaign builder starts
+ * from it, and every draft keeps its own copy in its payload.
+ */
+export const marketingAudienceProfiles = pgTable('marketing_audience_profiles', {
+  tenantId: uuid('tenant_id')
+    .primaryKey()
+    .default(WINGS_TENANT_ID)
+    .references(() => tenants.id),
+  idealCustomerProfile: text('ideal_customer_profile').notNull(),
+  /** `{ states: UF[], cities: { name, state }[] }`, validated by reachSchema. */
+  reach: jsonb('reach').notNull(),
+  updatedBy: uuid('updated_by').references(() => employees.id),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 const bytea = customType<{ data: Buffer; driverData: Buffer }>({
   dataType: () => 'bytea',
 });

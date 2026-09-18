@@ -379,6 +379,96 @@ export function estimateCostCents(dailyBudgetCents: number, days: number): numbe
 }
 
 // ---------------------------------------------------------------------------
+// Audience: ideal customer profile and reach
+// ---------------------------------------------------------------------------
+
+export const BRAZIL_STATES = [
+  'AC',
+  'AL',
+  'AP',
+  'AM',
+  'BA',
+  'CE',
+  'DF',
+  'ES',
+  'GO',
+  'MA',
+  'MT',
+  'MS',
+  'MG',
+  'PA',
+  'PB',
+  'PR',
+  'PE',
+  'PI',
+  'RJ',
+  'RN',
+  'RS',
+  'RO',
+  'RR',
+  'SC',
+  'SP',
+  'SE',
+  'TO',
+] as const;
+export type BrazilState = (typeof BRAZIL_STATES)[number];
+
+export const ICP_MIN = 20;
+export const ICP_MAX = 2000;
+export const MAX_REACH_CITIES = 50;
+
+/**
+ * Where the campaign should reach: whole states, single cities, or both.
+ *
+ * Minimal on purpose. Cities are names the operator types, not ids from a
+ * gazetteer: nothing consumes them yet except a person reading the request, and
+ * mapping them to a platform's location keys belongs with ad-set creation.
+ */
+export const reachSchema = z
+  .object({
+    states: z.array(z.enum(BRAZIL_STATES)).max(BRAZIL_STATES.length),
+    cities: z
+      .array(
+        z.object({
+          name: z.string().trim().min(2, 'Informe a cidade').max(80),
+          state: z.enum(BRAZIL_STATES, { error: 'Escolha a UF' }),
+        }),
+      )
+      .max(MAX_REACH_CITIES, `No máximo ${MAX_REACH_CITIES} cidades`),
+  })
+  .refine((reach) => reach.states.length + reach.cities.length > 0, {
+    message: 'Escolha pelo menos um estado ou uma cidade',
+  });
+export type Reach = z.output<typeof reachSchema>;
+
+const idealCustomerProfile = z
+  .string()
+  .trim()
+  .min(ICP_MIN, `Descreva o cliente ideal em pelo menos ${ICP_MIN} caracteres`)
+  .max(ICP_MAX, `Máximo de ${ICP_MAX} caracteres`);
+
+/**
+ * The tenant's standing answer to "who are we talking to, and where". The
+ * builder starts from it; each campaign then carries its own copy, so editing
+ * the default later never rewrites a request somebody already approved.
+ */
+export const audienceProfileSchema = z.object({ idealCustomerProfile, reach: reachSchema });
+export type AudienceProfileInput = z.output<typeof audienceProfileSchema>;
+
+export interface AudienceProfile extends AudienceProfileInput {
+  updatedAt: string;
+  updatedByName: string | null;
+}
+
+export function describeReach(reach: Reach): string {
+  const parts = [
+    ...reach.states.map((state) => `${state} (estado todo)`),
+    ...reach.cities.map((city) => `${city.name}/${city.state}`),
+  ];
+  return parts.join(' · ') || '—';
+}
+
+// ---------------------------------------------------------------------------
 // The draft
 // ---------------------------------------------------------------------------
 
@@ -428,6 +518,8 @@ export const campaignDraftSchema = z
     platform: z.literal('meta', { error: 'Só a Meta está habilitada' }),
     name: z.string().trim().min(3, 'Dê um nome à campanha').max(120),
     objective: z.enum(CAMPAIGN_OBJECTIVES, { error: 'Escolha o objetivo' }),
+    idealCustomerProfile,
+    reach: reachSchema,
     formatKey: z.string().min(1, 'Escolha o formato'),
     destinationUrl: z.url({ protocol: /^https$/, error: 'Informe um endereço https:// válido' }),
     variations: z

@@ -111,6 +111,8 @@ async function draft(overrides: Record<string, unknown> = {}) {
     platform: 'meta',
     name: `Sacrifício ${randomBytes(3).toString('hex')}`,
     objective: 'lead',
+    idealCustomerProfile: 'Empreendedor de 30 a 50 anos, com experiência em gestão.',
+    reach: { states: ['SP'], cities: [{ name: 'Curitiba', state: 'PR' }] },
     formatKey: 'feed_square',
     destinationUrl: 'https://wingscompany.com.br/franquia',
     variations: [
@@ -283,5 +285,70 @@ describe('creative uploads', () => {
     });
     expect(response.statusCode).toBe(400);
     expect(response.json<{ error: string }>().error).toBe('creative_not_found');
+  });
+});
+
+describe('the tenant audience profile', () => {
+  const profile = {
+    idealCustomerProfile: 'Empreendedor de 30 a 50 anos, com experiência em gestão.',
+    reach: { states: ['SP', 'PR'], cities: [{ name: 'Goiânia', state: 'GO' }] },
+  };
+
+  it('is empty until somebody saves it, then comes back as saved', async () => {
+    const marketing = await cookiesFor('marketing');
+    const before = await app.inject({ url: '/ads/audience-profile', cookies: marketing });
+    expect(before.json<{ profile: unknown }>().profile).toBeNull();
+
+    const saved = await app.inject({
+      method: 'PUT',
+      url: '/ads/audience-profile',
+      cookies: marketing,
+      payload: profile,
+    });
+    expect(saved.statusCode).toBe(200);
+
+    // Saving again replaces the single row instead of adding another.
+    await app.inject({
+      method: 'PUT',
+      url: '/ads/audience-profile',
+      cookies: marketing,
+      payload: { ...profile, reach: { states: ['RJ'], cities: [] } },
+    });
+    const after = await app.inject({ url: '/ads/audience-profile', cookies: marketing });
+    const body = after.json<{ profile: { reach: unknown; updatedByName: string | null } }>();
+    expect(body.profile.reach).toEqual({ states: ['RJ'], cities: [] });
+    expect(body.profile.updatedByName).not.toBeNull();
+  });
+
+  it('refuses an empty reach, an unknown state and a reader trying to save', async () => {
+    const marketing = await cookiesFor('marketing');
+    const put = (payload: Record<string, unknown>, cookies = marketing) =>
+      app.inject({ method: 'PUT', url: '/ads/audience-profile', cookies, payload });
+
+    const empty = await put({ ...profile, reach: { states: [], cities: [] } });
+    expect(empty.statusCode).toBe(400);
+    expect(empty.json<{ message: string }>().message).toBe(
+      'Escolha pelo menos um estado ou uma cidade',
+    );
+    expect((await put({ ...profile, reach: { states: ['XX'], cities: [] } })).statusCode).toBe(400);
+    expect((await put(profile, await cookiesFor('vendedor_expansao'))).statusCode).toBe(403);
+  });
+
+  it('keeps the audience inside the request, as the approver will see it', async () => {
+    const payload = await draft();
+    const created = await app.inject({
+      method: 'POST',
+      url: '/ads/campaign-requests',
+      cookies: await cookiesFor('marketing'),
+      payload,
+    });
+    const { approvalId } = created.json<{ approvalId: string }>();
+    const detail = await app.inject({
+      url: `/ads/approvals/${approvalId}`,
+      cookies: await cookiesFor('admin_master'),
+    });
+    const approval = detail.json<{ approval: ApprovalDetail }>().approval;
+    expect(approval.draft?.reach.cities).toEqual([{ name: 'Curitiba', state: 'PR' }]);
+    expect(approval.draft?.idealCustomerProfile).toContain('Empreendedor');
   });
 });

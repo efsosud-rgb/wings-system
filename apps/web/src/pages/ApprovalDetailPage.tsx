@@ -7,6 +7,7 @@ import {
   CREATIVE_FORMATS,
   applyUtms,
   campaignDays,
+  describeReach,
   estimateCostCents,
   type ApprovalDetail,
   type CampaignDraft,
@@ -146,6 +147,16 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
           <span className="field-label">Destino com UTMs</span>
           <p className="mono builder-url">{applyUtms(draft.destinationUrl, draft.utms, 0)}</p>
         </div>
+      </div>
+      <div className="readonly draft-audience">
+        <span className="field-label">Cliente ideal</span>
+        <p>{draft.idealCustomerProfile}</p>
+        <span className="field-label">Área de alcance</span>
+        <p>{describeReach(draft.reach)}</p>
+        <span className="cell-sub">
+          Registrado no pedido. Público e localização só chegam à Meta quando existir a criação do
+          conjunto de anúncios.
+        </span>
       </div>
       <div className="ad-preview-row">
         {draft.variations.map((variation, index) => (

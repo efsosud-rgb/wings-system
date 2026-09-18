@@ -1,4 +1,4 @@
-import type { PacingSummary } from '@wings/shared';
+import type { AudienceProfile, PacingSummary } from '@wings/shared';
 import { cleanup, fireEvent, render as renderBare, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -20,7 +20,18 @@ const launchState: { current: { isSuccess: boolean; data?: { approvalId: string 
 const uploadSize = { current: { width: 1080, height: 1080 } };
 let uploads = 0;
 
+const savedAudience: { current: AudienceProfile | null } = { current: null };
+const saveAudience = vi.fn();
+
 vi.mock('../../api/ads.js', () => ({
+  useAudienceProfile: () => ({ data: { profile: savedAudience.current } }),
+  useSaveAudienceProfile: () => ({
+    mutate: saveAudience,
+    isPending: false,
+    isError: false,
+    isSuccess: false,
+    error: null,
+  }),
   useUploadCreative: () => ({
     isPending: false,
     mutate: (
@@ -77,6 +88,8 @@ afterEach(() => {
   requestCampaign.mockReset();
   uploadSize.current = { width: 1080, height: 1080 };
   uploads = 0;
+  savedAudience.current = null;
+  saveAudience.mockReset();
 });
 
 function chooseImage(input: Element, type = 'image/png') {
@@ -93,6 +106,11 @@ function fillValidCampaign() {
   type(titles[1] as Element, 'Seja um franqueado Wings');
   type(texts[1] as Element, 'Suporte completo.');
   type(screen.getByLabelText(/Verba por dia/), '6,00');
+  type(
+    screen.getByLabelText(/^Quem é o cliente ideal/),
+    'Empreendedor de 30 a 50 anos, com experiência em gestão.',
+  );
+  fireEvent.click(screen.getByRole('checkbox', { name: 'SP' }));
   for (const input of screen.getAllByLabelText(/^Imagem — Variação/)) chooseImage(input);
 }
 
@@ -171,6 +189,43 @@ describe('the paid-media builder', () => {
     expect(uploads).toBe(0);
   });
 
+  it('starts from the audience Wings saved, and leaves it editable', () => {
+    savedAudience.current = {
+      idealCustomerProfile: 'Empreendedor com capital próprio e perfil de gestão.',
+      reach: { states: ['SP', 'PR'], cities: [{ name: 'Goiânia', state: 'GO' }] },
+      updatedAt: '2026-09-18T12:00:00.000Z',
+      updatedByName: 'Eric',
+    };
+    render(<PaidMediaBuilder canRequest />);
+
+    const icp = screen.getByLabelText(/^Quem é o cliente ideal/) as HTMLTextAreaElement;
+    expect(icp.value).toContain('capital próprio');
+    expect((screen.getByRole('checkbox', { name: 'PR' }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText(/Padrão atual salvo por Eric/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remover Goiânia' }));
+    expect(screen.getByText('Nenhuma cidade adicionada.')).toBeTruthy();
+  });
+
+  it('adds cities, and saves profile and reach as the Wings default', () => {
+    render(<PaidMediaBuilder canRequest />);
+    fireEvent.click(screen.getByRole('button', { name: /Salvar perfil e alcance/ }));
+    expect(screen.getByText(/Descreva o cliente ideal/)).toBeTruthy();
+    expect(saveAudience).not.toHaveBeenCalled();
+
+    type(screen.getByLabelText(/^Quem é o cliente ideal/), 'Empreendedor com perfil de gestão.');
+    type(screen.getByLabelText('Cidade'), 'Curitiba');
+    type(screen.getByLabelText('UF da cidade'), 'PR');
+    fireEvent.click(screen.getByRole('button', { name: 'Adicionar cidade' }));
+    expect(screen.getAllByText(/Curitiba\/PR/).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /Salvar perfil e alcance/ }));
+    expect(saveAudience).toHaveBeenCalledWith({
+      idealCustomerProfile: 'Empreendedor com perfil de gestão.',
+      reach: { states: [], cities: [{ name: 'Curitiba', state: 'PR' }] },
+    });
+  });
+
   it('allows a third variation and no more', () => {
     render(<PaidMediaBuilder canRequest />);
     expect(screen.getAllByLabelText(/^Título/)).toHaveLength(2);
@@ -206,6 +261,7 @@ describe('the paid-media builder', () => {
       name: 'Sacrifício — teste de escrita',
       dailyBudgetCents: 600,
       startPaused: true,
+      reach: { states: ['SP'], cities: [] },
       variations: [
         { creativeId: '00000001-0000-4000-8000-000000000000' },
         { creativeId: '00000002-0000-4000-8000-000000000000' },
