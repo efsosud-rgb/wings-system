@@ -62,7 +62,7 @@ export function EmployeesPage() {
           </p>
         </div>
         {canCreate && (
-          <Link to="/funcionarios/novo" className="btn btn-primary btn-inline">
+          <Link to="/administracao/usuarios/novo" className="btn btn-primary btn-inline">
             Novo funcionário
           </Link>
         )}
@@ -136,7 +136,7 @@ export function EmployeesPage() {
             {list.data?.employees.map((employee: EmployeeView) => (
               <tr key={employee.id}>
                 <td>
-                  <Link to={`/funcionarios/${employee.id}`}>{employee.fullName}</Link>
+                  <Link to={`/administracao/usuarios/${employee.id}`}>{employee.fullName}</Link>
                   <div className="cell-sub">{employee.email}</div>
                 </td>
                 {/* Always masked in listings; the full value needs an explicit,

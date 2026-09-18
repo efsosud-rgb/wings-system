@@ -155,7 +155,7 @@ export function EmployeeFormPage() {
         </header>
         <Alert kind="error">Registro não encontrado ou fora do seu escopo de acesso.</Alert>
         <p>
-          <Link to="/funcionarios">Voltar à lista</Link>
+          <Link to="/administracao/usuarios">Voltar à lista</Link>
         </p>
       </>
     );
@@ -170,7 +170,7 @@ export function EmployeeFormPage() {
             {isEdit ? employee?.fullName : 'O funcionário definirá a própria senha pelo convite.'}
           </p>
         </div>
-        <Link to="/funcionarios" className="btn btn-ghost btn-inline">
+        <Link to="/administracao/usuarios" className="btn btn-ghost btn-inline">
           Voltar
         </Link>
       </header>

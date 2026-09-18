@@ -184,7 +184,7 @@ describe('moving to the next decision', () => {
     renderSimulator();
 
     const link = screen.getByRole('link', { name: 'Ir para a próxima decisão' });
-    expect(link.getAttribute('href')).toBe('/trafego-pago/aprovacoes/ap-2');
+    expect(link.getAttribute('href')).toBe('/marketing/trafego-pago-wings/aprovacoes/ap-2');
     expect(screen.getByText(/decidida e registrada separadamente/)).toBeTruthy();
   });
 

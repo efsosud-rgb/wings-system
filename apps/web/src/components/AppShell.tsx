@@ -1,23 +1,38 @@
-import { SECTORS, ROLES } from '@wings/shared';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { hasPermission, useLogout, useSession } from '../api/auth.js';
+import { moduleKeyForPath, ROLES, SECTORS, visibleNavigation } from '@wings/shared';
+import { useState } from 'react';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useLogout, useSession } from '../api/auth.js';
 import { Button } from './ui.js';
 
-/** Menu entries appear only when the viewer holds the permission behind them. */
-const MENU = [
-  { to: '/funcionarios', label: 'Funcionários', icon: '👥', permission: 'employees.read' },
-  { to: '/trafego-pago', label: 'Tráfego pago', icon: '🚀', permission: 'ads.read' },
-  { to: '/ponto', label: 'Ponto (RH/DP)', icon: '🕒', permission: 'timeclock.read' },
-  { to: '/configuracoes', label: 'Configurações', icon: '⚙️', permission: 'settings.manage' },
-] as const;
-
+/**
+ * Sidebar and frame.
+ *
+ * The menu is generated from the navigation tree, never hand-listed: an entry
+ * cannot exist without a route, and a route cannot hide from the menu. The two
+ * used to be separate constants, which is how `/ponto` and `/configuracoes`
+ * ended up as menu entries pointing at screens that were never built.
+ *
+ * Modules expand; sub-modules are the leaves. A sub-module the viewer's role
+ * cannot reach is absent entirely, and one without a backend yet is shown but
+ * marked, so the shape of the system is visible without pretending it is done.
+ */
 export function AppShell() {
   const session = useSession();
   const logout = useLogout();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const user = session.data;
 
+  // The module containing the current screen starts open; the rest collapsed.
+  const [openModules, setOpenModules] = useState<Record<string, boolean>>({});
+
   if (!user) return null;
+
+  const modules = visibleNavigation({ role: user.role, permissions: user.permissions });
+  const activeModule = moduleKeyForPath(pathname);
+  const isOpen = (key: string) => openModules[key] ?? key === activeModule;
+  const toggle = (key: string) =>
+    setOpenModules((current) => ({ ...current, [key]: !(current[key] ?? key === activeModule) }));
 
   const onLogout = async () => {
     await logout.mutateAsync();
@@ -34,17 +49,49 @@ export function AppShell() {
           <small>SYSTEM</small>
         </div>
 
-        <nav className="sidebar-menu">
-          {MENU.filter((item) => hasPermission(user, item.permission)).map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) => `menu-item ${isActive ? 'active' : ''}`}
-            >
-              <span aria-hidden="true">{item.icon}</span>
-              {item.label}
-            </NavLink>
-          ))}
+        <nav className="sidebar-menu" aria-label="Módulos">
+          {modules.map((module) => {
+            const open = isOpen(module.key);
+            return (
+              <div key={module.key} className="menu-module">
+                <button
+                  type="button"
+                  className={`menu-module-header ${module.key === activeModule ? 'active' : ''}`}
+                  aria-expanded={open}
+                  onClick={() => toggle(module.key)}
+                >
+                  <span aria-hidden="true">{module.icon}</span>
+                  <span className="menu-module-label">{module.label}</span>
+                  <span aria-hidden="true" className={`chevron ${open ? 'open' : ''}`}>
+                    ›
+                  </span>
+                </button>
+
+                {open && (
+                  <div className="menu-submodules">
+                    {module.submodules.map((submodule) => (
+                      <NavLink
+                        key={submodule.path}
+                        to={submodule.path}
+                        className={({ isActive }) =>
+                          `menu-item ${isActive ? 'active' : ''} ${
+                            submodule.status === 'coming_soon' ? 'menu-item-soon' : ''
+                          }`
+                        }
+                      >
+                        {submodule.label}
+                        {/* Marked, not hidden: the structure stays visible and
+                            nobody mistakes it for a screen that failed to load. */}
+                        {submodule.status === 'coming_soon' && (
+                          <span className="soon-badge">em breve</span>
+                        )}
+                      </NavLink>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </nav>
 
         <div className="sidebar-user">

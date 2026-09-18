@@ -118,8 +118,8 @@ describe('the grouped view', () => {
       .getAllByRole('link')
       .map((link) => link.getAttribute('href'))
       .filter((href): href is string => href !== null);
-    expect(links).toContain('/trafego-pago/aprovacoes/ap-1');
-    expect(links).toContain('/trafego-pago/aprovacoes/ap-2');
+    expect(links).toContain('/marketing/trafego-pago-wings/aprovacoes/ap-1');
+    expect(links).toContain('/marketing/trafego-pago-wings/aprovacoes/ap-2');
 
     // No button in this view decides anything.
     const buttonNames = screen.getAllByRole('button').map((button) => button.textContent);

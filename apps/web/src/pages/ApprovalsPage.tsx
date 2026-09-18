@@ -64,7 +64,7 @@ function Section({
               {items.map((approval) => (
                 <tr key={approval.id}>
                   <td>
-                    <Link to={`/trafego-pago/aprovacoes/${approval.id}`}>
+                    <Link to={`/marketing/trafego-pago-wings/aprovacoes/${approval.id}`}>
                       {CHANGE_KIND_LABEL[approval.changeKind] ?? approval.changeKind}
                     </Link>
                     <div className="cell-sub">{approval.campaignName}</div>
@@ -154,7 +154,7 @@ function GroupedPending({ groups }: { groups: PendingGroup[] }) {
             <ol className="group-items">
               {group.items.map((item) => (
                 <li key={item.approvalId}>
-                  <Link to={`/trafego-pago/aprovacoes/${item.approvalId}`}>
+                  <Link to={`/marketing/trafego-pago-wings/aprovacoes/${item.approvalId}`}>
                     {CHANGE_KIND_LABEL[item.changeKind] ?? item.changeKind}
                     {item.changeKind === 'set_daily_budget' &&
                       ` · ${formatBrl(item.fromValueCents ?? 0)} → ${formatBrl(item.toValueCents ?? 0)}/dia`}
@@ -169,7 +169,7 @@ function GroupedPending({ groups }: { groups: PendingGroup[] }) {
             </ol>
 
             <Link
-              to={`/trafego-pago/aprovacoes/${group.items[0]?.approvalId ?? ''}`}
+              to={`/marketing/trafego-pago-wings/aprovacoes/${group.items[0]?.approvalId ?? ''}`}
               className="btn btn-ghost btn-inline"
             >
               Decidir uma a uma
@@ -205,7 +205,7 @@ export function ApprovalsPage() {
           <Button variant={byCampaign ? 'primary' : 'ghost'} onClick={() => setByCampaign(true)}>
             Por campanha
           </Button>
-          <Link to="/trafego-pago" className="btn btn-ghost btn-inline">
+          <Link to="/dashboard/marketing" className="btn btn-ghost btn-inline">
             Ver cockpit
           </Link>
         </div>

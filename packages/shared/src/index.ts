@@ -12,6 +12,7 @@ export * from './auth/credentials.js';
 export * from './auth/schema.js';
 export * from './cpf.js';
 export * from './employees/schema.js';
+export * from './navigation.js';
 export * from './rbac/permissions.js';
 export * from './rbac/policy.js';
 export * from './rbac/roles.js';

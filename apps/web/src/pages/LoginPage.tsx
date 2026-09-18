@@ -16,7 +16,7 @@ export function LoginPage() {
     formState: { errors },
   } = useForm<LoginInput>({ resolver: zodResolver(loginSchema) });
 
-  if (session.data) return <Navigate to="/funcionarios" replace />;
+  if (session.data) return <Navigate to="/" replace />;
 
   const onSubmit = handleSubmit(async (values) => {
     await login.mutateAsync(values);

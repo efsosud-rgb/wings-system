@@ -247,7 +247,7 @@ export function ApprovalSimulator({ approvalId }: { approvalId: string }) {
       {nextPending && (
         <Alert kind="info">
           Há mais {nextPending.remaining} solicitação(ões) aguardando nesta campanha.{' '}
-          <Link to={`/trafego-pago/aprovacoes/${nextPending.approvalId}`}>
+          <Link to={`/marketing/trafego-pago-wings/aprovacoes/${nextPending.approvalId}`}>
             Ir para a próxima decisão
           </Link>{' '}
           — cada uma é decidida e registrada separadamente.

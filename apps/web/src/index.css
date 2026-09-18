@@ -828,3 +828,170 @@ a {
   border-left: 2px solid var(--wings-border);
   padding-left: 12px;
 }
+
+/* ---------- menu de módulos expansíveis ---------- */
+.menu-module {
+  margin-bottom: 2px;
+}
+
+.menu-module-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--wings-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu-module-header:hover {
+  background: var(--wings-card);
+}
+
+.menu-module-header.active {
+  color: var(--wings-accent);
+}
+
+.menu-module-label {
+  flex: 1;
+}
+
+.chevron {
+  transition: transform 0.15s ease;
+  color: var(--wings-faint);
+}
+
+.chevron.open {
+  transform: rotate(90deg);
+}
+
+.menu-submodules {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 2px 0 6px 14px;
+  padding-left: 10px;
+  border-left: 1px solid var(--wings-border);
+}
+
+.menu-submodules .menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  padding: 7px 10px;
+}
+
+/* Visible and marked, never hidden: the structure of the system stays legible
+   even where it is not built yet. */
+.menu-item-soon {
+  color: var(--wings-faint);
+}
+
+.soon-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--wings-faint);
+  border: 1px solid var(--wings-border);
+  border-radius: 10px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
+/* ---------- studio: conversa + ferramentas ---------- */
+.studio {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .studio {
+    grid-template-columns: 1fr;
+  }
+}
+
+.studio-chat,
+.studio-tools {
+  background: var(--wings-card);
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.studio-chat {
+  min-height: 420px;
+  display: flex;
+  flex-direction: column;
+}
+
+.studio-chat-placeholder {
+  margin: auto;
+  max-width: 420px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.studio-chat-placeholder span {
+  font-size: 32px;
+}
+
+.studio-tool-group {
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--wings-border);
+}
+
+.studio-tool-group:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.studio-tool-group h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--wings-muted);
+  margin-bottom: 10px;
+}
+
+.studio-soon-list {
+  list-style: none;
+  font-size: 12.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.studio-soon-list li::before {
+  content: '·';
+  margin-right: 6px;
+}
+
+/* ---------- em breve ---------- */
+.coming-soon {
+  max-width: 620px;
+}
+
+.coming-soon h2 {
+  font-size: 16px;
+  margin: 10px 0 8px;
+}
+
+.coming-soon-tag {
+  color: var(--wings-muted);
+  background: rgba(163, 163, 163, 0.1);
+  border-color: var(--wings-border);
+}

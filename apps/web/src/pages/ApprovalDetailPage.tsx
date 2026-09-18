@@ -148,7 +148,7 @@ export function ApprovalDetailPage() {
         </header>
         <Alert kind="error">Solicitação não encontrada.</Alert>
         <p>
-          <Link to="/trafego-pago/aprovacoes">Voltar às aprovações</Link>
+          <Link to="/marketing/trafego-pago-wings/aprovacoes">Voltar às aprovações</Link>
         </p>
       </>
     );
@@ -176,7 +176,7 @@ export function ApprovalDetailPage() {
             {approval.escalatedAt && ` · escalada em ${formatDateTime(approval.escalatedAt)}`}
           </p>
         </div>
-        <Link to="/trafego-pago/aprovacoes" className="btn btn-ghost btn-inline">
+        <Link to="/marketing/trafego-pago-wings/aprovacoes" className="btn btn-ghost btn-inline">
           Voltar
         </Link>
       </header>

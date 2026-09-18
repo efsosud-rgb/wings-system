@@ -317,7 +317,9 @@ export function CockpitPage() {
             <div className="card">
               <span className="muted">Aprovações pendentes</span>
               <strong>
-                <Link to="/trafego-pago/aprovacoes">{cockpit.counts.pendingApprovals}</Link>
+                <Link to="/marketing/trafego-pago-wings/aprovacoes">
+                  {cockpit.counts.pendingApprovals}
+                </Link>
               </strong>
             </div>
           </div>
