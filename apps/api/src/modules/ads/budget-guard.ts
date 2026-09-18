@@ -420,7 +420,13 @@ export async function reserveChange(
             daysLeft,
           );
     const exposureDeltaCents = nextExposure - currentExposure;
-    const newCommitted = current.committedCents + exposureDeltaCents;
+    // Floored at zero, as releaseReservation already does. A pause hands back
+    // the campaign's whole exposure, but the period may never have counted it:
+    // a campaign created since the last reconciliation, or a commitment that
+    // reconciliation clipped to the allowance. Without the floor, the request
+    // to *reduce* spend died on the non-negative constraint. The next
+    // reconciliation re-derives the true figure from the platform either way.
+    const newCommitted = Math.max(0, current.committedCents + exposureDeltaCents);
 
     // Pre-checks give a precise reason; the constraints below are what
     // actually guarantee the outcome.

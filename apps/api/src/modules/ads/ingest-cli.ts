@@ -8,7 +8,7 @@ import { activeAdAccounts, archiveAdAccount, ensureAdAccount } from './metrics.j
 import { createGoogleClient } from './platform/google-client.js';
 import { formatBrl } from './platform/money.js';
 import { createMetaClient } from './platform/factory.js';
-import { periodMonthOf } from './reconcile.js';
+import { enforceReconciliationFreshness, periodMonthOf } from './reconcile.js';
 
 /**
  * The job the Coolify scheduled task runs.
@@ -177,6 +177,17 @@ async function main() {
           );
         }
       }
+    }
+
+    // Dead-man switch. Accounts served a moment ago are fresh by construction;
+    // what this catches is the account that has been failing cycle after cycle
+    // while the others carried on. It is frozen until a person looks.
+    const stale = await enforceReconciliationFreshness(db);
+    for (const entry of stale) {
+      console.error(
+        `\nTRAVA ACIONADA: conta ${entry.accountId} sem reconciliar há ${entry.ageMinutes} min ` +
+          `— gasto real desconhecido. Libere com ops-cli release-kill-switch depois de verificar.`,
+      );
     }
 
     if (failures > 0) {

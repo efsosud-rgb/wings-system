@@ -11,7 +11,12 @@ import {
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { getPeriodState, openPeriod, remainingDays } from './budget-guard.js';
 import { FakeMetaClient } from './platform/fake-meta-client.js';
-import { enforceReconciliationFreshness, reconcileAccount, syncCampaigns } from './reconcile.js';
+import {
+  enforceReconciliationFreshness,
+  reconcileAccount,
+  reconciliationFreshness,
+  syncCampaigns,
+} from './reconcile.js';
 
 const CAP = 400_000; // Meta: R$4.000,00
 const USABLE_PERCENT = 70;
@@ -204,6 +209,39 @@ describe('dead-man switch', () => {
       now: new Date(NOW.getTime() + 30 * 60_000),
     });
     expect(stale.some((entry) => entry.accountId === id)).toBe(false);
+  });
+
+  it('leaves an archived account alone — it never reconciles, by design', async () => {
+    const id = await account();
+    await db
+      .update(budgetPeriods)
+      .set({ lastReconciledAt: new Date(NOW.getTime() - 5 * 3600_000) })
+      .where(eq(budgetPeriods.adAccountId, id));
+    await db
+      .update(adAccounts)
+      .set({ archivedAt: NOW, archivedReason: 'conta errada' })
+      .where(eq(adAccounts.id, id));
+
+    const stale = await enforceReconciliationFreshness(db, { maxAgeMinutes: 120, now: NOW });
+
+    expect(stale.some((entry) => entry.accountId === id)).toBe(false);
+    const row = await db.query.adAccounts.findFirst({ where: eq(adAccounts.id, id) });
+    expect(row?.killSwitchEngaged).toBe(false);
+  });
+
+  it('reports a period that was opened but never reconciled as unknown, not fresh', async () => {
+    const id = await account();
+    expect(await reconciliationFreshness(db, id, { now: NOW })).toMatchObject({
+      fresh: false,
+      reason: 'never_reconciled',
+    });
+
+    const client = new FakeMetaClient({ campaigns: [] });
+    await reconcileAccount(db, client, id, NOW);
+    expect(await reconciliationFreshness(db, id, { now: NOW })).toMatchObject({ fresh: true });
+    expect(
+      await reconciliationFreshness(db, id, { now: new Date(NOW.getTime() + 121 * 60_000) }),
+    ).toMatchObject({ fresh: false, reason: 'stale', ageMinutes: 121 });
   });
 });
 

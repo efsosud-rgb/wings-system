@@ -1,4 +1,4 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   adAccounts,
@@ -322,19 +322,69 @@ export async function reconcileAccount(
   };
 }
 
+/** How old a reconciliation may be before the true spend counts as unknown. */
+export const RECONCILIATION_MAX_AGE_MINUTES = 120;
+
+export type ReconciliationFreshness =
+  | { fresh: true; ageMinutes: number }
+  | { fresh: false; ageMinutes: number | null; reason: 'never_reconciled' | 'stale' };
+
 /**
- * Dead-man switch. If an account has not reconciled within the window, stop
- * spending: a stale reconciliation means we do not know the true spend.
+ * Whether an account's spend is known recently enough to act on.
+ *
+ * The dead-man switch as seen from the write path. It reads state and changes
+ * none, so the executor can ask before every write even when the scheduled job
+ * that would normally notice staleness is itself the thing that died.
+ *
+ * A period that was opened but never reconciled counts as unknown, not as
+ * fresh: `createdAt` says when we started caring, not what has been spent.
+ */
+export async function reconciliationFreshness(
+  db: Database,
+  adAccountId: string,
+  options: { maxAgeMinutes?: number; now?: Date } = {},
+): Promise<ReconciliationFreshness> {
+  const maxAgeMinutes = options.maxAgeMinutes ?? RECONCILIATION_MAX_AGE_MINUTES;
+  const now = options.now ?? new Date();
+
+  const account = await db.query.adAccounts.findFirst({ where: eq(adAccounts.id, adAccountId) });
+  if (!account) return { fresh: false, ageMinutes: null, reason: 'never_reconciled' };
+
+  const period = await db.query.budgetPeriods.findFirst({
+    where: and(
+      eq(budgetPeriods.adAccountId, adAccountId),
+      eq(budgetPeriods.periodMonth, periodMonthOf(now, account.timezone)),
+    ),
+  });
+  if (!period?.lastReconciledAt) {
+    return { fresh: false, ageMinutes: null, reason: 'never_reconciled' };
+  }
+
+  const ageMinutes = Math.floor((now.getTime() - period.lastReconciledAt.getTime()) / 60_000);
+  return ageMinutes <= maxAgeMinutes
+    ? { fresh: true, ageMinutes }
+    : { fresh: false, ageMinutes, reason: 'stale' };
+}
+
+/**
+ * Dead-man switch. If an account has not reconciled within the window, freeze
+ * it: a stale reconciliation means we do not know the true spend.
+ *
+ * "Freeze" means this system will make no further change to the account. It
+ * does not pause anything on the platform — campaigns already running keep
+ * running, and the platform's own spend cap remains the outer wall.
+ *
+ * Archived accounts are left alone: they never reconcile, by design.
  */
 export async function enforceReconciliationFreshness(
   db: Database,
   options: { maxAgeMinutes?: number; now?: Date } = {},
 ): Promise<{ accountId: string; ageMinutes: number }[]> {
-  const maxAgeMinutes = options.maxAgeMinutes ?? 120;
+  const maxAgeMinutes = options.maxAgeMinutes ?? RECONCILIATION_MAX_AGE_MINUTES;
   const now = options.now ?? new Date();
   const stale: { accountId: string; ageMinutes: number }[] = [];
 
-  const accounts = await db.query.adAccounts.findMany();
+  const accounts = await db.query.adAccounts.findMany({ where: isNull(adAccounts.archivedAt) });
   for (const account of accounts) {
     if (account.killSwitchEngaged) continue;
 

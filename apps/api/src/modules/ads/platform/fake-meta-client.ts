@@ -361,24 +361,54 @@ export class FakeMetaClient implements AdsPlatformClient {
     return { status: 'applied', campaign: this.snapshot(campaign) };
   }
 
-  async pauseCampaign(campaignId: string): Promise<MutationOutcome> {
-    this.calls.push({ method: 'pauseCampaign', args: [campaignId] });
+  /**
+   * A status change fails the same ways a budget change does. The first real
+   * write is a pause, so its unknown outcomes must be rehearsable too.
+   */
+  private setStatus(
+    method: 'pauseCampaign' | 'resumeCampaign',
+    campaignId: string,
+    status: 'PAUSED' | 'ACTIVE',
+  ): MutationOutcome {
+    this.calls.push({ method, args: [campaignId] });
+    const failure = this.takeFailure();
     const campaign = this.campaigns.get(campaignId);
     if (!campaign) return { status: 'rejected', code: 'not_found', message: 'Campaign not found' };
-    campaign.status = 'PAUSED';
+
+    if (failure) {
+      switch (failure.kind) {
+        case 'rate_limit':
+          return {
+            status: 'rejected',
+            code: '80004',
+            message: 'Too many calls to this ad-account',
+          };
+        case 'invalid_token':
+          return { status: 'rejected', code: '190', message: 'Access token invalidated' };
+        case 'transient':
+          return { status: 'unknown', reason: 'transient platform error' };
+        case 'reject':
+          return { status: 'rejected', code: failure.code, message: failure.message };
+        case 'timeout_after_apply':
+          campaign.status = status;
+          return { status: 'unknown', reason: 'request timed out after the change was applied' };
+      }
+    }
+
+    // The platform refuses to resume while the account cap is reached.
+    if (status === 'ACTIVE' && this.capReached) {
+      return { status: 'rejected', code: 'account_cap', message: 'Account spending limit reached' };
+    }
+    campaign.status = status;
     return { status: 'applied', campaign: this.snapshot(campaign) };
   }
 
+  async pauseCampaign(campaignId: string): Promise<MutationOutcome> {
+    return this.setStatus('pauseCampaign', campaignId, 'PAUSED');
+  }
+
   async resumeCampaign(campaignId: string): Promise<MutationOutcome> {
-    this.calls.push({ method: 'resumeCampaign', args: [campaignId] });
-    const campaign = this.campaigns.get(campaignId);
-    if (!campaign) return { status: 'rejected', code: 'not_found', message: 'Campaign not found' };
-    // The platform refuses to resume while the account cap is reached.
-    if (this.capReached) {
-      return { status: 'rejected', code: 'account_cap', message: 'Account spending limit reached' };
-    }
-    campaign.status = 'ACTIVE';
-    return { status: 'applied', campaign: this.snapshot(campaign) };
+    return this.setStatus('resumeCampaign', campaignId, 'ACTIVE');
   }
 
   async setAccountSpendCap(

@@ -13,6 +13,7 @@ import {
 import { writeAudit } from '../../lib/audit.js';
 import { engageKillSwitch, releaseReservation } from './budget-guard.js';
 import type { AdsPlatformClient } from './platform/types.js';
+import { reconciliationFreshness } from './reconcile.js';
 
 /**
  * Execution: the first and only place a change reaches a real ad platform.
@@ -25,7 +26,10 @@ import type { AdsPlatformClient } from './platform/types.js';
  *   2. the kill switch is off;
  *   3. the budget period still has room for the reserved exposure;
  *   4. the platform still looks the way the approval assumed;
- *   5. nothing has executed this change already.
+ *   5. nothing has executed this change already;
+ *   6. the client is bound to the account the change belongs to;
+ *   7. the account reconciled recently, so the spend the cap was checked
+ *      against is real rather than remembered.
  *
  * A timeout is treated as "maybe it happened", never as a failure to retry.
  */
@@ -39,6 +43,8 @@ export type ExecutionRefusal =
   | 'platform_drift'
   | 'already_executed'
   | 'writes_disabled'
+  | 'wrong_account'
+  | 'reconciliation_stale'
   | 'campaign_missing';
 
 export type ExecutionResult =
@@ -128,6 +134,36 @@ export async function executeApprovedChange(
     return refuse(
       'writes_disabled',
       'Execução em contas reais está desabilitada nesta configuração.',
+    );
+  }
+
+  // 6. A client writes to whichever account it was built for. The ingestion
+  // loop once filed one account's data under another this way; here the same
+  // mistake would move another account's money.
+  if (client.accountExternalId !== account.externalId) {
+    return refuse('wrong_account', 'O cliente da plataforma não pertence à conta desta alteração.');
+  }
+
+  // 7. Dead-man switch. Checked here, not only by the scheduled job, because
+  // the job that would notice staleness may be the very thing that stopped.
+  // A refusal changes nothing: run the ingestion, then try again.
+  const freshness = await reconciliationFreshness(db, account.id, { now });
+  if (!freshness.fresh) {
+    await db.insert(adGuardrailEvents).values({
+      adAccountId: account.id,
+      kind: 'reconciliation_stale',
+      detail: {
+        note: 'Execução recusada: gasto real desconhecido',
+        reason: freshness.reason,
+        ageMinutes: freshness.ageMinutes,
+        changeRequestId: change.id,
+      },
+    });
+    return refuse(
+      'reconciliation_stale',
+      freshness.reason === 'never_reconciled'
+        ? 'Esta conta ainda não foi reconciliada neste mês. Rode a ingestão antes de executar.'
+        : `A última reconciliação tem ${freshness.ageMinutes} min. Rode a ingestão antes de executar.`,
     );
   }
 
