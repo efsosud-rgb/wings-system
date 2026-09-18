@@ -93,7 +93,10 @@ async function main() {
     const cycle = await runIngestionCycle(db, accounts, {
       // One client per account. Reusing a single client across accounts is how
       // one account's campaigns ended up filed under another.
-      clientFor: (account) => createMetaClient(env, account.externalId).client,
+      // Always a reader, even while the write switch is on for a supervised
+      // session: this job has no business holding a client that can spend.
+      clientFor: (account) =>
+        createMetaClient({ ...env, ADS_WRITES_ENABLED: false }, account.externalId).client,
       since,
       now,
       notifier: createAlertNotifier(env, db),

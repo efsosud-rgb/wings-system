@@ -450,6 +450,8 @@ export function renderAlertsSheet(alerts: OpenAlertRow[], now = new Date()): str
           `${String(detail.maxDailyReach)}, gasto ${brl(detail.spendCents)}`,
       );
       lines.push(`- **Como é estimada:** ${String(detail.estimate)}`);
+      // The stored figure is an upper bound; only the platform knows the real one.
+      lines.push('- **Frequência de 7 dias no Gerenciador (preencher):** ______');
     } else {
       lines.push(`- **Detalhe:** \`${JSON.stringify(detail)}\``);
     }
