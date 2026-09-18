@@ -137,6 +137,57 @@ históricas**. A primeira medição de sobreentrega acusou 4,87× quando o real 
 Sem isso, qualquer pergunta futura do tipo "essa campanha entregou acima do
 orçamento?" fica sem resposta depois da primeira alteração.
 
+## Dois achados de campo que custaram caro
+
+### 1. Um cliente só pode escrever na própria conta
+
+O laço de ingestão construía **um** cliente a partir de `META_WRITE_ACCOUNT_ID`
+e o reusava para cada conta do banco. Com uma conta só, invisível. Com duas, na
+primeira execução real, espelhou os dados da conta ativa **dentro da linha da
+conta antiga**: 84 campanhas, 202 conjuntos, R$ 636,93 de gasto e o teto da
+plataforma, tudo arquivado sob uma conta que nunca veiculou nada — e a conta
+certa ficou vazia.
+
+O bug é **anterior a esta onda**: teria aparecido no dia em que o multi-conta
+entrasse, provavelmente em produção.
+
+Correção: `AdsPlatformClient` declara `accountExternalId`, e `reconcileAccount`,
+`syncAds` e `ingestMetrics` **recusam** quando ele não bate com a linha da conta
+que estão escrevendo. A checagem vale para clientes **live**; um dublê de teste
+tem o vínculo que o teste quiser, então a trava é coberta com um cliente real e
+`fetch` injetado.
+
+### 2. Paginação da Meta: `cursors.after` NÃO encerra o laço
+
+A conta real (84 campanhas, 202 conjuntos, **660 anúncios**) faz a Meta
+responder _"Please reduce the amount of data you're asking for"_ em vez de
+truncar — paginar não é otimização, é a única forma de a chamada funcionar.
+
+> ⚠️ **A Meta devolve `paging.cursors.after` mesmo na última página.** Só a
+> presença de `paging.next` indica que existe outra página. Usar o cursor como
+> sinal de parada pagina até o limite e devolve o mesmo conteúdo repetido — na
+> primeira tentativa, 100 linhas onde havia 2. Um teste já existente pegou isso.
+
+Há também uma proteção contra cursor repetido, e páginas pequenas (25 para
+anúncios com criativos, 50 para campanhas e conjuntos, 100 para insights).
+
+## Limpeza de dados: corrigir para frente, nunca reescrever
+
+A limpeza do espelhamento errado esbarrou no gatilho append-only de
+`ad_spend_snapshots` — **o guardrail funcionando como projetado**. Um livro-razão
+de dinheiro não se apaga.
+
+O que foi feito:
+
+- as 82 campanhas erradas **sem** referência no livro-razão foram removidas,
+  com seus conjuntos;
+- **2 campanhas permanecem** sob a conta arquivada porque snapshots
+  append-only as referenciam. Ficam inertes;
+- os 25 snapshots errados **continuam lá**, e foram **compensados**: uma linha
+  nova de gasto zero por (campanha, dia), com `source` explicando o motivo.
+  Como a reconciliação usa a leitura mais recente por campanha/dia, o gasto
+  efetivo passou a zero **sem apagar o erro**, que continua visível com data.
+
 ## O que falta para multi-conta (fora do escopo desta onda)
 
 As 4 contas já estão atribuídas aos dois usuários de sistema, mas o sistema
