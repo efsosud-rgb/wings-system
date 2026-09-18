@@ -357,8 +357,18 @@ describe('a request to create a campaign', () => {
     formatKey: 'feed_square',
     destinationUrl: 'https://wingscompany.com.br/franquia',
     variations: [
-      { headline: 'Leve a Wings', primaryText: 'Fale com a gente.', callToAction: 'LEARN_MORE' },
-      { headline: 'Seja franqueado', primaryText: 'Suporte completo.', callToAction: 'CONTACT_US' },
+      {
+        creativeId: '11111111-1111-4111-8111-111111111111',
+        headline: 'Leve a Wings',
+        primaryText: 'Fale com a gente.',
+        callToAction: 'LEARN_MORE',
+      },
+      {
+        creativeId: '22222222-2222-4222-8222-222222222222',
+        headline: 'Seja franqueado',
+        primaryText: 'Suporte completo.',
+        callToAction: 'CONTACT_US',
+      },
     ],
     startDate: '2026-09-20',
     endDate: '2026-09-29',

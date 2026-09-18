@@ -64,6 +64,23 @@ nome repetido no pedido. Motivo: um create que dá timeout não devolve id, ent�
 - [ ] A conta tem restrição ativa (código 2643145 no spike 6.0). Ela impede
       criar campanha?
 
+## Criativos e pré-visualização
+
+- As imagens sobem para o **nosso** banco (`ad_creative_uploads`, `bytea`,
+  PNG/JPEG até 8 MB, lado menor ≥ 600 px). Tipo e dimensões são lidos dos
+  bytes no servidor; o que o navegador diz é ignorado. São imutáveis, e o hash
+  da aprovação cobre os ids — a imagem que o aprovador viu não vira outra.
+  **Nenhuma imagem vai para a Meta**: subir imagem (`adimages`) é uma escrita
+  que não existe no adapter.
+- A prévia na tela é **nossa**, aproximada, e diz isso. **A prévia oficial da
+  Meta não foi validada** — o spike 6.0 não tratou dela. Ela exige o ID da
+  página do Facebook e a imagem por URL pública ou já dentro da Meta.
+- [ ] Rodar `spike-preview.ts` (somente leitura, só GETs) com o token em mãos:
+      `pnpm --filter @wings/api exec tsx src/modules/ads/spike-preview.ts
+    <id-da-página> <url-https-pública-de-uma-imagem>`. Responde se
+      `generatepreviews` aceita criativo inline, imagem por URL e o token de
+      leitura. Anotar aqui o resultado antes de construir a integração.
+
 ## O que falta para o sacrifício fechar
 
 **Apagar a campanha não existe no sistema.** Não há `delete_campaign` no

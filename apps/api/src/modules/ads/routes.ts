@@ -5,10 +5,15 @@ import {
   type ApprovalListItem,
   type CampaignDraft,
 } from '@wings/shared';
-import { and, asc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { adAccounts, adApprovalRequests, auditLog } from '../../db/schema/index.js';
+import {
+  adAccounts,
+  adApprovalRequests,
+  adCreativeUploads,
+  auditLog,
+} from '../../db/schema/index.js';
 import { decideApproval, gateChange } from './approvals.js';
 import { reserveCampaignCreation } from './budget-guard.js';
 import { nextPendingInGroup, pendingGroups } from './batches.js';
@@ -341,6 +346,19 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
           error: 'invalid_request',
           message: issue?.message ?? 'Dados inválidos',
           path: issue?.path ?? [],
+        });
+      }
+
+      // Every variation points at an image that was really uploaded here.
+      const creativeIds = [...new Set(parsed.data.variations.map((v) => v.creativeId))];
+      const known = await db
+        .select({ id: adCreativeUploads.id })
+        .from(adCreativeUploads)
+        .where(inArray(adCreativeUploads.id, creativeIds));
+      if (known.length !== creativeIds.length) {
+        return reply.status(400).send({
+          error: 'creative_not_found',
+          message: 'Um dos criativos não foi encontrado. Envie a imagem de novo.',
         });
       }
 

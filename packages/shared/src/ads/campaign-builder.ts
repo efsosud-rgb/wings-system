@@ -125,6 +125,29 @@ export const CREATIVE_FORMATS: Record<PaidPlatformKey, readonly CreativeFormat[]
   linkedin: [],
 };
 
+/** What the server says about an image it accepted. Read from the bytes. */
+export interface CreativeUpload {
+  id: string;
+  mimeType: 'image/png' | 'image/jpeg';
+  width: number;
+  height: number;
+  byteSize: number;
+}
+
+/**
+ * Whether an image has the proportions of a format, within 2%. A mismatch is
+ * a warning, never a refusal: the platform crops, and the operator may want
+ * exactly that.
+ */
+export function matchesFormat(
+  image: { width: number; height: number },
+  format: CreativeFormat,
+): boolean {
+  const wanted = format.width / format.height;
+  const actual = image.width / image.height;
+  return Math.abs(actual - wanted) / wanted <= 0.02;
+}
+
 // ---------------------------------------------------------------------------
 // Calls to action
 // ---------------------------------------------------------------------------
@@ -384,6 +407,8 @@ const compliantText = (max: number, label: string) =>
     });
 
 export const copyVariationSchema = z.object({
+  /** The uploaded image this copy goes with; the server checks it exists. */
+  creativeId: z.uuid({ error: 'Envie o criativo desta variação' }),
   headline: compliantText(HEADLINE_MAX, 'o título'),
   primaryText: compliantText(PRIMARY_TEXT_MAX, 'o texto'),
   callToAction: z.enum(CALLS_TO_ACTION),

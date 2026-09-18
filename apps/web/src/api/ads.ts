@@ -5,6 +5,7 @@ import type {
   CampaignDraft,
   ChangeSimulation,
   CockpitSnapshot,
+  CreativeUpload,
   NextPendingLink,
   PendingGroup,
 } from '@wings/shared';
@@ -119,5 +120,12 @@ export function useRequestCampaign() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['ads'] });
     },
+  });
+}
+
+/** Uploads one creative image. It goes to our database, never to a platform. */
+export function useUploadCreative() {
+  return useMutation({
+    mutationFn: (file: File) => api.upload<{ creative: CreativeUpload }>('/ads/creatives', file),
   });
 }

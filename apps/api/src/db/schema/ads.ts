@@ -3,7 +3,9 @@ import {
   bigint,
   bigserial,
   boolean,
+  customType,
   date,
+  integer,
   index,
   jsonb,
   pgEnum,
@@ -248,6 +250,32 @@ export const adSets = pgTable(
   },
   (table) => [uniqueIndex('ad_sets_campaign_external_uq').on(table.campaignId, table.externalId)],
 );
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => 'bytea',
+});
+
+/**
+ * Creative images uploaded in the studio.
+ *
+ * Kept in the database on purpose: a handful of images of a few MB each, backed
+ * up with everything else, and no volume to configure on Coolify. Immutable —
+ * a draft's approval hash covers the ids of its creatives, so an image an
+ * approver looked at can never become a different image. Width, height and
+ * type are read from the bytes on the server, never taken from the client.
+ */
+export const adCreativeUploads = pgTable('ad_creative_uploads', {
+  tenantId: tenantId(),
+  id: uuid('id').primaryKey().defaultRandom(),
+  mimeType: text('mime_type').notNull(),
+  width: integer('width').notNull(),
+  height: integer('height').notNull(),
+  byteSize: integer('byte_size').notNull(),
+  sha256: text('sha256').notNull(),
+  data: bytea('data').notNull(),
+  uploadedBy: uuid('uploaded_by').references(() => employees.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 /**
  * A campaign somebody built in the studio and asked to have created.

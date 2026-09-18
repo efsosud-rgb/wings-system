@@ -21,16 +21,20 @@ import {
   campaignDraftSchema,
   checkCopyCompliance,
   estimateCostCents,
+  matchesFormat,
   type CampaignDraft,
   type CampaignDraftInput,
   type ComplianceFinding,
+  type CreativeFormat,
+  type CreativeUpload,
   type PacingSummary,
 } from '@wings/shared';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useFieldArray, useForm, type Resolver } from 'react-hook-form';
 import { Link } from 'react-router-dom';
-import { useCockpit, useRequestCampaign } from '../../api/ads.js';
+import { useCockpit, useRequestCampaign, useUploadCreative } from '../../api/ads.js';
 import { Alert, Button, Field, Input, Select } from '../ui.js';
+import { AdPreview, ApproximatePreviewNote, creativeUrl } from './AdPreview.js';
 import { formatBrl, formatDate, parseBrlToCents, todayInSaoPaulo } from './format.js';
 
 /**
@@ -122,6 +126,79 @@ function AccountCeiling({ pacing }: { pacing: PacingSummary | null | undefined }
   );
 }
 
+const ACCEPTED_TYPES = ['image/png', 'image/jpeg'];
+
+/**
+ * One variation's image. Uploading happens on choosing the file, so the form
+ * only ever holds the id of something the server has already accepted.
+ */
+function CreativeSlot({
+  label,
+  creativeId,
+  format,
+  error,
+  onUploaded,
+}: {
+  label: string;
+  creativeId: string;
+  format: CreativeFormat | undefined;
+  error: string | undefined;
+  onUploaded: (creative: CreativeUpload) => void;
+}) {
+  const upload = useUploadCreative();
+  const [problem, setProblem] = useState<string | null>(null);
+  const [uploaded, setUploaded] = useState<CreativeUpload | null>(null);
+  const current = uploaded && uploaded.id === creativeId ? uploaded : null;
+
+  return (
+    <div className="builder-creative">
+      <div className="builder-creative-thumb">
+        {creativeId ? (
+          <img src={creativeUrl(creativeId)} alt={`Criativo — ${label}`} />
+        ) : (
+          <span className="muted">Sem imagem</span>
+        )}
+      </div>
+      <div>
+        <Field label={`Imagem — ${label}`} error={problem ?? error} hint="PNG ou JPEG, até 8 MB.">
+          <input
+            type="file"
+            className="control"
+            accept={ACCEPTED_TYPES.join(',')}
+            disabled={upload.isPending}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (!file) return;
+              setProblem(null);
+              if (!ACCEPTED_TYPES.includes(file.type)) {
+                setProblem('Use uma imagem PNG ou JPEG.');
+                return;
+              }
+              upload.mutate(file, {
+                onSuccess: ({ creative }) => {
+                  setUploaded(creative);
+                  onUploaded(creative);
+                },
+                onError: (failure) => setProblem(failure.message),
+              });
+            }}
+          />
+        </Field>
+        {upload.isPending && <p className="field-hint">Enviando…</p>}
+        {current && (
+          <p className="field-hint">
+            {current.width} × {current.height} px
+            {format &&
+              (matchesFormat(current, format)
+                ? ` · ✓ proporção ${format.ratio}`
+                : ` · ⚠️ proporção diferente de ${format.ratio}: a plataforma vai cortar a imagem`)}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
   const today = todayInSaoPaulo();
   const cockpit = useCockpit(7);
@@ -144,6 +221,7 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
       formatKey: 'feed_square',
       destinationUrl: '',
       variations: Array.from({ length: MIN_VARIATIONS }, () => ({
+        creativeId: '',
         headline: '',
         primaryText: '',
         callToAction: 'LEARN_MORE' as const,
@@ -293,9 +371,24 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
             Escolher do Drive (em breve)
           </Button>
         </div>
-        <PendingInThisWave>
-          Upload direto da imagem — entra junto com a pré-visualização, na etapa 3 desta onda.
-        </PendingInThisWave>
+        <p className="field-hint">
+          Uma imagem por variação. Ela fica guardada no Wings System — nada é enviado à Meta.
+        </p>
+        {variations.fields.map((field, index) => (
+          <CreativeSlot
+            key={field.id}
+            label={`Variação ${index + 1}`}
+            creativeId={values.variations[index]?.creativeId ?? ''}
+            format={format}
+            error={errors.variations?.[index]?.creativeId?.message}
+            onUploaded={(creative) =>
+              setValue(`variations.${index}.creativeId`, creative.id, {
+                shouldDirty: true,
+                shouldValidate: submitCount > 0,
+              })
+            }
+          />
+        ))}
       </BuilderSection>
 
       <BuilderSection step={6} title="Formato e dimensão">
@@ -343,7 +436,12 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
             type="button"
             variant="ghost"
             onClick={() =>
-              variations.append({ headline: '', primaryText: '', callToAction: 'LEARN_MORE' })
+              variations.append({
+                creativeId: '',
+                headline: '',
+                primaryText: '',
+                callToAction: 'LEARN_MORE',
+              })
             }
           >
             + Adicionar variação
@@ -436,9 +534,21 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
       </BuilderSection>
 
       <BuilderSection step={12} title="Pré-visualização">
-        <PendingInThisWave>
-          Prévia do anúncio gerada pela Meta — entra na etapa 3 desta onda.
-        </PendingInThisWave>
+        <div className="ad-preview-row">
+          {values.variations.map((variation, index) => (
+            <AdPreview
+              key={variations.fields[index]?.id ?? index}
+              label={`Variação ${index + 1}`}
+              creativeId={variation.creativeId}
+              headline={variation.headline ?? ''}
+              primaryText={variation.primaryText ?? ''}
+              callToAction={variation.callToAction}
+              destinationUrl={values.destinationUrl ?? ''}
+              format={format}
+            />
+          ))}
+        </div>
+        <ApproximatePreviewNote />
       </BuilderSection>
 
       <BuilderSection step={13} title="Resumo — confira tudo">

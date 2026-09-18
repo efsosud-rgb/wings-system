@@ -1,7 +1,6 @@
 import {
   APPROVAL_STATUS_LABEL,
   APPROVAL_TRIGGER_LABEL,
-  CALL_TO_ACTION_LABEL,
   CAMPAIGN_OBJECTIVE_LABEL,
   CHANGE_KIND_LABEL,
   CHANGE_STATUS_LABEL,
@@ -18,6 +17,7 @@ import { hasPermission, useSession } from '../api/auth.js';
 import { useApproval, useDecideApproval, useExecuteApproval } from '../api/ads.js';
 import { ApiError } from '../api/client.js';
 import { ApprovalSimulator } from '../components/ApprovalSimulator.js';
+import { AdPreview, ApproximatePreviewNote } from '../components/campaign-builder/AdPreview.js';
 import { Alert, Button, Field, Input } from '../components/ui.js';
 
 function formatBrl(cents: number | null): string {
@@ -147,15 +147,21 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
           <p className="mono builder-url">{applyUtms(draft.destinationUrl, draft.utms, 0)}</p>
         </div>
       </div>
-      <ol className="draft-variations">
+      <div className="ad-preview-row">
         {draft.variations.map((variation, index) => (
-          <li key={index}>
-            <strong>{variation.headline}</strong>
-            <p>{variation.primaryText}</p>
-            <span className="cell-sub">Botão: {CALL_TO_ACTION_LABEL[variation.callToAction]}</span>
-          </li>
+          <AdPreview
+            key={index}
+            label={`Variação ${index + 1}`}
+            creativeId={variation.creativeId}
+            headline={variation.headline}
+            primaryText={variation.primaryText}
+            callToAction={variation.callToAction}
+            destinationUrl={draft.destinationUrl}
+            format={format}
+          />
         ))}
-      </ol>
+      </div>
+      <ApproximatePreviewNote />
     </section>
   );
 }

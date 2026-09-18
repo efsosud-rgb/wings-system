@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  CREATIVE_FORMATS,
   applyUtms,
   buildUtms,
   campaignDays,
@@ -7,6 +8,7 @@ import {
   campaignDraftSchema,
   checkCopyCompliance,
   estimateCostCents,
+  matchesFormat,
   utmSlug,
   type CampaignDraftInput,
 } from './campaign-builder.js';
@@ -84,6 +86,16 @@ describe('UTMs', () => {
   });
 });
 
+describe('creative proportions', () => {
+  it('matches a format within a small tolerance, whatever the resolution', () => {
+    const square = CREATIVE_FORMATS.meta[0];
+    if (!square) throw new Error('no format');
+    expect(matchesFormat({ width: 2160, height: 2160 }, square)).toBe(true);
+    expect(matchesFormat({ width: 1080, height: 1090 }, square)).toBe(true);
+    expect(matchesFormat({ width: 1200, height: 628 }, square)).toBe(false);
+  });
+});
+
 describe('duration and cost', () => {
   it('counts both ends of the range', () => {
     expect(campaignDays('2026-09-20', '2026-09-20')).toBe(1);
@@ -111,11 +123,13 @@ describe('the draft schema', () => {
     destinationUrl: 'https://wingscompany.com.br/franquia',
     variations: [
       {
+        creativeId: '11111111-1111-4111-8111-111111111111',
         headline: 'Leve a Wings para sua cidade',
         primaryText: 'Fale com a gente.',
         callToAction: 'LEARN_MORE',
       },
       {
+        creativeId: '22222222-2222-4222-8222-222222222222',
         headline: 'Seja um franqueado Wings',
         primaryText: 'Suporte completo.',
         callToAction: 'CONTACT_US',
@@ -144,6 +158,15 @@ describe('the draft schema', () => {
     });
     expect(result.success).toBe(false);
     expect(result.error?.issues[0]?.path).toEqual(['variations', 1, 'headline']);
+  });
+
+  it('demands a creative on every variation', () => {
+    const [first, second] = valid.variations;
+    const result = campaignDraftSchema.safeParse({
+      ...valid,
+      variations: [first, { ...second, creativeId: '' }],
+    });
+    expect(result.error?.issues[0]?.message).toBe('Envie o criativo desta variação');
   });
 
   it('demands two to three variations', () => {

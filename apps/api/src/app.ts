@@ -7,6 +7,7 @@ import { createCpfCrypto, type CpfCrypto } from './lib/cpf-crypto.js';
 import { createMailer, type Mailer } from './lib/mailer.js';
 import { authRoutes } from './modules/auth/routes.js';
 import { cockpitRoutes } from './modules/ads/cockpit-routes.js';
+import { creativeRoutes } from './modules/ads/creative-routes.js';
 import { adsRoutes } from './modules/ads/routes.js';
 import { employeeRoutes } from './modules/employees/routes.js';
 import { authPlugin } from './plugins/auth.js';
@@ -88,6 +89,7 @@ export async function buildApp(deps: {
   await app.register(employeeRoutes);
   await app.register(adsRoutes);
   await app.register(cockpitRoutes);
+  await app.register(creativeRoutes);
 
   return app;
 }

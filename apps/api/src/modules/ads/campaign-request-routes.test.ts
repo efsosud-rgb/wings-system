@@ -72,7 +72,41 @@ async function cookiesFor(role: 'admin_master' | 'marketing' | 'vendedor_expansa
   return { [SESSION_COOKIE]: token };
 }
 
-function draft(overrides: Record<string, unknown> = {}) {
+/** The smallest thing the header reader accepts as a PNG of the given size. */
+function pngOf(width: number, height: number): Buffer {
+  const bytes = Buffer.alloc(33);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes, 0);
+  bytes.writeUInt32BE(13, 8);
+  bytes.write('IHDR', 12, 'latin1');
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  return bytes;
+}
+
+async function upload(cookies: Record<string, string>, body: Buffer, type = 'image/png') {
+  return app.inject({
+    method: 'POST',
+    url: '/ads/creatives',
+    cookies,
+    headers: { 'content-type': type },
+    payload: body,
+  });
+}
+
+let creativeIds: [string, string];
+
+async function draft(overrides: Record<string, unknown> = {}) {
+  if (!creativeIds) {
+    const cookies = await cookiesFor('marketing');
+    const ids = await Promise.all(
+      [1080, 1200].map(
+        async (side) =>
+          (await upload(cookies, pngOf(side, side))).json<{ creative: { id: string } }>().creative
+            .id,
+      ),
+    );
+    creativeIds = [ids[0] as string, ids[1] as string];
+  }
   return {
     platform: 'meta',
     name: `Sacrifício ${randomBytes(3).toString('hex')}`,
@@ -80,8 +114,18 @@ function draft(overrides: Record<string, unknown> = {}) {
     formatKey: 'feed_square',
     destinationUrl: 'https://wingscompany.com.br/franquia',
     variations: [
-      { headline: 'Leve a Wings', primaryText: 'Fale com a gente.', callToAction: 'LEARN_MORE' },
-      { headline: 'Seja franqueado', primaryText: 'Suporte completo.', callToAction: 'CONTACT_US' },
+      {
+        creativeId: creativeIds[0],
+        headline: 'Leve a Wings',
+        primaryText: 'Fale com a gente.',
+        callToAction: 'LEARN_MORE',
+      },
+      {
+        creativeId: creativeIds[1],
+        headline: 'Seja franqueado',
+        primaryText: 'Suporte completo.',
+        callToAction: 'CONTACT_US',
+      },
     ],
     startDate: TODAY,
     endDate: TODAY,
@@ -94,7 +138,7 @@ function draft(overrides: Record<string, unknown> = {}) {
 
 describe('POST /ads/campaign-requests', () => {
   it('lets Marketing ask, and puts the whole campaign in front of the approver', async () => {
-    const payload = draft();
+    const payload = await draft();
     const response = await app.inject({
       method: 'POST',
       url: '/ads/campaign-requests',
@@ -132,7 +176,7 @@ describe('POST /ads/campaign-requests', () => {
       method: 'POST',
       url: '/ads/campaign-requests',
       cookies: marketing,
-      payload: draft(),
+      payload: await draft(),
     });
     const { approvalId } = created.json<{ approvalId: string }>();
     const decision = await app.inject({
@@ -149,7 +193,7 @@ describe('POST /ads/campaign-requests', () => {
       method: 'POST',
       url: '/ads/campaign-requests',
       cookies: await cookiesFor('vendedor_expansao'),
-      payload: draft(),
+      payload: await draft(),
     });
     expect(response.statusCode).toBe(403);
   });
@@ -159,10 +203,20 @@ describe('POST /ads/campaign-requests', () => {
       method: 'POST',
       url: '/ads/campaign-requests',
       cookies: await cookiesFor('marketing'),
-      payload: draft({
+      payload: await draft({
         variations: [
-          { headline: 'Retorno garantido', primaryText: 'Fale.', callToAction: 'LEARN_MORE' },
-          { headline: 'Seja franqueado', primaryText: 'Suporte.', callToAction: 'CONTACT_US' },
+          {
+            creativeId: creativeIds[0],
+            headline: 'Retorno garantido',
+            primaryText: 'Fale.',
+            callToAction: 'LEARN_MORE',
+          },
+          {
+            creativeId: creativeIds[1],
+            headline: 'Seja franqueado',
+            primaryText: 'Suporte.',
+            callToAction: 'CONTACT_US',
+          },
         ],
       }),
     });
@@ -175,9 +229,59 @@ describe('POST /ads/campaign-requests', () => {
       method: 'POST',
       url: '/ads/campaign-requests',
       cookies: await cookiesFor('marketing'),
-      payload: draft({ startPaused: false, dailyBudgetCents: 300_000 }),
+      payload: await draft({ startPaused: false, dailyBudgetCents: 300_000 }),
     });
     expect(response.statusCode).toBe(409);
     expect(response.json<{ error: string }>().error).toBe('usable_would_be_exceeded');
+  });
+});
+
+describe('creative uploads', () => {
+  it('stores what the bytes prove, and serves the same bytes back', async () => {
+    const cookies = await cookiesFor('marketing');
+    const bytes = pngOf(1080, 1350);
+    // The browser's claim about the type is ignored: the bytes are a PNG.
+    const response = await upload(cookies, bytes, 'image/jpeg');
+    expect(response.statusCode).toBe(201);
+    const { creative } = response.json<{ creative: { id: string; mimeType: string } }>();
+    expect(creative).toMatchObject({ mimeType: 'image/png', width: 1080, height: 1350 });
+
+    const served = await app.inject({ url: `/ads/creatives/${creative.id}`, cookies });
+    expect(served.headers['content-type']).toBe('image/png');
+    expect(served.headers['x-content-type-options']).toBe('nosniff');
+    expect(served.rawPayload.equals(bytes)).toBe(true);
+  });
+
+  it('refuses a file that is not an image, and one that is too small', async () => {
+    const cookies = await cookiesFor('marketing');
+    const fake = await upload(cookies, Buffer.from('<svg onload=alert(1)>'));
+    expect(fake.statusCode).toBe(400);
+    expect(fake.json<{ error: string }>().error).toBe('invalid_image');
+
+    const small = await upload(cookies, pngOf(300, 300));
+    expect(small.json<{ error: string }>().error).toBe('image_too_small');
+  });
+
+  it('refuses an upload from someone who may not ask for campaigns', async () => {
+    const response = await upload(await cookiesFor('vendedor_expansao'), pngOf(1080, 1080));
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('refuses a campaign pointing at a creative that was never uploaded', async () => {
+    const payload = await draft();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/ads/campaign-requests',
+      cookies: await cookiesFor('marketing'),
+      payload: {
+        ...payload,
+        variations: [
+          payload.variations[0],
+          { ...payload.variations[1], creativeId: '33333333-3333-4333-8333-333333333333' },
+        ],
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ error: string }>().error).toBe('creative_not_found');
   });
 });

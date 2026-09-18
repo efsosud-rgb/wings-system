@@ -17,7 +17,27 @@ const launchState: { current: { isSuccess: boolean; data?: { approvalId: string 
   current: { isSuccess: false },
 };
 
+const uploadSize = { current: { width: 1080, height: 1080 } };
+let uploads = 0;
+
 vi.mock('../../api/ads.js', () => ({
+  useUploadCreative: () => ({
+    isPending: false,
+    mutate: (
+      _file: File,
+      options: { onSuccess: (result: { creative: Record<string, unknown> }) => void },
+    ) => {
+      uploads += 1;
+      options.onSuccess({
+        creative: {
+          id: `0000000${uploads}-0000-4000-8000-000000000000`,
+          mimeType: 'image/png',
+          byteSize: 1,
+          ...uploadSize.current,
+        },
+      });
+    },
+  }),
   useCockpit: () => ({ data: { cockpit: { pacing: pacing.current } }, isLoading: false }),
   useRequestCampaign: () => ({
     mutate: requestCampaign,
@@ -55,7 +75,13 @@ afterEach(() => {
   pacing.current = buildPacing();
   launchState.current = { isSuccess: false };
   requestCampaign.mockReset();
+  uploadSize.current = { width: 1080, height: 1080 };
+  uploads = 0;
 });
+
+function chooseImage(input: Element, type = 'image/png') {
+  fireEvent.change(input, { target: { files: [new File(['x'], 'criativo.png', { type })] } });
+}
 
 function fillValidCampaign() {
   type(screen.getByLabelText(/^Nome da campanha/), 'Sacrifício — teste de escrita');
@@ -67,6 +93,7 @@ function fillValidCampaign() {
   type(titles[1] as Element, 'Seja um franqueado Wings');
   type(texts[1] as Element, 'Suporte completo.');
   type(screen.getByLabelText(/Verba por dia/), '6,00');
+  for (const input of screen.getAllByLabelText(/^Imagem — Variação/)) chooseImage(input);
 }
 
 const type = (element: Element, value: string) => fireEvent.change(element, { target: { value } });
@@ -122,6 +149,28 @@ describe('the paid-media builder', () => {
     expect((screen.getByLabelText('utm_campaign') as HTMLInputElement).value).toBe('minha-tag');
   });
 
+  it('takes one image per variation and says when it will be cropped', () => {
+    render(<PaidMediaBuilder canRequest />);
+    const [first, second] = screen.getAllByLabelText(/^Imagem — Variação/);
+    chooseImage(first as Element);
+    expect(screen.getByText(/1080 × 1080 px · ✓ proporção 1:1/)).toBeTruthy();
+
+    uploadSize.current = { width: 1200, height: 628 };
+    chooseImage(second as Element);
+    expect(screen.getByText(/proporção diferente de 1:1/)).toBeTruthy();
+
+    // The preview shows each uploaded image next to its copy.
+    expect(screen.getAllByAltText(/^Criativo — Variação 1/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/Não é a prévia oficial da Meta/)).toBeTruthy();
+  });
+
+  it('refuses a file type before sending it anywhere', () => {
+    render(<PaidMediaBuilder canRequest />);
+    chooseImage(screen.getAllByLabelText(/^Imagem — Variação/)[0] as Element, 'image/webp');
+    expect(screen.getByText('Use uma imagem PNG ou JPEG.')).toBeTruthy();
+    expect(uploads).toBe(0);
+  });
+
   it('allows a third variation and no more', () => {
     render(<PaidMediaBuilder canRequest />);
     expect(screen.getAllByLabelText(/^Título/)).toHaveLength(2);
@@ -157,6 +206,10 @@ describe('the paid-media builder', () => {
       name: 'Sacrifício — teste de escrita',
       dailyBudgetCents: 600,
       startPaused: true,
+      variations: [
+        { creativeId: '00000001-0000-4000-8000-000000000000' },
+        { creativeId: '00000002-0000-4000-8000-000000000000' },
+      ],
     });
   });
 

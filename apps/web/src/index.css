@@ -1206,10 +1206,126 @@ textarea.control {
   font-family: inherit;
 }
 
-.draft-variations {
-  margin: 14px 0 0 18px;
+.builder-creative {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.builder-creative-thumb {
+  width: 96px;
+  height: 96px;
+  border: 1px dashed var(--wings-border);
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  font-size: 11px;
+}
+
+.builder-creative-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* ---------- prévia aproximada do anúncio ---------- */
+.ad-preview-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.ad-preview {
+  width: 260px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  font-size: 13px;
+  gap: 6px;
+}
+
+.ad-preview-story {
+  width: 200px;
+}
+
+.ad-preview-card {
+  background: #fff;
+  color: #1c1e21;
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 12.5px;
+}
+
+.ad-preview-card .muted {
+  color: #65676b;
+}
+
+.ad-preview-page {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+}
+
+.ad-preview-page small,
+.ad-preview-footer small {
+  display: block;
+  font-size: 11px;
+}
+
+.ad-preview-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--wings-accent);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+}
+
+.ad-preview-text {
+  padding: 0 10px 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ad-preview-media {
+  position: relative;
+  background: #e4e6eb;
+  display: grid;
+  place-items: center;
+}
+
+.ad-preview-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.ad-preview-story .ad-preview-text {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: 24px 10px 10px;
+  color: #fff;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+}
+
+.ad-preview-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #f0f2f5;
+}
+
+.ad-preview-cta {
+  background: #e4e6eb;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-weight: 600;
+  white-space: nowrap;
 }
