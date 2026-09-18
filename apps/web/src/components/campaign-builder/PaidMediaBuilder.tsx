@@ -46,7 +46,7 @@ import {
   useUploadCreative,
 } from '../../api/ads.js';
 import { Alert, Button, Field, Input, Select } from '../ui.js';
-import { AdPreview, ApproximatePreviewNote, creativeUrl } from './AdPreview.js';
+import { AdPreviewGallery, creativeUrl } from './AdPreview.js';
 import { formatBrl, formatDate, parseBrlToCents, todayInSaoPaulo } from './format.js';
 
 /**
@@ -770,21 +770,16 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         title="Pré-visualização"
         why="O anúncio como a pessoa vai ver, com o corte do formato. É a última chance de pegar texto cortado ou imagem mal enquadrada."
       >
-        <div className="ad-preview-row">
-          {values.variations.map((variation, index) => (
-            <AdPreview
-              key={variations.fields[index]?.id ?? index}
-              label={`Variação ${index + 1}`}
-              creativeId={variation.creativeId}
-              headline={variation.headline ?? ''}
-              primaryText={variation.primaryText ?? ''}
-              callToAction={variation.callToAction}
-              destinationUrl={values.destinationUrl ?? ''}
-              format={format}
-            />
-          ))}
-        </div>
-        <ApproximatePreviewNote />
+        <AdPreviewGallery
+          variations={values.variations.map((variation) => ({
+            creativeId: variation.creativeId,
+            headline: variation.headline ?? '',
+            primaryText: variation.primaryText ?? '',
+            callToAction: variation.callToAction,
+          }))}
+          destinationUrl={values.destinationUrl ?? ''}
+          format={format}
+        />
       </BuilderSection>
 
       <BuilderSection

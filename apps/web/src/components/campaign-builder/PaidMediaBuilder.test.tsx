@@ -228,6 +228,30 @@ describe('the paid-media builder', () => {
     expect(screen.getByText(/Não é a prévia oficial da Meta/)).toBeTruthy();
   });
 
+  it('previews in the placement of the chosen format, and lets the operator see the other cut', () => {
+    render(<PaidMediaBuilder canRequest />);
+    const media = () => document.querySelector<HTMLElement>('.ad-preview-media')?.style.aspectRatio;
+    const pressed = (name: string) =>
+      screen.getByRole('button', { name }).getAttribute('aria-pressed');
+
+    // Feed quadrado is the default format.
+    expect(pressed('Feed')).toBe('true');
+    expect(media()).toBe('1080 / 1080');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stories' }));
+    expect(media()).toBe('9 / 16');
+    expect(screen.getByText(/É assim que a mesma imagem seria cortada em Stories/)).toBeTruthy();
+
+    // Back on the chosen side, the preview follows section 6 again.
+    fireEvent.click(screen.getByRole('button', { name: 'Feed' }));
+    type(screen.getByLabelText(/^Formato/), 'stories_reels');
+    expect(pressed('Stories')).toBe('true');
+    expect(media()).toBe('9 / 16');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Feed' }));
+    expect(media()).toBe('4 / 5');
+  });
+
   it('refuses a file type before sending it anywhere', () => {
     render(<PaidMediaBuilder canRequest />);
     chooseImage(screen.getAllByLabelText(/^Imagem — Variação/)[0] as Element, 'image/webp');
