@@ -1,5 +1,12 @@
 # Primeira escrita real na Meta — roteiro
 
+> ⚠️ **Plano alterado em 18/09/2026.** Não haverá sessão com o gestor de
+> tráfego e nenhuma campanha vigente será tocada. O primeiro teste real passa a
+> ser uma campanha de sacrifício criada pelo sistema — ver
+> [criar-campanha.md](criar-campanha.md). Os passos de preparação, verificação
+> e emergência abaixo continuam valendo; o alvo (`pause_campaign` numa campanha
+> do gestor) não.
+
 Roteiro para seguir **na hora**, sem improvisar. Alvo: conta Fly High
 (`act_694058302567457`), em **staging**, com o gestor de tráfego e o aprovador
 (Admin Master) presentes. Prazo de trabalho: quarta, 23/09/2026.

@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
-import { eq, sql } from 'drizzle-orm';
+import { campaignDaysInMonth, type CampaignDraft } from '@wings/shared';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   adAccounts,
+  adCampaignDrafts,
   adCampaigns,
   adChangeRequests,
   adGuardrailEvents,
@@ -37,7 +39,9 @@ export type GuardRefusal =
   | 'usable_would_be_exceeded'
   | 'implausible_amount'
   | 'period_not_open'
-  | 'campaign_not_found';
+  | 'campaign_not_found'
+  | 'start_in_past'
+  | 'duplicate_name';
 
 export type GuardResult<T> =
   { ok: true; value: T } | { ok: false; reason: GuardRefusal; message: string };
@@ -184,6 +188,133 @@ async function recordGuardrailEvent(
   await db.insert(adGuardrailEvents).values({ adAccountId, kind, detail });
 }
 
+type Transaction = Parameters<Parameters<Database['transaction']>[0]>[0];
+
+/** First day of the month `now` falls in, in the account's timezone. */
+function periodMonthOf(now: Date, timezone: string): string {
+  const month = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+  })
+    .format(now)
+    .slice(0, 7);
+  return `${month}-01`;
+}
+
+/**
+ * Locks the open period row. Concurrent reservations serialise here, so two
+ * changes can never both fit into the same remaining budget.
+ */
+async function lockOpenPeriod(
+  tx: Transaction,
+  adAccountId: string,
+  periodMonth: string,
+): Promise<PeriodState | null> {
+  const locked = await tx.execute<
+    {
+      id: string;
+      cap_cents: string;
+      usable_cents: string;
+      committed_cents: string;
+      spent_cents: string;
+      platform_remaining_cents: string | null;
+      platform_limit_source: string | null;
+    } & Record<string, unknown>
+  >(sql`
+    select id, cap_cents, usable_cents, committed_cents, spent_cents,
+           platform_remaining_cents, platform_limit_source
+      from ad_budget_periods
+     where ad_account_id = ${adAccountId} and period_month = ${periodMonth}
+       and closed_at is null
+     for update
+  `);
+
+  const row = locked.rows[0];
+  if (!row) return null;
+  return periodState({
+    id: row.id,
+    capCents: Number(row.cap_cents),
+    usableCents: Number(row.usable_cents),
+    committedCents: Number(row.committed_cents),
+    spentCents: Number(row.spent_cents),
+    platformRemainingCents:
+      row.platform_remaining_cents === null ? null : Number(row.platform_remaining_cents),
+    platformLimitSource: row.platform_limit_source,
+  });
+}
+
+/**
+ * The three ceilings every new commitment is judged against — our usable
+ * slice, what the platform itself still allows, and the monthly cap — in one
+ * place, so a change to an existing campaign and the creation of a new one can
+ * never be held to different rules. Returns null when the commitment fits.
+ */
+async function ceilingRefusal(
+  db: Database,
+  adAccountId: string,
+  current: PeriodState,
+  exposureDeltaCents: number,
+  subject: Record<string, unknown>,
+): Promise<{ ok: false; reason: GuardRefusal; message: string } | null> {
+  const newCommitted = Math.max(0, current.committedCents + exposureDeltaCents);
+
+  if (newCommitted > current.usableCents) {
+    await recordGuardrailEvent(db, adAccountId, 'usable_would_be_exceeded', {
+      ...subject,
+      exposureDeltaCents,
+      committedCents: current.committedCents,
+      usableCents: current.usableCents,
+    });
+    return {
+      ok: false,
+      reason: 'usable_would_be_exceeded',
+      message: 'A alteração ultrapassa a parcela utilizável do orçamento do mês.',
+    };
+  }
+  // The platform's own ceiling. Checked here rather than by a database
+  // constraint because this number moves on its own: Meta raises a cap,
+  // Google's prepaid balance drains. A CHECK would refuse to record a limit
+  // that had already dropped below what is committed, which is exactly when
+  // knowing about it matters most.
+  if (
+    current.platformRemainingCents !== null &&
+    exposureDeltaCents > 0 &&
+    newCommitted > current.platformRemainingCents
+  ) {
+    await recordGuardrailEvent(db, adAccountId, 'usable_would_be_exceeded', {
+      ...subject,
+      exposureDeltaCents,
+      newCommittedCents: newCommitted,
+      platformRemainingCents: current.platformRemainingCents,
+      platformLimitSource: current.platformLimitSource,
+      note: 'bloqueado pelo limite da própria plataforma, não pelo teto interno',
+    });
+    return {
+      ok: false,
+      reason: 'platform_limit_would_be_exceeded',
+      message:
+        `A alteração ultrapassa o que a própria plataforma ainda permite gastar ` +
+        `(${current.platformRemainingCents} centavos restantes, fonte ${current.platformLimitSource ?? 'desconhecida'}).`,
+    };
+  }
+
+  if (newCommitted > Math.max(0, current.capCents - current.spentCents)) {
+    await recordGuardrailEvent(db, adAccountId, 'cap_would_be_exceeded', {
+      ...subject,
+      exposureDeltaCents,
+      spentCents: current.spentCents,
+      capCents: current.capCents,
+    });
+    return {
+      ok: false,
+      reason: 'cap_would_be_exceeded',
+      message: 'A alteração ultrapassa o teto mensal desta conta.',
+    };
+  }
+  return null;
+}
+
 /** Opens (or reopens) a month for an account. Caps are recorded, never silent. */
 export async function openPeriod(
   db: Database,
@@ -283,57 +414,15 @@ export async function reserveChange(
   }
 
   return db.transaction(async (tx) => {
-    const month = new Intl.DateTimeFormat('en-CA', {
-      timeZone: account.timezone,
-      year: 'numeric',
-      month: '2-digit',
-    })
-      .format(now)
-      .slice(0, 7);
-    const periodMonth = `${month}-01`;
-
-    // Lock the period row: concurrent reservations serialise here, so two
-    // changes can never both fit into the same remaining budget.
-    const locked = await tx.execute<
-      {
-        id: string;
-        cap_cents: string;
-        usable_cents: string;
-        committed_cents: string;
-        spent_cents: string;
-        platform_remaining_cents: string | null;
-        platform_limit_source: string | null;
-      } & Record<string, unknown>
-    >(sql`
-      select id, cap_cents, usable_cents, committed_cents, spent_cents,
-             platform_remaining_cents, platform_limit_source
-        from ad_budget_periods
-       where ad_account_id = ${input.adAccountId} and period_month = ${periodMonth}
-         and closed_at is null
-       for update
-    `);
-
-    const periodRow = locked.rows[0];
-    if (!periodRow) {
+    const periodMonth = periodMonthOf(now, account.timezone);
+    const current = await lockOpenPeriod(tx, input.adAccountId, periodMonth);
+    if (!current) {
       return {
         ok: false as const,
         reason: 'period_not_open' as const,
         message: 'Nenhum período de orçamento aberto para esta conta neste mês.',
       };
     }
-
-    const current = periodState({
-      id: periodRow.id,
-      capCents: Number(periodRow.cap_cents),
-      usableCents: Number(periodRow.usable_cents),
-      committedCents: Number(periodRow.committed_cents),
-      spentCents: Number(periodRow.spent_cents),
-      platformRemainingCents:
-        periodRow.platform_remaining_cents === null
-          ? null
-          : Number(periodRow.platform_remaining_cents),
-      platformLimitSource: periodRow.platform_limit_source,
-    });
 
     const campaign = await tx.query.adCampaigns.findFirst({
       where: eq(adCampaigns.id, input.campaignId),
@@ -428,61 +517,12 @@ export async function reserveChange(
     // reconciliation re-derives the true figure from the platform either way.
     const newCommitted = Math.max(0, current.committedCents + exposureDeltaCents);
 
-    // Pre-checks give a precise reason; the constraints below are what
+    // Pre-checks give a precise reason; the database constraints are what
     // actually guarantee the outcome.
-    if (newCommitted > current.usableCents) {
-      await recordGuardrailEvent(db, input.adAccountId, 'usable_would_be_exceeded', {
-        campaignId: input.campaignId,
-        exposureDeltaCents,
-        committedCents: current.committedCents,
-        usableCents: current.usableCents,
-      });
-      return {
-        ok: false as const,
-        reason: 'usable_would_be_exceeded' as const,
-        message: 'A alteração ultrapassa a parcela utilizável do orçamento do mês.',
-      };
-    }
-    // The platform's own ceiling. Checked here rather than by a database
-    // constraint because this number moves on its own: Meta raises a cap,
-    // Google's prepaid balance drains. A CHECK would refuse to record a limit
-    // that had already dropped below what is committed, which is exactly when
-    // knowing about it matters most.
-    if (
-      current.platformRemainingCents !== null &&
-      exposureDeltaCents > 0 &&
-      newCommitted > current.platformRemainingCents
-    ) {
-      await recordGuardrailEvent(db, input.adAccountId, 'usable_would_be_exceeded', {
-        campaignId: input.campaignId,
-        exposureDeltaCents,
-        newCommittedCents: newCommitted,
-        platformRemainingCents: current.platformRemainingCents,
-        platformLimitSource: current.platformLimitSource,
-        note: 'bloqueado pelo limite da própria plataforma, não pelo teto interno',
-      });
-      return {
-        ok: false as const,
-        reason: 'platform_limit_would_be_exceeded' as const,
-        message:
-          `A alteração ultrapassa o que a própria plataforma ainda permite gastar ` +
-          `(${current.platformRemainingCents} centavos restantes, fonte ${current.platformLimitSource ?? 'desconhecida'}).`,
-      };
-    }
-
-    if (newCommitted > Math.max(0, current.capCents - current.spentCents)) {
-      await recordGuardrailEvent(db, input.adAccountId, 'cap_would_be_exceeded', {
-        campaignId: input.campaignId,
-        exposureDeltaCents,
-        spentCents: current.spentCents,
-        capCents: current.capCents,
-      });
-      return {
-        ok: false as const,
-        reason: 'cap_would_be_exceeded' as const,
-        message: 'A alteração ultrapassa o teto mensal desta conta.',
-      };
-    }
+    const refusal = await ceilingRefusal(db, input.adAccountId, current, exposureDeltaCents, {
+      campaignId: input.campaignId,
+    });
+    if (refusal) return refusal;
 
     await tx
       .update(budgetPeriods)
@@ -532,6 +572,226 @@ export async function reserveChange(
           committedCents: newCommitted,
           spentCents: current.spentCents,
         }),
+      },
+    };
+  });
+}
+
+/** JSON with keys sorted at every level: jsonb does not keep insertion order. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * Hash an approval of a `create_campaign` is bound to. It covers the whole
+ * draft, so what gets created is exactly what the approver was shown.
+ */
+export function draftPayloadHash(input: {
+  adAccountId: string;
+  payload: unknown;
+  exposureDeltaCents: number;
+}): string {
+  return createHash('sha256')
+    .update(canonicalJson({ kind: 'create_campaign', ...input }))
+    .digest('hex');
+}
+
+/**
+ * Exposure a campaign adds to the current month when it is created.
+ *
+ * Born paused it adds nothing, by the same rule as every other paused
+ * campaign; resuming it later is its own request and reserves then. Born
+ * active it counts from its start (or today) to its end or the month's,
+ * whichever comes first — later months are judged when their period opens.
+ */
+export function creationExposure(
+  draft: Pick<CampaignDraft, 'startPaused' | 'dailyBudgetCents' | 'startDate' | 'endDate'>,
+  today: string,
+): Cents {
+  if (draft.startPaused) return 0;
+  const from = draft.startDate > today ? draft.startDate : today;
+  return exposureOf(draft.dailyBudgetCents, campaignDaysInMonth(from, draft.endDate, today));
+}
+
+export interface CreationReservation extends Reservation {
+  draftId: string;
+}
+
+/**
+ * Validates a campaign somebody wants created and reserves its exposure.
+ *
+ * The counterpart of `reserveChange` for a campaign that does not exist yet:
+ * same kill switch, same locked period, same three ceilings. It stores the
+ * draft and the change request together, so there is never a draft nobody
+ * asked for or a request with nothing behind it.
+ */
+export async function reserveCampaignCreation(
+  db: Database,
+  input: {
+    adAccountId: string;
+    draft: CampaignDraft;
+    requestedBy?: string | null;
+    reason?: string;
+    now?: Date;
+  },
+): Promise<GuardResult<CreationReservation>> {
+  const now = input.now ?? new Date();
+  const { draft } = input;
+
+  const account = await db.query.adAccounts.findFirst({
+    where: eq(adAccounts.id, input.adAccountId),
+  });
+  if (!account) return { ok: false, reason: 'period_not_open', message: 'Conta não encontrada' };
+
+  if (account.killSwitchEngaged) {
+    await recordGuardrailEvent(db, input.adAccountId, 'kill_switch_engaged', {
+      attempted: 'create_campaign',
+    });
+    return {
+      ok: false,
+      reason: 'kill_switch_engaged',
+      message: 'Trava de emergência acionada: nenhuma alteração pode ser feita.',
+    };
+  }
+
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: account.timezone }).format(now);
+  if (draft.startDate < today) {
+    return { ok: false, reason: 'start_in_past', message: 'O início da campanha já passou.' };
+  }
+
+  return db.transaction(async (tx) => {
+    const current = await lockOpenPeriod(
+      tx,
+      input.adAccountId,
+      periodMonthOf(now, account.timezone),
+    );
+    if (!current) {
+      return {
+        ok: false as const,
+        reason: 'period_not_open' as const,
+        message: 'Nenhum período de orçamento aberto para esta conta neste mês.',
+      };
+    }
+
+    // A name is how a person — and resolve-unknown — finds this campaign on
+    // the platform, which hands back no id when a create times out. Checked
+    // under the period lock, so two identical requests cannot both pass.
+    const sameNameOnPlatform = await tx.query.adCampaigns.findFirst({
+      where: and(eq(adCampaigns.adAccountId, input.adAccountId), eq(adCampaigns.name, draft.name)),
+    });
+    const sameNameRequested = await tx
+      .select({ id: adChangeRequests.id })
+      .from(adChangeRequests)
+      .innerJoin(adCampaignDrafts, eq(adCampaignDrafts.id, adChangeRequests.draftId))
+      .where(
+        and(
+          eq(adChangeRequests.adAccountId, input.adAccountId),
+          eq(adCampaignDrafts.name, draft.name),
+          inArray(adChangeRequests.status, [
+            'pending_approval',
+            'approved',
+            'executing',
+            'unknown',
+          ]),
+        ),
+      );
+    if (sameNameOnPlatform || sameNameRequested.length > 0) {
+      return {
+        ok: false as const,
+        reason: 'duplicate_name' as const,
+        message: 'Já existe uma campanha ou um pedido com este nome nesta conta.',
+      };
+    }
+
+    try {
+      assertPlausibleAmount(
+        draft.dailyBudgetCents,
+        { monthlyCapCents: current.capCents },
+        'orçamento diário',
+      );
+    } catch (error) {
+      await recordGuardrailEvent(db, input.adAccountId, 'implausible_amount', {
+        attempted: 'create_campaign',
+        attemptedCents: draft.dailyBudgetCents,
+        capCents: current.capCents,
+      });
+      return {
+        ok: false as const,
+        reason: 'implausible_amount' as const,
+        message: error instanceof Error ? error.message : 'Valor implausível',
+      };
+    }
+
+    const exposureDeltaCents = creationExposure(draft, today);
+    const refusal = await ceilingRefusal(db, input.adAccountId, current, exposureDeltaCents, {
+      attempted: 'create_campaign',
+    });
+    if (refusal) return refusal;
+
+    const newCommitted = current.committedCents + exposureDeltaCents;
+    await tx
+      .update(budgetPeriods)
+      .set({ committedCents: newCommitted, updatedAt: now })
+      .where(eq(budgetPeriods.id, current.id));
+
+    const [stored] = await tx
+      .insert(adCampaignDrafts)
+      .values({
+        adAccountId: input.adAccountId,
+        name: draft.name,
+        objective: draft.objective,
+        dailyBudgetCents: draft.dailyBudgetCents,
+        startDate: draft.startDate,
+        endDate: draft.endDate,
+        startPaused: draft.startPaused,
+        payload: draft,
+        createdBy: input.requestedBy ?? null,
+      })
+      .returning({ id: adCampaignDrafts.id });
+    if (!stored) throw new Error('failed to record campaign draft');
+
+    const hash = draftPayloadHash({
+      adAccountId: input.adAccountId,
+      payload: draft,
+      exposureDeltaCents,
+    });
+
+    const [request] = await tx
+      .insert(adChangeRequests)
+      .values({
+        adAccountId: input.adAccountId,
+        draftId: stored.id,
+        budgetPeriodId: current.id,
+        kind: 'create_campaign',
+        fromValueCents: null,
+        toValueCents: draft.dailyBudgetCents,
+        exposureDeltaCents,
+        payloadHash: hash,
+        // Every change needs a human decision — there is no auto-approval.
+        status: 'pending_approval',
+        requestedBy: input.requestedBy ?? null,
+        // Only ever a person: see the automation blocker in docs/ads/travas.md.
+        requestedByAgent: false,
+        reason: input.reason ?? null,
+      })
+      .returning({ id: adChangeRequests.id });
+    if (!request) throw new Error('failed to record change request');
+
+    return {
+      ok: true as const,
+      value: {
+        changeRequestId: request.id,
+        draftId: stored.id,
+        exposureDeltaCents,
+        payloadHash: hash,
+        period: periodState({ ...current, committedCents: newCommitted }),
       },
     };
   });

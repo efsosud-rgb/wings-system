@@ -31,6 +31,15 @@ Ficam nas variáveis de ambiente da aplicação no Coolify — nunca no reposit�
 `NODE_ENV`, `API_PORT`. O Coolify cria automaticamente uma cópia de cada
 variável para deploys de preview (mesmo valor).
 
+Opcionais, para o studio criar **rascunhos** de post no site da Wings:
+`WORDPRESS_BASE_URL` (https), `WORDPRESS_USERNAME`, `WORDPRESS_APP_PASSWORD`.
+Use uma _senha de aplicativo_ do WordPress (Usuários → Perfil → Senhas de
+aplicativo) de um usuário com papel **Autor ou Colaborador** — nunca
+Administrador, e nunca a senha de login. Sem as três, o envio responde 503 e a
+tela avisa; nada é simulado. O sistema só cria rascunho: `status: 'draft'` é
+fixo no cliente (`apps/api/src/lib/wordpress.ts`), publicar é um clique de uma
+pessoa dentro do WordPress.
+
 > ⚠️ Faça backup de `CPF_ENCRYPTION_KEY` fora do servidor. Sem ela, os CPFs
 > armazenados são irrecuperáveis. Copie o valor pela interface do Coolify.
 

@@ -63,6 +63,18 @@ const schema = z.object({
   GOOGLE_ADS_DEVELOPER_TOKEN: optionalString,
   GOOGLE_ADS_CUSTOMER_ID: optionalString,
   GOOGLE_ADS_LOGIN_CUSTOMER_ID: optionalString,
+  /**
+   * Wings' own WordPress site, for draft posts created from the studio. All
+   * three must be set; otherwise the routes answer 503, never a fake success.
+   * The password is a WordPress *application password* for a user who may
+   * write posts and nothing more.
+   */
+  WORDPRESS_BASE_URL: optionalString.refine(
+    (value) => value === undefined || /^https:\/\/[^\s]+$/.test(value),
+    'must be an https:// URL',
+  ),
+  WORDPRESS_USERNAME: optionalString,
+  WORDPRESS_APP_PASSWORD: optionalString,
   ADS_APPROVAL_ADMIN_PHONES: optionalString,
   ADS_APPROVAL_DIRETORIA_PHONES: optionalString,
 

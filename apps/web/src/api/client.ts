@@ -48,6 +48,15 @@ export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, payload?: unknown) =>
     request<T>(path, { method: 'POST', body: payload ? JSON.stringify(payload) : undefined }),
+  /** Sends a file as the raw request body, typed as the file says it is. */
+  upload: <T>(path: string, file: Blob) =>
+    request<T>(path, {
+      method: 'POST',
+      body: file,
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+    }),
+  put: <T>(path: string, payload: unknown) =>
+    request<T>(path, { method: 'PUT', body: JSON.stringify(payload) }),
   patch: <T>(path: string, payload: unknown) =>
     request<T>(path, { method: 'PATCH', body: JSON.stringify(payload) }),
 };

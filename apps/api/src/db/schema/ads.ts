@@ -3,7 +3,9 @@ import {
   bigint,
   bigserial,
   boolean,
+  customType,
   date,
+  integer,
   index,
   jsonb,
   pgEnum,
@@ -67,6 +69,7 @@ export const changeKindEnum = pgEnum('ad_change_kind', [
   'set_daily_budget',
   'pause_campaign',
   'resume_campaign',
+  'create_campaign',
 ]);
 
 export const changeStatusEnum = pgEnum('ad_change_status', [
@@ -249,6 +252,104 @@ export const adSets = pgTable(
 );
 
 /**
+ * The tenant's standing audience: who the ideal customer is and where to reach
+ * them. One row per tenant — the minimum model. The campaign builder starts
+ * from it, and every draft keeps its own copy in its payload.
+ */
+export const marketingAudienceProfiles = pgTable('marketing_audience_profiles', {
+  tenantId: uuid('tenant_id')
+    .primaryKey()
+    .default(WINGS_TENANT_ID)
+    .references(() => tenants.id),
+  idealCustomerProfile: text('ideal_customer_profile').notNull(),
+  /** `{ states: UF[], cities: { name, state }[] }`, validated by reachSchema. */
+  reach: jsonb('reach').notNull(),
+  updatedBy: uuid('updated_by').references(() => employees.id),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Append-only log of drafts the studio sent to Wings' own site. The content
+ * itself lives in WordPress; this records that it was sent, by whom, and what
+ * the site answered — `unknown` included, so nobody resends blindly.
+ */
+export const sitePosts = pgTable(
+  'site_posts',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    title: text('title').notNull(),
+    outcome: text('outcome').notNull(),
+    wordpressPostId: bigint('wordpress_post_id', { mode: 'number' }),
+    editUrl: text('edit_url'),
+    /** The site's error code or the transport reason; never the content. */
+    detail: text('detail'),
+    createdBy: uuid('created_by').references(() => employees.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('site_posts_created_idx').on(table.createdAt)],
+);
+
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType: () => 'bytea',
+});
+
+/**
+ * Creative images uploaded in the studio.
+ *
+ * Kept in the database on purpose: a handful of images of a few MB each, backed
+ * up with everything else, and no volume to configure on Coolify. Immutable —
+ * a draft's approval hash covers the ids of its creatives, so an image an
+ * approver looked at can never become a different image. Width, height and
+ * type are read from the bytes on the server, never taken from the client.
+ */
+export const adCreativeUploads = pgTable('ad_creative_uploads', {
+  tenantId: tenantId(),
+  id: uuid('id').primaryKey().defaultRandom(),
+  mimeType: text('mime_type').notNull(),
+  width: integer('width').notNull(),
+  height: integer('height').notNull(),
+  byteSize: integer('byte_size').notNull(),
+  sha256: text('sha256').notNull(),
+  data: bytea('data').notNull(),
+  uploadedBy: uuid('uploaded_by').references(() => employees.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * A campaign somebody built in the studio and asked to have created.
+ *
+ * Immutable once written: the approval is bound to a hash over `payload`, so
+ * there is no update path — a different campaign is a different draft and a
+ * different request. `campaignId` is filled in when the executor creates the
+ * campaign on the platform, and never before.
+ */
+export const adCampaignDrafts = pgTable(
+  'ad_campaign_drafts',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    adAccountId: uuid('ad_account_id')
+      .notNull()
+      .references(() => adAccounts.id),
+    name: text('name').notNull(),
+    /** Ours (lead, traffic, conversion); mapped to the platform's at the boundary. */
+    objective: text('objective').notNull(),
+    dailyBudgetCents: bigint('daily_budget_cents', { mode: 'number' }).notNull(),
+    startDate: date('start_date').notNull(),
+    endDate: date('end_date').notNull(),
+    /** Born paused: never delivers until a separate, separately approved resume. */
+    startPaused: boolean('start_paused').notNull().default(true),
+    /** The whole validated form, exactly as it was submitted. */
+    payload: jsonb('payload').notNull(),
+    createdBy: uuid('created_by').references(() => employees.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    campaignId: uuid('campaign_id').references(() => adCampaigns.id),
+  },
+  (table) => [index('ad_campaign_drafts_account_idx').on(table.adAccountId, table.createdAt)],
+);
+
+/**
  * A proposed change and its reserved exposure.
  *
  * Every change requires approval by Admin Master or Diretoria — there is no
@@ -264,9 +365,13 @@ export const adChangeRequests = pgTable(
     adAccountId: uuid('ad_account_id')
       .notNull()
       .references(() => adAccounts.id),
-    campaignId: uuid('campaign_id')
-      .notNull()
-      .references(() => adCampaigns.id),
+    /**
+     * Null only for `create_campaign`, where the campaign does not exist yet
+     * and `draftId` says what is being asked for. The migration's CHECK
+     * guarantees one of the two is always present.
+     */
+    campaignId: uuid('campaign_id').references(() => adCampaigns.id),
+    draftId: uuid('draft_id').references(() => adCampaignDrafts.id),
     budgetPeriodId: uuid('budget_period_id')
       .notNull()
       .references(() => budgetPeriods.id),

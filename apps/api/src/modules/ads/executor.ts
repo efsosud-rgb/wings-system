@@ -1,9 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { META_OBJECTIVE, type CampaignDraft } from '@wings/shared';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   adAccounts,
   adApprovalRequests,
+  adCampaignDrafts,
   adCampaigns,
   adChangeRequests,
   adExecutions,
@@ -11,8 +13,8 @@ import {
   budgetPeriods,
 } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
-import { engageKillSwitch, releaseReservation } from './budget-guard.js';
-import type { AdsPlatformClient } from './platform/types.js';
+import { draftPayloadHash, engageKillSwitch, releaseReservation } from './budget-guard.js';
+import type { AdsPlatformClient, MutationOutcome, PlatformObjective } from './platform/types.js';
 import { reconciliationFreshness } from './reconcile.js';
 
 /**
@@ -25,7 +27,9 @@ import { reconciliationFreshness } from './reconcile.js';
  *   1. a person approved this exact change (payload hash matches);
  *   2. the kill switch is off;
  *   3. the budget period still has room for the reserved exposure;
- *   4. the platform still looks the way the approval assumed;
+ *   4. the platform still looks the way the approval assumed — or, for a
+ *      campaign being created, the stored draft is still the one approved and
+ *      no campaign of that name has appeared in the meantime;
  *   5. nothing has executed this change already;
  *   6. the client is bound to the account the change belongs to;
  *   7. the account reconciled recently, so the spend the cap was checked
@@ -45,7 +49,8 @@ export type ExecutionRefusal =
   | 'writes_disabled'
   | 'wrong_account'
   | 'reconciliation_stale'
-  | 'campaign_missing';
+  | 'campaign_missing'
+  | 'draft_missing';
 
 export type ExecutionResult =
   | { ok: true; outcome: 'applied'; executionId: string }
@@ -181,33 +186,72 @@ export async function executeApprovedChange(
     return refuse('cap_no_longer_allows', 'O orçamento do mês não comporta mais esta alteração.');
   }
 
-  const campaign = await db.query.adCampaigns.findFirst({
-    where: eq(adCampaigns.id, change.campaignId),
-  });
-  if (!campaign) return refuse('campaign_missing', 'Campanha não encontrada.');
+  // What the write is aimed at: an existing campaign, or the draft of a new one.
+  let campaign: typeof adCampaigns.$inferSelect | null = null;
+  let draft: (typeof adCampaignDrafts.$inferSelect & { payload: CampaignDraft }) | null = null;
 
-  // 4. The platform must still look the way the approver was told it looked.
-  const live = await client.getCampaign(campaign.externalId);
-  if (!live) return refuse('campaign_missing', 'Campanha não encontrada na plataforma.');
+  if (change.kind === 'create_campaign') {
+    const stored = change.draftId
+      ? await db.query.adCampaignDrafts.findFirst({
+          where: eq(adCampaignDrafts.id, change.draftId),
+        })
+      : undefined;
+    if (!stored) return refuse('draft_missing', 'O rascunho desta campanha não foi encontrado.');
+    if (stored.campaignId) return refuse('already_executed', 'Esta campanha já foi criada.');
 
-  const liveBudget = live.dailyBudgetCents ?? 0;
-  const expectedBudget = change.fromValueCents ?? 0;
-  if (change.kind === 'set_daily_budget' && liveBudget !== expectedBudget) {
-    await db.insert(adGuardrailEvents).values({
-      adAccountId: account.id,
-      kind: 'usable_would_be_exceeded',
-      detail: {
-        note: 'Estado da campanha na plataforma mudou desde a aprovação',
-        expectedCents: expectedBudget,
-        foundCents: liveBudget,
-        changeRequestId: change.id,
-      },
+    // 4. The approval covers the whole draft. Drafts have no update path, so a
+    // mismatch means something wrote the row another way — refuse, do not guess.
+    const hash = draftPayloadHash({
+      adAccountId: change.adAccountId,
+      payload: stored.payload,
+      exposureDeltaCents: change.exposureDeltaCents,
     });
-    await releaseReservation(db, change.id, 'superseded');
-    return refuse(
-      'platform_drift',
-      'A campanha mudou na plataforma desde a aprovação. Solicite uma nova aprovação.',
-    );
+    if (hash !== change.payloadHash) {
+      return refuse('payload_changed', 'O rascunho mudou depois da aprovação.');
+    }
+
+    // A campaign of this name appearing since the request means somebody made
+    // it by hand, or an earlier attempt landed after all. Creating a twin
+    // would leave two campaigns nobody can tell apart.
+    const existing = (await client.listCampaigns()).find((item) => item.name === stored.name);
+    if (existing) {
+      await releaseReservation(db, change.id, 'superseded');
+      return refuse(
+        'platform_drift',
+        'Já existe na plataforma uma campanha com este nome. Solicite uma nova aprovação com outro nome.',
+      );
+    }
+    draft = { ...stored, payload: stored.payload as CampaignDraft };
+  } else {
+    const found = change.campaignId
+      ? await db.query.adCampaigns.findFirst({ where: eq(adCampaigns.id, change.campaignId) })
+      : undefined;
+    if (!found) return refuse('campaign_missing', 'Campanha não encontrada.');
+    campaign = found;
+
+    // 4. The platform must still look the way the approver was told it looked.
+    const live = await client.getCampaign(campaign.externalId);
+    if (!live) return refuse('campaign_missing', 'Campanha não encontrada na plataforma.');
+
+    const liveBudget = live.dailyBudgetCents ?? 0;
+    const expectedBudget = change.fromValueCents ?? 0;
+    if (change.kind === 'set_daily_budget' && liveBudget !== expectedBudget) {
+      await db.insert(adGuardrailEvents).values({
+        adAccountId: account.id,
+        kind: 'usable_would_be_exceeded',
+        detail: {
+          note: 'Estado da campanha na plataforma mudou desde a aprovação',
+          expectedCents: expectedBudget,
+          foundCents: liveBudget,
+          changeRequestId: change.id,
+        },
+      });
+      await releaseReservation(db, change.id, 'superseded');
+      return refuse(
+        'platform_drift',
+        'A campanha mudou na plataforma desde a aprovação. Solicite uma nova aprovação.',
+      );
+    }
   }
 
   // Record the attempt before making it, so an interrupted process still
@@ -219,7 +263,8 @@ export async function executeApprovedChange(
       changeRequestId: change.id,
       idempotencyKey,
       requestHash: requestHashOf({
-        campaign: campaign.externalId,
+        campaign: campaign?.externalId ?? null,
+        draft: draft?.id ?? null,
         kind: change.kind,
         to: change.toValueCents,
       }),
@@ -233,23 +278,67 @@ export async function executeApprovedChange(
     .set({ status: 'executing' })
     .where(eq(adChangeRequests.id, change.id));
 
-  const outcome =
-    change.kind === 'set_daily_budget'
-      ? await client.setDailyBudget(campaign.externalId, change.toValueCents ?? 0)
-      : change.kind === 'pause_campaign'
-        ? await client.pauseCampaign(campaign.externalId)
-        : await client.resumeCampaign(campaign.externalId);
+  let outcome: MutationOutcome;
+  if (draft) {
+    outcome = await client.createCampaign({
+      name: draft.name,
+      objective: META_OBJECTIVE[draft.payload.objective] as PlatformObjective,
+      // Read from the approved draft, never defaulted: see CreateCampaignSpec.
+      status: draft.startPaused ? 'PAUSED' : 'ACTIVE',
+      dailyBudgetCents: draft.dailyBudgetCents,
+    });
+  } else if (!campaign) {
+    throw new Error('unreachable: a change is about a campaign or a draft');
+  } else if (change.kind === 'set_daily_budget') {
+    outcome = await client.setDailyBudget(campaign.externalId, change.toValueCents ?? 0);
+  } else if (change.kind === 'pause_campaign') {
+    outcome = await client.pauseCampaign(campaign.externalId);
+  } else {
+    outcome = await client.resumeCampaign(campaign.externalId);
+  }
 
   if (outcome.status === 'applied') {
-    await db
-      .update(adCampaigns)
-      .set({
-        dailyBudgetCents: outcome.campaign.dailyBudgetCents ?? 0,
-        status: outcome.campaign.status,
-        lastSyncedAt: now,
-        updatedAt: now,
-      })
-      .where(eq(adCampaigns.id, campaign.id));
+    if (draft) {
+      // Mirror the new campaign at once, so it can be paused, resumed or
+      // rebudgeted without waiting for the next ingestion. Reconciliation
+      // upserts on the same key and will simply agree.
+      const [created] = await db
+        .insert(adCampaigns)
+        .values({
+          adAccountId: account.id,
+          externalId: outcome.campaign.id,
+          name: outcome.campaign.name,
+          status: outcome.campaign.status,
+          dailyBudgetCents: outcome.campaign.dailyBudgetCents ?? 0,
+          budgetLevel: 'campaign',
+          lastSyncedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [adCampaigns.adAccountId, adCampaigns.externalId],
+          set: { status: outcome.campaign.status, lastSyncedAt: now, updatedAt: now },
+        })
+        .returning({ id: adCampaigns.id });
+      if (!created) throw new Error('failed to mirror the created campaign');
+
+      await db
+        .update(adCampaignDrafts)
+        .set({ campaignId: created.id })
+        .where(eq(adCampaignDrafts.id, draft.id));
+      await db
+        .update(adChangeRequests)
+        .set({ campaignId: created.id })
+        .where(eq(adChangeRequests.id, change.id));
+    } else if (campaign) {
+      await db
+        .update(adCampaigns)
+        .set({
+          dailyBudgetCents: outcome.campaign.dailyBudgetCents ?? 0,
+          status: outcome.campaign.status,
+          lastSyncedAt: now,
+          updatedAt: now,
+        })
+        .where(eq(adCampaigns.id, campaign.id));
+    }
 
     await db
       .update(adExecutions)

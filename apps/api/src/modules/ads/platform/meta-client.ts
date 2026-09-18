@@ -7,6 +7,7 @@ import type { Cents } from './money.js';
 import type {
   AdsPlatformClient,
   CampaignStatus,
+  CreateCampaignSpec,
   InsightRow,
   MetricsLevel,
   MutationOutcome,
@@ -499,6 +500,10 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
 
   resumeCampaign(_campaignId: string): Promise<MutationOutcome> {
     throw new MetaWritesDisabledError('resumeCampaign');
+  }
+
+  createCampaign(_spec: CreateCampaignSpec): Promise<MutationOutcome> {
+    throw new MetaWritesDisabledError('createCampaign');
   }
 
   setAccountSpendCap(

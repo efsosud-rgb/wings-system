@@ -2,6 +2,7 @@ import { assertCents, type Cents } from './money.js';
 import { META_DAILY_OVERDELIVERY_FACTOR } from './fixtures.js';
 import type {
   AdsPlatformClient,
+  CreateCampaignSpec,
   InsightRow,
   MetricsLevel,
   MutationOutcome,
@@ -104,6 +105,7 @@ export class FakeMetaClient implements AdsPlatformClient {
   private readonly ads: FakeAdSeed[] = [];
   private readonly failures: InjectedFailure[] = [];
   private capReached = false;
+  private createdCount = 0;
 
   /** Every call made, for assertions about what the system tried to do. */
   readonly calls: { method: string; args: unknown[] }[] = [];
@@ -409,6 +411,62 @@ export class FakeMetaClient implements AdsPlatformClient {
 
   async resumeCampaign(campaignId: string): Promise<MutationOutcome> {
     return this.setStatus('resumeCampaign', campaignId, 'ACTIVE');
+  }
+
+  /**
+   * Creating fails the same ways any other write does. `timeout_after_apply`
+   * matters most here: the campaign exists and the caller holds no id for it.
+   */
+  async createCampaign(spec: CreateCampaignSpec): Promise<MutationOutcome> {
+    this.calls.push({ method: 'createCampaign', args: [spec] });
+    assertCents(spec.dailyBudgetCents, 'dailyBudgetCents');
+
+    const create = (): InternalCampaign => {
+      this.createdCount += 1;
+      const campaign: InternalCampaign = {
+        id: `2385${String(this.createdCount).padStart(13, '0')}`,
+        name: spec.name,
+        status: spec.status,
+        dailyBudgetCents: spec.dailyBudgetCents,
+        lifetimeBudgetCents: null,
+        spendCents: 0,
+        actualSpendCents: 0,
+        reportedSpendCents: 0,
+        dailySpend: new Map(),
+      };
+      this.campaigns.set(campaign.id, campaign);
+      return campaign;
+    };
+
+    const failure = this.takeFailure();
+    if (failure) {
+      switch (failure.kind) {
+        case 'rate_limit':
+          return {
+            status: 'rejected',
+            code: '80004',
+            message: 'Too many calls to this ad-account',
+          };
+        case 'invalid_token':
+          return { status: 'rejected', code: '190', message: 'Access token invalidated' };
+        case 'transient':
+          return { status: 'unknown', reason: 'transient platform error' };
+        case 'reject':
+          return { status: 'rejected', code: failure.code, message: failure.message };
+        case 'timeout_after_apply':
+          create();
+          return { status: 'unknown', reason: 'request timed out after the campaign was created' };
+      }
+    }
+
+    if (spec.dailyBudgetCents < 100) {
+      return { status: 'rejected', code: '1487079', message: 'Daily budget below the minimum' };
+    }
+    // Meta refuses to create an ACTIVE campaign while the account cap is reached.
+    if (spec.status === 'ACTIVE' && this.capReached) {
+      return { status: 'rejected', code: 'account_cap', message: 'Account spending limit reached' };
+    }
+    return { status: 'applied', campaign: this.snapshot(create()) };
   }
 
   async setAccountSpendCap(

@@ -3,9 +3,10 @@ import type { Cents } from './money.js';
 /**
  * The narrow surface the rest of the system may use to touch an ad platform.
  *
- * V1 scope is budgets on existing campaigns: there is deliberately no way to
- * create a campaign, edit creatives or change targeting. What the interface
- * cannot express, no bug and no agent can do.
+ * Scope is budgets and status on existing campaigns, plus creating an empty
+ * campaign. There is deliberately no way to create an ad set, an ad or a
+ * creative, or to change targeting: a campaign with nothing under it cannot
+ * deliver. What the interface cannot express, no bug and no agent can do.
  */
 
 export type CampaignStatus = 'ACTIVE' | 'PAUSED' | 'DELETED' | 'ARCHIVED';
@@ -102,6 +103,23 @@ export type MutationOutcome =
   | { status: 'rejected'; code: string; message: string }
   | { status: 'unknown'; reason: string };
 
+/** Meta's ODAX objectives the builder can ask for. */
+export type PlatformObjective = 'OUTCOME_LEADS' | 'OUTCOME_TRAFFIC' | 'OUTCOME_SALES';
+
+/**
+ * An empty campaign: the object only, with nothing under it.
+ *
+ * `status` has no default on purpose. Whether a campaign is born able to
+ * deliver is a decision somebody made and an approver saw, never an omission.
+ */
+export interface CreateCampaignSpec {
+  name: string;
+  objective: PlatformObjective;
+  status: 'PAUSED' | 'ACTIVE';
+  /** Campaign-level (CBO) daily budget, in cents. */
+  dailyBudgetCents: Cents;
+}
+
 export interface AdsPlatformClient {
   readonly platform: 'meta' | 'google' | 'tiktok';
   /** True only for a client wired to a real ad account. */
@@ -131,6 +149,8 @@ export interface AdsPlatformClient {
   setDailyBudget(campaignId: string, dailyBudgetCents: Cents): Promise<MutationOutcome>;
   pauseCampaign(campaignId: string): Promise<MutationOutcome>;
   resumeCampaign(campaignId: string): Promise<MutationOutcome>;
+  /** Creates an empty campaign. `applied` carries the new campaign, id included. */
+  createCampaign(spec: CreateCampaignSpec): Promise<MutationOutcome>;
 
   /** Platform-native outer wall: the account stops spending at this amount. */
   setAccountSpendCap(

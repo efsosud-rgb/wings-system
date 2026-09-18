@@ -85,6 +85,34 @@
       "when": 1789739462266,
       "tag": "0011_wave1_real_ceilings",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1789757896219,
+      "tag": "0012_wave3_create_campaign",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1789758657028,
+      "tag": "0013_wave3_creative_uploads",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1789758936589,
+      "tag": "0014_wave3_audience_profile",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1789759579904,
+      "tag": "0015_wave3_site_posts",
+      "breakpoints": true
     }
   ]
 }

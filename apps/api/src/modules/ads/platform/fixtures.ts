@@ -95,5 +95,9 @@ export const ERROR_BUDGET_TOO_LOW = {
   },
 } as const;
 
-/** Meta permits delivery to exceed the daily budget by up to this factor. */
-export const META_DAILY_OVERDELIVERY_FACTOR = 1.25;
+/**
+ * Meta permits delivery to exceed the daily budget by up to this factor. It
+ * lives in the shared contract because the campaign builder shows the operator
+ * the same estimate the budget guard will reserve.
+ */
+export { META_DAILY_OVERDELIVERY_FACTOR } from '@wings/shared';
