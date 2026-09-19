@@ -15,6 +15,7 @@ export const PERMISSIONS = {
   'employees.deactivate': 'Inativar funcionários',
   'employees.pii.view': 'Revelar CPF completo (registrado em auditoria)',
   'roles.assign': 'Definir nível de acesso de funcionários',
+  'employees.assign_roles': 'Alterar o nível de acesso de qualquer funcionário',
   'timeclock.read': 'Ver registros de ponto',
   'timeclock.adjust': 'Aprovar ajustes de ponto',
   'leads.read': 'Ver leads do funil',
@@ -56,6 +57,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'employees.deactivate': 'all',
     'employees.pii.view': 'all',
     'roles.assign': 'all',
+    'employees.assign_roles': 'all',
     'timeclock.read': 'all',
     'timeclock.adjust': 'all',
     'leads.read': 'all',
@@ -71,6 +73,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   diretoria: {
     'employees.read': 'all',
     'employees.pii.view': 'all',
+    // Access levels only: Diretoria still cannot edit the rest of a record.
+    'employees.assign_roles': 'all',
     'timeclock.read': 'all',
     'leads.read': 'all',
     'audit.read': 'all',
@@ -79,6 +83,16 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     // Either Admin Master or Diretoria may approve a budget change.
     'ads.approve': 'all',
     'site.publish': 'all',
+  },
+  // The employee register and the RH/DP module. No CPF reveal and no time-clock
+  // approvals: neither was asked for, and both are easy to add later.
+  rh_dp: {
+    'employees.read': 'all',
+    'employees.create': 'all',
+    'employees.update': 'all',
+    'employees.deactivate': 'all',
+    'employees.assign_roles': 'all',
+    'timeclock.read': 'all',
   },
   gerente_comercial: {
     'employees.read': 'sector',

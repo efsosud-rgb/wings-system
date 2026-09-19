@@ -2,14 +2,14 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import {
   EMPLOYEE_STATUS,
   ROLES,
-  assignableRoles,
   employeeCreateSchema,
   formatCpf,
   isValidCpf,
+  roleFieldState,
+  type DenyReason,
   type EmployeeCreateInput,
   type EmployeeStatus,
   type EmployeeView,
-  type RoleKey,
 } from '@wings/shared';
 import { useEffect, useState } from 'react';
 import { useForm, type Resolver } from 'react-hook-form';
@@ -32,6 +32,15 @@ const STATUS_LABEL: Record<EmployeeStatus, string> = {
   inactive: 'Inativo',
   on_leave: 'Afastado',
 };
+
+/** Why the access-level select is locked, in the operator's words. */
+function roleLockHint(reason: DenyReason): string {
+  if (reason === 'self_role_change') return 'Você não pode alterar o próprio nível de acesso.';
+  if (reason === 'last_admin_master') {
+    return 'Único Admin Master do sistema — não pode ser rebaixado.';
+  }
+  return 'Seu perfil não pode alterar este nível.';
+}
 
 /** On edit the CPF stays masked, so the field is optional: fill it only to change it. */
 const editSchema = employeeCreateSchema.omit({ cpf: true }).extend({
@@ -109,16 +118,50 @@ export function EmployeeFormPage() {
         isSectorManager: user.isSectorManager,
       }
     : null;
-  const roleOptions: RoleKey[] = actor ? assignableRoles(actor, isEdit ? id : undefined) : [];
+  const chosenSector = watch('sector');
+  const roleField = !actor
+    ? { options: [], locked: null }
+    : isEdit
+      ? employee
+        ? roleFieldState(actor, {
+            employeeId: employee.id,
+            sector: employee.sector,
+            currentRole: employee.role,
+            isLastActiveAdminMaster: employee.isLastActiveAdminMaster,
+          })
+        : { options: [], locked: null }
+      : roleFieldState(actor, { sector: chosenSector || undefined });
+  const roleOptions = roleField.options;
   const canSetManagerFlag = user?.role === 'admin_master';
   const canRevealCpf = hasPermission(user, 'employees.pii.view');
+
+  // Everything but the access level is read-only for someone who holds only
+  // `employees.assign_roles` (Diretoria), and for anyone but an Admin Master
+  // looking at an Admin Master.
+  const adminMasterRecord =
+    isEdit && employee?.role === 'admin_master' && user?.role !== 'admin_master';
+  const fieldsLocked = isEdit && (adminMasterRecord || !hasPermission(user, 'employees.update'));
+  const nothingToSave = fieldsLocked && roleField.locked !== null;
+  const lock = { disabled: fieldsLocked };
 
   const onSubmit = handleSubmit(async (values) => {
     setInviteNotice(null);
     if (isEdit) {
-      const payload: Record<string, unknown> = { ...values };
+      const roleChanged = Boolean(employee) && values.role !== employee?.role;
+      if (roleChanged && employee && ROLES[values.role].rank < ROLES[employee.role].rank) {
+        const confirmed = window.confirm(
+          `Rebaixar o nível de acesso de "${ROLES[employee.role].name}" para "${ROLES[values.role].name}"? As sessões ativas deste funcionário serão encerradas.`,
+        );
+        if (!confirmed) return;
+      }
+
+      // With the rest of the record locked, only the level travels.
+      const payload: Record<string, unknown> = fieldsLocked ? {} : { ...values };
       if (!values.cpf) delete payload.cpf;
       if (!canSetManagerFlag) delete payload.isSectorManager;
+      // An unchanged level is left out: there is nothing to authorize.
+      if (roleChanged) payload.role = values.role;
+      else delete payload.role;
       await update.mutateAsync(payload);
       navigate('/funcionarios');
       return;
@@ -209,12 +252,20 @@ export function EmployeeFormPage() {
 
       {failure && <Alert kind="error">{failure.message}</Alert>}
 
+      {fieldsLocked && (
+        <Alert kind="info">
+          {adminMasterRecord
+            ? 'Apenas um Admin Master pode alterar o cadastro de um Admin Master.'
+            : 'Seu perfil altera apenas o nível de acesso deste cadastro.'}
+        </Alert>
+      )}
+
       <form onSubmit={onSubmit} noValidate>
         <fieldset className="block">
           <legend>Dados pessoais</legend>
           <div className="grid-2">
             <Field label="Nome completo" error={errors.fullName?.message}>
-              <Input autoFocus {...register('fullName')} />
+              <Input autoFocus {...register('fullName')} {...lock} />
             </Field>
 
             <Field
@@ -226,6 +277,7 @@ export function EmployeeFormPage() {
                 <Input
                   placeholder={isEdit ? employee?.cpfMasked : '000.000.000-00'}
                   {...register('cpf')}
+                  {...lock}
                 />
                 {isEdit && canRevealCpf && (
                   <Button
@@ -250,11 +302,11 @@ export function EmployeeFormPage() {
             </Field>
 
             <Field label="Data de nascimento" error={errors.birthDate?.message}>
-              <Input type="date" {...register('birthDate')} />
+              <Input type="date" {...register('birthDate')} {...lock} />
             </Field>
 
             <Field label="Telefone / WhatsApp" error={errors.phone?.message}>
-              <Input placeholder="(11) 99999-9999" {...register('phone')} />
+              <Input placeholder="(11) 99999-9999" {...register('phone')} {...lock} />
             </Field>
 
             <Field
@@ -262,7 +314,7 @@ export function EmployeeFormPage() {
               error={errors.email?.message}
               hint="O convite para definir a senha é enviado para este endereço."
             >
-              <Input type="email" {...register('email')} />
+              <Input type="email" {...register('email')} {...lock} />
             </Field>
           </div>
         </fieldset>
@@ -271,11 +323,11 @@ export function EmployeeFormPage() {
           <legend>Dados profissionais</legend>
           <div className="grid-2">
             <Field label="Cargo" error={errors.cargo?.message}>
-              <Input placeholder="Ex.: Analista de Marketing" {...register('cargo')} />
+              <Input placeholder="Ex.: Analista de Marketing" {...register('cargo')} {...lock} />
             </Field>
 
             <Field label="Setor" error={errors.sector?.message}>
-              <SectorSelect {...register('sector')}>
+              <SectorSelect {...register('sector')} {...lock}>
                 <option value="">Selecione…</option>
               </SectorSelect>
             </Field>
@@ -284,13 +336,15 @@ export function EmployeeFormPage() {
               label="Nível de acesso"
               error={errors.role?.message}
               hint={
-                roleOptions.length === 0
-                  ? 'Você não pode atribuir níveis de acesso.'
-                  : 'Somente níveis abaixo do seu aparecem aqui.'
+                roleField.locked
+                  ? roleLockHint(roleField.locked)
+                  : roleOptions.length === 0
+                    ? 'Você não pode atribuir níveis de acesso.'
+                    : 'Aparecem aqui os níveis que o seu perfil pode atribuir.'
               }
             >
-              <Select {...register('role')}>
-                <option value="">Selecione…</option>
+              <Select {...register('role')} disabled={roleField.locked !== null}>
+                {!isEdit && <option value="">Selecione…</option>}
                 {roleOptions.map((role) => (
                   <option key={role} value={role}>
                     {ROLES[role].name}
@@ -300,11 +354,11 @@ export function EmployeeFormPage() {
             </Field>
 
             <Field label="Data de admissão" error={errors.admissionDate?.message}>
-              <Input type="date" {...register('admissionDate')} />
+              <Input type="date" {...register('admissionDate')} {...lock} />
             </Field>
 
             <Field label="Status" error={errors.status?.message}>
-              <Select {...register('status')}>
+              <Select {...register('status')} {...lock}>
                 {EMPLOYEE_STATUS.map((value) => (
                   <option key={value} value={value}>
                     {STATUS_LABEL[value]}
@@ -352,7 +406,7 @@ export function EmployeeFormPage() {
         )}
 
         <div className="form-actions">
-          <Button type="submit" disabled={isSubmitting}>
+          <Button type="submit" disabled={isSubmitting || nothingToSave}>
             {isSubmitting
               ? 'Salvando…'
               : isEdit

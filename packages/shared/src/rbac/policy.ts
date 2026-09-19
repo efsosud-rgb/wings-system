@@ -33,7 +33,9 @@ export type DenyReason =
   | 'diretoria_ti_block'
   | 'role_rank_too_high'
   | 'protected_role'
-  | 'self_role_change';
+  | 'self_role_change'
+  | 'admin_master_record'
+  | 'last_admin_master';
 
 /**
  * Hard denials, evaluated before any grant.
@@ -92,30 +94,107 @@ export function can(actor: Actor, permission: PermissionKey, target: Target = {}
 }
 
 /**
- * Privilege-escalation guards for granting a role:
+ * The sector-manager guards for granting a role:
  *  - only Admin Master may grant Admin Master or Diretoria;
- *  - nobody may grant a role at or above their own rank;
- *  - nobody may change their own role.
+ *  - nobody else may grant a role at or above their own rank;
+ *  - nobody but an Admin Master may change their own role.
+ *
+ * This is the rule for actors holding only `roles.assign`. Whether a given
+ * change is allowed at all is `roleChangeDenial`'s question, not this one's.
  */
 export function roleAssignmentDenial(
   actor: Actor,
   targetRole: RoleKey,
   targetEmployeeId?: string,
 ): DenyReason | null {
-  if (targetEmployeeId && targetEmployeeId === actor.employeeId) return 'self_role_change';
   if (actor.role === 'admin_master') return null;
+  if (targetEmployeeId && targetEmployeeId === actor.employeeId) return 'self_role_change';
   if (PROTECTED_ROLES.includes(targetRole)) return 'protected_role';
   if (ROLES[targetRole].rank >= ROLES[actor.role].rank) return 'role_rank_too_high';
   return null;
 }
 
+/** The employee whose access level is being set. Omit id and role on creation. */
+export interface RoleChangeTarget {
+  employeeId?: string;
+  sector?: SectorSlug;
+  currentRole?: RoleKey;
+  /**
+   * True when this employee is the only Admin Master who can still log in. Only
+   * the API can know it; it travels on `EmployeeView` so the form can explain
+   * the locked select, and the API counts again inside the write.
+   */
+  isLastActiveAdminMaster?: boolean;
+}
+
 /**
- * Roles this actor may grant, in rank order. The form uses it to build the
- * dropdown; the API checks the same rule again on submit, so a tampered form
- * gains nothing.
+ * Whether `actor` may set `target`'s access level to `nextRole`. One rule for
+ * the form and the API, decided 2026-09-19:
+ *
+ *  - Keeping the current level is never a change, so it is never denied.
+ *  - Admin Master may change anyone, themselves included — except that the last
+ *    Admin Master cannot be demoted: the system never runs without one.
+ *  - Nobody else touches an Admin Master, and nobody else grants Admin Master.
+ *  - Holders of `employees.assign_roles` (Diretoria, RH/DP) may otherwise set
+ *    any level for anyone but themselves.
+ *  - Everyone else falls back to the sector-manager guards above, inside the
+ *    scope `roles.assign` gives them.
  */
-export function assignableRoles(actor: Actor, targetEmployeeId?: string): RoleKey[] {
-  return ROLE_KEYS.filter((role) => roleAssignmentDenial(actor, role, targetEmployeeId) === null);
+export function roleChangeDenial(
+  actor: Actor,
+  target: RoleChangeTarget,
+  nextRole: RoleKey,
+): DenyReason | null {
+  const blocked = hardDeny(actor, 'employees.assign_roles', target);
+  if (blocked) return blocked;
+  if (target.currentRole !== undefined && nextRole === target.currentRole) return null;
+
+  if (actor.role === 'admin_master') {
+    const demotesLastAdmin = target.currentRole === 'admin_master' && target.isLastActiveAdminMaster;
+    return demotesLastAdmin ? 'last_admin_master' : null;
+  }
+
+  const isSelf = target.employeeId !== undefined && target.employeeId === actor.employeeId;
+  if (target.currentRole === 'admin_master') return 'admin_master_record';
+
+  const wide = grantedScope(actor, 'employees.assign_roles');
+  if (wide && scopeSatisfied(actor, wide, { sector: target.sector })) {
+    if (isSelf) return 'self_role_change';
+    return nextRole === 'admin_master' ? 'protected_role' : null;
+  }
+
+  const narrow = grantedScope(actor, 'roles.assign');
+  if (!narrow) return 'no_permission';
+  if (!scopeSatisfied(actor, narrow, { sector: target.sector })) return 'out_of_scope';
+  return roleAssignmentDenial(actor, nextRole, target.employeeId);
+}
+
+/** What the access-level select should offer, and why it is locked if it is. */
+export interface RoleFieldState {
+  /** In rank order. On an edit it always includes the current level. */
+  options: RoleKey[];
+  /** Set when no other level can be chosen; the form disables the select. */
+  locked: DenyReason | null;
+}
+
+/**
+ * Drives the form's dropdown. The API applies `roleChangeDenial` again on
+ * submit, so a tampered form gains nothing.
+ */
+export function roleFieldState(actor: Actor, target: RoleChangeTarget = {}): RoleFieldState {
+  const options = ROLE_KEYS.filter((role) => roleChangeDenial(actor, target, role) === null);
+  if (target.currentRole === undefined) return { options, locked: null };
+  if (options.some((role) => role !== target.currentRole)) return { options, locked: null };
+
+  // Ask about the humblest other level: its answer is the underlying reason,
+  // not a side effect of rank or of a protected role.
+  const probe = [...ROLE_KEYS].reverse().find((role) => role !== target.currentRole);
+  return { options, locked: probe ? roleChangeDenial(actor, target, probe) : null };
+}
+
+/** Levels this actor may set for `target`, in rank order. */
+export function assignableRoles(actor: Actor, target: RoleChangeTarget = {}): RoleKey[] {
+  return roleFieldState(actor, target).options;
 }
 
 /** Whether login/logout of this role generates RH/DP time-clock entries. */

@@ -2,7 +2,7 @@ import {
   SECTOR_SLUGS,
   can,
   maskCpf,
-  roleAssignmentDenial,
+  roleChangeDenial,
   type Actor,
   type EmployeeCreate,
   type EmployeeListQuery,
@@ -26,7 +26,9 @@ export type EmployeeFailure =
   | 'cpf_taken'
   | 'email_taken'
   | 'role_not_allowed'
-  | 'manager_flag_forbidden';
+  | 'manager_flag_forbidden'
+  | 'admin_master_record'
+  | 'last_admin_master';
 
 export type Result<T> = { ok: true; value: T } | { ok: false; reason: EmployeeFailure };
 
@@ -43,6 +45,7 @@ type Row = {
   admission_date: string;
   status: EmployeeStatus;
   is_sector_manager: boolean;
+  is_last_active_admin_master: boolean;
   created_by: string | null;
   created_by_name: string | null;
   created_at: Date | string;
@@ -78,6 +81,7 @@ function toView(row: Row, cpfCrypto: CpfCrypto): EmployeeView {
     admissionDate: row.admission_date,
     status: row.status,
     isSectorManager: row.is_sector_manager,
+    isLastActiveAdminMaster: row.is_last_active_admin_master,
     createdBy: row.created_by,
     createdByName: row.created_by_name,
     createdAt: toIso(row.created_at) ?? new Date(0).toISOString(),
@@ -85,10 +89,23 @@ function toView(row: Row, cpfCrypto: CpfCrypto): EmployeeView {
   };
 }
 
+/**
+ * Admin Masters who can still log in. `on_leave` counts: only `inactive` blocks
+ * a login, so an Admin Master on leave can still come back and run the system.
+ */
+const USABLE_ADMIN_MASTERS = sql`
+  select count(*) from employees a
+    join roles ar on ar.id = a.role_id
+   where ar.key = 'admin_master' and a.status <> 'inactive'
+`;
+
 const SELECT_EMPLOYEE = sql`
   select e.id, e.full_name, e.cpf_encrypted, e.birth_date, e.phone, e.email, e.cargo,
          s.slug as sector_slug, r.key as role_key, e.admission_date, e.status,
-         e.is_sector_manager, e.created_by, creator.full_name as created_by_name,
+         e.is_sector_manager,
+         (r.key = 'admin_master' and e.status <> 'inactive' and (${USABLE_ADMIN_MASTERS}) = 1)
+           as is_last_active_admin_master,
+         e.created_by, creator.full_name as created_by_name,
          e.created_at, e.last_login_at
     from employees e
     join sectors s on s.id = e.sector_id
@@ -217,7 +234,7 @@ export async function createEmployee(
   if (!can(actor, 'employees.create', { sector: input.sector }).allowed) {
     return { ok: false, reason: 'forbidden' };
   }
-  if (!can(actor, 'roles.assign', { sector: input.sector, role: input.role }).allowed) {
+  if (roleChangeDenial(actor, { sector: input.sector }, input.role)) {
     return { ok: false, reason: 'role_not_allowed' };
   }
   // The sector-manager flag is an Admin Master decision only.
@@ -292,8 +309,23 @@ export async function updateEmployee(
   if (!can(actor, 'employees.read', { sector: currentSector }).allowed) {
     return { ok: false, reason: 'not_found' };
   }
+  const currentRole = current.role_key as RoleKey;
+  // Nobody but an Admin Master edits an Admin Master. Without this, anyone with
+  // update rights over that sector could point the account's e-mail at their
+  // own mailbox and take it over with a password reset.
+  if (currentRole === 'admin_master' && actor.role !== 'admin_master') {
+    return { ok: false, reason: 'admin_master_record' };
+  }
   if (!can(actor, 'employees.update', { sector: currentSector }).allowed) {
-    return { ok: false, reason: 'forbidden' };
+    // `employees.assign_roles` alone (Diretoria) changes the access level and
+    // nothing else on the record.
+    const touchesOtherFields = Object.entries(input).some(
+      ([field, value]) => field !== 'role' && value !== undefined,
+    );
+    const levelOnly =
+      can(actor, 'employees.assign_roles', { sector: currentSector }).allowed &&
+      !touchesOtherFields;
+    if (!levelOnly) return { ok: false, reason: 'forbidden' };
   }
   // Moving someone requires authority over the destination too, otherwise a
   // manager could push an employee out of their own scope, or pull one in.
@@ -303,13 +335,20 @@ export async function updateEmployee(
     }
   }
 
-  if (input.role && input.role !== (current.role_key as RoleKey)) {
-    if (!can(actor, 'roles.assign', { sector: input.sector ?? currentSector }).allowed) {
-      return { ok: false, reason: 'role_not_allowed' };
-    }
-    if (roleAssignmentDenial(actor, input.role, id)) {
-      return { ok: false, reason: 'role_not_allowed' };
-    }
+  const roleChanges = input.role !== undefined && input.role !== currentRole;
+  if (input.role !== undefined && roleChanges) {
+    const denial = roleChangeDenial(
+      actor,
+      {
+        employeeId: id,
+        sector: input.sector ?? currentSector,
+        currentRole,
+        isLastActiveAdminMaster: current.is_last_active_admin_master,
+      },
+      input.role,
+    );
+    if (denial === 'last_admin_master') return { ok: false, reason: 'last_admin_master' };
+    if (denial) return { ok: false, reason: 'role_not_allowed' };
   }
 
   if (
@@ -358,7 +397,7 @@ export async function updateEmployee(
     patch.sectorId = sector.id;
     changed.push('sector');
   }
-  if (input.role && input.role !== (current.role_key as RoleKey)) {
+  if (input.role !== undefined && roleChanges) {
     const role = await db.query.roles.findFirst({ where: eq(roles.key, input.role) });
     if (!role) return { ok: false, reason: 'not_found' };
     patch.roleId = role.id;
@@ -370,7 +409,28 @@ export async function updateEmployee(
     changed.push('status');
   }
 
-  await db.update(employees).set(patch).where(eq(employees.id, id));
+  // Demoting or deactivating an Admin Master: count again under a lock, so two
+  // Admin Masters demoting each other at the same moment cannot both succeed.
+  const removesAnAdminMaster =
+    currentRole === 'admin_master' &&
+    current.status !== 'inactive' &&
+    (roleChanges || patch.status === 'inactive');
+  if (removesAnAdminMaster) {
+    const kept = await db.transaction(async (tx) => {
+      const usable = await tx.execute<{ id: string } & Record<string, unknown>>(sql`
+        select a.id from employees a
+          join roles ar on ar.id = a.role_id
+         where ar.key = 'admin_master' and a.status <> 'inactive'
+           for update of a
+      `);
+      if (usable.rows.length <= 1) return false;
+      await tx.update(employees).set(patch).where(eq(employees.id, id));
+      return true;
+    });
+    if (!kept) return { ok: false, reason: 'last_admin_master' };
+  } else {
+    await db.update(employees).set(patch).where(eq(employees.id, id));
+  }
 
   // Deactivation or a role change must end access immediately, not at expiry.
   const revokes = changed.includes('role') || patch.status === 'inactive';
@@ -395,6 +455,20 @@ export async function updateEmployee(
       sessionsRevoked: revokes,
     },
   });
+
+  // Every access-level change gets its own entry: who, whom, from what, to what.
+  if (input.role !== undefined && roleChanges) {
+    await writeAudit(db, {
+      actorEmployeeId: actor.employeeId,
+      action: 'employee.role_changed',
+      entity: 'employee',
+      entityId: id,
+      targetEmployeeId: id,
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+      metadata: { previousRole: currentRole, newRole: input.role },
+    });
+  }
 
   const row = await fetchRow(db, id);
   return row ? { ok: true, value: toView(row, cpfCrypto) } : { ok: false, reason: 'not_found' };

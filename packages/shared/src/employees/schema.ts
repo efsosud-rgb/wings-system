@@ -71,6 +71,8 @@ export interface EmployeeView {
   admissionDate: string;
   status: EmployeeStatus;
   isSectorManager: boolean;
+  /** The only Admin Master who can still log in: their level is locked. */
+  isLastActiveAdminMaster: boolean;
   createdBy: string | null;
   /** Name of whoever created the record, for the read-only System block. */
   createdByName: string | null;

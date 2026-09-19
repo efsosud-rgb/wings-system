@@ -28,6 +28,8 @@ const STATUS_BY_FAILURE: Record<EmployeeFailure, number> = {
   email_taken: 409,
   role_not_allowed: 403,
   manager_flag_forbidden: 403,
+  admin_master_record: 403,
+  last_admin_master: 409,
 };
 
 const MESSAGE_BY_FAILURE: Record<EmployeeFailure, string> = {
@@ -37,6 +39,8 @@ const MESSAGE_BY_FAILURE: Record<EmployeeFailure, string> = {
   email_taken: 'Já existe um funcionário com este e-mail.',
   role_not_allowed: 'Você não pode atribuir este nível de acesso.',
   manager_flag_forbidden: 'Apenas o Admin Master pode definir gestores de setor.',
+  admin_master_record: 'Apenas um Admin Master pode alterar o cadastro de um Admin Master.',
+  last_admin_master: 'Único Admin Master do sistema — não pode ser rebaixado nem inativado.',
 };
 
 function fail(reply: FastifyReply, reason: EmployeeFailure) {

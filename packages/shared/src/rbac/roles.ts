@@ -9,6 +9,8 @@
 export const ROLES = {
   admin_master: { name: 'Admin Master', rank: 100, tracksTime: false },
   diretoria: { name: 'Diretoria', rank: 90, tracksTime: false },
+  // Runs the RH/DP module and the employee register for the whole company.
+  rh_dp: { name: 'RH / DP', rank: 70, tracksTime: true },
   gerente_comercial: { name: 'Gerente Comercial', rank: 60, tracksTime: true },
   marketing: { name: 'Marketing', rank: 50, tracksTime: true },
   formatacao_juridico: { name: 'Formatação — Jurídico', rank: 40, tracksTime: true },
@@ -33,7 +35,10 @@ export type RoleKey = keyof typeof ROLES;
 
 export const ROLE_KEYS = Object.keys(ROLES) as RoleKey[];
 
-/** Roles that may never be granted by anyone other than an Admin Master. */
+/**
+ * Roles a sector manager may never grant. Holders of `employees.assign_roles`
+ * follow a different rule — see `roleChangeDenial` in policy.ts.
+ */
 export const PROTECTED_ROLES: readonly RoleKey[] = ['admin_master', 'diretoria'];
 
 export function isRoleKey(value: string): value is RoleKey {

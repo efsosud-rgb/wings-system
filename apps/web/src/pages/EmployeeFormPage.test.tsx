@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { SessionUser } from '@wings/shared';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -31,20 +31,25 @@ const employee = {
   admissionDate: '2026-01-05',
   status: 'active',
   isSectorManager: false,
+  isLastActiveAdminMaster: false,
   createdBy: 'emp-0',
   createdByName: 'Admin Master',
   createdAt: '2026-02-01T12:00:00.000Z',
   lastLoginAt: null,
 };
 
+/** The record the edit form loads; tests override fields of it. */
+const record: { current: typeof employee } = { current: employee };
+const updateEmployee = vi.fn();
+
 vi.mock('../api/employees.js', () => ({
   useEmployee: (id?: string) => ({
-    data: id ? { employee } : undefined,
+    data: id ? { employee: record.current } : undefined,
     isLoading: false,
     isError: false,
   }),
   useCreateEmployee: () => ({ mutateAsync: vi.fn(), error: null }),
-  useUpdateEmployee: () => ({ mutateAsync: vi.fn(), error: null }),
+  useUpdateEmployee: () => ({ mutateAsync: updateEmployee, error: null }),
   useRevealCpf: () => ({ mutate: vi.fn(), isPending: false, data: undefined, isError: false }),
   useResendInvite: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
@@ -84,6 +89,8 @@ function renderForm(path: string) {
 
 beforeEach(() => {
   session.current = makeUser({});
+  record.current = employee;
+  updateEmployee.mockReset().mockResolvedValue({ employee });
 });
 
 afterEach(() => {
@@ -91,6 +98,7 @@ afterEach(() => {
   // registered; without this, renders pile up across tests.
   cleanup();
   session.current = null;
+  vi.restoreAllMocks();
 });
 
 describe('role dropdown', () => {
@@ -177,5 +185,151 @@ describe('system block', () => {
   it('is absent when creating', () => {
     renderForm('/funcionarios/novo');
     expect(screen.queryByText('Sistema')).toBeNull();
+  });
+});
+
+describe('access level on an existing record', () => {
+  const roleSelect = () => screen.getByLabelText(/Nível de acesso/i) as HTMLSelectElement;
+  const save = () => fireEvent.click(screen.getByRole('button', { name: /Salvar alterações/i }));
+  const manager = () =>
+    makeUser({
+      employeeId: 'emp-1',
+      role: 'gerente_comercial',
+      sector: 'comercial',
+      isSectorManager: true,
+      permissions: { 'employees.read': 'sector', 'employees.update': 'sector' },
+    });
+
+  it('always selects the current level, even when the viewer cannot change it', async () => {
+    // The original bug: editing your own record emptied the select, the form
+    // failed validation on "role" and nothing could be saved.
+    session.current = manager();
+    record.current = { ...employee, role: 'gerente_comercial', sector: 'comercial' };
+    renderForm('/funcionarios/emp-1');
+
+    await waitFor(() => expect(roleSelect().value).toBe('gerente_comercial'));
+    expect(roleSelect().disabled).toBe(true);
+    expect(screen.getByText('Você não pode alterar o próprio nível de acesso.')).toBeTruthy();
+  });
+
+  it('saves without changing the level, and leaves the level out of the request', async () => {
+    session.current = manager();
+    record.current = { ...employee, role: 'gerente_comercial', sector: 'comercial' };
+    renderForm('/funcionarios/emp-1');
+    await waitFor(() => expect(roleSelect().value).toBe('gerente_comercial'));
+
+    fireEvent.change(screen.getByLabelText('Cargo'), { target: { value: 'Gerente Regional' } });
+    save();
+
+    await waitFor(() => expect(updateEmployee).toHaveBeenCalledTimes(1));
+    const payload = updateEmployee.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(payload.cargo).toBe('Gerente Regional');
+    expect(payload).not.toHaveProperty('role');
+  });
+
+  it('locks the last Admin Master on Admin Master, with the reason', async () => {
+    session.current = makeUser({
+      employeeId: 'emp-1',
+      permissions: { 'employees.read': 'all', 'employees.update': 'all' },
+    });
+    record.current = { ...employee, role: 'admin_master', isLastActiveAdminMaster: true };
+    renderForm('/funcionarios/emp-1');
+
+    await waitFor(() => expect(roleSelect().value).toBe('admin_master'));
+    expect(roleSelect().disabled).toBe(true);
+    expect(
+      screen.getByText('Único Admin Master do sistema — não pode ser rebaixado.'),
+    ).toBeTruthy();
+  });
+
+  it('lets an Admin Master change their own level when another one exists', async () => {
+    session.current = makeUser({
+      employeeId: 'emp-1',
+      permissions: { 'employees.read': 'all', 'employees.update': 'all' },
+    });
+    record.current = { ...employee, role: 'admin_master' };
+    renderForm('/funcionarios/emp-1');
+
+    await waitFor(() => expect(roleSelect().value).toBe('admin_master'));
+    expect(roleSelect().disabled).toBe(false);
+  });
+
+  it('tells a viewer whose profile cannot change this level', async () => {
+    session.current = makeUser({
+      role: 'marketing',
+      sector: 'marketing',
+      permissions: { 'employees.read': 'sector' },
+    });
+    renderForm('/funcionarios/emp-1');
+
+    await waitFor(() => expect(roleSelect().value).toBe('marketing'));
+    expect(roleSelect().disabled).toBe(true);
+    expect(screen.getByText('Seu perfil não pode alterar este nível.')).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: /Salvar alterações/i }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('offers RH/DP every level but Admin Master', async () => {
+    session.current = makeUser({
+      role: 'rh_dp',
+      permissions: { 'employees.read': 'all', 'employees.update': 'all' },
+    });
+    renderForm('/funcionarios/emp-1');
+
+    await waitFor(() => expect(roleSelect().value).toBe('marketing'));
+    const values = Array.from(roleSelect().options).map((option) => option.value);
+    expect(values).toContain('diretoria');
+    expect(values).toContain('rh_dp');
+    expect(values).not.toContain('admin_master');
+    expect(values).not.toContain('');
+  });
+
+  it('gives Diretoria the level and nothing else, and sends only the level', async () => {
+    session.current = makeUser({ role: 'diretoria', permissions: { 'employees.read': 'all' } });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderForm('/funcionarios/emp-1');
+
+    await waitFor(() => expect(roleSelect().value).toBe('marketing'));
+    expect((screen.getByLabelText('Cargo') as HTMLInputElement).disabled).toBe(true);
+    expect(roleSelect().disabled).toBe(false);
+
+    fireEvent.change(roleSelect(), { target: { value: 'vendedor_expansao' } });
+    save();
+
+    await waitFor(() => expect(updateEmployee).toHaveBeenCalledTimes(1));
+    expect(updateEmployee.mock.calls[0]?.[0]).toEqual({ role: 'vendedor_expansao' });
+  });
+
+  it('asks before a demotion and does nothing when the answer is no', async () => {
+    session.current = makeUser({
+      permissions: { 'employees.read': 'all', 'employees.update': 'all' },
+    });
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    renderForm('/funcionarios/emp-1');
+    await waitFor(() => expect(roleSelect().value).toBe('marketing'));
+
+    fireEvent.change(roleSelect(), { target: { value: 'vendedor_expansao' } });
+    save();
+
+    await waitFor(() => expect(confirm).toHaveBeenCalledTimes(1));
+    expect(confirm.mock.calls[0]?.[0]).toContain('Vendedor Expansão');
+    expect(updateEmployee).not.toHaveBeenCalled();
+  });
+
+  it('does not ask on a promotion', async () => {
+    session.current = makeUser({
+      permissions: { 'employees.read': 'all', 'employees.update': 'all' },
+    });
+    const confirm = vi.spyOn(window, 'confirm');
+    renderForm('/funcionarios/emp-1');
+    await waitFor(() => expect(roleSelect().value).toBe('marketing'));
+
+    fireEvent.change(roleSelect(), { target: { value: 'diretoria' } });
+    save();
+
+    await waitFor(() => expect(updateEmployee).toHaveBeenCalledTimes(1));
+    expect(confirm).not.toHaveBeenCalled();
+    expect((updateEmployee.mock.calls[0]?.[0] as Record<string, unknown>).role).toBe('diretoria');
   });
 });
