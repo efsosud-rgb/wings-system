@@ -127,15 +127,20 @@ describe('per-platform independence', () => {
     });
     expect(refused.ok).toBe(false);
 
-    // ...while Google is entirely unaffected.
-    const google_ok = await reserveChange(db, {
+    // ...while Google's pool is entirely unaffected: nothing of Meta's was
+    // committed against it.
+    expect((await getPeriodState(db, google, PERIOD))?.committedCents).toBe(0);
+
+    // The proof used to be a budget change on the Google campaign. This system
+    // no longer asks for those: on Google it creates campaigns and nothing else.
+    const googleChange = await reserveChange(db, {
       adAccountId: google,
       campaignId: googleCampaign,
       kind: 'set_daily_budget',
       toDailyBudgetCents: perDay,
       now: NOW,
     });
-    expect(google_ok.ok).toBe(true);
+    expect(googleChange).toMatchObject({ ok: false, reason: 'not_supported_on_platform' });
   });
 
   it('gives each account its own cap and usable split', async () => {

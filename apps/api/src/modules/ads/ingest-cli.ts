@@ -1,13 +1,12 @@
 import { createDb } from '../../db/client.js';
 import { loadDotEnv } from '../../db/load-env.js';
 import { loadEnv } from '../../env.js';
-import { applyPlatformLimit, getPeriodState } from './budget-guard.js';
+import { getPeriodState } from './budget-guard.js';
 import { runIngestionCycle } from './ingest-cycle.js';
 import { createAlertNotifier } from './notifiers/factory.js';
 import { activeAdAccounts, archiveAdAccount } from './metrics.js';
-import { createGoogleClient } from './platform/google-client.js';
 import { formatBrl } from './platform/money.js';
-import { createMetaClient } from './platform/factory.js';
+import { createPlatformClient } from './platform/factory.js';
 import { enforceReconciliationFreshness, periodMonthOf } from './reconcile.js';
 import { seedAdAccount } from './seed-account.js';
 
@@ -84,8 +83,11 @@ async function main() {
       );
     }
 
-    const accounts = await activeAdAccounts(db, 'meta');
-    if (accounts.length === 0) {
+    // Every active account, Meta and Google alike. A Google account only gets
+    // a client when the environment is credentialed for that exact customer;
+    // otherwise it is reported as skipped, like a Meta account without a token.
+    const accounts = await activeAdAccounts(db);
+    if (!accounts.some((account) => account.platform === 'meta')) {
       throw new Error('No active ad accounts configured. Run once with --seed --account act_…');
     }
 
@@ -97,7 +99,7 @@ async function main() {
       // Always a reader, even while the write switch is on for a supervised
       // session: this job has no business holding a client that can spend.
       clientFor: (account) =>
-        createMetaClient({ ...env, ADS_WRITES_ENABLED: false }, account.externalId).client,
+        createPlatformClient({ ...env, ADS_WRITES_ENABLED: false }, account).client,
       since,
       now,
       notifier: createAlertNotifier(env, db),
@@ -152,36 +154,7 @@ async function main() {
         }
       },
     });
-    let failures = cycle.failed;
-
-    // Google: only the spending ceiling for now. Mirroring campaigns and
-    // metrics from Google needs decisions this wave does not take.
-    const googleClient = createGoogleClient(env);
-    if (googleClient) {
-      const googleAccounts = await activeAdAccounts(db, 'google');
-      for (const account of googleAccounts) {
-        try {
-          const limit = await googleClient.getSpendLimit();
-          await applyPlatformLimit(db, {
-            adAccountId: account.id,
-            periodMonth: periodMonthOf(now),
-            limit,
-            now,
-          });
-          console.warn(
-            `\ngoogle:${account.externalId}\n  saldo/limite: ` +
-              `${limit.remainingCents === null ? 'sem limite' : formatBrl(limit.remainingCents)} ` +
-              `(${limit.source})`,
-          );
-        } catch (error) {
-          failures += 1;
-          console.error(
-            `\ngoogle:${account.externalId}\n  FALHOU: ` +
-              (error instanceof Error ? `${error.name}: ${error.message}` : String(error)),
-          );
-        }
-      }
-    }
+    const failures = cycle.failed;
 
     // Dead-man switch. Accounts served a moment ago are fresh by construction;
     // what this catches is the account that has been failing cycle after cycle

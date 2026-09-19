@@ -1,5 +1,6 @@
 import {
   approvalDecisionSchema,
+  AD_ACCOUNT_PLATFORM,
   campaignDraftSchema,
   type ApprovalDetail,
   type ApprovalListItem,
@@ -19,7 +20,7 @@ import { reserveCampaignCreation } from './budget-guard.js';
 import { nextPendingInGroup, pendingGroups } from './batches.js';
 import { executeApprovedChange } from './executor.js';
 import { createApprovalNotifier } from './notifiers/factory.js';
-import { createMetaClient } from './platform/factory.js';
+import { createPlatformClient } from './platform/factory.js';
 import { simulateChange } from './simulate.js';
 
 /**
@@ -212,7 +213,10 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         changeStatus: row.change_status,
         executedAt: iso(row.executed_at),
         lastExecutionOutcome: row.last_execution_outcome,
-        executionAvailable: createMetaClient(env, row.account_external_id).canWrite,
+        executionAvailable: createPlatformClient(env, {
+          platform: row.platform,
+          externalId: row.account_external_id,
+        }).canWrite,
         // Shaped for display only; the approval hash is over the stored payload.
         // A draft from before the map existed has no customLocations.
         draft:
@@ -361,11 +365,15 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
       }
 
       // Every variation points at an image that was really uploaded here.
+      // Google drafts carry none: their campaigns are born as a shell.
       const creativeIds = [...new Set(parsed.data.variations.map((v) => v.creativeId))];
-      const known = await db
-        .select({ id: adCreativeUploads.id })
-        .from(adCreativeUploads)
-        .where(inArray(adCreativeUploads.id, creativeIds));
+      const known =
+        creativeIds.length === 0
+          ? []
+          : await db
+              .select({ id: adCreativeUploads.id })
+              .from(adCreativeUploads)
+              .where(inArray(adCreativeUploads.id, creativeIds));
       if (known.length !== creativeIds.length) {
         return reply.status(400).send({
           error: 'creative_not_found',
@@ -373,15 +381,21 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
-      // The account the studio works on: the same one the cockpit shows.
+      // The account the studio works on: for Meta, the one the cockpit shows;
+      // for Google Pesquisa and YouTube, the Google Ads account.
+      const accountPlatform = AD_ACCOUNT_PLATFORM[parsed.data.platform];
       const account = await db.query.adAccounts.findFirst({
-        where: and(eq(adAccounts.platform, 'meta'), isNull(adAccounts.archivedAt)),
+        where: and(eq(adAccounts.platform, accountPlatform), isNull(adAccounts.archivedAt)),
         orderBy: asc(adAccounts.createdAt),
       });
       if (!account) {
-        return reply
-          .status(409)
-          .send({ error: 'account_not_found', message: 'Nenhuma conta Meta ativa.' });
+        return reply.status(409).send({
+          error: 'account_not_found',
+          message:
+            accountPlatform === 'google'
+              ? 'Nenhuma conta Google Ads ativa neste ambiente.'
+              : 'Nenhuma conta Meta ativa.',
+        });
       }
 
       const reserved = await reserveCampaignCreation(db, {
@@ -445,7 +459,7 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
           .send({ error: 'not_found', message: 'Solicitação não encontrada.' });
       }
 
-      const { client, canWrite, reason } = createMetaClient(env, account.externalId);
+      const { client, canWrite, reason } = createPlatformClient(env, account);
       if (!client || !canWrite) {
         return reply.status(409).send({
           error: reason ?? 'writes_disabled',

@@ -435,3 +435,81 @@ describe('reach by radius on the map', () => {
     ).toEqual([]);
   });
 });
+
+describe('Google campaigns through the same request', () => {
+  const googleDraft = async () => {
+    return {
+      ...(await draft()),
+      formatKey: undefined,
+      variations: [],
+      platform: 'google_search',
+      name: `Pesquisa ${randomBytes(3).toString('hex')}`,
+      utms: { utm_source: 'google', utm_medium: 'cpc', utm_campaign: 'x', utm_content: 'lead' },
+      search: {
+        keywords: ['abrir franquia'],
+        negativeKeywords: [],
+        headlines: ['Franquia Wings'],
+        descriptions: ['Conheça o modelo de negócio e o suporte da Wings.'],
+      },
+    };
+  };
+
+  it('says plainly when this environment has no Google Ads account', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/ads/campaign-requests',
+      cookies: await cookiesFor('marketing'),
+      payload: await googleDraft(),
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({
+      error: 'account_not_found',
+      message: 'Nenhuma conta Google Ads ativa neste ambiente.',
+    });
+  });
+
+  it('files the request under the Google account, in front of the same approver', async () => {
+    const [google] = await db
+      .insert(adAccounts)
+      .values({ platform: 'google', externalId: '4268586278', name: 'Wings Company — Google Ads' })
+      .returning({ id: adAccounts.id });
+    if (!google) throw new Error('failed');
+    await openPeriod(db, {
+      adAccountId: google.id,
+      periodMonth: `${TODAY.slice(0, 7)}-01`,
+      capCents: 150_000,
+      usablePercent: 70,
+    });
+
+    const payload = await googleDraft();
+    const response = await app.inject({
+      method: 'POST',
+      url: '/ads/campaign-requests',
+      cookies: await cookiesFor('marketing'),
+      payload,
+    });
+    expect(response.statusCode).toBe(201);
+    expect(response.json<{ exposureDeltaCents: number }>().exposureDeltaCents).toBe(0);
+
+    const { approvalId } = response.json<{ approvalId: string }>();
+    const detail = await app.inject({
+      url: `/ads/approvals/${approvalId}`,
+      cookies: await cookiesFor('admin_master'),
+    });
+    const approval = detail.json<{ approval: ApprovalDetail }>().approval;
+    expect(approval.platform).toBe('google');
+    expect(approval.status).toBe('pending');
+    expect(approval.draft?.search?.keywords).toEqual(['abrir franquia']);
+    // No Google credentials and the switch off: approving cannot lead to a write.
+    expect(approval.executionAvailable).toBe(false);
+
+    // A born-active Google campaign never gets this far.
+    const active = await app.inject({
+      method: 'POST',
+      url: '/ads/campaign-requests',
+      cookies: await cookiesFor('marketing'),
+      payload: { ...(await googleDraft()), startPaused: false },
+    });
+    expect(active.statusCode).toBe(400);
+  });
+});

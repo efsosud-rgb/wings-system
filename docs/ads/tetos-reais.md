@@ -138,10 +138,9 @@ node dist/modules/ads/ingest-cli.js --seed --platform google \
 - `--account` precisa ser o `GOOGLE_ADS_CUSTOMER_ID` do ambiente: o cliente só
   lê essa conta, e uma linha de outra conta receberia o saldo errado — o mesmo
   formato do bug de ingestão descrito abaixo.
-- **Dead-man:** nada "reconcilia" uma conta Google, então ela é julgada pela
-  última leitura do saldo (`platform_limit_synced_at`). Sem isso ela congelaria
-  120 min depois de cadastrada, com alerta falso. `ops-cli status` ainda mostra
-  `reconciliação: NUNCA` para ela — esperado enquanto o Google não é espelhado.
+- **Reconciliação:** desde a Onda 4 a conta Google é espelhada e reconciliada
+  no mesmo ciclo da Meta (ver [google-escrita.md](google-escrita.md)); o
+  dead-man vale para ela como para qualquer conta.
 - O cockpit abre por padrão na primeira conta **Meta**; a conta Google não tem
   campanhas para mostrar.
 

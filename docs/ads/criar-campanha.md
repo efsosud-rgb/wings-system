@@ -4,6 +4,9 @@ Onda 3, 18/09/2026. **Nada aqui foi verificado contra a Meta**: o código foi
 exercitado só com o cliente falso e com `fetch` roteirizado.
 `ADS_WRITES_ENABLED` não foi tocada.
 
+> O mesmo caminho vale para o Google (Pesquisa e YouTube) desde a Onda 4 —
+> ver [google-escrita.md](google-escrita.md).
+
 ## Mudança de plano
 
 O primeiro teste real de escrita deixou de ser pausar uma campanha vigente com
