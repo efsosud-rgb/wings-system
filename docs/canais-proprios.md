@@ -61,14 +61,48 @@ está na galeria não se repete sozinha.
   transforma em player (oEmbed) — 6 posts do site já usam isso. Upload de
   arquivo de vídeo não existe, de propósito.
 
-## SEO (Rank Math): não implementado
+## SEO: checklist no studio, campos colados à mão no Rank Math
 
 `GET /wp/v2/posts/2477?context=edit`, autenticado, não traz nenhum
 `rank_math_*` em `meta` (só chaves do Elementor). O site não expõe esses campos
-à REST, então o formulário avisa que palavra-chave foco, título SEO e meta
-descrição são preenchidos no WordPress. Para mudar isso alguém teria de
-registrar os metadados com `show_in_rest` no site — mexer no site, fora do
-escopo do studio.
+à REST, então **nada de SEO é enviado ao WordPress**. Para mudar isso alguém
+teria de registrar os metadados com `show_in_rest` no site, o que é mexer no
+site e está fora do escopo do studio.
+
+O formulário tem os três campos (palavra-chave foco, título SEO, meta
+descrição) por dois motivos: alimentam o checklist, e ficam guardados em
+`site_posts.seo`, visíveis em "Últimos envios", para quem revisar o rascunho
+colar no Rank Math.
+
+O **Checklist SEO** fica ao lado do formulário e atualiza enquanto a pessoa
+escreve. É comparação de texto pura (`packages/shared/src/marketing/seo-checklist.ts`):
+sem LLM, sem rede, mesma resposta para o mesmo texto. **Não bloqueia o envio.**
+Os limites vêm das regras da skill claude-seo (`seo/references/quality-gates.md`):
+
+| Item                                | Verde quando                                                                         |
+| ----------------------------------- | ------------------------------------------------------------------------------------ |
+| Palavra-chave no título             | o título do post contém a palavra-chave (sem diferenciar acento ou maiúscula)        |
+| Palavra-chave no primeiro parágrafo | o primeiro parágrafo do texto contém                                                 |
+| Palavra-chave em um subtítulo       | pelo menos um `##`/`###` contém                                                      |
+| Título SEO                          | preenchido, até 60 caracteres (avisa se tiver menos de 30)                           |
+| Meta descrição                      | entre 120 e 160 caracteres                                                           |
+| Meta descrição diferente do título  | não começa repetindo o título (regra da skill contra metadado gerado em série)       |
+| Resumo                              | preenchido                                                                           |
+| Imagem destacada                    | presente, com texto alternativo de 10 a 125 caracteres (enviado como `alt_text`)     |
+| Tamanho do texto                    | mais de 600 palavras (a skill pede 1.500 para artigo aprofundado; aparece como dica) |
+| Link interno                        | pelo menos um link para `wingscompany.com.br`                                        |
+
+## Desenho do formulário
+
+Revisado com a skill ui-ux-pro-max (regras de formulário e acessibilidade):
+campos em seis grupos numerados; obrigatórios marcados; ao falhar a validação,
+um resumo focável no topo com link para cada campo, mantendo a mensagem junto
+do campo (`aria-describedby`), e a mensagem some quando o campo muda; o
+checklist indica estado com ícone e texto, nunca só com cor, e só o total é
+região viva; o que está sendo escrito fica salvo no navegador
+(`localStorage`) até o rascunho ser criado. Os textos de interface passaram
+pela skill humanizer: sem travessão ligando frases, sem contraste de efeito,
+cada mensagem de erro diz a causa e o que fazer.
 
 ## Verificações feitas no site real (19/09/2026)
 

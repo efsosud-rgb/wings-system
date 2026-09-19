@@ -72,6 +72,7 @@ const { OwnedChannelsPanel } = await import('./OwnedChannelsPanel.js');
 
 afterEach(() => {
   cleanup();
+  window.localStorage.clear();
   site.configured = true;
   posts.current = [];
   createState.current = {};
@@ -90,10 +91,10 @@ const file = (name = 'foto.jpg', type_ = 'image/jpeg', size = 1000) => {
 const choose = (label: string | RegExp, files: File[]) =>
   fireEvent.change(screen.getByLabelText(label), { target: { files } });
 const previewHtml = () => screen.getByLabelText('Prévia do post').innerHTML;
-const text = () => screen.getByLabelText(/^Texto do post/) as HTMLTextAreaElement;
+const text = () => screen.getByLabelText(/^Texto \*/) as HTMLTextAreaElement;
 
 function fillBasics() {
-  type(screen.getByLabelText(/^Título/), 'Como é o dia a dia de um franqueado');
+  type(screen.getByLabelText(/^Título \*/), 'Como é o dia a dia de um franqueado');
   type(text(), 'Um texto com mais de cinquenta caracteres para passar na validação do post.');
 }
 
@@ -139,15 +140,17 @@ describe('the owned-channels tab', () => {
   it('checks the featured image before using it, and previews it', async () => {
     render(<OwnedChannelsPanel canPublish />);
     choose('Imagem destacada', [file('capa.gif', 'image/gif')]);
-    expect(await screen.findByText(/capa.gif”: use JPG, PNG ou WebP/)).toBeTruthy();
+    expect(await screen.findByText(/"capa.gif" não é JPG, PNG nem WebP/)).toBeTruthy();
     choose('Imagem destacada', [file('capa.jpg', 'image/jpeg', 6 * 1024 * 1024)]);
-    expect(await screen.findByText(/O máximo é 5 MB/)).toBeTruthy();
+    expect(await screen.findByText(/o limite é 5 MB. Reduza a imagem/)).toBeTruthy();
     expect(held).toBe(0);
 
     nextImage.current = { width: 800, height: 600 };
     choose('Imagem destacada', [file('pequena.jpg')]);
     expect(
-      await screen.findByText(/800 × 600 px. A imagem destacada precisa de pelo menos 1200 × 630/),
+      await screen.findByText(
+        /800 × 600 px. A imagem destacada precisa de pelo menos 1200 × 630. Escolha uma versão maior/,
+      ),
     ).toBeTruthy();
     expect(screen.queryByAltText('Imagem destacada')).toBeNull();
 
@@ -194,7 +197,7 @@ describe('the owned-channels tab', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Formatação de Franquia' }));
     choose('Imagens no texto', [file('a.jpg'), file('b.jpg'), file('c.jpg')]);
     await screen.findByLabelText('Legenda da imagem 3');
-    expect(screen.getByText(/o tema não tem carrossel/)).toBeTruthy();
+    expect(screen.getByText(/porque o tema não tem carrossel/)).toBeTruthy();
 
     const inGallery = screen.getAllByRole('checkbox', { name: 'Na galeria' });
     fireEvent.click(inGallery[0] as Element);
@@ -217,7 +220,7 @@ describe('the owned-channels tab', () => {
   it('takes a YouTube or Vimeo link only, and plays it in the preview where the marker is', () => {
     render(<OwnedChannelsPanel canPublish />);
     type(screen.getByLabelText(/^Vídeo/), 'https://example.com/video.mp4');
-    expect(screen.getByText('Use um link do YouTube ou do Vimeo')).toBeTruthy();
+    expect(screen.getByText(/Este link não é do YouTube nem do Vimeo/)).toBeTruthy();
     expect(screen.queryByLabelText(/arquivo de vídeo/i)).toBeNull();
 
     type(screen.getByLabelText(/^Vídeo/), 'https://youtu.be/dQw4w9WgXcQ');
@@ -230,17 +233,96 @@ describe('the owned-channels tab', () => {
     expect(html.indexOf('<iframe')).toBeLessThan(html.indexOf('Depois.'));
   });
 
-  it('says SEO is filled in WordPress, and offers no SEO fields', () => {
+  it('updates the SEO checklist while the person types, with a state that is not colour alone', () => {
     render(<OwnedChannelsPanel canPublish />);
-    expect(screen.getByText(/são\s+preenchidos no WordPress/)).toBeTruthy();
-    expect(screen.queryByLabelText(/Palavra-chave foco|Título SEO|Meta descrição/)).toBeNull();
+    const list = screen.getByRole('complementary', { name: 'Checklist SEO' });
+    const item = (label: RegExp) =>
+      [...list.querySelectorAll('li')].find((li) => label.test(li.textContent ?? ''));
+    expect(screen.getByRole('status').textContent).toBe('0 de 10 itens prontos');
+    expect(item(/Palavra-chave no título/)?.textContent).toContain('Falta: ');
+
+    type(screen.getByLabelText(/^Palavra-chave foco/), 'formatação de franquia');
+    type(screen.getByLabelText(/^Título \*/), 'Formatacao de Franquia: por onde começar');
+    expect(item(/Palavra-chave no título/)?.textContent).toContain('Feito: ');
+    expect(item(/Palavra-chave no título/)?.className).toBe('seo-check-ok');
+
+    type(
+      text(),
+      'Sem a palavra aqui.\n\n## Etapas da formatação de franquia\n\nVeja https://wingscompany.com.br/contato',
+    );
+    expect(item(/no primeiro parágrafo/)?.className).toBe('seo-check-missing');
+    expect(item(/em um subtítulo/)?.className).toBe('seo-check-ok');
+    expect(item(/Link para outra página de wingscompany.com.br/)?.className).toBe('seo-check-ok');
+
+    type(screen.getByLabelText(/^Meta descrição/), 'curta');
+    expect(item(/Meta descrição entre 120 e 160/)?.textContent).toContain(
+      'Faltam 115 para o mínimo',
+    );
+    expect(screen.getByRole('status').textContent).toBe('4 de 10 itens prontos');
+  });
+
+  it('never lets the checklist block the draft, and keeps SEO fields out of what goes to the site', async () => {
+    render(<OwnedChannelsPanel canPublish />);
+    fillBasics();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Formatação de Franquia' }));
+    type(screen.getByLabelText(/^Palavra-chave foco/), 'franquia');
+    expect(screen.getByRole('status').textContent).toMatch(/^[0-3] de 10/);
+    fireEvent.click(screen.getByRole('button', { name: 'Criar rascunho no site' }));
+    await waitFor(() => expect(createDraft).toHaveBeenCalledTimes(1));
+    expect(createDraft.mock.calls[0]?.[0].seo).toEqual({
+      focusKeyword: 'franquia',
+      seoTitle: '',
+      metaDescription: '',
+    });
+    expect(screen.getByText(/para você colar no Rank Math/)).toBeTruthy();
+  });
+
+  it('lists what to fix at the top, focuses it, and keeps each message by its field', async () => {
+    render(<OwnedChannelsPanel canPublish />);
+    fireEvent.click(screen.getByRole('button', { name: 'Criar rascunho no site' }));
+    const summary = await screen.findByText('Falta acertar 3 campos para criar o rascunho');
+    const box = summary.closest('div') as HTMLElement;
+    await waitFor(() => expect(document.activeElement).toBe(box));
+    expect(box.querySelector('a[href="#site-post-title"]')?.textContent).toBe('Título');
+    expect(box.querySelector('a[href="#site-post-categories"]')).toBeTruthy();
+
+    const title = screen.getByLabelText(/^Título \*/);
+    expect(title.getAttribute('aria-invalid')).toBe('true');
+    expect(document.getElementById(title.getAttribute('aria-describedby') ?? '')?.textContent).toBe(
+      'Dê um título ao post',
+    );
+
+    // A message stops being shown as soon as its field changes.
+    type(title, 'Agora tem título');
+    expect(screen.queryByText('Dê um título ao post')).toBeNull();
+    expect(screen.getByText('Falta acertar 2 campos para criar o rascunho')).toBeTruthy();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Formatação de Franquia' }));
+    type(text(), 'Um texto com mais de cinquenta caracteres para passar na validação do post.');
+    expect(screen.queryByText(/Falta acertar/)).toBeNull();
+  });
+
+  it('keeps what was being written across a closed tab, and lets the person discard it', () => {
+    const first = render(<OwnedChannelsPanel canPublish />);
+    type(screen.getByLabelText(/^Título \*/), 'Um post pela metade');
+    type(screen.getByLabelText(/^Palavra-chave foco/), 'franquia');
+    first.unmount();
+
+    render(<OwnedChannelsPanel canPublish />);
+    expect((screen.getByLabelText(/^Título \*/) as HTMLInputElement).value).toBe(
+      'Um post pela metade',
+    );
+    expect(screen.getByText(/Recuperamos o post que você estava escrevendo/)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Descartar e começar do zero' }));
+    expect((screen.getByLabelText(/^Título \*/) as HTMLInputElement).value).toBe('');
+    expect(window.localStorage.getItem('wings.site-post-draft.v1')).toBeNull();
   });
 
   it('keeps everything in the form when sending fails', async () => {
     createState.current = {
       isError: true,
       error: new Error(
-        'Imagem 2 não subiu para o WordPress: Arquivo grande demais. O post NÃO foi criado.',
+        'Imagem 2 não subiu para o WordPress. O post não foi criado e o formulário continua como está.',
       ),
     };
     render(<OwnedChannelsPanel canPublish />);
@@ -251,8 +333,8 @@ describe('the owned-channels tab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Criar rascunho no site' }));
     await waitFor(() => expect(createDraft).toHaveBeenCalledTimes(1));
 
-    expect(screen.getByText(/Imagem 2 não subiu.*NÃO foi criado/)).toBeTruthy();
-    expect((screen.getByLabelText(/^Título/) as HTMLInputElement).value).toBe(
+    expect(screen.getByText(/Imagem 2 não subiu.*não foi criado/)).toBeTruthy();
+    expect((screen.getByLabelText(/^Título \*/) as HTMLInputElement).value).toBe(
       'Como é o dia a dia de um franqueado',
     );
     expect(screen.getByLabelText('Legenda da imagem 1')).toBeTruthy();
@@ -277,7 +359,7 @@ describe('the owned-channels tab', () => {
   it('turns sending off, and says why, when the server has no credentials', () => {
     site.configured = false;
     render(<OwnedChannelsPanel canPublish />);
-    expect(screen.getByText(/ainda não foi configurada no servidor/)).toBeTruthy();
+    expect(screen.getByText(/Falta configurar no servidor/)).toBeTruthy();
     expect(
       (screen.getByRole('button', { name: 'Criar rascunho no site' }) as HTMLButtonElement)
         .disabled,
@@ -286,8 +368,8 @@ describe('the owned-channels tab', () => {
 
   it('warns about risky promises without blocking the site', () => {
     render(<OwnedChannelsPanel canPublish />);
-    type(screen.getByLabelText(/^Título/), 'Retorno garantido em 12 meses');
-    expect(screen.getByText(/No site isto não é bloqueado/)).toBeTruthy();
+    type(screen.getByLabelText(/^Título \*/), 'Retorno garantido em 12 meses');
+    expect(screen.getByText(/No site isto não bloqueia o\s+rascunho/)).toBeTruthy();
   });
 
   it('lists what was sent with its edit link, category and images', () => {
@@ -300,6 +382,11 @@ describe('the owned-channels tab', () => {
         categoryNames: ['Formatação de Franquia'],
         hasFeaturedImage: true,
         imageCount: 3,
+        seo: {
+          focusKeyword: 'formatação de franquia',
+          seoTitle: 'Formatação de franquia: por onde começar',
+          metaDescription: '',
+        },
         createdAt: '2026-09-18T12:00:00.000Z',
         createdByName: 'Eric',
       },
@@ -311,6 +398,7 @@ describe('the owned-channels tab', () => {
         categoryNames: [],
         hasFeaturedImage: false,
         imageCount: 0,
+        seo: null,
         createdAt: '2026-09-18T11:00:00.000Z',
         createdByName: 'Eric',
       },
@@ -324,8 +412,11 @@ describe('the owned-channels tab', () => {
     ).toBeTruthy();
     expect(
       screen.getByText(
-        /Sem confirmação — confira no WordPress · sem categoria · sem imagem destacada/,
+        /O site não confirmou. Confira no WordPress · sem categoria · sem imagem destacada/,
       ),
     ).toBeTruthy();
+    // What was typed for SEO is kept here, to be pasted into Rank Math.
+    expect(screen.getByText('SEO para colar no Rank Math')).toBeTruthy();
+    expect(screen.getByText('Formatação de franquia: por onde começar')).toBeTruthy();
   });
 });

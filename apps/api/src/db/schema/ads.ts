@@ -296,6 +296,8 @@ export const sitePosts = pgTable(
      */
     media: jsonb('media').notNull().default([]),
     videoUrl: text('video_url'),
+    /** Focus keyword, SEO title and meta description, as typed. Never sent to the site. */
+    seo: jsonb('seo'),
     createdBy: uuid('created_by').references(() => employees.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

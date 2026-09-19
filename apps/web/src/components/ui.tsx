@@ -11,20 +11,34 @@ export function Field({
   label,
   error,
   hint,
+  required,
+  errorId,
   children,
 }: {
   label: string;
   error?: string;
   hint?: string;
+  /** Shows the required mark next to the label. */
+  required?: boolean;
+  /** Id for the error text, so the input can point at it with aria-describedby. */
+  errorId?: string;
   children: ReactNode;
 }) {
   return (
     <label className="field">
-      <span className="field-label">{label}</span>
+      <span className="field-label">
+        {label}
+        {required && (
+          <span className="field-required" aria-hidden="true">
+            {' '}
+            *
+          </span>
+        )}
+      </span>
       {children}
       {hint && !error && <span className="field-hint">{hint}</span>}
       {error && (
-        <span className="field-error" role="alert">
+        <span className="field-error" role="alert" id={errorId}>
           {error}
         </span>
       )}
