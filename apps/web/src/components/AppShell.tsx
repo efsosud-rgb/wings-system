@@ -43,10 +43,15 @@ export function AppShell() {
     <div className="shell">
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <span className="brand">
-            WING<span>S</span>
-          </span>
-          <small>SYSTEM</small>
+          <img className="sidebar-brand-mark" src="/brand/wings-logo-mark.png" alt="Wings System" />
+          {/* Decorative: the image's alt already reads "Wings System". One span per
+              letter so the word spreads across the same span "COMPANY" takes in the
+              original mark, whatever the font. */}
+          <small aria-hidden="true">
+            {'SYSTEM'.split('').map((letter, index) => (
+              <span key={index}>{letter}</span>
+            ))}
+          </small>
         </div>
 
         <nav className="sidebar-menu" aria-label="Módulos">

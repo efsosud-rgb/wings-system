@@ -125,3 +125,12 @@ describe('the old flat menu is gone', () => {
     expect(screen.queryByRole('link', { name: 'Funcionários' })).toBeNull();
   });
 });
+
+describe('the brand', () => {
+  it('is the Wings mark, named for screen readers', () => {
+    renderShell();
+
+    const mark = screen.getByRole('img', { name: 'Wings System' });
+    expect(mark.getAttribute('src')).toBe('/brand/wings-logo-mark.png');
+  });
+});

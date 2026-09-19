@@ -87,8 +87,8 @@ export function AuthCard({
   return (
     <main className="auth-wrap">
       <section className="auth-card">
-        <h1 className="brand">
-          WING<span>S</span>
+        <h1 className="auth-brand">
+          <img src="/brand/wings-logo.png" alt="Wings System" />
         </h1>
         <h2 className="auth-title">{title}</h2>
         {subtitle && <p className="auth-subtitle">{subtitle}</p>}
