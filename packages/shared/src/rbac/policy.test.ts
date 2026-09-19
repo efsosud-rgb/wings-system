@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { assertMatrixComplete, type PermissionKey } from './permissions.js';
-import { assignableRoles, can, roleAssignmentDenial, tracksTime, type Actor } from './policy.js';
+import {
+  assignableRoles,
+  can,
+  roleAssignmentDenial,
+  roleChangeDenial,
+  roleFieldState,
+  tracksTime,
+  type Actor,
+} from './policy.js';
 import { ROLE_KEYS, type RoleKey } from './roles.js';
 import type { SectorSlug } from './sectors.js';
 
@@ -28,7 +36,7 @@ const juridico = actor('formatacao_juridico', 'formatacao-juridico');
 describe('permission matrix', () => {
   it('covers every role', () => {
     expect(() => assertMatrixComplete()).not.toThrow();
-    expect(ROLE_KEYS).toHaveLength(12);
+    expect(ROLE_KEYS).toHaveLength(13);
   });
 });
 
@@ -127,8 +135,8 @@ describe('privilege escalation guards', () => {
     expect(roleAssignmentDenial(gerente, 'vendedor_expansao')).toBeNull();
   });
 
-  it('blocks changing your own role, even for Admin Master', () => {
-    expect(roleAssignmentDenial(adminMaster, 'admin_master', adminMaster.employeeId)).toBe(
+  it('blocks a manager changing their own role', () => {
+    expect(roleAssignmentDenial(gerente, 'vendedor_expansao', gerente.employeeId)).toBe(
       'self_role_change',
     );
   });
@@ -150,27 +158,164 @@ describe('time tracking exemptions', () => {
   });
 });
 
-describe('assignableRoles', () => {
-  it('lets Admin Master grant anything except their own record', () => {
-    expect(assignableRoles(adminMaster)).toHaveLength(12);
-    expect(assignableRoles(adminMaster, adminMaster.employeeId)).toHaveLength(0);
+const rhDp = actor('rh_dp', 'diretoria', { id: 'emp-rh-1' });
+const seller = {
+  employeeId: 'emp-vend-9',
+  sector: 'comercial',
+  currentRole: 'vendedor_expansao',
+} as const;
+
+describe('RH / DP', () => {
+  it('runs the employee register and sees the RH/DP module', () => {
+    for (const permission of ['employees.read', 'employees.create', 'employees.update'] as const) {
+      expect(can(rhDp, permission, { sector: 'marketing' }).allowed).toBe(true);
+    }
+    expect(can(rhDp, 'timeclock.read').allowed).toBe(true);
+    expect(can(rhDp, 'employees.pii.view').allowed).toBe(false);
+    expect(can(rhDp, 'ads.approve').allowed).toBe(false);
+  });
+});
+
+describe('roleChangeDenial — holders of employees.assign_roles', () => {
+  it('lets RH/DP change a seller, in any sector', () => {
+    expect(roleChangeDenial(rhDp, seller, 'gerente_comercial')).toBeNull();
+    expect(roleChangeDenial(rhDp, seller, 'diretoria')).toBeNull();
   });
 
-  it('never offers Admin Master or Diretoria to anyone else', () => {
-    for (const role of assignableRoles(gerente)) {
+  it('never lets Diretoria or RH/DP grant Admin Master', () => {
+    expect(roleChangeDenial(diretor, seller, 'admin_master')).toBe('protected_role');
+    expect(roleChangeDenial(rhDp, seller, 'admin_master')).toBe('protected_role');
+    expect(roleChangeDenial(rhDp, { sector: 'comercial' }, 'admin_master')).toBe('protected_role');
+  });
+
+  it('never lets them take Admin Master away, or touch that record at all', () => {
+    const anAdmin = {
+      employeeId: 'emp-adm-2',
+      sector: 'diretoria',
+      currentRole: 'admin_master',
+    } as const;
+    expect(roleChangeDenial(diretor, anAdmin, 'diretoria')).toBe('admin_master_record');
+    expect(roleChangeDenial(rhDp, anAdmin, 'vendedor_expansao')).toBe('admin_master_record');
+  });
+
+  it('blocks Diretoria changing their own level', () => {
+    const self = {
+      employeeId: diretor.employeeId,
+      sector: 'diretoria',
+      currentRole: 'diretoria',
+    } as const;
+    expect(roleChangeDenial(diretor, self, 'rh_dp')).toBe('self_role_change');
+  });
+
+  it('keeps Diretoria out of TI', () => {
+    const tiEmployee = {
+      employeeId: 'emp-ti-9',
+      sector: 'formatacao-ti',
+      currentRole: 'formatacao_ti',
+    } as const;
+    expect(roleChangeDenial(diretor, tiEmployee, 'marketing')).toBe('diretoria_ti_block');
+    expect(roleChangeDenial(rhDp, tiEmployee, 'marketing')).toBeNull();
+  });
+});
+
+describe('roleChangeDenial — Admin Master', () => {
+  const self = {
+    employeeId: adminMaster.employeeId,
+    sector: 'diretoria',
+    currentRole: 'admin_master',
+  } as const;
+
+  it('may change anyone, themselves included', () => {
+    expect(roleChangeDenial(adminMaster, seller, 'admin_master')).toBeNull();
+    expect(roleChangeDenial(adminMaster, self, 'diretoria')).toBeNull();
+  });
+
+  it('cannot demote the last Admin Master, whoever that is', () => {
+    expect(
+      roleChangeDenial(adminMaster, { ...self, isLastActiveAdminMaster: true }, 'diretoria'),
+    ).toBe('last_admin_master');
+    const other = {
+      employeeId: 'emp-adm-2',
+      sector: 'diretoria',
+      currentRole: 'admin_master',
+      isLastActiveAdminMaster: true,
+    } as const;
+    expect(roleChangeDenial(adminMaster, other, 'rh_dp')).toBe('last_admin_master');
+  });
+});
+
+describe('roleChangeDenial — sector managers, unchanged', () => {
+  it('stays inside the sector and below the manager rank', () => {
+    expect(roleChangeDenial(gerente, seller, 'vendedor_formatacao')).toBeNull();
+    expect(roleChangeDenial(gerente, seller, 'gerente_comercial')).toBe('role_rank_too_high');
+    expect(roleChangeDenial(gerente, seller, 'rh_dp')).toBe('role_rank_too_high');
+    expect(roleChangeDenial(gerente, seller, 'diretoria')).toBe('protected_role');
+    expect(
+      roleChangeDenial(gerente, { ...seller, sector: 'marketing' }, 'vendedor_formatacao'),
+    ).toBe('out_of_scope');
+  });
+
+  it('gives nothing to someone with no grant at all', () => {
+    expect(roleChangeDenial(juridico, seller, 'vendedor_formatacao')).toBe('no_permission');
+  });
+});
+
+describe('roleFieldState', () => {
+  it('always offers the current level, so saving without changing it works', () => {
+    const self = {
+      employeeId: gerente.employeeId,
+      sector: 'comercial',
+      currentRole: 'gerente_comercial',
+    } as const;
+    expect(roleFieldState(gerente, self)).toEqual({
+      options: ['gerente_comercial'],
+      locked: 'self_role_change',
+    });
+    expect(roleFieldState(juridico, seller)).toEqual({
+      options: ['vendedor_expansao'],
+      locked: 'no_permission',
+    });
+  });
+
+  it('locks the last Admin Master on Admin Master', () => {
+    const self = {
+      employeeId: adminMaster.employeeId,
+      sector: 'diretoria',
+      currentRole: 'admin_master',
+      isLastActiveAdminMaster: true,
+    } as const;
+    expect(roleFieldState(adminMaster, self)).toEqual({
+      options: ['admin_master'],
+      locked: 'last_admin_master',
+    });
+  });
+
+  it('offers RH/DP everything but Admin Master', () => {
+    const state = roleFieldState(rhDp, seller);
+    expect(state.locked).toBeNull();
+    expect(state.options).toHaveLength(12);
+    expect(state.options).not.toContain('admin_master');
+  });
+});
+
+describe('assignableRoles', () => {
+  it('lets Admin Master grant anything on a new record', () => {
+    expect(assignableRoles(adminMaster)).toHaveLength(13);
+  });
+
+  it('never offers Admin Master or Diretoria to a manager', () => {
+    for (const role of assignableRoles(gerente, { sector: 'comercial' })) {
       expect(['admin_master', 'diretoria']).not.toContain(role);
     }
   });
 
-  it('offers only roles below the actor rank', () => {
-    const offered = assignableRoles(gerente);
+  it('offers a manager only roles below their rank', () => {
+    const offered = assignableRoles(gerente, { sector: 'comercial' });
     expect(offered).toContain('vendedor_expansao');
     expect(offered).not.toContain('gerente_comercial');
   });
 
   it('offers nothing to someone without the permission to assign', () => {
-    // A plain employee has no roles.assign grant; the form would be empty and
-    // the API would refuse anyway.
-    expect(assignableRoles(juridico)).not.toContain('admin_master');
+    expect(assignableRoles(juridico)).toEqual([]);
   });
 });

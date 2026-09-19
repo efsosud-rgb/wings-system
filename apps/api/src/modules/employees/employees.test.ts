@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { SESSION_COOKIE, type EmployeeView } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
@@ -487,13 +487,13 @@ describe('PATCH /employees/:id', () => {
     ).toBe(401);
   });
 
-  it('blocks changing your own role', async () => {
-    const admin = await sessionFor({ role: 'admin_master', sector: 'diretoria' });
+  it('blocks a sector manager changing their own role', async () => {
+    const manager = await sessionFor({ role: 'gerente_comercial', sector: 'comercial' });
     const res = await app.inject({
       method: 'PATCH',
-      url: `/employees/${admin.employee.id}`,
-      cookies: admin.cookies,
-      payload: { role: 'diretoria' },
+      url: `/employees/${manager.employee.id}`,
+      cookies: manager.cookies,
+      payload: { role: 'vendedor_expansao' },
     });
     expect(res.statusCode).toBe(403);
   });
@@ -526,6 +526,148 @@ describe('PATCH /employees/:id', () => {
       payload: { cargo: 'Qualquer' },
     });
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe('PATCH /employees/:id — access levels', () => {
+  const patch = (id: string, cookies: Record<string, string>, payload: Record<string, unknown>) =>
+    app.inject({ method: 'PATCH', url: `/employees/${id}`, cookies, payload });
+
+  const roleOf = async (id: string, cookies: Record<string, string>) =>
+    (await app.inject({ method: 'GET', url: `/employees/${id}`, cookies })).json().employee.role;
+
+  /** Leaves `keepId` as the only Admin Master who can log in. */
+  async function makeLastAdminMaster(keepId: string) {
+    await db.execute(sql`
+      update employees set status = 'inactive', deactivated_at = now()
+       where id <> ${keepId}
+         and role_id = (select id from roles where key = 'admin_master')
+    `);
+  }
+
+  it('lets RH/DP change a seller and audits who, whom, from what and to what', async () => {
+    const rh = await sessionFor({ role: 'rh_dp', sector: 'diretoria' });
+    const seller = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
+
+    const res = await patch(seller.id, rh.cookies, { role: 'gerente_comercial' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().employee.role).toBe('gerente_comercial');
+
+    const entries = await db.select().from(auditLog).where(eq(auditLog.entityId, seller.id));
+    const change = entries.find((entry) => entry.action === 'employee.role_changed');
+    expect(change?.actorEmployeeId).toBe(rh.employee.id);
+    expect(change?.targetEmployeeId).toBe(seller.id);
+    expect(change?.metadata).toEqual({
+      previousRole: 'vendedor_expansao',
+      newRole: 'gerente_comercial',
+    });
+  });
+
+  it('stops Diretoria granting Admin Master', async () => {
+    const diretor = await sessionFor({ role: 'diretoria', sector: 'diretoria' });
+    const seller = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
+
+    const res = await patch(seller.id, diretor.cookies, { role: 'admin_master' });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe('role_not_allowed');
+    expect(await roleOf(seller.id, diretor.cookies)).toBe('vendedor_expansao');
+  });
+
+  it('stops Diretoria changing their own level', async () => {
+    const diretor = await sessionFor({ role: 'diretoria', sector: 'diretoria' });
+    const res = await patch(diretor.employee.id, diretor.cookies, { role: 'rh_dp' });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('lets Diretoria change a level but nothing else on the record', async () => {
+    const diretor = await sessionFor({ role: 'diretoria', sector: 'diretoria' });
+    const seller = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
+
+    expect((await patch(seller.id, diretor.cookies, { role: 'marketing' })).statusCode).toBe(200);
+    expect(
+      (await patch(seller.id, diretor.cookies, { role: 'rh_dp', cargo: 'Outro' })).statusCode,
+    ).toBe(403);
+    expect((await patch(seller.id, diretor.cookies, { cargo: 'Outro' })).statusCode).toBe(403);
+  });
+
+  it('stops anyone but an Admin Master touching an Admin Master record', async () => {
+    const admin = await createEmployee(db, { role: 'admin_master', sector: 'diretoria' });
+    const rh = await sessionFor({ role: 'rh_dp', sector: 'diretoria' });
+    const diretor = await sessionFor({ role: 'diretoria', sector: 'diretoria' });
+
+    for (const payload of [{ role: 'diretoria' }, { email: 'tomada@wingscompany.com.br' }]) {
+      const res = await patch(admin.id, rh.cookies, payload);
+      expect(res.statusCode).toBe(403);
+      expect(res.json().error).toBe('admin_master_record');
+    }
+    expect((await patch(admin.id, diretor.cookies, { role: 'diretoria' })).statusCode).toBe(403);
+  });
+
+  it('saves without changing the level, whoever is saving', async () => {
+    const diretor = await sessionFor({ role: 'diretoria', sector: 'diretoria' });
+    const manager = await sessionFor({ role: 'gerente_comercial', sector: 'comercial' });
+
+    // The form sends the current level back; that is not a change.
+    expect(
+      (
+        await patch(manager.employee.id, manager.cookies, {
+          role: 'gerente_comercial',
+          cargo: 'Gerente',
+        })
+      ).statusCode,
+    ).toBe(200);
+    expect(
+      (await patch(diretor.employee.id, diretor.cookies, { role: 'diretoria' })).statusCode,
+    ).toBe(200);
+    // Nothing changed, so nobody was logged out and nothing was audited as a change.
+    expect(
+      (await app.inject({ method: 'GET', url: '/auth/me', cookies: manager.cookies })).statusCode,
+    ).toBe(200);
+    const entries = await db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.entityId, manager.employee.id));
+    expect(entries.some((entry) => entry.action === 'employee.role_changed')).toBe(false);
+  });
+
+  it('lets an Admin Master change their own level while another one remains', async () => {
+    await createEmployee(db, { role: 'admin_master', sector: 'diretoria' });
+    const admin = await sessionFor({ role: 'admin_master', sector: 'diretoria' });
+
+    const res = await patch(admin.employee.id, admin.cookies, { role: 'diretoria' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('never demotes or deactivates the last Admin Master', async () => {
+    const admin = await sessionFor({ role: 'admin_master', sector: 'diretoria' });
+    await makeLastAdminMaster(admin.employee.id);
+
+    const view = await app.inject({
+      method: 'GET',
+      url: `/employees/${admin.employee.id}`,
+      cookies: admin.cookies,
+    });
+    expect(view.json().employee.isLastActiveAdminMaster).toBe(true);
+
+    const demote = await patch(admin.employee.id, admin.cookies, { role: 'diretoria' });
+    expect(demote.statusCode).toBe(409);
+    expect(demote.json().error).toBe('last_admin_master');
+
+    const deactivate = await patch(admin.employee.id, admin.cookies, { status: 'inactive' });
+    expect(deactivate.statusCode).toBe(409);
+
+    // Still an Admin Master, still logged in, and an unrelated edit still works.
+    expect((await patch(admin.employee.id, admin.cookies, { cargo: 'Diretor' })).statusCode).toBe(
+      200,
+    );
+    expect(await roleOf(admin.employee.id, admin.cookies)).toBe('admin_master');
+
+    // With a second one in place the lock lifts.
+    const second = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
+    expect((await patch(second.id, admin.cookies, { role: 'admin_master' })).statusCode).toBe(200);
+    expect((await patch(admin.employee.id, admin.cookies, { role: 'diretoria' })).statusCode).toBe(
+      200,
+    );
   });
 });
 
