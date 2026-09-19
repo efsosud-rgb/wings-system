@@ -19,8 +19,22 @@ import {
   budgetPeriods,
 } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
+import {
+  buildAdTree,
+  draftHasTree,
+  prepareAdTree,
+  recordStep,
+  type PreparedTree,
+  type TreeDraft,
+} from './ad-tree.js';
 import { draftPayloadHash, engageKillSwitch, releaseReservation } from './budget-guard.js';
-import type { AdsPlatformClient, MutationOutcome, PlatformObjective } from './platform/types.js';
+import {
+  isAdTreeWriter,
+  type AdsPlatformClient,
+  type AdTreeWriter,
+  type MutationOutcome,
+  type PlatformObjective,
+} from './platform/types.js';
 import { reconciliationFreshness } from './reconcile.js';
 
 /**
@@ -56,7 +70,10 @@ export type ExecutionRefusal =
   | 'wrong_account'
   | 'reconciliation_stale'
   | 'campaign_missing'
-  | 'draft_missing';
+  | 'draft_missing'
+  | 'media_missing'
+  | 'targeting_unresolved'
+  | 'platform_unavailable';
 
 export type ExecutionResult =
   | { ok: true; outcome: 'applied'; executionId: string }
@@ -69,6 +86,10 @@ export interface ExecuteOptions {
   allowWrites?: boolean;
   now?: Date;
   actorEmployeeId?: string | null;
+  /** The pixel a leads ad set optimises for (`META_PIXEL_ID`). */
+  metaPixelId?: string;
+  /** Where uploaded ad videos live (`CREATIVE_VIDEO_DIR`). */
+  videoDir?: string;
 }
 
 function requestHashOf(input: Record<string, unknown>): string {
@@ -195,6 +216,7 @@ export async function executeApprovedChange(
   // What the write is aimed at: an existing campaign, or the draft of a new one.
   let campaign: typeof adCampaigns.$inferSelect | null = null;
   let draft: (typeof adCampaignDrafts.$inferSelect & { payload: CampaignDraft }) | null = null;
+  let tree: { writer: AdTreeWriter; draft: TreeDraft; prepared: PreparedTree } | null = null;
 
   if (change.kind === 'create_campaign') {
     const stored = change.draftId
@@ -233,6 +255,23 @@ export async function executeApprovedChange(
     // carry `platform: 'meta'`, so they pass unchanged.
     if (AD_ACCOUNT_PLATFORM[draft.payload.platform] !== account.platform) {
       return refuse('wrong_account', 'O rascunho não pertence à plataforma desta conta.');
+    }
+
+    // A campaign with its ad set and ads is several writes. Everything that can
+    // be checked by reading is checked now, before the first of them: the
+    // files exist, and the platform can place every state and city.
+    if (draftHasTree(draft.payload)) {
+      if (!isAdTreeWriter(client)) {
+        return refuse(
+          'writes_disabled',
+          'O cliente desta plataforma não cria conjuntos de anúncios nem anúncios.',
+        );
+      }
+      const prepared = await prepareAdTree(db, client, draft.payload, {
+        videoDir: options.videoDir,
+      });
+      if (!prepared.ok) return refuse(prepared.reason, prepared.message);
+      tree = { writer: client, draft: draft.payload, prepared: prepared.value };
     }
   } else {
     const found = change.campaignId
@@ -297,6 +336,7 @@ export async function executeApprovedChange(
       name: draft.name,
       objective: META_OBJECTIVE[payload.objective] as PlatformObjective,
       // Read from the approved draft, never defaulted: see CreateCampaignSpec.
+      // Since 2026-09-19 no draft can ask for ACTIVE; older approved ones could.
       status: draft.startPaused ? 'PAUSED' : 'ACTIVE',
       dailyBudgetCents: draft.dailyBudgetCents,
       ...(isGooglePlatform(payload.platform)
@@ -353,6 +393,36 @@ export async function executeApprovedChange(
         .update(adChangeRequests)
         .set({ campaignId: created.id })
         .where(eq(adChangeRequests.id, change.id));
+
+      await recordStep(db, execution.id, {
+        seq: 1,
+        kind: 'campaign',
+        label: `Campanha ${outcome.campaign.name}`,
+        status: 'created',
+        externalId: outcome.campaign.id,
+        message: null,
+      });
+
+      if (tree) {
+        const built = await buildAdTree(db, tree.writer, {
+          executionId: execution.id,
+          startSeq: 1,
+          campaignExternalId: outcome.campaign.id,
+          draft: tree.draft,
+          prepared: tree.prepared,
+          pixelId: options.metaPixelId ?? '',
+        });
+        if (built.status === 'incomplete') {
+          // The campaign exists and the rest does not, or not all of it. That is
+          // not "applied" and not "rejected": it is a state a person must look
+          // at, so it takes the same road as any unknown outcome — recorded,
+          // account frozen, nothing retried.
+          outcome = {
+            status: 'unknown',
+            reason: `Criação interrompida depois da campanha. ${built.reason}`,
+          };
+        }
+      }
     } else if (campaign) {
       await db
         .update(adCampaigns)
@@ -364,7 +434,9 @@ export async function executeApprovedChange(
         })
         .where(eq(adCampaigns.id, campaign.id));
     }
+  }
 
+  if (outcome.status === 'applied') {
     await db
       .update(adExecutions)
       .set({

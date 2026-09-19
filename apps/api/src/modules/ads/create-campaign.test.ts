@@ -41,7 +41,22 @@ afterAll(async () => {
   await harness?.drop();
 });
 
+/**
+ * A draft as they were approved before ad sets existed: no page, no placements,
+ * no age range. Those still execute as what they were approved to be — the
+ * campaign shell alone — and that path is what this file rehearses. The full
+ * tree has its own file, `meta-ad-tree.test.ts`.
+ */
 function draftOf(overrides: Partial<CampaignDraft> = {}): CampaignDraft {
+  const shell = { ...fullDraftOf(overrides) };
+  delete shell.identity;
+  delete shell.placements;
+  delete shell.ageMin;
+  delete shell.ageMax;
+  return shell;
+}
+
+function fullDraftOf(overrides: Partial<CampaignDraft> = {}): CampaignDraft {
   return campaignDraftSchema.parse({
     platform: 'meta',
     name: `Sacrifício ${randomBytes(3).toString('hex')}`,
@@ -68,6 +83,10 @@ function draftOf(overrides: Partial<CampaignDraft> = {}): CampaignDraft {
     endDate: TODAY,
     dailyBudgetCents: 600,
     utms: { utm_source: 'meta', utm_medium: 'paid_social', utm_campaign: 'x', utm_content: 'lead' },
+    ageMin: 25,
+    ageMax: 65,
+    placements: { mode: 'automatic' },
+    identity: { pageId: '104567890123456' },
     startPaused: true,
     ...overrides,
   });
@@ -155,22 +174,22 @@ describe('asking for a campaign', () => {
     expect(change?.autoApproved).toBe(false);
   });
 
-  it('reserves an active campaign with overdelivery, inside this month only', async () => {
+  it('judges a paused campaign as if it were running, and still reserves nothing', async () => {
     const { accountId } = await world();
     const reserved = await reserveCampaignCreation(db, {
       adAccountId: accountId,
-      draft: draftOf({ startPaused: false, dailyBudgetCents: 2_000 }),
+      draft: draftOf({ dailyBudgetCents: 2_000 }),
     });
-    // One day (today) × R$ 20 × 1.25.
-    expect(reserved.ok && reserved.value.exposureDeltaCents).toBe(2_500);
-    expect((await getPeriodState(db, accountId, PERIOD))?.committedCents).toBe(2_500);
+    // One day (today) × R$ 20 × 1.25 fits under R$ 2.800: accepted, nothing held.
+    expect(reserved.ok && reserved.value.exposureDeltaCents).toBe(0);
+    expect((await getPeriodState(db, accountId, PERIOD))?.committedCents).toBe(0);
   });
 
-  it('refuses an active campaign that does not fit under the ceiling', async () => {
+  it('refuses a campaign that would not fit under the ceiling once switched on', async () => {
     const { accountId } = await world();
     const reserved = await reserveCampaignCreation(db, {
       adAccountId: accountId,
-      draft: draftOf({ startPaused: false, dailyBudgetCents: 300_000 }),
+      draft: draftOf({ dailyBudgetCents: 300_000 }),
     });
     expect(reserved.ok).toBe(false);
     expect(!reserved.ok && reserved.reason).toBe('usable_would_be_exceeded');
@@ -273,7 +292,7 @@ describe('executing an approved creation', () => {
     const { changeRequestId, draftId } = await requestAndApprove(accountId, draftOf());
     await db
       .update(adCampaignDrafts)
-      .set({ payload: draftOf({ startPaused: false }) })
+      .set({ payload: draftOf({ dailyBudgetCents: 999 }) })
       .where(eq(adCampaignDrafts.id, draftId));
 
     const result = await executeApprovedChange(db, client, changeRequestId, { allowWrites: true });
@@ -301,7 +320,7 @@ describe('executing an approved creation', () => {
     const { accountId, client } = await world();
     const { changeRequestId } = await requestAndApprove(
       accountId,
-      draftOf({ startPaused: false, dailyBudgetCents: 2_000 }),
+      draftOf({ dailyBudgetCents: 2_000 }),
     );
     client.injectFailure({ kind: 'reject', code: '1487079', message: 'Budget below the minimum' });
 

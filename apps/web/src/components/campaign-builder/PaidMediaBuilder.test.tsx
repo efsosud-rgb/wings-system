@@ -1,8 +1,9 @@
-import type { AudienceProfile, CustomLocation, PacingSummary } from '@wings/shared';
+import type { AudienceProfile, CustomLocation, MetaIdentities, PacingSummary } from '@wings/shared';
 import { cleanup, fireEvent, render as renderBare, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client.js';
 
 /**
  * The builder is approved by what it shows, so these tests pin what the
@@ -22,6 +23,29 @@ let uploads = 0;
 
 const savedAudience: { current: AudienceProfile | null } = { current: null };
 const saveAudience = vi.fn();
+
+const PAGE = '104567890123456';
+const OTHER_PAGE = '209876543210987';
+const INSTAGRAM = '17841400000000000';
+function buildIdentities(): MetaIdentities {
+  return {
+    pages: [
+      {
+        id: PAGE,
+        name: 'Wings Company',
+        instagramAccounts: [{ id: INSTAGRAM, username: 'wingscompany' }],
+      },
+      { id: OTHER_PAGE, name: 'Wings Franquias', instagramAccounts: [] },
+    ],
+    default: { pageId: PAGE, instagramActorId: INSTAGRAM },
+  };
+}
+/** What GET /ads/meta/identities answers: the lists, or the failure. */
+const identities: { current: MetaIdentities | ApiError } = { current: buildIdentities() };
+const refetchIdentities = vi.fn();
+const saveIdentityDefault = vi.fn();
+const uploadVideo = vi.fn();
+const videoFailure: { current: ApiError | null } = { current: null };
 
 vi.mock('../../api/ads.js', () => ({
   useAudienceProfile: () => ({ data: { profile: savedAudience.current } }),
@@ -45,6 +69,42 @@ vi.mock('../../api/ads.js', () => ({
           mimeType: 'image/png',
           byteSize: 1,
           ...uploadSize.current,
+        },
+      });
+    },
+  }),
+  useMetaIdentities: (enabled: boolean) => {
+    const failed = identities.current instanceof ApiError;
+    return {
+      data: enabled && !failed ? { identities: identities.current } : undefined,
+      isLoading: false,
+      isError: enabled && failed,
+      error: failed ? identities.current : null,
+      refetch: refetchIdentities,
+    };
+  },
+  useSaveMetaIdentityDefault: () => ({
+    mutate: saveIdentityDefault,
+    isError: false,
+    isSuccess: false,
+    error: null,
+  }),
+  useUploadVideo: () => ({
+    isPending: false,
+    mutate: (
+      file: File,
+      options: {
+        onSuccess: (result: { video: Record<string, unknown> }) => void;
+        onError: (failure: Error) => void;
+      },
+    ) => {
+      uploadVideo(file);
+      if (videoFailure.current) return options.onError(videoFailure.current);
+      options.onSuccess({
+        video: {
+          id: '33333333-3333-4333-8333-333333333333',
+          mimeType: 'video/mp4',
+          byteSize: 5_242_880,
         },
       });
     },
@@ -122,6 +182,11 @@ afterEach(() => {
   uploads = 0;
   savedAudience.current = null;
   saveAudience.mockReset();
+  identities.current = buildIdentities();
+  refetchIdentities.mockReset();
+  saveIdentityDefault.mockReset();
+  uploadVideo.mockReset();
+  videoFailure.current = null;
 });
 
 function chooseImage(input: Element, type = 'image/png') {
@@ -151,7 +216,7 @@ const type = (element: Element, value: string) => fireEvent.change(element, { ta
 describe('the paid-media builder', () => {
   it('offers Meta, Google Pesquisa and YouTube, and says why the others are off', () => {
     render(<PaidMediaBuilder canRequest />);
-    for (const name of [/Meta/, /Google Pesquisa/, /YouTube/]) {
+    for (const name of [/^Meta/, /Google Pesquisa/, /YouTube/]) {
       expect((screen.getByRole('radio', { name }) as HTMLInputElement).disabled).toBe(false);
     }
     for (const name of [/TikTok/, /LinkedIn/]) {
@@ -186,7 +251,7 @@ describe('the paid-media builder', () => {
   it('opens every section with what the choice changes in practice', () => {
     render(<PaidMediaBuilder canRequest />);
     const sections = screen.getAllByRole('region').filter((el) => el.matches('.builder-section'));
-    expect(sections).toHaveLength(13);
+    expect(sections).toHaveLength(15);
     for (const section of sections) {
       expect(section.querySelector('.builder-why')?.textContent?.length).toBeGreaterThan(40);
     }
@@ -462,7 +527,7 @@ describe('the builder on Google', () => {
       Array.from({ length: 11 }, (_, index) => String(index + 1)),
     );
 
-    choose(/Meta/);
+    choose(/^Meta/);
     expect(screen.queryByLabelText(/^Palavras-chave(?! negativas)/)).toBeNull();
     expect(screen.getAllByLabelText(/^Imagem — Variação/)).toHaveLength(2);
   });
@@ -476,12 +541,13 @@ describe('the builder on Google', () => {
     expect(screen.getByText(/Criada como campanha Demand Gen restrita ao YouTube/)).toBeTruthy();
   });
 
-  it('locks a Google campaign on paused, and says why', () => {
+  it('locks every campaign on paused, and says why on each platform', () => {
     render(<PaidMediaBuilder canRequest />);
     const paused = () =>
       screen.getByRole('checkbox', { name: /Criar a campanha/ }) as HTMLInputElement;
-    fireEvent.click(paused());
-    expect(paused().checked).toBe(false);
+    expect(paused().checked).toBe(true);
+    expect(paused().disabled).toBe(true);
+    expect(screen.getByText(/Tudo nasce pausado: campanha, conjunto e anúncios/)).toBeTruthy();
 
     choose(/Google Pesquisa/);
     expect(paused().checked).toBe(true);
@@ -636,5 +702,320 @@ describe('the builder on Google', () => {
       screen.getByText('O Google pode gastar até o dobro da verba diária num dia.'),
     ).toBeTruthy();
     expect(screen.queryByText('A Meta pode gastar até 25% acima disto num dia.')).toBeNull();
+  });
+});
+
+describe('the builder on Meta: ad set and ads', () => {
+  const choose = (name: RegExp) => fireEvent.click(screen.getByRole('radio', { name }));
+  const launch = async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
+    return requestCampaign.mock.calls[0]?.[0] as Record<string, unknown>;
+  };
+  const typeOf = (variation: number, name: string) =>
+    fireEvent.click(
+      screen
+        .getAllByRole('group', { name: `Tipo de criativo — Variação ${variation}` })
+        .flatMap((group) => Array.from(group.querySelectorAll('button')))
+        .find((button) => button.textContent === name) as Element,
+    );
+  const video = (size?: number) => {
+    const file = new File(['x'], 'anuncio.mp4', { type: 'video/mp4' });
+    if (size !== undefined) Object.defineProperty(file, 'size', { value: size });
+    return file;
+  };
+
+  it('starts at 25–65, automatic placements and the page Wings saved', () => {
+    render(<PaidMediaBuilder canRequest />);
+    expect((screen.getByLabelText(/^Idade mínima/) as HTMLInputElement).value).toBe('25');
+    expect((screen.getByLabelText(/^Idade máxima/) as HTMLInputElement).value).toBe('65');
+    expect(
+      (screen.getByRole('radio', { name: /Automático \(Advantage\+\)/ }) as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+    expect(screen.queryByRole('checkbox', { name: 'Facebook Feed' })).toBeNull();
+    expect((screen.getByLabelText(/^Página do Facebook/) as HTMLSelectElement).value).toBe(PAGE);
+    expect((screen.getByLabelText(/^Conta do Instagram/) as HTMLSelectElement).value).toBe(
+      INSTAGRAM,
+    );
+    // The Drive button is still there, and still off.
+    expect(
+      (screen.getByRole('button', { name: /Escolher do Drive/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('shows none of it on Google, and sends none of it', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    choose(/Google Pesquisa/);
+    expect(screen.queryByLabelText(/^Idade mínima/)).toBeNull();
+    expect(screen.queryByRole('radio', { name: /Automático/ })).toBeNull();
+    expect(screen.queryByLabelText(/^Página do Facebook/)).toBeNull();
+
+    type(screen.getByLabelText(/^Nome da campanha/), 'Pesquisa — franquia SP');
+    type(screen.getByLabelText(/Página de destino/), 'https://wingscompany.com.br/franquia');
+    type(screen.getByLabelText(/Verba por dia/), '30,00');
+    type(
+      screen.getByLabelText(/^Quem é o cliente ideal/),
+      'Empreendedor de 30 a 50 anos, com experiência.',
+    );
+    fireEvent.click(screen.getByRole('checkbox', { name: 'SP' }));
+    type(screen.getByLabelText(/^Palavras-chave(?! negativas)/), 'abrir franquia');
+    type(screen.getByLabelText(/^Título 1/), 'Franquia Wings');
+    type(screen.getByLabelText(/^Descrição 1/), 'Conheça o modelo de negócio e o suporte.');
+    const payload = await launch();
+    for (const field of ['ageMin', 'ageMax', 'placements', 'identity']) {
+      expect(payload).not.toHaveProperty(field);
+    }
+  });
+
+  it('sends the defaults as the ad set will be created', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    fillValidCampaign();
+    expect(await launch()).toMatchObject({
+      ageMin: 25,
+      ageMax: 65,
+      placements: { mode: 'automatic', facebook: [], instagram: [] },
+      identity: { pageId: PAGE, instagramActorId: INSTAGRAM },
+      startPaused: true,
+      variations: [{ creativeType: 'image' }, { creativeType: 'image' }],
+    });
+    expect(saveIdentityDefault).not.toHaveBeenCalled();
+  });
+
+  it('refuses an age outside 18–65 and a range upside down, in Portuguese', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    fillValidCampaign();
+    type(screen.getByLabelText(/^Idade mínima/), '17');
+    fireEvent.click(screen.getByRole('button', { name: 'Conferir campanha' }));
+    await waitFor(() => expect(screen.getByText('A idade vai de 18 a 65 anos.')).toBeTruthy());
+
+    type(screen.getByLabelText(/^Idade mínima/), '50');
+    type(screen.getByLabelText(/^Idade máxima/), '30');
+    fireEvent.click(screen.getByRole('button', { name: 'Conferir campanha' }));
+    await waitFor(() =>
+      expect(screen.getByText('A idade máxima não pode ser menor que a mínima')).toBeTruthy(),
+    );
+    expect(requestCampaign).not.toHaveBeenCalled();
+  });
+
+  it('takes manual placements, and needs an Instagram account to advertise there', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    fillValidCampaign();
+    choose(/^Manual/);
+    fireEvent.click(screen.getByRole('button', { name: 'Conferir campanha' }));
+    await waitFor(() =>
+      expect(screen.getByText('Escolha ao menos um posicionamento')).toBeTruthy(),
+    );
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Facebook Feed' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Instagram Reels' }));
+    type(screen.getByLabelText(/^Conta do Instagram/), '');
+    fireEvent.click(screen.getByRole('button', { name: 'Conferir campanha' }));
+    await waitFor(() =>
+      expect(
+        screen.getByText('Escolha a conta do Instagram para anunciar no Instagram'),
+      ).toBeTruthy(),
+    );
+
+    type(screen.getByLabelText(/^Conta do Instagram/), INSTAGRAM);
+    expect(await launch()).toMatchObject({
+      placements: { mode: 'manual', facebook: ['feed'], instagram: ['reels'] },
+      identity: { pageId: PAGE, instagramActorId: INSTAGRAM },
+    });
+  });
+
+  it('warns about the 9:16 cut only with Stories or Reels, and never blocks', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    fillValidCampaign();
+    expect(screen.queryByText(/Stories e Reels são verticais/)).toBeNull();
+    expect(screen.queryByText(/Esta imagem não é 9:16/)).toBeNull();
+
+    choose(/^Manual/);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Facebook Feed' }));
+    expect(screen.queryByText(/Stories e Reels são verticais/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Facebook Stories' }));
+    expect(screen.getByText(/Stories e Reels são verticais \(9:16\)/)).toBeTruthy();
+    // Both uploaded images are 1080 × 1080.
+    expect(
+      screen.getAllByText(/Esta imagem não é 9:16: será cortada em Stories e Reels/),
+    ).toHaveLength(2);
+
+    uploadSize.current = { width: 1080, height: 1920 };
+    chooseImage(screen.getAllByLabelText(/^Imagem — Variação/)[0] as Element);
+    expect(screen.getAllByText(/Esta imagem não é 9:16/)).toHaveLength(1);
+
+    await launch();
+  });
+
+  it('saves the page as the Wings default only when asked, and only when it changed', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    fillValidCampaign();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Guardar como padrão da Wings/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Conferir campanha' }));
+    await waitFor(() => expect(screen.getByText(/Tudo conferido/)).toBeTruthy());
+    // Ticked, but it is already the default.
+    expect(saveIdentityDefault).not.toHaveBeenCalled();
+
+    type(screen.getByLabelText(/^Página do Facebook/), OTHER_PAGE);
+    expect((screen.getByLabelText(/^Conta do Instagram/) as HTMLSelectElement).value).toBe('');
+    fireEvent.click(screen.getByRole('button', { name: 'Conferir campanha' }));
+    await waitFor(() => expect(saveIdentityDefault).toHaveBeenCalledTimes(1));
+    expect(saveIdentityDefault).toHaveBeenCalledWith({
+      pageId: OTHER_PAGE,
+      instagramActorId: null,
+    });
+  });
+
+  it('cannot launch where Meta is not configured, and says so', () => {
+    identities.current = new ApiError(503, { error: 'meta_not_configured', message: 'x' });
+    render(<PaidMediaBuilder canRequest />);
+    expect(
+      screen.getByText(
+        /A Meta não está configurada neste ambiente — não é possível escolher a página/,
+      ),
+    ).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Lançar campanha' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    // Google does not depend on Meta.
+    choose(/Google Pesquisa/);
+    expect(
+      (screen.getByRole('button', { name: 'Lançar campanha' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it('offers to ask Meta again when Meta failed', () => {
+    identities.current = new ApiError(502, {
+      error: 'meta_unavailable',
+      message: 'A Meta não respondeu.',
+    });
+    render(<PaidMediaBuilder canRequest />);
+    expect(screen.getByText(/A Meta não respondeu\./)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar de novo' }));
+    expect(refetchIdentities).toHaveBeenCalledTimes(1);
+  });
+
+  it('uploads a video variation and sends its id, with no image and no cards', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    fillValidCampaign();
+    typeOf(2, 'Vídeo');
+    expect(screen.getAllByLabelText(/^Imagem — Variação/)).toHaveLength(1);
+    fireEvent.change(screen.getByLabelText(/^Vídeo — Variação 2(?!,)/), {
+      target: { files: [video()] },
+    });
+    expect(uploadVideo).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/5 MB/)).toBeTruthy();
+    // The approximate preview plays the uploaded file.
+    expect(
+      document.querySelector('video[src="/api/ads/videos/33333333-3333-4333-8333-333333333333"]'),
+    ).toBeTruthy();
+
+    const payload = await launch();
+    const second = (payload.variations as Record<string, unknown>[])[1];
+    expect(second).toMatchObject({
+      creativeType: 'video',
+      videoId: '33333333-3333-4333-8333-333333333333',
+    });
+    expect(second?.creativeId).toBeUndefined();
+    expect(second?.cards).toBeUndefined();
+  });
+
+  it('refuses a video over 4 GB before sending anything', () => {
+    render(<PaidMediaBuilder canRequest />);
+    typeOf(1, 'Vídeo');
+    fireEvent.change(screen.getByLabelText(/^Vídeo — Variação 1(?!,)/), {
+      target: { files: [video(4 * 1024 * 1024 * 1024 + 1)] },
+    });
+    expect(screen.getByText('O vídeo passa de 4 GB.')).toBeTruthy();
+    expect(uploadVideo).not.toHaveBeenCalled();
+  });
+
+  it('says so when the server has nowhere to keep videos', () => {
+    videoFailure.current = new ApiError(503, {
+      error: 'video_storage_not_configured',
+      message: 'O armazenamento de vídeos não está configurado neste ambiente.',
+    });
+    render(<PaidMediaBuilder canRequest />);
+    typeOf(1, 'Vídeo');
+    fireEvent.change(screen.getByLabelText(/^Vídeo — Variação 1(?!,)/), {
+      target: { files: [video()] },
+    });
+    expect(screen.getByText(/O armazenamento de vídeos não está configurado/)).toBeTruthy();
+  });
+
+  it('builds a carousel of two cards and sends exactly that', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    fillValidCampaign();
+    typeOf(2, 'Carrossel');
+    expect(screen.getAllByText(/^Cartão \d$/)).toHaveLength(2);
+
+    const titles = screen.getAllByLabelText(/^Título do cartão/);
+    const texts = screen.getAllByLabelText(/^Texto do cartão/);
+    const links = screen.getAllByLabelText(/^Link do cartão/);
+    type(titles[0] as Element, 'Suporte completo');
+    type(texts[0] as Element, 'Do ponto à inauguração.');
+    type(links[0] as Element, 'https://wingscompany.com.br/suporte');
+    type(titles[1] as Element, 'Modelo enxuto');
+    type(texts[1] as Element, 'Operação simples.');
+    type(links[1] as Element, 'https://wingscompany.com.br/modelo');
+    chooseImage(screen.getByLabelText(/^Imagem — Variação 2, cartão 1/));
+    fireEvent.click(
+      Array.from(
+        screen
+          .getByRole('group', { name: 'Mídia — Variação 2, cartão 2' })
+          .querySelectorAll('button'),
+      ).find((button) => button.textContent === 'Vídeo') as Element,
+    );
+    fireEvent.change(screen.getByLabelText(/^Vídeo — Variação 2, cartão 2(?!,)/), {
+      target: { files: [video()] },
+    });
+
+    expect(screen.getByText(/Carrossel \(2 cartões\)/)).toBeTruthy();
+    const payload = await launch();
+    const second = (payload.variations as Record<string, unknown>[])[1];
+    expect(second).toMatchObject({ creativeType: 'carousel' });
+    expect(second?.creativeId).toBeUndefined();
+    expect(second?.cards).toEqual([
+      {
+        mediaType: 'image',
+        creativeId: '00000003-0000-4000-8000-000000000000',
+        headline: 'Suporte completo',
+        description: 'Do ponto à inauguração.',
+        link: 'https://wingscompany.com.br/suporte',
+      },
+      {
+        mediaType: 'video',
+        videoId: '33333333-3333-4333-8333-333333333333',
+        headline: 'Modelo enxuto',
+        description: 'Operação simples.',
+        link: 'https://wingscompany.com.br/modelo',
+      },
+    ]);
+  });
+
+  it('refuses a carousel of one card, and blocked copy on a card', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    fillValidCampaign();
+    typeOf(2, 'Carrossel');
+    type(screen.getAllByLabelText(/^Título do cartão/)[0] as Element, 'Retorno garantido');
+    expect(screen.getByText(/Há texto bloqueado pelo compliance/)).toBeTruthy();
+    type(screen.getAllByLabelText(/^Título do cartão/)[0] as Element, 'Suporte completo');
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remover cartão' })[1] as Element);
+    fireEvent.click(screen.getByRole('button', { name: 'Conferir campanha' }));
+    await waitFor(() =>
+      expect(screen.getByText('Um carrossel tem de 2 a 10 cartões')).toBeTruthy(),
+    );
+    expect(requestCampaign).not.toHaveBeenCalled();
+  });
+
+  it('says where the official preview will be', () => {
+    render(<PaidMediaBuilder canRequest />);
+    expect(
+      screen.getByText(
+        /A prévia oficial da Meta fica disponível na tela da aprovação depois que os anúncios forem criados/,
+      ),
+    ).toBeTruthy();
   });
 });

@@ -134,6 +134,10 @@ async function draft(overrides: Record<string, unknown> = {}) {
     endDate: TODAY,
     dailyBudgetCents: 600,
     utms: { utm_source: 'meta', utm_medium: 'paid_social', utm_campaign: 'x', utm_content: 'lead' },
+    ageMin: 25,
+    ageMax: 65,
+    placements: { mode: 'automatic' },
+    identity: { pageId: '104567890123456', instagramActorId: null },
     startPaused: true,
     ...overrides,
   };
@@ -232,7 +236,7 @@ describe('POST /ads/campaign-requests', () => {
       method: 'POST',
       url: '/ads/campaign-requests',
       cookies: await cookiesFor('marketing'),
-      payload: await draft({ startPaused: false, dailyBudgetCents: 300_000 }),
+      payload: await draft({ dailyBudgetCents: 300_000 }),
     });
     expect(response.statusCode).toBe(409);
     expect(response.json<{ error: string }>().error).toBe('usable_would_be_exceeded');
@@ -442,6 +446,10 @@ describe('Google campaigns through the same request', () => {
       ...(await draft()),
       formatKey: undefined,
       variations: [],
+      ageMin: undefined,
+      ageMax: undefined,
+      placements: undefined,
+      identity: undefined,
       platform: 'google_search',
       name: `Pesquisa ${randomBytes(3).toString('hex')}`,
       utms: { utm_source: 'google', utm_medium: 'cpc', utm_campaign: 'x', utm_content: 'lead' },

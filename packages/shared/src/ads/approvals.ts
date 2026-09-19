@@ -93,6 +93,11 @@ export interface ApprovalDetail extends ApprovalListItem {
   changeStatus: ChangeStatus;
   executedAt: string | null;
   lastExecutionOutcome: 'applied' | 'rejected' | 'unknown' | null;
+  /**
+   * What the last execution made on the platform, object by object and in
+   * order — how a person sees what exists after a failure in the middle.
+   */
+  executionSteps: ExecutionStepView[];
   /** False when the server has no write credentials or writes are disabled. */
   executionAvailable: boolean;
   accountExternalId: string;
@@ -131,3 +136,12 @@ export const approvalDecisionSchema = z
   });
 
 export type ApprovalDecisionInput = z.output<typeof approvalDecisionSchema>;
+
+export interface ExecutionStepView {
+  seq: number;
+  kind: 'campaign' | 'image' | 'video' | 'ad_set' | 'creative' | 'ad';
+  label: string;
+  status: 'created' | 'failed' | 'unknown';
+  externalId: string | null;
+  message: string | null;
+}

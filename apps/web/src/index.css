@@ -1981,3 +1981,141 @@ textarea.control {
   font-family: inherit;
   resize: vertical;
 }
+
+/* ---------- Meta: criativos por tipo, posicionamentos, página ---------- */
+.builder-segmented {
+  display: inline-flex;
+  border: 1px solid var(--wings-border);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+.builder-segmented-option {
+  background: none;
+  border: none;
+  color: var(--wings-muted);
+  font: inherit;
+  font-weight: 600;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.builder-segmented-option.is-active {
+  background: var(--wings-accent);
+  color: #fff;
+}
+
+.builder-creative-thumb video,
+.ad-preview-media video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.builder-crop-warning {
+  color: var(--wings-accent);
+}
+
+.builder-placements {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.builder-placement-group {
+  border: 1px solid var(--wings-border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.builder-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.builder-card {
+  border: 1px solid var(--wings-border);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.ad-preview-carousel {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 8px;
+  width: 100%;
+  align-self: stretch;
+}
+
+.ad-preview-carousel-card {
+  flex: 0 0 70%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: #fff;
+  color: #1c1e21;
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 12px;
+  padding-bottom: 6px;
+}
+
+.ad-preview-carousel-card strong,
+.ad-preview-carousel-card small {
+  padding: 0 8px;
+}
+
+.ad-preview-carousel-media {
+  aspect-ratio: 1 / 1;
+  background: #e4e6eb;
+  display: grid;
+  place-items: center;
+}
+
+.ad-preview-carousel-media img,
+.ad-preview-carousel-media video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* ---------- aprovação: o que foi criado e a prévia oficial ---------- */
+.execution-steps {
+  margin-top: 12px;
+}
+
+.execution-steps ol {
+  margin: 6px 0 0 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.execution-step-failed strong,
+.execution-step-unknown strong {
+  color: var(--wings-danger);
+}
+
+.official-previews {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.official-preview iframe {
+  width: 340px;
+  height: 640px;
+  border: 1px solid var(--wings-border);
+  border-radius: 6px;
+  background: #fff;
+}

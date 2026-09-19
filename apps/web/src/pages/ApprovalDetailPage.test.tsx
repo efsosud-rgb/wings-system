@@ -2,12 +2,15 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type {
   ApprovalDetail,
   ChangeSimulation,
+  ExecutionStepView,
   ExposureScenario,
+  OfficialPreview,
   SessionUser,
 } from '@wings/shared';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../api/client.js';
 
 /**
  * The panel is what a person actually looks at before money moves, so these
@@ -22,6 +25,9 @@ const simulation: { current: { simulation: ChangeSimulation; nextPending: null }
 };
 const decide = vi.fn().mockResolvedValue({ ok: true, status: 'approved' });
 const execute = vi.fn().mockResolvedValue({ ok: true, outcome: 'applied' });
+/** What GET /ads/approvals/:id/previews answers, and for which placement it was asked. */
+const previews: { current: OfficialPreview[] | ApiError } = { current: [] };
+const previewsAskedFor = vi.fn();
 
 vi.mock('../api/auth.js', () => ({
   useSession: () => ({ data: session.current, isLoading: false }),
@@ -39,6 +45,16 @@ vi.mock('../api/ads.js', () => ({
     isSuccess: false,
     error: null,
   }),
+  useOfficialPreviews: (_id: string, placement: string) => {
+    previewsAskedFor(placement);
+    const failed = previews.current instanceof ApiError;
+    return {
+      data: failed ? undefined : { previews: previews.current },
+      isLoading: false,
+      isError: failed,
+      error: failed ? previews.current : null,
+    };
+  },
   useApprovals: () => ({ data: { approvals: [] }, isLoading: false, isError: false }),
   // The simulator has its own test file; here it only needs to render.
   useSimulation: () => ({ data: simulation.current, isLoading: false, isError: false }),
@@ -81,6 +97,7 @@ function buildApproval(overrides: Partial<ApprovalDetail> = {}): ApprovalDetail 
     executedAt: null,
     lastExecutionOutcome: null,
     executionAvailable: true,
+    executionSteps: [],
     draft: null,
     auditTrail: [
       {
@@ -366,12 +383,14 @@ describe('a request to create a campaign', () => {
     destinationUrl: 'https://wingscompany.com.br/franquia',
     variations: [
       {
+        creativeType: 'image',
         creativeId: '11111111-1111-4111-8111-111111111111',
         headline: 'Leve a Wings',
         primaryText: 'Fale com a gente.',
         callToAction: 'LEARN_MORE',
       },
       {
+        creativeType: 'image',
         creativeId: '22222222-2222-4222-8222-222222222222',
         headline: 'Seja franqueado',
         primaryText: 'Suporte completo.',
@@ -471,5 +490,196 @@ describe('a request to create a campaign', () => {
     });
     renderDetail();
     expect(screen.getByText(/já fica reservada no mês/)).toBeTruthy();
+  });
+});
+
+describe('a Meta request that creates the ad set and the ads', () => {
+  const tree: NonNullable<ApprovalDetail['draft']> = {
+    platform: 'meta',
+    name: 'Meta — conjunto e anúncios',
+    objective: 'lead',
+    idealCustomerProfile: 'Empreendedor de 30 a 50 anos, com experiência em gestão.',
+    reach: { states: ['SP'], cities: [], customLocations: [] },
+    formatKey: 'feed_square',
+    destinationUrl: 'https://wingscompany.com.br/franquia',
+    variations: [
+      {
+        creativeType: 'video',
+        videoId: '33333333-3333-4333-8333-333333333333',
+        headline: 'Veja a Wings por dentro',
+        primaryText: 'Um minuto sobre o modelo.',
+        callToAction: 'LEARN_MORE',
+      },
+      {
+        creativeType: 'carousel',
+        cards: [1, 2, 3].map((n) => ({
+          mediaType: 'image' as const,
+          creativeId: '11111111-1111-4111-8111-111111111111',
+          headline: `Cartão ${n}`,
+          description: 'Suporte completo.',
+          link: 'https://wingscompany.com.br/franquia',
+        })),
+        headline: 'Conheça a Wings',
+        primaryText: 'Deslize para ver.',
+        callToAction: 'LEARN_MORE',
+      },
+    ],
+    ageMin: 25,
+    ageMax: 65,
+    placements: { mode: 'manual', facebook: ['feed'], instagram: ['stories', 'reels'] },
+    identity: { pageId: '104567890123456', instagramActorId: '17841400000000000' },
+    startDate: '2026-09-20',
+    endDate: '2026-09-29',
+    dailyBudgetCents: 2_000,
+    utms: { utm_source: 'meta', utm_medium: 'paid_social', utm_campaign: 'x', utm_content: 'lead' },
+    startPaused: true,
+  };
+  const created = (overrides: Record<string, unknown> = {}) =>
+    buildApproval({
+      changeKind: 'create_campaign',
+      campaignName: tree.name,
+      status: 'approved',
+      changeStatus: 'executed',
+      draft: tree,
+      ...overrides,
+    });
+
+  afterEach(() => {
+    previews.current = [];
+    previewsAskedFor.mockReset();
+  });
+
+  it('shows age range, placements, page, Instagram and each creative type', () => {
+    approval.current = created({ status: 'pending', changeStatus: 'pending_approval' });
+    renderDetail();
+
+    expect(screen.getByText(/Tudo nasce/)).toBeTruthy();
+    expect(screen.getByText('25 a 65 anos')).toBeTruthy();
+    expect(screen.getByText('Facebook: Feed · Instagram: Stories, Reels')).toBeTruthy();
+    expect(screen.getByText('Página 104567890123456')).toBeTruthy();
+    expect(screen.getByText('Instagram 17841400000000000')).toBeTruthy();
+    expect(screen.getByText('1. Vídeo')).toBeTruthy();
+    expect(screen.getByText('2. Carrossel (3 cartões)')).toBeTruthy();
+    // Nothing exists on Meta yet: no official preview is asked for.
+    expect(screen.queryByText('Prévia oficial da Meta')).toBeNull();
+    expect(previewsAskedFor).not.toHaveBeenCalled();
+  });
+
+  it('says an older draft creates the campaign alone, and asks for no official preview', () => {
+    const old = {
+      ...tree,
+      identity: undefined,
+      placements: undefined,
+      ageMin: undefined,
+      ageMax: undefined,
+    };
+    approval.current = created({ draft: old });
+    renderDetail();
+
+    expect(
+      screen.getByText(/Pedido anterior aos conjuntos de anúncios: cria só a campanha\./),
+    ).toBeTruthy();
+    expect(screen.queryByText('Faixa etária')).toBeNull();
+    expect(screen.queryByText('Prévia oficial da Meta')).toBeNull();
+  });
+
+  it('lists what was created on Meta, so a failure in the middle can be read', () => {
+    const executionSteps: ExecutionStepView[] = [
+      {
+        seq: 2,
+        kind: 'video',
+        label: 'Vídeo da variação 1',
+        status: 'created',
+        externalId: '9001',
+        message: null,
+      },
+      {
+        seq: 1,
+        kind: 'campaign',
+        label: 'Campanha',
+        status: 'created',
+        externalId: '23850000000000001',
+        message: null,
+      },
+      {
+        seq: 3,
+        kind: 'ad_set',
+        label: 'Conjunto de anúncios',
+        status: 'failed',
+        externalId: null,
+        message: 'Invalid parameter',
+      },
+      {
+        seq: 4,
+        kind: 'ad',
+        label: 'Anúncio da variação 1',
+        status: 'unknown',
+        externalId: null,
+        message: null,
+      },
+    ];
+    approval.current = {
+      ...created({ changeStatus: 'unknown' }),
+      executionSteps,
+    } as ApprovalDetail;
+    renderDetail();
+
+    const items = screen
+      .getByText('O que foi criado na Meta')
+      .parentElement?.querySelectorAll('li');
+    expect(Array.from(items ?? []).map((item) => item.textContent)).toEqual([
+      'Campanha — criado id 23850000000000001',
+      'Vídeo da variação 1 — criado id 9001',
+      'Conjunto de anúncios — falhou Invalid parameter',
+      'Anúncio da variação 1 — desconhecido',
+    ]);
+  });
+
+  it('renders the official preview only from Meta’s own hosts, per placement', () => {
+    previews.current = [
+      {
+        adName: 'Variação 1',
+        iframeSrc: 'https://www.facebook.com/ads/api/preview_iframe.php?d=1',
+      },
+      {
+        adName: 'Variação 2',
+        iframeSrc: 'https://business.facebook.com/ads/api/preview_iframe.php?d=2',
+      },
+      { adName: 'Intruso', iframeSrc: 'https://www.facebook.com.evil.example/preview' },
+    ];
+    approval.current = created();
+    renderDetail();
+
+    expect(screen.getByText('Prévia oficial da Meta')).toBeTruthy();
+    expect(previewsAskedFor).toHaveBeenLastCalledWith('facebook_feed');
+    const frames = Array.from(document.querySelectorAll('iframe'));
+    expect(frames.map((frame) => frame.title)).toEqual(['Variação 1', 'Variação 2']);
+    expect(frames[0]?.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
+    expect(frames[0]?.getAttribute('referrerpolicy')).toBe('no-referrer');
+    expect(screen.getByText(/o endereço não é da Meta/)).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText(/^Posicionamento$/), {
+      target: { value: 'instagram_stories' },
+    });
+    expect(previewsAskedFor).toHaveBeenLastCalledWith('instagram_stories');
+  });
+
+  it('says the ads do not exist yet, and keeps the approximate preview on other failures', () => {
+    approval.current = created();
+    previews.current = new ApiError(409, { error: 'not_created_yet', message: 'x' });
+    renderDetail();
+    expect(screen.getByText('Os anúncios ainda não existem na Meta.')).toBeTruthy();
+    cleanup();
+
+    previews.current = new ApiError(502, {
+      error: 'meta_unavailable',
+      message: 'A Meta não respondeu.',
+    });
+    renderDetail();
+    expect(
+      screen.getByText(/A Meta não respondeu\. A prévia aproximada acima continua valendo\./),
+    ).toBeTruthy();
+    expect(screen.getByText(/Não é a prévia oficial da Meta/)).toBeTruthy();
+    expect(document.querySelector('iframe')).toBeNull();
   });
 });

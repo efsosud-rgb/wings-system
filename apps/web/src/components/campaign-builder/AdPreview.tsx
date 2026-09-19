@@ -1,17 +1,26 @@
-import { CALL_TO_ACTION_LABEL, type CallToAction, type CreativeFormat } from '@wings/shared';
+import {
+  CALL_TO_ACTION_LABEL,
+  type CallToAction,
+  type CreativeFormat,
+  type CreativeType,
+} from '@wings/shared';
 import { useState } from 'react';
 
 /**
  * An approximate rendering of the ad, drawn by us.
  *
- * NOT Meta's preview: that API needs the Facebook page id and the image inside
- * Meta (a write), and has not been validated against the live account. This is
- * here so the operator and the approver see image, copy and button together,
- * cropped the way each placement crops — and it says on screen what it is.
+ * NOT Meta's preview: that one needs the media inside Meta (a write), so it
+ * only exists after the ads were created — the approval page asks for it then.
+ * This is here so the operator and the approver see media, copy and button
+ * together, cropped the way each placement crops — and it says what it is.
  */
 
 export function creativeUrl(creativeId: string): string {
   return `/api/ads/creatives/${creativeId}`;
+}
+
+export function videoUrl(videoId: string): string {
+  return `/api/ads/videos/${videoId}`;
 }
 
 function hostOf(url: string): string {
@@ -38,11 +47,55 @@ function mediaRatio(placement: PreviewPlacement, format: CreativeFormat | undefi
   return `${format.width} / ${format.height}`;
 }
 
+export interface PreviewCard {
+  mediaType?: 'image' | 'video';
+  creativeId?: string | null;
+  videoId?: string | null;
+  headline: string;
+  description: string;
+}
+
 export interface PreviewVariation {
-  creativeId: string | null | undefined;
+  /** Absent on drafts from before video and carousel: those are images. */
+  creativeType?: CreativeType;
+  creativeId?: string | null;
+  videoId?: string | null;
+  cards?: PreviewCard[];
   headline: string;
   primaryText: string;
   callToAction: CallToAction;
+}
+
+/** An uploaded image or video, or a placeholder saying which one is missing. */
+function PreviewMedia({
+  mediaType,
+  creativeId,
+  videoId,
+  label,
+}: {
+  mediaType: 'image' | 'video';
+  creativeId?: string | null;
+  videoId?: string | null;
+  label: string;
+}) {
+  if (mediaType === 'video') {
+    return videoId ? (
+      <video
+        controls
+        muted
+        preload="metadata"
+        src={videoUrl(videoId)}
+        aria-label={`Vídeo — ${label}`}
+      />
+    ) : (
+      <span className="muted">Sem vídeo</span>
+    );
+  }
+  return creativeId ? (
+    <img src={creativeUrl(creativeId)} alt={`Criativo — ${label}`} />
+  ) : (
+    <span className="muted">Sem criativo</span>
+  );
 }
 
 interface AdPreviewProps extends PreviewVariation {
@@ -54,7 +107,10 @@ interface AdPreviewProps extends PreviewVariation {
 
 function AdPreview({
   label,
+  creativeType = 'image',
   creativeId,
+  videoId,
+  cards = [],
   headline,
   primaryText,
   callToAction,
@@ -63,11 +119,34 @@ function AdPreview({
   placement,
 }: AdPreviewProps) {
   const story = placement === 'story';
-  const image = creativeId ? (
-    <img src={creativeUrl(creativeId)} alt={`Criativo — ${label}`} />
-  ) : (
-    <span className="muted">Sem criativo</span>
-  );
+  const media =
+    creativeType === 'carousel' ? (
+      // Cards side by side, scrolled sideways like the real thing.
+      <div className="ad-preview-carousel">
+        {cards.length === 0 && <span className="muted">Sem cartões</span>}
+        {cards.map((card, index) => (
+          <div className="ad-preview-carousel-card" key={index}>
+            <div className="ad-preview-carousel-media">
+              <PreviewMedia
+                mediaType={card.mediaType ?? 'image'}
+                creativeId={card.creativeId}
+                videoId={card.videoId}
+                label={`${label}, cartão ${index + 1}`}
+              />
+            </div>
+            <strong>{card.headline || `Título do cartão ${index + 1}`}</strong>
+            <small className="muted">{card.description || 'Texto do cartão'}</small>
+          </div>
+        ))}
+      </div>
+    ) : (
+      <PreviewMedia
+        mediaType={creativeType === 'video' ? 'video' : 'image'}
+        creativeId={creativeId}
+        videoId={videoId}
+        label={label}
+      />
+    );
 
   return (
     <figure className={`ad-preview ${story ? 'ad-preview-story' : ''}`}>
@@ -83,8 +162,14 @@ function AdPreview({
           </span>
         </div>
         {!story && <p className="ad-preview-text">{primaryText || 'Texto do anúncio'}</p>}
-        <div className="ad-preview-media" style={{ aspectRatio: mediaRatio(placement, format) }}>
-          {image}
+        <div
+          className="ad-preview-media"
+          style={
+            // A carousel sets its own height: its cards are squares in a row.
+            creativeType === 'carousel' ? undefined : { aspectRatio: mediaRatio(placement, format) }
+          }
+        >
+          {media}
           {story && <p className="ad-preview-text">{primaryText || 'Texto do anúncio'}</p>}
         </div>
         <div className="ad-preview-footer">
@@ -153,8 +238,8 @@ export function AdPreviewGallery({
       </div>
       <p className="field-hint">
         Prévia <strong>aproximada</strong>, desenhada pelo Wings System para conferir imagem, texto
-        e corte. Não é a prévia oficial da Meta — essa integração ainda depende de validação na
-        conta real.
+        e corte. Não é a prévia oficial da Meta. A prévia oficial da Meta fica disponível na tela da
+        aprovação depois que os anúncios forem criados.
       </p>
     </div>
   );

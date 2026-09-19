@@ -15,6 +15,7 @@ import type {
   PlatformAd,
   PlatformAdSet,
   PlatformCampaign,
+  ResolvedTargeting,
   SpendRow,
 } from './types.js';
 
@@ -128,6 +129,62 @@ export function sliceDateRange(
   return windows;
 }
 
+/** State names as Meta's location search knows them (it folds accents itself). */
+export const BRAZIL_STATE_NAMES: Record<string, string> = {
+  AC: 'Acre',
+  AL: 'Alagoas',
+  AP: 'Amapá',
+  AM: 'Amazonas',
+  BA: 'Bahia',
+  CE: 'Ceará',
+  DF: 'Distrito Federal',
+  ES: 'Espírito Santo',
+  GO: 'Goiás',
+  MA: 'Maranhão',
+  MT: 'Mato Grosso',
+  MS: 'Mato Grosso do Sul',
+  MG: 'Minas Gerais',
+  PA: 'Pará',
+  PB: 'Paraíba',
+  PR: 'Paraná',
+  PE: 'Pernambuco',
+  PI: 'Piauí',
+  RJ: 'Rio de Janeiro',
+  RN: 'Rio Grande do Norte',
+  RS: 'Rio Grande do Sul',
+  RO: 'Rondônia',
+  RR: 'Roraima',
+  SC: 'Santa Catarina',
+  SP: 'São Paulo',
+  SE: 'Sergipe',
+  TO: 'Tocantins',
+};
+
+/** Lower case, no accents, no "(state)" suffix: how two spellings of a place compare. */
+export function foldPlaceName(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\s*\((state|estado)\)\s*$/, '')
+    .trim();
+}
+
+/** A place, or the language, that Meta's search could not pin to one result. */
+export class TargetingResolutionError extends Error {
+  constructor(
+    readonly asked: string,
+    readonly matches: number,
+  ) {
+    super(
+      matches === 0
+        ? `A Meta não conhece "${asked}"`
+        : `"${asked}" corresponde a ${matches} resultados na Meta; escreva o nome como aparece no Gerenciador de Anúncios`,
+    );
+    this.name = 'TargetingResolutionError';
+  }
+}
+
 export class MetaReadOnlyClient implements AdsPlatformClient {
   readonly platform = 'meta' as const;
   /** Points at a real ad account: treat every call as consequential. */
@@ -196,7 +253,7 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
     return collected;
   }
 
-  private async get<T>(
+  protected async get<T>(
     path: string,
     params: Record<string, string> = {},
     timeoutMs = this.timeoutMs,
@@ -222,6 +279,150 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       );
     }
     return body as T;
+  }
+
+  // --- reads behind ad sets and ads -----------------------------------------
+
+  /**
+   * The Facebook Pages this token's user can act for, and the Instagram
+   * accounts attached to the ad account.
+   *
+   * Meta ties an Instagram account to a Page, but reading that link needs a
+   * Page token this system does not hold. So every Instagram account the ad
+   * account may advertise as is offered under every Page, and the person
+   * choosing knows which goes with which. NOT verified live: which of the two
+   * edges the system user's token can read — `me/accounts` is tried first and
+   * the ad account's `promote_pages` second.
+   */
+  async listIdentities(): Promise<{
+    pages: { id: string; name: string; instagramAccounts: { id: string; username: string }[] }[];
+  }> {
+    let pages: { id: string; name: string }[] = [];
+    try {
+      pages = await this.getAllPages<{ id: string; name: string }>('me/accounts', {
+        fields: 'id,name',
+        limit: '50',
+      });
+    } catch (error) {
+      if (!(error instanceof MetaApiError) || error.isCredentialFailure) throw error;
+    }
+    if (pages.length === 0) {
+      pages = await this.getAllPages<{ id: string; name: string }>(
+        `${this.accountId}/promote_pages`,
+        { fields: 'id,name', limit: '50' },
+      );
+    }
+
+    let instagramAccounts: { id: string; username: string }[] = [];
+    try {
+      instagramAccounts = await this.getAllPages<{ id: string; username: string }>(
+        `${this.accountId}/instagram_accounts`,
+        { fields: 'id,username', limit: '50' },
+      );
+    } catch (error) {
+      // A Page with no Instagram is a normal state; a dead token is not.
+      if (!(error instanceof MetaApiError) || error.isCredentialFailure) throw error;
+    }
+
+    return { pages: pages.map((page) => ({ ...page, instagramAccounts })) };
+  }
+
+  private async searchTargeting<T>(params: Record<string, string>): Promise<T[]> {
+    const body = await this.get<{ data?: T[] }>('search', params);
+    return body.data ?? [];
+  }
+
+  /**
+   * Turns the builder's states and typed city names into Meta's location keys,
+   * and finds the key for Portuguese (Brazil).
+   *
+   * One match or a refusal, never a guess: a city must match exactly one
+   * result by name inside the state the operator picked.
+   */
+  async resolveTargeting(reach: {
+    states: string[];
+    cities: { name: string; state: string }[];
+  }): Promise<ResolvedTargeting> {
+    const regions: ResolvedTargeting['regions'] = [];
+    const regionNameByUf = new Map<string, string>();
+
+    const regionOf = async (uf: string): Promise<{ key: string; name: string }> => {
+      const stateName = BRAZIL_STATE_NAMES[uf];
+      if (!stateName) throw new TargetingResolutionError(uf, 0);
+      const rows = await this.searchTargeting<{ key: string; name: string; country_code?: string }>(
+        {
+          type: 'adgeolocation',
+          location_types: '["region"]',
+          country_code: 'BR',
+          q: stateName,
+          limit: '25',
+        },
+      );
+      const matches = rows.filter(
+        (row) =>
+          (row.country_code ?? 'BR') === 'BR' &&
+          foldPlaceName(row.name) === foldPlaceName(stateName),
+      );
+      const match = matches[0];
+      if (matches.length !== 1 || !match) throw new TargetingResolutionError(uf, matches.length);
+      regionNameByUf.set(uf, match.name);
+      return { key: match.key, name: match.name };
+    };
+
+    for (const uf of reach.states) regions.push(await regionOf(uf));
+
+    const cities: ResolvedTargeting['cities'] = [];
+    for (const city of reach.cities) {
+      const asked = `${city.name}/${city.state}`;
+      const regionName = regionNameByUf.get(city.state) ?? (await regionOf(city.state)).name;
+      const rows = await this.searchTargeting<{
+        key: string;
+        name: string;
+        region?: string;
+        country_code?: string;
+      }>({
+        type: 'adgeolocation',
+        location_types: '["city"]',
+        country_code: 'BR',
+        q: city.name,
+        limit: '50',
+      });
+      const matches = rows.filter(
+        (row) =>
+          foldPlaceName(row.name) === foldPlaceName(city.name) &&
+          foldPlaceName(row.region ?? '') === foldPlaceName(regionName),
+      );
+      const match = matches[0];
+      if (matches.length !== 1 || !match) throw new TargetingResolutionError(asked, matches.length);
+      cities.push({ key: match.key, name: match.name, region: regionName });
+    }
+
+    const locales = await this.searchTargeting<{ key: number; name: string }>({
+      type: 'adlocale',
+      q: 'Portugu',
+      limit: '25',
+    });
+    const portuguese = locales.filter((row) => /portugu[eê]s?e? \(bra[sz]il\)/i.test(row.name));
+    const locale = portuguese[0];
+    if (portuguese.length !== 1 || !locale) {
+      throw new TargetingResolutionError('idioma português (Brasil)', portuguese.length);
+    }
+
+    return { regions, cities, localeKey: Number(locale.key) };
+  }
+
+  /**
+   * Meta's own rendering of an ad that already exists, for one placement.
+   * Returns the iframe address Meta hands back; the caller checks the host.
+   */
+  async getAdPreview(adId: string, adFormat: string): Promise<string | null> {
+    if (!/^\d+$/.test(adId)) return null;
+    const body = await this.get<{ data?: { body?: string }[] }>(`${adId}/previews`, {
+      ad_format: adFormat,
+    });
+    const html = body.data?.[0]?.body ?? '';
+    const src = /<iframe[^>]*\ssrc="([^"]+)"/i.exec(html)?.[1];
+    return src ? src.replace(/&amp;/g, '&') : null;
   }
 
   async getAccount(): Promise<PlatformAccount> {

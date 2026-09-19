@@ -25,7 +25,11 @@ export interface PlatformClientResult {
  * looping over several accounts builds one client per account instead of
  * reusing a client bound to whichever account the environment happens to name.
  */
-export function createMetaClient(env: Env, accountExternalId?: string): PlatformClientResult {
+export function createMetaClient(
+  env: Env,
+  accountExternalId?: string,
+  fetchImpl?: typeof fetch,
+): PlatformClientResult {
   const adAccountId = accountExternalId ?? env.META_WRITE_ACCOUNT_ID;
   const writeReady = Boolean(env.META_WRITE_TOKEN && adAccountId);
 
@@ -35,6 +39,7 @@ export function createMetaClient(env: Env, accountExternalId?: string): Platform
         accessToken: env.META_WRITE_TOKEN as string,
         adAccountId: adAccountId as string,
         confirmWrites: true,
+        fetchImpl,
       }),
       canWrite: true,
     };
@@ -46,6 +51,7 @@ export function createMetaClient(env: Env, accountExternalId?: string): Platform
       client: new MetaReadOnlyClient({
         accessToken: env.META_WRITE_TOKEN as string,
         adAccountId: adAccountId as string,
+        fetchImpl,
       }),
       canWrite: false,
       reason: 'writes_disabled',
@@ -83,8 +89,11 @@ export function createGooglePlatformClient(
 export function createPlatformClient(
   env: Env,
   account: { platform: string; externalId: string },
+  fetchImpl?: typeof fetch,
 ): PlatformClientResult {
-  if (account.platform === 'meta') return createMetaClient(env, account.externalId);
-  if (account.platform === 'google') return createGooglePlatformClient(env, account.externalId);
+  if (account.platform === 'meta') return createMetaClient(env, account.externalId, fetchImpl);
+  if (account.platform === 'google') {
+    return createGooglePlatformClient(env, account.externalId, fetchImpl);
+  }
   return { client: null, canWrite: false, reason: 'no_credentials' };
 }

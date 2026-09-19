@@ -8,13 +8,18 @@ import type {
   ChangeSimulation,
   CockpitSnapshot,
   CreativeUpload,
+  MetaIdentities,
+  MetaIdentity,
   NextPendingLink,
+  OfficialPreview,
   PendingGroup,
+  PreviewPlacement,
   SiteImageUpload,
   SitePostFormInput,
   SitePostRecord,
   SiteStatus,
   SiteTerms,
+  VideoUpload,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
@@ -134,6 +139,59 @@ export function useRequestCampaign() {
 export function useUploadCreative() {
   return useMutation({
     mutationFn: (file: File) => api.upload<{ creative: CreativeUpload }>('/ads/creatives', file),
+  });
+}
+
+/**
+ * Uploads one creative video, as the raw request body. It goes to our own
+ * storage; reaching Meta is part of executing an approved request.
+ */
+export function useUploadVideo() {
+  return useMutation({
+    mutationFn: (file: File) => api.upload<{ video: VideoUpload }>('/ads/videos', file),
+  });
+}
+
+/**
+ * The Facebook Pages and Instagram accounts the system user can publish as,
+ * read from Meta, plus Wings' saved choice. Never retried on its own: a 503
+ * means the environment has no Meta credentials, and asking again changes nothing.
+ */
+export function useMetaIdentities(enabled: boolean) {
+  return useQuery({
+    queryKey: ['ads', 'meta-identities'],
+    enabled,
+    retry: false,
+    staleTime: 5 * 60_000,
+    queryFn: () => api.get<{ identities: MetaIdentities }>('/ads/meta/identities'),
+  });
+}
+
+export function useSaveMetaIdentityDefault() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (identity: MetaIdentity) =>
+      api.put<{ default: MetaIdentity }>('/ads/meta/identities/default', identity),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ads', 'meta-identities'] });
+    },
+  });
+}
+
+/** Meta's own preview of the ads a request created. Read-only; 409 until they exist. */
+export function useOfficialPreviews(
+  approvalId: string | undefined,
+  placement: PreviewPlacement,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ['ads', 'official-previews', approvalId, placement],
+    enabled: enabled && Boolean(approvalId),
+    retry: false,
+    queryFn: () =>
+      api.get<{ previews: OfficialPreview[] }>(
+        `/ads/approvals/${approvalId ?? ''}/previews?placement=${placement}`,
+      ),
   });
 }
 

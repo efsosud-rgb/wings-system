@@ -5,6 +5,12 @@ import {
   CHANGE_KIND_LABEL,
   CHANGE_STATUS_LABEL,
   CREATIVE_FORMATS,
+  CREATIVE_TYPE_LABEL,
+  PLACEMENT_POSITION_LABEL,
+  PLACEMENT_PUBLISHERS,
+  PLACEMENT_PUBLISHER_LABEL,
+  PREVIEW_PLACEMENTS,
+  PREVIEW_PLACEMENT_LABEL,
   applyUtms,
   campaignDays,
   describeReach,
@@ -12,11 +18,18 @@ import {
   isGooglePlatform,
   type ApprovalDetail,
   type CampaignDraft,
+  type ExecutionStepView,
+  type PreviewPlacement,
 } from '@wings/shared';
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../api/auth.js';
-import { useApproval, useDecideApproval, useExecuteApproval } from '../api/ads.js';
+import {
+  useApproval,
+  useDecideApproval,
+  useExecuteApproval,
+  useOfficialPreviews,
+} from '../api/ads.js';
 import { ApiError } from '../api/client.js';
 import { ApprovalSimulator } from '../components/ApprovalSimulator.js';
 import { AdPreviewGallery } from '../components/campaign-builder/AdPreview.js';
@@ -40,6 +53,115 @@ const AUDIT_LABEL: Record<string, string> = {
   'ads.approval_rejected': 'Recusada',
   'ads.approval_denied_to_actor': 'Tentativa de decisão sem permissão',
 };
+
+/**
+ * What the executor created on the platform, or tried to. A create is several
+ * writes in a row, so after a failure in the middle this list is how a person
+ * sees what exists there.
+ */
+const STEP_STATUS_LABEL: Record<ExecutionStepView['status'], string> = {
+  created: 'criado',
+  failed: 'falhou',
+  unknown: 'desconhecido',
+};
+
+function ExecutionSteps({ steps }: { steps: ExecutionStepView[] }) {
+  if (steps.length === 0) return null;
+  return (
+    <div className="execution-steps">
+      <span className="field-label">O que foi criado na Meta</span>
+      <ol>
+        {[...steps]
+          .sort((a, b) => a.seq - b.seq)
+          .map((step) => (
+            <li key={step.seq} className={`execution-step execution-step-${step.status}`}>
+              <strong>{step.label}</strong> — {STEP_STATUS_LABEL[step.status]}
+              {step.externalId && <span className="cell-sub mono"> id {step.externalId}</span>}
+              {step.message && <span className="cell-sub"> {step.message}</span>}
+            </li>
+          ))}
+      </ol>
+    </div>
+  );
+}
+
+/** Meta's own iframes only: anything else is not rendered at all. */
+const OFFICIAL_PREVIEW_HOSTS = ['https://www.facebook.com/', 'https://business.facebook.com/'];
+
+/**
+ * Meta's official preview, per placement. It only exists once the ads do, so
+ * this is asked for after execution; before that the approximate one stands.
+ */
+function OfficialPreviews({ approvalId }: { approvalId: string }) {
+  const [placement, setPlacement] = useState<PreviewPlacement>('facebook_feed');
+  const query = useOfficialPreviews(approvalId, placement, true);
+  const failure = query.error instanceof ApiError ? query.error : null;
+  const previews = query.data?.previews ?? [];
+  const trusted = previews.filter((preview) =>
+    OFFICIAL_PREVIEW_HOSTS.some((host) => preview.iframeSrc.startsWith(host)),
+  );
+
+  return (
+    <section className="block">
+      <legend>Prévia oficial da Meta</legend>
+      <Field label="Posicionamento">
+        <select
+          className="control"
+          value={placement}
+          onChange={(event) => setPlacement(event.target.value as PreviewPlacement)}
+        >
+          {PREVIEW_PLACEMENTS.map((key) => (
+            <option key={key} value={key}>
+              {PREVIEW_PLACEMENT_LABEL[key]}
+            </option>
+          ))}
+        </select>
+      </Field>
+      {query.isLoading && <p className="muted">Pedindo a prévia à Meta…</p>}
+      {failure?.code === 'not_created_yet' && (
+        <Alert kind="info">Os anúncios ainda não existem na Meta.</Alert>
+      )}
+      {query.isError && failure?.code !== 'not_created_yet' && (
+        <Alert kind="error">
+          {query.error.message} A prévia aproximada acima continua valendo.
+        </Alert>
+      )}
+      {query.data && trusted.length < previews.length && (
+        <Alert kind="error">Uma prévia não pôde ser exibida: o endereço não é da Meta.</Alert>
+      )}
+      {query.data && previews.length === 0 && (
+        <p className="muted">A Meta não devolveu prévia para este posicionamento.</p>
+      )}
+      <div className="official-previews">
+        {trusted.map((preview) => (
+          <figure key={preview.adName} className="official-preview">
+            <figcaption className="field-label">{preview.adName}</figcaption>
+            <iframe
+              title={preview.adName}
+              src={preview.iframeSrc}
+              sandbox="allow-scripts allow-same-origin"
+              referrerPolicy="no-referrer"
+              loading="lazy"
+            />
+          </figure>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function describeDraftPlacements(placements: NonNullable<CampaignDraft['placements']>): string {
+  if (placements.mode !== 'manual') return 'Automático (Advantage+)';
+  return PLACEMENT_PUBLISHERS.flatMap((publisher) =>
+    placements[publisher].length === 0
+      ? []
+      : [
+          `${PLACEMENT_PUBLISHER_LABEL[publisher]}: ${placements[publisher]
+            .map((position) => PLACEMENT_POSITION_LABEL[position])
+            .join(', ')}`,
+        ],
+  ).join(' · ');
+}
 
 function Summary({ approval }: { approval: ApprovalDetail }) {
   const budgetChange =
@@ -108,15 +230,24 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
   const format = CREATIVE_FORMATS[draft.platform].find((item) => item.key === draft.formatKey);
   const google = isGooglePlatform(draft.platform);
   const date = (value: string) => value.split('-').reverse().join('/');
+  // A Meta draft from before ad sets existed names no page: it creates the
+  // campaign alone, exactly as it was approved to.
+  const metaTree = !google && Boolean(draft.identity);
 
   return (
     <section className="block">
       <legend>A campanha que será criada</legend>
-      {draft.startPaused ? (
+      {metaTree ? (
+        <Alert kind="info">
+          Tudo nasce <strong>pausado</strong>: a campanha, um conjunto de anúncios e um anúncio por
+          variação. Nada entrega e nada gasta até alguém ligar no Gerenciador de Anúncios.
+        </Alert>
+      ) : draft.startPaused ? (
         <Alert kind="info">
           Nasce <strong>pausada</strong> e vazia: só o objeto campanha é criado, sem{' '}
           {google ? 'grupo' : 'conjunto'} de anúncios e sem anúncio. Não entrega e não gasta. Ativar
           depois é outro pedido.
+          {!google && ' Pedido anterior aos conjuntos de anúncios: cria só a campanha.'}
         </Alert>
       ) : (
         <Alert kind="error">
@@ -149,6 +280,39 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
             <span className="field-label">Formato</span>
             <p>{format ? `${format.label} (${format.ratio})` : draft.formatKey}</p>
           </div>
+        )}
+        {metaTree && draft.identity && (
+          <>
+            <div>
+              <span className="field-label">Faixa etária</span>
+              <p>
+                {draft.ageMin ?? '—'} a {draft.ageMax ?? '—'} anos
+              </p>
+            </div>
+            <div>
+              <span className="field-label">Posicionamentos</span>
+              <p>{draft.placements ? describeDraftPlacements(draft.placements) : '—'}</p>
+            </div>
+            <div>
+              <span className="field-label">Página e Instagram</span>
+              <p className="mono">Página {draft.identity.pageId}</p>
+              <span className="cell-sub mono">
+                {draft.identity.instagramActorId
+                  ? `Instagram ${draft.identity.instagramActorId}`
+                  : 'sem conta do Instagram'}
+              </span>
+            </div>
+            <div>
+              <span className="field-label">Criativos</span>
+              {draft.variations.map((variation, index) => (
+                <p key={index}>
+                  {index + 1}. {CREATIVE_TYPE_LABEL[variation.creativeType ?? 'image']}
+                  {variation.creativeType === 'carousel' &&
+                    ` (${(variation.cards ?? []).length} cartões)`}
+                </p>
+              ))}
+            </div>
+          </>
         )}
         {draft.platform === 'youtube' && (
           <div>
@@ -186,7 +350,9 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
             ? 'Registrado no pedido. Estados, cidades e idioma português vão com a campanha; palavras-chave e anúncio só chegam ao Google quando existir a criação do grupo de anúncios.'
             : draft.platform === 'youtube'
               ? 'Registrado no pedido. Em Demand Gen, localização, idioma e a restrição ao YouTube moram no grupo de anúncios: só chegam ao Google quando existir a criação dele.'
-              : 'Registrado no pedido. Público e localização só chegam à Meta quando existir a criação do conjunto de anúncios.'}
+              : metaTree
+                ? 'Área de alcance, faixa etária e idioma português vão para a Meta no conjunto de anúncios, criado junto com a campanha.'
+                : 'Registrado no pedido. Público e localização só chegam à Meta quando existir a criação do conjunto de anúncios.'}
         </span>
       </div>
       {draft.youtube && (
@@ -426,8 +592,15 @@ export function ApprovalDetailPage() {
           {approval.changeStatus === 'executed' && (
             <Alert kind="success">Alteração já aplicada na plataforma.</Alert>
           )}
+
+          <ExecutionSteps steps={approval.executionSteps ?? []} />
         </section>
       )}
+
+      {id &&
+        approval.changeStatus === 'executed' &&
+        approval.platform !== 'google' &&
+        approval.draft?.identity && <OfficialPreviews approvalId={id} />}
 
       <section className="block">
         <legend>Trilha de auditoria</legend>
