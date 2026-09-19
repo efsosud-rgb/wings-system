@@ -1,3 +1,4 @@
+import { overdeliveryFactor } from '@wings/shared';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
@@ -211,7 +212,7 @@ export async function reconcileAccount(
   const platformLimit = limitFrom(
     platformAccount.spendCapCents,
     platformAccount.amountSpentCents,
-    `${client.platform}.spend_cap`,
+    client.spendLimitSource ?? `${client.platform}.spend_cap`,
   );
   const limitResult = await applyPlatformLimit(db, {
     adAccountId,
@@ -275,6 +276,7 @@ export async function reconcileAccount(
           adSets: adSetsByCampaignId.get(campaign.id) ?? [],
         },
         daysLeft,
+        overdeliveryFactor(account.platform),
       ),
     0,
   );
@@ -282,7 +284,16 @@ export async function reconcileAccount(
   const internalAllowed = Math.min(period.usableCents, Math.max(0, period.capCents - spentCents));
   // Three ceilings, smallest wins: usable slice, hard cap, and what the
   // platform will actually let us spend.
-  const allowed = effectiveHeadroomCents(internalAllowed, platformLimit.remainingCents);
+  //
+  // Except on a prepaid account (Google): there the platform's number is a
+  // balance that drains and is topped up by Pix, so running below the month's
+  // exposure is its normal state, not a sign that somebody raised budgets
+  // behind our back. It still binds every new request (`ceilingRefusal`) and is
+  // still recorded (`applyPlatformLimit`); it just does not freeze the account.
+  const allowed =
+    account.platform === 'google'
+      ? internalAllowed
+      : effectiveHeadroomCents(internalAllowed, platformLimit.remainingCents);
   const outOfBandChangeDetected = desiredCommitted > allowed;
   const committedCents = Math.min(desiredCommitted, allowed);
 
@@ -397,13 +408,7 @@ export async function enforceReconciliationFreshness(
     });
     if (!period) continue;
 
-    // Google is not mirrored yet: the only thing ingestion reads for it is the
-    // spending limit, so that read is what "still looking" means there. Judged
-    // by `lastReconciledAt`, which nothing ever sets for Google, the account
-    // would freeze two hours after being seeded, with a false alarm.
-    const lastLook =
-      account.platform === 'google' ? period.platformLimitSyncedAt : period.lastReconciledAt;
-    const last = lastLook ?? period.createdAt;
+    const last = period.lastReconciledAt ?? period.createdAt;
     const ageMinutes = Math.floor((now.getTime() - last.getTime()) / 60_000);
     if (ageMinutes <= maxAgeMinutes) continue;
 

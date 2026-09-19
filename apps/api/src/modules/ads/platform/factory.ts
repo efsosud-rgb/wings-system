@@ -1,4 +1,6 @@
 import type { Env } from '../../../env.js';
+import { GoogleAdsPlatformClient, GoogleAdsWriteClient } from './google-ads-client.js';
+import { createGoogleClient } from './google-client.js';
 import { MetaReadOnlyClient } from './meta-client.js';
 import { MetaWriteClient } from './meta-write-client.js';
 import type { AdsPlatformClient } from './types.js';
@@ -50,5 +52,39 @@ export function createMetaClient(env: Env, accountExternalId?: string): Platform
     };
   }
 
+  return { client: null, canWrite: false, reason: 'no_credentials' };
+}
+
+/**
+ * The Google counterpart. Google credentials name exactly one customer, so an
+ * account row for any other customer gets no client at all rather than a
+ * client that would read — or write — the wrong account.
+ */
+export function createGooglePlatformClient(
+  env: Env,
+  accountExternalId: string,
+  fetchImpl?: typeof fetch,
+): PlatformClientResult {
+  const reader = createGoogleClient(env, fetchImpl);
+  if (!reader || reader.customerId !== accountExternalId.replace(/-/g, '')) {
+    return { client: null, canWrite: false, reason: 'no_credentials' };
+  }
+  if (env.ADS_WRITES_ENABLED) {
+    return { client: new GoogleAdsWriteClient(reader, { confirmWrites: true }), canWrite: true };
+  }
+  return {
+    client: new GoogleAdsPlatformClient(reader),
+    canWrite: false,
+    reason: 'writes_disabled',
+  };
+}
+
+/** The client for an account row, whichever platform it belongs to. */
+export function createPlatformClient(
+  env: Env,
+  account: { platform: string; externalId: string },
+): PlatformClientResult {
+  if (account.platform === 'meta') return createMetaClient(env, account.externalId);
+  if (account.platform === 'google') return createGooglePlatformClient(env, account.externalId);
   return { client: null, canWrite: false, reason: 'no_credentials' };
 }

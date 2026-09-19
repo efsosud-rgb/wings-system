@@ -1,5 +1,10 @@
 import { createHash } from 'node:crypto';
-import { campaignDaysInMonth, type CampaignDraft } from '@wings/shared';
+import {
+  AD_ACCOUNT_PLATFORM,
+  campaignDaysInMonth,
+  overdeliveryFactor,
+  type CampaignDraft,
+} from '@wings/shared';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
@@ -41,7 +46,9 @@ export type GuardRefusal =
   | 'period_not_open'
   | 'campaign_not_found'
   | 'start_in_past'
-  | 'duplicate_name';
+  | 'duplicate_name'
+  | 'platform_mismatch'
+  | 'not_supported_on_platform';
 
 export type GuardResult<T> =
   { ok: true; value: T } | { ok: false; reason: GuardRefusal; message: string };
@@ -82,8 +89,12 @@ export function remainingDays(now: Date, timezone = 'America/Sao_Paulo'): number
  * Overdelivery is included, because the platform may spend more than the
  * budget on any given day.
  */
-export function exposureOf(dailyBudgetCents: Cents, daysLeft: number): Cents {
-  return Math.round(dailyBudgetCents * daysLeft * OVERDELIVERY_FACTOR);
+export function exposureOf(
+  dailyBudgetCents: Cents,
+  daysLeft: number,
+  factor: number = OVERDELIVERY_FACTOR,
+): Cents {
+  return Math.round(dailyBudgetCents * daysLeft * factor);
 }
 
 export interface ExposureInput {
@@ -105,17 +116,23 @@ export interface ExposureInput {
  * only the campaign budget — as the first version did — would report an ABO
  * campaign as free while it spent real money.
  */
-export function campaignExposure(input: ExposureInput, daysLeft: number): Cents {
+export function campaignExposure(
+  input: ExposureInput,
+  daysLeft: number,
+  factor: number = OVERDELIVERY_FACTOR,
+): Cents {
   if (input.campaignStatus !== 'ACTIVE') return 0;
 
   if (input.campaignDailyBudgetCents > 0) {
-    return exposureOf(input.campaignDailyBudgetCents, daysLeft);
+    return exposureOf(input.campaignDailyBudgetCents, daysLeft, factor);
   }
 
   return input.adSets
     .filter((adSet) => adSet.status === 'ACTIVE')
     .reduce((total, adSet) => {
-      if (adSet.dailyBudgetCents > 0) return total + exposureOf(adSet.dailyBudgetCents, daysLeft);
+      if (adSet.dailyBudgetCents > 0) {
+        return total + exposureOf(adSet.dailyBudgetCents, daysLeft, factor);
+      }
       // A lifetime budget is counted in full: the worst case is that all of it
       // is spent before the period ends.
       return total + (adSet.lifetimeBudgetCents ?? 0);
@@ -401,6 +418,17 @@ export async function reserveChange(
   });
   if (!account) return { ok: false, reason: 'period_not_open', message: 'Conta não encontrada' };
 
+  // On Google this system creates campaigns and nothing else: there is no
+  // request to make about one that already exists.
+  if (account.platform !== 'meta') {
+    return {
+      ok: false,
+      reason: 'not_supported_on_platform',
+      message:
+        'Nesta plataforma o sistema só cria campanhas novas; as existentes não são alteradas.',
+    };
+  }
+
   if (account.killSwitchEngaged) {
     await recordGuardrailEvent(db, input.adAccountId, 'kill_switch_engaged', {
       attempted: input.kind,
@@ -614,10 +642,15 @@ export function draftPayloadHash(input: {
 export function creationExposure(
   draft: Pick<CampaignDraft, 'startPaused' | 'dailyBudgetCents' | 'startDate' | 'endDate'>,
   today: string,
+  factor: number = OVERDELIVERY_FACTOR,
 ): Cents {
   if (draft.startPaused) return 0;
   const from = draft.startDate > today ? draft.startDate : today;
-  return exposureOf(draft.dailyBudgetCents, campaignDaysInMonth(from, draft.endDate, today));
+  return exposureOf(
+    draft.dailyBudgetCents,
+    campaignDaysInMonth(from, draft.endDate, today),
+    factor,
+  );
 }
 
 export interface CreationReservation extends Reservation {
@@ -649,6 +682,14 @@ export async function reserveCampaignCreation(
     where: eq(adAccounts.id, input.adAccountId),
   });
   if (!account) return { ok: false, reason: 'period_not_open', message: 'Conta não encontrada' };
+
+  if (AD_ACCOUNT_PLATFORM[draft.platform] !== account.platform) {
+    return {
+      ok: false,
+      reason: 'platform_mismatch',
+      message: 'A plataforma do rascunho não é a desta conta de anúncios.',
+    };
+  }
 
   if (account.killSwitchEngaged) {
     await recordGuardrailEvent(db, input.adAccountId, 'kill_switch_engaged', {
@@ -729,9 +770,22 @@ export async function reserveCampaignCreation(
       };
     }
 
-    const exposureDeltaCents = creationExposure(draft, today);
-    const refusal = await ceilingRefusal(db, input.adAccountId, current, exposureDeltaCents, {
+    const factor = overdeliveryFactor(account.platform);
+    const exposureDeltaCents = creationExposure(draft, today, factor);
+
+    // A Google shell is always born paused, so it reserves nothing — but anyone
+    // with access to Google Ads can switch it on, outside this system. It is
+    // therefore judged as if it were running: the three ceilings, the prepaid
+    // balance included, must have room for it today.
+    const judgedCents =
+      account.platform === 'google'
+        ? creationExposure({ ...draft, startPaused: false }, today, factor)
+        : exposureDeltaCents;
+    const refusal = await ceilingRefusal(db, input.adAccountId, current, judgedCents, {
       attempted: 'create_campaign',
+      ...(judgedCents !== exposureDeltaCents
+        ? { note: 'casca pausada julgada como se ativa' }
+        : {}),
     });
     if (refusal) return refusal;
 

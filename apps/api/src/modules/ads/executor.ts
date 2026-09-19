@@ -1,5 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { META_OBJECTIVE, type CampaignDraft } from '@wings/shared';
+import {
+  AD_ACCOUNT_PLATFORM,
+  GOOGLE_CHANNEL_TYPE,
+  META_OBJECTIVE,
+  isGooglePlatform,
+  type CampaignDraft,
+} from '@wings/shared';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
@@ -222,6 +228,12 @@ export async function executeApprovedChange(
       );
     }
     draft = { ...stored, payload: stored.payload as CampaignDraft };
+
+    // A draft is written for one platform. Drafts from before Google existed
+    // carry `platform: 'meta'`, so they pass unchanged.
+    if (AD_ACCOUNT_PLATFORM[draft.payload.platform] !== account.platform) {
+      return refuse('wrong_account', 'O rascunho não pertence à plataforma desta conta.');
+    }
   } else {
     const found = change.campaignId
       ? await db.query.adCampaigns.findFirst({ where: eq(adCampaigns.id, change.campaignId) })
@@ -280,12 +292,25 @@ export async function executeApprovedChange(
 
   let outcome: MutationOutcome;
   if (draft) {
+    const payload = draft.payload;
     outcome = await client.createCampaign({
       name: draft.name,
-      objective: META_OBJECTIVE[draft.payload.objective] as PlatformObjective,
+      objective: META_OBJECTIVE[payload.objective] as PlatformObjective,
       // Read from the approved draft, never defaulted: see CreateCampaignSpec.
       status: draft.startPaused ? 'PAUSED' : 'ACTIVE',
       dailyBudgetCents: draft.dailyBudgetCents,
+      ...(isGooglePlatform(payload.platform)
+        ? {
+            google: {
+              channel: GOOGLE_CHANNEL_TYPE[payload.platform],
+              // Traffic buys clicks; leads and conversions buy conversions.
+              bidding: payload.objective === 'traffic' ? 'MAXIMIZE_CLICKS' : 'MAXIMIZE_CONVERSIONS',
+              startDate: draft.startDate,
+              endDate: draft.endDate,
+              locations: { states: payload.reach.states, cities: payload.reach.cities },
+            },
+          }
+        : {}),
     });
   } else if (!campaign) {
     throw new Error('unreachable: a change is about a campaign or a draft');
@@ -342,7 +367,11 @@ export async function executeApprovedChange(
 
     await db
       .update(adExecutions)
-      .set({ outcome: 'applied', finishedAt: new Date(), platformResponse: { status: 'applied' } })
+      .set({
+        outcome: 'applied',
+        finishedAt: new Date(),
+        platformResponse: { status: 'applied', ...(outcome.detail ?? {}) },
+      })
       .where(eq(adExecutions.id, execution.id));
 
     await db

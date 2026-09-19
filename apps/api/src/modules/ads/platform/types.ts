@@ -99,7 +99,12 @@ export interface SpendRow {
  * platform state rather than retrying blindly.
  */
 export type MutationOutcome =
-  | { status: 'applied'; campaign: PlatformCampaign }
+  | {
+      status: 'applied';
+      campaign: PlatformCampaign;
+      /** Evidence worth keeping with the execution, e.g. the locations resolved. */
+      detail?: Record<string, unknown>;
+    }
   | { status: 'rejected'; code: string; message: string }
   | { status: 'unknown'; reason: string };
 
@@ -118,6 +123,25 @@ export interface CreateCampaignSpec {
   status: 'PAUSED' | 'ACTIVE';
   /** Campaign-level (CBO) daily budget, in cents. */
   dailyBudgetCents: Cents;
+  /** Required by the Google client, ignored by Meta's. */
+  google?: GoogleCampaignSpec;
+}
+
+/**
+ * What a Google campaign shell needs beyond the common fields.
+ *
+ * Search takes its locations and language on the campaign. Demand Gen takes
+ * them on the ad group, which this system does not create yet — so for Demand
+ * Gen they stay in the approved draft and nothing about them is sent.
+ */
+export interface GoogleCampaignSpec {
+  channel: 'SEARCH' | 'DEMAND_GEN';
+  bidding: 'MAXIMIZE_CONVERSIONS' | 'MAXIMIZE_CLICKS';
+  /** YYYY-MM-DD, in the account's timezone. */
+  startDate: string;
+  endDate: string;
+  /** Whole states (UF) and cities to resolve into geo target constants. */
+  locations: { states: string[]; cities: { name: string; state: string }[] };
 }
 
 export interface AdsPlatformClient {
@@ -133,6 +157,8 @@ export interface AdsPlatformClient {
    * what happened the first time a second account existed.
    */
   readonly accountExternalId: string;
+  /** Where `getAccount`'s ceiling comes from; defaults to `<platform>.spend_cap`. */
+  readonly spendLimitSource?: string;
 
   getAccount(): Promise<PlatformAccount>;
   listCampaigns(): Promise<PlatformCampaign[]>;

@@ -155,6 +155,18 @@ export class GoogleAdsReadClient {
    * R$12.600,00 to R$13.100,00 within minutes.
    */
   async getSpendLimit(): Promise<PlatformSpendLimit> {
+    const budget = await this.getAccountBudget();
+    if (!budget) {
+      // No approved account budget: the account sets no ceiling we can read.
+      // Saying "unlimited" is the honest answer; saying zero would freeze a
+      // working account over a missing row.
+      return limitFrom(null, 0, 'google.account_budget:absent');
+    }
+    return limitFrom(budget.limitCents, budget.servedCents, 'google.account_budget');
+  }
+
+  /** The approved account budget as limit and amount served; null when absent. */
+  async getAccountBudget(): Promise<{ limitCents: Cents; servedCents: Cents } | null> {
     const rows = await this.search<AccountBudgetRow>(`
       SELECT account_budget.id, account_budget.status,
              account_budget.approved_spending_limit_micros,
@@ -166,21 +178,26 @@ export class GoogleAdsReadClient {
     `);
 
     const budget = rows[0]?.accountBudget;
-    if (!budget) {
-      // No approved account budget: the account sets no ceiling we can read.
-      // Saying "unlimited" is the honest answer; saying zero would freeze a
-      // working account over a missing row.
-      return limitFrom(null, 0, 'google.account_budget:absent');
-    }
+    if (!budget) return null;
 
     // The adjusted limit already folds in credits and refunds; fall back to the
     // approved limit when Google has not computed an adjusted one.
-    const limitCents = centsFromMicros(
-      budget.adjustedSpendingLimitMicros ?? budget.approvedSpendingLimitMicros,
-    );
-    const servedCents = centsFromMicros(budget.amountServedMicros);
+    return {
+      limitCents: centsFromMicros(
+        budget.adjustedSpendingLimitMicros ?? budget.approvedSpendingLimitMicros,
+      ),
+      servedCents: centsFromMicros(budget.amountServedMicros),
+    };
+  }
 
-    return limitFrom(limitCents, servedCents, 'google.account_budget');
+  /** The customer this client is credentialed for, digits only. */
+  get customerId(): string {
+    return this.options.credentials.customerId;
+  }
+
+  /** The `fetch` this client was built with, for the write client to share. */
+  get transport(): typeof fetch {
+    return this.fetchImpl;
   }
 }
 

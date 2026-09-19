@@ -151,12 +151,20 @@ export async function accountExternalIdOfChange(
   db: Database,
   changeRequestId: string,
 ): Promise<string | null> {
+  return (await accountOfChange(db, changeRequestId))?.externalId ?? null;
+}
+
+/** The account a change belongs to, with the platform a client must be built for. */
+export async function accountOfChange(
+  db: Database,
+  changeRequestId: string,
+): Promise<{ platform: string; externalId: string } | null> {
   const rows = await db
-    .select({ externalId: adAccounts.externalId })
+    .select({ platform: adAccounts.platform, externalId: adAccounts.externalId })
     .from(adChangeRequests)
     .innerJoin(adAccounts, eq(adAccounts.id, adChangeRequests.adAccountId))
     .where(eq(adChangeRequests.id, changeRequestId));
-  return rows[0]?.externalId ?? null;
+  return rows[0] ?? null;
 }
 
 export type UnknownResolution = 'applied' | 'not_applied';

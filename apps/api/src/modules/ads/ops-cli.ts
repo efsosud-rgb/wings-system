@@ -3,7 +3,7 @@ import { loadDotEnv } from '../../db/load-env.js';
 import { loadEnv } from '../../env.js';
 import { createApprovalNotifier } from './notifiers/factory.js';
 import {
-  accountExternalIdOfChange,
+  accountOfChange,
   accountsStatus,
   openAlerts,
   releaseKillSwitchOnRecord,
@@ -12,7 +12,7 @@ import {
   resolveUnknownExecution,
   type ChangeKind,
 } from './ops.js';
-import { createMetaClient } from './platform/factory.js';
+import { createPlatformClient } from './platform/factory.js';
 import { formatBrl } from './platform/money.js';
 
 /**
@@ -151,13 +151,10 @@ async function main() {
 
       case 'resolve-unknown': {
         const changeId = required('change');
-        const accountExternalId = await accountExternalIdOfChange(db, changeId);
-        if (!accountExternalId) throw new Error('alteração não encontrada');
+        const account = await accountOfChange(db, changeId);
+        if (!account) throw new Error('alteração não encontrada');
         // Always a reader here, whatever the write switch says.
-        const { client } = createMetaClient(
-          { ...env, ADS_WRITES_ENABLED: false },
-          accountExternalId,
-        );
+        const { client } = createPlatformClient({ ...env, ADS_WRITES_ENABLED: false }, account);
         if (!client) throw new Error('sem credenciais para ler esta conta');
 
         const result = await resolveUnknownExecution(db, client, changeId);

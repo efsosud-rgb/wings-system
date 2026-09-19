@@ -149,13 +149,16 @@ function fillValidCampaign() {
 const type = (element: Element, value: string) => fireEvent.change(element, { target: { value } });
 
 describe('the paid-media builder', () => {
-  it('offers only Meta, and says why the others are off', () => {
+  it('offers Meta, Google Pesquisa and YouTube, and says why the others are off', () => {
     render(<PaidMediaBuilder canRequest />);
-    expect((screen.getByRole('radio', { name: /Meta/ }) as HTMLInputElement).disabled).toBe(false);
-    for (const name of [/TikTok/, /YouTube/, /LinkedIn/]) {
+    for (const name of [/Meta/, /Google Pesquisa/, /YouTube/]) {
+      expect((screen.getByRole('radio', { name }) as HTMLInputElement).disabled).toBe(false);
+    }
+    for (const name of [/TikTok/, /LinkedIn/]) {
       expect((screen.getByRole('radio', { name }) as HTMLInputElement).disabled).toBe(true);
     }
     expect(screen.getByText(/Sem conta de anúncios conectada/)).toBeTruthy();
+    expect(screen.getByText(/Integração ainda não construída/)).toBeTruthy();
   });
 
   it('explains blocked copy on screen instead of only refusing it', () => {
@@ -410,5 +413,228 @@ describe('the paid-media builder', () => {
       (screen.getByRole('button', { name: 'Lançar campanha' }) as HTMLButtonElement).disabled,
     ).toBe(true);
     expect(screen.getByText(/mas não enviar o pedido/)).toBeTruthy();
+  });
+});
+
+describe('the builder on Google', () => {
+  const choose = (name: RegExp) => fireEvent.click(screen.getByRole('radio', { name }));
+
+  function fillCommon() {
+    type(screen.getByLabelText(/^Nome da campanha/), 'Pesquisa — franquia SP');
+    type(screen.getByLabelText(/Página de destino/), 'https://wingscompany.com.br/franquia');
+    type(screen.getByLabelText(/Verba por dia/), '30,00');
+    type(
+      screen.getByLabelText(/^Quem é o cliente ideal/),
+      'Empreendedor de 30 a 50 anos, com experiência em gestão.',
+    );
+    fireEvent.click(screen.getByRole('checkbox', { name: 'SP' }));
+  }
+
+  function fillSearch() {
+    fillCommon();
+    type(
+      screen.getByLabelText(/^Palavras-chave(?! negativas)/),
+      'franquia de alimentação\n\n  abrir franquia  ',
+    );
+    type(screen.getByLabelText(/^Palavras-chave negativas/), 'grátis');
+    type(screen.getByLabelText(/^Título 1/), 'Franquia Wings');
+    type(screen.getByLabelText(/^Descrição 1/), 'Conheça o modelo de negócio e o suporte.');
+  }
+
+  it('shows the search fields only on Google Pesquisa, and hides what is Meta only', () => {
+    render(<PaidMediaBuilder canRequest />);
+    expect(screen.queryByLabelText(/^Palavras-chave(?! negativas)/)).toBeNull();
+    expect(screen.queryByLabelText(/Link do vídeo/)).toBeNull();
+
+    choose(/Google Pesquisa/);
+    expect(screen.getByLabelText(/^Palavras-chave(?! negativas)/)).toBeTruthy();
+    expect(screen.getByLabelText(/^Palavras-chave negativas/)).toBeTruthy();
+    expect(screen.queryByLabelText(/Link do vídeo/)).toBeNull();
+    // Meta's image, format and variations are gone, and so is the map.
+    expect(screen.queryByLabelText(/^Imagem — Variação/)).toBeNull();
+    expect(screen.queryByLabelText(/^Formato/)).toBeNull();
+    expect(screen.queryByRole('button', { name: '+ Adicionar variação' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'clicar no mapa' })).toBeNull();
+    expect(screen.getByText(/O raio no mapa ainda não vale para o Google/)).toBeTruthy();
+
+    const sections = screen.getAllByRole('region').filter((el) => el.matches('.builder-section'));
+    expect(sections.map((el) => el.querySelector('.builder-step')?.textContent)).toEqual(
+      Array.from({ length: 11 }, (_, index) => String(index + 1)),
+    );
+
+    choose(/Meta/);
+    expect(screen.queryByLabelText(/^Palavras-chave(?! negativas)/)).toBeNull();
+    expect(screen.getAllByLabelText(/^Imagem — Variação/)).toHaveLength(2);
+  });
+
+  it('shows the video fields only on YouTube, and says what kind of campaign it is', () => {
+    render(<PaidMediaBuilder canRequest />);
+    choose(/YouTube/);
+    expect(screen.getByLabelText(/Link do vídeo no YouTube/)).toBeTruthy();
+    expect(screen.queryByLabelText(/^Palavras-chave(?! negativas)/)).toBeNull();
+    expect(screen.queryByLabelText(/^Imagem — Variação/)).toBeNull();
+    expect(screen.getByText(/Criada como campanha Demand Gen restrita ao YouTube/)).toBeTruthy();
+  });
+
+  it('locks a Google campaign on paused, and says why', () => {
+    render(<PaidMediaBuilder canRequest />);
+    const paused = () =>
+      screen.getByRole('checkbox', { name: /Criar a campanha/ }) as HTMLInputElement;
+    fireEvent.click(paused());
+    expect(paused().checked).toBe(false);
+
+    choose(/Google Pesquisa/);
+    expect(paused().checked).toBe(true);
+    expect(paused().disabled).toBe(true);
+    expect(screen.getByText('Campanhas do Google nascem sempre pausadas.')).toBeTruthy();
+  });
+
+  it('launches a search request carrying only what belongs to it', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    choose(/Google Pesquisa/);
+    fillSearch();
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
+    const sent = requestCampaign.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(sent).toMatchObject({
+      platform: 'google_search',
+      name: 'Pesquisa — franquia SP',
+      dailyBudgetCents: 3000,
+      startPaused: true,
+      variations: [],
+      reach: { states: ['SP'], cities: [], customLocations: [] },
+      search: {
+        keywords: ['franquia de alimentação', 'abrir franquia'],
+        negativeKeywords: ['grátis'],
+        headlines: ['Franquia Wings'],
+        descriptions: ['Conheça o modelo de negócio e o suporte.'],
+      },
+      utms: { utm_source: 'google', utm_medium: 'cpc' },
+    });
+    expect(sent).not.toHaveProperty('formatKey');
+    expect(sent).not.toHaveProperty('youtube');
+  });
+
+  it('launches a YouTube request carrying only what belongs to it', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    choose(/YouTube/);
+    fillCommon();
+    type(screen.getByLabelText(/Link do vídeo/), 'https://youtu.be/dQw4w9WgXcQ');
+    type(screen.getByLabelText(/^Título/), 'Conheça a Wings');
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
+    const sent = requestCampaign.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(sent).toMatchObject({
+      platform: 'youtube',
+      startPaused: true,
+      variations: [],
+      youtube: { videoUrl: 'https://youtu.be/dQw4w9WgXcQ', headline: 'Conheça a Wings' },
+      utms: { utm_source: 'youtube', utm_medium: 'paid_video' },
+    });
+    expect(sent).not.toHaveProperty('formatKey');
+    expect(sent).not.toHaveProperty('search');
+  });
+
+  it('drops a radius chosen on Meta when the platform becomes Google', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    fireEvent.click(screen.getByRole('button', { name: 'clicar no mapa' }));
+    choose(/Google Pesquisa/);
+    fillSearch();
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
+    expect(requestCampaign.mock.calls[0]?.[0]).toMatchObject({
+      reach: { customLocations: [] },
+    });
+  });
+
+  it('refuses a link that is not a YouTube video, and sends nothing', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    choose(/YouTube/);
+    fillCommon();
+    type(screen.getByLabelText(/Link do vídeo/), 'https://vimeo.com/123456');
+    type(screen.getByLabelText(/^Título/), 'Conheça a Wings');
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+
+    await waitFor(() =>
+      expect(screen.getByText('Informe um link https:// do YouTube')).toBeTruthy(),
+    );
+    expect(requestCampaign).not.toHaveBeenCalled();
+  });
+
+  it('refuses more than 10 keywords', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    choose(/Google Pesquisa/);
+    fillSearch();
+    type(
+      screen.getByLabelText(/^Palavras-chave(?! negativas)/),
+      Array.from({ length: 11 }, (_, index) => `franquia termo ${index}`).join('\n'),
+    );
+    expect(screen.getByText(/11\/10/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+
+    await waitFor(() => expect(screen.getByText('No máximo 10 palavras-chave')).toBeTruthy());
+    expect(requestCampaign).not.toHaveBeenCalled();
+  });
+
+  it('holds search copy to the compliance rules, on screen and on launch', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    choose(/Google Pesquisa/);
+    fillSearch();
+    type(screen.getByLabelText(/^Título 2/), 'Retorno garantido');
+
+    expect(screen.getByText(/Este texto não pode ir ao ar/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+    await waitFor(() => expect(screen.getByText(/Há texto bloqueado/)).toBeTruthy());
+    expect(requestCampaign).not.toHaveBeenCalled();
+  });
+
+  it('previews the video by its YouTube still, with the typed title', () => {
+    render(<PaidMediaBuilder canRequest />);
+    choose(/YouTube/);
+    expect(screen.getByText('Cole um link do YouTube para ver a prévia')).toBeTruthy();
+
+    type(screen.getByLabelText(/Link do vídeo/), 'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    type(screen.getByLabelText(/^Título/), 'Conheça a Wings');
+    type(screen.getByLabelText(/Página de destino/), 'https://www.wingscompany.com.br/franquia');
+
+    const still = screen.getByAltText('Miniatura do vídeo no YouTube') as HTMLImageElement;
+    expect(still.src).toBe('https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg');
+    const preview = still.closest('figure');
+    expect(preview?.textContent).toContain('Conheça a Wings');
+    expect(preview?.textContent).toContain('wingscompany.com.br');
+    expect(screen.getByText(/Não é a prévia oficial do Google/)).toBeTruthy();
+  });
+
+  it('previews the search ad the way Google lays it out', () => {
+    render(<PaidMediaBuilder canRequest />);
+    choose(/Google Pesquisa/);
+    fillSearch();
+    type(screen.getByLabelText(/^Título 2/), 'Leve para sua cidade');
+
+    const preview = screen.getByText('Anúncio na Pesquisa do Google').closest('figure');
+    expect(preview?.textContent).toContain('Patrocinado');
+    expect(preview?.textContent).toContain('wingscompany.com.br › franquia');
+    expect(preview?.textContent).toContain('Franquia Wings | Leve para sua cidade');
+    expect(preview?.textContent).toContain('Conheça o modelo de negócio e o suporte.');
+  });
+
+  it('estimates Google at twice the daily budget, and says so', () => {
+    render(<PaidMediaBuilder canRequest />);
+    type(screen.getByLabelText(/^Início/), '2026-09-20');
+    type(screen.getByLabelText(/^Fim/), '2026-09-29');
+    type(screen.getByLabelText(/Verba por dia/), '20,00');
+    expect(screen.getAllByText('R$ 250,00').length).toBeGreaterThan(0);
+
+    choose(/Google Pesquisa/);
+    // R$ 20 × 10 days × 2.
+    expect(screen.getAllByText('R$ 400,00').length).toBeGreaterThan(0);
+    expect(screen.queryByText('R$ 250,00')).toBeNull();
+    expect(
+      screen.getByText('O Google pode gastar até o dobro da verba diária num dia.'),
+    ).toBeTruthy();
+    expect(screen.queryByText('A Meta pode gastar até 25% acima disto num dia.')).toBeNull();
   });
 });

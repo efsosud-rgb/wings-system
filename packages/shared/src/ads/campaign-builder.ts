@@ -12,6 +12,11 @@ import { z } from 'zod';
 
 /** Meta permits delivery to exceed the daily budget by up to this factor. */
 export const META_DAILY_OVERDELIVERY_FACTOR = 1.25;
+/**
+ * Google's contractual ceiling for one day. The live account never went past
+ * 1.35x (stage-google-spike.md), but a guardrail is sized by the worst case.
+ */
+export const GOOGLE_DAILY_OVERDELIVERY_FACTOR = 2;
 
 // ---------------------------------------------------------------------------
 // Platforms
@@ -25,16 +30,24 @@ export const PAID_PLATFORMS = [
     disabledReason: null,
   },
   {
+    key: 'google_search',
+    label: 'Google Pesquisa',
+    enabled: true,
+    disabledReason: null,
+  },
+  {
+    // Google's API cannot create a VIDEO campaign (reporting only). What it
+    // offers for video on YouTube is Demand Gen, restricted to YouTube channels.
+    key: 'youtube',
+    label: 'YouTube',
+    enabled: true,
+    disabledReason: null,
+  },
+  {
     key: 'tiktok',
     label: 'TikTok',
     enabled: false,
     disabledReason: 'Sem conta de anúncios conectada',
-  },
-  {
-    key: 'youtube',
-    label: 'YouTube',
-    enabled: false,
-    disabledReason: 'Google Ads aguardando acesso à API',
   },
   {
     key: 'linkedin',
@@ -45,6 +58,30 @@ export const PAID_PLATFORMS = [
 ] as const;
 
 export type PaidPlatformKey = (typeof PAID_PLATFORMS)[number]['key'];
+
+/** The ad account a builder platform spends from. */
+export type AdAccountPlatform = 'meta' | 'google';
+export const AD_ACCOUNT_PLATFORM: Record<'meta' | 'google_search' | 'youtube', AdAccountPlatform> =
+  { meta: 'meta', google_search: 'google', youtube: 'google' };
+
+export const GOOGLE_BUILDER_PLATFORMS = ['google_search', 'youtube'] as const;
+export type GoogleBuilderPlatform = (typeof GOOGLE_BUILDER_PLATFORMS)[number];
+
+export function isGooglePlatform(platform: string): platform is GoogleBuilderPlatform {
+  return (GOOGLE_BUILDER_PLATFORMS as readonly string[]).includes(platform);
+}
+
+/** Google's `advertising_channel_type` for each builder platform. */
+export const GOOGLE_CHANNEL_TYPE: Record<GoogleBuilderPlatform, 'SEARCH' | 'DEMAND_GEN'> = {
+  google_search: 'SEARCH',
+  youtube: 'DEMAND_GEN',
+};
+
+export function overdeliveryFactor(platform: string): number {
+  return isGooglePlatform(platform) || platform === 'google'
+    ? GOOGLE_DAILY_OVERDELIVERY_FACTOR
+    : META_DAILY_OVERDELIVERY_FACTOR;
+}
 
 // ---------------------------------------------------------------------------
 // Objectives
@@ -120,6 +157,8 @@ export const CREATIVE_FORMATS: Record<PaidPlatformKey, readonly CreativeFormat[]
       ratio: '1,91:1',
     },
   ],
+  // Google campaigns are born as a shell: no image is uploaded for them yet.
+  google_search: [],
   tiktok: [],
   youtube: [],
   linkedin: [],
@@ -283,8 +322,17 @@ export const UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_conten
 export type UtmKey = (typeof UTM_KEYS)[number];
 export type UtmParams = Record<UtmKey, string>;
 
+const UTM_MEDIUM: Record<PaidPlatformKey, string> = {
+  meta: 'paid_social',
+  google_search: 'cpc',
+  tiktok: 'paid_social',
+  youtube: 'paid_video',
+  linkedin: 'paid_social',
+};
+
 const UTM_SOURCE: Record<PaidPlatformKey, string> = {
   meta: 'meta',
+  google_search: 'google',
   tiktok: 'tiktok',
   youtube: 'youtube',
   linkedin: 'linkedin',
@@ -305,7 +353,7 @@ export function buildUtms(input: {
 }): UtmParams {
   return {
     utm_source: UTM_SOURCE[input.platform],
-    utm_medium: 'paid_social',
+    utm_medium: UTM_MEDIUM[input.platform],
     utm_campaign: utmSlug(input.campaignName) || 'campanha',
     // One value per campaign; each variation appends its own suffix (-v1, -v2).
     utm_content: input.objective,
@@ -371,11 +419,15 @@ export function campaignDaysInMonth(startDate: string, endDate: string, today: s
 }
 
 /**
- * What the campaign can really cost: budget is not spend, and the platform may
- * deliver up to 25% over the daily budget.
+ * What the campaign can really cost: budget is not spend. Meta may deliver up
+ * to 25% over the daily budget; Google, up to twice it on a given day.
  */
-export function estimateCostCents(dailyBudgetCents: number, days: number): number {
-  return Math.round(dailyBudgetCents * days * META_DAILY_OVERDELIVERY_FACTOR);
+export function estimateCostCents(
+  dailyBudgetCents: number,
+  days: number,
+  platform: string = 'meta',
+): number {
+  return Math.round(dailyBudgetCents * days * overdeliveryFactor(platform));
 }
 
 // ---------------------------------------------------------------------------
@@ -538,6 +590,96 @@ const compliantText = (max: number, label: string) =>
       }
     });
 
+// ---------------------------------------------------------------------------
+// Google: YouTube video and Search keywords
+// ---------------------------------------------------------------------------
+
+const YOUTUBE_ID = '[A-Za-z0-9_-]{11}';
+const YOUTUBE_PATTERNS = [
+  new RegExp(
+    String.raw`^https://(?:www\.|m\.)?youtube\.com/watch\?(?:[^#]*&)?v=(${YOUTUBE_ID})(?:[&#].*)?$`,
+  ),
+  new RegExp(String.raw`^https://youtu\.be/(${YOUTUBE_ID})(?:[?#].*)?$`),
+  new RegExp(
+    String.raw`^https://(?:www\.|m\.)?youtube\.com/(?:shorts|embed|live)/(${YOUTUBE_ID})(?:[?#/].*)?$`,
+  ),
+];
+
+/** The 11-character video id of a YouTube link, or null when it is not one. */
+export function parseYoutubeVideoId(url: string): string | null {
+  const trimmed = url.trim();
+  for (const pattern of YOUTUBE_PATTERNS) {
+    const match = pattern.exec(trimmed);
+    if (match?.[1]) return match[1];
+  }
+  return null;
+}
+
+/** YouTube's own still for a video; needs no API key. */
+export function youtubeThumbnailUrl(videoId: string): string {
+  return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+}
+
+export const MAX_KEYWORDS = 10;
+export const MAX_NEGATIVE_KEYWORDS = 20;
+export const KEYWORD_MAX_LENGTH = 80;
+export const KEYWORD_MAX_WORDS = 10;
+/** Google's limits for a responsive search ad's parts. */
+export const SEARCH_HEADLINE_MAX = 30;
+export const SEARCH_DESCRIPTION_MAX = 90;
+export const MAX_SEARCH_HEADLINES = 3;
+export const MAX_SEARCH_DESCRIPTIONS = 2;
+
+/** Google refuses these characters in a keyword. */
+const KEYWORD_FORBIDDEN = /[!@%,*=;`<>^{}|~]/;
+
+const keywordSchema = z
+  .string()
+  .trim()
+  .min(2, 'Palavra-chave muito curta')
+  .max(KEYWORD_MAX_LENGTH, `Máximo de ${KEYWORD_MAX_LENGTH} caracteres por palavra-chave`)
+  .refine((value) => !KEYWORD_FORBIDDEN.test(value), 'Caractere não aceito pelo Google')
+  .refine(
+    (value) => value.split(/\s+/).length <= KEYWORD_MAX_WORDS,
+    `No máximo ${KEYWORD_MAX_WORDS} palavras por palavra-chave`,
+  );
+
+const keywordList = (max: number, label: string) =>
+  z
+    .array(keywordSchema)
+    .max(max, `No máximo ${max} ${label}`)
+    .refine(
+      (list) => new Set(list.map((item) => item.toLowerCase())).size === list.length,
+      'Há palavras-chave repetidas',
+    );
+
+export const youtubeDraftSchema = z.object({
+  videoUrl: z
+    .string()
+    .trim()
+    .refine((value) => parseYoutubeVideoId(value) !== null, 'Informe um link https:// do YouTube'),
+  /** Shown over the video in the preview, and the ad's headline next wave. */
+  headline: compliantText(HEADLINE_MAX, 'o título'),
+});
+export type YoutubeDraft = z.output<typeof youtubeDraftSchema>;
+
+export const searchDraftSchema = z.object({
+  keywords: keywordList(MAX_KEYWORDS, 'palavras-chave').min(
+    1,
+    'Informe ao menos uma palavra-chave',
+  ),
+  negativeKeywords: keywordList(MAX_NEGATIVE_KEYWORDS, 'palavras-chave negativas').default([]),
+  headlines: z
+    .array(compliantText(SEARCH_HEADLINE_MAX, 'o título'))
+    .min(1, 'Escreva ao menos um título')
+    .max(MAX_SEARCH_HEADLINES),
+  descriptions: z
+    .array(compliantText(SEARCH_DESCRIPTION_MAX, 'a descrição'))
+    .min(1, 'Escreva ao menos uma descrição')
+    .max(MAX_SEARCH_DESCRIPTIONS),
+});
+export type SearchDraft = z.output<typeof searchDraftSchema>;
+
 export const copyVariationSchema = z.object({
   /** The uploaded image this copy goes with; the server checks it exists. */
   creativeId: z.uuid({ error: 'Envie o criativo desta variação' }),
@@ -555,19 +697,36 @@ const utmValue = z
   .max(80, 'Máximo de 80 caracteres')
   .regex(/^[A-Za-z0-9_.-]*$/, 'Use só letras, números, hífen, ponto e sublinhado');
 
+export const DRAFT_PLATFORMS = ['meta', 'google_search', 'youtube'] as const;
+export type DraftPlatform = (typeof DRAFT_PLATFORMS)[number];
+
+/**
+ * One shape for every platform, with the platform-specific parts required by
+ * the refinement below. A Meta draft is exactly what it was before Google
+ * existed, so drafts already approved keep their hash.
+ *
+ * Google drafts carry no uploaded image and are always born paused: the first
+ * real Google write is a shell created with a person watching.
+ */
 export const campaignDraftSchema = z
   .object({
-    platform: z.literal('meta', { error: 'Só a Meta está habilitada' }),
+    platform: z.enum(DRAFT_PLATFORMS, { error: 'Escolha uma plataforma habilitada' }),
     name: z.string().trim().min(3, 'Dê um nome à campanha').max(120),
     objective: z.enum(CAMPAIGN_OBJECTIVES, { error: 'Escolha o objetivo' }),
     idealCustomerProfile,
     reach: reachSchema,
-    formatKey: z.string().min(1, 'Escolha o formato'),
+    /** Meta only. */
+    formatKey: z.string().optional(),
     destinationUrl: z.url({ protocol: /^https$/, error: 'Informe um endereço https:// válido' }),
+    /** Meta only: image plus copy. Google drafts send none. */
     variations: z
       .array(copyVariationSchema)
-      .min(MIN_VARIATIONS, `Crie pelo menos ${MIN_VARIATIONS} variações`)
-      .max(MAX_VARIATIONS, `No máximo ${MAX_VARIATIONS} variações`),
+      .max(MAX_VARIATIONS, `No máximo ${MAX_VARIATIONS} variações`)
+      .default([]),
+    /** YouTube only. */
+    youtube: youtubeDraftSchema.optional(),
+    /** Google Pesquisa only. */
+    search: searchDraftSchema.optional(),
     startDate: dateString,
     endDate: dateString,
     dailyBudgetCents: z
@@ -580,7 +739,7 @@ export const campaignDraftSchema = z
       utm_campaign: utmValue.min(1, 'Obrigatório'),
       utm_content: utmValue,
     }),
-    /** Born paused: what the sacrifice-campaign test uses. */
+    /** Born paused: what the sacrifice-campaign test uses. Always true on Google. */
     startPaused: z.boolean(),
   })
   .superRefine((draft, ctx) => {
@@ -591,8 +750,66 @@ export const campaignDraftSchema = z
         message: 'O fim não pode ser antes do início',
       });
     }
-    if (!CREATIVE_FORMATS[draft.platform].some((format) => format.key === draft.formatKey)) {
-      ctx.addIssue({ code: 'custom', path: ['formatKey'], message: 'Formato inválido' });
+
+    const foreign = (field: 'youtube' | 'search' | 'variations' | 'formatKey', label: string) =>
+      ctx.addIssue({
+        code: 'custom',
+        path: [field],
+        message: `${label} não pertence a esta plataforma`,
+      });
+
+    if (draft.platform === 'meta') {
+      if (!CREATIVE_FORMATS.meta.some((format) => format.key === draft.formatKey)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['formatKey'],
+          message: draft.formatKey ? 'Formato inválido' : 'Escolha o formato',
+        });
+      }
+      if (draft.variations.length < MIN_VARIATIONS) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['variations'],
+          message: `Crie pelo menos ${MIN_VARIATIONS} variações`,
+        });
+      }
+      if (draft.youtube) foreign('youtube', 'O vídeo do YouTube');
+      if (draft.search) foreign('search', 'As palavras-chave');
+      return;
+    }
+
+    // Google from here on.
+    if (!draft.startPaused) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['startPaused'],
+        message: 'Campanhas do Google nascem sempre pausadas',
+      });
+    }
+    if (draft.reach.customLocations.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['reach', 'customLocations'],
+        message: 'O raio no mapa ainda não vale para o Google: use estados e cidades',
+      });
+    }
+    if (draft.variations.length > 0) foreign('variations', 'Criativo de imagem');
+    if (draft.formatKey) foreign('formatKey', 'Formato de imagem');
+
+    if (draft.platform === 'youtube') {
+      if (!draft.youtube) {
+        ctx.addIssue({ code: 'custom', path: ['youtube', 'videoUrl'], message: 'Informe o vídeo' });
+      }
+      if (draft.search) foreign('search', 'As palavras-chave');
+    } else {
+      if (!draft.search) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['search', 'keywords'],
+          message: 'Informe as palavras-chave',
+        });
+      }
+      if (draft.youtube) foreign('youtube', 'O vídeo do YouTube');
     }
   });
 
