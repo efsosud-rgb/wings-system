@@ -2,6 +2,7 @@ import {
   approvalDecisionSchema,
   AD_ACCOUNT_PLATFORM,
   campaignDraftSchema,
+  variationMedia,
   type ApprovalDetail,
   type ApprovalListItem,
   type CampaignDraft,
@@ -13,11 +14,13 @@ import {
   adAccounts,
   adApprovalRequests,
   adCreativeUploads,
+  adVideoUploads,
   auditLog,
 } from '../../db/schema/index.js';
 import { decideApproval, gateChange } from './approvals.js';
 import { reserveCampaignCreation } from './budget-guard.js';
 import { nextPendingInGroup, pendingGroups } from './batches.js';
+import { stepsOfExecution } from './ad-tree.js';
 import { executeApprovedChange } from './executor.js';
 import { createApprovalNotifier } from './notifiers/factory.js';
 import { createPlatformClient } from './platform/factory.js';
@@ -82,7 +85,7 @@ function toListItem(row: ListRow): ApprovalListItem {
 }
 
 export const adsRoutes: FastifyPluginAsync = async (app) => {
-  const { db, env } = app.wings;
+  const { db, env, platformFetch } = app.wings;
 
   /** Pending first, then escalated, then decided as history. */
   app.get(
@@ -141,6 +144,7 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
           change_status: ApprovalDetail['changeStatus'];
           executed_at: Date | string | null;
           last_execution_outcome: 'applied' | 'rejected' | 'unknown' | null;
+          last_execution_id: string | null;
           draft_payload: CampaignDraft | null;
         }
       >(sql`
@@ -156,6 +160,9 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
                (select ex.outcome from ad_executions ex
                  where ex.change_request_id = cr.id
                  order by ex.started_at desc limit 1) as last_execution_outcome,
+               (select ex.id from ad_executions ex
+                 where ex.change_request_id = cr.id
+                 order by ex.started_at desc limit 1) as last_execution_id,
                ar.requested_at, ar.escalated_at, ar.decided_at, ar.decision_reason,
                ar.notified_at, ar.notification_error,
                req.full_name as requested_by_name, ar.requested_by_agent,
@@ -213,6 +220,10 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         changeStatus: row.change_status,
         executedAt: iso(row.executed_at),
         lastExecutionOutcome: row.last_execution_outcome,
+        // Object by object, what the last execution made on the platform.
+        executionSteps: row.last_execution_id
+          ? await stepsOfExecution(db, row.last_execution_id)
+          : [],
         executionAvailable: createPlatformClient(env, {
           platform: row.platform,
           externalId: row.account_external_id,
@@ -366,7 +377,9 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
 
       // Every variation points at an image that was really uploaded here.
       // Google drafts carry none: their campaigns are born as a shell.
-      const creativeIds = [...new Set(parsed.data.variations.map((v) => v.creativeId))];
+      const media = parsed.data.variations.map(variationMedia);
+      const creativeIds = [...new Set(media.flatMap((item) => item.creativeIds))];
+      const videoIds = [...new Set(media.flatMap((item) => item.videoIds))];
       const known =
         creativeIds.length === 0
           ? []
@@ -378,6 +391,19 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(400).send({
           error: 'creative_not_found',
           message: 'Um dos criativos não foi encontrado. Envie a imagem de novo.',
+        });
+      }
+      const knownVideos =
+        videoIds.length === 0
+          ? []
+          : await db
+              .select({ id: adVideoUploads.id })
+              .from(adVideoUploads)
+              .where(inArray(adVideoUploads.id, videoIds));
+      if (knownVideos.length !== videoIds.length) {
+        return reply.status(400).send({
+          error: 'video_not_found',
+          message: 'Um dos vídeos não foi encontrado. Envie o vídeo de novo.',
         });
       }
 
@@ -459,7 +485,7 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
           .send({ error: 'not_found', message: 'Solicitação não encontrada.' });
       }
 
-      const { client, canWrite, reason } = createPlatformClient(env, account);
+      const { client, canWrite, reason } = createPlatformClient(env, account, platformFetch);
       if (!client || !canWrite) {
         return reply.status(409).send({
           error: reason ?? 'writes_disabled',
@@ -473,6 +499,8 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
       const result = await executeApprovedChange(db, client, approval.changeRequestId, {
         allowWrites: true,
         actorEmployeeId: request.session.actor.employeeId,
+        metaPixelId: env.META_PIXEL_ID,
+        videoDir: env.CREATIVE_VIDEO_DIR,
       });
 
       if (result.outcome === 'applied') return reply.send({ ok: true, outcome: 'applied' });

@@ -3,10 +3,11 @@ import type { Cents } from './money.js';
 /**
  * The narrow surface the rest of the system may use to touch an ad platform.
  *
- * Scope is budgets and status on existing campaigns, plus creating an empty
- * campaign. There is deliberately no way to create an ad set, an ad or a
- * creative, or to change targeting: a campaign with nothing under it cannot
- * deliver. What the interface cannot express, no bug and no agent can do.
+ * Scope is budgets and status on existing campaigns, plus creating a campaign.
+ * Creating what goes under it — media, one ad set, its ads — is a separate,
+ * narrower interface (`AdTreeWriter`, below) with no status, no update and no
+ * delete in it: everything is born paused and nothing that exists can be
+ * changed. What the interface cannot express, no bug and no agent can do.
  */
 
 export type CampaignStatus = 'ACTIVE' | 'PAUSED' | 'DELETED' | 'ARCHIVED';
@@ -182,4 +183,106 @@ export interface AdsPlatformClient {
   setAccountSpendCap(
     capCents: Cents,
   ): Promise<{ status: 'applied' | 'rejected'; message?: string }>;
+}
+
+// ---------------------------------------------------------------------------
+// The rest of a campaign: media, one ad set, its ads
+// ---------------------------------------------------------------------------
+
+/**
+ * Outcome of one write while building a campaign's tree. Same three answers as
+ * `MutationOutcome`, carrying whatever the next step needs.
+ */
+export type StepOutcome<T> =
+  | { status: 'created'; value: T }
+  | { status: 'rejected'; code: string; message: string }
+  | { status: 'unknown'; reason: string };
+
+export interface ResolvedTargeting {
+  regions: { key: string; name: string }[];
+  cities: { key: string; name: string; region: string }[];
+  /** Meta's locale key for Portuguese (Brazil). */
+  localeKey: number;
+}
+
+export type AdSetOptimization =
+  { goal: 'OFFSITE_CONVERSIONS'; pixelId: string; event: 'LEAD' } | { goal: 'LANDING_PAGE_VIEWS' };
+
+export interface AdSetSpec {
+  campaignId: string;
+  name: string;
+  /** YYYY-MM-DD, in the account's timezone. */
+  startDate: string;
+  endDate: string;
+  optimization: AdSetOptimization;
+  targeting: ResolvedTargeting;
+  customLocations: { latitude: number; longitude: number; radiusKm: number }[];
+  ageMin: number;
+  ageMax: number;
+  /** Null is Advantage+ placements: the ad set names none and Meta chooses. */
+  placements: {
+    facebook: ('feed' | 'stories' | 'reels')[];
+    instagram: ('feed' | 'stories' | 'reels')[];
+  } | null;
+}
+
+export type CreativeMedia =
+  { kind: 'image'; imageHash: string } | { kind: 'video'; videoId: string; thumbnailUrl: string };
+
+export interface CreativeSpec {
+  name: string;
+  pageId: string;
+  instagramUserId: string | null;
+  message: string;
+  headline: string;
+  callToAction: string;
+  /** Destination with UTMs already applied. */
+  link: string;
+  body:
+    | { type: 'single'; media: CreativeMedia }
+    | {
+        type: 'carousel';
+        cards: { media: CreativeMedia; headline: string; description: string; link: string }[];
+      };
+}
+
+/**
+ * What a client must be able to do for a campaign to get its ad set and ads.
+ *
+ * There is no status anywhere in these specs, on purpose: an ad set and an ad
+ * are created PAUSED by the client itself, and nothing here can say otherwise.
+ * There is also no update and no delete — nothing that exists can be touched.
+ */
+export interface AdTreeWriter {
+  /** Reads only. Done before the first write, so a bad place sends nothing. */
+  resolveTargeting(reach: {
+    states: string[];
+    cities: { name: string; state: string }[];
+  }): Promise<ResolvedTargeting>;
+  uploadImage(input: { bytes: Buffer; name: string }): Promise<StepOutcome<{ imageHash: string }>>;
+  /** Uploads in chunks and waits until Meta has processed the video. */
+  uploadVideo(input: {
+    filePath: string;
+    byteSize: number;
+    name: string;
+  }): Promise<StepOutcome<{ videoId: string; thumbnailUrl: string }>>;
+  createAdSet(spec: AdSetSpec): Promise<StepOutcome<{ id: string }>>;
+  createCreative(spec: CreativeSpec): Promise<StepOutcome<{ id: string }>>;
+  createAd(spec: {
+    name: string;
+    adSetId: string;
+    creativeId: string;
+  }): Promise<StepOutcome<{ id: string }>>;
+}
+
+export function isAdTreeWriter(client: unknown): client is AdTreeWriter {
+  const candidate = client as Partial<Record<keyof AdTreeWriter, unknown>>;
+  return (
+    typeof candidate.resolveTargeting === 'function' &&
+    typeof candidate.uploadImage === 'function' &&
+    typeof candidate.uploadVideo === 'function' &&
+    typeof candidate.createAdSet === 'function' &&
+    typeof candidate.createCreative === 'function' &&
+    typeof candidate.createAd === 'function'
+  );
 }

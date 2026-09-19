@@ -127,6 +127,13 @@
       "when": 1789834553935,
       "tag": "0017_wave3c_site_post_seo",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789852446942,
+      "tag": "0018_wave6_meta_adsets_ads",
+      "breakpoints": true
     }
   ]
 }

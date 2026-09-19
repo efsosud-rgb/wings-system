@@ -4,6 +4,11 @@ Onda 3, 18/09/2026. **Nada aqui foi verificado contra a Meta**: o código foi
 exercitado só com o cliente falso e com `fetch` roteirizado.
 `ADS_WRITES_ENABLED` não foi tocada.
 
+> ⚠️ **Desde a Onda 6 (19/09/2026) executar cria também o conjunto de anúncios e
+> os anúncios**, tudo pausado — ver [meta-conjunto-anuncios.md](meta-conjunto-anuncios.md).
+> O que este arquivo diz sobre "só a casca", "nenhuma imagem vai para a Meta" e
+> "nasce ativa" vale apenas para pedidos aprovados antes disso.
+>
 > O mesmo caminho vale para o Google (Pesquisa e YouTube) desde a Onda 4 —
 > ver [google-escrita.md](google-escrita.md).
 

@@ -773,14 +773,12 @@ export async function reserveCampaignCreation(
     const factor = overdeliveryFactor(account.platform);
     const exposureDeltaCents = creationExposure(draft, today, factor);
 
-    // A Google shell is always born paused, so it reserves nothing — but anyone
-    // with access to Google Ads can switch it on, outside this system. It is
-    // therefore judged as if it were running: the three ceilings, the prepaid
-    // balance included, must have room for it today.
-    const judgedCents =
-      account.platform === 'google'
-        ? creationExposure({ ...draft, startPaused: false }, today, factor)
-        : exposureDeltaCents;
+    // Everything is born paused, so it reserves nothing — but anyone with access
+    // to the platform can switch it on, outside this system, and since ad sets
+    // and ads are created too, one click is all it takes. It is therefore
+    // judged as if it were running: the three ceilings, the platform's own
+    // included, must have room for it today.
+    const judgedCents = creationExposure({ ...draft, startPaused: false }, today, factor);
     const refusal = await ceilingRefusal(db, input.adAccountId, current, judgedCents, {
       attempted: 'create_campaign',
       ...(judgedCents !== exposureDeltaCents

@@ -9,6 +9,7 @@ import { authRoutes } from './modules/auth/routes.js';
 import { audienceRoutes } from './modules/ads/audience-routes.js';
 import { cockpitRoutes } from './modules/ads/cockpit-routes.js';
 import { creativeRoutes } from './modules/ads/creative-routes.js';
+import { metaRoutes } from './modules/ads/meta-routes.js';
 import { adsRoutes } from './modules/ads/routes.js';
 import { siteRoutes } from './modules/site/routes.js';
 import { employeeRoutes } from './modules/employees/routes.js';
@@ -16,7 +17,14 @@ import { authPlugin } from './plugins/auth.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
-    wings: { env: Env; db: Database; mailer: Mailer; cpfCrypto: CpfCrypto };
+    wings: {
+      env: Env;
+      db: Database;
+      mailer: Mailer;
+      cpfCrypto: CpfCrypto;
+      /** Set only by tests, so no test ever reaches a real ad platform. */
+      platformFetch?: typeof fetch;
+    };
   }
 }
 
@@ -29,6 +37,8 @@ export async function buildApp(deps: {
   mailer?: Mailer;
   /** Overridable so tests never reach a real WordPress site. */
   wordpressFetch?: typeof fetch;
+  /** Overridable so tests never reach Meta or Google. */
+  platformFetch?: typeof fetch;
 }): Promise<FastifyInstance> {
   const app = Fastify({
     // Personal data must never reach the logs (LGPD), so request bodies are
@@ -49,6 +59,7 @@ export async function buildApp(deps: {
   app.decorate('wings', {
     env: deps.env,
     db: deps.db,
+    platformFetch: deps.platformFetch,
     mailer: deps.mailer ?? createMailer(deps.env, { info: (msg) => app.log.info(msg) }),
     cpfCrypto: createCpfCrypto(deps.env.CPF_ENCRYPTION_KEY, deps.env.CPF_INDEX_KEY),
   });
@@ -95,6 +106,7 @@ export async function buildApp(deps: {
   await app.register(cockpitRoutes);
   await app.register(creativeRoutes);
   await app.register(audienceRoutes);
+  await app.register(metaRoutes);
   await app.register(siteRoutes, { wordpressFetch: deps.wordpressFetch });
 
   return app;

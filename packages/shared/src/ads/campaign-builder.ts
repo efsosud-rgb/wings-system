@@ -799,6 +799,13 @@ export const MAX_AGE = 65;
 export const DEFAULT_AGE_MIN = 25;
 export const DEFAULT_AGE_MAX = 65;
 
+const AGE_MESSAGE = `A idade vai de ${MIN_AGE} a ${MAX_AGE} anos`;
+const ageSchema = z
+  .number({ error: AGE_MESSAGE })
+  .int(AGE_MESSAGE)
+  .min(MIN_AGE, AGE_MESSAGE)
+  .max(MAX_AGE, AGE_MESSAGE);
+
 export const PLACEMENT_PUBLISHERS = ['facebook', 'instagram'] as const;
 export type PlacementPublisher = (typeof PLACEMENT_PUBLISHERS)[number];
 export const PLACEMENT_POSITIONS = ['feed', 'stories', 'reels'] as const;
@@ -934,8 +941,8 @@ export const campaignDraftSchema = z
      * Meta only, and absent on drafts from before ad sets existed: those create
      * the campaign shell alone, as they were approved to.
      */
-    ageMin: z.number().int().min(MIN_AGE).max(MAX_AGE).optional(),
-    ageMax: z.number().int().min(MIN_AGE).max(MAX_AGE).optional(),
+    ageMin: ageSchema.optional(),
+    ageMax: ageSchema.optional(),
     placements: placementsSchema.optional(),
     identity: metaIdentitySchema.optional(),
     /** YouTube only. */

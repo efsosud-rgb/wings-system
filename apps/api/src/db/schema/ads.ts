@@ -331,6 +331,38 @@ export const adCreativeUploads = pgTable('ad_creative_uploads', {
 });
 
 /**
+ * Videos for ads. Too large for a column (Meta takes up to 4 GB), so the bytes
+ * live on a mounted volume and this row says where, how big and what hash.
+ * Like images, a video under an id never changes.
+ */
+export const adVideoUploads = pgTable('ad_video_uploads', {
+  tenantId: tenantId(),
+  id: uuid('id').primaryKey().defaultRandom(),
+  mimeType: text('mime_type').notNull(),
+  byteSize: bigint('byte_size', { mode: 'number' }).notNull(),
+  sha256: text('sha256').notNull(),
+  /** File name inside CREATIVE_VIDEO_DIR — never a path a client supplied. */
+  storageKey: text('storage_key').notNull(),
+  uploadedBy: uuid('uploaded_by').references(() => employees.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Wings' standing choice of Facebook Page and Instagram account to advertise
+ * as. One row per tenant; every request still carries its own copy.
+ */
+export const marketingMetaDefaults = pgTable('marketing_meta_defaults', {
+  tenantId: uuid('tenant_id')
+    .primaryKey()
+    .default(WINGS_TENANT_ID)
+    .references(() => tenants.id),
+  pageId: text('page_id').notNull(),
+  instagramActorId: text('instagram_actor_id'),
+  updatedBy: uuid('updated_by').references(() => employees.id),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
  * Images for posts on Wings' own site, held here until the draft is sent.
  *
  * The same idea as ad creatives, with the site's rules (WebP allowed, 5 MB).
@@ -490,6 +522,34 @@ export const adExecutions = pgTable('ad_executions', {
   startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
   finishedAt: timestamp('finished_at', { withTimezone: true }),
 });
+
+/**
+ * What one execution made on the platform, object by object, in order.
+ *
+ * Creating a campaign with its ad set and ads is several writes. If one fails
+ * in the middle, this is the record of what already exists out there — written
+ * after each write, so a crash loses at most the step in flight.
+ */
+export const adExecutionSteps = pgTable(
+  'ad_execution_steps',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    executionId: uuid('execution_id')
+      .notNull()
+      .references(() => adExecutions.id),
+    seq: integer('seq').notNull(),
+    /** campaign | image | video | ad_set | creative | ad */
+    kind: text('kind').notNull(),
+    label: text('label').notNull(),
+    /** created | failed | unknown */
+    status: text('status').notNull(),
+    externalId: text('external_id'),
+    message: text('message'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex('ad_execution_steps_execution_seq_uq').on(table.executionId, table.seq)],
+);
 
 /** Convenience: the SQL used by the guard to lock a period row. */
 export const LOCK_PERIOD_SQL = sql`select id from ad_budget_periods where id = $1 for update`;

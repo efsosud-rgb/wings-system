@@ -38,6 +38,16 @@ const schema = z.object({
    */
   META_WRITE_TOKEN: optionalString,
   META_WRITE_ACCOUNT_ID: optionalString,
+  /** The pixel whose Lead event a leads ad set optimises for. Not a secret. */
+  META_PIXEL_ID: z
+    .string()
+    .regex(/^\d{5,25}$/)
+    .default('1116678872845520'),
+  /**
+   * A mounted volume for ad videos (up to 4 GB each — too large for the
+   * database). Unset, the video routes answer 503, never a fake success.
+   */
+  CREATIVE_VIDEO_DIR: optionalString,
   ADS_WRITES_ENABLED: z
     .enum(['true', 'false'])
     .default('false')
