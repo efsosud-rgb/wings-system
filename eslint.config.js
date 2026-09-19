@@ -3,7 +3,8 @@ import prettier from 'eslint-config-prettier';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**'] },
+  // .claude/ holds third-party agent skills, vendored as published: not ours to lint.
+  { ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**', '.claude/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   prettier,
