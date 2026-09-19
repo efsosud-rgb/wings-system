@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ALT_TEXT_MAX, FOCUS_KEYWORD_MAX } from './seo-checklist.js';
 import { MAX_POST_IMAGES, MIN_GALLERY_IMAGES, parseVideoLink } from './site-content.js';
 
 /**
@@ -64,6 +65,25 @@ export const sitePostSchema = z
     /** Ids of tags that exist on the site: an Author cannot create terms. */
     tags: termIds.default([]),
     featuredImageId: z.uuid().nullable().default(null),
+    /** Sent to WordPress as the image's alt text; the post title when empty. */
+    featuredImageAlt: z
+      .string()
+      .trim()
+      .max(ALT_TEXT_MAX, `Máximo de ${ALT_TEXT_MAX} caracteres`)
+      .default(''),
+    /**
+     * What the SEO checklist works from. The site does not accept these over
+     * REST (Rank Math exposes no meta), so they are kept on our record for the
+     * person who pastes them into WordPress. The limits here are loose on
+     * purpose: the checklist advises on length and never blocks a draft.
+     */
+    seo: z
+      .object({
+        focusKeyword: z.string().trim().max(FOCUS_KEYWORD_MAX).default(''),
+        seoTitle: z.string().trim().max(120).default(''),
+        metaDescription: z.string().trim().max(320).default(''),
+      })
+      .default({ focusKeyword: '', seoTitle: '', metaDescription: '' }),
     /** In form order: `{{img:1}}` is the first. */
     images: z
       .array(
@@ -113,8 +133,8 @@ export type SitePostOutcome = (typeof SITE_POST_OUTCOMES)[number];
 
 export const SITE_POST_OUTCOME_LABEL: Record<SitePostOutcome, string> = {
   draft_created: 'Rascunho criado no WordPress',
-  failed: 'O WordPress recusou',
-  unknown: 'Sem confirmação — confira no WordPress',
+  failed: 'Não foi criado',
+  unknown: 'O site não confirmou. Confira no WordPress',
 };
 
 /** A category or tag as the site has it. Names arrive HTML-decoded. */
@@ -140,6 +160,8 @@ export interface SitePostRecord {
   hasFeaturedImage: boolean;
   /** Images placed in the body, gallery included. */
   imageCount: number;
+  /** Typed for the checklist; to be pasted into Rank Math by whoever publishes. */
+  seo: { focusKeyword: string; seoTitle: string; metaDescription: string } | null;
   outcome: SitePostOutcome;
   /** Where a person reviews and publishes it; null unless the draft exists. */
   editUrl: string | null;

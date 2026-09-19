@@ -1,0 +1,1 @@
+ALTER TABLE "site_posts" ADD COLUMN "seo" jsonb;

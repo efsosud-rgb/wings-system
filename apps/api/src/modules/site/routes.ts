@@ -218,6 +218,7 @@ export const siteRoutes: FastifyPluginAsync<SiteRoutesOptions> = async (app, opt
           categories: sitePosts.categories,
           featuredMediaId: sitePosts.featuredMediaId,
           media: sitePosts.media,
+          seo: sitePosts.seo,
           createdAt: sitePosts.createdAt,
           createdByName: employees.fullName,
         })
@@ -234,6 +235,7 @@ export const siteRoutes: FastifyPluginAsync<SiteRoutesOptions> = async (app, opt
         categoryNames: ((row.categories ?? []) as { name: string }[]).map((c) => c.name),
         hasFeaturedImage: row.featuredMediaId !== null,
         imageCount: ((row.media ?? []) as MediaRecord[]).filter((m) => m.role === 'inline').length,
+        seo: (row.seo ?? null) as SitePostRecord['seo'],
         createdAt: row.createdAt.toISOString(),
         createdByName: row.createdByName,
       }));
@@ -273,7 +275,8 @@ export const siteRoutes: FastifyPluginAsync<SiteRoutesOptions> = async (app, opt
       if (categories.length !== post.categories.length || tags.length !== post.tags.length) {
         return reply.status(400).send({
           error: 'unknown_term',
-          message: 'Uma categoria ou tag não existe mais no site. Atualize a lista.',
+          message:
+            'Uma categoria ou tag marcada não existe mais no site. Clique em Atualizar lista e marque de novo.',
         });
       }
 
@@ -292,14 +295,15 @@ export const siteRoutes: FastifyPluginAsync<SiteRoutesOptions> = async (app, opt
       if (wanted.some((id) => !uploadById.has(id))) {
         return reply.status(400).send({
           error: 'image_not_found',
-          message: 'Uma das imagens não foi encontrada. Envie de novo.',
+          message:
+            'Não encontramos uma das imagens deste post. Remova a imagem e envie o arquivo de novo.',
         });
       }
       const featured = post.featuredImageId ? uploadById.get(post.featuredImageId) : undefined;
       if (featured && !isBigEnoughToFeature(featured)) {
         return reply.status(400).send({
           error: 'featured_too_small',
-          message: `A imagem destacada tem ${featured.width} × ${featured.height} px. O mínimo é ${FEATURED_MIN_WIDTH} × ${FEATURED_MIN_HEIGHT}.`,
+          message: `A imagem destacada tem ${featured.width} × ${featured.height} px e o mínimo é ${FEATURED_MIN_WIDTH} × ${FEATURED_MIN_HEIGHT}. Escolha uma versão maior.`,
         });
       }
 
@@ -320,6 +324,7 @@ export const siteRoutes: FastifyPluginAsync<SiteRoutesOptions> = async (app, opt
             tags: tags.map(({ id, name }) => ({ id, name })),
             media,
             videoUrl: post.videoUrl || null,
+            seo: post.seo,
             createdBy: request.session.actor.employeeId,
             ...extra,
           })
@@ -335,13 +340,22 @@ export const siteRoutes: FastifyPluginAsync<SiteRoutesOptions> = async (app, opt
 
       const queue = [
         ...(featured
-          ? [{ role: 'featured' as const, position: 0, upload: featured, caption: '' }]
+          ? [
+              {
+                role: 'featured' as const,
+                position: 0,
+                upload: featured,
+                caption: '',
+                alt: post.featuredImageAlt,
+              },
+            ]
           : []),
         ...post.images.map((image, index) => ({
           role: 'inline' as const,
           position: index + 1,
           upload: uploadById.get(image.uploadId) as (typeof stored)[number],
           caption: image.caption,
+          alt: '',
         })),
       ];
       const sourceUrlOf = new Map<string, string>();
@@ -358,8 +372,8 @@ export const siteRoutes: FastifyPluginAsync<SiteRoutesOptions> = async (app, opt
             bytes: item.upload.data,
             mimeType: item.upload.mimeType,
             filename: `${slug}-${item.role === 'featured' ? 'destaque' : item.position}.${EXTENSION[item.upload.mimeType] ?? 'jpg'}`,
-            title: `${post.title} — ${label.toLowerCase()}`,
-            altText: item.caption || post.title,
+            title: `${post.title} (${label.toLowerCase()})`,
+            altText: item.alt || item.caption || post.title,
             caption: item.caption,
           });
 
@@ -371,12 +385,9 @@ export const siteRoutes: FastifyPluginAsync<SiteRoutesOptions> = async (app, opt
             return reply.status(502).send({
               error: unknown ? 'media_upload_unknown' : 'media_upload_failed',
               failedImage: { role: item.role, position: item.position },
-              message:
-                `${label} não subiu para o WordPress` +
-                (unknown
-                  ? ' — o site não confirmou; confira a biblioteca de mídia antes de tentar de novo.'
-                  : `: ${outcome.message}`) +
-                ' O post NÃO foi criado. Seu formulário continua como está.',
+              message: unknown
+                ? `${label} foi enviada, mas o site não confirmou se recebeu. O post não foi criado e o formulário continua como está. Confira a biblioteca de mídia do WordPress antes de tentar de novo.`
+                : `${label} não subiu para o WordPress. O site respondeu: "${outcome.message}". O post não foi criado e o formulário continua como está. Troque a imagem ou tente de novo.`,
             });
           }
 
@@ -446,13 +457,13 @@ export const siteRoutes: FastifyPluginAsync<SiteRoutesOptions> = async (app, opt
       if (outcome.status === 'failed') {
         return reply.status(502).send({
           error: 'site_refused',
-          message: `O WordPress recusou o rascunho: ${outcome.message}`,
+          message: `O WordPress não aceitou o rascunho. O site respondeu: "${outcome.message}". Nada foi criado e o formulário continua como está.`,
         });
       }
       return reply.status(202).send({
         error: 'unknown_outcome',
         message:
-          'O site não confirmou. O rascunho pode ter sido criado: confira no painel do WordPress antes de enviar de novo.',
+          'O site não confirmou se criou o rascunho. Abra os posts no WordPress e confira antes de enviar de novo, para não duplicar.',
       });
     },
   );

@@ -262,6 +262,12 @@ describe('building the draft', () => {
       categories: [37, 39],
       tags: [8],
       featuredImageId,
+      featuredImageAlt: 'Franqueado atendendo no balcão da unidade',
+      seo: {
+        focusKeyword: 'franqueado Wings',
+        seoTitle: 'Dia a dia do franqueado Wings',
+        metaDescription: 'x'.repeat(130),
+      },
       images,
       gallery: [2, 3],
       videoUrl: 'https://youtu.be/dQw4w9WgXcQ',
@@ -281,10 +287,11 @@ describe('building the draft', () => {
       'POST media',
       'POST posts',
     ]);
-    expect(media[0]?.query.get('title')).toBe(`${post.title} — imagem destacada`);
+    expect(media[0]?.query.get('title')).toBe(`${post.title} (imagem destacada)`);
     expect(media[0]?.headers.get('content-disposition')).toBe(
       'attachment; filename="como-e-o-dia-a-dia-de-um-franqueado-wings-destaque.jpg"',
     );
+    expect(media[0]?.query.get('alt_text')).toBe('Franqueado atendendo no balcão da unidade');
     expect(media[1]?.query.get('caption')).toBe('Equipe "Wings" <3');
     expect(media[1]?.query.get('alt_text')).toBe('Equipe "Wings" <3');
     expect(media[2]?.query.get('alt_text')).toBe(post.title);
@@ -343,6 +350,10 @@ describe('building the draft', () => {
       },
     ]);
     expect(row?.videoUrl).toBe('https://youtu.be/dQw4w9WgXcQ');
+    // SEO fields stay on our record and never travel to the site.
+    expect(row?.seo).toMatchObject({ focusKeyword: 'franqueado Wings' });
+    expect(JSON.stringify(body)).not.toContain('rank_math');
+    expect(body).not.toHaveProperty('meta');
 
     const list = await configured.inject({ url: '/marketing/site/posts', cookies });
     expect(list.json<{ posts: SitePostRecord[] }>().posts[0]).toMatchObject({
@@ -381,7 +392,7 @@ describe('building the draft', () => {
       failedImage: { role: 'inline', position: 2 },
     });
     expect(failed.json<{ message: string }>().message).toMatch(
-      /^Imagem 2 não subiu.*Arquivo grande demais.*NÃO foi criado/,
+      /^Imagem 2 não subiu.*Arquivo grande demais.*não foi criado.*continua como está/,
     );
     expect(wpCalls('POST', 'posts')).toHaveLength(0);
 

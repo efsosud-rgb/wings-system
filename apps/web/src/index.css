@@ -1701,3 +1701,193 @@ textarea.control {
   gap: 14px;
   align-items: center;
 }
+
+/* ---------- post do site: grupos, resumo de erros e checklist ---------- */
+.site-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 1180px) {
+  .site-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.site-group {
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.site-group > legend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.field-required {
+  color: var(--wings-accent);
+  font-weight: 700;
+}
+
+.site-error-summary ul {
+  margin: 8px 0 0 18px;
+  color: var(--wings-text);
+}
+
+.site-error-summary a {
+  color: inherit;
+  font-weight: 600;
+}
+
+.site-featured-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.site-featured-fields .field,
+.site-featured-fields input[type='file'] {
+  width: 100%;
+}
+
+/* Inside the two-column layout the preview goes under the text, full width. */
+.site-group .site-preview {
+  margin-top: 4px;
+}
+
+/* Chips are click targets: tall enough for a mouse, taller still for a finger. */
+.site-group .builder-state {
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+@media (pointer: coarse) {
+  .site-group .builder-state {
+    min-height: 44px;
+  }
+}
+
+.seo-checklist {
+  position: sticky;
+  top: 16px;
+  background: var(--wings-surface);
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+}
+
+.seo-checklist h3 {
+  font-size: 14px;
+}
+
+.seo-checklist-total {
+  font-size: 13px;
+  color: var(--wings-muted);
+}
+
+.seo-checklist-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--wings-border);
+  overflow: hidden;
+}
+
+.seo-checklist-bar span {
+  display: block;
+  height: 100%;
+  background: var(--wings-success);
+  transition: width 200ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seo-checklist-bar span {
+    transition: none;
+  }
+}
+
+.seo-checklist ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.seo-checklist li {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.seo-check-icon {
+  margin-top: 2px;
+}
+
+.seo-check-ok .seo-check-icon {
+  color: var(--wings-success);
+}
+
+.seo-check-missing .seo-check-icon {
+  color: var(--wings-danger);
+}
+
+.seo-check-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.seo-check-detail {
+  display: block;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--wings-muted);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.site-post-seo {
+  font-size: 12.5px;
+  margin-top: 4px;
+}
+
+.site-post-seo summary {
+  cursor: pointer;
+  color: var(--wings-muted);
+}
+
+.site-post-seo dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  margin-top: 6px;
+}
+
+.site-post-seo dt {
+  color: var(--wings-muted);
+}
