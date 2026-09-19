@@ -11,7 +11,9 @@ import {
   checkCopyCompliance,
   estimateCostCents,
   matchesFormat,
+  parseYoutubeVideoId,
   utmSlug,
+  youtubeThumbnailUrl,
   type CampaignDraftInput,
 } from './campaign-builder.js';
 
@@ -151,6 +153,21 @@ describe('duration and cost', () => {
 });
 
 describe('the draft schema', () => {
+  const variations = [
+    {
+      creativeId: '11111111-1111-4111-8111-111111111111',
+      headline: 'Leve a Wings para sua cidade',
+      primaryText: 'Fale com a gente.',
+      callToAction: 'LEARN_MORE',
+    },
+    {
+      creativeId: '22222222-2222-4222-8222-222222222222',
+      headline: 'Seja um franqueado Wings',
+      primaryText: 'Suporte completo.',
+      callToAction: 'CONTACT_US',
+    },
+  ] as const;
+
   const valid: CampaignDraftInput = {
     platform: 'meta',
     name: 'Sacrifício — teste de escrita',
@@ -159,20 +176,7 @@ describe('the draft schema', () => {
     reach: { states: ['SP'], cities: [{ name: 'Curitiba', state: 'PR' }] },
     formatKey: 'feed_square',
     destinationUrl: 'https://wingscompany.com.br/franquia',
-    variations: [
-      {
-        creativeId: '11111111-1111-4111-8111-111111111111',
-        headline: 'Leve a Wings para sua cidade',
-        primaryText: 'Fale com a gente.',
-        callToAction: 'LEARN_MORE',
-      },
-      {
-        creativeId: '22222222-2222-4222-8222-222222222222',
-        headline: 'Seja um franqueado Wings',
-        primaryText: 'Suporte completo.',
-        callToAction: 'CONTACT_US',
-      },
-    ],
+    variations: [...variations],
     startDate: '2026-09-20',
     endDate: '2026-09-27',
     dailyBudgetCents: 600,
@@ -192,14 +196,14 @@ describe('the draft schema', () => {
   it('refuses non-compliant copy on the server side too', () => {
     const result = campaignDraftSchema.safeParse({
       ...valid,
-      variations: [valid.variations[0], { ...valid.variations[1], headline: 'Retorno garantido' }],
+      variations: [variations[0], { ...variations[1], headline: 'Retorno garantido' }],
     });
     expect(result.success).toBe(false);
     expect(result.error?.issues[0]?.path).toEqual(['variations', 1, 'headline']);
   });
 
   it('demands a creative on every variation', () => {
-    const [first, second] = valid.variations;
+    const [first, second] = variations;
     const result = campaignDraftSchema.safeParse({
       ...valid,
       variations: [first, { ...second, creativeId: '' }],
@@ -208,9 +212,9 @@ describe('the draft schema', () => {
   });
 
   it('demands two to three variations', () => {
-    expect(
-      campaignDraftSchema.safeParse({ ...valid, variations: [valid.variations[0]] }).success,
-    ).toBe(false);
+    expect(campaignDraftSchema.safeParse({ ...valid, variations: [variations[0]] }).success).toBe(
+      false,
+    );
   });
 
   it('refuses an end before the start, an http destination and an unknown format', () => {
@@ -219,5 +223,141 @@ describe('the draft schema', () => {
       campaignDraftSchema.safeParse({ ...valid, destinationUrl: 'http://x.com' }).success,
     ).toBe(false);
     expect(campaignDraftSchema.safeParse({ ...valid, formatKey: 'banner' }).success).toBe(false);
+  });
+});
+
+describe('Google drafts', () => {
+  const common: Omit<CampaignDraftInput, 'platform'> = {
+    name: 'Pesquisa — franquia SP',
+    objective: 'lead',
+    idealCustomerProfile: 'Empreendedor de 30 a 50 anos, com experiência em gestão.',
+    reach: { states: ['SP'], cities: [{ name: 'Curitiba', state: 'PR' }] },
+    destinationUrl: 'https://wingscompany.com.br/franquia',
+    startDate: '2026-09-20',
+    endDate: '2026-09-27',
+    dailyBudgetCents: 3000,
+    utms: { utm_source: 'google', utm_medium: 'cpc', utm_campaign: 'pesquisa', utm_content: '' },
+    startPaused: true,
+  };
+
+  const search: CampaignDraftInput = {
+    ...common,
+    platform: 'google_search',
+    search: {
+      keywords: ['franquia de alimentação', 'abrir franquia'],
+      negativeKeywords: ['grátis'],
+      headlines: ['Franquia Wings'],
+      descriptions: ['Conheça o modelo de negócio e o suporte da Wings.'],
+    },
+  };
+
+  const youtube: CampaignDraftInput = {
+    ...common,
+    platform: 'youtube',
+    youtube: {
+      videoUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+      headline: 'Conheça a Wings',
+    },
+  };
+
+  it('accepts a search draft and a YouTube draft, with no image', () => {
+    const parsedSearch = campaignDraftSchema.safeParse(search);
+    expect(parsedSearch.success).toBe(true);
+    expect(parsedSearch.data?.variations).toEqual([]);
+    expect(campaignDraftSchema.safeParse(youtube).success).toBe(true);
+  });
+
+  it('never lets a Google campaign be born active', () => {
+    const result = campaignDraftSchema.safeParse({ ...search, startPaused: false });
+    expect(result.error?.issues[0]?.message).toBe('Campanhas do Google nascem sempre pausadas');
+  });
+
+  it('caps keywords at 10 and negatives at 20, and refuses repeats and bad characters', () => {
+    const many = (n: number) => Array.from({ length: n }, (_, i) => `franquia termo ${i}`);
+    const withSearch = (patch: Record<string, unknown>) =>
+      campaignDraftSchema.safeParse({ ...search, search: { ...search.search, ...patch } }).success;
+
+    expect(withSearch({ keywords: many(10), negativeKeywords: many(20) })).toBe(true);
+    expect(withSearch({ keywords: many(11) })).toBe(false);
+    expect(withSearch({ negativeKeywords: many(21) })).toBe(false);
+    expect(withSearch({ keywords: [] })).toBe(false);
+    expect(withSearch({ keywords: ['Franquia', 'franquia'] })).toBe(false);
+    expect(withSearch({ keywords: ['franquia 100%'] })).toBe(false);
+  });
+
+  it('holds search copy to the same compliance rules as Meta copy', () => {
+    const result = campaignDraftSchema.safeParse({
+      ...search,
+      search: { ...search.search, headlines: ['Retorno garantido'] },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('refuses the wrong parts: a video on search, keywords on YouTube, an image on either', () => {
+    expect(campaignDraftSchema.safeParse({ ...search, youtube: youtube.youtube }).success).toBe(
+      false,
+    );
+    expect(campaignDraftSchema.safeParse({ ...youtube, search: search.search }).success).toBe(
+      false,
+    );
+    expect(campaignDraftSchema.safeParse({ ...search, formatKey: 'feed_square' }).success).toBe(
+      false,
+    );
+    expect(campaignDraftSchema.safeParse({ ...youtube, youtube: undefined }).success).toBe(false);
+  });
+
+  it('refuses a radius on the map, which Google does not get yet', () => {
+    const result = campaignDraftSchema.safeParse({
+      ...search,
+      reach: {
+        states: ['SP'],
+        cities: [],
+        customLocations: [{ latitude: -23.5, longitude: -46.6, radiusKm: 10 }],
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('YouTube links', () => {
+  it.each([
+    ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'dQw4w9WgXcQ'],
+    ['https://youtube.com/watch?feature=share&v=dQw4w9WgXcQ&t=10', 'dQw4w9WgXcQ'],
+    ['https://youtu.be/dQw4w9WgXcQ?si=abc', 'dQw4w9WgXcQ'],
+    ['https://www.youtube.com/shorts/dQw4w9WgXcQ', 'dQw4w9WgXcQ'],
+    ['https://m.youtube.com/watch?v=dQw4w9WgXcQ', 'dQw4w9WgXcQ'],
+  ])('reads the id out of %s', (url, id) => {
+    expect(parseYoutubeVideoId(url)).toBe(id);
+    expect(youtubeThumbnailUrl(id)).toBe(`https://i.ytimg.com/vi/${id}/hqdefault.jpg`);
+  });
+
+  it.each([
+    'http://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    'https://vimeo.com/123456',
+    'https://www.youtube.com/watch?v=curto',
+    'https://youtube.com.evil.example/watch?v=dQw4w9WgXcQ',
+    'https://www.youtube.com/channel/UCabc',
+    '',
+  ])('refuses %s', (url) => {
+    expect(parseYoutubeVideoId(url)).toBeNull();
+  });
+});
+
+describe('cost estimate by platform', () => {
+  it('uses 1.25x for Meta and 2x for Google', () => {
+    expect(estimateCostCents(1000, 10)).toBe(12_500);
+    expect(estimateCostCents(1000, 10, 'meta')).toBe(12_500);
+    expect(estimateCostCents(1000, 10, 'google_search')).toBe(20_000);
+    expect(estimateCostCents(1000, 10, 'youtube')).toBe(20_000);
+  });
+
+  it('labels Google traffic as such in the UTMs', () => {
+    expect(
+      buildUtms({ platform: 'google_search', objective: 'lead', campaignName: 'X' }),
+    ).toMatchObject({ utm_source: 'google', utm_medium: 'cpc' });
+    expect(buildUtms({ platform: 'youtube', objective: 'lead', campaignName: 'X' })).toMatchObject({
+      utm_source: 'youtube',
+      utm_medium: 'paid_video',
+    });
   });
 });
