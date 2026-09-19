@@ -60,11 +60,18 @@ export function createMailer(env: Env, log?: { info: (msg: string) => void }): M
   };
 }
 
+// Always the production host: mail clients fetch it from outside, and a staging
+// e-mail should not depend on staging being reachable. The file is served by the
+// web app from apps/web/public/brand/.
+const LOGO_URL = 'https://wingssystem.online/brand/wings-logo.png';
+
 function layout(title: string, greeting: string, body: string, link: string, cta: string): string {
   return `<!doctype html>
 <html lang="pt-BR"><body style="margin:0;background:#0a0a0a;color:#e5e5e5;font-family:system-ui,-apple-system,sans-serif">
   <div style="max-width:560px;margin:0 auto;padding:32px 24px">
-    <h1 style="color:#e95228;font-size:20px;margin:0 0 24px">Wings System</h1>
+    <h1 style="margin:0 0 24px;background:#0a0a0a;color:#e95228;font-size:20px">
+      <img src="${LOGO_URL}" alt="Wings System" width="180" height="60" style="display:block;border:0;width:180px;height:auto;color:#e95228;font-size:20px;font-weight:bold">
+    </h1>
     <h2 style="font-size:16px;margin:0 0 12px">${title}</h2>
     <p style="color:#a3a3a3;font-size:14px;line-height:1.5">${greeting}</p>
     <p style="color:#a3a3a3;font-size:14px;line-height:1.5">${body}</p>

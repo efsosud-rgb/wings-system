@@ -39,18 +39,18 @@ a {
   color: var(--wings-muted);
 }
 
-/* ---------- brand ---------- */
-.brand {
-  font-size: 24px;
-  font-weight: 800;
-  letter-spacing: -0.03em;
-  color: #fff;
+/* ---------- auth pages ---------- */
+.auth-brand {
+  margin-bottom: 24px;
+  text-align: center;
+  line-height: 0;
 }
-.brand span {
-  color: var(--wings-accent);
+.auth-brand img {
+  width: 200px;
+  max-width: 100%;
+  height: auto;
 }
 
-/* ---------- auth pages ---------- */
 .auth-wrap {
   min-height: 100vh;
   display: grid;
@@ -221,12 +221,21 @@ a {
   flex-shrink: 0;
 }
 
-.sidebar-brand small {
+.sidebar-brand-mark {
   display: block;
-  color: var(--wings-faint);
-  font-size: 10px;
-  letter-spacing: 0.35em;
-  margin-top: 4px;
+  width: 100%;
+  height: auto;
+}
+
+/* Sits where "COMPANY" sits in the full mark: from 20% to 69% of its width. */
+.sidebar-brand small {
+  display: flex;
+  justify-content: space-between;
+  margin: 6px 31% 0 20%;
+  color: var(--wings-muted);
+  font-size: 11px;
+  line-height: 1;
+  text-transform: uppercase;
 }
 
 .sidebar-menu {
