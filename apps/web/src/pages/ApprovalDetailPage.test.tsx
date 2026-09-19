@@ -407,6 +407,63 @@ describe('a request to create a campaign', () => {
     expect(screen.queryByText(/Simul/)).toBeNull();
   });
 
+  it('shows a Google search draft as what it is: no image, keywords, 2x, and the Google button', () => {
+    approval.current = buildApproval({
+      platform: 'google',
+      changeKind: 'create_campaign',
+      campaignName: draft.name,
+      campaignExternalId: '',
+      changeStatus: 'approved',
+      status: 'approved',
+      executionAvailable: false,
+      draft: {
+        ...draft,
+        formatKey: undefined,
+        platform: 'google_search',
+        reach: { ...draft.reach, customLocations: [] },
+        variations: [],
+        search: {
+          keywords: ['franquia de alimentação', 'abrir franquia'],
+          negativeKeywords: ['grátis'],
+          headlines: ['Franquia Wings'],
+          descriptions: ['Conheça o modelo de negócio.'],
+        },
+      },
+    });
+    renderDetail();
+
+    // R$ 20 × 10 days × 2.
+    expect(screen.getByText(/custo total estimado\s+R\$\s400,00/)).toBeTruthy();
+    expect(screen.getByText('franquia de alimentação · abrir franquia')).toBeTruthy();
+    expect(screen.getByText('Anúncio na Pesquisa do Google')).toBeTruthy();
+    expect(screen.queryByText('Formato')).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Posicionamento da prévia' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Executar no Google' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Executar no Meta' })).toBeNull();
+  });
+
+  it('shows a YouTube draft with its still and says it is Demand Gen', () => {
+    approval.current = buildApproval({
+      platform: 'google',
+      changeKind: 'create_campaign',
+      draft: {
+        ...draft,
+        formatKey: undefined,
+        platform: 'youtube',
+        reach: { ...draft.reach, customLocations: [] },
+        variations: [],
+        youtube: { videoUrl: 'https://youtu.be/dQw4w9WgXcQ', headline: 'Conheça a Wings' },
+      },
+    });
+    renderDetail();
+
+    expect(screen.getByText('Demand Gen, restrita ao YouTube')).toBeTruthy();
+    expect(
+      (screen.getByAltText('Miniatura do vídeo no YouTube') as HTMLImageElement).src,
+    ).toContain('/vi/dQw4w9WgXcQ/');
+    expect(screen.getByText(/moram no grupo de anúncios/)).toBeTruthy();
+  });
+
   it('says so in red when the campaign would be born active', () => {
     approval.current = buildApproval({
       changeKind: 'create_campaign',

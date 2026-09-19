@@ -9,6 +9,7 @@ import {
   campaignDays,
   describeReach,
   estimateCostCents,
+  isGooglePlatform,
   type ApprovalDetail,
   type CampaignDraft,
 } from '@wings/shared';
@@ -19,6 +20,7 @@ import { useApproval, useDecideApproval, useExecuteApproval } from '../api/ads.j
 import { ApiError } from '../api/client.js';
 import { ApprovalSimulator } from '../components/ApprovalSimulator.js';
 import { AdPreviewGallery } from '../components/campaign-builder/AdPreview.js';
+import { SearchAdPreview, YoutubePreview } from '../components/campaign-builder/GooglePreview.js';
 import { Alert, Button, Field, Input } from '../components/ui.js';
 
 function formatBrl(cents: number | null): string {
@@ -104,6 +106,7 @@ function Summary({ approval }: { approval: ApprovalDetail }) {
 function DraftCampaign({ draft }: { draft: CampaignDraft }) {
   const days = campaignDays(draft.startDate, draft.endDate) ?? 0;
   const format = CREATIVE_FORMATS[draft.platform].find((item) => item.key === draft.formatKey);
+  const google = isGooglePlatform(draft.platform);
   const date = (value: string) => value.split('-').reverse().join('/');
 
   return (
@@ -111,8 +114,9 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
       <legend>A campanha que será criada</legend>
       {draft.startPaused ? (
         <Alert kind="info">
-          Nasce <strong>pausada</strong> e vazia: só o objeto campanha é criado, sem conjunto de
-          anúncios e sem anúncio. Não entrega e não gasta. Ativar depois é outro pedido.
+          Nasce <strong>pausada</strong> e vazia: só o objeto campanha é criado, sem{' '}
+          {google ? 'grupo' : 'conjunto'} de anúncios e sem anúncio. Não entrega e não gasta. Ativar
+          depois é outro pedido.
         </Alert>
       ) : (
         <Alert kind="error">
@@ -136,13 +140,29 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
           <span className="field-label">Verba diária</span>
           <p className="mono">{formatBrl(draft.dailyBudgetCents)}</p>
           <span className="cell-sub">
-            custo total estimado {formatBrl(estimateCostCents(draft.dailyBudgetCents, days))}
+            custo total estimado{' '}
+            {formatBrl(estimateCostCents(draft.dailyBudgetCents, days, draft.platform))}
           </span>
         </div>
-        <div>
-          <span className="field-label">Formato</span>
-          <p>{format ? `${format.label} (${format.ratio})` : draft.formatKey}</p>
-        </div>
+        {!google && (
+          <div>
+            <span className="field-label">Formato</span>
+            <p>{format ? `${format.label} (${format.ratio})` : draft.formatKey}</p>
+          </div>
+        )}
+        {draft.platform === 'youtube' && (
+          <div>
+            <span className="field-label">Tipo no Google</span>
+            <p>Demand Gen, restrita ao YouTube</p>
+            <span className="cell-sub mono builder-url">{draft.youtube?.videoUrl}</span>
+          </div>
+        )}
+        {draft.platform === 'google_search' && (
+          <div>
+            <span className="field-label">Tipo no Google</span>
+            <p>Pesquisa</p>
+          </div>
+        )}
         <div>
           <span className="field-label">Destino com UTMs</span>
           <p className="mono builder-url">{applyUtms(draft.destinationUrl, draft.utms, 0)}</p>
@@ -153,16 +173,43 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
         <p>{draft.idealCustomerProfile}</p>
         <span className="field-label">Área de alcance</span>
         <p>{describeReach(draft.reach)}</p>
+        {draft.search && (
+          <>
+            <span className="field-label">Palavras-chave</span>
+            <p>{draft.search.keywords.join(' · ')}</p>
+            <span className="field-label">Palavras-chave negativas</span>
+            <p>{draft.search.negativeKeywords.join(' · ') || '—'}</p>
+          </>
+        )}
         <span className="cell-sub">
-          Registrado no pedido. Público e localização só chegam à Meta quando existir a criação do
-          conjunto de anúncios.
+          {draft.platform === 'google_search'
+            ? 'Registrado no pedido. Estados, cidades e idioma português vão com a campanha; palavras-chave e anúncio só chegam ao Google quando existir a criação do grupo de anúncios.'
+            : draft.platform === 'youtube'
+              ? 'Registrado no pedido. Em Demand Gen, localização, idioma e a restrição ao YouTube moram no grupo de anúncios: só chegam ao Google quando existir a criação dele.'
+              : 'Registrado no pedido. Público e localização só chegam à Meta quando existir a criação do conjunto de anúncios.'}
         </span>
       </div>
-      <AdPreviewGallery
-        variations={draft.variations}
-        destinationUrl={draft.destinationUrl}
-        format={format}
-      />
+      {draft.youtube && (
+        <YoutubePreview
+          videoUrl={draft.youtube.videoUrl}
+          headline={draft.youtube.headline}
+          destinationUrl={draft.destinationUrl}
+        />
+      )}
+      {draft.search && (
+        <SearchAdPreview
+          headlines={draft.search.headlines}
+          descriptions={draft.search.descriptions}
+          destinationUrl={draft.destinationUrl}
+        />
+      )}
+      {!google && (
+        <AdPreviewGallery
+          variations={draft.variations}
+          destinationUrl={draft.destinationUrl}
+          format={format}
+        />
+      )}
     </section>
   );
 }
@@ -338,7 +385,8 @@ export function ApprovalDetailPage() {
               {!approval.executionAvailable && (
                 <Alert kind="info">
                   A execução em contas reais está desligada nesta configuração. A aprovação fica
-                  registrada e nada é enviado ao Meta.
+                  registrada e nada é enviado{' '}
+                  {approval.platform === 'google' ? 'ao Google' : 'ao Meta'}.
                 </Alert>
               )}
               {execute.isError && (
@@ -355,7 +403,11 @@ export function ApprovalDetailPage() {
                   disabled={execute.isPending || !approval.executionAvailable}
                   onClick={() => void execute.mutateAsync()}
                 >
-                  {execute.isPending ? 'Executando…' : 'Executar no Meta'}
+                  {execute.isPending
+                    ? 'Executando…'
+                    : approval.platform === 'google'
+                      ? 'Executar no Google'
+                      : 'Executar no Meta'}
                 </Button>
                 <span className="field-hint">
                   Esta ação altera a campanha real e movimenta dinheiro.

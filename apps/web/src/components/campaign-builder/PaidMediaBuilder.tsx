@@ -11,11 +11,17 @@ import {
   CREATIVE_FORMATS,
   HEADLINE_MAX,
   ICP_MAX,
+  MAX_KEYWORDS,
+  MAX_NEGATIVE_KEYWORDS,
+  MAX_SEARCH_DESCRIPTIONS,
+  MAX_SEARCH_HEADLINES,
   MAX_VARIATIONS,
   MIN_DAILY_BUDGET_CENTS,
   MIN_VARIATIONS,
   PAID_PLATFORMS,
   PRIMARY_TEXT_RECOMMENDED,
+  SEARCH_DESCRIPTION_MAX,
+  SEARCH_HEADLINE_MAX,
   UTM_KEYS,
   applyUtms,
   audienceProfileSchema,
@@ -26,7 +32,9 @@ import {
   checkCopyCompliance,
   describeReach,
   estimateCostCents,
+  isGooglePlatform,
   matchesFormat,
+  overdeliveryFactor,
   type CampaignDraft,
   type CampaignDraftInput,
   type BrazilState,
@@ -48,6 +56,7 @@ import {
 import { Alert, Button, Field, Input, Select } from '../ui.js';
 import { AdPreviewGallery, creativeUrl } from './AdPreview.js';
 import { formatBrl, formatDate, parseBrlToCents, todayInSaoPaulo } from './format.js';
+import { SearchAdPreview, YoutubePreview } from './GooglePreview.js';
 import { RadiusMap } from './RadiusMap.js';
 
 /**
@@ -63,6 +72,91 @@ function addDays(date: string, days: number): string {
   next.setUTCDate(next.getUTCDate() + days);
   return next.toISOString().slice(0, 10);
 }
+
+/** A textarea as a list: one item per line, trimmed, empty lines dropped. */
+function linesOf(text: string): string[] {
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+}
+
+/**
+ * What is validated and sent: only the parts that belong to the chosen
+ * platform. The form keeps every platform's fields in its state, so switching
+ * back and forth loses nothing; the schema refuses foreign parts, so they are
+ * dropped here — once, for the check and for the request alike.
+ */
+function shapeDraft(values: CampaignDraftInput): CampaignDraftInput {
+  const { youtube, search, formatKey, variations, ...common } = values;
+  if (!isGooglePlatform(values.platform)) return { ...common, formatKey, variations };
+
+  const google = {
+    ...common,
+    startPaused: true,
+    reach: { ...common.reach, customLocations: [] },
+  };
+  if (values.platform === 'youtube') return { ...google, youtube };
+  return {
+    ...google,
+    search: search && {
+      ...search,
+      // Boxes left empty are not headlines.
+      headlines: search.headlines.filter((item) => item.trim() !== ''),
+      descriptions: search.descriptions.filter((item) => item.trim() !== ''),
+    },
+  };
+}
+
+const schemaResolver = zodResolver(campaignDraftSchema) as Resolver<CampaignDraftInput>;
+const draftResolver: Resolver<CampaignDraftInput> = (values, context, options) =>
+  schemaResolver(shapeDraft(values), context, options);
+
+/** The builder's sections, in the order they appear for each platform. */
+const META_SECTIONS = [
+  'platform',
+  'objective',
+  'icp',
+  'reach',
+  'creative',
+  'format',
+  'copy',
+  'variations',
+  'duration',
+  'budget',
+  'utms',
+  'preview',
+  'summary',
+] as const;
+const YOUTUBE_SECTIONS = [
+  'platform',
+  'objective',
+  'icp',
+  'reach',
+  'video',
+  'duration',
+  'budget',
+  'utms',
+  'preview',
+  'summary',
+] as const;
+const SEARCH_SECTIONS = [
+  'platform',
+  'objective',
+  'icp',
+  'reach',
+  'keywords',
+  'searchAd',
+  'duration',
+  'budget',
+  'utms',
+  'preview',
+  'summary',
+] as const;
+type SectionKey =
+  | (typeof META_SECTIONS)[number]
+  | (typeof YOUTUBE_SECTIONS)[number]
+  | (typeof SEARCH_SECTIONS)[number];
 
 function BuilderSection({
   step,
@@ -94,12 +188,14 @@ function BuilderSection({
 /** Shown on screen, not just refused: the operator must see why copy is blocked. */
 function ComplianceWarning({ findings }: { findings: ComplianceFinding[] }) {
   if (findings.length === 0) return null;
+  // The same excerpt may be typed in two boxes; say it once.
+  const unique = [...new Map(findings.map((f) => [`${f.rule}:${f.excerpt}`, f])).values()];
   return (
     <div className="alert alert-warning" role="alert">
       <strong>Este texto não pode ir ao ar.</strong> A conta já teve anúncios reprovados por
       "práticas de negócios inaceitáveis".
       <ul>
-        {findings.map((finding) => (
+        {unique.map((finding) => (
           <li key={`${finding.rule}:${finding.excerpt}`}>
             <strong>{COMPLIANCE_RULE_LABEL[finding.rule]}</strong> — “{finding.excerpt}”.{' '}
             {COMPLIANCE_RULE_ADVICE[finding.rule]}
@@ -229,7 +325,7 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
     setValue,
     formState: { errors, dirtyFields, submitCount, isSubmitSuccessful },
   } = useForm<CampaignDraftInput>({
-    resolver: zodResolver(campaignDraftSchema) as Resolver<CampaignDraftInput>,
+    resolver: draftResolver,
     defaultValues: {
       platform: 'meta',
       name: '',
@@ -244,6 +340,13 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         primaryText: '',
         callToAction: 'LEARN_MORE' as const,
       })),
+      youtube: { videoUrl: '', headline: '' },
+      search: {
+        keywords: [],
+        negativeKeywords: [],
+        headlines: Array.from({ length: MAX_SEARCH_HEADLINES }, () => ''),
+        descriptions: Array.from({ length: MAX_SEARCH_DESCRIPTIONS }, () => ''),
+      },
       startDate: today,
       endDate: addDays(today, 6),
       utms: buildUtms({ platform: 'meta', objective: 'lead', campaignName: '' }),
@@ -285,6 +388,28 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
   ]);
 
   const values = watch();
+  const { platform } = values;
+  const google = isGooglePlatform(platform);
+  const sections: readonly SectionKey[] =
+    platform === 'youtube'
+      ? YOUTUBE_SECTIONS
+      : platform === 'google_search'
+        ? SEARCH_SECTIONS
+        : META_SECTIONS;
+  const stepOf = (key: SectionKey) => sections.indexOf(key) + 1;
+  const platformLabel = PAID_PLATFORMS.find((item) => item.key === platform)?.label ?? '—';
+
+  // A Google campaign is always born paused, and takes no radius on the map.
+  useEffect(() => {
+    if (!google) return;
+    setValue('startPaused', true);
+    setValue('reach.customLocations', []);
+  }, [google, setValue]);
+
+  // Keywords are typed one per line; the form holds them as the list it sends.
+  const [keywordsText, setKeywordsText] = useState('');
+  const [negativeKeywordsText, setNegativeKeywordsText] = useState('');
+
   const days = campaignDays(values.startDate, values.endDate);
   // The estimate reads what is in the box, as typed. It must never wait on
   // the form library's copy of the value to show a number the operator is
@@ -292,7 +417,7 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
   const [budgetText, setBudgetText] = useState('');
   const typedBudgetCents = parseBrlToCents(budgetText);
   const dailyBudgetCents = Number.isFinite(typedBudgetCents) ? typedBudgetCents : 0;
-  const totalCostCents = days ? estimateCostCents(dailyBudgetCents, days) : null;
+  const totalCostCents = days ? estimateCostCents(dailyBudgetCents, days, platform) : null;
   // Why there is no estimate yet, in the operator's terms — never a bare dash.
   const costMissing =
     budgetText.trim() === ''
@@ -308,25 +433,49 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
               : null;
   const budgetField = register('dailyBudgetCents', { setValueAs: parseBrlToCents });
   const daysThisMonth = campaignDaysInMonth(values.startDate, values.endDate, today);
-  const costThisMonthCents = estimateCostCents(dailyBudgetCents, daysThisMonth);
+  const costThisMonthCents = estimateCostCents(dailyBudgetCents, daysThisMonth, platform);
   const overCeiling =
     pacing != null && dailyBudgetCents > 0 && costThisMonthCents > pacing.availableCents;
 
   // UTMs follow the form until the operator edits one; an edited value is theirs.
   const { name, objective } = values;
   useEffect(() => {
-    const generated = buildUtms({ platform: 'meta', objective, campaignName: name });
+    const generated = buildUtms({ platform, objective, campaignName: name });
     for (const key of UTM_KEYS) {
       if (!dirtyFields.utms?.[key]) setValue(`utms.${key}`, generated[key]);
     }
-  }, [name, objective, dirtyFields.utms, setValue]);
+  }, [platform, name, objective, dirtyFields.utms, setValue]);
 
   const format = CREATIVE_FORMATS.meta.find((item) => item.key === values.formatKey);
-  const findingsByVariation = values.variations.map((variation) => [
+  const formVariations = values.variations ?? [];
+  const findingsByVariation = formVariations.map((variation) => [
     ...checkCopyCompliance(variation.headline ?? ''),
     ...checkCopyCompliance(variation.primaryText ?? ''),
   ]);
-  const hasComplianceProblem = findingsByVariation.some((findings) => findings.length > 0);
+  const searchHeadlines = values.search?.headlines ?? [];
+  const searchDescriptions = values.search?.descriptions ?? [];
+  const youtubeFindings = checkCopyCompliance(values.youtube?.headline ?? '');
+  const searchFindings = [...searchHeadlines, ...searchDescriptions].flatMap((text) =>
+    checkCopyCompliance(text ?? ''),
+  );
+  // Only the copy that will be sent counts: the other platforms' boxes are not.
+  const hasComplianceProblem =
+    platform === 'youtube'
+      ? youtubeFindings.length > 0
+      : platform === 'google_search'
+        ? searchFindings.length > 0
+        : findingsByVariation.some((findings) => findings.length > 0);
+  /** Array fields report either on the list or on one of its items. */
+  const listError = (
+    error:
+      | { message?: string; root?: { message?: string } }
+      | ({ message?: string } | undefined)[]
+      | undefined,
+  ): string | undefined => {
+    if (!error) return undefined;
+    if (Array.isArray(error)) return error.find((item) => item?.message)?.message;
+    return error.message ?? error.root?.message;
+  };
 
   const copyFields = (index: number) => (
     <div className="builder-variation" key={variations.fields[index]?.id ?? index}>
@@ -341,14 +490,14 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
       <Field
         label="Título"
         error={errors.variations?.[index]?.headline?.message}
-        hint={`${(values.variations[index]?.headline ?? '').length}/${HEADLINE_MAX}`}
+        hint={`${(formVariations[index]?.headline ?? '').length}/${HEADLINE_MAX}`}
       >
         <Input maxLength={HEADLINE_MAX} {...register(`variations.${index}.headline`)} />
       </Field>
       <Field
         label="Texto"
         error={errors.variations?.[index]?.primaryText?.message}
-        hint={`${(values.variations[index]?.primaryText ?? '').length} caracteres — a Meta corta perto de ${PRIMARY_TEXT_RECOMMENDED}`}
+        hint={`${(formVariations[index]?.primaryText ?? '').length} caracteres — a Meta corta perto de ${PRIMARY_TEXT_RECOMMENDED}`}
       >
         <textarea className="control" rows={3} {...register(`variations.${index}.primaryText`)} />
       </Field>
@@ -387,9 +536,9 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
       }}
     >
       <BuilderSection
-        step={1}
+        step={stepOf('platform')}
         title="Plataforma"
-        why="Onde o anúncio aparece. O nome é como você vai achar esta campanha no Gerenciador de Anúncios e nos relatórios — capriche nele."
+        why={`Onde o anúncio aparece. O nome é como você vai achar esta campanha no ${google ? 'Google Ads' : 'Gerenciador de Anúncios'} e nos relatórios — capriche nele.`}
       >
         <div className="builder-options" role="radiogroup" aria-label="Plataforma">
           {PAID_PLATFORMS.map((platform) => (
@@ -412,15 +561,25 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
             </label>
           ))}
         </div>
+        {platform === 'youtube' && (
+          <p className="field-hint">
+            Criada como campanha Demand Gen restrita ao YouTube — a API do Google não cria campanhas
+            do tipo Vídeo. O grupo de anúncios e o anúncio em vídeo entram na próxima etapa.
+          </p>
+        )}
         <Field label="Nome da campanha" error={errors.name?.message}>
           <Input placeholder="Ex.: Expansão SP — outubro" {...register('name')} />
         </Field>
       </BuilderSection>
 
       <BuilderSection
-        step={2}
+        step={stepOf('objective')}
         title="Objetivo"
-        why="Define como a Meta cobra e para quem mostra: dentro do seu público, ela procura quem tem mais chance de fazer exatamente isto."
+        why={
+          google
+            ? 'Define como o Google cobra e para quem mostra: dentro do seu público, ele procura quem tem mais chance de fazer exatamente isto.'
+            : 'Define como a Meta cobra e para quem mostra: dentro do seu público, ela procura quem tem mais chance de fazer exatamente isto.'
+        }
       >
         <div className="builder-options" role="radiogroup" aria-label="Objetivo">
           {CAMPAIGN_OBJECTIVES.map((key) => (
@@ -436,9 +595,9 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
       </BuilderSection>
 
       <BuilderSection
-        step={3}
+        step={stepOf('icp')}
         title="Perfil do cliente ideal"
-        why="É o retrato de quem você quer atrair. Guia a copy e o criativo agora e vira a segmentação quando o conjunto de anúncios for criado."
+        why={`É o retrato de quem você quer atrair. Guia a copy e o criativo agora e vira a segmentação quando o ${google ? 'grupo' : 'conjunto'} de anúncios for criado.`}
       >
         <Field
           label="Quem é o cliente ideal desta campanha"
@@ -456,7 +615,7 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
       </BuilderSection>
 
       <BuilderSection
-        step={4}
+        step={stepOf('reach')}
         title="Área de alcance"
         why="Onde o anúncio pode aparecer. Área grande demais espalha a verba; pequena demais encarece o lead."
       >
@@ -523,15 +682,21 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
             </Button>
           </div>
         </div>
-        <RadiusMap
-          value={values.reach.customLocations ?? []}
-          onChange={(next) =>
-            setValue('reach.customLocations', next, {
-              shouldDirty: true,
-              shouldValidate: submitCount > 0,
-            })
-          }
-        />
+        {google ? (
+          <p className="field-hint">
+            O raio no mapa ainda não vale para o Google: use estados e cidades.
+          </p>
+        ) : (
+          <RadiusMap
+            value={values.reach.customLocations ?? []}
+            onChange={(next) =>
+              setValue('reach.customLocations', next, {
+                shouldDirty: true,
+                shouldValidate: submitCount > 0,
+              })
+            }
+          />
+        )}
         {(errors.reach?.message ?? errors.reach?.root?.message) && (
           <p className="field-error" role="alert">
             {errors.reach?.message ?? errors.reach?.root?.message}
@@ -572,115 +737,261 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         </div>
       </BuilderSection>
 
-      <BuilderSection
-        step={5}
-        title="Criativo"
-        why="A imagem é o que faz a pessoa parar de rolar o feed. Uma por variação, para a Meta descobrir qual segura mais gente."
-      >
-        <div className="form-actions">
-          <Button type="button" variant="ghost" disabled title="Integração com o Drive em breve">
-            Escolher do Drive (em breve)
-          </Button>
-        </div>
-        <p className="field-hint">
-          Uma imagem por variação. Ela fica guardada no Wings System — nada é enviado à Meta.
-        </p>
-        {variations.fields.map((field, index) => (
-          <CreativeSlot
-            key={field.id}
-            label={`Variação ${index + 1}`}
-            creativeId={values.variations[index]?.creativeId ?? ''}
-            format={format}
-            error={errors.variations?.[index]?.creativeId?.message}
-            onUploaded={(creative) =>
-              setValue(`variations.${index}.creativeId`, creative.id, {
-                shouldDirty: true,
-                shouldValidate: submitCount > 0,
-              })
-            }
-          />
-        ))}
-      </BuilderSection>
-
-      <BuilderSection
-        step={6}
-        title="Formato e dimensão"
-        why="Cada posicionamento tem um corte. Imagem fora da proporção é cortada pela Meta — e pode perder o rosto ou o texto."
-      >
-        <Field
-          label="Formato"
-          error={errors.formatKey?.message}
-          hint={
-            format
-              ? `${format.width} × ${format.height} px (${format.ratio}) · ${format.placement}`
-              : undefined
-          }
-        >
-          <Select {...register('formatKey')}>
-            {CREATIVE_FORMATS.meta.map((item) => (
-              <option key={item.key} value={item.key}>
-                {item.label} — {item.ratio}
-              </option>
-            ))}
-          </Select>
-        </Field>
-      </BuilderSection>
-
-      <BuilderSection
-        step={7}
-        title="Copy"
-        why="É o que convence depois que a imagem chamou atenção. Promessa de ganho reprova o anúncio e pode restringir a conta — por isso o bloqueio."
-      >
-        <Field
-          label="Página de destino"
-          error={errors.destinationUrl?.message}
-          hint="Para onde o botão do anúncio leva. Os UTMs são aplicados a este endereço."
-        >
-          <Input
-            type="url"
-            placeholder="https://wingscompany.com.br/…"
-            {...register('destinationUrl')}
-          />
-        </Field>
-        {copyFields(0)}
-      </BuilderSection>
-
-      <BuilderSection
-        step={8}
-        title="Variações"
-        why="A Meta testa as versões entre si e entrega mais a que dá mais resultado. Com uma só, não há o que comparar."
-      >
-        <p className="field-hint">
-          De {MIN_VARIATIONS} a {MAX_VARIATIONS} por campanha, para a plataforma ter o que comparar.
-        </p>
-        {variations.fields.slice(1).map((_, offset) => copyFields(offset + 1))}
-        {variations.fields.length < MAX_VARIATIONS && (
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() =>
-              variations.append({
-                creativeId: '',
-                headline: '',
-                primaryText: '',
-                callToAction: 'LEARN_MORE',
-              })
-            }
+      {!google && (
+        <>
+          <BuilderSection
+            step={stepOf('creative')}
+            title="Criativo"
+            why="A imagem é o que faz a pessoa parar de rolar o feed. Uma por variação, para a Meta descobrir qual segura mais gente."
           >
-            + Adicionar variação
-          </Button>
-        )}
-        {errors.variations?.root?.message && (
-          <p className="field-error" role="alert">
-            {errors.variations.root.message}
-          </p>
-        )}
-      </BuilderSection>
+            <div className="form-actions">
+              <Button
+                type="button"
+                variant="ghost"
+                disabled
+                title="Integração com o Drive em breve"
+              >
+                Escolher do Drive (em breve)
+              </Button>
+            </div>
+            <p className="field-hint">
+              Uma imagem por variação. Ela fica guardada no Wings System — nada é enviado à Meta.
+            </p>
+            {variations.fields.map((field, index) => (
+              <CreativeSlot
+                key={field.id}
+                label={`Variação ${index + 1}`}
+                creativeId={formVariations[index]?.creativeId ?? ''}
+                format={format}
+                error={errors.variations?.[index]?.creativeId?.message}
+                onUploaded={(creative) =>
+                  setValue(`variations.${index}.creativeId`, creative.id, {
+                    shouldDirty: true,
+                    shouldValidate: submitCount > 0,
+                  })
+                }
+              />
+            ))}
+          </BuilderSection>
+
+          <BuilderSection
+            step={stepOf('format')}
+            title="Formato e dimensão"
+            why="Cada posicionamento tem um corte. Imagem fora da proporção é cortada pela Meta — e pode perder o rosto ou o texto."
+          >
+            <Field
+              label="Formato"
+              error={errors.formatKey?.message}
+              hint={
+                format
+                  ? `${format.width} × ${format.height} px (${format.ratio}) · ${format.placement}`
+                  : undefined
+              }
+            >
+              <Select {...register('formatKey')}>
+                {CREATIVE_FORMATS.meta.map((item) => (
+                  <option key={item.key} value={item.key}>
+                    {item.label} — {item.ratio}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          </BuilderSection>
+
+          <BuilderSection
+            step={stepOf('copy')}
+            title="Copy"
+            why="É o que convence depois que a imagem chamou atenção. Promessa de ganho reprova o anúncio e pode restringir a conta — por isso o bloqueio."
+          >
+            <Field
+              label="Página de destino"
+              error={errors.destinationUrl?.message}
+              hint="Para onde o botão do anúncio leva. Os UTMs são aplicados a este endereço."
+            >
+              <Input
+                type="url"
+                placeholder="https://wingscompany.com.br/…"
+                {...register('destinationUrl')}
+              />
+            </Field>
+            {copyFields(0)}
+          </BuilderSection>
+
+          <BuilderSection
+            step={stepOf('variations')}
+            title="Variações"
+            why="A Meta testa as versões entre si e entrega mais a que dá mais resultado. Com uma só, não há o que comparar."
+          >
+            <p className="field-hint">
+              De {MIN_VARIATIONS} a {MAX_VARIATIONS} por campanha, para a plataforma ter o que
+              comparar.
+            </p>
+            {variations.fields.slice(1).map((_, offset) => copyFields(offset + 1))}
+            {variations.fields.length < MAX_VARIATIONS && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() =>
+                  variations.append({
+                    creativeId: '',
+                    headline: '',
+                    primaryText: '',
+                    callToAction: 'LEARN_MORE',
+                  })
+                }
+              >
+                + Adicionar variação
+              </Button>
+            )}
+            {errors.variations?.root?.message && (
+              <p className="field-error" role="alert">
+                {errors.variations.root.message}
+              </p>
+            )}
+          </BuilderSection>
+        </>
+      )}
+
+      {platform === 'youtube' && (
+        <BuilderSection
+          step={stepOf('video')}
+          title="Vídeo"
+          why="O vídeo é o anúncio: os primeiros segundos decidem se a pessoa pula. Ele precisa estar publicado no YouTube — o link é o que o Google usa para achá-lo."
+        >
+          <Field
+            label="Link do vídeo no YouTube"
+            error={errors.youtube?.videoUrl?.message}
+            hint="Ex.: https://www.youtube.com/watch?v=… ou https://youtu.be/…"
+          >
+            <Input
+              type="url"
+              placeholder="https://www.youtube.com/watch?v=…"
+              {...register('youtube.videoUrl')}
+            />
+          </Field>
+          <Field
+            label="Título"
+            error={errors.youtube?.headline?.message}
+            hint={`${(values.youtube?.headline ?? '').length}/${HEADLINE_MAX}`}
+          >
+            <Input maxLength={HEADLINE_MAX} {...register('youtube.headline')} />
+          </Field>
+          <Field
+            label="Página de destino"
+            error={errors.destinationUrl?.message}
+            hint="Para onde o anúncio leva. Os UTMs são aplicados a este endereço."
+          >
+            <Input
+              type="url"
+              placeholder="https://wingscompany.com.br/…"
+              {...register('destinationUrl')}
+            />
+          </Field>
+          <ComplianceWarning findings={youtubeFindings} />
+        </BuilderSection>
+      )}
+
+      {platform === 'google_search' && (
+        <>
+          <BuilderSection
+            step={stepOf('keywords')}
+            title="Palavras-chave"
+            why="É o que a pessoa digita no Google para o anúncio aparecer. Poucas e específicas trazem quem já procura franquia; genéricas demais gastam a verba com curiosos."
+          >
+            <Field
+              label="Palavras-chave"
+              error={listError(errors.search?.keywords)}
+              hint={`${linesOf(keywordsText).length}/${MAX_KEYWORDS} · uma por linha`}
+            >
+              <textarea
+                className="control builder-keywords"
+                rows={6}
+                placeholder={'franquia de alimentação\nabrir franquia'}
+                value={keywordsText}
+                onChange={(event) => {
+                  setKeywordsText(event.target.value);
+                  setValue('search.keywords', linesOf(event.target.value), {
+                    shouldDirty: true,
+                    shouldValidate: submitCount > 0,
+                  });
+                }}
+              />
+            </Field>
+            <Field
+              label="Palavras-chave negativas"
+              error={listError(errors.search?.negativeKeywords)}
+              hint={`${linesOf(negativeKeywordsText).length}/${MAX_NEGATIVE_KEYWORDS} · uma por linha · buscas em que o anúncio NÃO deve aparecer`}
+            >
+              <textarea
+                className="control builder-keywords"
+                rows={4}
+                placeholder={'grátis\nemprego'}
+                value={negativeKeywordsText}
+                onChange={(event) => {
+                  setNegativeKeywordsText(event.target.value);
+                  setValue('search.negativeKeywords', linesOf(event.target.value), {
+                    shouldDirty: true,
+                    shouldValidate: submitCount > 0,
+                  });
+                }}
+              />
+            </Field>
+            <p className="field-hint">
+              Ficam guardadas no pedido. O grupo de anúncios, onde elas passam a valer, entra na
+              próxima etapa.
+            </p>
+          </BuilderSection>
+
+          <BuilderSection
+            step={stepOf('searchAd')}
+            title="Texto do anúncio"
+            why="Na Pesquisa não há imagem: o título é o que faz a pessoa clicar. Promessa de ganho reprova o anúncio e pode restringir a conta — por isso o bloqueio."
+          >
+            <Field
+              label="Página de destino"
+              error={errors.destinationUrl?.message}
+              hint="Para onde o anúncio leva. Os UTMs são aplicados a este endereço."
+            >
+              <Input
+                type="url"
+                placeholder="https://wingscompany.com.br/…"
+                {...register('destinationUrl')}
+              />
+            </Field>
+            {searchHeadlines.map((_, index) => (
+              <Field
+                key={`headline-${index}`}
+                label={`Título ${index + 1}${index === 0 ? '' : ' (opcional)'}`}
+                error={index === 0 ? listError(errors.search?.headlines) : undefined}
+                hint={`${(searchHeadlines[index] ?? '').length}/${SEARCH_HEADLINE_MAX}`}
+              >
+                <Input maxLength={SEARCH_HEADLINE_MAX} {...register(`search.headlines.${index}`)} />
+              </Field>
+            ))}
+            {searchDescriptions.map((_, index) => (
+              <Field
+                key={`description-${index}`}
+                label={`Descrição ${index + 1}${index === 0 ? '' : ' (opcional)'}`}
+                error={index === 0 ? listError(errors.search?.descriptions) : undefined}
+                hint={`${(searchDescriptions[index] ?? '').length}/${SEARCH_DESCRIPTION_MAX}`}
+              >
+                <textarea
+                  className="control"
+                  rows={2}
+                  maxLength={SEARCH_DESCRIPTION_MAX}
+                  {...register(`search.descriptions.${index}`)}
+                />
+              </Field>
+            ))}
+            <ComplianceWarning findings={searchFindings} />
+          </BuilderSection>
+        </>
+      )}
 
       <BuilderSection
-        step={9}
+        step={stepOf('duration')}
         title="Duração"
-        why="Por quanto tempo o anúncio roda. Nos primeiros dias a Meta ainda está aprendendo quem responde; campanha muito curta termina antes disso."
+        why={`Por quanto tempo o anúncio roda. Nos primeiros dias ${google ? 'o Google' : 'a Meta'} ainda está aprendendo quem responde; campanha muito curta termina antes disso.`}
       >
         <div className="input-row">
           <Field label="Início" error={errors.startDate?.message}>
@@ -696,16 +1007,24 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
       </BuilderSection>
 
       <BuilderSection
-        step={10}
+        step={stepOf('budget')}
         title="Verba diária"
-        why="É quanto você autoriza por dia. A Meta pode gastar até 25% a mais num dia, então o custo real é o estimado abaixo — e ele precisa caber no teto da conta."
+        why={
+          google
+            ? 'É quanto você autoriza por dia. O Google pode gastar até o dobro da verba diária num dia, então o custo real é o estimado abaixo — e ele precisa caber no teto da conta.'
+            : 'É quanto você autoriza por dia. A Meta pode gastar até 25% a mais num dia, então o custo real é o estimado abaixo — e ele precisa caber no teto da conta.'
+        }
       >
         <div className="builder-budget">
           <div>
             <Field
               label="Verba por dia (R$)"
               error={errors.dailyBudgetCents?.message}
-              hint="A Meta pode gastar até 25% acima disto num dia."
+              hint={
+                google
+                  ? 'O Google pode gastar até o dobro da verba diária num dia.'
+                  : 'A Meta pode gastar até 25% acima disto num dia.'
+              }
             >
               <Input
                 inputMode="decimal"
@@ -728,7 +1047,8 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
               )}
               {costMissing === null && days !== null && (
                 <p className="field-hint">
-                  {formatBrl(dailyBudgetCents)} × {days} dias × 1,25 de margem da plataforma
+                  {formatBrl(dailyBudgetCents)} × {days} dias ×{' '}
+                  {overdeliveryFactor(platform).toLocaleString('pt-BR')} de margem da plataforma
                   {daysThisMonth !== days &&
                     ` · ${formatBrl(costThisMonthCents)} caem neste mês (${daysThisMonth} dias)`}
                 </p>
@@ -745,7 +1065,7 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
           </div>
         )}
         <label className="checkbox-field">
-          <input type="checkbox" {...register('startPaused')} />
+          <input type="checkbox" {...register('startPaused')} disabled={google} />
           <span>
             Criar a campanha <strong>pausada</strong>
             <small className="muted">
@@ -753,12 +1073,15 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
               — nasce sem entregar e sem reservar verba; ativar depois é outro pedido, com outra
               aprovação.
             </small>
+            {google && (
+              <small className="field-hint">Campanhas do Google nascem sempre pausadas.</small>
+            )}
           </span>
         </label>
       </BuilderSection>
 
       <BuilderSection
-        step={11}
+        step={stepOf('utms')}
         title="UTMs"
         why="É assim que o lead chega no CRM com a origem certa. Sem UTM ele aparece como “direto” e ninguém sabe qual campanha pagou por ele."
       >
@@ -777,30 +1100,50 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
       </BuilderSection>
 
       <BuilderSection
-        step={12}
+        step={stepOf('preview')}
         title="Pré-visualização"
-        why="O anúncio como a pessoa vai ver, com o corte do formato. É a última chance de pegar texto cortado ou imagem mal enquadrada."
+        why={
+          google
+            ? 'O anúncio como a pessoa vai ver. É a última chance de pegar um título cortado, um link errado ou um texto que não convence.'
+            : 'O anúncio como a pessoa vai ver, com o corte do formato. É a última chance de pegar texto cortado ou imagem mal enquadrada.'
+        }
       >
-        <AdPreviewGallery
-          variations={values.variations.map((variation) => ({
-            creativeId: variation.creativeId,
-            headline: variation.headline ?? '',
-            primaryText: variation.primaryText ?? '',
-            callToAction: variation.callToAction,
-          }))}
-          destinationUrl={values.destinationUrl ?? ''}
-          format={format}
-        />
+        {platform === 'youtube' && (
+          <YoutubePreview
+            videoUrl={values.youtube?.videoUrl ?? ''}
+            headline={values.youtube?.headline ?? ''}
+            destinationUrl={values.destinationUrl ?? ''}
+          />
+        )}
+        {platform === 'google_search' && (
+          <SearchAdPreview
+            headlines={searchHeadlines.map((item) => item ?? '')}
+            descriptions={searchDescriptions.map((item) => item ?? '')}
+            destinationUrl={values.destinationUrl ?? ''}
+          />
+        )}
+        {!google && (
+          <AdPreviewGallery
+            variations={formVariations.map((variation) => ({
+              creativeId: variation.creativeId,
+              headline: variation.headline ?? '',
+              primaryText: variation.primaryText ?? '',
+              callToAction: variation.callToAction,
+            }))}
+            destinationUrl={values.destinationUrl ?? ''}
+            format={format}
+          />
+        )}
       </BuilderSection>
 
       <BuilderSection
-        step={13}
+        step={stepOf('summary')}
         title="Resumo — confira tudo"
         why="É exatamente o que o aprovador vai ler. Depois de lançado o pedido não pode ser editado — para mudar, faz-se outro."
       >
         <dl className="builder-summary">
           <dt>Plataforma</dt>
-          <dd>Meta (Facebook + Instagram)</dd>
+          <dd>{platformLabel}</dd>
           <dt>Campanha</dt>
           <dd>{values.name || '—'}</dd>
           <dt>Objetivo</dt>
@@ -809,17 +1152,43 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
           <dd className="builder-summary-clamp">{values.idealCustomerProfile || '—'}</dd>
           <dt>Alcance</dt>
           <dd>{describeReach(values.reach)}</dd>
-          <dt>Formato</dt>
-          <dd>{format ? `${format.label} (${format.ratio})` : '—'}</dd>
-          <dt>Variações</dt>
-          <dd>
-            {values.variations.map((variation, index) => (
-              <span key={index} className="builder-summary-line">
-                {index + 1}. {variation.headline || '(sem título)'} ·{' '}
-                {CALL_TO_ACTION_LABEL[variation.callToAction]}
-              </span>
-            ))}
-          </dd>
+          {!google && (
+            <>
+              <dt>Formato</dt>
+              <dd>{format ? `${format.label} (${format.ratio})` : '—'}</dd>
+              <dt>Variações</dt>
+              <dd>
+                {formVariations.map((variation, index) => (
+                  <span key={index} className="builder-summary-line">
+                    {index + 1}. {variation.headline || '(sem título)'} ·{' '}
+                    {CALL_TO_ACTION_LABEL[variation.callToAction]}
+                  </span>
+                ))}
+              </dd>
+            </>
+          )}
+          {platform === 'youtube' && (
+            <>
+              <dt>Tipo no Google</dt>
+              <dd>Demand Gen, restrita ao YouTube</dd>
+              <dt>Vídeo</dt>
+              <dd className="mono builder-url">{values.youtube?.videoUrl || '—'}</dd>
+              <dt>Título</dt>
+              <dd>{values.youtube?.headline || '—'}</dd>
+            </>
+          )}
+          {platform === 'google_search' && (
+            <>
+              <dt>Palavras-chave</dt>
+              <dd>{(values.search?.keywords ?? []).join(' · ') || '—'}</dd>
+              <dt>Negativas</dt>
+              <dd>{(values.search?.negativeKeywords ?? []).join(' · ') || '—'}</dd>
+              <dt>Títulos</dt>
+              <dd>{searchHeadlines.filter(Boolean).join(' | ') || '—'}</dd>
+              <dt>Descrições</dt>
+              <dd>{searchDescriptions.filter(Boolean).join(' ') || '—'}</dd>
+            </>
+          )}
           <dt>Duração</dt>
           <dd>
             {formatDate(values.startDate)} a {formatDate(values.endDate)}
@@ -843,7 +1212,8 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
 
         {hasComplianceProblem && (
           <Alert kind="error">
-            Há texto bloqueado pelo compliance. Corrija as variações acima.
+            Há texto bloqueado pelo compliance. Corrija {google ? 'os textos' : 'as variações'}{' '}
+            acima.
           </Alert>
         )}
         {submitCount > 0 && !isSubmitSuccessful && !hasComplianceProblem && (
@@ -857,8 +1227,8 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         {launch.isError && <Alert kind="error">{launch.error.message}</Alert>}
         {launch.isSuccess && (
           <Alert kind="success">
-            Pedido criado. Nada foi publicado: a campanha só existe na Meta depois que alguém
-            aprovar e executar.{' '}
+            Pedido criado. Nada foi publicado: a campanha só existe{' '}
+            {google ? 'no Google' : 'na Meta'} depois que alguém aprovar e executar.{' '}
             {launch.data.approvalId && (
               <Link to={`/marketing/trafego-pago-wings/aprovacoes/${launch.data.approvalId}`}>
                 Abrir o pedido nas Aprovações
