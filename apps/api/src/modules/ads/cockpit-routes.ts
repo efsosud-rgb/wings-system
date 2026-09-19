@@ -60,8 +60,9 @@ export const cockpitRoutes: FastifyPluginAsync = async (app) => {
       // default the cockpit opens on.
       const account = accountId
         ? await db.query.adAccounts.findFirst({ where: eq(adAccounts.id, accountId) })
-        : await db.query.adAccounts.findFirst({
-            where: isNull(adAccounts.archivedAt),
+        : // Meta only: a Google account has a spending limit and nothing to show.
+          await db.query.adAccounts.findFirst({
+            where: and(eq(adAccounts.platform, 'meta'), isNull(adAccounts.archivedAt)),
             orderBy: asc(adAccounts.createdAt),
           });
 

@@ -397,7 +397,13 @@ export async function enforceReconciliationFreshness(
     });
     if (!period) continue;
 
-    const last = period.lastReconciledAt ?? period.createdAt;
+    // Google is not mirrored yet: the only thing ingestion reads for it is the
+    // spending limit, so that read is what "still looking" means there. Judged
+    // by `lastReconciledAt`, which nothing ever sets for Google, the account
+    // would freeze two hours after being seeded, with a false alarm.
+    const lastLook =
+      account.platform === 'google' ? period.platformLimitSyncedAt : period.lastReconciledAt;
+    const last = lastLook ?? period.createdAt;
     const ageMinutes = Math.floor((now.getTime() - last.getTime()) / 60_000);
     if (ageMinutes <= maxAgeMinutes) continue;
 

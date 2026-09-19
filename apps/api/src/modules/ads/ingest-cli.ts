@@ -1,14 +1,15 @@
 import { createDb } from '../../db/client.js';
 import { loadDotEnv } from '../../db/load-env.js';
 import { loadEnv } from '../../env.js';
-import { applyPlatformLimit, getPeriodState, openPeriod } from './budget-guard.js';
+import { applyPlatformLimit, getPeriodState } from './budget-guard.js';
 import { runIngestionCycle } from './ingest-cycle.js';
 import { createAlertNotifier } from './notifiers/factory.js';
-import { activeAdAccounts, archiveAdAccount, ensureAdAccount } from './metrics.js';
+import { activeAdAccounts, archiveAdAccount } from './metrics.js';
 import { createGoogleClient } from './platform/google-client.js';
 import { formatBrl } from './platform/money.js';
 import { createMetaClient } from './platform/factory.js';
 import { enforceReconciliationFreshness, periodMonthOf } from './reconcile.js';
+import { seedAdAccount } from './seed-account.js';
 
 /**
  * The job the Coolify scheduled task runs.
@@ -19,6 +20,9 @@ import { enforceReconciliationFreshness, periodMonthOf } from './reconcile.js';
  *
  *   node dist/modules/ads/ingest-cli.js            # ingest everything
  *   node dist/modules/ads/ingest-cli.js --seed     # create the account row first
+ *   node dist/modules/ads/ingest-cli.js --seed --account act_… --name "…" --cap 250000 --usable 70
+ *   node dist/modules/ads/ingest-cli.js --seed --platform google --account 4268586278 \
+ *        --name "…" --cap 250000 --usable 70       # --cap is in cents
  *   node dist/modules/ads/ingest-cli.js --days 30  # wider metrics window
  *   node dist/modules/ads/ingest-cli.js --archive act_… --reason "…"
  */
@@ -62,24 +66,21 @@ async function main() {
     const since = new Date(now.getTime() - days * 24 * 3600_000).toISOString().slice(0, 10);
 
     if (flag('seed')) {
-      const externalId = arg('account') ?? env.META_WRITE_ACCOUNT_ID ?? '';
-      if (!externalId) throw new Error('--account act_… is required when seeding');
-
-      const accountId = await ensureAdAccount(db, {
-        platform: 'meta',
-        externalId,
-        name: arg('name') ?? 'Wings Matriz',
-      });
-      const capCents = Number(arg('cap') ?? 400_000);
-      const usablePercent = Number(arg('usable') ?? 70);
-      await openPeriod(db, {
-        adAccountId: accountId,
-        periodMonth: periodMonthOf(now),
-        capCents,
-        usablePercent,
-      });
+      const seeded = await seedAdAccount(
+        db,
+        env,
+        {
+          platform: arg('platform'),
+          account: arg('account'),
+          name: arg('name'),
+          cap: arg('cap'),
+          usable: arg('usable'),
+        },
+        now,
+      );
       console.warn(
-        `seeded ${externalId}: cap ${formatBrl(capCents)}, ${usablePercent}% usable, period ${periodMonthOf(now)}`,
+        `seeded ${seeded.platform}:${seeded.externalId}: cap ${formatBrl(seeded.capCents)}, ` +
+          `${seeded.usablePercent}% usable, period ${seeded.periodMonth}`,
       );
     }
 

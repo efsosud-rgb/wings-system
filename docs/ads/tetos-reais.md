@@ -122,6 +122,31 @@ um `AdsPlatformClient` — espelhar campanhas e métricas do Google depende de
 decisões que esta onda não toma (exposição por orçamento, P-max via
 `asset_group`, o segundo fator de sobreentrega).
 
+### Cadastrar a conta Google
+
+Até 19/09/2026 nenhuma conta Google existia em `ad_accounts`: o laço do Google
+na ingestão rodava sobre zero contas e o saldo nunca era gravado. O `--seed`
+passou a aceitar a plataforma:
+
+```
+node dist/modules/ads/ingest-cli.js --seed --platform google \
+  --account 4268586278 --name "Wings Company — Google Ads" --cap 250000 --usable 70
+```
+
+- `--cap` é em **centavos** (R$ 2.500 = `250000`); `--usable` é a porcentagem.
+  Sem período aberto, `applyPlatformLimit` não tem onde gravar o saldo.
+- `--account` precisa ser o `GOOGLE_ADS_CUSTOMER_ID` do ambiente: o cliente só
+  lê essa conta, e uma linha de outra conta receberia o saldo errado — o mesmo
+  formato do bug de ingestão descrito abaixo.
+- **Dead-man:** nada "reconcilia" uma conta Google, então ela é julgada pela
+  última leitura do saldo (`platform_limit_synced_at`). Sem isso ela congelaria
+  120 min depois de cadastrada, com alerta falso. `ops-cli status` ainda mostra
+  `reconciliação: NUNCA` para ela — esperado enquanto o Google não é espelhado.
+- O cockpit abre por padrão na primeira conta **Meta**; a conta Google não tem
+  campanhas para mostrar.
+
+Sem `--platform`, o `--seed` continua sendo Meta, com os mesmos padrões.
+
 ## 4. Snapshot diário do orçamento vigente
 
 Achado do spike do Google: **o GAQL junta o orçamento ATUAL a métricas

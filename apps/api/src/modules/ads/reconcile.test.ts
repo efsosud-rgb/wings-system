@@ -229,6 +229,41 @@ describe('dead-man switch', () => {
     expect(row?.killSwitchEngaged).toBe(false);
   });
 
+  it('judges a Google account by its spending-limit read, the only thing ingested for it', async () => {
+    const [row] = await db
+      .insert(adAccounts)
+      .values({
+        platform: 'google',
+        externalId: randomBytes(5).toString('hex'),
+        name: 'Wings Company — Google Ads',
+      })
+      .returning({ id: adAccounts.id });
+    if (!row) throw new Error('failed');
+    await openPeriod(db, {
+      adAccountId: row.id,
+      periodMonth: PERIOD,
+      capCents: CAP,
+      usablePercent: USABLE_PERCENT,
+    });
+    // Seeded five hours ago, never "reconciled" — nothing reconciles Google —
+    // but its limit was read half an hour ago.
+    await db
+      .update(budgetPeriods)
+      .set({
+        createdAt: new Date(NOW.getTime() - 5 * 3600_000),
+        platformLimitSyncedAt: new Date(NOW.getTime() - 30 * 60_000),
+      })
+      .where(eq(budgetPeriods.adAccountId, row.id));
+
+    const fresh = await enforceReconciliationFreshness(db, { maxAgeMinutes: 120, now: NOW });
+    expect(fresh.some((entry) => entry.accountId === row.id)).toBe(false);
+
+    // When that read stops too, the account is frozen like any other.
+    const later = new Date(NOW.getTime() + 3 * 3600_000);
+    const stale = await enforceReconciliationFreshness(db, { maxAgeMinutes: 120, now: later });
+    expect(stale.some((entry) => entry.accountId === row.id)).toBe(true);
+  });
+
   it('reports a period that was opened but never reconciled as unknown, not fresh', async () => {
     const id = await account();
     expect(await reconciliationFreshness(db, id, { now: NOW })).toMatchObject({
