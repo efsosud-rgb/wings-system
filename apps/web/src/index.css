@@ -205,11 +205,20 @@ a {
   display: flex;
   flex-direction: column;
   padding: 24px 0;
+  /* Pinned to the window: the page scrolls, the menu stays. Sticky rather than
+     fixed so the column keeps its place in the flex row and the window remains
+     the scroller, which is what the SEO checklist's own sticky depends on. */
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+  height: 100dvh;
 }
 
 .sidebar-brand {
   padding: 0 20px 20px;
   border-bottom: 1px solid var(--wings-border);
+  flex-shrink: 0;
 }
 
 .sidebar-brand small {
@@ -222,6 +231,10 @@ a {
 
 .sidebar-menu {
   flex: 1;
+  /* Without this the list would grow past the window instead of scrolling. */
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 16px 12px;
   display: flex;
   flex-direction: column;
@@ -251,6 +264,7 @@ a {
 
 .sidebar-user {
   padding: 16px 20px 0;
+  flex-shrink: 0;
   border-top: 1px solid var(--wings-border);
   display: flex;
   flex-direction: column;
