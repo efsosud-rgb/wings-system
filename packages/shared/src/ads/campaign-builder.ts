@@ -680,14 +680,221 @@ export const searchDraftSchema = z.object({
 });
 export type SearchDraft = z.output<typeof searchDraftSchema>;
 
-export const copyVariationSchema = z.object({
-  /** The uploaded image this copy goes with; the server checks it exists. */
-  creativeId: z.uuid({ error: 'Envie o criativo desta variação' }),
-  headline: compliantText(HEADLINE_MAX, 'o título'),
-  primaryText: compliantText(PRIMARY_TEXT_MAX, 'o texto'),
-  callToAction: z.enum(CALLS_TO_ACTION),
-});
+// ---------------------------------------------------------------------------
+// Meta: creative types, placements, age range, page and Instagram account
+// ---------------------------------------------------------------------------
+
+export const CREATIVE_TYPES = ['image', 'video', 'carousel'] as const;
+export type CreativeType = (typeof CREATIVE_TYPES)[number];
+
+export const CREATIVE_TYPE_LABEL: Record<CreativeType, string> = {
+  image: 'Imagem única',
+  video: 'Vídeo',
+  carousel: 'Carrossel',
+};
+
+export const MIN_CAROUSEL_CARDS = 2;
+export const MAX_CAROUSEL_CARDS = 10;
+export const CARD_DESCRIPTION_MAX = 60;
+/** Meta's ceiling for an ad video. */
+export const MAX_VIDEO_BYTES = 4 * 1024 * 1024 * 1024;
+export const VIDEO_MIME_TYPES = ['video/mp4', 'video/quicktime'] as const;
+
+/** What the server says about a video it accepted. */
+export interface VideoUpload {
+  id: string;
+  mimeType: (typeof VIDEO_MIME_TYPES)[number];
+  byteSize: number;
+}
+
+const mediaRefinement = (
+  media: { mediaType: 'image' | 'video'; creativeId?: string; videoId?: string },
+  ctx: z.RefinementCtx,
+  imageMessage: string,
+) => {
+  if (media.mediaType === 'image' && !media.creativeId) {
+    ctx.addIssue({ code: 'custom', path: ['creativeId'], message: imageMessage });
+  }
+  if (media.mediaType === 'video' && !media.videoId) {
+    ctx.addIssue({ code: 'custom', path: ['videoId'], message: 'Envie o vídeo' });
+  }
+};
+
+export const carouselCardSchema = z
+  .object({
+    mediaType: z.enum(['image', 'video']).default('image'),
+    creativeId: z.uuid().optional(),
+    videoId: z.uuid().optional(),
+    headline: compliantText(HEADLINE_MAX, 'o título do cartão'),
+    description: compliantText(CARD_DESCRIPTION_MAX, 'o texto do cartão'),
+    link: z.url({ protocol: /^https$/, error: 'Informe um endereço https:// válido' }),
+  })
+  .superRefine((card, ctx) => mediaRefinement(card, ctx, 'Envie a imagem do cartão'));
+export type CarouselCard = z.output<typeof carouselCardSchema>;
+
+/**
+ * One ad. `creativeType` defaults to `image`, and an image variation is exactly
+ * what a variation was before video and carousel existed — so drafts approved
+ * back then still parse, and still hash the same.
+ */
+export const copyVariationSchema = z
+  .object({
+    creativeType: z.enum(CREATIVE_TYPES).default('image'),
+    /** The uploaded image this copy goes with; the server checks it exists. */
+    creativeId: z.union([z.uuid(), z.literal('')]).optional(),
+    /** The uploaded video, for a video variation. */
+    videoId: z.uuid().optional(),
+    /** Carousel only. */
+    cards: z.array(carouselCardSchema).optional(),
+    headline: compliantText(HEADLINE_MAX, 'o título'),
+    primaryText: compliantText(PRIMARY_TEXT_MAX, 'o texto'),
+    callToAction: z.enum(CALLS_TO_ACTION),
+  })
+  .superRefine((variation, ctx) => {
+    if (variation.creativeType === 'image' && !variation.creativeId) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['creativeId'],
+        message: 'Envie o criativo desta variação',
+      });
+    }
+    if (variation.creativeType === 'video' && !variation.videoId) {
+      ctx.addIssue({ code: 'custom', path: ['videoId'], message: 'Envie o vídeo desta variação' });
+    }
+    if (variation.creativeType === 'carousel') {
+      const count = variation.cards?.length ?? 0;
+      if (count < MIN_CAROUSEL_CARDS || count > MAX_CAROUSEL_CARDS) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['cards'],
+          message: `Um carrossel tem de ${MIN_CAROUSEL_CARDS} a ${MAX_CAROUSEL_CARDS} cartões`,
+        });
+      }
+    } else if (variation.cards && variation.cards.length > 0) {
+      ctx.addIssue({ code: 'custom', path: ['cards'], message: 'Cartões são só do carrossel' });
+    }
+  });
 export type CopyVariation = z.output<typeof copyVariationSchema>;
+
+/** Every uploaded image and video a variation points at, cards included. */
+export function variationMedia(variation: CopyVariation): {
+  creativeIds: string[];
+  videoIds: string[];
+} {
+  const creativeIds: string[] = [];
+  const videoIds: string[] = [];
+  if (variation.creativeType === 'image' && variation.creativeId) {
+    creativeIds.push(variation.creativeId);
+  }
+  if (variation.creativeType === 'video' && variation.videoId) videoIds.push(variation.videoId);
+  for (const card of variation.creativeType === 'carousel' ? (variation.cards ?? []) : []) {
+    if (card.mediaType === 'image' && card.creativeId) creativeIds.push(card.creativeId);
+    if (card.mediaType === 'video' && card.videoId) videoIds.push(card.videoId);
+  }
+  return { creativeIds, videoIds };
+}
+
+export const MIN_AGE = 18;
+export const MAX_AGE = 65;
+export const DEFAULT_AGE_MIN = 25;
+export const DEFAULT_AGE_MAX = 65;
+
+export const PLACEMENT_PUBLISHERS = ['facebook', 'instagram'] as const;
+export type PlacementPublisher = (typeof PLACEMENT_PUBLISHERS)[number];
+export const PLACEMENT_POSITIONS = ['feed', 'stories', 'reels'] as const;
+export type PlacementPosition = (typeof PLACEMENT_POSITIONS)[number];
+
+export const PLACEMENT_PUBLISHER_LABEL: Record<PlacementPublisher, string> = {
+  facebook: 'Facebook',
+  instagram: 'Instagram',
+};
+export const PLACEMENT_POSITION_LABEL: Record<PlacementPosition, string> = {
+  feed: 'Feed',
+  stories: 'Stories',
+  reels: 'Reels',
+};
+
+const positionList = z.array(z.enum(PLACEMENT_POSITIONS)).max(PLACEMENT_POSITIONS.length);
+
+/**
+ * Where the ads may appear. `automatic` is Meta's Advantage+ placements: the
+ * ad set names no placement and Meta chooses. `manual` names them.
+ */
+export const placementsSchema = z
+  .object({
+    mode: z.enum(['automatic', 'manual']),
+    facebook: positionList.default([]),
+    instagram: positionList.default([]),
+  })
+  .superRefine((placements, ctx) => {
+    if (
+      placements.mode === 'manual' &&
+      placements.facebook.length + placements.instagram.length === 0
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['facebook'],
+        message: 'Escolha ao menos um posicionamento',
+      });
+    }
+  });
+export type Placements = z.output<typeof placementsSchema>;
+
+/** True when the chosen placements include a full-screen vertical one. */
+export function usesVerticalPlacements(placements: Placements | undefined): boolean {
+  if (!placements || placements.mode !== 'manual') return false;
+  return [...placements.facebook, ...placements.instagram].some(
+    (position) => position === 'stories' || position === 'reels',
+  );
+}
+
+/** The Facebook Page and Instagram account the ads are published as. */
+export const metaIdentitySchema = z.object({
+  pageId: z.string().regex(/^\d{5,25}$/, 'Escolha a Página do Facebook'),
+  instagramActorId: z
+    .string()
+    .regex(/^\d{5,25}$/)
+    .nullable()
+    .default(null),
+});
+export type MetaIdentity = z.output<typeof metaIdentitySchema>;
+
+/** What `GET /ads/meta/identities` answers: read from Meta, never typed in. */
+export interface MetaIdentities {
+  pages: {
+    id: string;
+    name: string;
+    instagramAccounts: { id: string; username: string }[];
+  }[];
+  /** Wings' standing choice, if one was saved. */
+  default: MetaIdentity | null;
+}
+
+/** Placements the official preview can be asked for, once the ads exist. */
+export const PREVIEW_PLACEMENTS = [
+  'facebook_feed',
+  'instagram_feed',
+  'facebook_stories',
+  'instagram_stories',
+  'facebook_reels',
+  'instagram_reels',
+] as const;
+export type PreviewPlacement = (typeof PREVIEW_PLACEMENTS)[number];
+
+export const PREVIEW_PLACEMENT_LABEL: Record<PreviewPlacement, string> = {
+  facebook_feed: 'Feed do Facebook',
+  instagram_feed: 'Feed do Instagram',
+  facebook_stories: 'Stories do Facebook',
+  instagram_stories: 'Stories do Instagram',
+  facebook_reels: 'Reels do Facebook',
+  instagram_reels: 'Reels do Instagram',
+};
+
+/** One official preview: Meta's own iframe, host checked by the server. */
+export interface OfficialPreview {
+  adName: string;
+  iframeSrc: string;
+}
 
 const dateString = z.string().regex(DATE_PATTERN, 'Informe a data');
 
@@ -723,6 +930,14 @@ export const campaignDraftSchema = z
       .array(copyVariationSchema)
       .max(MAX_VARIATIONS, `No máximo ${MAX_VARIATIONS} variações`)
       .default([]),
+    /**
+     * Meta only, and absent on drafts from before ad sets existed: those create
+     * the campaign shell alone, as they were approved to.
+     */
+    ageMin: z.number().int().min(MIN_AGE).max(MAX_AGE).optional(),
+    ageMax: z.number().int().min(MIN_AGE).max(MAX_AGE).optional(),
+    placements: placementsSchema.optional(),
+    identity: metaIdentitySchema.optional(),
     /** YouTube only. */
     youtube: youtubeDraftSchema.optional(),
     /** Google Pesquisa only. */
@@ -751,6 +966,16 @@ export const campaignDraftSchema = z
       });
     }
 
+    // Decided 2026-09-19: everything this system creates is born paused, on every
+    // platform. Switching a campaign on is a person's act, in the platform.
+    if (!draft.startPaused) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['startPaused'],
+        message: 'Toda campanha nasce pausada',
+      });
+    }
+
     const foreign = (field: 'youtube' | 'search' | 'variations' | 'formatKey', label: string) =>
       ctx.addIssue({
         code: 'custom',
@@ -775,16 +1000,49 @@ export const campaignDraftSchema = z
       }
       if (draft.youtube) foreign('youtube', 'O vídeo do YouTube');
       if (draft.search) foreign('search', 'As palavras-chave');
+
+      if (!draft.identity) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['identity', 'pageId'],
+          message: 'Escolha a Página do Facebook',
+        });
+      }
+      if (!draft.placements) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['placements', 'mode'],
+          message: 'Escolha os posicionamentos',
+        });
+      }
+      if (draft.ageMin === undefined || draft.ageMax === undefined) {
+        ctx.addIssue({ code: 'custom', path: ['ageMin'], message: 'Informe a faixa etária' });
+      } else if (draft.ageMin > draft.ageMax) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['ageMax'],
+          message: 'A idade máxima não pode ser menor que a mínima',
+        });
+      }
+      if (
+        draft.placements?.mode === 'manual' &&
+        draft.placements.instagram.length > 0 &&
+        !draft.identity?.instagramActorId
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['identity', 'instagramActorId'],
+          message: 'Escolha a conta do Instagram para anunciar no Instagram',
+        });
+      }
       return;
     }
 
     // Google from here on.
-    if (!draft.startPaused) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['startPaused'],
-        message: 'Campanhas do Google nascem sempre pausadas',
-      });
+    for (const field of ['ageMin', 'ageMax', 'placements', 'identity'] as const) {
+      if (draft[field] !== undefined) {
+        ctx.addIssue({ code: 'custom', path: [field], message: 'Campo só da Meta' });
+      }
     }
     if (draft.reach.customLocations.length > 0) {
       ctx.addIssue({

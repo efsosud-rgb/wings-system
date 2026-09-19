@@ -12,7 +12,10 @@ import {
   estimateCostCents,
   matchesFormat,
   parseYoutubeVideoId,
+  placementsSchema,
+  usesVerticalPlacements,
   utmSlug,
+  variationMedia,
   youtubeThumbnailUrl,
   type CampaignDraftInput,
 } from './campaign-builder.js';
@@ -177,6 +180,10 @@ describe('the draft schema', () => {
     formatKey: 'feed_square',
     destinationUrl: 'https://wingscompany.com.br/franquia',
     variations: [...variations],
+    ageMin: 25,
+    ageMax: 65,
+    placements: { mode: 'automatic' },
+    identity: { pageId: '104567890123456', instagramActorId: '17841400000000000' },
     startDate: '2026-09-20',
     endDate: '2026-09-27',
     dailyBudgetCents: 600,
@@ -226,6 +233,177 @@ describe('the draft schema', () => {
   });
 });
 
+describe('Meta drafts: ad set and ads', () => {
+  const variations = [
+    {
+      creativeId: '11111111-1111-4111-8111-111111111111',
+      headline: 'Leve a Wings para sua cidade',
+      primaryText: 'Fale com a gente.',
+      callToAction: 'LEARN_MORE',
+    },
+    {
+      creativeId: '22222222-2222-4222-8222-222222222222',
+      headline: 'Seja um franqueado Wings',
+      primaryText: 'Suporte completo.',
+      callToAction: 'CONTACT_US',
+    },
+  ] as const;
+
+  const meta: CampaignDraftInput = {
+    platform: 'meta',
+    name: 'Meta — conjunto e anúncios',
+    objective: 'lead',
+    idealCustomerProfile: 'Empreendedor de 30 a 50 anos, com experiência em gestão.',
+    reach: { states: ['SP'], cities: [] },
+    formatKey: 'feed_square',
+    destinationUrl: 'https://wingscompany.com.br/franquia',
+    variations: [...variations],
+    ageMin: 25,
+    ageMax: 65,
+    placements: { mode: 'automatic' },
+    identity: { pageId: '104567890123456' },
+    startDate: '2026-09-20',
+    endDate: '2026-09-27',
+    dailyBudgetCents: 600,
+    utms: { utm_source: 'meta', utm_medium: 'paid_social', utm_campaign: 'x', utm_content: '' },
+    startPaused: true,
+  };
+  const ok = (patch: Record<string, unknown>) =>
+    campaignDraftSchema.safeParse({ ...meta, ...patch }).success;
+
+  it('treats a plain variation as an image, exactly as before video and carousel', () => {
+    const parsed = campaignDraftSchema.parse(meta);
+    expect(parsed.variations[0]?.creativeType).toBe('image');
+    expect(parsed.identity?.instagramActorId).toBeNull();
+    expect(variationMedia(parsed.variations[0]!)).toEqual({
+      creativeIds: ['11111111-1111-4111-8111-111111111111'],
+      videoIds: [],
+    });
+  });
+
+  it('never lets anything be born active, on Meta either', () => {
+    expect(ok({ startPaused: false })).toBe(false);
+  });
+
+  it('demands a page, placements and a sane age range', () => {
+    expect(ok({ identity: undefined })).toBe(false);
+    expect(ok({ identity: { pageId: 'minha-pagina' } })).toBe(false);
+    expect(ok({ placements: undefined })).toBe(false);
+    expect(ok({ ageMin: undefined })).toBe(false);
+    expect(ok({ ageMin: 17 })).toBe(false);
+    expect(ok({ ageMax: 66 })).toBe(false);
+    expect(ok({ ageMin: 50, ageMax: 30 })).toBe(false);
+    expect(ok({ ageMin: 30, ageMax: 30 })).toBe(true);
+  });
+
+  it('takes manual placements, and needs an Instagram account to advertise there', () => {
+    const manual = { mode: 'manual', facebook: ['feed'], instagram: ['stories', 'reels'] };
+    expect(ok({ placements: { mode: 'manual', facebook: [], instagram: [] } })).toBe(false);
+    expect(ok({ placements: manual })).toBe(false);
+    expect(
+      ok({
+        placements: manual,
+        identity: { pageId: '104567890123456', instagramActorId: '17841400000000000' },
+      }),
+    ).toBe(true);
+    expect(ok({ placements: { mode: 'manual', facebook: ['feed', 'stories'] } })).toBe(true);
+
+    expect(usesVerticalPlacements(placementsSchema.parse(manual))).toBe(true);
+    expect(usesVerticalPlacements(placementsSchema.parse({ mode: 'automatic' }))).toBe(false);
+    expect(
+      usesVerticalPlacements(placementsSchema.parse({ mode: 'manual', facebook: ['feed'] })),
+    ).toBe(false);
+  });
+
+  it('takes a video variation and a carousel, each with what it needs', () => {
+    const video = {
+      creativeType: 'video',
+      videoId: '33333333-3333-4333-8333-333333333333',
+      headline: 'Veja a Wings por dentro',
+      primaryText: 'Um minuto sobre o modelo.',
+      callToAction: 'LEARN_MORE',
+    };
+    const card = (n: number, extra: Record<string, unknown> = {}) => ({
+      creativeId: '11111111-1111-4111-8111-111111111111',
+      headline: `Cartão ${n}`,
+      description: 'Suporte completo.',
+      link: 'https://wingscompany.com.br/franquia',
+      ...extra,
+    });
+    const carousel = {
+      creativeType: 'carousel',
+      cards: [
+        card(1),
+        card(2, { mediaType: 'video', creativeId: undefined, videoId: video.videoId }),
+      ],
+      headline: 'Conheça a Wings',
+      primaryText: 'Deslize para ver.',
+      callToAction: 'LEARN_MORE',
+    };
+
+    const parsed = campaignDraftSchema.safeParse({ ...meta, variations: [video, carousel] });
+    expect(parsed.success).toBe(true);
+    expect(variationMedia(parsed.data!.variations[1]!)).toEqual({
+      creativeIds: ['11111111-1111-4111-8111-111111111111'],
+      videoIds: [video.videoId],
+    });
+
+    expect(ok({ variations: [variations[0], { ...video, videoId: undefined }] })).toBe(false);
+    expect(ok({ variations: [variations[0], { ...carousel, cards: [card(1)] }] })).toBe(false);
+    expect(
+      ok({
+        variations: [
+          variations[0],
+          { ...carousel, cards: Array.from({ length: 11 }, (_, i) => card(i)) },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      ok({
+        variations: [
+          variations[0],
+          { ...carousel, cards: [card(1), card(2, { link: 'http://x.com' })] },
+        ],
+      }),
+    ).toBe(false);
+    // Card copy answers to the same compliance rules.
+    expect(
+      ok({
+        variations: [
+          variations[0],
+          { ...carousel, cards: [card(1), card(2, { headline: 'Retorno garantido' })] },
+        ],
+      }),
+    ).toBe(false);
+    expect(
+      ok({ variations: [variations[0], { ...variations[1], cards: [card(1), card(2)] }] }),
+    ).toBe(false);
+  });
+
+  it('keeps Meta-only fields off a Google draft', () => {
+    const google = {
+      ...meta,
+      platform: 'google_search',
+      formatKey: undefined,
+      variations: [],
+      identity: undefined,
+      placements: undefined,
+      ageMin: undefined,
+      ageMax: undefined,
+      search: {
+        keywords: ['abrir franquia'],
+        headlines: ['Franquia Wings'],
+        descriptions: ['Conheça o modelo de negócio.'],
+      },
+    };
+    expect(campaignDraftSchema.safeParse(google).success).toBe(true);
+    expect(campaignDraftSchema.safeParse({ ...google, ageMin: 25 }).success).toBe(false);
+    expect(
+      campaignDraftSchema.safeParse({ ...google, placements: { mode: 'automatic' } }).success,
+    ).toBe(false);
+  });
+});
+
 describe('Google drafts', () => {
   const common: Omit<CampaignDraftInput, 'platform'> = {
     name: 'Pesquisa — franquia SP',
@@ -269,7 +447,7 @@ describe('Google drafts', () => {
 
   it('never lets a Google campaign be born active', () => {
     const result = campaignDraftSchema.safeParse({ ...search, startPaused: false });
-    expect(result.error?.issues[0]?.message).toBe('Campanhas do Google nascem sempre pausadas');
+    expect(result.error?.issues[0]?.message).toBe('Toda campanha nasce pausada');
   });
 
   it('caps keywords at 10 and negatives at 20, and refuses repeats and bad characters', () => {
