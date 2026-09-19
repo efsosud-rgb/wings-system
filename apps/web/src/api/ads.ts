@@ -10,9 +10,11 @@ import type {
   CreativeUpload,
   NextPendingLink,
   PendingGroup,
-  SitePostInput,
+  SiteImageUpload,
+  SitePostFormInput,
   SitePostRecord,
   SiteStatus,
+  SiteTerms,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
@@ -169,11 +171,39 @@ export function useSitePosts() {
   });
 }
 
+/** The site's real categories and tags. The server caches them for an hour. */
+export function useSiteTerms(enabled: boolean) {
+  return useQuery({
+    queryKey: ['site', 'terms'],
+    enabled,
+    staleTime: 60 * 60 * 1000,
+    queryFn: () => api.get<{ terms: SiteTerms; stale?: boolean }>('/marketing/site/terms'),
+  });
+}
+
+/** "Atualizar": asks the server to read the site again, and keeps the answer. */
+export function useRefreshSiteTerms() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.get<{ terms: SiteTerms; stale?: boolean }>('/marketing/site/terms?refresh=1'),
+    onSuccess: (data) => queryClient.setQueryData(['site', 'terms'], data),
+  });
+}
+
+/** Holds an image in OUR database for preview. Nothing goes to the site yet. */
+export function useHoldSiteImage() {
+  return useMutation({
+    mutationFn: (file: File) =>
+      api.upload<{ image: SiteImageUpload }>('/marketing/site/images', file),
+  });
+}
+
 /** Creates a DRAFT post on the site. Publishing happens inside WordPress. */
 export function useCreateSiteDraft() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: SitePostInput) =>
+    mutationFn: (input: SitePostFormInput) =>
       api.post<{ outcome: 'draft_created'; editUrl: string }>('/marketing/site/posts', input),
     // Refused and unconfirmed attempts are recorded too, so refresh either way.
     onSettled: () => {
