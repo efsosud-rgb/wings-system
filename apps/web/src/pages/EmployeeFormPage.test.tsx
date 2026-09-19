@@ -270,7 +270,7 @@ describe('access level on an existing record', () => {
     ).toBe(true);
   });
 
-  it('offers RH/DP every level but Admin Master', async () => {
+  it('offers RH/DP every level but Admin Master and Diretoria', async () => {
     session.current = makeUser({
       role: 'rh_dp',
       permissions: { 'employees.read': 'all', 'employees.update': 'all' },
@@ -279,10 +279,27 @@ describe('access level on an existing record', () => {
 
     await waitFor(() => expect(roleSelect().value).toBe('marketing'));
     const values = Array.from(roleSelect().options).map((option) => option.value);
-    expect(values).toContain('diretoria');
     expect(values).toContain('rh_dp');
+    expect(values).not.toContain('diretoria');
     expect(values).not.toContain('admin_master');
     expect(values).not.toContain('');
+  });
+
+  it('locks a Diretoria record for RH/DP and says who assigns that level', async () => {
+    session.current = makeUser({
+      role: 'rh_dp',
+      permissions: { 'employees.read': 'all', 'employees.update': 'all' },
+    });
+    record.current = { ...employee, role: 'diretoria', sector: 'diretoria' };
+    renderForm('/funcionarios/emp-1');
+
+    await waitFor(() => expect(roleSelect().value).toBe('diretoria'));
+    expect(roleSelect().disabled).toBe(true);
+    expect(
+      screen.getByText('Diretoria é atribuída pela própria Diretoria ou pelo Admin Master.'),
+    ).toBeTruthy();
+    // The rest of the record is still RH/DP's to edit.
+    expect((screen.getByLabelText('Cargo') as HTMLInputElement).disabled).toBe(false);
   });
 
   it('gives Diretoria the level and nothing else, and sends only the level', async () => {

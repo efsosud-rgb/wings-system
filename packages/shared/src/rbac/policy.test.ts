@@ -179,7 +179,25 @@ describe('RH / DP', () => {
 describe('roleChangeDenial — holders of employees.assign_roles', () => {
   it('lets RH/DP change a seller, in any sector', () => {
     expect(roleChangeDenial(rhDp, seller, 'gerente_comercial')).toBeNull();
-    expect(roleChangeDenial(rhDp, seller, 'diretoria')).toBeNull();
+  });
+
+  it('leaves Diretoria to Diretoria and Admin Master: RH/DP neither grants nor removes it', () => {
+    const aDirector = {
+      employeeId: 'emp-dir-2',
+      sector: 'diretoria',
+      currentRole: 'diretoria',
+    } as const;
+    expect(roleChangeDenial(rhDp, seller, 'diretoria')).toBe('diretoria_level');
+    expect(roleChangeDenial(rhDp, { sector: 'diretoria' }, 'diretoria')).toBe('diretoria_level');
+    expect(roleChangeDenial(rhDp, aDirector, 'marketing')).toBe('diretoria_level');
+    expect(roleFieldState(rhDp, aDirector)).toEqual({
+      options: ['diretoria'],
+      locked: 'diretoria_level',
+    });
+
+    expect(roleChangeDenial(diretor, seller, 'diretoria')).toBeNull();
+    expect(roleChangeDenial(diretor, aDirector, 'marketing')).toBeNull();
+    expect(roleChangeDenial(adminMaster, aDirector, 'marketing')).toBeNull();
   });
 
   it('never lets Diretoria or RH/DP grant Admin Master', () => {
@@ -249,7 +267,7 @@ describe('roleChangeDenial — sector managers, unchanged', () => {
     expect(roleChangeDenial(gerente, seller, 'vendedor_formatacao')).toBeNull();
     expect(roleChangeDenial(gerente, seller, 'gerente_comercial')).toBe('role_rank_too_high');
     expect(roleChangeDenial(gerente, seller, 'rh_dp')).toBe('role_rank_too_high');
-    expect(roleChangeDenial(gerente, seller, 'diretoria')).toBe('protected_role');
+    expect(roleChangeDenial(gerente, seller, 'diretoria')).toBe('diretoria_level');
     expect(
       roleChangeDenial(gerente, { ...seller, sector: 'marketing' }, 'vendedor_formatacao'),
     ).toBe('out_of_scope');
@@ -290,11 +308,12 @@ describe('roleFieldState', () => {
     });
   });
 
-  it('offers RH/DP everything but Admin Master', () => {
+  it('offers RH/DP everything but Admin Master and Diretoria', () => {
     const state = roleFieldState(rhDp, seller);
     expect(state.locked).toBeNull();
-    expect(state.options).toHaveLength(12);
+    expect(state.options).toHaveLength(11);
     expect(state.options).not.toContain('admin_master');
+    expect(state.options).not.toContain('diretoria');
   });
 });
 

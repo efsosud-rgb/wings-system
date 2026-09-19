@@ -563,6 +563,32 @@ describe('PATCH /employees/:id — access levels', () => {
     });
   });
 
+  it('stops RH/DP granting or removing Diretoria, which Diretoria itself may do', async () => {
+    const rh = await sessionFor({ role: 'rh_dp', sector: 'diretoria' });
+    const diretor = await sessionFor({ role: 'diretoria', sector: 'diretoria' });
+    const seller = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
+    const director = await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
+
+    const grant = await patch(seller.id, rh.cookies, { role: 'diretoria' });
+    expect(grant.statusCode).toBe(403);
+    expect(grant.json().error).toBe('role_not_allowed');
+    expect((await patch(director.id, rh.cookies, { role: 'marketing' })).statusCode).toBe(403);
+    expect(await roleOf(director.id, rh.cookies)).toBe('diretoria');
+    // Creating someone straight into Diretoria is the same grant.
+    const created = await app.inject({
+      method: 'POST',
+      url: '/employees',
+      cookies: rh.cookies,
+      payload: newEmployeePayload({ role: 'diretoria', sector: 'diretoria' }),
+    });
+    expect(created.statusCode).toBe(403);
+    // RH/DP still edits the rest of a director's record.
+    expect((await patch(director.id, rh.cookies, { cargo: 'Diretora' })).statusCode).toBe(200);
+
+    expect((await patch(seller.id, diretor.cookies, { role: 'diretoria' })).statusCode).toBe(200);
+    expect((await patch(director.id, diretor.cookies, { role: 'marketing' })).statusCode).toBe(200);
+  });
+
   it('stops Diretoria granting Admin Master', async () => {
     const diretor = await sessionFor({ role: 'diretoria', sector: 'diretoria' });
     const seller = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });

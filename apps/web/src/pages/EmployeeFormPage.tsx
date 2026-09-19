@@ -39,6 +39,9 @@ function roleLockHint(reason: DenyReason): string {
   if (reason === 'last_admin_master') {
     return 'Único Admin Master do sistema — não pode ser rebaixado.';
   }
+  if (reason === 'diretoria_level') {
+    return 'Diretoria é atribuída pela própria Diretoria ou pelo Admin Master.';
+  }
   return 'Seu perfil não pode alterar este nível.';
 }
 

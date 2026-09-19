@@ -35,6 +35,7 @@ export type DenyReason =
   | 'protected_role'
   | 'self_role_change'
   | 'admin_master_record'
+  | 'diretoria_level'
   | 'last_admin_master';
 
 /**
@@ -135,6 +136,8 @@ export interface RoleChangeTarget {
  *  - Admin Master may change anyone, themselves included — except that the last
  *    Admin Master cannot be demoted: the system never runs without one.
  *  - Nobody else touches an Admin Master, and nobody else grants Admin Master.
+ *  - Diretoria is granted and removed only by Diretoria or an Admin Master —
+ *    RH/DP included, so it cannot promote a colleague into approving ad spend.
  *  - Holders of `employees.assign_roles` (Diretoria, RH/DP) may otherwise set
  *    any level for anyone but themselves.
  *  - Everyone else falls back to the sector-manager guards above, inside the
@@ -150,12 +153,15 @@ export function roleChangeDenial(
   if (target.currentRole !== undefined && nextRole === target.currentRole) return null;
 
   if (actor.role === 'admin_master') {
-    const demotesLastAdmin = target.currentRole === 'admin_master' && target.isLastActiveAdminMaster;
+    const demotesLastAdmin =
+      target.currentRole === 'admin_master' && target.isLastActiveAdminMaster;
     return demotesLastAdmin ? 'last_admin_master' : null;
   }
 
   const isSelf = target.employeeId !== undefined && target.employeeId === actor.employeeId;
   if (target.currentRole === 'admin_master') return 'admin_master_record';
+  const touchesDiretoria = nextRole === 'diretoria' || target.currentRole === 'diretoria';
+  if (touchesDiretoria && actor.role !== 'diretoria') return 'diretoria_level';
 
   const wide = grantedScope(actor, 'employees.assign_roles');
   if (wide && scopeSatisfied(actor, wide, { sector: target.sector })) {
