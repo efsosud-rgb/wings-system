@@ -6,23 +6,38 @@ import {
   CAMPAIGN_OBJECTIVES,
   CAMPAIGN_OBJECTIVE_HINT,
   CAMPAIGN_OBJECTIVE_LABEL,
+  CARD_DESCRIPTION_MAX,
   COMPLIANCE_RULE_ADVICE,
   COMPLIANCE_RULE_LABEL,
   CREATIVE_FORMATS,
+  CREATIVE_TYPES,
+  CREATIVE_TYPE_LABEL,
+  DEFAULT_AGE_MAX,
+  DEFAULT_AGE_MIN,
   HEADLINE_MAX,
   ICP_MAX,
+  MAX_AGE,
+  MAX_CAROUSEL_CARDS,
   MAX_KEYWORDS,
   MAX_NEGATIVE_KEYWORDS,
   MAX_SEARCH_DESCRIPTIONS,
   MAX_SEARCH_HEADLINES,
   MAX_VARIATIONS,
+  MAX_VIDEO_BYTES,
+  MIN_AGE,
+  MIN_CAROUSEL_CARDS,
   MIN_DAILY_BUDGET_CENTS,
   MIN_VARIATIONS,
   PAID_PLATFORMS,
+  PLACEMENT_POSITIONS,
+  PLACEMENT_POSITION_LABEL,
+  PLACEMENT_PUBLISHERS,
+  PLACEMENT_PUBLISHER_LABEL,
   PRIMARY_TEXT_RECOMMENDED,
   SEARCH_DESCRIPTION_MAX,
   SEARCH_HEADLINE_MAX,
   UTM_KEYS,
+  VIDEO_MIME_TYPES,
   applyUtms,
   audienceProfileSchema,
   buildUtms,
@@ -35,26 +50,42 @@ import {
   isGooglePlatform,
   matchesFormat,
   overdeliveryFactor,
+  usesVerticalPlacements,
   type CampaignDraft,
   type CampaignDraftInput,
   type BrazilState,
   type ComplianceFinding,
   type CreativeFormat,
+  type CreativeType,
   type CreativeUpload,
   type PacingSummary,
+  type Placements,
+  type VideoUpload,
 } from '@wings/shared';
 import { useEffect, useState, type ReactNode } from 'react';
-import { useFieldArray, useForm, type Resolver } from 'react-hook-form';
+import {
+  useFieldArray,
+  useForm,
+  type Control,
+  type FieldErrors,
+  type Resolver,
+  type UseFormRegister,
+  type UseFormSetValue,
+} from 'react-hook-form';
 import { Link } from 'react-router-dom';
 import {
   useAudienceProfile,
   useCockpit,
+  useMetaIdentities,
   useRequestCampaign,
   useSaveAudienceProfile,
+  useSaveMetaIdentityDefault,
   useUploadCreative,
+  useUploadVideo,
 } from '../../api/ads.js';
+import { ApiError } from '../../api/client.js';
 import { Alert, Button, Field, Input, Select } from '../ui.js';
-import { AdPreviewGallery, creativeUrl } from './AdPreview.js';
+import { AdPreviewGallery, creativeUrl, videoUrl } from './AdPreview.js';
 import { formatBrl, formatDate, parseBrlToCents, todayInSaoPaulo } from './format.js';
 import { SearchAdPreview, YoutubePreview } from './GooglePreview.js';
 import { RadiusMap } from './RadiusMap.js';
@@ -66,6 +97,13 @@ import { RadiusMap } from './RadiusMap.js';
  * an ad platform: the form's only output is a draft that becomes a
  * `create_campaign` request in front of the approvals gate.
  */
+
+/** An emptied age box is "not informed", never NaN. */
+function ageFromInput(value: unknown): number | undefined {
+  if (value === '' || value === null || value === undefined) return undefined;
+  const age = Number(value);
+  return Number.isFinite(age) ? age : undefined;
+}
 
 function addDays(date: string, days: number): string {
   const next = new Date(`${date}T00:00:00Z`);
@@ -88,8 +126,35 @@ function linesOf(text: string): string[] {
  * dropped here — once, for the check and for the request alike.
  */
 function shapeDraft(values: CampaignDraftInput): CampaignDraftInput {
-  const { youtube, search, formatKey, variations, ...common } = values;
-  if (!isGooglePlatform(values.platform)) return { ...common, formatKey, variations };
+  const {
+    youtube,
+    search,
+    formatKey,
+    variations,
+    ageMin,
+    ageMax,
+    placements,
+    identity,
+    ...common
+  } = values;
+  if (!isGooglePlatform(values.platform)) {
+    return {
+      ...common,
+      formatKey,
+      variations: (variations ?? []).map(shapeVariation),
+      ageMin,
+      ageMax,
+      // Automatic names no placement: whatever was ticked under "Manual" stays behind.
+      placements:
+        placements?.mode === 'manual'
+          ? placements
+          : { mode: 'automatic', facebook: [], instagram: [] },
+      identity: identity && {
+        pageId: identity.pageId,
+        instagramActorId: identity.instagramActorId || null,
+      },
+    };
+  }
 
   const google = {
     ...common,
@@ -108,6 +173,26 @@ function shapeDraft(values: CampaignDraftInput): CampaignDraftInput {
   };
 }
 
+type VariationInput = NonNullable<CampaignDraftInput['variations']>[number];
+type CardInput = NonNullable<VariationInput['cards']>[number];
+
+/** A card sends its image or its video, never the leftovers of the other. */
+function shapeCard(card: CardInput): CardInput {
+  const { creativeId, videoId, ...copy } = card;
+  return card.mediaType === 'video' ? { ...copy, videoId } : { ...copy, creativeId };
+}
+
+/** Likewise for a variation: only the media of the type that was chosen. */
+function shapeVariation(variation: VariationInput): VariationInput {
+  const { creativeId, videoId, cards, ...copy } = variation;
+  const creativeType = variation.creativeType ?? 'image';
+  if (creativeType === 'video') return { ...copy, creativeType, videoId };
+  if (creativeType === 'carousel') {
+    return { ...copy, creativeType, cards: (cards ?? []).map(shapeCard) };
+  }
+  return { ...copy, creativeType, creativeId };
+}
+
 const schemaResolver = zodResolver(campaignDraftSchema) as Resolver<CampaignDraftInput>;
 const draftResolver: Resolver<CampaignDraftInput> = (values, context, options) =>
   schemaResolver(shapeDraft(values), context, options);
@@ -118,6 +203,8 @@ const META_SECTIONS = [
   'objective',
   'icp',
   'reach',
+  'placements',
+  'identity',
   'creative',
   'format',
   'copy',
@@ -249,12 +336,15 @@ function CreativeSlot({
   creativeId,
   format,
   error,
+  vertical = false,
   onUploaded,
 }: {
   label: string;
   creativeId: string;
   format: CreativeFormat | undefined;
   error: string | undefined;
+  /** The manual placements include Stories or Reels, which are 9:16. */
+  vertical?: boolean;
   onUploaded: (creative: CreativeUpload) => void;
 }) {
   const upload = useUploadCreative();
@@ -306,9 +396,237 @@ function CreativeSlot({
                 : ` · ⚠️ proporção diferente de ${format.ratio}: a plataforma vai cortar a imagem`)}
           </p>
         )}
+        {current && vertical && VERTICAL_FORMAT && !matchesFormat(current, VERTICAL_FORMAT) && (
+          <p className="field-hint builder-crop-warning">
+            ⚠️ Esta imagem não é 9:16: será cortada em Stories e Reels.
+          </p>
+        )}
       </div>
     </div>
   );
+}
+
+const VERTICAL_FORMAT = CREATIVE_FORMATS.meta.find((item) => item.key === 'stories_reels');
+
+function formatBytes(bytes: number): string {
+  const megabytes = bytes / (1024 * 1024);
+  return megabytes >= 1024
+    ? `${(megabytes / 1024).toLocaleString('pt-BR', { maximumFractionDigits: 2 })} GB`
+    : `${megabytes.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} MB`;
+}
+
+/**
+ * One video. Like an image, it is uploaded on choosing the file, so the form
+ * only holds the id of something the server accepted. It goes to our own
+ * storage — reaching Meta is part of executing an approved request.
+ */
+function VideoSlot({
+  label,
+  videoId,
+  error,
+  onChange,
+}: {
+  label: string;
+  videoId: string;
+  error: string | undefined;
+  onChange: (video: VideoUpload | null) => void;
+}) {
+  const upload = useUploadVideo();
+  const [problem, setProblem] = useState<string | null>(null);
+  const [uploaded, setUploaded] = useState<VideoUpload | null>(null);
+  const current = uploaded && uploaded.id === videoId ? uploaded : null;
+
+  return (
+    <div className="builder-creative">
+      <div className="builder-creative-thumb">
+        {videoId ? (
+          <video muted preload="metadata" src={videoUrl(videoId)} aria-label={`Vídeo — ${label}`} />
+        ) : (
+          <span className="muted">Sem vídeo</span>
+        )}
+      </div>
+      <div>
+        <Field label={`Vídeo — ${label}`} error={problem ?? error} hint="MP4 ou MOV, até 4 GB.">
+          <input
+            type="file"
+            className="control"
+            accept={VIDEO_MIME_TYPES.join(',')}
+            disabled={upload.isPending}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (!file) return;
+              setProblem(null);
+              if (!(VIDEO_MIME_TYPES as readonly string[]).includes(file.type)) {
+                setProblem('Use um vídeo MP4 ou MOV.');
+                return;
+              }
+              // Refused here: nobody should wait on 4 GB going up to be told no.
+              if (file.size > MAX_VIDEO_BYTES) {
+                setProblem('O vídeo passa de 4 GB.');
+                return;
+              }
+              upload.mutate(file, {
+                onSuccess: ({ video }) => {
+                  setUploaded(video);
+                  onChange(video);
+                },
+                onError: (failure) => setProblem(failure.message),
+              });
+            }}
+          />
+        </Field>
+        {upload.isPending && (
+          <p className="field-hint" role="status">
+            <progress aria-label="Enviando vídeo" /> Enviando o vídeo… arquivos grandes levam alguns
+            minutos.
+          </p>
+        )}
+        {videoId && !upload.isPending && (
+          <p className="field-hint">
+            {current ? `${formatBytes(current.byteSize)} · ` : ''}
+            <button type="button" className="link-button" onClick={() => onChange(null)}>
+              Remover vídeo
+            </button>
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** A carousel's cards: each with its own media, title, text and link. */
+function CarouselCards({
+  index,
+  control,
+  register,
+  setValue,
+  cards,
+  errors,
+  format,
+  vertical,
+  revalidate,
+}: {
+  index: number;
+  control: Control<CampaignDraftInput>;
+  register: UseFormRegister<CampaignDraftInput>;
+  setValue: UseFormSetValue<CampaignDraftInput>;
+  cards: CardInput[];
+  errors: FieldErrors<CampaignDraftInput>;
+  format: CreativeFormat | undefined;
+  vertical: boolean;
+  revalidate: boolean;
+}) {
+  const list = useFieldArray({ control, name: `variations.${index}.cards` });
+  const cardErrors = errors.variations?.[index]?.cards;
+  const options = { shouldDirty: true, shouldValidate: revalidate };
+
+  return (
+    <div className="builder-cards">
+      <p className="field-hint">
+        De {MIN_CAROUSEL_CARDS} a {MAX_CAROUSEL_CARDS} cartões. {list.fields.length}/
+        {MAX_CAROUSEL_CARDS}
+      </p>
+      {list.fields.map((field, cardIndex) => {
+        const card = cards[cardIndex];
+        const label = `Variação ${index + 1}, cartão ${cardIndex + 1}`;
+        const path = `variations.${index}.cards.${cardIndex}` as const;
+        const mediaType = card?.mediaType ?? 'image';
+        return (
+          <div className="builder-card" key={field.id}>
+            <div className="builder-variation-head">
+              <strong>Cartão {cardIndex + 1}</strong>
+              <button type="button" className="link-button" onClick={() => list.remove(cardIndex)}>
+                Remover cartão
+              </button>
+            </div>
+            <div className="builder-segmented" role="group" aria-label={`Mídia — ${label}`}>
+              {(['image', 'video'] as const).map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  aria-pressed={mediaType === type}
+                  className={`builder-segmented-option ${mediaType === type ? 'is-active' : ''}`}
+                  onClick={() => setValue(`${path}.mediaType`, type, options)}
+                >
+                  {type === 'image' ? 'Imagem' : 'Vídeo'}
+                </button>
+              ))}
+            </div>
+            {mediaType === 'video' ? (
+              <VideoSlot
+                label={label}
+                videoId={card?.videoId ?? ''}
+                error={cardErrors?.[cardIndex]?.videoId?.message}
+                onChange={(video) => setValue(`${path}.videoId`, video?.id, options)}
+              />
+            ) : (
+              <CreativeSlot
+                label={label}
+                creativeId={card?.creativeId ?? ''}
+                format={format}
+                vertical={vertical}
+                error={cardErrors?.[cardIndex]?.creativeId?.message}
+                onUploaded={(creative) => setValue(`${path}.creativeId`, creative.id, options)}
+              />
+            )}
+            <Field
+              label="Título do cartão"
+              error={cardErrors?.[cardIndex]?.headline?.message}
+              hint={`${(card?.headline ?? '').length}/${HEADLINE_MAX}`}
+            >
+              <Input maxLength={HEADLINE_MAX} {...register(`${path}.headline`)} />
+            </Field>
+            <Field
+              label="Texto do cartão"
+              error={cardErrors?.[cardIndex]?.description?.message}
+              hint={`${(card?.description ?? '').length}/${CARD_DESCRIPTION_MAX}`}
+            >
+              <Input maxLength={CARD_DESCRIPTION_MAX} {...register(`${path}.description`)} />
+            </Field>
+            <Field label="Link do cartão" error={cardErrors?.[cardIndex]?.link?.message}>
+              <Input
+                type="url"
+                placeholder="https://wingscompany.com.br/…"
+                {...register(`${path}.link`)}
+              />
+            </Field>
+          </div>
+        );
+      })}
+      {list.fields.length < MAX_CAROUSEL_CARDS && (
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() =>
+            list.append({ mediaType: 'image', headline: '', description: '', link: '' })
+          }
+        >
+          + Adicionar cartão
+        </Button>
+      )}
+      {(cardErrors?.message ?? cardErrors?.root?.message) && (
+        <p className="field-error" role="alert">
+          {cardErrors?.message ?? cardErrors?.root?.message}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** "Facebook: Feed, Stories · Instagram: Reels", or what automatic means. */
+function describePlacements(placements: Placements | CampaignDraftInput['placements']): string {
+  if (!placements || placements.mode !== 'manual') return 'Automático (Advantage+)';
+  const parts = PLACEMENT_PUBLISHERS.flatMap((publisher) => {
+    const positions = placements[publisher] ?? [];
+    return positions.length === 0
+      ? []
+      : [
+          `${PLACEMENT_PUBLISHER_LABEL[publisher]}: ${positions
+            .map((position) => PLACEMENT_POSITION_LABEL[position])
+            .join(', ')}`,
+        ];
+  });
+  return parts.join(' · ') || 'Manual — nenhum escolhido';
 }
 
 export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
@@ -335,11 +653,17 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
       formatKey: 'feed_square',
       destinationUrl: '',
       variations: Array.from({ length: MIN_VARIATIONS }, () => ({
+        creativeType: 'image' as const,
         creativeId: '',
+        cards: [],
         headline: '',
         primaryText: '',
         callToAction: 'LEARN_MORE' as const,
       })),
+      ageMin: DEFAULT_AGE_MIN,
+      ageMax: DEFAULT_AGE_MAX,
+      placements: { mode: 'automatic', facebook: [], instagram: [] },
+      identity: { pageId: '', instagramActorId: null },
       youtube: { videoUrl: '', headline: '' },
       search: {
         keywords: [],
@@ -399,12 +723,44 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
   const stepOf = (key: SectionKey) => sections.indexOf(key) + 1;
   const platformLabel = PAID_PLATFORMS.find((item) => item.key === platform)?.label ?? '—';
 
-  // A Google campaign is always born paused, and takes no radius on the map.
+  // A Google campaign takes no radius on the map.
   useEffect(() => {
     if (!google) return;
-    setValue('startPaused', true);
     setValue('reach.customLocations', []);
   }, [google, setValue]);
+
+  // The Facebook Page and Instagram account the ads are published as: read from
+  // Meta, never typed in. Only Meta campaigns ask.
+  const identities = useMetaIdentities(!google);
+  const saveIdentityDefault = useSaveMetaIdentityDefault();
+  const pages = identities.data?.identities.pages ?? [];
+  const identityDefault = identities.data?.identities.default ?? null;
+  const identityFailure = identities.error instanceof ApiError ? identities.error : null;
+  const metaNotConfigured = identityFailure?.code === 'meta_not_configured';
+  const [keepIdentity, setKeepIdentity] = useState(false);
+  const [identityLoaded, setIdentityLoaded] = useState(false);
+  const chosenPage = pages.find((page) => page.id === values.identity?.pageId);
+  const chosenInstagram = chosenPage?.instagramAccounts.find(
+    (account) => account.id === values.identity?.instagramActorId,
+  );
+  useEffect(() => {
+    if (identityLoaded || !identities.data) return;
+    setIdentityLoaded(true);
+    if (dirtyFields.identity) return;
+    // Wings' saved choice; failing that, the only page there is.
+    const onlyPage = pages.length === 1 ? pages[0] : undefined;
+    const start =
+      identityDefault && pages.some((page) => page.id === identityDefault.pageId)
+        ? identityDefault
+        : onlyPage && { pageId: onlyPage.id, instagramActorId: null };
+    if (!start) return;
+    setValue('identity.pageId', start.pageId);
+    setValue('identity.instagramActorId', start.instagramActorId);
+  }, [identities.data, identityLoaded, dirtyFields.identity, identityDefault, pages, setValue]);
+
+  const identityOptions = { shouldDirty: true, shouldValidate: submitCount > 0 };
+
+  const vertical = usesVerticalPlacements(values.placements as Placements | undefined);
 
   // Keywords are typed one per line; the form holds them as the list it sends.
   const [keywordsText, setKeywordsText] = useState('');
@@ -451,6 +807,11 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
   const findingsByVariation = formVariations.map((variation) => [
     ...checkCopyCompliance(variation.headline ?? ''),
     ...checkCopyCompliance(variation.primaryText ?? ''),
+    // A carousel's cards are copy too, and only count while it is a carousel.
+    ...(variation.creativeType === 'carousel' ? (variation.cards ?? []) : []).flatMap((card) => [
+      ...checkCopyCompliance(card.headline ?? ''),
+      ...checkCopyCompliance(card.description ?? ''),
+    ]),
   ]);
   const searchHeadlines = values.search?.headlines ?? [];
   const searchDescriptions = values.search?.descriptions ?? [];
@@ -465,6 +826,19 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
       : platform === 'google_search'
         ? searchFindings.length > 0
         : findingsByVariation.some((findings) => findings.length > 0);
+  /** The schema's bounds answer in English; the operator gets them in Portuguese. */
+  const ageError = (field: 'ageMin' | 'ageMax'): string | undefined => {
+    if (!errors[field]) return undefined;
+    const value = values[field];
+    if (
+      typeof value === 'number' &&
+      (value < MIN_AGE || value > MAX_AGE || !Number.isInteger(value))
+    ) {
+      return `A idade vai de ${MIN_AGE} a ${MAX_AGE} anos.`;
+    }
+    return errors[field]?.message;
+  };
+
   /** Array fields report either on the list or on one of its items. */
   const listError = (
     error:
@@ -530,6 +904,16 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         launch.reset();
         void handleSubmit((values) => {
           const draft = values as CampaignDraft;
+          const identity = draft.identity;
+          // Only on request, and only when it is actually a different choice.
+          if (
+            keepIdentity &&
+            identity &&
+            (identity.pageId !== identityDefault?.pageId ||
+              identity.instagramActorId !== (identityDefault?.instagramActorId ?? null))
+          ) {
+            saveIdentityDefault.mutate(identity);
+          }
           if (launching && canRequest) launch.mutate(draft);
           else setChecked(draft);
         })(event);
@@ -612,6 +996,32 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
             {...register('idealCustomerProfile')}
           />
         </Field>
+        {!google && (
+          <>
+            <div className="input-row">
+              <Field label="Idade mínima" error={ageError('ageMin')}>
+                <Input
+                  type="number"
+                  min={MIN_AGE}
+                  max={MAX_AGE}
+                  {...register('ageMin', { setValueAs: ageFromInput })}
+                />
+              </Field>
+              <Field label="Idade máxima" error={ageError('ageMax')}>
+                <Input
+                  type="number"
+                  min={MIN_AGE}
+                  max={MAX_AGE}
+                  {...register('ageMax', { setValueAs: ageFromInput })}
+                />
+              </Field>
+            </div>
+            <p className="field-hint">
+              Faixa etária do conjunto de anúncios, de {MIN_AGE} a {MAX_AGE} anos ({MAX_AGE} quer
+              dizer “{MAX_AGE} ou mais”).
+            </p>
+          </>
+        )}
       </BuilderSection>
 
       <BuilderSection
@@ -740,6 +1150,155 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
       {!google && (
         <>
           <BuilderSection
+            step={stepOf('placements')}
+            title="Posicionamentos"
+            why="Em que telas o anúncio aparece. No automático a Meta distribui a verba onde o resultado sai mais barato; no manual você restringe — e costuma pagar mais por isso."
+          >
+            <div className="builder-options" role="radiogroup" aria-label="Posicionamentos">
+              <label className="builder-option">
+                <input type="radio" value="automatic" {...register('placements.mode')} />
+                <span>
+                  Automático (Advantage+)
+                  <small className="muted"> — a Meta escolhe onde exibir</small>
+                </span>
+              </label>
+              <label className="builder-option">
+                <input type="radio" value="manual" {...register('placements.mode')} />
+                <span>Manual</span>
+              </label>
+            </div>
+            {values.placements?.mode === 'manual' && (
+              <div className="builder-placements">
+                {PLACEMENT_PUBLISHERS.map((publisher) => (
+                  <fieldset key={publisher} className="builder-placement-group">
+                    <legend className="field-label">{PLACEMENT_PUBLISHER_LABEL[publisher]}</legend>
+                    {PLACEMENT_POSITIONS.map((position) => (
+                      <label key={position} className="builder-state">
+                        <input
+                          type="checkbox"
+                          value={position}
+                          aria-label={`${PLACEMENT_PUBLISHER_LABEL[publisher]} ${PLACEMENT_POSITION_LABEL[position]}`}
+                          {...register(`placements.${publisher}`)}
+                        />
+                        <span>{PLACEMENT_POSITION_LABEL[position]}</span>
+                      </label>
+                    ))}
+                  </fieldset>
+                ))}
+              </div>
+            )}
+            {(errors.placements?.facebook?.message ?? errors.placements?.mode?.message) && (
+              <p className="field-error" role="alert">
+                {errors.placements?.facebook?.message ?? errors.placements?.mode?.message}
+              </p>
+            )}
+            {vertical && (
+              <div className="alert alert-warning" role="status">
+                Stories e Reels são verticais (9:16). Criativos em outro formato serão cortados pela
+                Meta.
+              </div>
+            )}
+          </BuilderSection>
+
+          <BuilderSection
+            step={stepOf('identity')}
+            title="Página e Instagram"
+            why="É em nome de quem o anúncio aparece: a Página do Facebook e a conta do Instagram que assinam a publicação. A lista vem da própria Meta — só aparece o que o sistema pode usar."
+          >
+            {identities.isLoading && <p className="muted">Lendo as páginas na Meta…</p>}
+            {metaNotConfigured && (
+              <Alert kind="error">
+                A Meta não está configurada neste ambiente — não é possível escolher a página.
+              </Alert>
+            )}
+            {identities.isError && !metaNotConfigured && (
+              <Alert kind="error">
+                {identities.error.message}{' '}
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => void identities.refetch()}
+                >
+                  Tentar de novo
+                </button>
+              </Alert>
+            )}
+            {identities.data && pages.length === 0 && (
+              <Alert kind="error">
+                O usuário do sistema não tem acesso a nenhuma Página do Facebook.
+              </Alert>
+            )}
+            {pages.length > 0 && (
+              <>
+                <div className="input-row">
+                  <Field label="Página do Facebook" error={errors.identity?.pageId?.message}>
+                    {/* Controlled: the Instagram options depend on the page, and an
+                        uncontrolled select cannot take a value whose option is not
+                        on screen yet. */}
+                    <Select
+                      value={values.identity?.pageId ?? ''}
+                      onChange={(event) => {
+                        setValue('identity.pageId', event.target.value, identityOptions);
+                        // Another page, another set of Instagram accounts.
+                        setValue('identity.instagramActorId', null, identityOptions);
+                      }}
+                    >
+                      <option value="">Selecione…</option>
+                      {pages.map((page) => (
+                        <option key={page.id} value={page.id}>
+                          {page.name}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                  <Field
+                    label="Conta do Instagram"
+                    error={errors.identity?.instagramActorId?.message}
+                  >
+                    <Select
+                      value={values.identity?.instagramActorId ?? ''}
+                      onChange={(event) =>
+                        setValue(
+                          'identity.instagramActorId',
+                          event.target.value || null,
+                          identityOptions,
+                        )
+                      }
+                    >
+                      <option value="">Sem conta do Instagram</option>
+                      {(chosenPage?.instagramAccounts ?? []).map((account) => (
+                        <option key={account.id} value={account.id}>
+                          @{account.username}
+                        </option>
+                      ))}
+                    </Select>
+                  </Field>
+                </div>
+                <label className="checkbox-field">
+                  <input
+                    type="checkbox"
+                    checked={keepIdentity}
+                    onChange={(event) => setKeepIdentity(event.target.checked)}
+                  />
+                  <span>
+                    Guardar como padrão da Wings
+                    <small className="muted">
+                      {' '}
+                      — as próximas campanhas já começam com esta página e esta conta.
+                    </small>
+                  </span>
+                </label>
+                {saveIdentityDefault.isError && (
+                  <Alert kind="error">{saveIdentityDefault.error.message}</Alert>
+                )}
+                {saveIdentityDefault.isSuccess && (
+                  <Alert kind="success">Página e Instagram guardados como padrão da Wings.</Alert>
+                )}
+              </>
+            )}
+          </BuilderSection>
+
+          <BuilderSection
             step={stepOf('creative')}
             title="Criativo"
             why="A imagem é o que faz a pessoa parar de rolar o feed. Uma por variação, para a Meta descobrir qual segura mais gente."
@@ -755,23 +1314,86 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
               </Button>
             </div>
             <p className="field-hint">
-              Uma imagem por variação. Ela fica guardada no Wings System — nada é enviado à Meta.
+              Um criativo por variação: imagem única, vídeo ou carrossel. Fica guardado no Wings
+              System — só vai para a Meta quando um pedido aprovado for executado.
             </p>
-            {variations.fields.map((field, index) => (
-              <CreativeSlot
-                key={field.id}
-                label={`Variação ${index + 1}`}
-                creativeId={formVariations[index]?.creativeId ?? ''}
-                format={format}
-                error={errors.variations?.[index]?.creativeId?.message}
-                onUploaded={(creative) =>
-                  setValue(`variations.${index}.creativeId`, creative.id, {
-                    shouldDirty: true,
-                    shouldValidate: submitCount > 0,
-                  })
-                }
-              />
-            ))}
+            {variations.fields.map((field, index) => {
+              const variation = formVariations[index];
+              const creativeType: CreativeType = variation?.creativeType ?? 'image';
+              const label = `Variação ${index + 1}`;
+              const options = { shouldDirty: true, shouldValidate: submitCount > 0 };
+              return (
+                <div className="builder-variation" key={field.id}>
+                  <div
+                    className="builder-segmented"
+                    role="group"
+                    aria-label={`Tipo de criativo — ${label}`}
+                  >
+                    {CREATIVE_TYPES.map((type) => (
+                      <button
+                        key={type}
+                        type="button"
+                        aria-pressed={creativeType === type}
+                        className={`builder-segmented-option ${creativeType === type ? 'is-active' : ''}`}
+                        onClick={() => {
+                          setValue(`variations.${index}.creativeType`, type, options);
+                          // A carousel opens with the fewest cards it may have.
+                          if (type === 'carousel' && (variation?.cards ?? []).length === 0) {
+                            setValue(
+                              `variations.${index}.cards`,
+                              Array.from({ length: MIN_CAROUSEL_CARDS }, () => ({
+                                mediaType: 'image' as const,
+                                headline: '',
+                                description: '',
+                                link: '',
+                              })),
+                              options,
+                            );
+                          }
+                        }}
+                      >
+                        {CREATIVE_TYPE_LABEL[type]}
+                      </button>
+                    ))}
+                  </div>
+                  {creativeType === 'image' && (
+                    <CreativeSlot
+                      label={label}
+                      creativeId={variation?.creativeId ?? ''}
+                      format={format}
+                      vertical={vertical}
+                      error={errors.variations?.[index]?.creativeId?.message}
+                      onUploaded={(creative) =>
+                        setValue(`variations.${index}.creativeId`, creative.id, options)
+                      }
+                    />
+                  )}
+                  {creativeType === 'video' && (
+                    <VideoSlot
+                      label={label}
+                      videoId={variation?.videoId ?? ''}
+                      error={errors.variations?.[index]?.videoId?.message}
+                      onChange={(video) =>
+                        setValue(`variations.${index}.videoId`, video?.id, options)
+                      }
+                    />
+                  )}
+                  {creativeType === 'carousel' && (
+                    <CarouselCards
+                      index={index}
+                      control={control}
+                      register={register}
+                      setValue={setValue}
+                      cards={variation?.cards ?? []}
+                      errors={errors}
+                      format={format}
+                      vertical={vertical}
+                      revalidate={submitCount > 0}
+                    />
+                  )}
+                </div>
+              );
+            })}
           </BuilderSection>
 
           <BuilderSection
@@ -833,7 +1455,9 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
                 variant="ghost"
                 onClick={() =>
                   variations.append({
+                    creativeType: 'image',
                     creativeId: '',
+                    cards: [],
                     headline: '',
                     primaryText: '',
                     callToAction: 'LEARN_MORE',
@@ -1065,17 +1689,16 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
           </div>
         )}
         <label className="checkbox-field">
-          <input type="checkbox" {...register('startPaused')} disabled={google} />
+          {/* Locked on: everything this system creates is born paused. */}
+          <input type="checkbox" checked readOnly disabled />
           <span>
             Criar a campanha <strong>pausada</strong>
-            <small className="muted">
-              {' '}
-              — nasce sem entregar e sem reservar verba; ativar depois é outro pedido, com outra
-              aprovação.
+            <small className="muted"> — nasce sem entregar e sem reservar verba.</small>
+            <small className="field-hint">
+              {google
+                ? 'Campanhas do Google nascem sempre pausadas.'
+                : 'Tudo nasce pausado: campanha, conjunto e anúncios. Ligar é um ato seu, no Gerenciador de Anúncios.'}
             </small>
-            {google && (
-              <small className="field-hint">Campanhas do Google nascem sempre pausadas.</small>
-            )}
           </span>
         </label>
       </BuilderSection>
@@ -1125,7 +1748,16 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         {!google && (
           <AdPreviewGallery
             variations={formVariations.map((variation) => ({
+              creativeType: variation.creativeType ?? 'image',
               creativeId: variation.creativeId,
+              videoId: variation.videoId,
+              cards: (variation.cards ?? []).map((card) => ({
+                mediaType: card.mediaType ?? 'image',
+                creativeId: card.creativeId,
+                videoId: card.videoId,
+                headline: card.headline ?? '',
+                description: card.description ?? '',
+              })),
               headline: variation.headline ?? '',
               primaryText: variation.primaryText ?? '',
               callToAction: variation.callToAction,
@@ -1154,16 +1786,32 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
           <dd>{describeReach(values.reach)}</dd>
           {!google && (
             <>
+              <dt>Faixa etária</dt>
+              <dd>
+                {values.ageMin ?? '—'} a {values.ageMax ?? '—'} anos
+              </dd>
+              <dt>Posicionamentos</dt>
+              <dd>{describePlacements(values.placements)}</dd>
+              <dt>Página e Instagram</dt>
+              <dd>
+                {chosenPage?.name ?? '—'} ·{' '}
+                {chosenInstagram ? `@${chosenInstagram.username}` : 'sem conta do Instagram'}
+              </dd>
               <dt>Formato</dt>
               <dd>{format ? `${format.label} (${format.ratio})` : '—'}</dd>
               <dt>Variações</dt>
               <dd>
-                {formVariations.map((variation, index) => (
-                  <span key={index} className="builder-summary-line">
-                    {index + 1}. {variation.headline || '(sem título)'} ·{' '}
-                    {CALL_TO_ACTION_LABEL[variation.callToAction]}
-                  </span>
-                ))}
+                {formVariations.map((variation, index) => {
+                  const type = variation.creativeType ?? 'image';
+                  return (
+                    <span key={index} className="builder-summary-line">
+                      {index + 1}. {variation.headline || '(sem título)'} ·{' '}
+                      {CREATIVE_TYPE_LABEL[type]}
+                      {type === 'carousel' && ` (${(variation.cards ?? []).length} cartões)`} ·{' '}
+                      {CALL_TO_ACTION_LABEL[variation.callToAction]}
+                    </span>
+                  );
+                })}
               </dd>
             </>
           )}
@@ -1203,7 +1851,7 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
               : costMissing}
           </dd>
           <dt>Nasce</dt>
-          <dd>{values.startPaused ? 'Pausada' : 'Ativa, assim que aprovada e executada'}</dd>
+          <dd>Pausada</dd>
           <dt>Destino com UTMs</dt>
           <dd className="mono builder-url">
             {applyUtms(values.destinationUrl ?? '', values.utms, 0) ?? '—'}
@@ -1244,7 +1892,9 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
           <Button
             type="submit"
             value="launch"
-            disabled={!canRequest || launch.isPending || launch.isSuccess}
+            disabled={
+              !canRequest || launch.isPending || launch.isSuccess || (!google && metaNotConfigured)
+            }
             title={canRequest ? undefined : 'Seu perfil não pode pedir campanhas'}
           >
             {launch.isPending ? 'Enviando…' : 'Lançar campanha'}
