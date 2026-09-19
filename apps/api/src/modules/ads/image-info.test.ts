@@ -28,4 +28,34 @@ describe('readImageInfo', () => {
     // A JPEG that ends before any frame.
     expect(readImageInfo(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00]))).toBeNull();
   });
+
+  it('reads WebP in its three encodings', () => {
+    const riff = (chunk: string) => {
+      const bytes = Buffer.alloc(40);
+      bytes.write('RIFF', 0, 'latin1');
+      bytes.write('WEBP', 8, 'latin1');
+      bytes.write(chunk, 12, 'latin1');
+      return bytes;
+    };
+    const extended = riff('VP8X');
+    extended.writeUIntLE(1199, 24, 3);
+    extended.writeUIntLE(629, 27, 3);
+    expect(readImageInfo(extended)).toEqual({ mimeType: 'image/webp', width: 1200, height: 630 });
+
+    const lossless = riff('VP8L');
+    lossless[20] = 0x2f;
+    lossless.writeUInt32LE((1080 - 1) | ((1350 - 1) << 14), 21);
+    expect(readImageInfo(lossless)).toMatchObject({ width: 1080, height: 1350 });
+
+    const lossy = riff('VP8 ');
+    lossy.set([0x9d, 0x01, 0x2a], 23);
+    lossy.writeUInt16LE(1600, 26);
+    lossy.writeUInt16LE(900, 28);
+    expect(readImageInfo(lossy)).toMatchObject({ width: 1600, height: 900 });
+
+    // A RIFF file that is not WebP (a WAV, say) is not an image.
+    const wav = riff('fmt ');
+    wav.write('WAVE', 8, 'latin1');
+    expect(readImageInfo(wav)).toBeNull();
+  });
 });

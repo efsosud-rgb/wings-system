@@ -13,6 +13,7 @@ export * from './auth/credentials.js';
 export * from './auth/schema.js';
 export * from './cpf.js';
 export * from './employees/schema.js';
+export * from './marketing/site-content.js';
 export * from './marketing/site-post.js';
 export * from './navigation.js';
 export * from './rbac/permissions.js';

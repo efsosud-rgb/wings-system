@@ -39,7 +39,8 @@ export const creativeRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const info = readImageInfo(bytes);
-      if (!info) {
+      // WebP is recognised by the reader for the site's images; ads take none.
+      if (!info || info.mimeType === 'image/webp') {
         return reply.status(400).send({
           error: 'invalid_image',
           message: 'O arquivo não é uma imagem PNG ou JPEG válida.',
@@ -68,7 +69,7 @@ export const creativeRoutes: FastifyPluginAsync = async (app) => {
 
       const creative: CreativeUpload = {
         id: stored.id,
-        mimeType: info.mimeType,
+        mimeType: info.mimeType as CreativeUpload['mimeType'],
         width: info.width,
         height: info.height,
         byteSize: bytes.length,

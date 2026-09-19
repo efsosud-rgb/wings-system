@@ -284,6 +284,18 @@ export const sitePosts = pgTable(
     editUrl: text('edit_url'),
     /** The site's error code or the transport reason; never the content. */
     detail: text('detail'),
+    /** `[{ id, name }]` of the site's categories and tags it was sent with. */
+    categories: jsonb('categories').notNull().default([]),
+    tags: jsonb('tags').notNull().default([]),
+    /** WordPress media id of the featured image, when there is one. */
+    featuredMediaId: bigint('featured_media_id', { mode: 'number' }),
+    /**
+     * Everything this attempt put in the site's media library, in order:
+     * `[{ role, position, uploadId, wordpressMediaId, caption, inGallery }]`.
+     * Kept for a failed attempt too, so nothing uploaded goes unaccounted for.
+     */
+    media: jsonb('media').notNull().default([]),
+    videoUrl: text('video_url'),
     createdBy: uuid('created_by').references(() => employees.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -312,6 +324,29 @@ export const adCreativeUploads = pgTable('ad_creative_uploads', {
   byteSize: integer('byte_size').notNull(),
   sha256: text('sha256').notNull(),
   data: bytea('data').notNull(),
+  uploadedBy: uuid('uploaded_by').references(() => employees.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Images for posts on Wings' own site, held here until the draft is sent.
+ *
+ * The same idea as ad creatives, with the site's rules (WebP allowed, 5 MB).
+ * They reach WordPress only when the operator sends the draft. Once one has
+ * been uploaded there, its media id is remembered, so a retry after a failure
+ * halfway reuses it instead of filling the site's library with duplicates.
+ */
+export const siteMediaUploads = pgTable('site_media_uploads', {
+  tenantId: tenantId(),
+  id: uuid('id').primaryKey().defaultRandom(),
+  mimeType: text('mime_type').notNull(),
+  width: integer('width').notNull(),
+  height: integer('height').notNull(),
+  byteSize: integer('byte_size').notNull(),
+  sha256: text('sha256').notNull(),
+  data: bytea('data').notNull(),
+  wordpressMediaId: bigint('wordpress_media_id', { mode: 'number' }),
+  wordpressSourceUrl: text('wordpress_source_url'),
   uploadedBy: uuid('uploaded_by').references(() => employees.id),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });

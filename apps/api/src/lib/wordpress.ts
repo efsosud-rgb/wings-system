@@ -1,10 +1,19 @@
 /**
  * WordPress REST client for Wings' own site.
  *
- * It can do exactly one thing: create a **draft** post. `status` is not a
- * parameter — it is the literal 'draft' below — so no caller, bug or agent can
- * put something on the public site through this class. Publishing is a person
- * pressing the button inside WordPress. It never edits or deletes anything.
+ * What it can do is the whole of what the studio may do to the public site:
+ *
+ *  - read the site's categories and tags;
+ *  - add a NEW item to the media library;
+ *  - create a NEW post as a **draft**.
+ *
+ * `status` is not a parameter — it is the literal 'draft' below — so no caller,
+ * bug or agent can put something on the public site through this class. Going
+ * live is a person pressing the button inside WordPress. Every write is a POST
+ * to a collection (`/posts`, `/media`): there is no method here that takes the
+ * id of something already on the site, so nothing existing can be edited,
+ * replaced or deleted. It creates no terms either: the site's user is an
+ * Author, who cannot, and the studio only offers the terms that exist.
  */
 
 export interface WordPressConfig {
@@ -22,6 +31,64 @@ export type DraftOutcome =
   | { status: 'failed'; code: string; message: string }
   /** The request may have landed; a person must look before sending again. */
   | { status: 'unknown'; reason: string };
+
+export type MediaOutcome =
+  | { status: 'uploaded'; mediaId: number; sourceUrl: string }
+  | { status: 'failed'; code: string; message: string }
+  | { status: 'unknown'; reason: string };
+
+export interface WordPressTerm {
+  id: number;
+  name: string;
+  count: number;
+}
+
+export interface DraftPostInput {
+  title: string;
+  excerpt: string;
+  contentHtml: string;
+  categories?: number[];
+  tags?: number[];
+  featuredMediaId?: number | null;
+}
+
+export interface MediaInput {
+  bytes: Buffer;
+  mimeType: string;
+  /** ASCII file name with extension; it becomes the attachment's slug. */
+  filename: string;
+  title: string;
+  altText: string;
+  caption: string;
+}
+
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+};
+
+/** Term names arrive HTML-encoded ("Governança &amp; Franchising"). */
+export function decodeEntities(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, body: string) => {
+    if (body[0] === '#') {
+      const code =
+        body[1]?.toLowerCase() === 'x' ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
+      return Number.isFinite(code) && code > 0 && code <= 0x10ffff
+        ? String.fromCodePoint(code)
+        : whole;
+    }
+    return NAMED_ENTITIES[body.toLowerCase()] ?? whole;
+  });
+}
+
+interface ErrorBody {
+  code?: unknown;
+  message?: unknown;
+}
 
 export class WordPressClient {
   readonly siteHost: string;
@@ -43,77 +110,158 @@ export class WordPressClient {
     this.timeoutMs = config.timeoutMs ?? 15_000;
   }
 
-  async createDraftPost(input: {
-    title: string;
-    excerpt: string;
-    contentHtml: string;
-  }): Promise<DraftOutcome> {
+  /** Every category or tag on the site, following pagination. Read-only. */
+  private async listTerms(taxonomy: 'categories' | 'tags'): Promise<WordPressTerm[]> {
+    const terms: WordPressTerm[] = [];
+    // 100 is the API's maximum page size; ten pages is far beyond this site.
+    for (let page = 1; page <= 10; page += 1) {
+      const response = await this.fetchImpl(
+        `${this.root}/wp-json/wp/v2/${taxonomy}?per_page=100&page=${page}&orderby=name&_fields=id,name,count`,
+        {
+          headers: { Authorization: this.authorization },
+          signal: AbortSignal.timeout(this.timeoutMs),
+        },
+      );
+      if (!response.ok)
+        throw new Error(`WordPress answered ${response.status} listing ${taxonomy}`);
+      const body = (await response.json()) as { id?: unknown; name?: unknown; count?: unknown }[];
+      for (const term of body) {
+        if (typeof term.id === 'number' && typeof term.name === 'string') {
+          terms.push({
+            id: term.id,
+            name: decodeEntities(term.name),
+            count: typeof term.count === 'number' ? term.count : 0,
+          });
+        }
+      }
+      const pages = Number(response.headers.get('x-wp-totalpages') ?? '1');
+      if (page >= pages || body.length === 0) break;
+    }
+    return terms;
+  }
+
+  listCategories(): Promise<WordPressTerm[]> {
+    return this.listTerms('categories');
+  }
+
+  listTags(): Promise<WordPressTerm[]> {
+    return this.listTerms('tags');
+  }
+
+  /** POSTs and sorts the answer into created / refused / don't know. */
+  private async post(
+    path: string,
+    init: { headers: Record<string, string>; body: string | Buffer },
+    timeoutMs: number,
+  ): Promise<
+    | { ok: true; body: Record<string, unknown> }
+    | {
+        ok: false;
+        outcome:
+          | { status: 'failed'; code: string; message: string }
+          | { status: 'unknown'; reason: string };
+      }
+  > {
     let response: Response;
     try {
-      response = await this.fetchImpl(`${this.root}/wp-json/wp/v2/posts`, {
+      response = await this.fetchImpl(`${this.root}/wp-json/wp/v2/${path}`, {
         method: 'POST',
-        headers: { Authorization: this.authorization, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: input.title,
-          excerpt: input.excerpt,
-          content: input.contentHtml,
-          status: 'draft',
-        }),
-        signal: AbortSignal.timeout(this.timeoutMs),
+        headers: { Authorization: this.authorization, ...init.headers },
+        body: init.body,
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (error) {
       return {
-        status: 'unknown',
-        reason: `transport failure: ${error instanceof Error ? error.name : 'unknown'}`,
+        ok: false,
+        outcome: {
+          status: 'unknown',
+          reason: `transport failure: ${error instanceof Error ? error.name : 'unknown'}`,
+        },
       };
     }
 
     const text = await response.text();
-    let body: { id?: unknown; status?: unknown; code?: unknown; message?: unknown } = {};
+    let body: Record<string, unknown> & ErrorBody = {};
     try {
       body = JSON.parse(text) as typeof body;
     } catch {
       // Not JSON: a proxy error page, or a site without the REST API.
     }
 
-    if (response.status >= 500)
-      return { status: 'unknown', reason: `site error ${response.status}` };
+    if (response.status >= 500) {
+      return { ok: false, outcome: { status: 'unknown', reason: `site error ${response.status}` } };
+    }
     if (!response.ok) {
       return {
-        status: 'failed',
-        code: typeof body.code === 'string' ? body.code : String(response.status),
-        message:
-          typeof body.message === 'string'
-            ? body.message
-            : `WordPress respondeu ${response.status}`,
+        ok: false,
+        outcome: {
+          status: 'failed',
+          code: typeof body.code === 'string' ? body.code : String(response.status),
+          message:
+            typeof body.message === 'string'
+              ? body.message
+              : `WordPress respondeu ${response.status}`,
+        },
       };
     }
-    if (typeof body.id !== 'number') {
+    return { ok: true, body };
+  }
+
+  /** Adds ONE new item to the media library. Never touches an existing one. */
+  async uploadMedia(input: MediaInput): Promise<MediaOutcome> {
+    const query = new URLSearchParams({
+      title: input.title,
+      alt_text: input.altText,
+      caption: input.caption,
+    });
+    const result = await this.post(
+      `media?${query.toString()}`,
+      {
+        headers: {
+          'Content-Type': input.mimeType,
+          'Content-Disposition': `attachment; filename="${input.filename.replace(/[^A-Za-z0-9._-]/g, '')}"`,
+        },
+        body: input.bytes,
+      },
+      // A 5 MB image over a shared host takes longer than a JSON post.
+      Math.max(this.timeoutMs, 60_000),
+    );
+    if (!result.ok) return result.outcome;
+
+    const { id, source_url: sourceUrl } = result.body;
+    if (typeof id !== 'number' || typeof sourceUrl !== 'string') {
+      return { status: 'unknown', reason: 'the site answered without a media id' };
+    }
+    return { status: 'uploaded', mediaId: id, sourceUrl };
+  }
+
+  async createDraftPost(input: DraftPostInput): Promise<DraftOutcome> {
+    const result = await this.post(
+      'posts',
+      {
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: input.title,
+          excerpt: input.excerpt,
+          content: input.contentHtml,
+          status: 'draft',
+          ...(input.categories?.length ? { categories: input.categories } : {}),
+          ...(input.tags?.length ? { tags: input.tags } : {}),
+          ...(input.featuredMediaId ? { featured_media: input.featuredMediaId } : {}),
+        }),
+      },
+      this.timeoutMs,
+    );
+    if (!result.ok) return result.outcome;
+
+    const { id } = result.body;
+    if (typeof id !== 'number') {
       return { status: 'unknown', reason: 'the site answered without a post id' };
     }
     return {
       status: 'draft_created',
-      postId: body.id,
-      editUrl: `${this.root}/wp-admin/post.php?post=${body.id}&action=edit`,
+      postId: id,
+      editUrl: `${this.root}/wp-admin/post.php?post=${id}&action=edit`,
     };
   }
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-/** Plain text to paragraphs. Everything is escaped: the operator sends no markup. */
-export function plainTextToHtml(text: string): string {
-  return text
-    .replace(/\r\n/g, '\n')
-    .split(/\n{2,}/)
-    .map((block) => block.trim())
-    .filter((block) => block !== '')
-    .map((block) => `<p>${escapeHtml(block).replace(/\n/g, '<br />')}</p>`)
-    .join('\n');
 }
