@@ -4,7 +4,8 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { adAccounts } from '../../db/schema/index.js';
+import { sql } from 'drizzle-orm';
+import { adAccounts, marketingAudienceProfiles, WINGS_TENANT_ID } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
@@ -316,7 +317,7 @@ describe('the tenant audience profile', () => {
     });
     const after = await app.inject({ url: '/ads/audience-profile', cookies: marketing });
     const body = after.json<{ profile: { reach: unknown; updatedByName: string | null } }>();
-    expect(body.profile.reach).toEqual({ states: ['RJ'], cities: [] });
+    expect(body.profile.reach).toEqual({ states: ['RJ'], cities: [], customLocations: [] });
     expect(body.profile.updatedByName).not.toBeNull();
   });
 
@@ -328,7 +329,7 @@ describe('the tenant audience profile', () => {
     const empty = await put({ ...profile, reach: { states: [], cities: [] } });
     expect(empty.statusCode).toBe(400);
     expect(empty.json<{ message: string }>().message).toBe(
-      'Escolha pelo menos um estado ou uma cidade',
+      'Escolha pelo menos um estado, uma cidade ou um ponto no mapa',
     );
     expect((await put({ ...profile, reach: { states: ['XX'], cities: [] } })).statusCode).toBe(400);
     expect((await put(profile, await cookiesFor('vendedor_expansao'))).statusCode).toBe(403);
@@ -350,5 +351,87 @@ describe('the tenant audience profile', () => {
     const approval = detail.json<{ approval: ApprovalDetail }>().approval;
     expect(approval.draft?.reach.cities).toEqual([{ name: 'Curitiba', state: 'PR' }]);
     expect(approval.draft?.idealCustomerProfile).toContain('Empreendedor');
+  });
+});
+
+describe('reach by radius on the map', () => {
+  const point = { latitude: -22.9056, longitude: -47.0608, radiusKm: 25, label: 'Campinas' };
+
+  it('travels with the request, as the only reach if the operator wants', async () => {
+    const payload = await draft({ reach: { states: [], cities: [], customLocations: [point] } });
+    const created = await app.inject({
+      method: 'POST',
+      url: '/ads/campaign-requests',
+      cookies: await cookiesFor('marketing'),
+      payload,
+    });
+    expect(created.statusCode).toBe(201);
+    const detail = await app.inject({
+      url: `/ads/approvals/${created.json<{ approvalId: string }>().approvalId}`,
+      cookies: await cookiesFor('admin_master'),
+    });
+    expect(detail.json<{ approval: ApprovalDetail }>().approval.draft?.reach).toEqual({
+      states: [],
+      cities: [],
+      customLocations: [point],
+    });
+  });
+
+  it('refuses a radius Meta would not take', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/ads/campaign-requests',
+      cookies: await cookiesFor('marketing'),
+      payload: await draft({
+        reach: { states: [], cities: [], customLocations: [{ ...point, radiusKm: 200 }] },
+      }),
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json<{ message: string }>().message).toBe('O raio máximo é 80 km');
+  });
+
+  it('reads back a profile and a draft saved before the map existed', async () => {
+    const old = { states: ['SP'], cities: [] };
+    await db
+      .insert(marketingAudienceProfiles)
+      .values({
+        tenantId: WINGS_TENANT_ID,
+        idealCustomerProfile: 'Perfil salvo antes do mapa existir.',
+        reach: old,
+      })
+      .onConflictDoUpdate({ target: marketingAudienceProfiles.tenantId, set: { reach: old } });
+
+    const profile = await app.inject({
+      url: '/ads/audience-profile',
+      cookies: await cookiesFor('marketing'),
+    });
+    expect(profile.json<{ profile: { reach: unknown } }>().profile.reach).toEqual({
+      ...old,
+      customLocations: [],
+    });
+
+    // A draft stored without the field still opens, and still matches its hash.
+    const created = await app.inject({
+      method: 'POST',
+      url: '/ads/campaign-requests',
+      cookies: await cookiesFor('marketing'),
+      payload: await draft(),
+    });
+    const { approvalId, changeRequestId } = created.json<{
+      approvalId: string;
+      changeRequestId: string;
+    }>();
+    await db.execute(sql`
+      update ad_campaign_drafts set payload = payload #- '{reach,customLocations}'
+       where id = (select draft_id from ad_change_requests where id = ${changeRequestId})
+    `);
+    const detail = await app.inject({
+      url: `/ads/approvals/${approvalId}`,
+      cookies: await cookiesFor('admin_master'),
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(
+      detail.json<{ approval: ApprovalDetail }>().approval.draft?.reach.customLocations,
+    ).toEqual([]);
   });
 });

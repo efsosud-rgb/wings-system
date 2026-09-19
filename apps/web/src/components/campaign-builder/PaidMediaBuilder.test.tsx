@@ -1,4 +1,4 @@
-import type { AudienceProfile, PacingSummary } from '@wings/shared';
+import type { AudienceProfile, CustomLocation, PacingSummary } from '@wings/shared';
 import { cleanup, fireEvent, render as renderBare, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -58,6 +58,38 @@ vi.mock('../../api/ads.js', () => ({
     error: null,
     ...launchState.current,
   }),
+}));
+
+// Leaflet needs a real layout engine; the builder only cares what the map
+// reports, so a stand-in reports a click and a radius change.
+vi.mock('./RadiusMap.js', () => ({
+  RadiusMap: ({
+    value,
+    onChange,
+  }: {
+    value: CustomLocation[];
+    onChange: (next: CustomLocation[]) => void;
+  }) => (
+    <div>
+      <button
+        type="button"
+        onClick={() =>
+          onChange([
+            ...value,
+            { latitude: -22.9056, longitude: -47.0608, radiusKm: 15, label: 'Campinas' },
+          ])
+        }
+      >
+        clicar no mapa
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange(value.map((item) => ({ ...item, radiusKm: 40 })))}
+      >
+        raio 40
+      </button>
+    </div>
+  ),
 }));
 
 const render = (ui: ReactElement) => renderBare(<MemoryRouter>{ui}</MemoryRouter>);
@@ -148,6 +180,52 @@ describe('the paid-media builder', () => {
     expect(screen.queryByText(/passa do que a conta ainda permite/)).toBeNull();
   });
 
+  it('opens every section with what the choice changes in practice', () => {
+    render(<PaidMediaBuilder canRequest />);
+    const sections = screen.getAllByRole('region').filter((el) => el.matches('.builder-section'));
+    expect(sections).toHaveLength(13);
+    for (const section of sections) {
+      expect(section.querySelector('.builder-why')?.textContent?.length).toBeGreaterThan(40);
+    }
+    expect(screen.getByText(/Define como a Meta cobra e para quem mostra/)).toBeTruthy();
+    expect(screen.getByText(/o lead chega no CRM com a origem certa/)).toBeTruthy();
+    // The how-to hints under the fields are still there.
+    expect(screen.getByText('A Meta pode gastar até 25% acima disto num dia.')).toBeTruthy();
+  });
+
+  it('says which field the estimate is waiting for, never a bare dash', () => {
+    render(<PaidMediaBuilder canRequest />);
+    const cost = () => screen.getByText('Custo total estimado', { selector: 'span' }).parentElement;
+    expect(cost()?.textContent).toContain('Falta a verba por dia.');
+
+    type(screen.getByLabelText(/Verba por dia/), '20 reais');
+    expect(cost()?.textContent).toContain('Não entendi “20 reais”');
+
+    type(screen.getByLabelText(/Verba por dia/), '0,50');
+    expect(cost()?.textContent).toContain('pelo menos R$ 1,00');
+
+    type(screen.getByLabelText(/Verba por dia/), '20');
+    type(screen.getByLabelText(/^Fim/), '');
+    expect(cost()?.textContent).toContain('Falta escolher o início e o fim');
+
+    type(screen.getByLabelText(/^Início/), '2026-09-20');
+    type(screen.getByLabelText(/^Fim/), '2026-09-19');
+    expect(cost()?.textContent).toContain('O fim da campanha está antes do início.');
+
+    type(screen.getByLabelText(/^Fim/), '2026-09-26');
+    // toLocaleString puts a non-breaking space after R$.
+    expect(cost()?.textContent).toMatch(/R\$\s175,00/);
+    expect(cost()?.textContent).not.toContain('—');
+  });
+
+  it('reads a dot as a decimal mark, not as a hundred times the budget', () => {
+    render(<PaidMediaBuilder canRequest />);
+    type(screen.getByLabelText(/^Início/), '2026-09-20');
+    type(screen.getByLabelText(/^Fim/), '2026-09-26');
+    type(screen.getByLabelText(/Verba por dia/), '20.00');
+    expect(screen.getAllByText('R$ 175,00').length).toBeGreaterThan(0);
+  });
+
   it('warns when the campaign would not fit under the ceiling', () => {
     pacing.current = buildPacing({ availableCents: 10_000 });
     render(<PaidMediaBuilder canRequest />);
@@ -182,6 +260,30 @@ describe('the paid-media builder', () => {
     expect(screen.getByText(/Não é a prévia oficial da Meta/)).toBeTruthy();
   });
 
+  it('previews in the placement of the chosen format, and lets the operator see the other cut', () => {
+    render(<PaidMediaBuilder canRequest />);
+    const media = () => document.querySelector<HTMLElement>('.ad-preview-media')?.style.aspectRatio;
+    const pressed = (name: string) =>
+      screen.getByRole('button', { name }).getAttribute('aria-pressed');
+
+    // Feed quadrado is the default format.
+    expect(pressed('Feed')).toBe('true');
+    expect(media()).toBe('1080 / 1080');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stories' }));
+    expect(media()).toBe('9 / 16');
+    expect(screen.getByText(/É assim que a mesma imagem seria cortada em Stories/)).toBeTruthy();
+
+    // Back on the chosen side, the preview follows section 6 again.
+    fireEvent.click(screen.getByRole('button', { name: 'Feed' }));
+    type(screen.getByLabelText(/^Formato/), 'stories_reels');
+    expect(pressed('Stories')).toBe('true');
+    expect(media()).toBe('9 / 16');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Feed' }));
+    expect(media()).toBe('4 / 5');
+  });
+
   it('refuses a file type before sending it anywhere', () => {
     render(<PaidMediaBuilder canRequest />);
     chooseImage(screen.getAllByLabelText(/^Imagem — Variação/)[0] as Element, 'image/webp');
@@ -192,7 +294,11 @@ describe('the paid-media builder', () => {
   it('starts from the audience Wings saved, and leaves it editable', () => {
     savedAudience.current = {
       idealCustomerProfile: 'Empreendedor com capital próprio e perfil de gestão.',
-      reach: { states: ['SP', 'PR'], cities: [{ name: 'Goiânia', state: 'GO' }] },
+      reach: {
+        states: ['SP', 'PR'],
+        cities: [{ name: 'Goiânia', state: 'GO' }],
+        customLocations: [],
+      },
       updatedAt: '2026-09-18T12:00:00.000Z',
       updatedByName: 'Eric',
     };
@@ -205,6 +311,26 @@ describe('the paid-media builder', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Remover Goiânia' }));
     expect(screen.getByText('Nenhuma cidade adicionada.')).toBeTruthy();
+  });
+
+  it('takes a radius on the map into the summary and into the request', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    fillValidCampaign();
+    // The map alone is a valid reach: no state, no city.
+    fireEvent.click(screen.getByRole('checkbox', { name: 'SP' }));
+    fireEvent.click(screen.getByRole('button', { name: 'clicar no mapa' }));
+    fireEvent.click(screen.getByRole('button', { name: 'raio 40' }));
+    expect(screen.getByText('40 km ao redor de Campinas')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
+    expect(requestCampaign.mock.calls[0]?.[0].reach).toEqual({
+      states: [],
+      cities: [],
+      customLocations: [
+        { latitude: -22.9056, longitude: -47.0608, radiusKm: 40, label: 'Campinas' },
+      ],
+    });
   });
 
   it('adds cities, and saves profile and reach as the Wings default', () => {
@@ -222,7 +348,7 @@ describe('the paid-media builder', () => {
     fireEvent.click(screen.getByRole('button', { name: /Salvar perfil e alcance/ }));
     expect(saveAudience).toHaveBeenCalledWith({
       idealCustomerProfile: 'Empreendedor com perfil de gestão.',
-      reach: { states: [], cities: [{ name: 'Curitiba', state: 'PR' }] },
+      reach: { states: [], cities: [{ name: 'Curitiba', state: 'PR' }], customLocations: [] },
     });
   });
 
@@ -261,7 +387,7 @@ describe('the paid-media builder', () => {
       name: 'Sacrifício — teste de escrita',
       dailyBudgetCents: 600,
       startPaused: true,
-      reach: { states: ['SP'], cities: [] },
+      reach: { states: ['SP'], cities: [], customLocations: [] },
       variations: [
         { creativeId: '00000001-0000-4000-8000-000000000000' },
         { creativeId: '00000002-0000-4000-8000-000000000000' },

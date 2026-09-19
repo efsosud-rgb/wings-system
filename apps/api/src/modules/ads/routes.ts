@@ -213,7 +213,18 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         executedAt: iso(row.executed_at),
         lastExecutionOutcome: row.last_execution_outcome,
         executionAvailable: createMetaClient(env, row.account_external_id).canWrite,
-        draft: row.change_kind === 'create_campaign' ? row.draft_payload : null,
+        // Shaped for display only; the approval hash is over the stored payload.
+        // A draft from before the map existed has no customLocations.
+        draft:
+          row.change_kind === 'create_campaign' && row.draft_payload
+            ? {
+                ...row.draft_payload,
+                reach: {
+                  ...row.draft_payload.reach,
+                  customLocations: row.draft_payload.reach.customLocations ?? [],
+                },
+              }
+            : null,
         auditTrail: trail.map((entry) => ({
           at: entry.at.toISOString(),
           action: entry.action,

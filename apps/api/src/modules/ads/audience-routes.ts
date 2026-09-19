@@ -1,4 +1,4 @@
-import { audienceProfileSchema, type AudienceProfile, type Reach } from '@wings/shared';
+import { audienceProfileSchema, reachSchema, type AudienceProfile } from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { employees, marketingAudienceProfiles, WINGS_TENANT_ID } from '../../db/schema/index.js';
@@ -32,7 +32,9 @@ export const audienceRoutes: FastifyPluginAsync = async (app) => {
       const profile: AudienceProfile | null = row
         ? {
             idealCustomerProfile: row.idealCustomerProfile,
-            reach: row.reach as Reach,
+            // Parsed on the way out: a reach saved before the map existed has no
+            // customLocations, and the schema's default fills that in.
+            reach: reachSchema.parse(row.reach),
             updatedAt: row.updatedAt.toISOString(),
             updatedByName: row.updatedByName,
           }

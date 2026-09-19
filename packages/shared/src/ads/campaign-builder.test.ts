@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   CREATIVE_FORMATS,
+  describeReach,
+  reachSchema,
   applyUtms,
   buildUtms,
   campaignDays,
@@ -93,6 +95,40 @@ describe('creative proportions', () => {
     expect(matchesFormat({ width: 2160, height: 2160 }, square)).toBe(true);
     expect(matchesFormat({ width: 1080, height: 1090 }, square)).toBe(true);
     expect(matchesFormat({ width: 1200, height: 628 }, square)).toBe(false);
+  });
+});
+
+describe('reach', () => {
+  const point = { latitude: -22.9056, longitude: -47.0608, radiusKm: 25, label: 'Campinas' };
+
+  it('accepts a radius on the map alone, and describes it for the summary', () => {
+    const reach = reachSchema.parse({ states: [], cities: [], customLocations: [point] });
+    expect(describeReach(reach)).toBe('25 km ao redor de Campinas');
+    expect(
+      describeReach({
+        states: ['SP'],
+        cities: [],
+        customLocations: [{ ...point, label: undefined }],
+      }),
+    ).toBe('SP (estado todo) · 25 km ao redor de Ponto 1 (-22.906, -47.061)');
+  });
+
+  it('keeps reading a reach saved before the map existed', () => {
+    const old = { states: ['SP'], cities: [] };
+    expect(reachSchema.parse(old).customLocations).toEqual([]);
+    expect(describeReach(old as never)).toBe('SP (estado todo)');
+  });
+
+  it('holds the radius to what Meta documents, and refuses an empty reach', () => {
+    const parse = (radiusKm: number) =>
+      reachSchema.safeParse({ states: [], cities: [], customLocations: [{ ...point, radiusKm }] });
+    expect(parse(0).success).toBe(false);
+    expect(parse(81).success).toBe(false);
+    expect(parse(12.5).success).toBe(false);
+    expect(parse(80).success).toBe(true);
+    expect(reachSchema.safeParse({ states: [], cities: [], customLocations: [] }).success).toBe(
+      false,
+    );
   });
 });
 
