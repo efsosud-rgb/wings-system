@@ -354,7 +354,7 @@ function CreativeSlot({
   /** The manual placements include Stories or Reels, which are 9:16. */
   vertical?: boolean;
   onUploaded: (creative: CreativeUpload) => void;
-  /** "Escolher da biblioteca", when the person may read the media library. */
+  /** "Escolher do Drive", when the person may read the media library. */
   library?: ReactNode;
 }) {
   const upload = useUploadCreative();
@@ -673,7 +673,7 @@ export function PaidMediaBuilder({
   applyRef,
 }: {
   canRequest: boolean;
-  /** `marketing.media.read`: shows "Escolher da biblioteca" beside the uploads. */
+  /** `marketing.media.read`: shows "Escolher do Drive" beside the uploads. */
   canPickMedia?: boolean;
   /** Filled while the builder is on screen, null otherwise. */
   applyRef?: MutableRefObject<BuilderBridge | null>;
@@ -1560,16 +1560,6 @@ export function PaidMediaBuilder({
             title="Criativo"
             why="A imagem é o que faz a pessoa parar de rolar o feed. Uma por variação, para a Meta descobrir qual segura mais gente."
           >
-            <div className="form-actions">
-              <Button
-                type="button"
-                variant="ghost"
-                disabled
-                title="Integração com o Drive em breve"
-              >
-                Escolher do Drive (em breve)
-              </Button>
-            </div>
             <p className="field-hint">
               Um criativo por variação: imagem única, vídeo ou carrossel. Fica guardado no Wings
               System — só vai para a Meta quando um pedido aprovado for executado.

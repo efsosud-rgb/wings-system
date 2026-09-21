@@ -6,7 +6,7 @@ import { MediaPicker } from '../media-studio/MediaLibrary.js';
 import { Button } from '../ui.js';
 
 /**
- * "Escolher da biblioteca", beside an upload control. Picking an asset asks the
+ * "Escolher do Drive", beside an upload control. Picking an asset asks the
  * server to make it usable by the builder — the same checks an upload goes
  * through — and hands back the id the variation needs, plus the asset's own id.
  */
@@ -28,10 +28,10 @@ export function LibraryPick({
         type="button"
         variant="ghost"
         disabled={bridge.isPending}
-        aria-label={`Escolher da biblioteca — ${label}`}
+        aria-label={`Escolher do Drive — ${label}`}
         onClick={() => setOpen(true)}
       >
-        {bridge.isPending ? 'Trazendo da biblioteca…' : 'Escolher da biblioteca'}
+        {bridge.isPending ? 'Trazendo da biblioteca…' : 'Escolher do Drive'}
       </Button>
       {bridge.error && (
         <p className="field-error" role="alert">

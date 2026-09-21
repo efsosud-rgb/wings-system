@@ -15,6 +15,8 @@ export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
   readonly retryAfterSeconds?: number;
+  /** The whole answer, for the few refusals that carry more than a message. */
+  readonly body: ApiErrorBody;
 
   constructor(status: number, body: ApiErrorBody) {
     super(body.message ?? 'Erro inesperado. Tente novamente.');
@@ -22,6 +24,7 @@ export class ApiError extends Error {
     this.status = status;
     this.code = body.error ?? 'unknown';
     this.retryAfterSeconds = body.retryAfterSeconds;
+    this.body = body;
   }
 }
 
@@ -59,4 +62,5 @@ export const api = {
     request<T>(path, { method: 'PUT', body: JSON.stringify(payload) }),
   patch: <T>(path: string, payload: unknown) =>
     request<T>(path, { method: 'PATCH', body: JSON.stringify(payload) }),
+  delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 };
