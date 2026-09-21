@@ -50,8 +50,9 @@ A caixa "E se o orçamento diário fosse…" é **exploração**: consulta
 Para aplicar outro valor é preciso recusar e pedir uma nova alteração — o
 sistema nunca aprova um número diferente do solicitado.
 
-> A sobreentrega usada é a da Meta (1,25). O Google entrega até **2×** o diário;
-> quando aquele adaptador existir, o fator terá de vir da plataforma.
+> A sobreentrega usada é a da Meta (1,25), e o simulador só atende alterações de
+> campanhas existentes, que no Google o sistema não faz. Os fatores do Google
+> (2,0× num dia, 1,0× no período) estão em `tetos-reais.md`.
 
 ## 3. Visão por campanha (lote)
 

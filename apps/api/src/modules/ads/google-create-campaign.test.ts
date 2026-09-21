@@ -144,7 +144,8 @@ describe('asking for a Google campaign', () => {
 
   it('is refused by the internal ceiling, judged as if the campaign were running', async () => {
     const { accountId } = await world();
-    // R$ 1.050 usable; R$ 600/day at Google's 2x is R$ 1.200 for a single day.
+    // A one-day campaign, so the single-day check decides: R$ 1.050 usable, and
+    // R$ 600/day at Google's 2x is R$ 1.200 for that day.
     const reserved = await request(accountId, searchDraft({ dailyBudgetCents: 60_000 }));
 
     expect(reserved).toMatchObject({ ok: false, reason: 'usable_would_be_exceeded' });
@@ -157,7 +158,7 @@ describe('asking for a Google campaign', () => {
 
   it('is refused by the platform ceiling: the prepaid balance', async () => {
     const { accountId } = await world();
-    // R$ 40 left on the prepaid account; R$ 30/day at 2x needs R$ 60.
+    // R$ 40 left on the prepaid account; one day of R$ 30 at 2x needs R$ 60.
     await db
       .update(budgetPeriods)
       .set({ platformRemainingCents: 4000, platformLimitSource: 'google.account_budget' })
@@ -401,8 +402,140 @@ describe('executing an approved Google campaign', () => {
   });
 });
 
+/**
+ * Google makes two promises: up to 2x the budget on ONE day, and no more than
+ * the budget itself over the period (30.4 x daily in a month). The month is
+ * sized by the second; the first only decides a run of a single day. Dates are
+ * fixed here so the number of days left never depends on when the suite runs.
+ */
+describe('Google exposure: 1.0x over the period, 2.0x for a single day', () => {
+  const MARCH = '2026-03-01';
+  // 12 March, midday in São Paulo: 20 days left in the month, counting today.
+  const MID_MONTH = new Date('2026-03-12T15:00:00Z');
+  const LAST_DAY = new Date('2026-03-31T15:00:00Z');
+
+  async function marchWorld() {
+    const externalId = String(1_000_000_000 + Math.floor(Math.random() * 8e9));
+    const [account] = await db
+      .insert(adAccounts)
+      .values({ platform: 'google', externalId, name: 'Wings Company — Google Ads' })
+      .returning({ id: adAccounts.id });
+    if (!account) throw new Error('failed');
+    // R$ 1.500 cap, R$ 1.050 usable — the production figures.
+    await openPeriod(db, {
+      adAccountId: account.id,
+      periodMonth: MARCH,
+      capCents: 150_000,
+      usablePercent: 70,
+    });
+    return { accountId: account.id, externalId };
+  }
+
+  async function requestAt(accountId: string, draft: CampaignDraft, now: Date) {
+    const requester = await createEmployee(db, { role: 'marketing', sector: 'marketing' });
+    return reserveCampaignCreation(db, {
+      adAccountId: accountId,
+      draft,
+      requestedBy: requester.id,
+      now,
+    });
+  }
+
+  it('judges a new request at budget x days x 1.0', async () => {
+    const { accountId } = await marchWorld();
+    // R$ 50 x 20 days = R$ 1.000, inside R$ 1.050. At 2x it would be R$ 2.000.
+    const fits = await requestAt(
+      accountId,
+      searchDraft({ startDate: '2026-03-12', endDate: '2026-03-31', dailyBudgetCents: 5000 }),
+      MID_MONTH,
+    );
+    expect(fits.ok).toBe(true);
+
+    // R$ 55 x 20 days = R$ 1.100: over the usable slice even at 1.0.
+    const tooMuch = await requestAt(
+      accountId,
+      searchDraft({ startDate: '2026-03-12', endDate: '2026-03-31', dailyBudgetCents: 5500 }),
+      MID_MONTH,
+    );
+    expect(tooMuch).toMatchObject({ ok: false, reason: 'usable_would_be_exceeded' });
+  });
+
+  it('holds the prepaid balance to the same 1.0', async () => {
+    const { accountId } = await marchWorld();
+    await db
+      .update(budgetPeriods)
+      .set({ platformRemainingCents: 46_988, platformLimitSource: 'google.account_budget' })
+      .where(eq(budgetPeriods.adAccountId, accountId));
+    const week = { startDate: '2026-03-12', endDate: '2026-03-18' };
+
+    // R$ 60 x 7 days = R$ 420 fits R$ 469,88; at 2x (R$ 840) it would not.
+    expect(
+      (await requestAt(accountId, searchDraft({ ...week, dailyBudgetCents: 6000 }), MID_MONTH)).ok,
+    ).toBe(true);
+    // R$ 70 x 7 days = R$ 490 does not.
+    expect(
+      await requestAt(accountId, searchDraft({ ...week, dailyBudgetCents: 7000 }), MID_MONTH),
+    ).toMatchObject({ ok: false, reason: 'platform_limit_would_be_exceeded' });
+  });
+
+  it('keeps 2.0x when a single day of the campaign falls in the month', async () => {
+    const { accountId } = await marchWorld();
+    const intoApril = { startDate: '2026-03-31', endDate: '2026-04-05' };
+
+    // One day left: R$ 550 can become R$ 1.100 today, over R$ 1.050 usable.
+    expect(
+      await requestAt(accountId, searchDraft({ ...intoApril, dailyBudgetCents: 55_000 }), LAST_DAY),
+    ).toMatchObject({ ok: false, reason: 'usable_would_be_exceeded' });
+    // R$ 500 can become R$ 1.000, which fits.
+    expect(
+      (
+        await requestAt(
+          accountId,
+          searchDraft({ ...intoApril, dailyBudgetCents: 50_000 }),
+          LAST_DAY,
+        )
+      ).ok,
+    ).toBe(true);
+  });
+
+  it('never lets two days cost less than one worst day', async () => {
+    const { accountId } = await marchWorld();
+    // Two days at 1.0 and one day at 2.0 are the same R$ 1.100: still refused.
+    expect(
+      await requestAt(
+        accountId,
+        searchDraft({ startDate: '2026-03-30', endDate: '2026-03-31', dailyBudgetCents: 55_000 }),
+        new Date('2026-03-30T15:00:00Z'),
+      ),
+    ).toMatchObject({ ok: false, reason: 'usable_would_be_exceeded' });
+  });
+
+  it('reconciles committed at budget x days left x 1.0, without freezing', async () => {
+    const { accountId, externalId } = await marchWorld();
+    const api = fakeGoogleApi({
+      customerId: externalId,
+      campaigns: [
+        { id: '111', name: 'Search - Geral', status: 'ENABLED', amountMicros: '50000000' },
+      ],
+    });
+
+    const result = await reconcileAccount(
+      db,
+      new GoogleAdsPlatformClient(api.reader),
+      accountId,
+      MID_MONTH,
+    );
+
+    // R$ 50 x 20 days = R$ 1.000. The old 2x read R$ 2.000 here, clipped it to
+    // the usable slice and froze an account that was inside its plan.
+    expect((await getPeriodState(db, accountId, MARCH))?.committedCents).toBe(100_000);
+    expect(result.outOfBandChangeDetected).toBe(false);
+    expect(result.killSwitchEngaged).toBe(false);
+  });
+});
+
 describe('reconciling a Google account', () => {
-  it('counts an active campaign at 2x and does not freeze over a low prepaid balance', async () => {
+  it('counts an active campaign at 1x over the period and does not freeze over a low prepaid balance', async () => {
     const { accountId, externalId } = await world({ externalId: CUSTOMER, reconciled: false });
     const api = fakeGoogleApi({
       customerId: externalId,
@@ -421,12 +554,13 @@ describe('reconciling a Google account', () => {
     const period = await getPeriodState(db, accountId, PERIOD);
     expect(period?.platformRemainingCents).toBe(500);
     expect(period?.platformLimitSource).toBe('google.account_budget');
-    // R$ 10/day, at Google's 2x, for the days left in the month — capped by usable.
+    // R$ 10/day for the days left in the month, at Google's PERIOD factor of
+    // 1.0 — the 2x is a one-day promise and never sizes the month.
     const daysLeft =
       new Date(Date.UTC(Number(TODAY.slice(0, 4)), Number(TODAY.slice(5, 7)), 0)).getUTCDate() -
       Number(TODAY.slice(8, 10)) +
       1;
-    expect(period?.committedCents).toBe(Math.min(1000 * daysLeft * 2, 105_000));
+    expect(period?.committedCents).toBe(1000 * daysLeft);
   });
 
   it('still freezes when budgets in Google exceed the internal plan', async () => {

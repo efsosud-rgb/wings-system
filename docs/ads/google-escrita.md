@@ -37,8 +37,8 @@ e a tela de aprovação diz isso.
 Campanha pausada reserva **zero**, como na Meta. Mas uma casca pausada no
 Google pode ser ligada por qualquer pessoa com acesso ao Google Ads, fora do
 sistema. Por isso o pedido é **julgado como se a campanha estivesse ativa**:
-`verba × dias neste mês × 2,0` precisa caber na parcela utilizável, no teto e
-no **saldo pré-pago** (`platform_limit_would_be_exceeded`). Passando, a reserva
+`verba × dias neste mês × 1,0` — e nunca menos que um dia a 2,0× — precisa
+caber na parcela utilizável, no teto e no **saldo pré-pago** (`platform_limit_would_be_exceeded`). Passando, a reserva
 gravada continua zero.
 
 ## O que é escrito
@@ -84,8 +84,11 @@ campanha criada "aparece no Relatório de campanhas na próxima ingestão".
 
 Decisões tomadas aqui — revisar se discordar:
 
-- **Fator de sobreentrega 2,0×** para o Google (teto contratual; o observado na
-  conta foi 1,35×). Proposto no spike, agora em uso.
+- **Dois fatores de sobreentrega** para o Google: 2,0× é o limite de **um dia**
+  (teto contratual; o observado na conta foi 1,35×) e só decide a checagem de um
+  único dia; o comprometido do mês e a exposição de um pedido usam **1,0×**
+  (no mês o Google não cobra além de 30,4 × a verba diária). Corrigido em
+  21/09/2026 — ver "Google: dois fatores de sobreentrega" em `tetos-reais.md`.
 - **Saldo pré-pago baixo não congela a conta.** Na Meta, orçamentos acima do
   permitido acionam a trava, e o permitido inclui o `spend_cap`. Num pré-pago o
   saldo viver abaixo da exposição do mês é o estado normal (recarga por Pix);

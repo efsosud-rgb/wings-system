@@ -9,9 +9,11 @@ import {
   campaignDaysInMonth,
   campaignDraftSchema,
   checkCopyCompliance,
+  dailyOverdeliveryFactor,
   estimateCostCents,
   matchesFormat,
   parseYoutubeVideoId,
+  periodOverdeliveryFactor,
   placementsSchema,
   usesVerticalPlacements,
   utmSlug,
@@ -522,11 +524,32 @@ describe('YouTube links', () => {
 });
 
 describe('cost estimate by platform', () => {
-  it('uses 1.25x for Meta and 2x for Google', () => {
+  it('uses 1.25x for Meta and 1x over the period for Google', () => {
     expect(estimateCostCents(1000, 10)).toBe(12_500);
     expect(estimateCostCents(1000, 10, 'meta')).toBe(12_500);
-    expect(estimateCostCents(1000, 10, 'google_search')).toBe(20_000);
-    expect(estimateCostCents(1000, 10, 'youtube')).toBe(20_000);
+    expect(estimateCostCents(1000, 10, 'google_search')).toBe(10_000);
+    expect(estimateCostCents(1000, 10, 'youtube')).toBe(10_000);
+  });
+
+  it("keeps Google's 2x for a single day, where no period evens it out", () => {
+    expect(estimateCostCents(1000, 1, 'google_search')).toBe(2_000);
+    expect(estimateCostCents(1000, 2, 'google_search')).toBe(2_000);
+    expect(estimateCostCents(1000, 3, 'google_search')).toBe(3_000);
+    // Meta's one factor covers both, so a single day changes nothing there.
+    expect(estimateCostCents(1000, 1, 'meta')).toBe(1_250);
+  });
+
+  it('costs nothing over no days', () => {
+    expect(estimateCostCents(1000, 0, 'google_search')).toBe(0);
+    expect(estimateCostCents(1000, 0, 'meta')).toBe(0);
+  });
+
+  it('names both factors per platform', () => {
+    expect(dailyOverdeliveryFactor('google')).toBe(2);
+    expect(periodOverdeliveryFactor('google')).toBe(1);
+    expect(periodOverdeliveryFactor('youtube')).toBe(1);
+    expect(dailyOverdeliveryFactor('meta')).toBe(1.25);
+    expect(periodOverdeliveryFactor('meta')).toBe(1.25);
   });
 
   it('labels Google traffic as such in the UTMs', () => {

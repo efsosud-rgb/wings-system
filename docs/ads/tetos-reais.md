@@ -84,6 +84,51 @@ apareceu ao escrever o teste:
 > `saldo − comprometido`, não o saldo bruto. Sem isso, um saldo de R$ 20,76
 > pareceria plannável enquanto R$ 325 de exposição já estavam na fila.
 
+### Google: dois fatores de sobreentrega (corrigido em 21/09/2026)
+
+O Google faz **duas promessas diferentes**, e até 21/09/2026 o sistema usava a
+primeira para tudo:
+
+| Promessa do Google                                          | Fator    | Onde o sistema usa                         |
+| ----------------------------------------------------------- | -------- | ------------------------------------------ |
+| Num **único dia** pode gastar até o dobro da verba diária   | **2,0×** | só na checagem de um único dia (abaixo)    |
+| No **período** não cobra além da verba (mês: 30,4 × diária) | **1,0×** | comprometido do mês e exposição de pedidos |
+
+Regras, todas em centavos:
+
+- **Comprometido** (reconciliação) = `verba diária × dias restantes no mês × 1,0`,
+  somado sobre as campanhas ativas.
+- **Exposição de um pedido novo** = `verba diária × dias da campanha neste mês × 1,0`.
+- **Checagem de um único dia**: o pedido nunca é julgado por menos que
+  `verba diária × 2,0`. Na prática ela só decide quando **um** dia da campanha
+  cai no mês (campanha de um dia, ou pedido no último dia do mês): com dois dias
+  ou mais, `dias × 1,0` já é igual ou maior que `2,0`.
+- A **Meta não muda**: ela não faz promessa de período, então 1,25× vale para o
+  dia e para o período, e a checagem de um dia nunca decide nada.
+
+Exemplo com os números de produção (teto R$ 1.500, utilizável R$ 1.050): uma
+campanha ativa de R$ 50/dia com 20 dias pela frente compromete **R$ 1.000**. Com
+o 2,0× antigo eram R$ 2.000 — acima do utilizável, o que cortava o comprometido
+e **acionava a trava da conta** sem que ninguém tivesse saído do plano. Um pedido
+de R$ 10/dia por 7 dias passa a ser julgado em R$ 70, não R$ 140.
+
+Onde vive: `dailyOverdeliveryFactor`, `periodOverdeliveryFactor` e
+`estimateCostCents` em `packages/shared/src/ads/campaign-builder.ts` — o
+construtor e o guardião (`reserveCampaignCreation`) usam a **mesma** função para
+julgar um pedido, então a tela não promete o que o guardião recusa.
+`reconcileAccount` usa `periodOverdeliveryFactor`. Testes com datas fixas em
+`google-create-campaign.test.ts` ("Google exposure: 1.0x over the period…").
+
+> ⚠️ **Não verificado na conta real.** O 1,0× descreve uma campanha que roda de
+> forma contínua. O limite mensal do Google (30,4 × diária) é do **mês inteiro**:
+> uma campanha que ficou pausada ou entregou pouco no começo do mês e é ligada
+> depois pode, em tese, gastar até 2× por dia nos dias restantes até alcançar
+> esse limite — mais que `verba × dias restantes`. O sistema não cobre esse caso
+> de propósito (decisão do Eric em 21/09/2026); o que o segura é a folga de 30%
+> entre o utilizável e o teto, o saldo pré-pago e a trava por gasto reportado
+> (`applyReportedSpend`). Conferir no primeiro mês com campanha ligada no meio do
+> mês: gasto real dos dias restantes ÷ (verba × dias restantes).
+
 ### Onde é verificado
 
 - **Chokepoint** (`reserveChange`): recusa com motivo próprio,

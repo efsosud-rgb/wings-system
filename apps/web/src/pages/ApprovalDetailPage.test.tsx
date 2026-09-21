@@ -426,7 +426,7 @@ describe('a request to create a campaign', () => {
     expect(screen.queryByText(/Simul/)).toBeNull();
   });
 
-  it('shows a Google search draft as what it is: no image, keywords, 2x, and the Google button', () => {
+  it('shows a Google search draft as what it is: no image, keywords, the period cost, and the Google button', () => {
     approval.current = buildApproval({
       platform: 'google',
       changeKind: 'create_campaign',
@@ -451,8 +451,8 @@ describe('a request to create a campaign', () => {
     });
     renderDetail();
 
-    // R$ 20 × 10 days × 2.
-    expect(screen.getByText(/custo total estimado\s+R\$\s400,00/)).toBeTruthy();
+    // R$ 20 × 10 days × 1: over a period Google charges no more than the budget.
+    expect(screen.getByText(/custo total estimado\s+R\$\s200,00/)).toBeTruthy();
     expect(screen.getByText('franquia de alimentação · abrir franquia')).toBeTruthy();
     expect(screen.getByText('Anúncio na Pesquisa do Google')).toBeTruthy();
     expect(screen.queryByText('Formato')).toBeNull();

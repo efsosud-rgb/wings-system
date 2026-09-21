@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import {
   AD_ACCOUNT_PLATFORM,
   campaignDaysInMonth,
-  overdeliveryFactor,
+  estimateCostCents,
+  periodOverdeliveryFactor,
   type CampaignDraft,
 } from '@wings/shared';
 import { and, eq, inArray, sql } from 'drizzle-orm';
@@ -87,7 +88,9 @@ export function remainingDays(now: Date, timezone = 'America/Sao_Paulo'): number
 /**
  * Exposure a daily budget represents for the rest of the period.
  * Overdelivery is included, because the platform may spend more than the
- * budget on any given day.
+ * budget on any given day. `factor` is the platform's PERIOD factor: Google's
+ * 2x is a promise about one day, and over the days that remain it charges no
+ * more than the budget itself (`periodOverdeliveryFactor`).
  */
 export function exposureOf(
   dailyBudgetCents: Cents,
@@ -770,15 +773,28 @@ export async function reserveCampaignCreation(
       };
     }
 
-    const factor = overdeliveryFactor(account.platform);
-    const exposureDeltaCents = creationExposure(draft, today, factor);
+    const exposureDeltaCents = creationExposure(
+      draft,
+      today,
+      periodOverdeliveryFactor(account.platform),
+    );
 
     // Everything is born paused, so it reserves nothing — but anyone with access
     // to the platform can switch it on, outside this system, and since ad sets
     // and ads are created too, one click is all it takes. It is therefore
     // judged as if it were running: the three ceilings, the platform's own
     // included, must have room for it today.
-    const judgedCents = creationExposure({ ...draft, startPaused: false }, today, factor);
+    //
+    // Judged by the period factor, and never by less than one worst day: on
+    // Google a single day may cost twice the budget, which is what decides a
+    // request with one day left in the month. The builder shows this same
+    // figure (`estimateCostCents`), so the two cannot drift.
+    const judgedFrom = draft.startDate > today ? draft.startDate : today;
+    const judgedCents = estimateCostCents(
+      draft.dailyBudgetCents,
+      campaignDaysInMonth(judgedFrom, draft.endDate, today),
+      account.platform,
+    );
     const refusal = await ceilingRefusal(db, input.adAccountId, current, judgedCents, {
       attempted: 'create_campaign',
       ...(judgedCents !== exposureDeltaCents

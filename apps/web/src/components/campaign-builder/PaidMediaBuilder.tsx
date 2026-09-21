@@ -45,11 +45,12 @@ import {
   campaignDaysInMonth,
   campaignDraftSchema,
   checkCopyCompliance,
+  dailyOverdeliveryFactor,
   describeReach,
   estimateCostCents,
   isGooglePlatform,
   matchesFormat,
-  overdeliveryFactor,
+  periodOverdeliveryFactor,
   usesVerticalPlacements,
   type CampaignDraft,
   type CampaignDraftInput,
@@ -774,6 +775,11 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
   const typedBudgetCents = parseBrlToCents(budgetText);
   const dailyBudgetCents = Number.isFinite(typedBudgetCents) ? typedBudgetCents : 0;
   const totalCostCents = days ? estimateCostCents(dailyBudgetCents, days, platform) : null;
+  // On Google a short run is decided by one worst day (2×), not by the period.
+  const costIsOneWorstDay =
+    days !== null &&
+    dailyBudgetCents * dailyOverdeliveryFactor(platform) >
+      dailyBudgetCents * days * periodOverdeliveryFactor(platform);
   // Why there is no estimate yet, in the operator's terms — never a bare dash.
   const costMissing =
     budgetText.trim() === ''
@@ -1635,7 +1641,7 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         title="Verba diária"
         why={
           google
-            ? 'É quanto você autoriza por dia. O Google pode gastar até o dobro da verba diária num dia, então o custo real é o estimado abaixo — e ele precisa caber no teto da conta.'
+            ? 'É quanto você autoriza por dia. O Google pode gastar até o dobro da verba diária num dia, mas compensa nos outros: no período ele não cobra além da verba. O custo estimado abaixo precisa caber no teto da conta.'
             : 'É quanto você autoriza por dia. A Meta pode gastar até 25% a mais num dia, então o custo real é o estimado abaixo — e ele precisa caber no teto da conta.'
         }
       >
@@ -1646,7 +1652,7 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
               error={errors.dailyBudgetCents?.message}
               hint={
                 google
-                  ? 'O Google pode gastar até o dobro da verba diária num dia.'
+                  ? 'O Google pode gastar até o dobro da verba diária num dia, mas no período não cobra além da verba.'
                   : 'A Meta pode gastar até 25% acima disto num dia.'
               }
             >
@@ -1671,8 +1677,9 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
               )}
               {costMissing === null && days !== null && (
                 <p className="field-hint">
-                  {formatBrl(dailyBudgetCents)} × {days} dias ×{' '}
-                  {overdeliveryFactor(platform).toLocaleString('pt-BR')} de margem da plataforma
+                  {costIsOneWorstDay
+                    ? `${formatBrl(dailyBudgetCents)} × ${dailyOverdeliveryFactor(platform).toLocaleString('pt-BR')}: o pior caso de um único dia`
+                    : `${formatBrl(dailyBudgetCents)} × ${days} dias × ${periodOverdeliveryFactor(platform).toLocaleString('pt-BR')} de margem da plataforma no período`}
                   {daysThisMonth !== days &&
                     ` · ${formatBrl(costThisMonthCents)} caem neste mês (${daysThisMonth} dias)`}
                 </p>
