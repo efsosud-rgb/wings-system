@@ -812,6 +812,12 @@ export const copyVariationSchema = z
     creativeId: z.union([z.uuid(), z.literal('')]).optional(),
     /** The uploaded video, for a video variation. */
     videoId: z.uuid().optional(),
+    /**
+     * When the image or video was picked from the media library: which asset.
+     * A reference for people and reports; what is published is still the
+     * `creativeId` or `videoId` above.
+     */
+    mediaAssetId: z.uuid().optional(),
     /** Carousel only. */
     cards: z.array(carouselCardSchema).optional(),
     headline: compliantText(HEADLINE_MAX, 'o título'),

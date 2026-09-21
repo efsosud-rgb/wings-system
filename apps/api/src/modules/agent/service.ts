@@ -2,6 +2,7 @@ import {
   AGENT_TOOL_LABEL,
   agentCampaignProposalSchema,
   agentChangeProposalSchema,
+  agentGenerationProposalSchema,
   estimateAgentCostMicroUsd,
   type AgentChatMessage,
   type AgentConsultation,
@@ -12,24 +13,18 @@ import {
 } from '@wings/shared';
 import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
+import type { StudioDeps } from '../media/studio.js';
 import {
   adApprovalRequests,
   agentConversations,
   agentMessages,
   agentProposals,
+  mediaGenerations,
 } from '../../db/schema/index.js';
 import { LlmError, type AgentLlm, type LlmMessage, type LlmToolCall } from './llm.js';
-import { AGENT_SYSTEM_PROMPT, contextLine } from './prompt.js';
+import { TRAFFIC_AGENT, type AgentProfile } from './profile.js';
 import { scrubSensitive } from './scrub.js';
-import {
-  AGENT_TOOL_DEFINITIONS,
-  changeCard,
-  dataEnvelope,
-  isAgentTool,
-  pendingFor,
-  runAgentTool,
-  type ToolContext,
-} from './tools.js';
+import { changeCard, dataEnvelope, pendingFor, type ToolContext } from './tools.js';
 
 /**
  * One turn of the conversation: the person's message in, the agent's reply out,
@@ -63,6 +58,10 @@ export interface AgentDeps {
   now?: () => Date;
   /** Numbers and enum values about a finished turn. Never anybody's words. */
   log?: (facts: Record<string, unknown>) => void;
+  /** Which agent is answering. The traffic agent when absent. */
+  profile?: AgentProfile;
+  /** What the editing agent's tools need to read Kairogen. */
+  studio?: StudioDeps;
 }
 
 /** Asking again can help with anything except the daily ceiling. */
@@ -157,7 +156,7 @@ export async function cardOf(
   db: Database,
   row: {
     id: string;
-    kind: 'campaign' | 'change';
+    kind: 'campaign' | 'change' | 'generation';
     payload: unknown;
     status: AgentProposalCard['status'];
     createdAt: Date;
@@ -175,6 +174,34 @@ export async function cardOf(
       approvalId: row.approvalId,
       payload: payload.data,
       pending: pendingFor(payload.data),
+    };
+  }
+  if (row.kind === 'generation') {
+    const payload = agentGenerationProposalSchema.safeParse(row.payload);
+    if (!payload.success) return null;
+    // The estimate made for this card, and what became of it after a click.
+    const [made] = await db
+      .select()
+      .from(mediaGenerations)
+      .where(eq(mediaGenerations.proposalId, row.id))
+      .orderBy(desc(mediaGenerations.createdAt))
+      .limit(1);
+    return {
+      kind: 'generation',
+      id: row.id,
+      status: row.status,
+      createdAt: row.createdAt.toISOString(),
+      approvalId: null,
+      payload: payload.data,
+      estimate:
+        made?.status === 'estimated'
+          ? {
+              id: made.id,
+              credits: made.creditsEstimated,
+              expiresAt: made.estimateExpiresAt.toISOString(),
+            }
+          : null,
+      generationId: made && made.status !== 'estimated' ? made.id : null,
     };
   }
   const payload = agentChangeProposalSchema.safeParse(row.payload);
@@ -222,7 +249,7 @@ export async function runAgentTurn(
     employeeId: string;
     conversationId?: string;
     message: string;
-    context?: { tab: 'paid' | 'owned'; draft?: Record<string, unknown> };
+    context?: { tab: 'paid' | 'owned' | 'media'; draft?: Record<string, unknown> };
     /** "Tentar de novo": answer the last message again rather than store a copy. */
     retry?: boolean;
     signal?: AbortSignal;
@@ -230,6 +257,7 @@ export async function runAgentTurn(
   emit: (event: AgentStreamEvent) => void,
 ): Promise<{ ok: true } | TurnRefusal> {
   const { db } = deps;
+  const profile = deps.profile ?? TRAFFIC_AGENT;
   const now = deps.now?.() ?? new Date();
   // What the person typed is stored and sent without tokens, phones or CPFs.
   const message = scrubSensitive(input.message);
@@ -238,8 +266,10 @@ export async function runAgentTurn(
     ? await db.query.agentConversations.findFirst({
         where: and(
           eq(agentConversations.id, input.conversationId),
-          // Somebody else's conversation does not exist, as far as you can tell.
+          // Somebody else's conversation does not exist, as far as you can tell;
+          // nor does one held with another agent.
           eq(agentConversations.employeeId, input.employeeId),
+          eq(agentConversations.scope, profile.scope),
         ),
       })
     : undefined;
@@ -249,7 +279,7 @@ export async function runAgentTurn(
   if (!conversation) {
     [conversation] = await db
       .insert(agentConversations)
-      .values({ employeeId: input.employeeId, title: titleOf(message) })
+      .values({ employeeId: input.employeeId, scope: profile.scope, title: titleOf(message) })
       .returning();
     if (!conversation) throw new Error('failed to open conversation');
   }
@@ -316,14 +346,14 @@ export async function runAgentTurn(
   } else {
     const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(now);
     const messages: LlmMessage[] = [
-      { role: 'system', content: AGENT_SYSTEM_PROMPT },
+      { role: 'system', content: profile.systemPrompt },
       ...history
         .reverse()
         .filter((row) => row.content.trim() !== '')
         .map((row): LlmMessage => ({ role: row.role, content: row.content })),
       {
         role: 'user',
-        content: `${contextLine({ today, tab: input.context?.tab ?? null })}\n\n${message}`,
+        content: `${profile.contextLine({ today, tab: input.context?.tab ?? null })}\n\n${message}`,
       },
     ];
     const toolContext: ToolContext = {
@@ -332,6 +362,7 @@ export async function runAgentTurn(
       conversationId: conversation.id,
       now,
       builderDraft: input.context?.draft,
+      studio: deps.studio,
     };
 
     try {
@@ -342,7 +373,7 @@ export async function runAgentTurn(
           model: deps.model,
           messages,
           // On the last round there is nothing left to call: answer with what you have.
-          tools: lastRound ? [] : AGENT_TOOL_DEFINITIONS,
+          tools: lastRound ? [] : profile.tools,
           maxOutputTokens: MAX_OUTPUT_TOKENS,
           signal: input.signal,
           onText: (delta) => {
@@ -415,10 +446,10 @@ export async function runAgentTurn(
     call: LlmToolCall,
     cut: boolean,
   ): Promise<unknown> {
-    if (isAgentTool(call.name)) {
+    if (profile.isTool(call.name)) {
       emit({ type: 'consulting', tool: call.name, label: AGENT_TOOL_LABEL[call.name] });
     }
-    const outcome = await runAgentTool(toolContext, call, proposals.length, { cut });
+    const outcome = await profile.run(toolContext, call, proposals.length, { cut });
     if (outcome.consultation) emit({ type: 'consulted', consultation: outcome.consultation });
     if (outcome.proposal) {
       proposals.push(outcome.proposal);

@@ -1,7 +1,8 @@
-import type { KairogenStatus } from '@wings/shared';
+import { DEFAULT_KAIROGEN_PLAN, KAIROGEN_PLANS, type KairogenStatus } from '@wings/shared';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { writeAudit } from '../../../lib/audit.js';
+import { setPlan } from '../../media/studio.js';
 import { OAuthError } from './oauth.js';
 import {
   completeCodeFlow,
@@ -41,6 +42,7 @@ export const kairogenRoutes: FastifyPluginAsync = async (app) => {
     scopes: [],
     pending: null,
     credits: null,
+    plan: DEFAULT_KAIROGEN_PLAN,
     protocolVersion: null,
     tools: [],
   };
@@ -167,6 +169,30 @@ export const kairogenRoutes: FastifyPluginAsync = async (app) => {
         metadata: { flow: 'code' },
       });
       return reply.redirect(`${SETTINGS_PAGE}?kairogen=ok`);
+    },
+  );
+
+  /** The plan the account is on: what `estimate_cost` is asked against. */
+  app.put(
+    '/integrations/kairogen/plan',
+    { preHandler: app.requirePermission('integrations.manage') },
+    async (request, reply) => {
+      if (!deps)
+        return reply.status(503).send({ error: 'not_configured', message: notConfigured.detail });
+      const body = z.object({ plan: z.enum(KAIROGEN_PLANS) }).safeParse(request.body);
+      if (!body.success) {
+        return reply.status(400).send({ error: 'invalid_request', message: 'Plano inválido.' });
+      }
+      await setPlan(db, body.data.plan, new Date());
+      await writeAudit(db, {
+        actorEmployeeId: request.session.actor.employeeId,
+        action: 'integrations.kairogen_plan_changed',
+        entity: 'integration',
+        entityId: 'kairogen',
+        ip: request.ip,
+        metadata: { plan: body.data.plan },
+      });
+      return reply.send({ status: await getStatus(deps) });
     },
   );
 

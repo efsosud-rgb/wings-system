@@ -3,9 +3,11 @@ import type {
   AgentCampaignProposalCard,
   AgentChangeProposalCard,
   AgentChatMessage,
+  AgentGenerationProposalCard,
   AgentSendMessageInput,
   AgentStatusResponse,
   AgentStreamEvent,
+  MediaGeneration,
 } from '@wings/shared';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
@@ -58,6 +60,16 @@ vi.mock('../../api/agent.js', async (original) => ({
   }),
   streamAgentMessage: (...args: Parameters<typeof streamAgentMessage>) =>
     streamAgentMessage(...args),
+}));
+
+const startGeneration = vi.fn();
+const followed = { current: null as MediaGeneration | null };
+vi.mock('../../api/media.js', async (original) => ({
+  ...(await original<typeof import('../../api/media.js')>()),
+  useStartGeneration: () => ({ mutate: startGeneration, isPending: false, error: null }),
+  useGeneration: (id: string | undefined) => ({
+    data: id && followed.current ? { generation: followed.current } : undefined,
+  }),
 }));
 
 const { AgentChat } = await import('./AgentChat.js');
@@ -205,6 +217,8 @@ beforeEach(() => {
   sent.length = 0;
   streamAgentMessage.mockClear();
   markApplied.mockClear();
+  startGeneration.mockClear();
+  followed.current = null;
   requestFromProposal.mockClear();
 });
 
@@ -606,6 +620,114 @@ describe('limits of the panel', () => {
     expect(streamAgentMessage).not.toHaveBeenCalled();
     fireEvent.keyDown(field, { key: 'Enter' });
     await waitFor(() => expect(streamAgentMessage).toHaveBeenCalledTimes(1));
+  });
+});
+
+const generationCard: AgentGenerationProposalCard = {
+  id: 'prop-gen-1',
+  kind: 'generation',
+  status: 'open',
+  createdAt: '2026-09-21T12:00:00.000Z',
+  approvalId: null,
+  generationId: null,
+  estimate: { id: 'est-1', credits: 4, expiresAt: '2026-09-21T12:15:00.000Z' },
+  payload: {
+    kind: 'image',
+    model: 'seedream-v4',
+    prompt:
+      'Advertising photograph of a small business owner in front of a storefront at golden hour, 50mm, shallow depth of field.',
+    explanation:
+      'Dono de loja em frente ao negócio, luz de fim de tarde, espaço livre no alto para o título.',
+    aspect: '4:5',
+    quantity: 1,
+    params: { quality: 'medium' },
+    textInImage: null,
+  },
+};
+
+describe('the editing agent', () => {
+  const media = (canGenerate: boolean) => (
+    <AgentChat
+      scope="media"
+      tab="media"
+      title="Agente de Edição Wings"
+      canRequest={false}
+      canGenerate={canGenerate}
+      standingHint="O agente lê, estima e propõe. Nada é gerado daqui sem o seu clique, e o custo em créditos aparece antes."
+    />
+  );
+
+  it('talks to its own agent, under its own name and rule', async () => {
+    renderChat(media(true));
+    expect(screen.getByRole('heading', { name: 'Agente de Edição Wings' })).toBeTruthy();
+    expect(screen.getByText(/Nada é gerado daqui sem o seu clique/)).toBeTruthy();
+    await say('Uma imagem para a campanha do RJ');
+    expect(sent[0]).toMatchObject({ scope: 'media', context: { tab: 'media' } });
+  });
+
+  it('keeps sending no scope for the traffic agent, as before', async () => {
+    renderChat(<AgentChat canRequest tab="paid" />);
+    await say('oi');
+    expect(sent[0]).not.toHaveProperty('scope');
+  });
+
+  it('shows the cost on the card and generates only on the click, naming the estimate', async () => {
+    renderChat(media(true));
+    await say('Uma imagem para a campanha do RJ');
+    stream({ type: 'proposal', proposal: generationCard });
+
+    expect(screen.getByText('Custo estimado: 4 créditos')).toBeTruthy();
+    expect(screen.getByText(/Dono de loja em frente ao negócio/)).toBeTruthy();
+    expect(screen.getByText('Prompt enviado ao modelo')).toBeTruthy();
+    expect(startGeneration).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Gerar (4 créditos)' }));
+    expect(startGeneration).toHaveBeenCalledTimes(1);
+    expect(startGeneration.mock.calls[0]?.[0]).toEqual({
+      estimateId: 'est-1',
+      proposalId: 'prop-gen-1',
+    });
+
+    // The server said yes: the card now follows the generation and offers no second click.
+    followed.current = {
+      id: 'gen-1',
+      status: 'unknown',
+      operation: 'generate',
+      kind: 'image',
+      model: 'seedream-v4',
+      prompt: null,
+      creditsEstimated: 4,
+      creditsCharged: null,
+      detail: 'O Kairogen não respondeu se recebeu o pedido.',
+      requestedByName: null,
+      createdAt: '2026-09-21T12:00:05.000Z',
+      finishedAt: '2026-09-21T12:00:40.000Z',
+      assetIds: [],
+    };
+    const options = startGeneration.mock.calls[0]?.[1] as {
+      onSuccess: (body: { generation: MediaGeneration }) => void;
+    };
+    act(() => options.onSuccess({ generation: followed.current as MediaGeneration }));
+
+    expect(screen.getByText(/Resultado desconhecido/)).toBeTruthy();
+    expect(screen.getByText(/Confira no Kairogen antes de gerar de novo/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Gerar/ })).toBeNull();
+    expect(startGeneration).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no button without the permission to generate, nor without an estimate', async () => {
+    renderChat(media(false));
+    await say('Uma imagem');
+    stream({ type: 'proposal', proposal: generationCard });
+    expect(screen.queryByRole('button', { name: /^Gerar/ })).toBeNull();
+    expect(screen.getByText('Você não tem permissão para gerar mídia.')).toBeTruthy();
+    cleanup();
+
+    renderChat(media(true));
+    await say('Outra imagem');
+    stream({ type: 'proposal', proposal: { ...generationCard, id: 'prop-gen-2', estimate: null } });
+    expect(screen.queryByRole('button', { name: /^Gerar/ })).toBeNull();
+    expect(screen.getByText('Não foi possível estimar o custo. Peça de novo.')).toBeTruthy();
   });
 });
 

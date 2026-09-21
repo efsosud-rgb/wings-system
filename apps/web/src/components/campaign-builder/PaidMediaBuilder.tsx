@@ -57,6 +57,7 @@ import {
   usesVerticalPlacements,
   type CampaignDraft,
   type CampaignDraftInput,
+  type MediaBridgeResponse,
   type BrazilState,
   type ComplianceFinding,
   type AgentCampaignProposal,
@@ -90,9 +91,11 @@ import {
 } from '../../api/ads.js';
 import { ApiError } from '../../api/client.js';
 import { Alert, Button, Field, Input, Select } from '../ui.js';
+import { BUILDER_DRAFT_KEY, PICKED_MEDIA_KEY } from '../../api/media.js';
 import { AdPreviewGallery, creativeUrl, videoUrl } from './AdPreview.js';
 import { formatBrl, formatDate, parseBrlToCents, todayInSaoPaulo } from './format.js';
 import { SearchAdPreview, YoutubePreview } from './GooglePreview.js';
+import { LibraryPick } from './LibraryPick.js';
 import { RadiusMap } from './RadiusMap.js';
 
 /**
@@ -189,7 +192,10 @@ function shapeVariation(variation: VariationInput): VariationInput {
   const creativeType = variation.creativeType ?? 'image';
   if (creativeType === 'video') return { ...copy, creativeType, videoId };
   if (creativeType === 'carousel') {
-    return { ...copy, creativeType, cards: (cards ?? []).map(shapeCard) };
+    // A carousel's media sits in its cards: a library reference has no meaning here.
+    const { mediaAssetId: _unused, ...words } = copy;
+    void _unused;
+    return { ...words, creativeType, cards: (cards ?? []).map(shapeCard) };
   }
   return { ...copy, creativeType, creativeId };
 }
@@ -339,6 +345,7 @@ function CreativeSlot({
   error,
   vertical = false,
   onUploaded,
+  library,
 }: {
   label: string;
   creativeId: string;
@@ -347,6 +354,8 @@ function CreativeSlot({
   /** The manual placements include Stories or Reels, which are 9:16. */
   vertical?: boolean;
   onUploaded: (creative: CreativeUpload) => void;
+  /** "Escolher da biblioteca", when the person may read the media library. */
+  library?: ReactNode;
 }) {
   const upload = useUploadCreative();
   const [problem, setProblem] = useState<string | null>(null);
@@ -387,6 +396,7 @@ function CreativeSlot({
             }}
           />
         </Field>
+        {library}
         {upload.isPending && <p className="field-hint">Enviando…</p>}
         {current && (
           <p className="field-hint">
@@ -426,11 +436,13 @@ function VideoSlot({
   videoId,
   error,
   onChange,
+  library,
 }: {
   label: string;
   videoId: string;
   error: string | undefined;
   onChange: (video: VideoUpload | null) => void;
+  library?: ReactNode;
 }) {
   const upload = useUploadVideo();
   const [problem, setProblem] = useState<string | null>(null);
@@ -476,6 +488,7 @@ function VideoSlot({
             }}
           />
         </Field>
+        {library}
         {upload.isPending && (
           <p className="field-hint" role="status">
             <progress aria-label="Enviando vídeo" /> Enviando o vídeo… arquivos grandes levam alguns
@@ -656,9 +669,12 @@ function padTo(list: string[], length: number): string[] {
 
 export function PaidMediaBuilder({
   canRequest,
+  canPickMedia = false,
   applyRef,
 }: {
   canRequest: boolean;
+  /** `marketing.media.read`: shows "Escolher da biblioteca" beside the uploads. */
+  canPickMedia?: boolean;
   /** Filled while the builder is on screen, null otherwise. */
   applyRef?: MutableRefObject<BuilderBridge | null>;
 }) {
@@ -910,6 +926,48 @@ export function PaidMediaBuilder({
     setAppliedProposal(proposal);
     setAppliedPending(pending);
   };
+  // "Usar no construtor", clicked in the media studio: the asset arrives here
+  // once, into the first variation that has no media yet.
+  useEffect(() => {
+    let picked: MediaBridgeResponse | null;
+    try {
+      const stored = sessionStorage.getItem(PICKED_MEDIA_KEY);
+      if (!stored) return;
+      sessionStorage.removeItem(PICKED_MEDIA_KEY);
+      picked = JSON.parse(stored) as MediaBridgeResponse;
+    } catch {
+      return;
+    }
+    if (!picked || (!picked.creative && !picked.video)) return;
+    const current = getValues('variations') ?? [];
+    const free = current.findIndex((item) => !item?.creativeId && !item?.videoId);
+    const index = free === -1 ? 0 : free;
+    const filled = { shouldDirty: true, shouldValidate: false };
+    if (picked.video) {
+      setValue(`variations.${index}.creativeType`, 'video', filled);
+      setValue(`variations.${index}.videoId`, picked.video.id, filled);
+    } else if (picked.creative) {
+      setValue(`variations.${index}.creativeType`, 'image', filled);
+      setValue(`variations.${index}.creativeId`, picked.creative.id, filled);
+    }
+    setValue(`variations.${index}.mediaAssetId`, picked.mediaAssetId, filled);
+    // Once, when the builder opens.
+  }, []);
+
+  // What is on screen, for the editing agent in the other studio to read. Words
+  // and choices only: `shapeDraft` carries no file, no token, nothing personal.
+  const draftJson = JSON.stringify(shapeDraft(values));
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      try {
+        sessionStorage.setItem(BUILDER_DRAFT_KEY, draftJson);
+      } catch {
+        // Private mode or a full store: the agent simply has no draft to read.
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [draftJson]);
+
   // The bridge always points at this render's functions, and at nothing once
   // the builder leaves the screen.
   const bridge = {
@@ -1562,8 +1620,31 @@ export function PaidMediaBuilder({
                       format={format}
                       vertical={vertical}
                       error={errors.variations?.[index]?.creativeId?.message}
-                      onUploaded={(creative) =>
-                        setValue(`variations.${index}.creativeId`, creative.id, options)
+                      onUploaded={(creative) => {
+                        setValue(`variations.${index}.creativeId`, creative.id, options);
+                        // A file from the computer is not a library asset.
+                        setValue(`variations.${index}.mediaAssetId`, undefined, options);
+                      }}
+                      library={
+                        canPickMedia && (
+                          <LibraryPick
+                            kind="image"
+                            label={label}
+                            onPicked={(picked) => {
+                              if (!picked.creative) return;
+                              setValue(
+                                `variations.${index}.creativeId`,
+                                picked.creative.id,
+                                options,
+                              );
+                              setValue(
+                                `variations.${index}.mediaAssetId`,
+                                picked.mediaAssetId,
+                                options,
+                              );
+                            }}
+                          />
+                        )
                       }
                     />
                   )}
@@ -1572,8 +1653,26 @@ export function PaidMediaBuilder({
                       label={label}
                       videoId={variation?.videoId ?? ''}
                       error={errors.variations?.[index]?.videoId?.message}
-                      onChange={(video) =>
-                        setValue(`variations.${index}.videoId`, video?.id, options)
+                      onChange={(video) => {
+                        setValue(`variations.${index}.videoId`, video?.id, options);
+                        setValue(`variations.${index}.mediaAssetId`, undefined, options);
+                      }}
+                      library={
+                        canPickMedia && (
+                          <LibraryPick
+                            kind="video"
+                            label={label}
+                            onPicked={(picked) => {
+                              if (!picked.video) return;
+                              setValue(`variations.${index}.videoId`, picked.video.id, options);
+                              setValue(
+                                `variations.${index}.mediaAssetId`,
+                                picked.mediaAssetId,
+                                options,
+                              );
+                            }}
+                          />
+                        )
                       }
                     />
                   )}

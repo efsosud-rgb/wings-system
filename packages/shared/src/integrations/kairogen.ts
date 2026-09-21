@@ -1,3 +1,5 @@
+import type { KairogenPlan } from '../marketing/media-studio.js';
+
 /**
  * The Kairogen connection, as the settings screen sees it.
  *
@@ -62,6 +64,11 @@ export interface KairogenStatus {
   scopes: string[];
   pending: KairogenPendingAuthorization | null;
   credits: KairogenCredits | null;
+  /**
+   * The plan the Wings account is on. Kairogen's `estimate_cost` needs it and
+   * does not report it, so an Admin Master states it here.
+   */
+  plan: KairogenPlan;
   /** MCP protocol version the server settled on, once connected. */
   protocolVersion: string | null;
   /** The tools Kairogen offers this account, read live after connecting. */
@@ -94,6 +101,7 @@ export const KAIROGEN_READ_TOOLS: readonly KairogenToolName[] = [
 //   POST /integrations/kairogen/poll       -> { status }   device flow: one check of the token endpoint
 //   GET  /integrations/kairogen/callback   -> 302 to the settings page   (code flow)
 //   POST /integrations/kairogen/disconnect -> { status }
+//   PUT  /integrations/kairogen/plan       -> { status }   body: { plan }
 // All need `integrations.manage`, the callback included (it rides the session cookie).
 
 // ---------------------------------------------------------------------------

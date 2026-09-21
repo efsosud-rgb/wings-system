@@ -1,4 +1,10 @@
-import { KAIROGEN_STATE_LABEL, type KairogenStatus } from '@wings/shared';
+import {
+  KAIROGEN_PLANS,
+  KAIROGEN_PLAN_LABEL,
+  KAIROGEN_STATE_LABEL,
+  type KairogenPlan,
+  type KairogenStatus,
+} from '@wings/shared';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ApiError } from '../api/client.js';
@@ -8,6 +14,7 @@ import {
   useKairogenStatus,
   usePollKairogen,
 } from '../api/integrations.js';
+import { useSaveKairogenPlan } from '../api/media.js';
 import { Alert, Button } from '../components/ui.js';
 
 /**
@@ -18,6 +25,57 @@ import { Alert, Button } from '../components/ui.js';
 
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+}
+
+/**
+ * Kairogen prices by plan and does not say which plan the account is on, so an
+ * Admin Master states it here. Every estimate is made against this value.
+ */
+function PlanField({ plan }: { plan: KairogenPlan }) {
+  const save = useSaveKairogenPlan();
+  const [chosen, setChosen] = useState<KairogenPlan>(plan);
+  useEffect(() => setChosen(plan), [plan]);
+
+  return (
+    <form
+      className="integration-plan"
+      onSubmit={(event) => {
+        event.preventDefault();
+        save.mutate(chosen);
+      }}
+    >
+      <label className="field">
+        <span className="field-label">Plano contratado</span>
+        <select
+          className="control"
+          value={chosen}
+          onChange={(event) => setChosen(event.target.value as KairogenPlan)}
+        >
+          {KAIROGEN_PLANS.map((item) => (
+            <option key={item} value={item}>
+              {KAIROGEN_PLAN_LABEL[item]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <Button type="submit" variant="ghost" disabled={save.isPending || chosen === plan}>
+        Salvar plano
+      </Button>
+      <p className="field-hint">
+        Usado para estimar o custo de cada geração. Confira o plano na sua conta do Kairogen.
+      </p>
+      {save.isSuccess && chosen === plan && (
+        <p className="field-hint" role="status">
+          Plano salvo.
+        </p>
+      )}
+      {save.error && (
+        <p className="field-error" role="alert">
+          {save.error instanceof ApiError ? save.error.message : 'Não foi possível salvar o plano.'}
+        </p>
+      )}
+    </form>
+  );
 }
 
 function KairogenCard() {
@@ -111,6 +169,8 @@ function KairogenCard() {
           </div>
         </dl>
       )}
+
+      {current.state !== 'not_configured' && <PlanField plan={current.plan} />}
 
       {waiting && pending && (
         <div className="integration-device" aria-live="polite">

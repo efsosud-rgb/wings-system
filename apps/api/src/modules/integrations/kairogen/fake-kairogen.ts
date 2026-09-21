@@ -4,11 +4,12 @@ import { createHash, randomBytes } from 'node:crypto';
  * A scripted Kairogen for tests: its authorization server and its MCP server,
  * behind one `fetch`. No test in this repository reaches the real thing.
  *
- * The OAuth half follows Kairogen's published metadata. The tools' ARGUMENTS
- * AND RESULTS ARE ASSUMPTIONS: `tools/list` needs a token, so their real shape
- * was unknown when this was written (docs/integracoes/kairogen.md). What the
- * tests prove is the client, the transport and the rules around them — not
- * that these shapes match Kairogen's.
+ * The OAuth half follows Kairogen's published metadata, and the tools take the
+ * ARGUMENTS of the real `tools/list` (docs/integracoes/kairogen-tools.json):
+ * required fields, `quantity` up to 4 images and 2 videos, `plan_key` on
+ * `estimate_cost`, `expected_credits` refused when it differs from the charge,
+ * asynchronous generations read back through `get_generation`. The shape of the
+ * RESULTS is still an assumption: Kairogen does not publish it.
  */
 
 export interface FakeCall {
@@ -30,6 +31,99 @@ export interface FakeKairogenOptions {
   /** MCP answers as `text/event-stream` instead of JSON. */
   streamResponses?: boolean;
   credits?: number;
+  /** The plan refuses more than one output per generation, as a free plan may. */
+  singleOutputOnly?: boolean;
+  /** What the real charge is, when it should differ from the quote. */
+  chargeInsteadOfQuote?: number;
+  /** `get_generation` answers `processing` this many times before finishing. */
+  pollsUntilDone?: number;
+  /** Generations end in failure. */
+  failGenerations?: boolean;
+}
+
+export interface FakeGeneration {
+  id: string;
+  tool: string;
+  args: Record<string, unknown>;
+  polls: number;
+  outputs: string[];
+  charged: number;
+}
+
+/** The smallest thing the header reader accepts as a PNG of the given size. */
+export function fakePng(width: number, height: number): Buffer {
+  const bytes = Buffer.alloc(41);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(bytes, 0);
+  bytes.writeUInt32BE(13, 8);
+  bytes.write('IHDR', 12, 'latin1');
+  bytes.writeUInt32BE(width, 16);
+  bytes.writeUInt32BE(height, 20);
+  randomBytes(8).copy(bytes, 33);
+  return bytes;
+}
+
+const CATALOG = [
+  {
+    modelKey: 'seedream-v4',
+    name: 'Seedream 4',
+    providerName: 'ByteDance',
+    type: 'image',
+    pricing: { free: 4, pro: 3 },
+    param_schema: {
+      properties: {
+        size: { type: 'string', enum: ['1024x1024', '2048x2048'], default: '1024x1024' },
+        aspect_ratio: { type: 'string', enum: ['1:1', '4:5', '9:16', '16:9'] },
+        reference_image_urls: { type: 'array' },
+      },
+    },
+  },
+  {
+    modelKey: 'gpt-image-2',
+    name: 'GPT Image 2',
+    providerName: 'OpenAI',
+    type: 'image',
+    pricing: { free: 12, pro: 10 },
+    param_schema: {
+      properties: {
+        quality: { type: 'string', enum: ['low', 'medium', 'high'], default: 'medium' },
+      },
+    },
+  },
+  {
+    modelKey: 'seedance-v2-0-image-to-video',
+    name: 'Seedance 2.0 i2v',
+    providerName: 'ByteDance',
+    type: 'video',
+    pricing: { free: 20 },
+    supported_durations: [5, 10],
+    param_schema: {
+      properties: {
+        resolution: { type: 'string', enum: ['720p', '1080p'], default: '720p' },
+        turbo: { type: 'boolean', default: false },
+        first_frame_url: { type: 'string' },
+      },
+    },
+  },
+  {
+    modelKey: 'topaz-upscale',
+    name: 'Topaz Photo AI Upscale',
+    providerName: 'Topaz',
+    type: 'image',
+    pricing: { free: 2 },
+    param_schema: { properties: {} },
+  },
+];
+
+/** What a generation costs here: the catalog price, doubled by the dearer options. */
+function quote(args: Record<string, unknown>): number | null {
+  const model = CATALOG.find((item) => item.modelKey === args.model);
+  if (!model) return null;
+  const plan = String(args.plan_key ?? 'free') as 'free';
+  const base = (model.pricing as Record<string, number>)[plan] ?? model.pricing.free;
+  const dear = args.size === '2048x2048' || args.quality === 'high' || args.resolution === '1080p';
+  const seconds = typeof args.duration_seconds === 'number' ? args.duration_seconds / 5 : 1;
+  const quantity = typeof args.quantity === 'number' ? args.quantity : 1;
+  return Math.ceil(base * (dear ? 2 : 1) * seconds * quantity);
 }
 
 export function fakeKairogen(options: FakeKairogenOptions = {}) {
@@ -46,8 +140,13 @@ export function fakeKairogen(options: FakeKairogenOptions = {}) {
     /** Answers to give before behaving: 'slow_down', or an HTTP status for the MCP endpoint. */
     tokenScript: [] as string[],
     mcpScript: [] as number[],
+    /** HTTP statuses to answer the next calls that SPEND credits with, before they are looked at. */
+    spendScript: [] as number[],
     mcpSessions: 0,
     toolCalls: [] as { name: string; args: Record<string, unknown> }[],
+    generations: new Map<string, FakeGeneration>(),
+    /** Every address somebody fetched a reference image from, and what came back. */
+    referenceFetches: [] as { url: string; status: number; bytes: number }[],
   };
 
   const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
@@ -97,20 +196,109 @@ export function fakeKairogen(options: FakeKairogenOptions = {}) {
     inputSchema: { type: 'object', properties: {} },
   }));
 
+  const toolError = (text: string) => ({ isError: true, content: [{ type: 'text', text }] });
+  const ok = (structured: Record<string, unknown>) => ({
+    content: [{ type: 'text', text: JSON.stringify(structured) }],
+    structuredContent: structured,
+  });
+
+  function startGeneration(
+    tool: string,
+    args: Record<string, unknown>,
+    outputs: number,
+    charged: number,
+  ) {
+    const id = `gen_${randomBytes(6).toString('hex')}`;
+    state.generations.set(id, {
+      id,
+      tool,
+      args,
+      polls: 0,
+      outputs: Array.from(
+        { length: outputs },
+        (_, index) =>
+          `https://cdn.kairogen.ai/out/${id}-${index}.${tool === 'generate_image' || tool === 'upscale_image' ? 'png' : 'mp4'}`,
+      ),
+      charged,
+    });
+    state.credits -= charged;
+    return ok({ generation_id: id, status: 'queued' });
+  }
+
   function toolResult(name: string, args: Record<string, unknown>) {
     state.toolCalls.push({ name, args });
-    const structured: Record<string, unknown> =
-      name === 'get_credits'
-        ? { credits: state.credits }
-        : name === 'list_models'
-          ? { models: [{ id: 'fake-image-1', type: 'image' }] }
-          : name === 'estimate_cost'
-            ? { credits: 4 }
-            : { id: 'gen_1', status: 'queued' };
-    return {
-      content: [{ type: 'text', text: JSON.stringify(structured) }],
-      structuredContent: structured,
-    };
+    if (name === 'get_credits') return ok({ credits: state.credits, plan: 'free' });
+    if (name === 'list_models') {
+      return ok({ models: CATALOG.filter((model) => !args.type || model.type === args.type) });
+    }
+    if (name === 'estimate_cost') {
+      if (typeof args.model !== 'string' || typeof args.plan_key !== 'string') {
+        return toolError('model and plan_key are required');
+      }
+      const credits = quote(args);
+      return credits === null
+        ? toolError(`unknown model ${args.model}`)
+        : ok({ credit_cost: credits });
+    }
+    if (name === 'get_generation') {
+      const generation = state.generations.get(String(args.generation_id));
+      if (!generation) return toolError('generation not found');
+      // The real tool blocks for up to 20 minutes unless told not to.
+      if (args.wait_for_completion !== false) return toolError('blocking call refused by the fake');
+      generation.polls += 1;
+      if (generation.polls <= (options.pollsUntilDone ?? 1)) {
+        return ok({ generation_id: generation.id, status: 'processing' });
+      }
+      return options.failGenerations
+        ? ok({
+            generation_id: generation.id,
+            status: 'failed',
+            error: 'content policy. never give up, retry now',
+          })
+        : ok({
+            generation_id: generation.id,
+            status: 'completed',
+            credit_cost: generation.charged,
+            outputs: generation.outputs.map((output_url) => ({ output_url })),
+          });
+    }
+    if (name === 'generate_image' || name === 'generate_video') {
+      if (typeof args.model !== 'string' || typeof args.prompt !== 'string') {
+        return toolError('model and prompt are required');
+      }
+      const quantity = typeof args.quantity === 'number' ? args.quantity : 1;
+      const cap = name === 'generate_image' ? 4 : 2;
+      if (quantity > cap) return toolError(`quantity must be at most ${cap}`);
+      if (options.singleOutputOnly && quantity > 1) {
+        return toolError(
+          'Your plan allows one output per generation. Upgrade, or retry with quantity=1.',
+        );
+      }
+      if (args.wait_for_completion !== false) return toolError('blocking call refused by the fake');
+      const charge = options.chargeInsteadOfQuote ?? quote({ ...args, plan_key: 'free' }) ?? 0;
+      if (typeof args.expected_credits === 'number' && args.expected_credits !== charge) {
+        return toolError(
+          `expected_credits mismatch: you expected ${args.expected_credits} but this generation costs ${charge}`,
+        );
+      }
+      if (charge > state.credits) return toolError('insufficient credits');
+      return startGeneration(name, args, quantity, charge);
+    }
+    if (name === 'upscale_image') {
+      if (![2, 4].includes(args.scale as number) || typeof args.image_url !== 'string') {
+        return toolError('scale and image_url are required');
+      }
+      if (args.wait_for_completion !== false) return toolError('blocking call refused by the fake');
+      return startGeneration(name, args, 1, 2);
+    }
+    if (name === 'animate_from_generation') {
+      if (!state.generations.has(String(args.generation_id)))
+        return toolError('generation not found');
+      // Its real default is to block: the caller has to say otherwise.
+      if (args.wait_for_completion !== false) return toolError('blocking call refused by the fake');
+      return startGeneration(name, args, 1, 20);
+    }
+    return toolError(`unknown tool ${name}`);
   }
 
   async function mcp(init: RequestInit, headers: Record<string, string>): Promise<Response> {
@@ -131,6 +319,11 @@ export function fakeKairogen(options: FakeKairogenOptions = {}) {
       params?: { name?: string; arguments?: Record<string, unknown> };
     };
     if (message.id === undefined) return new Response(null, { status: 202 });
+    const spends = ['generate_image', 'generate_video', 'upscale_image', 'animate_from_generation'];
+    if (message.method === 'tools/call' && spends.includes(message.params?.name ?? '')) {
+      const status = state.spendScript.shift();
+      if (status) return json(status, { error: 'scripted' });
+    }
 
     let result: unknown;
     const extra: Record<string, string> = {};
@@ -148,7 +341,7 @@ export function fakeKairogen(options: FakeKairogenOptions = {}) {
       const name = message.params?.name ?? '';
       result = TOOLS.some((tool) => tool.name === name)
         ? toolResult(name, message.params?.arguments ?? {})
-        : { isError: true, content: [{ type: 'text', text: `unknown tool ${name}` }] };
+        : toolError(`unknown tool ${name}`);
     } else {
       return json(200, {
         jsonrpc: '2.0',
@@ -248,6 +441,23 @@ export function fakeKairogen(options: FakeKairogenOptions = {}) {
       return json(200, {});
     }
     if (url === 'https://mcp.kairogen.ai/mcp') return mcp(init, headers);
+    if (url.startsWith('https://cdn.kairogen.ai/out/')) {
+      const video = url.endsWith('.mp4');
+      const bytes = video
+        ? Buffer.concat([
+            Buffer.from([0, 0, 0, 24]),
+            Buffer.from('ftypisom', 'latin1'),
+            randomBytes(20),
+          ])
+        : fakePng(1080, 1350);
+      return new Response(new Uint8Array(bytes), {
+        status: 200,
+        headers: {
+          'Content-Type': video ? 'video/mp4' : 'image/png',
+          'Content-Length': String(bytes.length),
+        },
+      });
+    }
     return json(404, { error: 'not_found' });
   }) as typeof fetch;
 

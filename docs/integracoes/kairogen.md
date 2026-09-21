@@ -41,10 +41,9 @@ flow**; o code + PKCE fica como segunda opção no mesmo cartão.
 - Se o **registro dinâmico aceita** um cliente novo com grant `device_code` (só
   tentando; a tentativa é o primeiro clique em "Conectar", feito por um Admin
   Master, não por este trabalho).
-- Os **argumentos e o formato de resposta das 8 ferramentas** (`list_models`,
-  `estimate_cost`, `get_credits`, `generate_image`, `generate_video`,
-  `animate_from_generation`, `upscale_image`, `get_generation`): `tools/list`
-  exige token, e a documentação pública está fora do ar.
+- Os **argumentos e o formato de resposta das 8 ferramentas**: `tools/list`
+  exige token, e a documentação pública está fora do ar. Os **argumentos** foram
+  lidos depois da conexão (seção "Ferramentas reais"); as respostas, ainda não.
 
 ## Como a conexão funciona (Onda 7b-1)
 
@@ -113,8 +112,191 @@ staging e de produção.
 Permissões novas: `integrations.manage` (Admin Master), `marketing.media.read`
 e `marketing.media.generate` (Admin Master, Diretoria, Marketing).
 
-## O que fica para a Onda 7b-2
+## Ferramentas reais (lidas em 21/09/2026, conta conectada no staging)
 
-Tela de Edição de Fotos e Vídeos, geração com estimativa antes, tetos e ledger
-de créditos, chat do Agente de Edição e a ponte com o construtor. Dependem do
-formato real das ferramentas, que só dá para ler depois de conectar.
+Conta conectada, plano **free**, 45 créditos, protocolo MCP **2025-06-18**,
+scopes `kairogen:read` e `kairogen:generate`. Os esquemas completos, como o
+`tools/list` devolveu, estão em [`kairogen-tools.json`](kairogen-tools.json)
+(só nomes, descrições e esquemas; nenhum dado de conta). A leitura foi feita na
+coluna `tools` da conexão, sem tocar nas colunas de credencial. O `wings_ro`
+não tem permissão nessa tabela.
+
+| Ferramenta                | Obrigatórios                                                       | O que importa para a 7b-2                                                                                                                                                   |
+| ------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_models`             | nenhum (`type`, `search` opcionais)                                | cada modelo traz preço e `param_schema` com os parâmetros reais; é dali que sai o que o formulário mostra por modelo                                                        |
+| `get_credits`             | nenhum                                                             | saldo da conta                                                                                                                                                              |
+| `estimate_cost`           | `model`, **`plan_key`** (free, essential, pro, precision, creator) | precisa dos mesmos parâmetros que mexem no preço (`size`, `quality`, `resolution`, `duration_seconds`, `quantity`, `turbo`, `generate_audio`, `sound`, `extra_params`)      |
+| `generate_image`          | `model`, `prompt`                                                  | `quantity` até 4, `aspect_ratio`, `size`, `quality`, `seed`, `negative_prompt`, `reference_image_urls`, **`expected_credits`**, `wait_for_completion` (padrão falso)        |
+| `generate_video`          | `model`, `prompt`                                                  | `quantity` até 2, `duration_seconds` (tem de ser uma das durações do modelo), `resolution`, `first_frame_url`, `last_frame_url`, referências, **`expected_credits`**        |
+| `animate_from_generation` | `generation_id`                                                    | anima uma imagem **já gerada no Kairogen**, pelo id da geração; `video_model` padrão `seedance-v2-0-image-to-video`; aqui `wait_for_completion` é **verdadeiro** por padrão |
+| `upscale_image`           | `scale` (2 ou 4), `image_url`, `input_width`, `input_height`       | Topaz; `output_format` jpeg ou png; rosto opcional                                                                                                                          |
+| `get_generation`          | `generation_id`                                                    | devolve o estado na hora (`wait_for_completion` falso por padrão); é o que o sistema usa para acompanhar o progresso                                                        |
+
+Três coisas que mudam o desenho da 7b-2:
+
+1. **`expected_credits`.** `generate_image` e `generate_video` aceitam o custo
+   devolvido por `estimate_cost` e o Kairogen **recusa a geração se a cobrança
+   real for diferente**. É a trava do lado deles para a nossa regra "nunca gerar
+   sem estimar antes": o sistema sempre manda esse campo.
+2. **`plan_key` é obrigatório em `estimate_cost`.** O plano é da conta (hoje
+   free). Falta descobrir se `get_credits` informa o plano; se não informar,
+   vira configuração.
+3. **Referências e ampliação pedem URL pública.** `reference_image_urls`,
+   `first_frame_url`, `last_frame_url` e o `image_url` do `upscale_image`
+   precisam ser acessíveis ao Kairogen, e a biblioteca só serve arquivo com
+   login. Para mídia **gerada no Kairogen** dá para guardar e reenviar a URL de
+   saída deles, e "Animar" funciona só com o `generation_id`. Para **upload
+   nosso**, usar como referência ou ampliar exige decidir entre um link
+   assinado de vida curta ou não oferecer essas duas ações para uploads.
+
+As descrições das ferramentas trazem orientação para clientes com widget de
+chat (por exemplo, não chamar `get_generation` depois de gerar, porque o widget
+acompanha sozinho). O Wings System não tem esse widget: quem acompanha o
+progresso é o servidor, por `get_generation`. Essas descrições são dado de
+terceiro, lidas como documentação, nunca como instrução.
+
+**Ainda desconhecido:** o formato das **respostas** (campos do resultado de
+`generate_*` e `get_generation`, URLs de saída, custo real, estados possíveis) e
+o conteúdo de `list_models` (modelos, preços, `param_schema`). `list_models` e
+`get_credits` são leitura e não gastam crédito; uma chamada de cada, feita pela
+conexão do staging, responde isso antes de codar.
+
+## Edição de Fotos e Vídeos (Onda 7b-2)
+
+Marketing → Edição de Fotos e Vídeos (`/marketing/edicao`): biblioteca,
+formulário do operador e o chat do Agente de Edição Wings.
+
+### A ordem das coisas, que o código não deixa pular
+
+1. **Estimar.** `POST /media/estimates` valida o pedido contra o catálogo
+   (`list_models`, cache de 1 h por plano) e chama `estimate_cost` com o
+   **plano contratado** e os mesmos parâmetros de preço. Grava uma linha em
+   `media_generations` no estado `estimated`, válida por 10 minutos.
+2. **Clicar.** `POST /media/generations` aceita **só o id da estimativa**. Não
+   existe rota que gere a partir de parâmetros: "nunca gerar sem estimar antes" é
+   um fato do modelo de dados, não um hábito de quem chama.
+3. **Conferir tetos e saldo**, sob trava, para dois cliques não caberem juntos
+   no mesmo teto.
+4. **Gravar o gasto no ledger antes de falar com o Kairogen.** Uma queda entre
+   os dois deixa crédito contado que não foi gasto, nunca o contrário.
+5. **Chamar o Kairogen uma vez**, com `expected_credits` igual ao estimado e
+   `wait_for_completion: false` (também em `animate_from_generation`, cujo
+   padrão é bloquear).
+6. **Acompanhar** por `get_generation` com `wait_for_completion: false`, em
+   intervalo crescente (5 s, 10 s, 15 s… até 30 s), por no máximo 20 minutos. A
+   tela consulta `GET /media/generations/:id`; o servidor é quem fala com o
+   Kairogen, e retoma o acompanhamento depois de um reinício.
+7. **Guardar.** Cada saída é baixada para `MEDIA_DIR` e vira uma linha em
+   `media_assets` com `external_generation_id` e `source_url`.
+
+### O que acontece quando dá errado
+
+| Situação                                           | Estado      | Créditos contados           | Repete sozinho? |
+| -------------------------------------------------- | ----------- | --------------------------- | --------------- |
+| Kairogen recusa (custo diverge, plano, parâmetros) | `refused`   | devolvidos                  | nunca           |
+| Ninguém sabe se o pedido chegou (timeout, 5xx)     | `unknown`   | mantidos                    | nunca           |
+| Kairogen informa falha                             | `failed`    | mantidos, ou o real se vier | nunca           |
+| 20 minutos sem resposta final                      | `timed_out` | mantidos                    | nunca           |
+| Concluiu e o real difere do estimado               | `succeeded` | corrigidos pela diferença   | —               |
+
+A resposta do Kairogen numa recusa aparece na tela **como fala dele**
+("Resposta dele: …"), depois de passar pelo filtro de dados sensíveis. Frases
+como "retry with quantity=1" ou "never give up" são recado do fornecedor para
+outros programas: o sistema mostra e não obedece.
+
+### Tetos e ledger
+
+`KAIROGEN_DAILY_CREDITS_PER_USER` (padrão 30) e `KAIROGEN_MONTHLY_CREDITS`
+(padrão 500), no fuso de São Paulo, mais o saldo da conta. `media_credit_ledger`
+é **só de inserção**: `estimated`, `started` (+estimado), `refused` (−estimado),
+`succeeded`/`failed`/`timed_out`/`unknown` (correção pela cobrança real, quando
+informada). Cada linha leva quem, quando, prompt, modelo, parâmetros, estimado,
+real e o `generation_id`. Os tetos são somas de `credits_delta`.
+
+### Links assinados
+
+`reference_image_urls`, `first_frame_url` e o `image_url` do `upscale_image`
+exigem endereço público. Para mídia **gerada no Kairogen** o sistema reenvia a
+URL de origem deles. Para **upload nosso** emite
+`APP_BASE_URL/api/media/public/<id>?sig=…`: um link por asset, 15 minutos,
+HMAC-SHA256 com chave derivada de `INTEGRATIONS_ENCRYPTION_KEY` (não é a chave
+que cifra os tokens), sem login, `Cache-Control: no-store`. Cada emissão fica em
+`media_public_links` (asset, quem, para quê, quando vence). O endereço nunca
+contém caminho do volume, e uma assinatura errada ou vencida responde 404 sem
+dizer o motivo.
+
+### Plano
+
+`estimate_cost` exige `plan_key` e o Kairogen não informa o plano. O cartão de
+Integrações tem "Plano contratado" (free, essential, pro, precision, creator;
+padrão free; só `integrations.manage` edita; fica na auditoria). Trocar o plano
+esvazia o cache do catálogo, porque o preço é por plano.
+
+### Agente de Edição Wings
+
+Mesma infra do Agente de Tráfego (OpenRouter, streaming, teto `AGENT_DAILY_USD`,
+filtro de dados sensíveis, tabelas), com um **perfil por sub-módulo**
+(`modules/agent/profile.ts`) e conversas separadas por `scope`. Quem tem
+`marketing.media.read` conversa; gerar exige `marketing.media.generate`.
+
+Ferramentas: `listar_modelos`, `estimar_custo`, `consultar_biblioteca`,
+`consultar_saldo`, `rascunho_da_campanha` e `propor_geracao`. **Nenhuma gera.**
+`propor_geracao` valida a proposta (prompt em inglês com pelo menos cena, luz,
+enquadramento e estilo; explicação em português; regras de anúncio no prompt e
+no texto da imagem), o **servidor** pede a estimativa e o cartão sai com
+"Gerar (N créditos)". O clique chama a mesma `POST /media/generations`. Proposta
+que não cabe nos tetos volta ao modelo com o valor. Nenhum token, endereço do
+Kairogen, link assinado ou caminho de arquivo entra em resultado de ferramenta
+(há teste procurando por eles no que o modelo recebeu).
+
+### Ponte com o construtor
+
+`POST /media/assets/:id/use-in-builder` (`ads.request` e
+`marketing.media.read`) transforma uma mídia da biblioteca no criativo (imagem
+PNG/JPEG, lado menor de 600 px, as mesmas regras do upload) ou no vídeo que o
+construtor já sabe publicar, e a variação guarda `mediaAssetId`. O YouTube do
+construtor recebe um **link**, não um arquivo, então não tem seletor.
+
+### Onde o formato das respostas é lido
+
+`modules/media/kairogen-adapter.ts`. Os argumentos das ferramentas são os
+reais; o formato das **respostas** não é publicado, então os leitores são
+tolerantes (procuram `credit_cost`, `generation_id`, `output_url`,
+`param_schema`, `supported_durations` e `modelKey` nas grafias usuais) e
+respondem "não sei" em vez de supor. Se a primeira geração real mostrar outro
+formato, é o único arquivo que muda.
+
+## Roteiro do primeiro teste real
+
+Uma imagem, uma saída, no modelo mais barato, com os créditos grátis. Quem
+clica é o Eric.
+
+1. Em Administração → Integrações, confira "Plano contratado: Free" e o saldo.
+2. Abra Marketing → Edição de fotos e vídeos. O cabeçalho deve mostrar saldo,
+   plano e os dois usos em zero.
+3. No formulário: tipo **Imagem**; no seletor de modelo escolha o de **menor
+   número de créditos por saída**; formato 1:1; quantidade 1; um prompt simples
+   em inglês, sem texto na imagem.
+4. **Estimar custo.** Confira se o número bate com o do seletor e se cabe no
+   saldo. Se aparecer "O Kairogen respondeu sem um custo em créditos", pare: o
+   formato da resposta é outro e o ajuste é no adaptador.
+5. **Gerar (N créditos).** O cartão de progresso deve passar por "Gerando no
+   Kairogen", "Salvando na biblioteca" e "Concluída", e a imagem aparecer na
+   grade.
+6. Confira o saldo no cartão de Integrações e no próprio Kairogen: a queda tem
+   de ser igual ao estimado.
+7. Qualquer estado diferente de "Concluída" é para parar e me mandar o texto do
+   cartão. **Não clique de novo em "Resultado desconhecido"** sem olhar no
+   Kairogen se a geração existe.
+
+## Não verificado
+
+- [ ] O formato real das respostas de `estimate_cost`, `generate_*`,
+      `get_generation` e `list_models` (ver "Onde o formato das respostas é lido").
+- [ ] Se os modelos aceitam `aspect_ratio: '4:5'`. Quando o catálogo informa os
+      formatos aceitos, a estimativa já recusa o que o modelo não faz.
+- [ ] Se o catálogo lista o ampliador (Topaz) com preço. Sem isso "Ampliar"
+      responde que não pode ser estimado, e nada é gerado.
+- [ ] Se o Kairogen devolve créditos numa geração que falha.
+- [ ] Vídeos grandes: a saída é baixada inteira para a memória antes de gravar
+      (limite de 150 MB).

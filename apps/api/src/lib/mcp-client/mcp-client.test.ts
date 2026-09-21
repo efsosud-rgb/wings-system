@@ -51,11 +51,11 @@ describe('the MCP client', () => {
 
   it('reads a tool result from structured content, and from an event stream', async () => {
     const plain = connected({ credits: 77 });
-    expect((await plain.client.callTool('get_credits', {})).data).toEqual({ credits: 77 });
+    expect((await plain.client.callTool('get_credits', {})).data).toMatchObject({ credits: 77 });
 
     const streamed = connected({ credits: 12, streamResponses: true });
     const result = await streamed.client.callTool('get_credits', {});
-    expect(result.data).toEqual({ credits: 12 });
+    expect(result.data).toMatchObject({ credits: 12 });
     expect(result.text).toContain('12');
   });
 

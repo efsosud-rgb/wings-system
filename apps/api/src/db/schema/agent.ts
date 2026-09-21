@@ -34,6 +34,8 @@ export const agentConversations = pgTable(
     employeeId: uuid('employee_id')
       .notNull()
       .references(() => employees.id),
+    /** Which agent this conversation is with: 'traffic' or 'media'. They never mix. */
+    scope: text('scope').notNull().default('traffic'),
     /** The first words of the first message. Never a name or a number. */
     title: text('title').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -88,7 +90,11 @@ export const agentMessages = pgTable(
   ],
 );
 
-export const agentProposalKindEnum = pgEnum('agent_proposal_kind', ['campaign', 'change']);
+export const agentProposalKindEnum = pgEnum('agent_proposal_kind', [
+  'campaign',
+  'change',
+  'generation',
+]);
 export const agentProposalStatusEnum = pgEnum('agent_proposal_status', [
   'open',
   'applied',

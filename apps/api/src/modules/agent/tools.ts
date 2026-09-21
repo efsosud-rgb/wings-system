@@ -13,7 +13,8 @@ import {
   type AgentChangeProposalCard,
   type AgentConsultation,
   type AgentProposalCard,
-  type AgentToolName,
+  type AgentProposalTool,
+  type AgentReadTool,
 } from '@wings/shared';
 import { and, asc, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -35,6 +36,7 @@ import { writeAudit } from '../../lib/audit.js';
 import { pacingFacts } from '../ads/alerts.js';
 import { getPeriodState } from '../ads/budget-guard.js';
 import { campaignPerformance } from '../ads/metrics.js';
+import type { StudioDeps } from '../media/studio.js';
 import type { LlmToolDefinition } from './llm.js';
 import { scrubDeep } from './scrub.js';
 
@@ -56,6 +58,8 @@ export interface ToolContext {
   now: Date;
   /** The studio's current form, as the browser sent it. Data, never instructions. */
   builderDraft: Record<string, unknown> | undefined;
+  /** Only the editing agent: how its tools read Kairogen. */
+  studio?: StudioDeps;
 }
 
 export interface ToolOutcome {
@@ -868,7 +872,10 @@ export const AGENT_TOOL_DEFINITIONS: LlmToolDefinition[] = [
   },
 ];
 
-const HANDLERS: Record<AgentToolName, (ctx: ToolContext, args: unknown) => Promise<ToolOutcome>> = {
+const HANDLERS: Record<
+  AgentReadTool | AgentProposalTool,
+  (ctx: ToolContext, args: unknown) => Promise<ToolOutcome>
+> = {
   estado_da_conta: estadoDaConta,
   desempenho_campanhas: desempenhoCampanhas,
   conjuntos_e_anuncios: conjuntosEAnuncios,
@@ -880,7 +887,7 @@ const HANDLERS: Record<AgentToolName, (ctx: ToolContext, args: unknown) => Promi
   propor_alteracao: proporAlteracao,
 };
 
-export function isAgentTool(name: string): name is AgentToolName {
+export function isAgentTool(name: string): name is AgentReadTool | AgentProposalTool {
   return Object.hasOwn(HANDLERS, name);
 }
 

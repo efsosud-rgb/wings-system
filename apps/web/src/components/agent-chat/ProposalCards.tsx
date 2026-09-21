@@ -12,10 +12,16 @@ import {
   type AgentCampaignProposal,
   type AgentCampaignProposalCard,
   type AgentChangeProposalCard,
+  type AgentGenerationProposalCard,
   type AgentProposalCard,
+  GENERATION_STATUS_LABEL,
+  isGenerationOver,
 } from '@wings/shared';
+import { createContext, useContext } from 'react';
 import { Link } from 'react-router-dom';
 import { useMarkProposalApplied, useRequestFromProposal } from '../../api/agent.js';
+import { ApiError } from '../../api/client.js';
+import { useGeneration, useStartGeneration } from '../../api/media.js';
 import { Button } from '../ui.js';
 import { formatBrl, formatDate } from '../campaign-builder/format.js';
 
@@ -339,6 +345,135 @@ function ChangeCard({
   );
 }
 
+/** Whether the person may spend credits: `marketing.media.generate`. Set by the media studio. */
+export const CanGenerateContext = createContext(false);
+
+const credits = (value: number) =>
+  `${value.toLocaleString('pt-BR')} ${value === 1 ? 'crédito' : 'créditos'}`;
+
+/**
+ * A picture or a video the editing agent proposes. The cost is already on the
+ * card; the one button spends it, and only when pressed. A generation that went
+ * wrong is never sent again from here.
+ */
+function GenerationCard({
+  proposal,
+  onActed,
+}: {
+  proposal: AgentGenerationProposalCard;
+  onActed: (next: AgentProposalCard) => void;
+}) {
+  const canGenerate = useContext(CanGenerateContext);
+  const start = useStartGeneration();
+  const following = useGeneration(proposal.generationId ?? undefined);
+  const generation = following.data?.generation;
+  const { payload, estimate } = proposal;
+  const params = Object.entries(payload.params);
+
+  return (
+    <article className="agent-card" aria-label="Proposta de geração">
+      <header className="agent-card-head">
+        <span className="agent-card-kind">
+          {payload.kind === 'image' ? 'Proposta de imagem' : 'Proposta de vídeo'}
+        </span>
+      </header>
+      <p>{payload.explanation}</p>
+      <dl className="agent-card-facts">
+        <div>
+          <dt>Modelo</dt>
+          <dd className="mono">{payload.model}</dd>
+        </div>
+        <div>
+          <dt>Formato</dt>
+          <dd>{payload.aspect}</dd>
+        </div>
+        <div>
+          <dt>Quantidade</dt>
+          <dd>{payload.quantity}</dd>
+        </div>
+        {payload.durationSeconds !== undefined && (
+          <div>
+            <dt>Duração</dt>
+            <dd>{payload.durationSeconds} s</dd>
+          </div>
+        )}
+        {params.map(([key, value]) => (
+          <div key={key}>
+            <dt className="mono">{key}</dt>
+            <dd>{typeof value === 'boolean' ? (value ? 'sim' : 'não') : String(value)}</dd>
+          </div>
+        ))}
+        {payload.textInImage && (
+          <div>
+            <dt>Texto na imagem</dt>
+            <dd>{payload.textInImage}</dd>
+          </div>
+        )}
+      </dl>
+      <details className="agent-details">
+        <summary>Prompt enviado ao modelo</summary>
+        <p className="agent-text mono" lang="en">
+          {payload.prompt}
+        </p>
+        {payload.negativePrompt && (
+          <p className="agent-text mono" lang="en">
+            Evitar: {payload.negativePrompt}
+          </p>
+        )}
+      </details>
+
+      {proposal.generationId ? (
+        <p className="agent-card-state" role="status">
+          {generation ? GENERATION_STATUS_LABEL[generation.status] : 'Acompanhando a geração…'}
+          {generation?.detail && ` ${generation.detail}`}
+          {generation?.status === 'unknown' && ' Confira no Kairogen antes de gerar de novo.'}{' '}
+          {generation &&
+            isGenerationOver(generation.status) &&
+            generation.status === 'succeeded' && (
+              <Link to="/marketing/edicao">Ver na biblioteca</Link>
+            )}
+        </p>
+      ) : estimate === null ? (
+        <p className="field-hint">Não foi possível estimar o custo. Peça de novo.</p>
+      ) : (
+        <>
+          <p className="agent-card-cost">Custo estimado: {credits(estimate.credits)}</p>
+          {canGenerate ? (
+            <Button
+              type="button"
+              disabled={start.isPending}
+              onClick={() =>
+                start.mutate(
+                  { estimateId: estimate.id, proposalId: proposal.id },
+                  {
+                    onSuccess: (body) =>
+                      onActed({
+                        ...proposal,
+                        status: 'requested',
+                        generationId: body.generation.id,
+                      }),
+                  },
+                )
+              }
+            >
+              Gerar ({credits(estimate.credits)})
+            </Button>
+          ) : (
+            <p className="field-hint">Você não tem permissão para gerar mídia.</p>
+          )}
+        </>
+      )}
+      {start.error && (
+        <p className="field-error" role="alert">
+          {start.error instanceof ApiError
+            ? start.error.message
+            : 'Não foi possível iniciar a geração.'}
+        </p>
+      )}
+    </article>
+  );
+}
+
 export function ProposalCard({
   proposal,
   canRequest,
@@ -351,6 +486,8 @@ export function ProposalCard({
   /** The card as it stands after a click, so the panel can keep showing it that way. */
   onActed: (next: AgentProposalCard) => void;
 }) {
+  if (proposal.kind === 'generation')
+    return <GenerationCard proposal={proposal} onActed={onActed} />;
   return proposal.kind === 'campaign' ? (
     <CampaignCard proposal={proposal} onApplyCampaign={onApplyCampaign} onActed={onActed} />
   ) : (

@@ -53,6 +53,11 @@ export const integrationConnections = pgTable(
      * verifier, encrypted; the rest is what the screen may show.
      */
     pending: jsonb('pending'),
+    /**
+     * Kairogen only: the plan the account is on. `estimate_cost` demands it and
+     * nothing reports it, so an Admin Master states it on the settings card.
+     */
+    plan: text('plan').notNull().default('free'),
     protocolVersion: text('protocol_version'),
     /** Tool names, descriptions and input schemas, read live after connecting. */
     tools: jsonb('tools').notNull().default([]),
@@ -101,6 +106,12 @@ export const mediaAssets = pgTable(
     model: text('model'),
     credits: integer('credits'),
     externalGenerationId: text('external_generation_id'),
+    /**
+     * Kairogen only: the address the output was downloaded from. Kept so the
+     * same picture can be handed back to Kairogen (as a reference, to upscale)
+     * without publishing anything of ours.
+     */
+    sourceUrl: text('source_url'),
     /** The asset this one was made from: an upscale, an animation. */
     sourceAssetId: uuid('source_asset_id'),
     client: text('client'),
@@ -113,3 +124,119 @@ export const mediaAssets = pgTable(
     index('media_assets_owner_idx').on(table.ownerId),
   ],
 );
+
+export const mediaGenerationStatusEnum = pgEnum('media_generation_status', [
+  'estimated',
+  'running',
+  'saving',
+  'succeeded',
+  'failed',
+  'refused',
+  'unknown',
+  'timed_out',
+]);
+
+/**
+ * One row per estimate, which becomes the generation when somebody clicks.
+ *
+ * A generation cannot be asked for by its parameters, only by the id of a row
+ * here in state `estimated`: that is how "never generate without estimate_cost
+ * first" is a fact of the data model rather than a habit of the callers. The
+ * parameters sent to Kairogen are the ones stored at estimate time.
+ */
+export const mediaGenerations = pgTable(
+  'media_generations',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    requestedBy: uuid('requested_by')
+      .notNull()
+      .references(() => employees.id),
+    operation: text('operation').notNull(),
+    kind: mediaKindEnum('kind').notNull(),
+    model: text('model'),
+    prompt: text('prompt'),
+    /** The validated request, as the person or the agent's card made it. */
+    request: jsonb('request').notNull(),
+    /** What estimate_cost was asked: the price-affecting half of the tool arguments. */
+    priceArgs: jsonb('price_args').notNull().default({}),
+    creditsEstimated: integer('credits_estimated').notNull(),
+    creditsCharged: integer('credits_charged'),
+    status: mediaGenerationStatusEnum('status').notNull().default('estimated'),
+    /** Words for the screen. Never a provider message that could hold a secret. */
+    detail: text('detail'),
+    externalGenerationId: text('external_generation_id'),
+    sourceAssetId: uuid('source_asset_id'),
+    /** The agent's card that was clicked, when one was. */
+    proposalId: uuid('proposal_id'),
+    estimateExpiresAt: timestamp('estimate_expires_at', { withTimezone: true }).notNull(),
+    startedAt: timestamp('started_at', { withTimezone: true }),
+    nextPollAt: timestamp('next_poll_at', { withTimezone: true }),
+    pollCount: integer('poll_count').notNull().default(0),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('media_generations_requester_idx').on(table.requestedBy, table.createdAt),
+    index('media_generations_status_idx').on(table.status),
+  ],
+);
+
+/**
+ * Append-only: every step of every generation, with who, when, what and how
+ * many credits. Rows are inserted and never changed; the monthly and daily
+ * ceilings are sums over this table.
+ */
+export const mediaCreditLedger = pgTable(
+  'media_credit_ledger',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    generationId: uuid('generation_id')
+      .notNull()
+      .references(() => mediaGenerations.id),
+    employeeId: uuid('employee_id')
+      .notNull()
+      .references(() => employees.id),
+    /** estimated, started, refused, unknown, succeeded, failed, timed_out */
+    event: text('event').notNull(),
+    operation: text('operation').notNull(),
+    model: text('model'),
+    prompt: text('prompt'),
+    params: jsonb('params').notNull().default({}),
+    creditsEstimated: integer('credits_estimated').notNull(),
+    creditsCharged: integer('credits_charged'),
+    /**
+     * What this row adds to the credits counted against the ceilings: the
+     * estimate when a generation starts, a correction when the real charge is
+     * known, the estimate given back when Kairogen refused before charging.
+     */
+    creditsDelta: integer('credits_delta').notNull().default(0),
+    externalGenerationId: text('external_generation_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('media_credit_ledger_employee_idx').on(table.employeeId, table.createdAt),
+    index('media_credit_ledger_created_idx').on(table.createdAt),
+  ],
+);
+
+/**
+ * Every temporary public link ever issued. Kairogen needs a public address to
+ * read a reference image, and the library has none: a link names one asset,
+ * lives fifteen minutes, is signed, and leaves this row behind.
+ */
+export const mediaPublicLinks = pgTable('media_public_links', {
+  tenantId: tenantId(),
+  id: uuid('id').primaryKey().defaultRandom(),
+  assetId: uuid('asset_id')
+    .notNull()
+    .references(() => mediaAssets.id),
+  generationId: uuid('generation_id').references(() => mediaGenerations.id),
+  issuedBy: uuid('issued_by')
+    .notNull()
+    .references(() => employees.id),
+  purpose: text('purpose').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});

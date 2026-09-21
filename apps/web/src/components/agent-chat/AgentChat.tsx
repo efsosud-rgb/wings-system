@@ -4,6 +4,7 @@ import {
   type AgentChatMessage,
   type AgentConsultation,
   type AgentProposalCard,
+  type AgentScope,
   type AgentStatusResponse,
   type AgentStreamEvent,
 } from '@wings/shared';
@@ -16,7 +17,7 @@ import {
   useAgentStatus,
 } from '../../api/agent.js';
 import { Button } from '../ui.js';
-import { ProposalCard, type ApplyCampaign } from './ProposalCards.js';
+import { CanGenerateContext, ProposalCard, type ApplyCampaign } from './ProposalCards.js';
 
 /**
  * The conversation with the traffic agent, in the studio's side column.
@@ -26,9 +27,23 @@ import { ProposalCard, type ApplyCampaign } from './ProposalCards.js';
  * pressed: nothing the agent writes fills a form or creates a request by itself.
  */
 
+const TRAFFIC_HINT =
+  'O agente só lê e propõe. Nada é executado daqui: toda proposta vira ação só quando você clica, e todo pedido passa pelo portão de aprovações.';
+const TRAFFIC_EMPTY =
+  'Pergunte sobre gasto, leads, CPL ou alertas, ou peça uma proposta de campanha.';
+
 export interface AgentChatProps {
   canRequest: boolean;
-  tab: 'paid' | 'owned';
+  tab: 'paid' | 'owned' | 'media';
+  /** Which agent this panel talks to. Conversations are kept apart by it. */
+  scope?: AgentScope;
+  title?: string;
+  /** Shown while the conversation has no message yet. */
+  emptyHint?: string;
+  /** The standing line about what this agent may and may not do. */
+  standingHint?: string;
+  /** Media studio: whether the person may spend credits from a generation card. */
+  canGenerate?: boolean;
   /** The builder's current values, read at the moment a message is sent. */
   getBuilderDraft?: () => Record<string, unknown> | undefined;
   /** Present only while the builder is on screen. */
@@ -138,11 +153,21 @@ function AssistantBody({
   );
 }
 
-export function AgentChat({ canRequest, tab, getBuilderDraft, onApplyCampaign }: AgentChatProps) {
+export function AgentChat({
+  canRequest,
+  tab,
+  scope = 'traffic',
+  title = 'Conversa com o agente',
+  emptyHint = TRAFFIC_EMPTY,
+  standingHint = TRAFFIC_HINT,
+  canGenerate = false,
+  getBuilderDraft,
+  onApplyCampaign,
+}: AgentChatProps) {
   const queryClient = useQueryClient();
   const status = useAgentStatus();
   const configured = status.data?.configured ?? false;
-  const conversations = useAgentConversations(configured);
+  const conversations = useAgentConversations(configured, scope);
 
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [messages, setMessages] = useState<AgentChatMessage[]>([]);
@@ -292,6 +317,7 @@ export function AgentChat({ canRequest, tab, getBuilderDraft, onApplyCampaign }:
         {
           conversationId,
           message,
+          ...(scope === 'traffic' ? {} : { scope }),
           context: { tab, ...(draft ? { draft } : {}) },
           ...(again !== undefined ? { retry: true } : {}),
         },
@@ -331,7 +357,7 @@ export function AgentChat({ canRequest, tab, getBuilderDraft, onApplyCampaign }:
   if (status.isLoading) {
     return (
       <div className="agent-chat">
-        <h2 className="agent-chat-title">Conversa com o agente</h2>
+        <h2 className="agent-chat-title">{title}</h2>
         <p className="muted" role="status">
           Carregando…
         </p>
@@ -342,7 +368,7 @@ export function AgentChat({ canRequest, tab, getBuilderDraft, onApplyCampaign }:
   if (!configured) {
     return (
       <div className="agent-chat">
-        <h2 className="agent-chat-title">Conversa com o agente</h2>
+        <h2 className="agent-chat-title">{title}</h2>
         <p className="muted">O agente ainda não está configurado neste ambiente.</p>
       </div>
     );
@@ -353,152 +379,155 @@ export function AgentChat({ canRequest, tab, getBuilderDraft, onApplyCampaign }:
   const lastUserText = [...messages].reverse().find((item) => item.role === 'user')?.content;
 
   return (
-    <div className="agent-chat">
-      <div className="agent-chat-head">
-        <h2 className="agent-chat-title">Conversa com o agente</h2>
-        <button type="button" className="link-button" onClick={startNew}>
-          Nova conversa
-        </button>
-      </div>
+    <CanGenerateContext.Provider value={canGenerate}>
+      <div className="agent-chat">
+        <div className="agent-chat-head">
+          <h2 className="agent-chat-title">{title}</h2>
+          <button type="button" className="link-button" onClick={startNew}>
+            Nova conversa
+          </button>
+        </div>
 
-      {earlier.length > 0 && (
-        <label className="agent-chat-picker">
-          <span className="field-label">Conversas anteriores</span>
-          <select
-            className="control"
-            value={conversationId ?? ''}
-            onChange={(event) => open(event.target.value)}
-            disabled={streaming}
-          >
-            <option value="">Conversa nova</option>
-            {earlier.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.title}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-
-      <p className="field-hint">
-        O agente só lê e propõe. Nada é executado daqui: toda proposta vira ação só quando você
-        clica, e todo pedido passa pelo portão de aprovações.
-      </p>
-
-      <div ref={list} className="agent-messages" role="log" aria-label="Mensagens" aria-live="off">
-        {messages.length === 0 && !streaming && (
-          <p className="muted agent-empty">
-            {loadId && loaded.isLoading
-              ? 'Carregando a conversa…'
-              : 'Pergunte sobre gasto, leads, CPL ou alertas, ou peça uma proposta de campanha.'}
-          </p>
+        {earlier.length > 0 && (
+          <label className="agent-chat-picker">
+            <span className="field-label">Conversas anteriores</span>
+            <select
+              className="control"
+              value={conversationId ?? ''}
+              onChange={(event) => open(event.target.value)}
+              disabled={streaming}
+            >
+              <option value="">Conversa nova</option>
+              {earlier.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.title}
+                </option>
+              ))}
+            </select>
+          </label>
         )}
-        {messages.map((message) => (
-          <div key={message.id} className={`agent-message agent-message-${message.role}`}>
-            <span className="agent-author">{message.role === 'user' ? 'Você' : 'Agente'}</span>
-            {message.role === 'user' ? (
-              <p className="agent-text">{message.content}</p>
-            ) : (
+
+        <p className="field-hint">{standingHint}</p>
+
+        <div
+          ref={list}
+          className="agent-messages"
+          role="log"
+          aria-label="Mensagens"
+          aria-live="off"
+        >
+          {messages.length === 0 && !streaming && (
+            <p className="muted agent-empty">
+              {loadId && loaded.isLoading ? 'Carregando a conversa…' : emptyHint}
+            </p>
+          )}
+          {messages.map((message) => (
+            <div key={message.id} className={`agent-message agent-message-${message.role}`}>
+              <span className="agent-author">{message.role === 'user' ? 'Você' : 'Agente'}</span>
+              {message.role === 'user' ? (
+                <p className="agent-text">{message.content}</p>
+              ) : (
+                <AssistantBody
+                  content={message.content}
+                  consulted={message.consulted}
+                  proposals={message.proposals}
+                  notice={message.notice}
+                  canRequest={canRequest}
+                  onApplyCampaign={onApplyCampaign}
+                  acted={acted}
+                  onActed={onActed}
+                  onRetry={
+                    message === lastMessage && message.retryable && lastUserText && !exhausted
+                      ? () => void send(lastUserText)
+                      : undefined
+                  }
+                  retryDisabled={streaming}
+                />
+              )}
+            </div>
+          ))}
+          {reply && (
+            <div
+              className="agent-message agent-message-assistant"
+              aria-live="polite"
+              aria-busy="true"
+            >
+              <span className="agent-author">Agente</span>
+              {reply.consulting && (
+                <p className="muted agent-consulting">Consultando: {reply.consulting}…</p>
+              )}
+              {reply.text === '' && !reply.consulting && reply.proposals.length === 0 && (
+                <p className="muted agent-consulting">Escrevendo…</p>
+              )}
               <AssistantBody
-                content={message.content}
-                consulted={message.consulted}
-                proposals={message.proposals}
-                notice={message.notice}
+                content={reply.text}
+                consulted={reply.consulted}
+                proposals={reply.proposals}
+                notice={null}
                 canRequest={canRequest}
                 onApplyCampaign={onApplyCampaign}
                 acted={acted}
                 onActed={onActed}
-                onRetry={
-                  message === lastMessage && message.retryable && lastUserText && !exhausted
-                    ? () => void send(lastUserText)
-                    : undefined
-                }
-                retryDisabled={streaming}
               />
-            )}
-          </div>
-        ))}
-        {reply && (
-          <div
-            className="agent-message agent-message-assistant"
-            aria-live="polite"
-            aria-busy="true"
-          >
-            <span className="agent-author">Agente</span>
-            {reply.consulting && (
-              <p className="muted agent-consulting">Consultando: {reply.consulting}…</p>
-            )}
-            {reply.text === '' && !reply.consulting && reply.proposals.length === 0 && (
-              <p className="muted agent-consulting">Escrevendo…</p>
-            )}
-            <AssistantBody
-              content={reply.text}
-              consulted={reply.consulted}
-              proposals={reply.proposals}
-              notice={null}
-              canRequest={canRequest}
-              onApplyCampaign={onApplyCampaign}
-              acted={acted}
-              onActed={onActed}
-            />
+            </div>
+          )}
+        </div>
+
+        {problem && (
+          <p className="field-error" role="alert">
+            {problem}
+          </p>
+        )}
+        {exhausted && usage && (
+          <div className="alert alert-warning" role="status">
+            O teto de uso de hoje ({formatUsd(usage.limitMicroUsd)}) foi atingido. O agente volta a
+            responder amanhã.
           </div>
         )}
-      </div>
 
-      {problem && (
-        <p className="field-error" role="alert">
-          {problem}
-        </p>
-      )}
-      {exhausted && usage && (
-        <div className="alert alert-warning" role="status">
-          O teto de uso de hoje ({formatUsd(usage.limitMicroUsd)}) foi atingido. O agente volta a
-          responder amanhã.
-        </div>
-      )}
-
-      <form
-        className="agent-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void send();
-        }}
-      >
-        <label className="field-label" htmlFor={fieldId}>
-          Mensagem
-        </label>
-        <textarea
-          id={fieldId}
-          className="control agent-input"
-          rows={3}
-          maxLength={AGENT_MESSAGE_MAX}
-          value={text}
-          disabled={exhausted}
-          placeholder="Escreva e tecle Enter"
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
+        <form
+          className="agent-form"
+          onSubmit={(event) => {
             event.preventDefault();
             void send();
           }}
-        />
-        <div className="agent-form-actions">
-          {usage && (
-            <span className="agent-usage muted">
-              Uso de hoje: {formatUsd(usage.spentMicroUsd)} de {formatUsd(usage.limitMicroUsd)}
-            </span>
-          )}
-          {streaming && (
-            <Button type="button" variant="ghost" onClick={() => abort.current?.abort()}>
-              Parar
+        >
+          <label className="field-label" htmlFor={fieldId}>
+            Mensagem
+          </label>
+          <textarea
+            id={fieldId}
+            className="control agent-input"
+            rows={3}
+            maxLength={AGENT_MESSAGE_MAX}
+            value={text}
+            disabled={exhausted}
+            placeholder="Escreva e tecle Enter"
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
+              event.preventDefault();
+              void send();
+            }}
+          />
+          <div className="agent-form-actions">
+            {usage && (
+              <span className="agent-usage muted">
+                Uso de hoje: {formatUsd(usage.spentMicroUsd)} de {formatUsd(usage.limitMicroUsd)}
+              </span>
+            )}
+            {streaming && (
+              <Button type="button" variant="ghost" onClick={() => abort.current?.abort()}>
+                Parar
+              </Button>
+            )}
+            <Button type="submit" disabled={streaming || exhausted || text.trim() === ''}>
+              Enviar
             </Button>
-          )}
-          <Button type="submit" disabled={streaming || exhausted || text.trim() === ''}>
-            Enviar
-          </Button>
-        </div>
-        <span className="field-hint">Enter envia. Shift + Enter quebra a linha.</span>
-      </form>
-    </div>
+          </div>
+          <span className="field-hint">Enter envia. Shift + Enter quebra a linha.</span>
+        </form>
+      </div>
+    </CanGenerateContext.Provider>
   );
 }

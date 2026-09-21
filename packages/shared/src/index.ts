@@ -15,6 +15,7 @@ export * from './auth/schema.js';
 export * from './cpf.js';
 export * from './employees/schema.js';
 export * from './integrations/kairogen.js';
+export * from './marketing/media-studio.js';
 export * from './marketing/seo-checklist.js';
 export * from './marketing/site-content.js';
 export * from './marketing/site-post.js';

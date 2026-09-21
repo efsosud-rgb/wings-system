@@ -155,6 +155,13 @@
       "when": 1790014707445,
       "tag": "0021_kairogen_media",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1790017676092,
+      "tag": "0022_media_studio",
+      "breakpoints": true
     }
   ]
 }
