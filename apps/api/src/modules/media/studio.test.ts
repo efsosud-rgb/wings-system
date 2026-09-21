@@ -36,7 +36,7 @@ import type { AgentLlm, LlmMessage, LlmRequest, LlmTurn } from '../agent/llm.js'
 import { fakeKairogen, fakePng } from '../integrations/kairogen/fake-kairogen.js';
 import { MEDIA_AGENT_SYSTEM_PROMPT, MEDIA_AGENT_TOOL_DEFINITIONS } from './agent.js';
 import { storeMedia } from './library.js';
-import { clearModelCache, listModels, studioDepsOf, usageOf } from './studio.js';
+import { clearModelCache, issuePublicLink, listModels, studioDepsOf, usageOf } from './studio.js';
 
 /**
  * Spending Kairogen credits: never without an estimate, never without a click,
@@ -763,6 +763,43 @@ describe('handing Kairogen a picture of ours', () => {
     const expired = await app.inject({ url: path });
     expect(expired.statusCode).toBe(404);
     expect(expired.json()).toEqual({ error: 'not_found' });
+  });
+
+  it('with R2, hands Kairogen a pre-signed address of the bucket for fifteen minutes, still on the record', async () => {
+    const { employeeId } = await sessionFor('marketing');
+    const stored = await storeMedia(db, mediaDir, {
+      ownerId: employeeId,
+      origin: 'upload',
+      bytes: fakePng(1200, 1200),
+    });
+    if (!stored.ok) throw new Error('expected stored');
+    const deps = studioDepsOf({
+      db,
+      env: env({
+        R2_ENDPOINT: 'https://acct.r2.cloudflarestorage.com',
+        R2_BUCKET: 'wings-staging',
+        R2_ACCESS_KEY_ID: 'AKID',
+        R2_SECRET_ACCESS_KEY: 'r2-secret-never-shown',
+      }),
+      storageFetch: async () => new Response(null, { status: 500 }),
+    });
+    const url = new URL(
+      await issuePublicLink(deps, {
+        assetId: stored.id,
+        issuedBy: employeeId,
+        generationId: null,
+        purpose: 'reference_image',
+      }),
+    );
+    expect(url.origin).toBe('https://acct.r2.cloudflarestorage.com');
+    expect(url.pathname).toMatch(/^\/wings-staging\/drive\/\d{4}-\d{2}\/[0-9a-f-]{36}$/);
+    expect(url.searchParams.get('X-Amz-Expires')).toBe('900');
+    expect(url.toString()).not.toContain('r2-secret-never-shown');
+    const [link] = await db
+      .select()
+      .from(mediaPublicLinks)
+      .where(eq(mediaPublicLinks.assetId, stored.id));
+    expect(link).toMatchObject({ issuedBy: employeeId, purpose: 'reference_image' });
   });
 
   it('hands a picture only to a model that takes one, for what that model does with it, and says which models do', async () => {

@@ -31,6 +31,8 @@ export interface LocalGrant {
 
 export interface LocalStorage extends ObjectStorage {
   readonly kind: 'local';
+  /** The folder itself, for the server's own reads. Never part of an answer. */
+  readonly dir: string;
   /** What a token allows, or null when it is forged, altered or past its time. */
   open(token: string): LocalGrant | null;
   stream(key: string): Promise<{ stream: ReadStream; size: number } | null>;
@@ -56,6 +58,7 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
 
   const storage: LocalStorage = {
     kind: 'local',
+    dir: root,
     open(token) {
       const [body, mac] = token.split('.');
       if (!body || !mac) return null;
