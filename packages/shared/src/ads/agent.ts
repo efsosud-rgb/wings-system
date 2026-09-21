@@ -102,6 +102,7 @@ export const MEDIA_AGENT_READ_TOOLS = [
   'consultar_biblioteca',
   'consultar_saldo',
   'rascunho_da_campanha',
+  'listar_clientes',
 ] as const;
 export const MEDIA_AGENT_PROPOSAL_TOOLS = ['propor_geracao'] as const;
 export type MediaAgentToolName =
@@ -126,6 +127,7 @@ export const AGENT_TOOL_LABEL: Record<AgentToolName, string> = {
   consultar_biblioteca: 'Biblioteca de mídia',
   consultar_saldo: 'Saldo e limites de créditos',
   rascunho_da_campanha: 'Rascunho aberto no construtor de campanha',
+  listar_clientes: 'Clientes cadastrados',
   propor_geracao: 'Proposta de geração',
 };
 
@@ -563,6 +565,8 @@ export interface AgentChangeProposalCard extends AgentProposalBase {
 export interface AgentGenerationProposalCard extends AgentProposalBase {
   kind: 'generation';
   payload: AgentGenerationProposal;
+  /** Who the proposal is for, by name, for the card. Null when the client row is gone. */
+  clientName: string | null;
   /** Null when the estimate could not be made or has been used. */
   estimate: { id: string; credits: number; expiresAt: string } | null;
   /** Set once somebody clicked: the generation to follow. */

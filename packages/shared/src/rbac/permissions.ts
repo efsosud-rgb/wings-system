@@ -30,6 +30,7 @@ export const PERMISSIONS = {
   'integrations.manage': 'Conectar e desconectar integrações do sistema (Kairogen)',
   'marketing.media.read': 'Ver a biblioteca de mídia do marketing',
   'marketing.media.generate': 'Gerar imagens e vídeos gastando créditos',
+  'clients.manage': 'Cadastrar e editar clientes',
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;
@@ -56,6 +57,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   admin_master: {
     // The one connection to Kairogen belongs to the system: only an Admin Master makes it.
     'integrations.manage': 'all',
+    'clients.manage': 'all',
     'marketing.media.read': 'all',
     'marketing.media.generate': 'all',
     'employees.read': 'all',
@@ -78,6 +80,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'site.publish': 'all',
   },
   diretoria: {
+    'clients.manage': 'all',
     'marketing.media.read': 'all',
     'marketing.media.generate': 'all',
     'employees.read': 'all',
@@ -114,6 +117,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   },
   // Marketing builds and asks; only Admin Master or Diretoria approve.
   marketing: {
+    // Marketing is who works for the clients, so it keeps their register too.
+    'clients.manage': 'all',
     'marketing.media.read': 'all',
     'marketing.media.generate': 'all',
     ...SECTOR_STAFF,

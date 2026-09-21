@@ -145,8 +145,11 @@ export interface MediaAsset {
   prompt: string | null;
   model: string | null;
   credits: number | null;
-  /** Optional filing, the seed of the Drive module. */
+  /** Who it is for: a row of `clients`, Wings Company unless somebody chose another. */
+  clientId: string;
+  /** That client's name, for the screen. */
   client: string | null;
+  /** Optional filing, the seed of the Drive module. */
   folder: string | null;
   tags: string[];
   ownerName: string | null;
@@ -159,7 +162,7 @@ export const MEDIA_MAX_TAGS = 12;
 export const MEDIA_UPLOAD_MAX_BYTES = 30 * 1024 * 1024;
 export const MEDIA_UPLOAD_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'video/mp4'] as const;
 
-//   GET    /media/assets?kind=&origin=&aspect=&tag=&q=  -> { assets: MediaAsset[] }   marketing.media.read
+//   GET    /media/assets?kind=&origin=&aspect=&tag=&clientId=&q=  -> { assets: MediaAsset[] }   marketing.media.read
 //   GET    /media/assets/:id/file                      -> the file                  marketing.media.read
 //   POST   /media/assets  (raw body, typed)            -> { asset }                 marketing.media.generate
-//   PATCH  /media/assets/:id  { client, folder, tags } -> { asset }                 marketing.media.generate
+//   PATCH  /media/assets/:id  { clientId, folder, tags } -> { asset }                 marketing.media.generate

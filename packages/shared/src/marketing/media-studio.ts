@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { checkCopyCompliance, COMPLIANCE_RULE_LABEL } from '../ads/campaign-builder.js';
+import { WINGS_CLIENT_ID } from '../clients.js';
 
 /**
  * Marketing → Edição de Fotos e Vídeos: what the studio, its agent and the API
@@ -97,6 +98,11 @@ const generateSpec = z
     params: z.record(z.string().regex(/^[a-z][a-z0-9_]{0,40}$/), paramValue).default({}),
     /** A library image used as style reference (image) or as first frame (video). */
     referenceAssetId: z.uuid().optional(),
+    /**
+     * Who it is for. Filing only: it is stored with the generation, the ledger
+     * and the asset, and is never part of what Kairogen is sent.
+     */
+    clientId: z.uuid().default(WINGS_CLIENT_ID),
   })
   .superRefine((spec, ctx) => {
     if (spec.kind === 'video' && spec.quantity > MAX_VIDEOS_PER_GENERATION) {
@@ -220,10 +226,14 @@ export interface MediaGeneration {
   finishedAt: string | null;
   /** Library assets this generation produced, once saved. */
   assetIds: string[];
+  clientId: string;
+  clientName: string | null;
 }
 
 //   GET  /media/studio                 -> { usage, connected, storageAvailable }   marketing.media.read
 //   GET  /media/models?kind=           -> { models: MediaModel[], cachedAt }       marketing.media.read
+//        `creditsPerOutput` is null when the catalog gives no price: the screen then
+//        says "custo na estimativa", and the estimate is where the price comes from.
 //   POST /media/estimates              -> { estimate: MediaEstimate }              marketing.media.generate
 //   POST /media/generations            -> { generation }  body { estimateId }      marketing.media.generate
 //   GET  /media/generations            -> { generations } the latest, newest first marketing.media.read
@@ -277,6 +287,13 @@ export const agentGenerationProposalSchema = z
     durationSeconds: z.number().positive().max(120).optional(),
     params: z.record(z.string().regex(/^[a-z][a-z0-9_]{0,40}$/), paramValue).default({}),
     referenceAssetId: z.uuid().optional(),
+    /**
+     * Who it is for, by the id `listar_clientes` gave. Required: when the request
+     * does not say, the agent asks instead of assuming.
+     */
+    clientId: z.uuid(
+      'Diga para qual cliente é: use o id que listar_clientes devolve. Se o pedido não disse, pergunte "Para qual cliente?"',
+    ),
     /** Whether the picture carries written words. Only when the person asked for them. */
     textInImage: z.string().trim().max(120).nullable().default(null),
   })
