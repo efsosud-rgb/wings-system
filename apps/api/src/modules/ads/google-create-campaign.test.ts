@@ -385,6 +385,37 @@ describe('executing an approved Google campaign', () => {
     ).toHaveLength(0);
   });
 
+  it('carries a radius from the approved draft to a proximity criterion', async () => {
+    const { accountId, api, client } = await world();
+    const { changeRequestId } = await requestAndApprove(
+      accountId,
+      searchDraft({
+        reach: {
+          states: ['SP'],
+          cities: [],
+          customLocations: [{ latitude: -22.9056, longitude: -47.0608, radiusKm: 15 }],
+        },
+      }),
+    );
+
+    const result = await executeApprovedChange(db, client, changeRequestId, { allowWrites: true });
+    expect(result).toMatchObject({ ok: true });
+
+    const operations = (api.mutateCalls()[0]?.body.mutateOperations ?? []) as Record<
+      string,
+      { create: Record<string, unknown> }
+    >[];
+    const criteria = operations.flatMap((op) =>
+      op.campaignCriterionOperation ? [op.campaignCriterionOperation.create] : [],
+    );
+    expect(criteria.filter((criterion) => criterion.location)).toHaveLength(1);
+    expect(criteria.find((criterion) => criterion.proximity)?.proximity).toEqual({
+      geoPoint: { latitudeInMicroDegrees: -22_905_600, longitudeInMicroDegrees: -47_060_800 },
+      radius: 15,
+      radiusUnits: 'KILOMETERS',
+    });
+  });
+
   it('freezes the account when Google does not say what happened', async () => {
     const { accountId, api, client } = await world();
     const { changeRequestId } = await requestAndApprove(accountId, searchDraft());

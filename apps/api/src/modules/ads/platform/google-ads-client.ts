@@ -11,6 +11,7 @@ import type {
   PlatformAd,
   PlatformAdSet,
   PlatformCampaign,
+  PlatformReach,
   SpendRow,
 } from './types.js';
 
@@ -507,7 +508,7 @@ export class GoogleAdsWriteClient extends GoogleAdsPlatformClient {
     let locations: ResolvedLocation[] = [];
     if (google.channel === 'SEARCH') {
       try {
-        locations = await this.resolveLocations(google.locations);
+        locations = await this.resolveLocations(google.reach);
       } catch (error) {
         if (error instanceof GeoResolutionError) {
           return { status: 'rejected', code: 'geo_unresolved', message: error.message };
@@ -558,16 +559,9 @@ export class GoogleAdsWriteClient extends GoogleAdsPlatformClient {
       { campaignOperation: { create: campaign } },
     ];
     if (google.channel === 'SEARCH') {
-      for (const location of locations) {
-        mutateOperations.push({
-          campaignCriterionOperation: {
-            create: {
-              campaign: campaignName,
-              location: { geoTargetConstant: location.resourceName },
-            },
-          },
-        });
-      }
+      mutateOperations.push(
+        ...googleLocationCriteria(campaignName, locations, google.reach.customLocations),
+      );
       mutateOperations.push({
         campaignCriterionOperation: {
           create: {
@@ -623,10 +617,59 @@ export class GoogleAdsWriteClient extends GoogleAdsPlatformClient {
       detail: {
         channel: google.channel,
         locations: locations.map(({ asked, canonicalName }) => ({ asked, canonicalName })),
+        radii:
+          google.channel === 'SEARCH'
+            ? google.reach.customLocations.map(({ latitude, longitude, radiusKm }) => ({
+                latitude,
+                longitude,
+                radiusKm,
+              }))
+            : [],
         language: google.channel === 'SEARCH' ? PORTUGUESE_LANGUAGE_CONSTANT : null,
       },
     };
   }
+}
+
+/**
+ * Google's translation of a draft's reach: one campaign criterion per place.
+ *
+ * A state or a city is a `location` pointing at its geo target constant. A
+ * radius is a `proximity`: the point in micro degrees (degrees x 1 000 000,
+ * integers) and the radius in kilometres. The two kinds live side by side on
+ * the same campaign, and Google reaches the union of them — the same meaning a
+ * mixed reach has on Meta.
+ */
+export function googleLocationCriteria(
+  campaignResourceName: string,
+  locations: Pick<ResolvedLocation, 'resourceName'>[],
+  radii: PlatformReach['customLocations'],
+): Record<string, unknown>[] {
+  return [
+    ...locations.map((location) => ({
+      campaignCriterionOperation: {
+        create: {
+          campaign: campaignResourceName,
+          location: { geoTargetConstant: location.resourceName },
+        },
+      },
+    })),
+    ...radii.map((radius) => ({
+      campaignCriterionOperation: {
+        create: {
+          campaign: campaignResourceName,
+          proximity: {
+            geoPoint: {
+              latitudeInMicroDegrees: Math.round(radius.latitude * 1_000_000),
+              longitudeInMicroDegrees: Math.round(radius.longitude * 1_000_000),
+            },
+            radius: radius.radiusKm,
+            radiusUnits: 'KILOMETERS',
+          },
+        },
+      },
+    })),
+  ];
 }
 
 /**

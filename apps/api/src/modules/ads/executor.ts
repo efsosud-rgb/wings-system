@@ -347,7 +347,12 @@ export async function executeApprovedChange(
               bidding: payload.objective === 'traffic' ? 'MAXIMIZE_CLICKS' : 'MAXIMIZE_CONVERSIONS',
               startDate: draft.startDate,
               endDate: draft.endDate,
-              locations: { states: payload.reach.states, cities: payload.reach.cities },
+              reach: {
+                states: payload.reach.states,
+                cities: payload.reach.cities,
+                // A draft approved before the map existed has none.
+                customLocations: payload.reach.customLocations ?? [],
+              },
             },
           }
         : {}),

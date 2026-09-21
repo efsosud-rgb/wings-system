@@ -1507,6 +1507,14 @@ textarea.control {
   cursor: crosshair;
 }
 
+/* A platform that takes no radius: the map is shown, greyed, and marks nothing. */
+.radius-map.is-disabled .radius-map-canvas {
+  opacity: 0.45;
+  filter: grayscale(1);
+  pointer-events: none;
+  cursor: not-allowed;
+}
+
 .radius-map-slider {
   display: flex;
   flex-direction: column;

@@ -3,6 +3,7 @@ import {
   MAX_CUSTOM_LOCATIONS,
   MAX_RADIUS_KM,
   MIN_RADIUS_KM,
+  RADIUS_NOT_ACCEPTED_HINT,
   describeCustomLocation,
   type CustomLocation,
 } from '@wings/shared';
@@ -59,17 +60,22 @@ async function nameOf(latitude: number, longitude: number): Promise<string | nul
 export interface RadiusMapProps {
   value: CustomLocation[];
   onChange: (next: CustomLocation[]) => void;
+  /**
+   * The platform takes no radius. The map stays on screen — the block looks
+   * the same on every platform — but marks nothing, and says what to use.
+   */
+  disabled?: boolean;
 }
 
-export function RadiusMap({ value, onChange }: RadiusMapProps) {
+export function RadiusMap({ value, onChange, disabled = false }: RadiusMapProps) {
   const container = useRef<HTMLDivElement | null>(null);
   const map = useRef<L.Map | null>(null);
   const shapes = useRef<L.LayerGroup | null>(null);
   const [selected, setSelected] = useState(0);
 
   // The click handler lives as long as the map; these let it see today's props.
-  const latest = useRef({ value, onChange });
-  latest.current = { value, onChange };
+  const latest = useRef({ value, onChange, disabled });
+  latest.current = { value, onChange, disabled };
 
   useEffect(() => {
     if (!container.current || map.current) return;
@@ -83,8 +89,8 @@ export function RadiusMap({ value, onChange }: RadiusMapProps) {
     map.current = instance;
 
     instance.on('click', (event: L.LeafletMouseEvent) => {
-      const { value: current, onChange: emit } = latest.current;
-      if (current.length >= MAX_CUSTOM_LOCATIONS) return;
+      const { value: current, onChange: emit, disabled: off } = latest.current;
+      if (off || current.length >= MAX_CUSTOM_LOCATIONS) return;
       const latitude = Number(event.latlng.lat.toFixed(5));
       const longitude = Number(event.latlng.lng.toFixed(5));
       const index = current.length;
@@ -150,12 +156,14 @@ export function RadiusMap({ value, onChange }: RadiusMapProps) {
   const full = value.length >= MAX_CUSTOM_LOCATIONS;
 
   return (
-    <div className="radius-map">
+    <div className={`radius-map ${disabled ? 'is-disabled' : ''}`} aria-disabled={disabled}>
       <span className="field-label">Raio no mapa</span>
-      <p className="field-hint">
-        {full
-          ? `Limite de ${MAX_CUSTOM_LOCATIONS} pontos. Remova um para marcar outro.`
-          : 'Clique no mapa para marcar o centro. Depois ajuste o raio. Use os botões + e − para aproximar.'}
+      <p className="field-hint" role={disabled ? 'note' : undefined}>
+        {disabled
+          ? `${RADIUS_NOT_ACCEPTED_HINT}.`
+          : full
+            ? `Limite de ${MAX_CUSTOM_LOCATIONS} pontos. Remova um para marcar outro.`
+            : 'Clique no mapa para marcar o centro. Depois ajuste o raio. Use os botões + e − para aproximar.'}
       </p>
       <div
         ref={container}
@@ -164,13 +172,13 @@ export function RadiusMap({ value, onChange }: RadiusMapProps) {
         aria-label="Mapa para marcar um ponto e um raio de alcance"
       />
 
-      {current && (
+      {current && !disabled && (
         <label className="radius-map-slider">
           <span>
             Raio: <strong>{current.radiusKm} km</strong>
             <small className="muted">
               {' '}
-              — a Meta aceita de {MIN_RADIUS_KM} a {MAX_RADIUS_KM} km
+              — de {MIN_RADIUS_KM} a {MAX_RADIUS_KM} km
             </small>
           </span>
           <input
@@ -191,7 +199,7 @@ export function RadiusMap({ value, onChange }: RadiusMapProps) {
         </label>
       )}
 
-      {value.length > 0 && (
+      {value.length > 0 && !disabled && (
         <ul className="builder-cities radius-map-list">
           {value.map((location, index) => (
             <li key={`${location.latitude},${location.longitude}`}>

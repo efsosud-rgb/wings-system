@@ -507,11 +507,13 @@ export const MAX_REACH_CITIES = 50;
  * mapping them to a platform's location keys belongs with ad-set creation.
  */
 /**
- * A point on the map and a radius around it — Meta's
- * `geo_locations.custom_locations` (latitude, longitude, radius, kilometres).
- * The radius bounds are Meta's documented ones for a custom location; like
- * everything about targeting, they are unverified on the live account until
- * ad-set creation exists.
+ * A point on the map and a radius around it. One neutral shape that each
+ * platform's adapter translates: Meta's `geo_locations.custom_locations`,
+ * Google's proximity criterion. The field keeps the name `customLocations`
+ * because approved drafts are stored — and their approvals hashed — with it.
+ *
+ * The radius bounds are Meta's documented ones for a custom location, and sit
+ * well inside Google's (up to 800 km), so one range serves both.
  */
 export const MIN_RADIUS_KM = 1;
 export const MAX_RADIUS_KM = 80;
@@ -552,6 +554,43 @@ export const reachSchema = z
     message: 'Escolha pelo menos um estado, uma cidade ou um ponto no mapa',
   });
 export type Reach = z.output<typeof reachSchema>;
+
+/**
+ * What of the reach each platform can take. States and cities go everywhere;
+ * a radius does not. TikTok and LinkedIn are listed before their adapters
+ * exist so that, when they arrive, each needs only its own translator: the
+ * draft, the builder and this refusal are already in place.
+ */
+export const PLATFORM_REACH: Record<PaidPlatformKey, { radius: boolean }> = {
+  meta: { radius: true },
+  google_search: { radius: true },
+  youtube: { radius: true },
+  tiktok: { radius: false },
+  linkedin: { radius: false },
+};
+
+export function platformAcceptsRadius(platform: string): boolean {
+  return (
+    (PLATFORM_REACH as Record<string, { radius: boolean } | undefined>)[platform]?.radius === true
+  );
+}
+
+export const RADIUS_NOT_ACCEPTED_HINT = 'Esta plataforma não aceita raio: use estados e cidades';
+
+/**
+ * Why this reach cannot go to this platform, or null when it can. The draft
+ * schema refuses with it, so a platform added to the builder later is held to
+ * its row in `PLATFORM_REACH` without anyone remembering to write the check.
+ */
+export function reachRefusal(
+  platform: string,
+  reach: { customLocations?: readonly unknown[] },
+): string | null {
+  if ((reach.customLocations?.length ?? 0) > 0 && !platformAcceptsRadius(platform)) {
+    return RADIUS_NOT_ACCEPTED_HINT;
+  }
+  return null;
+}
 
 const idealCustomerProfile = z
   .string()
@@ -1012,6 +1051,11 @@ export const campaignDraftSchema = z
       });
     }
 
+    const reachProblem = reachRefusal(draft.platform, draft.reach);
+    if (reachProblem) {
+      ctx.addIssue({ code: 'custom', path: ['reach', 'customLocations'], message: reachProblem });
+    }
+
     const foreign = (field: 'youtube' | 'search' | 'variations' | 'formatKey', label: string) =>
       ctx.addIssue({
         code: 'custom',
@@ -1079,13 +1123,6 @@ export const campaignDraftSchema = z
       if (draft[field] !== undefined) {
         ctx.addIssue({ code: 'custom', path: [field], message: 'Campo só da Meta' });
       }
-    }
-    if (draft.reach.customLocations.length > 0) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['reach', 'customLocations'],
-        message: 'O raio no mapa ainda não vale para o Google: use estados e cidades',
-      });
     }
     if (draft.variations.length > 0) foreign('variations', 'Criativo de imagem');
     if (draft.formatKey) foreign('formatKey', 'Formato de imagem');

@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   CREATIVE_FORMATS,
+  PAID_PLATFORMS,
+  PLATFORM_REACH,
+  RADIUS_NOT_ACCEPTED_HINT,
   describeReach,
   reachSchema,
   applyUtms,
@@ -15,6 +18,8 @@ import {
   parseYoutubeVideoId,
   periodOverdeliveryFactor,
   placementsSchema,
+  platformAcceptsRadius,
+  reachRefusal,
   usesVerticalPlacements,
   utmSlug,
   variationMedia,
@@ -486,16 +491,26 @@ describe('Google drafts', () => {
     expect(campaignDraftSchema.safeParse({ ...youtube, youtube: undefined }).success).toBe(false);
   });
 
-  it('refuses a radius on the map, which Google does not get yet', () => {
-    const result = campaignDraftSchema.safeParse({
-      ...search,
-      reach: {
-        states: ['SP'],
-        cities: [],
-        customLocations: [{ latitude: -23.5, longitude: -46.6, radiusKm: 10 }],
-      },
-    });
-    expect(result.success).toBe(false);
+  it('accepts a radius on the map, alone or alongside states and cities', () => {
+    const point = { latitude: -23.5, longitude: -46.6, radiusKm: 10 };
+    for (const base of [search, youtube]) {
+      expect(
+        campaignDraftSchema.safeParse({
+          ...base,
+          reach: {
+            states: ['SP'],
+            cities: [{ name: 'Curitiba', state: 'PR' }],
+            customLocations: [point],
+          },
+        }).success,
+      ).toBe(true);
+      expect(
+        campaignDraftSchema.safeParse({
+          ...base,
+          reach: { states: [], cities: [], customLocations: [point] },
+        }).success,
+      ).toBe(true);
+    }
   });
 });
 
@@ -560,5 +575,37 @@ describe('cost estimate by platform', () => {
       utm_source: 'youtube',
       utm_medium: 'paid_video',
     });
+  });
+});
+
+describe('what of the reach each platform takes', () => {
+  const point = { latitude: -23.5, longitude: -46.6, radiusKm: 10 };
+
+  it('lists every platform of the builder, the ones without an adapter included', () => {
+    expect(Object.keys(PLATFORM_REACH).sort()).toEqual(PAID_PLATFORMS.map((p) => p.key).sort());
+  });
+
+  it('takes a radius on Meta, Google Pesquisa and YouTube; not on TikTok or LinkedIn', () => {
+    expect(['meta', 'google_search', 'youtube'].map(platformAcceptsRadius)).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(['tiktok', 'linkedin', 'unheard-of'].map(platformAcceptsRadius)).toEqual([
+      false,
+      false,
+      false,
+    ]);
+  });
+
+  it('refuses a radius where it is not taken, and says what to use instead', () => {
+    expect(reachRefusal('tiktok', { customLocations: [point] })).toBe(
+      'Esta plataforma não aceita raio: use estados e cidades',
+    );
+    expect(reachRefusal('linkedin', { customLocations: [point] })).toBe(RADIUS_NOT_ACCEPTED_HINT);
+    // States and cities go everywhere.
+    expect(reachRefusal('tiktok', { customLocations: [] })).toBeNull();
+    expect(reachRefusal('tiktok', {})).toBeNull();
+    expect(reachRefusal('google_search', { customLocations: [point] })).toBeNull();
   });
 });

@@ -368,25 +368,7 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
    */
   async createAdSet(spec: AdSetSpec): Promise<StepOutcome<{ id: string }>> {
     const targeting: Record<string, unknown> = {
-      geo_locations: {
-        ...(spec.targeting.regions.length > 0
-          ? { regions: spec.targeting.regions.map((region) => ({ key: region.key })) }
-          : {}),
-        ...(spec.targeting.cities.length > 0
-          ? { cities: spec.targeting.cities.map((city) => ({ key: city.key })) }
-          : {}),
-        ...(spec.customLocations.length > 0
-          ? {
-              custom_locations: spec.customLocations.map((location) => ({
-                latitude: location.latitude,
-                longitude: location.longitude,
-                radius: location.radiusKm,
-                distance_unit: 'kilometer',
-              })),
-            }
-          : {}),
-        location_types: ['home', 'recent'],
-      },
+      geo_locations: metaGeoLocations(spec.targeting, spec.customLocations),
       age_min: spec.ageMin,
       age_max: spec.ageMax,
       locales: [spec.targeting.localeKey],
@@ -538,3 +520,34 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
 }
 
 export { MetaApiError };
+
+/**
+ * Meta's translation of a draft's reach: states are `regions`, cities are
+ * `cities` (both by the keys Meta resolved them to) and each radius is a
+ * `custom_locations` entry in kilometres. Google's counterpart is
+ * `googleLocationCriteria`; a new platform brings its own.
+ */
+export function metaGeoLocations(
+  resolved: Pick<AdSetSpec['targeting'], 'regions' | 'cities'>,
+  radii: AdSetSpec['customLocations'],
+): Record<string, unknown> {
+  return {
+    ...(resolved.regions.length > 0
+      ? { regions: resolved.regions.map((region) => ({ key: region.key })) }
+      : {}),
+    ...(resolved.cities.length > 0
+      ? { cities: resolved.cities.map((city) => ({ key: city.key })) }
+      : {}),
+    ...(radii.length > 0
+      ? {
+          custom_locations: radii.map((location) => ({
+            latitude: location.latitude,
+            longitude: location.longitude,
+            radius: location.radiusKm,
+            distance_unit: 'kilometer',
+          })),
+        }
+      : {}),
+    location_types: ['home', 'recent'],
+  };
+}
