@@ -4,6 +4,7 @@ import {
   MAX_VIDEOS_PER_GENERATION,
   MEDIA_REFUSAL_MESSAGE,
   PROMPT_MAX,
+  WINGS_CLIENT_ID,
   mediaEstimateRequestSchema,
   type GenerationAspect,
   type MediaAsset,
@@ -14,7 +15,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ApiError } from '../../api/client.js';
 import { useEstimate, useMediaModels, useStartGeneration } from '../../api/media.js';
 import { Button } from '../ui.js';
-import { MediaPicker, MediaThumb } from './MediaLibrary.js';
+import { ClientSelect, MediaPicker, MediaThumb } from './MediaLibrary.js';
 
 /**
  * The operator's form. Two steps, always in this order: "Estimar custo" asks
@@ -54,6 +55,7 @@ export function GenerationForm({
   const [modelKey, setModelKey] = useState('');
   const model = list.find((item) => item.key === modelKey) ?? list[0];
 
+  const [clientId, setClientId] = useState<string>(WINGS_CLIENT_ID);
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
   const [aspect, setAspect] = useState<GenerationAspect>('1:1');
@@ -109,6 +111,7 @@ export function GenerationForm({
       ...(kind === 'video' && duration !== null ? { durationSeconds: duration } : {}),
       params,
       ...(reference ? { referenceAssetId: reference.id } : {}),
+      clientId,
     });
     if (!parsed.success) {
       setInvalid(parsed.error.issues[0]?.message ?? 'Confira os campos.');
@@ -137,6 +140,20 @@ export function GenerationForm({
       )}
 
       <fieldset className="media-form-fields" disabled={readOnly}>
+        <label className="field">
+          <span className="field-label">Para quem</span>
+          <ClientSelect
+            value={clientId}
+            onChange={(next) => {
+              setClientId(next);
+              changed();
+            }}
+          />
+        </label>
+        <span className="field-hint">
+          Serve para arquivar a mídia aqui. O nome do cliente não é enviado ao Kairogen.
+        </span>
+
         <div className="media-form-row">
           <label className="field">
             <span className="field-label">Tipo</span>
@@ -170,8 +187,10 @@ export function GenerationForm({
               {list.map((item) => (
                 <option key={item.key} value={item.key}>
                   {item.name}
-                  {item.creditsPerOutput !== null &&
-                    ` · ${credits(item.creditsPerOutput)} por saída`}
+                  {/* The catalog does not always give a price; the estimate always does. */}
+                  {item.creditsPerOutput !== null
+                    ? ` · ${credits(item.creditsPerOutput)} por saída`
+                    : ' · custo na estimativa'}
                 </option>
               ))}
             </select>

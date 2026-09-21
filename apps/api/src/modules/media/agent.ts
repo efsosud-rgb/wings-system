@@ -7,6 +7,7 @@ import {
   MAX_VIDEOS_PER_GENERATION,
   MEDIA_AGENT_PROPOSAL_TOOLS,
   MEDIA_AGENT_READ_TOOLS,
+  WINGS_CLIENT_ID,
   agentGenerationProposalSchema,
   mediaAspectOf,
   type AgentConsultation,
@@ -15,11 +16,12 @@ import {
 } from '@wings/shared';
 import { and, desc, eq, ilike } from 'drizzle-orm';
 import { z } from 'zod';
-import { agentProposals, mediaAssets } from '../../db/schema/index.js';
+import { agentProposals, clients, mediaAssets } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import type { LlmToolDefinition } from '../agent/llm.js';
 import type { AgentProfile } from '../agent/profile.js';
 import { scrubDeep } from '../agent/scrub.js';
+import { activeClient, listClients } from '../clients/routes.js';
 import type { ToolContext, ToolOutcome } from '../agent/tools.js';
 import { StudioRefusal, createEstimate, listModels, usageOf, type StudioDeps } from './studio.js';
 
@@ -40,9 +42,14 @@ export const MEDIA_AGENT_SYSTEM_PROMPT = `Você é o Agente de Edição Wings, o
 A Wings trabalha com formatação e expansão de franquias: estrutura negócios para virarem franquia e ajuda redes a vender novas unidades. As peças falam com empresários donos de negócio e com candidatos a franqueado. Imagem de anúncio aqui vende seriedade, método e suporte; não vende dinheiro fácil.
 
 # O que você pode fazer
-Você lê, estima e propõe. Lê o catálogo de modelos do Kairogen com preços (listar_modelos), a biblioteca de mídia (consultar_biblioteca), o saldo e os limites de créditos (consultar_saldo) e o rascunho da campanha aberta no construtor (rascunho_da_campanha). Pergunta ao Kairogen quanto custa (estimar_custo). E propõe uma geração com propor_geracao.
+Você lê, estima e propõe. Lê o catálogo de modelos do Kairogen com preços (listar_modelos), a biblioteca de mídia (consultar_biblioteca), o saldo e os limites de créditos (consultar_saldo), os clientes cadastrados (listar_clientes) e o rascunho da campanha aberta no construtor (rascunho_da_campanha). Pergunta ao Kairogen quanto custa (estimar_custo). E propõe uma geração com propor_geracao.
 Você não gera nada. A proposta vira um cartão com o custo em créditos e o botão "Gerar (N créditos)"; só o clique da pessoa gasta créditos. Nunca diga que gerou, criou ou enviou algo: diga que propôs. Você não tem acesso à internet.
 Antes de propor, leia listar_modelos para escolher o modelo e consultar_saldo para saber o que cabe. Se houver campanha aberta no construtor, leia rascunho_da_campanha e proponha mídia coerente com ela: mesmo público, mesma promessa, formato do posicionamento escolhido.
+
+# Para quem é
+Toda mídia é feita para um cliente: a própria Wings Company ou um cliente dela. Se o pedido não disser para quem é, pergunte "Para qual cliente?" antes de propor, e não presuma. Quando a pessoa responder, leia listar_clientes e use o id do cliente em clientId. Se o cliente não estiver na lista, diga que ele precisa ser cadastrado em Administração → Clientes; não proponha em nome de outro.
+O nome do cliente serve só para arquivar aqui dentro e nunca vai ao Kairogen: não escreva o nome do cliente no prompt, no negativePrompt nem em textInImage. Descreva o negócio dele ("a neighborhood bakery"), não a marca.
+Quando um modelo vier sem creditos_por_saida, o catálogo não informou o preço: use estimar_custo para saber.
 
 # Créditos
 Cada geração custa créditos do Kairogen. Há três limites: o saldo da conta, um limite diário por pessoa e um limite mensal da Wings. Prefira o modelo mais barato que resolve o pedido e uma saída só, a não ser que a pessoa peça variações. Imagem: até ${MAX_IMAGES_PER_GENERATION} por geração. Vídeo: até ${MAX_VIDEOS_PER_GENERATION}, e a duração tem de ser uma das que o modelo informa. Se a proposta não couber nos limites, diga quanto falta e proponha algo menor.
@@ -83,6 +90,7 @@ async function listarModelos(ctx: ToolContext, raw: unknown): Promise<ToolOutcom
       modelo: model.key,
       nome: model.name,
       tipo: model.kind,
+      // Null when the catalog gives no price: `estimar_custo` is then where it comes from.
       creditos_por_saida: model.creditsPerOutput,
       duracoes_aceitas_segundos: model.supportedDurations,
       formatos_aceitos: model.aspectRatios,
@@ -133,8 +141,10 @@ async function consultarBiblioteca(ctx: ToolContext, raw: unknown): Promise<Tool
       folder: mediaAssets.folder,
       tags: mediaAssets.tags,
       createdAt: mediaAssets.createdAt,
+      clientName: clients.name,
     })
     .from(mediaAssets)
+    .leftJoin(clients, eq(clients.id, mediaAssets.clientId))
     .where(
       and(
         args.tipo ? eq(mediaAssets.kind, args.tipo) : undefined,
@@ -158,12 +168,21 @@ async function consultarBiblioteca(ctx: ToolContext, raw: unknown): Promise<Tool
         prompt: row.prompt?.slice(0, 400) ?? null,
         modelo: row.model,
         creditos: row.credits,
+        cliente: row.clientName,
         pasta: row.folder,
         tags: row.tags,
         criada_em: row.createdAt.toISOString(),
       })),
     }),
     summary: `${rows.length} mídia(s) na biblioteca`,
+  };
+}
+
+async function listarClientes(ctx: ToolContext): Promise<ToolOutcome> {
+  const active = (await listClients(ctx.db)).filter((client) => client.active);
+  return {
+    result: { clientes: active.map((client) => ({ id: client.id, nome: client.name })) },
+    summary: `${active.length} cliente(s)`,
   };
 }
 
@@ -240,6 +259,8 @@ async function estimarCusto(ctx: ToolContext, raw: unknown): Promise<ToolOutcome
         quantity: args.quantidade,
         durationSeconds: args.duracao_segundos,
         params: args.parametros,
+        // A bare quote is nobody's work yet: it is filed under Wings and never generated.
+        clientId: WINGS_CLIENT_ID,
       },
     });
     return {
@@ -274,6 +295,17 @@ async function proporGeracao(ctx: ToolContext, raw: unknown): Promise<ToolOutcom
     };
   }
   const proposal = parsed.data;
+  const client = await activeClient(ctx.db, proposal.clientId);
+  if (!client) {
+    const reasons = [
+      'clientId: cliente não encontrado. Leia listar_clientes e use o id de lá; se o pedido não disse para quem é, pergunte "Para qual cliente?".',
+    ];
+    return {
+      result: { aceita: false, corrija: reasons },
+      summary: 'Proposta recusada: cliente não encontrado',
+      refusal: reasons,
+    };
+  }
 
   // The card exists only with its price: the estimate is made here, by the server.
   const [stored] = await ctx.db
@@ -303,6 +335,7 @@ async function proporGeracao(ctx: ToolContext, raw: unknown): Promise<ToolOutcom
         durationSeconds: proposal.durationSeconds,
         params: proposal.params,
         referenceAssetId: proposal.referenceAssetId,
+        clientId: client.id,
       },
     });
   } catch (error) {
@@ -335,6 +368,7 @@ async function proporGeracao(ctx: ToolContext, raw: unknown): Promise<ToolOutcom
     createdAt: stored.createdAt.toISOString(),
     approvalId: null,
     payload: proposal,
+    clientName: client.name,
     estimate: { id: estimate.id, credits: estimate.credits, expiresAt: estimate.expiresAt },
     generationId: null,
   };
@@ -344,7 +378,7 @@ async function proporGeracao(ctx: ToolContext, raw: unknown): Promise<ToolOutcom
       creditos: estimate.credits,
       observacao: `A pessoa vê um cartão com o botão "Gerar (${estimate.credits} créditos)". Nada foi gerado e nenhum crédito foi gasto.`,
     },
-    summary: `${proposal.model}, ${proposal.aspect}, ${proposal.quantity} saída(s): ${brl(estimate.credits)}`,
+    summary: `${client.name}: ${proposal.model}, ${proposal.aspect}, ${proposal.quantity} saída(s): ${brl(estimate.credits)}`,
     proposal: card,
   };
 }
@@ -388,6 +422,12 @@ export const MEDIA_AGENT_TOOL_DEFINITIONS: LlmToolDefinition[] = [
     parameters: noArgs,
   },
   {
+    name: 'listar_clientes',
+    description:
+      'Clientes cadastrados (a Wings Company e os clientes dela), com o id que vai em clientId na proposta. O nome do cliente é só para arquivar: nunca entra no prompt.',
+    parameters: noArgs,
+  },
+  {
     name: 'rascunho_da_campanha',
     description:
       'A campanha aberta no construtor do Agente de Tráfego: plataforma, objetivo, cliente ideal, região, formato, posicionamentos e textos. Para propor mídia coerente com ela.',
@@ -396,7 +436,7 @@ export const MEDIA_AGENT_TOOL_DEFINITIONS: LlmToolDefinition[] = [
   {
     name: 'propor_geracao',
     description:
-      'Propõe UMA geração: prompt final em inglês, explicação em português, modelo, formato, quantidade, parâmetros de preço. O servidor estima o custo e mostra um cartão com o botão "Gerar (N créditos)". Não gera nada: só o clique da pessoa gera.',
+      'Propõe UMA geração para UM cliente (clientId, de listar_clientes): prompt final em inglês, explicação em português, modelo, formato, quantidade, parâmetros de preço. O servidor estima o custo e mostra um cartão com o botão "Gerar (N créditos)". Não gera nada: só o clique da pessoa gera.',
     parameters: z.toJSONSchema(agentGenerationProposalSchema, { io: 'input' }) as Record<
       string,
       unknown
@@ -413,6 +453,7 @@ const HANDLERS: Record<
   consultar_biblioteca: consultarBiblioteca,
   consultar_saldo: (ctx) => consultarSaldo(ctx),
   rascunho_da_campanha: async (ctx) => rascunhoDaCampanha(ctx),
+  listar_clientes: (ctx) => listarClientes(ctx),
   propor_geracao: proporGeracao,
 };
 

@@ -10,7 +10,8 @@ import {
 import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { employees, mediaAssets } from '../../db/schema/index.js';
+import { clients, employees, mediaAssets } from '../../db/schema/index.js';
+import { activeClient } from '../clients/routes.js';
 import { writeAudit } from '../../lib/audit.js';
 import { mediaDirOf, openMedia, storeMedia, toMediaAsset } from './library.js';
 
@@ -23,11 +24,12 @@ const listQuery = z.object({
   origin: z.enum(MEDIA_ORIGINS).optional(),
   aspect: z.enum(MEDIA_ASPECTS).optional(),
   tag: z.string().trim().min(1).max(40).optional(),
+  clientId: z.uuid().optional(),
   q: z.string().trim().min(1).max(80).optional(),
 });
 
 const filing = z.object({
-  client: label.nullable().optional(),
+  clientId: z.uuid().optional(),
   folder: label.nullable().optional(),
   tags: tags.optional(),
 });
@@ -60,20 +62,22 @@ export const mediaRoutes: FastifyPluginAsync = async (app) => {
       if (!query.success) {
         return reply.status(400).send({ error: 'invalid_request', message: 'Filtro inválido.' });
       }
-      const { kind, origin, aspect, tag, q } = query.data;
+      const { kind, origin, aspect, tag, clientId, q } = query.data;
       const rows = await db
-        .select({ asset: mediaAssets, ownerName: employees.fullName })
+        .select({ asset: mediaAssets, ownerName: employees.fullName, clientName: clients.name })
         .from(mediaAssets)
         .leftJoin(employees, eq(employees.id, mediaAssets.ownerId))
+        .leftJoin(clients, eq(clients.id, mediaAssets.clientId))
         .where(
           and(
             kind ? eq(mediaAssets.kind, kind) : undefined,
             origin ? eq(mediaAssets.origin, origin) : undefined,
             tag ? sql`${tag} = any(${mediaAssets.tags})` : undefined,
+            clientId ? eq(mediaAssets.clientId, clientId) : undefined,
             q
               ? or(
                   ilike(mediaAssets.prompt, `%${q.replace(/[%_\\]/g, '\\$&')}%`),
-                  ilike(mediaAssets.client, `%${q.replace(/[%_\\]/g, '\\$&')}%`),
+                  ilike(clients.name, `%${q.replace(/[%_\\]/g, '\\$&')}%`),
                   ilike(mediaAssets.folder, `%${q.replace(/[%_\\]/g, '\\$&')}%`),
                 )
               : undefined,
@@ -84,7 +88,7 @@ export const mediaRoutes: FastifyPluginAsync = async (app) => {
 
       const assets = rows
         .filter((row) => !aspect || mediaAspectOf(row.asset.width, row.asset.height) === aspect)
-        .map((row) => toMediaAsset(row.asset, row.ownerName));
+        .map((row) => toMediaAsset(row.asset, { owner: row.ownerName, client: row.clientName }));
       return reply.send({ assets, storageAvailable: mediaDir !== null });
     },
   );
@@ -160,12 +164,15 @@ export const mediaRoutes: FastifyPluginAsync = async (app) => {
         metadata: { byteSize: bytes.length },
       });
       const [row] = await db
-        .select({ asset: mediaAssets, ownerName: employees.fullName })
+        .select({ asset: mediaAssets, ownerName: employees.fullName, clientName: clients.name })
         .from(mediaAssets)
         .leftJoin(employees, eq(employees.id, mediaAssets.ownerId))
+        .leftJoin(clients, eq(clients.id, mediaAssets.clientId))
         .where(eq(mediaAssets.id, stored.id));
       if (!row) throw new Error('asset vanished after insert');
-      return reply.status(201).send({ asset: toMediaAsset(row.asset, row.ownerName) });
+      return reply
+        .status(201)
+        .send({ asset: toMediaAsset(row.asset, { owner: row.ownerName, client: row.clientName }) });
     },
   );
 
@@ -178,8 +185,13 @@ export const mediaRoutes: FastifyPluginAsync = async (app) => {
       if (!params.success || !body.success) {
         return reply.status(400).send({ error: 'invalid_request', message: 'Dados inválidos.' });
       }
+      if (body.data.clientId && !(await activeClient(db, body.data.clientId))) {
+        return reply
+          .status(400)
+          .send({ error: 'invalid_request', message: 'Cliente não encontrado ou inativo.' });
+      }
       const changes = {
-        ...(body.data.client !== undefined ? { client: body.data.client || null } : {}),
+        ...(body.data.clientId !== undefined ? { clientId: body.data.clientId } : {}),
         ...(body.data.folder !== undefined ? { folder: body.data.folder || null } : {}),
         ...(body.data.tags !== undefined
           ? { tags: [...new Set(body.data.tags.map((item) => item.toLowerCase()))] }
@@ -195,10 +207,16 @@ export const mediaRoutes: FastifyPluginAsync = async (app) => {
               .returning();
       if (!updated)
         return reply.status(404).send({ error: 'not_found', message: 'Mídia não encontrada.' });
-      const owner = await db.query.employees.findFirst({
-        where: eq(employees.id, updated.ownerId),
+      const [owner, client] = await Promise.all([
+        db.query.employees.findFirst({ where: eq(employees.id, updated.ownerId) }),
+        db.query.clients.findFirst({ where: eq(clients.id, updated.clientId) }),
+      ]);
+      return reply.send({
+        asset: toMediaAsset(updated, {
+          owner: owner?.fullName ?? null,
+          client: client?.name ?? null,
+        }),
       });
-      return reply.send({ asset: toMediaAsset(updated, owner?.fullName ?? null) });
     },
   );
 };

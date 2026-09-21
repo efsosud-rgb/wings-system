@@ -22,6 +22,7 @@ import { Link } from 'react-router-dom';
 import { useMarkProposalApplied, useRequestFromProposal } from '../../api/agent.js';
 import { ApiError } from '../../api/client.js';
 import { useGeneration, useStartGeneration } from '../../api/media.js';
+import { MediaThumb } from '../media-studio/MediaLibrary.js';
 import { Button } from '../ui.js';
 import { formatBrl, formatDate } from '../campaign-builder/format.js';
 
@@ -380,6 +381,10 @@ function GenerationCard({
       <p>{payload.explanation}</p>
       <dl className="agent-card-facts">
         <div>
+          <dt>Para quem</dt>
+          <dd>{proposal.clientName ?? 'Cliente removido'}</dd>
+        </div>
+        <div>
           <dt>Modelo</dt>
           <dd className="mono">{payload.model}</dd>
         </div>
@@ -422,6 +427,21 @@ function GenerationCard({
         )}
       </details>
 
+      {generation?.status === 'succeeded' && generation.assetIds.length > 0 && (
+        <div className="agent-card-media">
+          {generation.assetIds.map((assetId, index) => (
+            <Link
+              key={assetId}
+              to="/marketing/edicao"
+              aria-label={`Mídia gerada ${index + 1} de ${generation.assetIds.length}: ver na biblioteca`}
+            >
+              <MediaThumb
+                asset={{ kind: generation.kind, downloadPath: `/media/assets/${assetId}/file` }}
+              />
+            </Link>
+          ))}
+        </div>
+      )}
       {proposal.generationId ? (
         <p className="agent-card-state" role="status">
           {generation ? GENERATION_STATUS_LABEL[generation.status] : 'Acompanhando a geração…'}

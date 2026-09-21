@@ -49,6 +49,7 @@ export interface MediaAssetFilters {
   origin?: 'kairogen' | 'upload';
   aspect?: string;
   tag?: string;
+  clientId?: string;
   q?: string;
 }
 
@@ -85,14 +86,9 @@ export function useUploadMedia() {
 export function useFileMedia() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: {
-      id: string;
-      client: string | null;
-      folder: string | null;
-      tags: string[];
-    }) =>
+    mutationFn: (input: { id: string; clientId: string; folder: string | null; tags: string[] }) =>
       api.patch<{ asset: MediaAsset }>(`/media/assets/${input.id}`, {
-        client: input.client,
+        clientId: input.clientId,
         folder: input.folder,
         tags: input.tags,
       }),

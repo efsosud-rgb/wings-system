@@ -58,7 +58,7 @@ function sendRefusal(reply: FastifyReply, error: StudioRefusal) {
  */
 export const mediaStudioRoutes: FastifyPluginAsync = async (app) => {
   const { db, env } = app.wings;
-  const deps = studioDepsOf(app.wings);
+  const deps = studioDepsOf(app.wings, app.log);
   void resumeGenerations(deps).catch(() => undefined);
 
   app.get(

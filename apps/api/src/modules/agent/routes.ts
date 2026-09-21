@@ -41,7 +41,7 @@ const HEARTBEAT_MS = 10_000;
  */
 export const agentRoutes: FastifyPluginAsync = async (app) => {
   const { db, env } = app.wings;
-  const studio = studioDepsOf(app.wings);
+  const studio = studioDepsOf(app.wings, app.log);
 
   /** Null while the key is missing: the routes then answer 503, never a fake reply. */
   const llm: AgentLlm | null =

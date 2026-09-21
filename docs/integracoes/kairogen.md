@@ -266,6 +266,88 @@ tolerantes (procuram `credit_cost`, `generation_id`, `output_url`,
 respondem "não sei" em vez de supor. Se a primeira geração real mostrar outro
 formato, é o único arquivo que muda.
 
+### A primeira geração real (staging, 2026-09-21)
+
+GPT-Image 1.5, 1 imagem, **estimativa de 1 crédito**, 35 segundos, terminou em
+"Concluída" e a imagem entrou na biblioteca. O que isso **prova** sobre o
+formato das respostas, porque sem esses campos o fluxo não chegaria ao fim:
+
+| Ferramenta       | O que o adaptador leu com sucesso                                              |
+| ---------------- | ------------------------------------------------------------------------------ |
+| `list_models`    | lista de modelos com chave, tipo e nome (o seletor encheu)                     |
+| `estimate_cost`  | um número de créditos (1)                                                      |
+| `generate_image` | um identificador de geração                                                    |
+| `get_generation` | um estado de "em andamento", depois um de "pronto" com endereço https da saída |
+| `get_credits`    | um número                                                                      |
+
+O que isso **não** prova, e por quê: o servidor não gravava o corpo das
+respostas em lugar nenhum (o log só tem as linhas de requisição), então o nome
+exato de cada campo, a forma do `pricing` em `list_models` e o campo do custo
+real continuam sem confirmação. Dois sintomas vieram dessa mesma lacuna:
+
+- **Seletor de modelo sem custo.** A tela mostra o custo quando
+  `creditsPerOutput` vem preenchido; veio `null` para todos os modelos, ou seja,
+  `creditsPerOutput()` do adaptador não achou preço no formato que o catálogo
+  usa (a descrição de `estimate_cost` cita `conditionalPricing`, um nome que o
+  leitor não conhece) ou o catálogo não traz preço no plano Free. Até saber
+  qual dos dois, o seletor diz **"custo na estimativa"**, que é verdade nos dois
+  casos: o preço que vale é sempre o de `estimate_cost`.
+- **Saldo de 45 para 94 depois de gastar 1.** Pode ser crédito que o Kairogen
+  pôs na conta, ou `creditsFrom()` lendo campos diferentes em respostas
+  diferentes. Ver "O saldo no ledger", abaixo.
+
+#### Como o formato real passa a ser conhecido
+
+Toda chamada do estúdio ao Kairogen passa por `ask()` (`studio.ts`), que escreve
+no log da API uma linha `kairogen answer shape` com a **forma** da resposta
+(`shapeOf()` no adaptador): nomes das chaves, tipos e números. Toda string vira
+o seu tamanho (`string(43)`), todo endereço vira só o host
+(`url(cdn.kairogen.ai)`); só palavras curtas sob chaves como `status` e `type`
+ficam. Nenhum prompt, link, nome ou token cabe nessa linha. Ela sai uma vez por
+ferramenta e por forma, não a cada chamada.
+
+Com isso no ar, abrir a tela do estúdio já registra `list_models` e
+`get_credits`; a próxima geração registra `estimate_cost`, `generate_*` e
+`get_generation` (em andamento e pronta). A partir dessas linhas os leitores do
+adaptador são apertados para os nomes reais, e esta seção ganha a tabela
+definitiva.
+
+### O saldo no ledger
+
+`media_credit_ledger.balance_reported` guarda o que `get_credits` respondeu:
+
+- em cada linha de uma geração (`estimated`, `started` e a linha final, esta com
+  o saldo lido **depois** de terminar): a diferença entre `started` e a final é
+  o que realmente saiu da conta;
+- numa linha própria, `balance_changed` (sem geração, delta zero, com quem
+  estava olhando), sempre que uma leitura difere da última registrada. Leituras
+  que repetem o último valor não escrevem nada.
+
+Um salto como 45 → 94 passa a ter data e a ficar entre duas linhas conhecidas.
+
+### Para quem: clientes
+
+Toda geração é para um cliente (`clients`: id, nome, slug, ativo), e a Wings
+Company é o primeiro, com id fixo, criado pela migração. `client_id` fica em
+`media_generations`, em cada linha do `media_credit_ledger` e em
+`media_assets`; a proposta do agente leva `clientId` no payload. Ampliar ou
+animar herda o cliente da imagem de origem. O cadastro fica em Administração →
+Clientes (`clients.manage`: Admin Master, Diretoria, Marketing); a Wings Company
+não pode ser renomeada nem desativada, e cliente inativo não recebe trabalho
+novo.
+
+**O nome do cliente nunca vai ao Kairogen.** `client_id` não faz parte de
+`price_args` nem dos argumentos de nenhuma ferramenta, e uma estimativa cujo
+prompt cite o nome do cliente escolhido é recusada antes de qualquer chamada
+(`mentionsClient`, sem diferença de maiúsculas, acentos ou pontuação). A Wings
+Company é a exceção: o próprio nome não é segredo. O agente lê
+`listar_clientes`, pergunta "Para qual cliente?" quando o pedido não diz (a
+proposta sem `clientId` volta para ele com essa instrução) e o cartão mostra
+"Para quem".
+
+A coluna de texto livre `media_assets.client`, de antes, não é mais lida nem
+escrita.
+
 ## Roteiro do primeiro teste real
 
 Uma imagem, uma saída, no modelo mais barato, com os créditos grátis. Quem
@@ -291,8 +373,13 @@ clica é o Eric.
 
 ## Não verificado
 
-- [ ] O formato real das respostas de `estimate_cost`, `generate_*`,
-      `get_generation` e `list_models` (ver "Onde o formato das respostas é lido").
+- [ ] Os nomes exatos dos campos das respostas de `estimate_cost`, `generate_*`,
+      `get_generation`, `get_credits` e `list_models`. A primeira geração real
+      provou que os leitores acham o que precisam, não com que nome (ver "A
+      primeira geração real"). Sai das linhas `kairogen answer shape` do log.
+- [ ] Se `list_models` traz preço por plano, e em que forma. Até lá o seletor
+      diz "custo na estimativa".
+- [ ] Se `get_generation` informa o custo real cobrado, e em que campo.
 - [ ] Se os modelos aceitam `aspect_ratio: '4:5'`. Quando o catálogo informa os
       formatos aceitos, a estimativa já recusa o que o modelo não faz.
 - [ ] Se o catálogo lista o ampliador (Topaz) com preço. Sem isso "Ampliar"

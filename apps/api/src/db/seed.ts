@@ -3,6 +3,9 @@ import {
   ROLES,
   ROLE_PERMISSIONS,
   SECTORS,
+  WINGS_CLIENT_ID,
+  WINGS_CLIENT_NAME,
+  WINGS_CLIENT_SLUG,
   type PermissionKey,
   type RoleKey,
   type SectorSlug,
@@ -10,7 +13,14 @@ import {
 import { eq } from 'drizzle-orm';
 import { createDb, type Database } from './client.js';
 import { loadDotEnv } from './load-env.js';
-import { permissions, rolePermissions, roles, sectors, workSchedules } from './schema/index.js';
+import {
+  clients,
+  permissions,
+  rolePermissions,
+  roles,
+  sectors,
+  workSchedules,
+} from './schema/index.js';
 
 /**
  * Seeds reference data: sectors, roles, the permission matrix and the standard
@@ -101,6 +111,13 @@ export async function seed(db: Database): Promise<void> {
       isDefault: true,
     });
   }
+
+  // The first client is Wings itself. The migration already inserts it (other
+  // tables default to its id); this keeps the row right in a database that lost it.
+  await db
+    .insert(clients)
+    .values({ id: WINGS_CLIENT_ID, name: WINGS_CLIENT_NAME, slug: WINGS_CLIENT_SLUG })
+    .onConflictDoNothing();
 }
 
 async function main() {

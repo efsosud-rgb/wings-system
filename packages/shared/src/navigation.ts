@@ -180,6 +180,14 @@ export const NAVIGATION: readonly NavModule[] = [
         status: 'ready',
         kind: 'crud',
       },
+      {
+        path: '/administracao/clientes',
+        label: 'Clientes',
+        description: 'Para quem o trabalho é feito',
+        permission: 'clients.manage',
+        status: 'ready',
+        kind: 'crud',
+      },
       soon('/administracao/configuracoes', 'Configurações', undefined, 'settings.manage'),
       {
         path: '/administracao/integracoes',

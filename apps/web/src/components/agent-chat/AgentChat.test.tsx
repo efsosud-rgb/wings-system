@@ -630,8 +630,10 @@ const generationCard: AgentGenerationProposalCard = {
   createdAt: '2026-09-21T12:00:00.000Z',
   approvalId: null,
   generationId: null,
+  clientName: 'Padaria Aurora',
   estimate: { id: 'est-1', credits: 4, expiresAt: '2026-09-21T12:15:00.000Z' },
   payload: {
+    clientId: '11111111-1111-4111-8111-1111111111c2',
     kind: 'image',
     model: 'seedream-v4',
     prompt:
@@ -677,6 +679,8 @@ describe('the editing agent', () => {
     stream({ type: 'proposal', proposal: generationCard });
 
     expect(screen.getByText('Custo estimado: 4 créditos')).toBeTruthy();
+    // Who it is for is on the card, before the click.
+    expect(screen.getByText('Para quem').nextElementSibling?.textContent).toBe('Padaria Aurora');
     expect(screen.getByText(/Dono de loja em frente ao negócio/)).toBeTruthy();
     expect(screen.getByText('Prompt enviado ao modelo')).toBeTruthy();
     expect(startGeneration).not.toHaveBeenCalled();
@@ -703,6 +707,8 @@ describe('the editing agent', () => {
       createdAt: '2026-09-21T12:00:05.000Z',
       finishedAt: '2026-09-21T12:00:40.000Z',
       assetIds: [],
+      clientId: '11111111-1111-4111-8111-1111111111c2',
+      clientName: 'Padaria Aurora',
     };
     const options = startGeneration.mock.calls[0]?.[1] as {
       onSuccess: (body: { generation: MediaGeneration }) => void;
@@ -713,6 +719,40 @@ describe('the editing agent', () => {
     expect(screen.getByText(/Confira no Kairogen antes de gerar de novo/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^Gerar/ })).toBeNull();
     expect(startGeneration).toHaveBeenCalledTimes(1);
+    // Nothing was produced, so the card shows no picture.
+    expect(screen.queryByRole('link', { name: /^Mídia gerada/ })).toBeNull();
+  });
+
+  it('shows what was generated on the card once the generation is done', async () => {
+    followed.current = {
+      id: 'gen-2',
+      status: 'succeeded',
+      operation: 'generate',
+      kind: 'image',
+      model: 'seedream-v4',
+      prompt: null,
+      creditsEstimated: 4,
+      creditsCharged: 4,
+      detail: null,
+      requestedByName: null,
+      createdAt: '2026-09-21T12:00:05.000Z',
+      finishedAt: '2026-09-21T12:00:40.000Z',
+      assetIds: ['asset-9'],
+      clientId: '11111111-1111-4111-8111-1111111111c2',
+      clientName: 'Padaria Aurora',
+    };
+    renderChat(media(true));
+    await say('Uma imagem');
+    stream({
+      type: 'proposal',
+      proposal: { ...generationCard, status: 'requested', estimate: null, generationId: 'gen-2' },
+    });
+
+    const thumb = screen.getByRole('link', { name: 'Mídia gerada 1 de 1: ver na biblioteca' });
+    // The library's own authenticated route: never an address at Kairogen.
+    expect(thumb.querySelector('img')?.getAttribute('src')).toBe('/api/media/assets/asset-9/file');
+    expect(screen.getByText(/Concluída/)).toBeTruthy();
+    followed.current = null;
   });
 
   it('offers no button without the permission to generate, nor without an estimate', async () => {

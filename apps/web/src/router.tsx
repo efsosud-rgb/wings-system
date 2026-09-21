@@ -6,6 +6,7 @@ import { ProtectedRoute } from './components/ProtectedRoute.js';
 import { NoAccess, RequirePermission } from './components/RequirePermission.js';
 import { ApprovalDetailPage } from './pages/ApprovalDetailPage.js';
 import { ApprovalsPage } from './pages/ApprovalsPage.js';
+import { ClientsPage } from './pages/ClientsPage.js';
 import { CockpitPage } from './pages/CockpitPage.js';
 import { ComingSoonPage } from './pages/ComingSoonPage.js';
 import { EmployeeFormPage } from './pages/EmployeeFormPage.js';
@@ -43,6 +44,7 @@ const SCREENS: Record<string, RouteObject[]> = {
     { path: 'novo', element: <EmployeeFormPage /> },
     { path: ':id', element: <EmployeeFormPage /> },
   ],
+  '/administracao/clientes': [{ index: true, element: <ClientsPage /> }],
   '/administracao/integracoes': [{ index: true, element: <IntegrationsPage /> }],
   '/dashboard/marketing': [{ index: true, element: <CockpitPage /> }],
   '/marketing/edicao': [{ index: true, element: <MediaStudioPage /> }],

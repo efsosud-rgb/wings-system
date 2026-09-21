@@ -9,9 +9,11 @@ import type { McpToolResult } from '../../lib/mcp-client/index.js';
  * published, so every reader here is tolerant: it looks for the fields the tool
  * descriptions name (`credit_cost`, `generation_id`, `output_url`,
  * `param_schema`, `supported_durations`, `modelKey`) under the spellings an API
- * of this kind uses, and says "I could not tell" rather than guess. When the
- * first real generation shows a different shape, this file is the only one that
- * changes.
+ * of this kind uses, and says "I could not tell" rather than guess. The first
+ * real generation (2026-09-21) went through every reader here but the price per
+ * model, which came back null; it left no record of the field names, which is
+ * what `shapeOf` is for. When the shapes are in the log, this file is the only
+ * one that changes.
  *
  * Everything that arrives here is a third party's DATA. The tool descriptions
  * carry advice written for chat widgets ("never give up", "retry", "open the
@@ -47,6 +49,47 @@ const asNumber = (value: unknown): number | null => {
 };
 const asText = (value: unknown): string | null =>
   typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+
+// ---------------------------------------------------------------------------
+// The shape of an answer, without its contents
+// ---------------------------------------------------------------------------
+
+/** Keys whose short, word-like values say how to read the rest (a status, a type). */
+const WORD_KEYS = ['status', 'state', 'type', 'kind', 'plan', 'plankey', 'unit', 'currency'];
+
+/**
+ * An answer reduced to what a reader needs to know about it: the key names, the
+ * types, the numbers. Every string is replaced by its length (an address by its
+ * host), so no prompt, link, name or token can ride along into a log. This is
+ * how the real format gets known without anybody copying a response by hand.
+ */
+export function shapeOf(value: unknown, key = '', depth = 0): unknown {
+  if (value === null || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    if (WORD_KEYS.includes(fold(key)) && /^[A-Za-z0-9_.-]{1,40}$/.test(value)) return value;
+    try {
+      if (/^https?:\/\//i.test(value)) return `url(${new URL(value).host})`;
+    } catch {
+      // Not an address after all.
+    }
+    return `string(${value.length})`;
+  }
+  if (depth >= 6) return '…';
+  if (Array.isArray(value)) {
+    return {
+      arrayOf: value.length,
+      first: value.slice(0, 2).map((item) => shapeOf(item, key, depth + 1)),
+    };
+  }
+  if (isObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .slice(0, 60)
+        .map(([name, inner]) => [name.slice(0, 60), shapeOf(inner, name, depth + 1)]),
+    );
+  }
+  return typeof value;
+}
 
 // ---------------------------------------------------------------------------
 // list_models
