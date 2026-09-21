@@ -27,6 +27,9 @@ export const PERMISSIONS = {
   'ads.request': 'Pedir a criação de campanhas de tráfego pago',
   'site.publish': 'Criar rascunhos de post no site da Wings',
   'ads.approve': 'Aprovar alterações de orçamento de tráfego pago',
+  'integrations.manage': 'Conectar e desconectar integrações do sistema (Kairogen)',
+  'marketing.media.read': 'Ver a biblioteca de mídia do marketing',
+  'marketing.media.generate': 'Gerar imagens e vídeos gastando créditos',
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;
@@ -51,6 +54,10 @@ const SECTOR_STAFF: RolePermissions = {
  */
 export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   admin_master: {
+    // The one connection to Kairogen belongs to the system: only an Admin Master makes it.
+    'integrations.manage': 'all',
+    'marketing.media.read': 'all',
+    'marketing.media.generate': 'all',
     'employees.read': 'all',
     'employees.create': 'all',
     'employees.update': 'all',
@@ -71,6 +78,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'site.publish': 'all',
   },
   diretoria: {
+    'marketing.media.read': 'all',
+    'marketing.media.generate': 'all',
     'employees.read': 'all',
     'employees.pii.view': 'all',
     // Access levels only: Diretoria still cannot edit the rest of a record.
@@ -105,6 +114,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   },
   // Marketing builds and asks; only Admin Master or Diretoria approve.
   marketing: {
+    'marketing.media.read': 'all',
+    'marketing.media.generate': 'all',
     ...SECTOR_STAFF,
     'ads.read': 'all',
     'ads.request': 'all',

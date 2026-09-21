@@ -13,6 +13,8 @@ import { metaRoutes } from './modules/ads/meta-routes.js';
 import { adsRoutes } from './modules/ads/routes.js';
 import type { AgentLlm } from './modules/agent/llm.js';
 import { agentRoutes } from './modules/agent/routes.js';
+import { kairogenRoutes } from './modules/integrations/kairogen/routes.js';
+import { mediaRoutes } from './modules/media/routes.js';
 import { siteRoutes } from './modules/site/routes.js';
 import { employeeRoutes } from './modules/employees/routes.js';
 import { authPlugin } from './plugins/auth.js';
@@ -28,6 +30,8 @@ declare module 'fastify' {
       platformFetch?: typeof fetch;
       /** Set only by tests, so no test ever reaches OpenRouter. */
       agentLlm?: AgentLlm;
+      /** Set only by tests, so no test ever reaches Kairogen. */
+      kairogenFetch?: typeof fetch;
     };
   }
 }
@@ -45,6 +49,8 @@ export async function buildApp(deps: {
   platformFetch?: typeof fetch;
   /** Overridable so tests script the language model instead of calling it. */
   agentLlm?: AgentLlm;
+  /** Overridable so tests talk to a simulated Kairogen. */
+  kairogenFetch?: typeof fetch;
 }): Promise<FastifyInstance> {
   const app = Fastify({
     // Personal data must never reach the logs (LGPD), so request bodies are
@@ -67,6 +73,7 @@ export async function buildApp(deps: {
     db: deps.db,
     platformFetch: deps.platformFetch,
     agentLlm: deps.agentLlm,
+    kairogenFetch: deps.kairogenFetch,
     mailer: deps.mailer ?? createMailer(deps.env, { info: (msg) => app.log.info(msg) }),
     cpfCrypto: createCpfCrypto(deps.env.CPF_ENCRYPTION_KEY, deps.env.CPF_INDEX_KEY),
   });
@@ -114,6 +121,8 @@ export async function buildApp(deps: {
   await app.register(creativeRoutes);
   await app.register(audienceRoutes);
   await app.register(agentRoutes);
+  await app.register(kairogenRoutes);
+  await app.register(mediaRoutes);
   await app.register(metaRoutes);
   await app.register(siteRoutes, { wordpressFetch: deps.wordpressFetch });
 

@@ -148,6 +148,13 @@
       "when": 1790011543882,
       "tag": "0020_agent_chat_fixes",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790014707445,
+      "tag": "0021_kairogen_media",
+      "breakpoints": true
     }
   ]
 }

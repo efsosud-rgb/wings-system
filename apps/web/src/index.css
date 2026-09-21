@@ -2484,3 +2484,125 @@ textarea.control {
     scroll-behavior: smooth;
   }
 }
+
+/* ---------- integrações ---------- */
+.integration-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 760px;
+  padding: 20px;
+  background: var(--wings-card);
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+}
+
+.integration-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.integration-card-head h2 {
+  font-size: 18px;
+}
+
+.integration-state {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border: 1px solid var(--wings-border);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--wings-muted);
+}
+
+.integration-state-connected {
+  color: var(--wings-success);
+  border-color: var(--wings-success);
+}
+
+.integration-state-needs_reconnect,
+.integration-state-not_configured {
+  color: var(--wings-danger);
+  border-color: var(--wings-danger);
+}
+
+.integration-state-pending {
+  color: var(--wings-accent);
+  border-color: var(--wings-accent);
+}
+
+.integration-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.integration-facts dt {
+  font-size: 12px;
+  color: var(--wings-muted);
+}
+
+.integration-device {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--wings-surface);
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+}
+
+.integration-code {
+  font-size: 28px;
+  letter-spacing: 0.12em;
+  color: var(--wings-text);
+  user-select: all;
+}
+
+.integration-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.integration-actions .btn {
+  min-height: 44px;
+}
+
+.btn.btn-danger {
+  background: transparent;
+  border: 1px solid var(--wings-danger);
+  color: var(--wings-danger);
+}
+
+.integration-tools {
+  font-size: 13px;
+  color: var(--wings-muted);
+}
+
+.integration-tools summary {
+  cursor: pointer;
+  padding: 6px 0;
+}
+
+.integration-tools ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.integration-schema {
+  margin-top: 4px;
+  padding: 8px;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 12px;
+  background: var(--wings-surface);
+  border: 1px solid var(--wings-border);
+  border-radius: 6px;
+}
