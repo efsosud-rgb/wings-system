@@ -15,6 +15,7 @@ import type { AgentLlm } from './modules/agent/llm.js';
 import { agentRoutes } from './modules/agent/routes.js';
 import { kairogenRoutes } from './modules/integrations/kairogen/routes.js';
 import { mediaRoutes } from './modules/media/routes.js';
+import { mediaStudioRoutes } from './modules/media/studio-routes.js';
 import { siteRoutes } from './modules/site/routes.js';
 import { employeeRoutes } from './modules/employees/routes.js';
 import { authPlugin } from './plugins/auth.js';
@@ -123,6 +124,7 @@ export async function buildApp(deps: {
   await app.register(agentRoutes);
   await app.register(kairogenRoutes);
   await app.register(mediaRoutes);
+  await app.register(mediaStudioRoutes);
   await app.register(metaRoutes);
   await app.register(siteRoutes, { wordpressFetch: deps.wordpressFetch });
 

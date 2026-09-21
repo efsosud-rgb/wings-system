@@ -30,6 +30,7 @@ export function TrafficStudioPage() {
   const canApprove = hasPermission(user, 'ads.approve');
   const canRequest = hasPermission(user, 'ads.request');
   const canPublish = hasPermission(user, 'site.publish');
+  const canPickMedia = hasPermission(user, 'marketing.media.read');
   const [tab, setTab] = useState<TabKey>('paid');
   // Points at the builder while it is on screen, and at nothing otherwise.
   const builder = useRef<BuilderBridge | null>(null);
@@ -70,7 +71,11 @@ export function TrafficStudioPage() {
           </div>
           <div role="tabpanel" id={`studio-panel-${tab}`} aria-labelledby={`studio-tab-${tab}`}>
             {tab === 'paid' ? (
-              <PaidMediaBuilder canRequest={canRequest} applyRef={builder} />
+              <PaidMediaBuilder
+                canRequest={canRequest}
+                canPickMedia={canPickMedia}
+                applyRef={builder}
+              />
             ) : (
               <OwnedChannelsPanel canPublish={canPublish} />
             )}

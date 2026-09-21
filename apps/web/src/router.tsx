@@ -14,6 +14,7 @@ import { ForgotPasswordPage } from './pages/ForgotPasswordPage.js';
 import { IntegrationsPage } from './pages/IntegrationsPage.js';
 import { LandingRoute } from './pages/LandingRoute.js';
 import { LoginPage } from './pages/LoginPage.js';
+import { MediaStudioPage } from './pages/MediaStudioPage.js';
 import { NotFoundPage } from './pages/NotFoundPage.js';
 import { SetPasswordPage } from './pages/SetPasswordPage.js';
 import { TrafficStudioPage } from './pages/TrafficStudioPage.js';
@@ -44,6 +45,7 @@ const SCREENS: Record<string, RouteObject[]> = {
   ],
   '/administracao/integracoes': [{ index: true, element: <IntegrationsPage /> }],
   '/dashboard/marketing': [{ index: true, element: <CockpitPage /> }],
+  '/marketing/edicao': [{ index: true, element: <MediaStudioPage /> }],
   '/marketing/trafego-pago-wings': [
     { index: true, element: <TrafficStudioPage /> },
     { path: 'aprovacoes', element: <ApprovalsPage /> },

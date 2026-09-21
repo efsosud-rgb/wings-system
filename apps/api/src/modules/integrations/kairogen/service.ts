@@ -1,7 +1,10 @@
 import {
+  DEFAULT_KAIROGEN_PLAN,
+  KAIROGEN_PLANS,
   KAIROGEN_READ_TOOLS,
   KAIROGEN_TOOLS,
   type KairogenCredits,
+  type KairogenPlan,
   type KairogenPendingAuthorization,
   type KairogenStatus,
   type KairogenTool,
@@ -544,6 +547,9 @@ export async function getStatus(
     scopes: connection?.scopes ?? [],
     pending,
     credits,
+    plan: KAIROGEN_PLANS.includes(connection?.plan as KairogenPlan)
+      ? (connection?.plan as KairogenPlan)
+      : DEFAULT_KAIROGEN_PLAN,
     protocolVersion: connection?.protocolVersion ?? null,
     tools: (connection?.tools as KairogenTool[] | undefined) ?? [],
   };

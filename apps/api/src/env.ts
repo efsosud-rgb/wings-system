@@ -1,4 +1,10 @@
-import { AGENT_MODELS, DEFAULT_AGENT_DAILY_USD, DEFAULT_AGENT_MODEL } from '@wings/shared';
+import {
+  AGENT_MODELS,
+  DEFAULT_AGENT_DAILY_USD,
+  DEFAULT_AGENT_MODEL,
+  DEFAULT_KAIROGEN_DAILY_CREDITS_PER_USER,
+  DEFAULT_KAIROGEN_MONTHLY_CREDITS,
+} from '@wings/shared';
 import { z } from 'zod';
 
 /** 32-byte key, base64-encoded. */
@@ -100,6 +106,23 @@ const schema = z.object({
    * id registered by hand. Public client (PKCE / device code), so no secret.
    */
   KAIROGEN_CLIENT_ID: optionalString,
+  /**
+   * Ceilings on Kairogen credits, enforced by this system on top of the
+   * account's own balance: per person per day, and for everyone per month
+   * (America/Sao_Paulo). Reaching one refuses the generation before it is sent.
+   */
+  KAIROGEN_DAILY_CREDITS_PER_USER: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_KAIROGEN_DAILY_CREDITS_PER_USER)
+    .or(z.literal('').transform(() => DEFAULT_KAIROGEN_DAILY_CREDITS_PER_USER)),
+  KAIROGEN_MONTHLY_CREDITS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_KAIROGEN_MONTHLY_CREDITS)
+    .or(z.literal('').transform(() => DEFAULT_KAIROGEN_MONTHLY_CREDITS)),
   /**
    * A mounted volume for the media library. Unset, it falls back to a `media`
    * folder inside CREATIVE_VIDEO_DIR; with neither, the media routes answer 503.

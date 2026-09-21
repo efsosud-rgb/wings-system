@@ -1,7 +1,10 @@
 import {
   agentCampaignProposalSchema,
   type AudienceProfile,
+  type CampaignDraftInput,
   type CustomLocation,
+  type MediaAsset,
+  type MediaBridgeResponse,
   type MetaIdentities,
   type PacingSummary,
 } from '@wings/shared';
@@ -12,6 +15,7 @@ import {
   render as renderBare,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -166,6 +170,29 @@ vi.mock('./RadiusMap.js', () => ({
       </button>
     </div>
   ),
+}));
+
+/** The media library, scripted: what it lists and what the bridge answers. */
+const libraryAssets: { current: MediaAsset[] } = { current: [] };
+const useInBuilder = vi.fn();
+const bridgeAnswer: { current: MediaBridgeResponse | null } = { current: null };
+vi.mock('../../api/media.js', async (original) => ({
+  ...(await original<typeof import('../../api/media.js')>()),
+  useMediaAssets: (filters: { kind?: string }) => ({
+    data: {
+      assets: libraryAssets.current.filter((item) => !filters.kind || item.kind === filters.kind),
+      storageAvailable: true,
+    },
+    isLoading: false,
+  }),
+  useMediaInBuilder: () => ({
+    isPending: false,
+    error: null,
+    mutate: (assetId: string, options?: { onSuccess?: (picked: MediaBridgeResponse) => void }) => {
+      useInBuilder(assetId);
+      if (bridgeAnswer.current) options?.onSuccess?.(bridgeAnswer.current);
+    },
+  }),
 }));
 
 const render = (ui: ReactElement) => renderBare(<MemoryRouter>{ui}</MemoryRouter>);
@@ -1346,5 +1373,139 @@ describe('applying a proposal from the agent', () => {
     });
     view.unmount();
     expect(bridge.current).toBeNull();
+  });
+});
+
+describe('media from the library', () => {
+  const libraryAsset = (overrides: Partial<MediaAsset> = {}): MediaAsset => ({
+    id: '33333333-3333-4333-8333-333333333333',
+    kind: 'image',
+    origin: 'kairogen',
+    mimeType: 'image/png',
+    byteSize: 1_400_000,
+    width: 1080,
+    height: 1080,
+    aspect: '1:1',
+    durationSeconds: null,
+    prompt: 'Storefront at golden hour',
+    model: 'seedream-v4',
+    credits: 4,
+    client: null,
+    folder: null,
+    tags: [],
+    ownerName: 'Marketing',
+    createdAt: '2026-09-21T12:00:00.000Z',
+    downloadPath: '/media/assets/33333333-3333-4333-8333-333333333333/file',
+    ...overrides,
+  });
+  const CREATIVE = '44444444-4444-4444-8444-444444444444';
+
+  afterEach(() => {
+    libraryAssets.current = [];
+    bridgeAnswer.current = null;
+    useInBuilder.mockReset();
+    sessionStorage.clear();
+  });
+
+  it('offers the library only to somebody who may read it', () => {
+    render(<PaidMediaBuilder canRequest />);
+    expect(screen.queryByRole('button', { name: /Escolher da biblioteca/ })).toBeNull();
+    cleanup();
+    render(<PaidMediaBuilder canRequest canPickMedia />);
+    expect(
+      screen.getAllByRole('button', { name: /Escolher da biblioteca — Variação/ }),
+    ).toHaveLength(2);
+  });
+
+  it('puts a picked image in the variation, with the asset it came from, and sends both', async () => {
+    libraryAssets.current = [libraryAsset()];
+    bridgeAnswer.current = {
+      mediaAssetId: libraryAsset().id,
+      creative: {
+        id: CREATIVE,
+        mimeType: 'image/png',
+        width: 1080,
+        height: 1080,
+        byteSize: 1_400_000,
+      },
+      video: null,
+    };
+    render(<PaidMediaBuilder canRequest canPickMedia />);
+    fillValidCampaign();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Escolher da biblioteca — Variação 1' }));
+    const dialog = screen.getByRole('dialog', { name: 'Escolher uma imagem da biblioteca' });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Imagem, 1080 × 1080/ }));
+    expect(useInBuilder).toHaveBeenCalledWith(libraryAsset().id);
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
+    const sent = requestCampaign.mock.calls[0]?.[0] as CampaignDraftInput;
+    expect(sent.variations?.[0]).toMatchObject({
+      creativeId: CREATIVE,
+      mediaAssetId: libraryAsset().id,
+    });
+    // The other variation came from the computer: it names no library asset.
+    expect(sent.variations?.[1]).not.toHaveProperty('mediaAssetId', expect.anything());
+  });
+
+  it('forgets the library asset when a file from the computer replaces it', async () => {
+    libraryAssets.current = [libraryAsset()];
+    bridgeAnswer.current = {
+      mediaAssetId: libraryAsset().id,
+      creative: { id: CREATIVE, mimeType: 'image/png', width: 1080, height: 1080, byteSize: 1 },
+      video: null,
+    };
+    render(<PaidMediaBuilder canRequest canPickMedia />);
+    fillValidCampaign();
+    fireEvent.click(screen.getByRole('button', { name: 'Escolher da biblioteca — Variação 1' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Imagem, 1080 × 1080/ }));
+    chooseImage(screen.getAllByLabelText(/^Imagem — Variação/)[0] as Element);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
+    const sent = requestCampaign.mock.calls[0]?.[0] as CampaignDraftInput;
+    expect(sent.variations?.[0]?.creativeId).not.toBe(CREATIVE);
+    expect(sent.variations?.[0]?.mediaAssetId).toBeUndefined();
+  });
+
+  it('shows a WebP but does not let it be picked: ads take PNG and JPEG', () => {
+    libraryAssets.current = [libraryAsset({ mimeType: 'image/webp' })];
+    render(<PaidMediaBuilder canRequest canPickMedia />);
+    fireEvent.click(screen.getByRole('button', { name: 'Escolher da biblioteca — Variação 1' }));
+    const tile = screen.getByRole('button', { name: /^Imagem, 1080 × 1080/ });
+    expect(tile).toHaveProperty('disabled', true);
+    expect(within(tile).getByText('WebP não vale para anúncio')).toBeTruthy();
+    fireEvent.click(tile);
+    expect(useInBuilder).not.toHaveBeenCalled();
+  });
+
+  it('receives what "Usar no construtor" handed over, once', async () => {
+    sessionStorage.setItem(
+      'wings.builder.pickedMedia',
+      JSON.stringify({
+        mediaAssetId: libraryAsset().id,
+        creative: { id: CREATIVE, mimeType: 'image/png', width: 1080, height: 1080, byteSize: 1 },
+        video: null,
+      }),
+    );
+    render(<PaidMediaBuilder canRequest canPickMedia />);
+    // Handed over once: the key is gone, and the first variation shows the picture.
+    expect(sessionStorage.getItem('wings.builder.pickedMedia')).toBeNull();
+    // The slot's thumbnail and the ad preview both show it.
+    const [thumb] = await screen.findAllByAltText('Criativo — Variação 1');
+    expect(thumb?.getAttribute('src')).toContain(CREATIVE);
+    expect(screen.queryByAltText('Criativo — Variação 2')).toBeNull();
+  });
+
+  it('leaves its draft where the editing agent can read it, without media ids of its own making', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    type(screen.getByLabelText(/^Nome da campanha/), 'Leads RJ');
+    await waitFor(
+      () => expect(sessionStorage.getItem('wings.builder.draft') ?? '').toContain('Leads RJ'),
+      { timeout: 2000 },
+    );
+    expect(sessionStorage.getItem('wings.builder.draft')).not.toMatch(/token|password/i);
   });
 });

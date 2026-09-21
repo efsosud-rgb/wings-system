@@ -3,6 +3,7 @@ import type {
   AgentConversationSummary,
   AgentProposalCard,
   AgentProposalRequestResponse,
+  AgentScope,
   AgentSendMessageInput,
   AgentStatusResponse,
   AgentStreamEvent,
@@ -22,10 +23,14 @@ export function useAgentStatus() {
   });
 }
 
-export function useAgentConversations(enabled = true) {
+/** Conversations never cross agents: each sub-module lists its own. */
+export function useAgentConversations(enabled = true, scope: AgentScope = 'traffic') {
   return useQuery({
-    queryKey: ['agent', 'conversations'],
-    queryFn: () => api.get<{ conversations: AgentConversationSummary[] }>('/agent/conversations'),
+    queryKey: ['agent', 'conversations', scope],
+    queryFn: () =>
+      api.get<{ conversations: AgentConversationSummary[] }>(
+        scope === 'traffic' ? '/agent/conversations' : `/agent/conversations?scope=${scope}`,
+      ),
     enabled,
   });
 }

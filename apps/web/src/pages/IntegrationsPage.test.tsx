@@ -6,11 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const get = vi.fn();
 const post = vi.fn();
+const put = vi.fn();
 vi.mock('../api/client.js', async (original) => ({
   ...(await original<typeof import('../api/client.js')>()),
   api: {
     get: (path: string) => get(path),
     post: (path: string, body?: unknown) => post(path, body),
+    put: (path: string, body?: unknown) => put(path, body),
   },
 }));
 
@@ -26,6 +28,7 @@ const status = (overrides: Partial<KairogenStatus> = {}): { status: KairogenStat
     scopes: [],
     pending: null,
     credits: null,
+    plan: 'free',
     protocolVersion: null,
     tools: [],
     ...overrides,
@@ -59,6 +62,7 @@ function renderPage(path = '/administracao/integracoes') {
 beforeEach(() => {
   get.mockReset();
   post.mockReset();
+  put.mockReset();
 });
 afterEach(cleanup);
 
@@ -140,6 +144,24 @@ describe('Configurações → Integrações → Kairogen', () => {
     await waitFor(() =>
       expect(post).toHaveBeenLastCalledWith('/integrations/kairogen/connect', { flow: 'code' }),
     );
+  });
+
+  it('states the plan the estimates are made against, and saves it on request', async () => {
+    get.mockResolvedValue(status({ state: 'connected' }));
+    put.mockResolvedValue(status({ state: 'connected', plan: 'pro' }));
+    renderPage();
+
+    const field = (await screen.findByLabelText('Plano contratado')) as HTMLSelectElement;
+    expect(field.value).toBe('free');
+    expect(screen.getByRole('button', { name: 'Salvar plano' })).toHaveProperty('disabled', true);
+
+    fireEvent.change(field, { target: { value: 'pro' } });
+    expect(put).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar plano' }));
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith('/integrations/kairogen/plan', { plan: 'pro' }),
+    );
+    expect(await screen.findByText('Plano salvo.')).toBeTruthy();
   });
 
   it('says so when the environment has no key, and offers nothing to click', async () => {
