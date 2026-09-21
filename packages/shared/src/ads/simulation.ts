@@ -65,6 +65,8 @@ export interface PendingGroupItem {
   escalatedAt: string | null;
   requestedByName: string | null;
   requestedByAgent: boolean;
+  /** A person asked, from a card the traffic agent proposed. Absent in older payloads. */
+  suggestedByAgent?: boolean;
 }
 
 export interface PendingGroup {

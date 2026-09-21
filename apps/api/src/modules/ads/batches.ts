@@ -30,6 +30,7 @@ export interface PendingGroupItem {
   escalatedAt: string | null;
   requestedByName: string | null;
   requestedByAgent: boolean;
+  suggestedByAgent: boolean;
 }
 
 export interface PendingGroup {
@@ -68,6 +69,7 @@ type GroupRow = {
   escalated_at: Date | string | null;
   requested_by_name: string | null;
   requested_by_agent: boolean;
+  suggested_by_agent: boolean;
   campaign_id: string;
   campaign_name: string;
   campaign_external_id: string;
@@ -95,6 +97,7 @@ export async function pendingGroups(db: Database): Promise<PendingGroup[]> {
            cr.to_value_cents::text as to_value_cents,
            ar.requested_at, ar.escalated_at,
            req.full_name as requested_by_name, ar.requested_by_agent,
+           cr.suggested_by_agent,
            -- A campaign still to be created is its own group, under its draft.
            coalesce(c.id, d.id) as campaign_id, coalesce(c.name, d.name) as campaign_name,
            coalesce(c.external_id, '') as campaign_external_id,
@@ -128,6 +131,7 @@ export async function pendingGroups(db: Database): Promise<PendingGroup[]> {
       escalatedAt: row.escalated_at === null ? null : iso(row.escalated_at),
       requestedByName: row.requested_by_name,
       requestedByAgent: row.requested_by_agent,
+      suggestedByAgent: row.suggested_by_agent,
     };
 
     const existing = groups.get(row.campaign_id);

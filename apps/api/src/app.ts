@@ -11,6 +11,8 @@ import { cockpitRoutes } from './modules/ads/cockpit-routes.js';
 import { creativeRoutes } from './modules/ads/creative-routes.js';
 import { metaRoutes } from './modules/ads/meta-routes.js';
 import { adsRoutes } from './modules/ads/routes.js';
+import type { AgentLlm } from './modules/agent/llm.js';
+import { agentRoutes } from './modules/agent/routes.js';
 import { siteRoutes } from './modules/site/routes.js';
 import { employeeRoutes } from './modules/employees/routes.js';
 import { authPlugin } from './plugins/auth.js';
@@ -24,6 +26,8 @@ declare module 'fastify' {
       cpfCrypto: CpfCrypto;
       /** Set only by tests, so no test ever reaches a real ad platform. */
       platformFetch?: typeof fetch;
+      /** Set only by tests, so no test ever reaches OpenRouter. */
+      agentLlm?: AgentLlm;
     };
   }
 }
@@ -39,6 +43,8 @@ export async function buildApp(deps: {
   wordpressFetch?: typeof fetch;
   /** Overridable so tests never reach Meta or Google. */
   platformFetch?: typeof fetch;
+  /** Overridable so tests script the language model instead of calling it. */
+  agentLlm?: AgentLlm;
 }): Promise<FastifyInstance> {
   const app = Fastify({
     // Personal data must never reach the logs (LGPD), so request bodies are
@@ -60,6 +66,7 @@ export async function buildApp(deps: {
     env: deps.env,
     db: deps.db,
     platformFetch: deps.platformFetch,
+    agentLlm: deps.agentLlm,
     mailer: deps.mailer ?? createMailer(deps.env, { info: (msg) => app.log.info(msg) }),
     cpfCrypto: createCpfCrypto(deps.env.CPF_ENCRYPTION_KEY, deps.env.CPF_INDEX_KEY),
   });
@@ -106,6 +113,7 @@ export async function buildApp(deps: {
   await app.register(cockpitRoutes);
   await app.register(creativeRoutes);
   await app.register(audienceRoutes);
+  await app.register(agentRoutes);
   await app.register(metaRoutes);
   await app.register(siteRoutes, { wordpressFetch: deps.wordpressFetch });
 

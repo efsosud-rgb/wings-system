@@ -391,6 +391,11 @@ export interface ReserveInput {
   toDailyBudgetCents?: Cents;
   requestedBy?: string | null;
   requestedByAgent?: boolean;
+  /**
+   * The person asked from a card the traffic agent proposed. It marks the
+   * request and changes nothing else: same guard, same gate, same approver.
+   */
+  suggestedByAgent?: boolean;
   reason?: string;
   now?: Date;
 }
@@ -584,6 +589,7 @@ export async function reserveChange(
         status: 'pending_approval',
         requestedBy: input.requestedBy ?? null,
         requestedByAgent: input.requestedByAgent ?? false,
+        suggestedByAgent: input.suggestedByAgent ?? false,
         reason: input.reason ?? null,
       })
       .returning({ id: adChangeRequests.id });
