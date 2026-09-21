@@ -5,6 +5,7 @@ import type { Database } from './db/client.js';
 import type { Env } from './env.js';
 import { createCpfCrypto, type CpfCrypto } from './lib/cpf-crypto.js';
 import { createMailer, type Mailer } from './lib/mailer.js';
+import type { ObjectStorage } from './lib/storage/index.js';
 import { authRoutes } from './modules/auth/routes.js';
 import { audienceRoutes } from './modules/ads/audience-routes.js';
 import { cockpitRoutes } from './modules/ads/cockpit-routes.js';
@@ -14,6 +15,7 @@ import { adsRoutes } from './modules/ads/routes.js';
 import type { AgentLlm } from './modules/agent/llm.js';
 import { agentRoutes } from './modules/agent/routes.js';
 import { clientRoutes } from './modules/clients/routes.js';
+import { driveBlobRoutes, driveRoutes } from './modules/drive/routes.js';
 import { kairogenRoutes } from './modules/integrations/kairogen/routes.js';
 import { mediaRoutes } from './modules/media/routes.js';
 import { mediaStudioRoutes } from './modules/media/studio-routes.js';
@@ -34,6 +36,9 @@ declare module 'fastify' {
       agentLlm?: AgentLlm;
       /** Set only by tests, so no test ever reaches Kairogen. */
       kairogenFetch?: typeof fetch;
+      /** Set only by tests, so no test ever reaches a real bucket. */
+      storageFetch?: typeof fetch;
+      storage?: ObjectStorage;
     };
   }
 }
@@ -53,6 +58,8 @@ export async function buildApp(deps: {
   agentLlm?: AgentLlm;
   /** Overridable so tests talk to a simulated Kairogen. */
   kairogenFetch?: typeof fetch;
+  storageFetch?: typeof fetch;
+  storage?: ObjectStorage;
 }): Promise<FastifyInstance> {
   const app = Fastify({
     // Personal data must never reach the logs (LGPD), so request bodies are
@@ -76,6 +83,8 @@ export async function buildApp(deps: {
     platformFetch: deps.platformFetch,
     agentLlm: deps.agentLlm,
     kairogenFetch: deps.kairogenFetch,
+    storageFetch: deps.storageFetch,
+    storage: deps.storage,
     mailer: deps.mailer ?? createMailer(deps.env, { info: (msg) => app.log.info(msg) }),
     cpfCrypto: createCpfCrypto(deps.env.CPF_ENCRYPTION_KEY, deps.env.CPF_INDEX_KEY),
   });
@@ -124,6 +133,8 @@ export async function buildApp(deps: {
   await app.register(audienceRoutes);
   await app.register(agentRoutes);
   await app.register(clientRoutes);
+  await app.register(driveRoutes);
+  await app.register(driveBlobRoutes);
   await app.register(kairogenRoutes);
   await app.register(mediaRoutes);
   await app.register(mediaStudioRoutes);

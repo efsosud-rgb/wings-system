@@ -831,10 +831,9 @@ describe('the builder on Meta: ad set and ads', () => {
     expect((screen.getByLabelText(/^Conta do Instagram/) as HTMLSelectElement).value).toBe(
       INSTAGRAM,
     );
-    // The Drive button is still there, and still off.
-    expect(
-      (screen.getByRole('button', { name: /Escolher do Drive/ }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+    // The "em breve" Drive button is gone: the Drive picker is real now, per variation,
+    // and only for who may read the library.
+    expect(screen.queryByRole('button', { name: /Escolher do Drive/ })).toBeNull();
   });
 
   it('shows none of it on Google, and sends none of it', async () => {
@@ -1412,12 +1411,10 @@ describe('media from the library', () => {
 
   it('offers the library only to somebody who may read it', () => {
     render(<PaidMediaBuilder canRequest />);
-    expect(screen.queryByRole('button', { name: /Escolher da biblioteca/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Escolher do Drive/ })).toBeNull();
     cleanup();
     render(<PaidMediaBuilder canRequest canPickMedia />);
-    expect(
-      screen.getAllByRole('button', { name: /Escolher da biblioteca — Variação/ }),
-    ).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: /Escolher do Drive — Variação/ })).toHaveLength(2);
   });
 
   it('puts a picked image in the variation, with the asset it came from, and sends both', async () => {
@@ -1436,7 +1433,7 @@ describe('media from the library', () => {
     render(<PaidMediaBuilder canRequest canPickMedia />);
     fillValidCampaign();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Escolher da biblioteca — Variação 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Escolher do Drive — Variação 1' }));
     const dialog = screen.getByRole('dialog', { name: 'Escolher uma imagem da biblioteca' });
     fireEvent.click(within(dialog).getByRole('button', { name: /^Imagem, 1080 × 1080/ }));
     expect(useInBuilder).toHaveBeenCalledWith(libraryAsset().id);
@@ -1462,7 +1459,7 @@ describe('media from the library', () => {
     };
     render(<PaidMediaBuilder canRequest canPickMedia />);
     fillValidCampaign();
-    fireEvent.click(screen.getByRole('button', { name: 'Escolher da biblioteca — Variação 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Escolher do Drive — Variação 1' }));
     fireEvent.click(screen.getByRole('button', { name: /^Imagem, 1080 × 1080/ }));
     chooseImage(screen.getAllByLabelText(/^Imagem — Variação/)[0] as Element);
 
@@ -1476,7 +1473,7 @@ describe('media from the library', () => {
   it('shows a WebP but does not let it be picked: ads take PNG and JPEG', () => {
     libraryAssets.current = [libraryAsset({ mimeType: 'image/webp' })];
     render(<PaidMediaBuilder canRequest canPickMedia />);
-    fireEvent.click(screen.getByRole('button', { name: 'Escolher da biblioteca — Variação 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Escolher do Drive — Variação 1' }));
     const tile = screen.getByRole('button', { name: /^Imagem, 1080 × 1080/ });
     expect(tile).toHaveProperty('disabled', true);
     expect(within(tile).getByText('WebP não vale para anúncio')).toBeTruthy();

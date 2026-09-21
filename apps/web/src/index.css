@@ -2939,3 +2939,376 @@ textarea.control {
 .builder-library-pick .btn {
   min-height: 44px;
 }
+
+/* ---------- drive ---------- */
+a.menu-module-header {
+  text-decoration: none;
+}
+
+.drive {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.drive-icon {
+  flex: none;
+  color: var(--wings-muted);
+}
+
+.drive-tree {
+  background: var(--wings-surface);
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+  padding: 8px;
+  max-height: calc(100vh - 180px);
+  overflow: auto;
+}
+
+.drive-tree-list {
+  list-style: none;
+}
+
+.drive-tree-row {
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+
+.drive-tree-row.current {
+  background: var(--wings-card);
+}
+
+.drive-tree-row.current .drive-tree-name,
+.drive-tree-row.current .drive-icon {
+  color: var(--wings-accent);
+}
+
+/* Where a dragged file would land. */
+.drive-tree-row.over,
+.drive-main.dropping {
+  border-color: var(--wings-accent);
+  background: rgb(233 82 40 / 8%);
+}
+
+.drive-tree-toggle,
+.drive-tree-name,
+.drive-name,
+.drive-tile {
+  background: none;
+  border: none;
+  color: var(--wings-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.drive-tree-toggle {
+  width: 28px;
+  min-height: 36px;
+  flex: none;
+}
+
+.drive-tree-toggle:disabled {
+  cursor: default;
+}
+
+.drive-tree-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  padding: 4px 8px 4px 0;
+  text-align: left;
+}
+
+.drive-tree-name span,
+.drive-tile-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A folder that is only the way down to yours. */
+.drive-tree-row.passage .drive-tree-name {
+  color: var(--wings-faint);
+  cursor: default;
+}
+
+.drive-tree-toggle:focus-visible,
+.drive-tree-name:focus-visible,
+.drive-name:focus-visible,
+.drive-tile:focus-visible {
+  outline: 2px solid var(--wings-accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.drive-main {
+  min-width: 0;
+  border: 1px dashed transparent;
+  border-radius: 8px;
+  padding: 4px;
+}
+
+.drive-crumbs {
+  margin-bottom: 12px;
+  color: var(--wings-muted);
+}
+
+.drive-crumbs ol {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+}
+
+.drive-crumbs li + li::before {
+  content: '/';
+  margin-right: 6px;
+  color: var(--wings-faint);
+}
+
+.drive-crumbs [aria-current='page'] {
+  color: var(--wings-text);
+  font-weight: 600;
+}
+
+.drive-toolbar,
+.drive-toolbar-actions,
+.drive-head-actions,
+.drive-row-actions,
+.drive-folder-actions,
+.drive-view,
+.drive-queue-conflict,
+.drive-template-row,
+.drive-template-name,
+.drive-template-add {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.drive-toolbar {
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 12px;
+}
+
+.drive-folder-actions {
+  gap: 16px;
+  margin-bottom: 8px;
+  color: var(--wings-muted);
+}
+
+.drive-view .btn.active {
+  border-color: var(--wings-accent);
+  color: var(--wings-accent);
+}
+
+.drive-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  text-align: left;
+}
+
+.drive-name:hover span,
+.drive-tile:hover .drive-tile-name {
+  text-decoration: underline;
+}
+
+.drive-table tr[draggable='true'] {
+  cursor: grab;
+}
+
+.drive-row-actions {
+  justify-content: flex-end;
+}
+
+.drive-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  list-style: none;
+}
+
+.drive-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 12px;
+  text-align: left;
+  background: var(--wings-card);
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+}
+
+.drive-tile-art {
+  display: grid;
+  place-items: center;
+  height: 72px;
+}
+
+.drive-tile-art .drive-icon {
+  width: 36px;
+  height: 36px;
+}
+
+.drive-dialog-wide {
+  width: min(960px, 100%);
+}
+
+.drive-preview {
+  display: grid;
+  place-items: center;
+  min-height: 160px;
+  margin-bottom: 12px;
+  background: var(--wings-black);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.drive-preview img,
+.drive-preview video {
+  max-width: 100%;
+  max-height: 60vh;
+}
+
+.drive-preview iframe {
+  width: 100%;
+  height: 60vh;
+  border: 0;
+  background: #fff;
+}
+
+.drive-form {
+  display: grid;
+  gap: 12px;
+}
+
+.drive-versions {
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.drive-versions li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Uploads: fixed where they can be seen while the person keeps working. */
+.drive-queue {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  width: min(380px, calc(100vw - 32px));
+  max-height: 50vh;
+  overflow: auto;
+  padding: 12px;
+  background: var(--wings-card);
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 50%);
+}
+
+.drive-queue-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.drive-queue ul {
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.drive-queue-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drive-progress {
+  position: relative;
+  height: 18px;
+  margin-top: 4px;
+  background: var(--wings-surface);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.drive-progress span {
+  position: absolute;
+  inset: 0;
+  background: var(--wings-accent);
+  transform-origin: left;
+  transition: transform 0.2s linear;
+}
+
+.drive-progress em {
+  position: relative;
+  display: block;
+  font-style: normal;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+  color: #fff;
+  text-shadow: 0 0 3px rgb(0 0 0 / 80%);
+}
+
+.drive-template-list {
+  list-style: none;
+  margin-left: 20px;
+  border-left: 1px solid var(--wings-border);
+  padding-left: 12px;
+}
+
+.page-header-row + .alert + .field-hint,
+.drive-template-list:first-of-type {
+  margin-left: 0;
+}
+
+.drive-template-row {
+  padding: 6px 0;
+}
+
+.drive-template-row .control,
+.drive-template-add .control {
+  width: auto;
+  min-width: 160px;
+}
+
+.drive-template-add {
+  align-items: flex-end;
+  margin: 8px 0 16px;
+}
+
+@media (max-width: 900px) {
+  .drive {
+    grid-template-columns: 1fr;
+  }
+
+  .drive-tree {
+    max-height: 240px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .drive-progress span {
+    transition: none;
+  }
+}

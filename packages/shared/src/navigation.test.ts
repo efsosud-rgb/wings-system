@@ -66,6 +66,7 @@ describe('the tree itself', () => {
       'Dashboard',
       'Gestão',
       'Produtividade',
+      'Drive',
       'Atendimento',
       'Administração',
       'SaaS',

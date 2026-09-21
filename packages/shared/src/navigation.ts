@@ -163,6 +163,23 @@ export const NAVIGATION: readonly NavModule[] = [
     ],
   },
   {
+    // A general module: every department has its own tree in it, and the API
+    // decides folder by folder what each person sees.
+    key: 'drive',
+    label: 'Drive',
+    icon: '🗂️',
+    submodules: [
+      {
+        path: '/drive/arquivos',
+        label: 'Arquivos',
+        description: 'Pastas e arquivos por departamento e cliente',
+        permission: 'drive.read',
+        status: 'ready',
+        kind: 'crud',
+      },
+    ],
+  },
+  {
     key: 'atendimento',
     label: 'Atendimento',
     icon: '☎️',
@@ -185,6 +202,14 @@ export const NAVIGATION: readonly NavModule[] = [
         label: 'Clientes',
         description: 'Para quem o trabalho é feito',
         permission: 'clients.manage',
+        status: 'ready',
+        kind: 'crud',
+      },
+      {
+        path: '/administracao/drive',
+        label: 'Drive: modelo de pastas',
+        description: 'As pastas que todo departamento e todo cliente recebem',
+        permission: 'drive.manage',
         status: 'ready',
         kind: 'crud',
       },

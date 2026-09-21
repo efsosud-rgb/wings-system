@@ -9,6 +9,8 @@ import { ApprovalsPage } from './pages/ApprovalsPage.js';
 import { ClientsPage } from './pages/ClientsPage.js';
 import { CockpitPage } from './pages/CockpitPage.js';
 import { ComingSoonPage } from './pages/ComingSoonPage.js';
+import { DrivePage } from './pages/DrivePage.js';
+import { DriveTemplatePage } from './pages/DriveTemplatePage.js';
 import { EmployeeFormPage } from './pages/EmployeeFormPage.js';
 import { EmployeesPage } from './pages/EmployeesPage.js';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage.js';
@@ -45,6 +47,8 @@ const SCREENS: Record<string, RouteObject[]> = {
     { path: ':id', element: <EmployeeFormPage /> },
   ],
   '/administracao/clientes': [{ index: true, element: <ClientsPage /> }],
+  '/administracao/drive': [{ index: true, element: <DriveTemplatePage /> }],
+  '/drive/arquivos': [{ index: true, element: <DrivePage /> }],
   '/administracao/integracoes': [{ index: true, element: <IntegrationsPage /> }],
   '/dashboard/marketing': [{ index: true, element: <CockpitPage /> }],
   '/marketing/edicao': [{ index: true, element: <MediaStudioPage /> }],

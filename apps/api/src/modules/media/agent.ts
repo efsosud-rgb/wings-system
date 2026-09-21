@@ -16,13 +16,14 @@ import {
 } from '@wings/shared';
 import { and, desc, eq, ilike } from 'drizzle-orm';
 import { z } from 'zod';
-import { agentProposals, clients, mediaAssets } from '../../db/schema/index.js';
+import { agentProposals, clients, driveFiles, mediaAssets } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import type { LlmToolDefinition } from '../agent/llm.js';
 import type { AgentProfile } from '../agent/profile.js';
 import { scrubDeep } from '../agent/scrub.js';
 import { activeClient, listClients } from '../clients/routes.js';
 import type { ToolContext, ToolOutcome } from '../agent/tools.js';
+import { inLibrary, libraryJoin } from './library.js';
 import { StudioRefusal, createEstimate, listModels, usageOf, type StudioDeps } from './studio.js';
 
 /**
@@ -149,8 +150,10 @@ async function consultarBiblioteca(ctx: ToolContext, raw: unknown): Promise<Tool
     })
     .from(mediaAssets)
     .leftJoin(clients, eq(clients.id, mediaAssets.clientId))
+    .leftJoin(driveFiles, libraryJoin)
     .where(
       and(
+        inLibrary,
         args.tipo ? eq(mediaAssets.kind, args.tipo) : undefined,
         args.busca
           ? ilike(mediaAssets.prompt, `%${args.busca.replace(/[%_\\]/g, '\\$&')}%`)

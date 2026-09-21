@@ -12,6 +12,7 @@ import {
 } from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import { createDb, type Database } from './client.js';
+import { seedDriveTemplate, syncDriveFolders } from '../modules/drive/folders.js';
 import { loadDotEnv } from './load-env.js';
 import {
   clients,
@@ -118,6 +119,11 @@ export async function seed(db: Database): Promise<void> {
     .insert(clients)
     .values({ id: WINGS_CLIENT_ID, name: WINGS_CLIENT_NAME, slug: WINGS_CLIENT_SLUG })
     .onConflictDoNothing();
+
+  // The Drive's folder model (written once, then it belongs to whoever edits it)
+  // and the folders it asks for. Both only ever add.
+  await seedDriveTemplate(db);
+  await syncDriveFolders(db);
 }
 
 async function main() {

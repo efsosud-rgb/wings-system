@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SESSION_COOKIE, WINGS_CLIENT_ID, mediaAspectOf, type MediaAsset } from '@wings/shared';
@@ -8,10 +8,12 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { clients, mediaAssets } from '../../db/schema/index.js';
+import { clients, driveFiles, driveFolders, mediaAssets } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
+import { migrateMediaToDrive } from '../../scripts/migrate-media-to-drive.js';
+import { createLocalStorage } from '../../lib/storage/local.js';
 import { mediaDirOf, storeMedia } from './library.js';
 
 /** The media library: files on a volume, rows in the database, a login in between. */
@@ -105,9 +107,21 @@ describe('the media library', () => {
     });
 
     const [row] = await db.select().from(mediaAssets).where(eq(mediaAssets.id, asset.id));
-    expect(row?.storageKey).toMatch(/^\d{4}-\d{2}\/[0-9a-f-]{36}\.png$/);
-    const [month] = await readdir(mediaDir);
-    expect(await readdir(join(mediaDir, month ?? ''))).toHaveLength(1);
+    // The bytes are a Drive file: in Formatação/Marketing/Mídia, under a key of the server's.
+    expect(row?.storageKey).toMatch(/^drive\/\d{4}-\d{2}\/[0-9a-f-]{36}$/);
+    const [month] = await readdir(join(mediaDir, 'drive'));
+    expect(await readdir(join(mediaDir, 'drive', month ?? ''))).toHaveLength(1);
+    const [inDrive] = await db
+      .select({ file: driveFiles, path: driveFolders.path })
+      .from(driveFiles)
+      .innerJoin(driveFolders, eq(driveFolders.id, driveFiles.folderId))
+      .where(eq(driveFiles.id, row?.driveFileId ?? ''));
+    expect(inDrive).toMatchObject({
+      path: '/Formatação/Marketing/Mídia',
+      file: { mimeType: 'image/png', byteSize: bytes.length, storageKey: row?.storageKey },
+    });
+    expect(inDrive?.file.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(created.payload).not.toContain(row?.storageKey ?? 'x');
 
     const file = await app.inject({ url: asset.downloadPath, cookies });
     expect(file.statusCode).toBe(200);
@@ -273,5 +287,194 @@ describe('the media library', () => {
     expect(mediaAspectOf(1920, 1080)).toBe('16:9');
     expect(mediaAspectOf(1000, 700)).toBe('other');
     expect(mediaAspectOf(null, null)).toBe('other');
+  });
+});
+
+describe('the library inside the Drive', () => {
+  it('files a client’s media in that client’s "Mídia", and follows the asset when it is refiled', async () => {
+    const { cookies, employeeId } = await sessionFor('marketing');
+    const made = await app.inject({
+      method: 'POST',
+      url: '/clients',
+      cookies,
+      payload: { name: 'Cliente Do Drive' },
+    });
+    const clientId = made.json<{ client: { id: string } }>().client.id;
+    const pathOf = async (assetId: string) => {
+      const [row] = await db
+        .select({ path: driveFolders.path })
+        .from(mediaAssets)
+        .innerJoin(driveFiles, eq(driveFiles.id, mediaAssets.driveFileId))
+        .innerJoin(driveFolders, eq(driveFolders.id, driveFiles.folderId))
+        .where(eq(mediaAssets.id, assetId));
+      return row?.path;
+    };
+
+    const forClient = await storeMedia(db, mediaDir, {
+      ownerId: employeeId,
+      origin: 'kairogen',
+      bytes: pngOf(1080, 1080),
+      model: 'seedream-v4',
+      clientId,
+    });
+    if (!forClient.ok) throw new Error('expected stored');
+    expect(await pathOf(forClient.id)).toBe(
+      '/Formatação/Marketing/Clientes/Cliente Do Drive/Mídia',
+    );
+
+    const forWings = await storeMedia(db, mediaDir, {
+      ownerId: employeeId,
+      origin: 'upload',
+      bytes: pngOf(1080, 1080),
+    });
+    if (!forWings.ok) throw new Error('expected stored');
+    expect(await pathOf(forWings.id)).toBe('/Formatação/Marketing/Mídia');
+    await app.inject({
+      method: 'PATCH',
+      url: `/media/assets/${forWings.id}`,
+      cookies,
+      payload: { clientId },
+    });
+    expect(await pathOf(forWings.id)).toBe('/Formatação/Marketing/Clientes/Cliente Do Drive/Mídia');
+  });
+
+  it('leaves the library when its file goes to the Drive’s trash, and comes back when restored', async () => {
+    const { cookies, employeeId } = await sessionFor('marketing');
+    const stored = await storeMedia(db, mediaDir, {
+      ownerId: employeeId,
+      origin: 'upload',
+      bytes: pngOf(640, 640),
+    });
+    if (!stored.ok) throw new Error('expected stored');
+    const [asset] = await db.select().from(mediaAssets).where(eq(mediaAssets.id, stored.id));
+    const listed = async () =>
+      (await app.inject({ url: '/media/assets', cookies }))
+        .json<{ assets: MediaAsset[] }>()
+        .assets.some((item) => item.id === stored.id);
+    expect(await listed()).toBe(true);
+    await app.inject({ method: 'POST', url: `/drive/files/${asset?.driveFileId}/trash`, cookies });
+    expect(await listed()).toBe(false);
+    await app.inject({
+      method: 'POST',
+      url: `/drive/files/${asset?.driveFileId}/restore`,
+      cookies,
+    });
+    expect(await listed()).toBe(true);
+  });
+
+  it('with R2, sends the browser to a five-minute pre-signed address instead of streaming', async () => {
+    const r2 = await buildApp({
+      env: env({
+        MEDIA_DIR: mediaDir,
+        R2_ENDPOINT: 'https://acct.r2.cloudflarestorage.com',
+        R2_BUCKET: 'wings-staging',
+        R2_ACCESS_KEY_ID: 'AKID',
+        R2_SECRET_ACCESS_KEY: 'r2-secret-never-shown',
+      }),
+      db,
+      storageFetch: async () => new Response(null, { status: 200 }),
+    });
+    try {
+      const { cookies } = await sessionFor('marketing', r2);
+      const { asset } = (
+        await r2.inject({
+          method: 'POST',
+          url: '/media/assets',
+          cookies,
+          headers: { 'content-type': 'image/png' },
+          payload: pngOf(1080, 1080),
+        })
+      ).json<{ asset: MediaAsset }>();
+      const file = await r2.inject({ url: asset.downloadPath, cookies });
+      expect(file.statusCode).toBe(302);
+      const to = new URL(String(file.headers.location));
+      expect(to.origin).toBe('https://acct.r2.cloudflarestorage.com');
+      expect(to.searchParams.get('X-Amz-Expires')).toBe('300');
+      expect(String(file.headers.location)).not.toContain('r2-secret-never-shown');
+      // And still nothing without a login.
+      expect((await r2.inject({ url: asset.downloadPath })).statusCode).toBe(401);
+    } finally {
+      await r2.close();
+    }
+  });
+});
+
+describe('moving the old library from the volume into the Drive', () => {
+  it('links and copies each asset once, however many times it runs, and carries files to a new storage', async () => {
+    const { employeeId } = await sessionFor('marketing');
+    // An asset as the library used to keep it: a file on the volume and no Drive file.
+    const bytes = pngOf(900, 900);
+    await mkdir(join(mediaDir, '2026-08'), { recursive: true });
+    await writeFile(join(mediaDir, '2026-08', 'legacy.png'), bytes);
+    const [legacy] = await db
+      .insert(mediaAssets)
+      .values({
+        ownerId: employeeId,
+        origin: 'kairogen',
+        kind: 'image',
+        mimeType: 'image/png',
+        byteSize: bytes.length,
+        sha256: 'a'.repeat(64),
+        width: 900,
+        height: 900,
+        storageKey: '2026-08/legacy.png',
+        model: 'gpt-image-1-5',
+      })
+      .returning();
+    const [lost] = await db
+      .insert(mediaAssets)
+      .values({
+        ownerId: employeeId,
+        origin: 'upload',
+        kind: 'image',
+        mimeType: 'image/png',
+        byteSize: 10,
+        sha256: 'b'.repeat(64),
+        storageKey: '2026-08/not-there.png',
+      })
+      .returning();
+
+    const local = createLocalStorage({
+      dir: mediaDir,
+      publicApiBase: '',
+      linkKey: Buffer.alloc(32),
+    });
+    const first = await migrateMediaToDrive(db, local, mediaDir);
+    expect(first.linked).toBe(1);
+    // A file that is not on the volume is reported by the asset's id, and left alone.
+    expect(first.missing).toContain(lost?.id);
+    expect(first.missing).not.toContain(legacy?.id);
+    const [after] = await db
+      .select()
+      .from(mediaAssets)
+      .where(eq(mediaAssets.id, legacy?.id ?? ''));
+    expect(after?.storageKey).toBe(`drive/media/${legacy?.id}`);
+    expect(after?.driveFileId).toBeTruthy();
+    expect((await local.get(after?.storageKey ?? ''))?.equals(bytes)).toBe(true);
+    // The old file is still on the volume: the script deletes nothing.
+    expect(await readdir(join(mediaDir, '2026-08'))).toContain('legacy.png');
+
+    const second = await migrateMediaToDrive(db, local, mediaDir);
+    expect(second).toMatchObject({ linked: 0, copied: 0 });
+    expect(second.missing).toEqual(first.missing);
+    expect(
+      await db
+        .select()
+        .from(driveFiles)
+        .where(eq(driveFiles.storageKey, `drive/media/${legacy?.id}`)),
+    ).toHaveLength(1);
+
+    // The environment gets a bucket: what was on the volume is carried over, once.
+    const bucket = new Map<string, Buffer>();
+    const r2 = {
+      ...local,
+      head: async (key: string) =>
+        bucket.has(key) ? { size: bucket.get(key)?.length ?? 0, etag: null } : null,
+      put: async (key: string, data: Buffer) => void bucket.set(key, data),
+    };
+    const carried = await migrateMediaToDrive(db, r2, mediaDir);
+    expect(carried.copied).toBeGreaterThan(0);
+    expect(bucket.get(`drive/media/${legacy?.id}`)?.equals(bytes)).toBe(true);
+    expect((await migrateMediaToDrive(db, r2, mediaDir)).copied).toBe(0);
   });
 });

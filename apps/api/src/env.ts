@@ -3,6 +3,7 @@ import {
   DEFAULT_AGENT_DAILY_USD,
   DEFAULT_AGENT_MODEL,
   DEFAULT_KAIROGEN_DAILY_CREDITS_PER_USER,
+  DEFAULT_DRIVE_MAX_FILE_BYTES,
   DEFAULT_KAIROGEN_MONTHLY_CREDITS,
 } from '@wings/shared';
 import { z } from 'zod';
@@ -128,6 +129,25 @@ const schema = z.object({
    * folder inside CREATIVE_VIDEO_DIR; with neither, the media routes answer 503.
    */
   MEDIA_DIR: optionalString,
+
+  /**
+   * The Drive's storage: an S3-compatible bucket (Cloudflare R2). All four set,
+   * files live there and browsers send and fetch them through pre-signed
+   * addresses; any of them missing, the Drive falls back to the local volume
+   * (MEDIA_DIR), which is for development and tests. R2's region is `auto`.
+   */
+  R2_ENDPOINT: optionalString,
+  R2_BUCKET: optionalString,
+  R2_ACCESS_KEY_ID: optionalString,
+  R2_SECRET_ACCESS_KEY: optionalString,
+  R2_REGION: optionalString,
+  /** The largest file the Drive takes, in bytes. 2 GB unless set. */
+  DRIVE_MAX_FILE_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(DEFAULT_DRIVE_MAX_FILE_BYTES)
+    .or(z.literal('').transform(() => DEFAULT_DRIVE_MAX_FILE_BYTES)),
 
   /**
    * The traffic agent's conversation, through OpenRouter. Without the key the

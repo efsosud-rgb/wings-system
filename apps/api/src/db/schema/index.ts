@@ -3,6 +3,7 @@ export * from './agent.js';
 export * from './audit.js';
 export * from './clients.js';
 export * from './credentials.js';
+export * from './drive.js';
 export * from './employees.js';
 export * from './enums.js';
 export * from './integrations.js';

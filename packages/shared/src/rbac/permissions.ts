@@ -31,6 +31,9 @@ export const PERMISSIONS = {
   'marketing.media.read': 'Ver a biblioteca de mídia do marketing',
   'marketing.media.generate': 'Gerar imagens e vídeos gastando créditos',
   'clients.manage': 'Cadastrar e editar clientes',
+  'drive.read': 'Ver pastas e arquivos do Drive',
+  'drive.write': 'Enviar, mover, renomear e excluir arquivos do Drive',
+  'drive.manage': 'Editar o modelo de pastas do Drive, sincronizar e esvaziar a lixeira',
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;
@@ -41,9 +44,22 @@ export type Scope = (typeof SCOPES)[number];
 
 export type RolePermissions = Partial<Record<PermissionKey, Scope>>;
 
+/**
+ * The Drive for a department: its own tree and the client folders inside it.
+ * `sector` here means the departments of the ROLE (`DRIVE_ROLE_DEPARTMENTS`),
+ * decided by the API folder by folder.
+ */
+const DRIVE_STAFF: RolePermissions = { 'drive.read': 'sector', 'drive.write': 'sector' };
+const DRIVE_ALL: RolePermissions = {
+  'drive.read': 'all',
+  'drive.write': 'all',
+  'drive.manage': 'all',
+};
+
 const SECTOR_STAFF: RolePermissions = {
   'employees.read': 'sector',
   'timeclock.read': 'own',
+  ...DRIVE_STAFF,
 };
 
 /**
@@ -55,6 +71,7 @@ const SECTOR_STAFF: RolePermissions = {
  */
 export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   admin_master: {
+    ...DRIVE_ALL,
     // The one connection to Kairogen belongs to the system: only an Admin Master makes it.
     'integrations.manage': 'all',
     'clients.manage': 'all',
@@ -80,6 +97,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'site.publish': 'all',
   },
   diretoria: {
+    ...DRIVE_ALL,
     'clients.manage': 'all',
     'marketing.media.read': 'all',
     'marketing.media.generate': 'all',
@@ -99,6 +117,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   // The employee register and the RH/DP module. No CPF reveal and no time-clock
   // approvals: neither was asked for, and both are easy to add later.
   rh_dp: {
+    ...DRIVE_STAFF,
     'employees.read': 'all',
     'employees.create': 'all',
     'employees.update': 'all',
@@ -107,6 +126,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'timeclock.read': 'all',
   },
   gerente_comercial: {
+    ...DRIVE_STAFF,
     'employees.read': 'sector',
     'employees.create': 'sector',
     'employees.update': 'sector',

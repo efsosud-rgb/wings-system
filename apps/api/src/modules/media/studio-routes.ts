@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { copyFile, stat } from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import {
   generationStartSchema,
   mediaEstimateRequestSchema,
@@ -17,8 +17,7 @@ import {
   mediaGenerations,
 } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
-import { readFile } from 'node:fs/promises';
-import { openMedia } from './library.js';
+import { readMedia, serveMedia, type MediaSource } from './library.js';
 import {
   StudioRefusal,
   advanceGeneration,
@@ -59,6 +58,7 @@ function sendRefusal(reply: FastifyReply, error: StudioRefusal) {
 export const mediaStudioRoutes: FastifyPluginAsync = async (app) => {
   const { db, env } = app.wings;
   const deps = studioDepsOf(app.wings, app.log);
+  const source: MediaSource = { storage: deps.storage, legacyDir: deps.mediaDir };
   void resumeGenerations(deps).catch(() => undefined);
 
   app.get(
@@ -69,7 +69,7 @@ export const mediaStudioRoutes: FastifyPluginAsync = async (app) => {
       const connected = deps.kairogen !== null && row?.state === 'connected';
       return reply.send({
         connected,
-        storageAvailable: deps.mediaDir !== null,
+        storageAvailable: deps.storage !== null,
         usage: await usageOf(deps, request.session.actor.employeeId, { withBalance: connected }),
       });
     },
@@ -211,19 +211,19 @@ export const mediaStudioRoutes: FastifyPluginAsync = async (app) => {
         : undefined;
       if (!asset)
         return reply.status(404).send({ error: 'not_found', message: 'Mídia não encontrada.' });
-      if (!deps.mediaDir) {
+      if (!deps.storage) {
         return reply.status(503).send({
           error: 'media_storage_unavailable',
           message: 'O armazenamento de mídia não está configurado neste ambiente.',
         });
       }
-      const root = resolve(deps.mediaDir);
-      const path = resolve(root, asset.storageKey);
-      const info = path.startsWith(root + sep) ? await stat(path).catch(() => null) : null;
-      if (!info?.isFile() || info.size !== asset.byteSize) {
-        return reply
-          .status(404)
-          .send({ error: 'file_missing', message: 'O arquivo desta mídia não está no volume.' });
+      // The builder keeps its own copy of what it publishes, so the bytes are read here.
+      const fileBytes = await readMedia(source, asset);
+      if (!fileBytes) {
+        return reply.status(404).send({
+          error: 'file_missing',
+          message: 'O arquivo desta mídia não está no armazenamento.',
+        });
       }
       const employeeId = request.session.actor.employeeId;
       const body: MediaBridgeResponse = { mediaAssetId: asset.id, creative: null, video: null };
@@ -241,7 +241,7 @@ export const mediaStudioRoutes: FastifyPluginAsync = async (app) => {
             message: `A imagem tem ${asset.width} × ${asset.height} px. O lado menor precisa de pelo menos ${MIN_AD_SIDE} px.`,
           });
         }
-        const bytes = await readFile(path);
+        const bytes = fileBytes;
         const [creative] = await db
           .insert(adCreativeUploads)
           .values({
@@ -270,7 +270,7 @@ export const mediaStudioRoutes: FastifyPluginAsync = async (app) => {
           });
         }
         const storageKey = `${randomUUID()}.mp4`;
-        await copyFile(path, join(env.CREATIVE_VIDEO_DIR, storageKey));
+        await writeFile(join(env.CREATIVE_VIDEO_DIR, storageKey), fileBytes, { flag: 'wx' });
         const [video] = await db
           .insert(adVideoUploads)
           .values({
@@ -309,11 +309,13 @@ export const mediaStudioRoutes: FastifyPluginAsync = async (app) => {
       params.success && query.success
         ? await resolvePublicLink(deps, params.data.id, query.data.sig)
         : null;
-    const stream =
-      asset && deps.mediaDir
-        ? await openMedia(deps.mediaDir, asset.storageKey, asset.byteSize)
-        : null;
-    if (!asset || !stream) return reply.status(404).send({ error: 'not_found' });
+    // Only reached for an asset on the volume: one in the bucket is handed to Kairogen as a
+    // pre-signed address of the bucket, never as this route.
+    const served = asset ? await serveMedia(source, asset, { expiresSeconds: 900 }) : null;
+    if (!asset || !served || 'redirect' in served) {
+      return reply.status(404).send({ error: 'not_found' });
+    }
+    const { stream } = served;
     return reply
       .header('Content-Type', asset.mimeType)
       .header('Content-Length', asset.byteSize)

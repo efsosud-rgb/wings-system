@@ -10,10 +10,20 @@ import {
 import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { clients, employees, mediaAssets } from '../../db/schema/index.js';
+import { clients, driveFiles, employees, mediaAssets } from '../../db/schema/index.js';
 import { activeClient } from '../clients/routes.js';
 import { writeAudit } from '../../lib/audit.js';
-import { mediaDirOf, openMedia, storeMedia, toMediaAsset } from './library.js';
+import { storageOf } from '../../lib/storage/index.js';
+import { mediaFolderFor } from '../drive/folders.js';
+import {
+  inLibrary,
+  libraryJoin,
+  mediaDirOf,
+  serveMedia,
+  storeMedia,
+  toMediaAsset,
+  type MediaSource,
+} from './library.js';
 
 const idParam = z.object({ id: z.uuid() });
 const label = z.string().trim().max(80);
@@ -41,7 +51,8 @@ const filing = z.object({
  */
 export const mediaRoutes: FastifyPluginAsync = async (app) => {
   const { db, env } = app.wings;
-  const mediaDir = mediaDirOf(env);
+  const storage = storageOf(app.wings);
+  const source: MediaSource = { storage, legacyDir: mediaDirOf(env) };
   const unavailable = {
     error: 'media_storage_unavailable',
     message: 'O armazenamento de mídia não está configurado neste ambiente.',
@@ -68,8 +79,11 @@ export const mediaRoutes: FastifyPluginAsync = async (app) => {
         .from(mediaAssets)
         .leftJoin(employees, eq(employees.id, mediaAssets.ownerId))
         .leftJoin(clients, eq(clients.id, mediaAssets.clientId))
+        .leftJoin(driveFiles, libraryJoin)
         .where(
           and(
+            // What went to the Drive's trash is out of the library until restored.
+            inLibrary,
             kind ? eq(mediaAssets.kind, kind) : undefined,
             origin ? eq(mediaAssets.origin, origin) : undefined,
             tag ? sql`${tag} = any(${mediaAssets.tags})` : undefined,
@@ -89,7 +103,7 @@ export const mediaRoutes: FastifyPluginAsync = async (app) => {
       const assets = rows
         .filter((row) => !aspect || mediaAspectOf(row.asset.width, row.asset.height) === aspect)
         .map((row) => toMediaAsset(row.asset, { owner: row.ownerName, client: row.clientName }));
-      return reply.send({ assets, storageAvailable: mediaDir !== null });
+      return reply.send({ assets, storageAvailable: storage !== null });
     },
   );
 
@@ -103,14 +117,21 @@ export const mediaRoutes: FastifyPluginAsync = async (app) => {
         : undefined;
       if (!asset)
         return reply.status(404).send({ error: 'not_found', message: 'Mídia não encontrada.' });
-      if (!mediaDir) return reply.status(503).send(unavailable);
+      if (!storage) return reply.status(503).send(unavailable);
 
-      const stream = await openMedia(mediaDir, asset.storageKey, asset.byteSize);
-      if (!stream) {
-        return reply
-          .status(404)
-          .send({ error: 'file_missing', message: 'O arquivo desta mídia não está no volume.' });
+      const served = await serveMedia(source, asset, { expiresSeconds: 300 });
+      if (!served) {
+        return reply.status(404).send({
+          error: 'file_missing',
+          message: 'O arquivo desta mídia não está no armazenamento.',
+        });
       }
+      if ('redirect' in served) {
+        // In the bucket: the browser fetches it from there, with an address good for five
+        // minutes that only a logged-in request with the permission can obtain.
+        return reply.header('Cache-Control', 'private, max-age=240').redirect(served.redirect, 302);
+      }
+      const { stream } = served;
       const extension = asset.storageKey.split('.').pop() ?? 'bin';
       return (
         reply
@@ -135,7 +156,7 @@ export const mediaRoutes: FastifyPluginAsync = async (app) => {
       bodyLimit: MEDIA_UPLOAD_MAX_BYTES,
     },
     async (request, reply) => {
-      if (!mediaDir) return reply.status(503).send(unavailable);
+      if (!storage) return reply.status(503).send(unavailable);
       const bytes = request.body;
       if (!Buffer.isBuffer(bytes) || bytes.length === 0) {
         return reply.status(400).send({
@@ -152,7 +173,7 @@ export const mediaRoutes: FastifyPluginAsync = async (app) => {
           .send({ error: 'invalid_request', message: 'Cliente não encontrado ou inativo.' });
       }
       const employeeId = request.session.actor.employeeId;
-      const stored = await storeMedia(db, mediaDir, {
+      const stored = await storeMedia(db, storage, {
         ownerId: employeeId,
         origin: 'upload',
         bytes,
@@ -216,6 +237,22 @@ export const mediaRoutes: FastifyPluginAsync = async (app) => {
               .returning();
       if (!updated)
         return reply.status(404).send({ error: 'not_found', message: 'Mídia não encontrada.' });
+      // Filed under another client, the file moves to that client's "Mídia" in the Drive.
+      if (body.data.clientId !== undefined && updated.driveFileId) {
+        const folder = await mediaFolderFor(db, updated.clientId);
+        if (folder) {
+          await db
+            .update(driveFiles)
+            .set({ folderId: folder.id, clientId: folder.clientId, updatedAt: new Date() })
+            .where(eq(driveFiles.id, updated.driveFileId));
+        }
+      }
+      if (body.data.tags !== undefined && updated.driveFileId) {
+        await db
+          .update(driveFiles)
+          .set({ tags: updated.tags })
+          .where(eq(driveFiles.id, updated.driveFileId));
+      }
       const [owner, client] = await Promise.all([
         db.query.employees.findFirst({ where: eq(employees.id, updated.ownerId) }),
         db.query.clients.findFirst({ where: eq(clients.id, updated.clientId) }),

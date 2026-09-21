@@ -57,6 +57,21 @@ export function AppShell() {
         <nav className="sidebar-menu" aria-label="Módulos">
           {modules.map((module) => {
             const open = isOpen(module.key);
+            const only = module.submodules.length === 1 ? module.submodules[0] : undefined;
+            // A module with one screen is a first-level entry: nothing to unfold.
+            if (only?.status === 'ready') {
+              return (
+                <div key={module.key} className="menu-module">
+                  <NavLink
+                    to={only.path}
+                    className={({ isActive }) => `menu-module-header ${isActive ? 'active' : ''}`}
+                  >
+                    <span aria-hidden="true">{module.icon}</span>
+                    <span className="menu-module-label">{module.label}</span>
+                  </NavLink>
+                </div>
+              );
+            }
             return (
               <div key={module.key} className="menu-module">
                 <button

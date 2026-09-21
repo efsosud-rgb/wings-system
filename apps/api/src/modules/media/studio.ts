@@ -46,6 +46,7 @@ import {
   modelsFrom,
   shapeOf,
 } from './kairogen-adapter.js';
+import { storageOf, type ObjectStorage } from '../../lib/storage/index.js';
 import { mediaDirOf, storeMedia } from './library.js';
 
 /**
@@ -73,6 +74,9 @@ const PRICING_BUDGET_MS = 8_000;
 export interface StudioDeps {
   db: Database;
   kairogen: KairogenDeps | null;
+  /** Where the library's files live: the Drive's storage. Null when this environment has none. */
+  storage: ObjectStorage | null;
+  /** The volume assets lived on before the Drive, read until the migration script has run. */
   mediaDir: string | null;
   dailyPerUser: number;
   monthly: number;
@@ -89,13 +93,20 @@ export interface StudioDeps {
 }
 
 export function studioDepsOf(
-  wings: { db: Database; env: Env; kairogenFetch?: typeof fetch },
+  wings: {
+    db: Database;
+    env: Env;
+    kairogenFetch?: typeof fetch;
+    storageFetch?: typeof fetch;
+    storage?: ObjectStorage;
+  },
   log?: { info: (entry: object, message: string) => void },
 ): StudioDeps {
   const key = wings.env.INTEGRATIONS_ENCRYPTION_KEY;
   return {
     db: wings.db,
     kairogen: kairogenDepsOf(wings),
+    storage: storageOf(wings),
     mediaDir: mediaDirOf(wings.env),
     dailyPerUser: wings.env.KAIROGEN_DAILY_CREDITS_PER_USER,
     monthly: wings.env.KAIROGEN_MONTHLY_CREDITS,
@@ -385,6 +396,18 @@ export async function issuePublicLink(
     .values({ ...input, expiresAt, createdAt: deps.now() })
     .returning({ id: mediaPublicLinks.id });
   if (!row) throw new Error('failed to record public link');
+  // In the bucket, the address is the bucket's own: pre-signed, for this one object, for
+  // the same fifteen minutes. The row above is the record of it either way.
+  const asset = await deps.db.query.mediaAssets.findFirst({
+    where: eq(mediaAssets.id, input.assetId),
+  });
+  if (deps.storage?.kind === 's3' && asset?.storageKey.startsWith('drive/')) {
+    return deps.storage.presignGet(asset.storageKey, {
+      expiresSeconds: LINK_TTL_MS / 1000,
+      disposition: 'inline',
+      contentType: asset.mimeType,
+    });
+  }
   return `${deps.publicApiBase}/media/public/${row.id}?sig=${sign(deps.linkKey, row.id, input.assetId, expiresAt)}`;
 }
 
@@ -766,7 +789,7 @@ export async function startGeneration(
   input: { employeeId: string; estimateId: string },
 ): Promise<GenerationRow> {
   const kairogen = connected(deps);
-  if (!deps.mediaDir) {
+  if (!deps.storage) {
     throw new StudioRefusal(
       'invalid_request',
       'O armazenamento de mídia não está configurado neste ambiente.',
@@ -1004,9 +1027,9 @@ export async function advanceGeneration(
   const request = current.request as MediaEstimateRequest;
   let saved = 0;
   for (const url of state.outputUrls) {
-    const bytes = deps.mediaDir ? await download(deps, url) : null;
-    if (!bytes || !deps.mediaDir) continue;
-    const stored = await storeMedia(deps.db, deps.mediaDir, {
+    const bytes = deps.storage ? await download(deps, url) : null;
+    if (!bytes || !deps.storage) continue;
+    const stored = await storeMedia(deps.db, deps.storage, {
       ownerId: current.requestedBy,
       origin: 'kairogen',
       bytes,
