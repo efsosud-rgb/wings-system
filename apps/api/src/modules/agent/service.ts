@@ -1,5 +1,6 @@
 import {
   AGENT_TOOL_LABEL,
+  WINGS_CLIENT_ID,
   agentCampaignProposalSchema,
   agentChangeProposalSchema,
   agentGenerationProposalSchema,
@@ -19,6 +20,7 @@ import {
   agentConversations,
   agentMessages,
   agentProposals,
+  clients,
   mediaGenerations,
 } from '../../db/schema/index.js';
 import { LlmError, type AgentLlm, type LlmMessage, type LlmToolCall } from './llm.js';
@@ -177,8 +179,15 @@ export async function cardOf(
     };
   }
   if (row.kind === 'generation') {
-    const payload = agentGenerationProposalSchema.safeParse(row.payload);
+    // Cards from before clients existed were all for Wings Company.
+    const payload = agentGenerationProposalSchema.safeParse({
+      clientId: WINGS_CLIENT_ID,
+      ...(row.payload as object),
+    });
     if (!payload.success) return null;
+    const client = await db.query.clients.findFirst({
+      where: eq(clients.id, payload.data.clientId),
+    });
     // The estimate made for this card, and what became of it after a click.
     const [made] = await db
       .select()
@@ -193,6 +202,7 @@ export async function cardOf(
       createdAt: row.createdAt.toISOString(),
       approvalId: null,
       payload: payload.data,
+      clientName: client?.name ?? null,
       estimate:
         made?.status === 'estimated'
           ? {

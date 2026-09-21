@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   SESSION_COOKIE,
+  WINGS_CLIENT_ID,
   type AgentStreamEvent,
   type MediaBridgeResponse,
   type MediaEstimate,
@@ -20,6 +21,7 @@ import {
   adCreativeUploads,
   agentProposals,
   auditLog,
+  clients,
   integrationConnections,
   mediaAssets,
   mediaCreditLedger,
@@ -34,7 +36,7 @@ import type { AgentLlm, LlmMessage, LlmRequest, LlmTurn } from '../agent/llm.js'
 import { fakeKairogen, fakePng } from '../integrations/kairogen/fake-kairogen.js';
 import { MEDIA_AGENT_SYSTEM_PROMPT, MEDIA_AGENT_TOOL_DEFINITIONS } from './agent.js';
 import { storeMedia } from './library.js';
-import { clearModelCache } from './studio.js';
+import { clearModelCache, listModels, studioDepsOf, usageOf } from './studio.js';
 
 /**
  * Spending Kairogen credits: never without an estimate, never without a click,
@@ -169,6 +171,21 @@ const spending = () =>
       item.name,
     ),
   );
+/** A client other than Wings Company, registered once per test file. */
+async function aurora(): Promise<string> {
+  const [row] = await db
+    .insert(clients)
+    .values({ name: 'Padaria Aurora', slug: 'padaria-aurora' })
+    .onConflictDoNothing()
+    .returning();
+  const found =
+    row ?? (await db.query.clients.findFirst({ where: eq(clients.slug, 'padaria-aurora') }));
+  if (!found) throw new Error('expected a client');
+  return found.id;
+}
+/** Everything Kairogen was ever sent in this test, as one string. */
+const sentToKairogen = () => JSON.stringify(fake.state.toolCalls);
+
 /** Lets the next check through without waiting the seconds the schedule asks for. */
 async function due(id: string) {
   await db
@@ -231,6 +248,28 @@ describe('the catalog', () => {
         })
       ).statusCode,
     ).toBe(403);
+  });
+});
+
+describe('the format of Kairogen’s answers', () => {
+  it('is noted in the log once per tool and shape, as key names and numbers and never contents', async () => {
+    const { employeeId } = await sessionFor('marketing');
+    const noted: { tool: string; shape: unknown }[] = [];
+    const deps = studioDepsOf(
+      { db, env: env(), kairogenFetch: transport },
+      { info: (entry) => noted.push(entry as { tool: string; shape: unknown }) },
+    );
+    await listModels(deps);
+    await usageOf(deps, employeeId);
+    await usageOf(deps, employeeId);
+
+    expect(noted.map((entry) => entry.tool)).toEqual(['list_models', 'get_credits']);
+    expect(noted[1]?.shape).toEqual({ credits: 120, plan: 'free' });
+    // Model names and descriptions are strings: only their lengths are written.
+    expect(JSON.stringify(noted[0])).not.toMatch(/seedream|Seedream|ByteDance/);
+    expect(JSON.stringify(noted[0])).toMatch(/string\(\d+\)/);
+    // Nothing of ours is in there either.
+    expect(JSON.stringify(noted)).not.toMatch(/at_test|Bearer/);
   });
 });
 
@@ -311,12 +350,122 @@ describe('estimate, then click, then follow', () => {
       params: { size: '2048x2048' },
     });
     expect(rows.at(-1)?.prompt).toContain('golden hour');
+    // Nobody chose a client: the generation, its ledger rows and the asset are Wings Company's.
+    expect(done).toMatchObject({ clientId: WINGS_CLIENT_ID, clientName: 'Wings Company' });
+    expect(rows.every((row) => row.clientId === WINGS_CLIENT_ID)).toBe(true);
+    expect(asset?.clientId).toBe(WINGS_CLIENT_ID);
+    // What get_credits said around each step: 120 before, 112 once the 8 credits left.
+    expect(rows.map((row) => [row.event, row.balanceReported])).toEqual([
+      ['estimated', 120],
+      ['started', 120],
+      ['succeeded', 112],
+    ]);
 
     // One estimate, one generation.
     const twice = await generate(cookies, { estimateId: quote.id });
     expect(twice.statusCode).toBe(409);
     expect(twice.json()).toMatchObject({ error: 'estimate_used' });
     expect(spending()).toHaveLength(1);
+  });
+
+  it('files a generation under the client that was chosen, and never tells Kairogen who that is', async () => {
+    const { cookies } = await sessionFor('marketing');
+    const clientId = await aurora();
+
+    const named = await estimate(
+      cookies,
+      image({ clientId, prompt: 'Counter of padaria AURORA at golden hour, 35mm, no text' }),
+    );
+    expect(named.statusCode).toBe(400);
+    expect(named.json<{ message: string }>().message).toContain('nunca é enviado ao Kairogen');
+    expect(fake.state.toolCalls.some((item) => item.name === 'estimate_cost')).toBe(false);
+
+    const unknown = await estimate(
+      cookies,
+      image({ clientId: '99999999-9999-4999-8999-999999999999' }),
+    );
+    expect(unknown.statusCode).toBe(400);
+
+    const priced = await estimate(cookies, image({ clientId }));
+    expect(priced.statusCode).toBe(201);
+    const quote = priced.json<{ estimate: MediaEstimate }>().estimate;
+    const started = await generate(cookies, { estimateId: quote.id });
+    const generation = started.json<{ generation: MediaGeneration }>().generation;
+    expect(generation).toMatchObject({ clientId, clientName: 'Padaria Aurora' });
+    const done = await follow(cookies, generation.id, 2);
+    expect(done?.status).toBe('succeeded');
+
+    const [asset] = await db
+      .select()
+      .from(mediaAssets)
+      .where(eq(mediaAssets.id, done?.assetIds[0] ?? ''));
+    expect(asset?.clientId).toBe(clientId);
+    const rows = await db
+      .select()
+      .from(mediaCreditLedger)
+      .where(eq(mediaCreditLedger.generationId, generation.id));
+    expect(rows).toHaveLength(3);
+    expect(rows.every((row) => row.clientId === clientId)).toBe(true);
+    const listed = await app.inject({ url: `/media/assets?clientId=${clientId}`, cookies });
+    expect(listed.json<{ assets: { id: string }[] }>().assets.map((item) => item.id)).toEqual([
+      asset?.id,
+    ]);
+
+    // Neither the name nor the id of the client is in anything Kairogen received.
+    expect(sentToKairogen()).not.toMatch(/aurora/i);
+    expect(sentToKairogen()).not.toContain(clientId);
+    expect(sentToKairogen()).not.toMatch(/client/i);
+
+    // An upscale of that picture is the same client's, with nobody saying so again.
+    const bigger = await estimate(cookies, { operation: 'upscale', assetId: asset?.id, scale: 2 });
+    expect(bigger.statusCode).toBe(201);
+    const [upscale] = await db
+      .select()
+      .from(mediaGenerations)
+      .where(eq(mediaGenerations.id, bigger.json<{ estimate: MediaEstimate }>().estimate.id));
+    expect(upscale?.clientId).toBe(clientId);
+
+    // A client that was switched off takes no new work.
+    await db.update(clients).set({ active: false }).where(eq(clients.id, clientId));
+    expect((await estimate(cookies, image({ clientId }))).statusCode).toBe(400);
+    await db.update(clients).set({ active: true }).where(eq(clients.id, clientId));
+  });
+
+  it('writes a ledger row when the balance Kairogen reports changes, and none when it repeats', async () => {
+    const { cookies, employeeId } = await sessionFor('marketing');
+    const balances = async () =>
+      (
+        await db
+          .select()
+          .from(mediaCreditLedger)
+          .where(eq(mediaCreditLedger.event, 'balance_changed'))
+          .orderBy(mediaCreditLedger.createdAt)
+      ).map((row) => row.balanceReported);
+
+    await app.inject({ url: '/media/studio', cookies });
+    await app.inject({ url: '/media/studio', cookies });
+    expect(await balances()).toEqual([120]);
+
+    // Kairogen tops the account up on its own: the jump is dated, and counts against no ceiling.
+    fake.state.credits = 169;
+    const studio = await app.inject({ url: '/media/studio', cookies });
+    expect(studio.json<{ usage: MediaUsage }>().usage).toMatchObject({
+      balance: 169,
+      usedTodayByYou: 0,
+      usedThisMonth: 0,
+    });
+    await app.inject({ url: '/media/studio', cookies });
+    expect(await balances()).toEqual([120, 169]);
+    const [jump] = await db
+      .select()
+      .from(mediaCreditLedger)
+      .where(eq(mediaCreditLedger.balanceReported, 169));
+    expect(jump).toMatchObject({
+      generationId: null,
+      employeeId,
+      operation: 'get_credits',
+      creditsDelta: 0,
+    });
   });
 
   it('cannot be asked to generate without an estimate, nor with somebody else’s', async () => {
@@ -742,6 +891,7 @@ describe('the editing agent', () => {
     aspect: '4:5',
     quantity: 1,
     params: {},
+    clientId: WINGS_CLIENT_ID,
     ...overrides,
   });
 
@@ -761,7 +911,13 @@ describe('the editing agent', () => {
       .filter((block) => block.startsWith('data: '))
       .map((block) => JSON.parse(block.slice(6)) as AgentStreamEvent);
     const done = events.find((event) => event.type === 'done');
-    return { response, events, message: done?.type === 'done' ? done.message : null };
+    const opened = events.find((event) => event.type === 'conversation');
+    return {
+      response,
+      events,
+      message: done?.type === 'done' ? done.message : null,
+      conversationId: opened?.type === 'conversation' ? opened.conversationId : null,
+    };
   }
 
   it('has tools that read, estimate and propose, and none that generates', () => {
@@ -770,9 +926,12 @@ describe('the editing agent', () => {
       'estimar_custo',
       'consultar_biblioteca',
       'consultar_saldo',
+      'listar_clientes',
       'rascunho_da_campanha',
       'propor_geracao',
     ]);
+    expect(MEDIA_AGENT_SYSTEM_PROMPT).toContain('pergunte "Para qual cliente?"');
+    expect(MEDIA_AGENT_SYSTEM_PROMPT).toContain('nunca vai ao Kairogen');
     expect(MEDIA_AGENT_TOOL_DEFINITIONS.map((tool) => tool.name).join(' ')).not.toMatch(
       /gerar|generate|upscale|animate|execut/,
     );
@@ -830,6 +989,78 @@ describe('the editing agent', () => {
     const traffic = await app.inject({ url: '/agent/conversations', cookies });
     expect(media.json<{ conversations: unknown[] }>().conversations).toHaveLength(1);
     expect(traffic.json<{ conversations: unknown[] }>().conversations).toHaveLength(0);
+  });
+
+  it('proposes for a client only by an id from listar_clientes, shows who on the card, and keeps the name from Kairogen', async () => {
+    const { cookies } = await sessionFor('marketing');
+    const clientId = await aurora();
+    script = [
+      () => ({ toolCalls: [call('listar_clientes')] }),
+      () => ({
+        toolCalls: [
+          // No client: sent back, to ask. A client nobody registered: sent back too.
+          call('propor_geracao', proposal({ clientId: undefined })),
+          call('propor_geracao', proposal({ clientId: '99999999-9999-4999-8999-999999999999' })),
+          // The client's name in the prompt: sent back, it would reach Kairogen.
+          call(
+            'propor_geracao',
+            proposal({ clientId, prompt: `Padaria Aurora storefront. ${proposal().prompt}` }),
+          ),
+        ],
+      }),
+      () => ({ toolCalls: [call('propor_geracao', proposal({ clientId }))] }),
+      () => ({ text: 'Propus uma imagem 4:5 para a Padaria Aurora, por 4 créditos.' }),
+    ];
+    const { message, conversationId } = await talk(
+      cookies,
+      'Uma imagem de feed para a Padaria Aurora',
+    );
+
+    const listed = (seen[1]?.messages ?? []).find((item) => item.role === 'tool');
+    expect(listed?.content).toContain('Wings Company');
+    expect(listed?.content).toContain(clientId);
+    const refusals = (seen[2]?.messages ?? []).filter((item) => item.role === 'tool').slice(-3);
+    expect(refusals[0]?.content).toContain('Para qual cliente?');
+    expect(refusals[1]?.content).toContain('cliente não encontrado');
+    expect(refusals[2]?.content).toContain('nunca é enviado ao Kairogen');
+
+    expect(message?.proposals).toHaveLength(1);
+    const card = message?.proposals[0];
+    if (card?.kind !== 'generation' || !card.estimate) throw new Error('expected a priced card');
+    expect(card).toMatchObject({ clientName: 'Padaria Aurora', payload: { clientId } });
+
+    const clicked = await generate(cookies, { estimateId: card.estimate.id, proposalId: card.id });
+    expect(clicked.json<{ generation: MediaGeneration }>().generation.clientId).toBe(clientId);
+    expect(sentToKairogen()).not.toMatch(/aurora/i);
+
+    // Read again later, the card still says who it is for and follows its generation.
+    const again = await app.inject({
+      url: `/agent/conversations/${conversationId}`,
+      cookies,
+    });
+    expect(again.payload).toContain('"clientName":"Padaria Aurora"');
+  });
+
+  it('still shows a card stored before clients existed, as Wings Company’s', async () => {
+    const { cookies } = await sessionFor('marketing');
+    script = [
+      () => ({ toolCalls: [call('propor_geracao', proposal())] }),
+      () => ({ text: 'Propus.' }),
+    ];
+    const { message, conversationId } = await talk(cookies, 'Uma imagem para a Wings');
+    const card = message?.proposals[0];
+    if (!card) throw new Error('expected a card');
+    await db
+      .update(agentProposals)
+      .set({ payload: proposal({ clientId: undefined }) })
+      .where(eq(agentProposals.id, card.id));
+
+    const again = await app.inject({
+      url: `/agent/conversations/${conversationId}`,
+      cookies,
+    });
+    expect(again.statusCode).toBe(200);
+    expect(again.payload).toContain('"clientName":"Wings Company"');
   });
 
   it('sends back a proposal that is thin, promises income or does not fit, and says so if it is never redone', async () => {

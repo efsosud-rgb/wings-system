@@ -11,6 +11,7 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { tenants, WINGS_TENANT_ID } from './ads.js';
+import { clientId } from './clients.js';
 import { employees } from './employees.js';
 
 const tenantId = () =>
@@ -114,6 +115,9 @@ export const mediaAssets = pgTable(
     sourceUrl: text('source_url'),
     /** The asset this one was made from: an upscale, an animation. */
     sourceAssetId: uuid('source_asset_id'),
+    /** Who it is for. Filing of ours: never part of anything Kairogen is sent. */
+    clientId: clientId(),
+    /** The free-text label from before the `clients` table. No longer read or written. */
     client: text('client'),
     folder: text('folder'),
     tags: text('tags').array().notNull().default([]),
@@ -122,6 +126,7 @@ export const mediaAssets = pgTable(
   (table) => [
     index('media_assets_created_idx').on(table.createdAt),
     index('media_assets_owner_idx').on(table.ownerId),
+    index('media_assets_client_idx').on(table.clientId),
   ],
 );
 
@@ -169,6 +174,8 @@ export const mediaGenerations = pgTable(
     sourceAssetId: uuid('source_asset_id'),
     /** The agent's card that was clicked, when one was. */
     proposalId: uuid('proposal_id'),
+    /** Who it is for. An upscale or an animation is for whoever its source was for. */
+    clientId: clientId(),
     estimateExpiresAt: timestamp('estimate_expires_at', { withTimezone: true }).notNull(),
     startedAt: timestamp('started_at', { withTimezone: true }),
     nextPollAt: timestamp('next_poll_at', { withTimezone: true }),
@@ -192,13 +199,12 @@ export const mediaCreditLedger = pgTable(
   {
     tenantId: tenantId(),
     id: uuid('id').primaryKey().defaultRandom(),
-    generationId: uuid('generation_id')
-      .notNull()
-      .references(() => mediaGenerations.id),
+    /** Null only on `balance_changed` rows, which belong to no generation. */
+    generationId: uuid('generation_id').references(() => mediaGenerations.id),
     employeeId: uuid('employee_id')
       .notNull()
       .references(() => employees.id),
-    /** estimated, started, refused, unknown, succeeded, failed, timed_out */
+    /** estimated, started, refused, unknown, succeeded, failed, timed_out, balance_changed */
     event: text('event').notNull(),
     operation: text('operation').notNull(),
     model: text('model'),
@@ -213,6 +219,13 @@ export const mediaCreditLedger = pgTable(
      */
     creditsDelta: integer('credits_delta').notNull().default(0),
     externalGenerationId: text('external_generation_id'),
+    clientId: clientId(),
+    /**
+     * What `get_credits` answered when this row was written, when it was asked.
+     * Kairogen moves the balance for reasons of its own (renewals, bonuses): with
+     * this column a jump can be placed between two rows instead of guessed at.
+     */
+    balanceReported: integer('balance_reported'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

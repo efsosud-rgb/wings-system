@@ -5,6 +5,8 @@ import {
   MAX_IMAGES_PER_GENERATION,
   MAX_VIDEOS_PER_GENERATION,
   MEDIA_REFUSAL_MESSAGE,
+  WINGS_CLIENT_ID,
+  mentionsClient,
   type KairogenPlan,
   type MediaEstimate,
   type MediaEstimateRequest,
@@ -13,9 +15,10 @@ import {
   type MediaRefusal,
   type MediaUsage,
 } from '@wings/shared';
-import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, lte, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
+  clients,
   employees,
   integrationConnections,
   mediaAssets,
@@ -24,7 +27,7 @@ import {
   mediaPublicLinks,
 } from '../../db/schema/index.js';
 import type { Env } from '../../env.js';
-import { McpError } from '../../lib/mcp-client/index.js';
+import { McpError, type McpToolResult } from '../../lib/mcp-client/index.js';
 import { scrubSensitive } from '../agent/scrub.js';
 import {
   callKairogen,
@@ -33,12 +36,14 @@ import {
   PROVIDER,
   type KairogenDeps,
 } from '../integrations/kairogen/service.js';
+import { activeClient } from '../clients/routes.js';
 import {
   creditCostFrom,
   generationIdFrom,
   generationStateFrom,
   isCreditMismatch,
   modelsFrom,
+  shapeOf,
 } from './kairogen-adapter.js';
 import { mediaDirOf, storeMedia } from './library.js';
 
@@ -75,13 +80,14 @@ export interface StudioDeps {
   /** False in tests: generations move only when somebody calls `advanceGeneration`. */
   autoPoll: boolean;
   now: () => Date;
+  /** Where the shape of Kairogen's answers is noted. Shapes only, never contents. */
+  noteShape?: (entry: { tool: string; shape: unknown; text: string | null }) => void;
 }
 
-export function studioDepsOf(wings: {
-  db: Database;
-  env: Env;
-  kairogenFetch?: typeof fetch;
-}): StudioDeps {
+export function studioDepsOf(
+  wings: { db: Database; env: Env; kairogenFetch?: typeof fetch },
+  log?: { info: (entry: object, message: string) => void },
+): StudioDeps {
   const key = wings.env.INTEGRATIONS_ENCRYPTION_KEY;
   return {
     db: wings.db,
@@ -97,7 +103,44 @@ export function studioDepsOf(wings: {
     fetch: wings.kairogenFetch ?? fetch,
     autoPoll: wings.env.NODE_ENV !== 'test',
     now: () => new Date(),
+    noteShape: log ? shapeNoter(log) : undefined,
   };
+}
+
+/** Writes a log line when a tool's shape is new, not once per call. */
+function shapeNoter(log: { info: (entry: object, message: string) => void }) {
+  const last = new Map<string, string>();
+  return (entry: { tool: string; shape: unknown; text: string | null }) => {
+    const seen = JSON.stringify(entry);
+    if (last.get(entry.tool) === seen) return;
+    last.set(entry.tool, seen);
+    log.info(entry, 'kairogen answer shape');
+  };
+}
+
+/**
+ * Every call to Kairogen from the studio goes through here, so that the FORMAT
+ * of what it answers is on record: key names, types and numbers, with every
+ * string reduced to its length (`shapeOf`). When there is no structured answer,
+ * the text is noted with its words masked and its numbers kept.
+ */
+async function ask(
+  deps: StudioDeps,
+  kairogen: KairogenDeps,
+  tool: Parameters<typeof callKairogen>[1],
+  args: Record<string, unknown> = {},
+  options: { timeoutMs?: number } = {},
+): Promise<McpToolResult> {
+  const result = await callKairogen(kairogen, tool, args, options);
+  if (deps.noteShape) {
+    const structured = result.data !== null && typeof result.data === 'object';
+    deps.noteShape({
+      tool,
+      shape: shapeOf(result.data),
+      text: structured ? null : result.text.slice(0, 300).replace(/\p{L}/gu, 'a'),
+    });
+  }
+  return result;
 }
 
 export class StudioRefusal extends Error {
@@ -167,7 +210,7 @@ export async function listModels(
     return { models: cached.models, cachedAt: new Date(cached.at).toISOString() };
   }
   try {
-    const models = modelsFrom(await callKairogen(kairogen, 'list_models', {}), plan);
+    const models = modelsFrom(await ask(deps, kairogen, 'list_models', {}), plan);
     modelCache.set(plan, { at: now, models });
     return { models, cachedAt: new Date(now).toISOString() };
   } catch (error) {
@@ -197,20 +240,51 @@ async function creditsCounted(db: Database, since: Date, employeeId?: string): P
   return Number(row?.total ?? 0);
 }
 
+/** What `get_credits` says right now, or null when it cannot be asked or has no number in it. */
+async function readBalance(deps: StudioDeps): Promise<number | null> {
+  if (!deps.kairogen) return null;
+  try {
+    return creditsFrom(await ask(deps, deps.kairogen, 'get_credits'), deps.now()).balance;
+  } catch (error) {
+    if (!(error instanceof McpError)) throw error;
+    return null;
+  }
+}
+
+/**
+ * Kairogen moves the balance for reasons of its own (a renewal, a bonus). Every
+ * reading that differs from the last one on record becomes a ledger row of its
+ * own, so a jump is dated and sits between the two generations it happened
+ * between. Readings that repeat the last one add nothing and are not written.
+ */
+async function noteBalance(deps: StudioDeps, employeeId: string, balance: number): Promise<void> {
+  const [last] = await deps.db
+    .select({ balance: mediaCreditLedger.balanceReported })
+    .from(mediaCreditLedger)
+    .where(isNotNull(mediaCreditLedger.balanceReported))
+    .orderBy(desc(mediaCreditLedger.createdAt))
+    .limit(1);
+  if (last?.balance === Math.floor(balance)) return;
+  await deps.db.insert(mediaCreditLedger).values({
+    generationId: null,
+    employeeId,
+    event: 'balance_changed',
+    operation: 'get_credits',
+    creditsEstimated: 0,
+    creditsDelta: 0,
+    balanceReported: Math.floor(balance),
+    createdAt: deps.now(),
+  });
+}
+
 export async function usageOf(
   deps: StudioDeps,
   employeeId: string,
   options: { withBalance?: boolean } = {},
 ): Promise<MediaUsage> {
   const starts = periodStarts(deps.now());
-  let balance: number | null = null;
-  if (options.withBalance !== false && deps.kairogen) {
-    try {
-      balance = creditsFrom(await callKairogen(deps.kairogen, 'get_credits'), deps.now()).balance;
-    } catch (error) {
-      if (!(error instanceof McpError)) throw error;
-    }
-  }
+  const balance = options.withBalance === false ? null : await readBalance(deps);
+  if (balance !== null) await noteBalance(deps, employeeId, balance);
   return {
     plan: await planOf(deps.db),
     balance,
@@ -283,7 +357,13 @@ async function ledger(
   db: Database,
   row: GenerationRow,
   event: string,
-  values: { creditsDelta: number; creditsCharged?: number | null; now: Date },
+  values: {
+    creditsDelta: number;
+    creditsCharged?: number | null;
+    /** What get_credits said around this step, when it was asked. */
+    balance?: number | null;
+    now: Date;
+  },
 ): Promise<void> {
   await db.insert(mediaCreditLedger).values({
     generationId: row.id,
@@ -297,6 +377,9 @@ async function ledger(
     creditsCharged: values.creditsCharged ?? row.creditsCharged,
     creditsDelta: values.creditsDelta,
     externalGenerationId: row.externalGenerationId,
+    clientId: row.clientId,
+    balanceReported:
+      values.balance === null || values.balance === undefined ? null : Math.floor(values.balance),
     createdAt: values.now,
   });
 }
@@ -314,6 +397,8 @@ function requireDuration(model: MediaModel, duration: number | undefined): void 
 }
 
 interface Resolved {
+  /** Filing only. Never part of `priceArgs` nor of any tool call. */
+  clientId: string;
   kind: 'image' | 'video';
   model: string | null;
   prompt: string | null;
@@ -332,6 +417,16 @@ async function resolve(deps: StudioDeps, request: MediaEstimateRequest): Promise
   };
 
   if (request.operation === 'generate') {
+    const client = await activeClient(deps.db, request.clientId);
+    if (!client) throw new StudioRefusal('invalid_request', 'Cliente não encontrado ou inativo.');
+    // Who the work is for stays here. Wings' own name is not a secret; a client's is.
+    const written = `${request.prompt} ${request.negativePrompt ?? ''}`;
+    if (client.id !== WINGS_CLIENT_ID && mentionsClient(written, client.name)) {
+      throw new StudioRefusal(
+        'invalid_request',
+        'O prompt cita o nome do cliente, e o nome do cliente nunca é enviado ao Kairogen. Descreva a cena sem o nome; o texto da marca entra depois, no anúncio.',
+      );
+    }
     const model = models.find((item) => item.key === request.model && item.kind === request.kind);
     if (!model)
       throw new StudioRefusal('invalid_request', 'Modelo não encontrado no catálogo do Kairogen.');
@@ -363,6 +458,7 @@ async function resolve(deps: StudioDeps, request: MediaEstimateRequest): Promise
       }
     }
     return {
+      clientId: client.id,
       kind: request.kind,
       model: model.key,
       prompt: request.prompt,
@@ -396,6 +492,7 @@ async function resolve(deps: StudioDeps, request: MediaEstimateRequest): Promise
       );
     }
     return {
+      clientId: asset.clientId,
       kind: 'image',
       model: upscaler.key,
       prompt: null,
@@ -421,6 +518,7 @@ async function resolve(deps: StudioDeps, request: MediaEstimateRequest): Promise
     throw new StudioRefusal('invalid_request', 'Modelo de vídeo não encontrado no catálogo.');
   requireDuration(video, request.durationSeconds);
   return {
+    clientId: asset.clientId,
     kind: 'video',
     model: video.key,
     prompt: request.prompt ?? asset.prompt,
@@ -445,7 +543,7 @@ export async function createEstimate(
 
   let credits: number | null;
   try {
-    credits = creditCostFrom(await callKairogen(kairogen, 'estimate_cost', resolved.priceArgs));
+    credits = creditCostFrom(await ask(deps, kairogen, 'estimate_cost', resolved.priceArgs));
   } catch (error) {
     if (error instanceof McpError && (error.code === 'tool_error' || error.code === 'rejected')) {
       throw new StudioRefusal(
@@ -476,14 +574,14 @@ export async function createEstimate(
       creditsEstimated: credits,
       sourceAssetId: resolved.sourceAssetId,
       proposalId: input.proposalId ?? null,
+      clientId: resolved.clientId,
       estimateExpiresAt: new Date(now.getTime() + ESTIMATE_TTL_MS),
       createdAt: now,
     })
     .returning();
   if (!row) throw new Error('failed to record estimate');
-  await ledger(deps.db, row, 'estimated', { creditsDelta: 0, now });
-
   const usage = await usageOf(deps, input.employeeId);
+  await ledger(deps.db, row, 'estimated', { creditsDelta: 0, balance: usage.balance, now });
   return {
     id: row.id,
     credits,
@@ -635,6 +733,7 @@ export async function startGeneration(
     if (!running) throw new Error('failed to claim estimate');
     await ledger(tx as unknown as Database, running, 'started', {
       creditsDelta: running.creditsEstimated,
+      balance: usage.balance,
       now,
     });
     return running;
@@ -661,7 +760,7 @@ export async function startGeneration(
     const call = await toolCallFor(deps, claimed);
     // Sent once. `callKairogen` never retries a tool that spends.
     externalId = generationIdFrom(
-      await callKairogen(kairogen, call.tool, call.args, { timeoutMs: 60_000 }),
+      await ask(deps, kairogen, call.tool, call.args, { timeoutMs: 60_000 }),
     );
   } catch (error) {
     if (error instanceof StudioRefusal)
@@ -769,6 +868,8 @@ export async function advanceGeneration(
       // Once the real charge is known, the ledger is corrected by the difference.
       creditsDelta: charged === null ? 0 : charged - row.creditsEstimated,
       creditsCharged: charged,
+      // The balance after: next to the one on the `started` row, it shows what really left.
+      balance: await readBalance(deps),
       now: deps.now(),
     });
     return row;
@@ -800,7 +901,7 @@ export async function advanceGeneration(
   let state;
   try {
     state = generationStateFrom(
-      await callKairogen(deps.kairogen, 'get_generation', {
+      await ask(deps, deps.kairogen, 'get_generation', {
         generation_id: current.externalGenerationId,
         wait_for_completion: false,
       }),
@@ -835,6 +936,7 @@ export async function advanceGeneration(
       credits: Math.round(current.creditsEstimated / Math.max(state.outputUrls.length, 1)),
       externalGenerationId: current.externalGenerationId,
       sourceAssetId: current.sourceAssetId,
+      clientId: current.clientId,
       durationSeconds:
         'durationSeconds' in request && request.durationSeconds ? request.durationSeconds : null,
       now: deps.now(),
@@ -882,8 +984,9 @@ export async function resumeGenerations(deps: StudioDeps): Promise<number> {
 // ---------------------------------------------------------------------------
 
 export async function toGeneration(db: Database, row: GenerationRow): Promise<MediaGeneration> {
-  const [requester, assets] = await Promise.all([
+  const [requester, client, assets] = await Promise.all([
     db.query.employees.findFirst({ where: eq(employees.id, row.requestedBy) }),
+    db.query.clients.findFirst({ where: eq(clients.id, row.clientId) }),
     row.externalGenerationId
       ? db
           .select({ id: mediaAssets.id })
@@ -905,6 +1008,8 @@ export async function toGeneration(db: Database, row: GenerationRow): Promise<Me
     createdAt: row.createdAt.toISOString(),
     finishedAt: row.finishedAt?.toISOString() ?? null,
     assetIds: assets.map((asset) => asset.id),
+    clientId: row.clientId,
+    clientName: client?.name ?? null,
   };
 }
 

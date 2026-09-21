@@ -2,13 +2,13 @@ import { randomBytes } from 'node:crypto';
 import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SESSION_COOKIE, mediaAspectOf, type MediaAsset } from '@wings/shared';
+import { SESSION_COOKIE, WINGS_CLIENT_ID, mediaAspectOf, type MediaAsset } from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { mediaAssets } from '../../db/schema/index.js';
+import { clients, mediaAssets } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
@@ -170,19 +170,43 @@ describe('the media library', () => {
     expect(await list('kind=video')).not.toContain(generated.id);
     expect((await app.inject({ url: '/media/assets?kind=audio', cookies })).statusCode).toBe(400);
 
+    // Everything starts as Wings Company's; the library can be narrowed to one client.
+    const [aurora] = await db
+      .insert(clients)
+      .values({ name: 'Padaria Aurora', slug: 'padaria-aurora' })
+      .returning();
+    if (!aurora) throw new Error('expected a client');
+    expect(await list(`clientId=${WINGS_CLIENT_ID}`)).toContain(generated.id);
+    expect(await list(`clientId=${aurora.id}`)).toEqual([]);
+    expect(await list('q=aurora')).toEqual([]);
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/media/assets/${generated.id}`,
+          cookies,
+          payload: { clientId: '99999999-9999-4999-8999-999999999999' },
+        })
+      ).statusCode,
+    ).toBe(400);
+
     const filed = await app.inject({
       method: 'PATCH',
       url: `/media/assets/${generated.id}`,
       cookies,
-      payload: { client: 'Wings', folder: 'Campanha RJ', tags: ['RJ', 'rj', 'Reels'] },
+      payload: { clientId: aurora.id, folder: 'Campanha RJ', tags: ['RJ', 'rj', 'Reels'] },
     });
     expect(filed.json<{ asset: MediaAsset }>().asset).toMatchObject({
-      client: 'Wings',
+      clientId: aurora.id,
+      client: 'Padaria Aurora',
       folder: 'Campanha RJ',
       tags: ['rj', 'reels'],
       prompt: 'Storefront at golden hour, advertising photography',
       credits: 4,
     });
+    expect(await list(`clientId=${aurora.id}`)).toEqual([generated.id]);
+    // The search finds a client by name too.
+    expect(await list('q=aurora')).toEqual([generated.id]);
   });
 
   it('serves nothing from outside the volume, nor a file that is no longer the one stored', async () => {

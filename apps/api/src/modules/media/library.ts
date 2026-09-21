@@ -67,7 +67,8 @@ export interface NewMedia {
   externalGenerationId?: string | null;
   sourceAssetId?: string | null;
   durationSeconds?: number | null;
-  client?: string | null;
+  /** Defaults to Wings Company, in the table itself. */
+  clientId?: string;
   folder?: string | null;
   tags?: string[];
   now?: Date;
@@ -109,7 +110,7 @@ export async function storeMedia(
       credits: input.credits ?? null,
       externalGenerationId: input.externalGenerationId ?? null,
       sourceAssetId: input.sourceAssetId ?? null,
-      client: input.client ?? null,
+      ...(input.clientId ? { clientId: input.clientId } : {}),
       folder: input.folder ?? null,
       tags: input.tags ?? [],
       createdAt: now,
@@ -132,7 +133,10 @@ export async function openMedia(mediaDir: string, storageKey: string, byteSize: 
 
 type AssetRow = typeof mediaAssets.$inferSelect;
 
-export function toMediaAsset(row: AssetRow, ownerName: string | null): MediaAsset {
+export function toMediaAsset(
+  row: AssetRow,
+  names: { owner: string | null; client: string | null },
+): MediaAsset {
   return {
     id: row.id,
     kind: row.kind,
@@ -146,10 +150,11 @@ export function toMediaAsset(row: AssetRow, ownerName: string | null): MediaAsse
     prompt: row.prompt,
     model: row.model,
     credits: row.credits,
-    client: row.client,
+    clientId: row.clientId,
+    client: names.client,
     folder: row.folder,
     tags: row.tags,
-    ownerName,
+    ownerName: names.owner,
     createdAt: row.createdAt.toISOString(),
     downloadPath: `/media/assets/${row.id}/file`,
   };

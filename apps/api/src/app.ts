@@ -13,6 +13,7 @@ import { metaRoutes } from './modules/ads/meta-routes.js';
 import { adsRoutes } from './modules/ads/routes.js';
 import type { AgentLlm } from './modules/agent/llm.js';
 import { agentRoutes } from './modules/agent/routes.js';
+import { clientRoutes } from './modules/clients/routes.js';
 import { kairogenRoutes } from './modules/integrations/kairogen/routes.js';
 import { mediaRoutes } from './modules/media/routes.js';
 import { mediaStudioRoutes } from './modules/media/studio-routes.js';
@@ -122,6 +123,7 @@ export async function buildApp(deps: {
   await app.register(creativeRoutes);
   await app.register(audienceRoutes);
   await app.register(agentRoutes);
+  await app.register(clientRoutes);
   await app.register(kairogenRoutes);
   await app.register(mediaRoutes);
   await app.register(mediaStudioRoutes);
