@@ -41,10 +41,9 @@ flow**; o code + PKCE fica como segunda opção no mesmo cartão.
 - Se o **registro dinâmico aceita** um cliente novo com grant `device_code` (só
   tentando; a tentativa é o primeiro clique em "Conectar", feito por um Admin
   Master, não por este trabalho).
-- Os **argumentos e o formato de resposta das 8 ferramentas** (`list_models`,
-  `estimate_cost`, `get_credits`, `generate_image`, `generate_video`,
-  `animate_from_generation`, `upscale_image`, `get_generation`): `tools/list`
-  exige token, e a documentação pública está fora do ar.
+- Os **argumentos e o formato de resposta das 8 ferramentas**: `tools/list`
+  exige token, e a documentação pública está fora do ar. Os **argumentos** foram
+  lidos depois da conexão (seção "Ferramentas reais"); as respostas, ainda não.
 
 ## Como a conexão funciona (Onda 7b-1)
 
@@ -112,6 +111,55 @@ staging e de produção.
 
 Permissões novas: `integrations.manage` (Admin Master), `marketing.media.read`
 e `marketing.media.generate` (Admin Master, Diretoria, Marketing).
+
+## Ferramentas reais (lidas em 21/09/2026, conta conectada no staging)
+
+Conta conectada, plano **free**, 45 créditos, protocolo MCP **2025-06-18**,
+scopes `kairogen:read` e `kairogen:generate`. Os esquemas completos, como o
+`tools/list` devolveu, estão em [`kairogen-tools.json`](kairogen-tools.json)
+(só nomes, descrições e esquemas; nenhum dado de conta). A leitura foi feita na
+coluna `tools` da conexão, sem tocar nas colunas de credencial. O `wings_ro`
+não tem permissão nessa tabela.
+
+| Ferramenta                | Obrigatórios                                                       | O que importa para a 7b-2                                                                                                                                                   |
+| ------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list_models`             | nenhum (`type`, `search` opcionais)                                | cada modelo traz preço e `param_schema` com os parâmetros reais; é dali que sai o que o formulário mostra por modelo                                                        |
+| `get_credits`             | nenhum                                                             | saldo da conta                                                                                                                                                              |
+| `estimate_cost`           | `model`, **`plan_key`** (free, essential, pro, precision, creator) | precisa dos mesmos parâmetros que mexem no preço (`size`, `quality`, `resolution`, `duration_seconds`, `quantity`, `turbo`, `generate_audio`, `sound`, `extra_params`)      |
+| `generate_image`          | `model`, `prompt`                                                  | `quantity` até 4, `aspect_ratio`, `size`, `quality`, `seed`, `negative_prompt`, `reference_image_urls`, **`expected_credits`**, `wait_for_completion` (padrão falso)        |
+| `generate_video`          | `model`, `prompt`                                                  | `quantity` até 2, `duration_seconds` (tem de ser uma das durações do modelo), `resolution`, `first_frame_url`, `last_frame_url`, referências, **`expected_credits`**        |
+| `animate_from_generation` | `generation_id`                                                    | anima uma imagem **já gerada no Kairogen**, pelo id da geração; `video_model` padrão `seedance-v2-0-image-to-video`; aqui `wait_for_completion` é **verdadeiro** por padrão |
+| `upscale_image`           | `scale` (2 ou 4), `image_url`, `input_width`, `input_height`       | Topaz; `output_format` jpeg ou png; rosto opcional                                                                                                                          |
+| `get_generation`          | `generation_id`                                                    | devolve o estado na hora (`wait_for_completion` falso por padrão); é o que o sistema usa para acompanhar o progresso                                                        |
+
+Três coisas que mudam o desenho da 7b-2:
+
+1. **`expected_credits`.** `generate_image` e `generate_video` aceitam o custo
+   devolvido por `estimate_cost` e o Kairogen **recusa a geração se a cobrança
+   real for diferente**. É a trava do lado deles para a nossa regra "nunca gerar
+   sem estimar antes": o sistema sempre manda esse campo.
+2. **`plan_key` é obrigatório em `estimate_cost`.** O plano é da conta (hoje
+   free). Falta descobrir se `get_credits` informa o plano; se não informar,
+   vira configuração.
+3. **Referências e ampliação pedem URL pública.** `reference_image_urls`,
+   `first_frame_url`, `last_frame_url` e o `image_url` do `upscale_image`
+   precisam ser acessíveis ao Kairogen, e a biblioteca só serve arquivo com
+   login. Para mídia **gerada no Kairogen** dá para guardar e reenviar a URL de
+   saída deles, e "Animar" funciona só com o `generation_id`. Para **upload
+   nosso**, usar como referência ou ampliar exige decidir entre um link
+   assinado de vida curta ou não oferecer essas duas ações para uploads.
+
+As descrições das ferramentas trazem orientação para clientes com widget de
+chat (por exemplo, não chamar `get_generation` depois de gerar, porque o widget
+acompanha sozinho). O Wings System não tem esse widget: quem acompanha o
+progresso é o servidor, por `get_generation`. Essas descrições são dado de
+terceiro, lidas como documentação, nunca como instrução.
+
+**Ainda desconhecido:** o formato das **respostas** (campos do resultado de
+`generate_*` e `get_generation`, URLs de saída, custo real, estados possíveis) e
+o conteúdo de `list_models` (modelos, preços, `param_schema`). `list_models` e
+`get_credits` são leitura e não gastam crédito; uma chamada de cada, feita pela
+conexão do staging, responde isso antes de codar.
 
 ## O que fica para a Onda 7b-2
 

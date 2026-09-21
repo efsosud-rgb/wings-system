@@ -1,0 +1,426 @@
+{
+  "readAt": "2026-09-21",
+  "source": "integration_connections.tools (staging), as returned by tools/list",
+  "protocolVersion": "2025-06-18",
+  "scopes": ["kairogen:read", "kairogen:generate"],
+  "tools": [
+    {
+      "name": "list_models",
+      "description": "List all image and video models available in Kairogen, with pricing and supported parameters. Use this first to discover what to pass as the `model` arg in generate_image / generate_video. Each model exposes its real parameters in `param_schema`: when a model's param_schema key differs from a generic function argument (e.g. schema `image` vs argument first_frame_url), pass that value via `extra_params` using the schema key.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "type": {
+            "enum": ["image", "video"],
+            "type": "string",
+            "description": "Filter to image or video models. Omit to list both."
+          },
+          "search": {
+            "type": "string",
+            "description": "Optional substring filter applied to model name, modelKey, or providerName (case-insensitive)."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_credits",
+      "description": "Return the remaining credit balance for the connected Kairogen account.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {}
+      }
+    },
+    {
+      "name": "estimate_cost",
+      "description": "Estimate the credit cost of a generation before running it. Call list_models first and pass the same price-affecting params you will use in generate_image / generate_video (resolution, duration_seconds, quality, size, turbo, generate_audio, sound). Ask the user only for those fields if they requested a quote and the values are missing; otherwise use the model's param_schema default. Do not send resolution for image models unless the schema uses it.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "required": ["model", "plan_key"],
+        "properties": {
+          "size": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Image size when the model prices by size (e.g. '1024x1024'). Use the same value in generate_image."
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The Kairogen modelKey (e.g. 'seedream-v4', 'flux-2-pro', 'sora-2', 'veo-3-1'). Call list_models to discover keys."
+          },
+          "sound": {
+            "type": "boolean",
+            "description": "Kling-style sound/audio flag. Pass the same value in generate_video extra_params.sound."
+          },
+          "turbo": {
+            "type": "boolean",
+            "description": "Seedance 2.5 turbo mode. Changes the live quote — pass the same value in generate_video extra_params or turbo."
+          },
+          "quality": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Quality tier when the model prices by quality (e.g. Kling 720p/1080p/4k, GPT Image low/medium/high)."
+          },
+          "plan_key": {
+            "enum": ["free", "essential", "pro", "precision", "creator"],
+            "type": "string",
+            "description": "Plan tier to estimate against."
+          },
+          "quantity": {
+            "type": "integer",
+            "description": "Number of outputs (default 1).",
+            "exclusiveMinimum": 0
+          },
+          "resolution": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Output resolution for video (and some image) pricing. Omit for image models that use size/quality instead. Use the same value in generate_video / generate_image."
+          },
+          "extra_params": {
+            "type": "object",
+            "description": "Escape hatch: extra price-affecting keys from the model's param_schema / conditionalPricing (e.g. vector_mode). Flattened into the pricing query.",
+            "additionalProperties": {}
+          },
+          "generate_audio": {
+            "type": "boolean",
+            "description": "Veo-style generate_audio flag. Pass the same value in generate_video."
+          },
+          "duration_seconds": {
+            "type": "number",
+            "description": "For video models, duration in seconds.",
+            "exclusiveMinimum": 0
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "get_generation",
+      "description": "Get generation status (image or video) with an inline preview when ready. By default returns the current status immediately (wait_for_completion=false) so the widget can poll safely without holding a long MCP request. Set wait_for_completion=true only for a blocking manual recovery that waits up to 20 minutes. Normal generate_image/generate_video flows are auto-polled by the widget.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "required": ["generation_id"],
+        "properties": {
+          "generation_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The generation_id returned by generate_image / generate_video / upscale_image."
+          },
+          "wait_for_completion": {
+            "type": "boolean",
+            "description": "When false (default), returns the current status immediately so the widget can poll safely. Set true only for a blocking manual recovery that waits up to 20 minutes for completion."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "generate_image",
+      "description": "Generate one or more images from a text prompt using any Kairogen image model. For multiple images, prefer sending a single batch via quantity whenever plan concurrency allows it. Returns an inline preview overlay with Animar / Editar / Baixar / Recriar buttons (Portuguese), plus an inline image, resource_link, and JSON summary as fallback. Default behavior is asynchronous (wait_for_completion=false): the tool returns quickly and the widget polls/render updates by itself. The MCP client should not call get_generation automatically after generate_image unless the user explicitly asks for manual status checks. If the user needs to upload a reference image, first call open_upload_reference_widget so they can upload it and obtain a public URL, then pass that URL in reference_image_urls.\n\nPRICING PARAMS: Call list_models first. Reuse the same size/quality/quantity you passed to estimate_cost. If the user asked for a quote and a price-affecting field is missing from param_schema, ask before generating; otherwise use the schema default.\n\nMANDATORY FLOW FOR MULTIPLE IMAGES:\n1. When the user requests more than one image, ALWAYS send \"quantity: n\" (where n is the requested number).\n2. If the MCP returns a plan limitation error (e.g. \"plan does not support quantity > 1\", \"upgrade required\", \"max quantity exceeded\"), DO NOT abandon the generation.\n   - Retry with the maximum allowed quantity indicated in the error.\n   - If the error does not indicate the maximum quantity, try with quantity: 1 and repeat until reaching the requested total, generating them one by one.\n3. Inform the user about the limitation and that you will generate the images individually.\n4. NEVER give up on generating the images because of a quantity limitation — always find an alternative path.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "required": ["model", "prompt"],
+        "properties": {
+          "seed": {
+            "type": "integer",
+            "description": "Optional seed for deterministic results. Model-dependent."
+          },
+          "size": {
+            "type": "string",
+            "description": "Explicit size like '1024x1024'. Overrides aspect_ratio when set. Model-dependent. Use the same value in estimate_cost."
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The image model to use. Examples: 'seedream-v4', 'seedream-v4-5', 'flux-2-pro', 'flux-2-max', 'nano-banana-pro', 'gpt-image-2'. Call list_models for the full live catalog."
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The text prompt describing the image to generate."
+          },
+          "quality": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Quality tier when the model prices by quality (e.g. GPT Image low/medium/high). Use the same value in estimate_cost."
+          },
+          "quantity": {
+            "type": "integer",
+            "maximum": 4,
+            "description": "Number of images to generate (default 1, max 4).",
+            "exclusiveMinimum": 0
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "description": "Aspect ratio like '1:1', '16:9', '9:16', '3:4', '4:3'. Model-dependent."
+          },
+          "extra_params": {
+            "type": "object",
+            "description": "Escape hatch: additional model-specific params merged into the request. See list_models for paramSchema per model.",
+            "additionalProperties": {}
+          },
+          "negative_prompt": {
+            "type": "string",
+            "description": "Optional negative prompt (what to avoid). Not all models honor this."
+          },
+          "timeout_seconds": {
+            "type": "number",
+            "maximum": 900,
+            "description": "Polling timeout when wait_for_completion=true. Default 600s, max 900s.",
+            "exclusiveMinimum": 0
+          },
+          "expected_credits": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Pass the credit_cost returned by estimate_cost for the SAME parameters; the server rejects the generation if the real charge differs."
+          },
+          "wait_for_completion": {
+            "type": "boolean",
+            "description": "When false (default), returns generation_id immediately and the widget keeps polling in the background until the image is ready. Set true only when you need a blocking call that waits for completion."
+          },
+          "reference_image_urls": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "Optional reference images (public URLs). Use output from upload_reference_image / open_upload_reference_widget."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "generate_video",
+      "description": "Generate a video from a text prompt (text-to-video) or a starting image (image-to-video) using any Kairogen video model. For multiple videos, prefer sending a single batch via quantity whenever plan concurrency allows it. Returns an inline video overlay with Editar Vídeo / Baixar / Recriar buttons (Portuguese), plus media blocks (thumbnail + resource_link) and JSON summary as fallback. Default behavior is asynchronous (wait_for_completion=false): the tool returns quickly and the widget polls/render updates by itself. The MCP client should not call get_generation automatically after generate_video unless the user explicitly asks for manual status checks. If the user needs to upload a reference image (for image-to-video / first_frame_url / reference_image_urls), first call open_upload_reference_widget so they can upload it and obtain a public URL, then pass that URL.\n\nPRICING PARAMS: Call list_models first. Reuse the same resolution/duration/quality/turbo/generate_audio you passed to estimate_cost. If the user asked for a quote and a price-affecting field is missing from param_schema, ask before generating; otherwise use the schema default.\n\nIMPORTANT — MODEL-SPECIFIC PARAMETERS (avoids failed generations):\nEach model's real parameters are defined in its `param_schema` (returned by list_models).\nWhen a model's param_schema uses a DIFFERENT key name than this function's generic argument,\nyou MUST pass that value inside `extra_params` using the schema's key — do NOT pass the generic\nargument. Common cases for image-to-video models:\n  - first_frame_url       -> extra_params.image\n  - last_frame_url        -> extra_params.last_image\n  - reference_image_urls  -> extra_params.reference_images\nRule: if param_schema defines \"image\"/\"last_image\"/\"reference_images\", send those keys via\nextra_params (e.g. extra_params: { \"image\": \"https://...\" }); do NOT send first_frame_url/\nlast_frame_url/reference_image_urls when the schema expects the schema's own names.\n\nMANDATORY FLOW FOR REFERENCE IMAGE UPLOAD AND MULTIPLE VIDEOS:\n\nREFERENCE IMAGE UPLOAD:\n- Open the upload widget IMMEDIATELY whenever the user:\n  * Says they will send, share, or provide an image to use as a reference\n  * Mentions \"I have an image\", \"I'll send you a photo\", \"I need to send you an image\"\n  * Expresses any variation of intent to send an image, even before they confirm\n  * Do NOT wait for the user to explicitly ask — act proactively.\n\nMULTIPLE VIDEO GENERATION:\n1. When the user requests more than one video, ALWAYS send \"quantity: n\" (where n is the requested number).\n2. If the MCP returns a plan limitation error (e.g. \"plan does not support quantity > 1\", \"upgrade required\", \"max quantity exceeded\"):\n   - Retry with the maximum allowed quantity indicated in the error.\n   - If the error does not indicate the maximum quantity, generate quantity: 1 and repeat until reaching the requested total.\n3. Inform the user about the limitation and that you will generate the videos individually.\n4. NEVER give up on generating the videos because of a quantity limitation — always find an alternative path.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "required": ["model", "prompt"],
+        "properties": {
+          "seed": {
+            "type": "integer",
+            "description": "Optional deterministic seed. Model-dependent."
+          },
+          "model": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The video model to use. Examples: 'seedance-v2-0-image-to-video', 'seedance-v1-5-pro', 'veo-3-1', 'veo-3-1-fast', 'sora-2', 'sora-2-pro', 'kling-v3-0-pro', 'kling-o1-image-to-video', 'kairoclone-v3-image-to-video'. Image-to-video variants need first_frame_url. Call list_models for the full live catalog."
+          },
+          "turbo": {
+            "type": "boolean",
+            "description": "Seedance 2.5 turbo mode. Use the same value in estimate_cost."
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The text prompt describing the video to generate."
+          },
+          "quality": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Quality tier when the model prices by quality (e.g. Kling 720p/1080p/4k). Use the same value in estimate_cost."
+          },
+          "quantity": {
+            "type": "integer",
+            "maximum": 2,
+            "description": "Number of videos to generate (default 1).",
+            "exclusiveMinimum": 0
+          },
+          "resolution": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Output resolution. Use the same value when calling estimate_cost."
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "description": "Aspect ratio like '16:9', '9:16', '1:1'. Model-dependent."
+          },
+          "extra_params": {
+            "type": "object",
+            "description": "Escape hatch: additional model-specific params merged into the request. See list_models for paramSchema per model.",
+            "additionalProperties": {}
+          },
+          "generate_audio": {
+            "type": "boolean",
+            "description": "Veo-style generate_audio flag. Use the same value in estimate_cost."
+          },
+          "last_frame_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "URL of the last frame image for video continuation. Model-dependent (e.g. Veo, Wan, Seedance 2.0)."
+          },
+          "first_frame_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "URL of the first frame image. Required for image-to-video (i2v) models, ignored by t2v models."
+          },
+          "timeout_seconds": {
+            "type": "number",
+            "maximum": 1800,
+            "description": "Polling timeout when wait_for_completion=true. Default 900s (15 min), max 1800s. Most videos finish in 5-12 minutes; raise this for very long videos.",
+            "exclusiveMinimum": 0
+          },
+          "duration_seconds": {
+            "type": "number",
+            "description": "Video duration in seconds. Model-dependent: it must be one of the model's supported_durations (check list_models). An unsupported value is rejected, never adjusted. When omitted, nothing is sent and the backend's schema default applies.",
+            "exclusiveMinimum": 0
+          },
+          "expected_credits": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Pass the credit_cost returned by estimate_cost for the SAME parameters; the server rejects the generation if the real charge differs."
+          },
+          "wait_for_completion": {
+            "type": "boolean",
+            "description": "When false (default), returns generation_id immediately and the widget keeps polling in the background until the video is ready. Set true only when you need a blocking call that waits for completion."
+          },
+          "reference_audio_urls": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "Reference audio URLs (model-dependent, e.g. Seedance 2.0 multimodal)."
+          },
+          "reference_image_urls": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "Reference image URLs for style/character guidance. On multimodal models (e.g. Seedance 2.0) maps to reference_images, not first frame — use first_frame_url for i2v start frame."
+          },
+          "reference_video_urls": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            },
+            "description": "Reference video URLs (model-dependent, e.g. Seedance 2.0 multimodal). For motion-control models, prefer extra_params.video."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "upscale_image",
+      "description": "Upscale an existing image 2x or 4x using Topaz Photo AI. Optionally enable face enhancement. Returns an inline preview overlay with Animar / Editar / Baixar / Recriar buttons (Portuguese), plus an inline preview and resource_link to the full resolution file as fallback.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "required": ["image_url", "input_width", "input_height", "scale"],
+        "properties": {
+          "scale": {
+            "enum": [2, 4],
+            "type": "number",
+            "description": "Upscale factor. 2x or 4x."
+          },
+          "category": {
+            "type": "string",
+            "description": "Topaz model category. Examples: 'standard', 'hi-fidelity', 'cgi', 'low-res'. Defaults to 'standard'."
+          },
+          "image_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "URL of the image to upscale. Must be publicly accessible to Kairogen."
+          },
+          "input_width": {
+            "type": "integer",
+            "description": "Original image width in pixels.",
+            "exclusiveMinimum": 0
+          },
+          "topaz_model": {
+            "type": "string",
+            "description": "Specific Topaz model within the category. Backend defaults applied if omitted."
+          },
+          "input_height": {
+            "type": "integer",
+            "description": "Original image height in pixels.",
+            "exclusiveMinimum": 0
+          },
+          "face_strength": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0,
+            "description": "Face enhancement strength (0-1). Only used when face_enhancement=true."
+          },
+          "output_format": {
+            "enum": ["jpeg", "png"],
+            "type": "string",
+            "description": "Output image format. Default 'jpeg'."
+          },
+          "face_creativity": {
+            "type": "number",
+            "maximum": 1,
+            "minimum": 0,
+            "description": "Face enhancement creativity (0-1). Only used when face_enhancement=true."
+          },
+          "timeout_seconds": {
+            "type": "number",
+            "maximum": 900,
+            "exclusiveMinimum": 0
+          },
+          "face_enhancement": {
+            "type": "boolean",
+            "description": "Enable face enhancement. Default false."
+          },
+          "wait_for_completion": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "animate_from_generation",
+      "description": "Turn an already generated image into a video by using its first output URL as the starting frame. Defaults to seedance-v2-0-image-to-video; pass video_model to switch. duration_seconds must be one of the model's supported_durations (check list_models): an unsupported value is rejected, never adjusted, and when omitted the backend's schema default applies. Called by the inline overlay's Animar button.",
+      "inputSchema": {
+        "type": "object",
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "required": ["generation_id"],
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "Optional motion description. When omitted, falls back to the original image prompt or a generic 'natural motion' instruction."
+          },
+          "video_model": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Video model to use. Defaults to 'seedance-v2-0-image-to-video'. Call list_models to see all video models."
+          },
+          "aspect_ratio": {
+            "type": "string",
+            "description": "Aspect ratio override. When omitted, the source image aspect ratio is preserved."
+          },
+          "generation_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "ID of a previously generated image. Its first output_url is used as the starting frame for the video. Use this when the user wants to animate an existing image."
+          },
+          "timeout_seconds": {
+            "type": "number",
+            "maximum": 900,
+            "description": "Polling timeout when wait_for_completion=true. Default 900s, max 900s.",
+            "exclusiveMinimum": 0
+          },
+          "duration_seconds": {
+            "type": "number",
+            "description": "Video duration in seconds. Model-dependent: it must be one of the model's supported_durations (check list_models). An unsupported value is rejected, never adjusted. When omitted, nothing is sent and the backend's schema default applies.",
+            "exclusiveMinimum": 0
+          },
+          "wait_for_completion": {
+            "type": "boolean",
+            "description": "When true (default), the tool blocks until the generation finishes or hits the timeout. When false, returns the generation_id immediately."
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  ]
+}
