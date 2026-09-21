@@ -88,6 +88,7 @@ function Section({
                       {approval.requestedByAgent
                         ? 'solicitado pelo agente'
                         : (approval.requestedByName ?? '—')}
+                      {approval.suggestedByAgent && ' · sugerido pelo agente'}
                     </div>
                   </td>
                 </tr>
@@ -162,6 +163,7 @@ function GroupedPending({ groups }: { groups: PendingGroup[] }) {
                   <span className="cell-sub">
                     {formatBrl(item.amountCents)} · {waitingFor(item.requestedAt)} ·{' '}
                     {item.requestedByAgent ? 'agente' : (item.requestedByName ?? '—')}
+                    {item.suggestedByAgent && ' · sugerido pelo agente'}
                     {item.status === 'escalated' && ' · escalada'}
                   </span>
                 </li>

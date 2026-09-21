@@ -118,6 +118,10 @@ saudável.
 > alteração por vez, o risco é aceitável; no dia em que não for uma pessoa, é
 > um bug de dinheiro. A regra também está nos não-negociáveis do `CLAUDE.md`.
 
+> O chat do agente (Onda 7, `agente-conversa.md`) **não** mexe nesta regra: o
+> agente só propõe. Quem pede é a pessoa que clica em "Criar pedido", uma
+> alteração por vez, e o pedido fica marcado como "sugerido pelo agente".
+
 O comprometido do mês (`committed_cents`) tem **dois donos que não conversam**:
 
 - `reserveChange` soma o delta de cada pedido **na hora do pedido**;

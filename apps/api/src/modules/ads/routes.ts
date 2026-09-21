@@ -59,6 +59,7 @@ type ListRow = {
   decided_at: Date | string | null;
   requested_by_name: string | null;
   requested_by_agent: boolean;
+  suggested_by_agent: boolean;
 } & Record<string, unknown>;
 
 function iso(value: Date | string | null): string | null {
@@ -81,6 +82,7 @@ function toListItem(row: ListRow): ApprovalListItem {
     decidedAt: iso(row.decided_at),
     requestedByName: row.requested_by_name,
     requestedByAgent: row.requested_by_agent,
+    suggestedByAgent: row.suggested_by_agent,
   };
 }
 
@@ -97,7 +99,8 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
                acc.name as account_name, acc.platform,
                coalesce(c.name, d.name) as campaign_name, cr.kind as change_kind,
                ar.requested_at, ar.escalated_at, ar.decided_at,
-               req.full_name as requested_by_name, ar.requested_by_agent
+               req.full_name as requested_by_name, ar.requested_by_agent,
+               cr.suggested_by_agent
           from ad_approval_requests ar
           join ad_change_requests cr on cr.id = ar.change_request_id
           join ad_accounts acc on acc.id = ar.ad_account_id
@@ -166,6 +169,7 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
                ar.requested_at, ar.escalated_at, ar.decided_at, ar.decision_reason,
                ar.notified_at, ar.notification_error,
                req.full_name as requested_by_name, ar.requested_by_agent,
+               cr.suggested_by_agent,
                dec.full_name as decided_by_name,
                p.cap_cents::text as cap_cents, p.usable_cents::text as usable_cents,
                p.committed_cents::text as committed_cents, p.spent_cents::text as spent_cents

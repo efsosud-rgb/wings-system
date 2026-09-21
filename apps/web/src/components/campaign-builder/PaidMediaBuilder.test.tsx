@@ -1,5 +1,18 @@
-import type { AudienceProfile, CustomLocation, MetaIdentities, PacingSummary } from '@wings/shared';
-import { cleanup, fireEvent, render as renderBare, screen, waitFor } from '@testing-library/react';
+import {
+  agentCampaignProposalSchema,
+  type AudienceProfile,
+  type CustomLocation,
+  type MetaIdentities,
+  type PacingSummary,
+} from '@wings/shared';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as renderBare,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -158,6 +171,7 @@ vi.mock('./RadiusMap.js', () => ({
 const render = (ui: ReactElement) => renderBare(<MemoryRouter>{ui}</MemoryRouter>);
 
 const { PaidMediaBuilder } = await import('./PaidMediaBuilder.js');
+type BuilderBridge = import('./PaidMediaBuilder.js').BuilderBridge;
 
 function buildPacing(overrides: Partial<PacingSummary> = {}): PacingSummary {
   return {
@@ -1067,5 +1081,179 @@ describe('the builder on Meta: ad set and ads', () => {
         /A prévia oficial da Meta fica disponível na tela da aprovação depois que os anúncios forem criados/,
       ),
     ).toBeTruthy();
+  });
+});
+
+describe('applying a proposal from the agent', () => {
+  const googleProposal = agentCampaignProposalSchema.parse({
+    platform: 'google_search',
+    name: 'Pesquisa — franquia SP',
+    objective: 'lead',
+    idealCustomerProfile: 'Empreendedor de 30 a 50 anos, com experiência em gestão.',
+    reach: { states: ['SP'], cities: [{ name: 'Curitiba', state: 'PR' }] },
+    destinationUrl: 'https://wingscompany.com.br/franquia',
+    dailyBudgetCents: 2000,
+    startDate: '2026-09-20',
+    endDate: '2026-09-29',
+    search: {
+      keywords: ['franquia de alimentação', 'abrir franquia'],
+      negativeKeywords: ['grátis'],
+      headlines: ['Franquia Wings'],
+      descriptions: ['Conheça o modelo de negócio e o suporte.'],
+    },
+    explanations: [
+      { field: 'dailyBudgetCents', reason: 'R$ 20 por dia cabem no disponível da conta Google.' },
+      { field: 'search', reason: 'Termos de quem já procura uma franquia.' },
+    ],
+    summary: 'Pesquisa para leads em SP e Curitiba.',
+  });
+
+  const metaProposal = agentCampaignProposalSchema.parse({
+    platform: 'meta',
+    name: 'Leads — formatação SP',
+    objective: 'lead',
+    dailyBudgetCents: 3500,
+    startDate: '2026-09-20',
+    endDate: '2026-09-26',
+    ageMin: 30,
+    ageMax: 55,
+    copy: [
+      { headline: 'Leve a Wings para sua cidade', primaryText: 'Fale com a gente.' },
+      { headline: 'Seja um franqueado Wings', primaryText: 'Suporte completo.' },
+      { headline: 'Conheça o modelo Wings', primaryText: 'Treinamento e suporte.' },
+    ],
+    explanations: [{ field: 'age', reason: 'Os leads qualificados têm de 30 a 55 anos.' }],
+    summary: 'Campanha de leads na Meta.',
+  });
+
+  function renderWithBridge() {
+    const bridge: { current: BuilderBridge | null } = { current: null };
+    const view = render(<PaidMediaBuilder canRequest applyRef={bridge} />);
+    return { bridge, view };
+  }
+
+  it('fills a Google Pesquisa campaign, explains each choice and sends nothing', () => {
+    const { bridge } = renderWithBridge();
+    expect(screen.queryByRole('region', { name: 'Proposta do agente aplicada' })).toBeNull();
+
+    act(() => bridge.current?.applyProposal(googleProposal));
+
+    expect(
+      (screen.getByRole('radio', { name: /Google Pesquisa/ }) as HTMLInputElement).checked,
+    ).toBe(true);
+    expect((screen.getByLabelText(/^Nome da campanha/) as HTMLInputElement).value).toBe(
+      'Pesquisa — franquia SP',
+    );
+    expect((screen.getByLabelText(/Verba por dia/) as HTMLInputElement).value).toBe('20,00');
+    // R$ 20 × 10 days × 1 on Google: the estimate follows the applied budget.
+    expect(screen.getAllByText('R$ 200,00').length).toBeGreaterThan(0);
+    expect(
+      (screen.getByLabelText(/^Palavras-chave(?! negativas)/) as HTMLTextAreaElement).value,
+    ).toBe('franquia de alimentação\nabrir franquia');
+    expect((screen.getByLabelText(/^Palavras-chave negativas/) as HTMLTextAreaElement).value).toBe(
+      'grátis',
+    );
+    expect((screen.getByLabelText(/^Título 1/) as HTMLInputElement).value).toBe('Franquia Wings');
+    expect((screen.getByRole('checkbox', { name: 'SP' }) as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByRole('button', { name: 'Remover Curitiba' })).toBeTruthy();
+
+    const panel = screen.getByRole('region', { name: 'Proposta do agente aplicada' });
+    expect(panel.textContent).toContain('Verba diária');
+    expect(panel.textContent).toContain('R$ 20 por dia cabem no disponível da conta Google.');
+    expect(panel.textContent).toContain('Termos de quem já procura uma franquia.');
+    expect(requestCampaign).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dispensar' }));
+    expect(screen.queryByRole('region', { name: 'Proposta do agente aplicada' })).toBeNull();
+  });
+
+  it('what was applied is what gets launched, by the person', async () => {
+    const { bridge } = renderWithBridge();
+    act(() => bridge.current?.applyProposal(googleProposal));
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
+    expect(requestCampaign.mock.calls[0]?.[0]).toMatchObject({
+      platform: 'google_search',
+      name: 'Pesquisa — franquia SP',
+      dailyBudgetCents: 2000,
+      startPaused: true,
+      reach: { states: ['SP'], cities: [{ name: 'Curitiba', state: 'PR' }] },
+      search: {
+        keywords: ['franquia de alimentação', 'abrir franquia'],
+        negativeKeywords: ['grátis'],
+        headlines: ['Franquia Wings'],
+      },
+      utms: { utm_source: 'google' },
+    });
+  });
+
+  it('fills the words of a Meta campaign and leaves the images the person chose', () => {
+    const { bridge } = renderWithBridge();
+    chooseImage(screen.getAllByLabelText(/^Imagem — Variação/)[0] as Element);
+    const imagesBefore = screen.getAllByAltText(/^Criativo/).length;
+    expect(imagesBefore).toBeGreaterThan(0);
+
+    act(() => bridge.current?.applyProposal(metaProposal));
+
+    const titles = screen.getAllByLabelText(/^Título/) as HTMLInputElement[];
+    expect(titles.map((input) => input.value)).toEqual([
+      'Leve a Wings para sua cidade',
+      'Seja um franqueado Wings',
+      'Conheça o modelo Wings',
+    ]);
+    expect((screen.getByLabelText('Idade mínima') as HTMLInputElement).value).toBe('30');
+    expect((screen.getByLabelText('Idade máxima') as HTMLInputElement).value).toBe('55');
+    expect((screen.getByLabelText(/Verba por dia/) as HTMLInputElement).value).toBe('35,00');
+    // The image uploaded before the proposal is still the first variation's.
+    expect(screen.getAllByAltText(/^Criativo/)).toHaveLength(imagesBefore);
+    expect(bridge.current?.getDraft()).toMatchObject({
+      platform: 'meta',
+      variations: [
+        {
+          creativeId: '00000001-0000-4000-8000-000000000000',
+          headline: 'Leve a Wings para sua cidade',
+        },
+        { creativeId: '', headline: 'Seja um franqueado Wings' },
+        { creativeId: '', headline: 'Conheça o modelo Wings' },
+      ],
+    });
+
+    const panel = screen.getByRole('region', { name: 'Proposta do agente aplicada' });
+    expect(panel.textContent).toContain('Faixa de idade');
+    expect(panel.textContent).toContain('Falta escolher as imagens e a Página.');
+    expect(requestCampaign).not.toHaveBeenCalled();
+  });
+
+  it('on YouTube, says the video link is still missing', () => {
+    const { bridge } = renderWithBridge();
+    act(() =>
+      bridge.current?.applyProposal(
+        agentCampaignProposalSchema.parse({
+          platform: 'youtube',
+          name: 'YouTube — institucional',
+          objective: 'traffic',
+          dailyBudgetCents: 1500,
+          startDate: '2026-09-20',
+          endDate: '2026-09-22',
+          youtube: { headline: 'Conheça a Wings' },
+          explanations: [{ field: 'youtube', reason: 'Título curto para o vídeo institucional.' }],
+          summary: 'Vídeo institucional.',
+        }),
+      ),
+    );
+    expect((screen.getByLabelText(/^Título/) as HTMLInputElement).value).toBe('Conheça a Wings');
+    expect(screen.getByText('Falta o link do vídeo.')).toBeTruthy();
+  });
+
+  it('hands the agent the form as it stands, and nothing once it leaves the screen', () => {
+    const { bridge, view } = renderWithBridge();
+    type(screen.getByLabelText(/^Nome da campanha/), 'Rascunho em andamento');
+    expect(bridge.current?.getDraft()).toMatchObject({
+      platform: 'meta',
+      name: 'Rascunho em andamento',
+    });
+    view.unmount();
+    expect(bridge.current).toBeNull();
   });
 });

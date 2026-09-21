@@ -455,6 +455,12 @@ export const adChangeRequests = pgTable(
     /** Null when proposed by the agent rather than a person. */
     requestedBy: uuid('requested_by').references(() => employees.id),
     requestedByAgent: boolean('requested_by_agent').notNull().default(false),
+    /**
+     * True when a person created this request from a card the traffic agent
+     * proposed. The request is still that person's (`requestedBy`), and
+     * `requestedByAgent` stays false: the agent has no way to ask for anything.
+     */
+    suggestedByAgent: boolean('suggested_by_agent').notNull().default(false),
     reason: text('reason'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     decidedAt: timestamp('decided_at', { withTimezone: true }),

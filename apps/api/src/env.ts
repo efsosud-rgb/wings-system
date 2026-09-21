@@ -1,3 +1,4 @@
+import { AGENT_MODELS, DEFAULT_AGENT_DAILY_USD, DEFAULT_AGENT_MODEL } from '@wings/shared';
 import { z } from 'zod';
 
 /** 32-byte key, base64-encoded. */
@@ -85,6 +86,19 @@ const schema = z.object({
   ),
   WORDPRESS_USERNAME: optionalString,
   WORDPRESS_APP_PASSWORD: optionalString,
+  /**
+   * The traffic agent's conversation, through OpenRouter. Without the key the
+   * agent routes answer 503, never a fake reply. The model is an allow-list:
+   * Sonnet 5 by default, Haiku 4.5 when this variable names it. The daily
+   * ceiling is per employee, in US dollars; reaching it stops the agent until
+   * the next day (America/Sao_Paulo).
+   */
+  OPENROUTER_API_KEY: optionalString,
+  AGENT_MODEL: z
+    .enum(AGENT_MODELS)
+    .default(DEFAULT_AGENT_MODEL)
+    .or(z.literal('').transform(() => DEFAULT_AGENT_MODEL)),
+  AGENT_DAILY_USD: z.coerce.number().positive().max(100).default(DEFAULT_AGENT_DAILY_USD),
   ADS_APPROVAL_ADMIN_PHONES: optionalString,
   ADS_APPROVAL_DIRETORIA_PHONES: optionalString,
 

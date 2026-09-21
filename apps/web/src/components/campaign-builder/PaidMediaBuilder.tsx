@@ -1,5 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
+  AGENT_DRAFT_FIELD_LABEL,
   BRAZIL_STATES,
   CALLS_TO_ACTION,
   CALL_TO_ACTION_LABEL,
@@ -57,6 +58,7 @@ import {
   type CampaignDraftInput,
   type BrazilState,
   type ComplianceFinding,
+  type AgentCampaignProposal,
   type CreativeFormat,
   type CreativeType,
   type CreativeUpload,
@@ -64,7 +66,7 @@ import {
   type Placements,
   type VideoUpload,
 } from '@wings/shared';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, type MutableRefObject, type ReactNode } from 'react';
 import {
   useFieldArray,
   useForm,
@@ -627,7 +629,37 @@ function describePlacements(placements: Placements | CampaignDraftInput['placeme
   return parts.join(' · ') || 'Manual — nenhum escolhido';
 }
 
-export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
+/**
+ * How the conversation with the agent reaches this form. `getDraft` is what the
+ * agent may read; `applyProposal` runs only from a click on a proposal card.
+ * Neither submits anything: launching stays the person's own button.
+ */
+export interface BuilderBridge {
+  getDraft: () => Record<string, unknown>;
+  applyProposal: (proposal: AgentCampaignProposal) => void;
+}
+
+/** Cents as the budget box shows them: 2000 -> "20,00". */
+function centsToBudgetText(cents: number): string {
+  return (cents / 100).toLocaleString('pt-BR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+    useGrouping: false,
+  });
+}
+
+function padTo(list: string[], length: number): string[] {
+  return Array.from({ length }, (_, index) => list[index] ?? '');
+}
+
+export function PaidMediaBuilder({
+  canRequest,
+  applyRef,
+}: {
+  canRequest: boolean;
+  /** Filled while the builder is on screen, null otherwise. */
+  applyRef?: MutableRefObject<BuilderBridge | null>;
+}) {
   const today = todayInSaoPaulo();
   const cockpit = useCockpit(7);
   const launch = useRequestCampaign();
@@ -639,6 +671,7 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
     handleSubmit,
     watch,
     setValue,
+    getValues,
     formState: { errors, dirtyFields, submitCount, isSubmitSuccessful },
   } = useForm<CampaignDraftInput>({
     resolver: draftResolver,
@@ -797,6 +830,94 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
   const overCeiling =
     pacing != null && dailyBudgetCents > 0 && costThisMonthCents > pacing.availableCents;
 
+  // A proposal from the agent, applied by a click on its card. It fills what the
+  // agent can know and leaves the rest as the person had it: images, videos,
+  // the Page and the Instagram account are never touched, and nothing is sent.
+  const [appliedProposal, setAppliedProposal] = useState<AgentCampaignProposal | null>(null);
+  const { append: appendVariation } = variations;
+  const applyProposal = (proposal: AgentCampaignProposal) => {
+    const filled = { shouldDirty: true, shouldValidate: submitCount > 0 };
+    // The saved audience must not overwrite what is applied here.
+    setAudienceLoaded(true);
+    setValue('platform', proposal.platform, filled);
+    setValue('name', proposal.name, filled);
+    setValue('objective', proposal.objective, filled);
+    if (proposal.idealCustomerProfile) {
+      setValue('idealCustomerProfile', proposal.idealCustomerProfile, filled);
+    }
+    if (proposal.reach) {
+      setValue('reach.states', proposal.reach.states, filled);
+      replaceCities(proposal.reach.cities);
+      setValue('reach.customLocations', proposal.reach.customLocations, filled);
+    }
+    if (proposal.destinationUrl) setValue('destinationUrl', proposal.destinationUrl, filled);
+    setValue('dailyBudgetCents', proposal.dailyBudgetCents, filled);
+    setBudgetText(centsToBudgetText(proposal.dailyBudgetCents));
+    setValue('startDate', proposal.startDate, filled);
+    setValue('endDate', proposal.endDate, filled);
+
+    if (proposal.platform === 'meta') {
+      if (proposal.ageMin !== undefined) setValue('ageMin', proposal.ageMin, filled);
+      if (proposal.ageMax !== undefined) setValue('ageMax', proposal.ageMax, filled);
+      const existing = getValues('variations') ?? [];
+      proposal.copy.forEach((copy, index) => {
+        if (index < existing.length) {
+          setValue(`variations.${index}.headline`, copy.headline, filled);
+          setValue(`variations.${index}.primaryText`, copy.primaryText, filled);
+          setValue(`variations.${index}.callToAction`, copy.callToAction, filled);
+        } else {
+          appendVariation({
+            creativeType: 'image',
+            creativeId: '',
+            cards: [],
+            headline: copy.headline,
+            primaryText: copy.primaryText,
+            callToAction: copy.callToAction,
+          });
+        }
+      });
+    }
+    if (proposal.platform === 'google_search' && proposal.search) {
+      setValue('search.keywords', proposal.search.keywords, filled);
+      setValue('search.negativeKeywords', proposal.search.negativeKeywords, filled);
+      setKeywordsText(proposal.search.keywords.join('\n'));
+      setNegativeKeywordsText(proposal.search.negativeKeywords.join('\n'));
+      setValue('search.headlines', padTo(proposal.search.headlines, MAX_SEARCH_HEADLINES), filled);
+      setValue(
+        'search.descriptions',
+        padTo(proposal.search.descriptions, MAX_SEARCH_DESCRIPTIONS),
+        filled,
+      );
+    }
+    if (proposal.platform === 'youtube' && proposal.youtube) {
+      setValue('youtube.headline', proposal.youtube.headline, filled);
+      if (proposal.youtube.videoUrl)
+        setValue('youtube.videoUrl', proposal.youtube.videoUrl, filled);
+    }
+    setChecked(null);
+    setAppliedProposal(proposal);
+  };
+  // The bridge always points at this render's functions, and at nothing once
+  // the builder leaves the screen.
+  const bridge = {
+    getDraft: () => shapeDraft(getValues()) as Record<string, unknown>,
+    applyProposal,
+  };
+  useEffect(() => {
+    if (!applyRef) return;
+    applyRef.current = bridge;
+    return () => {
+      applyRef.current = null;
+    };
+  });
+  const stillToDo = !appliedProposal
+    ? null
+    : appliedProposal.platform === 'meta'
+      ? 'Falta escolher as imagens e a Página.'
+      : appliedProposal.platform === 'youtube' && !appliedProposal.youtube?.videoUrl
+        ? 'Falta o link do vídeo.'
+        : null;
+
   // UTMs follow the form until the operator edits one; an edited value is theirs.
   const { name, objective } = values;
   useEffect(() => {
@@ -923,6 +1044,29 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
         })(event);
       }}
     >
+      {appliedProposal && (
+        <section className="builder-applied" aria-label="Proposta do agente aplicada">
+          <div className="builder-applied-head">
+            <strong>Proposta do agente aplicada</strong>
+            <button type="button" className="link-button" onClick={() => setAppliedProposal(null)}>
+              Dispensar
+            </button>
+          </div>
+          <p className="field-hint">
+            Confira cada escolha abaixo. Nada foi enviado: a campanha só vira pedido quando você
+            clicar em Lançar campanha.
+          </p>
+          <dl className="builder-applied-list">
+            {appliedProposal.explanations.map((item) => (
+              <div key={item.field}>
+                <dt>{AGENT_DRAFT_FIELD_LABEL[item.field]}</dt>
+                <dd>{item.reason}</dd>
+              </div>
+            ))}
+          </dl>
+          {stillToDo && <p className="builder-applied-todo">{stillToDo}</p>}
+        </section>
+      )}
       <BuilderSection
         step={stepOf('platform')}
         title="Plataforma"
@@ -1654,6 +1798,9 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
                 inputMode="decimal"
                 placeholder="20,00"
                 {...budgetField}
+                // Controlled by the text, so a budget applied from a proposal
+                // shows as "20,00" and not as the cents the form holds.
+                value={budgetText}
                 onChange={(event) => {
                   setBudgetText(event.target.value);
                   void budgetField.onChange(event);

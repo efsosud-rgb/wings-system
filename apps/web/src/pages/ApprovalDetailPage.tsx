@@ -211,6 +211,7 @@ function Summary({ approval }: { approval: ApprovalDetail }) {
               ? 'Agente de tráfego pago'
               : (approval.requestedByName ?? '—')}
           </p>
+          {approval.suggestedByAgent && <span className="tag tag-agent">sugerido pelo agente</span>}
           <span className="cell-sub">{formatDateTime(approval.requestedAt)}</span>
         </div>
       </div>
