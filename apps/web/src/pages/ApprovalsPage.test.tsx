@@ -165,6 +165,7 @@ describe('the flat list', () => {
         decidedAt: null,
         requestedByName: null,
         requestedByAgent: true,
+        suggestedByAgent: false,
       },
     ];
     renderPage();
@@ -172,5 +173,30 @@ describe('the flat list', () => {
     // The heading and the row's own status tag share this wording.
     expect(screen.getAllByText('Aguardando decisão').length).toBeGreaterThan(0);
     expect(screen.queryByText('Por campanha')).toBeTruthy(); // the toggle exists
+  });
+
+  it('marks a request a person made from a card the agent proposed', () => {
+    approvals.current = [
+      {
+        id: 'ap-2',
+        status: 'pending',
+        trigger: 'policy_always',
+        amountCents: 10_000,
+        accountName: 'Wings Matriz',
+        platform: 'meta',
+        campaignName: 'LEAD | FORMS',
+        changeKind: 'pause_campaign',
+        requestedAt: new Date().toISOString(),
+        escalatedAt: null,
+        decidedAt: null,
+        requestedByName: 'Marina',
+        requestedByAgent: false,
+        suggestedByAgent: true,
+      },
+    ];
+    renderPage();
+    // The request is the person's; the agent only suggested it.
+    expect(screen.getByText(/Marina · sugerido pelo agente/)).toBeTruthy();
+    expect(screen.queryByText(/solicitado pelo agente/)).toBeNull();
   });
 });

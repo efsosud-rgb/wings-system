@@ -1,18 +1,22 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { hasPermission, useSession } from '../api/auth.js';
+import { AgentChat } from '../components/agent-chat/AgentChat.js';
 import { OwnedChannelsPanel } from '../components/campaign-builder/OwnedChannelsPanel.js';
-import { PaidMediaBuilder } from '../components/campaign-builder/PaidMediaBuilder.js';
+import {
+  PaidMediaBuilder,
+  type BuilderBridge,
+} from '../components/campaign-builder/PaidMediaBuilder.js';
 import { StudioLayout, StudioToolGroup } from '../components/StudioLayout.js';
-import { Alert } from '../components/ui.js';
 
 /**
  * Studio for the Wings paid-traffic agent.
  *
  * The large pane is the campaign builder, in two tabs that share no fields:
- * paid media and owned channels. The conversation is still a placeholder.
- * Nothing built here reaches an ad platform directly — launching a campaign
- * creates a request for the approvals gate.
+ * paid media and owned channels. The conversation sits beside both and stays
+ * the same one when the tab changes. Nothing built here reaches an ad platform
+ * directly — launching a campaign creates a request for the approvals gate, and
+ * what the agent proposes fills the builder only when a person clicks.
  */
 
 const TABS = [
@@ -27,16 +31,22 @@ export function TrafficStudioPage() {
   const canRequest = hasPermission(user, 'ads.request');
   const canPublish = hasPermission(user, 'site.publish');
   const [tab, setTab] = useState<TabKey>('paid');
+  // Points at the builder while it is on screen, and at nothing otherwise.
+  const builder = useRef<BuilderBridge | null>(null);
 
   return (
     <StudioLayout
       title="Agente de Tráfego — Wings"
       subtitle="Conta Fly High · toda campanha e toda alteração de orçamento passam por aprovação humana"
-      notice={
-        <Alert kind="info">
-          O agente ainda não conversa. O construtor de campanha abaixo já opera sobre a conta real —
-          sempre pelo portão de aprovações.
-        </Alert>
+      conversation={
+        <AgentChat
+          canRequest={canRequest}
+          tab={tab}
+          getBuilderDraft={() => builder.current?.getDraft()}
+          onApplyCampaign={
+            tab === 'paid' ? (proposal) => builder.current?.applyProposal(proposal) : undefined
+          }
+        />
       }
       workspace={
         <>
@@ -58,7 +68,7 @@ export function TrafficStudioPage() {
           </div>
           <div role="tabpanel" id={`studio-panel-${tab}`} aria-labelledby={`studio-tab-${tab}`}>
             {tab === 'paid' ? (
-              <PaidMediaBuilder canRequest={canRequest} />
+              <PaidMediaBuilder canRequest={canRequest} applyRef={builder} />
             ) : (
               <OwnedChannelsPanel canPublish={canPublish} />
             )}

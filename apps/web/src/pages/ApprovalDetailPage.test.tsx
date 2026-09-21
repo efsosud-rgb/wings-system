@@ -78,6 +78,7 @@ function buildApproval(overrides: Partial<ApprovalDetail> = {}): ApprovalDetail 
     decidedAt: null,
     requestedByName: null,
     requestedByAgent: true,
+    suggestedByAgent: false,
     accountExternalId: 'act_339488762500182',
     campaignExternalId: '23851234567890123',
     budgetLevel: 'ad_set',
@@ -221,6 +222,22 @@ describe('what the approver sees', () => {
     renderDetail();
     expect(screen.getByText('Agente de tráfego pago')).toBeTruthy();
     expect(screen.getByText(/CPL abaixo da meta/)).toBeTruthy();
+  });
+
+  it('marks a request that came from a card the agent proposed', () => {
+    approval.current = buildApproval({
+      requestedByAgent: false,
+      requestedByName: 'Marina',
+      suggestedByAgent: true,
+    });
+    renderDetail();
+    expect(screen.getByText('Marina')).toBeTruthy();
+    expect(screen.getByText('sugerido pelo agente')).toBeTruthy();
+  });
+
+  it('shows no such mark on an ordinary request', () => {
+    renderDetail();
+    expect(screen.queryByText('sugerido pelo agente')).toBeNull();
   });
 
   it('shows the audit trail', () => {
