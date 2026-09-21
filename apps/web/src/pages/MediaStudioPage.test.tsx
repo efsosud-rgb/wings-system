@@ -22,13 +22,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const get = vi.fn();
 const post = vi.fn();
 const patch = vi.fn();
+const upload = vi.fn();
 vi.mock('../api/client.js', async (original) => ({
   ...(await original<typeof import('../api/client.js')>()),
   api: {
     get: (path: string) => get(path),
     post: (path: string, body?: unknown) => post(path, body),
     patch: (path: string, body?: unknown) => patch(path, body),
-    upload: vi.fn(),
+    upload: (path: string, file: Blob) => upload(path, file),
   },
 }));
 
@@ -77,8 +78,37 @@ const imageModel: MediaModel = {
       defaultValue: 'medium',
     },
   ],
+  imageUse: 'reference',
   acceptsReferenceImage: true,
   acceptsFirstFrame: false,
+};
+/** Takes a picture only to edit it, like GPT Image. */
+const editModel: MediaModel = {
+  ...imageModel,
+  key: 'gpt-image-1-5',
+  name: 'GPT Image 1.5',
+  creditsPerOutput: 1,
+  aspectRatios: null,
+  priceParams: [
+    {
+      key: 'size',
+      label: 'Tamanho',
+      type: 'choice',
+      options: ['1024x1024', '1536x1024'],
+      defaultValue: '1024x1024',
+    },
+  ],
+  imageUse: 'edit',
+};
+/** Takes no picture at all. */
+const textModel: MediaModel = {
+  ...imageModel,
+  key: 'flux-text-only',
+  name: 'Flux Text Only',
+  creditsPerOutput: 3,
+  priceParams: [],
+  imageUse: null,
+  acceptsReferenceImage: false,
 };
 const videoModel: MediaModel = {
   key: 'veo-3-1-fast',
@@ -97,6 +127,7 @@ const videoModel: MediaModel = {
       defaultValue: false,
     },
   ],
+  imageUse: null,
   acceptsReferenceImage: false,
   acceptsFirstFrame: false,
 };
@@ -160,6 +191,7 @@ const clients: Client[] = [
   { id: '11111111-1111-4111-8111-1111111111c3', name: 'Antigo', slug: 'antigo', active: false },
 ];
 
+let imageModels: MediaModel[] = [imageModel];
 let assets: MediaAsset[] = [];
 let generation: MediaGeneration = generationOf();
 
@@ -168,7 +200,7 @@ function script() {
     if (path === '/media/studio')
       return Promise.resolve({ usage, connected: true, storageAvailable: true });
     if (path.startsWith('/media/models?kind=image'))
-      return Promise.resolve({ models: [imageModel], cachedAt: '' });
+      return Promise.resolve({ models: imageModels, cachedAt: '' });
     if (path.startsWith('/media/models?kind=video'))
       return Promise.resolve({ models: [videoModel], cachedAt: '' });
     if (path === '/clients') return Promise.resolve({ clients });
@@ -203,8 +235,10 @@ beforeEach(() => {
   get.mockReset();
   post.mockReset();
   patch.mockReset();
+  upload.mockReset();
   sessionStorage.clear();
   assets = [];
+  imageModels = [imageModel];
   generation = generationOf();
   session.current = userWith('marketing.media.read', 'marketing.media.generate', 'ads.request');
   script();
@@ -258,6 +292,7 @@ describe('the operator form', () => {
         aspect: '1:1',
         quantity: 1,
         params: { quality: 'medium' },
+        referenceUse: 'reference',
         clientId: WINGS_CLIENT_ID,
       },
     ]);
@@ -326,7 +361,7 @@ describe('the operator form', () => {
     expect(within(within(form()).getByLabelText('Quantidade')).getAllByRole('option')).toHaveLength(
       4,
     );
-    expect(within(form()).getByText('Imagem de referência')).toBeTruthy();
+    expect(within(form()).getByRole('group', { name: 'Imagem de referência' })).toBeTruthy();
 
     fireEvent.change(within(form()).getByLabelText('Tipo'), { target: { value: 'video' } });
     await screen.findByRole('option', { name: 'Veo 3.1 Fast · custo na estimativa' });
@@ -342,7 +377,83 @@ describe('the operator form', () => {
     expect(within(form()).getByLabelText('Gerar áudio')).toBeTruthy();
     expect(within(form()).queryByLabelText('Qualidade')).toBeNull();
     expect(within(form()).getByRole('radio', { name: '16:9' })).toHaveProperty('disabled', false);
-    expect(within(form()).queryByText('Imagem de referência')).toBeNull();
+    // A video model that starts from no frame has no use for a picture.
+    expect(within(form()).queryByRole('group', { name: 'Primeiro quadro' })).toBeNull();
+  });
+
+  it('always offers a reference image for an image: from the library, or a file sent on the spot', async () => {
+    imageModels = [textModel, imageModel, editModel];
+    const sent = asset({
+      id: '55555555-5555-4555-8555-555555555555',
+      origin: 'upload',
+      downloadPath: '/media/assets/55555555-5555-4555-8555-555555555555/file',
+    });
+    upload.mockResolvedValue({ asset: sent });
+    post.mockResolvedValue({ estimate: estimateOf() });
+    renderPage();
+    // The model on screen takes no picture, and the field is there all the same.
+    await screen.findByRole('option', { name: 'Flux Text Only · 3 créditos por saída' });
+    const field = within(form()).getByRole('group', { name: 'Imagem de referência' });
+    expect(within(field).getByRole('button', { name: 'Escolher da biblioteca' })).toBeTruthy();
+
+    const file = new File([new Uint8Array([1, 2, 3])], 'produto.png', { type: 'image/png' });
+    fireEvent.change(within(field).getByLabelText('Enviar arquivo'), { target: { files: [file] } });
+    // The file goes into the library, under the client the form is for.
+    await waitFor(() =>
+      expect(upload).toHaveBeenCalledWith(`/media/assets?clientId=${WINGS_CLIENT_ID}`, file),
+    );
+
+    // This model takes no picture: the form says so, offers the ones that do, and estimates nothing.
+    const warning = await within(field).findByRole('alert');
+    expect(warning.textContent).toContain('Flux Text Only não usa imagem de referência');
+    expect(within(warning).queryByRole('button', { name: 'Usar GPT Image 1.5' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Estimar custo' })).toHaveProperty('disabled', true);
+
+    fireEvent.click(within(warning).getByRole('button', { name: 'Usar Seedream 4' }));
+    expect(within(field).queryByRole('alert')).toBeNull();
+    typePrompt(PROMPT);
+    fireEvent.click(screen.getByRole('button', { name: 'Estimar custo' }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      model: 'seedream-v4',
+      referenceAssetId: '55555555-5555-4555-8555-555555555555',
+      referenceUse: 'reference',
+    });
+  });
+
+  it('edits the picture itself only with a model that edits, and leaves the size to the format', async () => {
+    imageModels = [imageModel, editModel];
+    assets = [asset({ id: '66666666-6666-4666-8666-666666666666' })];
+    post.mockResolvedValue({ estimate: estimateOf() });
+    renderPage();
+    await screen.findByRole('option', { name: /Seedream 4/ });
+    const field = within(form()).getByRole('group', { name: 'Imagem de referência' });
+    fireEvent.click(within(field).getByRole('button', { name: 'Escolher da biblioteca' }));
+    const picker = await screen.findByRole('dialog', { name: 'Imagem de referência' });
+    fireEvent.click(await within(picker).findByRole('button', { name: /^Imagem, 1080 × 1350/ }));
+
+    fireEvent.click(within(field).getByRole('radio', { name: 'Editar esta imagem' }));
+    const warning = within(field).getByRole('alert');
+    expect(warning.textContent).toContain('Seedream 4 não edita imagens');
+    expect(warning.textContent).toContain('Ele só recebe uma imagem como referência.');
+    fireEvent.click(within(warning).getByRole('button', { name: 'Usar GPT Image 1.5' }));
+    expect(within(field).queryByRole('alert')).toBeNull();
+    expect(within(field).getByText(/o prompt descreve a mudança/)).toBeTruthy();
+
+    // An explicit size would override the format at Kairogen: by default none is sent.
+    const size = within(form()).getByLabelText('Tamanho') as HTMLSelectElement;
+    expect(size.value).toBe('');
+    expect(within(size).getByRole('option', { name: 'Pelo formato escolhido' })).toBeTruthy();
+
+    typePrompt('Replace the background with a plain light grey backdrop');
+    fireEvent.click(screen.getByRole('button', { name: 'Estimar custo' }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      model: 'gpt-image-1-5',
+      referenceAssetId: '66666666-6666-4666-8666-666666666666',
+      referenceUse: 'edit',
+      params: {},
+    });
   });
 
   it('says why a generation is blocked, and keeps the button off', async () => {

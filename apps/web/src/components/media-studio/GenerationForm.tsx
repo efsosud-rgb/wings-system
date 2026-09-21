@@ -2,18 +2,28 @@ import {
   GENERATION_ASPECTS,
   MAX_IMAGES_PER_GENERATION,
   MAX_VIDEOS_PER_GENERATION,
+  MEDIA_IMAGE_USES,
+  MEDIA_IMAGE_USE_LABEL,
   MEDIA_REFUSAL_MESSAGE,
+  MEDIA_UPLOAD_TYPES,
   PROMPT_MAX,
   WINGS_CLIENT_ID,
   mediaEstimateRequestSchema,
+  modelsForImageUse,
   type GenerationAspect,
   type MediaAsset,
   type MediaEstimate,
+  type MediaImageUse,
   type MediaModel,
 } from '@wings/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { ApiError } from '../../api/client.js';
-import { useEstimate, useMediaModels, useStartGeneration } from '../../api/media.js';
+import {
+  useEstimate,
+  useMediaModels,
+  useStartGeneration,
+  useUploadMedia,
+} from '../../api/media.js';
 import { Button } from '../ui.js';
 import { ClientSelect, MediaPicker, MediaThumb } from './MediaLibrary.js';
 
@@ -33,6 +43,8 @@ function defaultsOf(model: MediaModel | undefined): Record<string, ParamValue> {
   const values: Record<string, ParamValue> = {};
   for (const param of model?.priceParams ?? []) {
     if (param.type === 'boolean') values[param.key] = param.defaultValue === true;
+    // An explicit size overrides the format at Kairogen: left alone, the format decides.
+    else if (param.key === 'size') values[param.key] = '';
     else
       values[param.key] =
         typeof param.defaultValue === 'string' ? param.defaultValue : (param.options[0] ?? '');
@@ -63,7 +75,9 @@ export function GenerationForm({
   const [duration, setDuration] = useState<number | null>(null);
   const [params, setParams] = useState<Record<string, ParamValue>>({});
   const [reference, setReference] = useState<MediaAsset | null>(null);
+  const [referenceUse, setReferenceUse] = useState<MediaImageUse>('reference');
   const [picking, setPicking] = useState(false);
+  const upload = useUploadMedia();
 
   const estimate = useEstimate();
   const start = useStartGeneration();
@@ -89,14 +103,23 @@ export function GenerationForm({
       const first = GENERATION_ASPECTS.find((item) => model.aspectRatios?.includes(item));
       if (first) setAspect(first);
     }
-    if (!model?.acceptsReferenceImage && !model?.acceptsFirstFrame) setReference(null);
+    // A picture chosen for an image stays when the model changes: the form says whether the
+    // new model takes it. A video model that takes no first frame has no use for it.
+    if (model?.kind === 'video' && !model.acceptsFirstFrame) setReference(null);
     // Keyed on the model alone: the rest is what this effect sets.
   }, [currentKey]);
 
   const maxQuantity = kind === 'video' ? MAX_VIDEOS_PER_GENERATION : MAX_IMAGES_PER_GENERATION;
-  const takesReference = Boolean(model?.acceptsReferenceImage || model?.acceptsFirstFrame);
-  const referenceLabel =
-    kind === 'video' && model?.acceptsFirstFrame ? 'Primeiro quadro' : 'Imagem de referência';
+  // Image: the field is always there. Video: only for a model that starts from a frame.
+  const takesReference = kind === 'image' || Boolean(model?.acceptsFirstFrame);
+  const referenceLabel = kind === 'video' ? 'Primeiro quadro' : 'Imagem de referência';
+  /** The model on screen cannot do what was asked with the picture: say so, offer the ones that can. */
+  const mismatch =
+    kind === 'image' &&
+    reference !== null &&
+    model !== undefined &&
+    model.imageUse !== referenceUse;
+  const able = mismatch ? modelsForImageUse(list, referenceUse).slice(0, 4) : [];
   const readOnly = !canGenerate || !connected;
 
   function askForEstimate() {
@@ -109,8 +132,10 @@ export function GenerationForm({
       aspect,
       quantity,
       ...(kind === 'video' && duration !== null ? { durationSeconds: duration } : {}),
-      params,
+      // A parameter left on "by the format" is not sent: Kairogen's own default applies.
+      params: Object.fromEntries(Object.entries(params).filter(([, value]) => value !== '')),
       ...(reference ? { referenceAssetId: reference.id } : {}),
+      ...(reference && kind === 'image' ? { referenceUse } : {}),
       clientId,
     });
     if (!parsed.success) {
@@ -319,6 +344,7 @@ export function GenerationForm({
                     changed();
                   }}
                 >
+                  {param.key === 'size' && <option value="">Pelo formato escolhido</option>}
                   {param.options.map((option) => (
                     <option key={option} value={option}>
                       {option}
@@ -331,8 +357,8 @@ export function GenerationForm({
         </div>
 
         {takesReference && (
-          <div className="media-reference">
-            <span className="field-label">{referenceLabel}</span>
+          <div className="media-reference" role="group" aria-label={referenceLabel}>
+            <span className="field-label">{referenceLabel} (opcional)</span>
             {reference ? (
               <div className="media-reference-picked">
                 <MediaThumb asset={reference} />
@@ -348,12 +374,102 @@ export function GenerationForm({
                 </Button>
               </div>
             ) : (
-              <Button type="button" variant="ghost" onClick={() => setPicking(true)}>
-                Escolher da biblioteca
-              </Button>
+              <div className="media-reference-picked">
+                <Button type="button" variant="ghost" onClick={() => setPicking(true)}>
+                  Escolher da biblioteca
+                </Button>
+                {kind === 'image' && !readOnly && (
+                  <label className="btn btn-ghost btn-inline media-upload">
+                    {upload.isPending ? 'Enviando…' : 'Enviar arquivo'}
+                    <input
+                      type="file"
+                      className="sr-only"
+                      accept={MEDIA_UPLOAD_TYPES.filter((type) => type.startsWith('image/')).join(
+                        ',',
+                      )}
+                      disabled={upload.isPending}
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        event.target.value = '';
+                        if (!file) return;
+                        upload.mutate(
+                          { file, clientId },
+                          {
+                            onSuccess: (body) => {
+                              setReference(body.asset);
+                              changed();
+                            },
+                          },
+                        );
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+            )}
+            {upload.error && (
+              <p className="field-error" role="alert">
+                {upload.error instanceof ApiError
+                  ? upload.error.message
+                  : 'Não foi possível enviar o arquivo.'}
+              </p>
+            )}
+
+            {kind === 'image' && reference && (
+              <fieldset className="media-aspects">
+                <legend className="field-label">O que fazer com a imagem</legend>
+                {MEDIA_IMAGE_USES.map((use) => (
+                  <label key={use} className="media-aspect">
+                    <input
+                      type="radio"
+                      name="media-reference-use"
+                      value={use}
+                      checked={referenceUse === use}
+                      onChange={() => {
+                        setReferenceUse(use);
+                        changed();
+                      }}
+                    />
+                    <span>{MEDIA_IMAGE_USE_LABEL[use]}</span>
+                  </label>
+                ))}
+              </fieldset>
+            )}
+            {mismatch && model && (
+              <div className="alert alert-warning" role="alert">
+                <p>
+                  {model.name}{' '}
+                  {referenceUse === 'edit' ? 'não edita imagens' : 'não usa imagem de referência'}.
+                  {model.imageUse === 'edit' && ' Ele só recebe uma imagem para editá-la.'}
+                  {model.imageUse === 'reference' &&
+                    ' Ele só recebe uma imagem como referência.'}{' '}
+                  {able.length > 0
+                    ? 'Troque para um modelo que faz isso:'
+                    : 'Nenhum modelo do catálogo faz isso.'}
+                </p>
+                <div className="media-reference-picked">
+                  {able.map((item) => (
+                    <Button
+                      key={item.key}
+                      type="button"
+                      variant="ghost"
+                      onClick={() => {
+                        setModelKey(item.key);
+                        changed();
+                      }}
+                    >
+                      Usar {item.name}
+                    </Button>
+                  ))}
+                </div>
+              </div>
             )}
             <span className="field-hint">
-              O Kairogen recebe um link temporário desta imagem, válido por 15 minutos.
+              {kind === 'image' && referenceUse === 'edit'
+                ? 'No modo edição, o prompt descreve a mudança (por exemplo, "trocar o fundo por cinza claro"). '
+                : ''}
+              O arquivo enviado entra na biblioteca. O Kairogen recebe um link temporário desta
+              imagem, válido por 15 minutos.
             </span>
           </div>
         )}
@@ -372,7 +488,10 @@ export function GenerationForm({
 
       <div className="media-form-actions" aria-live="polite">
         {quote === null ? (
-          <Button type="submit" disabled={readOnly || estimate.isPending || currentKey === ''}>
+          <Button
+            type="submit"
+            disabled={readOnly || estimate.isPending || currentKey === '' || mismatch}
+          >
             {estimate.isPending ? 'Estimando…' : 'Estimar custo'}
           </Button>
         ) : (

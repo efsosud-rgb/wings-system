@@ -15,6 +15,7 @@ import {
   type AgentGenerationProposalCard,
   type AgentProposalCard,
   GENERATION_STATUS_LABEL,
+  MEDIA_IMAGE_USE_LABEL,
   isGenerationOver,
 } from '@wings/shared';
 import { createContext, useContext } from 'react';
@@ -408,6 +409,16 @@ function GenerationCard({
             <dd>{typeof value === 'boolean' ? (value ? 'sim' : 'não') : String(value)}</dd>
           </div>
         ))}
+        {payload.referenceAssetId && (
+          <div>
+            <dt>Imagem enviada</dt>
+            <dd>
+              {payload.kind === 'video'
+                ? 'Primeiro quadro'
+                : MEDIA_IMAGE_USE_LABEL[payload.referenceUse]}
+            </dd>
+          </div>
+        )}
         {payload.textInImage && (
           <div>
             <dt>Texto na imagem</dt>
@@ -415,6 +426,16 @@ function GenerationCard({
           </div>
         )}
       </dl>
+      {payload.referenceAssetId && (
+        <div className="agent-card-media" aria-label="Imagem que vai junto com o pedido">
+          <MediaThumb
+            asset={{
+              kind: 'image',
+              downloadPath: `/media/assets/${payload.referenceAssetId}/file`,
+            }}
+          />
+        </div>
+      )}
       <details className="agent-details">
         <summary>Prompt enviado ao modelo</summary>
         <p className="agent-text mono" lang="en">
