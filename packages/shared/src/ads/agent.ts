@@ -4,9 +4,11 @@ import {
   CALLS_TO_ACTION,
   CAMPAIGN_OBJECTIVES,
   COMPLIANCE_RULE_LABEL,
+  CREATIVE_FORMATS,
   DRAFT_PLATFORMS,
   HEADLINE_MAX,
   ICP_MAX,
+  ICP_MIN,
   KEYWORD_MAX_LENGTH,
   MAX_AGE,
   MAX_KEYWORDS,
@@ -14,6 +16,7 @@ import {
   MAX_SEARCH_DESCRIPTIONS,
   MAX_SEARCH_HEADLINES,
   MAX_VARIATIONS,
+  MIN_VARIATIONS,
   MIN_AGE,
   MIN_DAILY_BUDGET_CENTS,
   PRIMARY_TEXT_MAX,
@@ -24,6 +27,7 @@ import {
   customLocationSchema,
   isGooglePlatform,
   parseYoutubeVideoId,
+  placementsSchema,
   reachRefusal,
 } from './campaign-builder.js';
 
@@ -126,9 +130,12 @@ export const AGENT_DRAFT_FIELDS = [
   'dailyBudgetCents',
   'dates',
   'age',
+  'placements',
+  'format',
   'copy',
   'search',
   'youtube',
+  'utms',
 ] as const;
 export type AgentDraftField = (typeof AGENT_DRAFT_FIELDS)[number];
 
@@ -142,10 +149,75 @@ export const AGENT_DRAFT_FIELD_LABEL: Record<AgentDraftField, string> = {
   dailyBudgetCents: 'Verba diária',
   dates: 'Período',
   age: 'Faixa de idade',
+  placements: 'Posicionamentos',
+  format: 'Formato',
   copy: 'Textos do anúncio',
   search: 'Palavras-chave e anúncio de pesquisa',
   youtube: 'Vídeo',
+  utms: 'UTMs',
 };
+
+/**
+ * What a complete proposal must justify, per platform. A senior traffic
+ * manager does not hand over "broad, default" anything: every choice that
+ * shapes who sees the ad and what it costs comes with its reason.
+ */
+const EXPLAINED_ALWAYS: AgentDraftField[] = [
+  'objective',
+  'idealCustomerProfile',
+  'reach',
+  'dailyBudgetCents',
+  'dates',
+];
+export const AGENT_EXPLAINED_FIELDS: Record<
+  'meta' | 'google_search' | 'youtube',
+  readonly AgentDraftField[]
+> = {
+  meta: [...EXPLAINED_ALWAYS, 'age', 'placements', 'format', 'copy'],
+  google_search: [...EXPLAINED_ALWAYS, 'search'],
+  youtube: [...EXPLAINED_ALWAYS, 'youtube'],
+};
+
+/** A campaign shorter than this never leaves the platform's learning phase. */
+export const AGENT_MIN_CAMPAIGN_DAYS = 7;
+/** Leads a week a leads campaign should be funded for, by the account's own CPL. */
+export const AGENT_LEARNING_LEADS_PER_WEEK = 10;
+export const AGENT_MIN_NEGATIVE_KEYWORDS = 5;
+
+/**
+ * Searches that are known to bring people who will never buy a franchise. The
+ * agent starts every Google proposal's negatives from this list.
+ */
+export const AGENT_JUNK_SEARCH_TERMS = [
+  'vaga',
+  'vagas',
+  'emprego',
+  'currículo',
+  'trabalhe conosco',
+  'curso',
+  'grátis',
+  'gratuito',
+  'franquia barata',
+  'franquia sem investimento',
+  'pdf',
+  'o que é',
+] as const;
+
+export const KEYWORD_MATCH_TYPES = ['exact', 'phrase', 'broad'] as const;
+export type KeywordMatchType = (typeof KEYWORD_MATCH_TYPES)[number];
+
+/** A keyword the way Google Ads writes its match type: [exact], "phrase", broad. */
+export function keywordWithMatch(keyword: { text: string; match: KeywordMatchType }): string {
+  if (keyword.match === 'exact') return `[${keyword.text}]`;
+  if (keyword.match === 'phrase') return `"${keyword.text}"`;
+  return keyword.text;
+}
+
+const mediaBrief = z
+  .string()
+  .trim()
+  .min(20, 'Descreva em duas linhas o que a imagem ou o vídeo deve mostrar')
+  .max(400);
 
 /**
  * A campaign the agent proposes, in the builder's own terms.
@@ -162,7 +234,7 @@ export const agentCampaignProposalSchema = z
     platform: z.enum(DRAFT_PLATFORMS),
     name: z.string().trim().min(3).max(120),
     objective: z.enum(CAMPAIGN_OBJECTIVES),
-    idealCustomerProfile: z.string().trim().max(ICP_MAX).optional(),
+    idealCustomerProfile: z.string().trim().min(ICP_MIN).max(ICP_MAX),
     reach: z
       .object({
         states: z.array(z.enum(BRAZIL_STATES)).default([]),
@@ -172,20 +244,39 @@ export const agentCampaignProposalSchema = z
           .default([]),
         customLocations: z.array(customLocationSchema).max(5).default([]),
       })
-      .optional(),
-    destinationUrl: z.url({ protocol: /^https$/ }).optional(),
+      .refine(
+        (reach) => reach.states.length + reach.cities.length + reach.customLocations.length > 0,
+        'Escolha a região: estados, cidades ou raio',
+      ),
+    destinationUrl: z.url({ protocol: /^https$/ }),
+    utms: z.object({
+      utm_source: z.string().trim().min(1).max(80),
+      utm_medium: z.string().trim().min(1).max(80),
+      utm_campaign: z.string().trim().min(1).max(80),
+      utm_content: z.string().trim().max(80).default(''),
+    }),
     dailyBudgetCents: z.number().int().min(MIN_DAILY_BUDGET_CENTS),
     startDate: dateString,
     endDate: dateString,
     ageMin: z.number().int().min(MIN_AGE).max(MAX_AGE).optional(),
     ageMax: z.number().int().min(MIN_AGE).max(MAX_AGE).optional(),
-    /** Meta: the words of each variation. The image stays the person's choice. */
+    /** Meta only. */
+    placements: placementsSchema.optional(),
+    /** Meta only: one of the builder's creative formats. */
+    formatKey: z
+      .enum(CREATIVE_FORMATS.meta.map((format) => format.key) as [string, ...string[]])
+      .optional(),
+    /**
+     * Meta: the words of each variation. The image or video stays the person's
+     * choice, so each variation carries a brief for Design instead.
+     */
     copy: z
       .array(
         z.object({
           headline: z.string().trim().min(1).max(HEADLINE_MAX),
           primaryText: z.string().trim().min(1).max(PRIMARY_TEXT_MAX),
-          callToAction: z.enum(CALLS_TO_ACTION).default('LEARN_MORE'),
+          callToAction: z.enum(CALLS_TO_ACTION),
+          mediaBrief,
         }),
       )
       .max(MAX_VARIATIONS)
@@ -193,13 +284,23 @@ export const agentCampaignProposalSchema = z
     search: z
       .object({
         keywords: z
-          .array(z.string().trim().min(2).max(KEYWORD_MAX_LENGTH))
-          .min(1)
+          .array(
+            z.object({
+              text: z
+                .string()
+                .trim()
+                .min(2)
+                .max(KEYWORD_MAX_LENGTH - 2)
+                .regex(/^[^[\]"]+$/, 'Sem colchetes nem aspas: use match'),
+              match: z.enum(KEYWORD_MATCH_TYPES),
+            }),
+          )
+          .min(3, 'Ao menos 3 palavras-chave')
           .max(MAX_KEYWORDS),
         negativeKeywords: z
           .array(z.string().trim().min(2).max(KEYWORD_MAX_LENGTH))
-          .max(MAX_NEGATIVE_KEYWORDS)
-          .default([]),
+          .min(AGENT_MIN_NEGATIVE_KEYWORDS, `Ao menos ${AGENT_MIN_NEGATIVE_KEYWORDS} negativas`)
+          .max(MAX_NEGATIVE_KEYWORDS),
         headlines: z
           .array(z.string().trim().min(1).max(SEARCH_HEADLINE_MAX))
           .min(1)
@@ -218,8 +319,13 @@ export const agentCampaignProposalSchema = z
           .trim()
           .refine((value) => parseYoutubeVideoId(value) !== null, 'Link do YouTube inválido')
           .optional(),
+        mediaBrief,
       })
       .optional(),
+    /** What was assumed for lack of data. Shown at the end of the card. */
+    assumptions: z.array(z.string().trim().min(5).max(300)).min(1).max(8),
+    /** Required when the budget is below what the learning phase asks for. */
+    budgetNote: z.string().trim().min(10).max(400).optional(),
     /** Why each choice: shown beside the field it explains. */
     explanations: z
       .array(
@@ -233,8 +339,48 @@ export const agentCampaignProposalSchema = z
     summary: z.string().trim().min(3).max(600),
   })
   .superRefine((proposal, ctx) => {
-    if (campaignDays(proposal.startDate, proposal.endDate) === null) {
+    const days = campaignDays(proposal.startDate, proposal.endDate);
+    if (days === null) {
       ctx.addIssue({ code: 'custom', path: ['endDate'], message: 'O fim é antes do início' });
+    } else if (days < AGENT_MIN_CAMPAIGN_DAYS) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['endDate'],
+        message: `Duração mínima de ${AGENT_MIN_CAMPAIGN_DAYS} dias, para sair da fase de aprendizado`,
+      });
+    }
+
+    // Complete, per platform: nothing left at "default".
+    const missing = (path: string, message: string) =>
+      ctx.addIssue({ code: 'custom', path: [path], message });
+    if (proposal.platform === 'meta') {
+      if (proposal.ageMin === undefined || proposal.ageMax === undefined) {
+        missing('ageMin', 'Informe a faixa de idade (ageMin e ageMax)');
+      }
+      if (!proposal.placements) missing('placements', 'Informe os posicionamentos');
+      if (!proposal.formatKey) missing('formatKey', 'Informe o formato');
+      if (proposal.copy.length < MIN_VARIATIONS) {
+        missing('copy', `Escreva de ${MIN_VARIATIONS} a ${MAX_VARIATIONS} variações de texto`);
+      }
+    }
+    if (proposal.platform === 'google_search' && !proposal.search) {
+      missing('search', 'Informe palavras-chave, negativas, títulos e descrições');
+    }
+    if (proposal.platform === 'youtube' && !proposal.youtube) {
+      missing('youtube', 'Informe o título e o briefing do vídeo');
+    }
+
+    // Every choice justified.
+    const explained = new Set(proposal.explanations.map((item) => item.field));
+    const unexplained = AGENT_EXPLAINED_FIELDS[proposal.platform].filter(
+      (field) => !explained.has(field),
+    );
+    if (unexplained.length > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['explanations'],
+        message: `Falta justificar: ${unexplained.map((field) => AGENT_DRAFT_FIELD_LABEL[field]).join(', ')}`,
+      });
     }
     if (
       proposal.ageMin !== undefined &&
@@ -262,6 +408,13 @@ export const agentCampaignProposalSchema = z
     }
     if (google && (proposal.ageMin !== undefined || proposal.ageMax !== undefined)) {
       ctx.addIssue({ code: 'custom', path: ['ageMin'], message: 'Faixa de idade é só da Meta' });
+    }
+    if (google && (proposal.placements || proposal.formatKey)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['placements'],
+        message: 'Posicionamentos e formato são só da Meta',
+      });
     }
 
     // The same compliance rules as the builder, on every word the agent wrote.
@@ -352,6 +505,12 @@ interface AgentProposalBase {
 export interface AgentCampaignProposalCard extends AgentProposalBase {
   kind: 'campaign';
   payload: AgentCampaignProposal;
+  /**
+   * What only a person can choose, named by the server: images or video, the
+   * Facebook Page and the Instagram account. The briefs in the payload say
+   * what that media should show.
+   */
+  pending: string[];
 }
 
 export interface AgentChangeProposalCard extends AgentProposalBase {
@@ -393,6 +552,12 @@ export interface AgentChatMessage {
   proposals: AgentProposalCard[];
   /** Set when the reply was cut short: daily ceiling, provider failure. */
   notice: string | null;
+  /**
+   * True when asking again may work: the provider failed, the reply was cut or
+   * the connection dropped. The screen then offers "Tentar de novo". False for
+   * the daily ceiling, where asking again cannot help.
+   */
+  retryable: boolean;
 }
 
 export interface AgentConversationSummary {
@@ -420,6 +585,11 @@ export const agentSendMessageSchema = z.object({
   conversationId: z.uuid().optional(),
   message: z.string().trim().min(1, 'Escreva a mensagem').max(AGENT_MESSAGE_MAX),
   context: agentBuilderContextSchema,
+  /**
+   * "Tentar de novo": the same words as the last message of the conversation.
+   * The server then answers that message again instead of storing a copy of it.
+   */
+  retry: z.boolean().optional(),
 });
 export type AgentSendMessageInput = z.input<typeof agentSendMessageSchema>;
 

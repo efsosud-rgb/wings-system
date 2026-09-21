@@ -456,8 +456,9 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       status: string;
       daily_budget?: string;
       lifetime_budget?: string;
+      objective?: string;
     }>(`${this.accountId}/campaigns`, {
-      fields: 'id,name,status,daily_budget,lifetime_budget',
+      fields: 'id,name,status,daily_budget,lifetime_budget,objective',
       limit: '50',
     });
 
@@ -477,6 +478,7 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
         dailyBudgetCents: daily === 0 ? null : daily,
         lifetimeBudgetCents: lifetime === 0 ? null : lifetime,
         spendCents: 0,
+        objective: campaign.objective ?? null,
       };
     });
   }

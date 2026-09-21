@@ -17,6 +17,7 @@ import {
   adCampaigns,
   adChangeRequests,
   adMetricsDaily,
+  agentConversations,
   agentMessages,
   agentProposals,
   auditLog,
@@ -29,7 +30,7 @@ import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factori
 import { getPeriodState, openPeriod } from '../ads/budget-guard.js';
 import { LlmError, type AgentLlm, type LlmMessage, type LlmRequest, type LlmTurn } from './llm.js';
 import { AGENT_SYSTEM_PROMPT } from './prompt.js';
-import { DAILY_LIMIT_NOTICE } from './service.js';
+import { CUT_NOTICE, DAILY_LIMIT_NOTICE, isRetryable } from './service.js';
 import { AGENT_TOOL_DEFINITIONS, runAgentTool, type ToolContext } from './tools.js';
 
 /**
@@ -53,7 +54,7 @@ let metaAccountId: string;
 
 // --- the scripted model ------------------------------------------------------
 
-type Step = (request: LlmRequest) => Partial<LlmTurn> & { costUsd?: number | null };
+type Step = (request: LlmRequest) => Partial<LlmTurn>;
 let script: Step[] = [];
 let seen: { messages: LlmMessage[]; tools: string[] }[] = [];
 
@@ -71,6 +72,7 @@ const scriptedLlm: AgentLlm = {
       text: turn.text ?? '',
       toolCalls: turn.toolCalls ?? [],
       usage: turn.usage ?? { inputTokens: 2000, outputTokens: 100, costUsd: 0.005 },
+      finishReason: turn.finishReason ?? (turn.toolCalls?.length ? 'tool_calls' : 'stop'),
     };
   },
 };
@@ -136,6 +138,7 @@ beforeAll(async () => {
       status: 'ACTIVE',
       dailyBudgetCents: 2_000,
       budgetLevel: 'campaign',
+      objective: 'OUTCOME_LEADS',
     },
     {
       adAccountId: meta.id,
@@ -144,6 +147,7 @@ beforeAll(async () => {
       status: 'PAUSED',
       dailyBudgetCents: 1_000,
       budgetLevel: 'campaign',
+      objective: 'OUTCOME_TRAFFIC',
     },
     {
       adAccountId: google.id,
@@ -164,6 +168,19 @@ beforeAll(async () => {
     clicks: 80,
     conversions: 4,
     actions: { lead: 4 },
+    fetchedAt: NOW,
+  });
+  // Forty days ago: outside the 7-day reads, inside the 90-day ones.
+  await db.insert(adMetricsDaily).values({
+    adAccountId: meta.id,
+    level: 'campaign',
+    entityExternalId: '120000000000000002',
+    day: new Date(NOW.getTime() - 40 * 24 * 3_600_000).toISOString().slice(0, 10),
+    spendCents: 8_000,
+    impressions: 10_000,
+    clicks: 400,
+    conversions: 0,
+    actions: { link_click: 400, landing_page_view: 320 },
     fetchedAt: NOW,
   });
   await db.insert(adAlerts).values({
@@ -304,7 +321,12 @@ describe('the read tools, against the database', () => {
       total: Record<string, number>;
       campanhas: Record<string, unknown>[];
     };
-    expect(result.total).toEqual({ gasto_centavos: 12_000, leads: 4, cpl_centavos: 3_000 });
+    expect(result.total).toEqual({
+      gasto_centavos: 12_000,
+      leads: 4,
+      gasto_em_campanhas_de_leads_centavos: 12_000,
+      cpl_centavos: 3_000,
+    });
     expect(result.campanhas[0]).toMatchObject({
       id_na_plataforma: '120000000000000001',
       gasto_centavos: 12_000,
@@ -503,7 +525,7 @@ describe('the daily ceiling', () => {
     await db.insert(agentMessages).values({
       conversationId: (
         await db
-          .insert((await import('../../db/schema/index.js')).agentConversations)
+          .insert(agentConversations)
           .values({ employeeId, title: 'ontem e hoje' })
           .returning()
       )[0]!.id,
@@ -539,27 +561,93 @@ describe('the daily ceiling', () => {
   });
 });
 
+/** A copy without the named keys. */
+function without<T extends object, K extends keyof T>(value: T, ...keys: K[]): Omit<T, K> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([key]) => !keys.includes(key as K)),
+  ) as Omit<T, K>;
+}
+
+const IN_TEN_DAYS = new Date(NOW.getTime() + 9 * 24 * 3_600_000).toISOString().slice(0, 10);
+
+/** A complete Google Pesquisa proposal: everything filled, everything justified. */
 const campaignProposal = (overrides: Record<string, unknown> = {}) => ({
   platform: 'google_search',
   name: 'Pesquisa franquia SP',
   objective: 'lead',
+  idealCustomerProfile: 'Empresário dono de negócio em SP que quer expandir por franquias.',
   dailyBudgetCents: 3000,
   startDate: TODAY,
-  endDate: TODAY,
+  endDate: IN_TEN_DAYS,
   destinationUrl: 'https://wingscompany.com.br/franquia',
+  utms: {
+    utm_source: 'google',
+    utm_medium: 'cpc',
+    utm_campaign: 'pesquisa-franquia-sp',
+    utm_content: 'lead',
+  },
   reach: { states: ['SP'] },
   search: {
-    keywords: ['abrir franquia'],
-    negativeKeywords: ['grátis'],
-    headlines: ['Franquia Wings'],
-    descriptions: ['Conheça o modelo de negócio e o suporte.'],
+    keywords: [
+      { text: 'como franquear minha empresa', match: 'phrase' },
+      { text: 'formatação de franquia', match: 'exact' },
+      { text: 'transformar negócio em franquia', match: 'phrase' },
+    ],
+    negativeKeywords: ['vaga', 'emprego', 'currículo', 'curso', 'grátis', 'franquia barata'],
+    headlines: ['Franqueie sua marca', 'Formatação de franquias', 'Expanda com a Wings'],
+    descriptions: ['Conheça o método e o suporte da Wings.', 'Fale com um consultor.'],
   },
   explanations: [
+    { field: 'objective', reason: 'A página tem formulário: o que interessa é o lead.' },
+    { field: 'idealCustomerProfile', reason: 'É o perfil salvo pela Wings.' },
+    { field: 'reach', reason: 'SP é a área de alcance salva.' },
     { field: 'dailyBudgetCents', reason: 'Cabe nos R$ 1.050,00 disponíveis no Google.' },
+    { field: 'dates', reason: 'Dez dias passam da fase de aprendizado.' },
+    { field: 'search', reason: 'Termos de quem quer franquear, com as negativas de sempre.' },
   ],
-  summary: 'Campanha de pesquisa para quem já procura franquia em SP.',
+  assumptions: ['A página de destino é a de franquia do site.'],
+  summary: 'Campanha de pesquisa para quem já procura franquear o negócio em SP.',
   ...overrides,
 });
+
+/** The Meta counterpart, for what only Meta has. */
+const metaProposal = (overrides: Record<string, unknown> = {}) => {
+  const common = without(campaignProposal(), 'search');
+  return {
+    ...common,
+    platform: 'meta',
+    name: 'Leads franquia RJ',
+    utms: { ...common.utms, utm_source: 'meta', utm_medium: 'paid_social' },
+    ageMin: 30,
+    ageMax: 55,
+    placements: { mode: 'manual', facebook: [], instagram: ['feed', 'stories', 'reels'] },
+    formatKey: 'stories_reels',
+    copy: [
+      {
+        headline: 'Transforme sua marca em franquia',
+        primaryText: 'Para donos de negócio que querem crescer com método e suporte.',
+        callToAction: 'LEARN_MORE',
+        mediaBrief:
+          'Dono de loja em frente ao próprio negócio. Texto na peça: "Sua marca em outras cidades".',
+      },
+      {
+        headline: 'Expanda por franquias',
+        primaryText: 'A Wings estrutura o modelo, os contratos e a operação com você.',
+        callToAction: 'CONTACT_US',
+        mediaBrief:
+          'Mapa com pontos em várias cidades e a marca ao centro. Sem números de faturamento.',
+      },
+    ],
+    explanations: [
+      ...common.explanations.filter((item) => item.field !== 'search'),
+      { field: 'age', reason: 'Dono de negócio consolidado costuma ter mais de 30.' },
+      { field: 'placements', reason: 'A pessoa pediu só Instagram.' },
+      { field: 'format', reason: 'Stories e Reels pedem tela cheia.' },
+      { field: 'copy', reason: 'Fala com quem já tem negócio, sem prometer ganho.' },
+    ],
+    ...overrides,
+  };
+};
 
 describe('proposing a campaign', () => {
   it('puts a card on the screen and creates nothing; applying it is the person’s click', async () => {
@@ -602,9 +690,9 @@ describe('proposing a campaign', () => {
           'propor_campanha',
           campaignProposal({
             search: {
-              keywords: ['abrir franquia'],
-              headlines: ['Ganhe R$ 10 mil por mês'],
-              descriptions: ['Retorno garantido em 12 meses.'],
+              ...campaignProposal().search,
+              headlines: ['Ganhe R$ 10 mil por mês', 'Franquia Wings', 'Expanda já'],
+              descriptions: ['Retorno garantido em 12 meses.', 'Fale com um consultor.'],
             },
           }),
         ),
@@ -631,6 +719,293 @@ describe('proposing a campaign', () => {
     const { message } = await send(cookies, 'R$ 600 por dia no Google');
     expect(message?.proposals).toEqual([]);
     expect(seen[1]?.messages.at(-1)?.content).toContain('R$ 1.050,00');
+  });
+});
+
+describe('a proposal has to be complete and justified', () => {
+  it('sends an incomplete proposal back to the model, which completes it', async () => {
+    const { cookies } = await sessionFor('marketing');
+    const { copy } = metaProposal();
+    const withoutPlacements = without(metaProposal(), 'placements', 'copy');
+    script = [
+      // "Broad, default": no placements and a single variation.
+      use(call('propor_campanha', { ...withoutPlacements, copy: copy.slice(0, 1) })),
+      use(call('propor_campanha', metaProposal())),
+      say('Proposta no cartão. A aposta é o Reels; falta a mídia.'),
+    ];
+    const { message } = await send(cookies, 'Campanha de leads no Meta para o RJ, só Instagram');
+
+    const refusal = seen[1]?.messages.at(-1);
+    expect(refusal?.role).toBe('tool');
+    expect(refusal?.content).toContain('"aceita":false');
+    expect(refusal?.content).toContain('Informe os posicionamentos');
+    expect(refusal?.content).toContain('2 a 3 variações');
+
+    expect(message?.proposals).toHaveLength(1);
+    const card = message?.proposals[0];
+    expect(card).toMatchObject({
+      kind: 'campaign',
+      pending: [
+        'Imagem ou vídeo de cada variação (o briefing para o Design está na proposta)',
+        'Página do Facebook e conta do Instagram',
+      ],
+      payload: {
+        formatKey: 'stories_reels',
+        placements: { instagram: ['feed', 'stories', 'reels'] },
+      },
+    });
+    // It was redone, so nothing about a refusal is said to the person.
+    expect(message?.content).not.toContain('não virou cartão');
+  });
+
+  it('refuses a proposal whose choices come without their reasons', async () => {
+    const { cookies } = await sessionFor('marketing');
+    const complete = metaProposal();
+    script = [
+      use(
+        call('propor_campanha', {
+          ...complete,
+          explanations: complete.explanations.filter((item) =>
+            ['objective', 'dailyBudgetCents'].includes(item.field),
+          ),
+        }),
+      ),
+      use(call('propor_campanha', { ...complete, assumptions: [] })),
+      use(call('propor_campanha', complete)),
+      say('Pronto.'),
+    ];
+    const { message } = await send(cookies, 'Campanha de leads no Meta');
+
+    expect(seen[1]?.messages.at(-1)?.content).toContain(
+      'Falta justificar: Cliente ideal, Área de alcance, Período, Faixa de idade, Posicionamentos, Formato, Textos do anúncio',
+    );
+    expect(seen[2]?.messages.at(-1)?.content).toContain('assumptions');
+    expect(message?.proposals).toHaveLength(1);
+  });
+
+  it('holds duration and budget to the learning phase, and lets a warned exception through', async () => {
+    const { cookies } = await sessionFor('marketing');
+    // 90-day CPL of the account: R$ 120 + R$ 300 over 4 + 6 leads = R$ 42,00.
+    await db.insert(adMetricsDaily).values({
+      adAccountId: metaAccountId,
+      level: 'campaign',
+      entityExternalId: '120000000000000001',
+      day: new Date(NOW.getTime() - 45 * 24 * 3_600_000).toISOString().slice(0, 10),
+      spendCents: 30_000,
+      impressions: 9_000,
+      clicks: 150,
+      conversions: 6,
+      actions: { lead: 6 },
+      fetchedAt: NOW,
+    });
+    const threeDays = new Date(NOW.getTime() + 2 * 24 * 3_600_000).toISOString().slice(0, 10);
+    script = [
+      use(call('propor_campanha', metaProposal({ endDate: threeDays }))),
+      use(call('propor_campanha', metaProposal({ dailyBudgetCents: 2000 }))),
+      use(
+        call(
+          'propor_campanha',
+          metaProposal({
+            dailyBudgetCents: 2000,
+            budgetNote: 'Com R$ 20,00 por dia espere 3 a 4 leads por semana, abaixo do ideal.',
+          }),
+        ),
+      ),
+      say('Mantive os R$ 20,00 que você pediu e avisei no cartão.'),
+    ];
+    const { message } = await send(cookies, 'R$ 20 por dia, 3 dias');
+
+    expect(seen[1]?.messages.at(-1)?.content).toContain('Duração mínima de 7 dias');
+    // 10 leads a week at R$ 42,00 is R$ 60,00 a day.
+    expect(seen[2]?.messages.at(-1)?.content).toContain('R$ 60,00 por dia');
+    expect(message?.proposals[0]?.payload).toMatchObject({ dailyBudgetCents: 2000 });
+  });
+});
+
+describe('a reply that goes wrong says so', () => {
+  it('tells the person when a proposal was refused and never redone', async () => {
+    const { cookies, employeeId } = await sessionFor('marketing');
+    const incomplete = without(metaProposal(), 'placements');
+    script = [
+      use(call('desempenho_campanhas', { dias: 30 })),
+      use(call('propor_campanha', incomplete)),
+      // The model carries on as if the card existed.
+      say('Montei a campanha, está no cartão acima.'),
+    ];
+    const { message, events } = await send(cookies, 'Monte uma campanha de leads no Meta');
+
+    expect(message?.proposals).toEqual([]);
+    expect(message?.content).toContain('Montei a campanha');
+    expect(message?.content).toContain(
+      'A proposta não virou cartão: a validação do sistema recusou.',
+    );
+    expect(message?.content).toContain('Informe os posicionamentos');
+    // It was streamed like the rest of the reply, not slipped in afterwards.
+    const streamed = events
+      .flatMap((event) => (event.type === 'delta' ? [event.text] : []))
+      .join('');
+    expect(streamed).toContain('não virou cartão');
+
+    const [stored] = await db
+      .select({ diagnostics: agentMessages.diagnostics })
+      .from(agentMessages)
+      .where(and(eq(agentMessages.employeeId, employeeId), eq(agentMessages.role, 'assistant')));
+    expect(stored?.diagnostics).toMatchObject({
+      proposals: 0,
+      refusedProposals: 1,
+      rounds: [
+        { finishReason: 'tool_calls' },
+        { finishReason: 'tool_calls' },
+        { finishReason: 'stop' },
+      ],
+    });
+  });
+
+  it('says the reply was cut when the model ran into its output cap, and offers to retry', async () => {
+    const { cookies, employeeId } = await sessionFor('marketing');
+    script = [
+      () => ({
+        text: 'Para o RJ eu começaria pelo Reels, e se tiver um perfil mais',
+        finishReason: 'length',
+      }),
+    ];
+    const { message } = await send(cookies, 'Monte uma campanha');
+    expect(message).toMatchObject({
+      content: 'Para o RJ eu começaria pelo Reels, e se tiver um perfil mais',
+      notice: CUT_NOTICE,
+      retryable: true,
+    });
+    const history = await app.inject({
+      url: `/agent/conversations/${
+        (
+          await db.query.agentConversations.findFirst({
+            where: eq(agentConversations.employeeId, employeeId),
+          })
+        )?.id
+      }`,
+      cookies,
+    });
+    expect(history.json<AgentConversationResponse>().messages.at(-1)).toMatchObject({
+      notice: CUT_NOTICE,
+      retryable: true,
+    });
+  });
+
+  it('asks for a proposal again when its arguments were cut, instead of dropping it', async () => {
+    const { cookies } = await sessionFor('marketing');
+    const whole = JSON.stringify(campaignProposal());
+    script = [
+      () => ({
+        toolCalls: [{ id: 'call_cut', name: 'propor_campanha', arguments: whole.slice(0, 300) }],
+        finishReason: 'length',
+      }),
+      use(call('propor_campanha', campaignProposal({ name: 'Pesquisa franquia SP 2' }))),
+      say('Proposta no cartão.'),
+    ];
+    const { message } = await send(cookies, 'Campanha de pesquisa');
+    expect(seen[1]?.messages.at(-1)?.content).toContain('foram cortados pelo limite');
+    expect(message?.proposals).toHaveLength(1);
+    expect(message?.content).not.toContain('não virou cartão');
+  });
+
+  it('answers the same message again on "Tentar de novo", without storing it twice', async () => {
+    const { cookies, employeeId } = await sessionFor('marketing');
+    script = [() => ({ text: 'Começo pelo', finishReason: 'length' }), say('Resposta inteira.')];
+    const first = await send(cookies, 'Como está a conta?');
+    const second = await send(cookies, 'Como está a conta?', {
+      conversationId: first.conversationId ?? undefined,
+      retry: true,
+    });
+    expect(second.message?.content).toBe('Resposta inteira.');
+
+    const stored = await db
+      .select({ role: agentMessages.role })
+      .from(agentMessages)
+      .where(eq(agentMessages.employeeId, employeeId));
+    expect(stored.map((row) => row.role).sort()).toEqual(['assistant', 'assistant', 'user']);
+    // The model sees the question once, and not the attempt that failed.
+    expect(seen[1]?.messages.map((item) => item.role)).toEqual(['system', 'user']);
+  });
+
+  it('does not offer a retry for the daily ceiling, where asking again cannot help', () => {
+    expect(isRetryable(DAILY_LIMIT_NOTICE)).toBe(false);
+    expect(isRetryable(CUT_NOTICE)).toBe(true);
+    expect(isRetryable(null)).toBe(false);
+  });
+
+  it('opens the stream with a first byte at once, before the model has answered', async () => {
+    const { cookies } = await sessionFor('marketing');
+    script = [say('ok')];
+    const { response } = await send(cookies, 'oi');
+    expect(response.payload.startsWith(': stream\n\n')).toBe(true);
+    expect(response.headers['cache-control']).toBe('no-cache, no-transform');
+    expect(response.headers['x-accel-buffering']).toBe('no');
+  });
+});
+
+describe('“o que consultei”', () => {
+  it('names every tool that ran, with something to say about each: never an empty line', async () => {
+    const { cookies } = await sessionFor('marketing');
+    const incomplete = without(metaProposal(), 'placements');
+    script = [
+      use(
+        call('estado_da_conta'),
+        call('desempenho_campanhas', { dias: 90 }),
+        call('perfil_cliente_ideal'),
+        call('alertas_abertos'),
+        call('termos_de_pesquisa'),
+        call('rascunho_atual'),
+        call('conjuntos_e_anuncios', { id_da_campanha: '120000000000000001' }),
+        call('conjuntos_e_anuncios', { id_da_campanha: 'nao-existe' }),
+      ),
+      use(call('propor_campanha', incomplete), call('propor_campanha', metaProposal())),
+      say('Pronto.'),
+    ];
+    const { message, events } = await send(cookies, 'Olhe tudo e proponha');
+
+    expect(message?.consulted).toHaveLength(10);
+    for (const item of message?.consulted ?? []) {
+      expect(item.label.trim()).not.toBe('');
+      expect(item.summary.trim()).not.toBe('');
+    }
+    for (const event of events) {
+      if (event.type === 'consulting') expect(event.label.trim()).not.toBe('');
+    }
+  });
+});
+
+describe('each campaign is judged by its own objective', () => {
+  it('tells the agent which number counts, and gives it the traffic numbers', async () => {
+    const outcome = await runAgentTool(
+      toolContext('x'),
+      call('desempenho_campanhas', { dias: 90, plataforma: 'meta' }),
+      0,
+    );
+    const { campanhas } = outcome.result as { campanhas: Record<string, unknown>[] };
+    expect(campanhas.find((item) => item.id_na_plataforma === '120000000000000002')).toMatchObject({
+      objetivo: 'OUTCOME_TRAFFIC',
+      julgar_por: 'custo por visualização da página e por clique',
+      leads: 0,
+      cpl_centavos: null,
+      custo_por_clique_centavos: 20,
+      visualizacoes_da_pagina: 320,
+      custo_por_visualizacao_da_pagina_centavos: 25,
+    });
+    expect(campanhas.find((item) => item.id_na_plataforma === '120000000000000001')).toMatchObject({
+      objetivo: 'OUTCOME_LEADS',
+      julgar_por: 'cpl',
+    });
+  });
+
+  it('is told so in its standing rules, along with how a proposal must be made', () => {
+    expect(AGENT_SYSTEM_PROMPT).toContain(
+      'Campanha de tráfego se julga por custo por visualização',
+    );
+    expect(AGENT_SYSTEM_PROMPT).toContain('esta campanha é de tráfego, não de leads');
+    expect(AGENT_SYSTEM_PROMPT).toContain('faça UMA pergunta');
+    expect(AGENT_SYSTEM_PROMPT).toContain('no mínimo 7 dias');
+    expect(AGENT_SYSTEM_PROMPT).toContain('vaga, vagas, emprego');
+    expect(AGENT_SYSTEM_PROMPT).toContain('briefing de duas linhas para o Design');
   });
 });
 

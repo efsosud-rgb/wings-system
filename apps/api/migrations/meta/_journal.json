@@ -141,6 +141,13 @@
       "when": 1790008519953,
       "tag": "0019_agent_chat",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790011543882,
+      "tag": "0020_agent_chat_fixes",
+      "breakpoints": true
     }
   ]
 }

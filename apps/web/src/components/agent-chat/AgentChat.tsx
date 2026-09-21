@@ -1,6 +1,6 @@
 import {
   AGENT_MESSAGE_MAX,
-  type AgentCampaignProposal,
+  AGENT_TOOL_LABEL,
   type AgentChatMessage,
   type AgentConsultation,
   type AgentProposalCard,
@@ -16,7 +16,7 @@ import {
   useAgentStatus,
 } from '../../api/agent.js';
 import { Button } from '../ui.js';
-import { ProposalCard } from './ProposalCards.js';
+import { ProposalCard, type ApplyCampaign } from './ProposalCards.js';
 
 /**
  * The conversation with the traffic agent, in the studio's side column.
@@ -32,8 +32,10 @@ export interface AgentChatProps {
   /** The builder's current values, read at the moment a message is sent. */
   getBuilderDraft?: () => Record<string, unknown> | undefined;
   /** Present only while the builder is on screen. */
-  onApplyCampaign?: (proposal: AgentCampaignProposal) => void;
+  onApplyCampaign?: ApplyCampaign;
 }
+
+export const INTERRUPTED_NOTICE = 'Resposta interrompida.';
 
 interface StreamingReply {
   text: string;
@@ -51,16 +53,33 @@ function formatUsd(microUsd: number): string {
   })}`;
 }
 
+/**
+ * What one consultation is called on screen. The server sends a label; when it
+ * does not, the shared name of the tool stands in, and an entry with nothing to
+ * say is not an entry.
+ */
+function consultationLine(item: AgentConsultation): { label: string; summary: string } | null {
+  const known = (AGENT_TOOL_LABEL as Record<string, string | undefined>)[item.tool];
+  const label = (item.label ?? '').trim() || known || (item.tool ?? '').trim();
+  const summary = (item.summary ?? '').trim();
+  if (label === '' && summary === '') return null;
+  return { label: label || summary, summary: label ? summary : '' };
+}
+
 function Consulted({ items }: { items: AgentConsultation[] }) {
-  if (items.length === 0) return null;
+  const lines = items.flatMap((item) => {
+    const line = consultationLine(item);
+    return line ? [line] : [];
+  });
+  if (lines.length === 0) return null;
   return (
     <details className="agent-details agent-consulted">
       <summary>O que consultei</summary>
       <ul>
-        {items.map((item, index) => (
-          <li key={`${item.tool}-${index}`}>
-            <span>{item.label}</span>
-            <span className="muted">{item.summary}</span>
+        {lines.map((line, index) => (
+          <li key={`${line.label}-${index}`}>
+            <span>{line.label}</span>
+            {line.summary !== '' && <span className="muted">{line.summary}</span>}
           </li>
         ))}
       </ul>
@@ -77,15 +96,20 @@ function AssistantBody({
   onApplyCampaign,
   acted,
   onActed,
+  onRetry,
+  retryDisabled = false,
 }: {
   content: string;
   consulted: AgentConsultation[];
   proposals: AgentProposalCard[];
   notice: string | null;
   canRequest: boolean;
-  onApplyCampaign?: (proposal: AgentCampaignProposal) => void;
+  onApplyCampaign?: ApplyCampaign;
   acted: Record<string, AgentProposalCard>;
   onActed: (next: AgentProposalCard) => void;
+  /** Present only where asking again can help: the last reply, cut short. */
+  onRetry?: () => void;
+  retryDisabled?: boolean;
 }) {
   return (
     <>
@@ -94,6 +118,11 @@ function AssistantBody({
         <div className="alert alert-warning" role="status">
           {notice}
         </div>
+      )}
+      {onRetry && (
+        <Button type="button" variant="ghost" disabled={retryDisabled} onClick={onRetry}>
+          Tentar de novo
+        </Button>
       )}
       {proposals.map((proposal) => (
         <ProposalCard
@@ -126,7 +155,7 @@ export function AgentChat({ canRequest, tab, getBuilderDraft, onApplyCampaign }:
   const onActed = (next: AgentProposalCard) =>
     setActed((current) => ({ ...current, [next.id]: next }));
   const abort = useRef<AbortController | null>(null);
-  const bottom = useRef<HTMLDivElement | null>(null);
+  const list = useRef<HTMLDivElement | null>(null);
   const fieldId = useId();
 
   // An earlier conversation, chosen in the picker. Copied in once: from then on
@@ -144,8 +173,11 @@ export function AgentChat({ canRequest, tab, getBuilderDraft, onApplyCampaign }:
 
   const streaming = reply !== null;
   const lastLength = messages.length + (reply?.text.length ?? 0) + (reply?.proposals.length ?? 0);
+  // The list scrolls, never the page: the panel stays where it is while the
+  // builder beside it is somewhere else entirely.
   useEffect(() => {
-    bottom.current?.scrollIntoView?.({ block: 'nearest' });
+    const element = list.current;
+    if (element) element.scrollTop = element.scrollHeight;
   }, [lastLength]);
 
   useEffect(() => () => abort.current?.abort(), []);
@@ -174,24 +206,32 @@ export function AgentChat({ canRequest, tab, getBuilderDraft, onApplyCampaign }:
     setLoadId(id);
   }
 
-  async function send() {
-    const message = text.trim();
+  /**
+   * Sends what is in the box, or asks again with the words of the last message.
+   * Asking again adds no second copy of those words to the screen: the reply
+   * that was cut short stays, and the new one comes after it.
+   */
+  async function send(again?: string) {
+    const message = (again ?? text).trim();
     if (message === '' || streaming || exhausted) return;
 
     const temporaryId = `local-${Date.now()}`;
-    setMessages((current) => [
-      ...current,
-      {
-        id: temporaryId,
-        role: 'user',
-        content: message,
-        createdAt: new Date().toISOString(),
-        consulted: [],
-        proposals: [],
-        notice: null,
-      },
-    ]);
-    setText('');
+    if (again === undefined) {
+      setMessages((current) => [
+        ...current,
+        {
+          id: temporaryId,
+          role: 'user',
+          content: message,
+          createdAt: new Date().toISOString(),
+          consulted: [],
+          proposals: [],
+          notice: null,
+          retryable: false,
+        },
+      ]);
+      setText('');
+    }
     setProblem(null);
     setReply(EMPTY_REPLY);
 
@@ -253,6 +293,7 @@ export function AgentChat({ canRequest, tab, getBuilderDraft, onApplyCampaign }:
           conversationId,
           message,
           context: { tab, ...(draft ? { draft } : {}) },
+          ...(again !== undefined ? { retry: true } : {}),
         },
         onEvent,
         controller.signal,
@@ -264,22 +305,22 @@ export function AgentChat({ canRequest, tab, getBuilderDraft, onApplyCampaign }:
       }
     } finally {
       if (!finished) {
-        // Whatever was written before the stream stopped stays on screen.
+        // Whatever was written before the stream stopped stays on screen — even
+        // nothing at all, so there is always something to ask again from.
         const kept = partial;
-        if (kept.text !== '' || kept.proposals.length > 0) {
-          setMessages((current) => [
-            ...current,
-            {
-              id: `local-reply-${Date.now()}`,
-              role: 'assistant',
-              content: kept.text,
-              createdAt: new Date().toISOString(),
-              consulted: kept.consulted,
-              proposals: kept.proposals,
-              notice: 'Resposta interrompida.',
-            },
-          ]);
-        }
+        setMessages((current) => [
+          ...current,
+          {
+            id: `local-reply-${Date.now()}`,
+            role: 'assistant',
+            content: kept.text,
+            createdAt: new Date().toISOString(),
+            consulted: kept.consulted,
+            proposals: kept.proposals,
+            notice: INTERRUPTED_NOTICE,
+            retryable: true,
+          },
+        ]);
         setReply(null);
         void queryClient.invalidateQueries({ queryKey: ['agent', 'status'] });
       }
@@ -308,6 +349,8 @@ export function AgentChat({ canRequest, tab, getBuilderDraft, onApplyCampaign }:
   }
 
   const earlier = conversations.data?.conversations ?? [];
+  const lastMessage = messages.at(-1);
+  const lastUserText = [...messages].reverse().find((item) => item.role === 'user')?.content;
 
   return (
     <div className="agent-chat">
@@ -342,7 +385,7 @@ export function AgentChat({ canRequest, tab, getBuilderDraft, onApplyCampaign }:
         clica, e todo pedido passa pelo portão de aprovações.
       </p>
 
-      <div className="agent-messages" role="log" aria-label="Mensagens" aria-live="off">
+      <div ref={list} className="agent-messages" role="log" aria-label="Mensagens" aria-live="off">
         {messages.length === 0 && !streaming && (
           <p className="muted agent-empty">
             {loadId && loaded.isLoading
@@ -365,6 +408,12 @@ export function AgentChat({ canRequest, tab, getBuilderDraft, onApplyCampaign }:
                 onApplyCampaign={onApplyCampaign}
                 acted={acted}
                 onActed={onActed}
+                onRetry={
+                  message === lastMessage && message.retryable && lastUserText && !exhausted
+                    ? () => void send(lastUserText)
+                    : undefined
+                }
+                retryDisabled={streaming}
               />
             )}
           </div>
@@ -394,7 +443,6 @@ export function AgentChat({ canRequest, tab, getBuilderDraft, onApplyCampaign }:
             />
           </div>
         )}
-        <div ref={bottom} />
       </div>
 
       {problem && (

@@ -25,6 +25,8 @@ const requestState = { error: null as Error | null };
 /** The stream under the test's control. */
 let emit: (event: AgentStreamEvent) => void = () => undefined;
 let finish: () => void = () => undefined;
+/** The connection drops: the stream rejects without a `done`. */
+let drop: (error: Error) => void = () => undefined;
 const sent: AgentSendMessageInput[] = [];
 const streamAgentMessage = vi.fn(
   (
@@ -36,6 +38,7 @@ const streamAgentMessage = vi.fn(
     emit = onEvent;
     return new Promise<void>((resolve, reject) => {
       finish = resolve;
+      drop = reject;
       signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
     });
   },
@@ -81,19 +84,66 @@ const campaignCard: AgentCampaignProposalCard = {
     platform: 'google_search',
     name: 'Pesquisa — franquia SP',
     objective: 'lead',
+    idealCustomerProfile: 'Empresário dono de negócio que quer expandir por franquias.',
+    reach: { states: ['SP'], cities: [], customLocations: [] },
+    destinationUrl: 'https://wingscompany.com.br/franquia',
+    utms: {
+      utm_source: 'google',
+      utm_medium: 'cpc',
+      utm_campaign: 'pesquisa-franquia-sp',
+      utm_content: 'lead',
+    },
     dailyBudgetCents: 3000,
     startDate: '2026-09-22',
     endDate: '2026-09-28',
     copy: [],
     search: {
-      keywords: ['franquia de alimentação'],
-      negativeKeywords: ['grátis'],
+      keywords: [
+        { text: 'franquia de alimentação', match: 'phrase' },
+        { text: 'abrir franquia', match: 'exact' },
+        { text: 'como franquear meu negócio', match: 'broad' },
+      ],
+      negativeKeywords: ['grátis', 'vaga', 'emprego', 'curso', 'currículo'],
       headlines: ['Franquia Wings'],
       descriptions: ['Conheça o modelo de negócio.'],
     },
     explanations: [{ field: 'dailyBudgetCents', reason: 'Cabe no disponível de R$ 469,88.' }],
+    assumptions: ['Assumi que a página de destino já tem o formulário.'],
     summary: 'Campanha de pesquisa para leads em São Paulo.',
   },
+  pending: [],
+};
+
+const metaCard: AgentCampaignProposalCard = {
+  ...campaignCard,
+  id: 'prop-3',
+  payload: {
+    ...campaignCard.payload,
+    platform: 'meta',
+    name: 'Leads RJ — Instagram',
+    search: undefined,
+    ageMin: 30,
+    ageMax: 55,
+    formatKey: 'feed_vertical',
+    placements: { mode: 'manual', facebook: [], instagram: ['feed', 'stories'] },
+    budgetNote:
+      'R$ 20,00 por dia fica abaixo do que o CPL de R$ 30,00 pede para 10 leads por semana.',
+    copy: [
+      {
+        headline: 'Leve sua marca para outras cidades',
+        primaryText: 'A Wings formata o seu negócio para virar franquia.',
+        callToAction: 'LEARN_MORE',
+        mediaBrief: 'Dono de restaurante na porta da loja, fachada ao fundo, luz do dia.',
+      },
+      {
+        headline: 'Seu negócio pronto para franquear',
+        primaryText: 'Processos, manuais e suporte para expandir.',
+        callToAction: 'CONTACT_US',
+        mediaBrief: 'Mesa com manuais da franquia abertos e duas pessoas conversando.',
+      },
+    ],
+  },
+  pending: ['Imagens ou vídeo de cada variação', 'Página do Facebook e conta do Instagram'],
 };
 
 const changeCard: AgentChangeProposalCard = {
@@ -125,6 +175,7 @@ function assistant(overrides: Partial<AgentChatMessage> = {}): AgentChatMessage 
     consulted: [],
     proposals: [],
     notice: null,
+    retryable: false,
     ...overrides,
   };
 }
@@ -237,6 +288,35 @@ describe('a reply as it is written', () => {
     expect(screen.queryByText('O que consultei')).toBeNull();
   });
 
+  it('never shows an empty line under "O que consultei"', async () => {
+    renderChat(<AgentChat canRequest tab="paid" />);
+    await say('Como está a conta?');
+    stream({
+      type: 'done',
+      usage,
+      message: assistant({
+        consulted: [
+          // The label did not come: the shared name of the tool stands in.
+          { tool: 'estado_da_conta', label: '', summary: 'meta: R$ 1.750,00 disponíveis' },
+          { tool: 'perfil_cliente_ideal', summary: '' } as never,
+          // Nothing to say at all: not an entry.
+          { tool: '', label: '', summary: '' } as never,
+          {} as never,
+        ],
+      }),
+    });
+    await close();
+
+    const items = screen.getByText('O que consultei').closest('details')?.querySelectorAll('li');
+    expect([...(items ?? [])].map((item) => item.textContent)).toEqual([
+      'Conta, tetos e saldometa: R$ 1.750,00 disponíveis',
+      'Perfil de cliente ideal salvo',
+    ]);
+    for (const item of items ?? []) {
+      for (const span of item.querySelectorAll('span')) expect(span.textContent).not.toBe('');
+    }
+  });
+
   it('stops on "Parar", keeps what was written and takes the next message', async () => {
     renderChat(<AgentChat canRequest tab="paid" />);
     await say('Resumo do mês');
@@ -250,6 +330,85 @@ describe('a reply as it is written', () => {
     expect(screen.getByText('Resposta interrompida.')).toBeTruthy();
     // Stopping is not a failure.
     expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Tentar de novo' })).toBeTruthy();
+  });
+
+  it('offers "Tentar de novo" when the connection drops, and asks again with the same words', async () => {
+    renderChat(<AgentChat canRequest tab="paid" />);
+    await say('Monte uma campanha no RJ');
+    stream(
+      { type: 'conversation', conversationId: 'conv-9', title: 'RJ', userMessageId: 'msg-1' },
+      { type: 'delta', text: 'Proponho uma campanha se tiver um perfil mais' },
+    );
+    await act(async () => {
+      drop(new TypeError('network error'));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(screen.getByText('Resposta interrompida.')).toBeTruthy());
+    expect(screen.getByText('Proponho uma campanha se tiver um perfil mais')).toBeTruthy();
+    const retry = screen.getByRole('button', { name: 'Tentar de novo' });
+
+    fireEvent.click(retry);
+    await waitFor(() => expect(streamAgentMessage).toHaveBeenCalledTimes(2));
+    expect(sent[1]).toMatchObject({
+      conversationId: 'conv-9',
+      message: 'Monte uma campanha no RJ',
+    });
+    // The words are on screen once, and the button waits while the new reply is written.
+    expect(screen.getAllByText('Monte uma campanha no RJ')).toHaveLength(1);
+    expect(
+      (screen.getByRole('button', { name: 'Tentar de novo' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    stream({ type: 'done', usage, message: assistant({ content: 'Agora sim.' }) });
+    await close();
+    expect(screen.getByText('Agora sim.')).toBeTruthy();
+    // Only the last reply can be asked again.
+    expect(screen.queryByRole('button', { name: 'Tentar de novo' })).toBeNull();
+  });
+
+  it('keeps something to ask again from even when the stream died before a single event', async () => {
+    renderChat(<AgentChat canRequest tab="paid" />);
+    await say('Oi');
+    await act(async () => {
+      drop(new TypeError('network error'));
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.getByText('Resposta interrompida.')).toBeTruthy());
+    expect(screen.getByRole('button', { name: 'Tentar de novo' })).toBeTruthy();
+  });
+
+  it('offers it for a reply the server marked as worth asking again, never for the ceiling', async () => {
+    renderChat(<AgentChat canRequest tab="paid" />);
+    await say('Resumo');
+    stream({
+      type: 'done',
+      usage,
+      message: assistant({
+        content: 'O gasto foi',
+        notice: 'A resposta foi cortada antes do fim.',
+        retryable: true,
+      }),
+    });
+    await close();
+    expect(screen.getByRole('button', { name: 'Tentar de novo' })).toBeTruthy();
+
+    cleanup();
+    renderChat(<AgentChat canRequest tab="paid" />);
+    streamAgentMessage.mockClear();
+    await say('Mais uma');
+    stream({
+      type: 'done',
+      usage: { ...usage, exhausted: true },
+      message: assistant({
+        content: '',
+        notice: 'Você atingiu o limite diário de uso do agente.',
+        retryable: false,
+      }),
+    });
+    await close();
+    expect(screen.queryByRole('button', { name: 'Tentar de novo' })).toBeNull();
   });
 
   it('keeps what was written when the stream fails, and says it was cut short', async () => {
@@ -263,6 +422,7 @@ describe('a reply as it is written', () => {
     expect(screen.getByText('Até aqui')).toBeTruthy();
     expect(screen.getByText('Resposta interrompida.')).toBeTruthy();
     expect(screen.getByRole('alert').textContent).toBe('O provedor não respondeu.');
+    expect(screen.getByRole('button', { name: 'Tentar de novo' })).toBeTruthy();
   });
 });
 
@@ -284,10 +444,49 @@ describe('a campaign proposal', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Aplicar no construtor' }));
     expect(onApplyCampaign).toHaveBeenCalledTimes(1);
-    expect(onApplyCampaign).toHaveBeenCalledWith(campaignCard.payload);
+    expect(onApplyCampaign).toHaveBeenCalledWith(campaignCard.payload, []);
     expect(markApplied).toHaveBeenCalledWith('prop-1');
     expect(screen.getByText('Aplicada no construtor')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Aplicar de novo' })).toBeTruthy();
+  });
+
+  it('shows the whole proposal: briefs for Design, assumptions and what is pending', async () => {
+    const onApplyCampaign = vi.fn();
+    renderChat(<AgentChat canRequest tab="paid" onApplyCampaign={onApplyCampaign} />);
+    await say('Monte uma campanha de leads no RJ');
+    stream({ type: 'done', usage, message: assistant({ proposals: [metaCard] }) });
+    await close();
+
+    const card = screen.getByRole('article', { name: /Leads RJ — Instagram/ });
+    const text = card.textContent ?? '';
+    expect(text).toContain('30 a 55 anos');
+    expect(text).toContain('Instagram: Feed, Stories');
+    expect(text).toContain('Feed vertical');
+    expect(text).toContain('(7 dias)');
+    expect(text).toContain('SP (estado todo)');
+    expect(text).toContain('google / cpc / pesquisa-franquia-sp / lead');
+    expect(text).toContain('Briefing para o Design');
+    expect(text).toContain('Dono de restaurante na porta da loja');
+    expect(text).toContain('Botão: Saiba mais');
+    expect(text).toContain('abaixo do que o CPL de R$ 30,00 pede');
+    expect(text).toContain('Premissas');
+    expect(text).toContain('Assumi que a página de destino já tem o formulário.');
+    expect(text).toContain('Pendente');
+    expect(text).toContain('Página do Facebook e conta do Instagram');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Aplicar no construtor' }));
+    expect(onApplyCampaign).toHaveBeenCalledWith(metaCard.payload, metaCard.pending);
+  });
+
+  it('writes Google keywords with their match type', async () => {
+    renderChat(<AgentChat canRequest tab="paid" />);
+    await say('Monte uma campanha de pesquisa');
+    stream({ type: 'done', usage, message: assistant({ proposals: [campaignCard] }) });
+    await close();
+    expect(
+      screen.getByText('"franquia de alimentação" · [abrir franquia] · como franquear meu negócio'),
+    ).toBeTruthy();
+    expect(screen.getByText('grátis · vaga · emprego · curso · currículo')).toBeTruthy();
   });
 
   it('offers no button where there is no builder to fill', async () => {

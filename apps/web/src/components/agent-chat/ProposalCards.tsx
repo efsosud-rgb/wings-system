@@ -1,7 +1,14 @@
 import {
   AGENT_CHANGE_KIND_LABEL,
   AGENT_DRAFT_FIELD_LABEL,
+  CALL_TO_ACTION_LABEL,
+  CAMPAIGN_OBJECTIVE_LABEL,
+  CREATIVE_FORMATS,
   PAID_PLATFORMS,
+  PLACEMENT_POSITION_LABEL,
+  campaignDays,
+  describeReach,
+  keywordWithMatch,
   type AgentCampaignProposal,
   type AgentCampaignProposalCard,
   type AgentChangeProposalCard,
@@ -23,18 +30,39 @@ function platformLabel(key: string): string {
   return PAID_PLATFORMS.find((item) => item.key === key)?.label ?? key;
 }
 
+/** Longer than this, the ideal customer goes behind "ver tudo". */
+const ICP_PREVIEW = 140;
+
+function placementsLabel(placements: NonNullable<AgentCampaignProposal['placements']>): string {
+  if (placements.mode === 'automatic') return 'Automático (Advantage+)';
+  const positions = (list: typeof placements.facebook) =>
+    list.map((position) => PLACEMENT_POSITION_LABEL[position]).join(', ');
+  return [
+    placements.facebook.length > 0 ? `Facebook: ${positions(placements.facebook)}` : null,
+    placements.instagram.length > 0 ? `Instagram: ${positions(placements.instagram)}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+export type ApplyCampaign = (payload: AgentCampaignProposal, pending: string[]) => void;
+
 function CampaignCard({
   proposal,
   onApplyCampaign,
   onActed,
 }: {
   proposal: AgentCampaignProposalCard;
-  onApplyCampaign?: (payload: AgentCampaignProposal) => void;
+  onApplyCampaign?: ApplyCampaign;
   onActed: (next: AgentProposalCard) => void;
 }) {
   const markApplied = useMarkProposalApplied();
   const applied = proposal.status === 'applied';
   const { payload } = proposal;
+  const pending = proposal.pending ?? [];
+  const days = campaignDays(payload.startDate, payload.endDate);
+  const format = CREATIVE_FORMATS.meta.find((item) => item.key === payload.formatKey);
+  const icp = payload.idealCustomerProfile;
 
   return (
     <article className="agent-card" aria-label={`Proposta de campanha: ${payload.name}`}>
@@ -53,12 +81,117 @@ function CampaignCard({
           <dd className="mono">{formatBrl(payload.dailyBudgetCents)}</dd>
         </div>
         <div>
+          <dt>Objetivo</dt>
+          <dd>{CAMPAIGN_OBJECTIVE_LABEL[payload.objective]}</dd>
+        </div>
+        <div>
           <dt>Período</dt>
           <dd>
             {formatDate(payload.startDate)} a {formatDate(payload.endDate)}
+            {days !== null && ` (${days} dias)`}
           </dd>
         </div>
+        <div>
+          <dt>Região</dt>
+          <dd>{describeReach(payload.reach)}</dd>
+        </div>
+        {payload.ageMin !== undefined && payload.ageMax !== undefined && (
+          <div>
+            <dt>Idade</dt>
+            <dd>
+              {payload.ageMin} a {payload.ageMax} anos
+            </dd>
+          </div>
+        )}
+        {payload.placements && (
+          <div>
+            <dt>Posicionamentos</dt>
+            <dd>{placementsLabel(payload.placements)}</dd>
+          </div>
+        )}
+        {payload.formatKey && (
+          <div>
+            <dt>Formato</dt>
+            <dd>{format ? `${format.label} (${format.ratio})` : payload.formatKey}</dd>
+          </div>
+        )}
       </dl>
+      {payload.budgetNote && (
+        <p className="agent-card-warning" role="note">
+          {payload.budgetNote}
+        </p>
+      )}
+
+      <div className="agent-card-block">
+        <span className="agent-card-label">Público</span>
+        {icp.length <= ICP_PREVIEW ? (
+          <p>{icp}</p>
+        ) : (
+          <details className="agent-details">
+            <summary>{icp.slice(0, ICP_PREVIEW).trimEnd()}… ver tudo</summary>
+            <p>{icp}</p>
+          </details>
+        )}
+      </div>
+
+      {payload.copy.length > 0 && (
+        <details className="agent-details">
+          <summary>Textos do anúncio ({payload.copy.length} variações)</summary>
+          <ol className="agent-card-variations">
+            {payload.copy.map((copy, index) => (
+              <li key={`${copy.headline}-${index}`}>
+                <strong>{copy.headline}</strong>
+                <p>{copy.primaryText}</p>
+                <span className="muted">Botão: {CALL_TO_ACTION_LABEL[copy.callToAction]}</span>
+                <p className="agent-card-brief">
+                  <span className="agent-card-label">Briefing para o Design</span>
+                  {copy.mediaBrief}
+                </p>
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
+
+      {payload.search && (
+        <details className="agent-details">
+          <summary>Palavras-chave e anúncio de pesquisa</summary>
+          <div className="agent-card-block">
+            <span className="agent-card-label">Palavras-chave</span>
+            <p className="mono">{payload.search.keywords.map(keywordWithMatch).join(' · ')}</p>
+            <span className="agent-card-label">Negativas</span>
+            <p className="mono">{payload.search.negativeKeywords.join(' · ')}</p>
+            <span className="agent-card-label">Títulos</span>
+            <p>{payload.search.headlines.join(' · ')}</p>
+            <span className="agent-card-label">Descrições</span>
+            <p>{payload.search.descriptions.join(' · ')}</p>
+          </div>
+        </details>
+      )}
+
+      {payload.youtube && (
+        <div className="agent-card-block">
+          <span className="agent-card-label">Título do vídeo</span>
+          <p>{payload.youtube.headline}</p>
+          <p className="agent-card-brief">
+            <span className="agent-card-label">Briefing para o Design</span>
+            {payload.youtube.mediaBrief}
+          </p>
+        </div>
+      )}
+
+      <p className="agent-card-utms mono">
+        <span className="agent-card-label">UTMs</span>
+        {[
+          payload.utms.utm_source,
+          payload.utms.utm_medium,
+          payload.utms.utm_campaign,
+          payload.utms.utm_content,
+        ]
+          .filter((value) => value !== '')
+          .join(' / ')}
+      </p>
+
       <details className="agent-details">
         <summary>Por que cada escolha</summary>
         <dl className="agent-card-reasons">
@@ -70,6 +203,24 @@ function CampaignCard({
           ))}
         </dl>
       </details>
+      <details className="agent-details">
+        <summary>Premissas</summary>
+        <ul className="agent-card-plain">
+          {payload.assumptions.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      </details>
+      {pending.length > 0 && (
+        <div className="agent-card-block agent-card-pending">
+          <span className="agent-card-label">Pendente</span>
+          <ul className="agent-card-plain">
+            {pending.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {applied && (
         <p className="agent-card-state" role="status">
@@ -81,7 +232,7 @@ function CampaignCard({
           type="button"
           variant={applied ? 'ghost' : 'primary'}
           onClick={() => {
-            onApplyCampaign(payload);
+            onApplyCampaign(payload, pending);
             onActed({ ...proposal, status: 'applied' });
             markApplied.mutate(proposal.id);
           }}
@@ -196,7 +347,7 @@ export function ProposalCard({
 }: {
   proposal: AgentProposalCard;
   canRequest: boolean;
-  onApplyCampaign?: (payload: AgentCampaignProposal) => void;
+  onApplyCampaign?: ApplyCampaign;
   /** The card as it stands after a click, so the panel can keep showing it that way. */
   onActed: (next: AgentProposalCard) => void;
 }) {
