@@ -11,6 +11,7 @@ import { z } from 'zod';
 import type { Database } from '../../db/client.js';
 import { clients } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
+import { syncDriveFolders } from '../drive/folders.js';
 
 const idParam = z.object({ id: z.uuid() });
 
@@ -74,13 +75,15 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
           .status(409)
           .send({ error: 'client_exists', message: 'Já existe um cliente com este nome.' });
       }
+      // A new client gets its folder under every "Clientes" of the Drive, at once.
+      const folders = await syncDriveFolders(db);
       await writeAudit(db, {
         actorEmployeeId: request.session.actor.employeeId,
         action: 'client.created',
         entity: 'client',
         entityId: row.id,
         ip: request.ip,
-        metadata: { slug: row.slug },
+        metadata: { slug: row.slug, driveFoldersCreated: folders.foldersCreated },
       });
       return reply.status(201).send({ client: toClient(row) });
     },
@@ -125,13 +128,20 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
         .returning();
       if (!row)
         return reply.status(404).send({ error: 'not_found', message: 'Cliente não encontrado.' });
+      // A renamed client renames its folders; a reactivated one gets the ones it lacks.
+      const folders = await syncDriveFolders(db);
       await writeAudit(db, {
         actorEmployeeId: request.session.actor.employeeId,
         action: 'client.updated',
         entity: 'client',
         entityId: row.id,
         ip: request.ip,
-        metadata: { slug: row.slug, active: row.active },
+        metadata: {
+          slug: row.slug,
+          active: row.active,
+          driveFoldersCreated: folders.foldersCreated,
+          driveFoldersRenamed: folders.foldersRenamed,
+        },
       });
       return reply.send({ client: toClient(row) });
     },

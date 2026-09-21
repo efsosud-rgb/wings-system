@@ -12,6 +12,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { tenants, WINGS_TENANT_ID } from './ads.js';
 import { clientId } from './clients.js';
+import { driveFiles } from './drive.js';
 import { employees } from './employees.js';
 
 const tenantId = () =>
@@ -115,6 +116,11 @@ export const mediaAssets = pgTable(
     sourceUrl: text('source_url'),
     /** The asset this one was made from: an upscale, an animation. */
     sourceAssetId: uuid('source_asset_id'),
+    /**
+     * The Drive file that holds the bytes. The library is a view over the Drive's
+     * "Mídia" folders; null only on a row the volume-to-Drive script has not reached.
+     */
+    driveFileId: uuid('drive_file_id').references(() => driveFiles.id, { onDelete: 'set null' }),
     /** Who it is for. Filing of ours: never part of anything Kairogen is sent. */
     clientId: clientId(),
     /** The free-text label from before the `clients` table. No longer read or written. */
