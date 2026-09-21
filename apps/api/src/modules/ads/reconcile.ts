@@ -1,4 +1,4 @@
-import { overdeliveryFactor } from '@wings/shared';
+import { periodOverdeliveryFactor } from '@wings/shared';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
@@ -276,7 +276,9 @@ export async function reconcileAccount(
           adSets: adSetsByCampaignId.get(campaign.id) ?? [],
         },
         daysLeft,
-        overdeliveryFactor(account.platform),
+        // The period factor: on Google the rest of the month costs the budget
+        // itself (1.0x); its 2.0x is a promise about a single day.
+        periodOverdeliveryFactor(account.platform),
       ),
     0,
   );

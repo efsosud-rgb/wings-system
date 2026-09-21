@@ -17,6 +17,13 @@ export const META_DAILY_OVERDELIVERY_FACTOR = 1.25;
  * 1.35x (stage-google-spike.md), but a guardrail is sized by the worst case.
  */
 export const GOOGLE_DAILY_OVERDELIVERY_FACTOR = 2;
+/**
+ * Google makes a second, tighter promise over a period: a month is never
+ * charged beyond 30.4 x the daily budget, so the days that remain cost at most
+ * the budget itself. Sizing the month by the one-day factor would demand twice
+ * the ceiling for no reason (stage-google-spike.md, tetos-reais.md).
+ */
+export const GOOGLE_PERIOD_OVERDELIVERY_FACTOR = 1;
 
 // ---------------------------------------------------------------------------
 // Platforms
@@ -77,9 +84,24 @@ export const GOOGLE_CHANNEL_TYPE: Record<GoogleBuilderPlatform, 'SEARCH' | 'DEMA
   youtube: 'DEMAND_GEN',
 };
 
-export function overdeliveryFactor(platform: string): number {
-  return isGooglePlatform(platform) || platform === 'google'
+function spendsFromGoogle(platform: string): boolean {
+  return isGooglePlatform(platform) || platform === 'google';
+}
+
+/** The most one single day can cost, as a multiple of the daily budget. */
+export function dailyOverdeliveryFactor(platform: string): number {
+  return spendsFromGoogle(platform)
     ? GOOGLE_DAILY_OVERDELIVERY_FACTOR
+    : META_DAILY_OVERDELIVERY_FACTOR;
+}
+
+/**
+ * The most a run of days can cost, as a multiple of budget x days. Meta makes
+ * no period promise, so its daily factor applies to every day.
+ */
+export function periodOverdeliveryFactor(platform: string): number {
+  return spendsFromGoogle(platform)
+    ? GOOGLE_PERIOD_OVERDELIVERY_FACTOR
     : META_DAILY_OVERDELIVERY_FACTOR;
 }
 
@@ -420,14 +442,21 @@ export function campaignDaysInMonth(startDate: string, endDate: string, today: s
 
 /**
  * What the campaign can really cost: budget is not spend. Meta may deliver up
- * to 25% over the daily budget; Google, up to twice it on a given day.
+ * to 25% over the daily budget, every day. Google may deliver twice the budget
+ * on a given day but evens it out over the period, so the period costs the
+ * budget itself — and never less than one worst day, which is what decides a
+ * run of a single day. The budget guard judges a new request by this figure.
  */
 export function estimateCostCents(
   dailyBudgetCents: number,
   days: number,
   platform: string = 'meta',
 ): number {
-  return Math.round(dailyBudgetCents * days * overdeliveryFactor(platform));
+  if (days <= 0) return 0;
+  return Math.max(
+    Math.round(dailyBudgetCents * days * periodOverdeliveryFactor(platform)),
+    Math.round(dailyBudgetCents * dailyOverdeliveryFactor(platform)),
+  );
 }
 
 // ---------------------------------------------------------------------------

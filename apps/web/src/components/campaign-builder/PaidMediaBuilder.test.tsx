@@ -687,7 +687,7 @@ describe('the builder on Google', () => {
     expect(preview?.textContent).toContain('Conheça o modelo de negócio e o suporte.');
   });
 
-  it('estimates Google at twice the daily budget, and says so', () => {
+  it('estimates Google at the budget itself over the period, and says so', () => {
     render(<PaidMediaBuilder canRequest />);
     type(screen.getByLabelText(/^Início/), '2026-09-20');
     type(screen.getByLabelText(/^Fim/), '2026-09-29');
@@ -695,12 +695,20 @@ describe('the builder on Google', () => {
     expect(screen.getAllByText('R$ 250,00').length).toBeGreaterThan(0);
 
     choose(/Google Pesquisa/);
-    // R$ 20 × 10 days × 2.
-    expect(screen.getAllByText('R$ 400,00').length).toBeGreaterThan(0);
+    // R$ 20 × 10 days × 1: Google's 2× is a promise about one day only.
+    expect(screen.getAllByText('R$ 200,00').length).toBeGreaterThan(0);
     expect(screen.queryByText('R$ 250,00')).toBeNull();
+    expect(screen.queryByText('R$ 400,00')).toBeNull();
     expect(
-      screen.getByText('O Google pode gastar até o dobro da verba diária num dia.'),
+      screen.getByText(
+        'O Google pode gastar até o dobro da verba diária num dia, mas no período não cobra além da verba.',
+      ),
     ).toBeTruthy();
+
+    // A single day has no period to even it out: the worst day decides.
+    type(screen.getByLabelText(/^Fim/), '2026-09-20');
+    expect(screen.getAllByText('R$ 40,00').length).toBeGreaterThan(0);
+    expect(screen.getByText(/o pior caso de um único dia/)).toBeTruthy();
     expect(screen.queryByText('A Meta pode gastar até 25% acima disto num dia.')).toBeNull();
   });
 });
