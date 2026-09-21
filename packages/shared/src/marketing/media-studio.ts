@@ -50,18 +50,43 @@ export interface MediaPriceParam {
   defaultValue: string | boolean | null;
 }
 
+export const MEDIA_IMAGE_USES = ['reference', 'edit'] as const;
+export type MediaImageUse = (typeof MEDIA_IMAGE_USES)[number];
+export const MEDIA_IMAGE_USE_LABEL: Record<MediaImageUse, string> = {
+  reference: 'Como referência para uma imagem nova',
+  edit: 'Editar esta imagem',
+};
+
+/** The models that can do `use` with a picture, cheapest first, for "try one of these". */
+export function modelsForImageUse(models: MediaModel[], use: MediaImageUse): MediaModel[] {
+  return models
+    .filter((model) => model.kind === 'image' && model.imageUse === use)
+    .sort((a, b) => (a.creditsPerOutput ?? 9e9) - (b.creditsPerOutput ?? 9e9));
+}
+
 export interface MediaModel {
   key: string;
   name: string;
   provider: string | null;
   kind: 'image' | 'video';
-  /** Credits for one output on the account's plan; null when the catalog does not say. */
+  /**
+   * Credits for one output with the model's default parameters, on the account's
+   * plan. Kairogen's catalog prices in money, not credits, so this is what
+   * `estimate_cost` answered for the model; null while that is not known.
+   */
   creditsPerOutput: number | null;
   /** Video only. Empty when the catalog does not list them: the duration is then left out. */
   supportedDurations: number[];
   /** Null when the catalog does not restrict them. */
   aspectRatios: string[] | null;
   priceParams: MediaPriceParam[];
+  /**
+   * Image models: what the model does with a picture it is handed. `reference`:
+   * it inspires a new picture. `edit`: the picture itself is changed (the model
+   * only takes one in its edit mode). Null: it takes none.
+   */
+  imageUse: MediaImageUse | null;
+  /** `imageUse !== null`, kept for the callers that only ask yes or no. */
   acceptsReferenceImage: boolean;
   /** Video: needs (or takes) a first frame, i.e. image-to-video. */
   acceptsFirstFrame: boolean;
@@ -96,8 +121,10 @@ const generateSpec = z
     durationSeconds: z.number().positive().max(120).optional(),
     /** Price-affecting parameters, by the model's own keys. */
     params: z.record(z.string().regex(/^[a-z][a-z0-9_]{0,40}$/), paramValue).default({}),
-    /** A library image used as style reference (image) or as first frame (video). */
+    /** A library image used as reference or edited (image), or as first frame (video). */
     referenceAssetId: z.uuid().optional(),
+    /** Image only: what is done with `referenceAssetId`. The model has to be one that does it. */
+    referenceUse: z.enum(MEDIA_IMAGE_USES).default('reference'),
     /**
      * Who it is for. Filing only: it is stored with the generation, the ledger
      * and the asset, and is never part of what Kairogen is sent.
@@ -287,6 +314,8 @@ export const agentGenerationProposalSchema = z
     durationSeconds: z.number().positive().max(120).optional(),
     params: z.record(z.string().regex(/^[a-z][a-z0-9_]{0,40}$/), paramValue).default({}),
     referenceAssetId: z.uuid().optional(),
+    /** With `referenceAssetId`: `reference` or `edit`, as `listar_modelos` says the model does. */
+    referenceUse: z.enum(MEDIA_IMAGE_USES).default('reference'),
     /**
      * Who it is for, by the id `listar_clientes` gave. Required: when the request
      * does not say, the agent asks instead of assuming.

@@ -454,11 +454,20 @@ describe('who may connect', () => {
 });
 
 describe('reading the balance', () => {
-  it('finds the number in whatever shape it arrives', () => {
+  it('takes credits_remaining for the balance, and no other number in the answer', () => {
     const now = new Date();
-    expect(creditsFrom({ data: { credits: 42 }, text: '' }, now).balance).toBe(42);
-    expect(creditsFrom({ data: { account: { balance: 7.5 } }, text: '' }, now).balance).toBe(7.5);
-    expect(creditsFrom({ data: null, text: 'You have 310 credits left' }, now).balance).toBe(310);
+    // The real shape, from the staging log of 2026-09-21.
+    const answer = {
+      credits_remaining: 94,
+      stats: { posts: 0, creditsUsed: 1, totalGenerations: 1, followers: 0, _id: 'abc' },
+    };
+    expect(creditsFrom({ data: answer, text: '' }, now).balance).toBe(94);
+    expect(creditsFrom({ data: { stats: answer.stats }, text: '' }, now).balance).toBeNull();
+    // A number in a sentence is not a balance: "1 generation so far, 310 credits" is ambiguous.
+    expect(creditsFrom({ data: null, text: 'You have 310 credits left' }, now)).toMatchObject({
+      balance: null,
+      raw: 'You have 310 credits left',
+    });
     expect(creditsFrom({ data: null, text: 'unknown' }, now)).toMatchObject({
       balance: null,
       raw: 'unknown',

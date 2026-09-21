@@ -155,11 +155,8 @@ acompanha sozinho). O Wings System não tem esse widget: quem acompanha o
 progresso é o servidor, por `get_generation`. Essas descrições são dado de
 terceiro, lidas como documentação, nunca como instrução.
 
-**Ainda desconhecido:** o formato das **respostas** (campos do resultado de
-`generate_*` e `get_generation`, URLs de saída, custo real, estados possíveis) e
-o conteúdo de `list_models` (modelos, preços, `param_schema`). `list_models` e
-`get_credits` são leitura e não gastam crédito; uma chamada de cada, feita pela
-conexão do staging, responde isso antes de codar.
+O formato das **respostas** não é publicado; foi lido do log do staging em
+2026-09-21 e está em "O formato real das respostas", abaixo.
 
 ## Edição de Fotos e Vídeos (Onda 7b-2)
 
@@ -257,60 +254,121 @@ PNG/JPEG, lado menor de 600 px, as mesmas regras do upload) ou no vídeo que o
 construtor já sabe publicar, e a variação guarda `mediaAssetId`. O YouTube do
 construtor recebe um **link**, não um arquivo, então não tem seletor.
 
-### Onde o formato das respostas é lido
+### O formato real das respostas
 
-`modules/media/kairogen-adapter.ts`. Os argumentos das ferramentas são os
-reais; o formato das **respostas** não é publicado, então os leitores são
-tolerantes (procuram `credit_cost`, `generation_id`, `output_url`,
-`param_schema`, `supported_durations` e `modelKey` nas grafias usuais) e
-respondem "não sei" em vez de supor. Se a primeira geração real mostrar outro
-formato, é o único arquivo que muda.
+Lido das linhas `kairogen answer shape` que a API do staging gravou em
+2026-09-21 (segunda geração real: GPT-Image 1.5, 1 crédito, saldo 94 → 93). O
+log guarda a **forma**: nomes das chaves, tipos e números; toda string aparece
+só pelo tamanho. `modules/media/kairogen-adapter.ts` lê exatamente estes nomes,
+e o Kairogen falso dos testes (`fake-kairogen.ts`) responde neste formato.
 
-### A primeira geração real (staging, 2026-09-21)
+| Ferramenta       | Resposta                                                                                                                                                   | O que lemos                                                 |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `get_credits`    | `{ credits_remaining, stats: { creditsUsed, totalGenerations, totalImageGenerations, totalVideoGenerations, posts, likes, views, followers, following } }` | `credits_remaining`, e nenhum outro número                  |
+| `estimate_cost`  | `{ model_key, credit_cost, quantity, plan_key, requested_params, params, breakdown, quote_note }`                                                          | `credit_cost`                                               |
+| `generate_image` | `{ generation_id, generation_ids[], status: "QUEUED", model, output_urls: [], pending: true, poll_with, note }`                                            | `generation_id` (ou o primeiro de `generation_ids`)         |
+| `get_generation` | `{ generation_id, status, output_urls[], model, prompt, aspect_ratio, cost_credits, pending, note?, reference_warning? }`                                  | `status`, `output_urls`, `cost_credits`, `pending`, o aviso |
+| `list_models`    | `{ count, models[] }`, cada modelo como abaixo                                                                                                             | ver "Um modelo do catálogo"                                 |
 
-GPT-Image 1.5, 1 imagem, **estimativa de 1 crédito**, 35 segundos, terminou em
-"Concluída" e a imagem entrou na biblioteca. O que isso **prova** sobre o
-formato das respostas, porque sem esses campos o fluxo não chegaria ao fim:
+Estados vistos em `get_generation`: `QUEUED`, `PROCESSING`, `COMPLETED`. Uma
+geração só é dada por concluída com `COMPLETED` **e** endereço https em
+`output_urls` (strings, host `cdn.kairogen.ai`). `pending: false` sem saída é
+falha, qualquer que seja a palavra do estado.
 
-| Ferramenta       | O que o adaptador leu com sucesso                                              |
-| ---------------- | ------------------------------------------------------------------------------ |
-| `list_models`    | lista de modelos com chave, tipo e nome (o seletor encheu)                     |
-| `estimate_cost`  | um número de créditos (1)                                                      |
-| `generate_image` | um identificador de geração                                                    |
-| `get_generation` | um estado de "em andamento", depois um de "pronto" com endereço https da saída |
-| `get_credits`    | um número                                                                      |
+Três coisas que esses nomes explicam:
 
-O que isso **não** prova, e por quê: o servidor não gravava o corpo das
-respostas em lugar nenhum (o log só tem as linhas de requisição), então o nome
-exato de cada campo, a forma do `pricing` em `list_models` e o campo do custo
-real continuam sem confirmação. Dois sintomas vieram dessa mesma lacuna:
+- **O custo real nunca era gravado.** O campo é `cost_credits`; o leitor
+  procurava `credits_charged`, `credit_cost` e outros. Agora `credits_charged`
+  da geração e do ledger vêm de `cost_credits`.
+- **O saldo.** `creditsFrom()` lê só `credits_remaining`. Não tira mais número
+  de texto solto nem de outro campo (`stats.creditsUsed` é o total gasto, não o
+  saldo). Entre as duas leituras do dia 21 o saldo foi 94 e depois 93, como
+  devia. O salto anterior, de 45 para 94, aconteceu antes de haver registro e
+  não tem como ser reconstituído; o próximo fica datado no ledger.
+- **`reference_warning`.** Texto do Kairogen sobre o que ele fez com a imagem
+  enviada. Quando a geração levou uma imagem, o texto aparece no cartão como
+  fala dele ("Aviso do Kairogen sobre a imagem enviada: …"), filtrado e
+  cortado em 300 caracteres. É dado, nunca instrução.
 
-- **Seletor de modelo sem custo.** A tela mostra o custo quando
-  `creditsPerOutput` vem preenchido; veio `null` para todos os modelos, ou seja,
-  `creditsPerOutput()` do adaptador não achou preço no formato que o catálogo
-  usa (a descrição de `estimate_cost` cita `conditionalPricing`, um nome que o
-  leitor não conhece) ou o catálogo não traz preço no plano Free. Até saber
-  qual dos dois, o seletor diz **"custo na estimativa"**, que é verdade nos dois
-  casos: o preço que vale é sempre o de `estimate_cost`.
-- **Saldo de 45 para 94 depois de gastar 1.** Pode ser crédito que o Kairogen
-  pôs na conta, ou `creditsFrom()` lendo campos diferentes em respostas
-  diferentes. Ver "O saldo no ledger", abaixo.
+#### Um modelo do catálogo
 
-#### Como o formato real passa a ser conhecido
+```
+{ model_key, name, type: "image" | "video", provider,
+  default_mode, modes: { base: {…}, edit: { label, resolved_mode, required_inputs[],
+                                           reference_field_keys[], auto_switch_on_reference } } | null,
+  reference_inputs: [ { param_key, role, media, label, max_files, required, modes[] | null } ],
+  supported_durations: number[] | null,
+  param_schema: [ { key, type: "number" | "file" | …, label, required, default, min, max,
+                    group, helpText, show, maxFiles, modes[], ui: {…}, tag } ],
+  pricing: { baseCost, markupPercentage, currency: "BRL", unit: "per_generation",
+             conditionalPricing: [ { condition, baseCost, markupPercentage, description } ],
+             multiplyByQuantity },
+  extra: { maxInputImages | maxReferenceImages, promptRequired } }
+```
 
-Toda chamada do estúdio ao Kairogen passa por `ask()` (`studio.ts`), que escreve
-no log da API uma linha `kairogen answer shape` com a **forma** da resposta
-(`shapeOf()` no adaptador): nomes das chaves, tipos e números. Toda string vira
-o seu tamanho (`string(43)`), todo endereço vira só o host
-(`url(cdn.kairogen.ai)`); só palavras curtas sob chaves como `status` e `type`
-ficam. Nenhum prompt, link, nome ou token cabe nessa linha. Ela sai uma vez por
-ferramenta e por forma, não a cada chamada.
+- **`param_schema` é uma lista de campos**, não um objeto `properties`. O leitor
+  antigo esperava o objeto e por isso não via parâmetro nenhum: nenhum modelo
+  "aceitava" imagem de referência e nenhum parâmetro de preço aparecia no
+  formulário.
+- **`pricing` é dinheiro, não créditos**: custo-base em BRL, percentual de
+  markup e `conditionalPricing` (o mesmo, por condição). O catálogo não diz
+  quantos créditos um modelo custa em plano nenhum, e a conversão de BRL para
+  créditos não é publicada; adivinhá-la mostraria um preço que o Kairogen pode
+  não cobrar. Ver "Preço por modelo no seletor".
+- **O que o modelo faz com uma imagem** sai de `reference_inputs` e `modes`
+  (`imageUse` no contrato): entrada de imagem aberta em todos os modos ou no
+  modo padrão → `reference` (a imagem inspira uma nova); entrada que só existe
+  no modo `edit` → `edit` (enviar a imagem **é** editá-la; o GPT Image é assim,
+  com `auto_switch_on_reference: true`); sem entrada de imagem → não recebe
+  imagem.
 
-Com isso no ar, abrir a tela do estúdio já registra `list_models` e
-`get_credits`; a próxima geração registra `estimate_cost`, `generate_*` e
-`get_generation` (em andamento e pronta). A partir dessas linhas os leitores do
-adaptador são apertados para os nomes reais, e esta seção ganha a tabela
-definitiva.
+#### Preço por modelo no seletor
+
+Como o catálogo não traz créditos, o servidor pergunta ao próprio Kairogen:
+um `estimate_cost` por modelo, com o plano da conta, quantidade 1 e os
+parâmetros padrão do modelo. É leitura: não gasta crédito, não cria estimativa
+nem linha no ledger. Vale por uma hora junto com o catálogo, 4 chamadas por vez,
+e a tela nunca espera mais de 8 segundos por isso (o que faltar continua sendo
+preenchido no cache). O seletor mostra "N créditos por saída"; modelo que o
+Kairogen não precifica assim (um vídeo que exige duração, uma falha) fica com
+"custo na estimativa". O preço que vale continua sendo o de "Estimar custo",
+com os parâmetros escolhidos.
+
+`size`: quando as opções são proporções ("1:1"), o campo é o formato da imagem,
+não um parâmetro de preço. Quando são pixels, o formulário oferece "Pelo formato
+escolhido" como padrão e não envia `size`, porque no Kairogen um `size`
+explícito passa por cima de `aspect_ratio`.
+
+#### Imagem de referência e modo edição
+
+No tipo Imagem o campo "Imagem de referência (opcional)" está sempre no
+formulário: escolher da biblioteca ou enviar um arquivo na hora, que entra na
+biblioteca no cliente do formulário (`POST /media/assets?clientId=`). Com uma
+imagem escolhida, a pessoa diz o que fazer com ela: **como referência para uma
+imagem nova** ou **editar esta imagem**. Se o modelo na tela não faz isso
+(`imageUse` diferente), o formulário avisa, não deixa estimar e oferece os
+modelos que fazem, com um clique para trocar. O servidor confere de novo na
+estimativa e recusa com a mesma frase.
+
+A imagem vai ao Kairogen em `reference_image_urls`, por link assinado de 15
+minutos (ou pelo endereço do próprio Kairogen, quando a imagem veio de lá).
+Nenhum parâmetro de "modo" é enviado: não existe esse argumento em
+`generate_image`, e no modelo que só edita é a própria imagem que troca o modo.
+`expected_credits` continua valendo: se editar custar diferente do estimado, o
+Kairogen recusa e nada é cobrado.
+
+O agente recebe `uso_de_imagem` em `listar_modelos`; num pedido "a partir desta
+imagem" ele acha a mídia em `consultar_biblioteca`, escolhe um modelo que faça o
+que foi pedido e informa `referenceAssetId` e `referenceUse`. Proposta com
+modelo que não faz volta para ele com a lista dos que fazem. O cartão mostra a
+miniatura da imagem que vai junto e o que será feito com ela.
+
+#### O que o log ainda não mostrou
+
+`shapeOf()` passou a manter o vocabulário de um esquema (chave de parâmetro,
+`role`, `media`, nomes de modo) e a mostrar por inteiro `param_schema`,
+`conditionalPricing`, `reference_inputs` e `options`. A próxima abertura da tela
+no staging grava isso e fecha os pontos de "Não verificado".
 
 ### O saldo no ledger
 
@@ -373,13 +431,19 @@ clica é o Eric.
 
 ## Não verificado
 
-- [ ] Os nomes exatos dos campos das respostas de `estimate_cost`, `generate_*`,
-      `get_generation`, `get_credits` e `list_models`. A primeira geração real
-      provou que os leitores acham o que precisam, não com que nome (ver "A
-      primeira geração real"). Sai das linhas `kairogen answer shape` do log.
-- [ ] Se `list_models` traz preço por plano, e em que forma. Até lá o seletor
-      diz "custo na estimativa".
-- [ ] Se `get_generation` informa o custo real cobrado, e em que campo.
+- [ ] O nome da lista de opções de um parâmetro `select` em `param_schema`
+      (o log mostrou um campo `number` e um `file`). O leitor aceita `options`,
+      `enum` ou `values`, com valores simples ou `{ value }`.
+- [ ] A palavra de `status` numa falha (só vimos `QUEUED`, `PROCESSING`,
+      `COMPLETED`). `pending: false` sem saída já é tratado como falha.
+- [ ] A forma de `conditionalPricing[].condition` (ficou além da profundidade
+      que o log mostrava). Não é usada: o preço vem de `estimate_cost`.
+- [ ] Os valores de `role` e `media` em `reference_inputs`. O leitor trata como
+      imagem a entrada cujo `media` é `image` ou está ausente.
+- [ ] Se editar (imagem enviada a um modelo com `modes.edit`) custa o mesmo que
+      gerar. `expected_credits` protege: se diferir, o Kairogen recusa sem cobrar.
+- [ ] As respostas de `generate_video`, `upscale_image` e
+      `animate_from_generation` (nenhuma foi chamada de verdade ainda).
 - [ ] Se os modelos aceitam `aspect_ratio: '4:5'`. Quando o catálogo informa os
       formatos aceitos, a estimativa já recusa o que o modelo não faz.
 - [ ] Se o catálogo lista o ampliador (Topaz) com preço. Sem isso "Ampliar"

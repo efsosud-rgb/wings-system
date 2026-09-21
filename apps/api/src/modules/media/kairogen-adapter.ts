@@ -4,16 +4,13 @@ import type { McpToolResult } from '../../lib/mcp-client/index.js';
 /**
  * Where Kairogen's answers are read.
  *
- * The ARGUMENTS of its tools are known from `tools/list`
+ * The ARGUMENTS of its tools come from `tools/list`
  * (docs/integracoes/kairogen-tools.json). The shape of its ANSWERS is not
- * published, so every reader here is tolerant: it looks for the fields the tool
- * descriptions name (`credit_cost`, `generation_id`, `output_url`,
- * `param_schema`, `supported_durations`, `modelKey`) under the spellings an API
- * of this kind uses, and says "I could not tell" rather than guess. The first
- * real generation (2026-09-21) went through every reader here but the price per
- * model, which came back null; it left no record of the field names, which is
- * what `shapeOf` is for. When the shapes are in the log, this file is the only
- * one that changes.
+ * published; it was read from the `kairogen answer shape` lines the staging API
+ * logged on 2026-09-21 (docs/integracoes/kairogen.md, "O formato real das
+ * respostas"). The readers below use those names and nothing else. Where the
+ * log could not show something (the option list of a select parameter, the
+ * status word of a failure), the reader says so and stays tolerant there only.
  *
  * Everything that arrives here is a third party's DATA. The tool descriptions
  * carry advice written for chat widgets ("never give up", "retry", "open the
@@ -54,8 +51,34 @@ const asText = (value: unknown): string | null =>
 // The shape of an answer, without its contents
 // ---------------------------------------------------------------------------
 
-/** Keys whose short, word-like values say how to read the rest (a status, a type). */
-const WORD_KEYS = ['status', 'state', 'type', 'kind', 'plan', 'plankey', 'unit', 'currency'];
+/**
+ * Keys whose short, word-like values are vocabulary, not content: a status, a
+ * type, the name of a parameter or of a mode. Without them a schema cannot be read.
+ */
+const WORD_KEYS = [
+  'status',
+  'state',
+  'type',
+  'kind',
+  'plan',
+  'plankey',
+  'unit',
+  'currency',
+  'key',
+  'paramkey',
+  'role',
+  'media',
+  'mediatype',
+  'tag',
+  'modes',
+  'defaultmode',
+  'requiredinputs',
+  'referencefieldkeys',
+  'controltype',
+  'pollwith',
+];
+/** Lists that ARE the schema: two items of them say too little. */
+const LONG_LISTS = ['paramschema', 'conditionalpricing', 'referenceinputs', 'options'];
 
 /**
  * An answer reduced to what a reader needs to know about it: the key names, the
@@ -74,11 +97,12 @@ export function shapeOf(value: unknown, key = '', depth = 0): unknown {
     }
     return `string(${value.length})`;
   }
-  if (depth >= 6) return '…';
+  if (depth >= 8) return '…';
   if (Array.isArray(value)) {
+    const shown = LONG_LISTS.includes(fold(key)) ? 8 : 2;
     return {
       arrayOf: value.length,
-      first: value.slice(0, 2).map((item) => shapeOf(item, key, depth + 1)),
+      first: value.slice(0, shown).map((item) => shapeOf(item, key, depth + 1)),
     };
   }
   if (isObject(value)) {
@@ -106,30 +130,45 @@ const PRICE_LABEL: Record<string, string> = {
   sound: 'Som',
 };
 
-function schemaProperties(model: Json): Json {
-  const schema = pick(model, 'param_schema', 'paramSchema', 'parameters', 'params');
-  const properties = pick(schema, 'properties');
-  return isObject(properties) ? properties : isObject(schema) ? schema : {};
+/** `param_schema` is a LIST of fields, each `{ key, type, label, required, default, … }`. */
+const fieldsOf = (model: Json): Json[] => listOf(pick(model, 'param_schema'));
+
+/**
+ * The choices of a select field. NOT verified: the two fields the log showed
+ * were a number and a file, so the list is looked for under the usual names and
+ * taken as plain values or as `{ value }` objects.
+ */
+function optionsOf(field: Json): string[] {
+  const options = pick(field, 'options', 'enum', 'values');
+  if (!Array.isArray(options)) return [];
+  return options.flatMap((option): string[] => {
+    const value = isObject(option) ? pick(option, 'value', 'key', 'id') : option;
+    return typeof value === 'string' || typeof value === 'number' ? [String(value)] : [];
+  });
 }
 
-function priceParamsOf(properties: Json): MediaPriceParam[] {
-  return Object.entries(properties).flatMap(([key, raw]): MediaPriceParam[] => {
-    const name = PRICE_KEYS.find((candidate) => fold(candidate) === fold(key));
-    if (!name || !isObject(raw)) return [];
-    const options = pick(raw, 'enum', 'options', 'values');
-    const defaultValue = pick(raw, 'default');
-    if (Array.isArray(options) && options.length > 0) {
+const RATIO = /^\d+:\d+$/;
+
+function priceParamsOf(fields: Json[]): MediaPriceParam[] {
+  return fields.flatMap((field): MediaPriceParam[] => {
+    const key = asText(pick(field, 'key'));
+    const name = PRICE_KEYS.find((candidate) => key !== null && fold(candidate) === fold(key));
+    if (!name) return [];
+    const options = optionsOf(field);
+    const defaultValue = pick(field, 'default');
+    // A `size` made of ratios ("1:1") is the shape of the picture, not a price tier.
+    if (options.length > 0 && !options.every((option) => RATIO.test(option))) {
       return [
         {
           key: name,
           label: PRICE_LABEL[name] ?? name,
           type: 'choice',
-          options: options.map(String),
+          options,
           defaultValue: defaultValue === undefined ? null : String(defaultValue),
         },
       ];
     }
-    if (pick(raw, 'type') === 'boolean') {
+    if (pick(field, 'type') === 'boolean') {
       return [
         {
           key: name,
@@ -144,99 +183,106 @@ function priceParamsOf(properties: Json): MediaPriceParam[] {
   });
 }
 
-/** Credits for one output on the given plan, from whichever pricing shape the catalog uses. */
-function creditsPerOutput(model: Json, plan: string): number | null {
-  const pricing = pick(model, 'pricing', 'price', 'prices', 'credits', 'credit_cost', 'cost');
-  const flat = asNumber(pricing);
-  if (flat !== null) return flat;
-  if (!isObject(pricing)) return null;
-  const byPlan = pick(pricing, plan) ?? pick(pick(pricing, 'plans', 'by_plan', 'byPlan'), plan);
-  return (
-    asNumber(byPlan) ??
-    asNumber(pick(byPlan, 'credits', 'credit_cost', 'per_output', 'perOutput', 'base')) ??
-    asNumber(pick(pricing, 'credits', 'credit_cost', 'per_output', 'perOutput', 'base', 'default'))
-  );
+/** The shapes a model draws, when a field lists them as ratios (`aspect_ratio`, or a ratio `size`). */
+function aspectRatiosOf(fields: Json[]): string[] | null {
+  for (const field of fields) {
+    const key = fold(asText(pick(field, 'key')) ?? '');
+    if (key !== 'aspectratio' && key !== 'size') continue;
+    const ratios = optionsOf(field).filter((option) => RATIO.test(option));
+    if (ratios.length > 0) return ratios;
+  }
+  return null;
 }
 
-export function modelsFrom(result: McpToolResult, plan: string): MediaModel[] {
-  return listOf(result.data, 'models', 'items', 'data', 'results').flatMap(
-    (model): MediaModel[] => {
-      const key = asText(pick(model, 'modelKey', 'model_key', 'key', 'id', 'slug'));
-      const type = asText(pick(model, 'type', 'kind', 'category', 'media_type'))?.toLowerCase();
-      if (!key || (type !== 'image' && type !== 'video')) return [];
-      const properties = schemaProperties(model);
-      const has = (...names: string[]) =>
-        Object.keys(properties).some((name) => names.map(fold).includes(fold(name)));
-      const durations = pick(model, 'supported_durations', 'supportedDurations', 'durations');
-      const durationEnum = pick(pick(properties, 'duration_seconds', 'duration'), 'enum');
-      const ratios = pick(model, 'aspect_ratios', 'aspectRatios', 'supported_aspect_ratios');
-      const ratioEnum = pick(pick(properties, 'aspect_ratio', 'aspectRatio'), 'enum');
-      const ratioList = Array.isArray(ratios)
-        ? ratios
-        : Array.isArray(ratioEnum)
-          ? ratioEnum
-          : null;
+/**
+ * What a model does with a picture it is handed, from `reference_inputs`
+ * (`{ param_key, role, media, max_files, required, modes }`) and `modes`
+ * (`{ base, edit, … }`, each with `auto_switch_on_reference`).
+ *
+ *  - an input open in every mode (`modes: null`), or in the default one: the
+ *    picture is a REFERENCE for a new one;
+ *  - an input that exists only in the `edit` mode: handing the picture over IS
+ *    editing it (`auto_switch_on_reference`), as with GPT Image;
+ *  - no image input: the model takes no picture at all.
+ */
+function imageUseOf(model: Json): MediaModel['imageUse'] {
+  const inputs = listOf(pick(model, 'reference_inputs')).filter((input) => {
+    const media = asText(pick(input, 'media'))?.toLowerCase();
+    return media === undefined || media === null || media === 'image';
+  });
+  if (inputs.length === 0) return null;
+  const modes = pick(model, 'modes');
+  const hasEdit = isObject(modes) && isObject(pick(modes, 'edit'));
+  const defaultMode = asText(pick(model, 'default_mode'))?.toLowerCase() ?? null;
+  const openByDefault = inputs.some((input) => {
+    const only = pick(input, 'modes');
+    if (!Array.isArray(only) || only.length === 0) return true;
+    return (
+      defaultMode !== null && only.map((mode) => String(mode).toLowerCase()).includes(defaultMode)
+    );
+  });
+  return openByDefault ? 'reference' : hasEdit ? 'edit' : 'reference';
+}
 
-      return [
-        {
-          key,
-          name: asText(pick(model, 'name', 'display_name', 'displayName', 'title')) ?? key,
-          provider: asText(pick(model, 'providerName', 'provider_name', 'provider')),
-          kind: type,
-          creditsPerOutput: creditsPerOutput(model, plan),
-          supportedDurations: (Array.isArray(durations)
-            ? durations
-            : Array.isArray(durationEnum)
-              ? durationEnum
-              : []
-          )
-            .map(asNumber)
-            .filter((value): value is number => value !== null),
-          aspectRatios: ratioList ? ratioList.map(String) : null,
-          priceParams: priceParamsOf(properties),
-          acceptsReferenceImage: has('reference_image_urls', 'reference_images', 'image_urls'),
-          acceptsFirstFrame:
-            has('first_frame_url', 'first_frame', 'image', 'image_url', 'start_image') ||
-            /image-to-video|i2v/i.test(key),
-        },
-      ];
-    },
-  );
+export function modelsFrom(result: McpToolResult): MediaModel[] {
+  return listOf(result.data, 'models').flatMap((model): MediaModel[] => {
+    const key = asText(pick(model, 'model_key'));
+    const type = asText(pick(model, 'type'))?.toLowerCase();
+    if (!key || (type !== 'image' && type !== 'video')) return [];
+    const fields = fieldsOf(model);
+    const durations = pick(model, 'supported_durations');
+    const inputs = listOf(pick(model, 'reference_inputs'));
+    const imageUse = imageUseOf(model);
+
+    return [
+      {
+        key,
+        name: asText(pick(model, 'name')) ?? key,
+        provider: asText(pick(model, 'provider')),
+        kind: type,
+        // The catalog prices in money (`pricing.baseCost`, BRL, plus a markup and
+        // `conditionalPricing`), never in credits. Credits come from `estimate_cost`
+        // alone; `studio.ts` asks it once per model and fills this in.
+        creditsPerOutput: null,
+        supportedDurations: (Array.isArray(durations) ? durations : [])
+          .map(asNumber)
+          .filter((value): value is number => value !== null),
+        aspectRatios: aspectRatiosOf(fields),
+        priceParams: priceParamsOf(fields),
+        imageUse: type === 'image' ? imageUse : null,
+        acceptsReferenceImage: type === 'image' && imageUse !== null,
+        // Video: an image input the model cannot do without is its first frame.
+        acceptsFirstFrame:
+          type === 'video' &&
+          inputs.some(
+            (input) =>
+              pick(input, 'required') === true || /frame/i.test(asText(pick(input, 'role')) ?? ''),
+          ),
+      },
+    ];
+  });
 }
 
 // ---------------------------------------------------------------------------
 // estimate_cost, generate_*, get_generation
 // ---------------------------------------------------------------------------
 
-/** The quote, or null when the answer carries no number under a credit-like name. */
+/** `estimate_cost` answers `{ model_key, credit_cost, quantity, plan_key, params, … }`. */
 export function creditCostFrom(result: McpToolResult): number | null {
-  const direct = asNumber(result.data);
-  if (direct !== null) return Math.ceil(direct);
-  const found =
-    asNumber(pick(result.data, 'credit_cost', 'creditCost', 'credits', 'cost', 'total_credits')) ??
-    asNumber(
-      pick(
-        pick(result.data, 'estimate', 'quote', 'pricing', 'data'),
-        'credit_cost',
-        'creditCost',
-        'credits',
-        'cost',
-        'total_credits',
-      ),
-    );
-  return found === null ? null : Math.ceil(found);
+  const found = asNumber(pick(result.data, 'credit_cost'));
+  return found === null || found < 0 ? null : Math.ceil(found);
 }
 
+/** `generate_*` answers `{ generation_id, generation_ids, status: 'QUEUED', pending: true, … }`. */
 export function generationIdFrom(result: McpToolResult): string | null {
-  const direct =
-    pick(result.data, 'generation_id', 'generationId', 'id') ??
-    pick(pick(result.data, 'generation', 'data', 'job'), 'generation_id', 'generationId', 'id');
-  const text = asText(direct) ?? (typeof direct === 'number' ? String(direct) : null);
-  if (text) return text.slice(0, 200);
-  return /generation[_ ]?id["':\s]+([A-Za-z0-9_-]{6,})/i.exec(result.text)?.[1] ?? null;
+  const direct = pick(result.data, 'generation_id');
+  const first = pick(result.data, 'generation_ids');
+  const text = asText(direct) ?? (Array.isArray(first) ? asText(first[0]) : null);
+  return text ? text.slice(0, 200) : null;
 }
 
-const DONE = ['completed', 'complete', 'succeeded', 'success', 'done', 'ready', 'finished'];
+/** Seen: QUEUED, PROCESSING, COMPLETED. A failure was never seen, so its word is a guess. */
+const DONE = ['completed'];
 const FAILED = ['failed', 'error', 'errored', 'canceled', 'cancelled', 'rejected', 'expired'];
 
 export interface GenerationState {
@@ -245,45 +291,37 @@ export interface GenerationState {
   creditsCharged: number | null;
   /** Kairogen's own status word, for the record. Never shown as an instruction. */
   providerStatus: string | null;
+  /** `reference_warning`: what Kairogen says it did with the picture it was handed. Data. */
+  referenceWarning: string | null;
 }
 
-function urlsIn(value: unknown, depth = 0): string[] {
-  if (depth > 4) return [];
-  if (typeof value === 'string') return /^https:\/\/\S+$/i.test(value) ? [value] : [];
-  if (Array.isArray(value)) return value.flatMap((item) => urlsIn(item, depth + 1));
-  if (!isObject(value)) return [];
-  const own = pick(value, 'output_url', 'outputUrl', 'url', 'file_url', 'fileUrl', 'download_url');
-  return typeof own === 'string' ? urlsIn(own) : [];
-}
-
+/**
+ * `get_generation` answers `{ generation_id, status, output_urls: string[],
+ * cost_credits, pending, reference_warning?, … }`.
+ */
 export function generationStateFrom(result: McpToolResult): GenerationState {
-  const root = isObject(pick(result.data, 'generation', 'data', 'job'))
-    ? (pick(result.data, 'generation', 'data', 'job') as Json)
-    : result.data;
-  const providerStatus = asText(pick(root, 'status', 'state'))?.toLowerCase() ?? null;
-  const outputs = pick(root, 'output_urls', 'outputUrls', 'outputs', 'results', 'files', 'assets');
-  const single = pick(root, 'output_url', 'outputUrl');
-  // Only addresses under an output-like name: a thumbnail or a docs link is not the result.
-  const outputUrls = [...new Set([...urlsIn(outputs), ...urlsIn(single)])];
-  const creditsCharged = asNumber(
-    pick(
-      root,
-      'credits_charged',
-      'creditsCharged',
-      'credit_cost',
-      'creditCost',
-      'credits_used',
-      'cost',
+  const providerStatus = asText(pick(result.data, 'status'))?.toLowerCase() ?? null;
+  const outputs = pick(result.data, 'output_urls');
+  const outputUrls = [
+    ...new Set(
+      (Array.isArray(outputs) ? outputs : []).filter(
+        (url): url is string => typeof url === 'string' && /^https:\/\/\S+$/i.test(url),
+      ),
     ),
-  );
+  ];
+  const creditsCharged = asNumber(pick(result.data, 'cost_credits'));
+  const pending = pick(result.data, 'pending');
 
-  const failed = providerStatus !== null && FAILED.includes(providerStatus);
-  const done = providerStatus !== null ? DONE.includes(providerStatus) : outputUrls.length > 0;
+  const done = providerStatus !== null && DONE.includes(providerStatus) && outputUrls.length > 0;
+  // Over (`pending: false`) with nothing to show: whatever word it uses, it failed.
+  const failed =
+    !done && ((providerStatus !== null && FAILED.includes(providerStatus)) || pending === false);
   return {
-    state: failed ? 'failed' : done && outputUrls.length > 0 ? 'succeeded' : 'running',
+    state: failed ? 'failed' : done ? 'succeeded' : 'running',
     outputUrls,
     creditsCharged: creditsCharged === null ? null : Math.ceil(creditsCharged),
     providerStatus,
+    referenceWarning: asText(pick(result.data, 'reference_warning')),
   };
 }
 

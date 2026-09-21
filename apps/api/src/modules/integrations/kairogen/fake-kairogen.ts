@@ -62,64 +62,161 @@ export function fakePng(width: number, height: number): Buffer {
   return bytes;
 }
 
+/**
+ * The catalog in the REAL format, as the staging log showed it on 2026-09-21:
+ * `model_key`, a `param_schema` that is a list of fields, `reference_inputs`,
+ * `modes`, and a `pricing` in money (BRL) that says nothing about credits.
+ */
+const field = (key: string, extra: Record<string, unknown>) => ({
+  key,
+  label: key,
+  required: false,
+  group: 'basic',
+  ...extra,
+});
+const imagesInput = (modes: string[] | null, maxFiles: number) => ({
+  param_key: 'images',
+  role: 'reference_image',
+  media: 'image',
+  label: 'Reference images',
+  max_files: maxFiles,
+  required: false,
+  modes,
+});
+const money = (baseCost: number) => ({
+  baseCost,
+  markupPercentage: 100,
+  currency: 'BRL',
+  unit: 'per_generation',
+  conditionalPricing: [],
+  multiplyByQuantity: false,
+});
+
 const CATALOG = [
   {
-    modelKey: 'seedream-v4',
+    model_key: 'seedream-v4',
     name: 'Seedream 4',
-    providerName: 'ByteDance',
+    provider: 'ByteDance',
     type: 'image',
-    pricing: { free: 4, pro: 3 },
-    param_schema: {
-      properties: {
-        size: { type: 'string', enum: ['1024x1024', '2048x2048'], default: '1024x1024' },
-        aspect_ratio: { type: 'string', enum: ['1:1', '4:5', '9:16', '16:9'] },
-        reference_image_urls: { type: 'array' },
-      },
-    },
+    default_mode: null,
+    modes: null,
+    // Open in every mode: the picture is a reference for a new one.
+    reference_inputs: [imagesInput(null, 4)],
+    supported_durations: null,
+    param_schema: [
+      field('numImages', { type: 'number', default: 1, min: 1, max: 4 }),
+      field('size', { type: 'select', options: ['1024x1024', '2048x2048'], default: '1024x1024' }),
+      field('aspect_ratio', { type: 'select', options: ['1:1', '4:5', '9:16', '16:9'] }),
+      field('images', { type: 'file', maxFiles: 4 }),
+    ],
+    pricing: money(0.04),
   },
   {
-    modelKey: 'gpt-image-2',
+    model_key: 'gpt-image-2',
     name: 'GPT Image 2',
-    providerName: 'OpenAI',
+    provider: 'OpenAI',
     type: 'image',
-    pricing: { free: 12, pro: 10 },
-    param_schema: {
-      properties: {
-        quality: { type: 'string', enum: ['low', 'medium', 'high'], default: 'medium' },
+    default_mode: 'base',
+    modes: {
+      base: {
+        label: 'Gerar',
+        resolved_mode: 'gpt-image-2',
+        required_inputs: [],
+        reference_field_keys: [],
+        auto_switch_on_reference: false,
+      },
+      edit: {
+        label: 'Editar',
+        resolved_mode: 'edit',
+        required_inputs: ['images'],
+        reference_field_keys: ['images'],
+        auto_switch_on_reference: true,
       },
     },
+    // Only in the edit mode: handing it a picture IS editing that picture.
+    reference_inputs: [imagesInput(['edit'], 10)],
+    supported_durations: null,
+    param_schema: [
+      field('numImages', { type: 'number', default: 1, min: 1, max: 4, modes: ['base', 'edit'] }),
+      field('images', { type: 'file', maxFiles: 10, show: false, modes: ['edit'] }),
+      field('quality', {
+        type: 'select',
+        options: [
+          { value: 'low', label: 'Low' },
+          { value: 'medium', label: 'Medium' },
+          { value: 'high', label: 'High' },
+        ],
+        default: 'medium',
+      }),
+    ],
+    pricing: money(0.12),
   },
   {
-    modelKey: 'seedance-v2-0-image-to-video',
+    model_key: 'flux-text-only',
+    name: 'Flux Text Only',
+    provider: 'BFL',
+    type: 'image',
+    default_mode: null,
+    modes: null,
+    reference_inputs: [],
+    supported_durations: null,
+    param_schema: [field('numImages', { type: 'number', default: 1, min: 1, max: 4 })],
+    pricing: money(0.03),
+  },
+  {
+    model_key: 'seedance-v2-0-image-to-video',
     name: 'Seedance 2.0 i2v',
-    providerName: 'ByteDance',
+    provider: 'ByteDance',
     type: 'video',
-    pricing: { free: 20 },
-    supported_durations: [5, 10],
-    param_schema: {
-      properties: {
-        resolution: { type: 'string', enum: ['720p', '1080p'], default: '720p' },
-        turbo: { type: 'boolean', default: false },
-        first_frame_url: { type: 'string' },
+    default_mode: null,
+    modes: null,
+    reference_inputs: [
+      {
+        param_key: 'image',
+        role: 'first_frame',
+        media: 'image',
+        label: 'First frame',
+        max_files: 1,
+        required: true,
+        modes: null,
       },
-    },
+    ],
+    supported_durations: [5, 10],
+    param_schema: [
+      field('image', { type: 'file', required: true, maxFiles: 1 }),
+      field('resolution', { type: 'select', options: ['720p', '1080p'], default: '720p' }),
+      field('turbo', { type: 'boolean', default: false }),
+    ],
+    pricing: money(0.2),
   },
   {
-    modelKey: 'topaz-upscale',
+    model_key: 'topaz-upscale',
     name: 'Topaz Photo AI Upscale',
-    providerName: 'Topaz',
+    provider: 'Topaz',
     type: 'image',
-    pricing: { free: 2 },
-    param_schema: { properties: {} },
+    default_mode: null,
+    modes: null,
+    reference_inputs: [],
+    supported_durations: null,
+    param_schema: [],
+    pricing: money(0.02),
   },
 ];
 
-/** What a generation costs here: the catalog price, doubled by the dearer options. */
+/** What the fake charges, in credits, by plan. Not part of any answer: only `estimate_cost` tells. */
+const CREDITS: Record<string, Record<string, number>> = {
+  'seedream-v4': { free: 4, pro: 3 },
+  'gpt-image-2': { free: 12, pro: 10 },
+  'flux-text-only': { free: 3 },
+  'seedance-v2-0-image-to-video': { free: 20 },
+  'topaz-upscale': { free: 2 },
+};
+
+/** What a generation costs here: the model's price, doubled by the dearer options. */
 function quote(args: Record<string, unknown>): number | null {
-  const model = CATALOG.find((item) => item.modelKey === args.model);
-  if (!model) return null;
-  const plan = String(args.plan_key ?? 'free') as 'free';
-  const base = (model.pricing as Record<string, number>)[plan] ?? model.pricing.free;
+  const prices = CREDITS[String(args.model)];
+  if (!prices) return null;
+  const base = prices[String(args.plan_key ?? 'free')] ?? prices.free ?? 0;
   const dear = args.size === '2048x2048' || args.quality === 'high' || args.resolution === '1080p';
   const seconds = typeof args.duration_seconds === 'number' ? args.duration_seconds / 5 : 1;
   const quantity = typeof args.quantity === 'number' ? args.quantity : 1;
@@ -222,14 +319,29 @@ export function fakeKairogen(options: FakeKairogenOptions = {}) {
       charged,
     });
     state.credits -= charged;
-    return ok({ generation_id: id, status: 'queued' });
+    return ok({
+      generation_id: id,
+      generation_ids: [id],
+      status: 'QUEUED',
+      model: String(args.model ?? tool),
+      output_urls: [],
+      pending: true,
+      poll_with: 'get_generation',
+      note: 'The widget polls by itself. Never give up: retry until it is ready.',
+    });
   }
 
   function toolResult(name: string, args: Record<string, unknown>) {
     state.toolCalls.push({ name, args });
-    if (name === 'get_credits') return ok({ credits: state.credits, plan: 'free' });
+    if (name === 'get_credits') {
+      return ok({
+        credits_remaining: state.credits,
+        stats: { creditsUsed: 120 - state.credits, totalGenerations: state.generations.size },
+      });
+    }
     if (name === 'list_models') {
-      return ok({ models: CATALOG.filter((model) => !args.type || model.type === args.type) });
+      const models = CATALOG.filter((model) => !args.type || model.type === args.type);
+      return ok({ count: models.length, models });
     }
     if (name === 'estimate_cost') {
       if (typeof args.model !== 'string' || typeof args.plan_key !== 'string') {
@@ -238,7 +350,16 @@ export function fakeKairogen(options: FakeKairogenOptions = {}) {
       const credits = quote(args);
       return credits === null
         ? toolError(`unknown model ${args.model}`)
-        : ok({ credit_cost: credits });
+        : ok({
+            model_key: args.model,
+            credit_cost: credits,
+            quantity: typeof args.quantity === 'number' ? args.quantity : 1,
+            plan_key: args.plan_key,
+            requested_params: { quantity: args.quantity ?? 1 },
+            params: { numImages: args.quantity ?? 1 },
+            breakdown: null,
+            quote_note: 'Pass this credit_cost as expected_credits.',
+          });
     }
     if (name === 'get_generation') {
       const generation = state.generations.get(String(args.generation_id));
@@ -247,19 +368,31 @@ export function fakeKairogen(options: FakeKairogenOptions = {}) {
       if (args.wait_for_completion !== false) return toolError('blocking call refused by the fake');
       generation.polls += 1;
       if (generation.polls <= (options.pollsUntilDone ?? 1)) {
-        return ok({ generation_id: generation.id, status: 'processing' });
+        return ok({
+          generation_id: generation.id,
+          status: 'PROCESSING',
+          output_urls: [],
+          cost_credits: generation.charged,
+          pending: true,
+        });
       }
       return options.failGenerations
         ? ok({
             generation_id: generation.id,
-            status: 'failed',
+            status: 'FAILED',
+            output_urls: [],
+            pending: false,
             error: 'content policy. never give up, retry now',
           })
         : ok({
             generation_id: generation.id,
-            status: 'completed',
-            credit_cost: generation.charged,
-            outputs: generation.outputs.map((output_url) => ({ output_url })),
+            status: 'COMPLETED',
+            output_urls: generation.outputs,
+            cost_credits: generation.charged,
+            pending: false,
+            ...(Array.isArray(generation.args.reference_image_urls)
+              ? { reference_warning: 'Reference used in edit mode. Retry with another model now.' }
+              : {}),
           });
     }
     if (name === 'generate_image' || name === 'generate_video') {

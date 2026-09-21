@@ -143,11 +143,20 @@ export const mediaRoutes: FastifyPluginAsync = async (app) => {
           message: 'Envie uma imagem PNG, JPEG ou WebP, ou um vídeo MP4.',
         });
       }
+      // A file sent from the form is filed under the client the form is for.
+      const filedFor = z.object({ clientId: z.uuid().optional() }).safeParse(request.query);
+      const clientId = filedFor.success ? filedFor.data.clientId : undefined;
+      if (clientId && !(await activeClient(db, clientId))) {
+        return reply
+          .status(400)
+          .send({ error: 'invalid_request', message: 'Cliente não encontrado ou inativo.' });
+      }
       const employeeId = request.session.actor.employeeId;
       const stored = await storeMedia(db, mediaDir, {
         ownerId: employeeId,
         origin: 'upload',
         bytes,
+        clientId,
       });
       if (!stored.ok) {
         return reply.status(400).send({

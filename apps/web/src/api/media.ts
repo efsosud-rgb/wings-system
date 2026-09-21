@@ -78,7 +78,13 @@ export const mediaFileUrl = (asset: Pick<MediaAsset, 'downloadPath'>) =>
 export function useUploadMedia() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (file: File) => api.upload<{ asset: MediaAsset }>('/media/assets', file),
+    mutationFn: (input: File | { file: File; clientId: string }) =>
+      input instanceof File
+        ? api.upload<{ asset: MediaAsset }>('/media/assets', input)
+        : api.upload<{ asset: MediaAsset }>(
+            `/media/assets?clientId=${encodeURIComponent(input.clientId)}`,
+            input.file,
+          ),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['media', 'assets'] }),
   });
 }

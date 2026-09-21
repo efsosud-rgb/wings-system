@@ -643,6 +643,7 @@ const generationCard: AgentGenerationProposalCard = {
     aspect: '4:5',
     quantity: 1,
     params: { quality: 'medium' },
+    referenceUse: 'reference',
     textInImage: null,
   },
 };
@@ -721,6 +722,23 @@ describe('the editing agent', () => {
     expect(startGeneration).toHaveBeenCalledTimes(1);
     // Nothing was produced, so the card shows no picture.
     expect(screen.queryByRole('link', { name: /^Mídia gerada/ })).toBeNull();
+  });
+
+  it('shows the picture that goes with the request, and what the model will do with it', async () => {
+    renderChat(media(true));
+    await say('Troque o fundo desta imagem');
+    stream({
+      type: 'proposal',
+      proposal: {
+        ...generationCard,
+        payload: { ...generationCard.payload, referenceAssetId: 'asset-7', referenceUse: 'edit' },
+      },
+    });
+    expect(screen.getByText('Imagem enviada').nextElementSibling?.textContent).toBe(
+      'Editar esta imagem',
+    );
+    const sent = screen.getByLabelText('Imagem que vai junto com o pedido');
+    expect(sent.querySelector('img')?.getAttribute('src')).toBe('/api/media/assets/asset-7/file');
   });
 
   it('shows what was generated on the card once the generation is done', async () => {

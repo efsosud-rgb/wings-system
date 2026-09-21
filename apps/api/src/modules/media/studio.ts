@@ -6,6 +6,7 @@ import {
   MAX_VIDEOS_PER_GENERATION,
   MEDIA_REFUSAL_MESSAGE,
   WINGS_CLIENT_ID,
+  modelsForImageUse,
   mentionsClient,
   type KairogenPlan,
   type MediaEstimate,
@@ -65,6 +66,9 @@ const FIRST_POLL_MS = 5_000;
 const MAX_POLL_MS = 30_000;
 const DEFAULT_ANIMATION_MODEL = 'seedance-v2-0-image-to-video';
 const MAX_DOWNLOAD_BYTES = 150 * 1024 * 1024;
+/** Pricing the selector: a few `estimate_cost` at a time, and never holding the screen for long. */
+const PRICING_CONCURRENCY = 4;
+const PRICING_BUDGET_MS = 8_000;
 
 export interface StudioDeps {
   db: Database;
@@ -195,24 +199,78 @@ export async function setPlan(db: Database, plan: KairogenPlan, now: Date): Prom
   modelCache.clear();
 }
 
-const modelCache = new Map<string, { at: number; models: MediaModel[] }>();
+interface Catalog {
+  at: number;
+  models: MediaModel[];
+  /** Models `estimate_cost` was already asked about, whatever it answered. */
+  asked: Set<string>;
+}
+const modelCache = new Map<string, Catalog>();
 export const clearModelCache = () => modelCache.clear();
 
-/** The live catalog, kept for an hour per plan: prices are per plan. */
+/**
+ * Kairogen's catalog prices in money (BRL plus a markup), not in credits, so
+ * the only honest "credits per output" is what `estimate_cost` answers for the
+ * model with its default parameters. It is a read: it spends nothing and leaves
+ * no estimate behind. Asked once per model per hour; a model it cannot price
+ * (a video that needs a duration, a supplier hiccup) stays "custo na estimativa".
+ */
+async function priceCatalog(
+  deps: StudioDeps,
+  kairogen: KairogenDeps,
+  plan: KairogenPlan,
+  catalog: Catalog,
+  kind: 'image' | 'video' | undefined,
+): Promise<void> {
+  const queue = catalog.models.filter(
+    (model) => (!kind || model.kind === kind) && !catalog.asked.has(model.key),
+  );
+  if (queue.length === 0) return;
+  for (const model of queue) catalog.asked.add(model.key);
+  const worker = async () => {
+    for (let model = queue.shift(); model; model = queue.shift()) {
+      try {
+        const args = { model: model.key, plan_key: plan, quantity: 1 };
+        model.creditsPerOutput = creditCostFrom(await ask(deps, kairogen, 'estimate_cost', args));
+      } catch {
+        // No price for this one. The estimate the person asks for is what counts anyway.
+      }
+    }
+  };
+  const all = Promise.all(Array.from({ length: PRICING_CONCURRENCY }, worker));
+  // Whatever is not priced within the budget keeps being priced, into the same cache.
+  await Promise.race([all, new Promise((done) => setTimeout(done, PRICING_BUDGET_MS).unref())]);
+}
+
+/**
+ * The live catalog, kept for an hour per plan: prices are per plan. `priced`
+ * is for who shows prices (the selector, the agent's list); checking a request
+ * against the catalog needs none.
+ */
 export async function listModels(
   deps: StudioDeps,
+  options: { priced?: 'image' | 'video' | 'all' } = {},
 ): Promise<{ models: MediaModel[]; cachedAt: string }> {
   const kairogen = connected(deps);
   const plan = await planOf(deps.db);
   const now = deps.now().getTime();
-  const cached = modelCache.get(plan);
-  if (cached && now - cached.at < MODEL_CACHE_MS) {
-    return { models: cached.models, cachedAt: new Date(cached.at).toISOString() };
-  }
   try {
-    const models = modelsFrom(await ask(deps, kairogen, 'list_models', {}), plan);
-    modelCache.set(plan, { at: now, models });
-    return { models, cachedAt: new Date(now).toISOString() };
+    let catalog = modelCache.get(plan);
+    if (!catalog || now - catalog.at >= MODEL_CACHE_MS) {
+      const models = modelsFrom(await ask(deps, kairogen, 'list_models', {}));
+      catalog = { at: now, models, asked: new Set() };
+      modelCache.set(plan, catalog);
+    }
+    if (options.priced) {
+      await priceCatalog(
+        deps,
+        kairogen,
+        plan,
+        catalog,
+        options.priced === 'all' ? undefined : options.priced,
+      );
+    }
+    return { models: catalog.models, cachedAt: new Date(catalog.at).toISOString() };
   } catch (error) {
     throw fromMcp(error);
   }
@@ -453,8 +511,29 @@ async function resolve(deps: StudioDeps, request: MediaEstimateRequest): Promise
     }
     if (request.referenceAssetId) {
       const asset = await assetOf(request.referenceAssetId);
-      if (asset.kind !== 'image' || !(model.acceptsReferenceImage || model.acceptsFirstFrame)) {
+      if (asset.kind !== 'image') {
+        throw new StudioRefusal('invalid_request', 'Só imagens podem ser usadas aqui.');
+      }
+      if (request.kind === 'video' && !model.acceptsFirstFrame) {
         throw new StudioRefusal('invalid_request', 'Este modelo não aceita imagem de referência.');
+      }
+      // What is done with the picture has to be what THIS model does with one.
+      if (request.kind === 'image' && model.imageUse !== request.referenceUse) {
+        const able = modelsForImageUse(models, request.referenceUse)
+          .slice(0, 4)
+          .map((item) => item.name);
+        const wanted =
+          request.referenceUse === 'edit' ? 'não edita imagens' : 'não usa imagem de referência';
+        const does =
+          model.imageUse === 'edit'
+            ? ' Ele só recebe uma imagem para editá-la.'
+            : model.imageUse === 'reference'
+              ? ' Ele só recebe uma imagem como referência.'
+              : '';
+        throw new StudioRefusal(
+          'invalid_request',
+          `${model.name} ${wanted}.${does}${able.length > 0 ? ` Modelos que fazem isso: ${able.join(', ')}.` : ''}`,
+        );
       }
     }
     return {
@@ -945,11 +1024,18 @@ export async function advanceGeneration(
     await deps.db.update(mediaAssets).set({ sourceUrl: url }).where(eq(mediaAssets.id, stored.id));
     saved += 1;
   }
-  return end(
-    saved > 0 ? 'succeeded' : 'failed',
+  const notes = [
     saved === state.outputUrls.length
       ? null
       : `O Kairogen concluiu, mas ${state.outputUrls.length - saved} de ${state.outputUrls.length} arquivo(s) não puderam ser salvos. Eles continuam no Kairogen.`,
+    // What Kairogen says it did with the picture it was handed. His words, as his: never an order.
+    current.sourceAssetId && state.referenceWarning
+      ? `Aviso do Kairogen sobre a imagem enviada: ${scrubSensitive(state.referenceWarning).slice(0, 300)}`
+      : null,
+  ].filter(Boolean);
+  return end(
+    saved > 0 ? 'succeeded' : 'failed',
+    notes.length > 0 ? notes.join(' ') : null,
     state.creditsCharged,
   );
 }

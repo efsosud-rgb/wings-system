@@ -51,6 +51,9 @@ Toda mídia é feita para um cliente: a própria Wings Company ou um cliente del
 O nome do cliente serve só para arquivar aqui dentro e nunca vai ao Kairogen: não escreva o nome do cliente no prompt, no negativePrompt nem em textInImage. Descreva o negócio dele ("a neighborhood bakery"), não a marca.
 Quando um modelo vier sem creditos_por_saida, o catálogo não informou o preço: use estimar_custo para saber.
 
+# A partir de uma imagem
+Quando a pessoa pedir algo "a partir desta imagem", "com esta foto" ou "mexa nesta imagem", a imagem é uma mídia da biblioteca: ache o id dela em consultar_biblioteca (as mais recentes vêm primeiro; se não der para saber qual é, pergunte) e ponha em referenceAssetId. Depois escolha em listar_modelos um modelo cujo uso_de_imagem sirva ao pedido: "reference" quando a imagem inspira uma imagem nova (mesmo estilo, mesmo produto, outro cenário); "edit" quando é para mexer na própria imagem (trocar o fundo, tirar um objeto, ajustar a luz). Informe o mesmo valor em referenceUse. Modelo com uso_de_imagem nulo não recebe imagem nenhuma: não o use nesses pedidos. No modo edit, o prompt descreve a mudança, não a cena inteira. Diga na explanation qual imagem vai junto e o que o modelo fará com ela. A pessoa vê a miniatura da imagem no cartão antes de clicar.
+
 # Créditos
 Cada geração custa créditos do Kairogen. Há três limites: o saldo da conta, um limite diário por pessoa e um limite mensal da Wings. Prefira o modelo mais barato que resolve o pedido e uma saída só, a não ser que a pessoa peça variações. Imagem: até ${MAX_IMAGES_PER_GENERATION} por geração. Vídeo: até ${MAX_VIDEOS_PER_GENERATION}, e a duração tem de ser uma das que o modelo informa. Se a proposta não couber nos limites, diga quanto falta e proponha algo menor.
 
@@ -81,7 +84,7 @@ function needStudio(ctx: ToolContext): StudioDeps {
 
 async function listarModelos(ctx: ToolContext, raw: unknown): Promise<ToolOutcome> {
   const args = z.object({ tipo: z.enum(['image', 'video']).optional() }).parse(raw ?? {});
-  const { models, cachedAt } = await listModels(needStudio(ctx));
+  const { models, cachedAt } = await listModels(needStudio(ctx), { priced: args.tipo ?? 'all' });
   const shown = models
     .filter((model) => !args.tipo || model.kind === args.tipo)
     .sort((a, b) => (a.creditsPerOutput ?? 9e9) - (b.creditsPerOutput ?? 9e9))
@@ -99,7 +102,8 @@ async function listarModelos(ctx: ToolContext, raw: unknown): Promise<ToolOutcom
         opcoes: param.type === 'boolean' ? [true, false] : param.options,
         padrao: param.defaultValue,
       })),
-      aceita_imagem_de_referencia: model.acceptsReferenceImage,
+      // What the model does with a picture it is handed: 'reference', 'edit' or nothing (null).
+      uso_de_imagem: model.imageUse,
       aceita_primeiro_quadro: model.acceptsFirstFrame,
     }));
   return {
@@ -261,6 +265,7 @@ async function estimarCusto(ctx: ToolContext, raw: unknown): Promise<ToolOutcome
         params: args.parametros,
         // A bare quote is nobody's work yet: it is filed under Wings and never generated.
         clientId: WINGS_CLIENT_ID,
+        referenceUse: 'reference',
       },
     });
     return {
@@ -335,6 +340,7 @@ async function proporGeracao(ctx: ToolContext, raw: unknown): Promise<ToolOutcom
         durationSeconds: proposal.durationSeconds,
         params: proposal.params,
         referenceAssetId: proposal.referenceAssetId,
+        referenceUse: proposal.referenceUse,
         clientId: client.id,
       },
     });
@@ -389,7 +395,7 @@ export const MEDIA_AGENT_TOOL_DEFINITIONS: LlmToolDefinition[] = [
   {
     name: 'listar_modelos',
     description:
-      'Modelos de imagem e de vídeo do Kairogen com créditos por saída no plano da conta, durações aceitas, formatos aceitos e os parâmetros que mudam o preço. Ordenados do mais barato ao mais caro.',
+      'Modelos de imagem e de vídeo do Kairogen com créditos por saída no plano da conta (com os parâmetros padrão), durações aceitas, formatos aceitos, os parâmetros que mudam o preço e uso_de_imagem: o que o modelo faz com uma imagem enviada ("reference", "edit" ou nulo se não recebe imagem). Ordenados do mais barato ao mais caro.',
     parameters: {
       type: 'object',
       properties: { tipo: { type: 'string', enum: ['image', 'video'] } },
@@ -405,7 +411,7 @@ export const MEDIA_AGENT_TOOL_DEFINITIONS: LlmToolDefinition[] = [
   {
     name: 'consultar_biblioteca',
     description:
-      'Mídias já guardadas na biblioteca: tipo, formato, prompt usado, modelo e créditos. Use o id de uma imagem como referenceAssetId numa proposta.',
+      'Mídias já guardadas na biblioteca, as mais recentes primeiro: tipo, formato, prompt usado, modelo e créditos. Use o id de uma imagem como referenceAssetId numa proposta, com referenceUse igual ao uso_de_imagem do modelo escolhido.',
     parameters: {
       type: 'object',
       properties: {

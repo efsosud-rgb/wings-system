@@ -211,7 +211,31 @@ describe('the catalog', () => {
     await app.inject({ url: '/media/models', cookies });
     expect(fake.state.toolCalls.filter((item) => item.name === 'list_models')).toHaveLength(1);
 
+    // The catalog prices in BRL, so credits per output come from estimate_cost: asked once
+    // per model, with the plan and nothing else, and not again within the hour.
+    const pricing = fake.state.toolCalls.filter((item) => item.name === 'estimate_cost');
+    expect(pricing.map((item) => item.args.model).sort()).toEqual([
+      'flux-text-only',
+      'gpt-image-2',
+      'seedance-v2-0-image-to-video',
+      'seedream-v4',
+      'topaz-upscale',
+    ]);
+    expect(pricing[0]?.args).toEqual({
+      model: pricing[0]?.args.model,
+      plan_key: 'free',
+      quantity: 1,
+    });
+    // Pricing the selector is not an estimate: it leaves no row and no ledger entry.
+    expect(await db.select().from(mediaGenerations)).toHaveLength(0);
+
     const models = first.json<{ models: MediaModel[] }>().models;
+    expect(models.map((model) => [model.key, model.creditsPerOutput, model.imageUse])).toEqual([
+      ['seedream-v4', 4, 'reference'],
+      ['gpt-image-2', 12, 'edit'],
+      ['flux-text-only', 3, null],
+      ['topaz-upscale', 2, null],
+    ]);
     expect(models.find((model) => model.key === 'seedream-v4')).toMatchObject({
       kind: 'image',
       creditsPerOutput: 4,
@@ -264,7 +288,7 @@ describe('the format of Kairogen’s answers', () => {
     await usageOf(deps, employeeId);
 
     expect(noted.map((entry) => entry.tool)).toEqual(['list_models', 'get_credits']);
-    expect(noted[1]?.shape).toEqual({ credits: 120, plan: 'free' });
+    expect(noted[1]?.shape).toMatchObject({ credits_remaining: 120 });
     // Model names and descriptions are strings: only their lengths are written.
     expect(JSON.stringify(noted[0])).not.toMatch(/seedream|Seedream|ByteDance/);
     expect(JSON.stringify(noted[0])).toMatch(/string\(\d+\)/);
@@ -741,6 +765,98 @@ describe('handing Kairogen a picture of ours', () => {
     expect(expired.json()).toEqual({ error: 'not_found' });
   });
 
+  it('hands a picture only to a model that takes one, for what that model does with it, and says which models do', async () => {
+    const { cookies, employeeId } = await sessionFor('marketing');
+    const clientId = await aurora();
+    // A file sent from the form goes into the library, under the client the form is for.
+    const sent = await app.inject({
+      method: 'POST',
+      url: `/media/assets?clientId=${clientId}`,
+      cookies,
+      headers: { 'content-type': 'image/png' },
+      payload: fakePng(1200, 1200),
+    });
+    expect(sent.statusCode).toBe(201);
+    const picture = sent.json<{ asset: { id: string; clientId: string } }>().asset;
+    expect(picture.clientId).toBe(clientId);
+
+    // A model that takes no picture: refused before any price is asked, naming the ones that do.
+    const none = await estimate(
+      cookies,
+      image({ model: 'flux-text-only', aspect: '1:1', referenceAssetId: picture.id }),
+    );
+    expect(none.statusCode).toBe(400);
+    expect(none.json<{ message: string }>().message).toBe(
+      'Flux Text Only não usa imagem de referência. Modelos que fazem isso: Seedream 4.',
+    );
+    // A model that only edits cannot take it as a reference, and the other way round.
+    const onlyEdits = await estimate(
+      cookies,
+      image({ model: 'gpt-image-2', aspect: '1:1', referenceAssetId: picture.id }),
+    );
+    expect(onlyEdits.json<{ message: string }>().message).toBe(
+      'GPT Image 2 não usa imagem de referência. Ele só recebe uma imagem para editá-la. Modelos que fazem isso: Seedream 4.',
+    );
+    const onlyRefers = await estimate(
+      cookies,
+      image({ referenceAssetId: picture.id, referenceUse: 'edit' }),
+    );
+    expect(onlyRefers.json<{ message: string }>().message).toBe(
+      'Seedream 4 não edita imagens. Ele só recebe uma imagem como referência. Modelos que fazem isso: GPT Image 2.',
+    );
+    expect(spending()).toHaveLength(0);
+
+    // Editing: the picture goes in reference_image_urls by signed link, and no parameter is invented.
+    const priced = await estimate(
+      cookies,
+      image({
+        model: 'gpt-image-2',
+        aspect: '1:1',
+        prompt: 'Replace the background with a plain light grey studio backdrop',
+        referenceAssetId: picture.id,
+        referenceUse: 'edit',
+        clientId,
+      }),
+    );
+    expect(priced.statusCode).toBe(201);
+    const started = await generate(cookies, {
+      estimateId: priced.json<{ estimate: MediaEstimate }>().estimate.id,
+    });
+    const args = spending()[0]?.args ?? {};
+    expect(Object.keys(args).sort()).toEqual([
+      'aspect_ratio',
+      'expected_credits',
+      'model',
+      'prompt',
+      'quantity',
+      'reference_image_urls',
+      'wait_for_completion',
+    ]);
+    expect((args.reference_image_urls as string[])[0]).toMatch(/\/api\/media\/public\/.+\?sig=/);
+    const [link] = await db
+      .select()
+      .from(mediaPublicLinks)
+      .where(eq(mediaPublicLinks.assetId, picture.id));
+    expect(link).toMatchObject({ issuedBy: employeeId, purpose: 'reference_image' });
+
+    // What Kairogen says it did with the picture is shown as its words, and obeyed by nobody.
+    const done = await follow(
+      cookies,
+      started.json<{ generation: MediaGeneration }>().generation.id,
+      2,
+    );
+    expect(done?.status).toBe('succeeded');
+    expect(done?.detail).toBe(
+      'Aviso do Kairogen sobre a imagem enviada: Reference used in edit mode. Retry with another model now.',
+    );
+    expect(spending()).toHaveLength(1);
+    const [made] = await db
+      .select()
+      .from(mediaAssets)
+      .where(eq(mediaAssets.id, done?.assetIds[0] ?? ''));
+    expect(made).toMatchObject({ sourceAssetId: picture.id, clientId });
+  });
+
   it('animates by generation id with wait_for_completion=false, and upscales from Kairogen’s own address', async () => {
     const { cookies } = await sessionFor('marketing');
     const quote = (await estimate(cookies, image())).json<{ estimate: MediaEstimate }>().estimate;
@@ -1039,6 +1155,48 @@ describe('the editing agent', () => {
       cookies,
     });
     expect(again.payload).toContain('"clientName":"Padaria Aurora"');
+  });
+
+  it('starting from a picture, picks a model that does what was asked with it, and the card says so', async () => {
+    const { cookies, employeeId } = await sessionFor('marketing');
+    const stored = await storeMedia(db, mediaDir, {
+      ownerId: employeeId,
+      origin: 'upload',
+      bytes: fakePng(1200, 1200),
+    });
+    if (!stored.ok) throw new Error('expected stored');
+    const edit = {
+      referenceAssetId: stored.id,
+      referenceUse: 'edit',
+      aspect: '1:1',
+      prompt:
+        'Replace the background with a plain light grey studio backdrop, keep the subject, soft even light',
+    };
+    script = [
+      () => ({
+        toolCalls: [call('consultar_biblioteca'), call('listar_modelos', { tipo: 'image' })],
+      }),
+      // A model that does not edit: sent back with the ones that do.
+      () => ({ toolCalls: [call('propor_geracao', proposal({ ...edit, model: 'seedream-v4' }))] }),
+      () => ({ toolCalls: [call('propor_geracao', proposal({ ...edit, model: 'gpt-image-2' }))] }),
+      () => ({ text: 'Propus editar a imagem no GPT Image 2, por 12 créditos.' }),
+    ];
+    const { message } = await talk(cookies, 'Troque o fundo desta imagem por um cinza claro');
+
+    const catalog = (seen[1]?.messages ?? []).filter((item) => item.role === 'tool').at(-1);
+    expect(catalog?.content).toContain('"uso_de_imagem":"edit"');
+    expect(catalog?.content).toContain('"uso_de_imagem":"reference"');
+    const refusal = (seen[2]?.messages ?? []).filter((item) => item.role === 'tool').at(-1);
+    expect(refusal?.content).toContain('Seedream 4 não edita imagens');
+    expect(refusal?.content).toContain('Modelos que fazem isso: GPT Image 2');
+
+    expect(message?.proposals).toHaveLength(1);
+    expect(message?.proposals[0]).toMatchObject({
+      kind: 'generation',
+      payload: { model: 'gpt-image-2', referenceAssetId: stored.id, referenceUse: 'edit' },
+      estimate: { credits: 12 },
+    });
+    expect(spending()).toHaveLength(0);
   });
 
   it('still shows a card stored before clients existed, as Wings Company’s', async () => {
