@@ -11,6 +11,7 @@ import { ComingSoonPage } from './pages/ComingSoonPage.js';
 import { EmployeeFormPage } from './pages/EmployeeFormPage.js';
 import { EmployeesPage } from './pages/EmployeesPage.js';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage.js';
+import { IntegrationsPage } from './pages/IntegrationsPage.js';
 import { LandingRoute } from './pages/LandingRoute.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { NotFoundPage } from './pages/NotFoundPage.js';
@@ -41,6 +42,7 @@ const SCREENS: Record<string, RouteObject[]> = {
     { path: 'novo', element: <EmployeeFormPage /> },
     { path: ':id', element: <EmployeeFormPage /> },
   ],
+  '/administracao/integracoes': [{ index: true, element: <IntegrationsPage /> }],
   '/dashboard/marketing': [{ index: true, element: <CockpitPage /> }],
   '/marketing/trafego-pago-wings': [
     { index: true, element: <TrafficStudioPage /> },

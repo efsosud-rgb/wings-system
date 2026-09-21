@@ -174,6 +174,14 @@ export const NAVIGATION: readonly NavModule[] = [
         kind: 'crud',
       },
       soon('/administracao/configuracoes', 'Configurações', undefined, 'settings.manage'),
+      {
+        path: '/administracao/integracoes',
+        label: 'Integrações',
+        description: 'Contas de serviços externos ligadas ao sistema',
+        permission: 'integrations.manage',
+        status: 'ready',
+        kind: 'crud',
+      },
       soon(
         '/administracao/apis',
         'APIs e credenciais',

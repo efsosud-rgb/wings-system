@@ -87,6 +87,26 @@ const schema = z.object({
   WORDPRESS_USERNAME: optionalString,
   WORDPRESS_APP_PASSWORD: optionalString,
   /**
+   * Encrypts the credentials of external services (the Kairogen OAuth tokens).
+   * A key of its own, never the CPF key: see `lib/secret-box.ts`. Without it
+   * the integration routes answer 503.
+   */
+  INTEGRATIONS_ENCRYPTION_KEY: optionalString.refine(
+    (value) => value === undefined || Buffer.from(value, 'base64').length === 32,
+    'must be 32 bytes, base64-encoded',
+  ),
+  /**
+   * Only when Kairogen's dynamic client registration is unavailable: a client
+   * id registered by hand. Public client (PKCE / device code), so no secret.
+   */
+  KAIROGEN_CLIENT_ID: optionalString,
+  /**
+   * A mounted volume for the media library. Unset, it falls back to a `media`
+   * folder inside CREATIVE_VIDEO_DIR; with neither, the media routes answer 503.
+   */
+  MEDIA_DIR: optionalString,
+
+  /**
    * The traffic agent's conversation, through OpenRouter. Without the key the
    * agent routes answer 503, never a fake reply. The model is an allow-list:
    * Sonnet 5 by default, Haiku 4.5 when this variable names it. The daily
@@ -119,6 +139,14 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
       .map((issue) => `  ${issue.path.join('.')}: ${issue.message}`)
       .join('\n');
     throw new Error(`Invalid environment configuration:\n${details}`);
+  }
+  if (
+    parsed.data.INTEGRATIONS_ENCRYPTION_KEY !== undefined &&
+    [parsed.data.CPF_ENCRYPTION_KEY, parsed.data.CPF_INDEX_KEY].includes(
+      parsed.data.INTEGRATIONS_ENCRYPTION_KEY,
+    )
+  ) {
+    throw new Error('INTEGRATIONS_ENCRYPTION_KEY must not reuse a CPF key');
   }
   if (parsed.data.CPF_ENCRYPTION_KEY === parsed.data.CPF_INDEX_KEY) {
     throw new Error('CPF_ENCRYPTION_KEY and CPF_INDEX_KEY must be different keys');
