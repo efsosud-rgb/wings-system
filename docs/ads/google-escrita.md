@@ -58,7 +58,8 @@ DOES_NOT_CONTAIN_…` (obrigatório desde a v21), lance `maximizeConversions`
   o orçamento chama `<nome> · orçamento`.
 - **Só Pesquisa:** `networkSettings` só com a Pesquisa do Google (sem parceiros
   nem Display), `positiveGeoTargetType: PRESENCE`, um `campaignCriterion` por
-  estado/cidade e um de idioma (português, `languageConstants/1014`).
+  estado/cidade, **um por raio do mapa** (`proximity`, ver abaixo) e um de
+  idioma (português, `languageConstants/1014`).
 
 Guardado no rascunho e **não enviado**: link do vídeo e título (YouTube);
 palavras-chave, negativas, títulos e descrições (Pesquisa).
@@ -71,6 +72,38 @@ cidade precisa casar com **exatamente uma** constante, pelo nome, dentro do
 estado escolhido; nenhuma ou mais de uma é recusa (`geo_unresolved`) **sem
 nada enviado** — mirar na Campinas errada não é algo para descobrir depois. O
 que foi resolvido fica guardado na execução (`platform_response.locations`).
+
+### Raio no mapa → critério de proximidade (21/09/2026)
+
+O rascunho tem **uma** estrutura de alcance para todas as plataformas —
+`reach: { states, cities, customLocations }` — e cada adaptador a traduz. No
+Google o tradutor é `googleLocationCriteria` (`google-ads-client.ts`): cada raio
+vira um `campaignCriterion` com
+
+```
+proximity: {
+  geoPoint: { latitudeInMicroDegrees, longitudeInMicroDegrees },  // graus × 1.000.000, inteiros
+  radius: <km>,
+  radiusUnits: 'KILOMETERS'
+}
+```
+
+no **mesmo `mutate` atômico**, ao lado dos critérios de estado e cidade — o
+Google alcança a união deles, o mesmo sentido que o alcance misto tem na Meta.
+Um alcance só de raios não consulta `geo_target_constant`. O nome do ponto
+("Campinas, São Paulo") é para pessoas e **não é enviado**. Os raios enviados
+ficam na execução (`platform_response.radii`). Os limites do construtor (1 a
+80 km, até 5 pontos) são os da Meta e cabem com folga nos do Google (até 800 km).
+
+**YouTube (Demand Gen):** o rascunho aceita o raio, mas — como estados e
+cidades — ele **fica guardado e não é enviado**: Demand Gen recebe localização
+no grupo de anúncios, que o sistema ainda não cria. Quando criar, o tradutor é
+o mesmo.
+
+TikTok e LinkedIn já estão no contrato (`PLATFORM_REACH` em
+`packages/shared`): não aceitam raio, o construtor mostra o mapa desabilitado
+com "Esta plataforma não aceita raio: use estados e cidades" e o esquema do
+rascunho recusa (`reachRefusal`). Falta a cada uma só o próprio tradutor.
 
 ## A conta Google passou a ser reconciliada
 
@@ -113,6 +146,9 @@ Decisões tomadas aqui — revisar se discordar:
 - [ ] `geo_target_constant` via GAQL com `name LIKE` e os nomes dos 27 estados
       como o Google os escreve (a tabela `STATE_NAMES` é a aposta; um estado
       que não casar vira recusa, não palpite).
+- [ ] Critério `proximity` (raio): nomes de campo conferidos na documentação,
+      nunca enviados. Conferir também que `PRESENCE` vale para o raio como vale
+      para estado/cidade, e como o Google Ads mostra o raio na campanha criada.
 - [ ] Demand Gen aceita campanha sem grupo de anúncios e com `targetSpend`?
       Orçamento mínimo de Demand Gen na conta?
 - [ ] O nível de acesso do developer token (Exploração) permite `mutate`?

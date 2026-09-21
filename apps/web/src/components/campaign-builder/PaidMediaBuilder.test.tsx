@@ -126,13 +126,16 @@ vi.mock('./RadiusMap.js', () => ({
   RadiusMap: ({
     value,
     onChange,
+    disabled,
   }: {
     value: CustomLocation[];
     onChange: (next: CustomLocation[]) => void;
+    disabled?: boolean;
   }) => (
-    <div>
+    <div data-testid="radius-map" data-disabled={disabled ? 'yes' : 'no'}>
       <button
         type="button"
+        disabled={disabled}
         onClick={() =>
           onChange([
             ...value,
@@ -515,12 +518,12 @@ describe('the builder on Google', () => {
     expect(screen.getByLabelText(/^Palavras-chave(?! negativas)/)).toBeTruthy();
     expect(screen.getByLabelText(/^Palavras-chave negativas/)).toBeTruthy();
     expect(screen.queryByLabelText(/Link do vídeo/)).toBeNull();
-    // Meta's image, format and variations are gone, and so is the map.
+    // Meta's image, format and variations are gone; the map stays.
     expect(screen.queryByLabelText(/^Imagem — Variação/)).toBeNull();
     expect(screen.queryByLabelText(/^Formato/)).toBeNull();
     expect(screen.queryByRole('button', { name: '+ Adicionar variação' })).toBeNull();
-    expect(screen.queryByRole('button', { name: 'clicar no mapa' })).toBeNull();
-    expect(screen.getByText(/O raio no mapa ainda não vale para o Google/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'clicar no mapa' })).toBeTruthy();
+    expect(screen.queryByText(/ainda não vale para o Google/)).toBeNull();
 
     const sections = screen.getAllByRole('region').filter((el) => el.matches('.builder-section'));
     expect(sections.map((el) => el.querySelector('.builder-step')?.textContent)).toEqual(
@@ -603,16 +606,55 @@ describe('the builder on Google', () => {
     expect(sent).not.toHaveProperty('search');
   });
 
-  it('drops a radius chosen on Meta when the platform becomes Google', async () => {
+  it('keeps a radius chosen on Meta when the platform becomes Google, and sends it', async () => {
     render(<PaidMediaBuilder canRequest />);
     fireEvent.click(screen.getByRole('button', { name: 'clicar no mapa' }));
     choose(/Google Pesquisa/);
     fillSearch();
+    // The summary reads the states and the radius together.
+    expect(screen.getAllByText(/15 km ao redor de Campinas/).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
 
     await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
     expect(requestCampaign.mock.calls[0]?.[0]).toMatchObject({
-      reach: { customLocations: [] },
+      platform: 'google_search',
+      reach: {
+        customLocations: [
+          { latitude: -22.9056, longitude: -47.0608, radiusKm: 15, label: 'Campinas' },
+        ],
+      },
+    });
+  });
+
+  it('shows the same reach block, map included, on every platform that can be chosen', () => {
+    render(<PaidMediaBuilder canRequest />);
+    for (const name of [/^Meta/, /Google Pesquisa/, /YouTube/]) {
+      choose(name);
+      const reach = screen.getByRole('region', { name: /Área de alcance/ });
+      expect(reach.querySelector('.builder-states')).toBeTruthy();
+      expect(reach.textContent).toContain('Cidades');
+      expect(reach.querySelector('[data-testid="radius-map"]')?.getAttribute('data-disabled')).toBe(
+        'no',
+      );
+      expect(reach.textContent).not.toContain('não aceita raio');
+    }
+  });
+
+  it('sends a radius alone as a whole reach on YouTube too', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    choose(/YouTube/);
+    fillCommon();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'SP' }));
+    fireEvent.click(screen.getByRole('button', { name: 'clicar no mapa' }));
+    type(screen.getByLabelText(/Link do vídeo/), 'https://youtu.be/dQw4w9WgXcQ');
+    type(screen.getByLabelText(/^Título/), 'Conheça a Wings');
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
+    expect(requestCampaign.mock.calls[0]?.[0].reach).toMatchObject({
+      states: [],
+      cities: [],
+      customLocations: [{ radiusKm: 15 }],
     });
   });
 

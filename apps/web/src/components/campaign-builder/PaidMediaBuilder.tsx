@@ -51,6 +51,7 @@ import {
   isGooglePlatform,
   matchesFormat,
   periodOverdeliveryFactor,
+  platformAcceptsRadius,
   usesVerticalPlacements,
   type CampaignDraft,
   type CampaignDraftInput,
@@ -157,11 +158,7 @@ function shapeDraft(values: CampaignDraftInput): CampaignDraftInput {
     };
   }
 
-  const google = {
-    ...common,
-    startPaused: true,
-    reach: { ...common.reach, customLocations: [] },
-  };
+  const google = { ...common, startPaused: true };
   if (values.platform === 'youtube') return { ...google, youtube };
   return {
     ...google,
@@ -724,11 +721,12 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
   const stepOf = (key: SectionKey) => sections.indexOf(key) + 1;
   const platformLabel = PAID_PLATFORMS.find((item) => item.key === platform)?.label ?? '—';
 
-  // A Google campaign takes no radius on the map.
+  // A radius drawn for one platform must not travel to one that takes none.
+  const acceptsRadius = platformAcceptsRadius(platform);
   useEffect(() => {
-    if (!google) return;
+    if (acceptsRadius) return;
     setValue('reach.customLocations', []);
-  }, [google, setValue]);
+  }, [acceptsRadius, setValue]);
 
   // The Facebook Page and Instagram account the ads are published as: read from
   // Meta, never typed in. Only Meta campaigns ask.
@@ -1098,21 +1096,17 @@ export function PaidMediaBuilder({ canRequest }: { canRequest: boolean }) {
             </Button>
           </div>
         </div>
-        {google ? (
-          <p className="field-hint">
-            O raio no mapa ainda não vale para o Google: use estados e cidades.
-          </p>
-        ) : (
-          <RadiusMap
-            value={values.reach.customLocations ?? []}
-            onChange={(next) =>
-              setValue('reach.customLocations', next, {
-                shouldDirty: true,
-                shouldValidate: submitCount > 0,
-              })
-            }
-          />
-        )}
+        {/* The same block on every platform; where no radius is taken, the map says so. */}
+        <RadiusMap
+          disabled={!acceptsRadius}
+          value={values.reach.customLocations ?? []}
+          onChange={(next) =>
+            setValue('reach.customLocations', next, {
+              shouldDirty: true,
+              shouldValidate: submitCount > 0,
+            })
+          }
+        />
         {(errors.reach?.message ?? errors.reach?.root?.message) && (
           <p className="field-error" role="alert">
             {errors.reach?.message ?? errors.reach?.root?.message}

@@ -131,9 +131,10 @@ export interface CreateCampaignSpec {
 /**
  * What a Google campaign shell needs beyond the common fields.
  *
- * Search takes its locations and language on the campaign. Demand Gen takes
- * them on the ad group, which this system does not create yet — so for Demand
- * Gen they stay in the approved draft and nothing about them is sent.
+ * Search takes its locations (radii included) and language on the campaign.
+ * Demand Gen takes them on the ad group, which this system does not create yet
+ * — so for Demand Gen they stay in the approved draft and nothing about them
+ * is sent.
  */
 export interface GoogleCampaignSpec {
   channel: 'SEARCH' | 'DEMAND_GEN';
@@ -141,8 +142,20 @@ export interface GoogleCampaignSpec {
   /** YYYY-MM-DD, in the account's timezone. */
   startDate: string;
   endDate: string;
-  /** Whole states (UF) and cities to resolve into geo target constants. */
-  locations: { states: string[]; cities: { name: string; state: string }[] };
+  /**
+   * The draft's reach, as the builder wrote it: the same structure every
+   * platform receives, and each adapter translates its own way. Here states
+   * and cities resolve into geo target constants, and each radius becomes a
+   * proximity criterion (`googleLocationCriteria`).
+   */
+  reach: PlatformReach;
+}
+
+/** The platform-neutral reach of a draft: whole states, cities, radii. */
+export interface PlatformReach {
+  states: string[];
+  cities: { name: string; state: string }[];
+  customLocations: { latitude: number; longitude: number; radiusKm: number }[];
 }
 
 export interface AdsPlatformClient {

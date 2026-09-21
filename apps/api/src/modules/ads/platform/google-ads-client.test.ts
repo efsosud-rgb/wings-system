@@ -4,6 +4,7 @@ import {
   GoogleAdsPlatformClient,
   GoogleAdsWriteClient,
   PORTUGUESE_LANGUAGE_CONSTANT,
+  googleLocationCriteria,
   microsFromCents,
 } from './google-ads-client.js';
 import type { CreateCampaignSpec } from './types.js';
@@ -26,7 +27,7 @@ const searchSpec: CreateCampaignSpec = {
     bidding: 'MAXIMIZE_CONVERSIONS',
     startDate: '2026-09-21',
     endDate: '2026-09-30',
-    locations: { states: ['SP'], cities: [{ name: 'Curitiba', state: 'PR' }] },
+    reach: { states: ['SP'], cities: [{ name: 'Curitiba', state: 'PR' }], customLocations: [] },
   },
 };
 
@@ -140,6 +141,118 @@ describe('creating a Search campaign', () => {
   });
 });
 
+/**
+ * A radius drawn on the builder's map becomes a Google proximity criterion: the
+ * point in micro degrees, the radius in kilometres. It lives beside states and
+ * cities on the same campaign, never instead of them.
+ */
+describe('the reach translator: a radius on Google', () => {
+  const campinas = { latitude: -22.9056, longitude: -47.0608, radiusKm: 15, label: 'Campinas' };
+  const CAMPAIGN = 'customers/4268586278/campaigns/-2';
+  const withReach = (reach: NonNullable<CreateCampaignSpec['google']>['reach']) => ({
+    ...searchSpec,
+    google: { ...searchSpec.google!, reach },
+  });
+
+  it('translates a point and a radius into micro degrees and kilometres', () => {
+    expect(googleLocationCriteria(CAMPAIGN, [], [campinas])).toEqual([
+      {
+        campaignCriterionOperation: {
+          create: {
+            campaign: CAMPAIGN,
+            proximity: {
+              geoPoint: {
+                latitudeInMicroDegrees: -22_905_600,
+                longitudeInMicroDegrees: -47_060_800,
+              },
+              radius: 15,
+              radiusUnits: 'KILOMETERS',
+            },
+          },
+        },
+      },
+    ]);
+  });
+
+  it('sends whole micro degrees, whatever floating point makes of the product', () => {
+    // -23.55052 * 1e6 is -23550519.999999996 in floating point.
+    const [operation] = googleLocationCriteria(
+      CAMPAIGN,
+      [],
+      [{ latitude: -23.55052, longitude: -46.63331, radiusKm: 1 }],
+    ) as Operation[];
+    expect(operation?.campaignCriterionOperation?.create.proximity).toMatchObject({
+      geoPoint: { latitudeInMicroDegrees: -23_550_520, longitudeInMicroDegrees: -46_633_310 },
+    });
+  });
+
+  it('sends the radius beside states and cities, in the same atomic mutate', async () => {
+    const { api, client } = writer();
+    const outcome = await client.createCampaign(
+      withReach({
+        states: ['SP'],
+        cities: [{ name: 'Curitiba', state: 'PR' }],
+        customLocations: [campinas],
+      }),
+    );
+
+    expect(outcome.status).toBe('applied');
+    expect(api.mutateCalls()).toHaveLength(1);
+    const criteria = operationsOf(api)
+      .slice(2)
+      .map((op) => op.campaignCriterionOperation?.create);
+    expect(criteria.map((criterion) => Object.keys(criterion ?? {}).sort())).toEqual([
+      ['campaign', 'location'],
+      ['campaign', 'location'],
+      ['campaign', 'proximity'],
+      ['campaign', 'language'],
+    ]);
+    expect(criteria.every((criterion) => criterion?.campaign === CAMPAIGN)).toBe(true);
+    // The place name is for people; Google gets coordinates only.
+    expect(JSON.stringify(criteria)).not.toContain('Campinas');
+    if (outcome.status !== 'applied') return;
+    expect(outcome.detail).toMatchObject({
+      radii: [{ latitude: -22.9056, longitude: -47.0608, radiusKm: 15 }],
+    });
+  });
+
+  it('a reach of radii alone asks Google about no place at all', async () => {
+    const { api, client } = writer();
+    const outcome = await client.createCampaign(
+      withReach({
+        states: [],
+        cities: [],
+        customLocations: [campinas, { ...campinas, radiusKm: 80 }],
+      }),
+    );
+
+    expect(outcome.status).toBe('applied');
+    expect(api.searchCalls('geo_target_constant')).toHaveLength(0);
+    const criteria = operationsOf(api)
+      .slice(2)
+      .map((op) => op.campaignCriterionOperation?.create);
+    expect(criteria.filter((criterion) => criterion?.proximity)).toHaveLength(2);
+    expect(criteria.filter((criterion) => criterion?.location)).toHaveLength(0);
+  });
+
+  it('on YouTube the radius stays in the approved draft, like every other place', async () => {
+    const { api, client } = writer();
+    const outcome = await client.createCampaign({
+      ...youtubeSpec,
+      google: {
+        ...youtubeSpec.google!,
+        reach: { states: ['SP'], cities: [], customLocations: [campinas] },
+      },
+    });
+
+    expect(outcome.status).toBe('applied');
+    // Demand Gen takes places on the ad group, which is not created yet.
+    expect(operationsOf(api)).toHaveLength(2);
+    if (outcome.status !== 'applied') return;
+    expect(outcome.detail).toMatchObject({ radii: [] });
+  });
+});
+
 describe('creating a YouTube campaign', () => {
   it('is a Demand Gen shell: budget and campaign only, nothing about places', async () => {
     const { api, client } = writer();
@@ -209,7 +322,7 @@ describe('what the write client refuses without calling Google', () => {
       ...searchSpec,
       google: {
         ...searchSpec.google!,
-        locations: { states: [], cities: [{ name: 'Atlântida', state: 'SP' }] },
+        reach: { states: [], cities: [{ name: 'Atlântida', state: 'SP' }], customLocations: [] },
       },
     });
     expect(unknown).toMatchObject({ status: 'rejected', code: 'geo_unresolved' });
@@ -218,7 +331,7 @@ describe('what the write client refuses without calling Google', () => {
       ...searchSpec,
       google: {
         ...searchSpec.google!,
-        locations: { states: [], cities: [{ name: 'Bom Jesus', state: 'MG' }] },
+        reach: { states: [], cities: [{ name: 'Bom Jesus', state: 'MG' }], customLocations: [] },
       },
     });
     expect(ambiguous).toMatchObject({ status: 'rejected', code: 'geo_unresolved' });
@@ -228,7 +341,7 @@ describe('what the write client refuses without calling Google', () => {
       ...searchSpec,
       google: {
         ...searchSpec.google!,
-        locations: { states: [], cities: [{ name: 'Campinas', state: 'PR' }] },
+        reach: { states: [], cities: [{ name: 'Campinas', state: 'PR' }], customLocations: [] },
       },
     });
     expect(wrongState).toMatchObject({ status: 'rejected', code: 'geo_unresolved' });

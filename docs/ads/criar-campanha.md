@@ -100,7 +100,14 @@ padrão exige `ads.request` e fica na auditoria.
 **Raio no mapa** (onda 3b): além de estados e cidades, o operador clica num
 ponto e ajusta um raio. Entra no rascunho como `reach.customLocations`
 (`latitude`, `longitude`, `radiusKm` inteiro de 1 a 80, `label` opcional, até 5
-pontos) — o formato de `geo_locations.custom_locations` da Meta. Os limites de
+pontos). É uma forma neutra que cada adaptador traduz: `custom_locations` na
+Meta (`metaGeoLocations`), critério de proximidade no Google
+(`googleLocationCriteria`, ver `google-escrita.md`). O bloco "Área de alcance" é
+**igual em toda plataforma**, mapa incluído; onde a plataforma não aceita raio
+(`PLATFORM_REACH`: TikTok, LinkedIn) o mapa aparece desabilitado com a dica
+"Esta plataforma não aceita raio: use estados e cidades". O campo continua se
+chamando `customLocations` porque rascunhos aprovados estão gravados — e suas
+aprovações, assinadas por hash — com esse nome. Os limites de
 raio são os documentados pela Meta, **não verificados na conta**. O mapa é
 Leaflet sobre tiles do OpenStreetMap, sem chave e sem custo. Saem do navegador
 para o OpenStreetMap os tiles da área na tela e uma consulta (Nominatim) das
