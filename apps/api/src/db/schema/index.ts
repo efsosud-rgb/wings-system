@@ -1,4 +1,5 @@
 export * from './ads.js';
+export * from './agent.js';
 export * from './audit.js';
 export * from './credentials.js';
 export * from './employees.js';

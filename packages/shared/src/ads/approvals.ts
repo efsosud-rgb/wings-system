@@ -53,6 +53,8 @@ export interface ApprovalListItem {
   decidedAt: string | null;
   requestedByName: string | null;
   requestedByAgent: boolean;
+  /** A person asked, from a card the traffic agent proposed. */
+  suggestedByAgent: boolean;
 }
 
 export interface ApprovalAuditEntry {
