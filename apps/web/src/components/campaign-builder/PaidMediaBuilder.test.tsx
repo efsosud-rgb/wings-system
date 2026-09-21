@@ -176,6 +176,8 @@ vi.mock('./RadiusMap.js', () => ({
 const libraryAssets: { current: MediaAsset[] } = { current: [] };
 const useInBuilder = vi.fn();
 const bridgeAnswer: { current: MediaBridgeResponse | null } = { current: null };
+// The library picker's "Cliente" filter reads the register; the builder tests need no clients.
+vi.mock('../../api/clients.js', () => ({ useClients: () => ({ data: { clients: [] } }) }));
 vi.mock('../../api/media.js', async (original) => ({
   ...(await original<typeof import('../../api/media.js')>()),
   useMediaAssets: (filters: { kind?: string }) => ({
@@ -1390,7 +1392,8 @@ describe('media from the library', () => {
     prompt: 'Storefront at golden hour',
     model: 'seedream-v4',
     credits: 4,
-    client: null,
+    clientId: '00000000-0000-4000-8000-0000000000c1',
+    client: 'Wings Company',
     folder: null,
     tags: [],
     ownerName: 'Marketing',

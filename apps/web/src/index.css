@@ -2741,6 +2741,35 @@ textarea.control {
   border-radius: 6px;
 }
 
+/* What a proposal produced, shown on its card once the generation is done. */
+.agent-card-media {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-card-media img,
+.agent-card-media video {
+  display: block;
+  width: 120px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+.agent-card-media a:focus-visible {
+  outline: 2px solid var(--wings-accent);
+  outline-offset: 2px;
+}
+
+.clients-rename,
+.clients-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
 .media-form-actions,
 .media-actions,
 .media-paid-action,

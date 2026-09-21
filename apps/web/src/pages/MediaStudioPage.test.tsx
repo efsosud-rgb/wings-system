@@ -1,4 +1,6 @@
+import { WINGS_CLIENT_ID } from '@wings/shared';
 import type {
+  Client,
   MediaAsset,
   MediaEstimate,
   MediaGeneration,
@@ -112,7 +114,8 @@ const asset = (overrides: Partial<MediaAsset> = {}): MediaAsset => ({
   prompt: 'Storefront at golden hour',
   model: 'seedream-v4',
   credits: 4,
-  client: null,
+  clientId: WINGS_CLIENT_ID,
+  client: 'Wings Company',
   folder: null,
   tags: ['rj'],
   ownerName: 'Marketing',
@@ -145,8 +148,17 @@ const generationOf = (overrides: Partial<MediaGeneration> = {}): MediaGeneration
   createdAt: new Date().toISOString(),
   finishedAt: null,
   assetIds: [],
+  clientId: WINGS_CLIENT_ID,
+  clientName: 'Wings Company',
   ...overrides,
 });
+
+const AURORA = '11111111-1111-4111-8111-1111111111c2';
+const clients: Client[] = [
+  { id: WINGS_CLIENT_ID, name: 'Wings Company', slug: 'wings-company', active: true },
+  { id: AURORA, name: 'Padaria Aurora', slug: 'padaria-aurora', active: true },
+  { id: '11111111-1111-4111-8111-1111111111c3', name: 'Antigo', slug: 'antigo', active: false },
+];
 
 let assets: MediaAsset[] = [];
 let generation: MediaGeneration = generationOf();
@@ -159,6 +171,7 @@ function script() {
       return Promise.resolve({ models: [imageModel], cachedAt: '' });
     if (path.startsWith('/media/models?kind=video'))
       return Promise.resolve({ models: [videoModel], cachedAt: '' });
+    if (path === '/clients') return Promise.resolve({ clients });
     if (path === '/media/generations') return Promise.resolve({ generations: [] });
     if (path.startsWith('/media/generations/')) return Promise.resolve({ generation });
     if (path.startsWith('/media/assets'))
@@ -245,6 +258,7 @@ describe('the operator form', () => {
         aspect: '1:1',
         quantity: 1,
         params: { quality: 'medium' },
+        clientId: WINGS_CLIENT_ID,
       },
     ]);
 
@@ -276,6 +290,32 @@ describe('the operator form', () => {
     expect(screen.queryByRole('button', { name: /^Gerar/ })).toBeNull();
   });
 
+  it('asks who it is for, Wings Company unless somebody picks a client, and sends only the id', async () => {
+    post.mockResolvedValue({ estimate: estimateOf() });
+    renderPage();
+    await screen.findByRole('option', { name: /Seedream 4/ });
+    const forWhom = within(form()).getByLabelText('Para quem') as HTMLSelectElement;
+    await within(forWhom).findByRole('option', { name: 'Padaria Aurora' });
+    expect(forWhom.value).toBe(WINGS_CLIENT_ID);
+    // A client that was switched off is not offered for new work.
+    expect(within(forWhom).queryByRole('option', { name: 'Antigo' })).toBeNull();
+
+    fireEvent.change(forWhom, { target: { value: AURORA } });
+    typePrompt(PROMPT);
+    fireEvent.click(screen.getByRole('button', { name: 'Estimar custo' }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    expect(post.mock.calls[0]?.[1]).toMatchObject({ clientId: AURORA, prompt: PROMPT });
+    expect(JSON.stringify(post.mock.calls[0]?.[1])).not.toContain('Aurora');
+  });
+
+  it('says "custo na estimativa" for a model the catalog gives no price for', async () => {
+    renderPage();
+    fireEvent.change(await within(form()).findByLabelText('Tipo'), { target: { value: 'video' } });
+    expect(
+      await screen.findByRole('option', { name: 'Veo 3.1 Fast · custo na estimativa' }),
+    ).toBeTruthy();
+  });
+
   it('takes its controls from the model: price parameters, shapes, durations and quantity', async () => {
     renderPage();
     await screen.findByRole('option', { name: /Seedream 4/ });
@@ -289,7 +329,7 @@ describe('the operator form', () => {
     expect(within(form()).getByText('Imagem de referência')).toBeTruthy();
 
     fireEvent.change(within(form()).getByLabelText('Tipo'), { target: { value: 'video' } });
-    await screen.findByRole('option', { name: 'Veo 3.1 Fast' });
+    await screen.findByRole('option', { name: 'Veo 3.1 Fast · custo na estimativa' });
     const duration = within(form()).getByLabelText('Duração');
     expect(
       within(duration)
@@ -393,9 +433,11 @@ describe('the library', () => {
     fireEvent.change(within(filters).getByLabelText('Formato'), { target: { value: '9:16' } });
     fireEvent.change(within(filters).getByLabelText('Tag'), { target: { value: 'rj' } });
     fireEvent.change(within(filters).getByLabelText('Busca'), { target: { value: 'golden hour' } });
+    await within(filters).findByRole('option', { name: 'Padaria Aurora' });
+    fireEvent.change(within(filters).getByLabelText('Cliente'), { target: { value: AURORA } });
     await waitFor(() =>
       expect(get).toHaveBeenCalledWith(
-        '/media/assets?kind=image&origin=kairogen&aspect=9%3A16&tag=rj&q=golden+hour',
+        `/media/assets?kind=image&origin=kairogen&aspect=9%3A16&tag=rj&q=golden+hour&clientId=${AURORA}`,
       ),
     );
   });
@@ -458,6 +500,9 @@ describe('the library', () => {
     dialog = screen.getByRole('dialog', { name: 'Prévia da mídia' });
     expect(within(dialog).getByRole('button', { name: 'Animar' })).toBeTruthy();
 
+    expect(within(dialog).getByText('Para quem')).toBeTruthy();
+    await within(dialog).findByRole('option', { name: 'Padaria Aurora' });
+    fireEvent.change(within(dialog).getByLabelText('Cliente'), { target: { value: AURORA } });
     fireEvent.change(within(dialog).getByLabelText('Pasta'), { target: { value: 'Campanha RJ' } });
     fireEvent.change(within(dialog).getByLabelText('Tags, separadas por vírgula'), {
       target: { value: 'rj, reels' },
@@ -465,7 +510,7 @@ describe('the library', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Salvar organização' }));
     await waitFor(() =>
       expect(patch).toHaveBeenCalledWith('/media/assets/asset-1', {
-        client: null,
+        clientId: AURORA,
         folder: 'Campanha RJ',
         tags: ['rj', 'reels'],
       }),

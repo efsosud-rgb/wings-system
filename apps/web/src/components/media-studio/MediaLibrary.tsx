@@ -2,6 +2,8 @@ import {
   MEDIA_ASPECTS,
   MEDIA_MAX_TAGS,
   MEDIA_UPLOAD_TYPES,
+  WINGS_CLIENT_ID,
+  WINGS_CLIENT_NAME,
   type MediaAsset,
   type MediaEstimate,
   type MediaEstimateRequest,
@@ -9,6 +11,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ApiError } from '../../api/client.js';
+import { useClients } from '../../api/clients.js';
 import {
   PICKED_MEDIA_KEY,
   mediaFileUrl,
@@ -36,7 +39,7 @@ const formatSize = (bytes: number) =>
     ? `${(bytes / (1024 * 1024)).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} MB`
     : `${Math.max(1, Math.round(bytes / 1024)).toLocaleString('pt-BR')} KB`;
 
-export function MediaThumb({ asset }: { asset: MediaAsset }) {
+export function MediaThumb({ asset }: { asset: Pick<MediaAsset, 'kind' | 'downloadPath'> }) {
   return asset.kind === 'video' ? (
     <video src={mediaFileUrl(asset)} preload="metadata" muted playsInline aria-hidden="true" />
   ) : (
@@ -49,6 +52,39 @@ export function describeAsset(asset: MediaAsset): string {
   const shape = asset.width && asset.height ? `, ${asset.width} × ${asset.height}` : '';
   const from = asset.origin === 'kairogen' ? 'gerado no Kairogen' : 'enviado';
   return `${what}${shape}, ${from} em ${new Date(asset.createdAt).toLocaleDateString('pt-BR')}`;
+}
+
+/**
+ * "Para quem": Wings Company or one of its clients. Inactive clients are left
+ * out, except the one already chosen, so an old asset still shows whose it is.
+ */
+export function ClientSelect({
+  value,
+  onChange,
+  allLabel,
+}: {
+  value: string;
+  onChange: (clientId: string) => void;
+  /** When given, an empty first option with this label (a filter, not a choice). */
+  allLabel?: string;
+}) {
+  const clients = useClients();
+  const list = (clients.data?.clients ?? []).filter(
+    (client) => client.active || client.id === value,
+  );
+  return (
+    <select className="control" value={value} onChange={(event) => onChange(event.target.value)}>
+      {allLabel !== undefined && <option value="">{allLabel}</option>}
+      {allLabel === undefined && list.length === 0 && (
+        <option value={WINGS_CLIENT_ID}>{WINGS_CLIENT_NAME}</option>
+      )}
+      {list.map((client) => (
+        <option key={client.id} value={client.id}>
+          {client.name}
+        </option>
+      ))}
+    </select>
+  );
 }
 
 /** The filter bar, shared by the library and by the pickers. */
@@ -105,6 +141,14 @@ export function MediaFilters({
             </option>
           ))}
         </select>
+      </label>
+      <label className="field">
+        <span className="field-label">Cliente</span>
+        <ClientSelect
+          value={value.clientId ?? ''}
+          onChange={(next) => set('clientId', next)}
+          allLabel="Todos"
+        />
       </label>
       <label className="field">
         <span className="field-label">Tag</span>
@@ -205,7 +249,7 @@ function AssetPreview({
   const navigate = useNavigate();
   const bridge = useMediaInBuilder();
   const filing = useFileMedia();
-  const [client, setClient] = useState(asset.client ?? '');
+  const [clientId, setClientId] = useState(asset.clientId);
   const [folder, setFolder] = useState(asset.folder ?? '');
   const [tags, setTags] = useState(asset.tags.join(', '));
   const closeButton = useRef<HTMLButtonElement | null>(null);
@@ -263,6 +307,12 @@ function AssetPreview({
               {asset.aspect !== 'other' && ` · ${asset.aspect}`}
             </dd>
           </div>
+          {asset.client && (
+            <div>
+              <dt>Para quem</dt>
+              <dd>{asset.client}</dd>
+            </div>
+          )}
           {asset.ownerName && (
             <div>
               <dt>De</dt>
@@ -286,7 +336,7 @@ function AssetPreview({
               event.preventDefault();
               filing.mutate({
                 id: asset.id,
-                client: client.trim() || null,
+                clientId,
                 folder: folder.trim() || null,
                 tags: tags
                   .split(',')
@@ -298,12 +348,7 @@ function AssetPreview({
           >
             <label className="field">
               <span className="field-label">Cliente</span>
-              <input
-                className="control"
-                value={client}
-                maxLength={80}
-                onChange={(e) => setClient(e.target.value)}
-              />
+              <ClientSelect value={clientId} onChange={setClientId} />
             </label>
             <label className="field">
               <span className="field-label">Pasta</span>
