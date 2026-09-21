@@ -30,6 +30,7 @@ import {
   placementsSchema,
   reachRefusal,
 } from './campaign-builder.js';
+import type { AgentGenerationProposal } from '../marketing/media-studio.js';
 
 /**
  * The conversation with the traffic agent: what the API stores and streams and
@@ -86,9 +87,28 @@ export const AGENT_READ_TOOLS = [
   'rascunho_atual',
 ] as const;
 export const AGENT_PROPOSAL_TOOLS = ['propor_campanha', 'propor_alteracao'] as const;
+
+/**
+ * One chat infrastructure, one agent per sub-module. Conversations never cross:
+ * what was asked of the traffic agent is not context for the editing agent.
+ */
+export const AGENT_SCOPES = ['traffic', 'media'] as const;
+export type AgentScope = (typeof AGENT_SCOPES)[number];
+
+/** The editing agent (Marketing → Edição de Fotos e Vídeos). It reads, estimates and proposes. */
+export const MEDIA_AGENT_READ_TOOLS = [
+  'listar_modelos',
+  'estimar_custo',
+  'consultar_biblioteca',
+  'consultar_saldo',
+  'rascunho_da_campanha',
+] as const;
+export const MEDIA_AGENT_PROPOSAL_TOOLS = ['propor_geracao'] as const;
+export type MediaAgentToolName =
+  (typeof MEDIA_AGENT_READ_TOOLS)[number] | (typeof MEDIA_AGENT_PROPOSAL_TOOLS)[number];
 export type AgentReadTool = (typeof AGENT_READ_TOOLS)[number];
 export type AgentProposalTool = (typeof AGENT_PROPOSAL_TOOLS)[number];
-export type AgentToolName = AgentReadTool | AgentProposalTool;
+export type AgentToolName = AgentReadTool | AgentProposalTool | MediaAgentToolName;
 
 /** "O que consultei": one plain phrase per tool. */
 export const AGENT_TOOL_LABEL: Record<AgentToolName, string> = {
@@ -101,6 +121,12 @@ export const AGENT_TOOL_LABEL: Record<AgentToolName, string> = {
   rascunho_atual: 'Rascunho aberto no construtor',
   propor_campanha: 'Proposta de campanha',
   propor_alteracao: 'Proposta de alteração',
+  listar_modelos: 'Modelos e preços do Kairogen',
+  estimar_custo: 'Custo em créditos',
+  consultar_biblioteca: 'Biblioteca de mídia',
+  consultar_saldo: 'Saldo e limites de créditos',
+  rascunho_da_campanha: 'Rascunho aberto no construtor de campanha',
+  propor_geracao: 'Proposta de geração',
 };
 
 // ---------------------------------------------------------------------------
@@ -529,7 +555,22 @@ export interface AgentChangeProposalCard extends AgentProposalBase {
   notRequestableReason: string | null;
 }
 
-export type AgentProposalCard = AgentCampaignProposalCard | AgentChangeProposalCard;
+/**
+ * A picture or a video the editing agent proposes. The server already asked
+ * Kairogen what it costs, so the button can say "Gerar (N créditos)"; only the
+ * click spends them.
+ */
+export interface AgentGenerationProposalCard extends AgentProposalBase {
+  kind: 'generation';
+  payload: AgentGenerationProposal;
+  /** Null when the estimate could not be made or has been used. */
+  estimate: { id: string; credits: number; expiresAt: string } | null;
+  /** Set once somebody clicked: the generation to follow. */
+  generationId: string | null;
+}
+
+export type AgentProposalCard =
+  AgentCampaignProposalCard | AgentChangeProposalCard | AgentGenerationProposalCard;
 
 // ---------------------------------------------------------------------------
 // Conversations
@@ -575,13 +616,15 @@ export interface AgentUsageToday {
 /** What the studio knows that the database does not: the form on screen. */
 export const agentBuilderContextSchema = z
   .object({
-    tab: z.enum(['paid', 'owned']),
+    tab: z.enum(['paid', 'owned', 'media']),
     /** The builder's current values, as typed. Data for a read tool, nothing more. */
     draft: z.record(z.string(), z.unknown()).optional(),
   })
   .optional();
 
 export const agentSendMessageSchema = z.object({
+  /** Which agent is being talked to. Absent means the traffic agent, as before. */
+  scope: z.enum(AGENT_SCOPES).default('traffic'),
   conversationId: z.uuid().optional(),
   message: z.string().trim().min(1, 'Escreva a mensagem').max(AGENT_MESSAGE_MAX),
   context: agentBuilderContextSchema,
@@ -608,7 +651,7 @@ export type AgentStreamEvent =
 // ---------------------------------------------------------------------------
 //
 //   GET  /agent/status                  -> AgentStatusResponse
-//   GET  /agent/conversations           -> { conversations: AgentConversationSummary[] }
+//   GET  /agent/conversations?scope=    -> { conversations: AgentConversationSummary[] }
 //   GET  /agent/conversations/:id       -> AgentConversationResponse
 //   POST /agent/messages                -> text/event-stream of AgentStreamEvent,
 //                                          one JSON object per `data:` line

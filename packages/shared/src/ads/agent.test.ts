@@ -6,6 +6,8 @@ import {
   AGENT_PROPOSAL_TOOLS,
   AGENT_READ_TOOLS,
   AGENT_TOOL_LABEL,
+  MEDIA_AGENT_PROPOSAL_TOOLS,
+  MEDIA_AGENT_READ_TOOLS,
   agentCampaignProposalSchema,
   agentChangeProposalSchema,
   agentSendMessageSchema,
@@ -98,9 +100,14 @@ describe('the agent contract', () => {
   });
 
   it('names every tool for the screen, and none of them acts', () => {
-    const tools = [...AGENT_READ_TOOLS, ...AGENT_PROPOSAL_TOOLS];
+    const tools = [
+      ...AGENT_READ_TOOLS,
+      ...AGENT_PROPOSAL_TOOLS,
+      ...MEDIA_AGENT_READ_TOOLS,
+      ...MEDIA_AGENT_PROPOSAL_TOOLS,
+    ];
     expect(Object.keys(AGENT_TOOL_LABEL).sort()).toEqual([...tools].sort());
-    expect(tools.join(' ')).not.toMatch(/execut|aprovar|criar_pedido/);
+    expect(tools.join(' ')).not.toMatch(/execut|aprovar|criar_pedido|gerar_|generate/);
   });
 
   it('accepts a complete campaign proposal and drops whatever the builder has no field for', () => {
