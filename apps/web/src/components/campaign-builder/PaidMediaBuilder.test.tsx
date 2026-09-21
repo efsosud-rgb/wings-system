@@ -1085,23 +1085,41 @@ describe('the builder on Meta: ad set and ads', () => {
 });
 
 describe('applying a proposal from the agent', () => {
-  const googleProposal = agentCampaignProposalSchema.parse({
-    platform: 'google_search',
-    name: 'Pesquisa — franquia SP',
+  const common = {
     objective: 'lead',
     idealCustomerProfile: 'Empreendedor de 30 a 50 anos, com experiência em gestão.',
     reach: { states: ['SP'], cities: [{ name: 'Curitiba', state: 'PR' }] },
     destinationUrl: 'https://wingscompany.com.br/franquia',
-    dailyBudgetCents: 2000,
     startDate: '2026-09-20',
     endDate: '2026-09-29',
+    assumptions: ['Assumi que a página de destino já tem o formulário.'],
+  };
+  const because = (...fields: string[]) =>
+    fields.map((field) => ({ field, reason: `Motivo de ${field}.` }));
+
+  const googleProposal = agentCampaignProposalSchema.parse({
+    ...common,
+    platform: 'google_search',
+    name: 'Pesquisa — franquia SP',
+    dailyBudgetCents: 2000,
+    utms: {
+      utm_source: 'google',
+      utm_medium: 'cpc',
+      utm_campaign: 'agente-pesquisa-sp',
+      utm_content: 'lead',
+    },
     search: {
-      keywords: ['franquia de alimentação', 'abrir franquia'],
-      negativeKeywords: ['grátis'],
+      keywords: [
+        { text: 'franquia de alimentação', match: 'phrase' },
+        { text: 'abrir franquia', match: 'exact' },
+        { text: 'como franquear meu negócio', match: 'broad' },
+      ],
+      negativeKeywords: ['grátis', 'vaga', 'emprego', 'curso', 'currículo'],
       headlines: ['Franquia Wings'],
       descriptions: ['Conheça o modelo de negócio e o suporte.'],
     },
     explanations: [
+      ...because('objective', 'idealCustomerProfile', 'reach', 'dates'),
       { field: 'dailyBudgetCents', reason: 'R$ 20 por dia cabem no disponível da conta Google.' },
       { field: 'search', reason: 'Termos de quem já procura uma franquia.' },
     ],
@@ -1109,20 +1127,46 @@ describe('applying a proposal from the agent', () => {
   });
 
   const metaProposal = agentCampaignProposalSchema.parse({
+    ...common,
     platform: 'meta',
     name: 'Leads — formatação SP',
-    objective: 'lead',
     dailyBudgetCents: 3500,
-    startDate: '2026-09-20',
     endDate: '2026-09-26',
+    utms: {
+      utm_source: 'meta',
+      utm_medium: 'paid_social',
+      utm_campaign: 'agente-leads-sp',
+      utm_content: 'instagram',
+    },
     ageMin: 30,
     ageMax: 55,
+    formatKey: 'stories_reels',
+    placements: { mode: 'manual', facebook: [], instagram: ['stories', 'reels'] },
     copy: [
-      { headline: 'Leve a Wings para sua cidade', primaryText: 'Fale com a gente.' },
-      { headline: 'Seja um franqueado Wings', primaryText: 'Suporte completo.' },
-      { headline: 'Conheça o modelo Wings', primaryText: 'Treinamento e suporte.' },
+      {
+        headline: 'Leve a Wings para sua cidade',
+        primaryText: 'Fale com a gente.',
+        callToAction: 'LEARN_MORE',
+        mediaBrief: 'Dono de negócio na porta da loja, fachada ao fundo, luz do dia.',
+      },
+      {
+        headline: 'Seja um franqueado Wings',
+        primaryText: 'Suporte completo.',
+        callToAction: 'CONTACT_US',
+        mediaBrief: 'Equipe reunida em volta dos manuais da franquia.',
+      },
+      {
+        headline: 'Conheça o modelo Wings',
+        primaryText: 'Treinamento e suporte.',
+        callToAction: 'LEARN_MORE',
+        mediaBrief: 'Mapa do Brasil com as cidades onde a marca já está.',
+      },
     ],
-    explanations: [{ field: 'age', reason: 'Os leads qualificados têm de 30 a 55 anos.' }],
+    explanations: [
+      ...because('objective', 'idealCustomerProfile', 'reach', 'dailyBudgetCents', 'dates'),
+      ...because('placements', 'format', 'copy'),
+      { field: 'age', reason: 'Os leads qualificados têm de 30 a 55 anos.' },
+    ],
     summary: 'Campanha de leads na Meta.',
   });
 
@@ -1149,9 +1193,10 @@ describe('applying a proposal from the agent', () => {
     expect(screen.getAllByText('R$ 200,00').length).toBeGreaterThan(0);
     expect(
       (screen.getByLabelText(/^Palavras-chave(?! negativas)/) as HTMLTextAreaElement).value,
-    ).toBe('franquia de alimentação\nabrir franquia');
+      // Google's notation for the match type: "phrase", [exact], broad.
+    ).toBe('"franquia de alimentação"\n[abrir franquia]\ncomo franquear meu negócio');
     expect((screen.getByLabelText(/^Palavras-chave negativas/) as HTMLTextAreaElement).value).toBe(
-      'grátis',
+      'grátis\nvaga\nemprego\ncurso\ncurrículo',
     );
     expect((screen.getByLabelText(/^Título 1/) as HTMLInputElement).value).toBe('Franquia Wings');
     expect((screen.getByRole('checkbox', { name: 'SP' }) as HTMLInputElement).checked).toBe(true);
@@ -1161,6 +1206,7 @@ describe('applying a proposal from the agent', () => {
     expect(panel.textContent).toContain('Verba diária');
     expect(panel.textContent).toContain('R$ 20 por dia cabem no disponível da conta Google.');
     expect(panel.textContent).toContain('Termos de quem já procura uma franquia.');
+    expect(panel.textContent).toContain('Assumi que a página de destino já tem o formulário.');
     expect(requestCampaign).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Dispensar' }));
@@ -1180,11 +1226,13 @@ describe('applying a proposal from the agent', () => {
       startPaused: true,
       reach: { states: ['SP'], cities: [{ name: 'Curitiba', state: 'PR' }] },
       search: {
-        keywords: ['franquia de alimentação', 'abrir franquia'],
-        negativeKeywords: ['grátis'],
+        // The builder's own validation takes Google's match notation.
+        keywords: ['"franquia de alimentação"', '[abrir franquia]', 'como franquear meu negócio'],
+        negativeKeywords: ['grátis', 'vaga', 'emprego', 'curso', 'currículo'],
         headlines: ['Franquia Wings'],
       },
-      utms: { utm_source: 'google' },
+      // The proposal's UTMs, not the ones the builder would have generated.
+      utms: { utm_source: 'google', utm_medium: 'cpc', utm_campaign: 'agente-pesquisa-sp' },
     });
   });
 
@@ -1194,7 +1242,12 @@ describe('applying a proposal from the agent', () => {
     const imagesBefore = screen.getAllByAltText(/^Criativo/).length;
     expect(imagesBefore).toBeGreaterThan(0);
 
-    act(() => bridge.current?.applyProposal(metaProposal));
+    act(() =>
+      bridge.current?.applyProposal(metaProposal, [
+        'Imagens ou vídeo de cada variação',
+        'Página do Facebook e conta do Instagram',
+      ]),
+    );
 
     const titles = screen.getAllByLabelText(/^Título/) as HTMLInputElement[];
     expect(titles.map((input) => input.value)).toEqual([
@@ -1207,8 +1260,25 @@ describe('applying a proposal from the agent', () => {
     expect((screen.getByLabelText(/Verba por dia/) as HTMLInputElement).value).toBe('35,00');
     // The image uploaded before the proposal is still the first variation's.
     expect(screen.getAllByAltText(/^Criativo/)).toHaveLength(imagesBefore);
+    // Placements, format and UTMs come from the proposal too.
+    expect((screen.getByLabelText(/^Formato/) as HTMLSelectElement).value).toBe('stories_reels');
+    expect((screen.getByRole('radio', { name: 'Manual' }) as HTMLInputElement).checked).toBe(true);
+    expect(
+      (screen.getByRole('checkbox', { name: 'Instagram Stories' }) as HTMLInputElement).checked,
+    ).toBe(true);
+    expect(
+      (screen.getByRole('checkbox', { name: 'Facebook Feed' }) as HTMLInputElement).checked,
+    ).toBe(false);
     expect(bridge.current?.getDraft()).toMatchObject({
       platform: 'meta',
+      formatKey: 'stories_reels',
+      placements: { mode: 'manual', facebook: [], instagram: ['stories', 'reels'] },
+      utms: {
+        utm_source: 'meta',
+        utm_medium: 'paid_social',
+        utm_campaign: 'agente-leads-sp',
+        utm_content: 'instagram',
+      },
       variations: [
         {
           creativeId: '00000001-0000-4000-8000-000000000000',
@@ -1222,7 +1292,19 @@ describe('applying a proposal from the agent', () => {
     const panel = screen.getByRole('region', { name: 'Proposta do agente aplicada' });
     expect(panel.textContent).toContain('Faixa de idade');
     expect(panel.textContent).toContain('Falta escolher as imagens e a Página.');
+    // What Design has to produce stays in view after the card is gone.
+    expect(panel.textContent).toContain('Briefing para o Design — Variação 1');
+    expect(panel.textContent).toContain('Dono de negócio na porta da loja');
+    expect(panel.textContent).toContain('Briefing para o Design — Variação 3');
+    expect(panel.textContent).toContain('Pendente');
+    expect(panel.textContent).toContain('Página do Facebook e conta do Instagram');
     expect(requestCampaign).not.toHaveBeenCalled();
+
+    // Renaming the campaign does not rewrite the UTMs the proposal brought.
+    type(screen.getByLabelText(/^Nome da campanha/), 'Outro nome');
+    expect(bridge.current?.getDraft()).toMatchObject({
+      utms: { utm_campaign: 'agente-leads-sp' },
+    });
   });
 
   it('on YouTube, says the video link is still missing', () => {
@@ -1230,20 +1312,29 @@ describe('applying a proposal from the agent', () => {
     act(() =>
       bridge.current?.applyProposal(
         agentCampaignProposalSchema.parse({
+          ...common,
           platform: 'youtube',
           name: 'YouTube — institucional',
           objective: 'traffic',
           dailyBudgetCents: 1500,
-          startDate: '2026-09-20',
-          endDate: '2026-09-22',
-          youtube: { headline: 'Conheça a Wings' },
-          explanations: [{ field: 'youtube', reason: 'Título curto para o vídeo institucional.' }],
+          utms: { utm_source: 'youtube', utm_medium: 'paid_video', utm_campaign: 'agente-video' },
+          youtube: {
+            headline: 'Conheça a Wings',
+            mediaBrief: 'Fundador conta em 30 segundos como a marca virou franquia.',
+          },
+          explanations: [
+            ...because('objective', 'idealCustomerProfile', 'reach', 'dailyBudgetCents', 'dates'),
+            { field: 'youtube', reason: 'Título curto para o vídeo institucional.' },
+          ],
           summary: 'Vídeo institucional.',
         }),
       ),
     );
     expect((screen.getByLabelText(/^Título/) as HTMLInputElement).value).toBe('Conheça a Wings');
     expect(screen.getByText('Falta o link do vídeo.')).toBeTruthy();
+    const panel = screen.getByRole('region', { name: 'Proposta do agente aplicada' });
+    expect(panel.textContent).toContain('Briefing para o Design — Vídeo');
+    expect(panel.textContent).toContain('Fundador conta em 30 segundos');
   });
 
   it('hands the agent the form as it stands, and nothing once it leaves the screen', () => {

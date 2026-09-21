@@ -50,6 +50,7 @@ import {
   describeReach,
   estimateCostCents,
   isGooglePlatform,
+  keywordWithMatch,
   matchesFormat,
   periodOverdeliveryFactor,
   platformAcceptsRadius,
@@ -636,7 +637,8 @@ function describePlacements(placements: Placements | CampaignDraftInput['placeme
  */
 export interface BuilderBridge {
   getDraft: () => Record<string, unknown>;
-  applyProposal: (proposal: AgentCampaignProposal) => void;
+  /** `pending` is the card's list of what only a person can choose. */
+  applyProposal: (proposal: AgentCampaignProposal, pending?: string[]) => void;
 }
 
 /** Cents as the budget box shows them: 2000 -> "20,00". */
@@ -834,23 +836,25 @@ export function PaidMediaBuilder({
   // agent can know and leaves the rest as the person had it: images, videos,
   // the Page and the Instagram account are never touched, and nothing is sent.
   const [appliedProposal, setAppliedProposal] = useState<AgentCampaignProposal | null>(null);
+  const [appliedPending, setAppliedPending] = useState<string[]>([]);
+  // Once a proposal brought its own UTMs they are the person's to edit: the
+  // automatic ones stop following the name.
+  const [utmsFromProposal, setUtmsFromProposal] = useState(false);
   const { append: appendVariation } = variations;
-  const applyProposal = (proposal: AgentCampaignProposal) => {
+  const applyProposal = (proposal: AgentCampaignProposal, pending: string[] = []) => {
     const filled = { shouldDirty: true, shouldValidate: submitCount > 0 };
     // The saved audience must not overwrite what is applied here.
     setAudienceLoaded(true);
     setValue('platform', proposal.platform, filled);
     setValue('name', proposal.name, filled);
     setValue('objective', proposal.objective, filled);
-    if (proposal.idealCustomerProfile) {
-      setValue('idealCustomerProfile', proposal.idealCustomerProfile, filled);
-    }
-    if (proposal.reach) {
-      setValue('reach.states', proposal.reach.states, filled);
-      replaceCities(proposal.reach.cities);
-      setValue('reach.customLocations', proposal.reach.customLocations, filled);
-    }
-    if (proposal.destinationUrl) setValue('destinationUrl', proposal.destinationUrl, filled);
+    setValue('idealCustomerProfile', proposal.idealCustomerProfile, filled);
+    setValue('reach.states', proposal.reach.states, filled);
+    replaceCities(proposal.reach.cities);
+    setValue('reach.customLocations', proposal.reach.customLocations, filled);
+    setValue('destinationUrl', proposal.destinationUrl, filled);
+    setUtmsFromProposal(true);
+    for (const key of UTM_KEYS) setValue(`utms.${key}`, proposal.utms[key], filled);
     setValue('dailyBudgetCents', proposal.dailyBudgetCents, filled);
     setBudgetText(centsToBudgetText(proposal.dailyBudgetCents));
     setValue('startDate', proposal.startDate, filled);
@@ -859,6 +863,12 @@ export function PaidMediaBuilder({
     if (proposal.platform === 'meta') {
       if (proposal.ageMin !== undefined) setValue('ageMin', proposal.ageMin, filled);
       if (proposal.ageMax !== undefined) setValue('ageMax', proposal.ageMax, filled);
+      if (proposal.formatKey) setValue('formatKey', proposal.formatKey, filled);
+      if (proposal.placements) {
+        setValue('placements.mode', proposal.placements.mode, filled);
+        setValue('placements.facebook', proposal.placements.facebook, filled);
+        setValue('placements.instagram', proposal.placements.instagram, filled);
+      }
       const existing = getValues('variations') ?? [];
       proposal.copy.forEach((copy, index) => {
         if (index < existing.length) {
@@ -878,9 +888,11 @@ export function PaidMediaBuilder({
       });
     }
     if (proposal.platform === 'google_search' && proposal.search) {
-      setValue('search.keywords', proposal.search.keywords, filled);
+      // Google's own notation for the match type: [exact], "phrase", broad.
+      const keywords = proposal.search.keywords.map(keywordWithMatch);
+      setValue('search.keywords', keywords, filled);
       setValue('search.negativeKeywords', proposal.search.negativeKeywords, filled);
-      setKeywordsText(proposal.search.keywords.join('\n'));
+      setKeywordsText(keywords.join('\n'));
       setNegativeKeywordsText(proposal.search.negativeKeywords.join('\n'));
       setValue('search.headlines', padTo(proposal.search.headlines, MAX_SEARCH_HEADLINES), filled);
       setValue(
@@ -896,6 +908,7 @@ export function PaidMediaBuilder({
     }
     setChecked(null);
     setAppliedProposal(proposal);
+    setAppliedPending(pending);
   };
   // The bridge always points at this render's functions, and at nothing once
   // the builder leaves the screen.
@@ -917,15 +930,26 @@ export function PaidMediaBuilder({
       : appliedProposal.platform === 'youtube' && !appliedProposal.youtube?.videoUrl
         ? 'Falta o link do vídeo.'
         : null;
+  // What Design needs to produce: the agent cannot choose media, so it says
+  // what each piece should show.
+  const appliedBriefs = !appliedProposal
+    ? []
+    : appliedProposal.platform === 'youtube' && appliedProposal.youtube
+      ? [{ label: 'Vídeo', brief: appliedProposal.youtube.mediaBrief }]
+      : appliedProposal.copy.map((copy, index) => ({
+          label: `Variação ${index + 1}`,
+          brief: copy.mediaBrief,
+        }));
 
   // UTMs follow the form until the operator edits one; an edited value is theirs.
   const { name, objective } = values;
   useEffect(() => {
+    if (utmsFromProposal) return;
     const generated = buildUtms({ platform, objective, campaignName: name });
     for (const key of UTM_KEYS) {
       if (!dirtyFields.utms?.[key]) setValue(`utms.${key}`, generated[key]);
     }
-  }, [platform, name, objective, dirtyFields.utms, setValue]);
+  }, [platform, name, objective, dirtyFields.utms, setValue, utmsFromProposal]);
 
   const format = CREATIVE_FORMATS.meta.find((item) => item.key === values.formatKey);
   const formVariations = values.variations ?? [];
@@ -1064,7 +1088,38 @@ export function PaidMediaBuilder({
               </div>
             ))}
           </dl>
+          {appliedBriefs.length > 0 && (
+            <dl className="builder-applied-list">
+              {appliedBriefs.map((item) => (
+                <div key={item.label}>
+                  <dt>Briefing para o Design — {item.label}</dt>
+                  <dd>{item.brief}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+          <details className="agent-details">
+            <summary>Premissas</summary>
+            <ul className="builder-applied-plain">
+              {appliedProposal.assumptions.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </details>
+          {appliedProposal.budgetNote && (
+            <p className="builder-applied-warning">{appliedProposal.budgetNote}</p>
+          )}
           {stillToDo && <p className="builder-applied-todo">{stillToDo}</p>}
+          {appliedPending.length > 0 && (
+            <div>
+              <span className="field-label">Pendente</span>
+              <ul className="builder-applied-plain">
+                {appliedPending.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </div>
+          )}
         </section>
       )}
       <BuilderSection

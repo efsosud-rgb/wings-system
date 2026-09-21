@@ -21,6 +21,8 @@ export interface PlatformCampaign {
   lifetimeBudgetCents: Cents | null;
   /** Spend reported so far for the current period, in cents. */
   spendCents: Cents;
+  /** The platform's objective for the campaign, when it has one. */
+  objective?: string | null;
 }
 
 export interface PlatformAdSet {

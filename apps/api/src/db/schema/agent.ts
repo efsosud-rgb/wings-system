@@ -66,6 +66,13 @@ export const agentMessages = pgTable(
     toolCalls: jsonb('tool_calls').notNull().default([]),
     /** Set when the reply was cut short (daily ceiling, provider failure). */
     notice: text('notice'),
+    /**
+     * Assistant only: one entry per call to the model — why it stopped
+     * (`stop`, `tool_calls`, `length`…), tokens and how many tools it asked
+     * for. Numbers and enum values only, so it can be read when a reply goes
+     * wrong without reading anybody's conversation.
+     */
+    diagnostics: jsonb('diagnostics').notNull().default({}),
     model: text('model'),
     inputTokens: integer('input_tokens').notNull().default(0),
     outputTokens: integer('output_tokens').notNull().default(0),

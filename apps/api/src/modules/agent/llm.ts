@@ -40,6 +40,12 @@ export interface LlmTurn {
   text: string;
   toolCalls: LlmToolCall[];
   usage: LlmUsage;
+  /**
+   * Why the model stopped, as the provider names it: `stop`, `tool_calls`,
+   * `length` when it ran into the output cap mid-sentence or mid-tool-call.
+   * Ignoring this is how a reply gets cut with nobody told.
+   */
+  finishReason: string | null;
 }
 
 export interface LlmRequest {
@@ -71,6 +77,8 @@ const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 interface StreamChunk {
   error?: { message?: string; code?: number | string };
   choices?: {
+    finish_reason?: string | null;
+    native_finish_reason?: string | null;
     delta?: {
       content?: string | null;
       tool_calls?: {
@@ -120,7 +128,8 @@ export function createOpenRouterLlm(options: {
   timeoutMs?: number;
 }): AgentLlm {
   const transport = options.fetch ?? fetch;
-  const timeoutMs = options.timeoutMs ?? 90_000;
+  // One call may think, then write a whole proposal: slow, not stuck.
+  const timeoutMs = options.timeoutMs ?? 180_000;
 
   return {
     async complete(request) {
@@ -175,12 +184,19 @@ export function createOpenRouterLlm(options: {
       let text = '';
       const calls = new Map<number, LlmToolCall>();
       const usage: LlmUsage = { inputTokens: 0, outputTokens: 0, costUsd: null };
+      let finishReason: string | null = null;
 
       const handle = (chunk: StreamChunk) => {
         if (chunk.error) {
           throw new LlmError('provider_unavailable', 'OpenRouter reported an error mid-stream');
         }
-        const delta = chunk.choices?.[0]?.delta;
+        const choice = chunk.choices?.[0];
+        if (choice?.finish_reason) {
+          // Anthropic's own word for the output cap is `max_tokens`.
+          finishReason =
+            choice.native_finish_reason === 'max_tokens' ? 'length' : choice.finish_reason;
+        }
+        const delta = choice?.delta;
         if (delta?.content) {
           text += delta.content;
           request.onText?.(delta.content);
@@ -236,6 +252,7 @@ export function createOpenRouterLlm(options: {
           .map(([index, call]) => ({ ...call, id: call.id || `call_${index}` }))
           .filter((call) => call.name !== ''),
         usage,
+        finishReason,
       };
     },
   };

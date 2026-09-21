@@ -1035,6 +1035,47 @@ a {
   padding: 16px;
 }
 
+/* The side column stays put while the builder scrolls, the same way the side
+   menu and the SEO checklist do: sticky, with the window as the scroller. It is
+   never taller than the window, so the chat flexes inside it — the history
+   scrolls, the message field and the tools stay in view. */
+@media (min-width: 901px) {
+  .studio-side {
+    position: sticky;
+    top: 16px;
+    max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
+    /* Only for a window too short to hold even the fixed parts. */
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .studio-side .studio-chat-compact {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .studio-side .studio-tools {
+    flex: 0 0 auto;
+  }
+
+  .studio-side .agent-chat {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .studio-side .agent-messages {
+    flex: 1 1 auto;
+    max-height: none;
+    min-height: 96px;
+  }
+
+  .studio-side .agent-chat > :not(.agent-messages) {
+    flex: 0 0 auto;
+  }
+}
+
 .studio-chat-compact .studio-chat-placeholder span {
   font-size: 22px;
 }
@@ -2241,15 +2282,22 @@ textarea.control {
 
 .agent-consulted ul {
   list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
 .agent-consulted li {
+  list-style: none;
   display: flex;
   flex-direction: column;
   color: var(--wings-text);
+}
+
+.agent-consulted li::marker {
+  content: none;
 }
 
 .agent-card {
@@ -2306,6 +2354,70 @@ textarea.control {
 
 .agent-card-reasons dd {
   color: var(--wings-text);
+}
+
+.agent-card-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.agent-card-label {
+  display: block;
+  font-size: 11px;
+  color: var(--wings-muted);
+}
+
+.agent-card-variations {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--wings-text);
+}
+
+.agent-card-variations li {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-left: 2px solid var(--wings-border);
+  padding-left: 8px;
+}
+
+.agent-card-brief {
+  color: var(--wings-text);
+}
+
+.agent-card-utms {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.agent-card-plain,
+.builder-applied-plain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--wings-text);
+}
+
+.agent-card-warning,
+.builder-applied-warning {
+  font-size: 13px;
+  border-left: 2px solid var(--wings-accent);
+  padding-left: 8px;
+}
+
+.agent-card-pending {
+  border-top: 1px solid var(--wings-border);
+  padding-top: 8px;
 }
 
 .agent-card-state {

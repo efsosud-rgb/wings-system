@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AGENT_JUNK_SEARCH_TERMS,
   AGENT_MODELS,
   AGENT_MODEL_PRICING,
   AGENT_PROPOSAL_TOOLS,
@@ -9,20 +10,83 @@ import {
   agentChangeProposalSchema,
   agentSendMessageSchema,
   estimateAgentCostMicroUsd,
+  keywordWithMatch,
 } from './agent.js';
+
+/** A copy without the named keys. */
+function without<T extends object, K extends keyof T>(value: T, ...keys: K[]): Omit<T, K> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([key]) => !keys.includes(key as K)),
+  ) as Omit<T, K>;
+}
 
 const campaign = {
   platform: 'meta',
   name: 'Franquia SP — leads',
   objective: 'lead',
+  idealCustomerProfile: 'Empresário dono de negócio que quer expandir por franquias.',
+  reach: { states: ['SP'] },
+  destinationUrl: 'https://wingscompany.com.br/franquia',
+  utms: { utm_source: 'meta', utm_medium: 'paid_social', utm_campaign: 'franquia-sp' },
   dailyBudgetCents: 3000,
   startDate: '2026-10-01',
   endDate: '2026-10-10',
+  ageMin: 30,
+  ageMax: 55,
+  placements: { mode: 'automatic' },
+  formatKey: 'feed_square',
   copy: [
-    { headline: 'Leve a Wings para sua cidade', primaryText: 'Conheça o modelo e o suporte.' },
+    {
+      headline: 'Leve a Wings para sua cidade',
+      primaryText: 'Conheça o modelo e o suporte.',
+      callToAction: 'LEARN_MORE',
+      mediaBrief: 'Dono de loja em frente ao negócio, com a frase "Sua marca em outras cidades".',
+    },
+    {
+      headline: 'Expanda por franquias',
+      primaryText: 'Método, contratos e operação com a Wings.',
+      callToAction: 'CONTACT_US',
+      mediaBrief: 'Mapa com pontos em várias cidades e a marca ao centro, sem números.',
+    },
   ],
-  explanations: [{ field: 'dailyBudgetCents', reason: 'Cabe no disponível do mês.' }],
+  explanations: [
+    'objective',
+    'idealCustomerProfile',
+    'reach',
+    'dailyBudgetCents',
+    'dates',
+    'age',
+    'placements',
+    'format',
+    'copy',
+  ].map((field) => ({ field, reason: 'Motivo curto com um número: 30.' })),
+  assumptions: ['A página de destino é a de franquia do site.'],
   summary: 'Leads de franquia em SP.',
+};
+
+const search = {
+  keywords: [
+    { text: 'abrir franquia', match: 'phrase' as const },
+    { text: 'formatação de franquia', match: 'exact' as const },
+    { text: 'como franquear', match: 'broad' as const },
+  ],
+  negativeKeywords: ['vaga', 'emprego', 'currículo', 'curso', 'grátis'],
+  headlines: ['Franquia Wings', 'Franqueie sua marca', 'Expanda já'],
+  descriptions: ['Suporte completo.', 'Fale com um consultor.'],
+};
+const common = without(campaign, 'ageMin', 'ageMax', 'placements', 'formatKey', 'copy');
+const searchCampaign = {
+  ...common,
+  platform: 'google_search',
+  search,
+  explanations: [
+    'objective',
+    'idealCustomerProfile',
+    'reach',
+    'dailyBudgetCents',
+    'dates',
+    'search',
+  ].map((field) => ({ field, reason: 'Motivo curto.' })),
 };
 
 describe('the agent contract', () => {
@@ -39,38 +103,87 @@ describe('the agent contract', () => {
     expect(tools.join(' ')).not.toMatch(/execut|aprovar|criar_pedido/);
   });
 
-  it('accepts a campaign proposal and drops whatever the builder has no field for', () => {
+  it('accepts a complete campaign proposal and drops whatever the builder has no field for', () => {
     const parsed = agentCampaignProposalSchema.parse({ ...campaign, startPaused: false });
     expect(parsed).not.toHaveProperty('startPaused');
-    expect(parsed.copy[0]?.callToAction).toBe('LEARN_MORE');
+    expect(agentCampaignProposalSchema.safeParse(searchCampaign).success).toBe(true);
   });
 
   it('holds the agent’s copy to the same compliance rules as a person’s', () => {
     const result = agentCampaignProposalSchema.safeParse({
       ...campaign,
-      copy: [{ headline: 'Ganhe R$ 10 mil por mês', primaryText: 'Retorno garantido.' }],
+      copy: campaign.copy.map((item) => ({ ...item, headline: 'Ganhe R$ 10 mil por mês' })),
     });
     expect(result.success).toBe(false);
   });
 
   it('keeps each platform’s parts on its own platform', () => {
-    const search = {
-      keywords: ['abrir franquia'],
-      headlines: ['Franquia'],
-      descriptions: ['Suporte.'],
-    };
     expect(agentCampaignProposalSchema.safeParse({ ...campaign, search }).success).toBe(false);
+    expect(agentCampaignProposalSchema.safeParse({ ...searchCampaign, ageMin: 30 }).success).toBe(
+      false,
+    );
+    expect(
+      agentCampaignProposalSchema.safeParse({ ...searchCampaign, platform: 'youtube' }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    ['no placements', { placements: undefined }, 'Informe os posicionamentos'],
+    ['no format', { formatKey: undefined }, 'Informe o formato'],
+    ['no age range', { ageMin: undefined }, 'Informe a faixa de idade'],
+    ['a single variation', { copy: campaign.copy.slice(0, 1) }, 'variações de texto'],
+    [
+      'a variation with no brief for Design',
+      { copy: campaign.copy.map((item) => without(item, 'mediaBrief')) },
+      '',
+    ],
+    ['no assumptions', { assumptions: [] }, ''],
+    ['no region', { reach: { states: [] } }, 'Escolha a região'],
+    ['fewer than 7 days', { endDate: '2026-10-05' }, 'Duração mínima de 7 dias'],
+    [
+      'choices without their reasons',
+      { explanations: campaign.explanations.slice(0, 2) },
+      'Falta justificar: Área de alcance, Verba diária, Período, Faixa de idade, Posicionamentos, Formato, Textos do anúncio',
+    ],
+  ])('refuses a proposal with %s', (_label, overrides, message) => {
+    const result = agentCampaignProposalSchema.safeParse({ ...campaign, ...overrides });
+    expect(result.success).toBe(false);
+    if (!result.success && message) {
+      expect(result.error.issues.map((issue) => issue.message).join(' | ')).toContain(message);
+    }
+  });
+
+  it('asks Google proposals for match types and the usual negatives', () => {
     expect(
       agentCampaignProposalSchema.safeParse({
-        ...campaign,
-        platform: 'google_search',
-        copy: [],
-        search,
+        ...searchCampaign,
+        search: { ...search, negativeKeywords: ['vaga'] },
       }).success,
-    ).toBe(true);
-    expect(
-      agentCampaignProposalSchema.safeParse({ ...campaign, platform: 'youtube' }).success,
     ).toBe(false);
+    expect(
+      agentCampaignProposalSchema.safeParse({
+        ...searchCampaign,
+        search: {
+          ...search,
+          keywords: search.keywords.map((item) => ({ text: `[${item.text}]`, match: 'exact' })),
+        },
+      }).success,
+    ).toBe(false);
+    expect(search.keywords.map(keywordWithMatch)).toEqual([
+      '"abrir franquia"',
+      '[formatação de franquia]',
+      'como franquear',
+    ]);
+    expect(AGENT_JUNK_SEARCH_TERMS).toEqual(
+      expect.arrayContaining([
+        'vaga',
+        'emprego',
+        'currículo',
+        'curso',
+        'grátis',
+        'franquia barata',
+      ]),
+    );
   });
 
   it('wants a number behind every proposed change, and what each kind needs', () => {

@@ -217,6 +217,13 @@ export const adCampaigns = pgTable(
      * do. Exposure must follow the budget, or an ABO campaign would look free.
      */
     budgetLevel: budgetLevelEnum('budget_level').notNull().default('none'),
+    /**
+     * The platform's own objective (Meta: OUTCOME_LEADS, OUTCOME_TRAFFIC, …).
+     * Null until the next ingestion fills it, and on Google, which has none.
+     * It decides which number a campaign is judged by: a traffic campaign by
+     * its cost per click or page view, never by leads it was not built to get.
+     */
+    objective: text('objective'),
     lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

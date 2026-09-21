@@ -26,6 +26,7 @@ import {
   changeCard,
   dataEnvelope,
   isAgentTool,
+  pendingFor,
   runAgentTool,
   type ToolContext,
 } from './tools.js';
@@ -39,10 +40,18 @@ import {
 const MAX_TOOL_ROUNDS = 6;
 /** Earlier messages replayed to the model. Older ones stay in the history on screen. */
 const HISTORY_MESSAGES = 16;
-const MAX_OUTPUT_TOKENS = 2000;
+/**
+ * Output cap per call to the model. It covers the visible text, the arguments
+ * of every tool call and, on models that think, the thinking too. At 2 000 the
+ * first real proposal on staging was cut mid-sentence, before `propor_campanha`
+ * was ever called; a complete proposal alone is well over a thousand tokens.
+ */
+const MAX_OUTPUT_TOKENS = 8000;
 
 export const DAILY_LIMIT_NOTICE =
   'Você atingiu o limite diário de uso do agente. Ele volta a responder amanhã.';
+export const CUT_NOTICE = 'A resposta ficou longa demais e foi cortada antes do fim.';
+const ABORTED_NOTICE = 'Resposta interrompida.';
 const PROVIDER_NOTICE =
   'O serviço do modelo não respondeu agora. Tente de novo em instantes. Nada foi alterado.';
 
@@ -52,6 +61,27 @@ export interface AgentDeps {
   model: AgentModel;
   dailyLimitUsd: number;
   now?: () => Date;
+  /** Numbers and enum values about a finished turn. Never anybody's words. */
+  log?: (facts: Record<string, unknown>) => void;
+}
+
+/** Asking again can help with anything except the daily ceiling. */
+export function isRetryable(notice: string | null): boolean {
+  return notice !== null && notice !== DAILY_LIMIT_NOTICE;
+}
+
+/**
+ * What the person reads when a proposal never became a card. The model is told
+ * the reasons and usually corrects itself; when it does not, staying silent
+ * would leave a reply that promises a card that is not there.
+ */
+export function refusedProposalText(reasons: string[]): string {
+  const list = reasons.slice(0, 6).map((reason) => `- ${reason}`);
+  return [
+    'A proposta não virou cartão: a validação do sistema recusou.',
+    ...list,
+    'Peça de novo ou me diga o que ajustar, e eu refaço.',
+  ].join('\n');
 }
 
 const toMicro = (usd: number) => Math.round(usd * 1_000_000);
@@ -144,6 +174,7 @@ export async function cardOf(
       createdAt: row.createdAt.toISOString(),
       approvalId: row.approvalId,
       payload: payload.data,
+      pending: pendingFor(payload.data),
     };
   }
   const payload = agentChangeProposalSchema.safeParse(row.payload);
@@ -174,6 +205,7 @@ export async function conversationMessages(
     ),
     proposals: cards.get(row.id) ?? [],
     notice: row.notice,
+    retryable: row.role === 'assistant' && isRetryable(row.notice),
   }));
 }
 
@@ -191,6 +223,8 @@ export async function runAgentTurn(
     conversationId?: string;
     message: string;
     context?: { tab: 'paid' | 'owned'; draft?: Record<string, unknown> };
+    /** "Tentar de novo": answer the last message again rather than store a copy. */
+    retry?: boolean;
     signal?: AbortSignal;
   },
   emit: (event: AgentStreamEvent) => void,
@@ -221,22 +255,31 @@ export async function runAgentTurn(
   }
 
   const history = await db
-    .select({ role: agentMessages.role, content: agentMessages.content })
+    .select({ id: agentMessages.id, role: agentMessages.role, content: agentMessages.content })
     .from(agentMessages)
     .where(eq(agentMessages.conversationId, conversation.id))
     .orderBy(desc(agentMessages.createdAt))
     .limit(HISTORY_MESSAGES);
 
-  const [userRow] = await db
-    .insert(agentMessages)
-    .values({
-      conversationId: conversation.id,
-      employeeId: input.employeeId,
-      role: 'user',
-      content: message,
-      createdAt: now,
-    })
-    .returning({ id: agentMessages.id });
+  // Asking again: the question is already in the conversation, followed by the
+  // reply that went wrong. It is answered again, not stored twice, and the model
+  // is not shown the failed attempt.
+  const asked = input.retry ? history.findIndex((row) => row.role === 'user') : -1;
+  const repeated = asked !== -1 && history[asked]?.content === message ? history[asked] : null;
+  if (repeated) history.splice(0, asked + 1);
+
+  const [userRow] = repeated
+    ? [{ id: repeated.id }]
+    : await db
+        .insert(agentMessages)
+        .values({
+          conversationId: conversation.id,
+          employeeId: input.employeeId,
+          role: 'user',
+          content: message,
+          createdAt: now,
+        })
+        .returning({ id: agentMessages.id });
   if (!userRow) throw new Error('failed to record message');
 
   emit({
@@ -255,6 +298,14 @@ export async function runAgentTurn(
   let costMicroUsd = 0;
   let costFromProvider = true;
   let called = false;
+  const rounds: {
+    finishReason: string | null;
+    inputTokens: number;
+    outputTokens: number;
+    toolCalls: number;
+  }[] = [];
+  /** Proposal tools whose last attempt was refused, with the reasons given. */
+  const refused = new Map<string, string[]>();
 
   const before = await usageToday(db, input.employeeId, deps.dailyLimitUsd, now);
   const spentSoFar = () => before.spentMicroUsd + costMicroUsd;
@@ -300,6 +351,12 @@ export async function runAgentTurn(
           },
         });
 
+        rounds.push({
+          finishReason: turn.finishReason,
+          inputTokens: turn.usage.inputTokens,
+          outputTokens: turn.usage.outputTokens,
+          toolCalls: turn.toolCalls.length,
+        });
         inputTokens += turn.usage.inputTokens;
         outputTokens += turn.usage.outputTokens;
         if (turn.usage.costUsd === null) {
@@ -313,14 +370,19 @@ export async function runAgentTurn(
           costMicroUsd += toMicro(turn.usage.costUsd);
         }
 
-        if (turn.toolCalls.length === 0 || lastRound) break;
+        const cut = turn.finishReason === 'length';
+        if (turn.toolCalls.length === 0 || lastRound) {
+          // Cut in the middle of the text: say so, rather than end on half a sentence.
+          if (cut) notice = CUT_NOTICE;
+          break;
+        }
 
         messages.push({ role: 'assistant', content: turn.text, toolCalls: turn.toolCalls });
         for (const call of turn.toolCalls) {
           messages.push({
             role: 'tool',
             toolCallId: call.id,
-            content: dataEnvelope(await runTool(toolContext, call)),
+            content: dataEnvelope(await runTool(toolContext, call, cut)),
           });
         }
 
@@ -336,19 +398,34 @@ export async function runAgentTurn(
       }
     } catch (error) {
       if (!(error instanceof LlmError)) throw error;
-      notice = error.code === 'aborted' ? 'Resposta interrompida.' : PROVIDER_NOTICE;
+      notice = error.code === 'aborted' ? ABORTED_NOTICE : PROVIDER_NOTICE;
+    }
+
+    // A proposal that was refused and never redone must not pass in silence.
+    if (refused.size > 0) {
+      const said = refusedProposalText([...refused.values()].flat());
+      const separator = text.trim() === '' ? '' : '\n\n';
+      text += `${separator}${said}`;
+      emit({ type: 'delta', text: `${separator}${said}` });
     }
   }
 
-  async function runTool(toolContext: ToolContext, call: LlmToolCall): Promise<unknown> {
+  async function runTool(
+    toolContext: ToolContext,
+    call: LlmToolCall,
+    cut: boolean,
+  ): Promise<unknown> {
     if (isAgentTool(call.name)) {
       emit({ type: 'consulting', tool: call.name, label: AGENT_TOOL_LABEL[call.name] });
     }
-    const outcome = await runAgentTool(toolContext, call, proposals.length);
+    const outcome = await runAgentTool(toolContext, call, proposals.length, { cut });
     if (outcome.consultation) emit({ type: 'consulted', consultation: outcome.consultation });
     if (outcome.proposal) {
       proposals.push(outcome.proposal);
+      refused.delete(call.name);
       emit({ type: 'proposal', proposal: outcome.proposal });
+    } else if (outcome.refusal) {
+      refused.set(call.name, outcome.refusal);
     }
     records.push({
       name: call.name.slice(0, 80),
@@ -370,6 +447,7 @@ export async function runAgentTurn(
       content,
       toolCalls: records,
       notice,
+      diagnostics: { rounds, proposals: proposals.length, refusedProposals: refused.size },
       model: called ? deps.model : null,
       inputTokens,
       outputTokens,
@@ -407,8 +485,20 @@ export async function runAgentTurn(
       consulted: records.flatMap((record) => (record.consultation ? [record.consultation] : [])),
       proposals,
       notice,
+      retryable: isRetryable(notice),
     },
     usage: await usageToday(db, input.employeeId, deps.dailyLimitUsd, now),
+  });
+  deps.log?.({
+    msg: 'agent turn',
+    model: called ? deps.model : null,
+    rounds,
+    tools: records.map((record) => record.name),
+    proposals: proposals.length,
+    refusedProposals: refused.size,
+    cut: notice === CUT_NOTICE,
+    stopped: notice === null ? null : notice === DAILY_LIMIT_NOTICE ? 'daily_limit' : 'interrupted',
+    costMicroUsd,
   });
   return { ok: true };
 }

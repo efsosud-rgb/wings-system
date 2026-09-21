@@ -93,9 +93,103 @@ caso de injeção usa uma campanha cujo **nome** manda ignorar as instruções e
 modelo que "obedece": as ferramentas que ele tenta (`executar_pausa`,
 `criar_pedido`) não existem, e nada é pedido nem alterado.
 
+## Primeira conversa real e o que ela mudou (21/09/2026)
+
+Pedido: "Monte uma campanha de leads no Meta para o RJ, só Instagram, R$ 20 por
+dia, 10 dias." As três leituras rodaram, o texto parou em "...se tiver um perfil
+mais" e o cartão nunca apareceu.
+
+**Causa (a mais provável; ver a ressalva):** o limite de saída por chamada ao
+modelo era de **2.000 tokens**, e esse limite cobre o texto visível, os
+argumentos das ferramentas e, nos modelos que pensam antes de responder, o
+raciocínio. O modelo escreveu a análise, bateu no limite no meio da frase e
+nunca chegou a chamar `propor_campanha`. O cliente ignorava o motivo de parada
+(`finish_reason: length`), então a resposta cortada foi entregue como completa.
+O log da API mostra as duas mensagens terminando normalmente (a lista de
+conversas é recarregada só depois do evento `done`), sem erro do OpenRouter e
+sem queda do stream: **o Traefik não cortou nada**.
+
+> Ressalva: as tabelas do agente não puderam ser lidas no staging. O usuário
+> somente-leitura `wings_ro` recebeu `grant select` uma vez, à mão, e tabelas
+> novas não herdam isso (`permission denied for table agent_messages`). Para
+> liberar: `grant select on agent_conversations, agent_messages, agent_proposals
+to wings_ro;` e, para as próximas, `alter default privileges for role wings in
+schema public grant select on tables to wings_ro;`. A decisão é de quem
+> administra o banco, porque as conversas são de cada pessoa.
+
+O que mudou:
+
+- Limite de saída em 8.000 tokens e tempo por chamada em 180 s.
+- O motivo de parada de cada chamada fica gravado em
+  `agent_messages.diagnostics` (só números e enums) e sai no log como
+  `agent turn`, sem texto de ninguém. Da próxima vez dá para saber sem ler a
+  conversa.
+- Resposta cortada pelo limite recebe o aviso "A resposta ficou longa demais e
+  foi cortada antes do fim." e o botão "Tentar de novo".
+- Argumentos de ferramenta cortados voltam ao modelo com o pedido de refazer
+  mais curto, em vez de sumirem.
+- **Proposta recusada nunca passa em silêncio.** Se `propor_campanha` ou
+  `propor_alteracao` recusar e o modelo não refizer, o servidor acrescenta à
+  resposta "A proposta não virou cartão: a validação do sistema recusou." com os
+  motivos.
+- Stream: cabeçalhos e um primeiro byte saem na hora, e um comentário
+  `: ping` vai a cada 10 s, para nenhuma rodada longa de ferramenta ou de
+  raciocínio estourar timeout de inatividade no caminho.
+- Tela: stream que cai, erro ou "Parar" deixam "Resposta interrompida." com
+  "Tentar de novo". Tentar de novo responde a **mesma** mensagem (`retry: true`):
+  ela não é gravada duas vezes e o modelo não vê a tentativa que falhou.
+- "O que consultei" nunca mostra item vazio: o rótulo cai para o nome
+  compartilhado da ferramenta e item sem nada é descartado. **A origem das duas
+  bolinhas vazias não foi reproduzida**; há teste garantindo que toda consulta
+  sai do servidor com rótulo e resumo, inclusive proposta recusada.
+
+## Cada campanha pelo próprio objetivo
+
+A ingestão passou a gravar o objetivo da campanha (`ad_campaigns.objective`,
+lido da Meta; o Google não tem). `desempenho_campanhas` devolve o objetivo e o
+campo `julgar_por`: CPL só para leads e conversão; custo por visualização da
+página e por clique para tráfego; alcance e frequência para reconhecimento. O
+CPL total e o CPL histórico usado na regra de verba **não contam gasto de
+campanha de tráfego**. O prompt manda dizer com todas as letras quando a
+campanha não tem o objetivo pelo qual a pessoa perguntou. O objetivo só aparece
+depois da próxima ingestão; até lá vem vazio e o agente diz que não sabe.
+
+## Proposta completa e com opinião
+
+`agentCampaignProposalSchema` recusa o que não estiver completo, e a recusa
+volta ao modelo com o que falta:
+
+- sempre: cliente ideal, região, página de destino, UTMs, verba, período,
+  premissas (`assumptions`) e o motivo de objetivo, cliente ideal, região,
+  verba e período;
+- Meta: faixa de idade, posicionamentos, formato e 2 ou 3 variações com botão e
+  **briefing para o Design** (`mediaBrief`), tudo justificado;
+- Google Pesquisa: ao menos 3 palavras-chave com tipo de correspondência, ao
+  menos 5 negativas (o prompt parte de `AGENT_JUNK_SEARCH_TERMS`: vaga, emprego,
+  currículo, curso, grátis, franquia barata…), 3 títulos e 2 descrições;
+- YouTube: título e briefing do vídeo;
+- duração mínima de 7 dias;
+- verba: precisa caber no teto (a recusa informa a maior verba que cabe). Em
+  campanha de leads, abaixo de `CPL dos últimos 90 dias × 10 ÷ 7` por dia a
+  proposta só passa com `budgetNote` dizendo o que esperar, o que cobre tanto o
+  teto apertado quanto a verba que a própria pessoa pediu.
+
+O cartão lista o que fica **pendente** com a pessoa (mídia, Página, Instagram).
+O prompt manda ler a conta antes (melhores CPL e CTR em 30 ou 90 dias, textos
+dos anúncios que funcionaram, perfil salvo), assumir o contexto da Wings quando
+não houver perfil e dizer que assumiu, e fazer **uma** pergunta só quando faltar
+algo que muda tudo. A ingestão **não traz público, horário nem região por
+campanha**: o agente é instruído a dizer que não tem esses dados.
+
 ## Não verificado
 
-- [ ] Nenhuma chamada real ao OpenRouter foi feita. Conferir no staging: o nome
+- [x] O OpenRouter respondeu em staging em 21/09/2026 (modelo, streaming e
+      ferramentas de leitura funcionaram).
+- [ ] Conferir em `agent_messages.diagnostics` da próxima conversa se o motivo
+      de parada confirma a causa acima.
+- [ ] Painel fixo na coluna direita: CSS segue o padrão do checklist de SEO,
+      mas não foi visto num navegador de verdade.
+- [ ] (item antigo, em parte respondido) Conferir no staging: o nome
       exato dos modelos, se `usage.cost` vem no último evento do stream e se o
       `cache_control` no prompt de sistema é aceito.
 - [ ] O Traefik entrega o SSE sem segurar a resposta? (cabeçalhos

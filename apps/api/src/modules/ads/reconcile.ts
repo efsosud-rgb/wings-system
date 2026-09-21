@@ -112,6 +112,7 @@ export async function syncCampaigns(
         dailyBudgetCents: campaign.dailyBudgetCents ?? 0,
         lifetimeBudgetCents: campaign.lifetimeBudgetCents,
         budgetLevel: budgetLevelOf(campaign, adSetsByCampaign.get(campaign.id) ?? []),
+        objective: campaign.objective ?? null,
         lastSyncedAt: now,
       })
       .onConflictDoUpdate({
@@ -122,6 +123,8 @@ export async function syncCampaigns(
           dailyBudgetCents: campaign.dailyBudgetCents ?? 0,
           lifetimeBudgetCents: campaign.lifetimeBudgetCents,
           budgetLevel: budgetLevelOf(campaign, adSetsByCampaign.get(campaign.id) ?? []),
+          // A client that does not report the objective never erases a known one.
+          ...(campaign.objective ? { objective: campaign.objective } : {}),
           lastSyncedAt: now,
           updatedAt: now,
         },

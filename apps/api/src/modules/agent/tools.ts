@@ -1,6 +1,7 @@
 import {
   AD_ACCOUNT_PLATFORM,
   AGENT_CHANGE_KIND_LABEL,
+  AGENT_LEARNING_LEADS_PER_WEEK,
   AGENT_TOOL_LABEL,
   agentCampaignProposalSchema,
   agentChangeProposalSchema,
@@ -8,6 +9,7 @@ import {
   estimateCostCents,
   reachSchema,
   type AgentChangeProposal,
+  type AgentCampaignProposal,
   type AgentChangeProposalCard,
   type AgentConsultation,
   type AgentProposalCard,
@@ -22,6 +24,7 @@ import {
   adAlerts,
   adCampaignDrafts,
   adCampaigns,
+  adCreatives,
   adMetricsDaily,
   adSets,
   agentProposals,
@@ -61,6 +64,8 @@ export interface ToolOutcome {
   /** One line for "o que consultei". */
   summary: string;
   proposal?: AgentProposalCard;
+  /** A proposal tool said no: the reasons, in words a person can read. */
+  refusal?: string[];
 }
 
 const MAX_PROPOSALS_PER_REPLY = 3;
@@ -144,6 +149,17 @@ async function estadoDaConta(ctx: ToolContext, raw: unknown): Promise<ToolOutcom
   };
 }
 
+/** Which number a campaign answers for, by the objective the platform reports. */
+function judgedBy(objective: string | null): string {
+  if (objective === null) return 'objetivo desconhecido: pergunte ou diga que não sabe';
+  if (/LEAD|SALES|CONVERSION/i.test(objective)) return 'cpl';
+  if (/TRAFFIC|LINK_CLICKS/i.test(objective))
+    return 'custo por visualização da página e por clique';
+  if (/AWARENESS|REACH|BRAND/i.test(objective)) return 'alcance e frequência';
+  if (/ENGAGEMENT|VIDEO/i.test(objective)) return 'custo por engajamento ou visualização';
+  return 'o resultado do próprio objetivo';
+}
+
 async function desempenhoCampanhas(ctx: ToolContext, raw: unknown): Promise<ToolOutcome> {
   const args = z
     .object({ dias: z.number().int().min(1).max(90).default(7), plataforma: platformArg })
@@ -154,18 +170,40 @@ async function desempenhoCampanhas(ctx: ToolContext, raw: unknown): Promise<Tool
   const campanhas = (
     await Promise.all(
       accounts.map(async (account) => {
-        const [performance, mirrored] = await Promise.all([
+        const [performance, mirrored, pageViews] = await Promise.all([
           campaignPerformance(ctx.db, account.id, since),
           ctx.db.query.adCampaigns.findMany({ where: eq(adCampaigns.adAccountId, account.id) }),
+          // What a traffic campaign is judged by: people who reached the page.
+          ctx.db
+            .select({
+              externalId: adMetricsDaily.entityExternalId,
+              views: sql<string>`coalesce(sum((${adMetricsDaily.actions}->>'landing_page_view')::numeric), 0)`,
+            })
+            .from(adMetricsDaily)
+            .where(
+              and(
+                eq(adMetricsDaily.adAccountId, account.id),
+                eq(adMetricsDaily.level, 'campaign'),
+                gte(adMetricsDaily.day, since),
+              ),
+            )
+            .groupBy(adMetricsDaily.entityExternalId),
         ]);
         const byExternal = new Map(performance.map((row) => [row.campaignExternalId, row]));
+        const viewsOf = new Map(pageViews.map((row) => [row.externalId, Number(row.views)]));
         return mirrored.map((campaign) => {
           const row = byExternal.get(campaign.externalId);
+          const spend = row?.spendCents ?? 0;
+          const clicks = row?.clicks ?? 0;
+          const views = viewsOf.get(campaign.externalId) ?? 0;
           return {
             plataforma: account.platform,
             id_na_plataforma: campaign.externalId,
             nome: campaign.name,
             status: campaign.status,
+            // Null on Google and on campaigns mirrored before the objective was read.
+            objetivo: campaign.objective,
+            julgar_por: judgedBy(campaign.objective),
             verba_diaria_centavos: campaign.dailyBudgetCents,
             orcamento_fica_em: campaign.budgetLevel,
             gasto_centavos: row?.spendCents ?? 0,
@@ -174,6 +212,9 @@ async function desempenhoCampanhas(ctx: ToolContext, raw: unknown): Promise<Tool
             leads: row?.conversions ?? 0,
             ctr_percentual: row?.ctrMilli == null ? null : row.ctrMilli / 1000,
             cpl_centavos: row?.costPerLeadCents ?? null,
+            custo_por_clique_centavos: clicks > 0 ? Math.round(spend / clicks) : null,
+            visualizacoes_da_pagina: views,
+            custo_por_visualizacao_da_pagina_centavos: views > 0 ? Math.round(spend / views) : null,
             frequencia: row?.frequencyMilli == null ? null : row.frequencyMilli / 1000,
             espelhada_em: campaign.lastSyncedAt?.toISOString() ?? null,
           };
@@ -187,13 +228,19 @@ async function desempenhoCampanhas(ctx: ToolContext, raw: unknown): Promise<Tool
 
   const gasto = campanhas.reduce((total, item) => total + item.gasto_centavos, 0);
   const leads = campanhas.reduce((total, item) => total + item.leads, 0);
+  // The CPL of the whole only means something over campaigns that were after leads.
+  const deLeads = campanhas.filter((item) =>
+    item.objetivo === null ? item.leads > 0 : item.julgar_por === 'cpl',
+  );
+  const gastoEmLeads = deLeads.reduce((total, item) => total + item.gasto_centavos, 0);
   return {
     result: {
       periodo: { desde: since, ate: dayIn(ctx.now), dias: args.dias },
       total: {
         gasto_centavos: gasto,
         leads,
-        cpl_centavos: leads > 0 ? Math.round(gasto / leads) : null,
+        gasto_em_campanhas_de_leads_centavos: gastoEmLeads,
+        cpl_centavos: leads > 0 ? Math.round(gastoEmLeads / leads) : null,
       },
       campanhas,
     },
@@ -219,9 +266,18 @@ async function conjuntosEAnuncios(ctx: ToolContext, raw: unknown): Promise<ToolO
   }
 
   const since = daysAgo(ctx.now, args.dias);
-  const [sets, ads, metrics] = await Promise.all([
+  const [sets, ads, creatives, metrics] = await Promise.all([
     ctx.db.query.adSets.findMany({ where: eq(adSets.campaignId, campaign.id) }),
     ctx.db.query.adAds.findMany({ where: eq(adAds.campaignId, campaign.id) }),
+    // The words of each ad: which copy worked is half of what a proposal learns from.
+    ctx.db
+      .select({
+        externalId: adCreatives.externalId,
+        title: adCreatives.title,
+        body: adCreatives.body,
+      })
+      .from(adCreatives)
+      .where(eq(adCreatives.adAccountId, campaign.adAccountId)),
     ctx.db
       .select({
         level: adMetricsDaily.level,
@@ -265,10 +321,16 @@ async function conjuntosEAnuncios(ctx: ToolContext, raw: unknown): Promise<ToolO
     }),
   );
   const setName = new Map(sets.map((set) => [set.id, set.name]));
+  const creativeOf = new Map(creatives.map((creative) => [creative.externalId, creative]));
 
   return {
     result: scrubDeep({
-      campanha: { id_na_plataforma: campaign.externalId, nome: campaign.name },
+      campanha: {
+        id_na_plataforma: campaign.externalId,
+        nome: campaign.name,
+        objetivo: campaign.objective,
+        julgar_por: judgedBy(campaign.objective),
+      },
       periodo: { desde: since, dias: args.dias },
       conjuntos: sets.map((set) => ({
         id_na_plataforma: set.externalId,
@@ -283,6 +345,8 @@ async function conjuntosEAnuncios(ctx: ToolContext, raw: unknown): Promise<ToolO
         conjunto: ad.adSetId ? (setName.get(ad.adSetId) ?? null) : null,
         status: ad.status,
         status_efetivo: ad.effectiveStatus,
+        titulo: creativeOf.get(ad.creativeExternalId ?? '')?.title ?? null,
+        texto: creativeOf.get(ad.creativeExternalId ?? '')?.body?.slice(0, 400) ?? null,
         ...(figures.get(`ad:${ad.externalId}`) ?? {}),
       })),
     }),
@@ -449,30 +513,70 @@ function rascunhoAtual(ctx: ToolContext): ToolOutcome {
 // Proposal tools
 // ---------------------------------------------------------------------------
 
+/** Zod's issues as sentences a person can read: the path becomes the field's name. */
 function issuesOf(error: z.ZodError): string[] {
-  return error.issues
-    .slice(0, 8)
-    .map((issue) => `${issue.path.join('.') || 'proposta'}: ${issue.message}`);
+  return error.issues.slice(0, 8).map((issue) => {
+    const path = issue.path.join('.');
+    return path === '' ? issue.message : `${path}: ${issue.message}`;
+  });
+}
+
+function refuse(reasons: string[], summary: string): ToolOutcome {
+  return { result: { aceita: false, corrija: reasons }, summary, refusal: reasons };
+}
+
+/** What only a person in the studio can choose, per platform. */
+export function pendingFor(proposal: AgentCampaignProposal): string[] {
+  if (proposal.platform === 'meta') {
+    return [
+      'Imagem ou vídeo de cada variação (o briefing para o Design está na proposta)',
+      'Página do Facebook e conta do Instagram',
+    ];
+  }
+  if (proposal.platform === 'youtube') {
+    return proposal.youtube?.videoUrl
+      ? []
+      : ['Link do vídeo no YouTube (o briefing para o Design está na proposta)'];
+  }
+  return [];
+}
+
+/**
+ * The account's own cost per lead over the last 90 days, or null when it has
+ * not produced enough leads for the figure to mean anything.
+ */
+async function historicalCplCents(ctx: ToolContext, adAccountId: string): Promise<number | null> {
+  const [rows, mirrored] = await Promise.all([
+    campaignPerformance(ctx.db, adAccountId, daysAgo(ctx.now, 90)),
+    ctx.db
+      .select({ externalId: adCampaigns.externalId, objective: adCampaigns.objective })
+      .from(adCampaigns)
+      .where(eq(adCampaigns.adAccountId, adAccountId)),
+  ]);
+  // Only campaigns that were after leads: a traffic campaign's spend bought
+  // clicks, and counting it would make every lead look dearer than it was.
+  const objectiveOf = new Map(mirrored.map((row) => [row.externalId, row.objective]));
+  const counted = rows.filter((row) => {
+    const objective = objectiveOf.get(row.campaignExternalId) ?? null;
+    return objective === null ? row.conversions > 0 : judgedBy(objective) === 'cpl';
+  });
+  const spend = counted.reduce((total, row) => total + row.spendCents, 0);
+  const leads = counted.reduce((total, row) => total + row.conversions, 0);
+  return leads >= 5 ? Math.round(spend / leads) : null;
 }
 
 async function proporCampanha(ctx: ToolContext, raw: unknown): Promise<ToolOutcome> {
   const parsed = agentCampaignProposalSchema.safeParse(raw);
   if (!parsed.success) {
-    return {
-      result: { aceita: false, corrija: issuesOf(parsed.error) },
-      summary: 'Proposta recusada: fora das regras do construtor',
-    };
+    return refuse(issuesOf(parsed.error), 'Proposta recusada: incompleta ou fora das regras');
   }
   const proposal = parsed.data;
   const today = dayIn(ctx.now);
   if (proposal.startDate < today) {
-    return {
-      result: {
-        aceita: false,
-        corrija: [`startDate: o início não pode ser antes de hoje (${today})`],
-      },
-      summary: 'Proposta recusada: início no passado',
-    };
+    return refuse(
+      [`startDate: o início não pode ser antes de hoje (${today})`],
+      'Proposta recusada: início no passado',
+    );
   }
 
   // The same figure the budget guard will judge the request by, so the agent
@@ -484,21 +588,40 @@ async function proporCampanha(ctx: ToolContext, raw: unknown): Promise<ToolOutco
       account.id,
       `${dayIn(ctx.now, account.timezone).slice(0, 7)}-01`,
     );
+    const daysThisMonth = campaignDaysInMonth(proposal.startDate, proposal.endDate, today);
     const costThisMonth = estimateCostCents(
       proposal.dailyBudgetCents,
-      campaignDaysInMonth(proposal.startDate, proposal.endDate, today),
+      daysThisMonth,
       proposal.platform,
     );
     if (period && costThisMonth > period.availableCents) {
-      return {
-        result: {
-          aceita: false,
-          corrija: [
-            `O custo neste mês (${brl(costThisMonth)}) passa do disponível na conta (${brl(period.availableCents)}). Reduza a verba ou o período.`,
-          ],
-        },
-        summary: 'Proposta recusada: não cabe no teto',
-      };
+      // The largest whole-real budget that fits, so the model can propose it and say so.
+      const perCent = estimateCostCents(100, daysThisMonth, proposal.platform) / 100;
+      const maxDaily = perCent > 0 ? Math.floor(period.availableCents / perCent / 100) * 100 : 0;
+      return refuse(
+        [
+          `O custo neste mês (${brl(costThisMonth)}) passa do disponível na conta (${brl(period.availableCents)}). A maior verba diária que cabe neste período é ${brl(maxDaily)}: proponha essa e avise em budgetNote, ou encurte o período.`,
+        ],
+        'Proposta recusada: não cabe no teto',
+      );
+    }
+
+    // The learning phase: a leads campaign funded for fewer than ~10 leads a
+    // week rarely leaves it. Going below is allowed — the ceiling or the
+    // person's own number may force it — but never without saying so.
+    if (proposal.objective !== 'traffic') {
+      const cpl = await historicalCplCents(ctx, account.id);
+      if (cpl !== null) {
+        const minDaily = Math.ceil((cpl * AGENT_LEARNING_LEADS_PER_WEEK) / 7);
+        if (proposal.dailyBudgetCents < minDaily && !proposal.budgetNote) {
+          return refuse(
+            [
+              `dailyBudgetCents: com o CPL dos últimos 90 dias (${brl(cpl)}), ${AGENT_LEARNING_LEADS_PER_WEEK} leads por semana pedem ao menos ${brl(minDaily)} por dia. Suba a verba; se o teto ou o pedido da pessoa não deixarem, mantenha e explique em budgetNote o que ela deve esperar.`,
+            ],
+            'Proposta recusada: verba abaixo da fase de aprendizado, sem aviso',
+          );
+        }
+      }
     }
   }
 
@@ -510,12 +633,13 @@ async function proporCampanha(ctx: ToolContext, raw: unknown): Promise<ToolOutco
     createdAt: stored.createdAt.toISOString(),
     approvalId: null,
     payload: proposal,
+    pending: pendingFor(proposal),
   };
   return {
     result: {
       aceita: true,
       observacao:
-        'A pessoa vê um cartão com o botão "Aplicar no construtor". Nada foi criado nem pedido. Imagens, vídeo, Página e Instagram ficam por conta dela.',
+        'A pessoa vê um cartão com o botão "Aplicar no construtor". Nada foi criado nem pedido. O cartão já lista o que fica pendente com ela (mídia, Página, Instagram).',
     },
     summary: `Campanha "${proposal.name}", ${brl(proposal.dailyBudgetCents)}/dia`,
     proposal: card,
@@ -618,10 +742,7 @@ async function storeProposal(
 async function proporAlteracao(ctx: ToolContext, raw: unknown): Promise<ToolOutcome> {
   const parsed = agentChangeProposalSchema.safeParse(raw);
   if (!parsed.success) {
-    return {
-      result: { aceita: false, corrija: issuesOf(parsed.error) },
-      summary: 'Proposta recusada: incompleta',
-    };
+    return refuse(issuesOf(parsed.error), 'Proposta recusada: incompleta');
   }
   const probe = await changeCard(
     ctx.db,
@@ -629,13 +750,10 @@ async function proporAlteracao(ctx: ToolContext, raw: unknown): Promise<ToolOutc
     parsed.data,
   );
   if (!probe) {
-    return {
-      result: {
-        aceita: false,
-        corrija: ['campaignExternalId: campanha não encontrada. Use o id de desempenho_campanhas.'],
-      },
-      summary: 'Proposta recusada: campanha não encontrada',
-    };
+    return refuse(
+      ['campaignExternalId: campanha não encontrada. Use o id de desempenho_campanhas.'],
+      'Proposta recusada: campanha não encontrada',
+    );
   }
   const stored = await storeProposal(ctx, 'change', parsed.data);
   return {
@@ -677,7 +795,7 @@ export const AGENT_TOOL_DEFINITIONS: LlmToolDefinition[] = [
   {
     name: 'desempenho_campanhas',
     description:
-      'Campanhas espelhadas pela ingestão com status, verba diária, gasto, impressões, cliques, leads, CTR, CPL e frequência no período. Valores em centavos.',
+      'Campanhas espelhadas pela ingestão com objetivo, status, verba diária, gasto, impressões, cliques, leads, CTR, CPL, custo por clique, visualizações da página e frequência no período. "julgar_por" diz qual número vale para o objetivo de cada uma. Use 30 ou 90 dias para achar o que já funcionou. Valores em centavos.',
     parameters: {
       type: 'object',
       properties: {
@@ -695,7 +813,7 @@ export const AGENT_TOOL_DEFINITIONS: LlmToolDefinition[] = [
   {
     name: 'conjuntos_e_anuncios',
     description:
-      'Conjuntos de anúncios e anúncios de uma campanha, com status e métricas no período.',
+      'Conjuntos de anúncios e anúncios de uma campanha, com status, métricas no período e o título e o texto de cada anúncio. A ingestão não traz público, horário nem região por anúncio.',
     parameters: {
       type: 'object',
       properties: {
@@ -733,7 +851,7 @@ export const AGENT_TOOL_DEFINITIONS: LlmToolDefinition[] = [
   {
     name: 'propor_campanha',
     description:
-      'Propõe uma campanha nova no formato do construtor. Só mostra um cartão: a pessoa decide se aplica no formulário. Datas AAAA-MM-DD, verba em centavos. Meta: use copy (até 3 variações) e ageMin/ageMax. Google Pesquisa: use search. YouTube: use youtube. explanations explica cada escolha com o motivo.',
+      'Propõe uma campanha nova, COMPLETA, no formato do construtor. Só mostra um cartão: a pessoa decide se aplica no formulário. Datas AAAA-MM-DD, mínimo de 7 dias; verba em centavos. Sempre: idealCustomerProfile, reach, destinationUrl, utms, assumptions (premissas) e explanations com o motivo de objetivo, cliente ideal, região, verba e período. Meta: ageMin, ageMax, placements, formatKey e copy com 2 ou 3 variações, cada uma com callToAction e mediaBrief (duas linhas para o Design sobre o que a imagem ou o vídeo mostra); justifique idade, posicionamentos, formato e textos. Google Pesquisa: search com palavras-chave e tipo de correspondência, ao menos 5 negativas, 3 títulos e 2 descrições; justifique. YouTube: youtube com título e mediaBrief; justifique. budgetNote quando a verba ficar abaixo do que a fase de aprendizado pede. Proposta incompleta ou sem justificativa é recusada e volta com o que falta.',
     parameters: z.toJSONSchema(agentCampaignProposalSchema, { io: 'input' }) as Record<
       string,
       unknown
@@ -775,6 +893,7 @@ export async function runAgentTool(
   ctx: ToolContext,
   call: { name: string; arguments: string },
   proposalsSoFar: number,
+  options: { cut?: boolean } = {},
 ): Promise<ToolOutcome & { consultation: AgentConsultation | null }> {
   if (!isAgentTool(call.name)) {
     return {
@@ -800,10 +919,16 @@ export async function runAgentTool(
   try {
     args = call.arguments.trim() === '' ? {} : JSON.parse(call.arguments);
   } catch {
+    const reason = options.cut
+      ? 'Os argumentos foram cortados pelo limite de tamanho da resposta. Chame a ferramenta de novo, sem texto antes e com justificativas mais curtas.'
+      : 'Os argumentos não são JSON válido.';
     return {
-      result: { erro: 'Os argumentos não são JSON válido.' },
+      result: { erro: reason },
       summary: 'Argumentos inválidos',
       consultation: null,
+      ...(call.name.startsWith('propor_')
+        ? { refusal: ['A proposta chegou incompleta do modelo (resposta cortada).'] }
+        : {}),
     };
   }
 

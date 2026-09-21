@@ -44,7 +44,9 @@ export function TrafficStudioPage() {
           tab={tab}
           getBuilderDraft={() => builder.current?.getDraft()}
           onApplyCampaign={
-            tab === 'paid' ? (proposal) => builder.current?.applyProposal(proposal) : undefined
+            tab === 'paid'
+              ? (proposal, pending) => builder.current?.applyProposal(proposal, pending)
+              : undefined
           }
         />
       }

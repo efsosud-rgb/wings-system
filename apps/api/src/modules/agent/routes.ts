@@ -25,6 +25,7 @@ import { cardOf, conversationMessages, runAgentTurn, usageToday } from './servic
 
 const idParam = z.object({ id: z.uuid() });
 const MESSAGES_PER_MINUTE = 12;
+const HEARTBEAT_MS = 10_000;
 
 /**
  * The conversation with the traffic agent.
@@ -163,9 +164,24 @@ export const agentRoutes: FastifyPluginAsync = async (app) => {
         // Tells nginx-style proxies not to hold the reply back.
         'X-Accel-Buffering': 'no',
       });
+      // Headers and a first byte leave at once, so every proxy on the way knows
+      // this is a stream before the model has said a word.
+      reply.raw.flushHeaders();
+      // Optional calls: the socket of an injected test request has neither.
+      const socket = request.raw.socket as Partial<typeof request.raw.socket> | undefined;
+      socket?.setNoDelay?.(true);
+      socket?.setTimeout?.(0);
+      reply.raw.write(': stream\n\n');
+
       const send = (event: AgentStreamEvent) => {
         if (!reply.raw.writableEnded) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
       };
+      // A long round of tools or of thinking sends nothing for a while. A comment
+      // line every few seconds keeps idle timeouts (Traefik, the browser, anything
+      // in between) from closing a reply that is still being worked on.
+      const heartbeat = setInterval(() => {
+        if (!reply.raw.writableEnded) reply.raw.write(': ping\n\n');
+      }, HEARTBEAT_MS);
       const abort = new AbortController();
       reply.raw.on('close', () => {
         if (!reply.raw.writableEnded) abort.abort();
@@ -173,12 +189,19 @@ export const agentRoutes: FastifyPluginAsync = async (app) => {
 
       try {
         await runAgentTurn(
-          { db, llm, model: env.AGENT_MODEL, dailyLimitUsd: env.AGENT_DAILY_USD },
+          {
+            db,
+            llm,
+            model: env.AGENT_MODEL,
+            dailyLimitUsd: env.AGENT_DAILY_USD,
+            log: (facts) => request.log.info(facts),
+          },
           {
             employeeId,
             conversationId: parsed.data.conversationId,
             message: parsed.data.message,
             context: parsed.data.context,
+            retry: parsed.data.retry,
             signal: abort.signal,
           },
           send,
@@ -192,6 +215,7 @@ export const agentRoutes: FastifyPluginAsync = async (app) => {
           message: 'Não consegui responder agora. Nada foi alterado.',
         });
       } finally {
+        clearInterval(heartbeat);
         reply.raw.end();
       }
     },
