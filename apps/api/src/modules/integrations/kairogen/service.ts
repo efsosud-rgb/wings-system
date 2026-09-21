@@ -459,26 +459,18 @@ export async function describeServer(deps: KairogenDeps): Promise<KairogenTool[]
   return tools;
 }
 
-/** The balance, from whatever shape `get_credits` answers in. */
+/**
+ * The balance. `get_credits` answers `{ credits_remaining, stats: { creditsUsed, … } }`
+ * (read from the staging log, 2026-09-21): that one field is the balance, and no
+ * other number in the answer is ever taken for it.
+ */
 export function creditsFrom(result: McpToolResult, now: Date): KairogenCredits {
-  const seen = new Set<unknown>();
-  const find = (value: unknown, depth: number): number | null => {
-    if (depth > 3 || value === null || typeof value !== 'object' || seen.has(value)) return null;
-    seen.add(value);
-    const entries = Object.entries(value as Record<string, unknown>);
-    for (const key of ['credits', 'balance', 'remaining', 'credits_remaining', 'available']) {
-      const hit = entries.find(([name]) => name.toLowerCase() === key)?.[1];
-      if (typeof hit === 'number' && Number.isFinite(hit)) return hit;
-    }
-    for (const [, nested] of entries) {
-      const hit = find(nested, depth + 1);
-      if (hit !== null) return hit;
-    }
-    return null;
-  };
-  const fromData = typeof result.data === 'number' ? result.data : find(result.data, 0);
-  const fromText = /(\d+(?:[.,]\d+)?)/.exec(result.text)?.[1];
-  const balance = fromData ?? (fromText ? Number(fromText.replace(',', '.')) : null);
+  const data = result.data;
+  const value =
+    data !== null && typeof data === 'object' && !Array.isArray(data)
+      ? (data as Record<string, unknown>).credits_remaining
+      : undefined;
+  const balance = typeof value === 'number' && Number.isFinite(value) ? value : null;
   return {
     balance,
     raw: balance === null ? result.text.slice(0, 200) || null : null,

@@ -83,8 +83,8 @@ export const mediaStudioRoutes: FastifyPluginAsync = async (app) => {
         .object({ kind: z.enum(['image', 'video']).optional() })
         .safeParse(request.query);
       try {
-        const { models, cachedAt } = await listModels(deps);
         const kind = query.success ? query.data.kind : undefined;
+        const { models, cachedAt } = await listModels(deps, { priced: kind ?? 'all' });
         return reply.send({
           models: models.filter((model) => !kind || model.kind === kind),
           cachedAt,
