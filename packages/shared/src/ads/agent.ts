@@ -30,6 +30,7 @@ import {
   placementsSchema,
   reachRefusal,
 } from './campaign-builder.js';
+import type { MediaProviderId } from '../marketing/media-providers.js';
 import type { AgentGenerationProposal } from '../marketing/media-studio.js';
 
 /**
@@ -97,6 +98,7 @@ export type AgentScope = (typeof AGENT_SCOPES)[number];
 
 /** The editing agent (Marketing → Edição de Fotos e Vídeos). It reads, estimates and proposes. */
 export const MEDIA_AGENT_READ_TOOLS = [
+  'listar_provedores',
   'listar_modelos',
   'estimar_custo',
   'consultar_biblioteca',
@@ -122,8 +124,9 @@ export const AGENT_TOOL_LABEL: Record<AgentToolName, string> = {
   rascunho_atual: 'Rascunho aberto no construtor',
   propor_campanha: 'Proposta de campanha',
   propor_alteracao: 'Proposta de alteração',
-  listar_modelos: 'Modelos e preços do Kairogen',
-  estimar_custo: 'Custo em créditos',
+  listar_provedores: 'Provedores de mídia, saldo e cota',
+  listar_modelos: 'Modelos e preços por provedor',
+  estimar_custo: 'Custo estimado',
   consultar_biblioteca: 'Biblioteca de mídia',
   consultar_saldo: 'Saldo e limites de créditos',
   rascunho_da_campanha: 'Rascunho aberto no construtor de campanha',
@@ -559,8 +562,8 @@ export interface AgentChangeProposalCard extends AgentProposalBase {
 
 /**
  * A picture or a video the editing agent proposes. The server already asked
- * Kairogen what it costs, so the button can say "Gerar (N créditos)"; only the
- * click spends them.
+ * the provider what it costs, so the button can say "Gerar (R$ X)" or
+ * "Gerar (N créditos)"; only the click spends anything.
  */
 export interface AgentGenerationProposalCard extends AgentProposalBase {
   kind: 'generation';
@@ -568,7 +571,13 @@ export interface AgentGenerationProposalCard extends AgentProposalBase {
   /** Who the proposal is for, by name, for the card. Null when the client row is gone. */
   clientName: string | null;
   /** Null when the estimate could not be made or has been used. */
-  estimate: { id: string; credits: number; expiresAt: string } | null;
+  estimate: {
+    id: string;
+    credits: number;
+    brlCents: number;
+    providerId: MediaProviderId;
+    expiresAt: string;
+  } | null;
   /** Set once somebody clicked: the generation to follow. */
   generationId: string | null;
 }

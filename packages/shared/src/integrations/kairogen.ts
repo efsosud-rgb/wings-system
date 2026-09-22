@@ -108,8 +108,17 @@ export const KAIROGEN_READ_TOOLS: readonly KairogenToolName[] = [
 // Media library
 // ---------------------------------------------------------------------------
 
-export const MEDIA_ORIGINS = ['kairogen', 'upload'] as const;
+/** Where a library file came from: an upload, or the provider that generated it. */
+export const MEDIA_ORIGINS = ['kairogen', 'upload', 'cloudflare', 'gemini', 'higgsfield', 'mpt'] as const;
 export type MediaOrigin = (typeof MEDIA_ORIGINS)[number];
+export const MEDIA_ORIGIN_LABEL: Record<MediaOrigin, string> = {
+  upload: 'Enviadas',
+  kairogen: 'Geradas no Kairogen',
+  cloudflare: 'Geradas na Cloudflare',
+  gemini: 'Geradas no Gemini',
+  higgsfield: 'Geradas no Higgsfield',
+  mpt: 'Geradas no MoneyPrinterTurbo',
+};
 export const MEDIA_KINDS = ['image', 'video'] as const;
 export type MediaKind = (typeof MEDIA_KINDS)[number];
 
@@ -141,7 +150,7 @@ export interface MediaAsset {
   height: number | null;
   aspect: MediaAspect;
   durationSeconds: number | null;
-  /** Kairogen only. */
+  /** Generated media only. */
   prompt: string | null;
   model: string | null;
   credits: number | null;

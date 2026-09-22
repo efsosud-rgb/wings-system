@@ -4,38 +4,76 @@ import {
   MAX_VIDEOS_PER_GENERATION,
   MEDIA_IMAGE_USES,
   MEDIA_IMAGE_USE_LABEL,
+  MEDIA_PROVIDERS,
+  MEDIA_PROVIDER_LABEL,
   MEDIA_REFUSAL_MESSAGE,
   MEDIA_UPLOAD_TYPES,
   PROMPT_MAX,
   WINGS_CLIENT_ID,
+  formatBrl,
   mediaEstimateRequestSchema,
   modelsForImageUse,
   type GenerationAspect,
+  type MediaAlternative,
   type MediaAsset,
   type MediaEstimate,
   type MediaImageUse,
   type MediaModel,
+  type MediaProviderId,
+  type MediaProviderStatus,
 } from '@wings/shared';
 import { useEffect, useMemo, useState } from 'react';
 import { ApiError } from '../../api/client.js';
 import {
+  BUILDER_DRAFT_KEY,
   useEstimate,
   useMediaModels,
+  useMediaProviders,
   useStartGeneration,
   useUploadMedia,
 } from '../../api/media.js';
 import { Button } from '../ui.js';
 import { ClientSelect, MediaPicker, MediaThumb } from './MediaLibrary.js';
+import { providerHolding } from './ProviderStrip.js';
 
 /**
  * The operator's form. Two steps, always in this order: "Estimar custo" asks
- * the server what it costs, and only then the button reads "Gerar (N créditos)".
- * Touching any field after an estimate throws the estimate away, so the number
- * on the button is always the number for what is on screen.
+ * the server what it costs, and only then the button reads "Gerar (R$ X)" or
+ * "Gerar (N créditos)". Touching any field after an estimate throws the
+ * estimate away, so the number on the button is always the number for what is
+ * on screen. R$ 0 is a price like any other: it is shown and clicked the same way.
  */
 
 const credits = (value: number) =>
   `${value.toLocaleString('pt-BR')} ${value === 1 ? 'crédito' : 'créditos'}`;
+
+/** What one output costs, as the selector says it. */
+function costLabel(model: MediaModel): string {
+  if (model.brlCentsPerOutput === 0 && (model.creditsPerOutput ?? 0) === 0) return 'R$ 0 (grátis)';
+  if (model.providerId === 'kairogen' && model.creditsPerOutput !== null) {
+    return `${credits(model.creditsPerOutput)} por saída`;
+  }
+  if (model.brlCentsPerOutput !== null) return `≈ ${formatBrl(model.brlCentsPerOutput)} por saída`;
+  // The catalog does not always give a price; the estimate always does.
+  return 'custo na estimativa';
+}
+
+/** The price on the button: credits on Kairogen, reais everywhere else. */
+const priceOf = (quote: { credits: number; brlCents: number; providerId: MediaProviderId }) =>
+  quote.providerId === 'kairogen' ? credits(quote.credits) : formatBrl(quote.brlCents);
+
+/** The campaign open in the builder, if any, so "same model within a campaign" can be checked. */
+function campaignName(): string | undefined {
+  try {
+    const stored = sessionStorage.getItem(BUILDER_DRAFT_KEY);
+    const parsed: unknown = stored ? JSON.parse(stored) : null;
+    const name =
+      parsed !== null && typeof parsed === 'object' ? (parsed as { name?: unknown }).name : null;
+    return typeof name === 'string' && name.trim() ? name.trim().slice(0, 120) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 type ParamValue = string | boolean;
 
@@ -63,9 +101,29 @@ export function GenerationForm({
 }) {
   const [kind, setKind] = useState<'image' | 'video'>('image');
   const models = useMediaModels(kind, connected);
+  const providers = useMediaProviders(connected);
   const list = useMemo(() => models.data?.models ?? [], [models.data]);
   const [modelKey, setModelKey] = useState('');
   const model = list.find((item) => item.key === modelKey) ?? list[0];
+  /** The selector, grouped by provider in failover order, each group saying what it holds. */
+  const groups = useMemo(
+    () =>
+      MEDIA_PROVIDERS.map((id) => ({
+        id,
+        status: providers.data?.providers.find((item) => item.id === id),
+        models: list.filter((item) => item.providerId === id),
+      })).filter((group) => group.models.length > 0),
+    [list, providers.data],
+  );
+  const groupLabel = (id: MediaProviderId, status: MediaProviderStatus | undefined) => {
+    const name = MEDIA_PROVIDER_LABEL[id];
+    if (!status) return name;
+    if (!status.available) return `${name} · ${status.reason ?? 'indisponível'}`;
+    const holding = providerHolding(status);
+    return holding ? `${name} · ${holding}` : name;
+  };
+  /** Set by the offer of a costlier model: estimated as soon as the model is on screen. */
+  const [pendingEstimate, setPendingEstimate] = useState(false);
 
   const [clientId, setClientId] = useState<string>(WINGS_CLIENT_ID);
   const [prompt, setPrompt] = useState('');
@@ -109,7 +167,13 @@ export function GenerationForm({
     // Keyed on the model alone: the rest is what this effect sets.
   }, [currentKey]);
 
-  const maxQuantity = kind === 'video' ? MAX_VIDEOS_PER_GENERATION : MAX_IMAGES_PER_GENERATION;
+  const maxQuantity = Math.min(
+    model?.maxOutputs ?? MAX_IMAGES_PER_GENERATION,
+    kind === 'video' ? MAX_VIDEOS_PER_GENERATION : MAX_IMAGES_PER_GENERATION,
+  );
+  useEffect(() => {
+    if (quantity > maxQuantity) setQuantity(maxQuantity);
+  }, [quantity, maxQuantity]);
   // Image: the field is always there. Video: only for a model that starts from a frame.
   const takesReference = kind === 'image' || Boolean(model?.acceptsFirstFrame);
   const referenceLabel = kind === 'video' ? 'Primeiro quadro' : 'Imagem de referência';
@@ -137,6 +201,7 @@ export function GenerationForm({
       ...(reference ? { referenceAssetId: reference.id } : {}),
       ...(reference && kind === 'image' ? { referenceUse } : {}),
       clientId,
+      ...(campaignName() ? { campaign: campaignName() } : {}),
     });
     if (!parsed.success) {
       setInvalid(parsed.error.issues[0]?.message ?? 'Confira os campos.');
@@ -146,7 +211,25 @@ export function GenerationForm({
     estimate.mutate(parsed.data, { onSuccess: (body) => setQuote(body.estimate) });
   }
 
+  // The offer of a costlier model was taken: the model is on screen now, so price it.
+  useEffect(() => {
+    if (!pendingEstimate || model?.key !== modelKey) return;
+    setPendingEstimate(false);
+    askForEstimate();
+    // Only when the offered model has arrived on screen.
+  }, [pendingEstimate, modelKey, model?.key]);
+
   const problem = estimate.error ?? start.error;
+  /** A costlier model elsewhere that could do it: switching up is this person's click. */
+  const alternative =
+    estimate.error instanceof ApiError
+      ? ((estimate.error.body as { alternative?: MediaAlternative }).alternative ?? null)
+      : null;
+  const takeAlternative = (offer: MediaAlternative) => {
+    changed();
+    setModelKey(offer.model);
+    setPendingEstimate(true);
+  };
 
   return (
     <form
@@ -176,7 +259,7 @@ export function GenerationForm({
           />
         </label>
         <span className="field-hint">
-          Serve para arquivar a mídia aqui. O nome do cliente não é enviado ao Kairogen.
+          Serve para arquivar a mídia aqui. O nome do cliente não é enviado a provedor nenhum.
         </span>
 
         <div className="media-form-row">
@@ -209,18 +292,27 @@ export function GenerationForm({
               {list.length === 0 && (
                 <option value="">{models.isLoading ? 'Carregando…' : 'Nenhum modelo'}</option>
               )}
-              {list.map((item) => (
-                <option key={item.key} value={item.key}>
-                  {item.name}
-                  {/* The catalog does not always give a price; the estimate always does. */}
-                  {item.creditsPerOutput !== null
-                    ? ` · ${credits(item.creditsPerOutput)} por saída`
-                    : ' · custo na estimativa'}
-                </option>
+              {groups.map((group) => (
+                <optgroup key={group.id} label={groupLabel(group.id, group.status)}>
+                  {group.models.map((item) => (
+                    <option key={item.key} value={item.key}>
+                      {item.name} · {costLabel(item)}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
           </label>
         </div>
+        {models.data?.problems && Object.keys(models.data.problems).length > 0 && (
+          <span className="field-hint" role="status">
+            {Object.entries(models.data.problems)
+              .map(
+                ([id, reason]) => `${MEDIA_PROVIDER_LABEL[id as MediaProviderId]}: ${reason}`,
+              )
+              .join(' ')}
+          </span>
+        )}
 
         <label className="field">
           <span className="field-label">Prompt</span>
@@ -468,8 +560,8 @@ export function GenerationForm({
               {kind === 'image' && referenceUse === 'edit'
                 ? 'No modo edição, o prompt descreve a mudança (por exemplo, "trocar o fundo por cinza claro"). '
                 : ''}
-              O arquivo enviado entra na biblioteca. O Kairogen recebe um link temporário desta
-              imagem, válido por 15 minutos.
+              O arquivo enviado entra na biblioteca. O provedor recebe a imagem por um link
+              temporário de 15 minutos, ou junto com o pedido quando é assim que ele lê.
             </span>
           </div>
         )}
@@ -485,6 +577,17 @@ export function GenerationForm({
           {problem instanceof ApiError ? problem.message : 'Não foi possível concluir.'}
         </p>
       )}
+      {alternative && !readOnly && (
+        <div className="media-form-actions">
+          <Button type="button" variant="ghost" onClick={() => takeAlternative(alternative)}>
+            Usar {alternative.name} ({MEDIA_PROVIDER_LABEL[alternative.providerId]},{' '}
+            {alternative.credits
+              ? credits(alternative.credits)
+              : formatBrl(alternative.brlCents ?? 0)}
+            )
+          </Button>
+        </div>
+      )}
 
       <div className="media-form-actions" aria-live="polite">
         {quote === null ? (
@@ -496,7 +599,9 @@ export function GenerationForm({
           </Button>
         ) : (
           <>
-            <span className="media-cost">Custo: {credits(quote.credits)}</span>
+            <span className="media-cost">
+              Custo: {priceOf(quote)} · {MEDIA_PROVIDER_LABEL[quote.providerId]}
+            </span>
             <Button
               type="button"
               disabled={readOnly || start.isPending || quote.blockedBy !== null}
@@ -512,7 +617,7 @@ export function GenerationForm({
                 )
               }
             >
-              Gerar ({credits(quote.credits)})
+              Gerar ({priceOf(quote)})
             </Button>
           </>
         )}
@@ -520,6 +625,15 @@ export function GenerationForm({
       {quote?.blockedBy && (
         <div className="alert alert-warning" role="status">
           {MEDIA_REFUSAL_MESSAGE[quote.blockedBy]}
+        </div>
+      )}
+      {quote && quote.warnings.length > 0 && (
+        <div className="alert alert-warning" role="status">
+          <ul className="media-warnings">
+            {quote.warnings.map((warning) => (
+              <li key={warning}>{warning}</li>
+            ))}
+          </ul>
         </div>
       )}
 

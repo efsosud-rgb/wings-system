@@ -23,9 +23,11 @@ import {
   advanceGeneration,
   createEstimate,
   listModels,
+  providerStatuses,
   recentGenerations,
   resolvePublicLink,
   resumeGenerations,
+  spendOf,
   startGeneration,
   studioDepsOf,
   toGeneration,
@@ -40,14 +42,14 @@ const STATUS_OF: Record<string, number> = {
   invalid_request: 400,
   not_found: 404,
   cannot_estimate: 422,
-  kairogen_unavailable: 502,
+  provider_unreachable: 502,
   not_connected: 503,
 };
 
 function sendRefusal(reply: FastifyReply, error: StudioRefusal) {
   return reply
     .status(STATUS_OF[error.code] ?? 409)
-    .send({ error: error.code, message: error.message });
+    .send({ error: error.code, message: error.message, ...error.extra });
 }
 
 /**
@@ -65,13 +67,23 @@ export const mediaStudioRoutes: FastifyPluginAsync = async (app) => {
     '/media/studio',
     { preHandler: app.requirePermission('marketing.media.read') },
     async (request, reply) => {
-      const row = await db.query.integrationConnections.findFirst();
-      const connected = deps.kairogen !== null && row?.state === 'connected';
+      const providers = await providerStatuses(deps);
+      const connected = providers.some((item) => item.id === 'kairogen' && item.available);
       return reply.send({
         connected,
+        anyAvailable: providers.some((item) => item.available),
         storageAvailable: deps.storage !== null,
         usage: await usageOf(deps, request.session.actor.employeeId, { withBalance: connected }),
       });
+    },
+  );
+
+  /** Every provider: key present, available, balance or quota, spend this month. Never a key. */
+  app.get(
+    '/media/providers',
+    { preHandler: app.requirePermission('marketing.media.read') },
+    async (_request, reply) => {
+      return reply.send({ providers: await providerStatuses(deps), spend: await spendOf(deps) });
     },
   );
 
@@ -84,10 +96,11 @@ export const mediaStudioRoutes: FastifyPluginAsync = async (app) => {
         .safeParse(request.query);
       try {
         const kind = query.success ? query.data.kind : undefined;
-        const { models, cachedAt } = await listModels(deps, { priced: kind ?? 'all' });
+        const { models, cachedAt, problems } = await listModels(deps, { priced: kind ?? 'all' });
         return reply.send({
           models: models.filter((model) => !kind || model.kind === kind),
           cachedAt,
+          problems,
         });
       } catch (error) {
         if (error instanceof StudioRefusal) return sendRefusal(reply, error);
@@ -149,7 +162,9 @@ export const mediaStudioRoutes: FastifyPluginAsync = async (app) => {
           metadata: {
             operation: row.operation,
             model: row.model,
+            provider: row.provider,
             creditsEstimated: row.creditsEstimated,
+            brlCentsEstimated: row.brlCentsEstimated,
             status: row.status,
             fromAgentProposal: row.proposalId !== null,
           },

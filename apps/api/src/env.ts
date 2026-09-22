@@ -2,11 +2,21 @@ import {
   AGENT_MODELS,
   DEFAULT_AGENT_DAILY_USD,
   DEFAULT_AGENT_MODEL,
+  DEFAULT_BRL_PER_USD,
   DEFAULT_KAIROGEN_DAILY_CREDITS_PER_USER,
   DEFAULT_DRIVE_MAX_FILE_BYTES,
   DEFAULT_KAIROGEN_MONTHLY_CREDITS,
+  DEFAULT_MEDIA_MONTHLY_BRL,
 } from '@wings/shared';
 import { z } from 'zod';
+
+/** A positive number with a default, where an empty variable means the default too. */
+const numberOr = (fallback: number, options: { integer?: boolean } = {}) => {
+  const base = z.coerce.number().positive();
+  return (options.integer ? base.int() : base)
+    .default(fallback)
+    .or(z.literal('').transform(() => fallback));
+};
 
 /** 32-byte key, base64-encoded. */
 const base64Key32 = z
@@ -124,6 +134,52 @@ const schema = z.object({
     .positive()
     .default(DEFAULT_KAIROGEN_MONTHLY_CREDITS)
     .or(z.literal('').transform(() => DEFAULT_KAIROGEN_MONTHLY_CREDITS)),
+  /**
+   * Kairogen credits in reais, for the one ceiling every provider counts
+   * against. Zero (the default) means the month's credits are already paid for
+   * and only the credit ceilings above apply to them.
+   */
+  KAIROGEN_BRL_PER_CREDIT: z.coerce
+    .number()
+    .min(0)
+    .default(0)
+    .or(z.literal('').transform(() => 0)),
+  /**
+   * The other media providers. Each is on when its variables are set; none is
+   * asked anything before a person clicks a price. Every generation counts in
+   * reais estimated against MEDIA_MONTHLY_BRL, whichever provider ran it.
+   *
+   * Cloudflare Workers AI (FLUX.1 schnell): free within a daily quota this
+   * system counts on its own; the ceiling is ours, not Cloudflare's.
+   */
+  CF_ACCOUNT_ID: optionalString,
+  CF_WORKERS_AI_TOKEN: optionalString,
+  CF_WORKERS_AI_DAILY_IMAGES: numberOr(50, { integer: true }),
+  /** Gemini API image generation: free tier, with our own per-minute and per-day counters. */
+  GEMINI_API_KEY: optionalString,
+  GEMINI_DAILY_IMAGES: numberOr(50, { integer: true }),
+  GEMINI_IMAGES_PER_MINUTE: numberOr(5, { integer: true }),
+  /**
+   * Higgsfield: pay-per-use in US dollars, converted by BRL_PER_USD. The
+   * prices are what an output is EXPECTED to cost; the provider's real charge
+   * corrects the ledger when it is reported.
+   */
+  HIGGSFIELD_API_KEY: optionalString,
+  HIGGSFIELD_API_SECRET: optionalString,
+  HIGGSFIELD_USD_PER_IMAGE: numberOr(0.05),
+  HIGGSFIELD_USD_PER_VIDEO_SECOND: numberOr(0.1),
+  /**
+   * MoneyPrinterTurbo: a service of ours that makes short videos without a
+   * camera. Its address, and a bearer token when the service is behind one.
+   */
+  MPT_BASE_URL: optionalString.refine(
+    (value) => value === undefined || /^https?:\/\/[^\s]+$/.test(value),
+    'must be an http(s):// URL',
+  ),
+  MPT_API_KEY: optionalString,
+  BRL_PER_USD: numberOr(DEFAULT_BRL_PER_USD),
+  /** The one ceiling over every media provider, in reais per month (America/Sao_Paulo). */
+  MEDIA_MONTHLY_BRL: numberOr(DEFAULT_MEDIA_MONTHLY_BRL),
   /**
    * A mounted volume for the media library. Unset, it falls back to a `media`
    * folder inside CREATIVE_VIDEO_DIR; with neither, the media routes answer 503.

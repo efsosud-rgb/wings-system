@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { checkCopyCompliance, COMPLIANCE_RULE_LABEL } from '../ads/campaign-builder.js';
 import { WINGS_CLIENT_ID } from '../clients.js';
+import { MEDIA_PROVIDERS, type MediaProviderId } from './media-providers.js';
 
 /**
  * Marketing → Edição de Fotos e Vídeos: what the studio, its agent and the API
@@ -65,16 +66,29 @@ export function modelsForImageUse(models: MediaModel[], use: MediaImageUse): Med
 }
 
 export interface MediaModel {
+  /** Unique across providers: Kairogen's keys are bare, every other provider's start with its id. */
   key: string;
   name: string;
+  /** The service that runs it for us. */
+  providerId: MediaProviderId;
+  /** Who made the model (ByteDance, OpenAI…), when the provider says. Not the provider. */
   provider: string | null;
   kind: 'image' | 'video';
   /**
    * Credits for one output with the model's default parameters, on the account's
    * plan. Kairogen's catalog prices in money, not credits, so this is what
    * `estimate_cost` answered for the model; null while that is not known.
+   * Zero on every provider that does not count in credits.
    */
   creditsPerOutput: number | null;
+  /**
+   * What one output costs in reais, estimated: 0 on a free quota or our own
+   * service, the provider's price converted for pay-per-use, credits times the
+   * configured value on Kairogen. Null while it is not known.
+   */
+  brlCentsPerOutput: number | null;
+  /** How many outputs one generation may ask for. */
+  maxOutputs: number;
   /** Video only. Empty when the catalog does not list them: the duration is then left out. */
   supportedDurations: number[];
   /** Null when the catalog does not restrict them. */
@@ -130,6 +144,12 @@ const generateSpec = z
      * and the asset, and is never part of what Kairogen is sent.
      */
     clientId: z.uuid().default(WINGS_CLIENT_ID),
+    /**
+     * The campaign this is for, when one is open in the builder. Filing only:
+     * with it, "same model within the same campaign" is checked per campaign,
+     * not per client.
+     */
+    campaign: z.string().trim().min(1).max(120).optional(),
   })
   .superRefine((spec, ctx) => {
     if (spec.kind === 'video' && spec.quantity > MAX_VIDEOS_PER_GENERATION) {
@@ -178,36 +198,63 @@ export interface MediaUsage {
   dailyLimitPerUser: number;
   usedThisMonth: number;
   monthlyLimit: number;
+  /** Every provider together, in reais estimated, against MEDIA_MONTHLY_BRL. */
+  usedThisMonthBrlCents: number;
+  monthlyLimitBrlCents: number;
+}
+
+/** Another model that can do the same, offered when the chosen provider cannot right now. */
+export interface MediaAlternative {
+  model: string;
+  name: string;
+  providerId: MediaProviderId;
+  credits: number | null;
+  brlCents: number | null;
 }
 
 export interface MediaEstimate {
   id: string;
+  /** Kairogen credits. Zero on every other provider. */
   credits: number;
+  /** In reais estimated, whatever the provider: what "Gerar" will show. R$ 0 is a price too. */
+  brlCents: number;
+  providerId: MediaProviderId;
   /** After this the estimate is stale and "Gerar" asks for a new one. */
   expiresAt: string;
   request: MediaEstimateRequest;
   /** Why this estimate cannot be generated right now, when it cannot. */
   blockedBy: MediaRefusal | null;
   usage: MediaUsage;
+  /**
+   * Set when the model asked for could not be served and a cheaper (or free)
+   * one took its place without asking: the switch is said, never silent.
+   */
+  routedFrom: { model: string; providerId: MediaProviderId; reason: string } | null;
+  /** Things worth knowing before the click: mixing models in one campaign, an unverified provider. */
+  warnings: string[];
 }
 
 export const MEDIA_REFUSALS = [
   'daily_limit',
   'monthly_limit',
+  'monthly_brl_limit',
   'insufficient_credits',
   'estimate_expired',
   'estimate_used',
   'not_connected',
+  'provider_unavailable',
 ] as const;
 export type MediaRefusal = (typeof MEDIA_REFUSALS)[number];
 
 export const MEDIA_REFUSAL_MESSAGE: Record<MediaRefusal, string> = {
   daily_limit: 'Você atingiu o seu limite de créditos de hoje.',
   monthly_limit: 'O limite de créditos do mês foi atingido.',
+  monthly_brl_limit: 'O teto mensal em reais de todos os provedores de mídia seria ultrapassado.',
   insufficient_credits: 'O saldo da conta no Kairogen não cobre esta geração.',
   estimate_expired: 'A estimativa venceu. Estime o custo de novo.',
   estimate_used: 'Esta estimativa já foi usada. Estime o custo de novo.',
-  not_connected: 'O Kairogen não está conectado. Peça a um Admin Master para conectar.',
+  not_connected: 'Nenhum provedor de mídia está disponível. Peça a um Admin Master para conectar.',
+  provider_unavailable: 'Este provedor não pode atender agora.',
 };
 
 export const GENERATION_STATUSES = [
@@ -224,11 +271,11 @@ export type GenerationStatus = (typeof GENERATION_STATUSES)[number];
 
 export const GENERATION_STATUS_LABEL: Record<GenerationStatus, string> = {
   estimated: 'Estimada',
-  running: 'Gerando no Kairogen',
+  running: 'Gerando',
   saving: 'Salvando na biblioteca',
   succeeded: 'Concluída',
   failed: 'Falhou',
-  refused: 'Recusada pelo Kairogen',
+  refused: 'Recusada pelo provedor',
   unknown: 'Resultado desconhecido',
   timed_out: 'Passou de 20 minutos',
 };
@@ -242,10 +289,13 @@ export interface MediaGeneration {
   operation: 'generate' | 'upscale' | 'animate';
   kind: 'image' | 'video';
   model: string | null;
+  providerId: MediaProviderId;
   prompt: string | null;
   creditsEstimated: number;
   /** What Kairogen says it charged, when it says. */
   creditsCharged: number | null;
+  /** In reais estimated, for the record and the monthly ceiling. */
+  brlCentsEstimated: number;
   /** In words for the screen. Never a provider message that could hold a secret. */
   detail: string | null;
   requestedByName: string | null;
@@ -257,11 +307,13 @@ export interface MediaGeneration {
   clientName: string | null;
 }
 
-//   GET  /media/studio                 -> { usage, connected, storageAvailable }   marketing.media.read
+//   GET  /media/studio                 -> { usage, connected, anyAvailable, storageAvailable }   marketing.media.read
 //   GET  /media/models?kind=           -> { models: MediaModel[], cachedAt }       marketing.media.read
-//        `creditsPerOutput` is null when the catalog gives no price: the screen then
-//        says "custo na estimativa", and the estimate is where the price comes from.
+//        every provider's models together; `brlCentsPerOutput` null (and `creditsPerOutput`
+//        null) when the price is only known at the estimate: the screen then says so.
 //   POST /media/estimates              -> { estimate: MediaEstimate }              marketing.media.generate
+//        409 provider_unavailable may carry `alternative: MediaAlternative` when a costlier
+//        model elsewhere could do it: switching up is a click, never automatic.
 //   POST /media/generations            -> { generation }  body { estimateId }      marketing.media.generate
 //   GET  /media/generations            -> { generations } the latest, newest first marketing.media.read
 //   GET  /media/generations/:id        -> { generation }  (also moves it forward)  marketing.media.read
@@ -299,6 +351,11 @@ export interface MediaBridgeResponse {
 export const agentGenerationProposalSchema = z
   .object({
     kind: z.enum(['image', 'video']),
+    /** The provider the model belongs to, as `listar_modelos` says. Checked against the model. */
+    provider: z.enum(
+      MEDIA_PROVIDERS,
+      'Diga o provedor: use o valor de "provedor" que listar_modelos devolve para o modelo escolhido.',
+    ),
     model: z.string().trim().min(1).max(120),
     /** English, for the generation model. */
     prompt: z

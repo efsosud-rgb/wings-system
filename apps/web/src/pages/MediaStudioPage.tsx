@@ -1,12 +1,18 @@
-import { KAIROGEN_PLAN_LABEL, isGenerationOver } from '@wings/shared';
+import { KAIROGEN_PLAN_LABEL, formatBrl, isGenerationOver } from '@wings/shared';
 import { Suspense, lazy, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { hasPermission, useSession } from '../api/auth.js';
-import { BUILDER_DRAFT_KEY, useGenerations, useMediaStudio } from '../api/media.js';
+import {
+  BUILDER_DRAFT_KEY,
+  useGenerations,
+  useMediaProviders,
+  useMediaStudio,
+} from '../api/media.js';
 import { AgentChat } from '../components/agent-chat/AgentChat.js';
 import { GenerationForm } from '../components/media-studio/GenerationForm.js';
 import { GenerationProgress } from '../components/media-studio/GenerationProgress.js';
 import { MediaLibrary } from '../components/media-studio/MediaLibrary.js';
+import { ProviderStrip } from '../components/media-studio/ProviderStrip.js';
 import { StudioLayout, StudioToolGroup } from '../components/StudioLayout.js';
 import { Alert } from '../components/ui.js';
 
@@ -67,17 +73,27 @@ export function MediaStudioPage() {
   const state = studio.data;
   const usage = state?.usage ?? null;
   const connected = state?.connected ?? false;
+  // Older answers say only whether Kairogen is connected; with providers, any one of them will do.
+  const anyAvailable = state?.anyAvailable ?? connected;
+  const providers = useMediaProviders(Boolean(state));
 
   return (
     <StudioLayout
       title="Agente de Edição — Wings"
-      subtitle="Imagens e vídeos para os anúncios. Cada geração custa créditos e só acontece no seu clique, com o custo antes."
+      subtitle="Imagens e vídeos para os anúncios. Cada geração tem um custo, mesmo quando é R$ 0, e só acontece no seu clique, com o custo antes."
       notice={
         <>
-          {state && !connected && (
+          {state && !anyAvailable && (
             <Alert kind="info">
-              O Kairogen não está conectado. Peça a um Admin Master para conectar em Administração →
-              Integrações.{' '}
+              Nenhum provedor de mídia está disponível. O Kairogen não está conectado e os outros
+              provedores não têm chave neste ambiente ou esgotaram a cota. Peça a um Admin Master
+              para ver em Administração → Integrações.{' '}
+              {canConnect && <Link to="/administracao/integracoes">Abrir Integrações</Link>}
+            </Alert>
+          )}
+          {state && anyAvailable && !connected && (
+            <Alert kind="info">
+              O Kairogen não está conectado; os outros provedores continuam disponíveis.{' '}
               {canConnect && <Link to="/administracao/integracoes">Abrir Integrações</Link>}
             </Alert>
           )}
@@ -150,11 +166,20 @@ export function MediaStudioPage() {
                         : '—'}
                     </dd>
                   </div>
+                  <div>
+                    <dt>Todos os provedores no mês</dt>
+                    <dd className="mono">
+                      {usage
+                        ? `${formatBrl(usage.usedThisMonthBrlCents ?? 0)} de ${formatBrl(usage.monthlyLimitBrlCents ?? 0)}`
+                        : '—'}
+                    </dd>
+                  </div>
                 </dl>
+                {providers.data && <ProviderStrip providers={providers.data.providers} />}
 
                 <GenerationForm
                   canGenerate={canGenerate}
-                  connected={connected}
+                  connected={anyAvailable}
                   onStarted={follow}
                 />
 
@@ -173,7 +198,7 @@ export function MediaStudioPage() {
                 )}
 
                 <MediaLibrary
-                  canGenerate={canGenerate && connected}
+                  canGenerate={canGenerate && anyAvailable}
                   canUseInBuilder={canUseInBuilder}
                   onStarted={follow}
                 />
@@ -191,7 +216,7 @@ export function MediaStudioPage() {
           canGenerate={canGenerate}
           getBuilderDraft={campaignDraft}
           emptyHint="Peça uma imagem ou um vídeo para uma campanha, pergunte quanto custa um modelo ou o que já existe na biblioteca."
-          standingHint="O agente lê, estima e propõe. Nada é gerado daqui sem o seu clique, e o custo em créditos aparece antes."
+          standingHint="O agente lê, estima e propõe no provedor mais barato que atende. Nada é gerado daqui sem o seu clique, e o custo aparece antes."
         />
       }
       tools={

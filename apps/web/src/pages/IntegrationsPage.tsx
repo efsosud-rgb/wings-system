@@ -2,8 +2,11 @@ import {
   KAIROGEN_PLANS,
   KAIROGEN_PLAN_LABEL,
   KAIROGEN_STATE_LABEL,
+  MEDIA_BILLING_LABEL,
+  formatBrl,
   type KairogenPlan,
   type KairogenStatus,
+  type MediaProviderStatus,
 } from '@wings/shared';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
@@ -14,7 +17,8 @@ import {
   useKairogenStatus,
   usePollKairogen,
 } from '../api/integrations.js';
-import { useSaveKairogenPlan } from '../api/media.js';
+import { useMediaProviders, useSaveKairogenPlan } from '../api/media.js';
+import { providerHolding } from '../components/media-studio/ProviderStrip.js';
 import { Alert, Button } from '../components/ui.js';
 
 /**
@@ -297,6 +301,90 @@ function KairogenCard() {
   );
 }
 
+const CAPABILITY_LABEL: Record<MediaProviderStatus['capabilities'][number], string> = {
+  generate_image: 'imagem',
+  generate_video: 'vídeo',
+  animate: 'animar',
+  upscale: 'ampliar',
+};
+
+/**
+ * One card per media provider set up by environment variable: the browser
+ * sees whether the key is present, never the key. Kairogen keeps its own card
+ * above, because its connection is made here, not in the environment.
+ */
+function MediaProviderCard({ status }: { status: MediaProviderStatus }) {
+  const holding = providerHolding(status);
+  return (
+    <section className="provider-card" aria-labelledby={`provider-${status.id}`}>
+      <header className="integration-card-head">
+        <div>
+          <h3 id={`provider-${status.id}`}>{status.name}</h3>
+          <p className="muted">
+            {MEDIA_BILLING_LABEL[status.billing]} ·{' '}
+            {status.capabilities.map((item) => CAPABILITY_LABEL[item]).join(', ')}
+          </p>
+        </div>
+        <span
+          className={`integration-state integration-state-${status.available ? 'connected' : 'not_configured'}`}
+          role="status"
+        >
+          {status.available ? 'Disponível' : status.configured ? 'Indisponível' : 'Sem chave'}
+        </span>
+      </header>
+      <dl className="integration-facts">
+        <div>
+          <dt>Chave no ambiente</dt>
+          <dd>{status.configured ? 'presente' : 'ausente'}</dd>
+        </div>
+        <div>
+          <dt>{status.quota ? 'Cota do dia' : 'Saldo'}</dt>
+          <dd className="mono">{holding ?? '—'}</dd>
+        </div>
+        <div>
+          <dt>Gasto no mês</dt>
+          <dd className="mono">{formatBrl(status.usedThisMonthBrlCents)}</dd>
+        </div>
+      </dl>
+      {status.reason && status.configured && (
+        <div className="alert alert-warning" role="status">
+          {status.reason}
+        </div>
+      )}
+      {!status.verified && (
+        <p className="field-hint">
+          Ainda não verificado com uma geração real: o formato das respostas vem da documentação
+          pública.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function MediaProviderCards() {
+  const providers = useMediaProviders();
+  if (providers.isLoading) return null;
+  if (!providers.data || !Array.isArray(providers.data.providers)) {
+    return <Alert kind="error">Não foi possível ler os provedores de mídia.</Alert>;
+  }
+  const others = providers.data.providers.filter((status) => status.id !== 'kairogen');
+  return (
+    <section aria-labelledby="media-providers-title">
+      <h2 id="media-providers-title">Provedores de mídia</h2>
+      <p className="muted">
+        Ligados por variáveis de ambiente no Coolify. Teto mensal de todos juntos:{' '}
+        {formatBrl(providers.data.spend.usedThisMonthBrlCents)} de{' '}
+        {formatBrl(providers.data.spend.monthlyLimitBrlCents)} este mês.
+      </p>
+      <div className="provider-cards">
+        {others.map((status) => (
+          <MediaProviderCard key={status.id} status={status} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function IntegrationsPage() {
   return (
     <>
@@ -308,6 +396,7 @@ export function IntegrationsPage() {
         </p>
       </header>
       <KairogenCard />
+      <MediaProviderCards />
     </>
   );
 }

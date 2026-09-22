@@ -11,6 +11,7 @@ import {
   type AgentProposalCard,
   type AgentStreamEvent,
   type AgentUsageToday,
+  type MediaProviderId,
 } from '@wings/shared';
 import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
@@ -179,9 +180,11 @@ export async function cardOf(
     };
   }
   if (row.kind === 'generation') {
-    // Cards from before clients existed were all for Wings Company.
+    // Cards from before clients existed were all for Wings Company; from before
+    // there were other providers, all on Kairogen.
     const payload = agentGenerationProposalSchema.safeParse({
       clientId: WINGS_CLIENT_ID,
+      provider: 'kairogen',
       ...(row.payload as object),
     });
     if (!payload.success) return null;
@@ -208,6 +211,8 @@ export async function cardOf(
           ? {
               id: made.id,
               credits: made.creditsEstimated,
+              brlCents: made.brlCentsEstimated,
+              providerId: made.provider as MediaProviderId,
               expiresAt: made.estimateExpiresAt.toISOString(),
             }
           : null,

@@ -631,10 +631,17 @@ const generationCard: AgentGenerationProposalCard = {
   approvalId: null,
   generationId: null,
   clientName: 'Padaria Aurora',
-  estimate: { id: 'est-1', credits: 4, expiresAt: '2026-09-21T12:15:00.000Z' },
+  estimate: {
+    id: 'est-1',
+    credits: 4,
+    brlCents: 0,
+    providerId: 'kairogen',
+    expiresAt: '2026-09-21T12:15:00.000Z',
+  },
   payload: {
     clientId: '11111111-1111-4111-8111-1111111111c2',
     kind: 'image',
+    provider: 'kairogen',
     model: 'seedream-v4',
     prompt:
       'Advertising photograph of a small business owner in front of a storefront at golden hour, 50mm, shallow depth of field.',
@@ -679,7 +686,7 @@ describe('the editing agent', () => {
     await say('Uma imagem para a campanha do RJ');
     stream({ type: 'proposal', proposal: generationCard });
 
-    expect(screen.getByText('Custo estimado: 4 créditos')).toBeTruthy();
+    expect(screen.getByText('Custo estimado: 4 créditos · Kairogen')).toBeTruthy();
     // Who it is for is on the card, before the click.
     expect(screen.getByText('Para quem').nextElementSibling?.textContent).toBe('Padaria Aurora');
     expect(screen.getByText(/Dono de loja em frente ao negócio/)).toBeTruthy();
@@ -700,7 +707,9 @@ describe('the editing agent', () => {
       operation: 'generate',
       kind: 'image',
       model: 'seedream-v4',
+      providerId: 'kairogen',
       prompt: null,
+      brlCentsEstimated: 0,
       creditsEstimated: 4,
       creditsCharged: null,
       detail: 'O Kairogen não respondeu se recebeu o pedido.',
@@ -748,7 +757,9 @@ describe('the editing agent', () => {
       operation: 'generate',
       kind: 'image',
       model: 'seedream-v4',
+      providerId: 'kairogen',
       prompt: null,
+      brlCentsEstimated: 0,
       creditsEstimated: 4,
       creditsCharged: 4,
       detail: null,

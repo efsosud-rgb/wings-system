@@ -1,4 +1,9 @@
-import { GENERATION_STATUS_LABEL, isGenerationOver } from '@wings/shared';
+import {
+  GENERATION_STATUS_LABEL,
+  MEDIA_PROVIDER_LABEL,
+  formatBrl,
+  isGenerationOver,
+} from '@wings/shared';
 import { useEffect, useState } from 'react';
 import { useGeneration } from '../../api/media.js';
 
@@ -34,13 +39,21 @@ export function GenerationProgress({ id, onDismiss }: { id: string; onDismiss: (
   }
 
   const bad = over && generation.status !== 'succeeded';
+  const provider = MEDIA_PROVIDER_LABEL[generation.providerId];
+  const cost =
+    generation.providerId === 'kairogen'
+      ? `${generation.creditsEstimated.toLocaleString('pt-BR')} créditos`
+      : formatBrl(generation.brlCentsEstimated);
   return (
     <div className={`media-progress ${bad ? 'media-progress-bad' : ''}`} role="status">
       <div className="media-progress-head">
-        <strong>{GENERATION_STATUS_LABEL[generation.status]}</strong>
+        <strong>
+          {GENERATION_STATUS_LABEL[generation.status]}
+          {generation.status === 'running' && ` no ${provider}`}
+        </strong>
         <span className="muted">
           {generation.kind === 'video' ? 'Vídeo' : 'Imagem'}
-          {generation.model && ` · ${generation.model}`} ·{' '}
+          {generation.model && ` · ${generation.model}`} · {provider} · {cost} ·{' '}
           {over && generation.finishedAt
             ? elapsed(generation.createdAt, new Date(generation.finishedAt).getTime())
             : elapsed(generation.createdAt, now)}
@@ -55,7 +68,7 @@ export function GenerationProgress({ id, onDismiss }: { id: string; onDismiss: (
             : `${generation.assetIds.length} mídias já estão na biblioteca.`}
         </p>
       )}
-      {generation.status === 'unknown' && <p>Confira no Kairogen antes de gerar de novo.</p>}
+      {generation.status === 'unknown' && <p>Confira no {provider} antes de gerar de novo.</p>}
       {over && (
         <button type="button" className="link-button" onClick={onDismiss}>
           Dispensar

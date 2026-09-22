@@ -37,6 +37,8 @@ declare module 'fastify' {
       agentLlm?: AgentLlm;
       /** Set only by tests, so no test ever reaches Kairogen. */
       kairogenFetch?: typeof fetch;
+      /** Set only by tests, so no test ever reaches another media provider. */
+      mediaFetch?: typeof fetch;
       /** Set only by tests, so no test ever reaches a real bucket. */
       storageFetch?: typeof fetch;
       storage?: ObjectStorage;
@@ -59,6 +61,8 @@ export async function buildApp(deps: {
   agentLlm?: AgentLlm;
   /** Overridable so tests talk to a simulated Kairogen. */
   kairogenFetch?: typeof fetch;
+  /** Overridable so tests talk to simulated media providers. */
+  mediaFetch?: typeof fetch;
   storageFetch?: typeof fetch;
   storage?: ObjectStorage;
 }): Promise<FastifyInstance> {
@@ -84,6 +88,7 @@ export async function buildApp(deps: {
     platformFetch: deps.platformFetch,
     agentLlm: deps.agentLlm,
     kairogenFetch: deps.kairogenFetch,
+    mediaFetch: deps.mediaFetch,
     storageFetch: deps.storageFetch,
     storage: deps.storage,
     mailer: deps.mailer ?? createMailer(deps.env, { info: (msg) => app.log.info(msg) }),

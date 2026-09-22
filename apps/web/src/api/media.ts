@@ -8,6 +8,9 @@ import {
   type MediaEstimateRequest,
   type MediaGeneration,
   type MediaModel,
+  type MediaProviderId,
+  type MediaProviderStatus,
+  type MediaSpend,
   type MediaUsage,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -22,7 +25,10 @@ import { api } from './client.js';
 
 export interface MediaStudioState {
   usage: MediaUsage | null;
+  /** Kairogen in particular: connected and with credits left. */
   connected: boolean;
+  /** Any provider at all can serve right now. */
+  anyAvailable: boolean;
   storageAvailable: boolean;
 }
 
@@ -33,11 +39,27 @@ export function useMediaStudio() {
   });
 }
 
+/** Every provider: key present, available, balance or quota, spend this month. Never a key. */
+export function useMediaProviders(enabled = true) {
+  return useQuery({
+    queryKey: ['media', 'providers'],
+    queryFn: () =>
+      api.get<{ providers: MediaProviderStatus[]; spend: MediaSpend }>('/media/providers'),
+    enabled,
+    staleTime: 30_000,
+  });
+}
+
 export function useMediaModels(kind: 'image' | 'video', enabled = true) {
   return useQuery({
     queryKey: ['media', 'models', kind],
     queryFn: () =>
-      api.get<{ models: MediaModel[]; cachedAt: string }>(`/media/models?kind=${kind}`),
+      api.get<{
+        models: MediaModel[];
+        cachedAt: string;
+        /** Providers whose catalog could not be read right now, with why. */
+        problems: Partial<Record<MediaProviderId, string>>;
+      }>(`/media/models?kind=${kind}`),
     enabled,
     // The server caches the catalog for an hour; asking more often gains nothing.
     staleTime: 10 * 60_000,
@@ -125,6 +147,7 @@ export function useStartGeneration() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['media', 'generations'] });
       void queryClient.invalidateQueries({ queryKey: ['media', 'studio'] });
+      void queryClient.invalidateQueries({ queryKey: ['media', 'providers'] });
     },
   });
 }
@@ -159,6 +182,7 @@ export function useGeneration(id: string | undefined) {
   useEffect(() => {
     if (!status || !isGenerationOver(status)) return;
     void queryClient.invalidateQueries({ queryKey: ['media', 'studio'] });
+    void queryClient.invalidateQueries({ queryKey: ['media', 'providers'] });
     void queryClient.invalidateQueries({ queryKey: ['media', 'generations'] });
     if (status === 'succeeded')
       void queryClient.invalidateQueries({ queryKey: ['media', 'assets'] });
