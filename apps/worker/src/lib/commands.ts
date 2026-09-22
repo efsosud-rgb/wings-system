@@ -18,6 +18,22 @@ export async function runFfprobe(filePath: string): Promise<string> {
   return stdout;
 }
 
+/** `ffmpeg`, for the render job. Resolves on exit 0; on failure, rejects with
+ * exactly `ffmpeg exited with status <code>` — never ffmpeg's stderr, which
+ * routinely echoes back the temp file paths it was given. Not given a
+ * timeout of its own: the render job enforces `RENDER_TIMEOUT_SECONDS`
+ * itself, across the whole attempt, not just the encode. */
+export async function runFfmpeg(args: string[]): Promise<void> {
+  try {
+    await run('ffmpeg', args, { maxBuffer: MAX_BUFFER_BYTES });
+  } catch (error) {
+    const code = (error as { code?: number | string }).code;
+    // `cause` is for local debugging only: nothing reads it into the job's
+    // stored error, which stays exactly this sanitized message.
+    throw new Error(`ffmpeg exited with status ${typeof code === 'number' ? code : 'unknown'}`, { cause: error });
+  }
+}
+
 const TRANSCRIBE_SCRIPT = resolve(import.meta.dirname, '../../scripts/transcribe.py');
 
 /** faster-whisper, "small" model, CPU: segments and their times, as JSON on stdout. */

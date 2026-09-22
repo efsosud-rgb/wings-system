@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Job } from '../queue.js';
+import { baseContext } from '../test/context.js';
 import { createMemoryStorage } from '../test/memory-storage.js';
 import type { JobContext } from './types.js';
 import { runTranscribeJob, siblingTranscriptKey } from './transcribe.js';
@@ -15,15 +16,11 @@ const WHISPER_JSON = JSON.stringify({
 });
 
 function contextWith(overrides: Partial<JobContext> = {}): JobContext {
-  return {
-    storage: createMemoryStorage(),
+  return baseContext({
     threads: 2,
-    runFfprobe: async () => {
-      throw new Error('not used in this test');
-    },
     runWhisper: async () => WHISPER_JSON,
     ...overrides,
-  };
+  });
 }
 
 describe('siblingTranscriptKey', () => {

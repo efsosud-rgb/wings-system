@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Job } from '../queue.js';
+import { baseContext } from '../test/context.js';
 import { createMemoryStorage } from '../test/memory-storage.js';
 import type { JobContext } from './types.js';
 import { runFfprobeJob } from './ffprobe.js';
@@ -13,15 +14,7 @@ const FFPROBE_JSON = JSON.stringify({
 });
 
 function contextWith(overrides: Partial<JobContext> = {}): JobContext {
-  return {
-    storage: createMemoryStorage(),
-    threads: 1,
-    runFfprobe: async () => FFPROBE_JSON,
-    runWhisper: async () => {
-      throw new Error('not used in this test');
-    },
-    ...overrides,
-  };
+  return baseContext({ runFfprobe: async () => FFPROBE_JSON, ...overrides });
 }
 
 describe('the ffprobe job', () => {

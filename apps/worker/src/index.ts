@@ -1,4 +1,5 @@
-import { runFfprobe, runWhisper } from './lib/commands.js';
+import { tmpdir } from 'node:os';
+import { runFfmpeg, runFfprobe, runWhisper } from './lib/commands.js';
 import { createS3Storage } from './lib/storage.js';
 import { concurrencyOf, threadsPerJob } from './concurrency.js';
 import { createPool, waitForJobsTable } from './db/client.js';
@@ -27,7 +28,19 @@ async function main() {
 
   const stop = runWorker(
     pool,
-    { storage, threadsPerJob: threads, runFfprobe, runWhisper },
+    {
+      storage,
+      threadsPerJob: threads,
+      runFfprobe,
+      runWhisper,
+      runFfmpeg,
+      renderLimits: {
+        maxSeconds: env.RENDER_MAX_SECONDS,
+        timeoutSeconds: env.RENDER_TIMEOUT_SECONDS,
+        maxInputBytes: env.RENDER_MAX_INPUT_BYTES,
+        tmpDir: env.RENDER_TMP_DIR ?? tmpdir(),
+      },
+    },
     { jobTypes, concurrency, pollIntervalMs: env.WORKER_POLL_INTERVAL_MS, maxAttempts: env.WORKER_MAX_ATTEMPTS },
   );
 

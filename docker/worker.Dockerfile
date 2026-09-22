@@ -19,10 +19,12 @@ RUN pnpm install --frozen-lockfile --prod
 FROM node:22-bookworm-slim AS runner
 ENV NODE_ENV=production
 
-# FFmpeg for ffprobe (and, later, render); Python for faster-whisper and
-# auto-editor. No CUDA: CPU only, same as staging and production hosts.
+# FFmpeg for ffprobe and render; Python for faster-whisper and auto-editor;
+# fonts-dejavu-core is the one typeface the render job draws text with
+# (apps/worker/src/jobs/render/fonts.ts) — never downloaded at render time.
+# No CUDA: CPU only, same as staging and production hosts.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ffmpeg python3 python3-venv \
+      ffmpeg python3 python3-venv fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # An isolated venv: Debian's system Python refuses `pip install` outside one.

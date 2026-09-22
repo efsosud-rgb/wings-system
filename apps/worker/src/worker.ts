@@ -2,7 +2,7 @@ import type { JobType } from '@wings/shared';
 import type { Pool } from './db/client.js';
 import { JOB_HANDLERS } from './jobs/index.js';
 import type { JobContext } from './jobs/types.js';
-import { claimNextJob, failJob, completeJob } from './queue.js';
+import { claimNextJob, failJob, completeJob, maxAttemptsFor } from './queue.js';
 
 export interface WorkerConfig {
   jobTypes: readonly JobType[];
@@ -43,7 +43,7 @@ export function runWorker(
         const output = await handler(job, { ...context, threads: context.threadsPerJob });
         await completeJob(pool, job.id, output);
       } catch (error) {
-        await failJob(pool, job, messageOf(error), config.maxAttempts);
+        await failJob(pool, job, messageOf(error), maxAttemptsFor(job.type, config.maxAttempts));
       }
     }
   }

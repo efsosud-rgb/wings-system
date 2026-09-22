@@ -32,10 +32,22 @@ const schema = z.object({
   WORKER_MEMORY_PER_JOB_MB: z.coerce.number().int().positive().default(1024),
 
   WORKER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(2000),
+  /** For every type except `render`, which is always 1 attempt (docs/studio/jobs.md: "a job is one attempt"). */
   WORKER_MAX_ATTEMPTS: z.coerce.number().int().positive().default(3),
-  /** Comma-separated job types this instance claims. Excludes `render` by
-   * default: it has no handler yet (see docs/studio/jobs.md, pending). */
+  /** Comma-separated job types this instance claims. */
   WORKER_JOB_TYPES: requiredString.default(JOB_TYPES_IMPLEMENTED.join(',')),
+
+  /** Limits for the `render` job (docs/studio/jobs.md). */
+  RENDER_MAX_SECONDS: z.coerce.number().int().positive().default(3600),
+  RENDER_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(7200),
+  RENDER_MAX_INPUT_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(8 * 1024 * 1024 * 1024),
+  /** Where downloaded assets and the render result live until uploaded;
+   * always removed at the end, success or failure. */
+  RENDER_TMP_DIR: requiredString.optional(),
 });
 
 export type Env = z.infer<typeof schema>;

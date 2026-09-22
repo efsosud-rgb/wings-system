@@ -49,6 +49,13 @@ export async function completeJob(pool: Pool, id: string, output: unknown): Prom
   );
 }
 
+/** `render` is one attempt, always (docs/studio/jobs.md: "a job is one
+ * attempt"; render is too expensive to retry, and the person asks again from
+ * the screen). Every other type uses the worker's own `WORKER_MAX_ATTEMPTS`. */
+export function maxAttemptsFor(type: JobType, workerMaxAttempts: number): number {
+  return type === 'render' ? 1 : workerMaxAttempts;
+}
+
 /**
  * Below `maxAttempts`, the job goes back to `pending` for another try;
  * otherwise it is `failed` for good. `error` is a message, never a stack
