@@ -45,6 +45,49 @@ export interface DailyAmount {
   amount: number;
 }
 
+/** Which guard tripped the kill switch, read from the reason it wrote. */
+export const KILL_SWITCH_RULES = [
+  'spend_consumed_reservation',
+  'unknown_execution',
+  'budgets_exceed_plan',
+  'reconciliation_stale',
+  'other',
+] as const;
+export type KillSwitchRule = (typeof KILL_SWITCH_RULES)[number];
+
+export const KILL_SWITCH_RULE_LABEL: Record<KillSwitchRule, string> = {
+  spend_consumed_reservation: 'Gasto reportado chegou ao teto ou comeu o que estava reservado',
+  unknown_execution: 'Uma alteração terminou com resultado desconhecido na plataforma',
+  budgets_exceed_plan: 'Orçamentos ativos na plataforma somam mais que o permitido no mês',
+  reconciliation_stale: 'Reconciliação parada há mais de 120 minutos (dead-man switch)',
+  other: 'Trava acionada por uma pessoa ou por outra regra',
+};
+
+/** `engageKillSwitch` writes one of a few fixed sentences; this maps them back to the rule. */
+export function killSwitchRuleOf(reason: string | null): KillSwitchRule {
+  if (!reason) return 'other';
+  if (/consumiu o espaço reservado|atingiu o teto/i.test(reason))
+    return 'spend_consumed_reservation';
+  if (/resultado desconhecido/i.test(reason)) return 'unknown_execution';
+  if (/excedem o limite/i.test(reason)) return 'budgets_exceed_plan';
+  if (/Reconciliação parada/i.test(reason)) return 'reconciliation_stale';
+  return 'other';
+}
+
+export interface KillSwitchState {
+  rule: KillSwitchRule;
+  /** The sentence the guard wrote when it tripped. */
+  reason: string | null;
+  /** When the guard tripped; null when no event was recorded (older rows). */
+  engagedAt: string | null;
+  /** The platform's account id, for the release command. */
+  accountExternalId: string;
+}
+
+/** Only a person releases it, on the API's shell, after looking. */
+export const KILL_SWITCH_RELEASE_HOWTO =
+  'Só uma pessoa com acesso ao servidor (Admin Master) libera, depois de verificar a causa, com ops-cli release-kill-switch --account <conta> --reason "…" no container da API. Enquanto houver alteração com resultado desconhecido, a liberação é recusada: resolva com resolve-unknown antes.';
+
 export interface SpendStrip {
   source: SpendSource;
   unit: SpendUnit;
@@ -73,6 +116,8 @@ export interface SpendStrip {
   refreshedAt: string | null;
   /** Meta and Google only: the system's own kill switch. */
   killSwitchEngaged: boolean;
+  /** Why and when it tripped, and how it is released; null while it is not engaged. */
+  killSwitch: KillSwitchState | null;
   /**
    * Set when the source is configured but cannot show figures yet, and says
    * what is missing: credentials present but no account seeded in the

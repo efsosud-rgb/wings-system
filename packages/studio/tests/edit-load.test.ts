@@ -950,10 +950,13 @@ describe("Edit loadEdit()", () => {
 	});
 
 	describe("edge cases", () => {
-		it("rejects edit with no tracks (schema validation)", async () => {
+		// Wings: a project starts with nothing on it (see NOTICE.md), so an edit
+		// with no track loads instead of being refused. Empty clips stay refused.
+		it("accepts edit with no tracks (Wings: a project starts empty)", async () => {
 			const editConfig = createMinimalEdit([]);
 
-			await expect(edit.loadEdit(editConfig)).rejects.toThrow();
+			await expect(edit.loadEdit(editConfig)).resolves.toBeUndefined();
+			expect(edit.getEdit().timeline.tracks).toEqual([]);
 		});
 
 		it("rejects edit with empty clips (schema validation)", async () => {

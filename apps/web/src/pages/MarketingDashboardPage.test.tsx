@@ -29,7 +29,7 @@ const data = {} as {
   audience: DashboardAudience;
 };
 
-const ok =<T,>(value: T) => ({ data: value, isLoading: false, isError: false });
+const ok = <T,>(value: T) => ({ data: value, isLoading: false, isError: false });
 
 vi.mock('../api/dashboard.js', () => ({
   useDashboardOverview: () => ok({ overview: data.overview }),
@@ -40,8 +40,12 @@ vi.mock('../api/dashboard.js', () => ({
 }));
 // The other tabs have their own tests; here they only need to mount.
 vi.mock('../components/dashboard/InsightsTab.js', () => ({ InsightsTab: () => <p>insights</p> }));
-vi.mock('../components/dashboard/OwnedChannelsTab.js', () => ({ OwnedChannelsTab: () => <p>canais</p> }));
-vi.mock('../components/dashboard/SettingsTab.js', () => ({ SettingsTab: () => <p>configurações</p> }));
+vi.mock('../components/dashboard/OwnedChannelsTab.js', () => ({
+  OwnedChannelsTab: () => <p>canais</p>,
+}));
+vi.mock('../components/dashboard/SettingsTab.js', () => ({
+  SettingsTab: () => <p>configurações</p>,
+}));
 
 const { MarketingDashboardPage } = await import('./MarketingDashboardPage.js');
 
@@ -64,6 +68,7 @@ function strip(overrides: Partial<SpendStrip>): SpendStrip {
     activeDailyBudget: 10_000,
     refreshedAt: '2026-09-16T12:00:00.000Z',
     killSwitchEngaged: false,
+    killSwitch: null,
     setupNote: null,
     ...overrides,
   };
@@ -82,11 +87,27 @@ const positive: VerdictResult = {
   verdict: 'positive',
   primary: 'cpl',
   reasons: [
-    { signal: 'cpl', state: 'good', text: 'CPL R$ 38,20 contra a meta de R$ 45,00 (-15%), 3 lead(s).' },
-    { signal: 'ctr', state: 'good', text: 'CTR 2% contra a mediana da conta de 1,5% em 90 dias (+33%).' },
-    { signal: 'trend', state: 'neutral', text: 'CPL de R$ 38,20 nos últimos 7 dias contra R$ 40,00 nos 7 anteriores (-4%).' },
+    {
+      signal: 'cpl',
+      state: 'good',
+      text: 'CPL R$ 38,20 contra a meta de R$ 45,00 (-15%), 3 lead(s).',
+    },
+    {
+      signal: 'ctr',
+      state: 'good',
+      text: 'CTR 2% contra a mediana da conta de 1,5% em 90 dias (+33%).',
+    },
+    {
+      signal: 'trend',
+      state: 'neutral',
+      text: 'CPL de R$ 38,20 nos últimos 7 dias contra R$ 40,00 nos 7 anteriores (-4%).',
+    },
     { signal: 'frequency', state: 'good', text: 'Frequência 1,2 no período.' },
-    { signal: 'pacing', state: 'unknown', text: 'Orçamento diário fora da campanha (nos conjuntos) ou não informado.' },
+    {
+      signal: 'pacing',
+      state: 'unknown',
+      text: 'Orçamento diário fora da campanha (nos conjuntos) ou não informado.',
+    },
   ],
 };
 
@@ -98,9 +119,38 @@ function buildOverview(overrides: Partial<DashboardOverview> = {}): DashboardOve
     strips: [
       strip({ source: 'meta' }),
       strip({ source: 'google', balanceSource: 'google.prepaid_balance', balance: 50_000 }),
-      strip({ source: 'kairogen', unit: 'credits', spent: 10, forecast: 20, available: 990, balance: 990, ceiling: 1000, activeDailyBudget: null }),
-      strip({ source: 'ai', spent: 275, forecast: 550, available: null, balance: null, ceiling: null, balanceSource: null, activeDailyBudget: 1100 }),
-      strip({ source: 'media', configured: false, spent: 0, forecast: null, available: 30_000, balance: null, ceiling: 30_000, balanceSource: null, activeDailyBudget: null, refreshedAt: null }),
+      strip({
+        source: 'kairogen',
+        unit: 'credits',
+        spent: 10,
+        forecast: 20,
+        available: 990,
+        balance: 990,
+        ceiling: 1000,
+        activeDailyBudget: null,
+      }),
+      strip({
+        source: 'ai',
+        spent: 275,
+        forecast: 550,
+        available: null,
+        balance: null,
+        ceiling: null,
+        balanceSource: null,
+        activeDailyBudget: 1100,
+      }),
+      strip({
+        source: 'media',
+        configured: false,
+        spent: 0,
+        forecast: null,
+        available: 30_000,
+        balance: null,
+        ceiling: 30_000,
+        balanceSource: null,
+        activeDailyBudget: null,
+        refreshedAt: null,
+      }),
     ],
     counts: { openAlerts: 2, criticalAlerts: 1, pendingApprovals: 3, disapprovedAds: 1 },
     ingestion,
@@ -112,7 +162,13 @@ function buildOverview(overrides: Partial<DashboardOverview> = {}): DashboardOve
         detail: 'Nenhum evento de lead nos últimos 3 dias com R$ 120,00 gastos.',
         action: 'Confira o pixel e a CAPI no Gerenciador de Eventos.',
       },
-      { key: 'spend_pacing', platform: 'meta', state: 'ok', detail: 'Gasto 4% acima do previsto para o mês.', action: '' },
+      {
+        key: 'spend_pacing',
+        platform: 'meta',
+        state: 'ok',
+        detail: 'Gasto 4% acima do previsto para o mês.',
+        action: '',
+      },
     ],
     ...overrides,
   };
@@ -129,16 +185,34 @@ function buildPlatforms(): DashboardPlatforms {
       {
         platform: 'meta',
         accounts: [{ id: 'a1', name: 'Fly High', externalId: 'act_1' }],
-        current: { ...EMPTY_TOTALS, spendCents: 40_000, impressions: 8000, clicks: 160, reach: 6000 },
-        previous: { ...EMPTY_TOTALS, spendCents: 20_000, impressions: 4000, clicks: 100, reach: 3000 },
-        daily: [{ day: '2026-09-15', amount: 10_000 }, { day: '2026-09-16', amount: 0 }],
+        current: {
+          ...EMPTY_TOTALS,
+          spendCents: 40_000,
+          impressions: 8000,
+          clicks: 160,
+          reach: 6000,
+        },
+        previous: {
+          ...EMPTY_TOTALS,
+          spendCents: 20_000,
+          impressions: 4000,
+          clicks: 100,
+          reach: 3000,
+        },
+        daily: [
+          { day: '2026-09-15', amount: 10_000 },
+          { day: '2026-09-16', amount: 0 },
+        ],
       },
       {
         platform: 'google',
         accounts: [],
         current: EMPTY_TOTALS,
         previous: EMPTY_TOTALS,
-        daily: [{ day: '2026-09-15', amount: 0 }, { day: '2026-09-16', amount: 0 }],
+        daily: [
+          { day: '2026-09-15', amount: 0 },
+          { day: '2026-09-16', amount: 0 },
+        ],
       },
     ],
   };
@@ -193,7 +267,19 @@ function buildCreatives(): DashboardCreatives {
     days: 7,
     since: '2026-09-10',
     until: '2026-09-16',
-    formats: [{ format: 'video', ads: 1, totals: { ...EMPTY_TOTALS, spendCents: 4_500, impressions: 2000, clicks: 40, videoPlays: 600 } }],
+    formats: [
+      {
+        format: 'video',
+        ads: 1,
+        totals: {
+          ...EMPTY_TOTALS,
+          spendCents: 4_500,
+          impressions: 2000,
+          clicks: 40,
+          videoPlays: 600,
+        },
+      },
+    ],
     creatives: [
       {
         adExternalId: 'ad1',
@@ -204,8 +290,22 @@ function buildCreatives(): DashboardCreatives {
         thumbnailUrl: null,
         headline: null,
         effectiveStatus: 'ACTIVE',
-        totals: { ...EMPTY_TOTALS, spendCents: 4_500, impressions: 2000, clicks: 40, reach: 800, videoPlays: 600, videoThruplays: 240, videoP100: 60 },
-        fatigue: { firstHalfCtrMilli: 2500, secondHalfCtrMilli: 1500, frequencyMilli: 2500, wornOut: true },
+        totals: {
+          ...EMPTY_TOTALS,
+          spendCents: 4_500,
+          impressions: 2000,
+          clicks: 40,
+          reach: 800,
+          videoPlays: 600,
+          videoThruplays: 240,
+          videoP100: 60,
+        },
+        fatigue: {
+          firstHalfCtrMilli: 2500,
+          secondHalfCtrMilli: 1500,
+          frequencyMilli: 2500,
+          wornOut: true,
+        },
       },
     ],
   };
@@ -218,11 +318,48 @@ function buildAudience(): DashboardAudience {
     until: '2026-09-16',
     platforms: ['meta'],
     rows: [
-      { kind: 'placement', key: 'instagram', subKey: 'instagram_reels', totals: { ...EMPTY_TOTALS, spendCents: 3_000, impressions: 1500, clicks: 30, conversions: 2 } },
-      { kind: 'age_gender', key: '25-34', subKey: 'female', totals: { ...EMPTY_TOTALS, spendCents: 2_000, impressions: 900, clicks: 20 } },
-      { kind: 'region', key: 'São Paulo', subKey: '', totals: { ...EMPTY_TOTALS, spendCents: 4_000, impressions: 1800, clicks: 36 } },
-      { kind: 'hour', key: '20', subKey: '', totals: { ...EMPTY_TOTALS, spendCents: 1_000, impressions: 400, clicks: 8, conversions: 1 } },
-      { kind: 'device', key: 'mobile_app', subKey: '', totals: { ...EMPTY_TOTALS, spendCents: 3_500, impressions: 1600, clicks: 32, conversions: 2 } },
+      {
+        kind: 'placement',
+        key: 'instagram',
+        subKey: 'instagram_reels',
+        totals: {
+          ...EMPTY_TOTALS,
+          spendCents: 3_000,
+          impressions: 1500,
+          clicks: 30,
+          conversions: 2,
+        },
+      },
+      {
+        kind: 'age_gender',
+        key: '25-34',
+        subKey: 'female',
+        totals: { ...EMPTY_TOTALS, spendCents: 2_000, impressions: 900, clicks: 20 },
+      },
+      {
+        kind: 'region',
+        key: 'São Paulo',
+        subKey: '',
+        totals: { ...EMPTY_TOTALS, spendCents: 4_000, impressions: 1800, clicks: 36 },
+      },
+      {
+        kind: 'hour',
+        key: '20',
+        subKey: '',
+        totals: { ...EMPTY_TOTALS, spendCents: 1_000, impressions: 400, clicks: 8, conversions: 1 },
+      },
+      {
+        kind: 'device',
+        key: 'mobile_app',
+        subKey: '',
+        totals: {
+          ...EMPTY_TOTALS,
+          spendCents: 3_500,
+          impressions: 1600,
+          clicks: 32,
+          conversions: 2,
+        },
+      },
     ],
     heatmap: [
       { weekday: 2, hour: '20', spendCents: 1_000, clicks: 8, impressions: 400, conversions: 1 },
@@ -262,7 +399,9 @@ afterEach(() => {
 describe('the overview', () => {
   it('shows one strip per source, in reais or credits, with what is unknowable left as a dash', () => {
     renderAt();
-    const strips = screen.getAllByRole("listitem").filter((item) => item.classList.contains("strip"));
+    const strips = screen
+      .getAllByRole('listitem')
+      .filter((item) => item.classList.contains('strip'));
     expect(strips).toHaveLength(5);
     expect(text(strips[0])).toContain('Meta Ads');
     expect(text(strips[0])).toContain('R$ 1.236,10');
@@ -275,14 +414,37 @@ describe('the overview', () => {
 
   it('says when a source is not configured instead of showing zeros as spend', () => {
     renderAt();
-    const media = screen.getAllByRole('listitem').filter((item) => item.classList.contains('strip'))[4] as HTMLElement;
+    const media = screen
+      .getAllByRole('listitem')
+      .filter((item) => item.classList.contains('strip'))[4] as HTMLElement;
     expect(within(media).getByText('não configurado')).toBeTruthy();
   });
 
-  it('warns loudly when a kill switch is engaged', () => {
-    data.overview = buildOverview({ strips: [strip({ killSwitchEngaged: true })] });
+  it('says why the kill switch tripped, when, and how a person releases it', () => {
+    data.overview = buildOverview({
+      strips: [
+        strip({
+          killSwitchEngaged: true,
+          killSwitch: {
+            rule: 'budgets_exceed_plan',
+            reason: 'Orçamentos na plataforma excedem o limite planejado do mês',
+            engagedAt: '2026-09-19T18:00:00.000Z',
+            accountExternalId: 'act_694058302567457',
+          },
+        }),
+      ],
+    });
     renderAt();
-    expect(screen.getByText(/Trava de segurança acionada/)).toBeTruthy();
+    const alert = screen
+      .getByText(/Trava de segurança acionada/)
+      .closest('[role="alert"], .alert') as HTMLElement;
+    expect(alert.textContent).toContain('19/09');
+    expect(alert.textContent).toContain('excedem o limite planejado');
+    expect(alert.textContent).toContain('Orçamentos ativos na plataforma somam mais');
+    expect(alert.textContent).toContain(
+      'ops-cli release-kill-switch --account act_694058302567457',
+    );
+    expect(alert.textContent).toContain('resolve-unknown');
   });
 
   it('links the pending approvals to the queue', () => {
@@ -316,7 +478,9 @@ describe('the overview', () => {
   it('says when the schedule was never told to the system', () => {
     data.overview = buildOverview({ ingestion: { ...ingestion, schedule: null, nextRunAt: null } });
     renderAt();
-    expect(screen.getByText(/agendamento não informado ao sistema \(ADS_INGEST_CRON\)/)).toBeTruthy();
+    expect(
+      screen.getByText(/agendamento não informado ao sistema \(ADS_INGEST_CRON\)/),
+    ).toBeTruthy();
   });
 
   it('shows the setup note of a source with credentials but no account, with the command as code', () => {
@@ -325,7 +489,8 @@ describe('the overview', () => {
         strip({
           source: 'google',
           refreshedAt: null,
-          setupNote: 'Credenciais do Google configuradas, mas nenhuma conta foi semeada: rode `ingest-cli --seed --platform google`.',
+          setupNote:
+            'Credenciais do Google configuradas, mas nenhuma conta foi semeada: rode `ingest-cli --seed --platform google`.',
         }),
       ],
     });
@@ -350,7 +515,9 @@ describe('the overview', () => {
 describe('the tabs and the period', () => {
   it('opens the tab named in the address, with the period the address asks for', () => {
     renderAt('/dashboard/marketing?aba=plataformas&dias=30');
-    expect(screen.getByRole('button', { name: '30 dias' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: '30 dias' }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
     expect(screen.getByText(/comparado com os 30 dias anteriores/)).toBeTruthy();
   });
 
@@ -428,7 +595,7 @@ describe('audience and region', () => {
     expect(screen.getByText(/Melhores horas por CPL: 20h/)).toBeTruthy();
   });
 
-  it('ranks devices in a person\'s words and draws the week as weekday by hour', () => {
+  it("ranks devices in a person's words and draws the week as weekday by hour", () => {
     renderAt('/dashboard/marketing?aba=publico');
     expect(screen.getByText('Celular (app)')).toBeTruthy();
     const map = screen.getByRole('figure', { name: /Gasto por dia da semana e hora/ });
