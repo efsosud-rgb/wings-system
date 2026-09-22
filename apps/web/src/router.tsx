@@ -7,7 +7,6 @@ import { NoAccess, RequirePermission } from './components/RequirePermission.js';
 import { ApprovalDetailPage } from './pages/ApprovalDetailPage.js';
 import { ApprovalsPage } from './pages/ApprovalsPage.js';
 import { ClientsPage } from './pages/ClientsPage.js';
-import { CockpitPage } from './pages/CockpitPage.js';
 import { ComingSoonPage } from './pages/ComingSoonPage.js';
 import { DrivePage } from './pages/DrivePage.js';
 import { DriveTemplatePage } from './pages/DriveTemplatePage.js';
@@ -17,6 +16,7 @@ import { ForgotPasswordPage } from './pages/ForgotPasswordPage.js';
 import { IntegrationsPage } from './pages/IntegrationsPage.js';
 import { LandingRoute } from './pages/LandingRoute.js';
 import { LoginPage } from './pages/LoginPage.js';
+import { MarketingDashboardPage } from './pages/MarketingDashboardPage.js';
 import { MediaStudioPage } from './pages/MediaStudioPage.js';
 import { NotFoundPage } from './pages/NotFoundPage.js';
 import { SetPasswordPage } from './pages/SetPasswordPage.js';
@@ -50,7 +50,7 @@ const SCREENS: Record<string, RouteObject[]> = {
   '/administracao/drive': [{ index: true, element: <DriveTemplatePage /> }],
   '/drive/arquivos': [{ index: true, element: <DrivePage /> }],
   '/administracao/integracoes': [{ index: true, element: <IntegrationsPage /> }],
-  '/dashboard/marketing': [{ index: true, element: <CockpitPage /> }],
+  '/dashboard/marketing': [{ index: true, element: <MarketingDashboardPage /> }],
   '/marketing/edicao': [{ index: true, element: <MediaStudioPage /> }],
   '/marketing/trafego-pago-wings': [
     { index: true, element: <TrafficStudioPage /> },

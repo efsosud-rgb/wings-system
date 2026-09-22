@@ -29,7 +29,7 @@ export function percent(milli: number | null | undefined): number | null {
 
 /** Hands the file to the browser as a download. */
 export function downloadCsv(fileName: string, content: string): void {
-  const blob = new Blob([`﻿${content}`], { type: 'text/csv;charset=utf-8' });
+  const blob = new Blob([`\ufeff${content}`], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
