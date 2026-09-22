@@ -10,6 +10,7 @@ import { authRoutes } from './modules/auth/routes.js';
 import { audienceRoutes } from './modules/ads/audience-routes.js';
 import { cockpitRoutes } from './modules/ads/cockpit-routes.js';
 import { creativeRoutes } from './modules/ads/creative-routes.js';
+import { dashboardRoutes } from './modules/ads/dashboard/routes.js';
 import { metaRoutes } from './modules/ads/meta-routes.js';
 import { adsRoutes } from './modules/ads/routes.js';
 import type { AgentLlm } from './modules/agent/llm.js';
@@ -42,6 +43,8 @@ declare module 'fastify' {
       /** Set only by tests, so no test ever reaches a real bucket. */
       storageFetch?: typeof fetch;
       storage?: ObjectStorage;
+      /** Set only by tests, so a screen that reasons about "today" can be pinned to a day. */
+      now?: () => Date;
     };
   }
 }
@@ -65,6 +68,8 @@ export async function buildApp(deps: {
   mediaFetch?: typeof fetch;
   storageFetch?: typeof fetch;
   storage?: ObjectStorage;
+  /** Overridable so tests pin the dashboard's "today". */
+  now?: () => Date;
 }): Promise<FastifyInstance> {
   const app = Fastify({
     // Personal data must never reach the logs (LGPD), so request bodies are
@@ -91,6 +96,7 @@ export async function buildApp(deps: {
     mediaFetch: deps.mediaFetch,
     storageFetch: deps.storageFetch,
     storage: deps.storage,
+    now: deps.now,
     mailer: deps.mailer ?? createMailer(deps.env, { info: (msg) => app.log.info(msg) }),
     cpfCrypto: createCpfCrypto(deps.env.CPF_ENCRYPTION_KEY, deps.env.CPF_INDEX_KEY),
   });
@@ -135,6 +141,7 @@ export async function buildApp(deps: {
   await app.register(employeeRoutes);
   await app.register(adsRoutes);
   await app.register(cockpitRoutes);
+  await app.register(dashboardRoutes);
   await app.register(creativeRoutes);
   await app.register(audienceRoutes);
   await app.register(agentRoutes);

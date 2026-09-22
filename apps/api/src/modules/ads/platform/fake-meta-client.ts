@@ -2,7 +2,10 @@ import { assertCents, type Cents } from './money.js';
 import { META_DAILY_OVERDELIVERY_FACTOR } from './fixtures.js';
 import type {
   AdsPlatformClient,
+  BreakdownInsightRow,
+  BreakdownKind,
   CreateCampaignSpec,
+  CreativeFormat,
   InsightRow,
   MetricsLevel,
   MutationOutcome,
@@ -12,6 +15,32 @@ import type {
   PlatformCampaign,
   SpendRow,
 } from './types.js';
+
+/**
+ * How the simulator splits a day's delivery, so the audience views have
+ * something to show. Fixed shares, not random: a test can assert on them.
+ */
+export const FAKE_BREAKDOWN_SHARES: Record<BreakdownKind, { key: string; subKey: string; share: number }[]> = {
+  placement: [
+    { key: 'instagram', subKey: 'feed', share: 0.4 },
+    { key: 'instagram', subKey: 'reels', share: 0.35 },
+    { key: 'facebook', subKey: 'feed', share: 0.25 },
+  ],
+  age_gender: [
+    { key: '25-34', subKey: 'female', share: 0.4 },
+    { key: '25-34', subKey: 'male', share: 0.3 },
+    { key: '35-44', subKey: 'female', share: 0.3 },
+  ],
+  region: [
+    { key: 'São Paulo', subKey: '', share: 0.6 },
+    { key: 'Paraná', subKey: '', share: 0.4 },
+  ],
+  hour: [
+    { key: '09', subKey: '', share: 0.3 },
+    { key: '14', subKey: '', share: 0.3 },
+    { key: '20', subKey: '', share: 0.4 },
+  ],
+};
 
 /**
  * In-memory Meta Ads simulator.
@@ -64,11 +93,15 @@ export interface FakeAdSeed {
   /** Set to simulate a disapproved ad carrying a real rejection reason. */
   reviewFeedback?: unknown;
   issuesInfo?: unknown;
+  /** What the creative is made of; image unless said otherwise. */
+  format?: CreativeFormat;
 }
 
 export interface FakeMetaOptions {
   accountId?: string;
   spendCapCents?: Cents | null;
+  /** A prepaid balance the account reports; null (the default) for a card account. */
+  prepaidBalanceCents?: Cents | null;
   campaigns?: FakeCampaignSeed[];
   adSets?: FakeAdSetSeed[];
   ads?: FakeAdSeed[];
@@ -97,6 +130,7 @@ export class FakeMetaClient implements AdsPlatformClient {
 
   private readonly accountId: string;
   private spendCapCents: Cents | null;
+  private readonly prepaidBalanceCents: Cents | null;
   private readonly campaigns = new Map<string, InternalCampaign>();
   private readonly overdeliveryFactor: number;
   private readonly reportingLagMinutes: number;
@@ -113,6 +147,7 @@ export class FakeMetaClient implements AdsPlatformClient {
   constructor(options: FakeMetaOptions = {}) {
     this.accountId = options.accountId ?? 'act_123456789';
     this.spendCapCents = options.spendCapCents ?? null;
+    this.prepaidBalanceCents = options.prepaidBalanceCents ?? null;
     this.overdeliveryFactor = Math.min(
       options.overdeliveryFactor ?? 1,
       META_DAILY_OVERDELIVERY_FACTOR,
@@ -242,6 +277,8 @@ export class FakeMetaClient implements AdsPlatformClient {
       spendCapCents: this.spendCapCents,
       amountSpentCents: this.reportedTotalSpendCents(),
       capReached: this.capReached,
+      prepaidBalanceCents: this.prepaidBalanceCents,
+      fundingKind: this.prepaidBalanceCents === null ? 'credit_card' : 'prepaid',
     };
   }
 
@@ -260,37 +297,96 @@ export class FakeMetaClient implements AdsPlatformClient {
         thumbnailUrl: `https://example.invalid/${ad.id}.jpg`,
         title: 'Título',
         body: 'Corpo do anúncio',
+        format: ad.format ?? 'image',
       },
       reviewFeedback: ad.reviewFeedback ?? null,
       issuesInfo: ad.issuesInfo ?? null,
     }));
   }
 
-  /** Daily rows derived from what the simulator has actually "spent". */
+  /**
+   * Daily rows derived from what the simulator has actually "spent". At ad
+   * set and ad level the campaign's day is filed under each of its children in
+   * equal parts, so the tree adds up the way the platform's does.
+   */
   async getInsights(level: MetricsLevel, sinceDate: string): Promise<InsightRow[]> {
     this.calls.push({ method: 'getInsights', args: [level, sinceDate] });
     const rows: InsightRow[] = [];
 
     for (const campaign of this.campaigns.values()) {
-      for (const [date, spendCents] of campaign.dailySpend) {
+      const children =
+        level === 'campaign'
+          ? [{ id: campaign.id, share: 1 }]
+          : level === 'ad_set'
+            ? [...this.adSets.values()]
+                .filter((adSet) => adSet.campaignId === campaign.id)
+                .map((adSet) => ({ id: adSet.id, share: 1 }))
+            : this.ads
+                .filter((ad) => ad.campaignId === campaign.id)
+                .map((ad) => ({ id: ad.id, share: 1 }));
+      const count = children.length;
+      for (const [date, daySpend] of campaign.dailySpend) {
         if (date < sinceDate || campaign.reportedSpendCents === 0) continue;
-        const impressions = Math.max(1, Math.round(spendCents / 5));
-        const clicks = Math.round(impressions / 50);
-        rows.push({
-          level,
-          entityId: campaign.id,
-          date,
-          spendCents,
-          impressions,
-          clicks,
-          reach: Math.round(impressions / 1.3),
-          ctrMilli: Math.round((clicks / impressions) * 100 * 1000),
-          frequencyMilli: 1300,
-          actions: { link_click: clicks, video_view: impressions },
-          qualityRanking: null,
-          engagementRateRanking: null,
-          conversionRateRanking: null,
-        });
+        for (const child of children) {
+          const spendCents = Math.round(daySpend / count);
+          const impressions = Math.max(1, Math.round(spendCents / 5));
+          const clicks = Math.round(impressions / 50);
+          // Three in ten impressions become a 3-second play; a video funnel
+          // then narrows by fixed steps, so a test can assert on the rates.
+          const plays = Math.round(impressions * 0.3);
+          rows.push({
+            level,
+            entityId: child.id,
+            date,
+            spendCents,
+            impressions,
+            clicks,
+            reach: Math.round(impressions / 1.3),
+            ctrMilli: Math.round((clicks / impressions) * 100 * 1000),
+            frequencyMilli: 1300,
+            actions: { link_click: clicks, video_view: plays },
+            qualityRanking: null,
+            engagementRateRanking: null,
+            conversionRateRanking: null,
+            video: {
+              plays,
+              thruplays: Math.round(plays * 0.4),
+              p25: Math.round(plays * 0.6),
+              p50: Math.round(plays * 0.4),
+              p75: Math.round(plays * 0.25),
+              p100: Math.round(plays * 0.1),
+            },
+          });
+        }
+      }
+    }
+    return rows;
+  }
+
+  /** The campaign's day split by fixed shares (`FAKE_BREAKDOWN_SHARES`). */
+  async getBreakdowns(kind: BreakdownKind, sinceDate: string): Promise<BreakdownInsightRow[]> {
+    this.calls.push({ method: 'getBreakdowns', args: [kind, sinceDate] });
+    const rows: BreakdownInsightRow[] = [];
+    for (const campaign of this.campaigns.values()) {
+      for (const [date, daySpend] of campaign.dailySpend) {
+        if (date < sinceDate || campaign.reportedSpendCents === 0) continue;
+        for (const slice of FAKE_BREAKDOWN_SHARES[kind]) {
+          const spendCents = Math.round(daySpend * slice.share);
+          const impressions = Math.max(1, Math.round(spendCents / 5));
+          const clicks = Math.round(impressions / 50);
+          rows.push({
+            kind,
+            campaignId: campaign.id,
+            date,
+            key: slice.key,
+            subKey: slice.subKey,
+            spendCents,
+            impressions,
+            clicks,
+            reach: kind === 'hour' ? 0 : Math.round(impressions / 1.3),
+            actions: { link_click: clicks },
+          });
+        }
       }
     }
     return rows;

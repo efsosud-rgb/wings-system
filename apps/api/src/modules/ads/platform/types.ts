@@ -44,7 +44,17 @@ export interface PlatformAccount {
   amountSpentCents: Cents;
   /** True when the platform itself has stopped delivery (cap reached). */
   capReached: boolean;
+  /**
+   * Money loaded onto the account, when it is prepaid and the platform says
+   * how much is left. Null on a postpaid account and where the API is silent.
+   */
+  prepaidBalanceCents?: Cents | null;
+  /** `prepaid`, `credit_card`, `unknown`; a code, never the platform's display string. */
+  fundingKind?: string | null;
 }
+
+/** What a creative is made of, as far as the platform tells. */
+export type CreativeFormat = 'image' | 'video' | 'carousel' | 'unknown';
 
 export interface PlatformAd {
   id: string;
@@ -60,6 +70,7 @@ export interface PlatformAd {
     thumbnailUrl: string | null;
     title: string | null;
     body: string | null;
+    format?: CreativeFormat;
   } | null;
   /** The real rejection reason, when the ad was disapproved. */
   reviewFeedback: unknown;
@@ -85,6 +96,40 @@ export interface InsightRow {
   qualityRanking: string | null;
   engagementRateRanking: string | null;
   conversionRateRanking: string | null;
+  /** Video figures, when the platform reports them for the entity. */
+  video?: VideoMetrics;
+}
+
+export interface VideoMetrics {
+  /** Plays of 3 seconds or more. */
+  plays: number;
+  thruplays: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p100: number;
+}
+
+/** How a day's figures are split: by placement, age and gender, region, hour. */
+export type BreakdownKind = 'placement' | 'age_gender' | 'region' | 'hour';
+
+/**
+ * One day of one campaign, split one way. `key`/`subKey` are the platform's
+ * own names for the slice: `facebook`/`feed`, `25-34`/`female`, a state name,
+ * or the hour `"00"`..`"23"`.
+ */
+export interface BreakdownInsightRow {
+  kind: BreakdownKind;
+  campaignId: string;
+  date: string;
+  key: string;
+  subKey: string;
+  spendCents: Cents;
+  impressions: number;
+  clicks: number;
+  /** Zero where the platform refuses reach for the split. */
+  reach: number;
+  actions: Record<string, number>;
 }
 
 export interface SpendRow {
@@ -184,6 +229,12 @@ export interface AdsPlatformClient {
   listAds(): Promise<PlatformAd[]>;
   /** Daily performance rows for the window, at the requested level. */
   getInsights(level: MetricsLevel, sinceDate: string, untilDate?: string): Promise<InsightRow[]>;
+  /** Campaign-level daily rows split by one breakdown; empty where the platform has none. */
+  getBreakdowns(
+    kind: BreakdownKind,
+    sinceDate: string,
+    untilDate?: string,
+  ): Promise<BreakdownInsightRow[]>;
   getCampaign(campaignId: string): Promise<PlatformCampaign | null>;
   /** Reported spend per campaign per day, for reconciliation. */
   getSpend(sinceDate: string): Promise<SpendRow[]>;

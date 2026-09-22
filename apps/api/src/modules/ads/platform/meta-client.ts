@@ -1,11 +1,17 @@
 import {
   centsFromDecimalCurrencyString,
   centsFromMinorUnitString,
+  creativeFormatOf,
+  fundingKindOf,
+  prepaidBalanceFromDisplay,
   spendCapFromString,
+  sumActionValues,
 } from './meta-parse.js';
 import type { Cents } from './money.js';
 import type {
   AdsPlatformClient,
+  BreakdownInsightRow,
+  BreakdownKind,
   CampaignStatus,
   CreateCampaignSpec,
   InsightRow,
@@ -97,6 +103,57 @@ export const INSIGHT_WINDOW_DAYS: Record<MetricsLevel, number> = {
 
 /** Insights are slow by nature; the default timeout is for ordinary reads. */
 export const INSIGHTS_TIMEOUT_MS = 45_000;
+
+/** ThruPlays and the watched quartiles; 3-second plays come from `actions`. */
+export const VIDEO_FIELDS = [
+  'video_thruplay_watched_actions',
+  'video_p25_watched_actions',
+  'video_p50_watched_actions',
+  'video_p75_watched_actions',
+  'video_p100_watched_actions',
+] as const;
+
+const text = (value: unknown): string => (value === undefined || value === null ? '' : String(value));
+
+/**
+ * Meta's breakdown parameters per split, and how the answer's columns become
+ * a key. The hourly value is a range ("14:00:00 - 14:59:59"); only the hour
+ * is kept.
+ */
+const BREAKDOWN_SPEC: Record<
+  BreakdownKind,
+  {
+    breakdowns: string[];
+    reach: boolean;
+    key: (row: Record<string, unknown>) => string;
+    subKey: (row: Record<string, unknown>) => string;
+  }
+> = {
+  placement: {
+    breakdowns: ['publisher_platform', 'platform_position'],
+    reach: true,
+    key: (row) => text(row.publisher_platform),
+    subKey: (row) => text(row.platform_position),
+  },
+  age_gender: {
+    breakdowns: ['age', 'gender'],
+    reach: true,
+    key: (row) => text(row.age),
+    subKey: (row) => text(row.gender),
+  },
+  region: {
+    breakdowns: ['region'],
+    reach: true,
+    key: (row) => text(row.region),
+    subKey: () => '',
+  },
+  hour: {
+    breakdowns: ['hourly_stats_aggregated_by_advertiser_time_zone'],
+    reach: false,
+    key: (row) => text(row.hourly_stats_aggregated_by_advertiser_time_zone).slice(0, 2),
+    subKey: () => '',
+  },
+};
 
 /**
  * Splits an inclusive date range into consecutive windows of at most `days`.
@@ -432,13 +489,19 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       spend_cap?: string;
       amount_spent?: string;
       account_status?: number;
-    }>(this.accountId, { fields: 'id,currency,spend_cap,amount_spent,account_status' });
+      funding_source_details?: { type?: number; display_string?: string };
+    }>(this.accountId, {
+      // funding_source_details is readable with ads_read (stage6-spike.md); the
+      // prepaid balance inside it is text, parsed as such. NOT verified live.
+      fields: 'id,currency,spend_cap,amount_spent,account_status,funding_source_details',
+    });
 
     const spendCapCents = body.spend_cap === undefined ? null : spendCapFromString(body.spend_cap);
     const amountSpentCents =
       body.amount_spent === undefined
         ? 0
         : centsFromMinorUnitString(body.amount_spent, 'amount_spent');
+    const funding = body.funding_source_details;
 
     return {
       id: body.id,
@@ -446,6 +509,8 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       spendCapCents,
       amountSpentCents,
       capReached: spendCapCents !== null && amountSpentCents >= spendCapCents,
+      prepaidBalanceCents: prepaidBalanceFromDisplay(funding?.display_string),
+      fundingKind: funding ? fundingKindOf(funding.type) : null,
     };
   }
 
@@ -560,12 +625,16 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
         thumbnail_url?: string;
         title?: string;
         body?: string;
+        object_type?: string;
+        object_story_spec?: Parameters<typeof creativeFormatOf>[0]['object_story_spec'];
       };
     }>(`${this.accountId}/ads`, {
       // ad_review_feedback carries the real rejection reason; issues_info is
-      // empty on disapproved ads (Stage 6.0 spike).
+      // empty on disapproved ads (Stage 6.0 spike). object_type and the story
+      // spec say what the creative is made of. NOT verified live: whether the
+      // story spec is readable on every creative with this token.
       fields:
-        'id,name,status,effective_status,campaign_id,adset_id,issues_info,ad_review_feedback,creative{id,name,thumbnail_url,title,body}',
+        'id,name,status,effective_status,campaign_id,adset_id,issues_info,ad_review_feedback,creative{id,name,thumbnail_url,title,body,object_type,object_story_spec}',
       // 660 ads with creatives is more than Meta will serve in one page.
       limit: '25',
     });
@@ -584,6 +653,7 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
             thumbnailUrl: ad.creative.thumbnail_url ?? null,
             title: ad.creative.title ?? null,
             body: ad.creative.body ?? null,
+            format: creativeFormatOf(ad.creative),
           }
         : null,
       reviewFeedback: ad.ad_review_feedback ?? null,
@@ -627,7 +697,10 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       `${this.accountId}/insights`,
       {
         level: metaLevel,
-        fields: `${idField},spend,impressions,clicks,ctr,reach,frequency,actions,quality_ranking,engagement_rate_ranking,conversion_rate_ranking`,
+        // The video fields ride on the same request, so they cost no extra
+        // call. 3-second plays are the `video_view` action inside `actions`.
+        // NOT verified live: that every quartile field is served at ad level.
+        fields: `${idField},spend,impressions,clicks,ctr,reach,frequency,actions,quality_ranking,engagement_rate_ranking,conversion_rate_ranking,${VIDEO_FIELDS.join(',')}`,
         time_range: JSON.stringify({ since: sinceDate, until: untilDate }),
         time_increment: '1',
         // Daily rows across hundreds of entities add up fast; small pages are
@@ -662,8 +735,72 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
         qualityRanking: ranking(row.quality_ranking),
         engagementRateRanking: ranking(row.engagement_rate_ranking),
         conversionRateRanking: ranking(row.conversion_rate_ranking),
+        video: {
+          plays: actions.video_view ?? 0,
+          thruplays: sumActionValues(row.video_thruplay_watched_actions),
+          p25: sumActionValues(row.video_p25_watched_actions),
+          p50: sumActionValues(row.video_p50_watched_actions),
+          p75: sumActionValues(row.video_p75_watched_actions),
+          p100: sumActionValues(row.video_p100_watched_actions),
+        },
       };
     });
+  }
+
+  /**
+   * Campaign-level daily rows split one way, in the campaign window size.
+   *
+   * Each breakdown is its own request: Meta computes a split across every
+   * campaign, and the four splits together are four aggregations, never one.
+   * Reach is left out of the hourly split, which Meta refuses to combine with
+   * it. NOT verified live: the exact key names Meta answers for placement and
+   * region on this account (see docs/dashboard-marketing.md).
+   */
+  async getBreakdowns(
+    kind: BreakdownKind,
+    sinceDate: string,
+    untilDate = new Date().toISOString().slice(0, 10),
+  ): Promise<BreakdownInsightRow[]> {
+    const spec = BREAKDOWN_SPEC[kind];
+    const rows: BreakdownInsightRow[] = [];
+    for (const [since, until] of sliceDateRange(
+      sinceDate,
+      untilDate,
+      INSIGHT_WINDOW_DAYS.campaign,
+    )) {
+      const data = await this.getAllPages<Record<string, unknown>>(
+        `${this.accountId}/insights`,
+        {
+          level: 'campaign',
+          fields: `campaign_id,spend,impressions,clicks,actions${spec.reach ? ',reach' : ''}`,
+          breakdowns: spec.breakdowns.join(','),
+          time_range: JSON.stringify({ since, until }),
+          time_increment: '1',
+          limit: '100',
+        },
+        50,
+        INSIGHTS_TIMEOUT_MS,
+      );
+      for (const row of data) {
+        const actions: Record<string, number> = {};
+        for (const action of (row.actions ?? []) as { action_type: string; value: string }[]) {
+          actions[action.action_type] = Number(action.value);
+        }
+        rows.push({
+          kind,
+          campaignId: String(row.campaign_id ?? ''),
+          date: String(row.date_start ?? since),
+          key: spec.key(row),
+          subKey: spec.subKey(row),
+          spendCents: centsFromDecimalCurrencyString(String(row.spend ?? '0'), 'insights.spend'),
+          impressions: Number(row.impressions ?? 0),
+          clicks: Number(row.clicks ?? 0),
+          reach: Number(row.reach ?? 0),
+          actions,
+        });
+      }
+    }
+    return rows;
   }
 
   async getSpend(sinceDate: string): Promise<SpendRow[]> {
