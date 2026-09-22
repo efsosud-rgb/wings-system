@@ -5,12 +5,15 @@ WORKDIR /app
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/
+COPY packages/studio/package.json packages/studio/
 COPY apps/web/package.json apps/web/
 RUN pnpm install --frozen-lockfile
 
 COPY packages/shared packages/shared
+COPY packages/studio packages/studio
 COPY apps/web apps/web
-RUN pnpm --filter @wings/shared build && pnpm --filter @wings/web build
+# The editor core (packages/studio) is built before the web app that bundles it.
+RUN pnpm --filter @wings/shared build && pnpm --filter @wings/studio build && pnpm --filter @wings/web build
 
 # Runtime image contains ONLY the built static files — no source, no node_modules.
 FROM nginx:alpine AS runner

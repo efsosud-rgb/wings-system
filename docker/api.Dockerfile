@@ -6,6 +6,8 @@ WORKDIR /app
 # Install with the lockfile first so dependency layers cache.
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/
+# Only so the frozen lockfile matches the workspace; the API never builds the editor core.
+COPY packages/studio/package.json packages/studio/
 COPY apps/api/package.json apps/api/
 RUN pnpm install --frozen-lockfile
 
