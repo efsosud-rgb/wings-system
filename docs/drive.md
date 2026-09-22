@@ -44,7 +44,8 @@ Limite por arquivo: `DRIVE_MAX_FILE_BYTES`, 2 GB por padrão. É um `PUT` único
 R2 aceita até 5 GB assim); envio em partes, com retomada, fica para depois.
 
 Baixar e ver a prévia: `GET /drive/files/:id/link` devolve uma URL de 5 minutos.
-A prévia cobre imagem, vídeo e PDF.
+A prévia cobre imagem, vídeo e PDF. O Studio pede a sua própria, de 60 minutos
+(`GET /studio/files/:id/link`), porque edita em cima do arquivo.
 
 ### Variáveis
 
@@ -67,12 +68,15 @@ CORS no bucket o navegador bloqueia antes de enviar.
   {
     "AllowedOrigins": ["https://staging.wingssystem.online"],
     "AllowedMethods": ["PUT", "GET", "HEAD"],
-    "AllowedHeaders": ["content-type"],
-    "ExposeHeaders": ["ETag"],
+    "AllowedHeaders": ["content-type", "range"],
+    "ExposeHeaders": ["ETag", "Content-Range", "Accept-Ranges", "Content-Length"],
     "MaxAgeSeconds": 3600
   }
 ]
 ```
+
+`range` e os cabeçalhos expostos são para o Studio (`docs/studio/README.md`):
+a prévia toca vídeo dentro do WebGL e pede trechos do arquivo.
 
 Em produção, a origem é `https://wingssystem.online`, num bucket separado do de
 staging. O bucket fica privado, sem domínio público: tudo sai por URL assinada.
