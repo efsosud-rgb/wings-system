@@ -63,6 +63,11 @@ export interface FakeGoogleApiOptions {
   mutate?: 'ok' | 'ok_without_id' | 'reject' | 'server_error' | 'network_failure';
   /** Rows answered for `FROM conversion_action`; one enabled action by default. */
   conversionActions?: { id: string; name: string; status: string; type?: string }[];
+  /**
+   * Fields this "API version" does not know: a query naming one is refused
+   * the way v22 refused `metrics.video_views` on the first real run.
+   */
+  unrecognizedFields?: string[];
 }
 
 export const BRAZIL_GEO = [
@@ -325,7 +330,40 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
     });
 
     if (href.endsWith('googleAds:search')) {
-      return Promise.resolve(json(200, { results: search(String(body.query ?? '')) }));
+      const query = String(body.query ?? '');
+      const unknown = (options.unrecognizedFields ?? []).find((field) => query.includes(field));
+      if (unknown) {
+        return Promise.resolve(
+          json(400, {
+            error: {
+              message: 'Request contains an invalid argument.',
+              details: [{ errors: [{ message: `Unrecognized field in the query: '${unknown}'` }] }],
+            },
+          }),
+        );
+      }
+      // Like the real API, only the metrics the query named come back.
+      const results = search(query).map((row) => {
+        const metrics = (row as { metrics?: Record<string, unknown> }).metrics;
+        if (!metrics || /metrics\.video_views/.test(query)) return row;
+        const {
+          videoViews,
+          videoQuartileP25Rate,
+          videoQuartileP50Rate,
+          videoQuartileP75Rate,
+          videoQuartileP100Rate,
+          ...rest
+        } = metrics;
+        void [
+          videoViews,
+          videoQuartileP25Rate,
+          videoQuartileP50Rate,
+          videoQuartileP75Rate,
+          videoQuartileP100Rate,
+        ];
+        return { ...(row as object), metrics: rest };
+      });
+      return Promise.resolve(json(200, { results }));
     }
     if (href.endsWith('googleAds:mutate')) {
       if (state.mutate === 'network_failure') return Promise.reject(new TypeError('fetch failed'));

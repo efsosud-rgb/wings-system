@@ -54,6 +54,12 @@ describe('money parsing — the 100x trap', () => {
   it('reads Insights spend as decimal reais, a different unit entirely', () => {
     expect(centsFromDecimalCurrencyString('48.71', 'spend')).toBe(4871);
     expect(centsFromDecimalCurrencyString('61.02', 'spend')).toBe(6102);
+    // Breakdowns write more decimals than a cent has; they are rounded, not refused.
+    expect(centsFromDecimalCurrencyString('1.67832', 'spend')).toBe(168);
+    expect(centsFromDecimalCurrencyString('0.005', 'spend')).toBe(1);
+    expect(centsFromDecimalCurrencyString('12.999', 'spend')).toBe(1300);
+    expect(centsFromDecimalCurrencyString('7', 'spend')).toBe(700);
+    expect(centsFromDecimalCurrencyString('1.5', 'spend')).toBe(150);
     expect(centsFromDecimalCurrencyString('7', 'spend')).toBe(700);
     expect(centsFromDecimalCurrencyString('7.5', 'spend')).toBe(750);
   });

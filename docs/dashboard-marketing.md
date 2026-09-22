@@ -145,6 +145,27 @@ staging diz o que a API respondeu; o job para na etapa com nome
 Os testes cobrem tudo isso contra `FakeMetaClient`, `fakeGoogleApi` e um
 banco descartável; nenhum chama plataforma alguma.
 
+### Primeira rodada real (22/09/2026): decimais, timeout e campos de vídeo
+
+Três coisas que só a Meta e o Google de verdade mostraram, corrigidas em
+`fix/ingest-live-2`:
+
+- **Gasto das quebras com mais de dois decimais** ("1.67832"): o parser só
+  aceitava centavos e derrubava a conta em `breakdown:placement`. Agora aceita
+  qualquer decimal e arredonda para o centavo (`centsFromDecimalCurrencyString`).
+- **Passo `ads` com timeout**: a listagem de anúncios expande o criativo (com
+  `object_story_spec`) e usava o timeout padrão de 15 s com páginas de 25. Passou
+  a 45 s (o mesmo dos insights) e páginas de 50 (`ADS_LIST_TIMEOUT_MS`,
+  `ADS_PAGE_SIZE`).
+- **Google: "Unrecognized field in the query: 'metrics.video_views'"** em
+  `campaign`. A leitura diária tenta os campos de vídeo uma vez; se a API
+  responder campo desconhecido, o cliente marca vídeo como não disponível para
+  a conta (plays e quartis zerados), registra um aviso (`drainWarnings`, impresso
+  pelo job como `AVISO:` e devolvido em `IngestResult.warnings`) e refaz a
+  leitura só com os campos de dinheiro. Nenhuma outra falha é engolida. Qual
+  campo de vídeo esta versão aceita em `campaign` continua **não verificado**;
+  o log da próxima rodada diz.
+
 ### O que o token não pode ler vira "não disponível" (22/09/2026)
 
 No staging a tarefa `ads-ingest` passou a falhar em segundos com

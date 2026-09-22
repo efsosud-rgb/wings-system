@@ -46,6 +46,43 @@ describe('video on the daily rows', () => {
     const [row] = await google.getInsights('campaign', '2026-09-15', '2026-09-15');
     expect(row?.video).toEqual({ plays: 200, thruplays: 20, p25: 100, p50: 60, p75: 40, p100: 20 });
   });
+
+  it('makes video unavailable, with a warning, when the API does not know a field', async () => {
+    // What staging answered on the first real run: v22 refused
+    // metrics.video_views on campaign. The money rows still come back.
+    const api = fakeGoogleApi({
+      campaigns: [{ id: '100', name: 'Pesquisa', status: 'ENABLED', amountMicros: '5000000' }],
+      metrics: [day({ videoViews: 200, quartiles: [0.5, 0.3, 0.2, 0.1] })],
+      unrecognizedFields: ['metrics.video_views'],
+    });
+    const google = new GoogleAdsPlatformClient(api.reader, NOW);
+    const rows = await google.getInsights('campaign', '2026-09-15', '2026-09-15');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.spendCents).toBe(250);
+    expect(rows[0]?.video).toEqual({ plays: 0, thruplays: 0, p25: 0, p50: 0, p75: 0, p100: 0 });
+    const warnings = google.drainWarnings();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('metrics.video_views');
+    expect(google.drainWarnings()).toEqual([]);
+
+    // Learned once: the next read does not ask for video again.
+    const before = api.calls.length;
+    await google.getInsights('campaign', '2026-09-15', '2026-09-15');
+    const queries = api.calls.slice(before).map((call) => String(call.body.query ?? ''));
+    expect(queries).toHaveLength(1);
+    expect(queries[0]).not.toContain('video');
+  });
+
+  it('still fails on an error that is not an unknown field', async () => {
+    const api = fakeGoogleApi({
+      campaigns: [{ id: '100', name: 'Pesquisa', status: 'ENABLED', amountMicros: '5000000' }],
+      metrics: [day()],
+      unrecognizedFields: [],
+    });
+    const google = new GoogleAdsPlatformClient(api.reader, NOW);
+    api.reader.search = () => Promise.reject(new Error('google: search failed (500): backend'));
+    await expect(google.getInsights('campaign', '2026-09-15', '2026-09-15')).rejects.toThrow('500');
+  });
 });
 
 describe('the breakdowns as reports', () => {
