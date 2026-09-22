@@ -662,6 +662,12 @@ export const adCreatives = pgTable(
     thumbnailUrl: text('thumbnail_url'),
     title: text('title'),
     body: text('body'),
+    /**
+     * image | video | carousel | unknown, read from the creative's object type
+     * and story spec. Unknown when the platform did not say, never guessed
+     * from the name: the creative ranking groups by this.
+     */
+    format: text('format').notNull().default('unknown'),
     lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
   },
   (table) => [
@@ -719,6 +725,17 @@ export const adMetricsDaily = pgTable(
     qualityRanking: text('quality_ranking'),
     engagementRateRanking: text('engagement_rate_ranking'),
     conversionRateRanking: text('conversion_rate_ranking'),
+    /**
+     * Video, when the platform reports it: plays of 3 seconds or more (Meta's
+     * `video_view` action), ThruPlays and the four watched quartiles. Zero on
+     * an image ad and on a platform that does not report them.
+     */
+    videoPlays: bigint('video_plays', { mode: 'number' }).notNull().default(0),
+    videoThruplays: bigint('video_thruplays', { mode: 'number' }).notNull().default(0),
+    videoP25: bigint('video_p25', { mode: 'number' }).notNull().default(0),
+    videoP50: bigint('video_p50', { mode: 'number' }).notNull().default(0),
+    videoP75: bigint('video_p75', { mode: 'number' }).notNull().default(0),
+    videoP100: bigint('video_p100', { mode: 'number' }).notNull().default(0),
     fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -732,7 +749,104 @@ export const adMetricsDaily = pgTable(
       table.day,
     ),
     index('ad_metrics_daily_account_day_idx').on(table.adAccountId, table.day),
+    // The dashboard reads one level of one account over a date range; this is
+    // the index every one of its sums walks.
+    index('ad_metrics_daily_account_level_day_idx').on(table.adAccountId, table.level, table.day),
   ],
+);
+
+/** How a day's figures are split: by placement, age and gender, region, hour. */
+export const breakdownKindEnum = pgEnum('ad_breakdown_kind', [
+  'placement',
+  'age_gender',
+  'region',
+  'hour',
+]);
+
+/**
+ * Daily performance split one way at a time, per campaign.
+ *
+ * Campaign level only, on purpose: a breakdown multiplies the platform's
+ * aggregation work, and the ad level already needs one-day windows to answer
+ * at all (`INSIGHT_WINDOW_DAYS`). Same upsert rule as `ad_metrics_daily`: the
+ * newest pull wins. `key` and `sub_key` carry the split as the platform names
+ * it (`facebook`/`feed`, `25-34`/`female`, `São Paulo`/``, `14`/``).
+ */
+export const adMetricsBreakdownDaily = pgTable(
+  'ad_metrics_breakdown_daily',
+  {
+    tenantId: tenantId(),
+    id: bigserial('id', { mode: 'bigint' }).primaryKey(),
+    adAccountId: uuid('ad_account_id')
+      .notNull()
+      .references(() => adAccounts.id),
+    campaignId: uuid('campaign_id').references(() => adCampaigns.id, { onDelete: 'cascade' }),
+    campaignExternalId: text('campaign_external_id').notNull(),
+    day: date('day').notNull(),
+    kind: breakdownKindEnum('kind').notNull(),
+    key: text('key').notNull(),
+    subKey: text('sub_key').notNull().default(''),
+    spendCents: bigint('spend_cents', { mode: 'number' }).notNull().default(0),
+    impressions: bigint('impressions', { mode: 'number' }).notNull().default(0),
+    clicks: bigint('clicks', { mode: 'number' }).notNull().default(0),
+    /** Zero where the platform refuses reach for the split (Meta by hour). */
+    reach: bigint('reach', { mode: 'number' }).notNull().default(0),
+    conversions: bigint('conversions', { mode: 'number' }).notNull().default(0),
+    actions: jsonb('actions').notNull().default({}),
+    fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('ad_metrics_breakdown_daily_uq').on(
+      table.adAccountId,
+      table.campaignExternalId,
+      table.day,
+      table.kind,
+      table.key,
+      table.subKey,
+    ),
+    index('ad_metrics_breakdown_daily_account_kind_day_idx').on(
+      table.adAccountId,
+      table.kind,
+      table.day,
+    ),
+  ],
+);
+
+/**
+ * One row per account per day: what the platform said about the account
+ * itself when the ingest ran, and the budget in force that day.
+ *
+ * The platform only ever reports its CURRENT balance and cap, so without this
+ * the question "how much was there on the 10th?" has no answer after the 11th.
+ * The newest pull of a day wins; a closed day is never rewritten because the
+ * job does not run for past days.
+ */
+export const adAccountDaily = pgTable(
+  'ad_account_daily',
+  {
+    tenantId: tenantId(),
+    id: bigserial('id', { mode: 'bigint' }).primaryKey(),
+    adAccountId: uuid('ad_account_id')
+      .notNull()
+      .references(() => adAccounts.id),
+    day: date('day').notNull(),
+    /** Meta: spend_cap; Google: the approved account budget. Null when the platform sets none. */
+    spendCapCents: bigint('spend_cap_cents', { mode: 'number' }),
+    /** Meta: amount_spent against the cap; Google: amount served against the budget. */
+    amountSpentCents: bigint('amount_spent_cents', { mode: 'number' }),
+    /** What the account can still spend as the platform sees it; null when unlimited. */
+    platformRemainingCents: bigint('platform_remaining_cents', { mode: 'number' }),
+    /** Meta: the prepaid balance when the account has one (`funding_source_details`). */
+    prepaidBalanceCents: bigint('prepaid_balance_cents', { mode: 'number' }),
+    /** A code, never the display string: `prepaid`, `credit_card`, `unknown`. */
+    fundingKind: text('funding_kind'),
+    /** Sum of daily budgets in force on active campaigns (their ad sets for ABO), today. */
+    activeDailyBudgetCents: bigint('active_daily_budget_cents', { mode: 'number' })
+      .notNull()
+      .default(0),
+    fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [uniqueIndex('ad_account_daily_account_day_uq').on(table.adAccountId, table.day)],
 );
 
 export const alertKindEnum = pgEnum('ad_alert_kind', [

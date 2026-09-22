@@ -2,6 +2,8 @@ import { GOOGLE_ADS_API_VERSION, GoogleAdsReadClient, centsFromMicros } from './
 import type { Cents } from './money.js';
 import type {
   AdsPlatformClient,
+  BreakdownInsightRow,
+  BreakdownKind,
   CampaignStatus,
   CreateCampaignSpec,
   InsightRow,
@@ -46,14 +48,47 @@ interface CampaignRow {
 
 interface MetricsRow {
   campaign?: { id?: string };
-  segments?: { date?: string };
+  segments?: {
+    date?: string;
+    hour?: number | string;
+    adNetworkType?: string;
+    geoTargetRegion?: string;
+  };
+  adGroupCriterion?: { ageRange?: { type?: string }; gender?: { type?: string } };
   metrics?: {
     costMicros?: string;
     impressions?: string;
     clicks?: string;
     conversions?: number;
+    videoViews?: string;
+    videoQuartileP25Rate?: number;
+    videoQuartileP50Rate?: number;
+    videoQuartileP75Rate?: number;
+    videoQuartileP100Rate?: number;
   };
 }
+
+const METRIC_FIELDS =
+  'metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions';
+
+/**
+ * Google's age bands and genders, renamed to the words Meta uses so one
+ * audience table can hold both platforms.
+ */
+const AGE_RANGE: Record<string, string> = {
+  AGE_RANGE_18_24: '18-24',
+  AGE_RANGE_25_34: '25-34',
+  AGE_RANGE_35_44: '35-44',
+  AGE_RANGE_45_54: '45-54',
+  AGE_RANGE_55_64: '55-64',
+  AGE_RANGE_65_UP: '65+',
+  AGE_RANGE_UNDETERMINED: 'unknown',
+};
+const GENDER: Record<string, string> = {
+  MALE: 'male',
+  FEMALE: 'female',
+  UNDETERMINED: 'unknown',
+};
 
 interface GeoRow {
   geoTargetConstant?: {
@@ -163,6 +198,11 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient {
       spendCapCents,
       amountSpentCents,
       capReached: spendCapCents !== null && amountSpentCents >= spendCapCents,
+      // The account budget of a prepaid account IS the balance: what was
+      // loaded, less what was served (google-client.ts).
+      prepaidBalanceCents:
+        spendCapCents === null ? null : Math.max(0, spendCapCents - amountSpentCents),
+      fundingKind: budget ? 'prepaid' : null,
     };
   }
 
@@ -263,15 +303,24 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient {
   }
 
   private async dailyRows(sinceDate: string, untilDate?: string): Promise<MetricsRow[]> {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(sinceDate)) throw new Error('google: invalid since date');
-    const until = untilDate ?? this.today();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(until)) throw new Error('google: invalid until date');
+    const { until } = this.dateBounds(sinceDate, untilDate);
+    // The video figures ride on the same query. YouTube reports views and the
+    // quartiles as rates of views. NOT verified live.
     return this.reader.search<MetricsRow>(`
-      SELECT campaign.id, segments.date, metrics.cost_micros, metrics.impressions,
-             metrics.clicks, metrics.conversions
+      SELECT campaign.id, segments.date, ${METRIC_FIELDS},
+             metrics.video_views, metrics.video_quartile_p25_rate,
+             metrics.video_quartile_p50_rate, metrics.video_quartile_p75_rate,
+             metrics.video_quartile_p100_rate
         FROM campaign
        WHERE segments.date BETWEEN '${sinceDate}' AND '${until}'
     `);
+  }
+
+  private dateBounds(sinceDate: string, untilDate?: string): { since: string; until: string } {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(sinceDate)) throw new Error('google: invalid since date');
+    const until = untilDate ?? this.today();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(until)) throw new Error('google: invalid until date');
+    return { since: sinceDate, until };
   }
 
   async getInsights(
@@ -291,6 +340,8 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient {
       // On this account the only conversion that fires is the site's lead form
       // (stage-google-spike.md), so Google's conversions are leads.
       const actions: Record<string, number> = conversions > 0 ? { lead: conversions } : {};
+      const views = Number(row.metrics?.videoViews ?? 0);
+      const quartile = (rate: number | undefined) => Math.round(views * (rate ?? 0));
       return [
         {
           level,
@@ -306,9 +357,122 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient {
           qualityRanking: null,
           engagementRateRanking: null,
           conversionRateRanking: null,
+          video: {
+            plays: views,
+            // Google has no ThruPlay; the closest honest figure is a view that
+            // reached the end.
+            thruplays: quartile(row.metrics?.videoQuartileP100Rate),
+            p25: quartile(row.metrics?.videoQuartileP25Rate),
+            p50: quartile(row.metrics?.videoQuartileP50Rate),
+            p75: quartile(row.metrics?.videoQuartileP75Rate),
+            p100: quartile(row.metrics?.videoQuartileP100Rate),
+          },
         },
       ];
     });
+  }
+
+  /**
+   * Google's splits, each its own report. Placement is the network the ad
+   * served on (Search, YouTube, Display…); age and gender are two separate
+   * views on Google, so they arrive as two sets of rows with `all` on the
+   * side Google did not split (the screen groups by one side at a time).
+   * Region comes back as a geo target constant and is turned into a name
+   * with one more read. NOT verified live: every query here.
+   */
+  async getBreakdowns(
+    kind: BreakdownKind,
+    sinceDate: string,
+    untilDate?: string,
+  ): Promise<BreakdownInsightRow[]> {
+    const { since, until } = this.dateBounds(sinceDate, untilDate);
+    const where = `segments.date BETWEEN '${since}' AND '${until}'`;
+    const query = (select: string, from: string) =>
+      this.reader.search<MetricsRow>(
+        `SELECT campaign.id, segments.date, ${select}, ${METRIC_FIELDS} FROM ${from} WHERE ${where}`,
+      );
+
+    const base = (row: MetricsRow, key: string, subKey: string): BreakdownInsightRow[] => {
+      const campaignId = row.campaign?.id;
+      const date = row.segments?.date;
+      if (!campaignId || !date) return [];
+      const conversions = Math.round(row.metrics?.conversions ?? 0);
+      return [
+        {
+          kind,
+          campaignId,
+          date,
+          key,
+          subKey,
+          spendCents: centsFromMicros(row.metrics?.costMicros),
+          impressions: Number(row.metrics?.impressions ?? 0),
+          clicks: Number(row.metrics?.clicks ?? 0),
+          reach: 0,
+          actions: conversions > 0 ? { lead: conversions } : {},
+        },
+      ];
+    };
+
+    switch (kind) {
+      case 'placement': {
+        const rows = await query('segments.ad_network_type', 'campaign');
+        return rows.flatMap((row) =>
+          base(row, (row.segments?.adNetworkType ?? 'UNKNOWN').toLowerCase(), ''),
+        );
+      }
+      case 'hour': {
+        const rows = await query('segments.hour', 'campaign');
+        return rows.flatMap((row) =>
+          base(row, String(row.segments?.hour ?? '0').padStart(2, '0'), ''),
+        );
+      }
+      case 'age_gender': {
+        const [ages, genders] = await Promise.all([
+          query('ad_group_criterion.age_range.type', 'age_range_view'),
+          query('ad_group_criterion.gender.type', 'gender_view'),
+        ]);
+        return [
+          ...ages.flatMap((row) => {
+            const type = row.adGroupCriterion?.ageRange?.type ?? '';
+            return base(row, AGE_RANGE[type] ?? 'unknown', 'all');
+          }),
+          ...genders.flatMap((row) => {
+            const type = row.adGroupCriterion?.gender?.type ?? '';
+            return base(row, 'all', GENDER[type] ?? 'unknown');
+          }),
+        ];
+      }
+      case 'region': {
+        const rows = await query('segments.geo_target_region', 'geographic_view');
+        const constants = [
+          ...new Set(rows.map((row) => row.segments?.geoTargetRegion).filter(Boolean)),
+        ] as string[];
+        const names = await this.regionNames(constants);
+        return rows.flatMap((row) => {
+          const constant = row.segments?.geoTargetRegion ?? '';
+          return base(row, names.get(constant) ?? constant, '');
+        });
+      }
+    }
+  }
+
+  /** Names for geo target constants, one read for all of them. */
+  private async regionNames(resourceNames: string[]): Promise<Map<string, string>> {
+    const names = new Map<string, string>();
+    const safe = resourceNames.filter((name) => /^geoTargetConstants\/\d+$/.test(name));
+    if (safe.length === 0) return names;
+    const rows = await this.reader.search<{
+      geoTargetConstant?: { resourceName?: string; name?: string };
+    }>(`
+      SELECT geo_target_constant.resource_name, geo_target_constant.name
+        FROM geo_target_constant
+       WHERE geo_target_constant.resource_name IN (${safe.map((name) => `'${name}'`).join(', ')})
+    `);
+    for (const row of rows) {
+      const constant = row.geoTargetConstant;
+      if (constant?.resourceName && constant.name) names.set(constant.resourceName, constant.name);
+    }
+    return names;
   }
 
   async getSpend(sinceDate: string): Promise<SpendRow[]> {

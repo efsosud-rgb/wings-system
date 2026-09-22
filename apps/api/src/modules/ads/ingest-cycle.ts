@@ -1,7 +1,14 @@
 import type { Database } from '../../db/client.js';
 import { runAlerts, type AlertNotifier, type RunAlertsResult } from './alerts.js';
+import {
+  BREAKDOWN_KINDS,
+  ingestBreakdown,
+  recordAccountDay,
+  type AccountDayResult,
+  type BreakdownIngestResult,
+} from './breakdowns.js';
 import { ingestMetrics, syncAds, type IngestResult, type SyncAdsResult } from './metrics.js';
-import type { AdsPlatformClient, MetricsLevel } from './platform/types.js';
+import type { AdsPlatformClient, BreakdownKind, MetricsLevel } from './platform/types.js';
 import { reconcileAccount, type ReconcileResult } from './reconcile.js';
 
 /**
@@ -21,7 +28,14 @@ import { reconcileAccount, type ReconcileResult } from './reconcile.js';
 
 const METRIC_LEVELS: readonly MetricsLevel[] = ['campaign', 'ad_set', 'ad'];
 
-export type IngestStep = 'client' | 'reconcile' | 'ads' | `metrics:${MetricsLevel}` | 'alerts';
+export type IngestStep =
+  | 'client'
+  | 'reconcile'
+  | 'ads'
+  | `metrics:${MetricsLevel}`
+  | `breakdown:${BreakdownKind}`
+  | 'account_day'
+  | 'alerts';
 
 export interface CycleAccount {
   id: string;
@@ -36,6 +50,8 @@ export type AccountCycleResult =
       reconciled: ReconcileResult;
       ads: SyncAdsResult;
       metrics: Record<MetricsLevel, IngestResult>;
+      breakdowns: Record<BreakdownKind, BreakdownIngestResult>;
+      accountDay: AccountDayResult;
       alerts: RunAlertsResult;
     }
   | { status: 'skipped'; account: CycleAccount; reason: 'no_credentials' }
@@ -92,10 +108,21 @@ async function ingestAccount(
       metrics[level] = await ingestMetrics(db, client, account.id, level, options.since, now);
     }
 
+    // The splits the dashboard's audience view reads. Campaign level only,
+    // one platform aggregation per split (see breakdowns.ts).
+    const breakdowns = {} as Record<BreakdownKind, BreakdownIngestResult>;
+    for (const kind of BREAKDOWN_KINDS) {
+      step = `breakdown:${kind}`;
+      breakdowns[kind] = await ingestBreakdown(db, client, account.id, kind, options.since, now);
+    }
+
+    step = 'account_day';
+    const accountDay = await recordAccountDay(db, client, account.id, now);
+
     step = 'alerts';
     const alerts = await runAlerts(db, account.id, { notifier: options.notifier, now });
 
-    return { status: 'ok', account, reconciled, ads, metrics, alerts };
+    return { status: 'ok', account, reconciled, ads, metrics, breakdowns, accountDay, alerts };
   } catch (error) {
     return { status: 'failed', account, step, error: describeError(error) };
   }

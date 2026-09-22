@@ -9,6 +9,7 @@ export * from './ads/agent.js';
 export * from './ads/approvals.js';
 export * from './ads/campaign-builder.js';
 export * from './ads/cockpit.js';
+export * from './ads/dashboard.js';
 export * from './ads/simulation.js';
 export * from './auth/credentials.js';
 export * from './auth/schema.js';

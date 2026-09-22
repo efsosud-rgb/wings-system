@@ -92,6 +92,7 @@ export async function syncAds(
           thumbnailUrl: ad.creative.thumbnailUrl,
           title: ad.creative.title,
           body: ad.creative.body,
+          format: ad.creative.format ?? 'unknown',
           lastSyncedAt: now,
         })
         .onConflictDoUpdate({
@@ -101,6 +102,8 @@ export async function syncAds(
             thumbnailUrl: ad.creative.thumbnailUrl,
             title: ad.creative.title,
             body: ad.creative.body,
+            // A client that does not say the format never erases a known one.
+            ...(ad.creative.format ? { format: ad.creative.format } : {}),
             lastSyncedAt: now,
           },
         });
@@ -196,10 +199,19 @@ export async function ingestMetrics(
     const rowConversions = conversionsFrom(row.actions);
     spendCents += row.spendCents;
     conversions += rowConversions;
+    const video = {
+      videoPlays: row.video?.plays ?? 0,
+      videoThruplays: row.video?.thruplays ?? 0,
+      videoP25: row.video?.p25 ?? 0,
+      videoP50: row.video?.p50 ?? 0,
+      videoP75: row.video?.p75 ?? 0,
+      videoP100: row.video?.p100 ?? 0,
+    };
 
     await db
       .insert(adMetricsDaily)
       .values({
+        ...video,
         adAccountId,
         level,
         entityExternalId: row.entityId,
@@ -231,6 +243,7 @@ export async function ingestMetrics(
           adMetricsDaily.day,
         ],
         set: {
+          ...video,
           // A day that has closed keeps the budget it was ingested with; only
           // the current day may still be corrected.
           dailyBudgetCents:

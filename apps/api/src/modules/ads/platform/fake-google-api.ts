@@ -25,6 +25,29 @@ export interface RecordedGoogleCall {
   body: Record<string, unknown>;
 }
 
+/**
+ * One day of one campaign as the fake reports it. The optional dimensions
+ * make the row answer the matching breakdown query as well; a row with no
+ * dimension answers only the plain daily query.
+ */
+export interface FakeGoogleMetricsRow {
+  campaignId: string;
+  date: string;
+  costMicros: string;
+  impressions: number;
+  clicks: number;
+  conversions?: number;
+  videoViews?: number;
+  /** Quartile rates, 0..1 of views. */
+  quartiles?: [number, number, number, number];
+  hour?: number;
+  adNetworkType?: string;
+  /** A geo target constant resource name, resolved through `geo`. */
+  geoTargetRegion?: string;
+  ageRange?: string;
+  gender?: string;
+}
+
 export interface FakeGoogleApiOptions {
   customerId?: string;
   campaigns?: FakeGoogleCampaign[];
@@ -32,6 +55,8 @@ export interface FakeGoogleApiOptions {
   accountBudget?: { limitMicros: string; servedMicros: string } | null;
   /** Rows answered for `FROM geo_target_constant`. */
   geo?: { id: string; name: string; canonicalName: string; targetType: 'State' | 'City' }[];
+  /** Daily performance rows; none by default, as an account that never delivered. */
+  metrics?: FakeGoogleMetricsRow[];
   /** How the next mutate behaves. */
   mutate?: 'ok' | 'ok_without_id' | 'reject' | 'server_error' | 'network_failure';
 }
@@ -102,7 +127,65 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
     },
   });
 
+  const metricsRow = (row: FakeGoogleMetricsRow) => ({
+    campaign: { id: row.campaignId },
+    segments: {
+      date: row.date,
+      ...(row.hour === undefined ? {} : { hour: row.hour }),
+      ...(row.adNetworkType === undefined ? {} : { adNetworkType: row.adNetworkType }),
+      ...(row.geoTargetRegion === undefined ? {} : { geoTargetRegion: row.geoTargetRegion }),
+    },
+    ...(row.ageRange === undefined && row.gender === undefined
+      ? {}
+      : {
+          adGroupCriterion: {
+            ...(row.ageRange === undefined ? {} : { ageRange: { type: row.ageRange } }),
+            ...(row.gender === undefined ? {} : { gender: { type: row.gender } }),
+          },
+        }),
+    metrics: {
+      costMicros: row.costMicros,
+      impressions: String(row.impressions),
+      clicks: String(row.clicks),
+      conversions: row.conversions ?? 0,
+      ...(row.videoViews === undefined
+        ? {}
+        : {
+            videoViews: String(row.videoViews),
+            videoQuartileP25Rate: row.quartiles?.[0] ?? 0,
+            videoQuartileP50Rate: row.quartiles?.[1] ?? 0,
+            videoQuartileP75Rate: row.quartiles?.[2] ?? 0,
+            videoQuartileP100Rate: row.quartiles?.[3] ?? 0,
+          }),
+    },
+  });
+
+  /** Rows inside the query's date range that carry exactly the asked dimension. */
+  function metricsFor(query: string, dimension: keyof FakeGoogleMetricsRow | null): unknown[] {
+    const range = /BETWEEN '(\d{4}-\d{2}-\d{2})' AND '(\d{4}-\d{2}-\d{2})'/.exec(query);
+    return (options.metrics ?? [])
+      .filter((row) => !range || (row.date >= range[1]! && row.date <= range[2]!))
+      .filter((row) => {
+        const dimensions = (
+          ['hour', 'adNetworkType', 'geoTargetRegion', 'ageRange', 'gender'] as const
+        ).filter((name) => row[name] !== undefined);
+        return dimension === null ? dimensions.length === 0 : dimensions.join() === dimension;
+      })
+      .map(metricsRow);
+  }
+
   function search(query: string): unknown[] {
+    if (/FROM\s+geographic_view/i.test(query)) return metricsFor(query, 'geoTargetRegion');
+    if (/FROM\s+age_range_view/i.test(query)) return metricsFor(query, 'ageRange');
+    if (/FROM\s+gender_view/i.test(query)) return metricsFor(query, 'gender');
+    if (/FROM\s+geo_target_constant/i.test(query) && /resource_name IN/.test(query)) {
+      const wanted = [...query.matchAll(/'geoTargetConstants\/(\d+)'/g)].map((m) => m[1]);
+      return geo
+        .filter((row) => wanted.includes(row.id))
+        .map((row) => ({
+          geoTargetConstant: { resourceName: `geoTargetConstants/${row.id}`, name: row.name },
+        }));
+    }
     if (/FROM\s+account_budget/i.test(query)) {
       const budget =
         state.accountBudget === undefined
@@ -132,8 +215,12 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
         .map((row) => ({ geoTargetConstant: { ...row, status: 'ENABLED' } }));
     }
     if (/FROM\s+campaign/i.test(query)) {
-      // Metrics queries carry a date segment; nothing has spent in this fake.
-      if (/segments\.date/.test(query)) return [];
+      // Metrics queries carry a date segment and answer from `metrics`.
+      if (/segments\.date/.test(query)) {
+        if (/segments\.hour/.test(query)) return metricsFor(query, 'hour');
+        if (/segments\.ad_network_type/.test(query)) return metricsFor(query, 'adNetworkType');
+        return metricsFor(query, null);
+      }
       const byId = /campaign\.id = (\d+)/.exec(query)?.[1];
       return campaigns
         .filter((campaign) => campaign.status !== 'REMOVED')
