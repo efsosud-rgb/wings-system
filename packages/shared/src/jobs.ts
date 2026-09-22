@@ -8,7 +8,9 @@
 export const JOB_TYPES = ['ffprobe', 'transcribe', 'render'] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
-/** `render` has no handler in the worker yet: see docs/studio/jobs.md (pending). */
-export const JOB_TYPES_IMPLEMENTED = ['ffprobe', 'transcribe'] as const satisfies readonly JobType[];
+/** What a worker claims by default: every type it has a handler for. Kept
+ * distinct from JOB_TYPES so a future type can land in the contract before
+ * the worker is ready to claim it. */
+export const JOB_TYPES_IMPLEMENTED = ['ffprobe', 'transcribe', 'render'] as const satisfies readonly JobType[];
 
 export type JobState = 'pending' | 'running' | 'done' | 'failed';
