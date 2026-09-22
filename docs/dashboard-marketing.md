@@ -1,4 +1,4 @@
-# Dashboard → Marketing (parte 1)
+# Dashboard → Marketing
 
 A tela que substitui o cockpit de tráfego. Lê gastos, saldos e desempenho de
 tudo o que a empresa paga em marketing: Meta, Google/YouTube, créditos do
@@ -6,8 +6,10 @@ Kairogen, a IA do agente (OpenRouter) e os provedores de mídia.
 
 **Nada aqui altera uma conta.** Abrir a tela não chama plataforma nenhuma: os
 números vêm das nossas tabelas, espelhadas pelo job de ingestão, e a tela diz
-quando foram atualizados. A parte 2 (insights e sugestões da IA, canais
-próprios) vai criar pedidos pelo portão de aprovação, como toda alteração.
+quando foram atualizados. A parte 2 acrescentou a aba de insights e sugestões
+da IA (`docs/ads/insights.md`), vereditos por campanha, saúde da conta, canais
+próprios e dispositivo/dia × hora; toda sugestão acionável vira pedido pelo
+portão de aprovação, como toda alteração.
 
 ## O que a ingestão passou a gravar
 
@@ -15,10 +17,10 @@ O job (`ingest-cli`) continua somente leitura. Cada conta ganhou dois passos
 depois das métricas por entidade, cada um com o próprio nome em
 `AccountCycleResult` para o erro dizer onde parou:
 
-| Passo                 | Tabela                       | O que grava                                                                                                                                                                            |
-| --------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `breakdown:<quebra>`  | `ad_metrics_breakdown_daily` | Por campanha e dia, gasto, impressões, cliques, alcance e leads divididos por posicionamento, idade e gênero, região e hora. `key`/`sub_key` são os nomes da plataforma (`instagram`/`reels`, `25-34`/`female`, `São Paulo`, `14`). |
-| `account_day`         | `ad_account_daily`           | Uma linha por conta e dia: teto e gasto na plataforma, saldo pré-pago quando ela informa, tipo de pagamento e a soma dos orçamentos diários em vigor nas campanhas ativas.               |
+| Passo                | Tabela                       | O que grava                                                                                                                                                                                                                         |
+| -------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `breakdown:<quebra>` | `ad_metrics_breakdown_daily` | Por campanha e dia, gasto, impressões, cliques, alcance e leads divididos por posicionamento, idade e gênero, região e hora. `key`/`sub_key` são os nomes da plataforma (`instagram`/`reels`, `25-34`/`female`, `São Paulo`, `14`). |
+| `account_day`        | `ad_account_daily`           | Uma linha por conta e dia: teto e gasto na plataforma, saldo pré-pago quando ela informa, tipo de pagamento e a soma dos orçamentos diários em vigor nas campanhas ativas.                                                          |
 
 E as linhas de `ad_metrics_daily` ganharam vídeo: plays de 3 s (a ação
 `video_view` da Meta), ThruPlays e os quatro quartis. `ad_creatives` ganhou
@@ -59,13 +61,13 @@ de um período é um piso, não o número da plataforma; a tela avisa.
 
 Todas exigem `ads.read` e só leem.
 
-| Rota                                  | Aba                 |
-| ------------------------------------- | ------------------- |
-| `GET /ads/dashboard/overview`         | Visão geral         |
-| `GET /ads/dashboard/platforms?days=`  | Por plataforma      |
-| `GET /ads/dashboard/campaigns?days=`  | Campanhas           |
-| `GET /ads/dashboard/creatives?days=`  | Criativos           |
-| `GET /ads/dashboard/audience?days=`   | Público e região    |
+| Rota                                 | Aba              |
+| ------------------------------------ | ---------------- |
+| `GET /ads/dashboard/overview`        | Visão geral      |
+| `GET /ads/dashboard/platforms?days=` | Por plataforma   |
+| `GET /ads/dashboard/campaigns?days=` | Campanhas        |
+| `GET /ads/dashboard/creatives?days=` | Criativos        |
+| `GET /ads/dashboard/audience?days=`  | Público e região |
 
 `days` aceita 7, 14, 30 ou 90; outro valor é 400. A janela termina hoje em
 São Paulo e o período anterior tem o mesmo tamanho, imediatamente antes.
@@ -161,11 +163,24 @@ conta na etapa com nome. Testes: `meta-client-dashboard.test.ts` (fetch
 roteirizado respondendo 403 `#10`) e `ingest-cycle.test.ts` (fake negando o
 saldo e cada quebra).
 
-## Fica para a parte 2
+## As abas da parte 2
 
-Insights e sugestões da IA (verba ideal, perfil de cliente, região, formatos,
-horários) com "Criar pedido", e Canais próprios. Toda sugestão vira pedido
-pelo portão de aprovação; nada muda sozinho.
+- **Insights e sugestões** (`?aba=insights`): cartões gerados pela IA toda
+  segunda às 7h e por "Gerar agora", cada um com título, o que os números
+  mostram, sugestão, impacto estimado, confiança e "O que consultei"; ação
+  acionável ganha "Criar pedido" (portão de aprovação, "sugerido pela IA"),
+  as demais "Marcar como visto"; histórico com data e o que foi feito. Abaixo,
+  "Sugestões de novas campanhas" com "Abrir no construtor" (preenche o
+  construtor do studio pela `sessionStorage`; nada é lançado). Ver
+  `docs/ads/insights.md`.
+- **Canais próprios** (`?aba=canais-proprios`): posts do blog no período, do
+  espelho `site_blog_posts`; lugar reservado para a publicação social.
+- **Configurações** (`?aba=configuracoes`): meta de CPL (leads) e CPC
+  (tráfego), proposta a partir do histórico e confirmada por uma pessoa, e a
+  legenda de como o veredito é calculado.
+- **Campanhas** ganhou a coluna Veredito; **Visão geral**, a saúde da conta e
+  o estado da ingestão no cabeçalho; **Público e região**, o painel de
+  dispositivo e o mapa dia × hora.
 
 ## Parte 2 — ingestão, saúde e vereditos
 
@@ -182,8 +197,8 @@ a partir de uma tela; tudo é lido das nossas tabelas, gravadas pelo job.
   ambiente (`hasPlatformCredentials`, em `platform/factory.ts`) e a faixa
   ganhou `setupNote`, que diz o que falta: "Credenciais configuradas, mas a
   conta ainda não foi semeada na ingestão: `ingest-cli --seed --platform
-  google --account <GOOGLE_ADS_CUSTOMER_ID> --name "…" --cap <centavos>
-  --usable 70`" e, depois de semear, "Conta semeada; a primeira ingestão ainda
+google --account <GOOGLE_ADS_CUSTOMER_ID> --name "…" --cap <centavos>
+--usable 70`" e, depois de semear, "Conta semeada; a primeira ingestão ainda
   não gravou o dia da conta." Semear é uma decisão de quem administra o teto
   (R$ 4.000 por conta, por padrão), então o sistema não semeia sozinho.
 - **"Atualizados há 2 dias".** A última ingestão registrada no staging foi em
@@ -207,8 +222,8 @@ a partir de uma tela; tudo é lido das nossas tabelas, gravadas pelo job.
 Quatro perguntas por conta paga, cada uma com estado (`ok`, `attention`,
 `problem`, `unknown`), o que os números mostram e o que fazer:
 
-| Item                       | De onde vem                                                                                                   |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Item                       | De onde vem                                                                                                    |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | Conversões medindo         | `ad_account_daily.conversion_sources` (pixel da Meta, ações de conversão do Google) + leads dos últimos 3 dias |
 | Criativos desgastados      | `fatigueOf` em 14 dias + alertas `creative_fatigue` abertos                                                    |
 | Ritmo de gasto             | `pacingFacts`: desvio contra a linha do mês (< 20% ok, < 40% atenção, acima problema)                          |

@@ -8,6 +8,8 @@ import {
   AGENT_TOOL_LABEL,
   MEDIA_AGENT_PROPOSAL_TOOLS,
   MEDIA_AGENT_READ_TOOLS,
+  INSIGHT_READ_TOOLS,
+  INSIGHT_WRITE_TOOLS,
   agentCampaignProposalSchema,
   agentChangeProposalSchema,
   agentSendMessageSchema,
@@ -105,6 +107,8 @@ describe('the agent contract', () => {
       ...AGENT_PROPOSAL_TOOLS,
       ...MEDIA_AGENT_READ_TOOLS,
       ...MEDIA_AGENT_PROPOSAL_TOOLS,
+      ...INSIGHT_READ_TOOLS,
+      ...INSIGHT_WRITE_TOOLS,
     ];
     expect(Object.keys(AGENT_TOOL_LABEL).sort()).toEqual([...tools].sort());
     expect(tools.join(' ')).not.toMatch(/execut|aprovar|criar_pedido|gerar_|generate/);

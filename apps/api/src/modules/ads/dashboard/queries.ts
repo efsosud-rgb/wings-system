@@ -34,6 +34,7 @@ import {
   adMetricsDaily,
   adSets,
   agentMessages,
+  insightRuns,
   integrationConnections,
   mediaCreditLedger,
 } from '../../../db/schema/index.js';
@@ -295,8 +296,12 @@ function seriesOf(
 }
 
 /** `created_at` as a São Paulo day, for grouping ledger rows. */
-const ledgerDay = (column: typeof mediaCreditLedger.createdAt | typeof agentMessages.createdAt) =>
-  sql<string>`to_char(${column} at time zone 'America/Sao_Paulo', 'YYYY-MM-DD')`;
+const ledgerDay = (
+  column:
+    | typeof mediaCreditLedger.createdAt
+    | typeof agentMessages.createdAt
+    | typeof insightRuns.startedAt,
+) => sql<string>`to_char(${column} at time zone 'America/Sao_Paulo', 'YYYY-MM-DD')`;
 
 async function kairogenStrip(
   db: Database,
@@ -353,14 +358,31 @@ async function aiStrip(
   month: ReturnType<typeof monthOf>,
   monthStart: Date,
 ): Promise<SpendStrip> {
-  const rows = await db
-    .select({
-      day: ledgerDay(agentMessages.createdAt),
-      amount: sql<string>`coalesce(sum(${agentMessages.costMicroUsd}), 0)`,
-    })
-    .from(agentMessages)
-    .where(gte(agentMessages.createdAt, monthStart))
-    .groupBy(ledgerDay(agentMessages.createdAt));
+  // The agent's ledger and the insights generator's, on the same day axis:
+  // both spend through the same key, so the month's AI figure is their sum.
+  const [conversations, generations] = await Promise.all([
+    db
+      .select({
+        day: ledgerDay(agentMessages.createdAt),
+        amount: sql<string>`coalesce(sum(${agentMessages.costMicroUsd}), 0)`,
+      })
+      .from(agentMessages)
+      .where(gte(agentMessages.createdAt, monthStart))
+      .groupBy(ledgerDay(agentMessages.createdAt)),
+    db
+      .select({
+        day: ledgerDay(insightRuns.startedAt),
+        amount: sql<string>`coalesce(sum(${insightRuns.costMicroUsd}), 0)`,
+      })
+      .from(insightRuns)
+      .where(gte(insightRuns.startedAt, monthStart))
+      .groupBy(ledgerDay(insightRuns.startedAt)),
+  ]);
+  const byDay = new Map<string, number>();
+  for (const row of [...conversations, ...generations]) {
+    byDay.set(row.day, (byDay.get(row.day) ?? 0) + Number(row.amount));
+  }
+  const rows = [...byDay].map(([day, amount]) => ({ day, amount: String(amount) }));
   // Millionths of a dollar into cents of reais, at the rate the ledger uses.
   const daily = seriesOf(rows, month).map((point) => ({
     day: point.day,
