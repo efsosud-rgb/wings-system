@@ -23,11 +23,19 @@ import type { AdsPlatformClient, BreakdownKind } from './platform/types.js';
  * upsert, and the newest pull wins — the platforms revise figures for days.
  */
 
-export const BREAKDOWN_KINDS: readonly BreakdownKind[] = ['placement', 'age_gender', 'region', 'hour'];
+export const BREAKDOWN_KINDS: readonly BreakdownKind[] = [
+  'placement',
+  'age_gender',
+  'region',
+  'hour',
+];
 
 export interface BreakdownIngestResult {
   kind: BreakdownKind;
   rows: number;
+  /** True when the platform refused the split for lack of permission; nothing was written. */
+  unavailable?: boolean;
+  error?: string;
 }
 
 /** Pulls one split of daily campaign figures and upserts it. */
@@ -92,6 +100,8 @@ export interface AccountDayResult {
   activeDailyBudgetCents: number;
   platformRemainingCents: number | null;
   prepaidBalanceCents: number | null;
+  /** What the platform would not answer (permission), for the job's log. */
+  warnings: string[];
 }
 
 /**
@@ -160,5 +170,6 @@ export async function recordAccountDay(
     activeDailyBudgetCents,
     platformRemainingCents,
     prepaidBalanceCents: figures.prepaidBalanceCents,
+    warnings: platform.warnings ?? [],
   };
 }

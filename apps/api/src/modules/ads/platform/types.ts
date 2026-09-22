@@ -49,8 +49,16 @@ export interface PlatformAccount {
    * how much is left. Null on a postpaid account and where the API is silent.
    */
   prepaidBalanceCents?: Cents | null;
-  /** `prepaid`, `credit_card`, `unknown`; a code, never the platform's display string. */
+  /**
+   * `prepaid`, `credit_card`, `unknown`; a code, never the platform's display
+   * string. `unavailable` when the token may not read the payment fields.
+   */
   fundingKind?: string | null;
+  /**
+   * What the platform would not answer, in words for the job's log: a field
+   * the token lacks permission for, for instance. Never a failure by itself.
+   */
+  warnings?: string[];
 }
 
 /** What a creative is made of, as far as the platform tells. */

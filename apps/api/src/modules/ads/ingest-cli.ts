@@ -115,7 +115,17 @@ async function main() {
           return;
         }
 
-        const { reconciled, ads, metrics, alerts } = result;
+        const { reconciled, ads, metrics, alerts, breakdowns, accountDay } = result;
+        // What the token could not read, said once per cycle: the account is
+        // fine, the field is "não disponível" until somebody grants it.
+        for (const warning of accountDay.warnings) console.warn(`  AVISO: ${warning}`);
+        for (const split of Object.values(breakdowns)) {
+          if (split.unavailable) {
+            console.warn(
+              `  AVISO: quebra ${split.kind} não disponível para o token: ${split.error ?? ''}`,
+            );
+          }
+        }
         console.warn(
           `  reconcile: ${reconciled.campaignsSynced} campanhas, ${reconciled.adSetsSynced} conjuntos, ` +
             `gasto ${formatBrl(reconciled.spentCents)}, comprometido ${formatBrl(reconciled.committedCents)}` +

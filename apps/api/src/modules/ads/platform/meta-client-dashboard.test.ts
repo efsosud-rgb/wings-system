@@ -195,7 +195,63 @@ describe('the account and its funding', () => {
     const account = await meta.getAccount();
     expect(account.prepaidBalanceCents).toBe(123_456);
     expect(account.fundingKind).toBe('prepaid');
-    expect(calls[0]?.query.fields).toContain('funding_source_details');
+    // Two reads: the money fields first, the payment fields on their own.
+    expect(calls[0]?.query.fields).toBe('id,currency,spend_cap,amount_spent,account_status');
+    expect(calls[1]?.query.fields).toBe('funding_source_details');
+    expect(account.warnings).toEqual([]);
+  });
+
+  it('records the payment fields as unavailable when the token may not read them', async () => {
+    // What staging's read token answered: "(#10) Permission Denied" on
+    // funding_source_details, while the money fields were fine.
+    const fetchImpl = ((input: unknown) => {
+      const url = new URL(String(input));
+      const denied = url.searchParams.get('fields') === 'funding_source_details';
+      return Promise.resolve(
+        new Response(
+          JSON.stringify(
+            denied
+              ? { error: { code: 10, message: '(#10) Permission Denied' } }
+              : {
+                  id: 'act_123456789',
+                  currency: 'BRL',
+                  spend_cap: '250000',
+                  amount_spent: '63690',
+                },
+          ),
+          { status: denied ? 403 : 200, headers: { 'content-type': 'application/json' } },
+        ),
+      );
+    }) as typeof fetch;
+    const meta = new MetaReadOnlyClient({
+      accessToken: 'test-token-not-real',
+      adAccountId: 'act_123456789',
+      fetchImpl,
+    });
+
+    const account = await meta.getAccount();
+    expect(account.spendCapCents).toBe(250_000);
+    expect(account.amountSpentCents).toBe(63_690);
+    expect(account.prepaidBalanceCents).toBeNull();
+    expect(account.fundingKind).toBe('unavailable');
+    expect(account.warnings).toHaveLength(1);
+    expect(account.warnings?.[0]).toContain('#10');
+  });
+
+  it('still fails when the money fields themselves are denied', async () => {
+    const fetchImpl = (() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ error: { code: 10, message: '(#10) Permission Denied' } }), {
+          status: 403,
+          headers: { 'content-type': 'application/json' },
+        }),
+      )) as typeof fetch;
+    const meta = new MetaReadOnlyClient({
+      accessToken: 'test-token-not-real',
+      adAccountId: 'act_123456789',
+      fetchImpl,
+    });
+    await expect(meta.getAccount()).rejects.toMatchObject({ code: 10 });
   });
 
   it('reports a card account with no balance', async () => {
@@ -222,7 +278,9 @@ describe('the account and its funding', () => {
 describe('what a creative is made of', () => {
   it('tells video, carousel and image apart, and admits when it cannot', () => {
     expect(creativeFormatOf({ object_type: 'VIDEO' })).toBe('video');
-    expect(creativeFormatOf({ object_story_spec: { video_data: { video_id: '1' } } })).toBe('video');
+    expect(creativeFormatOf({ object_story_spec: { video_data: { video_id: '1' } } })).toBe(
+      'video',
+    );
     expect(
       creativeFormatOf({
         object_type: 'SHARE',

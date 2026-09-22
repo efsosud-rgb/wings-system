@@ -143,6 +143,24 @@ staging diz o que a API respondeu; o job para na etapa com nome
 Os testes cobrem tudo isso contra `FakeMetaClient`, `fakeGoogleApi` e um
 banco descartável; nenhum chama plataforma alguma.
 
+### O que o token não pode ler vira "não disponível" (22/09/2026)
+
+No staging a tarefa `ads-ingest` passou a falhar em segundos com
+`meta:act_… FALHOU em reconcile: (#10) Permission Denied`: o token de leitura
+não tem permissão para `funding_source_details`, e o pedido único que juntava
+os campos de saldo aos de dinheiro derrubava a conta inteira, antes de
+reconciliar (`tetos-reais.md` já registrava a recusa). Agora `getAccount` faz
+duas leituras: primeiro `spend_cap`, `amount_spent` e moeda, de que a
+reconciliação e o guardião dependem; depois os campos de pagamento. Permissão
+negada nesses vira `funding_kind = 'unavailable'` em `ad_account_daily`, com
+saldo vazio e um `AVISO` no log do job; a conta e o ciclo seguem. O mesmo para
+qualquer quebra que responder `(#10)`: fica marcada `unavailable` no resultado
+do ciclo, com aviso, e as outras quebras, o dia da conta e os alertas rodam.
+Um erro que não é de permissão (timeout, token inválido) continua derrubando a
+conta na etapa com nome. Testes: `meta-client-dashboard.test.ts` (fetch
+roteirizado respondendo 403 `#10`) e `ingest-cycle.test.ts` (fake negando o
+saldo e cada quebra).
+
 ## Fica para a parte 2
 
 Insights e sugestões da IA (verba ideal, perfil de cliente, região, formatos,
