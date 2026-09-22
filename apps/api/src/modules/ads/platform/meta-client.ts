@@ -66,6 +66,16 @@ export class MetaApiError extends Error {
   get isRateLimit(): boolean {
     return this.code === 17 || this.code === 613 || this.code === 80004;
   }
+
+  /**
+   * True when the token simply lacks a permission for what was asked (#10,
+   * and the 200–299 family). A field the token may not read is "não
+   * disponível", not a broken account: the ingest job records that and goes on.
+   */
+  get isPermissionDenied(): boolean {
+    const code = Number(this.code);
+    return code === 10 || (code >= 200 && code <= 299);
+  }
 }
 
 export interface MetaClientOptions {
@@ -499,6 +509,16 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
     return src ? src.replace(/&amp;/g, '&') : null;
   }
 
+  /**
+   * Two reads on purpose. The basic fields (cap, amount spent, currency) are
+   * what reconciliation and the budget guard live on; the balance and payment
+   * fields are a nicety for the dashboard. On staging the read token answered
+   * "(#10) Permission Denied" to `funding_source_details`, and asking for
+   * everything in one call took the whole account down with it. Now the
+   * money fields come first, and a denial on the balance fields is recorded
+   * as "não disponível" (`fundingKind: 'unavailable'`) with a warning, never
+   * as a failed account.
+   */
   async getAccount(): Promise<PlatformAccount> {
     const body = await this.get<{
       id: string;
@@ -506,11 +526,8 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       spend_cap?: string;
       amount_spent?: string;
       account_status?: number;
-      funding_source_details?: { type?: number; display_string?: string };
     }>(this.accountId, {
-      // funding_source_details is readable with ads_read (stage6-spike.md); the
-      // prepaid balance inside it is text, parsed as such. NOT verified live.
-      fields: 'id,currency,spend_cap,amount_spent,account_status,funding_source_details',
+      fields: 'id,currency,spend_cap,amount_spent,account_status',
     });
 
     const spendCapCents = body.spend_cap === undefined ? null : spendCapFromString(body.spend_cap);
@@ -518,17 +535,35 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       body.amount_spent === undefined
         ? 0
         : centsFromMinorUnitString(body.amount_spent, 'amount_spent');
-    const funding = body.funding_source_details;
-
-    return {
+    const account: PlatformAccount = {
       id: body.id,
       currency: body.currency,
       spendCapCents,
       amountSpentCents,
       capReached: spendCapCents !== null && amountSpentCents >= spendCapCents,
-      prepaidBalanceCents: prepaidBalanceFromDisplay(funding?.display_string),
-      fundingKind: funding ? fundingKindOf(funding.type) : null,
+      prepaidBalanceCents: null,
+      fundingKind: null,
+      warnings: [],
     };
+
+    try {
+      const funding = await this.get<{
+        funding_source_details?: { type?: number; display_string?: string };
+      }>(this.accountId, {
+        // The prepaid balance inside it is text, parsed as such. NOT verified live.
+        fields: 'funding_source_details',
+      });
+      const details = funding.funding_source_details;
+      account.prepaidBalanceCents = prepaidBalanceFromDisplay(details?.display_string);
+      account.fundingKind = details ? fundingKindOf(details.type) : null;
+    } catch (error) {
+      if (!(error instanceof MetaApiError) || !error.isPermissionDenied) throw error;
+      account.fundingKind = 'unavailable';
+      account.warnings?.push(
+        `funding_source_details não disponível para o token de leitura (#${error.code}): saldo e forma de pagamento ficam vazios`,
+      );
+    }
+    return account;
   }
 
   /**

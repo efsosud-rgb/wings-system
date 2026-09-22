@@ -8,6 +8,7 @@ import {
   type BreakdownIngestResult,
 } from './breakdowns.js';
 import { ingestMetrics, syncAds, type IngestResult, type SyncAdsResult } from './metrics.js';
+import { isPermissionDenied } from './platform/errors.js';
 import type { AdsPlatformClient, BreakdownKind, MetricsLevel } from './platform/types.js';
 import { reconcileAccount, type ReconcileResult } from './reconcile.js';
 
@@ -109,11 +110,19 @@ async function ingestAccount(
     }
 
     // The splits the dashboard's audience view reads. Campaign level only,
-    // one platform aggregation per split (see breakdowns.ts).
+    // one platform aggregation per split (see breakdowns.ts). A split the
+    // token may not read is recorded as unavailable and the cycle goes on:
+    // the money steps above already succeeded, and a denied nicety must not
+    // undo them.
     const breakdowns = {} as Record<BreakdownKind, BreakdownIngestResult>;
     for (const kind of BREAKDOWN_KINDS) {
       step = `breakdown:${kind}`;
-      breakdowns[kind] = await ingestBreakdown(db, client, account.id, kind, options.since, now);
+      try {
+        breakdowns[kind] = await ingestBreakdown(db, client, account.id, kind, options.since, now);
+      } catch (error) {
+        if (!isPermissionDenied(error)) throw error;
+        breakdowns[kind] = { kind, rows: 0, unavailable: true, error: describeError(error) };
+      }
     }
 
     step = 'account_day';
