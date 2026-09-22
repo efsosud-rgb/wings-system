@@ -90,14 +90,36 @@ function defaultsOf(model: MediaModel | undefined): Record<string, ParamValue> {
   return values;
 }
 
+/** A picture on the canvas the person wants a variation or an edit of. */
+export interface AiTarget {
+  mediaAssetId: string;
+  use: MediaImageUse;
+  name: string;
+  /** Changes on every click, so asking twice for the same picture is applied twice. */
+  nonce: number;
+}
+
 export function GenerationForm({
   canGenerate,
   connected,
   onStarted,
+  compact = false,
+  defaultClientId,
+  aiTarget = null,
 }: {
   canGenerate: boolean;
   connected: boolean;
   onStarted: (generationId: string) => void;
+  /**
+   * The workspace's rail panel: model, prompt, reference and the two buttons
+   * in view; format, quantity, duration and the model's parameters behind
+   * "Mais opções". The price-before-click flow is the same.
+   */
+  compact?: boolean;
+  /** Where the piece is filed (the workspace's "Para quem"); null means Wings. */
+  defaultClientId?: string | null;
+  /** Prefills the reference with a picture from the canvas, as a variation or an edit. */
+  aiTarget?: AiTarget | null;
 }) {
   const [kind, setKind] = useState<'image' | 'video'>('image');
   const models = useMediaModels(kind, connected);
@@ -125,14 +147,17 @@ export function GenerationForm({
   /** Set by the offer of a costlier model: estimated as soon as the model is on screen. */
   const [pendingEstimate, setPendingEstimate] = useState(false);
 
-  const [clientId, setClientId] = useState<string>(WINGS_CLIENT_ID);
+  const [clientId, setClientId] = useState<string>(defaultClientId ?? WINGS_CLIENT_ID);
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
   const [aspect, setAspect] = useState<GenerationAspect>('1:1');
   const [quantity, setQuantity] = useState(1);
   const [duration, setDuration] = useState<number | null>(null);
   const [params, setParams] = useState<Record<string, ParamValue>>({});
-  const [reference, setReference] = useState<MediaAsset | null>(null);
+  const [reference, setReference] = useState<Pick<
+    MediaAsset,
+    'id' | 'kind' | 'downloadPath'
+  > | null>(null);
   const [referenceUse, setReferenceUse] = useState<MediaImageUse>('reference');
   const [picking, setPicking] = useState(false);
   const upload = useUploadMedia();
@@ -185,6 +210,25 @@ export function GenerationForm({
     model.imageUse !== referenceUse;
   const able = mismatch ? modelsForImageUse(list, referenceUse).slice(0, 4) : [];
   const readOnly = !canGenerate || !connected;
+
+  // The workspace's "Para quem" follows into the form; the person may still change it here.
+  useEffect(() => {
+    if (defaultClientId !== undefined) setClientId(defaultClientId ?? WINGS_CLIENT_ID);
+  }, [defaultClientId]);
+
+  // A picture chosen on the canvas becomes the reference; the cost is still asked for after.
+  useEffect(() => {
+    if (!aiTarget) return;
+    setKind('image');
+    setReference({
+      id: aiTarget.mediaAssetId,
+      kind: 'image',
+      downloadPath: `/media/assets/${aiTarget.mediaAssetId}/file`,
+    });
+    setReferenceUse(aiTarget.use);
+    changed();
+    // Keyed on the click, not on the fields it sets.
+  }, [aiTarget?.nonce]);
 
   function askForEstimate() {
     const parsed = mediaEstimateRequestSchema.safeParse({
@@ -240,7 +284,12 @@ export function GenerationForm({
         if (quote === null) askForEstimate();
       }}
     >
-      <h2 id="media-form-title">Gerar mídia</h2>
+      {!compact && <h2 id="media-form-title">Gerar mídia</h2>}
+      {compact && (
+        <span id="media-form-title" className="sr-only">
+          Gerar mídia
+        </span>
+      )}
       {!canGenerate && (
         <p className="field-hint">
           Você pode ver a biblioteca, mas não tem permissão para gerar mídia.
@@ -248,19 +297,23 @@ export function GenerationForm({
       )}
 
       <fieldset className="media-form-fields" disabled={readOnly}>
-        <label className="field">
-          <span className="field-label">Para quem</span>
-          <ClientSelect
-            value={clientId}
-            onChange={(next) => {
-              setClientId(next);
-              changed();
-            }}
-          />
-        </label>
-        <span className="field-hint">
-          Serve para arquivar a mídia aqui. O nome do cliente não é enviado a provedor nenhum.
-        </span>
+        {!compact && (
+          <>
+            <label className="field">
+              <span className="field-label">Para quem</span>
+              <ClientSelect
+                value={clientId}
+                onChange={(next) => {
+                  setClientId(next);
+                  changed();
+                }}
+              />
+            </label>
+            <span className="field-hint">
+              Serve para arquivar a mídia aqui. O nome do cliente não é enviado a provedor nenhum.
+            </span>
+          </>
+        )}
 
         <div className="media-form-row">
           <label className="field">
@@ -307,9 +360,7 @@ export function GenerationForm({
         {models.data?.problems && Object.keys(models.data.problems).length > 0 && (
           <span className="field-hint" role="status">
             {Object.entries(models.data.problems)
-              .map(
-                ([id, reason]) => `${MEDIA_PROVIDER_LABEL[id as MediaProviderId]}: ${reason}`,
-              )
+              .map(([id, reason]) => `${MEDIA_PROVIDER_LABEL[id as MediaProviderId]}: ${reason}`)
               .join(' ')}
           </span>
         )}
@@ -350,103 +401,108 @@ export function GenerationForm({
           </label>
         </details>
 
-        <div className="media-form-row">
-          <fieldset className="media-aspects">
-            <legend className="field-label">Formato</legend>
-            {GENERATION_ASPECTS.map((item) => {
-              const refused = model?.aspectRatios != null && !model.aspectRatios.includes(item);
-              return (
-                <label key={item} className="media-aspect">
-                  <input
-                    type="radio"
-                    name="media-aspect"
-                    value={item}
-                    checked={aspect === item}
-                    disabled={refused}
-                    onChange={() => {
-                      setAspect(item);
-                      changed();
-                    }}
-                  />
-                  <span>{item}</span>
-                </label>
-              );
-            })}
-          </fieldset>
+        <details className="agent-details media-more" open={!compact}>
+          <summary className={compact ? '' : 'sr-only'}>
+            {compact ? 'Mais opções' : 'Formato, quantidade e parâmetros'}
+          </summary>
+          <div className="media-form-row">
+            <fieldset className="media-aspects">
+              <legend className="field-label">Formato</legend>
+              {GENERATION_ASPECTS.map((item) => {
+                const refused = model?.aspectRatios != null && !model.aspectRatios.includes(item);
+                return (
+                  <label key={item} className="media-aspect">
+                    <input
+                      type="radio"
+                      name="media-aspect"
+                      value={item}
+                      checked={aspect === item}
+                      disabled={refused}
+                      onChange={() => {
+                        setAspect(item);
+                        changed();
+                      }}
+                    />
+                    <span>{item}</span>
+                  </label>
+                );
+              })}
+            </fieldset>
 
-          <label className="field">
-            <span className="field-label">Quantidade</span>
-            <select
-              className="control"
-              value={quantity}
-              onChange={(event) => {
-                setQuantity(Number(event.target.value));
-                changed();
-              }}
-            >
-              {Array.from({ length: maxQuantity }, (_, index) => index + 1).map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {kind === 'video' && model && model.supportedDurations.length > 0 && (
             <label className="field">
-              <span className="field-label">Duração</span>
+              <span className="field-label">Quantidade</span>
               <select
                 className="control"
-                value={duration ?? ''}
+                value={quantity}
                 onChange={(event) => {
-                  setDuration(Number(event.target.value));
+                  setQuantity(Number(event.target.value));
                   changed();
                 }}
               >
-                {model.supportedDurations.map((seconds) => (
-                  <option key={seconds} value={seconds}>
-                    {seconds} s
+                {Array.from({ length: maxQuantity }, (_, index) => index + 1).map((value) => (
+                  <option key={value} value={value}>
+                    {value}
                   </option>
                 ))}
               </select>
             </label>
-          )}
 
-          {(model?.priceParams ?? []).map((param) =>
-            param.type === 'boolean' ? (
-              <label key={param.key} className="media-check">
-                <input
-                  type="checkbox"
-                  checked={params[param.key] === true}
-                  onChange={(event) => {
-                    setParams((current) => ({ ...current, [param.key]: event.target.checked }));
-                    changed();
-                  }}
-                />
-                <span>{param.label}</span>
-              </label>
-            ) : (
-              <label key={param.key} className="field">
-                <span className="field-label">{param.label}</span>
+            {kind === 'video' && model && model.supportedDurations.length > 0 && (
+              <label className="field">
+                <span className="field-label">Duração</span>
                 <select
                   className="control"
-                  value={String(params[param.key] ?? '')}
+                  value={duration ?? ''}
                   onChange={(event) => {
-                    setParams((current) => ({ ...current, [param.key]: event.target.value }));
+                    setDuration(Number(event.target.value));
                     changed();
                   }}
                 >
-                  {param.key === 'size' && <option value="">Pelo formato escolhido</option>}
-                  {param.options.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
+                  {model.supportedDurations.map((seconds) => (
+                    <option key={seconds} value={seconds}>
+                      {seconds} s
                     </option>
                   ))}
                 </select>
               </label>
-            ),
-          )}
-        </div>
+            )}
+
+            {(model?.priceParams ?? []).map((param) =>
+              param.type === 'boolean' ? (
+                <label key={param.key} className="media-check">
+                  <input
+                    type="checkbox"
+                    checked={params[param.key] === true}
+                    onChange={(event) => {
+                      setParams((current) => ({ ...current, [param.key]: event.target.checked }));
+                      changed();
+                    }}
+                  />
+                  <span>{param.label}</span>
+                </label>
+              ) : (
+                <label key={param.key} className="field">
+                  <span className="field-label">{param.label}</span>
+                  <select
+                    className="control"
+                    value={String(params[param.key] ?? '')}
+                    onChange={(event) => {
+                      setParams((current) => ({ ...current, [param.key]: event.target.value }));
+                      changed();
+                    }}
+                  >
+                    {param.key === 'size' && <option value="">Pelo formato escolhido</option>}
+                    {param.options.map((option) => (
+                      <option key={option} value={option}>
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ),
+            )}
+          </div>
+        </details>
 
         {takesReference && (
           <div className="media-reference" role="group" aria-label={referenceLabel}>

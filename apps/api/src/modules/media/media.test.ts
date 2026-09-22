@@ -104,6 +104,7 @@ describe('the media library', () => {
       height: 1350,
       aspect: '4:5',
       downloadPath: `/media/assets/${asset.id}/file`,
+      driveFileId: expect.any(String),
     });
 
     const [row] = await db.select().from(mediaAssets).where(eq(mediaAssets.id, asset.id));

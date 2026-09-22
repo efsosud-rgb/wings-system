@@ -16,21 +16,19 @@ import { ProviderStrip } from '../components/media-studio/ProviderStrip.js';
 import { StudioLayout, StudioToolGroup } from '../components/StudioLayout.js';
 import { Alert } from '../components/ui.js';
 
-// The editor core is a megabyte the agent tab never needs.
-const StudioEditor = lazy(() =>
-  import('../components/studio/StudioEditor.js').then((m) => ({ default: m.StudioEditor })),
+// The editor core is a megabyte only the workspace needs.
+const StudioWorkspace = lazy(() =>
+  import('../components/studio/workspace/StudioWorkspace.js').then((m) => ({
+    default: m.StudioWorkspace,
+  })),
 );
 
-const TABS = [
-  { key: 'agent', label: 'Agente e biblioteca' },
-  { key: 'studio', label: 'Studio' },
-] as const;
-type TabKey = (typeof TABS)[number]['key'];
-
 /**
- * Marketing → Edição de Fotos e Vídeos. The operator's form and the library in
- * the large pane, the editing agent on the side. Every generation costs credits,
- * so every generation is a click on a button that names its cost.
+ * Marketing → Edição de Fotos e Vídeos. With `marketing.media.edit` it is the
+ * studio: one workspace with the library, the generator, the canvas, the
+ * properties and the agent. Without it, the generator and the library as
+ * before, with the agent at the side. Every generation costs something, even
+ * when it is R$ 0, and only happens on a click that names the cost.
  */
 
 /** What the campaign builder last had on screen, so the agent can propose media that fits it. */
@@ -48,13 +46,49 @@ function campaignDraft(): Record<string, unknown> | undefined {
 
 const count = (value: number) => value.toLocaleString('pt-BR');
 
+function Notices({
+  state,
+  connected,
+  anyAvailable,
+  canConnect,
+}: {
+  state: ReturnType<typeof useMediaStudio>['data'];
+  connected: boolean;
+  anyAvailable: boolean;
+  canConnect: boolean;
+}) {
+  return (
+    <>
+      {state && !anyAvailable && (
+        <Alert kind="info">
+          Nenhum provedor de mídia está disponível. O Kairogen não está conectado e os outros
+          provedores não têm chave neste ambiente ou esgotaram a cota. Peça a um Admin Master para
+          ver em Administração → Integrações.{' '}
+          {canConnect && <Link to="/administracao/integracoes">Abrir Integrações</Link>}
+        </Alert>
+      )}
+      {state && anyAvailable && !connected && (
+        <Alert kind="info">
+          O Kairogen não está conectado; os outros provedores continuam disponíveis.{' '}
+          {canConnect && <Link to="/administracao/integracoes">Abrir Integrações</Link>}
+        </Alert>
+      )}
+      {state && !state.storageAvailable && (
+        <Alert kind="error">
+          O armazenamento de mídia não está configurado neste ambiente. Nada pode ser salvo na
+          biblioteca.
+        </Alert>
+      )}
+    </>
+  );
+}
+
 export function MediaStudioPage() {
   const { data: user } = useSession();
   const canGenerate = hasPermission(user, 'marketing.media.generate');
   const canUseInBuilder = hasPermission(user, 'ads.request');
   const canConnect = hasPermission(user, 'integrations.manage');
   const canEdit = hasPermission(user, 'marketing.media.edit');
-  const [tab, setTab] = useState<TabKey>('agent');
   const studio = useMediaStudio();
   const recent = useGenerations();
   const [following, setFollowing] = useState<string[]>([]);
@@ -77,135 +111,112 @@ export function MediaStudioPage() {
   const anyAvailable = state?.anyAvailable ?? connected;
   const providers = useMediaProviders(Boolean(state));
 
+  if (canEdit) {
+    const usageLine = usage
+      ? `Kairogen ${usage.balance != null ? `${count(usage.balance)} créditos` : 'sem saldo informado'} · mês ${formatBrl(usage.usedThisMonthBrlCents ?? 0)} de ${formatBrl(usage.monthlyLimitBrlCents ?? 0)}`
+      : null;
+    return (
+      <>
+        <header className="page-header page-header-slim">
+          <h1>Edição de Fotos e Vídeos</h1>
+        </header>
+        <Notices
+          state={state}
+          connected={connected}
+          anyAvailable={anyAvailable}
+          canConnect={canConnect}
+        />
+        <Suspense fallback={<p className="muted">Abrindo o estúdio…</p>}>
+          <StudioWorkspace
+            canGenerate={canGenerate}
+            anyAvailable={anyAvailable}
+            usageLine={usageLine}
+            getBuilderDraft={campaignDraft}
+          />
+        </Suspense>
+      </>
+    );
+  }
+
   return (
     <StudioLayout
       title="Agente de Edição — Wings"
       subtitle="Imagens e vídeos para os anúncios. Cada geração tem um custo, mesmo quando é R$ 0, e só acontece no seu clique, com o custo antes."
       notice={
         <>
-          {state && !anyAvailable && (
-            <Alert kind="info">
-              Nenhum provedor de mídia está disponível. O Kairogen não está conectado e os outros
-              provedores não têm chave neste ambiente ou esgotaram a cota. Peça a um Admin Master
-              para ver em Administração → Integrações.{' '}
-              {canConnect && <Link to="/administracao/integracoes">Abrir Integrações</Link>}
-            </Alert>
-          )}
-          {state && anyAvailable && !connected && (
-            <Alert kind="info">
-              O Kairogen não está conectado; os outros provedores continuam disponíveis.{' '}
-              {canConnect && <Link to="/administracao/integracoes">Abrir Integrações</Link>}
-            </Alert>
-          )}
-          {state && !state.storageAvailable && (
-            <Alert kind="error">
-              O armazenamento de mídia não está configurado neste ambiente. Nada pode ser salvo na
-              biblioteca.
-            </Alert>
-          )}
+          <Notices
+            state={state}
+            connected={connected}
+            anyAvailable={anyAvailable}
+            canConnect={canConnect}
+          />
+          <Alert kind="info">
+            O estúdio de edição (tela, camadas e linha do tempo) é de quem edita mídia no Marketing.
+            Peça a permissão "Editar vídeos no Studio" a um Admin Master; gerar e organizar a
+            biblioteca continua aqui.
+          </Alert>
         </>
       }
       workspace={
-        <>
-          <div className="studio-tabs" role="tablist" aria-label="Edição">
-            {TABS.map((item) => (
-              <button
-                key={item.key}
-                type="button"
-                role="tab"
-                id={`studio-tab-${item.key}`}
-                aria-selected={tab === item.key}
-                aria-controls={`studio-panel-${item.key}`}
-                className={`studio-tab ${tab === item.key ? 'studio-tab-active' : ''}`}
-                onClick={() => setTab(item.key)}
-              >
-                {item.label}
-              </button>
-            ))}
-          </div>
-          <div role="tabpanel" id={`studio-panel-${tab}`} aria-labelledby={`studio-tab-${tab}`}>
-            {tab === 'studio' ? (
-              canEdit ? (
-                <Suspense fallback={<p className="muted">Abrindo o editor…</p>}>
-                  <StudioEditor />
-                </Suspense>
-              ) : (
-                <Alert kind="info">
-                  O Studio é de quem edita vídeo no Marketing. Peça a permissão "Editar vídeos no
-                  Studio" a um Admin Master.
-                </Alert>
-              )
-            ) : (
-              <div className="media-studio">
-                <dl className="media-usage" aria-label="Créditos">
-                  <div>
-                    <dt>Saldo no Kairogen</dt>
-                    <dd className="mono">
-                      {usage?.balance != null
-                        ? `${count(usage.balance)} créditos`
-                        : 'não informado'}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Plano</dt>
-                    <dd>{usage ? KAIROGEN_PLAN_LABEL[usage.plan] : '—'}</dd>
-                  </div>
-                  <div>
-                    <dt>Você hoje</dt>
-                    <dd className="mono">
-                      {usage
-                        ? `${count(usage.usedTodayByYou)} de ${count(usage.dailyLimitPerUser)} créditos`
-                        : '—'}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Wings no mês</dt>
-                    <dd className="mono">
-                      {usage
-                        ? `${count(usage.usedThisMonth)} de ${count(usage.monthlyLimit)} créditos`
-                        : '—'}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt>Todos os provedores no mês</dt>
-                    <dd className="mono">
-                      {usage
-                        ? `${formatBrl(usage.usedThisMonthBrlCents ?? 0)} de ${formatBrl(usage.monthlyLimitBrlCents ?? 0)}`
-                        : '—'}
-                    </dd>
-                  </div>
-                </dl>
-                {providers.data && <ProviderStrip providers={providers.data.providers} />}
+        <div className="media-studio">
+          <dl className="media-usage" aria-label="Créditos">
+            <div>
+              <dt>Saldo no Kairogen</dt>
+              <dd className="mono">
+                {usage?.balance != null ? `${count(usage.balance)} créditos` : 'não informado'}
+              </dd>
+            </div>
+            <div>
+              <dt>Plano</dt>
+              <dd>{usage ? KAIROGEN_PLAN_LABEL[usage.plan] : '—'}</dd>
+            </div>
+            <div>
+              <dt>Você hoje</dt>
+              <dd className="mono">
+                {usage
+                  ? `${count(usage.usedTodayByYou)} de ${count(usage.dailyLimitPerUser)} créditos`
+                  : '—'}
+              </dd>
+            </div>
+            <div>
+              <dt>Wings no mês</dt>
+              <dd className="mono">
+                {usage
+                  ? `${count(usage.usedThisMonth)} de ${count(usage.monthlyLimit)} créditos`
+                  : '—'}
+              </dd>
+            </div>
+            <div>
+              <dt>Todos os provedores no mês</dt>
+              <dd className="mono">
+                {usage
+                  ? `${formatBrl(usage.usedThisMonthBrlCents ?? 0)} de ${formatBrl(usage.monthlyLimitBrlCents ?? 0)}`
+                  : '—'}
+              </dd>
+            </div>
+          </dl>
+          {providers.data && <ProviderStrip providers={providers.data.providers} />}
 
-                <GenerationForm
-                  canGenerate={canGenerate}
-                  connected={anyAvailable}
-                  onStarted={follow}
+          <GenerationForm canGenerate={canGenerate} connected={anyAvailable} onStarted={follow} />
+
+          {following.length > 0 && (
+            <section className="media-progress-list" aria-label="Gerações em andamento">
+              {following.map((id) => (
+                <GenerationProgress
+                  key={id}
+                  id={id}
+                  onDismiss={() => setFollowing((current) => current.filter((item) => item !== id))}
                 />
+              ))}
+            </section>
+          )}
 
-                {following.length > 0 && (
-                  <section className="media-progress-list" aria-label="Gerações em andamento">
-                    {following.map((id) => (
-                      <GenerationProgress
-                        key={id}
-                        id={id}
-                        onDismiss={() =>
-                          setFollowing((current) => current.filter((item) => item !== id))
-                        }
-                      />
-                    ))}
-                  </section>
-                )}
-
-                <MediaLibrary
-                  canGenerate={canGenerate && anyAvailable}
-                  canUseInBuilder={canUseInBuilder}
-                  onStarted={follow}
-                />
-              </div>
-            )}
-          </div>
-        </>
+          <MediaLibrary
+            canGenerate={canGenerate && anyAvailable}
+            canUseInBuilder={canUseInBuilder}
+            onStarted={follow}
+          />
+        </div>
       }
       conversation={
         <AgentChat

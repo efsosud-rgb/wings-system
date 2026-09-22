@@ -109,7 +109,14 @@ export const KAIROGEN_READ_TOOLS: readonly KairogenToolName[] = [
 // ---------------------------------------------------------------------------
 
 /** Where a library file came from: an upload, or the provider that generated it. */
-export const MEDIA_ORIGINS = ['kairogen', 'upload', 'cloudflare', 'gemini', 'higgsfield', 'mpt'] as const;
+export const MEDIA_ORIGINS = [
+  'kairogen',
+  'upload',
+  'cloudflare',
+  'gemini',
+  'higgsfield',
+  'mpt',
+] as const;
 export type MediaOrigin = (typeof MEDIA_ORIGINS)[number];
 export const MEDIA_ORIGIN_LABEL: Record<MediaOrigin, string> = {
   upload: 'Enviadas',
@@ -165,6 +172,11 @@ export interface MediaAsset {
   createdAt: string;
   /** Authenticated route that streams the file. Never a public address. */
   downloadPath: string;
+  /**
+   * The Drive file this asset is, so the Studio can put it on the canvas by
+   * id (`wings-drive://`). Null for assets from before the Drive existed.
+   */
+  driveFileId: string | null;
 }
 
 export const MEDIA_MAX_TAGS = 12;

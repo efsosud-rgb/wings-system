@@ -112,7 +112,9 @@ export async function storeMedia(
   await storageFrom(where).put(storageKey, input.bytes, inspected.mimeType);
   const stamp = now.toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-');
   const made =
-    input.origin === 'upload' ? 'envio' : (input.model ?? input.origin).replace(/[^A-Za-z0-9._-]/g, '-');
+    input.origin === 'upload'
+      ? 'envio'
+      : (input.model ?? input.origin).replace(/[^A-Za-z0-9._-]/g, '-');
   const name = `${made}-${stamp}-${randomBytes(2).toString('hex')}.${EXTENSION[inspected.mimeType]}`;
 
   return db.transaction(async (tx) => {
@@ -258,5 +260,6 @@ export function toMediaAsset(
     ownerName: names.owner,
     createdAt: row.createdAt.toISOString(),
     downloadPath: `/media/assets/${row.id}/file`,
+    driveFileId: row.driveFileId ?? null,
   };
 }
