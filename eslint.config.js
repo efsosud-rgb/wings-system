@@ -3,7 +3,9 @@ import prettier from 'eslint-config-prettier';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  // .claude/ holds third-party agent skills, vendored as published: not ours to lint.
+  // .claude/, .agents/ and .github/agents|hooks|skills hold third-party agent
+  // skills, vendored as published (some installers mirror the same skill into
+  // several agent harnesses): not ours to lint.
   // packages/studio/src and tests are a vendored fork (see its NOTICE.md), kept diffable against upstream.
   {
     ignores: [
@@ -11,6 +13,11 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/coverage/**',
       '.claude/**',
+      '.agents/**',
+      '.codex/**',
+      '.github/agents/**',
+      '.github/hooks/**',
+      '.github/skills/**',
       'packages/studio/src/**',
       'packages/studio/tests/**',
     ],

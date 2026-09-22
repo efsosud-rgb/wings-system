@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "skills": {
+    "animate": {
+      "source": "emilkowalski/skills",
+      "sourceType": "github",
+      "skillPath": "skills/animate/SKILL.md",
+      "computedHash": "7598d33e7f60dd5c24531eaaa897621cc3bdb48e8050324211627973bc59c4ce"
+    },
+    "brandkit": {
+      "source": "leonxlnx/taste-skill",
+      "sourceType": "github",
+      "skillPath": "skills/brandkit/SKILL.md",
+      "computedHash": "b63012f3c3d21197e0185d3e9cc7ec40c589fb10e0b5a32a561739de31aa3f20"
+    },
+    "canvas-design": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "skillPath": "skills/canvas-design/SKILL.md",
+      "computedHash": "3fa7ea60170023ad8268bf9fd734ea75dd404279a2ef8ddf5abaa1102ad8e5f4"
+    },
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "skillPath": "skills/frontend-design/SKILL.md",
+      "computedHash": "89496d5dd00f4810205f351759594fc2742bf8eea85a2f2b2d1de59f4bd91576"
+    }
+  }
+}
