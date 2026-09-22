@@ -43,6 +43,18 @@ export interface WordPressTerm {
   count: number;
 }
 
+/** A published post as the mirror keeps it: title, dates, link, category ids. */
+export interface WordPressPostSummary {
+  id: number;
+  title: string;
+  slug: string;
+  link: string;
+  /** ISO instants, from the site's GMT fields. */
+  publishedAt: string;
+  modifiedAt: string | null;
+  categoryIds: number[];
+}
+
 export interface DraftPostInput {
   title: string;
   excerpt: string;
@@ -146,6 +158,68 @@ export class WordPressClient {
 
   listTags(): Promise<WordPressTerm[]> {
     return this.listTerms('tags');
+  }
+
+  /**
+   * Every published post, newest first, following pagination. Read-only, and
+   * only the fields the dashboard lists: never the content. NOT verified live:
+   * that `date_gmt`/`modified_gmt` come with `_fields` on this site.
+   */
+  async listPublishedPosts(
+    options: { modifiedAfter?: string } = {},
+  ): Promise<WordPressPostSummary[]> {
+    const posts: WordPressPostSummary[] = [];
+    for (let page = 1; page <= 20; page += 1) {
+      const query = new URLSearchParams({
+        status: 'publish',
+        per_page: '100',
+        page: String(page),
+        orderby: 'date',
+        order: 'desc',
+        _fields: 'id,date_gmt,modified_gmt,title,link,slug,categories',
+      });
+      if (options.modifiedAfter) query.set('modified_after', options.modifiedAfter);
+      const response = await this.fetchImpl(
+        `${this.root}/wp-json/wp/v2/posts?${query.toString()}`,
+        {
+          headers: { Authorization: this.authorization },
+          signal: AbortSignal.timeout(this.timeoutMs),
+        },
+      );
+      if (!response.ok) throw new Error(`WordPress answered ${response.status} listing posts`);
+      const body = (await response.json()) as {
+        id?: unknown;
+        date_gmt?: unknown;
+        modified_gmt?: unknown;
+        title?: { rendered?: unknown };
+        link?: unknown;
+        slug?: unknown;
+        categories?: unknown;
+      }[];
+      for (const post of body) {
+        if (typeof post.id !== 'number' || typeof post.date_gmt !== 'string') continue;
+        const published = new Date(`${post.date_gmt}Z`);
+        if (Number.isNaN(published.getTime())) continue;
+        const modified =
+          typeof post.modified_gmt === 'string' ? new Date(`${post.modified_gmt}Z`) : null;
+        posts.push({
+          id: post.id,
+          title: decodeEntities(
+            typeof post.title?.rendered === 'string' ? post.title.rendered : '',
+          ),
+          slug: typeof post.slug === 'string' ? post.slug : '',
+          link: typeof post.link === 'string' ? post.link : '',
+          publishedAt: published.toISOString(),
+          modifiedAt: modified && !Number.isNaN(modified.getTime()) ? modified.toISOString() : null,
+          categoryIds: Array.isArray(post.categories)
+            ? post.categories.filter((id): id is number => typeof id === 'number')
+            : [],
+        });
+      }
+      const pages = Number(response.headers.get('x-wp-totalpages') ?? '1');
+      if (page >= pages || body.length === 0) break;
+    }
+    return posts;
   }
 
   /** POSTs and sorts the answer into created / refused / don't know. */

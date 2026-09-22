@@ -6,14 +6,18 @@ import {
   type DashboardCreatives,
   type DashboardOverview,
   type DashboardPlatforms,
+  type DashboardSettings,
 } from '@wings/shared';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../../app.js';
 import type { Database } from '../../../db/client.js';
+import { eq } from 'drizzle-orm';
 import {
+  adCampaigns,
   agentConversations,
   agentMessages,
+  ingestRuns,
   integrationConnections,
   mediaCreditLedger,
 } from '../../../db/schema/index.js';
@@ -37,7 +41,14 @@ import { reconcileAccount } from '../reconcile.js';
 
 const NOW = new Date('2026-09-16T12:00:00.000Z'); // 09:00 in São Paulo, day 16 of 30
 const PERIOD = '2026-09-01';
-const META_DAYS = ['2026-09-04', '2026-09-05', '2026-09-12', '2026-09-13', '2026-09-14', '2026-09-15'];
+const META_DAYS = [
+  '2026-09-04',
+  '2026-09-05',
+  '2026-09-12',
+  '2026-09-13',
+  '2026-09-14',
+  '2026-09-15',
+];
 
 let harness: TestDatabase;
 let db: Database;
@@ -57,6 +68,7 @@ beforeAll(async () => {
       APP_BASE_URL: 'https://staging.wingssystem.online',
       OPENROUTER_API_KEY: 'not-a-real-key',
       KAIROGEN_MONTHLY_CREDITS: '1000',
+      ADS_INGEST_CRON: '0 * * * *',
     }),
     db,
     now: () => NOW,
@@ -102,7 +114,7 @@ beforeAll(async () => {
   for (const level of ['campaign', 'ad_set', 'ad'] as const) {
     await ingestMetrics(db, meta, metaAccountId, level, PERIOD, NOW);
   }
-  for (const kind of ['placement', 'age_gender', 'region', 'hour'] as const) {
+  for (const kind of ['placement', 'age_gender', 'region', 'hour', 'device'] as const) {
     await ingestBreakdown(db, meta, metaAccountId, kind, PERIOD, NOW);
   }
   await recordAccountDay(db, meta, metaAccountId, NOW);
@@ -110,12 +122,43 @@ beforeAll(async () => {
 
   // --- Google: one Search campaign, prepaid ---------------------------------
   const api = fakeGoogleApi({
-    campaigns: [{ id: '100', name: 'Pesquisa | Franquia', status: 'ENABLED', amountMicros: '5000000' }],
+    campaigns: [
+      { id: '100', name: 'Pesquisa | Franquia', status: 'ENABLED', amountMicros: '5000000' },
+    ],
     accountBudget: { limitMicros: '13100000000', servedMicros: '12600000000' },
     metrics: [
-      { campaignId: '100', date: '2026-09-14', costMicros: '2500000', impressions: 500, clicks: 10, conversions: 1 },
-      { campaignId: '100', date: '2026-09-15', costMicros: '2500000', impressions: 500, clicks: 10, conversions: 1 },
-      { campaignId: '100', date: '2026-09-15', costMicros: '2500000', impressions: 500, clicks: 10, adNetworkType: 'YOUTUBE' },
+      {
+        campaignId: '100',
+        date: '2026-09-14',
+        costMicros: '2500000',
+        impressions: 500,
+        clicks: 10,
+        conversions: 1,
+      },
+      {
+        campaignId: '100',
+        date: '2026-09-15',
+        costMicros: '2500000',
+        impressions: 500,
+        clicks: 10,
+        conversions: 1,
+      },
+      {
+        campaignId: '100',
+        date: '2026-09-15',
+        costMicros: '2500000',
+        impressions: 500,
+        clicks: 10,
+        adNetworkType: 'YOUTUBE',
+      },
+      {
+        campaignId: '100',
+        date: '2026-09-15',
+        costMicros: '2000000',
+        impressions: 400,
+        clicks: 8,
+        device: 'MOBILE',
+      },
     ],
   });
   const google = new GoogleAdsPlatformClient(api.reader, () => NOW);
@@ -133,7 +176,29 @@ beforeAll(async () => {
   await reconcileAccount(db, google, googleAccountId, NOW);
   await ingestMetrics(db, google, googleAccountId, 'campaign', PERIOD, NOW);
   await ingestBreakdown(db, google, googleAccountId, 'placement', PERIOD, NOW);
+  await ingestBreakdown(db, google, googleAccountId, 'device', PERIOD, NOW);
   await recordAccountDay(db, google, googleAccountId, NOW);
+
+  // The ingest job's own record: the last run failed on the Google region split.
+  await db.insert(ingestRuns).values({
+    trigger: 'scheduled',
+    status: 'failed',
+    since: PERIOD,
+    startedAt: new Date('2026-09-16T11:00:00.000Z'),
+    finishedAt: new Date('2026-09-16T11:02:00.000Z'),
+    accounts: [
+      { platform: 'meta', externalId: metaExternalId, status: 'ok' },
+      {
+        platform: 'google',
+        externalId: api.reader.customerId,
+        status: 'failed',
+        step: 'breakdown:region',
+        error: 'GoogleAdsError: bad field',
+      },
+    ],
+    site: { status: 'ok', posts: 3 },
+    error: '1 conta(s) falharam',
+  });
 
   // --- Kairogen, the agent and the other media providers --------------------
   const employee = await createEmployee(db, { role: 'marketing', sector: 'marketing' });
@@ -289,6 +354,52 @@ describe('the overview', () => {
     expect(by.media).toMatchObject({ unit: 'brl', spent: 250, ceiling: 30_000, available: 29_750 });
   });
 
+  it('says when the ingest job last ran, what failed and when the next one is due', async () => {
+    const overview = await read<DashboardOverview>('/ads/dashboard/overview', 'overview');
+    expect(overview.ingestion.lastRunAt).toBe('2026-09-16T11:00:00.000Z');
+    expect(overview.ingestion.lastRunStatus).toBe('failed');
+    expect(overview.ingestion.lastRunFailures).toEqual([
+      { platform: 'google', step: 'breakdown:region' },
+    ]);
+    expect(overview.ingestion.schedule).toBe('0 * * * *');
+    // NOW is 12:00 UTC; the hourly slot at 12:00 is within the grace period, and 11:00 ran.
+    expect(overview.ingestion.nextRunAt).toBe('2026-09-16T13:00:00.000Z');
+    expect(overview.ingestion.overdue).toBe(false);
+  });
+
+  it('answers the four health questions per account, with numbers and what to do', async () => {
+    const overview = await read<DashboardOverview>('/ads/dashboard/overview', 'overview');
+    const keys = overview.health.map((item) => `${item.platform}:${item.key}`);
+    expect(keys).toEqual([
+      'meta:conversions_measuring',
+      'meta:creative_fatigue',
+      'meta:spend_pacing',
+      'meta:active_without_results',
+      'google:conversions_measuring',
+      'google:creative_fatigue',
+      'google:spend_pacing',
+      'google:active_without_results',
+    ]);
+    const metaConversions = overview.health.find(
+      (item) => item.platform === 'meta' && item.key === 'conversions_measuring',
+    );
+    // The fake pixel fires, so the account measures even without a lead in three days.
+    expect(metaConversions?.state).toBe('ok');
+    expect(metaConversions?.detail).toContain('Pixel Wings: ativo');
+    expect(metaConversions?.detail).toContain('0 lead(s)');
+    const googleConversions = overview.health.find(
+      (item) => item.platform === 'google' && item.key === 'conversions_measuring',
+    );
+    expect(googleConversions?.state).toBe('ok');
+    expect(googleConversions?.detail).toContain('2 lead(s)');
+    // Nothing is judged without a state, a detail and an action rule.
+    for (const item of overview.health) {
+      expect(['ok', 'attention', 'problem', 'unknown']).toContain(item.state);
+      expect(item.detail.length).toBeGreaterThan(10);
+      if (item.state === 'ok') expect(item.action).toBe('');
+    }
+  });
+
   it('carries the counts a person acts on', async () => {
     const overview = await read<DashboardOverview>('/ads/dashboard/overview', 'overview');
     expect(overview.counts.disapprovedAds).toBe(1);
@@ -301,7 +412,10 @@ describe('the overview', () => {
 
 describe('per platform', () => {
   it('compares the window with the one before it, per platform', async () => {
-    const platforms = await read<DashboardPlatforms>('/ads/dashboard/platforms?days=7', 'platforms');
+    const platforms = await read<DashboardPlatforms>(
+      '/ads/dashboard/platforms?days=7',
+      'platforms',
+    );
     expect(platforms.since).toBe('2026-09-10');
     expect(platforms.until).toBe('2026-09-16');
     expect(platforms.previousSince).toBe('2026-09-03');
@@ -347,6 +461,80 @@ describe('campaigns down to the ad', () => {
   });
 });
 
+describe('verdicts and targets', () => {
+  it('says "sem meta" for a leads campaign until a person confirms a target, then judges by it', async () => {
+    await db
+      .update(adCampaigns)
+      .set({ objective: 'OUTCOME_LEADS' })
+      .where(eq(adCampaigns.externalId, 'c-leads'));
+    const before = await read<DashboardCampaigns>('/ads/dashboard/campaigns?days=30', 'campaigns');
+    const untargeted = before.campaigns.find((campaign) => campaign.name === 'LEAD | FORMS');
+    expect(untargeted?.verdict.verdict).toBe('no_target');
+    expect(untargeted?.verdict.primary).toBe('cpl');
+    expect(untargeted?.verdict.reasons.find((reason) => reason.signal === 'cpl')?.text).toContain(
+      'Sem meta',
+    );
+    // Google's Search campaign spent R$ 7,50: too little to judge.
+    expect(
+      before.campaigns.find((campaign) => campaign.name === 'Pesquisa | Franquia')?.verdict.verdict,
+    ).toBe('insufficient');
+
+    const settings = await read<DashboardSettings>('/ads/dashboard/settings', 'settings');
+    expect(settings.targets.map((target) => target.objectiveKind)).toEqual(['leads', 'traffic']);
+    expect(settings.targets[0]?.targetCents).toBeNull();
+    // Two leads in the history are not enough for the system to propose a figure.
+    expect(settings.targets[0]?.proposedCents).toBeNull();
+
+    const cookies = await sessionFor('marketing');
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/ads/dashboard/settings/cpl-target',
+      cookies,
+      payload: { objectiveKind: 'leads', targetCents: 5000 },
+    });
+    expect(put.statusCode).toBe(200);
+    const confirmed = (put.json() as { settings: DashboardSettings }).settings.targets[0];
+    expect(confirmed).toMatchObject({ objectiveKind: 'leads', targetCents: 5000 });
+    expect(confirmed?.confirmedAt).not.toBeNull();
+    expect(confirmed?.confirmedByName).toBeTruthy();
+
+    const after = await read<DashboardCampaigns>('/ads/dashboard/campaigns?days=30', 'campaigns');
+    const judged = after.campaigns.find((campaign) => campaign.name === 'LEAD | FORMS');
+    // R$ 600,00 spent and no lead against a R$ 50,00 target: negative, and the reason says so.
+    expect(judged?.verdict.verdict).toBe('negative');
+    const cpl = judged?.verdict.reasons.find((reason) => reason.signal === 'cpl');
+    expect(cpl?.state).toBe('bad');
+    // formatBrl joins "R$" and the figure with a non-breaking space.
+    expect(cpl?.text).toMatch(/Nenhum lead com R\$\s600,00/);
+    expect(cpl?.text).toMatch(/meta de R\$\s50,00/);
+    expect(judged?.verdict.reasons.map((reason) => reason.signal)).toEqual([
+      'cpl',
+      'ctr',
+      'trend',
+      'frequency',
+      'pacing',
+    ]);
+  });
+
+  it('refuses a target from somebody who cannot request changes, and a bad one', async () => {
+    const cookies = await sessionFor('vendedor_expansao');
+    const forbidden = await app.inject({
+      method: 'PUT',
+      url: '/ads/dashboard/settings/cpl-target',
+      cookies,
+      payload: { objectiveKind: 'leads', targetCents: 5000 },
+    });
+    expect(forbidden.statusCode).toBe(403);
+    const invalid = await app.inject({
+      method: 'PUT',
+      url: '/ads/dashboard/settings/cpl-target',
+      cookies: await sessionFor('marketing'),
+      payload: { objectiveKind: 'awareness', targetCents: 5000 },
+    });
+    expect(invalid.statusCode).toBe(400);
+  });
+});
+
 describe('creatives', () => {
   it('ranks formats and lists the ads that delivered, with a fatigue signal each', async () => {
     // Fourteen days: the 4th and 5th fall in the first half, the 12th to 15th in the second.
@@ -376,5 +564,21 @@ describe('audience and region', () => {
     expect(reels?.totals.spendCents).toBe(14_000);
     expect(result.rows.some((row) => row.kind === 'hour' && row.key === '20')).toBe(true);
     expect(result.rows.some((row) => row.kind === 'region' && row.key === 'São Paulo')).toBe(true);
+  });
+
+  it('splits by device on both platforms and maps weekday × hour from the hourly rows', async () => {
+    const result = await read<DashboardAudience>('/ads/dashboard/audience?days=7', 'audience');
+    const devices = result.rows.filter((row) => row.kind === 'device');
+    expect(devices.map((row) => row.key).sort()).toEqual(['desktop', 'mobile', 'mobile_app']);
+    // Four Meta days in the window at 70% of R$ 100,00.
+    expect(devices.find((row) => row.key === 'mobile_app')?.totals.spendCents).toBe(28_000);
+    expect(devices.find((row) => row.key === 'mobile')?.totals.spendCents).toBe(200);
+
+    // 2026-09-12 is a Saturday and the 14th a Monday; the fake delivers at 09, 14 and 20.
+    const saturday = result.heatmap.filter((cell) => cell.weekday === 6);
+    expect(saturday.map((cell) => cell.hour)).toEqual(['09', '14', '20']);
+    expect(saturday.find((cell) => cell.hour === '20')?.spendCents).toBe(4000);
+    expect(result.heatmap.every((cell) => cell.impressions > 0)).toBe(true);
+    expect(result.heatmap.some((cell) => cell.weekday === 1)).toBe(true);
   });
 });

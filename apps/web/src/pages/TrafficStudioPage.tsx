@@ -1,6 +1,7 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { hasPermission, useSession } from '../api/auth.js';
+import { takeBuilderHandoff } from '../lib/builder-handoff.js';
 import { AgentChat } from '../components/agent-chat/AgentChat.js';
 import { OwnedChannelsPanel } from '../components/campaign-builder/OwnedChannelsPanel.js';
 import {
@@ -34,6 +35,26 @@ export function TrafficStudioPage() {
   const [tab, setTab] = useState<TabKey>('paid');
   // Points at the builder while it is on screen, and at nothing otherwise.
   const builder = useRef<BuilderBridge | null>(null);
+
+  // A campaign suggestion sent from the dashboard ("Abrir no construtor")
+  // waits in session storage. It is read once and fills the form the way a
+  // proposal card does; the builder mounts a moment after this page, so the
+  // apply waits for its bridge, up to two seconds. Nothing is submitted.
+  useEffect(() => {
+    const handoff = takeBuilderHandoff();
+    if (!handoff) return;
+    let attempts = 0;
+    const timer = setInterval(() => {
+      attempts += 1;
+      if (builder.current) {
+        builder.current.applyProposal(handoff.proposal, handoff.pending);
+        clearInterval(timer);
+      } else if (attempts >= 20) {
+        clearInterval(timer);
+      }
+    }, 100);
+    return () => clearInterval(timer);
+  }, []);
 
   return (
     <StudioLayout

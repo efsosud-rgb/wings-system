@@ -9,7 +9,7 @@ import {
 } from '../../db/schema/index.js';
 import { conversionsFrom } from './metrics.js';
 import { assertClientServesAccount } from './reconcile.js';
-import type { AdsPlatformClient, BreakdownKind } from './platform/types.js';
+import type { AdsPlatformClient, BreakdownKind, ConversionSource } from './platform/types.js';
 
 /**
  * The wider ingestion the marketing dashboard needs, beside the per-entity
@@ -23,7 +23,13 @@ import type { AdsPlatformClient, BreakdownKind } from './platform/types.js';
  * upsert, and the newest pull wins — the platforms revise figures for days.
  */
 
-export const BREAKDOWN_KINDS: readonly BreakdownKind[] = ['placement', 'age_gender', 'region', 'hour'];
+export const BREAKDOWN_KINDS: readonly BreakdownKind[] = [
+  'placement',
+  'age_gender',
+  'region',
+  'hour',
+  'device',
+];
 
 export interface BreakdownIngestResult {
   kind: BreakdownKind;
@@ -112,6 +118,17 @@ export async function recordAccountDay(
   const platform = await client.getAccount();
   const day = new Intl.DateTimeFormat('en-CA', { timeZone: account.timezone }).format(now);
 
+  // Whether conversions are being measured, as the platform sees it. A read
+  // that fails leaves null and never stops the day from being recorded: the
+  // money figures above matter more than this one, and the health line says
+  // "sem dado" rather than guessing. NOT verified live on either platform.
+  let conversionSources: ConversionSource[] | null;
+  try {
+    conversionSources = await client.getConversionSources();
+  } catch {
+    conversionSources = null;
+  }
+
   // Budget in force: an active CBO campaign's own budget, or the budgets of an
   // ABO campaign's active ad sets. A paused campaign starves its ad sets, so
   // theirs count for nothing.
@@ -144,6 +161,7 @@ export async function recordAccountDay(
     prepaidBalanceCents: platform.prepaidBalanceCents ?? null,
     fundingKind: platform.fundingKind ?? null,
     activeDailyBudgetCents,
+    conversionSources,
     fetchedAt: now,
   };
 

@@ -1,23 +1,26 @@
 import {
   addTotals,
   BREAKDOWN_KIND_LABEL,
+  DEVICE_LABEL,
   EMPTY_TOTALS,
+  WEEKDAY_LABEL,
   ratiosOf,
   type BreakdownRow,
   type DashboardAudience,
   type MetricTotals,
 } from '@wings/shared';
 import { useMemo, type ReactNode } from 'react';
-import { downloadCsv, percent, reais, toCsv } from '../../lib/csv.js';
+import { downloadCsv, percent, reais, toCsv, type CsvCell } from '../../lib/csv.js';
 import { Button } from '../ui.js';
-import { BarList, DailyColumns } from './charts.js';
+import { BarList, DailyColumns, HeatGrid } from './charts.js';
 import { formatInt, formatMoney, formatPercentMilli } from './format.js';
 import { ageLabel, genderLabel, hourLabel, placementLabel } from './labels.js';
 
 /**
  * Público e região: each split as a ranked list of spend with the cost per
- * lead beside it, and the hours as columns. Age and gender are read one side
- * at a time, because Google reports them separately and Meta crossed.
+ * lead beside it, the hours as columns, and the week as a map of weekday by
+ * hour. Age and gender are read one side at a time, because Google reports
+ * them separately and Meta crossed.
  */
 
 interface Group {
@@ -77,6 +80,10 @@ function Panel({ title, groups, limit = 12 }: { title: string; groups: Group[]; 
 
 const HOURS = Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, '0'));
 
+export function deviceLabel(key: string): string {
+  return DEVICE_LABEL[key] ?? key.replace(/_/g, ' ');
+}
+
 export function AudienceTab({ data }: { data: DashboardAudience }) {
   const by = useMemo(() => {
     const of = (kind: BreakdownRow['kind']) => data.rows.filter((row) => row.kind === kind);
@@ -90,6 +97,7 @@ export function AudienceTab({ data }: { data: DashboardAudience }) {
       gender: groupBy(ageGender, (row) => (row.subKey === 'all' ? null : row.subKey), genderLabel),
       region: groupBy(of('region'), (row) => row.key, (key) => key || 'Não informada'),
       hour: groupBy(of('hour'), (row) => row.key, hourLabel),
+      device: groupBy(of('device'), (row) => row.key || 'unknown', deviceLabel),
     };
   }, [data.rows]);
 
@@ -99,13 +107,24 @@ export function AudienceTab({ data }: { data: DashboardAudience }) {
   }));
   const hourLeads = by.hour.reduce((total, group) => total + group.totals.conversions, 0);
 
+  const heatCells = data.heatmap.map((cell) => ({
+    weekday: cell.weekday,
+    hour: cell.hour,
+    amount: cell.spendCents,
+    detail: `${formatInt(cell.clicks)} cliques, ${formatInt(cell.conversions)} leads`,
+  }));
+  const bestCells = [...data.heatmap]
+    .filter((cell) => cell.conversions > 0)
+    .sort((a, b) => a.spendCents / a.conversions - b.spendCents / b.conversions)
+    .slice(0, 3);
+
   const exportCsv = () => {
     const header = ['Quebra', 'Chave', 'Subchave', 'Gasto', 'Impressões', 'Cliques', 'CTR %', 'Alcance', 'Leads', 'CPL'];
-    const rows = data.rows.map((row) => {
+    const rows: CsvCell[][] = data.rows.map((row) => {
       const ratios = ratiosOf(row.totals);
       return [
         BREAKDOWN_KIND_LABEL[row.kind],
-        row.key,
+        row.kind === 'device' ? deviceLabel(row.key) : row.key,
         row.subKey,
         reais(row.totals.spendCents),
         row.totals.impressions,
@@ -116,6 +135,10 @@ export function AudienceTab({ data }: { data: DashboardAudience }) {
         reais(ratios.costPerLeadCents),
       ];
     });
+    for (const cell of data.heatmap) {
+      const ratios = ratiosOf({ ...EMPTY_TOTALS, spendCents: cell.spendCents, impressions: cell.impressions, clicks: cell.clicks, conversions: cell.conversions });
+      rows.push(['Dia × hora', WEEKDAY_LABEL[cell.weekday] ?? String(cell.weekday), `${cell.hour}h`, reais(cell.spendCents), cell.impressions, cell.clicks, percent(ratios.ctrMilli), null, cell.conversions, reais(ratios.costPerLeadCents)]);
+    }
     downloadCsv(`publico-${data.since}-a-${data.until}.csv`, toCsv(header, rows));
   };
 
@@ -137,6 +160,7 @@ export function AudienceTab({ data }: { data: DashboardAudience }) {
         <Panel title="Região" groups={by.region} />
         <Panel title="Idade" groups={by.age} limit={8} />
         <Panel title="Gênero" groups={by.gender} limit={4} />
+        <Panel title="Dispositivo" groups={by.device} limit={6} />
         <section className="dash-section audience-panel audience-hours">
           <h2>Hora do dia</h2>
           {by.hour.length === 0 ? (
@@ -160,6 +184,29 @@ export function AudienceTab({ data }: { data: DashboardAudience }) {
                       .map((group) => `${hourLabel(group.key)} (${formatMoney(ratiosOf(group.totals).costPerLeadCents)})`)
                       .join(', ')}.`
                   : 'Nenhum lead atribuído a uma hora no período.'}
+              </p>
+            </>
+          )}
+        </section>
+        <section className="dash-section audience-panel audience-hours">
+          <h2>Dia × hora</h2>
+          {data.heatmap.length === 0 ? (
+            <p className="muted">Sem dados no período.</p>
+          ) : (
+            <>
+              <HeatGrid
+                cells={heatCells}
+                rowLabels={WEEKDAY_LABEL}
+                color="var(--viz-meta)"
+                format={formatMoney}
+                ariaLabel="Gasto por dia da semana e hora, no fuso do anunciante"
+              />
+              <p className="cell-sub">
+                {bestCells.length > 0
+                  ? `Melhores horários por CPL: ${bestCells
+                      .map((cell) => `${WEEKDAY_LABEL[cell.weekday]} ${cell.hour}h (${formatMoney(Math.round(cell.spendCents / cell.conversions))})`)
+                      .join(', ')}. Cor mais forte, mais gasto.`
+                  : 'Cor mais forte, mais gasto. Nenhum lead atribuído a um horário no período.'}
               </p>
             </>
           )}

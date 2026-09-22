@@ -83,6 +83,34 @@ export function formatDateTime(iso: string | null | undefined): string {
   });
 }
 
+/** "16/09/2026". */
+export function formatDateFull(iso: string | null | undefined): string {
+  if (!iso) return DASH;
+  return new Date(iso).toLocaleDateString('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+}
+
+/** "às 16:00" on the same São Paulo day as `now`, "23/09 07:00" otherwise. */
+export function formatWhen(iso: string, now = Date.now()): string {
+  const day = (value: number) =>
+    new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(value);
+  const time = new Date(iso).toLocaleTimeString('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return day(new Date(iso).getTime()) === day(now) ? `às ${time}` : formatDateTime(iso);
+}
+
+/** Millionths of a dollar → "US$ 0,04". */
+export function formatUsdMicro(micro: number): string {
+  return `US$ ${(micro / 1_000_000).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 /** "há 40 min", "há 3 h", "há 2 dias". */
 export function since(iso: string | null | undefined, now = Date.now()): string {
   if (!iso) return 'nunca';

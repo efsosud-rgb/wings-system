@@ -40,6 +40,7 @@ export function createMetaClient(
         adAccountId: adAccountId as string,
         confirmWrites: true,
         fetchImpl,
+        pixelId: env.META_PIXEL_ID,
       }),
       canWrite: true,
     };
@@ -52,6 +53,7 @@ export function createMetaClient(
         accessToken: env.META_WRITE_TOKEN as string,
         adAccountId: adAccountId as string,
         fetchImpl,
+        pixelId: env.META_PIXEL_ID,
       }),
       canWrite: false,
       reason: 'writes_disabled',
@@ -83,6 +85,12 @@ export function createGooglePlatformClient(
     canWrite: false,
     reason: 'writes_disabled',
   };
+}
+
+/** Whether the environment names credentials for a platform, regardless of account rows. */
+export function hasPlatformCredentials(env: Env, platform: 'meta' | 'google'): boolean {
+  if (platform === 'meta') return Boolean(env.META_WRITE_TOKEN);
+  return createGoogleClient(env) !== null;
 }
 
 /** The client for an account row, whichever platform it belongs to. */

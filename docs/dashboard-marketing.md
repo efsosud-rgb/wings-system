@@ -148,3 +148,104 @@ banco descartável; nenhum chama plataforma alguma.
 Insights e sugestões da IA (verba ideal, perfil de cliente, região, formatos,
 horários) com "Criar pedido", e Canais próprios. Toda sugestão vira pedido
 pelo portão de aprovação; nada muda sozinho.
+
+## Parte 2 — ingestão, saúde e vereditos
+
+Lado da API do que a parte 2 acrescentou fora da IA (a IA está em
+`docs/ads/insights.md`). Continua valendo a regra: nada aqui chama plataforma
+a partir de uma tela; tudo é lido das nossas tabelas, gravadas pelo job.
+
+### O que os prints do staging mostraram, e o que mudou
+
+- **Google "não configurado" com a conta conectada.** Em `ad_accounts` do
+  staging só há as duas contas da Meta; a conta do Google **nunca foi semeada**
+  na ingestão, e a faixa dizia "não configurado" porque olhava para linhas de
+  conta, não para credenciais. Agora `configured` segue as credenciais do
+  ambiente (`hasPlatformCredentials`, em `platform/factory.ts`) e a faixa
+  ganhou `setupNote`, que diz o que falta: "Credenciais configuradas, mas a
+  conta ainda não foi semeada na ingestão: `ingest-cli --seed --platform
+  google --account <GOOGLE_ADS_CUSTOMER_ID> --name "…" --cap <centavos>
+  --usable 70`" e, depois de semear, "Conta semeada; a primeira ingestão ainda
+  não gravou o dia da conta." Semear é uma decisão de quem administra o teto
+  (R$ 4.000 por conta, por padrão), então o sistema não semeia sozinho.
+- **"Atualizados há 2 dias".** A última ingestão registrada no staging foi em
+  19/09 às 15:00 (São Paulo); antes dela, 18/09 às 11:03, 11:33 e 20:00.
+  Horários irregulares e nada depois: **a tarefa agendada do Coolify não está
+  disparando**, e as rodadas vistas foram manuais. O Coolify não é lido por
+  esta API, então quem administra confere lá a tarefa e o cron dela.
+  Para a tela nunca mais ficar em dúvida: o job grava cada rodada em
+  `ingest_runs` (`ingest-runs.ts`: início, fim, `ok`/`failed`, cada conta com
+  o passo em que falhou, e o passo do blog), e a API lê `ADS_INGEST_CRON`, o
+  cron com que a tarefa foi agendada (5 campos, horário de São Paulo, só
+  informa; `lib/cron.ts` calcula a próxima e a anterior). O `overview` devolve
+  `ingestion`: última rodada e estado, falhas por conta e passo, próxima
+  rodada e `overdue` quando o horário agendado passou há mais de 15 minutos
+  sem rodada registrada. Sem `ingest_runs` ainda (primeiro deploy), vale o
+  `max(fetched_at)` de `ad_metrics_daily`. Um `ingest-cli --manual` registra
+  a rodada como manual.
+
+### Saúde da conta (`dashboard/health.ts`)
+
+Quatro perguntas por conta paga, cada uma com estado (`ok`, `attention`,
+`problem`, `unknown`), o que os números mostram e o que fazer:
+
+| Item                       | De onde vem                                                                                                   |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Conversões medindo         | `ad_account_daily.conversion_sources` (pixel da Meta, ações de conversão do Google) + leads dos últimos 3 dias |
+| Criativos desgastados      | `fatigueOf` em 14 dias + alertas `creative_fatigue` abertos                                                    |
+| Ritmo de gasto             | `pacingFacts`: desvio contra a linha do mês (< 20% ok, < 40% atenção, acima problema)                          |
+| Ativas sem resultado (7 d) | campanhas ACTIVE de leads com gasto e zero leads nos últimos 7 dias                                            |
+
+`conversion_sources` é um passo novo de `recordAccountDay`, **não fatal**: a
+leitura que falha grava `null` e a linha do dia sai do mesmo jeito. Meta lê
+`GET /{META_PIXEL_ID}?fields=id,name,last_fired_time,is_unavailable` (ativo se
+disparou em 7 dias); Google lê `conversion_action` (ativo se `ENABLED`; o
+relatório não diz quando disparou).
+
+### Vereditos e metas
+
+`campaigns()` devolve `verdict` em cada campanha, calculado por
+`dashboard/verdicts.ts` com a regra de `packages/shared/src/ads/verdicts.ts`:
+CPL contra a meta, CTR contra a mediana da conta em 90 dias, tendência de 7
+dias contra os 7 anteriores, frequência e ritmo contra 7 × o orçamento diário.
+Campanha de leads sem meta confirmada é "Sem meta". As metas ficam em
+`marketing_cpl_targets` (`GET /ads/dashboard/settings`, `PUT
+/ads/dashboard/settings/cpl-target` com `ads.request`, auditoria
+`ads.cpl_target_set`); o histórico de 90 dias propõe um valor com a base
+escrita, e só a confirmação de uma pessoa o grava.
+
+### Dispositivo e dia × hora
+
+`ad_breakdown_kind` ganhou `device` (Meta: `device_platform`; Google:
+`segments.device`). O mapa dia da semana × hora (`audience().heatmap`) não
+precisa de ingestão nova: é o `extract(dow from day)` das linhas por hora.
+
+### Canais próprios: o blog espelhado
+
+O job passou a espelhar os posts publicados do WordPress em `site_blog_posts`
+(`site/blog-sync.ts`, só `GET /wp/v2/posts` e `/categories`), passo não fatal
+da mesma rodada. `GET /marketing/site/blog-posts?days=` lê o espelho e nunca o
+site. (`GET /marketing/site/posts` continua sendo a lista de rascunhos que o
+studio enviou.)
+
+### Leitura no staging
+
+As tabelas novas não herdam o grant do usuário somente-leitura:
+
+```sql
+grant select on ingest_runs, marketing_insight_runs, marketing_insights,
+  marketing_campaign_suggestions, marketing_cpl_targets, site_blog_posts to wings_ro;
+```
+
+### Não verificado contra os serviços reais
+
+- Quebra por dispositivo nas duas plataformas (`device_platform`,
+  `segments.device`): nomes exatos que voltam.
+- Leitura do pixel (`last_fired_time` com este token) e de
+  `conversion_action` no Google.
+- Listagem de posts do WordPress com `_fields` e `date_gmt`/`modified_gmt`.
+
+Os testes cobrem tudo contra `FakeMetaClient`, `fakeGoogleApi`, `fetch`
+roteirizado para o WordPress e banco descartável
+(`dashboard/routes.test.ts`, `dashboard/setup.test.ts`, `breakdowns.test.ts`,
+`site/blog-sync.test.ts`, `lib/cron.test.ts`).
