@@ -1,0 +1,44 @@
+{
+  "name": "@wings/studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Wings Studio editor core: a fork of Shotstack Studio SDK 2.19.6 (PolyForm Shield 1.0.0). See NOTICE.md.",
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "main": "./dist/wings-studio.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/wings-studio.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@shotstack/schemas": "1.18.0",
+    "@shotstack/shotstack-canvas": "2.11.0",
+    "howler": "^2.2.4",
+    "mediabunny": "^1.11.2",
+    "opentype.js": "^1.3.4",
+    "pixi-filters": "^6.0.5",
+    "pixi.js": "^8.15.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/howler": "^2.2.12",
+    "@types/node": "^24.13.4",
+    "@types/opentype.js": "^1.3.8",
+    "jsdom": "^28.1.0",
+    "vite": "^8.3.0",
+    "vite-plugin-dts": "^4.5.4",
+    "vitest": "^5.0.1"
+  }
+}

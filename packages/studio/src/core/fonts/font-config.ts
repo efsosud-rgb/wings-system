@@ -1,0 +1,126 @@
+/**
+ * Shared font configuration for text and rich-text players
+ */
+
+import { parseFontFamily as parseCanvasFontFamily } from "@shotstack/shotstack-canvas";
+
+import { GOOGLE_FONTS_BY_FILENAME, GOOGLE_FONTS_BY_NAME } from "./google-fonts";
+
+// Wings: the built-in fonts used to come from templates.shotstack.io. They are
+// all Google Fonts except Clear Sans and MovLette, which now fall back to
+// Roboto, so no font is ever fetched from a Shotstack server.
+const googleUrl = (name: string): string => GOOGLE_FONTS_BY_NAME.get(name)?.url ?? GOOGLE_FONTS_BY_NAME.get("Roboto")?.url ?? "";
+
+/** Font family name to its file URL (variable fonts where available). */
+export const FONT_PATHS: Record<string, string> = {
+	Arapey: googleUrl("Arapey"),
+	"Clear Sans": googleUrl("Roboto"),
+	"Clear Sans Bold": googleUrl("Roboto"),
+	"Didact Gothic": googleUrl("Didact Gothic"),
+	Montserrat: googleUrl("Montserrat"),
+	MovLette: googleUrl("Roboto"),
+	"Open Sans": googleUrl("Open Sans"),
+	"Permanent Marker": googleUrl("Permanent Marker"),
+	Roboto: googleUrl("Roboto"),
+	"Sue Ellen Francisco": googleUrl("Sue Ellen Francisco"),
+	"Work Sans": googleUrl("Work Sans")
+};
+
+/** Alternative names (camelCase, etc.) mapped to canonical names */
+export const FONT_ALIASES: Record<string, string> = {
+	ClearSans: "Clear Sans",
+	DidactGothic: "Didact Gothic",
+	OpenSans: "Open Sans",
+	PermanentMarker: "Permanent Marker",
+	SueEllenFrancisco: "Sue Ellen Francisco",
+	WorkSans: "Work Sans"
+};
+
+/** Font weight modifier names mapped to their CSS numeric weight (e.g. "ExtraBold" → 800). */
+export const WEIGHT_MODIFIERS: Record<string, number> = {
+	Thin: 100,
+	ExtraLight: 200,
+	Light: 300,
+	Regular: 400,
+	Medium: 500,
+	SemiBold: 600,
+	Bold: 700,
+	ExtraBold: 800,
+	Black: 900
+};
+
+/**
+ * Parse a font family name into its base family and CSS weight.
+ * e.g. "Montserrat ExtraBold" → { baseFontFamily: "Montserrat", fontWeight: 800 }.
+ * Surrounding whitespace is trimmed, so "Montserrat ExtraBold " parses to the same result.
+ */
+export function parseFontFamily(fontFamily: string): { baseFontFamily: string; fontWeight: number } {
+	const { family, weight } = parseCanvasFontFamily(fontFamily);
+	return { baseFontFamily: family, fontWeight: Number(weight) };
+}
+
+/**
+ * Resolve a font family name to its file path.
+ * Priority: Google filename hash → weight-specific built-in → exact match →
+ * base font (variable) → Google variable → Google by display name.
+ */
+export function resolveFontPath(fontFamily: string, weight?: number): string | undefined {
+	// Try Google Fonts by filename hash (from FontPicker selection)
+	const googleFontByFilename = GOOGLE_FONTS_BY_FILENAME.get(fontFamily);
+	if (googleFontByFilename) {
+		return googleFontByFilename.url;
+	}
+
+	// Parse family and resolve aliases once (shared by all resolution steps)
+	const { baseFontFamily } = parseFontFamily(fontFamily);
+	const resolved = FONT_ALIASES[baseFontFamily] ?? baseFontFamily;
+
+	// Try weight-specific built-in (e.g., "Clear Sans Bold" for weight 700)
+	if (weight !== undefined && weight !== 400) {
+		const modifier = Object.entries(WEIGHT_MODIFIERS).find(([, w]) => w === weight)?.[0];
+		if (modifier) {
+			const weightedName = `${resolved} ${modifier}`;
+			if (FONT_PATHS[weightedName]) return FONT_PATHS[weightedName];
+		}
+	}
+
+	// Try built-in fonts by exact input (e.g., "Clear Sans Bold" as literal key)
+	if (FONT_PATHS[fontFamily]) return FONT_PATHS[fontFamily];
+
+	// Try base font after alias resolution — covers variable fonts (Roboto, Montserrat, etc.)
+	if (FONT_PATHS[resolved]) return FONT_PATHS[resolved];
+
+	// Try Google Fonts — prefer variable when weight is specified
+	if (weight !== undefined) {
+		const googleFont = GOOGLE_FONTS_BY_NAME.get(resolved);
+		if (googleFont?.isVariable) return googleFont.url;
+	}
+
+	// Fall back to Google Fonts by display name
+	const googleFontByName = GOOGLE_FONTS_BY_NAME.get(fontFamily);
+	if (googleFontByName) return googleFontByName.url;
+
+	return undefined;
+}
+
+/**
+ * Check if a font family is a Google Font
+ */
+export function isGoogleFont(fontFamily: string): boolean {
+	return GOOGLE_FONTS_BY_FILENAME.has(fontFamily) || GOOGLE_FONTS_BY_NAME.has(fontFamily);
+}
+
+export function resolveGoogleFontUrl(fontFamily: string): string | undefined {
+	return (GOOGLE_FONTS_BY_FILENAME.get(fontFamily) ?? GOOGLE_FONTS_BY_NAME.get(fontFamily))?.url;
+}
+
+/**
+ * Get the display name for a font (resolves Google Font filename hashes to readable names)
+ */
+export function getFontDisplayName(fontFamily: string): string {
+	const googleFont = GOOGLE_FONTS_BY_FILENAME.get(fontFamily);
+	if (googleFont) {
+		return googleFont.displayName;
+	}
+	return fontFamily;
+}

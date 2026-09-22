@@ -1,0 +1,1670 @@
+import { TIME_EPSILON } from "@core/animations/keyframe-builder";
+import {
+	decodeOpacityPoints,
+	encodeOpacityPoints,
+	evaluateOpacity,
+	findOpacityPoint,
+	removeOpacityPoint,
+	snapOpacityTime,
+	type OpacityPoint,
+	upsertOpacityPoint
+} from "@core/animations/opacity-keyframes";
+import type { Edit } from "@core/edit-session";
+import { EditEvent } from "@core/events/edit-events";
+import { hasKeyframedVisualProperty } from "@core/shared/clip-utils";
+import { validateAssetUrl } from "@core/shared/utils";
+import { ShotstackEdit } from "@core/shotstack-edit";
+import type { ResolvedClip } from "@schemas";
+import { injectShotstackStyles } from "@styles/inject";
+
+import { BaseToolbar } from "./base-toolbar";
+import { EffectPanel } from "./composites/EffectPanel";
+import { TransitionPanel } from "./composites/TransitionPanel";
+import { DragStateManager } from "./drag-state-manager";
+import { MergeFieldLabelManager, type MergeFieldLabelHost } from "./merge-field-label-manager";
+import { SliderControl } from "./primitives/SliderControl";
+
+type FitValue = "crop" | "cover" | "contain" | "none";
+
+interface FitOption {
+	value: FitValue;
+	label: string;
+	description: string;
+}
+
+const FIT_OPTIONS: FitOption[] = [
+	{ value: "crop", label: "Crop", description: "Fill frame, clip overflow" },
+	{ value: "cover", label: "Cover", description: "Fill frame, keep ratio" },
+	{ value: "contain", label: "Contain", description: "Fit inside frame" },
+	{ value: "none", label: "None", description: "Original size" }
+];
+
+const ICONS = {
+	fit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/></svg>`,
+	opacity: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 0 20" fill="currentColor" opacity="0.3"/></svg>`,
+	scale: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>`,
+	volume: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`,
+	volumeMute: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`,
+	transition: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v18"/><path d="M5 12H2l3-3 3 3H5"/><path d="M19 12h3l-3 3-3-3h3"/></svg>`,
+	chevron: `<svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`,
+	check: `<svg class="checkmark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`,
+	moreVertical: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>`,
+	speed: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="4 5 13 12 4 19 4 5"/><polygon points="13 5 22 12 13 19 13 5"/></svg>`,
+	effect: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M1 12h4M19 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>`,
+	fadeIn: `<svg viewBox="0 0 32 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 14 L14 4 L30 4"/></svg>`,
+	fadeOut: `<svg viewBox="0 0 32 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4 L18 4 L30 14"/></svg>`,
+	fadeInOut: `<svg viewBox="0 0 32 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 14 L10 4 L22 4 L30 14"/></svg>`,
+	fadeNone: `<svg viewBox="0 0 32 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 10 L30 10"/></svg>`,
+	keyframePrevious: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m10 4-4 4 4 4"/></svg>`,
+	keyframe: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="m8 2.5 5.5 5.5L8 13.5 2.5 8 8 2.5Z"/></svg>`,
+	keyframeNext: `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 4 4 4-4 4"/></svg>`
+};
+
+type MediaAssetType = "video" | "image" | "audio" | "text-to-image" | "image-to-video" | "text-to-speech";
+
+/** Asset types that have visual controls (fit, opacity, scale, transition, effect) */
+const VISUAL_ASSET_TYPES: ReadonlySet<MediaAssetType> = new Set(["video", "image", "text-to-image", "image-to-video"]);
+
+/** Asset types that have volume controls */
+const VOLUME_ASSET_TYPES: ReadonlySet<MediaAssetType> = new Set(["video", "audio", "text-to-speech"]);
+
+/** Asset types that have audio fade controls (audio-only types) */
+const AUDIO_FADE_ASSET_TYPES: ReadonlySet<MediaAssetType> = new Set(["audio", "text-to-speech"]);
+
+/** Asset types that support playback speed (previewed live and honoured by renders) */
+const SPEED_ASSET_TYPES: ReadonlySet<MediaAssetType> = new Set(["video", "audio"]);
+
+const SPEED_PRESETS = [0.25, 0.5, 1, 1.5, 2, 4];
+
+const SPEED_MIN = 0.1;
+const SPEED_MAX = 10;
+const KEYFRAME_BUTTON_STATES = {
+	static: { pressed: "false", label: "Add opacity keyframe" },
+	animated: { pressed: "mixed", label: "Add opacity keyframe at playhead; opacity is animated" },
+	keyframe: { pressed: "true", label: "Remove opacity keyframe" }
+} as const;
+/** Slider midpoint: log-scaled so 1× sits centred and 0.5–2× gets half the travel */
+const SPEED_SLIDER_HALF = 300;
+
+export interface MediaToolbarOptions {
+	mergeFields?: boolean;
+}
+
+export class MediaToolbar extends BaseToolbar {
+	/** Default values for merge-field-bindable media properties. */
+	private static readonly MEDIA_PROPERTY_DEFAULTS: Record<string, string> = {
+		opacity: "1",
+		scale: "1",
+		"asset.volume": "1"
+	};
+
+	private showMergeFields: boolean;
+	private assetType: MediaAssetType = "image";
+
+	constructor(edit: Edit, options: MediaToolbarOptions = {}) {
+		super(edit);
+		this.showMergeFields = options.mergeFields ?? false;
+	}
+
+	/** Get the edit as ShotstackEdit if it has merge field capabilities */
+	private getShotstackEdit(): ShotstackEdit | null {
+		if (this.edit && "mergeFields" in this.edit) {
+			return this.edit as ShotstackEdit;
+		}
+		return null;
+	}
+
+	// Current values
+	private currentFit: FitValue = "crop";
+	private currentVolume: number = 100;
+
+	// ─── Composite UI Components ─────────────────────────────────────────────────
+	private transitionPanel: TransitionPanel | null = null;
+	private effectPanel: EffectPanel | null = null;
+	private opacitySlider: SliderControl | null = null;
+	private scaleSlider: SliderControl | null = null;
+	private mergeFieldManager: MergeFieldLabelManager | null = null;
+	private unsubMergeFieldChanged: (() => void) | null = null;
+
+	// ─── Button Elements ─────────────────────────────────────────────────────────
+	private fitBtn: HTMLButtonElement | null = null;
+	private opacityBtn: HTMLButtonElement | null = null;
+	private opacityPreviousKeyframeBtn: HTMLButtonElement | null = null;
+	private opacityKeyframeBtn: HTMLButtonElement | null = null;
+	private opacityNextKeyframeBtn: HTMLButtonElement | null = null;
+	private scaleBtn: HTMLButtonElement | null = null;
+	private volumeBtn: HTMLButtonElement | null = null;
+	private transitionBtn: HTMLButtonElement | null = null;
+	private effectBtn: HTMLButtonElement | null = null;
+	private advancedBtn: HTMLButtonElement | null = null;
+	private audioFadeBtn: HTMLButtonElement | null = null;
+	private speedBtn: HTMLButtonElement | null = null;
+
+	// ─── Popup Elements ──────────────────────────────────────────────────────────
+	private fitPopup: HTMLDivElement | null = null;
+	private opacityPopup: HTMLDivElement | null = null;
+	private scalePopup: HTMLDivElement | null = null;
+	private volumePopup: HTMLDivElement | null = null;
+	private transitionPopup: HTMLDivElement | null = null;
+	private effectPopup: HTMLDivElement | null = null;
+	private advancedPopup: HTMLDivElement | null = null;
+	private audioFadePopup: HTMLDivElement | null = null;
+	private speedPopup: HTMLDivElement | null = null;
+
+	// ─── Other Elements ──────────────────────────────────────────────────────────
+	private fitLabel: HTMLSpanElement | null = null;
+	private volumeSlider: HTMLInputElement | null = null;
+	private volumeValue: HTMLSpanElement | null = null;
+	private volumeDisplayInput: HTMLInputElement | null = null;
+	private volumeSection: HTMLDivElement | null = null;
+	private visualSection: HTMLDivElement | null = null;
+	private audioSection: HTMLDivElement | null = null;
+	private speedSection: HTMLDivElement | null = null;
+	private speedSlider: HTMLInputElement | null = null;
+	private speedValue: HTMLSpanElement | null = null;
+	private speedDisplayInput: HTMLInputElement | null = null;
+	private currentSpeed: number = 1;
+
+	// ─── Advanced Menu ───────────────────────────────────────────────────────────
+	private dynamicToggle: HTMLInputElement | null = null;
+	private dynamicPanel: HTMLDivElement | null = null;
+	private dynamicInput: HTMLInputElement | null = null;
+
+	// ─── State ───────────────────────────────────────────────────────────────────
+	private dragManager = new DragStateManager();
+	private pendingOpacityTimes = new Map<string, number>();
+	private opacityDragTime: number | null = null;
+	private playbackPauseListener: (() => void) | null = null;
+	private editChangedListener: ((event: { source: string }) => void) | null = null;
+	private audioFadeEffect: "" | "fadeIn" | "fadeOut" | "fadeInFadeOut" = "";
+	private isDynamicSource: boolean = false;
+	private dynamicFieldName: string = "";
+	private originalSrc: string = "";
+
+	// AbortController for cleanup of event listeners
+	private abortController: AbortController | null = null;
+
+	override mount(parent: HTMLElement): void {
+		injectShotstackStyles();
+
+		this.container = document.createElement("div");
+		this.container.className = "ss-media-toolbar";
+
+		this.container.innerHTML = `
+			<!-- Mode Toggle -->
+			<div class="ss-toolbar-mode-toggle" data-mode="asset">
+				<button class="ss-toolbar-mode-btn active" data-mode="asset" title="Asset properties (\`)">
+					<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+						<rect x="2" y="2" width="12" height="12" rx="1.5"/>
+						<path d="M2 6h12M6 6v8"/>
+					</svg>
+				</button>
+				<button class="ss-toolbar-mode-btn" data-mode="clip" title="Clip timing (\`)">
+					<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+						<circle cx="8" cy="8" r="6"/>
+						<path d="M8 5v3l2 2"/>
+					</svg>
+				</button>
+				<button class="ss-toolbar-mode-btn" data-mode="generate" title="Generate (\`)">
+					<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+						<path d="M8 2.5l1.3 3.2 3.2 1.3-3.2 1.3L8 11.5 6.7 8.3 3.5 7l3.2-1.3z"/>
+					</svg>
+				</button>
+				<span class="ss-toolbar-mode-indicator"></span>
+			</div>
+			<div class="ss-toolbar-mode-divider"></div>
+
+			<!-- Visual controls (hidden for audio) -->
+			<div class="ss-media-toolbar-visual" data-visual-section>
+				<!-- Fit Dropdown -->
+				<div class="ss-media-toolbar-dropdown">
+					<button class="ss-media-toolbar-btn" data-action="fit">
+						${ICONS.fit}
+						<span data-fit-label>Crop</span>
+						${ICONS.chevron}
+					</button>
+					<div class="ss-media-toolbar-popup" data-popup="fit">
+						${FIT_OPTIONS.map(
+							opt => `
+							<div class="ss-media-toolbar-popup-item" data-fit="${opt.value}">
+								<div class="ss-media-toolbar-popup-item-label">
+									<span>${opt.label}</span>
+									<span class="ss-media-toolbar-popup-item-sublabel">${opt.description}</span>
+								</div>
+								${ICONS.check}
+							</div>
+						`
+						).join("")}
+					</div>
+				</div>
+
+				<div class="ss-media-toolbar-divider"></div>
+
+				<!-- Opacity -->
+				<div class="ss-media-toolbar-dropdown">
+					<button class="ss-media-toolbar-btn" data-action="opacity">
+						${ICONS.opacity}
+						<span data-opacity-value>100%</span>
+					</button>
+					<div class="ss-media-toolbar-popup ss-media-toolbar-popup--slider" data-popup="opacity">
+						<div data-opacity-slider-mount></div>
+					</div>
+				</div>
+
+				<div class="ss-media-toolbar-divider"></div>
+
+				<!-- Scale -->
+				<div class="ss-media-toolbar-dropdown">
+					<button class="ss-media-toolbar-btn" data-action="scale">
+						${ICONS.scale}
+						<span data-scale-value>100%</span>
+					</button>
+					<div class="ss-media-toolbar-popup ss-media-toolbar-popup--slider" data-popup="scale">
+						<div data-scale-slider-mount></div>
+					</div>
+				</div>
+
+				<div class="ss-media-toolbar-divider"></div>
+
+				<!-- Transition -->
+				<div class="ss-media-toolbar-dropdown">
+					<button class="ss-media-toolbar-btn" data-action="transition">
+						${ICONS.transition}
+						<span>Transition</span>
+					</button>
+					<div class="ss-media-toolbar-popup ss-media-toolbar-popup--transition" data-popup="transition">
+						<div data-transition-panel-mount></div>
+					</div>
+				</div>
+
+				<div class="ss-media-toolbar-divider"></div>
+
+				<!-- Effect -->
+				<div class="ss-media-toolbar-dropdown">
+					<button class="ss-media-toolbar-btn" data-action="effect">
+						${ICONS.effect}
+						<span>Effect</span>
+					</button>
+					<div class="ss-media-toolbar-popup ss-media-toolbar-popup--effect" data-popup="effect">
+						<div data-effect-panel-mount></div>
+					</div>
+				</div>
+			</div>
+
+			<!-- Volume (video and audio only) -->
+			<div class="ss-media-toolbar-volume" data-volume-section>
+				<div class="ss-media-toolbar-divider"></div>
+				<div class="ss-media-toolbar-dropdown">
+					<button class="ss-media-toolbar-btn" data-action="volume">
+						<span data-volume-icon>${ICONS.volume}</span>
+						<span data-volume-value>100%</span>
+					</button>
+					<div class="ss-media-toolbar-popup ss-media-toolbar-popup--slider" data-popup="volume">
+						<div class="ss-media-toolbar-popup-header"${this.showMergeFields ? ' data-merge-path="asset.volume" data-merge-prefix="MEDIA_VOLUME"' : ""}>Volume</div>
+						<div class="ss-media-toolbar-slider-row">
+							<input type="range" class="ss-media-toolbar-slider" data-volume-slider min="0" max="100" value="100" />
+							<input type="text" class="ss-media-toolbar-slider-value" data-volume-display value="100%" />
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<!-- Speed (video and audio only) -->
+			<div class="ss-media-toolbar-speed" data-speed-section>
+				<div class="ss-media-toolbar-divider"></div>
+				<div class="ss-media-toolbar-dropdown">
+					<button class="ss-media-toolbar-btn" data-action="speed">
+						${ICONS.speed}
+						<span data-speed-value>1×</span>
+					</button>
+					<div class="ss-media-toolbar-popup ss-media-toolbar-popup--slider ss-media-toolbar-popup--speed" data-popup="speed">
+						<div class="ss-media-toolbar-popup-header">Speed</div>
+						<div class="ss-media-toolbar-slider-row">
+							<input type="range" class="ss-media-toolbar-slider" data-speed-slider min="0" max="${SPEED_SLIDER_HALF * 2}" value="${SPEED_SLIDER_HALF}" />
+							<input type="text" class="ss-media-toolbar-slider-value" data-speed-display value="1×" />
+						</div>
+						<div class="ss-media-toolbar-presets">
+							${SPEED_PRESETS.map(p => `<button class="ss-media-toolbar-preset" data-speed-preset="${p}">${p}×</button>`).join("")}
+						</div>
+					</div>
+				</div>
+			</div>
+
+			<!-- Audio Section - only visible for audio assets -->
+			<div class="ss-media-toolbar-audio" data-audio-section>
+				<div class="ss-media-toolbar-divider"></div>
+				<div class="ss-media-toolbar-dropdown">
+					<button class="ss-media-toolbar-btn" data-action="audio-fade">
+						${ICONS.fadeNone}
+						<span>Fade</span>
+						${ICONS.chevron}
+					</button>
+					<div class="ss-media-toolbar-popup ss-media-toolbar-popup--audio-fade" data-popup="audio-fade">
+						<div class="ss-audio-fade-options">
+							<button class="ss-audio-fade-btn" data-audio-fade="">
+								<span class="ss-audio-fade-icon">${ICONS.fadeNone}</span>
+								<span class="ss-audio-fade-label">None</span>
+							</button>
+							<button class="ss-audio-fade-btn" data-audio-fade="fadeIn">
+								<span class="ss-audio-fade-icon">${ICONS.fadeIn}</span>
+								<span class="ss-audio-fade-label">Fade In</span>
+							</button>
+							<button class="ss-audio-fade-btn" data-audio-fade="fadeOut">
+								<span class="ss-audio-fade-icon">${ICONS.fadeOut}</span>
+								<span class="ss-audio-fade-label">Fade Out</span>
+							</button>
+							<button class="ss-audio-fade-btn" data-audio-fade="fadeInFadeOut">
+								<span class="ss-audio-fade-icon">${ICONS.fadeInOut}</span>
+								<span class="ss-audio-fade-label">Both</span>
+							</button>
+						</div>
+					</div>
+				</div>
+			</div>
+
+			${
+				this.showMergeFields
+					? `
+			<div class="ss-media-toolbar-divider" data-divider-before-advanced></div>
+
+			<!-- Advanced Menu (Dynamic Source for merge fields) -->
+			<div class="ss-media-toolbar-dropdown">
+				<button class="ss-media-toolbar-btn ss-media-toolbar-btn--icon" data-action="advanced" data-tooltip="Advanced">
+					${ICONS.moreVertical}
+				</button>
+				<div class="ss-media-toolbar-popup ss-media-toolbar-popup--advanced" data-popup="advanced">
+					<div class="ss-advanced-option">
+						<span class="ss-advanced-label">Dynamic Source</span>
+						<label class="ss-toggle">
+							<input type="checkbox" data-dynamic-toggle />
+							<span class="ss-toggle-slider"></span>
+						</label>
+					</div>
+					<div class="ss-dynamic-panel" data-dynamic-panel>
+						<input type="text"
+							class="ss-dynamic-input"
+							data-dynamic-input
+							placeholder="Enter default URL..." />
+					</div>
+				</div>
+			</div>
+			`
+					: ""
+			}
+		`;
+
+		parent.insertBefore(this.container, parent.firstChild);
+
+		// Query elements
+		this.fitBtn = this.container.querySelector('[data-action="fit"]');
+		this.opacityBtn = this.container.querySelector('[data-action="opacity"]');
+		this.scaleBtn = this.container.querySelector('[data-action="scale"]');
+		this.volumeBtn = this.container.querySelector('[data-action="volume"]');
+		this.transitionBtn = this.container.querySelector('[data-action="transition"]');
+		this.effectBtn = this.container.querySelector('[data-action="effect"]');
+		this.advancedBtn = this.container.querySelector('[data-action="advanced"]');
+		this.audioFadeBtn = this.container.querySelector('[data-action="audio-fade"]');
+		this.speedBtn = this.container.querySelector('[data-action="speed"]');
+
+		this.fitPopup = this.container.querySelector('[data-popup="fit"]');
+		this.opacityPopup = this.container.querySelector('[data-popup="opacity"]');
+		this.scalePopup = this.container.querySelector('[data-popup="scale"]');
+		this.volumePopup = this.container.querySelector('[data-popup="volume"]');
+		this.transitionPopup = this.container.querySelector('[data-popup="transition"]');
+		this.effectPopup = this.container.querySelector('[data-popup="effect"]');
+		this.advancedPopup = this.container.querySelector('[data-popup="advanced"]');
+		this.audioFadePopup = this.container.querySelector('[data-popup="audio-fade"]');
+		this.speedPopup = this.container.querySelector('[data-popup="speed"]');
+
+		this.fitLabel = this.container.querySelector("[data-fit-label]");
+		this.volumeValue = this.container.querySelector("[data-volume-value]");
+		this.volumeSlider = this.container.querySelector("[data-volume-slider]");
+		this.volumeDisplayInput = this.container.querySelector("[data-volume-display]");
+		this.volumeSection = this.container.querySelector("[data-volume-section]");
+		this.visualSection = this.container.querySelector("[data-visual-section]");
+		this.audioSection = this.container.querySelector("[data-audio-section]");
+		this.speedSection = this.container.querySelector("[data-speed-section]");
+		this.speedSlider = this.container.querySelector("[data-speed-slider]");
+		this.speedValue = this.container.querySelector("[data-speed-value]");
+		this.speedDisplayInput = this.container.querySelector("[data-speed-display]");
+
+		this.dynamicToggle = this.container.querySelector("[data-dynamic-toggle]");
+		this.dynamicPanel = this.container.querySelector("[data-dynamic-panel]");
+		this.dynamicInput = this.container.querySelector("[data-dynamic-input]");
+
+		// ─── Mount Composite Components ──────────────────────────────────────────────
+		this.mountCompositeComponents();
+
+		// ─── Merge Field Labels ──────────────────────────────────────────────────────
+		if (this.showMergeFields) {
+			this.mergeFieldManager = new MergeFieldLabelManager(this as unknown as MergeFieldLabelHost, MediaToolbar.MEDIA_PROPERTY_DEFAULTS);
+			this.mergeFieldManager.init();
+
+			// Re-sync merge field labels when fields are added/removed globally
+			this.unsubMergeFieldChanged = this.edit.getInternalEvents().on(EditEvent.MergeFieldChanged, () => {
+				if (this.container?.style.display !== "none" && this.mergeFieldManager?.hasLabels) {
+					this.syncState();
+				}
+			});
+		}
+
+		this.setupEventListeners();
+		this.setupOutsideClickHandler();
+		this.enableDrag();
+		this.appendDeleteButton();
+	}
+
+	/**
+	 * Mount composite UI components into their placeholder elements.
+	 */
+
+	private mountCompositeComponents(): void {
+		// Mount opacity slider (two-phase: live preview during drag, single undo on release)
+		const opacityMount = this.container?.querySelector("[data-opacity-slider-mount]");
+		if (opacityMount) {
+			this.opacitySlider = new SliderControl({
+				label: "Opacity",
+				min: 0,
+				max: 100,
+				initialValue: 100,
+				formatValue: v => `${Math.round(v)}%`,
+				labelAttributes: this.showMergeFields ? { "data-merge-path": "opacity", "data-merge-prefix": "MEDIA_OPACITY" } : undefined
+			});
+			this.opacitySlider.onDragStart(() => this.startSliderDrag("opacity"));
+			this.opacitySlider.onChange(value => this.handleOpacityChange(value));
+			this.opacitySlider.onDragEnd(() => this.endSliderDrag("opacity"));
+			this.opacitySlider.mount(opacityMount as HTMLElement);
+
+			const section = opacityMount.querySelector(".ss-toolbar-popup-section");
+			const label = section?.querySelector(".ss-toolbar-popup-label");
+			if (section && label) {
+				const header = document.createElement("div");
+				header.className = "ss-media-toolbar-keyframe-header";
+				label.before(header);
+				header.appendChild(label);
+				header.insertAdjacentHTML(
+					"beforeend",
+					`<div class="ss-media-toolbar-keyframe-controls">
+						<button type="button" class="ss-media-toolbar-keyframe-btn" data-opacity-keyframe-previous aria-label="Previous opacity keyframe" title="Previous opacity keyframe">${ICONS.keyframePrevious}</button>
+						<button type="button" class="ss-media-toolbar-keyframe-btn" data-opacity-keyframe data-state="static" aria-label="Add opacity keyframe" aria-pressed="false" title="Add opacity keyframe">${ICONS.keyframe}</button>
+						<button type="button" class="ss-media-toolbar-keyframe-btn" data-opacity-keyframe-next aria-label="Next opacity keyframe" title="Next opacity keyframe">${ICONS.keyframeNext}</button>
+					</div>`
+				);
+				this.opacityPreviousKeyframeBtn = header.querySelector("[data-opacity-keyframe-previous]");
+				this.opacityKeyframeBtn = header.querySelector("[data-opacity-keyframe]");
+				this.opacityNextKeyframeBtn = header.querySelector("[data-opacity-keyframe-next]");
+			}
+
+			opacityMount.querySelector<HTMLInputElement>('input[type="range"]')?.setAttribute("aria-label", "Opacity");
+			opacityMount.querySelector<HTMLInputElement>('input[type="text"]')?.setAttribute("aria-label", "Opacity percentage");
+		}
+
+		// Mount scale slider (two-phase: live preview during drag, single undo on release)
+		const scaleMount = this.container?.querySelector("[data-scale-slider-mount]");
+		if (scaleMount) {
+			this.scaleSlider = new SliderControl({
+				label: "Scale",
+				min: 10,
+				max: 200,
+				initialValue: 100,
+				formatValue: v => `${Math.round(v)}%`,
+				labelAttributes: this.showMergeFields ? { "data-merge-path": "scale", "data-merge-prefix": "MEDIA_SCALE" } : undefined
+			});
+			this.scaleSlider.onDragStart(() => this.startSliderDrag("scale"));
+			this.scaleSlider.onChange(value => this.handleScaleChange(value));
+			this.scaleSlider.onDragEnd(() => this.endSliderDrag("scale"));
+			this.scaleSlider.mount(scaleMount as HTMLElement);
+		}
+
+		// Mount transition panel
+		const transitionMount = this.container?.querySelector("[data-transition-panel-mount]");
+		if (transitionMount) {
+			this.transitionPanel = new TransitionPanel();
+			this.transitionPanel.onChange(() => this.applyTransitionUpdate());
+			this.transitionPanel.mount(transitionMount as HTMLElement);
+		}
+
+		// Mount effect panel
+		const effectMount = this.container?.querySelector("[data-effect-panel-mount]");
+		if (effectMount) {
+			this.effectPanel = new EffectPanel();
+			this.effectPanel.onChange(() => this.applyEffect());
+			this.effectPanel.mount(effectMount as HTMLElement);
+		}
+	}
+
+	private setupEventListeners(): void {
+		// Create AbortController for cleanup
+		this.abortController = new AbortController();
+		const { signal } = this.abortController;
+
+		// Toggle popups
+		this.fitBtn?.addEventListener(
+			"click",
+			e => {
+				e.stopPropagation();
+				this.togglePopupByName("fit");
+			},
+			{ signal }
+		);
+		this.opacityBtn?.addEventListener(
+			"click",
+			e => {
+				e.stopPropagation();
+				this.togglePopupByName("opacity");
+			},
+			{ signal }
+		);
+		this.scaleBtn?.addEventListener(
+			"click",
+			e => {
+				e.stopPropagation();
+				this.togglePopupByName("scale");
+			},
+			{ signal }
+		);
+		this.volumeBtn?.addEventListener(
+			"click",
+			e => {
+				e.stopPropagation();
+				this.togglePopupByName("volume");
+			},
+			{ signal }
+		);
+		this.transitionBtn?.addEventListener(
+			"click",
+			e => {
+				e.stopPropagation();
+				this.togglePopupByName("transition");
+			},
+			{ signal }
+		);
+		this.effectBtn?.addEventListener(
+			"click",
+			e => {
+				e.stopPropagation();
+				this.togglePopupByName("effect");
+			},
+			{ signal }
+		);
+		this.advancedBtn?.addEventListener(
+			"click",
+			e => {
+				e.stopPropagation();
+				this.togglePopupByName("advanced");
+			},
+			{ signal }
+		);
+		this.audioFadeBtn?.addEventListener(
+			"click",
+			e => {
+				e.stopPropagation();
+				this.togglePopupByName("audio-fade");
+			},
+			{ signal }
+		);
+		this.speedBtn?.addEventListener(
+			"click",
+			e => {
+				e.stopPropagation();
+				this.togglePopupByName("speed");
+			},
+			{ signal }
+		);
+
+		this.opacityPreviousKeyframeBtn?.addEventListener("click", () => this.navigateOpacityKeyframe(-1), { signal });
+		this.opacityKeyframeBtn?.addEventListener("click", () => this.toggleOpacityKeyframe(), { signal });
+		this.opacityNextKeyframeBtn?.addEventListener("click", () => this.navigateOpacityKeyframe(1), { signal });
+
+		// Speed slider: readout-only during drag, single commit on release.
+		this.speedSlider?.addEventListener(
+			"input",
+			() => {
+				this.currentSpeed = MediaToolbar.sliderToSpeed(parseInt(this.speedSlider!.value, 10));
+				this.updateSpeedDisplay();
+			},
+			{ signal }
+		);
+		this.speedSlider?.addEventListener("change", () => this.handleSpeedChange(MediaToolbar.sliderToSpeed(parseInt(this.speedSlider!.value, 10))), {
+			signal
+		});
+
+		// Speed display input: commit on blur or Enter, revert on Escape
+		this.speedDisplayInput?.addEventListener("blur", () => this.commitSpeedInputValue(), { signal });
+		this.speedDisplayInput?.addEventListener(
+			"keydown",
+			(e: KeyboardEvent) => {
+				if (e.key === "Enter") {
+					e.preventDefault();
+					this.commitSpeedInputValue();
+					this.speedDisplayInput?.blur();
+				} else if (e.key === "Escape") {
+					e.preventDefault();
+					this.updateSpeedDisplay();
+					this.speedDisplayInput?.blur();
+				}
+			},
+			{ signal }
+		);
+		this.speedDisplayInput?.addEventListener(
+			"focus",
+			() => {
+				this.speedDisplayInput?.select();
+			},
+			{ signal }
+		);
+
+		// Speed presets
+		this.speedPopup?.querySelectorAll("[data-speed-preset]").forEach(btn => {
+			btn.addEventListener(
+				"click",
+				e => {
+					const el = e.currentTarget as HTMLElement;
+					this.handleSpeedChange(parseFloat(el.dataset["speedPreset"] || "1"));
+				},
+				{ signal }
+			);
+		});
+
+		// Dynamic source handlers
+		this.setupDynamicSourceHandlers(signal);
+
+		// Fit options
+		this.fitPopup?.querySelectorAll("[data-fit]").forEach(item => {
+			item.addEventListener(
+				"click",
+				e => {
+					const el = e.currentTarget as HTMLElement;
+					const fit = el.dataset["fit"] as FitValue;
+					this.handleFitChange(fit);
+				},
+				{ signal }
+			);
+		});
+
+		// Volume slider (two-phase: live preview during drag, single undo on release)
+		this.volumeSlider?.addEventListener("pointerdown", () => this.startSliderDrag("volume"), { signal });
+		this.volumeSlider?.addEventListener(
+			"input",
+			() => {
+				const value = parseInt(this.volumeSlider!.value, 10);
+				this.handleVolumeChange(value);
+			},
+			{ signal }
+		);
+		this.volumeSlider?.addEventListener("change", () => this.endSliderDrag("volume"), { signal });
+
+		// Volume display input: commit on blur or Enter, revert on Escape
+		this.volumeDisplayInput?.addEventListener("blur", () => this.commitVolumeInputValue(), { signal });
+		this.volumeDisplayInput?.addEventListener(
+			"keydown",
+			(e: KeyboardEvent) => {
+				if (e.key === "Enter") {
+					e.preventDefault();
+					this.commitVolumeInputValue();
+					this.volumeDisplayInput?.blur();
+				} else if (e.key === "Escape") {
+					e.preventDefault();
+					this.revertVolumeInputValue();
+					this.volumeDisplayInput?.blur();
+				}
+			},
+			{ signal }
+		);
+		this.volumeDisplayInput?.addEventListener(
+			"focus",
+			() => {
+				this.volumeDisplayInput?.select();
+			},
+			{ signal }
+		);
+
+		// Audio fade options
+		this.audioFadePopup?.querySelectorAll("[data-audio-fade]").forEach(btn => {
+			btn.addEventListener(
+				"click",
+				e => {
+					const el = e.currentTarget as HTMLElement;
+					const fadeValue = el.dataset["audioFade"] || "";
+					this.handleAudioFadeSelect(fadeValue as "" | "fadeIn" | "fadeOut" | "fadeInFadeOut");
+				},
+				{ signal }
+			);
+		});
+
+		// Edit.seek() pauses, so this also covers playhead scrubbing — keep the visibility
+		// check so a hidden toolbar does not resync on every pointermove.
+		if (!this.playbackPauseListener) {
+			this.playbackPauseListener = () => this.syncIfVisible();
+			this.edit.events.on(EditEvent.PlaybackPause, this.playbackPauseListener);
+		}
+		if (!this.editChangedListener) {
+			this.editChangedListener = event => {
+				if (event.source.startsWith("load")) this.pendingOpacityTimes.clear();
+				this.syncIfVisible();
+			};
+			this.edit.events.on(EditEvent.EditChanged, this.editChangedListener);
+		}
+	}
+
+	private syncIfVisible(): void {
+		if (this.container?.style.display === "none") return;
+		if (this.selectedTrackIdx < 0 || this.dragManager.isDragging("opacity")) return;
+		this.syncState();
+	}
+
+	private togglePopupByName(popup: "fit" | "opacity" | "scale" | "volume" | "transition" | "effect" | "advanced" | "audio-fade" | "speed"): void {
+		const popupMap = {
+			fit: { popup: this.fitPopup, btn: this.fitBtn },
+			opacity: { popup: this.opacityPopup, btn: this.opacityBtn },
+			scale: { popup: this.scalePopup, btn: this.scaleBtn },
+			volume: { popup: this.volumePopup, btn: this.volumeBtn },
+			transition: { popup: this.transitionPopup, btn: this.transitionBtn },
+			effect: { popup: this.effectPopup, btn: this.effectBtn },
+			advanced: { popup: this.advancedPopup, btn: this.advancedBtn },
+			"audio-fade": { popup: this.audioFadePopup, btn: this.audioFadeBtn },
+			speed: { popup: this.speedPopup, btn: this.speedBtn }
+		};
+
+		const isCurrentlyOpen = popupMap[popup].popup?.classList.contains("visible");
+		this.closeAllPopups();
+
+		if (!isCurrentlyOpen) {
+			this.togglePopup(popupMap[popup].popup);
+			popupMap[popup].btn?.classList.add("active");
+		}
+	}
+
+	protected override closeAllPopups(): void {
+		super.closeAllPopups();
+
+		// Also remove active state from buttons
+		this.fitBtn?.classList.remove("active");
+		this.opacityBtn?.classList.remove("active");
+		this.scaleBtn?.classList.remove("active");
+		this.volumeBtn?.classList.remove("active");
+		this.transitionBtn?.classList.remove("active");
+		this.effectBtn?.classList.remove("active");
+		this.advancedBtn?.classList.remove("active");
+		this.audioFadeBtn?.classList.remove("active");
+		this.speedBtn?.classList.remove("active");
+	}
+
+	protected override getPopupList(): (HTMLElement | null)[] {
+		return [
+			this.fitPopup,
+			this.opacityPopup,
+			this.scalePopup,
+			this.volumePopup,
+			this.transitionPopup,
+			this.effectPopup,
+			this.advancedPopup,
+			this.audioFadePopup,
+			this.speedPopup
+		];
+	}
+
+	protected override syncState(): void {
+		const clip = this.edit.getResolvedClip(this.selectedTrackIdx, this.selectedClipIdx);
+		if (clip) {
+			// Fit
+			this.currentFit = (clip.fit as FitValue) || "crop";
+
+			// Scale (convert from 0-1 to percentage)
+			const scale = typeof clip.scale === "number" ? clip.scale : 1;
+			this.scaleSlider?.setValue(Math.round(scale * 100));
+
+			// Volume (types with audio output)
+			if (VOLUME_ASSET_TYPES.has(this.assetType)) {
+				const asset = clip.asset as { volume?: number };
+				const volume = typeof asset.volume === "number" ? asset.volume : 1;
+				this.currentVolume = Math.round(volume * 100);
+			}
+
+			// Transition - use composite
+			this.transitionPanel?.setFromClip(clip.transition);
+
+			// Effect - use composite
+			this.effectPanel?.setFromClip(clip.effect);
+
+			// Audio fade effect (for audio and text-to-speech assets)
+			if (AUDIO_FADE_ASSET_TYPES.has(this.assetType)) {
+				const asset = clip.asset as { effect?: string };
+				this.audioFadeEffect = (asset.effect as "" | "fadeIn" | "fadeOut" | "fadeInFadeOut") || "";
+			}
+
+			// Playback speed
+			if (SPEED_ASSET_TYPES.has(this.assetType)) {
+				const asset = clip.asset as { speed?: number };
+				this.currentSpeed = typeof asset.speed === "number" ? asset.speed : 1;
+			}
+		}
+
+		// Update displays
+		this.updateFitDisplay();
+		this.updateScaleDisplay();
+		this.updateVolumeDisplay();
+		this.updateSpeedDisplay();
+
+		// Update active states
+		this.updateFitActiveState();
+		this.updateAudioFadeUI();
+		this.updateDynamicSourceUI();
+
+		// Show/hide visual section (only for visual asset types)
+		if (this.visualSection) {
+			this.visualSection.classList.toggle("hidden", !VISUAL_ASSET_TYPES.has(this.assetType));
+		}
+
+		// Show/hide volume section (only for types with audio output)
+		if (this.volumeSection) {
+			this.volumeSection.classList.toggle("hidden", !VOLUME_ASSET_TYPES.has(this.assetType));
+		}
+
+		// Show/hide audio fade section (only for audio-only types)
+		if (this.audioSection) {
+			this.audioSection.classList.toggle("hidden", !AUDIO_FADE_ASSET_TYPES.has(this.assetType));
+		}
+
+		// Show/hide speed section (only for types whose preview honours speed)
+		if (this.speedSection) {
+			this.speedSection.classList.toggle("hidden", !SPEED_ASSET_TYPES.has(this.assetType));
+		}
+
+		// Hide the advanced/dynamic source divider and button for AI types
+		const advancedDivider = this.container?.querySelector("[data-divider-before-advanced]") as HTMLElement | null;
+		if (advancedDivider) {
+			advancedDivider.classList.toggle("hidden", !VISUAL_ASSET_TYPES.has(this.assetType) || !this.showMergeFields);
+		}
+		if (this.advancedBtn?.parentElement) {
+			this.advancedBtn.parentElement.classList.toggle("hidden", !VISUAL_ASSET_TYPES.has(this.assetType) || !this.showMergeFields);
+		}
+
+		// Sync merge field label bound states
+		if (this.showMergeFields && this.mergeFieldManager?.hasLabels) {
+			this.mergeFieldManager.sync();
+		}
+
+		if (clip) {
+			const clipId = this.edit.getClipId(this.selectedTrackIdx, this.selectedClipIdx);
+			const shotstackEdit = this.getShotstackEdit();
+			const scaleKeyframed = Array.isArray(clip.scale);
+			this.scaleSlider?.setEnabled(!scaleKeyframed && !shotstackEdit?.getMergeFieldForProperty(clipId ?? "", "scale"));
+			if (this.scaleBtn) {
+				this.scaleBtn.disabled = scaleKeyframed;
+				this.scaleBtn.title = scaleKeyframed ? "Keyframed scale cannot be edited with this control" : "";
+			}
+			const { volume } = clip.asset as { volume?: unknown };
+			const volumeKeyframed = Array.isArray(volume);
+			const volumeEnabled = !volumeKeyframed && !shotstackEdit?.getMergeFieldForProperty(clipId ?? "", "asset.volume");
+			if (this.volumeSlider) this.volumeSlider.disabled = !volumeEnabled;
+			if (this.volumeDisplayInput) this.volumeDisplayInput.disabled = !volumeEnabled;
+			if (this.volumeBtn) {
+				this.volumeBtn.disabled = volumeKeyframed;
+				this.volumeBtn.title = volumeKeyframed ? "Keyframed volume cannot be edited with this control" : "";
+			}
+			this.syncOpacityState(clip);
+		}
+	}
+
+	private getOpacityTime(clip: ResolvedClip): number | null {
+		const localTime = this.edit.playbackTime - clip.start;
+		if (localTime < -TIME_EPSILON || localTime > clip.length + TIME_EPSILON) return null;
+		return snapOpacityTime(Math.max(0, Math.min(localTime, clip.length)), clip.length, this.edit.getOutputFps());
+	}
+
+	private getOpacityPoints(clip: ResolvedClip, clipId: string): OpacityPoint[] | null {
+		const documentOpacity = this.edit.getDocumentClip(this.selectedTrackIdx, this.selectedClipIdx)?.opacity;
+		const opacity = Array.isArray(documentOpacity) ? documentOpacity : clip.opacity;
+		if (Array.isArray(opacity)) return decodeOpacityPoints(opacity, clip.length);
+		const pendingTime = this.pendingOpacityTimes.get(clipId);
+		if (pendingTime === undefined) return [];
+		return [{ time: pendingTime, value: typeof clip.opacity === "number" ? clip.opacity : 1 }];
+	}
+
+	/** Keys past a trimmed clip end stay in the document but are not addressable from the toolbar. */
+	private visibleOpacityPoints(points: readonly OpacityPoint[], clip: ResolvedClip): OpacityPoint[] {
+		return points.filter(point => point.time <= clip.length + TIME_EPSILON);
+	}
+
+	private syncOpacityState(clip: ResolvedClip): void {
+		const clipId = this.edit.getClipId(this.selectedTrackIdx, this.selectedClipIdx);
+		const localTime = this.getOpacityTime(clip);
+
+		// Read back at the same frame-snapped time keys are written to, so the
+		// value the user just set is the value redisplayed.
+		const evaluatedTime = localTime ?? Math.max(0, Math.min(this.edit.playbackTime - clip.start, clip.length));
+		this.opacitySlider?.setValue((evaluateOpacity(clip.opacity, evaluatedTime, clip.length) ?? 1) * 100);
+		this.updateOpacityDisplay();
+		if (!clipId) return;
+
+		const shotstackEdit = this.getShotstackEdit();
+		const isBound = Boolean(shotstackEdit?.getMergeFieldForProperty(clipId, "opacity"));
+		if (Array.isArray(clip.opacity) || isBound) this.pendingOpacityTimes.delete(clipId);
+		const points = this.getOpacityPoints(clip, clipId);
+		const editable = points !== null;
+		const visiblePoints = this.visibleOpacityPoints(points ?? [], clip);
+		const fps = this.edit.getOutputFps();
+		const currentPoint = localTime === null ? undefined : findOpacityPoint(visiblePoints, localTime, fps);
+
+		const hasEffect = Boolean(clip.effect);
+		const hasTransition = Boolean(clip.transition?.in || clip.transition?.out);
+		const hasPreset = hasEffect || hasTransition;
+		const animated = Array.isArray(clip.opacity) || (points?.length ?? 0) > 0;
+		let disabledReason = "";
+		if (!editable) disabledReason = "This opacity animation can be previewed but not edited";
+		else if (isBound) disabledReason = "Remove the merge field before keyframing opacity";
+		else if (hasPreset) disabledReason = "Remove the clip effect or transition before keyframing opacity";
+		else if (localTime === null) disabledReason = "Move the playhead over the clip to edit opacity keyframes";
+		else if (currentPoint && points?.length === 2 && points.some(point => point !== currentPoint && point.time > clip.length + TIME_EPSILON)) {
+			disabledReason = "Extend the clip before removing this keyframe";
+		}
+
+		this.opacitySlider?.setEnabled(!isBound && editable && (!animated || (!hasPreset && localTime !== null)));
+
+		if (this.opacityKeyframeBtn) {
+			let state: keyof typeof KEYFRAME_BUTTON_STATES = "static";
+			if (animated) state = "animated";
+			if (currentPoint) state = "keyframe";
+			const { pressed, label } = KEYFRAME_BUTTON_STATES[state];
+			this.opacityKeyframeBtn.dataset["state"] = state;
+			this.opacityKeyframeBtn.disabled = Boolean(disabledReason);
+			this.opacityKeyframeBtn.setAttribute("aria-pressed", pressed);
+			this.opacityKeyframeBtn.setAttribute("aria-label", disabledReason || label);
+			this.opacityKeyframeBtn.title = disabledReason || label;
+		}
+
+		const navigationTime = this.edit.playbackTime - clip.start;
+		if (this.opacityPreviousKeyframeBtn) this.opacityPreviousKeyframeBtn.disabled = !findOpacityPoint(visiblePoints, navigationTime, fps, -1);
+		if (this.opacityNextKeyframeBtn) this.opacityNextKeyframeBtn.disabled = !findOpacityPoint(visiblePoints, navigationTime, fps, 1);
+
+		// Only committed keyframes gate presets. An armed-but-unwritten point has no
+		// document presence, so gating on it would disable controls with nothing to undo.
+		const hasVisualKeyframes = hasKeyframedVisualProperty(clip);
+		this.setPresetButtonEnabled(this.effectBtn, !(hasVisualKeyframes && !hasEffect), "Effects can't be combined with keyframes in the editor");
+		this.setPresetButtonEnabled(
+			this.transitionBtn,
+			!(hasVisualKeyframes && !hasTransition),
+			"Transitions can't be combined with keyframes in the editor"
+		);
+	}
+
+	private setPresetButtonEnabled(button: HTMLButtonElement | null, enabled: boolean, disabledReason: string): void {
+		if (!button) return;
+		Object.assign(button, { disabled: !enabled, title: enabled ? "" : disabledReason });
+		if (enabled) button.removeAttribute("aria-label");
+		else button.setAttribute("aria-label", disabledReason);
+	}
+
+	// ─── Two-Phase Drag Helpers ──────────────────────────────────────────────────
+	//
+	// Without this, every slider tick creates an undo command and Ctrl-Z steps
+	// through dozens of intermediate values instead of reverting the whole drag.
+	//
+	//   pointerdown → snapshot clip state
+	//   input       → live preview (bypass command system)
+	//   change      → commit one undo entry for the entire gesture
+	//
+	// Text-input commits (blur / Enter) skip the drag path and go straight
+	// through applyClipUpdate().
+
+	/**
+	 * Capture and deep-clone the current clip state for drag rollback.
+	 */
+	/**
+	 * Start a drag session for a slider control.
+	 */
+	private startSliderDrag(controlId: string): void {
+		const state = this.captureClipState();
+		if (state) {
+			this.dragManager.start(controlId, state.clipId, state.clip);
+		}
+		// Pause after the session opens: pause() emits PlaybackPause synchronously,
+		// and its listener must see the drag in progress to leave the slider alone.
+		if (controlId === "opacity") {
+			if (this.edit.isPlaying) this.edit.pause();
+			const clip = this.edit.getResolvedClip(this.selectedTrackIdx, this.selectedClipIdx);
+			this.opacityDragTime = clip ? this.getOpacityTime(clip) : null;
+		}
+	}
+
+	/**
+	 * End a drag session and commit a single undo entry.
+	 */
+	private endSliderDrag(controlId: string): void {
+		const session = this.dragManager.end(controlId);
+		if (!session) {
+			if (controlId === "opacity") this.opacityDragTime = null;
+			return;
+		}
+
+		const final = this.captureClipState();
+		if (final) {
+			this.edit.commitClipUpdate(session.clipId, session.initialState, final.clip);
+		}
+		if (controlId === "opacity") this.opacityDragTime = null;
+	}
+
+	// ─── Value Change Handlers ───────────────────────────────────────────────────
+
+	private handleFitChange(fit: FitValue): void {
+		this.currentFit = fit;
+		this.updateFitDisplay();
+		this.updateFitActiveState();
+		this.closeAllPopups();
+		this.applyClipUpdate({ fit });
+	}
+
+	private handleOpacityChange(value: number): void {
+		this.updateOpacityDisplay();
+		if (this.edit.isPlaying) this.edit.pause();
+
+		const clip = this.edit.getResolvedClip(this.selectedTrackIdx, this.selectedClipIdx);
+		const clipId = this.edit.getClipId(this.selectedTrackIdx, this.selectedClipIdx);
+		if (!clip || !clipId) return;
+
+		const points = this.getOpacityPoints(clip, clipId);
+		const isBound = Boolean(this.getShotstackEdit()?.getMergeFieldForProperty(clipId, "opacity"));
+		if (points === null || isBound) {
+			this.syncOpacityState(clip);
+			return;
+		}
+
+		const nextValue = value / 100;
+		let opacity: ResolvedClip["opacity"] = nextValue;
+		if (points.length > 0) {
+			const localTime = this.opacityDragTime ?? this.getOpacityTime(clip);
+			if (localTime === null || clip.effect || clip.transition?.in || clip.transition?.out) {
+				this.syncOpacityState(clip);
+				return;
+			}
+
+			const updatedPoints = upsertOpacityPoint(points, localTime, nextValue, clip.length, this.edit.getOutputFps());
+			const encoded = encodeOpacityPoints(updatedPoints, clip.length);
+			if (encoded) {
+				opacity = encoded;
+				this.pendingOpacityTimes.delete(clipId);
+			}
+		}
+
+		const updates = { opacity };
+
+		if (this.dragManager.isDragging("opacity")) {
+			this.edit.updateClipInDocument(clipId, updates);
+			this.edit.resolveClip(clipId);
+		} else {
+			this.applyClipUpdate(updates);
+		}
+	}
+
+	private toggleOpacityKeyframe(): void {
+		if (this.edit.isPlaying) this.edit.pause();
+		const clip = this.edit.getResolvedClip(this.selectedTrackIdx, this.selectedClipIdx);
+		const clipId = this.edit.getClipId(this.selectedTrackIdx, this.selectedClipIdx);
+		if (!clip || !clipId) return;
+
+		const points = this.getOpacityPoints(clip, clipId);
+		const localTime = this.getOpacityTime(clip);
+		if (
+			points === null ||
+			localTime === null ||
+			this.getShotstackEdit()?.getMergeFieldForProperty(clipId, "opacity") ||
+			clip.effect ||
+			clip.transition?.in ||
+			clip.transition?.out
+		) {
+			this.syncOpacityState(clip);
+			return;
+		}
+
+		const fps = this.edit.getOutputFps();
+		const currentPoint = findOpacityPoint(points, localTime, fps);
+		if (currentPoint) {
+			const remaining = removeOpacityPoint(points, localTime, fps);
+			if (remaining.length === 0) {
+				this.pendingOpacityTimes.delete(clipId);
+				this.syncOpacityState(clip);
+				return;
+			}
+			if (remaining.length === 1) {
+				if (remaining[0].time > clip.length + TIME_EPSILON) {
+					this.syncOpacityState(clip);
+					return;
+				}
+				this.pendingOpacityTimes.delete(clipId);
+				this.applyClipUpdate({ opacity: remaining[0].value });
+				return;
+			}
+
+			const encoded = encodeOpacityPoints(remaining, clip.length);
+			if (encoded) this.applyClipUpdate({ opacity: encoded });
+			return;
+		}
+
+		const value = evaluateOpacity(clip.opacity, localTime, clip.length);
+		if (value === null) return;
+		if (points.length === 0) {
+			this.pendingOpacityTimes.set(clipId, localTime);
+			this.syncOpacityState(clip);
+			return;
+		}
+
+		const encoded = encodeOpacityPoints(upsertOpacityPoint(points, localTime, value, clip.length, fps), clip.length);
+		if (encoded) {
+			this.pendingOpacityTimes.delete(clipId);
+			this.applyClipUpdate({ opacity: encoded });
+		}
+	}
+
+	private navigateOpacityKeyframe(direction: -1 | 1): void {
+		const clip = this.edit.getResolvedClip(this.selectedTrackIdx, this.selectedClipIdx);
+		const clipId = this.edit.getClipId(this.selectedTrackIdx, this.selectedClipIdx);
+		if (!clip || !clipId) return;
+		const points = this.getOpacityPoints(clip, clipId);
+		if (!points) return;
+		const visiblePoints = this.visibleOpacityPoints(points, clip);
+		const point = findOpacityPoint(visiblePoints, this.edit.playbackTime - clip.start, this.edit.getOutputFps(), direction);
+		if (point) this.edit.seek(clip.start + point.time);
+	}
+
+	private handleScaleChange(value: number): void {
+		this.updateScaleDisplay();
+		const clip = this.edit.getResolvedClip(this.selectedTrackIdx, this.selectedClipIdx);
+		if (Array.isArray(clip?.scale)) {
+			this.syncState();
+			return;
+		}
+
+		const clipId = this.edit.getClipId(this.selectedTrackIdx, this.selectedClipIdx);
+		if (!clipId) return;
+		if (this.getShotstackEdit()?.getMergeFieldForProperty(clipId, "scale")) {
+			this.syncState();
+			return;
+		}
+
+		const updates = { scale: value / 100 };
+
+		if (this.dragManager.isDragging("scale")) {
+			this.edit.updateClipInDocument(clipId, updates);
+			this.edit.resolveClip(clipId);
+		} else {
+			this.applyClipUpdate(updates);
+		}
+	}
+
+	private handleVolumeChange(value: number): void {
+		this.currentVolume = value;
+		this.updateVolumeDisplay();
+
+		if (!VOLUME_ASSET_TYPES.has(this.assetType)) return;
+
+		const clip = this.edit.getResolvedClip(this.selectedTrackIdx, this.selectedClipIdx);
+		if (!clip) return;
+
+		const clipId = this.edit.getClipId(this.selectedTrackIdx, this.selectedClipIdx);
+		if (!clipId) return;
+		if (this.getShotstackEdit()?.getMergeFieldForProperty(clipId, "asset.volume")) {
+			this.syncState();
+			return;
+		}
+
+		const asset = clip.asset as Record<string, unknown>;
+		if (Array.isArray(asset["volume"])) {
+			this.syncState();
+			return;
+		}
+		const updates = { asset: { ...asset, volume: value / 100 } as typeof clip.asset };
+
+		if (this.dragManager.isDragging("volume")) {
+			this.edit.updateClipInDocument(clipId, updates);
+			this.edit.resolveClip(clipId);
+		} else {
+			this.edit.updateClip(this.selectedTrackIdx, this.selectedClipIdx, updates);
+		}
+	}
+
+	// ─── Speed Handlers ──────────────────────────────────────────────────────────
+
+	/** Map slider position (0 to 2×half) to speed via log scale: half-way = 1× */
+	private static sliderToSpeed(t: number): number {
+		const speed = 10 ** ((t - SPEED_SLIDER_HALF) / SPEED_SLIDER_HALF);
+		return Math.round(speed * 100) / 100;
+	}
+
+	private static speedToSlider(speed: number): number {
+		const clamped = Math.max(SPEED_MIN, Math.min(SPEED_MAX, speed));
+		return Math.round(Math.log10(clamped) * SPEED_SLIDER_HALF + SPEED_SLIDER_HALF);
+	}
+
+	/** Format for display: trims trailing zeros, e.g. 1×, 0.5×, 1.25× */
+	private static formatSpeed(speed: number): string {
+		return `${parseFloat(speed.toFixed(2))}×`;
+	}
+
+	private handleSpeedChange(value: number): void {
+		this.currentSpeed = Math.max(SPEED_MIN, Math.min(SPEED_MAX, value));
+		this.updateSpeedDisplay();
+
+		if (!SPEED_ASSET_TYPES.has(this.assetType)) return;
+
+		const clip = this.edit.getResolvedClip(this.selectedTrackIdx, this.selectedClipIdx);
+		const clipId = this.edit.getClipId(this.selectedTrackIdx, this.selectedClipIdx);
+		if (!clip || !clipId) return;
+
+		const asset = clip.asset as Record<string, unknown>;
+		const newAsset: Record<string, unknown> = { ...asset, speed: this.currentSpeed === 1 ? undefined : this.currentSpeed };
+		const updates: Record<string, unknown> = { asset: newAsset };
+
+		// Rescale length and trim by oldSpeed/newSpeed so the clip keeps playing the same
+		// source window at the new pace (trim is speed-scaled at render time, so it moves too)
+		const oldSpeed = typeof asset["speed"] === "number" ? (asset["speed"] as number) : 1;
+		if (oldSpeed > 0 && oldSpeed !== this.currentSpeed) {
+			const ratio = oldSpeed / this.currentSpeed;
+			const docClip = this.edit.getDocumentClip(this.selectedTrackIdx, this.selectedClipIdx);
+			if (typeof docClip?.length === "number") {
+				updates["length"] = Math.max(0.1, docClip.length * ratio);
+			}
+			if (typeof asset["trim"] === "number" && asset["trim"] > 0) {
+				newAsset["trim"] = asset["trim"] * ratio;
+			}
+		}
+
+		this.edit.updateClip(this.selectedTrackIdx, this.selectedClipIdx, updates);
+	}
+
+	private commitSpeedInputValue(): void {
+		if (!this.speedDisplayInput) return;
+
+		const stripped = this.speedDisplayInput.value.replace(/[^0-9.]/g, "");
+		const num = parseFloat(stripped);
+		if (Number.isNaN(num)) {
+			this.updateSpeedDisplay();
+			return;
+		}
+		this.handleSpeedChange(num);
+	}
+
+	private updateSpeedDisplay(): void {
+		const text = MediaToolbar.formatSpeed(this.currentSpeed);
+		if (this.speedValue) this.speedValue.textContent = text;
+		if (this.speedSlider) this.speedSlider.value = String(MediaToolbar.speedToSlider(this.currentSpeed));
+		if (this.speedDisplayInput) this.speedDisplayInput.value = text;
+
+		this.speedPopup?.querySelectorAll("[data-speed-preset]").forEach(btn => {
+			const el = btn as HTMLElement;
+			el.classList.toggle("active", parseFloat(el.dataset["speedPreset"] || "1") === this.currentSpeed);
+		});
+	}
+
+	/**
+	 * Parse and commit the value from the volume text input.
+	 */
+	private commitVolumeInputValue(): void {
+		if (!this.volumeDisplayInput) return;
+
+		const parsed = this.parseVolumeInputValue(this.volumeDisplayInput.value);
+		this.handleVolumeChange(parsed);
+	}
+
+	/**
+	 * Revert the volume text input to match the current slider value.
+	 */
+	private revertVolumeInputValue(): void {
+		this.updateVolumeDisplay();
+	}
+
+	/**
+	 * Parse user input, strip non-numeric chars, clamp to 0-100.
+	 */
+	private parseVolumeInputValue(input: string): number {
+		const stripped = input.replace(/[^0-9]/g, "");
+		const num = parseInt(stripped, 10);
+		if (Number.isNaN(num)) return this.currentVolume;
+		return Math.max(0, Math.min(100, num));
+	}
+
+	// ─── Transition (using composite) ────────────────────────────────────────────
+
+	private applyTransitionUpdate(): void {
+		const transition = this.transitionPanel?.getClipValue();
+		const clip = this.edit.getResolvedClip(this.selectedTrackIdx, this.selectedClipIdx);
+		if (clip && hasKeyframedVisualProperty(clip)) {
+			const changesIn = Boolean(transition?.in && transition.in !== clip.transition?.in);
+			const changesOut = Boolean(transition?.out && transition.out !== clip.transition?.out);
+			if (changesIn || changesOut) {
+				this.transitionPanel?.setFromClip(clip.transition);
+				return;
+			}
+		}
+		this.applyClipUpdate({ transition });
+	}
+
+	// ─── Effect (using composite) ────────────────────────────────────────────────
+
+	private applyEffect(): void {
+		const effectValue = this.effectPanel?.getClipValue();
+		const clip = this.edit.getResolvedClip(this.selectedTrackIdx, this.selectedClipIdx);
+		if (effectValue && clip && hasKeyframedVisualProperty(clip)) {
+			this.effectPanel?.setFromClip(clip.effect);
+			return;
+		}
+		this.applyClipUpdate({ effect: effectValue });
+	}
+
+	// ─── Audio Fade Handlers ─────────────────────────────────────────────────────
+
+	private handleAudioFadeSelect(effect: "" | "fadeIn" | "fadeOut" | "fadeInFadeOut"): void {
+		this.audioFadeEffect = effect;
+		this.updateAudioFadeUI();
+		this.applyAudioFade();
+	}
+
+	private applyAudioFade(): void {
+		const clip = this.edit.getResolvedClip(this.selectedTrackIdx, this.selectedClipIdx);
+		if (!clip || !AUDIO_FADE_ASSET_TYPES.has(this.assetType)) return;
+
+		const asset = clip.asset as Record<string, unknown>;
+		this.edit.updateClip(this.selectedTrackIdx, this.selectedClipIdx, {
+			asset: { ...asset, effect: this.audioFadeEffect || undefined } as typeof clip.asset
+		});
+	}
+
+	private updateAudioFadeUI(): void {
+		if (!this.audioFadePopup) return;
+
+		const buttons = this.audioFadePopup.querySelectorAll("[data-audio-fade]");
+		buttons.forEach(btn => {
+			const fadeValue = (btn as HTMLElement).dataset["audioFade"] || "";
+			btn.classList.toggle("active", fadeValue === this.audioFadeEffect);
+		});
+
+		if (this.audioFadeBtn) {
+			const iconMap: Record<string, string> = {
+				"": ICONS.fadeNone,
+				fadeIn: ICONS.fadeIn,
+				fadeOut: ICONS.fadeOut,
+				fadeInFadeOut: ICONS.fadeInOut
+			};
+			const svg = this.audioFadeBtn.querySelector("svg");
+			if (svg) {
+				svg.outerHTML = iconMap[this.audioFadeEffect] || ICONS.fadeNone;
+			}
+		}
+	}
+
+	private applyClipUpdate(updates: Record<string, unknown>): void {
+		if (this.selectedTrackIdx >= 0 && this.selectedClipIdx >= 0) {
+			this.edit.updateClip(this.selectedTrackIdx, this.selectedClipIdx, updates);
+		}
+	}
+
+	// ─── Dynamic Source Handlers ─────────────────────────────────────────────────
+
+	private setupDynamicSourceHandlers(signal: AbortSignal): void {
+		this.dynamicToggle?.addEventListener(
+			"change",
+			() => {
+				const checked = this.dynamicToggle?.checked || false;
+				this.isDynamicSource = checked;
+
+				if (this.dynamicPanel) {
+					this.dynamicPanel.style.display = checked ? "block" : "none";
+				}
+
+				if (checked) {
+					this.dynamicInput?.focus();
+				} else {
+					this.clearDynamicSource();
+				}
+			},
+			{ signal }
+		);
+
+		this.dynamicInput?.addEventListener(
+			"keydown",
+			e => {
+				if (e.key === "Enter") {
+					e.preventDefault();
+					this.applyDynamicUrl();
+				} else if (e.key === "Escape") {
+					this.dynamicInput?.blur();
+				}
+			},
+			{ signal }
+		);
+
+		this.dynamicInput?.addEventListener(
+			"blur",
+			() => {
+				this.applyDynamicUrl();
+			},
+			{ signal }
+		);
+	}
+
+	private async applyDynamicUrl(): Promise<void> {
+		const url = (this.dynamicInput?.value || "").trim();
+		if (!url) return;
+
+		const validation = await validateAssetUrl(url);
+		if (!validation.valid) {
+			this.showUrlError(validation.error || "Invalid URL");
+			return;
+		}
+
+		this.clearUrlError();
+
+		const shotstackEdit = this.getShotstackEdit();
+		if (!shotstackEdit) return;
+
+		if (this.dynamicFieldName) {
+			// Document-first: resolve() triggers reconciler which handles reloadAsset()
+			shotstackEdit.updateMergeFieldValueLive(this.dynamicFieldName, url);
+			return;
+		}
+
+		const fieldName = shotstackEdit.mergeFields.generateUniqueName("MEDIA");
+		const clipId = this.edit.getClipId(this.selectedTrackIdx, this.selectedClipIdx);
+		if (!clipId) return;
+		shotstackEdit.applyMergeField(clipId, "asset.src", fieldName, url, this.originalSrc);
+		this.dynamicFieldName = fieldName;
+	}
+
+	private showUrlError(message: string): void {
+		if (this.dynamicInput) {
+			this.dynamicInput.classList.add("error");
+			this.dynamicInput.title = message;
+		}
+	}
+
+	private clearUrlError(): void {
+		if (this.dynamicInput) {
+			this.dynamicInput.classList.remove("error");
+			this.dynamicInput.title = "";
+		}
+	}
+
+	private clearDynamicSource(): void {
+		if (!this.dynamicFieldName) return;
+
+		const clipId = this.edit.getClipId(this.selectedTrackIdx, this.selectedClipIdx);
+		if (clipId) {
+			let restoreValue = this.originalSrc;
+			if (!restoreValue) {
+				const field = this.getShotstackEdit()?.mergeFields.get(this.dynamicFieldName);
+				restoreValue = field?.defaultValue || "";
+			}
+			if (!restoreValue) {
+				const clip = this.edit.getResolvedClip(this.selectedTrackIdx, this.selectedClipIdx);
+				restoreValue = (clip?.asset as { src?: string })?.src || "";
+			}
+			this.getShotstackEdit()?.removeMergeField(clipId, "asset.src", restoreValue);
+		}
+		this.dynamicFieldName = "";
+		if (this.dynamicInput) {
+			this.dynamicInput.value = "";
+		}
+	}
+
+	private updateDynamicSourceUI(): void {
+		const clip = this.edit.getResolvedClip(this.selectedTrackIdx, this.selectedClipIdx);
+		if (!clip) return;
+
+		const shotstackEdit = this.getShotstackEdit();
+		const clipId = this.edit.getClipId(this.selectedTrackIdx, this.selectedClipIdx);
+		const fieldName = (clipId && shotstackEdit?.getMergeFieldForProperty(clipId, "asset.src")) ?? null;
+
+		if (fieldName) {
+			this.isDynamicSource = true;
+			this.dynamicFieldName = fieldName;
+			const mergeField = shotstackEdit?.mergeFields.get(fieldName);
+			this.originalSrc = mergeField?.defaultValue || "";
+			if (this.dynamicToggle) this.dynamicToggle.checked = true;
+			if (this.dynamicPanel) this.dynamicPanel.style.display = "block";
+			if (this.dynamicInput) {
+				this.dynamicInput.value = mergeField?.defaultValue || "";
+			}
+		} else {
+			this.isDynamicSource = false;
+			this.dynamicFieldName = "";
+
+			const asset = clip.asset as { src?: string };
+			this.originalSrc = asset?.src || "";
+
+			if (this.dynamicToggle) this.dynamicToggle.checked = false;
+			if (this.dynamicPanel) this.dynamicPanel.style.display = "none";
+			if (this.dynamicInput) this.dynamicInput.value = "";
+		}
+	}
+
+	// ─── Display Updates ─────────────────────────────────────────────────────────
+
+	private updateFitDisplay(): void {
+		if (this.fitLabel) {
+			const option = FIT_OPTIONS.find(o => o.value === this.currentFit);
+			this.fitLabel.textContent = option?.label || "Crop";
+		}
+	}
+
+	private updateOpacityDisplay(): void {
+		const value = this.opacitySlider?.getValue() ?? 100;
+		const text = `${Math.round(value)}%`;
+		const opacityValue = this.container?.querySelector("[data-opacity-value]");
+		if (opacityValue) opacityValue.textContent = text;
+	}
+
+	private updateScaleDisplay(): void {
+		const value = this.scaleSlider?.getValue() ?? 100;
+		const text = `${Math.round(value)}%`;
+		const scaleValue = this.container?.querySelector("[data-scale-value]");
+		if (scaleValue) scaleValue.textContent = text;
+	}
+
+	private updateVolumeDisplay(): void {
+		const text = `${this.currentVolume}%`;
+		if (this.volumeValue) this.volumeValue.textContent = text;
+		if (this.volumeSlider) this.volumeSlider.value = String(this.currentVolume);
+		if (this.volumeDisplayInput) this.volumeDisplayInput.value = text;
+
+		const iconContainer = this.container?.querySelector("[data-volume-icon]");
+		if (iconContainer) {
+			iconContainer.innerHTML = this.currentVolume === 0 ? ICONS.volumeMute : ICONS.volume;
+		}
+	}
+
+	private updateFitActiveState(): void {
+		this.fitPopup?.querySelectorAll("[data-fit]").forEach(item => {
+			const el = item as HTMLElement;
+			el.classList.toggle("active", el.dataset["fit"] === this.currentFit);
+		});
+	}
+
+	/**
+	 * Show the toolbar for a specific clip.
+	 * Derives assetType from the clip's asset configuration.
+	 */
+	override show(trackIndex: number, clipIndex: number): void {
+		const clip = this.edit.getResolvedClip(trackIndex, clipIndex);
+		this.assetType = (clip?.asset?.type ?? "image") as MediaAssetType;
+		// An armed keyframe is scoped to the current selection; it never reaches the document.
+		this.pendingOpacityTimes.clear();
+		super.show(trackIndex, clipIndex);
+	}
+
+	override dispose(): void {
+		// Abort all event listeners
+		this.abortController?.abort();
+		this.abortController = null;
+
+		// Clear any in-progress drag sessions
+		this.dragManager.clear();
+		if (this.playbackPauseListener) {
+			this.edit.events.off(EditEvent.PlaybackPause, this.playbackPauseListener);
+			this.playbackPauseListener = null;
+		}
+		if (this.editChangedListener) {
+			this.edit.events.off(EditEvent.EditChanged, this.editChangedListener);
+			this.editChangedListener = null;
+		}
+		this.pendingOpacityTimes.clear();
+		this.opacityDragTime = null;
+
+		// Dispose composite components
+		this.transitionPanel?.dispose();
+		this.effectPanel?.dispose();
+		this.opacitySlider?.dispose();
+		this.scaleSlider?.dispose();
+
+		// Dispose merge field labels
+		this.unsubMergeFieldChanged?.();
+		this.unsubMergeFieldChanged = null;
+		this.mergeFieldManager?.dispose();
+		this.mergeFieldManager = null;
+
+		super.dispose();
+
+		this.transitionPanel = null;
+		this.effectPanel = null;
+		this.opacitySlider = null;
+		this.scaleSlider = null;
+
+		this.fitBtn = null;
+		this.opacityBtn = null;
+		this.opacityPreviousKeyframeBtn = null;
+		this.opacityKeyframeBtn = null;
+		this.opacityNextKeyframeBtn = null;
+		this.scaleBtn = null;
+		this.volumeBtn = null;
+		this.transitionBtn = null;
+		this.effectBtn = null;
+		this.advancedBtn = null;
+		this.audioFadeBtn = null;
+		this.speedBtn = null;
+
+		this.fitPopup = null;
+		this.opacityPopup = null;
+		this.scalePopup = null;
+		this.volumePopup = null;
+		this.transitionPopup = null;
+		this.effectPopup = null;
+		this.advancedPopup = null;
+		this.audioFadePopup = null;
+		this.speedPopup = null;
+
+		this.fitLabel = null;
+		this.volumeSlider = null;
+		this.volumeValue = null;
+		this.volumeDisplayInput = null;
+		this.volumeSection = null;
+		this.visualSection = null;
+		this.audioSection = null;
+		this.speedSection = null;
+		this.speedSlider = null;
+		this.speedValue = null;
+		this.speedDisplayInput = null;
+
+		this.dynamicToggle = null;
+		this.dynamicPanel = null;
+		this.dynamicInput = null;
+	}
+}

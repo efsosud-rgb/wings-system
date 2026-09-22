@@ -1,0 +1,323 @@
+import { KeyframeBuilder } from "@animations/keyframe-builder";
+import type { Edit } from "@core/edit-session";
+import { toLoadUrl } from "@core/shared/utils";
+import { type Size } from "@layouts/geometry";
+import { type ResolvedClip, type VideoAsset } from "@schemas";
+import * as pixi from "pixi.js";
+
+import { createPlaceholderGraphic } from "./placeholder-graphic";
+import { Player, PlayerType } from "./player";
+
+export class VideoPlayer extends Player {
+	private texture: pixi.Texture<pixi.VideoSource> | null;
+	private sprite: pixi.Sprite | null;
+	private placeholder: pixi.Graphics | null;
+	private isPlaying: boolean;
+
+	private volumeKeyframeBuilder: KeyframeBuilder;
+
+	private syncTimer: number;
+	private activeSyncTimer: number;
+	private skipVideoUpdate: boolean;
+
+	constructor(edit: Edit, clipConfiguration: ResolvedClip) {
+		super(edit, clipConfiguration, PlayerType.Video);
+
+		this.texture = null;
+		this.sprite = null;
+		this.placeholder = null;
+		this.isPlaying = false;
+
+		const videoAsset = this.clipConfiguration.asset as VideoAsset;
+
+		this.volumeKeyframeBuilder = new KeyframeBuilder(videoAsset.volume ?? 1, this.getLength());
+		this.syncTimer = 0;
+		this.activeSyncTimer = 0;
+		this.skipVideoUpdate = false;
+	}
+
+	public override async load(): Promise<void> {
+		this.skipVideoUpdate = true;
+		await super.load();
+		try {
+			await this.loadVideo();
+			this.configureKeyframes();
+		} catch (error) {
+			console.warn(`[VideoPlayer.load] FAILED clipId=${this.clipId}:`, error);
+			this.createFallbackGraphic();
+		} finally {
+			this.skipVideoUpdate = false;
+		}
+	}
+
+	private createFallbackGraphic(): void {
+		const { width, height } = this.getDisplaySize();
+		this.clearPlaceholder();
+
+		this.placeholder = createPlaceholderGraphic(width, height);
+		this.contentContainer.addChild(this.placeholder);
+		this.configureKeyframes();
+	}
+
+	public override update(deltaTime: number, elapsed: number): void {
+		super.update(deltaTime, elapsed);
+
+		if (this.skipVideoUpdate) {
+			return;
+		}
+
+		this.syncTimer += elapsed;
+
+		if (!this.texture) {
+			return;
+		}
+
+		const speed = this.getAssetSpeed();
+		const sourceTime = this.getSourceTime();
+		const shouldClipPlay = this.edit.isPlaying && this.isActive() && speed > 0;
+		const desyncThreshold = 0.3;
+
+		if (shouldClipPlay) {
+			if (!this.isPlaying) {
+				this.isPlaying = true;
+				this.activeSyncTimer = 0;
+				this.texture.source.resource.volume = this.getVolume();
+				// Preserve the prepared frame unless playback has moved substantially.
+				if (Math.abs(this.texture.source.resource.currentTime - sourceTime) > desyncThreshold) {
+					this.texture.source.resource.currentTime = sourceTime;
+				}
+				this.texture.source.resource.play().catch(console.error);
+			}
+
+			if (this.texture.source.resource.volume !== this.getVolume()) {
+				this.texture.source.resource.volume = this.getVolume();
+			}
+
+			if (this.texture.source.resource.playbackRate !== speed) {
+				this.texture.source.resource.playbackRate = speed;
+			}
+
+			// Rate-limit sync checks to once per second to prevent audio stuttering
+			this.activeSyncTimer += elapsed;
+			if (this.activeSyncTimer > 1000) {
+				this.activeSyncTimer = 0;
+				// Desync threshold: 0.3 seconds (300ms)
+				const drift = Math.abs(this.texture.source.resource.currentTime - sourceTime);
+				if (drift > desyncThreshold) {
+					this.texture.source.resource.currentTime = sourceTime;
+				}
+			}
+		}
+
+		if (!shouldClipPlay && this.isPlaying) {
+			this.isPlaying = false;
+			this.texture.source.resource.pause();
+		}
+
+		// Prepare future clips after a backward seek, before they become visible.
+		// Active paused/frozen clips still sync every 100ms for scrubbing.
+		const shouldSync = this.syncTimer > 100;
+		if (this.edit.playbackTime < this.getStart() || ((!this.edit.isPlaying || speed === 0) && this.isActive() && shouldSync)) {
+			this.syncTimer = 0;
+			if (Math.abs(this.texture.source.resource.currentTime - sourceTime) > 0.01) {
+				this.texture.source.resource.currentTime = sourceTime;
+			}
+		}
+	}
+
+	public override dispose(): void {
+		this.disposeVideo();
+		this.clearPlaceholder();
+		super.dispose();
+	}
+
+	public override getSize(): Size {
+		if (this.clipConfiguration.width && this.clipConfiguration.height) {
+			return {
+				width: this.clipConfiguration.width,
+				height: this.clipConfiguration.height
+			};
+		}
+
+		if (this.sprite) {
+			return { width: this.sprite.width, height: this.sprite.height };
+		}
+
+		return this.placeholder ? this.getDisplaySize() : { width: 0, height: 0 };
+	}
+
+	public override supportsEdgeResize(): boolean {
+		return true;
+	}
+
+	/** Reload the video asset when asset.src changes (e.g., merge field update) */
+	public override async reloadAsset(): Promise<void> {
+		this.skipVideoUpdate = true;
+		this.isPlaying = false;
+		this.syncTimer = 0;
+		this.activeSyncTimer = 0;
+
+		try {
+			this.disposeVideo();
+			this.clearPlaceholder();
+			await this.loadVideo();
+		} catch (error) {
+			console.warn(`[VideoPlayer.reloadAsset] FAILED clipId=${this.clipId}:`, error);
+			this.createFallbackGraphic();
+		} finally {
+			this.skipVideoUpdate = false;
+		}
+	}
+
+	public override reconfigureAfterRestore(): void {
+		super.reconfigureAfterRestore();
+
+		const videoAsset = this.clipConfiguration.asset as VideoAsset;
+		this.volumeKeyframeBuilder = new KeyframeBuilder(videoAsset.volume ?? 1, this.getLength());
+	}
+
+	private async loadVideo(): Promise<void> {
+		const videoAsset = this.clipConfiguration.asset as VideoAsset;
+		const { src } = videoAsset;
+		if (!src) {
+			// Prompt-bearing assets route to pending placeholder players — reaching here without a src is invalid data
+			throw new Error("Video asset has no src to load.");
+		}
+
+		if (src.endsWith(".mov")) {
+			throw new Error(`Video source '${src}' is not supported. .mov files cannot be played in the browser. Please convert to .webm or .mp4 first.`);
+		}
+
+		const loadUrl = toLoadUrl(src);
+		const loadOptions: pixi.UnresolvedAsset = { src: loadUrl, data: { autoPlay: false, muted: false } };
+
+		// Use unique loader to create independent video element per player
+		// This prevents conflicts when multiple clips use the same video source
+		const texture = await this.edit.assetLoader.loadVideoUnique(this.clipId ? `${this.clipId}:${loadUrl}` : loadUrl, loadOptions);
+
+		if (!texture || !(texture.source instanceof pixi.VideoSource)) {
+			throw new Error(`Invalid video source '${src}'.`);
+		}
+
+		this.clearPlaceholder();
+
+		// Fix alpha channel rendering for WebM VP9 videos (PixiJS 8 auto-detection is buggy)
+		texture.source.alphaMode = "no-premultiply-alpha";
+
+		this.texture = this.createCroppedTexture(texture);
+
+		// Ensure the video has at least one decoded frame before adding to render tree
+		// This prevents WebGL errors when GPU tries to upload uninitialized texture data
+		const video = (this.texture.source as pixi.VideoSource).resource;
+		if (video instanceof HTMLVideoElement && video.readyState < 2) {
+			await new Promise<void>(resolve => {
+				const onReady = () => {
+					video.removeEventListener("loadeddata", onReady);
+					resolve();
+				};
+				video.addEventListener("loadeddata", onReady);
+				if (video.readyState >= 2) resolve();
+			});
+		}
+
+		if (video instanceof HTMLVideoElement) {
+			const sourceTime = this.getSourceTime();
+			if (Math.abs(video.currentTime - sourceTime) > 0.01) {
+				const outcome = await new Promise<string | undefined>(resolve => {
+					const events = ["seeked", "abort", "emptied", "error"];
+					const onSettled = (event?: Event) => {
+						for (const type of events) video.removeEventListener(type, onSettled);
+						resolve(event?.type);
+					};
+					for (const type of events) video.addEventListener(type, onSettled);
+					video.currentTime = sourceTime;
+					if (!video.seeking) onSettled();
+				});
+				// Disposal and source replacement cancel the seek without producing a frame.
+				if (this.texture?.source.resource !== video || outcome === "abort" || outcome === "emptied") return;
+				if (outcome === "error") throw new Error("Video seeking failed.");
+			}
+		}
+
+		this.sprite = new pixi.Sprite(this.texture);
+		this.contentContainer.addChild(this.sprite);
+
+		// Set initial volume immediately so the element never sits at the browser default of 1.0
+		this.texture.source.resource.volume = this.getVolume();
+
+		this.texture.source.resource.preservesPitch = false;
+	}
+
+	private disposeVideo(): void {
+		if (this.texture?.source?.resource) {
+			this.texture.source.resource.pause();
+			// Release video resource - each player owns its own video element
+			this.texture.source.resource.src = "";
+			this.texture.source.resource.load();
+		}
+		if (this.sprite) {
+			this.contentContainer.removeChild(this.sprite);
+			this.sprite.destroy();
+			this.sprite = null;
+		}
+		// Destroy the texture since we own it (created via loadVideoUnique)
+		if (this.texture) {
+			this.texture.destroy(true);
+			this.texture = null;
+		}
+	}
+
+	private clearPlaceholder(): void {
+		if (!this.placeholder) {
+			return;
+		}
+
+		this.contentContainer.removeChild(this.placeholder);
+		this.placeholder.destroy();
+		this.placeholder = null;
+	}
+
+	public getVolume(): number {
+		return this.volumeKeyframeBuilder.getValue(this.getPlaybackTime());
+	}
+
+	public override getSourceDuration(): number | null {
+		const duration = this.texture?.source?.resource?.duration;
+		return typeof duration === "number" && Number.isFinite(duration) && duration > 0 ? duration : null;
+	}
+
+	public getCurrentDrift(): number {
+		if (!this.texture?.source?.resource) return 0;
+		// Both currentTime and getSourceTime() are in source-media seconds
+		return Math.abs(this.texture.source.resource.currentTime - this.getSourceTime());
+	}
+
+	private createCroppedTexture(texture: pixi.Texture<pixi.VideoSource>): pixi.Texture<pixi.VideoSource> {
+		const videoAsset = this.clipConfiguration.asset as VideoAsset;
+
+		if (!videoAsset.crop) {
+			return texture;
+		}
+
+		const originalWidth = texture.width;
+		const originalHeight = texture.height;
+
+		// Guard against uninitialized textures - skip cropping until GPU upload completes
+		if (originalWidth <= 0 || originalHeight <= 0) {
+			return texture;
+		}
+
+		const left = Math.floor((videoAsset.crop?.left ?? 0) * originalWidth);
+		const right = Math.floor((videoAsset.crop?.right ?? 0) * originalWidth);
+		const top = Math.floor((videoAsset.crop?.top ?? 0) * originalHeight);
+		const bottom = Math.floor((videoAsset.crop?.bottom ?? 0) * originalHeight);
+
+		const x = left;
+		const y = top;
+		const width = originalWidth - left - right;
+		const height = originalHeight - top - bottom;
+
+		const crop = new pixi.Rectangle(x, y, width, height);
+		return new pixi.Texture({ source: texture.source, frame: crop });
+	}
+}

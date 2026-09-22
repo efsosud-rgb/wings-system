@@ -1,0 +1,250 @@
+import { Canvas } from "@canvas/shotstack-canvas";
+import { ExportCommand } from "@core/commands/export-command";
+import { Edit } from "@core/edit-session";
+import { sec } from "@core/timing/types";
+import { Output, Mp4OutputFormat, BufferTarget, CanvasSource, AudioBufferSource } from "mediabunny";
+import * as pixi from "pixi.js";
+
+import { AudioProcessor } from "./audio-processor";
+import { ExportProgressUI } from "./export-progress-ui";
+import { ExportError, BrowserCompatibilityError } from "./export-utils";
+import { VideoFrameProcessor } from "./video-frame-processor";
+
+interface ExportConfig {
+	fps: number;
+	size: { width: number; height: number };
+	frames: number;
+	frameDuration: number;
+}
+
+/** Wings: what the host may choose for one render. */
+export interface RenderOptions {
+	fps?: number;
+	/** Video bits per second. */
+	bitrate?: number;
+	/** Given, the built-in overlay is not shown. `done` is 0..100. */
+	onProgress?: (done: number, message: string) => void;
+	signal?: AbortSignal;
+}
+
+const DEFAULT_VIDEO_BITRATE = 5_000_000;
+
+interface EditState {
+	wasPlaying: boolean;
+	time: number;
+	visible: boolean;
+	pos: { x: number; y: number };
+	scale: { x: number; y: number };
+}
+
+export class ExportCoordinator {
+	private readonly edit: Edit;
+	private readonly canvas: Canvas;
+	private readonly app: pixi.Application;
+	private isExporting = false;
+	private videoProcessor = new VideoFrameProcessor();
+	private audioProcessor = new AudioProcessor();
+	private progressUI = new ExportProgressUI();
+	private exportCommand = new ExportCommand();
+
+	constructor(edit: Edit, canvas: Canvas) {
+		this.edit = edit;
+		this.canvas = canvas;
+		this.app = canvas.application;
+		document.addEventListener("keydown", this.handleKeyDown);
+	}
+
+	/** Whether this browser can encode at all. Without WebCodecs, render on the server. */
+	static isSupported(): boolean {
+		return typeof VideoEncoder !== "undefined";
+	}
+
+	/** Upstream behaviour: render, then download the file. */
+	async export(filename = "shotstack-export.mp4", fps?: number): Promise<void> {
+		const blob = await this.render({ fps });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement("a");
+		a.href = url;
+		a.download = filename;
+		a.click();
+		URL.revokeObjectURL(url);
+	}
+
+	/**
+	 * Wings: render the edit to an MP4 and hand it back as a Blob, so the host
+	 * can save it wherever it likes (the Drive). With `onProgress` given, the
+	 * built-in overlay stays hidden and the host draws its own; `signal` aborts
+	 * between frames. `bitrate` is bits per second of video (upstream: 5 Mbps).
+	 */
+	async render(options: RenderOptions = {}): Promise<Blob> {
+		if (!ExportCoordinator.isSupported()) {
+			throw new BrowserCompatibilityError("WebCodecs API not supported", ["VideoEncoder"]);
+		}
+		if (this.isExporting) throw new ExportError("Export in progress", "init");
+
+		this.isExporting = true;
+		const savedState = this.saveEditState();
+		this.edit.setExportMode(true);
+		const showOverlay = !options.onProgress;
+		const report = (done: number, message: string): void => {
+			if (showOverlay) this.progressUI.update(done, 100, message);
+			else options.onProgress?.(done, message);
+		};
+
+		try {
+			if (showOverlay) this.progressUI.create();
+			this.canvas.pauseTicker();
+
+			this.edit.executeEditCommand(this.exportCommand);
+
+			const cfg = this.prepareConfig(options.fps ?? this.edit.getEdit().output?.fps ?? 30);
+			report(0, "Preparing...");
+
+			await this.videoProcessor.initialize(this.exportCommand.getClips());
+			report(10, "Video ready");
+
+			const output = new Output({ format: new Mp4OutputFormat(), target: new BufferTarget() });
+			const canvas = document.createElement("canvas");
+			canvas.width = cfg.size.width;
+			canvas.height = cfg.size.height;
+			const ctx = canvas.getContext("2d");
+			if (!ctx) throw new Error("No 2D context");
+
+			const videoSource = new CanvasSource(canvas, { codec: "avc", bitrate: options.bitrate ?? DEFAULT_VIDEO_BITRATE });
+			output.addVideoTrack(videoSource);
+
+			report(15, "Mixing audio...");
+			const mixedAudio = await this.audioProcessor.renderMix(this.exportCommand.getTracks(), this.edit.totalDuration);
+			let audioSource: AudioBufferSource | null = null;
+			if (mixedAudio) {
+				audioSource = new AudioBufferSource({ codec: "aac", bitrate: 192_000 });
+				output.addAudioTrack(audioSource);
+			}
+
+			await output.start();
+
+			if (audioSource && mixedAudio) {
+				report(20, "Encoding audio...");
+				await audioSource.add(mixedAudio);
+			}
+
+			report(25, "Exporting...");
+			await this.processFrames(cfg, videoSource, canvas, ctx, report, options.signal);
+
+			await output.finalize();
+
+			const data = (output.target as BufferTarget).buffer;
+			if (!data) throw new Error("No video data");
+
+			report(100, "Complete!");
+			return new Blob([data], { type: "video/mp4" });
+		} catch (error) {
+			throw error instanceof ExportError ? error : new ExportError(`Export failed: ${error}`, "export");
+		} finally {
+			this.isExporting = false;
+			this.edit.setExportMode(false);
+			this.canvas.resumeTicker();
+			if (showOverlay) this.progressUI.remove();
+			this.restoreEditState(savedState);
+		}
+	}
+
+	private async processFrames(
+		cfg: ExportConfig,
+		videoSource: CanvasSource,
+		_canvas: HTMLCanvasElement,
+		ctx: CanvasRenderingContext2D,
+		report: (done: number, message: string) => void,
+		signal?: AbortSignal
+	): Promise<void> {
+		const container = this.edit.getViewportContainer();
+		this.edit.pause();
+		Object.assign(container.position, { x: 0, y: 0 });
+		Object.assign(container.scale, { x: 1, y: 1 });
+		container.visible = true;
+
+		const players = this.videoProcessor.disableVideoPlayback(this.exportCommand.getClips());
+
+		for (let i = 0; i < cfg.frames; i += 1) {
+			if (signal?.aborted) throw new ExportError("Export cancelled", "cancelled");
+			const frameTime = i * cfg.frameDuration;
+			this.edit.playbackTime = sec(frameTime);
+
+			for (const clip of this.exportCommand.getClips()) {
+				clip.update(0, 0);
+			}
+
+			for (const player of players) {
+				const start = player.getStart?.() || 0;
+				const end = player.getEnd?.() || start + (player.getLength?.() || 0);
+				if (frameTime >= start && frameTime < end) {
+					await this.videoProcessor.replaceVideoTexture(player, frameTime);
+				}
+			}
+
+			this.app.renderer.render(this.app.stage);
+
+			const pixels = this.app.renderer.extract.pixels({
+				target: container,
+				frame: new pixi.Rectangle(0, 0, cfg.size.width, cfg.size.height)
+			});
+
+			const imageData = new ImageData(new Uint8ClampedArray(pixels.pixels), pixels.width, pixels.height);
+
+			ctx.putImageData(imageData, 0, 0);
+
+			await videoSource.add(i / cfg.fps, 1 / cfg.fps);
+
+			report(25 + Math.round(((i + 1) / cfg.frames) * 75), "Exporting...");
+		}
+	}
+
+	private handleKeyDown = (e: KeyboardEvent): void => {
+		if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+		if (e.code === "KeyE" && (e.metaKey || e.ctrlKey) && !this.isExporting) {
+			e.preventDefault();
+			this.export("shotstack-export.mp4", this.edit.getEdit().output?.fps || 30).catch(err => console.error("Export failed:", err));
+		}
+	};
+
+	dispose(): void {
+		document.removeEventListener("keydown", this.handleKeyDown);
+		this.videoProcessor.dispose();
+		this.progressUI.remove();
+	}
+
+	private prepareConfig(fps: number): ExportConfig {
+		const outputSize = this.edit.getEdit().output?.size;
+		const size = { width: outputSize?.width ?? 1920, height: outputSize?.height ?? 1080 };
+		// totalDuration is in seconds
+		return {
+			fps,
+			size,
+			frames: Math.ceil(this.edit.totalDuration * fps),
+			frameDuration: 1 / fps // seconds per frame
+		};
+	}
+
+	private saveEditState(): EditState {
+		const c = this.edit.getViewportContainer();
+		return {
+			wasPlaying: this.edit.isPlaying,
+			time: this.edit.playbackTime,
+			visible: c.visible,
+			pos: { x: c.position.x, y: c.position.y },
+			scale: { x: c.scale.x, y: c.scale.y }
+		};
+	}
+
+	private restoreEditState(state: EditState): void {
+		const c = this.edit.getViewportContainer();
+		this.edit.setExportMode(false);
+		this.videoProcessor.restore();
+
+		Object.assign(c.position, state.pos);
+		Object.assign(c.scale, state.scale);
+		c.visible = state.visible;
+		this.edit.seek(sec(state.time));
+		if (state.wasPlaying) this.edit.play();
+	}
+}

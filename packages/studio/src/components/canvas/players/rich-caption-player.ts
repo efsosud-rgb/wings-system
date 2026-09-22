@@ -1,0 +1,710 @@
+import { Player, PlayerType } from "@canvas/players/player";
+import { Edit } from "@core/edit-session";
+import { parseFontFamily, resolveFontPath, getFontDisplayName } from "@core/fonts/font-config";
+import { extractFontNames, isGoogleFontUrl } from "@core/fonts/font-utils";
+import { isAliasReference } from "@core/timing/types";
+import { type Size, type Vector } from "@layouts/geometry";
+import { RichCaptionAssetSchema, type RichCaptionAsset, type ResolvedClip } from "@schemas";
+import {
+	FontRegistry,
+	CaptionLayoutEngine,
+	generateRichCaptionFrame,
+	createDefaultGeneratorConfig,
+	createWebPainter,
+	buildCaptionLayoutConfig,
+	resolveCaptionFonts,
+	parseSubtitleToWords,
+	CanvasRichCaptionAssetSchema,
+	type CanvasRichCaptionAsset,
+	type CaptionLayout,
+	type RichCaptionGeneratorConfig,
+	type WordTiming
+} from "@shotstack/shotstack-canvas";
+import * as pixi from "pixi.js";
+
+import { studioConfig } from "../../../wings";
+
+const SOFT_WORD_LIMIT = 1500;
+const HARD_WORD_LIMIT = 5000;
+const SUBTITLE_FETCH_TIMEOUT_MS = 10_000;
+
+export class RichCaptionPlayer extends Player {
+	private fontRegistry: FontRegistry | null = null;
+	private layoutEngine: CaptionLayoutEngine | null = null;
+	private captionLayout: CaptionLayout | null = null;
+	private validatedAsset: CanvasRichCaptionAsset | null = null;
+	private generatorConfig: RichCaptionGeneratorConfig | null = null;
+
+	private canvas: HTMLCanvasElement | null = null;
+	private painter: ReturnType<typeof createWebPainter> | null = null;
+	private currentRender: Promise<void> | null = null; // serialises the async paint so captures await a finished frame
+	private texture: pixi.Texture | null = null;
+	private sprite: pixi.Sprite | null = null;
+
+	private words: WordTiming[] = [];
+	private loadComplete: boolean = false;
+	private isPlaceholder = false;
+
+	private readonly fontRegistrationCache = new Map<string, Promise<boolean>>();
+	private lastRegisteredFontKey: string = "";
+	private pendingLayoutId: number = 0;
+	private resolvedPauseThreshold: number = 500;
+
+	constructor(edit: Edit, clipConfiguration: ResolvedClip) {
+		const { fit, ...configWithoutFit } = clipConfiguration;
+		super(edit, configWithoutFit, PlayerType.RichCaption);
+	}
+
+	private static createPlaceholderWords(clipLengthMs: number): WordTiming[] {
+		const phrase = ["Your", "captions", "will", "appear", "here"];
+		const msPerWord = 400;
+		const phraseGapMs = 600;
+		const phraseDurationMs = phrase.length * msPerWord + phraseGapMs;
+		const spokenDurationMs = phrase.length * msPerWord;
+		const totalPhrases = Math.max(1, Math.ceil((clipLengthMs - spokenDurationMs) / phraseDurationMs) + 1);
+		const words: WordTiming[] = [];
+
+		for (let p = 0; p < totalPhrases; p += 1) {
+			const phraseStart = p * phraseDurationMs;
+			for (let w = 0; w < phrase.length; w += 1) {
+				const start = phraseStart + w * msPerWord;
+				words.push({
+					text: phrase[w],
+					start: Math.round(start),
+					end: Math.round(start + msPerWord),
+					confidence: 1
+				});
+			}
+		}
+
+		return words;
+	}
+
+	public override async load(): Promise<void> {
+		await super.load();
+
+		const richCaptionAsset = this.clipConfiguration.asset as RichCaptionAsset;
+
+		try {
+			const validationResult = RichCaptionAssetSchema.safeParse(richCaptionAsset);
+			if (!validationResult.success) {
+				this.createFallbackGraphic("Invalid caption asset");
+				return;
+			}
+
+			let words: WordTiming[];
+			if (richCaptionAsset.src) {
+				if (isAliasReference(richCaptionAsset.src)) {
+					words = RichCaptionPlayer.createPlaceholderWords(this.getLength() * 1000);
+					this.isPlaceholder = true;
+					this.needsResolution = true;
+				} else {
+					words = await this.fetchAndParseSubtitle(richCaptionAsset.src);
+					this.resolvedPauseThreshold = 5;
+				}
+			} else {
+				words = ((richCaptionAsset as RichCaptionAsset & { words?: WordTiming[] }).words ?? []).map((w: WordTiming) => ({
+					text: w.text,
+					start: w.start,
+					end: w.end,
+					confidence: w.confidence
+				}));
+			}
+
+			if (words.length === 0) {
+				this.createFallbackGraphic("No caption words found");
+				return;
+			}
+
+			if (words.length > HARD_WORD_LIMIT) {
+				this.createFallbackGraphic(`Word count (${words.length}) exceeds limit of ${HARD_WORD_LIMIT}`);
+				return;
+			}
+			if (words.length > SOFT_WORD_LIMIT) {
+				console.warn(`RichCaptionPlayer: ${words.length} words exceeds soft limit of ${SOFT_WORD_LIMIT}. Performance may degrade.`);
+			}
+
+			await this.buildRenderPipeline(richCaptionAsset, words);
+		} catch (error) {
+			console.error("RichCaptionPlayer load failed:", error);
+			this.cleanupResources();
+			this.createFallbackGraphic("Failed to load caption");
+		}
+	}
+
+	public override update(deltaTime: number, elapsed: number): void {
+		super.update(deltaTime, elapsed);
+
+		if (!this.isActive() || !this.loadComplete) {
+			return;
+		}
+
+		const currentTimeMs = this.getPlaybackTime() * 1000;
+		this.renderFrameSync(currentTimeMs);
+	}
+
+	/**
+	 * Render the exact playhead frame to completion for an off-playback capture. The web painter is
+	 * async, so this awaits {@link renderFrame} (which awaits the paint) before captureFrame extracts —
+	 * otherwise the snapshot is a half-drawn caption. Asset loading is awaited by the caller.
+	 * @internal
+	 */
+	public override async prepareStaticRender(): Promise<void> {
+		if (this.loadComplete) await this.renderFrame(this.getPlaybackTime() * 1000);
+	}
+
+	public override async reloadAsset(): Promise<void> {
+		const asset = this.clipConfiguration.asset as RichCaptionAsset;
+
+		// When src is an alias reference, reset to placeholder if previously resolved
+		if (!asset.src || isAliasReference(asset.src)) {
+			if (this.loadComplete && !this.isPlaceholder) {
+				this.resolvedPauseThreshold = 500;
+				this.words = RichCaptionPlayer.createPlaceholderWords(this.getLength() * 1000);
+				this.isPlaceholder = true;
+				this.needsResolution = true;
+				await this.reconfigure();
+			}
+			return;
+		}
+
+		this.loadComplete = false;
+
+		if (this.texture) {
+			this.texture.destroy();
+			this.texture = null;
+		}
+		if (this.sprite) {
+			this.sprite.destroy();
+			this.sprite = null;
+		}
+		this.captionLayout = null;
+		this.validatedAsset = null;
+		this.generatorConfig = null;
+		this.canvas = null;
+		this.painter = null;
+
+		this.isPlaceholder = false;
+		this.needsResolution = false;
+
+		const words = await this.fetchAndParseSubtitle(asset.src);
+		this.resolvedPauseThreshold = 5;
+
+		if (words.length === 0) {
+			this.createFallbackGraphic("No caption words found");
+			return;
+		}
+
+		await this.buildRenderPipeline(asset, words);
+	}
+
+	public override reconfigureAfterRestore(): void {
+		super.reconfigureAfterRestore();
+		this.reconfigure();
+	}
+
+	private async reconfigure(): Promise<void> {
+		if (!this.loadComplete || !this.layoutEngine || !this.canvas || !this.painter) {
+			return;
+		}
+
+		try {
+			const asset = this.clipConfiguration.asset as RichCaptionAsset;
+
+			// Regenerate placeholder words when clip length changes (e.g. "end" re-resolved after video probed)
+			if (this.isPlaceholder) {
+				this.words = RichCaptionPlayer.createPlaceholderWords(this.getLength() * 1000);
+			}
+
+			const fontKey = `${asset.font?.family ?? "Roboto"}|${asset.font?.weight ?? 400}`;
+			if (fontKey !== this.lastRegisteredFontKey) {
+				await this.registerFonts(asset);
+				this.lastRegisteredFontKey = fontKey;
+			}
+
+			const canvasPayload = this.buildCanvasPayload(asset, this.words);
+			const canvasValidation = CanvasRichCaptionAssetSchema.safeParse(canvasPayload);
+			if (!canvasValidation.success) {
+				console.error("Caption reconfigure validation failed:", canvasValidation.error?.issues);
+				return;
+			}
+			this.validatedAsset = canvasValidation.data;
+
+			const { width, height } = this.getSize();
+			const layoutConfig = buildCaptionLayoutConfig(this.validatedAsset, width, height);
+			this.captionLayout = await this.layoutEngine.layoutCaption(this.words, layoutConfig);
+
+			this.generatorConfig = createDefaultGeneratorConfig(width, height, 1);
+
+			this.renderFrameSync(this.getPlaybackTime() * 1000);
+		} catch (error) {
+			console.error("RichCaptionPlayer reconfigure failed:", error);
+		}
+	}
+
+	private async buildRenderPipeline(asset: RichCaptionAsset, words: WordTiming[]): Promise<void> {
+		const canvasPayload = this.buildCanvasPayload(asset, words);
+		const canvasValidation = CanvasRichCaptionAssetSchema.safeParse(canvasPayload);
+		if (!canvasValidation.success) {
+			console.error("Canvas caption validation failed:", canvasValidation.error?.issues ?? canvasValidation.error);
+			this.createFallbackGraphic("Caption validation failed");
+			return;
+		}
+		this.validatedAsset = canvasValidation.data;
+		this.words = words;
+
+		// Wings: HarfBuzz is served by our own app, never by js.shotstack.io.
+		this.fontRegistry = await FontRegistry.getSharedInstance(studioConfig().harfbuzzWasmUrl);
+		await this.registerFonts(asset);
+		this.lastRegisteredFontKey = `${asset.font?.family ?? "Roboto"}|${asset.font?.weight ?? 400}`;
+
+		this.layoutEngine = new CaptionLayoutEngine(this.fontRegistry);
+
+		const { width, height } = this.getSize();
+		const layoutConfig = buildCaptionLayoutConfig(this.validatedAsset, width, height);
+
+		this.captionLayout = await this.layoutEngine.layoutCaption(words, layoutConfig);
+
+		this.generatorConfig = createDefaultGeneratorConfig(width, height, 1);
+
+		this.canvas = document.createElement("canvas");
+		this.canvas.width = width;
+		this.canvas.height = height;
+		this.painter = createWebPainter(this.canvas);
+
+		this.renderFrameSync(0);
+		this.configureKeyframes();
+		this.loadComplete = true;
+	}
+
+	/**
+	 * Render the caption at `timeMs`, serialised so the shared canvas isn't cleared mid-paint.
+	 * Awaited by {@link prepareStaticRender} for off-playback captures.
+	 */
+	private async renderFrame(timeMs: number): Promise<void> {
+		while (this.currentRender) {
+			await this.currentRender;
+		}
+		this.currentRender = this.paintFrame(timeMs).finally(() => {
+			this.currentRender = null;
+		});
+		await this.currentRender;
+	}
+
+	/** Fire-and-forget render for the live tick and lifecycle hooks; the texture updates when the paint settles. */
+	private renderFrameSync(timeMs: number): void {
+		this.renderFrame(timeMs).catch(() => {});
+	}
+
+	/**
+	 * Paint the caption frame to completion. The web painter is async (glyph fills resolve
+	 * asynchronously), so the Pixi texture is only updated once the paint has finished — otherwise a
+	 * snapshot captures a half-drawn canvas (a single glyph).
+	 */
+	private async paintFrame(timeMs: number): Promise<void> {
+		if (!this.layoutEngine || !this.captionLayout || !this.canvas || !this.painter || !this.validatedAsset || !this.generatorConfig) {
+			return;
+		}
+
+		try {
+			const { ops } = generateRichCaptionFrame(this.validatedAsset, this.captionLayout, timeMs, this.layoutEngine, this.generatorConfig);
+
+			if (ops.length === 0 && this.sprite) {
+				this.sprite.visible = false;
+				return;
+			}
+
+			const ctx = this.canvas.getContext("2d");
+			if (ctx) ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+			await this.painter.render(ops);
+
+			if (!this.texture) {
+				this.texture = pixi.Texture.from(this.canvas);
+			} else {
+				this.texture.source.update();
+			}
+
+			if (!this.sprite) {
+				this.sprite = new pixi.Sprite(this.texture);
+				this.contentContainer.addChild(this.sprite);
+			}
+
+			this.sprite.visible = true;
+		} catch (err) {
+			console.error("Failed to render rich caption frame:", err);
+		}
+	}
+
+	private async fetchAndParseSubtitle(src: string): Promise<WordTiming[]> {
+		const controller = new AbortController();
+		const timeoutId = setTimeout(() => controller.abort(), SUBTITLE_FETCH_TIMEOUT_MS);
+		try {
+			const response = await fetch(src, { signal: controller.signal });
+			if (!response.ok) {
+				throw new Error(`Subtitle fetch failed: ${response.status}`);
+			}
+			const content = await response.text();
+			return parseSubtitleToWords(content);
+		} finally {
+			clearTimeout(timeoutId);
+		}
+	}
+
+	// Shared font resolution used by both registration and the render payload, so the registered
+	// face and the rendered family are always the same. Delegates to the canvas resolver.
+	private resolveFontsForAsset(asset: RichCaptionAsset) {
+		const family = asset.font?.family ?? "Roboto";
+		const weight = asset.font?.weight ? parseInt(String(asset.font.weight), 10) || 400 : 400;
+		const fontNameMap = new Map<string, string>();
+		for (const [src, meta] of this.edit.getFontMetadata()) fontNameMap.set(src, meta.baseFamilyName);
+		const activeFamily = asset.active?.font?.family;
+		const activeWeight = asset.active?.font?.weight;
+		return resolveCaptionFonts({
+			family,
+			weight,
+			timelineFonts: this.edit.getTimelineFonts(),
+			fontNameMap,
+			...(activeFamily ? { activeFamily } : {}),
+			...(activeWeight != null ? { activeWeight: activeWeight as string | number } : {})
+		});
+	}
+
+	private async registerFonts(asset: RichCaptionAsset): Promise<void> {
+		if (!this.fontRegistry) return;
+
+		const family = asset.font?.family ?? "Roboto";
+		const assetWeight = asset.font?.weight ? parseInt(String(asset.font.weight), 10) || 400 : 400;
+
+		// Registration and the render payload (buildCanvasPayload) share this one resolution, so the
+		// render looks up exactly the face that was registered.
+		const resolution = this.resolveFontsForAsset(asset);
+
+		if (resolution.matched) {
+			for (const font of resolution.fonts) {
+				if (font.src) await this.registerFontFromUrl(font.src, font.family, parseInt(font.weight, 10) || 400);
+			}
+			return;
+		}
+
+		const resolved = this.resolveFontWithWeight(family, assetWeight);
+		if (resolved) {
+			await this.registerFontFromUrl(resolved.url, resolved.baseFontFamily, resolved.fontWeight);
+		}
+	}
+
+	private async registerFontFromUrl(url: string, family: string, weight: number): Promise<boolean> {
+		if (!this.fontRegistry) return false;
+		const cacheKey = `${url}|${family}|${weight}`;
+		const cached = this.fontRegistrationCache.get(cacheKey);
+		if (cached) return cached;
+
+		const registrationPromise = (async (): Promise<boolean> => {
+			try {
+				const response = await fetch(url);
+				if (!response.ok) return false;
+				const bytes = await response.arrayBuffer();
+				await this.fontRegistry!.registerFromBytes(bytes, { family, weight: weight.toString() });
+
+				try {
+					const fontFace = new FontFace(family, bytes, {
+						weight: weight.toString()
+					});
+					await fontFace.load();
+					document.fonts.add(fontFace);
+				} catch {
+					// Browser FontFace registration is best-effort
+				}
+
+				return true;
+			} catch {
+				return false;
+			}
+		})();
+
+		this.fontRegistrationCache.set(cacheKey, registrationPromise);
+		return registrationPromise;
+	}
+
+	private resolveFontWithWeight(family: string, requestedWeight: number): { url: string; baseFontFamily: string; fontWeight: number } | null {
+		const resolvedFamily = getFontDisplayName(family);
+		const { baseFontFamily, fontWeight: parsedWeight } = parseFontFamily(resolvedFamily);
+		const effectiveWeight = parsedWeight !== 400 ? parsedWeight : requestedWeight;
+
+		const metadataUrl = this.edit.getFontUrlByFamilyAndWeight(baseFontFamily, effectiveWeight);
+		if (metadataUrl) {
+			return { url: metadataUrl, baseFontFamily, fontWeight: effectiveWeight };
+		}
+
+		const editData = this.edit.getEdit();
+		const timelineFonts = editData?.timeline?.fonts || [];
+		const matchingFont = timelineFonts.find(font => {
+			const { full, base } = extractFontNames(font.src);
+			const requested = family.toLowerCase();
+			return full.toLowerCase() === requested || base.toLowerCase() === requested;
+		});
+
+		if (matchingFont) {
+			return { url: matchingFont.src, baseFontFamily, fontWeight: effectiveWeight };
+		}
+
+		const weightedFamilyName = this.buildWeightedFamilyName(baseFontFamily, effectiveWeight);
+		if (weightedFamilyName) {
+			const weightedPath = resolveFontPath(weightedFamilyName);
+			if (weightedPath) {
+				return { url: weightedPath, baseFontFamily, fontWeight: effectiveWeight };
+			}
+		}
+
+		const builtInPath = resolveFontPath(family);
+		if (builtInPath) {
+			return { url: builtInPath, baseFontFamily, fontWeight: effectiveWeight };
+		}
+
+		return null;
+	}
+
+	private buildWeightedFamilyName(baseFontFamily: string, weight: number): string | null {
+		const WEIGHT_TO_MODIFIER: Record<number, string> = {
+			100: "Thin",
+			200: "ExtraLight",
+			300: "Light",
+			400: "Regular",
+			500: "Medium",
+			600: "SemiBold",
+			700: "Bold",
+			800: "ExtraBold",
+			900: "Black"
+		};
+
+		const modifier = WEIGHT_TO_MODIFIER[weight];
+		if (!modifier || modifier === "Regular") return null;
+
+		return `${baseFontFamily} ${modifier}`;
+	}
+
+	private buildCustomFontsFromTimeline(asset: RichCaptionAsset): Array<{ src: string; family: string; weight: string }> {
+		const rawFamily = asset.font?.family;
+		if (!rawFamily) return [];
+
+		const requestedFamily = getFontDisplayName(rawFamily);
+		const { baseFontFamily, fontWeight } = parseFontFamily(requestedFamily);
+
+		const timelineFonts = this.edit.getTimelineFonts();
+		const matchingFont = timelineFonts.find(font => {
+			const { full, base } = extractFontNames(font.src);
+			const requested = requestedFamily.toLowerCase();
+			return full.toLowerCase() === requested || base.toLowerCase() === requested;
+		});
+
+		if (matchingFont) {
+			return [{ src: matchingFont.src, family: baseFontFamily || requestedFamily, weight: fontWeight.toString() }];
+		}
+
+		const fontMetadata = this.edit.getFontMetadata();
+		const lowerRequested = (baseFontFamily || requestedFamily).toLowerCase();
+		const nonGoogleFonts = timelineFonts.filter(font => !isGoogleFontUrl(font.src));
+
+		const metadataMatch = nonGoogleFonts.find(font => {
+			const meta = fontMetadata.get(font.src);
+			return meta?.baseFamilyName.toLowerCase() === lowerRequested;
+		});
+
+		if (metadataMatch) {
+			return [{ src: metadataMatch.src, family: baseFontFamily || requestedFamily, weight: fontWeight.toString() }];
+		}
+
+		return [];
+	}
+
+	private buildCanvasPayload(asset: RichCaptionAsset, words: WordTiming[]): Record<string, unknown> {
+		const { width, height } = this.getSize();
+		// Use the same resolution as registration, so the rendered family matches the registered face.
+		const resolution = this.resolveFontsForAsset(asset);
+		const resolvedFamily = resolution.matched ? resolution.resolvedFamily : getFontDisplayName(asset.font?.family ?? "Roboto");
+		const customFonts = resolution.matched
+			? resolution.fonts.filter(f => f.src).map(f => ({ src: f.src as string, family: f.family, weight: f.weight }))
+			: this.buildCustomFontsFromTimeline(asset);
+
+		const payload: Record<string, unknown> = {
+			type: asset.type,
+			words: words.map(w => ({ text: w.text, start: w.start, end: w.end, confidence: w.confidence })),
+			font: { ...asset.font, family: resolvedFamily },
+			width,
+			height
+		};
+
+		const optionalFields: Record<string, unknown> = {
+			active: asset.active,
+			stroke: asset.stroke,
+			shadow: asset.shadow,
+			background: asset.background,
+			border: asset.border,
+			padding: asset.padding,
+			style: asset.style,
+			animation: asset.animation,
+			align: asset.align,
+			pauseThreshold: this.resolvedPauseThreshold
+		};
+
+		for (const [key, value] of Object.entries(optionalFields)) {
+			if (value !== undefined) {
+				payload[key] = value;
+			}
+		}
+
+		if (customFonts.length > 0) {
+			payload["customFonts"] = customFonts;
+		}
+
+		return payload;
+	}
+
+	private createFallbackGraphic(message: string): void {
+		const { width, height } = this.getSize();
+
+		const style = new pixi.TextStyle({
+			fontFamily: "Arial",
+			fontSize: 24,
+			fill: "#ffffff",
+			align: "center",
+			wordWrap: true,
+			wordWrapWidth: width
+		});
+
+		const fallbackText = new pixi.Text(message, style);
+		fallbackText.anchor.set(0.5, 0.5);
+		fallbackText.x = width / 2;
+		fallbackText.y = height / 2;
+
+		this.contentContainer.addChild(fallbackText);
+	}
+
+	private cleanupResources(): void {
+		if (this.fontRegistry) {
+			try {
+				this.fontRegistry.release();
+			} catch (e) {
+				console.warn("Error releasing font registry:", e);
+			}
+			this.fontRegistry = null;
+		}
+
+		this.layoutEngine = null;
+		this.captionLayout = null;
+		this.validatedAsset = null;
+		this.generatorConfig = null;
+		this.canvas = null;
+		this.painter = null;
+	}
+
+	public override dispose(): void {
+		super.dispose();
+		this.loadComplete = false;
+
+		if (this.texture) {
+			this.texture.destroy();
+		}
+		this.texture = null;
+
+		if (this.sprite) {
+			this.sprite.destroy();
+			this.sprite = null;
+		}
+
+		this.cleanupResources();
+	}
+
+	public override getSize(): Size {
+		const editData = this.edit.getEdit();
+		return {
+			width: this.clipConfiguration.width || editData?.output?.size?.width || this.edit.size.width,
+			height: this.clipConfiguration.height || editData?.output?.size?.height || this.edit.size.height
+		};
+	}
+
+	public override getContentSize(): Size {
+		return {
+			width: this.clipConfiguration.width || this.canvas?.width || this.edit.size.width,
+			height: this.clipConfiguration.height || this.canvas?.height || this.edit.size.height
+		};
+	}
+
+	protected override getFitScale(): number {
+		return 1;
+	}
+
+	protected override getContainerScale(): Vector {
+		const scale = this.getScale();
+		return { x: scale, y: scale };
+	}
+
+	protected override onDimensionsChanged(): void {
+		if (this.words.length === 0) return;
+
+		this.rebuildForCurrentSize();
+	}
+
+	private async rebuildForCurrentSize(): Promise<void> {
+		const currentTimeMs = this.getPlaybackTime() * 1000;
+
+		if (this.texture) {
+			this.texture.destroy();
+			this.texture = null;
+		}
+		if (this.sprite) {
+			this.contentContainer.removeChild(this.sprite);
+			this.sprite.destroy();
+			this.sprite = null;
+		}
+		if (this.contentContainer.mask) {
+			const { mask } = this.contentContainer;
+			this.contentContainer.mask = null;
+			if (mask instanceof pixi.Graphics) {
+				mask.destroy();
+			}
+		}
+
+		this.captionLayout = null;
+		this.validatedAsset = null;
+		this.generatorConfig = null;
+		this.canvas = null;
+		this.painter = null;
+
+		const { width, height } = this.getSize();
+		const asset = this.clipConfiguration.asset as RichCaptionAsset;
+
+		const canvasPayload = this.buildCanvasPayload(asset, this.words);
+		const canvasValidation = CanvasRichCaptionAssetSchema.safeParse(canvasPayload);
+		if (!canvasValidation.success) {
+			return;
+		}
+		this.validatedAsset = canvasValidation.data;
+
+		this.generatorConfig = createDefaultGeneratorConfig(width, height, 1);
+
+		this.canvas = document.createElement("canvas");
+		this.canvas.width = width;
+		this.canvas.height = height;
+		this.painter = createWebPainter(this.canvas);
+
+		if (!this.layoutEngine) return;
+
+		const layoutConfig = buildCaptionLayoutConfig(this.validatedAsset, width, height);
+
+		this.pendingLayoutId += 1;
+		const layoutId = this.pendingLayoutId;
+
+		const layout = await this.layoutEngine.layoutCaption(this.words, layoutConfig);
+
+		if (layoutId !== this.pendingLayoutId) return;
+
+		this.captionLayout = layout;
+
+		this.renderFrameSync(currentTimeMs);
+	}
+
+	public override supportsEdgeResize(): boolean {
+		return true;
+	}
+}
