@@ -283,7 +283,8 @@ export async function renderOf(
       .returning();
 
   const input = claimed.input as RenderInput;
-  const { filing: _filing, ...rest } = claimedOutput;
+  const rest: RenderOutput = { ...claimedOutput };
+  delete rest.filing;
   const key = rest.storageKey;
   const storage = deps.drive.storage;
   if (!storage)
