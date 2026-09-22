@@ -182,13 +182,54 @@ final.
    `running` ("renderizando"), `done` (com o arquivo no Drive e a lista de
    `unsupported`) ou `failed` (com a frase do erro).
 
+## Legendas (`type: transcribe`)
+
+O botão "Legendar" do Studio manda um vídeo ou áudio do Drive para o Whisper
+do worker (`faster-whisper`, modelo "small"). Mesmas três regras dos jobs.
+
+| Coluna   | Valor                                                                    |
+| -------- | ------------------------------------------------------------------------ |
+| `type`   | `transcribe`                                                             |
+| `input`  | `{ version: 1, storageKey, language?, destination }`                     |
+| `output` | o que o worker devolve; a API acrescenta `filed`, `language`, `segments` |
+| `error`  | `<código>: <frase>`                                                      |
+
+Quem enfileira é `POST /studio/transcriptions` (`{ fileId, language? }`,
+`marketing.media.edit`): o arquivo precisa ser `video/*` ou `audio/*`
+(senão `422 unsupported_file`), ler é o bastante para citá-lo, e a pasta dele
+precisa de acesso de escrita, porque o SRT nasce ao lado. O worker só lê
+`storageKey` e `language` (ISO 639-1; sem ela detecta); `destination`
+(`folderId`, `name` = `<nome sem extensão>.srt`, `sourceFileId`, `clientId`,
+`ownerId`) é da API, para o job continuar autossuficiente depois de um
+reinício. A resposta é `202 { transcription }`, auditada como
+`studio.captions_requested` (id do job, id do arquivo, idioma).
+
+O worker grava o JSON da transcrição (`{ language, languageProbability,
+segments: [{ start, end, text }] }`) em `<storageKey sem extensão>.transcript.json`
+e devolve `output.outputStorageKey` mais `language`, `languageProbability`,
+`durationSeconds` e `segments`.
+
+Na primeira `GET /studio/transcriptions/:id` que encontra o job `done`
+(só o dono vê; `select … for update` na prática é a mesma atualização
+condicional dos renders), a API lê esse JSON, monta o SRT (`segmentsToSrt`,
+em `packages/shared`: cues numeradas, `HH:MM:SS,mmm`, texto vazio pulado, fim
+nunca antes de início + 0,5 s), grava o SRT no storage com chave nova e cria
+o `drive_files` `<nome>.srt` na pasta da origem, **como nova versão** quando já
+existe um arquivo com esse nome. Audita `studio.captions_saved` (id do job,
+id do arquivo, número de cues) e guarda `output.filed = { driveFileId,
+version, name, at }`. JSON que não está no storage ou não tem `segments` vira
+`failed` com `output_missing`.
+
+O que a tela recebe (`StudioTranscription`): `id`, `state`, `error`,
+`sourceFileId`, `file: { id, version, name, folderId } | null`, `language`,
+`segments` (quantidade), `createdAt`, `finishedAt`. Com `file`, a tela põe um
+clipe `caption` citando `wings-drive://<file.id>`.
+
 ## Parte 2
 
 - Proxy de baixa resolução (`type: proxy`): 540p H.264, gravado como
   `drive/proxy/<id do arquivo>`, para o editor abrir vídeo de uma hora sem
   engasgar. O projeto continua citando o original.
-- Legendas por Whisper (`type: transcribe`, que já existe): o resultado vira um
-  SRT no Drive e um clipe `caption` no projeto.
 - Render no servidor com o mesmo motor do navegador (Chromium sem tela
   rodando `packages/studio`), para cobrir o esquema inteiro sem reimplementar
   em FFmpeg.

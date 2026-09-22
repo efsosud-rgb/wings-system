@@ -1,11 +1,23 @@
-import { STUDIO_LINK_TTL_SECONDS, studioRenderRequestSchema } from '@wings/shared';
+import {
+  STUDIO_LINK_TTL_SECONDS,
+  studioRenderRequestSchema,
+  studioTranscriptionRequestSchema,
+} from '@wings/shared';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { writeAudit } from '../../lib/audit.js';
 import { storageOf } from '../../lib/storage/index.js';
 import { driveAccessOf, type DriveAccess } from '../drive/access.js';
 import { DriveError, linkFor, type DriveDeps } from '../drive/service.js';
-import { StudioError, enqueueRender, listRenders, renderOf, type StudioDeps } from './service.js';
+import {
+  StudioError,
+  enqueueRender,
+  enqueueTranscription,
+  listRenders,
+  renderOf,
+  transcriptionOf,
+  type StudioDeps,
+} from './service.js';
 
 const idParam = z.object({ id: z.uuid() });
 
@@ -13,6 +25,7 @@ const STATUS: Record<string, number> = {
   not_found: 404,
   forbidden: 403,
   invalid_project: 422,
+  unsupported_file: 422,
   storage_unavailable: 503,
 };
 
@@ -130,6 +143,36 @@ export const studioRoutes: FastifyPluginAsync = async (app) => {
       if (!params.success) throw new StudioError('not_found', 'Render não encontrado.');
       const { render } = await renderOf(deps, access, params.data.id);
       return reply.header('Cache-Control', 'no-store').send({ render });
+    }),
+  );
+
+  /**
+   * "Legendar": Whisper on a video or audio file of the Drive. The answer is
+   * the job; the SRT is filed next to the source on the first look at it done.
+   */
+  app.post(
+    '/studio/transcriptions',
+    edit,
+    guarded(async (access, request, reply) => {
+      const body = studioTranscriptionRequestSchema.safeParse(request.body);
+      if (!body.success) return invalid(reply, body.error);
+      const transcription = await enqueueTranscription(deps, access, body.data);
+      await audit(request, 'studio.captions_requested', 'job', transcription.id, {
+        fileId: body.data.fileId,
+        language: body.data.language ?? null,
+      });
+      return reply.status(202).send({ transcription });
+    }),
+  );
+
+  app.get(
+    '/studio/transcriptions/:id',
+    edit,
+    guarded(async (access, request, reply) => {
+      const params = idParam.safeParse(request.params);
+      if (!params.success) throw new StudioError('not_found', 'Legenda não encontrada.');
+      const { transcription } = await transcriptionOf(deps, access, params.data.id);
+      return reply.header('Cache-Control', 'no-store').send({ transcription });
     }),
   );
 };

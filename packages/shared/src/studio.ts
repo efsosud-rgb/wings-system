@@ -38,6 +38,7 @@ export const STUDIO_ASPECTS = {
   '16:9': { width: 1920, height: 1080, label: 'Horizontal (16:9)' },
   '9:16': { width: 1080, height: 1920, label: 'Vertical (9:16)' },
   '1:1': { width: 1080, height: 1080, label: 'Quadrado (1:1)' },
+  '4:5': { width: 1080, height: 1350, label: 'Retrato (4:5)' },
 } as const;
 export type StudioAspect = keyof typeof STUDIO_ASPECTS;
 export const STUDIO_ASPECT_KEYS = Object.keys(STUDIO_ASPECTS) as StudioAspect[];
@@ -48,6 +49,12 @@ export const studioProjectFileSchema = z.object({
   version: z.literal(1),
   name: z.string().trim().min(1).max(120),
   aspect: z.enum(STUDIO_ASPECT_KEYS),
+  /**
+   * "Para quem": the client the piece is for. Filing only: it picks the
+   * default Drive folder, the client's logo in Elementos and the client of a
+   * generation. Absent on projects saved before part 2.
+   */
+  clientId: z.uuid().nullable().default(null),
   /** The editor core's own document (its `Edit` JSON), with `wings-drive://` sources. */
   edit: z.record(z.string(), z.unknown()),
   /** The files the project cites, so the screen can list them before any link is asked for. */
@@ -108,4 +115,102 @@ export const STUDIO_RENDER_ERRORS = [
   'render_failed',
   'timeout',
   'output_missing',
+] as const;
+
+// ---------------------------------------------------------------------------
+// Captions by Whisper (part 2)
+// ---------------------------------------------------------------------------
+//
+//   POST /studio/transcriptions          { fileId, language? } -> 202 { transcription }   (marketing.media.edit)
+//   GET  /studio/transcriptions/:id      -> { transcription }
+//
+// The API puts a `transcribe` job on the worker's queue for a Drive video or
+// audio file (read access is enough to cite it; write access to its folder
+// is needed, because the SRT is filed next to it). The first GET that sees the
+// job done turns the worker's segments into an SRT, files it in the Drive as
+// `<name>.srt` (a new version when one already exists) and audits
+// `studio.captions_saved`. The screen then adds a caption clip citing that
+// file by id. One job is one attempt; asking again is a person's click.
+
+export const studioTranscriptionRequestSchema = z.object({
+  fileId: z.uuid(),
+  /** ISO 639-1; auto-detected when omitted. */
+  language: z
+    .string()
+    .trim()
+    .regex(/^[a-z]{2}(-[A-Za-z]{2})?$/)
+    .optional(),
+});
+export type StudioTranscriptionRequest = z.output<typeof studioTranscriptionRequestSchema>;
+
+export type StudioTranscriptionState = StudioRenderState;
+
+export interface StudioTranscription {
+  id: string;
+  state: StudioTranscriptionState;
+  /** `<code>: <phrase>`, when failed. */
+  error: string | null;
+  sourceFileId: string;
+  /** The SRT in the Drive, once filed. */
+  file: { id: string; version: number; name: string; folderId: string } | null;
+  /** What Whisper detected, once done. */
+  language: string | null;
+  segments: number | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
+export const STUDIO_TRANSCRIPTION_STATE_LABEL: Record<StudioTranscriptionState, string> = {
+  pending: 'Na fila',
+  running: 'Transcrevendo',
+  done: 'Legenda pronta',
+  failed: 'Falhou',
+};
+
+/** Whisper's segments as an SRT document. Timestamps are `HH:MM:SS,mmm`. */
+export function segmentsToSrt(
+  segments: readonly { start: number; end: number; text: string }[],
+): string {
+  const stamp = (seconds: number) => {
+    const total = Math.max(0, seconds);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const whole = Math.floor(total % 60);
+    const millis = Math.round((total - Math.floor(total)) * 1000);
+    const pad = (value: number, size = 2) => String(value).padStart(size, '0');
+    return `${pad(hours)}:${pad(minutes)}:${pad(whole)},${pad(millis, 3)}`;
+  };
+  return segments
+    .filter((segment) => segment.text.trim() !== '')
+    .map(
+      (segment, index) =>
+        `${index + 1}\n${stamp(segment.start)} --> ${stamp(Math.max(segment.end, segment.start + 0.5))}\n${segment.text.trim()}\n`,
+    )
+    .join('\n');
+}
+
+/** How a text clip sits on the canvas. The properties panel edits these; the core stores them. */
+export const STUDIO_POSITIONS = [
+  'topLeft',
+  'top',
+  'topRight',
+  'left',
+  'center',
+  'right',
+  'bottomLeft',
+  'bottom',
+  'bottomRight',
+] as const;
+export type StudioPosition = (typeof STUDIO_POSITIONS)[number];
+
+export const STUDIO_TRANSITIONS = ['none', 'fade', 'fadeSlow', 'fadeFast'] as const;
+export type StudioTransition = (typeof STUDIO_TRANSITIONS)[number];
+
+/** Keyboard shortcuts the workspace adds on top of the core's (space, arrows, Ctrl+Z, Delete). */
+export const STUDIO_SHORTCUTS = [
+  { keys: 'Espaço', does: 'Tocar ou pausar' },
+  { keys: 'Ctrl+Z / Ctrl+Shift+Z', does: 'Desfazer / refazer' },
+  { keys: 'Delete', does: 'Remover o item selecionado' },
+  { keys: 'S', does: 'Salvar no Drive' },
+  { keys: '← →', does: 'Um quadro para trás ou para a frente' },
 ] as const;

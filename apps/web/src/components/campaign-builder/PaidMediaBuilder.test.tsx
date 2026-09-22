@@ -1398,6 +1398,7 @@ describe('media from the library', () => {
     ownerName: 'Marketing',
     createdAt: '2026-09-21T12:00:00.000Z',
     downloadPath: '/media/assets/33333333-3333-4333-8333-333333333333/file',
+    driveFileId: null,
     ...overrides,
   });
   const CREATIVE = '44444444-4444-4444-8444-444444444444';

@@ -1,4 +1,10 @@
-import type { DriveLink, StudioRender, StudioRenderRequest } from '@wings/shared';
+import type {
+  DriveLink,
+  StudioRender,
+  StudioRenderRequest,
+  StudioTranscription,
+  StudioTranscriptionRequest,
+} from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
 
@@ -38,3 +44,27 @@ export const useCreateRender = () => {
     onSuccess: () => queries.invalidateQueries({ queryKey: ['studio', 'renders'] }),
   });
 };
+
+// ---------------------------------------------------------------------------
+// Captions by Whisper: a `transcribe` job whose SRT is filed in the Drive
+// ---------------------------------------------------------------------------
+
+export const TRANSCRIPTION_POLL_MS = 5000;
+
+export const useCreateTranscription = () =>
+  useMutation({
+    mutationFn: (request: StudioTranscriptionRequest) =>
+      api.post<{ transcription: StudioTranscription }>('/studio/transcriptions', request),
+  });
+
+/** One transcription, followed until the SRT is in the Drive or the job failed. */
+export const useTranscription = (id: string | null) =>
+  useQuery({
+    queryKey: ['studio', 'transcription', id],
+    queryFn: () => api.get<{ transcription: StudioTranscription }>(`/studio/transcriptions/${id}`),
+    enabled: id !== null,
+    refetchInterval: (query) => {
+      const state = query.state.data?.transcription.state;
+      return state === 'pending' || state === 'running' ? TRANSCRIPTION_POLL_MS : false;
+    },
+  });

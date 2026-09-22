@@ -1,13 +1,17 @@
 import {
   STUDIO_AUDIO_BITRATE,
   parseWingsDriveRef,
+  segmentsToSrt,
   type StudioRender,
   type StudioRenderRequest,
   type StudioRenderState,
+  type StudioTranscription,
+  type StudioTranscriptionRequest,
 } from '@wings/shared';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { z } from 'zod';
 import type { Database } from '../../db/client.js';
-import { driveUploads, jobs } from '../../db/schema/index.js';
+import { driveFiles, driveUploads, jobs } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import type { DriveAccess } from '../drive/access.js';
 import {
@@ -27,7 +31,7 @@ import {
 
 export class StudioError extends Error {
   constructor(
-    readonly code: 'invalid_project' | 'not_found' | 'storage_unavailable',
+    readonly code: 'invalid_project' | 'not_found' | 'storage_unavailable' | 'unsupported_file',
     message: string,
     readonly details: Record<string, unknown> = {},
   ) {
@@ -83,7 +87,22 @@ type JobRow = typeof jobs.$inferSelect;
 
 interface ClipRef {
   where: string;
+  type: unknown;
   src: unknown;
+}
+
+/**
+ * A shape is an SVG the core keeps inline (`asset.src` is the markup, no
+ * scheme). It cites no file, so it is allowed as long as it fetches nothing:
+ * no address, no script, no external reference. The worker draws none of it
+ * and lists it as unsupported; the browser export does draw it.
+ */
+export function inlineSvgOk(src: unknown): boolean {
+  if (typeof src !== 'string' || !src.trimStart().startsWith('<svg')) return false;
+  // The namespace declaration is an identifier, not a fetch; everything else
+  // that looks like an address is.
+  const body = src.replace(/xmlns(?::[a-z]+)?\s*=\s*(["'])[^"']*\1/gi, '');
+  return !/https?:|url\(|<script|xlink:href|href\s*=|<foreignObject|<image/i.test(body);
 }
 
 /** Every `asset.src` in the project, with where it sits, for the refusal message. */
@@ -104,7 +123,11 @@ function clipSources(project: Record<string, unknown>): ClipRef[] {
       const asset =
         clip && typeof clip === 'object' ? (clip as { asset?: unknown }).asset : undefined;
       if (!asset || typeof asset !== 'object' || !('src' in asset)) return;
-      refs.push({ where: `faixa ${t + 1}, clipe ${c + 1}`, src: (asset as { src: unknown }).src });
+      refs.push({
+        where: `faixa ${t + 1}, clipe ${c + 1}`,
+        type: (asset as { type?: unknown }).type,
+        src: (asset as { src: unknown }).src,
+      });
     });
   });
   return refs;
@@ -114,6 +137,15 @@ function clipSources(project: Record<string, unknown>): ClipRef[] {
 export function projectFileIds(project: Record<string, unknown>): string[] {
   const ids = new Set<string>();
   for (const ref of clipSources(project)) {
+    if (ref.type === 'svg') {
+      if (!inlineSvgOk(ref.src)) {
+        throw new StudioError(
+          'invalid_project',
+          `A forma em ${ref.where} aponta para um endereço ou traz código; só desenho inline é aceito.`,
+        );
+      }
+      continue;
+    }
     const id = parseWingsDriveRef(ref.src);
     if (!id) {
       throw new StudioError(
@@ -339,6 +371,240 @@ export async function renderOf(
     return { render: toRender(done ?? claimed), filedNow: true };
   } catch (error) {
     // Let the next look try again; the worker's output is untouched.
+    await settle({ output: rest });
+    throw error;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Captions: a transcribe job, and its SRT filed in the Drive
+// ---------------------------------------------------------------------------
+
+/** What the job row carries. The worker reads `storageKey` and `language` only. */
+interface TranscribeInput {
+  version: 1;
+  storageKey: string;
+  language?: string;
+  destination: {
+    folderId: string;
+    name: string;
+    sourceFileId: string;
+    clientId: string | null;
+    ownerId: string;
+  };
+}
+
+interface TranscribeOutput {
+  filing?: true;
+  outputStorageKey?: string;
+  language?: string;
+  segments?: number | unknown[];
+  filed?: { driveFileId: string; version: number; name: string; at: string };
+}
+
+const SRT_MIME = 'application/x-subrip';
+
+/** The worker's JSON, as much of it as the SRT needs. */
+const transcriptSchema = z.object({
+  language: z.string().optional(),
+  segments: z.array(
+    z.object({ start: z.number().min(0), end: z.number().min(0), text: z.string() }),
+  ),
+});
+
+const srtNameOf = (name: string) => `${name.replace(/\.[^./]+$/, '') || name}.srt`;
+
+export async function enqueueTranscription(
+  deps: StudioDeps,
+  access: DriveAccess,
+  request: StudioTranscriptionRequest,
+): Promise<StudioTranscription> {
+  if (!deps.drive.storage) {
+    throw new StudioError('storage_unavailable', 'O armazenamento não está configurado.');
+  }
+  // Read access is enough to cite the file; the SRT lands beside it, which
+  // takes write access to the folder.
+  const { file } = await fileFor(deps.drive, access, request.fileId);
+  if (file.trashedAt) throw new DriveError('not_found');
+  if (!/^(video|audio)\//.test(file.mimeType)) {
+    throw new StudioError(
+      'unsupported_file',
+      'Só vídeo e áudio podem ser legendados. Escolha um arquivo de vídeo ou de áudio.',
+    );
+  }
+  const folder = await folderFor(deps.drive, access, file.folderId, 'write');
+
+  const input: TranscribeInput = {
+    version: 1,
+    storageKey: file.storageKey,
+    ...(request.language ? { language: request.language } : {}),
+    destination: {
+      folderId: folder.id,
+      name: srtNameOf(file.name),
+      sourceFileId: file.id,
+      clientId: folder.clientId,
+      ownerId: access.employeeId,
+    },
+  };
+  const [row] = await deps.db.insert(jobs).values({ type: 'transcribe', input }).returning();
+  if (!row) throw new Error('transcribe job was not inserted');
+  return toTranscription(row);
+}
+
+function toTranscription(row: JobRow): StudioTranscription {
+  const input = row.input as TranscribeInput;
+  const output = (row.output ?? {}) as TranscribeOutput;
+  return {
+    id: row.id,
+    state: row.state as StudioTranscription['state'],
+    error: row.error,
+    sourceFileId: input.destination.sourceFileId,
+    file: output.filed
+      ? {
+          id: output.filed.driveFileId,
+          version: output.filed.version,
+          name: output.filed.name,
+          folderId: input.destination.folderId,
+        }
+      : null,
+    language: typeof output.language === 'string' ? output.language : null,
+    segments:
+      typeof output.segments === 'number'
+        ? output.segments
+        : Array.isArray(output.segments)
+          ? output.segments.length
+          : null,
+    createdAt: row.createdAt.toISOString(),
+    finishedAt: row.finishedAt?.toISOString() ?? null,
+  };
+}
+
+/**
+ * One transcription. Like `renderOf`: the first look at a finished job turns
+ * the worker's segments into an SRT and files it next to the source, as a new
+ * version when a file of that name is already there. Claimed with one
+ * conditional update, so two tabs polling at once file it once.
+ */
+export async function transcriptionOf(
+  deps: StudioDeps,
+  access: DriveAccess,
+  id: string,
+): Promise<{ transcription: StudioTranscription; filedNow: boolean }> {
+  const row = await deps.db.query.jobs.findFirst({
+    where: and(eq(jobs.id, id), eq(jobs.type, 'transcribe'), ownedBy(access.employeeId)),
+  });
+  if (!row) throw new StudioError('not_found', 'Legenda não encontrada.');
+  const output = (row.output ?? {}) as TranscribeOutput;
+  if (row.state !== 'done' || output.filed || output.filing) {
+    return { transcription: toTranscription(row), filedNow: false };
+  }
+
+  const [claimed] = await deps.db
+    .update(jobs)
+    .set({ output: sql`coalesce(${jobs.output}, '{}'::jsonb) || '{"filing": true}'::jsonb` })
+    .where(
+      and(
+        eq(jobs.id, id),
+        eq(jobs.state, 'done'),
+        sql`coalesce(${jobs.output}, '{}'::jsonb) -> 'filed' is null`,
+        sql`coalesce(${jobs.output}, '{}'::jsonb) -> 'filing' is null`,
+      ),
+    )
+    .returning();
+  if (!claimed) return { transcription: toTranscription(row), filedNow: false };
+  const settle = (patch: Partial<typeof jobs.$inferInsert>) =>
+    deps.db
+      .update(jobs)
+      .set({ ...patch, updatedAt: deps.now() })
+      .where(eq(jobs.id, id))
+      .returning();
+
+  const input = claimed.input as TranscribeInput;
+  const rest: TranscribeOutput = { ...((claimed.output ?? {}) as TranscribeOutput) };
+  delete rest.filing;
+  const storage = deps.drive.storage;
+  if (!storage)
+    throw new StudioError('storage_unavailable', 'O armazenamento não está configurado.');
+
+  const bytes = rest.outputStorageKey ? await storage.get(rest.outputStorageKey) : null;
+  let transcript: z.output<typeof transcriptSchema> | null = null;
+  if (bytes) {
+    try {
+      const parsed = transcriptSchema.safeParse(JSON.parse(bytes.toString('utf8')));
+      transcript = parsed.success ? parsed.data : null;
+    } catch {
+      transcript = null;
+    }
+  }
+  if (!transcript) {
+    const [failed] = await settle({
+      state: 'failed',
+      error: 'output_missing: a transcrição não está no armazenamento',
+      output: rest,
+    });
+    return { transcription: toTranscription(failed ?? claimed), filedNow: false };
+  }
+
+  try {
+    const now = deps.now();
+    const srt = Buffer.from(segmentsToSrt(transcript.segments), 'utf8');
+    const key = newStorageKey(now);
+    await storage.put(key, srt, SRT_MIME);
+    // A caption file of that name already there becomes a version, not a twin.
+    const [existing] = await deps.db
+      .select({ id: driveFiles.id })
+      .from(driveFiles)
+      .where(
+        and(
+          eq(driveFiles.folderId, input.destination.folderId),
+          isNull(driveFiles.trashedAt),
+          sql`lower(${driveFiles.name}) = lower(${input.destination.name})`,
+        ),
+      );
+    const [upload] = await deps.db
+      .insert(driveUploads)
+      .values({
+        folderId: input.destination.folderId,
+        name: input.destination.name,
+        mimeType: SRT_MIME,
+        byteSize: srt.length,
+        storageKey: key,
+        replaceFileId: existing?.id ?? null,
+        requestedBy: access.employeeId,
+        expiresAt: new Date(now.getTime() + 60_000),
+      })
+      .returning();
+    if (!upload) throw new Error('captions upload row was not inserted');
+    const { file } = await completeUpload(deps.drive, access, upload.id);
+
+    const filed = {
+      driveFileId: file.id,
+      version: file.version,
+      name: file.name,
+      at: now.toISOString(),
+    };
+    const [done] = await settle({
+      output: {
+        ...rest,
+        language: transcript.language ?? rest.language,
+        segments: transcript.segments.length,
+        filed,
+      },
+    });
+    await writeAudit(deps.db, {
+      actorEmployeeId: access.employeeId,
+      action: 'studio.captions_saved',
+      entity: 'drive_file',
+      entityId: file.id,
+      metadata: {
+        jobId: id,
+        version: file.version,
+        segments: transcript.segments.length,
+        replaced: existing !== undefined,
+      },
+    });
+    return { transcription: toTranscription(done ?? claimed), filedNow: true };
+  } catch (error) {
     await settle({ output: rest });
     throw error;
   }

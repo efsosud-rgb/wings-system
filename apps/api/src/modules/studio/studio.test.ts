@@ -11,6 +11,7 @@ import {
   type RoleKey,
   type SectorSlug,
   type StudioRender,
+  type StudioTranscription,
 } from '@wings/shared';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -86,12 +87,18 @@ const folderAt = async (session: Session, path: string) => {
 };
 
 /** The whole upload, as the browser does it. */
-async function upload(session: Session, folderId: string, name: string, bytes: Buffer) {
+async function upload(
+  session: Session,
+  folderId: string,
+  name: string,
+  bytes: Buffer,
+  mimeType = 'video/mp4',
+) {
   const asked = await app.inject({
     method: 'POST',
     url: '/drive/uploads',
     cookies: session.cookies,
-    payload: { folderId, name, mimeType: 'video/mp4', byteSize: bytes.length },
+    payload: { folderId, name, mimeType, byteSize: bytes.length },
   });
   expect(asked.statusCode).toBe(201);
   const { ticket } = asked.json<{ ticket: DriveUploadTicket }>();
@@ -374,5 +381,213 @@ describe('when the worker is done', () => {
   it("is invisible to somebody else's session", async () => {
     const queued = await ask('meu.mp4');
     expect((await render(admin, queued.id)).statusCode).toBe(404);
+  });
+});
+
+describe('shapes drawn inline', () => {
+  const withShape = (svg: string) => {
+    const project = projectWith(wingsDriveRef(clip.id));
+    project.timeline.tracks.unshift({
+      clips: [{ asset: { type: 'svg', src: svg }, start: 0, length: 4 }],
+    });
+    return project;
+  };
+
+  it('accepts an inline SVG shape, which cites no file', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/studio/renders',
+      cookies: marketing.cookies,
+      payload: {
+        project: withShape(
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="#e95228"/></svg>',
+        ),
+        destination: { folderId: media.id, name: 'com-forma.mp4' },
+      },
+    });
+    expect(response.statusCode).toBe(202);
+  });
+
+  it('refuses a shape that would fetch something', async () => {
+    for (const svg of [
+      '<svg xmlns="http://www.w3.org/2000/svg"><image href="http://example.com/a.png"/></svg>',
+      '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+      'https://example.com/shape.svg',
+    ]) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/studio/renders',
+        cookies: marketing.cookies,
+        payload: { project: withShape(svg), destination: { folderId: media.id, name: 'x.mp4' } },
+      });
+      expect(response.statusCode).toBe(422);
+      expect(response.json<{ error: string }>().error).toBe('invalid_project');
+    }
+  });
+});
+
+describe('captions by Whisper', () => {
+  const ask = async (session: Session, fileId: string, language?: string) =>
+    app.inject({
+      method: 'POST',
+      url: '/studio/transcriptions',
+      cookies: session.cookies,
+      payload: { fileId, ...(language ? { language } : {}) },
+    });
+  const look = (session: Session, id: string) =>
+    app.inject({ url: `/studio/transcriptions/${id}`, cookies: session.cookies });
+
+  /** What the worker does: the transcript JSON next to the source, the row done. */
+  async function whisperFinishes(jobId: string, transcript: unknown | null) {
+    const row = await db.query.jobs.findFirst({ where: eq(jobs.id, jobId) });
+    if (!row) throw new Error('no job');
+    const input = row.input as { storageKey: string };
+    const outputStorageKey = `${input.storageKey}.transcript.json`;
+    const storage = storageOf(app.wings);
+    if (!storage) throw new Error('no storage');
+    if (transcript) {
+      await storage.put(
+        outputStorageKey,
+        Buffer.from(JSON.stringify(transcript)),
+        'application/json',
+      );
+    }
+    await db
+      .update(jobs)
+      .set({
+        state: 'done',
+        finishedAt: new Date(),
+        output: {
+          outputStorageKey,
+          language: 'pt',
+          languageProbability: 0.98,
+          durationSeconds: 4,
+          segments: [],
+        },
+      })
+      .where(eq(jobs.id, jobId));
+  }
+
+  const segments = [
+    { start: 0, end: 1.5, text: 'Olá, franqueado.' },
+    { start: 1.5, end: 3.2, text: '  ' },
+    { start: 3.2, end: 4, text: 'Vamos começar.' },
+  ];
+
+  it('queues a transcribe job the worker can read, with nothing of the storage in the answer', async () => {
+    const response = await ask(marketing, clip.id, 'pt');
+    expect(response.statusCode).toBe(202);
+    const { transcription } = response.json<{ transcription: StudioTranscription }>();
+    expect(transcription).toMatchObject({ state: 'pending', sourceFileId: clip.id, file: null });
+    expect(response.body).not.toContain('storageKey');
+    expect(response.body).not.toContain('drive/');
+
+    const [row] = await db.select().from(jobs).where(eq(jobs.id, transcription.id));
+    const [stored] = await db.select().from(driveFiles).where(eq(driveFiles.id, clip.id));
+    expect(row?.type).toBe('transcribe');
+    expect(row?.input).toMatchObject({
+      version: 1,
+      storageKey: stored?.storageKey,
+      language: 'pt',
+      destination: {
+        folderId: media.id,
+        name: 'entrevista.srt',
+        sourceFileId: clip.id,
+        ownerId: marketing.employeeId,
+      },
+    });
+    const audited = await db
+      .select()
+      .from(auditLog)
+      .where(
+        and(
+          eq(auditLog.action, 'studio.captions_requested'),
+          eq(auditLog.entityId, transcription.id),
+        ),
+      );
+    expect(audited).toHaveLength(1);
+  });
+
+  it('files the SRT next to the video on the first look, once, and audits it', async () => {
+    const { transcription: queued } = (await ask(marketing, clip.id)).json<{
+      transcription: StudioTranscription;
+    }>();
+    await whisperFinishes(queued.id, { language: 'pt', languageProbability: 0.98, segments });
+
+    const first = (await look(marketing, queued.id)).json<{ transcription: StudioTranscription }>()
+      .transcription;
+    expect(first.state).toBe('done');
+    expect(first.file).toMatchObject({ name: 'entrevista.srt', folderId: media.id, version: 1 });
+    expect(first.language).toBe('pt');
+    expect(first.segments).toBe(3);
+
+    const second = (await look(marketing, queued.id)).json<{ transcription: StudioTranscription }>()
+      .transcription;
+    expect(second.file).toEqual(first.file);
+
+    const filed = await db
+      .select()
+      .from(driveFiles)
+      .where(and(eq(driveFiles.folderId, media.id), eq(driveFiles.name, 'entrevista.srt')));
+    expect(filed).toHaveLength(1);
+    expect(filed[0]?.mimeType).toBe('application/x-subrip');
+    const storage = storageOf(app.wings);
+    const srt = (await storage?.get(filed[0]!.storageKey))?.toString('utf8') ?? '';
+    expect(srt).toContain('1\n00:00:00,000 --> 00:00:01,500\nOlá, franqueado.');
+    expect(srt).not.toContain('\n2\n00:00:01,500');
+    expect(srt).toContain('00:00:03,200 --> 00:00:04,000\nVamos começar.');
+
+    const audited = await db
+      .select()
+      .from(auditLog)
+      .where(
+        and(eq(auditLog.action, 'studio.captions_saved'), eq(auditLog.entityId, first.file!.id)),
+      );
+    expect(audited).toHaveLength(1);
+
+    // Asking again puts the new SRT on top of the old one as a version.
+    const { transcription: again } = (await ask(marketing, clip.id)).json<{
+      transcription: StudioTranscription;
+    }>();
+    await whisperFinishes(again.id, { language: 'pt', languageProbability: 0.98, segments });
+    const redone = (await look(marketing, again.id)).json<{ transcription: StudioTranscription }>()
+      .transcription;
+    expect(redone.file).toMatchObject({ id: first.file!.id, version: 2 });
+  });
+
+  it('takes audio too, and refuses an image', async () => {
+    const audio = await upload(
+      marketing,
+      media.id,
+      'narracao.mp3',
+      Buffer.from('mp3'),
+      'audio/mpeg',
+    );
+    expect((await ask(marketing, audio.id)).statusCode).toBe(202);
+    const image = await upload(marketing, media.id, 'foto.png', Buffer.from('png'), 'image/png');
+    const refused = await ask(marketing, image.id);
+    expect(refused.statusCode).toBe(422);
+    expect(refused.json<{ error: string }>().error).toBe('unsupported_file');
+  });
+
+  it('marks the job failed when the transcript is not in storage', async () => {
+    const other = await upload(marketing, media.id, 'sem-audio.mp4', Buffer.from('mp4'));
+    const { transcription: queued } = (await ask(marketing, other.id)).json<{
+      transcription: StudioTranscription;
+    }>();
+    await whisperFinishes(queued.id, null);
+    const failed = (await look(marketing, queued.id)).json<{ transcription: StudioTranscription }>()
+      .transcription;
+    expect(failed.state).toBe('failed');
+    expect(failed.error).toMatch(/^output_missing/);
+    expect(failed.file).toBeNull();
+  });
+
+  it("is invisible to somebody else's session, and closed without the permission", async () => {
+    const { transcription: queued } = (await ask(marketing, clip.id)).json<{
+      transcription: StudioTranscription;
+    }>();
+    expect((await look(admin, queued.id)).statusCode).toBe(404);
+    expect((await ask(rh, clip.id)).statusCode).toBe(403);
   });
 });

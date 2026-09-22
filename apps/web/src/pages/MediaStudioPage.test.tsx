@@ -43,6 +43,12 @@ vi.mock('../api/auth.js', () => ({
 
 // The chat has its own tests; here it would only add requests to script.
 vi.mock('../components/agent-chat/AgentChat.js', () => ({ AgentChat: () => <div>chat</div> }));
+// The workspace has its own tests and a megabyte of core behind it.
+vi.mock('../components/studio/workspace/StudioWorkspace.js', () => ({
+  StudioWorkspace: (props: { usageLine: string | null }) => (
+    <div>estúdio aberto · {props.usageLine ?? 'sem créditos informados'}</div>
+  ),
+}));
 
 const { MediaStudioPage } = await import('./MediaStudioPage.js');
 const { ApiError } = await import('../api/client.js');
@@ -164,6 +170,7 @@ const asset = (overrides: Partial<MediaAsset> = {}): MediaAsset => ({
   ownerName: 'Marketing',
   createdAt: '2026-09-21T12:00:00.000Z',
   downloadPath: '/media/assets/asset-1/file',
+  driveFileId: null,
   ...overrides,
 });
 
@@ -263,6 +270,29 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+describe('the workspace', () => {
+  it('opens the studio for whoever edits, with the credits line in the bar', async () => {
+    session.current = userWith(
+      'marketing.media.read',
+      'marketing.media.generate',
+      'marketing.media.edit',
+    );
+    renderPage();
+    expect(
+      await screen.findByText(
+        `estúdio aberto · Kairogen 45 créditos · mês ${brl(0)} de ${brl(30_000)}`,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole('form', { name: 'Gerar mídia' })).toBeNull();
+  });
+
+  it('keeps the generator and the library for whoever cannot edit, and says why', async () => {
+    renderPage();
+    expect(await screen.findByText(/O estúdio de edição .* é de quem edita mídia/)).toBeTruthy();
+    expect(screen.getByRole('form', { name: 'Gerar mídia' })).toBeTruthy();
+  });
+});
+
 describe('the header', () => {
   it('shows the balance, the plan and both ceilings', async () => {
     renderPage();
@@ -338,7 +368,12 @@ describe('providers', () => {
     const before = get.getMockImplementation();
     get.mockImplementation((path: string) => {
       if (path === '/media/studio')
-        return Promise.resolve({ usage, connected: true, anyAvailable: true, storageAvailable: true });
+        return Promise.resolve({
+          usage,
+          connected: true,
+          anyAvailable: true,
+          storageAvailable: true,
+        });
       if (path === '/media/providers')
         return Promise.resolve({
           providers: statuses,
@@ -368,10 +403,11 @@ describe('providers', () => {
     renderPage();
     const select = await screen.findByLabelText('Modelo');
     await screen.findByRole('option', { name: 'FLUX.1 schnell · R$ 0 (grátis)' });
-    expect(within(select).getAllByRole('group').map((group) => group.getAttribute('label'))).toEqual([
-      'Kairogen · 45 créditos',
-      'Cloudflare Workers AI · 12 de 50 hoje',
-    ]);
+    expect(
+      within(select)
+        .getAllByRole('group')
+        .map((group) => group.getAttribute('label')),
+    ).toEqual(['Kairogen · 45 créditos', 'Cloudflare Workers AI · 12 de 50 hoje']);
     expect(screen.getByRole('option', { name: 'Seedream 4 · 4 créditos por saída' })).toBeTruthy();
     // The one ceiling in reais (from the usage), and the strip with every provider.
     expect(screen.getByText(`${brl(0)} de ${brl(30_000)}`)).toBeTruthy();
