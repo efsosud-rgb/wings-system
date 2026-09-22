@@ -338,7 +338,7 @@ export async function listTrash(deps: DriveDeps, access: DriveAccess): Promise<D
   return rows.map((row) => toFile(row, access));
 }
 
-async function fileFor(
+export async function fileFor(
   deps: DriveDeps,
   access: DriveAccess,
   id: string,
@@ -359,8 +359,14 @@ export async function linkFor(
   deps: DriveDeps,
   access: DriveAccess,
   id: string,
-  options: { disposition: 'inline' | 'attachment'; version?: number },
+  options: {
+    disposition: 'inline' | 'attachment';
+    version?: number;
+    /** The Studio asks for longer than the default five minutes: a video element keeps reading through the link. */
+    ttlSeconds?: number;
+  },
 ): Promise<DriveLink & { fileId: string; version: number }> {
+  const ttl = options.ttlSeconds ?? LINK_TTL_SECONDS;
   const storage = storageOrRefuse(deps);
   const { file } = await fileFor(deps, access, id);
   let source = { key: file.storageKey, mimeType: file.mimeType, version: file.version };
@@ -375,14 +381,14 @@ export async function linkFor(
     source = { key: old.storageKey, mimeType: old.mimeType, version: old.version };
   }
   const url = await storage.presignGet(source.key, {
-    expiresSeconds: LINK_TTL_SECONDS,
+    expiresSeconds: ttl,
     disposition: options.disposition,
     filename: file.name,
     contentType: source.mimeType,
   });
   return {
     url,
-    expiresAt: new Date(deps.now().getTime() + LINK_TTL_SECONDS * 1000).toISOString(),
+    expiresAt: new Date(deps.now().getTime() + ttl * 1000).toISOString(),
     fileId: file.id,
     version: source.version,
   };
