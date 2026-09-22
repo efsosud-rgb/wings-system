@@ -249,6 +249,12 @@ export interface AdsPlatformClient {
   listAdSets(): Promise<PlatformAdSet[]>;
   /** Every ad, with its creative and review state. */
   listAds(): Promise<PlatformAd[]>;
+  /**
+   * What the platform would not answer since the last call, in words for the
+   * job's log (a metric this API version does not know, for instance). The
+   * read still succeeded without it. Absent on clients that never warn.
+   */
+  drainWarnings?(): string[];
   /** Daily performance rows for the window, at the requested level. */
   getInsights(level: MetricsLevel, sinceDate: string, untilDate?: string): Promise<InsightRow[]>;
   /** Campaign-level daily rows split by one breakdown; empty where the platform has none. */

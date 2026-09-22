@@ -150,6 +150,8 @@ export interface IngestResult {
   rows: number;
   spendCents: number;
   conversions: number;
+  /** What the platform would not answer (a metric this API version lacks); the rows still landed. */
+  warnings: string[];
 }
 
 /** Pulls daily performance for one level and upserts it. */
@@ -163,6 +165,7 @@ export async function ingestMetrics(
 ): Promise<IngestResult> {
   await assertMirrorTarget(db, client, adAccountId);
   const rows = await client.getInsights(level, sinceDate);
+  const warnings = client.drainWarnings?.() ?? [];
 
   const campaigns = await db.query.adCampaigns.findMany({
     where: eq(adCampaigns.adAccountId, adAccountId),
@@ -266,7 +269,7 @@ export async function ingestMetrics(
       });
   }
 
-  return { level, rows: rows.length, spendCents, conversions };
+  return { level, rows: rows.length, spendCents, conversions, warnings };
 }
 
 export interface CampaignPerformance {

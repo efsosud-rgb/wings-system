@@ -116,6 +116,13 @@ export const INSIGHT_WINDOW_DAYS: Record<MetricsLevel, number> = {
 
 /** Insights are slow by nature; the default timeout is for ordinary reads. */
 export const INSIGHTS_TIMEOUT_MS = 45_000;
+/**
+ * The ads listing expands every creative (story spec included) and timed out
+ * at the default 15 s on the first real run with 660 ads; it gets the same
+ * patience as insights, and fewer, larger pages.
+ */
+export const ADS_LIST_TIMEOUT_MS = 45_000;
+export const ADS_PAGE_SIZE = '50';
 
 /** ThruPlays and the watched quartiles; 3-second plays come from `actions`. */
 export const VIDEO_FIELDS = [
@@ -715,16 +722,21 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
         object_type?: string;
         object_story_spec?: Parameters<typeof creativeFormatOf>[0]['object_story_spec'];
       };
-    }>(`${this.accountId}/ads`, {
-      // ad_review_feedback carries the real rejection reason; issues_info is
-      // empty on disapproved ads (Stage 6.0 spike). object_type and the story
-      // spec say what the creative is made of. NOT verified live: whether the
-      // story spec is readable on every creative with this token.
-      fields:
-        'id,name,status,effective_status,campaign_id,adset_id,issues_info,ad_review_feedback,creative{id,name,thumbnail_url,title,body,object_type,object_story_spec}',
-      // 660 ads with creatives is more than Meta will serve in one page.
-      limit: '25',
-    });
+    }>(
+      `${this.accountId}/ads`,
+      {
+        // ad_review_feedback carries the real rejection reason; issues_info is
+        // empty on disapproved ads (Stage 6.0 spike). object_type and the story
+        // spec say what the creative is made of. NOT verified live: whether the
+        // story spec is readable on every creative with this token.
+        fields:
+          'id,name,status,effective_status,campaign_id,adset_id,issues_info,ad_review_feedback,creative{id,name,thumbnail_url,title,body,object_type,object_story_spec}',
+        // 660 ads with creatives is more than Meta will serve in one page.
+        limit: ADS_PAGE_SIZE,
+      },
+      50,
+      ADS_LIST_TIMEOUT_MS,
+    );
 
     return data.map((ad) => ({
       id: ad.id,

@@ -304,17 +304,49 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient {
     return [];
   }
 
+  /**
+   * Whether this API version answers the video metrics on `campaign`. On the
+   * first real run v22 refused `metrics.video_views` ("Unrecognized field in
+   * the query"); a field the API does not know makes video "não disponível"
+   * for the account, with a warning, and never fails the account. NOT verified
+   * live: which of the video fields this version does accept on campaign.
+   */
+  private videoFields: 'try' | 'none' = 'try';
+  private readonly warnings: string[] = [];
+
+  drainWarnings(): string[] {
+    return this.warnings.splice(0);
+  }
+
   private async dailyRows(sinceDate: string, untilDate?: string): Promise<MetricsRow[]> {
     const { until } = this.dateBounds(sinceDate, untilDate);
-    // The video figures ride on the same query. YouTube reports views and the
-    // quartiles as rates of views. NOT verified live.
+    const where = `WHERE segments.date BETWEEN '${sinceDate}' AND '${until}'`;
+    if (this.videoFields === 'try') {
+      // The video figures ride on the same query. YouTube reports views and
+      // the quartiles as rates of views.
+      try {
+        return await this.reader.search<MetricsRow>(`
+          SELECT campaign.id, segments.date, ${METRIC_FIELDS},
+                 metrics.video_views, metrics.video_quartile_p25_rate,
+                 metrics.video_quartile_p50_rate, metrics.video_quartile_p75_rate,
+                 metrics.video_quartile_p100_rate
+            FROM campaign
+           ${where}
+        `);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const field = /Unrecognized field in the query: '([^']+)'/i.exec(message)?.[1];
+        if (!field) throw error;
+        this.videoFields = 'none';
+        this.warnings.push(
+          `métricas de vídeo não disponíveis: a API do Google não reconhece ${field} em campaign; plays e quartis ficam zerados`,
+        );
+      }
+    }
     return this.reader.search<MetricsRow>(`
-      SELECT campaign.id, segments.date, ${METRIC_FIELDS},
-             metrics.video_views, metrics.video_quartile_p25_rate,
-             metrics.video_quartile_p50_rate, metrics.video_quartile_p75_rate,
-             metrics.video_quartile_p100_rate
+      SELECT campaign.id, segments.date, ${METRIC_FIELDS}
         FROM campaign
-       WHERE segments.date BETWEEN '${sinceDate}' AND '${until}'
+       ${where}
     `);
   }
 
@@ -342,7 +374,8 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient {
       // On this account the only conversion that fires is the site's lead form
       // (stage-google-spike.md), so Google's conversions are leads.
       const actions: Record<string, number> = conversions > 0 ? { lead: conversions } : {};
-      const views = Number(row.metrics?.videoViews ?? 0);
+      // Once the API said it does not know the video fields, nothing is read from them.
+      const views = this.videoFields === 'none' ? 0 : Number(row.metrics?.videoViews ?? 0);
       const quartile = (rate: number | undefined) => Math.round(views * (rate ?? 0));
       return [
         {

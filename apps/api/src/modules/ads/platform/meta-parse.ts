@@ -23,13 +23,16 @@ export function centsFromMinorUnitString(value: unknown, field: string): Cents {
 }
 
 export function centsFromDecimalCurrencyString(value: unknown, field: string): Cents {
-  if (typeof value !== 'string' || !/^\d+(\.\d{1,2})?$/.test(value)) {
+  // Insights write spend with as many decimals as they like ("1.67832" on the
+  // first real breakdown run); anything beyond the cent is rounded, never a
+  // reason to drop the row.
+  if (typeof value !== 'string' || !/^\d+(\.\d+)?$/.test(value)) {
     throw new Error(
       `${field}: expected a decimal currency string like "48.71", got ${JSON.stringify(value)}`,
     );
   }
   const [whole = '0', fraction = ''] = value.split('.');
-  const cents = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
+  const cents = Number(whole) * 100 + Math.round(Number(`0.${fraction || '0'}`) * 100);
   if (!Number.isSafeInteger(cents)) throw new Error(`${field}: value out of safe range`);
   return cents;
 }

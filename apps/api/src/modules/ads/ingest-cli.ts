@@ -143,6 +143,9 @@ async function main() {
         // What the token could not read, said once per cycle: the account is
         // fine, the field is "não disponível" until somebody grants it.
         for (const warning of accountDay.warnings) console.warn(`  AVISO: ${warning}`);
+        for (const level of Object.values(metrics)) {
+          for (const warning of level.warnings) console.warn(`  AVISO: ${warning}`);
+        }
         for (const split of Object.values(breakdowns)) {
           if (split.unavailable) {
             console.warn(
