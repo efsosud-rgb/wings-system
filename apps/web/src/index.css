@@ -3312,3 +3312,221 @@ a.menu-module-header {
     transition: none;
   }
 }
+
+/* ---------------------------------------------------------------------------
+ * Wings Studio (Marketing → Edição → aba Studio)
+ * The editor core brings its own timeline and toolbar styles (packages/studio);
+ * what is here is the frame around them.
+ * ------------------------------------------------------------------------- */
+
+.studio-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.studio-editor-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--wings-card);
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+}
+
+.studio-editor-bar .studio-editor-title {
+  font-weight: 600;
+  margin-right: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+
+.studio-editor-bar select {
+  background: var(--wings-surface);
+  color: var(--wings-text);
+  border: 1px solid var(--wings-border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font: inherit;
+}
+
+.studio-editor-bar .studio-editor-group {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  padding-left: 8px;
+  border-left: 1px solid var(--wings-border);
+}
+
+.studio-stage {
+  position: relative;
+  background: #000;
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+  overflow: hidden;
+  min-height: 320px;
+  height: min(52vh, 560px);
+}
+
+.studio-stage [data-shotstack-studio] {
+  width: 100%;
+  height: 100%;
+}
+
+.studio-stage-cover {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--wings-muted);
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.studio-timeline {
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+  overflow: hidden;
+  min-height: 220px;
+  background: var(--wings-surface);
+}
+
+.studio-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--wings-card);
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+}
+
+.studio-progress-bar {
+  flex: 1;
+  height: 8px;
+  background: var(--wings-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.studio-progress-bar span {
+  display: block;
+  height: 100%;
+  background: var(--wings-accent);
+  transition: width 0.2s ease;
+}
+
+.studio-assets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--wings-muted);
+}
+
+.studio-assets li {
+  list-style: none;
+  padding: 2px 8px;
+  border: 1px solid var(--wings-border);
+  border-radius: 999px;
+}
+
+.studio-picker {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 16px;
+  min-height: 360px;
+}
+
+.studio-picker-tree {
+  overflow: auto;
+  max-height: 60vh;
+}
+
+.studio-picker-files {
+  min-width: 0;
+  overflow: auto;
+  max-height: 60vh;
+}
+
+.studio-picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.studio-picker-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--wings-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.studio-picker-row:hover:not(:disabled) {
+  border-color: var(--wings-border);
+  background: var(--wings-card);
+}
+
+.studio-picker-row:disabled {
+  color: var(--wings-faint);
+  cursor: default;
+}
+
+.studio-picker-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-save {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 16px;
+}
+
+.studio-save-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.studio-save-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.studio-render {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--wings-card);
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+}
+
+@media (max-width: 900px) {
+  .studio-picker,
+  .studio-save {
+    grid-template-columns: 1fr;
+  }
+}

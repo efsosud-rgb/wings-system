@@ -3,3 +3,8 @@ pnpm-lock.yaml
 **/node_modules/**
 **/coverage/**
 .claude/
+# Vendored fork, kept diffable against upstream (packages/studio/NOTICE.md)
+packages/studio/src/
+packages/studio/tests/
+packages/studio/UPSTREAM-*.md
+packages/studio/LICENSE

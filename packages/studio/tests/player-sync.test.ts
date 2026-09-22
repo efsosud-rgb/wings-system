@@ -1,0 +1,535 @@
+/**
+ * Player Sync Tests
+ *
+ * These tests verify that player time calculations use correct units (seconds).
+ * Both edit.playbackTime and player.getPlaybackTime() are in seconds.
+ *
+ * Key invariants tested:
+ * - getPlaybackTime() returns seconds relative to clip start
+ * - getCurrentDrift() returns seconds (video vs expected time)
+ * - Time values are consistent across all player types
+ */
+
+import { VideoPlayer } from "@canvas/players/video-player";
+import { AudioPlayer } from "@canvas/players/audio-player";
+import { LumaPlayer } from "@canvas/players/luma-player";
+import { CaptionPlayer } from "@canvas/players/caption-player";
+import type { Edit } from "@core/edit-session";
+import { sec, type Seconds } from "@core/timing/types";
+import type { ResolvedClip, VideoAsset, AudioAsset, LumaAsset, CaptionAsset } from "@schemas";
+import * as pixi from "pixi.js";
+
+// Mock pixi-filters (must be before pixi.js)
+vi.mock("pixi-filters", () => ({
+	AdjustmentFilter: vi.fn().mockImplementation(() => ({})),
+	BloomFilter: vi.fn().mockImplementation(() => ({})),
+	GlowFilter: vi.fn().mockImplementation(() => ({})),
+	OutlineFilter: vi.fn().mockImplementation(() => ({})),
+	DropShadowFilter: vi.fn().mockImplementation(() => ({}))
+}));
+
+// Mock pixi.js
+vi.mock("pixi.js", async () => {
+	const createMockContainer = (): Record<string, unknown> => {
+		const children: unknown[] = [];
+		return {
+			children,
+			sortableChildren: true,
+			parent: null as unknown,
+			label: null as string | null,
+			zIndex: 0,
+			addChild: vi.fn((child: { parent?: unknown }) => {
+				children.push(child);
+				return child;
+			}),
+			removeChild: vi.fn((child: unknown) => {
+				const idx = children.indexOf(child);
+				if (idx !== -1) children.splice(idx, 1);
+				return child;
+			}),
+			destroy: vi.fn(),
+			setMask: vi.fn()
+		};
+	};
+
+	return {
+		// eslint-disable-next-line global-require, @typescript-eslint/no-require-imports
+		...(await import("./helpers/pixi-mock-filters")).pixiFilterStubs,
+		Container: vi.fn().mockImplementation(createMockContainer),
+		Graphics: vi.fn().mockImplementation(() => ({
+			rect: vi.fn().mockReturnThis(),
+			fill: vi.fn().mockReturnThis(),
+			clear: vi.fn().mockReturnThis(),
+			destroy: vi.fn()
+		})),
+		Sprite: vi.fn().mockImplementation(() => ({
+			texture: {},
+			width: 1920,
+			height: 1080,
+			anchor: { set: vi.fn() },
+			destroy: vi.fn()
+		})),
+		Texture: {
+			from: vi.fn(),
+			WHITE: {}
+		},
+		Rectangle: vi.fn().mockImplementation((x, y, w, h) => ({ x, y, width: w, height: h })),
+		Assets: {
+			load: vi.fn(),
+			unload: vi.fn(),
+			cache: { has: vi.fn().mockReturnValue(false) }
+		},
+		VideoSource: class MockVideoSource {
+			resource: HTMLVideoElement;
+
+			alphaMode = "premultiply-alpha-on-upload";
+
+			constructor(opts: { resource: HTMLVideoElement }) {
+				this.resource = opts.resource;
+			}
+		},
+		ColorMatrixFilter: vi.fn(() => ({ negative: vi.fn() }))
+	};
+});
+
+// Mock howler for AudioPlayer
+vi.mock("howler", () => ({
+	Howl: vi.fn().mockImplementation(() => ({
+		play: vi.fn(),
+		pause: vi.fn(),
+		stop: vi.fn(),
+		seek: vi.fn().mockReturnValue(0),
+		volume: vi.fn().mockReturnValue(1),
+		rate: vi.fn().mockReturnValue(1),
+		duration: vi.fn().mockReturnValue(10),
+		unload: vi.fn()
+	}))
+}));
+
+// Mock AssetLoader
+vi.mock("@loaders/asset-loader", () => ({
+	AssetLoader: vi.fn().mockImplementation(() => ({
+		load: vi.fn().mockResolvedValue({}),
+		loadVideoUnique: vi.fn().mockResolvedValue(null),
+		unload: vi.fn(),
+		getProgress: vi.fn().mockReturnValue(100),
+		incrementRef: vi.fn(),
+		decrementRef: vi.fn().mockReturnValue(true),
+		loadTracker: { on: vi.fn(), off: vi.fn() }
+	}))
+}));
+
+// Mock LumaMaskController
+vi.mock("@core/luma-mask-controller", () => ({
+	LumaMaskController: vi.fn().mockImplementation(() => ({
+		initialize: vi.fn(),
+		update: vi.fn(),
+		dispose: vi.fn(),
+		cleanupForPlayer: vi.fn()
+	}))
+}));
+
+// Mock TextPlayer
+vi.mock("@canvas/players/text-player", () => ({
+	TextPlayer: { resetFontCache: vi.fn() }
+}));
+
+// Mock AlignmentGuides
+vi.mock("@canvas/system/alignment-guides", () => ({
+	AlignmentGuides: vi.fn().mockImplementation(() => ({
+		drawCanvasGuide: vi.fn(),
+		drawClipGuide: vi.fn(),
+		clear: vi.fn()
+	}))
+}));
+
+// Mock captions module
+vi.mock("@core/captions", () => ({
+	findActiveCue: vi.fn().mockReturnValue(null)
+}));
+
+// Mock subtitle loader
+vi.mock("@loaders/subtitle-load-parser", () => ({
+	SubtitleLoadParser: {
+		load: vi.fn().mockResolvedValue([])
+	}
+}));
+
+// Mock font config
+vi.mock("@core/fonts/font-config", () => ({
+	parseFontFamily: vi.fn().mockReturnValue("Arial"),
+	resolveFontPath: vi.fn().mockReturnValue(null)
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper Functions
+// ─────────────────────────────────────────────────────────────────────────────
+
+function createMockVideoElement(): HTMLVideoElement {
+	return {
+		currentTime: 0,
+		play: vi.fn().mockResolvedValue(undefined),
+		pause: vi.fn(),
+		paused: false,
+		volume: 1,
+		readyState: 4,
+		videoWidth: 1920,
+		videoHeight: 1080,
+		duration: 10,
+		src: "",
+		load: vi.fn()
+	} as unknown as HTMLVideoElement;
+}
+
+function createMockEdit(playbackTimeSec: number): Edit {
+	return {
+		playbackTime: sec(playbackTimeSec) as Seconds, // Use Seconds branded type
+		isPlaying: true,
+		assetLoader: {
+			load: vi.fn(),
+			loadVideoUnique: vi.fn(),
+			incrementRef: vi.fn(),
+			decrementRef: vi.fn()
+		},
+		events: { emit: vi.fn(), on: vi.fn(), off: vi.fn() },
+		output: { size: { width: 1920, height: 1080 } }
+	} as unknown as Edit;
+}
+
+function createVideoClipConfig(trim = 0, start = 0, speed?: number): ResolvedClip {
+	return {
+		asset: { type: "video", src: "test.mp4", trim, speed } as VideoAsset,
+		start,
+		length: 10
+	} as ResolvedClip;
+}
+
+function createAudioClipConfig(trim = 0, start = 0, speed?: number): ResolvedClip {
+	return {
+		asset: { type: "audio", src: "test.mp3", trim, speed } as AudioAsset,
+		start,
+		length: 10
+	} as ResolvedClip;
+}
+
+function createLumaClipConfig(start = 0): ResolvedClip {
+	return {
+		asset: { type: "luma", src: "luma.mp4" } as LumaAsset,
+		start,
+		length: 10
+	} as ResolvedClip;
+}
+
+function createCaptionClipConfig(start = 0): ResolvedClip {
+	return {
+		asset: { type: "caption", src: "captions.srt" } as CaptionAsset,
+		start,
+		length: 10
+	} as ResolvedClip;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VideoPlayer Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("VideoPlayer", () => {
+	describe("getPlaybackTime", () => {
+		it("returns time in seconds", () => {
+			// edit.playbackTime = 2.5 seconds from timeline start
+			const mockEdit = createMockEdit(2.5);
+
+			const player = new VideoPlayer(mockEdit, createVideoClipConfig(0, 0));
+
+			// getPlaybackTime() should return 2.5 seconds
+			const playbackTime = player.getPlaybackTime();
+
+			expect(playbackTime).toBe(2.5);
+		});
+
+		it("accounts for clip start time", () => {
+			// edit.playbackTime = 5 seconds, clip starts at 2 seconds
+			const mockEdit = createMockEdit(5);
+
+			const player = new VideoPlayer(mockEdit, createVideoClipConfig(0, 2));
+
+			// playbackTime should be 5 - 2 = 3 seconds (relative to clip start)
+			expect(player.getPlaybackTime()).toBe(3);
+		});
+
+		it("clamps to 0 when before clip start", () => {
+			// edit.playbackTime = 1 second, but clip starts at 2 seconds
+			const mockEdit = createMockEdit(1);
+
+			const player = new VideoPlayer(mockEdit, createVideoClipConfig(0, 2));
+
+			// Should return 0, not negative
+			expect(player.getPlaybackTime()).toBe(0);
+		});
+
+		it("clamps to clip length when past end", () => {
+			// edit.playbackTime = 15 seconds, clip is 10 seconds long starting at 0
+			const mockEdit = createMockEdit(15);
+
+			const player = new VideoPlayer(mockEdit, createVideoClipConfig(0, 0));
+
+			// Should return 10 (clip length), not 15
+			expect(player.getPlaybackTime()).toBe(10);
+		});
+	});
+
+	describe("getCurrentDrift", () => {
+		it("returns drift in seconds", () => {
+			const mockEdit = createMockEdit(3); // 3 seconds
+			const mockVideoElement = createMockVideoElement();
+			const trim = 0.5;
+
+			const player = new VideoPlayer(mockEdit, createVideoClipConfig(trim, 0));
+
+			// Set up texture with video element
+			const mockTexture = {
+				source: new pixi.VideoSource({ resource: mockVideoElement }),
+				width: 1920,
+				height: 1080
+			};
+			// @ts-expect-error - accessing private property for testing
+			player.texture = mockTexture;
+
+			// video.currentTime = 4.0, expected = playbackTime + trim = 3 + 0.5 = 3.5
+			// drift = |4.0 - 0.5 - 3.0| = 0.5 seconds
+			mockVideoElement.currentTime = 4.0;
+
+			const drift = player.getCurrentDrift();
+
+			// Drift should be 0.5 seconds
+			expect(drift).toBe(0.5);
+			// Should be a small decimal, not hundreds
+			expect(drift).toBeLessThan(10);
+		});
+
+		it("accounts for speed when computing drift", () => {
+			const mockEdit = createMockEdit(3); // 3 seconds
+			const mockVideoElement = createMockVideoElement();
+
+			// speed 2, trim 0.5: expected source time = 2 × (0.5 + 3) = 7.0
+			const player = new VideoPlayer(mockEdit, createVideoClipConfig(0.5, 0, 2));
+
+			const mockTexture = {
+				source: new pixi.VideoSource({ resource: mockVideoElement }),
+				width: 1920,
+				height: 1080
+			};
+			// @ts-expect-error - accessing private property for testing
+			player.texture = mockTexture;
+
+			mockVideoElement.currentTime = 7.0;
+			expect(player.getCurrentDrift()).toBe(0);
+
+			mockVideoElement.currentTime = 7.4;
+			expect(player.getCurrentDrift()).toBeCloseTo(0.4, 5);
+		});
+
+		it("handles zero drift correctly", () => {
+			const mockEdit = createMockEdit(2); // 2 seconds
+			const mockVideoElement = createMockVideoElement();
+			const trim = 1.0;
+
+			const player = new VideoPlayer(mockEdit, createVideoClipConfig(trim, 0));
+
+			const mockTexture = {
+				source: new pixi.VideoSource({ resource: mockVideoElement }),
+				width: 1920,
+				height: 1080
+			};
+			// @ts-expect-error - accessing private property for testing
+			player.texture = mockTexture;
+
+			// video.currentTime = 3.0, expected = 2 + 1 = 3.0 (perfect sync)
+			mockVideoElement.currentTime = 3.0;
+
+			expect(player.getCurrentDrift()).toBe(0);
+		});
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Speed Mapping Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("getSourceTime", () => {
+	it("defaults to trim + playbackTime at speed 1", () => {
+		const player = new VideoPlayer(createMockEdit(3), createVideoClipConfig(0.5, 0));
+		expect(player.getSourceTime()).toBe(3.5);
+	});
+
+	it("maps sourceTime = speed × (trim + playbackTime), matching render output", () => {
+		// playbackTime 4, trim 1, speed 0.5 → source time 0.5 × (1 + 4) = 2.5
+		const slow = new VideoPlayer(createMockEdit(4), createVideoClipConfig(1, 0, 0.5));
+		expect(slow.getSourceTime()).toBe(2.5);
+
+		// playbackTime 2, trim 1, speed 2 → source time 2 × (1 + 2) = 6
+		const fast = new AudioPlayer(createMockEdit(2), createAudioClipConfig(1, 0, 2));
+		expect(fast.getSourceTime()).toBe(6);
+	});
+
+	it("freezes at source time 0 when speed is 0", () => {
+		const player = new VideoPlayer(createMockEdit(5), createVideoClipConfig(2, 0, 0));
+		expect(player.getSourceTime()).toBe(0);
+	});
+
+	it("exposes asset speed with default 1", () => {
+		expect(new VideoPlayer(createMockEdit(0), createVideoClipConfig()).getAssetSpeed()).toBe(1);
+		expect(new AudioPlayer(createMockEdit(0), createAudioClipConfig(0, 0, 1.5)).getAssetSpeed()).toBe(1.5);
+	});
+});
+
+describe("getMaxLength", () => {
+	function createVideoPlayerWithDuration(trim: number, speed?: number): VideoPlayer {
+		const player = new VideoPlayer(createMockEdit(0), createVideoClipConfig(trim, 0, speed));
+		const mockTexture = {
+			source: new pixi.VideoSource({ resource: createMockVideoElement() }),
+			width: 1920,
+			height: 1080
+		};
+		// @ts-expect-error - accessing private property for testing
+		player.texture = mockTexture;
+		return player;
+	}
+
+	it("returns source duration minus trim at speed 1", () => {
+		// mock video duration is 10s
+		expect(createVideoPlayerWithDuration(0).getMaxLength()).toBe(10);
+		expect(createVideoPlayerWithDuration(2).getMaxLength()).toBe(8);
+	});
+
+	it("scales max length by speed: duration/speed − trim", () => {
+		expect(createVideoPlayerWithDuration(0, 2).getMaxLength()).toBe(5);
+		expect(createVideoPlayerWithDuration(0, 0.5).getMaxLength()).toBe(20);
+		expect(createVideoPlayerWithDuration(1, 2).getMaxLength()).toBe(4);
+	});
+
+	it("returns null when unbounded: media not loaded or speed 0", () => {
+		const noMedia = new VideoPlayer(createMockEdit(0), createVideoClipConfig());
+		expect(noMedia.getMaxLength()).toBeNull();
+		expect(createVideoPlayerWithDuration(0, 0).getMaxLength()).toBeNull();
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AudioPlayer Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("AudioPlayer", () => {
+	describe("getPlaybackTime", () => {
+		it("returns time in seconds", () => {
+			const mockEdit = createMockEdit(4.5); // 4.5 seconds
+
+			const player = new AudioPlayer(mockEdit, createAudioClipConfig(0, 0));
+
+			expect(player.getPlaybackTime()).toBe(4.5);
+		});
+
+		it("accounts for clip start time", () => {
+			const mockEdit = createMockEdit(6); // 6 seconds
+
+			const player = new AudioPlayer(mockEdit, createAudioClipConfig(0, 1));
+
+			// 6 - 1 = 5 seconds relative to clip start
+			expect(player.getPlaybackTime()).toBe(5);
+		});
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LumaPlayer Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("LumaPlayer", () => {
+	describe("getPlaybackTime", () => {
+		it("returns time in seconds", () => {
+			const mockEdit = createMockEdit(6); // 6 seconds
+
+			const player = new LumaPlayer(mockEdit, createLumaClipConfig(0));
+
+			expect(player.getPlaybackTime()).toBe(6);
+		});
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CaptionPlayer Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("CaptionPlayer", () => {
+	describe("getPlaybackTime", () => {
+		it("returns time in seconds", () => {
+			const mockEdit = createMockEdit(7.5); // 7.5 seconds
+
+			const player = new CaptionPlayer(mockEdit, createCaptionClipConfig(0));
+
+			expect(player.getPlaybackTime()).toBe(7.5);
+		});
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Regression Guard Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("Regression guards", () => {
+	describe("time unit consistency across all players", () => {
+		it("all players return getPlaybackTime in seconds for same edit.playbackTime", () => {
+			const mockEdit = createMockEdit(5); // 5 seconds
+
+			const videoPlayer = new VideoPlayer(mockEdit, createVideoClipConfig(0, 0));
+			const audioPlayer = new AudioPlayer(mockEdit, createAudioClipConfig(0, 0));
+			const lumaPlayer = new LumaPlayer(mockEdit, createLumaClipConfig(0));
+			const captionPlayer = new CaptionPlayer(mockEdit, createCaptionClipConfig(0));
+
+			// All should return 5 seconds
+			expect(videoPlayer.getPlaybackTime()).toBe(5);
+			expect(audioPlayer.getPlaybackTime()).toBe(5);
+			expect(lumaPlayer.getPlaybackTime()).toBe(5);
+			expect(captionPlayer.getPlaybackTime()).toBe(5);
+		});
+
+		it("verifies values are small decimals (seconds)", () => {
+			// Use 8 seconds - within the 10s clip length
+			const mockEdit = createMockEdit(8);
+
+			const player = new VideoPlayer(mockEdit, createVideoClipConfig(0, 0));
+			const playbackTime = player.getPlaybackTime();
+
+			// Should be exactly 8 seconds
+			expect(playbackTime).toBe(8);
+			// Should be a small value, not hundreds or thousands
+			expect(playbackTime).toBeLessThan(100);
+		});
+	});
+
+	describe("drift calculation unit consistency", () => {
+		it("getCurrentDrift returns small values (seconds)", () => {
+			const mockEdit = createMockEdit(5);
+			const mockVideoElement = createMockVideoElement();
+
+			const player = new VideoPlayer(mockEdit, createVideoClipConfig(0, 0));
+
+			const mockTexture = {
+				source: new pixi.VideoSource({ resource: mockVideoElement }),
+				width: 1920,
+				height: 1080
+			};
+			// @ts-expect-error - accessing private property for testing
+			player.texture = mockTexture;
+
+			// Set video 0.3 seconds ahead
+			mockVideoElement.currentTime = 5.3;
+
+			const drift = player.getCurrentDrift();
+
+			// Drift in seconds: 0.3
+			expect(drift).toBeCloseTo(0.3, 1);
+			// Should be a small value
+			expect(drift).not.toBeGreaterThan(10);
+		});
+	});
+});
