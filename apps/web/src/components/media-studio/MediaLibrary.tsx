@@ -1,6 +1,9 @@
 import {
   MEDIA_ASPECTS,
   MEDIA_MAX_TAGS,
+  MEDIA_ORIGINS,
+  MEDIA_ORIGIN_LABEL,
+  MEDIA_PROVIDER_LABEL,
   MEDIA_UPLOAD_TYPES,
   WINGS_CLIENT_ID,
   WINGS_CLIENT_NAME,
@@ -50,7 +53,8 @@ export function MediaThumb({ asset }: { asset: Pick<MediaAsset, 'kind' | 'downlo
 export function describeAsset(asset: MediaAsset): string {
   const what = asset.kind === 'video' ? 'Vídeo' : 'Imagem';
   const shape = asset.width && asset.height ? `, ${asset.width} × ${asset.height}` : '';
-  const from = asset.origin === 'kairogen' ? 'gerado no Kairogen' : 'enviado';
+  const from =
+    asset.origin === 'upload' ? 'enviado' : `gerado no ${MEDIA_PROVIDER_LABEL[asset.origin]}`;
   return `${what}${shape}, ${from} em ${new Date(asset.createdAt).toLocaleDateString('pt-BR')}`;
 }
 
@@ -123,8 +127,11 @@ export function MediaFilters({
           onChange={(e) => set('origin', e.target.value)}
         >
           <option value="">Todas</option>
-          <option value="kairogen">Geradas no Kairogen</option>
-          <option value="upload">Enviadas</option>
+          {MEDIA_ORIGINS.map((origin) => (
+            <option key={origin} value={origin}>
+              {MEDIA_ORIGIN_LABEL[origin]}
+            </option>
+          ))}
         </select>
       </label>
       <label className="field">
@@ -516,7 +523,7 @@ export function MediaLibrary({
                     : asset.aspect === 'other'
                       ? 'Imagem'
                       : asset.aspect}
-                  {asset.origin === 'kairogen' && ' · Kairogen'}
+                  {asset.origin !== 'upload' && ` · ${MEDIA_PROVIDER_LABEL[asset.origin]}`}
                 </span>
               </button>
             </li>

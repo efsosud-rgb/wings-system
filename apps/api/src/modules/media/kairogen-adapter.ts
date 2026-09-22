@@ -238,12 +238,15 @@ export function modelsFrom(result: McpToolResult): MediaModel[] {
       {
         key,
         name: asText(pick(model, 'name')) ?? key,
+        providerId: 'kairogen',
         provider: asText(pick(model, 'provider')),
         kind: type,
         // The catalog prices in money (`pricing.baseCost`, BRL, plus a markup and
         // `conditionalPricing`), never in credits. Credits come from `estimate_cost`
-        // alone; `studio.ts` asks it once per model and fills this in.
+        // alone; the Kairogen provider asks it once per model and fills both in.
         creditsPerOutput: null,
+        brlCentsPerOutput: null,
+        maxOutputs: type === 'video' ? 2 : 4,
         supportedDurations: (Array.isArray(durations) ? durations : [])
           .map(asNumber)
           .filter((value): value is number => value !== null),

@@ -74,6 +74,8 @@ export interface NewMedia {
   model?: string | null;
   credits?: number | null;
   externalGenerationId?: string | null;
+  /** The generation of ours it came from. */
+  generationId?: string | null;
   sourceAssetId?: string | null;
   durationSeconds?: number | null;
   /** Defaults to Wings Company, in the table itself. */
@@ -109,7 +111,8 @@ export async function storeMedia(
   const storageKey = newStorageKey(now);
   await storageFrom(where).put(storageKey, input.bytes, inspected.mimeType);
   const stamp = now.toISOString().slice(0, 19).replace(/[-:]/g, '').replace('T', '-');
-  const made = input.origin === 'kairogen' ? (input.model ?? 'kairogen') : 'envio';
+  const made =
+    input.origin === 'upload' ? 'envio' : (input.model ?? input.origin).replace(/[^A-Za-z0-9._-]/g, '-');
   const name = `${made}-${stamp}-${randomBytes(2).toString('hex')}.${EXTENSION[inspected.mimeType]}`;
 
   return db.transaction(async (tx) => {
@@ -148,6 +151,7 @@ export async function storeMedia(
         model: input.model ?? null,
         credits: input.credits ?? null,
         externalGenerationId: input.externalGenerationId ?? null,
+        generationId: input.generationId ?? null,
         sourceAssetId: input.sourceAssetId ?? null,
         clientId,
         folder: input.folder ?? null,

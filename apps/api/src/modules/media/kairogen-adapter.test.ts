@@ -222,10 +222,13 @@ describe('reading Kairogen’s answers', () => {
     expect(models[0]).toEqual({
       key: 'gpt-image-1-5',
       name: 'GPT Image 1.5',
+      providerId: 'kairogen',
       provider: 'OpenAI',
       kind: 'image',
       // baseCost 0.009 is BRL, not credits: never shown as a price.
       creditsPerOutput: null,
+      brlCentsPerOutput: null,
+      maxOutputs: 4,
       supportedDurations: [],
       aspectRatios: null,
       priceParams: [

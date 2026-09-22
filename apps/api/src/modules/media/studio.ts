@@ -1,95 +1,97 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import {
-  DEFAULT_KAIROGEN_PLAN,
-  KAIROGEN_PLANS,
+  MEDIA_BILLING_RANK,
+  MEDIA_REFUSAL_MESSAGE,
   MAX_IMAGES_PER_GENERATION,
   MAX_VIDEOS_PER_GENERATION,
-  MEDIA_REFUSAL_MESSAGE,
   WINGS_CLIENT_ID,
-  modelsForImageUse,
+  formatBrl,
   mentionsClient,
-  type KairogenPlan,
+  modelsForImageUse,
+  type MediaAlternative,
   type MediaEstimate,
   type MediaEstimateRequest,
   type MediaGeneration,
   type MediaModel,
+  type MediaOrigin,
+  type MediaProviderId,
+  type MediaProviderStatus,
   type MediaRefusal,
+  type MediaSpend,
   type MediaUsage,
 } from '@wings/shared';
-import { and, desc, eq, gte, inArray, isNotNull, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, lte, ne, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   clients,
   employees,
-  integrationConnections,
   mediaAssets,
   mediaCreditLedger,
   mediaGenerations,
   mediaPublicLinks,
 } from '../../db/schema/index.js';
 import type { Env } from '../../env.js';
-import { McpError, type McpToolResult } from '../../lib/mcp-client/index.js';
-import { scrubSensitive } from '../agent/scrub.js';
-import {
-  callKairogen,
-  creditsFrom,
-  kairogenDepsOf,
-  PROVIDER,
-  type KairogenDeps,
-} from '../integrations/kairogen/service.js';
-import { activeClient } from '../clients/routes.js';
-import {
-  creditCostFrom,
-  generationIdFrom,
-  generationStateFrom,
-  isCreditMismatch,
-  modelsFrom,
-  shapeOf,
-} from './kairogen-adapter.js';
 import { storageOf, type ObjectStorage } from '../../lib/storage/index.js';
-import { mediaDirOf, storeMedia } from './library.js';
+import { activeClient } from '../clients/routes.js';
+import { mediaDirOf, readMedia, storeMedia } from './library.js';
+import {
+  DEFAULT_ANIMATION_MODEL,
+  ProviderError,
+  mediaProvidersOf,
+  planOf,
+  providerById,
+  type MediaProvider,
+  type ProviderContext,
+  type ProviderOutput,
+  type ResolvedRequest,
+  type SourceAsset,
+} from './providers/index.js';
+
+export { clearModelCache, planOf, setPlan } from './providers/index.js';
 
 /**
- * Spending Kairogen credits, and everything that keeps it honest.
+ * Spending on media, and everything that keeps it honest, whichever provider
+ * runs the model.
  *
- * The order of things is fixed: estimate (Kairogen says the price) → a person
- * clicks → ceilings and balance are checked → the ledger records the spend →
- * only then is Kairogen called, ONCE, with `expected_credits` so that it
- * refuses if the charge would differ → the server polls until the files are in
- * the library. No step is skipped and none is repeated on its own.
+ * The order of things is fixed: estimate (the provider says the price, R$ 0
+ * included) → a person clicks → ceilings, quota and balance are checked → the
+ * ledger records the spend → only then is the provider called, ONCE → the
+ * server follows until the files are in the library. No step is skipped and
+ * none is repeated on its own.
+ *
+ * When the provider asked for cannot serve, a cheaper (or free) one that does
+ * the same takes its place and the estimate says so; a costlier one is only
+ * offered, and taking it is a click. The switch happens before the price is
+ * shown, never after: what is generated is always what was priced.
  */
 
 const ESTIMATE_TTL_MS = 10 * 60_000;
 const LINK_TTL_MS = 15 * 60_000;
-const MODEL_CACHE_MS = 60 * 60_000;
 const GIVE_UP_AFTER_MS = 20 * 60_000;
 const FIRST_POLL_MS = 5_000;
 const MAX_POLL_MS = 30_000;
-const DEFAULT_ANIMATION_MODEL = 'seedance-v2-0-image-to-video';
 const MAX_DOWNLOAD_BYTES = 150 * 1024 * 1024;
-/** Pricing the selector: a few `estimate_cost` at a time, and never holding the screen for long. */
-const PRICING_CONCURRENCY = 4;
-const PRICING_BUDGET_MS = 8_000;
 
 export interface StudioDeps {
   db: Database;
-  kairogen: KairogenDeps | null;
+  /** Every provider the system knows, in failover order. */
+  providers: MediaProvider[];
   /** Where the library's files live: the Drive's storage. Null when this environment has none. */
   storage: ObjectStorage | null;
   /** The volume assets lived on before the Drive, read until the migration script has run. */
   mediaDir: string | null;
   dailyPerUser: number;
   monthly: number;
-  /** Where Kairogen can reach this API: APP_BASE_URL + /api. */
+  /** The one ceiling over every provider, in cents of reais per month. */
+  monthlyBrlCents: number;
+  /** Where a provider can reach this API: APP_BASE_URL + /api. */
   publicApiBase: string;
   linkKey: Buffer | null;
-  /** Downloads of finished outputs. Tests hand in the fake's. */
+  /** Downloads of finished outputs. Tests hand in the fakes'. */
   fetch: typeof fetch;
   /** False in tests: generations move only when somebody calls `advanceGeneration`. */
   autoPoll: boolean;
   now: () => Date;
-  /** Where the shape of Kairogen's answers is noted. Shapes only, never contents. */
-  noteShape?: (entry: { tool: string; shape: unknown; text: string | null }) => void;
 }
 
 export function studioDepsOf(
@@ -97,6 +99,7 @@ export function studioDepsOf(
     db: Database;
     env: Env;
     kairogenFetch?: typeof fetch;
+    mediaFetch?: typeof fetch;
     storageFetch?: typeof fetch;
     storage?: ObjectStorage;
   },
@@ -105,64 +108,36 @@ export function studioDepsOf(
   const key = wings.env.INTEGRATIONS_ENCRYPTION_KEY;
   return {
     db: wings.db,
-    kairogen: kairogenDepsOf(wings),
+    providers: mediaProvidersOf(wings, log),
     storage: storageOf(wings),
     mediaDir: mediaDirOf(wings.env),
     dailyPerUser: wings.env.KAIROGEN_DAILY_CREDITS_PER_USER,
     monthly: wings.env.KAIROGEN_MONTHLY_CREDITS,
+    monthlyBrlCents: Math.round(wings.env.MEDIA_MONTHLY_BRL * 100),
     publicApiBase: `${wings.env.APP_BASE_URL}/api`,
     // A key of its own, derived: signing links never reuses the key that encrypts tokens.
     linkKey: key
       ? createHmac('sha256', Buffer.from(key, 'base64')).update('wings-media-public-link').digest()
       : null,
-    fetch: wings.kairogenFetch ?? fetch,
+    fetch: wings.mediaFetch ?? wings.kairogenFetch ?? fetch,
     autoPoll: wings.env.NODE_ENV !== 'test',
     now: () => new Date(),
-    noteShape: log ? shapeNoter(log) : undefined,
   };
 }
 
-/** Writes a log line when a tool's shape is new, not once per call. */
-function shapeNoter(log: { info: (entry: object, message: string) => void }) {
-  const last = new Map<string, string>();
-  return (entry: { tool: string; shape: unknown; text: string | null }) => {
-    const seen = JSON.stringify(entry);
-    if (last.get(entry.tool) === seen) return;
-    last.set(entry.tool, seen);
-    log.info(entry, 'kairogen answer shape');
-  };
-}
-
-/**
- * Every call to Kairogen from the studio goes through here, so that the FORMAT
- * of what it answers is on record: key names, types and numbers, with every
- * string reduced to its length (`shapeOf`). When there is no structured answer,
- * the text is noted with its words masked and its numbers kept.
- */
-async function ask(
-  deps: StudioDeps,
-  kairogen: KairogenDeps,
-  tool: Parameters<typeof callKairogen>[1],
-  args: Record<string, unknown> = {},
-  options: { timeoutMs?: number } = {},
-): Promise<McpToolResult> {
-  const result = await callKairogen(kairogen, tool, args, options);
-  if (deps.noteShape) {
-    const structured = result.data !== null && typeof result.data === 'object';
-    deps.noteShape({
-      tool,
-      shape: shapeOf(result.data),
-      text: structured ? null : result.text.slice(0, 300).replace(/\p{L}/gu, 'a'),
-    });
-  }
-  return result;
-}
+const ctxOf = (deps: StudioDeps): ProviderContext => ({ db: deps.db, now: deps.now });
 
 export class StudioRefusal extends Error {
   constructor(
     readonly code:
-      MediaRefusal | 'invalid_request' | 'cannot_estimate' | 'not_found' | 'kairogen_unavailable',
+      | MediaRefusal
+      | 'invalid_request'
+      | 'cannot_estimate'
+      | 'not_found'
+      | 'provider_unreachable',
     message: string,
+    /** For the few refusals that carry more than a message: a costlier model that could do it. */
+    readonly extra: { alternative?: MediaAlternative } = {},
   ) {
     super(message);
     this.name = 'StudioRefusal';
@@ -170,121 +145,62 @@ export class StudioRefusal extends Error {
 }
 const refuse = (code: MediaRefusal) => new StudioRefusal(code, MEDIA_REFUSAL_MESSAGE[code]);
 
-function connected(deps: StudioDeps): KairogenDeps {
-  if (!deps.kairogen) throw refuse('not_connected');
-  return deps.kairogen;
+function providerOf(deps: StudioDeps, id: MediaProviderId): MediaProvider {
+  const provider = providerById(deps.providers, id);
+  if (!provider) throw new StudioRefusal('invalid_request', 'Provedor desconhecido.');
+  return provider;
 }
 
-/** Kairogen said something went wrong: what that means for the person, never its raw words as orders. */
-function fromMcp(error: unknown): StudioRefusal {
-  if (error instanceof McpError && error.code === 'unauthorized') return refuse('not_connected');
-  if (error instanceof McpError) {
-    return new StudioRefusal(
-      'kairogen_unavailable',
-      'O Kairogen não respondeu agora. Tente em instantes.',
-    );
+/** A provider said no before anything was spent: what that means for the person. */
+function fromProvider(error: unknown): StudioRefusal {
+  if (!(error instanceof ProviderError)) throw error;
+  switch (error.code) {
+    case 'unauthorized':
+      return new StudioRefusal('not_connected', error.message);
+    case 'rejected':
+      return new StudioRefusal('cannot_estimate', error.message);
+    case 'quota':
+      return new StudioRefusal('provider_unavailable', error.message);
+    default:
+      return new StudioRefusal('provider_unreachable', error.message);
   }
-  throw error;
 }
 
 // ---------------------------------------------------------------------------
-// Plan, catalog, usage
+// Catalog, providers, usage
 // ---------------------------------------------------------------------------
 
-export async function planOf(db: Database): Promise<KairogenPlan> {
-  const row = await db.query.integrationConnections.findFirst({
-    where: eq(integrationConnections.provider, PROVIDER),
-  });
-  const plan = row?.plan as KairogenPlan | undefined;
-  return plan && KAIROGEN_PLANS.includes(plan) ? plan : DEFAULT_KAIROGEN_PLAN;
-}
-
-export async function setPlan(db: Database, plan: KairogenPlan, now: Date): Promise<void> {
-  await db
-    .insert(integrationConnections)
-    .values({ provider: PROVIDER, plan, updatedAt: now })
-    .onConflictDoUpdate({
-      target: [integrationConnections.tenantId, integrationConnections.provider],
-      set: { plan, updatedAt: now },
-    });
-  modelCache.clear();
-}
-
-interface Catalog {
-  at: number;
-  models: MediaModel[];
-  /** Models `estimate_cost` was already asked about, whatever it answered. */
-  asked: Set<string>;
-}
-const modelCache = new Map<string, Catalog>();
-export const clearModelCache = () => modelCache.clear();
-
 /**
- * Kairogen's catalog prices in money (BRL plus a markup), not in credits, so
- * the only honest "credits per output" is what `estimate_cost` answers for the
- * model with its default parameters. It is a read: it spends nothing and leaves
- * no estimate behind. Asked once per model per hour; a model it cannot price
- * (a video that needs a duration, a supplier hiccup) stays "custo na estimativa".
- */
-async function priceCatalog(
-  deps: StudioDeps,
-  kairogen: KairogenDeps,
-  plan: KairogenPlan,
-  catalog: Catalog,
-  kind: 'image' | 'video' | undefined,
-): Promise<void> {
-  const queue = catalog.models.filter(
-    (model) => (!kind || model.kind === kind) && !catalog.asked.has(model.key),
-  );
-  if (queue.length === 0) return;
-  for (const model of queue) catalog.asked.add(model.key);
-  const worker = async () => {
-    for (let model = queue.shift(); model; model = queue.shift()) {
-      try {
-        const args = { model: model.key, plan_key: plan, quantity: 1 };
-        model.creditsPerOutput = creditCostFrom(await ask(deps, kairogen, 'estimate_cost', args));
-      } catch {
-        // No price for this one. The estimate the person asks for is what counts anyway.
-      }
-    }
-  };
-  const all = Promise.all(Array.from({ length: PRICING_CONCURRENCY }, worker));
-  // Whatever is not priced within the budget keeps being priced, into the same cache.
-  await Promise.race([all, new Promise((done) => setTimeout(done, PRICING_BUDGET_MS).unref())]);
-}
-
-/**
- * The live catalog, kept for an hour per plan: prices are per plan. `priced`
- * is for who shows prices (the selector, the agent's list); checking a request
- * against the catalog needs none.
+ * Every configured provider's models together. A provider that cannot be read
+ * right now is named in `problems` and its models are simply absent; with no
+ * provider available at all, the studio is not connected.
  */
 export async function listModels(
   deps: StudioDeps,
   options: { priced?: 'image' | 'video' | 'all' } = {},
-): Promise<{ models: MediaModel[]; cachedAt: string }> {
-  const kairogen = connected(deps);
-  const plan = await planOf(deps.db);
-  const now = deps.now().getTime();
-  try {
-    let catalog = modelCache.get(plan);
-    if (!catalog || now - catalog.at >= MODEL_CACHE_MS) {
-      const models = modelsFrom(await ask(deps, kairogen, 'list_models', {}));
-      catalog = { at: now, models, asked: new Set() };
-      modelCache.set(plan, catalog);
+): Promise<{
+  models: MediaModel[];
+  cachedAt: string;
+  problems: Partial<Record<MediaProviderId, string>>;
+}> {
+  const ctx = ctxOf(deps);
+  const models: MediaModel[] = [];
+  const problems: Partial<Record<MediaProviderId, string>> = {};
+  for (const provider of deps.providers) {
+    if (!provider.configured) continue;
+    try {
+      models.push(...(await provider.listModels(ctx, options)));
+    } catch (error) {
+      if (!(error instanceof ProviderError)) throw error;
+      problems[provider.id] = error.message;
     }
-    if (options.priced) {
-      await priceCatalog(
-        deps,
-        kairogen,
-        plan,
-        catalog,
-        options.priced === 'all' ? undefined : options.priced,
-      );
-    }
-    return { models: catalog.models, cachedAt: new Date(catalog.at).toISOString() };
-  } catch (error) {
-    throw fromMcp(error);
   }
+  if (models.length === 0) {
+    const unreachable = Object.values(problems)[0];
+    if (unreachable) throw new StudioRefusal('provider_unreachable', unreachable);
+    throw refuse('not_connected');
+  }
+  return { models, cachedAt: deps.now().toISOString(), problems };
 }
 
 /** Midnight today, and the first of this month, in São Paulo (UTC-3 all year since 2019). */
@@ -304,20 +220,30 @@ async function creditsCounted(db: Database, since: Date, employeeId?: string): P
       and(
         gte(mediaCreditLedger.createdAt, since),
         employeeId ? eq(mediaCreditLedger.employeeId, employeeId) : undefined,
+        eq(mediaCreditLedger.provider, 'kairogen'),
       ),
     );
   return Number(row?.total ?? 0);
 }
 
-/** What `get_credits` says right now, or null when it cannot be asked or has no number in it. */
+async function brlCounted(db: Database, since: Date, provider?: MediaProviderId): Promise<number> {
+  const [row] = await db
+    .select({ total: sql<string>`coalesce(sum(${mediaCreditLedger.brlCentsDelta}), 0)` })
+    .from(mediaCreditLedger)
+    .where(
+      and(
+        gte(mediaCreditLedger.createdAt, since),
+        provider ? eq(mediaCreditLedger.provider, provider) : undefined,
+      ),
+    );
+  return Number(row?.total ?? 0);
+}
+
+/** What Kairogen's `get_credits` says right now, or null when it cannot be asked. */
 async function readBalance(deps: StudioDeps): Promise<number | null> {
-  if (!deps.kairogen) return null;
-  try {
-    return creditsFrom(await ask(deps, deps.kairogen, 'get_credits'), deps.now()).balance;
-  } catch (error) {
-    if (!(error instanceof McpError)) throw error;
-    return null;
-  }
+  const kairogen = providerById(deps.providers, 'kairogen');
+  if (!kairogen?.configured) return null;
+  return (await kairogen.balance(ctxOf(deps)))?.credits ?? null;
 }
 
 /**
@@ -339,11 +265,19 @@ async function noteBalance(deps: StudioDeps, employeeId: string, balance: number
     employeeId,
     event: 'balance_changed',
     operation: 'get_credits',
+    provider: 'kairogen',
     creditsEstimated: 0,
     creditsDelta: 0,
     balanceReported: Math.floor(balance),
     createdAt: deps.now(),
   });
+}
+
+export async function spendOf(deps: StudioDeps): Promise<MediaSpend> {
+  return {
+    usedThisMonthBrlCents: await brlCounted(deps.db, periodStarts(deps.now()).month),
+    monthlyLimitBrlCents: deps.monthlyBrlCents,
+  };
 }
 
 export async function usageOf(
@@ -361,13 +295,59 @@ export async function usageOf(
     dailyLimitPerUser: deps.dailyPerUser,
     usedThisMonth: await creditsCounted(deps.db, starts.month),
     monthlyLimit: deps.monthly,
+    usedThisMonthBrlCents: await brlCounted(deps.db, starts.month),
+    monthlyLimitBrlCents: deps.monthlyBrlCents,
   };
 }
 
-function blockedBy(usage: MediaUsage, credits: number): MediaRefusal | null {
-  if (usage.usedTodayByYou + credits > usage.dailyLimitPerUser) return 'daily_limit';
-  if (usage.usedThisMonth + credits > usage.monthlyLimit) return 'monthly_limit';
-  if (usage.balance !== null && usage.balance < credits) return 'insufficient_credits';
+/** Every provider as the screens see it: what it is, whether it can serve, what it holds and spent. */
+export async function providerStatuses(deps: StudioDeps): Promise<MediaProviderStatus[]> {
+  const ctx = ctxOf(deps);
+  const month = periodStarts(deps.now()).month;
+  return Promise.all(
+    deps.providers.map(async (provider): Promise<MediaProviderStatus> => {
+      const availability = provider.configured
+        ? await provider.availability(ctx)
+        : { available: false, reason: null };
+      return {
+        id: provider.id,
+        name: provider.name,
+        billing: provider.billing,
+        capabilities: [...provider.capabilities],
+        configured: provider.configured,
+        available: availability.available,
+        reason: provider.configured ? availability.reason : 'Sem chave no ambiente.',
+        balance: provider.configured ? await provider.balance(ctx) : null,
+        quota: provider.configured ? await provider.quota(ctx) : null,
+        usedThisMonthBrlCents: await brlCounted(deps.db, month, provider.id),
+        verified: provider.verified,
+      };
+    }),
+  );
+}
+
+/** The ceilings, with a sentence for the one that refuses. */
+function blockedBy(
+  usage: MediaUsage,
+  quote: { providerId: MediaProviderId; credits: number; brlCents: number },
+): { code: MediaRefusal; detail: string } | null {
+  if (quote.providerId === 'kairogen') {
+    if (usage.usedTodayByYou + quote.credits > usage.dailyLimitPerUser) {
+      return { code: 'daily_limit', detail: MEDIA_REFUSAL_MESSAGE.daily_limit };
+    }
+    if (usage.usedThisMonth + quote.credits > usage.monthlyLimit) {
+      return { code: 'monthly_limit', detail: MEDIA_REFUSAL_MESSAGE.monthly_limit };
+    }
+    if (usage.balance !== null && usage.balance < quote.credits) {
+      return { code: 'insufficient_credits', detail: MEDIA_REFUSAL_MESSAGE.insufficient_credits };
+    }
+  }
+  if (quote.brlCents > 0 && usage.usedThisMonthBrlCents + quote.brlCents > usage.monthlyLimitBrlCents) {
+    return {
+      code: 'monthly_brl_limit',
+      detail: `O teto mensal de ${formatBrl(usage.monthlyLimitBrlCents)} em mídia seria ultrapassado: ${formatBrl(usage.usedThisMonthBrlCents)} já contados este mês e esta geração custa ${formatBrl(quote.brlCents)}.`,
+    };
+  }
   return null;
 }
 
@@ -381,7 +361,7 @@ const sign = (key: Buffer, linkId: string, assetId: string, expiresAt: Date) =>
     .digest('base64url');
 
 /**
- * A public address for ONE asset, good for fifteen minutes, so that Kairogen
+ * A public address for ONE asset, good for fifteen minutes, so that a provider
  * can read a reference image. Every link issued leaves a row; the address
  * carries an id and a signature, never a path on the volume.
  */
@@ -440,7 +420,9 @@ async function ledger(
   event: string,
   values: {
     creditsDelta: number;
+    brlCentsDelta: number;
     creditsCharged?: number | null;
+    brlCentsCharged?: number | null;
     /** What get_credits said around this step, when it was asked. */
     balance?: number | null;
     now: Date;
@@ -452,11 +434,15 @@ async function ledger(
     event,
     operation: row.operation,
     model: row.model,
+    provider: row.provider,
     prompt: row.prompt,
     params: row.priceArgs,
     creditsEstimated: row.creditsEstimated,
     creditsCharged: values.creditsCharged ?? row.creditsCharged,
     creditsDelta: values.creditsDelta,
+    brlCentsEstimated: row.brlCentsEstimated,
+    brlCentsCharged: values.brlCentsCharged ?? row.brlCentsCharged,
+    brlCentsDelta: values.brlCentsDelta,
     externalGenerationId: row.externalGenerationId,
     clientId: row.clientId,
     balanceReported:
@@ -477,20 +463,28 @@ function requireDuration(model: MediaModel, duration: number | undefined): void 
   }
 }
 
-interface Resolved {
-  /** Filing only. Never part of `priceArgs` nor of any tool call. */
+interface Resolved extends ResolvedRequest {
+  /** Filing only. Never part of `priceArgs` nor of any provider call. */
   clientId: string;
-  kind: 'image' | 'video';
-  model: string | null;
-  prompt: string | null;
-  sourceAssetId: string | null;
-  /** What estimate_cost is asked: the price-affecting arguments and nothing else. */
-  priceArgs: Record<string, unknown>;
+  campaign: string | null;
 }
 
-async function resolve(deps: StudioDeps, request: MediaEstimateRequest): Promise<Resolved> {
-  const plan = await planOf(deps.db);
-  const { models } = await listModels(deps);
+const asSource = (asset: typeof mediaAssets.$inferSelect): SourceAsset => ({
+  id: asset.id,
+  kind: asset.kind,
+  mimeType: asset.mimeType,
+  width: asset.width,
+  height: asset.height,
+  origin: asset.origin,
+  externalGenerationId: asset.externalGenerationId,
+  sourceUrl: asset.sourceUrl,
+});
+
+async function resolve(
+  deps: StudioDeps,
+  request: MediaEstimateRequest,
+  models: MediaModel[],
+): Promise<Resolved> {
   const assetOf = async (id: string) => {
     const asset = await deps.db.query.mediaAssets.findFirst({ where: eq(mediaAssets.id, id) });
     if (!asset) throw new StudioRefusal('not_found', 'Mídia não encontrada na biblioteca.');
@@ -505,15 +499,17 @@ async function resolve(deps: StudioDeps, request: MediaEstimateRequest): Promise
     if (client.id !== WINGS_CLIENT_ID && mentionsClient(written, client.name)) {
       throw new StudioRefusal(
         'invalid_request',
-        'O prompt cita o nome do cliente, e o nome do cliente nunca é enviado ao Kairogen. Descreva a cena sem o nome; o texto da marca entra depois, no anúncio.',
+        'O prompt cita o nome do cliente, e o nome do cliente nunca é enviado ao provedor. Descreva a cena sem o nome; o texto da marca entra depois, no anúncio.',
       );
     }
     const model = models.find((item) => item.key === request.model && item.kind === request.kind);
-    if (!model)
-      throw new StudioRefusal('invalid_request', 'Modelo não encontrado no catálogo do Kairogen.');
-    const cap = request.kind === 'video' ? MAX_VIDEOS_PER_GENERATION : MAX_IMAGES_PER_GENERATION;
+    if (!model) throw new StudioRefusal('invalid_request', 'Modelo não encontrado no catálogo.');
+    const cap = Math.min(
+      model.maxOutputs,
+      request.kind === 'video' ? MAX_VIDEOS_PER_GENERATION : MAX_IMAGES_PER_GENERATION,
+    );
     if (request.quantity > cap) {
-      throw new StudioRefusal('invalid_request', `No máximo ${cap} por geração.`);
+      throw new StudioRefusal('invalid_request', `No máximo ${cap} por geração neste modelo.`);
     }
     if (model.aspectRatios && !model.aspectRatios.includes(request.aspect)) {
       throw new StudioRefusal(
@@ -532,6 +528,7 @@ async function resolve(deps: StudioDeps, request: MediaEstimateRequest): Promise
       if (!valid)
         throw new StudioRefusal('invalid_request', `Parâmetro "${key}" inválido para este modelo.`);
     }
+    let source: SourceAsset | null = null;
     if (request.referenceAssetId) {
       const asset = await assetOf(request.referenceAssetId);
       if (asset.kind !== 'image') {
@@ -558,22 +555,22 @@ async function resolve(deps: StudioDeps, request: MediaEstimateRequest): Promise
           `${model.name} ${wanted}.${does}${able.length > 0 ? ` Modelos que fazem isso: ${able.join(', ')}.` : ''}`,
         );
       }
+      source = asSource(asset);
     }
     return {
+      operation: 'generate',
       clientId: client.id,
+      campaign: request.campaign ?? null,
       kind: request.kind,
-      model: model.key,
+      model,
       prompt: request.prompt,
-      sourceAssetId: request.referenceAssetId ?? null,
-      priceArgs: {
-        model: model.key,
-        plan_key: plan,
-        quantity: request.quantity,
-        ...request.params,
-        ...(request.durationSeconds !== undefined
-          ? { duration_seconds: request.durationSeconds }
-          : {}),
-      },
+      negativePrompt: request.negativePrompt ?? null,
+      aspect: request.aspect,
+      quantity: request.quantity,
+      durationSeconds: request.durationSeconds,
+      params: request.params,
+      scale: null,
+      source,
     };
   }
 
@@ -585,82 +582,219 @@ async function resolve(deps: StudioDeps, request: MediaEstimateRequest): Promise
     if (!asset.width || !asset.height) {
       throw new StudioRefusal('invalid_request', 'Esta imagem não tem dimensões conhecidas.');
     }
-    // The upscaler is priced like any other model, when the catalog lists it.
-    const upscaler = models.find((item) => /topaz|upscal/i.test(`${item.key} ${item.name}`));
+    // The upscaler is priced like any other model, when a catalog lists it.
+    const upscaler = models.find(
+      (item) =>
+        providerById(deps.providers, item.providerId)?.capabilities.includes('upscale') &&
+        /topaz|upscal/i.test(`${item.key} ${item.name}`),
+    );
     if (!upscaler) {
       throw new StudioRefusal(
         'cannot_estimate',
-        'O catálogo do Kairogen não informa o preço da ampliação, então ela não pode ser estimada. Sem estimativa, nada é gerado.',
+        'Nenhum catálogo informa o preço da ampliação, então ela não pode ser estimada. Sem estimativa, nada é gerado.',
       );
     }
     return {
+      operation: 'upscale',
       clientId: asset.clientId,
+      campaign: null,
       kind: 'image',
-      model: upscaler.key,
+      model: upscaler,
       prompt: null,
-      sourceAssetId: asset.id,
-      priceArgs: {
-        model: upscaler.key,
-        plan_key: plan,
-        quantity: 1,
-        extra_params: { scale: request.scale },
-      },
+      negativePrompt: null,
+      aspect: null,
+      quantity: 1,
+      durationSeconds: undefined,
+      params: {},
+      scale: request.scale,
+      source: asSource(asset),
     };
   }
 
-  if (asset.origin !== 'kairogen' || !asset.externalGenerationId) {
+  // Animating is done by the provider that generated the picture, from its own generation id.
+  const animator = providerById(deps.providers, asset.origin as MediaProviderId);
+  if (
+    asset.origin === 'upload' ||
+    !animator?.capabilities.includes('animate') ||
+    !asset.externalGenerationId
+  ) {
     throw new StudioRefusal(
       'invalid_request',
       'Só imagens geradas no Kairogen podem ser animadas.',
     );
   }
   const videoKey = request.videoModel ?? DEFAULT_ANIMATION_MODEL;
-  const video = models.find((item) => item.key === videoKey && item.kind === 'video');
+  const video = models.find(
+    (item) =>
+      item.key === videoKey && item.kind === 'video' && item.providerId === animator.id,
+  );
   if (!video)
     throw new StudioRefusal('invalid_request', 'Modelo de vídeo não encontrado no catálogo.');
   requireDuration(video, request.durationSeconds);
   return {
+    operation: 'animate',
     clientId: asset.clientId,
+    campaign: null,
     kind: 'video',
-    model: video.key,
+    model: video,
     prompt: request.prompt ?? asset.prompt,
-    sourceAssetId: asset.id,
-    priceArgs: {
-      model: video.key,
-      plan_key: plan,
-      quantity: 1,
-      ...(request.durationSeconds !== undefined
-        ? { duration_seconds: request.durationSeconds }
-        : {}),
-    },
+    negativePrompt: null,
+    aspect: null,
+    quantity: 1,
+    durationSeconds: request.durationSeconds,
+    params: {},
+    scale: null,
+    source: asSource(asset),
   };
+}
+
+/** Cheaper first: free with quota, then credits, then per use; within a tier, by the price per output. */
+const rankOf = (provider: MediaProvider, model: MediaModel): [number, number] => [
+  MEDIA_BILLING_RANK[provider.billing],
+  model.brlCentsPerOutput ?? Number.POSITIVE_INFINITY,
+];
+const cheaperOrEqual = (a: [number, number], b: [number, number]) =>
+  a[0] < b[0] || (a[0] === b[0] && a[1] <= b[1]);
+
+/**
+ * Another model, on another provider, that could do this request now: same
+ * kind, same use of the picture, same shape, available for this many outputs,
+ * and able to price it. The cheapest of them.
+ */
+async function alternativeFor(
+  deps: StudioDeps,
+  models: MediaModel[],
+  resolved: Resolved,
+  request: MediaEstimateRequest,
+): Promise<{ model: MediaModel; provider: MediaProvider; quote: { credits: number; brlCents: number } } | null> {
+  if (resolved.operation !== 'generate' || request.operation !== 'generate') return null;
+  const candidates = models
+    .filter((model) => model.kind === resolved.kind && model.providerId !== resolved.model.providerId)
+    .filter((model) => resolved.quantity <= model.maxOutputs)
+    .filter((model) => !model.aspectRatios || !resolved.aspect || model.aspectRatios.includes(resolved.aspect))
+    .filter((model) =>
+      resolved.source
+        ? resolved.kind === 'image'
+          ? model.imageUse === request.referenceUse
+          : model.acceptsFirstFrame
+        : true,
+    )
+    .filter((model) => resolved.durationSeconds === undefined || model.supportedDurations.includes(resolved.durationSeconds))
+    .map((model) => ({ model, provider: providerOf(deps, model.providerId) }))
+    .filter(({ provider }) => provider.configured)
+    .sort((a, b) => {
+      const [ra, rb] = [rankOf(a.provider, a.model), rankOf(b.provider, b.model)];
+      return ra[0] - rb[0] || ra[1] - rb[1];
+    });
+  const ctx = ctxOf(deps);
+  for (const candidate of candidates) {
+    const availability = await candidate.provider.availability(ctx, { outputs: resolved.quantity });
+    if (!availability.available) continue;
+    try {
+      const quote = await candidate.provider.estimate(ctx, {
+        ...resolved,
+        model: candidate.model,
+        // Price-affecting parameters belong to the model they were chosen for.
+        params: {},
+      });
+      return { ...candidate, quote };
+    } catch (error) {
+      if (!(error instanceof ProviderError)) throw error;
+    }
+  }
+  return null;
+}
+
+/** The last model used for the same client (and campaign), when it is another one. */
+async function mixWarning(deps: StudioDeps, resolved: Resolved): Promise<string | null> {
+  if (resolved.operation !== 'generate') return null;
+  const [last] = await deps.db
+    .select({ model: mediaGenerations.model, provider: mediaGenerations.provider })
+    .from(mediaGenerations)
+    .where(
+      and(
+        eq(mediaGenerations.clientId, resolved.clientId),
+        resolved.campaign ? eq(mediaGenerations.campaign, resolved.campaign) : undefined,
+        eq(mediaGenerations.kind, resolved.kind),
+        inArray(mediaGenerations.status, ['running', 'saving', 'succeeded']),
+        ne(mediaGenerations.model, resolved.model.key),
+      ),
+    )
+    .orderBy(desc(mediaGenerations.createdAt))
+    .limit(1);
+  if (!last?.model) return null;
+  const where = resolved.campaign ? `A campanha "${resolved.campaign}"` : 'Este cliente';
+  const provider = providerById(deps.providers, last.provider as MediaProviderId)?.name ?? last.provider;
+  return `${where} já tem ${resolved.kind === 'video' ? 'vídeo' : 'imagem'} feita com ${last.model} (${provider}). Misturar modelos muda o estilo das peças; use o mesmo modelo se quiser que combinem.`;
 }
 
 export async function createEstimate(
   deps: StudioDeps,
   input: { employeeId: string; request: MediaEstimateRequest; proposalId?: string | null },
 ): Promise<MediaEstimate> {
-  const kairogen = connected(deps);
-  const resolved = await resolve(deps, input.request);
+  const ctx = ctxOf(deps);
+  const { models } = await listModels(deps);
+  let resolved = await resolve(deps, input.request, models);
+  let provider = providerOf(deps, resolved.model.providerId);
+  let routedFrom: MediaEstimate['routedFrom'] = null;
+  const warnings: string[] = [];
 
-  let credits: number | null;
-  try {
-    credits = creditCostFrom(await ask(deps, kairogen, 'estimate_cost', resolved.priceArgs));
-  } catch (error) {
-    if (error instanceof McpError && (error.code === 'tool_error' || error.code === 'rejected')) {
+  const availability = await provider.availability(ctx, { outputs: resolved.quantity });
+  if (!availability.available) {
+    const reason = availability.reason ?? MEDIA_REFUSAL_MESSAGE.provider_unavailable;
+    const alternative = await alternativeFor(deps, models, resolved, input.request);
+    if (!alternative) {
       throw new StudioRefusal(
-        'cannot_estimate',
-        `O Kairogen não estimou o custo: ${scrubSensitive(error.message).slice(0, 300)}`,
+        'provider_unavailable',
+        `${provider.name}: ${reason} Nenhum outro provedor disponível faz isso agora.`,
       );
     }
-    throw fromMcp(error);
+    const asked = rankOf(provider, resolved.model);
+    const offered = rankOf(alternative.provider, {
+      ...alternative.model,
+      brlCentsPerOutput: alternative.quote.brlCents / Math.max(resolved.quantity, 1),
+    });
+    const cost =
+      alternative.quote.credits > 0
+        ? `${alternative.quote.credits} créditos`
+        : formatBrl(alternative.quote.brlCents);
+    if (!cheaperOrEqual(offered, asked)) {
+      // Up in price is a person's decision: the alternative is offered, not taken.
+      throw new StudioRefusal(
+        'provider_unavailable',
+        `${provider.name}: ${reason} ${alternative.model.name} (${alternative.provider.name}) faz isso por ${cost}, mas trocar para um provedor mais caro é um clique seu.`,
+        {
+          alternative: {
+            model: alternative.model.key,
+            name: alternative.model.name,
+            providerId: alternative.provider.id,
+            credits: alternative.quote.credits,
+            brlCents: alternative.quote.brlCents,
+          },
+        },
+      );
+    }
+    routedFrom = { model: resolved.model.key, providerId: provider.id, reason };
+    warnings.push(
+      `${provider.name} não pôde atender: ${reason} Foi para ${alternative.model.name} (${alternative.provider.name}), por ${cost}.`,
+    );
+    resolved = { ...resolved, model: alternative.model, params: {} };
+    provider = alternative.provider;
   }
-  if (credits === null || credits < 0) {
-    throw new StudioRefusal(
-      'cannot_estimate',
-      'O Kairogen respondeu sem um custo em créditos. Sem estimativa, nada é gerado.',
+
+  let quote;
+  try {
+    quote = await provider.estimate(ctx, resolved);
+  } catch (error) {
+    throw fromProvider(error);
+  }
+  if (!provider.verified) {
+    warnings.push(
+      `${provider.name} ainda não foi verificado com uma geração real: o formato das respostas vem da documentação pública.`,
     );
   }
+  const mixed = await mixWarning(deps, resolved);
+  if (mixed) warnings.push(mixed);
 
   const now = deps.now();
   const [row] = await deps.db
@@ -669,28 +803,43 @@ export async function createEstimate(
       requestedBy: input.employeeId,
       operation: input.request.operation,
       kind: resolved.kind,
-      model: resolved.model,
+      model: resolved.model.key,
+      provider: provider.id,
       prompt: resolved.prompt,
       request: input.request,
-      priceArgs: resolved.priceArgs,
-      creditsEstimated: credits,
-      sourceAssetId: resolved.sourceAssetId,
+      priceArgs: quote.priceArgs,
+      creditsEstimated: quote.credits,
+      brlCentsEstimated: quote.brlCents,
+      sourceAssetId: resolved.source?.id ?? null,
       proposalId: input.proposalId ?? null,
       clientId: resolved.clientId,
+      campaign: resolved.campaign,
+      routedFrom,
       estimateExpiresAt: new Date(now.getTime() + ESTIMATE_TTL_MS),
       createdAt: now,
     })
     .returning();
   if (!row) throw new Error('failed to record estimate');
-  const usage = await usageOf(deps, input.employeeId);
-  await ledger(deps.db, row, 'estimated', { creditsDelta: 0, balance: usage.balance, now });
+  const usage = await usageOf(deps, input.employeeId, { withBalance: provider.id === 'kairogen' });
+  await ledger(deps.db, row, 'estimated', {
+    creditsDelta: 0,
+    brlCentsDelta: 0,
+    balance: usage.balance,
+    now,
+  });
+  const blocked = blockedBy(usage, { providerId: provider.id, ...quote });
+  if (blocked && blocked.code === 'monthly_brl_limit') warnings.push(blocked.detail);
   return {
     id: row.id,
-    credits,
+    credits: quote.credits,
+    brlCents: quote.brlCents,
+    providerId: provider.id,
     expiresAt: row.estimateExpiresAt.toISOString(),
     request: input.request,
-    blockedBy: blockedBy(usage, credits),
+    blockedBy: blocked?.code ?? null,
     usage,
+    routedFrom,
+    warnings,
   };
 }
 
@@ -698,103 +847,25 @@ export async function createEstimate(
 // Generating
 // ---------------------------------------------------------------------------
 
-/** The arguments of the spending call: the stored request, the stored price args, the quote. */
-async function toolCallFor(
-  deps: StudioDeps,
-  row: GenerationRow,
-): Promise<{
-  tool: 'generate_image' | 'generate_video' | 'upscale_image' | 'animate_from_generation';
-  args: Record<string, unknown>;
-}> {
-  const request = row.request as MediaEstimateRequest;
-  // What the spending tool takes of the priced arguments: all but the plan (only
-  // `estimate_cost` has it) and the estimate-only `extra_params`.
-  const price = Object.fromEntries(
-    Object.entries(row.priceArgs as Record<string, unknown>).filter(
-      ([key]) => key !== 'plan_key' && key !== 'extra_params',
-    ),
-  );
-  const source = row.sourceAssetId
-    ? await deps.db.query.mediaAssets.findFirst({ where: eq(mediaAssets.id, row.sourceAssetId) })
-    : undefined;
-  /** Kairogen's own address when the picture came from there; a signed link of ours otherwise. */
-  const publicUrl = async (purpose: string) =>
-    source
-      ? (source.sourceUrl ??
-        (await issuePublicLink(deps, {
-          assetId: source.id,
-          issuedBy: row.requestedBy,
-          generationId: row.id,
-          purpose,
-        })))
-      : null;
-
-  if (request.operation === 'upscale') {
-    if (!source) throw new StudioRefusal('not_found', 'A imagem de origem não existe mais.');
-    return {
-      tool: 'upscale_image',
-      args: {
-        scale: request.scale,
-        image_url: await publicUrl('upscale'),
-        input_width: source.width,
-        input_height: source.height,
-        output_format: source.mimeType === 'image/png' ? 'png' : 'jpeg',
-        wait_for_completion: false,
-      },
-    };
-  }
-  if (request.operation === 'animate') {
-    if (!source?.externalGenerationId)
-      throw new StudioRefusal('not_found', 'A imagem de origem não existe mais.');
-    return {
-      tool: 'animate_from_generation',
-      args: {
-        generation_id: source.externalGenerationId,
-        video_model: row.model,
-        ...(row.prompt ? { prompt: row.prompt } : {}),
-        ...(request.durationSeconds !== undefined
-          ? { duration_seconds: request.durationSeconds }
-          : {}),
-        // Its default is to block for minutes. Like every other generation: an id now, polling after.
-        wait_for_completion: false,
-      },
-    };
-  }
-
-  const reference = await publicUrl(request.kind === 'video' ? 'first_frame' : 'reference_image');
-  const model = (await listModels(deps)).models.find((item) => item.key === row.model);
-  return {
-    tool: request.kind === 'video' ? 'generate_video' : 'generate_image',
-    args: {
-      ...price,
-      prompt: request.prompt,
-      aspect_ratio: request.aspect,
-      ...(request.negativePrompt && request.kind === 'image'
-        ? { negative_prompt: request.negativePrompt }
-        : {}),
-      ...(reference
-        ? request.kind === 'video' && model?.acceptsFirstFrame
-          ? { first_frame_url: reference }
-          : { reference_image_urls: [reference] }
-        : {}),
-      // Kairogen refuses the generation if the real charge differs from the quote.
-      expected_credits: row.creditsEstimated,
-      wait_for_completion: false,
-    },
-  };
+async function sourceOf(deps: StudioDeps, row: GenerationRow) {
+  return row.sourceAssetId
+    ? ((await deps.db.query.mediaAssets.findFirst({
+        where: eq(mediaAssets.id, row.sourceAssetId),
+      })) ?? null)
+    : null;
 }
 
 export async function startGeneration(
   deps: StudioDeps,
   input: { employeeId: string; estimateId: string },
 ): Promise<GenerationRow> {
-  const kairogen = connected(deps);
   if (!deps.storage) {
     throw new StudioRefusal(
       'invalid_request',
       'O armazenamento de mídia não está configurado neste ambiente.',
     );
   }
+  const ctx = ctxOf(deps);
   // Read before the lock: a network call has no place inside it.
   const usage = await usageOf(deps, input.employeeId);
   const now = deps.now();
@@ -815,37 +886,56 @@ export async function startGeneration(
     if (!row) return new StudioRefusal('not_found', 'Estimativa não encontrada.');
     if (row.status !== 'estimated') return refuse('estimate_used');
     if (row.estimateExpiresAt <= now) return refuse('estimate_expired');
+    const provider = providerById(deps.providers, row.provider as MediaProviderId);
+    if (!provider?.configured) return refuse('provider_unavailable');
 
     const starts = periodStarts(now);
+    const txDb = tx as unknown as Database;
     const fresh: MediaUsage = {
       ...usage,
-      usedTodayByYou: await creditsCounted(tx as unknown as Database, starts.day, input.employeeId),
-      usedThisMonth: await creditsCounted(tx as unknown as Database, starts.month),
+      usedTodayByYou: await creditsCounted(txDb, starts.day, input.employeeId),
+      usedThisMonth: await creditsCounted(txDb, starts.month),
+      usedThisMonthBrlCents: await brlCounted(txDb, starts.month),
     };
-    const blocked = blockedBy(fresh, row.creditsEstimated);
-    if (blocked) return refuse(blocked);
+    const blocked = blockedBy(fresh, {
+      providerId: provider.id,
+      credits: row.creditsEstimated,
+      brlCents: row.brlCentsEstimated,
+    });
+    if (blocked) return new StudioRefusal(blocked.code, blocked.detail);
+    // A free quota is counted from this same ledger: re-read under the lock, so two
+    // clicks cannot both take the last picture of the day.
+    if (provider.billing === 'free_quota') {
+      const quantity = Number((row.priceArgs as { quantity?: unknown }).quantity ?? 1) || 1;
+      const availability = await provider.availability({ db: txDb, now: deps.now }, { outputs: quantity });
+      if (!availability.available) {
+        return new StudioRefusal('provider_unavailable', `${provider.name}: ${availability.reason}`);
+      }
+    }
 
-    // The spend is on the record BEFORE Kairogen hears of it: a crash between the
-    // two leaves credits counted that were not spent, never the other way round.
+    // The spend is on the record BEFORE the provider hears of it: a crash between the
+    // two leaves it counted but not spent, never the other way round.
     const [running] = await tx
       .update(mediaGenerations)
       .set({ status: 'running', startedAt: now })
       .where(eq(mediaGenerations.id, row.id))
       .returning();
     if (!running) throw new Error('failed to claim estimate');
-    await ledger(tx as unknown as Database, running, 'started', {
+    await ledger(txDb, running, 'started', {
       creditsDelta: running.creditsEstimated,
+      brlCentsDelta: running.brlCentsEstimated,
       balance: usage.balance,
       now,
     });
     return running;
   });
   if (claimed instanceof StudioRefusal) throw claimed;
+  const provider = providerOf(deps, claimed.provider as MediaProviderId);
 
   const finish = async (
     status: 'refused' | 'unknown',
     detail: string,
-    creditsDelta: number,
+    givenBack: boolean,
   ): Promise<GenerationRow> => {
     const [row] = await deps.db
       .update(mediaGenerations)
@@ -853,52 +943,62 @@ export async function startGeneration(
       .where(eq(mediaGenerations.id, claimed.id))
       .returning();
     if (!row) throw new Error('generation vanished');
-    await ledger(deps.db, row, status, { creditsDelta, now: deps.now() });
+    await ledger(deps.db, row, status, {
+      creditsDelta: givenBack ? -claimed.creditsEstimated : 0,
+      brlCentsDelta: givenBack ? -claimed.brlCentsEstimated : 0,
+      now: deps.now(),
+    });
     return row;
   };
 
-  let externalId: string | null;
+  const source = await sourceOf(deps, claimed);
+  let started;
   try {
-    const call = await toolCallFor(deps, claimed);
-    // Sent once. `callKairogen` never retries a tool that spends.
-    externalId = generationIdFrom(
-      await ask(deps, kairogen, call.tool, call.args, { timeoutMs: 60_000 }),
-    );
+    // Sent once. Whatever happens next, this call is never made again.
+    started = await provider.start(ctx, {
+      generationId: claimed.id,
+      modelKey: claimed.model ?? '',
+      request: claimed.request as MediaEstimateRequest,
+      priceArgs: claimed.priceArgs as Record<string, unknown>,
+      creditsEstimated: claimed.creditsEstimated,
+      source: source ? asSource(source) : null,
+      publicUrl: (purpose) =>
+        source
+          ? issuePublicLink(deps, {
+              assetId: source.id,
+              issuedBy: claimed.requestedBy,
+              generationId: claimed.id,
+              purpose,
+            })
+          : Promise.resolve(null),
+      sourceBytes: () =>
+        source
+          ? readMedia({ storage: deps.storage, legacyDir: deps.mediaDir }, source)
+          : Promise.resolve(null),
+    });
   } catch (error) {
-    if (error instanceof StudioRefusal)
-      return finish('refused', error.message, -claimed.creditsEstimated);
-    if (!(error instanceof McpError)) throw error;
-    if (error.outcomeUnknown) {
-      // Nobody knows whether it arrived. The credits stay counted and nothing is sent again.
-      return finish(
-        'unknown',
-        'Não sabemos se o Kairogen recebeu o pedido. Confira no Kairogen antes de gerar de novo.',
-        0,
-      );
-    }
-    const said = scrubSensitive(error.message).slice(0, 300);
-    return finish(
-      'refused',
-      error.code === 'unauthorized'
-        ? MEDIA_REFUSAL_MESSAGE.not_connected
-        : isCreditMismatch(said)
-          ? `O Kairogen recusou: o custo real difere do estimado (${claimed.creditsEstimated} créditos). Estime de novo. Resposta dele: ${said}`
-          : `O Kairogen recusou a geração. Resposta dele: ${said}`,
-      -claimed.creditsEstimated,
-    );
+    if (error instanceof StudioRefusal) return finish('refused', error.message, true);
+    if (!(error instanceof ProviderError)) throw error;
+    // Nobody knows whether it arrived: the spend stays counted and nothing is sent again.
+    if (error.code === 'outcome_unknown') return finish('unknown', error.message, false);
+    return finish('refused', error.message, true);
   }
-  if (!externalId) {
-    return finish(
-      'unknown',
-      'O Kairogen aceitou o pedido mas não devolveu o identificador da geração. Confira no Kairogen antes de gerar de novo.',
-      0,
-    );
+
+  if (started.done) {
+    // The provider answered with the files in the same call: straight to the library.
+    return settle(deps, claimed.id, {
+      state: started.outputs.length > 0 ? 'succeeded' : 'failed',
+      outputs: started.outputs,
+      creditsCharged: started.creditsCharged,
+      brlCentsCharged: started.brlCentsCharged,
+      note: started.note ?? (started.outputs.length === 0 ? 'O provedor respondeu sem arquivo.' : null),
+    });
   }
 
   const [row] = await deps.db
     .update(mediaGenerations)
     .set({
-      externalGenerationId: externalId,
+      externalGenerationId: started.externalId,
       nextPollAt: new Date(deps.now().getTime() + FIRST_POLL_MS),
     })
     .where(eq(mediaGenerations.id, claimed.id))
@@ -937,11 +1037,115 @@ async function download(deps: StudioDeps, url: string): Promise<Buffer | null> {
   }
 }
 
+/** Closes a generation: its row, its ledger correction, and the balance after when Kairogen ran it. */
+async function end(
+  deps: StudioDeps,
+  id: string,
+  status: 'succeeded' | 'failed' | 'timed_out',
+  detail: string | null,
+  charged: { credits: number | null; brlCents: number | null },
+): Promise<GenerationRow> {
+  const [row] = await deps.db
+    .update(mediaGenerations)
+    .set({
+      status,
+      detail,
+      creditsCharged: charged.credits,
+      brlCentsCharged: charged.brlCents,
+      finishedAt: deps.now(),
+      nextPollAt: null,
+    })
+    .where(eq(mediaGenerations.id, id))
+    .returning();
+  if (!row) throw new Error('generation vanished');
+  await ledger(deps.db, row, status, {
+    // Once the real charge is known, the ledger is corrected by the difference.
+    creditsDelta: charged.credits === null ? 0 : charged.credits - row.creditsEstimated,
+    brlCentsDelta: charged.brlCents === null ? 0 : charged.brlCents - row.brlCentsEstimated,
+    creditsCharged: charged.credits,
+    brlCentsCharged: charged.brlCents,
+    // The balance after: next to the one on the `started` row, it shows what really left.
+    balance: row.provider === 'kairogen' ? await readBalance(deps) : null,
+    now: deps.now(),
+  });
+  return row;
+}
+
+/** Every output into the library, then the row closed with what was saved. */
+async function settle(
+  deps: StudioDeps,
+  id: string,
+  result: {
+    state: 'succeeded' | 'failed';
+    outputs: ProviderOutput[];
+    creditsCharged: number | null;
+    brlCentsCharged: number | null;
+    note: string | null;
+  },
+): Promise<GenerationRow> {
+  const charged = { credits: result.creditsCharged, brlCents: result.brlCentsCharged };
+  if (result.state === 'failed') {
+    return end(deps, id, 'failed', result.note ?? 'O provedor informou que a geração falhou.', charged);
+  }
+  const current = await deps.db.query.mediaGenerations.findFirst({
+    where: eq(mediaGenerations.id, id),
+  });
+  if (!current) throw new Error('generation vanished');
+  const provider = providerById(deps.providers, current.provider as MediaProviderId);
+  await deps.db.update(mediaGenerations).set({ status: 'saving' }).where(eq(mediaGenerations.id, id));
+  const request = current.request as MediaEstimateRequest;
+  let saved = 0;
+  for (const output of result.outputs) {
+    const bytes = !deps.storage
+      ? null
+      : 'bytes' in output
+        ? output.bytes
+        : await download(deps, output.url);
+    if (!bytes || !deps.storage) continue;
+    const stored = await storeMedia(deps.db, deps.storage, {
+      ownerId: current.requestedBy,
+      origin: current.provider as MediaOrigin,
+      bytes,
+      prompt: current.prompt,
+      model: current.model,
+      credits: Math.round(current.creditsEstimated / Math.max(result.outputs.length, 1)),
+      externalGenerationId: current.externalGenerationId,
+      generationId: current.id,
+      sourceAssetId: current.sourceAssetId,
+      clientId: current.clientId,
+      durationSeconds:
+        'durationSeconds' in request && request.durationSeconds ? request.durationSeconds : null,
+      now: deps.now(),
+    });
+    if (!stored.ok) continue;
+    if ('url' in output) {
+      await deps.db
+        .update(mediaAssets)
+        .set({ sourceUrl: output.url })
+        .where(eq(mediaAssets.id, stored.id));
+    }
+    saved += 1;
+  }
+  const notes = [
+    saved === result.outputs.length
+      ? null
+      : `${provider?.name ?? 'O provedor'} concluiu, mas ${result.outputs.length - saved} de ${result.outputs.length} arquivo(s) não puderam ser salvos.`,
+    result.note,
+  ].filter(Boolean);
+  return end(
+    deps,
+    id,
+    saved > 0 ? 'succeeded' : 'failed',
+    notes.length > 0 ? notes.join(' ') : null,
+    charged,
+  );
+}
+
 /**
- * Moves one generation forward, if it is due: asks Kairogen once for its state
- * (`wait_for_completion: false`), and when it is finished downloads every
- * output into the library. Safe to call from a timer and from a request at the
- * same time: the row is claimed by pushing `next_poll_at` forward.
+ * Moves one generation forward, if it is due: asks its provider once how it
+ * stands, and when it is finished puts every output in the library. Safe to
+ * call from a timer and from a request at the same time: the row is claimed by
+ * pushing `next_poll_at` forward.
  */
 export async function advanceGeneration(
   deps: StudioDeps,
@@ -951,37 +1155,18 @@ export async function advanceGeneration(
   const current = await deps.db.query.mediaGenerations.findFirst({
     where: eq(mediaGenerations.id, id),
   });
-  if (!current || current.status !== 'running' || !current.externalGenerationId || !deps.kairogen) {
+  const provider = current ? providerById(deps.providers, current.provider as MediaProviderId) : undefined;
+  if (!current || current.status !== 'running' || !current.externalGenerationId || !provider?.configured) {
     return current ?? null;
   }
 
-  const end = async (
-    status: 'succeeded' | 'failed' | 'timed_out',
-    detail: string | null,
-    charged: number | null,
-  ) => {
-    const [row] = await deps.db
-      .update(mediaGenerations)
-      .set({ status, detail, creditsCharged: charged, finishedAt: deps.now(), nextPollAt: null })
-      .where(eq(mediaGenerations.id, id))
-      .returning();
-    if (!row) throw new Error('generation vanished');
-    await ledger(deps.db, row, status, {
-      // Once the real charge is known, the ledger is corrected by the difference.
-      creditsDelta: charged === null ? 0 : charged - row.creditsEstimated,
-      creditsCharged: charged,
-      // The balance after: next to the one on the `started` row, it shows what really left.
-      balance: await readBalance(deps),
-      now: deps.now(),
-    });
-    return row;
-  };
-
   if (current.startedAt && now.getTime() - current.startedAt.getTime() > GIVE_UP_AFTER_MS) {
     return end(
+      deps,
+      id,
       'timed_out',
-      'Passou de 20 minutos sem resposta final. Confira no Kairogen; os créditos continuam contados.',
-      null,
+      `Passou de 20 minutos sem resposta final. Confira no ${provider.name}; o gasto continua contado.`,
+      { credits: null, brlCents: null },
     );
   }
 
@@ -1002,65 +1187,19 @@ export async function advanceGeneration(
 
   let state;
   try {
-    state = generationStateFrom(
-      await ask(deps, deps.kairogen, 'get_generation', {
-        generation_id: current.externalGenerationId,
-        wait_for_completion: false,
-      }),
-    );
+    state = await provider.poll(ctxOf(deps), current.externalGenerationId);
   } catch (error) {
-    if (!(error instanceof McpError)) throw error;
-    if (error.code === 'tool_error')
-      return end('failed', 'O Kairogen informou que a geração falhou.', null);
+    if (!(error instanceof ProviderError)) throw error;
     return claimed; // Unreachable for now: try again at the next interval.
   }
-
   if (state.state === 'running') return claimed;
-  if (state.state === 'failed') {
-    return end('failed', 'O Kairogen informou que a geração falhou.', state.creditsCharged);
-  }
-
-  await deps.db
-    .update(mediaGenerations)
-    .set({ status: 'saving' })
-    .where(eq(mediaGenerations.id, id));
-  const request = current.request as MediaEstimateRequest;
-  let saved = 0;
-  for (const url of state.outputUrls) {
-    const bytes = deps.storage ? await download(deps, url) : null;
-    if (!bytes || !deps.storage) continue;
-    const stored = await storeMedia(deps.db, deps.storage, {
-      ownerId: current.requestedBy,
-      origin: 'kairogen',
-      bytes,
-      prompt: current.prompt,
-      model: current.model,
-      credits: Math.round(current.creditsEstimated / Math.max(state.outputUrls.length, 1)),
-      externalGenerationId: current.externalGenerationId,
-      sourceAssetId: current.sourceAssetId,
-      clientId: current.clientId,
-      durationSeconds:
-        'durationSeconds' in request && request.durationSeconds ? request.durationSeconds : null,
-      now: deps.now(),
-    });
-    if (!stored.ok) continue;
-    await deps.db.update(mediaAssets).set({ sourceUrl: url }).where(eq(mediaAssets.id, stored.id));
-    saved += 1;
-  }
-  const notes = [
-    saved === state.outputUrls.length
-      ? null
-      : `O Kairogen concluiu, mas ${state.outputUrls.length - saved} de ${state.outputUrls.length} arquivo(s) não puderam ser salvos. Eles continuam no Kairogen.`,
-    // What Kairogen says it did with the picture it was handed. His words, as his: never an order.
-    current.sourceAssetId && state.referenceWarning
-      ? `Aviso do Kairogen sobre a imagem enviada: ${scrubSensitive(state.referenceWarning).slice(0, 300)}`
-      : null,
-  ].filter(Boolean);
-  return end(
-    saved > 0 ? 'succeeded' : 'failed',
-    notes.length > 0 ? notes.join(' ') : null,
-    state.creditsCharged,
-  );
+  return settle(deps, id, {
+    state: state.state,
+    outputs: state.outputs,
+    creditsCharged: state.creditsCharged,
+    brlCentsCharged: state.brlCentsCharged,
+    note: state.note,
+  });
 }
 
 function schedule(deps: StudioDeps, id: string, delayMs: number): void {
@@ -1096,12 +1235,18 @@ export async function toGeneration(db: Database, row: GenerationRow): Promise<Me
   const [requester, client, assets] = await Promise.all([
     db.query.employees.findFirst({ where: eq(employees.id, row.requestedBy) }),
     db.query.clients.findFirst({ where: eq(clients.id, row.clientId) }),
-    row.externalGenerationId
-      ? db
-          .select({ id: mediaAssets.id })
-          .from(mediaAssets)
-          .where(eq(mediaAssets.externalGenerationId, row.externalGenerationId))
-      : Promise.resolve([]),
+    // By our own id, or by the provider's for files saved before there was one.
+    db
+      .select({ id: mediaAssets.id })
+      .from(mediaAssets)
+      .where(
+        or(
+          eq(mediaAssets.generationId, row.id),
+          row.externalGenerationId
+            ? eq(mediaAssets.externalGenerationId, row.externalGenerationId)
+            : undefined,
+        ),
+      ),
   ]);
   return {
     id: row.id,
@@ -1109,9 +1254,11 @@ export async function toGeneration(db: Database, row: GenerationRow): Promise<Me
     operation: row.operation as MediaGeneration['operation'],
     kind: row.kind,
     model: row.model,
+    providerId: row.provider as MediaProviderId,
     prompt: row.prompt,
     creditsEstimated: row.creditsEstimated,
     creditsCharged: row.creditsCharged,
+    brlCentsEstimated: row.brlCentsEstimated,
     detail: row.detail,
     requestedByName: requester?.fullName ?? null,
     createdAt: row.createdAt.toISOString(),

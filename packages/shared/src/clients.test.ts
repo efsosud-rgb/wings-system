@@ -39,6 +39,7 @@ describe('who a generation is for', () => {
   it('is never assumed for the agent: a proposal without a client is sent back to ask', () => {
     const parsed = agentGenerationProposalSchema.safeParse({
       ...spec,
+      provider: 'kairogen',
       prompt: `${spec.prompt}, 35mm, warm window light, clean space for headline`,
       explanation: 'Padaria de bairro no fim da tarde, para o feed.',
       quantity: 1,

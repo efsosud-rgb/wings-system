@@ -401,7 +401,7 @@ describe('estimate, then click, then follow', () => {
       image({ clientId, prompt: 'Counter of padaria AURORA at golden hour, 35mm, no text' }),
     );
     expect(named.statusCode).toBe(400);
-    expect(named.json<{ message: string }>().message).toContain('nunca é enviado ao Kairogen');
+    expect(named.json<{ message: string }>().message).toContain('nunca é enviado ao provedor');
     expect(fake.state.toolCalls.some((item) => item.name === 'estimate_cost')).toBe(false);
 
     const unknown = await estimate(
@@ -1036,6 +1036,7 @@ describe('who may spend', () => {
 describe('the editing agent', () => {
   const proposal = (overrides: Record<string, unknown> = {}) => ({
     kind: 'image',
+    provider: 'kairogen',
     model: 'seedream-v4',
     prompt:
       'Owner of a small bakery standing behind the counter, warm window light, 35mm, shallow depth of field, advertising photography, clean space at the top for headline, no text, no logos',
@@ -1075,6 +1076,7 @@ describe('the editing agent', () => {
 
   it('has tools that read, estimate and propose, and none that generates', () => {
     expect(MEDIA_AGENT_TOOL_DEFINITIONS.map((tool) => tool.name)).toEqual([
+      'listar_provedores',
       'listar_modelos',
       'estimar_custo',
       'consultar_biblioteca',
@@ -1084,7 +1086,7 @@ describe('the editing agent', () => {
       'propor_geracao',
     ]);
     expect(MEDIA_AGENT_SYSTEM_PROMPT).toContain('pergunte "Para qual cliente?"');
-    expect(MEDIA_AGENT_SYSTEM_PROMPT).toContain('nunca vai ao Kairogen');
+    expect(MEDIA_AGENT_SYSTEM_PROMPT).toContain('nunca vai a provedor nenhum');
     expect(MEDIA_AGENT_TOOL_DEFINITIONS.map((tool) => tool.name).join(' ')).not.toMatch(
       /gerar|generate|upscale|animate|execut/,
     );
@@ -1175,7 +1177,7 @@ describe('the editing agent', () => {
     const refusals = (seen[2]?.messages ?? []).filter((item) => item.role === 'tool').slice(-3);
     expect(refusals[0]?.content).toContain('Para qual cliente?');
     expect(refusals[1]?.content).toContain('cliente não encontrado');
-    expect(refusals[2]?.content).toContain('nunca é enviado ao Kairogen');
+    expect(refusals[2]?.content).toContain('nunca é enviado ao provedor');
 
     expect(message?.proposals).toHaveLength(1);
     const card = message?.proposals[0];

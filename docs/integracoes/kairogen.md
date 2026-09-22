@@ -1,5 +1,11 @@
 # Kairogen (geração de imagem e vídeo) — integração
 
+> Desde a onda "Provedores de mídia", o Kairogen é o **primeiro de vários
+> provedores** atrás de um contrato só (`modules/media/providers/kairogen.ts`),
+> sem mudança no que ele faz. O que vale para todos (roteamento, teto em
+> reais, tela, agente) está em [provedores-de-midia.md](provedores-de-midia.md);
+> este documento continua sendo a referência do Kairogen em si.
+
 Kairogen é o serviço que gera e edita imagens e vídeos para o sub-módulo
 Marketing → Edição de Fotos e Vídeos. O Wings System fala com ele por **MCP**
 (Model Context Protocol, transporte Streamable HTTP), autenticado por **OAuth

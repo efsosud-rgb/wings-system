@@ -1,10 +1,11 @@
-import { WINGS_CLIENT_ID } from '@wings/shared';
+import { WINGS_CLIENT_ID, formatBrl } from '@wings/shared';
 import type {
   Client,
   MediaAsset,
   MediaEstimate,
   MediaGeneration,
   MediaModel,
+  MediaProviderStatus,
   MediaUsage,
   SessionUser,
 } from '@wings/shared';
@@ -46,6 +47,9 @@ vi.mock('../components/agent-chat/AgentChat.js', () => ({ AgentChat: () => <div>
 const { MediaStudioPage } = await import('./MediaStudioPage.js');
 const { ApiError } = await import('../api/client.js');
 
+/** What the screen shows, as Testing Library reads it: the currency's no-break space collapsed. */
+const brl = (cents: number) => formatBrl(cents).replace(/\u00a0/g, ' ');
+
 const userWith = (...permissions: string[]) =>
   ({
     id: 'emp-1',
@@ -59,14 +63,19 @@ const usage: MediaUsage = {
   dailyLimitPerUser: 30,
   usedThisMonth: 120,
   monthlyLimit: 500,
+  usedThisMonthBrlCents: 0,
+  monthlyLimitBrlCents: 30_000,
 };
 
 const imageModel: MediaModel = {
   key: 'seedream-v4',
   name: 'Seedream 4',
+  providerId: 'kairogen',
   provider: 'ByteDance',
   kind: 'image',
   creditsPerOutput: 4,
+  brlCentsPerOutput: null,
+  maxOutputs: 4,
   supportedDurations: [],
   aspectRatios: ['1:1', '4:5', '9:16'],
   priceParams: [
@@ -113,9 +122,12 @@ const textModel: MediaModel = {
 const videoModel: MediaModel = {
   key: 'veo-3-1-fast',
   name: 'Veo 3.1 Fast',
+  providerId: 'kairogen',
   provider: 'Google',
   kind: 'video',
   creditsPerOutput: null,
+  brlCentsPerOutput: null,
+  maxOutputs: 2,
   supportedDurations: [4, 8],
   aspectRatios: null,
   priceParams: [
@@ -158,7 +170,11 @@ const asset = (overrides: Partial<MediaAsset> = {}): MediaAsset => ({
 const estimateOf = (overrides: Partial<MediaEstimate> = {}): MediaEstimate => ({
   id: 'est-1',
   credits: 4,
+  brlCents: 0,
+  providerId: 'kairogen',
   expiresAt: '2026-09-21T12:15:00.000Z',
+  routedFrom: null,
+  warnings: [],
   request: { operation: 'upscale', assetId: 'asset-1', scale: 2 },
   blockedBy: null,
   usage,
@@ -171,9 +187,11 @@ const generationOf = (overrides: Partial<MediaGeneration> = {}): MediaGeneration
   operation: 'generate',
   kind: 'image',
   model: 'seedream-v4',
+  providerId: 'kairogen',
   prompt: null,
   creditsEstimated: 4,
   creditsCharged: null,
+  brlCentsEstimated: 0,
   detail: null,
   requestedByName: null,
   createdAt: new Date().toISOString(),
@@ -268,6 +286,154 @@ describe('the header', () => {
   });
 });
 
+describe('providers', () => {
+  const cloudflareModel: MediaModel = {
+    ...imageModel,
+    key: 'cloudflare/flux-1-schnell',
+    name: 'FLUX.1 schnell',
+    providerId: 'cloudflare',
+    provider: 'Black Forest Labs',
+    creditsPerOutput: 0,
+    brlCentsPerOutput: 0,
+    aspectRatios: ['1:1'],
+    priceParams: [],
+    imageUse: null,
+    acceptsReferenceImage: false,
+  };
+  const statusOf = (overrides: Partial<MediaProviderStatus>): MediaProviderStatus => ({
+    id: 'kairogen',
+    name: 'Kairogen',
+    billing: 'credits',
+    capabilities: ['generate_image'],
+    configured: true,
+    available: true,
+    reason: null,
+    balance: null,
+    quota: null,
+    usedThisMonthBrlCents: 0,
+    verified: true,
+    ...overrides,
+  });
+  const statuses: MediaProviderStatus[] = [
+    statusOf({ balance: { credits: 45, usd: null, brlCents: 0 } }),
+    statusOf({
+      id: 'cloudflare',
+      name: 'Cloudflare Workers AI',
+      billing: 'free_quota',
+      quota: { usedToday: 12, dailyLimit: 50, usedThisMinute: null, perMinuteLimit: null },
+      verified: false,
+    }),
+    statusOf({
+      id: 'higgsfield',
+      name: 'Higgsfield',
+      billing: 'per_use',
+      configured: false,
+      available: false,
+      reason: 'Sem chave no ambiente.',
+    }),
+  ];
+
+  function scriptProviders() {
+    imageModels = [imageModel, cloudflareModel];
+    const before = get.getMockImplementation();
+    get.mockImplementation((path: string) => {
+      if (path === '/media/studio')
+        return Promise.resolve({ usage, connected: true, anyAvailable: true, storageAvailable: true });
+      if (path === '/media/providers')
+        return Promise.resolve({
+          providers: statuses,
+          spend: { usedThisMonthBrlCents: 2800, monthlyLimitBrlCents: 30_000 },
+        });
+      return before ? before(path) : Promise.reject(new Error(`unexpected GET ${path}`));
+    });
+  }
+
+  it('groups the selector by provider with cost and quota, and says R$ 0 on the button', async () => {
+    scriptProviders();
+    generation = generationOf({ providerId: 'cloudflare' });
+    post.mockImplementation((path: string) =>
+      path === '/media/estimates'
+        ? Promise.resolve({
+            estimate: estimateOf({
+              providerId: 'cloudflare',
+              credits: 0,
+              brlCents: 0,
+              warnings: [
+                'Cloudflare Workers AI ainda não foi verificado com uma geração real: o formato das respostas vem da documentação pública.',
+              ],
+            }),
+          })
+        : Promise.resolve({ generation: generationOf({ providerId: 'cloudflare' }) }),
+    );
+    renderPage();
+    const select = await screen.findByLabelText('Modelo');
+    await screen.findByRole('option', { name: 'FLUX.1 schnell · R$ 0 (grátis)' });
+    expect(within(select).getAllByRole('group').map((group) => group.getAttribute('label'))).toEqual([
+      'Kairogen · 45 créditos',
+      'Cloudflare Workers AI · 12 de 50 hoje',
+    ]);
+    expect(screen.getByRole('option', { name: 'Seedream 4 · 4 créditos por saída' })).toBeTruthy();
+    // The one ceiling in reais (from the usage), and the strip with every provider.
+    expect(screen.getByText(`${brl(0)} de ${brl(30_000)}`)).toBeTruthy();
+    expect(screen.getByText('Higgsfield').parentElement?.textContent).toContain(
+      'Sem chave no ambiente.',
+    );
+
+    fireEvent.change(select, { target: { value: 'cloudflare/flux-1-schnell' } });
+    typePrompt(PROMPT);
+    fireEvent.click(screen.getByRole('button', { name: 'Estimar custo' }));
+    expect(await screen.findByText(`Custo: ${brl(0)} · Cloudflare Workers AI`)).toBeTruthy();
+    expect(screen.getByText(/ainda não foi verificado com uma geração real/)).toBeTruthy();
+    expect(post.mock.calls[0]?.[1]).toMatchObject({ model: 'cloudflare/flux-1-schnell' });
+
+    fireEvent.click(screen.getByRole('button', { name: `Gerar (${formatBrl(0)})` }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    expect(post.mock.calls[1]).toEqual(['/media/generations', { estimateId: 'est-1' }]);
+    expect(await screen.findByText('Gerando no Cloudflare Workers AI')).toBeTruthy();
+  });
+
+  it('offers a costlier model only as a click, and estimates it once taken', async () => {
+    scriptProviders();
+    post
+      .mockImplementationOnce(() =>
+        Promise.reject(
+          new ApiError(409, {
+            error: 'provider_unavailable',
+            message:
+              'Cloudflare Workers AI: Cota grátis do dia esgotada (50 de 50 imagens). Seedream 4 (Kairogen) faz isso por 4 créditos, mas trocar para um provedor mais caro é um clique seu.',
+            alternative: {
+              model: 'seedream-v4',
+              name: 'Seedream 4',
+              providerId: 'kairogen',
+              credits: 4,
+              brlCents: 0,
+            },
+          } as ConstructorParameters<typeof ApiError>[1]),
+        ),
+      )
+      .mockImplementationOnce(() => Promise.resolve({ estimate: estimateOf() }));
+    renderPage();
+    const select = await screen.findByLabelText('Modelo');
+    await screen.findByRole('option', { name: 'FLUX.1 schnell · R$ 0 (grátis)' });
+    fireEvent.change(select, { target: { value: 'cloudflare/flux-1-schnell' } });
+    typePrompt(PROMPT);
+    fireEvent.click(screen.getByRole('button', { name: 'Estimar custo' }));
+
+    const offer = await screen.findByRole('button', {
+      name: 'Usar Seedream 4 (Kairogen, 4 créditos)',
+    });
+    expect(screen.getByText(/trocar para um provedor mais caro é um clique seu/)).toBeTruthy();
+    // Nothing was estimated elsewhere on its own.
+    expect(post).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(offer);
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    expect(post.mock.calls[1]?.[1]).toMatchObject({ model: 'seedream-v4' });
+    expect(await screen.findByText('Custo: 4 créditos · Kairogen')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Gerar (4 créditos)' })).toBeTruthy();
+  });
+});
+
 describe('the operator form', () => {
   it('shows the cost first, and then a button that names it and sends only the estimate', async () => {
     post.mockImplementation((path: string) =>
@@ -297,7 +463,7 @@ describe('the operator form', () => {
       },
     ]);
 
-    expect(await screen.findByText('Custo: 4 créditos')).toBeTruthy();
+    expect(await screen.findByText('Custo: 4 créditos · Kairogen')).toBeTruthy();
     // Nothing was generated by estimating.
     expect(post).toHaveBeenCalledTimes(1);
 
@@ -500,7 +666,7 @@ describe('the operator form', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Estimar custo' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Gerar (4 créditos)' }));
 
-    expect(await screen.findByText('Recusada pelo Kairogen')).toBeTruthy();
+    expect(await screen.findByText('Recusada pelo provedor')).toBeTruthy();
     expect(screen.getByText(/cobraria 6 créditos/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /tentar de novo/i })).toBeNull();
     const generations = post.mock.calls.filter(([path]) => path === '/media/generations');

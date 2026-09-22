@@ -3530,3 +3530,44 @@ a.menu-module-header {
     grid-template-columns: 1fr;
   }
 }
+
+/* Media providers: the strip on the studio, the cards under Integrações. */
+.provider-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+}
+.provider-chip {
+  border: 1px solid var(--border, #d9d9d9);
+  border-radius: 999px;
+  font-size: 0.85rem;
+  padding: 0.25rem 0.75rem;
+}
+.provider-chip-off {
+  opacity: 0.7;
+}
+.provider-chip-on strong::before {
+  content: '● ';
+  color: var(--success, #2e7d32);
+}
+.provider-cards {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr));
+  margin-top: 1.5rem;
+}
+.provider-card {
+  border: 1px solid var(--border, #d9d9d9);
+  border-radius: 0.75rem;
+  padding: 1rem;
+}
+.provider-card h3 {
+  margin: 0 0 0.25rem;
+}
+.media-warnings {
+  margin: 0.75rem 0 0;
+  padding-left: 1.25rem;
+}

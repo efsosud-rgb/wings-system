@@ -16,6 +16,8 @@ import {
   type AgentProposalCard,
   GENERATION_STATUS_LABEL,
   MEDIA_IMAGE_USE_LABEL,
+  MEDIA_PROVIDER_LABEL,
+  type MediaProviderId,
   isGenerationOver,
 } from '@wings/shared';
 import { createContext, useContext } from 'react';
@@ -352,6 +354,9 @@ export const CanGenerateContext = createContext(false);
 
 const credits = (value: number) =>
   `${value.toLocaleString('pt-BR')} ${value === 1 ? 'crédito' : 'créditos'}`;
+/** The price as the button says it: credits on Kairogen, reais anywhere else, R$ 0 included. */
+const priceOf = (estimate: { credits: number; brlCents: number; providerId: MediaProviderId }) =>
+  estimate.providerId === 'kairogen' ? credits(estimate.credits) : formatBrl(estimate.brlCents);
 
 /**
  * A picture or a video the editing agent proposes. The cost is already on the
@@ -384,6 +389,10 @@ function GenerationCard({
         <div>
           <dt>Para quem</dt>
           <dd>{proposal.clientName ?? 'Cliente removido'}</dd>
+        </div>
+        <div>
+          <dt>Provedor</dt>
+          <dd>{MEDIA_PROVIDER_LABEL[payload.provider]}</dd>
         </div>
         <div>
           <dt>Modelo</dt>
@@ -467,7 +476,8 @@ function GenerationCard({
         <p className="agent-card-state" role="status">
           {generation ? GENERATION_STATUS_LABEL[generation.status] : 'Acompanhando a geração…'}
           {generation?.detail && ` ${generation.detail}`}
-          {generation?.status === 'unknown' && ' Confira no Kairogen antes de gerar de novo.'}{' '}
+          {generation?.status === 'unknown' &&
+            ` Confira no ${MEDIA_PROVIDER_LABEL[generation.providerId]} antes de gerar de novo.`}{' '}
           {generation &&
             isGenerationOver(generation.status) &&
             generation.status === 'succeeded' && (
@@ -478,7 +488,9 @@ function GenerationCard({
         <p className="field-hint">Não foi possível estimar o custo. Peça de novo.</p>
       ) : (
         <>
-          <p className="agent-card-cost">Custo estimado: {credits(estimate.credits)}</p>
+          <p className="agent-card-cost">
+            Custo estimado: {priceOf(estimate)} · {MEDIA_PROVIDER_LABEL[estimate.providerId]}
+          </p>
           {canGenerate ? (
             <Button
               type="button"
@@ -497,7 +509,7 @@ function GenerationCard({
                 )
               }
             >
-              Gerar ({credits(estimate.credits)})
+              Gerar ({priceOf(estimate)})
             </Button>
           ) : (
             <p className="field-hint">Você não tem permissão para gerar mídia.</p>

@@ -18,6 +18,7 @@ export * from './clients.js';
 export * from './drive.js';
 export * from './integrations/kairogen.js';
 export * from './jobs.js';
+export * from './marketing/media-providers.js';
 export * from './marketing/media-studio.js';
 export * from './marketing/seo-checklist.js';
 export * from './marketing/site-content.js';

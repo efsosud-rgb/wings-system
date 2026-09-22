@@ -75,7 +75,15 @@ export const integrationConnections = pgTable(
   ],
 );
 
-export const mediaOriginEnum = pgEnum('media_origin', ['kairogen', 'upload']);
+/** An upload, or the provider that generated the file: Kairogen and the providers after it. */
+export const mediaOriginEnum = pgEnum('media_origin', [
+  'kairogen',
+  'upload',
+  'cloudflare',
+  'gemini',
+  'higgsfield',
+  'mpt',
+]);
 export const mediaKindEnum = pgEnum('media_kind', ['image', 'video']);
 
 /**
@@ -116,6 +124,11 @@ export const mediaAssets = pgTable(
     sourceUrl: text('source_url'),
     /** The asset this one was made from: an upscale, an animation. */
     sourceAssetId: uuid('source_asset_id'),
+    /**
+     * The generation of ours that produced it. A provider that answers in the
+     * same call gives no external id, so this is how its files point back.
+     */
+    generationId: uuid('generation_id'),
     /**
      * The Drive file that holds the bytes. The library is a view over the Drive's
      * "Mídia" folders; null only on a row the volume-to-Drive script has not reached.
@@ -166,13 +179,24 @@ export const mediaGenerations = pgTable(
     operation: text('operation').notNull(),
     kind: mediaKindEnum('kind').notNull(),
     model: text('model'),
+    /** The service that runs it: a `MediaProviderId`. Kairogen for every row from before there were others. */
+    provider: text('provider').notNull().default('kairogen'),
     prompt: text('prompt'),
     /** The validated request, as the person or the agent's card made it. */
     request: jsonb('request').notNull(),
-    /** What estimate_cost was asked: the price-affecting half of the tool arguments. */
+    /** What the provider's estimate was asked: the price-affecting half of the arguments. */
     priceArgs: jsonb('price_args').notNull().default({}),
+    /** Kairogen credits. Zero on every other provider. */
     creditsEstimated: integer('credits_estimated').notNull(),
     creditsCharged: integer('credits_charged'),
+    /** In reais estimated, whatever the provider: what the click was shown. */
+    brlCentsEstimated: integer('brl_cents_estimated').notNull().default(0),
+    /** What the provider said it charged, in reais, when it said. */
+    brlCentsCharged: integer('brl_cents_charged'),
+    /** The campaign it is for, when the builder had one open. Filing only. */
+    campaign: text('campaign'),
+    /** Set when a cheaper provider took the place of the one asked for: `{ model, providerId, reason }`. */
+    routedFrom: jsonb('routed_from'),
     status: mediaGenerationStatusEnum('status').notNull().default('estimated'),
     /** Words for the screen. Never a provider message that could hold a secret. */
     detail: text('detail'),
@@ -214,6 +238,8 @@ export const mediaCreditLedger = pgTable(
     event: text('event').notNull(),
     operation: text('operation').notNull(),
     model: text('model'),
+    /** A `MediaProviderId`. The free providers' daily quotas are counts over this column. */
+    provider: text('provider').notNull().default('kairogen'),
     prompt: text('prompt'),
     params: jsonb('params').notNull().default({}),
     creditsEstimated: integer('credits_estimated').notNull(),
@@ -224,6 +250,10 @@ export const mediaCreditLedger = pgTable(
      * known, the estimate given back when Kairogen refused before charging.
      */
     creditsDelta: integer('credits_delta').notNull().default(0),
+    /** The same three, in reais estimated: every provider counts against MEDIA_MONTHLY_BRL. */
+    brlCentsEstimated: integer('brl_cents_estimated').notNull().default(0),
+    brlCentsCharged: integer('brl_cents_charged'),
+    brlCentsDelta: integer('brl_cents_delta').notNull().default(0),
     externalGenerationId: text('external_generation_id'),
     clientId: clientId(),
     /**
@@ -237,6 +267,7 @@ export const mediaCreditLedger = pgTable(
   (table) => [
     index('media_credit_ledger_employee_idx').on(table.employeeId, table.createdAt),
     index('media_credit_ledger_created_idx').on(table.createdAt),
+    index('media_credit_ledger_provider_idx').on(table.provider, table.createdAt),
   ],
 );
 
