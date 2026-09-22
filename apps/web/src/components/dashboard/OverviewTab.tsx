@@ -1,13 +1,25 @@
-import { SPEND_SOURCE_LABEL, type DashboardOverview, type SpendStrip } from '@wings/shared';
+import {
+  AD_PLATFORM_LABEL,
+  HEALTH_ITEM_LABEL,
+  HEALTH_STATE_LABEL,
+  SPEND_SOURCE_LABEL,
+  type AdPlatform,
+  type DashboardOverview,
+  type HealthItem,
+  type SpendStrip,
+} from '@wings/shared';
 import { Link } from 'react-router-dom';
 import { Alert } from '../ui.js';
 import { DailyColumns, MonthMeter } from './charts.js';
 import { formatAmount, formatMonth, since } from './format.js';
+import { StatePill, stateOfHealth } from './icons.js';
 
 /**
  * Visão geral: one strip per source of money, all on the same day axis, so
  * the month reads across platforms at a glance. Paid platforms are never
  * pooled — each strip is its own budget, its own ceiling, its own balance.
+ * Below the strips, the account's health: four checks per platform, each
+ * with its state, what was seen and what to do about it.
  */
 
 const COLOR: Record<SpendStrip['source'], string> = {
@@ -17,6 +29,22 @@ const COLOR: Record<SpendStrip['source'], string> = {
   ai: 'var(--viz-ai)',
   media: 'var(--viz-media)',
 };
+
+/** A setup note quotes the command to run; it is shown as code, not prose. */
+function SetupNote({ note }: { note: string }) {
+  const parts = note.split(/(`[^`]+`)/);
+  return (
+    <p className="strip-setup muted">
+      {parts.map((part, index) =>
+        part.startsWith('`') && part.endsWith('`') ? (
+          <code key={index}>{part.slice(1, -1)}</code>
+        ) : (
+          <span key={index}>{part}</span>
+        ),
+      )}
+    </p>
+  );
+}
 
 function Strip({ strip }: { strip: SpendStrip }) {
   const money = (value: number | null) => formatAmount(value, strip.unit);
@@ -34,7 +62,9 @@ function Strip({ strip }: { strip: SpendStrip }) {
             ? 'não configurado'
             : strip.refreshedAt
               ? `atualizado ${since(strip.refreshedAt)}`
-              : 'lido do nosso registro'}
+              : strip.setupNote
+                ? 'sem dados ainda'
+                : 'lido do nosso registro'}
         </span>
       </header>
 
@@ -44,6 +74,7 @@ function Strip({ strip }: { strip: SpendStrip }) {
           conta até a revisão.
         </Alert>
       )}
+      {strip.setupNote && <SetupNote note={strip.setupNote} />}
 
       <dl className="strip-figures">
         <div>
@@ -91,6 +122,47 @@ function Strip({ strip }: { strip: SpendStrip }) {
   );
 }
 
+function HealthRow({ item }: { item: HealthItem }) {
+  return (
+    <li className="health-row">
+      <StatePill state={stateOfHealth(item.state)}>{HEALTH_STATE_LABEL[item.state]}</StatePill>
+      <div className="health-body">
+        <strong>{HEALTH_ITEM_LABEL[item.key]}</strong>
+        <p>{item.detail}</p>
+        {item.action && (
+          <p className="health-action">
+            <span>O que fazer:</span> {item.action}
+          </p>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function Health({ items }: { items: HealthItem[] }) {
+  const platforms = [...new Set(items.map((item) => item.platform))] as AdPlatform[];
+  if (platforms.length === 0) return null;
+  return (
+    <section className="dash-section health" aria-labelledby="health-title">
+      <h2 id="health-title">Saúde da conta</h2>
+      <div className="health-grid">
+        {platforms.map((platform) => (
+          <div key={platform} className="health-platform">
+            <h3>{AD_PLATFORM_LABEL[platform]}</h3>
+            <ul>
+              {items
+                .filter((item) => item.platform === platform)
+                .map((item) => (
+                  <HealthRow key={`${platform}:${item.key}`} item={item} />
+                ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function OverviewTab({ overview }: { overview: DashboardOverview }) {
   const { counts } = overview;
   return (
@@ -105,6 +177,8 @@ export function OverviewTab({ overview }: { overview: DashboardOverview }) {
           <Strip key={strip.source} strip={strip} />
         ))}
       </ol>
+
+      <Health items={overview.health} />
 
       <section className="dash-counts" aria-label="O que pede uma pessoa">
         <div>

@@ -323,6 +323,151 @@ export function BarList({
   );
 }
 
+export interface HeatCellProps {
+  weekday: number;
+  hour: string;
+  amount: number;
+  /** What the tooltip and the aria label say beside the amount. */
+  detail: string;
+}
+
+const HOURS_24 = Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, '0'));
+
+/**
+ * Weekday × hour, seven rows of twenty-four squares. Ink is the entity's
+ * colour at an opacity that follows the amount, in five steps so that two
+ * neighbouring cells can be told apart. A cell with no delivery keeps the
+ * surface. A visually hidden table carries the same numbers for a screen
+ * reader.
+ */
+export function HeatGrid({
+  cells,
+  rowLabels,
+  color,
+  format,
+  ariaLabel,
+}: {
+  cells: HeatCellProps[];
+  rowLabels: readonly string[];
+  color: string;
+  format: (amount: number) => string;
+  ariaLabel: string;
+}) {
+  const [hover, setHover] = useState<HeatCellProps | null>(null);
+  const id = useId();
+  const [ref, width] = useWidth();
+  const gutter = 34;
+  const axis = 16;
+  const gap = 2;
+  const cell = Math.max(6, Math.floor((width - gutter - gap * 23) / 24));
+  const height = rowLabels.length * (cell + gap) - gap;
+  const max = Math.max(...cells.map((item) => item.amount), 0);
+  const byKey = new Map(cells.map((item) => [`${item.weekday}:${item.hour}`, item]));
+  const opacityOf = (amount: number) => {
+    if (amount <= 0 || max <= 0) return 0;
+    // Five steps between 0.18 and 1, so a small cell still reads as ink.
+    return 0.18 + Math.ceil((amount / max) * 5) * 0.164;
+  };
+
+  return (
+    <figure className="viz viz-heat" aria-label={ariaLabel} ref={ref}>
+      <svg
+        viewBox={`0 0 ${width} ${height + axis}`}
+        width={width}
+        height={height + axis}
+        className="viz-svg"
+        role="img"
+        aria-labelledby={`${id}-title`}
+        onMouseLeave={() => setHover(null)}
+      >
+        <title id={`${id}-title`}>{ariaLabel}</title>
+        {rowLabels.map((label, row) => (
+          <text
+            key={label}
+            x={gutter - 8}
+            y={row * (cell + gap) + cell / 2 + 3.5}
+            className="viz-tick viz-tick-end"
+          >
+            {label}
+          </text>
+        ))}
+        {HOURS_24.map((hour, column) =>
+          column % 3 === 0 ? (
+            <text
+              key={hour}
+              x={gutter + column * (cell + gap) + cell / 2}
+              y={height + 12}
+              className="viz-tick"
+            >
+              {hour}h
+            </text>
+          ) : null,
+        )}
+        {rowLabels.map((label, row) =>
+          HOURS_24.map((hour, column) => {
+            const item = byKey.get(`${row}:${hour}`) ?? {
+              weekday: row,
+              hour,
+              amount: 0,
+              detail: '',
+            };
+            const active = hover === null || hover === item;
+            return (
+              <rect
+                key={`${row}:${hour}`}
+                x={gutter + column * (cell + gap)}
+                y={row * (cell + gap)}
+                width={cell}
+                height={cell}
+                rx={2}
+                fill={item.amount > 0 ? color : 'var(--viz-grid)'}
+                opacity={item.amount > 0 ? opacityOf(item.amount) * (active ? 1 : 0.5) : 1}
+                tabIndex={0}
+                onMouseEnter={() => setHover(item)}
+                onFocus={() => setHover(item)}
+                onBlur={() => setHover(null)}
+                aria-label={`${label} ${hour}h: ${format(item.amount)}${item.detail ? `, ${item.detail}` : ''}`}
+              />
+            );
+          }),
+        )}
+      </svg>
+      {hover && (
+        <figcaption className="viz-tooltip" aria-live="polite">
+          <span>
+            {rowLabels[hover.weekday]} {hover.hour}h
+          </span>
+          <strong>{format(hover.amount)}</strong>
+          {hover.detail && <span>{hover.detail}</span>}
+        </figcaption>
+      )}
+      <table className="sr-only">
+        <caption>{ariaLabel}</caption>
+        <thead>
+          <tr>
+            <th scope="col">Dia</th>
+            {HOURS_24.map((hour) => (
+              <th key={hour} scope="col">
+                {hour}h
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rowLabels.map((label, row) => (
+            <tr key={label}>
+              <th scope="row">{label}</th>
+              {HOURS_24.map((hour) => (
+                <td key={hour}>{format(byKey.get(`${row}:${hour}`)?.amount ?? 0)}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </figure>
+  );
+}
+
 /**
  * Spend against the month: a track for the ceiling, the spent part in the
  * source's colour, the forecast as a hairline marker past it.

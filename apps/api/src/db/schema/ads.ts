@@ -761,6 +761,7 @@ export const breakdownKindEnum = pgEnum('ad_breakdown_kind', [
   'age_gender',
   'region',
   'hour',
+  'device',
 ]);
 
 /**
@@ -844,6 +845,14 @@ export const adAccountDaily = pgTable(
     activeDailyBudgetCents: bigint('active_daily_budget_cents', { mode: 'number' })
       .notNull()
       .default(0),
+    /**
+     * What the platform says about its conversion measurement, read once a
+     * day: Meta's pixel (`last_fired_time`), Google's conversion actions and
+     * their status. `[{ id, name, status: 'active' | 'inactive' | 'unknown',
+     * lastEventAt }]`; null when the read failed or the platform has none.
+     * NOT verified live on either platform.
+     */
+    conversionSources: jsonb('conversion_sources'),
     fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [uniqueIndex('ad_account_daily_account_day_uq').on(table.adAccountId, table.day)],

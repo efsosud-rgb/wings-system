@@ -1,7 +1,14 @@
-import { DASHBOARD_WINDOWS, type DashboardWindow } from '@wings/shared';
+import {
+  DASHBOARD_WINDOWS,
+  setCplTargetSchema,
+  type DashboardSettings,
+  type DashboardWindow,
+} from '@wings/shared';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { writeAudit } from '../../../lib/audit.js';
 import { audience, campaigns, creatives, overview, platforms } from './queries.js';
+import { dashboardTargets, setTarget } from './targets.js';
 
 /**
  * HTTP surface of Dashboard → Marketing. Reads only: every figure comes from
@@ -13,7 +20,9 @@ import { audience, campaigns, creatives, overview, platforms } from './queries.j
 const windowSchema = z.object({
   days: z.coerce
     .number()
-    .refine((value): value is DashboardWindow => DASHBOARD_WINDOWS.includes(value as DashboardWindow))
+    .refine((value): value is DashboardWindow =>
+      DASHBOARD_WINDOWS.includes(value as DashboardWindow),
+    )
     .default(7),
 });
 
@@ -61,4 +70,43 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
     if (days === null) return;
     return reply.send({ audience: await audience(db, days, now()) });
   });
+
+  /**
+   * Configurações do Dashboard: the CPL and CPC targets the verdicts judge
+   * against. The history proposes; only a person's confirmation sets one,
+   * and that takes `ads.request`, the permission of whoever runs the traffic.
+   */
+  app.get('/ads/dashboard/settings', guard, async (_request, reply) => {
+    const settings: DashboardSettings = { targets: await dashboardTargets(db, now()) };
+    return reply.send({ settings });
+  });
+
+  app.put(
+    '/ads/dashboard/settings/cpl-target',
+    { preHandler: app.requirePermission('ads.request') },
+    async (request, reply) => {
+      const parsed = setCplTargetSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: 'invalid_request',
+          message: parsed.error.issues[0]?.message ?? 'Dados inválidos',
+        });
+      }
+      const employeeId = request.session.actor.employeeId;
+      await setTarget(db, { ...parsed.data, employeeId, now: now() });
+      await writeAudit(db, {
+        actorEmployeeId: employeeId,
+        action: 'ads.cpl_target_set',
+        entity: 'marketing_cpl_target',
+        entityId: parsed.data.objectiveKind,
+        ip: request.ip,
+        metadata: {
+          objectiveKind: parsed.data.objectiveKind,
+          targetCents: parsed.data.targetCents,
+        },
+      });
+      const settings: DashboardSettings = { targets: await dashboardTargets(db, now()) };
+      return reply.send({ settings });
+    },
+  );
 };

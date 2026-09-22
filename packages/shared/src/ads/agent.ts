@@ -111,7 +111,24 @@ export type MediaAgentToolName =
   (typeof MEDIA_AGENT_READ_TOOLS)[number] | (typeof MEDIA_AGENT_PROPOSAL_TOOLS)[number];
 export type AgentReadTool = (typeof AGENT_READ_TOOLS)[number];
 export type AgentProposalTool = (typeof AGENT_PROPOSAL_TOOLS)[number];
-export type AgentToolName = AgentReadTool | AgentProposalTool | MediaAgentToolName;
+
+/**
+ * The insights generator (Dashboard → Marketing → Insights e sugestões) runs
+ * on the same infrastructure with the traffic agent's read tools plus these.
+ * `registrar_*` are its only "proposal" tools: they write cards, nothing else.
+ */
+export const INSIGHT_READ_TOOLS = [
+  'quebras_de_publico',
+  'curva_gasto_leads',
+  'desgaste_criativos',
+  'vereditos_campanhas',
+  'metas_de_cpl',
+] as const;
+export const INSIGHT_WRITE_TOOLS = ['registrar_insights', 'registrar_sugestoes'] as const;
+export type InsightToolName =
+  (typeof INSIGHT_READ_TOOLS)[number] | (typeof INSIGHT_WRITE_TOOLS)[number];
+
+export type AgentToolName = AgentReadTool | AgentProposalTool | MediaAgentToolName | InsightToolName;
 
 /** "O que consultei": one plain phrase per tool. */
 export const AGENT_TOOL_LABEL: Record<AgentToolName, string> = {
@@ -132,6 +149,13 @@ export const AGENT_TOOL_LABEL: Record<AgentToolName, string> = {
   rascunho_da_campanha: 'Rascunho aberto no construtor de campanha',
   listar_clientes: 'Clientes cadastrados',
   propor_geracao: 'Proposta de geração',
+  quebras_de_publico: 'Público, região, posicionamentos, horários e dispositivos',
+  curva_gasto_leads: 'Curva de gasto × leads por campanha',
+  desgaste_criativos: 'Desgaste dos criativos',
+  vereditos_campanhas: 'Veredito por campanha',
+  metas_de_cpl: 'Metas de CPL confirmadas',
+  registrar_insights: 'Insights registrados',
+  registrar_sugestoes: 'Sugestões de campanha registradas',
 };
 
 // ---------------------------------------------------------------------------

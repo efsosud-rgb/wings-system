@@ -5,6 +5,7 @@ import type {
   BreakdownInsightRow,
   BreakdownKind,
   CampaignStatus,
+  ConversionSource,
   CreateCampaignSpec,
   InsightRow,
   MetricsLevel,
@@ -53,6 +54,7 @@ interface MetricsRow {
     hour?: number | string;
     adNetworkType?: string;
     geoTargetRegion?: string;
+    device?: string;
   };
   adGroupCriterion?: { ageRange?: { type?: string }; gender?: { type?: string } };
   metrics?: {
@@ -426,6 +428,13 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient {
           base(row, String(row.segments?.hour ?? '0').padStart(2, '0'), ''),
         );
       }
+      case 'device': {
+        // MOBILE, DESKTOP, TABLET, CONNECTED_TV, OTHER. NOT verified live.
+        const rows = await query('segments.device', 'campaign');
+        return rows.flatMap((row) =>
+          base(row, (row.segments?.device ?? 'UNKNOWN').toLowerCase(), ''),
+        );
+      }
       case 'age_gender': {
         const [ages, genders] = await Promise.all([
           query('ad_group_criterion.age_range.type', 'age_range_view'),
@@ -454,6 +463,38 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient {
         });
       }
     }
+  }
+
+  /**
+   * The account's conversion actions and their status. Google's report has no
+   * "last fired" time, so an ENABLED action is `active` and nothing more is
+   * claimed. NOT verified live.
+   */
+  async getConversionSources(): Promise<ConversionSource[]> {
+    const rows = await this.reader.search<{
+      conversionAction?: { id?: string; name?: string; status?: string; type?: string };
+    }>(`
+      SELECT conversion_action.id, conversion_action.name, conversion_action.status,
+             conversion_action.type
+        FROM conversion_action
+    `);
+    return rows.flatMap((row) => {
+      const action = row.conversionAction;
+      if (!action?.id) return [];
+      return [
+        {
+          id: String(action.id),
+          name: action.name ?? String(action.id),
+          status:
+            action.status === 'ENABLED'
+              ? ('active' as const)
+              : action.status === 'REMOVED' || action.status === 'HIDDEN'
+                ? ('inactive' as const)
+                : ('unknown' as const),
+          lastEventAt: null,
+        },
+      ];
+    });
   }
 
   /** Names for geo target constants, one read for all of them. */

@@ -118,8 +118,22 @@ export interface VideoMetrics {
   p100: number;
 }
 
-/** How a day's figures are split: by placement, age and gender, region, hour. */
-export type BreakdownKind = 'placement' | 'age_gender' | 'region' | 'hour';
+/** How a day's figures are split: by placement, age and gender, region, hour, device. */
+export type BreakdownKind = 'placement' | 'age_gender' | 'region' | 'hour' | 'device';
+
+/**
+ * What the platform says about one of its conversion sources: Meta's pixel,
+ * a Google conversion action. `active` means the platform reports it as
+ * enabled and, where it says so, firing recently. NOT verified live on either
+ * platform (docs/dashboard-marketing.md).
+ */
+export interface ConversionSource {
+  id: string;
+  name: string;
+  status: 'active' | 'inactive' | 'unknown';
+  /** ISO instant of the last event, where the platform reports one. */
+  lastEventAt: string | null;
+}
 
 /**
  * One day of one campaign, split one way. `key`/`subKey` are the platform's
@@ -246,6 +260,8 @@ export interface AdsPlatformClient {
   getCampaign(campaignId: string): Promise<PlatformCampaign | null>;
   /** Reported spend per campaign per day, for reconciliation. */
   getSpend(sinceDate: string): Promise<SpendRow[]>;
+  /** The account's conversion sources and whether they measure; empty where the platform has none. */
+  getConversionSources(): Promise<ConversionSource[]>;
 
   setDailyBudget(campaignId: string, dailyBudgetCents: Cents): Promise<MutationOutcome>;
   pauseCampaign(campaignId: string): Promise<MutationOutcome>;

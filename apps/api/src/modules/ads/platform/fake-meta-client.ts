@@ -5,6 +5,7 @@ import type {
   AdsPlatformClient,
   BreakdownInsightRow,
   BreakdownKind,
+  ConversionSource,
   CreateCampaignSpec,
   CreativeFormat,
   InsightRow,
@@ -43,6 +44,10 @@ export const FAKE_BREAKDOWN_SHARES: Record<
     { key: '09', subKey: '', share: 0.3 },
     { key: '14', subKey: '', share: 0.3 },
     { key: '20', subKey: '', share: 0.4 },
+  ],
+  device: [
+    { key: 'mobile_app', subKey: '', share: 0.7 },
+    { key: 'desktop', subKey: '', share: 0.3 },
   ],
 };
 
@@ -114,6 +119,8 @@ export interface FakeMetaOptions {
   /** How long reported spend trails actual spend. */
   reportingLagMinutes?: number;
   now?: () => Date;
+  /** What `getConversionSources` answers; a pixel firing today unless told otherwise. */
+  conversionSources?: ConversionSource[] | (() => ConversionSource[]);
   /**
    * What the token may not read, the way staging's read token answered
    * "(#10) Permission Denied": the payment fields of the account, or a
@@ -142,6 +149,7 @@ export class FakeMetaClient implements AdsPlatformClient {
   private readonly accountId: string;
   private spendCapCents: Cents | null;
   private readonly prepaidBalanceCents: Cents | null;
+  private readonly conversionSources: ConversionSource[] | (() => ConversionSource[]);
   private readonly campaigns = new Map<string, InternalCampaign>();
   private readonly overdeliveryFactor: number;
   private readonly reportingLagMinutes: number;
@@ -160,6 +168,9 @@ export class FakeMetaClient implements AdsPlatformClient {
     this.accountId = options.accountId ?? 'act_123456789';
     this.spendCapCents = options.spendCapCents ?? null;
     this.prepaidBalanceCents = options.prepaidBalanceCents ?? null;
+    this.conversionSources = options.conversionSources ?? [
+      { id: 'px1', name: 'Pixel Wings', status: 'active', lastEventAt: new Date().toISOString() },
+    ];
     this.overdeliveryFactor = Math.min(
       options.overdeliveryFactor ?? 1,
       META_DAILY_OVERDELIVERY_FACTOR,
@@ -305,6 +316,12 @@ export class FakeMetaClient implements AdsPlatformClient {
       fundingKind: this.prepaidBalanceCents === null ? 'credit_card' : 'prepaid',
       warnings: [],
     };
+  }
+
+  async getConversionSources(): Promise<ConversionSource[]> {
+    this.calls.push({ method: 'getConversionSources', args: [] });
+    const sources = this.conversionSources;
+    return typeof sources === 'function' ? sources() : sources;
   }
 
   async listAds(): Promise<PlatformAd[]> {

@@ -46,6 +46,8 @@ export interface FakeGoogleMetricsRow {
   geoTargetRegion?: string;
   ageRange?: string;
   gender?: string;
+  /** MOBILE, DESKTOP, TABLET… */
+  device?: string;
 }
 
 export interface FakeGoogleApiOptions {
@@ -59,6 +61,8 @@ export interface FakeGoogleApiOptions {
   metrics?: FakeGoogleMetricsRow[];
   /** How the next mutate behaves. */
   mutate?: 'ok' | 'ok_without_id' | 'reject' | 'server_error' | 'network_failure';
+  /** Rows answered for `FROM conversion_action`; one enabled action by default. */
+  conversionActions?: { id: string; name: string; status: string; type?: string }[];
 }
 
 export const BRAZIL_GEO = [
@@ -134,6 +138,7 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
       ...(row.hour === undefined ? {} : { hour: row.hour }),
       ...(row.adNetworkType === undefined ? {} : { adNetworkType: row.adNetworkType }),
       ...(row.geoTargetRegion === undefined ? {} : { geoTargetRegion: row.geoTargetRegion }),
+      ...(row.device === undefined ? {} : { device: row.device }),
     },
     ...(row.ageRange === undefined && row.gender === undefined
       ? {}
@@ -167,7 +172,7 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
       .filter((row) => !range || (row.date >= range[1]! && row.date <= range[2]!))
       .filter((row) => {
         const dimensions = (
-          ['hour', 'adNetworkType', 'geoTargetRegion', 'ageRange', 'gender'] as const
+          ['hour', 'adNetworkType', 'geoTargetRegion', 'ageRange', 'gender', 'device'] as const
         ).filter((name) => row[name] !== undefined);
         return dimension === null ? dimensions.length === 0 : dimensions.join() === dimension;
       })
@@ -185,6 +190,14 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
         .map((row) => ({
           geoTargetConstant: { resourceName: `geoTargetConstants/${row.id}`, name: row.name },
         }));
+    }
+    if (/FROM\s+conversion_action/i.test(query)) {
+      const actions = options.conversionActions ?? [
+        { id: '77', name: 'Lead - formulário', status: 'ENABLED', type: 'WEBPAGE' },
+      ];
+      return actions.map((action) => ({
+        conversionAction: { ...action, type: action.type ?? 'WEBPAGE' },
+      }));
     }
     if (/FROM\s+account_budget/i.test(query)) {
       const budget =
@@ -219,6 +232,7 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
       if (/segments\.date/.test(query)) {
         if (/segments\.hour/.test(query)) return metricsFor(query, 'hour');
         if (/segments\.ad_network_type/.test(query)) return metricsFor(query, 'adNetworkType');
+        if (/segments\.device/.test(query)) return metricsFor(query, 'device');
         return metricsFor(query, null);
       }
       const byId = /campaign\.id = (\d+)/.exec(query)?.[1];

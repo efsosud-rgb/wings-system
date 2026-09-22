@@ -207,3 +207,9 @@ perto de 9.400 tokens de entrada e 350 de saída, **cerca de US$ 0,02 no Sonnet
 US$ 0,20** (metade disso no Haiku 4.5). Com o cache de prompt funcionando a
 entrada repetida sai mais barata. O teto de US$ 2 por dia dá para umas dez
 conversas assim por pessoa.
+
+## Os insights do dashboard usam a mesma infra
+
+A aba "Insights e sugestões" do Dashboard → Marketing roda sobre este mesmo
+cliente do OpenRouter, com as ferramentas de leitura daqui e mais algumas,
+sob um teto próprio (`INSIGHTS_DAILY_USD`). Veja [insights.md](insights.md).

@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
+  OWNED_CHANNEL_WINDOWS,
+  type OwnedChannelsResponse,
   FEATURED_MIN_HEIGHT,
   FEATURED_MIN_WIDTH,
   SITE_IMAGE_MAX_BYTES,
@@ -24,6 +26,8 @@ import type { Env } from '../../env.js';
 import { writeAudit } from '../../lib/audit.js';
 import { WordPressClient } from '../../lib/wordpress.js';
 import { readImageInfo } from '../ads/image-info.js';
+import { addDays, dayIn } from '../ads/dashboard/window.js';
+import { mirroredPosts } from './blog-sync.js';
 
 /**
  * Owned channels: Wings' own WordPress site.
@@ -122,6 +126,41 @@ export const siteRoutes: FastifyPluginAsync<SiteRoutesOptions> = async (app, opt
         siteHost: client?.siteHost ?? null,
       };
       return reply.send({ status });
+    },
+  );
+
+  /**
+   * Canais próprios on the dashboard: the blog's posts by period, from the
+   * mirror the ingest job keeps. Never calls the site.
+   */
+  app.get(
+    '/marketing/site/blog-posts',
+    { preHandler: app.requirePermission('ads.read') },
+    async (request, reply) => {
+      const asked = Number((request.query as { days?: string }).days ?? 30);
+      const days = (OWNED_CHANNEL_WINDOWS as readonly number[]).includes(asked) ? asked : null;
+      if (days === null) {
+        return reply.status(400).send({
+          error: 'invalid_request',
+          message: `Período inválido: use ${OWNED_CHANNEL_WINDOWS.join(', ')} dias.`,
+        });
+      }
+      const now = (app.wings.now ?? (() => new Date()))();
+      const until = dayIn(now);
+      const since = addDays(until, -(days - 1));
+      const mirror = await mirroredPosts(
+        db,
+        new Date(`${since}T00:00:00-03:00`),
+        new Date(`${until}T23:59:59.999-03:00`),
+      );
+      const body: OwnedChannelsResponse = {
+        days,
+        since,
+        until,
+        blog: { configured: clientFrom(env, options.wordpressFetch) !== null, ...mirror },
+        social: null,
+      };
+      return reply.send(body);
     },
   );
 

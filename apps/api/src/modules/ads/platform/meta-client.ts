@@ -13,6 +13,7 @@ import type {
   BreakdownInsightRow,
   BreakdownKind,
   CampaignStatus,
+  ConversionSource,
   CreateCampaignSpec,
   InsightRow,
   MetricsLevel,
@@ -85,6 +86,8 @@ export interface MetaClientOptions {
   timeoutMs?: number;
   /** Injected in tests; production uses global fetch. */
   fetchImpl?: typeof fetch;
+  /** The pixel whose firing `getConversionSources` reports. Absent: no source to report. */
+  pixelId?: string;
 }
 
 interface MetaErrorBody {
@@ -164,7 +167,18 @@ const BREAKDOWN_SPEC: Record<
     key: (row) => text(row.hourly_stats_aggregated_by_advertiser_time_zone).slice(0, 2),
     subKey: () => '',
   },
+  // mobile_app, mobile_web, desktop. NOT verified live: the exact values Meta
+  // answers on this account.
+  device: {
+    breakdowns: ['device_platform'],
+    reach: true,
+    key: (row) => text(row.device_platform),
+    subKey: () => '',
+  },
 };
+
+/** A pixel that fired within this many days is measuring. */
+const PIXEL_ACTIVE_DAYS = 7;
 
 /**
  * Splits an inclusive date range into consecutive windows of at most `days`.
@@ -271,6 +285,7 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
   private readonly version: string;
   private readonly timeoutMs: number;
   private readonly fetchImpl: typeof fetch;
+  private readonly pixelId: string | null;
 
   constructor(options: MetaClientOptions) {
     if (!options.accessToken) throw new Error('Meta access token is required');
@@ -282,6 +297,7 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
     this.version = options.apiVersion ?? 'v23.0';
     this.timeoutMs = options.timeoutMs ?? 15_000;
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.pixelId = options.pixelId && /^\d{5,25}$/.test(options.pixelId) ? options.pixelId : null;
   }
 
   /**
@@ -548,6 +564,41 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       );
     }
     return account;
+  }
+
+  /**
+   * The pixel the leads ad sets optimise for, and when it last fired. One
+   * pixel per account is what Wings has; the id comes from the environment.
+   * NOT verified live: that `last_fired_time` is readable with this token.
+   */
+  async getConversionSources(): Promise<ConversionSource[]> {
+    if (!this.pixelId) return [];
+    const body = await this.get<{
+      id?: string;
+      name?: string;
+      last_fired_time?: string;
+      is_unavailable?: boolean;
+    }>(this.pixelId, { fields: 'id,name,last_fired_time,is_unavailable' });
+    const lastFired = body.last_fired_time ? new Date(body.last_fired_time) : null;
+    const recent =
+      lastFired !== null &&
+      !Number.isNaN(lastFired.getTime()) &&
+      Date.now() - lastFired.getTime() <= PIXEL_ACTIVE_DAYS * 24 * 3_600_000;
+    return [
+      {
+        id: String(body.id ?? this.pixelId),
+        name: body.name ?? `Pixel ${this.pixelId}`,
+        status: body.is_unavailable
+          ? 'inactive'
+          : lastFired === null
+            ? 'unknown'
+            : recent
+              ? 'active'
+              : 'inactive',
+        lastEventAt:
+          lastFired && !Number.isNaN(lastFired.getTime()) ? lastFired.toISOString() : null,
+      },
+    ];
   }
 
   async listCampaigns(): Promise<PlatformCampaign[]> {

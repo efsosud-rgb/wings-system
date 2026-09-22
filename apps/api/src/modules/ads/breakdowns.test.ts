@@ -29,7 +29,12 @@ afterAll(async () => {
 async function account(): Promise<{ id: string; externalId: string }> {
   const externalId = `act_${randomBytes(4).toString('hex')}`;
   const id = await ensureAdAccount(db, { platform: 'meta', externalId, name: 'Fly High' });
-  await openPeriod(db, { adAccountId: id, periodMonth: PERIOD, capCents: 400_000, usablePercent: 70 });
+  await openPeriod(db, {
+    adAccountId: id,
+    periodMonth: PERIOD,
+    capCents: 400_000,
+    usablePercent: 70,
+  });
   return { id, externalId };
 }
 
@@ -80,7 +85,10 @@ describe('ingesting a breakdown', () => {
     await ingestBreakdown(db, client, id, 'hour', '2026-09-15', NOW);
 
     const rows = await db.query.adMetricsBreakdownDaily.findMany({
-      where: and(eq(adMetricsBreakdownDaily.adAccountId, id), eq(adMetricsBreakdownDaily.kind, 'hour')),
+      where: and(
+        eq(adMetricsBreakdownDaily.adAccountId, id),
+        eq(adMetricsBreakdownDaily.kind, 'hour'),
+      ),
     });
     expect(rows.map((row) => row.key).sort()).toEqual(['09', '14', '20']);
     expect(rows.every((row) => row.reach === 0)).toBe(true);
@@ -166,5 +174,58 @@ describe('inside the ingestion cycle', () => {
     expect(result.breakdowns.hour.rows).toBeGreaterThan(0);
     expect(result.accountDay.day).toBe('2026-09-16');
     expect(result.accountDay.activeDailyBudgetCents).toBe(2000);
+  });
+});
+
+describe('device and conversion sources', () => {
+  it('files the device split like any other, keyed by the platform name', async () => {
+    const { id, externalId } = await account();
+    const client = new FakeMetaClient({
+      accountId: externalId,
+      campaigns: [{ id: 'c1', name: 'Leads', status: 'ACTIVE', dailyBudgetCents: 10_000 }],
+    });
+    client.simulateDay('2026-09-15');
+    await reconcileAccount(db, client, id, NOW);
+    const result = await ingestBreakdown(db, client, id, 'device', '2026-09-15', NOW);
+    expect(result.rows).toBe(FAKE_BREAKDOWN_SHARES.device.length);
+
+    const rows = await db.query.adMetricsBreakdownDaily.findMany({
+      where: and(
+        eq(adMetricsBreakdownDaily.adAccountId, id),
+        eq(adMetricsBreakdownDaily.kind, 'device'),
+      ),
+    });
+    expect(rows.map((row) => row.key).sort()).toEqual(['desktop', 'mobile_app']);
+    expect(rows.find((row) => row.key === 'mobile_app')?.spendCents).toBe(7000);
+  });
+
+  it('writes what the platform says about its conversion sources, and null when the read fails', async () => {
+    const { id, externalId } = await account();
+    const measuring = new FakeMetaClient({
+      accountId: externalId,
+      conversionSources: [{ id: 'px', name: 'Pixel', status: 'inactive', lastEventAt: null }],
+    });
+    await reconcileAccount(db, measuring, id, NOW);
+    await recordAccountDay(db, measuring, id, NOW);
+    const [row] = await db.select().from(adAccountDaily).where(eq(adAccountDaily.adAccountId, id));
+    expect(row?.conversionSources).toEqual([
+      { id: 'px', name: 'Pixel', status: 'inactive', lastEventAt: null },
+    ]);
+
+    const broken = new FakeMetaClient({
+      accountId: externalId,
+      conversionSources: () => {
+        throw new Error('pixel unreadable');
+      },
+    });
+    // The day is still recorded: the read is a courtesy, not a step that can fail the cycle.
+    await expect(recordAccountDay(db, broken, id, NOW)).resolves.toMatchObject({
+      day: '2026-09-16',
+    });
+    const [again] = await db
+      .select()
+      .from(adAccountDaily)
+      .where(eq(adAccountDaily.adAccountId, id));
+    expect(again?.conversionSources).toBeNull();
   });
 });

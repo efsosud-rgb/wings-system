@@ -65,7 +65,7 @@ export function Alert({
   kind,
   children,
 }: {
-  kind: 'error' | 'success' | 'info';
+  kind: 'error' | 'success' | 'info' | 'warning';
   children: ReactNode;
 }) {
   return (

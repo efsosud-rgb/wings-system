@@ -1,3 +1,5 @@
+import type { VerdictResult } from './verdicts.js';
+
 /**
  * Contract for Dashboard → Marketing: spend and balances across every paid
  * source, and performance read from the mirrored platform data.
@@ -71,6 +73,62 @@ export interface SpendStrip {
   refreshedAt: string | null;
   /** Meta and Google only: the system's own kill switch. */
   killSwitchEngaged: boolean;
+  /**
+   * Set when the source is configured but cannot show figures yet, and says
+   * what is missing: credentials present but no account seeded in the
+   * ingestion, for instance. Null when there is nothing to say.
+   */
+  setupNote: string | null;
+}
+
+/** How the ingest job is doing, so the header can say when the next run is. */
+export interface IngestionStatus {
+  /** Start of the last run recorded, ok or not; null when no run was ever recorded. */
+  lastRunAt: string | null;
+  lastRunStatus: 'ok' | 'failed' | 'running' | null;
+  /** Accounts that failed in the last run, with the step they died in. */
+  lastRunFailures: { platform: AdPlatform | string; step: string }[];
+  /** The cron the API was told (ADS_INGEST_CRON), in São Paulo; null when not told. */
+  schedule: string | null;
+  /** Next run by that schedule; null without a schedule. */
+  nextRunAt: string | null;
+  /** True when a scheduled run should have happened and no run was recorded since. */
+  overdue: boolean;
+}
+
+export const HEALTH_ITEM_KEYS = [
+  'conversions_measuring',
+  'creative_fatigue',
+  'spend_pacing',
+  'active_without_results',
+] as const;
+export type HealthItemKey = (typeof HEALTH_ITEM_KEYS)[number];
+
+export const HEALTH_ITEM_LABEL: Record<HealthItemKey, string> = {
+  conversions_measuring: 'Conversões medindo',
+  creative_fatigue: 'Criativos desgastados',
+  spend_pacing: 'Ritmo de gasto',
+  active_without_results: 'Campanhas ativas sem resultado há 7 dias',
+};
+
+export type HealthState = 'ok' | 'attention' | 'problem' | 'unknown';
+
+export const HEALTH_STATE_LABEL: Record<HealthState, string> = {
+  ok: 'Em ordem',
+  attention: 'Atenção',
+  problem: 'Problema',
+  unknown: 'Sem dado',
+};
+
+/** One line of "Saúde da conta": the state, what was seen and what to do. */
+export interface HealthItem {
+  key: HealthItemKey;
+  platform: AdPlatform;
+  state: HealthState;
+  /** What the numbers show, with the numbers. */
+  detail: string;
+  /** What a person does about it; empty when nothing is needed. */
+  action: string;
 }
 
 export interface DashboardOverview {
@@ -86,6 +144,8 @@ export interface DashboardOverview {
     pendingApprovals: number;
     disapprovedAds: number;
   };
+  ingestion: IngestionStatus;
+  health: HealthItem[];
 }
 
 // ---------------------------------------------------------------------------
@@ -261,6 +321,8 @@ export interface CampaignNode {
   /** Ads under the campaign whose ad set is not mirrored (Google, or a gap in the mirror). */
   orphanAds: AdNode[];
   alertCount: number;
+  /** Positiva, Atenção, Negativa… with the numbers behind it (`verdictOf`, in `verdicts.ts`). */
+  verdict: VerdictResult;
 }
 
 export interface DashboardCampaigns {
@@ -347,7 +409,7 @@ export function fatigueOf(
 // Audience and region: the breakdowns
 // ---------------------------------------------------------------------------
 
-export const BREAKDOWN_KINDS = ['placement', 'age_gender', 'region', 'hour'] as const;
+export const BREAKDOWN_KINDS = ['placement', 'age_gender', 'region', 'hour', 'device'] as const;
 export type BreakdownKind = (typeof BREAKDOWN_KINDS)[number];
 
 export const BREAKDOWN_KIND_LABEL: Record<BreakdownKind, string> = {
@@ -355,16 +417,45 @@ export const BREAKDOWN_KIND_LABEL: Record<BreakdownKind, string> = {
   age_gender: 'Idade e gênero',
   region: 'Região',
   hour: 'Hora do dia',
+  device: 'Dispositivo',
+};
+
+/** The platforms' device names, as the screen shows them. Unknown names show as they came. */
+export const DEVICE_LABEL: Record<string, string> = {
+  // Meta: device_platform
+  mobile_app: 'Celular (app)',
+  mobile_web: 'Celular (navegador)',
+  desktop: 'Computador',
+  // Google: segments.device
+  mobile: 'Celular',
+  tablet: 'Tablet',
+  connected_tv: 'TV conectada',
+  other: 'Outro',
+  unknown: 'Não informado',
 };
 
 export interface BreakdownRow {
   kind: BreakdownKind;
-  /** placement: publisher platform · age_gender: age band · region: state · hour: "00".."23". */
+  /** placement: publisher platform · age_gender: age band · region: state · hour: "00".."23" · device: device name. */
   key: string;
   /** placement: position · age_gender: gender · otherwise empty. */
   subKey: string;
   totals: MetricTotals;
 }
+
+/** One cell of the weekday × hour map, from the hourly rows and the day they fell on. */
+export interface HeatCell {
+  /** 0 = Sunday … 6 = Saturday, in the account's timezone. */
+  weekday: number;
+  /** "00".."23". */
+  hour: string;
+  spendCents: number;
+  clicks: number;
+  impressions: number;
+  conversions: number;
+}
+
+export const WEEKDAY_LABEL = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'] as const;
 
 export interface DashboardAudience {
   days: DashboardWindow;
@@ -372,6 +463,8 @@ export interface DashboardAudience {
   until: string;
   platforms: AdPlatform[];
   rows: BreakdownRow[];
+  /** Only cells with any delivery; the screen fills the rest with zeros. */
+  heatmap: HeatCell[];
 }
 
 /** Meta's gender values, as the screen names them. */

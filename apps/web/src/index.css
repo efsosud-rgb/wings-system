@@ -4128,3 +4128,519 @@ a.menu-module-header {
       width 200ms ease-out;
   }
 }
+
+/* ---------- dashboard, part 2: ingestion, health, verdicts, insights ---------- */
+.dash-ingestion {
+  color: var(--wings-muted);
+}
+
+.strip-setup {
+  grid-area: alert;
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 72ch;
+}
+
+.strip-setup code {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+  background: var(--wings-surface);
+  border: 1px solid var(--wings-border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  overflow-wrap: anywhere;
+}
+
+/* State pills: an icon and a word, so the state reads without its colour. */
+.state-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 4px 8px 4px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--state-edge, var(--wings-border));
+  color: var(--state-ink, var(--wings-muted));
+  background: var(--state-wash, transparent);
+  white-space: nowrap;
+}
+
+.state-icon {
+  flex: none;
+}
+
+.state-good {
+  --state-ink: var(--wings-success);
+  --state-edge: rgba(52, 211, 153, 0.35);
+  --state-wash: rgba(52, 211, 153, 0.08);
+}
+
+.state-attention {
+  --state-ink: #fbbf24;
+  --state-edge: rgba(251, 191, 36, 0.35);
+  --state-wash: rgba(251, 191, 36, 0.08);
+}
+
+.state-bad {
+  --state-ink: var(--wings-danger);
+  --state-edge: rgba(248, 113, 113, 0.35);
+  --state-wash: rgba(248, 113, 113, 0.08);
+}
+
+.state-unknown,
+.state-insufficient {
+  --state-ink: var(--wings-muted);
+  --state-edge: var(--wings-border);
+  --state-wash: transparent;
+}
+
+/* Saúde da conta: one column per platform, hairlines between the checks. */
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 0 40px;
+}
+
+.health-platform h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--wings-muted);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--wings-border);
+}
+
+.health-platform ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.health-row {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--wings-border);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.health-row .state-pill {
+  align-self: start;
+  justify-self: start;
+}
+
+.health-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.health-body p {
+  color: var(--wings-muted);
+}
+
+.health-action {
+  color: var(--wings-text);
+}
+
+.health-action span {
+  color: var(--wings-muted);
+}
+
+/* The verdict: a pill that opens into its five reasons. */
+.verdict summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+}
+
+.verdict summary::-webkit-details-marker {
+  display: none;
+}
+
+.verdict summary:focus-visible {
+  outline: 2px solid var(--wings-accent);
+  outline-offset: 2px;
+  border-radius: 999px;
+}
+
+.verdict[open] summary .state-pill {
+  border-color: var(--state-ink, var(--wings-muted));
+}
+
+.verdict-reasons {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 320px;
+  max-width: 460px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: normal;
+  background: var(--wings-card);
+  border: 1px solid var(--wings-border);
+  border-radius: 6px;
+}
+
+.verdict-reason {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 8px;
+  color: var(--wings-muted);
+}
+
+.verdict-reason .state-icon {
+  margin-top: 2px;
+  color: var(--state-ink, var(--wings-muted));
+}
+
+.verdict-reason b {
+  color: var(--wings-text);
+  font-weight: 600;
+}
+
+.verdict-hint {
+  grid-template-columns: 1fr;
+  padding-left: 22px;
+}
+
+.verdict-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin: 0 0 20px;
+}
+
+.verdict-count {
+  text-decoration: none;
+}
+
+.verdict-count:focus-visible {
+  outline: 2px solid var(--wings-accent);
+  outline-offset: 2px;
+  border-radius: 999px;
+}
+
+/* The run bar above the insights and the suggestions. */
+.runbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 0 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--wings-border);
+}
+
+.runbar h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.runbar-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.runbar-action {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex: none;
+}
+
+.runbar-action .btn {
+  width: auto;
+  padding: 8px 16px;
+}
+
+.runbar-action .field-hint,
+.runbar-action .field-error {
+  text-align: right;
+  max-width: 28ch;
+}
+
+/* An insight: a narrow column with what it is, a wide one with what it says. */
+.insights {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--wings-border);
+}
+
+.insight {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 8px 28px;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--wings-border);
+}
+
+.insight-side {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.insight-kind {
+  font-weight: 600;
+  color: var(--wings-text);
+}
+
+.insight-confidence {
+  color: var(--wings-muted);
+}
+
+.confidence-high {
+  color: var(--wings-success);
+}
+
+.confidence-low {
+  color: #fbbf24;
+}
+
+.insight-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 76ch;
+}
+
+.insight-main h3 {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-wrap: balance;
+}
+
+.insight-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.insight-block .cell-sub {
+  display: block;
+}
+
+.insight-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.insight-actions .btn {
+  width: auto;
+  padding: 8px 16px;
+}
+
+.insight-actions .field-hint {
+  flex-basis: 100%;
+}
+
+.insight-history ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--wings-border);
+}
+
+.insight-history-row {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr) minmax(160px, auto);
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--wings-border);
+  font-size: 13px;
+}
+
+.insight-history-row b {
+  font-weight: 600;
+}
+
+.insight-history-row .cell-sub {
+  display: block;
+}
+
+.suggestions {
+  margin-top: 32px;
+}
+
+.suggestions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.suggestion-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.suggestion-actions .btn {
+  min-height: 40px;
+}
+
+/* Configurações: targets and the legend. */
+.targets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 32px;
+}
+
+.target {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--wings-border);
+}
+
+.target h3 {
+  font-size: 15px;
+  font-weight: 600;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.target h3 .cell-sub {
+  font-weight: 400;
+}
+
+.target-current {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+
+.target-current b {
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.target-proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.target-proposal p {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.target-proposal b {
+  font-size: 16px;
+}
+
+.target-proposal .btn,
+.target-actions .btn {
+  width: auto;
+  padding: 6px 12px;
+  font-size: 13px;
+  align-self: flex-start;
+}
+
+.target-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 320px;
+}
+
+.target-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.legend-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  max-width: 76ch;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.legend-list dt {
+  font-weight: 600;
+}
+
+.legend-list dd {
+  color: var(--wings-muted);
+}
+
+.viz-heat .viz-tick-end {
+  text-anchor: end;
+}
+
+.viz-heat rect:focus-visible {
+  stroke: var(--wings-accent);
+  stroke-width: 1.5;
+}
+
+.owned-placeholder {
+  padding-top: 16px;
+  border-top: 1px solid var(--wings-border);
+}
+
+@media (max-width: 720px) {
+  .insight {
+    grid-template-columns: 1fr;
+  }
+
+  .insight-side {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .runbar {
+    flex-direction: column;
+  }
+
+  .runbar-action {
+    align-items: flex-start;
+  }
+
+  .runbar-action .field-hint,
+  .runbar-action .field-error {
+    text-align: left;
+  }
+
+  .insight-history-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .health-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .verdict-reasons {
+    min-width: 0;
+  }
+}

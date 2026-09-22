@@ -16,6 +16,7 @@ import {
   type DashboardPlatforms,
   type DashboardWindow,
   type FormatPerformance,
+  type HeatCell,
   type MetricTotals,
   type MirroredFormat,
   type SpendStrip,
@@ -33,12 +34,17 @@ import {
   adMetricsDaily,
   adSets,
   agentMessages,
+  insightRuns,
   integrationConnections,
   mediaCreditLedger,
 } from '../../../db/schema/index.js';
 import type { Env } from '../../../env.js';
 import { getPeriodState } from '../budget-guard.js';
+import { hasPlatformCredentials } from '../platform/factory.js';
 import { usdToBrlCents } from '../../media/providers/quota.js';
+import { accountHealth } from './health.js';
+import { ingestionStatus } from './ingestion.js';
+import { campaignVerdicts } from './verdicts.js';
 import { addDays, daysBetween, forecastOf, monthOf, windowOf } from './window.js';
 
 /**
@@ -52,9 +58,9 @@ import { addDays, daysBetween, forecastOf, monthOf, windowOf } from './window.js
 
 const PLATFORMS: AdPlatform[] = ['meta', 'google'];
 
-type Account = typeof adAccounts.$inferSelect;
+export type Account = typeof adAccounts.$inferSelect;
 
-async function activeAccounts(db: Database): Promise<Account[]> {
+export async function activeAccounts(db: Database): Promise<Account[]> {
   return db.query.adAccounts.findMany({
     where: and(isNull(adAccounts.archivedAt), inArray(adAccounts.platform, PLATFORMS)),
     orderBy: adAccounts.createdAt,
@@ -94,7 +100,7 @@ function totalsOf(row: SumRow): MetricTotals {
 }
 
 /** Sums of one level over the accounts and days, grouped by entity. */
-async function sumsByEntity(
+export async function sumsByEntity(
   db: Database,
   accountIds: string[],
   level: 'campaign' | 'ad_set' | 'ad',
@@ -202,8 +208,36 @@ function sumOrNull(values: (number | null)[]): number | null {
   return known.length === 0 ? null : known.reduce((a, b) => a + b, 0);
 }
 
+/**
+ * What is missing between "credentials in the environment" and "figures on
+ * the screen", said plainly. On staging the Google strip read "não
+ * configurado" with the credentials set, because no account row had ever
+ * been seeded: `configured` now follows the credentials and this note says
+ * what is left to do.
+ */
+function setupNoteOf(
+  env: Env,
+  platform: AdPlatform,
+  accounts: Account[],
+  latest: Map<string, unknown>,
+): string | null {
+  if (!hasPlatformCredentials(env, platform)) return null;
+  if (accounts.length === 0) {
+    const account =
+      platform === 'google'
+        ? (env.GOOGLE_ADS_CUSTOMER_ID ?? '<id do cliente>')
+        : (env.META_WRITE_ACCOUNT_ID ?? 'act_<id>');
+    return `Credenciais configuradas, mas a conta ainda não foi semeada na ingestão: ingest-cli --seed --platform ${platform} --account ${account} --name "…" --cap <centavos> --usable 70`;
+  }
+  if (accounts.every((account) => !latest.has(account.id))) {
+    return 'Conta semeada; a primeira ingestão ainda não gravou o dia da conta.';
+  }
+  return null;
+}
+
 async function paidStrip(
   db: Database,
+  env: Env,
   platform: AdPlatform,
   accounts: Account[],
   month: ReturnType<typeof monthOf>,
@@ -214,6 +248,7 @@ async function paidStrip(
     latestAccountDays(db, ids),
     dailySpend(db, ids, month.periodMonth, month.today),
   ]);
+  const configured = hasPlatformCredentials(env, platform) || accounts.length > 0;
 
   // Money truth is the guard's own reconciled figure, not the analytics rows.
   const spent = states.reduce((total, state) => total + (state?.spentCents ?? 0), 0);
@@ -231,7 +266,7 @@ async function paidStrip(
   return {
     source: platform,
     unit: 'brl',
-    configured: accounts.length > 0,
+    configured,
     spent,
     forecast: accounts.length > 0 ? forecastOf(spent, month) : null,
     available: sumOrNull(states.map((state) => state?.availableCents ?? null)),
@@ -246,6 +281,7 @@ async function paidStrip(
         ? null
         : new Date(Math.max(...days.map((row) => row.fetchedAt.getTime()))).toISOString(),
     killSwitchEngaged: accounts.some((account) => account.killSwitchEngaged),
+    setupNote: setupNoteOf(env, platform, accounts, latest),
   };
 }
 
@@ -260,8 +296,12 @@ function seriesOf(
 }
 
 /** `created_at` as a São Paulo day, for grouping ledger rows. */
-const ledgerDay = (column: typeof mediaCreditLedger.createdAt | typeof agentMessages.createdAt) =>
-  sql<string>`to_char(${column} at time zone 'America/Sao_Paulo', 'YYYY-MM-DD')`;
+const ledgerDay = (
+  column:
+    | typeof mediaCreditLedger.createdAt
+    | typeof agentMessages.createdAt
+    | typeof insightRuns.startedAt,
+) => sql<string>`to_char(${column} at time zone 'America/Sao_Paulo', 'YYYY-MM-DD')`;
 
 async function kairogenStrip(
   db: Database,
@@ -308,6 +348,7 @@ async function kairogenStrip(
     activeDailyBudget: null,
     refreshedAt: balance?.at ? balance.at.toISOString() : null,
     killSwitchEngaged: false,
+    setupNote: null,
   };
 }
 
@@ -317,14 +358,31 @@ async function aiStrip(
   month: ReturnType<typeof monthOf>,
   monthStart: Date,
 ): Promise<SpendStrip> {
-  const rows = await db
-    .select({
-      day: ledgerDay(agentMessages.createdAt),
-      amount: sql<string>`coalesce(sum(${agentMessages.costMicroUsd}), 0)`,
-    })
-    .from(agentMessages)
-    .where(gte(agentMessages.createdAt, monthStart))
-    .groupBy(ledgerDay(agentMessages.createdAt));
+  // The agent's ledger and the insights generator's, on the same day axis:
+  // both spend through the same key, so the month's AI figure is their sum.
+  const [conversations, generations] = await Promise.all([
+    db
+      .select({
+        day: ledgerDay(agentMessages.createdAt),
+        amount: sql<string>`coalesce(sum(${agentMessages.costMicroUsd}), 0)`,
+      })
+      .from(agentMessages)
+      .where(gte(agentMessages.createdAt, monthStart))
+      .groupBy(ledgerDay(agentMessages.createdAt)),
+    db
+      .select({
+        day: ledgerDay(insightRuns.startedAt),
+        amount: sql<string>`coalesce(sum(${insightRuns.costMicroUsd}), 0)`,
+      })
+      .from(insightRuns)
+      .where(gte(insightRuns.startedAt, monthStart))
+      .groupBy(ledgerDay(insightRuns.startedAt)),
+  ]);
+  const byDay = new Map<string, number>();
+  for (const row of [...conversations, ...generations]) {
+    byDay.set(row.day, (byDay.get(row.day) ?? 0) + Number(row.amount));
+  }
+  const rows = [...byDay].map(([day, amount]) => ({ day, amount: String(amount) }));
   // Millionths of a dollar into cents of reais, at the rate the ledger uses.
   const daily = seriesOf(rows, month).map((point) => ({
     day: point.day,
@@ -347,6 +405,7 @@ async function aiStrip(
     activeDailyBudget: usdToBrlCents(env.AGENT_DAILY_USD, env.BRL_PER_USD),
     refreshedAt: null,
     killSwitchEngaged: false,
+    setupNote: null,
   };
 }
 
@@ -384,22 +443,42 @@ async function mediaStrip(
     activeDailyBudget: null,
     refreshedAt: null,
     killSwitchEngaged: false,
+    setupNote: null,
   };
 }
 
-export async function overview(db: Database, env: Env, now = new Date()): Promise<DashboardOverview> {
+export async function overview(
+  db: Database,
+  env: Env,
+  now = new Date(),
+): Promise<DashboardOverview> {
   const month = monthOf(now);
   const monthStart = new Date(`${month.periodMonth}T00:00:00-03:00`);
   const accounts = await activeAccounts(db);
   const ids = accounts.map((account) => account.id);
 
-  const [meta, google, kairogen, ai, media] = await Promise.all([
-    paidStrip(db, 'meta', accounts.filter((a) => a.platform === 'meta'), month),
-    paidStrip(db, 'google', accounts.filter((a) => a.platform === 'google'), month),
+  const [meta, google, kairogen, ai, media, ingestion, latest] = await Promise.all([
+    paidStrip(
+      db,
+      env,
+      'meta',
+      accounts.filter((a) => a.platform === 'meta'),
+      month,
+    ),
+    paidStrip(
+      db,
+      env,
+      'google',
+      accounts.filter((a) => a.platform === 'google'),
+      month,
+    ),
     kairogenStrip(db, env, month, monthStart),
     aiStrip(db, env, month, monthStart),
     mediaStrip(db, env, month, monthStart),
+    ingestionStatus(db, env, ids, now),
+    latestAccountDays(db, ids),
   ]);
+  const health = await accountHealth(db, accounts, latest, now);
 
   const [alerts] = ids.length
     ? await db
@@ -436,6 +515,8 @@ export async function overview(db: Database, env: Env, now = new Date()): Promis
       pendingApprovals: Number(approvals?.count ?? 0),
       disapprovedAds: Number(disapproved?.count ?? 0),
     },
+    ingestion,
+    health,
   };
 }
 
@@ -488,7 +569,10 @@ export async function platforms(
 // ---------------------------------------------------------------------------
 
 async function creativesByKey(db: Database, accountIds: string[]) {
-  const byKey = new Map<string, { format: MirroredFormat; thumbnailUrl: string | null; title: string | null }>();
+  const byKey = new Map<
+    string,
+    { format: MirroredFormat; thumbnailUrl: string | null; title: string | null }
+  >();
   if (accountIds.length === 0) return byKey;
   const rows = await db.query.adCreatives.findMany({
     where: inArray(adCreatives.adAccountId, accountIds),
@@ -514,25 +598,36 @@ export async function campaigns(
   const accountById = new Map(accounts.map((account) => [account.id, account]));
   if (ids.length === 0) return { days, since: window.since, until: window.until, campaigns: [] };
 
-  const [campaignRows, adSetRows, adRows, creatives, campaignSums, adSetSums, adSums, alertRows] =
-    await Promise.all([
-      db.query.adCampaigns.findMany({ where: inArray(adCampaigns.adAccountId, ids) }),
-      db
-        .select()
-        .from(adSets)
-        .innerJoin(adCampaigns, eq(adCampaigns.id, adSets.campaignId))
-        .where(inArray(adCampaigns.adAccountId, ids))
-        .then((rows) => rows.map((row) => row.ad_sets)),
-      db.query.adAds.findMany({ where: inArray(adAds.adAccountId, ids) }),
-      creativesByKey(db, ids),
-      sumsByEntity(db, ids, 'campaign', window.since, window.until),
-      sumsByEntity(db, ids, 'ad_set', window.since, window.until),
-      sumsByEntity(db, ids, 'ad', window.since, window.until),
-      db
-        .select({ entityExternalId: adAlerts.entityExternalId })
-        .from(adAlerts)
-        .where(and(inArray(adAlerts.adAccountId, ids), isNull(adAlerts.resolvedAt))),
-    ]);
+  const [
+    campaignRows,
+    adSetRows,
+    adRows,
+    creatives,
+    campaignSums,
+    adSetSums,
+    adSums,
+    alertRows,
+    verdicts,
+  ] = await Promise.all([
+    db.query.adCampaigns.findMany({ where: inArray(adCampaigns.adAccountId, ids) }),
+    db
+      .select()
+      .from(adSets)
+      .innerJoin(adCampaigns, eq(adCampaigns.id, adSets.campaignId))
+      .where(inArray(adCampaigns.adAccountId, ids))
+      .then((rows) => rows.map((row) => row.ad_sets)),
+    db.query.adAds.findMany({ where: inArray(adAds.adAccountId, ids) }),
+    creativesByKey(db, ids),
+    sumsByEntity(db, ids, 'campaign', window.since, window.until),
+    sumsByEntity(db, ids, 'ad_set', window.since, window.until),
+    sumsByEntity(db, ids, 'ad', window.since, window.until),
+    db
+      .select({ entityExternalId: adAlerts.entityExternalId })
+      .from(adAlerts)
+      .where(and(inArray(adAlerts.adAccountId, ids), isNull(adAlerts.resolvedAt))),
+    campaignVerdicts(db, days, now),
+  ]);
+  const verdictOf = new Map(verdicts.map((row) => [row.campaignId, row.verdict]));
 
   const adNode = (ad: (typeof adRows)[number]): AdNode => {
     const creative = ad.creativeExternalId
@@ -554,7 +649,8 @@ export async function campaigns(
   // An alert on an ad or an ad set is badged on the campaign above it.
   const campaignOfEntity = new Map<string, string>();
   const campaignExternalById = new Map(campaignRows.map((c) => [c.id, c.externalId]));
-  for (const campaign of campaignRows) campaignOfEntity.set(campaign.externalId, campaign.externalId);
+  for (const campaign of campaignRows)
+    campaignOfEntity.set(campaign.externalId, campaign.externalId);
   for (const adSet of adSetRows) {
     const owner = campaignExternalById.get(adSet.campaignId);
     if (owner) campaignOfEntity.set(adSet.externalId, owner);
@@ -602,6 +698,11 @@ export async function campaigns(
       adSets: adSetNodes,
       orphanAds,
       alertCount: alertCount.get(campaign.externalId) ?? 0,
+      verdict: verdictOf.get(campaign.id) ?? {
+        verdict: 'insufficient',
+        primary: 'ctr',
+        reasons: [],
+      },
     };
   });
 
@@ -664,7 +765,11 @@ export async function creatives(
 
   const byFormat = new Map<MirroredFormat, FormatPerformance>();
   for (const item of list) {
-    const entry = byFormat.get(item.format) ?? { format: item.format, ads: 0, totals: EMPTY_TOTALS };
+    const entry = byFormat.get(item.format) ?? {
+      format: item.format,
+      ads: 0,
+      totals: EMPTY_TOTALS,
+    };
     byFormat.set(item.format, {
       format: item.format,
       ads: entry.ads + 1,
@@ -697,7 +802,41 @@ export async function audience(
     until: window.until,
     platforms: [...new Set(accounts.map((account) => account.platform as AdPlatform))],
   };
-  if (ids.length === 0) return { ...base, rows: [] };
+  if (ids.length === 0) return { ...base, rows: [], heatmap: [] };
+
+  // The weekday × hour map: the hourly rows and the day each fell on. Sunday
+  // is 0, as Postgres counts it.
+  const weekdayOf = sql<string>`extract(dow from ${adMetricsBreakdownDaily.day})::int`;
+  const heatRows = await db
+    .select({
+      weekday: weekdayOf,
+      hour: adMetricsBreakdownDaily.key,
+      spendCents: sql<string>`coalesce(sum(${adMetricsBreakdownDaily.spendCents}), 0)`,
+      impressions: sql<string>`coalesce(sum(${adMetricsBreakdownDaily.impressions}), 0)`,
+      clicks: sql<string>`coalesce(sum(${adMetricsBreakdownDaily.clicks}), 0)`,
+      conversions: sql<string>`coalesce(sum(${adMetricsBreakdownDaily.conversions}), 0)`,
+    })
+    .from(adMetricsBreakdownDaily)
+    .where(
+      and(
+        inArray(adMetricsBreakdownDaily.adAccountId, ids),
+        eq(adMetricsBreakdownDaily.kind, 'hour'),
+        gte(adMetricsBreakdownDaily.day, window.since),
+        lte(adMetricsBreakdownDaily.day, window.until),
+      ),
+    )
+    .groupBy(weekdayOf, adMetricsBreakdownDaily.key);
+  const heatmap: HeatCell[] = heatRows
+    .map((row) => ({
+      weekday: Number(row.weekday),
+      hour: row.hour,
+      spendCents: Number(row.spendCents),
+      impressions: Number(row.impressions),
+      clicks: Number(row.clicks),
+      conversions: Number(row.conversions),
+    }))
+    .filter((cell) => cell.impressions > 0 || cell.spendCents > 0)
+    .sort((a, b) => a.weekday - b.weekday || a.hour.localeCompare(b.hour));
 
   const rows = await db
     .select({
@@ -741,5 +880,6 @@ export async function audience(
         },
       }))
       .sort((a, b) => b.totals.spendCents - a.totals.spendCents),
+    heatmap,
   };
 }

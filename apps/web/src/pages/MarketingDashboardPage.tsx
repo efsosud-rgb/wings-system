@@ -1,4 +1,4 @@
-import { DASHBOARD_WINDOWS, type DashboardWindow } from '@wings/shared';
+import { DASHBOARD_WINDOWS, type DashboardWindow, type IngestionStatus } from '@wings/shared';
 import { useSearchParams } from 'react-router-dom';
 import {
   useDashboardAudience,
@@ -10,29 +10,36 @@ import {
 import { AudienceTab } from '../components/dashboard/AudienceTab.js';
 import { CampaignsTab } from '../components/dashboard/CampaignsTab.js';
 import { CreativesTab } from '../components/dashboard/CreativesTab.js';
-import { since } from '../components/dashboard/format.js';
+import { formatDateTime, formatWhen } from '../components/dashboard/format.js';
+import { InsightsTab } from '../components/dashboard/InsightsTab.js';
 import { OverviewTab } from '../components/dashboard/OverviewTab.js';
+import { OwnedChannelsTab } from '../components/dashboard/OwnedChannelsTab.js';
 import { PlatformsTab } from '../components/dashboard/PlatformsTab.js';
+import { SettingsTab } from '../components/dashboard/SettingsTab.js';
 import { Alert, Button } from '../components/ui.js';
 
 /**
  * Dashboard → Marketing.
  *
  * Everything here is read from data the ingest job already mirrored: opening
- * a tab calls no platform, spends nothing and changes nothing. There is no
- * button on this screen that acts on an ad account; suggestions that become
- * requests are part 2, and they will go through the approval gate like every
- * other change.
+ * a tab calls no platform, spends nothing and changes nothing. The only
+ * buttons that act are the ones behind a person's click, and each of those
+ * goes through the approval gate like every other change: "Criar pedido" on
+ * an insight makes a request in that person's name, marked "sugerido pela
+ * IA"; "Abrir no construtor" only fills the studio's form.
  *
  * The tab and the period live in the address, so a view can be sent as a link.
  */
 
 const TABS = [
-  { key: 'visao-geral', label: 'Visão geral' },
-  { key: 'plataformas', label: 'Por plataforma' },
-  { key: 'campanhas', label: 'Campanhas' },
-  { key: 'criativos', label: 'Criativos' },
-  { key: 'publico', label: 'Público e região' },
+  { key: 'visao-geral', label: 'Visão geral', windowed: false },
+  { key: 'plataformas', label: 'Por plataforma', windowed: true },
+  { key: 'campanhas', label: 'Campanhas', windowed: true },
+  { key: 'criativos', label: 'Criativos', windowed: true },
+  { key: 'publico', label: 'Público e região', windowed: true },
+  { key: 'insights', label: 'Insights e sugestões', windowed: false },
+  { key: 'canais-proprios', label: 'Canais próprios', windowed: true },
+  { key: 'configuracoes', label: 'Configurações', windowed: false },
 ] as const;
 type TabKey = (typeof TABS)[number]['key'];
 
@@ -50,12 +57,30 @@ function Loading({ query, children }: { query: { isLoading: boolean; isError: bo
   return <>{children}</>;
 }
 
+/** One line: when the ingestion last ran, how it went, and when the next one is due. */
+function ingestionLine(ingestion: IngestionStatus): string {
+  const last = ingestion.lastRunAt
+    ? `Última ingestão ${formatDateTime(ingestion.lastRunAt)}${
+        ingestion.lastRunStatus === 'running'
+          ? ' (em andamento)'
+          : ingestion.lastRunStatus === 'failed'
+            ? ` (falhou em ${ingestion.lastRunFailures.map((failure) => `${failure.step}, ${failure.platform}`).join('; ') || 'uma etapa'})`
+            : ' (ok)'
+      }`
+    : 'Nenhuma ingestão registrada ainda';
+  const next = ingestion.nextRunAt
+    ? `próxima ${formatWhen(ingestion.nextRunAt)}`
+    : 'agendamento não informado ao sistema (ADS_INGEST_CRON)';
+  return `${last} · ${next}.`;
+}
+
 export function MarketingDashboardPage() {
   const [params, setParams] = useSearchParams();
   const tabParam = params.get('aba');
   const tab: TabKey = isTab(tabParam) ? tabParam : 'visao-geral';
   const daysParam = Number(params.get('dias'));
   const days: DashboardWindow = isWindow(daysParam) ? daysParam : 7;
+  const windowed = TABS.find((item) => item.key === tab)?.windowed ?? false;
 
   const overview = useDashboardOverview();
   const platforms = useDashboardPlatforms(days);
@@ -69,7 +94,7 @@ export function MarketingDashboardPage() {
     setParams(next, { replace: true });
   };
 
-  const refreshedAt = platforms.data?.platforms.metricsFetchedAt ?? null;
+  const ingestion = overview.data?.overview.ingestion ?? null;
 
   return (
     <>
@@ -77,11 +102,11 @@ export function MarketingDashboardPage() {
         <div>
           <h1>Dashboard de marketing</h1>
           <p>
-            Gastos, saldos e desempenho lidos das plataformas
-            {refreshedAt ? `, atualizados ${since(refreshedAt)}` : ''}. Nada aqui altera uma conta.
+            Gastos, saldos e desempenho lidos das plataformas pela ingestão. Nada aqui altera uma conta.
+            {ingestion && <span className="dash-ingestion"> {ingestionLine(ingestion)}</span>}
           </p>
         </div>
-        {tab !== 'visao-geral' && (
+        {windowed && (
           <div className="window-picker" role="group" aria-label="Período">
             {DASHBOARD_WINDOWS.map((option) => (
               <Button
@@ -96,6 +121,13 @@ export function MarketingDashboardPage() {
           </div>
         )}
       </header>
+
+      {ingestion?.overdue && (
+        <Alert kind="warning">
+          A ingestão agendada não rodou desde {formatDateTime(ingestion.lastRunAt)}: confira a tarefa
+          agendada no Coolify. Os números desta tela param nessa data.
+        </Alert>
+      )}
 
       <nav className="dash-tabs" aria-label="Seções do dashboard">
         {TABS.map((item) => (
@@ -126,6 +158,9 @@ export function MarketingDashboardPage() {
       {tab === 'publico' && (
         <Loading query={audience}>{audience.data && <AudienceTab data={audience.data.audience} />}</Loading>
       )}
+      {tab === 'insights' && <InsightsTab />}
+      {tab === 'canais-proprios' && <OwnedChannelsTab days={days} />}
+      {tab === 'configuracoes' && <SettingsTab />}
     </>
   );
 }

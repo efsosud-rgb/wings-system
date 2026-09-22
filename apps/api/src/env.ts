@@ -5,6 +5,7 @@ import {
   DEFAULT_BRL_PER_USD,
   DEFAULT_KAIROGEN_DAILY_CREDITS_PER_USER,
   DEFAULT_DRIVE_MAX_FILE_BYTES,
+  DEFAULT_INSIGHTS_DAILY_USD,
   DEFAULT_KAIROGEN_MONTHLY_CREDITS,
   DEFAULT_MEDIA_MONTHLY_BRL,
 } from '@wings/shared';
@@ -218,6 +219,26 @@ const schema = z.object({
     .default(DEFAULT_AGENT_MODEL)
     .or(z.literal('').transform(() => DEFAULT_AGENT_MODEL)),
   AGENT_DAILY_USD: z.coerce.number().positive().max(100).default(DEFAULT_AGENT_DAILY_USD),
+  /**
+   * The dashboard's insights and campaign suggestions: the same OpenRouter key
+   * and model, under a ceiling of their own, in US dollars per day for the
+   * whole company (scheduled and on-demand runs alike).
+   */
+  INSIGHTS_DAILY_USD: z.coerce
+    .number()
+    .positive()
+    .max(100)
+    .default(DEFAULT_INSIGHTS_DAILY_USD)
+    .or(z.literal('').transform(() => DEFAULT_INSIGHTS_DAILY_USD)),
+  /**
+   * The cron expression (5 fields, America/Sao_Paulo) the Coolify scheduled
+   * task runs ingest-cli with. The API only reads it, to tell the screen when
+   * the next ingestion is due and when one is overdue; it schedules nothing.
+   */
+  ADS_INGEST_CRON: optionalString.refine(
+    (value) => value === undefined || value.trim().split(/\s+/).length === 5,
+    'must be a 5-field cron expression',
+  ),
   ADS_APPROVAL_ADMIN_PHONES: optionalString,
   ADS_APPROVAL_DIRETORIA_PHONES: optionalString,
 

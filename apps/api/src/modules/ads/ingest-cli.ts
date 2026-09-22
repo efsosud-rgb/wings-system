@@ -9,6 +9,15 @@ import { formatBrl } from './platform/money.js';
 import { createPlatformClient } from './platform/factory.js';
 import { enforceReconciliationFreshness, periodMonthOf } from './reconcile.js';
 import { seedAdAccount } from './seed-account.js';
+import { WordPressClient } from '../../lib/wordpress.js';
+import { syncBlogPosts } from '../site/blog-sync.js';
+import {
+  accountRecordOf,
+  finishIngestRun,
+  startIngestRun,
+  type IngestRunAccount,
+  type IngestRunSite,
+} from './ingest-runs.js';
 
 /**
  * The job the Coolify scheduled task runs.
@@ -23,7 +32,14 @@ import { seedAdAccount } from './seed-account.js';
  *   node dist/modules/ads/ingest-cli.js --seed --platform google --account 4268586278 \
  *        --name "…" --cap 250000 --usable 70       # --cap is in cents
  *   node dist/modules/ads/ingest-cli.js --days 30  # wider metrics window
+ *   node dist/modules/ads/ingest-cli.js --manual   # from a shell, not the scheduled task
  *   node dist/modules/ads/ingest-cli.js --archive act_… --reason "…"
+ *
+ * Every run writes a row to `ingest_runs` when it starts and when it ends, so
+ * the dashboard can say when the last ingestion was, what failed and whether
+ * the scheduled one is overdue. The blog mirror (Canais próprios) is a step
+ * of the same run, non-fatal: a site that does not answer never costs an ad
+ * account its reconciliation.
  */
 
 function arg(name: string): string | undefined {
@@ -91,6 +107,13 @@ async function main() {
       throw new Error('No active ad accounts configured. Run once with --seed --account act_…');
     }
 
+    const runId = await startIngestRun(db, {
+      trigger: flag('manual') ? 'manual' : 'scheduled',
+      since,
+      now,
+    });
+    const recorded: IngestRunAccount[] = [];
+
     // Each account is its own failure domain: one that throws is reported and
     // the rest are still served. See ingest-cycle.ts.
     const cycle = await runIngestionCycle(db, accounts, {
@@ -104,6 +127,7 @@ async function main() {
       now,
       notifier: createAlertNotifier(env, db),
       onAccountDone: async (result) => {
+        recorded.push(accountRecordOf(result));
         console.warn(`\n${result.account.platform}:${result.account.externalId}`);
         if (result.status === 'skipped') {
           console.warn('  sem credenciais para esta conta — pulando');
@@ -165,6 +189,35 @@ async function main() {
       },
     });
     const failures = cycle.failed;
+
+    // The blog mirror for Canais próprios. Reads only; a failure is recorded
+    // on the run and changes nothing else.
+    let site: IngestRunSite | null = null;
+    if (env.WORDPRESS_BASE_URL && env.WORDPRESS_USERNAME && env.WORDPRESS_APP_PASSWORD) {
+      try {
+        const synced = await syncBlogPosts(
+          db,
+          new WordPressClient({
+            baseUrl: env.WORDPRESS_BASE_URL,
+            username: env.WORDPRESS_USERNAME,
+            applicationPassword: env.WORDPRESS_APP_PASSWORD,
+          }),
+          now,
+        );
+        site = { status: 'ok', posts: synced.posts };
+        console.warn(`\nblog: ${synced.posts} post(s) espelhado(s)`);
+      } catch (error) {
+        site = { status: 'failed', error: error instanceof Error ? error.name : 'unknown' };
+        console.error('\nblog: falhou ao espelhar os posts; o restante do ciclo não foi afetado');
+      }
+    }
+
+    await finishIngestRun(db, runId, {
+      status: failures > 0 ? 'failed' : 'ok',
+      accounts: recorded,
+      site,
+      error: failures > 0 ? `${failures} conta(s) falharam` : null,
+    });
 
     // Dead-man switch. Accounts served a moment ago are fresh by construction;
     // what this catches is the account that has been failing cycle after cycle
