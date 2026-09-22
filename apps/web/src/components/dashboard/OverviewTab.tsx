@@ -2,6 +2,8 @@ import {
   AD_PLATFORM_LABEL,
   HEALTH_ITEM_LABEL,
   HEALTH_STATE_LABEL,
+  KILL_SWITCH_RELEASE_HOWTO,
+  KILL_SWITCH_RULE_LABEL,
   SPEND_SOURCE_LABEL,
   type AdPlatform,
   type DashboardOverview,
@@ -11,7 +13,7 @@ import {
 import { Link } from 'react-router-dom';
 import { Alert } from '../ui.js';
 import { DailyColumns, MonthMeter } from './charts.js';
-import { formatAmount, formatMonth, since } from './format.js';
+import { formatAmount, formatDateTime, formatMonth, since } from './format.js';
 import { StatePill, stateOfHealth } from './icons.js';
 
 /**
@@ -70,8 +72,19 @@ function Strip({ strip }: { strip: SpendStrip }) {
 
       {strip.killSwitchEngaged && (
         <Alert kind="error">
-          Trava de segurança acionada: nenhuma alteração pode ser reservada ou executada nesta
-          conta até a revisão.
+          <strong>
+            Trava de segurança acionada
+            {strip.killSwitch?.engagedAt ? ` em ${formatDateTime(strip.killSwitch.engagedAt)}` : ''}
+            .
+          </strong>{' '}
+          {strip.killSwitch?.reason ? `${strip.killSwitch.reason}. ` : ''}
+          Regra: {KILL_SWITCH_RULE_LABEL[strip.killSwitch?.rule ?? 'other']}. Nenhuma alteração é
+          reservada ou executada nesta conta até a liberação.
+          <br />
+          {KILL_SWITCH_RELEASE_HOWTO.replace(
+            '<conta>',
+            strip.killSwitch?.accountExternalId ?? '<conta>',
+          )}
         </Alert>
       )}
       {strip.setupNote && <SetupNote note={strip.setupNote} />}
@@ -185,9 +198,7 @@ export function OverviewTab({ overview }: { overview: DashboardOverview }) {
           <span>Alertas abertos</span>
           <strong className={counts.criticalAlerts > 0 ? 'error-text' : ''}>
             {counts.openAlerts}
-            {counts.criticalAlerts > 0 && (
-              <small> {counts.criticalAlerts} crítico(s)</small>
-            )}
+            {counts.criticalAlerts > 0 && <small> {counts.criticalAlerts} crítico(s)</small>}
           </strong>
         </div>
         <div>

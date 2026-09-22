@@ -1,10 +1,12 @@
 import {
+  STUDIO_ASPECTS,
   STUDIO_POSITIONS,
   STUDIO_TRANSITIONS,
+  type StudioAspect,
   type StudioPosition,
   type StudioTransition,
 } from '@wings/shared';
-import type { Edit } from '@wings/studio';
+import type { Edit, EditConfig } from '@wings/studio';
 import type {
   ClipPatch,
   SelectedClip,
@@ -38,6 +40,44 @@ export interface DocTrack {
 export interface EditDoc {
   timeline?: { tracks?: DocTrack[]; background?: string };
   output?: { size?: { width: number; height: number } };
+}
+
+/**
+ * The document a new project starts from: no track, and the format as width
+ * and height only. `STUDIO_ASPECTS` carries a label for the screen, and the
+ * core's schema is strict about `output.size`, so the label must never leak
+ * into it (on staging it did, and the editor refused to open).
+ */
+export function emptyEdit(aspect: StudioAspect): EditConfig {
+  const { width, height } = STUDIO_ASPECTS[aspect];
+  return {
+    timeline: { background: '#000000', tracks: [] },
+    output: { format: 'mp4', fps: 30, size: { width, height } },
+  } as unknown as EditConfig;
+}
+
+/** A saved document with only what the core's `output.size` accepts. */
+export function withCleanSize<T extends { output?: unknown }>(doc: T): T {
+  const output = doc.output as { size?: Record<string, unknown> } | undefined;
+  const size = output?.size;
+  if (size && typeof size === 'object') {
+    output.size = { width: size['width'], height: size['height'] };
+  }
+  return doc;
+}
+
+/**
+ * The core validates with Zod and throws the issues as a JSON string. Nobody
+ * should read that on a screen: the person gets one sentence and what to do,
+ * the console gets the detail.
+ */
+export function friendlyCoreError(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/^\s*\[\s*\{[\s\S]*"code"/.test(message)) {
+    console.error('studio core validation', message);
+    return 'O projeto não pôde ser montado: a linha do tempo ou o formato estão fora do que o editor aceita. Crie um projeto novo ou abra outro arquivo do Drive.';
+  }
+  return error instanceof Error && message ? message : fallback;
 }
 
 export const WINGS_ORANGE = '#e95228';

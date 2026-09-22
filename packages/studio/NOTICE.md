@@ -40,6 +40,10 @@ Network access that remains, by design: Google Fonts (`fonts.gstatic.com`) for
 the font picker, and whatever URLs the host app puts in the edit (Drive links).
 Nothing in this package calls a Shotstack service.
 
+- `src/core/schemas/index.ts`: `EditSchema` accepts an empty `timeline.tracks`
+  (upstream requires one track), so a project can start with nothing on it.
+  `ResolvedEditSchema` is unchanged.
+
 ## Bringing upstream changes
 
 ```bash

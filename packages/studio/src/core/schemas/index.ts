@@ -142,7 +142,6 @@ export interface NumericKeyframe {
 
 // Re-export external schemas with SDK naming convention
 export {
-	editSchema as EditSchema,
 	timelineSchema as TimelineSchema,
 	trackSchema as TrackSchema,
 	clipSchema as ClipSchema,
@@ -178,6 +177,15 @@ export const OutputFpsSchema = outputSchema.shape.fps.unwrap(); // unwrap option
 export const OutputResolutionSchema = outputSchema.shape.resolution;
 export const OutputAspectRatioSchema = outputSchema.shape.aspectRatio;
 export const HexColorSchema = z.string().regex(/^#[0-9A-Fa-f]{6}$|^#[0-9A-Fa-f]{8}$/);
+
+// Wings: an editor that has just opened holds no track yet, and the person
+// builds the piece from nothing. Upstream's editSchema (and the Shotstack API
+// behind it) require at least one track, which made a new project invalid
+// before the first clip was added. ResolvedEditSchema keeps the upstream rule
+// for documents that have been resolved.
+export const EditSchema = editSchema.extend({
+	timeline: timelineSchema.extend({ tracks: z.array(trackSchema) })
+});
 
 // ─── Resolved Zod Schemas ───────────────────────────────────────────────────
 // Extended schemas that accept the SDK's internal `id` field on clips.

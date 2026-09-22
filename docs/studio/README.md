@@ -23,6 +23,13 @@ ao original está em `packages/studio/NOTICE.md`.
 | Direita            | Propriedades do item selecionado (posição, tamanho, opacidade, transição, fonte, cor, volume) e, dobrado embaixo, o Agente de Edição (aberto por padrão em telas largas, lembrado no navegador).                                                                                                                                                                                             |
 | Embaixo            | a linha do tempo, quando a peça é vídeo, com o botão "Legendar"; o painel de camadas, quando a peça é imagem.                                                                                                                                                                                                                                                                                |
 
+**Um projeto começa vazio.** O esquema do núcleo (fork) aceita `timeline.tracks`
+sem nenhuma trilha (`EditSchema`, ver `packages/studio/NOTICE.md`), e o
+documento inicial leva em `output.size` só largura e altura: o rótulo do
+formato fica na tela. Uma recusa do núcleo nunca aparece como JSON: a pessoa
+lê uma frase com o que fazer, e o detalhe vai para o console
+(`friendlyCoreError`).
+
 **Imagem na mesma tela.** Uma peça começa como imagem ou vídeo ("Novo"). Como
 imagem, a tela tem camadas (imagem, texto, logo, forma) em vez de linha do
 tempo; trocar o formato recorta a imagem de base para o novo tamanho

@@ -29,6 +29,9 @@ import {
   captionClip,
   clipFor,
   dataUrlToBlob,
+  emptyEdit,
+  friendlyCoreError,
+  withCleanSize,
   hasPlayableMedia,
   kindOfMime,
   layersOf,
@@ -72,12 +75,6 @@ interface Core {
   controls: Controls;
   exporter: VideoExporter;
 }
-
-const emptyEdit = (aspect: StudioAspect): EditConfig =>
-  ({
-    timeline: { background: '#000000', tracks: [] },
-    output: { format: 'mp4', fps: 30, size: STUDIO_ASPECTS[aspect] },
-  }) as unknown as EditConfig;
 
 /**
  * A still is captured at the playhead, so in image mode every layer starts
@@ -219,7 +216,7 @@ export function useStudioSession(): StudioSession {
       setFailure(
         error instanceof Error && error.name === 'WebGLUnsupportedError'
           ? 'Este navegador não tem WebGL, que a prévia precisa. Tente o Chrome ou o Edge.'
-          : errorText(error, 'O editor não conseguiu abrir.'),
+          : friendlyCoreError(error, 'O editor não conseguiu abrir.'),
       );
     });
     return () => {
@@ -333,7 +330,7 @@ export function useStudioSession(): StudioSession {
     try {
       await run();
     } catch (error) {
-      setNotice({ kind: 'error', text: errorText(error, fallback) });
+      setNotice({ kind: 'error', text: friendlyCoreError(error, fallback) });
     } finally {
       setBusy(null);
     }
@@ -364,7 +361,7 @@ export function useStudioSession(): StudioSession {
           clip.asset.src = (await resolve({ id, ...meta })).url;
         }
       }
-      await core().edit.loadEdit(doc as unknown as EditConfig);
+      await core().edit.loadEdit(withCleanSize(doc) as unknown as EditConfig);
       setAspectState(project.aspect);
       setProjectName(project.name);
       setClientId(project.clientId);

@@ -2,6 +2,7 @@ import {
   addTotals,
   EMPTY_TOTALS,
   fatigueOf,
+  killSwitchRuleOf,
   ratiosOf,
   type AdNode,
   type AdPlatform,
@@ -17,6 +18,7 @@ import {
   type DashboardWindow,
   type FormatPerformance,
   type HeatCell,
+  type KillSwitchState,
   type MetricTotals,
   type MirroredFormat,
   type SpendStrip,
@@ -30,6 +32,7 @@ import {
   adAlerts,
   adCampaigns,
   adCreatives,
+  adGuardrailEvents,
   adMetricsBreakdownDaily,
   adMetricsDaily,
   adSets,
@@ -235,6 +238,35 @@ function setupNoteOf(
   return null;
 }
 
+/**
+ * Why the kill switch is engaged, from the account row and the guard's own
+ * event: `engageKillSwitch` writes the reason on the account and a
+ * `kill_switch_engaged` event carrying it (a refused attempt writes the same
+ * kind with `attempted` instead, and is not the trip).
+ */
+async function killSwitchOf(db: Database, accounts: Account[]): Promise<KillSwitchState | null> {
+  const engaged = accounts.find((account) => account.killSwitchEngaged);
+  if (!engaged) return null;
+  const [event] = await db
+    .select({ createdAt: adGuardrailEvents.createdAt })
+    .from(adGuardrailEvents)
+    .where(
+      and(
+        eq(adGuardrailEvents.adAccountId, engaged.id),
+        eq(adGuardrailEvents.kind, 'kill_switch_engaged'),
+        sql`${adGuardrailEvents.detail} ? 'reason'`,
+      ),
+    )
+    .orderBy(desc(adGuardrailEvents.createdAt))
+    .limit(1);
+  return {
+    rule: killSwitchRuleOf(engaged.killSwitchReason),
+    reason: engaged.killSwitchReason,
+    engagedAt: event?.createdAt.toISOString() ?? null,
+    accountExternalId: engaged.externalId,
+  };
+}
+
 async function paidStrip(
   db: Database,
   env: Env,
@@ -281,6 +313,7 @@ async function paidStrip(
         ? null
         : new Date(Math.max(...days.map((row) => row.fetchedAt.getTime()))).toISOString(),
     killSwitchEngaged: accounts.some((account) => account.killSwitchEngaged),
+    killSwitch: await killSwitchOf(db, accounts),
     setupNote: setupNoteOf(env, platform, accounts, latest),
   };
 }
@@ -348,6 +381,7 @@ async function kairogenStrip(
     activeDailyBudget: null,
     refreshedAt: balance?.at ? balance.at.toISOString() : null,
     killSwitchEngaged: false,
+    killSwitch: null,
     setupNote: null,
   };
 }
@@ -405,6 +439,7 @@ async function aiStrip(
     activeDailyBudget: usdToBrlCents(env.AGENT_DAILY_USD, env.BRL_PER_USD),
     refreshedAt: null,
     killSwitchEngaged: false,
+    killSwitch: null,
     setupNote: null,
   };
 }
@@ -443,6 +478,7 @@ async function mediaStrip(
     activeDailyBudget: null,
     refreshedAt: null,
     killSwitchEngaged: false,
+    killSwitch: null,
     setupNote: null,
   };
 }

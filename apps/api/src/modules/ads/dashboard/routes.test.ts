@@ -26,7 +26,7 @@ import { createTestDatabase, type TestDatabase } from '../../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../../test/factories.js';
 import { runAlerts } from '../alerts.js';
 import { ingestBreakdown, recordAccountDay } from '../breakdowns.js';
-import { openPeriod } from '../budget-guard.js';
+import { engageKillSwitch, openPeriod, releaseKillSwitch } from '../budget-guard.js';
 import { ensureAdAccount, ingestMetrics, syncAds } from '../metrics.js';
 import { fakeGoogleApi } from '../platform/fake-google-api.js';
 import { FakeMetaClient } from '../platform/fake-meta-client.js';
@@ -325,6 +325,7 @@ describe('the overview', () => {
     expect(meta.activeDailyBudget).toBe(10_000);
     expect(meta.forecast).toBeGreaterThan(meta.spent);
     expect(meta.killSwitchEngaged).toBe(false);
+    expect(meta.killSwitch).toBeNull();
     expect(meta.daily.map((point) => point.day)).toContain('2026-09-15');
     expect(meta.daily.find((point) => point.day === '2026-09-15')?.amount).toBe(10_000);
     expect(meta.daily.find((point) => point.day === '2026-09-10')?.amount).toBe(0);
@@ -580,5 +581,26 @@ describe('audience and region', () => {
     expect(saturday.find((cell) => cell.hour === '20')?.spendCents).toBe(4000);
     expect(result.heatmap.every((cell) => cell.impressions > 0)).toBe(true);
     expect(result.heatmap.some((cell) => cell.weekday === 1)).toBe(true);
+  });
+});
+
+describe('the kill switch on the strip', () => {
+  it('carries the rule, the reason and when it tripped', async () => {
+    await engageKillSwitch(
+      db,
+      metaAccountId,
+      'Orçamentos na plataforma excedem o limite planejado do mês',
+    );
+    try {
+      const overview = await read<DashboardOverview>('/ads/dashboard/overview', 'overview');
+      const meta = overview.strips.find((strip) => strip.source === 'meta');
+      expect(meta?.killSwitchEngaged).toBe(true);
+      expect(meta?.killSwitch?.rule).toBe('budgets_exceed_plan');
+      expect(meta?.killSwitch?.reason).toContain('excedem o limite');
+      expect(meta?.killSwitch?.engagedAt).toBeTruthy();
+      expect(meta?.killSwitch?.accountExternalId).toMatch(/^act_/);
+    } finally {
+      await releaseKillSwitch(db, metaAccountId, 'teste');
+    }
   });
 });

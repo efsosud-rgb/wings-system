@@ -88,7 +88,12 @@ teto. Kairogen conta em créditos contra `KAIROGEN_MONTHLY_CREDITS`, com o
 cost_micro_usd` convertido por `BRL_PER_USD`; não tem teto mensal, só o
 diário por pessoa (`AGENT_DAILY_USD`), mostrado como linha. Provedores de
 mídia somam `brl_cents_delta` do ledger contra `MEDIA_MONTHLY_BRL`. Uma fonte
-sem credencial diz "não configurado" em vez de mostrar zeros.
+sem credencial diz "não configurado" em vez de mostrar zeros. Com a trava de
+segurança acionada, a faixa diz quando (o evento `kill_switch_engaged` do
+guardião), o motivo que ele escreveu, qual regra disparou
+(`killSwitchRuleOf`, em `packages/shared`) e como uma pessoa libera
+(`ops-cli release-kill-switch`, recusado enquanto houver alteração com
+resultado desconhecido; ver `docs/ads/travas.md`).
 
 **Por plataforma.** Gasto por dia das duas plataformas numa linha e a tabela
 com as dez métricas, cada uma com a variação contra o período anterior. A
