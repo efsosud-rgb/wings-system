@@ -16,6 +16,7 @@ import { adsRoutes } from './modules/ads/routes.js';
 import type { AgentLlm } from './modules/agent/llm.js';
 import { agentRoutes } from './modules/agent/routes.js';
 import { clientRoutes } from './modules/clients/routes.js';
+import { insightsRoutes } from './modules/insights/routes.js';
 import { driveBlobRoutes, driveRoutes } from './modules/drive/routes.js';
 import { kairogenRoutes } from './modules/integrations/kairogen/routes.js';
 import { mediaRoutes } from './modules/media/routes.js';
@@ -145,6 +146,7 @@ export async function buildApp(deps: {
   await app.register(creativeRoutes);
   await app.register(audienceRoutes);
   await app.register(agentRoutes);
+  await app.register(insightsRoutes);
   await app.register(clientRoutes);
   await app.register(driveRoutes);
   await app.register(driveBlobRoutes);

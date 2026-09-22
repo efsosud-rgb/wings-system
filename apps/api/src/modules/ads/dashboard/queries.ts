@@ -52,9 +52,9 @@ import { addDays, daysBetween, forecastOf, monthOf, windowOf } from './window.js
 
 const PLATFORMS: AdPlatform[] = ['meta', 'google'];
 
-type Account = typeof adAccounts.$inferSelect;
+export type Account = typeof adAccounts.$inferSelect;
 
-async function activeAccounts(db: Database): Promise<Account[]> {
+export async function activeAccounts(db: Database): Promise<Account[]> {
   return db.query.adAccounts.findMany({
     where: and(isNull(adAccounts.archivedAt), inArray(adAccounts.platform, PLATFORMS)),
     orderBy: adAccounts.createdAt,
@@ -94,7 +94,7 @@ function totalsOf(row: SumRow): MetricTotals {
 }
 
 /** Sums of one level over the accounts and days, grouped by entity. */
-async function sumsByEntity(
+export async function sumsByEntity(
   db: Database,
   accountIds: string[],
   level: 'campaign' | 'ad_set' | 'ad',
