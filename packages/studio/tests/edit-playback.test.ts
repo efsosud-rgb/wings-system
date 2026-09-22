@@ -1,0 +1,474 @@
+/**
+ * Edit Class Playback Tests
+ *
+ * Tests the playback state machine: play(), pause(), seek(), stop(), and update()
+ * These methods control timeline playback and emit events for UI synchronization.
+ */
+
+import { Edit } from "@core/edit-session";
+import type { EventEmitter } from "@core/events/event-emitter";
+import { ms, sec } from "@core/timing/types";
+
+// Mock pixi-filters (must be before pixi.js since it extends pixi classes)
+vi.mock("pixi-filters", () => ({
+	AdjustmentFilter: vi.fn().mockImplementation(() => ({})),
+	BloomFilter: vi.fn().mockImplementation(() => ({})),
+	GlowFilter: vi.fn().mockImplementation(() => ({})),
+	OutlineFilter: vi.fn().mockImplementation(() => ({})),
+	DropShadowFilter: vi.fn().mockImplementation(() => ({}))
+}));
+
+// Mock pixi.js to prevent WebGL initialization
+vi.mock("pixi.js", async () => {
+	const createMockContainer = (): Record<string, unknown> => {
+		const children: unknown[] = [];
+		return {
+			children,
+			sortableChildren: true,
+			parent: null as unknown,
+			label: null as string | null,
+			zIndex: 0,
+			visible: true,
+			scale: { set: vi.fn(), x: 1, y: 1 },
+			pivot: { set: vi.fn(), x: 0, y: 0 },
+			position: { set: vi.fn(), x: 0, y: 0 },
+			addChild: vi.fn((child: { parent?: unknown }) => {
+				children.push(child);
+				if (typeof child === "object" && child !== null) {
+					// eslint-disable-next-line no-param-reassign -- Intentional mock of Pixi.js Container behavior
+					child.parent = createMockContainer();
+				}
+				return child;
+			}),
+			removeChild: vi.fn((child: unknown) => {
+				const idx = children.indexOf(child);
+				if (idx !== -1) children.splice(idx, 1);
+				return child;
+			}),
+			removeChildAt: vi.fn(),
+			getChildByLabel: vi.fn(() => null),
+			getChildIndex: vi.fn(() => 0),
+			destroy: vi.fn(),
+			setMask: vi.fn()
+		};
+	};
+
+	const createMockGraphics = (): Record<string, unknown> => ({
+		fillStyle: {},
+		rect: vi.fn().mockReturnThis(),
+		fill: vi.fn().mockReturnThis(),
+		clear: vi.fn().mockReturnThis(),
+		destroy: vi.fn()
+	});
+
+	return {
+		// eslint-disable-next-line global-require, @typescript-eslint/no-require-imports
+		...(await import("./helpers/pixi-mock-filters")).pixiFilterStubs,
+		Container: vi.fn().mockImplementation(createMockContainer),
+		Graphics: vi.fn().mockImplementation(createMockGraphics),
+		Sprite: vi.fn().mockImplementation(() => ({
+			texture: {},
+			width: 100,
+			height: 100,
+			parent: null,
+			destroy: vi.fn()
+		})),
+		Texture: { from: vi.fn() },
+		Assets: { load: vi.fn(), unload: vi.fn(), cache: { has: vi.fn().mockReturnValue(false) } },
+		ColorMatrixFilter: vi.fn(() => ({ negative: vi.fn() }))
+	};
+});
+
+// Mock AssetLoader
+vi.mock("@loaders/asset-loader", () => ({
+	AssetLoader: vi.fn().mockImplementation(() => ({
+		load: vi.fn().mockResolvedValue({}),
+		unload: vi.fn(),
+		getProgress: vi.fn().mockReturnValue(100),
+		incrementRef: vi.fn(),
+		decrementRef: vi.fn().mockReturnValue(true),
+		loadTracker: {
+			on: vi.fn(),
+			off: vi.fn()
+		}
+	}))
+}));
+
+// Mock LumaMaskController
+vi.mock("@core/luma-mask-controller", () => ({
+	LumaMaskController: vi.fn().mockImplementation(() => ({
+		initialize: vi.fn(),
+		update: vi.fn(),
+		dispose: vi.fn(),
+		cleanupForPlayer: vi.fn(),
+		getActiveMaskCount: vi.fn().mockReturnValue(0)
+	}))
+}));
+
+// Mock TextPlayer font cache
+vi.mock("@canvas/players/text-player", () => ({
+	TextPlayer: {
+		resetFontCache: vi.fn()
+	}
+}));
+
+// Mock AlignmentGuides
+vi.mock("@canvas/system/alignment-guides", () => ({
+	AlignmentGuides: vi.fn().mockImplementation(() => ({
+		drawCanvasGuide: vi.fn(),
+		drawClipGuide: vi.fn(),
+		clear: vi.fn()
+	}))
+}));
+
+describe("Edit Playback", () => {
+	let edit: Edit;
+	let events: EventEmitter;
+	let emitSpy: MockInstance;
+	let mockNowMs: number;
+	let nowSpy: MockInstance;
+
+	beforeEach(async () => {
+		// Playback advances by real wall-clock time, so drive a controllable clock.
+		mockNowMs = 0;
+		nowSpy = vi.spyOn(performance, "now").mockImplementation(() => mockNowMs);
+
+		// Create Edit instance from template
+		edit = new Edit({
+			timeline: {
+				tracks: [{ clips: [{ asset: { type: "image", src: "https://example.com/image.jpg" }, start: 0, length: 1 }] }]
+			},
+			output: { size: { width: 1920, height: 1080 }, format: "mp4" }
+		});
+
+		// Initialize the container (normally done by Canvas)
+		await edit.load();
+
+		// Access the internal events emitter
+		events = edit.getInternalEvents();
+		emitSpy = vi.spyOn(events, "emit");
+
+		// Set up a mock duration for testing (use Seconds branded type)
+		edit.totalDuration = sec(10); // 10 seconds
+		edit.playbackTime = sec(0);
+		edit.isPlaying = false;
+	});
+
+	afterEach(() => {
+		edit.dispose();
+		nowSpy.mockRestore();
+		vi.clearAllMocks();
+	});
+
+	describe("play()", () => {
+		it("sets isPlaying to true", () => {
+			expect(edit.isPlaying).toBe(false);
+
+			edit.play();
+
+			expect(edit.isPlaying).toBe(true);
+		});
+
+		it("emits playback:play event", () => {
+			edit.play();
+
+			expect(emitSpy).toHaveBeenCalledWith("playback:play");
+		});
+
+		it("does not change playbackTime", () => {
+			edit.playbackTime = sec(5);
+
+			edit.play();
+
+			expect(edit.playbackTime).toBe(5);
+		});
+	});
+
+	describe("pause()", () => {
+		it("sets isPlaying to false", () => {
+			edit.isPlaying = true;
+
+			edit.pause();
+
+			expect(edit.isPlaying).toBe(false);
+		});
+
+		it("emits playback:pause event", () => {
+			edit.pause();
+
+			expect(emitSpy).toHaveBeenCalledWith("playback:pause");
+		});
+
+		it("does not change playbackTime", () => {
+			edit.playbackTime = sec(5);
+			edit.isPlaying = true;
+
+			edit.pause();
+
+			expect(edit.playbackTime).toBe(5);
+		});
+	});
+
+	describe("seek()", () => {
+		it("updates playbackTime to target", () => {
+			edit.seek(sec(5));
+
+			expect(edit.playbackTime).toBe(5);
+		});
+
+		it("clamps negative time to 0", () => {
+			edit.seek(sec(-1));
+
+			expect(edit.playbackTime).toBe(0);
+		});
+
+		it("clamps time beyond duration to totalDuration", () => {
+			edit.seek(sec(20)); // Beyond 10 second duration
+
+			expect(edit.playbackTime).toBe(10);
+		});
+
+		it("pauses playback when seeking", () => {
+			edit.isPlaying = true;
+
+			edit.seek(sec(5));
+
+			expect(edit.isPlaying).toBe(false);
+		});
+
+		it("emits playback:pause event", () => {
+			edit.isPlaying = true;
+
+			edit.seek(sec(5));
+
+			expect(emitSpy).toHaveBeenCalledWith("playback:pause");
+		});
+
+		it("seeks to exact boundary values", () => {
+			edit.seek(sec(0));
+			expect(edit.playbackTime).toBe(0);
+
+			edit.seek(sec(10));
+			expect(edit.playbackTime).toBe(10);
+		});
+	});
+
+	describe("stop()", () => {
+		it("resets playbackTime to 0", () => {
+			edit.playbackTime = sec(5);
+
+			edit.stop();
+
+			expect(edit.playbackTime).toBe(0);
+		});
+
+		it("pauses playback", () => {
+			edit.isPlaying = true;
+
+			edit.stop();
+
+			expect(edit.isPlaying).toBe(false);
+		});
+	});
+
+	describe("update() playback advancement", () => {
+		it("advances playbackTime by real elapsed time when playing", () => {
+			edit.playbackTime = sec(0);
+			edit.play(); // anchors the wall clock at now = 0
+
+			mockNowMs = 100; // 100ms of real time passes
+			edit.update(0.016, ms(5)); // the elapsed arg no longer drives the playhead
+
+			expect(edit.playbackTime).toBeCloseTo(0.1, 5);
+		});
+
+		it("tracks real time even when frame deltas under-report (half-speed regression)", () => {
+			// A slow machine renders below target, so the ticker delta is clamped to a tiny value.
+			// Playback must still follow wall-clock time, not the delta.
+			edit.playbackTime = sec(0);
+			edit.play();
+
+			mockNowMs = 1000; // a full real second elapsed
+			edit.update(0.016, ms(16.67)); // ...but the frame delta claims only ~16.67ms
+
+			expect(edit.playbackTime).toBeCloseTo(1.0, 2);
+		});
+
+		it("does not advance playbackTime when paused", () => {
+			edit.isPlaying = false;
+			edit.playbackTime = sec(1);
+
+			mockNowMs = 100; // clock moves, but playback is paused
+			edit.update(0.016, ms(100));
+
+			expect(edit.playbackTime).toBe(1);
+		});
+
+		it("clamps playbackTime to totalDuration", () => {
+			edit.playbackTime = sec(9.95);
+			edit.play();
+
+			mockNowMs = 100; // would advance to 10.05, but should clamp to 10
+			edit.update(0.016, ms(100));
+
+			expect(edit.playbackTime).toBe(10);
+		});
+
+		it("auto-pauses when reaching end of timeline", () => {
+			edit.playbackTime = sec(9.95);
+			edit.play();
+
+			mockNowMs = 100; // reaches end
+			edit.update(0.016, ms(100));
+
+			expect(edit.isPlaying).toBe(false);
+			expect(emitSpy).toHaveBeenCalledWith("playback:pause");
+		});
+
+		it("converts wall-clock milliseconds to seconds (regression: #play-immediately-pauses)", () => {
+			// Guards against advancing the playhead in milliseconds instead of seconds.
+			// At 60fps ~16.67ms passes per frame; the playhead must move 0.01667s, not 16.67s.
+			edit.playbackTime = sec(0);
+			edit.totalDuration = sec(10);
+			edit.play();
+
+			mockNowMs = 16.67; // one 60fps frame of real time
+			edit.update(0.016, ms(16.67));
+
+			expect(edit.playbackTime).toBeCloseTo(0.01667, 3);
+			expect(edit.isPlaying).toBe(true); // still playing, not auto-paused
+		});
+	});
+
+	describe("playback edge cases", () => {
+		it("handles empty timeline (duration 0)", () => {
+			edit.totalDuration = sec(0);
+			edit.playbackTime = sec(0);
+			edit.isPlaying = true;
+
+			edit.update(0.016, ms(100));
+
+			// Should immediately hit end and pause
+			expect(edit.playbackTime).toBe(0);
+			expect(edit.isPlaying).toBe(false);
+		});
+
+		it("seek while playing stops playback", () => {
+			edit.isPlaying = true;
+			edit.playbackTime = sec(2);
+
+			edit.seek(sec(8));
+
+			expect(edit.isPlaying).toBe(false);
+			expect(edit.playbackTime).toBe(8);
+		});
+
+		it("play at end of timeline (no advancement)", () => {
+			edit.playbackTime = sec(10);
+			edit.play();
+
+			mockNowMs = 100;
+			edit.update(0.016, ms(100));
+
+			// Already at end, should pause immediately
+			expect(edit.playbackTime).toBe(10);
+			expect(edit.isPlaying).toBe(false);
+		});
+	});
+
+	describe("playback state sequences", () => {
+		it("play → pause → play preserves position", () => {
+			edit.playbackTime = sec(3);
+
+			edit.play();
+			expect(edit.isPlaying).toBe(true);
+			expect(edit.playbackTime).toBe(3);
+
+			edit.pause();
+			expect(edit.isPlaying).toBe(false);
+			expect(edit.playbackTime).toBe(3);
+
+			edit.play();
+			expect(edit.isPlaying).toBe(true);
+			expect(edit.playbackTime).toBe(3);
+		});
+
+		it("play → seek → play restarts from seek position", () => {
+			edit.play();
+			edit.playbackTime = sec(2); // Simulate some advancement
+
+			edit.seek(sec(7));
+			expect(edit.isPlaying).toBe(false);
+			expect(edit.playbackTime).toBe(7);
+
+			edit.play();
+			expect(edit.isPlaying).toBe(true);
+			expect(edit.playbackTime).toBe(7);
+		});
+
+		it("stop always returns to beginning", () => {
+			edit.play();
+			edit.playbackTime = sec(5);
+
+			edit.stop();
+			expect(edit.playbackTime).toBe(0);
+			expect(edit.isPlaying).toBe(false);
+
+			edit.play();
+			edit.playbackTime = sec(8);
+
+			edit.stop();
+			expect(edit.playbackTime).toBe(0);
+		});
+
+		it("repeated stops are idempotent", () => {
+			edit.playbackTime = sec(5);
+
+			edit.stop();
+			expect(edit.playbackTime).toBe(0);
+
+			edit.stop();
+			expect(edit.playbackTime).toBe(0);
+
+			edit.stop();
+			expect(edit.playbackTime).toBe(0);
+		});
+	});
+
+	describe("event emission patterns", () => {
+		it("pause emits single event per call", () => {
+			edit.pause();
+			edit.pause();
+			edit.pause();
+
+			const pauseEvents = emitSpy.mock.calls.filter(call => call[0] === "playback:pause");
+			expect(pauseEvents.length).toBe(3);
+		});
+
+		it("play emits single event per call", () => {
+			edit.play();
+			edit.play();
+
+			const playEvents = emitSpy.mock.calls.filter(call => call[0] === "playback:play");
+			expect(playEvents.length).toBe(2);
+		});
+
+		it("seek emits pause event (via internal pause call)", () => {
+			edit.isPlaying = true;
+			emitSpy.mockClear();
+
+			edit.seek(sec(5));
+
+			expect(emitSpy).toHaveBeenCalledWith("playback:pause");
+		});
+
+		it("stop emits pause event (via seek → pause)", () => {
+			edit.isPlaying = true;
+			emitSpy.mockClear();
+
+			edit.stop();
+
+			expect(emitSpy).toHaveBeenCalledWith("playback:pause");
+		});
+	});
+});

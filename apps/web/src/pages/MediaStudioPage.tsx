@@ -1,5 +1,5 @@
 import { KAIROGEN_PLAN_LABEL, isGenerationOver } from '@wings/shared';
-import { useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { hasPermission, useSession } from '../api/auth.js';
 import { BUILDER_DRAFT_KEY, useGenerations, useMediaStudio } from '../api/media.js';
@@ -9,6 +9,17 @@ import { GenerationProgress } from '../components/media-studio/GenerationProgres
 import { MediaLibrary } from '../components/media-studio/MediaLibrary.js';
 import { StudioLayout, StudioToolGroup } from '../components/StudioLayout.js';
 import { Alert } from '../components/ui.js';
+
+// The editor core is a megabyte the agent tab never needs.
+const StudioEditor = lazy(() =>
+  import('../components/studio/StudioEditor.js').then((m) => ({ default: m.StudioEditor })),
+);
+
+const TABS = [
+  { key: 'agent', label: 'Agente e biblioteca' },
+  { key: 'studio', label: 'Studio' },
+] as const;
+type TabKey = (typeof TABS)[number]['key'];
 
 /**
  * Marketing → Edição de Fotos e Vídeos. The operator's form and the library in
@@ -36,6 +47,8 @@ export function MediaStudioPage() {
   const canGenerate = hasPermission(user, 'marketing.media.generate');
   const canUseInBuilder = hasPermission(user, 'ads.request');
   const canConnect = hasPermission(user, 'integrations.manage');
+  const canEdit = hasPermission(user, 'marketing.media.edit');
+  const [tab, setTab] = useState<TabKey>('agent');
   const studio = useMediaStudio();
   const recent = useGenerations();
   const [following, setFollowing] = useState<string[]>([]);
@@ -77,56 +90,97 @@ export function MediaStudioPage() {
         </>
       }
       workspace={
-        <div className="media-studio">
-          <dl className="media-usage" aria-label="Créditos">
-            <div>
-              <dt>Saldo no Kairogen</dt>
-              <dd className="mono">
-                {usage?.balance != null ? `${count(usage.balance)} créditos` : 'não informado'}
-              </dd>
-            </div>
-            <div>
-              <dt>Plano</dt>
-              <dd>{usage ? KAIROGEN_PLAN_LABEL[usage.plan] : '—'}</dd>
-            </div>
-            <div>
-              <dt>Você hoje</dt>
-              <dd className="mono">
-                {usage
-                  ? `${count(usage.usedTodayByYou)} de ${count(usage.dailyLimitPerUser)} créditos`
-                  : '—'}
-              </dd>
-            </div>
-            <div>
-              <dt>Wings no mês</dt>
-              <dd className="mono">
-                {usage
-                  ? `${count(usage.usedThisMonth)} de ${count(usage.monthlyLimit)} créditos`
-                  : '—'}
-              </dd>
-            </div>
-          </dl>
+        <>
+          <div className="studio-tabs" role="tablist" aria-label="Edição">
+            {TABS.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                role="tab"
+                id={`studio-tab-${item.key}`}
+                aria-selected={tab === item.key}
+                aria-controls={`studio-panel-${item.key}`}
+                className={`studio-tab ${tab === item.key ? 'studio-tab-active' : ''}`}
+                onClick={() => setTab(item.key)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <div role="tabpanel" id={`studio-panel-${tab}`} aria-labelledby={`studio-tab-${tab}`}>
+            {tab === 'studio' ? (
+              canEdit ? (
+                <Suspense fallback={<p className="muted">Abrindo o editor…</p>}>
+                  <StudioEditor />
+                </Suspense>
+              ) : (
+                <Alert kind="info">
+                  O Studio é de quem edita vídeo no Marketing. Peça a permissão "Editar vídeos no
+                  Studio" a um Admin Master.
+                </Alert>
+              )
+            ) : (
+              <div className="media-studio">
+                <dl className="media-usage" aria-label="Créditos">
+                  <div>
+                    <dt>Saldo no Kairogen</dt>
+                    <dd className="mono">
+                      {usage?.balance != null
+                        ? `${count(usage.balance)} créditos`
+                        : 'não informado'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Plano</dt>
+                    <dd>{usage ? KAIROGEN_PLAN_LABEL[usage.plan] : '—'}</dd>
+                  </div>
+                  <div>
+                    <dt>Você hoje</dt>
+                    <dd className="mono">
+                      {usage
+                        ? `${count(usage.usedTodayByYou)} de ${count(usage.dailyLimitPerUser)} créditos`
+                        : '—'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Wings no mês</dt>
+                    <dd className="mono">
+                      {usage
+                        ? `${count(usage.usedThisMonth)} de ${count(usage.monthlyLimit)} créditos`
+                        : '—'}
+                    </dd>
+                  </div>
+                </dl>
 
-          <GenerationForm canGenerate={canGenerate} connected={connected} onStarted={follow} />
-
-          {following.length > 0 && (
-            <section className="media-progress-list" aria-label="Gerações em andamento">
-              {following.map((id) => (
-                <GenerationProgress
-                  key={id}
-                  id={id}
-                  onDismiss={() => setFollowing((current) => current.filter((item) => item !== id))}
+                <GenerationForm
+                  canGenerate={canGenerate}
+                  connected={connected}
+                  onStarted={follow}
                 />
-              ))}
-            </section>
-          )}
 
-          <MediaLibrary
-            canGenerate={canGenerate && connected}
-            canUseInBuilder={canUseInBuilder}
-            onStarted={follow}
-          />
-        </div>
+                {following.length > 0 && (
+                  <section className="media-progress-list" aria-label="Gerações em andamento">
+                    {following.map((id) => (
+                      <GenerationProgress
+                        key={id}
+                        id={id}
+                        onDismiss={() =>
+                          setFollowing((current) => current.filter((item) => item !== id))
+                        }
+                      />
+                    ))}
+                  </section>
+                )}
+
+                <MediaLibrary
+                  canGenerate={canGenerate && connected}
+                  canUseInBuilder={canUseInBuilder}
+                  onStarted={follow}
+                />
+              </div>
+            )}
+          </div>
+        </>
       }
       conversation={
         <AgentChat

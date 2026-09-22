@@ -4,7 +4,17 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   // .claude/ holds third-party agent skills, vendored as published: not ours to lint.
-  { ignores: ['**/dist/**', '**/node_modules/**', '**/coverage/**', '.claude/**'] },
+  // packages/studio/src and tests are a vendored fork (see its NOTICE.md), kept diffable against upstream.
+  {
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/coverage/**',
+      '.claude/**',
+      'packages/studio/src/**',
+      'packages/studio/tests/**',
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   prettier,

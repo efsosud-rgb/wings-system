@@ -1,0 +1,831 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+## [2.19.0] - 2026-09-02
+
+### Added
+
+- `edit.generateClip(clipId)` starts generation for a prompt-bearing clip without the toolbar (#173)
+- Public `clip:generationStarted`, `clip:generationCompleted` and `clip:generationFailed` events on `edit.events` (#173)
+
+## [2.18.0] - 2026-08-27
+
+### Added
+
+- Optional model catalogue on `registerAssetGenerator`, with model and option controls in the generate pane (#168, #169)
+
+## [2.17.0] - 2026-08-25
+
+### Added
+
+- **Prompt-driven asset generation** — a host registers a generator; the editor can then generate image, video and audio clips from a prompt (#158)
+  - A Generate toolbar pane behind a third mode segment (#161)
+  - Add or remove a clip's prompt to turn generation on and off (#162)
+  - Generation progress on pending clips in the canvas and timeline (#160)
+
+### Changed
+
+- Upgraded `@shotstack/schemas` to 1.18.0 (#157)
+
+### Fixed
+
+- Legacy generated asset types migrate to image, video or audio on load (#159)
+- Toolbar mode for non-generative clips matches the clip's actual asset (#162)
+
+## [2.16.3] - 2026-08-21
+
+### Fixed
+
+- A merge field whose resolved text starts with a digit stays text instead of collapsing to a number (#152)
+
+## [2.16.2] - 2026-08-21
+
+### Fixed
+
+- Unsigned media URLs are cache-busted so a non-CORS cached response cannot poison the editor load; a warning is logged when CORS blocks an asset (#156)
+
+## [2.16.1] - 2026-08-21
+
+### Fixed
+
+- Signed media URLs are passed to the loader unchanged, so a cache-busting query parameter cannot invalidate the signature (#154)
+
+## [2.16.0] - 2026-08-11
+
+### Added
+
+- Opacity keyframe editing in the media toolbar (#149)
+
+### Fixed
+
+- Toolbar undo state and keyframed control behaviour (#149)
+- Unresolved merge fields are not editable via canvas gestures (#149)
+
+## [2.15.1] - 2026-07-22
+
+### Fixed
+
+- Timeline pointer capture waits until a drag starts, so clicks on clip children (such as the mask badge) register (#148)
+
+## [2.15.0] - 2026-07-22
+
+### Added
+
+- Preview playback honours `asset.speed`, with a toolbar speed control and speed-aware clip resizing (#147)
+
+## [2.14.4] - 2026-07-17
+
+### Fixed
+
+- Google Drive destinations without `options` are accepted (`@shotstack/schemas` 1.14.1) (#144)
+
+## [2.14.3] - 2026-07-17
+
+### Fixed
+
+- Rich-text clips repaint each frame, so animated text updates on seek and during playback (#142)
+- Numeric-looking merge values on text and HTML assets stay strings, so values such as `"3"` still render (#142)
+
+## [2.14.2] - 2026-07-15
+
+### Fixed
+
+- `Canvas.load()` throws a typed `WebGLUnsupportedError` when WebGL is unavailable; `resize()` is a no-op until a renderer exists (#141)
+
+## [2.14.1] - 2026-07-14
+
+### Fixed
+
+- Rich-caption clips no longer write `wordSpacing`, which the schema rejects (#139)
+
+## [2.14.0] - 2026-07-13
+
+### Added
+
+- Pending placeholders for prompt-only image, video and audio assets until generation fills `src` (#126)
+
+### Fixed
+
+- Assets with neither `src` nor a prompt error instead of rendering as empty (#126)
+
+## [2.13.3] - 2026-07-13
+
+### Changed
+
+- Upgraded `@shotstack/schemas` to 1.14.0 (#138)
+
+### Fixed
+
+- Generated assets without a `src` yet are handled instead of failing validation (#138)
+
+## [2.13.2] - 2026-07-13
+
+### Fixed
+
+- `getClip`, `getClipById` and `getTrack` return copies, so mutating or freezing the result cannot corrupt the running edit (#137)
+
+## [2.13.1] - 2026-07-07
+
+### Fixed
+
+- Timeline clip interactions cancel when the pointer stream is interrupted, so a clip cannot stick to the cursor (#135)
+
+## [2.13.0] - 2026-07-03
+
+### Added
+
+- Edit mutators resolve with a `CommandResult` (`success` or `noop`) so callers can tell a refused command from one that applied (#134)
+
+### Fixed
+
+- Deleting a luma-attached clip at the last-clip boundary is refused atomically, so the luma cannot be left behind (#134)
+
+## [2.12.2] - 2026-07-02
+
+### Fixed
+
+- Placeholders already in the edit resolve when merge fields are registered after load (#133)
+
+## [2.12.1] - 2026-07-02
+
+### Fixed
+
+- Copy is left to the browser when text is selected or no clip is targeted, so ordinary text copy still works (#132)
+
+## [2.12.0] - 2026-06-27
+
+### Added
+
+- `canUndo` and `canRedo` getters on `Edit` (#131)
+
+## [2.11.7] - 2026-06-26
+
+### Fixed
+
+- Preview no longer plays at half speed with an audio echo on slower machines (#130)
+
+## [2.11.6] - 2026-06-24
+
+### Fixed
+
+- Video-backed luma masks no longer crash the renderer during playback (#128)
+
+## [2.11.5] - 2026-06-10
+
+### Changed
+
+- Upgraded `@shotstack/shotstack-canvas` to ^2.10.0 (#124)
+
+### Fixed
+
+- Preview and export render-parity (#124)
+  - Rich-caption font resolution delegates to shotstack-canvas
+  - `captureFrame` snapshots the rendered output at a requested time
+  - Eased keyframes evaluate with a cubic-bezier timing function
+  - `wipeLeft` / `wipeRight` transitions render with a gradient-sweep filter
+  - Zoom-in transition no longer over-accelerates near the end
+  - Luma masks build after the masked clip loads, preventing a black clip
+
+## [2.11.4] - 2026-06-05
+
+### Fixed
+
+- Rebuilt client-side video export on WebCodecs, fixing broken output (#122)
+  - Video clips are decoded frame-accurately via WebCodecs, fixing frozen first frames, stutter, and timing drift. Source codecs the browser cannot play in a `<video>` element now decode and export correctly
+  - The full timeline audio is mixed down into the export. Audio embedded in video and luma clips is now included (previously only standalone audio clips were encoded), overlapping clips are mixed rather than truncated, gaps render as silence, and per-clip volume — scalar, keyframed automation, and `fadeIn`/`fadeOut`/`fadeInFadeOut` — plus `trim` offsets are applied
+
+## [2.11.3] - 2026-06-03
+
+### Changed
+
+- Font family name parsing now delegates to the shared `@shotstack/shotstack-canvas` parser (upgraded to ^2.9.0), so a family name is interpreted the same way everywhere it is used
+
+### Fixed
+
+- A `font.family` value with leading or trailing whitespace — common from CMS fields and merge-field variables — now resolves to the declared font instead of falling back to a default (#120)
+
+## [2.11.2] - 2026-06-02
+
+### Fixed
+
+- Custom font family names are read correctly from fonts whose OpenType `name` table splits metadata across separate platform records, preventing a font from registering — and rendering — under the wrong family (#118)
+
+## [2.11.1] - 2026-05-27
+
+### Fixed
+
+- Catalogued Google Fonts referenced by a clip are auto-registered during export, so text renders with the intended font even when that font was not explicitly preloaded
+- HTML5 clip frames are now captured as WebP for faster, higher-quality capture (#116)
+
+## [2.11.0] - 2026-05-22
+
+### Added
+
+- **Asset URL preflight validation** — `addClip`, `addTrack`, `addFont`, and `setFonts` now check referenced `http(s)` asset and font URLs before applying the change, rejecting unreachable resources by throwing a typed `InvalidAssetUrlError` (carrying `url`, `status`, and `reason`) (#115)
+
+### Changed
+
+- Upgraded `@shotstack/shotstack-canvas` to ^2.8.0
+
+### Fixed
+
+- Font operations are serialised through the command queue, preventing race conditions when fonts are added while other edits are in flight
+- HTML5 clips now render in screenshots and thumbnails
+- `loadEdit()` no longer mutates the edit object passed in by the caller — inputs are defensively copied
+
+## [2.10.2] - 2026-05-19
+
+### Fixed
+
+- HTML5 playback, asset handling, and edit-document serialisation hardening (#112)
+- Upgraded `@shotstack/shotstack-canvas` to ^2.7.3
+
+## [2.10.1] - 2026-05-19
+
+### Fixed
+
+- Resizing a clip taller than 2160px no longer throws — the resize handle stops at the schema maximum (3840px wide × 2160px tall) instead of producing an out-of-bounds height (#113)
+
+## [2.10.0] - 2026-05-15
+
+### Added
+
+- **HTML5 asset support** — new `html5` asset type renders an HTML/CSS/JS bundle as a clip on the canvas and timeline (#111)
+  - JavaScript-driven animations are captured frame-by-frame, so they appear in both preview playback and export
+  - Popular animation libraries (GSAP, anime.js, and D3) are available as globals inside the sandbox
+  - Loading graphics are shown while a clip's frames are captured
+
+### Changed
+
+- Upgraded `@shotstack/schemas` to 1.11.0 (adds the `html5` asset type)
+
+## [2.9.1] - 2026-05-14
+
+### Fixed
+
+- Moved canvas double-click detection to the Edit layer for more reliable text-edit activation (#110)
+
+## [2.9.0] - 2026-05-14
+
+### Added
+
+- Double-click a text clip on the canvas to open its edit popup
+- Renamed the text toolbar button to "Edit text" with a caret icon to improve discoverability
+
+## [2.8.0] - 2026-05-14
+
+### Added
+
+- Delete clips via a right-click context menu or a toolbar button (#109)
+
+### Changed
+
+- Upgraded `@shotstack/shotstack-canvas` to ^2.7.2
+
+## [2.7.1] - 2026-04-29
+
+### Added
+
+- Optional `wrap` field on `rich-text` and `rich-caption` assets and on text background configuration, with matching text-wrap rendering (#106)
+
+### Changed
+
+- Upgraded `@shotstack/schemas` to 1.10.9 and `@shotstack/shotstack-canvas` to ^2.4.3 (#106)
+
+## [2.7.0] - 2026-04-29
+
+### Added
+
+- **Paste SVG and JSON directly** — Ctrl/Cmd+V pastes whatever was most recently copied: SVG markup from design tools such as Figma or Illustrator, clip and track JSON from Shotstack templates or docs, or internal copies from the timeline (#105)
+  - Multi-track and multi-clip pastes undo in a single step
+  - Internal copies are mirrored to the system clipboard, enabling paste across browser tabs
+  - Pasted clips use overlap-aware placement, offsetting rather than landing exactly on top of existing content
+
+## [2.6.1] - 2026-04-12
+
+### Fixed
+
+- Corrected audio fade-out timing by removing an incorrect division in the audio player's clip-length calculation (#102)
+
+## [2.6.0] - 2026-04-11
+
+### Added
+
+- Per-track drag-to-resize with component-local height state (#101)
+
+## [2.5.0] - 2026-04-11
+
+### Added
+
+- Horizontal padding at the start and end of the timeline for visual clearance from UI boundaries (#100)
+
+## [2.4.5] - 2026-04-07
+
+### Fixed
+
+- Upgrade `@shotstack/schemas` to 1.9.10
+
+## [2.4.4] - 2026-03-26
+
+### Fixed
+
+- Font variation settings applied correctly for bold weight (#92)
+
+## [2.4.3] - 2026-03-26
+
+### Fixed
+
+- IIFE build crash resolved
+
+## [2.4.2] - 2026-03-16
+
+### Added
+
+- Husky pre-commit hooks and updated AOS tooling (#97)
+
+## [2.4.1] - 2026-03-16
+
+### Fixed
+
+- Fallback placeholder graphics for failed image, video, and luma loads (#87)
+- Caption toolbar padding, alignment, and stroke type handling (#86)
+- Word spacing control and font search in caption toolbar (#86)
+- Caption source linking with intelligent clip matching (#86)
+- Active word styling panel with shadow and focus controls (#86)
+
+## [2.4.0] - 2026-03-11
+
+### Added
+
+- Rotation cursor near selection corners, follows clip angle (#85)
+- Larger hit areas on selection handles and edges (#85)
+
+## [2.3.0] - 2026-03-11
+
+### Added
+
+- CI/CD concurrency control for sequential releases (#84)
+
+## [2.2.3] - 2026-03-11
+
+### Fixed
+
+- Default font weight resolution for variable fonts with named weight handling (#83)
+- Auto-set fit to `contain` for image/video clips on resize (#82)
+- Track insertion at last position using sentinel value (#80)
+
+## [2.2.2] - 2026-03-11
+
+### Added
+
+- Updated CI/CD pipeline for automated semver releases (#78)
+
+## [2.2.1] - 2026-03-11
+
+### Fixed
+
+- Rotation angles get normalized to schema bounds
+
+## [2.2.0] - 2026-03-11
+
+### Added
+
+- add rich-caption toolbar with layout, word animation, and active word controls
+
+## [2.1.3] - 2026-03-10
+
+### Fixed
+
+- Better, more intuitive snapping and guide lines.
+- Timeline clip selection
+
+## [2.1.2] - 2026-03-06
+
+### Fixed
+
+- Fix audio bleed when switching media sources via `loadEdit()` — AudioPlayer now properly reloads on source change
+- Fix audio/video player disposal to stop playback immediately and clean up PIXI containers
+
+## [2.1.1] - 2026-03-05
+
+### Fixed
+
+- Recalculate total timeline duration after granular `loadEdit()` updates so the toolbar displays the correct time
+
+## [2.1.0] - 2026-03-04
+
+### Added
+
+- Canvas panning with middle mouse button drag, including grab cursor feedback
+- Timeline resize handle for adjustable timeline height
+
+### Fixed
+
+- Set initial volume for audio and video players to avoid undefined default values
+- Resolve merge fields as strings for `text` and `src` keys
+
+## [2.0.4] - 2026-03-04
+
+### Added
+
+- Externalize `@napi-rs/canvas` in Vite/Rollup build configs to prevent bundling of native Node addons
+
+## [2.0.2] - 2026-03-04
+
+### Fixed
+
+- Prevent deletion of the last clip in a document.
+
+## [2.0.1] - 2026-02-24
+
+### Fixed
+
+- Fixed toolbar positioning when SDK is embedded in a page with surrounding content. Toolbars now use `position: absolute` within the canvas container instead of `position: fixed` relative to the viewport.
+
+## [2.0.0] - 2026-02-17
+
+### Added
+
+**Timeline**
+
+- **HTML/CSS timeline rebuild** - Replaced the 1.x timeline with a fully rewritten HTML/CSS implementation
+  - Asset type icons with variable track heights based on content type
+  - Playhead ghost hover preview
+  - Home/End key navigation (replaces meta+arrow keys)
+- **Copy-paste** - Duplicate clips on the timeline using standard keyboard shortcuts
+- **Collision detection** - Automatic clip pushing during drag operations to prevent overlapping
+- **Thumbnail rendering** - Video and image thumbnails displayed directly on timeline clips
+- **Soundtrack support** - Integrated audio player for soundtrack assets on the timeline
+- **Graceful error handling** - Visual error indicators on clips that fail to load
+- **Seconds-based timing** - Unified all time values to a branded `Seconds` type throughout the timeline
+
+**UI Toolbars**
+
+- **Rich text toolbar** - Full formatting toolbar with font picker, text shadow, padding, background color, animation presets, and strikethrough
+- **Media toolbar** - Editing controls for video and image clips including audio, fade effects, zoom/slide transitions, and effects
+- **SVG toolbar** - Fill color, corner radius, and clip-level controls (opacity, scale, transition, effect)
+- **Canvas toolbar** - Resolution, FPS, and background color controls in a vertical layout on the right edge
+- **Asset toolbar** - Quick text and media insertion controls on the canvas
+- **Text-to-Speech toolbar** - Voice selection and audio generation controls
+- **Text-to-image toolbar** - Prompt editing and AI image generation controls
+- **Draggable toolbars** - All toolbars support drag repositioning with reset capability
+- **Extensible toolbar buttons** - Registry system for adding custom toolbar buttons
+
+**AI-Powered Assets**
+
+- **AI asset players** - Aurora loading animations for text-to-image and text-to-speech assets during generation
+- **AI asset overlays** - Asset number badges and prompt preview overlays on AI-generated content
+
+**Merge Fields**
+
+- **Merge field system** - Template variable substitution across Edit properties
+  - Redesigned merge field popup with scroll architecture
+
+**Font System**
+
+- **Font Picker** - Virtual scrolling font selector with recent fonts tracking
+- **Font color picker** - Color and highlight controls with gradient presets
+- **Font weight selector** - Dropdown with full weight range, replacing the simple bold toggle
+- **OpenType integration** - Font family name extraction using `opentype.js` for accurate metadata
+- **CDN font hosting** - Migrated default font assets to CDN with expanded weight and style variants
+
+**Rotation, Resize & Alignment**
+
+- **Rotation** - Full rotation support for canvas objects with snapping to fixed angles
+- **8-point resize handles** - Corner and edge resize with proper dimension handling for SVG and rich text assets
+- **Alignment guides** - Drag snapping to alignment guides integrated into the canvas
+- **Dimension labels** - Live dimension display during resize operations
+- **Drag time tooltips** - Time position display during clip drag and resize on the timeline
+
+**Luma Mask**
+
+- **Luma mask system** - Attach luma masks to clips using Alt+drag with automatic asset type transformation
+
+**Output & Resolution**
+
+- **Output configuration commands** - Commands for setting format, resolution, aspect ratio, and destinations
+- **Resolution presets** - Predefined resolution options with rollback handling
+- **Multi-provider destinations** - Output schema supports multiple render destinations
+
+**Canvas & Rendering**
+
+- **Responsive canvas zoom** - Automatic zoom scaling to fit the container
+- **Alpha channel support** - Correct rendering for WebM VP9 transparent videos
+
+**Clip Management**
+
+- **Clip reconciliation** - Unidirectional data flow with unified resolution for predictable clip tracking across undo/redo
+- **Clip timing controls** - Asset/clip mode toggle for timing configuration
+- **Smart loadEdit** - Structural diffing with unified event dispatch when reloading an edit
+- **Drag-to-create track** - Drop zone indicators for creating new tracks during clip drag
+- **Alias resolution** - Clip reference system using aliases
+- **Caption rendering** - Subtitle player with VTT/SRT parser for caption assets
+
+**Keyframes & Animations**
+
+- **Layered animation composition** - Effects and transitions composed as independent animation layers
+- **Skew transform** - New skew property for clip transforms with animation builder support
+- **Smooth easing** - New easing curve for improved carousel and slide transitions
+
+**SDK Architecture**
+
+- **EditDocument** - Pure data layer for edit configuration management, separating data from rendering
+- **Composite UI components** - Reusable panels for effects, transitions, spacing, and style controls
+- **SVG asset support** - Full SVG asset rendering, editing, and shared SVG utilities
+- **Keyboard arrow positioning** - Arrow keys move selected clips on the canvas
+
+### Changed
+
+- Migrated to `@shotstack/schemas` as canonical type source
+- Upgraded `@shotstack/shotstack-canvas` from ^1.6.5 to ^1.9.6
+- Upgraded `pixi.js` from ^8.5.2 to ^8.15.0
+- Upgraded `zod` from ^3.23.8 to ^4.0.0
+- Requires Node.js 22 (previously unconstrained)
+- Timeline API simplified — feature toggles and constructor options removed
+- Default preview framerate updated to 25fps
+- Switched to light theme as default
+
+### Fixed
+
+- Corrected playback time unit conversions across all player types
+- Fixed memory leaks from event listener accumulation and recursive handlers
+- Resolved race conditions in render updates during clip selection changes
+- Fixed audio stuttering caused by excessive video sync checks (now rate-limited)
+- Added cache invalidation for clip and track mutations
+- Corrected track layer calculation and z-index sorting for multi-track compositions
+- Performance and rendering improvements
+- Fixed crop scaling logic to use max ratio consistently
+- Deferred audio volume keyframe initialization until timing is resolved
+- Fixed left-edge clip resize to correctly adjust start position and duration
+- Added track existence validation before clip reorder on same-track moves
+- Corrected carousel offset calculation logic
+- Normalized z-index hierarchy across UI layers
+- Improved `.mov` video error messaging
+- Included opacity in clip keyframe detection
+- Prevented toolbar container duplication on remount
+- Fixed SVG icons intercepting pointer events on toolbar buttons
+- Fixed clip mask offset to account for centered border strokes
+
+### Removed
+
+- `./schema` package export — schemas now provided by the `@shotstack/schemas` package
+- `TimelineOptions` — Timeline constructor options removed in favour of simplified API
+- `fast-deep-equal` dependency — replaced by internal structural diffing
+- Schema build configuration (`vite.config.schema.ts`)
+- Internal UI component exports from the public API surface
+- `.webm` browser support check
+
+## [1.10.1] - 2025-11-27
+
+### Changed
+
+- Moved `width`, `height`, and `customFonts` out of `RichTextAssetSchema` - dimensions now resolved from clip config, custom fonts computed at runtime ([#46](https://github.com/shotstack/shotstack-studio-sdk/pull/46))
+- Updated `@shotstack/shotstack-canvas` to v1.5.3
+
+## [1.10.0] - 2025-11-26
+
+### Added
+
+- **Audio fade effects** - Added `effect` property to audio assets supporting `fadeIn`, `fadeOut`, and `fadeInFadeOut` with 2-second fade duration
+- **updateClip command** ([#44](https://github.com/shotstack/shotstack-studio-sdk/pull/44), [#34](https://github.com/shotstack/shotstack-studio-sdk/issues/34))
+  - New command to update clip properties programmatically
+  - Dynamic background color updates
+- **Rich text padding and border support** ([#45](https://github.com/shotstack/shotstack-studio-sdk/pull/45))
+  - Added `padding` property to rich-text assets
+  - Added `background.border` property (width, color, opacity) to rich-text assets
+- **Merge fields support** for template variable substitution
+- **Smart-clip timing values** with support for `"auto"` and `"end"` values with resolution logic
+- Emits `timeline:updated` event when edit is reloaded
+- Exported `VERSION` constant from package.json
+
+### Changed
+
+- Added strict validation to all Zod schemas
+- Rich text player implements `reconfigureAfterRestore` to clear cache and re-render
+
+### Fixed
+
+- Reset render state on seek to prevent race conditions
+- Stored bound event handlers to fix listener cleanup
+
+## [1.9.0] - 2025-11-22
+
+### Changed
+
+- Updated `@shotstack/shotstack-canvas` to v1.4.7
+- Removed `style` property from font configurations ([#43](https://github.com/shotstack/shotstack-studio-sdk/pull/43))
+  - Font style variants should now be loaded as separate font families
+
+### Added
+
+- Support for `background.border` property (width, color, opacity)
+- Support for `padding` property (uniform or per-side values)
+
+## [1.8.1] - 2025-11-18
+
+### Fixed
+
+- Fixed module resolution issues in Next.js and other bundlers ([#11](https://github.com/shotstack/shotstack-studio-sdk/issues/11), [#42](https://github.com/shotstack/shotstack-studio-sdk/pull/42))
+  - Added `inlineDynamicImports: true` to Vite build configuration to prevent chunk file generation
+  - Resolved "Cannot find module" errors when importing the SDK in Next.js applications
+  - All code is now properly inlined into single ES and UMD bundle files
+
+### Changed
+
+- Updated `@shotstack/shotstack-canvas` to v1.3.0
+- Improved development tooling:
+  - Added `typecheck` script for TypeScript validation
+  - Added `test:package` script to validate build output before publishing
+
+## [1.8.0] - 2025-11-10
+
+### Changed
+
+- Updated `@shotstack/shotstack-canvas` to v1.1.7
+- Improved package exports with explicit TypeScript types and better module format support
+- Updated schema build to output `.mjs` and `.cjs` files for better compatibility
+
+## [1.7.1] - 2025-11-06
+
+### Added
+
+- Test cases for Jest builds ([#39](https://github.com/shotstack/shotstack-studio-sdk/pull/39))
+- Schema exports for Jest compatibility
+
+### Changed
+
+- Removed makefile build commands in favour of package.json scripts
+
+## [1.7.0] - 2025-11-04
+
+### Added
+
+- **Rich Text Asset Support ([#35](https://github.com/shotstack/shotstack-studio-sdk/pull/35))**
+  - New `rich-text` asset type with RichTextPlayer
+  - Custom font loading from URLs and local files
+
+- **Clip Dimensions ([#36](https://github.com/shotstack/shotstack-studio-sdk/pull/36))**
+  - Added optional `width` and `height` properties to clips (1-3840px, 1-2160px)
+
+- **Schema Exports ([#38](https://github.com/shotstack/shotstack-studio-sdk/pull/38))**
+  - All Zod validation schemas now exported for external package usage
+
+### Changed
+
+- Fit property now optional with smart defaults: `none` for rich-text, `crop` for other assets ([#36](https://github.com/shotstack/shotstack-studio-sdk/pull/36))
+- Updated `@shotstack/shotstack-canvas` to v1.1.2
+
+### Fixed
+
+- Rewrote fit logic to match backend behavior ([#37](https://github.com/shotstack/shotstack-studio-sdk/pull/37)):
+  - `cover`: non-uniform stretch to fill
+  - `crop`: viewport-aware scaling, never downscales small images
+  - `contain`: fit within bounds preserving aspect ratio
+  - `none`: native dimensions
+- Fixed animation sequence and tween properties integration
+
+## [1.6.0] - 2025-09-02
+
+### Changed
+
+- **Replaced WASM-based FFmpeg with Mediabunny**
+  - Switched from FFmpeg to WebCodecs-based Mediabunny
+  - Export speeds improved by 10x
+
+### Added
+
+- Keyboard shortcut for export/download with Cmd/Ctrl + E
+
+### Removed
+
+- FFmpeg dependency
+
+## [1.5.1] - 2025-08-29
+
+### Fixed
+
+- Image fit behaviour corrected ([#31]):
+  - cover: apply non-uniform x/y scaling to fill the viewport (break aspect ratio)
+  - crop: scale by dominant viewport axis (height for portrait viewports)
+- Mask overflow outside the edit viewport using a rectangular stage mask to prevent content drawing beyond bounds
+
+## [1.5.0] - 2025-07-27
+
+### Added
+
+- **Timeline Component**: A comprehensive visual timeline interface for editing video projects
+  - Visual track and clip representation with drag-and-drop support
+  - Clip resizing with edge detection and visual feedback
+  - Playhead control for timeline navigation
+  - Ruler with time markers and zoom support
+  - Toolbar with playback controls, edit actions, and time display
+  - Snap-to-grid functionality for precise clip alignment
+  - Multi-track support with visual track management
+  - Theme support with dark, light, and minimal themes
+  - Selection system with visual feedback
+  - Collision detection for clip placement
+  - Viewport management with scroll and zoom controls
+  - Real-time preview updates during clip manipulation
+
+### Fixed
+
+- Improved clip selection logic for better user interaction
+- Fixed resize handles to always appear on top with full opacity
+
+## [1.4.1] - 2025-07-06
+
+### Fixed
+
+- Fixed TypeScript declaration files not resolving path aliases in published npm package
+- Replaced custom build process with vite-plugin-dts for standard declaration file generation
+
+## [1.4.0] - 2025-07-06
+
+### Changed
+
+- **Major refactoring: Implemented command pattern architecture**
+  - Reorganized project structure in anticipation of new UI modules
+  - Extracted all edit operations into dedicated command classes
+
+### Added
+
+- **Complete undo/redo support for all editing operations**
+  - Implemented undo functionality for all commands
+  - Added keyboard shortcuts ctrl/cmd-z for undo ctrl/cmd-shift-z for redo
+
+### Technical Improvements
+
+- Enhanced TypeScript strict mode with `noImplicitAny` enabled
+- Improved import path aliases for better code organization
+
+## [1.3.0] - 2025-07-02
+
+### Added
+
+- WYSIWYG text editing for text clips with double-click activation
+- Real-time cursor positioning with support for all text alignments (left, center, right)
+- Arrow key navigation for precise cursor movement
+
+## [1.2.2] - 2025-06-26
+
+### Fixed
+
+- Asset loader video handling now correctly targets only Safari browsers instead of all webkit-based browsers, resolving video loading issues in Chrome and other webkit browsers ([#18](https://github.com/shotstack/shotstack-studio-sdk/issues/18))
+
+## [1.2.1] - 2025-06-05
+
+### Fixed
+
+Asset loader now sets required CORS attributes for Webkit video elements, preventing loading hangs ([#15](https://github.com/shotstack/shotstack-studio-sdk/issues/15)).
+
+## [1.2.0] - 2025-05-26
+
+### Added
+
+- **Luma mask rendering compatibility with Shotstack Edit API ([#12](https://github.com/shotstack/shotstack-studio-sdk/issues/12))**
+  - Luma masks in Studio now render with the same behaviour as the Shotstack Edit API.
+  - White areas are transparent, black areas are opaque.
+  - Ensures accurate previews of templates using video and image luma clips.
+
+## [1.1.2] - 2025-04-29
+
+### Fixed
+
+Corrected totalDuration calculation issue in `loadEdit()` method. Explicitly calls `updateTotalDuration()` after loading all clips to ensure accurate timeline duration and consistent playback behavior ([#7](https://github.com/shotstack/shotstack-studio-sdk/issues/7)).
+
+### Changed
+
+- **Separated clip selection and state update events ([#6](https://github.com/shotstack/shotstack-studio-sdk/issues/6))**:
+  - `clip:select` event now triggers only on initial selection (pointer down).
+  - Added new `clip:updated` event triggered after state changes upon manipulation (pointer up), providing structured payload with previous and current clip states.
+
+## [1.1.1] - 2025-04-22
+
+### Fixed
+
+- Fixed duplication issue in loadEdit() method where new template content appended instead of replacing existing content. All clips are now cleared before loading new content ([#5](https://github.com/shotstack/shotstack-studio-sdk/issues/5)).
+
+## [1.1.0] - 2025-04-17
+
+### Changed
+
+- Moved FFmpeg to peer dependencies to reduce compatibility issues with frameworks such as Next.js
+- Updated documentation to clarify FFmpeg installation requirements
+
+## [1.0.0] - 2025-04-10
+
+### Added
+
+- Initial release of Shotstack Studio
+- Core Edit class for managing video timelines and compositions
+- Controls for keyboard-based playback and editing
+- VideoExporter for exporting to MP4 using browser-based FFmpeg
+- Support for images, videos, text, shapes, and audio clips
+- Positioning and transformation system
+- Keyframing system
+- Preconfigured effects and transitions
+- Template-based editing system with JSON format compatible with Shotstack Edit API
+- Event system
+- Asset loader
+- Full TypeScript support with comprehensive type definitions

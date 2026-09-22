@@ -1,0 +1,42 @@
+{
+  // Vendored code keeps the upstream compiler settings (see NOTICE.md); the
+  // monorepo base config is stricter than the SDK was written for.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "useDefineForClassFields": true,
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "strict": true,
+    "noImplicitAny": true,
+    "noImplicitOverride": true,
+    "noUncheckedSideEffectImports": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "forceConsistentCasingInFileNames": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "types": ["vite/client", "node"],
+    "paths": {
+      "@core/*": ["./src/core/*"],
+      "@canvas/*": ["./src/components/canvas/*"],
+      "@timeline/*": ["./src/components/timeline/*"],
+      "@shared/*": ["./src/core/shared/*"],
+      "@schemas": ["./src/core/schemas/index"],
+      "@schemas/*": ["./src/core/schemas/*"],
+      "@timing/*": ["./src/core/timing/*"],
+      "@layouts/*": ["./src/core/layouts/*"],
+      "@animations/*": ["./src/core/animations/*"],
+      "@events/*": ["./src/core/events/*"],
+      "@inputs/*": ["./src/core/inputs/*"],
+      "@loaders/*": ["./src/core/loaders/*"],
+      "@export/*": ["./src/core/export/*"],
+      "@styles/*": ["./src/styles/*"]
+    }
+  },
+  "include": ["src", "vite.config.ts", "vitest.config.ts"],
+  "exclude": ["tests", "**/*.test.ts", "**/*.spec.ts"]
+}

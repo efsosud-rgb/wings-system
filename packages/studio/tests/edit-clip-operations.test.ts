@@ -1,0 +1,1813 @@
+/**
+ * Edit Class Clip Operations Tests
+ *
+ * Tests clip CRUD operations: addClip, deleteClip, updateClip, addSvgClip
+ * These are the core editing operations that modify timeline content.
+ */
+
+import { Edit } from "@core/edit-session";
+import { EditEvent, InternalEvent } from "@core/events/edit-events";
+import { PlayerType } from "@canvas/players/player";
+import type { EventEmitter } from "@core/events/event-emitter";
+import type { Clip, ResolvedClip } from "@schemas";
+import { ms, sec } from "@core/timing/types";
+
+// Stub the DOM-dependent svg-clipboard helpers — sanitisation is unit-tested
+// in svg-clipboard.test.ts. Here we verify addSvgClip's orchestration: clip
+// shape, fit default, dispatch through insertClipWithOverlapPolicy.
+// (vi.mock is hoisted by ts-jest, so placement after imports is fine.)
+vi.mock("@core/clipboard/svg-clipboard", () => ({
+	sanitiseSvg: vi.fn((markup: string) => markup.replace(/<script[\s\S]*?<\/script>/gi, "").replace(/\son\w+="[^"]*"/gi, "")),
+	parseSvgIntrinsicSize: vi.fn((markup: string) => {
+		const w = markup.match(/\bwidth="(\d+)/i);
+		const h = markup.match(/\bheight="(\d+)/i);
+		return { width: w ? Number(w[1]) : undefined, height: h ? Number(h[1]) : undefined };
+	}),
+	readSvgFromClipboardItems: vi.fn().mockResolvedValue(null),
+	looksLikeSvg: vi.fn((text: string) => /^\s*<svg/i.test(text))
+}));
+
+// Spy on writeSystemClipboardText so copyClip OS-mirroring can be asserted.
+vi.mock("@core/clipboard/system-clipboard", () => ({
+	readSystemClipboardText: vi.fn().mockResolvedValue(null),
+	writeSystemClipboardText: vi.fn().mockResolvedValue(undefined)
+}));
+
+// Mock pixi-filters
+vi.mock("pixi-filters", () => ({
+	AdjustmentFilter: vi.fn().mockImplementation(() => ({})),
+	BloomFilter: vi.fn().mockImplementation(() => ({})),
+	GlowFilter: vi.fn().mockImplementation(() => ({})),
+	OutlineFilter: vi.fn().mockImplementation(() => ({})),
+	DropShadowFilter: vi.fn().mockImplementation(() => ({}))
+}));
+
+// Mock pixi.js
+vi.mock("pixi.js", async () => {
+	const createMockContainer = (): Record<string, unknown> => {
+		const children: unknown[] = [];
+		const self = {
+			children,
+			sortableChildren: true,
+			parent: null as unknown,
+			label: null as string | null,
+			zIndex: 0,
+			visible: true,
+			destroyed: false,
+			addChild: vi.fn((child: { parent?: unknown }) => {
+				children.push(child);
+				if (typeof child === "object" && child !== null) {
+					// eslint-disable-next-line no-param-reassign -- Intentional mock of Pixi.js Container behavior
+					child.parent = self;
+				}
+				return child;
+			}),
+			removeChild: vi.fn((child: unknown) => {
+				const idx = children.indexOf(child);
+				if (idx !== -1) children.splice(idx, 1);
+				return child;
+			}),
+			removeChildAt: vi.fn(),
+			getChildByLabel: vi.fn(() => null),
+			getChildIndex: vi.fn(() => 0),
+			destroy: vi.fn(() => {
+				self.destroyed = true;
+			}),
+			setMask: vi.fn()
+		};
+		return self;
+	};
+
+	const createMockGraphics = (): Record<string, unknown> => ({
+		fillStyle: {},
+		rect: vi.fn().mockReturnThis(),
+		fill: vi.fn().mockReturnThis(),
+		clear: vi.fn().mockReturnThis(),
+		stroke: vi.fn().mockReturnThis(),
+		strokeStyle: {},
+		destroy: vi.fn()
+	});
+
+	return {
+		// eslint-disable-next-line global-require, @typescript-eslint/no-require-imports
+		...(await import("./helpers/pixi-mock-filters")).pixiFilterStubs,
+		Container: vi.fn().mockImplementation(createMockContainer),
+		Graphics: vi.fn().mockImplementation(createMockGraphics),
+		Sprite: vi.fn().mockImplementation(() => ({
+			texture: {},
+			width: 100,
+			height: 100,
+			parent: null,
+			anchor: { set: vi.fn() },
+			scale: { set: vi.fn() },
+			position: { set: vi.fn() },
+			destroy: vi.fn()
+		})),
+		Texture: { from: vi.fn() },
+		Assets: { load: vi.fn().mockResolvedValue({}), unload: vi.fn(), cache: { has: vi.fn().mockReturnValue(false) } },
+		ColorMatrixFilter: vi.fn(() => ({ negative: vi.fn() })),
+		Rectangle: vi.fn()
+	};
+});
+
+// Mock AssetLoader
+vi.mock("@loaders/asset-loader", () => ({
+	AssetLoader: vi.fn().mockImplementation(() => ({
+		load: vi.fn().mockResolvedValue({}),
+		unload: vi.fn(),
+		getProgress: vi.fn().mockReturnValue(100),
+		incrementRef: vi.fn(),
+		decrementRef: vi.fn().mockReturnValue(true),
+		loadTracker: { on: vi.fn(), off: vi.fn() }
+	}))
+}));
+
+// Mock LumaMaskController
+vi.mock("@core/luma-mask-controller", () => ({
+	LumaMaskController: vi.fn().mockImplementation(() => ({
+		initialize: vi.fn(),
+		update: vi.fn(),
+		dispose: vi.fn(),
+		cleanupForPlayer: vi.fn(),
+		getActiveMaskCount: vi.fn().mockReturnValue(0)
+	}))
+}));
+
+// Mock AlignmentGuides
+vi.mock("@canvas/system/alignment-guides", () => ({
+	AlignmentGuides: vi.fn().mockImplementation(() => ({
+		drawCanvasGuide: vi.fn(),
+		drawClipGuide: vi.fn(),
+		clear: vi.fn()
+	}))
+}));
+
+// Create mock container for players
+const createMockPlayerContainer = () => {
+	const children: unknown[] = [];
+	return {
+		children,
+		parent: null,
+		visible: true,
+		zIndex: 0,
+		addChild: vi.fn((child: unknown) => {
+			children.push(child);
+			return child;
+		}),
+		removeChild: vi.fn(),
+		destroy: vi.fn(),
+		setMask: vi.fn()
+	};
+};
+
+// Mock player factory - create functional mock players
+const createMockPlayer = (edit: Edit, config: ResolvedClip, type: PlayerType) => {
+	const container = createMockPlayerContainer();
+	const contentContainer = createMockPlayerContainer();
+
+	// Calculate initial resolved values in SECONDS (not milliseconds)
+	// The timing system now operates in seconds internally
+	const startSec = typeof config.start === "number" ? config.start : 0;
+	const lengthSec = typeof config.length === "number" ? config.length : 3;
+
+	let resolvedTiming = { start: startSec, length: lengthSec };
+
+	// Mock player object - clipId will be set by reconciler after creation
+	const mockPlayer: Record<string, unknown> = {
+		clipConfiguration: config,
+		clipId: null as string | null,
+		layer: 0,
+		playerType: type,
+		shouldDispose: false,
+		getContainer: () => container,
+		getContentContainer: () => contentContainer,
+		getStart: () => resolvedTiming.start,
+		getLength: () => resolvedTiming.length,
+		getEnd: () => resolvedTiming.start + resolvedTiming.length,
+		getSize: () => ({ width: 1920, height: 1080 }),
+		// Read timing intent from document (matches real Player behavior)
+		getTimingIntent: () => {
+			const clipId = mockPlayer["clipId"] as string | null;
+			if (clipId) {
+				const docClip = edit.getDocumentClipById(clipId);
+				if (docClip) {
+					return {
+						start: docClip.start,
+						length: docClip.length
+					};
+				}
+			}
+			// Fallback: use resolved values from clipConfiguration
+			return {
+				start: config.start,
+				length: config.length
+			};
+		},
+		getResolvedTiming: () => ({ ...resolvedTiming }),
+		setResolvedTiming: vi.fn((timing: { start: number; length: number }) => {
+			resolvedTiming = { ...timing };
+		}),
+		load: vi.fn().mockResolvedValue(undefined),
+		draw: vi.fn(),
+		update: vi.fn(),
+		reconfigureAfterRestore: vi.fn(),
+		reloadAsset: vi.fn().mockResolvedValue(undefined),
+		dispose: vi.fn(),
+		isActive: () => true,
+		getExportableClip: () => {
+			const exported = structuredClone(config);
+			// Apply timing intent from document (matches real Player behavior)
+			const intent = (mockPlayer["getTimingIntent"] as () => { start: unknown; length: unknown })();
+			(exported as { start: unknown }).start = intent.start;
+			(exported as { length: unknown }).length = intent.length;
+			return exported;
+		}
+	};
+
+	return mockPlayer;
+};
+
+// Mock all player types
+vi.mock("@canvas/players/video-player", () => ({
+	VideoPlayer: vi.fn().mockImplementation((edit, config) => createMockPlayer(edit, config, PlayerType.Video))
+}));
+
+vi.mock("@canvas/players/image-player", () => ({
+	ImagePlayer: vi.fn().mockImplementation((edit, config) => createMockPlayer(edit, config, PlayerType.Image))
+}));
+
+vi.mock("@canvas/players/text-player", () => ({
+	TextPlayer: Object.assign(
+		vi.fn().mockImplementation((edit, config) => createMockPlayer(edit, config, PlayerType.Text)),
+		{ resetFontCache: vi.fn() }
+	)
+}));
+
+vi.mock("@canvas/players/audio-player", () => ({
+	AudioPlayer: vi.fn().mockImplementation((edit, config) => createMockPlayer(edit, config, PlayerType.Audio))
+}));
+
+vi.mock("@canvas/players/luma-player", () => ({
+	LumaPlayer: vi.fn().mockImplementation((edit, config) => createMockPlayer(edit, config, PlayerType.Luma))
+}));
+
+vi.mock("@canvas/players/shape-player", () => ({
+	ShapePlayer: vi.fn().mockImplementation((edit, config) => createMockPlayer(edit, config, PlayerType.Shape))
+}));
+
+vi.mock("@canvas/players/html-player", () => ({
+	HtmlPlayer: vi.fn().mockImplementation((edit, config) => createMockPlayer(edit, config, PlayerType.Html))
+}));
+
+vi.mock("@canvas/players/rich-text-player", () => ({
+	RichTextPlayer: vi.fn().mockImplementation((edit, config) => createMockPlayer(edit, config, PlayerType.RichText))
+}));
+
+vi.mock("@canvas/players/caption-player", () => ({
+	CaptionPlayer: vi.fn().mockImplementation((edit, config) => createMockPlayer(edit, config, PlayerType.Caption))
+}));
+
+vi.mock("@canvas/players/svg-player", () => ({
+	SvgPlayer: vi.fn().mockImplementation((edit, config) => createMockPlayer(edit, config, PlayerType.Svg))
+}));
+
+/**
+ * Helper to access private Edit state for testing.
+ */
+function getEditState(edit: Edit): {
+	tracks: unknown[][];
+	clips: unknown[];
+	originalEdit: unknown;
+} {
+	const anyEdit = edit as unknown as {
+		tracks: unknown[][];
+		clips: unknown[];
+		originalEdit: unknown;
+	};
+	return {
+		tracks: anyEdit.tracks,
+		clips: anyEdit.clips,
+		originalEdit: anyEdit.originalEdit
+	};
+}
+
+/**
+ * Create a simple video clip config for testing.
+ */
+function createVideoClip(start: number, length: number): Clip {
+	return {
+		asset: { type: "video", src: "https://example.com/video.mp4", transcode: false },
+		start,
+		length,
+		fit: "crop"
+	};
+}
+
+/**
+ * Create a simple image clip config for testing.
+ */
+function createImageClip(start: number, length: number): Clip {
+	return {
+		asset: { type: "image", src: "https://example.com/image.jpg" },
+		start,
+		length,
+		fit: "crop"
+	};
+}
+
+/**
+ * Create a text clip config for testing.
+ */
+function createTextClip(start: number, length: number, text: string = "Hello"): Clip {
+	return {
+		asset: { type: "text", text },
+		start,
+		length,
+		fit: "none"
+	};
+}
+
+describe("Edit Clip Operations", () => {
+	let edit: Edit;
+	let events: EventEmitter;
+	let emitSpy: MockInstance;
+
+	beforeEach(async () => {
+		edit = new Edit({
+			timeline: {
+				tracks: [{ clips: [{ asset: { type: "image", src: "https://example.com/image.jpg" }, start: 0, length: 1 }] }]
+			},
+			output: { size: { width: 1920, height: 1080 }, format: "mp4" }
+		});
+		await edit.load();
+
+		events = edit.getInternalEvents();
+		emitSpy = vi.spyOn(events, "emit");
+	});
+
+	afterEach(() => {
+		edit.dispose();
+		vi.clearAllMocks();
+	});
+
+	describe("addClip()", () => {
+		it("adds clip to specified track", async () => {
+			const clip = createVideoClip(0, 5);
+
+			await edit.addClip(0, clip);
+
+			const { tracks } = getEditState(edit);
+			expect(tracks.length).toBeGreaterThanOrEqual(1);
+			expect(tracks[0].length).toBe(2);
+		});
+
+		it("creates new track if trackIdx exceeds current tracks", async () => {
+			const clip = createVideoClip(0, 5);
+
+			await edit.addClip(2, clip); // Track index 2 when no tracks exist
+
+			const { tracks } = getEditState(edit);
+			expect(tracks.length).toBeGreaterThanOrEqual(3);
+			expect(tracks[2].length).toBe(1);
+		});
+
+		it("emits clip:added event", async () => {
+			const clip = createVideoClip(0, 5);
+			emitSpy.mockClear();
+
+			await edit.addClip(0, clip);
+
+			expect(emitSpy).toHaveBeenCalledWith("clip:added", expect.anything());
+		});
+
+		it("updates totalDuration", async () => {
+			expect(edit.totalDuration).toBe(1);
+
+			await edit.addClip(0, createVideoClip(0, 5));
+
+			expect(edit.totalDuration).toBe(5); // 5 seconds
+		});
+
+		it("adds multiple clips to same track", async () => {
+			await edit.addClip(0, createVideoClip(0, 3));
+			await edit.addClip(0, createVideoClip(3, 2));
+
+			const { tracks } = getEditState(edit);
+			expect(tracks[0].length).toBe(3);
+			expect(edit.totalDuration).toBe(5);
+		});
+
+		it("is undoable - clip removed on undo", async () => {
+			await edit.addClip(0, createVideoClip(0, 5));
+			const { tracks: beforeUndo } = getEditState(edit);
+			expect(beforeUndo[0].length).toBe(2);
+
+			await edit.undo();
+
+			// After undo, the clip should be queued for disposal
+			// The actual removal happens on next update cycle
+			edit.update(0, ms(0));
+
+			const { tracks: afterUndo } = getEditState(edit);
+			expect(afterUndo[0]?.length ?? 0).toBe(1);
+		});
+	});
+
+	describe("deleteClip()", () => {
+		beforeEach(async () => {
+			// Set up a track with a clip
+			await edit.addClip(0, createVideoClip(0, 5));
+		});
+
+		it("removes clip from track", async () => {
+			const { tracks: before } = getEditState(edit);
+			expect(before[0].length).toBe(2);
+
+			edit.deleteClip(0, 0);
+
+			const { tracks: after } = getEditState(edit);
+			expect(after[0].length).toBe(1);
+		});
+
+		it("emits clip:deleted event", async () => {
+			emitSpy.mockClear();
+
+			edit.deleteClip(0, 0);
+
+			expect(emitSpy).toHaveBeenCalledWith("clip:deleted", expect.anything());
+		});
+
+		it("updates totalDuration after deletion", async () => {
+			await edit.addClip(0, createVideoClip(5, 3)); // Add third clip
+			expect(edit.totalDuration).toBe(8);
+
+			edit.deleteClip(0, 2); // Delete third clip (video 5-8s)
+
+			expect(edit.totalDuration).toBe(5);
+		});
+
+		it("is undoable - clip restored on undo", async () => {
+			edit.deleteClip(0, 0);
+
+			const { tracks: afterDelete } = getEditState(edit);
+			expect(afterDelete[0].length).toBe(1);
+
+			await edit.undo();
+			// Flush microtask queue - undo is async internally due to DeleteTrackCommand
+			await Promise.resolve();
+
+			const { tracks: afterUndo } = getEditState(edit);
+			expect(afterUndo[0].length).toBe(2);
+		});
+
+		it("prevents deletion of the last clip in the document", async () => {
+			// Inner beforeEach added a video clip, so we have 2 clips.
+			// Delete the video to leave only the initial image clip.
+			edit.deleteClip(0, 1);
+
+			const { tracks: before } = getEditState(edit);
+			expect(before[0].length).toBe(1);
+
+			// Attempt to delete the last remaining clip — should be prevented
+			edit.deleteClip(0, 0);
+
+			const { tracks: after } = getEditState(edit);
+			expect(after[0].length).toBe(1);
+		});
+
+		it("handles non-existent track gracefully", async () => {
+			expect(() => edit.deleteClip(99, 0)).not.toThrow();
+		});
+
+		it("handles non-existent clip gracefully", async () => {
+			expect(() => edit.deleteClip(0, 99)).not.toThrow();
+		});
+	});
+
+	describe("command results", () => {
+		it("deleteClip resolves noop when deleting the only clip", async () => {
+			// Only the initial image clip exists at this point
+			const result = await edit.deleteClip(0, 0);
+
+			expect(result).toEqual({ status: "noop", message: "Cannot delete the last clip" });
+			const { tracks } = getEditState(edit);
+			expect(tracks[0].length).toBe(1);
+		});
+
+		it("deleteClip resolves success when another clip remains", async () => {
+			await edit.addClip(0, createVideoClip(0, 5));
+
+			const result = await edit.deleteClip(0, 0);
+
+			expect(result.status).toBe("success");
+		});
+
+		it("deleteClip resolves noop for a missing position", async () => {
+			expect(await edit.deleteClip(99, 0)).toMatchObject({ status: "noop" });
+			expect(await edit.deleteClip(0, 99)).toMatchObject({ status: "noop" });
+		});
+
+		it("deleteClipById resolves noop for an unknown id", async () => {
+			const result = await edit.deleteClipById("not-a-real-clip-id");
+
+			expect(result).toEqual({ status: "noop", message: "No clip with id not-a-real-clip-id" });
+		});
+
+		it("updateClipById resolves noop for an unknown id", async () => {
+			const result = await edit.updateClipById("not-a-real-clip-id", {});
+
+			expect(result).toMatchObject({ status: "noop" });
+		});
+
+		it("addClip resolves success", async () => {
+			const result = await edit.addClip(0, createVideoClip(0, 5));
+
+			expect(result.status).toBe("success");
+		});
+
+		it("deleteTrack resolves noop when deleting the last track", async () => {
+			const result = await edit.deleteTrack(0);
+
+			expect(result).toEqual({ status: "noop", message: "Cannot delete the last track" });
+		});
+
+		it("undo resolves noop when the history is empty", async () => {
+			// load() builds the initial timeline without going through the command queue
+			expect(await edit.undo()).toEqual({ status: "noop", message: "Nothing to undo" });
+		});
+
+		it("undo resolves the undone command's outcome", async () => {
+			await edit.addClip(0, createVideoClip(0, 5));
+
+			expect((await edit.undo()).status).toBe("success");
+			expect(await edit.undo()).toEqual({ status: "noop", message: "Nothing to undo" });
+		});
+
+		it("redo resolves noop when there is nothing to redo", async () => {
+			const result = await edit.redo();
+
+			expect(result).toEqual({ status: "noop", message: "Nothing to redo" });
+		});
+
+		it("redo resolves the re-applied command's outcome", async () => {
+			await edit.addClip(0, createVideoClip(0, 5));
+			await edit.undo();
+
+			expect((await edit.redo()).status).toBe("success");
+			expect(await edit.redo()).toEqual({ status: "noop", message: "Nothing to redo" });
+		});
+
+		it("moveClipById resolves noop for an unknown id", async () => {
+			const result = await edit.moveClipById("not-a-real-clip-id", 0);
+
+			expect(result).toEqual({ status: "noop", message: "No clip with id not-a-real-clip-id" });
+		});
+
+		it("deleteClipById resolves success for a real clip", async () => {
+			await edit.addClip(0, createVideoClip(0, 5));
+			const doc = (edit as unknown as { document: { getClipId(t: number, c: number): string | null } }).document;
+			const id = doc.getClipId(0, 1);
+			expect(id).toBeTruthy();
+
+			expect((await edit.deleteClipById(id as string)).status).toBe("success");
+		});
+
+		it("moves a legacy text-to-speech merge binding through generation, undo and redo", async () => {
+			const mergedEdit = new Edit({
+				timeline: {
+					tracks: [
+						{
+							clips: [
+								{
+									asset: { type: "text-to-speech", text: "Hello {{ NAME }}", voice: "Matthew" },
+									start: 0,
+									length: 1
+								}
+							]
+						}
+					]
+				},
+				merge: [{ find: "NAME", replace: "Derk" }],
+				output: { size: { width: 1920, height: 1080 }, format: "mp4" }
+			});
+			await mergedEdit.load();
+			const clip = mergedEdit.getEdit({ includeIds: true }).timeline.tracks[0]?.clips[0] as Clip & { id: string };
+			mergedEdit.registerAssetGenerator(async () => ({ url: "https://cdn.example.com/speech.mp3" }));
+
+			await mergedEdit.generateClip(clip.id);
+			expect(mergedEdit.getEdit().timeline.tracks[0]?.clips[0]?.asset).toMatchObject({
+				type: "audio",
+				prompt: "Hello {{ NAME }}"
+			});
+			expect(mergedEdit.getResolvedClip(0, 0)?.asset).toMatchObject({ prompt: "Hello Derk" });
+
+			await mergedEdit.undo();
+			expect(mergedEdit.getEdit().timeline.tracks[0]?.clips[0]?.asset).toMatchObject({
+				type: "text-to-speech",
+				text: "Hello {{ NAME }}"
+			});
+
+			await mergedEdit.redo();
+			expect(mergedEdit.getEdit().timeline.tracks[0]?.clips[0]?.asset).toMatchObject({
+				type: "audio",
+				prompt: "Hello {{ NAME }}"
+			});
+			mergedEdit.dispose();
+		});
+
+		it("moves a legacy text-to-speech voice binding into options", async () => {
+			const mergedEdit = new Edit({
+				timeline: {
+					tracks: [{ clips: [{ asset: { type: "text-to-speech", text: "Hello", voice: "{{ VOICE }}" }, start: 0, length: 1 }] }]
+				},
+				merge: [{ find: "VOICE", replace: "Joanna" }],
+				output: { size: { width: 1920, height: 1080 }, format: "mp4" }
+			});
+			await mergedEdit.load();
+			const clip = mergedEdit.getEdit({ includeIds: true }).timeline.tracks[0]?.clips[0] as Clip & { id: string };
+			mergedEdit.registerAssetGenerator(async () => ({ url: "https://cdn.example.com/speech.mp3" }));
+
+			await mergedEdit.generateClip(clip.id);
+
+			expect(mergedEdit.getEdit().timeline.tracks[0]?.clips[0]?.asset).toMatchObject({
+				type: "audio",
+				options: { voice: "{{ VOICE }}" }
+			});
+			expect(mergedEdit.getResolvedClip(0, 0)?.asset).toMatchObject({ options: { voice: "Joanna" } });
+			// The exportable asset rebuilds from the resolved clip, so it needs the binding at its new path.
+			expect(mergedEdit.getOriginalAsset(0, 0)).toMatchObject({ options: { voice: "{{ VOICE }}" } });
+			mergedEdit.dispose();
+		});
+
+		it("moves a legacy image-to-video src binding into options.inputSrc", async () => {
+			const mergedEdit = new Edit({
+				timeline: {
+					tracks: [
+						{
+							clips: [{ asset: { type: "image-to-video", src: "{{ IMAGE }}", prompt: "orbit left" }, start: 0, length: 1 }]
+						}
+					]
+				},
+				merge: [{ find: "IMAGE", replace: "https://cdn.example.com/in.jpg" }],
+				output: { size: { width: 1920, height: 1080 }, format: "mp4" }
+			});
+			await mergedEdit.load();
+			const clip = mergedEdit.getEdit({ includeIds: true }).timeline.tracks[0]?.clips[0] as Clip & { id: string };
+			mergedEdit.registerAssetGenerator(async () => ({ url: "https://cdn.example.com/out.mp4" }));
+
+			await mergedEdit.generateClip(clip.id);
+
+			expect(mergedEdit.getEdit().timeline.tracks[0]?.clips[0]?.asset).toMatchObject({
+				type: "video",
+				src: "https://cdn.example.com/out.mp4",
+				options: { inputSrc: "{{ IMAGE }}" }
+			});
+			expect(mergedEdit.getResolvedClip(0, 0)?.asset).toMatchObject({
+				options: { inputSrc: "https://cdn.example.com/in.jpg" }
+			});
+			expect(mergedEdit.getOriginalAsset(0, 0)).toMatchObject({ options: { inputSrc: "{{ IMAGE }}" } });
+			mergedEdit.dispose();
+		});
+
+		it("reports a refused write as a failed generation", async () => {
+			const refusedEdit = new Edit({
+				timeline: { tracks: [{ clips: [{ asset: { type: "image", prompt: "a red apple" }, start: 0, length: 1 }] }] },
+				output: { size: { width: 1920, height: 1080 }, format: "mp4" }
+			} as never);
+			await refusedEdit.load();
+			const clip = refusedEdit.getEdit({ includeIds: true }).timeline.tracks[0]?.clips[0] as Clip & { id: string };
+			refusedEdit.registerAssetGenerator(async () => ({ url: "https://cdn.example.com/out.png" }));
+
+			const completed: string[] = [];
+			refusedEdit.getInternalEvents().on(EditEvent.ClipGenerationCompleted, ({ clipId }) => completed.push(clipId));
+			jest
+				.spyOn(refusedEdit as unknown as { executeCommand: () => Promise<unknown> }, "executeCommand")
+				.mockResolvedValue({ status: "noop", message: "Invalid clip at 0/0" });
+
+			await refusedEdit.generateClip(clip.id);
+
+			expect(refusedEdit.getClipGenerationState(clip.id)).toEqual({ status: "failed", error: "Invalid clip at 0/0" });
+			expect(completed).toEqual([]);
+			refusedEdit.dispose();
+		});
+
+		it("aborts in-flight generation when the clip is deleted by position", async () => {
+			await edit.addClip(0, { asset: { type: "image", prompt: "a red apple" }, start: 0, length: 5 } as never);
+			let aborted = false;
+			edit.registerAssetGenerator(
+				({ signal }) =>
+					new Promise((_resolve, reject) => {
+						signal.addEventListener("abort", () => {
+							aborted = true;
+							reject(new Error("aborted"));
+						});
+					})
+			);
+			const doc = (edit as unknown as { document: { getClipId(t: number, c: number): string | null } }).document;
+			const id = doc.getClipId(0, 1) as string;
+
+			const pending = edit.generateClip(id);
+			expect(edit.getClipGenerationState(id)?.status).toBe("generating");
+
+			await edit.deleteClip(0, 1);
+			await pending;
+
+			expect(aborted).toBe(true);
+			expect(edit.getClipGenerationState(id)).toBeUndefined();
+		});
+
+		it("updateClip resolves success and noop by position", async () => {
+			expect((await edit.updateClip(0, 0, { fit: "contain" })).status).toBe("success");
+			expect(await edit.updateClip(0, 99, {})).toMatchObject({ status: "noop" });
+		});
+
+		it("deleteTrack resolves success when another track remains", async () => {
+			await edit.addTrack(1, { clips: [createVideoClip(0, 5)] });
+
+			expect((await edit.deleteTrack(1)).status).toBe("success");
+		});
+
+		it("setOutputSize resolves a command outcome", async () => {
+			expect((await edit.setOutputSize(1280, 720)).status).toBe("success");
+		});
+
+		it("deleteClip returns the requested clip's outcome when a luma matte shares the track", async () => {
+			// Track 0: [image (initial), luma, video]
+			await edit.addClip(0, { asset: { type: "luma", src: "https://example.com/matte.mp4" }, start: 0, length: 5 });
+			await edit.addClip(0, createVideoClip(0, 5));
+
+			// Deleting the video (a content clip) removes the track's luma first, then the video —
+			// the resolved outcome is the video's
+			const result = await edit.deleteClip(0, 2);
+
+			expect(result.status).toBe("success");
+			const { tracks } = getEditState(edit);
+			expect(tracks[0].length).toBe(1);
+		});
+
+		it("deleteClip refuses atomically when the content clip with a luma is the last one", async () => {
+			// Track 0: [image (initial), luma] — the image is the last content clip
+			await edit.addClip(0, { asset: { type: "luma", src: "https://example.com/matte.mp4" }, start: 0, length: 5 });
+
+			// The deletion is refused up front: the luma must NOT be deleted as a side
+			// effect of a refused operation
+			const result = await edit.deleteClip(0, 0);
+
+			expect(result).toEqual({ status: "noop", message: "Cannot delete the last clip" });
+			const { tracks } = getEditState(edit);
+			expect(tracks[0].length).toBe(2);
+		});
+	});
+
+	describe("asset generation", () => {
+		it("notifies internal UI when generator configuration changes", () => {
+			const changed = vi.fn();
+			edit.getInternalEvents().on(InternalEvent.AssetGeneratorChanged, changed);
+
+			edit.registerAssetGenerator(async () => ({ url: "https://cdn.example.com/out.png" }), {
+				catalogue: {
+					models: [
+						{
+							model: "flux-schnell",
+							type: "image",
+							options: { type: "object", properties: {}, additionalProperties: false }
+						}
+					]
+				}
+			});
+
+			expect(changed).toHaveBeenCalledTimes(1);
+		});
+
+		type DocLookup = { document: { getClipId(t: number, c: number): string | null } };
+		const clipIdAt = (target: Edit, t: number, c: number) => (target as unknown as DocLookup).document.getClipId(t, c) as string;
+
+		const PROMPT_CLIP = { asset: { type: "image", prompt: "a red apple" }, start: 0, length: 5 };
+
+		/** Registers a handler that only ever settles by being aborted. */
+		function blockingGenerator(target: Edit) {
+			const seen = { aborted: false };
+			target.registerAssetGenerator(
+				({ signal }) =>
+					new Promise((_resolve, reject) => {
+						signal.addEventListener("abort", () => {
+							seen.aborted = true;
+							reject(new Error("aborted"));
+						});
+					})
+			);
+			return seen;
+		}
+
+		it("drops generation when the whole track is deleted", async () => {
+			await edit.addClip(1, PROMPT_CLIP as never);
+			const seen = blockingGenerator(edit);
+			const id = clipIdAt(edit, 1, 0);
+
+			const pending = edit.generateClip(id);
+			expect(edit.getClipGenerationState(id)?.status).toBe("generating");
+
+			await edit.deleteTrack(1);
+			await pending;
+
+			expect(seen.aborted).toBe(true);
+			expect(edit.getClipGenerationState(id)).toBeUndefined();
+		});
+
+		it("drops generation when the clip's addition is undone", async () => {
+			await edit.addClip(0, PROMPT_CLIP as never);
+			const seen = blockingGenerator(edit);
+			const id = clipIdAt(edit, 0, 1);
+
+			const pending = edit.generateClip(id);
+			expect(edit.getClipGenerationState(id)?.status).toBe("generating");
+
+			await edit.undo();
+			await pending;
+
+			expect(seen.aborted).toBe(true);
+			expect(edit.getClipGenerationState(id)).toBeUndefined();
+		});
+
+		it("drops generation when the edit is reloaded", async () => {
+			await edit.addClip(0, PROMPT_CLIP as never);
+			const seen = blockingGenerator(edit);
+			const id = clipIdAt(edit, 0, 1);
+
+			const pending = edit.generateClip(id);
+			expect(edit.getClipGenerationState(id)?.status).toBe("generating");
+
+			await edit.loadEdit({
+				timeline: {
+					tracks: [{ clips: [{ asset: { type: "image", src: "https://example.com/other.jpg" }, start: 0, length: 2 }] }]
+				},
+				output: { size: { width: 1920, height: 1080 }, format: "mp4" }
+			} as never);
+			await pending;
+
+			expect(seen.aborted).toBe(true);
+			expect(edit.getClipGenerationState(id)).toBeUndefined();
+		});
+
+		it("keeps generation running when the deletion is refused", async () => {
+			const solo = new Edit({
+				timeline: { tracks: [{ clips: [PROMPT_CLIP] }] },
+				output: { size: { width: 1920, height: 1080 }, format: "mp4" }
+			} as never);
+			await solo.load();
+			const seen = blockingGenerator(solo);
+			const id = clipIdAt(solo, 0, 0);
+
+			const pending = solo.generateClip(id);
+			expect((await solo.deleteClip(0, 0)).status).toBe("noop");
+
+			expect(seen.aborted).toBe(false);
+			expect(solo.getClipGenerationState(id)?.status).toBe("generating");
+
+			solo.dispose();
+			await pending;
+		});
+
+		it("hands the generator a prompt with merge fields resolved", async () => {
+			const templated = new Edit({
+				timeline: {
+					tracks: [{ clips: [{ asset: { type: "image", prompt: "an illustration of {{ SUBJECT }}" }, start: 0, length: 1 }] }]
+				},
+				output: { size: { width: 1920, height: 1080 }, format: "mp4" },
+				merge: [{ find: "SUBJECT", replace: "a red apple" }]
+			} as never);
+			await templated.load();
+
+			let received: string | undefined;
+			templated.registerAssetGenerator(async ({ asset }) => {
+				received = (asset as { prompt?: string }).prompt;
+				return { url: "https://cdn/out.png" };
+			});
+
+			const doc = (templated as unknown as { document: { getClipId(t: number, c: number): string | null } }).document;
+			await templated.generateClip(doc.getClipId(0, 0) as string);
+
+			expect(received).toBe("an illustration of a red apple");
+			templated.dispose();
+		});
+	});
+
+	describe("updateClip()", () => {
+		beforeEach(async () => {
+			await edit.addClip(0, createTextClip(0, 5, "Original"));
+		});
+
+		it("merges partial updates with existing config", async () => {
+			const clipBefore = edit.getClip(0, 1);
+			expect((clipBefore?.asset as { text: string }).text).toBe("Original");
+
+			edit.updateClip(0, 1, {
+				asset: { type: "text", text: "Updated" }
+			});
+
+			const clipAfter = edit.getClip(0, 1);
+			expect((clipAfter?.asset as { text: string }).text).toBe("Updated");
+		});
+
+		it("emits clip:updated event with previous/current", async () => {
+			emitSpy.mockClear();
+
+			edit.updateClip(0, 1, {
+				opacity: 0.5
+			});
+
+			expect(emitSpy).toHaveBeenCalledWith(
+				"clip:updated",
+				expect.objectContaining({
+					previous: expect.anything(),
+					current: expect.anything()
+				})
+			);
+		});
+
+		it("is undoable - restores original config on undo", async () => {
+			edit.updateClip(0, 1, {
+				asset: { type: "text", text: "Changed" }
+			});
+
+			const clipChanged = edit.getClip(0, 1);
+			expect((clipChanged?.asset as { text: string }).text).toBe("Changed");
+
+			await edit.undo();
+
+			const clipRestored = edit.getClip(0, 1);
+			expect((clipRestored?.asset as { text: string }).text).toBe("Original");
+		});
+
+		it("handles position updates", async () => {
+			edit.updateClip(0, 1, {
+				position: "topLeft"
+			});
+
+			const clip = edit.getClip(0, 1);
+			expect(clip?.position).toBe("topLeft");
+		});
+
+		it("handles offset updates", async () => {
+			edit.updateClip(0, 1, {
+				offset: { x: 0.1, y: -0.2 }
+			});
+
+			const clip = edit.getClip(0, 1);
+			expect(clip?.offset?.x).toBe(0.1);
+			expect(clip?.offset?.y).toBe(-0.2);
+		});
+
+		it("warns for non-existent clip", async () => {
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation();
+
+			edit.updateClip(99, 99, { opacity: 0.5 });
+
+			expect(warnSpy).toHaveBeenCalled();
+			warnSpy.mockRestore();
+		});
+	});
+
+	describe("track management", () => {
+		beforeEach(async () => {
+			await edit.addClip(0, createVideoClip(0, 3));
+			await edit.addClip(0, createImageClip(3, 2));
+			await edit.addClip(1, createTextClip(0, 4, "Track 2"));
+		});
+
+		it("getClip returns correct clip configuration", async () => {
+			const clip = edit.getClip(0, 1);
+			expect(clip?.asset?.type).toBe("video");
+
+			const clip2 = edit.getClip(0, 2);
+			expect(clip2?.asset?.type).toBe("image");
+
+			const clip3 = edit.getClip(1, 0);
+			expect(clip3?.asset?.type).toBe("text");
+		});
+
+		it("getClip returns null for invalid indices", async () => {
+			expect(edit.getClip(-1, 0)).toBeNull();
+			expect(edit.getClip(0, -1)).toBeNull();
+			expect(edit.getClip(99, 0)).toBeNull();
+			expect(edit.getClip(0, 99)).toBeNull();
+		});
+
+		it("getPlayerClip returns player instance", async () => {
+			const player = edit.getPlayerClip(0, 1);
+			expect(player).not.toBeNull();
+			expect(player?.clipConfiguration.asset?.type).toBe("video");
+		});
+
+		it("getTrack returns track configuration", async () => {
+			const track = edit.getTrack(0);
+			expect(track).not.toBeNull();
+			expect(track?.clips.length).toBe(3);
+		});
+
+		it("getTrack returns null for invalid index", async () => {
+			expect(edit.getTrack(99)).toBeNull();
+		});
+	});
+
+	describe("defensive copies from public getters", () => {
+		it("getClipById returns a copy — freezing it does not break in-place document updates", () => {
+			const clipId = edit.getClipId(0, 0);
+			expect(clipId).not.toBeNull();
+
+			// Hosts may store returned clips in state that deep-freezes (e.g. immer autoFreeze).
+			// updateClipInDocument mutates the stored clip in place (the canvas resize/drag path),
+			// so a leaked live reference would make this throw "object is not extensible".
+			Object.freeze(edit.getClipById(clipId!));
+
+			expect(() => edit.updateClipInDocument(clipId!, { width: 100, height: 100 })).not.toThrow();
+			expect(edit.getClipById(clipId!)?.width).toBe(100);
+		});
+
+		it("getClip returns a copy detached from live player state", () => {
+			const copy = edit.getClip(0, 0);
+			expect(copy).not.toBeNull();
+			(copy as { start?: number }).start = 999;
+
+			expect(edit.getClip(0, 0)?.start).not.toBe(999);
+		});
+
+		it("getTrack returns copies of clip configurations", () => {
+			const track = edit.getTrack(0);
+			expect(track).not.toBeNull();
+			(track!.clips[0] as { start?: number }).start = 999;
+
+			expect(edit.getTrack(0)?.clips[0]?.start).not.toBe(999);
+		});
+	});
+
+	describe("clip operations undo integration", () => {
+		it("addClip undo removes the added clip", async () => {
+			await edit.addClip(0, createVideoClip(0, 5));
+			expect(edit.getClip(0, 1)).not.toBeNull();
+
+			await edit.undo();
+			edit.update(0, ms(0)); // Process disposal
+
+			expect(edit.getClip(0, 1)).toBeNull();
+		});
+
+		it("deleteClip undo restores clip", async () => {
+			await edit.addClip(0, createVideoClip(0, 5));
+			edit.deleteClip(0, 1);
+			expect(edit.getClip(0, 1)).toBeNull();
+
+			await edit.undo();
+			// Flush microtask queue - undo is async internally due to DeleteTrackCommand
+			await Promise.resolve();
+
+			expect(edit.getClip(0, 1)).not.toBeNull();
+		});
+
+		it("updateClip undo restores original configuration", async () => {
+			await edit.addClip(0, createTextClip(0, 5, "Before"));
+
+			edit.updateClip(0, 1, {
+				asset: { type: "text", text: "After" }
+			});
+			expect((edit.getClip(0, 1)?.asset as { text: string }).text).toBe("After");
+
+			await edit.undo();
+
+			expect((edit.getClip(0, 1)?.asset as { text: string }).text).toBe("Before");
+		});
+
+		it("multiple operations can be undone in sequence", async () => {
+			await edit.addClip(0, createVideoClip(0, 3));
+			await edit.addClip(0, createImageClip(3, 2));
+
+			const { tracks: withThree } = getEditState(edit);
+			expect(withThree[0].length).toBe(3);
+
+			await edit.undo(); // Undo second add
+			edit.update(0, ms(0));
+
+			const { tracks: withTwo } = getEditState(edit);
+			expect(withTwo[0].length).toBe(2);
+
+			await edit.undo(); // Undo first add
+			edit.update(0, ms(0));
+
+			const { tracks: withOne } = getEditState(edit);
+			expect(withOne[0].length).toBe(1);
+		});
+
+		it("redo re-applies undone operations", async () => {
+			await edit.addClip(0, createVideoClip(0, 5));
+
+			await edit.undo();
+			edit.update(0, ms(0));
+			expect(edit.getClip(0, 1)).toBeNull();
+
+			await edit.redo();
+
+			expect(edit.getClip(0, 1)).not.toBeNull();
+		});
+	});
+
+	describe("copy/paste operations", () => {
+		beforeEach(async () => {
+			await edit.addClip(0, createVideoClip(0, 5));
+		});
+
+		it("copyClip stores clip configuration", async () => {
+			expect(edit.hasCopiedClip()).toBe(false);
+
+			edit.copyClip(0, 0);
+
+			expect(edit.hasCopiedClip()).toBe(true);
+		});
+
+		it("copyClip mirrors the clip to the OS clipboard as JSON", async () => {
+			// eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
+			const { writeSystemClipboardText } = (await import("@core/clipboard/system-clipboard")) as { writeSystemClipboardText: Mock };
+			writeSystemClipboardText.mockClear();
+
+			// Index 1 = the video clip added in the inner beforeEach (index 0 is the image from the outer beforeEach).
+			edit.copyClip(0, 1);
+
+			expect(writeSystemClipboardText).toHaveBeenCalledTimes(1);
+			const written = writeSystemClipboardText.mock.calls[0][0] as string;
+			const parsed = JSON.parse(written);
+			expect(parsed.asset.type).toBe("video");
+			// id must be stripped — pasted clip will get a fresh one.
+			expect(parsed.id).toBeUndefined();
+		});
+
+		it("copyClip emits clip:copied event", async () => {
+			emitSpy.mockClear();
+
+			edit.copyClip(0, 0);
+
+			expect(emitSpy).toHaveBeenCalledWith(
+				"clip:copied",
+				expect.objectContaining({
+					trackIndex: 0,
+					clipIndex: 0
+				})
+			);
+		});
+
+		it("pasteClip adds clip at playhead position", async () => {
+			edit.copyClip(0, 0);
+			edit.playbackTime = sec(5); // 5 seconds
+
+			await edit.pasteClip();
+
+			const { tracks } = getEditState(edit);
+			expect(tracks[0].length).toBe(3);
+
+			// The pasted clip should start at playhead time
+			const pastedClip = edit.getClip(0, 2);
+			expect(pastedClip?.start).toBe(5); // 5 seconds
+		});
+
+		it("pasteClip does nothing without copied clip", async () => {
+			const { tracks: before } = getEditState(edit);
+			const countBefore = before[0].length;
+
+			edit.pasteClip(); // No copied clip
+
+			const { tracks: after } = getEditState(edit);
+			expect(after[0].length).toBe(countBefore);
+		});
+
+		it("pasteClip lands on a new top track when paste would overlap on the source track", async () => {
+			edit.copyClip(0, 0);
+			edit.playbackTime = sec(2); // overlaps with the video clip at 0-5
+
+			const { tracks: before } = getEditState(edit);
+			const trackCountBefore = before.length;
+			const sourceCountBefore = before[0].length;
+
+			await edit.pasteClip();
+
+			const { tracks: after } = getEditState(edit);
+			// New track inserted at the top (index 0); original tracks shift down.
+			expect(after.length).toBe(trackCountBefore + 1);
+			// New top track holds only the pasted clip.
+			expect(after[0].length).toBe(1);
+			// Original track is now at index 1, untouched.
+			expect(after[1].length).toBe(sourceCountBefore);
+		});
+
+		it("undoing a paste that created a new track reverses both as one atomic step", async () => {
+			edit.copyClip(0, 0);
+			edit.playbackTime = sec(2); // forces overlap → insert-track path
+
+			const { tracks: beforePaste } = getEditState(edit);
+			const trackCountBeforePaste = beforePaste.length;
+
+			await edit.pasteClip();
+			expect(getEditState(edit).tracks.length).toBe(trackCountBeforePaste + 1);
+
+			// Single undo should reverse both the track creation and the clip add.
+			await edit.undo();
+
+			const { tracks: afterUndo } = getEditState(edit);
+			expect(afterUndo.length).toBe(trackCountBeforePaste);
+			expect(afterUndo[0].length).toBe(beforePaste[0].length);
+		});
+
+		it("undoing a paste clears the selection if the pasted clip was selected", async () => {
+			edit.copyClip(0, 0);
+			edit.playbackTime = sec(5); // non-overlap path; pastes onto same track
+			await edit.pasteClip();
+
+			const pastedIdx = getEditState(edit).tracks[0].length - 1;
+			edit.selectClip(0, pastedIdx);
+			expect(edit.isClipSelected(0, pastedIdx)).toBe(true);
+
+			await edit.undo();
+
+			// Without the fix, selection would still reference the disposed player
+			// and the canvas selection handles would linger over the gone clip.
+			expect(edit.getSelectedClipInfo()).toBeNull();
+		});
+
+		it("pasteClip stays on the source track when there is no overlap", async () => {
+			edit.copyClip(0, 0);
+			edit.playbackTime = sec(5); // touches end of original; non-overlapping
+
+			const { tracks: before } = getEditState(edit);
+			const trackCountBefore = before.length;
+			const sourceCountBefore = before[0].length;
+
+			await edit.pasteClip();
+
+			const { tracks: after } = getEditState(edit);
+			expect(after.length).toBe(trackCountBefore);
+			expect(after[0].length).toBe(sourceCountBefore + 1);
+		});
+
+		it("pasteClip remints alias so resolve does not throw Duplicate alias", async () => {
+			// Index 1 = video from inner beforeEach
+			await edit.updateClip(0, 1, { alias: "VOICEOVER" } as Partial<Clip>);
+			edit.copyClip(0, 1);
+			edit.playbackTime = sec(5);
+
+			await expect(edit.pasteClip()).resolves.toBeUndefined();
+
+			const original = edit.getDocumentClip(0, 1) as { alias?: string } | null;
+			expect(original?.alias).toBe("VOICEOVER");
+
+			const pasted = edit.getDocumentClip(0, 2) as { alias?: string; id?: string } | null;
+			expect(pasted).not.toBeNull();
+			expect(pasted?.alias).toBeDefined();
+			expect(pasted?.alias).not.toBe("VOICEOVER");
+			expect(pasted?.alias).toMatch(/^source_[\da-f]{8}$/i);
+		});
+
+		it("addClipFromJson remints alias that would collide with an existing clip", async () => {
+			await edit.updateClip(0, 1, { alias: "VOICEOVER" } as Partial<Clip>);
+			const source = edit.getDocumentClip(0, 1) as Clip;
+			const payload = structuredClone(source) as Clip & { id?: string; alias?: string };
+			payload.alias = "VOICEOVER";
+			payload.id = "should-be-stripped";
+			payload.start = 5;
+
+			await expect(edit.addClipFromJson(payload)).resolves.toBeUndefined();
+
+			const original = edit.getDocumentClip(0, 1) as { alias?: string } | null;
+			expect(original?.alias).toBe("VOICEOVER");
+
+			const pasted = edit.getDocumentClip(0, 2) as { alias?: string } | null;
+			expect(pasted?.alias).toBeDefined();
+			expect(pasted?.alias).not.toBe("VOICEOVER");
+		});
+	});
+
+	describe("addSvgClip()", () => {
+		const ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 16 16"><path d="M0 0L16 16"/></svg>';
+
+		it("inserts an svg-typed clip at the playhead with fit:contain by default", async () => {
+			edit.playbackTime = sec(3);
+			await edit.addSvgClip(ICON_SVG);
+
+			const clip = edit.getClip(0, edit.getTracks()[0].length - 1);
+			expect(clip?.asset?.type).toBe("svg");
+			expect(clip?.fit).toBe("contain");
+			expect(clip?.start).toBe(3);
+			expect(clip?.length).toBe(5);
+		});
+
+		it("populates clip width/height from the SVG's intrinsic dimensions", async () => {
+			await edit.addSvgClip(ICON_SVG);
+
+			const clip = edit.getClip(0, edit.getTracks()[0].length - 1);
+			expect(clip?.width).toBe(100);
+			expect(clip?.height).toBe(100);
+		});
+
+		it("strips <script> elements from the SVG before insertion", async () => {
+			const dirty = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><script>alert(1)</script><rect/></svg>';
+			await edit.addSvgClip(dirty);
+
+			const clip = edit.getClip(0, edit.getTracks()[0].length - 1);
+			const src = (clip?.asset as { src?: string } | undefined)?.src ?? "";
+			expect(src).not.toMatch(/<script/i);
+			expect(src).toMatch(/<rect/);
+		});
+
+		it("strips on* event-handler attributes from the SVG before insertion", async () => {
+			const dirty = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10" onload="alert(1)"><rect onclick="evil()"/></svg>';
+			await edit.addSvgClip(dirty);
+
+			const clip = edit.getClip(0, edit.getTracks()[0].length - 1);
+			const src = (clip?.asset as { src?: string } | undefined)?.src ?? "";
+			expect(src).not.toMatch(/onload=/i);
+			expect(src).not.toMatch(/onclick=/i);
+		});
+
+		it("honours opts.trackIndex, opts.start, and opts.length overrides", async () => {
+			await edit.addSvgClip(ICON_SVG, {
+				trackIndex: 1,
+				start: sec(7),
+				length: sec(2)
+			});
+
+			const tracks = edit.getTracks();
+			expect(tracks.length).toBeGreaterThanOrEqual(2);
+			const clip = edit.getClip(1, tracks[1].length - 1);
+			expect(clip?.start).toBe(7);
+			expect(clip?.length).toBe(2);
+		});
+
+		it("falls back to a new top track when the playhead-time range overlaps an existing clip", async () => {
+			await edit.addClip(0, createVideoClip(0, 10));
+
+			const trackCountBefore = edit.getTracks().length;
+			edit.playbackTime = sec(2); // overlaps with [0, 10]
+
+			await edit.addSvgClip(ICON_SVG);
+
+			const after = edit.getTracks();
+			expect(after.length).toBe(trackCountBefore + 1);
+			// New top track holds the SVG; original track shifted down.
+			expect(after[0].length).toBe(1);
+		});
+
+		it("undoing an SVG paste that created a new track reverses both as one atomic step", async () => {
+			await edit.addClip(0, createVideoClip(0, 10));
+			edit.playbackTime = sec(2); // forces overlap → insert-track path
+
+			const trackCountBefore = edit.getTracks().length;
+			await edit.addSvgClip(ICON_SVG);
+			expect(edit.getTracks().length).toBe(trackCountBefore + 1);
+
+			await edit.undo();
+
+			expect(edit.getTracks().length).toBe(trackCountBefore);
+		});
+	});
+
+	describe("addClipFromJson()", () => {
+		const validClip = {
+			asset: { type: "image" as const, src: "https://example.com/x.jpg" },
+			start: 0,
+			length: 4,
+			fit: "contain" as const
+		};
+
+		it("inserts a clip from a Clip object, stripping id", async () => {
+			await edit.addClipFromJson({ ...validClip, id: "should-be-stripped" } as unknown as Parameters<typeof edit.addClipFromJson>[0]);
+
+			const clip = edit.getClip(0, edit.getTracks()[0].length - 1);
+			expect(clip?.asset?.type).toBe("image");
+			// Document assigns a fresh id different from the input one.
+			expect((clip as { id?: string }).id).not.toBe("should-be-stripped");
+		});
+
+		it("inserts a clip from a JSON string", async () => {
+			await edit.addClipFromJson(JSON.stringify(validClip));
+
+			const clip = edit.getClip(0, edit.getTracks()[0].length - 1);
+			expect(clip?.asset?.type).toBe("image");
+			expect(clip?.length).toBe(4);
+		});
+
+		it("rejects when the JSON string is invalid clip JSON", async () => {
+			await expect(edit.addClipFromJson("{ not valid json")).rejects.toThrow(/invalid clip JSON/i);
+			await expect(edit.addClipFromJson('{"foo": "bar"}')).rejects.toThrow(/invalid clip JSON/i);
+		});
+
+		it("respects the JSON's start by default", async () => {
+			edit.playbackTime = sec(99);
+			await edit.addClipFromJson({ ...validClip, start: 3 } as unknown as Parameters<typeof edit.addClipFromJson>[0]);
+
+			const clip = edit.getClip(0, edit.getTracks()[0].length - 1);
+			expect(clip?.start).toBe(3);
+		});
+
+		it("opts.start overrides the JSON's start (paste-flow behaviour)", async () => {
+			await edit.addClipFromJson(validClip as unknown as Parameters<typeof edit.addClipFromJson>[0], { start: sec(7) });
+
+			const clip = edit.getClip(0, edit.getTracks()[0].length - 1);
+			expect(clip?.start).toBe(7);
+		});
+
+		it("falls back to a new top track when paste would overlap", async () => {
+			await edit.addClip(0, createVideoClip(0, 10));
+			const trackCountBefore = edit.getTracks().length;
+
+			await edit.addClipFromJson({ ...validClip, start: 2, length: 3 } as unknown as Parameters<typeof edit.addClipFromJson>[0]);
+
+			expect(edit.getTracks().length).toBe(trackCountBefore + 1);
+			expect(edit.getTracks()[0].length).toBe(1);
+		});
+
+		it("sanitises embedded SVG src for parity with addSvgClip", async () => {
+			const svgClipJson = {
+				asset: { type: "svg" as const, src: '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script><rect/></svg>' },
+				start: 0,
+				length: 3,
+				fit: "contain" as const
+			};
+
+			await edit.addClipFromJson(svgClipJson as unknown as Parameters<typeof edit.addClipFromJson>[0]);
+
+			const clip = edit.getClip(0, edit.getTracks()[0].length - 1);
+			const src = (clip?.asset as { src?: string } | undefined)?.src ?? "";
+			expect(src).not.toMatch(/<script/i);
+		});
+	});
+
+	describe("addTracksFromJson()", () => {
+		const multiClipTrack = {
+			clips: [
+				{ asset: { type: "image" as const, src: "https://example.com/a.jpg" }, start: 0, length: 4 },
+				{ asset: { type: "image" as const, src: "https://example.com/b.jpg" }, start: 4, length: 3 }
+			]
+		};
+
+		it("inserts a single multi-clip track as one new top track at the playhead", async () => {
+			edit.playbackTime = sec(10);
+			const trackCountBefore = edit.getTracks().length;
+
+			await edit.addTracksFromJson(JSON.stringify(multiClipTrack));
+
+			const after = edit.getTracks();
+			expect(after.length).toBe(trackCountBefore + 1);
+			// New top track holds both clips of the source.
+			expect(after[0].length).toBe(2);
+			// Earliest source clip anchors at playhead 10; second offset by +4 → 14.
+			const starts = after[0].map(p => p.getStart()).sort((a, b) => a - b);
+			expect(starts).toEqual([10, 14]);
+		});
+
+		it("inserts multiple tracks as multiple new top tracks, source order preserved", async () => {
+			const trackA = { clips: [{ asset: { type: "image" as const, src: "x" }, start: 0, length: 5 }] };
+			const trackB = { clips: [{ asset: { type: "image" as const, src: "y" }, start: 0, length: 3 }] };
+			edit.playbackTime = sec(0);
+			const trackCountBefore = edit.getTracks().length;
+
+			await edit.addTracksFromJson(JSON.stringify([trackA, trackB]));
+
+			const after = edit.getTracks();
+			expect(after.length).toBe(trackCountBefore + 2);
+			// Source order: trackA → after[0], trackB → after[1].
+			expect((after[0][0].clipConfiguration.asset as { src?: string }).src).toBe("x");
+			expect((after[1][0].clipConfiguration.asset as { src?: string }).src).toBe("y");
+		});
+
+		it("accepts comma-separated track fragments by auto-wrapping in [...]", async () => {
+			const trackA = JSON.stringify({ clips: [{ asset: { type: "image" as const, src: "x" }, start: 0, length: 5 }] });
+			const trackB = JSON.stringify({ clips: [{ asset: { type: "image" as const, src: "y" }, start: 0, length: 3 }] });
+			edit.playbackTime = sec(0);
+			const trackCountBefore = edit.getTracks().length;
+
+			// User-pasted comma fragment from a tracks array.
+			await edit.addTracksFromJson(`${trackA},${trackB}`);
+
+			expect(edit.getTracks().length).toBe(trackCountBefore + 2);
+		});
+
+		it("preserves relative timing across multiple tracks (global earliest anchors at playhead)", async () => {
+			const trackA = { clips: [{ asset: { type: "image" as const, src: "x" }, start: 2, length: 3 }] };
+			const trackB = { clips: [{ asset: { type: "image" as const, src: "y" }, start: 7, length: 2 }] };
+			edit.playbackTime = sec(20);
+
+			await edit.addTracksFromJson(JSON.stringify([trackA, trackB]));
+
+			// Global min start was 2 → anchored at 20 (offset +18). Other clip at 7 → 25.
+			const after = edit.getTracks();
+			const newTrackClips = [...after[0], ...after[1]];
+			const starts = newTrackClips.map(p => p.getStart()).sort((a, b) => a - b);
+			expect(starts).toEqual([20, 25]);
+		});
+
+		it("works for the user-reported single-clip track shape", async () => {
+			const richTextTrack = {
+				clips: [
+					{
+						asset: {
+							type: "rich-text" as const,
+							text: "Roboto w100",
+							font: { family: "Roboto", weight: 100, size: 22, color: "#000088" }
+						},
+						start: 0,
+						length: 5,
+						width: 540,
+						height: 60,
+						offset: { x: -0.3, y: -0.44 }
+					}
+				]
+			};
+
+			await edit.addTracksFromJson(JSON.stringify(richTextTrack));
+
+			const richTextClips = edit
+				.getTracks()
+				.flat()
+				.filter(p => p.clipConfiguration.asset?.type === "rich-text");
+			expect(richTextClips).toHaveLength(1);
+		});
+
+		it("works for the user-reported two-track comma fragment", async () => {
+			const fragment = `{
+				"clips": [{
+					"asset": { "type": "rich-text", "text": "Roboto w100", "font": { "family": "Roboto", "weight": 100, "size": 22, "color": "#000088" } },
+					"start": 0, "length": 5, "width": 540, "height": 60, "offset": { "x": -0.30, "y": -0.44 }
+				}]
+			},
+			{
+				"clips": [{
+					"asset": { "type": "rich-text", "text": "Roboto w200", "font": { "family": "Roboto", "weight": 200, "size": 22, "color": "#000088" } },
+					"start": 0, "length": 5, "width": 540, "height": 60, "offset": { "x": -0.30, "y": -0.37 }
+				}]
+			}`;
+			const trackCountBefore = edit.getTracks().length;
+
+			await edit.addTracksFromJson(fragment);
+
+			expect(edit.getTracks().length).toBe(trackCountBefore + 2);
+		});
+
+		it("works for the user-reported two-track comma fragment WITH a trailing comma", async () => {
+			// User copied two tracks out of a `tracks: [...]` array; the trailing
+			// comma after the last `}` is the separator that came along.
+			const fragment = `{
+				"clips": [{
+					"asset": { "type": "rich-text", "text": "Roboto w100", "font": { "family": "Roboto", "weight": 100, "size": 22, "color": "#000088" } },
+					"start": 0, "length": 5, "width": 540, "height": 60, "offset": { "x": -0.30, "y": -0.44 }
+				}]
+			},
+			{
+				"clips": [{
+					"asset": { "type": "rich-text", "text": "Roboto w200", "font": { "family": "Roboto", "weight": 200, "size": 22, "color": "#000088" } },
+					"start": 0, "length": 5, "width": 540, "height": 60, "offset": { "x": -0.30, "y": -0.37 }
+				}]
+			},`;
+			const trackCountBefore = edit.getTracks().length;
+
+			await edit.addTracksFromJson(fragment);
+
+			expect(edit.getTracks().length).toBe(trackCountBefore + 2);
+		});
+
+		it("undo reverses a multi-track paste atomically in ONE step", async () => {
+			const trackA = { clips: [{ asset: { type: "image" as const, src: "x" }, start: 0, length: 5 }] };
+			const trackB = { clips: [{ asset: { type: "image" as const, src: "y" }, start: 0, length: 3 }] };
+			const trackCountBefore = edit.getTracks().length;
+
+			await edit.addTracksFromJson(JSON.stringify([trackA, trackB]));
+			expect(edit.getTracks().length).toBe(trackCountBefore + 2);
+
+			// Single undo must remove BOTH pasted tracks.
+			await edit.undo();
+
+			expect(edit.getTracks().length).toBe(trackCountBefore);
+		});
+
+		it("undo reverses a multi-track multi-clip paste atomically in ONE step", async () => {
+			const trackA = {
+				clips: [
+					{ asset: { type: "image" as const, src: "x1" }, start: 0, length: 2 },
+					{ asset: { type: "image" as const, src: "x2" }, start: 2, length: 2 }
+				]
+			};
+			const trackB = {
+				clips: [
+					{ asset: { type: "image" as const, src: "y1" }, start: 0, length: 3 },
+					{ asset: { type: "image" as const, src: "y2" }, start: 3, length: 1 },
+					{ asset: { type: "image" as const, src: "y3" }, start: 4, length: 2 }
+				]
+			};
+			const trackCountBefore = edit.getTracks().length;
+
+			await edit.addTracksFromJson(JSON.stringify([trackA, trackB]));
+			expect(edit.getTracks().length).toBe(trackCountBefore + 2);
+
+			// Single undo removes BOTH tracks and ALL 5 clips.
+			await edit.undo();
+
+			expect(edit.getTracks().length).toBe(trackCountBefore);
+		});
+
+		it("rejects when the input is not a valid tracks JSON", async () => {
+			await expect(edit.addTracksFromJson("{ not valid json")).rejects.toThrow(/invalid tracks JSON/i);
+			await expect(edit.addTracksFromJson('{"foo": "bar"}')).rejects.toThrow(/invalid tracks JSON/i);
+			// Clip-shaped JSON must also reject.
+			await expect(edit.addTracksFromJson('{"asset":{"type":"image","src":"x"},"start":0,"length":5}')).rejects.toThrow(/invalid tracks JSON/i);
+		});
+	});
+
+	describe("selection operations", () => {
+		beforeEach(async () => {
+			await edit.addClip(0, createVideoClip(0, 5));
+			await edit.addClip(1, createImageClip(0, 3));
+		});
+
+		it("selectClip updates selected clip", async () => {
+			expect(edit.isClipSelected(0, 0)).toBe(false);
+
+			edit.selectClip(0, 0);
+
+			expect(edit.isClipSelected(0, 0)).toBe(true);
+			expect(edit.isClipSelected(1, 0)).toBe(false);
+		});
+
+		it("selectClip deselects previous selection", async () => {
+			edit.selectClip(0, 0);
+			expect(edit.isClipSelected(0, 0)).toBe(true);
+
+			edit.selectClip(1, 0);
+
+			expect(edit.isClipSelected(0, 0)).toBe(false);
+			expect(edit.isClipSelected(1, 0)).toBe(true);
+		});
+
+		it("clearSelection clears selected clip", async () => {
+			edit.selectClip(0, 0);
+			expect(edit.isClipSelected(0, 0)).toBe(true);
+
+			edit.clearSelection();
+
+			expect(edit.isClipSelected(0, 0)).toBe(false);
+		});
+
+		it("getSelectedClipInfo returns correct info", async () => {
+			expect(edit.getSelectedClipInfo()).toBeNull();
+
+			edit.selectClip(1, 0);
+
+			const info = edit.getSelectedClipInfo();
+			expect(info).not.toBeNull();
+			expect(info?.trackIndex).toBe(1);
+			expect(info?.clipIndex).toBe(0);
+		});
+	});
+
+	describe("duration calculations", () => {
+		it("totalDuration reflects longest track", async () => {
+			await edit.addClip(0, createVideoClip(0, 5));
+			await edit.addClip(1, createImageClip(0, 8));
+
+			expect(edit.totalDuration).toBe(8);
+		});
+
+		it("duration updates when clips change", async () => {
+			await edit.addClip(0, createVideoClip(0, 5));
+			expect(edit.totalDuration).toBe(5);
+
+			await edit.addClip(0, createVideoClip(5, 3));
+			expect(edit.totalDuration).toBe(8);
+
+			edit.deleteClip(0, 2); // Delete longest clip (video 5-8s)
+			expect(edit.totalDuration).toBe(5);
+		});
+
+		it("duration reflects initial clip", async () => {
+			expect(edit.totalDuration).toBe(1);
+		});
+	});
+
+	describe("AddClipCommand export state sync", () => {
+		// Note: The tests below call loadEdit which starts with this clip,
+		// then add more clips on top. Test assertions account for this.
+		const baseEdit = {
+			timeline: {
+				tracks: [{ clips: [{ asset: { type: "image", src: "https://example.com/base.jpg" }, start: 0, length: 1 }] }] as { clips: ResolvedClip[] }[]
+			},
+			output: { format: "mp4" as const, fps: 25 as const, size: { width: 1920, height: 1080 } }
+		};
+
+		it("tracks clip state after addClip", async () => {
+			// Load an initial edit (has 1 base image clip)
+			await edit.loadEdit(baseEdit);
+
+			const clip = createVideoClip(1, 5); // Start after base clip
+			await edit.addClip(0, clip);
+
+			// Verify added clip is tracked (appended at index 1)
+			const player = edit.getPlayerClip(0, 1);
+			expect(player).not.toBeNull();
+			expect(player?.clipConfiguration.asset?.type).toBe("video");
+		});
+
+		it("removes clip state on undo", async () => {
+			// Load an initial edit (has 1 base image clip)
+			await edit.loadEdit(baseEdit);
+
+			const clip = createVideoClip(1, 5);
+			await edit.addClip(0, clip);
+
+			// Verify added clip exists (appended at index 1)
+			expect(edit.getPlayerClip(0, 1)).not.toBeNull();
+
+			await edit.undo();
+			edit.update(0, ms(0)); // Process disposal
+
+			// Verify added clip is removed (base clip still at index 0)
+			expect(edit.getPlayerClip(0, 1)).toBeNull();
+			// Base clip should still exist
+			expect(edit.getPlayerClip(0, 0)).not.toBeNull();
+		});
+
+		it("tracks multiple clips after addClip", async () => {
+			await edit.loadEdit(baseEdit); // 1 base clip
+
+			await edit.addClip(0, createVideoClip(1, 3));
+			await edit.addClip(0, createImageClip(4, 2));
+
+			// Verify all 3 clips are tracked (1 base + 2 added)
+			const { tracks } = getEditState(edit);
+			expect(tracks[0]).toHaveLength(3);
+		});
+
+		it("maintains state across multiple undo operations", async () => {
+			await edit.loadEdit(baseEdit); // 1 base clip
+
+			await edit.addClip(0, createVideoClip(1, 3));
+			await edit.addClip(0, createImageClip(4, 2));
+
+			const { tracks: withThree } = getEditState(edit);
+			expect(withThree[0]).toHaveLength(3); // 1 base + 2 added
+
+			await edit.undo(); // Undo second add
+			edit.update(0, ms(0));
+
+			const { tracks: withTwo } = getEditState(edit);
+			expect(withTwo[0]).toHaveLength(2); // 1 base + 1 added
+
+			await edit.undo(); // Undo first add
+			edit.update(0, ms(0));
+
+			const { tracks: withOne } = getEditState(edit);
+			expect(withOne[0]).toHaveLength(1); // Just base clip
+		});
+	});
+
+	describe("edge cases", () => {
+		it("handles rapid add/delete cycles", async () => {
+			for (let i = 0; i < 5; i += 1) {
+				await edit.addClip(0, createVideoClip(i, 1)); // eslint-disable-line no-await-in-loop -- Sequential adds are intentional for this test
+			}
+
+			const { tracks: withSix } = getEditState(edit);
+			expect(withSix[0].length).toBe(6);
+
+			for (let i = 4; i >= 0; i -= 1) {
+				await edit.deleteClip(0, i); // eslint-disable-line no-await-in-loop -- Sequential deletes are intentional for this test
+			}
+
+			// One clip remains (guard prevents deleting last clip)
+			const { tracks: withOne } = getEditState(edit);
+			expect(withOne[0].length).toBe(1);
+		});
+
+		it("handles updates to deleted clips gracefully", async () => {
+			await edit.addClip(0, createVideoClip(0, 5));
+			edit.deleteClip(0, 1);
+
+			// Should not throw when updating a non-existent clip index
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation();
+			edit.updateClip(0, 1, { opacity: 0.5 });
+			warnSpy.mockRestore();
+		});
+
+		it("maintains track integrity across operations", async () => {
+			await edit.addClip(0, createVideoClip(0, 2));
+			await edit.addClip(0, createImageClip(2, 2));
+			await edit.addClip(0, createTextClip(4, 2, "Test"));
+
+			// Delete middle added clip (image at index 2)
+			edit.deleteClip(0, 2);
+
+			const { tracks } = getEditState(edit);
+			expect(tracks[0].length).toBe(3);
+
+			// Initial image clip at index 0
+			expect(edit.getClip(0, 0)?.asset?.type).toBe("image");
+			// Added video clip at index 1
+			expect(edit.getClip(0, 1)?.asset?.type).toBe("video");
+			// Text clip shifted from index 3 to index 2
+			expect(edit.getClip(0, 2)?.asset?.type).toBe("text");
+		});
+	});
+});
