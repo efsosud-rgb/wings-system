@@ -1,5 +1,6 @@
 import { assertCents, type Cents } from './money.js';
 import { META_DAILY_OVERDELIVERY_FACTOR } from './fixtures.js';
+import { MetaApiError } from './meta-client.js';
 import type {
   AdsPlatformClient,
   BreakdownInsightRow,
@@ -20,7 +21,10 @@ import type {
  * How the simulator splits a day's delivery, so the audience views have
  * something to show. Fixed shares, not random: a test can assert on them.
  */
-export const FAKE_BREAKDOWN_SHARES: Record<BreakdownKind, { key: string; subKey: string; share: number }[]> = {
+export const FAKE_BREAKDOWN_SHARES: Record<
+  BreakdownKind,
+  { key: string; subKey: string; share: number }[]
+> = {
   placement: [
     { key: 'instagram', subKey: 'feed', share: 0.4 },
     { key: 'instagram', subKey: 'reels', share: 0.35 },
@@ -110,6 +114,13 @@ export interface FakeMetaOptions {
   /** How long reported spend trails actual spend. */
   reportingLagMinutes?: number;
   now?: () => Date;
+  /**
+   * What the token may not read, the way staging's read token answered
+   * "(#10) Permission Denied": the payment fields of the account, or a
+   * breakdown. The live client turns a denial on `funding` into
+   * `fundingKind: 'unavailable'` with a warning; this does the same.
+   */
+  permissionDenied?: { funding?: boolean; breakdowns?: BreakdownKind[] };
 }
 
 interface InternalCampaign extends PlatformCampaign {
@@ -134,6 +145,7 @@ export class FakeMetaClient implements AdsPlatformClient {
   private readonly campaigns = new Map<string, InternalCampaign>();
   private readonly overdeliveryFactor: number;
   private readonly reportingLagMinutes: number;
+  private readonly permissionDenied: NonNullable<FakeMetaOptions['permissionDenied']>;
   private readonly now: () => Date;
   private readonly adSets = new Map<string, PlatformAdSet & { actualSpendCents: Cents }>();
   private readonly ads: FakeAdSeed[] = [];
@@ -153,6 +165,7 @@ export class FakeMetaClient implements AdsPlatformClient {
       META_DAILY_OVERDELIVERY_FACTOR,
     );
     this.reportingLagMinutes = options.reportingLagMinutes ?? 0;
+    this.permissionDenied = options.permissionDenied ?? {};
     this.now = options.now ?? (() => new Date());
 
     for (const seed of options.campaigns ?? []) {
@@ -271,14 +284,26 @@ export class FakeMetaClient implements AdsPlatformClient {
 
   async getAccount(): Promise<PlatformAccount> {
     this.calls.push({ method: 'getAccount', args: [] });
-    return {
+    const base = {
       id: this.accountId,
       currency: 'BRL',
       spendCapCents: this.spendCapCents,
       amountSpentCents: this.reportedTotalSpendCents(),
       capReached: this.capReached,
+    };
+    if (this.permissionDenied.funding) {
+      return {
+        ...base,
+        prepaidBalanceCents: null,
+        fundingKind: 'unavailable',
+        warnings: ['funding_source_details não disponível para o token de leitura (#10)'],
+      };
+    }
+    return {
+      ...base,
       prepaidBalanceCents: this.prepaidBalanceCents,
       fundingKind: this.prepaidBalanceCents === null ? 'credit_card' : 'prepaid',
+      warnings: [],
     };
   }
 
@@ -366,6 +391,9 @@ export class FakeMetaClient implements AdsPlatformClient {
   /** The campaign's day split by fixed shares (`FAKE_BREAKDOWN_SHARES`). */
   async getBreakdowns(kind: BreakdownKind, sinceDate: string): Promise<BreakdownInsightRow[]> {
     this.calls.push({ method: 'getBreakdowns', args: [kind, sinceDate] });
+    if (this.permissionDenied.breakdowns?.includes(kind)) {
+      throw new MetaApiError(10, '(#10) Permission Denied');
+    }
     const rows: BreakdownInsightRow[] = [];
     for (const campaign of this.campaigns.values()) {
       for (const [date, daySpend] of campaign.dailySpend) {

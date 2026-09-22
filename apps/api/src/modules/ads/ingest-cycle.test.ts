@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../../db/client.js';
-import { adAccounts, adCampaigns, budgetPeriods } from '../../db/schema/index.js';
+import { adAccountDaily, adAccounts, adCampaigns, budgetPeriods } from '../../db/schema/index.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { openPeriod } from './budget-guard.js';
 import { runIngestionCycle, type AccountCycleResult, type CycleAccount } from './ingest-cycle.js';
@@ -201,5 +201,78 @@ describe('an ingestion cycle over several accounts', () => {
 
     expect(seen).toEqual(['ok', 'ok']);
     expect(cycle.failed).toBe(0);
+  });
+});
+
+describe('what the read token may not see', () => {
+  // The staging failure of 22/09: "(#10) Permission Denied" on the account's
+  // payment fields took the whole account down in `reconcile`. A denied
+  // nicety is "não disponível", and the money steps still run.
+  it('records the payment fields as unavailable and still reconciles', async () => {
+    const target = await account();
+    const client = new FakeMetaClient({
+      accountId: target.externalId,
+      campaigns: [{ id: 'c1', name: 'Leads', dailyBudgetCents: 5000 }],
+      permissionDenied: { funding: true },
+    });
+    client.simulateDay('2026-09-17');
+
+    const cycle = await runIngestionCycle(db, [target], {
+      clientFor: () => client,
+      since: SINCE,
+      now: NOW,
+    });
+
+    const [result] = cycle.accounts;
+    expect(result?.status).toBe('ok');
+    expect(result?.status === 'ok' && result.accountDay.warnings[0]).toContain('#10');
+    expect(await lastReconciledAt(target.id)).toEqual(NOW);
+    const day = await db.query.adAccountDaily.findFirst({
+      where: eq(adAccountDaily.adAccountId, target.id),
+    });
+    expect(day?.fundingKind).toBe('unavailable');
+    expect(day?.prepaidBalanceCents).toBeNull();
+    expect(day?.spendCapCents).toBeNull();
+  });
+
+  it('marks a denied breakdown as unavailable and goes on with the others', async () => {
+    const target = await account();
+    const client = new FakeMetaClient({
+      accountId: target.externalId,
+      campaigns: [{ id: 'c1', name: 'Leads', dailyBudgetCents: 5000 }],
+      permissionDenied: { breakdowns: ['region', 'hour'] },
+    });
+    client.simulateDay('2026-09-17');
+
+    const cycle = await runIngestionCycle(db, [target], {
+      clientFor: () => client,
+      since: SINCE,
+      now: NOW,
+    });
+
+    const [result] = cycle.accounts;
+    expect(result?.status).toBe('ok');
+    if (result?.status !== 'ok') throw new Error('unreachable');
+    expect(result.breakdowns.region).toMatchObject({ unavailable: true, rows: 0 });
+    expect(result.breakdowns.hour).toMatchObject({ unavailable: true, rows: 0 });
+    expect(result.breakdowns.placement.unavailable).toBeUndefined();
+    expect(result.breakdowns.placement.rows).toBeGreaterThan(0);
+    // The steps after the breakdowns still ran.
+    expect(result.accountDay.day).toBe('2026-09-18');
+    expect(cycle.failed).toBe(0);
+  });
+
+  it('still fails the account on a breakdown error that is not a permission', async () => {
+    const target = await account();
+    const client = liveLike(target.externalId, [{ id: 'c1', name: 'Leads' }]);
+    client.getBreakdowns = () => Promise.reject(new Error('timeout'));
+
+    const cycle = await runIngestionCycle(db, [target], {
+      clientFor: () => client,
+      since: SINCE,
+      now: NOW,
+    });
+
+    expect(cycle.accounts[0]).toMatchObject({ status: 'failed', step: 'breakdown:placement' });
   });
 });
