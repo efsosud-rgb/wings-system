@@ -21,6 +21,7 @@ export * from './clients.js';
 export * from './drive.js';
 export * from './integrations/kairogen.js';
 export * from './jobs.js';
+export * from './leads.js';
 export * from './marketing/media-providers.js';
 export * from './marketing/media-studio.js';
 export * from './marketing/owned-channels.js';

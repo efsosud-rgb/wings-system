@@ -1,0 +1,771 @@
+import { z } from 'zod';
+
+/**
+ * Funil Sofia, part 1: how a lead enters the CRM (capture) and what the
+ * worker finds out about it (enrichment). The contract between the API, the
+ * worker and the screen: sources and channels, tracking codes, the rules
+ * that map a landing page or a Meta form to a client, the DDD table, and the
+ * "perfil de franqueado" score with its explainable criteria.
+ *
+ * Nothing here talks to a service: the score and the summary are pure
+ * functions over facts the worker collected, so the screen and the tests can
+ * reproduce every number.
+ */
+
+// --- sources and channels ---------------------------------------------------
+
+/** How the lead entered the system. */
+export const LEAD_SOURCES = ['rd_station', 'whatsapp_link', 'meta_lead_ads', 'manual'] as const;
+export type LeadSource = (typeof LEAD_SOURCES)[number];
+
+export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
+  rd_station: 'Landing page (RD Station)',
+  whatsapp_link: 'WhatsApp (link rastreável)',
+  meta_lead_ads: 'Meta Lead Ads',
+  manual: 'Cadastro manual',
+};
+
+/** The channels a tracked WhatsApp link can be generated for. */
+export const LEAD_LINK_CHANNELS = ['instagram', 'site', 'linktree', 'linkedin', 'tiktok'] as const;
+export type LeadLinkChannel = (typeof LEAD_LINK_CHANNELS)[number];
+
+/** Every channel a lead may carry: the link channels plus the two that come from a platform. */
+export const LEAD_CHANNELS = [...LEAD_LINK_CHANNELS, 'landing_page', 'meta_lead_ads'] as const;
+export type LeadChannel = (typeof LEAD_CHANNELS)[number];
+
+export const LEAD_CHANNEL_LABELS: Record<LeadChannel, string> = {
+  instagram: 'Instagram',
+  site: 'Site',
+  linktree: 'Linktree',
+  linkedin: 'LinkedIn',
+  tiktok: 'TikTok',
+  landing_page: 'Landing page',
+  meta_lead_ads: 'Meta Lead Ads',
+};
+
+// --- LGPD ---------------------------------------------------------------------
+
+/**
+ * The legal basis a lead's data is held under (LGPD art. 7º). Recorded with
+ * the lead, with the moment it was given and where. Which basis applies to
+ * each entry point is a decision for Jurídico to confirm; see docs/leads/intake.md.
+ */
+export const LEAD_LEGAL_BASES = ['consent', 'pre_contract', 'legitimate_interest'] as const;
+export type LeadLegalBasis = (typeof LEAD_LEGAL_BASES)[number];
+
+export const LEAD_LEGAL_BASIS_LABELS: Record<LeadLegalBasis, string> = {
+  consent: 'Consentimento do titular (art. 7º, I)',
+  pre_contract: 'Diligências pré-contratuais a pedido do titular (art. 7º, V)',
+  legitimate_interest: 'Legítimo interesse (art. 7º, IX)',
+};
+
+// --- phone --------------------------------------------------------------------
+
+/**
+ * Normalises a Brazilian number to digits (55 + DDD + number). Returns null
+ * for anything that is not a usable number, including placeholder values.
+ */
+export function normalizeBrazilianPhone(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 0) return null;
+  if (/^(\d)\1+$/.test(digits)) return null;
+  if (digits.length === 10 || digits.length === 11) return `55${digits}`;
+  if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) return digits;
+  return null;
+}
+
+/** The DDD of a normalised number (`5511999998888` -> `11`). */
+export function dddOf(phone: string | null | undefined): string | null {
+  if (!phone || !/^55\d{10,11}$/.test(phone)) return null;
+  return phone.slice(2, 4);
+}
+
+/**
+ * DDD -> the main city of the area and its state. A DDD covers a region, not
+ * one city, so the screen says "região de São Paulo", never "mora em".
+ */
+export const DDD_REGIONS: Record<string, { city: string; uf: string }> = {
+  '11': { city: 'São Paulo', uf: 'SP' },
+  '12': { city: 'São José dos Campos', uf: 'SP' },
+  '13': { city: 'Santos', uf: 'SP' },
+  '14': { city: 'Bauru', uf: 'SP' },
+  '15': { city: 'Sorocaba', uf: 'SP' },
+  '16': { city: 'Ribeirão Preto', uf: 'SP' },
+  '17': { city: 'São José do Rio Preto', uf: 'SP' },
+  '18': { city: 'Presidente Prudente', uf: 'SP' },
+  '19': { city: 'Campinas', uf: 'SP' },
+  '21': { city: 'Rio de Janeiro', uf: 'RJ' },
+  '22': { city: 'Campos dos Goytacazes', uf: 'RJ' },
+  '24': { city: 'Volta Redonda', uf: 'RJ' },
+  '27': { city: 'Vitória', uf: 'ES' },
+  '28': { city: 'Cachoeiro de Itapemirim', uf: 'ES' },
+  '31': { city: 'Belo Horizonte', uf: 'MG' },
+  '32': { city: 'Juiz de Fora', uf: 'MG' },
+  '33': { city: 'Governador Valadares', uf: 'MG' },
+  '34': { city: 'Uberlândia', uf: 'MG' },
+  '35': { city: 'Poços de Caldas', uf: 'MG' },
+  '37': { city: 'Divinópolis', uf: 'MG' },
+  '38': { city: 'Montes Claros', uf: 'MG' },
+  '41': { city: 'Curitiba', uf: 'PR' },
+  '42': { city: 'Ponta Grossa', uf: 'PR' },
+  '43': { city: 'Londrina', uf: 'PR' },
+  '44': { city: 'Maringá', uf: 'PR' },
+  '45': { city: 'Foz do Iguaçu', uf: 'PR' },
+  '46': { city: 'Francisco Beltrão', uf: 'PR' },
+  '47': { city: 'Joinville', uf: 'SC' },
+  '48': { city: 'Florianópolis', uf: 'SC' },
+  '49': { city: 'Chapecó', uf: 'SC' },
+  '51': { city: 'Porto Alegre', uf: 'RS' },
+  '53': { city: 'Pelotas', uf: 'RS' },
+  '54': { city: 'Caxias do Sul', uf: 'RS' },
+  '55': { city: 'Santa Maria', uf: 'RS' },
+  '61': { city: 'Brasília', uf: 'DF' },
+  '62': { city: 'Goiânia', uf: 'GO' },
+  '63': { city: 'Palmas', uf: 'TO' },
+  '64': { city: 'Rio Verde', uf: 'GO' },
+  '65': { city: 'Cuiabá', uf: 'MT' },
+  '66': { city: 'Rondonópolis', uf: 'MT' },
+  '67': { city: 'Campo Grande', uf: 'MS' },
+  '68': { city: 'Rio Branco', uf: 'AC' },
+  '69': { city: 'Porto Velho', uf: 'RO' },
+  '71': { city: 'Salvador', uf: 'BA' },
+  '73': { city: 'Ilhéus', uf: 'BA' },
+  '74': { city: 'Juazeiro', uf: 'BA' },
+  '75': { city: 'Feira de Santana', uf: 'BA' },
+  '77': { city: 'Vitória da Conquista', uf: 'BA' },
+  '79': { city: 'Aracaju', uf: 'SE' },
+  '81': { city: 'Recife', uf: 'PE' },
+  '82': { city: 'Maceió', uf: 'AL' },
+  '83': { city: 'João Pessoa', uf: 'PB' },
+  '84': { city: 'Natal', uf: 'RN' },
+  '85': { city: 'Fortaleza', uf: 'CE' },
+  '86': { city: 'Teresina', uf: 'PI' },
+  '87': { city: 'Petrolina', uf: 'PE' },
+  '88': { city: 'Juazeiro do Norte', uf: 'CE' },
+  '89': { city: 'Picos', uf: 'PI' },
+  '91': { city: 'Belém', uf: 'PA' },
+  '92': { city: 'Manaus', uf: 'AM' },
+  '93': { city: 'Santarém', uf: 'PA' },
+  '94': { city: 'Marabá', uf: 'PA' },
+  '95': { city: 'Boa Vista', uf: 'RR' },
+  '96': { city: 'Macapá', uf: 'AP' },
+  '97': { city: 'Coari', uf: 'AM' },
+  '98': { city: 'São Luís', uf: 'MA' },
+  '99': { city: 'Imperatriz', uf: 'MA' },
+};
+
+export interface LeadRegion {
+  ddd: string;
+  city: string;
+  uf: string;
+}
+
+export function regionOfPhone(phone: string | null | undefined): LeadRegion | null {
+  const ddd = dddOf(phone);
+  const region = ddd ? DDD_REGIONS[ddd] : undefined;
+  return ddd && region ? { ddd, ...region } : null;
+}
+
+// --- e-mail -------------------------------------------------------------------
+
+const PERSONAL_EMAIL_DOMAINS = new Set([
+  'gmail.com',
+  'hotmail.com',
+  'hotmail.com.br',
+  'outlook.com',
+  'outlook.com.br',
+  'live.com',
+  'msn.com',
+  'yahoo.com',
+  'yahoo.com.br',
+  'icloud.com',
+  'me.com',
+  'uol.com.br',
+  'bol.com.br',
+  'terra.com.br',
+  'globo.com',
+  'ig.com.br',
+  'protonmail.com',
+  'proton.me',
+  'aol.com',
+  'zipmail.com.br',
+]);
+
+export interface LeadEmailDomain {
+  domain: string;
+  /** `personal` is a webmail; `corporate` is anything else, which may be a company of the lead's. */
+  kind: 'personal' | 'corporate';
+}
+
+export function normalizeEmail(raw: string | null | undefined): string | null {
+  const email = raw?.trim().toLowerCase() ?? '';
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
+}
+
+export function emailDomainOf(email: string | null | undefined): LeadEmailDomain | null {
+  const normalized = normalizeEmail(email);
+  if (!normalized) return null;
+  const domain = normalized.slice(normalized.indexOf('@') + 1);
+  return { domain, kind: PERSONAL_EMAIL_DOMAINS.has(domain) ? 'personal' : 'corporate' };
+}
+
+// --- tracking codes -----------------------------------------------------------
+
+/** No 0/O/1/I: the code is typed by nobody, but read by everybody. */
+export const TRACKING_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+export const TRACKING_CODE_LENGTH = 6;
+const TRACKING_CODE_RE = /^[A-HJ-NP-Z2-9]{6}$/;
+
+/** A fresh code; `random` is injectable so tests get fixed codes. */
+export function generateTrackingCode(random: () => number = Math.random): string {
+  let code = '';
+  for (let i = 0; i < TRACKING_CODE_LENGTH; i++) {
+    const index = Math.min(
+      TRACKING_CODE_ALPHABET.length - 1,
+      Math.floor(random() * TRACKING_CODE_ALPHABET.length),
+    );
+    code += TRACKING_CODE_ALPHABET[index];
+  }
+  return code;
+}
+
+export function isTrackingCode(value: string): boolean {
+  return TRACKING_CODE_RE.test(value);
+}
+
+/**
+ * The code an inbound WhatsApp message starts with, or null. A leading `#`
+ * and surrounding spaces are ignored; anything after the first word is the
+ * person's own text.
+ */
+export function trackingCodeOf(message: string | null | undefined): string | null {
+  const first = (message ?? '').trim().replace(/^#/, '').split(/\s+/)[0]?.toUpperCase() ?? '';
+  return isTrackingCode(first) ? first : null;
+}
+
+/** `https://wa.me/5511999998888?text=K7M2QX` */
+export function whatsappLinkOf(phone: string, code: string): string {
+  return `https://wa.me/${phone}?text=${encodeURIComponent(code)}`;
+}
+
+// --- source rules: landing page / Meta form -> client -------------------------
+
+export const LEAD_SOURCE_RULE_KINDS = ['landing_page', 'meta_form', 'meta_campaign'] as const;
+export type LeadSourceRuleKind = (typeof LEAD_SOURCE_RULE_KINDS)[number];
+
+export const LEAD_SOURCE_RULE_KIND_LABELS: Record<LeadSourceRuleKind, string> = {
+  landing_page: 'Landing page (slug, domínio ou identificador da conversão)',
+  meta_form: 'Formulário do Meta Lead Ads (id do formulário)',
+  meta_campaign: 'Campanha do Meta (id da campanha)',
+};
+
+export interface LeadSourceRule {
+  id: string;
+  kind: LeadSourceRuleKind;
+  pattern: string;
+  clientId: string;
+  clientName: string;
+  createdAt: string;
+}
+
+/** The franchise landing pages live at franquia.wingscompany.com.br/<slug>. */
+export const FRANCHISE_LP_HOST = 'franquia.wingscompany.com.br';
+
+/** Lower-case, no scheme, no `www.`, no query, no trailing slash. */
+export function normalizeSourcePattern(pattern: string): string {
+  return pattern
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/[?#].*$/, '')
+    .replace(/\/+$/, '');
+}
+
+/**
+ * Every key a landing-page rule may match for one conversion: the full
+ * address, the host alone, the first path segment (the franchise slug when
+ * the host is ours) and the raw identifier RD Station sent.
+ */
+export function landingPageKeysOf(input: {
+  url?: string | null;
+  identifier?: string | null;
+}): string[] {
+  const keys = new Set<string>();
+  if (input.identifier) keys.add(normalizeSourcePattern(input.identifier));
+  if (input.url) {
+    const address = normalizeSourcePattern(input.url);
+    if (address) keys.add(address);
+    const [host = '', ...segments] = address.split('/');
+    if (host) keys.add(host);
+    const slug = segments.find((segment) => segment.length > 0);
+    if (slug) {
+      keys.add(`${host}/${slug}`);
+      if (host === FRANCHISE_LP_HOST) keys.add(slug);
+    }
+  }
+  keys.delete('');
+  return [...keys];
+}
+
+/** The rule a set of keys matches, the most specific (longest) pattern first. */
+export function matchSourceRule<Rule extends { kind: LeadSourceRuleKind; pattern: string }>(
+  rules: readonly Rule[],
+  kind: LeadSourceRuleKind,
+  keys: readonly string[],
+): Rule | null {
+  const wanted = new Set(keys.map(normalizeSourcePattern));
+  const candidates = rules
+    .filter((rule) => rule.kind === kind && wanted.has(normalizeSourcePattern(rule.pattern)))
+    .sort((a, b) => b.pattern.length - a.pattern.length);
+  return candidates[0] ?? null;
+}
+
+// --- expansion area -----------------------------------------------------------
+
+export const BRAZIL_UFS = [
+  'AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR',
+  'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO',
+] as const;
+export type BrazilUf = (typeof BRAZIL_UFS)[number];
+
+/** One entry of a client's expansion area: a whole state, or a city in it. */
+export interface ExpansionEntry {
+  uf: BrazilUf;
+  city: string | null;
+}
+
+const plainText = (text: string) =>
+  text
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+/**
+ * "SP", "Campinas/SP", "Campinas - SP" and "Campinas, SP" are all accepted;
+ * anything else is refused so the area stays checkable against the DDD table.
+ */
+export function parseExpansionEntry(raw: string): ExpansionEntry | null {
+  const text = raw.trim();
+  const ufOnly = text.toUpperCase();
+  if ((BRAZIL_UFS as readonly string[]).includes(ufOnly)) return { uf: ufOnly as BrazilUf, city: null };
+  const match = /^(.+?)\s*[\/,\-–]\s*([A-Za-z]{2})$/.exec(text);
+  if (!match) return null;
+  const uf = (match[2] as string).toUpperCase();
+  const city = (match[1] as string).trim();
+  if (!(BRAZIL_UFS as readonly string[]).includes(uf) || city.length < 2) return null;
+  return { uf: uf as BrazilUf, city };
+}
+
+export function formatExpansionEntry(entry: ExpansionEntry): string {
+  return entry.city ? `${entry.city}/${entry.uf}` : entry.uf;
+}
+
+// --- enrichment facts ---------------------------------------------------------
+
+export type FoundLinkKind = 'linkedin' | 'instagram' | 'other';
+
+export interface FoundLink {
+  kind: FoundLinkKind;
+  url: string;
+  title: string;
+  snippet: string;
+}
+
+export interface LeadCompany {
+  cnpj: string;
+  name: string;
+  legalName: string;
+  /** In reais, as the Receita publishes it; null when it did not say. */
+  capitalSocialBrl: number | null;
+  openedAt: string | null;
+  mainActivity: string | null;
+  /** ME, EPP, DEMAIS or whatever the Receita answered. */
+  size: string | null;
+  city: string | null;
+  uf: string | null;
+  /** The lead's name appears in the company's partners (QSA). */
+  leadIsPartner: boolean;
+  /** How the company was tied to the lead, for the reasons column. */
+  matchedBy: 'partner' | 'email_domain';
+}
+
+export interface LeadWhatsappProfile {
+  profileName: string | null;
+  photoUrl: string | null;
+}
+
+/** Everything the worker found. Every field may be null: a step that failed leaves its fact empty. */
+export interface EnrichmentFacts {
+  region: LeadRegion | null;
+  emailDomain: LeadEmailDomain | null;
+  whatsapp: LeadWhatsappProfile | null;
+  links: FoundLink[];
+  company: LeadCompany | null;
+  /** How many web searches were run (each is a paid call). */
+  searches: number;
+}
+
+export const EMPTY_FACTS: EnrichmentFacts = {
+  region: null,
+  emailDomain: null,
+  whatsapp: null,
+  links: [],
+  company: null,
+  searches: 0,
+};
+
+// --- the score ----------------------------------------------------------------
+
+export type ScoreCriterionKey = 'capital' | 'management' | 'location';
+
+export interface ScoreCriterion {
+  key: ScoreCriterionKey;
+  label: string;
+  points: number;
+  max: number;
+  /** False when nothing allowed a judgement (no phone, no expansion area): left out of the total. */
+  evaluated: boolean;
+  reasons: string[];
+}
+
+export interface FranchiseeScore {
+  /** 0–100 over the criteria that could be evaluated; null when none could. */
+  score: number | null;
+  criteria: ScoreCriterion[];
+}
+
+const MANAGEMENT_TERMS =
+  /\b(s[oó]ci[oa]|fundador|founder|co-?founder|ceo|cfo|coo|diret|gerent|propriet[aá]ri|empres[aá]ri|owner|head of|coordenad|supervis|gestor)/i;
+
+const formatBrl = (value: number) =>
+  `R$ ${Math.round(value).toLocaleString('pt-BR')}`;
+
+/**
+ * "Perfil de franqueado", 0–100, from three explainable criteria: probable
+ * capital (40), management experience (30) and the region against the
+ * client's expansion area (30). Every point comes with its reason, and a
+ * criterion nothing could judge is left out of the total instead of counting
+ * as zero.
+ */
+export function franchiseeScoreOf(
+  facts: EnrichmentFacts,
+  expansionArea: readonly ExpansionEntry[],
+): FranchiseeScore {
+  const capital: ScoreCriterion = {
+    key: 'capital',
+    label: 'Capital provável',
+    points: 0,
+    max: 40,
+    evaluated: true,
+    reasons: [],
+  };
+  if (facts.company?.leadIsPartner) {
+    capital.points += 15;
+    capital.reasons.push(`Consta como sócio de ${facts.company.name} (CNPJ ${facts.company.cnpj}).`);
+  }
+  if (facts.company && facts.company.capitalSocialBrl !== null) {
+    const value = facts.company.capitalSocialBrl;
+    if (value >= 100_000) {
+      capital.points += 15;
+      capital.reasons.push(`Capital social de ${formatBrl(value)} na empresa encontrada.`);
+    } else if (value >= 30_000) {
+      capital.points += 8;
+      capital.reasons.push(`Capital social de ${formatBrl(value)} na empresa encontrada.`);
+    } else {
+      capital.reasons.push(`Capital social de ${formatBrl(value)} na empresa encontrada, abaixo de R$ 30.000.`);
+    }
+  }
+  if (facts.emailDomain?.kind === 'corporate') {
+    capital.points += 10;
+    capital.reasons.push(`E-mail em domínio próprio (${facts.emailDomain.domain}).`);
+  } else if (facts.emailDomain?.kind === 'personal') {
+    capital.reasons.push(`E-mail pessoal (${facts.emailDomain.domain}).`);
+  }
+  if (capital.reasons.length === 0) capital.reasons.push('Nenhum sinal de capital encontrado.');
+
+  const management: ScoreCriterion = {
+    key: 'management',
+    label: 'Experiência em gestão',
+    points: 0,
+    max: 30,
+    evaluated: true,
+    reasons: [],
+  };
+  const linkedin = facts.links.find((link) => link.kind === 'linkedin');
+  if (linkedin) {
+    management.points += 5;
+    management.reasons.push('Perfil público no LinkedIn encontrado.');
+  }
+  const managementHit = facts.links.find(
+    (link) => MANAGEMENT_TERMS.test(link.title) || MANAGEMENT_TERMS.test(link.snippet),
+  );
+  if (managementHit) {
+    management.points += 15;
+    const term = (MANAGEMENT_TERMS.exec(`${managementHit.title} ${managementHit.snippet}`) ?? [''])[0];
+    management.reasons.push(`Cargo de gestão citado em resultado público ("${term}").`);
+  }
+  if (facts.company?.leadIsPartner) {
+    management.points += 10;
+    management.reasons.push('Sócio ou administrador de empresa ativa na Receita.');
+  }
+  if (management.reasons.length === 0) management.reasons.push('Nenhum sinal de gestão encontrado.');
+
+  const location: ScoreCriterion = {
+    key: 'location',
+    label: 'Cidade na área de expansão',
+    points: 0,
+    max: 30,
+    evaluated: true,
+    reasons: [],
+  };
+  if (!facts.region) {
+    location.evaluated = false;
+    location.reasons.push('Sem telefone com DDD conhecido: região não avaliada.');
+  } else if (expansionArea.length === 0) {
+    location.evaluated = false;
+    location.reasons.push('O cliente não tem área de expansão cadastrada: região não avaliada.');
+  } else {
+    const region = facts.region;
+    const cityHit = expansionArea.find(
+      (entry) => entry.city !== null && entry.uf === region.uf && plainText(entry.city) === plainText(region.city),
+    );
+    const ufHit = expansionArea.find((entry) => entry.uf === region.uf);
+    if (cityHit) {
+      location.points = 30;
+      location.reasons.push(`DDD ${region.ddd} é a região de ${region.city}/${region.uf}, cidade da área de expansão.`);
+    } else if (ufHit) {
+      location.points = 15;
+      location.reasons.push(`DDD ${region.ddd} (região de ${region.city}/${region.uf}): o estado está na área de expansão, a cidade não.`);
+    } else {
+      location.reasons.push(`DDD ${region.ddd} (região de ${region.city}/${region.uf}) fora da área de expansão.`);
+    }
+  }
+
+  const criteria = [capital, management, location];
+  const evaluated = criteria.filter((criterion) => criterion.evaluated);
+  const max = evaluated.reduce((sum, criterion) => sum + criterion.max, 0);
+  const points = evaluated.reduce((sum, criterion) => sum + criterion.points, 0);
+  return { score: max === 0 ? null : Math.round((100 * points) / max), criteria };
+}
+
+// --- the summary --------------------------------------------------------------
+
+/** Five lines, one per subject, each a full sentence a seller can read in a glance. */
+export function enrichmentSummaryOf(
+  lead: { name: string | null },
+  facts: EnrichmentFacts,
+  score: FranchiseeScore,
+): string {
+  const name = lead.name ?? 'Lead sem nome';
+  const where = facts.region
+    ? `região de ${facts.region.city}/${facts.region.uf} pelo DDD ${facts.region.ddd}`
+    : 'região desconhecida (sem telefone)';
+  const email = facts.emailDomain
+    ? facts.emailDomain.kind === 'corporate'
+      ? `e-mail em domínio próprio (${facts.emailDomain.domain})`
+      : `e-mail pessoal (${facts.emailDomain.domain})`
+    : 'sem e-mail';
+  const line1 = `${name}: ${where}; ${email}.`;
+
+  const line2 = facts.whatsapp
+    ? `WhatsApp: perfil "${facts.whatsapp.profileName ?? 'sem nome'}"${facts.whatsapp.photoUrl ? ', com foto' : ', sem foto'}.`
+    : 'WhatsApp: perfil não consultado.';
+
+  const linkedin = facts.links.find((link) => link.kind === 'linkedin');
+  const instagram = facts.links.find((link) => link.kind === 'instagram');
+  const presence = [
+    linkedin ? `LinkedIn: ${linkedin.title || linkedin.url}` : null,
+    instagram ? `Instagram: ${instagram.title || instagram.url}` : null,
+  ].filter((part): part is string => part !== null);
+  const line3 =
+    presence.length > 0
+      ? `${presence.join('; ')}.`
+      : facts.searches > 0
+        ? `Nenhum perfil público encontrado em ${facts.searches} busca(s).`
+        : 'Busca web não realizada.';
+
+  const company = facts.company;
+  const line4 = company
+    ? `Empresa: ${company.name} (CNPJ ${company.cnpj})${company.capitalSocialBrl !== null ? `, capital social ${formatBrl(company.capitalSocialBrl)}` : ''}${company.openedAt ? `, desde ${company.openedAt.slice(0, 4)}` : ''}${company.mainActivity ? `, ${company.mainActivity}` : ''}; ${company.leadIsPartner ? 'o lead consta como sócio' : 'ligada pelo domínio do e-mail'}.`
+    : 'Empresa: nenhum CNPJ ligado ao lead.';
+
+  const parts = score.criteria.map((criterion) =>
+    criterion.evaluated
+      ? `${criterion.label.toLowerCase()} ${criterion.points}/${criterion.max}`
+      : `${criterion.label.toLowerCase()} não avaliada`,
+  );
+  const line5 =
+    score.score === null
+      ? `Perfil de franqueado: sem nota (${parts.join(', ')}).`
+      : `Perfil de franqueado: ${score.score}/100 (${parts.join(', ')}).`;
+
+  return [line1, line2, line3, line4, line5].join('\n');
+}
+
+// --- what the screen receives ---------------------------------------------------
+
+export type LeadEnrichmentState = 'none' | 'pending' | 'running' | 'done' | 'failed';
+
+export interface LeadOrigin {
+  clientId: string;
+  clientName: string;
+  /** False when no rule mapped the landing page or form: filed under Wings Company until someone adds one. */
+  clientMapped: boolean;
+  source: LeadSource;
+  channel: LeadChannel | null;
+  landingPage: string | null;
+  campaignId: string | null;
+  campaignName: string | null;
+  formId: string | null;
+  trackingCode: string | null;
+  externalId: string | null;
+}
+
+export interface LeadConsent {
+  legalBasis: LeadLegalBasis | null;
+  consentedAt: string | null;
+  source: string | null;
+  text: string | null;
+}
+
+export interface LeadResearch {
+  state: LeadEnrichmentState;
+  summary: string | null;
+  score: number | null;
+  criteria: ScoreCriterion[];
+  links: FoundLink[];
+  facts: EnrichmentFacts | null;
+  error: string | null;
+  updatedAt: string | null;
+  costUsd: number;
+}
+
+export interface LeadEvent {
+  id: string;
+  at: string;
+  kind: string;
+  detail: Record<string, unknown>;
+}
+
+export interface Lead {
+  id: string;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  status: 'new';
+  ownerEmployeeId: string | null;
+  firstMessage: string | null;
+  whatsapp: LeadWhatsappProfile | null;
+  origin: LeadOrigin;
+  consent: LeadConsent;
+  research: LeadResearch;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LeadListItem {
+  id: string;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  clientName: string;
+  clientMapped: boolean;
+  source: LeadSource;
+  channel: LeadChannel | null;
+  score: number | null;
+  researchState: LeadEnrichmentState;
+  createdAt: string;
+}
+
+export interface LeadTrackingLink {
+  id: string;
+  clientId: string;
+  channel: LeadLinkChannel;
+  code: string;
+  /** The Wings number the link points at, digits only. */
+  phone: string;
+  url: string;
+  hits: number;
+  lastHitAt: string | null;
+  createdAt: string;
+}
+
+// --- request schemas ------------------------------------------------------------
+
+export const LEAD_NAME_MAX = 120;
+
+export const leadCreateSchema = z.object({
+  name: z.string().trim().min(2, 'Informe o nome').max(LEAD_NAME_MAX),
+  email: z.string().trim().max(200).optional().or(z.literal('')),
+  phone: z.string().trim().max(30).optional().or(z.literal('')),
+  clientId: z.uuid().optional(),
+  channel: z.enum(LEAD_CHANNELS).optional(),
+  legalBasis: z.enum(LEAD_LEGAL_BASES),
+  consentText: z.string().trim().min(5, 'Descreva onde o titular autorizou o contato').max(500),
+});
+export type LeadCreateInput = z.infer<typeof leadCreateSchema>;
+
+export const trackingLinkCreateSchema = z.object({
+  channel: z.enum(LEAD_LINK_CHANNELS),
+});
+
+export const sourceRuleCreateSchema = z.object({
+  kind: z.enum(LEAD_SOURCE_RULE_KINDS),
+  pattern: z
+    .string()
+    .trim()
+    .min(2, 'Informe o padrão')
+    .max(200)
+    .transform(normalizeSourcePattern)
+    .refine((pattern) => pattern.length >= 2, 'Informe o padrão'),
+  clientId: z.uuid(),
+});
+
+export const EXPANSION_AREA_MAX = 200;
+
+export const expansionAreaSchema = z.object({
+  expansionArea: z
+    .array(z.string().trim().min(2).max(80))
+    .max(EXPANSION_AREA_MAX)
+    .transform((entries, ctx) => {
+      const parsed: ExpansionEntry[] = [];
+      for (const raw of entries) {
+        const entry = parseExpansionEntry(raw);
+        if (!entry) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `"${raw}" não é uma UF nem "Cidade/UF".`,
+          });
+          return z.NEVER;
+        }
+        if (!parsed.some((seen) => seen.uf === entry.uf && seen.city === entry.city)) parsed.push(entry);
+      }
+      return parsed;
+    }),
+});
+
+export const leadListQuerySchema = z.object({
+  q: z.string().trim().max(120).optional().or(z.literal('').transform(() => undefined)),
+  clientId: z.uuid().optional().or(z.literal('').transform(() => undefined)),
+  source: z.enum(LEAD_SOURCES).optional().or(z.literal('').transform(() => undefined)),
+});
+
+// Routes (docs/leads/intake.md):
+//   GET    /leads?q=&clientId=&source=            -> { leads: LeadListItem[] }         leads.read (own / all)
+//   POST   /leads                                  -> { lead: Lead }                   leads.write
+//   GET    /leads/:id                              -> { lead: Lead, events: LeadEvent[] } leads.read
+//   POST   /leads/:id/research                     -> { lead: Lead }  (enqueue again)  leads.write
+//   GET    /leads/source-rules                     -> { rules: LeadSourceRule[] }      clients.manage
+//   POST   /leads/source-rules                     -> { rule }                         clients.manage
+//   DELETE /leads/source-rules/:id                 -> 204                              clients.manage
+//   GET    /clients/:id/tracking-links             -> { links: LeadTrackingLink[] }    clients.manage
+//   POST   /clients/:id/tracking-links { channel } -> { link }                         clients.manage
+//   PATCH  /clients/:id/expansion-area             -> { client }                       clients.manage
+//   POST   /integrations/rd-station/webhook        (secret)                            no session
+//   POST   /integrations/zapi/webhook              (secret)                            no session
+//   GET    /integrations/meta/leadgen/webhook      (hub.verify_token)                  no session
+//   POST   /integrations/meta/leadgen/webhook      (X-Hub-Signature-256)               no session

@@ -122,10 +122,10 @@ describe('who sees what', () => {
 
 describe('where a viewer lands', () => {
   it('opens on the first screen that actually exists for them', () => {
-    // Marketing reaches the traffic studio; Admin Master reaches it too, but
-    // its first ready screen is the one earlier in the tree.
+    // Marketing reaches the traffic studio; Admin Master can open the Funil,
+    // which sits earlier in the tree, so that is where it lands.
     expect(defaultPathFor(marketing)).toBe('/marketing/trafego-pago-wings');
-    expect(defaultPathFor(adminMaster)).toBe('/marketing/trafego-pago-wings');
+    expect(defaultPathFor(adminMaster)).toBe('/crm-vendas/funil');
   });
 
   it('never lands on a placeholder', () => {

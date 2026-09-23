@@ -6,6 +6,8 @@
  * because a WhatsApp sender cannot be authenticated well enough to move money.
  */
 
+import { normalizeBrazilianPhone } from '@wings/shared';
+
 export interface ZapiConfig {
   instanceId: string;
   instanceToken: string;
@@ -25,22 +27,7 @@ export class ZapiError extends Error {
   }
 }
 
-/**
- * Normalises a Brazilian number to the digits Z-API expects (55 + DDD + number).
- * Returns null for anything that is not a usable number, including the
- * placeholder values a bootstrap record may carry.
- */
-export function normalizeBrazilianPhone(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  const digits = raw.replace(/\D/g, '');
-  if (digits.length === 0) return null;
-  // 00000000000 and friends are placeholders, not phone numbers.
-  if (/^(\d)\1+$/.test(digits)) return null;
-
-  if (digits.length === 10 || digits.length === 11) return `55${digits}`;
-  if ((digits.length === 12 || digits.length === 13) && digits.startsWith('55')) return digits;
-  return null;
-}
+export { normalizeBrazilianPhone } from '@wings/shared';
 
 export class ZapiClient {
   private readonly config: Required<Omit<ZapiConfig, 'fetchImpl'>> & { fetchImpl: typeof fetch };

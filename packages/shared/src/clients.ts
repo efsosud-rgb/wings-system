@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ExpansionEntry } from './leads.js';
 
 /**
  * Clients: who a piece of work is for. Wings Company itself is the first one,
@@ -19,6 +20,8 @@ export interface Client {
   name: string;
   slug: string;
   active: boolean;
+  /** Where the client is looking for franchisees: states, or cities in them. */
+  expansionArea: ExpansionEntry[];
 }
 
 /** Accent- and case-blind, with every run of anything else collapsed to one space. */
