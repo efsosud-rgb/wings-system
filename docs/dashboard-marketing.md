@@ -140,12 +140,18 @@ staging diz o que a API respondeu; o job para na etapa com nome
   `platform_position` e `region` nesta conta; `funding_source_details.type`
   (a tabela de códigos em `fundingKindOf` é a documentada) e a leitura do
   saldo pré-pago a partir do `display_string`, porque a Meta não tem campo
-  numérico para ele.
+  numérico para ele. `device_platform` confirmado em 2026-09-23: `mobile_app`
+  veio certo em toda linha vista até agora (`desktop` e `mobile_web` ainda
+  não apareceram nesta conta).
 - **Google:** todas as consultas de quebra (`segments.ad_network_type`,
   `segments.hour`, `age_range_view`, `gender_view`, `geographic_view` com
-  `segments.geo_target_region`) e as métricas de vídeo
-  (`metrics.video_views`, `video_quartile_p*_rate`). O YouTube não tem
-  ThruPlay: a coluna usa a visualização até o fim.
+  `segments.geo_target_region`). O YouTube não tem ThruPlay: a coluna usa a
+  visualização até o fim. `segments.device` confirmado em 2026-09-23: `MOBILE`
+  e `DESKTOP` vieram certos, já em minúsculas (`TABLET`/`CONNECTED_TV`/`OTHER`
+  ainda não apareceram nesta conta). As métricas de vídeo
+  (`metrics.video_views`, `video_quartile_p*_rate`) são recusadas por esta
+  versão da API (`57140df`): o campo vira "não disponível" com aviso, e o
+  ciclo segue.
 
 Os testes cobrem tudo isso contra `FakeMetaClient`, `fakeGoogleApi` e um
 banco descartável; nenhum chama plataforma alguma.
@@ -298,11 +304,15 @@ grant select on ingest_runs, marketing_insight_runs, marketing_insights,
 
 ### Não verificado contra os serviços reais
 
-- Quebra por dispositivo nas duas plataformas (`device_platform`,
-  `segments.device`): nomes exatos que voltam.
 - Leitura do pixel (`last_fired_time` com este token) e de
   `conversion_action` no Google.
 - Listagem de posts do WordPress com `_fields` e `date_gmt`/`modified_gmt`.
+
+Quebra por dispositivo confirmada em staging em 2026-09-23:
+`device_platform` (Meta) devolveu `mobile_app`; `segments.device` (Google)
+devolveu `MOBILE` e `DESKTOP`, já minúsculos pelo código. Os demais valores
+possíveis de cada enum ainda não apareceram nesta conta (sem gasto nesses
+posicionamentos na janela olhada).
 
 Os testes cobrem tudo contra `FakeMetaClient`, `fakeGoogleApi`, `fetch`
 roteirizado para o WordPress e banco descartável

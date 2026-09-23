@@ -174,8 +174,10 @@ const BREAKDOWN_SPEC: Record<
     key: (row) => text(row.hourly_stats_aggregated_by_advertiser_time_zone).slice(0, 2),
     subKey: () => '',
   },
-  // mobile_app, mobile_web, desktop. NOT verified live: the exact values Meta
-  // answers on this account.
+  // mobile_app, mobile_web, desktop. Confirmed live 2026-09-23 on this
+  // account: `mobile_app` came back for every row seen so far (`desktop` and
+  // `mobile_web` not yet observed — no spend on those placements in the
+  // window checked).
   device: {
     breakdowns: ['device_platform'],
     reach: true,
