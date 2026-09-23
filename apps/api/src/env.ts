@@ -242,6 +242,33 @@ const schema = z.object({
   ADS_APPROVAL_ADMIN_PHONES: optionalString,
   ADS_APPROVAL_DIRETORIA_PHONES: optionalString,
 
+  /**
+   * Lead intake (docs/leads/intake.md). Each webhook is off until its secret
+   * is set: an unconfigured one answers 503, never accepts a body. RD Station
+   * sends no signature, so the shared secret travels in a header or in the
+   * URL; Z-API the same; Meta signs the raw body with the app secret.
+   */
+  RD_STATION_WEBHOOK_SECRET: optionalString.refine(
+    (value) => value === undefined || value.length >= 16,
+    'must be at least 16 characters',
+  ),
+  ZAPI_WEBHOOK_SECRET: optionalString.refine(
+    (value) => value === undefined || value.length >= 16,
+    'must be at least 16 characters',
+  ),
+  META_APP_SECRET: optionalString,
+  META_LEADGEN_VERIFY_TOKEN: optionalString.refine(
+    (value) => value === undefined || value.length >= 16,
+    'must be at least 16 characters',
+  ),
+  /** Reads Lead Ads form answers (leads_retrieval). Falls back to META_WRITE_TOKEN, read-only use. */
+  META_LEADS_ACCESS_TOKEN: optionalString,
+  /** The WhatsApp number the tracked links point at, digits only. Not a secret. */
+  WINGS_WHATSAPP_NUMBER: optionalString.refine(
+    (value) => value === undefined || /^55\d{10,11}$/.test(value),
+    'must be 55 + DDD + number, digits only',
+  ),
+
   /** Google Workspace SMTP. Optional in development; required in production. */
   SMTP_HOST: optionalString,
   SMTP_PORT: z.coerce.number().int().positive().default(587),
