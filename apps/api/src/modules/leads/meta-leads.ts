@@ -142,12 +142,15 @@ export async function fetchMetaLead(
     signal: AbortSignal.timeout(options.timeoutMs ?? 8_000),
   });
   const text = await response.text();
-  let raw: unknown = null;
-  try {
-    raw = text ? JSON.parse(text) : null;
-  } catch {
-    raw = null;
-  }
   if (!response.ok) throw new MetaLeadFetchError(response.status, `Graph API answered ${response.status}`);
+  const raw = parseJsonOrNull(text);
   return { details: parseMetaLead(raw), raw };
+}
+
+function parseJsonOrNull(text: string): unknown {
+  try {
+    return text ? JSON.parse(text) : null;
+  } catch {
+    return null;
+  }
 }

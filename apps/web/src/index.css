@@ -5393,3 +5393,160 @@ a.menu-module-header {
     margin-left: 0;
   }
 }
+
+/* ---------- CRM Vendas → Funil (leads) ---------- */
+.lead-new {
+  margin-bottom: 20px;
+}
+
+.lead-grid .block {
+  margin-bottom: 20px;
+}
+
+.lead-facts {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  gap: 8px 16px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.lead-facts dt {
+  color: var(--wings-muted);
+}
+
+.lead-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.lead-wrap {
+  overflow-wrap: anywhere;
+}
+
+.lead-head-side {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.lead-photo {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--wings-border);
+}
+
+.lead-research-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.lead-research-head .btn {
+  width: auto;
+}
+
+.lead-summary {
+  border-left: 3px solid var(--wings-accent);
+  padding: 4px 0 4px 14px;
+  margin: 12px 0 20px;
+}
+
+.lead-summary p {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.lead-score {
+  display: grid;
+  grid-template-columns: minmax(140px, max-content) 1fr;
+  gap: 16px 24px;
+  align-items: start;
+}
+
+.lead-score-figure strong {
+  font-size: 40px;
+  line-height: 1;
+  display: block;
+}
+
+.lead-criteria,
+.lead-reasons,
+.lead-links,
+.lead-timeline {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.lead-criterion {
+  margin-bottom: 14px;
+}
+
+.lead-criterion-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.lead-criterion .meter {
+  height: 6px;
+  margin-bottom: 6px;
+}
+
+.lead-criterion .meter-fill {
+  background: var(--wings-accent);
+}
+
+.lead-reasons li,
+.lead-timeline li {
+  font-size: 13px;
+  color: var(--wings-muted);
+  margin: 2px 0;
+}
+
+.lead-links li {
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+}
+
+.lead-subhead {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--wings-muted);
+  margin: 16px 0 8px;
+}
+
+.lead-client-details {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.lead-area {
+  max-width: 720px;
+  margin-bottom: 8px;
+}
+
+.lead-area .btn,
+.lead-links-admin .btn,
+.lead-links-table .btn {
+  width: auto;
+}
+
+.lead-links-table {
+  margin-top: 12px;
+}
+
+@media (max-width: 640px) {
+  .lead-facts,
+  .lead-score {
+    grid-template-columns: 1fr;
+  }
+}

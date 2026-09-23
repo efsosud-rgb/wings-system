@@ -71,6 +71,14 @@ export function shapeOf(value: unknown, depth = 0): unknown {
 const asString = (value: unknown): string | null =>
   typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 
+function parseJsonOrEmpty(text: string): unknown {
+  try {
+    return text ? JSON.parse(text) : {};
+  } catch {
+    return {};
+  }
+}
+
 // --- Z-API -------------------------------------------------------------------------
 
 export function createZapiProfileClient(config: {
@@ -142,12 +150,7 @@ export function createBraveSearch(config: {
       });
       const text = await response.text();
       if (!response.ok) throw new Error(`Brave Search answered ${response.status}`);
-      let body: unknown = {};
-      try {
-        body = text ? JSON.parse(text) : {};
-      } catch {
-        body = {};
-      }
+      const body = parseJsonOrEmpty(text);
       config.log?.({ msg: 'brave search', shape: shapeOf(body) });
       const results = ((body as { web?: { results?: unknown } }).web?.results ?? []) as Record<string, unknown>[];
       return (Array.isArray(results) ? results : [])
@@ -180,12 +183,7 @@ export function createBrasilApi(config: {
       const text = await response.text();
       if (response.status === 404) return null;
       if (!response.ok) throw new Error(`BrasilAPI answered ${response.status}`);
-      let body: Record<string, unknown> = {};
-      try {
-        body = text ? (JSON.parse(text) as Record<string, unknown>) : {};
-      } catch {
-        body = {};
-      }
+      const body = parseJsonOrEmpty(text) as Record<string, unknown>;
       config.log?.({ msg: 'brasilapi cnpj', shape: shapeOf(body) });
       const qsa = Array.isArray(body.qsa) ? (body.qsa as Record<string, unknown>[]) : [];
       const capital = typeof body.capital_social === 'number' ? body.capital_social : Number(body.capital_social);

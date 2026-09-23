@@ -352,7 +352,7 @@ export function parseExpansionEntry(raw: string): ExpansionEntry | null {
   const text = raw.trim();
   const ufOnly = text.toUpperCase();
   if ((BRAZIL_UFS as readonly string[]).includes(ufOnly)) return { uf: ufOnly as BrazilUf, city: null };
-  const match = /^(.+?)\s*[\/,\-–]\s*([A-Za-z]{2})$/.exec(text);
+  const match = /^(.+?)\s*[/,\-–]\s*([A-Za-z]{2})$/.exec(text);
   if (!match) return null;
   const uf = (match[2] as string).toUpperCase();
   const city = (match[1] as string).trim();

@@ -378,7 +378,7 @@ describe('POST /integrations/zapi/webhook', () => {
   });
 
   it('ignores our own messages, groups, messages without a code and unknown codes', async () => {
-    const send = (payload: unknown) =>
+    const send = (payload: Record<string, unknown>) =>
       app.inject({ method: 'POST', url: '/integrations/zapi/webhook', headers: { 'x-wings-webhook-secret': ZAPI_SECRET }, payload });
     expect((await send({ phone: '5541988880001', fromMe: true, text: { message: 'ABCDEF oi' } })).json()).toEqual({ ignored: 'not_inbound' });
     expect((await send({ phone: '5541988880001', isGroup: true, text: { message: 'ABCDEF oi' } })).json()).toEqual({ ignored: 'not_inbound' });

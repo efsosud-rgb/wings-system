@@ -69,15 +69,14 @@ export function cnpjCandidatesOf(texts: string[]): string[] {
 }
 
 function linkKindOf(url: string): FoundLink['kind'] | null {
-  let host = '';
-  let path = '';
+  let parsed: URL;
   try {
-    const parsed = new URL(url);
-    host = parsed.hostname.replace(/^www\./, '');
-    path = parsed.pathname;
+    parsed = new URL(url);
   } catch {
     return null;
   }
+  const host = parsed.hostname.replace(/^www\./, '');
+  const path = parsed.pathname;
   if (host.endsWith('linkedin.com') && /^\/in\/[^/]+/.test(path)) return 'linkedin';
   if (host === 'instagram.com' && /^\/[^/]+\/?$/.test(path) && !/^\/(p|reel|explore|accounts)\//.test(path)) {
     return 'instagram';

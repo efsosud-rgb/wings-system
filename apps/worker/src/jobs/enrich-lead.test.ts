@@ -3,7 +3,7 @@ import type { CnpjRecord, SearchResult, ZapiProfile } from '../lib/enrichment.js
 import { reserveSpend, saoPauloDayStart, spentTodayUsdMicro } from '../lib/enrichment.js';
 import { baseContext } from '../test/context.js';
 import { createTestDatabase, type TestDatabase } from '../test/db.js';
-import { cnpjCandidatesOf, companyOf, nameMatches, profileLinksOf, runEnrichLeadJob } from './enrich-lead.js';
+import { cnpjCandidatesOf, companyOf, nameMatches, profileLinksOf, runEnrichLeadJob, type EnrichLeadOutput } from './enrich-lead.js';
 
 const WINGS_CLIENT_ID = '00000000-0000-4000-8000-0000000000c1';
 
@@ -101,7 +101,7 @@ describe('the enrich_lead job', () => {
     const zapiCalls: string[] = [];
     const cnpjCalls: string[] = [];
 
-    const output = await runEnrichLeadJob(
+    const output = (await runEnrichLeadJob(
       job,
       baseContext({
         db: database.pool,
@@ -144,7 +144,7 @@ describe('the enrich_lead job', () => {
           budget: { dailyUsd: 2, searchUsdPerQuery: 0.005 },
         },
       }),
-    );
+    )) as EnrichLeadOutput;
 
     expect(output).toMatchObject({ leadId, score: 100, searches: 2, linksFound: 2, companyFound: true, costUsdMicro: 10_000 });
     expect(zapiCalls).toEqual(['5519999998888']);
@@ -184,7 +184,7 @@ describe('the enrich_lead job', () => {
     const leadId = await insertLead({ client_id: WINGS_CLIENT_ID, name: 'Bruno Lima', email: 'bruno@gmail.com', phone: '5531977776666', source: 'manual' });
     const job = await insertJob(leadId);
     let searched = 0;
-    const output = await runEnrichLeadJob(
+    const output = (await runEnrichLeadJob(
       job,
       baseContext({
         db: database.pool,
@@ -201,7 +201,7 @@ describe('the enrich_lead job', () => {
           budget: { dailyUsd: 0.01, searchUsdPerQuery: 0.005 },
         },
       }),
-    );
+    )) as EnrichLeadOutput;
     expect(searched).toBe(0);
     expect(output.steps).toMatchObject({ zapi_profile: 'skipped', web_search: 'refused', brasilapi_cnpj: 'skipped' });
     expect(output.costUsdMicro).toBe(0);
@@ -218,7 +218,7 @@ describe('the enrich_lead job', () => {
   it('keeps going when Z-API fails, keeps the reserved cost when a search fails, and never sends a query without a name', async () => {
     const leadId = await insertLead({ client_id: WINGS_CLIENT_ID, name: 'Carla Dias', phone: '5541988887777', source: 'whatsapp_link' });
     const job = await insertJob(leadId);
-    const output = await runEnrichLeadJob(
+    const output = (await runEnrichLeadJob(
       job,
       baseContext({
         db: database.pool,
@@ -237,7 +237,7 @@ describe('the enrich_lead job', () => {
           budget: { dailyUsd: 5, searchUsdPerQuery: 0.005 },
         },
       }),
-    );
+    )) as EnrichLeadOutput;
     expect(output.steps).toMatchObject({ zapi_profile: 'failed', web_search: 'done', brasilapi_cnpj: 'skipped' });
     expect(output.costUsdMicro).toBe(10_000);
     const ledger = await ledgerRows(leadId);
@@ -251,7 +251,7 @@ describe('the enrich_lead job', () => {
     expect(JSON.stringify(ledger)).not.toContain('Carla');
 
     const nameless = await insertLead({ client_id: WINGS_CLIENT_ID, phone: '5541988880000', source: 'whatsapp_link' });
-    const output2 = await runEnrichLeadJob(
+    const output2 = (await runEnrichLeadJob(
       await insertJob(nameless),
       baseContext({
         db: database.pool,
@@ -266,7 +266,7 @@ describe('the enrich_lead job', () => {
           budget: { dailyUsd: 5, searchUsdPerQuery: 0.005 },
         },
       }),
-    );
+    )) as EnrichLeadOutput;
     expect(output2.steps.web_search).toBe('skipped');
     expect(output2.searches).toBe(0);
   });
