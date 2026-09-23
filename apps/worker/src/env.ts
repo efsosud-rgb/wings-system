@@ -2,6 +2,7 @@ import { JOB_TYPES, JOB_TYPES_IMPLEMENTED, type JobType } from '@wings/shared';
 import { z } from 'zod';
 
 const requiredString = z.string().trim().min(1);
+const optionalString = requiredString.optional().or(z.literal('').transform(() => undefined));
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -48,6 +49,22 @@ const schema = z.object({
   /** Where downloaded assets and the render result live until uploaded;
    * always removed at the end, success or failure. */
   RENDER_TMP_DIR: requiredString.optional(),
+
+  /**
+   * The `enrich_lead` job (docs/leads/intake.md). Z-API reads the WhatsApp
+   * profile of a number (the same instance the API notifies with); Brave
+   * Search finds public LinkedIn/Instagram pages and is PAID per query;
+   * BrasilAPI is public. Unset, a step is skipped and the lead says so.
+   */
+  ZAPI_INSTANCE_ID: optionalString,
+  ZAPI_INSTANCE_TOKEN: optionalString,
+  ZAPI_CLIENT_TOKEN: optionalString,
+  BRAVE_SEARCH_API_KEY: optionalString,
+  /** What one search query costs, in US dollars (Brave: US$ 5 per 1,000). */
+  ENRICH_SEARCH_USD_PER_QUERY: z.coerce.number().min(0).default(0.005),
+  /** The ceiling on paid enrichment for everyone, per day (America/Sao_Paulo). */
+  ENRICH_DAILY_USD: z.coerce.number().positive().max(100).default(2),
+  BRASILAPI_BASE_URL: optionalString,
 });
 
 export type Env = z.infer<typeof schema>;

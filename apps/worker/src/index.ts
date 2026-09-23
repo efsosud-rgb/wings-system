@@ -1,5 +1,6 @@
 import { tmpdir } from 'node:os';
 import { runFfmpeg, runFfprobe, runWhisper } from './lib/commands.js';
+import { createBraveSearch, createBrasilApi, createZapiProfileClient } from './lib/enrichment.js';
 import { createS3Storage } from './lib/storage.js';
 import { concurrencyOf, threadsPerJob } from './concurrency.js';
 import { createPool, waitForJobsTable } from './db/client.js';
@@ -26,6 +27,22 @@ async function main() {
     `wings-worker: claiming [${jobTypes.join(', ')}], concurrency=${concurrency}, threads/job=${threads}`,
   );
 
+  // Shapes only (key names and numbers): these answers carry a person's name.
+  const log = (facts: Record<string, unknown>) => console.warn(JSON.stringify({ worker: 'enrich_lead', ...facts }));
+  const zapi =
+    env.ZAPI_INSTANCE_ID && env.ZAPI_INSTANCE_TOKEN && env.ZAPI_CLIENT_TOKEN
+      ? createZapiProfileClient({
+          instanceId: env.ZAPI_INSTANCE_ID,
+          instanceToken: env.ZAPI_INSTANCE_TOKEN,
+          clientToken: env.ZAPI_CLIENT_TOKEN,
+          log,
+        })
+      : null;
+  const search = env.BRAVE_SEARCH_API_KEY ? createBraveSearch({ apiKey: env.BRAVE_SEARCH_API_KEY, log }) : null;
+  console.warn(
+    `wings-worker: enrich_lead with zapi=${zapi ? 'on' : 'off'}, search=${search ? 'brave' : 'off'}, ceiling US$ ${env.ENRICH_DAILY_USD}/day`,
+  );
+
   const stop = runWorker(
     pool,
     {
@@ -39,6 +56,13 @@ async function main() {
         timeoutSeconds: env.RENDER_TIMEOUT_SECONDS,
         maxInputBytes: env.RENDER_MAX_INPUT_BYTES,
         tmpDir: env.RENDER_TMP_DIR ?? tmpdir(),
+      },
+      db: pool,
+      enrichment: {
+        zapi,
+        search,
+        cnpj: createBrasilApi({ baseUrl: env.BRASILAPI_BASE_URL, log }),
+        budget: { dailyUsd: env.ENRICH_DAILY_USD, searchUsdPerQuery: env.ENRICH_SEARCH_USD_PER_QUERY },
       },
     },
     { jobTypes, concurrency, pollIntervalMs: env.WORKER_POLL_INTERVAL_MS, maxAttempts: env.WORKER_MAX_ATTEMPTS },

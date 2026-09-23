@@ -1,3 +1,5 @@
+import type { Pool } from '../db/client.js';
+import type { CnpjLookup, EnrichmentBudget, WebSearch, ZapiProfileClient } from '../lib/enrichment.js';
 import type { ObjectStorage } from '../lib/storage.js';
 import type { Job } from '../queue.js';
 
@@ -20,6 +22,17 @@ export interface JobContext {
     maxInputBytes: number;
     tmpDir: string;
   };
+  /** The queue's own database: the `enrich_lead` job reads and writes the lead tables with plain SQL. */
+  db: Pool;
+  /** The outside services of `enrich_lead`; a null one means "not configured", and the step is skipped. */
+  enrichment: {
+    zapi: ZapiProfileClient | null;
+    search: WebSearch | null;
+    cnpj: CnpjLookup;
+    budget: EnrichmentBudget;
+  };
+  /** Set only by tests, to pin "today" for the daily ceiling. */
+  now?: () => Date;
 }
 
 export type JobHandler = (job: Job, ctx: JobContext) => Promise<unknown>;

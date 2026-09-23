@@ -1,4 +1,5 @@
 import { tmpdir } from 'node:os';
+import type { Pool } from '../db/client.js';
 import type { JobContext } from '../jobs/types.js';
 import { createMemoryStorage } from './memory-storage.js';
 
@@ -23,6 +24,21 @@ export function baseContext(overrides: Partial<JobContext> = {}): JobContext {
       timeoutSeconds: 7200,
       maxInputBytes: 8 * 1024 * 1024 * 1024,
       tmpDir: tmpdir(),
+    },
+    db: new Proxy({} as Pool, {
+      get() {
+        throw new Error('db was not provided for this test');
+      },
+    }),
+    enrichment: {
+      zapi: null,
+      search: null,
+      cnpj: {
+        lookup: async () => {
+          throw new Error('cnpj lookup was not stubbed for this test');
+        },
+      },
+      budget: { dailyUsd: 2, searchUsdPerQuery: 0.005 },
     },
     ...overrides,
   };
