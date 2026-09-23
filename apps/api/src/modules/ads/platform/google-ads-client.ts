@@ -462,7 +462,10 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient {
         );
       }
       case 'device': {
-        // MOBILE, DESKTOP, TABLET, CONNECTED_TV, OTHER. NOT verified live.
+        // MOBILE, DESKTOP, TABLET, CONNECTED_TV, OTHER. Confirmed live
+        // 2026-09-23 on this account: MOBILE and DESKTOP came back correctly
+        // lowercased (TABLET/CONNECTED_TV/OTHER not yet observed — no spend
+        // on those in the window checked).
         const rows = await query('segments.device', 'campaign');
         return rows.flatMap((row) =>
           base(row, (row.segments?.device ?? 'UNKNOWN').toLowerCase(), ''),
