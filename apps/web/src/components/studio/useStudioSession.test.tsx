@@ -216,6 +216,9 @@ vi.mock('@wings/studio', () => ({
     setZoom(zoom: number) {
       core.state.zoom = zoom;
     }
+    resize() {
+      /* the real one measures the stage box and refits */
+    }
     zoomToFit() {
       core.state.zoom = 0.4;
     }
@@ -242,6 +245,11 @@ vi.mock('@wings/studio', () => ({
     }
     dispose() {}
   },
+}));
+// jsdom never loads media: the probe is scripted, and the clip must carry what it answered.
+const probeMediaDuration = vi.fn(async () => 84.16);
+vi.mock('./media-probe.js', () => ({
+  probeMediaDuration: (...args: unknown[]) => probeMediaDuration(...(args as [])),
 }));
 vi.mock('harfbuzzjs/hb.wasm?url', () => ({ default: '/assets/hb.wasm' }));
 vi.mock('@resvg/resvg-wasm/index_bg.wasm?url', () => ({ default: '/assets/resvg.wasm' }));
@@ -366,6 +374,9 @@ describe('files from the Drive', () => {
     await act(() => session().addDriveFile(video, folder));
     expect(get).toHaveBeenCalledWith(`/studio/files/${FILE_ID}/link`);
     expect(core.state.tracks[0]?.clips[0]?.asset).toMatchObject({ type: 'video', src: LINK });
+    // Born with the file's real length, read by the browser first; never the core's guess.
+    expect(probeMediaDuration).toHaveBeenCalledWith(LINK, 'video');
+    expect(core.state.tracks[0]?.clips[0]?.length).toBe(84.16);
     await waitFor(() => expect(session().mode).toBe('video'));
     expect(session().assets.map((asset) => asset.name)).toEqual(['entrevista.mp4']);
     // Video on the timeline: it cannot become a still.

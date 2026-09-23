@@ -14,6 +14,7 @@ import { and, eq, like } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
+import { byteRangeOf } from './routes.js';
 import type { Database } from '../../db/client.js';
 import { seed } from '../../db/seed.js';
 import { auditLog, driveFiles, driveFolders, driveTemplateNodes } from '../../db/schema/index.js';
@@ -446,6 +447,32 @@ describe('files', () => {
       "filename*=UTF-8''Proposta%20Aurora.pdf",
     );
     expect(fetched.headers['content-type']).toBe('application/pdf');
+    expect(fetched.headers['accept-ranges']).toBe('bytes');
+
+    // A video seeks by byte range: the same link answers 206 with the slice asked for.
+    const path = url.replace('http://localhost:5173/api', '');
+    const slice = await app.inject({ url: path, headers: { range: 'bytes=1-2' } });
+    expect(slice.statusCode).toBe(206);
+    expect(slice.headers['content-range']).toBe(`bytes 1-2/${bytes.length}`);
+    expect(slice.headers['content-length']).toBe('2');
+    expect(slice.rawPayload.equals(bytes.subarray(1, 3))).toBe(true);
+    const tail = await app.inject({ url: path, headers: { range: 'bytes=2-' } });
+    expect(tail.statusCode).toBe(206);
+    expect(tail.rawPayload.equals(bytes.subarray(2))).toBe(true);
+    const beyond = await app.inject({ url: path, headers: { range: `bytes=${bytes.length}-` } });
+    expect(beyond.statusCode).toBe(416);
+    expect(beyond.headers['content-range']).toBe(`bytes */${bytes.length}`);
+  });
+
+  it('reads a Range header the way a browser writes one', () => {
+    expect(byteRangeOf(undefined, 10)).toBeNull();
+    expect(byteRangeOf('bytes=0-', 10)).toEqual({ start: 0, end: 9 });
+    expect(byteRangeOf('bytes=3-5', 10)).toEqual({ start: 3, end: 5 });
+    expect(byteRangeOf('bytes=3-50', 10)).toEqual({ start: 3, end: 9 });
+    expect(byteRangeOf('bytes=-4', 10)).toEqual({ start: 6, end: 9 });
+    expect(byteRangeOf('bytes=10-', 10)).toBe('unsatisfiable');
+    expect(byteRangeOf('bytes=5-3', 10)).toBe('unsatisfiable');
+    expect(byteRangeOf('items=1-2', 10)).toBeNull();
   });
 
   it('refuses a file over the limit, and a name already in the folder unless it is a replacement', async () => {

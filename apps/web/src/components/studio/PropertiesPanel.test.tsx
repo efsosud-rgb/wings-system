@@ -34,6 +34,7 @@ const selectedText: SelectedClip = {
     vertical: 'middle',
   },
   fill: null,
+  caption: null,
 };
 
 function stub(overrides: Partial<StudioSession>): StudioSession {

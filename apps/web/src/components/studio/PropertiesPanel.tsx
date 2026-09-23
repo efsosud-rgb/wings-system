@@ -323,6 +323,64 @@ export function PropertiesPanel({ session }: { session: StudioSession }) {
         </>
       )}
 
+      {selected.caption && (
+        <fieldset className="studio-prop-group">
+          <legend>Legenda</legend>
+          <NumberField
+            id="prop-caption-size"
+            label="Tamanho da letra"
+            unit="px"
+            value={selected.caption.size}
+            min={8}
+            max={400}
+            step={2}
+            onCommit={(value) => patch({ caption: { size: value } })}
+          />
+          <label className="studio-prop" htmlFor="prop-caption-placement">
+            <span>Posição</span>
+            <select
+              id="prop-caption-placement"
+              value={selected.caption.placement}
+              onChange={(event) =>
+                patch({ caption: { placement: event.target.value as 'top' | 'middle' | 'bottom' } })
+              }
+            >
+              <option value="bottom">Terço inferior</option>
+              <option value="middle">Centro</option>
+              <option value="top">Terço superior</option>
+            </select>
+          </label>
+          <label className="studio-prop" htmlFor="prop-caption-color">
+            <span>Cor da letra</span>
+            <input
+              id="prop-caption-color"
+              type="color"
+              value={selected.caption.color}
+              onChange={(event) => patch({ caption: { color: event.target.value } })}
+            />
+          </label>
+          <label className="studio-prop" htmlFor="prop-caption-background">
+            <span>Cor do fundo</span>
+            <input
+              id="prop-caption-background"
+              type="color"
+              value={selected.caption.backgroundColor}
+              onChange={(event) => patch({ caption: { backgroundColor: event.target.value } })}
+            />
+          </label>
+          <NumberField
+            id="prop-caption-background-opacity"
+            label="Opacidade do fundo"
+            unit="%"
+            value={pct(selected.caption.backgroundOpacity)}
+            min={0}
+            max={100}
+            step={5}
+            onCommit={(value) => patch({ caption: { backgroundOpacity: value / 100 } })}
+          />
+        </fieldset>
+      )}
+
       {selected.assetType === 'svg' && (
         <label className="studio-prop" htmlFor="prop-fill">
           <span>Cor</span>

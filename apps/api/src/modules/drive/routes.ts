@@ -477,6 +477,30 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
  * the permission, as a pre-signed R2 address would be, and it says nothing when
  * it refuses. With R2 configured these routes are never handed out.
  */
+/**
+ * The one range a `Range: bytes=a-b` header asks for, clamped to the file:
+ * `a-` runs to the end, `-n` is the last n bytes. Anything else is served
+ * whole; a start past the end is unsatisfiable.
+ */
+export function byteRangeOf(
+  header: string | undefined,
+  size: number,
+): { start: number; end: number } | null | 'unsatisfiable' {
+  if (!header || size <= 0) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+  if (!match) return null;
+  const [, from, to] = match;
+  if (from === '' && to === '') return null;
+  if (from === '') {
+    const suffix = Math.min(size, Number(to));
+    return suffix <= 0 ? 'unsatisfiable' : { start: size - suffix, end: size - 1 };
+  }
+  const start = Number(from);
+  if (start >= size) return 'unsatisfiable';
+  const end = to === '' ? size - 1 : Math.min(size - 1, Number(to));
+  return end < start ? 'unsatisfiable' : { start, end };
+}
+
 export const driveBlobRoutes: FastifyPluginAsync = async (app) => {
   const storage = storageOf(app.wings);
   if (storage?.kind !== 'local') return;
@@ -510,16 +534,34 @@ export const driveBlobRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
+  /**
+   * Serves a file, whole or by byte range. Video and audio in the Studio ask
+   * for ranges (a seek is a range request), as they would from R2; without
+   * 206 answers the browser never gets a frame after the first.
+   */
   app.get('/drive/blob', async (request, reply) => {
     const grant = local.open(tokenOf(request) ?? '');
-    const found = grant?.verb === 'GET' ? await local.stream(grant.key) : null;
-    if (!grant || !found) return reply.status(404).send({ error: 'not_found' });
-    return reply
+    const size = grant?.verb === 'GET' ? await local.size(grant.key) : null;
+    if (!grant || size === null) return reply.status(404).send({ error: 'not_found' });
+    const range = byteRangeOf(request.headers.range, size);
+    if (range === 'unsatisfiable') {
+      return reply.status(416).header('Content-Range', `bytes */${size}`).send();
+    }
+    const found = await local.stream(grant.key, range ?? undefined);
+    if (!found) return reply.status(404).send({ error: 'not_found' });
+    void reply
       .header('Content-Type', grant.contentType ?? 'application/octet-stream')
-      .header('Content-Length', found.size)
       .header('Content-Disposition', grant.disposition ?? 'attachment')
       .header('Cache-Control', 'private, no-store')
-      .header('X-Content-Type-Options', 'nosniff')
-      .send(found.stream);
+      .header('Accept-Ranges', 'bytes')
+      .header('X-Content-Type-Options', 'nosniff');
+    if (range) {
+      return reply
+        .status(206)
+        .header('Content-Range', `bytes ${range.start}-${range.end}/${size}`)
+        .header('Content-Length', range.end - range.start + 1)
+        .send(found.stream);
+    }
+    return reply.header('Content-Length', size).send(found.stream);
   });
 };
