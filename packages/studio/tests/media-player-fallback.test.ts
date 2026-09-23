@@ -443,7 +443,7 @@ describe("media player source URLs", () => {
 
 		await new ImagePlayer(edit as never, createClip("image")).load();
 
-		expect(edit.assetLoader.load).toHaveBeenCalledWith(signedSrc, { src: signedSrc, crossorigin: "anonymous", data: {} });
+		expect(edit.assetLoader.load).toHaveBeenCalledWith(signedSrc, { src: signedSrc, crossorigin: "anonymous", data: {}, parser: "loadTextures" });
 	});
 
 	it("passes the video src to the loader unchanged", async () => {
@@ -461,7 +461,7 @@ describe("media player source URLs", () => {
 
 		await new ImageToVideoPlayer(edit as never, createClip("image-to-video")).load();
 
-		expect(edit.assetLoader.load).toHaveBeenCalledWith(signedSrc, { src: signedSrc, crossorigin: "anonymous", data: {} });
+		expect(edit.assetLoader.load).toHaveBeenCalledWith(signedSrc, { src: signedSrc, crossorigin: "anonymous", data: {}, parser: "loadTextures" });
 	});
 
 	// Query-less URLs get a cache-busting parameter so a response cached
@@ -475,7 +475,7 @@ describe("media player source URLs", () => {
 
 		await new ImagePlayer(edit as never, { asset: { type: "image", src: plainSrc }, start: 0, length: 5 } as ResolvedClip).load();
 
-		expect(edit.assetLoader.load).toHaveBeenCalledWith(bustedSrc, { src: bustedSrc, crossorigin: "anonymous", data: {} });
+		expect(edit.assetLoader.load).toHaveBeenCalledWith(bustedSrc, { src: bustedSrc, crossorigin: "anonymous", data: {}, parser: "loadTextures" });
 	});
 
 	it("cache-busts a query-less video src", async () => {

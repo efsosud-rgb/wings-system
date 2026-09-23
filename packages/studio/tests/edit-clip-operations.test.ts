@@ -460,19 +460,18 @@ describe("Edit Clip Operations", () => {
 			expect(afterUndo[0].length).toBe(2);
 		});
 
-		it("prevents deletion of the last clip in the document", async () => {
+		it("deletes the last clip too, leaving the timeline empty (Wings: no clip is kept alive)", async () => {
 			// Inner beforeEach added a video clip, so we have 2 clips.
-			// Delete the video to leave only the initial image clip.
-			edit.deleteClip(0, 1);
+			await edit.deleteClip(0, 1);
 
 			const { tracks: before } = getEditState(edit);
 			expect(before[0].length).toBe(1);
 
-			// Attempt to delete the last remaining clip — should be prevented
-			edit.deleteClip(0, 0);
+			await edit.deleteClip(0, 0);
 
 			const { tracks: after } = getEditState(edit);
-			expect(after[0].length).toBe(1);
+			expect(after[0]?.length ?? 0).toBe(0);
+			expect(edit.totalDuration).toBe(0);
 		});
 
 		it("handles non-existent track gracefully", async () => {
@@ -485,13 +484,13 @@ describe("Edit Clip Operations", () => {
 	});
 
 	describe("command results", () => {
-		it("deleteClip resolves noop when deleting the only clip", async () => {
+		it("deleteClip resolves success when deleting the only clip", async () => {
 			// Only the initial image clip exists at this point
 			const result = await edit.deleteClip(0, 0);
 
-			expect(result).toEqual({ status: "noop", message: "Cannot delete the last clip" });
+			expect(result.status).toBe("success");
 			const { tracks } = getEditState(edit);
-			expect(tracks[0].length).toBe(1);
+			expect(tracks[0]?.length ?? 0).toBe(0);
 		});
 
 		it("deleteClip resolves success when another clip remains", async () => {
@@ -745,17 +744,15 @@ describe("Edit Clip Operations", () => {
 			expect(tracks[0].length).toBe(1);
 		});
 
-		it("deleteClip refuses atomically when the content clip with a luma is the last one", async () => {
+		it("deleteClip takes the luma along when the content clip with it is the last one", async () => {
 			// Track 0: [image (initial), luma] — the image is the last content clip
 			await edit.addClip(0, { asset: { type: "luma", src: "https://example.com/matte.mp4" }, start: 0, length: 5 });
 
-			// The deletion is refused up front: the luma must NOT be deleted as a side
-			// effect of a refused operation
 			const result = await edit.deleteClip(0, 0);
 
-			expect(result).toEqual({ status: "noop", message: "Cannot delete the last clip" });
+			expect(result.status).toBe("success");
 			const { tracks } = getEditState(edit);
-			expect(tracks[0].length).toBe(2);
+			expect(tracks[0]?.length ?? 0).toBe(0);
 		});
 	});
 
@@ -849,7 +846,7 @@ describe("Edit Clip Operations", () => {
 			expect(edit.getClipGenerationState(id)).toBeUndefined();
 		});
 
-		it("keeps generation running when the deletion is refused", async () => {
+		it("drops generation when the only clip is deleted (Wings: the last clip may go)", async () => {
 			const solo = new Edit({
 				timeline: { tracks: [{ clips: [PROMPT_CLIP] }] },
 				output: { size: { width: 1920, height: 1080 }, format: "mp4" }
@@ -859,13 +856,13 @@ describe("Edit Clip Operations", () => {
 			const id = clipIdAt(solo, 0, 0);
 
 			const pending = solo.generateClip(id);
-			expect((await solo.deleteClip(0, 0)).status).toBe("noop");
+			expect((await solo.deleteClip(0, 0)).status).toBe("success");
+			await pending;
 
-			expect(seen.aborted).toBe(false);
-			expect(solo.getClipGenerationState(id)?.status).toBe("generating");
+			expect(seen.aborted).toBe(true);
+			expect(solo.getClipGenerationState(id)?.status).not.toBe("generating");
 
 			solo.dispose();
-			await pending;
 		});
 
 		it("hands the generator a prompt with merge fields resolved", async () => {

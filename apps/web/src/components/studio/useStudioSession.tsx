@@ -25,6 +25,7 @@ import {
   useTranscription,
 } from '../../api/studio.js';
 import { errorText } from '../drive/DriveParts.js';
+import { probeMediaDuration } from './media-probe.js';
 import {
   captionClip,
   clipFor,
@@ -241,6 +242,32 @@ export function useStudioSession(): StudioSession {
     return () => cancelAnimationFrame(frame);
   }, [playing]);
 
+  // The stage box changes without a window resize (the transport and the timeline
+  // appear when a piece turns into a video, a panel opens beside it). The core
+  // only listens to the window, so it kept the box it measured at load and fitted
+  // every later format into that: on staging a format switch left the frame off
+  // the stage. Measure again whenever the box moves.
+  useEffect(() => {
+    if (status !== 'ready' || typeof ResizeObserver === 'undefined') return;
+    const host = stageRef.current;
+    if (!host) return;
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const made = coreRef.current;
+        if (!made) return;
+        made.canvas.resize();
+        setZoomState(made.canvas.getZoom());
+      });
+    });
+    observer.observe(host);
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [status]);
+
   // The wheel zooms inside the core; this only keeps the number on screen honest.
   useEffect(() => {
     if (status !== 'ready') return;
@@ -320,9 +347,23 @@ export function useStudioSession(): StudioSession {
     return true;
   };
 
+  const outputSize = () => {
+    const made = coreRef.current;
+    const size = made?.edit.size;
+    return size && size.width > 0 ? { width: size.width, height: size.height } : STUDIO_ASPECTS[aspect];
+  };
+
   const setAspect = async (next: StudioAspect) => {
     setAspectState(next);
-    await core().edit.setOutputSize(STUDIO_ASPECTS[next].width, STUDIO_ASPECTS[next].height);
+    const made = core();
+    await made.edit.setOutputSize(STUDIO_ASPECTS[next].width, STUDIO_ASPECTS[next].height);
+    // The core refits on its own event, but with the stage box it measured at load;
+    // `resize()` measures the box again and refits, so the new frame lands centred.
+    requestAnimationFrame(() => {
+      coreRef.current?.canvas.resize();
+      setZoomState(coreRef.current?.canvas.getZoom() ?? 1);
+    });
+    refresh();
   };
 
   const withBusy = async (message: string, fallback: string, run: () => Promise<void>) => {
@@ -389,12 +430,22 @@ export function useStudioSession(): StudioSession {
     await withBusy('Abrindo o arquivo…', 'Não deu para abrir o arquivo.', async () => {
       const asset = await resolve(file);
       const start = options?.at ?? clipStart();
-      const clip = clipFor(kind, asset.url, start);
+      // A video or audio clip is born with the file's real length, read here first.
+      const durationSeconds =
+        kind === 'video' || kind === 'audio' ? await probeMediaDuration(asset.url, kind) : null;
+      const clip = clipFor(kind, asset.url, start, { durationSeconds, output: outputSize() });
       if (mode === 'image' && kind === 'image')
         (clip as { length: unknown }).length = IMAGE_MODE_LENGTH;
       await addClip(clip, options?.trackIndex ?? 0);
       if (folder) setLastFolder(folder);
-      setNotice(null);
+      setNotice(
+        (kind === 'video' || kind === 'audio') && durationSeconds === null
+          ? {
+              kind: 'info',
+              text: 'Não deu para ler a duração deste arquivo no navegador; o editor usou uma estimativa. Ajuste a duração em Propriedades.',
+            }
+          : null,
+      );
     });
   };
 
@@ -488,7 +539,7 @@ export function useStudioSession(): StudioSession {
     const made = core();
     if (!selected) return;
     const current = (made.edit.getDocumentClipById(selected.clipId) ?? {}) as DocClip;
-    await made.edit.updateClipById(selected.clipId, updatesFor(patch, current));
+    await made.edit.updateClipById(selected.clipId, updatesFor(patch, current, outputSize()));
     refresh();
   };
 
@@ -697,7 +748,7 @@ export function useStudioSession(): StudioSession {
         name: done.file.name,
         mimeType: 'application/x-subrip',
       });
-      await addClip(captionClip(asset.url));
+      await addClip(captionClip(asset.url, outputSize()));
       setModeState('video');
       setNotice({ kind: 'success', text: 'Legenda colocada na linha do tempo, por cima de tudo.' });
     });

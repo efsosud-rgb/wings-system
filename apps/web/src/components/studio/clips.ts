@@ -8,6 +8,7 @@ import {
 } from '@wings/shared';
 import type { Edit, EditConfig } from '@wings/studio';
 import type {
+  CaptionStyle,
   ClipPatch,
   SelectedClip,
   ShapeKind,
@@ -121,16 +122,31 @@ export function hasPlayableMedia(doc: EditDoc): boolean {
 // Making clips
 // ---------------------------------------------------------------------------
 
-export function clipFor(kind: StudioFileKind, src: string, start: number): Clip {
+/**
+ * A video or audio clip is born with the file's real length, read in the
+ * browser before the clip exists (`probeMediaDuration`). Only when that read
+ * failed does the core's `auto` stand in, and the person is told.
+ */
+export function clipFor(
+  kind: StudioFileKind,
+  src: string,
+  start: number,
+  options: { durationSeconds?: number | null; output?: { width: number; height: number } } = {},
+): Clip {
+  const measured =
+    typeof options.durationSeconds === 'number' && Number.isFinite(options.durationSeconds) && options.durationSeconds > 0
+      ? Math.round(options.durationSeconds * 100) / 100
+      : null;
   switch (kind) {
     case 'video':
-      return { asset: { type: 'video', src, volume: 1 }, start, length: 'auto' } as Clip;
+      return { asset: { type: 'video', src, volume: 1 }, start, length: measured ?? 'auto' } as Clip;
     case 'audio':
-      return { asset: { type: 'audio', src, volume: 1 }, start, length: 'auto' } as Clip;
+      return { asset: { type: 'audio', src, volume: 1 }, start, length: measured ?? 'auto' } as Clip;
     case 'image':
       return { asset: { type: 'image', src }, start, length: 5, fit: 'contain' } as Clip;
     case 'subtitle':
-      return { asset: { type: 'rich-caption', src }, start, length: 'end' } as Clip;
+      // An SRT from the Drive gets the same look as one Whisper wrote.
+      return captionClip(src, options.output ?? { width: 1920, height: 1080 });
     case 'project':
       throw new Error('a project is opened, not added');
   }
@@ -177,8 +193,89 @@ export function logoClip(src: string, start: number, length: number): Clip {
   } as Clip;
 }
 
-export function captionClip(src: string): Clip {
-  return { asset: { type: 'rich-caption', src }, start: 0, length: 'end' } as Clip;
+/** How far a caption band sits from the frame's edge, as a share of the height. */
+const CAPTION_EDGE_OFFSET = 0.06;
+const CAPTION_LINE_HEIGHT = 1.3;
+const CAPTION_LINES = 2;
+
+/**
+ * The default look of a caption: letters about 5% of the frame's height,
+ * centred in the lower third, a translucent band behind them, and a box
+ * two lines tall so a long segment wraps once and no more. Everything here
+ * is what `CaptionStyle` later edits.
+ */
+export function captionStyleFor(output: { width: number; height: number }): CaptionStyle {
+  return {
+    size: Math.max(16, Math.round(output.height * 0.05)),
+    color: '#ffffff',
+    placement: 'bottom',
+    backgroundColor: '#000000',
+    backgroundOpacity: 0.55,
+  };
+}
+
+const CAPTION_PLACEMENT_POSITION: Record<CaptionStyle['placement'], StudioPosition> = {
+  bottom: 'bottom',
+  middle: 'center',
+  top: 'top',
+};
+
+/** The clip-level fields (box and place) a caption style implies. */
+function captionBox(style: CaptionStyle, output: { width: number; height: number }) {
+  const padding = Math.round(style.size * 0.35);
+  return {
+    width: Math.round(output.width * 0.9),
+    height: Math.round(style.size * CAPTION_LINE_HEIGHT * CAPTION_LINES + padding * 2),
+    position: CAPTION_PLACEMENT_POSITION[style.placement],
+    // In the core, a positive y offset moves the clip up.
+    offset: {
+      x: 0,
+      y: style.placement === 'bottom' ? CAPTION_EDGE_OFFSET : style.placement === 'top' ? -CAPTION_EDGE_OFFSET : 0,
+    },
+    padding,
+  };
+}
+
+export function captionClip(src: string, output: { width: number; height: number }): Clip {
+  const style = captionStyleFor(output);
+  const box = captionBox(style, output);
+  return {
+    asset: {
+      type: 'rich-caption',
+      src,
+      font: { family: TEXT_FONT, size: style.size, weight: 600, color: style.color, opacity: 1 },
+      style: { lineHeight: CAPTION_LINE_HEIGHT },
+      background: {
+        color: style.backgroundColor,
+        opacity: style.backgroundOpacity,
+        borderRadius: Math.round(style.size * 0.2),
+        padding: box.padding,
+        wrap: true,
+      },
+      align: { horizontal: 'center', vertical: 'middle' },
+    },
+    start: 0,
+    length: 'end',
+    width: box.width,
+    height: box.height,
+    position: box.position,
+    offset: box.offset,
+  } as Clip;
+}
+
+/** The caption style a document clip carries, for the properties panel. */
+export function captionStyleOf(clip: DocClip): CaptionStyle {
+  const asset = clip.asset ?? {};
+  const font = (asset.font ?? {}) as Record<string, unknown>;
+  const background = (asset.background ?? {}) as Record<string, unknown>;
+  const position = clip.position;
+  return {
+    size: numberOr(font.size, 32),
+    color: typeof font.color === 'string' ? font.color : '#ffffff',
+    placement: position === 'top' ? 'top' : position === 'center' ? 'middle' : 'bottom',
+    backgroundColor: typeof background.color === 'string' ? background.color : '#000000',
+    backgroundOpacity: numberOr(background.opacity, 0),
+  };
 }
 
 /** Inline SVG markup for a shape. No address in it: the project rule holds for shapes too. */
@@ -232,6 +329,7 @@ const numberOr = (value: unknown, fallback: number) =>
   typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 
 const TEXT_TYPES = new Set(['rich-text', 'text', 'title']);
+const CAPTION_TYPES = new Set(['rich-caption', 'caption']);
 
 export function selectedFrom(
   clip: ResolvedClip,
@@ -278,11 +376,16 @@ export function selectedFrom(
         }
       : null,
     fill: type === 'svg' ? fillOf(asset.src) : null,
+    caption: CAPTION_TYPES.has(type) ? captionStyleOf(raw) : null,
   };
 }
 
 /** A `ClipPatch` as the core's `updateClipById` takes it. `current` is the document clip. */
-export function updatesFor(patch: ClipPatch, current: DocClip): Partial<Clip> {
+export function updatesFor(
+  patch: ClipPatch,
+  current: DocClip,
+  output?: { width: number; height: number },
+): Partial<Clip> {
   const updates: Record<string, unknown> = {};
   if (patch.start !== undefined) updates.start = Math.max(0, patch.start);
   if (patch.length !== undefined) updates.length = Math.max(0.1, patch.length);
@@ -323,6 +426,29 @@ export function updatesFor(patch: ClipPatch, current: DocClip): Partial<Clip> {
   }
   if (patch.fill !== undefined && asset.type === 'svg' && typeof asset.src === 'string') {
     asset.src = withFill(asset.src, patch.fill);
+    assetChanged = true;
+  }
+  if (patch.caption !== undefined && asset.type && CAPTION_TYPES.has(asset.type)) {
+    const style: CaptionStyle = { ...captionStyleOf(current), ...patch.caption };
+    style.size = Math.min(400, Math.max(8, Math.round(style.size)));
+    style.backgroundOpacity = Math.min(1, Math.max(0, style.backgroundOpacity));
+    const box = captionBox(style, output ?? { width: 1920, height: 1080 });
+    const font = { ...((asset.font ?? {}) as Record<string, unknown>), size: style.size, color: style.color };
+    const background = {
+      ...((asset.background ?? {}) as Record<string, unknown>),
+      color: style.backgroundColor,
+      opacity: style.backgroundOpacity,
+      padding: box.padding,
+      borderRadius: Math.round(style.size * 0.2),
+      wrap: true,
+    };
+    asset.font = font;
+    asset.background = background;
+    asset.style = { ...((asset.style ?? {}) as Record<string, unknown>), lineHeight: CAPTION_LINE_HEIGHT };
+    updates.width = box.width;
+    updates.height = box.height;
+    updates.position = box.position;
+    updates.offset = box.offset;
     assetChanged = true;
   }
   if (assetChanged) updates.asset = asset;

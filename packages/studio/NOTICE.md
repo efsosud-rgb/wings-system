@@ -43,6 +43,15 @@ Nothing in this package calls a Shotstack service.
 - `src/core/schemas/index.ts`: `EditSchema` accepts an empty `timeline.tracks`
   (upstream requires one track), so a project can start with nothing on it.
   `ResolvedEditSchema` is unchanged.
+- `src/core/commands/delete-clip-command.ts` and `deleteClip` in
+  `src/core/edit-session.ts`: the last clip may be deleted too (upstream keeps
+  one clip alive and answers `noop`, which on staging looked like "Remover"
+  and Delete doing nothing). An empty track stays; the last track is still
+  never deleted.
+- `src/components/canvas/players/image-player.ts`: the image load names its
+  parser (`parser: "loadTextures"`). PixiJS otherwise picks a parser by the
+  URL's file extension, and a Drive link ends in the file's id, so a library
+  PNG showed the warning triangle instead of loading.
 
 ## Bringing upstream changes
 

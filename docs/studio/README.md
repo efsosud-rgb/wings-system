@@ -49,7 +49,34 @@ referência: o provedor só recebe arquivos da biblioteca.
 para o job `transcribe` do worker (Whisper); o SRT é arquivado no Drive, na
 pasta do arquivo, e um segundo clique põe a legenda na linha do tempo como
 clipe `caption`, citando o SRT pelo id. O contrato está em
-[`jobs.md`](jobs.md).
+[`jobs.md`](jobs.md). A legenda nasce cobrindo o vídeo inteiro
+(`length: end`) e com o estilo de vídeo vertical: letra em 5% da altura do
+quadro (96 px em 1080×1920), centralizada no terço inferior, faixa preta a
+55% atrás, caixa de duas linhas (`captionClip`, `captionStyleFor` em
+`clips.ts`). Um SRT arrastado do Drive entra com o mesmo estilo. Em
+Propriedades, a legenda tem tamanho da letra, posição (terço inferior,
+centro, terço superior), cor da letra, cor e opacidade do fundo; cada campo é
+um comando desfazível.
+
+**Duração real.** Um vídeo ou áudio entra na linha do tempo com a duração
+que o navegador leu dos metadados do arquivo (`probeMediaDuration`, antes
+de o clipe existir), nunca com o `auto` do núcleo: em staging um vídeo de
+1 min 23 s entrou com 8 s e depois 3 s, e o contador mostrava total menor
+que a posição. Se o navegador não conseguir ler (codec que ele não toca,
+link vencido), o núcleo estima e a tela avisa para ajustar em Propriedades.
+Os 5 s fixos valem só para imagem, texto e forma.
+
+**Correções de 2026-09-23 (fix/studio-live-1), conferidas com o núcleo real
+no Chromium sem cabeça.** "Remover" e Delete apagam também o último clipe (o
+núcleo mantinha um clipe vivo e respondia `noop`); o painel Propriedades
+ganhou o CSS que nunca teve (`.studio-props`, `.studio-prop`: rótulo e campo
+em grade); uma imagem da Biblioteca ou do Drive carrega mesmo com link sem
+extensão (o PixiJS escolhia o parser pela extensão; o núcleo agora o nomeia,
+ver `packages/studio/NOTICE.md`); trocar o formato mede a tela de novo e
+recentra o quadro (`canvas.resize()`, e um `ResizeObserver` no palco, porque
+o núcleo só ouvia a janela e a barra de transporte e a linha do tempo mudam
+o tamanho do palco sem ela); em desenvolvimento a rota local `/api/drive/blob`
+responde `Range` com 206, como o R2, para o vídeo procurar quadros.
 
 **Atalhos.** Espaço toca e pausa; Ctrl+Z e Ctrl+Shift+Z desfazem e refazem;
 Delete remove o selecionado; S abre "Salvar no Drive"; as setas andam um

@@ -68,6 +68,24 @@ export interface SelectedClip {
   } | null;
   /** Shapes only: the fill colour. */
   fill: string | null;
+  /** Caption clips only. */
+  caption: CaptionStyle | null;
+}
+
+/**
+ * The few things a person changes on a caption: the letters, where the band
+ * sits, and the band behind them. Read from and written to the core's
+ * rich-caption asset by `clips.ts`.
+ */
+export interface CaptionStyle {
+  /** Font size in output pixels. */
+  size: number;
+  color: string;
+  /** Lower third, middle, or upper third of the frame. */
+  placement: 'bottom' | 'middle' | 'top';
+  backgroundColor: string;
+  /** 0–1 */
+  backgroundOpacity: number;
 }
 
 /** What the properties panel may change. Every field optional; each one is one undoable command. */
@@ -82,6 +100,7 @@ export interface ClipPatch {
   volume?: number;
   text?: Partial<NonNullable<SelectedClip['text']>>;
   fill?: string;
+  caption?: Partial<CaptionStyle>;
 }
 
 /** One row of the layers panel (image mode) — top of the list is on top of the canvas. */

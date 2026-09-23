@@ -45,3 +45,74 @@ describe('friendlyCoreError', () => {
     expect(friendlyCoreError('?', 'fallback')).toBe('fallback');
   });
 });
+
+describe('clipFor', () => {
+  it('gives a video or audio clip the length the browser measured, and only falls back to auto', async () => {
+    const { clipFor } = await import('./clips.js');
+    expect(clipFor('video', 'https://x/v', 2, { durationSeconds: 84.16 })).toMatchObject({ start: 2, length: 84.16 });
+    expect(clipFor('audio', 'https://x/a', 0, { durationSeconds: 12.345 })).toMatchObject({ length: 12.35 });
+    expect(clipFor('video', 'https://x/v', 0, { durationSeconds: null })).toMatchObject({ length: 'auto' });
+    expect(clipFor('video', 'https://x/v', 0, { durationSeconds: Number.NaN })).toMatchObject({ length: 'auto' });
+    // Images never depend on a measurement.
+    expect(clipFor('image', 'https://x/i', 0, { durationSeconds: 84 })).toMatchObject({ length: 5 });
+  });
+});
+
+describe('captions', () => {
+  const vertical = { width: 1080, height: 1920 };
+
+  it('are born large, in the lower third, on a translucent band, two lines tall', async () => {
+    const { captionClip, captionStyleFor } = await import('./clips.js');
+    expect(captionStyleFor(vertical)).toEqual({
+      size: 96,
+      color: '#ffffff',
+      placement: 'bottom',
+      backgroundColor: '#000000',
+      backgroundOpacity: 0.55,
+    });
+    const clip = captionClip('https://x/legenda.srt', vertical) as unknown as Record<string, unknown>;
+    expect(clip).toMatchObject({
+      start: 0,
+      length: 'end',
+      width: 972,
+      position: 'bottom',
+      offset: { x: 0, y: 0.06 },
+      asset: {
+        type: 'rich-caption',
+        src: 'https://x/legenda.srt',
+        font: { size: 96, color: '#ffffff', weight: 600 },
+        background: { color: '#000000', opacity: 0.55, wrap: true },
+        align: { horizontal: 'center', vertical: 'middle' },
+      },
+    });
+    // Two lines of 96 px at 1.3 line height, plus the padding above and below.
+    expect(clip['height']).toBe(Math.round(96 * 1.3 * 2 + 34 * 2));
+    // An SRT from the Drive is the same clip.
+    const { clipFor } = await import('./clips.js');
+    expect(clipFor('subtitle', 'https://x/legenda.srt', 0, { output: vertical })).toEqual(clip);
+  });
+
+  it('reads the style back for the panel and writes a patch onto the asset and the box', async () => {
+    const { captionClip, captionStyleOf, updatesFor } = await import('./clips.js');
+    const clip = captionClip('https://x/legenda.srt', vertical) as unknown as Record<string, unknown>;
+    expect(captionStyleOf(clip)).toMatchObject({ size: 96, placement: 'bottom', backgroundOpacity: 0.55 });
+
+    const updates = updatesFor(
+      { caption: { size: 60, placement: 'top', color: '#ffee00', backgroundOpacity: 0 } },
+      clip,
+      vertical,
+    ) as unknown as Record<string, unknown>;
+    expect(updates).toMatchObject({
+      position: 'top',
+      offset: { x: 0, y: -0.06 },
+      width: 972,
+      asset: {
+        font: { size: 60, color: '#ffee00' },
+        background: { color: '#000000', opacity: 0 },
+      },
+    });
+    expect(updates['height']).toBe(Math.round(60 * 1.3 * 2 + 21 * 2));
+    // A text patch on a caption changes nothing: captions are edited through `caption`.
+    expect(updatesFor({ text: { text: 'x' } }, clip, vertical)).toEqual({});
+  });
+});

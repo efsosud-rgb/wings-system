@@ -93,7 +93,9 @@ export class ImagePlayer extends Player {
 		}
 
 		const loadUrl = toLoadUrl(src);
-		const loadOptions: pixi.UnresolvedAsset = { src: loadUrl, crossorigin: "anonymous", data: {} };
+		// Wings: the parser is named, so a Drive link with no file extension
+		// (a pre-signed address ends in the file's id) still loads as an image.
+		const loadOptions: pixi.UnresolvedAsset = { src: loadUrl, crossorigin: "anonymous", data: {}, parser: "loadTextures" };
 		const texture = await this.edit.assetLoader.load<pixi.Texture<pixi.ImageSource>>(loadUrl, loadOptions);
 
 		if (!(texture?.source instanceof pixi.ImageSource)) {

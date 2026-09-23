@@ -5550,3 +5550,127 @@ a.menu-module-header {
     grid-template-columns: 1fr;
   }
 }
+
+/* ---------- Studio: properties panel ---------- */
+.studio-props {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--wings-card);
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.studio-props-empty {
+  padding: 16px 12px;
+}
+
+.studio-props-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--wings-border);
+}
+
+.studio-props-kind {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--wings-accent);
+}
+
+.studio-props-name {
+  overflow-wrap: anywhere;
+}
+
+.studio-prop {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(88px, 40%);
+  align-items: center;
+  gap: 8px;
+}
+
+.studio-prop > span {
+  color: var(--wings-muted);
+  min-width: 0;
+}
+
+.studio-prop input,
+.studio-prop select,
+.studio-prop textarea {
+  width: 100%;
+  min-width: 0;
+  background: var(--wings-surface);
+  border: 1px solid var(--wings-border);
+  color: #fff;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.studio-prop input[type='color'] {
+  height: 30px;
+  padding: 2px;
+}
+
+.studio-prop textarea {
+  grid-column: 1 / -1;
+  resize: vertical;
+}
+
+.studio-prop:has(textarea) > span {
+  grid-column: 1 / -1;
+}
+
+.studio-prop-group {
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+  padding: 8px 10px 10px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.studio-prop-group legend,
+.studio-prop-grid legend {
+  padding: 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--wings-muted);
+}
+
+.studio-prop-grid {
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+  padding: 8px 10px 10px;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 28px);
+  gap: 6px;
+  justify-content: start;
+}
+
+.studio-prop-cell {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--wings-border);
+  background: var(--wings-surface);
+  cursor: pointer;
+}
+
+.studio-prop-cell[aria-pressed='true'] {
+  background: var(--wings-accent);
+  border-color: var(--wings-accent);
+}
+
+.studio-props .btn {
+  width: auto;
+  align-self: flex-start;
+}
