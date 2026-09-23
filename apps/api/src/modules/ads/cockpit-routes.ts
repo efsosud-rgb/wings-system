@@ -72,7 +72,8 @@ export const cockpitRoutes: FastifyPluginAsync = async (app) => {
           .send({ error: 'not_found', message: 'Nenhuma conta de anúncios configurada.' });
       }
 
-      const now = new Date();
+      // Injectable so a test can pin "today" against the metric days it seeds.
+      const now = app.wings.now?.() ?? new Date();
       const sinceDate = new Date(now.getTime() - days * 24 * 3_600_000).toISOString().slice(0, 10);
 
       const [campaigns, performance, facts, alertRows, adRows] = await Promise.all([

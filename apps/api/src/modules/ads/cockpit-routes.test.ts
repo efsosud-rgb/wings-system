@@ -36,6 +36,7 @@ beforeAll(async () => {
       APP_BASE_URL: 'https://staging.wingssystem.online',
     }),
     db,
+    now: () => NOW,
   });
 
   accountId = await ensureAdAccount(db, {

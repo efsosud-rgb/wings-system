@@ -211,9 +211,9 @@ const generationOf = (overrides: Partial<MediaGeneration> = {}): MediaGeneration
 
 const AURORA = '11111111-1111-4111-8111-1111111111c2';
 const clients: Client[] = [
-  { id: WINGS_CLIENT_ID, name: 'Wings Company', slug: 'wings-company', active: true },
-  { id: AURORA, name: 'Padaria Aurora', slug: 'padaria-aurora', active: true },
-  { id: '11111111-1111-4111-8111-1111111111c3', name: 'Antigo', slug: 'antigo', active: false },
+  { id: WINGS_CLIENT_ID, name: 'Wings Company', slug: 'wings-company', active: true, expansionArea: [] },
+  { id: AURORA, name: 'Padaria Aurora', slug: 'padaria-aurora', active: true, expansionArea: [] },
+  { id: '11111111-1111-4111-8111-1111111111c3', name: 'Antigo', slug: 'antigo', active: false, expansionArea: [] },
 ];
 
 let imageModels: MediaModel[] = [imageModel];

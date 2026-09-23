@@ -15,6 +15,8 @@ import { EmployeesPage } from './pages/EmployeesPage.js';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage.js';
 import { IntegrationsPage } from './pages/IntegrationsPage.js';
 import { LandingRoute } from './pages/LandingRoute.js';
+import { LeadPage } from './pages/LeadPage.js';
+import { LeadsPage } from './pages/LeadsPage.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { MarketingDashboardPage } from './pages/MarketingDashboardPage.js';
 import { MediaStudioPage } from './pages/MediaStudioPage.js';
@@ -47,6 +49,10 @@ const SCREENS: Record<string, RouteObject[]> = {
     { path: ':id', element: <EmployeeFormPage /> },
   ],
   '/administracao/clientes': [{ index: true, element: <ClientsPage /> }],
+  '/crm-vendas/funil': [
+    { index: true, element: <LeadsPage /> },
+    { path: ':id', element: <LeadPage /> },
+  ],
   '/administracao/drive': [{ index: true, element: <DriveTemplatePage /> }],
   '/drive/arquivos': [{ index: true, element: <DrivePage /> }],
   '/administracao/integracoes': [{ index: true, element: <IntegrationsPage /> }],

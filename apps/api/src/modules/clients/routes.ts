@@ -4,6 +4,7 @@ import {
   clientSlugOf,
   clientUpdateSchema,
   type Client,
+  type ExpansionEntry,
 } from '@wings/shared';
 import { and, asc, desc, eq, ne } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
@@ -16,11 +17,12 @@ import { syncDriveFolders } from '../drive/folders.js';
 const idParam = z.object({ id: z.uuid() });
 
 type ClientRow = typeof clients.$inferSelect;
-const toClient = (row: ClientRow): Client => ({
+export const toClient = (row: ClientRow): Client => ({
   id: row.id,
   name: row.name,
   slug: row.slug,
   active: row.active,
+  expansionArea: Array.isArray(row.expansionArea) ? (row.expansionArea as ExpansionEntry[]) : [],
 });
 
 /** Wings Company first, then the active ones by name, then the inactive. */

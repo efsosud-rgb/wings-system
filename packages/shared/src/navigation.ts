@@ -64,7 +64,14 @@ export const NAVIGATION: readonly NavModule[] = [
     label: 'CRM Vendas',
     icon: '🎯',
     submodules: [
-      soon('/crm-vendas/funil', 'Funil', 'Pipeline de leads e oportunidades', 'leads.read'),
+      {
+        path: '/crm-vendas/funil',
+        label: 'Funil',
+        description: 'Leads captados, de onde vieram e o que a pesquisa encontrou',
+        permission: 'leads.read',
+        status: 'ready',
+        kind: 'crud',
+      },
       soon('/crm-vendas/sofia', 'Sofia (SDR IA)', 'Agente de pré-venda'),
       soon('/crm-vendas/clientes', 'Clientes', 'Base de clientes e histórico', 'leads.read'),
     ],

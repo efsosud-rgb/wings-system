@@ -51,9 +51,11 @@ export async function completeJob(pool: Pool, id: string, output: unknown): Prom
 
 /** `render` is one attempt, always (docs/studio/jobs.md: "a job is one
  * attempt"; render is too expensive to retry, and the person asks again from
- * the screen). Every other type uses the worker's own `WORKER_MAX_ATTEMPTS`. */
+ * the screen). `enrich_lead` too: its searches are paid, and a retry would
+ * pay again (docs/leads/intake.md). Every other type uses the worker's own
+ * `WORKER_MAX_ATTEMPTS`. */
 export function maxAttemptsFor(type: JobType, workerMaxAttempts: number): number {
-  return type === 'render' ? 1 : workerMaxAttempts;
+  return type === 'render' || type === 'enrich_lead' ? 1 : workerMaxAttempts;
 }
 
 /**
