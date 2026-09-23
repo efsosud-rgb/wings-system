@@ -124,7 +124,7 @@ export class ImageToVideoPlayer extends Player {
 	private async tryLoadTexture(src: string): Promise<boolean> {
 		try {
 			const loadUrl = toLoadUrl(src);
-			const loadOptions: pixi.UnresolvedAsset = { src: loadUrl, crossorigin: "anonymous", data: {} };
+			const loadOptions: pixi.UnresolvedAsset = { src: loadUrl, crossorigin: "anonymous", data: {}, parser: "loadTextures" };
 			const texture = await this.edit.assetLoader.load<pixi.Texture<pixi.ImageSource>>(loadUrl, loadOptions);
 
 			if (!(texture?.source instanceof pixi.ImageSource)) {
