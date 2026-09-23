@@ -34,9 +34,9 @@ export class DeleteClipCommand implements EditCommand {
 			return CommandNoop(`No clip at track ${this.trackIdx}, index ${this.clipIdx}`);
 		}
 
-		if (document.getClipCount() <= 1) {
-			return CommandNoop("Cannot delete the last clip");
-		}
+		// Wings: the last clip may go too. `EditSchema` accepts a timeline with
+		// nothing on it (see NOTICE.md), and a person who presses Delete on the
+		// only clip means exactly that; upstream kept one clip alive here.
 
 		// Save config for undo
 		this.deletedClipConfig = structuredClone(clip);
