@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { parseWingsDriveRef, segmentsToSrt, wingsDriveRef } from './studio.js';
+import {
+  parseWingsDriveRef,
+  segmentsByZone,
+  segmentsToSrt,
+  wingsDriveRef,
+  zoneSrtName,
+} from './studio.js';
 
 describe('segmentsToSrt', () => {
   it('numbers the cues, writes HH:MM:SS,mmm and skips empty text', () => {
@@ -25,5 +31,31 @@ describe('wings-drive references', () => {
     expect(parseWingsDriveRef(wingsDriveRef(id))).toBe(id);
     expect(parseWingsDriveRef('https://example.com/a.mp4')).toBeNull();
     expect(parseWingsDriveRef('wings-drive://not-an-id')).toBeNull();
+  });
+});
+
+describe('smart captions', () => {
+  it('splits the segments by zone, in preference order, dropping empty ones', () => {
+    const segments = [
+      { start: 0, end: 1, text: 'a' },
+      { start: 1, end: 2, text: 'b' },
+      { start: 2, end: 3, text: ' ' },
+      { start: 3, end: 4, text: 'c' },
+    ];
+    const groups = segmentsByZone(segments, ['top', 'bottom', 'middle', 'top']);
+    expect(groups.map((group) => [group.zone, group.segments.map((item) => item.text)])).toEqual([
+      ['bottom', ['b']],
+      ['top', ['a', 'c']],
+    ]);
+  });
+
+  it('puts a segment with no zone at the bottom', () => {
+    expect(segmentsByZone([{ start: 0, end: 1, text: 'a' }], [])[0]?.zone).toBe('bottom');
+  });
+
+  it('names one SRT per zone next to the plain one', () => {
+    expect(zoneSrtName('entrevista.srt', 'top')).toBe('entrevista.legenda-em-cima.srt');
+    expect(zoneSrtName('entrevista.SRT', 'bottom')).toBe('entrevista.legenda-embaixo.srt');
+    expect(zoneSrtName('entrevista.srt', 'middle')).toBe('entrevista.legenda-no-meio.srt');
   });
 });

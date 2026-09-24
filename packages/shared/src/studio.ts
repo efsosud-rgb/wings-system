@@ -131,9 +131,20 @@ export const STUDIO_RENDER_ERRORS = [
 // `<name>.srt` (a new version when one already exists) and audits
 // `studio.captions_saved`. The screen then adds a caption clip citing that
 // file by id. One job is one attempt; asking again is a person's click.
+//
+// Smart captions (part 3b): with `smart`, on a video, the same GET that files
+// the SRT queues a `caption_layout` job. The worker looks at a few frames of
+// each cue (faces with YuNet, written text with the PP-OCRv3 detector, both
+// run by OpenCV on our CPU, R$ 0) and answers one zone per cue: bottom, top
+// or middle, whichever is free, never changing place for less than
+// CAPTION_MIN_RUN_SECONDS. Only the zones are kept: no box, no face, no
+// frame leaves the job. The next GET files one SRT per zone used (up to
+// three) and the screen adds one caption clip per file, each in its place.
 
 export const studioTranscriptionRequestSchema = z.object({
   fileId: z.uuid(),
+  /** Place each cue away from faces and on-screen text (video only; ignored on audio). */
+  smart: z.boolean().default(false),
   /** ISO 639-1; auto-detected when omitted. */
   language: z
     .string()
@@ -144,6 +155,49 @@ export const studioTranscriptionRequestSchema = z.object({
 export type StudioTranscriptionRequest = z.output<typeof studioTranscriptionRequestSchema>;
 
 export type StudioTranscriptionState = StudioRenderState;
+
+/** Where a smart caption cue sits, in the order it is preferred when free. */
+export const CAPTION_ZONES = ['bottom', 'top', 'middle'] as const;
+export type CaptionZone = (typeof CAPTION_ZONES)[number];
+
+export const CAPTION_ZONE_LABEL: Record<CaptionZone, string> = {
+  bottom: 'embaixo',
+  top: 'em cima',
+  middle: 'no meio',
+};
+
+/** A caption never changes place for a stretch shorter than this. */
+export const CAPTION_MIN_RUN_SECONDS = 2;
+
+/** The SRT of one zone: `vídeo.srt` -> `vídeo.legenda-em-cima.srt`. */
+export const zoneSrtName = (srtName: string, zone: CaptionZone) =>
+  `${srtName.replace(/\.srt$/i, '')}.legenda-${CAPTION_ZONE_LABEL[zone].replace(/ /g, '-')}.srt`;
+
+/**
+ * The transcript's segments split by the zone chosen for each (by index), in
+ * CAPTION_ZONES order, zones with no cue left out. Empty segments are dropped
+ * the same way `segmentsToSrt` drops them.
+ */
+export function segmentsByZone<T extends { start: number; end: number; text: string }>(
+  segments: readonly T[],
+  zones: readonly CaptionZone[],
+): { zone: CaptionZone; segments: T[] }[] {
+  return CAPTION_ZONES.map((zone) => ({
+    zone,
+    segments: segments.filter(
+      (segment, index) => (zones[index] ?? 'bottom') === zone && segment.text.trim() !== '',
+    ),
+  })).filter((group) => group.segments.length > 0);
+}
+
+/** The smart placement of one transcription, when it was asked for. */
+export interface StudioCaptionLayout {
+  state: StudioRenderState;
+  /** `<code>: <phrase>`, when failed. The plain SRT is still there to use. */
+  error: string | null;
+  /** One SRT per zone used, once filed. */
+  files: { id: string; version: number; name: string; zone: CaptionZone; cues: number }[];
+}
 
 export interface StudioTranscription {
   id: string;
@@ -156,6 +210,8 @@ export interface StudioTranscription {
   /** What Whisper detected, once done. */
   language: string | null;
   segments: number | null;
+  /** Null when smart captions were not asked for (or the file is audio). */
+  layout: StudioCaptionLayout | null;
   createdAt: string;
   finishedAt: string | null;
 }
@@ -165,6 +221,13 @@ export const STUDIO_TRANSCRIPTION_STATE_LABEL: Record<StudioTranscriptionState, 
   running: 'Transcrevendo',
   done: 'Legenda pronta',
   failed: 'Falhou',
+};
+
+export const STUDIO_CAPTION_LAYOUT_STATE_LABEL: Record<StudioRenderState, string> = {
+  pending: 'Na fila para posicionar',
+  running: 'Procurando rostos e textos no vídeo',
+  done: 'Posições prontas',
+  failed: 'Não deu para posicionar',
 };
 
 /** Whisper's segments as an SRT document. Timestamps are `HH:MM:SS,mmm`. */
