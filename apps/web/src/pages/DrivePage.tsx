@@ -35,6 +35,7 @@ import {
 } from '../components/drive/DriveParts.js';
 import { ClientSelect } from '../components/media-studio/MediaLibrary.js';
 import { Alert, Button } from '../components/ui.js';
+import { ProjectSummary } from '../components/projects/ProjectParts.js';
 
 /**
  * The Drive. The tree on the left is what the server says this person may see;
@@ -307,6 +308,9 @@ export function DrivePage() {
                 ))}
               </ol>
             </nav>
+          )}
+          {!inTrash && current?.clientId && hasPermission(user ?? null, 'projects.read') && (
+            <ProjectSummary clientId={current.clientId} slot={current.slot} />
           )}
 
           {!inTrash && (

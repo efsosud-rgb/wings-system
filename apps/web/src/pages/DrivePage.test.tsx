@@ -105,6 +105,37 @@ function script() {
     if (path.includes('/link')) {
       return Promise.resolve({ url: 'https://r2.example/signed', expiresAt: '' });
     }
+    if (path === '/projects/c-1') {
+      return Promise.resolve({
+        project: {
+          id: 'p-1',
+          clientId: 'c-1',
+          clientName: 'Padaria Aurora',
+          clientNumber: 3,
+          clientActive: true,
+          status: 'parado',
+          currentStage: '08',
+          updatedAt: '2026-09-24T12:00:00.000Z',
+          updatedByName: null,
+          canManage: false,
+          stages: [
+            {
+              slot: '08',
+              name: '08 Marketing',
+              department: 'marketing',
+              progress: 'em_andamento',
+              note: null,
+              startedAt: null,
+              completedAt: null,
+              updatedAt: null,
+              updatedByName: null,
+              canEdit: true,
+            },
+          ],
+        },
+        history: [],
+      });
+    }
     return Promise.reject(new Error(`unexpected GET ${path}`));
   });
 }
@@ -234,6 +265,33 @@ describe('the tree and the folder', () => {
     expect(screen.queryByRole('table')).toBeNull();
     expect(await screen.findByRole('button', { name: /Roteiro\.pdf/ })).toBeTruthy();
     expect(localStorage.getItem('wings.drive.view')).toBe('grid');
+  });
+
+  it('shows the project status and stage on a client folder, and nothing on the rest', async () => {
+    session.current = userWith('drive.read', 'drive.write', 'projects.read');
+    FOLDERS.push(
+      folder('f-client', '/Clientes/03. Padaria Aurora/08 Marketing', {
+        parentId: null,
+        department: 'marketing',
+        clientId: 'c-1',
+        origin: 'client_child',
+        slot: '08',
+      }),
+    );
+    try {
+      renderAt('/drive/arquivos?pasta=f-client');
+      const summary = await screen.findByLabelText('Projeto do cliente');
+      expect(within(summary).getByText('Parado')).toBeTruthy();
+      expect(within(summary).getByText('Etapa atual: 08 Marketing')).toBeTruthy();
+      expect(within(summary).getByText('Em andamento')).toBeTruthy();
+      // Read only here: the chip is not a button.
+      expect(within(summary).queryByRole('button')).toBeNull();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Marketing' }));
+      await waitFor(() => expect(screen.queryByLabelText('Projeto do cliente')).toBeNull());
+    } finally {
+      FOLDERS.pop();
+    }
   });
 
   it('offers nothing that writes to somebody who may only read', async () => {

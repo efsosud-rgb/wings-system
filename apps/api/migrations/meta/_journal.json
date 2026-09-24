@@ -225,6 +225,13 @@
       "when": 1790257400168,
       "tag": "0031_client_folders",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1790259560527,
+      "tag": "0032_client_projects",
+      "breakpoints": true
     }
   ]
 }

@@ -5,6 +5,7 @@ import {
   LEAD_CHANNEL_LABELS,
   LEAD_SOURCE_RULE_KINDS,
   LEAD_SOURCE_RULE_KIND_LABELS,
+  PROJECT_STATUS_LABELS,
   WINGS_CLIENT_ID,
   formatExpansionEntry,
   type Client,
@@ -14,6 +15,7 @@ import {
 import { useState } from 'react';
 import { ApiError } from '../api/client.js';
 import { useClients, useCreateClient, useUpdateClient } from '../api/clients.js';
+import { useProjects } from '../api/projects.js';
 import {
   useCreateSourceRule,
   useCreateTrackingLink,
@@ -22,7 +24,9 @@ import {
   useTrackingLinks,
   useUpdateExpansionArea,
 } from '../api/leads.js';
+import { ProjectStatusTag, StatusDialog, stageLabel } from '../components/projects/ProjectParts.js';
 import { Alert, Button, Field, Input, Select } from '../components/ui.js';
+import type { ClientProject } from '@wings/shared';
 
 /**
  * Administração → Clientes. The smallest register that lets work be filed
@@ -157,7 +161,19 @@ function TrackingLinks({ client }: { client: Client }) {
 const numberLabel = (number: number | null) =>
   number === null ? '—' : String(number).padStart(2, '0');
 
-function ClientRow({ client, open, onToggle }: { client: Client; open: boolean; onToggle: () => void }) {
+function ClientRow({
+  client,
+  project,
+  open,
+  onToggle,
+  onStatus,
+}: {
+  client: Client;
+  project: ClientProject | undefined;
+  open: boolean;
+  onToggle: () => void;
+  onStatus: (project: ClientProject) => void;
+}) {
   const update = useUpdateClient();
   const [name, setName] = useState(client.name);
   const [number, setNumber] = useState(client.number === null ? '' : String(client.number));
@@ -238,6 +254,25 @@ function ClientRow({ client, open, onToggle }: { client: Client; open: boolean; 
           </span>
         </td>
         <td>
+          {project && (
+            <div className="clients-project">
+              {project.canManage ? (
+                <button
+                  type="button"
+                  className="projects-status-button"
+                  aria-label={`Status do projeto de ${client.name}: ${PROJECT_STATUS_LABELS[project.status]}`}
+                  onClick={() => onStatus(project)}
+                >
+                  <ProjectStatusTag status={project.status} />
+                </button>
+              ) : (
+                <ProjectStatusTag status={project.status} />
+              )}
+              <div className="cell-sub">Etapa atual: {stageLabel(project.currentStage)}</div>
+            </div>
+          )}
+        </td>
+        <td>
           <div className="clients-actions">
             {!fixed && !editing && (
               <>
@@ -264,7 +299,7 @@ function ClientRow({ client, open, onToggle }: { client: Client; open: boolean; 
       </tr>
       {open && (
         <tr>
-          <td colSpan={4} className="lead-client-details">
+          <td colSpan={5} className="lead-client-details">
             <ExpansionArea client={client} />
             <TrackingLinks client={client} />
           </td>
@@ -380,9 +415,15 @@ function SourceRules({ clients }: { clients: Client[] }) {
 export function ClientsPage() {
   const clients = useClients();
   const create = useCreateClient();
+  // Every client's project, inactive ones included: this is the register of all of them.
+  const projects = useProjects({ inactive: true });
   const [name, setName] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
+  const [statusOf, setStatusOf] = useState<ClientProject | null>(null);
   const list = clients.data?.clients ?? [];
+  const projectByClient = new Map(
+    (projects.data?.projects ?? []).map((project) => [project.clientId, project]),
+  );
 
   return (
     <>
@@ -435,6 +476,7 @@ export function ClientsPage() {
               <th title="O número da pasta do cliente no Drive: Clientes/NN. Nome">Nº</th>
               <th>Nome</th>
               <th>Situação</th>
+              <th title="Status e etapa atual do projeto; o quadro fica em Gestão → Projetos">Projeto</th>
               <th>
                 <span className="sr-only">Ações</span>
               </th>
@@ -443,7 +485,7 @@ export function ClientsPage() {
           <tbody>
             {clients.isLoading && (
               <tr>
-                <td colSpan={4} className="muted">
+                <td colSpan={5} className="muted">
                   Carregando…
                 </td>
               </tr>
@@ -452,8 +494,10 @@ export function ClientsPage() {
               <ClientRow
                 key={client.id}
                 client={client}
+                project={projectByClient.get(client.id)}
                 open={openId === client.id}
                 onToggle={() => setOpenId((current) => (current === client.id ? null : client.id))}
+                onStatus={setStatusOf}
               />
             ))}
           </tbody>
@@ -461,6 +505,7 @@ export function ClientsPage() {
       </div>
 
       <SourceRules clients={list} />
+      {statusOf && <StatusDialog project={statusOf} onClose={() => setStatusOf(null)} />}
     </>
   );
 }

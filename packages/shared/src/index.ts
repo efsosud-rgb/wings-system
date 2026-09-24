@@ -29,6 +29,7 @@ export * from './marketing/seo-checklist.js';
 export * from './marketing/site-content.js';
 export * from './marketing/site-post.js';
 export * from './navigation.js';
+export * from './projects.js';
 export * from './rbac/permissions.js';
 export * from './rbac/policy.js';
 export * from './rbac/roles.js';

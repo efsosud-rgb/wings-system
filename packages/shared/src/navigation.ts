@@ -151,6 +151,14 @@ export const NAVIGATION: readonly NavModule[] = [
     label: 'Gestão',
     icon: '🏢',
     submodules: [
+      {
+        path: '/gestao/projetos',
+        label: 'Projetos',
+        description: 'O projeto de cada cliente: status e as oito etapas',
+        permission: 'projects.read',
+        status: 'ready',
+        kind: 'crud',
+      },
       soon('/gestao/financeiro', 'Financeiro', 'Contas a pagar e receber'),
       soon('/gestao/rh-dp', 'RH e DP', 'Ponto, férias e folha', 'timeclock.read'),
       soon('/gestao/fiscal', 'Fiscal', 'Notas e obrigações'),

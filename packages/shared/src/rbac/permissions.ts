@@ -35,6 +35,8 @@ export const PERMISSIONS = {
   'drive.read': 'Ver pastas e arquivos do Drive',
   'drive.write': 'Enviar, mover, renomear e excluir arquivos do Drive',
   'drive.manage': 'Editar o modelo de pastas do Drive, sincronizar e esvaziar a lixeira',
+  'projects.read': 'Ver o quadro de projetos dos clientes',
+  'projects.manage': 'Mudar status, etapa atual e andamento das etapas dos projetos dos clientes',
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;
@@ -57,6 +59,16 @@ const DRIVE_ALL: RolePermissions = {
   'drive.manage': 'all',
 };
 
+/**
+ * The projects board (Gestão → Projetos): everyone who works for the clients
+ * sees every client's project. `sector` on `projects.manage` is the progress
+ * of the stages of the role's own departments (`stageEditableBy`); `all` is the
+ * status, the current stage and every stage.
+ */
+const PROJECT_STAFF: RolePermissions = { 'projects.read': 'all', 'projects.manage': 'sector' };
+const PROJECT_READ: RolePermissions = { 'projects.read': 'all' };
+const PROJECT_ALL: RolePermissions = { 'projects.read': 'all', 'projects.manage': 'all' };
+
 const SECTOR_STAFF: RolePermissions = {
   'employees.read': 'sector',
   'timeclock.read': 'own',
@@ -73,6 +85,7 @@ const SECTOR_STAFF: RolePermissions = {
 export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   admin_master: {
     ...DRIVE_ALL,
+    ...PROJECT_ALL,
     // The one connection to Kairogen belongs to the system: only an Admin Master makes it.
     'integrations.manage': 'all',
     'clients.manage': 'all',
@@ -100,6 +113,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   },
   diretoria: {
     ...DRIVE_ALL,
+    ...PROJECT_ALL,
     'clients.manage': 'all',
     'marketing.media.read': 'all',
     'marketing.media.generate': 'all',
@@ -121,6 +135,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   // approvals: neither was asked for, and both are easy to add later.
   rh_dp: {
     ...DRIVE_STAFF,
+    ...PROJECT_READ,
     'employees.read': 'all',
     'employees.create': 'all',
     'employees.update': 'all',
@@ -130,6 +145,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   },
   gerente_comercial: {
     ...DRIVE_STAFF,
+    ...PROJECT_STAFF,
     'employees.read': 'sector',
     'employees.create': 'sector',
     'employees.update': 'sector',
@@ -146,18 +162,31 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'marketing.media.generate': 'all',
     'marketing.media.edit': 'all',
     ...SECTOR_STAFF,
+    ...PROJECT_STAFF,
     'ads.read': 'all',
     'ads.request': 'all',
     'site.publish': 'all',
   },
-  formatacao_juridico: { ...SECTOR_STAFF },
-  formatacao_financeiro: { ...SECTOR_STAFF },
-  formatacao_processos_projetos: { ...SECTOR_STAFF },
-  formatacao_contabil_tributario: { ...SECTOR_STAFF },
-  formatacao_logistica: { ...SECTOR_STAFF },
-  formatacao_ti: { ...SECTOR_STAFF, 'settings.manage': 'all', 'api_credentials.manage': 'all' },
-  vendedor_expansao: { ...SECTOR_STAFF, 'leads.read': 'own', 'leads.write': 'own' },
-  vendedor_formatacao: { ...SECTOR_STAFF, 'leads.read': 'own', 'leads.write': 'own' },
+  formatacao_juridico: { ...SECTOR_STAFF, ...PROJECT_STAFF },
+  formatacao_financeiro: { ...SECTOR_STAFF, ...PROJECT_STAFF },
+  // Processos e Projetos runs the client: status, current stage and every stage.
+  formatacao_processos_projetos: { ...SECTOR_STAFF, ...PROJECT_ALL },
+  formatacao_contabil_tributario: { ...SECTOR_STAFF, ...PROJECT_STAFF },
+  // No stage of the client belongs to Logística or TI: they read the board only.
+  formatacao_logistica: { ...SECTOR_STAFF, ...PROJECT_READ },
+  formatacao_ti: {
+    ...SECTOR_STAFF,
+    ...PROJECT_READ,
+    'settings.manage': 'all',
+    'api_credentials.manage': 'all',
+  },
+  vendedor_expansao: { ...SECTOR_STAFF, ...PROJECT_STAFF, 'leads.read': 'own', 'leads.write': 'own' },
+  vendedor_formatacao: {
+    ...SECTOR_STAFF,
+    ...PROJECT_STAFF,
+    'leads.read': 'own',
+    'leads.write': 'own',
+  },
 };
 
 /**

@@ -13,6 +13,7 @@ import type { Database } from '../../db/client.js';
 import { clients } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { syncDriveFolders } from '../drive/folders.js';
+import { openProjectForClient } from '../projects/service.js';
 
 const idParam = z.object({ id: z.uuid() });
 
@@ -83,6 +84,8 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
           })
           .onConflictDoNothing()
           .returning();
+        // The client's project opens with the client: Em Andamento, at 01.
+        if (made) await openProjectForClient(tx, made.id);
         return made;
       });
       if (!row) {
@@ -98,7 +101,7 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
         entity: 'client',
         entityId: row.id,
         ip: request.ip,
-        metadata: { slug: row.slug, driveFoldersCreated: folders.foldersCreated },
+        metadata: { slug: row.slug, driveFoldersCreated: folders.foldersCreated, projectOpened: true },
       });
       return reply.status(201).send({ client: toClient(row) });
     },

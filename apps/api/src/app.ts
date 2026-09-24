@@ -23,6 +23,7 @@ import { leadRoutes } from './modules/leads/routes.js';
 import { leadWebhookRoutes } from './modules/leads/webhooks.js';
 import { mediaRoutes } from './modules/media/routes.js';
 import { mediaStudioRoutes } from './modules/media/studio-routes.js';
+import { projectRoutes } from './modules/projects/routes.js';
 import { siteRoutes } from './modules/site/routes.js';
 import { studioRoutes } from './modules/studio/routes.js';
 import { employeeRoutes } from './modules/employees/routes.js';
@@ -150,6 +151,7 @@ export async function buildApp(deps: {
   await app.register(agentRoutes);
   await app.register(insightsRoutes);
   await app.register(clientRoutes);
+  await app.register(projectRoutes);
   await app.register(leadRoutes);
   await app.register(leadWebhookRoutes);
   await app.register(driveRoutes);

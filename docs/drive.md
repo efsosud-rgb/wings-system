@@ -134,6 +134,11 @@ em Administração → Clientes, nunca repetido (409 `number_taken`). Dois
 dígitos até 99. A Wings Company não tem número nem pasta de cliente. Renomear
 ou renumerar o cliente renomeia a pasta e o `path` de tudo dentro.
 
+**Etiqueta do projeto.** A pasta do cliente e as 01–08 mostram, abaixo da
+trilha, o status do projeto e a etapa atual (numa 01–08, também o andamento
+daquela etapa), lidos de `GET /projects/:clientId` por quem tem
+`projects.read`. Só leitura: muda-se em Gestão → Projetos (`docs/projetos.md`).
+
 **Função da pasta (`slot`).** Cada nó da árvore do cliente tem uma função
 (`01`…`08`, `midia`, `enviados`, `reunioes`, `entrega`, `entrega_01`…`08`,
 em `DRIVE_FOLDER_SLOTS`) copiada para as pastas feitas dele. O Portal do
