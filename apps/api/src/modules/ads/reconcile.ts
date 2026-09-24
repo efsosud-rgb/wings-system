@@ -16,7 +16,7 @@ import {
   engageKillSwitch,
   remainingDays,
 } from './budget-guard.js';
-import { effectiveHeadroomCents, limitFrom } from './platform/limits.js';
+import { effectiveHeadroomCents, limitFrom, prepaidLimitFrom } from './platform/limits.js';
 import type { AdsPlatformClient } from './platform/types.js';
 
 /**
@@ -210,17 +210,31 @@ export async function reconcileAccount(
 
   // What the platform itself allows, read from its own API rather than assumed.
   // Meta reports spend_cap and amount_spent on the account; a prepaid Google
-  // account reports the same shape through its account budget.
+  // account reports the same shape through its account budget. On a prepaid
+  // account (Google always, Meta sometimes) the balance itself IS the
+  // headroom — spend_cap minus amount_spent is a proxy that agrees with it
+  // only when the cap was never touched mid-month.
   const platformAccount = await client.getAccount();
-  const platformLimit = limitFrom(
-    platformAccount.spendCapCents,
-    platformAccount.amountSpentCents,
-    client.spendLimitSource ?? `${client.platform}.spend_cap`,
-  );
+  const platformLimit =
+    platformAccount.fundingKind === 'prepaid'
+      ? prepaidLimitFrom(
+          platformAccount.prepaidBalanceCents ?? null,
+          platformAccount.amountSpentCents,
+          client.spendLimitSource ?? `${client.platform}.prepaid_balance`,
+        )
+      : limitFrom(
+          platformAccount.spendCapCents,
+          platformAccount.amountSpentCents,
+          client.spendLimitSource ?? `${client.platform}.spend_cap`,
+        );
+  // The human reason a field came back empty, when the platform gave one —
+  // the "motivo" the cockpit shows next to a figure it cannot compute.
+  const platformLimitNote = platformAccount.warnings?.[0] ?? null;
   const limitResult = await applyPlatformLimit(db, {
     adAccountId,
     periodMonth,
     limit: platformLimit,
+    note: platformLimitNote,
     now,
   });
 

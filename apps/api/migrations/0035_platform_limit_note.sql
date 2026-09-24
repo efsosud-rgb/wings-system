@@ -1,0 +1,1 @@
+ALTER TABLE "ad_budget_periods" ADD COLUMN "platform_limit_note" text;

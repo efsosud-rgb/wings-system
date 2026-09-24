@@ -27,6 +27,7 @@ export const PERMISSIONS = {
   'ads.request': 'Pedir a criação de campanhas de tráfego pago',
   'site.publish': 'Criar rascunhos de post no site da Wings',
   'ads.approve': 'Aprovar alterações de orçamento de tráfego pago',
+  'ads.budget_caps.manage': 'Editar o teto interno de orçamento de tráfego pago por conta',
   'integrations.manage': 'Conectar e desconectar integrações do sistema (Kairogen)',
   'marketing.media.read': 'Ver a biblioteca de mídia do marketing',
   'marketing.media.generate': 'Gerar imagens e vídeos gastando créditos',
@@ -110,6 +111,9 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'ads.read': 'all',
     'ads.request': 'all',
     'ads.approve': 'all',
+    // The internal monthly cap is what the guardrail refuses against; only an
+    // Admin Master moves it, the same as the CLI it replaces on screen.
+    'ads.budget_caps.manage': 'all',
     'site.publish': 'all',
     // The roadmap report goes to the CEOs; only an Admin Master edits and approves it.
     'roadmap.manage': 'all',

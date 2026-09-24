@@ -164,6 +164,11 @@ export const budgetPeriods = pgTable(
     platformRemainingCents: bigint('platform_remaining_cents', { mode: 'number' }),
     platformLimitSource: text('platform_limit_source'),
     platformLimitSyncedAt: timestamp('platform_limit_synced_at', { withTimezone: true }),
+    /**
+     * Why the platform would not answer a number, in its own words (e.g. a
+     * permission the read token lacks). Null when the platform did answer.
+     */
+    platformLimitNote: text('platform_limit_note'),
     /** Hard ceiling for the account this month. */
     capCents: bigint('cap_cents', { mode: 'number' }).notNull(),
     /** Portion the agent may plan against (70%); the rest absorbs overdelivery. */
