@@ -315,7 +315,9 @@ export interface MediaGeneration {
 //   POST /media/estimates              -> { estimate: MediaEstimate }              marketing.media.generate
 //        409 provider_unavailable may carry `alternative: MediaAlternative` when a costlier
 //        model elsewhere could do it: switching up is a click, never automatic.
-//   POST /media/generations            -> { generation }  body { estimateId }      marketing.media.generate
+//   POST /media/generations            -> { generation, requote? }  body { estimateId }  marketing.media.generate
+//        requote: Kairogen refused over the price and named the real one (nothing charged);
+//        a new estimate at that price, for a new click.
 //   GET  /media/generations            -> { generations } the latest, newest first marketing.media.read
 //   GET  /media/generations/:id        -> { generation }  (also moves it forward)  marketing.media.read
 //   POST /media/assets/:id/use-in-builder -> MediaBridgeResponse                   ads.request

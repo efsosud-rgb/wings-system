@@ -77,7 +77,10 @@ const apiPost = vi.fn(
 );
 vi.mock('../../api/client.js', async (original) => {
   const real = await original<typeof import('../../api/client.js')>();
-  return { ...real, api: { ...real.api, post: (path: string, body?: unknown) => apiPost(path, body) } };
+  return {
+    ...real,
+    api: { ...real.api, post: (path: string, body?: unknown) => apiPost(path, body) },
+  };
 });
 const generationPosts = () => posted.filter((item) => item.path === '/media/generations');
 
@@ -873,6 +876,34 @@ describe('the editing agent', () => {
     expect(generationPosts()).toHaveLength(1);
   });
 
+  it('puts the price Kairogen named on the button when it refused an edit over the quote', async () => {
+    renderChat(media(true));
+    await say('Edite a imagem ClickFranquia');
+    stream({ type: 'proposal', proposal: generationCard });
+    fireEvent.click(screen.getByRole('button', { name: 'Gerar (4 créditos)' }));
+    await waitFor(() => expect(generationPosts()).toHaveLength(1));
+    await act(async () => {
+      generationPosts()[0]?.answer.resolve({
+        generation: { ...unknownGeneration, status: 'refused' },
+        requote: {
+          id: 'est-5',
+          credits: 5,
+          brlCents: 0,
+          providerId: 'kairogen',
+          expiresAt: '2099-01-01T00:00:00.000Z',
+          warnings: [
+            'O Kairogen cobra 5 créditos por esta geração, não os 4 da estimativa dele: ela não conta a imagem enviada.',
+          ],
+        },
+      });
+      await Promise.resolve();
+    });
+    expect(await screen.findByText(/ela não conta a imagem enviada/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Gerar (5 créditos)' }));
+    await waitFor(() => expect(generationPosts()).toHaveLength(2));
+    expect(generationPosts()[1]?.body).toEqual({ estimateId: 'est-5', proposalId: 'prop-gen-1' });
+  });
+
   it('turns a used or expired estimate into "Estimar de novo", one click, no agent', async () => {
     renderChat(media(true));
     await say('Uma imagem');
@@ -895,7 +926,13 @@ describe('the editing agent', () => {
     const again = posted.find((item) => item.path === estimatePath);
     await act(async () => {
       again?.answer.resolve({
-        estimate: { id: 'est-2', credits: 4, brlCents: 0, providerId: 'kairogen', expiresAt: '2099-01-01T00:00:00.000Z' },
+        estimate: {
+          id: 'est-2',
+          credits: 4,
+          brlCents: 0,
+          providerId: 'kairogen',
+          expiresAt: '2099-01-01T00:00:00.000Z',
+        },
         generationId: null,
       });
       await Promise.resolve();

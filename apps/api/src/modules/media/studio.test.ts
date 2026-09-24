@@ -557,12 +557,18 @@ describe('estimate, then click, then follow', () => {
     await connect({ chargeInsteadOfQuote: 9 });
     const { cookies } = await sessionFor('marketing');
     const quote = (await estimate(cookies, image())).json<{ estimate: MediaEstimate }>().estimate;
-    const refused = (await generate(cookies, { estimateId: quote.id })).json<{
+    const answer = (await generate(cookies, { estimateId: quote.id })).json<{
       generation: MediaGeneration;
-    }>().generation;
+      requote: MediaEstimate;
+    }>();
+    const refused = answer.generation;
 
     expect(refused.status).toBe('refused');
-    expect(refused.detail).toContain('o custo real difere do estimado (4 créditos)');
+    expect(refused.detail).toBe(
+      'O Kairogen cobra 9 créditos por esta geração, não os 4 da estimativa. Nada foi gerado nem cobrado. O novo preço já está no botão.',
+    );
+    // The price it named is offered for a new click; nothing is sent again by itself.
+    expect(answer.requote).toMatchObject({ credits: 9 });
     expect(spending()).toHaveLength(1);
     const rows = await db
       .select()
@@ -900,10 +906,58 @@ describe('handing Kairogen a picture of ours', () => {
       }),
     );
     expect(priced.statusCode).toBe(201);
-    const started = await generate(cookies, {
-      estimateId: priced.json<{ estimate: MediaEstimate }>().estimate.id,
-    });
-    const args = spending()[0]?.args ?? {};
+    const quoted = priced.json<{ estimate: MediaEstimate }>().estimate;
+    // Kairogen's estimate_cost cannot be told about the picture, and an edit costs one
+    // credit more (staging, 2026-09-24: quoted 3, charged 4). It refuses, charges
+    // nothing and names the price: that price goes on the button, for a new click.
+    const first = await generate(cookies, { estimateId: quoted.id });
+    expect(first.statusCode).toBe(201);
+    const refusedBody = first.json<{ generation: MediaGeneration; requote: MediaEstimate }>();
+    expect(refusedBody.generation.status).toBe('refused');
+    expect(refusedBody.generation.detail).toContain(
+      `O Kairogen cobra ${quoted.credits + 1} créditos por esta geração, não os ${quoted.credits}`,
+    );
+    expect(refusedBody.requote).toMatchObject({ credits: quoted.credits + 1, blockedBy: null });
+    expect(refusedBody.requote.warnings[0]).toContain('não conta a imagem enviada');
+    expect(spending()).toHaveLength(1);
+    const ledgerOf = async (id: string) =>
+      (await db.select().from(mediaCreditLedger).where(eq(mediaCreditLedger.generationId, id))).map(
+        (row) => [row.event, row.creditsDelta],
+      );
+    expect(await ledgerOf(refusedBody.generation.id)).toEqual([
+      ['estimated', 0],
+      ['started', quoted.credits],
+      ['refused', -quoted.credits],
+    ]);
+    const [again] = await db
+      .select()
+      .from(mediaGenerations)
+      .where(eq(mediaGenerations.id, refusedBody.requote.id));
+    const [before] = await db
+      .select()
+      .from(mediaGenerations)
+      .where(eq(mediaGenerations.id, quoted.id));
+    // The same request and the same priced parameters: only the price moved.
+    expect(again?.request).toEqual(before?.request);
+    expect(again?.priceArgs).toEqual(before?.priceArgs);
+    expect(again?.sourceAssetId).toBe(picture.id);
+
+    const started = await generate(cookies, { estimateId: refusedBody.requote.id });
+    expect(started.json<{ generation: MediaGeneration }>().generation.status).toBe('running');
+    expect(spending()).toHaveLength(2);
+    // Payload identical to the refused call but for the price it expects.
+    const withoutPriceAndLink = (args: Record<string, unknown>) =>
+      Object.fromEntries(
+        Object.entries(args).filter(
+          ([key]) => key !== 'expected_credits' && key !== 'reference_image_urls',
+        ),
+      );
+    const firstArgs = withoutPriceAndLink(spending()[0]!.args);
+    const secondArgs = withoutPriceAndLink(spending()[1]!.args);
+    const [expectedFirst, expectedSecond] = spending().map((call) => call.args.expected_credits);
+    expect(secondArgs).toEqual(firstArgs);
+    expect([expectedFirst, expectedSecond]).toEqual([quoted.credits, quoted.credits + 1]);
+    const args = spending()[1]?.args ?? {};
     expect(Object.keys(args).sort()).toEqual([
       'aspect_ratio',
       'expected_credits',
@@ -930,7 +984,8 @@ describe('handing Kairogen a picture of ours', () => {
     expect(done?.detail).toBe(
       'Aviso do Kairogen sobre a imagem enviada: Reference used in edit mode. Retry with another model now.',
     );
-    expect(spending()).toHaveLength(1);
+    expect(spending()).toHaveLength(2);
+    expect(done?.creditsCharged).toBe(quoted.credits + 1);
     const [made] = await db
       .select()
       .from(mediaAssets)
@@ -1275,7 +1330,7 @@ describe('the editing agent', () => {
       .where(eq(mediaGenerations.id, card.estimate.id));
     const reread = await app.inject({ url: `/agent/conversations/${conversationId}`, cookies });
     const stale = reread
-      .json<{ messages: { proposals: typeof card[] }[] }>()
+      .json<{ messages: { proposals: (typeof card)[] }[] }>()
       .messages.flatMap((item) => item.proposals)
       .find((item) => item.id === card.id);
     expect(stale).toMatchObject({ estimate: null, generationId: null });

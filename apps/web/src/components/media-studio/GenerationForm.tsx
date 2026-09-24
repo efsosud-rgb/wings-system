@@ -695,6 +695,11 @@ export function GenerationForm({
                   { estimateId: quote.id },
                   {
                     onSuccess: (body) => {
+                      // Refused over the price, nothing charged: the real price goes on the button.
+                      if (body.requote) {
+                        setQuote(body.requote);
+                        return;
+                      }
                       setQuote(null);
                       onStarted(body.generation.id);
                     },

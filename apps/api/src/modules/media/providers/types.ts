@@ -114,6 +114,11 @@ export class ProviderError extends Error {
     readonly code: ProviderErrorCode,
     /** For the person. Already filtered: never a key, never an address of ours. */
     message: string,
+    /**
+     * A refusal over the price that names the real one, with nothing generated and
+     * nothing charged: the server offers that price for a new click, never a retry.
+     */
+    readonly requotedCredits: number | null = null,
   ) {
     super(message);
     this.name = 'ProviderError';

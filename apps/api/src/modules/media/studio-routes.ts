@@ -174,7 +174,8 @@ export const mediaStudioRoutes: FastifyPluginAsync = async (app) => {
       const employeeId = request.session.actor.employeeId;
       try {
         const row = await startGeneration(deps, { employeeId, estimateId: body.data.estimateId });
-        if (row.proposalId) {
+        // Refused over the price with the real one named: the card stays open, on the new price.
+        if (row.proposalId && !row.requote) {
           await db
             .update(agentProposals)
             .set({ status: 'requested', actedBy: employeeId, actedAt: new Date() })
@@ -196,7 +197,10 @@ export const mediaStudioRoutes: FastifyPluginAsync = async (app) => {
             fromAgentProposal: row.proposalId !== null,
           },
         });
-        return reply.status(201).send({ generation: await toGeneration(db, row) });
+        return reply.status(201).send({
+          generation: await toGeneration(db, row),
+          ...(row.requote ? { requote: row.requote } : {}),
+        });
       } catch (error) {
         if (error instanceof StudioRefusal) return sendRefusal(reply, error);
         throw error;

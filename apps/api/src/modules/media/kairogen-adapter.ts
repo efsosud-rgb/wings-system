@@ -329,6 +329,18 @@ export function generationStateFrom(result: McpToolResult): GenerationState {
 }
 
 /** True when Kairogen said no because the charge would differ from `expected_credits`. */
+/**
+ * The charge Kairogen names when it refuses a generation over the quote
+ * ("[GENERATION_QUOTE_MISMATCH] O custo desta geração mudou para 4 créditos"):
+ * nothing was generated and nothing charged. Null when it names none.
+ */
+export function requotedCreditsFrom(message: string): number | null {
+  if (!/GENERATION_QUOTE_MISMATCH/.test(message)) return null;
+  const found = /mudou para (\d+) cr[ée]ditos?/i.exec(message);
+  const credits = found ? Number(found[1]) : NaN;
+  return Number.isInteger(credits) && credits > 0 ? credits : null;
+}
+
 export function isCreditMismatch(message: string): boolean {
   return /expected[_ ]credits|credit[_ ]?cost|differ|mismatch|diverg/i.test(message);
 }

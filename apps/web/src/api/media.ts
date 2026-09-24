@@ -143,7 +143,10 @@ export function useStartGeneration() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: { estimateId: string; proposalId?: string }) =>
-      api.post<{ generation: MediaGeneration }>('/media/generations', input),
+      api.post<{ generation: MediaGeneration; requote?: MediaEstimate }>(
+        '/media/generations',
+        input,
+      ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['media', 'generations'] });
       void queryClient.invalidateQueries({ queryKey: ['media', 'studio'] });

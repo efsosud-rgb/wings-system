@@ -385,7 +385,28 @@ function GenerationCard({
   // mutate() callback that an unmounted card would never run.
   const generate = (estimateId: string) =>
     start.mutateAsync({ estimateId, proposalId: proposal.id }).then(
-      (body) => onActed({ ...proposal, status: 'requested', generationId: body.generation.id }),
+      (body) => {
+        const { requote } = body;
+        if (requote) {
+          // Kairogen named the real price and charged nothing: it goes on the button.
+          start.reset();
+          onActed({
+            ...proposal,
+            status: 'open',
+            estimate: {
+              id: requote.id,
+              credits: requote.credits,
+              brlCents: requote.brlCents,
+              providerId: requote.providerId,
+              expiresAt: requote.expiresAt,
+            },
+            generationId: null,
+            priceNote: requote.warnings[0] ?? null,
+          });
+          return;
+        }
+        onActed({ ...proposal, status: 'requested', generationId: body.generation.id });
+      },
       () => undefined,
     );
   const estimateAgain = () =>
@@ -531,6 +552,11 @@ function GenerationCard({
         </p>
       ) : tryAgain || estimate === null ? null : (
         <>
+          {proposal.priceNote && (
+            <p className="field-hint" role="status">
+              {proposal.priceNote}
+            </p>
+          )}
           <p className="agent-card-cost">
             Custo estimado: {priceOf(estimate)} · {MEDIA_PROVIDER_LABEL[estimate.providerId]}
           </p>

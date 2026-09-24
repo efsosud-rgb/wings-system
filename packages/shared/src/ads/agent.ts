@@ -609,6 +609,8 @@ export interface AgentGenerationProposalCard extends AgentProposalBase {
   } | null;
   /** Set once somebody clicked: the generation to follow. */
   generationId: string | null;
+  /** Why the price on the button changed after a click (Kairogen named the real one). */
+  priceNote?: string | null;
 }
 
 /**

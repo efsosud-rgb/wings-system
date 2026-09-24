@@ -461,3 +461,22 @@ clica é o Eric.
 - [ ] Se o Kairogen devolve créditos numa geração que falha.
 - [ ] Vídeos grandes: a saída é baixada inteira para a memória antes de gravar
       (limite de 150 MB).
+
+#### Edição com imagem: o `estimate_cost` não sabe o preço (verificado 2026-09-24)
+
+Lido do Kairogen real, de dentro da API de staging (só `list_models` e
+`estimate_cost`, nada gerado): o `gpt-image-2` não tem `conditionalPricing`, e o
+`estimate_cost` responde **3 créditos** (free, 1k, 1:1) com ou sem
+`extra_params` `mode: "edit"`, `resolved_mode: "edit"`, `images: [url]` ou
+`reference_image_urls`. O `estimate_cost` não declara argumento de imagem. Já a
+geração com `reference_image_urls` entra no modo edit (`auto_switch_on_reference`)
+e custa **4**. O Kairogen recusa com `GENERATION_QUOTE_MISMATCH` ("O custo desta
+geração mudou para 4 créditos"), sem gerar e sem cobrar.
+
+Não há payload de estimativa que acerte esse preço. A recusa passou a nomear o preço real:
+`requotedCreditsFrom()` o lê, a geração fica `refused` (crédito devolvido no
+ledger), e o servidor grava **uma nova estimativa** com esse preço e exatamente o
+mesmo pedido e os mesmos parâmetros de preço (`requote` na resposta de
+`POST /media/generations`). O botão passa a mostrar "Gerar (4 créditos)" com o
+motivo, e gastar é um novo clique. Nada é reenviado sozinho: a chamada recusada
+não custou nada, e a próxima só sai com o clique de uma pessoa no preço novo.
