@@ -143,6 +143,10 @@ O catálogo mora em `packages/shared/src/marketing/camera-moves.ts` (`CAMERA_MOV
 
 O Agente de Edição recebe o catálogo no prompt de sistema e escolhe pelo objetivo (fachada da franquia → `drone_ascending`). Ele informa só o id em `cameraMove` de `propor_geracao` (recusado em imagem, ou fora do catálogo); o servidor compõe o prompt com a mesma `withCameraMove` antes de estimar. O cartão mostra "Movimento de câmera" e o prompt completo antes do botão "Gerar (…)".
 
+## Legenda inteligente (parte 3b)
+
+"Legendar" com a caixa "Legenda inteligente" marcada (só vídeo) põe cada trecho da legenda embaixo, em cima ou no meio, onde não há rosto nem texto escrito no vídeo, sem trocar de lugar por menos de 2 s. Roda no worker (R$ 0) e guarda só a posição. O fluxo, os modelos e a nota de LGPD estão em [jobs.md](jobs.md#legenda-inteligente-type-caption_layout-parte-3b).
+
 ## Licença, antes de tudo
 
 O núcleo está sob **PolyForm Shield 1.0.0**: uso interno, modificação e fork

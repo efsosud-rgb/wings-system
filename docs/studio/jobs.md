@@ -263,6 +263,65 @@ O que a tela recebe (`StudioTranscription`): `id`, `state`, `error`,
 `segments` (quantidade), `createdAt`, `finishedAt`. Com `file`, a tela põe um
 clipe `caption` citando `wings-drive://<file.id>`.
 
+## Legenda inteligente (`type: caption_layout`, parte 3b)
+
+No diálogo "Legendar", um vídeo vem com a caixa "Legenda inteligente: fugir de
+rostos e de textos do vídeo" marcada. Ela manda `smart: true` em
+`POST /studio/transcriptions`; num áudio a API ignora (`layout: null`).
+
+| Coluna   | Valor                                                                            |
+| -------- | -------------------------------------------------------------------------------- |
+| `type`   | `caption_layout`                                                                 |
+| `input`  | `{ version: 1, storageKey, transcriptStorageKey, transcriptionId, destination }` |
+| `output` | `{ zones, frames, width, height }`; a API acrescenta `filed`                     |
+| `error`  | mensagem do worker (`caption layout exited with status <n>`, sem stderr)         |
+
+1. A `GET` que arquiva o SRT comum não muda. A `GET` seguinte, com o
+   transcribe `done` e arquivado, enfileira **um** `caption_layout`, sob
+   `select … for update` na linha do transcribe (`output.layoutJobId`), então
+   duas abas não criam dois.
+2. O worker lê do JSON da transcrição só os tempos das cues e roda
+   `scripts/caption_layout.py`: para cada cue, de 1 a 6 quadros (meio, pontas
+   e um a cada 2 s), reduzidos a 640 px de largura; rostos com **YuNet** e
+   caixas de texto escrito com o **detector PP-OCRv3** (a metade de detecção
+   do PaddleOCR, sem ler palavras), os dois em ONNX rodando no OpenCV, na CPU.
+   Mede quanto de três faixas (em cima 4–30 %, meio 37,5–62,5 %, embaixo
+   70–96 % da altura) está coberto; rosto pesa 3, texto pesa 1, e a caixa do
+   rosto é esticada até o pescoço. Imprime só esses três números por cue.
+3. `chooseZones` (`src/jobs/caption-layout.ts`) escolhe a faixa mais livre
+   (empate: embaixo, em cima, no meio; cobertura abaixo de 2 % conta como
+   livre) e depois junta qualquer trecho que ficaria menos de
+   `CAPTION_MIN_RUN_SECONDS` (2 s) num lugar ao vizinho que custa menos. O
+   `output` guarda **só as zonas**: nenhuma caixa, medida ou quadro sai do job.
+4. Na primeira `GET` com o layout `done`, a API separa as cues por zona
+   (`segmentsByZone`) e arquiva um SRT por zona usada, ao lado do vídeo:
+   `<nome>.legenda-embaixo.srt`, `.legenda-em-cima.srt`,
+   `.legenda-no-meio.srt` (nova versão quando já existe). Audita
+   `studio.captions_layout_saved` com ids, zonas e contagens, sem texto.
+5. A tela mostra "Procurando rostos e textos no vídeo…" com "Não esperar: pôr
+   embaixo"; pronto, "Adicionar legenda à linha do tempo" põe um clipe de
+   legenda por arquivo, cada um na sua posição. Se o layout falhar, o SRT
+   comum continua lá e vai embaixo.
+
+Os modelos são baixados no build da imagem (`scripts/fetch_caption_models.py`,
+SHA-256 fixado) para `CAPTION_MODELS_DIR`
+(`/opt/wings-worker-models/captions`); nada é baixado em tempo de execução.
+Custo: R$ 0 (CPU do worker). Conferido no build local da imagem: vídeo de 9 s
+com três cues (placa em cima e rosto embaixo; rosto em cima; quadro vazio)
+deu custos que levam a meio, embaixo, embaixo; 12 quadros em 3,4 s com 2
+threads.
+
+**`WORKER_JOB_TYPES`**: onde a variável está definida (staging tem
+`ffprobe,transcribe,render`), `caption_layout` precisa entrar na lista, ou o
+job fica na fila para sempre (a tela ainda deixa pôr a legenda embaixo).
+
+**LGPD.** Detectar rosto é tratamento de dado biométrico, mesmo sem
+identificar ninguém. O que foi feito para minimizar: a detecção roda no nosso
+servidor, só dentro do processo; nenhum rosto, caixa ou quadro é gravado,
+registrado em log ou enviado a terceiros; só a posição escolhida para cada
+trecho fica guardada. **Jurídico precisa avaliar** antes de usar em vídeo de
+cliente com pessoas que não sejam da equipe Wings.
+
 ## Parte 2
 
 - Proxy de baixa resolução (`type: proxy`): 540p H.264, gravado como
