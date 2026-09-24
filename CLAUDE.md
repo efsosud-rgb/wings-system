@@ -75,6 +75,6 @@ The API container runs `db:migrate` then `db:seed` before serving, so both must 
 | Staging     | `develop` | staging.wingssystem.online | own Coolify PostgreSQL |
 | Production  | `main`    | wingssystem.online         | own Coolify PostgreSQL |
 
-Coolify deploys from GitHub on push. The n8n PostgreSQL instance is never used by this app. Only `coolify-proxy` may publish host ports 80/443 — another container binding them once took every site on the server down.
+A push does not deploy: the repository has no webhook. Deploys are started through the Coolify API with `wings-deploy staging` or `wings-deploy production` (production asks for a typed PRODUCAO), and each app pulls the code over SSH with a deploy key. The n8n PostgreSQL instance is never used by this app. Only `coolify-proxy` may publish host ports 80/443 — another container binding them once took every site on the server down.
 
 The old static page still served from `/var/www/crm-vendas` (Marketing module mockup) will be ported into `apps/web` later; do not edit it as part of this work.
