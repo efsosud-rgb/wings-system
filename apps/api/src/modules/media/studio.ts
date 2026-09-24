@@ -23,6 +23,7 @@ import {
 import { and, desc, eq, gte, inArray, isNotNull, lte, ne, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
+  agentProposals,
   clients,
   employees,
   mediaAssets,
@@ -875,6 +876,83 @@ export async function createEstimate(
     usage,
     routedFrom,
     warnings,
+  };
+}
+
+/** Where an agent card's estimate stands, after "Estimar de novo". */
+export interface ProposalEstimate {
+  estimate: {
+    id: string;
+    credits: number;
+    brlCents: number;
+    providerId: MediaProviderId;
+    expiresAt: string;
+  } | null;
+  generationId: string | null;
+}
+
+/**
+ * "Estimar de novo" on an agent card: a fresh estimate for exactly the request
+ * the card was priced with (the stored one, so estimate and generation carry
+ * the same payload), without talking to the agent. A card whose estimate is
+ * still open answers with that one, and a card whose generation is under way or
+ * already done answers with the generation: nothing is ever priced twice to be
+ * spent twice.
+ */
+export async function reestimateProposal(
+  deps: StudioDeps,
+  input: { employeeId: string; proposalId: string },
+): Promise<ProposalEstimate> {
+  const [last] = await deps.db
+    .select()
+    .from(mediaGenerations)
+    .where(
+      and(
+        eq(mediaGenerations.proposalId, input.proposalId),
+        eq(mediaGenerations.requestedBy, input.employeeId),
+      ),
+    )
+    .orderBy(desc(mediaGenerations.createdAt))
+    .limit(1);
+  if (!last) throw new StudioRefusal('not_found', 'Proposta não encontrada.');
+  const open = last.status === 'estimated' && last.estimateExpiresAt > deps.now();
+  if (open) {
+    return {
+      estimate: {
+        id: last.id,
+        credits: last.creditsEstimated,
+        brlCents: last.brlCentsEstimated,
+        providerId: last.provider as MediaProviderId,
+        expiresAt: last.estimateExpiresAt.toISOString(),
+      },
+      generationId: null,
+    };
+  }
+  // Under way, done, or nobody knows: the card follows that generation instead.
+  if (!['estimated', 'refused', 'failed'].includes(last.status)) {
+    return { estimate: null, generationId: last.id };
+  }
+  const estimate = await createEstimate(deps, {
+    employeeId: input.employeeId,
+    proposalId: input.proposalId,
+    request: last.request as MediaEstimateRequest,
+  });
+  if (estimate.blockedBy) {
+    throw new StudioRefusal(estimate.blockedBy, MEDIA_REFUSAL_MESSAGE[estimate.blockedBy]);
+  }
+  await deps.db
+    .update(agentProposals)
+    .set({ status: 'open', actedBy: null, actedAt: null })
+    .where(eq(agentProposals.id, input.proposalId));
+  return {
+    estimate: {
+      id: estimate.id,
+      credits: estimate.credits,
+      brlCents: estimate.brlCents,
+      providerId: estimate.providerId,
+      expiresAt: estimate.expiresAt,
+    },
+    generationId: null,
   };
 }
 

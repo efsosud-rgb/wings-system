@@ -1251,6 +1251,67 @@ describe('the editing agent', () => {
     expect(pricedParamsOf(spending().at(-1)!.args)).toEqual(pricedParamsOf(estimated!.args));
   });
 
+  it('"Estimar de novo" prices the card again with the same request, and never re-prices one already spent', async () => {
+    const { cookies } = await sessionFor('marketing');
+    script = [
+      () => ({ toolCalls: [call('propor_geracao', proposal())] }),
+      () => ({ text: 'Propus uma imagem.' }),
+    ];
+    const { message, conversationId } = await talk(cookies, 'Uma imagem para o feed');
+    const card = message?.proposals[0];
+    if (card?.kind !== 'generation' || !card.estimate) throw new Error('expected a priced card');
+    const again = () =>
+      app.inject({ method: 'POST', url: `/media/proposals/${card.id}/estimate`, cookies });
+
+    // Still open: the same estimate comes back, nothing new is priced.
+    const same = await again();
+    expect(same.statusCode).toBe(200);
+    expect(same.json()).toMatchObject({ estimate: { id: card.estimate.id }, generationId: null });
+
+    // The estimate runs out: the card, read again, has no price and offers to ask for one.
+    await db
+      .update(mediaGenerations)
+      .set({ estimateExpiresAt: new Date(Date.now() - 1000) })
+      .where(eq(mediaGenerations.id, card.estimate.id));
+    const reread = await app.inject({ url: `/agent/conversations/${conversationId}`, cookies });
+    const stale = reread
+      .json<{ messages: { proposals: typeof card[] }[] }>()
+      .messages.flatMap((item) => item.proposals)
+      .find((item) => item.id === card.id);
+    expect(stale).toMatchObject({ estimate: null, generationId: null });
+
+    const fresh = await again();
+    expect(fresh.statusCode).toBe(200);
+    const priced = fresh.json<{ estimate: { id: string; credits: number } }>().estimate;
+    expect(priced.id).not.toBe(card.estimate.id);
+    expect(priced.credits).toBe(4);
+    const [first, second] = await db
+      .select()
+      .from(mediaGenerations)
+      .where(eq(mediaGenerations.proposalId, card.id))
+      .orderBy(mediaGenerations.createdAt);
+    // Exactly the request the card was first priced with.
+    expect(second?.request).toEqual(first?.request);
+    expect(spending()).toHaveLength(0);
+
+    const clicked = await generate(cookies, { estimateId: priced.id, proposalId: card.id });
+    expect(clicked.statusCode).toBe(201);
+    const generationId = clicked.json<{ generation: MediaGeneration }>().generation.id;
+    // Under way: asking again follows that generation and prices nothing.
+    const after = await again();
+    expect(after.json()).toMatchObject({ estimate: null, generationId });
+    expect(spending()).toHaveLength(1);
+
+    // Someone else's card is nobody's business.
+    const other = await sessionFor('admin_master');
+    const foreign = await app.inject({
+      method: 'POST',
+      url: `/media/proposals/${card.id}/estimate`,
+      cookies: other.cookies,
+    });
+    expect(foreign.statusCode).toBe(404);
+  });
+
   it('names the right id when the agent writes a model id slightly wrong', async () => {
     const { cookies } = await sessionFor('marketing');
     script = [
