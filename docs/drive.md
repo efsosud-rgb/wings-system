@@ -168,10 +168,13 @@ departamentos e o Dossiê, põe o nó `Clientes` novo, cria a árvore de cada
 cliente ativo e move cada arquivo das pastas de cliente antigas para a pasta
 correspondente. Só o `folder_id` muda: os bytes ficam onde estão, e cada
 movimento vai para a auditoria (`drive.file_migrated`, por id). Subpastas
-feitas à mão vêm junto. Nome repetido no destino ganha " (migrado)". As
-pastas antigas ficam, vazias, como pastas comuns: nada é apagado. Arquivo de
-cliente inativo (sem árvore nova) fica onde está e é listado. Rodar de novo
-não faz nada.
+feitas à mão vêm junto. Nome repetido no destino ganha " (migrado)".
+Nenhum arquivo é apagado. As pastas do layout antigo, já vazias, são
+apagadas com o que houver dentro (decisão de 2026-09-24; auditoria
+`drive.folder_deleted`, por id). Se alguma ainda tiver arquivo (cliente
+inativo não tem árvore nova) ou envio não confirmado, o `--apply` para sem
+gravar nada, sai com código 2 e lista as pastas: reative o cliente ou mova
+o arquivo e rode de novo. Rodar de novo depois de aplicado não faz nada.
 
 | De (pasta de cliente antiga)                        | Para                        |
 | --------------------------------------------------- | --------------------------- |

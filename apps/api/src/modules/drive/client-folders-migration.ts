@@ -23,10 +23,12 @@ import { syncDriveFolders, writeTemplateNodes } from './folders.js';
  *     the new tree (only `folder_id` changes: the bytes stay where they are),
  *     keeping the sub-folders a person made by hand.
  *
- * Nothing is deleted. Old folders stay, empty, as ordinary folders. A file with
- * no destination (its client is inactive, so it has no new tree) stays where
- * it is and is listed. `apply: false` runs everything and rolls it back: the
- * report is what `apply: true` would do.
+ * No file is ever deleted. The old folders, once empty, are deleted with the
+ * folders inside them (decision of 2026-09-24). If one still holds a file (its
+ * client is inactive, so it has no new tree) or an unconfirmed upload,
+ * `apply: true` stops and writes nothing: the person decides what to do with
+ * it first. `apply: false` runs everything and rolls it back: the report is
+ * what `apply: true` would do.
  */
 
 export interface ClientFolderMigrationReport {
@@ -38,8 +40,11 @@ export interface ClientFolderMigrationReport {
   foldersCreated: number;
   foldersRenamed: number;
   oldClientFolders: number;
-  /** Every folder the old nodes made, which stays as an ordinary folder; `empty` once the files moved. */
+  /** Every folder the old nodes made; the empty ones (with what is inside them) are deleted. */
   oldFolders: { path: string; empty: boolean }[];
+  foldersDeleted: number;
+  /** Old folders still holding a file: `apply` stops, and nothing is written. */
+  blockedBy: string[];
   clients: { id: string; number: number | null; folder: string | null; active: boolean }[];
   moves: { fileId: string; from: string; to: string; renamed: boolean; trashed: boolean }[];
   left: { fileId: string; from: string; reason: string }[];
@@ -52,6 +57,17 @@ class Rollback extends Error {
     super('dry run');
   }
 }
+
+/** `apply` found old folders still holding files: everything was rolled back. */
+export class ClientFolderMigrationBlocked extends Error {
+  constructor(readonly report: ClientFolderMigrationReport) {
+    super(
+      `parado sem gravar nada: ${report.blockedBy.length} pasta(s) antiga(s) ainda têm arquivos: ${report.blockedBy.join(', ')}`,
+    );
+    this.name = 'ClientFolderMigrationBlocked';
+  }
+}
+const Blocked = ClientFolderMigrationBlocked;
 
 type Tx = Parameters<Parameters<Database['transaction']>[0]>[0];
 type NodeRow = typeof driveTemplateNodes.$inferSelect;
@@ -93,6 +109,7 @@ export async function migrateClientFolders(
       await tx.execute(sql`select pg_advisory_xact_lock(7301, 1)`);
       const report = await migrate(tx);
       if (!options.apply) throw new Rollback(report);
+      if (report.blockedBy.length > 0) throw new Blocked(report);
       return { ...report, applied: true };
     });
   } catch (error) {
@@ -111,6 +128,8 @@ async function migrate(tx: Tx): Promise<ClientFolderMigrationReport> {
     foldersRenamed: 0,
     oldClientFolders: 0,
     oldFolders: [],
+    foldersDeleted: 0,
+    blockedBy: [],
     clients: [],
     moves: [],
     left: [],
@@ -316,22 +335,42 @@ async function migrate(tx: Tx): Promise<ClientFolderMigrationReport> {
   report.foldersCreated += again.foldersCreated;
   report.foldersRenamed += again.foldersRenamed;
 
-  // What the old model leaves behind, for the person to see (and clear, if they want).
-  const oldFolderIds = folders
-    .filter((folder) => folder.templateNodeId !== null && oldNodeIds.has(folder.templateNodeId))
-    .map((folder) => folder.id);
-  if (oldFolderIds.length > 0) {
-    const occupied = await tx.execute<{ id: string }>(sql`
-      select f.id from drive_folders f
-       where f.id in (${sql.join(oldFolderIds.map((id) => sql`${id}`), sql`, `)})
-         and exists (
-           select 1 from drive_files x join drive_folders d on d.id = x.folder_id
-            where d.id = f.id or starts_with(d.path, f.path || '/'))`);
-    const busy = new Set(occupied.rows.map((row) => row.id));
-    report.oldFolders = oldFolderIds
-      .map((id) => byId.get(id) as FolderRow)
-      .map((folder) => ({ path: folder.path, empty: !busy.has(folder.id) }))
+  // What the old model leaves behind (decision of 2026-09-24): empty folders go; if any
+  // still holds a file (or an upload waiting to be confirmed), the whole migration stops.
+  const oldRoots = folders.filter(
+    (folder) => folder.templateNodeId !== null && oldNodeIds.has(folder.templateNodeId),
+  );
+  if (oldRoots.length > 0) {
+    const all = await tx.select().from(driveFolders);
+    const under = (root: FolderRow) =>
+      all.filter((folder) => folder.id === root.id || folder.path.startsWith(`${root.path}/`));
+    const doomed = new Map<string, FolderRow>();
+    for (const root of oldRoots) for (const folder of under(root)) doomed.set(folder.id, folder);
+    const ids = [...doomed.keys()];
+    const holding = await tx.execute<{ folder_id: string }>(sql`
+      select folder_id from drive_files where folder_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+      union
+      select folder_id from drive_uploads where folder_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`);
+    const busy = new Set(holding.rows.map((row) => row.folder_id));
+    const occupied = (folder: FolderRow) => under(folder).some((item) => busy.has(item.id));
+    report.oldFolders = oldRoots
+      .map((folder) => ({ path: folder.path, empty: !occupied(folder) }))
       .sort((a, b) => a.path.localeCompare(b.path));
+    report.blockedBy = report.oldFolders.filter((folder) => !folder.empty).map((folder) => folder.path);
+    if (report.blockedBy.length === 0) {
+      // Deepest first, so a folder goes after everything inside it.
+      const ordered = [...doomed.values()].sort((a, b) => b.path.length - a.path.length);
+      for (const folder of ordered) {
+        await tx.delete(driveFolders).where(eq(driveFolders.id, folder.id));
+        await tx.insert(auditLog).values({
+          action: 'drive.folder_deleted',
+          entity: 'drive_folder',
+          entityId: folder.id,
+          metadata: { reason: 'client_folders_migration', empty: true },
+        });
+      }
+      report.foldersDeleted = ordered.length;
+    }
   }
   return report;
 }
