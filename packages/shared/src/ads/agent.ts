@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { studioTimelineSnapshotSchema, type StoredTimelineEdit } from '../studio-agent.js';
 import {
   BRAZIL_STATES,
   CALLS_TO_ACTION,
@@ -105,8 +106,9 @@ export const MEDIA_AGENT_READ_TOOLS = [
   'consultar_saldo',
   'rascunho_da_campanha',
   'listar_clientes',
+  'linha_do_tempo',
 ] as const;
-export const MEDIA_AGENT_PROPOSAL_TOOLS = ['propor_geracao'] as const;
+export const MEDIA_AGENT_PROPOSAL_TOOLS = ['propor_geracao', 'propor_edicao'] as const;
 export type MediaAgentToolName =
   (typeof MEDIA_AGENT_READ_TOOLS)[number] | (typeof MEDIA_AGENT_PROPOSAL_TOOLS)[number];
 export type AgentReadTool = (typeof AGENT_READ_TOOLS)[number];
@@ -128,7 +130,8 @@ export const INSIGHT_WRITE_TOOLS = ['registrar_insights', 'registrar_sugestoes']
 export type InsightToolName =
   (typeof INSIGHT_READ_TOOLS)[number] | (typeof INSIGHT_WRITE_TOOLS)[number];
 
-export type AgentToolName = AgentReadTool | AgentProposalTool | MediaAgentToolName | InsightToolName;
+export type AgentToolName =
+  AgentReadTool | AgentProposalTool | MediaAgentToolName | InsightToolName;
 
 /** "O que consultei": one plain phrase per tool. */
 export const AGENT_TOOL_LABEL: Record<AgentToolName, string> = {
@@ -149,6 +152,8 @@ export const AGENT_TOOL_LABEL: Record<AgentToolName, string> = {
   rascunho_da_campanha: 'Rascunho aberto no construtor de campanha',
   listar_clientes: 'Clientes cadastrados',
   propor_geracao: 'Proposta de geração',
+  linha_do_tempo: 'Linha do tempo aberta no Studio',
+  propor_edicao: 'Proposta de edição',
   quebras_de_publico: 'Público, região, posicionamentos, horários e dispositivos',
   curva_gasto_leads: 'Curva de gasto × leads por campanha',
   desgaste_criativos: 'Desgaste dos criativos',
@@ -606,8 +611,21 @@ export interface AgentGenerationProposalCard extends AgentProposalBase {
   generationId: string | null;
 }
 
+/**
+ * Changes to the timeline open in the Studio. The lines were written by the
+ * server from the operations; the operations run in the browser only on
+ * "Pré-visualizar", as one step that "Descartar" takes back.
+ */
+export interface AgentTimelineEditProposalCard extends AgentProposalBase {
+  kind: 'timeline_edit';
+  payload: StoredTimelineEdit;
+}
+
 export type AgentProposalCard =
-  AgentCampaignProposalCard | AgentChangeProposalCard | AgentGenerationProposalCard;
+  | AgentCampaignProposalCard
+  | AgentChangeProposalCard
+  | AgentGenerationProposalCard
+  | AgentTimelineEditProposalCard;
 
 // ---------------------------------------------------------------------------
 // Conversations
@@ -656,6 +674,8 @@ export const agentBuilderContextSchema = z
     tab: z.enum(['paid', 'owned', 'media']),
     /** The builder's current values, as typed. Data for a read tool, nothing more. */
     draft: z.record(z.string(), z.unknown()).optional(),
+    /** The Studio's timeline, when the editor is open. Data for a read tool, nothing more. */
+    timeline: studioTimelineSnapshotSchema.optional(),
   })
   .optional();
 
