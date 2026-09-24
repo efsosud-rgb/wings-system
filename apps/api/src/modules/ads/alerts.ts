@@ -164,6 +164,12 @@ export interface PacingFacts {
   deviationPercent: number | null;
   elapsedDays: number;
   totalDays: number;
+  /** What the platform itself still allows, as last synced. Null when never or uncapped. */
+  platformRemainingCents: number | null;
+  platformLimitSource: string | null;
+  platformLimitSyncedAtIso: string | null;
+  /** Why the platform would not answer a number, in its own words. */
+  platformLimitNote: string | null;
 }
 
 /**
@@ -202,6 +208,12 @@ export async function pacingFacts(
         : null,
     elapsedDays: Math.round(elapsedDays * 10) / 10,
     totalDays,
+    platformRemainingCents: state.platformRemainingCents,
+    platformLimitSource: state.platformLimitSource,
+    platformLimitSyncedAtIso: state.platformLimitSyncedAt
+      ? state.platformLimitSyncedAt.toISOString()
+      : null,
+    platformLimitNote: state.platformLimitNote,
   };
 }
 

@@ -179,6 +179,69 @@ describe('reconciling spend', () => {
   });
 });
 
+describe('the platform limit reconciliation records', () => {
+  it('uses the prepaid balance as remaining headroom, not spend_cap minus amount_spent', async () => {
+    const id = await account();
+    // The balance deliberately disagrees with a naive spend_cap - amount_spent:
+    // spend_cap says 4.000,00 left, but the account actually has 500,00 loaded.
+    const client = new FakeMetaClient({
+      spendCapCents: 400_000,
+      prepaidBalanceCents: 50_000,
+      campaigns: [{ id: 'c1', name: 'Institucional', dailyBudgetCents: 1000 }],
+    });
+
+    await reconcileAccount(db, client, id, NOW);
+
+    const state = await getPeriodState(db, id, PERIOD);
+    expect(state?.platformRemainingCents).toBe(50_000);
+    expect(state?.platformLimitSource).toBe('meta.prepaid_balance');
+  });
+
+  it('keeps the existing spend_cap behaviour for a non-prepaid (card) account', async () => {
+    const id = await account();
+    const client = new FakeMetaClient({
+      spendCapCents: 250_000,
+      campaigns: [{ id: 'c1', name: 'Institucional', dailyBudgetCents: 1000 }],
+    });
+    client.simulateDay('2026-09-16');
+    client.settleReporting();
+
+    await reconcileAccount(db, client, id, NOW);
+
+    const state = await getPeriodState(db, id, PERIOD);
+    // spend_cap (250.000) minus the R$10,00 delivered.
+    expect(state?.platformRemainingCents).toBe(250_000 - 1000);
+    expect(state?.platformLimitSource).toBe('meta.spend_cap');
+  });
+
+  it('persists the platform warning as a human-readable note', async () => {
+    const id = await account();
+    const client = new FakeMetaClient({
+      permissionDenied: { funding: true },
+      campaigns: [{ id: 'c1', name: 'Institucional', dailyBudgetCents: 1000 }],
+    });
+
+    await reconcileAccount(db, client, id, NOW);
+
+    const state = await getPeriodState(db, id, PERIOD);
+    expect(state?.platformLimitNote).toMatch(/funding_source_details/);
+    expect(state?.platformLimitSyncedAt).not.toBeNull();
+  });
+
+  it('leaves the note null when the platform answered without complaint', async () => {
+    const id = await account();
+    const client = new FakeMetaClient({
+      spendCapCents: 100_000,
+      campaigns: [{ id: 'c1', name: 'Institucional', dailyBudgetCents: 1000 }],
+    });
+
+    await reconcileAccount(db, client, id, NOW);
+
+    const state = await getPeriodState(db, id, PERIOD);
+    expect(state?.platformLimitNote).toBeNull();
+  });
+});
+
 describe('dead-man switch', () => {
   it('stops spending when reconciliation goes stale', async () => {
     const id = await account();

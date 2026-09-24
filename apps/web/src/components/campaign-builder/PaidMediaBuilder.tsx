@@ -302,14 +302,60 @@ function ComplianceWarning({ findings }: { findings: ComplianceFinding[] }) {
   );
 }
 
-function AccountCeiling({ pacing }: { pacing: PacingSummary | null | undefined }) {
+/** "atualizado há 3 min" from an ISO instant; "nunca sincronizado" when null. */
+function syncedAgoLabel(iso: string | null): string {
+  if (!iso) return 'nunca sincronizado';
+  const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000));
+  if (minutes < 1) return 'atualizado agora mesmo';
+  if (minutes < 60) return `atualizado há ${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  return `atualizado há ${hours}h`;
+}
+
+type WingsTotal = { capCents: number; usableCents: number; committedCents: number; spentCents: number };
+
+/** Once regardless of platform: the cross-account figure, not any one account's. */
+function WingsTotalLine({ wingsTotal }: { wingsTotal: WingsTotal | null }) {
+  if (!wingsTotal) return null;
+  const availableCents = Math.max(0, wingsTotal.usableCents - wingsTotal.committedCents);
+  return (
+    <p className="field-hint builder-ceiling-wings-total">
+      Total Wings (todas as contas): <strong className="mono">{formatBrl(availableCents)}</strong>{' '}
+      ainda planejável de {formatBrl(wingsTotal.usableCents)} utilizáveis.
+    </p>
+  );
+}
+
+function AccountCeiling({
+  pacing,
+  wingsTotal,
+  platform,
+}: {
+  pacing: PacingSummary | null | undefined;
+  wingsTotal: WingsTotal | null;
+  platform: CampaignDraftInput['platform'];
+}) {
   if (pacing === undefined) return <p className="muted">Lendo o teto da conta…</p>;
+
+  // Search and YouTube spend from the same Google account: worth saying out
+  // loud, since the ceiling below is not this campaign's alone.
+  const sharedCaption = platform !== 'meta' && (
+    <p className="field-hint">
+      Pesquisa e YouTube compartilham a mesma conta e o mesmo teto do Google.
+    </p>
+  );
+
   if (pacing === null) {
     return (
-      <Alert kind="error">
-        Não há período de orçamento aberto para esta conta neste mês. Sem teto, nenhum pedido é
-        aceito.
-      </Alert>
+      <div className="builder-ceiling">
+        <Alert kind="error">
+          Não há período de orçamento aberto para esta conta neste mês. Sem teto, nenhum pedido é
+          aceito.
+        </Alert>
+        <p className="field-hint">sem teto próprio</p>
+        {sharedCaption}
+        <WingsTotalLine wingsTotal={wingsTotal} />
+      </div>
     );
   }
   return (
@@ -317,6 +363,7 @@ function AccountCeiling({ pacing }: { pacing: PacingSummary | null | undefined }
       <span className="field-label">Teto real da conta neste mês</span>
       <p className="mono builder-ceiling-figure">{formatBrl(pacing.availableCents)}</p>
       <p className="field-hint">ainda pode ser planejado</p>
+      {sharedCaption}
       <dl>
         <dt>Teto do mês</dt>
         <dd className="mono">{formatBrl(pacing.capCents)}</dd>
@@ -327,6 +374,18 @@ function AccountCeiling({ pacing }: { pacing: PacingSummary | null | undefined }
         <dt>Já gasto</dt>
         <dd className="mono">{formatBrl(pacing.spentCents)}</dd>
       </dl>
+      <div className="builder-ceiling-platform">
+        <span className="field-label">Saldo/crédito informado pela plataforma</span>
+        {pacing.platformRemainingCents !== null ? (
+          <p className="mono">{formatBrl(pacing.platformRemainingCents)}</p>
+        ) : (
+          <p className="field-hint">
+            {pacing.platformLimitNote ?? 'a plataforma não informa este número'}
+          </p>
+        )}
+        <p className="field-hint">{syncedAgoLabel(pacing.platformLimitSyncedAtIso)}</p>
+      </div>
+      <WingsTotalLine wingsTotal={wingsTotal} />
       {pacing.killSwitchEngaged && (
         <Alert kind="error">Trava de emergência acionada: a conta não aceita pedidos agora.</Alert>
       )}
@@ -681,9 +740,7 @@ export function PaidMediaBuilder({
   applyRef?: MutableRefObject<BuilderBridge | null>;
 }) {
   const today = todayInSaoPaulo();
-  const cockpit = useCockpit(7);
   const launch = useRequestCampaign();
-  const pacing = cockpit.isLoading ? undefined : (cockpit.data?.cockpit.pacing ?? null);
 
   const {
     register,
@@ -764,6 +821,9 @@ export function PaidMediaBuilder({
 
   const values = watch();
   const { platform } = values;
+  const cockpit = useCockpit({ days: 7, platform });
+  const pacing = cockpit.isLoading ? undefined : (cockpit.data?.cockpit.pacing ?? null);
+  const wingsTotal = cockpit.data?.cockpit.wingsTotal ?? null;
   const google = isGooglePlatform(platform);
   const sections: readonly SectionKey[] =
     platform === 'youtube'
@@ -1984,7 +2044,7 @@ export function PaidMediaBuilder({
               )}
             </div>
           </div>
-          <AccountCeiling pacing={pacing} />
+          <AccountCeiling pacing={pacing} wingsTotal={wingsTotal} platform={platform} />
         </div>
         {overCeiling && pacing && (
           <div className="alert alert-warning" role="alert">

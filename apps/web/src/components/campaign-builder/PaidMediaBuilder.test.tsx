@@ -29,6 +29,8 @@ import { ApiError } from '../../api/client.js';
  */
 
 const pacing: { current: PacingSummary | null } = { current: buildPacing() };
+/** Every call the builder made to `useCockpit`, in order — what days/platform it asked for. */
+const cockpitCalls: { days: number; platform?: string }[] = [];
 
 const requestCampaign = vi.fn();
 const launchState: { current: { isSuccess: boolean; data?: { approvalId: string } } } = {
@@ -126,7 +128,13 @@ vi.mock('../../api/ads.js', () => ({
       });
     },
   }),
-  useCockpit: () => ({ data: { cockpit: { pacing: pacing.current } }, isLoading: false }),
+  useCockpit: (args: { days: number; platform?: string }) => {
+    cockpitCalls.push(args);
+    return {
+      data: { cockpit: { pacing: pacing.current, wingsTotal: null } },
+      isLoading: false,
+    };
+  },
   useRequestCampaign: () => ({
     mutate: requestCampaign,
     reset: vi.fn(),
@@ -215,6 +223,10 @@ function buildPacing(overrides: Partial<PacingSummary> = {}): PacingSummary {
     elapsedDays: 18,
     totalDays: 30,
     killSwitchEngaged: false,
+    platformRemainingCents: null,
+    platformLimitSource: null,
+    platformLimitSyncedAtIso: null,
+    platformLimitNote: null,
     ...overrides,
   };
 }
@@ -222,6 +234,7 @@ function buildPacing(overrides: Partial<PacingSummary> = {}): PacingSummary {
 afterEach(() => {
   cleanup();
   pacing.current = buildPacing();
+  cockpitCalls.length = 0;
   launchState.current = { isSuccess: false };
   requestCampaign.mockReset();
   uploadSize.current = { width: 1080, height: 1080 };
@@ -561,6 +574,17 @@ describe('the builder on Google', () => {
     type(screen.getByLabelText(/^Título 1/), 'Franquia Wings');
     type(screen.getByLabelText(/^Descrição 1/), 'Conheça o modelo de negócio e o suporte.');
   }
+
+  it('asks the cockpit for the Meta account by default, and the Google one once the platform changes', () => {
+    render(<PaidMediaBuilder canRequest />);
+    expect(cockpitCalls.at(-1)).toEqual({ days: 7, platform: 'meta' });
+
+    choose(/Google Pesquisa/);
+    expect(cockpitCalls.at(-1)).toEqual({ days: 7, platform: 'google_search' });
+
+    choose(/YouTube/);
+    expect(cockpitCalls.at(-1)).toEqual({ days: 7, platform: 'youtube' });
+  });
 
   it('shows the search fields only on Google Pesquisa, and hides what is Meta only', () => {
     render(<PaidMediaBuilder canRequest />);

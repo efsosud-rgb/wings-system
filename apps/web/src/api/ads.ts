@@ -1,25 +1,28 @@
-import type {
-  ApprovalDecisionInput,
-  ApprovalDetail,
-  ApprovalListItem,
-  AudienceProfile,
-  AudienceProfileInput,
-  CampaignDraft,
-  ChangeSimulation,
-  CockpitSnapshot,
-  CreativeUpload,
-  MetaIdentities,
-  MetaIdentity,
-  NextPendingLink,
-  OfficialPreview,
-  PendingGroup,
-  PreviewPlacement,
-  SiteImageUpload,
-  SitePostFormInput,
-  SitePostRecord,
-  SiteStatus,
-  SiteTerms,
-  VideoUpload,
+import {
+  AD_ACCOUNT_PLATFORM,
+  type AdAccountBudgetCapView,
+  type ApprovalDecisionInput,
+  type ApprovalDetail,
+  type ApprovalListItem,
+  type AudienceProfile,
+  type AudienceProfileInput,
+  type BudgetCapUpdateInput,
+  type CampaignDraft,
+  type ChangeSimulation,
+  type CockpitSnapshot,
+  type CreativeUpload,
+  type MetaIdentities,
+  type MetaIdentity,
+  type NextPendingLink,
+  type OfficialPreview,
+  type PendingGroup,
+  type PreviewPlacement,
+  type SiteImageUpload,
+  type SitePostFormInput,
+  type SitePostRecord,
+  type SiteStatus,
+  type SiteTerms,
+  type VideoUpload,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
@@ -68,13 +71,60 @@ export function useDecideApproval(id: string) {
   });
 }
 
-/** The cockpit snapshot: performance, pacing and open alerts in one read. */
-export function useCockpit(days: number) {
+/**
+ * The cockpit snapshot: performance, pacing and open alerts in one read.
+ *
+ * `platform` is the campaign builder's own choice ('meta' | 'google_search' |
+ * 'youtube'); the backend only knows ad-account platforms ('meta' | 'google'),
+ * so the mapping happens here, on the frontend, via `AD_ACCOUNT_PLATFORM`.
+ * Omitting it keeps the old behaviour: the account the cockpit has always
+ * opened on (Meta).
+ */
+export function useCockpit({
+  days,
+  platform,
+}: {
+  days: number;
+  platform?: keyof typeof AD_ACCOUNT_PLATFORM;
+}) {
+  const accountPlatform = platform ? AD_ACCOUNT_PLATFORM[platform] : undefined;
   return useQuery({
-    queryKey: ['ads', 'cockpit', days],
-    queryFn: () => api.get<{ cockpit: CockpitSnapshot }>(`/ads/cockpit?days=${days}`),
+    queryKey: ['ads', 'cockpit', days, accountPlatform ?? null],
+    queryFn: () =>
+      api.get<{ cockpit: CockpitSnapshot }>(
+        `/ads/cockpit?days=${days}${accountPlatform ? `&platform=${accountPlatform}` : ''}`,
+      ),
     // The ingest job runs hourly; refetching faster only adds noise.
     staleTime: 60_000,
+  });
+}
+
+/**
+ * Administração → Integrações: every account's current cap, for the edit
+ * form. `enabled` so a viewer without `ads.budget_caps.manage` never fires
+ * the request — the section is hidden for them, and the API would refuse it.
+ */
+export function useAdAccountBudgetCaps(enabled: boolean) {
+  return useQuery({
+    queryKey: ['ads', 'accounts', 'budget-caps'],
+    enabled,
+    queryFn: () => api.get<{ accounts: AdAccountBudgetCapView[] }>('/ads/accounts/budget-caps'),
+  });
+}
+
+/** Opens or edits this month's internal cap for one account. Admin Master only. */
+export function useSetBudgetCap(accountId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: BudgetCapUpdateInput) =>
+      api.post<{ account: AdAccountBudgetCapView }>(
+        `/ads/accounts/${accountId}/budget-cap`,
+        input,
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ads', 'accounts', 'budget-caps'] });
+      void queryClient.invalidateQueries({ queryKey: ['ads', 'cockpit'] });
+    },
   });
 }
 

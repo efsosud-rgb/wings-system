@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 /**
  * Contract for the traffic cockpit: the performance table and the alert feed.
  *
@@ -85,6 +87,17 @@ export interface PacingSummary {
   elapsedDays: number;
   totalDays: number;
   killSwitchEngaged: boolean;
+  /**
+   * What the platform itself still allows, as last synced by reconciliation.
+   * Null when never synced or when the platform sets no limit — never a
+   * fabricated number. See `platformLimitNote` for why, when it is null.
+   */
+  platformRemainingCents: number | null;
+  /** Which field this came from, e.g. `meta.spend_cap`, `meta.prepaid_balance`. */
+  platformLimitSource: string | null;
+  platformLimitSyncedAtIso: string | null;
+  /** Why the platform would not answer, in its own words; null when it did. */
+  platformLimitNote: string | null;
 }
 
 export interface CockpitAccount {
@@ -109,4 +122,39 @@ export interface CockpitSnapshot {
     openAlerts: number;
     pendingApprovals: number;
   };
+  /**
+   * The cross-platform figure: summed across every non-archived account's
+   * currently open budget period this month. Null only when literally no
+   * account has one open — not the selected account's own figure, which is
+   * `pacing` (null there means "this account has no cap", not "nobody does").
+   */
+  wingsTotal: {
+    capCents: number;
+    usableCents: number;
+    committedCents: number;
+    spentCents: number;
+  } | null;
 }
+
+/** One ad account, as Administração → Integrações lists it for cap editing. */
+export interface AdAccountBudgetCapView {
+  accountId: string;
+  platform: 'meta' | 'google' | 'tiktok';
+  name: string;
+  externalId: string;
+  /** First day of the month the figures below cover. */
+  periodMonth: string;
+  /** Null when no period is open yet this month. */
+  capCents: number | null;
+  usableCents: number | null;
+  usablePercent: number | null;
+}
+
+/** Body of `POST /ads/accounts/:accountId/budget-cap` — opens or edits this month's cap. */
+export const budgetCapUpdateSchema = z.object({
+  capCents: z.number().int().positive(),
+  usablePercent: z.number().int().min(1).max(100),
+  reason: z.string().trim().min(3).max(500),
+});
+
+export type BudgetCapUpdateInput = z.output<typeof budgetCapUpdateSchema>;

@@ -66,6 +66,10 @@ export interface PeriodState {
    */
   platformRemainingCents: Cents | null;
   platformLimitSource: string | null;
+  /** When the platform limit was last synced by reconciliation; null when never. */
+  platformLimitSyncedAt: Date | null;
+  /** Why the platform would not answer, in the API's own words; null when it did. */
+  platformLimitNote: string | null;
   /** What may still be planned: the smallest of the headrooms, platform included. */
   availableCents: Cents;
 }
@@ -161,6 +165,8 @@ function periodState(row: {
   spentCents: number;
   platformRemainingCents?: number | null;
   platformLimitSource?: string | null;
+  platformLimitSyncedAt?: Date | null;
+  platformLimitNote?: string | null;
 }): PeriodState {
   const capHeadroom = Math.max(0, row.capCents - row.spentCents - row.committedCents);
   const usableHeadroom = Math.max(0, row.usableCents - row.committedCents);
@@ -187,6 +193,8 @@ function periodState(row: {
     spentCents: row.spentCents,
     platformRemainingCents,
     platformLimitSource: row.platformLimitSource ?? null,
+    platformLimitSyncedAt: row.platformLimitSyncedAt ?? null,
+    platformLimitNote: row.platformLimitNote ?? null,
     availableCents: effectiveHeadroomCents(internalHeadroom, platformHeadroom),
   };
 }
@@ -1001,10 +1009,13 @@ export async function getPeriodState(
       spent_cents: string;
       platform_remaining_cents: string | null;
       platform_limit_source: string | null;
+      platform_limit_synced_at: Date | string | null;
+      platform_limit_note: string | null;
     } & Record<string, unknown>
   >(sql`
     select id, cap_cents, usable_cents, committed_cents, spent_cents,
-           platform_remaining_cents, platform_limit_source
+           platform_remaining_cents, platform_limit_source, platform_limit_synced_at,
+           platform_limit_note
       from ad_budget_periods
      where ad_account_id = ${adAccountId} and period_month = ${periodMonth}
   `);
@@ -1019,6 +1030,11 @@ export async function getPeriodState(
     platformRemainingCents:
       row.platform_remaining_cents === null ? null : Number(row.platform_remaining_cents),
     platformLimitSource: row.platform_limit_source,
+    // node-postgres parses timestamptz to a Date normally, but drizzle's raw
+    // `execute` does not always get that parser wired in — accept either.
+    platformLimitSyncedAt:
+      row.platform_limit_synced_at === null ? null : new Date(row.platform_limit_synced_at),
+    platformLimitNote: row.platform_limit_note,
   });
 }
 
@@ -1046,6 +1062,8 @@ export async function applyPlatformLimit(
     adAccountId: string;
     periodMonth: string;
     limit: PlatformSpendLimit;
+    /** Why the platform would not answer, in its own words; null when it did. */
+    note?: string | null;
     now?: Date;
   },
 ): Promise<PlatformLimitResult | null> {
@@ -1078,6 +1096,7 @@ export async function applyPlatformLimit(
       platformRemainingCents: remaining,
       platformLimitSource: input.limit.source,
       platformLimitSyncedAt: now,
+      platformLimitNote: input.note ?? null,
       updatedAt: now,
     })
     .where(eq(budgetPeriods.id, row.id));

@@ -1,15 +1,19 @@
 import {
+  AD_PLATFORM_LABEL,
   KAIROGEN_PLANS,
   KAIROGEN_PLAN_LABEL,
   KAIROGEN_STATE_LABEL,
   MEDIA_BILLING_LABEL,
   formatBrl,
+  type AdAccountBudgetCapView,
   type KairogenPlan,
   type KairogenStatus,
   type MediaProviderStatus,
 } from '@wings/shared';
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useAdAccountBudgetCaps, useSetBudgetCap } from '../api/ads.js';
+import { hasPermission, useSession } from '../api/auth.js';
 import { ApiError } from '../api/client.js';
 import {
   useConnectKairogen,
@@ -19,7 +23,7 @@ import {
 } from '../api/integrations.js';
 import { useMediaProviders, useSaveKairogenPlan } from '../api/media.js';
 import { providerHolding } from '../components/media-studio/ProviderStrip.js';
-import { Alert, Button } from '../components/ui.js';
+import { Alert, Button, Field, Input } from '../components/ui.js';
 
 /**
  * Configurações → Integrações. One card per external service the SYSTEM is
@@ -385,6 +389,145 @@ function MediaProviderCards() {
   );
 }
 
+function platformLabel(platform: AdAccountBudgetCapView['platform']): string {
+  return platform === 'meta' || platform === 'google' ? AD_PLATFORM_LABEL[platform] : platform;
+}
+
+/**
+ * One account's cap: current figures plus the edit form. Reused for Meta and
+ * Google alike — same shape, same write (`openPeriod`), only the account id
+ * differs.
+ */
+function BudgetCapCard({ account }: { account: AdAccountBudgetCapView }) {
+  const setCap = useSetBudgetCap(account.accountId);
+  const [capReais, setCapReais] = useState(
+    account.capCents !== null ? (account.capCents / 100).toFixed(2) : '',
+  );
+  const [usablePercent, setUsablePercent] = useState(
+    account.usablePercent !== null ? String(account.usablePercent) : '70',
+  );
+  const [reason, setReason] = useState('');
+
+  useEffect(() => {
+    setCapReais(account.capCents !== null ? (account.capCents / 100).toFixed(2) : '');
+    setUsablePercent(account.usablePercent !== null ? String(account.usablePercent) : '70');
+  }, [account.capCents, account.usablePercent]);
+
+  const capCents = Math.round(Number(capReais.replace(',', '.')) * 100);
+  const percent = Number(usablePercent);
+  const canSubmit =
+    Number.isFinite(capCents) &&
+    capCents > 0 &&
+    Number.isInteger(percent) &&
+    percent >= 1 &&
+    percent <= 100 &&
+    reason.trim().length >= 3;
+
+  return (
+    <section className="integration-card" aria-labelledby={`budget-cap-${account.accountId}`}>
+      <header className="integration-card-head">
+        <div>
+          <h3 id={`budget-cap-${account.accountId}`}>
+            {platformLabel(account.platform)} — {account.name}
+          </h3>
+          <p className="muted">
+            {account.capCents !== null && account.usableCents !== null
+              ? `Teto de ${formatBrl(account.capCents)}, ${account.usablePercent}% utilizável (${formatBrl(account.usableCents)}).`
+              : 'Sem período aberto este mês — nenhum pedido é aceito até um teto ser salvo.'}
+          </p>
+        </div>
+      </header>
+      <form
+        className="integration-plan"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!canSubmit) return;
+          setCap.mutate(
+            { capCents, usablePercent: percent, reason: reason.trim() },
+            { onSuccess: () => setReason('') },
+          );
+        }}
+      >
+        <Field label="Teto do mês (R$)">
+          <Input
+            type="text"
+            inputMode="decimal"
+            value={capReais}
+            onChange={(event) => setCapReais(event.target.value)}
+          />
+        </Field>
+        <Field
+          label="Utilizável (%)"
+          hint="Parcela do teto que pode ser planejada; o resto absorve sobreentrega."
+        >
+          <Input
+            type="number"
+            min={1}
+            max={100}
+            value={usablePercent}
+            onChange={(event) => setUsablePercent(event.target.value)}
+          />
+        </Field>
+        <Field label="Motivo" hint="Registrado no histórico de alterações do teto.">
+          <Input
+            type="text"
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="Ex.: recarga combinada com o Eric"
+          />
+        </Field>
+        <Button type="submit" variant="ghost" disabled={!canSubmit || setCap.isPending}>
+          Salvar teto
+        </Button>
+        {setCap.isSuccess && (
+          <p className="field-hint" role="status">
+            Teto salvo.
+          </p>
+        )}
+        {setCap.error && (
+          <p className="field-error" role="alert">
+            {setCap.error instanceof ApiError
+              ? setCap.error.message
+              : 'Não foi possível salvar o teto.'}
+          </p>
+        )}
+      </form>
+    </section>
+  );
+}
+
+/**
+ * Administração → Integrações: the internal cap per ad account, editable only
+ * by an Admin Master — the same write `openPeriod` has always made from the
+ * CLI (`ingest-cli --seed`, `verify-live`), now reachable from a screen.
+ */
+function BudgetCapsSection() {
+  const session = useSession();
+  const canManage = hasPermission(session.data, 'ads.budget_caps.manage');
+  const accounts = useAdAccountBudgetCaps(canManage);
+
+  if (!canManage) return null;
+  if (accounts.isLoading) return null;
+  if (!accounts.data || !Array.isArray(accounts.data.accounts)) {
+    return <Alert kind="error">Não foi possível ler os tetos de orçamento.</Alert>;
+  }
+
+  return (
+    <section aria-labelledby="budget-caps-title">
+      <h2 id="budget-caps-title">Teto interno de orçamento de tráfego pago</h2>
+      <p className="muted">
+        O teto que o guardião de orçamento usa para recusar pedidos — nunca acima do que a própria
+        plataforma permite. Cada alteração fica registrada, com quem mudou e por quê.
+      </p>
+      <div className="provider-cards">
+        {accounts.data.accounts.map((account) => (
+          <BudgetCapCard key={account.accountId} account={account} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function IntegrationsPage() {
   return (
     <>
@@ -397,6 +540,7 @@ export function IntegrationsPage() {
       </header>
       <KairogenCard />
       <MediaProviderCards />
+      <BudgetCapsSection />
     </>
   );
 }

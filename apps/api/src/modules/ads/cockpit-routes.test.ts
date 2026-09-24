@@ -5,12 +5,12 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { adAlerts, adMetricsDaily } from '../../db/schema/index.js';
+import { adAccounts, adAlerts, adMetricsDaily } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import { runAlerts } from './alerts.js';
-import { openPeriod } from './budget-guard.js';
+import { getPeriodState, openPeriod } from './budget-guard.js';
 import { ensureAdAccount, syncAds } from './metrics.js';
 import { FakeMetaClient } from './platform/fake-meta-client.js';
 import { reconcileAccount } from './reconcile.js';
@@ -90,7 +90,7 @@ afterAll(async () => {
   await harness?.drop();
 });
 
-async function sessionFor(role: 'admin_master' | 'marketing' | 'vendedor_expansao') {
+async function sessionFor(role: 'admin_master' | 'marketing' | 'vendedor_expansao' | 'diretoria') {
   const employee = await createEmployee(db, {
     role,
     sector:
@@ -208,5 +208,158 @@ describe('acknowledging an alert', () => {
     expect(stored?.acknowledgedBy).toBe(employee.id);
     // Acknowledging is not resolving: the ad is still rejected.
     expect(stored?.resolvedAt).toBeNull();
+  });
+});
+
+describe('multi-account: the platform param and the Wings total', () => {
+  let googleAccountId: string;
+
+  beforeAll(async () => {
+    googleAccountId = await ensureAdAccount(db, {
+      platform: 'google',
+      externalId: '4268586278',
+      name: 'Wings Company — Google Ads',
+    });
+    await openPeriod(db, {
+      adAccountId: googleAccountId,
+      periodMonth: PERIOD,
+      capCents: 250_000,
+      usablePercent: 70,
+    });
+  });
+
+  it('resolves the same account by default and by ?platform=meta', async () => {
+    const { cookies } = await sessionFor('marketing');
+    const byDefault = await cockpit(cookies);
+    const response = await app.inject({
+      method: 'GET',
+      url: '/ads/cockpit?platform=meta',
+      cookies,
+    });
+    expect(response.statusCode).toBe(200);
+    const byPlatform = (response.json() as { cockpit: CockpitSnapshot }).cockpit;
+    expect(byPlatform.account.id).toBe(byDefault.account.id);
+    expect(byPlatform.account.platform).toBe('meta');
+  });
+
+  it('resolves the Google account with ?platform=google', async () => {
+    const { cookies } = await sessionFor('marketing');
+    const response = await app.inject({
+      method: 'GET',
+      url: '/ads/cockpit?platform=google',
+      cookies,
+    });
+    expect(response.statusCode).toBe(200);
+    const snapshot = (response.json() as { cockpit: CockpitSnapshot }).cockpit;
+    expect(snapshot.account.id).toBe(googleAccountId);
+    expect(snapshot.account.platform).toBe('google');
+  });
+
+  it('404s — never a fake zeroed response — when the requested platform has no account', async () => {
+    // Archived is history: briefly archive the only Google account, then
+    // restore it, rather than standing up a whole second database.
+    await db
+      .update(adAccounts)
+      .set({ archivedAt: NOW, archivedReason: 'teste' })
+      .where(eq(adAccounts.id, googleAccountId));
+
+    const { cookies } = await sessionFor('marketing');
+    const response = await app.inject({
+      method: 'GET',
+      url: '/ads/cockpit?platform=google',
+      cookies,
+    });
+    expect(response.statusCode).toBe(404);
+
+    await db
+      .update(adAccounts)
+      .set({ archivedAt: null, archivedReason: null })
+      .where(eq(adAccounts.id, googleAccountId));
+  });
+
+  it('sums the Wings total across every account with an open period this month', async () => {
+    const { cookies } = await sessionFor('marketing');
+    const snapshot = await cockpit(cookies);
+    // Meta: cap 400.000, usable 280.000, committed R$40/day x 15 days x 1.25
+    // from the LEAD | FORMS campaign seeded at module setup. Google: cap
+    // 250.000, usable 175.000, never reconciled so nothing committed yet.
+    expect(snapshot.wingsTotal).toEqual({
+      capCents: 400_000 + 250_000,
+      usableCents: 280_000 + 175_000,
+      committedCents: 3000 * 15 * 1.25,
+      spentCents: 0,
+    });
+  });
+
+  it('skips an account with no open period this month, without nulling the total', async () => {
+    await ensureAdAccount(db, {
+      platform: 'meta',
+      externalId: `act_${randomBytes(4).toString('hex')}`,
+      name: 'Sem período aberto',
+    });
+
+    const { cookies } = await sessionFor('marketing');
+    const snapshot = await cockpit(cookies);
+    // Unchanged from the previous test: the bare account adds nothing.
+    expect(snapshot.wingsTotal?.capCents).toBe(400_000 + 250_000);
+  });
+});
+
+describe('admin-only budget cap editing', () => {
+  it('refuses a role without ads.budget_caps.manage, even one that can approve budget changes', async () => {
+    const { cookies } = await sessionFor('diretoria');
+    const response = await app.inject({
+      method: 'POST',
+      url: `/ads/accounts/${accountId}/budget-cap`,
+      cookies,
+      payload: { capCents: 500_000, usablePercent: 70, reason: 'teste de permissão' },
+    });
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('refuses the listing route to the same non-admin role', async () => {
+    const { cookies } = await sessionFor('diretoria');
+    const response = await app.inject({
+      method: 'GET',
+      url: '/ads/accounts/budget-caps',
+      cookies,
+    });
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('lets an Admin Master open a new cap, using the same write the CLI has always used', async () => {
+    const { cookies } = await sessionFor('admin_master');
+    const response = await app.inject({
+      method: 'POST',
+      url: `/ads/accounts/${accountId}/budget-cap`,
+      cookies,
+      payload: { capCents: 500_000, usablePercent: 80, reason: 'Reajuste combinado com o Eric' },
+    });
+    expect(response.statusCode).toBe(200);
+
+    const body = response.json() as {
+      account: { capCents: number | null; usableCents: number | null; usablePercent: number | null };
+    };
+    expect(body.account.capCents).toBe(500_000);
+    expect(body.account.usableCents).toBe(400_000);
+    expect(body.account.usablePercent).toBe(80);
+
+    const state = await getPeriodState(db, accountId, PERIOD);
+    expect(state?.capCents).toBe(500_000);
+  });
+
+  it('lists every account with its current cap for the admin screen', async () => {
+    const { cookies } = await sessionFor('admin_master');
+    const response = await app.inject({
+      method: 'GET',
+      url: '/ads/accounts/budget-caps',
+      cookies,
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as {
+      accounts: { accountId: string; capCents: number | null }[];
+    };
+    const row = body.accounts.find((a) => a.accountId === accountId);
+    expect(row?.capCents).toBe(500_000);
   });
 });

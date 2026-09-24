@@ -33,6 +33,25 @@ export function limitFrom(
 }
 
 /**
+ * The platform limit when funding is prepaid: the balance itself IS the
+ * headroom. `spend_cap − amount_spent` is a proxy that only happens to agree
+ * with it on an account that never had its cap raised or lowered mid-month —
+ * the balance is the fact, read straight from the platform, never derived.
+ */
+export function prepaidLimitFrom(
+  prepaidBalanceCents: Cents | null,
+  spentCents: Cents,
+  source: string,
+): PlatformSpendLimit {
+  return {
+    limitCents: prepaidBalanceCents === null ? null : prepaidBalanceCents + spentCents,
+    spentCents,
+    remainingCents: prepaidBalanceCents,
+    source,
+  };
+}
+
+/**
  * The effective ceiling: the smaller of what we allow and what the platform
  * allows. Null platform headroom means "no platform limit", not "zero".
  */

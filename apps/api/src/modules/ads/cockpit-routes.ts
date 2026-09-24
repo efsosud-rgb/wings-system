@@ -1,10 +1,12 @@
-import type {
-  AlertItem,
-  CampaignPerformanceItem,
-  CockpitSnapshot,
-  PacingSummary,
+import {
+  budgetCapUpdateSchema,
+  type AdAccountBudgetCapView,
+  type AlertItem,
+  type CampaignPerformanceItem,
+  type CockpitSnapshot,
+  type PacingSummary,
 } from '@wings/shared';
-import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import {
@@ -14,31 +16,61 @@ import {
   adCampaigns,
   adMetricsDaily,
   adSets,
+  budgetPeriods,
   employees,
 } from '../../db/schema/index.js';
 import { acknowledgeAlert, pacingFacts } from './alerts.js';
+import { getPeriodState, openPeriod } from './budget-guard.js';
 import { campaignPerformance } from './metrics.js';
+import { periodMonthOf } from './reconcile.js';
 
 /**
  * HTTP surface for the traffic cockpit.
  *
- * Read-only apart from acknowledging an alert. Every number here comes from
- * data already mirrored by the ingest job — the cockpit never calls an ad
- * platform itself, so opening a screen can neither spend money nor burn rate
- * limit.
+ * Read-only apart from acknowledging an alert and, for an Admin Master only,
+ * editing the internal monthly cap — the same write `openPeriod` has always
+ * done from the CLI, now reachable from a screen instead of a shell.
  */
 
 const idParamSchema = z.object({ id: z.string().uuid() });
+const accountIdParamSchema = z.object({ accountId: z.string().uuid() });
 
 const querySchema = z.object({
   /** Performance window, in days. */
   days: z.coerce.number().int().min(1).max(90).default(7),
   accountId: z.string().uuid().optional(),
+  /**
+   * The ad-account platform ('meta' | 'google') — NOT the campaign-level
+   * placement ('meta' | 'google_search' | 'youtube'). The frontend maps one
+   * to the other (`AD_ACCOUNT_PLATFORM`); this route only knows accounts.
+   */
+  platform: z.enum(['meta', 'google']).optional(),
 });
 
 function iso(value: Date | string | null): string | null {
   if (value === null) return null;
   return (value instanceof Date ? value : new Date(value)).toISOString();
+}
+
+/** One account's cap view for the admin editing screen, current month. */
+async function budgetCapViewOf(
+  db: import('../../db/client.js').Database,
+  account: { id: string; platform: 'meta' | 'google' | 'tiktok'; name: string; externalId: string; timezone: string },
+  now: Date,
+): Promise<AdAccountBudgetCapView> {
+  const periodMonth = periodMonthOf(now, account.timezone);
+  const state = await getPeriodState(db, account.id, periodMonth);
+  return {
+    accountId: account.id,
+    platform: account.platform,
+    name: account.name,
+    externalId: account.externalId,
+    periodMonth,
+    capCents: state?.capCents ?? null,
+    usableCents: state?.usableCents ?? null,
+    usablePercent:
+      state && state.capCents > 0 ? Math.round((state.usableCents / state.capCents) * 100) : null,
+  };
 }
 
 export const cockpitRoutes: FastifyPluginAsync = async (app) => {
@@ -54,15 +86,19 @@ export const cockpitRoutes: FastifyPluginAsync = async (app) => {
           .status(400)
           .send({ error: 'invalid_request', message: 'Parâmetros inválidos.' });
       }
-      const { days, accountId } = parsed.data;
+      const { days, accountId, platform } = parsed.data;
 
       // Archived accounts are history: reachable by explicit id, never the
-      // default the cockpit opens on.
+      // default the cockpit opens on. `platform` picks the account for that
+      // ad-account platform; with neither given, Meta remains the default
+      // this screen has always opened on.
       const account = accountId
         ? await db.query.adAccounts.findFirst({ where: eq(adAccounts.id, accountId) })
-        : // Meta only: a Google account has a spending limit and nothing to show.
-          await db.query.adAccounts.findFirst({
-            where: and(eq(adAccounts.platform, 'meta'), isNull(adAccounts.archivedAt)),
+        : await db.query.adAccounts.findFirst({
+            where: and(
+              eq(adAccounts.platform, platform ?? 'meta'),
+              isNull(adAccounts.archivedAt),
+            ),
             orderBy: asc(adAccounts.createdAt),
           });
 
@@ -191,8 +227,44 @@ export const cockpitRoutes: FastifyPluginAsync = async (app) => {
             elapsedDays: facts.elapsedDays,
             totalDays: facts.totalDays,
             killSwitchEngaged: account.killSwitchEngaged,
+            platformRemainingCents: facts.platformRemainingCents,
+            platformLimitSource: facts.platformLimitSource,
+            platformLimitSyncedAtIso: facts.platformLimitSyncedAtIso,
+            platformLimitNote: facts.platformLimitNote,
           }
         : null;
+
+      // The cross-platform figure: every non-archived account's currently
+      // open period this month, summed. Independent of which account is
+      // selected above — Meta and Google never share a pool, but a person
+      // still wants to see the two side by side.
+      const periodMonth = periodMonthOf(now);
+      const [wingsTotalRow] = await db
+        .select({
+          count: sql<string>`count(*)`,
+          capCents: sql<string>`coalesce(sum(${budgetPeriods.capCents}), 0)`,
+          usableCents: sql<string>`coalesce(sum(${budgetPeriods.usableCents}), 0)`,
+          committedCents: sql<string>`coalesce(sum(${budgetPeriods.committedCents}), 0)`,
+          spentCents: sql<string>`coalesce(sum(${budgetPeriods.spentCents}), 0)`,
+        })
+        .from(budgetPeriods)
+        .innerJoin(adAccounts, eq(adAccounts.id, budgetPeriods.adAccountId))
+        .where(
+          and(
+            eq(budgetPeriods.periodMonth, periodMonth),
+            isNull(budgetPeriods.closedAt),
+            isNull(adAccounts.archivedAt),
+          ),
+        );
+      const wingsTotal =
+        wingsTotalRow && Number(wingsTotalRow.count) > 0
+          ? {
+              capCents: Number(wingsTotalRow.capCents),
+              usableCents: Number(wingsTotalRow.usableCents),
+              committedCents: Number(wingsTotalRow.committedCents),
+              spentCents: Number(wingsTotalRow.spentCents),
+            }
+          : null;
 
       const alerts: AlertItem[] = alertRows.map((row) => ({
         id: row.id,
@@ -223,6 +295,7 @@ export const cockpitRoutes: FastifyPluginAsync = async (app) => {
         alerts,
         metricsFetchedAt: iso(fetched?.fetchedAt ?? null),
         sinceDate,
+        wingsTotal,
         counts: {
           ads: adRows.length,
           disapprovedAds: adRows.filter((ad) => ad.effectiveStatus === 'DISAPPROVED').length,
@@ -258,6 +331,71 @@ export const cockpitRoutes: FastifyPluginAsync = async (app) => {
         });
       }
       return reply.send({ ok: true });
+    },
+  );
+
+  /**
+   * Administração → Integrações: every non-archived Meta/Google account with
+   * this month's cap, for the admin edit form. Admin Master only — the same
+   * hand that may write the cap below.
+   */
+  app.get(
+    '/ads/accounts/budget-caps',
+    { preHandler: app.requirePermission('ads.budget_caps.manage') },
+    async (_request, reply) => {
+      const now = app.wings.now?.() ?? new Date();
+      const accounts = await db.query.adAccounts.findMany({
+        where: and(isNull(adAccounts.archivedAt), inArray(adAccounts.platform, ['meta', 'google'])),
+        orderBy: asc(adAccounts.createdAt),
+      });
+      const views = await Promise.all(
+        accounts.map((account) => budgetCapViewOf(db, account, now)),
+      );
+      return reply.send({ accounts: views });
+    },
+  );
+
+  /**
+   * Opens or edits this month's internal cap for one account — the same
+   * write `openPeriod` has always done from `ingest-cli --seed`/`verify-live`,
+   * now reachable from a screen. Never touches `reserveChange` or any
+   * enforcement path: it only records what the guardrail is judged against.
+   */
+  app.post(
+    '/ads/accounts/:accountId/budget-cap',
+    { preHandler: app.requirePermission('ads.budget_caps.manage') },
+    async (request, reply) => {
+      const params = accountIdParamSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.status(404).send({ error: 'not_found', message: 'Conta não encontrada.' });
+      }
+      const body = budgetCapUpdateSchema.safeParse(request.body);
+      if (!body.success) {
+        return reply.status(400).send({
+          error: 'invalid_request',
+          message: body.error.issues[0]?.message ?? 'Dados inválidos.',
+        });
+      }
+
+      const account = await db.query.adAccounts.findFirst({
+        where: eq(adAccounts.id, params.data.accountId),
+      });
+      if (!account) {
+        return reply.status(404).send({ error: 'not_found', message: 'Conta não encontrada.' });
+      }
+
+      const now = app.wings.now?.() ?? new Date();
+      const periodMonth = periodMonthOf(now, account.timezone);
+      await openPeriod(db, {
+        adAccountId: account.id,
+        periodMonth,
+        capCents: body.data.capCents,
+        usablePercent: body.data.usablePercent,
+        changedBy: request.session.actor.employeeId,
+        reason: body.data.reason,
+      });
+
+      return reply.send({ account: await budgetCapViewOf(db, account, now) });
     },
   );
 };
