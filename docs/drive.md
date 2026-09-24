@@ -111,31 +111,77 @@ quando está vazia (arquivo na lixeira conta como conteúdo, porque pode voltar)
 Administração → Drive: modelo de pastas (`drive.manage`). O seed grava o modelo
 uma vez; depois ele é de quem edita, e o seed não mexe mais.
 
+Desde 2026-09-24 (decisão do Eric) o cliente tem uma árvore só, no nível de
+cima, em vez de uma pasta "Clientes" dentro de cada departamento e do Dossiê:
+
 ```
-Formatação
-  Marketing   (Mídia, Clientes → <Cliente> → Mídia)
-  Jurídico, Financeiro, Produção, Processos, Logística, TI, RH-DP, Projetos
-              (cada um com Clientes → <Cliente>)
-  Clientes → <Cliente> → Reuniões, Documentos, Contrato, Propostas, Mídia   (o Dossiê)
-Comercial     (Propostas Comerciais, Clientes → <Cliente>)
-RH-DP         (Documentos, Contratos, Clientes → <Cliente>)
+Formatação   (Marketing → Mídia, Jurídico, Financeiro, Produção, Processos,
+              Logística, TI, RH-DP, Projetos)
+Comercial    (Propostas Comerciais)
+RH-DP        (Documentos, Contratos)
+Clientes
+  <NN. Nome do Cliente>
+    01 Boas Vindas · 02 Imersão · 03 Desenvolvimento Estratégico
+    04 Financeiro · 05 Operacional · 06 Jurídico · 07 Comercial
+    08 Marketing → Mídia          (a biblioteca de mídia do cliente)
+    Documentos Enviados           (tudo o que o cliente manda; o Portal envia para cá)
+    Reuniões                      (gravações, resumo e insights, uma subpasta por data)
+    Entrega → 01 … 08             (só material final; é o que o Portal mostra)
 ```
 
-Um nó do tipo "pasta de clientes" vira uma pasta `Clientes` com uma pasta por
-cliente ativo, e o que estiver abaixo dele no modelo é criado dentro de cada
-cliente. A Wings Company não ganha pasta de cliente.
+**Número.** `NN` é `clients.number`: o próximo ao cadastrar (sob lock), editável
+em Administração → Clientes, nunca repetido (409 `number_taken`). Dois
+dígitos até 99. A Wings Company não tem número nem pasta de cliente. Renomear
+ou renumerar o cliente renomeia a pasta e o `path` de tudo dentro.
+
+**Função da pasta (`slot`).** Cada nó da árvore do cliente tem uma função
+(`01`…`08`, `midia`, `enviados`, `reunioes`, `entrega`, `entrega_01`…`08`,
+em `DRIVE_FOLDER_SLOTS`) copiada para as pastas feitas dele. O Portal do
+Cliente e a importação do Google Drive (parte 2) acham as pastas pela função,
+nunca pelo nome, então renomear "04 Financeiro" no modelo não quebra nada. Um
+nó com função pode ser renomeado, mas não excluído do modelo (409
+`folder_has_role`).
 
 `syncDriveFolders` aplica o modelo. Só cria e renomeia, nunca apaga, e pode
 rodar quantas vezes for preciso. Ele roda:
 
 - no seed, a cada subida da API;
-- ao cadastrar, renomear ou reativar um cliente (na rota de clientes, e não por
-  gatilho no banco, para a operação ficar na auditoria com quem a fez);
+- ao cadastrar, renomear, renumerar ou reativar um cliente (na rota de
+  clientes, e não por gatilho no banco, para a operação ficar na auditoria
+  com quem a fez);
 - no botão "Sincronizar pastas".
 
-Renomear o cliente renomeia as pastas dele em todos os departamentos, e o
-`path` do que houver dentro. Cliente desativado mantém as pastas e não ganha
-novas. Tirar um nó do modelo deixa a pasta onde está, como pasta comum.
+Cliente desativado mantém as pastas e não ganha novas. Tirar um nó (sem
+função) do modelo deixa a pasta onde está, como pasta comum.
+
+### Migração do layout antigo
+
+```bash
+pnpm --filter @wings/api drive:migrate-client-folders            # simula
+pnpm --filter @wings/api drive:migrate-client-folders --apply    # aplica
+node dist/scripts/migrate-client-folders.js [--apply]            # no contêiner da API
+```
+
+Sem `--apply`, roda tudo numa transação desfeita no fim e imprime o que faria.
+Com `--apply`, numa transação só: tira do modelo os "Clientes" dos
+departamentos e o Dossiê, põe o nó `Clientes` novo, cria a árvore de cada
+cliente ativo e move cada arquivo das pastas de cliente antigas para a pasta
+correspondente. Só o `folder_id` muda: os bytes ficam onde estão, e cada
+movimento vai para a auditoria (`drive.file_migrated`, por id). Subpastas
+feitas à mão vêm junto. Nome repetido no destino ganha " (migrado)". As
+pastas antigas ficam, vazias, como pastas comuns: nada é apagado. Arquivo de
+cliente inativo (sem árvore nova) fica onde está e é listado. Rodar de novo
+não faz nada.
+
+| De (pasta de cliente antiga)                        | Para                        |
+| --------------------------------------------------- | --------------------------- |
+| Formatação/Marketing/Clientes/X (e `Mídia`)         | 08 Marketing (e `Mídia`)    |
+| Formatação/Jurídico/Clientes/X                      | 06 Jurídico                 |
+| Formatação/Financeiro/Clientes/X                    | 04 Financeiro               |
+| Formatação/Processos ou Projetos/Clientes/X         | 05 Operacional              |
+| Formatação/Produção, Logística, TI, RH-DP e RH-DP/Clientes/X | 05 Operacional/<Área> |
+| Comercial/Clientes/X                                | 07 Comercial                |
+| Dossiê: Reuniões · Documentos · Contrato · Propostas · Mídia | Reuniões · Documentos Enviados · 06 · 07 · 08/Mídia |
 
 ## Permissões
 
@@ -143,36 +189,44 @@ novas. Tirar um nó do modelo deixa a pasta onde está, como pasta comum.
 três com escopo `all` e veem tudo. Não existe um perfil "CEO" no sistema: quem
 ocupa esse papel usa Diretoria ou Admin Master.
 
-Os demais perfis têm leitura e escrita com escopo `sector`, que aqui quer dizer
-"os departamentos do perfil" (`DRIVE_ROLE_DEPARTMENTS`, em `packages/shared`):
+Os demais perfis têm escopo `sector`, que aqui quer dizer "os departamentos do
+perfil". Desde 2026-09-24 leitura e escrita são separadas (`access.ts`):
 
-| Perfil                                        | Vê                                         |
-| --------------------------------------------- | ------------------------------------------ |
-| Marketing                                     | Formatação/Marketing                       |
-| Formatação — Jurídico                         | Formatação/Jurídico                        |
-| Formatação — Financeiro e Contábil/Tributário | Formatação/Financeiro                      |
-| Formatação — Processos e Projetos             | Formatação/Processos e Formatação/Projetos |
-| Formatação — Logística                        | Formatação/Logística                       |
-| Formatação — TI                               | Formatação/TI                              |
-| RH / DP                                       | RH-DP e Formatação/RH-DP                   |
-| Gerente Comercial e vendedores                | Comercial                                  |
+- `DRIVE_ROLE_DEPARTMENTS`: onde o perfil lê e escreve;
+- `DRIVE_ROLE_READ_ONLY_DEPARTMENTS`: onde só lê (a pasta aparece, lista e abre,
+  mas envio, renomear, mover e lixeira respondem 403);
+- `DRIVE_CLIENT_VIEW_ROLES`: quem lê o cliente inteiro, qualquer que seja o
+  departamento de cada pasta; escreve só nos próprios departamentos.
 
-Formatação/Produção e o Dossiê (Formatação/Clientes) não pertencem a nenhum
-perfil de departamento: só Diretoria e Admin Master veem.
+| Perfil                                        | Lê e escreve                                        | Só lê                                |
+| --------------------------------------------- | --------------------------------------------------- | ------------------------------------ |
+| Marketing                                     | Formatação/Marketing; 08 e Entrega/08 do cliente    | 01–03 do cliente                     |
+| Formatação — Jurídico                         | Formatação/Jurídico; 06 e Entrega/06                | 01–03                                |
+| Formatação — Financeiro e Contábil/Tributário | Formatação/Financeiro; 04 e Entrega/04              | 01–03                                |
+| Formatação — Processos e Projetos             | Formatação/Processos e Projetos; 01–03, 05, a pasta do cliente, Documentos Enviados, Reuniões, Entrega (01–03 e 05) | o cliente inteiro |
+| Formatação — Logística, TI; RH / DP           | Formatação/Logística, TI; RH-DP e Formatação/RH-DP  | 01–03                                |
+| Gerente Comercial e vendedores                | Comercial; 07 e Entrega/07                          | —                                    |
 
-A pasta acima da sua (por exemplo "Formatação" para o Marketing) aparece na
-árvore só para dar passagem. Ela vem marcada `accessible: false`, não lista
-arquivos e responde 404 se alguém pedir por id. Pasta e arquivo de outro
-departamento respondem 404 em tudo: listagem, busca, lixeira, link, mover para
-dentro. Os testes cobrem cada perfil.
+01–03 são de um departamento próprio, `imersao`, que Processos e Projetos
+escreve e toda a Formatação lê: é o contexto base da Imersão para os
+consultores e os agentes. A raiz `Clientes`, a pasta de cada cliente,
+Documentos Enviados, Reuniões e Entrega são do departamento `clientes`.
+Formatação/Produção não pertence a nenhum perfil de departamento: só Diretoria
+e Admin Master veem.
+
+A pasta acima da sua (por exemplo "Formatação" para o Marketing, ou "Clientes"
+e "07. Nome" para o Comercial) aparece na árvore só para dar passagem. Ela vem
+marcada `accessible: false`, não lista arquivos e responde 404 se alguém pedir
+por id. Pasta e arquivo de outro departamento respondem 404 em tudo: listagem,
+busca, lixeira, link, mover para dentro. Os testes cobrem cada perfil, pasta
+por pasta dentro do cliente.
 
 ## Biblioteca de mídia dentro do Drive
 
 A biblioteca de Marketing → Edição passa a ser uma visão das pastas `Mídia`:
 Formatação/Marketing/Mídia para a Wings Company e
-Formatação/Marketing/Clientes/<Cliente>/Mídia quando o "Para quem" é um
-cliente. Escolhi a pasta do cliente dentro de Marketing, e não a `Mídia` do
-Dossiê, porque o perfil de Marketing não enxerga o Dossiê.
+Clientes/<NN. Nome>/08 Marketing/Mídia quando o "Para quem" é um cliente
+(achada pela função `midia`, não pelo nome).
 
 - `media_assets.drive_file_id` aponta para o `drive_files`. Upload e geração do
   Kairogen gravam no storage do Drive.

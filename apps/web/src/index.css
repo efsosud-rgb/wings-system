@@ -2762,6 +2762,10 @@ textarea.control {
   outline-offset: 2px;
 }
 
+.clients-number {
+  width: 88px;
+}
+
 .clients-rename,
 .clients-actions {
   display: flex;

@@ -51,6 +51,7 @@ const folder = (id: string, path: string, extra: Partial<DriveFolder> = {}): Dri
   accessible: true,
   canWrite: true,
   managed: true,
+  slot: null,
   ...extra,
 });
 // Marketing's view: "Formatação" is only the way down to its own tree.
@@ -62,6 +63,7 @@ const FOLDERS: DriveFolder[] = [
     parentId: 'f-mkt',
     origin: 'manual',
     managed: false,
+    slot: null,
   }),
 ];
 const fileOf = (extra: Partial<DriveFile> = {}): DriveFile => ({

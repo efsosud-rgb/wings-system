@@ -38,6 +38,8 @@ export interface ClientFolderMigrationReport {
   foldersCreated: number;
   foldersRenamed: number;
   oldClientFolders: number;
+  /** Every folder the old nodes made, which stays as an ordinary folder; `empty` once the files moved. */
+  oldFolders: { path: string; empty: boolean }[];
   clients: { id: string; number: number | null; folder: string | null; active: boolean }[];
   moves: { fileId: string; from: string; to: string; renamed: boolean; trashed: boolean }[];
   left: { fileId: string; from: string; reason: string }[];
@@ -108,6 +110,7 @@ async function migrate(tx: Tx): Promise<ClientFolderMigrationReport> {
     foldersCreated: 0,
     foldersRenamed: 0,
     oldClientFolders: 0,
+    oldFolders: [],
     clients: [],
     moves: [],
     left: [],
@@ -312,5 +315,23 @@ async function migrate(tx: Tx): Promise<ClientFolderMigrationReport> {
   const again = await syncDriveFolders(tx);
   report.foldersCreated += again.foldersCreated;
   report.foldersRenamed += again.foldersRenamed;
+
+  // What the old model leaves behind, for the person to see (and clear, if they want).
+  const oldFolderIds = folders
+    .filter((folder) => folder.templateNodeId !== null && oldNodeIds.has(folder.templateNodeId))
+    .map((folder) => folder.id);
+  if (oldFolderIds.length > 0) {
+    const occupied = await tx.execute<{ id: string }>(sql`
+      select f.id from drive_folders f
+       where f.id in (${sql.join(oldFolderIds.map((id) => sql`${id}`), sql`, `)})
+         and exists (
+           select 1 from drive_files x join drive_folders d on d.id = x.folder_id
+            where d.id = f.id or starts_with(d.path, f.path || '/'))`);
+    const busy = new Set(occupied.rows.map((row) => row.id));
+    report.oldFolders = oldFolderIds
+      .map((id) => byId.get(id) as FolderRow)
+      .map((folder) => ({ path: folder.path, empty: !busy.has(folder.id) }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+  }
   return report;
 }

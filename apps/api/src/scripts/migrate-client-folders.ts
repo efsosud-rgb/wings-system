@@ -21,7 +21,7 @@ export function formatReport(report: ClientFolderMigrationReport): string {
   const lines = [
     report.applied ? 'APLICADO' : 'SIMULAÇÃO (nada foi gravado; rode com --apply para valer)',
     `modelo: ${report.templateChanged ? `${report.nodesRemoved} nós saem, ${report.nodesAdded} entram` : 'já estava no formato novo'}`,
-    `pastas: ${report.foldersCreated} criadas, ${report.foldersRenamed} renomeadas; ${report.oldClientFolders} pastas de cliente antigas viram pastas comuns (nada é apagado)`,
+    `pastas: ${report.foldersCreated} criadas, ${report.foldersRenamed} renomeadas; ${report.oldClientFolders} pastas de cliente antigas (nada é apagado)`,
     `clientes: ${report.clients.length}`,
     ...report.clients.map(
       (client) =>
@@ -34,6 +34,8 @@ export function formatReport(report: ClientFolderMigrationReport): string {
     ),
     `arquivos que ficam onde estão: ${report.left.length}`,
     ...report.left.map((item) => `  ${item.fileId}: ${item.from} (${item.reason})`),
+    `pastas do layout antigo que ficam, como pastas comuns: ${report.oldFolders.length} (${report.oldFolders.filter((folder) => folder.empty).length} vazias)`,
+    ...report.oldFolders.map((folder) => `  ${folder.path}${folder.empty ? ' (vazia)' : ' (ainda com arquivos)'}`),
     ...report.accessNotes.map((note) => `atenção: ${note}`),
   ];
   return lines.join('\n');
