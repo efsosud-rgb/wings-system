@@ -1,5 +1,5 @@
 import { tmpdir } from 'node:os';
-import { runFfmpeg, runFfprobe, runWhisper } from './lib/commands.js';
+import { runCaptionLayout, runFfmpeg, runFfprobe, runWhisper } from './lib/commands.js';
 import { createBraveSearch, createBrasilApi, createZapiProfileClient } from './lib/enrichment.js';
 import { createS3Storage } from './lib/storage.js';
 import { concurrencyOf, threadsPerJob } from './concurrency.js';
@@ -50,6 +50,7 @@ async function main() {
       threadsPerJob: threads,
       runFfprobe,
       runWhisper,
+      runCaptionLayout,
       runFfmpeg,
       renderLimits: {
         maxSeconds: env.RENDER_MAX_SECONDS,

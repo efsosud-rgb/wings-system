@@ -73,6 +73,7 @@ export const STALE_AFTER_MS: Record<JobType, number> = {
   transcribe: 5 * 60_000,
   render: 5 * 60_000,
   enrich_lead: 5 * 60_000,
+  caption_layout: 5 * 60_000,
 };
 
 /** Keeps the claim alive. False when the job is no longer this claim's. */

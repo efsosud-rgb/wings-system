@@ -1,4 +1,5 @@
 import type { JobType } from '@wings/shared';
+import { runCaptionLayoutJob } from './caption-layout.js';
 import { runEnrichLeadJob } from './enrich-lead.js';
 import { runFfprobeJob } from './ffprobe.js';
 import { runRenderJob } from './render/index.js';
@@ -10,11 +11,13 @@ export const JOB_HANDLERS: Record<JobType, JobHandler> = {
   transcribe: runTranscribeJob,
   render: runRenderJob,
   enrich_lead: runEnrichLeadJob,
+  caption_layout: runCaptionLayoutJob,
 };
 
 export type { JobContext, JobHandler } from './types.js';
 export { siblingTranscriptKey, type TranscribeOutput } from './transcribe.js';
 export type { FfprobeOutput } from './ffprobe.js';
+export { chooseZones, type CaptionLayoutOutput } from './caption-layout.js';
 export type { EnrichLeadOutput } from './enrich-lead.js';
 export { RenderError, type RenderJobInput, type RenderJobOutput } from './render/contract.js';
 export { recoverDeliveredRender, type RecoveredRenderOutput } from './render/index.js';

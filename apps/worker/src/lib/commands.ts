@@ -50,3 +50,25 @@ export async function runWhisper(
   });
   return stdout;
 }
+
+const CAPTION_LAYOUT_SCRIPT = resolve(import.meta.dirname, '../../scripts/caption_layout.py');
+
+/** YuNet + PP-OCRv3 detection through OpenCV, CPU: per cue, how busy each caption band is, as JSON on stdout.
+ * On failure, rejects with the exit status only: the script's stderr may carry a temp path. */
+export async function runCaptionLayout(
+  filePath: string,
+  cuesPath: string,
+  options: { threads: number },
+): Promise<string> {
+  try {
+    const { stdout } = await run('python3', [CAPTION_LAYOUT_SCRIPT, filePath, cuesPath, '--threads', String(options.threads)], {
+      maxBuffer: MAX_BUFFER_BYTES,
+      // A few frames per cue: minutes even on a long video.
+      timeout: 30 * 60_000,
+    });
+    return stdout;
+  } catch (error) {
+    const code = (error as { code?: number | string }).code;
+    throw new Error(`caption layout exited with status ${typeof code === 'number' ? code : 'unknown'}`, { cause: error });
+  }
+}

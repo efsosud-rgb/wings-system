@@ -11,6 +11,8 @@ export interface JobContext {
   threads: number;
   runFfprobe: (filePath: string) => Promise<string>;
   runWhisper: (filePath: string, options: { threads: number; language?: string }) => Promise<string>;
+  /** `scripts/caption_layout.py`: per cue, [top, middle, bottom] costs, as JSON on stdout. */
+  runCaptionLayout: (filePath: string, cuesPath: string, options: { threads: number }) => Promise<string>;
   /** Resolves on exit 0; rejects with a message of exactly
    * `ffmpeg exited with status <code>` otherwise — never ffmpeg's stderr,
    * which can carry a temp file path. */

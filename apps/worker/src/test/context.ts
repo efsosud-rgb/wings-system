@@ -16,6 +16,9 @@ export function baseContext(overrides: Partial<JobContext> = {}): JobContext {
     runWhisper: async () => {
       throw new Error('runWhisper was not stubbed for this test');
     },
+    runCaptionLayout: async () => {
+      throw new Error('runCaptionLayout was not stubbed for this test');
+    },
     runFfmpeg: async () => {
       throw new Error('runFfmpeg was not stubbed for this test');
     },
