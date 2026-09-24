@@ -4,13 +4,16 @@ import {
   MAX_VIDEOS_PER_GENERATION,
   MEDIA_IMAGE_USES,
   MEDIA_IMAGE_USE_LABEL,
-  MEDIA_PROVIDERS,
   MEDIA_PROVIDER_LABEL,
   MEDIA_REFUSAL_MESSAGE,
   MEDIA_UPLOAD_TYPES,
   PROMPT_MAX,
+  KAIROGEN_PLAN_LABEL,
+  MEDIA_TIER_LABEL,
   WINGS_CLIENT_ID,
+  cheapestFirst,
   formatBrl,
+  isFreeBilling,
   mediaEstimateRequestSchema,
   modelsForImageUse,
   promptRoomWith,
@@ -19,17 +22,19 @@ import {
   type GenerationAspect,
   type MediaAlternative,
   type MediaAsset,
+  type MediaBilling,
   type MediaEstimate,
   type MediaImageUse,
   type MediaModel,
   type MediaProviderId,
   type MediaProviderStatus,
 } from '@wings/shared';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError } from '../../api/client.js';
 import {
   BUILDER_DRAFT_KEY,
   useEstimate,
+  useMediaAssets,
   useMediaModels,
   useMediaProviders,
   useStartGeneration,
@@ -61,6 +66,15 @@ function costLabel(model: MediaModel): string {
   // The catalog does not always give a price; the estimate always does.
   return 'custo na estimativa';
 }
+
+/** How each provider charges, until its status arrives from the server. */
+const DEFAULT_BILLING: Record<MediaProviderId, MediaBilling> = {
+  kairogen: 'credits',
+  cloudflare: 'free_quota',
+  gemini: 'per_use',
+  higgsfield: 'per_use',
+  mpt: 'own_service',
+};
 
 /** The price on the button: credits on Kairogen, reais everywhere else. */
 const priceOf = (quote: { credits: number; brlCents: number; providerId: MediaProviderId }) =>
@@ -97,6 +111,8 @@ function defaultsOf(model: MediaModel | undefined): Record<string, ParamValue> {
 /** A picture on the canvas the person wants a variation or an edit of. */
 export interface AiTarget {
   mediaAssetId: string;
+  /** The picture's client, when the caller knows it: the edit is filed under the same one. */
+  clientId?: string | null;
   use: MediaImageUse;
   name: string;
   /** Changes on every click, so asking twice for the same picture is applied twice. */
@@ -130,19 +146,27 @@ export function GenerationForm({
   const providers = useMediaProviders(connected);
   const list = useMemo(() => models.data?.models ?? [], [models.data]);
   const [modelKey, setModelKey] = useState('');
-  const model = list.find((item) => item.key === modelKey) ?? list[0];
-  /** The selector, grouped by provider in failover order, each group saying what it holds. */
+  const statusOf = (id: MediaProviderId) =>
+    providers.data?.providers.find((item) => item.id === id);
+  const billingOf = (id: MediaProviderId): MediaBilling =>
+    statusOf(id)?.billing ?? DEFAULT_BILLING[id];
+  /** Every model, cheapest first: the agent's order (free, credits already paid, per use). */
+  const sorted = useMemo(() => cheapestFirst(list, billingOf), [list, providers.data]);
+  /** Can be picked and served now: open on the Kairogen plan, provider available. */
+  const usable = (item: MediaModel) =>
+    !item.planRequired && statusOf(item.providerId)?.available !== false;
+  /** The selector: one group per provider, the groups in price-tier order, each saying its tier. */
   const groups = useMemo(
     () =>
-      MEDIA_PROVIDERS.map((id) => ({
+      [...new Set(sorted.map((item) => item.providerId))].map((id) => ({
         id,
-        status: providers.data?.providers.find((item) => item.id === id),
-        models: list.filter((item) => item.providerId === id),
-      })).filter((group) => group.models.length > 0),
-    [list, providers.data],
+        status: statusOf(id),
+        models: sorted.filter((item) => item.providerId === id),
+      })),
+    [sorted, providers.data],
   );
   const groupLabel = (id: MediaProviderId, status: MediaProviderStatus | undefined) => {
-    const name = MEDIA_PROVIDER_LABEL[id];
+    const name = `${MEDIA_TIER_LABEL[billingOf(id)]} · ${MEDIA_PROVIDER_LABEL[id]}`;
     if (!status) return name;
     if (!status.available) return `${name} · ${status.reason ?? 'indisponível'}`;
     const holding = providerHolding(status);
@@ -165,8 +189,23 @@ export function GenerationForm({
     'id' | 'kind' | 'downloadPath'
   > | null>(null);
   const [referenceUse, setReferenceUse] = useState<MediaImageUse>('reference');
+  /** What a model must do with the picture on screen, if there is one. */
+  const fits = (item: MediaModel) =>
+    kind !== 'image' || reference === null || item.imageUse === referenceUse;
+  /** Until the person picks one: the cheapest that can serve, as the agent would route it. */
+  const cheapest = sorted.find((item) => usable(item) && fits(item)) ?? sorted.find(usable);
+  const model = list.find((item) => item.key === modelKey) ?? cheapest ?? sorted[0];
+  /** A free model that would do the same, when the one on screen costs something. */
+  const freeOption =
+    model && !isFreeBilling(billingOf(model.providerId))
+      ? sorted.find(
+          (item) => usable(item) && fits(item) && isFreeBilling(billingOf(item.providerId)),
+        )
+      : undefined;
   const [picking, setPicking] = useState(false);
   const upload = useUploadMedia();
+  // The library, already loaded beside the form: where a canvas picture's client comes from.
+  const library = useMediaAssets({}, aiTarget !== null);
 
   const estimate = useEstimate();
   const start = useStartGeneration();
@@ -235,6 +274,19 @@ export function GenerationForm({
     changed();
     // Keyed on the click, not on the fields it sets.
   }, [aiTarget?.nonce]);
+
+  // An edit or a variation of a library picture belongs to that picture's client: set once
+  // per click, as soon as it is known, and the person may still change it after.
+  const inheritedFor = useRef<number | null>(null);
+  useEffect(() => {
+    if (!aiTarget || inheritedFor.current === aiTarget.nonce) return;
+    const owner =
+      aiTarget.clientId ??
+      library.data?.assets.find((item) => item.id === aiTarget.mediaAssetId)?.clientId;
+    if (!owner) return;
+    inheritedFor.current = aiTarget.nonce;
+    setClientId(owner);
+  }, [aiTarget?.nonce, library.data]);
 
   function askForEstimate() {
     const parsed = mediaEstimateRequestSchema.safeParse({
@@ -355,8 +407,11 @@ export function GenerationForm({
               {groups.map((group) => (
                 <optgroup key={group.id} label={groupLabel(group.id, group.status)}>
                   {group.models.map((item) => (
-                    <option key={item.key} value={item.key}>
-                      {item.name} · {costLabel(item)}
+                    <option key={item.key} value={item.key} disabled={Boolean(item.planRequired)}>
+                      {item.name} ·{' '}
+                      {item.planRequired
+                        ? `exige plano ${KAIROGEN_PLAN_LABEL[item.planRequired]}`
+                        : costLabel(item)}
                     </option>
                   ))}
                 </optgroup>
@@ -364,6 +419,23 @@ export function GenerationForm({
             </select>
           </label>
         </div>
+        {freeOption && (
+          <div className="alert alert-warning" role="status">
+            {model?.name} é {MEDIA_TIER_LABEL[billingOf(model!.providerId)].toLowerCase()}, e há
+            opção grátis para isto: {freeOption.name} ({MEDIA_PROVIDER_LABEL[freeOption.providerId]}
+            ).{' '}
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => {
+                setModelKey(freeOption.key);
+                changed();
+              }}
+            >
+              Usar {freeOption.name}
+            </Button>
+          </div>
+        )}
         {models.data?.problems && Object.keys(models.data.problems).length > 0 && (
           <span className="field-hint" role="status">
             {Object.entries(models.data.problems)
@@ -734,6 +806,8 @@ export function GenerationForm({
           onClose={() => setPicking(false)}
           onPick={(asset) => {
             setReference(asset);
+            // A library picture is edited for the client it already belongs to.
+            if (asset.clientId) setClientId(asset.clientId);
             setPicking(false);
             changed();
           }}

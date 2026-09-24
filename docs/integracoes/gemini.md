@@ -1,10 +1,26 @@
 # Gemini API (imagem) — provedor de mídia
 
-Geração e edição de imagem pelo `gemini-2.5-flash-image`, na camada grátis da
-API do Google. Cobrança `free_quota`: **R$ 0 por saída**, com cota **local**
-por dia (`GEMINI_DAILY_IMAGES`, padrão 50) e por minuto
-(`GEMINI_IMAGES_PER_MINUTE`, padrão 5), contadas no ledger, mais baixas que
-as do Google para recusar antes dele.
+Geração e edição de imagem pelo `gemini-2.5-flash-image`, **pago por uso**.
+
+A tabela oficial do Google (ai.google.dev/gemini-api/docs/pricing, lida em
+2026-09-24, "last updated 2026-09-24") diz **"Not available"** na camada
+grátis para a saída de imagem de todos os modelos de imagem. O
+`gemini-2.5-flash-image` custa **US$ 0,039 por imagem** na camada paga. No
+staging, a 1ª chamada do dia foi recusada com 429 "You exceeded your current
+quota". A camada grátis continua valendo para modelos de texto, que este
+provedor não usa.
+
+Por isso a cobrança é `per_use`: o preço no botão é `GEMINI_USD_PER_IMAGE`
+(padrão 0,039) × `BRL_PER_USD`, conta no teto único `MEDIA_MONTHLY_BRL`, e o
+roteamento só chega a ele por um clique (é o mais caro das imagens depois do
+Kairogen). **Fica desativado** enquanto `GEMINI_BILLING_ENABLED` não for
+`true`: o cartão de Integrações mostra "Pago por uso" e o motivo. Os limites
+locais por dia (`GEMINI_DAILY_IMAGES`, padrão 50) e por minuto
+(`GEMINI_IMAGES_PER_MINUTE`, padrão 5) continuam como freio nosso.
+
+Se o Google recusar por cota (429), a geração fica `refused`, nada é
+reenviado, e o texto nomeia a próxima opção mais barata que atende agora
+(Cloudflare grátis ou créditos do Kairogen): estimar com ela é um clique.
 
 Adaptador: `apps/api/src/modules/media/providers/gemini.ts`. Modelo no
 catálogo: `gemini/gemini-2.5-flash-image`, "Gemini 2.5 Flash Image", imagem,
@@ -12,16 +28,11 @@ formatos 1:1, 4:5, 9:16 e 16:9, até 4 saídas (uma chamada por saída),
 **edita** uma imagem da biblioteca (`uso_de_imagem: edit`): a imagem vai
 inline, em base64, no mesmo pedido — nenhum link assinado é emitido.
 
-## O que o Eric precisa criar
+## O que o Eric precisa fazer para ligar
 
-1. Uma chave em **Google AI Studio** (aistudio.google.com → Get API key), num
-   projeto **sem billing** se a intenção é ficar na camada grátis →
-   `GEMINI_API_KEY`.
-2. Se o projeto tiver billing ligado, cada imagem é cobrada pelo Google no
-   preço publicado (cerca de US$ 0,04 em 2026) e **este sistema continuará
-   mostrando R$ 0**, porque trata a chave como grátis. Nesse caso, ou use um
-   projeto sem billing, ou peça para tratar o Gemini como pago por uso (é uma
-   linha de configuração no adaptador).
+1. Ligar o faturamento no projeto do Google da chave `GEMINI_API_KEY`.
+2. Pôr `GEMINI_BILLING_ENABLED=true` no Coolify (e, se o preço mudar,
+   `GEMINI_USD_PER_IMAGE`).
 
 ## Como o adaptador fala (não verificado)
 

@@ -160,6 +160,13 @@ const schema = z.object({
   GEMINI_API_KEY: optionalString,
   GEMINI_DAILY_IMAGES: numberOr(50, { integer: true }),
   GEMINI_IMAGES_PER_MINUTE: numberOr(5, { integer: true }),
+  /** Gemini images have no free tier: off until the Google project has billing. */
+  GEMINI_BILLING_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  /** Google's published price for gemini-2.5-flash-image (2026-09-24). */
+  GEMINI_USD_PER_IMAGE: numberOr(0.039),
   /**
    * Higgsfield: pay-per-use in US dollars, converted by BRL_PER_USD. The
    * prices are what an output is EXPECTED to cost; the provider's real charge

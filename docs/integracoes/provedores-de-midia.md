@@ -131,6 +131,17 @@ R$ 300,00 em mídia seria ultrapassado: R$ 299,80 já contados este mês e esta
 geração custa R$ 0,28". Uma geração de R$ 0 passa com o teto batido: o teto é
 sobre dinheiro.
 
+## Ordem única e modelo padrão
+
+`cheapestFirst()` (`packages/shared`) ordena os modelos para o agente
+(`listar_modelos`) e para o formulário "Gerar com IA": **Grátis** (cota grátis
+ou serviço próprio) → **Créditos já pagos** (Kairogen) → **Pago por uso**
+(Gemini, Higgsfield), e dentro de cada faixa o mais barato. O formulário abre
+no primeiro modelo que pode atender agora (provedor disponível, plano do
+Kairogen liberado e, com imagem escolhida, que faça com ela o que foi pedido).
+Os grupos do seletor dizem a faixa ("Grátis · Cloudflare Workers AI"). Escolher
+um modelo pago quando há um grátis que atende mostra um aviso com "Usar <grátis>".
+
 ## Tela
 
 - **Seletor de modelo** agrupado por provedor, na ordem do failover. O grupo

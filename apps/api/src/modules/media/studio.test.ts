@@ -129,6 +129,15 @@ async function connect(options: Parameters<typeof fakeKairogen>[0] = {}) {
   });
 }
 
+/** The contracted plan, as Integrações would set it. Videos and Topaz need Pro. */
+async function onPlan(plan: 'free' | 'essential' | 'pro') {
+  await db
+    .update(integrationConnections)
+    .set({ plan })
+    .where(eq(integrationConnections.provider, 'kairogen'));
+  clearModelCache();
+}
+
 beforeEach(async () => {
   script = [];
   seen = [];
@@ -484,7 +493,8 @@ describe('estimate, then click, then follow', () => {
     expect(sentToKairogen()).not.toContain(clientId);
     expect(sentToKairogen()).not.toMatch(/client/i);
 
-    // An upscale of that picture is the same client's, with nobody saying so again.
+    // An upscale of that picture is the same client's, with nobody saying so again. (Topaz: Pro.)
+    await onPlan('pro');
     const bigger = await estimate(cookies, { operation: 'upscale', assetId: asset?.id, scale: 2 });
     expect(bigger.statusCode).toBe(201);
     const [upscale] = await db
@@ -584,6 +594,70 @@ describe('estimate, then click, then follow', () => {
     expect(spending()).toHaveLength(1);
   });
 
+  it('knows what the contracted plan opens: a closed model is named with its plan and never asked about', async () => {
+    const { cookies } = await sessionFor('marketing');
+    // Free: videos need a paid plan (Kairogen's table); Topaz needs Pro.
+    const models = (await app.inject({ url: '/media/models', cookies })).json<{
+      models: MediaModel[];
+    }>().models;
+    const planOf = (key: string) => models.find((item) => item.key === key)?.planRequired;
+    expect(planOf('seedance-v2-0-image-to-video')).toBe('pro');
+    expect(planOf('topaz-upscale')).toBe('pro');
+    expect(planOf('gpt-image-2')).toBeNull();
+
+    const before = fake.state.toolCalls.filter((item) => item.name === 'estimate_cost').length;
+    const closed = await estimate(cookies, {
+      operation: 'generate',
+      kind: 'video',
+      model: 'seedance-v2-0-image-to-video',
+      prompt: 'A storefront at dusk, slow push in',
+      aspect: '9:16',
+      quantity: 1,
+      durationSeconds: 5,
+      params: {},
+    });
+    expect(closed.statusCode).toBe(409);
+    expect(closed.json()).toMatchObject({
+      error: 'plan_required',
+      message: expect.stringContaining('exige o plano Pro do Kairogen'),
+    });
+    // Refused before Kairogen was asked anything.
+    expect(fake.state.toolCalls.filter((item) => item.name === 'estimate_cost').length).toBe(
+      before,
+    );
+
+    await onPlan('pro');
+    const open = (await app.inject({ url: '/media/models', cookies })).json<{
+      models: MediaModel[];
+    }>().models;
+    expect(
+      open.find((item) => item.key === 'seedance-v2-0-image-to-video')?.planRequired,
+    ).toBeNull();
+  });
+
+  it('says which plan opens a model when Kairogen refuses on the plan, and learns it', async () => {
+    const { cookies } = await sessionFor('marketing');
+    fake.state.toolErrorScript.push({
+      tool: 'generate_image',
+      text: 'Kairogen API error (403): {"error":"PLAN_UPGRADE_REQUIRED","plan_key":"free","model":"seedream-v4","message":"The image model \'seedream-v4\' is not available on the Free plan."}',
+    });
+    const quote = (await estimate(cookies, image())).json<{ estimate: MediaEstimate }>().estimate;
+    const refused = (await generate(cookies, { estimateId: quote.id })).json<{
+      generation: MediaGeneration;
+    }>().generation;
+    expect(refused.status).toBe('refused');
+    expect(refused.detail).toContain(
+      'O modelo seedream-v4 não está no plano Free do Kairogen: ele exige o plano Essential ou superior',
+    );
+    expect(refused.detail).toContain('Nada foi gerado nem cobrado');
+    expect(spending()).toHaveLength(1);
+    // Kairogen's word beats the table: the catalog now shows it closed on Free.
+    const models = (await app.inject({ url: '/media/models', cookies })).json<{
+      models: MediaModel[];
+    }>().models;
+    expect(models.find((item) => item.key === 'seedream-v4')?.planRequired).toBe('essential');
+  });
+
   it('shows the plan’s refusal of more than one output, and does not redo it with one', async () => {
     await connect({ singleOutputOnly: true });
     const { cookies } = await sessionFor('marketing');
@@ -667,6 +741,7 @@ describe('estimate, then click, then follow', () => {
 
 describe('limits that come before the click', () => {
   it('refuses what Kairogen’s own schema refuses: quantity, durations, parameters, shapes', async () => {
+    await onPlan('pro');
     const { cookies } = await sessionFor('marketing');
     const refused = async (payload: Record<string, unknown>) =>
       (await estimate(cookies, payload)).json<{ message: string }>();
@@ -1002,6 +1077,8 @@ describe('handing Kairogen a picture of ours', () => {
     const done = await follow(cookies, started.id, 2);
     const assetId = done?.assetIds[0] ?? '';
 
+    // Videos and Topaz need the Pro plan.
+    await onPlan('pro');
     const animate = (
       await estimate(cookies, { operation: 'animate', assetId, durationSeconds: 5 })
     ).json<{
@@ -1387,6 +1464,7 @@ describe('the editing agent', () => {
       'drone_ascending: Drone subindo, "drone shot, ascending"',
     );
     expect(MEDIA_AGENT_SYSTEM_PROMPT).toContain('Objetivos: fachada');
+    await onPlan('pro');
     const { cookies } = await sessionFor('marketing');
     const video = proposal({
       kind: 'video',
@@ -1473,6 +1551,44 @@ describe('the editing agent', () => {
       cookies,
     });
     expect(again.payload).toContain('"clientName":"Padaria Aurora"');
+  });
+
+  it('editing a library picture keeps its client, without asking', async () => {
+    const { cookies, employeeId } = await sessionFor('marketing');
+    const clientId = await aurora();
+    const stored = await storeMedia(db, mediaDir, {
+      ownerId: employeeId,
+      origin: 'upload',
+      bytes: fakePng(1200, 1200),
+      clientId,
+    });
+    if (!stored.ok) throw new Error('expected stored');
+    // No clientId at all: the agent was told the picture's client is the one.
+    const withoutClient = Object.fromEntries(
+      Object.entries(
+        proposal({
+          model: 'gpt-image-2',
+          aspect: '1:1',
+          referenceAssetId: stored.id,
+          referenceUse: 'edit',
+          prompt: 'Change only the gradient of the logo to orange and red, keep everything else',
+        }),
+      ).filter(([key]) => key !== 'clientId'),
+    );
+    script = [
+      () => ({ toolCalls: [call('consultar_biblioteca', { tipo: 'image' })] }),
+      () => ({ toolCalls: [call('propor_geracao', withoutClient)] }),
+      () => ({ text: 'Propus a edição.' }),
+    ];
+    const { message } = await talk(cookies, 'Mude o gradiente desta imagem para laranja');
+    const library = (seen[1]?.messages ?? []).filter((item) => item.role === 'tool').at(-1);
+    expect(library?.content).toContain(`"cliente_id":"${clientId}"`);
+    expect(message?.proposals[0]).toMatchObject({
+      kind: 'generation',
+      clientName: 'Padaria Aurora',
+      payload: { clientId, referenceAssetId: stored.id },
+    });
+    expect(MEDIA_AGENT_SYSTEM_PROMPT).toContain('o cliente é o dessa mídia');
   });
 
   it('starting from a picture, picks a model that does what was asked with it, and the card says so', async () => {

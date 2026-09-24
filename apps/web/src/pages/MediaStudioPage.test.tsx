@@ -428,8 +428,18 @@ describe('providers', () => {
       within(select)
         .getAllByRole('group')
         .map((group) => group.getAttribute('label')),
-    ).toEqual(['Kairogen · 45 créditos', 'Cloudflare Workers AI · 12 de 50 hoje']);
+    ).toEqual([
+      'Grátis · Cloudflare Workers AI · 12 de 50 hoje',
+      'Créditos já pagos · Kairogen · 45 créditos',
+    ]);
     expect(screen.getByRole('option', { name: 'Seedream 4 · 4 créditos por saída' })).toBeTruthy();
+    // Until the person picks one, the cheapest that can serve: the free one, as the agent routes.
+    expect((select as HTMLSelectElement).value).toBe('cloudflare/flux-1-schnell');
+    // A paid model while a free one would do: said, with the way back one click away.
+    fireEvent.change(select, { target: { value: 'seedream-v4' } });
+    const paid = await screen.findByText(/há\s+opção grátis para isto: FLUX\.1 schnell/);
+    fireEvent.click(within(paid).getByRole('button', { name: 'Usar FLUX.1 schnell' }));
+    expect((select as HTMLSelectElement).value).toBe('cloudflare/flux-1-schnell');
     // The one ceiling in reais (from the usage), and the strip with every provider.
     expect(screen.getByText(`${brl(0)} de ${brl(30_000)}`)).toBeTruthy();
     expect(screen.getByText('Higgsfield').parentElement?.textContent).toContain(
@@ -663,7 +673,11 @@ describe('the operator form', () => {
       expect(upload).toHaveBeenCalledWith(`/media/assets?clientId=${WINGS_CLIENT_ID}`, file),
     );
 
-    // This model takes no picture: the form says so, offers the ones that do, and estimates nothing.
+    // With a picture, the default moves to the cheapest model that takes one.
+    const select = screen.getByLabelText('Modelo') as HTMLSelectElement;
+    await waitFor(() => expect(select.value).toBe('seedream-v4'));
+    // Picked by hand, a model that takes no picture: the form says so and estimates nothing.
+    fireEvent.change(select, { target: { value: 'flux-text-only' } });
     const warning = await within(field).findByRole('alert');
     expect(warning.textContent).toContain('Flux Text Only não usa imagem de referência');
     expect(within(warning).queryByRole('button', { name: 'Usar GPT Image 1.5' })).toBeNull();
@@ -692,6 +706,8 @@ describe('the operator form', () => {
     const picker = await screen.findByRole('dialog', { name: 'Imagem de referência' });
     fireEvent.click(await within(picker).findByRole('button', { name: /^Imagem, 1080 × 1350/ }));
 
+    // Seedream 4 picked by hand, then "edit": it does not edit, and the form says so.
+    fireEvent.change(screen.getByLabelText('Modelo'), { target: { value: 'seedream-v4' } });
     fireEvent.click(within(field).getByRole('radio', { name: 'Editar esta imagem' }));
     const warning = within(field).getByRole('alert');
     expect(warning.textContent).toContain('Seedream 4 não edita imagens');
@@ -714,6 +730,14 @@ describe('the operator form', () => {
       referenceUse: 'edit',
       params: {},
     });
+  });
+
+  it('shows a model the Kairogen plan does not open as "exige plano", and never picks it', async () => {
+    imageModels = [{ ...imageModel, planRequired: 'pro' }, editModel];
+    renderPage();
+    const closed = await screen.findByRole('option', { name: 'Seedream 4 · exige plano Pro' });
+    expect(closed).toHaveProperty('disabled', true);
+    expect((screen.getByLabelText('Modelo') as HTMLSelectElement).value).toBe(editModel.key);
   });
 
   it('says why a generation is blocked, and keeps the button off', async () => {

@@ -10,7 +10,8 @@ import {
   MEDIA_AGENT_PROPOSAL_TOOLS,
   MEDIA_AGENT_READ_TOOLS,
   MEDIA_BILLING_LABEL,
-  MEDIA_BILLING_RANK,
+  KAIROGEN_PLAN_LABEL,
+  cheapestFirst,
   MEDIA_PROVIDER_LABEL,
   type MediaProviderId,
   WINGS_CLIENT_ID,
@@ -72,7 +73,7 @@ Há mais de um provedor: uns grátis com cota do dia (Cloudflare, Gemini), o Kai
 Dentro de uma mesma campanha, use o mesmo modelo para todas as peças, para que combinem; se a pessoa pedir outro, avise que misturar muda o estilo.
 
 # Para quem é
-Toda mídia é feita para um cliente: a própria Wings Company ou um cliente dela. Se o pedido não disser para quem é, pergunte "Para qual cliente?" antes de propor, e não presuma. Quando a pessoa responder, leia listar_clientes e use o id do cliente em clientId. Se o cliente não estiver na lista, diga que ele precisa ser cadastrado em Administração → Clientes; não proponha em nome de outro.
+Toda mídia é feita para um cliente: a própria Wings Company ou um cliente dela. Se o pedido não disser para quem é, pergunte "Para qual cliente?" antes de propor, e não presuma. Quando a pessoa responder, leia listar_clientes e use o id do cliente em clientId. Se o cliente não estiver na lista, diga que ele precisa ser cadastrado em Administração → Clientes; não proponha em nome de outro. Exceção: ao editar ou usar como referência uma mídia da biblioteca, o cliente é o dessa mídia (cliente de consultar_biblioteca): não pergunte, deixe clientId de fora e o servidor usa o da mídia.
 O nome do cliente serve só para arquivar aqui dentro e nunca vai a provedor nenhum: não escreva o nome do cliente no prompt, no negativePrompt nem em textInImage. Descreva o negócio dele ("a neighborhood bakery"), não a marca.
 Quando um modelo vier sem reais_por_saida nem creditos_por_saida, o catálogo não informou o preço: use estimar_custo para saber.
 
@@ -169,15 +170,16 @@ async function listarProvedores(ctx: ToolContext): Promise<ToolOutcome> {
 async function listarModelos(ctx: ToolContext, raw: unknown): Promise<ToolOutcome> {
   const args = z.object({ tipo: z.enum(['image', 'video']).optional() }).parse(raw ?? {});
   const { models, cachedAt } = await listModels(needStudio(ctx), { priced: args.tipo ?? 'all' });
-  const shown = models
-    .filter((model) => !args.tipo || model.kind === args.tipo)
-    // Cheapest first: free tiers, then credits, then per use; unknown prices last.
-    .sort(
-      (a, b) =>
-        MEDIA_BILLING_RANK[billingOf(ctx, a)] - MEDIA_BILLING_RANK[billingOf(ctx, b)] ||
-        (a.brlCentsPerOutput ?? 9e9) - (b.brlCentsPerOutput ?? 9e9) ||
-        (a.creditsPerOutput ?? 9e9) - (b.creditsPerOutput ?? 9e9),
-    )
+  const ofKind = models.filter((model) => !args.tipo || model.kind === args.tipo);
+  // Closed on the contracted Kairogen plan: never offered, only named with the plan it needs.
+  const closed = ofKind
+    .filter((model) => model.planRequired)
+    .map((model) => ({ modelo: model.key, exige_plano: KAIROGEN_PLAN_LABEL[model.planRequired!] }));
+  // Cheapest first, the same order as the form: free, credits already paid, per use.
+  const shown = cheapestFirst(
+    ofKind.filter((model) => !model.planRequired),
+    (providerId) => billingOf(ctx, { providerId }),
+  )
     .slice(0, 40)
     .map((model) => ({
       provedor: model.providerId,
@@ -201,7 +203,17 @@ async function listarModelos(ctx: ToolContext, raw: unknown): Promise<ToolOutcom
       aceita_primeiro_quadro: model.acceptsFirstFrame,
     }));
   return {
-    result: { catalogo_lido_em: cachedAt, modelos: shown },
+    result: {
+      catalogo_lido_em: cachedAt,
+      modelos: shown,
+      ...(closed.length > 0
+        ? {
+            fora_do_plano_contratado: closed,
+            observacao_plano:
+              'Os modelos em fora_do_plano_contratado não podem ser propostos: diga à pessoa que exigem outro plano do Kairogen.',
+          }
+        : {}),
+    },
     summary: `${shown.length} modelo(s)${args.tipo ? ` de ${args.tipo === 'image' ? 'imagem' : 'vídeo'}` : ''}`,
   };
 }
@@ -251,6 +263,7 @@ async function consultarBiblioteca(ctx: ToolContext, raw: unknown): Promise<Tool
       tags: mediaAssets.tags,
       createdAt: mediaAssets.createdAt,
       clientName: clients.name,
+      clientId: mediaAssets.clientId,
     })
     .from(mediaAssets)
     .leftJoin(clients, eq(clients.id, mediaAssets.clientId))
@@ -280,6 +293,7 @@ async function consultarBiblioteca(ctx: ToolContext, raw: unknown): Promise<Tool
         modelo: row.model,
         creditos: row.credits,
         cliente: row.clientName,
+        cliente_id: row.clientId,
         pasta: row.folder,
         tags: row.tags,
         criada_em: row.createdAt.toISOString(),
@@ -446,8 +460,26 @@ async function estimarCusto(ctx: ToolContext, raw: unknown): Promise<ToolOutcome
   }
 }
 
+/**
+ * A picture from the library is edited for the client it already belongs to:
+ * with no clientId, the proposal takes the picture's, and nobody is asked.
+ */
+async function withInheritedClient(ctx: ToolContext, raw: unknown): Promise<unknown> {
+  if (raw === null || typeof raw !== 'object') return raw;
+  const proposal = raw as Record<string, unknown>;
+  if (proposal.clientId !== undefined || typeof proposal.referenceAssetId !== 'string') return raw;
+  const parsedId = z.uuid().safeParse(proposal.referenceAssetId);
+  if (!parsedId.success) return raw;
+  const [asset] = await ctx.db
+    .select({ clientId: mediaAssets.clientId })
+    .from(mediaAssets)
+    .where(eq(mediaAssets.id, parsedId.data))
+    .limit(1);
+  return asset?.clientId ? { ...proposal, clientId: asset.clientId } : raw;
+}
+
 async function proporGeracao(ctx: ToolContext, raw: unknown): Promise<ToolOutcome> {
-  const parsed = agentGenerationProposalSchema.safeParse(raw);
+  const parsed = agentGenerationProposalSchema.safeParse(await withInheritedClient(ctx, raw));
   if (!parsed.success) {
     const reasons = parsed.error.issues
       .slice(0, 8)

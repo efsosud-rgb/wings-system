@@ -480,3 +480,31 @@ mesmo pedido e os mesmos parâmetros de preço (`requote` na resposta de
 `POST /media/generations`). O botão passa a mostrar "Gerar (4 créditos)" com o
 motivo, e gastar é um novo clique. Nada é reenviado sozinho: a chamada recusada
 não custou nada, e a próxima só sai com o clique de uma pessoa no preço novo.
+
+#### Plano contratado e modelos liberados (2026-09-24)
+
+Nem `list_models` nem `get_credits` informam o plano de um modelo (lido do
+Kairogen real em 2026-09-24: o catálogo só tem `model_key, name, type,
+provider, default_mode, modes, reference_inputs, supported_durations,
+param_schema, pricing, extra`). A regra fica em `kairogenMinimumPlan()`
+(`packages/shared`), tirada da seção de planos de kairogen.ai:
+
+- **Free:** todos os modelos de imagem, menos Topaz (o gpt-image-2 gerou no Free).
+  Vídeo não ("The video model … is not available on the Free plan", recusa real).
+- **Essential:** + vídeo Wan 2.6, Grok Imagine v1, Seedance V1.5 Pro, Veo 3.1 Lite.
+- **Pro, Precision, Creator:** tudo, inclusive Sora, Veo Pro, Kling, Seedance 2.0 e Topaz.
+
+Não verificado: o Free liberar todos os modelos de imagem (só o gpt-image-2
+foi visto gerando), e os vídeos que o site não lista pelo nome (tratados como
+Pro).
+
+**A palavra do Kairogen vale mais que a tabela.** Uma recusa
+`PLAN_UPGRADE_REQUIRED` na geração fica no `detail` da geração (com o código),
+e dali em diante o catálogo marca o modelo como fechado no plano atual (pelo
+menos o plano seguinte). O plano vem de "Plano contratado" em Integrações.
+
+Um modelo fechado vem com `planRequired` no catálogo: o formulário mostra
+"exige plano Pro" desabilitado, o agente o recebe em `fora_do_plano_contratado`
+e não pode propô-lo, e a estimativa é recusada (`plan_required`) antes de
+qualquer chamada ao Kairogen. Se a recusa vier na geração, o texto diz qual
+plano libera.
