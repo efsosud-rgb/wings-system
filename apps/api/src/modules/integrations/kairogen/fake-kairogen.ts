@@ -148,6 +148,16 @@ const CATALOG = [
         ],
         default: 'medium',
       }),
+      // Like the real one: priced by `estimate_cost` at the top level, but not an argument
+      // `generate_image` declares, so at generation it only counts inside `extra_params`.
+      field('resolution', {
+        type: 'select',
+        options: [
+          { value: '1k', label: '1K' },
+          { value: '2k', label: '2K' },
+        ],
+        default: '1k',
+      }),
     ],
     pricing: money(0.12),
   },
@@ -217,11 +227,55 @@ function quote(args: Record<string, unknown>): number | null {
   const prices = CREDITS[String(args.model)];
   if (!prices) return null;
   const base = prices[String(args.plan_key ?? 'free')] ?? prices.free ?? 0;
-  const dear = args.size === '2048x2048' || args.quality === 'high' || args.resolution === '1080p';
+  const dear =
+    args.size === '2048x2048' ||
+    args.quality === 'high' ||
+    args.resolution === '1080p' ||
+    args.resolution === '2k';
   const seconds = typeof args.duration_seconds === 'number' ? args.duration_seconds / 5 : 1;
   const quantity = typeof args.quantity === 'number' ? args.quantity : 1;
   return Math.ceil(base * (dear ? 2 : 1) * seconds * quantity);
 }
+
+/** The top-level arguments of the spending tools (docs/integracoes/kairogen-tools.json). */
+const DECLARED: Record<'generate_image' | 'generate_video', readonly string[]> = {
+  generate_image: [
+    'aspect_ratio',
+    'expected_credits',
+    'extra_params',
+    'model',
+    'negative_prompt',
+    'prompt',
+    'quality',
+    'quantity',
+    'reference_image_urls',
+    'seed',
+    'size',
+    'timeout_seconds',
+    'wait_for_completion',
+  ],
+  generate_video: [
+    'aspect_ratio',
+    'duration_seconds',
+    'expected_credits',
+    'extra_params',
+    'first_frame_url',
+    'generate_audio',
+    'last_frame_url',
+    'model',
+    'prompt',
+    'quality',
+    'quantity',
+    'reference_audio_urls',
+    'reference_image_urls',
+    'reference_video_urls',
+    'resolution',
+    'seed',
+    'timeout_seconds',
+    'turbo',
+    'wait_for_completion',
+  ],
+};
 
 export function fakeKairogen(options: FakeKairogenOptions = {}) {
   const calls: FakeCall[] = [];
@@ -415,7 +469,18 @@ export function fakeKairogen(options: FakeKairogenOptions = {}) {
         );
       }
       if (args.wait_for_completion !== false) return toolError('blocking call refused by the fake');
-      const charge = options.chargeInsteadOfQuote ?? quote({ ...args, plan_key: 'free' }) ?? 0;
+      // As the real server does: a top-level key the tool does not declare is dropped;
+      // `extra_params` is merged into the request.
+      const declared = DECLARED[name];
+      const kept = Object.fromEntries(
+        Object.entries(args).filter(([key]) => declared.includes(key)),
+      );
+      const nested =
+        args.extra_params !== null && typeof args.extra_params === 'object'
+          ? (args.extra_params as Record<string, unknown>)
+          : {};
+      const charge =
+        options.chargeInsteadOfQuote ?? quote({ ...kept, ...nested, plan_key: 'free' }) ?? 0;
       if (typeof args.expected_credits === 'number' && args.expected_credits !== charge) {
         return toolError(
           `expected_credits mismatch: you expected ${args.expected_credits} but this generation costs ${charge}`,

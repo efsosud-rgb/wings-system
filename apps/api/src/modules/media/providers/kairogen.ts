@@ -53,6 +53,90 @@ async function creditsCounted(db: Database, since: Date): Promise<number> {
 
 const MODEL_CACHE_MS = 60 * 60_000;
 const DEFAULT_ANIMATION_MODEL = 'seedance-v2-0-image-to-video';
+/**
+ * The top-level arguments each tool declares (docs/integracoes/kairogen-tools.json).
+ * Anything else goes in `extra_params`: Kairogen drops an undeclared top-level
+ * key, so `resolution` sent loose to `generate_image` was priced by
+ * `estimate_cost` (which declares it) and then lost at generation, and the
+ * charge no longer matched the quote (GENERATION_QUOTE_MISMATCH, 2026-09-24).
+ */
+const TOOL_ARGS = {
+  estimate_cost: [
+    'model',
+    'plan_key',
+    'quantity',
+    'duration_seconds',
+    'generate_audio',
+    'quality',
+    'resolution',
+    'size',
+    'sound',
+    'turbo',
+  ],
+  generate_image: ['model', 'quantity', 'quality', 'size', 'seed'],
+  generate_video: [
+    'model',
+    'quantity',
+    'duration_seconds',
+    'generate_audio',
+    'quality',
+    'resolution',
+    'seed',
+    'turbo',
+  ],
+} as const satisfies Record<string, readonly string[]>;
+
+/**
+ * The priced parameters of an estimate, laid out for `tool`: declared keys at the
+ * top, every other one inside `extra_params`. The plan is only `estimate_cost`'s.
+ */
+export function pricedArgsFor(
+  tool: keyof typeof TOOL_ARGS,
+  priced: Record<string, unknown>,
+): Record<string, unknown> {
+  const declared: readonly string[] = TOOL_ARGS[tool];
+  const top: Record<string, unknown> = {};
+  const extra: Record<string, unknown> = {};
+  const nested = priced.extra_params;
+  if (nested !== null && typeof nested === 'object') Object.assign(extra, nested);
+  for (const [key, value] of Object.entries(priced)) {
+    if (key === 'extra_params' || value === undefined) continue;
+    if (key === 'plan_key' && tool !== 'estimate_cost') continue;
+    if (declared.includes(key)) top[key] = value;
+    else extra[key] = value;
+  }
+  return Object.keys(extra).length > 0 ? { ...top, extra_params: extra } : top;
+}
+
+/**
+ * Every priced parameter of a call, flattened the way Kairogen prices it (top
+ * level and `extra_params` together), without the plan and the arguments that
+ * do not change the price. Estimate and generation must agree on this, key by key.
+ */
+export function pricedParamsOf(args: Record<string, unknown>): Record<string, unknown> {
+  const unpriced = new Set([
+    'plan_key',
+    'extra_params',
+    'prompt',
+    'negative_prompt',
+    'aspect_ratio',
+    'reference_image_urls',
+    'first_frame_url',
+    'last_frame_url',
+    'expected_credits',
+    'wait_for_completion',
+    'timeout_seconds',
+    'seed',
+  ]);
+  const nested =
+    args.extra_params !== null && typeof args.extra_params === 'object'
+      ? (args.extra_params as Record<string, unknown>)
+      : {};
+  return Object.fromEntries(
+    Object.entries({ ...args, ...nested }).filter(([key]) => !unpriced.has(key)),
+  );
+}
+
 /** Pricing the selector: a few `estimate_cost` at a time, and never holding the screen for long. */
 const PRICING_CONCURRENCY = 4;
 const PRICING_BUDGET_MS = 8_000;
@@ -143,7 +227,8 @@ export function kairogenProvider(config: KairogenProviderConfig): MediaProvider 
     args: Record<string, unknown> = {},
     options: { timeoutMs?: number } = {},
   ): Promise<McpToolResult> {
-    if (!config.kairogen) throw new ProviderError('unauthorized', MEDIA_REFUSAL_MESSAGE.not_connected);
+    if (!config.kairogen)
+      throw new ProviderError('unauthorized', MEDIA_REFUSAL_MESSAGE.not_connected);
     const result = await callKairogen(config.kairogen, tool, args, options);
     if (config.noteShape) {
       const structured = result.data !== null && typeof result.data === 'object';
@@ -241,13 +326,6 @@ export function kairogenProvider(config: KairogenProviderConfig): MediaProvider 
     args: Record<string, unknown>;
   }> {
     const request = input.request;
-    // What the spending tool takes of the priced arguments: all but the plan (only
-    // `estimate_cost` has it) and the estimate-only `extra_params`.
-    const price = Object.fromEntries(
-      Object.entries(input.priceArgs).filter(
-        ([key]) => key !== 'plan_key' && key !== 'extra_params',
-      ),
-    );
     const source = input.source;
     /** Kairogen's own address when the picture came from there; a signed link of ours otherwise. */
     const publicUrl = async (purpose: string) =>
@@ -287,10 +365,12 @@ export function kairogenProvider(config: KairogenProviderConfig): MediaProvider 
 
     const reference = await publicUrl(request.kind === 'video' ? 'first_frame' : 'reference_image');
     const model = (await listModels(ctx)).find((item) => item.key === input.modelKey);
+    const tool = request.kind === 'video' ? 'generate_video' : 'generate_image';
     return {
-      tool: request.kind === 'video' ? 'generate_video' : 'generate_image',
+      tool,
       args: {
-        ...price,
+        // Exactly the priced parameters of the estimate, placed where this tool reads them.
+        ...pricedArgsFor(tool, input.priceArgs),
         prompt: request.prompt,
         aspect_ratio: request.aspect,
         ...(request.negativePrompt && request.kind === 'image'
@@ -360,7 +440,7 @@ export function kairogenProvider(config: KairogenProviderConfig): MediaProvider 
           extra_params: { scale: request.scale },
         };
       } else {
-        priceArgs = {
+        priceArgs = pricedArgsFor('estimate_cost', {
           model: request.model.key,
           plan_key: plan,
           quantity: request.quantity,
@@ -368,7 +448,7 @@ export function kairogenProvider(config: KairogenProviderConfig): MediaProvider 
           ...(request.durationSeconds !== undefined
             ? { duration_seconds: request.durationSeconds }
             : {}),
-        };
+        });
       }
       let credits: number | null;
       try {
