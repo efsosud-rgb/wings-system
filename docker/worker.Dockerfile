@@ -32,7 +32,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # below can run it; nothing needs to write to it after this build step.
 RUN python3 -m venv /opt/wings-worker-venv
 ENV PATH="/opt/wings-worker-venv/bin:${PATH}"
-RUN pip install --no-cache-dir faster-whisper auto-editor
+RUN pip install --no-cache-dir faster-whisper auto-editor opencv-python-headless
+
+# Smart captions (caption_layout): YuNet for faces and the PP-OCRv3 text
+# detector, from the OpenCV model zoo, baked in and checked by SHA-256 so the
+# job never downloads anything at run time.
+ENV CAPTION_MODELS_DIR=/opt/wings-worker-models/captions
+COPY apps/worker/scripts/fetch_caption_models.py /tmp/fetch_caption_models.py
+RUN python3 /tmp/fetch_caption_models.py && rm /tmp/fetch_caption_models.py
 
 # Bake the "small" model into the image at build time: staging and production
 # hosts should not depend on reaching Hugging Face at container start.
