@@ -201,6 +201,12 @@ export interface StudioSession {
   ): Promise<void>;
   /** A library asset is a Drive file under the hood; same as `addDriveFile`. */
   addMediaAsset(asset: MediaAsset, options?: { at?: number; trackIndex?: number }): Promise<void>;
+  /**
+   * "Substituir" (and the result of "Editar com IA"): another picture in the same
+   * image clip, keeping its place, size, layer, start and length. ONE undoable
+   * command; false, with a notice, when it could not be done.
+   */
+  replaceImage(clipId: string, item: StudioDragItem): Promise<boolean>;
   openProject(file: DriveFile, folder: DriveFolder): Promise<void>;
   /** Clears the timeline. Refused when dirty unless `force`. Returns whether it happened. */
   newProject(options: { mode: StudioMode; aspect?: StudioAspect; force?: boolean }): boolean;
@@ -246,7 +252,15 @@ export interface StudioSession {
   discardAgentEdit(): Promise<void>;
 
   /** The selected image clip, if it came from the media library, for "Gerar variação" / "Editar com IA". */
-  selectedImageForAi: { driveFileId: string; mediaAssetId: string | null; name: string } | null;
+  selectedImageForAi: {
+    driveFileId: string;
+    mediaAssetId: string | null;
+    name: string;
+    /** The library asset's client: an edit of it is filed under the same one. */
+    clientId: string | null;
+    /** The library asset's aspect, when the library knows it. */
+    aspect: string | null;
+  } | null;
 
   busy: string | null;
   progress: { done: number; message: string } | null;

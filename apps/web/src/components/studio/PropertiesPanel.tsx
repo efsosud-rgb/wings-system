@@ -7,6 +7,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '../ui.js';
 import { STUDIO_FONTS, clipTypeLabel } from './clips.js';
+import { ImageActions } from './ImageActions.js';
 import type { ClipPatch, StudioSession } from './session.js';
 
 /**
@@ -89,7 +90,14 @@ function NumberField({
   );
 }
 
-export function PropertiesPanel({ session }: { session: StudioSession }) {
+export function PropertiesPanel({
+  session,
+  canGenerate = false,
+}: {
+  session: StudioSession;
+  /** "Editar com IA" spends: only for whoever may generate media. */
+  canGenerate?: boolean;
+}) {
   const { selected, mode } = session;
   const [draftText, setDraftText] = useState(selected?.text?.text ?? '');
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -407,9 +415,13 @@ export function PropertiesPanel({ session }: { session: StudioSession }) {
         </label>
       )}
 
-      <Button type="button" variant="ghost" onClick={() => void session.deleteSelected()}>
-        Remover
-      </Button>
+      {selected.assetType === 'image' ? (
+        <ImageActions session={session} canGenerate={canGenerate} />
+      ) : (
+        <Button type="button" variant="ghost" onClick={() => void session.deleteSelected()}>
+          Remover
+        </Button>
+      )}
     </div>
   );
 }

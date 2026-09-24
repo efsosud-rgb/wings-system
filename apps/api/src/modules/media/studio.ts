@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import {
   MEDIA_BILLING_RANK,
+  KAIROGEN_PLAN_LABEL,
   MEDIA_REFUSAL_MESSAGE,
   MAX_IMAGES_PER_GENERATION,
   MAX_VIDEOS_PER_GENERATION,
@@ -698,6 +699,7 @@ async function alternativeFor(
     .filter(
       (model) => model.kind === resolved.kind && model.providerId !== resolved.model.providerId,
     )
+    .filter((model) => !model.planRequired)
     .filter((model) => resolved.quantity <= model.maxOutputs)
     .filter(
       (model) =>
@@ -771,6 +773,14 @@ export async function createEstimate(
   const ctx = ctxOf(deps);
   const { models } = await listModels(deps);
   let resolved = await resolve(deps, input.request, models);
+  const needed = resolved.model.planRequired;
+  if (needed) {
+    // Refused here, before Kairogen is asked anything: it would refuse the generation.
+    throw new StudioRefusal(
+      'plan_required',
+      `${resolved.model.name} exige o plano ${KAIROGEN_PLAN_LABEL[needed]} do Kairogen, e o plano contratado não o inclui. Escolha um modelo do plano contratado ou mude o plano em Integrações.`,
+    );
+  }
   let provider = providerOf(deps, resolved.model.providerId);
   let routedFrom: MediaEstimate['routedFrom'] = null;
   const warnings: string[] = [];
@@ -877,6 +887,31 @@ export async function createEstimate(
     routedFrom,
     warnings,
   };
+}
+
+/**
+ * After a provider refused over its own quota: the cheapest other provider that
+ * can do the same thing right now, in words for the card. Only named: pricing it
+ * is a new estimate, and generating is a new click.
+ */
+async function nextOptionAfter(deps: StudioDeps, row: GenerationRow): Promise<string | null> {
+  try {
+    const request = row.request as MediaEstimateRequest;
+    const { models } = await listModels(deps);
+    const resolved = await resolve(deps, request, models);
+    const alternative = await alternativeFor(deps, models, resolved, request);
+    if (!alternative) return 'Nenhum outro provedor faz isso agora.';
+    const how =
+      alternative.provider.billing === 'free_quota' ||
+      alternative.provider.billing === 'own_service'
+        ? 'grátis'
+        : alternative.quote.credits > 0
+          ? `${alternative.quote.credits} créditos já pagos`
+          : formatBrl(alternative.quote.brlCents);
+    return `Próxima opção: ${alternative.model.name} no ${alternative.provider.name} (${how}). Estime com ele para gerar; nada foi reenviado.`;
+  } catch {
+    return null;
+  }
 }
 
 /** Where an agent card's estimate stands, after "Estimar de novo". */
@@ -1173,6 +1208,11 @@ export async function startGeneration(
     }
     // Nobody knows whether it arrived: the spend stays counted and nothing is sent again.
     if (error.code === 'outcome_unknown') return finish('unknown', error.message, false);
+    if (error.code === 'quota') {
+      // The provider's own quota: nothing is sent again, anywhere. The next option is named.
+      const next = await nextOptionAfter(deps, claimed);
+      return finish('refused', next ? `${error.message} ${next}` : error.message, true);
+    }
     return finish('refused', error.message, true);
   }
 

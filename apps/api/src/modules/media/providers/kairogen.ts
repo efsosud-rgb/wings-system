@@ -1,13 +1,20 @@
 import {
   DEFAULT_KAIROGEN_PLAN,
+  KAIROGEN_PLAN_LABEL,
   KAIROGEN_PLANS,
   MEDIA_REFUSAL_MESSAGE,
+  kairogenMinimumPlan,
+  kairogenPlanRank,
   type KairogenPlan,
   type MediaModel,
 } from '@wings/shared';
 import { and, eq, gte, sql } from 'drizzle-orm';
 import type { Database } from '../../../db/client.js';
-import { integrationConnections, mediaCreditLedger } from '../../../db/schema/index.js';
+import {
+  integrationConnections,
+  mediaCreditLedger,
+  mediaGenerations,
+} from '../../../db/schema/index.js';
 import { McpError, type McpToolResult } from '../../../lib/mcp-client/index.js';
 import { scrubSensitive } from '../../agent/scrub.js';
 import {
@@ -185,6 +192,38 @@ interface Catalog {
 const modelCache = new Map<string, Catalog>();
 export const clearModelCache = () => modelCache.clear();
 
+/**
+ * Models Kairogen itself refused on this plan (PLAN_UPGRADE_REQUIRED, kept in
+ * the generation's detail). Its word beats the published table.
+ */
+async function refusedOnPlan(db: Database, plan: KairogenPlan): Promise<Set<string>> {
+  const rows = await db
+    .selectDistinct({ model: mediaGenerations.model })
+    .from(mediaGenerations)
+    .where(
+      and(
+        eq(mediaGenerations.provider, PROVIDER),
+        eq(mediaGenerations.status, 'refused'),
+        sql`${mediaGenerations.detail} like '%PLAN_UPGRADE_REQUIRED%'`,
+        sql`${mediaGenerations.priceArgs}->>'plan_key' = ${plan}`,
+      ),
+    );
+  return new Set(rows.flatMap((row) => (row.model ? [row.model] : [])));
+}
+
+/** The plan a model needs beyond the contracted one, or null when it is open. */
+export function planRequiredFor(
+  model: Pick<MediaModel, 'key' | 'kind'>,
+  plan: KairogenPlan,
+  refused: ReadonlySet<string>,
+): KairogenPlan | null {
+  const published = kairogenMinimumPlan(model.key, model.kind);
+  if (kairogenPlanRank(published) > kairogenPlanRank(plan)) return published;
+  if (!refused.has(model.key)) return null;
+  // Kairogen said no on this plan although the table says yes: at least the next one.
+  return KAIROGEN_PLANS[kairogenPlanRank(plan) + 1] ?? plan;
+}
+
 /** Kairogen said something went wrong: what that means for the person, never its raw words as orders. */
 function fromMcp(error: unknown, spending = false): ProviderError {
   if (error instanceof McpError && error.code === 'unauthorized') {
@@ -301,7 +340,11 @@ export function kairogenProvider(config: KairogenProviderConfig): MediaProvider 
       if (options.priced) {
         await priceCatalog(plan, catalog, options.priced === 'all' ? undefined : options.priced);
       }
-      return catalog.models;
+      const refused = await refusedOnPlan(ctx.db, plan);
+      return catalog.models.map((model) => ({
+        ...model,
+        planRequired: planRequiredFor(model, plan, refused),
+      }));
     } catch (error) {
       throw fromMcp(error);
     }
@@ -474,6 +517,25 @@ export function kairogenProvider(config: KairogenProviderConfig): MediaProvider 
         externalId = generationIdFrom(await ask(call.tool, call.args, { timeoutMs: 60_000 }));
       } catch (error) {
         const failure = fromMcp(error, true);
+        if (failure.code === 'rejected' && /PLAN_UPGRADE_REQUIRED/.test(failure.message)) {
+          const planKey = String(input.priceArgs.plan_key ?? '');
+          const plan = KAIROGEN_PLANS.includes(planKey as KairogenPlan)
+            ? (planKey as KairogenPlan)
+            : await planOf(ctx.db);
+          const model = {
+            key: input.modelKey,
+            kind:
+              input.request.operation === 'generate' && input.request.kind === 'video'
+                ? ('video' as const)
+                : ('image' as const),
+          };
+          const needed = planRequiredFor(model, plan, new Set([input.modelKey])) ?? plan;
+          // The code stays in the text: it is how the catalog learns this model is closed here.
+          throw new ProviderError(
+            'rejected',
+            `O modelo ${input.modelKey} não está no plano ${KAIROGEN_PLAN_LABEL[plan]} do Kairogen: ele exige o plano ${KAIROGEN_PLAN_LABEL[needed]} ou superior (PLAN_UPGRADE_REQUIRED). Nada foi gerado nem cobrado. Escolha um modelo do plano contratado ou mude o plano em Integrações.`,
+          );
+        }
         if (failure.code === 'rejected' && isCreditMismatch(failure.message)) {
           const requoted = requotedCreditsFrom(failure.message);
           if (requoted !== null) {

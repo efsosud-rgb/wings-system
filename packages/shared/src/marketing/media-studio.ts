@@ -2,7 +2,12 @@ import { z } from 'zod';
 import { checkCopyCompliance, COMPLIANCE_RULE_LABEL } from '../ads/campaign-builder.js';
 import { WINGS_CLIENT_ID } from '../clients.js';
 import { CAMERA_MOVE_IDS, withCameraMove } from './camera-moves.js';
-import { MEDIA_PROVIDERS, type MediaProviderId } from './media-providers.js';
+import {
+  MEDIA_BILLING_RANK,
+  MEDIA_PROVIDERS,
+  type MediaBilling,
+  type MediaProviderId,
+} from './media-providers.js';
 
 /**
  * Marketing → Edição de Fotos e Vídeos: what the studio, its agent and the API
@@ -24,6 +29,31 @@ export const KAIROGEN_PLAN_LABEL: Record<KairogenPlan, string> = {
   precision: 'Precision',
   creator: 'Creator',
 };
+
+/** Rank of a plan: a model open on one plan is open on every plan above it. */
+export const kairogenPlanRank = (plan: KairogenPlan) => KAIROGEN_PLANS.indexOf(plan);
+
+/**
+ * Video models the Essential plan opens, from Kairogen's plans section
+ * (kairogen.ai, read 2026-09-24): "Wan 2.6, Grok Imagine v1, Seedance V1.5 Pro,
+ * Veo3.1 Lite"; "Sora, Veo Pro, Kling, Seedance 2.0 e Topaz só no Pro+".
+ */
+const ESSENTIAL_VIDEO = ['wan-2-6', 'grok-imagine-video-v1', 'seedance-v1-5-pro', 'veo3-1-lite'];
+
+/**
+ * The lowest plan that opens a Kairogen model. Neither `list_models` nor
+ * `get_credits` says it (checked 2026-09-24), so this is the published table:
+ * every image model but Topaz from Free (gpt-image-2 generated on Free); the
+ * four videos above from Essential; every other video and Topaz from Pro. The
+ * Free plan's video refusal is Kairogen's own ("The video model … is not
+ * available on the Free plan", PLAN_UPGRADE_REQUIRED). A refusal Kairogen gives
+ * for a model on a plan beats this table (see `planRequiredFor` in the API).
+ */
+export function kairogenMinimumPlan(modelKey: string, kind: 'image' | 'video'): KairogenPlan {
+  if (/topaz/i.test(modelKey)) return 'pro';
+  if (kind === 'image') return 'free';
+  return ESSENTIAL_VIDEO.includes(modelKey) ? 'essential' : 'pro';
+}
 
 export const DEFAULT_KAIROGEN_DAILY_CREDITS_PER_USER = 30;
 export const DEFAULT_KAIROGEN_MONTHLY_CREDITS = 500;
@@ -105,6 +135,39 @@ export interface MediaModel {
   acceptsReferenceImage: boolean;
   /** Video: needs (or takes) a first frame, i.e. image-to-video. */
   acceptsFirstFrame: boolean;
+  /**
+   * Kairogen only: the plan this model needs when the contracted one does not
+   * open it ("exige plano Pro"). Null when it can be used. Never offered, never
+   * estimated while set.
+   */
+  planRequired?: KairogenPlan | null;
+}
+
+/** The three price tiers the selector and the agent show, cheapest first. */
+export const MEDIA_TIER_LABEL: Record<MediaBilling, string> = {
+  free_quota: 'Grátis',
+  own_service: 'Grátis',
+  credits: 'Créditos já pagos',
+  per_use: 'Pago por uso',
+};
+
+/** Free and our own service cost nothing per output. */
+export const isFreeBilling = (billing: MediaBilling) => MEDIA_BILLING_RANK[billing] === 0;
+
+/**
+ * One order for every list of models, the agent's and the form's alike: free
+ * first, then credits already paid for, then pay-per-use; within a tier the
+ * cheapest; an unknown price last. The form's default is the first usable one.
+ */
+export function cheapestFirst<
+  T extends Pick<MediaModel, 'providerId' | 'brlCentsPerOutput' | 'creditsPerOutput'>,
+>(models: readonly T[], billingOf: (providerId: MediaProviderId) => MediaBilling): T[] {
+  return [...models].sort(
+    (a, b) =>
+      MEDIA_BILLING_RANK[billingOf(a.providerId)] - MEDIA_BILLING_RANK[billingOf(b.providerId)] ||
+      (a.brlCentsPerOutput ?? 9e9) - (b.brlCentsPerOutput ?? 9e9) ||
+      (a.creditsPerOutput ?? 9e9) - (b.creditsPerOutput ?? 9e9),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +305,7 @@ export const MEDIA_REFUSALS = [
   'insufficient_credits',
   'estimate_expired',
   'estimate_used',
+  'plan_required',
   'not_connected',
   'provider_unavailable',
 ] as const;
@@ -254,6 +318,7 @@ export const MEDIA_REFUSAL_MESSAGE: Record<MediaRefusal, string> = {
   insufficient_credits: 'O saldo da conta no Kairogen não cobre esta geração.',
   estimate_expired: 'A estimativa venceu. Estime o custo de novo.',
   estimate_used: 'Esta estimativa já foi usada. Estime o custo de novo.',
+  plan_required: 'Este modelo não está no plano contratado do Kairogen.',
   not_connected: 'Nenhum provedor de mídia está disponível. Peça a um Admin Master para conectar.',
   provider_unavailable: 'Este provedor não pode atender agora.',
 };

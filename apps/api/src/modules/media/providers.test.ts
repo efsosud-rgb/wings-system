@@ -100,6 +100,8 @@ const envOf = (extra: Record<string, string> = {}): Env =>
     KAIROGEN_MONTHLY_CREDITS: '60',
     KAIROGEN_BRL_PER_CREDIT: '0.25',
     ...FAKE_PROVIDER_ENV,
+    // Gemini images are paid per use; these tests run the project with billing on.
+    GEMINI_BILLING_ENABLED: 'true',
     ...extra,
   });
 
@@ -303,7 +305,8 @@ describe('the registry', () => {
       // Kairogen: credits from estimate_cost, reais at KAIROGEN_BRL_PER_CREDIT.
       'seedream-v4': ['kairogen', 4, 100],
       'cloudflare/flux-1-schnell': ['cloudflare', 0, 0],
-      'gemini/gemini-2.5-flash-image': ['gemini', 0, 0],
+      // Paid per use: USD 0.039 at 5.5 = R$ 0.2145, rounded up.
+      'gemini/gemini-2.5-flash-image': ['gemini', 0, 22],
       // USD 0.05 at 5.5 = R$ 0.275, rounded up.
       'higgsfield/soul': ['higgsfield', 0, 28],
       // USD 0.10 a second, five seconds unless said otherwise.
@@ -443,7 +446,8 @@ describe('Gemini', () => {
     );
     expect(quoted.statusCode).toBe(201);
     const quote = quoted.json<{ estimate: MediaEstimate }>().estimate;
-    expect(quote).toMatchObject({ providerId: 'gemini', brlCents: 0, credits: 0 });
+    // Paid per use: Google's price per picture, in reais, on the button before the click.
+    expect(quote).toMatchObject({ providerId: 'gemini', brlCents: 22, credits: 0 });
 
     const generation = (await generate(app, cookies, { estimateId: quote.id })).json<{
       generation: MediaGeneration;
@@ -715,7 +719,7 @@ describe('routing with failover', () => {
     // (R$ 0 a credit, the default), thirty cents a month over everything.
     tight = await build({
       CF_WORKERS_AI_DAILY_IMAGES: '1',
-      GEMINI_DAILY_IMAGES: '1',
+      GEMINI_DAILY_IMAGES: '5',
       KAIROGEN_MONTHLY_CREDITS: '4',
       KAIROGEN_BRL_PER_CREDIT: '',
       MEDIA_MONTHLY_BRL: '0.30',
@@ -769,69 +773,92 @@ describe('routing with failover', () => {
       'succeeded',
     );
 
-    // 3. Cloudflare's one picture is gone: an equal tier (Gemini, free) still takes over on its own.
-    const sideways = (await estimate(tight, cookies, image())).json<{ estimate: MediaEstimate }>()
-      .estimate;
-    expect(sideways).toMatchObject({
-      providerId: 'gemini',
-      routedFrom: {
-        providerId: 'cloudflare',
-        reason: 'Cota grátis do dia esgotada (1 de 1 imagens).',
-      },
-    });
-    expect(
-      (await generate(tight, cookies, { estimateId: sideways.id })).json().generation.status,
-    ).toBe('succeeded');
-
-    // 4. Every free quota and the month's credits are gone: paying more is offered, never taken.
+    // 3. Cloudflare's one picture is gone and no free provider is left (Gemini images are paid
+    //    per use): paying is offered, never taken — the cheapest paid one, Gemini.
     const offered = await estimate(tight, cookies, image());
     expect(offered.statusCode).toBe(409);
     expect(offered.json()).toMatchObject({
       error: 'provider_unavailable',
       alternative: {
-        model: 'higgsfield/soul',
-        name: 'Higgsfield Soul',
-        providerId: 'higgsfield',
+        model: 'gemini/gemini-2.5-flash-image',
+        providerId: 'gemini',
         credits: 0,
-        brlCents: 28,
+        brlCents: 22,
       },
     });
     expect(offered.json().message).toContain('trocar para um provedor mais caro é um clique seu');
-    expect(await db.select().from(mediaGenerations)).toHaveLength(3);
+    expect(await db.select().from(mediaGenerations)).toHaveLength(2);
 
-    // 5. The click on the alternative: an estimate on the costlier provider, made by the person.
-    const paid = (await estimate(tight, cookies, image({ model: 'higgsfield/soul' }))).json<{
-      estimate: MediaEstimate;
-    }>().estimate;
+    // 4. The click on the alternative: an estimate on the costlier provider, made by the person.
+    const paid = (
+      await estimate(tight, cookies, image({ model: 'gemini/gemini-2.5-flash-image' }))
+    ).json<{ estimate: MediaEstimate }>().estimate;
     expect(paid).toMatchObject({
-      providerId: 'higgsfield',
-      brlCents: 28,
+      providerId: 'gemini',
+      brlCents: 22,
       routedFrom: null,
       blockedBy: null,
     });
     const job = (await generate(tight, cookies, { estimateId: paid.id })).json<{
       generation: MediaGeneration;
     }>().generation;
-    expect(job.status).toBe('running');
+    expect(job.status).toBe('succeeded');
 
-    // 6. R$ 0,28 of the R$ 0,30 are counted: the next one would cross the ceiling, and the refusal says the numbers.
-    const over = (await estimate(tight, cookies, image({ model: 'higgsfield/soul' }))).json<{
-      estimate: MediaEstimate;
-    }>().estimate;
+    // 5. R$ 0,22 of the R$ 0,30 are counted: the next one would cross the ceiling, and the refusal says the numbers.
+    const over = (
+      await estimate(tight, cookies, image({ model: 'gemini/gemini-2.5-flash-image' }))
+    ).json<{ estimate: MediaEstimate }>().estimate;
     expect(over.blockedBy).toBe('monthly_brl_limit');
     expect(over.warnings.join(' ')).toContain(
-      `O teto mensal de ${formatBrl(30)} em mídia seria ultrapassado: ${formatBrl(28)} já contados este mês e esta geração custa ${formatBrl(28)}.`,
+      `O teto mensal de ${formatBrl(30)} em mídia seria ultrapassado: ${formatBrl(22)} já contados este mês e esta geração custa ${formatBrl(22)}.`,
     );
     const refused = await generate(tight, cookies, { estimateId: over.id });
     expect(refused.statusCode).toBe(409);
     expect(refused.json()).toMatchObject({ error: 'monthly_brl_limit' });
     expect(refused.json().message).toContain(formatBrl(30));
-    // A free generation still fits under a spent ceiling: the ceiling is about money.
     expect(
-      providers.state.calls.filter(
-        (item) => item.provider === 'higgsfield' && item.method === 'POST',
-      ),
+      providers.state.calls.filter((item) => item.provider === 'gemini' && item.method === 'POST'),
     ).toHaveLength(1);
+  });
+
+  it('Gemini images stay off until the project has billing, and say why', async () => {
+    const off = await build({ GEMINI_BILLING_ENABLED: 'false' });
+    try {
+      const { cookies } = await sessionFor();
+      const status = (await off.inject({ url: '/media/providers', cookies })).json<{
+        providers: MediaProviderStatus[];
+      }>();
+      expect(status.providers.find((item) => item.id === 'gemini')).toMatchObject({
+        billing: 'per_use',
+        available: false,
+        reason: expect.stringContaining('não tem cota grátis na API'),
+      });
+      // Asked for by name, it is routed down to the free one, never called.
+      const quote = (
+        await estimate(off, cookies, image({ model: 'gemini/gemini-2.5-flash-image' }))
+      ).json<{ estimate: MediaEstimate }>().estimate;
+      expect(quote).toMatchObject({ providerId: 'cloudflare', brlCents: 0 });
+      expect(providers.state.calls.filter((item) => item.provider === 'gemini')).toHaveLength(0);
+    } finally {
+      await off.close();
+    }
+  });
+
+  it('after a provider refuses over its quota, names the next option and sends nothing again', async () => {
+    await reset({ providers: { gemini: { status: 429 } } });
+    const { cookies } = await sessionFor();
+    const quote = (
+      await estimate(app, cookies, image({ model: 'gemini/gemini-2.5-flash-image' }))
+    ).json<{ estimate: MediaEstimate }>().estimate;
+    const generation = (await generate(app, cookies, { estimateId: quote.id })).json<{
+      generation: MediaGeneration;
+    }>().generation;
+    expect(generation.status).toBe('refused');
+    expect(generation.detail).toContain(
+      'Próxima opção: FLUX.1 schnell no Cloudflare Workers AI (grátis). Estime com ele para gerar; nada foi reenviado.',
+    );
+    expect(providers.state.calls.filter((item) => item.provider === 'gemini')).toHaveLength(1);
+    expect(providers.state.calls.filter((item) => item.provider === 'cloudflare')).toHaveLength(0);
   });
 
   it('warns when a campaign mixes models, and stays quiet within one', async () => {

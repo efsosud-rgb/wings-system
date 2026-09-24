@@ -28,7 +28,6 @@ vi.mock('../../../api/auth.js', () => ({
 }));
 vi.mock('../../agent-chat/AgentChat.js', () => ({ AgentChat: () => <div>chat do agente</div> }));
 vi.mock('../PropertiesPanel.js', () => ({ PropertiesPanel: () => <div>propriedades</div> }));
-vi.mock('../LayersPanel.js', () => ({ LayersPanel: () => <div>painel de camadas</div> }));
 const shortcuts = vi.fn();
 vi.mock('../useStudioShortcuts.js', () => ({
   useStudioShortcuts: (session: unknown, options: unknown) => shortcuts(session, options),
@@ -123,6 +122,7 @@ function stubSession(overrides: Partial<StudioSession> = {}): StudioSession {
     ],
     addDriveFile: vi.fn(async () => undefined),
     addMediaAsset: vi.fn(async () => undefined),
+    replaceImage: vi.fn(async () => true),
     openProject: vi.fn(async () => undefined),
     newProject: vi.fn(() => true),
     addText: vi.fn(async () => undefined),
@@ -336,9 +336,26 @@ describe('the stage', () => {
 });
 
 describe('the dock', () => {
-  it('shows the layers and hides the timeline for an image, keeping the host in the DOM', () => {
-    renderWorkspace(stubSession({ mode: 'image', assets: [] }));
-    expect(screen.getByText('painel de camadas')).toBeTruthy();
+  it('shows nothing under an image (no loose list of file names), keeping the timeline host in the DOM', () => {
+    renderWorkspace(
+      stubSession({
+        mode: 'image',
+        assets: [],
+        layers: [
+          {
+            clipId: 'c1',
+            trackIndex: 0,
+            clipIndex: 0,
+            assetType: 'image',
+            label: 'imagem-4784fbc5',
+            selected: true,
+          },
+        ],
+      }),
+    );
+    // Staging, 2026-09-24: the image's layers showed as a bare "• imagem-…" list under the stage.
+    expect(screen.queryByText(/imagem-4784fbc5/)).toBeNull();
+    expect(screen.queryByRole('list', { name: 'Camadas' })).toBeNull();
     expect(screen.getByTestId('ws-timeline').hasAttribute('hidden')).toBe(true);
     expect(screen.queryByRole('button', { name: /Legendar/ })).toBeNull();
   });

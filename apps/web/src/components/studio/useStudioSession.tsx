@@ -120,6 +120,8 @@ export function useStudioSession(): StudioSession {
   const assetsRef = useRef<Map<string, StudioAsset>>(new Map());
   /** Drive file id → media library asset id, for the AI panel. */
   const mediaIdsRef = useRef<Map<string, string>>(new Map());
+  /** Drive file id → the library asset itself (its client and aspect), for "Editar com IA". */
+  const mediaAssetsRef = useRef<Map<string, MediaAsset>>(new Map());
   const abortRef = useRef<AbortController | null>(null);
 
   const [status, setStatus] = useState<StudioStatus>('loading');
@@ -501,12 +503,63 @@ export function useStudioSession(): StudioSession {
       return;
     }
     mediaIdsRef.current.set(driveFileId, asset.id);
+    mediaAssetsRef.current.set(driveFileId, asset);
     const name = `${asset.kind === 'video' ? 'video' : 'imagem'}-${asset.id.slice(0, 8)}`;
     await addDriveFile(
       { id: driveFileId, name, mimeType: asset.mimeType } as DriveFile,
       null,
       options,
     );
+  };
+
+  const replaceImage: StudioSession['replaceImage'] = async (clipId, item) => {
+    const made = coreRef.current;
+    const clip = made ? (made.edit.getDocumentClipById(clipId) as DocClip | null) : null;
+    if (!made || !clip || clip.asset?.type !== 'image') {
+      setNotice({ kind: 'error', text: 'A imagem a trocar não está mais na tela.' });
+      return false;
+    }
+    let file: Pick<DriveFile, 'id' | 'name' | 'mimeType'>;
+    if (item.kind === 'media-asset') {
+      const { asset } = item;
+      if (asset.kind !== 'image') {
+        setNotice({ kind: 'error', text: 'Uma imagem só pode ser trocada por outra imagem.' });
+        return false;
+      }
+      if (!asset.driveFileId) {
+        setNotice({
+          kind: 'error',
+          text: 'Este item da biblioteca ainda não está no Drive. Rode a migração da biblioteca ou salve-o no Drive antes.',
+        });
+        return false;
+      }
+      mediaIdsRef.current.set(asset.driveFileId, asset.id);
+      mediaAssetsRef.current.set(asset.driveFileId, asset);
+      file = {
+        id: asset.driveFileId,
+        name: `imagem-${asset.id.slice(0, 8)}`,
+        mimeType: asset.mimeType,
+      };
+    } else {
+      if (kindOfMime(item.file.name, item.file.mimeType) !== 'image') {
+        setNotice({ kind: 'error', text: 'Uma imagem só pode ser trocada por outra imagem.' });
+        return false;
+      }
+      file = item.file;
+      if (item.folder) setLastFolder(item.folder);
+    }
+    let done = false;
+    await withBusy('Trocando a imagem…', 'Não deu para trocar a imagem.', async () => {
+      const next = await resolve(file);
+      // Only the source moves: position, size, layer and timing stay, and the
+      // core records it as one command, so Ctrl+Z brings the old picture back.
+      const result = await made.edit.updateClipById(clipId, {
+        asset: { ...clip.asset, src: next.url },
+      } as never);
+      done = result.status !== 'noop';
+      refresh();
+    });
+    return done;
   };
 
   const newProject: StudioSession['newProject'] = ({
@@ -521,6 +574,7 @@ export function useStudioSession(): StudioSession {
     void made.edit.loadEdit(emptyEdit(chosen)).then(() => {
       assetsRef.current.clear();
       mediaIdsRef.current.clear();
+      mediaAssetsRef.current.clear();
       setAssets([]);
       setAspectState(chosen);
       setProjectName('Novo projeto');
@@ -919,10 +973,13 @@ export function useStudioSession(): StudioSession {
     if (typeof src !== 'string') return null;
     const asset = [...assetsRef.current.values()].find((item) => item.url === src);
     if (!asset) return null;
+    const library = mediaAssetsRef.current.get(asset.id) ?? null;
     return {
       driveFileId: asset.id,
       mediaAssetId: mediaIdsRef.current.get(asset.id) ?? null,
       name: asset.name,
+      clientId: library?.clientId ?? null,
+      aspect: library?.aspect ?? null,
     };
   })();
 
@@ -995,6 +1052,7 @@ export function useStudioSession(): StudioSession {
     assets,
     addDriveFile,
     addMediaAsset,
+    replaceImage,
     openProject,
     newProject,
     addText,

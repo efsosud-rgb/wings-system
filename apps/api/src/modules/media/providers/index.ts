@@ -59,6 +59,9 @@ export function mediaProvidersOf(
     }),
     geminiProvider({
       apiKey: env.GEMINI_API_KEY,
+      billingEnabled: env.GEMINI_BILLING_ENABLED,
+      usdPerImage: env.GEMINI_USD_PER_IMAGE,
+      brlPerUsd: env.BRL_PER_USD,
       dailyImages: env.GEMINI_DAILY_IMAGES,
       imagesPerMinute: env.GEMINI_IMAGES_PER_MINUTE,
       fetch: fetchFn,

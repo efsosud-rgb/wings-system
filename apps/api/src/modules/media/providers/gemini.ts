@@ -1,6 +1,6 @@
 import type { MediaModel } from '@wings/shared';
 import { asText, bytesFromBase64, find, http, isObject, pick, said } from './http.js';
-import { outputsStarted, periodStarts } from './quota.js';
+import { outputsStarted, periodStarts, usdToBrlCents } from './quota.js';
 import {
   ProviderError,
   type MediaProvider,
@@ -10,20 +10,22 @@ import {
 } from './types.js';
 
 /**
- * Gemini API image generation (gemini-2.5-flash-image), on the free tier.
- * Google's free tier has limits per minute and per day that it does not
- * report; this system keeps its own, lower ones (GEMINI_IMAGES_PER_MINUTE,
- * GEMINI_DAILY_IMAGES), counted from the ledger, and refuses before Google can.
+ * Gemini API image generation (gemini-2.5-flash-image), PAID PER USE.
+ *
+ * Google's pricing page (read 2026-09-24, "last updated 2026-09-24") lists image
+ * output as "Not available" on the free tier for every image model, and
+ * gemini-2.5-flash-image at US$ 0.039 per image on the paid tier. Staging saw it:
+ * the first call of the day answered 429 "You exceeded your current quota". So
+ * this provider is pay-per-use, priced at GEMINI_USD_PER_IMAGE, and stays off
+ * until the Google project has billing and GEMINI_BILLING_ENABLED is true. The
+ * daily and per-minute ceilings (GEMINI_DAILY_IMAGES, GEMINI_IMAGES_PER_MINUTE)
+ * stay as our own brakes, counted from the ledger.
  *
  * NOT VERIFIED against the real service (docs/integracoes/gemini.md): the
  * request is `POST /v1beta/models/<model>:generateContent` with the key in
  * `x-goog-api-key`, `responseModalities: ['IMAGE']` and an `imageConfig.aspectRatio`;
  * the picture is read from the first part with `inlineData.data` (base64). A
  * picture handed over goes inline in the same request: the model then edits it.
- *
- * If the Google project has billing turned on, a picture is charged by Google
- * at its published price; this system shows R$ 0 because it treats the key as
- * a free-tier key. The doc says so, in the section on the account.
  */
 
 export const GEMINI_MODEL_KEY = 'gemini/gemini-2.5-flash-image';
@@ -32,6 +34,10 @@ const TIMEOUT_MS = 120_000;
 
 export interface GeminiConfig {
   apiKey: string | undefined;
+  /** GEMINI_BILLING_ENABLED: the Google project pays for images. Off: the provider serves nothing. */
+  billingEnabled: boolean;
+  usdPerImage: number;
+  brlPerUsd: number;
   dailyImages: number;
   imagesPerMinute: number;
   fetch: typeof fetch;
@@ -45,7 +51,8 @@ const MODEL: MediaModel = {
   provider: 'Google',
   kind: 'image',
   creditsPerOutput: 0,
-  brlCentsPerOutput: 0,
+  // Set from GEMINI_USD_PER_IMAGE when the provider is built.
+  brlCentsPerOutput: null,
   maxOutputs: 4,
   supportedDurations: [],
   aspectRatios: ['1:1', '4:5', '9:16', '16:9'],
@@ -56,8 +63,12 @@ const MODEL: MediaModel = {
   acceptsFirstFrame: false,
 };
 
+export const GEMINI_NO_FREE_TIER =
+  'A imagem do Gemini não tem cota grátis na API (tabela do Google, 2026-09-24): é paga por uso. Fica desativada até o projeto do Google ter faturamento e GEMINI_BILLING_ENABLED=true.';
+
 export function geminiProvider(config: GeminiConfig): MediaProvider {
   const configured = Boolean(config.apiKey);
+  const perImage = usdToBrlCents(config.usdPerImage, config.brlPerUsd);
   const quota = async (ctx: ProviderContext) => {
     const starts = periodStarts(ctx.now());
     return {
@@ -71,24 +82,25 @@ export function geminiProvider(config: GeminiConfig): MediaProvider {
   return {
     id: 'gemini',
     name: 'Gemini',
-    billing: 'free_quota',
+    billing: 'per_use',
     capabilities: ['generate_image'],
     verified: false,
     configured,
 
     async availability(ctx, need = { outputs: 1 }) {
       if (!configured) return { available: false, reason: 'Sem GEMINI_API_KEY no ambiente.' };
+      if (!config.billingEnabled) return { available: false, reason: GEMINI_NO_FREE_TIER };
       const now = await quota(ctx);
       if (now.usedToday + need.outputs > now.dailyLimit) {
         return {
           available: false,
-          reason: `Cota grátis do dia esgotada (${now.usedToday} de ${now.dailyLimit} imagens).`,
+          reason: `Limite do dia no Gemini atingido (${now.usedToday} de ${now.dailyLimit} imagens).`,
         };
       }
       if ((now.usedThisMinute ?? 0) + need.outputs > (now.perMinuteLimit ?? Infinity)) {
         return {
           available: false,
-          reason: `Cota por minuto esgotada (${now.usedThisMinute} de ${now.perMinuteLimit}). Espere um minuto.`,
+          reason: `Limite por minuto no Gemini atingido (${now.usedThisMinute} de ${now.perMinuteLimit}). Espere um minuto.`,
         };
       }
       return { available: true, reason: null };
@@ -101,7 +113,7 @@ export function geminiProvider(config: GeminiConfig): MediaProvider {
     quota,
 
     async listModels() {
-      return configured ? [{ ...MODEL }] : [];
+      return configured ? [{ ...MODEL, brlCentsPerOutput: perImage }] : [];
     },
 
     async estimate(_ctx, request) {
@@ -110,7 +122,7 @@ export function geminiProvider(config: GeminiConfig): MediaProvider {
       }
       return {
         credits: 0,
-        brlCents: 0,
+        brlCents: perImage * request.quantity,
         priceArgs: {
           model: request.model.key,
           quantity: request.quantity,
@@ -134,7 +146,9 @@ export function geminiProvider(config: GeminiConfig): MediaProvider {
       if (input.source) {
         const bytes = await input.sourceBytes();
         if (!bytes) throw new ProviderError('rejected', 'A imagem de origem não pôde ser lida.');
-        parts.push({ inlineData: { mimeType: input.source.mimeType, data: bytes.toString('base64') } });
+        parts.push({
+          inlineData: { mimeType: input.source.mimeType, data: bytes.toString('base64') },
+        });
       }
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
       const outputs: ProviderOutput[] = [];
@@ -179,7 +193,15 @@ export function geminiProvider(config: GeminiConfig): MediaProvider {
           break;
         }
       }
-      return { done: true, externalId: null, outputs, creditsCharged: 0, brlCentsCharged: 0, note };
+      // Google charges its published price per picture; it does not say so in the answer.
+      return {
+        done: true,
+        externalId: null,
+        outputs,
+        creditsCharged: 0,
+        brlCentsCharged: perImage * outputs.length,
+        note,
+      };
     },
 
     async poll() {
