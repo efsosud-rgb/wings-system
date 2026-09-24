@@ -269,6 +269,28 @@ const schema = z.object({
     'must be 55 + DDD + number, digits only',
   ),
 
+  /**
+   * The roadmap's commit-history generator (docs/roadmap.md). A GitHub
+   * fine-grained PAT, read-only, scoped to Contents+Metadata on this one
+   * repo — never a classic broad-scope token. Without it `roadmap-cli.js
+   * --generate` fails loudly instead of writing an empty or wrong roadmap.
+   */
+  GITHUB_ROADMAP_TOKEN: optionalString,
+  /** `owner/repo`, e.g. `wings-company/wings-system`. */
+  GITHUB_ROADMAP_REPO: optionalString.refine(
+    (value) => value === undefined || /^[^/\s]+\/[^/\s]+$/.test(value),
+    'must be "owner/repo"',
+  ),
+  /**
+   * Same pattern as ADS_WRITES_ENABLED: the 18:00 job always computes and
+   * composes the report, but only sends it over Z-API when this is explicitly
+   * true. Off by default in every environment, production included.
+   */
+  ROADMAP_REPORT_SEND_ENABLED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+
   /** Google Workspace SMTP. Optional in development; required in production. */
   SMTP_HOST: optionalString,
   SMTP_PORT: z.coerce.number().int().positive().default(587),
