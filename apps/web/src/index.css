@@ -5179,6 +5179,11 @@ a.menu-module-header {
 }
 .ws-panel .media-form-row {
   flex-direction: column;
+  align-items: stretch;
+}
+/* Stacked, a field's flex width must not become its height. */
+.ws-panel .media-form-row > * {
+  flex: 0 0 auto !important;
 }
 
 .ws-stage-wrap {
