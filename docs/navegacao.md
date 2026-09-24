@@ -37,7 +37,9 @@ APIs, auditoria e ads. Contratos, Formatação, Gestão, Produtividade e
 Atendimento **não têm permissão definida** — e inventar essa matriz seria
 decisão de negócio, não esqueleto. (Desde então ganharam permissão os módulos
 que foram construídos: Drive, clientes, mídia, integrações e, em Gestão,
-Projetos com `projects.read` e `projects.manage`; ver `docs/projetos.md`.)
+Projetos com `projects.read` e `projects.manage`; ver `docs/projetos.md`. Em
+Administração, Roadmap ganhou `roadmap.manage`, só para Admin Master; ver
+`docs/roadmap.md`.)
 
 Regra aplicada:
 

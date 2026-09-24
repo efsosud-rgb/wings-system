@@ -22,6 +22,7 @@ import { MarketingDashboardPage } from './pages/MarketingDashboardPage.js';
 import { MediaStudioPage } from './pages/MediaStudioPage.js';
 import { NotFoundPage } from './pages/NotFoundPage.js';
 import { ProjectsPage } from './pages/ProjectsPage.js';
+import { RoadmapPage } from './pages/RoadmapPage.js';
 import { SetPasswordPage } from './pages/SetPasswordPage.js';
 import { TrafficStudioPage } from './pages/TrafficStudioPage.js';
 
@@ -48,6 +49,10 @@ const SCREENS: Record<string, RouteObject[]> = {
     { index: true, element: <EmployeesPage /> },
     { path: 'novo', element: <EmployeeFormPage /> },
     { path: ':id', element: <EmployeeFormPage /> },
+  ],
+  '/administracao/roadmap': [
+    { index: true, element: <RoadmapPage /> },
+    { path: 'relatorios/:id', element: <RoadmapPage /> },
   ],
   '/administracao/clientes': [{ index: true, element: <ClientsPage /> }],
   '/crm-vendas/funil': [

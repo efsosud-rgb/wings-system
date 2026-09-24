@@ -35,5 +35,6 @@ export * from './rbac/permissions.js';
 export * from './rbac/policy.js';
 export * from './rbac/roles.js';
 export * from './rbac/sectors.js';
+export * from './roadmap.js';
 export * from './studio.js';
 export * from './studio-agent.js';
