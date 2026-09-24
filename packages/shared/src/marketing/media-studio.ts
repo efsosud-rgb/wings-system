@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { checkCopyCompliance, COMPLIANCE_RULE_LABEL } from '../ads/campaign-builder.js';
 import { WINGS_CLIENT_ID } from '../clients.js';
+import { CAMERA_MOVE_IDS, withCameraMove } from './camera-moves.js';
 import { MEDIA_PROVIDERS, type MediaProviderId } from './media-providers.js';
 
 /**
@@ -364,6 +365,13 @@ export const agentGenerationProposalSchema = z
       .min(40, 'O prompt precisa descrever cena, luz, enquadramento e estilo')
       .max(PROMPT_MAX),
     negativePrompt: z.string().trim().max(600).optional(),
+    /**
+     * Video only: a move from CAMERA_MOVES. The server adds its English term to
+     * the prompt with `withCameraMove`, the same way the form does.
+     */
+    cameraMove: z
+      .enum(CAMERA_MOVE_IDS, 'Use um id de movimento de câmera do catálogo (movimentos_de_camera).')
+      .optional(),
     /** Portuguese, for the person: what the picture will show and why. */
     explanation: z.string().trim().min(20).max(800),
     aspect: z.enum(GENERATION_ASPECTS),
@@ -389,6 +397,20 @@ export const agentGenerationProposalSchema = z
         code: 'custom',
         path: ['quantity'],
         message: 'No máximo 2 vídeos por geração',
+      });
+    }
+    if (proposal.cameraMove && proposal.kind !== 'video') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['cameraMove'],
+        message: 'Movimento de câmera é só para vídeo',
+      });
+    }
+    if (withCameraMove(proposal.prompt, proposal.cameraMove).length > PROMPT_MAX) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['prompt'],
+        message: 'O prompt com o movimento de câmera passa do limite: encurte o prompt',
       });
     }
     refuseBlocked(ctx, proposal.prompt);
