@@ -252,8 +252,12 @@ function captionBox(style: CaptionStyle, output: { width: number; height: number
   };
 }
 
-export function captionClip(src: string, output: { width: number; height: number }): Clip {
-  const style = captionStyleFor(output);
+export function captionClip(
+  src: string,
+  output: { width: number; height: number },
+  placement: CaptionStyle['placement'] = 'bottom',
+): Clip {
+  const style = { ...captionStyleFor(output), placement };
   const box = captionBox(style, output);
   return {
     asset: {

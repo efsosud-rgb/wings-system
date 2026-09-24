@@ -767,7 +767,7 @@ export function useStudioSession(): StudioSession {
       });
     });
 
-  const requestCaptions: StudioSession['requestCaptions'] = async (assetId, language) =>
+  const requestCaptions: StudioSession['requestCaptions'] = async (assetId, language, smart) =>
     withBusy('Pedindo a legenda…', 'Não deu para pedir a legenda.', async () => {
       const asset = assetsRef.current.get(assetId);
       if (!asset || (asset.kind !== 'video' && asset.kind !== 'audio')) {
@@ -775,24 +775,48 @@ export function useStudioSession(): StudioSession {
       }
       const { transcription: queued } = await createTranscription.mutateAsync({
         fileId: asset.id,
+        smart: smart === true && asset.kind === 'video',
         ...(language ? { language } : {}),
       });
       setTranscriptionId(queued.id);
       setNotice(null);
     });
 
-  const addCaptionsFromTranscription = async () =>
+  const addCaptionsFromTranscription: StudioSession['addCaptionsFromTranscription'] = async (
+    options,
+  ) =>
     withBusy('Colocando a legenda…', 'Não deu para colocar a legenda.', async () => {
       const done = transcription.data?.transcription;
       if (!done?.file) throw new Error('A legenda ainda não está pronta.');
-      const asset = await resolve({
-        id: done.file.id,
-        name: done.file.name,
-        mimeType: 'application/x-subrip',
-      });
-      await addClip(captionClip(asset.url, outputSize()));
+      const placed =
+        !options?.plain && done.layout?.state === 'done' && done.layout.files.length > 0
+          ? done.layout.files
+          : null;
+      if (placed) {
+        // One caption clip per zone, each holding only the cues that sit there.
+        for (const file of placed) {
+          const asset = await resolve({
+            id: file.id,
+            name: file.name,
+            mimeType: 'application/x-subrip',
+          });
+          await addClip(captionClip(asset.url, outputSize(), file.zone));
+        }
+      } else {
+        const asset = await resolve({
+          id: done.file.id,
+          name: done.file.name,
+          mimeType: 'application/x-subrip',
+        });
+        await addClip(captionClip(asset.url, outputSize()));
+      }
       setModeState('video');
-      setNotice({ kind: 'success', text: 'Legenda colocada na linha do tempo, por cima de tudo.' });
+      setNotice({
+        kind: 'success',
+        text: placed
+          ? `Legenda colocada em ${placed.length === 1 ? '1 faixa' : `${placed.length} faixas`}, longe de rostos e textos.`
+          : 'Legenda colocada na linha do tempo, por cima de tudo.',
+      });
     });
 
   /** Where each clip sits in time as the core resolved it: `auto` and `end` in seconds. */

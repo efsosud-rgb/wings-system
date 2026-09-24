@@ -219,11 +219,17 @@ export interface StudioSession {
   /** WebCodecs present, and the timeline short enough for the browser. */
   browserExport: { available: boolean; reason: string | null };
 
-  /** "Legendar": queue Whisper on a video or audio file of this project; the SRT lands in the Drive. */
-  requestCaptions(assetId: string, language?: string): Promise<void>;
+  /**
+   * "Legendar": queue Whisper on a video or audio file of this project; the SRT lands in the Drive.
+   * With `smart` (video only), each cue is then placed away from faces and on-screen text.
+   */
+  requestCaptions(assetId: string, language?: string, smart?: boolean): Promise<void>;
   transcription: StudioTranscription | null;
-  /** Once the SRT is filed, put it on the timeline as a caption clip. */
-  addCaptionsFromTranscription(): Promise<void>;
+  /**
+   * Once the SRT is filed, put it on the timeline: one caption clip per zone when the smart
+   * placement is done, else one clip at the bottom (`plain` forces that).
+   */
+  addCaptionsFromTranscription(options?: { plain?: boolean }): Promise<void>;
   dismissTranscription(): void;
 
   render: StudioRender | null;

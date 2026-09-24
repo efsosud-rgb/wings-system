@@ -672,6 +672,7 @@ describe('shapes and captions', () => {
       file: null,
       language: null,
       segments: null,
+      layout: null,
       createdAt: '2026-09-22T10:00:00.000Z',
       finishedAt: null,
     };
@@ -696,6 +697,7 @@ describe('shapes and captions', () => {
     await act(() => session().requestCaptions(FILE_ID, 'pt'));
     expect(post).toHaveBeenCalledWith('/studio/transcriptions', {
       fileId: FILE_ID,
+      smart: false,
       language: 'pt',
     });
     await waitFor(() => expect(session().transcription?.state).toBe('done'));
@@ -714,6 +716,85 @@ describe('shapes and captions', () => {
     const { saved } = await savedJson();
     expect(JSON.stringify(saved)).toContain(`wings-drive://${SRT_ID}`);
     expect(JSON.stringify(saved)).not.toContain('legenda.srt?sig');
+  });
+
+  it('with smart captions, puts one caption clip per zone, each in its place', async () => {
+    await mount();
+    await act(() => session().addDriveFile(video, folder));
+    const TOP_ID = '11111111-2222-4333-8444-5555555555a1';
+    const BOTTOM_ID = '11111111-2222-4333-8444-5555555555a2';
+    const queued = {
+      id: 't-2',
+      state: 'pending',
+      error: null,
+      sourceFileId: FILE_ID,
+      file: null,
+      language: null,
+      segments: null,
+      layout: { state: 'pending', error: null, files: [] },
+      createdAt: '2026-09-24T10:00:00.000Z',
+      finishedAt: null,
+    };
+    post.mockResolvedValue({ transcription: queued });
+    get.mockImplementation(async (path: string) => {
+      if (path === '/studio/transcriptions/t-2')
+        return {
+          transcription: {
+            ...queued,
+            state: 'done',
+            file: { id: SRT_ID, version: 1, name: 'entrevista.srt', folderId: FOLDER_ID },
+            language: 'pt',
+            segments: 12,
+            layout: {
+              state: 'done',
+              error: null,
+              files: [
+                {
+                  id: BOTTOM_ID,
+                  version: 1,
+                  name: 'entrevista.legenda-embaixo.srt',
+                  zone: 'bottom',
+                  cues: 8,
+                },
+                {
+                  id: TOP_ID,
+                  version: 1,
+                  name: 'entrevista.legenda-em-cima.srt',
+                  zone: 'top',
+                  cues: 4,
+                },
+              ],
+            },
+          },
+        };
+      if (path === `/studio/files/${TOP_ID}/link`)
+        return { url: 'http://storage.test/drive/top.srt?sig=1', expiresAt: '' };
+      if (path === `/studio/files/${BOTTOM_ID}/link`)
+        return { url: 'http://storage.test/drive/bottom.srt?sig=2', expiresAt: '' };
+      if (path === `/studio/files/${FILE_ID}/link`) return { url: LINK, expiresAt: '' };
+      throw new Error(`unexpected GET ${path}`);
+    });
+
+    await act(() => session().requestCaptions(FILE_ID, undefined, true));
+    expect(post).toHaveBeenCalledWith('/studio/transcriptions', { fileId: FILE_ID, smart: true });
+    await waitFor(() => expect(session().transcription?.layout?.state).toBe('done'));
+
+    await act(() => session().addCaptionsFromTranscription());
+    const captions = core.state.tracks
+      .flatMap((track) => track.clips as FakeClip[])
+      .filter((clip) => (clip.asset as { type?: string }).type === 'rich-caption')
+      .map((clip) => [
+        (clip.asset as { src: string }).src,
+        (clip as { position?: string }).position,
+      ]);
+    expect(captions).toEqual(
+      expect.arrayContaining([
+        ['http://storage.test/drive/bottom.srt?sig=2', 'bottom'],
+        ['http://storage.test/drive/top.srt?sig=1', 'top'],
+      ]),
+    );
+    expect(captions).toHaveLength(2);
+    expect(session().notice?.text).toMatch(/2 faixas, longe de rostos e textos/);
   });
 
   it('refuses captions for something that is not a video or audio of this project', async () => {

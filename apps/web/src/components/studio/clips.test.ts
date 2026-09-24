@@ -150,3 +150,18 @@ describe('captions', () => {
     expect(updatesFor({ text: { text: 'x' } }, clip, vertical)).toEqual({});
   });
 });
+
+describe('captionClip placement', () => {
+  it('puts a smart caption file in its zone', async () => {
+    const { captionClip } = await import('./clips.js');
+    const output = { width: 1080, height: 1920 };
+    const top = captionClip('https://x/a.legenda-em-cima.srt', output, 'top') as unknown as {
+      position: string;
+    };
+    const middle = captionClip('https://x/a.legenda-no-meio.srt', output, 'middle') as unknown as {
+      position: string;
+    };
+    const bottom = captionClip('https://x/a.srt', output) as unknown as { position: string };
+    expect([top.position, middle.position, bottom.position]).toEqual(['top', 'center', 'bottom']);
+  });
+});

@@ -64,7 +64,12 @@ export const useTranscription = (id: string | null) =>
     queryFn: () => api.get<{ transcription: StudioTranscription }>(`/studio/transcriptions/${id}`),
     enabled: id !== null,
     refetchInterval: (query) => {
-      const state = query.state.data?.transcription.state;
-      return state === 'pending' || state === 'running' ? TRANSCRIPTION_POLL_MS : false;
+      const transcription = query.state.data?.transcription;
+      const working = (state: string | undefined) => state === 'pending' || state === 'running';
+      // Smart captions: followed until the zones are filed too.
+      return working(transcription?.state) ||
+        (transcription?.state === 'done' && working(transcription.layout?.state))
+        ? TRANSCRIPTION_POLL_MS
+        : false;
     },
   });

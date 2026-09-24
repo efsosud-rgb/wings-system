@@ -1,4 +1,8 @@
-import { STUDIO_TRANSCRIPTION_STATE_LABEL } from '@wings/shared';
+import {
+  CAPTION_ZONE_LABEL,
+  STUDIO_CAPTION_LAYOUT_STATE_LABEL,
+  STUDIO_TRANSCRIPTION_STATE_LABEL,
+} from '@wings/shared';
 import { useState } from 'react';
 import { Dialog } from '../../drive/DriveParts.js';
 import { Button } from '../../ui.js';
@@ -23,6 +27,8 @@ function CaptionsDialog({ session, onClose }: { session: StudioSession; onClose:
   const spoken = session.assets.filter((asset) => asset.kind === 'video' || asset.kind === 'audio');
   const [assetId, setAssetId] = useState(spoken[0]?.id ?? '');
   const [language, setLanguage] = useState('');
+  const [smart, setSmart] = useState(true);
+  const isVideo = spoken.find((asset) => asset.id === assetId)?.kind === 'video';
   return (
     <Dialog label="Legendar com Whisper" onClose={onClose}>
       <div className="ws-form">
@@ -58,12 +64,29 @@ function CaptionsDialog({ session, onClose }: { session: StudioSession; onClose:
             ))}
           </select>
         </label>
+        {isVideo && (
+          <>
+            <label className="media-check">
+              <input
+                type="checkbox"
+                checked={smart}
+                onChange={(event) => setSmart(event.target.checked)}
+              />
+              <span>Legenda inteligente: fugir de rostos e de textos do vídeo</span>
+            </label>
+            <p className="field-hint">
+              Nosso servidor olha alguns quadros de cada trecho e põe a legenda embaixo, em cima ou
+              no meio, onde estiver livre, sem trocar de lugar por menos de 2 segundos. Sem custo.
+              Guarda só a posição escolhida, nunca o rosto.
+            </p>
+          </>
+        )}
         <div className="studio-save-actions">
           <Button
             type="button"
             disabled={assetId === ''}
             onClick={() => {
-              void session.requestCaptions(assetId, language || undefined);
+              void session.requestCaptions(assetId, language || undefined, isVideo && smart);
               onClose();
             }}
           >
@@ -83,6 +106,7 @@ export function BottomDock({ session }: { session: StudioSession }) {
   const ready = session.status === 'ready' && session.busy === null;
   const spoken = session.assets.some((asset) => asset.kind === 'video' || asset.kind === 'audio');
   const transcription = session.transcription;
+  const layout = transcription?.layout ?? null;
   const video = session.mode === 'video';
 
   return (
@@ -110,14 +134,43 @@ export function BottomDock({ session }: { session: StudioSession }) {
                 <>
                   {transcription.language && ` · idioma ${transcription.language}`}
                   {transcription.segments !== null && ` · ${transcription.segments} trechos`}{' '}
-                  <Button
-                    type="button"
-                    variant="primary"
-                    disabled={!ready}
-                    onClick={() => void session.addCaptionsFromTranscription()}
-                  >
-                    Adicionar legenda à linha do tempo
-                  </Button>
+                  {layout && (layout.state === 'pending' || layout.state === 'running') ? (
+                    <>
+                      · {STUDIO_CAPTION_LAYOUT_STATE_LABEL[layout.state]}…{' '}
+                      <button
+                        type="button"
+                        className="link-button"
+                        disabled={!ready}
+                        onClick={() => void session.addCaptionsFromTranscription({ plain: true })}
+                      >
+                        Não esperar: pôr embaixo
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      {layout?.state === 'done' && layout.files.length > 0 && (
+                        <>
+                          · {STUDIO_CAPTION_LAYOUT_STATE_LABEL.done}:{' '}
+                          {layout.files
+                            .map((file) => CAPTION_ZONE_LABEL[file.zone])
+                            .join(', ')}{' '}
+                        </>
+                      )}
+                      {layout?.state === 'failed' && (
+                        <span className="muted">
+                          · {STUDIO_CAPTION_LAYOUT_STATE_LABEL.failed}, a legenda vai embaixo.{' '}
+                        </span>
+                      )}
+                      <Button
+                        type="button"
+                        variant="primary"
+                        disabled={!ready}
+                        onClick={() => void session.addCaptionsFromTranscription()}
+                      >
+                        Adicionar legenda à linha do tempo
+                      </Button>
+                    </>
+                  )}
                 </>
               )}
               {transcription.state === 'failed' && (

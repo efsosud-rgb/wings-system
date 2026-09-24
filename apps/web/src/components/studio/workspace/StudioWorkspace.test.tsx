@@ -1,4 +1,4 @@
-import type { DriveFolder, MediaAsset, SessionUser } from '@wings/shared';
+import type { DriveFolder, MediaAsset, SessionUser, StudioTranscription } from '@wings/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
@@ -351,7 +351,8 @@ describe('the dock', () => {
     const dialog = screen.getByRole('dialog', { name: 'Legendar com Whisper' });
     fireEvent.change(within(dialog).getByLabelText('Idioma'), { target: { value: 'pt' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Legendar' }));
-    expect(session.requestCaptions).toHaveBeenCalledWith('a1', 'pt');
+    // A video gets the smart placement unless the box is unticked.
+    expect(session.requestCaptions).toHaveBeenCalledWith('a1', 'pt', true);
     unmount();
 
     const done = stubSession({
@@ -363,6 +364,7 @@ describe('the dock', () => {
         file: { id: 'f1', version: 1, name: 'entrevista.srt', folderId: folder.id },
         language: 'pt',
         segments: 42,
+        layout: null,
         createdAt: '2026-09-22T12:00:00.000Z',
         finishedAt: '2026-09-22T12:03:00.000Z',
       },
@@ -371,6 +373,84 @@ describe('the dock', () => {
     expect(screen.getByText('Legenda pronta')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Adicionar legenda à linha do tempo' }));
     expect(done.addCaptionsFromTranscription).toHaveBeenCalled();
+  });
+});
+
+describe('smart captions', () => {
+  const doneWith = (layout: StudioTranscription['layout']): StudioTranscription => ({
+    id: 't1',
+    state: 'done',
+    error: null,
+    sourceFileId: 'a1',
+    file: { id: 'f1', version: 1, name: 'entrevista.srt', folderId: folder.id },
+    language: 'pt',
+    segments: 12,
+    layout,
+    createdAt: '2026-09-24T12:00:00.000Z',
+    finishedAt: '2026-09-24T12:03:00.000Z',
+  });
+
+  it('offers the placement for a video, ticked, and sends it off when unticked', () => {
+    const session = stubSession();
+    renderWorkspace(session);
+    fireEvent.click(screen.getByRole('button', { name: /Legendar/ }));
+    const dialog = screen.getByRole('dialog', { name: 'Legendar com Whisper' });
+    const box = within(dialog).getByRole('checkbox', { name: /fugir de rostos e de textos/ });
+    expect((box as HTMLInputElement).checked).toBe(true);
+    expect(within(dialog).getByText(/Guarda só a posição escolhida, nunca o rosto/)).toBeTruthy();
+    fireEvent.click(box);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Legendar' }));
+    expect(session.requestCaptions).toHaveBeenCalledWith('a1', undefined, false);
+  });
+
+  it('has no placement for an audio file', () => {
+    renderWorkspace(
+      stubSession({
+        assets: [
+          { id: 'a2', name: 'voz.mp3', mimeType: 'audio/mpeg', url: 'blob:y', kind: 'audio' },
+        ],
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Legendar/ }));
+    const dialog = screen.getByRole('dialog', { name: 'Legendar com Whisper' });
+    expect(within(dialog).queryByRole('checkbox')).toBeNull();
+  });
+
+  it('while placing, says so and lets the person put it at the bottom without waiting', () => {
+    const session = stubSession({
+      transcription: doneWith({ state: 'running', error: null, files: [] }),
+    });
+    renderWorkspace(session);
+    expect(screen.getByText(/Procurando rostos e textos no vídeo/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Adicionar legenda à linha do tempo' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Não esperar: pôr embaixo' }));
+    expect(session.addCaptionsFromTranscription).toHaveBeenCalledWith({ plain: true });
+  });
+
+  it('once placed, names the zones and adds them', () => {
+    const session = stubSession({
+      transcription: doneWith({
+        state: 'done',
+        error: null,
+        files: [
+          { id: 'z1', version: 1, name: 'entrevista.legenda-embaixo.srt', zone: 'bottom', cues: 9 },
+          { id: 'z2', version: 1, name: 'entrevista.legenda-em-cima.srt', zone: 'top', cues: 3 },
+        ],
+      }),
+    });
+    renderWorkspace(session);
+    expect(screen.getByText(/Posições prontas: embaixo, em cima/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Adicionar legenda à linha do tempo' }));
+    expect(session.addCaptionsFromTranscription).toHaveBeenCalledWith();
+  });
+
+  it('when placing failed, says the caption goes at the bottom', () => {
+    renderWorkspace(
+      stubSession({
+        transcription: doneWith({ state: 'failed', error: 'x: y', files: [] }),
+      }),
+    );
+    expect(screen.getByText(/Não deu para posicionar, a legenda vai embaixo/)).toBeTruthy();
   });
 });
 
