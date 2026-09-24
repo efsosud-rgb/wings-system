@@ -57,7 +57,9 @@ let providers = fakeProviders();
 /** One transport: Kairogen's hosts to its fake, everything else to the providers'. */
 const transport = ((input: string | URL | Request, init?: RequestInit) => {
   const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url);
-  return /kairogen\.ai$/.test(url.host) ? kairogen.fetch(input, init) : providers.fetch(input, init);
+  return /kairogen\.ai$/.test(url.host)
+    ? kairogen.fetch(input, init)
+    : providers.fetch(input, init);
 }) as typeof fetch;
 
 type Step = (request: LlmRequest) => Partial<LlmTurn>;
@@ -125,11 +127,13 @@ afterAll(async () => {
 });
 
 /** A connected Kairogen account and clean tables, with the fakes re-scripted. */
-async function reset(options: {
-  kairogen?: Parameters<typeof fakeKairogen>[0];
-  providers?: FakeProvidersOptions;
-  connected?: boolean;
-} = {}) {
+async function reset(
+  options: {
+    kairogen?: Parameters<typeof fakeKairogen>[0];
+    providers?: FakeProvidersOptions;
+    connected?: boolean;
+  } = {},
+) {
   kairogen = fakeKairogen(options.kairogen);
   providers = fakeProviders(options.providers);
   clearModelCache();
@@ -290,7 +294,10 @@ describe('the registry', () => {
       models: MediaModel[];
     }>().models;
     const priced = Object.fromEntries(
-      models.map((model) => [model.key, [model.providerId, model.creditsPerOutput, model.brlCentsPerOutput]]),
+      models.map((model) => [
+        model.key,
+        [model.providerId, model.creditsPerOutput, model.brlCentsPerOutput],
+      ]),
     );
     expect(priced).toMatchObject({
       // Kairogen: credits from estimate_cost, reais at KAIROGEN_BRL_PER_CREDIT.
@@ -358,7 +365,9 @@ describe('Cloudflare Workers AI', () => {
     expect(asset?.sourceUrl).toBeNull();
 
     const rows = await ledgerOf(generation.id);
-    expect(rows.map((row) => [row.event, row.provider, row.brlCentsDelta, row.creditsDelta])).toEqual([
+    expect(
+      rows.map((row) => [row.event, row.provider, row.brlCentsDelta, row.creditsDelta]),
+    ).toEqual([
       ['estimated', 'cloudflare', 0, 0],
       ['started', 'cloudflare', 0, 0],
       ['succeeded', 'cloudflare', 0, 0],
@@ -375,7 +384,8 @@ describe('Cloudflare Workers AI', () => {
   it('marks the outcome unknown when the connection drops mid-call, and never sends again', async () => {
     await reset({ providers: { cloudflare: { drop: true } } });
     const { cookies } = await sessionFor();
-    const quote = (await estimate(app, cookies, image())).json<{ estimate: MediaEstimate }>().estimate;
+    const quote = (await estimate(app, cookies, image())).json<{ estimate: MediaEstimate }>()
+      .estimate;
     const generation = (await generate(app, cookies, { estimateId: quote.id })).json<{
       generation: MediaGeneration;
     }>().generation;
@@ -390,7 +400,8 @@ describe('Cloudflare Workers AI', () => {
   it('takes a raw image answer as well as a base64 one', async () => {
     await reset({ providers: { cloudflare: { rawImage: true } } });
     const { cookies } = await sessionFor();
-    const quote = (await estimate(app, cookies, image())).json<{ estimate: MediaEstimate }>().estimate;
+    const quote = (await estimate(app, cookies, image())).json<{ estimate: MediaEstimate }>()
+      .estimate;
     const generation = (await generate(app, cookies, { estimateId: quote.id })).json<{
       generation: MediaGeneration;
     }>().generation;
@@ -457,7 +468,12 @@ describe('Gemini', () => {
     const asset = await db.query.mediaAssets.findFirst({
       where: eq(mediaAssets.id, generation.assetIds[0] ?? ''),
     });
-    expect(asset).toMatchObject({ origin: 'gemini', width: 576, height: 1024, sourceAssetId: stored.id });
+    expect(asset).toMatchObject({
+      origin: 'gemini',
+      width: 576,
+      height: 1024,
+      sourceAssetId: stored.id,
+    });
 
     const status = (await app.inject({ url: '/media/providers', cookies })).json<{
       providers: MediaProviderStatus[];
@@ -480,7 +496,9 @@ describe('Gemini', () => {
       generation: MediaGeneration;
     }>().generation;
     expect(generation.status).toBe('refused');
-    expect(generation.detail).toContain('O Gemini respondeu sem imagem. Resposta dele: I cannot create that image.');
+    expect(generation.detail).toContain(
+      'O Gemini respondeu sem imagem. Resposta dele: I cannot create that image.',
+    );
     expect(generation.assetIds).toHaveLength(0);
   });
 });
@@ -492,7 +510,12 @@ describe('Higgsfield', () => {
     const quoted = await estimate(app, cookies, image({ model: 'higgsfield/soul', aspect: '4:5' }));
     expect(quoted.statusCode).toBe(201);
     const quote = quoted.json<{ estimate: MediaEstimate }>().estimate;
-    expect(quote).toMatchObject({ providerId: 'higgsfield', credits: 0, brlCents: 28, blockedBy: null });
+    expect(quote).toMatchObject({
+      providerId: 'higgsfield',
+      credits: 0,
+      brlCents: 28,
+      blockedBy: null,
+    });
 
     const started = (await generate(app, cookies, { estimateId: quote.id })).json<{
       generation: MediaGeneration;
@@ -515,7 +538,9 @@ describe('Higgsfield', () => {
     expect(finished?.assetIds).toHaveLength(1);
     // Still one POST: following never sends the job again.
     expect(
-      providers.state.calls.filter((item) => item.provider === 'higgsfield' && item.method === 'POST'),
+      providers.state.calls.filter(
+        (item) => item.provider === 'higgsfield' && item.method === 'POST',
+      ),
     ).toHaveLength(1);
 
     const asset = await db.query.mediaAssets.findFirst({
@@ -536,7 +561,9 @@ describe('Higgsfield', () => {
       providers: MediaProviderStatus[];
     }>();
     expect(spend.spend.usedThisMonthBrlCents).toBe(22);
-    expect(spend.providers.find((item) => item.id === 'higgsfield')?.usedThisMonthBrlCents).toBe(22);
+    expect(spend.providers.find((item) => item.id === 'higgsfield')?.usedThisMonthBrlCents).toBe(
+      22,
+    );
   });
 
   it('needs a first frame for a video, and reads it through a signed link of ours', async () => {
@@ -578,7 +605,9 @@ describe('Higgsfield', () => {
       (item) => item.provider === 'higgsfield' && item.method === 'POST',
     );
     expect(posted?.url).toBe('https://platform.higgsfield.ai/v1/image2video/dop');
-    const params = (posted?.body as { params: { input_image: { image_url: string }; duration: number } }).params;
+    const params = (
+      posted?.body as { params: { input_image: { image_url: string }; duration: number } }
+    ).params;
     expect(params.duration).toBe(10);
     expect(params.input_image.image_url).toMatch(
       /^https:\/\/staging\.wingssystem\.online\/api\/media\/public\/[0-9a-f-]+\?sig=/,
@@ -700,10 +729,17 @@ describe('routing with failover', () => {
     const { cookies } = await sessionFor();
 
     // 1. Kairogen's month is spent by one Seedream picture (4 credits).
-    const seedream = (await estimate(tight, cookies, image({ model: 'seedream-v4', aspect: '1:1' }))).json<{
+    const seedream = (
+      await estimate(tight, cookies, image({ model: 'seedream-v4', aspect: '1:1' }))
+    ).json<{
       estimate: MediaEstimate;
     }>().estimate;
-    expect(seedream).toMatchObject({ providerId: 'kairogen', credits: 4, brlCents: 0, routedFrom: null });
+    expect(seedream).toMatchObject({
+      providerId: 'kairogen',
+      credits: 4,
+      brlCents: 0,
+      routedFrom: null,
+    });
     const first = (await generate(tight, cookies, { estimateId: seedream.id })).json<{
       generation: MediaGeneration;
     }>().generation;
@@ -725,21 +761,27 @@ describe('routing with failover', () => {
     expect(down.warnings.join(' ')).toContain(
       `Foi para FLUX.1 schnell (Cloudflare Workers AI), por ${formatBrl(0)}.`,
     );
-    const row = await db.query.mediaGenerations.findFirst({ where: eq(mediaGenerations.id, down.id) });
+    const row = await db.query.mediaGenerations.findFirst({
+      where: eq(mediaGenerations.id, down.id),
+    });
     expect(row).toMatchObject({ provider: 'cloudflare', model: 'cloudflare/flux-1-schnell' });
     expect((await generate(tight, cookies, { estimateId: down.id })).json().generation.status).toBe(
       'succeeded',
     );
 
     // 3. Cloudflare's one picture is gone: an equal tier (Gemini, free) still takes over on its own.
-    const sideways = (await estimate(tight, cookies, image())).json<{ estimate: MediaEstimate }>().estimate;
+    const sideways = (await estimate(tight, cookies, image())).json<{ estimate: MediaEstimate }>()
+      .estimate;
     expect(sideways).toMatchObject({
       providerId: 'gemini',
-      routedFrom: { providerId: 'cloudflare', reason: 'Cota grátis do dia esgotada (1 de 1 imagens).' },
+      routedFrom: {
+        providerId: 'cloudflare',
+        reason: 'Cota grátis do dia esgotada (1 de 1 imagens).',
+      },
     });
-    expect((await generate(tight, cookies, { estimateId: sideways.id })).json().generation.status).toBe(
-      'succeeded',
-    );
+    expect(
+      (await generate(tight, cookies, { estimateId: sideways.id })).json().generation.status,
+    ).toBe('succeeded');
 
     // 4. Every free quota and the month's credits are gone: paying more is offered, never taken.
     const offered = await estimate(tight, cookies, image());
@@ -761,7 +803,12 @@ describe('routing with failover', () => {
     const paid = (await estimate(tight, cookies, image({ model: 'higgsfield/soul' }))).json<{
       estimate: MediaEstimate;
     }>().estimate;
-    expect(paid).toMatchObject({ providerId: 'higgsfield', brlCents: 28, routedFrom: null, blockedBy: null });
+    expect(paid).toMatchObject({
+      providerId: 'higgsfield',
+      brlCents: 28,
+      routedFrom: null,
+      blockedBy: null,
+    });
     const job = (await generate(tight, cookies, { estimateId: paid.id })).json<{
       generation: MediaGeneration;
     }>().generation;
@@ -781,7 +828,9 @@ describe('routing with failover', () => {
     expect(refused.json().message).toContain(formatBrl(30));
     // A free generation still fits under a spent ceiling: the ceiling is about money.
     expect(
-      providers.state.calls.filter((item) => item.provider === 'higgsfield' && item.method === 'POST'),
+      providers.state.calls.filter(
+        (item) => item.provider === 'higgsfield' && item.method === 'POST',
+      ),
     ).toHaveLength(1);
   });
 
@@ -826,7 +875,8 @@ describe('the editing agent across providers', () => {
     model: 'cloudflare/flux-1-schnell',
     prompt:
       'Owner of a small bakery standing behind the counter, warm window light, 35mm, shallow depth of field, advertising photography, clean space at the top for headline, no text, no logos',
-    explanation: 'Dona de padaria atrás do balcão, luz de janela. Para o feed, de graça na Cloudflare.',
+    explanation:
+      'Dona de padaria atrás do balcão, luz de janela. Para o feed, de graça na Cloudflare.',
     aspect: '1:1',
     quantity: 1,
     params: {},
@@ -857,7 +907,10 @@ describe('the editing agent across providers', () => {
       () => ({ toolCalls: [call('propor_geracao', proposal())] }),
       () => ({ text: 'Proposta na Cloudflare, de graça, 1:1.' }),
     ];
-    const { message } = await talk(cookies, 'Uma imagem de padaria para o feed da Wings, a mais barata.');
+    const { message } = await talk(
+      cookies,
+      'Uma imagem de padaria para o feed da Wings, a mais barata.',
+    );
     const results = (seen[1]?.messages ?? []).filter((item) => item.role === 'tool');
     expect(results[0]?.content).toContain('"provedor":"cloudflare"');
     expect(results[0]?.content).toContain('"cota_do_dia":{"usadas":0,"limite":50');
@@ -865,7 +918,9 @@ describe('the editing agent across providers', () => {
     expect(results[1]?.content).toContain('"reais_por_saida":0');
     expect(results[1]?.content).toContain('"gratis":true');
     // Cheapest first: the free ones before Kairogen, Kairogen before Higgsfield.
-    const order = [...(results[1]?.content.matchAll(/"provedor":"([a-z]+)"/g) ?? [])].map((m) => m[1]);
+    const order = [...(results[1]?.content.matchAll(/"provedor":"([a-z]+)"/g) ?? [])].map(
+      (m) => m[1],
+    );
     expect(order.indexOf('cloudflare')).toBeLessThan(order.indexOf('kairogen'));
     expect(order.indexOf('kairogen')).toBeLessThan(order.indexOf('higgsfield'));
     for (const secret of SECRETS) expect(JSON.stringify(seen)).not.toContain(secret);

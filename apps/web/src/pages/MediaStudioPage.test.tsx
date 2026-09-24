@@ -211,9 +211,30 @@ const generationOf = (overrides: Partial<MediaGeneration> = {}): MediaGeneration
 
 const AURORA = '11111111-1111-4111-8111-1111111111c2';
 const clients: Client[] = [
-  { id: WINGS_CLIENT_ID, name: 'Wings Company', slug: 'wings-company', active: true, expansionArea: [], number: null },
-  { id: AURORA, name: 'Padaria Aurora', slug: 'padaria-aurora', active: true, expansionArea: [], number: null },
-  { id: '11111111-1111-4111-8111-1111111111c3', name: 'Antigo', slug: 'antigo', active: false, expansionArea: [], number: null },
+  {
+    id: WINGS_CLIENT_ID,
+    name: 'Wings Company',
+    slug: 'wings-company',
+    active: true,
+    expansionArea: [],
+    number: null,
+  },
+  {
+    id: AURORA,
+    name: 'Padaria Aurora',
+    slug: 'padaria-aurora',
+    active: true,
+    expansionArea: [],
+    number: null,
+  },
+  {
+    id: '11111111-1111-4111-8111-1111111111c3',
+    name: 'Antigo',
+    slug: 'antigo',
+    active: false,
+    expansionArea: [],
+    number: null,
+  },
 ];
 
 let imageModels: MediaModel[] = [imageModel];
@@ -581,6 +602,43 @@ describe('the operator form', () => {
     expect(within(form()).getByRole('radio', { name: '16:9' })).toHaveProperty('disabled', false);
     // A video model that starts from no frame has no use for a picture.
     expect(within(form()).queryByRole('group', { name: 'Primeiro quadro' })).toBeNull();
+  });
+
+  it('offers camera moves on a video, adds the term to the end of the prompt, and takes it away again', async () => {
+    post.mockResolvedValue({ estimate: estimateOf() });
+    renderPage();
+    await screen.findByRole('option', { name: /Seedream 4/ });
+    // An image has no camera.
+    expect(
+      within(form()).queryByRole('group', { name: 'Movimento de câmera (opcional)' }),
+    ).toBeNull();
+
+    fireEvent.change(within(form()).getByLabelText('Tipo'), { target: { value: 'video' } });
+    await screen.findByRole('option', { name: /Veo 3.1 Fast/ });
+    const moves = within(form()).getByRole('group', { name: 'Movimento de câmera (opcional)' });
+    expect(within(moves).getAllByRole('radio')).toHaveLength(18);
+    expect(within(moves).getByText('drone shot, ascending')).toBeTruthy();
+
+    typePrompt(PROMPT);
+    fireEvent.click(within(moves).getByRole('radio', { name: /^Drone subindo/ }));
+    expect(within(moves).getByText('Camera movement: drone shot, ascending.')).toBeTruthy();
+    // The person's text stays as written in the field.
+    expect((within(form()).getByLabelText('Prompt') as HTMLTextAreaElement).value).toBe(PROMPT);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Estimar custo' }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    expect(post.mock.calls[0]?.[1]).toMatchObject({
+      kind: 'video',
+      prompt: `${PROMPT}. Camera movement: drone shot, ascending.`,
+    });
+    await screen.findByRole('button', { name: /^Gerar/ });
+
+    // Removing the move throws the estimate away and sends the prompt alone.
+    fireEvent.click(within(moves).getByRole('button', { name: 'Remover movimento' }));
+    expect(screen.queryByRole('button', { name: /^Gerar/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Estimar custo' }));
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+    expect(post.mock.calls[1]?.[1]).toMatchObject({ prompt: PROMPT });
   });
 
   it('always offers a reference image for an image: from the library, or a file sent on the spot', async () => {

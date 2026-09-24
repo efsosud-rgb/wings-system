@@ -362,6 +362,55 @@ describe('keeping the connection alive', () => {
     expect(fake.state.toolCalls.filter((call) => call.name === 'generate_image')).toHaveLength(0);
   });
 
+  it('tries a read once more after Kairogen reports its own server error, and never a call that spends', async () => {
+    await connect();
+    const made = kairogenDepsOf({
+      db,
+      env: env({ INTEGRATIONS_ENCRYPTION_KEY: KEY }),
+      kairogenFetch: transport,
+    });
+    if (!made) throw new Error('expected deps');
+    const deps = { ...made, transientRetryMs: 5 };
+    const internal =
+      'Kairogen API error (500): [INTERNAL_ERROR] Erro interno do servidor. Tente novamente ou contate o suporte.';
+    const estimate = { model: 'seedream-v4', plan_key: 'free', quantity: 1 };
+    const calls = (name: string) =>
+      fake.state.toolCalls.filter((call) => call.name === name).length;
+
+    // Once: the second try answers.
+    fake.state.toolErrorScript.push({ tool: 'estimate_cost', text: internal });
+    const quoted = await callKairogen(deps, 'estimate_cost', estimate);
+    expect((quoted.data as { credit_cost: number }).credit_cost).toBe(4);
+    expect(calls('estimate_cost')).toBe(2);
+
+    // Twice: reported as Kairogen being unavailable, not as a refusal of what we asked.
+    fake.state.toolErrorScript.push(
+      { tool: 'estimate_cost', text: internal },
+      { tool: 'estimate_cost', text: internal },
+    );
+    await expect(callKairogen(deps, 'estimate_cost', estimate)).rejects.toMatchObject({
+      code: 'unavailable',
+    });
+    expect(calls('estimate_cost')).toBe(4);
+
+    // A validation error is ours to fix: no second try.
+    fake.state.toolErrorScript.push({
+      tool: 'estimate_cost',
+      text: 'Kairogen API error (400): [VALIDATION_ERROR] Erro ao calcular créditos.',
+    });
+    await expect(callKairogen(deps, 'estimate_cost', estimate)).rejects.toMatchObject({
+      code: 'tool_error',
+    });
+    expect(calls('estimate_cost')).toBe(5);
+
+    // A generation is sent once, whatever Kairogen says.
+    fake.state.toolErrorScript.push({ tool: 'generate_image', text: internal });
+    await expect(
+      callKairogen(deps, 'generate_image', { model: 'seedream-v4', prompt: 'x' }),
+    ).rejects.toMatchObject({ code: 'tool_error' });
+    expect(calls('generate_image')).toBe(1);
+  });
+
   it('keeps the connection when Kairogen is only down, and asks to reconnect when it no longer renews', async () => {
     fake = fakeKairogen({ expiresIn: 30 });
     const admin = await connect();

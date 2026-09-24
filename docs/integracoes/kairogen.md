@@ -87,6 +87,8 @@ informe `KAIROGEN_CLIENT_ID`.
 | Nunca repetir o que gasta crédito      | o cliente MCP só repete leitura (`list_models`, `estimate_cost`, `get_credits`, `get_generation`). Geração vai uma vez; se ninguém sabe se chegou, o erro diz isso   |
 | Auditoria                              | `integrations.kairogen_connect_started`, `_connected`, `_connect_failed`, `_disconnected`, sem nenhum valor secreto                                                  |
 
+**Erro do próprio Kairogen numa leitura** (2026-09-24, visto no staging: `Kairogen API error (500): [INTERNAL_ERROR]` dentro da resposta da ferramenta, não como HTTP 500). `callKairogen` tenta a mesma leitura mais uma vez depois de 1,5 s (`KAIROGEN_TRANSIENT_RETRY_MS`); falhando de novo, vira `unavailable` ("O Kairogen não respondeu agora"), e não recusa do pedido. Erro 400 (`VALIDATION_ERROR`) não é repetido. Geração nunca é repetida. No agente, um provedor que falhou do lado dele não é chamado de novo na mesma resposta: a ferramenta devolve `problema_do_provedor` e o agente diz à pessoa que o problema é do provedor e oferece tentar mais tarde.
+
 ## Cliente MCP
 
 `apps/api/src/lib/mcp-client`: JSON-RPC por POST, `Authorization: Bearer`,
