@@ -2,6 +2,7 @@ import type { JobType } from '@wings/shared';
 import type { Pool } from './db/client.js';
 import { JOB_HANDLERS, recoverDeliveredRender } from './jobs/index.js';
 import type { JobContext } from './jobs/types.js';
+import { touchLiveness, WORKER_LIVENESS_FILE } from './liveness.js';
 import {
   HEARTBEAT_INTERVAL_MS,
   STALE_AFTER_MS,
@@ -116,6 +117,9 @@ export function runWorker(
 
   async function loop(): Promise<void> {
     while (!stopped) {
+      await touchLiveness(WORKER_LIVENESS_FILE).catch((error) =>
+        console.warn(`wings-worker: failed to touch liveness file: ${messageOf(error)}`),
+      );
       const job = await claimNextJob(pool, config.jobTypes);
       if (!job) {
         await sleep(config.pollIntervalMs);
