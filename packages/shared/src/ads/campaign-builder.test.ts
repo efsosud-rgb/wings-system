@@ -3,6 +3,7 @@ import {
   CREATIVE_FORMATS,
   PAID_PLATFORMS,
   PLATFORM_REACH,
+  PLATFORM_STATUS_LABEL,
   RADIUS_NOT_ACCEPTED_HINT,
   describeReach,
   reachSchema,
@@ -14,6 +15,7 @@ import {
   checkCopyCompliance,
   dailyOverdeliveryFactor,
   estimateCostCents,
+  isPlatformEnabled,
   matchesFormat,
   parseYoutubeVideoId,
   periodOverdeliveryFactor,
@@ -28,6 +30,46 @@ import {
 } from './campaign-builder.js';
 
 const rulesOf = (text: string) => checkCopyCompliance(text).map((finding) => finding.rule);
+
+describe('the ad platform catalog', () => {
+  it('has exactly one status per platform, and a reason only where it is not active', () => {
+    for (const platform of PAID_PLATFORMS) {
+      expect(PLATFORM_STATUS_LABEL[platform.status]).toBeTruthy();
+      if (platform.status === 'active') {
+        expect(platform.reason).toBeNull();
+      } else {
+        expect(isPlatformEnabled(platform.status)).toBe(false);
+      }
+    }
+  });
+
+  it('starts Meta, Google Pesquisa and YouTube active; the rest not', () => {
+    expect(PAID_PLATFORMS.filter((p) => isPlatformEnabled(p.status)).map((p) => p.key)).toEqual([
+      'meta',
+      'google_search',
+      'youtube',
+    ]);
+  });
+
+  it('is waiting on the platform for TikTok, LinkedIn and X, with the reason on screen', () => {
+    const awaiting = Object.fromEntries(
+      PAID_PLATFORMS.filter((p) => p.status === 'awaiting_api_access').map((p) => [p.key, p.reason]),
+    );
+    expect(awaiting).toEqual({
+      tiktok: 'Perfil de desenvolvedor em análise pelo TikTok',
+      linkedin: 'Acesso à Advertising API e Lead Sync em análise',
+      x_twitter: 'Acesso à Ads API em análise',
+    });
+  });
+
+  it('has no integration work started yet for Microsoft Ads, Kwai, Pinterest and Reddit', () => {
+    expect(
+      PAID_PLATFORMS.filter((p) => p.status === 'coming_soon')
+        .map((p) => p.key)
+        .sort(),
+    ).toEqual(['kwai_ads', 'microsoft_ads', 'pinterest_ads', 'reddit_ads']);
+  });
+});
 
 describe('copy compliance', () => {
   it('lets ordinary franchise copy through', () => {
@@ -320,6 +362,53 @@ describe('Meta drafts: ad set and ads', () => {
     expect(
       usesVerticalPlacements(placementsSchema.parse({ mode: 'manual', facebook: ['feed'] })),
     ).toBe(false);
+  });
+
+  it('takes Threads only alongside the Instagram feed, and only as the feed position', () => {
+    expect(
+      placementsSchema.safeParse({
+        mode: 'manual',
+        facebook: [],
+        instagram: [],
+        threads: ['feed'],
+      }).success,
+    ).toBe(false);
+    expect(
+      placementsSchema.safeParse({
+        mode: 'manual',
+        facebook: [],
+        instagram: ['stories'],
+        threads: ['feed'],
+      }).success,
+    ).toBe(false);
+    expect(
+      placementsSchema.safeParse({
+        mode: 'manual',
+        facebook: [],
+        instagram: ['feed'],
+        threads: ['feed'],
+      }).success,
+    ).toBe(true);
+    expect(
+      placementsSchema.safeParse({
+        mode: 'manual',
+        facebook: [],
+        instagram: ['feed'],
+        threads: ['stories'],
+      }).success,
+    ).toBe(false);
+
+    expect(
+      ok({
+        placements: { mode: 'manual', facebook: [], instagram: ['feed'], threads: ['feed'] },
+      }),
+    ).toBe(false);
+    expect(
+      ok({
+        placements: { mode: 'manual', facebook: [], instagram: ['feed'], threads: ['feed'] },
+        identity: { pageId: '104567890123456', instagramActorId: '17841400000000000' },
+      }),
+    ).toBe(true);
   });
 
   it('takes a video variation and a carousel, each with what it needs', () => {

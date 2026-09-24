@@ -29,42 +29,111 @@ export const GOOGLE_PERIOD_OVERDELIVERY_FACTOR = 1;
 // Platforms
 // ---------------------------------------------------------------------------
 
+/**
+ * `active` takes the builder all the way to an approval. `awaiting_api_access`
+ * is a platform whose integration is being built but is stuck on that
+ * platform granting API access — the block is on their side, not ours.
+ * `coming_soon` has no integration work started yet.
+ */
+export const PLATFORM_STATUSES = ['active', 'awaiting_api_access', 'coming_soon'] as const;
+export type PlatformStatus = (typeof PLATFORM_STATUSES)[number];
+
+export const PLATFORM_STATUS_LABEL: Record<PlatformStatus, string> = {
+  active: 'Ativa',
+  awaiting_api_access: 'Aguardando acesso à API',
+  coming_soon: 'Em breve',
+};
+
+export interface PaidPlatform {
+  key: string;
+  label: string;
+  status: PlatformStatus;
+  /** Shown next to the label whenever the platform is not active. */
+  reason: string | null;
+  /** Internal note, not necessarily shown to the operator. */
+  note: string | null;
+}
+
 export const PAID_PLATFORMS = [
   {
     key: 'meta',
     label: 'Meta (Facebook + Instagram)',
-    enabled: true,
-    disabledReason: null,
+    status: 'active',
+    reason: null,
+    note: null,
   },
   {
     key: 'google_search',
     label: 'Google Pesquisa',
-    enabled: true,
-    disabledReason: null,
+    status: 'active',
+    reason: null,
+    note: null,
   },
   {
-    // Google's API cannot create a VIDEO campaign (reporting only). What it
-    // offers for video on YouTube is Demand Gen, restricted to YouTube channels.
     key: 'youtube',
     label: 'YouTube',
-    enabled: true,
-    disabledReason: null,
+    status: 'active',
+    reason: null,
+    // Google's API cannot create a VIDEO campaign (reporting only). What it
+    // offers for video on YouTube is Demand Gen, restricted to YouTube channels.
+    note: 'Google não cria campanha VIDEO por API; usa Demand Gen, restrito a canais do YouTube.',
   },
   {
     key: 'tiktok',
     label: 'TikTok',
-    enabled: false,
-    disabledReason: 'Sem conta de anúncios conectada',
+    status: 'awaiting_api_access',
+    reason: 'Perfil de desenvolvedor em análise pelo TikTok',
+    note: null,
   },
   {
     key: 'linkedin',
     label: 'LinkedIn',
-    enabled: false,
-    disabledReason: 'Integração ainda não construída',
+    status: 'awaiting_api_access',
+    reason: 'Acesso à Advertising API e Lead Sync em análise',
+    note: null,
   },
-] as const;
+  {
+    key: 'x_twitter',
+    label: 'X (Twitter)',
+    status: 'awaiting_api_access',
+    reason: 'Acesso à Ads API em análise',
+    note: null,
+  },
+  {
+    key: 'microsoft_ads',
+    label: 'Microsoft Ads (Bing)',
+    status: 'coming_soon',
+    reason: null,
+    note: null,
+  },
+  {
+    key: 'kwai_ads',
+    label: 'Kwai Ads',
+    status: 'coming_soon',
+    reason: null,
+    note: null,
+  },
+  {
+    key: 'pinterest_ads',
+    label: 'Pinterest Ads',
+    status: 'coming_soon',
+    reason: null,
+    note: null,
+  },
+  {
+    key: 'reddit_ads',
+    label: 'Reddit Ads',
+    status: 'coming_soon',
+    reason: null,
+    note: null,
+  },
+] as const satisfies readonly PaidPlatform[];
 
 export type PaidPlatformKey = (typeof PAID_PLATFORMS)[number]['key'];
+
+export function isPlatformEnabled(status: PlatformStatus): boolean {
+  return status === 'active';
+}
 
 /** The ad account a builder platform spends from. */
 export type AdAccountPlatform = 'meta' | 'google';
@@ -184,6 +253,11 @@ export const CREATIVE_FORMATS: Record<PaidPlatformKey, readonly CreativeFormat[]
   tiktok: [],
   youtube: [],
   linkedin: [],
+  x_twitter: [],
+  microsoft_ads: [],
+  kwai_ads: [],
+  pinterest_ads: [],
+  reddit_ads: [],
 };
 
 /** What the server says about an image it accepted. Read from the bytes. */
@@ -350,6 +424,11 @@ const UTM_MEDIUM: Record<PaidPlatformKey, string> = {
   tiktok: 'paid_social',
   youtube: 'paid_video',
   linkedin: 'paid_social',
+  x_twitter: 'paid_social',
+  microsoft_ads: 'cpc',
+  kwai_ads: 'paid_social',
+  pinterest_ads: 'paid_social',
+  reddit_ads: 'paid_social',
 };
 
 const UTM_SOURCE: Record<PaidPlatformKey, string> = {
@@ -358,6 +437,11 @@ const UTM_SOURCE: Record<PaidPlatformKey, string> = {
   tiktok: 'tiktok',
   youtube: 'youtube',
   linkedin: 'linkedin',
+  x_twitter: 'x',
+  microsoft_ads: 'microsoft',
+  kwai_ads: 'kwai',
+  pinterest_ads: 'pinterest',
+  reddit_ads: 'reddit',
 };
 
 /** "Expansão SP — Set/26" -> "expansao-sp-set-26". */
@@ -557,8 +641,8 @@ export type Reach = z.output<typeof reachSchema>;
 
 /**
  * What of the reach each platform can take. States and cities go everywhere;
- * a radius does not. TikTok and LinkedIn are listed before their adapters
- * exist so that, when they arrive, each needs only its own translator: the
+ * a radius does not. Platforms without an adapter yet are listed before it
+ * exists so that, when it arrives, each needs only its own translator: the
  * draft, the builder and this refusal are already in place.
  */
 export const PLATFORM_REACH: Record<PaidPlatformKey, { radius: boolean }> = {
@@ -567,6 +651,11 @@ export const PLATFORM_REACH: Record<PaidPlatformKey, { radius: boolean }> = {
   youtube: { radius: true },
   tiktok: { radius: false },
   linkedin: { radius: false },
+  x_twitter: { radius: false },
+  microsoft_ads: { radius: false },
+  kwai_ads: { radius: false },
+  pinterest_ads: { radius: false },
+  reddit_ads: { radius: false },
 };
 
 export function platformAcceptsRadius(platform: string): boolean {
@@ -880,7 +969,7 @@ const ageSchema = z
   .min(MIN_AGE, AGE_MESSAGE)
   .max(MAX_AGE, AGE_MESSAGE);
 
-export const PLACEMENT_PUBLISHERS = ['facebook', 'instagram'] as const;
+export const PLACEMENT_PUBLISHERS = ['facebook', 'instagram', 'threads'] as const;
 export type PlacementPublisher = (typeof PLACEMENT_PUBLISHERS)[number];
 export const PLACEMENT_POSITIONS = ['feed', 'stories', 'reels'] as const;
 export type PlacementPosition = (typeof PLACEMENT_POSITIONS)[number];
@@ -888,11 +977,24 @@ export type PlacementPosition = (typeof PLACEMENT_POSITIONS)[number];
 export const PLACEMENT_PUBLISHER_LABEL: Record<PlacementPublisher, string> = {
   facebook: 'Facebook',
   instagram: 'Instagram',
+  threads: 'Threads',
 };
 export const PLACEMENT_POSITION_LABEL: Record<PlacementPosition, string> = {
   feed: 'Feed',
   stories: 'Stories',
   reels: 'Reels',
+};
+
+/**
+ * The positions Meta actually offers per publisher. Threads is Meta's own
+ * placement, not a separate platform — it only takes the feed position
+ * (`threads_stream` on the wire) and only alongside the Instagram feed
+ * (`stream`), per Meta's Marketing API placement targeting reference.
+ */
+export const PLACEMENT_PUBLISHER_POSITIONS: Record<PlacementPublisher, readonly PlacementPosition[]> = {
+  facebook: PLACEMENT_POSITIONS,
+  instagram: PLACEMENT_POSITIONS,
+  threads: ['feed'],
 };
 
 const positionList = z.array(z.enum(PLACEMENT_POSITIONS)).max(PLACEMENT_POSITIONS.length);
@@ -906,16 +1008,35 @@ export const placementsSchema = z
     mode: z.enum(['automatic', 'manual']),
     facebook: positionList.default([]),
     instagram: positionList.default([]),
+    threads: positionList.default([]),
   })
   .superRefine((placements, ctx) => {
     if (
       placements.mode === 'manual' &&
-      placements.facebook.length + placements.instagram.length === 0
+      placements.facebook.length + placements.instagram.length + placements.threads.length === 0
     ) {
       ctx.addIssue({
         code: 'custom',
         path: ['facebook'],
         message: 'Escolha ao menos um posicionamento',
+      });
+    }
+    if (placements.threads.some((position) => position !== 'feed')) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['threads'],
+        message: 'Threads só aceita o posicionamento Feed',
+      });
+    }
+    if (
+      placements.mode === 'manual' &&
+      placements.threads.length > 0 &&
+      !placements.instagram.includes('feed')
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['threads'],
+        message: 'Threads exige o Feed do Instagram também',
       });
     }
   });
@@ -924,7 +1045,7 @@ export type Placements = z.output<typeof placementsSchema>;
 /** True when the chosen placements include a full-screen vertical one. */
 export function usesVerticalPlacements(placements: Placements | undefined): boolean {
   if (!placements || placements.mode !== 'manual') return false;
-  return [...placements.facebook, ...placements.instagram].some(
+  return [...placements.facebook, ...placements.instagram, ...placements.threads].some(
     (position) => position === 'stories' || position === 'reels',
   );
 }

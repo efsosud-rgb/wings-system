@@ -319,6 +319,8 @@ export interface AdSetSpec {
   placements: {
     facebook: ('feed' | 'stories' | 'reels')[];
     instagram: ('feed' | 'stories' | 'reels')[];
+    /** Meta's own placement, not a separate platform: only `feed` exists. */
+    threads: 'feed'[];
   } | null;
 }
 

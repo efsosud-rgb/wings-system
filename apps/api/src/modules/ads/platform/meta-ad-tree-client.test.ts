@@ -116,7 +116,7 @@ describe('the ad set', () => {
     await client.createAdSet({
       ...adSetSpec,
       optimization: { goal: 'LANDING_PAGE_VIEWS' },
-      placements: { facebook: ['feed', 'reels'], instagram: ['stories'] },
+      placements: { facebook: ['feed', 'reels'], instagram: ['stories'], threads: [] },
     });
 
     const fields = api.writes('adsets')[0]?.fields ?? {};
@@ -127,12 +127,28 @@ describe('the ad set', () => {
       facebook_positions: ['feed', 'facebook_reels'],
       instagram_positions: ['story'],
     });
+    expect(JSON.parse(fields.targeting ?? '{}')).not.toHaveProperty('threads_positions');
 
     const { api: facebookOnly, client: other } = writer();
-    await other.createAdSet({ ...adSetSpec, placements: { facebook: ['stories'], instagram: [] } });
+    await other.createAdSet({
+      ...adSetSpec,
+      placements: { facebook: ['stories'], instagram: [], threads: [] },
+    });
     const only = JSON.parse(facebookOnly.writes('adsets')[0]?.fields.targeting ?? '{}');
     expect(only.publisher_platforms).toEqual(['facebook']);
     expect(only).not.toHaveProperty('instagram_positions');
+  });
+
+  it('with Threads, names the one placement Meta offers there', async () => {
+    const { api, client } = writer();
+    await client.createAdSet({
+      ...adSetSpec,
+      placements: { facebook: [], instagram: ['feed'], threads: ['feed'] },
+    });
+
+    const targeting = JSON.parse(api.writes('adsets')[0]?.fields.targeting ?? '{}');
+    expect(targeting.publisher_platforms).toEqual(['instagram', 'threads']);
+    expect(targeting.threads_positions).toEqual(['threads_stream']);
   });
 });
 

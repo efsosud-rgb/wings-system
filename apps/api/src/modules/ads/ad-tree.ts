@@ -301,7 +301,12 @@ export async function buildAdTree(
         ageMax: draft.ageMax,
         placements:
           draft.placements.mode === 'manual'
-            ? { facebook: draft.placements.facebook, instagram: draft.placements.instagram }
+            ? {
+                facebook: draft.placements.facebook,
+                instagram: draft.placements.instagram,
+                // The schema refuses anything but 'feed' here.
+                threads: draft.placements.threads as 'feed'[],
+              }
             : null,
       }),
     (value) => value.id,

@@ -543,7 +543,7 @@ describe('a Meta request that creates the ad set and the ads', () => {
     ],
     ageMin: 25,
     ageMax: 65,
-    placements: { mode: 'manual', facebook: ['feed'], instagram: ['stories', 'reels'] },
+    placements: { mode: 'manual', facebook: ['feed'], instagram: ['stories', 'reels'], threads: [] },
     identity: { pageId: '104567890123456', instagramActorId: '17841400000000000' },
     startDate: '2026-09-20',
     endDate: '2026-09-29',

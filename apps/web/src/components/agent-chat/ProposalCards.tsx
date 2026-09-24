@@ -51,6 +51,7 @@ function placementsLabel(placements: NonNullable<AgentCampaignProposal['placemen
   return [
     placements.facebook.length > 0 ? `Facebook: ${positions(placements.facebook)}` : null,
     placements.instagram.length > 0 ? `Instagram: ${positions(placements.instagram)}` : null,
+    placements.threads.length > 0 ? `Threads: ${positions(placements.threads)}` : null,
   ]
     .filter(Boolean)
     .join(' · ');
