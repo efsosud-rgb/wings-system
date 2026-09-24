@@ -13,7 +13,7 @@ import {
   type StudioRender,
   type StudioTranscription,
 } from '@wings/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
@@ -581,6 +581,110 @@ describe('captions by Whisper', () => {
     expect(failed.state).toBe('failed');
     expect(failed.error).toMatch(/^output_missing/);
     expect(failed.file).toBeNull();
+  });
+
+  describe('smart captions', () => {
+    const askSmart = (fileId: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/studio/transcriptions',
+        cookies: marketing.cookies,
+        payload: { fileId, smart: true },
+      });
+    const layoutJobs = () => db.select().from(jobs).where(eq(jobs.type, 'caption_layout'));
+    const shown = async (id: string) =>
+      (await look(marketing, id)).json<{ transcription: StudioTranscription }>().transcription;
+
+    it('queues one caption_layout job after the SRT, files one SRT per zone, once, and keeps no text in the job', async () => {
+      const video = await upload(marketing, media.id, 'depoimento.mp4', Buffer.from('mp4'));
+      const { transcription: queued } = (await askSmart(video.id)).json<{
+        transcription: StudioTranscription;
+      }>();
+      expect(queued.layout).toEqual({ state: 'pending', error: null, files: [] });
+      expect(await layoutJobs()).toHaveLength(0);
+
+      await whisperFinishes(queued.id, { language: 'pt', languageProbability: 0.98, segments });
+      const first = await shown(queued.id);
+      expect(first.file).toMatchObject({ name: 'depoimento.srt' });
+      expect(first.layout?.state).toBe('pending');
+      await shown(queued.id);
+      const [layoutJob, ...others] = await layoutJobs();
+      expect(others).toHaveLength(0);
+      if (!layoutJob) throw new Error('expected a caption_layout job');
+      const input = layoutJob.input as Record<string, unknown>;
+      expect(input.storageKey).toEqual(expect.any(String));
+      expect(String(input.transcriptStorageKey)).toMatch(/\.transcript\.json$/);
+      expect(JSON.stringify(input)).not.toMatch(/franqueado|começar/);
+
+      // The worker answers one zone per segment (the empty one included) and nothing else.
+      await db
+        .update(jobs)
+        .set({
+          state: 'done',
+          finishedAt: new Date(),
+          output: { zones: ['top', 'top', 'bottom'], frames: 5, width: 1080, height: 1920 },
+        })
+        .where(eq(jobs.id, layoutJob.id));
+      const placed = await shown(queued.id);
+      expect(placed.layout?.state).toBe('done');
+      expect(placed.layout?.files.map((file) => [file.zone, file.name, file.cues])).toEqual([
+        ['bottom', 'depoimento.legenda-embaixo.srt', 1],
+        ['top', 'depoimento.legenda-em-cima.srt', 1],
+      ]);
+      const storage = storageOf(app.wings);
+      const [top] = await db
+        .select()
+        .from(driveFiles)
+        .where(eq(driveFiles.name, 'depoimento.legenda-em-cima.srt'));
+      const topSrt = (await storage?.get(top!.storageKey))?.toString('utf8') ?? '';
+      expect(topSrt).toBe('1\n00:00:00,000 --> 00:00:01,500\nOlá, franqueado.\n');
+
+      // Looking again files nothing twice.
+      expect((await shown(queued.id)).layout?.files).toEqual(placed.layout?.files);
+      const zoneFiles = await db
+        .select()
+        .from(driveFiles)
+        .where(
+          and(
+            eq(driveFiles.folderId, media.id),
+            sql`${driveFiles.name} like 'depoimento.legenda-%'`,
+          ),
+        );
+      expect(zoneFiles).toHaveLength(2);
+      const audited = await db
+        .select()
+        .from(auditLog)
+        .where(eq(auditLog.action, 'studio.captions_layout_saved'));
+      expect(audited).toHaveLength(1);
+      expect(JSON.stringify(audited[0]?.metadata)).not.toMatch(/franqueado|começar/);
+    });
+
+    it('says when placing failed, and the plain SRT is still there', async () => {
+      const video = await upload(marketing, media.id, 'loja.mp4', Buffer.from('mp4'));
+      const { transcription: queued } = (await askSmart(video.id)).json<{
+        transcription: StudioTranscription;
+      }>();
+      await whisperFinishes(queued.id, { language: 'pt', languageProbability: 0.98, segments });
+      await shown(queued.id);
+      const [layoutJob] = (await layoutJobs()).filter(
+        (row) => (row.input as { transcriptionId: string }).transcriptionId === queued.id,
+      );
+      await db
+        .update(jobs)
+        .set({ state: 'failed', error: 'caption layout exited with status 3' })
+        .where(eq(jobs.id, layoutJob!.id));
+      const failed = await shown(queued.id);
+      expect(failed.layout).toMatchObject({ state: 'failed', files: [] });
+      expect(failed.file).toMatchObject({ name: 'loja.srt' });
+    });
+
+    it('gives an audio file the plain SRT only', async () => {
+      const audio = await upload(marketing, media.id, 'voz.mp3', Buffer.from('mp3'), 'audio/mpeg');
+      const { transcription } = (await askSmart(audio.id)).json<{
+        transcription: StudioTranscription;
+      }>();
+      expect(transcription.layout).toBeNull();
+    });
   });
 
   it("is invisible to somebody else's session, and closed without the permission", async () => {

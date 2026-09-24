@@ -1,7 +1,11 @@
 import {
   STUDIO_AUDIO_BITRATE,
   parseWingsDriveRef,
+  segmentsByZone,
   segmentsToSrt,
+  zoneSrtName,
+  type CaptionZone,
+  type StudioCaptionLayout,
   type StudioRender,
   type StudioRenderRequest,
   type StudioRenderState,
@@ -385,6 +389,8 @@ interface TranscribeInput {
   version: 1;
   storageKey: string;
   language?: string;
+  /** Smart captions asked for, on a video: a caption_layout job follows the filing. */
+  smart?: true;
   destination: {
     folderId: string;
     name: string;
@@ -400,6 +406,25 @@ interface TranscribeOutput {
   language?: string;
   segments?: number | unknown[];
   filed?: { driveFileId: string; version: number; name: string; at: string };
+  /** The caption_layout job queued after the filing, when smart. */
+  layoutJobId?: string;
+}
+
+/** What a caption_layout row carries. The worker reads the two keys only. */
+interface LayoutInput {
+  version: 1;
+  storageKey: string;
+  transcriptStorageKey: string;
+  transcriptionId: string;
+  destination: TranscribeInput['destination'];
+}
+
+/** The worker's zones, and what the API filed from them. */
+interface LayoutOutput {
+  zones?: CaptionZone[];
+  frames?: number;
+  filing?: true;
+  filed?: { driveFileId: string; version: number; name: string; zone: CaptionZone; cues: number }[];
 }
 
 const SRT_MIME = 'application/x-subrip';
@@ -438,6 +463,8 @@ export async function enqueueTranscription(
     version: 1,
     storageKey: file.storageKey,
     ...(request.language ? { language: request.language } : {}),
+    // Placing captions reads frames: a video only. An audio file gets the plain SRT.
+    ...(request.smart && file.mimeType.startsWith('video/') ? { smart: true as const } : {}),
     destination: {
       folderId: folder.id,
       name: srtNameOf(file.name),
@@ -468,6 +495,8 @@ function toTranscription(row: JobRow): StudioTranscription {
         }
       : null,
     language: typeof output.language === 'string' ? output.language : null,
+    layout:
+      input.smart && row.state !== 'failed' ? { state: 'pending', error: null, files: [] } : null,
     segments:
       typeof output.segments === 'number'
         ? output.segments
@@ -479,13 +508,222 @@ function toTranscription(row: JobRow): StudioTranscription {
   };
 }
 
+/** Files one SRT in a Drive folder: a new version when a file of that name is already there. */
+async function fileSrt(
+  deps: StudioDeps,
+  access: DriveAccess,
+  folderId: string,
+  name: string,
+  text: string,
+): Promise<{ file: Awaited<ReturnType<typeof completeUpload>>['file']; replaced: boolean }> {
+  const storage = deps.drive.storage;
+  if (!storage)
+    throw new StudioError('storage_unavailable', 'O armazenamento não está configurado.');
+  const now = deps.now();
+  const srt = Buffer.from(text, 'utf8');
+  const key = newStorageKey(now);
+  await storage.put(key, srt, SRT_MIME);
+  const [existing] = await deps.db
+    .select({ id: driveFiles.id })
+    .from(driveFiles)
+    .where(
+      and(
+        eq(driveFiles.folderId, folderId),
+        isNull(driveFiles.trashedAt),
+        sql`lower(${driveFiles.name}) = lower(${name})`,
+      ),
+    );
+  const [upload] = await deps.db
+    .insert(driveUploads)
+    .values({
+      folderId,
+      name,
+      mimeType: SRT_MIME,
+      byteSize: srt.length,
+      storageKey: key,
+      replaceFileId: existing?.id ?? null,
+      requestedBy: access.employeeId,
+      expiresAt: new Date(now.getTime() + 60_000),
+    })
+    .returning();
+  if (!upload) throw new Error('captions upload row was not inserted');
+  const { file } = await completeUpload(deps.drive, access, upload.id);
+  return { file, replaced: existing !== undefined };
+}
+
+/**
+ * One transcription, and with `smart` its placement. The first look at a
+ * finished transcription files the SRT (fileTranscription); the look after
+ * that queues the caption_layout job once, under a row lock; the first look
+ * at a finished layout files one SRT per zone used.
+ */
+export async function transcriptionOf(
+  deps: StudioDeps,
+  access: DriveAccess,
+  id: string,
+): Promise<{ transcription: StudioTranscription; filedNow: boolean }> {
+  const result = await fileTranscription(deps, access, id);
+  if (!result.transcription.layout) return result;
+  const row = await deps.db.query.jobs.findFirst({
+    where: and(eq(jobs.id, id), eq(jobs.type, 'transcribe'), ownedBy(access.employeeId)),
+  });
+  if (!row) return result;
+  const layout = await layoutOf(deps, access, row);
+  return { ...result, transcription: { ...toTranscription(row), layout } };
+}
+
+async function queueLayout(deps: StudioDeps, transcriptionId: string): Promise<string | null> {
+  return deps.db.transaction(async (tx) => {
+    const [locked] = await tx.select().from(jobs).where(eq(jobs.id, transcriptionId)).for('update');
+    if (!locked) return null;
+    const output = (locked.output ?? {}) as TranscribeOutput;
+    if (output.layoutJobId) return output.layoutJobId;
+    if (locked.state !== 'done' || !output.filed || !output.outputStorageKey) return null;
+    const source = locked.input as TranscribeInput;
+    const input: LayoutInput = {
+      version: 1,
+      storageKey: source.storageKey,
+      transcriptStorageKey: output.outputStorageKey,
+      transcriptionId,
+      destination: source.destination,
+    };
+    const [queued] = await tx
+      .insert(jobs)
+      .values({ type: 'caption_layout', input })
+      .returning({ id: jobs.id });
+    if (!queued) throw new Error('caption_layout job was not inserted');
+    await tx
+      .update(jobs)
+      .set({ output: { ...output, layoutJobId: queued.id } })
+      .where(eq(jobs.id, transcriptionId));
+    return queued.id;
+  });
+}
+
+async function layoutOf(
+  deps: StudioDeps,
+  access: DriveAccess,
+  transcription: JobRow,
+): Promise<StudioCaptionLayout | null> {
+  if (transcription.state === 'failed') return null;
+  const pending: StudioCaptionLayout = { state: 'pending', error: null, files: [] };
+  const layoutJobId = await queueLayout(deps, transcription.id);
+  if (!layoutJobId) return pending;
+  const row = await deps.db.query.jobs.findFirst({
+    where: and(eq(jobs.id, layoutJobId), eq(jobs.type, 'caption_layout')),
+  });
+  if (!row) return pending;
+  const shown = (current: JobRow): StudioCaptionLayout => {
+    const output = (current.output ?? {}) as LayoutOutput;
+    return {
+      state: current.state as StudioCaptionLayout['state'],
+      error: current.error,
+      files: (output.filed ?? []).map((item) => ({
+        id: item.driveFileId,
+        version: item.version,
+        name: item.name,
+        zone: item.zone,
+        cues: item.cues,
+      })),
+    };
+  };
+  const output = (row.output ?? {}) as LayoutOutput;
+  if (row.state !== 'done' || output.filed || output.filing) {
+    // Still being filed by another look: not ready until it is.
+    return output.filing ? { ...shown(row), state: 'running' } : shown(row);
+  }
+
+  const [claimed] = await deps.db
+    .update(jobs)
+    .set({ output: sql`coalesce(${jobs.output}, '{}'::jsonb) || '{"filing": true}'::jsonb` })
+    .where(
+      and(
+        eq(jobs.id, row.id),
+        eq(jobs.state, 'done'),
+        sql`coalesce(${jobs.output}, '{}'::jsonb) -> 'filed' is null`,
+        sql`coalesce(${jobs.output}, '{}'::jsonb) -> 'filing' is null`,
+      ),
+    )
+    .returning();
+  if (!claimed) return { ...shown(row), state: 'running' };
+  const rest: LayoutOutput = { ...((claimed.output ?? {}) as LayoutOutput) };
+  delete rest.filing;
+  const settle = async (patch: Partial<typeof jobs.$inferInsert>) => {
+    const [settled] = await deps.db
+      .update(jobs)
+      .set({ ...patch, updatedAt: deps.now() })
+      .where(eq(jobs.id, row.id))
+      .returning();
+    return settled ?? claimed;
+  };
+
+  const input = claimed.input as LayoutInput;
+  const bytes = await deps.drive.storage?.get(input.transcriptStorageKey);
+  let transcript: z.output<typeof transcriptSchema> | null = null;
+  if (bytes) {
+    try {
+      const parsed = transcriptSchema.safeParse(JSON.parse(bytes.toString('utf8')));
+      transcript = parsed.success ? parsed.data : null;
+    } catch {
+      transcript = null;
+    }
+  }
+  if (!transcript || !Array.isArray(rest.zones)) {
+    return shown(
+      await settle({
+        state: 'failed',
+        error: 'output_missing: a transcrição ou as posições não estão no armazenamento',
+        output: rest,
+      }),
+    );
+  }
+
+  try {
+    const filed: NonNullable<LayoutOutput['filed']> = [];
+    for (const group of segmentsByZone(transcript.segments, rest.zones)) {
+      const name = zoneSrtName(input.destination.name, group.zone);
+      const { file } = await fileSrt(
+        deps,
+        access,
+        input.destination.folderId,
+        name,
+        segmentsToSrt(group.segments),
+      );
+      filed.push({
+        driveFileId: file.id,
+        version: file.version,
+        name: file.name,
+        zone: group.zone,
+        cues: group.segments.length,
+      });
+    }
+    const done = await settle({ output: { ...rest, filed } });
+    await writeAudit(deps.db, {
+      actorEmployeeId: access.employeeId,
+      action: 'studio.captions_layout_saved',
+      entity: 'job',
+      entityId: row.id,
+      // Counts only: which zones, how many cues each. No text, no measurement.
+      metadata: {
+        transcriptionId: input.transcriptionId,
+        frames: rest.frames ?? null,
+        files: filed.map((item) => ({ id: item.driveFileId, zone: item.zone, cues: item.cues })),
+      },
+    });
+    return shown(done);
+  } catch (error) {
+    await settle({ output: rest });
+    throw error;
+  }
+}
+
 /**
  * One transcription. Like `renderOf`: the first look at a finished job turns
  * the worker's segments into an SRT and files it next to the source, as a new
  * version when a file of that name is already there. Claimed with one
  * conditional update, so two tabs polling at once file it once.
  */
-export async function transcriptionOf(
+async function fileTranscription(
   deps: StudioDeps,
   access: DriveAccess,
   id: string,
@@ -547,35 +785,13 @@ export async function transcriptionOf(
 
   try {
     const now = deps.now();
-    const srt = Buffer.from(segmentsToSrt(transcript.segments), 'utf8');
-    const key = newStorageKey(now);
-    await storage.put(key, srt, SRT_MIME);
-    // A caption file of that name already there becomes a version, not a twin.
-    const [existing] = await deps.db
-      .select({ id: driveFiles.id })
-      .from(driveFiles)
-      .where(
-        and(
-          eq(driveFiles.folderId, input.destination.folderId),
-          isNull(driveFiles.trashedAt),
-          sql`lower(${driveFiles.name}) = lower(${input.destination.name})`,
-        ),
-      );
-    const [upload] = await deps.db
-      .insert(driveUploads)
-      .values({
-        folderId: input.destination.folderId,
-        name: input.destination.name,
-        mimeType: SRT_MIME,
-        byteSize: srt.length,
-        storageKey: key,
-        replaceFileId: existing?.id ?? null,
-        requestedBy: access.employeeId,
-        expiresAt: new Date(now.getTime() + 60_000),
-      })
-      .returning();
-    if (!upload) throw new Error('captions upload row was not inserted');
-    const { file } = await completeUpload(deps.drive, access, upload.id);
+    const { file, replaced } = await fileSrt(
+      deps,
+      access,
+      input.destination.folderId,
+      input.destination.name,
+      segmentsToSrt(transcript.segments),
+    );
 
     const filed = {
       driveFileId: file.id,
@@ -600,7 +816,7 @@ export async function transcriptionOf(
         jobId: id,
         version: file.version,
         segments: transcript.segments.length,
-        replaced: existing !== undefined,
+        replaced,
       },
     });
     return { transcription: toTranscription(done ?? claimed), filedNow: true };

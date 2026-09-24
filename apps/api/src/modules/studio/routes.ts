@@ -160,6 +160,7 @@ export const studioRoutes: FastifyPluginAsync = async (app) => {
       await audit(request, 'studio.captions_requested', 'job', transcription.id, {
         fileId: body.data.fileId,
         language: body.data.language ?? null,
+        smart: transcription.layout !== null,
       });
       return reply.status(202).send({ transcription });
     }),
