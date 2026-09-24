@@ -1245,6 +1245,8 @@ describe('the editing agent', () => {
     if (card?.kind !== 'generation' || !card.estimate) throw new Error('expected a priced card');
     const clicked = await generate(cookies, { estimateId: card.estimate.id, proposalId: card.id });
     expect(clicked.statusCode).toBe(201);
+    // Kairogen took it: the charge matched the quote.
+    expect(clicked.json<{ generation: MediaGeneration }>().generation.status).toBe('running');
     const estimated = fake.state.toolCalls.filter((item) => item.name === 'estimate_cost').at(-1);
     expect(pricedParamsOf(spending().at(-1)!.args)).toEqual(pricedParamsOf(estimated!.args));
   });
