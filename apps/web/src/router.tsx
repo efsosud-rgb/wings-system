@@ -6,6 +6,7 @@ import { ProtectedRoute } from './components/ProtectedRoute.js';
 import { NoAccess, RequirePermission } from './components/RequirePermission.js';
 import { ApprovalDetailPage } from './pages/ApprovalDetailPage.js';
 import { ApprovalsPage } from './pages/ApprovalsPage.js';
+import { ClientRecordPage } from './pages/ClientRecordPage.js';
 import { ClientsPage } from './pages/ClientsPage.js';
 import { ComingSoonPage } from './pages/ComingSoonPage.js';
 import { DrivePage } from './pages/DrivePage.js';
@@ -54,7 +55,10 @@ const SCREENS: Record<string, RouteObject[]> = {
     { index: true, element: <RoadmapPage /> },
     { path: 'relatorios/:id', element: <RoadmapPage /> },
   ],
-  '/administracao/clientes': [{ index: true, element: <ClientsPage /> }],
+  '/administracao/clientes': [
+    { index: true, element: <ClientsPage /> },
+    { path: ':id', element: <ClientRecordPage /> },
+  ],
   '/crm-vendas/funil': [
     { index: true, element: <LeadsPage /> },
     { path: ':id', element: <LeadPage /> },

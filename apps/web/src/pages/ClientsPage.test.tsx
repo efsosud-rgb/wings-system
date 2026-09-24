@@ -1,6 +1,7 @@
-import { WINGS_CLIENT_ID, type Client, type ClientProject } from '@wings/shared';
+import { WINGS_CLIENT_ID, type Client, type ClientProject, type SessionUser } from '@wings/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const get = vi.fn();
@@ -47,17 +48,38 @@ const AURORA_PROJECT: ClientProject = {
   canManage: true,
 };
 
+const user = (role: SessionUser['role'], permissions: SessionUser['permissions']): SessionUser => ({
+  employeeId: 'e1',
+  fullName: 'Pessoa',
+  email: 'p@wingscompany.com.br',
+  cargo: 'Cargo',
+  role,
+  sector: 'marketing',
+  isSectorManager: false,
+  tracksTime: true,
+  permissions,
+  lastLoginAt: null,
+  sessionExpiresAt: '2026-09-24T23:00:00Z',
+});
+const MARKETING = user('marketing', { 'clients.manage': 'all', 'clients.read': 'all', 'clients.edit': 'all' });
+const LEGAL = user('formatacao_juridico', { 'clients.read': 'all', 'clients.edit': 'all', 'clients.sensitive': 'all' });
+let me: SessionUser = MARKETING;
+
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <ClientsPage />
+      <MemoryRouter>
+        <ClientsPage />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
 
 beforeEach(() => {
+  me = MARKETING;
   get.mockReset().mockImplementation(async (path: string) => {
+    if (path === '/auth/me') return { user: me };
     if (path === '/clients') return { clients: [WINGS, AURORA] };
     if (path === '/leads/source-rules') return { rules: [] };
     if (path.endsWith('/tracking-links')) return { links: [], phoneConfigured: true };
@@ -90,12 +112,59 @@ describe('Administração → Clientes', () => {
     const submit = screen.getByRole('button', { name: 'Cadastrar cliente' });
     expect(submit).toHaveProperty('disabled', true);
 
-    fireEvent.change(screen.getByLabelText('Novo cliente'), {
+    fireEvent.change(screen.getByLabelText(/Nome do cliente/), {
       target: { value: 'Padaria Aurora' },
     });
     fireEvent.click(submit);
-    await waitFor(() => expect(post).toHaveBeenCalledWith('/clients', { name: 'Padaria Aurora' }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/clients', { name: 'Padaria Aurora', cnpj: null, contact: null }),
+    );
     expect(await screen.findByText('Já existe um cliente com este nome.')).toBeTruthy();
+  });
+
+  it('registers quickly with the CNPJ from the Receita and the main contact', async () => {
+    post.mockImplementation(async (path: string) => {
+      if (path === '/clients/lookup/cnpj') {
+        return {
+          source: 'brasilapi',
+          registrationStatus: 'ATIVA',
+          company: { legalName: 'AURORA PAES LTDA', tradeName: 'Aurora Pães' },
+          partners: [],
+        };
+      }
+      return { client: AURORA };
+    });
+    renderPage();
+    await screen.findByRole('cell', { name: 'Padaria Aurora' });
+    fireEvent.change(screen.getByLabelText(/^CNPJ/), { target: { value: '11.222.333/0001-80' } });
+    expect(screen.getByText('CNPJ inválido')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/^CNPJ/), { target: { value: '11.222.333/0001-81' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Buscar' }));
+    await waitFor(() => expect(screen.getByLabelText(/Nome do cliente/)).toHaveProperty('value', 'Aurora Pães'));
+    expect(screen.getByText('Receita: ATIVA')).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText('Contato principal'), { target: { value: 'Ana' } });
+    fireEvent.change(screen.getByLabelText('WhatsApp do contato'), { target: { value: '(11) 98888-7777' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cadastrar cliente' }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/clients', {
+        name: 'Aurora Pães',
+        cnpj: '11222333000181',
+        contact: { name: 'Ana', email: null, whatsapp: '(11) 98888-7777' },
+      }),
+    );
+  });
+
+  it('gives Jurídico the record of each client, and nothing to register, rename or deactivate', async () => {
+    me = LEGAL;
+    renderPage();
+    const aurora = (await screen.findByRole('cell', { name: 'Padaria Aurora' })).closest('tr') as HTMLElement;
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Cadastrar cliente' })).toBeNull());
+    expect(within(aurora).getByRole('link', { name: 'Ficha' }).getAttribute('href')).toBe(
+      `/administracao/clientes/${AURORA.id}`,
+    );
+    expect(within(aurora).queryByRole('button', { name: 'Editar' })).toBeNull();
+    expect(screen.queryByText('Origens de leads')).toBeNull();
   });
 
   it('deactivates a client with one click', async () => {
@@ -111,6 +180,7 @@ describe('Administração → Clientes', () => {
   });
   it('opens the client\'s links and expansion area, generates a wa.me link and saves the area', async () => {
     get.mockImplementation(async (path: string) => {
+      if (path === '/auth/me') return { user: me };
       if (path === '/clients') return { clients: [WINGS, AURORA] };
       if (path === '/leads/source-rules') return { rules: [] };
       if (path === `/clients/${AURORA.id}/tracking-links`) {

@@ -6471,3 +6471,125 @@ button.stage-chip:focus-visible {
 .roadmap-report-focused {
   background: rgba(233, 82, 40, 0.08);
 }
+
+/* Administração → Clientes: cadastro rápido e ficha */
+
+.clients-quick h2 {
+  font-size: 15px;
+  margin-bottom: 12px;
+}
+
+.clients-quick-hint {
+  margin-left: 12px;
+}
+
+.record-header-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.record-progress {
+  border: 1px solid var(--wings-border);
+  background: var(--wings-card);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 20px;
+}
+
+.record-progress-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 16px;
+  margin-bottom: 10px;
+}
+
+.record-progress-head strong {
+  font-size: 18px;
+}
+
+.record-progress-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--wings-border);
+  overflow: hidden;
+}
+
+.record-progress-bar span {
+  display: block;
+  height: 100%;
+  background: var(--wings-accent);
+  transition: width 0.3s ease;
+}
+
+.record-tabs {
+  flex-wrap: wrap;
+  overflow-x: auto;
+}
+
+.record-tab-count {
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--wings-faint);
+}
+
+.record-tab-done {
+  color: var(--wings-success);
+}
+
+.record-missing {
+  font-size: 13px;
+  color: var(--wings-muted);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.record-missing-done {
+  color: var(--wings-success);
+}
+
+.record-fieldset {
+  border: none;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.record-subhead {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--wings-muted);
+  margin: 16px 0 8px;
+}
+
+.record-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.record-actions .btn {
+  width: auto;
+}
+
+.record-qsa-item {
+  display: inline-flex;
+  gap: 6px;
+  margin-right: 12px;
+}
+
+.input-affix {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.input-affix-text {
+  font-size: 13px;
+  color: var(--wings-muted);
+}

@@ -7,14 +7,18 @@ import {
   LEAD_SOURCE_RULE_KIND_LABELS,
   PROJECT_STATUS_LABELS,
   WINGS_CLIENT_ID,
+  formatCnpj,
   formatExpansionEntry,
+  isValidCnpj,
   type Client,
   type LeadLinkChannel,
   type LeadSourceRuleKind,
 } from '@wings/shared';
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { hasPermission, useSession } from '../api/auth.js';
 import { ApiError } from '../api/client.js';
-import { useClients, useCreateClient, useUpdateClient } from '../api/clients.js';
+import { useClients, useCnpjLookup, useCreateClient, useUpdateClient } from '../api/clients.js';
 import { useProjects } from '../api/projects.js';
 import {
   useCreateSourceRule,
@@ -29,11 +33,15 @@ import { Alert, Button, Field, Input, Select } from '../components/ui.js';
 import type { ClientProject } from '@wings/shared';
 
 /**
- * Administração → Clientes. The smallest register that lets work be filed
- * under who it is for: a name, and whether the client is still active. Wings
- * Company is the fixed first row. Since the Funil (part 1), a client also
- * carries its expansion area and its tracked WhatsApp links, and the page
- * keeps the rules that map a landing page or a Meta form to a client.
+ * Administração → Clientes. The register of who work is for: a quick
+ * registration (name, and the CNPJ and main contact when known) and, per
+ * client, the full record ("ficha", ClientRecordPage). Wings Company is the
+ * fixed first row. Since the Funil (part 1), a client also carries its
+ * expansion area and its tracked WhatsApp links, and the page keeps the rules
+ * that map a landing page or a Meta form to a client.
+ *
+ * Registering, renaming and deactivating are `clients.manage`; Jurídico only
+ * reads the list and fills the record.
  */
 
 function ExpansionArea({ client }: { client: Client }) {
@@ -167,7 +175,9 @@ function ClientRow({
   open,
   onToggle,
   onStatus,
+  canManage,
 }: {
+  canManage: boolean;
   client: Client;
   project: ClientProject | undefined;
   open: boolean;
@@ -275,6 +285,11 @@ function ClientRow({
         <td>
           <div className="clients-actions">
             {!fixed && !editing && (
+              <Link className="btn btn-ghost" to={`/administracao/clientes/${client.id}`}>
+                Ficha
+              </Link>
+            )}
+            {canManage && !fixed && !editing && (
               <>
                 <Button type="button" variant="ghost" onClick={() => setEditing(true)}>
                   Editar
@@ -289,7 +304,7 @@ function ClientRow({
                 </Button>
               </>
             )}
-            {!fixed && client.active && (
+            {canManage && !fixed && client.active && (
               <Button type="button" variant="ghost" aria-expanded={open} onClick={onToggle}>
                 {open ? 'Fechar' : 'Links e expansão'}
               </Button>
@@ -412,12 +427,141 @@ function SourceRules({ clients }: { clients: Client[] }) {
   );
 }
 
+/** "Cadastro rápido": the name, and the CNPJ and main contact when already known. */
+function QuickCreate() {
+  const create = useCreateClient();
+  const lookup = useCnpjLookup();
+  const [name, setName] = useState('');
+  const [cnpj, setCnpj] = useState('');
+  const [contact, setContact] = useState({ name: '', email: '', whatsapp: '' });
+  const cnpjDigits = cnpj.replace(/[^0-9A-Za-z]/g, '').toUpperCase();
+  const cnpjOk = cnpjDigits === '' || isValidCnpj(cnpjDigits);
+  const reset = () => {
+    create.reset();
+  };
+
+  return (
+    <section className="block clients-quick">
+      <h2>Novo cliente</h2>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          create.mutate(
+            {
+              name,
+              cnpj: cnpjDigits || null,
+              contact: contact.name.trim()
+                ? { name: contact.name, email: contact.email || null, whatsapp: contact.whatsapp || null }
+                : null,
+            },
+            {
+              onSuccess: () => {
+                setName('');
+                setCnpj('');
+                setContact({ name: '', email: '', whatsapp: '' });
+                lookup.reset();
+              },
+            },
+          );
+        }}
+      >
+        <div className="grid-3">
+          <Field
+            label="CNPJ"
+            hint={lookup.data ? `Receita: ${lookup.data.registrationStatus ?? 'situação não informada'}` : 'Opcional. Buscar preenche o nome.'}
+            error={
+              lookup.error
+                ? lookup.error instanceof ApiError
+                  ? lookup.error.message
+                  : 'Não foi possível consultar o CNPJ.'
+                : cnpjOk
+                  ? undefined
+                  : 'CNPJ inválido'
+            }
+          >
+            <div className="input-row">
+              <Input
+                value={cnpjDigits.length === 14 ? formatCnpj(cnpjDigits) : cnpj}
+                placeholder="00.000.000/0000-00"
+                onChange={(event) => {
+                  setCnpj(event.target.value);
+                  lookup.reset();
+                  reset();
+                }}
+              />
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={cnpjDigits.length !== 14 || !cnpjOk || lookup.isPending}
+                onClick={() =>
+                  lookup.mutate(cnpjDigits, {
+                    onSuccess: (found) => {
+                      const suggested = found.company.tradeName ?? found.company.legalName;
+                      if (suggested && !name.trim()) setName(suggested.slice(0, CLIENT_NAME_MAX));
+                    },
+                  })
+                }
+              >
+                {lookup.isPending ? 'Buscando…' : 'Buscar'}
+              </Button>
+            </div>
+          </Field>
+          <Field label="Nome do cliente" required>
+            <Input
+              value={name}
+              maxLength={CLIENT_NAME_MAX}
+              placeholder="Como a Wings chama o cliente"
+              onChange={(event) => {
+                setName(event.target.value);
+                reset();
+              }}
+            />
+          </Field>
+        </div>
+        <div className="grid-3">
+          <Field label="Contato principal">
+            <Input
+              value={contact.name}
+              placeholder="Nome"
+              onChange={(event) => setContact({ ...contact, name: event.target.value })}
+            />
+          </Field>
+          <Field label="E-mail do contato">
+            <Input
+              type="email"
+              value={contact.email}
+              onChange={(event) => setContact({ ...contact, email: event.target.value })}
+            />
+          </Field>
+          <Field label="WhatsApp do contato">
+            <Input
+              type="tel"
+              value={contact.whatsapp}
+              placeholder="(11) 99999-9999"
+              onChange={(event) => setContact({ ...contact, whatsapp: event.target.value })}
+            />
+          </Field>
+        </div>
+        <Button type="submit" className="btn-inline" disabled={create.isPending || name.trim().length < 2 || !cnpjOk}>
+          Cadastrar cliente
+        </Button>
+        <span className="field-hint clients-quick-hint">O resto dos dados vai na ficha do cliente.</span>
+      </form>
+      {create.error && (
+        <Alert kind="error">
+          {create.error instanceof ApiError ? create.error.message : 'Não foi possível cadastrar o cliente.'}
+        </Alert>
+      )}
+    </section>
+  );
+}
+
 export function ClientsPage() {
   const clients = useClients();
-  const create = useCreateClient();
+  const { data: user } = useSession();
+  const canManage = hasPermission(user, 'clients.manage');
   // Every client's project, inactive ones included: this is the register of all of them.
   const projects = useProjects({ inactive: true });
-  const [name, setName] = useState('');
   const [openId, setOpenId] = useState<string | null>(null);
   const [statusOf, setStatusOf] = useState<ClientProject | null>(null);
   const list = clients.data?.clients ?? [];
@@ -436,37 +580,7 @@ export function ClientsPage() {
         </p>
       </header>
 
-      <form
-        className="filters"
-        onSubmit={(event) => {
-          event.preventDefault();
-          create.mutate(name, { onSuccess: () => setName('') });
-        }}
-      >
-        <label className="field">
-          <span className="field-label">Novo cliente</span>
-          <input
-            className="control"
-            value={name}
-            maxLength={CLIENT_NAME_MAX}
-            placeholder="Nome do cliente"
-            onChange={(event) => {
-              setName(event.target.value);
-              create.reset();
-            }}
-          />
-        </label>
-        <Button type="submit" disabled={create.isPending || name.trim().length < 2}>
-          Cadastrar cliente
-        </Button>
-      </form>
-      {create.error && (
-        <Alert kind="error">
-          {create.error instanceof ApiError
-            ? create.error.message
-            : 'Não foi possível cadastrar o cliente.'}
-        </Alert>
-      )}
+      {canManage && <QuickCreate />}
       {clients.isError && <Alert kind="error">Não foi possível carregar os clientes.</Alert>}
 
       <div className="table-wrap">
@@ -498,13 +612,14 @@ export function ClientsPage() {
                 open={openId === client.id}
                 onToggle={() => setOpenId((current) => (current === client.id ? null : client.id))}
                 onStatus={setStatusOf}
+                canManage={canManage}
               />
             ))}
           </tbody>
         </table>
       </div>
 
-      <SourceRules clients={list} />
+      {canManage && <SourceRules clients={list} />}
       {statusOf && <StatusDialog project={statusOf} onClose={() => setStatusOf(null)} />}
     </>
   );
