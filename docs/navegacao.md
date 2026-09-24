@@ -35,7 +35,9 @@ do sistema é legível por inteiro, e ninguém confunde "não construído" com
 Só existem 15 permissões, cobrindo funcionários, ponto, leads, configurações,
 APIs, auditoria e ads. Contratos, Formatação, Gestão, Produtividade e
 Atendimento **não têm permissão definida** — e inventar essa matriz seria
-decisão de negócio, não esqueleto.
+decisão de negócio, não esqueleto. (Desde então ganharam permissão os módulos
+que foram construídos: Drive, clientes, mídia, integrações e, em Gestão,
+Projetos com `projects.read` e `projects.manage`; ver `docs/projetos.md`.)
 
 Regra aplicada:
 

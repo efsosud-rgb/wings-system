@@ -80,4 +80,4 @@ export function mentionsClient(text: string, clientName: string): boolean {
 //   GET   /clients            -> { clients: Client[] }  active first   marketing.media.read or clients.manage
 //   POST  /clients  { name }  -> { client }                            clients.manage
 //   PATCH /clients/:id { name?, active?, number? } -> { client }       clients.manage (number taken -> 409)
-//   Wings Company can be neither renamed nor deactivated.
+//   Wings Company can be neither renamed nor deactivated. Registering a client also opens its project (projects.ts).

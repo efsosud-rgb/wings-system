@@ -1,4 +1,4 @@
-import { WINGS_CLIENT_ID, type Client } from '@wings/shared';
+import { WINGS_CLIENT_ID, type Client, type ClientProject } from '@wings/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -33,6 +33,20 @@ const WINGS: Client = {
   number: null,
 };
 
+const AURORA_PROJECT: ClientProject = {
+  id: 'p-1',
+  clientId: AURORA.id,
+  clientName: AURORA.name,
+  clientNumber: 3,
+  clientActive: true,
+  status: 'em_andamento',
+  currentStage: '04',
+  updatedAt: '2026-09-24T12:00:00.000Z',
+  updatedByName: null,
+  stages: [],
+  canManage: true,
+};
+
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -47,6 +61,7 @@ beforeEach(() => {
     if (path === '/clients') return { clients: [WINGS, AURORA] };
     if (path === '/leads/source-rules') return { rules: [] };
     if (path.endsWith('/tracking-links')) return { links: [], phoneConfigured: true };
+    if (path === '/projects?inactive=true') return { projects: [AURORA_PROJECT] };
     throw new Error(`unexpected GET ${path}`);
   });
   post.mockReset();
@@ -168,5 +183,28 @@ describe('Administração → Clientes', () => {
       }),
     );
     expect(await screen.findByText('O número 5 já é de Sushi do Bairro.')).toBeTruthy();
+  });
+
+  it('shows each client\'s project status and current stage, and opens the status dialog', async () => {
+    patch.mockResolvedValueOnce({ project: { ...AURORA_PROJECT, status: 'finalizado' } });
+    renderPage();
+    const aurora = (await screen.findByRole('cell', { name: 'Padaria Aurora' })).closest('tr') as HTMLElement;
+    expect(within(aurora).getByText('Etapa atual: 04 Financeiro')).toBeTruthy();
+    const wings = screen.getByRole('cell', { name: /Wings Company/ }).closest('tr') as HTMLElement;
+    expect(within(wings).queryByText(/Etapa atual/)).toBeNull();
+
+    fireEvent.click(
+      within(aurora).getByRole('button', { name: 'Status do projeto de Padaria Aurora: Em Andamento' }),
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Status de Padaria Aurora' });
+    fireEvent.change(within(dialog).getByLabelText('Novo status'), { target: { value: 'finalizado' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Salvar status' }));
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith(`/projects/${AURORA.id}/status`, {
+        status: 'finalizado',
+        reason: undefined,
+      }),
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 });

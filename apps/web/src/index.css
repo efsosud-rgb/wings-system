@@ -5678,3 +5678,215 @@ a.menu-module-header {
   width: auto;
   align-self: flex-start;
 }
+
+/* ---------------------------------------------------------------------------
+   Gestão → Projetos: the board, the status tag and the stage chips
+   --------------------------------------------------------------------------- */
+
+.project-status {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 3px 9px;
+  border: 1px solid;
+  white-space: nowrap;
+}
+
+.project-status-em_andamento {
+  color: #60a5fa;
+  background: rgba(96, 165, 250, 0.12);
+  border-color: rgba(96, 165, 250, 0.35);
+}
+
+.project-status-parado {
+  color: #fbbf24;
+  background: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.35);
+}
+
+.project-status-cancelado {
+  color: var(--wings-danger);
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+.project-status-finalizado {
+  color: var(--wings-success);
+  background: rgba(52, 211, 153, 0.12);
+  border-color: rgba(52, 211, 153, 0.35);
+}
+
+.projects-status-button {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.projects-status-button:hover .project-status,
+.projects-status-button:focus-visible .project-status {
+  filter: brightness(1.25);
+  outline: 1px solid currentColor;
+}
+
+.stage-chip {
+  display: inline-block;
+  min-width: 88px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+button.stage-chip {
+  cursor: pointer;
+}
+
+button.stage-chip:hover,
+button.stage-chip:focus-visible {
+  filter: brightness(1.25);
+}
+
+.stage-nao_iniciada {
+  color: var(--wings-muted);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.stage-em_andamento {
+  color: #93c5fd;
+  background: rgba(96, 165, 250, 0.18);
+}
+
+.stage-concluida {
+  color: var(--wings-success);
+  background: rgba(52, 211, 153, 0.16);
+}
+
+.stage-bloqueada {
+  color: var(--wings-danger);
+  background: rgba(248, 113, 113, 0.16);
+}
+
+.stage-current {
+  border-color: var(--wings-accent);
+  box-shadow: 0 0 0 1px rgba(233, 82, 40, 0.5);
+}
+
+.projects-board-wrap {
+  overflow-x: auto;
+}
+
+.projects-board th,
+.projects-board td {
+  vertical-align: middle;
+}
+
+.projects-stage-head {
+  text-align: center;
+  min-width: 100px;
+}
+
+.projects-stage-number {
+  display: block;
+  font-size: 11px;
+  color: var(--wings-faint);
+}
+
+.projects-stage-name {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.projects-stage-cell {
+  text-align: center;
+}
+
+.projects-row-inactive td {
+  opacity: 0.6;
+}
+
+.projects-stage-select {
+  min-width: 190px;
+}
+
+.projects-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-end;
+  padding-bottom: 8px;
+}
+
+.projects-refresh {
+  margin-top: 12px;
+}
+
+.project-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+  padding: 16px;
+}
+
+.project-dialog {
+  width: min(440px, 100%);
+  background: var(--wings-card);
+  border: 1px solid var(--wings-border);
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.project-dialog h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.project-dialog form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.project-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.drive-project {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 12px;
+  font-size: 13px;
+  color: var(--wings-muted);
+}
+
+.drive-project-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.clients-project {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}

@@ -11,5 +11,6 @@ export * from './integrations.js';
 export * from './jobs.js';
 export * from './leads.js';
 export * from './org.js';
+export * from './projects.js';
 export * from './sessions.js';
 export * from './timeclock.js';
