@@ -10,7 +10,7 @@ import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { Database } from '../../db/client.js';
-import { clients } from '../../db/schema/index.js';
+import { clientContacts, clients } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { syncDriveFolders } from '../drive/folders.js';
 import { openProjectForClient } from '../projects/service.js';
@@ -52,7 +52,11 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
   const { db } = app.wings;
 
   app.get('/clients', { preHandler: app.requireAuth }, async (request, reply) => {
-    if (!app.can(request, 'clients.manage') && !app.can(request, 'marketing.media.read')) {
+    if (
+      !app.can(request, 'clients.manage') &&
+      !app.can(request, 'clients.read') &&
+      !app.can(request, 'marketing.media.read')
+    ) {
       return reply.status(403).send({ error: 'forbidden', message: 'Acesso negado' });
     }
     return reply.send({ clients: await listClients(db) });
@@ -69,6 +73,19 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
           message: body.error.issues[0]?.message ?? 'Dados inválidos',
         });
       }
+      const { cnpj, contact } = body.data;
+      if (cnpj) {
+        const holder = await db.query.clients.findFirst({
+          where: eq(clients.cnpj, cnpj),
+          columns: { name: true },
+        });
+        if (holder) {
+          return reply.status(409).send({
+            error: 'cnpj_taken',
+            message: `Este CNPJ já está no cadastro de ${holder.name}.`,
+          });
+        }
+      }
       // The next number, under a lock so two registrations never take the same one.
       const row = await db.transaction(async (tx) => {
         await tx.execute(sql`select pg_advisory_xact_lock(7301, 2)`);
@@ -81,9 +98,13 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
             name: body.data.name,
             slug: clientSlugOf(body.data.name),
             number: (last?.number ?? 0) + 1,
+            cnpj,
           })
           .onConflictDoNothing()
           .returning();
+        if (made && contact) {
+          await tx.insert(clientContacts).values({ clientId: made.id, role: 'principal', ...contact });
+        }
         // The client's project opens with the client: Em Andamento, at 01.
         if (made) await openProjectForClient(tx, made.id);
         return made;
@@ -101,7 +122,13 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
         entity: 'client',
         entityId: row.id,
         ip: request.ip,
-        metadata: { slug: row.slug, driveFoldersCreated: folders.foldersCreated, projectOpened: true },
+        metadata: {
+          slug: row.slug,
+          withCnpj: cnpj !== null,
+          withContact: contact !== null,
+          driveFoldersCreated: folders.foldersCreated,
+          projectOpened: true,
+        },
       });
       return reply.status(201).send({ client: toClient(row) });
     },

@@ -224,7 +224,7 @@ export const NAVIGATION: readonly NavModule[] = [
         path: '/administracao/clientes',
         label: 'Clientes',
         description: 'Para quem o trabalho é feito',
-        permission: 'clients.manage',
+        permission: 'clients.read',
         status: 'ready',
         kind: 'crud',
       },
