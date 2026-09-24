@@ -260,6 +260,13 @@
       "when": 1790283908225,
       "tag": "0036_roadmap_ro_grants",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1790285252455,
+      "tag": "0037_client_record",
+      "breakpoints": true
     }
   ]
 }

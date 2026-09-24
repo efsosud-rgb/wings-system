@@ -15,6 +15,7 @@ import { metaRoutes } from './modules/ads/meta-routes.js';
 import { adsRoutes } from './modules/ads/routes.js';
 import type { AgentLlm } from './modules/agent/llm.js';
 import { agentRoutes } from './modules/agent/routes.js';
+import { clientRecordRoutes } from './modules/clients/record-routes.js';
 import { clientRoutes } from './modules/clients/routes.js';
 import { insightsRoutes } from './modules/insights/routes.js';
 import { driveBlobRoutes, driveRoutes } from './modules/drive/routes.js';
@@ -47,6 +48,8 @@ declare module 'fastify' {
       mediaFetch?: typeof fetch;
       /** Set only by tests, so no test ever reaches a real bucket. */
       storageFetch?: typeof fetch;
+      /** Set only by tests, so no test ever reaches BrasilAPI, ReceitaWS or ViaCEP. */
+      registryFetch?: typeof fetch;
       storage?: ObjectStorage;
       /** Set only by tests, so a screen that reasons about "today" can be pinned to a day. */
       now?: () => Date;
@@ -72,6 +75,8 @@ export async function buildApp(deps: {
   /** Overridable so tests talk to simulated media providers. */
   mediaFetch?: typeof fetch;
   storageFetch?: typeof fetch;
+  /** Overridable so tests answer CNPJ and CEP lookups themselves. */
+  registryFetch?: typeof fetch;
   storage?: ObjectStorage;
   /** Overridable so tests pin the dashboard's "today". */
   now?: () => Date;
@@ -100,6 +105,7 @@ export async function buildApp(deps: {
     kairogenFetch: deps.kairogenFetch,
     mediaFetch: deps.mediaFetch,
     storageFetch: deps.storageFetch,
+    registryFetch: deps.registryFetch,
     storage: deps.storage,
     now: deps.now,
     mailer: deps.mailer ?? createMailer(deps.env, { info: (msg) => app.log.info(msg) }),
@@ -152,6 +158,7 @@ export async function buildApp(deps: {
   await app.register(agentRoutes);
   await app.register(insightsRoutes);
   await app.register(clientRoutes);
+  await app.register(clientRecordRoutes);
   await app.register(projectRoutes);
   await app.register(roadmapRoutes);
   await app.register(leadRoutes);
