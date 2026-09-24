@@ -25,7 +25,7 @@ export const jobs = pgTable(
   {
     tenantId: tenantId(),
     id: uuid('id').primaryKey().defaultRandom(),
-    /** ffprobe | transcribe | render (render has no worker handler yet) */
+    /** ffprobe | transcribe | render | enrich_lead */
     type: text('type').notNull(),
     input: jsonb('input').notNull().default({}),
     /** pending | running | done | failed */
@@ -36,6 +36,12 @@ export const jobs = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp('started_at', { withTimezone: true }),
+    /**
+     * Written by the worker when it claims the job and every 30 s while it
+     * runs. A `running` row whose heartbeat stopped belongs to a worker that
+     * died; `apps/worker/src/queue.ts` reclaims it (docs/studio/jobs.md).
+     */
+    heartbeatAt: timestamp('heartbeat_at', { withTimezone: true }),
     finishedAt: timestamp('finished_at', { withTimezone: true }),
   },
   (table) => [

@@ -183,3 +183,48 @@ export const runRenderJob: JobHandler = async (job: Job, ctx: JobContext) => {
     await rm(dir, { recursive: true, force: true });
   }
 };
+
+/** What a render found already delivered is finished with: the output of a
+ * normal run, minus the time it took (nobody saw it end), marked recovered. */
+export type RecoveredRenderOutput = Omit<RenderJobOutput, 'renderSeconds'> & {
+  renderSeconds: null;
+  recovered: true;
+};
+
+/**
+ * A render whose worker died after the upload but before the row said
+ * `done`. The object is under the one key the API chose, and a PUT is all or
+ * nothing, so if it is there the render was delivered: it is finished as done
+ * (and the API files it as usual) rather than failed or rendered again.
+ * Null when the object is not there, or the input cannot be read.
+ */
+export async function recoverDeliveredRender(
+  job: Job,
+  ctx: Pick<JobContext, 'storage'>,
+): Promise<RecoveredRenderOutput | null> {
+  let input: RenderJobInput;
+  let plan: RenderPlan;
+  try {
+    input = parseRenderInput(job.input);
+    plan = buildRenderPlan(input);
+  } catch {
+    return null;
+  }
+  const head = await ctx.storage.head(input.output.storageKey);
+  if (!head || head.size === 0) return null;
+  const bytes = await ctx.storage.get(input.output.storageKey);
+  if (!bytes || bytes.length !== head.size) return null;
+  return {
+    storageKey: input.output.storageKey,
+    byteSize: bytes.length,
+    checksum: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+    mimeType: 'video/mp4',
+    width: input.output.width,
+    height: input.output.height,
+    fps: input.output.fps,
+    durationSeconds: plan.totalDurationSeconds,
+    unsupported: plan.unsupported,
+    renderSeconds: null,
+    recovered: true,
+  };
+}

@@ -17,3 +17,4 @@ export { siblingTranscriptKey, type TranscribeOutput } from './transcribe.js';
 export type { FfprobeOutput } from './ffprobe.js';
 export type { EnrichLeadOutput } from './enrich-lead.js';
 export { RenderError, type RenderJobInput, type RenderJobOutput } from './render/contract.js';
+export { recoverDeliveredRender, type RecoveredRenderOutput } from './render/index.js';

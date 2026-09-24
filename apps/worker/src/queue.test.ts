@@ -40,8 +40,9 @@ describe('the jobs queue', () => {
 
   it('finishes a job as done, with its output', async () => {
     const id = await insertJob('ffprobe');
-    await claimNextJob(database.pool, ['ffprobe']);
-    await completeJob(database.pool, id, { durationSeconds: 12.5 });
+    const job = await claimNextJob(database.pool, ['ffprobe']);
+    if (!job) throw new Error('expected a job');
+    expect(await completeJob(database.pool, job, { durationSeconds: 12.5 })).toBe(true);
 
     const row = await database.pool.query(
       'select state, output, error, finished_at is not null as finished from jobs where id = $1',
@@ -66,7 +67,11 @@ describe('the jobs queue', () => {
       [id],
     );
     // Back to pending: attempts (1) is still under the ceiling (3).
-    expect(row.rows[0]).toMatchObject({ state: 'pending', error: 'ffmpeg exited with code 1', finished: false });
+    expect(row.rows[0]).toMatchObject({
+      state: 'pending',
+      error: 'ffmpeg exited with code 1',
+      finished: false,
+    });
 
     // Claim and fail two more times to reach the ceiling.
     for (let i = 0; i < 2; i++) {
@@ -88,7 +93,7 @@ describe('the jobs queue', () => {
     // Drain the "render" row an earlier test left pending, so this checks an
     // empty result rather than an untouched one.
     const leftover = await claimNextJob(database.pool, ['render']);
-    if (leftover) await completeJob(database.pool, leftover.id, null);
+    if (leftover) await completeJob(database.pool, leftover, null);
 
     expect(await claimNextJob(database.pool, ['render'])).toBeNull();
     expect(await claimNextJob(database.pool, [])).toBeNull();
