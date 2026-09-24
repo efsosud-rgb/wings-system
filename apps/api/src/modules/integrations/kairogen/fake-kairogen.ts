@@ -239,6 +239,8 @@ export function fakeKairogen(options: FakeKairogenOptions = {}) {
     mcpScript: [] as number[],
     /** HTTP statuses to answer the next calls that SPEND credits with, before they are looked at. */
     spendScript: [] as number[],
+    /** Tool-level errors to answer the next calls of a tool with, as Kairogen does when its own upstream fails. */
+    toolErrorScript: [] as { tool: string; text: string }[],
     mcpSessions: 0,
     toolCalls: [] as { name: string; args: Record<string, unknown> }[],
     generations: new Map<string, FakeGeneration>(),
@@ -342,6 +344,11 @@ export function fakeKairogen(options: FakeKairogenOptions = {}) {
     if (name === 'list_models') {
       const models = CATALOG.filter((model) => !args.type || model.type === args.type);
       return ok({ count: models.length, models });
+    }
+    const scripted = state.toolErrorScript.findIndex((item) => item.tool === name);
+    if (scripted !== -1) {
+      const [failure] = state.toolErrorScript.splice(scripted, 1);
+      return toolError(failure?.text ?? 'error');
     }
     if (name === 'estimate_cost') {
       if (typeof args.model !== 'string' || typeof args.plan_key !== 'string') {
