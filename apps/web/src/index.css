@@ -6369,3 +6369,84 @@ button.stage-chip:focus-visible {
     filter: blur(0);
   }
 }
+
+/* Administração → Roadmap */
+
+.tab-row {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--wings-border);
+  margin-bottom: 20px;
+}
+
+.tab-button {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--wings-muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 10px 4px;
+  margin-right: 16px;
+  cursor: pointer;
+}
+
+.tab-button:hover {
+  color: var(--wings-text);
+}
+
+.tab-button-active {
+  color: var(--wings-accent);
+  border-bottom-color: var(--wings-accent);
+}
+
+.roadmap-module {
+  margin-bottom: 16px;
+}
+
+.roadmap-module-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.roadmap-module-percent {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--wings-accent);
+}
+
+.roadmap-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--wings-surface);
+  border: 1px solid var(--wings-border);
+  overflow: hidden;
+  margin-bottom: 14px;
+}
+
+.roadmap-bar-fill {
+  height: 100%;
+  background: var(--wings-success);
+}
+
+.roadmap-message {
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 13px;
+  background: var(--wings-surface);
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+
+.field-inline {
+  display: inline-flex;
+  align-items: center;
+}
+
+.roadmap-report-focused {
+  background: rgba(233, 82, 40, 0.08);
+}
