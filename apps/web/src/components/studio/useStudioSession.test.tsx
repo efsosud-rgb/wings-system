@@ -45,6 +45,7 @@ const core = vi.hoisted(() => {
     size: { width: 1920, height: 1080 },
     nextId: 1,
     zoom: 0.5,
+    history: [] as { clips: FakeClip[] }[][],
   };
   return {
     state,
@@ -156,11 +157,14 @@ const core = vi.hoisted(() => {
       }
       async updateClipById(clipId: string, updates: Record<string, unknown>) {
         const found = this.find(clipId);
-        if (!found) return { success: false };
+        if (!found) return { success: false, status: 'noop' };
+        // One command, like the real core: undo takes exactly this change back.
+        state.history.push(structuredClone(state.tracks));
+        this.canUndo = true;
         Object.assign(found.clip, updates);
         this.emit('clip:updated', {});
         this.emit('edit:changed', { source: 'test', timestamp: 0 });
-        return { success: true };
+        return { success: true, status: 'success' };
       }
       async deleteClipById(clipId: string) {
         const found = this.find(clipId);
@@ -198,7 +202,12 @@ const core = vi.hoisted(() => {
       seek(target: number) {
         this.playbackTime = target;
       }
-      async undo() {}
+      async undo() {
+        const previous = state.history.pop();
+        if (previous) state.tracks = previous;
+        this.canUndo = state.history.length > 0;
+        this.emit('edit:changed', { source: 'undo:test', timestamp: 0 });
+      }
       async redo() {}
       dispose() {}
     },
@@ -339,6 +348,7 @@ beforeEach(() => {
   core.state.tracks = [];
   core.state.size = { width: 1920, height: 1080 };
   core.state.nextId = 1;
+  core.state.history = [];
   latest = null;
   onSave.mockReset();
   get.mockReset();
@@ -636,8 +646,84 @@ describe('the selected item', () => {
         driveFileId: IMAGE_ID,
         mediaAssetId: 'asset-9',
         name: 'imagem-asset-9',
+        clientId: null,
+        aspect: null,
       }),
     );
+  });
+
+  it('replaces the picture in place, keeping place, size, layer and timing, as one undoable step', async () => {
+    const OTHER_ID = '66666666-6666-4666-8666-666666666666';
+    const OTHER_LINK = 'http://storage.test/drive/2026-09/outra?sig=4';
+    get.mockImplementation(async (path: string) => {
+      if (path === `/studio/files/${IMAGE_ID}/link`)
+        return { url: 'http://storage.test/drive/2026-09/img?sig=2', expiresAt: '' };
+      if (path === `/studio/files/${OTHER_ID}/link`) return { url: OTHER_LINK, expiresAt: '' };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    await mount();
+    await act(() => session().addText('title'));
+    await act(() =>
+      session().addMediaAsset({
+        id: 'asset-1',
+        kind: 'image',
+        mimeType: 'image/png',
+        driveFileId: IMAGE_ID,
+        clientId: CLIENT_ID,
+        aspect: '1:1',
+      } as MediaAsset),
+    );
+    const imageId = core.state.tracks[0]?.clips[0]?.id as string;
+    act(() => session().selectClip(imageId));
+    await waitFor(() => expect(session().selected?.assetType).toBe('image'));
+    expect(session().selectedImageForAi).toMatchObject({ clientId: CLIENT_ID, aspect: '1:1' });
+    await act(() =>
+      session().updateSelected({ position: 'topRight', offset: { x: 0.1, y: -0.2 }, scale: 0.5 }),
+    );
+    const before = structuredClone(core.state.tracks[0]?.clips[0]) as FakeClip;
+    const tracksBefore = core.state.tracks.length;
+
+    let replaced = false;
+    await act(async () => {
+      replaced = await session().replaceImage(imageId, {
+        kind: 'media-asset',
+        asset: {
+          id: 'asset-2',
+          kind: 'image',
+          mimeType: 'image/png',
+          driveFileId: OTHER_ID,
+          clientId: CLIENT_ID,
+          aspect: '1:1',
+        } as MediaAsset,
+      });
+    });
+    expect(replaced).toBe(true);
+    const after = core.state.tracks[0]?.clips[0] as FakeClip;
+    // The same clip, in the same track, with everything but the picture as it was.
+    expect(after.id).toBe(imageId);
+    expect(core.state.tracks.length).toBe(tracksBefore);
+    expect(after.asset).toEqual({ ...before.asset, src: OTHER_LINK });
+    const withoutAsset = (clip: FakeClip) =>
+      Object.fromEntries(Object.entries(clip).filter(([key]) => key !== 'asset'));
+    const beforeRest = withoutAsset(before);
+    const afterRest = withoutAsset(after);
+    expect(afterRest).toEqual(beforeRest);
+
+    // Ctrl+Z (undo) brings the old picture back in one step.
+    await act(() => session().undo());
+    expect((core.state.tracks[0]?.clips[0] as FakeClip).asset.src).toBe(before.asset.src);
+  });
+
+  it('refuses to replace a picture with something that is not a picture', async () => {
+    await mount();
+    await act(() => session().addDriveFile(image, folder));
+    const imageId = core.state.tracks[0]?.clips[0]?.id as string;
+    let replaced = true;
+    await act(async () => {
+      replaced = await session().replaceImage(imageId, { kind: 'drive-file', file: video, folder });
+    });
+    expect(replaced).toBe(false);
+    expect(session().notice?.text).toBe('Uma imagem só pode ser trocada por outra imagem.');
   });
 });
 

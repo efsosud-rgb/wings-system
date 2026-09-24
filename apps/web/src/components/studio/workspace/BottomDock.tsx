@@ -2,14 +2,13 @@ import { STUDIO_TRANSCRIPTION_STATE_LABEL } from '@wings/shared';
 import { useState } from 'react';
 import { Dialog } from '../../drive/DriveParts.js';
 import { Button } from '../../ui.js';
-import { LayersPanel } from '../LayersPanel.js';
 import type { StudioSession } from '../session.js';
 import { CaptionsIcon } from './icons.js';
 
 /**
- * Under the stage: the timeline for a video, the layers for an image. The
- * timeline's host stays in the DOM in both modes, hidden, because the core
- * keeps its own DOM inside it.
+ * Under the stage: the timeline, for a video. An image has nothing here (its
+ * layers are ordered from the selected item's properties); the timeline's host
+ * stays in the DOM, hidden, because the core keeps its own DOM inside it.
  */
 
 const LANGUAGES = [
@@ -86,7 +85,7 @@ export function BottomDock({ session }: { session: StudioSession }) {
   const video = session.mode === 'video';
 
   return (
-    <section className="ws-dock" aria-label={video ? 'Linha do tempo' : 'Camadas'}>
+    <section className="ws-dock" aria-label="Linha do tempo" hidden={!video}>
       {video && (
         <div className="ws-dock-tools">
           <Button
@@ -146,7 +145,6 @@ export function BottomDock({ session }: { session: StudioSession }) {
         hidden={!video}
         data-testid="ws-timeline"
       />
-      {!video && <LayersPanel session={session} />}
       {asking && <CaptionsDialog session={session} onClose={() => setAsking(false)} />}
     </section>
   );
