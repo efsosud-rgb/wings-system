@@ -32,7 +32,11 @@ export const PERMISSIONS = {
   'marketing.media.read': 'Ver a biblioteca de mídia do marketing',
   'marketing.media.generate': 'Gerar imagens e vídeos gastando créditos',
   'marketing.media.edit': 'Editar vídeos no Studio, exportar e salvar no Drive',
-  'clients.manage': 'Cadastrar e editar clientes',
+  'clients.manage': 'Cadastrar, renomear e desativar clientes',
+  'clients.read': 'Ver a ficha completa dos clientes',
+  'clients.edit': 'Preencher a ficha completa dos clientes',
+  'clients.sensitive':
+    'Ver e editar CPF, estado civil e regime de bens dos sócios dos clientes (revelação registrada em auditoria)',
   'drive.read': 'Ver pastas e arquivos do Drive',
   'drive.write': 'Enviar, mover, renomear e excluir arquivos do Drive',
   'drive.manage': 'Editar o modelo de pastas do Drive, sincronizar e esvaziar a lixeira',
@@ -71,6 +75,14 @@ const PROJECT_STAFF: RolePermissions = { 'projects.read': 'all', 'projects.manag
 const PROJECT_READ: RolePermissions = { 'projects.read': 'all' };
 const PROJECT_ALL: RolePermissions = { 'projects.read': 'all', 'projects.manage': 'all' };
 
+/**
+ * The client's full record (Administração → Clientes → ficha). `clients.sensitive`
+ * is the partners' CPF, marital status and property regime: Jurídico, Diretoria
+ * and Admin Master only, and every CPF reveal is audited.
+ */
+const CLIENT_RECORD: RolePermissions = { 'clients.read': 'all', 'clients.edit': 'all' };
+const CLIENT_RECORD_LEGAL: RolePermissions = { ...CLIENT_RECORD, 'clients.sensitive': 'all' };
+
 const SECTOR_STAFF: RolePermissions = {
   'employees.read': 'sector',
   'timeclock.read': 'own',
@@ -90,6 +102,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     ...PROJECT_ALL,
     // The one connection to Kairogen belongs to the system: only an Admin Master makes it.
     'integrations.manage': 'all',
+    ...CLIENT_RECORD_LEGAL,
     'clients.manage': 'all',
     'marketing.media.read': 'all',
     'marketing.media.generate': 'all',
@@ -121,6 +134,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   diretoria: {
     ...DRIVE_ALL,
     ...PROJECT_ALL,
+    ...CLIENT_RECORD_LEGAL,
     'clients.manage': 'all',
     'marketing.media.read': 'all',
     'marketing.media.generate': 'all',
@@ -165,6 +179,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   marketing: {
     // Marketing is who works for the clients, so it keeps their register too.
     'clients.manage': 'all',
+    ...CLIENT_RECORD,
     'marketing.media.read': 'all',
     'marketing.media.generate': 'all',
     'marketing.media.edit': 'all',
@@ -174,7 +189,9 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'ads.request': 'all',
     'site.publish': 'all',
   },
-  formatacao_juridico: { ...SECTOR_STAFF, ...PROJECT_STAFF },
+  // Jurídico drafts the contracts and the COF from the client's record, so it
+  // fills the record and sees the partners' qualification.
+  formatacao_juridico: { ...SECTOR_STAFF, ...PROJECT_STAFF, ...CLIENT_RECORD_LEGAL },
   formatacao_financeiro: { ...SECTOR_STAFF, ...PROJECT_STAFF },
   // Processos e Projetos runs the client: status, current stage and every stage.
   formatacao_processos_projetos: { ...SECTOR_STAFF, ...PROJECT_ALL },

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { clientQuickContactSchema, cnpjField } from './client-record.js';
 import type { ExpansionEntry } from './leads.js';
 
 /**
@@ -41,20 +42,25 @@ const plain = (text: string) =>
 
 export const clientSlugOf = (name: string) => plain(name).replace(/ /g, '-').slice(0, 60);
 
+const clientNameSchema = z
+  .string()
+  .trim()
+  .min(2, 'Informe o nome do cliente')
+  .max(CLIENT_NAME_MAX)
+  .refine((name) => clientSlugOf(name).length >= 2, 'Informe um nome com letras ou números');
+
+/** "Cadastro rápido": the name, and the CNPJ and main contact when already known. */
 export const clientCreateSchema = z.object({
-  name: z
-    .string()
-    .trim()
-    .min(2, 'Informe o nome do cliente')
-    .max(CLIENT_NAME_MAX)
-    .refine((name) => clientSlugOf(name).length >= 2, 'Informe um nome com letras ou números'),
+  name: clientNameSchema,
+  cnpj: cnpjField,
+  contact: clientQuickContactSchema.nullish().transform((value) => value ?? null),
 });
 
 export const CLIENT_NUMBER_MAX = 9999;
 
 export const clientUpdateSchema = z
   .object({
-    name: clientCreateSchema.shape.name.optional(),
+    name: clientNameSchema.optional(),
     active: z.boolean().optional(),
     number: z
       .number({ error: 'Informe um número' })
