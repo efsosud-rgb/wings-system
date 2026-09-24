@@ -112,6 +112,12 @@ function stubSession(overrides: Partial<StudioSession> = {}): StudioSession {
     updateSelected: vi.fn(async () => undefined),
     deleteSelected: vi.fn(async () => undefined),
     moveSelected: vi.fn(async () => undefined),
+    timelineForAgent: vi.fn(() => null),
+    agentPreview: null,
+    agentEditsKept: [],
+    previewAgentEdit: vi.fn(async () => true),
+    keepAgentEdit: vi.fn(),
+    discardAgentEdit: vi.fn(async () => undefined),
     assets: [
       { id: 'a1', name: 'entrevista.mp4', mimeType: 'video/mp4', url: 'blob:x', kind: 'video' },
     ],

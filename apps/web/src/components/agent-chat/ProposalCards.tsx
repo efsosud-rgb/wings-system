@@ -14,13 +14,14 @@ import {
   type AgentChangeProposalCard,
   type AgentGenerationProposalCard,
   type AgentProposalCard,
+  type AgentTimelineEditProposalCard,
   GENERATION_STATUS_LABEL,
   MEDIA_IMAGE_USE_LABEL,
   MEDIA_PROVIDER_LABEL,
   type MediaProviderId,
   isGenerationOver,
 } from '@wings/shared';
-import { createContext, useContext } from 'react';
+import { createContext, useContext, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMarkProposalApplied, useRequestFromProposal } from '../../api/agent.js';
 import { ApiError } from '../../api/client.js';
@@ -527,6 +528,103 @@ function GenerationCard({
   );
 }
 
+/**
+ * What a timeline card needs from the Studio around it. Null where the editor
+ * is not on screen (the media page without the Studio): the card then says so.
+ */
+export interface TimelineEditBridge {
+  /** The card now previewed on the timeline, if any. */
+  previewing: string | null;
+  /** Cards kept in this session, by "Aplicar" or by editing on after the preview. */
+  kept: readonly string[];
+  preview(card: AgentTimelineEditProposalCard): Promise<boolean>;
+  keep(): void;
+  discard(): Promise<void>;
+}
+
+export const TimelineEditContext = createContext<TimelineEditBridge | null>(null);
+
+/**
+ * Changes to the timeline, one line each, written by the server. The card
+ * does nothing by being on screen: "Pré-visualizar" puts them on the timeline
+ * as one step, "Aplicar" keeps that step and "Descartar" takes it back.
+ */
+function TimelineEditCard({
+  proposal,
+  onActed,
+}: {
+  proposal: AgentTimelineEditProposalCard;
+  onActed: (next: AgentProposalCard) => void;
+}) {
+  const bridge = useContext(TimelineEditContext);
+  const [working, setWorking] = useState(false);
+  const previewing = bridge?.previewing === proposal.id;
+  const applied = proposal.status === 'applied' || (bridge?.kept.includes(proposal.id) ?? false);
+
+  return (
+    <article className="agent-card" aria-label="Proposta de edição">
+      <header className="agent-card-head">
+        <span className="agent-card-kind">Proposta de edição</span>
+      </header>
+      <p>{proposal.payload.explanation}</p>
+      <ol className="agent-card-lines" aria-label="O que muda na linha do tempo">
+        {proposal.payload.lines.map((line, index) => (
+          <li key={index}>{line}</li>
+        ))}
+      </ol>
+      {!bridge ? (
+        <p className="field-hint">
+          Abra o Studio (Edição de fotos e vídeos) para pré-visualizar esta edição.
+        </p>
+      ) : previewing ? (
+        <>
+          <p className="agent-card-state" role="status">
+            Prévia na tela. Aplicar mantém como um passo (Ctrl+Z desfaz); Descartar volta ao que
+            era.
+          </p>
+          <div className="agent-card-actions">
+            <Button
+              type="button"
+              onClick={() => {
+                bridge.keep();
+                onActed({ ...proposal, status: 'applied' });
+              }}
+            >
+              Aplicar
+            </Button>
+            <Button type="button" variant="ghost" onClick={() => void bridge.discard()}>
+              Descartar
+            </Button>
+          </div>
+        </>
+      ) : (
+        <>
+          {applied && (
+            <p className="agent-card-state" role="status">
+              Aplicada. Ctrl+Z na linha do tempo desfaz, se ainda for a última mudança.
+            </p>
+          )}
+          <Button
+            type="button"
+            variant={applied ? 'ghost' : undefined}
+            disabled={working}
+            onClick={async () => {
+              setWorking(true);
+              try {
+                await bridge.preview(proposal);
+              } finally {
+                setWorking(false);
+              }
+            }}
+          >
+            {applied ? 'Pré-visualizar de novo' : 'Pré-visualizar'}
+          </Button>
+        </>
+      )}
+    </article>
+  );
+}
+
 export function ProposalCard({
   proposal,
   canRequest,
@@ -541,6 +639,8 @@ export function ProposalCard({
 }) {
   if (proposal.kind === 'generation')
     return <GenerationCard proposal={proposal} onActed={onActed} />;
+  if (proposal.kind === 'timeline_edit')
+    return <TimelineEditCard proposal={proposal} onActed={onActed} />;
   return proposal.kind === 'campaign' ? (
     <CampaignCard proposal={proposal} onApplyCampaign={onApplyCampaign} onActed={onActed} />
   ) : (

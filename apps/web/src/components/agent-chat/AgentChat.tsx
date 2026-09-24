@@ -7,6 +7,7 @@ import {
   type AgentScope,
   type AgentStatusResponse,
   type AgentStreamEvent,
+  type StudioTimelineSnapshot,
 } from '@wings/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useId, useRef, useState } from 'react';
@@ -46,6 +47,8 @@ export interface AgentChatProps {
   canGenerate?: boolean;
   /** The builder's current values, read at the moment a message is sent. */
   getBuilderDraft?: () => Record<string, unknown> | undefined;
+  /** The Studio's timeline, read at the moment a message is sent. Present only with the editor open. */
+  getTimeline?: () => StudioTimelineSnapshot | null;
   /** Present only while the builder is on screen. */
   onApplyCampaign?: ApplyCampaign;
 }
@@ -162,6 +165,7 @@ export function AgentChat({
   standingHint = TRAFFIC_HINT,
   canGenerate = false,
   getBuilderDraft,
+  getTimeline,
   onApplyCampaign,
 }: AgentChatProps) {
   const queryClient = useQueryClient();
@@ -313,12 +317,13 @@ export function AgentChat({
 
     try {
       const draft = getBuilderDraft?.();
+      const timeline = getTimeline?.() ?? null;
       await streamAgentMessage(
         {
           conversationId,
           message,
           ...(scope === 'traffic' ? {} : { scope }),
-          context: { tab, ...(draft ? { draft } : {}) },
+          context: { tab, ...(draft ? { draft } : {}), ...(timeline ? { timeline } : {}) },
           ...(again !== undefined ? { retry: true } : {}),
         },
         onEvent,

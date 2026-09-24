@@ -260,7 +260,11 @@ export function StudioWorkspace({
         <Stage session={session} emptyState={emptyState} />
         <aside className="ws-right" aria-label="Propriedades e agente">
           <PropertiesPanel session={session} />
-          <AgentDrawer canGenerate={canGenerate} getBuilderDraft={getBuilderDraft} />
+          <AgentDrawer
+            session={session}
+            canGenerate={canGenerate}
+            getBuilderDraft={getBuilderDraft}
+          />
         </aside>
       </div>
 
