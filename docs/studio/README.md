@@ -21,7 +21,7 @@ ao original está em `packages/studio/NOTICE.md`.
 | Trilho da esquerda | **Biblioteca** (mídia gerada ou enviada, com busca e filtros; e o Drive inteiro), **Gerar com IA** (o formulário da parte 1 condensado: modelo com custo por saída, prompt, referência, "Estimar" e depois "Gerar (custo)"; o resto em "Mais opções"), **Texto** (título, subtítulo, corpo), **Elementos** (logo da Wings, logo do cliente, formas), **Áudio** (música e narração do Drive). |
 | Centro             | a tela do núcleo, com zoom, "Ajustar", guias de terços e a reprodução (no vídeo). Um arquivo arrastado de qualquer painel cai na tela; um clique em "Adicionar" faz o mesmo.                                                                                                                                                                                                                 |
 | Direita            | Propriedades do item selecionado (posição, tamanho, opacidade, transição, fonte, cor, volume) e, dobrado embaixo, o Agente de Edição (aberto por padrão em telas largas, lembrado no navegador).                                                                                                                                                                                             |
-| Embaixo            | a linha do tempo, quando a peça é vídeo, com o botão "Legendar"; o painel de camadas, quando a peça é imagem.                                                                                                                                                                                                                                                                                |
+| Embaixo            | a linha do tempo, quando a peça é vídeo, com o botão "Legendar". A peça de imagem não tem nada embaixo: a ordem das camadas fica nas Propriedades do item selecionado.                                                                                                                                                                                                                       |
 
 **Um projeto começa vazio.** O esquema do núcleo (fork) aceita `timeline.tracks`
 sem nenhuma trilha (`EditSchema`, ver `packages/studio/NOTICE.md`), e o
@@ -38,12 +38,30 @@ para o Drive, por um quadro capturado do próprio núcleo (`captureFrame`). Pôr
 um vídeo ou um áudio na tela muda a peça para vídeo; voltar para imagem só é
 possível sem vídeo nem áudio, e o botão diz isso.
 
-**Gerar variação e Editar com IA.** Com uma imagem da biblioteca selecionada
-na tela, o painel Gerar com IA oferece os dois botões: eles preenchem a
-referência (como referência de uma imagem nova, ou como a imagem a editar). O
+**A imagem selecionada (2026-09-24).** Com uma imagem selecionada na tela,
+Propriedades oferece **Remover**, **Substituir** (da biblioteca ou do Drive) e,
+na peça de imagem, **Trazer para frente** / **Enviar para trás**. Substituir
+troca só o arquivo do clipe (`replaceImage`): posição, tamanho, camada, começo
+e duração ficam, e é **um** comando do núcleo, então Ctrl+Z volta a imagem
+anterior.
+
+**Gerar variação e Editar com IA.** Com uma imagem da biblioteca selecionada,
+o painel Gerar com IA oferece os dois botões: eles preenchem a referência do
+formulário (como referência de uma imagem nova, ou como a imagem a editar). O
 custo continua vindo de "Estimar" antes de "Gerar"; nada é gerado por ter
-clicado ali. Uma imagem que não está na biblioteca de mídia não serve de
-referência: o provedor só recebe arquivos da biblioteca.
+clicado ali, e um preço que o provedor nomear ao recusar (`requote`) vai para
+o botão e pede outro clique. Numa edição, o painel guarda o clipe que estava
+selecionado: quando a geração termina bem, a imagem editada (um item novo na
+biblioteca) entra no lugar dele pelo mesmo `replaceImage`, como mais um passo
+desfazível. Uma variação não substitui nada. Uma imagem que não está na
+biblioteca de mídia não serve de referência: o provedor só recebe arquivos da
+biblioteca. O acompanhamento vive no painel: fechá-lo antes do fim deixa o
+resultado só na biblioteca.
+
+**Sem lista de camadas embaixo.** A peça de imagem não tem mais o painel de
+camadas sob a tela: sem CSS, ele aparecia no staging como uma lista solta de
+nomes ("• imagem-…"). A ordem das camadas agora é dada nas Propriedades do item
+selecionado, e a seleção é feita na tela.
 
 **Legendar.** O botão da linha do tempo manda o vídeo ou o áudio escolhido
 para o job `transcribe` do worker (Whisper); o SRT é arquivado no Drive, na

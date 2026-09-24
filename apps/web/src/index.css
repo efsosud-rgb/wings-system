@@ -5394,6 +5394,10 @@ a.menu-module-header {
 .ws-timeline[hidden] {
   display: none;
 }
+/* An image has no timeline: the dock goes away with it (the host stays in the DOM). */
+.ws-dock[hidden] {
+  display: none;
+}
 
 .ws-form {
   display: flex;
@@ -5733,6 +5737,23 @@ a.menu-module-header {
 
 .studio-prop:has(textarea) > span {
   grid-column: 1 / -1;
+}
+
+/* The selected picture: remove, replace, order, and "Editar com IA". */
+.studio-image-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.studio-image-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.studio-image-actions textarea {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
 }
 
 .studio-prop-group {

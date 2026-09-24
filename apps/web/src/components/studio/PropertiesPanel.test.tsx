@@ -1,6 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { LayersPanel } from './LayersPanel.js';
 import { PropertiesPanel } from './PropertiesPanel.js';
 import type { SelectedClip, StudioSession } from './session.js';
 
@@ -149,46 +148,5 @@ describe('PropertiesPanel', () => {
     expect(screen.getByLabelText('Volume (%)')).toBeTruthy();
     expect(screen.queryByLabelText('Texto')).toBeNull();
     expect(screen.getByText('entrevista.mp4')).toBeTruthy();
-  });
-});
-
-describe('LayersPanel', () => {
-  it('teaches what to do when the picture is empty', () => {
-    render(<LayersPanel session={stub({})} />);
-    expect(screen.getByText(/Abra uma imagem da biblioteca ou gere uma com IA/)).toBeTruthy();
-  });
-
-  it('lists layers top first, selects on click and moves the selected one', () => {
-    const session = stub({
-      layers: [
-        {
-          clipId: 't',
-          trackIndex: 0,
-          clipIndex: 0,
-          assetType: 'rich-text',
-          label: 'Título',
-          selected: true,
-        },
-        {
-          clipId: 'i',
-          trackIndex: 1,
-          clipIndex: 0,
-          assetType: 'image',
-          label: 'capa.png',
-          selected: false,
-        },
-      ],
-    });
-    render(<LayersPanel session={session} />);
-    const rows = screen.getAllByRole('listitem');
-    expect(rows[0]?.textContent).toContain('Título');
-    expect(rows[1]?.textContent).toContain('capa.png');
-    fireEvent.click(screen.getByRole('button', { name: /capa.png/ }));
-    expect(session.selectClip).toHaveBeenCalledWith('i');
-    expect((screen.getByRole('button', { name: 'Subir' }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Descer' }));
-    expect(session.moveSelected).toHaveBeenCalledWith('down');
   });
 });
