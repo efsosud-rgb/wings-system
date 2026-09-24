@@ -265,11 +265,21 @@ describe('the paid-media builder', () => {
     for (const name of [/^Meta/, /Google Pesquisa/, /YouTube/]) {
       expect((screen.getByRole('radio', { name }) as HTMLInputElement).disabled).toBe(false);
     }
-    for (const name of [/TikTok/, /LinkedIn/]) {
+    for (const name of [
+      /TikTok/,
+      /LinkedIn/,
+      /X \(Twitter\)/,
+      /Microsoft Ads/,
+      /Kwai Ads/,
+      /Pinterest Ads/,
+      /Reddit Ads/,
+    ]) {
       expect((screen.getByRole('radio', { name }) as HTMLInputElement).disabled).toBe(true);
     }
-    expect(screen.getByText(/Sem conta de anúncios conectada/)).toBeTruthy();
-    expect(screen.getByText(/Integração ainda não construída/)).toBeTruthy();
+    expect(screen.getByText(/Perfil de desenvolvedor em análise pelo TikTok/)).toBeTruthy();
+    expect(screen.getByText(/Acesso à Advertising API e Lead Sync em análise/)).toBeTruthy();
+    expect(screen.getByText(/Acesso à Ads API em análise/)).toBeTruthy();
+    expect(screen.getAllByText(/— Em breve/).length).toBe(4);
   });
 
   it('explains blocked copy on screen instead of only refusing it', () => {

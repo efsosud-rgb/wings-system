@@ -140,7 +140,7 @@ const metaCard: AgentCampaignProposalCard = {
     ageMin: 30,
     ageMax: 55,
     formatKey: 'feed_vertical',
-    placements: { mode: 'manual', facebook: [], instagram: ['feed', 'stories'] },
+    placements: { mode: 'manual', facebook: [], instagram: ['feed', 'stories'], threads: [] },
     budgetNote:
       'R$ 20,00 por dia fica abaixo do que o CPL de R$ 30,00 pede para 10 leads por semana.',
     copy: [

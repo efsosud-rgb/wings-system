@@ -33,6 +33,8 @@ export interface MetaWriteClientOptions extends MetaClientOptions {
 
 const FACEBOOK_POSITION = { feed: 'feed', stories: 'story', reels: 'facebook_reels' } as const;
 const INSTAGRAM_POSITION = { feed: 'stream', stories: 'story', reels: 'reels' } as const;
+/** Threads only has one placement on the Marketing API (`threads_stream`). */
+const THREADS_POSITION = { feed: 'threads_stream' } as const;
 
 /** Narrows a write failure to the step shape; `post` never reports success. */
 function asStepFailure(failure: MutationOutcome): StepOutcome<never> {
@@ -378,6 +380,7 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
       const publishers = [
         ...(spec.placements.facebook.length > 0 ? ['facebook'] : []),
         ...(spec.placements.instagram.length > 0 ? ['instagram'] : []),
+        ...(spec.placements.threads.length > 0 ? ['threads'] : []),
       ];
       targeting.publisher_platforms = publishers;
       if (spec.placements.facebook.length > 0) {
@@ -385,6 +388,9 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
       }
       if (spec.placements.instagram.length > 0) {
         targeting.instagram_positions = spec.placements.instagram.map((p) => INSTAGRAM_POSITION[p]);
+      }
+      if (spec.placements.threads.length > 0) {
+        targeting.threads_positions = spec.placements.threads.map((p) => THREADS_POSITION[p]);
       }
     }
 

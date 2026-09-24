@@ -30,10 +30,11 @@ import {
   MIN_DAILY_BUDGET_CENTS,
   MIN_VARIATIONS,
   PAID_PLATFORMS,
-  PLACEMENT_POSITIONS,
   PLACEMENT_POSITION_LABEL,
   PLACEMENT_PUBLISHERS,
   PLACEMENT_PUBLISHER_LABEL,
+  PLACEMENT_PUBLISHER_POSITIONS,
+  PLATFORM_STATUS_LABEL,
   PRIMARY_TEXT_RECOMMENDED,
   SEARCH_DESCRIPTION_MAX,
   SEARCH_HEADLINE_MAX,
@@ -50,6 +51,7 @@ import {
   describeReach,
   estimateCostCents,
   isGooglePlatform,
+  isPlatformEnabled,
   keywordWithMatch,
   matchesFormat,
   periodOverdeliveryFactor,
@@ -156,7 +158,7 @@ function shapeDraft(values: CampaignDraftInput): CampaignDraftInput {
       placements:
         placements?.mode === 'manual'
           ? placements
-          : { mode: 'automatic', facebook: [], instagram: [] },
+          : { mode: 'automatic', facebook: [], instagram: [], threads: [] },
       identity: identity && {
         pageId: identity.pageId,
         instagramActorId: identity.instagramActorId || null,
@@ -711,7 +713,7 @@ export function PaidMediaBuilder({
       })),
       ageMin: DEFAULT_AGE_MIN,
       ageMax: DEFAULT_AGE_MAX,
-      placements: { mode: 'automatic', facebook: [], instagram: [] },
+      placements: { mode: 'automatic', facebook: [], instagram: [], threads: [] },
       identity: { pageId: '', instagramActorId: null },
       youtube: { videoUrl: '', headline: '' },
       search: {
@@ -884,6 +886,7 @@ export function PaidMediaBuilder({
         setValue('placements.mode', proposal.placements.mode, filled);
         setValue('placements.facebook', proposal.placements.facebook, filled);
         setValue('placements.instagram', proposal.placements.instagram, filled);
+        setValue('placements.threads', proposal.placements.threads, filled);
       }
       const existing = getValues('variations') ?? [];
       proposal.copy.forEach((copy, index) => {
@@ -1186,25 +1189,31 @@ export function PaidMediaBuilder({
         why={`Onde o anúncio aparece. O nome é como você vai achar esta campanha no ${google ? 'Google Ads' : 'Gerenciador de Anúncios'} e nos relatórios — capriche nele.`}
       >
         <div className="builder-options" role="radiogroup" aria-label="Plataforma">
-          {PAID_PLATFORMS.map((platform) => (
-            <label
-              key={platform.key}
-              className={`builder-option ${platform.enabled ? '' : 'builder-option-disabled'}`}
-            >
-              <input
-                type="radio"
-                value={platform.key}
-                disabled={!platform.enabled}
-                {...register('platform')}
-              />
-              <span>
-                {platform.label}
-                {platform.disabledReason && (
-                  <small className="muted"> — {platform.disabledReason}</small>
-                )}
-              </span>
-            </label>
-          ))}
+          {PAID_PLATFORMS.map((platform) => {
+            const enabled = isPlatformEnabled(platform.status);
+            return (
+              <label
+                key={platform.key}
+                className={`builder-option ${enabled ? '' : 'builder-option-disabled'}`}
+              >
+                <input
+                  type="radio"
+                  value={platform.key}
+                  disabled={!enabled}
+                  {...register('platform')}
+                />
+                <span>
+                  {platform.label}
+                  {!enabled && (
+                    <small className="muted">
+                      {' '}
+                      — {platform.reason ?? PLATFORM_STATUS_LABEL[platform.status]}
+                    </small>
+                  )}
+                </span>
+              </label>
+            );
+          })}
         </div>
         {platform === 'youtube' && (
           <p className="field-hint">
@@ -1429,7 +1438,7 @@ export function PaidMediaBuilder({
                 {PLACEMENT_PUBLISHERS.map((publisher) => (
                   <fieldset key={publisher} className="builder-placement-group">
                     <legend className="field-label">{PLACEMENT_PUBLISHER_LABEL[publisher]}</legend>
-                    {PLACEMENT_POSITIONS.map((position) => (
+                    {PLACEMENT_PUBLISHER_POSITIONS[publisher].map((position) => (
                       <label key={position} className="builder-state">
                         <input
                           type="checkbox"
@@ -1444,9 +1453,13 @@ export function PaidMediaBuilder({
                 ))}
               </div>
             )}
-            {(errors.placements?.facebook?.message ?? errors.placements?.mode?.message) && (
+            {(errors.placements?.facebook?.message ??
+              errors.placements?.threads?.message ??
+              errors.placements?.mode?.message) && (
               <p className="field-error" role="alert">
-                {errors.placements?.facebook?.message ?? errors.placements?.mode?.message}
+                {errors.placements?.facebook?.message ??
+                  errors.placements?.threads?.message ??
+                  errors.placements?.mode?.message}
               </p>
             )}
             {vertical && (

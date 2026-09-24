@@ -83,7 +83,12 @@ capa) é `unknown`, nunca `failed`.
 - Posicionamentos: **automático** = nenhum campo de posicionamento (é isso que
   Advantage+ significa na API); **manual** = `publisher_platforms` +
   `facebook_positions` (`feed`, `story`, `facebook_reels`) +
-  `instagram_positions` (`stream`, `story`, `reels`).
+  `instagram_positions` (`stream`, `story`, `reels`). Threads não é uma
+  plataforma à parte no catálogo do construtor — é um posicionamento da Meta:
+  entra em `publisher_platforms` como `threads`, só tem `threads_positions`
+  (`threads_stream`, feed) e exige que o Feed do Instagram (`stream`) também
+  esteja marcado (regra da própria Meta), conferido pelo `placementsSchema`
+  em `packages/shared`.
 - Datas: `AAAA-MM-DDT00:00:00-0300` a `…T23:59:59-0300`.
 
 Cidades e estados: um resultado exato ou recusa (`targeting_unresolved`),

@@ -68,10 +68,15 @@ describe('the radius map, platform by platform', () => {
     },
   );
 
-  it('takes a radius on Meta, Google Pesquisa and YouTube; not on TikTok or LinkedIn', () => {
+  it('takes a radius only on Meta, Google Pesquisa and YouTube', () => {
     expect(PAID_PLATFORMS.filter((p) => !platformAcceptsRadius(p.key)).map((p) => p.key)).toEqual([
       'tiktok',
       'linkedin',
+      'x_twitter',
+      'microsoft_ads',
+      'kwai_ads',
+      'pinterest_ads',
+      'reddit_ads',
     ]);
   });
 
