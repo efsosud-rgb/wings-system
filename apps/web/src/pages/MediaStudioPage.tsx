@@ -116,7 +116,7 @@ export function MediaStudioPage() {
       ? `Kairogen ${usage.balance != null ? `${count(usage.balance)} créditos` : 'sem saldo informado'} · mês ${formatBrl(usage.usedThisMonthBrlCents ?? 0)} de ${formatBrl(usage.monthlyLimitBrlCents ?? 0)}`
       : null;
     return (
-      <>
+      <div className="ws-page">
         <header className="page-header page-header-slim">
           <h1>Edição de Fotos e Vídeos</h1>
         </header>
@@ -134,7 +134,7 @@ export function MediaStudioPage() {
             getBuilderDraft={campaignDraft}
           />
         </Suspense>
-      </>
+      </div>
     );
   }
 

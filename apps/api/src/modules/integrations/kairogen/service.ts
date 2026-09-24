@@ -52,6 +52,8 @@ export interface KairogenDeps {
   /** KAIROGEN_CLIENT_ID, when registration by hand was needed. */
   configuredClientId?: string;
   now?: () => Date;
+  /** Tests shorten the wait before a read is tried again (KAIROGEN_TRANSIENT_RETRY_MS). */
+  transientRetryMs?: number;
 }
 
 interface StoredPending extends KairogenPendingAuthorization {
@@ -427,9 +429,21 @@ function mcp(deps: KairogenDeps, forceRefresh: { next: boolean }): McpClient {
 }
 
 /**
+ * Kairogen's own upstream failing, as it reports it inside a tool answer
+ * ("Kairogen API error (500): [INTERNAL_ERROR] …"): worth one more try after a
+ * short wait. A validation error (400) is not.
+ */
+const TRANSIENT_TOOL_ERROR = /\((5\d\d)\)|\[INTERNAL_ERROR\]|timed? ?out|temporarily unavailable/i;
+
+/** The wait before trying a read again after Kairogen reported its own failure. */
+export const KAIROGEN_TRANSIENT_RETRY_MS = 1500;
+
+/**
  * Calls one of the eight tools. A 401 is answered once with a forced refresh —
  * a token can be revoked before its time — and only for tools that read: a
- * generation is never sent twice.
+ * generation is never sent twice. A read that Kairogen answers with its own
+ * server error is tried once more after KAIROGEN_TRANSIENT_RETRY_MS; if it
+ * fails again, it is reported as Kairogen being unavailable, not as a refusal.
  */
 export async function callKairogen(
   deps: KairogenDeps,
@@ -438,6 +452,40 @@ export async function callKairogen(
   options: { timeoutMs?: number } = {},
 ): Promise<McpToolResult> {
   const reads = KAIROGEN_READ_TOOLS.includes(tool);
+  if (!reads) return callKairogenOnce(deps, tool, args, options, false);
+  try {
+    return await callKairogenOnce(deps, tool, args, options, true);
+  } catch (error) {
+    if (!(error instanceof McpError) || error.code !== 'tool_error') throw error;
+    if (!TRANSIENT_TOOL_ERROR.test(error.message)) throw error;
+    await new Promise((resolve) =>
+      setTimeout(resolve, deps.transientRetryMs ?? KAIROGEN_TRANSIENT_RETRY_MS),
+    );
+    try {
+      return await callKairogenOnce(deps, tool, args, options, true);
+    } catch (again) {
+      if (
+        again instanceof McpError &&
+        again.code === 'tool_error' &&
+        TRANSIENT_TOOL_ERROR.test(again.message)
+      ) {
+        throw new McpError(
+          'unavailable',
+          'o Kairogen respondeu com erro do próprio servidor duas vezes',
+        );
+      }
+      throw again;
+    }
+  }
+}
+
+async function callKairogenOnce(
+  deps: KairogenDeps,
+  tool: KairogenToolName,
+  args: Record<string, unknown>,
+  options: { timeoutMs?: number },
+  reads: boolean,
+): Promise<McpToolResult> {
   const force = { next: false };
   const client = mcp(deps, force);
   try {

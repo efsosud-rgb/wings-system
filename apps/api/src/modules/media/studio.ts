@@ -502,7 +502,19 @@ async function resolve(
       );
     }
     const model = models.find((item) => item.key === request.model && item.kind === request.kind);
-    if (!model) throw new StudioRefusal('invalid_request', 'Modelo não encontrado no catálogo.');
+    if (!model) {
+      // A near miss ("seedance-v1.5-pro" for "seedance-v1-5-pro") names the right id.
+      const squash = (key: string) => key.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const near = models.find(
+        (item) => item.kind === request.kind && squash(item.key) === squash(request.model),
+      );
+      throw new StudioRefusal(
+        'invalid_request',
+        near
+          ? `Modelo não encontrado no catálogo: "${request.model}". O id certo é "${near.key}".`
+          : 'Modelo não encontrado no catálogo.',
+      );
+    }
     const cap = Math.min(
       model.maxOutputs,
       request.kind === 'video' ? MAX_VIDEOS_PER_GENERATION : MAX_IMAGES_PER_GENERATION,

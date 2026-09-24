@@ -1148,6 +1148,54 @@ describe('the editing agent', () => {
     expect(traffic.json<{ conversations: unknown[] }>().conversations).toHaveLength(0);
   });
 
+  it('when Kairogen fails on its side, says so once and calls it no more in the same reply', async () => {
+    const { cookies } = await sessionFor('marketing');
+    const internal =
+      'Kairogen API error (500): [INTERNAL_ERROR] Erro interno do servidor. Tente novamente ou contate o suporte.';
+    // The first try and the one retry both fail.
+    fake.state.toolErrorScript.push(
+      { tool: 'estimate_cost', text: internal },
+      { tool: 'estimate_cost', text: internal },
+    );
+    const before = fake.state.toolCalls.filter((item) => item.name === 'estimate_cost').length;
+    script = [
+      () => ({ toolCalls: [call('propor_geracao', proposal())] }),
+      // The model insists, both ways: answered here without calling Kairogen.
+      () => ({
+        toolCalls: [
+          call('propor_geracao', proposal()),
+          call('estimar_custo', { tipo: 'image', modelo: 'seedream-v4', formato: '4:5' }),
+        ],
+      }),
+      () => ({ text: 'O Kairogen está com problema agora. Tento de novo mais tarde?' }),
+    ];
+    const { message } = await talk(cookies, 'Uma imagem para o feed');
+    expect(message?.proposals).toHaveLength(0);
+    const results = JSON.stringify(seen.at(-1)?.messages.filter((item) => item.role === 'tool'));
+    expect(results).toContain('problema_do_provedor');
+    expect(results).toContain('Kairogen já falhou nesta resposta e não foi chamado de novo');
+    expect(results).not.toContain('corrija');
+    expect(results).not.toContain('aceita');
+    const after = fake.state.toolCalls.filter((item) => item.name === 'estimate_cost').length;
+    expect(after - before).toBe(2);
+    expect(spending()).toHaveLength(0);
+  });
+
+  it('names the right id when the agent writes a model id slightly wrong', async () => {
+    const { cookies } = await sessionFor('marketing');
+    script = [
+      () => ({
+        toolCalls: [
+          call('estimar_custo', { tipo: 'image', modelo: 'seedream.v4', formato: '4:5' }),
+        ],
+      }),
+      () => ({ text: 'Vou usar o id certo.' }),
+    ];
+    await talk(cookies, 'Quanto custa uma imagem?');
+    const results = JSON.stringify(seen.at(-1)?.messages.filter((item) => item.role === 'tool'));
+    expect(results).toMatch(/O id certo é .{0,6}seedream-v4/);
+  });
+
   it('knows the camera moves, and a video card carries the chosen one into the prompt only on the click', async () => {
     expect(MEDIA_AGENT_SYSTEM_PROMPT).toContain(
       'drone_ascending: Drone subindo, "drone shot, ascending"',
