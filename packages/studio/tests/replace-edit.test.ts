@@ -153,6 +153,18 @@ describe("replaceEdit", () => {
 		expect(srcs(edit)).toHaveLength(3);
 	});
 
+	it("drops tracks left empty, on the new side and on the side undo goes back to", async () => {
+		const edit = new Edit(editWith([image(0, 3, "a")]));
+		await edit.load();
+		const withEmpty = edit.getEdit({ includeIds: true });
+		withEmpty.timeline.tracks.push({ clips: [] } as never);
+		withEmpty.timeline.tracks[0].clips.push(image(3, 2, "b") as never);
+		expect((await edit.replaceEdit(withEmpty)).status).toBe("success");
+		expect(edit.getEdit().timeline.tracks).toHaveLength(1);
+		await edit.undo();
+		expect(srcs(edit)).toEqual(["https://example.com/a.png"]);
+	});
+
 	it("refuses to change the output or the background, and leaves the history alone", async () => {
 		const edit = new Edit(editWith([image(0, 3, "a")]));
 		await edit.load();

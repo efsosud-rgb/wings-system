@@ -399,14 +399,22 @@ export class Edit {
 
 	/**
 	 * Wings: replaces the whole edit as ONE undoable command (see
-	 * `ReplaceEditCommand`). Refused with `noop` when the output (size, fps,
+	 * `ReplaceEditCommand`). Tracks left with no clip are dropped, since the
+	 * schema refuses them. Refused with `noop` when the output (size, fps,
 	 * format, resolution, aspect ratio, destinations) or the background would
 	 * change: `loadEdit` applies those through commands of their own, and a
 	 * command cannot wait on another inside the command queue.
 	 */
-	public replaceEdit(next: EditConfig): Promise<CommandResult> {
+	public replaceEdit(nextEdit: EditConfig): Promise<CommandResult> {
+		// The document may hold a track emptied by a delete, which the schema (and so
+		// loadEdit, on undo) refuses: both sides go without their empty tracks.
+		const withoutEmptyTracks = (edit: EditConfig): EditConfig => ({
+			...edit,
+			timeline: { ...edit.timeline, tracks: edit.timeline.tracks.filter(track => track.clips.length > 0) }
+		});
+		const next = withoutEmptyTracks(nextEdit);
 		EditSchema.parse(next);
-		const previous = this.getEdit({ includeIds: true });
+		const previous = withoutEmptyTracks(this.getEdit({ includeIds: true }));
 		const outputOf = (edit: EditConfig) => {
 			const output = edit.output ?? {};
 			return JSON.stringify([

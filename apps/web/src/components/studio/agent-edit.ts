@@ -231,5 +231,7 @@ export function applyTimelineOps(
       }
     }
   }
+  // The core's schema refuses a track with no clip: a track emptied here goes away.
+  next.timeline.tracks = tracks.filter((track) => (track.clips ?? []).length > 0);
   return next;
 }

@@ -133,7 +133,8 @@ describe('applying the operations', () => {
       },
     });
     const tracks = next.timeline?.tracks ?? [];
-    expect(tracks).toHaveLength(4);
+    // The title was restyled and then removed: its emptied track goes, the schema refuses it.
+    expect(tracks).toHaveLength(3);
     expect(tracks[0]?.clips?.[0]).toMatchObject({
       asset: { type: 'image', src: 'https://r2.example/photo' },
       start: 0,
@@ -144,9 +145,7 @@ describe('applying the operations', () => {
       start: 25,
       length: 5,
     });
-    // The title was restyled and then removed: its track stays, empty.
-    expect(tracks[2]?.clips).toEqual([]);
-    expect(tracks[3]?.clips?.[0]).toMatchObject({
+    expect(tracks[2]?.clips?.[0]).toMatchObject({
       id: 'video',
       start: 0,
       length: 28,
