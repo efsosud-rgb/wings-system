@@ -326,6 +326,20 @@ export function PropertiesPanel({ session }: { session: StudioSession }) {
       {selected.caption && (
         <fieldset className="studio-prop-group">
           <legend>Legenda</legend>
+          <label className="studio-prop" htmlFor="prop-caption-font">
+            <span>Fonte</span>
+            <select
+              id="prop-caption-font"
+              value={selected.caption.fontFamily}
+              onChange={(event) => patch({ caption: { fontFamily: event.target.value } })}
+            >
+              {[...new Set([selected.caption.fontFamily, ...STUDIO_FONTS])].map((font) => (
+                <option key={font} value={font}>
+                  {font}
+                </option>
+              ))}
+            </select>
+          </label>
           <NumberField
             id="prop-caption-size"
             label="Tamanho da letra"

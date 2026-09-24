@@ -56,6 +56,30 @@ afterEach(() => {
 });
 
 describe('PropertiesPanel', () => {
+  it('offers the text fonts for a caption and patches the one chosen', () => {
+    const session = stub({
+      selected: {
+        ...selectedText,
+        assetType: 'rich-caption',
+        text: null,
+        caption: {
+          fontFamily: 'Work Sans',
+          size: 96,
+          color: '#ffffff',
+          placement: 'bottom',
+          backgroundColor: '#000000',
+          backgroundOpacity: 0.55,
+        },
+      },
+    });
+    render(<PropertiesPanel session={session} />);
+    const font = screen.getByLabelText('Fonte') as HTMLSelectElement;
+    expect(font.value).toBe('Work Sans');
+    expect([...font.options].map((option) => option.value)).toContain('Montserrat');
+    fireEvent.change(font, { target: { value: 'Montserrat' } });
+    expect(session.updateSelected).toHaveBeenCalledWith({ caption: { fontFamily: 'Montserrat' } });
+  });
+
   it('teaches what to do when nothing is selected', () => {
     render(<PropertiesPanel session={stub({})} />);
     expect(screen.getByText(/Selecione um item na tela ou na linha do tempo/)).toBeTruthy();
