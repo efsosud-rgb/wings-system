@@ -13,6 +13,9 @@ import {
   formatBrl,
   mediaEstimateRequestSchema,
   modelsForImageUse,
+  promptRoomWith,
+  withCameraMove,
+  type CameraMoveId,
   type GenerationAspect,
   type MediaAlternative,
   type MediaAsset,
@@ -33,6 +36,7 @@ import {
   useUploadMedia,
 } from '../../api/media.js';
 import { Button } from '../ui.js';
+import { CameraMovePicker } from './CameraMovePicker.js';
 import { ClientSelect, MediaPicker, MediaThumb } from './MediaLibrary.js';
 import { providerHolding } from './ProviderStrip.js';
 
@@ -150,6 +154,8 @@ export function GenerationForm({
   const [clientId, setClientId] = useState<string>(defaultClientId ?? WINGS_CLIENT_ID);
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState('');
+  /** Video only: kept apart from the prompt and added to its end when the cost is asked. */
+  const [cameraMove, setCameraMove] = useState<CameraMoveId | null>(null);
   const [aspect, setAspect] = useState<GenerationAspect>('1:1');
   const [quantity, setQuantity] = useState(1);
   const [duration, setDuration] = useState<number | null>(null);
@@ -235,7 +241,7 @@ export function GenerationForm({
       operation: 'generate',
       kind,
       model: currentKey,
-      prompt,
+      prompt: withCameraMove(prompt, kind === 'video' ? cameraMove : null),
       ...(negativePrompt.trim() ? { negativePrompt } : {}),
       aspect,
       quantity,
@@ -324,6 +330,7 @@ export function GenerationForm({
               onChange={(event) => {
                 setKind(event.target.value as 'image' | 'video');
                 setModelKey('');
+                setCameraMove(null);
                 setQuantity(1);
                 changed();
               }}
@@ -371,7 +378,7 @@ export function GenerationForm({
             className="control"
             rows={4}
             aria-describedby="media-prompt-hint"
-            maxLength={PROMPT_MAX}
+            maxLength={promptRoomWith(kind === 'video' ? cameraMove : null, PROMPT_MAX)}
             value={prompt}
             onChange={(event) => {
               setPrompt(event.target.value);
@@ -383,6 +390,28 @@ export function GenerationForm({
           Descreva cena, luz, enquadramento e estilo. Em inglês os modelos costumam responder
           melhor.
         </span>
+
+        {kind === 'video' &&
+          (compact ? (
+            <details className="agent-details">
+              <summary>Movimento de câmera{cameraMove ? ' (escolhido)' : ''}</summary>
+              <CameraMovePicker
+                value={cameraMove}
+                onChange={(next) => {
+                  setCameraMove(next);
+                  changed();
+                }}
+              />
+            </details>
+          ) : (
+            <CameraMovePicker
+              value={cameraMove}
+              onChange={(next) => {
+                setCameraMove(next);
+                changed();
+              }}
+            />
+          ))}
 
         <details className="agent-details">
           <summary>Prompt negativo (opcional)</summary>

@@ -19,7 +19,9 @@ import {
   MEDIA_IMAGE_USE_LABEL,
   MEDIA_PROVIDER_LABEL,
   type MediaProviderId,
+  cameraMoveById,
   isGenerationOver,
+  withCameraMove,
 } from '@wings/shared';
 import { createContext, useContext, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -377,6 +379,7 @@ function GenerationCard({
   const generation = following.data?.generation;
   const { payload, estimate } = proposal;
   const params = Object.entries(payload.params);
+  const camera = payload.cameraMove ? cameraMoveById(payload.cameraMove) : undefined;
 
   return (
     <article className="agent-card" aria-label="Proposta de geração">
@@ -429,6 +432,17 @@ function GenerationCard({
             </dd>
           </div>
         )}
+        {camera && (
+          <div>
+            <dt>Movimento de câmera</dt>
+            <dd>
+              {camera.name} ·{' '}
+              <span className="mono" lang="en">
+                {camera.term}
+              </span>
+            </dd>
+          </div>
+        )}
         {payload.textInImage && (
           <div>
             <dt>Texto na imagem</dt>
@@ -449,7 +463,7 @@ function GenerationCard({
       <details className="agent-details">
         <summary>Prompt enviado ao modelo</summary>
         <p className="agent-text mono" lang="en">
-          {payload.prompt}
+          {withCameraMove(payload.prompt, payload.cameraMove)}
         </p>
         {payload.negativePrompt && (
           <p className="agent-text mono" lang="en">

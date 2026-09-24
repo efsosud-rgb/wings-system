@@ -684,6 +684,32 @@ describe('the editing agent', () => {
     expect(sent[0]).not.toHaveProperty('scope');
   });
 
+  it('shows the camera move the agent chose on a video card, and the prompt with its term, before the click', async () => {
+    renderChat(media(true));
+    await say('Um vídeo da fachada da franquia');
+    stream({
+      type: 'proposal',
+      proposal: {
+        ...generationCard,
+        payload: {
+          ...generationCard.payload,
+          kind: 'video',
+          model: 'veo-3-1-fast',
+          cameraMove: 'drone_ascending',
+        },
+      },
+    });
+    expect(screen.getByText('Movimento de câmera').nextElementSibling?.textContent).toBe(
+      'Drone subindo · drone shot, ascending',
+    );
+    expect(
+      screen.getByText(
+        /golden hour, 50mm, shallow depth of field\. Camera movement: drone shot, ascending\.$/,
+      ),
+    ).toBeTruthy();
+    expect(startGeneration).not.toHaveBeenCalled();
+  });
+
   it('shows the cost on the card and generates only on the click, naming the estimate', async () => {
     renderChat(media(true));
     await say('Uma imagem para a campanha do RJ');

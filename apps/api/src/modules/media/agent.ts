@@ -1,5 +1,7 @@
 import {
   AGENT_TOOL_LABEL,
+  CAMERA_GOAL_LABEL,
+  CAMERA_MOVES,
   COMPLIANCE_RULE_ADVICE,
   COMPLIANCE_RULES,
   GENERATION_ASPECTS,
@@ -18,6 +20,7 @@ import {
   type StudioTimelineOp,
   formatBrl,
   mediaAspectOf,
+  withCameraMove,
   type AgentConsultation,
   type AgentProposalCard,
   type MediaAgentToolName,
@@ -81,6 +84,11 @@ Toda geração tem um custo antes do clique, mesmo quando é R$ 0. No Kairogen h
 O prompt vai em INGLÊS para o modelo, e você explica em português, no campo explanation, o que a imagem vai mostrar e por quê. Escreva como um fotógrafo publicitário e um diretor de arte escreveriam um briefing de produção: assunto e ação; ambiente; enquadramento e lente (por exemplo 35mm, close, plano médio); luz (natural de janela, golden hour, estúdio com softbox); paleta e materiais; composição com espaço livre para o texto do anúncio quando o formato pedir; estilo (advertising photography, editorial, product shot) e nível de realismo. Seja específico e concreto; evite adjetivos vazios como "beautiful" ou "amazing".
 Formatos de anúncio: ${GENERATION_ASPECTS.join(', ')}. Use 9:16 para Stories e Reels, 4:5 ou 1:1 para feed, 16:9 para YouTube.
 Texto dentro da imagem só quando a pessoa pedir, e então informe o texto exato em textInImage. Sem pedido, peça a imagem sem texto ("no text, no letters, no watermark") e deixe o texto para o anúncio.
+
+# Movimento de câmera (só vídeo)
+Num vídeo, escolha um movimento de câmera do catálogo abaixo conforme o objetivo da cena e informe o id em cameraMove; o sistema acrescenta o termo técnico ao fim do prompt, do mesmo jeito que o seletor "Movimento de câmera" do formulário. Não escreva o termo no prompt você mesmo, para não repeti-lo. Diga na explanation qual movimento escolheu e por quê, em uma frase ("fachada da franquia: drone subindo, para revelar o ponto e a rua"). Um movimento por vídeo; na dúvida, câmera parada. Em imagem, não use cameraMove.
+Catálogo (id: nome, termo, quando usar, objetivos):
+${CAMERA_MOVES.map((move) => `- ${move.id}: ${move.name}, "${move.term}". ${move.whenToUse} Objetivos: ${move.goals.map((goal) => CAMERA_GOAL_LABEL[goal]).join(', ')}.`).join('\n')}
 
 # O que nunca entra numa peça
 - Rosto ou semelhança de pessoa real, famosa ou não. Pessoas nas imagens são sempre genéricas e fictícias; não use nomes de pessoas no prompt.
@@ -444,7 +452,8 @@ async function proporGeracao(ctx: ToolContext, raw: unknown): Promise<ToolOutcom
         operation: 'generate',
         kind: proposal.kind,
         model: proposal.model,
-        prompt: proposal.prompt,
+        // The same composition as the form's selector: the agent names the move, the server adds it.
+        prompt: withCameraMove(proposal.prompt, proposal.cameraMove),
         negativePrompt: proposal.negativePrompt,
         aspect: proposal.aspect,
         quantity: proposal.quantity,

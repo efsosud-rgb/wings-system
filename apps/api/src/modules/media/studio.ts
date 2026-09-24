@@ -130,11 +130,7 @@ const ctxOf = (deps: StudioDeps): ProviderContext => ({ db: deps.db, now: deps.n
 export class StudioRefusal extends Error {
   constructor(
     readonly code:
-      | MediaRefusal
-      | 'invalid_request'
-      | 'cannot_estimate'
-      | 'not_found'
-      | 'provider_unreachable',
+      MediaRefusal | 'invalid_request' | 'cannot_estimate' | 'not_found' | 'provider_unreachable',
     message: string,
     /** For the few refusals that carry more than a message: a costlier model that could do it. */
     readonly extra: { alternative?: MediaAlternative } = {},
@@ -342,7 +338,10 @@ function blockedBy(
       return { code: 'insufficient_credits', detail: MEDIA_REFUSAL_MESSAGE.insufficient_credits };
     }
   }
-  if (quote.brlCents > 0 && usage.usedThisMonthBrlCents + quote.brlCents > usage.monthlyLimitBrlCents) {
+  if (
+    quote.brlCents > 0 &&
+    usage.usedThisMonthBrlCents + quote.brlCents > usage.monthlyLimitBrlCents
+  ) {
     return {
       code: 'monthly_brl_limit',
       detail: `O teto mensal de ${formatBrl(usage.monthlyLimitBrlCents)} em mídia seria ultrapassado: ${formatBrl(usage.usedThisMonthBrlCents)} já contados este mês e esta geração custa ${formatBrl(quote.brlCents)}.`,
@@ -625,8 +624,7 @@ async function resolve(
   }
   const videoKey = request.videoModel ?? DEFAULT_ANIMATION_MODEL;
   const video = models.find(
-    (item) =>
-      item.key === videoKey && item.kind === 'video' && item.providerId === animator.id,
+    (item) => item.key === videoKey && item.kind === 'video' && item.providerId === animator.id,
   );
   if (!video)
     throw new StudioRefusal('invalid_request', 'Modelo de vídeo não encontrado no catálogo.');
@@ -666,12 +664,21 @@ async function alternativeFor(
   models: MediaModel[],
   resolved: Resolved,
   request: MediaEstimateRequest,
-): Promise<{ model: MediaModel; provider: MediaProvider; quote: { credits: number; brlCents: number } } | null> {
+): Promise<{
+  model: MediaModel;
+  provider: MediaProvider;
+  quote: { credits: number; brlCents: number };
+} | null> {
   if (resolved.operation !== 'generate' || request.operation !== 'generate') return null;
   const candidates = models
-    .filter((model) => model.kind === resolved.kind && model.providerId !== resolved.model.providerId)
+    .filter(
+      (model) => model.kind === resolved.kind && model.providerId !== resolved.model.providerId,
+    )
     .filter((model) => resolved.quantity <= model.maxOutputs)
-    .filter((model) => !model.aspectRatios || !resolved.aspect || model.aspectRatios.includes(resolved.aspect))
+    .filter(
+      (model) =>
+        !model.aspectRatios || !resolved.aspect || model.aspectRatios.includes(resolved.aspect),
+    )
     .filter((model) =>
       resolved.source
         ? resolved.kind === 'image'
@@ -679,7 +686,11 @@ async function alternativeFor(
           : model.acceptsFirstFrame
         : true,
     )
-    .filter((model) => resolved.durationSeconds === undefined || model.supportedDurations.includes(resolved.durationSeconds))
+    .filter(
+      (model) =>
+        resolved.durationSeconds === undefined ||
+        model.supportedDurations.includes(resolved.durationSeconds),
+    )
     .map((model) => ({ model, provider: providerOf(deps, model.providerId) }))
     .filter(({ provider }) => provider.configured)
     .sort((a, b) => {
@@ -724,7 +735,8 @@ async function mixWarning(deps: StudioDeps, resolved: Resolved): Promise<string 
     .limit(1);
   if (!last?.model) return null;
   const where = resolved.campaign ? `A campanha "${resolved.campaign}"` : 'Este cliente';
-  const provider = providerById(deps.providers, last.provider as MediaProviderId)?.name ?? last.provider;
+  const provider =
+    providerById(deps.providers, last.provider as MediaProviderId)?.name ?? last.provider;
   return `${where} já tem ${resolved.kind === 'video' ? 'vídeo' : 'imagem'} feita com ${last.model} (${provider}). Misturar modelos muda o estilo das peças; use o mesmo modelo se quiser que combinem.`;
 }
 
@@ -907,9 +919,15 @@ export async function startGeneration(
     // clicks cannot both take the last picture of the day.
     if (provider.billing === 'free_quota') {
       const quantity = Number((row.priceArgs as { quantity?: unknown }).quantity ?? 1) || 1;
-      const availability = await provider.availability({ db: txDb, now: deps.now }, { outputs: quantity });
+      const availability = await provider.availability(
+        { db: txDb, now: deps.now },
+        { outputs: quantity },
+      );
       if (!availability.available) {
-        return new StudioRefusal('provider_unavailable', `${provider.name}: ${availability.reason}`);
+        return new StudioRefusal(
+          'provider_unavailable',
+          `${provider.name}: ${availability.reason}`,
+        );
       }
     }
 
@@ -991,7 +1009,8 @@ export async function startGeneration(
       outputs: started.outputs,
       creditsCharged: started.creditsCharged,
       brlCentsCharged: started.brlCentsCharged,
-      note: started.note ?? (started.outputs.length === 0 ? 'O provedor respondeu sem arquivo.' : null),
+      note:
+        started.note ?? (started.outputs.length === 0 ? 'O provedor respondeu sem arquivo.' : null),
     });
   }
 
@@ -1085,14 +1104,23 @@ async function settle(
 ): Promise<GenerationRow> {
   const charged = { credits: result.creditsCharged, brlCents: result.brlCentsCharged };
   if (result.state === 'failed') {
-    return end(deps, id, 'failed', result.note ?? 'O provedor informou que a geração falhou.', charged);
+    return end(
+      deps,
+      id,
+      'failed',
+      result.note ?? 'O provedor informou que a geração falhou.',
+      charged,
+    );
   }
   const current = await deps.db.query.mediaGenerations.findFirst({
     where: eq(mediaGenerations.id, id),
   });
   if (!current) throw new Error('generation vanished');
   const provider = providerById(deps.providers, current.provider as MediaProviderId);
-  await deps.db.update(mediaGenerations).set({ status: 'saving' }).where(eq(mediaGenerations.id, id));
+  await deps.db
+    .update(mediaGenerations)
+    .set({ status: 'saving' })
+    .where(eq(mediaGenerations.id, id));
   const request = current.request as MediaEstimateRequest;
   let saved = 0;
   for (const output of result.outputs) {
@@ -1155,8 +1183,15 @@ export async function advanceGeneration(
   const current = await deps.db.query.mediaGenerations.findFirst({
     where: eq(mediaGenerations.id, id),
   });
-  const provider = current ? providerById(deps.providers, current.provider as MediaProviderId) : undefined;
-  if (!current || current.status !== 'running' || !current.externalGenerationId || !provider?.configured) {
+  const provider = current
+    ? providerById(deps.providers, current.provider as MediaProviderId)
+    : undefined;
+  if (
+    !current ||
+    current.status !== 'running' ||
+    !current.externalGenerationId ||
+    !provider?.configured
+  ) {
     return current ?? null;
   }
 
