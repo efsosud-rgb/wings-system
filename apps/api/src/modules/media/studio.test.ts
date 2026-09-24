@@ -1149,7 +1149,9 @@ describe('the editing agent', () => {
   });
 
   it('knows the camera moves, and a video card carries the chosen one into the prompt only on the click', async () => {
-    expect(MEDIA_AGENT_SYSTEM_PROMPT).toContain('drone_ascending: Drone subindo, "drone shot, ascending"');
+    expect(MEDIA_AGENT_SYSTEM_PROMPT).toContain(
+      'drone_ascending: Drone subindo, "drone shot, ascending"',
+    );
     expect(MEDIA_AGENT_SYSTEM_PROMPT).toContain('Objetivos: fachada');
     const { cookies } = await sessionFor('marketing');
     const video = proposal({

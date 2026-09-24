@@ -95,9 +95,9 @@ describe('the agent proposal with a camera move', () => {
   });
 
   it('refuses a move that is not in the catalog', () => {
-    expect(agentGenerationProposalSchema.safeParse({ ...base, cameraMove: 'barrel_roll' }).success).toBe(
-      false,
-    );
+    expect(
+      agentGenerationProposalSchema.safeParse({ ...base, cameraMove: 'barrel_roll' }).success,
+    ).toBe(false);
   });
 
   it('refuses a move on an image', () => {

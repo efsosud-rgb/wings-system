@@ -5926,3 +5926,377 @@ button.stage-chip:focus-visible {
   align-items: flex-start;
   gap: 2px;
 }
+
+/* ---------- movimento de câmera ---------- */
+.camera-moves {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.camera-moves-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.camera-move-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.camera-move-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+  background: var(--wings-card);
+  cursor: pointer;
+  font-size: 0.8125rem;
+}
+
+.camera-move-card:has(input:checked) {
+  border-color: var(--wings-accent);
+  box-shadow: inset 0 0 0 1px var(--wings-accent);
+}
+
+.camera-move-card:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.camera-move-card:focus-within {
+  outline: 2px solid var(--wings-accent);
+  outline-offset: 2px;
+}
+
+.camera-move-name {
+  font-weight: 600;
+  color: var(--wings-text);
+}
+
+.camera-move-term {
+  color: var(--wings-accent);
+  font-size: 0.75rem;
+}
+
+.camera-move-when,
+.camera-move-goals {
+  color: var(--wings-muted);
+  line-height: 1.35;
+}
+
+.camera-move-goals {
+  font-size: 0.75rem;
+}
+
+.camera-preview {
+  display: block;
+  aspect-ratio: 5 / 3;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--wings-surface);
+}
+
+.camera-scene {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-origin: 50% 50%;
+}
+
+.camera-scene * {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.camera-sky {
+  fill: var(--wings-surface);
+}
+
+.camera-ground {
+  fill: var(--wings-border);
+}
+
+.camera-back {
+  fill: var(--wings-faint);
+}
+
+.camera-subject {
+  fill: var(--wings-muted);
+}
+
+.camera-sign {
+  fill: var(--wings-accent);
+}
+
+.camera-door,
+.camera-front {
+  fill: var(--wings-text);
+}
+
+/* The camera moves, so the scene moves the other way. Loops of 2.4 s. */
+@media (prefers-reduced-motion: no-preference) {
+  .camera-preview .camera-scene,
+  .camera-preview .camera-front,
+  .camera-preview .camera-back,
+  .camera-preview .camera-subject {
+    animation-duration: 2.4s;
+    animation-iteration-count: infinite;
+    animation-timing-function: ease-in-out;
+  }
+
+  .camera-preview--drone_ascending .camera-scene {
+    animation-name: cam-drone-up;
+  }
+  .camera-preview--orbit_360 .camera-subject {
+    animation-name: cam-orbit;
+    animation-timing-function: linear;
+  }
+  .camera-preview--whip_pan .camera-scene {
+    animation-name: cam-whip;
+  }
+  .camera-preview--dolly_tracking .camera-scene {
+    animation-name: cam-dolly;
+    animation-timing-function: linear;
+  }
+  .camera-preview--dolly_tracking .camera-front {
+    animation-name: cam-parallax;
+    animation-timing-function: linear;
+  }
+  .camera-preview--slow_zoom_in .camera-scene {
+    animation-name: cam-slow-zoom;
+    animation-duration: 4s;
+  }
+  .camera-preview--crane_up .camera-scene {
+    animation-name: cam-crane-up;
+  }
+  .camera-preview--crane_down .camera-scene {
+    animation-name: cam-crane-down;
+  }
+  .camera-preview--hyperlapse .camera-scene {
+    animation-name: cam-dolly;
+    animation-timing-function: steps(8);
+  }
+  .camera-preview--hyperlapse .camera-front {
+    animation-name: cam-bustle;
+    animation-duration: 0.4s;
+    animation-timing-function: linear;
+  }
+  .camera-preview--handheld .camera-scene {
+    animation-name: cam-handheld;
+    animation-duration: 1.6s;
+    animation-timing-function: linear;
+  }
+  .camera-preview--push_in .camera-scene {
+    animation-name: cam-push-in;
+  }
+  .camera-preview--pull_out .camera-scene {
+    animation-name: cam-pull-out;
+  }
+  .camera-preview--tilt_up .camera-scene {
+    animation-name: cam-tilt-up;
+  }
+  .camera-preview--tilt_down .camera-scene {
+    animation-name: cam-tilt-down;
+  }
+  .camera-preview--pan_left .camera-scene {
+    animation-name: cam-pan-left;
+  }
+  .camera-preview--pan_right .camera-scene {
+    animation-name: cam-pan-right;
+  }
+  .camera-preview--fpv_drone .camera-scene {
+    animation-name: cam-fpv;
+    animation-timing-function: ease-in;
+  }
+  .camera-preview--rack_focus .camera-front {
+    animation-name: cam-focus-out;
+  }
+  .camera-preview--rack_focus .camera-subject {
+    animation-name: cam-focus-in;
+  }
+}
+
+@keyframes cam-drone-up {
+  0% {
+    transform: translateY(-28%) scale(1.35);
+  }
+  100% {
+    transform: translateY(12%) scale(0.9);
+  }
+}
+@keyframes cam-orbit {
+  0% {
+    transform: perspective(160px) rotateY(0deg);
+  }
+  100% {
+    transform: perspective(160px) rotateY(360deg);
+  }
+}
+@keyframes cam-whip {
+  0%,
+  35% {
+    transform: translateX(0);
+    filter: blur(0);
+  }
+  50% {
+    transform: translateX(-60%);
+    filter: blur(3px);
+  }
+  51% {
+    transform: translateX(60%);
+    filter: blur(3px);
+  }
+  65%,
+  100% {
+    transform: translateX(0);
+    filter: blur(0);
+  }
+}
+@keyframes cam-dolly {
+  0% {
+    transform: translateX(18%);
+  }
+  100% {
+    transform: translateX(-18%);
+  }
+}
+@keyframes cam-parallax {
+  0% {
+    transform: translateX(40%);
+  }
+  100% {
+    transform: translateX(-40%);
+  }
+}
+@keyframes cam-slow-zoom {
+  0% {
+    transform: scale(1);
+  }
+  100% {
+    transform: scale(1.3);
+  }
+}
+@keyframes cam-crane-up {
+  0% {
+    transform: translateY(-20%) scale(1.25);
+  }
+  100% {
+    transform: translateY(15%) scale(1);
+  }
+}
+@keyframes cam-crane-down {
+  0% {
+    transform: translateY(15%) scale(1);
+  }
+  100% {
+    transform: translateY(-20%) scale(1.25);
+  }
+}
+@keyframes cam-bustle {
+  0% {
+    transform: translateX(-10px);
+  }
+  100% {
+    transform: translateX(10px);
+  }
+}
+@keyframes cam-handheld {
+  0%,
+  100% {
+    transform: translate(0, 0) rotate(0deg) scale(1.08);
+  }
+  20% {
+    transform: translate(1.5%, -1%) rotate(0.6deg) scale(1.08);
+  }
+  45% {
+    transform: translate(-1%, 1.2%) rotate(-0.5deg) scale(1.08);
+  }
+  70% {
+    transform: translate(1%, 0.6%) rotate(0.4deg) scale(1.08);
+  }
+}
+@keyframes cam-push-in {
+  0% {
+    transform: scale(1);
+  }
+  100% {
+    transform: scale(1.7);
+  }
+}
+@keyframes cam-pull-out {
+  0% {
+    transform: scale(1.7);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes cam-tilt-up {
+  0% {
+    transform: translateY(-22%);
+  }
+  100% {
+    transform: translateY(22%);
+  }
+}
+@keyframes cam-tilt-down {
+  0% {
+    transform: translateY(22%);
+  }
+  100% {
+    transform: translateY(-22%);
+  }
+}
+@keyframes cam-pan-left {
+  0% {
+    transform: translateX(-25%);
+  }
+  100% {
+    transform: translateX(25%);
+  }
+}
+@keyframes cam-pan-right {
+  0% {
+    transform: translateX(25%);
+  }
+  100% {
+    transform: translateX(-25%);
+  }
+}
+@keyframes cam-fpv {
+  0% {
+    transform: scale(0.8) rotate(-4deg);
+  }
+  100% {
+    transform: scale(3.2) rotate(3deg) translateY(-6%);
+  }
+}
+@keyframes cam-focus-out {
+  0%,
+  40% {
+    filter: blur(0);
+  }
+  60%,
+  100% {
+    filter: blur(2px);
+  }
+}
+@keyframes cam-focus-in {
+  0%,
+  40% {
+    filter: blur(2px);
+  }
+  60%,
+  100% {
+    filter: blur(0);
+  }
+}

@@ -137,6 +137,12 @@ toda ação que salva, exporta ou gasta) e a cara (`components/studio/workspace/
 que só desenha estado e chama o contrato). Os painéis nunca tocam o núcleo:
 a regra do projeto sem endereço tem uma porta só.
 
+## Movimentos de câmera
+
+O catálogo mora em `packages/shared/src/marketing/camera-moves.ts` (`CAMERA_MOVES`): id, nome em português, termo técnico em inglês, quando usar e objetivos (fachada, produto, depoimento, ambiente interno…). No formulário de geração, com Tipo = Vídeo, o seletor "Movimento de câmera" mostra um cartão por movimento com uma prévia desenhada em SVG e animada em CSS (nada é gerado para mostrá-la; com "reduzir movimento" do sistema, a prévia fica parada). O movimento fica fora do campo Prompt: ao estimar, `withCameraMove` acrescenta `Camera movement: <termo>.` ao fim do texto da pessoa, para qualquer provedor. "Remover movimento" tira o termo e joga fora a estimativa na tela, como qualquer outra mudança.
+
+O Agente de Edição recebe o catálogo no prompt de sistema e escolhe pelo objetivo (fachada da franquia → `drone_ascending`). Ele informa só o id em `cameraMove` de `propor_geracao` (recusado em imagem, ou fora do catálogo); o servidor compõe o prompt com a mesma `withCameraMove` antes de estimar. O cartão mostra "Movimento de câmera" e o prompt completo antes do botão "Gerar (…)".
+
 ## Licença, antes de tudo
 
 O núcleo está sob **PolyForm Shield 1.0.0**: uso interno, modificação e fork
