@@ -16,7 +16,7 @@ O contrato fica em `packages/shared/src/client-record.ts` (schemas, vocabulário
 e `clientCompleteness`). A API responde a cada gravação com a ficha inteira,
 com o % recalculado.
 
-## Blocos e tabelas (migração `0036_client_record`)
+## Blocos e tabelas (migração `0037_client_record`)
 
 | Bloco | Onde fica |
 | ----- | --------- |
