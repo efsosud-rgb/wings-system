@@ -37,6 +37,7 @@ export const PERMISSIONS = {
   'drive.manage': 'Editar o modelo de pastas do Drive, sincronizar e esvaziar a lixeira',
   'projects.read': 'Ver o quadro de projetos dos clientes',
   'projects.manage': 'Mudar status, etapa atual e andamento das etapas dos projetos dos clientes',
+  'roadmap.manage': 'Editar o roadmap e aprovar o relatório diário para a diretoria',
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;
@@ -110,6 +111,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'ads.request': 'all',
     'ads.approve': 'all',
     'site.publish': 'all',
+    // The roadmap report goes to the CEOs; only an Admin Master edits and approves it.
+    'roadmap.manage': 'all',
   },
   diretoria: {
     ...DRIVE_ALL,

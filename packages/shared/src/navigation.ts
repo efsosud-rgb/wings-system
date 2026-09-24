@@ -213,6 +213,14 @@ export const NAVIGATION: readonly NavModule[] = [
         kind: 'crud',
       },
       {
+        path: '/administracao/roadmap',
+        label: 'Roadmap',
+        description: 'Progresso do sistema e relatório diário para a diretoria',
+        permission: 'roadmap.manage',
+        status: 'ready',
+        kind: 'crud',
+      },
+      {
         path: '/administracao/clientes',
         label: 'Clientes',
         description: 'Para quem o trabalho é feito',
