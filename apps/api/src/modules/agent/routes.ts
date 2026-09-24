@@ -254,15 +254,25 @@ export const agentRoutes: FastifyPluginAsync = async (app) => {
     return row ?? null;
   }
 
-  /** "Aplicar no construtor" was clicked. The form lives in the browser; this is the record. */
+  /**
+   * "Aplicar no construtor" (campaign) or "Aplicar" (timeline edit) was clicked.
+   * The form and the timeline live in the browser; this is the record. Each
+   * kind has the door of the screen it is applied on.
+   */
   app.post(
     '/agent/proposals/:id/applied',
-    { preHandler: app.requirePermission('ads.read') },
+    { preHandler: app.requireAuth },
     async (request, reply) => {
       const params = idParam.safeParse(request.params);
       const employeeId = request.session.actor.employeeId;
       const row = params.success ? await ownProposal(params.data.id, employeeId) : null;
-      if (!row || row.kind !== 'campaign') {
+      const allowed =
+        row?.kind === 'campaign'
+          ? app.can(request, 'ads.read')
+          : row?.kind === 'timeline_edit'
+            ? app.can(request, 'marketing.media.edit')
+            : false;
+      if (!row || !allowed) {
         return reply.status(404).send({ error: 'not_found', message: 'Proposta não encontrada.' });
       }
       const now = new Date();

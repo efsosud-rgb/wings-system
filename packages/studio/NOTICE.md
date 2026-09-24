@@ -53,6 +53,15 @@ Nothing in this package calls a Shotstack service.
   URL's file extension, and a Drive link ends in the file's id, so a library
   PNG showed the warning triangle instead of loading.
 
+- `src/core/commands/replace-edit-command.ts` (new) and `replaceEdit()` in
+  `src/core/edit-session.ts`: swaps the whole edit as ONE undoable command, so
+  the editing agent's proposal (Studio parte 3) is taken back by one
+  "Desfazer". It refuses (`noop`) a change of output or background, which
+  `loadEdit` would apply through commands of its own inside the queue, and
+  drops tracks with no clip from both documents, since `EditSchema` refuses
+  them.
+  Tests: `tests/replace-edit.test.ts`.
+
 ## Bringing upstream changes
 
 ```bash

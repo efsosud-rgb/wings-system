@@ -3,6 +3,7 @@ import {
   STUDIO_BROWSER_EXPORT_MAX_SECONDS,
   STUDIO_PROJECT_MIME,
   STUDIO_PROJECT_SUFFIX,
+  checkTimelineOps,
   parseWingsDriveRef,
   studioProjectFileSchema,
   wingsDriveRef,
@@ -11,11 +12,13 @@ import {
   type MediaAsset,
   type StudioAspect,
   type StudioProjectFile,
+  type StudioTimelineSnapshot,
 } from '@wings/shared';
 import type { Canvas, Controls, Edit, EditConfig, Timeline, VideoExporter } from '@wings/studio';
 import resvgWasmUrl from '@resvg/resvg-wasm/index_bg.wasm?url';
 import hbWasmUrl from 'harfbuzzjs/hb.wasm?url';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { api } from '../../api/client.js';
 import { NameTakenError, sendFile } from '../../api/drive.js';
 import {
   studioFileLink,
@@ -25,6 +28,13 @@ import {
   useTranscription,
 } from '../../api/studio.js';
 import { errorText } from '../drive/DriveParts.js';
+import {
+  applyTimelineOps,
+  snapshotClips,
+  timelineSnapshot,
+  type PlacedFile,
+  type TimingOf,
+} from './agent-edit.js';
 import { probeMediaDuration } from './media-probe.js';
 import {
   captionClip,
@@ -50,6 +60,7 @@ import type {
   SelectedClip,
   ShapeKind,
   StudioAsset,
+  StudioFileKind,
   StudioLayer,
   StudioMode,
   StudioNotice,
@@ -83,6 +94,16 @@ interface Core {
  */
 const IMAGE_MODE_LENGTH = 5;
 const VIDEO_TEXT_LENGTH = 5;
+
+/** The record behind "Aplicar" on an agent's card. The timeline itself lives here, in the browser. */
+function recordAgentEditKept(proposalId: string) {
+  void api.post(`/agent/proposals/${proposalId}/applied`).catch(() => {
+    // The edit is on the timeline either way; only the card's record missed.
+  });
+}
+
+/** Edits that happen inside `replaceEdit` itself, or take it back, and do not keep a preview. */
+const PREVIEW_OWN_SOURCES = /^(loadEdit|replaceEdit$|undo:replaceEdit$|redo:replaceEdit$)/;
 
 function dispose(core: Core) {
   core.exporter.dispose();
@@ -124,6 +145,10 @@ export function useStudioSession(): StudioSession {
   const [notice, setNotice] = useState<StudioNotice | null>(null);
   const [renderId, setRenderId] = useState<string | null>(null);
   const [transcriptionId, setTranscriptionId] = useState<string | null>(null);
+  const [agentPreview, setAgentPreview] = useState<{ proposalId: string } | null>(null);
+  const [agentEditsKept, setAgentEditsKept] = useState<string[]>([]);
+  /** The previewed card, read by the core's listeners, which outlive a render. */
+  const previewRef = useRef<string | null>(null);
 
   const createRender = useCreateRender();
   const render = useRender(renderId);
@@ -186,12 +211,13 @@ export function useStudioSession(): StudioSession {
         return;
       }
       coreRef.current = made;
-      const on = (name: string, listener: () => void) =>
+      const on = (name: string, listener: (payload?: unknown) => void) =>
         offs.push(
-          (edit.events as unknown as { on: (n: string, l: () => void) => () => void }).on(
-            name,
-            listener,
-          ),
+          (
+            edit.events as unknown as {
+              on: (n: string, l: (payload?: unknown) => void) => () => void;
+            }
+          ).on(name, listener),
         );
       on('clip:selected', refresh);
       on('selection:cleared', refresh);
@@ -200,9 +226,23 @@ export function useStudioSession(): StudioSession {
       on('clip:updated', refresh);
       on('timeline:updated', refresh);
       on('duration:changed', refresh);
-      on('edit:changed', () => {
+      on('edit:changed', (event) => {
         setDirty(true);
         refresh();
+        // Editing on after a preview keeps it: it is one step of the history like any other.
+        // Ctrl+Z on it takes it back, as "Descartar" would.
+        const previewed = previewRef.current;
+        const source = (event as { source?: string } | undefined)?.source ?? '';
+        if (!previewed) return;
+        if (source === 'undo:replaceEdit') {
+          previewRef.current = null;
+          setAgentPreview(null);
+        } else if (!PREVIEW_OWN_SOURCES.test(source)) {
+          previewRef.current = null;
+          setAgentPreview(null);
+          setAgentEditsKept((kept) => [...kept, previewed]);
+          recordAgentEditKept(previewed);
+        }
       });
       on('playback:play', () => setPlaying(true));
       on('playback:pause', () => {
@@ -350,7 +390,9 @@ export function useStudioSession(): StudioSession {
   const outputSize = () => {
     const made = coreRef.current;
     const size = made?.edit.size;
-    return size && size.width > 0 ? { width: size.width, height: size.height } : STUDIO_ASPECTS[aspect];
+    return size && size.width > 0
+      ? { width: size.width, height: size.height }
+      : STUDIO_ASPECTS[aspect];
   };
 
   const setAspect = async (next: StudioAspect) => {
@@ -753,6 +795,122 @@ export function useStudioSession(): StudioSession {
       setNotice({ kind: 'success', text: 'Legenda colocada na linha do tempo, por cima de tudo.' });
     });
 
+  /** Where each clip sits in time as the core resolved it: `auto` and `end` in seconds. */
+  const timingOf =
+    (edit: Edit): TimingOf =>
+    (clipId) => {
+      const resolved = edit.getResolvedClipById(clipId) as {
+        start?: unknown;
+        length?: unknown;
+      } | null;
+      if (!resolved) return null;
+      const start = Number(resolved.start);
+      const length = Number(resolved.length);
+      return Number.isFinite(start) && Number.isFinite(length) ? { start, length } : null;
+    };
+
+  const timelineForAgent = (): StudioTimelineSnapshot | null => {
+    const made = coreRef.current;
+    if (!made) return null;
+    const info = made.edit.getSelectedClipInfo();
+    return timelineSnapshot({
+      doc: made.edit.getEdit({ includeIds: true }) as unknown as EditDoc,
+      timing: timingOf(made.edit),
+      assets: [...assetsRef.current.values()],
+      aspect,
+      mode,
+      durationSeconds: made.edit.totalDuration,
+      playheadSeconds: made.edit.playbackTime,
+      selectedClipId: info ? made.edit.getClipId(info.trackIndex, info.clipIndex) : null,
+    });
+  };
+
+  const discardAgentEdit = async () => {
+    if (!previewRef.current) return;
+    previewRef.current = null;
+    setAgentPreview(null);
+    await coreRef.current?.edit.undo();
+    refresh();
+  };
+
+  const keepAgentEdit = () => {
+    const previewed = previewRef.current;
+    if (!previewed) return;
+    previewRef.current = null;
+    setAgentPreview(null);
+    setAgentEditsKept((kept) => [...kept, previewed]);
+    recordAgentEditKept(previewed);
+  };
+
+  const previewAgentEdit: StudioSession['previewAgentEdit'] = async (card) => {
+    const made = coreRef.current;
+    if (!made) return false;
+    // One preview at a time: another card's goes back first.
+    if (previewRef.current) await discardAgentEdit();
+    setBusy('Preparando a prévia…');
+    try {
+      const doc = made.edit.getEdit({ includeIds: true }) as unknown as EditDoc;
+      const timing = timingOf(made.edit);
+      const byUrl = new Map([...assetsRef.current.values()].map((asset) => [asset.url, asset]));
+      const files: Record<string, { name: string; kind: StudioFileKind }> = {};
+      for (const asset of assetsRef.current.values()) files[asset.id] = asset;
+      for (const [id, file] of Object.entries(card.payload.files)) files[id] = file;
+      // Checked again against the timeline as it is now: it may have changed since the proposal.
+      const { problems } = checkTimelineOps(
+        card.payload.ops,
+        {
+          clips: snapshotClips(doc, timing, (src) =>
+            typeof src === 'string' ? (byUrl.get(src) ?? null) : null,
+          ),
+        },
+        files as Record<string, { name: string; kind: 'video' | 'audio' | 'image' | 'subtitle' }>,
+      );
+      if (problems.length > 0) {
+        setNotice({
+          kind: 'error',
+          text: `A linha do tempo mudou desde a proposta (${problems[0]}). Peça de novo ao agente.`,
+        });
+        return false;
+      }
+      const placed: Record<string, PlacedFile> = {};
+      for (const [id, file] of Object.entries(card.payload.files)) {
+        const asset = await resolve({ id, name: file.name, mimeType: file.mimeType });
+        placed[id] = {
+          url: asset.url,
+          kind: file.kind,
+          durationSeconds:
+            file.kind === 'video' || file.kind === 'audio'
+              ? await probeMediaDuration(asset.url, file.kind)
+              : null,
+        };
+      }
+      const next = applyTimelineOps(doc, card.payload.ops, {
+        timing,
+        output: outputSize(),
+        placed,
+      });
+      const result = await made.edit.replaceEdit(withCleanSize(next) as unknown as EditConfig);
+      if (result.status !== 'success') {
+        setNotice({
+          kind: 'error',
+          text: 'O editor não aceitou a prévia. Peça de novo ao agente.',
+        });
+        return false;
+      }
+      previewRef.current = card.id;
+      setAgentPreview({ proposalId: card.id });
+      if (hasPlayableMedia(next)) setModeState('video');
+      setNotice(null);
+      refresh();
+      return true;
+    } catch (error) {
+      setNotice({ kind: 'error', text: friendlyCoreError(error, 'Não deu para pré-visualizar.') });
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const selectedImageForAi = (() => {
     if (!selected || selected.assetType !== 'image') return null;
     const made = coreRef.current;
@@ -853,6 +1011,12 @@ export function useStudioSession(): StudioSession {
     dismissTranscription: () => setTranscriptionId(null),
     render: render.data?.render ?? null,
     dismissRender: () => setRenderId(null),
+    timelineForAgent,
+    agentPreview,
+    agentEditsKept,
+    previewAgentEdit,
+    keepAgentEdit,
+    discardAgentEdit,
     selectedImageForAi,
     busy,
     progress,

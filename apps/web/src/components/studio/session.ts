@@ -1,4 +1,5 @@
 import type {
+  AgentTimelineEditProposalCard,
   DriveFile,
   DriveFolder,
   MediaAsset,
@@ -7,6 +8,7 @@ import type {
   StudioRender,
   StudioTransition,
   StudioTranscription,
+  StudioTimelineSnapshot,
 } from '@wings/shared';
 import type { ReactNode, RefObject } from 'react';
 
@@ -226,6 +228,22 @@ export interface StudioSession {
 
   render: StudioRender | null;
   dismissRender(): void;
+
+  /** The timeline as the editing agent may read it, sent with each message. Null until the editor opens. */
+  timelineForAgent(): StudioTimelineSnapshot | null;
+  /** The agent's card now on the timeline as a preview, if any. */
+  agentPreview: { proposalId: string } | null;
+  /** Cards kept in this session: by "Aplicar", or by editing on after the preview. */
+  agentEditsKept: string[];
+  /**
+   * Puts a card's operations on the timeline as ONE undoable step. False, with
+   * a notice, when they no longer fit the timeline (it changed since).
+   */
+  previewAgentEdit(card: AgentTimelineEditProposalCard): Promise<boolean>;
+  /** "Aplicar": the preview stays, as that one step of the history, and the card is recorded. */
+  keepAgentEdit(): void;
+  /** "Descartar": the one step is undone. */
+  discardAgentEdit(): Promise<void>;
 
   /** The selected image clip, if it came from the media library, for "Gerar variação" / "Editar com IA". */
   selectedImageForAi: { driveFileId: string; mediaAssetId: string | null; name: string } | null;

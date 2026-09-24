@@ -78,6 +78,46 @@ o núcleo só ouvia a janela e a barra de transporte e a linha do tempo mudam
 o tamanho do palco sem ela); em desenvolvimento a rota local `/api/drive/blob`
 responde `Range` com 206, como o R2, para o vídeo procurar quadros.
 
+**O agente edita a linha do tempo (parte 3a).** Com o Studio aberto, cada
+mensagem ao Agente de Edição leva a linha do tempo (`timelineForAgent`, em
+`agent-edit.ts`): formato, duração, agulha, clipe selecionado, e para cada
+clipe o id do núcleo, a faixa, o tipo, o arquivo do Drive (id e nome),
+começo, duração, corte inicial, texto, posição, opacidade e volume. Nenhum
+link vai junto. O agente lê com `linha_do_tempo` e propõe com
+`propor_edicao` uma lista de operações (`remove`, `set_timing`, `split`,
+`style`, `add_text`, `add_file`; contrato em
+`packages/shared/src/studio-agent.ts`). O servidor confere cada operação
+contra a linha do tempo que veio (`checkTimelineOps`: clipe que não existe,
+corte fora do clipe, estilo de legenda em algo que não é legenda…) e devolve
+ao modelo o que corrigir; quando passa, grava o cartão com uma linha por
+mudança escrita pelo servidor, não pelo modelo. Uma mídia da biblioteca entra
+pelo id do arquivo no Drive e com nome `imagem-<id>`/`video-<id>`, nunca pelo
+nome do arquivo no Drive; o link é pedido pela rota de sempre, que confere o
+departamento.
+
+No cartão, **Pré-visualizar** confere de novo as operações contra a linha do
+tempo de agora (ela pode ter mudado), monta o documento seguinte
+(`applyTimelineOps`) e o entrega ao núcleo por `replaceEdit`, que o aplica
+como **um passo só** do histórico. **Aplicar** mantém esse passo e registra
+o cartão (`agent.proposal_applied`); **Descartar** desfaz o passo; Ctrl+Z faz
+o mesmo que Descartar enquanto a prévia é a última mudança; editar à mão
+depois da prévia a mantém, como qualquer outro passo. A prévia é a própria
+linha do tempo, não uma cópia: um desfazer por fora do histórico do núcleo
+apontaria para faixas e clipes que já não existem. Formato e fundo não mudam
+por edição do agente (o núcleo recusa: `loadEdit` os aplicaria por comandos
+dentro da fila). Faixas que ficam vazias somem, porque o esquema do núcleo as
+recusa. O custo é o da conversa com o agente, contado no teto diário por
+pessoa (`AGENT_DAILY_USD`) e mostrado no rodapé do chat como "Uso de hoje";
+propor edição não gasta crédito de mídia. Fora do Studio (a página da
+biblioteca), o cartão diz para abrir o Studio.
+
+Conferido com o núcleo real no Chromium sem tela (2026-09-24): dividir,
+cortar o início, remover, mudar estilo, texto novo, desfazer, refazer, uma
+edição à mão depois da prévia seguida de dois desfazer, e a recusa de mudar o
+formato. Foi assim que apareceu a faixa vazia recusada pelo esquema. Ainda não
+visto: o modelo de verdade propondo pelo OpenRouter, e o fluxo inteiro na tela
+do staging (mensagem → cartão → prévia).
+
 **Atalhos.** Espaço toca e pausa; Ctrl+Z e Ctrl+Shift+Z desfazem e refazem;
 Delete remove o selecionado; S abre "Salvar no Drive"; as setas andam um
 quadro. Nenhum atalho age enquanto o foco está num campo de texto. O botão
@@ -205,8 +245,10 @@ jsdom). Só o staging confirma:
 
 ## Fica para depois
 
-- Agente montando o primeiro corte a partir de um pedido (ferramenta que
-  propõe um projeto; a pessoa abre e ajusta).
+- Agente montando o primeiro corte a partir de um pedido, do zero (a parte 3a
+  edita uma linha do tempo que já existe).
+- Legenda inteligente que desvia de rostos e de textos do vídeo (parte 3b,
+  job `caption_layout` no worker).
 - Proxy de baixa resolução para vídeo de uma hora (job `proxy`).
 - Textos da interface do núcleo em português (hoje em inglês, no código do
   SDK).

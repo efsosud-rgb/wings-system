@@ -7,7 +7,9 @@ import type {
   AgentSendMessageInput,
   AgentStatusResponse,
   AgentStreamEvent,
+  AgentTimelineEditProposalCard,
   MediaGeneration,
+  StudioTimelineSnapshot,
 } from '@wings/shared';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
@@ -73,6 +75,7 @@ vi.mock('../../api/media.js', async (original) => ({
 }));
 
 const { AgentChat } = await import('./AgentChat.js');
+const { TimelineEditContext } = await import('./ProposalCards.js');
 const { createSseParser } = await import('../../api/agent.js');
 
 function renderChat(ui: ReactElement) {
@@ -821,5 +824,96 @@ describe('reading the event stream', () => {
     parser.push(': keep-alive\n\ndata: não é json\n\ndata: {"type":"delta","text":"fim"}');
     parser.end();
     expect(events).toEqual([{ type: 'delta', text: 'fim' }]);
+  });
+});
+
+describe('timeline edits', () => {
+  const card: AgentTimelineEditProposalCard = {
+    id: 'prop-edit-1',
+    kind: 'timeline_edit',
+    status: 'open',
+    createdAt: '2026-09-24T12:00:00.000Z',
+    approvalId: null,
+    payload: {
+      explanation: 'Tiro o título e corto os 2 primeiros segundos.',
+      ops: [
+        { op: 'remove', clipId: 'title' },
+        { op: 'set_timing', clipId: 'video', trim: 2 },
+      ],
+      lines: [
+        'Remove texto "Seja franqueado" (0,0 s a 4,0 s)',
+        'vídeo "depoimento.mp4" (0,0 s a 30,0 s): pula os primeiros 2,0 s do arquivo',
+      ],
+      files: {},
+    },
+  };
+  const timeline: StudioTimelineSnapshot = {
+    aspect: '9:16',
+    mode: 'video',
+    durationSeconds: 30,
+    playheadSeconds: 0,
+    selectedClipId: null,
+    clips: [],
+    files: [],
+  };
+
+  function bridge(previewing: string | null = null) {
+    return {
+      previewing,
+      kept: [] as string[],
+      preview: vi.fn(async () => true),
+      keep: vi.fn(),
+      discard: vi.fn(async () => undefined),
+    };
+  }
+  const chat = (value: ReturnType<typeof bridge> | null) => (
+    <TimelineEditContext.Provider value={value}>
+      <AgentChat
+        scope="media"
+        tab="media"
+        canRequest={false}
+        getTimeline={value ? () => timeline : undefined}
+      />
+    </TimelineEditContext.Provider>
+  );
+
+  it('sends the timeline with the message when the editor is open', async () => {
+    renderChat(chat(bridge()));
+    await say('Tira o título');
+    expect(sent[0]).toMatchObject({ scope: 'media', context: { tab: 'media', timeline } });
+  });
+
+  it('lists what changes and previews only on the click', async () => {
+    const studio = bridge();
+    renderChat(chat(studio));
+    await say('Tira o título');
+    stream({ type: 'proposal', proposal: card });
+    const lines = screen.getByRole('list', { name: 'O que muda na linha do tempo' });
+    expect(lines.textContent).toContain('Remove texto "Seja franqueado"');
+    expect(lines.textContent).toContain('pula os primeiros 2,0 s do arquivo');
+    expect(studio.preview).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pré-visualizar' }));
+    await waitFor(() => expect(studio.preview).toHaveBeenCalledWith(card));
+  });
+
+  it('while previewing, Aplicar keeps it and Descartar takes it back', async () => {
+    const studio = bridge('prop-edit-1');
+    renderChat(chat(studio));
+    await say('Tira o título');
+    stream({ type: 'proposal', proposal: card });
+    expect(screen.getByText(/Prévia na tela/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Descartar' }));
+    expect(studio.discard).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Aplicar' }));
+    expect(studio.keep).toHaveBeenCalledTimes(1);
+  });
+
+  it('outside the Studio, says where the edit can be seen', async () => {
+    renderChat(chat(null));
+    await say('Tira o título');
+    stream({ type: 'proposal', proposal: card });
+    expect(screen.getByText(/Abra o Studio/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Pré-visualizar' })).toBeNull();
   });
 });

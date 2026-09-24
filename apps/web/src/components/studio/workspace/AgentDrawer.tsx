@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { AgentChat } from '../../agent-chat/AgentChat.js';
+import { TimelineEditContext, type TimelineEditBridge } from '../../agent-chat/ProposalCards.js';
+import type { StudioSession } from '../session.js';
 import { ChevronIcon } from './icons.js';
 
 const OPEN_KEY = 'wings.studio.agentOpen';
@@ -18,12 +20,22 @@ function remembered(): boolean | null {
  * screens, closed under 1440 px, and whatever the person chose after that.
  */
 export function AgentDrawer({
+  session,
   canGenerate,
   getBuilderDraft,
 }: {
+  session: StudioSession;
   canGenerate: boolean;
   getBuilderDraft: () => Record<string, unknown> | undefined;
 }) {
+  // The agent's timeline cards act on this editor, and only through the session.
+  const bridge: TimelineEditBridge = {
+    previewing: session.agentPreview?.proposalId ?? null,
+    kept: session.agentEditsKept,
+    preview: (card) => session.previewAgentEdit(card),
+    keep: () => session.keepAgentEdit(),
+    discard: () => session.discardAgentEdit(),
+  };
   const [open, setOpen] = useState(
     () => remembered() ?? (typeof window !== 'undefined' ? window.innerWidth >= 1440 : true),
   );
@@ -52,16 +64,19 @@ export function AgentDrawer({
       </button>
       <div id="ws-agent-body" className="ws-agent-body" hidden={!open}>
         {open && (
-          <AgentChat
-            scope="media"
-            tab="media"
-            title="Agente de Edição Wings"
-            canRequest={false}
-            canGenerate={canGenerate}
-            getBuilderDraft={getBuilderDraft}
-            emptyHint="Peça uma imagem ou um vídeo para uma campanha, pergunte quanto custa um modelo ou o que já existe na biblioteca."
-            standingHint="O agente lê, estima e propõe no provedor mais barato que atende. Nada é gerado daqui sem o seu clique, e o custo aparece antes."
-          />
+          <TimelineEditContext.Provider value={bridge}>
+            <AgentChat
+              scope="media"
+              tab="media"
+              title="Agente de Edição Wings"
+              canRequest={false}
+              canGenerate={canGenerate}
+              getBuilderDraft={getBuilderDraft}
+              getTimeline={() => session.timelineForAgent()}
+              emptyHint="Peça uma imagem ou um vídeo, ou uma edição: “corta os 3 primeiros segundos”, “põe um título no começo”, “divide o vídeo no segundo 10”."
+              standingHint="O agente lê, estima e propõe. Edições viram um cartão com Pré-visualizar; nada muda na linha do tempo nem é gerado sem o seu clique, e o custo de gerar aparece antes."
+            />
+          </TimelineEditContext.Provider>
         )}
       </div>
     </section>

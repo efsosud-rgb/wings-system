@@ -5,6 +5,7 @@ import {
   agentChangeProposalSchema,
   agentGenerationProposalSchema,
   estimateAgentCostMicroUsd,
+  storedTimelineEditSchema,
   type AgentChatMessage,
   type AgentConsultation,
   type AgentModel,
@@ -12,6 +13,7 @@ import {
   type AgentStreamEvent,
   type AgentUsageToday,
   type MediaProviderId,
+  type StudioTimelineSnapshot,
 } from '@wings/shared';
 import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
@@ -159,7 +161,7 @@ export async function cardOf(
   db: Database,
   row: {
     id: string;
-    kind: 'campaign' | 'change' | 'generation';
+    kind: 'campaign' | 'change' | 'generation' | 'timeline_edit';
     payload: unknown;
     status: AgentProposalCard['status'];
     createdAt: Date;
@@ -177,6 +179,18 @@ export async function cardOf(
       approvalId: row.approvalId,
       payload: payload.data,
       pending: pendingFor(payload.data),
+    };
+  }
+  if (row.kind === 'timeline_edit') {
+    const payload = storedTimelineEditSchema.safeParse(row.payload);
+    if (!payload.success) return null;
+    return {
+      kind: 'timeline_edit',
+      id: row.id,
+      status: row.status,
+      createdAt: row.createdAt.toISOString(),
+      approvalId: null,
+      payload: payload.data,
     };
   }
   if (row.kind === 'generation') {
@@ -264,7 +278,11 @@ export async function runAgentTurn(
     employeeId: string;
     conversationId?: string;
     message: string;
-    context?: { tab: 'paid' | 'owned' | 'media'; draft?: Record<string, unknown> };
+    context?: {
+      tab: 'paid' | 'owned' | 'media';
+      draft?: Record<string, unknown>;
+      timeline?: StudioTimelineSnapshot;
+    };
     /** "Tentar de novo": answer the last message again rather than store a copy. */
     retry?: boolean;
     signal?: AbortSignal;
@@ -377,6 +395,7 @@ export async function runAgentTurn(
       conversationId: conversation.id,
       now,
       builderDraft: input.context?.draft,
+      timeline: input.context?.timeline,
       studio: deps.studio,
     };
 
