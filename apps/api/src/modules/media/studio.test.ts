@@ -1148,6 +1148,47 @@ describe('the editing agent', () => {
     expect(traffic.json<{ conversations: unknown[] }>().conversations).toHaveLength(0);
   });
 
+  it('knows the camera moves, and a video card carries the chosen one into the prompt only on the click', async () => {
+    expect(MEDIA_AGENT_SYSTEM_PROMPT).toContain('drone_ascending: Drone subindo, "drone shot, ascending"');
+    expect(MEDIA_AGENT_SYSTEM_PROMPT).toContain('Objetivos: fachada');
+    const { cookies } = await sessionFor('marketing');
+    const video = proposal({
+      kind: 'video',
+      model: 'seedance-v2-0-image-to-video',
+      prompt:
+        'A modern franchise storefront on a sunny commercial street, glass facade, people walking by, no text, no logos',
+      explanation: 'Fachada da franquia: drone subindo, para revelar o ponto e a rua.',
+      aspect: '9:16',
+      durationSeconds: 5,
+      cameraMove: 'drone_ascending',
+    });
+    script = [
+      // A move on an image, or one not in the catalog, is sent back.
+      () => ({
+        toolCalls: [
+          call('propor_geracao', proposal({ cameraMove: 'orbit_360' })),
+          call('propor_geracao', { ...video, cameraMove: 'barrel_roll' }),
+        ],
+      }),
+      () => ({ toolCalls: [call('propor_geracao', video)] }),
+      () => ({ text: 'Propus um vídeo 9:16 com drone subindo.' }),
+    ];
+    const { message } = await talk(cookies, 'Um vídeo da fachada da franquia');
+    expect(message?.proposals).toHaveLength(1);
+    const card = message?.proposals[0];
+    if (card?.kind !== 'generation' || !card.estimate) throw new Error('expected a priced card');
+    expect(card.payload).toMatchObject({ cameraMove: 'drone_ascending' });
+    expect(JSON.stringify(seen)).toContain('Movimento de câmera é só para vídeo');
+    expect(spending()).toHaveLength(0);
+
+    const clicked = await generate(cookies, { estimateId: card.estimate.id, proposalId: card.id });
+    expect(clicked.statusCode).toBe(201);
+    expect(spending()).toHaveLength(1);
+    expect(String(spending()[0]?.args.prompt)).toBe(
+      'A modern franchise storefront on a sunny commercial street, glass facade, people walking by, no text, no logos. Camera movement: drone shot, ascending.',
+    );
+  });
+
   it('proposes for a client only by an id from listar_clientes, shows who on the card, and keeps the name from Kairogen', async () => {
     const { cookies } = await sessionFor('marketing');
     const clientId = await aurora();
