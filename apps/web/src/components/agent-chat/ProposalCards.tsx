@@ -27,7 +27,7 @@ import { createContext, useContext, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMarkProposalApplied, useRequestFromProposal } from '../../api/agent.js';
 import { ApiError } from '../../api/client.js';
-import { useGeneration, useStartGeneration } from '../../api/media.js';
+import { useGeneration, useReestimateProposal, useStartGeneration } from '../../api/media.js';
 import { MediaThumb } from '../media-studio/MediaLibrary.js';
 import { Button } from '../ui.js';
 import { formatBrl, formatDate } from '../campaign-builder/format.js';
@@ -376,9 +376,38 @@ function GenerationCard({
 }) {
   const canGenerate = useContext(CanGenerateContext);
   const start = useStartGeneration();
+  const reestimate = useReestimateProposal();
   const following = useGeneration(proposal.generationId ?? undefined);
   const generation = following.data?.generation;
   const { payload, estimate } = proposal;
+  // The card is drawn again when the reply finishes writing, so what a click
+  // learns is handed up to the chat (which outlives the card), never kept in a
+  // mutate() callback that an unmounted card would never run.
+  const generate = (estimateId: string) =>
+    start.mutateAsync({ estimateId, proposalId: proposal.id }).then(
+      (body) => onActed({ ...proposal, status: 'requested', generationId: body.generation.id }),
+      () => undefined,
+    );
+  const estimateAgain = () =>
+    reestimate.mutateAsync(proposal.id).then(
+      (body) => {
+        start.reset();
+        onActed({
+          ...proposal,
+          status: body.generationId ? 'requested' : 'open',
+          estimate: body.estimate,
+          generationId: body.generationId,
+        });
+      },
+      () => undefined,
+    );
+  const staleCode =
+    start.error instanceof ApiError &&
+    (start.error.code === 'estimate_used' || start.error.code === 'estimate_expired');
+  const tryAgain =
+    generation?.status === 'refused' || generation?.status === 'failed'
+      ? true
+      : !proposal.generationId && (estimate === null || staleCode);
   const params = Object.entries(payload.params);
   const camera = payload.cameraMove ? cameraMoveById(payload.cameraMove) : undefined;
 
@@ -500,9 +529,7 @@ function GenerationCard({
               <Link to="/marketing/edicao">Ver na biblioteca</Link>
             )}
         </p>
-      ) : estimate === null ? (
-        <p className="field-hint">Não foi possível estimar o custo. Peça de novo.</p>
-      ) : (
+      ) : tryAgain || estimate === null ? null : (
         <>
           <p className="agent-card-cost">
             Custo estimado: {priceOf(estimate)} · {MEDIA_PROVIDER_LABEL[estimate.providerId]}
@@ -511,19 +538,7 @@ function GenerationCard({
             <Button
               type="button"
               disabled={start.isPending}
-              onClick={() =>
-                start.mutate(
-                  { estimateId: estimate.id, proposalId: proposal.id },
-                  {
-                    onSuccess: (body) =>
-                      onActed({
-                        ...proposal,
-                        status: 'requested',
-                        generationId: body.generation.id,
-                      }),
-                  },
-                )
-              }
+              onClick={() => void generate(estimate.id)}
             >
               Gerar ({priceOf(estimate)})
             </Button>
@@ -532,7 +547,29 @@ function GenerationCard({
           )}
         </>
       )}
-      {start.error && (
+      {tryAgain && canGenerate && (
+        <p className="agent-card-state">
+          {estimate === null || proposal.generationId
+            ? 'Esta proposta precisa de um novo preço antes de gerar.'
+            : 'A estimativa venceu ou já foi usada.'}{' '}
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={reestimate.isPending}
+            onClick={() => void estimateAgain()}
+          >
+            {reestimate.isPending ? 'Estimando…' : 'Estimar de novo'}
+          </Button>
+        </p>
+      )}
+      {reestimate.error && (
+        <p className="field-error" role="alert">
+          {reestimate.error instanceof ApiError
+            ? reestimate.error.message
+            : 'Não foi possível estimar de novo.'}
+        </p>
+      )}
+      {start.error && !staleCode && (
         <p className="field-error" role="alert">
           {start.error instanceof ApiError
             ? start.error.message

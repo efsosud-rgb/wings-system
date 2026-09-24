@@ -152,6 +152,25 @@ export function useStartGeneration() {
   });
 }
 
+export interface ProposalEstimate {
+  estimate: {
+    id: string;
+    credits: number;
+    brlCents: number;
+    providerId: MediaProviderId;
+    expiresAt: string;
+  } | null;
+  generationId: string | null;
+}
+
+/** "Estimar de novo" on an agent card: the server prices the same request again. Spends nothing. */
+export function useReestimateProposal() {
+  return useMutation({
+    mutationFn: (proposalId: string) =>
+      api.post<ProposalEstimate>(`/media/proposals/${proposalId}/estimate`, {}),
+  });
+}
+
 export function useGenerations(enabled = true) {
   return useQuery({
     queryKey: ['media', 'generations'],

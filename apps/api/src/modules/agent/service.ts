@@ -220,8 +220,9 @@ export async function cardOf(
       approvalId: null,
       payload: payload.data,
       clientName: client?.name ?? null,
+      // An estimate past its time is no price at all: the card offers "Estimar de novo".
       estimate:
-        made?.status === 'estimated'
+        made?.status === 'estimated' && made.estimateExpiresAt > new Date()
           ? {
               id: made.id,
               credits: made.creditsEstimated,

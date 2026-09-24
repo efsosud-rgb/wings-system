@@ -25,6 +25,7 @@ import {
   listModels,
   providerStatuses,
   recentGenerations,
+  reestimateProposal,
   resolvePublicLink,
   resumeGenerations,
   spendOf,
@@ -126,6 +127,32 @@ export const mediaStudioRoutes: FastifyPluginAsync = async (app) => {
           request: body.data,
         });
         return reply.status(201).send({ estimate });
+      } catch (error) {
+        if (error instanceof StudioRefusal) return sendRefusal(reply, error);
+        throw error;
+      }
+    },
+  );
+
+  /**
+   * "Estimar de novo" on an agent card: the same request, priced again by the
+   * server. Spends nothing; the card's button still does that, on a click.
+   */
+  app.post(
+    '/media/proposals/:id/estimate',
+    { preHandler: app.requirePermission('marketing.media.generate') },
+    async (request, reply) => {
+      const params = idParam.safeParse(request.params);
+      if (!params.success) {
+        return reply.status(404).send({ error: 'not_found', message: 'Proposta não encontrada.' });
+      }
+      try {
+        return reply.send(
+          await reestimateProposal(deps, {
+            employeeId: request.session.actor.employeeId,
+            proposalId: params.data.id,
+          }),
+        );
       } catch (error) {
         if (error instanceof StudioRefusal) return sendRefusal(reply, error);
         throw error;

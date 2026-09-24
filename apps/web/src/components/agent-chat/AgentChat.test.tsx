@@ -64,11 +64,26 @@ vi.mock('../../api/agent.js', async (original) => ({
     streamAgentMessage(...args),
 }));
 
-const startGeneration = vi.fn();
+/**
+ * The card's own mutations run for real; only the request leaves the test. Each
+ * POST waits for the test to answer it, so a test can finish a reply while a
+ * click is still on its way.
+ */
+type Pending = { resolve: (body: unknown) => void; reject: (error: unknown) => void };
+const posted: { path: string; body: unknown; answer: Pending }[] = [];
+const apiPost = vi.fn(
+  (path: string, body?: unknown) =>
+    new Promise((resolve, reject) => posted.push({ path, body, answer: { resolve, reject } })),
+);
+vi.mock('../../api/client.js', async (original) => {
+  const real = await original<typeof import('../../api/client.js')>();
+  return { ...real, api: { ...real.api, post: (path: string, body?: unknown) => apiPost(path, body) } };
+});
+const generationPosts = () => posted.filter((item) => item.path === '/media/generations');
+
 const followed = { current: null as MediaGeneration | null };
 vi.mock('../../api/media.js', async (original) => ({
   ...(await original<typeof import('../../api/media.js')>()),
-  useStartGeneration: () => ({ mutate: startGeneration, isPending: false, error: null }),
   useGeneration: (id: string | undefined) => ({
     data: id && followed.current ? { generation: followed.current } : undefined,
   }),
@@ -77,6 +92,7 @@ vi.mock('../../api/media.js', async (original) => ({
 const { AgentChat } = await import('./AgentChat.js');
 const { TimelineEditContext } = await import('./ProposalCards.js');
 const { createSseParser } = await import('../../api/agent.js');
+const { ApiError } = await import('../../api/client.js');
 
 function renderChat(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -220,7 +236,8 @@ beforeEach(() => {
   sent.length = 0;
   streamAgentMessage.mockClear();
   markApplied.mockClear();
-  startGeneration.mockClear();
+  apiPost.mockClear();
+  posted.length = 0;
   followed.current = null;
   requestFromProposal.mockClear();
 });
@@ -658,6 +675,26 @@ const generationCard: AgentGenerationProposalCard = {
   },
 };
 
+const unknownGeneration: MediaGeneration = {
+  id: 'gen-1',
+  status: 'unknown',
+  operation: 'generate',
+  kind: 'image',
+  model: 'seedream-v4',
+  providerId: 'kairogen',
+  prompt: null,
+  brlCentsEstimated: 0,
+  creditsEstimated: 4,
+  creditsCharged: null,
+  detail: 'O Kairogen não respondeu se recebeu o pedido.',
+  requestedByName: null,
+  createdAt: '2026-09-21T12:00:05.000Z',
+  finishedAt: '2026-09-21T12:00:40.000Z',
+  assetIds: [],
+  clientId: '11111111-1111-4111-8111-1111111111c2',
+  clientName: 'Padaria Aurora',
+};
+
 describe('the editing agent', () => {
   const media = (canGenerate: boolean) => (
     <AgentChat
@@ -707,7 +744,7 @@ describe('the editing agent', () => {
         /golden hour, 50mm, shallow depth of field\. Camera movement: drone shot, ascending\.$/,
       ),
     ).toBeTruthy();
-    expect(startGeneration).not.toHaveBeenCalled();
+    expect(generationPosts()).toHaveLength(0);
   });
 
   it('shows the cost on the card and generates only on the click, naming the estimate', async () => {
@@ -720,44 +757,26 @@ describe('the editing agent', () => {
     expect(screen.getByText('Para quem').nextElementSibling?.textContent).toBe('Padaria Aurora');
     expect(screen.getByText(/Dono de loja em frente ao negócio/)).toBeTruthy();
     expect(screen.getByText('Prompt enviado ao modelo')).toBeTruthy();
-    expect(startGeneration).not.toHaveBeenCalled();
+    expect(generationPosts()).toHaveLength(0);
 
     fireEvent.click(screen.getByRole('button', { name: 'Gerar (4 créditos)' }));
-    expect(startGeneration).toHaveBeenCalledTimes(1);
-    expect(startGeneration.mock.calls[0]?.[0]).toEqual({
+    await waitFor(() => expect(generationPosts()).toHaveLength(1));
+    expect(generationPosts()[0]?.body).toEqual({
       estimateId: 'est-1',
       proposalId: 'prop-gen-1',
     });
 
     // The server said yes: the card now follows the generation and offers no second click.
-    followed.current = {
-      id: 'gen-1',
-      status: 'unknown',
-      operation: 'generate',
-      kind: 'image',
-      model: 'seedream-v4',
-      providerId: 'kairogen',
-      prompt: null,
-      brlCentsEstimated: 0,
-      creditsEstimated: 4,
-      creditsCharged: null,
-      detail: 'O Kairogen não respondeu se recebeu o pedido.',
-      requestedByName: null,
-      createdAt: '2026-09-21T12:00:05.000Z',
-      finishedAt: '2026-09-21T12:00:40.000Z',
-      assetIds: [],
-      clientId: '11111111-1111-4111-8111-1111111111c2',
-      clientName: 'Padaria Aurora',
-    };
-    const options = startGeneration.mock.calls[0]?.[1] as {
-      onSuccess: (body: { generation: MediaGeneration }) => void;
-    };
-    act(() => options.onSuccess({ generation: followed.current as MediaGeneration }));
+    followed.current = unknownGeneration;
+    await act(async () => {
+      generationPosts()[0]?.answer.resolve({ generation: followed.current });
+      await Promise.resolve();
+    });
 
-    expect(screen.getByText(/Resultado desconhecido/)).toBeTruthy();
+    expect(await screen.findByText(/Resultado desconhecido/)).toBeTruthy();
     expect(screen.getByText(/Confira no Kairogen antes de gerar de novo/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /^Gerar/ })).toBeNull();
-    expect(startGeneration).toHaveBeenCalledTimes(1);
+    expect(generationPosts()).toHaveLength(1);
     // Nothing was produced, so the card shows no picture.
     expect(screen.queryByRole('link', { name: /^Mídia gerada/ })).toBeNull();
   });
@@ -825,7 +844,71 @@ describe('the editing agent', () => {
     await say('Outra imagem');
     stream({ type: 'proposal', proposal: { ...generationCard, id: 'prop-gen-2', estimate: null } });
     expect(screen.queryByRole('button', { name: /^Gerar/ })).toBeNull();
-    expect(screen.getByText('Não foi possível estimar o custo. Peça de novo.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Estimar de novo' })).toBeTruthy();
+  });
+
+  it('keeps the answer to a click made while the reply was still being written', async () => {
+    // Staging, 2026-09-24: the click landed, the reply finished, the card was drawn
+    // again without it, and the next click was told the estimate was already used.
+    renderChat(media(true));
+    await say('Use a imagem ClickFranquia e gere uma versão laranja');
+    stream({ type: 'proposal', proposal: generationCard });
+    fireEvent.click(screen.getByRole('button', { name: 'Gerar (4 créditos)' }));
+    await waitFor(() => expect(generationPosts()).toHaveLength(1));
+
+    stream({
+      type: 'done',
+      message: assistant({ content: 'Pronto, o cartão está aí.', proposals: [generationCard] }),
+      usage,
+    });
+    await close();
+
+    followed.current = unknownGeneration;
+    await act(async () => {
+      generationPosts()[0]?.answer.resolve({ generation: unknownGeneration });
+      await Promise.resolve();
+    });
+    expect(await screen.findByText(/Resultado desconhecido/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /^Gerar/ })).toBeNull();
+    expect(generationPosts()).toHaveLength(1);
+  });
+
+  it('turns a used or expired estimate into "Estimar de novo", one click, no agent', async () => {
+    renderChat(media(true));
+    await say('Uma imagem');
+    stream({ type: 'proposal', proposal: generationCard });
+    fireEvent.click(screen.getByRole('button', { name: 'Gerar (4 créditos)' }));
+    await waitFor(() => expect(generationPosts()).toHaveLength(1));
+    await act(async () => {
+      generationPosts()[0]?.answer.reject(
+        new ApiError(409, {
+          error: 'estimate_expired',
+          message: 'A estimativa venceu. Estime o custo de novo.',
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Estimar de novo' }));
+    const estimatePath = '/media/proposals/prop-gen-1/estimate';
+    await waitFor(() => expect(posted.some((item) => item.path === estimatePath)).toBe(true));
+    const again = posted.find((item) => item.path === estimatePath);
+    await act(async () => {
+      again?.answer.resolve({
+        estimate: { id: 'est-2', credits: 4, brlCents: 0, providerId: 'kairogen', expiresAt: '2099-01-01T00:00:00.000Z' },
+        generationId: null,
+      });
+      await Promise.resolve();
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Gerar (4 créditos)' }));
+    await waitFor(() => expect(generationPosts()).toHaveLength(2));
+    expect(generationPosts().map((item) => item.body)).toEqual([
+      { estimateId: 'est-1', proposalId: 'prop-gen-1' },
+      { estimateId: 'est-2', proposalId: 'prop-gen-1' },
+    ]);
+    // Nothing reached the agent: no second message was sent.
+    expect(streamAgentMessage).toHaveBeenCalledTimes(1);
   });
 });
 
