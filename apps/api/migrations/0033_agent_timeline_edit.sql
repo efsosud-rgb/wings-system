@@ -1,0 +1,1 @@
+ALTER TYPE "public"."agent_proposal_kind" ADD VALUE 'timeline_edit';

@@ -94,6 +94,7 @@ export const agentProposalKindEnum = pgEnum('agent_proposal_kind', [
   'campaign',
   'change',
   'generation',
+  'timeline_edit',
 ]);
 export const agentProposalStatusEnum = pgEnum('agent_proposal_status', [
   'open',

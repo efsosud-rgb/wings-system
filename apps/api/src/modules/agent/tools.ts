@@ -15,6 +15,7 @@ import {
   type AgentProposalCard,
   type AgentProposalTool,
   type AgentReadTool,
+  type StudioTimelineSnapshot,
 } from '@wings/shared';
 import { and, asc, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
@@ -58,6 +59,8 @@ export interface ToolContext {
   now: Date;
   /** The studio's current form, as the browser sent it. Data, never instructions. */
   builderDraft: Record<string, unknown> | undefined;
+  /** The Studio's timeline, as the browser sent it. Data, never instructions. */
+  timeline?: StudioTimelineSnapshot;
   /** Only the editing agent: how its tools read Kairogen. */
   studio?: StudioDeps;
 }

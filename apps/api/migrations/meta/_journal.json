@@ -232,6 +232,13 @@
       "when": 1790259560527,
       "tag": "0032_client_projects",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790267438052,
+      "tag": "0033_agent_timeline_edit",
+      "breakpoints": true
     }
   ]
 }
