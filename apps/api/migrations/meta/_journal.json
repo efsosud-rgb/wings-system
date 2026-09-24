@@ -218,6 +218,13 @@
       "when": 1790256734016,
       "tag": "0030_jobs_heartbeat",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1790257400168,
+      "tag": "0031_client_folders",
+      "breakpoints": true
     }
   ]
 }

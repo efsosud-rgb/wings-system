@@ -18,7 +18,6 @@ import {
   desc,
   eq,
   ilike,
-  inArray,
   isNotNull,
   isNull,
   lt,
@@ -37,7 +36,7 @@ import {
   mediaAssets,
 } from '../../db/schema/index.js';
 import type { ObjectStorage } from '../../lib/storage/index.js';
-import { seesDepartment, type DriveAccess } from './access.js';
+import { folderReachSql, seesFolder, writesFolder, type DriveAccess } from './access.js';
 import { moveFolderTree } from './folders.js';
 
 /**
@@ -84,7 +83,7 @@ export const newStorageKey = (now: Date) =>
 // ---------------------------------------------------------------------------
 
 export function toFolder(row: FolderRow, access: DriveAccess): DriveFolder {
-  const accessible = seesDepartment(access, row.department);
+  const accessible = seesFolder(access, row);
   return {
     id: row.id,
     parentId: row.parentId,
@@ -94,8 +93,9 @@ export function toFolder(row: FolderRow, access: DriveAccess): DriveFolder {
     clientId: row.clientId,
     origin: row.origin as DriveFolderOrigin,
     accessible,
-    canWrite: accessible && access.write,
+    canWrite: accessible && writesFolder(access, row),
     managed: row.origin !== 'manual',
+    slot: (row.slot as DriveFolder['slot']) ?? null,
   };
 }
 
@@ -110,7 +110,7 @@ export async function listTree(deps: DriveDeps, access: DriveAccess): Promise<Dr
   const byId = new Map(rows.map((row) => [row.id, row]));
   const shown = new Set<string>();
   for (const row of rows) {
-    if (!seesDepartment(access, row.department)) continue;
+    if (!seesFolder(access, row)) continue;
     for (let at: FolderRow | undefined = row; at && !shown.has(at.id);) {
       shown.add(at.id);
       at = at.parentId ? byId.get(at.parentId) : undefined;
@@ -127,8 +127,8 @@ export async function folderFor(
   need: 'read' | 'write' = 'read',
 ): Promise<FolderRow> {
   const row = await deps.db.query.driveFolders.findFirst({ where: eq(driveFolders.id, id) });
-  if (!row || !seesDepartment(access, row.department)) throw new DriveError('not_found');
-  if (need === 'write' && !access.write) throw new DriveError('forbidden');
+  if (!row || !seesFolder(access, row)) throw new DriveError('not_found');
+  if (need === 'write' && !writesFolder(access, row)) throw new DriveError('forbidden');
   return row;
 }
 
@@ -242,6 +242,7 @@ const fileColumns = {
   file: driveFiles,
   folderPath: driveFolders.path,
   department: driveFolders.department,
+  folderClientId: driveFolders.clientId,
   ownerName: employees.fullName,
   clientName: clients.name,
 };
@@ -250,6 +251,7 @@ type FileJoin = {
   file: FileRow;
   folderPath: string;
   department: string;
+  folderClientId: string | null;
   ownerName: string | null;
   clientName: string | null;
 };
@@ -274,7 +276,7 @@ function toFile(row: FileJoin, access: DriveAccess): DriveFile {
     purgeAt: file.trashedAt
       ? new Date(file.trashedAt.getTime() + DRIVE_TRASH_DAYS * DAY_MS).toISOString()
       : null,
-    canWrite: access.write,
+    canWrite: writesFolder(access, { department: row.department, clientId: row.folderClientId }),
   };
 }
 
@@ -287,12 +289,7 @@ const selectFiles = (db: Database) =>
     .leftJoin(clients, eq(clients.id, driveFiles.clientId));
 
 /** The department filter of every query over files: nothing outside it is ever matched. */
-const withinReach = (access: DriveAccess) =>
-  access.all
-    ? undefined
-    : access.departments.size > 0
-      ? inArray(driveFolders.department, [...access.departments])
-      : sql`false`;
+const withinReach = (access: DriveAccess) => folderReachSql(access);
 
 export async function listFiles(deps: DriveDeps, access: DriveAccess, folderId: string) {
   const folder = await folderFor(deps, access, folderId);
@@ -345,8 +342,9 @@ export async function fileFor(
   need: 'read' | 'write' = 'read',
 ): Promise<FileJoin> {
   const [row] = await selectFiles(deps.db).where(eq(driveFiles.id, id));
-  if (!row || !seesDepartment(access, row.department)) throw new DriveError('not_found');
-  if (need === 'write' && !access.write) throw new DriveError('forbidden');
+  const reach = { department: row?.department ?? '', clientId: row?.folderClientId ?? null };
+  if (!row || !seesFolder(access, reach)) throw new DriveError('not_found');
+  if (need === 'write' && !writesFolder(access, reach)) throw new DriveError('forbidden');
   return row;
 }
 

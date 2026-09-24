@@ -49,6 +49,7 @@ const folder: DriveFolder = {
   accessible: true,
   canWrite: true,
   managed: false,
+  slot: null,
 };
 
 const asset: MediaAsset = {

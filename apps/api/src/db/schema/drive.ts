@@ -35,6 +35,8 @@ export const driveTemplateNodes = pgTable(
     /** folder | clients */
     kind: text('kind').notNull().default('folder'),
     department: text('department').notNull(),
+    /** A `DriveFolderSlot` for the nodes of a client's tree; copied to its folders. */
+    slot: text('slot'),
     position: integer('position').notNull().default(0),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -57,6 +59,8 @@ export const driveFolders = pgTable(
     department: text('department').notNull(),
     /** Set on a client's folder and on everything inside it. */
     clientId: uuid('client_id').references(() => clients.id),
+    /** What the folder is in a client's tree (`DriveFolderSlot`), from its model node. */
+    slot: text('slot'),
     /** manual | template | client | client_child */
     origin: text('origin').notNull().default('manual'),
     /** The node of the model this folder was made from, while that node exists. */

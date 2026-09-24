@@ -2,6 +2,7 @@ import {
   DRIVE_MEDIA_FOLDER,
   DRIVE_TEMPLATE_SEED,
   WINGS_CLIENT_ID,
+  clientFolderName,
   type DriveSyncResult,
   type DriveTemplateSeed,
 } from '@wings/shared';
@@ -19,12 +20,9 @@ type FolderRow = typeof driveFolders.$inferSelect;
 type NodeRow = typeof driveTemplateNodes.$inferSelect;
 type Tx = Parameters<Parameters<Database['transaction']>[0]>[0];
 
-/** A client's name as a folder name: separators cannot be part of one. */
-export const folderNameOf = (name: string) =>
-  name
-    .replace(/[\\/\p{Cc}]/gu, '-')
-    .trim()
-    .slice(0, 120) || 'Cliente';
+/** A client's folder name: `NN. Nome` (see `clientFolderName`). */
+export const folderNameOf = (client: { number: number | null; name: string }) =>
+  clientFolderName(client.number, client.name);
 
 /** Renames a folder and rewrites the path of everything under it. */
 export async function renameFolderTree(tx: Tx | Database, folder: FolderRow, name: string) {
@@ -58,8 +56,19 @@ export async function seedDriveTemplate(db: Database): Promise<void> {
     .from(driveTemplateNodes)
     .limit(1);
   if (existing) return;
-  const write = async (nodes: DriveTemplateSeed[], parentId: string | null) => {
-    for (const [position, node] of nodes.entries()) {
+  await writeTemplateNodes(db, DRIVE_TEMPLATE_SEED, null);
+}
+
+/** Writes model nodes under `parentId`, depth first, in the given order. */
+export async function writeTemplateNodes(
+  db: Database | Tx,
+  seed: DriveTemplateSeed[],
+  parentId: string | null,
+  firstPosition = 0,
+): Promise<void> {
+  const write = async (nodes: DriveTemplateSeed[], parentId: string | null, offset: number) => {
+    for (const [index, node] of nodes.entries()) {
+      const position = offset + index;
       const [row] = await db
         .insert(driveTemplateNodes)
         .values({
@@ -67,14 +76,15 @@ export async function seedDriveTemplate(db: Database): Promise<void> {
           name: node.name,
           kind: node.clients ? 'clients' : 'folder',
           department: node.department,
+          slot: node.slot ?? null,
           position,
         })
         .returning({ id: driveTemplateNodes.id });
       if (!row) throw new Error('failed to seed drive template');
-      await write(node.children ?? [], row.id);
+      await write(node.children ?? [], row.id, 0);
     }
   };
-  await write(DRIVE_TEMPLATE_SEED, null);
+  await write(seed, parentId, firstPosition);
 }
 
 /**
@@ -83,7 +93,7 @@ export async function seedDriveTemplate(db: Database): Promise<void> {
  * that node's children inside, and a folder whose node or client was renamed
  * takes the new name. One at a time, under a lock.
  */
-export async function syncDriveFolders(db: Database): Promise<DriveSyncResult> {
+export async function syncDriveFolders(db: Database | Tx): Promise<DriveSyncResult> {
   return db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(7301, 1)`);
     const nodes = await tx
@@ -137,6 +147,7 @@ export async function syncDriveFolders(db: Database): Promise<DriveSyncResult> {
             clientId: input.clientId,
             origin: input.origin,
             templateNodeId: input.node.id,
+            slot: input.origin === 'client' ? null : input.node.slot,
           })
           .returning();
         if (!made) throw new Error('failed to create drive folder');
@@ -165,17 +176,21 @@ export async function syncDriveFolders(db: Database): Promise<DriveSyncResult> {
           result.foldersRenamed += 1;
         }
       }
+      // The client's own folder belongs to the tree's owner department, not to the container's.
+      const slot = input.origin === 'client' ? null : input.node.slot;
       if (
         folder.templateNodeId !== input.node.id ||
         folder.origin !== input.origin ||
         folder.department !== input.node.department ||
-        folder.clientId !== input.clientId
+        folder.clientId !== input.clientId ||
+        folder.slot !== slot
       ) {
         const changes = {
           templateNodeId: input.node.id,
           origin: input.origin,
           department: input.node.department,
           clientId: input.clientId,
+          slot,
         };
         await tx.update(driveFolders).set(changes).where(eq(driveFolders.id, folder.id));
         folder = Object.assign(folder, changes);
@@ -208,7 +223,7 @@ export async function syncDriveFolders(db: Database): Promise<DriveSyncResult> {
           node,
           origin: 'client',
           clientId: each.id,
-          name: folderNameOf(each.name),
+          name: folderNameOf(each),
           create: each.active,
         });
         if (!clientFolder) continue;
@@ -238,8 +253,9 @@ export async function syncDriveFolders(db: Database): Promise<DriveSyncResult> {
 
 /**
  * The folder the media library lives in: Formatação/Marketing/Mídia for Wings
- * Company, Formatação/Marketing/Clientes/<Cliente>/Mídia for a client. Found by
- * what it is (department, client, name), so a renamed "Marketing" still works.
+ * Company, Clientes/<NN. Nome>/08 Marketing/Mídia for a client. Wings' is found
+ * by what it is (department and name, no client); a client's by its slot, so
+ * renaming either in the model still works.
  */
 export async function mediaFolderFor(db: Database, clientId: string): Promise<FolderRow | null> {
   const find = () =>
@@ -249,10 +265,17 @@ export async function mediaFolderFor(db: Database, clientId: string): Promise<Fo
       .where(
         and(
           eq(driveFolders.department, 'marketing'),
-          eq(driveFolders.name, DRIVE_MEDIA_FOLDER),
           clientId === WINGS_CLIENT_ID
-            ? and(isNull(driveFolders.clientId), eq(driveFolders.origin, 'template'))
-            : and(eq(driveFolders.clientId, clientId), eq(driveFolders.origin, 'client_child')),
+            ? and(
+                eq(driveFolders.name, DRIVE_MEDIA_FOLDER),
+                isNull(driveFolders.clientId),
+                eq(driveFolders.origin, 'template'),
+              )
+            : and(
+                eq(driveFolders.clientId, clientId),
+                eq(driveFolders.origin, 'client_child'),
+                eq(driveFolders.slot, 'midia'),
+              ),
         ),
       )
       .orderBy(asc(driveFolders.createdAt))

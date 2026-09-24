@@ -358,6 +358,7 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
     parentId: row.parentId,
     name: row.name,
     kind: row.kind as DriveTemplateKind,
+    slot: (row.slot as DriveTemplateNode['slot']) ?? null,
     department: row.department as DriveDepartment,
     position: row.position,
   });
@@ -450,6 +451,14 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
     const params = idParam.safeParse(request.params);
     if (!params.success) return reply.status(404).send({ error: 'not_found' });
     const nodes = await allNodes();
+    // The client tree's folders have a function (the Portal and the import find them by it).
+    if (nodes.find((node) => node.id === params.data.id)?.slot) {
+      return reply.status(409).send({
+        error: 'folder_has_role',
+        message:
+          'Esta pasta faz parte da estrutura de cada cliente (o Portal do Cliente a usa). Renomeie, mas não exclua.',
+      });
+    }
     if (nodes.some((node) => node.parentId === params.data.id)) {
       return reply.status(409).send({
         error: 'folder_not_empty',

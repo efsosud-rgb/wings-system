@@ -23,12 +23,14 @@ const AURORA: Client = {
   name: 'Padaria Aurora',
   slug: 'padaria-aurora',
   active: true, expansionArea: [],
+  number: 3,
 };
 const WINGS: Client = {
   id: WINGS_CLIENT_ID,
   name: 'Wings Company',
   slug: 'wings-company',
   active: true, expansionArea: [],
+  number: null,
 };
 
 function renderPage() {
@@ -60,7 +62,7 @@ describe('Administração → Clientes', () => {
     expect(within(wings).queryByRole('button')).toBeNull();
 
     const aurora = screen.getByRole('cell', { name: 'Padaria Aurora' }).closest('tr') as HTMLElement;
-    expect(within(aurora).getByRole('button', { name: 'Renomear' })).toBeTruthy();
+    expect(within(aurora).getByRole('button', { name: 'Editar' })).toBeTruthy();
     expect(within(aurora).getByRole('button', { name: 'Desativar' })).toBeTruthy();
   });
 
@@ -147,5 +149,24 @@ describe('Administração → Clientes', () => {
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith('/leads/source-rules', { kind: 'landing_page', pattern: 'padaria-aurora', clientId: AURORA.id }),
     );
+  });
+  it('shows the Drive number and changes it, saying so when it is taken', async () => {
+    patch.mockRejectedValueOnce(
+      new ApiError(409, { error: 'number_taken', message: 'O número 5 já é de Sushi do Bairro.' }),
+    );
+    renderPage();
+    const row = (await screen.findByRole('cell', { name: 'Padaria Aurora' })).closest('tr') as HTMLElement;
+    expect(within(row).getByText('03')).toBeTruthy();
+    fireEvent.click(within(row).getByRole('button', { name: 'Editar' }));
+    fireEvent.change(screen.getByLabelText('Número de Padaria Aurora'), { target: { value: '5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar' }));
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith(`/clients/${AURORA.id}`, {
+        name: undefined,
+        active: undefined,
+        number: 5,
+      }),
+    );
+    expect(await screen.findByText('O número 5 já é de Sushi do Bairro.')).toBeTruthy();
   });
 });

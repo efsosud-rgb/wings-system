@@ -319,8 +319,9 @@ describe('the library inside the Drive', () => {
       clientId,
     });
     if (!forClient.ok) throw new Error('expected stored');
-    expect(await pathOf(forClient.id)).toBe(
-      '/Formatação/Marketing/Clientes/Cliente Do Drive/Mídia',
+    // Clientes/<NN. Nome>/08 Marketing/Mídia (decision of 2026-09-24).
+    expect(await pathOf(forClient.id)).toMatch(
+      /^\/Clientes\/\d{2}\. Cliente Do Drive\/08 Marketing\/Mídia$/,
     );
 
     const forWings = await storeMedia(db, mediaDir, {
@@ -336,7 +337,7 @@ describe('the library inside the Drive', () => {
       cookies,
       payload: { clientId },
     });
-    expect(await pathOf(forWings.id)).toBe('/Formatação/Marketing/Clientes/Cliente Do Drive/Mídia');
+    expect(await pathOf(forWings.id)).toBe(await pathOf(forClient.id));
   });
 
   it('leaves the library when its file goes to the Drive’s trash, and comes back when restored', async () => {

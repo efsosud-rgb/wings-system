@@ -1,5 +1,6 @@
 import {
   CLIENT_NAME_MAX,
+  CLIENT_NUMBER_MAX,
   LEAD_LINK_CHANNELS,
   LEAD_CHANNEL_LABELS,
   LEAD_SOURCE_RULE_KINDS,
@@ -152,24 +153,47 @@ function TrackingLinks({ client }: { client: Client }) {
   );
 }
 
+/** `NN` as the Drive shows it: `Clientes/07. Nome`. */
+const numberLabel = (number: number | null) =>
+  number === null ? '—' : String(number).padStart(2, '0');
+
 function ClientRow({ client, open, onToggle }: { client: Client; open: boolean; onToggle: () => void }) {
   const update = useUpdateClient();
   const [name, setName] = useState(client.name);
+  const [number, setNumber] = useState(client.number === null ? '' : String(client.number));
   const [editing, setEditing] = useState(false);
   const fixed = client.id === WINGS_CLIENT_ID;
 
   return (
     <>
       <tr>
+        <td className="mono">{editing ? null : numberLabel(client.number)}</td>
         <td>
           {editing ? (
             <form
               className="clients-rename"
               onSubmit={(event) => {
                 event.preventDefault();
-                update.mutate({ id: client.id, name }, { onSuccess: () => setEditing(false) });
+                const next = Number(number);
+                update.mutate(
+                  {
+                    id: client.id,
+                    ...(name !== client.name ? { name } : {}),
+                    ...(Number.isInteger(next) && next !== client.number ? { number: next } : {}),
+                  },
+                  { onSuccess: () => setEditing(false) },
+                );
               }}
             >
+              <input
+                className="control clients-number"
+                aria-label={`Número de ${client.name}`}
+                type="number"
+                min={1}
+                max={CLIENT_NUMBER_MAX}
+                value={number}
+                onChange={(event) => setNumber(event.target.value)}
+              />
               <input
                 className="control"
                 aria-label={`Novo nome de ${client.name}`}
@@ -185,6 +209,7 @@ function ClientRow({ client, open, onToggle }: { client: Client; open: boolean; 
                 variant="ghost"
                 onClick={() => {
                   setName(client.name);
+                  setNumber(client.number === null ? '' : String(client.number));
                   setEditing(false);
                   update.reset();
                 }}
@@ -217,7 +242,7 @@ function ClientRow({ client, open, onToggle }: { client: Client; open: boolean; 
             {!fixed && !editing && (
               <>
                 <Button type="button" variant="ghost" onClick={() => setEditing(true)}>
-                  Renomear
+                  Editar
                 </Button>
                 <Button
                   type="button"
@@ -239,7 +264,7 @@ function ClientRow({ client, open, onToggle }: { client: Client; open: boolean; 
       </tr>
       {open && (
         <tr>
-          <td colSpan={3} className="lead-client-details">
+          <td colSpan={4} className="lead-client-details">
             <ExpansionArea client={client} />
             <TrackingLinks client={client} />
           </td>
@@ -364,8 +389,9 @@ export function ClientsPage() {
       <header className="page-header">
         <h1>Clientes</h1>
         <p>
-          Para quem o trabalho é feito. A mídia gerada é arquivada pelo cliente escolhido; o nome do
-          cliente não é enviado a fornecedores.
+          Para quem o trabalho é feito. Cada cliente tem um número e uma pasta no Drive,
+          Clientes/NN. Nome, criada no cadastro. A mídia gerada é arquivada pelo cliente escolhido; o
+          nome do cliente não é enviado a fornecedores.
         </p>
       </header>
 
@@ -406,6 +432,7 @@ export function ClientsPage() {
         <table className="table">
           <thead>
             <tr>
+              <th title="O número da pasta do cliente no Drive: Clientes/NN. Nome">Nº</th>
               <th>Nome</th>
               <th>Situação</th>
               <th>
@@ -416,7 +443,7 @@ export function ClientsPage() {
           <tbody>
             {clients.isLoading && (
               <tr>
-                <td colSpan={3} className="muted">
+                <td colSpan={4} className="muted">
                   Carregando…
                 </td>
               </tr>

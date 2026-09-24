@@ -23,15 +23,17 @@ export function useCreateClient() {
 export function useUpdateClient() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: { id: string; name?: string; active?: boolean }) =>
+    mutationFn: (input: { id: string; name?: string; active?: boolean; number?: number }) =>
       api.patch<{ client: Client }>(`/clients/${input.id}`, {
         name: input.name,
         active: input.active,
+        number: input.number,
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['clients'] });
-      // Asset rows carry the client's name.
+      // Asset rows carry the client's name; the Drive's folders carry its number and name.
       void queryClient.invalidateQueries({ queryKey: ['media', 'assets'] });
+      void queryClient.invalidateQueries({ queryKey: ['drive'] });
     },
   });
 }

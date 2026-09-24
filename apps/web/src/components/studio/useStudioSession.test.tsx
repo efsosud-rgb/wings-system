@@ -275,6 +275,7 @@ const folder: DriveFolder = {
   accessible: true,
   canWrite: true,
   managed: true,
+  slot: null,
 };
 const baseFile = {
   folderId: FOLDER_ID,
