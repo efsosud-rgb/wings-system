@@ -78,6 +78,8 @@ export interface SelectedClip {
  * rich-caption asset by `clips.ts`.
  */
 export interface CaptionStyle {
+  /** One of the text fonts (`STUDIO_FONTS`), or whatever the file already carries. */
+  fontFamily: string;
   /** Font size in output pixels. */
   size: number;
   color: string;

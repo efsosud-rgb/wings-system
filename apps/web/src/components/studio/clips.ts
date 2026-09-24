@@ -134,14 +134,24 @@ export function clipFor(
   options: { durationSeconds?: number | null; output?: { width: number; height: number } } = {},
 ): Clip {
   const measured =
-    typeof options.durationSeconds === 'number' && Number.isFinite(options.durationSeconds) && options.durationSeconds > 0
+    typeof options.durationSeconds === 'number' &&
+    Number.isFinite(options.durationSeconds) &&
+    options.durationSeconds > 0
       ? Math.round(options.durationSeconds * 100) / 100
       : null;
   switch (kind) {
     case 'video':
-      return { asset: { type: 'video', src, volume: 1 }, start, length: measured ?? 'auto' } as Clip;
+      return {
+        asset: { type: 'video', src, volume: 1 },
+        start,
+        length: measured ?? 'auto',
+      } as Clip;
     case 'audio':
-      return { asset: { type: 'audio', src, volume: 1 }, start, length: measured ?? 'auto' } as Clip;
+      return {
+        asset: { type: 'audio', src, volume: 1 },
+        start,
+        length: measured ?? 'auto',
+      } as Clip;
     case 'image':
       return { asset: { type: 'image', src }, start, length: 5, fit: 'contain' } as Clip;
     case 'subtitle':
@@ -206,6 +216,7 @@ const CAPTION_LINES = 2;
  */
 export function captionStyleFor(output: { width: number; height: number }): CaptionStyle {
   return {
+    fontFamily: TEXT_FONT,
     size: Math.max(16, Math.round(output.height * 0.05)),
     color: '#ffffff',
     placement: 'bottom',
@@ -230,7 +241,12 @@ function captionBox(style: CaptionStyle, output: { width: number; height: number
     // In the core, a positive y offset moves the clip up.
     offset: {
       x: 0,
-      y: style.placement === 'bottom' ? CAPTION_EDGE_OFFSET : style.placement === 'top' ? -CAPTION_EDGE_OFFSET : 0,
+      y:
+        style.placement === 'bottom'
+          ? CAPTION_EDGE_OFFSET
+          : style.placement === 'top'
+            ? -CAPTION_EDGE_OFFSET
+            : 0,
     },
     padding,
   };
@@ -243,7 +259,13 @@ export function captionClip(src: string, output: { width: number; height: number
     asset: {
       type: 'rich-caption',
       src,
-      font: { family: TEXT_FONT, size: style.size, weight: 600, color: style.color, opacity: 1 },
+      font: {
+        family: style.fontFamily,
+        size: style.size,
+        weight: 600,
+        color: style.color,
+        opacity: 1,
+      },
       style: { lineHeight: CAPTION_LINE_HEIGHT },
       background: {
         color: style.backgroundColor,
@@ -270,6 +292,7 @@ export function captionStyleOf(clip: DocClip): CaptionStyle {
   const background = (asset.background ?? {}) as Record<string, unknown>;
   const position = clip.position;
   return {
+    fontFamily: typeof font.family === 'string' && font.family ? font.family : TEXT_FONT,
     size: numberOr(font.size, 32),
     color: typeof font.color === 'string' ? font.color : '#ffffff',
     placement: position === 'top' ? 'top' : position === 'center' ? 'middle' : 'bottom',
@@ -433,7 +456,12 @@ export function updatesFor(
     style.size = Math.min(400, Math.max(8, Math.round(style.size)));
     style.backgroundOpacity = Math.min(1, Math.max(0, style.backgroundOpacity));
     const box = captionBox(style, output ?? { width: 1920, height: 1080 });
-    const font = { ...((asset.font ?? {}) as Record<string, unknown>), size: style.size, color: style.color };
+    const font = {
+      ...((asset.font ?? {}) as Record<string, unknown>),
+      family: style.fontFamily,
+      size: style.size,
+      color: style.color,
+    };
     const background = {
       ...((asset.background ?? {}) as Record<string, unknown>),
       color: style.backgroundColor,
@@ -444,7 +472,10 @@ export function updatesFor(
     };
     asset.font = font;
     asset.background = background;
-    asset.style = { ...((asset.style ?? {}) as Record<string, unknown>), lineHeight: CAPTION_LINE_HEIGHT };
+    asset.style = {
+      ...((asset.style ?? {}) as Record<string, unknown>),
+      lineHeight: CAPTION_LINE_HEIGHT,
+    };
     updates.width = box.width;
     updates.height = box.height;
     updates.position = box.position;

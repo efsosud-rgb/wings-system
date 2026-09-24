@@ -49,12 +49,23 @@ describe('friendlyCoreError', () => {
 describe('clipFor', () => {
   it('gives a video or audio clip the length the browser measured, and only falls back to auto', async () => {
     const { clipFor } = await import('./clips.js');
-    expect(clipFor('video', 'https://x/v', 2, { durationSeconds: 84.16 })).toMatchObject({ start: 2, length: 84.16 });
-    expect(clipFor('audio', 'https://x/a', 0, { durationSeconds: 12.345 })).toMatchObject({ length: 12.35 });
-    expect(clipFor('video', 'https://x/v', 0, { durationSeconds: null })).toMatchObject({ length: 'auto' });
-    expect(clipFor('video', 'https://x/v', 0, { durationSeconds: Number.NaN })).toMatchObject({ length: 'auto' });
+    expect(clipFor('video', 'https://x/v', 2, { durationSeconds: 84.16 })).toMatchObject({
+      start: 2,
+      length: 84.16,
+    });
+    expect(clipFor('audio', 'https://x/a', 0, { durationSeconds: 12.345 })).toMatchObject({
+      length: 12.35,
+    });
+    expect(clipFor('video', 'https://x/v', 0, { durationSeconds: null })).toMatchObject({
+      length: 'auto',
+    });
+    expect(clipFor('video', 'https://x/v', 0, { durationSeconds: Number.NaN })).toMatchObject({
+      length: 'auto',
+    });
     // Images never depend on a measurement.
-    expect(clipFor('image', 'https://x/i', 0, { durationSeconds: 84 })).toMatchObject({ length: 5 });
+    expect(clipFor('image', 'https://x/i', 0, { durationSeconds: 84 })).toMatchObject({
+      length: 5,
+    });
   });
 });
 
@@ -64,13 +75,17 @@ describe('captions', () => {
   it('are born large, in the lower third, on a translucent band, two lines tall', async () => {
     const { captionClip, captionStyleFor } = await import('./clips.js');
     expect(captionStyleFor(vertical)).toEqual({
+      fontFamily: 'Work Sans',
       size: 96,
       color: '#ffffff',
       placement: 'bottom',
       backgroundColor: '#000000',
       backgroundOpacity: 0.55,
     });
-    const clip = captionClip('https://x/legenda.srt', vertical) as unknown as Record<string, unknown>;
+    const clip = captionClip('https://x/legenda.srt', vertical) as unknown as Record<
+      string,
+      unknown
+    >;
     expect(clip).toMatchObject({
       start: 0,
       length: 'end',
@@ -80,7 +95,7 @@ describe('captions', () => {
       asset: {
         type: 'rich-caption',
         src: 'https://x/legenda.srt',
-        font: { size: 96, color: '#ffffff', weight: 600 },
+        font: { family: 'Work Sans', size: 96, color: '#ffffff', weight: 600 },
         background: { color: '#000000', opacity: 0.55, wrap: true },
         align: { horizontal: 'center', vertical: 'middle' },
       },
@@ -94,11 +109,26 @@ describe('captions', () => {
 
   it('reads the style back for the panel and writes a patch onto the asset and the box', async () => {
     const { captionClip, captionStyleOf, updatesFor } = await import('./clips.js');
-    const clip = captionClip('https://x/legenda.srt', vertical) as unknown as Record<string, unknown>;
-    expect(captionStyleOf(clip)).toMatchObject({ size: 96, placement: 'bottom', backgroundOpacity: 0.55 });
+    const clip = captionClip('https://x/legenda.srt', vertical) as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(captionStyleOf(clip)).toMatchObject({
+      size: 96,
+      placement: 'bottom',
+      backgroundOpacity: 0.55,
+    });
 
     const updates = updatesFor(
-      { caption: { size: 60, placement: 'top', color: '#ffee00', backgroundOpacity: 0 } },
+      {
+        caption: {
+          fontFamily: 'Montserrat',
+          size: 60,
+          placement: 'top',
+          color: '#ffee00',
+          backgroundOpacity: 0,
+        },
+      },
       clip,
       vertical,
     ) as unknown as Record<string, unknown>;
@@ -107,11 +137,15 @@ describe('captions', () => {
       offset: { x: 0, y: -0.06 },
       width: 972,
       asset: {
-        font: { size: 60, color: '#ffee00' },
+        font: { family: 'Montserrat', size: 60, color: '#ffee00', weight: 600 },
         background: { color: '#000000', opacity: 0 },
       },
     });
     expect(updates['height']).toBe(Math.round(60 * 1.3 * 2 + 21 * 2));
+    // The chosen font reads back for the panel.
+    expect(
+      captionStyleOf({ ...clip, asset: updates['asset'] as Record<string, unknown> }),
+    ).toMatchObject({ fontFamily: 'Montserrat' });
     // A text patch on a caption changes nothing: captions are edited through `caption`.
     expect(updatesFor({ text: { text: 'x' } }, clip, vertical)).toEqual({});
   });
