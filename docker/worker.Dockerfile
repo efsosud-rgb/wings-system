@@ -59,4 +59,12 @@ COPY --from=builder --chown=node:node /app/apps/worker/package.json ./apps/worke
 # to have already run `db:migrate` (see docker/api.Dockerfile); it waits and
 # retries a few times on the "jobs" table if it hasn't yet.
 WORKDIR /app/apps/worker
+
+# No HTTP port to probe, so liveness is a file the polling loop touches every
+# round (src/liveness.ts): stale for over 2 minutes means the loop is stuck.
+# Not jobs.heartbeat_at — that column is only written while a job is running,
+# so an idle worker would look unhealthy.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD test -f /tmp/worker-alive && [ "$(( $(date +%s) - $(stat -c %Y /tmp/worker-alive) ))" -lt 120 ] || exit 1
+
 CMD ["node", "dist/index.js"]
