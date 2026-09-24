@@ -84,7 +84,13 @@ export function GeneratePanel({
       return;
     }
     setEditing(use === 'edit' ? (session.selected?.clipId ?? null) : null);
-    setTarget({ mediaAssetId: picked.mediaAssetId, use, name: picked.name, nonce: Date.now() });
+    setTarget({
+      mediaAssetId: picked.mediaAssetId,
+      clientId: picked.clientId,
+      use,
+      name: picked.name,
+      nonce: Date.now(),
+    });
   };
 
   return (
