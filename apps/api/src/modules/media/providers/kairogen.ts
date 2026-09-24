@@ -22,6 +22,7 @@ import {
   generationStateFrom,
   isCreditMismatch,
   modelsFrom,
+  requotedCreditsFrom,
   shapeOf,
 } from '../kairogen-adapter.js';
 import { periodStarts } from './quota.js';
@@ -474,6 +475,16 @@ export function kairogenProvider(config: KairogenProviderConfig): MediaProvider 
       } catch (error) {
         const failure = fromMcp(error, true);
         if (failure.code === 'rejected' && isCreditMismatch(failure.message)) {
+          const requoted = requotedCreditsFrom(failure.message);
+          if (requoted !== null) {
+            // Kairogen named the real price (an edit with a picture, which `estimate_cost`
+            // cannot be told about, is how it happens). Nothing was generated or charged.
+            throw new ProviderError(
+              'rejected',
+              `O Kairogen cobra ${requoted} créditos por esta geração, não os ${input.creditsEstimated} da estimativa${input.source ? ' (a estimativa dele não conta a imagem enviada)' : ''}. Nada foi gerado nem cobrado. O novo preço já está no botão.`,
+              requoted,
+            );
+          }
           throw new ProviderError(
             'rejected',
             `O Kairogen recusou: o custo real difere do estimado (${input.creditsEstimated} créditos). Estime de novo. ${failure.message.replace(/^O Kairogen recusou a geração\. /, '')}`,

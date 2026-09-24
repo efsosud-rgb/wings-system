@@ -968,10 +968,79 @@ async function sourceOf(deps: StudioDeps, row: GenerationRow) {
     : null;
 }
 
+/**
+ * Kairogen refused over the price and named the real one, with nothing generated
+ * and nothing charged. A new estimate with that price and exactly the same
+ * request and priced parameters goes on the record: the button shows it, and
+ * spending it is a new click. Nothing is sent again from here.
+ */
+async function requote(
+  deps: StudioDeps,
+  refused: GenerationRow,
+  credits: number,
+): Promise<MediaEstimate> {
+  const now = deps.now();
+  const brlCents =
+    refused.creditsEstimated > 0
+      ? Math.round((refused.brlCentsEstimated * credits) / refused.creditsEstimated)
+      : 0;
+  const [row] = await deps.db
+    .insert(mediaGenerations)
+    .values({
+      requestedBy: refused.requestedBy,
+      operation: refused.operation,
+      kind: refused.kind,
+      model: refused.model,
+      provider: refused.provider,
+      prompt: refused.prompt,
+      request: refused.request,
+      priceArgs: refused.priceArgs,
+      creditsEstimated: credits,
+      brlCentsEstimated: brlCents,
+      sourceAssetId: refused.sourceAssetId,
+      proposalId: refused.proposalId,
+      clientId: refused.clientId,
+      campaign: refused.campaign,
+      routedFrom: refused.routedFrom,
+      estimateExpiresAt: new Date(now.getTime() + ESTIMATE_TTL_MS),
+      createdAt: now,
+    })
+    .returning();
+  if (!row) throw new Error('failed to record estimate');
+  const usage = await usageOf(deps, refused.requestedBy, {
+    withBalance: refused.provider === 'kairogen',
+  });
+  await ledger(deps.db, row, 'estimated', {
+    creditsDelta: 0,
+    brlCentsDelta: 0,
+    balance: usage.balance,
+    now,
+  });
+  const blocked = blockedBy(usage, {
+    providerId: refused.provider as MediaProviderId,
+    credits,
+    brlCents,
+  });
+  return {
+    id: row.id,
+    credits,
+    brlCents,
+    providerId: refused.provider as MediaProviderId,
+    expiresAt: row.estimateExpiresAt.toISOString(),
+    request: refused.request as MediaEstimateRequest,
+    blockedBy: blocked?.code ?? null,
+    usage,
+    routedFrom: null,
+    warnings: [
+      `O Kairogen cobra ${credits} créditos por esta geração, não os ${refused.creditsEstimated} da estimativa dele${refused.sourceAssetId ? ': ela não conta a imagem enviada' : ''}.`,
+    ],
+  };
+}
+
 export async function startGeneration(
   deps: StudioDeps,
   input: { employeeId: string; estimateId: string },
-): Promise<GenerationRow> {
+): Promise<GenerationRow & { requote?: MediaEstimate }> {
   if (!deps.storage) {
     throw new StudioRefusal(
       'invalid_request',
@@ -1098,6 +1167,10 @@ export async function startGeneration(
   } catch (error) {
     if (error instanceof StudioRefusal) return finish('refused', error.message, true);
     if (!(error instanceof ProviderError)) throw error;
+    if (error.code === 'rejected' && error.requotedCredits !== null) {
+      const refused = await finish('refused', error.message, true);
+      return { ...refused, requote: await requote(deps, refused, error.requotedCredits) };
+    }
     // Nobody knows whether it arrived: the spend stays counted and nothing is sent again.
     if (error.code === 'outcome_unknown') return finish('unknown', error.message, false);
     return finish('refused', error.message, true);

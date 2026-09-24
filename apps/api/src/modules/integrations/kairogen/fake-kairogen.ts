@@ -479,11 +479,23 @@ export function fakeKairogen(options: FakeKairogenOptions = {}) {
         args.extra_params !== null && typeof args.extra_params === 'object'
           ? (args.extra_params as Record<string, unknown>)
           : {};
+      // As seen on staging (2026-09-24): a picture handed to a model whose edit mode
+      // switches on with it costs one credit more than `estimate_cost` says, and
+      // `estimate_cost` has no way to be told about the picture.
+      const edits =
+        Array.isArray(args.reference_image_urls) &&
+        args.reference_image_urls.length > 0 &&
+        (
+          CATALOG.find((model) => model.model_key === args.model) as
+            { modes?: { edit?: { auto_switch_on_reference?: boolean } } | null } | undefined
+        )?.modes?.edit?.auto_switch_on_reference === true;
       const charge =
-        options.chargeInsteadOfQuote ?? quote({ ...kept, ...nested, plan_key: 'free' }) ?? 0;
+        options.chargeInsteadOfQuote ??
+        (quote({ ...kept, ...nested, plan_key: 'free' }) ?? 0) + (edits ? 1 : 0);
       if (typeof args.expected_credits === 'number' && args.expected_credits !== charge) {
+        // The real wording (staging, 2026-09-24): nothing generated, nothing charged.
         return toolError(
-          `expected_credits mismatch: you expected ${args.expected_credits} but this generation costs ${charge}`,
+          `Kairogen API error (400): [GENERATION_QUOTE_MISMATCH] O custo desta geração mudou para ${charge} créditos. Confira o valor atualizado e tente novamente. The server's charge differs from the expected_credits you passed, so nothing was generated and no credits were charged — re-run estimate_cost with exactly the same params.`,
         );
       }
       if (charge > state.credits) return toolError('insufficient credits');
