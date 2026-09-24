@@ -12,6 +12,7 @@ import { AddTracksCommand } from "@core/commands/add-tracks-command";
 import { DeleteClipCommand } from "@core/commands/delete-clip-command";
 import { DeleteTrackCommand } from "@core/commands/delete-track-command";
 import { MoveClipCommand } from "@core/commands/move-clip-command";
+import { ReplaceEditCommand } from "@core/commands/replace-edit-command";
 import { SetOutputAspectRatioCommand } from "@core/commands/set-output-aspect-ratio-command";
 import { SetOutputDestinationsCommand } from "@core/commands/set-output-destinations-command";
 import { SetOutputFormatCommand } from "@core/commands/set-output-format-command";
@@ -394,6 +395,35 @@ export class Edit {
 			this.backgroundColor = prevBackgroundColor;
 			throw error;
 		}
+	}
+
+	/**
+	 * Wings: replaces the whole edit as ONE undoable command (see
+	 * `ReplaceEditCommand`). Refused with `noop` when the output (size, fps,
+	 * format, resolution, aspect ratio, destinations) or the background would
+	 * change: `loadEdit` applies those through commands of their own, and a
+	 * command cannot wait on another inside the command queue.
+	 */
+	public replaceEdit(next: EditConfig): Promise<CommandResult> {
+		EditSchema.parse(next);
+		const previous = this.getEdit({ includeIds: true });
+		const outputOf = (edit: EditConfig) => {
+			const output = edit.output ?? {};
+			return JSON.stringify([
+				output.size?.width ?? null,
+				output.size?.height ?? null,
+				output.fps ?? null,
+				output.format ?? null,
+				output.resolution ?? null,
+				output.aspectRatio ?? null,
+				output.destinations ?? null,
+				edit.timeline?.background ?? null
+			]);
+		};
+		if (outputOf(previous) !== outputOf(next)) {
+			return Promise.resolve(CommandNoop("replaceEdit keeps the output and the background"));
+		}
+		return this.executeCommand(new ReplaceEditCommand(previous, structuredClone(next), edit => this.loadEdit(edit)));
 	}
 
 	private async loadSoundtrack(soundtrack: Soundtrack): Promise<void> {
