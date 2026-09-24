@@ -536,8 +536,19 @@ async function resolve(
         (param.type === 'boolean'
           ? typeof value === 'boolean'
           : param.options.includes(String(value)));
-      if (!valid)
-        throw new StudioRefusal('invalid_request', `Parâmetro "${key}" inválido para este modelo.`);
+      if (!valid) {
+        const accepted = model.priceParams
+          .map((item) =>
+            item.type === 'boolean'
+              ? `${item.key} (true, false)`
+              : `${item.key} (${item.options.join(', ')})`,
+          )
+          .join('; ');
+        throw new StudioRefusal(
+          'invalid_request',
+          `Parâmetro "${key}" inválido para este modelo. ${accepted ? `Aceitos: ${accepted}.` : 'Este modelo não tem parâmetros de preço: mande params vazio.'}`,
+        );
+      }
     }
     let source: SourceAsset | null = null;
     if (request.referenceAssetId) {

@@ -35,6 +35,7 @@ import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factori
 import type { AgentLlm, LlmMessage, LlmRequest, LlmTurn } from '../agent/llm.js';
 import { fakeKairogen, fakePng } from '../integrations/kairogen/fake-kairogen.js';
 import { MEDIA_AGENT_SYSTEM_PROMPT, MEDIA_AGENT_TOOL_DEFINITIONS } from './agent.js';
+import { pricedArgsFor, pricedParamsOf } from './providers/kairogen.js';
 import { storeMedia } from './library.js';
 import { clearModelCache, issuePublicLink, listModels, studioDepsOf, usageOf } from './studio.js';
 
@@ -298,6 +299,49 @@ describe('the format of Kairogen’s answers', () => {
 });
 
 describe('estimate, then click, then follow', () => {
+  /** Every priced parameter of the estimate reaches the generation with the same value, key by key. */
+  function expectSameParams() {
+    const estimated = fake.state.toolCalls.filter((item) => item.name === 'estimate_cost').at(-1);
+    const generated = spending().at(-1);
+    if (!estimated || !generated) throw new Error('expected an estimate and a generation');
+    const priced = pricedParamsOf(estimated.args);
+    const sent = pricedParamsOf(generated.args);
+    for (const [key, value] of Object.entries(priced))
+      expect([key, sent[key]]).toEqual([key, value]);
+    expect(Object.keys(sent).sort()).toEqual(Object.keys(priced).sort());
+  }
+
+  it('lays out a priced parameter where each tool reads it', () => {
+    const priced = { model: 'gpt-image-2', plan_key: 'free', quantity: 1, resolution: '2k' };
+    expect(pricedArgsFor('estimate_cost', priced)).toEqual(priced);
+    expect(pricedArgsFor('generate_image', priced)).toEqual({
+      model: 'gpt-image-2',
+      quantity: 1,
+      extra_params: { resolution: '2k' },
+    });
+    expect(pricedArgsFor('generate_video', priced)).toEqual({
+      model: 'gpt-image-2',
+      quantity: 1,
+      resolution: '2k',
+    });
+  });
+
+  it('generates with exactly the parameters it estimated, resolution included (form)', async () => {
+    const { cookies } = await sessionFor('marketing');
+    const priced = await estimate(
+      cookies,
+      image({ model: 'gpt-image-2', params: { resolution: '2k' } }),
+    );
+    expect(priced.statusCode).toBe(201);
+    const quote = priced.json<{ estimate: MediaEstimate }>().estimate;
+    expect(quote.credits).toBe(24);
+    const started = await generate(cookies, { estimateId: quote.id });
+    expect(started.statusCode).toBe(201);
+    expect(started.json<{ generation: MediaGeneration }>().generation.status).toBe('running');
+    expect(spending().at(-1)?.args).toMatchObject({ extra_params: { resolution: '2k' } });
+    expectSameParams();
+  });
+
   it('asks Kairogen the price with the plan, and generates only what was priced, only on the click', async () => {
     const { cookies, employeeId } = await sessionFor('marketing');
     const priced = await estimate(cookies, image({ params: { size: '2048x2048' } }));
@@ -1179,6 +1223,32 @@ describe('the editing agent', () => {
     const after = fake.state.toolCalls.filter((item) => item.name === 'estimate_cost').length;
     expect(after - before).toBe(2);
     expect(spending()).toHaveLength(0);
+  });
+
+  it('a card generates with exactly the parameters it was priced with, and a parameter the model lacks is refused with the valid ones', async () => {
+    const { cookies } = await sessionFor('marketing');
+    script = [
+      () => ({
+        toolCalls: [
+          // Not in this model's schema: refused before any card, naming what it takes.
+          call('propor_geracao', proposal({ model: 'gpt-image-2', params: { turbo: true } })),
+          call('propor_geracao', proposal({ model: 'gpt-image-2', params: { resolution: '2k' } })),
+        ],
+      }),
+      () => ({ text: 'Propus em 2K.' }),
+    ];
+    const { message } = await talk(cookies, 'Uma imagem em 2K');
+    const results = JSON.stringify(seen.at(-1)?.messages.filter((item) => item.role === 'tool'));
+    expect(results).toMatch(/Parâmetro .{0,4}turbo.{0,4} inválido para este modelo/);
+    expect(results).toMatch(/Aceitos: .*resolution \(1k, 2k\)/);
+    const card = message?.proposals[0];
+    if (card?.kind !== 'generation' || !card.estimate) throw new Error('expected a priced card');
+    const clicked = await generate(cookies, { estimateId: card.estimate.id, proposalId: card.id });
+    expect(clicked.statusCode).toBe(201);
+    // Kairogen took it: the charge matched the quote.
+    expect(clicked.json<{ generation: MediaGeneration }>().generation.status).toBe('running');
+    const estimated = fake.state.toolCalls.filter((item) => item.name === 'estimate_cost').at(-1);
+    expect(pricedParamsOf(spending().at(-1)!.args)).toEqual(pricedParamsOf(estimated!.args));
   });
 
   it('names the right id when the agent writes a model id slightly wrong', async () => {
