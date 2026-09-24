@@ -22,6 +22,12 @@ export interface Client {
   active: boolean;
   /** Where the client is looking for franchisees: states, or cities in them. */
   expansionArea: ExpansionEntry[];
+  /**
+   * The client's number, `NN` in `Clientes/<NN. Nome>`: the next one when the
+   * client is registered, editable, never repeated. Null for Wings Company,
+   * which has no client folder.
+   */
+  number: number | null;
 }
 
 /** Accent- and case-blind, with every run of anything else collapsed to one space. */
@@ -44,12 +50,23 @@ export const clientCreateSchema = z.object({
     .refine((name) => clientSlugOf(name).length >= 2, 'Informe um nome com letras ou números'),
 });
 
+export const CLIENT_NUMBER_MAX = 9999;
+
 export const clientUpdateSchema = z
   .object({
     name: clientCreateSchema.shape.name.optional(),
     active: z.boolean().optional(),
+    number: z
+      .number({ error: 'Informe um número' })
+      .int('Use um número inteiro')
+      .min(1, 'O número começa em 1')
+      .max(CLIENT_NUMBER_MAX)
+      .optional(),
   })
-  .refine((body) => body.name !== undefined || body.active !== undefined, 'Nada a alterar');
+  .refine(
+    (body) => body.name !== undefined || body.active !== undefined || body.number !== undefined,
+    'Nada a alterar',
+  );
 
 /**
  * True when `text` names the client. What is generated for a client is filed
@@ -62,5 +79,5 @@ export function mentionsClient(text: string, clientName: string): boolean {
 
 //   GET   /clients            -> { clients: Client[] }  active first   marketing.media.read or clients.manage
 //   POST  /clients  { name }  -> { client }                            clients.manage
-//   PATCH /clients/:id { name?, active? } -> { client }                clients.manage
+//   PATCH /clients/:id { name?, active?, number? } -> { client }       clients.manage (number taken -> 409)
 //   Wings Company can be neither renamed nor deactivated.

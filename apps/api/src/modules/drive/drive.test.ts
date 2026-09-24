@@ -2,6 +2,8 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  DRIVE_CLIENT_STAGES,
+  DRIVE_FOLDER_SLOTS,
   SESSION_COOKIE,
   type Client,
   type DriveFile,
@@ -124,29 +126,38 @@ async function upload(
 describe('the folder model', () => {
   it('is seeded once, makes its folders, and running the seed again changes nothing', async () => {
     const before = await db.select().from(driveFolders);
-    expect(before.map((folder) => folder.path)).toEqual(
+    const paths = before.map((folder) => folder.path);
+    expect(paths).toEqual(
       expect.arrayContaining([
         '/Formatação',
         '/Formatação/Marketing/Mídia',
-        '/Formatação/Marketing/Clientes',
-        '/Formatação/Jurídico/Clientes',
         '/Formatação/RH-DP',
         '/Formatação/Projetos',
-        '/Formatação/Clientes',
+        '/Clientes',
         '/Comercial/Propostas Comerciais',
         '/RH-DP/Documentos',
         '/RH-DP/Contratos',
       ]),
     );
+    // The old layout is gone: no "Clientes" inside a department, no dossier.
+    expect(paths.filter((path) => path.includes('/Clientes') && path !== '/Clientes')).toEqual([]);
     expect(before.every((folder) => folder.origin === 'template')).toBe(true);
     await seed(db);
     expect(await db.select().from(driveFolders)).toHaveLength(before.length);
+    const nodes = await db.select().from(driveTemplateNodes);
+    const clientsNodes = nodes.filter((node) => node.kind === 'clients');
+    expect(clientsNodes).toHaveLength(1);
+    expect(clientsNodes[0]).toMatchObject({ parentId: null, department: 'clientes' });
+    // Every node of a client's tree has its function, for the Portal and the import.
     expect(
-      (await db.select().from(driveTemplateNodes)).filter((node) => node.kind === 'clients'),
-    ).toHaveLength(12);
+      nodes
+        .filter((node) => node.parentId !== null && node.slot !== null)
+        .map((node) => node.slot)
+        .sort(),
+    ).toEqual([...DRIVE_FOLDER_SLOTS].sort());
   });
 
-  it('gives a new client its folders everywhere, renames them with the client, and keeps them when it is switched off', async () => {
+  it('gives a new client its numbered tree, renames and renumbers it, and keeps it when it is switched off', async () => {
     const marketing = await sessionFor('marketing');
     const made = await app.inject({
       method: 'POST',
@@ -155,36 +166,43 @@ describe('the folder model', () => {
       payload: { name: 'Padaria Aurora' },
     });
     const client = made.json<{ client: Client }>().client;
-    const paths = async () =>
-      (await db.select().from(driveFolders).where(eq(driveFolders.clientId, client.id)))
-        .map((folder) => folder.path)
-        .sort();
+    expect(client.number).toBe(1);
+    const rows = async () =>
+      db.select().from(driveFolders).where(eq(driveFolders.clientId, client.id));
+    const paths = async () => (await rows()).map((folder) => folder.path).sort();
+    const root = '/Clientes/01. Padaria Aurora';
     expect(await paths()).toEqual(
-      expect.arrayContaining([
-        '/Comercial/Clientes/Padaria Aurora',
-        '/Formatação/Jurídico/Clientes/Padaria Aurora',
-        '/Formatação/Marketing/Clientes/Padaria Aurora/Mídia',
-        // The dossier.
-        '/Formatação/Clientes/Padaria Aurora/Reuniões',
-        '/Formatação/Clientes/Padaria Aurora/Documentos',
-        '/Formatação/Clientes/Padaria Aurora/Contrato',
-        '/Formatação/Clientes/Padaria Aurora/Propostas',
-        '/Formatação/Clientes/Padaria Aurora/Mídia',
-      ]),
+      [
+        root,
+        ...DRIVE_CLIENT_STAGES.map((stage) => `${root}/${stage.name}`),
+        `${root}/08 Marketing/Mídia`,
+        `${root}/Documentos Enviados`,
+        `${root}/Reuniões`,
+        `${root}/Entrega`,
+        ...DRIVE_CLIENT_STAGES.map((stage) => `${root}/Entrega/${stage.name}`),
+      ].sort(),
     );
+    // Each stage folder belongs to its department, and carries its slot.
+    const bySlot = new Map((await rows()).map((folder) => [folder.slot, folder]));
+    expect(bySlot.get('01')?.department).toBe('imersao');
+    expect(bySlot.get('05')?.department).toBe('projetos');
+    expect(bySlot.get('06')?.department).toBe('juridico');
+    expect(bySlot.get('entrega_06')?.department).toBe('juridico');
+    expect(bySlot.get('midia')?.department).toBe('marketing');
+    expect(bySlot.get('enviados')?.department).toBe('clientes');
     // Wings Company is who the work is by: it has no client folder.
     expect(
-      await db.select().from(driveFolders).where(like(driveFolders.path, '%/Clientes/Wings%')),
+      await db.select().from(driveFolders).where(like(driveFolders.path, '/Clientes/%Wings%')),
     ).toHaveLength(0);
 
     // Something made by hand inside follows the rename too.
     const admin = await sessionFor('admin_master');
-    const dossier = await folderAt(admin, '/Formatação/Clientes/Padaria Aurora/Documentos');
+    const sent = await folderAt(admin, `${root}/Documentos Enviados`);
     await app.inject({
       method: 'POST',
       url: '/drive/folders',
       cookies: admin.cookies,
-      payload: { parentId: dossier.id, name: 'Alvarás' },
+      payload: { parentId: sent.id, name: 'Alvarás' },
     });
     const count = (await paths()).length;
     await app.inject({
@@ -193,8 +211,45 @@ describe('the folder model', () => {
       cookies: marketing.cookies,
       payload: { name: 'Aurora Pães' },
     });
-    expect((await paths()).every((path) => path.includes('/Aurora Pães'))).toBe(true);
-    expect(await paths()).toContain('/Formatação/Clientes/Aurora Pães/Documentos/Alvarás');
+    expect((await paths()).every((path) => path.startsWith('/Clientes/01. Aurora Pães'))).toBe(true);
+    expect(await paths()).toContain('/Clientes/01. Aurora Pães/Documentos Enviados/Alvarás');
+
+    // The number is editable, and never repeated.
+    const renumbered = await app.inject({
+      method: 'PATCH',
+      url: `/clients/${client.id}`,
+      cookies: marketing.cookies,
+      payload: { number: 7 },
+    });
+    expect(renumbered.json<{ client: Client }>().client.number).toBe(7);
+    expect((await paths()).every((path) => path.startsWith('/Clientes/07. Aurora Pães'))).toBe(true);
+    const next = (
+      await app.inject({
+        method: 'POST',
+        url: '/clients',
+        cookies: marketing.cookies,
+        payload: { name: 'Sushi do Bairro' },
+      })
+    ).json<{ client: Client }>().client;
+    expect(next.number).toBe(8);
+    const clash = await app.inject({
+      method: 'PATCH',
+      url: `/clients/${next.id}`,
+      cookies: marketing.cookies,
+      payload: { number: 7 },
+    });
+    expect(clash.statusCode).toBe(409);
+    expect(clash.json()).toMatchObject({ error: 'number_taken' });
+    expect(
+      (
+        await app.inject({
+          method: 'PATCH',
+          url: `/clients/${next.id}`,
+          cookies: marketing.cookies,
+          payload: { number: 0 },
+        })
+      ).statusCode,
+    ).toBe(400);
     expect(await paths()).toHaveLength(count);
 
     await app.inject({
@@ -226,6 +281,15 @@ describe('the folder model', () => {
     expect(added.json()).toMatchObject({ node: { department: 'comercial', kind: 'folder' } });
     // A "Clientes" inside a "Clientes" is refused.
     const clientsNode = nodes.find((node) => node.kind === 'clients');
+    // A folder of the client's tree has a function: it can be renamed, not taken out.
+    const stageNode = nodes.find((node) => node.parentId === clientsNode?.id);
+    const refused = await app.inject({
+      method: 'DELETE',
+      url: `/drive/template/${stageNode?.id}`,
+      cookies: admin.cookies,
+    });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: 'folder_has_role' });
     expect(
       (
         await app.inject({
@@ -258,11 +322,12 @@ describe('the folder model', () => {
 });
 
 describe('who sees what, decided by the server', () => {
+  // Outside the client tree; the tree has a test of its own below.
   const accessible = (folders: DriveFolder[]) =>
     [
       ...new Set(
         folders
-          .filter((folder) => folder.accessible)
+          .filter((folder) => folder.accessible && !folder.path.startsWith('/Clientes'))
           .map((f) => f.path.split('/').slice(0, 3).join('/')),
       ),
     ].sort();
@@ -277,10 +342,10 @@ describe('who sees what, decided by the server', () => {
     ['formatacao_ti', ['/Formatação/TI']],
     [
       'rh_dp',
-      ['/Formatação/RH-DP', '/RH-DP', '/RH-DP/Clientes', '/RH-DP/Contratos', '/RH-DP/Documentos'],
+      ['/Formatação/RH-DP', '/RH-DP', '/RH-DP/Contratos', '/RH-DP/Documentos'],
     ],
-    ['gerente_comercial', ['/Comercial', '/Comercial/Clientes', '/Comercial/Propostas Comerciais']],
-    ['vendedor_expansao', ['/Comercial', '/Comercial/Clientes', '/Comercial/Propostas Comerciais']],
+    ['gerente_comercial', ['/Comercial', '/Comercial/Propostas Comerciais']],
+    ['vendedor_expansao', ['/Comercial', '/Comercial/Propostas Comerciais']],
   ] as [RoleKey, string[]][])('%s works only in its own tree', async (role, expected) => {
     const session = await sessionFor(role);
     const folders = await tree(session);
@@ -300,6 +365,66 @@ describe('who sees what, decided by the server', () => {
     const other = role === 'formatacao_ti' ? '/Formatação/Jurídico' : '/Formatação/TI';
     expect(folders.some((folder) => folder.path.startsWith(other))).toBe(false);
   });
+
+  const IMERSAO = ['01', '02', '03', 'entrega_01', 'entrega_02', 'entrega_03'];
+  const ALL_SLOTS = ['client', ...DRIVE_FOLDER_SLOTS];
+  it.each([
+    // [role, what it reads, what it writes], by slot ('client' is the client's own folder).
+    ['marketing', [...IMERSAO, '08', 'midia', 'entrega_08'], ['08', 'midia', 'entrega_08']],
+    ['formatacao_juridico', [...IMERSAO, '06', 'entrega_06'], ['06', 'entrega_06']],
+    ['formatacao_financeiro', [...IMERSAO, '04', 'entrega_04'], ['04', 'entrega_04']],
+    ['formatacao_contabil_tributario', [...IMERSAO, '04', 'entrega_04'], ['04', 'entrega_04']],
+    ['formatacao_logistica', IMERSAO, []],
+    ['formatacao_ti', IMERSAO, []],
+    ['rh_dp', IMERSAO, []],
+    ['gerente_comercial', ['07', 'entrega_07'], ['07', 'entrega_07']],
+    ['vendedor_expansao', ['07', 'entrega_07'], ['07', 'entrega_07']],
+    // Processos e Projetos sees the whole client and runs 01–03, 05 and the client's own folders.
+    [
+      'formatacao_processos_projetos',
+      ALL_SLOTS,
+      ['client', ...IMERSAO, '05', 'entrega_05', 'enviados', 'reunioes', 'entrega'],
+    ],
+  ] as [RoleKey, string[], string[]][])(
+    'in a client’s tree, %s reads and writes exactly its folders',
+    async (role, reads, writes) => {
+      const admin = await sessionFor('admin_master');
+      const created = await app.inject({
+        method: 'POST',
+        url: '/clients',
+        cookies: admin.cookies,
+        payload: { name: `Cliente de ${role}` },
+      });
+      const clientId = created.json<{ client: Client }>().client.id;
+      const session = await sessionFor(role);
+      const mine = (await tree(session)).filter((folder) => folder.clientId === clientId);
+      const slotOf = (folder: DriveFolder) => folder.slot ?? 'client';
+      expect(mine.filter((folder) => folder.accessible).map(slotOf).sort()).toEqual([...reads].sort());
+      expect(mine.filter((folder) => folder.canWrite).map(slotOf).sort()).toEqual([...writes].sort());
+
+      // Read-only is enforced by the server, not only shown: an upload into 01 is refused.
+      const imersao = mine.find((folder) => folder.slot === '01');
+      if (imersao?.accessible && !imersao.canWrite) {
+        const asked = await app.inject({
+          method: 'POST',
+          url: '/drive/uploads',
+          cookies: session.cookies,
+          payload: { folderId: imersao.id, name: 'a.pdf', mimeType: 'application/pdf', byteSize: 3 },
+        });
+        expect(asked.statusCode).toBe(403);
+      }
+      // A folder it does not read answers 404, like any other department's.
+      const hidden = (await tree(admin)).find(
+        (folder) => folder.clientId === clientId && !reads.includes(folder.slot ?? 'client'),
+      );
+      if (hidden) {
+        expect(
+          (await app.inject({ url: `/drive/folders/${hidden.id}`, cookies: session.cookies }))
+            .statusCode,
+        ).toBe(404);
+      }
+    },
+  );
 
   it.each(['admin_master', 'diretoria'] as RoleKey[])('%s sees everything', async (role) => {
     const session = await sessionFor(role);

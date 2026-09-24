@@ -6,7 +6,7 @@ import {
   type Client,
   type ExpansionEntry,
 } from '@wings/shared';
-import { and, asc, desc, eq, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { Database } from '../../db/client.js';
@@ -23,6 +23,7 @@ export const toClient = (row: ClientRow): Client => ({
   slug: row.slug,
   active: row.active,
   expansionArea: Array.isArray(row.expansionArea) ? (row.expansionArea as ExpansionEntry[]) : [],
+  number: row.number ?? null,
 });
 
 /** Wings Company first, then the active ones by name, then the inactive. */
@@ -67,17 +68,29 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
           message: body.error.issues[0]?.message ?? 'Dados inválidos',
         });
       }
-      const [row] = await db
-        .insert(clients)
-        .values({ name: body.data.name, slug: clientSlugOf(body.data.name) })
-        .onConflictDoNothing()
-        .returning();
+      // The next number, under a lock so two registrations never take the same one.
+      const row = await db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(7301, 2)`);
+        const [last] = await tx
+          .select({ number: sql<number | null>`max(${clients.number})` })
+          .from(clients);
+        const [made] = await tx
+          .insert(clients)
+          .values({
+            name: body.data.name,
+            slug: clientSlugOf(body.data.name),
+            number: (last?.number ?? 0) + 1,
+          })
+          .onConflictDoNothing()
+          .returning();
+        return made;
+      });
       if (!row) {
         return reply
           .status(409)
           .send({ error: 'client_exists', message: 'Já existe um cliente com este nome.' });
       }
-      // A new client gets its folder under every "Clientes" of the Drive, at once.
+      // A new client gets its tree under Clientes/<NN. Nome>, at once.
       const folders = await syncDriveFolders(db);
       await writeAudit(db, {
         actorEmployeeId: request.session.actor.employeeId,
@@ -109,6 +122,17 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
           message: 'Wings Company é o cliente padrão e não pode ser alterado.',
         });
       }
+      if (body.data.number !== undefined) {
+        const holder = await db.query.clients.findFirst({
+          where: and(eq(clients.number, body.data.number), ne(clients.id, params.data.id)),
+        });
+        if (holder) {
+          return reply.status(409).send({
+            error: 'number_taken',
+            message: `O número ${body.data.number} já é de ${holder.name}.`,
+          });
+        }
+      }
       const slug = body.data.name === undefined ? undefined : clientSlugOf(body.data.name);
       if (slug !== undefined) {
         const taken = await db.query.clients.findFirst({
@@ -125,6 +149,7 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
         .set({
           ...(body.data.name !== undefined ? { name: body.data.name, slug } : {}),
           ...(body.data.active !== undefined ? { active: body.data.active } : {}),
+          ...(body.data.number !== undefined ? { number: body.data.number } : {}),
         })
         .where(eq(clients.id, params.data.id))
         .returning();
@@ -141,6 +166,7 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
         metadata: {
           slug: row.slug,
           active: row.active,
+          number: row.number,
           driveFoldersCreated: folders.foldersCreated,
           driveFoldersRenamed: folders.foldersRenamed,
         },

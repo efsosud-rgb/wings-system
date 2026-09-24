@@ -28,14 +28,19 @@ export const DRIVE_DEPARTMENTS = {
   rh_dp: 'RH-DP',
   projetos: 'Projetos',
   comercial: 'Comercial',
+  /** The client tree's own folders: `Clientes`, each client, Documentos Enviados, Reuniões, Entrega. */
+  clientes: 'Clientes',
+  /** 01 Boas Vindas, 02 Imersão, 03 Desenvolvimento Estratégico: every Formatação area reads them. */
+  imersao: 'Imersão (01–03)',
 } as const;
 export type DriveDepartment = keyof typeof DRIVE_DEPARTMENTS;
 export const DRIVE_DEPARTMENT_KEYS = Object.keys(DRIVE_DEPARTMENTS) as DriveDepartment[];
 
 /**
- * The departments a role works in. A role with `drive.read` at scope `all`
- * (Admin Master, Diretoria) is not listed: it sees every folder. `formatacao`
- * and `producao` belong to nobody in particular, so only those two see them.
+ * The departments a role works in: it sees them and, with `drive.write`,
+ * writes in them. A role with `drive.read` at scope `all` (Admin Master,
+ * Diretoria) is not listed: it sees every folder. `formatacao` and
+ * `producao` belong to nobody in particular, so only those two see them.
  */
 export const DRIVE_ROLE_DEPARTMENTS: Partial<Record<RoleKey, readonly DriveDepartment[]>> = {
   marketing: ['marketing'],
@@ -47,10 +52,35 @@ export const DRIVE_ROLE_DEPARTMENTS: Partial<Record<RoleKey, readonly DriveDepar
   formatacao_financeiro: ['financeiro'],
   // There is no Contábil folder in the model: accounting works inside Financeiro.
   formatacao_contabil_tributario: ['financeiro'],
-  formatacao_processos_projetos: ['processos', 'projetos'],
+  // Processos e Projetos runs the client: 01–03 and 05, plus the client's own folders.
+  formatacao_processos_projetos: ['processos', 'projetos', 'imersao', 'clientes'],
   formatacao_logistica: ['logistica'],
   formatacao_ti: ['ti'],
 };
+
+/**
+ * Departments a role only READS: listed, searched and opened, never written.
+ * Decision of 2026-09-24: 01 Boas Vindas, 02 Imersão and 03 Desenvolvimento
+ * Estratégico are the base every Formatação consultant (and their agents)
+ * works from, so every Formatação area reads them; Processos e Projetos
+ * writes them.
+ */
+export const DRIVE_ROLE_READ_ONLY_DEPARTMENTS: Partial<Record<RoleKey, readonly DriveDepartment[]>> = {
+  marketing: ['imersao'],
+  rh_dp: ['imersao'],
+  formatacao_juridico: ['imersao'],
+  formatacao_financeiro: ['imersao'],
+  formatacao_contabil_tributario: ['imersao'],
+  formatacao_logistica: ['imersao'],
+  formatacao_ti: ['imersao'],
+};
+
+/**
+ * Roles that read EVERY folder of every client (the whole `Clientes/<NN. Nome>`
+ * tree, whatever its department), besides the `all` roles. Reading only:
+ * writing still follows `DRIVE_ROLE_DEPARTMENTS`.
+ */
+export const DRIVE_CLIENT_VIEW_ROLES: readonly RoleKey[] = ['formatacao_processos_projetos'];
 
 // ---------------------------------------------------------------------------
 // Names
@@ -82,6 +112,45 @@ const tagsSchema = z
 /** How a folder came to be: by hand, from the model, or for a client under a model node. */
 export type DriveFolderOrigin = 'manual' | 'template' | 'client' | 'client_child';
 
+/**
+ * What a folder of a client IS, independent of its name: the import from
+ * Google Drive and the Client Portal find folders by slot, never by name, so
+ * renaming "04 Financeiro" in the model breaks neither. Set on model nodes
+ * and copied to the folders made from them.
+ */
+export const DRIVE_CLIENT_STAGES = [
+  { slot: '01', name: '01 Boas Vindas', department: 'imersao' },
+  { slot: '02', name: '02 Imersão', department: 'imersao' },
+  { slot: '03', name: '03 Desenvolvimento Estratégico', department: 'imersao' },
+  { slot: '04', name: '04 Financeiro', department: 'financeiro' },
+  { slot: '05', name: '05 Operacional', department: 'projetos' },
+  { slot: '06', name: '06 Jurídico', department: 'juridico' },
+  { slot: '07', name: '07 Comercial', department: 'comercial' },
+  { slot: '08', name: '08 Marketing', department: 'marketing' },
+] as const satisfies readonly { slot: string; name: string; department: DriveDepartment }[];
+
+export type DriveStageSlot = (typeof DRIVE_CLIENT_STAGES)[number]['slot'];
+
+export const DRIVE_FOLDER_SLOTS = [
+  ...DRIVE_CLIENT_STAGES.map((stage) => stage.slot),
+  'midia',
+  'enviados',
+  'reunioes',
+  'entrega',
+  ...DRIVE_CLIENT_STAGES.map((stage) => `entrega_${stage.slot}` as const),
+] as const;
+export type DriveFolderSlot = (typeof DRIVE_FOLDER_SLOTS)[number];
+
+/** `NN. Nome`: two digits up to 99, then as many as it takes. */
+export function clientFolderName(number: number | null, name: string): string {
+  const clean =
+    name
+      .replace(/[\\/\p{Cc}]/gu, '-')
+      .trim()
+      .slice(0, 110) || 'Cliente';
+  return number === null ? clean : `${String(number).padStart(2, '0')}. ${clean}`;
+}
+
 export interface DriveFolder {
   id: string;
   parentId: string | null;
@@ -99,6 +168,8 @@ export interface DriveFolder {
   canWrite: boolean;
   /** Folders of the model and of clients are kept by the system: no rename, move or delete. */
   managed: boolean;
+  /** What the folder is inside a client's tree, or null. */
+  slot: DriveFolderSlot | null;
 }
 
 export interface DriveFile {
@@ -221,6 +292,7 @@ export interface DriveTemplateNode {
   kind: DriveTemplateKind;
   department: DriveDepartment;
   position: number;
+  slot: DriveFolderSlot | null;
 }
 
 export const driveTemplateNodeCreateSchema = z.object({
@@ -252,67 +324,85 @@ export interface DriveTemplateSeed {
   name: string;
   department: DriveDepartment;
   clients?: boolean;
+  slot?: DriveFolderSlot;
   children?: DriveTemplateSeed[];
 }
 
-const clientsOf = (
-  department: DriveDepartment,
-  children: DriveTemplateSeed[] = [],
-): DriveTemplateSeed => ({ name: DRIVE_CLIENTS_FOLDER, department, clients: true, children });
-
-const area = (
-  name: string,
-  department: DriveDepartment,
-  children: DriveTemplateSeed[] = [],
-): DriveTemplateSeed => ({ name, department, children: [...children, clientsOf(department)] });
-
-const plain = (name: string, department: DriveDepartment): DriveTemplateSeed => ({
+const plain = (name: string, department: DriveDepartment, children: DriveTemplateSeed[] = []): DriveTemplateSeed => ({
   name,
   department,
+  children,
 });
+
+/**
+ * One client's tree (decision of 2026-09-24): the eight stages, what the client
+ * sends, the meetings, and `Entrega`, the finished material the Client Portal
+ * shows, mirroring the eight stages. The media library of a client is
+ * `08 Marketing/Mídia`.
+ */
+export const DRIVE_CLIENT_TREE: DriveTemplateSeed[] = [
+  ...DRIVE_CLIENT_STAGES.map(
+    (stage): DriveTemplateSeed => ({
+      name: stage.name,
+      department: stage.department,
+      slot: stage.slot,
+      children:
+        stage.slot === '08'
+          ? [{ name: DRIVE_MEDIA_FOLDER, department: 'marketing', slot: 'midia' }]
+          : [],
+    }),
+  ),
+  { name: 'Documentos Enviados', department: 'clientes', slot: 'enviados' },
+  { name: 'Reuniões', department: 'clientes', slot: 'reunioes' },
+  {
+    name: 'Entrega',
+    department: 'clientes',
+    slot: 'entrega',
+    children: DRIVE_CLIENT_STAGES.map(
+      (stage): DriveTemplateSeed => ({
+        name: stage.name,
+        department: stage.department,
+        slot: `entrega_${stage.slot}`,
+      }),
+    ),
+  },
+];
+
+export const DRIVE_CLIENTS_ROOT: DriveTemplateSeed = {
+  name: DRIVE_CLIENTS_FOLDER,
+  department: 'clientes',
+  clients: true,
+  children: DRIVE_CLIENT_TREE,
+};
 
 export const DRIVE_TEMPLATE_SEED: DriveTemplateSeed[] = [
   {
     name: 'Formatação',
     department: 'formatacao',
     children: [
-      {
-        name: 'Marketing',
-        department: 'marketing',
-        children: [
-          // The media library, and each client's share of it.
-          plain(DRIVE_MEDIA_FOLDER, 'marketing'),
-          clientsOf('marketing', [plain(DRIVE_MEDIA_FOLDER, 'marketing')]),
-        ],
-      },
-      area('Jurídico', 'juridico'),
-      area('Financeiro', 'financeiro'),
-      area('Produção', 'producao'),
-      area('Processos', 'processos'),
-      area('Logística', 'logistica'),
-      area('TI', 'ti'),
-      area('RH-DP', 'rh_dp'),
-      area('Projetos', 'projetos'),
-      // The client's dossier.
-      clientsOf('formatacao', [
-        plain('Reuniões', 'formatacao'),
-        plain('Documentos', 'formatacao'),
-        plain('Contrato', 'formatacao'),
-        plain('Propostas', 'formatacao'),
-        plain(DRIVE_MEDIA_FOLDER, 'formatacao'),
-      ]),
+      // Wings' own media library. A client's is Clientes/<NN. Nome>/08 Marketing/Mídia.
+      plain('Marketing', 'marketing', [plain(DRIVE_MEDIA_FOLDER, 'marketing')]),
+      plain('Jurídico', 'juridico'),
+      plain('Financeiro', 'financeiro'),
+      plain('Produção', 'producao'),
+      plain('Processos', 'processos'),
+      plain('Logística', 'logistica'),
+      plain('TI', 'ti'),
+      plain('RH-DP', 'rh_dp'),
+      plain('Projetos', 'projetos'),
     ],
   },
   {
     name: 'Comercial',
     department: 'comercial',
-    children: [plain('Propostas Comerciais', 'comercial'), clientsOf('comercial')],
+    children: [plain('Propostas Comerciais', 'comercial')],
   },
   {
     name: 'RH-DP',
     department: 'rh_dp',
-    children: [plain('Documentos', 'rh_dp'), plain('Contratos', 'rh_dp'), clientsOf('rh_dp')],
+    children: [plain('Documentos', 'rh_dp'), plain('Contratos', 'rh_dp')],
   },
+  DRIVE_CLIENTS_ROOT,
 ];
 
 //   GET    /drive/tree                         -> { folders: DriveFolder[] }                 drive.read
