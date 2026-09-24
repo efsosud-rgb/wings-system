@@ -155,9 +155,47 @@ não está lá, ou com tamanho diferente, vira `failed` com `output_missing`.
 | `render_failed`     | FFmpeg terminou com erro                                                |
 | `timeout`           | passou de `RENDER_TIMEOUT_SECONDS` (padrão 7200)                        |
 | `output_missing`    | (API) o objeto prometido não estava no storage ao arquivar              |
+| `worker_lost`       | o worker parou no meio do job (ver "Job abandonado")                    |
 
 Formato de `error`: `render_failed: ffmpeg exited with status 1`. Sem stack,
 sem stderr inteiro (o stderr do FFmpeg traz o caminho do arquivo temporário).
+
+## Job abandonado
+
+O worker grava `heartbeat_at` ao pegar o job e a cada 30 s enquanto ele roda.
+Se o processo morre (OOM, deploy, reinício do container), o job fica
+`running` e o heartbeat para. Todo worker procura, a cada minuto, jobs dos
+tipos que ele atende sem heartbeat há mais de:
+
+| Tipo          | Sem heartbeat há |
+| ------------- | ---------------- |
+| `ffprobe`     | 2 min            |
+| `transcribe`  | 5 min            |
+| `render`      | 5 min            |
+| `enrich_lead` | 5 min            |
+
+O trabalho pesado roda em processo filho (FFmpeg, Whisper), então esses
+tempos só precisam cobrir um event loop ocupado e um banco lento, não a
+duração do job. Linha pega antes de `heartbeat_at` existir conta a partir de
+`started_at`.
+
+O que acontece com o job abandonado:
+
+- **`render`**: nunca volta para a fila. Se o objeto já está em
+  `output.storageKey` (o upload é tudo ou nada), o render foi entregue: vira
+  `done` com `output.recovered = true`, `renderSeconds = null` e o checksum
+  lido do storage, e a API o arquiva no Drive como qualquer outro. Se não
+  está, vira `failed` com `worker_lost` e a pessoa pede de novo pela tela.
+- **`enrich_lead`**: uma tentativa só (as buscas são pagas); vira `failed`.
+- **`ffprobe` e `transcribe`**: voltam para `pending` enquanto `attempts` for
+  menor que `WORKER_MAX_ATTEMPTS` (padrão 3), com `error` dizendo a tentativa;
+  no limite, `failed` com `worker_lost`.
+
+Cada decisão é um `update` condicional que confere de novo o id, o número da
+tentativa e o heartbeat, então duas réplicas não decidem o mesmo job e um
+worker só lento, que bateu no meio, fica com o seu. Pelo mesmo motivo,
+`completeJob` e `failJob` só gravam se o job ainda é daquela tentativa: um
+worker que volta atrasado não sobrescreve quem veio depois.
 
 ## Limites
 

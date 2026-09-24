@@ -211,6 +211,13 @@
       "when": 1790189064347,
       "tag": "0029_lead_intake",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1790256734016,
+      "tag": "0030_jobs_heartbeat",
+      "breakpoints": true
     }
   ]
 }
