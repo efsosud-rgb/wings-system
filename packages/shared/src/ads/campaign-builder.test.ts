@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CREATIVE_FORMATS,
+  minDailyBudgetCents,
   PAID_PLATFORMS,
   PLATFORM_REACH,
   PLATFORM_STATUS_LABEL,
@@ -330,6 +331,17 @@ describe('Meta drafts: ad set and ads', () => {
       creativeIds: ['11111111-1111-4111-8111-111111111111'],
       videoIds: [],
     });
+  });
+
+  it("refuses a daily budget below the account's Meta floor of R$ 5,17", () => {
+    const low = campaignDraftSchema.safeParse({ ...meta, dailyBudgetCents: 516 });
+    expect(low.success).toBe(false);
+    expect(low.error?.issues.map((issue) => issue.message)).toContain(
+      'A verba diária mínima na Meta é R$ 5,17',
+    );
+    expect(ok({ dailyBudgetCents: 517 })).toBe(true);
+    expect(minDailyBudgetCents('meta')).toBe(517);
+    expect(minDailyBudgetCents('google_search')).toBe(100);
   });
 
   it('never lets anything be born active, on Meta either', () => {
