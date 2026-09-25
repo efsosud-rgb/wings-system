@@ -29,8 +29,8 @@ import {
   MAX_VIDEO_BYTES,
   MIN_AGE,
   MIN_CAROUSEL_CARDS,
-  MIN_DAILY_BUDGET_CENTS,
   MIN_VARIATIONS,
+  minDailyBudgetCents,
   PAID_PLATFORMS,
   PLACEMENT_POSITION_LABEL,
   PLACEMENT_PUBLISHERS,
@@ -940,8 +940,8 @@ export function PaidMediaBuilder({
       ? 'Falta a verba por dia.'
       : !Number.isFinite(typedBudgetCents)
         ? `Não entendi “${budgetText.trim()}”. Digite só o valor, como 20,00.`
-        : dailyBudgetCents < MIN_DAILY_BUDGET_CENTS
-          ? 'A verba por dia precisa ser de pelo menos R$ 1,00.'
+        : dailyBudgetCents < minDailyBudgetCents(platform)
+          ? `A verba por dia precisa ser de pelo menos ${formatBrl(minDailyBudgetCents(platform))}.`
           : !values.startDate || !values.endDate
             ? 'Falta escolher o início e o fim da campanha.'
             : days === null

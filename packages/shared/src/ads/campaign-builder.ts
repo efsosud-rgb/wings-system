@@ -731,6 +731,16 @@ export const PRIMARY_TEXT_MAX = 500;
 export const PRIMARY_TEXT_RECOMMENDED = 125;
 /** Smallest daily budget the system will ask for: R$ 1,00. Meta may demand more. */
 export const MIN_DAILY_BUDGET_CENTS = 100;
+/**
+ * The Fly High account's own floor on Meta (`min_daily_budget` = 517, read on
+ * 2026-09-25): Meta refuses a campaign below it, so the builder stops it first.
+ */
+export const META_MIN_DAILY_BUDGET_CENTS = 517;
+
+/** The smallest daily budget a draft may carry on each platform. */
+export function minDailyBudgetCents(platform: DraftPlatform | undefined): number {
+  return platform === 'meta' ? META_MIN_DAILY_BUDGET_CENTS : MIN_DAILY_BUDGET_CENTS;
+}
 
 const compliantText = (max: number, label: string) =>
   z
@@ -1314,6 +1324,13 @@ export const campaignDraftSchema = z
       });
 
     if (draft.platform === 'meta') {
+      if (draft.dailyBudgetCents < META_MIN_DAILY_BUDGET_CENTS) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['dailyBudgetCents'],
+          message: 'A verba diária mínima na Meta é R$ 5,17',
+        });
+      }
       if (!CREATIVE_FORMATS.meta.some((format) => format.key === draft.formatKey)) {
         ctx.addIssue({
           code: 'custom',

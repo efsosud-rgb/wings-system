@@ -378,7 +378,7 @@ describe('the paid-media builder', () => {
     expect(cost()?.textContent).toContain('Não entendi “20 reais”');
 
     type(screen.getByLabelText(/Verba por dia/), '0,50');
-    expect(cost()?.textContent).toContain('pelo menos R$ 1,00');
+    expect(cost()?.textContent).toMatch(/pelo menos R\$\s5,17/);
 
     type(screen.getByLabelText(/Verba por dia/), '20');
     type(screen.getByLabelText(/^Fim/), '');
