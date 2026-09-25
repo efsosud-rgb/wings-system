@@ -9,6 +9,7 @@ import type {
   CreativeSpec,
   MutationOutcome,
   StepOutcome,
+  UploadedVideo,
 } from './types.js';
 
 /**
@@ -112,7 +113,16 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
 
     const text = await response.text();
     if (!response.ok) {
-      let parsed: { error?: { message?: string; code?: number } } = {};
+      let parsed: {
+        error?: {
+          message?: string;
+          code?: number;
+          error_subcode?: number;
+          error_user_title?: string;
+          error_user_msg?: string;
+          fbtrace_id?: string;
+        };
+      } = {};
       try {
         parsed = JSON.parse(text) as typeof parsed;
       } catch {
@@ -123,15 +133,32 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
       if (response.status >= 500) {
         return { failure: { status: 'unknown', reason: `platform error ${response.status}` } };
       }
+      // Everything Meta says about why, kept: "100: Invalid parameter" alone
+      // once left a failed creative with nothing to diagnose (2026-09-25).
+      const error = parsed.error ?? {};
+      const detail: Record<string, unknown> = {
+        ...(error.error_subcode !== undefined ? { subcode: error.error_subcode } : {}),
+        ...(error.error_user_title ? { userTitle: error.error_user_title } : {}),
+        ...(error.error_user_msg ? { userMessage: error.error_user_msg } : {}),
+        ...(error.fbtrace_id ? { fbtraceId: error.fbtrace_id } : {}),
+      };
+      const parts = [error.message ?? `Meta rejected the change (${response.status})`];
+      if (error.error_user_title || error.error_user_msg) {
+        parts.push([error.error_user_title, error.error_user_msg].filter(Boolean).join(': '));
+      }
+      const tags = [
+        ...(error.error_subcode !== undefined ? [`subcode ${error.error_subcode}`] : []),
+        ...(error.fbtrace_id ? [`fbtrace ${error.fbtrace_id}`] : []),
+      ];
       return {
         failure: {
           status: 'rejected',
           code: String(code),
-          message: parsed.error?.message ?? `Meta rejected the change (${response.status})`,
+          message: `${parts.join(' — ')}${tags.length > 0 ? ` [${tags.join(', ')}]` : ''}`,
+          ...(Object.keys(detail).length > 0 ? { detail } : {}),
         },
       };
     }
-
     return { body: text };
   }
 
@@ -260,7 +287,7 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
     filePath: string;
     byteSize: number;
     name: string;
-  }): Promise<StepOutcome<{ videoId: string; thumbnailUrl: string }>> {
+  }): Promise<StepOutcome<UploadedVideo>> {
     const path = `${this.accountPath()}/advideos`;
     const started = await this.send(path, {
       upload_phase: 'start',
@@ -348,18 +375,91 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
       await new Promise((resolve) => setTimeout(resolve, this.videoPollIntervalMs));
     }
 
-    // A video ad needs a still; Meta generates them during processing.
+    // A video ad needs a still; Meta generates them during processing. The
+    // still becomes an ad image of its own (see `videoStill`).
+    const still = await this.videoStill(videoId, input.name);
+    if (still.status !== 'created') {
+      return orphan(still.status === 'rejected' ? still.message : still.reason);
+    }
+    return { status: 'created', value: { videoId, ...still.value } };
+  }
+
+  /**
+   * A video already in the account, put there by an earlier execution. Reads
+   * that Meta still has it and that it is ready, then makes its still an ad
+   * image (the same bytes give the same hash, so nothing is duplicated).
+   */
+  async reuseVideo(videoId: string, name: string): Promise<StepOutcome<UploadedVideo>> {
+    let status: string | undefined;
+    try {
+      const body = await this.get<{ status?: { video_status?: string } }>(videoId, {
+        fields: 'status',
+      });
+      status = body.status?.video_status;
+    } catch {
+      return {
+        status: 'rejected',
+        code: 'video_unreadable',
+        message: `O vídeo ${videoId} não pôde ser lido na Meta.`,
+      };
+    }
+    if (status !== 'ready') {
+      return {
+        status: 'rejected',
+        code: 'video_not_ready',
+        message: `O vídeo ${videoId} não está pronto na Meta (${status ?? 'sem status'}).`,
+      };
+    }
+    const still = await this.videoStill(videoId, name);
+    if (still.status !== 'created') return still;
+    return { status: 'created', value: { videoId, ...still.value } };
+  }
+
+  /**
+   * The video's preferred thumbnail, downloaded and uploaded as an ad image.
+   * Meta's signed CDN address was refused as `video_data.image_url` on the
+   * first real write ("100: Invalid parameter", 2026-09-25); an `image_hash`
+   * from `adimages` is the documented, stable way to give a video ad its
+   * picture.
+   */
+  private async videoStill(
+    videoId: string,
+    name: string,
+  ): Promise<StepOutcome<{ thumbnailUrl: string; imageHash: string }>> {
+    let thumbnailUrl: string | undefined;
     try {
       const thumbnails = await this.get<{ data?: { uri?: string; is_preferred?: boolean }[] }>(
         `${videoId}/thumbnails`,
       );
       const rows = thumbnails.data ?? [];
-      const thumbnailUrl = (rows.find((row) => row.is_preferred) ?? rows[0])?.uri;
-      if (!thumbnailUrl) return orphan('a Meta não gerou uma capa para o vídeo');
-      return { status: 'created', value: { videoId, thumbnailUrl } };
+      thumbnailUrl = (rows.find((row) => row.is_preferred) ?? rows[0])?.uri;
     } catch {
-      return orphan('não foi possível ler a capa do vídeo');
+      return { status: 'unknown', reason: 'não foi possível ler a capa do vídeo' };
     }
+    if (!thumbnailUrl) {
+      return { status: 'unknown', reason: 'a Meta não gerou uma capa para o vídeo' };
+    }
+
+    let bytes: Buffer;
+    try {
+      const response = await this.writeFetch(thumbnailUrl, {
+        signal: AbortSignal.timeout(this.writeTimeoutMs),
+      });
+      if (!response.ok) {
+        return {
+          status: 'unknown',
+          reason: `a capa do vídeo não pôde ser baixada (${response.status})`,
+        };
+      }
+      bytes = Buffer.from(await response.arrayBuffer());
+    } catch {
+      return { status: 'unknown', reason: 'a capa do vídeo não pôde ser baixada' };
+    }
+    if (bytes.length === 0) return { status: 'unknown', reason: 'a capa do vídeo veio vazia' };
+
+    const image = await this.uploadImage({ bytes, name: `${name}-capa.jpg` });
+    if (image.status !== 'created') return image;
+    return { status: 'created', value: { thumbnailUrl, imageHash: image.value.imageHash } };
   }
 
   /**
@@ -423,12 +523,40 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
       : outcome;
   }
 
-  async createCreative(spec: CreativeSpec): Promise<StepOutcome<{ id: string }>> {
+  /**
+   * Meta's own check of an ad with its creative inline and nothing created
+   * (`execution_options: ["validate_only"]`): the creative's fields, the
+   * page, the Instagram account and the media are all judged here, before the
+   * creative is written. NOT yet verified against the live API: that a refused
+   * creative answers here with the same error it would give on the write.
+   */
+  async validateAd(spec: {
+    name: string;
+    adSetId: string;
+    creative: CreativeSpec;
+  }): Promise<StepOutcome<true>> {
+    const result = await this.send(`${this.accountPath()}/ads`, {
+      name: spec.name,
+      adset_id: spec.adSetId,
+      status: 'PAUSED',
+      creative: JSON.stringify({
+        name: spec.creative.name,
+        object_story_spec: this.objectStorySpec(spec.creative),
+      }),
+      execution_options: '["validate_only"]',
+    });
+    if ('failure' in result) return asStepFailure(result.failure);
+    return { status: 'created', value: true };
+  }
+
+  private objectStorySpec(spec: CreativeSpec): Record<string, unknown> {
     const callToAction = (link: string) => ({ type: spec.callToAction, value: { link } });
+    // A video's picture is the ad image made from its still, never the CDN
+    // address (refused live on 2026-09-25). Carousel video cards: NOT verified live.
     const mediaFields = (media: CreativeMedia) =>
       media.kind === 'image'
         ? { image_hash: media.imageHash }
-        : { video_id: media.videoId, picture: media.thumbnailUrl };
+        : { video_id: media.videoId, image_hash: media.imageHash };
 
     let story: Record<string, unknown>;
     if (spec.body.type === 'carousel') {
@@ -453,7 +581,7 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
       story = {
         video_data: {
           video_id: spec.body.media.videoId,
-          image_url: spec.body.media.thumbnailUrl,
+          image_hash: spec.body.media.imageHash,
           title: spec.headline,
           message: spec.message,
           call_to_action: callToAction(spec.link),
@@ -471,17 +599,18 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
       };
     }
 
+    return {
+      page_id: spec.pageId,
+      // `instagram_actor_id` was retired in v22; this is its replacement.
+      ...(spec.instagramUserId ? { instagram_user_id: spec.instagramUserId } : {}),
+      ...story,
+    };
+  }
+
+  async createCreative(spec: CreativeSpec): Promise<StepOutcome<{ id: string }>> {
     const outcome = await this.create(
       `${this.accountPath()}/adcreatives`,
-      {
-        name: spec.name,
-        object_story_spec: JSON.stringify({
-          page_id: spec.pageId,
-          // `instagram_actor_id` was retired in v22; this is its replacement.
-          ...(spec.instagramUserId ? { instagram_user_id: spec.instagramUserId } : {}),
-          ...story,
-        }),
-      },
+      { name: spec.name, object_story_spec: JSON.stringify(this.objectStorySpec(spec)) },
       (body) => body.id,
     );
     return outcome.status === 'created'

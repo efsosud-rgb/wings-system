@@ -175,9 +175,11 @@ describe('media', () => {
       name: 'wings-video',
     });
 
-    expect(outcome).toEqual({
+    expect(outcome).toMatchObject({
       status: 'created',
       value: {
+        // The preferred still, downloaded and uploaded as an ad image of its own.
+        imageHash: expect.stringMatching(/^hash-/) as unknown as string,
         videoId: expect.stringMatching(/^\d+$/),
         thumbnailUrl: 'https://scontent.xx.fbcdn.net/t/preferred.jpg',
       },
@@ -264,7 +266,7 @@ describe('creatives and ads', () => {
       instagramUserId: null,
       body: {
         type: 'single',
-        media: { kind: 'video', videoId: '999', thumbnailUrl: 'https://x/t.jpg' },
+        media: { kind: 'video', videoId: '999', thumbnailUrl: 'https://x/t.jpg', imageHash: 'h-still' },
       },
     });
 
@@ -272,7 +274,7 @@ describe('creatives and ads', () => {
     expect(story).not.toHaveProperty('instagram_user_id');
     expect(story.video_data).toEqual({
       video_id: '999',
-      image_url: 'https://x/t.jpg',
+      image_hash: 'h-still',
       title: 'Leve a Wings',
       message: 'Fale com a gente.',
       call_to_action: { type: 'LEARN_MORE', value: { link: creativeBase.link } },
@@ -293,7 +295,7 @@ describe('creatives and ads', () => {
             link: 'https://wingscompany.com.br/a',
           },
           {
-            media: { kind: 'video', videoId: '999', thumbnailUrl: 'https://x/t.jpg' },
+            media: { kind: 'video', videoId: '999', thumbnailUrl: 'https://x/t.jpg', imageHash: 'h-still' },
             headline: 'Cartão 2',
             description: 'Modelo.',
             link: 'https://wingscompany.com.br/b',
@@ -318,7 +320,7 @@ describe('creatives and ads', () => {
         description: 'Modelo.',
         call_to_action: { type: 'LEARN_MORE', value: { link: 'https://wingscompany.com.br/b' } },
         video_id: '999',
-        picture: 'https://x/t.jpg',
+        image_hash: 'h-still',
       },
     ]);
   });

@@ -1,9 +1,15 @@
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { applyUtms, variationMedia, type CampaignDraft, type CopyVariation } from '@wings/shared';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { adCreativeUploads, adExecutionSteps, adVideoUploads } from '../../db/schema/index.js';
+import {
+  adChangeRequests,
+  adCreativeUploads,
+  adExecutionSteps,
+  adExecutions,
+  adVideoUploads,
+} from '../../db/schema/index.js';
 import { TargetingResolutionError } from './platform/meta-client.js';
 import type {
   AdSetOptimization,
@@ -194,6 +200,33 @@ export async function stepsOfExecution(
     }));
 }
 
+/**
+ * The Meta id of a video an earlier execution on this account uploaded for the
+ * same local video, if any: the newest created `video` step whose note names
+ * it. Null when it was never uploaded, or every attempt failed before the end.
+ */
+export async function priorVideo(
+  db: Database,
+  adAccountId: string,
+  localVideoId: string,
+): Promise<string | null> {
+  const rows = await db
+    .select({ externalId: adExecutionSteps.externalId, createdAt: adExecutionSteps.createdAt })
+    .from(adExecutionSteps)
+    .innerJoin(adExecutions, eq(adExecutions.id, adExecutionSteps.executionId))
+    .innerJoin(adChangeRequests, eq(adChangeRequests.id, adExecutions.changeRequestId))
+    .where(
+      and(
+        eq(adChangeRequests.adAccountId, adAccountId),
+        eq(adExecutionSteps.kind, 'video'),
+        eq(adExecutionSteps.status, 'created'),
+        eq(adExecutionSteps.message, `video:${localVideoId}`),
+      ),
+    );
+  const newest = rows.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+  return newest?.externalId ?? null;
+}
+
 function optimizationFor(draft: TreeDraft, pixelId: string): AdSetOptimization {
   // Traffic buys landing-page views. Leads — and conversions, which on this
   // account means the same site form — optimise for the pixel's Lead event.
@@ -217,6 +250,8 @@ export async function buildAdTree(
     executionId: string;
     /** The step number the campaign itself was recorded under. */
     startSeq: number;
+    /** Our id of the account, to find media an earlier execution already uploaded. */
+    adAccountId: string;
     campaignExternalId: string;
     draft: TreeDraft;
     prepared: PreparedTree;
@@ -232,6 +267,8 @@ export async function buildAdTree(
     label: string,
     run: () => Promise<StepOutcome<T>>,
     idOf: (value: T) => string,
+    /** Kept with a created step: how a later execution finds it (`video:<local id>`). */
+    note: string | null = null,
   ): Promise<{ ok: true; value: T } | { ok: false; reason: string }> => {
     seq += 1;
     let outcome: StepOutcome<T>;
@@ -252,7 +289,7 @@ export async function buildAdTree(
         label,
         status: 'created',
         externalId: idOf(outcome.value),
-        message: null,
+        message: note,
       });
       return { ok: true, value: outcome.value };
     }
@@ -283,12 +320,25 @@ export async function buildAdTree(
     uploaded.set(id, { kind: 'image', imageHash: result.value.imageHash });
   }
   for (const [id, video] of prepared.videos) {
-    const result = await step(
-      'video',
-      `Vídeo ${video.name}`,
-      () => writer.uploadVideo(video),
-      (value) => value.videoId,
-    );
+    // A video this system already put in the account (an earlier execution
+    // that failed after it) is used again, never uploaded twice. The step
+    // keeps the local id in its message, which is how it is found next time.
+    const earlier = await priorVideo(db, input.adAccountId, id);
+    const result = earlier
+      ? await step(
+          'video',
+          `Vídeo ${video.name} (reaproveitado)`,
+          () => writer.reuseVideo(earlier, video.name),
+          (value) => value.videoId,
+          `video:${id}`,
+        )
+      : await step(
+          'video',
+          `Vídeo ${video.name}`,
+          () => writer.uploadVideo(video),
+          (value) => value.videoId,
+          `video:${id}`,
+        );
     if (!result.ok) return { status: 'incomplete', reason: result.reason };
     uploaded.set(id, { kind: 'video', ...result.value });
   }
@@ -349,20 +399,34 @@ export async function buildAdTree(
   const adIds: string[] = [];
   for (const [index, variation] of draft.variations.entries()) {
     const name = `${draft.name} — v${index + 1}`;
+    const creativeSpec = {
+      name,
+      pageId: draft.identity.pageId,
+      instagramUserId: draft.identity.instagramActorId,
+      message: variation.primaryText,
+      headline: variation.headline,
+      callToAction: variation.callToAction,
+      link: applyUtms(draft.destinationUrl, draft.utms, index) ?? draft.destinationUrl,
+      body: bodyOf(variation, index),
+    };
+    // Meta judges the ad with its creative inline first, creating nothing; a
+    // refusal here is the same step failing, with nothing more on the platform.
     const creative = await step(
       'creative',
       `Criativo ${name}`,
-      () =>
-        writer.createCreative({
-          name,
-          pageId: draft.identity.pageId,
-          instagramUserId: draft.identity.instagramActorId,
-          message: variation.primaryText,
-          headline: variation.headline,
-          callToAction: variation.callToAction,
-          link: applyUtms(draft.destinationUrl, draft.utms, index) ?? draft.destinationUrl,
-          body: bodyOf(variation, index),
-        }),
+      async () => {
+        const checked = await writer.validateAd({
+          name: `Anúncio ${name}`,
+          adSetId: adSet.value.id,
+          creative: creativeSpec,
+        });
+        if (checked.status !== 'created') {
+          return checked.status === 'rejected'
+            ? { ...checked, message: `validate_only: ${checked.message}` }
+            : checked;
+        }
+        return writer.createCreative(creativeSpec);
+      },
       (value) => value.id,
     );
     if (!creative.ok) return { status: 'incomplete', reason: creative.reason };

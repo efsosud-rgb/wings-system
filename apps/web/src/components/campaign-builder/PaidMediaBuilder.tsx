@@ -89,6 +89,7 @@ import {
   type Resolver,
   type UseFormRegister,
   type UseFormSetValue,
+  useController,
 } from 'react-hook-form';
 import { Link } from 'react-router-dom';
 import {
@@ -686,7 +687,7 @@ function CarouselCards({
             <Field label="Link do cartão" error={cardErrors?.[cardIndex]?.link?.message}>
               <Input
                 type="url"
-                placeholder="https://wingscompany.com.br/…"
+                placeholder="https://wingscompany.com.br/contato/"
                 {...register(`${path}.link`)}
               />
             </Field>
@@ -791,7 +792,8 @@ export function PaidMediaBuilder({
       idealCustomerProfile: '',
       reach: { states: [], cities: [], customLocations: [] },
       formatKey: 'feed_square',
-      destinationUrl: '',
+      // Wings' contact page: the RD form there feeds the Formatação funnel.
+      destinationUrl: 'https://wingscompany.com.br/contato/',
       variations: Array.from({ length: MIN_VARIATIONS }, () => ({
         creativeType: 'image' as const,
         creativeId: '',
@@ -919,7 +921,13 @@ export function PaidMediaBuilder({
   const [defaultMatch, setDefaultMatch] = useState<SearchMatchType>('exact');
   // The CPC ceiling box keeps its own text, like the budget box.
   const [maxCpcText, setMaxCpcText] = useState(centsToBudgetText(DEFAULT_MAX_CPC_CENTS));
-  const maxCpcField = register('search.maxCpcCents', { setValueAs: parseBrlToCents });
+  const maxCpcController = useController({ control, name: 'search.maxCpcCents' });
+  const maxCpcField = {
+    name: maxCpcController.field.name,
+    onBlur: maxCpcController.field.onBlur,
+    onChange: (event: { target: { value: string } }) =>
+      maxCpcController.field.onChange(parseBrlToCents(event.target.value)),
+  };
 
   const days = campaignDays(values.startDate, values.endDate);
   // The estimate reads what is in the box, as typed. It must never wait on
@@ -947,7 +955,17 @@ export function PaidMediaBuilder({
             : days === null
               ? 'O fim da campanha está antes do início.'
               : null;
-  const budgetField = register('dailyBudgetCents', { setValueAs: parseBrlToCents });
+  // A controlled field, not a registered input: the box shows its own text
+  // ("120,00") and hands the form the cents. A registered input would be
+  // re-written with the raw cents ("12000") by the form library after a
+  // value set from a saved draft or a proposal.
+  const budgetController = useController({ control, name: 'dailyBudgetCents' });
+  const budgetField = {
+    name: budgetController.field.name,
+    onBlur: budgetController.field.onBlur,
+    onChange: (event: { target: { value: string } }) =>
+      budgetController.field.onChange(parseBrlToCents(event.target.value)),
+  };
   const daysThisMonth = campaignDaysInMonth(values.startDate, values.endDate, today);
   const costThisMonthCents = estimateCostCents(dailyBudgetCents, daysThisMonth, platform);
   const overCeiling =
@@ -1967,7 +1985,7 @@ export function PaidMediaBuilder({
             >
               <Input
                 type="url"
-                placeholder="https://wingscompany.com.br/…"
+                placeholder="https://wingscompany.com.br/contato/"
                 {...register('destinationUrl')}
               />
             </Field>
@@ -2042,7 +2060,7 @@ export function PaidMediaBuilder({
           >
             <Input
               type="url"
-              placeholder="https://wingscompany.com.br/…"
+              placeholder="https://wingscompany.com.br/contato/"
               {...register('destinationUrl')}
             />
           </Field>
@@ -2204,7 +2222,7 @@ export function PaidMediaBuilder({
                   value={maxCpcText}
                   onChange={(event) => {
                     setMaxCpcText(event.target.value);
-                    void maxCpcField.onChange(event);
+                    maxCpcField.onChange(event);
                   }}
                 />
               </Field>
@@ -2223,7 +2241,7 @@ export function PaidMediaBuilder({
             >
               <Input
                 type="url"
-                placeholder="https://wingscompany.com.br/…"
+                placeholder="https://wingscompany.com.br/contato/"
                 {...register('destinationUrl')}
               />
             </Field>
@@ -2309,7 +2327,7 @@ export function PaidMediaBuilder({
                 value={budgetText}
                 onChange={(event) => {
                   setBudgetText(event.target.value);
-                  void budgetField.onChange(event);
+                  budgetField.onChange(event);
                 }}
               />
             </Field>

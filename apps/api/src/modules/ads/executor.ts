@@ -451,6 +451,7 @@ export async function executeApprovedChange(
         const built = await buildAdTree(db, tree.writer, {
           executionId: execution.id,
           startSeq: 1,
+          adAccountId: account.id,
           campaignExternalId: outcome.campaign.id,
           draft: tree.draft,
           prepared: tree.prepared,
@@ -520,6 +521,7 @@ export async function executeApprovedChange(
         platformResponse: {
           code: outcome.code,
           message: outcome.message,
+          ...(outcome.detail ?? {}),
           ...(preflightRejection ? { preflight: true } : {}),
         },
       })
