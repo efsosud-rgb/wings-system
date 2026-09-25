@@ -1,9 +1,17 @@
-# Escrita no Google Ads — YouTube e Pesquisa (Onda 4)
+# Escrita no Google Ads — YouTube e Pesquisa (Onda 4, revista em 25/09/2026)
 
 19/09/2026. **Nada aqui foi escrito no Google.** O adaptador foi exercitado só
 contra uma API do Google roteirizada (`platform/fake-google-api.ts`).
 `ADS_WRITES_ENABLED` não foi tocada. A primeira escrita real é em produção, com
 o aprovador presente.
+
+> **25/09/2026 — Pesquisa completa, preflight e alterações.** Ver a seção
+> "Pesquisa de ponta a ponta (25/09/2026)" no fim: a campanha de Pesquisa nasce
+> com grupo de anúncios, palavras-chave (exata e frase), negativas e anúncio
+> responsivo, tudo pausado, numa escrita atômica; o executor valida com
+> `validateOnly` antes de escrever; orçamento, pausa e retomada em campanhas do
+> Google passaram a existir pelo mesmo fluxo de aprovação. O que este arquivo
+> diz sobre "só a casca" e "o cliente não sabe criar grupo" vale até essa data.
 
 ## O que mudou no plano: YouTube é Demand Gen
 
@@ -172,3 +180,111 @@ construído; seria um `ops-cli preflight-google`.
 4. Apagar/remover campanha de teste (não existe em nenhuma plataforma).
 5. Migração da API para v23+.
 6. Espelhar anúncios, reprovações e P-max; alerta de saldo pré-pago baixo.
+
+## Pesquisa de ponta a ponta (25/09/2026)
+
+Construído para o lançamento de uma campanha de Pesquisa **pelo sistema**, com
+a Diretoria, no staging (que neste mês é o ambiente de uso real do agente).
+Exercitado só contra a API roteirizada; **nada foi escrito no Google** nesta
+onda. O que foi feito contra a conta real foi um `validateOnly` (ver abaixo).
+
+### O que muda no rascunho (`packages/shared`)
+
+- **Palavras-chave com correspondência, na notação do próprio Google:**
+  `[exata]` ou `"frase"`. Um termo sem marca seria correspondência **ampla** e
+  o esquema **recusa** ("Ampla não é aceita"). No construtor, um seletor diz
+  qual correspondência as linhas sem marca recebem (padrão: exata); uma
+  proposta do agente com `broad` é apertada para exata antes de entrar no
+  formulário. `parseSearchKeyword`/`formatSearchKeyword` são a única leitura.
+- **Negativas** continuam termos simples e vão para a **campanha** em
+  correspondência de **frase**, para valer em qualquer grupo criado à mão.
+- **Anúncio responsivo:** 3 a 15 títulos (30 caracteres), 2 a 4 descrições
+  (90), sem repetidos — os mínimos são os que o Google exige.
+- **`adGroupName`** (opcional): o único grupo da campanha; em branco, usa o nome
+  da campanha.
+
+Não havia rascunho de Pesquisa gravado em staging, então a mudança de forma
+não afeta nenhum hash de aprovação existente.
+
+### A escrita: uma só, atômica, tudo pausado
+
+`googleAds:mutate` com `partialFailure: false` e ids temporários, na ordem:
+
+1. `campaignBudget` (-1) · 2. `campaign` (-2, `PAUSED`, só rede de pesquisa,
+   presença) · 3. critérios de localização, raio e idioma · 4. **negativas**
+   (`campaignCriterion` com `negative: true`, `keyword.matchType: PHRASE`) ·
+5. **`adGroup`** (-3, `PAUSED`, `SEARCH_STANDARD`) · 6. **palavras-chave**
+   (`adGroupCriterion`, `EXACT`/`PHRASE`, `ENABLED` dentro do grupo pausado) ·
+7. **anúncio** (`adGroupAd`, `PAUSED`, `responsiveSearchAd` com `finalUrls` =
+   destino com UTMs).
+
+Ou entra tudo, ou nada: não existe "campanha sem anúncio" nem "orçamento órfão"
+a procurar. A resposta é lida operação por operação e cada objeto vira um passo
+em `ad_execution_steps` (`ad_group`, `keyword`, `negative_keyword`, `ad`), com
+o id do Google — a tela de aprovação mostra "O que foi criado no Google".
+
+**Campanha, grupo e anúncio nascem pausados**, como manda o não-negociável.
+Por isso **retomar** (`resume_campaign`) no Google liga, no mesmo `mutate`, a
+campanha **e** os grupos e anúncios que o sistema criou pausados sob ela
+(lidos de `ad_execution_steps`, `companionsOf`) — nunca algo feito à mão no
+Google Ads. Pausar toca só a campanha (uma campanha pausada não entrega).
+
+### Preflight: `validateOnly` antes de qualquer escrita
+
+O Google aceita a mesma solicitação com `validateOnly: true`: a conta real
+confere cada campo, limite e política de escrita, **sem criar nem alterar**.
+
+- **O executor faz isso sozinho**, antes de toda escrita no Google
+  (`canPreflight`/`validateWrite`, garantia 8 do `executor.ts`): recusa do
+  Google na validação vira **rejeição** (execução gravada com `preflight:
+true`, reserva devolvida, `ads.change_rejected_by_platform`), com **nada
+  enviado**; Google sem resposta vira recusa `platform_unavailable`, sem tocar
+  no pedido e sem congelar a conta (nada pode ter acontecido).
+- **A tela de aprovação tem o botão "Validar no Google (sem escrever)"**
+  (`POST /ads/approvals/:id/preflight`, permissão `ads.request`), antes ou
+  depois da decisão, **com a chave de escrita desligada** — o cliente usado é
+  sempre um leitor, e o transporte do leitor recusa qualquer `mutate` que não
+  seja `validateOnly`. Cada validação entra na trilha (`ads.preflight`).
+- **`ops-cli preflight-google --approval <uuid>`** faz o mesmo no terminal, e
+  **`--example`** valida uma campanha de exemplo embutida, para um ensaio
+  antes de existir pedido.
+
+A mensagem de recusa traz o campo apontado pelo Google
+(`mutate_operations[7].ad_group_ad_operation.create.ad…headlines[1]: …`).
+
+### Orçamento, pausa e retomada em campanhas do Google
+
+`reserveChange` aceita contas Google (antes recusava
+`not_supported_on_platform`). A regra é a da Meta: pedido de uma pessoa →
+WhatsApp → aprovação (`ads.approve`) → clique → auditoria, com hash do payload,
+trava de emergência, `wrong_account`, janela de reconciliação de 120 min e os
+três tetos. Na tela da criação executada há "Próximos pedidos sobre esta
+campanha" (ativar, novo orçamento, pausar), que chama
+`POST /ads/change-requests`; o `ops-cli request` também serve. Os cartões do
+agente para campanhas do Google passaram a ter botão (negativação continua
+manual).
+
+No adaptador: orçamento é `campaignBudgetOperation.update` com
+`updateMask: amount_micros` no orçamento **próprio** da campanha — um
+orçamento **compartilhado** é recusado (`google_shared_budget`) sem chamar o
+Google, porque mudaria outras campanhas; status é `campaignOperation.update`
+com `updateMask: status`.
+
+### Não verificado — o ensaio de 25/09 e a primeira escrita respondem
+
+- [ ] Todos os nomes de campo do grupo, das palavras-chave, das negativas e do
+      anúncio responsivo (v22): conferidos na documentação, nunca enviados. O
+      `validateOnly` contra a conta real é o que os confirma antes do clique.
+- [ ] Se `validateOnly` cobre política de anúncio (texto reprovável) ou só
+      forma — o Google documenta que valida "o que pode ser validado sem
+      escrever"; reprovação por política pode aparecer só depois, na revisão.
+- [ ] Orçamento diário mínimo da conta e `MONEY_AMOUNT_TOO_SMALL`.
+- [ ] O status do anúncio depois da revisão do Google e o tempo até
+      "Qualificado"; ligar a campanha antes disso não entrega até aprovar.
+- [ ] `resume` com três atualizações num `mutate` (campanha, grupo, anúncio).
+
+### Depois do ensaio (não construído)
+
+Leitura de reprovações e P-max via `asset_group`; alerta
+`account_out_of_funds`; pausa e negativas autônomas; guardrail explícito de
+correspondência ampla (hoje o esquema simplesmente recusa).
