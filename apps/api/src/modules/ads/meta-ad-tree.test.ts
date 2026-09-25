@@ -223,16 +223,26 @@ describe('image ads, automatic placements', () => {
     const result = await run(client, changeRequestId);
     expect(result).toMatchObject({ ok: true, outcome: 'applied' });
 
+    // Before each creative, Meta validates the ad with the creative inline and
+    // creates nothing; then the creative and the ad are written.
     expect(api.writes().map((call) => call.path.split('/')[1])).toEqual([
       'campaigns',
       'adimages',
       'adimages',
       'adsets',
+      'ads',
       'adcreatives',
+      'ads',
       'ads',
       'adcreatives',
       'ads',
     ]);
+    const validations = api.writes('ads').filter((call) => call.fields.execution_options);
+    expect(validations).toHaveLength(2);
+    expect(validations[0]?.fields.execution_options).toBe('["validate_only"]');
+    expect(JSON.parse(validations[0]?.fields.creative ?? '{}')).toHaveProperty(
+      'object_story_spec.page_id',
+    );
     for (const edge of ['campaigns', 'adsets', 'ads'] as const) {
       for (const call of api.writes(edge)) expect(call.fields.status).toBe('PAUSED');
     }
@@ -285,7 +295,32 @@ describe('image ads, automatic placements', () => {
 
     await run(client, changeRequestId);
     expect(api.writes('adimages')).toHaveLength(1);
-    expect(api.writes('ads')).toHaveLength(2);
+    expect(api.writes('ads').filter((call) => !call.fields.execution_options)).toHaveLength(2);
+  });
+
+  it('a creative Meta would refuse: validate_only says so, nothing more is created, the error is kept whole', async () => {
+    const { accountDbId, api, client } = await world({ failOn: { edge: 'ads', mode: 'reject' } });
+    const { changeRequestId } = await requestAndApprove(accountDbId, draftOf());
+
+    const result = await run(client, changeRequestId);
+    expect(result).toMatchObject({ ok: false, outcome: 'unknown' });
+    // The validation went out; no creative and no real ad did.
+    expect(api.writes('adcreatives')).toHaveLength(0);
+    expect(api.writes('ads')).toHaveLength(1);
+    expect(api.writes('ads')[0]?.fields.execution_options).toBe('["validate_only"]');
+
+    const steps = await stepsOfExecution(db, executionIdOf(result));
+    expect(steps.map((step) => [step.kind, step.status])).toEqual([
+      ['campaign', 'created'],
+      ['image', 'created'],
+      ['image', 'created'],
+      ['ad_set', 'created'],
+      ['creative', 'failed'],
+    ]);
+    // Everything Meta said, not just "100: Invalid parameter".
+    expect(steps.at(-1)?.message).toBe(
+      '100: validate_only: Invalid parameter on ads [subcode 1815857]',
+    );
   });
 });
 
@@ -342,8 +377,9 @@ describe('video and carousel', () => {
     const result = await run(client, changeRequestId);
     expect(result).toMatchObject({ outcome: 'applied' });
 
-    // One image and one video, though the video is used twice.
-    expect(api.writes('adimages')).toHaveLength(1);
+    // One image, one video (used twice) and the video's still as an ad image.
+    expect(api.writes('adimages')).toHaveLength(2);
+    expect(api.writes('adimages')[1]?.fields.name).toMatch(/-capa\.jpg$/);
     expect(
       api.writes('advideos').filter((call) => call.fields.upload_phase === 'start'),
     ).toHaveLength(1);
@@ -351,16 +387,16 @@ describe('video and carousel', () => {
     const [videoStory, carouselStory] = api
       .writes('adcreatives')
       .map((call) => JSON.parse(call.fields.object_story_spec ?? '{}'));
-    expect(videoStory.video_data).toMatchObject({
-      title: 'Veja a Wings',
-      image_url: 'https://scontent.xx.fbcdn.net/t/preferred.jpg',
-    });
+    // The still went up as an ad image: the creative carries its hash, never the CDN address.
+    expect(videoStory.video_data).toMatchObject({ title: 'Veja a Wings' });
+    expect(videoStory.video_data.image_hash).toMatch(/^hash-/);
+    expect(videoStory.video_data).not.toHaveProperty('image_url');
     expect(videoStory.video_data.video_id).toMatch(/^\d+$/);
     expect(carouselStory.link_data.child_attachments).toHaveLength(2);
     expect(carouselStory.link_data.child_attachments[0]).toHaveProperty('image_hash');
     expect(carouselStory.link_data.child_attachments[1]).toMatchObject({
       video_id: videoStory.video_data.video_id,
-      picture: 'https://scontent.xx.fbcdn.net/t/preferred.jpg',
+      image_hash: videoStory.video_data.image_hash,
     });
     expect(carouselStory.link_data.call_to_action.type).toBe('CONTACT_US');
 
@@ -419,6 +455,52 @@ describe('what is checked by reading, before the first write', () => {
     });
     expect(result).toMatchObject({ outcome: 'refused', reason: 'media_missing' });
     expect(api.writes()).toHaveLength(0);
+  });
+});
+
+describe('a video already in the account', () => {
+  it('is used again by a later request on the same account, never uploaded twice', async () => {
+    const { accountDbId, api, client } = await world();
+    const videoDraft = (name: string) =>
+      draftOf({
+        name,
+        variations: [
+          {
+            creativeType: 'video',
+            videoId,
+            headline: 'Veja a Wings',
+            primaryText: 'Fale com a gente.',
+            callToAction: 'CONTACT_US',
+          },
+          imageVariation(imageIds[0], 'Dois'),
+        ],
+      });
+
+    const first = await requestAndApprove(accountDbId, videoDraft(`Vídeo A ${randomBytes(2).toString('hex')}`));
+    const firstResult = await run(client, first.changeRequestId);
+    expect(firstResult).toMatchObject({ outcome: 'applied' });
+    const uploadsAfterFirst = api
+      .writes('advideos')
+      .filter((call) => call.fields.upload_phase === 'start').length;
+    expect(uploadsAfterFirst).toBe(1);
+
+    const second = await requestAndApprove(accountDbId, videoDraft(`Vídeo B ${randomBytes(2).toString('hex')}`));
+    const result = await run(client, second.changeRequestId);
+    expect(result).toMatchObject({ outcome: 'applied' });
+    // No new upload: the earlier Meta video was found by the local id kept on its step.
+    expect(
+      api.writes('advideos').filter((call) => call.fields.upload_phase === 'start'),
+    ).toHaveLength(uploadsAfterFirst);
+
+    const steps = await stepsOfExecution(db, executionIdOf(result));
+    const video = steps.find((step) => step.kind === 'video');
+    expect(video?.label).toMatch(/reaproveitado/);
+    expect(video?.message).toBe(`video:${videoId}`);
+    const firstSteps = await stepsOfExecution(db, executionIdOf(firstResult));
+    expect(video?.externalId).toBe(firstSteps.find((step) => step.kind === 'video')?.externalId);
+    // The still is made again for the creative (same bytes, same hash).
+    const stills = api.writes('adimages').filter((call) => /-capa\.jpg$/.test(call.fields.name ?? ''));
+    expect(stills).toHaveLength(2);
   });
 });
 

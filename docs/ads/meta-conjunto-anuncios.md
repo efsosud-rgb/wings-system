@@ -184,3 +184,33 @@ ativa), mais:
 Execução em segundo plano com acompanhamento na tela; `pause`/`resume` no nível
 de conjunto e anúncio; apagar objetos de teste; validar antes de escrever
 (`execution_options=["validate_only"]` da Meta) como preflight.
+
+## Primeira escrita real (25/09/2026) e o que ela ensinou
+
+A execução das 18:06 criou campanha `120252228318620076`, dois vídeos e o
+conjunto `120252228329890076`, e parou no criativo v1 com `100: Invalid
+parameter` — e nada mais: o cliente guardava só código e mensagem. Três
+correções, todas exercitadas contra a API roteirizada:
+
+- **Capa do vídeo como `image_hash`.** A URL assinada do CDN
+  (`video_data.image_url`) era a hipótese principal da recusa. Agora a capa
+  preferida é baixada e sobe em `adimages`; o criativo recebe `image_hash`
+  (também nos cartões de carrossel com vídeo, **não verificado ao vivo**).
+- **Erro completo guardado.** `error_subcode`, `error_user_title`,
+  `error_user_msg` e `fbtrace_id` entram na mensagem do passo e em
+  `platform_response` (`subcode`, `userTitle`, `userMessage`, `fbtraceId`).
+- **`validate_only` antes de cada criativo.** `POST act_…/ads` com o criativo
+  inline e `execution_options=["validate_only"]`: a Meta julga página,
+  Instagram, mídia e texto sem criar nada; uma recusa é o passo `creative`
+  falhando com `validate_only: …`, e nada mais existe na plataforma. Só é
+  possível depois de existirem campanha, vídeos e conjunto (o anúncio precisa
+  de `adset_id`), então é "antes de qualquer escrita de criativo ou anúncio".
+- **Vídeos não sobem duas vezes.** O passo `video` guarda o id local em
+  `message` (`video:<uuid>`); um novo pedido com o mesmo vídeo encontra o id
+  da Meta, confere que está `ready`, refaz só a capa (`adimages` com os mesmos
+  bytes devolve o mesmo hash) e segue — passo `Vídeo … (reaproveitado)`.
+
+A campanha ficou **ACTIVE** na Meta a partir das 18:10 por ação no
+Gerenciador (o sistema a criou e releu PAUSED); foi pausada de novo por uma
+pessoa. Não existe "continuar de onde parou": a campanha antiga é arquivada à
+mão e o pedido é feito de novo a partir do rascunho salvo.

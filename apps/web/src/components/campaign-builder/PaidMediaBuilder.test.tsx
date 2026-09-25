@@ -796,9 +796,8 @@ describe('the builder on Google', () => {
       );
       expect((byField('Título 1') as HTMLInputElement).value).toBe('Formate Sua Franquia');
       expect((screen.getByLabelText(/Verba por dia/) as HTMLInputElement).value).toBe('100,00');
-      await waitFor(() =>
-        expect((byField('CPC máximo (R$)') as HTMLInputElement).value).toBe('4,50'),
-      );
+      // Shown as reais at once, never as the raw cents the form holds.
+      expect((byField('CPC máximo (R$)') as HTMLInputElement).value).toBe('4,50');
       expect(screen.getAllByText(/Campinas/).length).toBeGreaterThan(0);
       expect(requestCampaign).not.toHaveBeenCalled();
 

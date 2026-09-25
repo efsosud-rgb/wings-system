@@ -221,11 +221,20 @@ export function fakeMetaApi(options: FakeMetaApiOptions = {}) {
     if (edge === 'adimages') {
       return json(200, { images: { [fields.name ?? 'image']: { hash: `hash-${newId()}` } } });
     }
+    // Like Meta: a validate-only ad is judged and never created.
+    if (edge === 'ads' && (fields.execution_options ?? '').includes('validate_only')) {
+      return json(200, { success: true });
+    }
     return json(200, { id: newId() });
   }
 
   const impl = (async (url: unknown, init?: RequestInit) => {
     const parsed = new URL(String(url));
+    // A video still lives on Meta's CDN, not on the Graph API: bytes come back.
+    if (parsed.hostname.endsWith('fbcdn.net')) {
+      calls.push({ method: 'GET', path: parsed.pathname, query: {}, fields: {}, headers: {} });
+      return new Response(Buffer.from('jpeg-bytes'), { status: 200 });
+    }
     const path = parsed.pathname.replace(/^\/v[\d.]+\//, '');
     const query = Object.fromEntries(parsed.searchParams.entries());
     const method = init?.method ?? 'GET';

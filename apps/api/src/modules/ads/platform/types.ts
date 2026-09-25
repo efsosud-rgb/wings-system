@@ -180,7 +180,13 @@ export type MutationOutcome =
        */
       created?: CreatedObject[];
     }
-  | { status: 'rejected'; code: string; message: string }
+  | {
+      status: 'rejected';
+      code: string;
+      message: string;
+      /** The platform's own diagnostics (subcode, user message, trace id); never PII. */
+      detail?: Record<string, unknown>;
+    }
   | { status: 'unknown'; reason: string };
 
 export interface CreatedObject {
@@ -359,7 +365,7 @@ export interface AdsPlatformClient {
  */
 export type StepOutcome<T> =
   | { status: 'created'; value: T }
-  | { status: 'rejected'; code: string; message: string }
+  | { status: 'rejected'; code: string; message: string; detail?: Record<string, unknown> }
   | { status: 'unknown'; reason: string };
 
 export interface ResolvedTargeting {
@@ -392,8 +398,20 @@ export interface AdSetSpec {
   } | null;
 }
 
+/**
+ * A video's still is an ad image of its own (`imageHash`): Meta's signed CDN
+ * address of the thumbnail (`thumbnailUrl`) is kept for people to look at and
+ * is never sent as the creative's picture (2026-09-25: "Invalid parameter").
+ */
 export type CreativeMedia =
-  { kind: 'image'; imageHash: string } | { kind: 'video'; videoId: string; thumbnailUrl: string };
+  | { kind: 'image'; imageHash: string }
+  | { kind: 'video'; videoId: string; thumbnailUrl: string; imageHash: string };
+
+export interface UploadedVideo {
+  videoId: string;
+  thumbnailUrl: string;
+  imageHash: string;
+}
 
 export interface CreativeSpec {
   name: string;
@@ -426,13 +444,24 @@ export interface AdTreeWriter {
     cities: { name: string; state: string }[];
   }): Promise<ResolvedTargeting>;
   uploadImage(input: { bytes: Buffer; name: string }): Promise<StepOutcome<{ imageHash: string }>>;
-  /** Uploads in chunks and waits until Meta has processed the video. */
+  /** Uploads in chunks, waits until Meta has processed the video, and makes its still an ad image. */
   uploadVideo(input: {
     filePath: string;
     byteSize: number;
     name: string;
-  }): Promise<StepOutcome<{ videoId: string; thumbnailUrl: string }>>;
+  }): Promise<StepOutcome<UploadedVideo>>;
+  /**
+   * A video this system already put in the account, ready to use again: reads
+   * its state and makes (or finds) its still. Nothing is uploaded twice.
+   */
+  reuseVideo(videoId: string, name: string): Promise<StepOutcome<UploadedVideo>>;
   createAdSet(spec: AdSetSpec): Promise<StepOutcome<{ id: string }>>;
+  /**
+   * Meta's own check of an ad with its creative inline (`validate_only`):
+   * everything the creative and the ad would be refused for, with nothing
+   * created. Done before every creative.
+   */
+  validateAd(spec: { name: string; adSetId: string; creative: CreativeSpec }): Promise<StepOutcome<true>>;
   createCreative(spec: CreativeSpec): Promise<StepOutcome<{ id: string }>>;
   createAd(spec: {
     name: string;
@@ -447,7 +476,9 @@ export function isAdTreeWriter(client: unknown): client is AdTreeWriter {
     typeof candidate.resolveTargeting === 'function' &&
     typeof candidate.uploadImage === 'function' &&
     typeof candidate.uploadVideo === 'function' &&
+    typeof candidate.reuseVideo === 'function' &&
     typeof candidate.createAdSet === 'function' &&
+    typeof candidate.validateAd === 'function' &&
     typeof candidate.createCreative === 'function' &&
     typeof candidate.createAd === 'function'
   );
