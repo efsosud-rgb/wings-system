@@ -174,9 +174,58 @@ export type MutationOutcome =
       campaign: PlatformCampaign;
       /** Evidence worth keeping with the execution, e.g. the locations resolved. */
       detail?: Record<string, unknown>;
+      /**
+       * Every object the write made besides the campaign, in order, for the
+       * execution's step list: what a person sees exists on the platform.
+       */
+      created?: CreatedObject[];
     }
   | { status: 'rejected'; code: string; message: string }
   | { status: 'unknown'; reason: string };
+
+export interface CreatedObject {
+  kind: 'ad_group' | 'keyword' | 'negative_keyword' | 'ad';
+  label: string;
+  externalId: string;
+}
+
+/**
+ * A write the executor is about to make, in the platform's own terms. Built
+ * once, validated first where the platform can validate without writing
+ * (`PreflightCapable`), then performed — so what was validated is exactly
+ * what goes out.
+ */
+export type PlannedWrite =
+  | { kind: 'create_campaign'; spec: CreateCampaignSpec }
+  | { kind: 'set_daily_budget'; campaignId: string; dailyBudgetCents: Cents }
+  | { kind: 'pause_campaign'; campaignId: string }
+  | { kind: 'resume_campaign'; campaignId: string; enableWith?: ResumeCompanions };
+
+/**
+ * What a resume switches on besides the campaign: the ad groups and ads this
+ * system itself created paused under it, by their platform ids. Nothing a
+ * person made by hand is ever listed here.
+ */
+export interface ResumeCompanions {
+  adGroupIds: string[];
+  adIds: string[];
+}
+
+export type PreflightOutcome =
+  /** The platform accepted the whole request without writing it. */
+  | { status: 'ok'; operations: string[] }
+  | { status: 'rejected'; code: string; message: string }
+  /** Nothing was validated: the platform did not answer. */
+  | { status: 'unavailable'; reason: string };
+
+/** A client that can ask the platform to validate a write without making it. */
+export interface PreflightCapable {
+  validateWrite(write: PlannedWrite): Promise<PreflightOutcome>;
+}
+
+export function canPreflight(client: unknown): client is PreflightCapable {
+  return typeof (client as Partial<PreflightCapable>).validateWrite === 'function';
+}
 
 /** Meta's ODAX objectives the builder can ask for. */
 export type PlatformObjective = 'OUTCOME_LEADS' | 'OUTCOME_TRAFFIC' | 'OUTCOME_SALES';
@@ -218,6 +267,19 @@ export interface GoogleCampaignSpec {
    * proximity criterion (`googleLocationCriteria`).
    */
   reach: PlatformReach;
+  /** Search only: the one ad group, its keywords and its responsive search ad. */
+  search?: GoogleSearchSpec;
+}
+
+export interface GoogleSearchSpec {
+  adGroupName: string;
+  keywords: { text: string; match: 'EXACT' | 'PHRASE' }[];
+  /** Campaign-level negatives, always phrase match. */
+  negativeKeywords: string[];
+  headlines: string[];
+  descriptions: string[];
+  /** Destination with UTMs already applied. */
+  finalUrl: string;
 }
 
 /** The platform-neutral reach of a draft: whole states, cities, radii. */
@@ -271,7 +333,8 @@ export interface AdsPlatformClient {
 
   setDailyBudget(campaignId: string, dailyBudgetCents: Cents): Promise<MutationOutcome>;
   pauseCampaign(campaignId: string): Promise<MutationOutcome>;
-  resumeCampaign(campaignId: string): Promise<MutationOutcome>;
+  /** `enableWith` names what this system created paused under the campaign; Meta ignores it. */
+  resumeCampaign(campaignId: string, enableWith?: ResumeCompanions): Promise<MutationOutcome>;
   /** Creates an empty campaign. `applied` carries the new campaign, id included. */
   createCampaign(spec: CreateCampaignSpec): Promise<MutationOutcome>;
 

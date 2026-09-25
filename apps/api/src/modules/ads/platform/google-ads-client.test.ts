@@ -6,6 +6,7 @@ import {
   PORTUGUESE_LANGUAGE_CONSTANT,
   googleLocationCriteria,
   microsFromCents,
+  googleFailure,
 } from './google-ads-client.js';
 import type { CreateCampaignSpec } from './types.js';
 
@@ -28,6 +29,17 @@ const searchSpec: CreateCampaignSpec = {
     startDate: '2026-09-21',
     endDate: '2026-09-30',
     reach: { states: ['SP'], cities: [{ name: 'Curitiba', state: 'PR' }], customLocations: [] },
+    search: {
+      adGroupName: 'Franquia SP',
+      keywords: [
+        { text: 'franquia de alimentação', match: 'EXACT' },
+        { text: 'abrir franquia', match: 'PHRASE' },
+      ],
+      negativeKeywords: ['grátis', 'emprego'],
+      headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
+      descriptions: ['Conheça o modelo de negócio.', 'Suporte do início ao fim.'],
+      finalUrl: 'https://wingscompany.com.br/franquia?utm_source=google',
+    },
   },
 };
 
@@ -85,7 +97,10 @@ describe('creating a Search campaign', () => {
       geoTargetTypeSetting: { positiveGeoTargetType: 'PRESENCE' },
     });
 
-    const criteria = operations.slice(2).map((op) => op.campaignCriterionOperation?.create);
+    // Locations and language; the negatives are checked with the ad group.
+    const criteria = operations
+      .map((op) => op.campaignCriterionOperation?.create)
+      .filter((create) => create && create.negative !== true);
     expect(criteria).toEqual([
       {
         campaign: 'customers/4268586278/campaigns/-2',
@@ -102,16 +117,88 @@ describe('creating a Search campaign', () => {
     ]);
   });
 
-  it('creates nothing below the campaign: no ad group, no ad, no keyword', async () => {
+  it('creates the ad group, its keywords, the negatives and the ad in the same atomic mutate, all paused', async () => {
     const { api, client } = writer();
-    await client.createCampaign(searchSpec);
+    const outcome = await client.createCampaign(searchSpec);
+    if (outcome.status !== 'applied') throw new Error('expected applied');
 
-    const kinds = new Set(operationsOf(api).flatMap((operation) => Object.keys(operation)));
+    expect(api.writeCalls()).toHaveLength(1);
+    const operations = operationsOf(api);
+    const kinds = new Set(operations.flatMap((operation) => Object.keys(operation)));
     expect([...kinds].sort()).toEqual([
+      'adGroupAdOperation',
+      'adGroupCriterionOperation',
+      'adGroupOperation',
       'campaignBudgetOperation',
       'campaignCriterionOperation',
       'campaignOperation',
     ]);
+
+    // Negatives on the campaign, phrase match, so any ad group added by hand inherits them.
+    const negatives = operations
+      .map((op) => op.campaignCriterionOperation?.create)
+      .filter((create) => create?.negative === true);
+    expect(negatives).toEqual([
+      { campaign: 'customers/4268586278/campaigns/-2', negative: true, keyword: { text: 'grátis', matchType: 'PHRASE' } },
+      { campaign: 'customers/4268586278/campaigns/-2', negative: true, keyword: { text: 'emprego', matchType: 'PHRASE' } },
+    ]);
+
+    // The ad group: paused, standard search, under the temporary campaign.
+    expect(operations.find((op) => op.adGroupOperation)?.adGroupOperation?.create).toEqual({
+      resourceName: 'customers/4268586278/adGroups/-3',
+      name: 'Franquia SP',
+      campaign: 'customers/4268586278/campaigns/-2',
+      status: 'PAUSED',
+      type: 'SEARCH_STANDARD',
+    });
+
+    // Keywords with the match the draft wrote; never broad.
+    const keywords = operations
+      .map((op) => op.adGroupCriterionOperation?.create)
+      .filter(Boolean);
+    expect(keywords).toEqual([
+      { adGroup: 'customers/4268586278/adGroups/-3', status: 'ENABLED', keyword: { text: 'franquia de alimentação', matchType: 'EXACT' } },
+      { adGroup: 'customers/4268586278/adGroups/-3', status: 'ENABLED', keyword: { text: 'abrir franquia', matchType: 'PHRASE' } },
+    ]);
+
+    // The responsive search ad: paused, final URL with UTMs, headlines and descriptions.
+    expect(operations.find((op) => op.adGroupAdOperation)?.adGroupAdOperation?.create).toEqual({
+      adGroup: 'customers/4268586278/adGroups/-3',
+      status: 'PAUSED',
+      ad: {
+        finalUrls: ['https://wingscompany.com.br/franquia?utm_source=google'],
+        responsiveSearchAd: {
+          headlines: [{ text: 'Franquia Wings' }, { text: 'Expanda sua marca' }, { text: 'Fale com a Wings' }],
+          descriptions: [{ text: 'Conheça o modelo de negócio.' }, { text: 'Suporte do início ao fim.' }],
+        },
+      },
+    });
+
+    // What Google made, by id, for the execution's step list.
+    expect(outcome.created?.map((object) => object.kind)).toEqual([
+      'negative_keyword',
+      'negative_keyword',
+      'ad_group',
+      'keyword',
+      'keyword',
+      'ad',
+    ]);
+    const adGroup = api.adGroups[0];
+    expect(outcome.created?.find((object) => object.kind === 'ad_group')?.externalId).toBe(adGroup?.id);
+    expect(outcome.created?.find((object) => object.kind === 'ad')?.externalId).toBe(api.ads[0]?.id);
+    expect(adGroup).toMatchObject({ status: 'PAUSED', keywords: [{ matchType: 'EXACT' }, { matchType: 'PHRASE' }] });
+    expect(api.ads[0]).toMatchObject({ status: 'PAUSED' });
+    expect(outcome.detail).toMatchObject({ adGroup: 'Franquia SP', keywords: 2, negativeKeywords: 2, headlines: 3, descriptions: 2 });
+  });
+
+  it('refuses a Search spec without its ad group, before any read or write', async () => {
+    const { api, client } = writer();
+    const outcome = await client.createCampaign({
+      ...searchSpec,
+      google: { ...searchSpec.google!, search: undefined },
+    });
+    expect(outcome).toMatchObject({ status: 'rejected', code: 'google_search_spec_missing' });
+    expect(api.calls).toHaveLength(0);
   });
 
   it('re-reads the campaign it made, and keeps the places it resolved as evidence', async () => {
@@ -199,8 +286,8 @@ describe('the reach translator: a radius on Google', () => {
     expect(outcome.status).toBe('applied');
     expect(api.mutateCalls()).toHaveLength(1);
     const criteria = operationsOf(api)
-      .slice(2)
-      .map((op) => op.campaignCriterionOperation?.create);
+      .map((op) => op.campaignCriterionOperation?.create)
+      .filter((create) => create && create.negative !== true);
     expect(criteria.map((criterion) => Object.keys(criterion ?? {}).sort())).toEqual([
       ['campaign', 'location'],
       ['campaign', 'location'],
@@ -290,7 +377,7 @@ describe('what the write client refuses without calling Google', () => {
     expect(api.mutateCalls()).toHaveLength(0);
   });
 
-  it('anything about a campaign that already exists', async () => {
+  it('a shared budget: changing it would change other campaigns', async () => {
     const { api, client } = writer(
       fakeGoogleApi({
         campaigns: [
@@ -299,20 +386,15 @@ describe('what the write client refuses without calling Google', () => {
             name: 'Search - Wings - Geral',
             status: 'ENABLED',
             amountMicros: '30000000',
+            explicitlyShared: true,
           },
         ],
       }),
     );
-
-    for (const outcome of [
-      await client.setDailyBudget(),
-      await client.pauseCampaign(),
-      await client.resumeCampaign(),
-    ]) {
-      expect(outcome).toMatchObject({ status: 'rejected', code: 'google_not_supported' });
-    }
+    const outcome = await client.setDailyBudget('111', 5000);
+    expect(outcome).toMatchObject({ status: 'rejected', code: 'google_shared_budget' });
+    expect(api.mutateCalls()).toHaveLength(0);
     expect((await client.setAccountSpendCap()).status).toBe('rejected');
-    expect(api.calls).toHaveLength(0);
   });
 
   it('a place Google does not know, or knows twice', async () => {
@@ -363,7 +445,8 @@ describe('what Google answers', () => {
     expect(await client.createCampaign(searchSpec)).toEqual({
       status: 'rejected',
       code: 'MONEY_AMOUNT_TOO_SMALL',
-      message: 'The budget amount is too small.',
+      message:
+        'mutate_operations[0].campaign_budget_operation.create.amount_micros: The budget amount is too small.',
     });
   });
 
@@ -486,8 +569,148 @@ describe('reading the account', () => {
   it('is a reader: asked to create, it refuses without calling Google', async () => {
     const api = fakeGoogleApi();
     const outcome = await new GoogleAdsPlatformClient(api.reader).createCampaign(searchSpec);
-    expect(outcome).toMatchObject({ status: 'rejected', code: 'writes_disabled' });
+    expect(outcome).toMatchObject({ status: 'rejected', code: 'google_read_only' });
     expect(api.calls).toHaveLength(0);
+  });
+
+  it('is a reader that can still rehearse: validateOnly goes out, nothing is created', async () => {
+    const api = fakeGoogleApi();
+    const reader = new GoogleAdsPlatformClient(api.reader);
+    const outcome = await reader.validateWrite({ kind: 'create_campaign', spec: searchSpec });
+    expect(outcome).toMatchObject({ status: 'ok' });
+    if (outcome.status !== 'ok') throw new Error('expected ok');
+    expect(outcome.operations).toContain('Grupo Franquia SP');
+    expect(outcome.operations).toContain('Anúncio responsivo de pesquisa');
+
+    const [call] = api.mutateCalls();
+    expect(call?.body.validateOnly).toBe(true);
+    expect(call?.body.partialFailure).toBe(false);
+    expect(api.writeCalls()).toHaveLength(0);
+    expect(api.campaigns).toHaveLength(0);
+    expect(api.adGroups).toHaveLength(0);
+  });
+});
+
+describe('changes to a campaign that exists', () => {
+  const existing = () =>
+    fakeGoogleApi({
+      campaigns: [
+        { id: '111', name: 'Search - Wings - Geral', status: 'PAUSED', amountMicros: '30000000' },
+      ],
+    });
+
+  it('a new daily budget is one update of the campaign’s own budget, masked to the amount', async () => {
+    const { api, client } = writer(existing());
+    const outcome = await client.setDailyBudget('111', 5000);
+    expect(outcome).toMatchObject({ status: 'applied', campaign: { id: '111', dailyBudgetCents: 5000 } });
+    expect(operationsOf(api)).toEqual([
+      {
+        campaignBudgetOperation: {
+          update: { resourceName: 'customers/4268586278/campaignBudgets/b111', amountMicros: '50000000' },
+          updateMask: 'amount_micros',
+        },
+      },
+    ]);
+  });
+
+  it('a pause is one status update of the campaign', async () => {
+    const api = fakeGoogleApi({
+      campaigns: [{ id: '111', name: 'X', status: 'ENABLED', amountMicros: '30000000' }],
+    });
+    const { client } = writer(api);
+    const outcome = await client.pauseCampaign('111');
+    expect(outcome).toMatchObject({ status: 'applied', campaign: { status: 'PAUSED' } });
+    expect(operationsOf(api)).toEqual([
+      {
+        campaignOperation: {
+          update: { resourceName: 'customers/4268586278/campaigns/111', status: 'PAUSED' },
+          updateMask: 'status',
+        },
+      },
+    ]);
+  });
+
+  it('a resume switches on the campaign and what the system created under it, in one mutate', async () => {
+    const { api, client } = writer(existing());
+    const outcome = await client.resumeCampaign('111', { adGroupIds: ['900'], adIds: ['900~901'] });
+    expect(outcome).toMatchObject({ status: 'applied', campaign: { status: 'ACTIVE' } });
+    expect(operationsOf(api)).toEqual([
+      {
+        campaignOperation: {
+          update: { resourceName: 'customers/4268586278/campaigns/111', status: 'ENABLED' },
+          updateMask: 'status',
+        },
+      },
+      {
+        adGroupOperation: {
+          update: { resourceName: 'customers/4268586278/adGroups/900', status: 'ENABLED' },
+          updateMask: 'status',
+        },
+      },
+      {
+        adGroupAdOperation: {
+          update: { resourceName: 'customers/4268586278/adGroupAds/900~901', status: 'ENABLED' },
+          updateMask: 'status',
+        },
+      },
+    ]);
+  });
+
+  it('a campaign Google does not have is a rejection with nothing sent', async () => {
+    const { api, client } = writer(existing());
+    expect(await client.setDailyBudget('222', 5000)).toMatchObject({
+      status: 'rejected',
+      code: 'campaign_not_found',
+    });
+    expect(api.mutateCalls()).toHaveLength(0);
+  });
+
+  it('validates a change with validateOnly and changes nothing', async () => {
+    const { api, client } = writer(existing());
+    const outcome = await client.validateWrite({
+      kind: 'set_daily_budget',
+      campaignId: '111',
+      dailyBudgetCents: 5000,
+    });
+    expect(outcome).toMatchObject({ status: 'ok', operations: ['Orçamento diário'] });
+    expect(api.mutateCalls()[0]?.body.validateOnly).toBe(true);
+    expect(api.campaigns[0]?.amountMicros).toBe('30000000');
+  });
+
+  it('reads Google’s refusal with the field it points at', () => {
+    expect(
+      googleFailure(
+        JSON.stringify({
+          error: {
+            message: 'Request contains an invalid argument.',
+            details: [
+              {
+                errors: [
+                  {
+                    errorCode: { adError: 'LINE_TOO_WIDE' },
+                    message: 'Line too wide.',
+                    location: {
+                      fieldPathElements: [
+                        { fieldName: 'mutate_operations', index: 7 },
+                        { fieldName: 'ad_group_ad_operation' },
+                        { fieldName: 'create' },
+                        { fieldName: 'ad' },
+                        { fieldName: 'responsive_search_ad' },
+                        { fieldName: 'headlines', index: 1 },
+                      ],
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      ),
+    ).toEqual({
+      code: 'LINE_TOO_WIDE',
+      message:
+        'mutate_operations[7].ad_group_ad_operation.create.ad.responsive_search_ad.headlines[1]: Line too wide.',
+    });
   });
 });
 

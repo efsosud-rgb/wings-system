@@ -16,6 +16,7 @@ import {
   describeReach,
   estimateCostCents,
   isGooglePlatform,
+  parseSearchKeyword,
   type ApprovalDetail,
   type CampaignDraft,
   type ExecutionStepView,
@@ -29,6 +30,8 @@ import {
   useDecideApproval,
   useExecuteApproval,
   useOfficialPreviews,
+  usePreflightApproval,
+  useRequestCampaignChange,
 } from '../api/ads.js';
 import { ApiError } from '../api/client.js';
 import { ApprovalSimulator } from '../components/ApprovalSimulator.js';
@@ -52,6 +55,7 @@ const AUDIT_LABEL: Record<string, string> = {
   'ads.approval_granted': 'Aprovada',
   'ads.approval_rejected': 'Recusada',
   'ads.approval_denied_to_actor': 'Tentativa de decisão sem permissão',
+  'ads.preflight': 'Validação prévia na plataforma (sem escrever)',
 };
 
 /**
@@ -65,11 +69,19 @@ const STEP_STATUS_LABEL: Record<ExecutionStepView['status'], string> = {
   unknown: 'desconhecido',
 };
 
-function ExecutionSteps({ steps }: { steps: ExecutionStepView[] }) {
+function ExecutionSteps({
+  steps,
+  platform,
+}: {
+  steps: ExecutionStepView[];
+  platform: ApprovalDetail['platform'];
+}) {
   if (steps.length === 0) return null;
   return (
     <div className="execution-steps">
-      <span className="field-label">O que foi criado na Meta</span>
+      <span className="field-label">
+        O que foi criado {platform === 'google' ? 'no Google' : 'na Meta'}
+      </span>
       <ol>
         {[...steps]
           .sort((a, b) => a.seq - b.seq)
@@ -243,6 +255,12 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
           Tudo nasce <strong>pausado</strong>: a campanha, um conjunto de anúncios e um anúncio por
           variação. Nada entrega e nada gasta até alguém ligar no Gerenciador de Anúncios.
         </Alert>
+      ) : draft.platform === 'google_search' && draft.search ? (
+        <Alert kind="info">
+          Tudo nasce <strong>pausado</strong>: a campanha, o grupo de anúncios e o anúncio, numa
+          única escrita atômica no Google (ou entra tudo, ou nada). Não entrega e não gasta.
+          Ativar é um pedido de <strong>retomada</strong>, com aprovação própria, que liga os três.
+        </Alert>
       ) : draft.startPaused ? (
         <Alert kind="info">
           Nasce <strong>pausada</strong> e vazia: só o objeto campanha é criado, sem{' '}
@@ -325,7 +343,10 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
         {draft.platform === 'google_search' && (
           <div>
             <span className="field-label">Tipo no Google</span>
-            <p>Pesquisa</p>
+            <p>Pesquisa (só a rede de pesquisa do Google)</p>
+            {draft.search && (
+              <span className="cell-sub">Grupo de anúncios: {draft.search.adGroupName?.trim() || draft.name}</span>
+            )}
           </div>
         )}
         <div>
@@ -340,15 +361,23 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
         <p>{describeReach(draft.reach)}</p>
         {draft.search && (
           <>
-            <span className="field-label">Palavras-chave</span>
+            <span className="field-label">Palavras-chave (grupo de anúncios)</span>
             <p>{draft.search.keywords.join(' · ')}</p>
-            <span className="field-label">Palavras-chave negativas</span>
+            <span className="cell-sub">
+              {describeMatches(draft.search.keywords)} · [colchetes] = exata, “aspas” = frase; ampla
+              não é usada
+            </span>
+            <span className="field-label">Palavras-chave negativas (campanha, correspondência de frase)</span>
             <p>{draft.search.negativeKeywords.join(' · ') || '—'}</p>
+            <span className="field-label">Títulos ({draft.search.headlines.length})</span>
+            <p>{draft.search.headlines.join(' | ')}</p>
+            <span className="field-label">Descrições ({draft.search.descriptions.length})</span>
+            <p>{draft.search.descriptions.join(' ')}</p>
           </>
         )}
         <span className="cell-sub">
           {draft.platform === 'google_search'
-            ? 'Registrado no pedido. Estados, cidades e idioma português vão com a campanha; palavras-chave e anúncio só chegam ao Google quando existir a criação do grupo de anúncios.'
+            ? 'Vai tudo para o Google na mesma escrita: estados, cidades e raio na campanha (presença), idioma português, negativas na campanha, palavras-chave e anúncio responsivo no grupo. Antes de escrever, o executor valida a solicitação inteira com validateOnly.'
             : draft.platform === 'youtube'
               ? 'Registrado no pedido. Em Demand Gen, localização, idioma e a restrição ao YouTube moram no grupo de anúncios: só chegam ao Google quando existir a criação dele.'
               : metaTree
@@ -377,6 +406,167 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
           format={format}
         />
       )}
+    </section>
+  );
+}
+
+/** "2 exatas, 1 frase" — what the approver is agreeing to bid on. */
+function describeMatches(keywords: string[]): string {
+  const exact = keywords.filter((item) => parseSearchKeyword(item)?.match === 'exact').length;
+  const phrase = keywords.filter((item) => parseSearchKeyword(item)?.match === 'phrase').length;
+  const parts = [];
+  if (exact > 0) parts.push(`${exact} exata${exact === 1 ? '' : 's'}`);
+  if (phrase > 0) parts.push(`${phrase} frase${phrase === 1 ? '' : 's'}`);
+  return parts.join(', ') || 'sem correspondência marcada';
+}
+
+/**
+ * The rehearsal: Google checks the exact request against the real account and
+ * writes nothing. Offered before and after the decision, with writes on or
+ * off — a refusal here is what the executor would have met at the click.
+ */
+function Preflight({ approvalId }: { approvalId: string }) {
+  const preflight = usePreflightApproval(approvalId);
+  const answer = preflight.data;
+  const failure = preflight.error instanceof ApiError ? preflight.error : null;
+  return (
+    <section className="block">
+      <legend>Validação prévia no Google (validateOnly)</legend>
+      <p className="field-hint">
+        Envia ao Google a solicitação exata, marcada para <strong>só validar</strong>: a conta real
+        confere cada campo e nada é criado nem alterado. Pode ser feita antes da aprovação e não
+        depende da chave de escrita.
+      </p>
+      {failure && <Alert kind="error">{failure.message}</Alert>}
+      {answer?.status === 'ok' && (
+        <Alert kind="success">
+          O Google aceitou a solicitação inteira ({answer.operations?.length ?? 0} operações). Nada
+          foi escrito.
+          {answer.operations && answer.operations.length > 0 && (
+            <ul className="preflight-operations">
+              {answer.operations.map((label, index) => (
+                <li key={`${label}-${index}`}>{label}</li>
+              ))}
+            </ul>
+          )}
+        </Alert>
+      )}
+      {answer?.status === 'rejected' && (
+        <Alert kind="error">
+          O Google recusaria esta solicitação ({answer.code}): {answer.message}. Nada foi escrito.
+          Corrija o pedido e faça um novo.
+        </Alert>
+      )}
+      {answer?.status === 'unavailable' && (
+        <Alert kind="error">
+          O Google não respondeu à validação ({answer.reason}). Nada foi validado; tente de novo.
+        </Alert>
+      )}
+      <div className="form-actions">
+        <Button
+          type="button"
+          variant="ghost"
+          disabled={preflight.isPending}
+          onClick={() => void preflight.mutateAsync()}
+        >
+          {preflight.isPending ? 'Validando…' : 'Validar no Google (sem escrever)'}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * What comes after a campaign exists: switching it on and changing its
+ * budget are requests of their own, each with its approval and its click.
+ * Nothing here touches the platform; it only files the request.
+ */
+function NextRequests({ approval }: { approval: ApprovalDetail }) {
+  const request = useRequestCampaignChange();
+  const [reason, setReason] = useState('');
+  const [budgetText, setBudgetText] = useState('');
+  const [problem, setProblem] = useState<string | null>(null);
+  const failure = request.error instanceof ApiError ? request.error : null;
+
+  const file = async (kind: 'resume_campaign' | 'pause_campaign' | 'set_daily_budget') => {
+    setProblem(null);
+    if (reason.trim().length < 3) {
+      setProblem('Informe o motivo do pedido');
+      return;
+    }
+    let toDailyBudgetCents: number | undefined;
+    if (kind === 'set_daily_budget') {
+      const value = Number(budgetText.replace(/\./g, '').replace(',', '.'));
+      if (!Number.isFinite(value) || value <= 0) {
+        setProblem('Informe o novo orçamento diário, como 30,00');
+        return;
+      }
+      toDailyBudgetCents = Math.round(value * 100);
+    }
+    await request.mutateAsync({
+      accountExternalId: approval.accountExternalId,
+      campaignExternalId: approval.campaignExternalId,
+      kind,
+      toDailyBudgetCents,
+      reason: reason.trim(),
+    });
+  };
+
+  return (
+    <section className="block">
+      <legend>Próximos pedidos sobre esta campanha</legend>
+      <p className="field-hint">
+        A campanha existe {approval.platform === 'google' ? 'no Google' : 'na Meta'}, pausada. Cada
+        pedido abaixo passa pela mesma aprovação e pelo mesmo clique de execução.
+        {approval.platform === 'google' &&
+          ' “Ativar” liga a campanha, o grupo de anúncios e o anúncio criados pelo sistema.'}
+      </p>
+      {request.isSuccess && request.data.approvalId && (
+        <Alert kind="success">
+          Pedido registrado.{' '}
+          <Link to={`/marketing/trafego-pago-wings/aprovacoes/${request.data.approvalId}`}>
+            Abrir a aprovação
+          </Link>
+        </Alert>
+      )}
+      {failure && <Alert kind="error">{failure.message}</Alert>}
+      <Field label="Motivo" error={problem ?? undefined}>
+        <Input
+          value={reason}
+          maxLength={500}
+          onChange={(event) => setReason(event.target.value)}
+          placeholder="Ex.: lançamento aprovado pela Diretoria"
+        />
+      </Field>
+      <Field label="Novo orçamento diário (R$)" hint="Só para o pedido de orçamento.">
+        <Input
+          inputMode="decimal"
+          value={budgetText}
+          onChange={(event) => setBudgetText(event.target.value)}
+          placeholder="30,00"
+        />
+      </Field>
+      <div className="form-actions">
+        <Button type="button" disabled={request.isPending} onClick={() => void file('resume_campaign')}>
+          Pedir ativação da campanha
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          disabled={request.isPending}
+          onClick={() => void file('set_daily_budget')}
+        >
+          Pedir novo orçamento diário
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          disabled={request.isPending}
+          onClick={() => void file('pause_campaign')}
+        >
+          Pedir pausa
+        </Button>
+      </div>
     </section>
   );
 }
@@ -429,6 +619,7 @@ export function ApprovalDetailPage() {
 
   const approval = query.data?.approval;
   const canDecide = hasPermission(user, 'ads.approve');
+  const canRequest = hasPermission(user, 'ads.request');
   const open = approval?.status === 'pending' || approval?.status === 'escalated';
 
   if (query.isLoading) return <div className="page-loading">Carregando…</div>;
@@ -482,7 +673,21 @@ export function ApprovalDetailPage() {
 
       <Summary approval={approval} />
       {approval.draft && <DraftCampaign draft={approval.draft} />}
+      {approval.platform === 'google' &&
+        approval.changeKind === 'resume_campaign' &&
+        approval.changeStatus !== 'executed' && (
+          <Alert kind="info">
+            Retomar no Google liga a campanha <strong>e</strong> o grupo de anúncios e o anúncio
+            que o sistema criou pausados com ela. A partir daí ela entrega e gasta.
+          </Alert>
+        )}
       <PeriodContext approval={approval} />
+      {id &&
+        canRequest &&
+        approval.platform === 'google' &&
+        (approval.changeStatus === 'pending_approval' || approval.changeStatus === 'approved') && (
+          <Preflight approvalId={id} />
+        )}
       {/* The simulator explores budgets of a campaign that exists; a draft has none yet. */}
       {id && !approval.draft && <ApprovalSimulator approvalId={id} />}
 
@@ -594,9 +799,14 @@ export function ApprovalDetailPage() {
             <Alert kind="success">Alteração já aplicada na plataforma.</Alert>
           )}
 
-          <ExecutionSteps steps={approval.executionSteps ?? []} />
+          <ExecutionSteps steps={approval.executionSteps ?? []} platform={approval.platform} />
         </section>
       )}
+
+      {canRequest &&
+        approval.changeKind === 'create_campaign' &&
+        approval.changeStatus === 'executed' &&
+        approval.campaignExternalId !== '' && <NextRequests approval={approval} />}
 
       {id &&
         approval.changeStatus === 'executed' &&

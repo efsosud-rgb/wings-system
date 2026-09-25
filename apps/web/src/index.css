@@ -2031,6 +2031,19 @@ textarea.control {
   resize: vertical;
 }
 
+.builder-match {
+  display: flex;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.preflight-operations {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+  columns: 2;
+  font-size: 0.85em;
+}
+
 /* ---------- Meta: criativos por tipo, posicionamentos, página ---------- */
 .builder-segmented {
   display: inline-flex;

@@ -59,6 +59,7 @@ export async function requestCampaignChange(
     kind: ChangeKind;
     toDailyBudgetCents?: number;
     reason: string;
+    requestedBy?: string | null;
     notifier?: ApprovalNotifier;
     now?: Date;
   },
@@ -82,6 +83,7 @@ export async function requestCampaignChange(
     kind: input.kind,
     toDailyBudgetCents: input.toDailyBudgetCents,
     reason: input.reason,
+    requestedBy: input.requestedBy,
     now: input.now,
   });
   if (!reserved.ok) {

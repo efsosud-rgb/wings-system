@@ -141,7 +141,16 @@ export type ApprovalDecisionInput = z.output<typeof approvalDecisionSchema>;
 
 export interface ExecutionStepView {
   seq: number;
-  kind: 'campaign' | 'image' | 'video' | 'ad_set' | 'creative' | 'ad';
+  kind:
+    | 'campaign'
+    | 'image'
+    | 'video'
+    | 'ad_set'
+    | 'creative'
+    | 'ad'
+    | 'ad_group'
+    | 'keyword'
+    | 'negative_keyword';
   label: string;
   status: 'created' | 'failed' | 'unknown';
   externalId: string | null;

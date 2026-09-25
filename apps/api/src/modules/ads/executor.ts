@@ -3,7 +3,9 @@ import {
   AD_ACCOUNT_PLATFORM,
   GOOGLE_CHANNEL_TYPE,
   META_OBJECTIVE,
+  applyUtms,
   isGooglePlatform,
+  parseSearchKeyword,
   type CampaignDraft,
 } from '@wings/shared';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -14,6 +16,7 @@ import {
   adCampaignDrafts,
   adCampaigns,
   adChangeRequests,
+  adExecutionSteps,
   adExecutions,
   adGuardrailEvents,
   budgetPeriods,
@@ -29,11 +32,16 @@ import {
 } from './ad-tree.js';
 import { draftPayloadHash, engageKillSwitch, releaseReservation } from './budget-guard.js';
 import {
+  canPreflight,
   isAdTreeWriter,
   type AdsPlatformClient,
   type AdTreeWriter,
+  type CreateCampaignSpec,
   type MutationOutcome,
+  type PlannedWrite,
   type PlatformObjective,
+  type PreflightOutcome,
+  type ResumeCompanions,
 } from './platform/types.js';
 import { reconciliationFreshness } from './reconcile.js';
 
@@ -53,7 +61,10 @@ import { reconciliationFreshness } from './reconcile.js';
  *   5. nothing has executed this change already;
  *   6. the client is bound to the account the change belongs to;
  *   7. the account reconciled recently, so the spend the cap was checked
- *      against is real rather than remembered.
+ *      against is real rather than remembered;
+ *   8. where the platform can validate without writing (Google's
+ *      `validateOnly`), the exact request is validated first, and a refusal
+ *      there is a rejection with nothing sent.
  *
  * A timeout is treated as "maybe it happened", never as a failure to retry.
  */
@@ -305,6 +316,41 @@ export async function executeApprovedChange(
     }
   }
 
+  // What is about to go out, built once: the same request is validated where
+  // the platform can validate without writing, and then sent.
+  const write: PlannedWrite = draft
+    ? { kind: 'create_campaign', spec: createSpecOf(draft) }
+    : change.kind === 'set_daily_budget'
+      ? {
+          kind: 'set_daily_budget',
+          campaignId: campaign!.externalId,
+          dailyBudgetCents: change.toValueCents ?? 0,
+        }
+      : change.kind === 'pause_campaign'
+        ? { kind: 'pause_campaign', campaignId: campaign!.externalId }
+        : {
+            kind: 'resume_campaign',
+            campaignId: campaign!.externalId,
+            // Born paused all the way down, so a resume switches on what this
+            // system itself created under the campaign — and nothing else.
+            enableWith: await companionsOf(db, campaign!.id),
+          };
+
+  // 8. Preflight. A refusal here is Google saying no to the exact request,
+  // so it is recorded and the reservation given back like any rejection;
+  // "no answer" validates nothing and leaves the change untouched to retry.
+  let preflightRejection: Extract<PreflightOutcome, { status: 'rejected' }> | null = null;
+  if (canPreflight(client)) {
+    const preflight = await client.validateWrite(write);
+    if (preflight.status === 'unavailable') {
+      return refuse(
+        'platform_unavailable',
+        `A plataforma não respondeu à validação prévia (${preflight.reason}). Nada foi enviado; tente de novo.`,
+      );
+    }
+    if (preflight.status === 'rejected') preflightRejection = preflight;
+  }
+
   // Record the attempt before making it, so an interrupted process still
   // leaves evidence that something may have gone out.
   const idempotencyKey = randomUUID();
@@ -330,41 +376,20 @@ export async function executeApprovedChange(
     .where(eq(adChangeRequests.id, change.id));
 
   let outcome: MutationOutcome;
-  if (draft) {
-    const payload = draft.payload;
-    outcome = await client.createCampaign({
-      name: draft.name,
-      objective: META_OBJECTIVE[payload.objective] as PlatformObjective,
-      // Read from the approved draft, never defaulted: see CreateCampaignSpec.
-      // Since 2026-09-19 no draft can ask for ACTIVE; older approved ones could.
-      status: draft.startPaused ? 'PAUSED' : 'ACTIVE',
-      dailyBudgetCents: draft.dailyBudgetCents,
-      ...(isGooglePlatform(payload.platform)
-        ? {
-            google: {
-              channel: GOOGLE_CHANNEL_TYPE[payload.platform],
-              // Traffic buys clicks; leads and conversions buy conversions.
-              bidding: payload.objective === 'traffic' ? 'MAXIMIZE_CLICKS' : 'MAXIMIZE_CONVERSIONS',
-              startDate: draft.startDate,
-              endDate: draft.endDate,
-              reach: {
-                states: payload.reach.states,
-                cities: payload.reach.cities,
-                // A draft approved before the map existed has none.
-                customLocations: payload.reach.customLocations ?? [],
-              },
-            },
-          }
-        : {}),
-    });
-  } else if (!campaign) {
-    throw new Error('unreachable: a change is about a campaign or a draft');
-  } else if (change.kind === 'set_daily_budget') {
-    outcome = await client.setDailyBudget(campaign.externalId, change.toValueCents ?? 0);
-  } else if (change.kind === 'pause_campaign') {
-    outcome = await client.pauseCampaign(campaign.externalId);
+  if (preflightRejection) {
+    outcome = {
+      status: 'rejected',
+      code: preflightRejection.code,
+      message: `Recusado na validação prévia: ${preflightRejection.message}`,
+    };
+  } else if (write.kind === 'create_campaign') {
+    outcome = await client.createCampaign(write.spec);
+  } else if (write.kind === 'set_daily_budget') {
+    outcome = await client.setDailyBudget(write.campaignId, write.dailyBudgetCents);
+  } else if (write.kind === 'pause_campaign') {
+    outcome = await client.pauseCampaign(write.campaignId);
   } else {
-    outcome = await client.resumeCampaign(campaign.externalId);
+    outcome = await client.resumeCampaign(write.campaignId, write.enableWith);
   }
 
   if (outcome.status === 'applied') {
@@ -407,6 +432,20 @@ export async function executeApprovedChange(
         externalId: outcome.campaign.id,
         message: null,
       });
+      // One atomic write made all of these along with the campaign (Google):
+      // listed so a person sees what exists, and so a resume can find them.
+      let seq = 1;
+      for (const object of outcome.created ?? []) {
+        seq += 1;
+        await recordStep(db, execution.id, {
+          seq,
+          kind: object.kind,
+          label: object.label,
+          status: 'created',
+          externalId: object.externalId || null,
+          message: null,
+        });
+      }
 
       if (tree) {
         const built = await buildAdTree(db, tree.writer, {
@@ -478,7 +517,11 @@ export async function executeApprovedChange(
       .set({
         outcome: 'rejected',
         finishedAt: new Date(),
-        platformResponse: { code: outcome.code, message: outcome.message },
+        platformResponse: {
+          code: outcome.code,
+          message: outcome.message,
+          ...(preflightRejection ? { preflight: true } : {}),
+        },
       })
       .where(eq(adExecutions.id, execution.id));
 
@@ -490,7 +533,7 @@ export async function executeApprovedChange(
       action: 'ads.change_rejected_by_platform',
       entity: 'ad_change_request',
       entityId: change.id,
-      metadata: { code: outcome.code },
+      metadata: { code: outcome.code, preflight: preflightRejection !== null },
     });
 
     return {
@@ -557,4 +600,163 @@ export async function unresolvedExecutions(db: Database) {
   return db.query.adChangeRequests.findMany({
     where: inArray(adChangeRequests.status, ['unknown', 'executing']),
   });
+}
+
+/**
+ * The platform's spec for a draft, read from the approved draft and never
+ * defaulted (see `CreateCampaignSpec`). Since 2026-09-19 no draft can ask for
+ * ACTIVE; older approved ones could.
+ */
+export function createSpecOf(
+  draft: Pick<
+    typeof adCampaignDrafts.$inferSelect,
+    'name' | 'startPaused' | 'dailyBudgetCents' | 'startDate' | 'endDate'
+  > & { payload: CampaignDraft },
+): CreateCampaignSpec {
+  const payload = draft.payload;
+  const search = payload.search;
+  return {
+    name: draft.name,
+    objective: META_OBJECTIVE[payload.objective] as PlatformObjective,
+    status: draft.startPaused ? 'PAUSED' : 'ACTIVE',
+    dailyBudgetCents: draft.dailyBudgetCents,
+    ...(isGooglePlatform(payload.platform)
+      ? {
+          google: {
+            channel: GOOGLE_CHANNEL_TYPE[payload.platform],
+            // Traffic buys clicks; leads and conversions buy conversions.
+            bidding: payload.objective === 'traffic' ? 'MAXIMIZE_CLICKS' : 'MAXIMIZE_CONVERSIONS',
+            startDate: draft.startDate,
+            endDate: draft.endDate,
+            reach: {
+              states: payload.reach.states,
+              cities: payload.reach.cities,
+              // A draft approved before the map existed has none.
+              customLocations: payload.reach.customLocations ?? [],
+            },
+            ...(payload.platform === 'google_search' && search
+              ? {
+                  search: {
+                    adGroupName: search.adGroupName?.trim() || draft.name,
+                    // The schema refused anything but [exact] and "phrase".
+                    keywords: search.keywords.flatMap((raw) => {
+                      const parsed = parseSearchKeyword(raw);
+                      return parsed
+                        ? [{ text: parsed.text, match: parsed.match === 'exact' ? 'EXACT' : 'PHRASE' }]
+                        : [];
+                    }),
+                    negativeKeywords: search.negativeKeywords.map(
+                      (raw) => parseSearchKeyword(raw)?.text ?? raw.trim(),
+                    ),
+                    headlines: search.headlines,
+                    descriptions: search.descriptions,
+                    finalUrl: applyUtms(payload.destinationUrl, payload.utms) ?? payload.destinationUrl,
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+/**
+ * The ad groups and ads this system created (paused) under a campaign, from
+ * the steps of its executions. Nothing made by hand on the platform is ever
+ * here, so a resume switches on only what the system itself switched off.
+ */
+export async function companionsOf(db: Database, campaignId: string): Promise<ResumeCompanions> {
+  const rows = await db
+    .select({ kind: adExecutionSteps.kind, externalId: adExecutionSteps.externalId })
+    .from(adExecutionSteps)
+    .innerJoin(adExecutions, eq(adExecutions.id, adExecutionSteps.executionId))
+    .innerJoin(adChangeRequests, eq(adChangeRequests.id, adExecutions.changeRequestId))
+    .where(
+      and(
+        eq(adChangeRequests.campaignId, campaignId),
+        eq(adChangeRequests.kind, 'create_campaign'),
+        eq(adExecutionSteps.status, 'created'),
+        inArray(adExecutionSteps.kind, ['ad_group', 'ad']),
+      ),
+    );
+  const ids = (kind: string) =>
+    rows.flatMap((row) => (row.kind === kind && row.externalId ? [row.externalId] : []));
+  return { adGroupIds: ids('ad_group'), adIds: ids('ad') };
+}
+
+export type PreflightResult =
+  | { ok: true; status: 'ok'; operations: string[] }
+  | { ok: false; status: 'rejected'; code: string; message: string }
+  | { ok: false; status: 'unavailable'; reason: string }
+  | { ok: false; status: 'refused'; reason: ExecutionRefusal; message: string };
+
+/**
+ * Validates a change against the real account without writing: the exact
+ * request the executor would send, with the platform's validate-only flag.
+ * Any client of the platform will do — a reader included — because nothing
+ * is written. Nothing about the change is altered by this; it is a rehearsal.
+ */
+export async function preflightChange(
+  db: Database,
+  client: AdsPlatformClient,
+  changeRequestId: string,
+): Promise<PreflightResult> {
+  const refuse = (reason: ExecutionRefusal, message: string): PreflightResult => ({
+    ok: false,
+    status: 'refused',
+    reason,
+    message,
+  });
+  if (!canPreflight(client)) {
+    return refuse('platform_unavailable', 'Esta plataforma não valida sem escrever.');
+  }
+  const change = await db.query.adChangeRequests.findFirst({
+    where: eq(adChangeRequests.id, changeRequestId),
+  });
+  if (!change) return refuse('not_approved', 'Alteração não encontrada.');
+  const account = await db.query.adAccounts.findFirst({
+    where: eq(adAccounts.id, change.adAccountId),
+  });
+  if (!account) return refuse('campaign_missing', 'Conta não encontrada.');
+  if (client.accountExternalId !== account.externalId) {
+    return refuse('wrong_account', 'O cliente da plataforma não pertence à conta desta alteração.');
+  }
+
+  let write: PlannedWrite;
+  if (change.kind === 'create_campaign') {
+    const stored = change.draftId
+      ? await db.query.adCampaignDrafts.findFirst({
+          where: eq(adCampaignDrafts.id, change.draftId),
+        })
+      : undefined;
+    if (!stored) return refuse('draft_missing', 'O rascunho desta campanha não foi encontrado.');
+    write = {
+      kind: 'create_campaign',
+      spec: createSpecOf({ ...stored, payload: stored.payload as CampaignDraft }),
+    };
+  } else {
+    const campaign = change.campaignId
+      ? await db.query.adCampaigns.findFirst({ where: eq(adCampaigns.id, change.campaignId) })
+      : undefined;
+    if (!campaign) return refuse('campaign_missing', 'Campanha não encontrada.');
+    write =
+      change.kind === 'set_daily_budget'
+        ? {
+            kind: 'set_daily_budget',
+            campaignId: campaign.externalId,
+            dailyBudgetCents: change.toValueCents ?? 0,
+          }
+        : change.kind === 'pause_campaign'
+          ? { kind: 'pause_campaign', campaignId: campaign.externalId }
+          : {
+              kind: 'resume_campaign',
+              campaignId: campaign.externalId,
+              enableWith: await companionsOf(db, campaign.id),
+            };
+  }
+
+  const outcome = await client.validateWrite(write);
+  if (outcome.status === 'ok') return { ok: true, status: 'ok', operations: outcome.operations };
+  if (outcome.status === 'rejected') return { ok: false, ...outcome };
+  return { ok: false, status: 'unavailable', reason: outcome.reason };
 }

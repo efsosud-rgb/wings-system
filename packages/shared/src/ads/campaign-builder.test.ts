@@ -27,6 +27,8 @@ import {
   variationMedia,
   youtubeThumbnailUrl,
   type CampaignDraftInput,
+  formatSearchKeyword,
+  parseSearchKeyword,
 } from './campaign-builder.js';
 
 const rulesOf = (text: string) => checkCopyCompliance(text).map((finding) => finding.rule);
@@ -487,9 +489,9 @@ describe('Meta drafts: ad set and ads', () => {
       ageMin: undefined,
       ageMax: undefined,
       search: {
-        keywords: ['abrir franquia'],
-        headlines: ['Franquia Wings'],
-        descriptions: ['Conheça o modelo de negócio.'],
+        keywords: ['[abrir franquia]'],
+        headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
+        descriptions: ['Conheça o modelo de negócio.', 'Suporte da Wings do início ao fim.'],
       },
     };
     expect(campaignDraftSchema.safeParse(google).success).toBe(true);
@@ -518,10 +520,10 @@ describe('Google drafts', () => {
     ...common,
     platform: 'google_search',
     search: {
-      keywords: ['franquia de alimentação', 'abrir franquia'],
+      keywords: ['[franquia de alimentação]', '"abrir franquia"'],
       negativeKeywords: ['grátis'],
-      headlines: ['Franquia Wings'],
-      descriptions: ['Conheça o modelo de negócio e o suporte da Wings.'],
+      headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
+      descriptions: ['Conheça o modelo de negócio e o suporte da Wings.', 'Suporte do início ao fim.'],
     },
   };
 
@@ -547,16 +549,49 @@ describe('Google drafts', () => {
   });
 
   it('caps keywords at 10 and negatives at 20, and refuses repeats and bad characters', () => {
-    const many = (n: number) => Array.from({ length: n }, (_, i) => `franquia termo ${i}`);
+    const many = (n: number) => Array.from({ length: n }, (_, i) => `[franquia termo ${i}]`);
+    const bare = (n: number) => Array.from({ length: n }, (_, i) => `franquia termo ${i}`);
     const withSearch = (patch: Record<string, unknown>) =>
       campaignDraftSchema.safeParse({ ...search, search: { ...search.search, ...patch } }).success;
 
-    expect(withSearch({ keywords: many(10), negativeKeywords: many(20) })).toBe(true);
+    expect(withSearch({ keywords: many(10), negativeKeywords: bare(20) })).toBe(true);
     expect(withSearch({ keywords: many(11) })).toBe(false);
-    expect(withSearch({ negativeKeywords: many(21) })).toBe(false);
+    expect(withSearch({ negativeKeywords: bare(21) })).toBe(false);
     expect(withSearch({ keywords: [] })).toBe(false);
-    expect(withSearch({ keywords: ['Franquia', 'franquia'] })).toBe(false);
-    expect(withSearch({ keywords: ['franquia 100%'] })).toBe(false);
+    expect(withSearch({ keywords: ['[Franquia]', '[franquia]'] })).toBe(false);
+    expect(withSearch({ keywords: ['[franquia 100%]'] })).toBe(false);
+  });
+
+  it('takes only exact and phrase keywords: a bare term would be broad match', () => {
+    const withKeywords = (keywords: string[]) =>
+      campaignDraftSchema.safeParse({ ...search, search: { ...search.search, keywords } });
+    expect(withKeywords(['[franquia]', '"abrir franquia"']).success).toBe(true);
+    const broad = withKeywords(['abrir franquia']);
+    expect(broad.success).toBe(false);
+    expect(broad.error?.issues[0]?.message).toMatch(/Ampla não é aceita/);
+    expect(withKeywords(['[abrir franquia']).success).toBe(false);
+
+    expect(parseSearchKeyword('[ franquia ]')).toEqual({ text: 'franquia', match: 'exact' });
+    expect(parseSearchKeyword('"abrir franquia"')).toEqual({
+      text: 'abrir franquia',
+      match: 'phrase',
+    });
+    expect(parseSearchKeyword('abrir franquia')).toBeNull();
+    expect(formatSearchKeyword({ text: 'x y', match: 'phrase' })).toBe('"x y"');
+  });
+
+  it('wants a responsive search ad Google would accept: 3 to 15 headlines, 2 to 4 descriptions', () => {
+    const withAd = (patch: Record<string, unknown>) =>
+      campaignDraftSchema.safeParse({ ...search, search: { ...search.search, ...patch } }).success;
+    const titles = (n: number) => Array.from({ length: n }, (_, i) => `Título ${i}`);
+    const texts = (n: number) => Array.from({ length: n }, (_, i) => `Descrição número ${i}`);
+    expect(withAd({ headlines: titles(2) })).toBe(false);
+    expect(withAd({ headlines: titles(15) })).toBe(true);
+    expect(withAd({ headlines: titles(16) })).toBe(false);
+    expect(withAd({ descriptions: texts(1) })).toBe(false);
+    expect(withAd({ descriptions: texts(4) })).toBe(true);
+    expect(withAd({ descriptions: texts(5) })).toBe(false);
+    expect(withAd({ adGroupName: 'Grupo 1' })).toBe(true);
   });
 
   it('holds search copy to the same compliance rules as Meta copy', () => {

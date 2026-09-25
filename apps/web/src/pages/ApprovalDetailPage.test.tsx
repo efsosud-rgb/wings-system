@@ -25,6 +25,8 @@ const simulation: { current: { simulation: ChangeSimulation; nextPending: null }
 };
 const decide = vi.fn().mockResolvedValue({ ok: true, status: 'approved' });
 const execute = vi.fn().mockResolvedValue({ ok: true, outcome: 'applied' });
+const preflight = vi.fn();
+const requestChange = vi.fn();
 /** What GET /ads/approvals/:id/previews answers, and for which placement it was asked. */
 const previews: { current: OfficialPreview[] | ApiError } = { current: [] };
 const previewsAskedFor = vi.fn();
@@ -56,6 +58,19 @@ vi.mock('../api/ads.js', () => ({
     };
   },
   useApprovals: () => ({ data: { approvals: [] }, isLoading: false, isError: false }),
+  usePreflightApproval: () => ({
+    mutateAsync: preflight,
+    isPending: false,
+    data: undefined,
+    error: null,
+  }),
+  useRequestCampaignChange: () => ({
+    mutateAsync: requestChange,
+    isPending: false,
+    isSuccess: false,
+    data: undefined,
+    error: null,
+  }),
   // The simulator has its own test file; here it only needs to render.
   useSimulation: () => ({ data: simulation.current, isLoading: false, isError: false }),
   useApprovalGroups: () => ({ data: { groups: [] }, isLoading: false, isError: false }),
@@ -168,7 +183,7 @@ function makeUser(overrides: Partial<SessionUser>): SessionUser {
     sector: 'diretoria',
     isSectorManager: false,
     tracksTime: false,
-    permissions: { 'ads.read': 'all', 'ads.approve': 'all' },
+    permissions: { 'ads.read': 'all', 'ads.approve': 'all', 'ads.request': 'all' },
     lastLoginAt: null,
     sessionExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
     ...overrides,
@@ -459,10 +474,11 @@ describe('a request to create a campaign', () => {
         reach: { ...draft.reach, customLocations: [] },
         variations: [],
         search: {
-          keywords: ['franquia de alimentação', 'abrir franquia'],
+          adGroupName: 'Grupo SP',
+          keywords: ['[franquia de alimentação]', '"abrir franquia"'],
           negativeKeywords: ['grátis'],
-          headlines: ['Franquia Wings'],
-          descriptions: ['Conheça o modelo de negócio.'],
+          headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
+          descriptions: ['Conheça o modelo de negócio.', 'Suporte do início ao fim.'],
         },
       },
     });
@@ -470,8 +486,13 @@ describe('a request to create a campaign', () => {
 
     // R$ 20 × 10 days × 1: over a period Google charges no more than the budget.
     expect(screen.getByText(/custo total estimado\s+R\$\s200,00/)).toBeTruthy();
-    expect(screen.getByText('franquia de alimentação · abrir franquia')).toBeTruthy();
+    expect(screen.getByText('[franquia de alimentação] · "abrir franquia"')).toBeTruthy();
+    expect(screen.getByText(/1 exata, 1 frase/)).toBeTruthy();
+    expect(screen.getByText(/Grupo de anúncios: Grupo SP/)).toBeTruthy();
+    expect(screen.getByText(/Tudo nasce/)).toBeTruthy();
     expect(screen.getByText('Anúncio na Pesquisa do Google')).toBeTruthy();
+    // The rehearsal is offered while the change is still to be executed.
+    expect(screen.getByRole('button', { name: 'Validar no Google (sem escrever)' })).toBeTruthy();
     expect(screen.queryByText('Formato')).toBeNull();
     expect(screen.queryByRole('group', { name: 'Posicionamento da prévia' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Executar no Google' })).toBeTruthy();
