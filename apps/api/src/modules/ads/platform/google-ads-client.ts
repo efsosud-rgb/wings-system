@@ -7,14 +7,20 @@ import type {
   CampaignStatus,
   ConversionSource,
   CreateCampaignSpec,
+  CreatedObject,
+  GoogleSearchSpec,
   InsightRow,
   MetricsLevel,
   MutationOutcome,
+  PlannedWrite,
   PlatformAccount,
   PlatformAd,
   PlatformAdSet,
   PlatformCampaign,
   PlatformReach,
+  PreflightCapable,
+  PreflightOutcome,
+  ResumeCompanions,
   SpendRow,
 } from './types.js';
 
@@ -25,11 +31,18 @@ import type {
  * a Google account be reconciled — and an account that is never reconciled can
  * never be written to: the executor's dead-man switch refuses it.
  *
- * Writing is one thing only: creating a campaign shell, always PAUSED, with its
- * own budget. No ad group, no ad, no keyword is created, and nothing that
- * already exists can be touched — `setDailyBudget`, `pauseCampaign` and
- * `resumeCampaign` refuse without calling Google. What the client cannot
- * express, no bug and no agent can do.
+ * Writing (the write client only) is four things: creating a Search campaign
+ * with everything it needs to deliver — budget, locations, language,
+ * negatives, one ad group, its keywords and one responsive search ad — in ONE
+ * atomic mutate, all of it PAUSED; and, on a campaign that exists, changing
+ * its daily budget, pausing it and resuming it. Nothing else: no delete, no
+ * edit of an ad group or an ad. What the client cannot express, no bug and no
+ * agent can do.
+ *
+ * Every write can be rehearsed first: `validateWrite` sends the same request
+ * with Google's `validateOnly`, which checks it against the real account and
+ * writes nothing. The read-only client offers that too, since it changes
+ * nothing — and its transport refuses any mutate that is not validate-only.
  *
  * Verified against the live account (stage-google-spike.md): v22, no
  * `login-customer-id`, budgets only at campaign level, money in micros.
@@ -172,7 +185,7 @@ export class GeoResolutionError extends Error {
   }
 }
 
-export class GoogleAdsPlatformClient implements AdsPlatformClient {
+export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapable {
   readonly platform = 'google' as const;
   readonly isLive = true;
   readonly accountExternalId: string;
@@ -659,89 +672,185 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient {
     return resolved;
   }
 
-  // --- writes: refused here, and mostly refused in the write client too ------
+  // --- writes: refused here; rehearsed (validateOnly) here and in the write client ---
 
   protected notSupported(what: string): MutationOutcome {
     return {
       status: 'rejected',
-      code: 'google_not_supported',
-      message: `${what} não existe para o Google: o sistema só cria campanhas novas, pausadas.`,
+      code: 'google_read_only',
+      message: `${what}: este cliente do Google é somente leitura.`,
     };
   }
 
-  async setDailyBudget(): Promise<MutationOutcome> {
+  async setDailyBudget(_campaignId: string, _dailyBudgetCents: Cents): Promise<MutationOutcome> {
     return this.notSupported('Alterar orçamento');
   }
 
-  async pauseCampaign(): Promise<MutationOutcome> {
+  async pauseCampaign(_campaignId: string): Promise<MutationOutcome> {
     return this.notSupported('Pausar campanha');
   }
 
-  async resumeCampaign(): Promise<MutationOutcome> {
+  async resumeCampaign(_campaignId: string, _enableWith?: ResumeCompanions): Promise<MutationOutcome> {
     return this.notSupported('Reativar campanha');
   }
 
   async createCampaign(_spec: CreateCampaignSpec): Promise<MutationOutcome> {
-    return {
-      status: 'rejected',
-      code: 'writes_disabled',
-      message: 'Este cliente do Google é somente leitura.',
-    };
+    return this.notSupported('Criar campanha');
   }
 
   async setAccountSpendCap(): Promise<{ status: 'applied' | 'rejected'; message?: string }> {
     return { status: 'rejected', message: 'O saldo pré-pago do Google não é ajustável pela API.' };
   }
-}
 
-export interface GoogleWriteClientOptions {
-  /** Must be true. Exists so enabling writes is a visible, deliberate act. */
-  confirmWrites: true;
-  timeoutMs?: number;
-  now?: () => Date;
-}
+  /** True only on the write client. The transport checks it on every mutate. */
+  protected get mayWrite(): boolean {
+    return false;
+  }
 
-/** Cents to micros: 1 cent is 10 000 micros. */
-export function microsFromCents(cents: Cents): string {
-  return String(cents * 10_000);
-}
+  protected get timeoutMs(): number {
+    return 20_000;
+  }
 
-/**
- * The only Google client that can change anything, and the only thing it can
- * change is the number of campaigns: one more, paused.
- */
-export class GoogleAdsWriteClient extends GoogleAdsPlatformClient {
-  private readonly timeoutMs: number;
-
-  constructor(reader: GoogleAdsReadClient, options: GoogleWriteClientOptions) {
-    super(reader, options.now);
-    if (options.confirmWrites !== true) {
-      throw new Error('GoogleAdsWriteClient requires confirmWrites: true');
-    }
-    this.timeoutMs = options.timeoutMs ?? 20_000;
+  protected get customer(): string {
+    return `customers/${this.accountExternalId}`;
   }
 
   /**
-   * Budget and campaign (and, for Search, its locations and language) in ONE
-   * atomic `googleAds:mutate`: all of it lands or none of it does, so an
-   * `unknown` outcome leaves exactly one thing to look for and never an
-   * orphaned budget.
+   * The same request the write would send, checked by Google against the real
+   * account with `validateOnly: true`: every field, every limit, every policy
+   * the API enforces at write time — and nothing is created or changed.
    */
-  override async createCampaign(spec: CreateCampaignSpec): Promise<MutationOutcome> {
+  async validateWrite(write: PlannedWrite): Promise<PreflightOutcome> {
+    const plan = await this.plan(write);
+    if (!plan.ok) return { status: 'rejected', code: plan.code, message: plan.message };
+    const sent = await this.mutate(plan.operations, { validateOnly: true });
+    if (sent.status === 'ok') return { status: 'ok', operations: plan.labels.map(labelOf) };
+    if (sent.status === 'rejected') return sent;
+    return { status: 'unavailable', reason: sent.reason };
+  }
+
+  /**
+   * Turns a planned write into Google's operations. Reads only — locations are
+   * resolved, a budget is looked up — so a plan that cannot be made sends
+   * nothing, and a plan made once serves both the rehearsal and the write.
+   */
+  protected async plan(write: PlannedWrite): Promise<Plan> {
+    switch (write.kind) {
+      case 'create_campaign':
+        return this.planCreate(write.spec);
+      case 'set_daily_budget': {
+        const budget = await this.budgetOf(write.campaignId);
+        if (!budget.ok) return budget;
+        if (budget.explicitlyShared) {
+          return {
+            ok: false,
+            code: 'google_shared_budget',
+            message:
+              'Esta campanha usa um orçamento compartilhado no Google: alterá-lo mudaria outras campanhas. Ajuste no Google Ads.',
+          };
+        }
+        return {
+          ok: true,
+          operations: [
+            {
+              campaignBudgetOperation: {
+                update: {
+                  resourceName: budget.resourceName,
+                  amountMicros: microsFromCents(write.dailyBudgetCents),
+                },
+                updateMask: 'amount_micros',
+              },
+            },
+          ],
+          labels: [{ kind: 'budget', label: 'Orçamento diário' }],
+          detail: { budget: budget.resourceName },
+        };
+      }
+      case 'pause_campaign':
+        return {
+          ok: true,
+          operations: [statusUpdate('campaignOperation', this.campaignName(write.campaignId), 'PAUSED')],
+          labels: [{ kind: 'campaign', label: 'Campanha pausada' }],
+          detail: {},
+        };
+      case 'resume_campaign': {
+        const companions = write.enableWith ?? { adGroupIds: [], adIds: [] };
+        return {
+          ok: true,
+          operations: [
+            statusUpdate('campaignOperation', this.campaignName(write.campaignId), 'ENABLED'),
+            ...companions.adGroupIds.map((id) =>
+              statusUpdate('adGroupOperation', `${this.customer}/adGroups/${id}`, 'ENABLED'),
+            ),
+            ...companions.adIds.map((id) =>
+              statusUpdate('adGroupAdOperation', `${this.customer}/adGroupAds/${id}`, 'ENABLED'),
+            ),
+          ],
+          labels: [
+            { kind: 'campaign', label: 'Campanha ativada' },
+            ...companions.adGroupIds.map(
+              (id): PlanLabel => ({ kind: 'ad_group', label: `Grupo ${id} ativado` }),
+            ),
+            ...companions.adIds.map(
+              (id): PlanLabel => ({ kind: 'ad', label: `Anúncio ${id} ativado` }),
+            ),
+          ],
+          detail: { enabled: companions },
+        };
+      }
+    }
+  }
+
+  private campaignName(campaignId: string): string {
+    return `${this.customer}/campaigns/${campaignId}`;
+  }
+
+  private async budgetOf(
+    campaignId: string,
+  ): Promise<
+    | { ok: true; resourceName: string; explicitlyShared: boolean }
+    | { ok: false; code: string; message: string }
+  > {
+    if (!/^\d+$/.test(campaignId)) {
+      return { ok: false, code: 'campaign_not_found', message: 'Id de campanha inválido.' };
+    }
+    const [row] = await this.campaignRows(`campaign.id = ${campaignId}`);
+    const resourceName = row?.campaignBudget?.resourceName;
+    if (!row || !resourceName) {
+      return {
+        ok: false,
+        code: 'campaign_not_found',
+        message: 'Campanha não encontrada no Google, ou sem orçamento próprio.',
+      };
+    }
+    return { ok: true, resourceName, explicitlyShared: row.campaignBudget?.explicitlyShared ?? false };
+  }
+
+  /**
+   * Budget, campaign, its criteria (locations, radii, language, negatives),
+   * one ad group, its keywords and its responsive search ad — ONE atomic
+   * `googleAds:mutate` with temporary ids: all of it lands or none of it
+   * does, so an `unknown` outcome leaves exactly one thing to look for and
+   * never an orphaned budget or a campaign that cannot deliver.
+   */
+  protected async planCreate(spec: CreateCampaignSpec): Promise<Plan> {
     const google = spec.google;
     if (!google) {
-      return {
-        status: 'rejected',
-        code: 'google_spec_missing',
-        message: 'Rascunho sem dados do Google.',
-      };
+      return { ok: false, code: 'google_spec_missing', message: 'Rascunho sem dados do Google.' };
     }
     // Defence in depth: the draft schema already refuses this.
     if (spec.status !== 'PAUSED') {
       return {
-        status: 'rejected',
+        ok: false,
         code: 'google_must_start_paused',
         message: 'Campanhas do Google nascem sempre pausadas.',
+      };
+    }
+    if (google.channel === 'SEARCH' && !google.search) {
+      return {
+        ok: false,
+        code: 'google_search_spec_missing',
+        message: 'Rascunho de Pesquisa sem grupo de anúncios, palavras-chave ou anúncio.',
       };
     }
 
@@ -752,15 +861,15 @@ export class GoogleAdsWriteClient extends GoogleAdsPlatformClient {
         locations = await this.resolveLocations(google.reach);
       } catch (error) {
         if (error instanceof GeoResolutionError) {
-          return { status: 'rejected', code: 'geo_unresolved', message: error.message };
+          return { ok: false, code: 'geo_unresolved', message: error.message };
         }
         throw error;
       }
     }
 
-    const customer = `customers/${this.accountExternalId}`;
-    const budgetName = `${customer}/campaignBudgets/-1`;
-    const campaignName = `${customer}/campaigns/-2`;
+    const budgetName = `${this.customer}/campaignBudgets/-1`;
+    const campaignName = `${this.customer}/campaigns/-2`;
+    const adGroupName = `${this.customer}/adGroups/-3`;
 
     const campaign: Record<string, unknown> = {
       resourceName: campaignName,
@@ -784,7 +893,7 @@ export class GoogleAdsWriteClient extends GoogleAdsPlatformClient {
       campaign.geoTargetTypeSetting = { positiveGeoTargetType: 'PRESENCE' };
     }
 
-    const mutateOperations: Record<string, unknown>[] = [
+    const operations: Record<string, unknown>[] = [
       {
         campaignBudgetOperation: {
           create: {
@@ -799,11 +908,16 @@ export class GoogleAdsWriteClient extends GoogleAdsPlatformClient {
       },
       { campaignOperation: { create: campaign } },
     ];
-    if (google.channel === 'SEARCH') {
-      mutateOperations.push(
-        ...googleLocationCriteria(campaignName, locations, google.reach.customLocations),
-      );
-      mutateOperations.push({
+    const labels: PlanLabel[] = [
+      { kind: 'budget', label: `Orçamento ${spec.name}` },
+      { kind: 'campaign', label: `Campanha ${spec.name}` },
+    ];
+
+    if (google.channel === 'SEARCH' && google.search) {
+      const geo = googleLocationCriteria(campaignName, locations, google.reach.customLocations);
+      operations.push(...geo);
+      labels.push(...geo.map((): PlanLabel => ({ kind: 'criterion', label: 'Localização' })));
+      operations.push({
         campaignCriterionOperation: {
           create: {
             campaign: campaignName,
@@ -811,16 +925,70 @@ export class GoogleAdsWriteClient extends GoogleAdsPlatformClient {
           },
         },
       });
+      labels.push({ kind: 'criterion', label: 'Idioma português' });
+
+      const tree = googleSearchOperations(campaignName, adGroupName, google.search);
+      operations.push(...tree.operations);
+      labels.push(...tree.labels);
     }
 
+    return {
+      ok: true,
+      operations,
+      labels,
+      detail: {
+        channel: google.channel,
+        locations: locations.map(({ asked, canonicalName }) => ({ asked, canonicalName })),
+        radii:
+          google.channel === 'SEARCH'
+            ? google.reach.customLocations.map(({ latitude, longitude, radiusKm }) => ({
+                latitude,
+                longitude,
+                radiusKm,
+              }))
+            : [],
+        language: google.channel === 'SEARCH' ? PORTUGUESE_LANGUAGE_CONSTANT : null,
+        ...(google.search
+          ? {
+              adGroup: google.search.adGroupName,
+              keywords: google.search.keywords.length,
+              negativeKeywords: google.search.negativeKeywords.length,
+              headlines: google.search.headlines.length,
+              descriptions: google.search.descriptions.length,
+            }
+          : {}),
+      },
+    };
+  }
+
+  /**
+   * The one place a mutate leaves this process. A validate-only request is
+   * exactly the write with one more flag; a real write is refused unless this
+   * is the write client — the reader cannot be talked into writing.
+   */
+  protected async mutate(
+    operations: Record<string, unknown>[],
+    options: { validateOnly: boolean },
+  ): Promise<MutateResult> {
+    if (!options.validateOnly && !this.mayWrite) {
+      return {
+        status: 'rejected',
+        code: 'google_read_only',
+        message: 'Este cliente do Google é somente leitura.',
+      };
+    }
     let response: Response;
     try {
       response = await this.reader.transport(
-        `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/${customer}/googleAds:mutate`,
+        `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/${this.customer}/googleAds:mutate`,
         {
           method: 'POST',
           headers: await this.reader.requestHeaders(),
-          body: JSON.stringify({ mutateOperations, partialFailure: false }),
+          body: JSON.stringify({
+            mutateOperations: operations,
+            partialFailure: false,
+            ...(options.validateOnly ? { validateOnly: true } : {}),
+          }),
           signal: AbortSignal.timeout(this.timeoutMs),
         },
       );
@@ -841,11 +1009,57 @@ export class GoogleAdsWriteClient extends GoogleAdsPlatformClient {
       return {
         status: 'rejected',
         code: failure.code ?? String(response.status),
-        message: failure.message ?? `O Google recusou a criação (${response.status})`,
+        message: failure.message ?? `O Google recusou a operação (${response.status})`,
       };
     }
+    return { status: 'ok', body: text };
+  }
+}
 
-    const id = createdCampaignId(text);
+export interface GoogleWriteClientOptions {
+  /** Must be true. Exists so enabling writes is a visible, deliberate act. */
+  confirmWrites: true;
+  timeoutMs?: number;
+  now?: () => Date;
+}
+
+/** Cents to micros: 1 cent is 10 000 micros. */
+export function microsFromCents(cents: Cents): string {
+  return String(cents * 10_000);
+}
+
+/**
+ * The only Google client that can change anything: one more campaign (paused,
+ * with its ad group and ad), or the budget or status of one that exists.
+ */
+export class GoogleAdsWriteClient extends GoogleAdsPlatformClient {
+  private readonly writeTimeoutMs: number;
+
+  constructor(reader: GoogleAdsReadClient, options: GoogleWriteClientOptions) {
+    super(reader, options.now);
+    if (options.confirmWrites !== true) {
+      throw new Error('GoogleAdsWriteClient requires confirmWrites: true');
+    }
+    this.writeTimeoutMs = options.timeoutMs ?? 20_000;
+  }
+
+  protected override get mayWrite(): boolean {
+    return true;
+  }
+
+  protected override get timeoutMs(): number {
+    return this.writeTimeoutMs;
+  }
+
+  override async createCampaign(spec: CreateCampaignSpec): Promise<MutationOutcome> {
+    const plan = await this.planCreate(spec);
+    if (!plan.ok) return { status: 'rejected', code: plan.code, message: plan.message };
+
+    const sent = await this.mutate(plan.operations, { validateOnly: false });
+    if (sent.status !== 'ok') return sent;
+
+    const results = mutateResults(sent.body);
+    const id = createdCampaignId(results);
     // Google said yes but we cannot tell what it made: it exists, id unknown.
     if (!id)
       return { status: 'unknown', reason: 'campaign created but the response carried no id' };
@@ -855,21 +1069,143 @@ export class GoogleAdsWriteClient extends GoogleAdsPlatformClient {
     return {
       status: 'applied',
       campaign: created,
-      detail: {
-        channel: google.channel,
-        locations: locations.map(({ asked, canonicalName }) => ({ asked, canonicalName })),
-        radii:
-          google.channel === 'SEARCH'
-            ? google.reach.customLocations.map(({ latitude, longitude, radiusKm }) => ({
-                latitude,
-                longitude,
-                radiusKm,
-              }))
-            : [],
-        language: google.channel === 'SEARCH' ? PORTUGUESE_LANGUAGE_CONSTANT : null,
-      },
+      detail: plan.detail,
+      created: createdObjects(plan.labels, results),
     };
   }
+
+  private async applyToCampaign(
+    campaignId: string,
+    write: PlannedWrite,
+  ): Promise<MutationOutcome> {
+    const plan = await this.plan(write);
+    if (!plan.ok) return { status: 'rejected', code: plan.code, message: plan.message };
+    const sent = await this.mutate(plan.operations, { validateOnly: false });
+    if (sent.status !== 'ok') return sent;
+    const campaign = await this.getCampaign(campaignId);
+    if (!campaign) return { status: 'unknown', reason: 'campaign unreadable after the change' };
+    return { status: 'applied', campaign, detail: plan.detail };
+  }
+
+  override async setDailyBudget(campaignId: string, dailyBudgetCents: Cents): Promise<MutationOutcome> {
+    return this.applyToCampaign(campaignId, { kind: 'set_daily_budget', campaignId, dailyBudgetCents });
+  }
+
+  override async pauseCampaign(campaignId: string): Promise<MutationOutcome> {
+    return this.applyToCampaign(campaignId, { kind: 'pause_campaign', campaignId });
+  }
+
+  override async resumeCampaign(
+    campaignId: string,
+    enableWith?: ResumeCompanions,
+  ): Promise<MutationOutcome> {
+    return this.applyToCampaign(campaignId, { kind: 'resume_campaign', campaignId, enableWith });
+  }
+}
+
+interface PlanLabel {
+  kind: 'budget' | 'campaign' | 'criterion' | CreatedObject['kind'];
+  label: string;
+}
+
+type Plan =
+  | {
+      ok: true;
+      operations: Record<string, unknown>[];
+      /** One per operation, in order: what each one is, for people. */
+      labels: PlanLabel[];
+      detail: Record<string, unknown>;
+    }
+  | { ok: false; code: string; message: string };
+
+type MutateResult =
+  | { status: 'ok'; body: string }
+  | { status: 'rejected'; code: string; message: string }
+  | { status: 'unknown'; reason: string };
+
+function labelOf(label: PlanLabel): string {
+  return label.label;
+}
+
+function statusUpdate(
+  operation: 'campaignOperation' | 'adGroupOperation' | 'adGroupAdOperation',
+  resourceName: string,
+  status: 'ENABLED' | 'PAUSED',
+): Record<string, unknown> {
+  return { [operation]: { update: { resourceName, status }, updateMask: 'status' } };
+}
+
+/**
+ * The ad group, its keywords, the campaign's negatives and the responsive
+ * search ad. Every keyword carries the match the draft wrote (exact or
+ * phrase; never broad); negatives are phrase, on the campaign, so they hold
+ * for any ad group added later by hand. Ad group and ad are born PAUSED like
+ * the campaign: switching on is `resume_campaign`, which enables the three.
+ */
+export function googleSearchOperations(
+  campaignName: string,
+  adGroupName: string,
+  search: GoogleSearchSpec,
+): { operations: Record<string, unknown>[]; labels: PlanLabel[] } {
+  const operations: Record<string, unknown>[] = [];
+  const labels: PlanLabel[] = [];
+
+  for (const text of search.negativeKeywords) {
+    operations.push({
+      campaignCriterionOperation: {
+        create: { campaign: campaignName, negative: true, keyword: { text, matchType: 'PHRASE' } },
+      },
+    });
+    labels.push({ kind: 'negative_keyword', label: `Negativa "${text}"` });
+  }
+
+  operations.push({
+    adGroupOperation: {
+      create: {
+        resourceName: adGroupName,
+        name: search.adGroupName,
+        campaign: campaignName,
+        status: 'PAUSED',
+        type: 'SEARCH_STANDARD',
+      },
+    },
+  });
+  labels.push({ kind: 'ad_group', label: `Grupo ${search.adGroupName}` });
+
+  for (const keyword of search.keywords) {
+    operations.push({
+      adGroupCriterionOperation: {
+        create: {
+          adGroup: adGroupName,
+          status: 'ENABLED',
+          keyword: { text: keyword.text, matchType: keyword.match },
+        },
+      },
+    });
+    labels.push({
+      kind: 'keyword',
+      label: keyword.match === 'EXACT' ? `[${keyword.text}]` : `"${keyword.text}"`,
+    });
+  }
+
+  operations.push({
+    adGroupAdOperation: {
+      create: {
+        adGroup: adGroupName,
+        status: 'PAUSED',
+        ad: {
+          finalUrls: [search.finalUrl],
+          responsiveSearchAd: {
+            headlines: search.headlines.map((text) => ({ text })),
+            descriptions: search.descriptions.map((text) => ({ text })),
+          },
+        },
+      },
+    },
+  });
+  labels.push({ kind: 'ad', label: 'Anúncio responsivo de pesquisa' });
+
+  return { operations, labels };
 }
 
 /**
@@ -922,32 +1258,105 @@ function campaignDates(startDate: string, endDate: string): Record<string, strin
   return { startDate, endDate };
 }
 
-function createdCampaignId(body: string): string | null {
+interface MutateOperationResponse {
+  campaignBudgetResult?: { resourceName?: string };
+  campaignResult?: { resourceName?: string };
+  campaignCriterionResult?: { resourceName?: string };
+  adGroupResult?: { resourceName?: string };
+  adGroupCriterionResult?: { resourceName?: string };
+  adGroupAdResult?: { resourceName?: string };
+}
+
+function mutateResults(body: string): MutateOperationResponse[] {
   try {
-    const parsed = JSON.parse(body) as {
-      mutateOperationResponses?: { campaignResult?: { resourceName?: string } }[];
-    };
-    for (const entry of parsed.mutateOperationResponses ?? []) {
-      const match = /\/campaigns\/(\d+)$/.exec(entry.campaignResult?.resourceName ?? '');
-      if (match?.[1]) return match[1];
-    }
+    const parsed = JSON.parse(body) as { mutateOperationResponses?: MutateOperationResponse[] };
+    return parsed.mutateOperationResponses ?? [];
   } catch {
-    // Not JSON: fall through.
+    return [];
+  }
+}
+
+function createdCampaignId(results: MutateOperationResponse[]): string | null {
+  for (const entry of results) {
+    const match = /\/campaigns\/(\d+)$/.exec(entry.campaignResult?.resourceName ?? '');
+    if (match?.[1]) return match[1];
   }
   return null;
 }
 
-function googleFailure(body: string): { code?: string; message?: string } {
+/** The last path segment of a resource name: `123`, or `123~456` for an ad. */
+function idOf(resourceName: string | undefined): string | null {
+  const match = /\/([^/]+)$/.exec(resourceName ?? '');
+  return match?.[1] ?? null;
+}
+
+/**
+ * Pairs each operation's label with what Google made of it, in order. Only
+ * the objects worth a step (ad group, keywords, negatives, ad) are listed:
+ * the campaign has its own step and criteria are evidence in `detail`.
+ */
+function createdObjects(
+  labels: PlanLabel[],
+  results: MutateOperationResponse[],
+): CreatedObject[] {
+  const created: CreatedObject[] = [];
+  labels.forEach((label, index) => {
+    const result = results[index];
+    const externalId =
+      label.kind === 'ad_group'
+        ? idOf(result?.adGroupResult?.resourceName)
+        : label.kind === 'keyword'
+          ? idOf(result?.adGroupCriterionResult?.resourceName)
+          : label.kind === 'negative_keyword'
+            ? idOf(result?.campaignCriterionResult?.resourceName)
+            : label.kind === 'ad'
+              ? idOf(result?.adGroupAdResult?.resourceName)
+              : null;
+    if (
+      label.kind === 'ad_group' ||
+      label.kind === 'keyword' ||
+      label.kind === 'negative_keyword' ||
+      label.kind === 'ad'
+    ) {
+      created.push({ kind: label.kind, label: label.label, externalId: externalId ?? '' });
+    }
+  });
+  return created;
+}
+
+/**
+ * Google's error, in one line a person can act on: the code of the first
+ * error, and up to three messages each prefixed by the field it points at
+ * (`operations[7].create.keyword.text`), which is what tells a headline that
+ * is too long from a keyword Google refuses.
+ */
+export function googleFailure(body: string): { code?: string; message?: string } {
   try {
     const parsed = JSON.parse(body) as {
       error?: {
         message?: string;
-        details?: { errors?: { message?: string; errorCode?: Record<string, string> }[] }[];
+        details?: {
+          errors?: {
+            message?: string;
+            errorCode?: Record<string, string>;
+            location?: { fieldPathElements?: { fieldName?: string; index?: number }[] };
+          }[];
+        }[];
       };
     };
-    const first = parsed.error?.details?.[0]?.errors?.[0];
+    const errors = parsed.error?.details?.flatMap((detail) => detail.errors ?? []) ?? [];
+    const first = errors[0];
     const code = first?.errorCode ? Object.values(first.errorCode)[0] : undefined;
-    return { code, message: first?.message ?? parsed.error?.message };
+    const lines = errors.slice(0, 3).map((error) => {
+      const path = (error.location?.fieldPathElements ?? [])
+        .map((element) =>
+          element.index === undefined ? element.fieldName : `${element.fieldName}[${element.index}]`,
+        )
+        .join('.');
+      return path ? `${path}: ${error.message ?? ''}` : (error.message ?? '');
+    });
+    const message = lines.filter(Boolean).join(' · ') || parsed.error?.message;
+    return { code, message };
   } catch {
     return {};
   }

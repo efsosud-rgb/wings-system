@@ -24,7 +24,16 @@ import type {
  * what was created stays recorded and a person decides what to do with it.
  */
 
-export type StepKind = 'campaign' | 'image' | 'video' | 'ad_set' | 'creative' | 'ad';
+export type StepKind =
+  | 'campaign'
+  | 'image'
+  | 'video'
+  | 'ad_set'
+  | 'creative'
+  | 'ad'
+  | 'ad_group'
+  | 'keyword'
+  | 'negative_keyword';
 
 export interface ExecutionStep {
   seq: number;

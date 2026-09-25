@@ -19,6 +19,25 @@ export interface FakeGoogleCampaign {
   explicitlyShared?: boolean;
 }
 
+/** What a create left under a campaign, as the fake keeps it. */
+export interface FakeGoogleAdGroup {
+  id: string;
+  campaignId: string;
+  name: string;
+  status: string;
+  keywords: { text: string; matchType: string }[];
+}
+
+export interface FakeGoogleAd {
+  /** `<adGroupId>~<adId>`, as Google names an ad group ad. */
+  id: string;
+  adGroupId: string;
+  status: string;
+  finalUrls: string[];
+  headlines: string[];
+  descriptions: string[];
+}
+
 export interface RecordedGoogleCall {
   url: string;
   headers: Record<string, string>;
@@ -60,7 +79,15 @@ export interface FakeGoogleApiOptions {
   /** Daily performance rows; none by default, as an account that never delivered. */
   metrics?: FakeGoogleMetricsRow[];
   /** How the next mutate behaves. */
-  mutate?: 'ok' | 'ok_without_id' | 'reject' | 'server_error' | 'network_failure';
+  /** `reject_writes` accepts a validate-only request and refuses the write. */
+  mutate?:
+    | 'ok'
+    | 'ok_without_id'
+    | 'reject'
+    | 'reject_writes'
+    | 'server_error'
+    | 'server_error_writes'
+    | 'network_failure';
   /** Rows answered for `FROM conversion_action`; one enabled action by default. */
   conversionActions?: { id: string; name: string; status: string; type?: string }[];
   /**
@@ -114,6 +141,9 @@ export const BRAZIL_GEO = [
 export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
   const customerId = options.customerId ?? '4268586278';
   const campaigns: FakeGoogleCampaign[] = [...(options.campaigns ?? [])];
+  const adGroups: FakeGoogleAdGroup[] = [];
+  const ads: FakeGoogleAd[] = [];
+  const negatives: { campaignId: string; text: string; matchType: string }[] = [];
   const geo = options.geo ?? [...BRAZIL_GEO];
   const calls: RecordedGoogleCall[] = [];
   const state = { mutate: options.mutate ?? 'ok', accountBudget: options.accountBudget };
@@ -249,9 +279,28 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
     return [];
   }
 
+  type Operation = Record<
+    string,
+    { create?: Record<string, unknown>; update?: Record<string, unknown>; updateMask?: string }
+  >;
+
+  /**
+   * Like Google: the whole request is checked and, unless `validateOnly`,
+   * applied atomically. Temporary ids (`-1`, `-2`, `-3`) resolve inside the
+   * request. A `validateOnly` request changes nothing and answers 200 with
+   * no results — exactly the shape the real API gives.
+   */
   function mutate(body: Record<string, unknown>): Response {
-    if (state.mutate === 'server_error') return json(503, { error: { message: 'backend error' } });
-    if (state.mutate === 'reject') {
+    if (
+      state.mutate === 'server_error' ||
+      (state.mutate === 'server_error_writes' && body.validateOnly !== true)
+    ) {
+      return json(503, { error: { message: 'backend error' } });
+    }
+    if (
+      state.mutate === 'reject' ||
+      (state.mutate === 'reject_writes' && body.validateOnly !== true)
+    ) {
       return json(400, {
         error: {
           message: 'Request contains an invalid argument.',
@@ -261,6 +310,14 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
                 {
                   errorCode: { campaignBudgetError: 'MONEY_AMOUNT_TOO_SMALL' },
                   message: 'The budget amount is too small.',
+                  location: {
+                    fieldPathElements: [
+                      { fieldName: 'mutate_operations', index: 0 },
+                      { fieldName: 'campaign_budget_operation' },
+                      { fieldName: 'create' },
+                      { fieldName: 'amount_micros' },
+                    ],
+                  },
                 },
               ],
             },
@@ -269,45 +326,133 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
       });
     }
 
-    const operations = (body.mutateOperations ?? []) as Record<
-      string,
-      { create?: Record<string, unknown> }
-    >[];
-    const budget = operations.find((op) => op.campaignBudgetOperation)?.campaignBudgetOperation
-      ?.create;
-    const campaign = operations.find((op) => op.campaignOperation)?.campaignOperation?.create;
-    const id = String(nextId++);
-    campaigns.push({
-      id,
-      name: String(campaign?.name ?? ''),
-      status: (campaign?.status as FakeGoogleCampaign['status']) ?? 'PAUSED',
-      amountMicros: String(budget?.amountMicros ?? '0'),
-    });
+    const operations = (body.mutateOperations ?? []) as Operation[];
+    if (body.validateOnly === true) return json(200, { mutateOperationResponses: [] });
 
-    return json(200, {
-      mutateOperationResponses: operations.map((op) =>
-        op.campaignBudgetOperation
-          ? {
-              campaignBudgetResult: {
-                resourceName: `customers/${customerId}/campaignBudgets/b${id}`,
-              },
-            }
-          : op.campaignOperation
-            ? {
-                campaignResult: {
-                  resourceName:
-                    state.mutate === 'ok_without_id'
-                      ? ''
-                      : `customers/${customerId}/campaigns/${id}`,
-                },
-              }
-            : {
-                campaignCriterionResult: {
-                  resourceName: `customers/${customerId}/campaignCriteria/${id}~1`,
-                },
-              },
-      ),
-    });
+    const tempIds = new Map<string, string>();
+    const resolve = (name: unknown): string => {
+      const value = String(name ?? '');
+      return tempIds.get(value) ?? value;
+    };
+    const lastSegment = (name: string) => name.slice(name.lastIndexOf('/') + 1);
+    const responses: Record<string, { resourceName: string }>[] = [];
+
+    for (const op of operations) {
+      if (op.campaignBudgetOperation) {
+        const { create, update } = op.campaignBudgetOperation;
+        if (create) {
+          const id = `b${nextId}`;
+          const resourceName = `customers/${customerId}/campaignBudgets/${id}`;
+          tempIds.set(String(create.resourceName), resourceName);
+          responses.push({ campaignBudgetResult: { resourceName } });
+        } else if (update) {
+          const target = campaigns.find(
+            (campaign) =>
+              (campaign.budgetResourceName ??
+                `customers/${customerId}/campaignBudgets/b${campaign.id}`) ===
+              update.resourceName,
+          );
+          if (target) target.amountMicros = String(update.amountMicros);
+          responses.push({ campaignBudgetResult: { resourceName: String(update.resourceName) } });
+        }
+      } else if (op.campaignOperation) {
+        const { create, update } = op.campaignOperation;
+        if (create) {
+          const id = String(nextId++);
+          const resourceName = `customers/${customerId}/campaigns/${id}`;
+          tempIds.set(String(create.resourceName), resourceName);
+          const budgetName = resolve(create.campaignBudget);
+          const budget = operations.find(
+            (item) => item.campaignBudgetOperation?.create?.resourceName === create.campaignBudget,
+          )?.campaignBudgetOperation?.create;
+          campaigns.push({
+            id,
+            name: String(create.name ?? ''),
+            status: (create.status as FakeGoogleCampaign['status']) ?? 'PAUSED',
+            amountMicros: String(budget?.amountMicros ?? '0'),
+            budgetResourceName: budgetName,
+          });
+          responses.push({
+            campaignResult: { resourceName: state.mutate === 'ok_without_id' ? '' : resourceName },
+          });
+        } else if (update) {
+          const target = campaigns.find((campaign) => campaign.id === lastSegment(String(update.resourceName)));
+          if (target && update.status) target.status = update.status as FakeGoogleCampaign['status'];
+          responses.push({ campaignResult: { resourceName: String(update.resourceName) } });
+        }
+      } else if (op.campaignCriterionOperation) {
+        const create = op.campaignCriterionOperation.create ?? {};
+        const campaignId = lastSegment(resolve(create.campaign));
+        const keyword = create.keyword as { text: string; matchType: string } | undefined;
+        if (create.negative === true && keyword) {
+          negatives.push({ campaignId, text: keyword.text, matchType: keyword.matchType });
+        }
+        responses.push({
+          campaignCriterionResult: {
+            resourceName: `customers/${customerId}/campaignCriteria/${campaignId}~${nextId++}`,
+          },
+        });
+      } else if (op.adGroupOperation) {
+        const { create, update } = op.adGroupOperation;
+        if (create) {
+          const id = String(nextId++);
+          const resourceName = `customers/${customerId}/adGroups/${id}`;
+          tempIds.set(String(create.resourceName), resourceName);
+          adGroups.push({
+            id,
+            campaignId: lastSegment(resolve(create.campaign)),
+            name: String(create.name ?? ''),
+            status: String(create.status ?? 'ENABLED'),
+            keywords: [],
+          });
+          responses.push({ adGroupResult: { resourceName } });
+        } else if (update) {
+          const target = adGroups.find((group) => group.id === lastSegment(String(update.resourceName)));
+          if (target && update.status) target.status = String(update.status);
+          responses.push({ adGroupResult: { resourceName: String(update.resourceName) } });
+        }
+      } else if (op.adGroupCriterionOperation) {
+        const create = op.adGroupCriterionOperation.create ?? {};
+        const groupId = lastSegment(resolve(create.adGroup));
+        const keyword = create.keyword as { text: string; matchType: string } | undefined;
+        const group = adGroups.find((item) => item.id === groupId);
+        if (group && keyword) group.keywords.push(keyword);
+        responses.push({
+          adGroupCriterionResult: {
+            resourceName: `customers/${customerId}/adGroupCriteria/${groupId}~${nextId++}`,
+          },
+        });
+      } else if (op.adGroupAdOperation) {
+        const { create, update } = op.adGroupAdOperation;
+        if (create) {
+          const groupId = lastSegment(resolve(create.adGroup));
+          const id = `${groupId}~${nextId++}`;
+          const ad = (create.ad ?? {}) as {
+            finalUrls?: string[];
+            responsiveSearchAd?: { headlines?: { text: string }[]; descriptions?: { text: string }[] };
+          };
+          ads.push({
+            id,
+            adGroupId: groupId,
+            status: String(create.status ?? 'ENABLED'),
+            finalUrls: ad.finalUrls ?? [],
+            headlines: (ad.responsiveSearchAd?.headlines ?? []).map((item) => item.text),
+            descriptions: (ad.responsiveSearchAd?.descriptions ?? []).map((item) => item.text),
+          });
+          responses.push({
+            adGroupAdResult: { resourceName: `customers/${customerId}/adGroupAds/${id}` },
+          });
+        } else if (update) {
+          const target = ads.find((ad) => ad.id === lastSegment(String(update.resourceName)));
+          if (target && update.status) target.status = String(update.status);
+          responses.push({ adGroupAdResult: { resourceName: String(update.resourceName) } });
+        }
+      } else {
+        responses.push({});
+      }
+    }
+
+    return json(200, { mutateOperationResponses: responses });
   }
 
   const impl = ((url: unknown, init?: RequestInit) => {
@@ -387,8 +532,16 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
     reader,
     calls,
     campaigns,
+    adGroups,
+    ads,
+    negatives,
     state,
     mutateCalls: () => calls.filter((call) => call.url.endsWith('googleAds:mutate')),
+    /** Only the mutates that could change something: validate-only ones are left out. */
+    writeCalls: () =>
+      calls.filter(
+        (call) => call.url.endsWith('googleAds:mutate') && call.body.validateOnly !== true,
+      ),
     searchCalls: (from: string) =>
       calls.filter(
         (call) =>

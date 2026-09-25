@@ -1,6 +1,10 @@
+import { campaignDraftSchema, type CampaignDraft } from '@wings/shared';
+import { and, eq, isNull } from 'drizzle-orm';
 import { createDb } from '../../db/client.js';
 import { loadDotEnv } from '../../db/load-env.js';
+import { adAccounts, adApprovalRequests } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
+import { createSpecOf, preflightChange, type PreflightResult } from './executor.js';
 import { createApprovalNotifier } from './notifiers/factory.js';
 import {
   accountOfChange,
@@ -13,6 +17,7 @@ import {
   type ChangeKind,
 } from './ops.js';
 import { createPlatformClient } from './platform/factory.js';
+import { canPreflight } from './platform/types.js';
 import { formatBrl } from './platform/money.js';
 
 /**
@@ -28,6 +33,13 @@ import { formatBrl } from './platform/money.js';
  *        --kind pause_campaign --reason "…"
  *   node dist/modules/ads/ops-cli.js resolve-unknown --change <uuid>
  *   node dist/modules/ads/ops-cli.js release-kill-switch --account act_… --reason "…"
+ *   node dist/modules/ads/ops-cli.js preflight-google --approval <uuid>
+ *   node dist/modules/ads/ops-cli.js preflight-google --example
+ *
+ * `preflight-google` sends Google the exact request with `validateOnly`: the
+ * real account checks it and nothing is created or changed. It works with the
+ * write switch off. `--example` rehearses a built-in Search campaign, for a
+ * dry run before there is any request.
  */
 
 const KINDS: readonly ChangeKind[] = ['pause_campaign', 'resume_campaign', 'set_daily_budget'];
@@ -167,6 +179,88 @@ async function main() {
         return;
       }
 
+      case 'preflight-google': {
+        const account = await db.query.adAccounts.findFirst({
+          where: and(eq(adAccounts.platform, 'google'), isNull(adAccounts.archivedAt)),
+        });
+        if (!account) throw new Error('nenhuma conta Google Ads ativa neste ambiente');
+        // Always a reader, whatever the write switch says: validateOnly never writes.
+        const { client } = createPlatformClient({ ...env, ADS_WRITES_ENABLED: false }, account);
+        if (!client) throw new Error('sem credenciais do Google para esta conta');
+        if (!canPreflight(client)) throw new Error('este cliente não valida sem escrever');
+
+        const approvalId = arg('approval');
+        if (approvalId) {
+          const approval = await db.query.adApprovalRequests.findFirst({
+            where: eq(adApprovalRequests.id, approvalId),
+          });
+          if (!approval) throw new Error('aprovação não encontrada');
+          const result = await preflightChange(db, client, approval.changeRequestId);
+          printPreflight(result);
+          if (!result.ok) process.exitCode = 1;
+          return;
+        }
+        if (!arg('example') && !process.argv.includes('--example')) {
+          throw new Error('informe --approval <uuid> ou --example');
+        }
+        const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(
+          new Date(),
+        );
+        const end = new Date(Date.now() + 14 * 86_400_000);
+        const draft: CampaignDraft = campaignDraftSchema.parse({
+          platform: 'google_search',
+          name: `Ensaio validateOnly ${today}`,
+          objective: 'lead',
+          idealCustomerProfile:
+            'Empresário dono de negócio próprio que quer expandir a marca por franquias.',
+          reach: { states: ['SP'], cities: [], customLocations: [] },
+          destinationUrl: 'https://wingscompany.com.br/',
+          startDate: today,
+          endDate: new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(end),
+          dailyBudgetCents: 2000,
+          utms: {
+            utm_source: 'google',
+            utm_medium: 'cpc',
+            utm_campaign: 'ensaio-validateonly',
+            utm_content: 'lead',
+          },
+          startPaused: true,
+          search: {
+            adGroupName: 'Ensaio · grupo 1',
+            keywords: ['[franquear minha empresa]', '"como franquear meu negócio"', '[expandir por franquias]'],
+            negativeKeywords: ['vaga', 'emprego', 'curso', 'grátis', 'pdf'],
+            headlines: [
+              'Franqueie o Seu Negócio',
+              'Expansão por Franquias',
+              'Consultoria de Franquias',
+              'Wings Company',
+            ],
+            descriptions: [
+              'Formatação de franquia com método próprio e acompanhamento da Wings.',
+              'Fale com um consultor e veja se o seu negócio está pronto para franquear.',
+            ],
+          },
+        });
+        const spec = createSpecOf({
+          name: draft.name,
+          startPaused: true,
+          dailyBudgetCents: draft.dailyBudgetCents,
+          startDate: draft.startDate,
+          endDate: draft.endDate,
+          payload: draft,
+        });
+        const outcome = await client.validateWrite({ kind: 'create_campaign', spec });
+        printPreflight(
+          outcome.status === 'ok'
+            ? { ok: true, ...outcome }
+            : outcome.status === 'rejected'
+              ? { ok: false, ...outcome }
+              : { ok: false, ...outcome },
+        );
+        if (outcome.status !== 'ok') process.exitCode = 1;
+        return;
+      }
+
       case 'release-kill-switch': {
         const result = await releaseKillSwitchOnRecord(db, {
           accountExternalId: required('account'),
@@ -182,11 +276,33 @@ async function main() {
 
       default:
         throw new Error(
-          'comando desconhecido. Use: status | preflight | alerts | request | resolve-unknown | release-kill-switch',
+          'comando desconhecido. Use: status | preflight | preflight-google | alerts | request | resolve-unknown | release-kill-switch',
         );
     }
   } finally {
     await pool.end();
+  }
+}
+
+function printPreflight(result: PreflightResult): void {
+  switch (result.status) {
+    case 'ok':
+      console.warn(
+        `validateOnly: o Google ACEITOU a solicitação inteira (${result.operations.length} operações). Nada foi escrito.\n` +
+          result.operations.map((label) => `  - ${label}`).join('\n'),
+      );
+      return;
+    case 'rejected':
+      console.warn(
+        `validateOnly: o Google RECUSOU — ${result.code}\n  ${result.message}\nNada foi escrito.`,
+      );
+      return;
+    case 'unavailable':
+      console.warn(`validateOnly: o Google não respondeu (${result.reason}). Nada foi validado.`);
+      return;
+    case 'refused':
+      console.warn(`recusado antes de chamar o Google — ${result.reason}: ${result.message}`);
+      return;
   }
 }
 

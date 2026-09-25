@@ -665,11 +665,10 @@ function requestability(
       reason: 'O sistema ainda não cria pedidos de negativação. Faça no Google Ads.',
     };
   }
-  if (platform !== 'meta') {
+  if (platform !== 'meta' && platform !== 'google') {
     return {
       requestable: false,
-      reason:
-        'Em campanhas do Google que já existem o sistema não altera nada. Faça no Google Ads.',
+      reason: 'Nesta plataforma o sistema não altera campanhas que já existem.',
     };
   }
   if (proposal.kind === 'set_daily_budget' && campaign.budgetLevel === 'ad_set') {

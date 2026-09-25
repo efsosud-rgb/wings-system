@@ -454,10 +454,10 @@ describe('Google campaigns through the same request', () => {
       name: `Pesquisa ${randomBytes(3).toString('hex')}`,
       utms: { utm_source: 'google', utm_medium: 'cpc', utm_campaign: 'x', utm_content: 'lead' },
       search: {
-        keywords: ['abrir franquia'],
+        keywords: ['[abrir franquia]'],
         negativeKeywords: [],
-        headlines: ['Franquia Wings'],
-        descriptions: ['Conheça o modelo de negócio e o suporte da Wings.'],
+        headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
+        descriptions: ['Conheça o modelo de negócio e o suporte da Wings.', 'Suporte do início ao fim.'],
       },
     };
   };
@@ -507,7 +507,7 @@ describe('Google campaigns through the same request', () => {
     const approval = detail.json<{ approval: ApprovalDetail }>().approval;
     expect(approval.platform).toBe('google');
     expect(approval.status).toBe('pending');
-    expect(approval.draft?.search?.keywords).toEqual(['abrir franquia']);
+    expect(approval.draft?.search?.keywords).toEqual(['[abrir franquia]']);
     // No Google credentials and the switch off: approving cannot lead to a write.
     expect(approval.executionAvailable).toBe(false);
 

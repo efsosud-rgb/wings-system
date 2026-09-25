@@ -582,8 +582,8 @@ export interface AgentChangeProposalCard extends AgentProposalBase {
   currentDailyBudgetCents: number | null;
   /**
    * False when the system has no request of this kind to create — a negative
-   * keyword, or anything on a Google campaign that already exists. The card
-   * then says the change is done by hand, and offers no button.
+   * keyword, or a budget held at ad-set level. The card then says the change
+   * is done by hand, and offers no button.
    */
   requestable: boolean;
   notRequestableReason: string | null;

@@ -17,12 +17,14 @@ import {
   adVideoUploads,
   auditLog,
 } from '../../db/schema/index.js';
+import { writeAudit } from '../../lib/audit.js';
 import { decideApproval, gateChange } from './approvals.js';
 import { reserveCampaignCreation } from './budget-guard.js';
 import { nextPendingInGroup, pendingGroups } from './batches.js';
 import { stepsOfExecution } from './ad-tree.js';
-import { executeApprovedChange } from './executor.js';
+import { executeApprovedChange, preflightChange } from './executor.js';
 import { createApprovalNotifier } from './notifiers/factory.js';
+import { requestCampaignChange } from './ops.js';
 import { createPlatformClient } from './platform/factory.js';
 import { simulateChange } from './simulate.js';
 
@@ -40,6 +42,20 @@ const idParamSchema = z.object({ id: z.string().uuid() });
 const simulationQuerySchema = z.object({
   dailyBudgetCents: z.coerce.number().int().min(0).max(100_000_000).optional(),
 });
+
+/** A change to a campaign that exists, asked for by a person from the screen. */
+const changeRequestSchema = z
+  .object({
+    accountExternalId: z.string().trim().min(1),
+    campaignExternalId: z.string().trim().min(1),
+    kind: z.enum(['set_daily_budget', 'pause_campaign', 'resume_campaign']),
+    toDailyBudgetCents: z.number().int().min(0).max(100_000_000).optional(),
+    reason: z.string().trim().min(3, 'Informe o motivo').max(500),
+  })
+  .refine((value) => value.kind !== 'set_daily_budget' || value.toDailyBudgetCents !== undefined, {
+    message: 'Informe o novo orçamento diário',
+    path: ['toDailyBudgetCents'],
+  });
 
 function requestContext(request: FastifyRequest) {
   return { ip: request.ip, userAgent: request.headers['user-agent'] ?? null };
@@ -448,6 +464,100 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         changeRequestId: reserved.value.changeRequestId,
         exposureDeltaCents: reserved.value.exposureDeltaCents,
       });
+    },
+  );
+
+  /**
+   * Asks for a change to a campaign that exists: budget, pause or resume.
+   * The same road the ops CLI and the agent's cards take — the budget guard
+   * reserves, the gate puts it in front of an approver, nothing is sent.
+   */
+  app.post(
+    '/ads/change-requests',
+    { preHandler: app.requirePermission('ads.request') },
+    async (request, reply) => {
+      const parsed = changeRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0];
+        return reply
+          .status(400)
+          .send({ error: 'invalid_request', message: issue?.message ?? 'Dados inválidos' });
+      }
+      const result = await requestCampaignChange(db, {
+        ...parsed.data,
+        requestedBy: request.session.actor.employeeId,
+        notifier: createApprovalNotifier(env, db, (message) => request.log.info(message)),
+      });
+      if (!result.ok) {
+        const status = result.reason === 'reservation_refused' ? 409 : 404;
+        return reply.status(status).send({ error: result.reason, message: result.message });
+      }
+      return reply.status(201).send({
+        approvalId: result.value.approvalId ?? null,
+        changeRequestId: result.value.changeRequestId,
+        exposureDeltaCents: result.value.exposureDeltaCents,
+      });
+    },
+  );
+
+  /**
+   * Rehearses a change against the real account without writing anything:
+   * the exact request the executor would send, validated by the platform
+   * (Google's `validateOnly`). Any credentials will do, a reader's included,
+   * and the write switch is not consulted — nothing here can write.
+   */
+  app.post(
+    '/ads/approvals/:id/preflight',
+    { preHandler: app.requirePermission('ads.request') },
+    async (request, reply) => {
+      const params = idParamSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply
+          .status(404)
+          .send({ error: 'not_found', message: 'Solicitação não encontrada.' });
+      }
+      const approval = await db.query.adApprovalRequests.findFirst({
+        where: eq(adApprovalRequests.id, params.data.id),
+      });
+      const account = approval
+        ? await db.query.adAccounts.findFirst({ where: eq(adAccounts.id, approval.adAccountId) })
+        : undefined;
+      if (!approval || !account) {
+        return reply
+          .status(404)
+          .send({ error: 'not_found', message: 'Solicitação não encontrada.' });
+      }
+      // Always a reader: a rehearsal must be possible with writes switched off.
+      const { client } = createPlatformClient(
+        { ...env, ADS_WRITES_ENABLED: false },
+        account,
+        platformFetch,
+      );
+      if (!client) {
+        return reply.status(409).send({
+          error: 'no_credentials',
+          message: 'Sem credenciais configuradas para esta conta.',
+        });
+      }
+
+      const result = await preflightChange(db, client, approval.changeRequestId);
+      await writeAudit(db, {
+        actorEmployeeId: request.session.actor.employeeId,
+        action: 'ads.preflight',
+        entity: 'ad_approval_request',
+        entityId: approval.id,
+        ip: request.ip,
+        metadata: {
+          platform: account.platform,
+          status: result.status,
+          ...(result.status === 'rejected' ? { code: result.code } : {}),
+          ...(result.status === 'ok' ? { operations: result.operations.length } : {}),
+        },
+      });
+      if (result.status === 'refused') {
+        return reply.status(409).send({ error: result.reason, message: result.message });
+      }
+      return reply.send(result);
     },
   );
 

@@ -434,9 +434,10 @@ export async function reserveChange(
   });
   if (!account) return { ok: false, reason: 'period_not_open', message: 'Conta não encontrada' };
 
-  // On Google this system creates campaigns and nothing else: there is no
-  // request to make about one that already exists.
-  if (account.platform !== 'meta') {
+  // Meta and Google both take a budget, a pause and a resume on a campaign
+  // that exists (since 2026-09-25 for Google). Any other platform has no
+  // write client, so there is no request to make.
+  if (account.platform !== 'meta' && account.platform !== 'google') {
     return {
       ok: false,
       reason: 'not_supported_on_platform',

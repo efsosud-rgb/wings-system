@@ -781,32 +781,104 @@ export const MAX_KEYWORDS = 10;
 export const MAX_NEGATIVE_KEYWORDS = 20;
 export const KEYWORD_MAX_LENGTH = 80;
 export const KEYWORD_MAX_WORDS = 10;
-/** Google's limits for a responsive search ad's parts. */
+/**
+ * Google's limits for a responsive search ad's parts. Google itself refuses an
+ * ad with fewer than 3 headlines or 2 descriptions, so the form does too.
+ */
 export const SEARCH_HEADLINE_MAX = 30;
 export const SEARCH_DESCRIPTION_MAX = 90;
-export const MAX_SEARCH_HEADLINES = 3;
-export const MAX_SEARCH_DESCRIPTIONS = 2;
+export const MAX_SEARCH_HEADLINES = 15;
+export const MAX_SEARCH_DESCRIPTIONS = 4;
+export const MIN_SEARCH_HEADLINES = 3;
+export const MIN_SEARCH_DESCRIPTIONS = 2;
+export const AD_GROUP_NAME_MAX = 120;
 
 /** Google refuses these characters in a keyword. */
 const KEYWORD_FORBIDDEN = /[!@%,*=;`<>^{}|~]/;
 
+/**
+ * The match types this system sends. Broad match is deliberately absent: on
+ * a new account it spends the budget on searches nobody chose. A keyword is
+ * written the way Google Ads writes it — `[exata]` or `"frase"` — and a bare
+ * term (which Google would read as broad) is refused by the draft schema.
+ */
+export const SEARCH_MATCH_TYPES = ['exact', 'phrase'] as const;
+export type SearchMatchType = (typeof SEARCH_MATCH_TYPES)[number];
+export const SEARCH_MATCH_LABEL: Record<SearchMatchType, string> = {
+  exact: 'Exata',
+  phrase: 'Frase',
+};
+
+/**
+ * `[franquia]` → exact, `"abrir franquia"` → phrase. Null for a bare term or
+ * an unbalanced mark: the caller decides whether that is a refusal (the draft)
+ * or something to wrap (the form's default match).
+ */
+export function parseSearchKeyword(raw: string): { text: string; match: SearchMatchType } | null {
+  const value = raw.trim();
+  const exact = /^\[(.+)\]$/.exec(value);
+  if (exact?.[1]) return { text: exact[1].trim(), match: 'exact' };
+  const phrase = /^"(.+)"$/.exec(value);
+  if (phrase?.[1]) return { text: phrase[1].trim(), match: 'phrase' };
+  return null;
+}
+
+/** The inverse: a term and its match, written the way the draft stores it. */
+export function formatSearchKeyword(keyword: { text: string; match: SearchMatchType }): string {
+  return keyword.match === 'exact' ? `[${keyword.text}]` : `"${keyword.text}"`;
+}
+
+const keywordTerm = (value: string) =>
+  z
+    .string()
+    .trim()
+    .min(2, 'Palavra-chave muito curta')
+    .max(KEYWORD_MAX_LENGTH, `Máximo de ${KEYWORD_MAX_LENGTH} caracteres por palavra-chave`)
+    .refine((text) => !KEYWORD_FORBIDDEN.test(text), 'Caractere não aceito pelo Google')
+    .refine(
+      (text) => text.split(/\s+/).length <= KEYWORD_MAX_WORDS,
+      `No máximo ${KEYWORD_MAX_WORDS} palavras por palavra-chave`,
+    )
+    .safeParse(value);
+
+/** A keyword the ad group bids on: must carry its match, exact or phrase. */
 const keywordSchema = z
   .string()
   .trim()
-  .min(2, 'Palavra-chave muito curta')
-  .max(KEYWORD_MAX_LENGTH, `Máximo de ${KEYWORD_MAX_LENGTH} caracteres por palavra-chave`)
-  .refine((value) => !KEYWORD_FORBIDDEN.test(value), 'Caractere não aceito pelo Google')
-  .refine(
-    (value) => value.split(/\s+/).length <= KEYWORD_MAX_WORDS,
-    `No máximo ${KEYWORD_MAX_WORDS} palavras por palavra-chave`,
-  );
+  .max(KEYWORD_MAX_LENGTH + 2, `Máximo de ${KEYWORD_MAX_LENGTH} caracteres por palavra-chave`)
+  .superRefine((value, ctx) => {
+    const parsed = parseSearchKeyword(value);
+    if (!parsed) {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'Escreva a correspondência: [exata] entre colchetes ou "frase" entre aspas. Ampla não é aceita.',
+      });
+      return;
+    }
+    const term = keywordTerm(parsed.text);
+    if (!term.success) {
+      ctx.addIssue({ code: 'custom', message: term.error.issues[0]?.message ?? 'Inválida' });
+    }
+  });
 
-const keywordList = (max: number, label: string) =>
+/** A negative keyword is a bare term: it is always sent as a phrase match. */
+const negativeKeywordSchema = z
+  .string()
+  .trim()
+  .superRefine((value, ctx) => {
+    const term = keywordTerm(parseSearchKeyword(value)?.text ?? value);
+    if (!term.success) {
+      ctx.addIssue({ code: 'custom', message: term.error.issues[0]?.message ?? 'Inválida' });
+    }
+  });
+
+const keywordList = (item: z.ZodType<string>, max: number, label: string) =>
   z
-    .array(keywordSchema)
+    .array(item)
     .max(max, `No máximo ${max} ${label}`)
     .refine(
-      (list) => new Set(list.map((item) => item.toLowerCase())).size === list.length,
+      (list) => new Set(list.map((entry) => entry.toLowerCase())).size === list.length,
       'Há palavras-chave repetidas',
     );
 
@@ -821,19 +893,31 @@ export const youtubeDraftSchema = z.object({
 export type YoutubeDraft = z.output<typeof youtubeDraftSchema>;
 
 export const searchDraftSchema = z.object({
-  keywords: keywordList(MAX_KEYWORDS, 'palavras-chave').min(
+  /** The one ad group the campaign is born with. Defaults to the campaign's name. */
+  adGroupName: z.string().trim().max(AD_GROUP_NAME_MAX).optional(),
+  keywords: keywordList(keywordSchema, MAX_KEYWORDS, 'palavras-chave').min(
     1,
     'Informe ao menos uma palavra-chave',
   ),
-  negativeKeywords: keywordList(MAX_NEGATIVE_KEYWORDS, 'palavras-chave negativas').default([]),
+  negativeKeywords: keywordList(
+    negativeKeywordSchema,
+    MAX_NEGATIVE_KEYWORDS,
+    'palavras-chave negativas',
+  ).default([]),
   headlines: z
     .array(compliantText(SEARCH_HEADLINE_MAX, 'o título'))
-    .min(1, 'Escreva ao menos um título')
-    .max(MAX_SEARCH_HEADLINES),
+    .min(MIN_SEARCH_HEADLINES, `Escreva ao menos ${MIN_SEARCH_HEADLINES} títulos`)
+    .max(MAX_SEARCH_HEADLINES)
+    .refine((list) => new Set(list.map((t) => t.toLowerCase())).size === list.length, {
+      message: 'Há títulos repetidos',
+    }),
   descriptions: z
     .array(compliantText(SEARCH_DESCRIPTION_MAX, 'a descrição'))
-    .min(1, 'Escreva ao menos uma descrição')
-    .max(MAX_SEARCH_DESCRIPTIONS),
+    .min(MIN_SEARCH_DESCRIPTIONS, `Escreva ao menos ${MIN_SEARCH_DESCRIPTIONS} descrições`)
+    .max(MAX_SEARCH_DESCRIPTIONS)
+    .refine((list) => new Set(list.map((t) => t.toLowerCase())).size === list.length, {
+      message: 'Há descrições repetidas',
+    }),
 });
 export type SearchDraft = z.output<typeof searchDraftSchema>;
 

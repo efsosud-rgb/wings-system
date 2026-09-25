@@ -20,7 +20,8 @@ import {
   reserveCampaignCreation,
   reserveChange,
 } from './budget-guard.js';
-import { executeApprovedChange } from './executor.js';
+import { executeApprovedChange, preflightChange } from './executor.js';
+import { stepsOfExecution } from './ad-tree.js';
 import { fakeGoogleApi } from './platform/fake-google-api.js';
 import { GoogleAdsPlatformClient, GoogleAdsWriteClient } from './platform/google-ads-client.js';
 import { reconcileAccount } from './reconcile.js';
@@ -67,10 +68,11 @@ function searchDraft(overrides: Record<string, unknown> = {}): CampaignDraft {
     ...common(),
     platform: 'google_search',
     search: {
-      keywords: ['franquia de alimentação', 'abrir franquia'],
+      adGroupName: 'Franquia SP',
+      keywords: ['[franquia de alimentação]', '"abrir franquia"'],
       negativeKeywords: ['grátis'],
-      headlines: ['Franquia Wings'],
-      descriptions: ['Conheça o modelo de negócio e o suporte da Wings.'],
+      headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
+      descriptions: ['Conheça o modelo de negócio e o suporte da Wings.', 'Suporte do início ao fim.'],
     },
     ...overrides,
   });
@@ -210,7 +212,7 @@ describe('asking for a Google campaign', () => {
     });
   });
 
-  it('never accepts a request about a Google campaign that already exists', async () => {
+  it('takes a request about a Google campaign that already exists, through the same guard', async () => {
     const { accountId } = await world();
     const [campaign] = await db
       .insert(adCampaigns)
@@ -230,7 +232,7 @@ describe('asking for a Google campaign', () => {
       campaignId: campaign.id,
       kind: 'pause_campaign',
     });
-    expect(reserved).toMatchObject({ ok: false, reason: 'not_supported_on_platform' });
+    expect(reserved.ok).toBe(true);
   });
 });
 
@@ -266,7 +268,9 @@ describe('executing an approved Google campaign', () => {
 
     const result = await executeApprovedChange(db, client, changeRequestId, { allowWrites: true });
     expect(result).toMatchObject({ ok: true, outcome: 'applied' });
-    expect(api.mutateCalls()).toHaveLength(1);
+    // One rehearsal (validateOnly) and one write, in that order.
+    expect(api.mutateCalls().map((call) => call.body.validateOnly === true)).toEqual([true, false]);
+    expect(api.writeCalls()).toHaveLength(1);
 
     const mirrored = await db.query.adCampaigns.findMany({
       where: eq(adCampaigns.adAccountId, accountId),
@@ -284,11 +288,37 @@ describe('executing an approved Google campaign', () => {
       where: eq(adCampaignDrafts.id, draftId),
     });
     expect(stored?.campaignId).toBe(mirrored[0]?.id);
-    // The keywords stay with the approved draft, for the ad group to come.
+    // The keywords went out with the match the draft wrote, and stay in the draft.
     expect((stored?.payload as CampaignDraft).search?.keywords).toEqual([
-      'franquia de alimentação',
-      'abrir franquia',
+      '[franquia de alimentação]',
+      '"abrir franquia"',
     ]);
+    expect(api.adGroups[0]).toMatchObject({
+      name: 'Franquia SP',
+      status: 'PAUSED',
+      keywords: [
+        { text: 'franquia de alimentação', matchType: 'EXACT' },
+        { text: 'abrir franquia', matchType: 'PHRASE' },
+      ],
+    });
+    expect(api.negatives).toEqual([{ campaignId: api.campaigns[0]?.id, text: 'grátis', matchType: 'PHRASE' }]);
+    expect(api.ads[0]).toMatchObject({
+      status: 'PAUSED',
+      finalUrls: ['https://wingscompany.com.br/franquia?utm_source=google&utm_medium=cpc&utm_campaign=x&utm_content=lead'],
+      headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
+    });
+
+    // Every object is a step a person can see, by its Google id.
+    const steps = await stepsOfExecution(db, (await db.select().from(adExecutions).where(eq(adExecutions.changeRequestId, changeRequestId)))[0]!.id);
+    expect(steps.map((step) => step.kind)).toEqual([
+      'campaign',
+      'negative_keyword',
+      'ad_group',
+      'keyword',
+      'keyword',
+      'ad',
+    ]);
+    expect(steps.find((step) => step.kind === 'ad_group')?.externalId).toBe(api.adGroups[0]?.id);
 
     const [execution] = await db
       .select()
@@ -303,7 +333,79 @@ describe('executing an approved Google campaign', () => {
     // A second click never creates a twin.
     const again = await executeApprovedChange(db, client, changeRequestId, { allowWrites: true });
     expect(again).toMatchObject({ ok: false, reason: 'already_executed' });
+    expect(api.writeCalls()).toHaveLength(1);
+  });
+
+  it('is refused by the rehearsal before anything is written, and gives the reservation back', async () => {
+    const { accountId, api, client } = await world();
+    const { changeRequestId } = await requestAndApprove(accountId, searchDraft());
+    api.state.mutate = 'reject';
+
+    const result = await executeApprovedChange(db, client, changeRequestId, { allowWrites: true });
+    expect(result).toMatchObject({
+      ok: false,
+      outcome: 'rejected',
+      code: 'MONEY_AMOUNT_TOO_SMALL',
+    });
+    if (result.outcome !== 'rejected') throw new Error('expected rejected');
+    expect(result.message).toMatch(/^Recusado na validação prévia: mutate_operations\[0\]/);
+    // Only the validate-only request went out.
     expect(api.mutateCalls()).toHaveLength(1);
+    expect(api.writeCalls()).toHaveLength(0);
+    expect(api.campaigns).toHaveLength(0);
+
+    const change = await db.query.adChangeRequests.findFirst({
+      where: eq(adChangeRequests.id, changeRequestId),
+    });
+    expect(change).toMatchObject({ status: 'failed', reservationActive: false });
+    const [execution] = await db
+      .select()
+      .from(adExecutions)
+      .where(eq(adExecutions.changeRequestId, changeRequestId));
+    expect(execution?.platformResponse).toMatchObject({ preflight: true, code: 'MONEY_AMOUNT_TOO_SMALL' });
+  });
+
+  it('leaves the change untouched when Google does not answer the rehearsal', async () => {
+    const { accountId, api, client } = await world();
+    const { changeRequestId } = await requestAndApprove(accountId, searchDraft());
+    api.state.mutate = 'server_error';
+
+    const result = await executeApprovedChange(db, client, changeRequestId, { allowWrites: true });
+    expect(result).toMatchObject({ ok: false, outcome: 'refused', reason: 'platform_unavailable' });
+    expect(api.writeCalls()).toHaveLength(0);
+    const change = await db.query.adChangeRequests.findFirst({
+      where: eq(adChangeRequests.id, changeRequestId),
+    });
+    expect(change).toMatchObject({ status: 'approved', reservationActive: true });
+    // Nothing frozen: nothing may have happened.
+    const account = await db.query.adAccounts.findFirst({ where: eq(adAccounts.id, accountId) });
+    expect(account?.killSwitchEngaged).toBe(false);
+  });
+
+  it('can be rehearsed by anyone with a reader, before approval, writing nothing', async () => {
+    const { accountId, api } = await world();
+    const reserved = await request(accountId, searchDraft());
+    if (!reserved.ok) throw new Error(reserved.message);
+    const reader = new GoogleAdsPlatformClient(api.reader);
+
+    const outcome = await preflightChange(db, reader, reserved.value.changeRequestId);
+    expect(outcome).toMatchObject({ ok: true, status: 'ok' });
+    if (!outcome.ok) throw new Error('expected ok');
+    expect(outcome.operations).toContain('Grupo Franquia SP');
+    expect(api.mutateCalls()[0]?.body.validateOnly).toBe(true);
+    expect(api.writeCalls()).toHaveLength(0);
+
+    api.state.mutate = 'reject';
+    expect(await preflightChange(db, reader, reserved.value.changeRequestId)).toMatchObject({
+      ok: false,
+      status: 'rejected',
+      code: 'MONEY_AMOUNT_TOO_SMALL',
+    });
+    // A rehearsal changes nothing about the request.
+    const change = await db.query.adChangeRequests.findFirst({
+      where: eq(adChangeRequests.id, reserved.value.changeRequestId),
+    });
+    expect(change?.status).toBe('pending_approval');
   });
 
   it('creates a paused Demand Gen campaign for YouTube, keeping the video in the draft', async () => {
@@ -366,13 +468,14 @@ describe('executing an approved Google campaign', () => {
 
     const result = await executeApprovedChange(db, client, changeRequestId, { allowWrites: true });
     expect(result).toMatchObject({ ok: false, reason: 'platform_drift' });
-    expect(api.mutateCalls()).toHaveLength(0);
+    expect(api.writeCalls()).toHaveLength(0);
   });
 
-  it('gives the reservation back when Google says no', async () => {
+  it('gives the reservation back when Google says no to the write itself', async () => {
     const { accountId, api, client } = await world();
     const { changeRequestId } = await requestAndApprove(accountId, searchDraft());
-    api.state.mutate = 'reject';
+    // The rehearsal passes, the write is refused: the same rejection path.
+    api.state.mutate = 'reject_writes';
 
     const result = await executeApprovedChange(db, client, changeRequestId, { allowWrites: true });
     expect(result).toMatchObject({
@@ -380,9 +483,66 @@ describe('executing an approved Google campaign', () => {
       outcome: 'rejected',
       code: 'MONEY_AMOUNT_TOO_SMALL',
     });
+    expect(api.mutateCalls()).toHaveLength(2);
     expect(
       await db.query.adCampaigns.findMany({ where: eq(adCampaigns.adAccountId, accountId) }),
     ).toHaveLength(0);
+    const change = await db.query.adChangeRequests.findFirst({
+      where: eq(adChangeRequests.id, changeRequestId),
+    });
+    expect(change).toMatchObject({ status: 'failed', reservationActive: false });
+  });
+
+  it('activates the campaign, ad group and ad it created, and changes its budget, through the same approval flow', async () => {
+    const { accountId, api, client } = await world();
+    const { changeRequestId } = await requestAndApprove(accountId, searchDraft());
+    expect(await executeApprovedChange(db, client, changeRequestId, { allowWrites: true })).toMatchObject({ ok: true });
+    // The next ingestion would do this; the executor mirrored the campaign already.
+    const mirrored = await db.query.adCampaigns.findFirst({ where: eq(adCampaigns.adAccountId, accountId) });
+    if (!mirrored) throw new Error('expected the campaign mirrored');
+    expect(api.campaigns[0]).toMatchObject({ status: 'PAUSED' });
+
+    // Ask to resume: a request of its own, judged as the campaign's whole exposure.
+    const resume = await reserveChange(db, { adAccountId: accountId, campaignId: mirrored.id, kind: 'resume_campaign' });
+    if (!resume.ok) throw new Error(resume.message);
+    expect(resume.value.exposureDeltaCents).toBeGreaterThan(0);
+    const gate = await gateChange(db, { changeRequestId: resume.value.changeRequestId });
+    const admin = await createEmployee(db, { role: 'admin_master', sector: 'diretoria' });
+    await decideApproval(db, { approvalId: gate.approvalId!, approverEmployeeId: admin.id, decision: 'approved' });
+
+    const activated = await executeApprovedChange(db, client, resume.value.changeRequestId, { allowWrites: true });
+    expect(activated).toMatchObject({ ok: true, outcome: 'applied' });
+    expect(api.campaigns[0]).toMatchObject({ status: 'ENABLED' });
+    expect(api.adGroups[0]).toMatchObject({ status: 'ENABLED' });
+    expect(api.ads[0]).toMatchObject({ status: 'ENABLED' });
+    const resumeWrite = api.writeCalls().at(-1)?.body.mutateOperations as Record<string, unknown>[];
+    expect(resumeWrite).toHaveLength(3);
+    expect(await db.query.adCampaigns.findFirst({ where: eq(adCampaigns.id, mirrored.id) })).toMatchObject({ status: 'ACTIVE' });
+
+    // A new daily budget: one more request, one more approval, one more click.
+    const budget = await reserveChange(db, {
+      adAccountId: accountId,
+      campaignId: mirrored.id,
+      kind: 'set_daily_budget',
+      toDailyBudgetCents: 4500,
+    });
+    if (!budget.ok) throw new Error(budget.message);
+    const budgetGate = await gateChange(db, { changeRequestId: budget.value.changeRequestId });
+    await decideApproval(db, { approvalId: budgetGate.approvalId!, approverEmployeeId: admin.id, decision: 'approved' });
+    const rebudgeted = await executeApprovedChange(db, client, budget.value.changeRequestId, { allowWrites: true });
+    expect(rebudgeted).toMatchObject({ ok: true });
+    expect(api.campaigns[0]?.amountMicros).toBe('45000000');
+    expect(await db.query.adCampaigns.findFirst({ where: eq(adCampaigns.id, mirrored.id) })).toMatchObject({ dailyBudgetCents: 4500 });
+
+    // And a pause touches only the campaign.
+    const pause = await reserveChange(db, { adAccountId: accountId, campaignId: mirrored.id, kind: 'pause_campaign' });
+    if (!pause.ok) throw new Error(pause.message);
+    const pauseGate = await gateChange(db, { changeRequestId: pause.value.changeRequestId });
+    await decideApproval(db, { approvalId: pauseGate.approvalId!, approverEmployeeId: admin.id, decision: 'approved' });
+    expect(await executeApprovedChange(db, client, pause.value.changeRequestId, { allowWrites: true })).toMatchObject({ ok: true });
+    expect(api.campaigns[0]).toMatchObject({ status: 'PAUSED' });
+    expect(api.adGroups[0]).toMatchObject({ status: 'ENABLED' });
+    expect((api.writeCalls().at(-1)?.body.mutateOperations as unknown[])).toHaveLength(1);
   });
 
   it('carries a radius from the approved draft to a proximity criterion', async () => {
@@ -401,7 +561,7 @@ describe('executing an approved Google campaign', () => {
     const result = await executeApprovedChange(db, client, changeRequestId, { allowWrites: true });
     expect(result).toMatchObject({ ok: true });
 
-    const operations = (api.mutateCalls()[0]?.body.mutateOperations ?? []) as Record<
+    const operations = (api.writeCalls()[0]?.body.mutateOperations ?? []) as Record<
       string,
       { create: Record<string, unknown> }
     >[];
@@ -416,10 +576,10 @@ describe('executing an approved Google campaign', () => {
     });
   });
 
-  it('freezes the account when Google does not say what happened', async () => {
+  it('freezes the account when Google does not say what happened to the write', async () => {
     const { accountId, api, client } = await world();
     const { changeRequestId } = await requestAndApprove(accountId, searchDraft());
-    api.state.mutate = 'server_error';
+    api.state.mutate = 'server_error_writes';
 
     const result = await executeApprovedChange(db, client, changeRequestId, { allowWrites: true });
     expect(result).toMatchObject({ ok: false, outcome: 'unknown' });
