@@ -41,3 +41,13 @@ export function formatDate(date: string): string {
   const [year, month, day] = date.split('-');
   return year && month && day ? `${day}/${month}/${year}` : '—';
 }
+
+/** "atualizado há 3 min" from an ISO instant; "nunca sincronizado" when null. */
+export function agoLabel(iso: string | null): string {
+  if (!iso) return 'nunca sincronizado';
+  const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000));
+  if (minutes < 1) return 'atualizado agora mesmo';
+  if (minutes < 60) return `atualizado há ${minutes} min`;
+  const hours = Math.round(minutes / 60);
+  return `atualizado há ${hours}h`;
+}

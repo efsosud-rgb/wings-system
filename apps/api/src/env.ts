@@ -246,6 +246,15 @@ const schema = z.object({
     (value) => value === undefined || value.trim().split(/\s+/).length === 5,
     'must be a 5-field cron expression',
   ),
+  /**
+   * Same idea, for the second Coolify scheduled task: `ingest-cli
+   * --reconcile-only`, meant to run every 15 minutes so the spend ceiling
+   * reflects the platform quickly instead of waiting for the full cycle.
+   */
+  ADS_RECONCILE_CRON: optionalString.refine(
+    (value) => value === undefined || value.trim().split(/\s+/).length === 5,
+    'must be a 5-field cron expression',
+  ),
   ADS_APPROVAL_ADMIN_PHONES: optionalString,
   ADS_APPROVAL_DIRETORIA_PHONES: optionalString,
 

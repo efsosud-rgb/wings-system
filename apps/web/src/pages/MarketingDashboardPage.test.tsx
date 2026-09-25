@@ -83,6 +83,15 @@ const ingestion: IngestionStatus = {
   overdue: false,
 };
 
+const reconciliation: IngestionStatus = {
+  lastRunAt: '2026-09-16T11:50:00.000Z',
+  lastRunStatus: 'ok',
+  lastRunFailures: [],
+  schedule: '*/15 * * * *',
+  nextRunAt: '2026-09-16T12:05:00.000Z',
+  overdue: false,
+};
+
 const positive: VerdictResult = {
   verdict: 'positive',
   primary: 'cpl',
@@ -154,6 +163,7 @@ function buildOverview(overrides: Partial<DashboardOverview> = {}): DashboardOve
     ],
     counts: { openAlerts: 2, criticalAlerts: 1, pendingApprovals: 3, disapprovedAds: 1 },
     ingestion,
+    reconciliation,
     health: [
       {
         key: 'conversions_measuring',
@@ -481,6 +491,23 @@ describe('the overview', () => {
     expect(
       screen.getByText(/agendamento não informado ao sistema \(ADS_INGEST_CRON\)/),
     ).toBeTruthy();
+  });
+
+  it('says in the header when the fast reconciliation last ran and when the next one is due', () => {
+    renderAt();
+    expect(screen.getByText(/Última reconciliação 16\/09, 08:50 \(ok\)/)).toBeTruthy();
+    expect(screen.getByText(/próxima 16\/09, 09:05/)).toBeTruthy();
+  });
+
+  it('warns when the scheduled reconciliation is overdue, separately from the full ingestion', () => {
+    data.overview = buildOverview({
+      reconciliation: { ...reconciliation, overdue: true, lastRunStatus: 'failed' },
+    });
+    renderAt();
+    expect(
+      screen.getByText(/A reconciliação agendada \(15 min\) não rodou desde 16\/09, 08:50/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/A ingestão agendada não rodou desde/)).toBeNull();
   });
 
   it('shows the setup note of a source with credentials but no account, with the command as code', () => {

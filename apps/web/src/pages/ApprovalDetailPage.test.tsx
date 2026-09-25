@@ -27,6 +27,7 @@ const decide = vi.fn().mockResolvedValue({ ok: true, status: 'approved' });
 const execute = vi.fn().mockResolvedValue({ ok: true, outcome: 'applied' });
 const preflight = vi.fn();
 const requestChange = vi.fn();
+const reconcileNow = vi.fn();
 /** What GET /ads/approvals/:id/previews answers, and for which placement it was asked. */
 const previews: { current: OfficialPreview[] | ApiError } = { current: [] };
 const previewsAskedFor = vi.fn();
@@ -74,6 +75,7 @@ vi.mock('../api/ads.js', () => ({
   // The simulator has its own test file; here it only needs to render.
   useSimulation: () => ({ data: simulation.current, isLoading: false, isError: false }),
   useApprovalGroups: () => ({ data: { groups: [] }, isLoading: false, isError: false }),
+  useReconcileNow: () => ({ mutate: reconcileNow, isPending: false, error: null }),
 }));
 
 const { ApprovalDetailPage } = await import('./ApprovalDetailPage.js');
@@ -94,6 +96,7 @@ function buildApproval(overrides: Partial<ApprovalDetail> = {}): ApprovalDetail 
     requestedByName: null,
     requestedByAgent: true,
     suggestedByAgent: false,
+    accountId: 'acc-1',
     accountExternalId: 'act_339488762500182',
     campaignExternalId: '23851234567890123',
     budgetLevel: 'ad_set',
@@ -107,6 +110,7 @@ function buildApproval(overrides: Partial<ApprovalDetail> = {}): ApprovalDetail 
     periodUsableCents: 280_000,
     periodCommittedCents: 37_500,
     periodSpentCents: 20_000,
+    periodLastReconciledAt: '2026-09-17T11:55:00.000Z',
     notifiedAt: '2026-09-17T12:00:05.000Z',
     notificationError: null,
     changeStatus: 'pending_approval',

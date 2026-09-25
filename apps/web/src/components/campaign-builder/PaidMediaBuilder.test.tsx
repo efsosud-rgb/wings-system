@@ -7,6 +7,7 @@ import {
   type MediaBridgeResponse,
   type MetaIdentities,
   type PacingSummary,
+  type SessionUser,
 } from '@wings/shared';
 import {
   act,
@@ -42,6 +43,8 @@ let uploads = 0;
 
 const savedAudience: { current: AudienceProfile | null } = { current: null };
 const saveAudience = vi.fn();
+const session: { current: SessionUser | null } = { current: null };
+const reconcileNow = vi.fn();
 
 const PAGE = '104567890123456';
 const OTHER_PAGE = '209876543210987';
@@ -141,7 +144,13 @@ vi.mock('../../api/ads.js', () => ({
   useCockpit: (args: { days: number; platform?: string }) => {
     cockpitCalls.push(args);
     return {
-      data: { cockpit: { pacing: pacing.current, wingsTotal: null } },
+      data: {
+        cockpit: {
+          account: { id: 'acc-1', name: 'Wings Matriz', platform: 'meta', externalId: 'act_1' },
+          pacing: pacing.current,
+          wingsTotal: null,
+        },
+      },
       isLoading: false,
     };
   },
@@ -153,6 +162,13 @@ vi.mock('../../api/ads.js', () => ({
     error: null,
     ...launchState.current,
   }),
+  useReconcileNow: () => ({ mutate: reconcileNow, isPending: false, error: null }),
+}));
+
+vi.mock('../../api/auth.js', () => ({
+  useSession: () => ({ data: session.current, isLoading: false }),
+  hasPermission: (user: SessionUser | null, permission: string) =>
+    Boolean(user?.permissions[permission as keyof SessionUser['permissions']]),
 }));
 
 // Leaflet needs a real layout engine; the builder only cares what the map
@@ -237,6 +253,7 @@ function buildPacing(overrides: Partial<PacingSummary> = {}): PacingSummary {
     platformLimitSource: null,
     platformLimitSyncedAtIso: null,
     platformLimitNote: null,
+    lastReconciledAt: null,
     ...overrides,
   };
 }
@@ -256,6 +273,8 @@ afterEach(() => {
   saveIdentityDefault.mockReset();
   uploadVideo.mockReset();
   videoFailure.current = null;
+  session.current = null;
+  reconcileNow.mockReset();
 });
 
 function chooseImage(input: Element, type = 'image/png') {

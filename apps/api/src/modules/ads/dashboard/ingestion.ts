@@ -8,10 +8,11 @@ import { latestIngestRun, type IngestRunAccount } from '../ingest-runs.js';
 import { SAO_PAULO } from './window.js';
 
 /**
- * How the ingest job is doing, for the dashboard header: last run, next run
- * by the cron the API was told (ADS_INGEST_CRON), and whether the scheduled
- * one failed to happen. The API schedules nothing itself; it only reads the
- * job's own record and the clock.
+ * How an ingest job is doing, for the dashboard header: last run, next run by
+ * the cron the API was told (ADS_INGEST_CRON for the full cycle,
+ * ADS_RECONCILE_CRON for the fast one), and whether the scheduled one failed
+ * to happen. The API schedules nothing itself; it only reads the job's own
+ * record and the clock.
  */
 
 /** A scheduled slot this much in the past with no run since it is overdue. */
@@ -22,14 +23,18 @@ export async function ingestionStatus(
   env: Env,
   accountIds: string[],
   now = new Date(),
+  options: { kind?: 'full' | 'reconcile' } = {},
 ): Promise<IngestionStatus> {
-  const run = await latestIngestRun(db);
+  const kind = options.kind ?? 'full';
+  const run = await latestIngestRun(db, { kind });
   let lastRunAt: Date | null = run?.startedAt ?? null;
   let lastRunStatus: IngestionStatus['lastRunStatus'] = null;
   if (run) {
     lastRunStatus = run.status === 'ok' ? 'ok' : run.status === 'failed' ? 'failed' : 'running';
-  } else if (accountIds.length > 0) {
+  } else if (accountIds.length > 0 && kind === 'full') {
     // Before the first run recorded itself, the newest metrics row is the best witness.
+    // The fast cycle touches no metrics table, so it has no such witness — it
+    // just reads as "never run" until its own first `ingest_runs` row lands.
     const [row] = await db
       .select({ fetchedAt: sql<Date | null>`max(${adMetricsDaily.fetchedAt})` })
       .from(adMetricsDaily)
@@ -37,7 +42,7 @@ export async function ingestionStatus(
     lastRunAt = row?.fetchedAt ? new Date(row.fetchedAt) : null;
   }
 
-  const schedule = env.ADS_INGEST_CRON ?? null;
+  const schedule = (kind === 'reconcile' ? env.ADS_RECONCILE_CRON : env.ADS_INGEST_CRON) ?? null;
   const nextRunAt = schedule ? nextCronRun(schedule, now, SAO_PAULO) : null;
   const previousDue = schedule ? previousCronRun(schedule, now, SAO_PAULO) : null;
   const overdue =

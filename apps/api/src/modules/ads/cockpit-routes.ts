@@ -19,17 +19,20 @@ import {
   budgetPeriods,
   employees,
 } from '../../db/schema/index.js';
+import { writeAudit } from '../../lib/audit.js';
 import { acknowledgeAlert, pacingFacts } from './alerts.js';
 import { getPeriodState, openPeriod } from './budget-guard.js';
 import { campaignPerformance } from './metrics.js';
-import { periodMonthOf } from './reconcile.js';
+import { createPlatformClient } from './platform/factory.js';
+import { periodMonthOf, reconcileAccount } from './reconcile.js';
 
 /**
  * HTTP surface for the traffic cockpit.
  *
- * Read-only apart from acknowledging an alert and, for an Admin Master only,
- * editing the internal monthly cap — the same write `openPeriod` has always
- * done from the CLI, now reachable from a screen instead of a shell.
+ * Read-only apart from acknowledging an alert, editing the internal monthly
+ * cap (Admin Master only) and forcing an account's reconciliation now (Admin
+ * Master or Diretoria) — the same reads the scheduled tasks already do,
+ * reachable from a screen instead of waiting for the next cycle.
  */
 
 const idParamSchema = z.object({ id: z.string().uuid() });
@@ -73,8 +76,23 @@ async function budgetCapViewOf(
   };
 }
 
+/**
+ * How long a manual "Atualizar agora" click stays refused after the last one
+ * for the same account — the trava against repeated clicks. Deliberately
+ * short: this is a read against the platform, not a spend, so the risk of a
+ * double click is wasted API calls, not money. Shorter than the 15-min
+ * scheduled cadence, so a person can always get a fresher read than the last
+ * cycle gave them.
+ */
+const MANUAL_RECONCILE_COOLDOWN_MS = 30_000;
+
 export const cockpitRoutes: FastifyPluginAsync = async (app) => {
-  const { db } = app.wings;
+  const { db, env, platformFetch } = app.wings;
+  // In-flight guard only: two clicks a hairsbreadth apart, before either has
+  // had time to move `lastReconciledAt`. Per process, not persisted — the
+  // cooldown check below is what actually survives a restart or a second
+  // instance.
+  const reconcilingNow = new Set<string>();
 
   app.get(
     '/ads/cockpit',
@@ -231,6 +249,7 @@ export const cockpitRoutes: FastifyPluginAsync = async (app) => {
             platformLimitSource: facts.platformLimitSource,
             platformLimitSyncedAtIso: facts.platformLimitSyncedAtIso,
             platformLimitNote: facts.platformLimitNote,
+            lastReconciledAt: facts.lastReconciledAtIso,
           }
         : null;
 
@@ -396,6 +415,91 @@ export const cockpitRoutes: FastifyPluginAsync = async (app) => {
       });
 
       return reply.send({ account: await budgetCapViewOf(db, account, now) });
+    },
+  );
+
+  /**
+   * "Atualizar agora": the same read `reconcileAccount` does every 15 minutes
+   * on the scheduled task, run once on a click instead of waiting for the
+   * next cycle. Never writes to the platform — always a reader, the same as
+   * the scheduled job, whatever ADS_WRITES_ENABLED says.
+   */
+  app.post(
+    '/ads/accounts/:accountId/reconcile-now',
+    { preHandler: app.requirePermission('ads.reconcile.manual') },
+    async (request, reply) => {
+      const params = accountIdParamSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.status(404).send({ error: 'not_found', message: 'Conta não encontrada.' });
+      }
+      const { accountId } = params.data;
+
+      const account = await db.query.adAccounts.findFirst({ where: eq(adAccounts.id, accountId) });
+      if (!account || account.archivedAt) {
+        return reply.status(404).send({ error: 'not_found', message: 'Conta não encontrada.' });
+      }
+
+      const now = app.wings.now?.() ?? new Date();
+
+      if (reconcilingNow.has(accountId)) {
+        return reply.status(429).send({
+          error: 'reconcile_in_progress',
+          message: 'Já há uma reconciliação em andamento para esta conta.',
+        });
+      }
+      const state = await getPeriodState(db, accountId, periodMonthOf(now, account.timezone));
+      if (
+        state?.lastReconciledAt &&
+        now.getTime() - state.lastReconciledAt.getTime() < MANUAL_RECONCILE_COOLDOWN_MS
+      ) {
+        const retryAfterSeconds = Math.ceil(
+          (MANUAL_RECONCILE_COOLDOWN_MS - (now.getTime() - state.lastReconciledAt.getTime())) /
+            1000,
+        );
+        return reply.status(429).send({
+          error: 'reconcile_cooldown',
+          message: `Conta já foi atualizada há pouco. Tente de novo em ${retryAfterSeconds}s.`,
+          retryAfterSeconds,
+        });
+      }
+
+      const { client } = createPlatformClient(
+        { ...env, ADS_WRITES_ENABLED: false },
+        account,
+        platformFetch,
+      );
+      if (!client) {
+        return reply.status(503).send({
+          error: 'no_credentials',
+          message: 'Sem credenciais de leitura configuradas para esta conta.',
+        });
+      }
+
+      reconcilingNow.add(accountId);
+      try {
+        await reconcileAccount(db, client, accountId, now);
+      } catch (error) {
+        return reply.status(502).send({
+          error: 'reconcile_failed',
+          message: 'A plataforma não respondeu. Tente de novo em instantes.',
+          detail: error instanceof Error ? error.name : 'unknown',
+        });
+      } finally {
+        reconcilingNow.delete(accountId);
+      }
+
+      await writeAudit(db, {
+        actorEmployeeId: request.session.actor.employeeId,
+        action: 'ads.reconciled_manually',
+        entity: 'ad_account',
+        entityId: accountId,
+        ip: request.ip,
+        userAgent: request.headers['user-agent'] ?? null,
+        metadata: { accountExternalId: account.externalId, platform: account.platform },
+      });
+
+      const facts = await pacingFacts(db, accountId, now);
+      return reply.send({ ok: true, lastReconciledAt: facts?.lastReconciledAtIso ?? null });
     },
   );
 };

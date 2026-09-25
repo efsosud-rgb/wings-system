@@ -38,7 +38,9 @@ import {
 import { ApiError } from '../api/client.js';
 import { ApprovalSimulator } from '../components/ApprovalSimulator.js';
 import { AdPreviewGallery } from '../components/campaign-builder/AdPreview.js';
+import { agoLabel } from '../components/campaign-builder/format.js';
 import { SearchAdPreview, YoutubePreview } from '../components/campaign-builder/GooglePreview.js';
+import { ReconcileNowButton } from '../components/campaign-builder/ReconcileNowButton.js';
 import { Alert, Button, Field, Input } from '../components/ui.js';
 
 function formatBrl(cents: number | null): string {
@@ -592,6 +594,7 @@ function PeriodContext({ approval }: { approval: ApprovalDetail }) {
   return (
     <section className="block">
       <legend>Orçamento do mês nesta conta</legend>
+      <p className="field-hint">{agoLabel(approval.periodLastReconciledAt)}</p>
       <div className="grid-3 readonly">
         <div>
           <span className="field-label">Teto</span>
@@ -614,6 +617,7 @@ function PeriodContext({ approval }: { approval: ApprovalDetail }) {
           <p className="mono">{formatBrl(remaining)}</p>
         </div>
       </div>
+      <ReconcileNowButton accountId={approval.accountId} />
     </section>
   );
 }

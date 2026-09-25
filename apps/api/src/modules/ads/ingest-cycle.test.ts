@@ -5,7 +5,12 @@ import type { Database } from '../../db/client.js';
 import { adAccountDaily, adAccounts, adCampaigns, budgetPeriods } from '../../db/schema/index.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { openPeriod } from './budget-guard.js';
-import { runIngestionCycle, type AccountCycleResult, type CycleAccount } from './ingest-cycle.js';
+import {
+  runIngestionCycle,
+  runReconciliationCycle,
+  type AccountCycleResult,
+  type CycleAccount,
+} from './ingest-cycle.js';
 import { FakeMetaClient } from './platform/fake-meta-client.js';
 import type { AdsPlatformClient } from './platform/types.js';
 
@@ -274,5 +279,57 @@ describe('what the read token may not see', () => {
     });
 
     expect(cycle.accounts[0]).toMatchObject({ status: 'failed', step: 'breakdown:placement' });
+  });
+});
+
+describe('the fast reconcile-only cycle', () => {
+  it('reconciles every account and skips the rest of the full cycle entirely', async () => {
+    const target = await account();
+    const client = liveLike(target.externalId, [{ id: 'c1', name: 'Institucional' }]);
+
+    const cycle = await runReconciliationCycle(db, [target], {
+      clientFor: () => client,
+      now: NOW,
+    });
+
+    expect(cycle.failed).toBe(0);
+    const [result] = cycle.accounts;
+    expect(result).toMatchObject({ status: 'ok' });
+    if (result?.status !== 'ok') throw new Error('unreachable');
+    expect(result.reconciled.campaignsSynced).toBe(1);
+    expect(await lastReconciledAt(target.id)).toEqual(NOW);
+
+    // No ad, no campaign metric row exists for this account: the fast cycle
+    // never called syncAds/ingestMetrics/ingestBreakdown.
+    const mirrored = await db.query.adCampaigns.findMany({
+      where: eq(adCampaigns.adAccountId, target.id),
+    });
+    expect(mirrored).toHaveLength(1); // campaigns are mirrored by reconcileAccount itself
+  });
+
+  it('still reconciles the other accounts after one that throws', async () => {
+    const broken = await account();
+    const healthy = await account();
+
+    const cycle = await runReconciliationCycle(db, [broken, healthy], {
+      clientFor: (a) => (a.id === broken.id ? brokenClient(a.externalId) : liveLike(a.externalId)),
+      now: NOW,
+    });
+
+    expect(cycle.failed).toBe(1);
+    expect(cycle.accounts.map((r) => r.status)).toEqual(['failed', 'ok']);
+    expect(await lastReconciledAt(healthy.id)).toEqual(NOW);
+    expect(await lastReconciledAt(broken.id)).toBeNull();
+  });
+
+  it('skips an account without credentials and does not count it as failed', async () => {
+    const orphan = await account();
+    const cycle = await runReconciliationCycle(db, [orphan], {
+      clientFor: () => null,
+      now: NOW,
+    });
+
+    expect(cycle.failed).toBe(0);
+    expect(cycle.accounts[0]).toMatchObject({ status: 'skipped', reason: 'no_credentials' });
   });
 });

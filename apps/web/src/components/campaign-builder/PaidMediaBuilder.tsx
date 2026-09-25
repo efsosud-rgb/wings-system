@@ -109,9 +109,10 @@ import { ApiError } from '../../api/client.js';
 import { Alert, Button, Field, Input, Select } from '../ui.js';
 import { BUILDER_DRAFT_KEY, PICKED_MEDIA_KEY } from '../../api/media.js';
 import { AdPreviewGallery, creativeUrl, videoUrl } from './AdPreview.js';
-import { formatBrl, formatDate, parseBrlToCents, todayInSaoPaulo } from './format.js';
+import { agoLabel, formatBrl, formatDate, parseBrlToCents, todayInSaoPaulo } from './format.js';
 import { SearchAdPreview, YoutubePreview } from './GooglePreview.js';
 import { LibraryPick } from './LibraryPick.js';
+import { ReconcileNowButton } from './ReconcileNowButton.js';
 import { RadiusMap } from './RadiusMap.js';
 
 /**
@@ -331,16 +332,6 @@ function ComplianceWarning({ findings }: { findings: ComplianceFinding[] }) {
   );
 }
 
-/** "atualizado há 3 min" from an ISO instant; "nunca sincronizado" when null. */
-function syncedAgoLabel(iso: string | null): string {
-  if (!iso) return 'nunca sincronizado';
-  const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000));
-  if (minutes < 1) return 'atualizado agora mesmo';
-  if (minutes < 60) return `atualizado há ${minutes} min`;
-  const hours = Math.round(minutes / 60);
-  return `atualizado há ${hours}h`;
-}
-
 type WingsTotal = { capCents: number; usableCents: number; committedCents: number; spentCents: number };
 
 /** Once regardless of platform: the cross-account figure, not any one account's. */
@@ -356,10 +347,12 @@ function WingsTotalLine({ wingsTotal }: { wingsTotal: WingsTotal | null }) {
 }
 
 function AccountCeiling({
+  accountId,
   pacing,
   wingsTotal,
   platform,
 }: {
+  accountId: string | undefined;
   pacing: PacingSummary | null | undefined;
   wingsTotal: WingsTotal | null;
   platform: CampaignDraftInput['platform'];
@@ -391,8 +384,11 @@ function AccountCeiling({
     <div className="builder-ceiling">
       <span className="field-label">Teto real da conta neste mês</span>
       <p className="mono builder-ceiling-figure">{formatBrl(pacing.availableCents)}</p>
-      <p className="field-hint">ainda pode ser planejado</p>
+      <p className="field-hint">
+        ainda pode ser planejado · {agoLabel(pacing.lastReconciledAt)}
+      </p>
       {sharedCaption}
+      <ReconcileNowButton accountId={accountId} />
       <dl>
         <dt>Teto do mês</dt>
         <dd className="mono">{formatBrl(pacing.capCents)}</dd>
@@ -412,7 +408,7 @@ function AccountCeiling({
             {pacing.platformLimitNote ?? 'a plataforma não informa este número'}
           </p>
         )}
-        <p className="field-hint">{syncedAgoLabel(pacing.platformLimitSyncedAtIso)}</p>
+        <p className="field-hint">{agoLabel(pacing.platformLimitSyncedAtIso)}</p>
       </div>
       <WingsTotalLine wingsTotal={wingsTotal} />
       {pacing.killSwitchEngaged && (
@@ -2337,7 +2333,12 @@ export function PaidMediaBuilder({
               )}
             </div>
           </div>
-          <AccountCeiling pacing={pacing} wingsTotal={wingsTotal} platform={platform} />
+          <AccountCeiling
+            accountId={cockpit.data?.cockpit.account.id}
+            pacing={pacing}
+            wingsTotal={wingsTotal}
+            platform={platform}
+          />
         </div>
         {overCeiling && pacing && (
           <div className="alert alert-warning" role="alert">

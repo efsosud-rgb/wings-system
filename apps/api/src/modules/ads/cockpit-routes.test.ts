@@ -5,13 +5,20 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { adAccounts, adAlerts, adMetricsDaily } from '../../db/schema/index.js';
+import {
+  adAccounts,
+  adAlerts,
+  adCampaigns,
+  adMetricsDaily,
+  budgetPeriods,
+} from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import { runAlerts } from './alerts.js';
 import { getPeriodState, openPeriod } from './budget-guard.js';
 import { ensureAdAccount, syncAds } from './metrics.js';
+import { fakeMetaApi } from './platform/fake-meta-api.js';
 import { FakeMetaClient } from './platform/fake-meta-client.js';
 import { reconcileAccount } from './reconcile.js';
 
@@ -361,5 +368,165 @@ describe('admin-only budget cap editing', () => {
     };
     const row = body.accounts.find((a) => a.accountId === accountId);
     expect(row?.capCents).toBe(500_000);
+  });
+});
+
+describe('manual reconciliation ("Atualizar agora")', () => {
+  let manualAccountId: string;
+  let manualExternalId: string;
+  let reconcileApp: FastifyInstance;
+
+  beforeAll(async () => {
+    manualExternalId = `act_${randomBytes(4).readUInt32BE(0)}`;
+    manualAccountId = await ensureAdAccount(db, {
+      platform: 'meta',
+      externalId: manualExternalId,
+      name: 'Conta para reconciliação manual',
+    });
+    await openPeriod(db, {
+      adAccountId: manualAccountId,
+      periodMonth: PERIOD,
+      capCents: 100_000,
+      usablePercent: 70,
+    });
+    const client = new FakeMetaClient({
+      campaigns: [{ id: 'c1', name: 'Campanha', status: 'ACTIVE', dailyBudgetCents: 1000 }],
+    });
+    await reconcileAccount(db, client, manualAccountId, NOW);
+
+    // A second app, with read credentials for this one account, so the route
+    // can really call `createPlatformClient` and reconcile against a scripted
+    // Meta — the shared `app` above has none, on purpose (see routes.test.ts).
+    const meta = fakeMetaApi({ accountId: manualExternalId });
+    meta.state.campaigns.push({
+      id: 'c2',
+      name: 'Campanha nova',
+      status: 'ACTIVE',
+      daily_budget: '2000',
+    });
+    reconcileApp = await buildApp({
+      env: loadEnv({
+        NODE_ENV: 'test',
+        DATABASE_URL: harness.url,
+        SESSION_SECRET: randomBytes(48).toString('base64'),
+        CPF_ENCRYPTION_KEY: TEST_CPF_KEY,
+        CPF_INDEX_KEY: TEST_INDEX_KEY,
+        APP_BASE_URL: 'https://staging.wingssystem.online',
+        META_WRITE_TOKEN: 'token',
+      }),
+      db,
+      now: () => NOW,
+      platformFetch: meta.impl,
+    });
+  });
+
+  afterAll(async () => {
+    await reconcileApp?.close();
+  });
+
+  it('refuses a role without ads.reconcile.manual', async () => {
+    const { cookies } = await sessionFor('marketing');
+    const response = await reconcileApp.inject({
+      method: 'POST',
+      url: `/ads/accounts/${manualAccountId}/reconcile-now`,
+      cookies,
+    });
+    expect(response.statusCode).toBe(403);
+  });
+
+  it('404s for an unknown account', async () => {
+    const { cookies } = await sessionFor('admin_master');
+    const response = await reconcileApp.inject({
+      method: 'POST',
+      url: '/ads/accounts/00000000-0000-0000-0000-000000000000/reconcile-now',
+      cookies,
+    });
+    expect(response.statusCode).toBe(404);
+  });
+
+  it('refuses a repeated click inside the cooldown, for Admin Master and for Diretoria alike', async () => {
+    // The setup's own reconcileAccount just set lastReconciledAt to NOW.
+    const admin = await sessionFor('admin_master');
+    const first = await reconcileApp.inject({
+      method: 'POST',
+      url: `/ads/accounts/${manualAccountId}/reconcile-now`,
+      cookies: admin.cookies,
+    });
+    expect(first.statusCode).toBe(429);
+    expect(first.json()).toMatchObject({ error: 'reconcile_cooldown' });
+
+    const diretoria = await sessionFor('diretoria');
+    const second = await reconcileApp.inject({
+      method: 'POST',
+      url: `/ads/accounts/${manualAccountId}/reconcile-now`,
+      cookies: diretoria.cookies,
+    });
+    expect(second.statusCode).toBe(429);
+  });
+
+  it('really reconciles against the platform once the cooldown has passed, and records the freshness', async () => {
+    // Backdate past the 30s cooldown without waiting for it in the test.
+    await db
+      .update(budgetPeriods)
+      .set({ lastReconciledAt: new Date(NOW.getTime() - 31_000) })
+      .where(eq(budgetPeriods.adAccountId, manualAccountId));
+
+    const { cookies } = await sessionFor('admin_master');
+    const response = await reconcileApp.inject({
+      method: 'POST',
+      url: `/ads/accounts/${manualAccountId}/reconcile-now`,
+      cookies,
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { ok: true; lastReconciledAt: string | null };
+    expect(body.ok).toBe(true);
+    expect(body.lastReconciledAt).toBe(NOW.toISOString());
+
+    const state = await getPeriodState(db, manualAccountId, PERIOD);
+    expect(state?.lastReconciledAt?.toISOString()).toBe(NOW.toISOString());
+    // The scripted Meta answered two campaigns, not the one the setup seeded:
+    // a real reconcileAccount ran, not a stub answer.
+    const campaigns = await db.query.adCampaigns.findMany({
+      where: eq(adCampaigns.adAccountId, manualAccountId),
+    });
+    expect(campaigns.map((c) => c.externalId).sort()).toEqual(['c1', 'c2']);
+  });
+
+  it('lets Diretoria trigger it too, once the cooldown has passed again', async () => {
+    await db
+      .update(budgetPeriods)
+      .set({ lastReconciledAt: new Date(NOW.getTime() - 31_000) })
+      .where(eq(budgetPeriods.adAccountId, manualAccountId));
+
+    const { cookies } = await sessionFor('diretoria');
+    const response = await reconcileApp.inject({
+      method: 'POST',
+      url: `/ads/accounts/${manualAccountId}/reconcile-now`,
+      cookies,
+    });
+    expect(response.statusCode).toBe(200);
+  });
+
+  it('answers 503 for an account whose platform has no read credentials', async () => {
+    const orphanId = await ensureAdAccount(db, {
+      platform: 'google',
+      externalId: '1234567890',
+      name: 'Conta sem credenciais no ambiente de teste',
+    });
+    await openPeriod(db, {
+      adAccountId: orphanId,
+      periodMonth: PERIOD,
+      capCents: 100_000,
+      usablePercent: 70,
+    });
+
+    const { cookies } = await sessionFor('admin_master');
+    const response = await reconcileApp.inject({
+      method: 'POST',
+      url: `/ads/accounts/${orphanId}/reconcile-now`,
+      cookies,
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toMatchObject({ error: 'no_credentials' });
   });
 });

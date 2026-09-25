@@ -60,6 +60,14 @@ Retenção e execução manual não são expostas pela API do Coolify nesta vers
 (4.3.18): use a interface, ou o próprio modelo via
 `docker exec coolify php artisan tinker`.
 
+## Tarefas agendadas de tráfego pago
+
+Duas tarefas agendadas rodam `ingest-cli` (`docs/ads/reconciliacao-15min.md`):
+o ciclo completo (`ADS_INGEST_CRON`, cadência de sempre) e, desde 2026-09-25,
+um ciclo rápido só de reconciliação a cada 15 min
+(`ingest-cli --reconcile-only`, `ADS_RECONCILE_CRON`). Ambas só leitura contra
+Meta e Google.
+
 ## Pendências
 
 1. **Produção** continua no container manual `wings-crm-web`; a migração para o

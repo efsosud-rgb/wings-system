@@ -159,3 +159,65 @@ export async function runIngestionCycle(
     failed: results.filter((result) => result.status === 'failed').length,
   };
 }
+
+export type ReconcileCycleAccountResult =
+  | { status: 'ok'; account: CycleAccount; reconciled: ReconcileResult }
+  | { status: 'skipped'; account: CycleAccount; reason: 'no_credentials' }
+  | { status: 'failed'; account: CycleAccount; error: string };
+
+export interface ReconcileCycleOptions {
+  clientFor: (account: CycleAccount) => AdsPlatformClient | null;
+  now?: Date;
+  onAccountDone?: (result: ReconcileCycleAccountResult) => void | Promise<void>;
+}
+
+export interface ReconcileCycleResult {
+  accounts: ReconcileCycleAccountResult[];
+  failed: number;
+}
+
+/**
+ * Balance, platform limit, daily budget and campaign status only — the four
+ * platform calls `reconcileAccount` itself makes, and nothing from the rest
+ * of `ingestAccount` (ads, metrics, breakdowns, account_day, alerts).
+ *
+ * This is what lets reconciliation run every 15 minutes without touching the
+ * Google Ads API operation ceiling: four operations per account per run,
+ * against the full cycle's metrics and breakdown queries. See
+ * docs/ads/tetos-reais.md for the budget math and the two Coolify scheduled
+ * tasks this and `runIngestionCycle` each answer to.
+ */
+export async function runReconciliationCycle(
+  db: Database,
+  accounts: CycleAccount[],
+  options: ReconcileCycleOptions,
+): Promise<ReconcileCycleResult> {
+  const now = options.now ?? new Date();
+  const results: ReconcileCycleAccountResult[] = [];
+
+  for (const account of accounts) {
+    let result: ReconcileCycleAccountResult;
+    try {
+      const client = options.clientFor(account);
+      if (client) {
+        const reconciled = await reconcileAccount(db, client, account.id, now);
+        result = { status: 'ok', account, reconciled };
+      } else {
+        result = { status: 'skipped', account, reason: 'no_credentials' };
+      }
+    } catch (error) {
+      result = { status: 'failed', account, error: describeError(error) };
+    }
+    results.push(result);
+    try {
+      await options.onAccountDone?.(result);
+    } catch {
+      // Reporting is a courtesy; it must never cost the next account its turn.
+    }
+  }
+
+  return {
+    accounts: results,
+    failed: results.filter((result) => result.status === 'failed').length,
+  };
+}

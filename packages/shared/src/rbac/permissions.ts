@@ -28,6 +28,7 @@ export const PERMISSIONS = {
   'site.publish': 'Criar rascunhos de post no site da Wings',
   'ads.approve': 'Aprovar alterações de orçamento de tráfego pago',
   'ads.budget_caps.manage': 'Editar o teto interno de orçamento de tráfego pago por conta',
+  'ads.reconcile.manual': 'Forçar agora a reconciliação de uma conta de tráfego pago com a plataforma',
   'integrations.manage': 'Conectar e desconectar integrações do sistema (Kairogen)',
   'marketing.media.read': 'Ver a biblioteca de mídia do marketing',
   'marketing.media.generate': 'Gerar imagens e vídeos gastando créditos',
@@ -127,6 +128,9 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     // The internal monthly cap is what the guardrail refuses against; only an
     // Admin Master moves it, the same as the CLI it replaces on screen.
     'ads.budget_caps.manage': 'all',
+    // Same pair as ads.approve: whoever may approve a spend change may also
+    // force the read that tells them whether it is safe to approve.
+    'ads.reconcile.manual': 'all',
     'site.publish': 'all',
     // The roadmap report goes to the CEOs; only an Admin Master edits and approves it.
     'roadmap.manage': 'all',
@@ -150,6 +154,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'ads.request': 'all',
     // Either Admin Master or Diretoria may approve a budget change.
     'ads.approve': 'all',
+    'ads.reconcile.manual': 'all',
     'site.publish': 'all',
   },
   // The employee register and the RH/DP module. No CPF reveal and no time-clock
