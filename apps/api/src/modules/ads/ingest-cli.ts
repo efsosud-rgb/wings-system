@@ -2,7 +2,7 @@ import { createDb } from '../../db/client.js';
 import { loadDotEnv } from '../../db/load-env.js';
 import { loadEnv } from '../../env.js';
 import { getPeriodState } from './budget-guard.js';
-import { runIngestionCycle } from './ingest-cycle.js';
+import { runIngestionCycle, runReconciliationCycle } from './ingest-cycle.js';
 import { createAlertNotifier } from './notifiers/factory.js';
 import { activeAdAccounts, archiveAdAccount } from './metrics.js';
 import { formatBrl } from './platform/money.js';
@@ -14,32 +14,38 @@ import { syncBlogPosts } from '../site/blog-sync.js';
 import {
   accountRecordOf,
   finishIngestRun,
+  reconcileRecordOf,
   startIngestRun,
   type IngestRunAccount,
   type IngestRunSite,
 } from './ingest-runs.js';
 
 /**
- * The job the Coolify scheduled task runs.
+ * The job the Coolify scheduled tasks run — two of them, both read-only
+ * against the platform, so a scheduling mistake costs nothing but API calls.
  *
- * Read-only against the platform: it mirrors campaigns, ad sets, ads and
- * creatives, pulls daily performance, and reconciles spend. It never writes to
- * an ad platform, so a scheduling mistake costs nothing but API calls.
- *
- *   node dist/modules/ads/ingest-cli.js            # ingest everything
+ *   node dist/modules/ads/ingest-cli.js                 # full cycle: campaigns,
+ *                                                        # ads, metrics, breakdowns,
+ *                                                        # alerts, reconciliation
+ *   node dist/modules/ads/ingest-cli.js --reconcile-only # fast cycle: balance,
+ *                                                        # platform limit and
+ *                                                        # campaign status only —
+ *                                                        # the 15-min task
  *   node dist/modules/ads/ingest-cli.js --seed     # create the account row first
  *   node dist/modules/ads/ingest-cli.js --seed --account act_… --name "…" --cap 250000 --usable 70
  *   node dist/modules/ads/ingest-cli.js --seed --platform google --account 4268586278 \
  *        --name "…" --cap 250000 --usable 70       # --cap is in cents
- *   node dist/modules/ads/ingest-cli.js --days 30  # wider metrics window
+ *   node dist/modules/ads/ingest-cli.js --days 30  # wider metrics window (full cycle only)
  *   node dist/modules/ads/ingest-cli.js --manual   # from a shell, not the scheduled task
  *   node dist/modules/ads/ingest-cli.js --archive act_… --reason "…"
  *
  * Every run writes a row to `ingest_runs` when it starts and when it ends, so
- * the dashboard can say when the last ingestion was, what failed and whether
- * the scheduled one is overdue. The blog mirror (Canais próprios) is a step
- * of the same run, non-fatal: a site that does not answer never costs an ad
- * account its reconciliation.
+ * the dashboard can say when the last one of each kind was, what failed and
+ * whether the scheduled one is overdue. The blog mirror (Canais próprios)
+ * stays a step of the full cycle only, non-fatal there. Both cycles end with
+ * the dead-man check (`enforceReconciliationFreshness`): the fast cycle keeps
+ * accounts fresh on its own now, but the full cycle still checks too, in case
+ * the fast task itself is what stopped running.
  */
 
 function arg(name: string): string | undefined {
@@ -105,6 +111,60 @@ async function main() {
     const accounts = await activeAdAccounts(db);
     if (!accounts.some((account) => account.platform === 'meta')) {
       throw new Error('No active ad accounts configured. Run once with --seed --account act_…');
+    }
+
+    if (flag('reconcile-only')) {
+      const runId = await startIngestRun(db, {
+        trigger: flag('manual') ? 'manual_reconcile' : 'scheduled_reconcile',
+        since,
+        now,
+      });
+      const recorded: IngestRunAccount[] = [];
+
+      const cycle = await runReconciliationCycle(db, accounts, {
+        clientFor: (account) =>
+          createPlatformClient({ ...env, ADS_WRITES_ENABLED: false }, account).client,
+        now,
+        onAccountDone: (result) => {
+          recorded.push(reconcileRecordOf(result));
+          console.warn(`${result.account.platform}:${result.account.externalId}`);
+          if (result.status === 'skipped') {
+            console.warn('  sem credenciais para esta conta — pulando');
+            return;
+          }
+          if (result.status === 'failed') {
+            console.error(`  FALHOU: ${result.error}`);
+            return;
+          }
+          console.warn(
+            `  reconcile: ${result.reconciled.campaignsSynced} campanhas, gasto ` +
+              `${formatBrl(result.reconciled.spentCents)}, comprometido ` +
+              `${formatBrl(result.reconciled.committedCents)}` +
+              (result.reconciled.killSwitchEngaged ? ' [TRAVA ACIONADA]' : ''),
+          );
+        },
+      });
+      const failures = cycle.failed;
+
+      await finishIngestRun(db, runId, {
+        status: failures > 0 ? 'failed' : 'ok',
+        accounts: recorded,
+        site: null,
+        error: failures > 0 ? `${failures} conta(s) falharam` : null,
+      });
+
+      const stale = await enforceReconciliationFreshness(db, { now });
+      for (const entry of stale) {
+        console.error(
+          `TRAVA ACIONADA: conta ${entry.accountId} sem reconciliar há ${entry.ageMinutes} min ` +
+            `— gasto real desconhecido. Libere com ops-cli release-kill-switch depois de verificar.`,
+        );
+      }
+
+      if (failures > 0) {
+        throw new Error(`${failures} conta(s) falharam neste ciclo de reconciliação — veja acima.`);
+      }
+      return;
     }
 
     const runId = await startIngestRun(db, {

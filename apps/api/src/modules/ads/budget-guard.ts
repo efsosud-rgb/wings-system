@@ -70,6 +70,8 @@ export interface PeriodState {
   platformLimitSyncedAt: Date | null;
   /** Why the platform would not answer, in the API's own words; null when it did. */
   platformLimitNote: string | null;
+  /** When `reconcileAccount` last finished for this period; null when never. */
+  lastReconciledAt: Date | null;
   /** What may still be planned: the smallest of the headrooms, platform included. */
   availableCents: Cents;
 }
@@ -167,6 +169,7 @@ function periodState(row: {
   platformLimitSource?: string | null;
   platformLimitSyncedAt?: Date | null;
   platformLimitNote?: string | null;
+  lastReconciledAt?: Date | null;
 }): PeriodState {
   const capHeadroom = Math.max(0, row.capCents - row.spentCents - row.committedCents);
   const usableHeadroom = Math.max(0, row.usableCents - row.committedCents);
@@ -195,6 +198,7 @@ function periodState(row: {
     platformLimitSource: row.platformLimitSource ?? null,
     platformLimitSyncedAt: row.platformLimitSyncedAt ?? null,
     platformLimitNote: row.platformLimitNote ?? null,
+    lastReconciledAt: row.lastReconciledAt ?? null,
     availableCents: effectiveHeadroomCents(internalHeadroom, platformHeadroom),
   };
 }
@@ -1012,11 +1016,12 @@ export async function getPeriodState(
       platform_limit_source: string | null;
       platform_limit_synced_at: Date | string | null;
       platform_limit_note: string | null;
+      last_reconciled_at: Date | string | null;
     } & Record<string, unknown>
   >(sql`
     select id, cap_cents, usable_cents, committed_cents, spent_cents,
            platform_remaining_cents, platform_limit_source, platform_limit_synced_at,
-           platform_limit_note
+           platform_limit_note, last_reconciled_at
       from ad_budget_periods
      where ad_account_id = ${adAccountId} and period_month = ${periodMonth}
   `);
@@ -1036,6 +1041,7 @@ export async function getPeriodState(
     platformLimitSyncedAt:
       row.platform_limit_synced_at === null ? null : new Date(row.platform_limit_synced_at),
     platformLimitNote: row.platform_limit_note,
+    lastReconciledAt: row.last_reconciled_at === null ? null : new Date(row.last_reconciled_at),
   });
 }
 

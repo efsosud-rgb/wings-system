@@ -190,6 +190,11 @@ export interface DashboardOverview {
     disapprovedAds: number;
   };
   ingestion: IngestionStatus;
+  /**
+   * The fast cycle (`ingest-cli --reconcile-only`), same shape: balance,
+   * platform limit and campaign status only, meant to run every 15 minutes.
+   */
+  reconciliation: IngestionStatus;
   health: HealthItem[];
 }
 

@@ -147,6 +147,24 @@ export function useCockpit({
 }
 
 /**
+ * "Atualizar agora": the same read the scheduled reconciliation does, run
+ * once on a click. The server enforces the cooldown against repeated
+ * clicks — this just surfaces its answer, never counts down on its own.
+ */
+export function useReconcileNow(accountId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ ok: true; lastReconciledAt: string | null }>(
+        `/ads/accounts/${accountId ?? ''}/reconcile-now`,
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ads'] });
+    },
+  });
+}
+
+/**
  * Administração → Integrações: every account's current cap, for the edit
  * form. `enabled` so a viewer without `ads.budget_caps.manage` never fires
  * the request — the section is hidden for them, and the API would refuse it.

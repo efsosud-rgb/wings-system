@@ -145,7 +145,9 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
 
       const rows = await db.execute<
         ListRow & {
+          ad_account_id: string;
           account_external_id: string;
+          period_last_reconciled_at: Date | string | null;
           campaign_external_id: string;
           budget_level: ApprovalDetail['budgetLevel'];
           from_value_cents: string | null;
@@ -168,7 +170,8 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         }
       >(sql`
         select ar.id, ar.status, ar.trigger, ar.amount_cents::text as amount_cents,
-               acc.name as account_name, acc.platform, acc.external_id as account_external_id,
+               ar.ad_account_id, acc.name as account_name, acc.platform,
+               acc.external_id as account_external_id,
                coalesce(c.name, d.name) as campaign_name,
                coalesce(c.external_id, '') as campaign_external_id,
                coalesce(c.budget_level, 'campaign') as budget_level, d.payload as draft_payload,
@@ -188,7 +191,8 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
                cr.suggested_by_agent,
                dec.full_name as decided_by_name,
                p.cap_cents::text as cap_cents, p.usable_cents::text as usable_cents,
-               p.committed_cents::text as committed_cents, p.spent_cents::text as spent_cents
+               p.committed_cents::text as committed_cents, p.spent_cents::text as spent_cents,
+               p.last_reconciled_at as period_last_reconciled_at
           from ad_approval_requests ar
           join ad_change_requests cr on cr.id = ar.change_request_id
           join ad_accounts acc on acc.id = ar.ad_account_id
@@ -222,6 +226,7 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
 
       const detail: ApprovalDetail = {
         ...toListItem(row),
+        accountId: row.ad_account_id,
         accountExternalId: row.account_external_id,
         campaignExternalId: row.campaign_external_id,
         budgetLevel: row.budget_level,
@@ -235,6 +240,7 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         periodUsableCents: Number(row.usable_cents),
         periodCommittedCents: Number(row.committed_cents),
         periodSpentCents: Number(row.spent_cents),
+        periodLastReconciledAt: iso(row.period_last_reconciled_at),
         notifiedAt: iso(row.notified_at),
         notificationError: row.notification_error,
         changeStatus: row.change_status,

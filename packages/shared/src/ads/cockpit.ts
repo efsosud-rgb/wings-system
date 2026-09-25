@@ -98,6 +98,12 @@ export interface PacingSummary {
   platformLimitSyncedAtIso: string | null;
   /** Why the platform would not answer, in its own words; null when it did. */
   platformLimitNote: string | null;
+  /**
+   * When `reconcileAccount` last ran successfully for this account — the
+   * freshness of every figure above, not only the platform limit. Null when
+   * this month's period has never reconciled.
+   */
+  lastReconciledAt: string | null;
 }
 
 export interface CockpitAccount {

@@ -1,8 +1,8 @@
-import { desc } from 'drizzle-orm';
+import { desc, inArray, notInArray } from 'drizzle-orm';
 import { eq } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { ingestRuns } from '../../db/schema/index.js';
-import type { AccountCycleResult } from './ingest-cycle.js';
+import type { AccountCycleResult, ReconcileCycleAccountResult } from './ingest-cycle.js';
 
 /**
  * The ingest job's own record of itself: one row per run, written when it
@@ -12,7 +12,15 @@ import type { AccountCycleResult } from './ingest-cycle.js';
  * that crashes leaves its `running` row behind, which is itself a finding.
  */
 
-export type IngestTrigger = 'scheduled' | 'manual';
+/**
+ * `scheduled`/`manual` are the full cycle (campaigns, ads, metrics,
+ * breakdowns, alerts) — hourly-or-slower. `scheduled_reconcile`/
+ * `manual_reconcile` are the fast cycle added for the 15-min dead-man window:
+ * balance, platform limit and campaign status only, nothing else.
+ */
+export type IngestTrigger = 'scheduled' | 'manual' | 'scheduled_reconcile' | 'manual_reconcile';
+
+const RECONCILE_TRIGGERS: readonly IngestTrigger[] = ['scheduled_reconcile', 'manual_reconcile'];
 
 /** One account as the run recorded it. Errors carry codes and ids, never personal data. */
 export interface IngestRunAccount {
@@ -72,7 +80,30 @@ export function accountRecordOf(result: AccountCycleResult): IngestRunAccount {
   return { ...base, status: 'failed', step: result.step, error: result.error.slice(0, 500) };
 }
 
-export async function latestIngestRun(db: Database) {
-  const [row] = await db.select().from(ingestRuns).orderBy(desc(ingestRuns.startedAt)).limit(1);
+/** The reconcile-only cycle's result as the run row keeps it — no `step`, it has one. */
+export function reconcileRecordOf(result: ReconcileCycleAccountResult): IngestRunAccount {
+  const base = { platform: result.account.platform, externalId: result.account.externalId };
+  if (result.status === 'ok') return { ...base, status: 'ok' };
+  if (result.status === 'skipped') return { ...base, status: 'skipped', error: result.reason };
+  return { ...base, status: 'failed', error: result.error.slice(0, 500) };
+}
+
+/**
+ * The newest run row. `kind: 'reconcile'` reads the fast cycle's own runs,
+ * `'full'` (the default) reads the campaigns/metrics/breakdowns cycle — each
+ * ignores the other's rows, since the dashboard tells the two apart.
+ */
+export async function latestIngestRun(db: Database, options: { kind?: 'full' | 'reconcile' } = {}) {
+  const kind = options.kind ?? 'full';
+  const [row] = await db
+    .select()
+    .from(ingestRuns)
+    .where(
+      kind === 'reconcile'
+        ? inArray(ingestRuns.trigger, [...RECONCILE_TRIGGERS])
+        : notInArray(ingestRuns.trigger, [...RECONCILE_TRIGGERS]),
+    )
+    .orderBy(desc(ingestRuns.startedAt))
+    .limit(1);
   return row ?? null;
 }

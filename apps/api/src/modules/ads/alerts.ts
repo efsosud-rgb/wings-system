@@ -170,6 +170,8 @@ export interface PacingFacts {
   platformLimitSyncedAtIso: string | null;
   /** Why the platform would not answer a number, in its own words. */
   platformLimitNote: string | null;
+  /** When this account's period last reconciled with the platform; null when never. */
+  lastReconciledAtIso: string | null;
 }
 
 /**
@@ -214,6 +216,7 @@ export async function pacingFacts(
       ? state.platformLimitSyncedAt.toISOString()
       : null,
     platformLimitNote: state.platformLimitNote,
+    lastReconciledAtIso: state.lastReconciledAt ? state.lastReconciledAt.toISOString() : null,
   };
 }
 

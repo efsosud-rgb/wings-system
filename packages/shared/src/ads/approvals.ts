@@ -102,6 +102,7 @@ export interface ApprovalDetail extends ApprovalListItem {
   executionSteps: ExecutionStepView[];
   /** False when the server has no write credentials or writes are disabled. */
   executionAvailable: boolean;
+  accountId: string;
   accountExternalId: string;
   /** Empty while the campaign is still to be created. */
   campaignExternalId: string;
@@ -121,6 +122,8 @@ export interface ApprovalDetail extends ApprovalListItem {
   periodUsableCents: number;
   periodCommittedCents: number;
   periodSpentCents: number;
+  /** When this account's period last reconciled with the platform; null when never. */
+  periodLastReconciledAt: string | null;
   notifiedAt: string | null;
   notificationError: string | null;
   auditTrail: ApprovalAuditEntry[];

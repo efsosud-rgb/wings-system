@@ -57,20 +57,20 @@ function Loading({ query, children }: { query: { isLoading: boolean; isError: bo
   return <>{children}</>;
 }
 
-/** One line: when the ingestion last ran, how it went, and when the next one is due. */
-function ingestionLine(ingestion: IngestionStatus): string {
-  const last = ingestion.lastRunAt
-    ? `Última ingestão ${formatDateTime(ingestion.lastRunAt)}${
-        ingestion.lastRunStatus === 'running'
+/** One line: when a job last ran, how it went, and when the next one is due. */
+function jobLine(label: string, status: IngestionStatus, cronEnvVar: string): string {
+  const last = status.lastRunAt
+    ? `${label} ${formatDateTime(status.lastRunAt)}${
+        status.lastRunStatus === 'running'
           ? ' (em andamento)'
-          : ingestion.lastRunStatus === 'failed'
-            ? ` (falhou em ${ingestion.lastRunFailures.map((failure) => `${failure.step}, ${failure.platform}`).join('; ') || 'uma etapa'})`
+          : status.lastRunStatus === 'failed'
+            ? ` (falhou em ${status.lastRunFailures.map((failure) => `${failure.step}, ${failure.platform}`).join('; ') || 'uma etapa'})`
             : ' (ok)'
       }`
-    : 'Nenhuma ingestão registrada ainda';
-  const next = ingestion.nextRunAt
-    ? `próxima ${formatWhen(ingestion.nextRunAt)}`
-    : 'agendamento não informado ao sistema (ADS_INGEST_CRON)';
+    : `${label} nunca registrada`;
+  const next = status.nextRunAt
+    ? `próxima ${formatWhen(status.nextRunAt)}`
+    : `agendamento não informado ao sistema (${cronEnvVar})`;
   return `${last} · ${next}.`;
 }
 
@@ -95,6 +95,7 @@ export function MarketingDashboardPage() {
   };
 
   const ingestion = overview.data?.overview.ingestion ?? null;
+  const reconciliation = overview.data?.overview.reconciliation ?? null;
 
   return (
     <>
@@ -103,8 +104,15 @@ export function MarketingDashboardPage() {
           <h1>Dashboard de marketing</h1>
           <p>
             Gastos, saldos e desempenho lidos das plataformas pela ingestão. Nada aqui altera uma conta.
-            {ingestion && <span className="dash-ingestion"> {ingestionLine(ingestion)}</span>}
+            {ingestion && (
+              <span className="dash-ingestion"> {jobLine('Última ingestão', ingestion, 'ADS_INGEST_CRON')}</span>
+            )}
           </p>
+          {reconciliation && (
+            <p className="field-hint">
+              {jobLine('Última reconciliação', reconciliation, 'ADS_RECONCILE_CRON')}
+            </p>
+          )}
         </div>
         {windowed && (
           <div className="window-picker" role="group" aria-label="Período">
@@ -126,6 +134,13 @@ export function MarketingDashboardPage() {
         <Alert kind="warning">
           A ingestão agendada não rodou desde {formatDateTime(ingestion.lastRunAt)}: confira a tarefa
           agendada no Coolify. Os números desta tela param nessa data.
+        </Alert>
+      )}
+      {reconciliation?.overdue && (
+        <Alert kind="warning">
+          A reconciliação agendada (15 min) não rodou desde{' '}
+          {formatDateTime(reconciliation.lastRunAt)}: confira a tarefa agendada no Coolify. O teto
+          real da conta pode estar desatualizado.
         </Alert>
       )}
 

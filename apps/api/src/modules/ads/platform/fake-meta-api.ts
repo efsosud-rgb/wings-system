@@ -30,6 +30,9 @@ export interface FakeMetaApiOptions {
   instagramAccounts?: { id: string; username: string }[];
   /** Extra cities for the location search, beyond the defaults. */
   cities?: { key: string; name: string; region: string }[];
+  /** The account's spend_cap and amount_spent, both minor-unit strings — what `getAccount` reads. */
+  spendCapCents?: string;
+  amountSpentCents?: string;
 }
 
 const REGIONS = [
@@ -60,6 +63,8 @@ export function fakeMetaApi(options: FakeMetaApiOptions = {}) {
     campaigns: [] as { id: string; name: string; status: string; daily_budget: string }[],
     videoStatuses: [...(options.videoStatuses ?? ['ready'])],
     videoBytes: new Map<string, number>(),
+    spendCapCents: options.spendCapCents ?? '400000',
+    amountSpentCents: options.amountSpentCents ?? '0',
   };
   const sizes = new Map<string, number>();
   let nextId = 120_210_000_000_000;
@@ -122,6 +127,20 @@ export function fakeMetaApi(options: FakeMetaApiOptions = {}) {
       });
     }
     if (path === `${accountId}/campaigns`) return json(200, { data: state.campaigns });
+    if (path === `${accountId}/adsets`) return json(200, { data: [] });
+    if (path === `${accountId}/insights`) return json(200, { data: [] });
+    if (path === accountId && query.fields === 'funding_source_details') {
+      return json(200, { id: accountId });
+    }
+    if (path === accountId) {
+      return json(200, {
+        id: accountId,
+        currency: 'BRL',
+        spend_cap: state.spendCapCents,
+        amount_spent: state.amountSpentCents,
+        account_status: 1,
+      });
+    }
 
     const campaign = state.campaigns.find((item) => item.id === path);
     if (campaign) return json(200, campaign);

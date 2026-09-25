@@ -493,7 +493,7 @@ export async function overview(
   const accounts = await activeAccounts(db);
   const ids = accounts.map((account) => account.id);
 
-  const [meta, google, kairogen, ai, media, ingestion, latest] = await Promise.all([
+  const [meta, google, kairogen, ai, media, ingestion, reconciliation, latest] = await Promise.all([
     paidStrip(
       db,
       env,
@@ -512,6 +512,7 @@ export async function overview(
     aiStrip(db, env, month, monthStart),
     mediaStrip(db, env, month, monthStart),
     ingestionStatus(db, env, ids, now),
+    ingestionStatus(db, env, ids, now, { kind: 'reconcile' }),
     latestAccountDays(db, ids),
   ]);
   const health = await accountHealth(db, accounts, latest, now);
@@ -552,6 +553,7 @@ export async function overview(
       disapprovedAds: Number(disapproved?.count ?? 0),
     },
     ingestion,
+    reconciliation,
     health,
   };
 }

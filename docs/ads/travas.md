@@ -191,8 +191,14 @@ permissão desta sessão, e não contornei.
       "orçamentos excedem o plano" já a tenha acionado. Se estiver, a primeira
       escrita está bloqueada até ajustarmos o teto.
 - [ ] `ops-cli preflight`: o token tem `ads_management`?
-- [ ] De quanto em quanto tempo a ingestão agendada roda? Se for mais que
-      120 min, a janela do dead-man precisa de ajuste ou a ingestão manual
-      vira passo fixo do roteiro.
+- [x] De quanto em quanto tempo a ingestão agendada roda? Respondido em
+      2026-09-25: a ingestão completa (campanhas, ads, métricas, quebras,
+      alertas) segue com o cron que já existia — só ela não bastava para
+      manter a janela de 120 min folgada se algum ciclo atrasasse. Agora existe
+      uma segunda tarefa agendada no Coolify, `ingest-cli --reconcile-only`, a
+      cada 15 min: só o que `reconcileAccount` lê (saldo, teto da plataforma,
+      orçamento e status das campanhas), sem métricas nem quebras. Ver
+      `docs/ads/reconciliacao-15min.md` para a conta de operações da API do
+      Google e como configurar `ADS_RECONCILE_CRON`.
 - [ ] Depois do deploy desta branch, o primeiro ciclo agendado termina sem
       congelar a Fly High.
