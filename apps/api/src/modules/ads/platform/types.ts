@@ -273,6 +273,11 @@ export interface GoogleCampaignSpec {
 
 export interface GoogleSearchSpec {
   adGroupName: string;
+  /** People in the place, or also people searching about it. */
+  locationMode: 'PRESENCE' | 'PRESENCE_OR_INTEREST';
+  bidding: 'MAXIMIZE_CLICKS' | 'MAXIMIZE_CONVERSIONS';
+  /** Ceiling per click, with MAXIMIZE_CLICKS. */
+  maxCpcCents?: Cents;
   keywords: { text: string; match: 'EXACT' | 'PHRASE' }[];
   /** Campaign-level negatives, always phrase match. */
   negativeKeywords: string[];

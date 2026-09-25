@@ -521,3 +521,57 @@ describe('Google campaigns through the same request', () => {
     expect(active.statusCode).toBe(400);
   });
 });
+
+describe('saved drafts', () => {
+  it('saves, lists, opens and deletes a draft without any request, approval or reservation', async () => {
+    const cookies = await cookiesFor('marketing');
+    const payload = {
+      ...(await draft()),
+      formatKey: undefined,
+      variations: [],
+      ageMin: undefined,
+      ageMax: undefined,
+      placements: undefined,
+      identity: undefined,
+      platform: 'google_search',
+      name: 'SEARCH | Formatação | Alta Intenção | Set26',
+      utms: { utm_source: 'google', utm_medium: 'cpc', utm_campaign: 'x', utm_content: 'lead' },
+      search: {
+        adGroupName: 'Formatação',
+        keywords: ['"formatação de franquia"', '[wings company]'],
+        negativeKeywords: ['emprego'],
+        headlines: ['Formate Sua Franquia', 'Consultoria de Franquias', 'Fale com um Especialista'],
+        descriptions: ['Formatamos sua empresa para virar franqueadora.', 'Fale com a Wings.'],
+      },
+    };
+    const changesBefore = (await db.query.adChangeRequests.findMany()).length;
+    const saved = await app.inject({ method: 'POST', url: '/ads/saved-drafts', cookies, payload: { draft: payload } });
+    expect(saved.statusCode).toBe(201);
+    const { id } = saved.json<{ id: string }>();
+
+    const list = await app.inject({ url: '/ads/saved-drafts', cookies });
+    expect(list.json<{ drafts: { id: string; name: string; platform: string }[] }>().drafts).toContainEqual(
+      expect.objectContaining({ id, name: payload.name, platform: 'google_search' }),
+    );
+    const one = await app.inject({ url: `/ads/saved-drafts/${id}`, cookies });
+    expect(one.statusCode).toBe(200);
+    expect(one.json<{ draft: { search: { adGroupName: string } } }>().draft.search.adGroupName).toBe('Formatação');
+
+    // Nothing was requested, approved or reserved.
+    expect(await db.query.adChangeRequests.findMany()).toHaveLength(changesBefore);
+
+    // A draft the schema refuses is not saved.
+    const bad = await app.inject({
+      method: 'POST',
+      url: '/ads/saved-drafts',
+      cookies,
+      payload: { draft: { ...payload, search: { ...payload.search, keywords: ['abrir franquia'] } } },
+    });
+    expect(bad.statusCode).toBe(400);
+
+    expect((await app.inject({ method: 'DELETE', url: `/ads/saved-drafts/${id}`, cookies })).statusCode).toBe(204);
+    expect((await app.inject({ url: `/ads/saved-drafts/${id}`, cookies })).statusCode).toBe(404);
+    // A seller cannot see the builder's drafts.
+    expect((await app.inject({ url: '/ads/saved-drafts', cookies: await cookiesFor('vendedor_expansao') })).statusCode).toBe(403);
+  });
+});

@@ -30,6 +30,11 @@ import {
   parseYoutubeVideoId,
   placementsSchema,
   reachRefusal,
+  AD_GROUP_NAME_MAX,
+  MAX_MAX_CPC_CENTS,
+  MIN_MAX_CPC_CENTS,
+  SEARCH_BIDDING_STRATEGIES,
+  SEARCH_LOCATION_MODES,
 } from './campaign-builder.js';
 import type { MediaProviderId } from '../marketing/media-providers.js';
 import type { AgentGenerationProposal } from '../marketing/media-studio.js';
@@ -343,6 +348,12 @@ export const agentCampaignProposalSchema = z
       .default([]),
     search: z
       .object({
+        /** The ad group's name; the builder falls back to the campaign's. */
+        adGroupName: z.string().trim().min(2).max(AD_GROUP_NAME_MAX).optional(),
+        /** Defaults in the builder: presence, maximize_clicks at R$ 6,00. */
+        locationMode: z.enum(SEARCH_LOCATION_MODES).optional(),
+        bidding: z.enum(SEARCH_BIDDING_STRATEGIES).optional(),
+        maxCpcCents: z.number().int().min(MIN_MAX_CPC_CENTS).max(MAX_MAX_CPC_CENTS).optional(),
         keywords: z
           .array(
             z.object({

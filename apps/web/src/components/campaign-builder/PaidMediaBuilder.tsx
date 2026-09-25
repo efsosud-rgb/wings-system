@@ -74,6 +74,11 @@ import {
   type PacingSummary,
   type Placements,
   type VideoUpload,
+  DEFAULT_MAX_CPC_CENTS,
+  SEARCH_BIDDING_LABEL,
+  SEARCH_BIDDING_STRATEGIES,
+  SEARCH_LOCATION_MODES,
+  SEARCH_LOCATION_MODE_LABEL,
 } from '@wings/shared';
 import { useEffect, useState, type MutableRefObject, type ReactNode } from 'react';
 import {
@@ -95,6 +100,10 @@ import {
   useSaveMetaIdentityDefault,
   useUploadCreative,
   useUploadVideo,
+  loadSavedDraft,
+  useDeleteSavedDraft,
+  useSaveDraft,
+  useSavedDrafts,
 } from '../../api/ads.js';
 import { ApiError } from '../../api/client.js';
 import { Alert, Button, Field, Input, Select } from '../ui.js';
@@ -261,6 +270,7 @@ const SEARCH_SECTIONS = [
   'icp',
   'reach',
   'keywords',
+  'searchSettings',
   'searchAd',
   'duration',
   'budget',
@@ -732,6 +742,8 @@ export interface BuilderBridge {
   getDraft: () => Record<string, unknown>;
   /** `pending` is the card's list of what only a person can choose. */
   applyProposal: (proposal: AgentCampaignProposal, pending?: string[]) => void;
+  /** Fills the form with a saved draft, whole. Submits nothing. */
+  applyDraft: (draft: CampaignDraft) => void;
 }
 
 /** Cents as the budget box shows them: 2000 -> "20,00". */
@@ -760,6 +772,11 @@ export function PaidMediaBuilder({
 }) {
   const today = todayInSaoPaulo();
   const launch = useRequestCampaign();
+  const saveDraft = useSaveDraft();
+  const savedDrafts = useSavedDrafts(canRequest);
+  const deleteSavedDraft = useDeleteSavedDraft();
+  const [loadProblem, setLoadProblem] = useState<string | null>(null);
+  const [loadedDraftName, setLoadedDraftName] = useState<string | null>(null);
 
   const {
     register,
@@ -794,6 +811,10 @@ export function PaidMediaBuilder({
       youtube: { videoUrl: '', headline: '' },
       search: {
         adGroupName: '',
+        network: 'google_search_only',
+        locationMode: 'presence',
+        bidding: 'maximize_clicks',
+        maxCpcCents: DEFAULT_MAX_CPC_CENTS,
         keywords: [],
         negativeKeywords: [],
         headlines: Array.from({ length: MAX_SEARCH_HEADLINES }, () => ''),
@@ -900,6 +921,9 @@ export function PaidMediaBuilder({
   // The match a line gets when the operator does not mark it. Exact by
   // default: the tightest, for an account still learning which searches pay.
   const [defaultMatch, setDefaultMatch] = useState<SearchMatchType>('exact');
+  // The CPC ceiling box keeps its own text, like the budget box.
+  const [maxCpcText, setMaxCpcText] = useState(centsToBudgetText(DEFAULT_MAX_CPC_CENTS));
+  const maxCpcField = register('search.maxCpcCents', { setValueAs: parseBrlToCents });
 
   const days = campaignDays(values.startDate, values.endDate);
   // The estimate reads what is in the box, as typed. It must never wait on
@@ -1003,6 +1027,13 @@ export function PaidMediaBuilder({
         padTo(proposal.search.descriptions, MAX_SEARCH_DESCRIPTIONS),
         filled,
       );
+      setValue('search.adGroupName', proposal.search.adGroupName ?? '', filled);
+      // Network, place and bid: the proposal's, or the builder's defaults.
+      setValue('search.locationMode', proposal.search.locationMode ?? 'presence', filled);
+      setValue('search.bidding', proposal.search.bidding ?? 'maximize_clicks', filled);
+      const cpc = proposal.search.maxCpcCents ?? DEFAULT_MAX_CPC_CENTS;
+      setValue('search.maxCpcCents', cpc, filled);
+      setMaxCpcText(centsToBudgetText(cpc));
     }
     if (proposal.platform === 'youtube' && proposal.youtube) {
       setValue('youtube.headline', proposal.youtube.headline, filled);
@@ -1055,11 +1086,72 @@ export function PaidMediaBuilder({
     return () => clearTimeout(timer);
   }, [draftJson]);
 
+  /**
+   * A saved draft is the whole form as it was validated, so it goes in whole:
+   * the form is reset to it over the current defaults, and the boxes that keep
+   * their own text (keywords, budget) are told too. Nothing is submitted.
+   */
+  const applyDraft = (draft: CampaignDraft) => {
+    // Field by field, like a proposal: the form library re-writes its inputs
+    // after a whole-form reset, which would undo the budget box's own text.
+    const filled = { shouldDirty: true, shouldValidate: false };
+    setAudienceLoaded(true);
+    setUtmsFromProposal(true);
+    setAppliedProposal(null);
+    setValue('platform', draft.platform, filled);
+    setValue('name', draft.name, filled);
+    setValue('objective', draft.objective, filled);
+    setValue('idealCustomerProfile', draft.idealCustomerProfile, filled);
+    setValue('reach.states', draft.reach.states, filled);
+    replaceCities(draft.reach.cities);
+    setValue('reach.customLocations', draft.reach.customLocations, filled);
+    setValue('destinationUrl', draft.destinationUrl, filled);
+    for (const key of UTM_KEYS) setValue(`utms.${key}`, draft.utms[key], filled);
+    setValue('dailyBudgetCents', draft.dailyBudgetCents, filled);
+    setBudgetText(centsToBudgetText(draft.dailyBudgetCents));
+    setValue('startDate', draft.startDate, filled);
+    setValue('endDate', draft.endDate, filled);
+    setValue('startPaused', true, filled);
+
+    if (draft.platform === 'meta') {
+      if (draft.formatKey) setValue('formatKey', draft.formatKey, filled);
+      if (draft.ageMin !== undefined) setValue('ageMin', draft.ageMin, filled);
+      if (draft.ageMax !== undefined) setValue('ageMax', draft.ageMax, filled);
+      if (draft.placements) setValue('placements', draft.placements, filled);
+      if (draft.identity) {
+        setValue('identity.pageId', draft.identity.pageId, filled);
+        setValue('identity.instagramActorId', draft.identity.instagramActorId, filled);
+      }
+      if (draft.variations.length > 0) variations.replace(draft.variations);
+    }
+    if (draft.youtube) {
+      setValue('youtube.videoUrl', draft.youtube.videoUrl, filled);
+      setValue('youtube.headline', draft.youtube.headline, filled);
+    }
+    const search = draft.search;
+    if (search) {
+      setValue('search.adGroupName', search.adGroupName ?? '', filled);
+      setValue('search.locationMode', search.locationMode, filled);
+      setValue('search.bidding', search.bidding, filled);
+      setValue('search.maxCpcCents', search.maxCpcCents, filled);
+      setMaxCpcText(centsToBudgetText(search.maxCpcCents));
+      setValue('search.keywords', search.keywords, filled);
+      setValue('search.negativeKeywords', search.negativeKeywords, filled);
+      setKeywordsText(search.keywords.join('\n'));
+      setNegativeKeywordsText(search.negativeKeywords.join('\n'));
+      setValue('search.headlines', padTo(search.headlines, MAX_SEARCH_HEADLINES), filled);
+      setValue('search.descriptions', padTo(search.descriptions, MAX_SEARCH_DESCRIPTIONS), filled);
+    }
+    setChecked(null);
+    launch.reset();
+  };
+
   // The bridge always points at this render's functions, and at nothing once
   // the builder leaves the screen.
   const bridge = {
     getDraft: () => shapeDraft(getValues()) as Record<string, unknown>,
     applyProposal,
+    applyDraft,
   };
   useEffect(() => {
     if (!applyRef) return;
@@ -1193,9 +1285,11 @@ export function PaidMediaBuilder({
       onSubmit={(event) => {
         // Which button was pressed: checking never sends anything.
         const submitter = (event.nativeEvent as SubmitEvent).submitter;
-        const launching = submitter instanceof HTMLButtonElement && submitter.value === 'launch';
+        const action = submitter instanceof HTMLButtonElement ? submitter.value : 'check';
+        const launching = action === 'launch';
         setChecked(null);
         launch.reset();
+        saveDraft.reset();
         void handleSubmit((values) => {
           const draft = values as CampaignDraft;
           const identity = draft.identity;
@@ -1209,10 +1303,70 @@ export function PaidMediaBuilder({
             saveIdentityDefault.mutate(identity);
           }
           if (launching && canRequest) launch.mutate(draft);
+          else if (action === 'save' && canRequest) saveDraft.mutate({ draft });
           else setChecked(draft);
         })(event);
       }}
     >
+      {canRequest && (savedDrafts.data?.drafts.length ?? 0) > 0 && (
+        <section className="builder-applied" aria-label="Rascunhos salvos">
+          <div className="builder-applied-head">
+            <strong>Rascunhos salvos</strong>
+          </div>
+          <p className="field-hint">
+            Carregar preenche o formulário com o rascunho, inteiro. Nada é enviado: a campanha só
+            vira pedido em Lançar campanha.
+          </p>
+          {loadProblem && <Alert kind="error">{loadProblem}</Alert>}
+          {loadedDraftName && <Alert kind="success">Rascunho “{loadedDraftName}” carregado.</Alert>}
+          <ul className="builder-saved-drafts">
+            {savedDrafts.data?.drafts.map((item) => (
+              <li key={item.id}>
+                <span>
+                  <strong>{item.name}</strong>
+                  <span className="cell-sub">
+                    {' '}
+                    {PAID_PLATFORMS.find((p) => p.key === item.platform)?.label ?? item.platform}
+                    {item.createdByName ? ` · ${item.createdByName}` : ''} ·{' '}
+                    {new Date(item.updatedAt).toLocaleString('pt-BR', {
+                      timeZone: 'America/Sao_Paulo',
+                    })}
+                  </span>
+                </span>
+                <span className="builder-saved-actions">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      setLoadProblem(null);
+                      setLoadedDraftName(null);
+                      loadSavedDraft(item.id)
+                        .then((loaded) => {
+                          applyDraft(loaded.draft);
+                          setLoadedDraftName(loaded.name);
+                        })
+                        .catch((error: unknown) =>
+                          setLoadProblem(
+                            error instanceof Error ? error.message : 'Não foi possível carregar.',
+                          ),
+                        );
+                    }}
+                  >
+                    Carregar
+                  </Button>
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => deleteSavedDraft.mutate(item.id)}
+                  >
+                    Excluir
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {appliedProposal && (
         <section className="builder-applied" aria-label="Proposta do agente aplicada">
           <div className="builder-applied-head">
@@ -2000,6 +2154,68 @@ export function PaidMediaBuilder({
           </BuilderSection>
 
           <BuilderSection
+            step={stepOf('searchSettings')}
+            title="Rede, local e lance"
+            why="Onde o anúncio aparece, quem conta como “no local” e quanto cada clique pode custar. Os três vão no pedido aprovado e são validados no Google antes de escrever."
+          >
+            <div className="field">
+              <span className="field-label">Rede</span>
+              <p>Só a Pesquisa do Google. Parceiros de pesquisa e Display desligados.</p>
+            </div>
+            <div className="field">
+              <span className="field-label" id="builder-location-mode">
+                Local
+              </span>
+              <div className="builder-match" role="radiogroup" aria-labelledby="builder-location-mode">
+                {SEARCH_LOCATION_MODES.map((mode) => (
+                  <label key={mode} className="check">
+                    <input type="radio" value={mode} {...register('search.locationMode')} />{' '}
+                    {SEARCH_LOCATION_MODE_LABEL[mode]}
+                  </label>
+                ))}
+              </div>
+              <span className="field-hint">
+                Presença é o padrão: só quem está nos estados, cidades ou raios escolhidos.
+              </span>
+            </div>
+            <div className="field">
+              <span className="field-label" id="builder-bidding">
+                Lance
+              </span>
+              <div className="builder-match" role="radiogroup" aria-labelledby="builder-bidding">
+                {SEARCH_BIDDING_STRATEGIES.map((strategy) => (
+                  <label key={strategy} className="check">
+                    <input type="radio" value={strategy} {...register('search.bidding')} />{' '}
+                    {SEARCH_BIDDING_LABEL[strategy]}
+                  </label>
+                ))}
+              </div>
+              <span className="field-hint">
+                Maximizar cliques é o padrão enquanto a conversão da conta não for confiável: o
+                Google só compra cliques até o CPC máximo.
+              </span>
+            </div>
+            {values.search?.bidding !== 'maximize_conversions' && (
+              <Field
+                label="CPC máximo (R$)"
+                error={errors.search?.maxCpcCents?.message}
+                hint="O máximo por clique. Padrão R$ 6,00."
+              >
+                <Input
+                  inputMode="decimal"
+                  placeholder="6,00"
+                  {...maxCpcField}
+                  value={maxCpcText}
+                  onChange={(event) => {
+                    setMaxCpcText(event.target.value);
+                    void maxCpcField.onChange(event);
+                  }}
+                />
+              </Field>
+            )}
+          </BuilderSection>
+
+          <BuilderSection
             step={stepOf('searchAd')}
             title="Texto do anúncio"
             why="Na Pesquisa não há imagem: o título é o que faz a pessoa clicar. Promessa de ganho reprova o anúncio e pode restringir a conta — por isso o bloqueio."
@@ -2273,6 +2489,16 @@ export function PaidMediaBuilder({
               <dd>{(values.search?.keywords ?? []).join(' · ') || '—'}</dd>
               <dt>Negativas</dt>
               <dd>{(values.search?.negativeKeywords ?? []).join(' · ') || '—'}</dd>
+              <dt>Rede</dt>
+              <dd>Só Pesquisa do Google (sem parceiros, sem Display)</dd>
+              <dt>Local</dt>
+              <dd>{SEARCH_LOCATION_MODE_LABEL[values.search?.locationMode ?? 'presence']}</dd>
+              <dt>Lance</dt>
+              <dd>
+                {SEARCH_BIDDING_LABEL[values.search?.bidding ?? 'maximize_clicks']}
+                {values.search?.bidding !== 'maximize_conversions' &&
+                  ` · CPC máximo R$ ${maxCpcText || '—'}`}
+              </dd>
               <dt>Títulos</dt>
               <dd>{searchHeadlines.filter(Boolean).join(' | ') || '—'}</dd>
               <dt>Descrições</dt>
@@ -2327,10 +2553,23 @@ export function PaidMediaBuilder({
           </Alert>
         )}
 
+        {saveDraft.isSuccess && <Alert kind="success">Rascunho salvo. Nada foi enviado.</Alert>}
+        {saveDraft.isError && (
+          <Alert kind="error">
+            {saveDraft.error instanceof ApiError
+              ? saveDraft.error.message
+              : 'Não foi possível salvar o rascunho.'}
+          </Alert>
+        )}
         <div className="form-actions">
           <Button type="submit" variant="ghost" value="check">
             Conferir campanha
           </Button>
+          {canRequest && (
+            <Button type="submit" variant="ghost" value="save" disabled={saveDraft.isPending}>
+              {saveDraft.isPending ? 'Salvando…' : 'Salvar rascunho'}
+            </Button>
+          )}
           <Button
             type="submit"
             value="launch"

@@ -15,6 +15,8 @@ import {
   campaignDays,
   describeReach,
   estimateCostCents,
+  SEARCH_BIDDING_LABEL,
+  SEARCH_LOCATION_MODE_LABEL,
   isGooglePlatform,
   parseSearchKeyword,
   type ApprovalDetail,
@@ -367,6 +369,14 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
               {describeMatches(draft.search.keywords)} · [colchetes] = exata, “aspas” = frase; ampla
               não é usada
             </span>
+            <span className="field-label">Rede · local · lance</span>
+            <p>
+              Só Pesquisa do Google (sem parceiros, sem Display) ·{' '}
+              {SEARCH_LOCATION_MODE_LABEL[draft.search.locationMode ?? 'presence']} ·{' '}
+              {SEARCH_BIDDING_LABEL[draft.search.bidding ?? 'maximize_clicks']}
+              {(draft.search.bidding ?? 'maximize_clicks') === 'maximize_clicks' &&
+                ` de ${formatBrl(draft.search.maxCpcCents ?? null)}`}
+            </p>
             <span className="field-label">Palavras-chave negativas (campanha, correspondência de frase)</span>
             <p>{draft.search.negativeKeywords.join(' · ') || '—'}</p>
             <span className="field-label">Títulos ({draft.search.headlines.length})</span>

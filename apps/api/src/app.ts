@@ -13,6 +13,7 @@ import { creativeRoutes } from './modules/ads/creative-routes.js';
 import { dashboardRoutes } from './modules/ads/dashboard/routes.js';
 import { metaRoutes } from './modules/ads/meta-routes.js';
 import { adsRoutes } from './modules/ads/routes.js';
+import { savedDraftRoutes } from './modules/ads/saved-draft-routes.js';
 import type { AgentLlm } from './modules/agent/llm.js';
 import { agentRoutes } from './modules/agent/routes.js';
 import { clientRecordRoutes } from './modules/clients/record-routes.js';
@@ -151,6 +152,7 @@ export async function buildApp(deps: {
   await app.register(authRoutes);
   await app.register(employeeRoutes);
   await app.register(adsRoutes);
+  await app.register(savedDraftRoutes);
   await app.register(cockpitRoutes);
   await app.register(dashboardRoutes);
   await app.register(creativeRoutes);

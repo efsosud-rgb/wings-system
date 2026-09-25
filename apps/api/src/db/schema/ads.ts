@@ -431,6 +431,29 @@ export const adCampaignDrafts = pgTable(
 );
 
 /**
+ * A campaign the builder saved to come back to: the whole form, validated by
+ * `campaignDraftSchema`, and nothing else. Saving asks for no approval and
+ * reserves no budget; loading one only fills the builder. A request made from
+ * it is stored in `ad_campaign_drafts` like any other, so nothing here is ever
+ * bound to an approval or a hash.
+ */
+export const adCampaignSavedDrafts = pgTable(
+  'ad_campaign_saved_drafts',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    name: text('name').notNull(),
+    /** meta | google_search | youtube, as the form's platform. */
+    platform: text('platform').notNull(),
+    payload: jsonb('payload').notNull(),
+    createdBy: uuid('created_by').references(() => employees.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('ad_campaign_saved_drafts_updated_idx').on(table.updatedAt)],
+);
+
+/**
  * A proposed change and its reserved exposure.
  *
  * Every change requires approval by Admin Master or Diretoria — there is no

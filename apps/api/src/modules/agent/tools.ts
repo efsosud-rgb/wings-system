@@ -224,6 +224,18 @@ async function desempenhoCampanhas(ctx: ToolContext, raw: unknown): Promise<Tool
             custo_por_visualizacao_da_pagina_centavos: views > 0 ? Math.round(spend / views) : null,
             frequencia: row?.frequencyMilli == null ? null : row.frequencyMilli / 1000,
             espelhada_em: campaign.lastSyncedAt?.toISOString() ?? null,
+            // Google's "leads" are one form_submit conversion, never checked
+            // against the search terms that produced them. On 2026-09-25 a
+            // read of 90 days of search terms showed 17 of them coming from
+            // people looking for "google meu negócio". Until search terms are
+            // ingested, a Google CPL is a number, not evidence.
+            ...(account.platform === 'google'
+              ? {
+                  conversoes_verificadas: false,
+                  aviso_cpl:
+                    'CPL não confiável: as conversões do Google vêm de um único evento (form_submit) e incluem buscas de lixo (ex.: "google meu negócio"). Não projete leads com este CPL; diga que ele não é confiável.',
+                }
+              : {}),
           };
         });
       }),
@@ -615,8 +627,10 @@ async function proporCampanha(ctx: ToolContext, raw: unknown): Promise<ToolOutco
 
     // The learning phase: a leads campaign funded for fewer than ~10 leads a
     // week rarely leaves it. Going below is allowed — the ceiling or the
-    // person's own number may force it — but never without saying so.
-    if (proposal.objective !== 'traffic') {
+    // person's own number may force it — but never without saying so. Judged
+    // by the account's own CPL, which on Google is not trusted (see
+    // `desempenho_campanhas`): no projection is made from it there.
+    if (proposal.objective !== 'traffic' && account.platform === 'meta') {
       const cpl = await historicalCplCents(ctx, account.id);
       if (cpl !== null) {
         const minDaily = Math.ceil((cpl * AGENT_LEARNING_LEADS_PER_WEEK) / 7);

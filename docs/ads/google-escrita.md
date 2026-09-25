@@ -288,3 +288,39 @@ com `updateMask: status`.
 Leitura de reprovações e P-max via `asset_group`; alerta
 `account_out_of_funds`; pausa e negativas autônomas; guardrail explícito de
 correspondência ampla (hoje o esquema simplesmente recusa).
+
+### Rascunhos salvos e limites (25/09/2026, tarde)
+
+- **Limites do construtor:** 20 palavras-chave e 50 negativas (eram 10 e 20).
+  A campanha real de 25/09 leva 13 e 35; o `validateOnly` na conta real
+  aceitou a solicitação inteira (54 operações) antes da mudança.
+- **Rascunhos salvos** (`ad_campaign_saved_drafts`, migração 0038, com o
+  GRANT para `wings_ro`): "Salvar rascunho" no construtor guarda o formulário
+  validado, **sem pedido, sem aprovação, sem WhatsApp e sem reserva**; o bloco
+  "Rascunhos salvos" no topo do construtor carrega um deles inteiro. Rotas
+  `GET/POST/DELETE /ads/saved-drafts` (`ads.request`), auditadas
+  (`ads.draft_saved`, `ads.draft_deleted`). No terminal,
+  `ops-cli save-draft --file rascunho.json` faz o mesmo sem sessão.
+- O rascunho da campanha de lançamento está em
+  `docs/ads/rascunho-pesquisa-set26.json` (datas: hoje a +30 dias; ajustar na
+  tela).
+
+### Rede, local e lance no rascunho (25/09/2026, noite)
+
+Até aqui o adaptador decidia sozinho: rede só Pesquisa, local `PRESENCE` e
+lance `maximizeConversions` para lead/conversão (`targetSpend` só para
+tráfego). Agora os três **estão no rascunho** (`search.network`,
+`search.locationMode`, `search.bidding`, `search.maxCpcCents`), aparecem no
+construtor, no cartão do agente, no resumo e na aprovação, entram no hash do
+payload aprovado e no `validateOnly`. Padrões: só Pesquisa do Google (único
+valor), presença, **maximizar cliques com CPC máximo R$ 6,00**
+(`targetSpend.cpcBidCeilingMicros`). Maximizar conversões existe como opção,
+mas não é o padrão enquanto a conversão da conta estiver contaminada.
+
+O agente passou a preencher `search.adGroupName`, e para o Google **não
+projeta leads pelo CPL histórico**: `desempenho_campanhas` marca as campanhas
+do Google com `conversoes_verificadas: false` (as conversões vêm de um único
+`form_submit` e incluem buscas de lixo, 17 de "google meu negócio" em 90 dias
+lidos em 25/09), e a regra dos 10 leads/semana passou a valer só para a Meta.
+A prévia do anúncio de Pesquisa mostra no máximo 3 títulos e 2 descrições,
+como o Google.

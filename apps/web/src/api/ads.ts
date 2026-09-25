@@ -17,6 +17,7 @@ import {
   type OfficialPreview,
   type PendingGroup,
   type PreviewPlacement,
+  type SavedCampaignDraft,
   type SiteImageUpload,
   type SitePostFormInput,
   type SitePostRecord,
@@ -296,6 +297,40 @@ export function useAudienceProfile() {
   return useQuery({
     queryKey: ['ads', 'audience-profile'],
     queryFn: () => api.get<{ profile: AudienceProfile | null }>('/ads/audience-profile'),
+  });
+}
+
+/** Campaigns saved in the builder to come back to. Loading one fills the form only. */
+export function useSavedDrafts(enabled: boolean) {
+  return useQuery({
+    queryKey: ['ads', 'saved-drafts'],
+    enabled,
+    queryFn: () => api.get<{ drafts: SavedCampaignDraft[] }>('/ads/saved-drafts'),
+  });
+}
+
+export function loadSavedDraft(id: string) {
+  return api.get<{ id: string; name: string; draft: CampaignDraft }>(`/ads/saved-drafts/${id}`);
+}
+
+export function useSaveDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { name?: string; draft: CampaignDraft }) =>
+      api.post<{ id: string }>('/ads/saved-drafts', input),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ads', 'saved-drafts'] });
+    },
+  });
+}
+
+export function useDeleteSavedDraft() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.delete<void>(`/ads/saved-drafts/${id}`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ads', 'saved-drafts'] });
+    },
   });
 }
 

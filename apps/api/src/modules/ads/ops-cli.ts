@@ -1,8 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { campaignDraftSchema, type CampaignDraft } from '@wings/shared';
 import { and, eq, isNull } from 'drizzle-orm';
 import { createDb } from '../../db/client.js';
 import { loadDotEnv } from '../../db/load-env.js';
-import { adAccounts, adApprovalRequests } from '../../db/schema/index.js';
+import { adAccounts, adApprovalRequests, adCampaignSavedDrafts } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createSpecOf, preflightChange, type PreflightResult } from './executor.js';
 import { createApprovalNotifier } from './notifiers/factory.js';
@@ -35,6 +36,7 @@ import { formatBrl } from './platform/money.js';
  *   node dist/modules/ads/ops-cli.js release-kill-switch --account act_… --reason "…"
  *   node dist/modules/ads/ops-cli.js preflight-google --approval <uuid>
  *   node dist/modules/ads/ops-cli.js preflight-google --example
+ *   node dist/modules/ads/ops-cli.js save-draft --file rascunho.json [--name "…"]
  *
  * `preflight-google` sends Google the exact request with `validateOnly`: the
  * real account checks it and nothing is created or changed. It works with the
@@ -261,6 +263,19 @@ async function main() {
         return;
       }
 
+      case 'save-draft': {
+        // Puts a campaign in the builder's "Rascunhos salvos": no request, no
+        // approval, no WhatsApp, nothing reserved. Validated like a request.
+        const raw = JSON.parse(readFileSync(required('file'), 'utf8')) as unknown;
+        const draft = campaignDraftSchema.parse(raw);
+        const [row] = await db
+          .insert(adCampaignSavedDrafts)
+          .values({ name: arg('name') ?? draft.name, platform: draft.platform, payload: draft })
+          .returning({ id: adCampaignSavedDrafts.id });
+        console.warn(`rascunho salvo: ${row?.id} — "${arg('name') ?? draft.name}" (${draft.platform})`);
+        return;
+      }
+
       case 'release-kill-switch': {
         const result = await releaseKillSwitchOnRecord(db, {
           accountExternalId: required('account'),
@@ -276,7 +291,7 @@ async function main() {
 
       default:
         throw new Error(
-          'comando desconhecido. Use: status | preflight | preflight-google | alerts | request | resolve-unknown | release-kill-switch',
+          'comando desconhecido. Use: status | preflight | preflight-google | save-draft | alerts | request | resolve-unknown | release-kill-switch',
         );
     }
   } finally {

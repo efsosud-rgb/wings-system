@@ -475,6 +475,10 @@ describe('a request to create a campaign', () => {
         variations: [],
         search: {
           adGroupName: 'Grupo SP',
+          network: 'google_search_only',
+          locationMode: 'presence',
+          bidding: 'maximize_clicks',
+          maxCpcCents: 600,
           keywords: ['[franquia de alimentação]', '"abrir franquia"'],
           negativeKeywords: ['grátis'],
           headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
@@ -489,6 +493,7 @@ describe('a request to create a campaign', () => {
     expect(screen.getByText('[franquia de alimentação] · "abrir franquia"')).toBeTruthy();
     expect(screen.getByText(/1 exata, 1 frase/)).toBeTruthy();
     expect(screen.getByText(/Grupo de anúncios: Grupo SP/)).toBeTruthy();
+    expect(screen.getByText(/Só Pesquisa do Google .* Presença: pessoas .* Maximizar cliques.* de R\$\s6,00/)).toBeTruthy();
     expect(screen.getByText(/Tudo nasce/)).toBeTruthy();
     expect(screen.getByText('Anúncio na Pesquisa do Google')).toBeTruthy();
     // The rehearsal is offered while the change is still to be executed.
