@@ -23,6 +23,8 @@ import {
   MAX_NEGATIVE_KEYWORDS,
   MAX_SEARCH_DESCRIPTIONS,
   MAX_SEARCH_HEADLINES,
+  MIN_SEARCH_DESCRIPTIONS,
+  MIN_SEARCH_HEADLINES,
   MAX_VARIATIONS,
   MAX_VIDEO_BYTES,
   MIN_AGE,
@@ -52,7 +54,10 @@ import {
   estimateCostCents,
   isGooglePlatform,
   isPlatformEnabled,
+  formatSearchKeyword,
   keywordWithMatch,
+  parseSearchKeyword,
+  type SearchMatchType,
   matchesFormat,
   periodOverdeliveryFactor,
   platformAcceptsRadius,
@@ -130,6 +135,19 @@ function linesOf(text: string): string[] {
 }
 
 /**
+ * Keywords the way Google writes them. A line already marked — `[exata]` or
+ * `"frase"` — keeps its match; a bare line takes the match chosen for the
+ * list. Broad match never leaves the form: it is what a bare term would mean.
+ */
+function markKeywords(lines: string[], defaultMatch: SearchMatchType): string[] {
+  return lines.map((line) =>
+    parseSearchKeyword(line)
+      ? line
+      : formatSearchKeyword({ text: line.replace(/^[["]+|[\]"]+$/g, '').trim(), match: defaultMatch }),
+  );
+}
+
+/**
  * What is validated and sent: only the parts that belong to the chosen
  * platform. The form keeps every platform's fields in its state, so switching
  * back and forth loses nothing; the schema refuses foreign parts, so they are
@@ -172,6 +190,7 @@ function shapeDraft(values: CampaignDraftInput): CampaignDraftInput {
     ...google,
     search: search && {
       ...search,
+      adGroupName: search.adGroupName?.trim() || undefined,
       // Boxes left empty are not headlines.
       headlines: search.headlines.filter((item) => item.trim() !== ''),
       descriptions: search.descriptions.filter((item) => item.trim() !== ''),
@@ -774,6 +793,7 @@ export function PaidMediaBuilder({
       identity: { pageId: '', instagramActorId: null },
       youtube: { videoUrl: '', headline: '' },
       search: {
+        adGroupName: '',
         keywords: [],
         negativeKeywords: [],
         headlines: Array.from({ length: MAX_SEARCH_HEADLINES }, () => ''),
@@ -877,6 +897,9 @@ export function PaidMediaBuilder({
   // Keywords are typed one per line; the form holds them as the list it sends.
   const [keywordsText, setKeywordsText] = useState('');
   const [negativeKeywordsText, setNegativeKeywordsText] = useState('');
+  // The match a line gets when the operator does not mark it. Exact by
+  // default: the tightest, for an account still learning which searches pay.
+  const [defaultMatch, setDefaultMatch] = useState<SearchMatchType>('exact');
 
   const days = campaignDays(values.startDate, values.endDate);
   // The estimate reads what is in the box, as typed. It must never wait on
@@ -967,8 +990,9 @@ export function PaidMediaBuilder({
       });
     }
     if (proposal.platform === 'google_search' && proposal.search) {
-      // Google's own notation for the match type: [exact], "phrase", broad.
-      const keywords = proposal.search.keywords.map(keywordWithMatch);
+      // Google's own notation for the match type: [exact], "phrase" — and a
+      // broad proposal is tightened to the form's default, never sent broad.
+      const keywords = markKeywords(proposal.search.keywords.map(keywordWithMatch), 'exact');
       setValue('search.keywords', keywords, filled);
       setValue('search.negativeKeywords', proposal.search.negativeKeywords, filled);
       setKeywordsText(keywords.join('\n'));
@@ -1884,21 +1908,69 @@ export function PaidMediaBuilder({
             why="É o que a pessoa digita no Google para o anúncio aparecer. Poucas e específicas trazem quem já procura franquia; genéricas demais gastam a verba com curiosos."
           >
             <Field
+              label="Nome do grupo de anúncios"
+              error={errors.search?.adGroupName?.message}
+              hint="Um grupo por campanha nesta versão. Em branco, usa o nome da campanha."
+            >
+              <Input
+                maxLength={120}
+                placeholder={values.name || 'Grupo 1'}
+                {...register('search.adGroupName')}
+              />
+            </Field>
+            <div className="field">
+              <span className="field-label" id="builder-default-match">
+                Correspondência para linhas sem marcação
+              </span>
+              <div
+                className="builder-match"
+                role="radiogroup"
+                aria-labelledby="builder-default-match"
+              >
+                {(['exact', 'phrase'] as const).map((match) => (
+                  <label key={match} className="check">
+                    <input
+                      type="radio"
+                      name="defaultMatch"
+                      value={match}
+                      checked={defaultMatch === match}
+                      onChange={() => {
+                        setDefaultMatch(match);
+                        setValue('search.keywords', markKeywords(linesOf(keywordsText), match), {
+                          shouldDirty: true,
+                          shouldValidate: submitCount > 0,
+                        });
+                      }}
+                    />{' '}
+                    {match === 'exact' ? 'Exata [termo]' : 'Frase “termo”'}
+                  </label>
+                ))}
+              </div>
+              <span className="field-hint">
+                Exata = só essa busca ([termo]). Frase = buscas que contêm o termo nessa ordem
+                (“termo”). Ampla não é aceita nesta fase.
+              </span>
+            </div>
+            <Field
               label="Palavras-chave"
               error={listError(errors.search?.keywords)}
-              hint={`${linesOf(keywordsText).length}/${MAX_KEYWORDS} · uma por linha`}
+              hint={`${linesOf(keywordsText).length}/${MAX_KEYWORDS} · uma por linha · marque [exata] ou "frase"; sem marca, vale a correspondência acima`}
             >
               <textarea
                 className="control builder-keywords"
                 rows={6}
-                placeholder={'franquia de alimentação\nabrir franquia'}
+                placeholder={'[franquear minha empresa]\n"como franquear meu negócio"'}
                 value={keywordsText}
                 onChange={(event) => {
                   setKeywordsText(event.target.value);
-                  setValue('search.keywords', linesOf(event.target.value), {
-                    shouldDirty: true,
-                    shouldValidate: submitCount > 0,
-                  });
+                  setValue(
+                    'search.keywords',
+                    markKeywords(linesOf(event.target.value), defaultMatch),
+                    {
+                      shouldDirty: true,
+                      shouldValidate: submitCount > 0,
+                    },
+                  );
                 }}
               />
             </Field>
@@ -1922,8 +1994,8 @@ export function PaidMediaBuilder({
               />
             </Field>
             <p className="field-hint">
-              Ficam guardadas no pedido. O grupo de anúncios, onde elas passam a valer, entra na
-              próxima etapa.
+              Vão para o Google junto com a campanha: as negativas na campanha (correspondência de
+              frase), as palavras-chave no grupo de anúncios. Tudo nasce pausado.
             </p>
           </BuilderSection>
 
@@ -1943,10 +2015,15 @@ export function PaidMediaBuilder({
                 {...register('destinationUrl')}
               />
             </Field>
+            <p className="field-hint">
+              Anúncio responsivo de pesquisa: o Google combina os títulos e descrições. Mínimo de{' '}
+              {MIN_SEARCH_HEADLINES} títulos e {MIN_SEARCH_DESCRIPTIONS} descrições; quanto mais
+              variações, melhor ele aprende.
+            </p>
             {searchHeadlines.map((_, index) => (
               <Field
                 key={`headline-${index}`}
-                label={`Título ${index + 1}${index === 0 ? '' : ' (opcional)'}`}
+                label={`Título ${index + 1}${index < MIN_SEARCH_HEADLINES ? '' : ' (opcional)'}`}
                 error={index === 0 ? listError(errors.search?.headlines) : undefined}
                 hint={`${(searchHeadlines[index] ?? '').length}/${SEARCH_HEADLINE_MAX}`}
               >
@@ -1956,7 +2033,7 @@ export function PaidMediaBuilder({
             {searchDescriptions.map((_, index) => (
               <Field
                 key={`description-${index}`}
-                label={`Descrição ${index + 1}${index === 0 ? '' : ' (opcional)'}`}
+                label={`Descrição ${index + 1}${index < MIN_SEARCH_DESCRIPTIONS ? '' : ' (opcional)'}`}
                 error={index === 0 ? listError(errors.search?.descriptions) : undefined}
                 hint={`${(searchDescriptions[index] ?? '').length}/${SEARCH_DESCRIPTION_MAX}`}
               >

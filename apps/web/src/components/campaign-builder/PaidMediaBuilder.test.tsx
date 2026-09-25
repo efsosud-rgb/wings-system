@@ -272,6 +272,16 @@ function fillValidCampaign() {
 
 const type = (element: Element, value: string) => fireEvent.change(element, { target: { value } });
 
+/** A Field's label holds the hint too ("Título 10/30"), so find the control by the label text alone. */
+function byField(text: string): HTMLElement {
+  const label = Array.from(document.querySelectorAll('label.field')).find(
+    (element) => element.querySelector('.field-label')?.textContent?.trim() === text,
+  );
+  const control = label?.querySelector('input, textarea, select');
+  if (!control) throw new Error(`no field labelled "${text}"`);
+  return control as HTMLElement;
+}
+
 describe('the paid-media builder', () => {
   it('offers Meta, Google Pesquisa and YouTube, and says why the others are off', () => {
     render(<PaidMediaBuilder canRequest />);
@@ -571,8 +581,11 @@ describe('the builder on Google', () => {
       'franquia de alimentação\n\n  abrir franquia  ',
     );
     type(screen.getByLabelText(/^Palavras-chave negativas/), 'grátis');
-    type(screen.getByLabelText(/^Título 1/), 'Franquia Wings');
-    type(screen.getByLabelText(/^Descrição 1/), 'Conheça o modelo de negócio e o suporte.');
+    type(byField('Título 1'), 'Franquia Wings');
+    type(byField('Título 2'), 'Expanda sua marca');
+    type(byField('Título 3'), 'Fale com a Wings');
+    type(byField('Descrição 1'), 'Conheça o modelo de negócio e o suporte.');
+    type(byField('Descrição 2'), 'Suporte do início ao fim.');
   }
 
   it('asks the cockpit for the Meta account by default, and the Google one once the platform changes', () => {
@@ -651,15 +664,38 @@ describe('the builder on Google', () => {
       variations: [],
       reach: { states: ['SP'], cities: [], customLocations: [] },
       search: {
-        keywords: ['franquia de alimentação', 'abrir franquia'],
+        // Bare lines take the default match: exact.
+        keywords: ['[franquia de alimentação]', '[abrir franquia]'],
         negativeKeywords: ['grátis'],
-        headlines: ['Franquia Wings'],
-        descriptions: ['Conheça o modelo de negócio e o suporte.'],
+        headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
+        descriptions: ['Conheça o modelo de negócio e o suporte.', 'Suporte do início ao fim.'],
       },
       utms: { utm_source: 'google', utm_medium: 'cpc' },
     });
     expect(sent).not.toHaveProperty('formatKey');
     expect(sent).not.toHaveProperty('youtube');
+    expect((sent.search as Record<string, unknown>).adGroupName).toBeUndefined();
+  });
+
+  it('keeps a marked match, applies the chosen default to bare lines, and never sends broad', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    choose(/Google Pesquisa/);
+    fillSearch();
+    fireEvent.click(screen.getByRole('radio', { name: /Frase/ }));
+    type(
+      screen.getByLabelText(/^Palavras-chave(?! negativas)/),
+      '[franquia de alimentação]\nabrir franquia',
+    );
+    type(screen.getByLabelText(/Nome do grupo de anúncios/), 'Grupo SP');
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
+    expect(requestCampaign.mock.calls[0]?.[0]).toMatchObject({
+      search: {
+        adGroupName: 'Grupo SP',
+        keywords: ['[franquia de alimentação]', '"abrir franquia"'],
+      },
+    });
   });
 
   it('launches a YouTube request carrying only what belongs to it', async () => {
@@ -768,7 +804,7 @@ describe('the builder on Google', () => {
     render(<PaidMediaBuilder canRequest />);
     choose(/Google Pesquisa/);
     fillSearch();
-    type(screen.getByLabelText(/^Título 2/), 'Retorno garantido');
+    type(byField('Título 2'), 'Retorno garantido');
 
     expect(screen.getByText(/Este texto não pode ir ao ar/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
@@ -797,7 +833,7 @@ describe('the builder on Google', () => {
     render(<PaidMediaBuilder canRequest />);
     choose(/Google Pesquisa/);
     fillSearch();
-    type(screen.getByLabelText(/^Título 2/), 'Leve para sua cidade');
+    type(byField('Título 2'), 'Leve para sua cidade');
 
     const preview = screen.getByText('Anúncio na Pesquisa do Google').closest('figure');
     expect(preview?.textContent).toContain('Patrocinado');
@@ -886,8 +922,11 @@ describe('the builder on Meta: ad set and ads', () => {
     );
     fireEvent.click(screen.getByRole('checkbox', { name: 'SP' }));
     type(screen.getByLabelText(/^Palavras-chave(?! negativas)/), 'abrir franquia');
-    type(screen.getByLabelText(/^Título 1/), 'Franquia Wings');
-    type(screen.getByLabelText(/^Descrição 1/), 'Conheça o modelo de negócio e o suporte.');
+    type(byField('Título 1'), 'Franquia Wings');
+    type(byField('Título 2'), 'Expanda sua marca');
+    type(byField('Título 3'), 'Fale com a Wings');
+    type(byField('Descrição 1'), 'Conheça o modelo de negócio e o suporte.');
+    type(byField('Descrição 2'), 'Suporte do início ao fim.');
     const payload = await launch();
     for (const field of ['ageMin', 'ageMax', 'placements', 'identity']) {
       expect(payload).not.toHaveProperty(field);
@@ -1177,8 +1216,8 @@ describe('applying a proposal from the agent', () => {
         { text: 'como franquear meu negócio', match: 'broad' },
       ],
       negativeKeywords: ['grátis', 'vaga', 'emprego', 'curso', 'currículo'],
-      headlines: ['Franquia Wings'],
-      descriptions: ['Conheça o modelo de negócio e o suporte.'],
+      headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
+      descriptions: ['Conheça o modelo de negócio e o suporte.', 'Suporte do início ao fim.'],
     },
     explanations: [
       ...because('objective', 'idealCustomerProfile', 'reach', 'dates'),
@@ -1255,12 +1294,13 @@ describe('applying a proposal from the agent', () => {
     expect(screen.getAllByText('R$ 200,00').length).toBeGreaterThan(0);
     expect(
       (screen.getByLabelText(/^Palavras-chave(?! negativas)/) as HTMLTextAreaElement).value,
-      // Google's notation for the match type: "phrase", [exact], broad.
-    ).toBe('"franquia de alimentação"\n[abrir franquia]\ncomo franquear meu negócio');
+      // Google's notation for the match type: "phrase", [exact] — and a broad
+      // proposal is tightened to exact: the form never sends broad.
+    ).toBe('"franquia de alimentação"\n[abrir franquia]\n[como franquear meu negócio]');
     expect((screen.getByLabelText(/^Palavras-chave negativas/) as HTMLTextAreaElement).value).toBe(
       'grátis\nvaga\nemprego\ncurso\ncurrículo',
     );
-    expect((screen.getByLabelText(/^Título 1/) as HTMLInputElement).value).toBe('Franquia Wings');
+    expect((byField('Título 1') as HTMLInputElement).value).toBe('Franquia Wings');
     expect((screen.getByRole('checkbox', { name: 'SP' }) as HTMLInputElement).checked).toBe(true);
     expect(screen.getByRole('button', { name: 'Remover Curitiba' })).toBeTruthy();
 
@@ -1289,9 +1329,9 @@ describe('applying a proposal from the agent', () => {
       reach: { states: ['SP'], cities: [{ name: 'Curitiba', state: 'PR' }] },
       search: {
         // The builder's own validation takes Google's match notation.
-        keywords: ['"franquia de alimentação"', '[abrir franquia]', 'como franquear meu negócio'],
+        keywords: ['"franquia de alimentação"', '[abrir franquia]', '[como franquear meu negócio]'],
         negativeKeywords: ['grátis', 'vaga', 'emprego', 'curso', 'currículo'],
-        headlines: ['Franquia Wings'],
+        headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
       },
       // The proposal's UTMs, not the ones the builder would have generated.
       utms: { utm_source: 'google', utm_medium: 'cpc', utm_campaign: 'agente-pesquisa-sp' },

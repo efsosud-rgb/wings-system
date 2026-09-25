@@ -1114,22 +1114,23 @@ describe('proposing a change, and asking for it', () => {
           evidence: [{ label: 'Cliques sem lead', value: '40' }],
         }),
       ),
-      say('Recomendo as duas, feitas à mão no Google Ads.'),
+      say('A pausa vira pedido; a negativa é feita à mão no Google Ads.'),
     ];
     const { message } = await send(cookies, 'E no Google?');
+    // Since 2026-09-25 a pause on a Google campaign is a request like any
+    // other; negatives are still done by hand, so that card has no button.
     expect(message?.proposals.map((card) => card.kind === 'change' && card.requestable)).toEqual([
-      false,
+      true,
       false,
     ]);
-    for (const card of message?.proposals ?? []) {
-      const attempt = await app.inject({
-        method: 'POST',
-        url: `/agent/proposals/${card.id}/request`,
-        cookies,
-      });
-      expect(attempt.statusCode).toBe(409);
-      expect(attempt.json()).toMatchObject({ error: 'not_requestable' });
-    }
+    const manual = message?.proposals.find((card) => card.kind === 'change' && !card.requestable);
+    const attempt = await app.inject({
+      method: 'POST',
+      url: `/agent/proposals/${manual?.id}/request`,
+      cookies,
+    });
+    expect(attempt.statusCode).toBe(409);
+    expect(attempt.json()).toMatchObject({ error: 'not_requestable' });
   });
 
   it('needs numbers and a campaign that exists', async () => {

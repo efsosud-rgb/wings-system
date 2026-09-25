@@ -57,6 +57,52 @@ export function useExecuteApproval(id: string) {
   });
 }
 
+/**
+ * Rehearses an approval's change against the real account without writing:
+ * Google's validateOnly. Works with the write switch off, before or after the
+ * decision — it changes nothing about the request.
+ */
+export interface PreflightAnswer {
+  status: 'ok' | 'rejected' | 'unavailable';
+  operations?: string[];
+  code?: string;
+  message?: string;
+  reason?: string;
+}
+
+export function usePreflightApproval(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<PreflightAnswer>(`/ads/approvals/${id}/preflight`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ads', 'approval', id] });
+    },
+  });
+}
+
+/** A budget, pause or resume on a campaign that exists: a request of its own. */
+export interface ChangeRequestInput {
+  accountExternalId: string;
+  campaignExternalId: string;
+  kind: 'set_daily_budget' | 'pause_campaign' | 'resume_campaign';
+  toDailyBudgetCents?: number;
+  reason: string;
+}
+
+export function useRequestCampaignChange() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: ChangeRequestInput) =>
+      api.post<{ approvalId: string | null; changeRequestId: string; exposureDeltaCents: number }>(
+        '/ads/change-requests',
+        input,
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ads'] });
+    },
+  });
+}
+
 export function useDecideApproval(id: string) {
   const queryClient = useQueryClient();
   return useMutation({
