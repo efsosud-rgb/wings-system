@@ -625,7 +625,13 @@ export function createSpecOf(
           google: {
             channel: GOOGLE_CHANNEL_TYPE[payload.platform],
             // Traffic buys clicks; leads and conversions buy conversions.
-            bidding: payload.objective === 'traffic' ? 'MAXIMIZE_CLICKS' : 'MAXIMIZE_CONVERSIONS',
+            // Search bids as the draft says (below); Demand Gen by objective.
+            bidding:
+              search?.bidding === 'maximize_conversions'
+                ? 'MAXIMIZE_CONVERSIONS'
+                : search?.bidding === 'maximize_clicks' || payload.objective === 'traffic'
+                  ? 'MAXIMIZE_CLICKS'
+                  : 'MAXIMIZE_CONVERSIONS',
             startDate: draft.startDate,
             endDate: draft.endDate,
             reach: {
@@ -638,6 +644,15 @@ export function createSpecOf(
               ? {
                   search: {
                     adGroupName: search.adGroupName?.trim() || draft.name,
+                    locationMode:
+                      search.locationMode === 'presence_or_interest'
+                        ? 'PRESENCE_OR_INTEREST'
+                        : 'PRESENCE',
+                    bidding:
+                      search.bidding === 'maximize_conversions'
+                        ? 'MAXIMIZE_CONVERSIONS'
+                        : 'MAXIMIZE_CLICKS',
+                    maxCpcCents: search.bidding === 'maximize_conversions' ? undefined : search.maxCpcCents,
                     // The schema refused anything but [exact] and "phrase".
                     keywords: search.keywords.flatMap((raw) => {
                       const parsed = parseSearchKeyword(raw);

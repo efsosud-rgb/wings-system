@@ -304,3 +304,23 @@ correspondência ampla (hoje o esquema simplesmente recusa).
 - O rascunho da campanha de lançamento está em
   `docs/ads/rascunho-pesquisa-set26.json` (datas: hoje a +30 dias; ajustar na
   tela).
+
+### Rede, local e lance no rascunho (25/09/2026, noite)
+
+Até aqui o adaptador decidia sozinho: rede só Pesquisa, local `PRESENCE` e
+lance `maximizeConversions` para lead/conversão (`targetSpend` só para
+tráfego). Agora os três **estão no rascunho** (`search.network`,
+`search.locationMode`, `search.bidding`, `search.maxCpcCents`), aparecem no
+construtor, no cartão do agente, no resumo e na aprovação, entram no hash do
+payload aprovado e no `validateOnly`. Padrões: só Pesquisa do Google (único
+valor), presença, **maximizar cliques com CPC máximo R$ 6,00**
+(`targetSpend.cpcBidCeilingMicros`). Maximizar conversões existe como opção,
+mas não é o padrão enquanto a conversão da conta estiver contaminada.
+
+O agente passou a preencher `search.adGroupName`, e para o Google **não
+projeta leads pelo CPL histórico**: `desempenho_campanhas` marca as campanhas
+do Google com `conversoes_verificadas: false` (as conversões vêm de um único
+`form_submit` e incluem buscas de lixo, 17 de "google meu negócio" em 90 dias
+lidos em 25/09), e a regra dos 10 leads/semana passou a valer só para a Meta.
+A prévia do anúncio de Pesquisa mostra no máximo 3 títulos e 2 descrições,
+como o Google.

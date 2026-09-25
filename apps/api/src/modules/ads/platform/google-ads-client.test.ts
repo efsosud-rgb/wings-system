@@ -31,6 +31,9 @@ const searchSpec: CreateCampaignSpec = {
     reach: { states: ['SP'], cities: [{ name: 'Curitiba', state: 'PR' }], customLocations: [] },
     search: {
       adGroupName: 'Franquia SP',
+      locationMode: 'PRESENCE',
+      bidding: 'MAXIMIZE_CLICKS',
+      maxCpcCents: 600,
       keywords: [
         { text: 'franquia de alimentação', match: 'EXACT' },
         { text: 'abrir franquia', match: 'PHRASE' },
@@ -87,7 +90,8 @@ describe('creating a Search campaign', () => {
       containsEuPoliticalAdvertising: 'DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING',
       startDate: '2026-09-21',
       endDate: '2026-09-30',
-      maximizeConversions: {},
+      // Maximize clicks with a ceiling of R$ 6,00 per click, from the draft.
+      targetSpend: { cpcBidCeilingMicros: '6000000' },
       networkSettings: {
         targetGoogleSearch: true,
         targetSearchNetwork: false,
@@ -189,6 +193,28 @@ describe('creating a Search campaign', () => {
     expect(adGroup).toMatchObject({ status: 'PAUSED', keywords: [{ matchType: 'EXACT' }, { matchType: 'PHRASE' }] });
     expect(api.ads[0]).toMatchObject({ status: 'PAUSED' });
     expect(outcome.detail).toMatchObject({ adGroup: 'Franquia SP', keywords: 2, negativeKeywords: 2, headlines: 3, descriptions: 2 });
+  });
+
+  it('bids and places people as the draft says: conversions, or presence-or-interest', async () => {
+    const { api, client } = writer();
+    await client.createCampaign({
+      ...searchSpec,
+      google: {
+        ...searchSpec.google!,
+        search: {
+          ...searchSpec.google!.search!,
+          locationMode: 'PRESENCE_OR_INTEREST',
+          bidding: 'MAXIMIZE_CONVERSIONS',
+          maxCpcCents: undefined,
+        },
+      },
+    });
+    const campaign = operationsOf(api)[1]?.campaignOperation?.create;
+    expect(campaign).toMatchObject({
+      maximizeConversions: {},
+      geoTargetTypeSetting: { positiveGeoTargetType: 'PRESENCE_OR_INTEREST' },
+    });
+    expect(campaign).not.toHaveProperty('targetSpend');
   });
 
   it('refuses a Search spec without its ad group, before any read or write', async () => {

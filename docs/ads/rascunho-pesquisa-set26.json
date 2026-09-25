@@ -97,6 +97,10 @@
       "Descubra se o seu negócio tem potencial para franquia. Fale com um especialista da Wings.",
       "Consultoria completa de formatação de franquias, do planejamento à expansão da rede.",
       "Para empresários com negócio validado que querem crescer por meio de franquias."
-    ]
+    ],
+    "network": "google_search_only",
+    "locationMode": "presence",
+    "bidding": "maximize_clicks",
+    "maxCpcCents": 600
   }
 }

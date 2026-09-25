@@ -627,7 +627,7 @@ describe('the builder on Google', () => {
 
     const sections = screen.getAllByRole('region').filter((el) => el.matches('.builder-section'));
     expect(sections.map((el) => el.querySelector('.builder-step')?.textContent)).toEqual(
-      Array.from({ length: 11 }, (_, index) => String(index + 1)),
+      Array.from({ length: 12 }, (_, index) => String(index + 1)),
     );
 
     choose(/^Meta/);
@@ -674,6 +674,11 @@ describe('the builder on Google', () => {
       variations: [],
       reach: { states: ['SP'], cities: [], customLocations: [] },
       search: {
+        // Network, place and bid: the builder's defaults, in the payload.
+        network: 'google_search_only',
+        locationMode: 'presence',
+        bidding: 'maximize_clicks',
+        maxCpcCents: 600,
         // Bare lines take the default match: exact.
         keywords: ['[franquia de alimentação]', '[abrir franquia]'],
         negativeKeywords: ['grátis'],
@@ -748,6 +753,10 @@ describe('the builder on Google', () => {
       variations: [],
       search: {
         adGroupName: 'Formatação | Alta Intenção',
+        network: 'google_search_only',
+        locationMode: 'presence',
+        bidding: 'maximize_clicks',
+        maxCpcCents: 450,
         keywords: ['"formatação de franquia"', '[wings company]'],
         negativeKeywords: ['emprego', 'vaga'],
         headlines: ['Formate Sua Franquia', 'Consultoria de Franquias', 'Fale com um Especialista'],
@@ -768,6 +777,9 @@ describe('the builder on Google', () => {
       );
       expect((byField('Título 1') as HTMLInputElement).value).toBe('Formate Sua Franquia');
       expect((screen.getByLabelText(/Verba por dia/) as HTMLInputElement).value).toBe('100,00');
+      await waitFor(() =>
+        expect((byField('CPC máximo (R$)') as HTMLInputElement).value).toBe('4,50'),
+      );
       expect(screen.getAllByText(/Campinas/).length).toBeGreaterThan(0);
       expect(requestCampaign).not.toHaveBeenCalled();
 

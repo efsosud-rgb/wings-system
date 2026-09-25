@@ -82,8 +82,16 @@ export function SearchAdPreview({
   const { host, path } = addressOf(destinationUrl);
   // Google shows the domain and the first couple of path segments as crumbs.
   const crumbs = path.split('/').filter(Boolean).slice(0, 2);
-  const title = headlines.map((item) => item.trim()).filter(Boolean);
-  const body = descriptions.map((item) => item.trim()).filter(Boolean);
+  // Google shows up to 3 headlines and 2 descriptions of a responsive search
+  // ad at a time; the rest rotate. The preview shows the first of each.
+  const title = headlines
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  const body = descriptions
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 2);
 
   return (
     <div className="ad-preview-gallery">

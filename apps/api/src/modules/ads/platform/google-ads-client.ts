@@ -879,18 +879,22 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
       campaignBudget: budgetName,
       containsEuPoliticalAdvertising: 'DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING',
       ...campaignDates(google.startDate, google.endDate),
-      ...(google.bidding === 'MAXIMIZE_CLICKS' ? { targetSpend: {} } : { maximizeConversions: {} }),
+      ...googleBidding(google),
     };
     if (google.channel === 'SEARCH') {
-      // Google Search only: no partners, no Display expansion.
+      // Google Search only: no partners, no Display expansion. The draft's
+      // `network` has one value, and this is it.
       campaign.networkSettings = {
         targetGoogleSearch: true,
         targetSearchNetwork: false,
         targetContentNetwork: false,
         targetPartnerSearchNetwork: false,
       };
-      // People who are in the place, not people who searched about it.
-      campaign.geoTargetTypeSetting = { positiveGeoTargetType: 'PRESENCE' };
+      // From the approved draft: people who are in the place (PRESENCE), or
+      // also people who searched about it.
+      campaign.geoTargetTypeSetting = {
+        positiveGeoTargetType: google.search?.locationMode ?? 'PRESENCE',
+      };
     }
 
     const operations: Record<string, unknown>[] = [
@@ -951,6 +955,10 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
         ...(google.search
           ? {
               adGroup: google.search.adGroupName,
+              network: 'google_search_only',
+              locationMode: google.search.locationMode,
+              bidding: google.search.bidding,
+              maxCpcCents: google.search.maxCpcCents ?? null,
               keywords: google.search.keywords.length,
               negativeKeywords: google.search.negativeKeywords.length,
               headlines: google.search.headlines.length,
@@ -1125,6 +1133,22 @@ type MutateResult =
 
 function labelOf(label: PlanLabel): string {
   return label.label;
+}
+
+/**
+ * The bidding strategy, from the approved draft. A Search campaign says how
+ * it bids in `search` (maximize clicks with a CPC ceiling, or maximize
+ * conversions); Demand Gen keeps the objective-derived choice.
+ */
+function googleBidding(google: NonNullable<CreateCampaignSpec['google']>): Record<string, unknown> {
+  const bidding = google.search?.bidding ?? google.bidding;
+  if (bidding === 'MAXIMIZE_CLICKS') {
+    const ceiling = google.search?.maxCpcCents;
+    return {
+      targetSpend: ceiling ? { cpcBidCeilingMicros: microsFromCents(ceiling) } : {},
+    };
+  }
+  return { maximizeConversions: {} };
 }
 
 function statusUpdate(

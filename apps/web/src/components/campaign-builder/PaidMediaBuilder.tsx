@@ -74,6 +74,11 @@ import {
   type PacingSummary,
   type Placements,
   type VideoUpload,
+  DEFAULT_MAX_CPC_CENTS,
+  SEARCH_BIDDING_LABEL,
+  SEARCH_BIDDING_STRATEGIES,
+  SEARCH_LOCATION_MODES,
+  SEARCH_LOCATION_MODE_LABEL,
 } from '@wings/shared';
 import { useEffect, useState, type MutableRefObject, type ReactNode } from 'react';
 import {
@@ -265,6 +270,7 @@ const SEARCH_SECTIONS = [
   'icp',
   'reach',
   'keywords',
+  'searchSettings',
   'searchAd',
   'duration',
   'budget',
@@ -805,6 +811,10 @@ export function PaidMediaBuilder({
       youtube: { videoUrl: '', headline: '' },
       search: {
         adGroupName: '',
+        network: 'google_search_only',
+        locationMode: 'presence',
+        bidding: 'maximize_clicks',
+        maxCpcCents: DEFAULT_MAX_CPC_CENTS,
         keywords: [],
         negativeKeywords: [],
         headlines: Array.from({ length: MAX_SEARCH_HEADLINES }, () => ''),
@@ -911,6 +921,9 @@ export function PaidMediaBuilder({
   // The match a line gets when the operator does not mark it. Exact by
   // default: the tightest, for an account still learning which searches pay.
   const [defaultMatch, setDefaultMatch] = useState<SearchMatchType>('exact');
+  // The CPC ceiling box keeps its own text, like the budget box.
+  const [maxCpcText, setMaxCpcText] = useState(centsToBudgetText(DEFAULT_MAX_CPC_CENTS));
+  const maxCpcField = register('search.maxCpcCents', { setValueAs: parseBrlToCents });
 
   const days = campaignDays(values.startDate, values.endDate);
   // The estimate reads what is in the box, as typed. It must never wait on
@@ -1014,6 +1027,13 @@ export function PaidMediaBuilder({
         padTo(proposal.search.descriptions, MAX_SEARCH_DESCRIPTIONS),
         filled,
       );
+      setValue('search.adGroupName', proposal.search.adGroupName ?? '', filled);
+      // Network, place and bid: the proposal's, or the builder's defaults.
+      setValue('search.locationMode', proposal.search.locationMode ?? 'presence', filled);
+      setValue('search.bidding', proposal.search.bidding ?? 'maximize_clicks', filled);
+      const cpc = proposal.search.maxCpcCents ?? DEFAULT_MAX_CPC_CENTS;
+      setValue('search.maxCpcCents', cpc, filled);
+      setMaxCpcText(centsToBudgetText(cpc));
     }
     if (proposal.platform === 'youtube' && proposal.youtube) {
       setValue('youtube.headline', proposal.youtube.headline, filled);
@@ -1111,6 +1131,10 @@ export function PaidMediaBuilder({
     const search = draft.search;
     if (search) {
       setValue('search.adGroupName', search.adGroupName ?? '', filled);
+      setValue('search.locationMode', search.locationMode, filled);
+      setValue('search.bidding', search.bidding, filled);
+      setValue('search.maxCpcCents', search.maxCpcCents, filled);
+      setMaxCpcText(centsToBudgetText(search.maxCpcCents));
       setValue('search.keywords', search.keywords, filled);
       setValue('search.negativeKeywords', search.negativeKeywords, filled);
       setKeywordsText(search.keywords.join('\n'));
@@ -2130,6 +2154,68 @@ export function PaidMediaBuilder({
           </BuilderSection>
 
           <BuilderSection
+            step={stepOf('searchSettings')}
+            title="Rede, local e lance"
+            why="Onde o anúncio aparece, quem conta como “no local” e quanto cada clique pode custar. Os três vão no pedido aprovado e são validados no Google antes de escrever."
+          >
+            <div className="field">
+              <span className="field-label">Rede</span>
+              <p>Só a Pesquisa do Google. Parceiros de pesquisa e Display desligados.</p>
+            </div>
+            <div className="field">
+              <span className="field-label" id="builder-location-mode">
+                Local
+              </span>
+              <div className="builder-match" role="radiogroup" aria-labelledby="builder-location-mode">
+                {SEARCH_LOCATION_MODES.map((mode) => (
+                  <label key={mode} className="check">
+                    <input type="radio" value={mode} {...register('search.locationMode')} />{' '}
+                    {SEARCH_LOCATION_MODE_LABEL[mode]}
+                  </label>
+                ))}
+              </div>
+              <span className="field-hint">
+                Presença é o padrão: só quem está nos estados, cidades ou raios escolhidos.
+              </span>
+            </div>
+            <div className="field">
+              <span className="field-label" id="builder-bidding">
+                Lance
+              </span>
+              <div className="builder-match" role="radiogroup" aria-labelledby="builder-bidding">
+                {SEARCH_BIDDING_STRATEGIES.map((strategy) => (
+                  <label key={strategy} className="check">
+                    <input type="radio" value={strategy} {...register('search.bidding')} />{' '}
+                    {SEARCH_BIDDING_LABEL[strategy]}
+                  </label>
+                ))}
+              </div>
+              <span className="field-hint">
+                Maximizar cliques é o padrão enquanto a conversão da conta não for confiável: o
+                Google só compra cliques até o CPC máximo.
+              </span>
+            </div>
+            {values.search?.bidding !== 'maximize_conversions' && (
+              <Field
+                label="CPC máximo (R$)"
+                error={errors.search?.maxCpcCents?.message}
+                hint="O máximo por clique. Padrão R$ 6,00."
+              >
+                <Input
+                  inputMode="decimal"
+                  placeholder="6,00"
+                  {...maxCpcField}
+                  value={maxCpcText}
+                  onChange={(event) => {
+                    setMaxCpcText(event.target.value);
+                    void maxCpcField.onChange(event);
+                  }}
+                />
+              </Field>
+            )}
+          </BuilderSection>
+
+          <BuilderSection
             step={stepOf('searchAd')}
             title="Texto do anúncio"
             why="Na Pesquisa não há imagem: o título é o que faz a pessoa clicar. Promessa de ganho reprova o anúncio e pode restringir a conta — por isso o bloqueio."
@@ -2403,6 +2489,16 @@ export function PaidMediaBuilder({
               <dd>{(values.search?.keywords ?? []).join(' · ') || '—'}</dd>
               <dt>Negativas</dt>
               <dd>{(values.search?.negativeKeywords ?? []).join(' · ') || '—'}</dd>
+              <dt>Rede</dt>
+              <dd>Só Pesquisa do Google (sem parceiros, sem Display)</dd>
+              <dt>Local</dt>
+              <dd>{SEARCH_LOCATION_MODE_LABEL[values.search?.locationMode ?? 'presence']}</dd>
+              <dt>Lance</dt>
+              <dd>
+                {SEARCH_BIDDING_LABEL[values.search?.bidding ?? 'maximize_clicks']}
+                {values.search?.bidding !== 'maximize_conversions' &&
+                  ` · CPC máximo R$ ${maxCpcText || '—'}`}
+              </dd>
               <dt>Títulos</dt>
               <dd>{searchHeadlines.filter(Boolean).join(' | ') || '—'}</dd>
               <dt>Descrições</dt>

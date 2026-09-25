@@ -897,9 +897,43 @@ export const youtubeDraftSchema = z.object({
 });
 export type YoutubeDraft = z.output<typeof youtubeDraftSchema>;
 
+/**
+ * Where a Search campaign shows, whom it reaches and how it bids. All three
+ * are part of the draft — and so of the approved payload's hash and of the
+ * validate-only rehearsal — never a default hidden in the adapter.
+ */
+export const SEARCH_NETWORK = 'google_search_only' as const;
+export const SEARCH_LOCATION_MODES = ['presence', 'presence_or_interest'] as const;
+export type SearchLocationMode = (typeof SEARCH_LOCATION_MODES)[number];
+export const SEARCH_LOCATION_MODE_LABEL: Record<SearchLocationMode, string> = {
+  presence: 'Presença: pessoas que estão no local',
+  presence_or_interest: 'Presença ou interesse: também quem pesquisa sobre o local',
+};
+export const SEARCH_BIDDING_STRATEGIES = ['maximize_clicks', 'maximize_conversions'] as const;
+export type SearchBiddingStrategy = (typeof SEARCH_BIDDING_STRATEGIES)[number];
+export const SEARCH_BIDDING_LABEL: Record<SearchBiddingStrategy, string> = {
+  maximize_clicks: 'Maximizar cliques, com CPC máximo',
+  maximize_conversions: 'Maximizar conversões',
+};
+/** R$ 6,00: the ceiling per click while the account's conversion is not trusted. */
+export const DEFAULT_MAX_CPC_CENTS = 600;
+export const MIN_MAX_CPC_CENTS = 10;
+export const MAX_MAX_CPC_CENTS = 5000;
+
 export const searchDraftSchema = z.object({
   /** The one ad group the campaign is born with. Defaults to the campaign's name. */
   adGroupName: z.string().trim().max(AD_GROUP_NAME_MAX).optional(),
+  /** Only Google Search: no search partners, no Display. The one value there is. */
+  network: z.literal(SEARCH_NETWORK).default(SEARCH_NETWORK),
+  locationMode: z.enum(SEARCH_LOCATION_MODES).default('presence'),
+  bidding: z.enum(SEARCH_BIDDING_STRATEGIES).default('maximize_clicks'),
+  /** The most one click may cost, for maximize_clicks. */
+  maxCpcCents: z
+    .number({ error: 'Informe o CPC máximo' })
+    .int()
+    .min(MIN_MAX_CPC_CENTS, 'O CPC máximo mínimo é R$ 0,10')
+    .max(MAX_MAX_CPC_CENTS, 'O CPC máximo vai até R$ 50,00')
+    .default(DEFAULT_MAX_CPC_CENTS),
   keywords: keywordList(keywordSchema, MAX_KEYWORDS, 'palavras-chave').min(
     1,
     'Informe ao menos uma palavra-chave',

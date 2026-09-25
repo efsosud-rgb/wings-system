@@ -22,6 +22,9 @@ import {
   cameraMoveById,
   isGenerationOver,
   withCameraMove,
+  DEFAULT_MAX_CPC_CENTS,
+  SEARCH_BIDDING_LABEL,
+  SEARCH_LOCATION_MODE_LABEL,
 } from '@wings/shared';
 import { createContext, useContext, useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -171,6 +174,16 @@ function CampaignCard({
         <details className="agent-details">
           <summary>Palavras-chave e anúncio de pesquisa</summary>
           <div className="agent-card-block">
+            <span className="agent-card-label">Grupo de anúncios</span>
+            <p>{payload.search.adGroupName ?? `${payload.name} (o nome da campanha)`}</p>
+            <span className="agent-card-label">Rede · local · lance</span>
+            <p>
+              Só Pesquisa do Google ·{' '}
+              {SEARCH_LOCATION_MODE_LABEL[payload.search.locationMode ?? 'presence']} ·{' '}
+              {SEARCH_BIDDING_LABEL[payload.search.bidding ?? 'maximize_clicks']}
+              {(payload.search.bidding ?? 'maximize_clicks') === 'maximize_clicks' &&
+                ` de R$ ${((payload.search.maxCpcCents ?? DEFAULT_MAX_CPC_CENTS) / 100).toFixed(2).replace('.', ',')}`}
+            </p>
             <span className="agent-card-label">Palavras-chave</span>
             <p className="mono">{payload.search.keywords.map(keywordWithMatch).join(' · ')}</p>
             <span className="agent-card-label">Negativas</span>
