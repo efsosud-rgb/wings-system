@@ -66,7 +66,17 @@ const saveIdentityDefault = vi.fn();
 const uploadVideo = vi.fn();
 const videoFailure: { current: ApiError | null } = { current: null };
 
+const savedDrafts: { current: { id: string; name: string; platform: string; updatedAt: string; createdByName: string | null }[] } = { current: [] };
+const savedDraftPayload: { current: Record<string, unknown> | null } = { current: null };
+const saveDraft = vi.fn();
+const deleteSavedDraft = vi.fn();
+
 vi.mock('../../api/ads.js', () => ({
+  useSavedDrafts: () => ({ data: { drafts: savedDrafts.current } }),
+  loadSavedDraft: (id: string) =>
+    Promise.resolve({ id, name: 'Rascunho real', draft: savedDraftPayload.current }),
+  useSaveDraft: () => ({ mutate: saveDraft, reset: vi.fn(), isPending: false, isSuccess: false, isError: false, error: null }),
+  useDeleteSavedDraft: () => ({ mutate: deleteSavedDraft }),
   useAudienceProfile: () => ({ data: { profile: savedAudience.current } }),
   useSaveAudienceProfile: () => ({
     mutate: saveAudience,
@@ -719,6 +729,60 @@ describe('the builder on Google', () => {
     expect(sent).not.toHaveProperty('search');
   });
 
+  it('loads a saved Google draft whole, and saving validates like a launch without sending', async () => {
+    savedDrafts.current = [
+      { id: 'd1', name: 'SEARCH | Formatação', platform: 'google_search', updatedAt: '2026-09-25T15:00:00Z', createdByName: null },
+    ];
+    savedDraftPayload.current = {
+      platform: 'google_search',
+      name: 'SEARCH | Formatação | Alta Intenção | Set26',
+      objective: 'lead',
+      idealCustomerProfile: 'Empresário com negócio validado que quer crescer por franquias.',
+      reach: { states: ['SP'], cities: [{ name: 'Campinas', state: 'SP' }], customLocations: [] },
+      destinationUrl: 'https://wingscompany.com.br/formatar/franquia',
+      startDate: '2026-09-25',
+      endDate: '2026-10-25',
+      dailyBudgetCents: 10000,
+      utms: { utm_source: 'google', utm_medium: 'cpc', utm_campaign: 'search-formatacao', utm_content: 'lead' },
+      startPaused: true,
+      variations: [],
+      search: {
+        adGroupName: 'Formatação | Alta Intenção',
+        keywords: ['"formatação de franquia"', '[wings company]'],
+        negativeKeywords: ['emprego', 'vaga'],
+        headlines: ['Formate Sua Franquia', 'Consultoria de Franquias', 'Fale com um Especialista'],
+        descriptions: ['Formatamos sua empresa para virar franqueadora.', 'Fale com um especialista da Wings.'],
+      },
+    };
+    try {
+      render(<PaidMediaBuilder canRequest />);
+      fireEvent.click(screen.getByRole('button', { name: 'Carregar' }));
+      await screen.findByText(/Rascunho “Rascunho real” carregado/);
+
+      expect((screen.getByLabelText(/^Nome da campanha/) as HTMLInputElement).value).toBe(
+        'SEARCH | Formatação | Alta Intenção | Set26',
+      );
+      expect((byField('Nome do grupo de anúncios') as HTMLInputElement).value).toBe('Formatação | Alta Intenção');
+      expect((screen.getByLabelText(/^Palavras-chave(?! negativas)/) as HTMLTextAreaElement).value).toBe(
+        '"formatação de franquia"\n[wings company]',
+      );
+      expect((byField('Título 1') as HTMLInputElement).value).toBe('Formate Sua Franquia');
+      expect((screen.getByLabelText(/Verba por dia/) as HTMLInputElement).value).toBe('100,00');
+      expect(screen.getAllByText(/Campinas/).length).toBeGreaterThan(0);
+      expect(requestCampaign).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Salvar rascunho' }));
+      await waitFor(() => expect(saveDraft).toHaveBeenCalledTimes(1));
+      expect(saveDraft.mock.calls[0]?.[0]).toMatchObject({
+        draft: { platform: 'google_search', search: { adGroupName: 'Formatação | Alta Intenção' } },
+      });
+      expect(requestCampaign).not.toHaveBeenCalled();
+    } finally {
+      savedDrafts.current = [];
+      savedDraftPayload.current = null;
+    }
+  });
+
   it('keeps a radius chosen on Meta when the platform becomes Google, and sends it', async () => {
     render(<PaidMediaBuilder canRequest />);
     fireEvent.click(screen.getByRole('button', { name: 'clicar no mapa' }));
@@ -785,18 +849,18 @@ describe('the builder on Google', () => {
     expect(requestCampaign).not.toHaveBeenCalled();
   });
 
-  it('refuses more than 10 keywords', async () => {
+  it('refuses more than 20 keywords', async () => {
     render(<PaidMediaBuilder canRequest />);
     choose(/Google Pesquisa/);
     fillSearch();
     type(
       screen.getByLabelText(/^Palavras-chave(?! negativas)/),
-      Array.from({ length: 11 }, (_, index) => `franquia termo ${index}`).join('\n'),
+      Array.from({ length: 21 }, (_, index) => `franquia termo ${index}`).join('\n'),
     );
-    expect(screen.getByText(/11\/10/)).toBeTruthy();
+    expect(screen.getByText(/21\/20/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
 
-    await waitFor(() => expect(screen.getByText('No máximo 10 palavras-chave')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('No máximo 20 palavras-chave')).toBeTruthy());
     expect(requestCampaign).not.toHaveBeenCalled();
   });
 

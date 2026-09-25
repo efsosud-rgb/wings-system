@@ -95,6 +95,10 @@ import {
   useSaveMetaIdentityDefault,
   useUploadCreative,
   useUploadVideo,
+  loadSavedDraft,
+  useDeleteSavedDraft,
+  useSaveDraft,
+  useSavedDrafts,
 } from '../../api/ads.js';
 import { ApiError } from '../../api/client.js';
 import { Alert, Button, Field, Input, Select } from '../ui.js';
@@ -732,6 +736,8 @@ export interface BuilderBridge {
   getDraft: () => Record<string, unknown>;
   /** `pending` is the card's list of what only a person can choose. */
   applyProposal: (proposal: AgentCampaignProposal, pending?: string[]) => void;
+  /** Fills the form with a saved draft, whole. Submits nothing. */
+  applyDraft: (draft: CampaignDraft) => void;
 }
 
 /** Cents as the budget box shows them: 2000 -> "20,00". */
@@ -760,6 +766,11 @@ export function PaidMediaBuilder({
 }) {
   const today = todayInSaoPaulo();
   const launch = useRequestCampaign();
+  const saveDraft = useSaveDraft();
+  const savedDrafts = useSavedDrafts(canRequest);
+  const deleteSavedDraft = useDeleteSavedDraft();
+  const [loadProblem, setLoadProblem] = useState<string | null>(null);
+  const [loadedDraftName, setLoadedDraftName] = useState<string | null>(null);
 
   const {
     register,
@@ -1055,11 +1066,68 @@ export function PaidMediaBuilder({
     return () => clearTimeout(timer);
   }, [draftJson]);
 
+  /**
+   * A saved draft is the whole form as it was validated, so it goes in whole:
+   * the form is reset to it over the current defaults, and the boxes that keep
+   * their own text (keywords, budget) are told too. Nothing is submitted.
+   */
+  const applyDraft = (draft: CampaignDraft) => {
+    // Field by field, like a proposal: the form library re-writes its inputs
+    // after a whole-form reset, which would undo the budget box's own text.
+    const filled = { shouldDirty: true, shouldValidate: false };
+    setAudienceLoaded(true);
+    setUtmsFromProposal(true);
+    setAppliedProposal(null);
+    setValue('platform', draft.platform, filled);
+    setValue('name', draft.name, filled);
+    setValue('objective', draft.objective, filled);
+    setValue('idealCustomerProfile', draft.idealCustomerProfile, filled);
+    setValue('reach.states', draft.reach.states, filled);
+    replaceCities(draft.reach.cities);
+    setValue('reach.customLocations', draft.reach.customLocations, filled);
+    setValue('destinationUrl', draft.destinationUrl, filled);
+    for (const key of UTM_KEYS) setValue(`utms.${key}`, draft.utms[key], filled);
+    setValue('dailyBudgetCents', draft.dailyBudgetCents, filled);
+    setBudgetText(centsToBudgetText(draft.dailyBudgetCents));
+    setValue('startDate', draft.startDate, filled);
+    setValue('endDate', draft.endDate, filled);
+    setValue('startPaused', true, filled);
+
+    if (draft.platform === 'meta') {
+      if (draft.formatKey) setValue('formatKey', draft.formatKey, filled);
+      if (draft.ageMin !== undefined) setValue('ageMin', draft.ageMin, filled);
+      if (draft.ageMax !== undefined) setValue('ageMax', draft.ageMax, filled);
+      if (draft.placements) setValue('placements', draft.placements, filled);
+      if (draft.identity) {
+        setValue('identity.pageId', draft.identity.pageId, filled);
+        setValue('identity.instagramActorId', draft.identity.instagramActorId, filled);
+      }
+      if (draft.variations.length > 0) variations.replace(draft.variations);
+    }
+    if (draft.youtube) {
+      setValue('youtube.videoUrl', draft.youtube.videoUrl, filled);
+      setValue('youtube.headline', draft.youtube.headline, filled);
+    }
+    const search = draft.search;
+    if (search) {
+      setValue('search.adGroupName', search.adGroupName ?? '', filled);
+      setValue('search.keywords', search.keywords, filled);
+      setValue('search.negativeKeywords', search.negativeKeywords, filled);
+      setKeywordsText(search.keywords.join('\n'));
+      setNegativeKeywordsText(search.negativeKeywords.join('\n'));
+      setValue('search.headlines', padTo(search.headlines, MAX_SEARCH_HEADLINES), filled);
+      setValue('search.descriptions', padTo(search.descriptions, MAX_SEARCH_DESCRIPTIONS), filled);
+    }
+    setChecked(null);
+    launch.reset();
+  };
+
   // The bridge always points at this render's functions, and at nothing once
   // the builder leaves the screen.
   const bridge = {
     getDraft: () => shapeDraft(getValues()) as Record<string, unknown>,
     applyProposal,
+    applyDraft,
   };
   useEffect(() => {
     if (!applyRef) return;
@@ -1193,9 +1261,11 @@ export function PaidMediaBuilder({
       onSubmit={(event) => {
         // Which button was pressed: checking never sends anything.
         const submitter = (event.nativeEvent as SubmitEvent).submitter;
-        const launching = submitter instanceof HTMLButtonElement && submitter.value === 'launch';
+        const action = submitter instanceof HTMLButtonElement ? submitter.value : 'check';
+        const launching = action === 'launch';
         setChecked(null);
         launch.reset();
+        saveDraft.reset();
         void handleSubmit((values) => {
           const draft = values as CampaignDraft;
           const identity = draft.identity;
@@ -1209,10 +1279,70 @@ export function PaidMediaBuilder({
             saveIdentityDefault.mutate(identity);
           }
           if (launching && canRequest) launch.mutate(draft);
+          else if (action === 'save' && canRequest) saveDraft.mutate({ draft });
           else setChecked(draft);
         })(event);
       }}
     >
+      {canRequest && (savedDrafts.data?.drafts.length ?? 0) > 0 && (
+        <section className="builder-applied" aria-label="Rascunhos salvos">
+          <div className="builder-applied-head">
+            <strong>Rascunhos salvos</strong>
+          </div>
+          <p className="field-hint">
+            Carregar preenche o formulário com o rascunho, inteiro. Nada é enviado: a campanha só
+            vira pedido em Lançar campanha.
+          </p>
+          {loadProblem && <Alert kind="error">{loadProblem}</Alert>}
+          {loadedDraftName && <Alert kind="success">Rascunho “{loadedDraftName}” carregado.</Alert>}
+          <ul className="builder-saved-drafts">
+            {savedDrafts.data?.drafts.map((item) => (
+              <li key={item.id}>
+                <span>
+                  <strong>{item.name}</strong>
+                  <span className="cell-sub">
+                    {' '}
+                    {PAID_PLATFORMS.find((p) => p.key === item.platform)?.label ?? item.platform}
+                    {item.createdByName ? ` · ${item.createdByName}` : ''} ·{' '}
+                    {new Date(item.updatedAt).toLocaleString('pt-BR', {
+                      timeZone: 'America/Sao_Paulo',
+                    })}
+                  </span>
+                </span>
+                <span className="builder-saved-actions">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      setLoadProblem(null);
+                      setLoadedDraftName(null);
+                      loadSavedDraft(item.id)
+                        .then((loaded) => {
+                          applyDraft(loaded.draft);
+                          setLoadedDraftName(loaded.name);
+                        })
+                        .catch((error: unknown) =>
+                          setLoadProblem(
+                            error instanceof Error ? error.message : 'Não foi possível carregar.',
+                          ),
+                        );
+                    }}
+                  >
+                    Carregar
+                  </Button>
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => deleteSavedDraft.mutate(item.id)}
+                  >
+                    Excluir
+                  </button>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {appliedProposal && (
         <section className="builder-applied" aria-label="Proposta do agente aplicada">
           <div className="builder-applied-head">
@@ -2327,10 +2457,23 @@ export function PaidMediaBuilder({
           </Alert>
         )}
 
+        {saveDraft.isSuccess && <Alert kind="success">Rascunho salvo. Nada foi enviado.</Alert>}
+        {saveDraft.isError && (
+          <Alert kind="error">
+            {saveDraft.error instanceof ApiError
+              ? saveDraft.error.message
+              : 'Não foi possível salvar o rascunho.'}
+          </Alert>
+        )}
         <div className="form-actions">
           <Button type="submit" variant="ghost" value="check">
             Conferir campanha
           </Button>
+          {canRequest && (
+            <Button type="submit" variant="ghost" value="save" disabled={saveDraft.isPending}>
+              {saveDraft.isPending ? 'Salvando…' : 'Salvar rascunho'}
+            </Button>
+          )}
           <Button
             type="submit"
             value="launch"

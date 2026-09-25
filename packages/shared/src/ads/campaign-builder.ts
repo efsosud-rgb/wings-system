@@ -777,8 +777,13 @@ export function youtubeThumbnailUrl(videoId: string): string {
   return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 }
 
-export const MAX_KEYWORDS = 10;
-export const MAX_NEGATIVE_KEYWORDS = 20;
+/**
+ * Builder ceilings, not Google's (which allow thousands): enough for one
+ * tight ad group and a real negative list. Raised 2026-09-25 (10/20 before)
+ * for the first real Search campaign, which carries 13 and 35.
+ */
+export const MAX_KEYWORDS = 20;
+export const MAX_NEGATIVE_KEYWORDS = 50;
 export const KEYWORD_MAX_LENGTH = 80;
 export const KEYWORD_MAX_WORDS = 10;
 /**

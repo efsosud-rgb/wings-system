@@ -156,3 +156,12 @@ export interface ExecutionStepView {
   externalId: string | null;
   message: string | null;
 }
+
+/** A campaign saved in the builder, as the list shows it. */
+export interface SavedCampaignDraft {
+  id: string;
+  name: string;
+  platform: 'meta' | 'google_search' | 'youtube';
+  updatedAt: string;
+  createdByName: string | null;
+}

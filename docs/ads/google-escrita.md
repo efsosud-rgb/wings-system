@@ -288,3 +288,19 @@ com `updateMask: status`.
 Leitura de reprovações e P-max via `asset_group`; alerta
 `account_out_of_funds`; pausa e negativas autônomas; guardrail explícito de
 correspondência ampla (hoje o esquema simplesmente recusa).
+
+### Rascunhos salvos e limites (25/09/2026, tarde)
+
+- **Limites do construtor:** 20 palavras-chave e 50 negativas (eram 10 e 20).
+  A campanha real de 25/09 leva 13 e 35; o `validateOnly` na conta real
+  aceitou a solicitação inteira (54 operações) antes da mudança.
+- **Rascunhos salvos** (`ad_campaign_saved_drafts`, migração 0038, com o
+  GRANT para `wings_ro`): "Salvar rascunho" no construtor guarda o formulário
+  validado, **sem pedido, sem aprovação, sem WhatsApp e sem reserva**; o bloco
+  "Rascunhos salvos" no topo do construtor carrega um deles inteiro. Rotas
+  `GET/POST/DELETE /ads/saved-drafts` (`ads.request`), auditadas
+  (`ads.draft_saved`, `ads.draft_deleted`). No terminal,
+  `ops-cli save-draft --file rascunho.json` faz o mesmo sem sessão.
+- O rascunho da campanha de lançamento está em
+  `docs/ads/rascunho-pesquisa-set26.json` (datas: hoje a +30 dias; ajustar na
+  tela).
