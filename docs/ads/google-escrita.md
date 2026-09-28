@@ -324,3 +324,15 @@ do Google com `conversoes_verificadas: false` (as conversões vêm de um único
 lidos em 25/09), e a regra dos 10 leads/semana passou a valer só para a Meta.
 A prévia do anúncio de Pesquisa mostra no máximo 3 títulos e 2 descrições,
 como o Google.
+
+### Correções à mão na campanha real (28/09/2026)
+
+Pedidas por Eric e feitas por script no container da API, com `validateOnly`
+antes e a campanha `24289782134` **pausada**: URL final do RSA
+`200582882397~825987552936` → `/contato/?…utm_content=lead-v1`
+(`adOperation.update final_urls`, o Google permite editar a URL sem recriar o
+anúncio); negativa de campanha "meu negócio" removida
+(`24289782134~488913784232`); fim da campanha 04/10 → 02/10
+(`campaignOperation.update end_date`). Registradas na trilha da campanha como
+`ads.manual_platform_change`. O sistema ainda não tem esses três tipos de
+alteração no fluxo de aprovação.
