@@ -21,6 +21,11 @@ import {
   useKairogenStatus,
   usePollKairogen,
 } from '../api/integrations.js';
+import {
+  useExpansionLandingPages,
+  useRemoveLandingPage,
+  useSaveLandingPage,
+} from '../api/expansion.js';
 import { useMediaProviders, useSaveKairogenPlan } from '../api/media.js';
 import { providerHolding } from '../components/media-studio/ProviderStrip.js';
 import { Alert, Button, Field, Input } from '../components/ui.js';
@@ -528,6 +533,97 @@ function BudgetCapsSection() {
   );
 }
 
+/**
+ * Entrada de leads de Expansão: which RD Marketing landing pages belong to
+ * client brands. A conversion on an active one becomes a deal in the
+ * "Expansão" funnel ("Tentando contato"); the job reads this list every pass.
+ */
+function ExpansionIntakeSection() {
+  const session = useSession();
+  const canManage = hasPermission(session.data, 'integrations.manage');
+  const pages = useExpansionLandingPages();
+  const save = useSaveLandingPage();
+  const remove = useRemoveLandingPage();
+  const [identifier, setIdentifier] = useState('');
+  const [brand, setBrand] = useState('');
+
+  if (!canManage || pages.isLoading) return null;
+  if (!pages.data) return <Alert kind="error">Não foi possível ler as páginas de Expansão.</Alert>;
+
+  return (
+    <section aria-labelledby="expansion-intake-title">
+      <h2 id="expansion-intake-title">Entrada de leads de Expansão</h2>
+      <p className="muted">
+        Toda conversão nestas páginas de marcas-clientes vira um negócio no funil Expansão, etapa
+        &ldquo;Tentando contato&rdquo;, se o contato ainda não tiver negócio aberto. A conferência
+        roda a cada 5 minutos
+        {pages.data.enabled
+          ? '.'
+          : ' e está desligada neste ambiente (EXPANSION_INTAKE_ENABLED).'}{' '}
+        O formulário do site (wings-company-form-site) vai para o funil Formatação e não fica nesta
+        lista.
+      </p>
+      <ul>
+        {pages.data.landingPages.map((page) => (
+          <li key={page.identifier}>
+            <strong>{page.brand}</strong> <code>{page.identifier}</code>{' '}
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={save.isPending}
+              onClick={() => save.mutate({ ...page, active: !page.active })}
+            >
+              {page.active ? 'Desativar' : 'Ativar'}
+            </Button>{' '}
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={remove.isPending}
+              onClick={() => remove.mutate(page.identifier)}
+            >
+              Remover
+            </Button>
+            {!page.active && <span className="muted"> (desativada)</span>}
+          </li>
+        ))}
+      </ul>
+      <form
+        className="integration-plan"
+        onSubmit={(event) => {
+          event.preventDefault();
+          save.mutate(
+            { identifier: identifier.trim(), brand: brand.trim(), active: true },
+            {
+              onSuccess: () => {
+                setIdentifier('');
+                setBrand('');
+              },
+            },
+          );
+        }}
+      >
+        <Field
+          label="Identificador da conversão no RD"
+          hint="Exatamente como aparece no RD Marketing"
+        >
+          <Input
+            value={identifier}
+            onChange={(event) => setIdentifier(event.target.value)}
+            required
+          />
+        </Field>
+        <Field label="Marca">
+          <Input value={brand} onChange={(event) => setBrand(event.target.value)} required />
+        </Field>
+        <Button type="submit" disabled={save.isPending}>
+          Adicionar página
+        </Button>
+        {save.error && <Alert kind="error">Não foi possível salvar.</Alert>}
+      </form>
+    </section>
+  );
+}
+
 export function IntegrationsPage() {
   return (
     <>
@@ -540,6 +636,7 @@ export function IntegrationsPage() {
       </header>
       <KairogenCard />
       <MediaProviderCards />
+      <ExpansionIntakeSection />
       <BudgetCapsSection />
     </>
   );
