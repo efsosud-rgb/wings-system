@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { CampaignDraft } from './campaign-builder.js';
+import type { CampaignDraft, DraftDifference } from './campaign-builder.js';
 
 /**
  * Contract for the approvals panel.
@@ -108,6 +108,15 @@ export interface ApprovalDetail extends ApprovalListItem {
   campaignExternalId: string;
   /** The whole campaign being asked for; null for a change to an existing one. */
   draft: CampaignDraft | null;
+  /**
+   * How the request compares with the saved draft of the same name, when one
+   * exists: the approver sees in bold what was edited after "Carregar".
+   */
+  savedDraftDrift: {
+    savedDraftName: string;
+    savedAt: string;
+    differences: DraftDifference[];
+  } | null;
   /** Where the budget lives: campaign (CBO) or ad set (ABO). */
   budgetLevel: 'campaign' | 'ad_set' | 'none';
   fromValueCents: number | null;

@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { adAccounts, marketingAudienceProfiles, WINGS_TENANT_ID } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
@@ -573,5 +573,83 @@ describe('saved drafts', () => {
     expect((await app.inject({ url: `/ads/saved-drafts/${id}`, cookies })).statusCode).toBe(404);
     // A seller cannot see the builder's drafts.
     expect((await app.inject({ url: '/ads/saved-drafts', cookies: await cookiesFor('vendedor_expansao') })).statusCode).toBe(403);
+  });
+});
+
+describe('a request compared with its saved draft', () => {
+  it('shows the approver what was edited after loading the draft, and says so when nothing was', async () => {
+    const cookies = await cookiesFor('marketing');
+    // The Google account and its period exist from the suite above.
+    const account = await db.query.adAccounts.findFirst({
+      where: eq(adAccounts.platform, 'google'),
+    });
+    if (!account) throw new Error('expected the Google account of the suite above');
+
+    const name = `Drift ${randomBytes(3).toString('hex')}`;
+    const base = {
+      ...(await draft()),
+      formatKey: undefined,
+      variations: [],
+      ageMin: undefined,
+      ageMax: undefined,
+      placements: undefined,
+      identity: undefined,
+      platform: 'google_search',
+      name,
+      dailyBudgetCents: 3000,
+      utms: { utm_source: 'google', utm_medium: 'cpc', utm_campaign: 'x', utm_content: 'lead' },
+      search: {
+        keywords: ['[abrir franquia]'],
+        negativeKeywords: [],
+        headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
+        descriptions: ['Conheça o modelo de negócio e o suporte da Wings.', 'Suporte do início ao fim.'],
+      },
+    };
+    expect(
+      (await app.inject({ method: 'POST', url: '/ads/saved-drafts', cookies, payload: { draft: base } }))
+        .statusCode,
+    ).toBe(201);
+
+    // Requested with twice the budget: the approval names the difference.
+    const edited = await app.inject({
+      method: 'POST',
+      url: '/ads/campaign-requests',
+      cookies,
+      payload: { ...base, dailyBudgetCents: 6000 },
+    });
+    expect(edited.statusCode).toBe(201);
+    const detail = await app.inject({
+      url: `/ads/approvals/${edited.json<{ approvalId: string }>().approvalId}`,
+      cookies: await cookiesFor('admin_master'),
+    });
+    expect(detail.json<{ approval: ApprovalDetail }>().approval.savedDraftDrift).toMatchObject({
+      savedDraftName: name,
+      differences: [
+        { field: 'dailyBudgetCents', saved: 'R$ 30,00', requested: 'R$ 60,00' },
+      ],
+    });
+
+    // Requested exactly as saved (another name: the guard refuses a repeated
+    // campaign name): the approval says they agree.
+    const other = { ...base, name: `${name} B` };
+    expect(
+      (await app.inject({ method: 'POST', url: '/ads/saved-drafts', cookies, payload: { draft: other } }))
+        .statusCode,
+    ).toBe(201);
+    const same = await app.inject({
+      method: 'POST',
+      url: '/ads/campaign-requests',
+      cookies,
+      payload: other,
+    });
+    expect(same.statusCode).toBe(201);
+    const sameDetail = await app.inject({
+      url: `/ads/approvals/${same.json<{ approvalId: string }>().approvalId}`,
+      cookies: await cookiesFor('admin_master'),
+    });
+    expect(sameDetail.json<{ approval: ApprovalDetail }>().approval.savedDraftDrift).toMatchObject({
+      savedDraftName: `${name} B`,
+      differences: [],
+    });
   });
 });

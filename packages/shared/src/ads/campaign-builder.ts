@@ -1413,3 +1413,85 @@ export const campaignDraftSchema = z
 
 export type CampaignDraftInput = z.input<typeof campaignDraftSchema>;
 export type CampaignDraft = z.output<typeof campaignDraftSchema>;
+
+// ---------------------------------------------------------------------------
+// A request against the saved draft it came from
+// ---------------------------------------------------------------------------
+
+export interface DraftDifference {
+  field: 'dailyBudgetCents' | 'startDate' | 'endDate' | 'destinationUrl' | 'reach' | 'audience';
+  label: string;
+  saved: string;
+  requested: string;
+}
+
+const brDate = (value: string) => value.split('-').reverse().join('/');
+const brl = (cents: number) => `R$ ${(cents / 100).toFixed(2).replace('.', ',')}`;
+
+/**
+ * Where a request departs from the saved draft of the same name: money,
+ * dates, destination and audience. Shown in bold on the approval, because a
+ * form edited after "Carregar" once went out with twice the budget and a
+ * shorter run than the draft everyone had agreed on (2026-09-25).
+ */
+export function draftDifferences(
+  saved: CampaignDraft,
+  requested: CampaignDraft,
+): DraftDifference[] {
+  const differences: DraftDifference[] = [];
+  if (saved.dailyBudgetCents !== requested.dailyBudgetCents) {
+    differences.push({
+      field: 'dailyBudgetCents',
+      label: 'Verba diária',
+      saved: brl(saved.dailyBudgetCents),
+      requested: brl(requested.dailyBudgetCents),
+    });
+  }
+  if (saved.startDate !== requested.startDate) {
+    differences.push({
+      field: 'startDate',
+      label: 'Início',
+      saved: brDate(saved.startDate),
+      requested: brDate(requested.startDate),
+    });
+  }
+  if (saved.endDate !== requested.endDate) {
+    differences.push({
+      field: 'endDate',
+      label: 'Fim',
+      saved: brDate(saved.endDate),
+      requested: brDate(requested.endDate),
+    });
+  }
+  if (saved.destinationUrl.trim() !== requested.destinationUrl.trim()) {
+    differences.push({
+      field: 'destinationUrl',
+      label: 'Destino',
+      saved: saved.destinationUrl,
+      requested: requested.destinationUrl,
+    });
+  }
+  const savedReach = describeReach(saved.reach);
+  const requestedReach = describeReach(requested.reach);
+  if (savedReach !== requestedReach) {
+    differences.push({ field: 'reach', label: 'Área de alcance', saved: savedReach, requested: requestedReach });
+  }
+  const audience = (draft: CampaignDraft) =>
+    [
+      draft.idealCustomerProfile.trim(),
+      draft.ageMin !== undefined && draft.ageMax !== undefined
+        ? `${draft.ageMin} a ${draft.ageMax} anos`
+        : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  if (audience(saved) !== audience(requested)) {
+    differences.push({
+      field: 'audience',
+      label: 'Público',
+      saved: audience(saved),
+      requested: audience(requested),
+    });
+  }
+  return differences;
+}

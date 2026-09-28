@@ -2,17 +2,19 @@ import {
   approvalDecisionSchema,
   AD_ACCOUNT_PLATFORM,
   campaignDraftSchema,
+  draftDifferences,
   variationMedia,
   type ApprovalDetail,
   type ApprovalListItem,
   type CampaignDraft,
 } from '@wings/shared';
-import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   adAccounts,
   adApprovalRequests,
+  adCampaignSavedDrafts,
   adCreativeUploads,
   adVideoUploads,
   auditLog,
@@ -224,8 +226,31 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         .where(and(eq(auditLog.entity, 'ad_approval_request'), eq(auditLog.entityId, row.id)))
         .orderBy(auditLog.at);
 
+      // The saved draft this request most likely came from: same name, same
+      // platform, the most recently saved. What differs is shown in bold.
+      let savedDraftDrift: ApprovalDetail['savedDraftDrift'] = null;
+      if (row.change_kind === 'create_campaign' && row.draft_payload) {
+        const requested = campaignDraftSchema.safeParse(row.draft_payload);
+        const saved = await db.query.adCampaignSavedDrafts.findFirst({
+          where: and(
+            eq(adCampaignSavedDrafts.name, row.draft_payload.name),
+            eq(adCampaignSavedDrafts.platform, row.draft_payload.platform),
+          ),
+          orderBy: desc(adCampaignSavedDrafts.updatedAt),
+        });
+        const savedDraft = saved ? campaignDraftSchema.safeParse(saved.payload) : null;
+        if (saved && savedDraft?.success && requested.success) {
+          savedDraftDrift = {
+            savedDraftName: saved.name,
+            savedAt: saved.updatedAt.toISOString(),
+            differences: draftDifferences(savedDraft.data, requested.data),
+          };
+        }
+      }
+
       const detail: ApprovalDetail = {
         ...toListItem(row),
+        savedDraftDrift,
         accountId: row.ad_account_id,
         accountExternalId: row.account_external_id,
         campaignExternalId: row.campaign_external_id,
