@@ -355,3 +355,20 @@ alteração no fluxo de aprovação.
   o que a tela do Google mostrou como pausado era estado antigo. Para isso não
   depender de confiança, a execução agora relê os status do grupo e do anúncio
   depois do `mutate` e os grava em `platform_response.statusesAfter`.
+
+### 28/09/2026 (tarde): mais palavras, negativas, CPC R$ 10 e RSA novo
+
+Na campanha ativa `24289782134`, pela API com `validateOnly` antes, num só
+`mutate` atômico: 11 palavras-chave no grupo `200582882397`
+(`[consultoria de franchising]` e dez em frase, incluindo as regionais
+"consultoria de franquias rj" e "formatação de franquias rio de janeiro"); 5
+negativas de campanha em frase (`franqueado`, `seja franqueado`, `franquia até
+50 mil`, `quanto rende`, `como crescer minha empresa`; `sebrae` já existia);
+CPC máximo do Maximizar cliques R$ 6 → **R$ 10**; e, como os títulos de um RSA
+são imutáveis, um **RSA novo** `200582882397~826254020361` (ENABLED, em
+revisão) igual ao antigo com "+1.400 Projetos de Franquia" no lugar de "+1.300
+Marcas Formatadas" e "Ex-Diretor da ABF-RJ" no lugar de "Agende Sua Avaliação"
+(o limite é 15 títulos; o dropado era redundante com "Avalie Seu Negócio"). O
+RSA antigo `825987552936` fica ativo até o novo ser aprovado. Tudo na trilha
+(`ads.manual_platform_change`) e no rascunho salvo (24 palavras, 40 negativas,
+CPC R$ 10, títulos novos); o limite do construtor subiu para 30 palavras-chave.

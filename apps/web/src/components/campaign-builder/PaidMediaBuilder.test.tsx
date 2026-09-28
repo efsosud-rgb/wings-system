@@ -879,18 +879,18 @@ describe('the builder on Google', () => {
     expect(requestCampaign).not.toHaveBeenCalled();
   });
 
-  it('refuses more than 20 keywords', async () => {
+  it('refuses more than 30 keywords', async () => {
     render(<PaidMediaBuilder canRequest />);
     choose(/Google Pesquisa/);
     fillSearch();
     type(
       screen.getByLabelText(/^Palavras-chave(?! negativas)/),
-      Array.from({ length: 21 }, (_, index) => `franquia termo ${index}`).join('\n'),
+      Array.from({ length: 31 }, (_, index) => `franquia termo ${index}`).join('\n'),
     );
-    expect(screen.getByText(/21\/20/)).toBeTruthy();
+    expect(screen.getByText(/31\/30/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
 
-    await waitFor(() => expect(screen.getByText('No máximo 20 palavras-chave')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('No máximo 30 palavras-chave')).toBeTruthy());
     expect(requestCampaign).not.toHaveBeenCalled();
   });
 
