@@ -8,6 +8,7 @@ import {
   type CockpitAdWarning,
   type CockpitAlert,
   type CockpitCampaign,
+  type CockpitCampaignScope,
   type CockpitDay,
   type CockpitFigures,
   type CockpitRegion,
@@ -51,6 +52,7 @@ export async function cockpit(
   env: Env,
   days: DashboardWindow,
   now = new Date(),
+  campaignScope: CockpitCampaignScope = 'ativas',
 ): Promise<DashboardCockpit> {
   const window = windowOf(days, now);
   const accounts = await activeAccounts(db);
@@ -84,6 +86,33 @@ export async function cockpit(
   const dayRange = (column: typeof adMetricsDaily.day) =>
     and(gte(column, window.previousSince), lte(column, window.until));
 
+  // "Todas": also the paused and ended campaigns that delivered in either
+  // window. "Só ativas" (the default): only the ones delivering now.
+  let inScope = active;
+  if (campaignScope === 'todas' && ids.length) {
+    const delivered = await db
+      .selectDistinct({
+        accountId: adMetricsDaily.adAccountId,
+        externalId: adMetricsDaily.entityExternalId,
+      })
+      .from(adMetricsDaily)
+      .where(
+        and(
+          inArray(adMetricsDaily.adAccountId, ids),
+          eq(adMetricsDaily.level, 'campaign'),
+          dayRange(adMetricsDaily.day),
+          sql`(${adMetricsDaily.spendCents} > 0 or ${adMetricsDaily.impressions} > 0)`,
+        ),
+      );
+    const keys = new Set(delivered.map((row) => `${row.accountId}:${row.externalId}`));
+    inScope = campaignRows.filter(
+      (campaign) =>
+        activeIds.has(campaign.id) || keys.has(`${campaign.adAccountId}:${campaign.externalId}`),
+    );
+  }
+  const scopeIds = new Set(inScope.map((campaign) => campaign.id));
+  const scopeExternal = inScope.map((campaign) => campaign.externalId);
+
   const [perDay, sessionsPerDay, deals, regionRows, creativeData, alertRows] = await Promise.all([
     ids.length
       ? db
@@ -99,10 +128,7 @@ export async function cockpit(
             and(
               inArray(adMetricsDaily.adAccountId, ids),
               eq(adMetricsDaily.level, 'campaign'),
-              inArray(
-                adMetricsDaily.entityExternalId,
-                activeExternal.length ? activeExternal : none,
-              ),
+              inArray(adMetricsDaily.entityExternalId, scopeExternal.length ? scopeExternal : none),
               dayRange(adMetricsDaily.day),
             ),
           )
@@ -144,7 +170,7 @@ export async function cockpit(
               inArray(adMetricsBreakdownDaily.adAccountId, ids),
               inArray(
                 adMetricsBreakdownDaily.campaignExternalId,
-                activeExternal.length ? activeExternal : none,
+                scopeExternal.length ? scopeExternal : none,
               ),
               eq(adMetricsBreakdownDaily.kind, 'region'),
               gte(adMetricsBreakdownDaily.day, window.since),
@@ -232,6 +258,11 @@ export async function cockpit(
   const campaignById = new Map(campaignRows.map((campaign) => [campaign.id, campaign]));
   const adWarnings: CockpitAdWarning[] = [];
   const servingAds = new Set<string>();
+  const scopeAds = new Set(
+    adRows
+      .filter((ad) => ad.campaignId && scopeIds.has(ad.campaignId))
+      .map((ad) => `${platformOf.get(ad.adAccountId) ?? 'meta'}:${ad.externalId}`),
+  );
   for (const ad of adRows) {
     if (!ad.campaignId || !activeIds.has(ad.campaignId)) continue;
     const platform = platformOf.get(ad.adAccountId) ?? 'meta';
@@ -252,10 +283,15 @@ export async function cockpit(
     }
   }
 
-  // Serving ads of active campaigns only. Leads first, then the cheapest
-  // lead, then spend: what worked, at the top.
+  // "Só ativas": serving ads of active campaigns. "Todas": every ad of the
+  // campaigns in scope that delivered. Leads first, then the cheapest lead,
+  // then spend: what worked, at the top.
   const ranked = creativeData.creatives
-    .filter((creative) => servingAds.has(`${creative.platform}:${creative.adExternalId}`))
+    .filter((creative) =>
+      (campaignScope === 'todas' ? scopeAds : servingAds).has(
+        `${creative.platform}:${creative.adExternalId}`,
+      ),
+    )
     .sort(
       (a, b) =>
         b.totals.conversions - a.totals.conversions ||
@@ -265,16 +301,16 @@ export async function cockpit(
         b.totals.spendCents - a.totals.spendCents,
     );
 
-  // Only what belongs to an active campaign (or to the account itself): an
-  // alert about an ad of a paused campaign is not the Cockpit's business.
-  const adSetRows = activeIds.size
-    ? await db.query.adSets.findMany({ where: inArray(adSets.campaignId, [...activeIds]) })
+  // Only what belongs to a campaign in scope (or to the account itself): in
+  // "Só ativas", an alert about an ad of a paused campaign is left out.
+  const adSetRows = scopeIds.size
+    ? await db.query.adSets.findMany({ where: inArray(adSets.campaignId, [...scopeIds]) })
     : [];
-  const activeExternalIds = new Set(activeExternal);
+  const activeExternalIds = new Set(scopeExternal);
   const activeAdSets = new Set(adSetRows.map((row) => row.externalId));
   const activeAds = new Set(
     adRows
-      .filter((row) => row.campaignId && activeIds.has(row.campaignId))
+      .filter((row) => row.campaignId && scopeIds.has(row.campaignId))
       .map((row) => `${row.adAccountId}:${row.externalId}`),
   );
   const alertInScope = (row: (typeof alertRows)[number]) => {
@@ -348,7 +384,7 @@ export async function cockpit(
     return daily || null;
   };
   const spendByPlatform: Record<AdPlatform, number> = { meta: 0, google: 0 };
-  for (const campaign of active) {
+  for (const campaign of inScope) {
     const platform = platformOf.get(campaign.adAccountId) ?? 'meta';
     spendByPlatform[platform] += windowByCampaign.get(campaign.externalId)?.spendCents ?? 0;
   }
@@ -366,12 +402,14 @@ export async function cockpit(
     otherRegionsSpendCents,
     creatives: ranked.slice(0, 6),
     alerts,
-    activeCampaigns: active
+    campaignScope,
+    activeCampaigns: inScope
       .map((campaign): CockpitCampaign => ({
         platform: platformOf.get(campaign.adAccountId) ?? 'meta',
         externalId: campaign.externalId,
         name: campaign.name,
         deliveryStatus: campaign.deliveryStatus,
+        delivering: activeIds.has(campaign.id),
         startDate: campaign.startDate,
         endDate: campaign.endDate,
         dailyBudgetCents: dailyBudgetOf(campaign),

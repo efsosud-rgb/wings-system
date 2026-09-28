@@ -1,4 +1,5 @@
 import type {
+  CockpitCampaignScope,
   DashboardAudience,
   DashboardCampaigns,
   DashboardCockpit,
@@ -62,10 +63,16 @@ export function useDashboardCampaigns(days: DashboardWindow) {
   });
 }
 
-export function useDashboardCockpit(days: DashboardWindow) {
+export function useDashboardCockpit(
+  days: DashboardWindow,
+  campaigns: CockpitCampaignScope = 'ativas',
+) {
   return useQuery({
-    queryKey: ['dashboard', 'cockpit', days],
-    queryFn: () => api.get<{ cockpit: DashboardCockpit }>(`/ads/dashboard/cockpit?days=${days}`),
+    queryKey: ['dashboard', 'cockpit', days, campaigns],
+    queryFn: () =>
+      api.get<{ cockpit: DashboardCockpit }>(
+        `/ads/dashboard/cockpit?days=${days}&campanhas=${campaigns}`,
+      ),
     staleTime: STALE_MS,
   });
 }
