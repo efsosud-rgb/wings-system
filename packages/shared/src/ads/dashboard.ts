@@ -775,11 +775,17 @@ export const AD_ISSUE_LABEL: Record<string, string> = {
   AREA_OF_INTEREST_ONLY: 'Aprovado só na área de interesse',
 };
 
+/** Which campaigns the Cockpit sums: delivering now (default) or every one that delivered in the window. */
+export const COCKPIT_CAMPAIGN_SCOPES = ['ativas', 'todas'] as const;
+export type CockpitCampaignScope = (typeof COCKPIT_CAMPAIGN_SCOPES)[number];
+
 export interface CockpitCampaign {
   platform: AdPlatform;
   externalId: string;
   name: string;
   deliveryStatus: string | null;
+  /** Delivering now; false for a paused or ended campaign shown under "Todas". */
+  delivering: boolean;
   startDate: string | null;
   endDate: string | null;
   /** Daily budget in force (campaign or the sum of its ad sets); null when it has a lifetime budget only. */
@@ -876,7 +882,8 @@ export interface DashboardCockpit {
   otherRegionsSpendCents: number;
   creatives: CreativePerformance[];
   alerts: CockpitAlert[];
-  /** The campaigns every figure above is summed over: only those delivering. */
+  campaignScope: CockpitCampaignScope;
+  /** The campaigns every figure above is summed over (the name predates "Todas"). */
   activeCampaigns: CockpitCampaign[];
   /** Ads switched on in those campaigns that are not serving; outside every figure. */
   adWarnings: CockpitAdWarning[];

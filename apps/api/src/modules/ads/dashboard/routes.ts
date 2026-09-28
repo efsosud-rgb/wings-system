@@ -1,4 +1,5 @@
 import {
+  COCKPIT_CAMPAIGN_SCOPES,
   DASHBOARD_WINDOWS,
   setAccountCplTargetSchema,
   setCplTargetSchema,
@@ -70,7 +71,16 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
   app.get('/ads/dashboard/cockpit', guard, async (request, reply) => {
     const days = windowOrReject(request, reply);
     if (days === null) return;
-    return reply.send({ cockpit: await cockpit(db, env, days, now()) });
+    const scope = z
+      .enum(COCKPIT_CAMPAIGN_SCOPES)
+      .default('ativas')
+      .safeParse((request.query as { campanhas?: string }).campanhas);
+    if (!scope.success) {
+      return reply
+        .status(400)
+        .send({ error: 'invalid_request', message: 'campanhas deve ser ativas ou todas.' });
+    }
+    return reply.send({ cockpit: await cockpit(db, env, days, now(), scope.data) });
   });
 
   app.get('/ads/dashboard/site', guard, async (request, reply) => {
