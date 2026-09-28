@@ -11,6 +11,8 @@ import { enforceReconciliationFreshness, periodMonthOf } from './reconcile.js';
 import { seedAdAccount } from './seed-account.js';
 import { WordPressClient } from '../../lib/wordpress.js';
 import { syncBlogPosts } from '../site/blog-sync.js';
+import { Ga4Client, parseGa4Credentials } from '../../lib/ga4.js';
+import { syncGa4Traffic, syncRdCrmDeals } from './funnel-sync.js';
 import {
   accountRecordOf,
   finishIngestRun,
@@ -337,6 +339,43 @@ async function main() {
       } catch (error) {
         site = { status: 'failed', error: error instanceof Error ? error.name : 'unknown' };
         console.error('\nblog: falhou ao espelhar os posts; o restante do ciclo não foi afetado');
+      }
+    }
+
+    // After the click: the site's sessions (GA4) and the RD CRM deals, for the
+    // funnel. Read only, each on its own, and never the cause of a failed run.
+    const today = now.toISOString().slice(0, 10);
+    if (env.GA4_PROPERTY_ID && env.GA4_SERVICE_ACCOUNT_JSON) {
+      try {
+        const ga4 = new Ga4Client({
+          propertyId: env.GA4_PROPERTY_ID,
+          credentials: parseGa4Credentials(env.GA4_SERVICE_ACCOUNT_JSON),
+        });
+        const read = await syncGa4Traffic(db, ga4, {
+          propertyId: env.GA4_PROPERTY_ID,
+          since,
+          until: today,
+          now,
+        });
+        console.warn(`\nga4: ${read.rows} linha(s), ${read.sessions} sessão(ões) desde ${since}`);
+      } catch (error) {
+        // The class and code only: a message could quote the request.
+        console.error(
+          `\nga4: falhou (${error instanceof Error ? `${error.name}${'code' in error ? ` ${String(error.code)}` : ''}` : 'unknown'})`,
+        );
+      }
+    }
+    if (env.RD_CRM_API_TOKEN) {
+      try {
+        const read = await syncRdCrmDeals(db, {
+          token: env.RD_CRM_API_TOKEN,
+          since: new Date(now.getTime() - 90 * 24 * 3600_000).toISOString().slice(0, 10),
+          until: today,
+          now,
+        });
+        console.warn(`rd crm: ${read.deals} negociação(ões) dos últimos 90 dias`);
+      } catch (error) {
+        console.error(`rd crm: falhou (${error instanceof Error ? error.name : 'unknown'})`);
       }
     }
 

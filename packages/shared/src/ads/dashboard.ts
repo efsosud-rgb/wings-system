@@ -574,3 +574,91 @@ export const GENDER_LABEL: Record<string, string> = {
   female: 'Mulheres',
   unknown: 'Não informado',
 };
+
+// ---------------------------------------------------------------------------
+// After the click: the site (GA4) and the funnel down to the sale (RD CRM)
+// ---------------------------------------------------------------------------
+
+/** One source / medium / campaign over the window, as GA4 counts it. */
+export interface SiteTrafficRow {
+  source: string;
+  medium: string;
+  campaign: string;
+  sessions: number;
+  engagedSessions: number;
+  engagementSeconds: number;
+  pageViews: number;
+  keyEvents: number;
+}
+
+export interface DashboardSite {
+  days: DashboardWindow;
+  since: string;
+  until: string;
+  /** False until GA4_PROPERTY_ID and the service account key are set. */
+  configured: boolean;
+  propertyId: string | null;
+  /** When GA4 was last read; null when never. */
+  fetchedAt: string | null;
+  totals: Omit<SiteTrafficRow, 'source' | 'medium' | 'campaign'>;
+  rows: SiteTrafficRow[];
+}
+
+/** Engagement rate (engaged ÷ sessions) x1000, average engagement per session in seconds, pages per session x1000. */
+export function siteRatiosOf(row: Omit<SiteTrafficRow, 'source' | 'medium' | 'campaign'>): {
+  engagementRateMilli: number | null;
+  avgEngagementSeconds: number | null;
+  pagesPerSessionMilli: number | null;
+} {
+  const per = (value: number) => (row.sessions > 0 ? value / row.sessions : null);
+  const rate = per(row.engagedSessions);
+  const seconds = per(row.engagementSeconds);
+  const pages = per(row.pageViews);
+  return {
+    engagementRateMilli: rate === null ? null : Math.round(rate * 100_000),
+    avgEngagementSeconds: seconds === null ? null : Math.round(seconds),
+    pagesPerSessionMilli: pages === null ? null : Math.round(pages * 1000),
+  };
+}
+
+/** One ad campaign, impression to lead. Sessions are null when GA4 is not connected. */
+export interface FunnelCampaignRow {
+  platform: AdPlatform;
+  externalId: string;
+  name: string;
+  spendCents: number;
+  impressions: number;
+  clicks: number;
+  sessions: number | null;
+  /** Leads the platform reports (its conversion); the CRM count is per platform, below. */
+  leads: number;
+  /** The GA4 campaign names matched to this campaign (utm_campaign of its draft, or its own name). */
+  matchedSiteCampaigns: string[];
+}
+
+/** One platform, impression to sale. CRM stages come from RD's own labels (source / campaign). */
+export interface FunnelPlatformRow {
+  platform: AdPlatform;
+  spendCents: number;
+  impressions: number;
+  clicks: number;
+  sessions: number | null;
+  leads: number;
+  crmLeads: number;
+  meetings: number;
+  sales: number;
+}
+
+export interface DashboardFunnel {
+  days: DashboardWindow;
+  since: string;
+  until: string;
+  siteConfigured: boolean;
+  crmConfigured: boolean;
+  /** When the RD CRM copy was last refreshed; null when never. */
+  crmFetchedAt: string | null;
+  campaigns: FunnelCampaignRow[];
+  platforms: FunnelPlatformRow[];
+  /** Deals in the window whose RD labels name no paid platform (organic, referral, "Tráfego pago" without a platform…). */
+  crmUnattributed: number;
+}

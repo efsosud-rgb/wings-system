@@ -6,7 +6,9 @@ import {
   type DashboardCreatives,
   type DashboardOverview,
   type DashboardPlatforms,
+  type DashboardFunnel,
   type DashboardSettings,
+  type DashboardSite,
 } from '@wings/shared';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -14,6 +16,8 @@ import { buildApp } from '../../../app.js';
 import type { Database } from '../../../db/client.js';
 import { eq } from 'drizzle-orm';
 import {
+  rdCrmDeals,
+  ga4TrafficDaily,
   adCampaignDrafts,
   adCampaigns,
   agentConversations,
@@ -70,6 +74,9 @@ beforeAll(async () => {
       OPENROUTER_API_KEY: 'not-a-real-key',
       KAIROGEN_MONTHLY_CREDITS: '1000',
       ADS_INGEST_CRON: '0 * * * *',
+      GA4_PROPERTY_ID: '123456789',
+      GA4_SERVICE_ACCOUNT_JSON: '{"client_email":"x","private_key":"y"}',
+      RD_CRM_API_TOKEN: 'not-a-real-token',
     }),
     db,
     now: () => NOW,
@@ -532,6 +539,118 @@ describe('campaigns the system created', () => {
     expect(created?.accountExternalId).toMatch(/^act_/);
     const byHand = result.campaigns.find((campaign) => campaign.name === 'Institucional parada');
     expect(byHand).toMatchObject({ systemCreated: false, startDate: null, endDate: null });
+  });
+});
+
+describe('after the click: site and funnel', () => {
+  it('shows the site by source and campaign, and follows each campaign and platform down to the sale', async () => {
+    await db.insert(ga4TrafficDaily).values([
+      // Matched to the Meta campaign by its own name, whatever the case.
+      {
+        propertyId: '123456789',
+        day: '2026-09-15',
+        source: 'facebook',
+        medium: 'cpc',
+        campaign: 'lead | forms',
+        sessions: 40,
+        engagedSessions: 30,
+        engagementSeconds: 1200,
+        pageViews: 80,
+        keyEvents: 2,
+      },
+      {
+        propertyId: '123456789',
+        day: '2026-09-15',
+        source: '(direct)',
+        medium: '(none)',
+        campaign: '(não definido)',
+        sessions: 10,
+        engagedSessions: 5,
+        engagementSeconds: 100,
+        pageViews: 12,
+        keyEvents: 0,
+      },
+      // Outside the 7-day window.
+      {
+        propertyId: '123456789',
+        day: '2026-09-01',
+        source: 'facebook',
+        medium: 'cpc',
+        campaign: 'lead | forms',
+        sessions: 999,
+        engagedSessions: 0,
+        engagementSeconds: 0,
+        pageViews: 0,
+        keyEvents: 0,
+      },
+    ]);
+    const at = (day: string) => new Date(`${day}T12:00:00-03:00`);
+    await db.insert(rdCrmDeals).values([
+      {
+        rdId: 'r1',
+        pipeline: 'Formatação',
+        stage: 'Proposta enviada',
+        stageOrder: 4,
+        reachedMeeting: true,
+        win: null,
+        createdAt: at('2026-09-14'),
+        platform: 'meta',
+        sourceLabel: 'Busca Paga | Facebook Ads',
+      },
+      {
+        rdId: 'r2',
+        pipeline: 'Formatação',
+        stage: 'Sem contato',
+        stageOrder: 1,
+        reachedMeeting: false,
+        win: null,
+        createdAt: at('2026-09-15'),
+        platform: 'meta',
+      },
+      {
+        rdId: 'r3',
+        pipeline: 'Vendidos',
+        stage: 'Vendido',
+        stageOrder: 1,
+        reachedMeeting: true,
+        win: true,
+        createdAt: at('2026-09-12'),
+        platform: 'google',
+      },
+      {
+        rdId: 'r4',
+        pipeline: 'Expansão',
+        stage: 'Sem contato',
+        stageOrder: 1,
+        reachedMeeting: false,
+        win: null,
+        createdAt: at('2026-09-13'),
+        platform: null,
+      },
+    ]);
+
+    const site = await read<DashboardSite>('/ads/dashboard/site?days=7', 'site');
+    expect(site.configured).toBe(true);
+    expect(site.totals.sessions).toBe(50);
+    expect(site.rows[0]).toMatchObject({
+      source: 'facebook',
+      campaign: 'lead | forms',
+      sessions: 40,
+    });
+
+    const funnel = await read<DashboardFunnel>('/ads/dashboard/funnel?days=7', 'funnel');
+    const leads = funnel.campaigns.find((campaign) => campaign.name === 'LEAD | FORMS');
+    expect(leads).toMatchObject({ sessions: 40, matchedSiteCampaigns: ['lead | forms'] });
+    expect(leads?.impressions).toBeGreaterThan(0);
+    const meta = funnel.platforms.find((platform) => platform.platform === 'meta');
+    expect(meta).toMatchObject({ sessions: 40, crmLeads: 2, meetings: 1, sales: 0 });
+    expect(funnel.platforms.find((platform) => platform.platform === 'google')).toMatchObject({
+      crmLeads: 1,
+      meetings: 1,
+      sales: 1,
+    });
+    expect(funnel.crmUnattributed).toBe(1);
+    expect(funnel.crmConfigured).toBe(true);
   });
 });
 

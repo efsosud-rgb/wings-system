@@ -6695,3 +6695,55 @@ button.stage-chip:focus-visible {
   max-width: 28rem;
   font-weight: 400;
 }
+
+/* Dashboard → Funil: one plain bar per step, log length (see FunnelTab). */
+.funnel-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.funnel-step {
+  display: grid;
+  grid-template-columns: minmax(10rem, 14rem) 1fr 6rem;
+  grid-template-areas: 'label bar count' 'label meta meta';
+  align-items: center;
+  column-gap: 12px;
+}
+
+.funnel-label {
+  grid-area: label;
+}
+
+.funnel-bar {
+  grid-area: bar;
+  height: 12px;
+  background: var(--surface-muted, rgba(127, 127, 127, 0.12));
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.funnel-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent, #2f6fed);
+  border-radius: 6px;
+}
+
+.funnel-count {
+  grid-area: count;
+  text-align: right;
+}
+
+.funnel-meta {
+  grid-area: meta;
+}
+
+@media (max-width: 640px) {
+  .funnel-step {
+    grid-template-columns: 1fr 5rem;
+    grid-template-areas: 'label count' 'bar bar' 'meta meta';
+  }
+}

@@ -295,6 +295,13 @@
       "when": 1790620314033,
       "tag": "0041_video_watch_time",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1790620420811,
+      "tag": "0042_site_and_crm_funnel",
+      "breakpoints": true
     }
   ]
 }

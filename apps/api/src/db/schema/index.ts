@@ -1,5 +1,6 @@
 export * from './ads.js';
 export * from './agent.js';
+export * from './analytics.js';
 export * from './audit.js';
 export * from './clients.js';
 export * from './credentials.js';

@@ -328,6 +328,34 @@ botão: muda-se na plataforma.
   servidor. Atualiza gasto, saldo e status; métricas e criativos chegam na
   coleta de hora em hora.
 
+### Bloco B (28/09/2026): vídeo por anúncio, Site (GA4) e Funil
+
+- **Vídeo (migração 0041)**: a Meta passa a enviar `video_play_actions` e
+  `video_avg_time_watched_actions` na mesma leitura. O dia fica guardado como
+  inícios (`video_starts`) e milissegundos assistidos no total (média × inícios,
+  `video_watch_ms`), então a média de um período é total ÷ inícios, nunca média
+  de médias. Criativos mostra Tempo médio, ThruPlays e 25 · 50 · 75 · 100% dos
+  inícios. Não verificado ao vivo: o campo de tempo médio por anúncio nesta conta.
+- **Site (GA4) (migração 0042, `ga4_traffic_daily`)**: a coleta de hora em hora
+  lê a Data API com uma conta de serviço (`lib/ga4.ts`, JWT assinado no próprio
+  servidor, escopo analytics.readonly) e guarda sessões, sessões engajadas,
+  tempo de engajamento, páginas e eventos-chave por dia, origem, mídia e
+  campanha. Precisa de `GA4_PROPERTY_ID` (o número da propriedade, não o G-…)
+  e `GA4_SERVICE_ACCOUNT_JSON`. O site hoje só carrega **G-C10F4NPBF0** (pelo
+  GTM-MXJLC5HH, em todas as páginas conferidas em 28/09); G-Q0TCG8R502 não
+  aparece mais no HTML nem nos scripts. Nada foi verificado contra o GA4 real.
+- **Funil (`rd_crm_deals`)**: a coleta copia do RD Station CRM as negociações
+  dos últimos 90 dias com etapa, ganho, datas e as etiquetas de origem e
+  campanha do RD, sem nome, e-mail ou telefone. Cada campanha vai de
+  impressão a clique, sessão (GA4, casada pela utm_campaign do rascunho ou pelo
+  nome da campanha) e lead da plataforma; cada plataforma vai até leads no CRM,
+  reuniões e vendas, com o custo de cada etapa. O CRM para na plataforma porque
+  as negociações do RD não trazem a campanha de anúncio, só as etiquetas do RD
+  ("Busca Paga | Facebook Ads", "META ADS"); uma etiqueta que não diz a
+  plataforma fica de fora e é contada à parte. Reunião = etapa "Reunião
+  realizada" ou depois, ou venda; o RD não guarda histórico, então uma perdida
+  depois da reunião não conta.
+
 ### Dispositivo e dia × hora
 
 `ad_breakdown_kind` ganhou `device` (Meta: `device_platform`; Google:
