@@ -341,7 +341,7 @@ botão: muda-se na plataforma.
   servidor, escopo analytics.readonly) e guarda sessões, sessões engajadas,
   tempo de engajamento, páginas e eventos-chave por dia, origem, mídia e
   campanha. Precisa de `GA4_PROPERTY_ID` (o número da propriedade, não o G-…)
-  e `GA4_SERVICE_ACCOUNT_JSON`. O site hoje só carrega **G-C10F4NPBF0** (pelo
+  e `GA4_SERVICE_ACCOUNT_JSON` (o arquivo JSON da chave em base64, `base64 -w0 chave.json`; JSON puro também é aceito). O site hoje só carrega **G-C10F4NPBF0** (pelo
   GTM-MXJLC5HH, em todas as páginas conferidas em 28/09); G-Q0TCG8R502 não
   aparece mais no HTML nem nos scripts. Nada foi verificado contra o GA4 real.
 - **Funil (`rd_crm_deals`)**: a coleta copia do RD Station CRM as negociações
