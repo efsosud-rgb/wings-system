@@ -385,3 +385,18 @@ removido. O RSA original `825987552936` segue ENABLED e aprovado até o novo ser
 aprovado. Conferido por GET: campanha, grupo e anúncios ENABLED; só Pesquisa
 (sem parceiros, sem Display); presença; CPC máximo R$ 10; fim 09/10/2026.
 Total: 27 palavras-chave, 40 negativas.
+
+### 28/09/2026 (noite): entrega baixa → seis estados, variações e ampla nos 5 termos nucleares
+
+Diagnóstico por GET: campanha SERVING, grupo e anúncios ELIGIBLE/APPROVED, 27
+palavras aprovadas (4 "raramente exibidas"), sem programação de horário, sem
+conflito entre as 40 negativas e as positivas, faturamento aprovado e saldo
+R$ 1.469,88 — 2 impressões no dia porque quase não há buscas exatas/frase no
+RJ. Aprovado por Eric e aplicado com `validateOnly` antes: presença em **SP,
+RJ, MG, ES, PR e SC**; +5 frases (`franquear`, `formatação franquia`,
+`consultoria franchising`, `abrir franqueadora`, `montar franquia da minha
+empresa`); **correspondência ampla só nos 5 termos nucleares**, protegida
+pelas 40 negativas e pelo teto de CPC R$ 10; verba R$ 100/dia e lance
+mantidos por 48–72 h. Total 37 palavras (3 exatas, 29 frases, 5 amplas). A
+ampla não cabe no rascunho salvo (o esquema só aceita exata/frase): fica na
+trilha; o rascunho tem os 6 estados e 32 palavras (limite subiu para 40).
