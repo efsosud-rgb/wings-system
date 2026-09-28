@@ -153,9 +153,17 @@ const dayMonth = (date: string) => `${date.slice(8, 10)}/${date.slice(5, 7)}`;
 
 /** Início – fim, from the draft that created it; a campaign made by hand has none here. */
 function period(campaign: CampaignNode): string {
-  if (!campaign.startDate || !campaign.endDate) return '—';
-  return `${dayMonth(campaign.startDate)} – ${dayMonth(campaign.endDate)}`;
+  if (!campaign.startDate) return '—';
+  return `${dayMonth(campaign.startDate)} – ${campaign.endDate ? dayMonth(campaign.endDate) : 'sem fim'}`;
 }
+
+type CampaignOrder = 'recentes' | 'antigas' | 'gasto';
+
+const ORDER_LABEL: Record<CampaignOrder, string> = {
+  recentes: 'Início mais recente primeiro',
+  antigas: 'Início mais antigo primeiro',
+  gasto: 'Maior gasto no período',
+};
 
 const isRunning = (status: string) => status === 'ACTIVE' || status === 'ENABLED';
 
@@ -358,10 +366,17 @@ export function CampaignsTab({ data }: { data: DashboardCampaigns }) {
   const { data: user } = useSession();
   const canRequest = hasPermission(user, 'ads.request');
   const [filter, setFilter] = useState('');
+  const [order, setOrder] = useState<CampaignOrder>('recentes');
   const visible = useMemo(() => {
     const needle = filter.trim().toLowerCase();
-    return needle ? data.campaigns.filter((campaign) => campaign.name.toLowerCase().includes(needle)) : data.campaigns;
-  }, [data.campaigns, filter]);
+    const matched = needle
+      ? data.campaigns.filter((campaign) => campaign.name.toLowerCase().includes(needle))
+      : data.campaigns;
+    // The API sends the newest first; the other two orders are made here.
+    if (order === 'antigas') return [...matched].reverse();
+    if (order === 'gasto') return [...matched].sort((a, b) => b.totals.spendCents - a.totals.spendCents);
+    return matched;
+  }, [data.campaigns, filter, order]);
 
   const exportCsv = () => {
     const header = ['Nível', 'Plataforma', 'Campanha', 'Conjunto', 'Anúncio', 'Formato', 'Veredito', 'Motivos', 'Situação', 'Orçamento diário', 'Gasto', 'Impressões', 'Cliques', 'CTR %', 'CPC', 'Leads', 'CPL'];
@@ -394,6 +409,16 @@ export function CampaignsTab({ data }: { data: DashboardCampaigns }) {
           onChange={(event) => setFilter(event.target.value)}
           className="dash-filter"
         />
+        <label className="dash-order">
+          <span className="sr-only">Ordem das campanhas</span>
+          <select value={order} onChange={(event) => setOrder(event.target.value as CampaignOrder)}>
+            {(Object.keys(ORDER_LABEL) as CampaignOrder[]).map((key) => (
+              <option key={key} value={key}>
+                {ORDER_LABEL[key]}
+              </option>
+            ))}
+          </select>
+        </label>
         <Button variant="ghost" onClick={exportCsv}>
           Exportar CSV
         </Button>

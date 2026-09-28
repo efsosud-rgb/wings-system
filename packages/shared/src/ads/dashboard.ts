@@ -95,8 +95,16 @@ export interface SpendStrip {
   configured: boolean;
   /** Spent so far this month. */
   spent: number;
-  /** Straight-line projection of `spent` to the end of the month; null before day 2. */
+  /**
+   * What the month will have cost. Meta and Google: spent so far, plus what
+   * is left of today's budget, plus the active daily budgets for each day
+   * left in the month, stopping at each campaign's end date (`forecastRule`
+   * says it in words). Other sources: straight-line projection of `spent`;
+   * null before day 2.
+   */
   forecast: number | null;
+  /** How `forecast` was reached, with the numbers; null for the straight-line sources. */
+  forecastRule: string | null;
   /** What the month still allows under the tightest ceiling; null when nothing caps it. */
   available: number | null;
   /**
@@ -139,6 +147,8 @@ export interface IngestionStatus {
   nextRunAt: string | null;
   /** True when a scheduled run should have happened and no run was recorded since. */
   overdue: boolean;
+  /** When the last run that finished ok ended: "dados até" on the screen; null when none did. */
+  dataUntil: string | null;
 }
 
 export const HEALTH_ITEM_KEYS = [
@@ -196,6 +206,8 @@ export interface DashboardOverview {
    */
   reconciliation: IngestionStatus;
   health: HealthItem[];
+  /** The active ad accounts, for "Atualizar agora" (one reconciliation per account). */
+  accounts: { id: string; platform: AdPlatform; name: string }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -369,9 +381,11 @@ export interface CampaignNode {
    * person made by hand is changed in the platform.
    */
   systemCreated: boolean;
-  /** From the draft that created it; null for a campaign the system did not create. */
+  /** First and last day, as the platform reports them (or the draft's); null end = no end date. */
   startDate: string | null;
   endDate: string | null;
+  /** When the mirror first saw it: the order's tie-break when the start date is unknown. */
+  mirroredAt: string;
   /** The CPL target the verdict used (the account's, else the company's); null without one. */
   targetCplCents: number | null;
   name: string;
@@ -399,13 +413,15 @@ export interface DashboardCampaigns {
 // Creatives
 // ---------------------------------------------------------------------------
 
-export const MIRRORED_FORMATS = ['image', 'video', 'carousel', 'unknown'] as const;
+export const MIRRORED_FORMATS = ['image', 'video', 'carousel', 'text', 'unknown'] as const;
 export type MirroredFormat = (typeof MIRRORED_FORMATS)[number];
 
 export const MIRRORED_FORMAT_LABEL: Record<MirroredFormat, string> = {
   image: 'Imagem',
   video: 'Vídeo',
   carousel: 'Carrossel',
+  /** Google's responsive search ad: headlines and descriptions, no media. */
+  text: 'Texto (pesquisa)',
   unknown: 'Formato não informado',
 };
 

@@ -281,6 +281,13 @@
       "when": 1790616515696,
       "tag": "0039_account_cpl_targets",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1790619081327,
+      "tag": "0040_campaign_schedule",
+      "breakpoints": true
     }
   ]
 }

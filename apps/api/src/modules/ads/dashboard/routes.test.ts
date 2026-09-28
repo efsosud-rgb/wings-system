@@ -332,6 +332,49 @@ describe('the overview', () => {
     expect(meta.daily.find((point) => point.day === '2026-09-10')?.amount).toBe(0);
   });
 
+  it('forecasts the month from the budgets in force, each campaign stopping at its end date', async () => {
+    const mirrored = await db.query.adCampaigns.findMany({
+      where: eq(adCampaigns.adAccountId, metaAccountId),
+    });
+    const saved = mirrored.map((campaign) => ({ ...campaign }));
+    try {
+      // One campaign at R$ 240,00 a day, ending on the 18th; everything else paused.
+      await db
+        .update(adCampaigns)
+        .set({ status: 'PAUSED' })
+        .where(eq(adCampaigns.adAccountId, metaAccountId));
+      await db
+        .update(adCampaigns)
+        .set({
+          status: 'ACTIVE',
+          budgetLevel: 'campaign',
+          dailyBudgetCents: 24_000,
+          endDate: '2026-09-18',
+        })
+        .where(eq(adCampaigns.id, mirrored[0]!.id));
+      const overview = await read<DashboardOverview>('/ads/dashboard/overview', 'overview');
+      const meta = overview.strips.find((strip) => strip.source === 'meta');
+      // Day 16, nothing spent yet today: the rest of today, then the 17th and the 18th.
+      expect(meta?.forecast).toBe(60_000 + 24_000 * 3);
+      expect(meta?.forecastRule).toContain('R$ 240,00/dia');
+      expect(meta?.forecastRule).toContain('data de fim');
+      // Kairogen and AI keep the straight line, with no rule.
+      expect(overview.strips.find((strip) => strip.source === 'ai')?.forecastRule).toBeNull();
+    } finally {
+      for (const campaign of saved) {
+        await db
+          .update(adCampaigns)
+          .set({
+            status: campaign.status,
+            budgetLevel: campaign.budgetLevel,
+            dailyBudgetCents: campaign.dailyBudgetCents,
+            endDate: campaign.endDate,
+          })
+          .where(eq(adCampaigns.id, campaign.id));
+      }
+    }
+  });
+
   it('reads Google as a prepaid balance', async () => {
     const overview = await read<DashboardOverview>('/ads/dashboard/overview', 'overview');
     const google = overview.strips.find((strip) => strip.source === 'google');

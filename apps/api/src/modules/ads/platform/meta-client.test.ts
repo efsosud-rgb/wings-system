@@ -106,6 +106,28 @@ describe('reading the account', () => {
     expect(campaigns[1]).toMatchObject({ status: 'PAUSED', dailyBudgetCents: 3000 });
   });
 
+  it("reads each campaign's schedule as São Paulo days, falling back to when it was created", async () => {
+    const meta = client(() => ({
+      body: {
+        data: [
+          {
+            id: '1',
+            name: '28Set',
+            status: 'ACTIVE',
+            daily_budget: '24000',
+            start_time: '2026-09-28T09:59:32-0300',
+            stop_time: '2026-10-02T23:59:59-0300',
+          },
+          // 01:30 UTC on the 29th is still the 28th in São Paulo.
+          { id: '2', name: 'Sem fim', status: 'ACTIVE', created_time: '2026-09-29T01:30:00+0000' },
+        ],
+      },
+    }));
+    const [dated, open] = await meta.listCampaigns();
+    expect(dated).toMatchObject({ startDate: '2026-09-28', endDate: '2026-10-02' });
+    expect(open).toMatchObject({ startDate: '2026-09-28', endDate: null });
+  });
+
   it('parses daily spend from Insights', async () => {
     const meta = client(() => ({ body: INSIGHTS_RESPONSE }));
     const rows = await meta.getSpend('2026-09-01');

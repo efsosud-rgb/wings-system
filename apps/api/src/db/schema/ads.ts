@@ -229,6 +229,14 @@ export const adCampaigns = pgTable(
      * its cost per click or page view, never by leads it was not built to get.
      */
     objective: text('objective'),
+    /**
+     * The campaign's own schedule as the platform reports it, as São Paulo
+     * days (Meta: start_time/stop_time, falling back to created_time; Google:
+     * start_date/end_date). Null end: runs until someone stops it. Orders the
+     * dashboard and bounds the month's forecast.
+     */
+    startDate: date('start_date'),
+    endDate: date('end_date'),
     lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

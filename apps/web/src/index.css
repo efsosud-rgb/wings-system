@@ -6662,3 +6662,36 @@ button.stage-chip:focus-visible {
   min-width: 16rem;
   max-width: 22rem;
 }
+
+/* Dashboard: "Dados até HH:MM" and "Atualizar agora", above every tab. */
+.dash-freshness {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+}
+
+.dash-freshness-time {
+  font-weight: 600;
+}
+
+.dash-freshness .btn {
+  width: auto;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.dash-order select {
+  padding: 6px 8px;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  color: inherit;
+}
+
+.forecast-rule {
+  display: block;
+  max-width: 28rem;
+  font-weight: 400;
+}

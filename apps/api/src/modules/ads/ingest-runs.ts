@@ -145,12 +145,19 @@ export function reconcileRecordOf(result: ReconcileCycleAccountResult): IngestRu
  * `'full'` (the default) reads the campaigns/metrics/breakdowns cycle — each
  * ignores the other's rows, since the dashboard tells the two apart.
  */
-export async function latestIngestRun(db: Database, options: { kind?: 'full' | 'reconcile' } = {}) {
+export async function latestIngestRun(
+  db: Database,
+  options: { kind?: 'full' | 'reconcile'; status?: 'ok' } = {},
+) {
   const kind = options.kind ?? 'full';
   const [row] = await db
     .select()
     .from(ingestRuns)
-    .where(triggersOf(kind))
+    .where(
+      options.status
+        ? and(triggersOf(kind), eq(ingestRuns.status, options.status))
+        : triggersOf(kind),
+    )
     .orderBy(desc(ingestRuns.startedAt))
     .limit(1);
   return row ?? null;

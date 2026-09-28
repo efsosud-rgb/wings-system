@@ -618,8 +618,12 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       daily_budget?: string;
       lifetime_budget?: string;
       objective?: string;
+      start_time?: string;
+      stop_time?: string;
+      created_time?: string;
     }>(`${this.accountId}/campaigns`, {
-      fields: 'id,name,status,daily_budget,lifetime_budget,objective',
+      fields:
+        'id,name,status,daily_budget,lifetime_budget,objective,start_time,stop_time,created_time',
       limit: '50',
     });
 
@@ -640,6 +644,8 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
         lifetimeBudgetCents: lifetime === 0 ? null : lifetime,
         spendCents: 0,
         objective: campaign.objective ?? null,
+        startDate: saoPauloDay(campaign.start_time ?? campaign.created_time),
+        endDate: saoPauloDay(campaign.stop_time),
       };
     });
   }
@@ -952,4 +958,13 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
   ): Promise<{ status: 'applied' | 'rejected'; message?: string }> {
     throw new MetaWritesDisabledError('setAccountSpendCap');
   }
+}
+
+/** Meta's ISO time ("2026-09-28T09:59:32-0300") as the São Paulo day it falls on; null when absent or unreadable. */
+function saoPauloDay(time: string | undefined): string | null {
+  if (!time) return null;
+  // Meta writes the offset without a colon, which Date.parse accepts only with it.
+  const instant = new Date(time.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
+  if (Number.isNaN(instant.getTime())) return null;
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(instant);
 }

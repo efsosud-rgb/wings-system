@@ -300,6 +300,34 @@ tela de aprovação: nada vai à plataforma daqui. O pedido passa pela aprovaç�
 e pelo clique em Executar como qualquer outro. Campanha feita à mão não tem
 botão: muda-se na plataforma.
 
+### Correções de 28/09/2026: previsto, ordem, Google em Criativos, "dados até"
+
+- **Previsto para o mês (Meta e Google)**: deixou de ser o ritmo passado
+  projetado em linha reta. Agora é o gasto real (o da reconciliação), mais o
+  que falta da verba de hoje, mais a verba diária de cada campanha ativa
+  (a da campanha, ou a soma dos conjuntos ativos no ABO) em cada dia que
+  resta no mês, parando na data de fim da campanha. A regra aparece escrita
+  embaixo do número (`forecastRule`). A sobreentrega da plataforma não entra.
+  Kairogen, IA e provedores continuam em linha reta.
+- **Datas das campanhas** (migração 0040): `ad_campaigns.start_date` e
+  `end_date`, lidas da Meta (`start_time`/`stop_time`, ou `created_time` na
+  falta de início) e do Google (`campaign.start_date`/`end_date` na v22; o
+  2037-12-30 do Google vira "sem fim"). A aba Campanhas vem da mais recente
+  para a mais antiga pelo início, com a opção de inverter ou ordenar por
+  gasto. A campanha Search de 28/09 sumia porque a ordem era por gasto e ela
+  tinha R$ 0 entre mais de 90 campanhas.
+- **Google em Criativos**: `listAds` do Google lê os anúncios responsivos de
+  pesquisa (títulos, descrições, status de aprovação) e `getInsights('ad')`
+  traz o dia de cada anúncio. O formato novo é "Texto (pesquisa)". São duas
+  leituras a mais por ingestão completa: 17 por hora mais 5 por reconciliação,
+  cerca de 890 operações por dia contra o limite de 2.880 do acesso Exploração.
+- **Dados até / Atualizar agora**: o topo de todas as abas diz até quando vão
+  os dados (fim da última ingestão completa que terminou bem) e, para quem tem
+  `ads.reconcile.manual`, oferece "Atualizar agora": a mesma reconciliação
+  manual do Construtor, conta por conta, com a mesma espera mínima do
+  servidor. Atualiza gasto, saldo e status; métricas e criativos chegam na
+  coleta de hora em hora.
+
 ### Dispositivo e dia × hora
 
 `ad_breakdown_kind` ganhou `device` (Meta: `device_platform`; Google:

@@ -26,7 +26,10 @@ export async function ingestionStatus(
   options: { kind?: 'full' | 'reconcile' } = {},
 ): Promise<IngestionStatus> {
   const kind = options.kind ?? 'full';
-  const run = await latestIngestRun(db, { kind });
+  const [run, lastOk] = await Promise.all([
+    latestIngestRun(db, { kind }),
+    latestIngestRun(db, { kind, status: 'ok' }),
+  ]);
   let lastRunAt: Date | null = run?.startedAt ?? null;
   let lastRunStatus: IngestionStatus['lastRunStatus'] = null;
   if (run) {
@@ -69,5 +72,6 @@ export async function ingestionStatus(
     schedule,
     nextRunAt: nextRunAt?.toISOString() ?? null,
     overdue,
+    dataUntil: lastOk?.finishedAt?.toISOString() ?? null,
   };
 }
