@@ -5,7 +5,7 @@ import type { Conversion, CrmMap, NewDeal, RdCrm, RdMarketing } from './rd.js';
  * the right funnel:
  *
  *  - a client brand's landing page (the configurable list) → funnel
- *    "Expansão", stage "Tentando contato", the brand named on the deal;
+ *    "Expansão", stage "Novo Contato", the brand named on the deal;
  *  - the Wings site form (`wings-company-form-site`) → funnel "Formatação",
  *    stage "Sem contato".
  *
@@ -14,6 +14,9 @@ import type { Conversion, CrmMap, NewDeal, RdCrm, RdMarketing } from './rd.js';
  * contact has none open and none made after the conversion. Nothing personal
  * leaves this file except into RD itself; the result is counts.
  */
+
+/** The task each new Expansão deal gets, for its owner, due the day it is created. */
+export const FIRST_CONTACT_TASK = 'Fazer primeiro contato';
 
 export const FORM_SITE_IDENTIFIER = 'wings-company-form-site';
 
@@ -25,7 +28,7 @@ export interface LandingPageRule {
 export type Target = 'expansao' | 'formatacao';
 
 const TARGETS: Record<Target, { pipeline: string; stage: string }> = {
-  expansao: { pipeline: 'Expansão', stage: 'Tentando contato' },
+  expansao: { pipeline: 'Expansão', stage: 'Novo Contato' },
   formatacao: { pipeline: 'Formatação', stage: 'Sem contato' },
 };
 
@@ -63,6 +66,8 @@ export interface IntakeResult {
   existingDeal: number;
   noContactData: number;
   failed: number;
+  /** Expansão deals whose first-contact task RD refused (the deal itself was made). */
+  taskFailed: number;
   /** Deals created that RD read back without a contact or a source. */
   unverified: number;
   /** Would create (dry run) or created, per funnel and brand. */
@@ -160,6 +165,7 @@ export async function runExpansionIntake(input: {
   expansionOwnerId?: string | null;
   since: Date;
   dryRun: boolean;
+  now?: () => Date;
 }): Promise<IntakeResult> {
   const { marketing, crm, ledger, dryRun } = input;
   const brandOf = new Map(input.rules.map((rule) => [rule.identifier, rule.brand]));
@@ -171,6 +177,7 @@ export async function runExpansionIntake(input: {
     existingDeal: 0,
     noContactData: 0,
     failed: 0,
+    taskFailed: 0,
     unverified: 0,
     created: {},
   };
@@ -226,6 +233,18 @@ export async function runExpansionIntake(input: {
         handled.add(uuid);
         result.created[label] = (result.created[label] ?? 0) + 1;
         await ledger.record({ key, target, outcome: 'created', dealId });
+        if (target === 'expansao' && input.expansionOwnerId) {
+          try {
+            await crm.createTask({
+              dealId,
+              userId: input.expansionOwnerId,
+              subject: FIRST_CONTACT_TASK,
+              dueDay: input.now?.() ?? new Date(),
+            });
+          } catch {
+            result.taskFailed += 1;
+          }
+        }
         const back = await crm.checkDeal(dealId).catch(() => null);
         if (!back || !back.hasContact || !back.hasSource) result.unverified += 1;
       } catch {

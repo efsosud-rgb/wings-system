@@ -347,6 +347,34 @@ export class RdCrm {
     return (body.id ?? body._id) as string;
   }
 
+  /** A task on a deal for one user, due at the end of `dueDay` (São Paulo). One attempt. */
+  async createTask(input: {
+    dealId: string;
+    userId: string;
+    subject: string;
+    dueDay: Date;
+  }): Promise<void> {
+    const day = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(
+      input.dueDay,
+    );
+    const response = await this.fetchImpl(this.url('/tasks'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        task: {
+          deal_id: input.dealId,
+          subject: input.subject,
+          type: 'task',
+          date: day,
+          hour: '23:59',
+          user_ids: [input.userId],
+        },
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) throw new Error(`RD CRM POST /tasks answered ${response.status}`);
+  }
+
   /** Reads a deal back: did RD keep its contact and its source? Booleans only. */
   async checkDeal(dealId: string): Promise<{ hasContact: boolean; hasSource: boolean }> {
     const deal = await this.get<{ contacts?: unknown[]; deal_source?: unknown }>(

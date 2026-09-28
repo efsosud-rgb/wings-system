@@ -5,7 +5,7 @@ conversões novas do RD Marketing e cria o negócio que faltar no RD CRM.
 
 | Conversão (`conversion_identifier`) | Funil / etapa |
 | --- | --- |
-| página de marca-cliente da lista (Integrações → Entrada de leads de Expansão) | Expansão / "Tentando contato", marca em "Nome da Marca" |
+| página de marca-cliente da lista (Integrações → Entrada de leads de Expansão) | Expansão / "Novo Contato", marca em "Nome da Marca", dono e tarefa "Fazer primeiro contato" (vence no dia) |
 | `wings-company-form-site` | Formatação / "Sem contato" |
 | qualquer outra | nada (contada como ignorada) |
 
