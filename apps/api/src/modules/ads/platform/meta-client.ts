@@ -621,6 +621,7 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       id: string;
       name: string;
       status: string;
+      effective_status?: string;
       daily_budget?: string;
       lifetime_budget?: string;
       objective?: string;
@@ -629,7 +630,7 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       created_time?: string;
     }>(`${this.accountId}/campaigns`, {
       fields:
-        'id,name,status,daily_budget,lifetime_budget,objective,start_time,stop_time,created_time',
+        'id,name,status,effective_status,daily_budget,lifetime_budget,objective,start_time,stop_time,created_time',
       limit: '50',
     });
 
@@ -652,6 +653,7 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
         objective: campaign.objective ?? null,
         startDate: saoPauloDay(campaign.start_time ?? campaign.created_time),
         endDate: saoPauloDay(campaign.stop_time),
+        deliveryStatus: campaign.effective_status ?? null,
       };
     });
   }
@@ -982,9 +984,17 @@ function saoPauloDay(time: string | undefined): string | null {
  * day is stored as starts and total milliseconds watched (average × starts),
  * never as an average that would be averaged again.
  */
-function watchTimeOf(starts: unknown, averageSeconds: unknown): { starts: number; watchMs: number } {
+function watchTimeOf(
+  starts: unknown,
+  averageSeconds: unknown,
+): { starts: number; watchMs: number } {
   const count = sumActionValues(starts);
-  const first = Array.isArray(averageSeconds) ? (averageSeconds[0] as { value?: unknown } | undefined) : undefined;
+  const first = Array.isArray(averageSeconds)
+    ? (averageSeconds[0] as { value?: unknown } | undefined)
+    : undefined;
   const seconds = Number(first?.value ?? 0);
-  return { starts: count, watchMs: Number.isFinite(seconds) ? Math.round(seconds * 1000 * count) : 0 };
+  return {
+    starts: count,
+    watchMs: Number.isFinite(seconds) ? Math.round(seconds * 1000 * count) : 0,
+  };
 }

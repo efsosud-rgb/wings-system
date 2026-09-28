@@ -8,6 +8,7 @@ import {
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { writeAudit } from '../../../lib/audit.js';
+import { cockpit } from './cockpit.js';
 import { funnel, site } from './funnel.js';
 import { activeAccounts, audience, campaigns, creatives, overview, platforms } from './queries.js';
 import {
@@ -64,6 +65,12 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
     const days = windowOrReject(request, reply);
     if (days === null) return;
     return reply.send({ campaigns: await campaigns(db, days, now()) });
+  });
+
+  app.get('/ads/dashboard/cockpit', guard, async (request, reply) => {
+    const days = windowOrReject(request, reply);
+    if (days === null) return;
+    return reply.send({ cockpit: await cockpit(db, env, days, now()) });
   });
 
   app.get('/ads/dashboard/site', guard, async (request, reply) => {

@@ -20,6 +20,8 @@ export interface FakeGoogleCampaign {
   /** YYYY-MM-DD, as `campaign.start_date`/`end_date` come back on v22. */
   startDate?: string;
   endDate?: string;
+  /** campaign.serving_status; SERVING for an enabled campaign when omitted. */
+  servingStatus?: string;
 }
 
 /** What a create left under a campaign, as the fake keeps it. */
@@ -96,7 +98,14 @@ export interface FakeGoogleApiOptions {
   /** Ads already in the account (not made by a create here), with the campaign they sit under. */
   existingAds?: (FakeGoogleAd & { campaignId: string; approvalStatus?: string })[];
   /** One day of one ad, for the ad-level report. */
-  adMetrics?: { adId: string; date: string; costMicros: string; impressions: number; clicks: number; conversions?: number }[];
+  adMetrics?: {
+    adId: string;
+    date: string;
+    costMicros: string;
+    impressions: number;
+    clicks: number;
+    conversions?: number;
+  }[];
   /**
    * Fields this "API version" does not know: a query naming one is refused
    * the way v22 refused `metrics.video_views` on the first real run.
@@ -169,6 +178,7 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
       id: campaign.id,
       name: campaign.name,
       status: campaign.status,
+      servingStatus: campaign.servingStatus ?? (campaign.status === 'ENABLED' ? 'SERVING' : 'NONE'),
       ...(campaign.startDate ? { startDate: campaign.startDate } : {}),
       ...(campaign.endDate ? { endDate: campaign.endDate } : {}),
     },
@@ -413,8 +423,7 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
           const target = campaigns.find(
             (campaign) =>
               (campaign.budgetResourceName ??
-                `customers/${customerId}/campaignBudgets/b${campaign.id}`) ===
-              update.resourceName,
+                `customers/${customerId}/campaignBudgets/b${campaign.id}`) === update.resourceName,
           );
           if (target) target.amountMicros = String(update.amountMicros);
           responses.push({ campaignBudgetResult: { resourceName: String(update.resourceName) } });
@@ -440,8 +449,11 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
             campaignResult: { resourceName: state.mutate === 'ok_without_id' ? '' : resourceName },
           });
         } else if (update) {
-          const target = campaigns.find((campaign) => campaign.id === lastSegment(String(update.resourceName)));
-          if (target && update.status) target.status = update.status as FakeGoogleCampaign['status'];
+          const target = campaigns.find(
+            (campaign) => campaign.id === lastSegment(String(update.resourceName)),
+          );
+          if (target && update.status)
+            target.status = update.status as FakeGoogleCampaign['status'];
           responses.push({ campaignResult: { resourceName: String(update.resourceName) } });
         }
       } else if (op.campaignCriterionOperation) {
@@ -471,7 +483,9 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
           });
           responses.push({ adGroupResult: { resourceName } });
         } else if (update) {
-          const target = adGroups.find((group) => group.id === lastSegment(String(update.resourceName)));
+          const target = adGroups.find(
+            (group) => group.id === lastSegment(String(update.resourceName)),
+          );
           if (target && update.status) target.status = String(update.status);
           responses.push({ adGroupResult: { resourceName: String(update.resourceName) } });
         }
@@ -493,7 +507,10 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
           const id = `${groupId}~${nextId++}`;
           const ad = (create.ad ?? {}) as {
             finalUrls?: string[];
-            responsiveSearchAd?: { headlines?: { text: string }[]; descriptions?: { text: string }[] };
+            responsiveSearchAd?: {
+              headlines?: { text: string }[];
+              descriptions?: { text: string }[];
+            };
           };
           ads.push({
             id,

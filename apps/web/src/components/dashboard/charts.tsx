@@ -224,6 +224,8 @@ export function DailyLines({
               />
               <path
                 d={path}
+                className="viz-line"
+                pathLength={1}
                 fill="none"
                 stroke={line.color}
                 strokeWidth={2}

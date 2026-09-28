@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import {
   useDashboardAudience,
   useDashboardCampaigns,
+  useDashboardCockpit,
   useDashboardCreatives,
   useDashboardFunnel,
   useDashboardSite,
@@ -11,6 +12,7 @@ import {
 } from '../api/dashboard.js';
 import { AudienceTab } from '../components/dashboard/AudienceTab.js';
 import { CampaignsTab } from '../components/dashboard/CampaignsTab.js';
+import { CockpitTab } from '../components/dashboard/CockpitTab.js';
 import { CreativesTab } from '../components/dashboard/CreativesTab.js';
 import { FunnelTab } from '../components/dashboard/FunnelTab.js';
 import { SiteTab } from '../components/dashboard/SiteTab.js';
@@ -37,6 +39,7 @@ import { Alert, Button } from '../components/ui.js';
  */
 
 const TABS = [
+  { key: 'cockpit', label: 'Cockpit', windowed: true },
   { key: 'visao-geral', label: 'Visão geral', windowed: false },
   { key: 'plataformas', label: 'Por plataforma', windowed: true },
   { key: 'campanhas', label: 'Campanhas', windowed: true },
@@ -58,8 +61,17 @@ function isWindow(value: number): value is DashboardWindow {
   return DASHBOARD_WINDOWS.includes(value as DashboardWindow);
 }
 
-function Loading({ query, children }: { query: { isLoading: boolean; isError: boolean }; children: React.ReactNode }) {
-  if (query.isError) return <Alert kind="error">Não foi possível carregar esta aba. Tente de novo em instantes.</Alert>;
+function Loading({
+  query,
+  children,
+}: {
+  query: { isLoading: boolean; isError: boolean };
+  children: React.ReactNode;
+}) {
+  if (query.isError)
+    return (
+      <Alert kind="error">Não foi possível carregar esta aba. Tente de novo em instantes.</Alert>
+    );
   if (query.isLoading) return <p className="muted">Carregando…</p>;
   return <>{children}</>;
 }
@@ -95,6 +107,7 @@ export function MarketingDashboardPage() {
   const creatives = useDashboardCreatives(days);
   const audience = useDashboardAudience(days);
   const siteTraffic = useDashboardSite(days);
+  const cockpitData = useDashboardCockpit(days);
   const funnel = useDashboardFunnel(days);
 
   const setParam = (key: string, value: string) => {
@@ -112,9 +125,13 @@ export function MarketingDashboardPage() {
         <div>
           <h1>Dashboard de marketing</h1>
           <p>
-            Gastos, saldos e desempenho lidos das plataformas pela ingestão. Nada aqui altera uma conta.
+            Gastos, saldos e desempenho lidos das plataformas pela ingestão. Nada aqui altera uma
+            conta.
             {ingestion && (
-              <span className="dash-ingestion"> {jobLine('Última ingestão', ingestion, 'ADS_INGEST_CRON')}</span>
+              <span className="dash-ingestion">
+                {' '}
+                {jobLine('Última ingestão', ingestion, 'ADS_INGEST_CRON')}
+              </span>
             )}
           </p>
           {reconciliation && (
@@ -143,8 +160,8 @@ export function MarketingDashboardPage() {
 
       {ingestion?.overdue && (
         <Alert kind="warning">
-          A ingestão agendada não rodou desde {formatDateTime(ingestion.lastRunAt)}: confira a tarefa
-          agendada no Coolify. Os números desta tela param nessa data.
+          A ingestão agendada não rodou desde {formatDateTime(ingestion.lastRunAt)}: confira a
+          tarefa agendada no Coolify. Os números desta tela param nessa data.
         </Alert>
       )}
       {reconciliation?.overdue && (
@@ -169,23 +186,40 @@ export function MarketingDashboardPage() {
         ))}
       </nav>
 
+      {tab === 'cockpit' && (
+        <Loading query={cockpitData}>
+          {cockpitData.data && <CockpitTab data={cockpitData.data.cockpit} />}
+        </Loading>
+      )}
       {tab === 'visao-geral' && (
-        <Loading query={overview}>{overview.data && <OverviewTab overview={overview.data.overview} />}</Loading>
+        <Loading query={overview}>
+          {overview.data && <OverviewTab overview={overview.data.overview} />}
+        </Loading>
       )}
       {tab === 'plataformas' && (
-        <Loading query={platforms}>{platforms.data && <PlatformsTab data={platforms.data.platforms} />}</Loading>
+        <Loading query={platforms}>
+          {platforms.data && <PlatformsTab data={platforms.data.platforms} />}
+        </Loading>
       )}
       {tab === 'campanhas' && (
-        <Loading query={campaigns}>{campaigns.data && <CampaignsTab data={campaigns.data.campaigns} />}</Loading>
+        <Loading query={campaigns}>
+          {campaigns.data && <CampaignsTab data={campaigns.data.campaigns} />}
+        </Loading>
       )}
       {tab === 'criativos' && (
-        <Loading query={creatives}>{creatives.data && <CreativesTab data={creatives.data.creatives} />}</Loading>
+        <Loading query={creatives}>
+          {creatives.data && <CreativesTab data={creatives.data.creatives} />}
+        </Loading>
       )}
       {tab === 'publico' && (
-        <Loading query={audience}>{audience.data && <AudienceTab data={audience.data.audience} />}</Loading>
+        <Loading query={audience}>
+          {audience.data && <AudienceTab data={audience.data.audience} />}
+        </Loading>
       )}
       {tab === 'site' && (
-        <Loading query={siteTraffic}>{siteTraffic.data && <SiteTab data={siteTraffic.data.site} />}</Loading>
+        <Loading query={siteTraffic}>
+          {siteTraffic.data && <SiteTab data={siteTraffic.data.site} />}
+        </Loading>
       )}
       {tab === 'funil' && (
         <Loading query={funnel}>{funnel.data && <FunnelTab data={funnel.data.funnel} />}</Loading>

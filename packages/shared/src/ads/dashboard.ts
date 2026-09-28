@@ -662,3 +662,194 @@ export interface DashboardFunnel {
   /** Deals in the window whose RD labels name no paid platform (organic, referral, "Tráfego pago" without a platform…). */
   crmUnattributed: number;
 }
+
+// ---------------------------------------------------------------------------
+// Cockpit: the executive view, one screen
+// ---------------------------------------------------------------------------
+
+/** Brazil's states, for the map. `row` and `col` place each one on a tile grid that keeps the country's shape. */
+export const BRAZIL_STATE_TILES: { uf: string; name: string; row: number; col: number }[] = [
+  { uf: 'RR', name: 'Roraima', row: 0, col: 2 },
+  { uf: 'AP', name: 'Amapá', row: 0, col: 4 },
+  { uf: 'AM', name: 'Amazonas', row: 1, col: 1 },
+  { uf: 'PA', name: 'Pará', row: 1, col: 3 },
+  { uf: 'MA', name: 'Maranhão', row: 1, col: 5 },
+  { uf: 'CE', name: 'Ceará', row: 1, col: 6 },
+  { uf: 'RN', name: 'Rio Grande do Norte', row: 1, col: 7 },
+  { uf: 'AC', name: 'Acre', row: 2, col: 0 },
+  { uf: 'RO', name: 'Rondônia', row: 2, col: 1 },
+  { uf: 'TO', name: 'Tocantins', row: 2, col: 4 },
+  { uf: 'PI', name: 'Piauí', row: 2, col: 5 },
+  { uf: 'PB', name: 'Paraíba', row: 2, col: 7 },
+  { uf: 'PE', name: 'Pernambuco', row: 2, col: 6 },
+  { uf: 'MT', name: 'Mato Grosso', row: 3, col: 2 },
+  { uf: 'BA', name: 'Bahia', row: 3, col: 5 },
+  { uf: 'AL', name: 'Alagoas', row: 3, col: 7 },
+  { uf: 'SE', name: 'Sergipe', row: 3, col: 6 },
+  { uf: 'GO', name: 'Goiás', row: 4, col: 3 },
+  { uf: 'DF', name: 'Distrito Federal', row: 4, col: 4 },
+  { uf: 'MG', name: 'Minas Gerais', row: 4, col: 5 },
+  { uf: 'ES', name: 'Espírito Santo', row: 4, col: 6 },
+  { uf: 'MS', name: 'Mato Grosso do Sul', row: 5, col: 2 },
+  { uf: 'SP', name: 'São Paulo', row: 5, col: 4 },
+  { uf: 'RJ', name: 'Rio de Janeiro', row: 5, col: 5 },
+  { uf: 'PR', name: 'Paraná', row: 6, col: 3 },
+  { uf: 'SC', name: 'Santa Catarina', row: 7, col: 3 },
+  { uf: 'RS', name: 'Rio Grande do Sul', row: 8, col: 3 },
+];
+
+const foldName = (value: string) =>
+  value
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/^state of /, '')
+    .replace(/\s*\((state|estado)\)\s*$/, '')
+    .replace(/^estado d[eo] /, '')
+    .trim();
+
+/** "Rio de Janeiro (state)" (Meta), "State of Rio de Janeiro" (Google) → "RJ"; null when not a Brazilian state. */
+export function ufOfRegion(name: string): string | null {
+  const folded = foldName(name);
+  if (folded === 'federal district' || folded === 'distrito federal') return 'DF';
+  return BRAZIL_STATE_TILES.find((state) => foldName(state.name) === folded)?.uf ?? null;
+}
+
+/**
+ * The Cockpit's one rule for "active": what is really delivering. Meta counts
+ * when its effective_status is ACTIVE; Google when the campaign is ENABLED
+ * and serving_status is SERVING. A campaign whose end date has passed never
+ * counts. Until the ingestion has read the delivery status (null), the status
+ * a person set stands in for it.
+ */
+export function campaignDelivering(
+  campaign: {
+    platform: AdPlatform;
+    status: string;
+    deliveryStatus: string | null;
+    endDate: string | null;
+  },
+  today: string,
+): boolean {
+  if (campaign.endDate && campaign.endDate < today) return false;
+  if (campaign.platform === 'google') {
+    return campaign.status === 'ACTIVE' && (campaign.deliveryStatus ?? 'SERVING') === 'SERVING';
+  }
+  return (campaign.deliveryStatus ?? campaign.status) === 'ACTIVE';
+}
+
+/** Google approval states an ad serves under; anything else is a warning. */
+const GOOGLE_SERVING_APPROVALS = new Set(['APPROVED', 'APPROVED_LIMITED', 'AREA_OF_INTEREST_ONLY']);
+
+/**
+ * Whether an ad inside an active campaign delivers. Null when it does; the
+ * reason a person set it on and it still does not serve, otherwise. An ad a
+ * person paused is neither: it is simply off, and returns 'off'.
+ */
+export function adDeliveryIssue(ad: {
+  platform: AdPlatform;
+  status: string;
+  effectiveStatus: string | null;
+}): null | 'off' | string {
+  if (ad.status !== 'ACTIVE') return 'off';
+  if (ad.platform === 'google') {
+    return ad.effectiveStatus === null || GOOGLE_SERVING_APPROVALS.has(ad.effectiveStatus)
+      ? null
+      : ad.effectiveStatus;
+  }
+  const effective = ad.effectiveStatus ?? 'ACTIVE';
+  if (effective === 'ACTIVE') return null;
+  // Paused above it (ad set or campaign): off, not a problem with the ad.
+  if (effective.endsWith('_PAUSED') || effective === 'PAUSED') return 'off';
+  return effective;
+}
+
+/** Portuguese for the delivery issues a person can act on. */
+export const AD_ISSUE_LABEL: Record<string, string> = {
+  IN_PROCESS: 'Em processamento',
+  PENDING_REVIEW: 'Em análise',
+  UNDER_REVIEW: 'Em análise',
+  DISAPPROVED: 'Reprovado',
+  WITH_ISSUES: 'Com problemas',
+  PENDING_BILLING_INFO: 'Pagamento pendente',
+  AREA_OF_INTEREST_ONLY: 'Aprovado só na área de interesse',
+};
+
+export interface CockpitCampaign {
+  platform: AdPlatform;
+  externalId: string;
+  name: string;
+  deliveryStatus: string | null;
+  endDate: string | null;
+}
+
+/** An ad that a person switched on inside an active campaign and that is not serving. */
+export interface CockpitAdWarning {
+  platform: AdPlatform;
+  adExternalId: string;
+  adName: string;
+  campaignName: string;
+  /** The platform's own word: IN_PROCESS, PENDING_REVIEW, DISAPPROVED… */
+  issue: string;
+}
+
+export interface CockpitFigures {
+  spendCents: number;
+  impressions: number;
+  clicks: number;
+  /** Leads the platforms report. */
+  leads: number;
+  /** GA4 sessions; null while GA4 is not connected. */
+  sessions: number | null;
+  /** RD CRM deals from a paid platform, meetings and sales. */
+  crmLeads: number;
+  meetings: number;
+  sales: number;
+}
+
+export interface CockpitDay {
+  day: string;
+  /** The same position in the previous window. */
+  previousDay: string;
+  spendCents: number;
+  previousSpendCents: number;
+  leads: number;
+  previousLeads: number;
+  clicks: number;
+  previousClicks: number;
+}
+
+export interface CockpitRegion {
+  uf: string;
+  spendCents: number;
+  leads: number;
+  impressions: number;
+}
+
+export interface CockpitAlert {
+  id: string;
+  severity: 'info' | 'warning' | 'critical';
+  title: string;
+  firstSeenAt: string;
+  platform: AdPlatform;
+}
+
+export interface DashboardCockpit {
+  days: DashboardWindow;
+  since: string;
+  until: string;
+  previousSince: string;
+  previousUntil: string;
+  current: CockpitFigures;
+  previous: CockpitFigures;
+  daily: CockpitDay[];
+  regions: CockpitRegion[];
+  /** Spend on regions that are not a Brazilian state (unknown, abroad). */
+  otherRegionsSpendCents: number;
+  creatives: CreativePerformance[];
+  alerts: CockpitAlert[];
+  /** The campaigns every figure above is summed over: only those delivering. */
+  activeCampaigns: CockpitCampaign[];
+  /** Ads switched on in those campaigns that are not serving; outside every figure. */
+  adWarnings: CockpitAdWarning[];
+}

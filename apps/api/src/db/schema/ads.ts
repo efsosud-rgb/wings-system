@@ -237,6 +237,13 @@ export const adCampaigns = pgTable(
      */
     startDate: date('start_date'),
     endDate: date('end_date'),
+    /**
+     * Whether the platform is delivering it: Meta's effective_status, Google's
+     * serving_status. `status` is what a person set; this is what happens.
+     * The Cockpit counts a campaign only when it is ACTIVE (Meta) or ENABLED
+     * and SERVING (Google). Null until the next ingestion reads it.
+     */
+    deliveryStatus: text('delivery_status'),
     lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

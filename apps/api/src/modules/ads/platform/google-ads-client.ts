@@ -50,7 +50,14 @@ import type {
  */
 
 interface CampaignRow {
-  campaign?: { id?: string; name?: string; status?: string; startDate?: string; endDate?: string };
+  campaign?: {
+    id?: string;
+    name?: string;
+    status?: string;
+    servingStatus?: string;
+    startDate?: string;
+    endDate?: string;
+  };
   campaignBudget?: {
     resourceName?: string;
     amountMicros?: string;
@@ -242,7 +249,7 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
 
   private async campaignRows(where: string): Promise<CampaignRow[]> {
     return this.reader.search<CampaignRow>(`
-      SELECT campaign.id, campaign.name, campaign.status,
+      SELECT campaign.id, campaign.name, campaign.status, campaign.serving_status,
              campaign.start_date, campaign.end_date,
              campaign_budget.resource_name, campaign_budget.amount_micros,
              campaign_budget.total_amount_micros, campaign_budget.period,
@@ -296,7 +303,9 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
       spendCents: spend.get(id) ?? 0,
       startDate: row.campaign?.startDate ?? null,
       // Google writes "no end" as its far-future sentinel (2037-12-30).
-      endDate: row.campaign?.endDate && row.campaign.endDate < '2037-01-01' ? row.campaign.endDate : null,
+      endDate:
+        row.campaign?.endDate && row.campaign.endDate < '2037-01-01' ? row.campaign.endDate : null,
+      deliveryStatus: row.campaign?.servingStatus ?? null,
     };
   }
 
@@ -354,7 +363,9 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
       if (!ad?.id || !campaignId) return [];
       const rsa = ad.responsiveSearchAd;
       const headlines = (rsa?.headlines ?? []).map((asset) => asset.text ?? '').filter(Boolean);
-      const descriptions = (rsa?.descriptions ?? []).map((asset) => asset.text ?? '').filter(Boolean);
+      const descriptions = (rsa?.descriptions ?? [])
+        .map((asset) => asset.text ?? '')
+        .filter(Boolean);
       const approval = row.adGroupAd?.policySummary?.approvalStatus ?? null;
       const title = headlines.slice(0, 3).join(' | ') || null;
       return [
@@ -490,7 +501,12 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
     const rows = await this.reader.search<{
       adGroupAd?: { ad?: { id?: string } };
       segments?: { date?: string };
-      metrics?: { costMicros?: string; impressions?: string; clicks?: string; conversions?: number };
+      metrics?: {
+        costMicros?: string;
+        impressions?: string;
+        clicks?: string;
+        conversions?: number;
+      };
     }>(`
       SELECT ad_group_ad.ad.id, segments.date, metrics.cost_micros, metrics.impressions,
              metrics.clicks, metrics.conversions
@@ -796,7 +812,10 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
     return this.notSupported('Pausar campanha');
   }
 
-  async resumeCampaign(_campaignId: string, _enableWith?: ResumeCompanions): Promise<MutationOutcome> {
+  async resumeCampaign(
+    _campaignId: string,
+    _enableWith?: ResumeCompanions,
+  ): Promise<MutationOutcome> {
     return this.notSupported('Reativar campanha');
   }
 
@@ -875,7 +894,9 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
       case 'pause_campaign':
         return {
           ok: true,
-          operations: [statusUpdate('campaignOperation', this.campaignName(write.campaignId), 'PAUSED')],
+          operations: [
+            statusUpdate('campaignOperation', this.campaignName(write.campaignId), 'PAUSED'),
+          ],
           labels: [{ kind: 'campaign', label: 'Campanha pausada' }],
           detail: {},
         };
@@ -894,12 +915,14 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
           ],
           labels: [
             { kind: 'campaign', label: 'Campanha ativada' },
-            ...companions.adGroupIds.map(
-              (id): PlanLabel => ({ kind: 'ad_group', label: `Grupo ${id} ativado` }),
-            ),
-            ...companions.adIds.map(
-              (id): PlanLabel => ({ kind: 'ad', label: `Anúncio ${id} ativado` }),
-            ),
+            ...companions.adGroupIds.map((id): PlanLabel => ({
+              kind: 'ad_group',
+              label: `Grupo ${id} ativado`,
+            })),
+            ...companions.adIds.map((id): PlanLabel => ({
+              kind: 'ad',
+              label: `Anúncio ${id} ativado`,
+            })),
           ],
           detail: { enabled: companions },
         };
@@ -929,7 +952,11 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
         message: 'Campanha não encontrada no Google, ou sem orçamento próprio.',
       };
     }
-    return { ok: true, resourceName, explicitlyShared: row.campaignBudget?.explicitlyShared ?? false };
+    return {
+      ok: true,
+      resourceName,
+      explicitlyShared: row.campaignBudget?.explicitlyShared ?? false,
+    };
   }
 
   /**
@@ -1188,10 +1215,7 @@ export class GoogleAdsWriteClient extends GoogleAdsPlatformClient {
     };
   }
 
-  private async applyToCampaign(
-    campaignId: string,
-    write: PlannedWrite,
-  ): Promise<MutationOutcome> {
+  private async applyToCampaign(campaignId: string, write: PlannedWrite): Promise<MutationOutcome> {
     const plan = await this.plan(write);
     if (!plan.ok) return { status: 'rejected', code: plan.code, message: plan.message };
     const sent = await this.mutate(plan.operations, { validateOnly: false });
@@ -1215,22 +1239,34 @@ export class GoogleAdsWriteClient extends GoogleAdsPlatformClient {
       const rows = await this.reader.search<{ adGroup?: { id?: string; status?: string } }>(
         `SELECT ad_group.id, ad_group.status FROM ad_group WHERE ad_group.id IN (${adGroupIds.join(', ')})`,
       );
-      for (const row of rows) if (row.adGroup?.id) statuses[`adGroup:${row.adGroup.id}`] = row.adGroup.status ?? '?';
+      for (const row of rows)
+        if (row.adGroup?.id) statuses[`adGroup:${row.adGroup.id}`] = row.adGroup.status ?? '?';
     }
     const adIds = companions.adIds
       .map((id) => id.split('~')[1] ?? '')
       .filter((id) => /^\d+$/.test(id));
     if (adIds.length > 0) {
-      const rows = await this.reader.search<{ adGroupAd?: { status?: string; ad?: { id?: string } } }>(
+      const rows = await this.reader.search<{
+        adGroupAd?: { status?: string; ad?: { id?: string } };
+      }>(
         `SELECT ad_group_ad.status, ad_group_ad.ad.id FROM ad_group_ad WHERE ad_group_ad.ad.id IN (${adIds.join(', ')})`,
       );
-      for (const row of rows) if (row.adGroupAd?.ad?.id) statuses[`ad:${row.adGroupAd.ad.id}`] = row.adGroupAd.status ?? '?';
+      for (const row of rows)
+        if (row.adGroupAd?.ad?.id)
+          statuses[`ad:${row.adGroupAd.ad.id}`] = row.adGroupAd.status ?? '?';
     }
     return statuses;
   }
 
-  override async setDailyBudget(campaignId: string, dailyBudgetCents: Cents): Promise<MutationOutcome> {
-    return this.applyToCampaign(campaignId, { kind: 'set_daily_budget', campaignId, dailyBudgetCents });
+  override async setDailyBudget(
+    campaignId: string,
+    dailyBudgetCents: Cents,
+  ): Promise<MutationOutcome> {
+    return this.applyToCampaign(campaignId, {
+      kind: 'set_daily_budget',
+      campaignId,
+      dailyBudgetCents,
+    });
   }
 
   override async pauseCampaign(campaignId: string): Promise<MutationOutcome> {
@@ -1453,10 +1489,7 @@ function idOf(resourceName: string | undefined): string | null {
  * the objects worth a step (ad group, keywords, negatives, ad) are listed:
  * the campaign has its own step and criteria are evidence in `detail`.
  */
-function createdObjects(
-  labels: PlanLabel[],
-  results: MutateOperationResponse[],
-): CreatedObject[] {
+function createdObjects(labels: PlanLabel[], results: MutateOperationResponse[]): CreatedObject[] {
   const created: CreatedObject[] = [];
   labels.forEach((label, index) => {
     const result = results[index];
@@ -1508,7 +1541,9 @@ export function googleFailure(body: string): { code?: string; message?: string }
     const lines = errors.slice(0, 3).map((error) => {
       const path = (error.location?.fieldPathElements ?? [])
         .map((element) =>
-          element.index === undefined ? element.fieldName : `${element.fieldName}[${element.index}]`,
+          element.index === undefined
+            ? element.fieldName
+            : `${element.fieldName}[${element.index}]`,
         )
         .join('.');
       return path ? `${path}: ${error.message ?? ''}` : (error.message ?? '');
