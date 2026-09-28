@@ -5,7 +5,12 @@
   "idealCustomerProfile": "Empresário com negócio validado, dono da marca, que quer crescer por meio de franquias e procura quem formate a empresa para virar franqueadora.",
   "reach": {
     "states": [
-      "SP"
+      "SP",
+      "RJ",
+      "MG",
+      "ES",
+      "PR",
+      "SC"
     ],
     "cities": [],
     "customLocations": []
@@ -50,7 +55,12 @@
       "\"formatação de franquias rio de janeiro\"",
       "\"como formatar uma franquia\"",
       "\"transformar minha empresa em franquia\"",
-      "\"como franquear\""
+      "\"como franquear\"",
+      "\"franquear\"",
+      "\"formatação franquia\"",
+      "\"consultoria franchising\"",
+      "\"abrir franqueadora\"",
+      "\"montar franquia da minha empresa\""
     ],
     "negativeKeywords": [
       "emprego",
