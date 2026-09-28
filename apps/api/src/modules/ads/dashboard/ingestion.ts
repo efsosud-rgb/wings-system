@@ -4,7 +4,7 @@ import type { Database } from '../../../db/client.js';
 import { adMetricsDaily } from '../../../db/schema/index.js';
 import type { Env } from '../../../env.js';
 import { nextCronRun, previousCronRun } from '../../../lib/cron.js';
-import { latestIngestRun, type IngestRunAccount } from '../ingest-runs.js';
+import { ABANDONED_AFTER_MS, latestIngestRun, type IngestRunAccount } from '../ingest-runs.js';
 import { SAO_PAULO } from './window.js';
 
 /**
@@ -30,7 +30,13 @@ export async function ingestionStatus(
   let lastRunAt: Date | null = run?.startedAt ?? null;
   let lastRunStatus: IngestionStatus['lastRunStatus'] = null;
   if (run) {
-    lastRunStatus = run.status === 'ok' ? 'ok' : run.status === 'failed' ? 'failed' : 'running';
+    // A `running` row past the abandon window belongs to a dead process (the
+    // next run retires it); until then it must not read "em andamento".
+    const abandoned =
+      run.status === 'running' &&
+      now.getTime() - run.startedAt.getTime() > ABANDONED_AFTER_MS[kind];
+    lastRunStatus =
+      run.status === 'ok' ? 'ok' : run.status === 'failed' || abandoned ? 'failed' : 'running';
   } else if (accountIds.length > 0 && kind === 'full') {
     // Before the first run recorded itself, the newest metrics row is the best witness.
     // The fast cycle touches no metrics table, so it has no such witness — it
