@@ -418,8 +418,10 @@ export const UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_conten
 export type UtmKey = (typeof UTM_KEYS)[number];
 export type UtmParams = Record<UtmKey, string>;
 
+// Meta is `cpc`, not `paid_social`: RD Station files `paid_social` under
+// "Desconhecido" and `cpc` under "Busca Paga | Facebook Ads" (2026-09-28).
 const UTM_MEDIUM: Record<PaidPlatformKey, string> = {
-  meta: 'paid_social',
+  meta: 'cpc',
   google_search: 'cpc',
   tiktok: 'paid_social',
   youtube: 'paid_video',
@@ -431,8 +433,9 @@ const UTM_MEDIUM: Record<PaidPlatformKey, string> = {
   reddit_ads: 'paid_social',
 };
 
+// `facebook` with `cpc` is what RD Station reads as "Busca Paga | Facebook Ads".
 const UTM_SOURCE: Record<PaidPlatformKey, string> = {
-  meta: 'meta',
+  meta: 'facebook',
   google_search: 'google',
   tiktok: 'tiktok',
   youtube: 'youtube',
