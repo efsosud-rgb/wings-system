@@ -38,6 +38,21 @@ vi.mock('../api/dashboard.js', () => ({
   useDashboardCreatives: () => ok({ creatives: data.creatives }),
   useDashboardAudience: () => ok({ audience: data.audience }),
 }));
+const requests = { canRequest: true, filed: vi.fn() };
+vi.mock('../api/auth.js', () => ({
+  useSession: () => ({ data: {} }),
+  hasPermission: (_user: unknown, key: string) =>
+    key === 'ads.request' ? requests.canRequest : true,
+}));
+vi.mock('../api/ads.js', () => ({
+  useRequestCampaignChange: () => ({
+    mutate: requests.filed,
+    isPending: false,
+    isError: false,
+    isSuccess: false,
+    error: null,
+  }),
+}));
 // The other tabs have their own tests; here they only need to mount.
 vi.mock('../components/dashboard/InsightsTab.js', () => ({ InsightsTab: () => <p>insights</p> }));
 vi.mock('../components/dashboard/OwnedChannelsTab.js', () => ({
@@ -238,6 +253,11 @@ function buildCampaigns(): DashboardCampaigns {
         externalId: 'c1',
         platform: 'meta',
         accountName: 'Fly High',
+        accountExternalId: 'act_694058302567457',
+        systemCreated: true,
+        startDate: '2026-09-28',
+        endDate: '2026-10-02',
+        targetCplCents: 4500,
         name: 'LEAD | FORMS',
         status: 'ACTIVE',
         objective: 'OUTCOME_LEADS',
@@ -575,6 +595,48 @@ describe('campaigns', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Abrir anúncios de Conjunto SP' }));
     expect(screen.getByText('Reels 15s')).toBeTruthy();
     expect(screen.getByText('Vídeo')).toBeTruthy();
+  });
+
+  it('shows platform, period and the CPL target, and files a pause as a request, never directly', () => {
+    requests.canRequest = true;
+    renderAt('/dashboard/marketing?aba=campanhas');
+    const row = screen.getByText('LEAD | FORMS').closest('tr')!;
+    expect(text(row)).toContain('Meta');
+    expect(text(row)).toContain('28/09 – 02/10');
+    expect(text(row)).toContain('meta de CPL R$ 45,00');
+    expect(text(row)).toContain('criada pelo sistema');
+    // Running, budget in the ad sets: only Pausar applies.
+    expect(within(row).queryByRole('button', { name: 'Retomar' })).toBeNull();
+    expect(within(row).queryByRole('button', { name: 'Mudar verba diária' })).toBeNull();
+    fireEvent.click(within(row).getByRole('button', { name: 'Pausar' }));
+    fireEvent.click(within(row).getByRole('button', { name: 'Pedir aprovação' }));
+    expect(requests.filed).not.toHaveBeenCalled();
+    expect(text(row)).toContain('Escreva o motivo do pedido.');
+    fireEvent.change(within(row).getByLabelText(/^Motivo/), {
+      target: { value: 'CPL acima da meta há 5 dias' },
+    });
+    fireEvent.click(within(row).getByRole('button', { name: 'Pedir aprovação' }));
+    expect(requests.filed).toHaveBeenCalledWith({
+      accountExternalId: 'act_694058302567457',
+      campaignExternalId: 'c1',
+      kind: 'pause_campaign',
+      reason: 'CPL acima da meta há 5 dias',
+    });
+  });
+
+  it('offers no request buttons without the permission, or on a campaign made by hand', () => {
+    requests.canRequest = false;
+    renderAt('/dashboard/marketing?aba=campanhas');
+    expect(screen.queryByRole('button', { name: 'Pausar' })).toBeNull();
+    cleanup();
+    requests.canRequest = true;
+    data.campaigns = {
+      ...data.campaigns,
+      campaigns: data.campaigns.campaigns.map((c) => ({ ...c, systemCreated: false })),
+    };
+    renderAt('/dashboard/marketing?aba=campanhas');
+    expect(screen.queryByRole('button', { name: 'Pausar' })).toBeNull();
+    data.campaigns = buildCampaigns();
   });
 
   it('filters campaigns by name', () => {

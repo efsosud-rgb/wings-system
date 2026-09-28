@@ -100,6 +100,8 @@ export function useRequestCampaignChange() {
       ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['ads'] });
+      // Requested from the dashboard too: its campaign rows show what is pending.
+      void queryClient.invalidateQueries({ queryKey: ['dashboard', 'campaigns'] });
     },
   });
 }

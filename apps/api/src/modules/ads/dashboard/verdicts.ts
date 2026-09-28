@@ -13,7 +13,7 @@ import { inArray } from 'drizzle-orm';
 import type { Database } from '../../../db/client.js';
 import { adCampaigns } from '../../../db/schema/index.js';
 import { activeAccounts, sumsByEntity } from './queries.js';
-import { confirmedTargets } from './targets.js';
+import { confirmedAccountTargets, confirmedTargets } from './targets.js';
 import { addDays, dayIn, windowOf } from './window.js';
 
 /**
@@ -36,6 +36,8 @@ export interface CampaignVerdictRow {
   objectiveKind: ObjectiveKind;
   dailyBudgetCents: number | null;
   totals: MetricTotals;
+  /** The CPL target the verdict used for a leads campaign; null otherwise or without one. */
+  targetCplCents: number | null;
   verdict: VerdictResult;
 }
 
@@ -66,13 +68,14 @@ export async function campaignVerdicts(
   const prev7Since = addDays(prev7Until, -6);
   const medianSince = addDays(today, -(MEDIAN_DAYS - 1));
 
-  const [campaigns, sums, last7, prev7, history, targets] = await Promise.all([
+  const [campaigns, sums, last7, prev7, history, targets, accountTargets] = await Promise.all([
     db.query.adCampaigns.findMany({ where: inArray(adCampaigns.adAccountId, ids) }),
     sumsByEntity(db, ids, 'campaign', window.since, window.until),
     sumsByEntity(db, ids, 'campaign', last7Since, today),
     sumsByEntity(db, ids, 'campaign', prev7Since, prev7Until),
     sumsByEntity(db, ids, 'campaign', medianSince, today),
     confirmedTargets(db),
+    confirmedAccountTargets(db),
   ]);
   const accountById = new Map(accounts.map((account) => [account.id, account]));
 
@@ -100,6 +103,13 @@ export async function campaignVerdicts(
     const dailyBudgetCents = campaign.budgetLevel === 'campaign' ? campaign.dailyBudgetCents || null : null;
     const targetKind: ObjectiveKind | null =
       objectiveKind === 'leads' ? 'leads' : objectiveKind === 'traffic' ? 'traffic' : null;
+    // The account's own CPL target wins over the company's: Meta and Google
+    // leads do not cost the same.
+    const targetCplCents = targetKind
+      ? ((targetKind === 'leads' ? accountTargets.get(campaign.adAccountId) : undefined) ??
+        targets.get(targetKind) ??
+        null)
+      : null;
 
     return {
       campaignId: campaign.id,
@@ -112,6 +122,7 @@ export async function campaignVerdicts(
       objectiveKind,
       dailyBudgetCents,
       totals,
+      targetCplCents: targetKind === 'leads' ? targetCplCents : null,
       verdict: verdictOf({
         objectiveKind,
         spendCents: totals.spendCents,
@@ -120,7 +131,7 @@ export async function campaignVerdicts(
         cplCents: ratios.costPerLeadCents,
         ctrMilli: ratios.ctrMilli,
         frequencyMilli: ratios.frequencyMilli,
-        targetCplCents: targetKind ? (targets.get(targetKind) ?? null) : null,
+        targetCplCents,
         accountMedianCtrMilli: medianByAccount.get(campaign.adAccountId) ?? null,
         trend: {
           currentCplCents: current.costPerLeadCents,

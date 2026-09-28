@@ -100,7 +100,15 @@ export class WhatsAppApprovalNotifier implements ApprovalNotifier {
         return this.phonesForRoles(['diretoria'], this.options.extraDiretoriaPhones ?? []);
       case 'requested':
       case 'decided':
-        return this.phonesForRoles(['admin_master'], this.options.extraAdminPhones ?? []);
+        // Everyone who can approve hears of a new request and of its decision:
+        // Admin Master and Diretoria alike. Until 28/09 only Admin Master was
+        // told, so the directors' numbers (Thais, Umberto) only ever received
+        // the 4-hour escalation, which never came because requests were
+        // decided sooner.
+        return this.phonesForRoles(
+          ['admin_master', 'diretoria'],
+          [...(this.options.extraAdminPhones ?? []), ...(this.options.extraDiretoriaPhones ?? [])],
+        );
     }
   }
 

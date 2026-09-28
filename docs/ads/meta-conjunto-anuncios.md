@@ -179,6 +179,19 @@ ativa), mais:
 - "Escolher do Drive" segue desabilitado (onda 5).
 - Apagar campanha/conjunto/anúncio de teste continua não existindo.
 
+## Retomar liga a árvore inteira (28/09/2026)
+
+Um `resume_campaign` aprovado e executado liga, na Meta, os anúncios, depois
+os conjuntos e por último a campanha, os que o próprio sistema criou
+(`companionsOf`, dos passos `ad_set` e `ad` do create_campaign). Nada feito à
+mão entra na lista. Como a Meta não tem transação, a ordem é a proteção:
+enquanto a campanha não estiver ativa nada entrega, então uma falha no meio
+deixa filhos ligados sob uma campanha pausada, sem gasto, e o pedido fica
+recusado (ou desconhecido, se a resposta não veio) com o que já foi ligado
+anotado. No fim, o status de cada objeto é relido e gravado em
+`statusesAfter` na execução, como no Google. Antes disso, "Retomar" ligava só
+a campanha, e a campanha não entregava.
+
 ## Onda seguinte (sugestão)
 
 Execução em segundo plano com acompanhamento na tela; `pause`/`resume` no nível

@@ -13,7 +13,7 @@ import {
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
-import { adCampaigns, adChangeRequests, tenants, WINGS_TENANT_ID } from './ads.js';
+import { adAccounts, adCampaigns, adChangeRequests, tenants, WINGS_TENANT_ID } from './ads.js';
 import { employees } from './employees.js';
 
 /**
@@ -184,6 +184,30 @@ export const cplTargets = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [primaryKey({ columns: [table.tenantId, table.objectiveKind] })],
+);
+
+/**
+ * The CPL target of one ad account, for its leads campaigns. Takes precedence
+ * over the tenant-wide target above: Meta and Google leads do not cost the
+ * same, and a Google account may stay without a target until its conversions
+ * are trustworthy. Like the tenant target, only a person's confirmation fills
+ * `targetCents`; the screen may offer a suggestion, never apply one.
+ */
+export const accountCplTargets = pgTable(
+  'marketing_account_cpl_targets',
+  {
+    tenantId: tenantId(),
+    adAccountId: uuid('ad_account_id')
+      .notNull()
+      .references(() => adAccounts.id),
+    /** leads, for now: traffic campaigns are judged by CTR. */
+    objectiveKind: text('objective_kind').notNull(),
+    targetCents: bigint('target_cents', { mode: 'number' }),
+    confirmedBy: uuid('confirmed_by').references(() => employees.id),
+    confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.adAccountId, table.objectiveKind] })],
 );
 
 /**

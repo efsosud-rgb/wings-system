@@ -693,12 +693,13 @@ export async function companionsOf(db: Database, campaignId: string): Promise<Re
         eq(adChangeRequests.campaignId, campaignId),
         eq(adChangeRequests.kind, 'create_campaign'),
         eq(adExecutionSteps.status, 'created'),
-        inArray(adExecutionSteps.kind, ['ad_group', 'ad']),
+        // Google records its ad groups as `ad_group`, Meta its ad sets as `ad_set`.
+        inArray(adExecutionSteps.kind, ['ad_group', 'ad_set', 'ad']),
       ),
     );
-  const ids = (kind: string) =>
-    rows.flatMap((row) => (row.kind === kind && row.externalId ? [row.externalId] : []));
-  return { adGroupIds: ids('ad_group'), adIds: ids('ad') };
+  const ids = (...kinds: string[]) =>
+    rows.flatMap((row) => (kinds.includes(row.kind) && row.externalId ? [row.externalId] : []));
+  return { adGroupIds: ids('ad_group', 'ad_set'), adIds: ids('ad') };
 }
 
 export type PreflightResult =

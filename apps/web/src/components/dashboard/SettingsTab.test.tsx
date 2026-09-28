@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = { settings: {} as DashboardSettings, canConfirm: true };
 const setTarget = vi.fn();
+const setAccountTarget = vi.fn();
 
 vi.mock('../../api/auth.js', () => ({
   useSession: () => ({ data: { permissions: state.canConfirm ? { 'ads.request': 'all' } : {} } }),
@@ -13,6 +14,7 @@ vi.mock('../../api/auth.js', () => ({
 vi.mock('../../api/dashboard.js', () => ({
   useDashboardSettings: () => ({ data: state.settings, isError: false }),
   useSetCplTarget: () => ({ mutate: setTarget, isPending: false, isError: false, error: null }),
+  useSetAccountCplTarget: () => ({ mutate: setAccountTarget, isPending: false, isError: false, error: null }),
 }));
 
 const { SettingsTab } = await import('./SettingsTab.js');
@@ -36,6 +38,28 @@ beforeEach(() => {
         confirmedByName: 'Ana',
         proposedCents: null,
         proposedBasis: null,
+      },
+    ],
+    accountTargets: [
+      {
+        adAccountId: '11111111-1111-4111-8111-111111111111',
+        accountName: 'CA - Wings Company Fly High 2k23',
+        platform: 'meta',
+        targetCents: null,
+        confirmedAt: null,
+        confirmedByName: null,
+        suggestedCents: 8590,
+        suggestionNote: 'Sugestão inicial combinada em 28/09. Só vale depois de confirmada.',
+      },
+      {
+        adAccountId: '22222222-2222-4222-8222-222222222222',
+        accountName: 'Wings Company — Google Ads',
+        platform: 'google',
+        targetCents: null,
+        confirmedAt: null,
+        confirmedByName: null,
+        suggestedCents: null,
+        suggestionNote: 'Sem meta até o Google ter conversões confiáveis.',
       },
     ],
   };
@@ -87,8 +111,26 @@ describe('Configurações do Dashboard', () => {
     state.canConfirm = false;
     render(<SettingsTab />);
     expect(screen.queryByRole('button', { name: 'Confirmar meta' })).toBeNull();
-    expect(screen.getAllByText(/Só quem pode pedir alterações de tráfego confirma uma meta/).length).toBe(2);
+    expect(screen.getAllByText(/Só quem pode pedir alterações de tráfego confirma uma meta/).length).toBe(3);
+    expect(screen.queryByRole('button', { name: 'Confirmar' })).toBeNull();
     expect(screen.getByRole('heading', { name: 'Como o veredito é calculado' })).toBeTruthy();
     expect(screen.getByText(/Bom até 10% abaixo da meta, atenção até 15% acima/)).toBeTruthy();
+  });
+
+  it('offers the Meta suggestion per account, applies nothing until confirmed, and leaves Google empty', () => {
+    render(<SettingsTab />);
+    const table = screen.getByRole('table');
+    const [meta, google] = within(table).getAllByRole('row').slice(1);
+    expect(text(meta)).toContain('Sem meta da conta');
+    expect(text(meta)).toContain('Só vale depois de confirmada');
+    expect((within(meta!).getByLabelText('Meta de CPL em reais') as HTMLInputElement).value).toBe('85,90');
+    expect((within(google!).getByLabelText('Meta de CPL em reais') as HTMLInputElement).value).toBe('');
+    expect(setAccountTarget).not.toHaveBeenCalled();
+
+    fireEvent.click(within(meta!).getByRole('button', { name: 'Confirmar' }));
+    expect(setAccountTarget).toHaveBeenCalledWith({
+      adAccountId: '11111111-1111-4111-8111-111111111111',
+      targetCents: 8590,
+    });
   });
 });

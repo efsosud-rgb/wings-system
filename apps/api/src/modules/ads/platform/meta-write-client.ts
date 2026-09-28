@@ -8,6 +8,7 @@ import type {
   CreativeMedia,
   CreativeSpec,
   MutationOutcome,
+  ResumeCompanions,
   StepOutcome,
   UploadedVideo,
 } from './types.js';
@@ -183,12 +184,74 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
     return { status: 'applied', campaign };
   }
 
-  override async resumeCampaign(campaignId: string): Promise<MutationOutcome> {
+  /**
+   * Switches the campaign on together with the ad sets and ads this system
+   * created paused under it (`enableWith`, from the create_campaign's own
+   * execution steps; nothing a person made by hand is ever listed).
+   *
+   * Meta has no transaction, so the order is what keeps a half-done resume
+   * harmless: ads first, then ad sets, the campaign last. Until the campaign
+   * is ACTIVE nothing delivers, so a failure part-way leaves the children on
+   * under a paused campaign and nothing spending. Afterwards every object is
+   * read back and its status kept (`statusesAfter`) for the approval screen,
+   * like the Google client does.
+   */
+  override async resumeCampaign(
+    campaignId: string,
+    enableWith?: ResumeCompanions,
+  ): Promise<MutationOutcome> {
+    const children = [
+      ...(enableWith?.adIds ?? []).map((id) => ({ kind: 'ad' as const, id })),
+      ...(enableWith?.adGroupIds ?? []).map((id) => ({ kind: 'adSet' as const, id })),
+    ].filter((child) => /^\d+$/.test(child.id));
+    const enabled: string[] = [];
+
+    for (const child of children) {
+      const failure = await this.post(child.id, { status: 'ACTIVE' });
+      if (failure) {
+        const note = `${child.kind} ${child.id}: a campanha não foi ligada (${enabled.length} objeto(s) já ligados sob ela, sem entregar)`;
+        if (failure.status === 'rejected') {
+          return {
+            ...failure,
+            message: `${failure.message} — ${note}`,
+            detail: { ...(failure.detail ?? {}), enabledBeforeFailure: enabled },
+          };
+        }
+        if (failure.status === 'unknown')
+          return { ...failure, reason: `${failure.reason} — ${note}` };
+        return failure;
+      }
+      enabled.push(`${child.kind}:${child.id}`);
+    }
+
     const failure = await this.post(campaignId, { status: 'ACTIVE' });
     if (failure) return failure;
     const campaign = await this.getCampaign(campaignId);
     if (!campaign) return { status: 'unknown', reason: 'campaign unreadable after the change' };
-    return { status: 'applied', campaign };
+    if (children.length === 0) return { status: 'applied', campaign };
+    return {
+      status: 'applied',
+      campaign,
+      detail: { enabled, statusesAfter: await this.statusesOf(children) },
+    };
+  }
+
+  /** Each object's status as Meta reports it now; a read that fails says so instead of guessing. */
+  private async statusesOf(
+    objects: { kind: 'ad' | 'adSet'; id: string }[],
+  ): Promise<Record<string, string>> {
+    const statuses: Record<string, string> = {};
+    for (const object of objects) {
+      try {
+        const read = await this.get<{ status?: string; effective_status?: string }>(object.id, {
+          fields: 'status,effective_status',
+        });
+        statuses[`${object.kind}:${object.id}`] = read.effective_status ?? read.status ?? '?';
+      } catch {
+        statuses[`${object.kind}:${object.id}`] = 'ilegível';
+      }
+    }
+    return statuses;
   }
 
   /**

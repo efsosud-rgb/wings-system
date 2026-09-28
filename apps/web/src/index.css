@@ -6642,3 +6642,23 @@ button.stage-chip:focus-visible {
   font-size: 13px;
   color: var(--wings-muted);
 }
+
+/* Dashboard → Campanhas: Pausar / Retomar / Mudar verba diária, each a request for approval. */
+.campaign-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.campaign-actions .btn {
+  width: auto;
+  padding: 4px 10px;
+  font-size: 13px;
+}
+
+.campaign-action-form {
+  display: grid;
+  gap: 8px;
+  min-width: 16rem;
+  max-width: 22rem;
+}

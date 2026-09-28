@@ -344,7 +344,7 @@ export interface AdsPlatformClient {
 
   setDailyBudget(campaignId: string, dailyBudgetCents: Cents): Promise<MutationOutcome>;
   pauseCampaign(campaignId: string): Promise<MutationOutcome>;
-  /** `enableWith` names what this system created paused under the campaign; Meta ignores it. */
+  /** `enableWith` names what this system created paused under the campaign: both platforms switch it on too. */
   resumeCampaign(campaignId: string, enableWith?: ResumeCompanions): Promise<MutationOutcome>;
   /** Creates an empty campaign. `applied` carries the new campaign, id included. */
   createCampaign(spec: CreateCampaignSpec): Promise<MutationOutcome>;
