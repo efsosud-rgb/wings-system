@@ -35,7 +35,9 @@ export function startExpansionIntakeScheduler(deps: {
         created: result.created,
         existingDeal: result.existingDeal,
         alreadyDecided: result.alreadyDecided,
+        settling: result.settling,
         failed: result.failed,
+        taskFailed: result.taskFailed,
         unverified: result.unverified,
       });
     } catch (error) {

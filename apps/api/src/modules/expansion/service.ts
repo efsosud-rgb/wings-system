@@ -62,5 +62,6 @@ export async function runIntakeOnce(
     expansionOwnerId: credentials.expansionOwnerId ?? null,
     since: new Date(now.getTime() - options.lookbackHours * 3_600_000),
     dryRun: options.dryRun ?? false,
+    now: () => now,
   });
 }
