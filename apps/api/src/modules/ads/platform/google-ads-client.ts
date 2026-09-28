@@ -1092,7 +1092,35 @@ export class GoogleAdsWriteClient extends GoogleAdsPlatformClient {
     if (sent.status !== 'ok') return sent;
     const campaign = await this.getCampaign(campaignId);
     if (!campaign) return { status: 'unknown', reason: 'campaign unreadable after the change' };
-    return { status: 'applied', campaign, detail: plan.detail };
+    // What Google says the switched-on objects are now: the proof a person
+    // reads on the approval, instead of trusting that the update took.
+    const detail =
+      write.kind === 'resume_campaign' && write.enableWith
+        ? { ...plan.detail, statusesAfter: await this.companionStatuses(write.enableWith) }
+        : plan.detail;
+    return { status: 'applied', campaign, detail };
+  }
+
+  private async companionStatuses(companions: ResumeCompanions): Promise<Record<string, string>> {
+    const statuses: Record<string, string> = {};
+    const numeric = (ids: string[]) => ids.filter((id) => /^\d+$/.test(id));
+    const adGroupIds = numeric(companions.adGroupIds);
+    if (adGroupIds.length > 0) {
+      const rows = await this.reader.search<{ adGroup?: { id?: string; status?: string } }>(
+        `SELECT ad_group.id, ad_group.status FROM ad_group WHERE ad_group.id IN (${adGroupIds.join(', ')})`,
+      );
+      for (const row of rows) if (row.adGroup?.id) statuses[`adGroup:${row.adGroup.id}`] = row.adGroup.status ?? '?';
+    }
+    const adIds = companions.adIds
+      .map((id) => id.split('~')[1] ?? '')
+      .filter((id) => /^\d+$/.test(id));
+    if (adIds.length > 0) {
+      const rows = await this.reader.search<{ adGroupAd?: { status?: string; ad?: { id?: string } } }>(
+        `SELECT ad_group_ad.status, ad_group_ad.ad.id FROM ad_group_ad WHERE ad_group_ad.ad.id IN (${adIds.join(', ')})`,
+      );
+      for (const row of rows) if (row.adGroupAd?.ad?.id) statuses[`ad:${row.adGroupAd.ad.id}`] = row.adGroupAd.status ?? '?';
+    }
+    return statuses;
   }
 
   override async setDailyBudget(campaignId: string, dailyBudgetCents: Cents): Promise<MutationOutcome> {

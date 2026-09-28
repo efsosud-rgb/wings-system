@@ -262,6 +262,18 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
         )
         .map((row) => ({ geoTargetConstant: { ...row, status: 'ENABLED' } }));
     }
+    if (/FROM\s+ad_group_ad/i.test(query)) {
+      const wanted = [...query.matchAll(/(\d+)/g)].map((m) => m[1]);
+      return ads
+        .filter((ad) => wanted.includes(ad.id.split('~')[1] ?? ''))
+        .map((ad) => ({ adGroupAd: { status: ad.status, ad: { id: ad.id.split('~')[1] } } }));
+    }
+    if (/FROM\s+ad_group\b/i.test(query)) {
+      const wanted = [...query.matchAll(/(\d+)/g)].map((m) => m[1]);
+      return adGroups
+        .filter((group) => wanted.includes(group.id))
+        .map((group) => ({ adGroup: { id: group.id, status: group.status } }));
+    }
     if (/FROM\s+campaign/i.test(query)) {
       // Metrics queries carry a date segment and answer from `metrics`.
       if (/segments\.date/.test(query)) {

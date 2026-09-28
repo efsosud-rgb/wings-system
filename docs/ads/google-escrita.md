@@ -336,3 +336,22 @@ anúncio); negativa de campanha "meu negócio" removida
 (`campaignOperation.update end_date`). Registradas na trilha da campanha como
 `ads.manual_platform_change`. O sistema ainda não tem esses três tipos de
 alteração no fluxo de aprovação.
+
+### 28/09/2026: fim → 09/10, exposição da retomada e prova dos status
+
+- Fim da campanha `24289782134` 02/10 → **09/10** pela API, `validateOnly`
+  antes, registrado na trilha (`ads.manual_platform_change`); rascunho salvo
+  idem.
+- **Bug corrigido no guard e no simulador:** um pedido sobre campanha existente
+  (retomar, orçamento) usava o fator da Meta (1,25×) em qualquer plataforma —
+  a retomada de R$ 100/dia com 3 dias no mês reservou R$ 375; no Google o mês
+  custa R$ 300 (1,0×), nunca menos que um dia a 2,0×. `reserveChange` e
+  `simulateChange` passaram a usar `periodOverdeliveryFactor`/
+  `dailyOverdeliveryFactor` da plataforma.
+- **Retomada de 28/09 10:13:** o histórico de alterações do Google
+  (`change_event`) mostra três atualizações às 10:13:13 pelo nosso usuário da
+  API — campanha, grupo `200582882397` e anúncio `825987552936`, todos
+  `status` — e nenhuma alteração pelo Google Ads web. O executor ligou os três;
+  o que a tela do Google mostrou como pausado era estado antigo. Para isso não
+  depender de confiança, a execução agora relê os status do grupo e do anúncio
+  depois do `mutate` e os grava em `platform_response.statusesAfter`.
