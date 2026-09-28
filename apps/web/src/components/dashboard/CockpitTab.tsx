@@ -1,4 +1,5 @@
 import {
+  AD_ISSUE_LABEL,
   AD_PLATFORM_LABEL,
   BRAZIL_STATE_TILES,
   MIRRORED_FORMAT_LABEL,
@@ -8,7 +9,13 @@ import {
 } from '@wings/shared';
 import { useEffect, useState } from 'react';
 import { DailyLines } from './charts.js';
-import { formatDayShort, formatInt, formatMoney, formatPercentMilli, formatSignedPercent } from './format.js';
+import {
+  formatDayShort,
+  formatInt,
+  formatMoney,
+  formatPercentMilli,
+  formatSignedPercent,
+} from './format.js';
 
 /**
  * Cockpit: the executive screen. Big figures that count up, the funnel that
@@ -19,7 +26,10 @@ import { formatDayShort, formatInt, formatMoney, formatPercentMilli, formatSigne
  */
 
 function reducedMotion(): boolean {
-  return typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+  return (
+    typeof window !== 'undefined' &&
+    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+  );
 }
 
 /** Counts from 0 to `target` in ~0.8 s, easing out; jumps straight there with reduced motion. */
@@ -45,15 +55,24 @@ export function useCountUp(target: number, duration = 800): number {
 
 type Better = 'up' | 'down';
 
-function Delta({ current, previous, better }: { current: number | null; previous: number | null; better: Better }) {
+function Delta({
+  current,
+  previous,
+  better,
+}: {
+  current: number | null;
+  previous: number | null;
+  better: Better;
+}) {
   if (current === null || previous === null || previous === 0) {
     return <span className="kpi-delta muted">sem comparação</span>;
   }
   const change = Math.round(((current - previous) / previous) * 100);
-  const good = change === 0 ? null : (change > 0) === (better === 'up');
+  const good = change === 0 ? null : change > 0 === (better === 'up');
   return (
     <span className={`kpi-delta ${good === null ? 'muted' : good ? 'kpi-good' : 'kpi-bad'}`}>
-      {change > 0 ? '▲' : change < 0 ? '▼' : '•'} {formatSignedPercent(change)} contra o período anterior
+      {change > 0 ? '▲' : change < 0 ? '▼' : '•'} {formatSignedPercent(change)} contra o período
+      anterior
     </span>
   );
 }
@@ -77,7 +96,10 @@ function Kpi({
   return (
     <div className={`kpi${big ? ' kpi-big' : ''}`}>
       <span className="kpi-label">{label}</span>
-      <span className="kpi-value mono" aria-label={`${label}: ${value === null ? 'sem dado' : format(value)}`}>
+      <span
+        className="kpi-value mono"
+        aria-label={`${label}: ${value === null ? 'sem dado' : format(value)}`}
+      >
         {value === null ? '—' : format(shown)}
       </span>
       <Delta current={value} previous={previous} better={better} />
@@ -85,8 +107,10 @@ function Kpi({
   );
 }
 
-const cpl = (figures: CockpitFigures) => (figures.leads > 0 ? figures.spendCents / figures.leads : null);
-const ctr = (figures: CockpitFigures) => (figures.impressions > 0 ? (figures.clicks / figures.impressions) * 100_000 : null);
+const cpl = (figures: CockpitFigures) =>
+  figures.leads > 0 ? figures.spendCents / figures.leads : null;
+const ctr = (figures: CockpitFigures) =>
+  figures.impressions > 0 ? (figures.clicks / figures.impressions) * 100_000 : null;
 
 function Funnel({ figures }: { figures: CockpitFigures }) {
   const [filled, setFilled] = useState(reducedMotion());
@@ -107,7 +131,9 @@ function Funnel({ figures }: { figures: CockpitFigures }) {
   return (
     <ol className="cockpit-funnel">
       {steps.map((step) => {
-        const width = step.count ? Math.max(3, Math.round((Math.log10(step.count + 1) / top) * 100)) : 0;
+        const width = step.count
+          ? Math.max(3, Math.round((Math.log10(step.count + 1) / top) * 100))
+          : 0;
         return (
           <li key={step.label}>
             <span className="cockpit-funnel-label">{step.label}</span>
@@ -143,10 +169,15 @@ function StateMap({ data }: { data: DashboardCockpit }) {
           const region = byUf.get(state.uf);
           const share = region ? region.spendCents / max : 0;
           return (
-            <g key={state.uf} transform={`translate(${state.col * (size + gap)},${state.row * (size + gap)})`}>
+            <g
+              key={state.uf}
+              transform={`translate(${state.col * (size + gap)},${state.row * (size + gap)})`}
+            >
               <title>
                 {state.name}
-                {region ? `: ${formatMoney(region.spendCents)}, ${region.leads} lead(s)` : ': sem entrega'}
+                {region
+                  ? `: ${formatMoney(region.spendCents)}, ${region.leads} lead(s)`
+                  : ': sem entrega'}
               </title>
               <rect
                 width={size}
@@ -155,7 +186,12 @@ function StateMap({ data }: { data: DashboardCockpit }) {
                 className={region ? 'cockpit-tile cockpit-tile-on' : 'cockpit-tile'}
                 style={region ? { fillOpacity: 0.25 + 0.75 * share } : undefined}
               />
-              <text x={size / 2} y={size / 2 + 4} textAnchor="middle" className="cockpit-tile-label">
+              <text
+                x={size / 2}
+                y={size / 2 + 4}
+                textAnchor="middle"
+                className="cockpit-tile-label"
+              >
                 {state.uf}
               </text>
             </g>
@@ -163,9 +199,10 @@ function StateMap({ data }: { data: DashboardCockpit }) {
         })}
       </svg>
       <figcaption className="cell-sub">
-        Cor mais forte, mais gasto no período. As plataformas informam a região por estado: dentro do RJ não há recorte
-        por cidade ou bairro.
-        {data.otherRegionsSpendCents > 0 && ` Fora de um estado (desconhecido): ${formatMoney(data.otherRegionsSpendCents)}.`}
+        Cor mais forte, mais gasto no período. As plataformas informam a região por estado: dentro
+        do RJ não há recorte por cidade ou bairro.
+        {data.otherRegionsSpendCents > 0 &&
+          ` Fora de um estado (desconhecido): ${formatMoney(data.otherRegionsSpendCents)}.`}
       </figcaption>
       <ul className="cockpit-map-list">
         {data.regions.slice(0, 5).map((region) => (
@@ -187,39 +224,138 @@ export function CockpitTab({ data }: { data: DashboardCockpit }) {
       key: 'now',
       label: `${formatDayShort(data.since)} a ${formatDayShort(data.until)}`,
       color: 'var(--wings-accent)',
-      points: data.daily.map((day) => ({ day: day.day, amount: pick === 'spend' ? day.spendCents : day.leads })),
+      points: data.daily.map((day) => ({
+        day: day.day,
+        amount: pick === 'spend' ? day.spendCents : day.leads,
+      })),
     },
     {
       key: 'before',
       label: `período anterior (${formatDayShort(data.previousSince)} a ${formatDayShort(data.previousUntil)})`,
       color: 'var(--viz-ink)',
-      points: data.daily.map((day) => ({ day: day.day, amount: pick === 'spend' ? day.previousSpendCents : day.previousLeads })),
+      points: data.daily.map((day) => ({
+        day: day.day,
+        amount: pick === 'spend' ? day.previousSpendCents : day.previousLeads,
+      })),
     },
   ];
 
   return (
     <div className="cockpit">
+      <section className="cockpit-scope" aria-label="Campanhas somadas">
+        {data.activeCampaigns.length === 0 ? (
+          <p className="muted">Nenhuma campanha ativa agora: os números abaixo ficam zerados.</p>
+        ) : (
+          <p>
+            <b>Só campanhas ativas ({data.activeCampaigns.length}):</b>{' '}
+            {data.activeCampaigns.map((campaign, index) => (
+              <span key={`${campaign.platform}:${campaign.externalId}`}>
+                {index > 0 && ' · '}
+                {campaign.name}{' '}
+                <span className="cell-sub">({AD_PLATFORM_LABEL[campaign.platform]})</span>
+              </span>
+            ))}
+          </p>
+        )}
+      </section>
+
+      {data.adWarnings.length > 0 && (
+        <section className="cockpit-card cockpit-warnings" aria-labelledby="cockpit-ad-warnings">
+          <h2 id="cockpit-ad-warnings">Anúncios ligados que não estão rodando</h2>
+          <p className="cell-sub">Ficam fora de todos os números até a plataforma liberar.</p>
+          <ul className="cockpit-alerts">
+            {data.adWarnings.map((warning) => (
+              <li
+                key={`${warning.platform}:${warning.adExternalId}`}
+                className="cockpit-alert cockpit-alert-warning"
+              >
+                <b>{AD_ISSUE_LABEL[warning.issue] ?? warning.issue}</b> {warning.adName}
+                <span className="cell-sub">
+                  {AD_PLATFORM_LABEL[warning.platform]} · {warning.campaignName}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section className="cockpit-kpis" aria-label="Indicadores do período">
-        <Kpi big label="Investimento" value={current.spendCents} previous={previous.spendCents} format={(v) => formatMoney(Math.round(v))} better="up" />
-        <Kpi big label="Leads" value={current.leads} previous={previous.leads} format={(v) => formatInt(Math.round(v))} better="up" />
-        <Kpi big label="Custo por lead" value={cpl(current)} previous={cpl(previous)} format={(v) => formatMoney(Math.round(v))} better="down" />
-        <Kpi label="CTR" value={ctr(current)} previous={ctr(previous)} format={(v) => formatPercentMilli(Math.round(v))} better="up" />
-        <Kpi label="Sessões no site" value={current.sessions} previous={previous.sessions} format={(v) => formatInt(Math.round(v))} better="up" />
-        <Kpi label="Reuniões" value={current.meetings} previous={previous.meetings} format={(v) => formatInt(Math.round(v))} better="up" />
-        <Kpi label="Vendas" value={current.sales} previous={previous.sales} format={(v) => formatInt(Math.round(v))} better="up" />
+        <Kpi
+          big
+          label="Investimento"
+          value={current.spendCents}
+          previous={previous.spendCents}
+          format={(v) => formatMoney(Math.round(v))}
+          better="up"
+        />
+        <Kpi
+          big
+          label="Leads"
+          value={current.leads}
+          previous={previous.leads}
+          format={(v) => formatInt(Math.round(v))}
+          better="up"
+        />
+        <Kpi
+          big
+          label="Custo por lead"
+          value={cpl(current)}
+          previous={cpl(previous)}
+          format={(v) => formatMoney(Math.round(v))}
+          better="down"
+        />
+        <Kpi
+          label="CTR"
+          value={ctr(current)}
+          previous={ctr(previous)}
+          format={(v) => formatPercentMilli(Math.round(v))}
+          better="up"
+        />
+        <Kpi
+          label="Sessões no site"
+          value={current.sessions}
+          previous={previous.sessions}
+          format={(v) => formatInt(Math.round(v))}
+          better="up"
+        />
+        <Kpi
+          label="Reuniões"
+          value={current.meetings}
+          previous={previous.meetings}
+          format={(v) => formatInt(Math.round(v))}
+          better="up"
+        />
+        <Kpi
+          label="Vendas"
+          value={current.sales}
+          previous={previous.sales}
+          format={(v) => formatInt(Math.round(v))}
+          better="up"
+        />
       </section>
 
       <div className="cockpit-grid">
         <section className="cockpit-card" aria-labelledby="cockpit-evolution">
           <h2 id="cockpit-evolution">Evolução diária</h2>
-          <DailyLines series={series('spend')} format={(v) => formatMoney(v)} ariaLabel="Investimento por dia contra o período anterior" />
-          <DailyLines series={series('leads')} format={(v) => formatInt(v)} height={120} ariaLabel="Leads por dia contra o período anterior" />
+          <DailyLines
+            series={series('spend')}
+            format={(v) => formatMoney(v)}
+            ariaLabel="Investimento por dia contra o período anterior"
+          />
+          <DailyLines
+            series={series('leads')}
+            format={(v) => formatInt(v)}
+            height={120}
+            ariaLabel="Leads por dia contra o período anterior"
+          />
         </section>
 
         <section className="cockpit-card" aria-labelledby="cockpit-funnel">
           <h2 id="cockpit-funnel">Funil</h2>
           <Funnel figures={current} />
-          <p className="cell-sub">Meta e Google somados; CRM pelas etiquetas do RD. Detalhes na aba Funil.</p>
+          <p className="cell-sub">
+            Meta e Google somados; CRM pelas etiquetas do RD. Detalhes na aba Funil.
+          </p>
         </section>
 
         <section className="cockpit-card" aria-labelledby="cockpit-map">
@@ -246,8 +382,10 @@ export function CockpitTab({ data }: { data: DashboardCockpit }) {
                     <span>
                       {creative.name}
                       <span className="cell-sub">
-                        {AD_PLATFORM_LABEL[creative.platform]} · {MIRRORED_FORMAT_LABEL[creative.format]} ·{' '}
-                        {formatInt(creative.totals.conversions)} lead(s) · CPL {formatMoney(ratios.costPerLeadCents)} · CTR{' '}
+                        {AD_PLATFORM_LABEL[creative.platform]} ·{' '}
+                        {MIRRORED_FORMAT_LABEL[creative.format]} ·{' '}
+                        {formatInt(creative.totals.conversions)} lead(s) · CPL{' '}
+                        {formatMoney(ratios.costPerLeadCents)} · CTR{' '}
                         {formatPercentMilli(ratios.ctrMilli)}
                       </span>
                     </span>

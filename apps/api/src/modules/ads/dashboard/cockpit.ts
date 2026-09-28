@@ -1,7 +1,11 @@
 import {
+  adDeliveryIssue,
+  campaignDelivering,
   ufOfRegion,
   type AdPlatform,
+  type CockpitAdWarning,
   type CockpitAlert,
+  type CockpitCampaign,
   type CockpitDay,
   type CockpitFigures,
   type CockpitRegion,
@@ -11,20 +15,25 @@ import {
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, sql } from 'drizzle-orm';
 import type { Database } from '../../../db/client.js';
 import {
+  adAds,
   adAlerts,
+  adCampaigns,
   adMetricsBreakdownDaily,
   adMetricsDaily,
   ga4TrafficDaily,
   rdCrmDeals,
 } from '../../../db/schema/index.js';
 import type { Env } from '../../../env.js';
+import { ga4CredentialsOf } from '../../../lib/ga4.js';
 import { activeAccounts, creatives } from './queries.js';
 import { addDays, daysBetween, windowOf } from './window.js';
 
 /**
  * Cockpit: the executive screen, from the same copies the other tabs read.
  * Every figure has its previous-window twin so the screen can say better or
- * worse; nothing here reaches a platform.
+ * worse; nothing here reaches a platform. Only campaigns that are delivering
+ * count (`campaignDelivering`), in both windows; ads switched on but not
+ * serving (in review, disapproved…) are listed as warnings and ranked nowhere.
  */
 
 const SEVERITY_ORDER: Record<string, number> = { critical: 0, warning: 1, info: 2 };
@@ -38,8 +47,32 @@ export async function cockpit(
   const window = windowOf(days, now);
   const accounts = await activeAccounts(db);
   const ids = accounts.map((account) => account.id);
-  const platformOf = new Map(accounts.map((account) => [account.id, account.platform as AdPlatform]));
-  const siteOn = Boolean(env.GA4_PROPERTY_ID && env.GA4_SERVICE_ACCOUNT_JSON);
+  const platformOf = new Map(
+    accounts.map((account) => [account.id, account.platform as AdPlatform]),
+  );
+  const siteOn = Boolean(env.GA4_PROPERTY_ID && ga4CredentialsOf(env));
+  const [campaignRows, adRows] = ids.length
+    ? await Promise.all([
+        db.query.adCampaigns.findMany({ where: inArray(adCampaigns.adAccountId, ids) }),
+        db.query.adAds.findMany({ where: inArray(adAds.adAccountId, ids) }),
+      ])
+    : [[], []];
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(now);
+  const active = campaignRows.filter((campaign) =>
+    campaignDelivering(
+      {
+        platform: platformOf.get(campaign.adAccountId) ?? 'meta',
+        status: campaign.status,
+        deliveryStatus: campaign.deliveryStatus,
+        endDate: campaign.endDate,
+      },
+      today,
+    ),
+  );
+  const activeIds = new Set(active.map((campaign) => campaign.id));
+  const activeExternal = active.map((campaign) => campaign.externalId);
+  // No active campaign: every sum below is over nothing, not over everything.
+  const none = ['-'];
   const dayRange = (column: typeof adMetricsDaily.day) =>
     and(gte(column, window.previousSince), lte(column, window.until));
 
@@ -58,6 +91,10 @@ export async function cockpit(
             and(
               inArray(adMetricsDaily.adAccountId, ids),
               eq(adMetricsDaily.level, 'campaign'),
+              inArray(
+                adMetricsDaily.entityExternalId,
+                activeExternal.length ? activeExternal : none,
+              ),
               dayRange(adMetricsDaily.day),
             ),
           )
@@ -66,10 +103,16 @@ export async function cockpit(
     db
       .select({ day: ga4TrafficDaily.day, sessions: sql<string>`sum(${ga4TrafficDaily.sessions})` })
       .from(ga4TrafficDaily)
-      .where(and(gte(ga4TrafficDaily.day, window.previousSince), lte(ga4TrafficDaily.day, window.until)))
+      .where(
+        and(gte(ga4TrafficDaily.day, window.previousSince), lte(ga4TrafficDaily.day, window.until)),
+      )
       .groupBy(ga4TrafficDaily.day),
     db
-      .select({ createdAt: rdCrmDeals.createdAt, reachedMeeting: rdCrmDeals.reachedMeeting, win: rdCrmDeals.win })
+      .select({
+        createdAt: rdCrmDeals.createdAt,
+        reachedMeeting: rdCrmDeals.reachedMeeting,
+        win: rdCrmDeals.win,
+      })
       .from(rdCrmDeals)
       .where(
         and(
@@ -90,6 +133,10 @@ export async function cockpit(
           .where(
             and(
               inArray(adMetricsBreakdownDaily.adAccountId, ids),
+              inArray(
+                adMetricsBreakdownDaily.campaignExternalId,
+                activeExternal.length ? activeExternal : none,
+              ),
               eq(adMetricsBreakdownDaily.kind, 'region'),
               gte(adMetricsBreakdownDaily.day, window.since),
               lte(adMetricsBreakdownDaily.day, window.until),
@@ -171,15 +218,41 @@ export async function cockpit(
     regions.set(uf, entry);
   }
 
-  // Leads first, then the cheapest lead, then spend: what worked, at the top.
-  const ranked = [...creativeData.creatives].sort(
-    (a, b) =>
-      b.totals.conversions - a.totals.conversions ||
-      (a.totals.conversions > 0 && b.totals.conversions > 0
-        ? a.totals.spendCents / a.totals.conversions - b.totals.spendCents / b.totals.conversions
-        : 0) ||
-      b.totals.spendCents - a.totals.spendCents,
-  );
+  const campaignById = new Map(campaignRows.map((campaign) => [campaign.id, campaign]));
+  const adWarnings: CockpitAdWarning[] = [];
+  const servingAds = new Set<string>();
+  for (const ad of adRows) {
+    if (!ad.campaignId || !activeIds.has(ad.campaignId)) continue;
+    const platform = platformOf.get(ad.adAccountId) ?? 'meta';
+    const issue = adDeliveryIssue({
+      platform,
+      status: ad.status,
+      effectiveStatus: ad.effectiveStatus,
+    });
+    if (issue === null) servingAds.add(`${platform}:${ad.externalId}`);
+    else if (issue !== 'off') {
+      adWarnings.push({
+        platform,
+        adExternalId: ad.externalId,
+        adName: ad.name,
+        campaignName: campaignById.get(ad.campaignId)?.name ?? '',
+        issue,
+      });
+    }
+  }
+
+  // Serving ads of active campaigns only. Leads first, then the cheapest
+  // lead, then spend: what worked, at the top.
+  const ranked = creativeData.creatives
+    .filter((creative) => servingAds.has(`${creative.platform}:${creative.adExternalId}`))
+    .sort(
+      (a, b) =>
+        b.totals.conversions - a.totals.conversions ||
+        (a.totals.conversions > 0 && b.totals.conversions > 0
+          ? a.totals.spendCents / a.totals.conversions - b.totals.spendCents / b.totals.conversions
+          : 0) ||
+        b.totals.spendCents - a.totals.spendCents,
+    );
 
   const alerts: CockpitAlert[] = alertRows
     .sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 3) - (SEVERITY_ORDER[b.severity] ?? 3))
@@ -205,5 +278,15 @@ export async function cockpit(
     otherRegionsSpendCents,
     creatives: ranked.slice(0, 6),
     alerts,
+    activeCampaigns: active
+      .map((campaign): CockpitCampaign => ({
+        platform: platformOf.get(campaign.adAccountId) ?? 'meta',
+        externalId: campaign.externalId,
+        name: campaign.name,
+        deliveryStatus: campaign.deliveryStatus,
+        endDate: campaign.endDate,
+      }))
+      .sort((a, b) => a.platform.localeCompare(b.platform) || a.name.localeCompare(b.name)),
+    adWarnings,
   };
 }

@@ -715,6 +715,84 @@ export function ufOfRegion(name: string): string | null {
   return BRAZIL_STATE_TILES.find((state) => foldName(state.name) === folded)?.uf ?? null;
 }
 
+/**
+ * The Cockpit's one rule for "active": what is really delivering. Meta counts
+ * when its effective_status is ACTIVE; Google when the campaign is ENABLED
+ * and serving_status is SERVING. A campaign whose end date has passed never
+ * counts. Until the ingestion has read the delivery status (null), the status
+ * a person set stands in for it.
+ */
+export function campaignDelivering(
+  campaign: {
+    platform: AdPlatform;
+    status: string;
+    deliveryStatus: string | null;
+    endDate: string | null;
+  },
+  today: string,
+): boolean {
+  if (campaign.endDate && campaign.endDate < today) return false;
+  if (campaign.platform === 'google') {
+    return campaign.status === 'ACTIVE' && (campaign.deliveryStatus ?? 'SERVING') === 'SERVING';
+  }
+  return (campaign.deliveryStatus ?? campaign.status) === 'ACTIVE';
+}
+
+/** Google approval states an ad serves under; anything else is a warning. */
+const GOOGLE_SERVING_APPROVALS = new Set(['APPROVED', 'APPROVED_LIMITED', 'AREA_OF_INTEREST_ONLY']);
+
+/**
+ * Whether an ad inside an active campaign delivers. Null when it does; the
+ * reason a person set it on and it still does not serve, otherwise. An ad a
+ * person paused is neither: it is simply off, and returns 'off'.
+ */
+export function adDeliveryIssue(ad: {
+  platform: AdPlatform;
+  status: string;
+  effectiveStatus: string | null;
+}): null | 'off' | string {
+  if (ad.status !== 'ACTIVE') return 'off';
+  if (ad.platform === 'google') {
+    return ad.effectiveStatus === null || GOOGLE_SERVING_APPROVALS.has(ad.effectiveStatus)
+      ? null
+      : ad.effectiveStatus;
+  }
+  const effective = ad.effectiveStatus ?? 'ACTIVE';
+  if (effective === 'ACTIVE') return null;
+  // Paused above it (ad set or campaign): off, not a problem with the ad.
+  if (effective.endsWith('_PAUSED') || effective === 'PAUSED') return 'off';
+  return effective;
+}
+
+/** Portuguese for the delivery issues a person can act on. */
+export const AD_ISSUE_LABEL: Record<string, string> = {
+  IN_PROCESS: 'Em processamento',
+  PENDING_REVIEW: 'Em análise',
+  UNDER_REVIEW: 'Em análise',
+  DISAPPROVED: 'Reprovado',
+  WITH_ISSUES: 'Com problemas',
+  PENDING_BILLING_INFO: 'Pagamento pendente',
+  AREA_OF_INTEREST_ONLY: 'Aprovado só na área de interesse',
+};
+
+export interface CockpitCampaign {
+  platform: AdPlatform;
+  externalId: string;
+  name: string;
+  deliveryStatus: string | null;
+  endDate: string | null;
+}
+
+/** An ad that a person switched on inside an active campaign and that is not serving. */
+export interface CockpitAdWarning {
+  platform: AdPlatform;
+  adExternalId: string;
+  adName: string;
+  campaignName: string;
+  /** The platform's own word: IN_PROCESS, PENDING_REVIEW, DISAPPROVED… */
+  issue: string;
+}
+
 export interface CockpitFigures {
   spendCents: number;
   impressions: number;
@@ -770,4 +848,8 @@ export interface DashboardCockpit {
   otherRegionsSpendCents: number;
   creatives: CreativePerformance[];
   alerts: CockpitAlert[];
+  /** The campaigns every figure above is summed over: only those delivering. */
+  activeCampaigns: CockpitCampaign[];
+  /** Ads switched on in those campaigns that are not serving; outside every figure. */
+  adWarnings: CockpitAdWarning[];
 }

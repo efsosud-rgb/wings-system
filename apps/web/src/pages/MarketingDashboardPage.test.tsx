@@ -2,6 +2,7 @@ import {
   EMPTY_TOTALS,
   type DashboardAudience,
   type DashboardCampaigns,
+  type DashboardCockpit,
   type DashboardCreatives,
   type DashboardFunnel,
   type DashboardSite,
@@ -31,6 +32,7 @@ const data = {} as {
   audience: DashboardAudience;
   site: DashboardSite;
   funnel: DashboardFunnel;
+  cockpit: DashboardCockpit;
 };
 
 const ok = <T,>(value: T) => ({ data: value, isLoading: false, isError: false });
@@ -43,6 +45,7 @@ vi.mock('../api/dashboard.js', () => ({
   useDashboardAudience: () => ok({ audience: data.audience }),
   useDashboardSite: () => ok({ site: data.site }),
   useDashboardFunnel: () => ok({ funnel: data.funnel }),
+  useDashboardCockpit: () => ok({ cockpit: data.cockpit }),
 }));
 const requests = { canRequest: true, filed: vi.fn() };
 vi.mock('../api/auth.js', () => ({
@@ -869,5 +872,81 @@ describe('the new tabs', () => {
     cleanup();
     renderAt('/dashboard/marketing?aba=configuracoes');
     expect(screen.getByText('configurações')).toBeTruthy();
+  });
+});
+
+describe('the cockpit', () => {
+  it('names the active campaigns it sums, and warns about ads that are on but not serving', () => {
+    data.cockpit = {
+      days: 7,
+      since: '2026-09-22',
+      until: '2026-09-28',
+      previousSince: '2026-09-15',
+      previousUntil: '2026-09-21',
+      current: {
+        ...{
+          spendCents: 0,
+          impressions: 0,
+          clicks: 0,
+          leads: 0,
+          sessions: null,
+          crmLeads: 0,
+          meetings: 0,
+          sales: 0,
+        },
+        spendCents: 150_000,
+        impressions: 40_000,
+        clicks: 800,
+        leads: 30,
+      },
+      previous: {
+        spendCents: 0,
+        impressions: 0,
+        clicks: 0,
+        leads: 0,
+        sessions: null,
+        crmLeads: 0,
+        meetings: 0,
+        sales: 0,
+      },
+      daily: [],
+      regions: [],
+      otherRegionsSpendCents: 0,
+      creatives: [],
+      alerts: [],
+      activeCampaigns: [
+        {
+          platform: 'meta',
+          externalId: '1',
+          name: 'Meta 28Set',
+          deliveryStatus: 'ACTIVE',
+          endDate: null,
+        },
+        {
+          platform: 'google',
+          externalId: '2',
+          name: 'SEARCH | Formatação | Alta Intenção',
+          deliveryStatus: 'SERVING',
+          endDate: null,
+        },
+      ],
+      adWarnings: [
+        {
+          platform: 'meta',
+          adExternalId: '9',
+          adName: 'Vídeo novo',
+          campaignName: 'Meta 28Set',
+          issue: 'PENDING_REVIEW',
+        },
+      ],
+    };
+    renderAt('/dashboard/marketing?aba=cockpit');
+    expect(screen.getByText(/Só campanhas ativas \(2\)/)).toBeTruthy();
+    expect(screen.getByText('Meta 28Set')).toBeTruthy();
+    const warnings = screen
+      .getByRole('heading', { name: 'Anúncios ligados que não estão rodando' })
+      .closest('section')!;
+    expect(within(warnings).getByText('Em análise')).toBeTruthy();
+    expect(within(warnings).getByText(/Vídeo novo/)).toBeTruthy();
   });
 });

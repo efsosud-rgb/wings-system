@@ -115,6 +115,7 @@ export async function syncCampaigns(
         objective: campaign.objective ?? null,
         startDate: campaign.startDate ?? null,
         endDate: campaign.endDate ?? null,
+        deliveryStatus: campaign.deliveryStatus ?? null,
         lastSyncedAt: now,
       })
       .onConflictDoUpdate({
@@ -130,6 +131,9 @@ export async function syncCampaigns(
           // Same for the schedule: undefined means "not read", null means "no end".
           ...(campaign.startDate !== undefined ? { startDate: campaign.startDate } : {}),
           ...(campaign.endDate !== undefined ? { endDate: campaign.endDate } : {}),
+          ...(campaign.deliveryStatus !== undefined
+            ? { deliveryStatus: campaign.deliveryStatus }
+            : {}),
           lastSyncedAt: now,
           updatedAt: now,
         },

@@ -98,8 +98,7 @@ export function useDashboardCreatives(days: DashboardWindow) {
 export function useDashboardAudience(days: DashboardWindow) {
   return useQuery({
     queryKey: ['dashboard', 'audience', days],
-    queryFn: () =>
-      api.get<{ audience: DashboardAudience }>(`/ads/dashboard/audience?days=${days}`),
+    queryFn: () => api.get<{ audience: DashboardAudience }>(`/ads/dashboard/audience?days=${days}`),
     staleTime: STALE_MS,
   });
 }
@@ -125,8 +124,7 @@ export function useInsightRun(id: string | undefined, enabled: boolean) {
     queryKey: ['dashboard', 'insight-run', id],
     queryFn: () => api.get<{ run: InsightRun }>(`/ads/insights/runs/${id}`),
     enabled: enabled && Boolean(id),
-    refetchInterval: (query) =>
-      query.state.data?.run.status === 'running' ? RUN_POLL_MS : false,
+    refetchInterval: (query) => (query.state.data?.run.status === 'running' ? RUN_POLL_MS : false),
   });
 }
 
@@ -154,9 +152,7 @@ export function useRequestFromInsight() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) =>
-      api.post<{ insight: InsightCard; approvalId: string | null }>(
-        `/ads/insights/${id}/request`,
-      ),
+      api.post<{ insight: InsightCard; approvalId: string | null }>(`/ads/insights/${id}/request`),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: insightsKey });
       void queryClient.invalidateQueries({ queryKey: ['dashboard', 'overview'] });

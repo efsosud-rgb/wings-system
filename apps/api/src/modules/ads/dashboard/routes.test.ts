@@ -3,6 +3,7 @@ import {
   SESSION_COOKIE,
   type DashboardAudience,
   type DashboardCampaigns,
+  type DashboardCockpit,
   type DashboardCreatives,
   type DashboardOverview,
   type DashboardPlatforms,
@@ -841,6 +842,42 @@ describe('the kill switch on the strip', () => {
       expect(meta?.killSwitch?.accountExternalId).toMatch(/^act_/);
     } finally {
       await releaseKillSwitch(db, metaAccountId, 'teste');
+    }
+  });
+});
+
+describe('the cockpit', () => {
+  it('sums only the campaigns delivering now, and lists ads that are on but not serving', async () => {
+    const before = await read<DashboardCockpit>('/ads/dashboard/cockpit?days=7', 'cockpit');
+    expect(before.activeCampaigns.map((campaign) => campaign.name).sort()).toEqual([
+      'LEAD | FORMS',
+      'Pesquisa | Franquia',
+    ]);
+    expect(before.adWarnings).toEqual([
+      expect.objectContaining({
+        adName: 'Reprovado',
+        issue: 'DISAPPROVED',
+        campaignName: 'LEAD | FORMS',
+      }),
+    ]);
+    expect(before.creatives.map((creative) => creative.name)).not.toContain('Reprovado');
+    expect(before.current.spendCents).toBeGreaterThan(0);
+
+    // Google stops serving (the end date came, say): its spend leaves every figure.
+    await db
+      .update(adCampaigns)
+      .set({ deliveryStatus: 'ENDED' })
+      .where(eq(adCampaigns.externalId, '100'));
+    try {
+      const after = await read<DashboardCockpit>('/ads/dashboard/cockpit?days=7', 'cockpit');
+      expect(after.activeCampaigns.map((campaign) => campaign.name)).toEqual(['LEAD | FORMS']);
+      expect(after.current.spendCents).toBeLessThan(before.current.spendCents);
+      expect(after.creatives.every((creative) => creative.platform === 'meta')).toBe(true);
+    } finally {
+      await db
+        .update(adCampaigns)
+        .set({ deliveryStatus: 'SERVING' })
+        .where(eq(adCampaigns.externalId, '100'));
     }
   });
 });

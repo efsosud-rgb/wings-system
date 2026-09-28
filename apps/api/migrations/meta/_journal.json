@@ -302,6 +302,13 @@
       "when": 1790620420811,
       "tag": "0042_site_and_crm_funnel",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1790623832784,
+      "tag": "0043_campaign_delivery_status",
+      "breakpoints": true
     }
   ]
 }

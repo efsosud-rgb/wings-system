@@ -6965,3 +6965,11 @@ button.stage-chip:focus-visible {
     font-size: 30px;
   }
 }
+
+.cockpit-scope p {
+  margin: 0;
+  line-height: 1.6;
+}
+.cockpit-warnings {
+  margin-block: 1rem;
+}

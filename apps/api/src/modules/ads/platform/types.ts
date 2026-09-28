@@ -26,6 +26,13 @@ export interface PlatformCampaign {
   /** First and last day it runs (YYYY-MM-DD, São Paulo); undefined when the client does not read them, null end = open-ended. */
   startDate?: string | null;
   endDate?: string | null;
+  /**
+   * Whether it is actually delivering, as the platform says: Meta's
+   * effective_status (ACTIVE, CAMPAIGN_PAUSED, IN_PROCESS, WITH_ISSUES…),
+   * Google's serving_status (SERVING, ENDED, PENDING, SUSPENDED…). Undefined
+   * when the client does not read it.
+   */
+  deliveryStatus?: string | null;
 }
 
 export interface PlatformAdSet {
@@ -468,7 +475,11 @@ export interface AdTreeWriter {
    * everything the creative and the ad would be refused for, with nothing
    * created. Done before every creative.
    */
-  validateAd(spec: { name: string; adSetId: string; creative: CreativeSpec }): Promise<StepOutcome<true>>;
+  validateAd(spec: {
+    name: string;
+    adSetId: string;
+    creative: CreativeSpec;
+  }): Promise<StepOutcome<true>>;
   createCreative(spec: CreativeSpec): Promise<StepOutcome<{ id: string }>>;
   createAd(spec: {
     name: string;
