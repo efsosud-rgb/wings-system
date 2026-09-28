@@ -224,3 +224,15 @@ idade). Quando tudo confere, diz isso numa linha. Motivo: em 25/09 um pedido
 saiu com o dobro da verba e um período menor que o rascunho combinado, e o
 aprovador não tinha como notar. O vínculo é pelo nome, não por id: renomear a
 campanha no construtor desliga a comparação.
+
+### UTMs da Meta: `facebook` / `cpc` (28/09/2026)
+
+O padrão do construtor para a Meta passou de `utm_source=meta&utm_medium=paid_social`
+para **`utm_source=facebook&utm_medium=cpc`**: o RD Station não reconhece
+`paid_social` (fonte "Desconhecido") e lê `cpc` + `facebook` como "Busca Paga |
+Facebook Ads". Nos anúncios ativos da campanha `120252260012720076` a troca foi
+feita à mão pela API (o criativo da Meta é imutável): criativos novos iguais
+com o link corrigido (`1100345526226556` para v1, `3651541801687471` para
+v2), `validate_only` da troca e depois a troca no anúncio, sem pausar nada;
+registrado na trilha como `ads.manual_platform_change`. A troca de criativo
+manda o anúncio de volta à revisão (`IN_PROCESS`).

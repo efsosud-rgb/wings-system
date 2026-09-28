@@ -129,8 +129,9 @@ describe('UTMs', () => {
   it('generates defaults from the form', () => {
     expect(buildUtms({ platform: 'meta', objective: 'lead', campaignName: 'Expansão SP' })).toEqual(
       {
-        utm_source: 'meta',
-        utm_medium: 'paid_social',
+        // What RD Station files as "Busca Paga | Facebook Ads".
+        utm_source: 'facebook',
+        utm_medium: 'cpc',
         utm_campaign: 'expansao-sp',
         utm_content: 'lead',
       },
@@ -140,7 +141,7 @@ describe('UTMs', () => {
   it('applies them to the destination, one content value per variation', () => {
     const utms = buildUtms({ platform: 'meta', objective: 'lead', campaignName: 'Teste' });
     expect(applyUtms('https://wingscompany.com.br/franquia?x=1', utms, 1)).toBe(
-      'https://wingscompany.com.br/franquia?x=1&utm_source=meta&utm_medium=paid_social&utm_campaign=teste&utm_content=lead-v2',
+      'https://wingscompany.com.br/franquia?x=1&utm_source=facebook&utm_medium=cpc&utm_campaign=teste&utm_content=lead-v2',
     );
     expect(applyUtms('não é url', utms)).toBeNull();
   });
