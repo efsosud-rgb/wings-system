@@ -18,6 +18,12 @@ import type { Conversion, CrmMap, NewDeal, RdCrm, RdMarketing } from './rd.js';
 /** The task each new Expansão deal gets, for its owner, due the day it is created. */
 export const FIRST_CONTACT_TASK = 'Fazer primeiro contato';
 
+/**
+ * A conversion this young is left for the next pass: RD's own flows create
+ * the deal within minutes, and this job is only the safety net behind them.
+ */
+export const SETTLING_MS = 15 * 60_000;
+
 export const FORM_SITE_IDENTIFIER = 'wings-company-form-site';
 
 export interface LandingPageRule {
@@ -63,6 +69,8 @@ export interface IntakeResult {
   /** Conversions per identifier that no rule routes (counts of an identifier, not of people). */
   ignored: Record<string, number>;
   alreadyDecided: number;
+  /** Too recent: RD's flows may still be creating the deal. */
+  settling: number;
   existingDeal: number;
   noContactData: number;
   failed: number;
@@ -174,6 +182,7 @@ export async function runExpansionIntake(input: {
     conversions: 0,
     ignored: {},
     alreadyDecided: 0,
+    settling: 0,
     existingDeal: 0,
     noContactData: 0,
     failed: 0,
@@ -201,6 +210,10 @@ export async function runExpansionIntake(input: {
           : null;
       if (!target) {
         result.ignored[conversion.identifier] = (result.ignored[conversion.identifier] ?? 0) + 1;
+        continue;
+      }
+      if (input.now && input.now().getTime() - conversion.occurredAt.getTime() < SETTLING_MS) {
+        result.settling += 1;
         continue;
       }
       const key = conversionKey(conversion);

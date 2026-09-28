@@ -52,7 +52,7 @@ function harness(conversions: Conversion[], contacts: Record<string, CrmContact 
     checkDeal: async () => ({ hasContact: true, hasSource: true }),
   } as unknown as RdCrm;
   const ledger = memoryLedger();
-  const run = (dryRun = false) =>
+  const run = (dryRun = false, now?: () => Date) =>
     runExpansionIntake({
       marketing,
       crm,
@@ -61,6 +61,7 @@ function harness(conversions: Conversion[], contacts: Record<string, CrmContact 
       expansionOwnerId: 'owner-1',
       since: at('2026-09-01T00:00:00Z'),
       dryRun,
+      now,
     });
   return { created, tasks, ledger, run };
 }
@@ -151,5 +152,21 @@ describe('expansion intake', () => {
     const result = await h.run();
     expect(result.noContactData).toBe(1);
     expect(h.created).toHaveLength(0);
+  });
+
+  it('leaves a conversion younger than 15 minutes for the next pass, then finds the flow made the deal', async () => {
+    const recent = conversion({ occurredAt: at('2026-09-28T12:00:00Z') });
+    const h = harness([recent]);
+    const early = await h.run(false, () => at('2026-09-28T12:05:00Z'));
+    expect(early.settling).toBe(1);
+    expect(h.created).toHaveLength(0);
+
+    // The RD flow made the deal in the meantime: the next pass adds nothing.
+    const later = harness([recent], {
+      'fulano@example.com': { id: 'c1', deals: [{ id: 'd1', win: null }] },
+    });
+    const result = await later.run(false, () => at('2026-09-28T12:20:00Z'));
+    expect(result.existingDeal).toBe(1);
+    expect(later.created).toHaveLength(0);
   });
 });
