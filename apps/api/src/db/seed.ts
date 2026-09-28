@@ -28,11 +28,17 @@ import {
  * Seeds reference data: sectors, roles, the permission matrix and the standard
  * work schedule. Idempotent — safe to re-run after every deploy.
  */
-/** Landing pages of client brands known on 2026-09-28; more are added in Integrações. */
+/** Landing pages of client brands known on 2026-09-28 (the last six confirmed by Eric the same day); more are added in Integrações. */
 const EXPANSION_LANDING_PAGES = [
   { identifier: 'lp-calcadao-do-frango', brand: 'Calçadão do Frango' },
   { identifier: 'casal-do-churros', brand: 'Casal dos Churros' },
   { identifier: 'lp-mister-russo', brand: 'Mister Russo' },
+  { identifier: 'calcadao-do-frango', brand: 'Calçadão do Frango' },
+  { identifier: 'acai-da-fila', brand: 'Açaí da Fila' },
+  { identifier: 'grupo-forte-fenix', brand: 'Grupo Forte Fênix' },
+  { identifier: 'rio-acai-gourmet', brand: 'Rio Açaí Gourmet' },
+  { identifier: 'ginteco', brand: 'Ginteco' },
+  { identifier: 'lista-de-espera-familia-k', brand: 'Família K' },
 ];
 
 export async function seed(db: Database): Promise<void> {

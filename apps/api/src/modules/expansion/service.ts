@@ -44,6 +44,7 @@ export async function activeRules(db: Database): Promise<LandingPageRule[]> {
 export interface IntakeCredentials {
   rdCrmToken: string;
   rdMarketing: RdMarketingCredentials;
+  expansionOwnerId?: string | null;
 }
 
 /** One pass over the last `lookbackHours` of conversions. */
@@ -58,6 +59,7 @@ export async function runIntakeOnce(
     crm: new RdCrm(credentials.rdCrmToken, options.fetchImpl),
     ledger: dbLedger(db),
     rules: await activeRules(db),
+    expansionOwnerId: credentials.expansionOwnerId ?? null,
     since: new Date(now.getTime() - options.lookbackHours * 3_600_000),
     dryRun: options.dryRun ?? false,
   });

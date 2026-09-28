@@ -201,6 +201,8 @@ export interface NewDeal {
   contact: { name: string; email: string | null; phone: string | null };
   sourceId: string | null;
   campaignId: string | null;
+  /** RD CRM user id of the deal's owner; null leaves it unassigned. */
+  ownerId: string | null;
   customFields: { id: string; value: string }[];
 }
 
@@ -320,6 +322,7 @@ export class RdCrm {
         deal: {
           name: input.name,
           deal_stage_id: input.stageId,
+          ...(input.ownerId ? { user_id: input.ownerId } : {}),
           deal_custom_fields: input.customFields.map((field) => ({
             custom_field_id: field.id,
             value: field.value,

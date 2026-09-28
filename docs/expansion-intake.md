@@ -42,4 +42,4 @@ Eventos do contato trazem `payload.conversion_identifier` e `traffic_source`.
 **Não verificado:** criar negócio para contato que já existe no CRM (o vínculo por
 `contacts: [{ _id }]` não funciona; agora o contato vai inteiro e o RD casa por
 e-mail — conferir na primeira criação real, `unverified` avisa); dono do negócio
-(não é definido; `distribution_settings` do RD não foi testado).
+(Expansão: `EXPANSION_OWNER_RD_USER_ID`, id do usuário no RD CRM, vai em `deal.user_id`; Formatação fica sem dono; `distribution_settings` do RD não foi testado).

@@ -39,6 +39,7 @@ async function main() {
     const stop = startExpansionIntakeScheduler({
       db,
       credentials: {
+        expansionOwnerId: env.EXPANSION_OWNER_RD_USER_ID ?? null,
         rdCrmToken: env.RD_CRM_API_TOKEN,
         rdMarketing: {
           clientId: env.RD_MKT_CLIENT_ID,

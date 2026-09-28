@@ -56,6 +56,7 @@ function harness(conversions: Conversion[], contacts: Record<string, CrmContact 
       crm,
       ledger,
       rules,
+      expansionOwnerId: 'owner-1',
       since: at('2026-09-01T00:00:00Z'),
       dryRun,
     });
@@ -67,7 +68,11 @@ describe('expansion intake', () => {
     const h = harness([conversion({})]);
     const result = await h.run();
     expect(result.created).toEqual({ 'expansao:Marca X': 1 });
-    expect(h.created[0]).toMatchObject({ stageId: 's-exp', campaignId: 'camp-x' });
+    expect(h.created[0]).toMatchObject({
+      stageId: 's-exp',
+      campaignId: 'camp-x',
+      ownerId: 'owner-1',
+    });
     expect(h.created[0]!.customFields).toEqual([
       { id: 'cf-brand', value: 'Marca X' },
       { id: 'cf-obs', value: expect.stringContaining('campaign=c1') },
@@ -82,7 +87,7 @@ describe('expansion intake', () => {
     const result = await h.run();
     expect(result.created).toEqual({ formatacao: 1 });
     expect(result.ignored).toEqual({ 'RD Station CRM': 1 });
-    expect(h.created[0]).toMatchObject({ stageId: 's-for', sourceId: 'src-site' });
+    expect(h.created[0]).toMatchObject({ stageId: 's-for', sourceId: 'src-site', ownerId: null });
   });
 
   it('does not duplicate when the contact has an open deal in any funnel', async () => {

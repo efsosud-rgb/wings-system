@@ -123,6 +123,7 @@ function dealFor(
   target: Target,
   brand: string | null,
   map: CrmMap,
+  ownerId: string | null,
 ): NewDeal | null {
   const spec = TARGETS[target];
   const stageId = map.pipelines.get(spec.pipeline)?.stages.get(spec.stage);
@@ -144,6 +145,7 @@ function dealFor(
     stageId,
     contact: { name, email: conversion.email, phone: conversion.phone },
     sourceId: sourceIdFor(conversion, target, map),
+    ownerId: target === 'expansao' ? ownerId : null,
     campaignId: (campaignName && map.campaigns.get(campaignName)) || null,
     customFields,
   };
@@ -154,6 +156,8 @@ export async function runExpansionIntake(input: {
   crm: RdCrm;
   ledger: Ledger;
   rules: LandingPageRule[];
+  /** RD CRM user who owns the Expansão deals this run creates. */
+  expansionOwnerId?: string | null;
   since: Date;
   dryRun: boolean;
 }): Promise<IntakeResult> {
@@ -216,7 +220,7 @@ export async function runExpansionIntake(input: {
           continue;
         }
         map ??= await crm.map();
-        const deal = dealFor(conversion, target, brand, map);
+        const deal = dealFor(conversion, target, brand, map, input.expansionOwnerId ?? null);
         if (!deal) throw new Error('funnel or stage not found in RD CRM');
         const dealId = await crm.createDeal(deal);
         handled.add(uuid);

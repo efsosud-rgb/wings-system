@@ -132,6 +132,8 @@ const schema = z.object({
    * Marketing conversions without a CRM deal get one. Off unless "true", and
    * it also needs the RD CRM and RD Marketing credentials below.
    */
+  /** RD CRM user id that owns the Expansão deals the intake creates (not a secret). */
+  EXPANSION_OWNER_RD_USER_ID: optionalString,
   EXPANSION_INTAKE_ENABLED: optionalString.refine(
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',
