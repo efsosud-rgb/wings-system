@@ -11,6 +11,7 @@ import type {
   InsightRun,
   InsightsResponse,
   OwnedChannelsResponse,
+  SetAccountCplTargetInput,
   SetCplTargetInput,
   SuggestionsResponse,
 } from '@wings/shared';
@@ -197,6 +198,18 @@ export function useSetCplTarget() {
     onSuccess: (data) => {
       queryClient.setQueryData(settingsKey, data);
       // The verdicts judge against the target: every campaign read is stale now.
+      void queryClient.invalidateQueries({ queryKey: ['dashboard', 'campaigns'] });
+    },
+  });
+}
+
+export function useSetAccountCplTarget() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: SetAccountCplTargetInput) =>
+      api.put<DashboardSettings>('/ads/dashboard/settings/account-cpl-target', input),
+    onSuccess: (data) => {
+      queryClient.setQueryData(settingsKey, data);
       void queryClient.invalidateQueries({ queryKey: ['dashboard', 'campaigns'] });
     },
   });

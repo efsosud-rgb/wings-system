@@ -279,6 +279,27 @@ Campanha de leads sem meta confirmada é "Sem meta". As metas ficam em
 `ads.cpl_target_set`); o histórico de 90 dias propõe um valor com a base
 escrita, e só a confirmação de uma pessoa o grava.
 
+**Meta por conta (28/09/2026, migração 0039).** `marketing_account_cpl_targets`
+guarda a meta de CPL de leads de cada conta, e ela vale antes da meta por
+objetivo: CPL de Meta e de Google não se comparam. Configurações mostra uma
+linha por conta com a sugestão já no campo: R$ 85,90 na Meta e nenhuma no
+Google, até ele ter conversões confiáveis (`ACCOUNT_CPL_SUGGESTION`). A
+sugestão não conta para nada até alguém clicar em "Confirmar" (`PUT
+/ads/dashboard/settings/account-cpl-target`, `ads.request`, auditoria
+`ads.account_cpl_target_set`). A campanha traz `targetCplCents`, a meta que o
+veredito usou.
+
+### Campanhas criadas pelo sistema: pedidos pela aba Campanhas
+
+Cada campanha traz `systemCreated` (um rascunho executado aponta para ela), o
+período do rascunho (`startDate`/`endDate`) e `accountExternalId`. Nas criadas
+pelo sistema, quem tem `ads.request` vê "Pausar" (se está ativa), "Retomar" (se
+está pausada) e "Mudar verba diária" (se a verba é da campanha). Cada botão
+pede motivo e registra um pedido em `POST /ads/change-requests`, o mesmo da
+tela de aprovação: nada vai à plataforma daqui. O pedido passa pela aprovação
+e pelo clique em Executar como qualquer outro. Campanha feita à mão não tem
+botão: muda-se na plataforma.
+
 ### Dispositivo e dia × hora
 
 `ad_breakdown_kind` ganhou `device` (Meta: `device_platform`; Google:

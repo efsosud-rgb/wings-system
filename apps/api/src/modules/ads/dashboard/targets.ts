@@ -1,7 +1,20 @@
-import { objectiveKindOf, type CplTarget, type ObjectiveKind } from '@wings/shared';
+import {
+  ACCOUNT_CPL_SUGGESTION,
+  objectiveKindOf,
+  type AccountCplTarget,
+  type CplTarget,
+  type ObjectiveKind,
+} from '@wings/shared';
 import { and, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import type { Database } from '../../../db/client.js';
-import { adCampaigns, adMetricsDaily, cplTargets, employees, WINGS_TENANT_ID } from '../../../db/schema/index.js';
+import {
+  accountCplTargets,
+  adCampaigns,
+  adMetricsDaily,
+  cplTargets,
+  employees,
+  WINGS_TENANT_ID,
+} from '../../../db/schema/index.js';
 import { activeAccounts } from './queries.js';
 import { addDays, dayIn } from './window.js';
 
@@ -163,4 +176,70 @@ export async function setTarget(
     .insert(cplTargets)
     .values({ tenantId: WINGS_TENANT_ID, objectiveKind: input.objectiveKind, ...values })
     .onConflictDoUpdate({ target: [cplTargets.tenantId, cplTargets.objectiveKind], set: values });
+}
+
+/** Confirmed leads targets by ad account id; accounts without one are absent. */
+export async function confirmedAccountTargets(db: Database): Promise<Map<string, number>> {
+  const rows = await db
+    .select({ adAccountId: accountCplTargets.adAccountId, targetCents: accountCplTargets.targetCents })
+    .from(accountCplTargets)
+    .where(eq(accountCplTargets.objectiveKind, 'leads'));
+  const targets = new Map<string, number>();
+  for (const row of rows) if (row.targetCents !== null) targets.set(row.adAccountId, row.targetCents);
+  return targets;
+}
+
+/** Every active account with its leads target, confirmed or only suggested, for the settings screen. */
+export async function dashboardAccountTargets(db: Database): Promise<AccountCplTarget[]> {
+  const [accounts, rows] = await Promise.all([
+    activeAccounts(db),
+    db
+      .select({
+        adAccountId: accountCplTargets.adAccountId,
+        targetCents: accountCplTargets.targetCents,
+        confirmedAt: accountCplTargets.confirmedAt,
+        confirmedByName: employees.fullName,
+      })
+      .from(accountCplTargets)
+      .leftJoin(employees, eq(employees.id, accountCplTargets.confirmedBy))
+      .where(eq(accountCplTargets.objectiveKind, 'leads')),
+  ]);
+  const byAccount = new Map(rows.map((row) => [row.adAccountId, row]));
+  return accounts.map((account) => {
+    const platform = account.platform as 'meta' | 'google';
+    const row = byAccount.get(account.id);
+    const confirmed = row?.targetCents !== null && row?.targetCents !== undefined;
+    const suggestion = ACCOUNT_CPL_SUGGESTION[platform];
+    return {
+      adAccountId: account.id,
+      accountName: account.name,
+      platform,
+      targetCents: row?.targetCents ?? null,
+      confirmedAt: confirmed ? (row?.confirmedAt?.toISOString() ?? null) : null,
+      confirmedByName: confirmed ? (row?.confirmedByName ?? null) : null,
+      suggestedCents: suggestion.cents,
+      suggestionNote: suggestion.note,
+    };
+  });
+}
+
+/** A person confirmed (or cleared) an account's leads target. Null clears it. */
+export async function setAccountTarget(
+  db: Database,
+  input: { adAccountId: string; targetCents: number | null; employeeId: string; now?: Date },
+): Promise<void> {
+  const now = input.now ?? new Date();
+  const values = {
+    targetCents: input.targetCents,
+    confirmedBy: input.targetCents === null ? null : input.employeeId,
+    confirmedAt: input.targetCents === null ? null : now,
+    updatedAt: now,
+  };
+  await db
+    .insert(accountCplTargets)
+    .values({ adAccountId: input.adAccountId, objectiveKind: 'leads', ...values })
+    .onConflictDoUpdate({
+      target: [accountCplTargets.adAccountId, accountCplTargets.objectiveKind],
+      set: values,
+    });
 }

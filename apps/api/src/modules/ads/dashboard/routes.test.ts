@@ -14,6 +14,7 @@ import { buildApp } from '../../../app.js';
 import type { Database } from '../../../db/client.js';
 import { eq } from 'drizzle-orm';
 import {
+  adCampaignDrafts,
   adCampaigns,
   agentConversations,
   agentMessages,
@@ -462,6 +463,35 @@ describe('campaigns down to the ad', () => {
   });
 });
 
+describe('campaigns the system created', () => {
+  it('carry the account id, the flag and the period of the draft that created them; the rest do not', async () => {
+    const leads = await db.query.adCampaigns.findFirst({
+      where: eq(adCampaigns.externalId, 'c-leads'),
+    });
+    if (!leads) throw new Error('expected the leads campaign');
+    await db.insert(adCampaignDrafts).values({
+      adAccountId: metaAccountId,
+      name: 'LEAD | FORMS',
+      objective: 'lead',
+      dailyBudgetCents: 24_000,
+      startDate: '2026-09-28',
+      endDate: '2026-10-02',
+      payload: {},
+      campaignId: leads.id,
+    });
+    const result = await read<DashboardCampaigns>('/ads/dashboard/campaigns?days=30', 'campaigns');
+    const created = result.campaigns.find((campaign) => campaign.name === 'LEAD | FORMS');
+    expect(created).toMatchObject({
+      systemCreated: true,
+      startDate: '2026-09-28',
+      endDate: '2026-10-02',
+    });
+    expect(created?.accountExternalId).toMatch(/^act_/);
+    const byHand = result.campaigns.find((campaign) => campaign.name === 'Institucional parada');
+    expect(byHand).toMatchObject({ systemCreated: false, startDate: null, endDate: null });
+  });
+});
+
 describe('verdicts and targets', () => {
   it('says "sem meta" for a leads campaign until a person confirms a target, then judges by it', async () => {
     await db
@@ -515,6 +545,52 @@ describe('verdicts and targets', () => {
       'frequency',
       'pacing',
     ]);
+  });
+
+  it("an account's own CPL target wins over the company's, and clearing it brings the company's back", async () => {
+    // Runs after the test above confirmed the company-wide R$ 50,00.
+    const cookies = await sessionFor('marketing');
+    const settings = await read<DashboardSettings>('/ads/dashboard/settings', 'settings');
+    const meta = settings.accountTargets.find((target) => target.adAccountId === metaAccountId);
+    // The Meta suggestion fills the box; nothing is judged against it yet.
+    expect(meta).toMatchObject({ platform: 'meta', targetCents: null, suggestedCents: 8590 });
+    expect(
+      settings.accountTargets.find((target) => target.platform === 'google')?.suggestedCents,
+    ).toBeNull();
+
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/ads/dashboard/settings/account-cpl-target',
+      cookies,
+      payload: { adAccountId: metaAccountId, targetCents: 8590 },
+    });
+    expect(put.statusCode).toBe(200);
+    const leads = (
+      await read<DashboardCampaigns>('/ads/dashboard/campaigns?days=30', 'campaigns')
+    ).campaigns.find((campaign) => campaign.name === 'LEAD | FORMS');
+    expect(leads?.targetCplCents).toBe(8590);
+    expect(leads?.verdict.reasons.find((reason) => reason.signal === 'cpl')?.text).toMatch(
+      /meta de R\$\s85,90/,
+    );
+
+    await app.inject({
+      method: 'PUT',
+      url: '/ads/dashboard/settings/account-cpl-target',
+      cookies,
+      payload: { adAccountId: metaAccountId, targetCents: null },
+    });
+    const back = (
+      await read<DashboardCampaigns>('/ads/dashboard/campaigns?days=30', 'campaigns')
+    ).campaigns.find((campaign) => campaign.name === 'LEAD | FORMS');
+    expect(back?.targetCplCents).toBe(5000);
+
+    const unknown = await app.inject({
+      method: 'PUT',
+      url: '/ads/dashboard/settings/account-cpl-target',
+      cookies,
+      payload: { adAccountId: '99999999-9999-4999-8999-999999999999', targetCents: 8590 },
+    });
+    expect(unknown.statusCode).toBe(404);
   });
 
   it('refuses a target from somebody who cannot request changes, and a bad one', async () => {

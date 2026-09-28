@@ -292,9 +292,42 @@ export interface CplTarget {
   proposedBasis: string | null;
 }
 
+/**
+ * The CPL target of one ad account, for its leads campaigns; it wins over the
+ * company-wide one. `suggestedCents` is only a starting value for the input
+ * (Meta R$ 85,90 as agreed on 28/09; Google none until its conversions are
+ * trustworthy): nothing is judged against it until a person confirms.
+ */
+export interface AccountCplTarget {
+  adAccountId: string;
+  accountName: string;
+  platform: 'meta' | 'google';
+  targetCents: number | null;
+  confirmedAt: string | null;
+  confirmedByName: string | null;
+  suggestedCents: number | null;
+  suggestionNote: string | null;
+}
+
+export const ACCOUNT_CPL_SUGGESTION: Record<'meta' | 'google', { cents: number | null; note: string }> = {
+  meta: { cents: 8590, note: 'Sugestão inicial combinada em 28/09. Só vale depois de confirmada.' },
+  google: {
+    cents: null,
+    note: 'Sem meta até o Google ter conversões confiáveis; até lá as campanhas de leads ficam "Sem meta".',
+  },
+};
+
 export interface DashboardSettings {
   targets: CplTarget[];
+  accountTargets: AccountCplTarget[];
 }
+
+export const setAccountCplTargetSchema = z.object({
+  adAccountId: z.string().uuid(),
+  /** Whole cents; null clears the target, and the company-wide one applies again. */
+  targetCents: z.number().int().min(100).max(100_000_00).nullable(),
+});
+export type SetAccountCplTargetInput = z.input<typeof setAccountCplTargetSchema>;
 
 export const setCplTargetSchema = z.object({
   objectiveKind: z.enum(['leads', 'traffic']),
@@ -318,6 +351,7 @@ export type SetCplTargetInput = z.input<typeof setCplTargetSchema>;
 //   POST /ads/insights/suggestions/:id/dismiss  -> { suggestion }              (ads.read)
 //   GET  /ads/dashboard/settings                -> DashboardSettings           (ads.read)
 //   PUT  /ads/dashboard/settings/cpl-target     -> DashboardSettings           (ads.request)
+//   PUT  /ads/dashboard/settings/account-cpl-target -> DashboardSettings       (ads.request)
 //
 // Without OPENROUTER_API_KEY the generate routes answer 503, never a fake card.
 // A generate while a run of the same kind is going answers 409 `already_running`;

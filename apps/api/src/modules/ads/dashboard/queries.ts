@@ -30,6 +30,7 @@ import {
   adAccounts,
   adAds,
   adAlerts,
+  adCampaignDrafts,
   adCampaigns,
   adCreatives,
   adGuardrailEvents,
@@ -646,6 +647,7 @@ export async function campaigns(
     adSums,
     alertRows,
     verdicts,
+    drafts,
   ] = await Promise.all([
     db.query.adCampaigns.findMany({ where: inArray(adCampaigns.adAccountId, ids) }),
     db
@@ -664,8 +666,20 @@ export async function campaigns(
       .from(adAlerts)
       .where(and(inArray(adAlerts.adAccountId, ids), isNull(adAlerts.resolvedAt))),
     campaignVerdicts(db, days, now),
+    // A campaign this system created is the one its executed draft points at.
+    db
+      .select({
+        campaignId: adCampaignDrafts.campaignId,
+        startDate: adCampaignDrafts.startDate,
+        endDate: adCampaignDrafts.endDate,
+      })
+      .from(adCampaignDrafts)
+      .innerJoin(adCampaigns, eq(adCampaigns.id, adCampaignDrafts.campaignId))
+      .where(inArray(adCampaigns.adAccountId, ids)),
   ]);
   const verdictOf = new Map(verdicts.map((row) => [row.campaignId, row.verdict]));
+  const targetOf = new Map(verdicts.map((row) => [row.campaignId, row.targetCplCents]));
+  const draftOf = new Map(drafts.map((row) => [row.campaignId, row]));
 
   const adNode = (ad: (typeof adRows)[number]): AdNode => {
     const creative = ad.creativeExternalId
@@ -727,6 +741,11 @@ export async function campaigns(
       externalId: campaign.externalId,
       platform: (account?.platform ?? 'meta') as AdPlatform,
       accountName: account?.name ?? '',
+      accountExternalId: account?.externalId ?? '',
+      systemCreated: draftOf.has(campaign.id),
+      startDate: draftOf.get(campaign.id)?.startDate ?? null,
+      endDate: draftOf.get(campaign.id)?.endDate ?? null,
+      targetCplCents: targetOf.get(campaign.id) ?? null,
       name: campaign.name,
       status: campaign.status,
       objective: campaign.objective,

@@ -1,5 +1,6 @@
 import {
   DASHBOARD_WINDOWS,
+  setAccountCplTargetSchema,
   setCplTargetSchema,
   type DashboardSettings,
   type DashboardWindow,
@@ -7,8 +8,13 @@ import {
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { writeAudit } from '../../../lib/audit.js';
-import { audience, campaigns, creatives, overview, platforms } from './queries.js';
-import { dashboardTargets, setTarget } from './targets.js';
+import { activeAccounts, audience, campaigns, creatives, overview, platforms } from './queries.js';
+import {
+  dashboardAccountTargets,
+  dashboardTargets,
+  setAccountTarget,
+  setTarget,
+} from './targets.js';
 
 /**
  * HTTP surface of Dashboard → Marketing. Reads only: every figure comes from
@@ -77,8 +83,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
    * and that takes `ads.request`, the permission of whoever runs the traffic.
    */
   app.get('/ads/dashboard/settings', guard, async (_request, reply) => {
-    const settings: DashboardSettings = { targets: await dashboardTargets(db, now()) };
-    return reply.send({ settings });
+    return reply.send({ settings: await settingsOf() });
   });
 
   app.put(
@@ -105,8 +110,47 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
           targetCents: parsed.data.targetCents,
         },
       });
-      const settings: DashboardSettings = { targets: await dashboardTargets(db, now()) };
-      return reply.send({ settings });
+      return reply.send({ settings: await settingsOf() });
     },
   );
+
+  /** The leads CPL target of one account; it wins over the company-wide one. */
+  app.put(
+    '/ads/dashboard/settings/account-cpl-target',
+    { preHandler: app.requirePermission('ads.request') },
+    async (request, reply) => {
+      const parsed = setAccountCplTargetSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: 'invalid_request',
+          message: parsed.error.issues[0]?.message ?? 'Dados inválidos',
+        });
+      }
+      const accounts = await activeAccounts(db);
+      if (!accounts.some((account) => account.id === parsed.data.adAccountId)) {
+        return reply
+          .status(404)
+          .send({ error: 'not_found', message: 'Conta de anúncios não encontrada.' });
+      }
+      const employeeId = request.session.actor.employeeId;
+      await setAccountTarget(db, { ...parsed.data, employeeId, now: now() });
+      await writeAudit(db, {
+        actorEmployeeId: employeeId,
+        action: 'ads.account_cpl_target_set',
+        entity: 'marketing_account_cpl_target',
+        entityId: parsed.data.adAccountId,
+        ip: request.ip,
+        metadata: { objectiveKind: 'leads', targetCents: parsed.data.targetCents },
+      });
+      return reply.send({ settings: await settingsOf() });
+    },
+  );
+
+  async function settingsOf(): Promise<DashboardSettings> {
+    const [targets, accountTargets] = await Promise.all([
+      dashboardTargets(db, now()),
+      dashboardAccountTargets(db),
+    ]);
+    return { targets, accountTargets };
+  }
 };

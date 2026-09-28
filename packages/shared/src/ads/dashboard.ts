@@ -361,6 +361,19 @@ export interface CampaignNode {
   externalId: string;
   platform: AdPlatform;
   accountName: string;
+  /** The account's platform id: what a change request names (`POST /ads/change-requests`). */
+  accountExternalId: string;
+  /**
+   * Created by this system (a create_campaign it executed). Only these get
+   * Pausar / Retomar / Mudar verba diária on the dashboard; a campaign a
+   * person made by hand is changed in the platform.
+   */
+  systemCreated: boolean;
+  /** From the draft that created it; null for a campaign the system did not create. */
+  startDate: string | null;
+  endDate: string | null;
+  /** The CPL target the verdict used (the account's, else the company's); null without one. */
+  targetCplCents: number | null;
   name: string;
   status: string;
   objective: string | null;

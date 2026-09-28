@@ -2,12 +2,14 @@ import {
   OBJECTIVE_KIND_LABEL,
   TARGET_METRIC_LABEL,
   VERDICT_RULES,
+  AD_PLATFORM_LABEL,
   VERDICT_SIGNAL_LABEL,
+  type AccountCplTarget,
   type CplTarget,
 } from '@wings/shared';
 import { useState } from 'react';
 import { hasPermission, useSession } from '../../api/auth.js';
-import { useDashboardSettings, useSetCplTarget } from '../../api/dashboard.js';
+import { useDashboardSettings, useSetAccountCplTarget, useSetCplTarget } from '../../api/dashboard.js';
 import { formatBrl, parseBrlToCents } from '../campaign-builder/format.js';
 import { Alert, Button, Field, Input } from '../ui.js';
 import { formatDateTime, formatInt, formatMoney } from './format.js';
@@ -120,6 +122,95 @@ function TargetCard({ target, canConfirm }: { target: CplTarget; canConfirm: boo
   );
 }
 
+const centsText = (cents: number) => (cents / 100).toFixed(2).replace('.', ',');
+
+/**
+ * One account's leads CPL target. It wins over the company-wide one. The
+ * suggestion only fills the box; the target exists after "Confirmar".
+ */
+function AccountTargetRow({ target, canConfirm }: { target: AccountCplTarget; canConfirm: boolean }) {
+  const set = useSetAccountCplTarget();
+  const initial = target.targetCents ?? target.suggestedCents;
+  const [text, setText] = useState(initial === null ? '' : centsText(initial));
+  const [error, setError] = useState<string | null>(null);
+  const inputId = `account-target-${target.adAccountId}`;
+
+  const confirm = () => {
+    const cents = parseBrlToCents(text);
+    if (!Number.isFinite(cents) || cents < 100) {
+      setError('Informe um valor em reais, como 85,90.');
+      return;
+    }
+    setError(null);
+    set.mutate({ adAccountId: target.adAccountId, targetCents: cents });
+  };
+
+  return (
+    <tr>
+      <td>
+        {target.accountName}
+        <span className="cell-sub">{AD_PLATFORM_LABEL[target.platform]}</span>
+      </td>
+      <td>
+        {target.targetCents === null ? (
+          <span className="muted">Sem meta da conta</span>
+        ) : (
+          <>
+            <b className="mono">{formatBrl(target.targetCents)}</b>
+            <span className="cell-sub">
+              confirmada{target.confirmedByName ? ` por ${target.confirmedByName}` : ''} em {formatDateTime(target.confirmedAt)}
+            </span>
+          </>
+        )}
+        {target.targetCents === null && target.suggestionNote && <span className="cell-sub">{target.suggestionNote}</span>}
+      </td>
+      <td>
+        <Field label="Meta de CPL em reais" error={error ?? undefined} errorId={`${inputId}-error`}>
+          <Input
+            id={inputId}
+            inputMode="decimal"
+            value={text}
+            onChange={(event) => {
+              setText(event.target.value);
+              setError(null);
+            }}
+            aria-describedby={error ? `${inputId}-error` : undefined}
+            placeholder="85,90"
+            disabled={!canConfirm}
+          />
+        </Field>
+      </td>
+      <td>
+        {canConfirm && (
+          <div className="target-actions">
+            <Button type="button" disabled={set.isPending} onClick={confirm}>
+              {set.isPending ? 'Confirmando…' : 'Confirmar'}
+            </Button>
+            {target.targetCents !== null && (
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={set.isPending}
+                onClick={() => {
+                  setText('');
+                  set.mutate({ adAccountId: target.adAccountId, targetCents: null });
+                }}
+              >
+                Remover
+              </Button>
+            )}
+          </div>
+        )}
+        {set.isError && (
+          <p className="field-error" role="alert">
+            {set.error instanceof Error ? set.error.message : 'Não foi possível salvar a meta.'}
+          </p>
+        )}
+      </td>
+    </tr>
+  );
+}
+
 export function SettingsTab() {
   const { data: user } = useSession();
   const canConfirm = hasPermission(user, 'ads.request');
@@ -139,6 +230,38 @@ export function SettingsTab() {
             <TargetCard key={target.objectiveKind} target={target} canConfirm={canConfirm} />
           ))}
         </div>
+      </section>
+
+      <section className="dash-section" aria-labelledby="account-targets-title">
+        <h2 id="account-targets-title">Meta de CPL por conta</h2>
+        <p className="muted">
+          Vale para as campanhas de leads da conta e passa na frente da meta por objetivo acima. Sem meta da conta, vale a
+          meta por objetivo; sem nenhuma, a campanha fica "Sem meta".
+        </p>
+        {settings.data.accountTargets.length === 0 ? (
+          <p className="muted">Nenhuma conta de anúncios ativa.</p>
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th scope="col">Conta</th>
+                  <th scope="col">Meta atual</th>
+                  <th scope="col">Nova meta</th>
+                  <th scope="col">
+                    <span className="sr-only">Ações</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {settings.data.accountTargets.map((target) => (
+                  <AccountTargetRow key={target.adAccountId} target={target} canConfirm={canConfirm} />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {!canConfirm && <p className="field-hint">Só quem pode pedir alterações de tráfego confirma uma meta.</p>}
       </section>
 
       <section className="dash-section verdict-legend" aria-labelledby="legend-title">
