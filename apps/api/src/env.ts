@@ -108,7 +108,8 @@ const schema = z.object({
    * Google Analytics 4, read through the Data API with a service account that
    * a person added as Leitor on the property. The property id is the number
    * in GA4 → Admin → Detalhes da propriedade (not the G-… measurement id).
-   * The key is the service account's JSON, as downloaded (a secret). Both, or
+   * The key is the service account's JSON file encoded in base64
+   * (`base64 -w0 chave.json`; plain JSON also works), a secret. Both, or
    * the site section says "não configurado".
    */
   GA4_PROPERTY_ID: optionalString.refine(

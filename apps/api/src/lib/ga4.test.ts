@@ -78,7 +78,19 @@ describe('GA4 Data API client', () => {
     expect(String((error as Error).message)).not.toContain('PRIVATE KEY');
   });
 
+  it('reads the key as base64 of the JSON file, wrapped or not, and as plain JSON', () => {
+    const file = JSON.stringify({ type: 'service_account', ...credentials }, null, 2);
+    const encoded = Buffer.from(file).toString('base64');
+    const wrapped = encoded.replace(/.{76}/g, '$&\n');
+    for (const raw of [encoded, `${wrapped}\n`, file]) {
+      expect(parseGa4Credentials(raw)).toEqual({ ...credentials, token_uri: undefined });
+    }
+  });
+
   it('refuses a key file that is not a service account', () => {
+    expect(() =>
+      parseGa4Credentials(Buffer.from('{"type":"authorized_user"}').toString('base64')),
+    ).toThrow(/client_email/);
     expect(() => parseGa4Credentials('{"type":"authorized_user"}')).toThrow(/client_email/);
     expect(() => parseGa4Credentials('não é json')).toThrow(Ga4Error);
   });

@@ -35,12 +35,25 @@ export class Ga4Error extends Error {
 const SCOPE = 'https://www.googleapis.com/auth/analytics.readonly';
 const TOKEN_URI = 'https://oauth2.googleapis.com/token';
 
+/**
+ * The key as Coolify holds it: the downloaded JSON file encoded in base64
+ * (`base64 -w0 chave.json`), so its line breaks survive the variable. Plain
+ * JSON is still accepted. Line breaks inside the base64 (`base64` without
+ * `-w0` wraps at 76 columns) are ignored.
+ */
 export function parseGa4Credentials(raw: string): Ga4Credentials {
+  const value = raw.trim();
+  const json = value.startsWith('{')
+    ? value
+    : Buffer.from(value.replace(/\s+/g, ''), 'base64').toString('utf8');
   let parsed: Partial<Ga4Credentials>;
   try {
-    parsed = JSON.parse(raw) as Partial<Ga4Credentials>;
+    parsed = JSON.parse(json) as Partial<Ga4Credentials>;
   } catch {
-    throw new Ga4Error('bad_credentials', 'GA4_SERVICE_ACCOUNT_JSON is not JSON');
+    throw new Ga4Error(
+      'bad_credentials',
+      'GA4_SERVICE_ACCOUNT_JSON is neither base64 of the JSON key nor JSON',
+    );
   }
   if (!parsed.client_email || !parsed.private_key) {
     throw new Ga4Error(
