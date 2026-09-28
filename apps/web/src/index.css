@@ -2068,6 +2068,11 @@ textarea.control {
   flex-wrap: wrap;
 }
 
+.draft-drift {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+}
+
 .preflight-operations {
   margin: 0.5rem 0 0;
   padding-left: 1.25rem;

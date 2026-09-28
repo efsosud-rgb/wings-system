@@ -214,3 +214,13 @@ A campanha ficou **ACTIVE** na Meta a partir das 18:10 por ação no
 Gerenciador (o sistema a criou e releu PAUSED); foi pausada de novo por uma
 pessoa. Não existe "continuar de onde parou": a campanha antiga é arquivada à
 mão e o pedido é feito de novo a partir do rascunho salvo.
+
+### Pedido versus rascunho salvo (28/09/2026)
+
+A tela de aprovação compara o pedido com o **rascunho salvo de mesmo nome e
+plataforma** (o mais recente) e destaca em vermelho o que difere: verba
+diária, início, fim, destino, área de alcance e público (cliente ideal e
+idade). Quando tudo confere, diz isso numa linha. Motivo: em 25/09 um pedido
+saiu com o dobro da verba e um período menor que o rascunho combinado, e o
+aprovador não tinha como notar. O vínculo é pelo nome, não por id: renomear a
+campanha no construtor desliga a comparação.

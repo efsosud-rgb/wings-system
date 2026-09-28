@@ -686,6 +686,26 @@ export function ApprovalDetailPage() {
       )}
 
       <Summary approval={approval} />
+      {approval.savedDraftDrift && approval.savedDraftDrift.differences.length > 0 && (
+        <Alert kind="error">
+          <strong>Este pedido difere do rascunho salvo “{approval.savedDraftDrift.savedDraftName}”</strong>{' '}
+          (salvo em {formatDateTime(approval.savedDraftDrift.savedAt)}). Confira antes de aprovar:
+          <ul className="draft-drift">
+            {approval.savedDraftDrift.differences.map((item) => (
+              <li key={item.field}>
+                <strong>{item.label}:</strong> rascunho {item.saved} → pedido{' '}
+                <strong>{item.requested}</strong>
+              </li>
+            ))}
+          </ul>
+        </Alert>
+      )}
+      {approval.savedDraftDrift && approval.savedDraftDrift.differences.length === 0 && (
+        <Alert kind="info">
+          Verba, datas, destino e público conferem com o rascunho salvo “
+          {approval.savedDraftDrift.savedDraftName}”.
+        </Alert>
+      )}
       {approval.draft && <DraftCampaign draft={approval.draft} />}
       {approval.platform === 'google' &&
         approval.changeKind === 'resume_campaign' &&

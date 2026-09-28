@@ -30,6 +30,7 @@ import {
   type CampaignDraftInput,
   formatSearchKeyword,
   parseSearchKeyword,
+  draftDifferences,
 } from './campaign-builder.js';
 
 const rulesOf = (text: string) => checkCopyCompliance(text).map((finding) => finding.rule);
@@ -511,6 +512,52 @@ describe('Meta drafts: ad set and ads', () => {
     expect(
       campaignDraftSchema.safeParse({ ...google, placements: { mode: 'automatic' } }).success,
     ).toBe(false);
+  });
+});
+
+describe('a request against the saved draft it came from', () => {
+  const saved = campaignDraftSchema.parse({
+    platform: 'google_search',
+    name: 'SEARCH | Formatação',
+    objective: 'lead',
+    idealCustomerProfile: 'Empresário com negócio validado que quer crescer por franquias.',
+    reach: { states: ['SP'], cities: [] },
+    destinationUrl: 'https://wingscompany.com.br/contato/',
+    startDate: '2026-09-25',
+    endDate: '2026-10-04',
+    dailyBudgetCents: 12000,
+    utms: { utm_source: 'google', utm_medium: 'cpc', utm_campaign: 'x', utm_content: 'lead' },
+    startPaused: true,
+    search: {
+      keywords: ['[franquia]'],
+      headlines: ['A', 'B', 'C'],
+      descriptions: ['Descrição um.', 'Descrição dois.'],
+    },
+  });
+
+  it('is silent when money, dates, destination and audience match', () => {
+    expect(draftDifferences(saved, { ...saved, name: 'outro nome' })).toEqual([]);
+  });
+
+  it('names each edited figure with both values, in Brazilian formats', () => {
+    const requested = {
+      ...saved,
+      dailyBudgetCents: 24000,
+      endDate: '2026-09-29',
+      destinationUrl: 'https://wingscompany.com.br/formatar/franquia',
+      reach: { states: ['RJ'], cities: [], customLocations: [] },
+    };
+    expect(draftDifferences(saved, requested)).toEqual([
+      { field: 'dailyBudgetCents', label: 'Verba diária', saved: 'R$ 120,00', requested: 'R$ 240,00' },
+      { field: 'endDate', label: 'Fim', saved: '04/10/2026', requested: '29/09/2026' },
+      {
+        field: 'destinationUrl',
+        label: 'Destino',
+        saved: 'https://wingscompany.com.br/contato/',
+        requested: 'https://wingscompany.com.br/formatar/franquia',
+      },
+      expect.objectContaining({ field: 'reach', label: 'Área de alcance' }),
+    ]);
   });
 });
 

@@ -119,6 +119,7 @@ function buildApproval(overrides: Partial<ApprovalDetail> = {}): ApprovalDetail 
     executionAvailable: true,
     executionSteps: [],
     draft: null,
+    savedDraftDrift: null,
     auditTrail: [
       {
         at: '2026-09-17T12:00:00.000Z',
@@ -506,6 +507,26 @@ describe('a request to create a campaign', () => {
     expect(screen.queryByRole('group', { name: 'Posicionamento da prévia' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Executar no Google' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Executar no Meta' })).toBeNull();
+  });
+
+  it('warns in bold when the request departs from the saved draft it came from', () => {
+    approval.current = buildApproval({
+      changeKind: 'create_campaign',
+      draft,
+      savedDraftDrift: {
+        savedDraftName: draft.name,
+        savedAt: '2026-09-25T18:35:00Z',
+        differences: [
+          { field: 'dailyBudgetCents', label: 'Verba diária', saved: 'R$ 120,00', requested: 'R$ 240,00' },
+          { field: 'endDate', label: 'Fim', saved: '04/10/2026', requested: '29/09/2026' },
+        ],
+      },
+    });
+    renderDetail();
+    expect(screen.getByText(/Este pedido difere do rascunho salvo/)).toBeTruthy();
+    expect(screen.getByText(/rascunho R\$ 120,00 → pedido/)).toBeTruthy();
+    expect(screen.getByText('R$ 240,00')).toBeTruthy();
+    expect(screen.getByText(/rascunho 04\/10\/2026 → pedido/)).toBeTruthy();
   });
 
   it('shows a YouTube draft with its still and says it is Demand Gen', () => {
