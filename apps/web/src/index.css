@@ -6973,3 +6973,30 @@ button.stage-chip:focus-visible {
 .cockpit-warnings {
   margin-block: 1rem;
 }
+
+.campaign-leads-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 0.75rem;
+  margin-block: 1rem;
+}
+.campaign-leads-stages ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.875rem;
+}
+.campaign-leads-stages li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.campaign-leads-attribution {
+  margin-block: 0.5rem 1rem;
+}
+.campaign-leads-attribution ul {
+  margin: 0.25rem 0 0;
+}
+.campaign-leads-table td {
+  vertical-align: top;
+}

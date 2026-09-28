@@ -834,6 +834,29 @@ export interface CockpitAlert {
   platform: AdPlatform;
 }
 
+/**
+ * Performance ativa: the active campaigns since the day the campaign leads
+ * start (28/09), judged by the RD CRM leads they brought, not by the
+ * platforms' own lead counts. Null ratios where the base is zero.
+ */
+export interface CockpitActivePerformance {
+  since: string;
+  spendCents: number;
+  leads: number;
+  qualified: number;
+  sales: number;
+  revenueCents: number;
+  costPerLeadCents: number | null;
+  costPerQualifiedCents: number | null;
+  cacCents: number | null;
+  /** Revenue ÷ spend, x100 (2.5x -> 250); null without a sale. */
+  roasCentuple: number | null;
+  /** Fewer than 10 leads: the ratios move a lot with each new one. */
+  smallSample: boolean;
+  /** When the RD read last finished; null before the first. */
+  fetchedAt: string | null;
+}
+
 export interface DashboardCockpit {
   days: DashboardWindow;
   since: string;
@@ -852,4 +875,5 @@ export interface DashboardCockpit {
   activeCampaigns: CockpitCampaign[];
   /** Ads switched on in those campaigns that are not serving; outside every figure. */
   adWarnings: CockpitAdWarning[];
+  activePerformance: CockpitActivePerformance;
 }

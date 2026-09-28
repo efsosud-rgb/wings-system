@@ -8,6 +8,7 @@ import { createMailer, type Mailer } from './lib/mailer.js';
 import type { ObjectStorage } from './lib/storage/index.js';
 import { authRoutes } from './modules/auth/routes.js';
 import { audienceRoutes } from './modules/ads/audience-routes.js';
+import { campaignLeadsRoutes } from './modules/ads/campaign-leads-routes.js';
 import { cockpitRoutes } from './modules/ads/cockpit-routes.js';
 import { creativeRoutes } from './modules/ads/creative-routes.js';
 import { dashboardRoutes } from './modules/ads/dashboard/routes.js';
@@ -155,6 +156,7 @@ export async function buildApp(deps: {
   await app.register(savedDraftRoutes);
   await app.register(cockpitRoutes);
   await app.register(dashboardRoutes);
+  await app.register(campaignLeadsRoutes);
   await app.register(creativeRoutes);
   await app.register(audienceRoutes);
   await app.register(agentRoutes);

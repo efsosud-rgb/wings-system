@@ -128,6 +128,14 @@ const schema = z.object({
    */
   RD_CRM_API_TOKEN: optionalString,
   /**
+   * RD Station Marketing OAuth app and its refresh token (secrets), read
+   * only: the UTMs of the conversion behind each campaign lead. Without them
+   * Leads das Campanhas attributes by RD's source label alone.
+   */
+  RD_MKT_CLIENT_ID: optionalString,
+  RD_MKT_CLIENT_SECRET: optionalString,
+  RD_MKT_REFRESH_TOKEN: optionalString,
+  /**
    * Encrypts the credentials of external services (the Kairogen OAuth tokens).
    * A key of its own, never the CPF key: see `lib/secret-box.ts`. Without it
    * the integration routes answer 503.

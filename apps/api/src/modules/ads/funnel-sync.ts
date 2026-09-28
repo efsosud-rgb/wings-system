@@ -1,3 +1,4 @@
+import { isTestDeal } from '@wings/shared';
 import type { Database } from '../../db/client.js';
 import { ga4TrafficDaily, rdCrmDeals } from '../../db/schema/index.js';
 import type { Ga4Client } from '../../lib/ga4.js';
@@ -89,15 +90,17 @@ export function platformOfRdLabels(
 
 interface RdDeal {
   id: string;
+  name?: string;
   win: boolean | null;
   created_at: string;
   closed_at?: string | null;
   deal_stage?: { id?: string };
   deal_source?: { name?: string } | null;
   campaign?: { name?: string } | null;
+  deal_lost_reason?: { name?: string } | null;
 }
 
-interface RdPipeline {
+export interface RdPipeline {
   name: string;
   deal_stages: { id: string; name: string }[];
 }
@@ -110,16 +113,13 @@ const RD_CRM = 'https://crm.rdstation.com/api/v1';
  * "Reunião realizada" or later in its pipeline, or the deal won; a deal lost
  * after a meeting is not counted, and the screen says so.
  */
-export async function syncRdCrmDeals(
-  db: Database,
-  input: { token: string; since: string; until: string; fetchImpl?: typeof fetch; now?: Date },
-): Promise<{ deals: number }> {
-  const fetchImpl = input.fetchImpl ?? fetch;
-  const get = async <T>(path: string, params: Record<string, string>): Promise<T> => {
+/** A GET against RD CRM with its token, waiting out 429s; errors name the path and status only. */
+export function rdCrmGetter(token: string, fetchImpl: typeof fetch = fetch) {
+  return async <T>(path: string, params: Record<string, string>): Promise<T> => {
     const url = new URL(`${RD_CRM}${path}`);
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
     // RD CRM takes the token in the query string; the URL is never logged or thrown.
-    url.searchParams.set('token', input.token);
+    url.searchParams.set('token', token);
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const response = await fetchImpl(url.toString(), { signal: AbortSignal.timeout(30_000) });
       if (response.status === 429) {
@@ -131,6 +131,13 @@ export async function syncRdCrmDeals(
     }
     throw new Error(`RD CRM ${path} kept answering 429`);
   };
+}
+
+export async function syncRdCrmDeals(
+  db: Database,
+  input: { token: string; since: string; until: string; fetchImpl?: typeof fetch; now?: Date },
+): Promise<{ deals: number }> {
+  const get = rdCrmGetter(input.token, input.fetchImpl ?? fetch);
 
   const pipelines = await get<RdPipeline[]>('/deal_pipelines', {});
   const stageOf = new Map<
@@ -187,6 +194,8 @@ export async function syncRdCrmDeals(
       sourceLabel,
       campaignLabel,
       platform: platformOfRdLabels(sourceLabel, campaignLabel),
+      lostReason: deal.deal_lost_reason?.name ?? null,
+      isTest: isTestDeal(deal.name ?? null, deal.deal_lost_reason?.name ?? null),
       fetchedAt: now,
     };
     await db

@@ -144,6 +144,14 @@ export const NAVIGATION: readonly NavModule[] = [
         status: 'ready',
         kind: 'report',
       },
+      {
+        path: '/dashboard/leads-campanhas',
+        label: 'Leads das Campanhas',
+        description: 'Leads do RD vindos das campanhas ativas',
+        permission: 'campaign_leads.read',
+        status: 'ready',
+        kind: 'report',
+      },
     ],
   },
   {

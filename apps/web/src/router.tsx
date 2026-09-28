@@ -19,6 +19,7 @@ import { LandingRoute } from './pages/LandingRoute.js';
 import { LeadPage } from './pages/LeadPage.js';
 import { LeadsPage } from './pages/LeadsPage.js';
 import { LoginPage } from './pages/LoginPage.js';
+import { CampaignLeadsPage } from './pages/CampaignLeadsPage.js';
 import { MarketingDashboardPage } from './pages/MarketingDashboardPage.js';
 import { MediaStudioPage } from './pages/MediaStudioPage.js';
 import { NotFoundPage } from './pages/NotFoundPage.js';
@@ -68,6 +69,7 @@ const SCREENS: Record<string, RouteObject[]> = {
   '/gestao/projetos': [{ index: true, element: <ProjectsPage /> }],
   '/administracao/integracoes': [{ index: true, element: <IntegrationsPage /> }],
   '/dashboard/marketing': [{ index: true, element: <MarketingDashboardPage /> }],
+  '/dashboard/leads-campanhas': [{ index: true, element: <CampaignLeadsPage /> }],
   '/marketing/edicao': [{ index: true, element: <MediaStudioPage /> }],
   '/marketing/trafego-pago-wings': [
     { index: true, element: <TrafficStudioPage /> },

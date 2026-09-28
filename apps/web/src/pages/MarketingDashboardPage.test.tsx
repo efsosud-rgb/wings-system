@@ -939,6 +939,20 @@ describe('the cockpit', () => {
           issue: 'PENDING_REVIEW',
         },
       ],
+      activePerformance: {
+        since: '2026-09-28',
+        spendCents: 48_000,
+        leads: 3,
+        qualified: 1,
+        sales: 0,
+        revenueCents: 0,
+        costPerLeadCents: 16_000,
+        costPerQualifiedCents: 48_000,
+        cacCents: null,
+        roasCentuple: null,
+        smallSample: true,
+        fetchedAt: '2026-09-28T20:00:00.000Z',
+      },
     };
     renderAt('/dashboard/marketing?aba=cockpit');
     expect(screen.getByText(/Só campanhas ativas \(2\)/)).toBeTruthy();
@@ -948,5 +962,9 @@ describe('the cockpit', () => {
       .closest('section')!;
     expect(within(warnings).getByText('Em análise')).toBeTruthy();
     expect(within(warnings).getByText(/Vídeo novo/)).toBeTruthy();
+    const active = screen.getByRole('heading', { name: /Performance ativa/ }).closest('section')!;
+    expect(within(active).getByText('Amostra pequena')).toBeTruthy();
+    expect(within(active).getByText('R$ 160,00')).toBeTruthy();
+    expect(within(active).getAllByText('sem venda "Ganho" ainda')).toHaveLength(2);
   });
 });

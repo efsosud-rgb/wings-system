@@ -1,4 +1,6 @@
 import {
+  CAMPAIGN_LEADS_SINCE,
+  isQualifiedLead,
   adDeliveryIssue,
   campaignDelivering,
   ufOfRegion,
@@ -18,8 +20,10 @@ import {
   adAds,
   adAlerts,
   adCampaigns,
+  adSets,
   adMetricsBreakdownDaily,
   adMetricsDaily,
+  campaignLeads,
   ga4TrafficDaily,
   rdCrmDeals,
 } from '../../../db/schema/index.js';
@@ -35,6 +39,9 @@ import { addDays, daysBetween, windowOf } from './window.js';
  * count (`campaignDelivering`), in both windows; ads switched on but not
  * serving (in review, disapproved…) are listed as warnings and ranked nowhere.
  */
+
+const saoPauloDayOf = (at: Date) =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(at);
 
 const SEVERITY_ORDER: Record<string, number> = { critical: 0, warning: 1, info: 2 };
 
@@ -117,6 +124,7 @@ export async function cockpit(
       .where(
         and(
           isNotNull(rdCrmDeals.platform),
+          eq(rdCrmDeals.isTest, false),
           gte(rdCrmDeals.createdAt, new Date(`${window.previousSince}T00:00:00-03:00`)),
           lte(rdCrmDeals.createdAt, new Date(`${window.until}T23:59:59-03:00`)),
         ),
@@ -154,6 +162,8 @@ export async function cockpit(
             firstSeenAt: adAlerts.firstSeenAt,
             lastSeenAt: adAlerts.lastSeenAt,
             adAccountId: adAlerts.adAccountId,
+            entityLevel: adAlerts.entityLevel,
+            entityExternalId: adAlerts.entityExternalId,
           })
           .from(adAlerts)
           .where(and(inArray(adAlerts.adAccountId, ids), isNull(adAlerts.resolvedAt)))
@@ -254,7 +264,28 @@ export async function cockpit(
         b.totals.spendCents - a.totals.spendCents,
     );
 
+  // Only what belongs to an active campaign (or to the account itself): an
+  // alert about an ad of a paused campaign is not the Cockpit's business.
+  const adSetRows = activeIds.size
+    ? await db.query.adSets.findMany({ where: inArray(adSets.campaignId, [...activeIds]) })
+    : [];
+  const activeExternalIds = new Set(activeExternal);
+  const activeAdSets = new Set(adSetRows.map((row) => row.externalId));
+  const activeAds = new Set(
+    adRows
+      .filter((row) => row.campaignId && activeIds.has(row.campaignId))
+      .map((row) => `${row.adAccountId}:${row.externalId}`),
+  );
+  const alertInScope = (row: (typeof alertRows)[number]) => {
+    if (!row.entityLevel || !row.entityExternalId) return true;
+    const key = `${row.adAccountId}:${row.entityExternalId}`;
+    if (row.entityLevel === 'campaign') return activeExternalIds.has(row.entityExternalId);
+    if (row.entityLevel === 'ad_set') return activeAdSets.has(row.entityExternalId);
+    return activeAds.has(key);
+  };
+
   const alerts: CockpitAlert[] = alertRows
+    .filter(alertInScope)
     .sort((a, b) => (SEVERITY_ORDER[a.severity] ?? 3) - (SEVERITY_ORDER[b.severity] ?? 3))
     .slice(0, 8)
     .map((row) => ({
@@ -264,6 +295,39 @@ export async function cockpit(
       firstSeenAt: row.firstSeenAt.toISOString(),
       platform: platformOf.get(row.adAccountId) ?? 'meta',
     }));
+
+  // Performance ativa: RD leads of the active campaigns since 28/09.
+  const activeSince = saoPauloDayOf(new Date(CAMPAIGN_LEADS_SINCE));
+  const [leadRows, [activeSpend], [leadsFetched]] = await Promise.all([
+    activeIds.size
+      ? db.query.campaignLeads.findMany({
+          where: and(
+            inArray(campaignLeads.campaignId, [...activeIds]),
+            eq(campaignLeads.isTest, false),
+            gte(campaignLeads.enteredAt, new Date(CAMPAIGN_LEADS_SINCE)),
+          ),
+        })
+      : [],
+    activeExternal.length
+      ? db
+          .select({ spend: sql<string>`coalesce(sum(${adMetricsDaily.spendCents}), 0)` })
+          .from(adMetricsDaily)
+          .where(
+            and(
+              inArray(adMetricsDaily.adAccountId, ids),
+              eq(adMetricsDaily.level, 'campaign'),
+              inArray(adMetricsDaily.entityExternalId, activeExternal),
+              gte(adMetricsDaily.day, activeSince),
+            ),
+          )
+      : [{ spend: '0' }],
+    db.select({ at: sql<string | null>`max(${campaignLeads.fetchedAt})` }).from(campaignLeads),
+  ]);
+  const spendSince = Number(activeSpend?.spend ?? 0);
+  const qualified = leadRows.filter(isQualifiedLead).length;
+  const won = leadRows.filter((row) => row.win === true);
+  const revenueCents = won.reduce((total, row) => total + row.amountCents, 0);
+  const perUnit = (count: number) => (count > 0 ? Math.round(spendSince / count) : null);
 
   return {
     days,
@@ -288,5 +352,20 @@ export async function cockpit(
       }))
       .sort((a, b) => a.platform.localeCompare(b.platform) || a.name.localeCompare(b.name)),
     adWarnings,
+    activePerformance: {
+      since: activeSince,
+      spendCents: spendSince,
+      leads: leadRows.length,
+      qualified,
+      sales: won.length,
+      revenueCents,
+      costPerLeadCents: perUnit(leadRows.length),
+      costPerQualifiedCents: perUnit(qualified),
+      cacCents: perUnit(won.length),
+      roasCentuple:
+        won.length && spendSince > 0 ? Math.round((revenueCents / spendSince) * 100) : null,
+      smallSample: leadRows.length < 10,
+      fetchedAt: leadsFetched?.at ? new Date(leadsFetched.at).toISOString() : null,
+    },
   };
 }
