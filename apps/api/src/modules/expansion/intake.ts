@@ -100,10 +100,22 @@ function describeUtms(conversion: Conversion): string {
 }
 
 /** "Referência | <the LP's host>" when RD has it (the brands' existing deals use it), else "Contato pelo Site". */
-function sourceIdFor(conversion: Conversion, target: Target, map: CrmMap): string | null {
+export function sourceIdFor(conversion: Conversion, target: Target, map: CrmMap): string | null {
   const host = conversion.page?.split('/')[0]?.replace(/^www\./, '');
   const named = target === 'expansao' && host ? map.sources.get(`Referência | ${host}`) : undefined;
   return named ?? map.sources.get('Contato pelo Site') ?? null;
+}
+
+export function campaignNameFor(
+  target: Target,
+  brand: string | null,
+  map: CrmMap,
+): string | undefined {
+  return target === 'expansao'
+    ? [`LP/LE ${brand} - Fluxo Expansão`, `LP ${brand} - Fluxo Expansão`].find((candidate) =>
+        map.campaigns.has(candidate),
+      )
+    : 'SITE WINGS // FORMATAÇÃO';
 }
 
 function dealFor(
