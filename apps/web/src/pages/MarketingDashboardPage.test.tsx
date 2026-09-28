@@ -921,7 +921,7 @@ describe('the cockpit', () => {
           name: 'Meta 28Set',
           deliveryStatus: 'ACTIVE',
           startDate: '2026-09-28',
-          endDate: '2026-10-02',
+          endDate: null,
           dailyBudgetCents: 24_000,
           spentTodayCents: 12_000,
         },
@@ -964,8 +964,8 @@ describe('the cockpit', () => {
       today: '2026-09-28',
     };
     renderAt('/dashboard/marketing?aba=cockpit');
-    const scope = screen.getByText(/Só campanhas ativas \(2\)/).closest('p')!;
-    expect(within(scope).getByText(/Meta 28Set/)).toBeTruthy();
+    expect(screen.getByText(/Só campanhas ativas \(2\)/)).toBeTruthy();
+    expect(screen.getByText('Meta 28Set')).toBeTruthy();
     const warnings = screen
       .getByRole('heading', { name: 'Anúncios ligados que não estão rodando' })
       .closest('section')!;
@@ -975,30 +975,5 @@ describe('the cockpit', () => {
     expect(within(active).getByText('Amostra pequena')).toBeTruthy();
     expect(within(active).getByText('R$ 160,00')).toBeTruthy();
     expect(within(active).getAllByText('sem venda "Ganho" ainda')).toHaveLength(2);
-
-    // No target confirmed: the gauge says so instead of drawing zones.
-    const gauge = screen.getByRole('heading', { name: 'Custo por lead (CRM)' }).closest('section')!;
-    expect(within(gauge).getByText('nenhuma meta confirmada (Configurações)')).toBeTruthy();
-    // Meta 80% of the window's spend, Google 20%.
-    const investment = screen.getByRole('heading', { name: 'Investimento' }).closest('section')!;
-    expect(within(investment).getByText(/Meta 80%/)).toBeTruthy();
-    // Reach is never summed across days: a dash and the reason.
-    const delivery = screen.getByRole('heading', { name: 'Entrega' }).closest('section')!;
-    expect(within(delivery).getByText(/o alcance do período não é a soma dos dias/)).toBeTruthy();
-    // Pacing: today's spend against the daily budget; a lifetime budget says so.
-    const pacing = screen.getByRole('heading', { name: /ritmo do dia/ }).closest('section')!;
-    expect(within(pacing).getByText(/R\$ 120,00 de R\$ 240,00 hoje \(50%\)/)).toBeTruthy();
-    expect(within(pacing).getByText('sem verba diária (orçamento total)')).toBeTruthy();
-  });
-});
-
-describe('the cockpit sessions by channel', () => {
-  it('groups GA4 source/medium into the channels a person names', async () => {
-    const { channelOf } = await import('../components/dashboard/CockpitTab.js');
-    expect(channelOf({ source: 'facebook', medium: 'paid_social' })).toBe('Meta pago');
-    expect(channelOf({ source: 'google', medium: 'cpc' })).toBe('Google pago');
-    expect(channelOf({ source: 'google', medium: 'organic' })).toBe('Busca orgânica');
-    expect(channelOf({ source: '(direct)', medium: '(none)' })).toBe('Direto');
-    expect(channelOf({ source: 'casaldochurros.com.br', medium: 'referral' })).toBe('Referência');
   });
 });

@@ -865,9 +865,7 @@ describe('the cockpit', () => {
     // What the visual cards read: the budget in force, the split and "today".
     const google = before.activeCampaigns.find((campaign) => campaign.platform === 'google');
     expect(google?.dailyBudgetCents).toBe(500);
-    expect(before.spendByPlatform.meta + before.spendByPlatform.google).toBe(
-      before.current.spendCents,
-    );
+    expect(before.spendByPlatform.meta + before.spendByPlatform.google).toBe(before.current.spendCents);
     expect(before.today).toBe('2026-09-16');
     // A target confirmed by an earlier test in this file reaches the gauge.
     expect(before.cplTargetCents).toBe(5000);

@@ -456,23 +456,3 @@ roteirizado para o WordPress e banco descartável
 Não verificado ao vivo: o formato de `traffic_source` com UTMs de um lead
 real de campanha (só o de uma conversão orgânica foi visto), `/tasks` com
 tarefa concluída e `organization` preenchido em um negócio.
-
-### Cockpit: visual (etapa 3, 28/09/2026)
-
-Só o visual mudou; os números são os mesmos da API. Painel inclinado em 3D
-(`perspective: 2400px`, `rotateX(14deg) rotateY(-10deg) rotateZ(1.2deg)`,
-flutuando 7 s), borda em degradê ciano → laranja, brilho a cada 6 s,
-partículas; tema azul-marinho neon com Sora e JetBrains Mono (Google Fonts,
-carregadas só quando o Cockpit abre). Grade de 12 colunas, cartões esticados
-à altura da linha. Abaixo do painel, uma base isométrica em SVG: moedas do
-gasto do mês de Meta e Google (1 moeda = R$ 50, no máximo 240), colunas das
-sessões por canal do GA4 e placas impressões → cliques → leads.
-
-Regras do visual: sem dado mostra "—" e o motivo; variação só contra a janela
-anterior que teve o número; alcance e frequência ficam "—" (o alcance do
-período não é a soma dos dias e ainda não é lido); o medidor de CPL usa o CPL
-dos leads do CRM contra a meta confirmada (verde até a meta, âmbar até 1,3×,
-vermelho acima) e, sem meta, não desenha as zonas. Abaixo de 1100 px o painel
-fica reto e os cartões empilham; `prefers-reduced-motion` desliga toda
-animação. Com a inclinação as linhas ficam em declive, por isso no funil o
-número fica colado ao rótulo e a barra logo abaixo.
