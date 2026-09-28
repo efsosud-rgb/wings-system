@@ -11,7 +11,7 @@ import { enforceReconciliationFreshness, periodMonthOf } from './reconcile.js';
 import { seedAdAccount } from './seed-account.js';
 import { WordPressClient } from '../../lib/wordpress.js';
 import { syncBlogPosts } from '../site/blog-sync.js';
-import { Ga4Client, parseGa4Credentials } from '../../lib/ga4.js';
+import { Ga4Client, ga4CredentialsOf } from '../../lib/ga4.js';
 import { syncGa4Traffic, syncRdCrmDeals } from './funnel-sync.js';
 import {
   accountRecordOf,
@@ -345,12 +345,10 @@ async function main() {
     // After the click: the site's sessions (GA4) and the RD CRM deals, for the
     // funnel. Read only, each on its own, and never the cause of a failed run.
     const today = now.toISOString().slice(0, 10);
-    if (env.GA4_PROPERTY_ID && env.GA4_SERVICE_ACCOUNT_JSON) {
+    const ga4Credentials = ga4CredentialsOf(env);
+    if (env.GA4_PROPERTY_ID && ga4Credentials) {
       try {
-        const ga4 = new Ga4Client({
-          propertyId: env.GA4_PROPERTY_ID,
-          credentials: parseGa4Credentials(env.GA4_SERVICE_ACCOUNT_JSON),
-        });
+        const ga4 = new Ga4Client({ propertyId: env.GA4_PROPERTY_ID, credentials: ga4Credentials });
         const read = await syncGa4Traffic(db, ga4, {
           propertyId: env.GA4_PROPERTY_ID,
           since,
