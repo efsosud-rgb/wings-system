@@ -862,6 +862,15 @@ describe('the cockpit', () => {
     ]);
     expect(before.creatives.map((creative) => creative.name)).not.toContain('Reprovado');
     expect(before.current.spendCents).toBeGreaterThan(0);
+    // What the visual cards read: the budget in force, the split and "today".
+    const google = before.activeCampaigns.find((campaign) => campaign.platform === 'google');
+    expect(google?.dailyBudgetCents).toBe(500);
+    expect(before.spendByPlatform.meta + before.spendByPlatform.google).toBe(
+      before.current.spendCents,
+    );
+    expect(before.today).toBe('2026-09-16');
+    // A target confirmed by an earlier test in this file reaches the gauge.
+    expect(before.cplTargetCents).toBe(5000);
 
     // Google stops serving (the end date came, say): its spend leaves every figure.
     await db

@@ -188,7 +188,13 @@ export function MarketingDashboardPage() {
 
       {tab === 'cockpit' && (
         <Loading query={cockpitData}>
-          {cockpitData.data && <CockpitTab data={cockpitData.data.cockpit} />}
+          {cockpitData.data && (
+            <CockpitTab
+              data={cockpitData.data.cockpit}
+              overview={overview.data?.overview ?? null}
+              site={siteTraffic.data?.site ?? null}
+            />
+          )}
         </Loading>
       )}
       {tab === 'visao-geral' && (
