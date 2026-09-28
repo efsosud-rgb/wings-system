@@ -1,19 +1,18 @@
-import { createSign } from 'node:crypto';
-
 /**
- * Google Analytics 4 Data API, read-only, with a service account.
+ * Google Analytics 4 Data API, read-only, with a person's OAuth consent.
  *
- * The account signs its own JWT (RS256) and trades it for an access token
- * scoped to analytics.readonly: no library, no refresh token to keep. The
- * key never leaves this module: it is not logged, not returned and not put in
- * an error message. NOT verified live: nothing here has met the real API yet
- * (the property still has to add the account as Leitor).
+ * The organisation blocks service account keys, so GA4 is read like Google
+ * Ads: the existing OAuth client (same Google Cloud project) plus a refresh
+ * token granted once, in a browser, by an account that can read the property,
+ * with the analytics.readonly scope only. The refresh token is traded for a
+ * short access token; neither is logged, returned or put in an error message.
+ * NOT verified live until the first collection with the real token.
  */
 
 export interface Ga4Credentials {
-  client_email: string;
-  private_key: string;
-  token_uri?: string;
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
 }
 
 export interface Ga4Row {
@@ -23,8 +22,7 @@ export interface Ga4Row {
 
 export class Ga4Error extends Error {
   constructor(
-    readonly code:
-      'bad_credentials' | 'auth_failed' | 'forbidden' | 'report_failed' | 'unavailable',
+    readonly code: 'auth_failed' | 'forbidden' | 'report_failed' | 'unavailable',
     message: string,
   ) {
     super(message);
@@ -32,43 +30,23 @@ export class Ga4Error extends Error {
   }
 }
 
-const SCOPE = 'https://www.googleapis.com/auth/analytics.readonly';
-const TOKEN_URI = 'https://oauth2.googleapis.com/token';
-
-/**
- * The key as Coolify holds it: the downloaded JSON file encoded in base64
- * (`base64 -w0 chave.json`), so its line breaks survive the variable. Plain
- * JSON is still accepted. Line breaks inside the base64 (`base64` without
- * `-w0` wraps at 76 columns) are ignored.
- */
-export function parseGa4Credentials(raw: string): Ga4Credentials {
-  const value = raw.trim();
-  const json = value.startsWith('{')
-    ? value
-    : Buffer.from(value.replace(/\s+/g, ''), 'base64').toString('utf8');
-  let parsed: Partial<Ga4Credentials>;
-  try {
-    parsed = JSON.parse(json) as Partial<Ga4Credentials>;
-  } catch {
-    throw new Ga4Error(
-      'bad_credentials',
-      'GA4_SERVICE_ACCOUNT_JSON is neither base64 of the JSON key nor JSON',
-    );
-  }
-  if (!parsed.client_email || !parsed.private_key) {
-    throw new Ga4Error(
-      'bad_credentials',
-      'GA4_SERVICE_ACCOUNT_JSON lacks client_email or private_key',
-    );
-  }
+/** The three pieces from the environment, or null while any is missing. */
+export function ga4CredentialsOf(env: {
+  GOOGLE_ADS_CLIENT_ID?: string;
+  GOOGLE_ADS_CLIENT_SECRET?: string;
+  GA4_REFRESH_TOKEN?: string;
+}): Ga4Credentials | null {
+  const { GOOGLE_ADS_CLIENT_ID, GOOGLE_ADS_CLIENT_SECRET, GA4_REFRESH_TOKEN } = env;
+  if (!GOOGLE_ADS_CLIENT_ID || !GOOGLE_ADS_CLIENT_SECRET || !GA4_REFRESH_TOKEN) return null;
   return {
-    client_email: parsed.client_email,
-    private_key: parsed.private_key,
-    token_uri: parsed.token_uri,
+    clientId: GOOGLE_ADS_CLIENT_ID,
+    clientSecret: GOOGLE_ADS_CLIENT_SECRET,
+    refreshToken: GA4_REFRESH_TOKEN,
   };
 }
 
-const base64url = (value: Buffer | string) => Buffer.from(value).toString('base64url');
+export const GA4_SCOPE = 'https://www.googleapis.com/auth/analytics.readonly';
+const TOKEN_URI = 'https://oauth2.googleapis.com/token';
 
 export class Ga4Client {
   private token: { value: string; expiresAt: number } | null = null;
@@ -89,33 +67,15 @@ export class Ga4Client {
   private async accessToken(): Promise<string> {
     const now = (this.options.now?.() ?? new Date()).getTime();
     if (this.token && this.token.expiresAt - 60_000 > now) return this.token.value;
-    const issuedAt = Math.floor(now / 1000);
-    const tokenUri = this.options.credentials.token_uri ?? TOKEN_URI;
-    const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
-    const claims = base64url(
-      JSON.stringify({
-        iss: this.options.credentials.client_email,
-        scope: SCOPE,
-        aud: tokenUri,
-        iat: issuedAt,
-        exp: issuedAt + 3600,
-      }),
-    );
-    let signature: string;
-    try {
-      signature = createSign('RSA-SHA256')
-        .update(`${header}.${claims}`)
-        .sign(this.options.credentials.private_key)
-        .toString('base64url');
-    } catch {
-      throw new Ga4Error('bad_credentials', 'the service account key could not sign');
-    }
-    const response = await this.fetchImpl(tokenUri, {
+    const { clientId, clientSecret, refreshToken } = this.options.credentials;
+    const response = await this.fetchImpl(TOKEN_URI, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-        assertion: `${header}.${claims}.${signature}`,
+        grant_type: 'refresh_token',
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
       }).toString(),
       signal: AbortSignal.timeout(20_000),
     }).catch(() => null);
@@ -123,9 +83,14 @@ export class Ga4Client {
     const body = (await response.json().catch(() => ({}))) as {
       access_token?: string;
       expires_in?: number;
+      error?: string;
     };
     if (!response.ok || !body.access_token) {
-      throw new Ga4Error('auth_failed', `token request refused (${response.status})`);
+      // `invalid_grant`: the consent was revoked or the token expired; grant it again.
+      throw new Ga4Error(
+        'auth_failed',
+        `token request refused (${response.status} ${body.error ?? ''})`.trim(),
+      );
     }
     this.token = { value: body.access_token, expiresAt: now + (body.expires_in ?? 3600) * 1000 };
     return body.access_token;
@@ -164,7 +129,7 @@ export class Ga4Client {
         error?: { status?: string };
       };
       if (response.status === 403) {
-        throw new Ga4Error('forbidden', 'the service account is not a Leitor on this property');
+        throw new Ga4Error('forbidden', 'the consenting account cannot read this property, or the Data API is off');
       }
       if (!response.ok) {
         throw new Ga4Error(

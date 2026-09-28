@@ -105,18 +105,22 @@ const schema = z.object({
   WORDPRESS_USERNAME: optionalString,
   WORDPRESS_APP_PASSWORD: optionalString,
   /**
-   * Google Analytics 4, read through the Data API with a service account that
-   * a person added as Leitor on the property. The property id is the number
-   * in GA4 → Admin → Detalhes da propriedade (not the G-… measurement id).
-   * The key is the service account's JSON file encoded in base64
-   * (`base64 -w0 chave.json`; plain JSON also works), a secret. Both, or
-   * the site section says "não configurado".
+   * Google Analytics 4, read through the Data API. The property id is the
+   * number in GA4 → Admin → Detalhes da propriedade (not the G-… measurement
+   * id). Without it and GA4_REFRESH_TOKEN the site section says "não
+   * configurado".
    */
   GA4_PROPERTY_ID: optionalString.refine(
     (value) => value === undefined || /^\d{5,15}$/.test(value),
     'must be the numeric GA4 property id',
   ),
-  GA4_SERVICE_ACCOUNT_JSON: optionalString,
+  /**
+   * GA4's OAuth refresh token (a secret), granted with the analytics.readonly
+   * scope by an account that can read the property, through the Google Ads
+   * OAuth client (GOOGLE_ADS_CLIENT_ID/SECRET). The organisation blocks
+   * service account keys, so there is none.
+   */
+  GA4_REFRESH_TOKEN: optionalString,
   /**
    * RD Station CRM API token (the instance token), read only: the funnel's
    * deals, meetings and sales. A secret; it travels in RD's query string, so

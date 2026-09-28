@@ -16,6 +16,7 @@ import {
   rdCrmDeals,
 } from '../../../db/schema/index.js';
 import type { Env } from '../../../env.js';
+import { ga4CredentialsOf } from '../../../lib/ga4.js';
 import { activeAccounts, sumsByEntity } from './queries.js';
 import { windowOf } from './window.js';
 
@@ -29,7 +30,7 @@ import { windowOf } from './window.js';
  * needs the lead's UTM kept with the deal (CRM próprio, fase 1, §1.4).
  */
 
-const siteConfigured = (env: Env) => Boolean(env.GA4_PROPERTY_ID && env.GA4_SERVICE_ACCOUNT_JSON);
+const siteConfigured = (env: Env) => Boolean(env.GA4_PROPERTY_ID && ga4CredentialsOf(env));
 
 export async function site(
   db: Database,
