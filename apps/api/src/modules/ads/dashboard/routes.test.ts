@@ -849,7 +849,11 @@ describe('the kill switch on the strip', () => {
 describe('the cockpit', () => {
   it('refuses a campaign filter it does not know', async () => {
     const cookies = await sessionFor('marketing');
-    const response = await app.inject({ method: 'GET', url: '/ads/dashboard/cockpit?days=7&campanhas=pausadas', cookies });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/ads/dashboard/cockpit?days=7&campanhas=pausadas',
+      cookies,
+    });
     expect(response.statusCode).toBe(400);
   });
 
@@ -871,7 +875,9 @@ describe('the cockpit', () => {
     // What the visual cards read: the budget in force, the split and "today".
     const google = before.activeCampaigns.find((campaign) => campaign.platform === 'google');
     expect(google?.dailyBudgetCents).toBe(500);
-    expect(before.spendByPlatform.meta + before.spendByPlatform.google).toBe(before.current.spendCents);
+    expect(before.spendByPlatform.meta + before.spendByPlatform.google).toBe(
+      before.current.spendCents,
+    );
     expect(before.today).toBe('2026-09-16');
     // A target confirmed by an earlier test in this file reaches the gauge.
     expect(before.cplTargetCents).toBe(5000);
@@ -889,9 +895,14 @@ describe('the cockpit', () => {
 
       // "Todas": the ended campaign delivered in the window, so it is back in
       // every figure, marked as not delivering; Performance ativa does not move.
-      const all = await read<DashboardCockpit>('/ads/dashboard/cockpit?days=7&campanhas=todas', 'cockpit');
+      const all = await read<DashboardCockpit>(
+        '/ads/dashboard/cockpit?days=7&campanhas=todas',
+        'cockpit',
+      );
       expect(all.campaignScope).toBe('todas');
-      expect(all.activeCampaigns.find((campaign) => campaign.platform === 'google')?.delivering).toBe(false);
+      expect(
+        all.activeCampaigns.find((campaign) => campaign.platform === 'google')?.delivering,
+      ).toBe(false);
       expect(all.current.spendCents).toBe(before.current.spendCents);
       expect(all.activePerformance).toEqual(after.activePerformance);
     } finally {

@@ -1,4 +1,9 @@
-import { DASHBOARD_WINDOWS, type DashboardWindow, type IngestionStatus } from '@wings/shared';
+import {
+  DASHBOARD_WINDOWS,
+  type CockpitCampaignScope,
+  type DashboardWindow,
+  type IngestionStatus,
+} from '@wings/shared';
 import { useSearchParams } from 'react-router-dom';
 import {
   useDashboardAudience,
@@ -100,6 +105,8 @@ export function MarketingDashboardPage() {
   const daysParam = Number(params.get('dias'));
   const days: DashboardWindow = isWindow(daysParam) ? daysParam : 7;
   const windowed = TABS.find((item) => item.key === tab)?.windowed ?? false;
+  const campaignScope: CockpitCampaignScope =
+    params.get('campanhas') === 'todas' ? 'todas' : 'ativas';
 
   const overview = useDashboardOverview();
   const platforms = useDashboardPlatforms(days);
@@ -107,7 +114,7 @@ export function MarketingDashboardPage() {
   const creatives = useDashboardCreatives(days);
   const audience = useDashboardAudience(days);
   const siteTraffic = useDashboardSite(days);
-  const cockpitData = useDashboardCockpit(days);
+  const cockpitData = useDashboardCockpit(days, campaignScope);
   const funnel = useDashboardFunnel(days);
 
   const setParam = (key: string, value: string) => {
@@ -141,17 +148,39 @@ export function MarketingDashboardPage() {
           )}
         </div>
         {windowed && (
-          <div className="window-picker" role="group" aria-label="Período">
-            {DASHBOARD_WINDOWS.map((option) => (
-              <Button
-                key={option}
-                variant={option === days ? 'primary' : 'ghost'}
-                onClick={() => setParam('dias', String(option))}
-                aria-pressed={option === days}
-              >
-                {option} dias
-              </Button>
-            ))}
+          <div className="dash-controls">
+            {tab === 'cockpit' && (
+              <div className="window-picker" role="group" aria-label="Campanhas">
+                <span className="window-picker-label">Campanhas:</span>
+                {(
+                  [
+                    ['ativas', 'Só ativas'],
+                    ['todas', 'Todas'],
+                  ] as const
+                ).map(([value, label]) => (
+                  <Button
+                    key={value}
+                    variant={value === campaignScope ? 'primary' : 'ghost'}
+                    onClick={() => setParam('campanhas', value)}
+                    aria-pressed={value === campaignScope}
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </div>
+            )}
+            <div className="window-picker" role="group" aria-label="Período">
+              {DASHBOARD_WINDOWS.map((option) => (
+                <Button
+                  key={option}
+                  variant={option === days ? 'primary' : 'ghost'}
+                  onClick={() => setParam('dias', String(option))}
+                  aria-pressed={option === days}
+                >
+                  {option} dias
+                </Button>
+              ))}
+            </div>
           </div>
         )}
       </header>

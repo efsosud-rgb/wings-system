@@ -23,6 +23,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * period and the tab travel in the address.
  */
 
+/** Every campaign filter the page asked the Cockpit for, in order. */
+const cockpitScopes: string[] = [];
+
 // Filled after the builders below; the mocks read it lazily.
 const data = {} as {
   overview: DashboardOverview;
@@ -45,7 +48,10 @@ vi.mock('../api/dashboard.js', () => ({
   useDashboardAudience: () => ok({ audience: data.audience }),
   useDashboardSite: () => ok({ site: data.site }),
   useDashboardFunnel: () => ok({ funnel: data.funnel }),
-  useDashboardCockpit: () => ok({ cockpit: data.cockpit }),
+  useDashboardCockpit: (_days: number, scope: string) => {
+    cockpitScopes.push(scope);
+    return ok({ cockpit: data.cockpit });
+  },
 }));
 const requests = { canRequest: true, filed: vi.fn() };
 vi.mock('../api/auth.js', () => ({
@@ -920,6 +926,7 @@ describe('the cockpit', () => {
           externalId: '1',
           name: 'Meta 28Set',
           deliveryStatus: 'ACTIVE',
+          delivering: true,
           startDate: '2026-09-28',
           endDate: null,
           dailyBudgetCents: 24_000,
@@ -930,6 +937,7 @@ describe('the cockpit', () => {
           externalId: '2',
           name: 'SEARCH | Formatação | Alta Intenção',
           deliveryStatus: 'SERVING',
+          delivering: true,
           startDate: '2026-09-24',
           endDate: null,
           dailyBudgetCents: null,
@@ -959,6 +967,7 @@ describe('the cockpit', () => {
         smallSample: true,
         fetchedAt: '2026-09-28T20:00:00.000Z',
       },
+      campaignScope: 'ativas',
       spendByPlatform: { meta: 120_000, google: 30_000 },
       cplTargetCents: null,
       today: '2026-09-28',
@@ -971,9 +980,40 @@ describe('the cockpit', () => {
       .closest('section')!;
     expect(within(warnings).getByText('Em análise')).toBeTruthy();
     expect(within(warnings).getByText(/Vídeo novo/)).toBeTruthy();
+    // Only platform leads can draw the second chart: none here, so a dash and why.
+    expect(screen.getByText(/As plataformas não contaram nenhum lead/)).toBeTruthy();
     const active = screen.getByRole('heading', { name: /Performance ativa/ }).closest('section')!;
     expect(within(active).getByText('Amostra pequena')).toBeTruthy();
     expect(within(active).getByText('R$ 160,00')).toBeTruthy();
     expect(within(active).getAllByText('sem venda "Ganho" ainda')).toHaveLength(2);
+  });
+});
+
+describe('the cockpit campaign filter', () => {
+  it('starts on "Só ativas", switches to "Todas" and keeps it in the address', () => {
+    cockpitScopes.length = 0;
+    renderAt('/dashboard/marketing?aba=cockpit');
+    expect(cockpitScopes.at(-1)).toBe('ativas');
+    const group = screen.getByRole('group', { name: 'Campanhas' });
+    fireEvent.click(within(group).getByRole('button', { name: 'Todas' }));
+    expect(cockpitScopes.at(-1)).toBe('todas');
+    expect(within(group).getByRole('button', { name: 'Todas' }).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+    cleanup();
+    renderAt('/dashboard/marketing?aba=cockpit&campanhas=todas');
+    expect(cockpitScopes.at(-1)).toBe('todas');
+  });
+
+  it('puts a balloon on the state with the most spend', () => {
+    data.cockpit = {
+      ...data.cockpit,
+      regions: [
+        { uf: 'RJ', spendCents: 7582, leads: 0, impressions: 900 },
+        { uf: 'SP', spendCents: 1200, leads: 0, impressions: 100 },
+      ],
+    };
+    renderAt('/dashboard/marketing?aba=cockpit');
+    expect(text(document.querySelector('.cockpit-balloon'))).toBe('RJ R$ 75,82 · 0 lead(s)');
   });
 });

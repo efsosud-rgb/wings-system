@@ -128,10 +128,7 @@ export async function cockpit(
             and(
               inArray(adMetricsDaily.adAccountId, ids),
               eq(adMetricsDaily.level, 'campaign'),
-              inArray(
-                adMetricsDaily.entityExternalId,
-                scopeExternal.length ? scopeExternal : none,
-              ),
+              inArray(adMetricsDaily.entityExternalId, scopeExternal.length ? scopeExternal : none),
               dayRange(adMetricsDaily.day),
             ),
           )

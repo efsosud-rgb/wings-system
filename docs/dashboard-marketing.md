@@ -456,3 +456,29 @@ roteirizado para o WordPress e banco descartável
 Não verificado ao vivo: o formato de `traffic_source` com UTMs de um lead
 real de campanha (só o de uma conversão orgânica foi visto), `/tasks` com
 tarefa concluída e `organization` preenchido em um negócio.
+
+### Cockpit: visual grafite (aprovado pelo Eric em 28/09/2026)
+
+Substitui a proposta neon, que foi revertida (b1e244b). Mesma estrutura da
+aba, outro estilo: fundo grafite (#2b2f36 → #1f2227), cartões #343942 com
+borda sutil e cantos de 10 px, texto branco e rótulos cinza-claro.
+
+- "Performance ativa" no topo (8 cartões em uma linha, ou 4, ou 2 conforme a
+  largura) e os KPIs do período abaixo, com os mesmos cálculos.
+- Evolução diária: áreas com linha laranja #ff5a1f e degradê para
+  transparente; o período anterior em cinza tracejado. Um gráfico sem nenhum
+  valor nos dois períodos vira "—" com o motivo.
+- Funil: barras do vinho ao laranja (#7a1f1f → #ff5a1f), número à direita e,
+  em cinza abaixo, o custo por etapa (gasto ÷ quantidade).
+- Onde o dinheiro foi: mapa do Brasil com os contornos das UFs da malha
+  pública do IBGE (`apps/web/src/components/dashboard/brazil-map.ts`, baixada
+  uma vez; a tela não chama o IBGE). Estados sem gasto em cinza-claro, com
+  gasto em laranja a vermelho com brilho, e um balão no estado de maior gasto
+  ("RJ R$ 75,82 · 0 lead(s)").
+- Criativos e alertas no mesmo estilo; alerta com borda esquerda âmbar.
+- **Seletor "Campanhas: Só ativas | Todas"** ao lado do período, só na aba
+  Cockpit, guardado na URL (`?campanhas=ativas|todas`, padrão ativas). Em
+  "Todas" o Cockpit soma também as campanhas pausadas ou encerradas que
+  entregaram na janela atual ou na anterior, e as marca na faixa do topo; os
+  criativos passam a ser todos os anúncios delas que entregaram. "Performance
+  ativa" fica sempre nas campanhas ativas.
