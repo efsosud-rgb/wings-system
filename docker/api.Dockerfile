@@ -38,5 +38,13 @@ COPY --from=builder --chown=node:node /app/apps/api/package.json ./apps/api/pack
 
 EXPOSE 3000
 WORKDIR /app/apps/api
+
+# No curl (and no guarantee of wget either) on node:alpine, so Coolify's
+# default curl-based probe silently no-ops as "healthy" without ever calling
+# the API. node has fetch built in, so use that to hit the real endpoint and
+# fail the container for real when it doesn't answer with 2xx.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
 # Migrations and reference-data seeding run before the API accepts traffic.
 CMD ["sh", "-c", "node dist/db/migrate.js && node dist/db/seed.js && node dist/server.js"]
