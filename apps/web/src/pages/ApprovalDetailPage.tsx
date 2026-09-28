@@ -257,7 +257,8 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
       {metaTree ? (
         <Alert kind="info">
           Tudo nasce <strong>pausado</strong>: a campanha, um conjunto de anúncios e um anúncio por
-          variação. Nada entrega e nada gasta até alguém ligar no Gerenciador de Anúncios.
+          variação. Nada entrega e nada gasta. Ativar é um pedido de <strong>retomada</strong>, com
+          aprovação própria, que liga os anúncios, o conjunto e a campanha.
         </Alert>
       ) : draft.platform === 'google_search' && draft.search ? (
         <Alert kind="info">
@@ -530,8 +531,9 @@ function NextRequests({ approval }: { approval: ApprovalDetail }) {
       <p className="field-hint">
         A campanha existe {approval.platform === 'google' ? 'no Google' : 'na Meta'}, pausada. Cada
         pedido abaixo passa pela mesma aprovação e pelo mesmo clique de execução.
-        {approval.platform === 'google' &&
-          ' “Ativar” liga a campanha, o grupo de anúncios e o anúncio criados pelo sistema.'}
+        {approval.platform === 'google'
+          ? ' “Ativar” liga a campanha, o grupo de anúncios e o anúncio criados pelo sistema.'
+          : ' “Ativar” liga a campanha, o conjunto de anúncios e os anúncios criados pelo sistema.'}
       </p>
       {request.isSuccess && request.data.approvalId && (
         <Alert kind="success">
@@ -707,14 +709,22 @@ export function ApprovalDetailPage() {
         </Alert>
       )}
       {approval.draft && <DraftCampaign draft={approval.draft} />}
-      {approval.platform === 'google' &&
-        approval.changeKind === 'resume_campaign' &&
-        approval.changeStatus !== 'executed' && (
-          <Alert kind="info">
-            Retomar no Google liga a campanha <strong>e</strong> o grupo de anúncios e o anúncio
-            que o sistema criou pausados com ela. A partir daí ela entrega e gasta.
-          </Alert>
-        )}
+      {approval.changeKind === 'resume_campaign' && approval.changeStatus !== 'executed' && (
+        <Alert kind="info">
+          {approval.platform === 'google' ? (
+            <>
+              Retomar no Google liga a campanha <strong>e</strong> o grupo de anúncios e o anúncio
+              que o sistema criou pausados com ela.
+            </>
+          ) : (
+            <>
+              Retomar na Meta liga os anúncios, o conjunto e, por último, a campanha que o sistema
+              criou pausados. Se algo falhar no meio, a campanha continua pausada.
+            </>
+          )}{' '}
+          A partir daí ela entrega e gasta.
+        </Alert>
+      )}
       <PeriodContext approval={approval} />
       {id &&
         canRequest &&

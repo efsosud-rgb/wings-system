@@ -11,6 +11,7 @@ import {
   adCampaigns,
   adChangeRequests,
   adCreativeUploads,
+  adExecutions,
   adVideoUploads,
   budgetPeriods,
 } from '../../db/schema/index.js';
@@ -18,7 +19,7 @@ import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee } from '../../test/factories.js';
 import { stepsOfExecution } from './ad-tree.js';
 import { decideApproval, gateChange } from './approvals.js';
-import { openPeriod, reserveCampaignCreation } from './budget-guard.js';
+import { openPeriod, reserveCampaignCreation, reserveChange } from './budget-guard.js';
 import { executeApprovedChange } from './executor.js';
 import { fakeMetaApi, type FakeMetaApiOptions } from './platform/fake-meta-api.js';
 import { MetaReadOnlyClient } from './platform/meta-client.js';
@@ -607,5 +608,64 @@ describe('a draft approved before ad sets existed', () => {
 
     expect(await run(client, changeRequestId)).toMatchObject({ outcome: 'applied' });
     expect(api.writes().map((call) => call.path.split('/')[1])).toEqual(['campaigns']);
+  });
+});
+
+describe('resuming a campaign the system created', () => {
+  async function createdAndResumeApproved(api: ReturnType<typeof fakeMetaApi>, client: MetaWriteClient, accountDbId: string) {
+    const { changeRequestId } = await requestAndApprove(accountDbId, draftOf());
+    expect(await run(client, changeRequestId)).toMatchObject({ ok: true, outcome: 'applied' });
+    const mirrored = await db.query.adCampaigns.findFirst({ where: eq(adCampaigns.adAccountId, accountDbId) });
+    if (!mirrored) throw new Error('expected the campaign mirrored');
+    const resume = await reserveChange(db, { adAccountId: accountDbId, campaignId: mirrored.id, kind: 'resume_campaign' });
+    if (!resume.ok) throw new Error(resume.message);
+    const gate = await gateChange(db, { changeRequestId: resume.value.changeRequestId });
+    const admin = await createEmployee(db, { role: 'admin_master', sector: 'diretoria' });
+    await decideApproval(db, { approvalId: gate.approvalId!, approverEmployeeId: admin.id, decision: 'approved' });
+    const campaignId = api.state.campaigns[0]!.id;
+    const adSets = [...api.state.objects].filter(([, object]) => object.edge === 'adsets').map(([id]) => id);
+    const ads = [...api.state.objects].filter(([, object]) => object.edge === 'ads').map(([id]) => id);
+    return { resumeId: resume.value.changeRequestId, campaignId, adSets, ads, mirroredId: mirrored.id };
+  }
+
+  it('switches on the ads, then the ad set, then the campaign, and keeps what Meta reports after', async () => {
+    const { accountDbId, api, client } = await world();
+    const { resumeId, campaignId, adSets, ads, mirroredId } = await createdAndResumeApproved(api, client, accountDbId);
+    expect(adSets).toHaveLength(1);
+    expect(ads).toHaveLength(2);
+    const before = api.writes().length;
+
+    const resumed = await run(client, resumeId);
+    expect(resumed).toMatchObject({ ok: true, outcome: 'applied' });
+
+    const statusWrites = api.writes().slice(before);
+    // The campaign is the last switch: until it is on, nothing delivers.
+    expect(statusWrites.map((call) => call.path)).toEqual([...ads, ...adSets, campaignId]);
+    for (const call of statusWrites) expect(call.fields).toEqual({ status: 'ACTIVE' });
+    expect(api.state.campaigns[0]?.status).toBe('ACTIVE');
+    for (const id of [...adSets, ...ads]) expect(api.state.objects.get(id)?.status).toBe('ACTIVE');
+
+    const [execution] = await db.select().from(adExecutions).where(eq(adExecutions.changeRequestId, resumeId));
+    expect(execution?.platformResponse).toMatchObject({
+      statusesAfter: Object.fromEntries([
+        ...ads.map((id) => [`ad:${id}`, 'ACTIVE']),
+        ...adSets.map((id) => [`adSet:${id}`, 'ACTIVE']),
+      ]),
+    });
+    expect(await db.query.adCampaigns.findFirst({ where: eq(adCampaigns.id, mirroredId) })).toMatchObject({ status: 'ACTIVE' });
+  });
+
+  it('an ad set Meta refuses to switch on stops before the campaign, which stays paused', async () => {
+    const { accountDbId, api, client } = await world();
+    const { resumeId, adSets, ads } = await createdAndResumeApproved(api, client, accountDbId);
+    api.state.refuseStatusOn = adSets[0];
+
+    const result = await run(client, resumeId);
+    expect(result).toMatchObject({ ok: false, outcome: 'rejected' });
+    expect(api.state.campaigns[0]?.status).toBe('PAUSED');
+    // The ads went on first, under a paused campaign: nothing delivers.
+    for (const id of ads) expect(api.state.objects.get(id)?.status).toBe('ACTIVE');
+    const change = await db.query.adChangeRequests.findFirst({ where: eq(adChangeRequests.id, resumeId) });
+    expect(change?.status).toBe('failed');
   });
 });
