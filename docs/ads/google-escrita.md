@@ -372,3 +372,16 @@ Marcas Formatadas" e "Ex-Diretor da ABF-RJ" no lugar de "Agende Sua Avaliação"
 RSA antigo `825987552936` fica ativo até o novo ser aprovado. Tudo na trilha
 (`ads.manual_platform_change`) e no rascunho salvo (24 palavras, 40 negativas,
 CPC R$ 10, títulos novos); o limite do construtor subiu para 30 palavras-chave.
+
+Segundo lote do mesmo dia (`validateOnly` antes): +3 palavras em frase (`como
+formatar uma franquia`, `transformar minha empresa em franquia`, `como
+franquear`), negativa `licenciamento`, e um **RSA definitivo**
+`200582882397~826292243692` (ENABLED, em revisão) com "+1.400 Projetos de
+Franquia", "Ex-Diretor da ABF-RJ" e "Diagnóstico Franqueabilidade" ("Diagnóstico
+de Franqueabilidade" tem 31 caracteres; o Google aceita 30) no lugar de
+"+1.300 Marcas Formatadas", "Agende Sua Avaliação" e "Do Diagnóstico à
+Expansão"; o RSA intermediário `826254020361` (em revisão, nunca veiculou) foi
+removido. O RSA original `825987552936` segue ENABLED e aprovado até o novo ser
+aprovado. Conferido por GET: campanha, grupo e anúncios ENABLED; só Pesquisa
+(sem parceiros, sem Display); presença; CPC máximo R$ 10; fim 09/10/2026.
+Total: 27 palavras-chave, 40 negativas.
