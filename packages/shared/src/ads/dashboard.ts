@@ -595,7 +595,7 @@ export interface DashboardSite {
   days: DashboardWindow;
   since: string;
   until: string;
-  /** False until GA4_PROPERTY_ID and the service account key are set. */
+  /** False until GA4_PROPERTY_ID and GA4_REFRESH_TOKEN are set. */
   configured: boolean;
   propertyId: string | null;
   /** When GA4 was last read; null when never. */

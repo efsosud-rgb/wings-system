@@ -337,11 +337,17 @@ botão: muda-se na plataforma.
   de médias. Criativos mostra Tempo médio, ThruPlays e 25 · 50 · 75 · 100% dos
   inícios. Não verificado ao vivo: o campo de tempo médio por anúncio nesta conta.
 - **Site (GA4) (migração 0042, `ga4_traffic_daily`)**: a coleta de hora em hora
-  lê a Data API com uma conta de serviço (`lib/ga4.ts`, JWT assinado no próprio
-  servidor, escopo analytics.readonly) e guarda sessões, sessões engajadas,
-  tempo de engajamento, páginas e eventos-chave por dia, origem, mídia e
-  campanha. Precisa de `GA4_PROPERTY_ID` (o número da propriedade, não o G-…)
-  e `GA4_SERVICE_ACCOUNT_JSON`. O site hoje só carrega **G-C10F4NPBF0** (pelo
+  lê a Data API (`lib/ga4.ts`, escopo analytics.readonly) e guarda sessões,
+  sessões engajadas, tempo de engajamento, páginas e eventos-chave por dia,
+  origem, mídia e campanha. Precisa de `GA4_PROPERTY_ID` (o número da
+  propriedade, não o G-…; a da Wings é **395271354**, "GA4 - Wings Company
+  2k23") e `GA4_REFRESH_TOKEN`. A organização wingscompany.com.br bloqueia
+  chaves de conta de serviço (`iam.disableServiceAccountKeyCreation`), então a
+  leitura usa OAuth de usuário como o Google Ads: o mesmo client
+  (`GOOGLE_ADS_CLIENT_ID`/`SECRET`) e um refresh token que uma conta com acesso
+  à propriedade concede uma vez no navegador, só com o escopo
+  analytics.readonly. Se a coleta disser `auth_failed (400 invalid_grant)`, o
+  consentimento foi revogado ou expirou e precisa ser dado de novo. O site hoje só carrega **G-C10F4NPBF0** (pelo
   GTM-MXJLC5HH, em todas as páginas conferidas em 28/09); G-Q0TCG8R502 não
   aparece mais no HTML nem nos scripts. Nada foi verificado contra o GA4 real.
 - **Funil (`rd_crm_deals`)**: a coleta copia do RD Station CRM as negociações

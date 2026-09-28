@@ -18,9 +18,10 @@ export function SiteTab({ data }: { data: DashboardSite }) {
   if (!data.configured) {
     return (
       <Alert kind="info">
-        O Google Analytics 4 ainda não está conectado. Falta criar a conta de serviço, adicioná-la
-        como Leitor na propriedade do GA4 e configurar GA4_PROPERTY_ID e GA4_SERVICE_ACCOUNT_JSON no
-        servidor. Depois disso a coleta de hora em hora traz as sessões por origem e campanha.
+        O Google Analytics 4 ainda não está conectado. Falta autorizar a leitura com uma conta
+        Google que acesse a propriedade (consentimento OAuth) e configurar GA4_PROPERTY_ID e
+        GA4_REFRESH_TOKEN no servidor. Depois disso a coleta de hora em hora traz as sessões por
+        origem e campanha.
       </Alert>
     );
   }

@@ -750,7 +750,7 @@ describe('site and funnel', () => {
       rows: [],
     };
     renderAt('/dashboard/marketing?aba=site');
-    expect(screen.getByText(/conta de serviço/)).toBeTruthy();
+    expect(screen.getByText(/consentimento OAuth/)).toBeTruthy();
   });
 
   it('shows sessions with engagement, time and pages per session', () => {
