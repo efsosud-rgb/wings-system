@@ -179,7 +179,7 @@ beforeEach(() => {
   state.canRequest = true;
   state.insights = {
     configured: true,
-    usage: { spentMicroUsd: 42_000, limitMicroUsd: 1_000_000, exhausted: false },
+    usage: { spentMicroUsd: 42_000, limitMicroUsd: 1_000_000, failedRuns: 0, failedMicroUsd: 0, exhausted: false },
     latestRun: run,
     runningRun: null,
     open: [insight({})],
@@ -206,7 +206,7 @@ beforeEach(() => {
   };
   state.suggestions = {
     configured: true,
-    usage: { spentMicroUsd: 42_000, limitMicroUsd: 1_000_000, exhausted: false },
+    usage: { spentMicroUsd: 42_000, limitMicroUsd: 1_000_000, failedRuns: 0, failedMicroUsd: 0, exhausted: false },
     latestRun: { ...run, id: 'run-2', kind: 'campaign_suggestions', trigger: 'manual', requestedByName: 'Ana' },
     runningRun: null,
     suggestions: [suggestion],
@@ -248,7 +248,7 @@ describe('the run bar', () => {
     expect(screen.getByText('Uma geração está em andamento.')).toBeTruthy();
 
     cleanup();
-    state.insights = { ...state.insights, runningRun: null, usage: { spentMicroUsd: 1_000_000, limitMicroUsd: 1_000_000, exhausted: true } };
+    state.insights = { ...state.insights, runningRun: null, usage: { spentMicroUsd: 1_000_000, limitMicroUsd: 1_000_000, failedRuns: 0, failedMicroUsd: 0, exhausted: true } };
     renderTab();
     expect(screen.getByText(/O teto diário de IA dos insights foi atingido/)).toBeTruthy();
 

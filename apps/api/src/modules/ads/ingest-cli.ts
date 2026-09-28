@@ -14,8 +14,10 @@ import { syncBlogPosts } from '../site/blog-sync.js';
 import {
   accountRecordOf,
   finishIngestRun,
+  INGEST_DEADLINE_MS,
   reconcileRecordOf,
   startIngestRun,
+  type IngestKind,
   type IngestRunAccount,
   type IngestRunSite,
 } from './ingest-runs.js';
@@ -47,6 +49,19 @@ import {
  * accounts fresh on its own now, but the full cycle still checks too, in case
  * the fast task itself is what stopped running.
  */
+
+/**
+ * One cycle of each kind at a time. A session-level advisory lock on its own
+ * connection: it dies with the process, so a run that is killed can never
+ * leave the next one blocked. A second run that finds it taken leaves quietly.
+ */
+const LOCK_KEYS: Record<IngestKind, number> = { full: 7_202_601, reconcile: 7_202_602 };
+
+/**
+ * The run in progress, so a SIGTERM (a redeploy replacing the container) or
+ * the deadline can close its row as failed instead of leaving it "running".
+ */
+let current: { runId: string; accounts: IngestRunAccount[] } | null = null;
 
 function arg(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -82,6 +97,54 @@ async function main() {
       return;
     }
 
+    const kind: IngestKind = flag('reconcile-only') ? 'reconcile' : 'full';
+    const lockClient = await pool.connect();
+    const locked = await lockClient.query<{ ok: boolean }>(
+      'select pg_try_advisory_lock($1) as ok',
+      [LOCK_KEYS[kind]],
+    );
+    if (!locked.rows[0]?.ok) {
+      lockClient.release(true);
+      console.warn(`já há uma ingestão (${kind}) em andamento; esta sai sem fazer nada`);
+      return;
+    }
+    // Destroying the connection at the end frees the lock with it.
+    const releaseLock = () => lockClient.release(true);
+
+    const stop = async (reason: 'interrupted' | 'timeout') => {
+      const run = current;
+      current = null;
+      if (run) {
+        await finishIngestRun(db, run.runId, {
+          status: 'failed',
+          accounts: run.accounts,
+          site: null,
+          error: reason,
+        }).catch(() => undefined);
+      }
+      console.error(reason === 'timeout' ? 'prazo da ingestão estourado' : 'ingestão interrompida');
+      releaseLock();
+      await pool.end().catch(() => undefined);
+      process.exit(1);
+    };
+    const deadline = setTimeout(() => void stop('timeout'), INGEST_DEADLINE_MS[kind]);
+    deadline.unref();
+    process.once('SIGTERM', () => void stop('interrupted'));
+    process.once('SIGINT', () => void stop('interrupted'));
+
+    try {
+      await cycle();
+    } finally {
+      clearTimeout(deadline);
+      current = null;
+      releaseLock();
+    }
+  } finally {
+    await pool.end();
+  }
+
+  /** The cycle itself, inside the lock and the deadline. */
+  async function cycle() {
     const now = new Date();
     const days = Number(arg('days') ?? 7);
     const since = new Date(now.getTime() - days * 24 * 3600_000).toISOString().slice(0, 10);
@@ -120,6 +183,7 @@ async function main() {
         now,
       });
       const recorded: IngestRunAccount[] = [];
+      current = { runId, accounts: recorded };
 
       const cycle = await runReconciliationCycle(db, accounts, {
         clientFor: (account) =>
@@ -173,6 +237,7 @@ async function main() {
       now,
     });
     const recorded: IngestRunAccount[] = [];
+    current = { runId, accounts: recorded };
 
     // Each account is its own failure domain: one that throws is reported and
     // the rest are still served. See ingest-cycle.ts.
@@ -297,8 +362,6 @@ async function main() {
       // Every account had its turn; now fail visibly so the scheduler shows it.
       throw new Error(`${failures} conta(s) falharam neste ciclo — veja acima.`);
     }
-  } finally {
-    await pool.end();
   }
 }
 

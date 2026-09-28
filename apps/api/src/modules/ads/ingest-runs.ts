@@ -1,5 +1,4 @@
-import { desc, inArray, notInArray } from 'drizzle-orm';
-import { eq } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, notInArray } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { ingestRuns } from '../../db/schema/index.js';
 import type { AccountCycleResult, ReconcileCycleAccountResult } from './ingest-cycle.js';
@@ -37,10 +36,63 @@ export interface IngestRunSite {
   error?: string;
 }
 
+export type IngestKind = 'full' | 'reconcile';
+
+export const kindOfTrigger = (trigger: IngestTrigger): IngestKind =>
+  RECONCILE_TRIGGERS.includes(trigger) ? 'reconcile' : 'full';
+
+/**
+ * How long a run may say `running` before it is taken for dead. Above the
+ * CLI's own deadline (INGEST_DEADLINE_MS), so a live run is never retired: a
+ * row older than this belongs to a process that was killed — a redeploy
+ * replacing the container mid-run, as on 28/09 at 09:00, or the scheduler's
+ * timeout.
+ */
+export const ABANDONED_AFTER_MS: Record<IngestKind, number> = {
+  full: 20 * 60_000,
+  reconcile: 6 * 60_000,
+};
+
+/** The CLI stops itself and records the run as failed after this long. */
+export const INGEST_DEADLINE_MS: Record<IngestKind, number> = {
+  full: 14 * 60_000,
+  reconcile: 4 * 60_000,
+};
+
+const triggersOf = (kind: IngestKind) =>
+  kind === 'reconcile'
+    ? inArray(ingestRuns.trigger, [...RECONCILE_TRIGGERS])
+    : notInArray(ingestRuns.trigger, [...RECONCILE_TRIGGERS]);
+
+/**
+ * Closes the `running` rows a dead process left behind, as failed with
+ * `interrupted`. The row stays (append-only in spirit: nothing is deleted),
+ * and the dashboard stops saying "em andamento" about a run nobody is doing.
+ */
+export async function retireAbandonedRuns(
+  db: Database,
+  kind: IngestKind,
+  now = new Date(),
+): Promise<number> {
+  const retired = await db
+    .update(ingestRuns)
+    .set({ status: 'failed', error: 'interrupted', finishedAt: now })
+    .where(
+      and(
+        triggersOf(kind),
+        eq(ingestRuns.status, 'running'),
+        lt(ingestRuns.startedAt, new Date(now.getTime() - ABANDONED_AFTER_MS[kind])),
+      ),
+    )
+    .returning({ id: ingestRuns.id });
+  return retired.length;
+}
+
 export async function startIngestRun(
   db: Database,
   input: { trigger: IngestTrigger; since: string; now?: Date },
 ): Promise<string> {
+  await retireAbandonedRuns(db, kindOfTrigger(input.trigger), input.now ?? new Date());
   const [row] = await db
     .insert(ingestRuns)
     .values({ trigger: input.trigger, since: input.since, startedAt: input.now ?? new Date() })
@@ -98,11 +150,7 @@ export async function latestIngestRun(db: Database, options: { kind?: 'full' | '
   const [row] = await db
     .select()
     .from(ingestRuns)
-    .where(
-      kind === 'reconcile'
-        ? inArray(ingestRuns.trigger, [...RECONCILE_TRIGGERS])
-        : notInArray(ingestRuns.trigger, [...RECONCILE_TRIGGERS]),
-    )
+    .where(triggersOf(kind))
     .orderBy(desc(ingestRuns.startedAt))
     .limit(1);
   return row ?? null;

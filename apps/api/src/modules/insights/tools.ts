@@ -402,6 +402,9 @@ async function desgasteCriativos(
   };
 }
 
+/** The verdicts the generator reads at most, biggest spenders first. */
+const VERDICTS_MAX = 40;
+
 async function vereditosCampanhas(
   ctx: InsightToolContext,
   raw: unknown,
@@ -433,8 +436,20 @@ async function vereditosCampanhas(
       ...figures(row.totals),
     }))
     .sort((a, b) => b.gasto_centavos - a.gasto_centavos);
+  // A campaign that spent nothing in the window and is not running has no
+  // verdict worth reading; with 80+ old campaigns they were most of an 81k-char
+  // result. Capped too, biggest spenders first.
+  const relevant = campanhas.filter(
+    (campanha) => campanha.gasto_centavos > 0 || campanha.status === 'ACTIVE',
+  );
+  const shown = relevant.slice(0, VERDICTS_MAX);
   return {
-    result: scrubDeep({ periodo_dias: toWindow(args.dias), campanhas }),
+    result: scrubDeep({
+      periodo_dias: toWindow(args.dias),
+      campanhas: shown,
+      omitidas_sem_gasto_nem_ativas: campanhas.length - relevant.length,
+      omitidas_pelo_limite: relevant.length - shown.length,
+    }),
     summary: `${campanhas.length} campanha(s) com veredito, ${toWindow(args.dias)} dias`,
     stored: 0,
   };
