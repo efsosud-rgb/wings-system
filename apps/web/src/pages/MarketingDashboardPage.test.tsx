@@ -336,7 +336,12 @@ function buildCreatives(): DashboardCreatives {
           reach: 800,
           videoPlays: 600,
           videoThruplays: 240,
+          videoP25: 500,
+          videoP50: 300,
+          videoP75: 150,
           videoP100: 60,
+          videoStarts: 1000,
+          videoWatchMs: 6_400_000,
         },
         fatigue: {
           firstHalfCtrMilli: 2500,
@@ -714,6 +719,15 @@ describe('creatives', () => {
     expect(text(row)).toContain('30%');
     expect(text(row)).toContain('40%');
     expect(text(row)).toContain('10%');
+  });
+
+  it('shows the average time watched per start, ThruPlays and the four quarters', () => {
+    renderAt('/dashboard/marketing?aba=criativos');
+    const row = screen.getByText('Reels 15s').closest('tr');
+    // 6,400 s over 1,000 starts; quarters on the starts: 500, 300, 150, 60 of 1,000.
+    expect(text(row)).toContain('6,4 s');
+    expect(text(row)).toContain('240');
+    expect(text(row)).toContain('50 · 30 · 15 · 6%');
   });
 });
 

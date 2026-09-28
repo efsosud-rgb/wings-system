@@ -232,6 +232,9 @@ export interface MetricTotals {
   videoP50: number;
   videoP75: number;
   videoP100: number;
+  /** Every start of the video, and the total milliseconds watched; Meta only. */
+  videoStarts: number;
+  videoWatchMs: number;
 }
 
 export const EMPTY_TOTALS: MetricTotals = {
@@ -246,6 +249,8 @@ export const EMPTY_TOTALS: MetricTotals = {
   videoP50: 0,
   videoP75: 0,
   videoP100: 0,
+  videoStarts: 0,
+  videoWatchMs: 0,
 };
 
 /** Ratios, each null when its denominator is zero. All x1000 integers or cents. */
@@ -263,6 +268,16 @@ export interface MetricRatios {
   holdRateMilli: number | null;
   /** Share of 3-second plays that reached the end, percentage x1000. */
   completionRateMilli: number | null;
+  /** Average time watched per start, in milliseconds. */
+  avgWatchMs: number | null;
+  /**
+   * Share of starts that reached 25/50/75/100% of the video, percentage x1000.
+   * On the starts when Meta reported them, else on the 3-second plays.
+   */
+  p25Milli: number | null;
+  p50Milli: number | null;
+  p75Milli: number | null;
+  p100Milli: number | null;
 }
 
 export function addTotals(a: MetricTotals, b: Partial<MetricTotals>): MetricTotals {
@@ -278,6 +293,8 @@ export function addTotals(a: MetricTotals, b: Partial<MetricTotals>): MetricTota
     videoP50: a.videoP50 + (b.videoP50 ?? 0),
     videoP75: a.videoP75 + (b.videoP75 ?? 0),
     videoP100: a.videoP100 + (b.videoP100 ?? 0),
+    videoStarts: a.videoStarts + (b.videoStarts ?? 0),
+    videoWatchMs: a.videoWatchMs + (b.videoWatchMs ?? 0),
   };
 }
 
@@ -303,6 +320,11 @@ export function ratiosOf(t: MetricTotals): MetricRatios {
     hookRateMilli: perMille(t.videoPlays, t.impressions),
     holdRateMilli: perMille(t.videoThruplays, t.videoPlays),
     completionRateMilli: perMille(t.videoP100, t.videoPlays),
+    avgWatchMs: t.videoStarts > 0 ? Math.round(t.videoWatchMs / t.videoStarts) : null,
+    p25Milli: perMille(t.videoP25, t.videoStarts || t.videoPlays),
+    p50Milli: perMille(t.videoP50, t.videoStarts || t.videoPlays),
+    p75Milli: perMille(t.videoP75, t.videoStarts || t.videoPlays),
+    p100Milli: perMille(t.videoP100, t.videoStarts || t.videoPlays),
   };
 }
 

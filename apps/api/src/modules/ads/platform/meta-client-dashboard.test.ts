@@ -66,6 +66,9 @@ describe('video figures on an insights row', () => {
           video_p50_watched_actions: [{ action_type: 'video_view', value: '150' }],
           video_p75_watched_actions: [{ action_type: 'video_view', value: '90' }],
           video_p100_watched_actions: [{ action_type: 'video_view', value: '45' }],
+          video_play_actions: [{ action_type: 'video_view', value: '400' }],
+          // Seconds per start, with decimals: stored as a total, never rounded to the second.
+          video_avg_time_watched_actions: [{ action_type: 'video_view', value: '6.45' }],
         },
       ],
     }));
@@ -78,6 +81,8 @@ describe('video figures on an insights row', () => {
       p50: 150,
       p75: 90,
       p100: 45,
+      starts: 400,
+      watchMs: 2_580_000,
     });
     // The fields ride on the same request: no extra call for video.
     expect(calls).toHaveLength(1);
@@ -89,7 +94,7 @@ describe('video figures on an insights row', () => {
       data: [{ campaign_id: 'c1', date_start: '2026-09-15', spend: '1.00', impressions: '10' }],
     }));
     const [row] = await meta.getInsights('campaign', '2026-09-15', '2026-09-15');
-    expect(row?.video).toEqual({ plays: 0, thruplays: 0, p25: 0, p50: 0, p75: 0, p100: 0 });
+    expect(row?.video).toEqual({ plays: 0, thruplays: 0, p25: 0, p50: 0, p75: 0, p100: 0, starts: 0, watchMs: 0 });
   });
 
   it('sums an action list and shrugs at anything else', () => {

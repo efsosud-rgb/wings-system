@@ -83,6 +83,8 @@ const sumColumns = {
   videoP50: sql<string>`coalesce(sum(${adMetricsDaily.videoP50}), 0)`,
   videoP75: sql<string>`coalesce(sum(${adMetricsDaily.videoP75}), 0)`,
   videoP100: sql<string>`coalesce(sum(${adMetricsDaily.videoP100}), 0)`,
+  videoStarts: sql<string>`coalesce(sum(${adMetricsDaily.videoStarts}), 0)`,
+  videoWatchMs: sql<string>`coalesce(sum(${adMetricsDaily.videoWatchMs}), 0)`,
 };
 
 type SumRow = Record<keyof typeof sumColumns, string>;
@@ -100,6 +102,8 @@ function totalsOf(row: SumRow): MetricTotals {
     videoP50: Number(row.videoP50),
     videoP75: Number(row.videoP75),
     videoP100: Number(row.videoP100),
+    videoStarts: Number(row.videoStarts),
+    videoWatchMs: Number(row.videoWatchMs),
   };
 }
 

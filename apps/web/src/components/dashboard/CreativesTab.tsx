@@ -29,6 +29,17 @@ function videoOnly(creative: CreativePerformance, value: number | null): number 
   return creative.totals.videoPlays > 0 ? value : null;
 }
 
+const seconds = (ms: number | null) =>
+  ms === null ? null : `${(ms / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} s`;
+
+/** 25 · 50 · 75 · 100%: the share of starts that reached each quarter of the video. */
+function quartiles(creative: CreativePerformance): string | null {
+  if (creative.totals.videoPlays === 0 && creative.totals.videoStarts === 0) return null;
+  const r = ratiosOf(creative.totals);
+  const pct = (milli: number | null) => (milli === null ? '—' : String(Math.round(milli / 1000)));
+  return `${pct(r.p25Milli)} · ${pct(r.p50Milli)} · ${pct(r.p75Milli)} · ${pct(r.p100Milli)}%`;
+}
+
 function Fatigue({ creative }: { creative: CreativePerformance }) {
   const { fatigue } = creative;
   const trend = deltaPercent(fatigue.secondHalfCtrMilli, fatigue.firstHalfCtrMilli);
@@ -49,7 +60,7 @@ function Fatigue({ creative }: { creative: CreativePerformance }) {
 
 export function CreativesTab({ data }: { data: DashboardCreatives }) {
   const exportCsv = () => {
-    const header = ['Anúncio', 'Campanha', 'Plataforma', 'Formato', 'Gasto', 'Impressões', 'Cliques', 'CTR %', 'Leads', 'CPL', 'Plays 3s', 'Gancho %', 'ThruPlays', 'Retenção %', 'Assistiram até o fim %', 'Frequência', 'CTR 1ª metade %', 'CTR 2ª metade %', 'Desgastado'];
+    const header = ['Anúncio', 'Campanha', 'Plataforma', 'Formato', 'Gasto', 'Impressões', 'Cliques', 'CTR %', 'Leads', 'CPL', 'Plays 3s', 'Gancho %', 'ThruPlays', 'Retenção %', 'Assistiram até o fim %', 'Inícios do vídeo', 'Tempo médio assistido (s)', '25% %', '50% %', '75% %', '100% %', 'Frequência', 'CTR 1ª metade %', 'CTR 2ª metade %', 'Desgastado'];
     const rows = data.creatives.map((creative) => {
       const ratios = ratiosOf(creative.totals);
       return [
@@ -68,6 +79,12 @@ export function CreativesTab({ data }: { data: DashboardCreatives }) {
         creative.totals.videoThruplays,
         percent(videoOnly(creative, ratios.holdRateMilli)),
         percent(videoOnly(creative, ratios.completionRateMilli)),
+        creative.totals.videoStarts,
+        ratios.avgWatchMs === null ? null : ratios.avgWatchMs / 1000,
+        percent(ratios.p25Milli),
+        percent(ratios.p50Milli),
+        percent(ratios.p75Milli),
+        percent(ratios.p100Milli),
         ratios.frequencyMilli === null ? null : ratios.frequencyMilli / 1000,
         percent(creative.fatigue.firstHalfCtrMilli),
         percent(creative.fatigue.secondHalfCtrMilli),
@@ -135,6 +152,9 @@ export function CreativesTab({ data }: { data: DashboardCreatives }) {
                   <th scope="col" className="num" title="Plays de 3 s por impressão">Gancho</th>
                   <th scope="col" className="num" title="ThruPlays por play de 3 s">Retenção</th>
                   <th scope="col" className="num" title="Assistiram até o fim, por play de 3 s">Até o fim</th>
+                  <th scope="col" className="num" title="Tempo médio assistido por início do vídeo (Meta)">Tempo médio</th>
+                  <th scope="col" className="num">ThruPlays</th>
+                  <th scope="col" className="num" title="Parcela dos inícios que chegou a 25%, 50%, 75% e 100% do vídeo">25 · 50 · 75 · 100%</th>
                   <th scope="col" className="num">Frequência</th>
                   <th scope="col">Desgaste</th>
                 </tr>
@@ -154,6 +174,7 @@ export function CreativesTab({ data }: { data: DashboardCreatives }) {
                           <span>
                             {creative.name}
                             <span className="cell-sub">
+                              {creative.format === 'text' && creative.headline ? `${creative.headline} · ` : ''}
                               {creative.campaignName || AD_PLATFORM_LABEL[creative.platform]}
                               {creative.effectiveStatus === 'DISAPPROVED' && <strong className="error-text"> · reprovado</strong>}
                             </span>
@@ -168,6 +189,11 @@ export function CreativesTab({ data }: { data: DashboardCreatives }) {
                       <td className="mono num">{formatPercentMilli(videoOnly(creative, ratios.hookRateMilli))}</td>
                       <td className="mono num">{formatPercentMilli(videoOnly(creative, ratios.holdRateMilli))}</td>
                       <td className="mono num">{formatPercentMilli(videoOnly(creative, ratios.completionRateMilli))}</td>
+                      <td className="mono num">{seconds(ratios.avgWatchMs) ?? '—'}</td>
+                      <td className="mono num">
+                        {creative.totals.videoPlays > 0 ? formatInt(creative.totals.videoThruplays) : '—'}
+                      </td>
+                      <td className="mono num">{quartiles(creative) ?? '—'}</td>
                       <td className="mono num">{formatMilli(ratios.frequencyMilli)}</td>
                       <td>
                         <Fatigue creative={creative} />
