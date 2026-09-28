@@ -53,6 +53,9 @@ vi.mock('../api/ads.js', () => ({
     error: null,
   }),
 }));
+vi.mock('../components/dashboard/DashboardRefresh.js', () => ({
+  DashboardRefresh: () => <p>dados até</p>,
+}));
 // The other tabs have their own tests; here they only need to mount.
 vi.mock('../components/dashboard/InsightsTab.js', () => ({ InsightsTab: () => <p>insights</p> }));
 vi.mock('../components/dashboard/OwnedChannelsTab.js', () => ({
@@ -85,8 +88,9 @@ function strip(overrides: Partial<SpendStrip>): SpendStrip {
     killSwitchEngaged: false,
     killSwitch: null,
     setupNote: null,
+    forecastRule: null,
     ...overrides,
-  };
+  } as SpendStrip;
 }
 
 const ingestion: IngestionStatus = {
@@ -96,6 +100,7 @@ const ingestion: IngestionStatus = {
   schedule: '0 * * * *',
   nextRunAt: '2026-09-16T13:00:00.000Z',
   overdue: false,
+  dataUntil: '2026-09-16T12:02:00.000Z',
 };
 
 const reconciliation: IngestionStatus = {
@@ -105,6 +110,7 @@ const reconciliation: IngestionStatus = {
   schedule: '*/15 * * * *',
   nextRunAt: '2026-09-16T12:05:00.000Z',
   overdue: false,
+  dataUntil: '2026-09-16T11:50:10.000Z',
 };
 
 const positive: VerdictResult = {
@@ -195,6 +201,7 @@ function buildOverview(overrides: Partial<DashboardOverview> = {}): DashboardOve
         action: '',
       },
     ],
+    accounts: [{ id: '11111111-1111-4111-8111-111111111111', platform: 'meta', name: 'Fly High' }],
     ...overrides,
   };
 }
@@ -258,6 +265,7 @@ function buildCampaigns(): DashboardCampaigns {
         startDate: '2026-09-28',
         endDate: '2026-10-02',
         targetCplCents: 4500,
+        mirroredAt: '2026-09-28T13:00:00.000Z',
         name: 'LEAD | FORMS',
         status: 'ACTIVE',
         objective: 'OUTCOME_LEADS',
@@ -636,6 +644,40 @@ describe('campaigns', () => {
     };
     renderAt('/dashboard/marketing?aba=campanhas');
     expect(screen.queryByRole('button', { name: 'Pausar' })).toBeNull();
+    data.campaigns = buildCampaigns();
+  });
+
+  it('keeps the API order (newest start first), and can flip it or sort by spend', () => {
+    const base = data.campaigns.campaigns[0]!;
+    const search = {
+      ...base,
+      externalId: '24289782134',
+      platform: 'google' as const,
+      name: 'SEARCH | Formatação | Alta Intenção | Set26',
+      startDate: '2026-09-29',
+      endDate: null,
+      systemCreated: false,
+      totals: { ...base.totals, spendCents: 0 },
+      adSets: [],
+    };
+    // The API sends it first: it starts later, whatever it spent.
+    data.campaigns = { ...data.campaigns, campaigns: [search, base] };
+    renderAt('/dashboard/marketing?aba=campanhas');
+    const names = () =>
+      screen.getAllByRole('row').flatMap((row) => {
+        const strong = row.querySelector('strong');
+        return strong ? [strong.textContent] : [];
+      });
+    expect(names()).toEqual(['SEARCH | Formatação | Alta Intenção | Set26', 'LEAD | FORMS']);
+    expect(
+      text(screen.getByText('SEARCH | Formatação | Alta Intenção | Set26').closest('tr')),
+    ).toContain('29/09 – sem fim');
+    fireEvent.change(screen.getByLabelText('Ordem das campanhas'), {
+      target: { value: 'antigas' },
+    });
+    expect(names()).toEqual(['LEAD | FORMS', 'SEARCH | Formatação | Alta Intenção | Set26']);
+    fireEvent.change(screen.getByLabelText('Ordem das campanhas'), { target: { value: 'gasto' } });
+    expect(names()[0]).toBe('LEAD | FORMS');
     data.campaigns = buildCampaigns();
   });
 

@@ -23,6 +23,9 @@ export interface PlatformCampaign {
   spendCents: Cents;
   /** The platform's objective for the campaign, when it has one. */
   objective?: string | null;
+  /** First and last day it runs (YYYY-MM-DD, São Paulo); undefined when the client does not read them, null end = open-ended. */
+  startDate?: string | null;
+  endDate?: string | null;
 }
 
 export interface PlatformAdSet {
@@ -62,7 +65,7 @@ export interface PlatformAccount {
 }
 
 /** What a creative is made of, as far as the platform tells. */
-export type CreativeFormat = 'image' | 'video' | 'carousel' | 'unknown';
+export type CreativeFormat = 'image' | 'video' | 'carousel' | 'text' | 'unknown';
 
 export interface PlatformAd {
   id: string;

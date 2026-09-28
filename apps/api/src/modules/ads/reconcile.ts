@@ -113,6 +113,8 @@ export async function syncCampaigns(
         lifetimeBudgetCents: campaign.lifetimeBudgetCents,
         budgetLevel: budgetLevelOf(campaign, adSetsByCampaign.get(campaign.id) ?? []),
         objective: campaign.objective ?? null,
+        startDate: campaign.startDate ?? null,
+        endDate: campaign.endDate ?? null,
         lastSyncedAt: now,
       })
       .onConflictDoUpdate({
@@ -125,6 +127,9 @@ export async function syncCampaigns(
           budgetLevel: budgetLevelOf(campaign, adSetsByCampaign.get(campaign.id) ?? []),
           // A client that does not report the objective never erases a known one.
           ...(campaign.objective ? { objective: campaign.objective } : {}),
+          // Same for the schedule: undefined means "not read", null means "no end".
+          ...(campaign.startDate !== undefined ? { startDate: campaign.startDate } : {}),
+          ...(campaign.endDate !== undefined ? { endDate: campaign.endDate } : {}),
           lastSyncedAt: now,
           updatedAt: now,
         },

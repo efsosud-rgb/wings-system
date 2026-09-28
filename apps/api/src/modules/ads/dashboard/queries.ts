@@ -268,6 +268,69 @@ async function killSwitchOf(db: Database, accounts: Account[]): Promise<KillSwit
   };
 }
 
+const brl = (cents: number) =>
+  `R$ ${(cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/**
+ * The month's forecast from the budgets in force, not from the past pace: a
+ * campaign switched on today at R$ 240/day would take a week to move a
+ * straight-line projection. Spent so far + what is left of today's budget +
+ * the active daily budget for every day left, each campaign stopping at its
+ * own end date. The platform's overdelivery (Meta up to 25% a day) is not
+ * added: this is what the budgets say, not the worst case.
+ */
+async function budgetForecast(
+  db: Database,
+  accountIds: string[],
+  month: ReturnType<typeof monthOf>,
+  spentCents: number,
+): Promise<{ forecast: number; forecastRule: string }> {
+  const monthEnd = `${month.periodMonth.slice(0, 8)}${String(month.totalDays).padStart(2, '0')}`;
+  const [campaignRows, adSetRows, todayRows] = await Promise.all([
+    db.query.adCampaigns.findMany({
+      where: and(inArray(adCampaigns.adAccountId, accountIds), eq(adCampaigns.status, 'ACTIVE')),
+    }),
+    db
+      .select({
+        campaignId: adSets.campaignId,
+        status: adSets.status,
+        dailyBudgetCents: adSets.dailyBudgetCents,
+      })
+      .from(adSets)
+      .innerJoin(adCampaigns, eq(adCampaigns.id, adSets.campaignId))
+      .where(inArray(adCampaigns.adAccountId, accountIds)),
+    sumsByEntity(db, accountIds, 'campaign', month.today, month.today),
+  ]);
+
+  let rest = 0;
+  let activeDaily = 0;
+  let running = 0;
+  for (const campaign of campaignRows) {
+    const daily =
+      campaign.budgetLevel === 'ad_set'
+        ? adSetRows
+            .filter((row) => row.campaignId === campaign.id && row.status === 'ACTIVE')
+            .reduce((total, row) => total + (row.dailyBudgetCents ?? 0), 0)
+        : campaign.dailyBudgetCents;
+    if (!daily) continue;
+    const lastDay = campaign.endDate && campaign.endDate < monthEnd ? campaign.endDate : monthEnd;
+    if (lastDay < month.today) continue;
+    running += 1;
+    activeDaily += daily;
+    const spentToday = todayRows.get(campaign.externalId)?.spendCents ?? 0;
+    const fullDaysLeft = daysBetween(addDays(month.today, 1), lastDay).length;
+    rest += Math.max(0, daily - spentToday) + daily * fullDaysLeft;
+  }
+  const daysLeft = daysBetween(addDays(month.today, 1), monthEnd).length;
+  const forecastRule =
+    running === 0
+      ? `Nenhuma campanha ativa com verba: o previsto é o gasto até agora, ${brl(spentCents)}.`
+      : `Gasto até agora ${brl(spentCents)} + o que falta da verba de hoje + ${brl(activeDaily)}/dia de ` +
+        `${running} campanha(s) ativa(s) nos ${daysLeft} dia(s) que restam no mês, cada uma até a sua data de fim` +
+        ` = ${brl(spentCents + rest)}. Sem a sobreentrega da plataforma.`;
+  return { forecast: spentCents + rest, forecastRule };
+}
+
 async function paidStrip(
   db: Database,
   env: Env,
@@ -301,7 +364,9 @@ async function paidStrip(
     unit: 'brl',
     configured,
     spent,
-    forecast: accounts.length > 0 ? forecastOf(spent, month) : null,
+    ...(accounts.length > 0
+      ? await budgetForecast(db, ids, month, spent)
+      : { forecast: null, forecastRule: null }),
     available: sumOrNull(states.map((state) => state?.availableCents ?? null)),
     balance: sumOrNull(balances),
     balanceSource: sumOrNull(balances) === null ? null : balanceSource,
@@ -374,6 +439,7 @@ async function kairogenStrip(
     configured,
     spent,
     forecast: configured ? forecastOf(spent, month) : null,
+    forecastRule: null,
     available: Math.max(0, env.KAIROGEN_MONTHLY_CREDITS - spent),
     balance: balance?.balance ?? null,
     balanceSource: balance ? 'kairogen.get_credits' : null,
@@ -431,6 +497,7 @@ async function aiStrip(
     configured,
     spent,
     forecast: configured ? forecastOf(spent, month) : null,
+    forecastRule: null,
     // The agent's ceiling is per person per day (AGENT_DAILY_USD); the month has none.
     available: null,
     balance: null,
@@ -471,6 +538,7 @@ async function mediaStrip(
     configured,
     spent,
     forecast: configured ? forecastOf(spent, month) : null,
+    forecastRule: null,
     available: Math.max(0, ceiling - spent),
     balance: null,
     balanceSource: null,
@@ -556,6 +624,11 @@ export async function overview(
     ingestion,
     reconciliation,
     health,
+    accounts: accounts.map((account) => ({
+      id: account.id,
+      platform: account.platform as AdPlatform,
+      name: account.name,
+    })),
   };
 }
 
@@ -743,8 +816,10 @@ export async function campaigns(
       accountName: account?.name ?? '',
       accountExternalId: account?.externalId ?? '',
       systemCreated: draftOf.has(campaign.id),
-      startDate: draftOf.get(campaign.id)?.startDate ?? null,
-      endDate: draftOf.get(campaign.id)?.endDate ?? null,
+      // The platform's own schedule first; the draft's for a campaign not synced since.
+      startDate: campaign.startDate ?? draftOf.get(campaign.id)?.startDate ?? null,
+      endDate: campaign.endDate ?? draftOf.get(campaign.id)?.endDate ?? null,
+      mirroredAt: campaign.createdAt.toISOString(),
       targetCplCents: targetOf.get(campaign.id) ?? null,
       name: campaign.name,
       status: campaign.status,
@@ -763,7 +838,13 @@ export async function campaigns(
     };
   });
 
-  return { days, since: window.since, until: window.until, campaigns: nodes.sort(bySpend) };
+  // Newest first: by start date, then by when the mirror first saw it. The
+  // screen can flip the order or sort by spend; the API picks the default.
+  const byRecency = (a: CampaignNode, b: CampaignNode) =>
+    (b.startDate ?? '').localeCompare(a.startDate ?? '') ||
+    b.mirroredAt.localeCompare(a.mirroredAt) ||
+    bySpend(a, b);
+  return { days, since: window.since, until: window.until, campaigns: nodes.sort(byRecency) };
 }
 
 // ---------------------------------------------------------------------------

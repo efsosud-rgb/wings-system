@@ -17,6 +17,9 @@ export interface FakeGoogleCampaign {
   amountMicros: string;
   budgetResourceName?: string;
   explicitlyShared?: boolean;
+  /** YYYY-MM-DD, as `campaign.start_date`/`end_date` come back on v22. */
+  startDate?: string;
+  endDate?: string;
 }
 
 /** What a create left under a campaign, as the fake keeps it. */
@@ -90,6 +93,10 @@ export interface FakeGoogleApiOptions {
     | 'network_failure';
   /** Rows answered for `FROM conversion_action`; one enabled action by default. */
   conversionActions?: { id: string; name: string; status: string; type?: string }[];
+  /** Ads already in the account (not made by a create here), with the campaign they sit under. */
+  existingAds?: (FakeGoogleAd & { campaignId: string; approvalStatus?: string })[];
+  /** One day of one ad, for the ad-level report. */
+  adMetrics?: { adId: string; date: string; costMicros: string; impressions: number; clicks: number; conversions?: number }[];
   /**
    * Fields this "API version" does not know: a query naming one is refused
    * the way v22 refused `metrics.video_views` on the first real run.
@@ -142,7 +149,9 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
   const customerId = options.customerId ?? '4268586278';
   const campaigns: FakeGoogleCampaign[] = [...(options.campaigns ?? [])];
   const adGroups: FakeGoogleAdGroup[] = [];
-  const ads: FakeGoogleAd[] = [];
+  const ads: (FakeGoogleAd & { campaignId?: string; approvalStatus?: string })[] = [
+    ...(options.existingAds ?? []),
+  ];
   const negatives: { campaignId: string; text: string; matchType: string }[] = [];
   const geo = options.geo ?? [...BRAZIL_GEO];
   const calls: RecordedGoogleCall[] = [];
@@ -156,7 +165,13 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
     });
 
   const campaignRow = (campaign: FakeGoogleCampaign) => ({
-    campaign: { id: campaign.id, name: campaign.name, status: campaign.status },
+    campaign: {
+      id: campaign.id,
+      name: campaign.name,
+      status: campaign.status,
+      ...(campaign.startDate ? { startDate: campaign.startDate } : {}),
+      ...(campaign.endDate ? { endDate: campaign.endDate } : {}),
+    },
     campaignBudget: {
       resourceName:
         campaign.budgetResourceName ?? `customers/${customerId}/campaignBudgets/b${campaign.id}`,
@@ -261,6 +276,43 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
           like === undefined ? true : row.name.toLowerCase() === like.toLowerCase(),
         )
         .map((row) => ({ geoTargetConstant: { ...row, status: 'ENABLED' } }));
+    }
+    if (/FROM\s+ad_group_ad/i.test(query) && /responsive_search_ad/.test(query)) {
+      return ads
+        .filter((ad) => ad.status !== 'REMOVED')
+        .map((ad) => ({
+          adGroupAd: {
+            status: ad.status,
+            policySummary: { approvalStatus: ad.approvalStatus ?? 'APPROVED' },
+            ad: {
+              id: ad.id.split('~')[1],
+              type: 'RESPONSIVE_SEARCH_AD',
+              responsiveSearchAd: {
+                headlines: ad.headlines.map((text) => ({ text })),
+                descriptions: ad.descriptions.map((text) => ({ text })),
+              },
+            },
+          },
+          adGroup: { id: ad.adGroupId },
+          campaign: {
+            id: ad.campaignId ?? adGroups.find((group) => group.id === ad.adGroupId)?.campaignId,
+          },
+        }));
+    }
+    if (/FROM\s+ad_group_ad/i.test(query) && /segments\.date/.test(query)) {
+      const range = /BETWEEN '(\d{4}-\d{2}-\d{2})' AND '(\d{4}-\d{2}-\d{2})'/.exec(query);
+      return (options.adMetrics ?? [])
+        .filter((row) => !range || (row.date >= range[1]! && row.date <= range[2]!))
+        .map((row) => ({
+          adGroupAd: { ad: { id: row.adId } },
+          segments: { date: row.date },
+          metrics: {
+            costMicros: row.costMicros,
+            impressions: String(row.impressions),
+            clicks: String(row.clicks),
+            conversions: row.conversions ?? 0,
+          },
+        }));
     }
     if (/FROM\s+ad_group_ad/i.test(query)) {
       const wanted = [...query.matchAll(/(\d+)/g)].map((m) => m[1]);

@@ -96,7 +96,12 @@ function Strip({ strip }: { strip: SpendStrip }) {
         </div>
         <div>
           <dt>Previsto para o mês</dt>
-          <dd>{money(strip.forecast)}</dd>
+          <dd>
+            {money(strip.forecast)}
+            {strip.forecastRule && (
+              <span className="cell-sub forecast-rule">{strip.forecastRule}</span>
+            )}
+          </dd>
         </div>
         <div>
           <dt>Disponível</dt>

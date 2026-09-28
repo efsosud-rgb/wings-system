@@ -131,3 +131,112 @@ describe('the breakdowns as reports', () => {
     expect(row?.actions).toEqual({ lead: 3 });
   });
 });
+
+describe('search ads and their schedule (28/09)', () => {
+  function account() {
+    const api = fakeGoogleApi({
+      campaigns: [
+        {
+          id: '100',
+          name: 'SEARCH | Set26',
+          status: 'ENABLED',
+          amountMicros: '100000000',
+          startDate: '2026-09-28',
+          endDate: '2037-12-30',
+        },
+        {
+          id: '200',
+          name: 'Antiga',
+          status: 'PAUSED',
+          amountMicros: '5000000',
+          startDate: '2026-08-01',
+          endDate: '2026-08-31',
+        },
+      ],
+      existingAds: [
+        {
+          id: '55~9001',
+          adGroupId: '55',
+          campaignId: '100',
+          status: 'ENABLED',
+          finalUrls: ['https://wingscompany.com.br/formatar/franquia'],
+          headlines: [
+            'Formate sua franquia',
+            'Fale com a Wings',
+            'Modelo completo',
+            'Quarto título',
+          ],
+          descriptions: ['Estruturamos a sua rede do zero.', 'Outra descrição.'],
+        },
+        {
+          id: '55~9002',
+          adGroupId: '55',
+          campaignId: '100',
+          status: 'ENABLED',
+          approvalStatus: 'DISAPPROVED',
+          finalUrls: [],
+          headlines: ['Reprovado'],
+          descriptions: [],
+        },
+      ],
+      adMetrics: [
+        {
+          adId: '9001',
+          date: '2026-09-15',
+          costMicros: '3200000',
+          impressions: 80,
+          clicks: 6,
+          conversions: 1,
+        },
+        { adId: '9001', date: '2026-08-01', costMicros: '9900000', impressions: 1, clicks: 1 },
+      ],
+    });
+    return new GoogleAdsPlatformClient(api.reader, NOW);
+  }
+
+  it('lists responsive search ads with their headlines as a text creative, under their campaign', async () => {
+    const ads = await account().listAds();
+    expect(ads).toHaveLength(2);
+    expect(ads[0]).toMatchObject({
+      id: '9001',
+      campaignId: '100',
+      status: 'ACTIVE',
+      effectiveStatus: 'APPROVED',
+      creative: {
+        title: 'Formate sua franquia | Fale com a Wings | Modelo completo',
+        body: 'Estruturamos a sua rede do zero.',
+        format: 'text',
+        thumbnailUrl: null,
+      },
+    });
+    expect(ads[1]?.effectiveStatus).toBe('DISAPPROVED');
+  });
+
+  it('reports each ad per day, inside the window only', async () => {
+    const rows = await account().getInsights('ad', '2026-09-10', '2026-09-16');
+    expect(rows).toEqual([
+      expect.objectContaining({
+        level: 'ad',
+        entityId: '9001',
+        date: '2026-09-15',
+        spendCents: 320,
+        impressions: 80,
+        clicks: 6,
+        actions: { lead: 1 },
+      }),
+    ]);
+    expect(await account().getInsights('ad_set', '2026-09-10', '2026-09-16')).toEqual([]);
+  });
+
+  it("reads the campaign's start and end, and Google's far-future end as no end", async () => {
+    const campaigns = await account().listCampaigns();
+    expect(campaigns.find((campaign) => campaign.id === '100')).toMatchObject({
+      startDate: '2026-09-28',
+      endDate: null,
+    });
+    expect(campaigns.find((campaign) => campaign.id === '200')).toMatchObject({
+      startDate: '2026-08-01',
+      endDate: '2026-08-31',
+    });
+  });
+});

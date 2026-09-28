@@ -50,7 +50,7 @@ import type {
  */
 
 interface CampaignRow {
-  campaign?: { id?: string; name?: string; status?: string };
+  campaign?: { id?: string; name?: string; status?: string; startDate?: string; endDate?: string };
   campaignBudget?: {
     resourceName?: string;
     amountMicros?: string;
@@ -58,6 +58,21 @@ interface CampaignRow {
     period?: string;
     explicitlyShared?: boolean;
   };
+}
+
+interface GoogleAdRow {
+  adGroupAd?: {
+    status?: string;
+    policySummary?: { approvalStatus?: string };
+    ad?: {
+      id?: string;
+      name?: string;
+      type?: string;
+      responsiveSearchAd?: { headlines?: { text?: string }[]; descriptions?: { text?: string }[] };
+    };
+  };
+  adGroup?: { id?: string };
+  campaign?: { id?: string };
 }
 
 interface MetricsRow {
@@ -228,6 +243,7 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
   private async campaignRows(where: string): Promise<CampaignRow[]> {
     return this.reader.search<CampaignRow>(`
       SELECT campaign.id, campaign.name, campaign.status,
+             campaign.start_date, campaign.end_date,
              campaign_budget.resource_name, campaign_budget.amount_micros,
              campaign_budget.total_amount_micros, campaign_budget.period,
              campaign_budget.explicitly_shared
@@ -278,6 +294,9 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
       dailyBudgetCents: counted ? daily : 0,
       lifetimeBudgetCents: counted ? lifetime : null,
       spendCents: spend.get(id) ?? 0,
+      startDate: row.campaign?.startDate ?? null,
+      // Google writes "no end" as its far-future sentinel (2037-12-30).
+      endDate: row.campaign?.endDate && row.campaign.endDate < '2037-01-01' ? row.campaign.endDate : null,
     };
   }
 
@@ -312,9 +331,53 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
     return [];
   }
 
-  /** Ads and their review state are not mirrored yet (P-max needs asset groups too). */
+  /**
+   * Responsive search ads, with their headlines and review state. The ad
+   * group is not mirrored as an ad set (Google has none), so the ad sits
+   * straight under its campaign on the dashboard. P-max asset groups and
+   * other ad types come back with their type and no text. NOT verified live:
+   * the policy_summary field names on v22.
+   */
   async listAds(): Promise<PlatformAd[]> {
-    return [];
+    const rows = await this.reader.search<GoogleAdRow>(`
+      SELECT ad_group_ad.ad.id, ad_group_ad.ad.name, ad_group_ad.ad.type,
+             ad_group_ad.status, ad_group_ad.policy_summary.approval_status,
+             ad_group_ad.ad.responsive_search_ad.headlines,
+             ad_group_ad.ad.responsive_search_ad.descriptions,
+             ad_group.id, campaign.id
+        FROM ad_group_ad
+       WHERE ad_group_ad.status != 'REMOVED'
+    `);
+    return rows.flatMap((row) => {
+      const ad = row.adGroupAd?.ad;
+      const campaignId = row.campaign?.id;
+      if (!ad?.id || !campaignId) return [];
+      const rsa = ad.responsiveSearchAd;
+      const headlines = (rsa?.headlines ?? []).map((asset) => asset.text ?? '').filter(Boolean);
+      const descriptions = (rsa?.descriptions ?? []).map((asset) => asset.text ?? '').filter(Boolean);
+      const approval = row.adGroupAd?.policySummary?.approvalStatus ?? null;
+      const title = headlines.slice(0, 3).join(' | ') || null;
+      return [
+        {
+          id: ad.id,
+          campaignId,
+          adSetId: row.adGroup?.id ?? '',
+          name: ad.name || title || `Anúncio ${ad.id}`,
+          status: STATUS[row.adGroupAd?.status ?? ''] ?? 'PAUSED',
+          effectiveStatus: approval === 'DISAPPROVED' ? 'DISAPPROVED' : (approval ?? null),
+          creative: {
+            id: ad.id,
+            name: ad.name ?? null,
+            thumbnailUrl: null,
+            title,
+            body: descriptions[0] ?? null,
+            format: ad.type === 'RESPONSIVE_SEARCH_AD' ? 'text' : undefined,
+          },
+          reviewFeedback: null,
+          issuesInfo: null,
+        },
+      ];
+    });
   }
 
   /**
@@ -375,7 +438,8 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
     sinceDate: string,
     untilDate?: string,
   ): Promise<InsightRow[]> {
-    if (level !== 'campaign') return [];
+    if (level === 'ad_set') return [];
+    if (level === 'ad') return this.adInsights(sinceDate, untilDate);
     const rows = await this.dailyRows(sinceDate, untilDate);
     return rows.flatMap((row) => {
       const entityId = row.campaign?.id;
@@ -415,6 +479,48 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
             p75: quartile(row.metrics?.videoQuartileP75Rate),
             p100: quartile(row.metrics?.videoQuartileP100Rate),
           },
+        },
+      ];
+    });
+  }
+
+  /** One day of one ad: spend, impressions, clicks and conversions (the site's lead form). */
+  private async adInsights(sinceDate: string, untilDate?: string): Promise<InsightRow[]> {
+    const until = untilDate ?? this.today();
+    const rows = await this.reader.search<{
+      adGroupAd?: { ad?: { id?: string } };
+      segments?: { date?: string };
+      metrics?: { costMicros?: string; impressions?: string; clicks?: string; conversions?: number };
+    }>(`
+      SELECT ad_group_ad.ad.id, segments.date, metrics.cost_micros, metrics.impressions,
+             metrics.clicks, metrics.conversions
+        FROM ad_group_ad
+       WHERE segments.date BETWEEN '${sinceDate}' AND '${until}'
+    `);
+    return rows.flatMap((row) => {
+      const entityId = row.adGroupAd?.ad?.id;
+      const date = row.segments?.date;
+      if (!entityId || !date) return [];
+      const impressions = Number(row.metrics?.impressions ?? 0);
+      const clicks = Number(row.metrics?.clicks ?? 0);
+      const conversions = Math.round(row.metrics?.conversions ?? 0);
+      const actions: Record<string, number> = conversions > 0 ? { lead: conversions } : {};
+      return [
+        {
+          level: 'ad' as const,
+          entityId,
+          date,
+          spendCents: centsFromMicros(row.metrics?.costMicros),
+          impressions,
+          clicks,
+          reach: 0,
+          ctrMilli: impressions > 0 ? Math.round((clicks / impressions) * 100_000) : 0,
+          frequencyMilli: 0,
+          actions,
+          qualityRanking: null,
+          engagementRateRanking: null,
+          conversionRateRanking: null,
+          video: { plays: 0, thruplays: 0, p25: 0, p50: 0, p75: 0, p100: 0 },
         },
       ];
     });
