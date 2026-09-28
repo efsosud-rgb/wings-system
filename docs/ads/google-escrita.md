@@ -400,3 +400,40 @@ pelas 40 negativas e pelo teto de CPC R$ 10; verba R$ 100/dia e lance
 mantidos por 48–72 h. Total 37 palavras (3 exatas, 29 frases, 5 amplas). A
 ampla não cabe no rascunho salvo (o esquema só aceita exata/frase): fica na
 trilha; o rascunho tem os 6 estados e 32 palavras (limite subiu para 40).
+
+### 28/09/2026 (noite, "aprovo tudo"): recursos, públicos, 2º grupo, negativas, parceiros, conversão
+
+Tudo pela API com `validateOnly` antes, na campanha ativa `24289782134`, na
+trilha como `ads.manual_platform_change`:
+
+- **Recursos ligados à campanha** (antes: nenhum): 4 sitelinks novos
+  (Diagnóstico de Franquia → /contato, Cases de Sucesso → case Mister Russo,
+  Como Funciona → /metodologia-wings, Fale no WhatsApp → wa.me), 5 frases de
+  destaque (+1.400 Projetos, Ex-Diretor da ABF-RJ, Reunião de Diagnóstico,
+  30 anos de experiência, Especialista em Franquias), snippet "Serviços",
+  ligação (+55 21 99947-0288, o número público do site), nome da empresa e
+  logo 1:1 já existente na conta. **Não entraram:** imagens (material do Eric)
+  e o **formulário de lead** — o Google recusa (`LEAD_FORM_MISSING_AGREEMENT`)
+  até alguém aceitar os Termos de formulários de lead na interface.
+- **Públicos em observação** no grupo `200582882397`: no mercado Business
+  Services (80463) e Business Education (80233), afinidade Business
+  Professionals (92913), remarketing All visitors (9291286078) e All
+  Converters (9299771892); exclusão 18–24 nos dois grupos. O segmento
+  personalizado (3 termos + 4 sites concorrentes) foi criado
+  (`customAudiences/1019547251`) mas **a Pesquisa não aceita segmentos
+  personalizados** (`OPERATION_NOT_PERMITTED_FOR_CONTEXT`): fica para Demand
+  Gen/P-Max.
+- **Grupo novo "Estruturação de Empresa"** `204219760241`, 8 frases
+  (estruturar minha empresa, organizar/padronizar processos da empresa,
+  consultoria para estruturar empresa, empresa depende do dono, como sair do
+  operacional, consultoria de negócios, consultoria empresarial) e RSA
+  `826301381476` (15/4, em revisão, destino /contato com `utm_content=estruturacao-v1`).
+- **+10 negativas** de campanha (50 no total) e **rede de parceiros de
+  pesquisa ligada** (recomendação do próprio Google).
+- **Ação de conversão "RD form conversion"** `7804997444` (WEBPAGE,
+  SUBMIT_LEAD_FORM, 1 por clique, primária), tag
+  `AW-17802911171/rTTBCMSe24kdEMO7i6lC`; falta o gatilho no GTM (sucesso do
+  formulário RD) e, depois de disparar, rebaixar `form_submit`,
+  `WhatsApp_clique` e `Contato_WhatsApp` a secundárias.
+- Sem alterações de lance, horário ou local além dos 6 estados; Maximizar
+  cliques não aplica ajustes de lance (só −100 % de dispositivo).
