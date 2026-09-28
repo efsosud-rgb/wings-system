@@ -794,9 +794,10 @@ export function youtubeThumbnailUrl(videoId: string): string {
  * Builder ceilings, not Google's (which allow thousands): enough for one
  * tight ad group and a real negative list. Raised 2026-09-25 (10/20 before)
  * for the first real Search campaign (13 and 35), and to 30 keywords on
- * 2026-09-28 when it grew to 24.
+ * 2026-09-28 when it grew to 24, then to 40 the same evening (32 in phrase/exact
+ * on the live campaign, plus broad ones the draft cannot hold).
  */
-export const MAX_KEYWORDS = 30;
+export const MAX_KEYWORDS = 40;
 export const MAX_NEGATIVE_KEYWORDS = 50;
 export const KEYWORD_MAX_LENGTH = 80;
 export const KEYWORD_MAX_WORDS = 10;
