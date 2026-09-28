@@ -36,7 +36,18 @@
       "[franqueabilidade]",
       "\"análise de franqueabilidade\"",
       "\"quanto custa formatar uma franquia\"",
-      "\"virar franqueador\""
+      "\"virar franqueador\"",
+      "[consultoria de franchising]",
+      "\"assessoria para franquias\"",
+      "\"consultoria para franquias\"",
+      "\"consultoria de franquia\"",
+      "\"especialista em franchising\"",
+      "\"como estruturar uma franquia\"",
+      "\"franquear minha empresa\"",
+      "\"avaliação de franqueabilidade\"",
+      "\"estudo de franqueabilidade\"",
+      "\"consultoria de franquias rj\"",
+      "\"formatação de franquias rio de janeiro\""
     ],
     "negativeKeywords": [
       "emprego",
@@ -73,7 +84,12 @@
       "marketing",
       "gratuitamente",
       "portal do empreendedor",
-      "ser franqueado"
+      "ser franqueado",
+      "franqueado",
+      "seja franqueado",
+      "franquia até 50 mil",
+      "quanto rende",
+      "como crescer minha empresa"
     ],
     "headlines": [
       "Formate Sua Franquia",
@@ -85,12 +101,12 @@
       "Expanda Sua Marca com Franquia",
       "Fale com um Especialista",
       "Avalie Seu Negócio",
-      "+1.300 Marcas Formatadas",
+      "+1.400 Projetos de Franquia",
       "Seu Negócio Pode Ser Franquia?",
       "Do Diagnóstico à Expansão",
       "Estruture Sua Rede de Franquia",
-      "Agende Sua Avaliação",
-      "Especialistas em Franchising"
+      "Especialistas em Franchising",
+      "Ex-Diretor da ABF-RJ"
     ],
     "descriptions": [
       "Formatamos sua empresa para virar franqueadora: diagnóstico, processos, COF e contratos.",
@@ -101,6 +117,6 @@
     "network": "google_search_only",
     "locationMode": "presence",
     "bidding": "maximize_clicks",
-    "maxCpcCents": 600
+    "maxCpcCents": 1000
   }
 }

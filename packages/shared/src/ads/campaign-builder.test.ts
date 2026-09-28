@@ -608,14 +608,14 @@ describe('Google drafts', () => {
     expect(result.error?.issues[0]?.message).toBe('Toda campanha nasce pausada');
   });
 
-  it('caps keywords at 20 and negatives at 50, and refuses repeats and bad characters', () => {
+  it('caps keywords at 30 and negatives at 50, and refuses repeats and bad characters', () => {
     const many = (n: number) => Array.from({ length: n }, (_, i) => `[franquia termo ${i}]`);
     const bare = (n: number) => Array.from({ length: n }, (_, i) => `franquia termo ${i}`);
     const withSearch = (patch: Record<string, unknown>) =>
       campaignDraftSchema.safeParse({ ...search, search: { ...search.search, ...patch } }).success;
 
-    expect(withSearch({ keywords: many(20), negativeKeywords: bare(50) })).toBe(true);
-    expect(withSearch({ keywords: many(21) })).toBe(false);
+    expect(withSearch({ keywords: many(30), negativeKeywords: bare(50) })).toBe(true);
+    expect(withSearch({ keywords: many(31) })).toBe(false);
     expect(withSearch({ negativeKeywords: bare(51) })).toBe(false);
     expect(withSearch({ keywords: [] })).toBe(false);
     expect(withSearch({ keywords: ['[Franquia]', '[franquia]'] })).toBe(false);
