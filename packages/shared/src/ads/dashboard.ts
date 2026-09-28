@@ -232,6 +232,9 @@ export interface MetricTotals {
   videoP50: number;
   videoP75: number;
   videoP100: number;
+  /** Every start of the video, and the total milliseconds watched; Meta only. */
+  videoStarts: number;
+  videoWatchMs: number;
 }
 
 export const EMPTY_TOTALS: MetricTotals = {
@@ -246,6 +249,8 @@ export const EMPTY_TOTALS: MetricTotals = {
   videoP50: 0,
   videoP75: 0,
   videoP100: 0,
+  videoStarts: 0,
+  videoWatchMs: 0,
 };
 
 /** Ratios, each null when its denominator is zero. All x1000 integers or cents. */
@@ -263,6 +268,16 @@ export interface MetricRatios {
   holdRateMilli: number | null;
   /** Share of 3-second plays that reached the end, percentage x1000. */
   completionRateMilli: number | null;
+  /** Average time watched per start, in milliseconds. */
+  avgWatchMs: number | null;
+  /**
+   * Share of starts that reached 25/50/75/100% of the video, percentage x1000.
+   * On the starts when Meta reported them, else on the 3-second plays.
+   */
+  p25Milli: number | null;
+  p50Milli: number | null;
+  p75Milli: number | null;
+  p100Milli: number | null;
 }
 
 export function addTotals(a: MetricTotals, b: Partial<MetricTotals>): MetricTotals {
@@ -278,6 +293,8 @@ export function addTotals(a: MetricTotals, b: Partial<MetricTotals>): MetricTota
     videoP50: a.videoP50 + (b.videoP50 ?? 0),
     videoP75: a.videoP75 + (b.videoP75 ?? 0),
     videoP100: a.videoP100 + (b.videoP100 ?? 0),
+    videoStarts: a.videoStarts + (b.videoStarts ?? 0),
+    videoWatchMs: a.videoWatchMs + (b.videoWatchMs ?? 0),
   };
 }
 
@@ -303,6 +320,11 @@ export function ratiosOf(t: MetricTotals): MetricRatios {
     hookRateMilli: perMille(t.videoPlays, t.impressions),
     holdRateMilli: perMille(t.videoThruplays, t.videoPlays),
     completionRateMilli: perMille(t.videoP100, t.videoPlays),
+    avgWatchMs: t.videoStarts > 0 ? Math.round(t.videoWatchMs / t.videoStarts) : null,
+    p25Milli: perMille(t.videoP25, t.videoStarts || t.videoPlays),
+    p50Milli: perMille(t.videoP50, t.videoStarts || t.videoPlays),
+    p75Milli: perMille(t.videoP75, t.videoStarts || t.videoPlays),
+    p100Milli: perMille(t.videoP100, t.videoStarts || t.videoPlays),
   };
 }
 
@@ -552,3 +574,91 @@ export const GENDER_LABEL: Record<string, string> = {
   female: 'Mulheres',
   unknown: 'Não informado',
 };
+
+// ---------------------------------------------------------------------------
+// After the click: the site (GA4) and the funnel down to the sale (RD CRM)
+// ---------------------------------------------------------------------------
+
+/** One source / medium / campaign over the window, as GA4 counts it. */
+export interface SiteTrafficRow {
+  source: string;
+  medium: string;
+  campaign: string;
+  sessions: number;
+  engagedSessions: number;
+  engagementSeconds: number;
+  pageViews: number;
+  keyEvents: number;
+}
+
+export interface DashboardSite {
+  days: DashboardWindow;
+  since: string;
+  until: string;
+  /** False until GA4_PROPERTY_ID and the service account key are set. */
+  configured: boolean;
+  propertyId: string | null;
+  /** When GA4 was last read; null when never. */
+  fetchedAt: string | null;
+  totals: Omit<SiteTrafficRow, 'source' | 'medium' | 'campaign'>;
+  rows: SiteTrafficRow[];
+}
+
+/** Engagement rate (engaged ÷ sessions) x1000, average engagement per session in seconds, pages per session x1000. */
+export function siteRatiosOf(row: Omit<SiteTrafficRow, 'source' | 'medium' | 'campaign'>): {
+  engagementRateMilli: number | null;
+  avgEngagementSeconds: number | null;
+  pagesPerSessionMilli: number | null;
+} {
+  const per = (value: number) => (row.sessions > 0 ? value / row.sessions : null);
+  const rate = per(row.engagedSessions);
+  const seconds = per(row.engagementSeconds);
+  const pages = per(row.pageViews);
+  return {
+    engagementRateMilli: rate === null ? null : Math.round(rate * 100_000),
+    avgEngagementSeconds: seconds === null ? null : Math.round(seconds),
+    pagesPerSessionMilli: pages === null ? null : Math.round(pages * 1000),
+  };
+}
+
+/** One ad campaign, impression to lead. Sessions are null when GA4 is not connected. */
+export interface FunnelCampaignRow {
+  platform: AdPlatform;
+  externalId: string;
+  name: string;
+  spendCents: number;
+  impressions: number;
+  clicks: number;
+  sessions: number | null;
+  /** Leads the platform reports (its conversion); the CRM count is per platform, below. */
+  leads: number;
+  /** The GA4 campaign names matched to this campaign (utm_campaign of its draft, or its own name). */
+  matchedSiteCampaigns: string[];
+}
+
+/** One platform, impression to sale. CRM stages come from RD's own labels (source / campaign). */
+export interface FunnelPlatformRow {
+  platform: AdPlatform;
+  spendCents: number;
+  impressions: number;
+  clicks: number;
+  sessions: number | null;
+  leads: number;
+  crmLeads: number;
+  meetings: number;
+  sales: number;
+}
+
+export interface DashboardFunnel {
+  days: DashboardWindow;
+  since: string;
+  until: string;
+  siteConfigured: boolean;
+  crmConfigured: boolean;
+  /** When the RD CRM copy was last refreshed; null when never. */
+  crmFetchedAt: string | null;
+  campaigns: FunnelCampaignRow[];
+  platforms: FunnelPlatformRow[];
+  /** Deals in the window whose RD labels name no paid platform (organic, referral, "Tráfego pago" without a platform…). */
+  crmUnattributed: number;
+}

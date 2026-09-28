@@ -8,6 +8,7 @@ import {
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { writeAudit } from '../../../lib/audit.js';
+import { funnel, site } from './funnel.js';
 import { activeAccounts, audience, campaigns, creatives, overview, platforms } from './queries.js';
 import {
   dashboardAccountTargets,
@@ -63,6 +64,18 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
     const days = windowOrReject(request, reply);
     if (days === null) return;
     return reply.send({ campaigns: await campaigns(db, days, now()) });
+  });
+
+  app.get('/ads/dashboard/site', guard, async (request, reply) => {
+    const days = windowOrReject(request, reply);
+    if (days === null) return;
+    return reply.send({ site: await site(db, env, days, now()) });
+  });
+
+  app.get('/ads/dashboard/funnel', guard, async (request, reply) => {
+    const days = windowOrReject(request, reply);
+    if (days === null) return;
+    return reply.send({ funnel: await funnel(db, env, days, now()) });
   });
 
   app.get('/ads/dashboard/creatives', guard, async (request, reply) => {

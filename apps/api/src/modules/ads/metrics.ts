@@ -209,6 +209,8 @@ export async function ingestMetrics(
       videoP50: row.video?.p50 ?? 0,
       videoP75: row.video?.p75 ?? 0,
       videoP100: row.video?.p100 ?? 0,
+      videoStarts: row.video?.starts ?? 0,
+      videoWatchMs: row.video?.watchMs ?? 0,
     };
 
     await db

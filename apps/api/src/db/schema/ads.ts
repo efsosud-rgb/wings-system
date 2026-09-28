@@ -772,6 +772,9 @@ export const adMetricsDaily = pgTable(
     videoP50: bigint('video_p50', { mode: 'number' }).notNull().default(0),
     videoP75: bigint('video_p75', { mode: 'number' }).notNull().default(0),
     videoP100: bigint('video_p100', { mode: 'number' }).notNull().default(0),
+    /** Every start of the video, and the total milliseconds watched (Meta's average × starts). */
+    videoStarts: bigint('video_starts', { mode: 'number' }).notNull().default(0),
+    videoWatchMs: bigint('video_watch_ms', { mode: 'number' }).notNull().default(0),
     fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

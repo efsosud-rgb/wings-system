@@ -4,12 +4,16 @@ import {
   useDashboardAudience,
   useDashboardCampaigns,
   useDashboardCreatives,
+  useDashboardFunnel,
+  useDashboardSite,
   useDashboardOverview,
   useDashboardPlatforms,
 } from '../api/dashboard.js';
 import { AudienceTab } from '../components/dashboard/AudienceTab.js';
 import { CampaignsTab } from '../components/dashboard/CampaignsTab.js';
 import { CreativesTab } from '../components/dashboard/CreativesTab.js';
+import { FunnelTab } from '../components/dashboard/FunnelTab.js';
+import { SiteTab } from '../components/dashboard/SiteTab.js';
 import { DashboardRefresh } from '../components/dashboard/DashboardRefresh.js';
 import { formatDateTime, formatWhen } from '../components/dashboard/format.js';
 import { InsightsTab } from '../components/dashboard/InsightsTab.js';
@@ -38,6 +42,8 @@ const TABS = [
   { key: 'campanhas', label: 'Campanhas', windowed: true },
   { key: 'criativos', label: 'Criativos', windowed: true },
   { key: 'publico', label: 'Público e região', windowed: true },
+  { key: 'site', label: 'Site (GA4)', windowed: true },
+  { key: 'funil', label: 'Funil', windowed: true },
   { key: 'insights', label: 'Insights e sugestões', windowed: false },
   { key: 'canais-proprios', label: 'Canais próprios', windowed: true },
   { key: 'configuracoes', label: 'Configurações', windowed: false },
@@ -88,6 +94,8 @@ export function MarketingDashboardPage() {
   const campaigns = useDashboardCampaigns(days);
   const creatives = useDashboardCreatives(days);
   const audience = useDashboardAudience(days);
+  const siteTraffic = useDashboardSite(days);
+  const funnel = useDashboardFunnel(days);
 
   const setParam = (key: string, value: string) => {
     const next = new URLSearchParams(params);
@@ -175,6 +183,12 @@ export function MarketingDashboardPage() {
       )}
       {tab === 'publico' && (
         <Loading query={audience}>{audience.data && <AudienceTab data={audience.data.audience} />}</Loading>
+      )}
+      {tab === 'site' && (
+        <Loading query={siteTraffic}>{siteTraffic.data && <SiteTab data={siteTraffic.data.site} />}</Loading>
+      )}
+      {tab === 'funil' && (
+        <Loading query={funnel}>{funnel.data && <FunnelTab data={funnel.data.funnel} />}</Loading>
       )}
       {tab === 'insights' && <InsightsTab />}
       {tab === 'canais-proprios' && <OwnedChannelsTab days={days} />}

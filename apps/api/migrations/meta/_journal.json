@@ -288,6 +288,20 @@
       "when": 1790619081327,
       "tag": "0040_campaign_schedule",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1790620314033,
+      "tag": "0041_video_watch_time",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1790620420811,
+      "tag": "0042_site_and_crm_funnel",
+      "breakpoints": true
     }
   ]
 }

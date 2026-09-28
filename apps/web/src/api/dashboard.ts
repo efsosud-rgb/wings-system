@@ -2,9 +2,11 @@ import type {
   DashboardAudience,
   DashboardCampaigns,
   DashboardCreatives,
+  DashboardFunnel,
   DashboardOverview,
   DashboardPlatforms,
   DashboardSettings,
+  DashboardSite,
   DashboardWindow,
   CampaignSuggestionCard,
   InsightCard,
@@ -55,6 +57,22 @@ export function useDashboardCampaigns(days: DashboardWindow) {
     queryKey: ['dashboard', 'campaigns', days],
     queryFn: () =>
       api.get<{ campaigns: DashboardCampaigns }>(`/ads/dashboard/campaigns?days=${days}`),
+    staleTime: STALE_MS,
+  });
+}
+
+export function useDashboardSite(days: DashboardWindow) {
+  return useQuery({
+    queryKey: ['dashboard', 'site', days],
+    queryFn: () => api.get<{ site: DashboardSite }>(`/ads/dashboard/site?days=${days}`),
+    staleTime: STALE_MS,
+  });
+}
+
+export function useDashboardFunnel(days: DashboardWindow) {
+  return useQuery({
+    queryKey: ['dashboard', 'funnel', days],
+    queryFn: () => api.get<{ funnel: DashboardFunnel }>(`/ads/dashboard/funnel?days=${days}`),
     staleTime: STALE_MS,
   });
 }

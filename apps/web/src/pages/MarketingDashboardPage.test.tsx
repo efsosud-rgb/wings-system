@@ -3,6 +3,8 @@ import {
   type DashboardAudience,
   type DashboardCampaigns,
   type DashboardCreatives,
+  type DashboardFunnel,
+  type DashboardSite,
   type DashboardOverview,
   type DashboardPlatforms,
   type IngestionStatus,
@@ -27,6 +29,8 @@ const data = {} as {
   campaigns: DashboardCampaigns;
   creatives: DashboardCreatives;
   audience: DashboardAudience;
+  site: DashboardSite;
+  funnel: DashboardFunnel;
 };
 
 const ok = <T,>(value: T) => ({ data: value, isLoading: false, isError: false });
@@ -37,6 +41,8 @@ vi.mock('../api/dashboard.js', () => ({
   useDashboardCampaigns: () => ok({ campaigns: data.campaigns }),
   useDashboardCreatives: () => ok({ creatives: data.creatives }),
   useDashboardAudience: () => ok({ audience: data.audience }),
+  useDashboardSite: () => ok({ site: data.site }),
+  useDashboardFunnel: () => ok({ funnel: data.funnel }),
 }));
 const requests = { canRequest: true, filed: vi.fn() };
 vi.mock('../api/auth.js', () => ({
@@ -336,7 +342,12 @@ function buildCreatives(): DashboardCreatives {
           reach: 800,
           videoPlays: 600,
           videoThruplays: 240,
+          videoP25: 500,
+          videoP50: 300,
+          videoP75: 150,
           videoP100: 60,
+          videoStarts: 1000,
+          videoWatchMs: 6_400_000,
         },
         fatigue: {
           firstHalfCtrMilli: 2500,
@@ -714,6 +725,114 @@ describe('creatives', () => {
     expect(text(row)).toContain('30%');
     expect(text(row)).toContain('40%');
     expect(text(row)).toContain('10%');
+  });
+
+  it('shows the average time watched per start, ThruPlays and the four quarters', () => {
+    renderAt('/dashboard/marketing?aba=criativos');
+    const row = screen.getByText('Reels 15s').closest('tr');
+    // 6,400 s over 1,000 starts; quarters on the starts: 500, 300, 150, 60 of 1,000.
+    expect(text(row)).toContain('6,4 s');
+    expect(text(row)).toContain('240');
+    expect(text(row)).toContain('50 · 30 · 15 · 6%');
+  });
+});
+
+describe('site and funnel', () => {
+  it('explains what GA4 still needs when it is not connected', () => {
+    data.site = {
+      days: 7,
+      since: '2026-09-22',
+      until: '2026-09-28',
+      configured: false,
+      propertyId: null,
+      fetchedAt: null,
+      totals: { sessions: 0, engagedSessions: 0, engagementSeconds: 0, pageViews: 0, keyEvents: 0 },
+      rows: [],
+    };
+    renderAt('/dashboard/marketing?aba=site');
+    expect(screen.getByText(/conta de serviço/)).toBeTruthy();
+  });
+
+  it('shows sessions with engagement, time and pages per session', () => {
+    data.site = {
+      days: 7,
+      since: '2026-09-22',
+      until: '2026-09-28',
+      configured: true,
+      propertyId: '123',
+      fetchedAt: '2026-09-28T18:00:00.000Z',
+      totals: {
+        sessions: 50,
+        engagedSessions: 35,
+        engagementSeconds: 1300,
+        pageViews: 92,
+        keyEvents: 2,
+      },
+      rows: [
+        {
+          source: 'facebook',
+          medium: 'cpc',
+          campaign: 'formatacao_jimmyogro_set26',
+          sessions: 40,
+          engagedSessions: 30,
+          engagementSeconds: 1200,
+          pageViews: 80,
+          keyEvents: 2,
+        },
+      ],
+    };
+    renderAt('/dashboard/marketing?aba=site');
+    const row = screen.getByText('formatacao_jimmyogro_set26').closest('tr');
+    expect(text(row)).toContain('facebook / cpc');
+    expect(text(row)).toContain('75');
+    expect(text(row)).toContain('30 s');
+  });
+
+  it('follows a platform to the sale with the cost of each step, and a campaign to the lead', () => {
+    data.funnel = {
+      days: 7,
+      since: '2026-09-22',
+      until: '2026-09-28',
+      siteConfigured: true,
+      crmConfigured: true,
+      crmFetchedAt: '2026-09-28T18:00:00.000Z',
+      crmUnattributed: 3,
+      platforms: [
+        {
+          platform: 'meta',
+          spendCents: 60_000,
+          impressions: 20_000,
+          clicks: 300,
+          sessions: 200,
+          leads: 10,
+          crmLeads: 8,
+          meetings: 3,
+          sales: 1,
+        },
+      ],
+      campaigns: [
+        {
+          platform: 'meta',
+          externalId: 'c1',
+          name: 'LEAD | FORMS',
+          spendCents: 60_000,
+          impressions: 20_000,
+          clicks: 300,
+          sessions: 200,
+          leads: 10,
+          matchedSiteCampaigns: ['lead | forms'],
+        },
+      ],
+    };
+    renderAt('/dashboard/marketing?aba=funil');
+    const sales = screen.getByText('Vendas').closest('li');
+    expect(text(sales)).toContain('custo por etapa R$ 600,00');
+    const meetings = screen.getByText('Reuniões').closest('li');
+    expect(text(meetings)).toContain('R$ 200,00');
+    expect(screen.getByText(/3 negociação\(ões\) do período não dizem a plataforma/)).toBeTruthy();
+    const row = screen.getByText('LEAD | FORMS').closest('tr');
+    expect(text(row)).toContain('R$ 3,00');
+    expect(text(row)).toContain('R$ 60,00');
   });
 });
 

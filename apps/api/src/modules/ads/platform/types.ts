@@ -119,6 +119,10 @@ export interface VideoMetrics {
   p50: number;
   p75: number;
   p100: number;
+  /** Every start of the video (Meta's video_play_actions); the base for watch time and quartiles. */
+  starts?: number;
+  /** Milliseconds watched in total: average per start × starts. */
+  watchMs?: number;
 }
 
 /** How a day's figures are split: by placement, age and gender, region, hour, device. */

@@ -124,8 +124,14 @@ export const INSIGHTS_TIMEOUT_MS = 45_000;
 export const ADS_LIST_TIMEOUT_MS = 45_000;
 export const ADS_PAGE_SIZE = '50';
 
-/** ThruPlays and the watched quartiles; 3-second plays come from `actions`. */
+/**
+ * ThruPlays, the watched quartiles, every start of the video and the average
+ * time watched per start; 3-second plays come from `actions`. NOT verified
+ * live: `video_avg_time_watched_actions` at ad level on this account.
+ */
 export const VIDEO_FIELDS = [
+  'video_play_actions',
+  'video_avg_time_watched_actions',
   'video_thruplay_watched_actions',
   'video_p25_watched_actions',
   'video_p50_watched_actions',
@@ -849,6 +855,7 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
           p50: sumActionValues(row.video_p50_watched_actions),
           p75: sumActionValues(row.video_p75_watched_actions),
           p100: sumActionValues(row.video_p100_watched_actions),
+          ...watchTimeOf(row.video_play_actions, row.video_avg_time_watched_actions),
         },
       };
     });
@@ -967,4 +974,17 @@ function saoPauloDay(time: string | undefined): string | null {
   const instant = new Date(time.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
   if (Number.isNaN(instant.getTime())) return null;
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(instant);
+}
+
+/**
+ * Meta reports the average seconds watched per start of the video, per day.
+ * A window's average is the total over its days divided by the starts, so the
+ * day is stored as starts and total milliseconds watched (average × starts),
+ * never as an average that would be averaged again.
+ */
+function watchTimeOf(starts: unknown, averageSeconds: unknown): { starts: number; watchMs: number } {
+  const count = sumActionValues(starts);
+  const first = Array.isArray(averageSeconds) ? (averageSeconds[0] as { value?: unknown } | undefined) : undefined;
+  const seconds = Number(first?.value ?? 0);
+  return { starts: count, watchMs: Number.isFinite(seconds) ? Math.round(seconds * 1000 * count) : 0 };
 }
