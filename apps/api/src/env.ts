@@ -128,6 +128,17 @@ const schema = z.object({
    */
   RD_CRM_API_TOKEN: optionalString,
   /**
+   * Expansion intake (docs/expansion-intake.md): every 5 minutes, new RD
+   * Marketing conversions without a CRM deal get one. Off unless "true", and
+   * it also needs the RD CRM and RD Marketing credentials below.
+   */
+  /** RD CRM user id that owns the Expansão deals the intake creates (not a secret). */
+  EXPANSION_OWNER_RD_USER_ID: optionalString,
+  EXPANSION_INTAKE_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  /**
    * RD Station Marketing OAuth app and its refresh token (secrets), read
    * only: the UTMs of the conversion behind each campaign lead. Without them
    * Leads das Campanhas attributes by RD's source label alone.

@@ -8,6 +8,7 @@ export * from './credentials.js';
 export * from './drive.js';
 export * from './employees.js';
 export * from './enums.js';
+export * from './expansion.js';
 export * from './insights.js';
 export * from './integrations.js';
 export * from './jobs.js';
