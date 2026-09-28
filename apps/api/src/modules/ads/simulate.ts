@@ -1,3 +1,4 @@
+import { dailyOverdeliveryFactor, periodOverdeliveryFactor } from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
@@ -10,7 +11,6 @@ import {
 import {
   campaignExposure,
   exposureOf,
-  OVERDELIVERY_FACTOR,
   remainingDays,
 } from './budget-guard.js';
 
@@ -105,12 +105,14 @@ function scenario(
     usableCents: number;
     spentCents: number;
     daysLeft: number;
+    /** meta | google: which overdelivery the platform promises. */
+    platform: string;
   },
 ): ExposureScenario {
   const capHeadroom = Math.max(0, input.capCents - input.spentCents - input.committedCents);
   const usableHeadroom = Math.max(0, input.usableCents - input.committedCents);
   const availableCents = Math.min(capHeadroom, usableHeadroom);
-  const dailyWithOverdelivery = input.dailyBudgetCents * OVERDELIVERY_FACTOR;
+  const dailyWithOverdelivery = input.dailyBudgetCents * dailyOverdeliveryFactor(input.platform);
 
   return {
     label,
@@ -191,6 +193,7 @@ export async function simulateChange(
     usableCents: period.usableCents,
     spentCents: period.spentCents,
     daysLeft,
+    platform: account.platform,
   };
 
   const current = scenario('current', {
@@ -215,7 +218,10 @@ export async function simulateChange(
   let simulated: ExposureScenario | null = null;
   if (simulationAvailable && options.alternativeDailyBudgetCents !== undefined) {
     const value = Math.max(0, Math.round(options.alternativeDailyBudgetCents));
-    const exposure = exposureOf(value, daysLeft);
+    const exposure = Math.max(
+      exposureOf(value, daysLeft, periodOverdeliveryFactor(account.platform)),
+      value > 0 ? exposureOf(value, 1, dailyOverdeliveryFactor(account.platform)) : 0,
+    );
     simulated = scenario('simulated', {
       ...common,
       dailyBudgetCents: value,
@@ -244,7 +250,7 @@ export async function simulateChange(
     campaignExternalId: campaign.externalId,
     budgetLevel: campaign.budgetLevel,
     daysLeftInPeriod: daysLeft,
-    overdeliveryFactorMilli: Math.round(OVERDELIVERY_FACTOR * 1000),
+    overdeliveryFactorMilli: Math.round(periodOverdeliveryFactor(account.platform) * 1000),
     period: periodContext,
     current,
     requested,

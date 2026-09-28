@@ -17,6 +17,7 @@ import { decideApproval, gateChange } from './approvals.js';
 import {
   getPeriodState,
   openPeriod,
+  remainingDays,
   reserveCampaignCreation,
   reserveChange,
 } from './budget-guard.js';
@@ -505,7 +506,9 @@ describe('executing an approved Google campaign', () => {
     // Ask to resume: a request of its own, judged as the campaign's whole exposure.
     const resume = await reserveChange(db, { adAccountId: accountId, campaignId: mirrored.id, kind: 'resume_campaign' });
     if (!resume.ok) throw new Error(resume.message);
-    expect(resume.value.exposureDeltaCents).toBeGreaterThan(0);
+    // Google: budget x days left x 1.0, never less than one day at 2.0 — not Meta's 1.25.
+    const daysLeft = remainingDays(new Date());
+    expect(resume.value.exposureDeltaCents).toBe(Math.max(3000 * daysLeft, 3000 * 2));
     const gate = await gateChange(db, { changeRequestId: resume.value.changeRequestId });
     const admin = await createEmployee(db, { role: 'admin_master', sector: 'diretoria' });
     await decideApproval(db, { approvalId: gate.approvalId!, approverEmployeeId: admin.id, decision: 'approved' });
@@ -517,6 +520,17 @@ describe('executing an approved Google campaign', () => {
     expect(api.ads[0]).toMatchObject({ status: 'ENABLED' });
     const resumeWrite = api.writeCalls().at(-1)?.body.mutateOperations as Record<string, unknown>[];
     expect(resumeWrite).toHaveLength(3);
+    // The execution keeps what Google says the three are now.
+    const [resumeExecution] = await db
+      .select()
+      .from(adExecutions)
+      .where(eq(adExecutions.changeRequestId, resume.value.changeRequestId));
+    expect(resumeExecution?.platformResponse).toMatchObject({
+      statusesAfter: {
+        [`adGroup:${api.adGroups[0]?.id}`]: 'ENABLED',
+        [`ad:${api.ads[0]?.id.split('~')[1]}`]: 'ENABLED',
+      },
+    });
     expect(await db.query.adCampaigns.findFirst({ where: eq(adCampaigns.id, mirrored.id) })).toMatchObject({ status: 'ACTIVE' });
 
     // A new daily budget: one more request, one more approval, one more click.

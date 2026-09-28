@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   AD_ACCOUNT_PLATFORM,
   campaignDaysInMonth,
+  dailyOverdeliveryFactor,
   estimateCostCents,
   periodOverdeliveryFactor,
   type CampaignDraft,
@@ -489,6 +490,10 @@ export async function reserveChange(
       where: eq(adSets.campaignId, campaign.id),
     });
 
+    // The platform's own period factor (Meta 1.25x, Google 1.0x): a resume of
+    // R$ 100/dia with three days left once reserved R$ 375 on Google, where
+    // the month can only cost R$ 300 (2026-09-28).
+    const factor = periodOverdeliveryFactor(account.platform);
     const currentExposure = campaignExposure(
       {
         campaignStatus: campaign.status,
@@ -496,6 +501,7 @@ export async function reserveChange(
         adSets: campaignAdSets,
       },
       daysLeft,
+      factor,
     );
 
     // ABO campaigns hold no budget of their own, so a campaign-level change
@@ -546,16 +552,22 @@ export async function reserveChange(
     }
 
     // The "after" exposure: a pause zeroes the campaign, including its ad sets.
+    // Never less than one worst day: on Google a single day may cost twice
+    // the budget, which is what decides a change with one day left.
     const nextExposure =
       input.kind === 'pause_campaign'
         ? 0
-        : campaignExposure(
-            {
-              campaignStatus: 'ACTIVE',
-              campaignDailyBudgetCents: toBudget,
-              adSets: campaignAdSets,
-            },
-            daysLeft,
+        : Math.max(
+            campaignExposure(
+              {
+                campaignStatus: 'ACTIVE',
+                campaignDailyBudgetCents: toBudget,
+                adSets: campaignAdSets,
+              },
+              daysLeft,
+              factor,
+            ),
+            toBudget > 0 ? exposureOf(toBudget, 1, dailyOverdeliveryFactor(account.platform)) : 0,
           );
     const exposureDeltaCents = nextExposure - currentExposure;
     // Floored at zero, as releaseReservation already does. A pause hands back
