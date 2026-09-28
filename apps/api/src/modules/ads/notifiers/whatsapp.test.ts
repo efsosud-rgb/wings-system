@@ -111,6 +111,27 @@ describe('who gets told', () => {
     expect(admin.id).toBeTruthy();
   });
 
+  it('sends a new request and its decision to Diretoria too, employees or not', async () => {
+    // 28/09: requests reached only the company number; the directors' numbers
+    // were configured but only ever used for the 4-hour escalation.
+    const id = await account();
+    await createEmployee(db, { role: 'admin_master', sector: 'diretoria' });
+    for (const kind of ['requested', 'decided'] as const) {
+      const { client, sent } = recordingClient();
+      await new WhatsAppApprovalNotifier({
+        db,
+        client,
+        appBaseUrl: 'https://staging.wingssystem.online',
+        extraDiretoriaPhones: ['+55 21 99049-1634', '+55 21 98768-1976'],
+      }).send(notification(id, kind, kind === 'decided' ? 'approved' : 'pending'));
+
+      const phones = sent.map((message) => message.phone);
+      expect(phones).toContain('5511999998888'); // Admin Master, the factory's default phone
+      expect(phones).toContain('5521990491634');
+      expect(phones).toContain('5521987681976');
+    }
+  });
+
   it('sends an escalation to both Diretoria numbers, employees or not', async () => {
     const id = await account();
     await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
