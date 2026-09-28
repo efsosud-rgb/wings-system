@@ -401,3 +401,58 @@ Os testes cobrem tudo contra `FakeMetaClient`, `fakeGoogleApi`, `fetch`
 roteirizado para o WordPress e banco descartável
 (`dashboard/routes.test.ts`, `dashboard/setup.test.ts`, `breakdowns.test.ts`,
 `site/blog-sync.test.ts`, `lib/cron.test.ts`).
+
+## Bloco C (28/09/2026): Cockpit e Leads das Campanhas
+
+### Cockpit: só o que está entregando
+
+- Uma campanha conta quando está entregando de fato: Meta `effective_status`
+  ACTIVE; Google `status` ENABLED **e** `serving_status` SERVING; e a data de
+  fim ainda não passou (`campaignDelivering`, em `packages/shared`). O status
+  de entrega vem de cada reconciliação (`ad_campaigns.delivery_status`,
+  migração 0043). Antes da primeira leitura, vale o status ligado.
+- Anúncios ligados que não rodam (em análise, em processamento, reprovados)
+  aparecem só como aviso, fora de todos os números e do ranking.
+- Alertas: só os da conta ou das campanhas ativas (e dos conjuntos e anúncios
+  delas).
+- Negócios de teste (motivo de perda ou título com "teste") não contam em
+  nenhum número: `rd_crm_deals.is_test` e `campaign_leads.is_test` (0044).
+- **Performance ativa desde 28/09**: gasto das campanhas ativas desde
+  28/09 e os leads do RD delas (os mesmos de Leads das Campanhas): CPL, custo
+  por lead qualificado (ganho, ou no pipeline Formatação em "Identificação de
+  interesse" ou depois), CAC e ROAS só com venda "Ganho". Menos de 10 leads:
+  selo "Amostra pequena".
+
+### Leads das Campanhas (`/dashboard/leads-campanhas`)
+
+- **Quem vê**: `campaign_leads.read`/`campaign_leads.reveal`. Diretoria,
+  Gerente Comercial e Admin Master veem todos; Vendedor Formatação só os que o
+  RD atribui a ele (dono do negócio no RD com o mesmo e-mail do cadastro);
+  Vendedor Expansão e Marketing não veem.
+- **Escopo**: negócios do Funil Formatação (e dos pipelines "perdidos" /
+  "vendidos" de Formatação) criados desde 28/09/2026 00:00 (Brasília).
+- **Conferência a cada 15 min**: roda junto de `ingest-cli --reconcile-only`,
+  depois da reconciliação. Só lê o RD CRM e o RD Marketing. O log mostra só
+  contagens.
+- **Atribuição**, nesta ordem: (1) UTMs da conversão do contato no RD
+  Marketing (`traffic_source` é `encoded_` + base64 com a URL de entrada),
+  consultadas uma vez por lead; `utm_campaign` casa com a UTM do rascunho, o
+  nome ou o id da campanha ativa, `utm_content` com o id ou o nome do anúncio;
+  (2) a origem do RD ("Busca Paga | Facebook" / "| Google") quando a
+  plataforma tem uma única campanha ativa; (3) senão, sem atribuição, com o
+  motivo (`UNATTRIBUTED_REASONS`). Um lead atribuído guarda a campanha mesmo
+  depois que ela termina.
+- **Primeiro contato**: a primeira anotação ou tarefa concluída no RD; sem
+  isso, a saída de "Sem contato" como a conferência viu (precisão de 15 min).
+- **Temperatura**: estrelas do RD (1–2 Frio, 3 Morno, 4–5 Quente).
+- **Dados pessoais**: nome em texto; telefone e e-mail só cifrados
+  (AES-256-GCM sob `CPF_ENCRYPTION_KEY`) mais a máscara. "Revelar" é POST e
+  grava `campaign_lead.revealed` na auditoria (quem, qual lead, qual campo).
+  Nada pessoal vai para log. **Não dar `select` em `campaign_leads` ao
+  `wings_ro`**: a tabela tem dados pessoais.
+- **Webhook de conversão do RD**: ainda não. Por enquanto só a conferência de
+  15 min.
+
+Não verificado ao vivo: o formato de `traffic_source` com UTMs de um lead
+real de campanha (só o de uma conversão orgânica foi visto), `/tasks` com
+tarefa concluída e `organization` preenchido em um negócio.

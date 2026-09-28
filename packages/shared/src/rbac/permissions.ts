@@ -20,6 +20,9 @@ export const PERMISSIONS = {
   'timeclock.adjust': 'Aprovar ajustes de ponto',
   'leads.read': 'Ver leads do funil',
   'leads.write': 'Criar e editar leads',
+  'campaign_leads.read': 'Ver os leads das campanhas de tráfego pago (RD CRM)',
+  'campaign_leads.reveal':
+    'Revelar telefone e e-mail dos leads das campanhas (registrado em auditoria)',
   'settings.manage': 'Configurações do sistema',
   'api_credentials.manage': 'Gerenciar credenciais de API',
   'audit.read': 'Consultar log de auditoria',
@@ -28,7 +31,8 @@ export const PERMISSIONS = {
   'site.publish': 'Criar rascunhos de post no site da Wings',
   'ads.approve': 'Aprovar alterações de orçamento de tráfego pago',
   'ads.budget_caps.manage': 'Editar o teto interno de orçamento de tráfego pago por conta',
-  'ads.reconcile.manual': 'Forçar agora a reconciliação de uma conta de tráfego pago com a plataforma',
+  'ads.reconcile.manual':
+    'Forçar agora a reconciliação de uma conta de tráfego pago com a plataforma',
   'integrations.manage': 'Conectar e desconectar integrações do sistema (Kairogen)',
   'marketing.media.read': 'Ver a biblioteca de mídia do marketing',
   'marketing.media.generate': 'Gerar imagens e vídeos gastando créditos',
@@ -119,6 +123,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'timeclock.adjust': 'all',
     'leads.read': 'all',
     'leads.write': 'all',
+    'campaign_leads.read': 'all',
+    'campaign_leads.reveal': 'all',
     'settings.manage': 'all',
     'api_credentials.manage': 'all',
     'audit.read': 'all',
@@ -149,6 +155,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'employees.assign_roles': 'all',
     'timeclock.read': 'all',
     'leads.read': 'all',
+    'campaign_leads.read': 'all',
+    'campaign_leads.reveal': 'all',
     'audit.read': 'all',
     'ads.read': 'all',
     'ads.request': 'all',
@@ -179,6 +187,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'timeclock.read': 'sector',
     'leads.read': 'all',
     'leads.write': 'all',
+    'campaign_leads.read': 'all',
+    'campaign_leads.reveal': 'all',
   },
   // Marketing builds and asks; only Admin Master or Diretoria approve.
   marketing: {
@@ -209,12 +219,20 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'settings.manage': 'all',
     'api_credentials.manage': 'all',
   },
-  vendedor_expansao: { ...SECTOR_STAFF, ...PROJECT_STAFF, 'leads.read': 'own', 'leads.write': 'own' },
+  vendedor_expansao: {
+    ...SECTOR_STAFF,
+    ...PROJECT_STAFF,
+    'leads.read': 'own',
+    'leads.write': 'own',
+  },
+  // Leads das Campanhas: only the leads RD assigns to them.
   vendedor_formatacao: {
     ...SECTOR_STAFF,
     ...PROJECT_STAFF,
     'leads.read': 'own',
     'leads.write': 'own',
+    'campaign_leads.read': 'own',
+    'campaign_leads.reveal': 'own',
   },
 };
 

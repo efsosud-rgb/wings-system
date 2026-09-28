@@ -7,7 +7,7 @@ import type {
   FunnelPlatformRow,
   SiteTrafficRow,
 } from '@wings/shared';
-import { and, gte, inArray, isNotNull, lte, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, isNotNull, lte, sql } from 'drizzle-orm';
 import type { Database } from '../../../db/client.js';
 import {
   adCampaignDrafts,
@@ -150,6 +150,8 @@ export async function funnel(
       .from(rdCrmDeals)
       .where(
         and(
+          // Test deals (the diagnostic's, or made by hand) count nowhere.
+          eq(rdCrmDeals.isTest, false),
           gte(rdCrmDeals.createdAt, new Date(`${window.since}T00:00:00-03:00`)),
           lte(rdCrmDeals.createdAt, new Date(`${window.until}T23:59:59-03:00`)),
         ),

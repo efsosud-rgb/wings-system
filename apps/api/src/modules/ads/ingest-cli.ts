@@ -12,6 +12,8 @@ import { seedAdAccount } from './seed-account.js';
 import { WordPressClient } from '../../lib/wordpress.js';
 import { syncBlogPosts } from '../site/blog-sync.js';
 import { Ga4Client, ga4CredentialsOf } from '../../lib/ga4.js';
+import { createSecretBox } from '../../lib/secret-box.js';
+import { syncCampaignLeads } from './campaign-leads-sync.js';
 import { syncGa4Traffic, syncRdCrmDeals } from './funnel-sync.js';
 import {
   accountRecordOf,
@@ -225,6 +227,34 @@ async function main() {
           `TRAVA ACIONADA: conta ${entry.accountId} sem reconciliar há ${entry.ageMinutes} min ` +
             `— gasto real desconhecido. Libere com ops-cli release-kill-switch depois de verificar.`,
         );
+      }
+
+      // Leads das Campanhas, after the statuses are fresh: counts only in the log.
+      if (env.RD_CRM_API_TOKEN) {
+        try {
+          const leads = await syncCampaignLeads(db, {
+            rdCrmToken: env.RD_CRM_API_TOKEN,
+            rdMarketing:
+              env.RD_MKT_CLIENT_ID && env.RD_MKT_CLIENT_SECRET && env.RD_MKT_REFRESH_TOKEN
+                ? {
+                    clientId: env.RD_MKT_CLIENT_ID,
+                    clientSecret: env.RD_MKT_CLIENT_SECRET,
+                    refreshToken: env.RD_MKT_REFRESH_TOKEN,
+                  }
+                : null,
+            box: createSecretBox(env.CPF_ENCRYPTION_KEY),
+            now,
+          });
+          console.warn(
+            `leads das campanhas: ${leads.deals} negócio(s) do Funil Formatação, ` +
+              `${leads.attributed} atribuído(s), ${leads.unattributed} sem atribuição, ` +
+              `${leads.tests} de teste; UTM consultada ${leads.utmLookups}x (${leads.utmFailures} falha(s))`,
+          );
+        } catch (error) {
+          console.error(
+            `leads das campanhas: falhou (${error instanceof Error ? error.name : 'unknown'})`,
+          );
+        }
       }
 
       if (failures > 0) {

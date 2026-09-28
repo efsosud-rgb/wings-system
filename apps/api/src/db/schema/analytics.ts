@@ -80,6 +80,10 @@ export const rdCrmDeals = pgTable(
     campaignLabel: text('campaign_label'),
     /** meta | google | null: the paid platform the labels point at, when they do. */
     platform: text('platform'),
+    /** RD's lost reason, a label ("Sem interesse"); never free text about a person. */
+    lostReason: text('lost_reason'),
+    /** A test deal (lost reason or title says "teste"): counted in no figure. */
+    isTest: boolean('is_test').notNull().default(false),
     fetchedAt: timestamp('fetched_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index('rd_crm_deals_created_idx').on(table.createdAt)],

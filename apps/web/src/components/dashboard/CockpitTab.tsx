@@ -10,6 +10,7 @@ import {
 import { useEffect, useState } from 'react';
 import { DailyLines } from './charts.js';
 import {
+  formatDateTime,
   formatDayShort,
   formatInt,
   formatMoney,
@@ -215,6 +216,53 @@ function StateMap({ data }: { data: DashboardCockpit }) {
   );
 }
 
+/** Performance ativa: the active campaigns judged by the RD leads they brought since 28/09. */
+function ActivePerformance({ data }: { data: DashboardCockpit['activePerformance'] }) {
+  const cell = (label: string, value: string, why?: string) => (
+    <div className="kpi" key={label}>
+      <span className="kpi-label">{label}</span>
+      <span className="kpi-value mono">{value}</span>
+      {why && <span className="kpi-delta muted">{why}</span>}
+    </div>
+  );
+  const money = (cents: number | null, why: string) =>
+    cents === null ? { value: '—', why } : { value: formatMoney(cents), why: undefined };
+  const cpl = money(data.costPerLeadCents, 'sem lead no CRM ainda');
+  const cpq = money(data.costPerQualifiedCents, 'sem lead qualificado ainda');
+  const cac = money(data.cacCents, 'sem venda "Ganho" ainda');
+  return (
+    <section className="cockpit-card cockpit-active" aria-labelledby="cockpit-active">
+      <h2 id="cockpit-active">
+        Performance ativa desde {formatDayShort(data.since)}{' '}
+        {data.smallSample && <span className="status status-on_leave">Amostra pequena</span>}
+      </h2>
+      <p className="cell-sub">
+        Campanhas ativas julgadas pelos leads do RD CRM (Funil Formatação, sem negócios de teste),
+        os mesmos da tela Leads das Campanhas.
+        {data.fetchedAt
+          ? ` Dados do RD ${formatDateTime(data.fetchedAt)}.`
+          : ' A conferência do RD ainda não rodou.'}
+      </p>
+      <div className="cockpit-kpis">
+        {cell('Investimento', formatMoney(data.spendCents))}
+        {cell('Leads no CRM', formatInt(data.leads))}
+        {cell('CPL', cpl.value, cpl.why)}
+        {cell('Qualificados', formatInt(data.qualified))}
+        {cell('Custo por qualificado', cpq.value, cpq.why)}
+        {cell('Vendas', formatInt(data.sales))}
+        {cell('CAC', cac.value, cac.why)}
+        {cell(
+          'ROAS',
+          data.roasCentuple === null
+            ? '—'
+            : `${(data.roasCentuple / 100).toFixed(2).replace('.', ',')}×`,
+          data.roasCentuple === null ? 'sem venda "Ganho" ainda' : undefined,
+        )}
+      </div>
+    </section>
+  );
+}
+
 const SEVERITY_LABEL = { critical: 'Crítico', warning: 'Atenção', info: 'Aviso' } as const;
 
 export function CockpitTab({ data }: { data: DashboardCockpit }) {
@@ -278,6 +326,8 @@ export function CockpitTab({ data }: { data: DashboardCockpit }) {
           </ul>
         </section>
       )}
+
+      <ActivePerformance data={data.activePerformance} />
 
       <section className="cockpit-kpis" aria-label="Indicadores do período">
         <Kpi
