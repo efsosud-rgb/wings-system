@@ -22,7 +22,7 @@ function conversion(over: Partial<Conversion>): Conversion {
 
 const map: CrmMap = {
   pipelines: new Map([
-    ['Expansão', { id: 'p1', stages: new Map([['Tentando contato', 's-exp']]) }],
+    ['Expansão', { id: 'p1', stages: new Map([['Novo Contato', 's-nov']]) }],
     ['Formatação', { id: 'p2', stages: new Map([['Sem contato', 's-for']]) }],
   ]),
   customFields: new Map([
@@ -35,6 +35,7 @@ const map: CrmMap = {
 
 function harness(conversions: Conversion[], contacts: Record<string, CrmContact | null> = {}) {
   const created: NewDeal[] = [];
+  const tasks: unknown[] = [];
   const marketing = {
     contactsConvertedSince: async () => [...new Set(conversions.map((c) => c.contactUuid))],
     conversionsOf: async (uuid: string) => conversions.filter((c) => c.contactUuid === uuid),
@@ -47,10 +48,11 @@ function harness(conversions: Conversion[], contacts: Record<string, CrmContact 
       created.push(deal);
       return `deal-${created.length}`;
     },
+    createTask: async (task: unknown) => void tasks.push(task),
     checkDeal: async () => ({ hasContact: true, hasSource: true }),
   } as unknown as RdCrm;
   const ledger = memoryLedger();
-  const run = (dryRun = false) =>
+  const run = (dryRun = false, now?: () => Date) =>
     runExpansionIntake({
       marketing,
       crm,
@@ -59,20 +61,28 @@ function harness(conversions: Conversion[], contacts: Record<string, CrmContact 
       expansionOwnerId: 'owner-1',
       since: at('2026-09-01T00:00:00Z'),
       dryRun,
+      now,
     });
-  return { created, ledger, run };
+  return { created, tasks, ledger, run };
 }
 
 describe('expansion intake', () => {
-  it('creates an Expansão deal in "Tentando contato" with brand and UTM', async () => {
+  it('creates an Expansão deal in "Novo Contato" with brand and UTM', async () => {
     const h = harness([conversion({})]);
     const result = await h.run();
     expect(result.created).toEqual({ 'expansao:Marca X': 1 });
     expect(h.created[0]).toMatchObject({
-      stageId: 's-exp',
+      stageId: 's-nov',
       campaignId: 'camp-x',
       ownerId: 'owner-1',
     });
+    expect(h.tasks).toEqual([
+      expect.objectContaining({
+        dealId: 'deal-1',
+        userId: 'owner-1',
+        subject: 'Fazer primeiro contato',
+      }),
+    ]);
     expect(h.created[0]!.customFields).toEqual([
       { id: 'cf-brand', value: 'Marca X' },
       { id: 'cf-obs', value: expect.stringContaining('campaign=c1') },
@@ -142,5 +152,21 @@ describe('expansion intake', () => {
     const result = await h.run();
     expect(result.noContactData).toBe(1);
     expect(h.created).toHaveLength(0);
+  });
+
+  it('leaves a conversion younger than 15 minutes for the next pass, then finds the flow made the deal', async () => {
+    const recent = conversion({ occurredAt: at('2026-09-28T12:00:00Z') });
+    const h = harness([recent]);
+    const early = await h.run(false, () => at('2026-09-28T12:05:00Z'));
+    expect(early.settling).toBe(1);
+    expect(h.created).toHaveLength(0);
+
+    // The RD flow made the deal in the meantime: the next pass adds nothing.
+    const later = harness([recent], {
+      'fulano@example.com': { id: 'c1', deals: [{ id: 'd1', win: null }] },
+    });
+    const result = await later.run(false, () => at('2026-09-28T12:20:00Z'));
+    expect(result.existingDeal).toBe(1);
+    expect(later.created).toHaveLength(0);
   });
 });
