@@ -210,13 +210,16 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
       const failure = await this.post(child.id, { status: 'ACTIVE' });
       if (failure) {
         const note = `${child.kind} ${child.id}: a campanha não foi ligada (${enabled.length} objeto(s) já ligados sob ela, sem entregar)`;
-        return failure.status === 'rejected'
-          ? {
-              ...failure,
-              message: `${failure.message} — ${note}`,
-              detail: { ...(failure.detail ?? {}), enabledBeforeFailure: enabled },
-            }
-          : { ...failure, reason: `${failure.reason} — ${note}` };
+        if (failure.status === 'rejected') {
+          return {
+            ...failure,
+            message: `${failure.message} — ${note}`,
+            detail: { ...(failure.detail ?? {}), enabledBeforeFailure: enabled },
+          };
+        }
+        if (failure.status === 'unknown')
+          return { ...failure, reason: `${failure.reason} — ${note}` };
+        return failure;
       }
       enabled.push(`${child.kind}:${child.id}`);
     }
