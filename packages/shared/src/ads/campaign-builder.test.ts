@@ -540,7 +540,7 @@ describe('a request against the saved draft it came from', () => {
   });
 
   it('names each edited figure with both values, in Brazilian formats', () => {
-    const requested = {
+    const requested: typeof saved = {
       ...saved,
       dailyBudgetCents: 24000,
       endDate: '2026-09-29',
