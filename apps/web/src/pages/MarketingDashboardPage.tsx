@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import {
   useDashboardAudience,
   useDashboardCampaigns,
+  useDashboardCockpit,
   useDashboardCreatives,
   useDashboardFunnel,
   useDashboardSite,
@@ -11,6 +12,7 @@ import {
 } from '../api/dashboard.js';
 import { AudienceTab } from '../components/dashboard/AudienceTab.js';
 import { CampaignsTab } from '../components/dashboard/CampaignsTab.js';
+import { CockpitTab } from '../components/dashboard/CockpitTab.js';
 import { CreativesTab } from '../components/dashboard/CreativesTab.js';
 import { FunnelTab } from '../components/dashboard/FunnelTab.js';
 import { SiteTab } from '../components/dashboard/SiteTab.js';
@@ -37,6 +39,7 @@ import { Alert, Button } from '../components/ui.js';
  */
 
 const TABS = [
+  { key: 'cockpit', label: 'Cockpit', windowed: true },
   { key: 'visao-geral', label: 'Visão geral', windowed: false },
   { key: 'plataformas', label: 'Por plataforma', windowed: true },
   { key: 'campanhas', label: 'Campanhas', windowed: true },
@@ -95,6 +98,7 @@ export function MarketingDashboardPage() {
   const creatives = useDashboardCreatives(days);
   const audience = useDashboardAudience(days);
   const siteTraffic = useDashboardSite(days);
+  const cockpitData = useDashboardCockpit(days);
   const funnel = useDashboardFunnel(days);
 
   const setParam = (key: string, value: string) => {
@@ -169,6 +173,9 @@ export function MarketingDashboardPage() {
         ))}
       </nav>
 
+      {tab === 'cockpit' && (
+        <Loading query={cockpitData}>{cockpitData.data && <CockpitTab data={cockpitData.data.cockpit} />}</Loading>
+      )}
       {tab === 'visao-geral' && (
         <Loading query={overview}>{overview.data && <OverviewTab overview={overview.data.overview} />}</Loading>
       )}

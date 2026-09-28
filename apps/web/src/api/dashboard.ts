@@ -1,6 +1,7 @@
 import type {
   DashboardAudience,
   DashboardCampaigns,
+  DashboardCockpit,
   DashboardCreatives,
   DashboardFunnel,
   DashboardOverview,
@@ -57,6 +58,14 @@ export function useDashboardCampaigns(days: DashboardWindow) {
     queryKey: ['dashboard', 'campaigns', days],
     queryFn: () =>
       api.get<{ campaigns: DashboardCampaigns }>(`/ads/dashboard/campaigns?days=${days}`),
+    staleTime: STALE_MS,
+  });
+}
+
+export function useDashboardCockpit(days: DashboardWindow) {
+  return useQuery({
+    queryKey: ['dashboard', 'cockpit', days],
+    queryFn: () => api.get<{ cockpit: DashboardCockpit }>(`/ads/dashboard/cockpit?days=${days}`),
     staleTime: STALE_MS,
   });
 }

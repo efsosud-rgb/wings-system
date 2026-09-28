@@ -6747,3 +6747,221 @@ button.stage-chip:focus-visible {
     grid-template-areas: 'label count' 'bar bar' 'meta meta';
   }
 }
+
+/* Dashboard → Cockpit: the executive view. Flat marks, animation only without reduced motion. */
+.cockpit-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  background: var(--wings-card);
+  border: 1px solid var(--wings-border);
+  border-radius: 12px;
+}
+
+.kpi-big {
+  grid-column: span 2;
+}
+
+.kpi-label {
+  color: var(--wings-muted);
+  font-size: 13px;
+}
+
+.kpi-value {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--wings-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.kpi-big .kpi-value {
+  font-size: 38px;
+}
+
+.kpi-delta {
+  font-size: 12px;
+}
+
+.kpi-good {
+  color: var(--wings-success);
+}
+
+.kpi-bad {
+  color: var(--wings-danger);
+}
+
+.cockpit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  gap: 16px;
+}
+
+.cockpit-card {
+  padding: 16px;
+  background: var(--wings-card);
+  border: 1px solid var(--wings-border);
+  border-radius: 12px;
+  min-width: 0;
+}
+
+.cockpit-card h2 {
+  font-size: 15px;
+  margin-bottom: 12px;
+}
+
+.cockpit-funnel {
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.cockpit-funnel li {
+  display: grid;
+  grid-template-columns: 7.5rem 1fr 4.5rem;
+  grid-template-areas: 'label bar count' 'label meta meta';
+  align-items: center;
+  column-gap: 10px;
+}
+
+.cockpit-funnel-label {
+  grid-area: label;
+  font-size: 13px;
+}
+
+.cockpit-funnel-bar {
+  grid-area: bar;
+  height: 14px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+}
+
+.cockpit-funnel-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 7px;
+  background: var(--wings-accent);
+}
+
+.cockpit-funnel li > .num {
+  grid-area: count;
+  text-align: right;
+}
+
+.cockpit-funnel li > .cell-sub {
+  grid-area: meta;
+}
+
+.cockpit-map svg {
+  width: 100%;
+  max-width: 360px;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
+.cockpit-tile {
+  fill: rgba(255, 255, 255, 0.05);
+  stroke: var(--wings-border);
+}
+
+.cockpit-tile-on {
+  fill: var(--wings-accent);
+  stroke: none;
+}
+
+.cockpit-tile-label {
+  fill: var(--wings-text);
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.cockpit-map-list {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.cockpit-creatives,
+.cockpit-alerts {
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.cockpit-creatives li {
+  display: grid;
+  grid-template-columns: 1.5rem auto 1fr;
+  gap: 10px;
+  align-items: center;
+}
+
+.cockpit-rank {
+  color: var(--wings-muted);
+  font-weight: 700;
+}
+
+.cockpit-alert {
+  padding: 8px 10px;
+  border-left: 3px solid var(--wings-faint);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+}
+
+.cockpit-alert-critical {
+  border-left-color: var(--wings-danger);
+}
+
+.cockpit-alert-warning {
+  border-left-color: #fbbf24;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cockpit-funnel-bar > span {
+    transition: width 900ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .cockpit .viz-line {
+    stroke-dasharray: 1;
+    stroke-dashoffset: 1;
+    animation: cockpit-draw 1100ms ease-out forwards;
+  }
+
+  .cockpit-tile-on {
+    animation: cockpit-fade 700ms ease-out both;
+  }
+}
+
+@keyframes cockpit-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes cockpit-fade {
+  from {
+    fill-opacity: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .kpi-big {
+    grid-column: span 1;
+  }
+
+  .kpi-big .kpi-value {
+    font-size: 30px;
+  }
+}

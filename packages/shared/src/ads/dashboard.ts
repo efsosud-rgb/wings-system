@@ -662,3 +662,112 @@ export interface DashboardFunnel {
   /** Deals in the window whose RD labels name no paid platform (organic, referral, "Tráfego pago" without a platform…). */
   crmUnattributed: number;
 }
+
+// ---------------------------------------------------------------------------
+// Cockpit: the executive view, one screen
+// ---------------------------------------------------------------------------
+
+/** Brazil's states, for the map. `row` and `col` place each one on a tile grid that keeps the country's shape. */
+export const BRAZIL_STATE_TILES: { uf: string; name: string; row: number; col: number }[] = [
+  { uf: 'RR', name: 'Roraima', row: 0, col: 2 },
+  { uf: 'AP', name: 'Amapá', row: 0, col: 4 },
+  { uf: 'AM', name: 'Amazonas', row: 1, col: 1 },
+  { uf: 'PA', name: 'Pará', row: 1, col: 3 },
+  { uf: 'MA', name: 'Maranhão', row: 1, col: 5 },
+  { uf: 'CE', name: 'Ceará', row: 1, col: 6 },
+  { uf: 'RN', name: 'Rio Grande do Norte', row: 1, col: 7 },
+  { uf: 'AC', name: 'Acre', row: 2, col: 0 },
+  { uf: 'RO', name: 'Rondônia', row: 2, col: 1 },
+  { uf: 'TO', name: 'Tocantins', row: 2, col: 4 },
+  { uf: 'PI', name: 'Piauí', row: 2, col: 5 },
+  { uf: 'PB', name: 'Paraíba', row: 2, col: 7 },
+  { uf: 'PE', name: 'Pernambuco', row: 2, col: 6 },
+  { uf: 'MT', name: 'Mato Grosso', row: 3, col: 2 },
+  { uf: 'BA', name: 'Bahia', row: 3, col: 5 },
+  { uf: 'AL', name: 'Alagoas', row: 3, col: 7 },
+  { uf: 'SE', name: 'Sergipe', row: 3, col: 6 },
+  { uf: 'GO', name: 'Goiás', row: 4, col: 3 },
+  { uf: 'DF', name: 'Distrito Federal', row: 4, col: 4 },
+  { uf: 'MG', name: 'Minas Gerais', row: 4, col: 5 },
+  { uf: 'ES', name: 'Espírito Santo', row: 4, col: 6 },
+  { uf: 'MS', name: 'Mato Grosso do Sul', row: 5, col: 2 },
+  { uf: 'SP', name: 'São Paulo', row: 5, col: 4 },
+  { uf: 'RJ', name: 'Rio de Janeiro', row: 5, col: 5 },
+  { uf: 'PR', name: 'Paraná', row: 6, col: 3 },
+  { uf: 'SC', name: 'Santa Catarina', row: 7, col: 3 },
+  { uf: 'RS', name: 'Rio Grande do Sul', row: 8, col: 3 },
+];
+
+const foldName = (value: string) =>
+  value
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/^state of /, '')
+    .replace(/\s*\((state|estado)\)\s*$/, '')
+    .replace(/^estado d[eo] /, '')
+    .trim();
+
+/** "Rio de Janeiro (state)" (Meta), "State of Rio de Janeiro" (Google) → "RJ"; null when not a Brazilian state. */
+export function ufOfRegion(name: string): string | null {
+  const folded = foldName(name);
+  if (folded === 'federal district' || folded === 'distrito federal') return 'DF';
+  return BRAZIL_STATE_TILES.find((state) => foldName(state.name) === folded)?.uf ?? null;
+}
+
+export interface CockpitFigures {
+  spendCents: number;
+  impressions: number;
+  clicks: number;
+  /** Leads the platforms report. */
+  leads: number;
+  /** GA4 sessions; null while GA4 is not connected. */
+  sessions: number | null;
+  /** RD CRM deals from a paid platform, meetings and sales. */
+  crmLeads: number;
+  meetings: number;
+  sales: number;
+}
+
+export interface CockpitDay {
+  day: string;
+  /** The same position in the previous window. */
+  previousDay: string;
+  spendCents: number;
+  previousSpendCents: number;
+  leads: number;
+  previousLeads: number;
+  clicks: number;
+  previousClicks: number;
+}
+
+export interface CockpitRegion {
+  uf: string;
+  spendCents: number;
+  leads: number;
+  impressions: number;
+}
+
+export interface CockpitAlert {
+  id: string;
+  severity: 'info' | 'warning' | 'critical';
+  title: string;
+  firstSeenAt: string;
+  platform: AdPlatform;
+}
+
+export interface DashboardCockpit {
+  days: DashboardWindow;
+  since: string;
+  until: string;
+  previousSince: string;
+  previousUntil: string;
+  current: CockpitFigures;
+  previous: CockpitFigures;
+  daily: CockpitDay[];
+  regions: CockpitRegion[];
+  /** Spend on regions that are not a Brazilian state (unknown, abroad). */
+  otherRegionsSpendCents: number;
+  creatives: CreativePerformance[];
+  alerts: CockpitAlert[];
+}
