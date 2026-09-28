@@ -29,7 +29,8 @@ import {
 } from '../../../db/schema/index.js';
 import type { Env } from '../../../env.js';
 import { ga4CredentialsOf } from '../../../lib/ga4.js';
-import { activeAccounts, creatives } from './queries.js';
+import { activeAccounts, creatives, sumsByEntity } from './queries.js';
+import { confirmedTargets } from './targets.js';
 import { addDays, daysBetween, windowOf } from './window.js';
 
 /**
@@ -329,6 +330,29 @@ export async function cockpit(
   const revenueCents = won.reduce((total, row) => total + row.amountCents, 0);
   const perUnit = (count: number) => (count > 0 ? Math.round(spendSince / count) : null);
 
+  // For the visual cards: today's spend and the budget in force per active
+  // campaign (the forecast's rule: an ABO campaign's budget is its active
+  // ad sets'), the window's spend per platform and the confirmed CPL target.
+  const [todayRows, windowByCampaign, targets] = await Promise.all([
+    sumsByEntity(db, ids, 'campaign', today, today),
+    sumsByEntity(db, ids, 'campaign', window.since, window.until),
+    confirmedTargets(db),
+  ]);
+  const dailyBudgetOf = (campaign: (typeof active)[number]) => {
+    const daily =
+      campaign.budgetLevel === 'ad_set'
+        ? adSetRows
+            .filter((row) => row.campaignId === campaign.id && row.status === 'ACTIVE')
+            .reduce((total, row) => total + (row.dailyBudgetCents ?? 0), 0)
+        : campaign.dailyBudgetCents;
+    return daily || null;
+  };
+  const spendByPlatform: Record<AdPlatform, number> = { meta: 0, google: 0 };
+  for (const campaign of active) {
+    const platform = platformOf.get(campaign.adAccountId) ?? 'meta';
+    spendByPlatform[platform] += windowByCampaign.get(campaign.externalId)?.spendCents ?? 0;
+  }
+
   return {
     days,
     since: window.since,
@@ -348,7 +372,10 @@ export async function cockpit(
         externalId: campaign.externalId,
         name: campaign.name,
         deliveryStatus: campaign.deliveryStatus,
+        startDate: campaign.startDate,
         endDate: campaign.endDate,
+        dailyBudgetCents: dailyBudgetOf(campaign),
+        spentTodayCents: todayRows.get(campaign.externalId)?.spendCents ?? 0,
       }))
       .sort((a, b) => a.platform.localeCompare(b.platform) || a.name.localeCompare(b.name)),
     adWarnings,
@@ -367,5 +394,8 @@ export async function cockpit(
       smallSample: leadRows.length < 10,
       fetchedAt: leadsFetched?.at ? new Date(leadsFetched.at).toISOString() : null,
     },
+    spendByPlatform,
+    cplTargetCents: targets.get('leads') ?? null,
+    today,
   };
 }

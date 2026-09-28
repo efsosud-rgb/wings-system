@@ -780,7 +780,12 @@ export interface CockpitCampaign {
   externalId: string;
   name: string;
   deliveryStatus: string | null;
+  startDate: string | null;
   endDate: string | null;
+  /** Daily budget in force (campaign or the sum of its ad sets); null when it has a lifetime budget only. */
+  dailyBudgetCents: number | null;
+  /** Spend reported for today (São Paulo) so far. */
+  spentTodayCents: number;
 }
 
 /** An ad that a person switched on inside an active campaign and that is not serving. */
@@ -876,4 +881,10 @@ export interface DashboardCockpit {
   /** Ads switched on in those campaigns that are not serving; outside every figure. */
   adWarnings: CockpitAdWarning[];
   activePerformance: CockpitActivePerformance;
+  /** Spend of the window per platform, active campaigns only. */
+  spendByPlatform: Record<AdPlatform, number>;
+  /** The company's confirmed CPL target for leads campaigns; null until a person confirms one. */
+  cplTargetCents: number | null;
+  /** Today in São Paulo, for the timeline's "hoje" mark. */
+  today: string;
 }
