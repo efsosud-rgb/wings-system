@@ -2,6 +2,7 @@ import {
   AD_PLATFORM_LABEL,
   CAMPAIGN_VERDICT_LABEL,
   INSIGHT_CONFIDENCE_LABEL,
+  INSIGHTS_FAILED_RUNS_PER_DAY,
   INSIGHT_KIND_LABEL,
   type CampaignVerdict,
   type InsightCard,
@@ -52,6 +53,9 @@ export function generateBlocker(input: {
 }): string | null {
   if (!input.configured) return 'O OpenRouter não está configurado neste ambiente.';
   if (input.running) return 'Uma geração está em andamento.';
+  if (input.usage.failedRuns >= INSIGHTS_FAILED_RUNS_PER_DAY) {
+    return 'Várias gerações falharam hoje. Para não gastar à toa, a geração volta amanhã.';
+  }
   if (input.usage.exhausted) return 'O teto diário de IA dos insights foi atingido. Volta amanhã.';
   return null;
 }

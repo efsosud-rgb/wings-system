@@ -60,10 +60,22 @@ export interface InsightRun {
 }
 
 export interface InsightsUsageToday {
+  /** What the runs that produced cards cost today: the ceiling counts only these. */
   spentMicroUsd: number;
   limitMicroUsd: number;
+  /** Runs that failed today, and what they cost anyway: shown, not counted against the ceiling. */
+  failedRuns: number;
+  failedMicroUsd: number;
+  /** Ceiling reached, or too many failed runs today (see INSIGHTS_FAILED_RUNS_PER_DAY). */
   exhausted: boolean;
 }
+
+/**
+ * A failed run does not count against the daily ceiling, so this many
+ * failures in a day stop "Gerar agora" instead: a broken generator must not
+ * keep spending just because it never produces a card.
+ */
+export const INSIGHTS_FAILED_RUNS_PER_DAY = 3;
 
 // ---------------------------------------------------------------------------
 // Insights
@@ -309,4 +321,5 @@ export type SetCplTargetInput = z.input<typeof setCplTargetSchema>;
 //
 // Without OPENROUTER_API_KEY the generate routes answer 503, never a fake card.
 // A generate while a run of the same kind is going answers 409 `already_running`;
-// past the daily ceiling, 429 `daily_limit`.
+// past the daily ceiling, 429 `daily_limit`; after INSIGHTS_FAILED_RUNS_PER_DAY
+// failed runs in the day, 429 `too_many_failures`.

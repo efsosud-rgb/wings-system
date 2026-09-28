@@ -63,13 +63,14 @@ let metaAccountId: string;
 
 type Step = (request: LlmRequest) => Partial<LlmTurn>;
 let script: Step[] = [];
-let seen: { messages: LlmMessage[]; tools: string[] }[] = [];
+let seen: { messages: LlmMessage[]; tools: string[]; toolChoice?: string }[] = [];
 
 const scriptedLlm: AgentLlm = {
   async complete(request) {
     seen.push({
       messages: structuredClone(request.messages),
       tools: request.tools.map((tool) => tool.name),
+      toolChoice: request.toolChoice,
     });
     const step = script.shift();
     if (!step) throw new Error('the script ended before the run did');
@@ -677,6 +678,65 @@ describe('a weekly run of insights', () => {
     ];
     const { run } = await generate(cookies);
     expect(run).toMatchObject({ status: 'done', produced: 1 });
+  });
+
+  it('a model that writes a report instead of registering is made to call the register tool', async () => {
+    // The staging failures of 25 and 28/09: 80k tokens of data, then 8,000
+    // tokens of prose cut by the output cap, twice, and no card.
+    const { cookies } = await sessionFor('marketing');
+    const report = 'Análise longa. '.repeat(2000);
+    script = [
+      () => ({ text: report, finishReason: 'length' }),
+      use(call('registrar_insights', { insights: [insight()] })),
+      say('ok'),
+    ];
+    const { run } = await generate(cookies);
+    expect(run).toMatchObject({ status: 'done', produced: 1 });
+    expect(seen[1]?.tools).toEqual(['registrar_insights']);
+    expect(seen[1]?.toolChoice).toBe('registrar_insights');
+    // The report is not sent back to be paid for again.
+    expect(JSON.stringify(seen[1]?.messages)).not.toContain('Análise longa. Análise longa.');
+    expect(seen[0]?.toolChoice).toBeUndefined();
+  });
+
+  it('a failed run does not count against the daily ceiling', async () => {
+    const { cookies } = await sessionFor('marketing');
+    await db.insert(insightRuns).values({
+      kind: 'insights',
+      trigger: 'schedule',
+      status: 'failed',
+      error: 'no_cards',
+      startedAt: NOW,
+      finishedAt: NOW,
+      costMicroUsd: 670_000,
+    });
+    script = [use(call('registrar_insights', { insights: [insight()] })), say('ok')];
+    const { run } = await generate(cookies);
+    expect(run).toMatchObject({ status: 'done', produced: 1 });
+    expect((await board(cookies)).usage).toMatchObject({
+      failedRuns: 1,
+      failedMicroUsd: 670_000,
+    });
+  });
+
+  it('after three failed runs in a day nothing is generated, so a broken generator stops spending', async () => {
+    const { cookies } = await sessionFor('marketing');
+    for (let index = 0; index < 3; index += 1) {
+      await db.insert(insightRuns).values({
+        kind: 'insights',
+        trigger: 'manual',
+        status: 'failed',
+        error: 'no_cards',
+        startedAt: NOW,
+        finishedAt: NOW,
+        costMicroUsd: 100_000,
+      });
+    }
+    const response = await app.inject({ method: 'POST', url: '/ads/insights/generate', cookies });
+    expect(response.statusCode).toBe(429);
+    expect(response.json()).toMatchObject({ error: 'too_many_failures' });
+    expect(seen).toHaveLength(0);
+    expect((await board(cookies)).usage).toMatchObject({ failedRuns: 3, exhausted: true });
   });
 
   it('past the daily ceiling nothing is generated and no model is called', async () => {

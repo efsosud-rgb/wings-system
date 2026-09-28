@@ -1,4 +1,5 @@
 import {
+  INSIGHTS_FAILED_RUNS_PER_DAY,
   AGENT_TOOL_LABEL,
   estimateAgentCostMicroUsd,
   type AgentConsultation,
@@ -38,6 +39,8 @@ import {
 
 const MAX_TOOL_ROUNDS = 10;
 const MAX_OUTPUT_TOKENS = 8000;
+/** The forced registering turn writes every card in one call: up to 12 insights. */
+const FORCED_OUTPUT_TOKENS = 16000;
 /** A `running` row older than this belongs to a process that died. */
 const STALE_RUN_MS = 15 * 60_000;
 
@@ -51,7 +54,10 @@ export interface InsightsDeps {
   log?: (facts: Record<string, unknown>) => void;
 }
 
-export type RunRefusal = { ok: false; code: 'daily_limit' | 'already_running' | 'already_ran' };
+export type RunRefusal = {
+  ok: false;
+  code: 'daily_limit' | 'too_many_failures' | 'already_running' | 'already_ran';
+};
 export type RunStarted = { ok: true; runId: string };
 
 const toMicro = (usd: number) => Math.round(usd * 1_000_000);
@@ -62,19 +68,35 @@ export function startOfDay(now: Date): Date {
   return new Date(`${day}T00:00:00-03:00`);
 }
 
-/** The company's spend on insights today, scheduled and on-demand alike. */
+/**
+ * The company's spend on insights today, scheduled and on-demand alike.
+ * Only runs that did not fail count against the ceiling; failed runs are
+ * reported apart and capped by number (INSIGHTS_FAILED_RUNS_PER_DAY).
+ */
 export async function insightsUsageToday(
   db: Database,
   dailyLimitUsd: number,
   now = new Date(),
 ): Promise<InsightsUsageToday> {
   const [row] = await db
-    .select({ total: sql<string>`coalesce(sum(${insightRuns.costMicroUsd}), 0)` })
+    .select({
+      spent: sql<string>`coalesce(sum(${insightRuns.costMicroUsd}) filter (where ${insightRuns.status} <> 'failed'), 0)`,
+      failedCost: sql<string>`coalesce(sum(${insightRuns.costMicroUsd}) filter (where ${insightRuns.status} = 'failed'), 0)`,
+      failedRuns: sql<string>`count(*) filter (where ${insightRuns.status} = 'failed' and ${insightRuns.costMicroUsd} > 0)`,
+    })
     .from(insightRuns)
     .where(gte(insightRuns.startedAt, startOfDay(now)));
-  const spentMicroUsd = Number(row?.total ?? 0);
+  const spentMicroUsd = Number(row?.spent ?? 0);
+  const failedMicroUsd = Number(row?.failedCost ?? 0);
+  const failedRuns = Number(row?.failedRuns ?? 0);
   const limitMicroUsd = toMicro(dailyLimitUsd);
-  return { spentMicroUsd, limitMicroUsd, exhausted: spentMicroUsd >= limitMicroUsd };
+  return {
+    spentMicroUsd,
+    limitMicroUsd,
+    failedRuns,
+    failedMicroUsd,
+    exhausted: spentMicroUsd >= limitMicroUsd || failedRuns >= INSIGHTS_FAILED_RUNS_PER_DAY,
+  };
 }
 
 /** A run row as the screen sees it. */
@@ -160,6 +182,8 @@ export async function openRun(
 ): Promise<RunStarted | RunRefusal> {
   const now = deps.now?.() ?? new Date();
   const usage = await insightsUsageToday(deps.db, deps.dailyLimitUsd, now);
+  if (usage.failedRuns >= INSIGHTS_FAILED_RUNS_PER_DAY)
+    return { ok: false, code: 'too_many_failures' };
   if (usage.exhausted) return { ok: false, code: 'daily_limit' };
   if (await runningRun(deps.db, input.kind, now)) return { ok: false, code: 'already_running' };
 
@@ -217,6 +241,9 @@ export async function executeRun(
     inputTokens: number;
     outputTokens: number;
     toolCalls: number;
+    /** Length of the prose the model wrote instead of calling a tool. A number, never the text. */
+    textChars: number;
+    forced: boolean;
   }[] = [];
   let inputTokens = 0;
   let outputTokens = 0;
@@ -231,17 +258,24 @@ export async function executeRun(
   try {
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1) {
       const lastRound = round === MAX_TOOL_ROUNDS;
+      // After the nudge the model may only register: with 80k tokens of data in
+      // front of it, it would otherwise write a report until the output cap
+      // (the no_cards runs of 25 and 28/09) and never call the tool.
+      const forced = nudged && produced === 0 && !lastRound;
       const turn = await deps.llm.complete({
         model: deps.model,
         messages,
-        tools: lastRound ? [] : tools,
-        maxOutputTokens: MAX_OUTPUT_TOKENS,
+        tools: lastRound ? [] : forced ? tools.filter((tool) => tool.name === writeTool) : tools,
+        ...(forced ? { toolChoice: writeTool } : {}),
+        maxOutputTokens: forced ? FORCED_OUTPUT_TOKENS : MAX_OUTPUT_TOKENS,
       });
       rounds.push({
         finishReason: turn.finishReason,
         inputTokens: turn.usage.inputTokens,
         outputTokens: turn.usage.outputTokens,
         toolCalls: turn.toolCalls.length,
+        textChars: turn.text.length,
+        forced,
       });
       inputTokens += turn.usage.inputTokens;
       outputTokens += turn.usage.outputTokens;
@@ -261,7 +295,12 @@ export async function executeRun(
         // Stopped without registering anything: asked once more, plainly.
         if (produced === 0 && !nudged && !lastRound) {
           nudged = true;
-          messages.push({ role: 'assistant', content: turn.text });
+          // The prose itself is not sent back: it can be 8,000 tokens of report
+          // that would only be paid for again. A short stand-in keeps the turn order.
+          messages.push({
+            role: 'assistant',
+            content: turn.text ? '(análise em texto omitida)' : '',
+          });
           messages.push({ role: 'user', content: NUDGE_TURN });
           continue;
         }

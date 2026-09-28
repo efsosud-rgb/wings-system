@@ -53,6 +53,12 @@ export interface LlmRequest {
   messages: LlmMessage[];
   tools: LlmToolDefinition[];
   maxOutputTokens: number;
+  /**
+   * Makes the model call this one tool instead of answering in text. Used
+   * where a turn that writes prose is worth nothing (the insights generator's
+   * last word); never on the chat, where the model must be free to answer.
+   */
+  toolChoice?: string;
   signal?: AbortSignal;
   /** Called with each piece of visible text as it arrives. */
   onText?: (delta: string) => void;
@@ -160,6 +166,9 @@ export function createOpenRouterLlm(options: {
                 parameters: tool.parameters,
               },
             })),
+            ...(request.toolChoice
+              ? { tool_choice: { type: 'function', function: { name: request.toolChoice } } }
+              : {}),
           }),
           signal: AbortSignal.any(signals),
         });

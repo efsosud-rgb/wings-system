@@ -237,6 +237,13 @@ export const insightsRoutes: FastifyPluginAsync = async (app) => {
     const employeeId = request.session.actor.employeeId;
     const opened = await openRun(ready, { kind, trigger: 'manual', requestedBy: employeeId });
     if (!opened.ok) {
+      if (opened.code === 'too_many_failures') {
+        return reply.status(429).send({
+          error: 'too_many_failures',
+          message:
+            'Várias gerações falharam hoje. Para não gastar à toa, a geração volta amanhã ou depois de uma correção.',
+        });
+      }
       if (opened.code === 'daily_limit') {
         return reply.status(429).send({
           error: 'daily_limit',
