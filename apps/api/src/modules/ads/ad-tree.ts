@@ -68,10 +68,13 @@ export function draftHasTree(draft: CampaignDraft): draft is TreeDraft {
   );
 }
 
-export interface PreparedTree {
-  targeting: ResolvedTargeting;
+export interface PreparedMedia {
   images: Map<string, { bytes: Buffer; name: string }>;
   videos: Map<string, { filePath: string; byteSize: number; name: string }>;
+}
+
+export interface PreparedTree extends PreparedMedia {
+  targeting: ResolvedTargeting;
 }
 
 export type PrepareResult =
@@ -239,45 +242,26 @@ export type BuildResult =
   | { status: 'complete'; adSetId: string; adIds: string[] }
   | { status: 'incomplete'; reason: string };
 
-/**
- * Media, then the ad set, then a creative and an ad per variation. Stops at the
- * first step that does not answer "created".
- */
-export async function buildAdTree(
-  db: Database,
-  writer: AdTreeWriter,
-  input: {
-    executionId: string;
-    /** The step number the campaign itself was recorded under. */
-    startSeq: number;
-    /** Our id of the account, to find media an earlier execution already uploaded. */
-    adAccountId: string;
-    campaignExternalId: string;
-    draft: TreeDraft;
-    prepared: PreparedTree;
-    pixelId: string;
-  },
-): Promise<BuildResult> {
-  const { draft, prepared, executionId } = input;
-  let seq = input.startSeq;
+type Stepper = <T>(
+  kind: StepKind,
+  label: string,
+  run: () => Promise<StepOutcome<T>>,
+  idOf: (value: T) => string,
+  note?: string | null,
+) => Promise<{ ok: true; value: T } | { ok: false; reason: string }>;
 
-  /** Runs one write, records it, and says whether to go on. */
-  const step = async <T>(
-    kind: StepKind,
-    label: string,
-    run: () => Promise<StepOutcome<T>>,
-    idOf: (value: T) => string,
-    /** Kept with a created step: how a later execution finds it (`video:<local id>`). */
-    note: string | null = null,
-  ): Promise<{ ok: true; value: T } | { ok: false; reason: string }> => {
+/** Runs one write at a time, records it the moment it answers, and numbers it after `startSeq`. */
+function stepperFor(db: Database, executionId: string, startSeq: number): Stepper {
+  let seq = startSeq;
+  return async (kind, label, run, idOf, note = null) => {
     seq += 1;
-    let outcome: StepOutcome<T>;
+    let outcome;
     try {
       outcome = await run();
     } catch (error) {
       // A throw in the middle of a write says nothing about whether it landed.
       outcome = {
-        status: 'unknown',
+        status: 'unknown' as const,
         reason: error instanceof Error ? error.name : 'unexpected failure',
       };
     }
@@ -306,8 +290,16 @@ export async function buildAdTree(
     });
     return { ok: false, reason: `${label}: ${message}` };
   };
+}
 
-  // 1. Media, each file once however many variations or cards use it.
+/** Media, each file once however many variations or cards use it. */
+async function uploadMedia(
+  db: Database,
+  writer: AdTreeWriter,
+  step: Stepper,
+  adAccountId: string,
+  prepared: PreparedMedia,
+): Promise<{ ok: true; uploaded: Map<string, CreativeMedia> } | { ok: false; reason: string }> {
   const uploaded = new Map<string, CreativeMedia>();
   for (const [id, image] of prepared.images) {
     const result = await step(
@@ -316,14 +308,14 @@ export async function buildAdTree(
       () => writer.uploadImage(image),
       (value) => value.imageHash,
     );
-    if (!result.ok) return { status: 'incomplete', reason: result.reason };
+    if (!result.ok) return result;
     uploaded.set(id, { kind: 'image', imageHash: result.value.imageHash });
   }
   for (const [id, video] of prepared.videos) {
     // A video this system already put in the account (an earlier execution
     // that failed after it) is used again, never uploaded twice. The step
     // keeps the local id in its message, which is how it is found next time.
-    const earlier = await priorVideo(db, input.adAccountId, id);
+    const earlier = await priorVideo(db, adAccountId, id);
     const result = earlier
       ? await step(
           'video',
@@ -339,9 +331,131 @@ export async function buildAdTree(
           (value) => value.videoId,
           `video:${id}`,
         );
-    if (!result.ok) return { status: 'incomplete', reason: result.reason };
+    if (!result.ok) return result;
     uploaded.set(id, { kind: 'video', ...result.value });
   }
+  return { ok: true, uploaded };
+}
+
+/**
+ * A creative and an ad per variation, in an ad set that exists. Each ad is
+ * judged with its creative inline first (validate_only), and each carries its
+ * own utm_content: its kind and its position in the ad set, from
+ * `firstPosition`. Ads are born paused, like everything this system creates.
+ */
+async function createAds(
+  writer: AdTreeWriter,
+  step: Stepper,
+  input: {
+    adSetId: string;
+    /** "<campaign name>": ads are named "<campaign name> — v<position>". */
+    name: string;
+    pageId: string;
+    instagramActorId: string | null | undefined;
+    destinationUrl: string;
+    utms: CampaignDraft['utms'];
+    variations: CopyVariation[];
+    uploaded: Map<string, CreativeMedia>;
+    firstPosition: number;
+  },
+): Promise<{ ok: true; adIds: string[] } | { ok: false; reason: string }> {
+  const mediaOf = (id: string | undefined): CreativeMedia => {
+    const media = id ? input.uploaded.get(id) : undefined;
+    if (!media) throw new Error('unreachable: prepared media covers every variation');
+    return media;
+  };
+  const adIds: string[] = [];
+  for (const [index, variation] of input.variations.entries()) {
+    const position = input.firstPosition + index;
+    const ad = { creativeType: variation.creativeType, position };
+    const body =
+      variation.creativeType === 'carousel'
+        ? {
+            type: 'carousel' as const,
+            cards: (variation.cards ?? []).map((card) => ({
+              media: mediaOf(card.mediaType === 'video' ? card.videoId : card.creativeId),
+              headline: card.headline,
+              description: card.description,
+              link: applyUtms(card.link, input.utms, ad) ?? card.link,
+            })),
+          }
+        : {
+            type: 'single' as const,
+            media: mediaOf(
+              variation.creativeType === 'video' ? variation.videoId : variation.creativeId,
+            ),
+          };
+    const name = `${input.name} — v${position}`;
+    const creativeSpec = {
+      name,
+      pageId: input.pageId,
+      instagramUserId: input.instagramActorId ?? null,
+      message: variation.primaryText,
+      headline: variation.headline,
+      callToAction: variation.callToAction,
+      // Each ad carries its own utm_content (video-1, imagem-2…).
+      link: applyUtms(input.destinationUrl, input.utms, ad) ?? input.destinationUrl,
+      body,
+    };
+    // Meta judges the ad with its creative inline first, creating nothing; a
+    // refusal here is the same step failing, with nothing more on the platform.
+    const creative = await step(
+      'creative',
+      `Criativo ${name}`,
+      async () => {
+        const checked = await writer.validateAd({
+          name: `Anúncio ${name}`,
+          adSetId: input.adSetId,
+          creative: creativeSpec,
+        });
+        if (checked.status !== 'created') {
+          return checked.status === 'rejected'
+            ? { ...checked, message: `validate_only: ${checked.message}` }
+            : checked;
+        }
+        return writer.createCreative(creativeSpec);
+      },
+      (value) => value.id,
+    );
+    if (!creative.ok) return creative;
+
+    const created = await step(
+      'ad',
+      `Anúncio ${name}`,
+      () => writer.createAd({ name, adSetId: input.adSetId, creativeId: creative.value.id }),
+      (value) => value.id,
+    );
+    if (!created.ok) return created;
+    adIds.push(created.value.id);
+  }
+  return { ok: true, adIds };
+}
+
+/**
+ * Media, then the ad set, then a creative and an ad per variation. Stops at the
+ * first step that does not answer "created".
+ */
+export async function buildAdTree(
+  db: Database,
+  writer: AdTreeWriter,
+  input: {
+    executionId: string;
+    /** The step number the campaign itself was recorded under. */
+    startSeq: number;
+    /** Our id of the account, to find media an earlier execution already uploaded. */
+    adAccountId: string;
+    campaignExternalId: string;
+    draft: TreeDraft;
+    prepared: PreparedTree;
+    pixelId: string;
+  },
+): Promise<BuildResult> {
+  const { draft, prepared } = input;
+  const step = stepperFor(db, input.executionId, input.startSeq);
+
+  // 1. Media.
+  const media = await uploadMedia(db, writer, step, input.adAccountId, prepared);
+  if (!media.ok) return { status: 'incomplete', reason: media.reason };
 
   // 2. The ad set.
   const adSet = await step(
@@ -372,81 +486,58 @@ export async function buildAdTree(
   );
   if (!adSet.ok) return { status: 'incomplete', reason: adSet.reason };
 
-  // 3. One creative and one ad per variation.
-  const mediaOf = (id: string | undefined): CreativeMedia => {
-    const media = id ? uploaded.get(id) : undefined;
-    if (!media) throw new Error('unreachable: prepared media covers every variation');
-    return media;
-  };
-  const bodyOf = (variation: CopyVariation, index: number) => {
-    if (variation.creativeType === 'carousel') {
-      return {
-        type: 'carousel' as const,
-        cards: (variation.cards ?? []).map((card) => ({
-          media: mediaOf(card.mediaType === 'video' ? card.videoId : card.creativeId),
-          headline: card.headline,
-          description: card.description,
-          link:
-            applyUtms(card.link, draft.utms, { creativeType: 'carousel', position: index + 1 }) ??
-            card.link,
-        })),
-      };
-    }
-    return {
-      type: 'single' as const,
-      media: mediaOf(variation.creativeType === 'video' ? variation.videoId : variation.creativeId),
-    };
-  };
+  // 3. One creative and one ad per variation, positions from 1.
+  const ads = await createAds(writer, step, {
+    adSetId: adSet.value.id,
+    name: draft.name,
+    pageId: draft.identity.pageId,
+    instagramActorId: draft.identity.instagramActorId,
+    destinationUrl: draft.destinationUrl,
+    utms: draft.utms,
+    variations: draft.variations,
+    uploaded: media.uploaded,
+    firstPosition: 1,
+  });
+  if (!ads.ok) return { status: 'incomplete', reason: ads.reason };
+  return { status: 'complete', adSetId: adSet.value.id, adIds: ads.adIds };
+}
 
-  const adIds: string[] = [];
-  for (const [index, variation] of draft.variations.entries()) {
-    const name = `${draft.name} — v${index + 1}`;
-    const creativeSpec = {
-      name,
-      pageId: draft.identity.pageId,
-      instagramUserId: draft.identity.instagramActorId,
-      message: variation.primaryText,
-      headline: variation.headline,
-      callToAction: variation.callToAction,
-      // Each ad carries its own utm_content (video-1, imagem-2…).
-      link:
-        applyUtms(draft.destinationUrl, draft.utms, {
-          creativeType: variation.creativeType,
-          position: index + 1,
-        }) ?? draft.destinationUrl,
-      body: bodyOf(variation, index),
-    };
-    // Meta judges the ad with its creative inline first, creating nothing; a
-    // refusal here is the same step failing, with nothing more on the platform.
-    const creative = await step(
-      'creative',
-      `Criativo ${name}`,
-      async () => {
-        const checked = await writer.validateAd({
-          name: `Anúncio ${name}`,
-          adSetId: adSet.value.id,
-          creative: creativeSpec,
-        });
-        if (checked.status !== 'created') {
-          return checked.status === 'rejected'
-            ? { ...checked, message: `validate_only: ${checked.message}` }
-            : checked;
-        }
-        return writer.createCreative(creativeSpec);
-      },
-      (value) => value.id,
-    );
-    if (!creative.ok) return { status: 'incomplete', reason: creative.reason };
-
-    const ad = await step(
-      'ad',
-      `Anúncio ${name}`,
-      () => writer.createAd({ name, adSetId: adSet.value.id, creativeId: creative.value.id }),
-      (value) => value.id,
-    );
-    if (!ad.ok) return { status: 'incomplete', reason: ad.reason };
-    adIds.push(ad.value.id);
-  }
-
-  return { status: 'complete', adSetId: adSet.value.id, adIds };
+/**
+ * New ads in an ad set that already runs (`add_ads`): media, then a creative
+ * and an ad per creative, born paused. Nothing about the campaign or the ad set
+ * is touched.
+ */
+export async function buildAdsInAdSet(
+  db: Database,
+  writer: AdTreeWriter,
+  input: {
+    executionId: string;
+    adAccountId: string;
+    adSetExternalId: string;
+    campaignName: string;
+    pageId: string;
+    instagramActorId: string | null | undefined;
+    destinationUrl: string;
+    utms: CampaignDraft['utms'];
+    variations: CopyVariation[];
+    prepared: PreparedMedia;
+    firstPosition: number;
+  },
+): Promise<BuildResult> {
+  const step = stepperFor(db, input.executionId, 0);
+  const media = await uploadMedia(db, writer, step, input.adAccountId, input.prepared);
+  if (!media.ok) return { status: 'incomplete', reason: media.reason };
+  const ads = await createAds(writer, step, {
+    adSetId: input.adSetExternalId,
+    name: input.campaignName,
+    pageId: input.pageId,
+    instagramActorId: input.instagramActorId,
+    destinationUrl: input.destinationUrl,
+    utms: input.utms,
+    variations: input.variations,
+    uploaded: media.uploaded,
+    firstPosition: input.firstPosition,
+  });
+  if (!ads.ok) return { status: 'incomplete', reason: ads.reason };
+  return { status: 'complete', adSetId: input.adSetExternalId, adIds: ads.adIds };
 }
