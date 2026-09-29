@@ -1,4 +1,6 @@
 import {
+  addAdsPayloadSchema,
+  addAdsRequestSchema,
   approvalDecisionSchema,
   AD_ACCOUNT_PLATFORM,
   campaignDraftSchema,
@@ -21,7 +23,8 @@ import {
 } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { decideApproval, gateChange } from './approvals.js';
-import { reserveCampaignCreation } from './budget-guard.js';
+import { reserveAddAds, reserveCampaignCreation } from './budget-guard.js';
+import { activeAdAccounts } from './metrics.js';
 import { nextPendingInGroup, pendingGroups } from './batches.js';
 import { stepsOfExecution } from './ad-tree.js';
 import { executeApprovedChange, preflightChange } from './executor.js';
@@ -170,6 +173,7 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
           last_execution_id: string | null;
           draft_payload: CampaignDraft | null;
           campaign_end_date: string | null;
+          change_payload: unknown;
         }
       >(sql`
         select ar.id, ar.status, ar.trigger, ar.amount_cents::text as amount_cents,
@@ -178,7 +182,7 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
                coalesce(c.name, d.name) as campaign_name,
                coalesce(c.external_id, '') as campaign_external_id,
                coalesce(c.budget_level, 'campaign') as budget_level, d.payload as draft_payload,
-               c.end_date::text as campaign_end_date,
+               c.end_date::text as campaign_end_date, cr.payload as change_payload,
                cr.kind as change_kind, cr.from_value_cents::text as from_value_cents,
                cr.to_value_cents::text as to_value_cents,
                cr.exposure_delta_cents::text as exposure_delta_cents, cr.reason as request_reason,
@@ -273,9 +277,13 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         campaignForecast = { dailyCents: daily, days, totalCents: daily * days, from: todaySp, until: row.campaign_end_date };
       }
 
+      const addAds =
+        row.change_kind === 'add_ads' ? addAdsPayloadSchema.safeParse(row.change_payload) : null;
+
       const detail: ApprovalDetail = {
         ...toListItem(row),
         campaignForecast,
+        addAds: addAds?.success ? addAds.data : null,
         savedDraftDrift,
         accountId: row.ad_account_id,
         accountExternalId: row.account_external_id,
@@ -520,6 +528,65 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         approvalId: gate.approvalId ?? null,
         changeRequestId: reserved.value.changeRequestId,
         exposureDeltaCents: reserved.value.exposureDeltaCents,
+      });
+    },
+  );
+
+  /**
+   * Asks for new ads (1 to 5 creatives) in a Meta campaign that exists. They
+   * are created born paused, only after a person approves and executes; the
+   * approval shows each creative with the utm_content its ad will carry.
+   */
+  app.post(
+    '/ads/add-ads',
+    { preHandler: app.requirePermission('ads.request') },
+    async (request, reply) => {
+      const parsed = addAdsRequestSchema.safeParse(request.body);
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0];
+        return reply
+          .status(400)
+          .send({ error: 'invalid_request', message: issue?.message ?? 'Dados inválidos' });
+      }
+      const [account] = await activeAdAccounts(db, 'meta');
+      if (!account) {
+        return reply.status(409).send({ error: 'account_not_found', message: 'Nenhuma conta Meta ativa.' });
+      }
+      // Every image and video must be ours, as for a new campaign.
+      const media = parsed.data.variations.map(variationMedia);
+      const creativeIds = media.flatMap((item) => item.creativeIds);
+      const videoIds = media.flatMap((item) => item.videoIds);
+      const [images, videos] = await Promise.all([
+        creativeIds.length
+          ? db.select({ id: adCreativeUploads.id }).from(adCreativeUploads).where(inArray(adCreativeUploads.id, creativeIds))
+          : [],
+        videoIds.length
+          ? db.select({ id: adVideoUploads.id }).from(adVideoUploads).where(inArray(adVideoUploads.id, videoIds))
+          : [],
+      ]);
+      if (images.length !== new Set(creativeIds).size || videos.length !== new Set(videoIds).size) {
+        return reply
+          .status(400)
+          .send({ error: 'media_missing', message: 'Um dos criativos enviados não foi encontrado. Envie de novo.' });
+      }
+
+      const reserved = await reserveAddAds(db, {
+        adAccountId: account.id,
+        request: parsed.data,
+        requestedBy: request.session.actor.employeeId,
+        reason: 'Criativos adicionados pelo construtor',
+      });
+      if (!reserved.ok) {
+        return reply.status(409).send({ error: reserved.reason, message: reserved.message });
+      }
+      const gate = await gateChange(db, {
+        changeRequestId: reserved.value.changeRequestId,
+        notifier: createApprovalNotifier(env, db, (message) => request.log.info(message)),
+      });
+      return reply.status(201).send({
+        approvalId: gate.approvalId ?? null,
+        changeRequestId: reserved.value.changeRequestId,
+        firstPosition: reserved.value.payload.firstPosition,
       });
     },
   );

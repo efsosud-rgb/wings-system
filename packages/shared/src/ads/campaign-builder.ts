@@ -1523,3 +1523,41 @@ export function draftDifferences(
   }
   return differences;
 }
+
+
+// ---------------------------------------------------------------------------
+// New ads in a campaign that already exists (`add_ads`)
+// ---------------------------------------------------------------------------
+
+/**
+ * What a person asks for to add creatives to a Meta campaign that exists:
+ * 1 to 5 creatives, each a new ad in the campaign's ad set, born paused. No
+ * budget changes, but it still goes through approval like every other write.
+ */
+export const addAdsRequestSchema = z.object({
+  campaignExternalId: z.string().regex(/^\d{5,30}$/, 'Escolha a campanha'),
+  /** Only when the campaign has more than one ad set. */
+  adSetExternalId: z.string().regex(/^\d{5,30}$/).optional(),
+  identity: metaIdentitySchema,
+  destinationUrl: z.url({ protocol: /^https$/, error: 'Informe um endereço https:// válido' }),
+  utms: z.object({
+    utm_source: utmValue.min(1, 'Obrigatório'),
+    utm_medium: utmValue.min(1, 'Obrigatório'),
+    utm_campaign: utmValue.min(1, 'Obrigatório'),
+    utm_content: utmValue,
+  }),
+  variations: z
+    .array(copyVariationSchema)
+    .min(MIN_VARIATIONS, 'Envie pelo menos 1 criativo')
+    .max(MAX_VARIATIONS, `No máximo ${MAX_VARIATIONS} criativos por pedido`),
+});
+export type AddAdsRequest = z.output<typeof addAdsRequestSchema>;
+
+/** The request as stored and approved: which ad set, and where the numbering of utm_content resumes. */
+export const addAdsPayloadSchema = addAdsRequestSchema.extend({
+  adSetExternalId: z.string().regex(/^\d{5,30}$/),
+  campaignName: z.string().min(1),
+  /** utm_content position of the first new ad: one after the ads the ad set already has. */
+  firstPosition: z.number().int().min(1),
+});
+export type AddAdsPayload = z.output<typeof addAdsPayloadSchema>;

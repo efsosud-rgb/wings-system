@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { CampaignDraft, DraftDifference } from './campaign-builder.js';
+import type { AddAdsPayload, CampaignDraft, DraftDifference } from './campaign-builder.js';
 
 /**
  * Contract for the approvals panel.
@@ -37,6 +37,7 @@ export const CHANGE_KIND_LABEL: Record<string, string> = {
   pause_campaign: 'Pausar campanha',
   resume_campaign: 'Retomar campanha',
   create_campaign: 'Criar campanha',
+  add_ads: 'Adicionar anúncios',
 };
 
 export interface ApprovalListItem {
@@ -108,6 +109,8 @@ export interface ApprovalDetail extends ApprovalListItem {
   campaignExternalId: string;
   /** The whole campaign being asked for; null for a change to an existing one. */
   draft: CampaignDraft | null;
+  /** The ads being added to an existing campaign (`add_ads`); null for anything else. */
+  addAds: AddAdsPayload | null;
   /**
    * How the request compares with the saved draft of the same name, when one
    * exists: the approver sees in bold what was edited after "Carregar".

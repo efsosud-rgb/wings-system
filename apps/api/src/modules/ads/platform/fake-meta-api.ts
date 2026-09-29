@@ -33,6 +33,8 @@ export interface FakeMetaApiOptions {
   /** The account's spend_cap and amount_spent, both minor-unit strings — what `getAccount` reads. */
   spendCapCents?: string;
   amountSpentCents?: string;
+  /** Ad sets that already exist on the account, as `listAdSets` reads them. */
+  existingAdSets?: { id: string; campaign_id: string; name: string; status: string }[];
 }
 
 const REGIONS = [
@@ -131,7 +133,7 @@ export function fakeMetaApi(options: FakeMetaApiOptions = {}) {
       });
     }
     if (path === `${accountId}/campaigns`) return json(200, { data: state.campaigns });
-    if (path === `${accountId}/adsets`) return json(200, { data: [] });
+    if (path === `${accountId}/adsets`) return json(200, { data: options.existingAdSets ?? [] });
     if (path === `${accountId}/insights`) return json(200, { data: [] });
     if (path === accountId && query.fields === 'funding_source_details') {
       return json(200, { id: accountId });

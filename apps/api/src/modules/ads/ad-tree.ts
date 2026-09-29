@@ -85,15 +85,15 @@ export type PrepareResult =
       message: string;
     };
 
-export async function prepareAdTree(
+/** Reads every image and video the variations use: our database and the video volume, nothing else. */
+export async function prepareMedia(
   db: Database,
-  writer: AdTreeWriter,
-  draft: TreeDraft,
+  variations: CopyVariation[],
   options: { videoDir?: string },
-): Promise<PrepareResult> {
+): Promise<{ ok: true; value: PreparedMedia } | { ok: false; reason: 'media_missing'; message: string }> {
   const creativeIds = new Set<string>();
   const videoIds = new Set<string>();
-  for (const variation of draft.variations) {
+  for (const variation of variations) {
     const media = variationMedia(variation);
     media.creativeIds.forEach((id) => creativeIds.add(id));
     media.videoIds.forEach((id) => videoIds.add(id));
@@ -155,6 +155,19 @@ export async function prepareAdTree(
       };
     }
   }
+
+  return { ok: true, value: { images, videos } };
+}
+
+export async function prepareAdTree(
+  db: Database,
+  writer: AdTreeWriter,
+  draft: TreeDraft,
+  options: { videoDir?: string },
+): Promise<PrepareResult> {
+  const media = await prepareMedia(db, draft.variations, options);
+  if (!media.ok) return media;
+  const { images, videos } = media.value;
 
   try {
     const targeting = await writer.resolveTargeting({

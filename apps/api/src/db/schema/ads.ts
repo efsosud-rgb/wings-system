@@ -70,6 +70,8 @@ export const changeKindEnum = pgEnum('ad_change_kind', [
   'pause_campaign',
   'resume_campaign',
   'create_campaign',
+  // New ads (1 to 5) in the ad set of a campaign that exists, born paused.
+  'add_ads',
 ]);
 
 export const changeStatusEnum = pgEnum('ad_change_status', [
@@ -501,6 +503,11 @@ export const adChangeRequests = pgTable(
     exposureDeltaCents: bigint('exposure_delta_cents', { mode: 'number' }).notNull(),
     /** Hash over the exact change; an approval is bound to this value. */
     payloadHash: text('payload_hash').notNull(),
+    /**
+     * What exactly was asked, for a change that is more than a number
+     * (`add_ads`: the ad set and the creatives). The approval hash covers it.
+     */
+    payload: jsonb('payload'),
     status: changeStatusEnum('status').notNull().default('pending_approval'),
     /** Null when proposed by the agent rather than a person. */
     requestedBy: uuid('requested_by').references(() => employees.id),

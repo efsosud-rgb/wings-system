@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   AD_ACCOUNT_PLATFORM,
   GOOGLE_CHANNEL_TYPE,
+  addAdsPayloadSchema,
   META_OBJECTIVE,
   applyUtms,
   isGooglePlatform,
@@ -24,13 +25,20 @@ import {
 import { writeAudit } from '../../lib/audit.js';
 import {
   buildAdTree,
+  buildAdsInAdSet,
   draftHasTree,
   prepareAdTree,
+  prepareMedia,
   recordStep,
   type PreparedTree,
   type TreeDraft,
 } from './ad-tree.js';
-import { draftPayloadHash, engageKillSwitch, releaseReservation } from './budget-guard.js';
+import {
+  addAdsPayloadHash,
+  draftPayloadHash,
+  engageKillSwitch,
+  releaseReservation,
+} from './budget-guard.js';
 import {
   canPreflight,
   isAdTreeWriter,
@@ -222,6 +230,12 @@ export async function executeApprovedChange(
   if (period.committedCents > allowed) {
     await engageKillSwitch(db, account.id, 'Gasto reportado consumiu o espaço reservado');
     return refuse('cap_no_longer_allows', 'O orçamento do mês não comporta mais esta alteração.');
+  }
+
+  // New ads in an ad set that exists: their own road, since there is no
+  // single write to validate and no campaign or budget to touch.
+  if (change.kind === 'add_ads') {
+    return executeAddAds(db, client, change, account, options, now, refuse);
   }
 
   // What the write is aimed at: an existing campaign, or the draft of a new one.
@@ -691,7 +705,9 @@ export async function companionsOf(db: Database, campaignId: string): Promise<Re
     .where(
       and(
         eq(adChangeRequests.campaignId, campaignId),
-        eq(adChangeRequests.kind, 'create_campaign'),
+        // What this system created under the campaign: the tree of its
+        // creation and the ads added to it later.
+        inArray(adChangeRequests.kind, ['create_campaign', 'add_ads']),
         eq(adExecutionSteps.status, 'created'),
         // Google records its ad groups as `ad_group`, Meta its ad sets as `ad_set`.
         inArray(adExecutionSteps.kind, ['ad_group', 'ad_set', 'ad']),
@@ -740,6 +756,16 @@ export async function preflightChange(
     return refuse('wrong_account', 'O cliente da plataforma não pertence à conta desta alteração.');
   }
 
+  // New ads are validated one by one inside their execution (validate_only
+  // with the creative inline), right before each is created.
+  if (change.kind === 'add_ads') {
+    return {
+      ok: false,
+      status: 'unavailable',
+      reason: 'Os anúncios novos são validados um a um na execução, antes de cada criação.',
+    };
+  }
+
   let write: PlannedWrite;
   if (change.kind === 'create_campaign') {
     const stored = change.draftId
@@ -777,4 +803,149 @@ export async function preflightChange(
   if (outcome.status === 'ok') return { ok: true, status: 'ok', operations: outcome.operations };
   if (outcome.status === 'rejected') return { ok: false, ...outcome };
   return { ok: false, status: 'unavailable', reason: outcome.reason };
+}
+
+
+/**
+ * Executes an approved `add_ads`: the stored payload must still hash to what
+ * was approved, the ad set must still belong to the campaign on the platform,
+ * and every file must be here before the first write. Then media, and a
+ * creative and an ad per creative (each validated first), all born paused.
+ * Nothing created: rejected. Something created and then a stop: unknown, the
+ * account frozen, as any partial write.
+ */
+async function executeAddAds(
+  db: Database,
+  client: AdsPlatformClient,
+  change: typeof adChangeRequests.$inferSelect,
+  account: typeof adAccounts.$inferSelect,
+  options: ExecuteOptions,
+  now: Date,
+  refuse: (reason: ExecutionRefusal, message: string) => ExecutionResult,
+): Promise<ExecutionResult> {
+  const parsed = addAdsPayloadSchema.safeParse(change.payload);
+  if (!parsed.success) return refuse('draft_missing', 'O pedido dos anúncios não foi encontrado.');
+  const payload = parsed.data;
+  if (addAdsPayloadHash({ adAccountId: account.id, payload }) !== change.payloadHash) {
+    return refuse('payload_changed', 'O pedido mudou depois da aprovação.');
+  }
+  const campaign = change.campaignId
+    ? await db.query.adCampaigns.findFirst({ where: eq(adCampaigns.id, change.campaignId) })
+    : undefined;
+  if (!campaign) return refuse('campaign_missing', 'Campanha não encontrada.');
+  if (!isAdTreeWriter(client)) {
+    return refuse('writes_disabled', 'O cliente desta plataforma não cria anúncios.');
+  }
+
+  // The ad set must still be this campaign's, as the approver was told.
+  const liveSets = await client.listAdSets().catch(() => null);
+  if (!liveSets) {
+    return refuse('platform_unavailable', 'A Meta não respondeu à leitura dos conjuntos. Nada foi enviado.');
+  }
+  const liveSet = liveSets.find((set) => set.id === payload.adSetExternalId);
+  if (!liveSet || liveSet.campaignId !== campaign.externalId) {
+    return refuse(
+      'platform_drift',
+      'O conjunto de anúncios não pertence mais a esta campanha na Meta. Solicite uma nova aprovação.',
+    );
+  }
+
+  const media = await prepareMedia(db, payload.variations, { videoDir: options.videoDir });
+  if (!media.ok) return refuse(media.reason, media.message);
+
+  const [execution] = await db
+    .insert(adExecutions)
+    .values({
+      changeRequestId: change.id,
+      idempotencyKey: randomUUID(),
+      requestHash: requestHashOf({
+        campaign: campaign.externalId,
+        adSet: payload.adSetExternalId,
+        kind: change.kind,
+        payload: change.payloadHash,
+      }),
+      startedAt: now,
+    })
+    .returning({ id: adExecutions.id });
+  if (!execution) throw new Error('failed to record execution');
+  await db.update(adChangeRequests).set({ status: 'executing' }).where(eq(adChangeRequests.id, change.id));
+
+  const built = await buildAdsInAdSet(db, client, {
+    executionId: execution.id,
+    adAccountId: account.id,
+    adSetExternalId: payload.adSetExternalId,
+    campaignName: payload.campaignName,
+    pageId: payload.identity.pageId,
+    instagramActorId: payload.identity.instagramActorId,
+    destinationUrl: payload.destinationUrl,
+    utms: payload.utms,
+    variations: payload.variations,
+    prepared: media.value,
+    firstPosition: payload.firstPosition,
+  });
+
+  if (built.status === 'complete') {
+    await db
+      .update(adExecutions)
+      .set({ outcome: 'applied', finishedAt: new Date(), platformResponse: { status: 'applied', adIds: built.adIds } })
+      .where(eq(adExecutions.id, execution.id));
+    await db
+      .update(adChangeRequests)
+      .set({ status: 'executed', executedAt: new Date() })
+      .where(eq(adChangeRequests.id, change.id));
+    await writeAudit(db, {
+      actorEmployeeId: options.actorEmployeeId ?? null,
+      action: 'ads.change_executed',
+      entity: 'ad_change_request',
+      entityId: change.id,
+      metadata: { platform: account.platform, kind: change.kind, adIds: built.adIds, adSet: payload.adSetExternalId },
+    });
+    return { ok: true, outcome: 'applied', executionId: execution.id };
+  }
+
+  const created = await db
+    .select({ id: adExecutionSteps.id })
+    .from(adExecutionSteps)
+    .where(and(eq(adExecutionSteps.executionId, execution.id), eq(adExecutionSteps.status, 'created')));
+  if (created.length === 0) {
+    // Refused before anything existed (validate_only, most likely): nothing to look after.
+    await db
+      .update(adExecutions)
+      .set({ outcome: 'rejected', finishedAt: new Date(), platformResponse: { message: built.reason } })
+      .where(eq(adExecutions.id, execution.id));
+    await db.update(adChangeRequests).set({ status: 'failed' }).where(eq(adChangeRequests.id, change.id));
+    await writeAudit(db, {
+      actorEmployeeId: options.actorEmployeeId ?? null,
+      action: 'ads.change_rejected_by_platform',
+      entity: 'ad_change_request',
+      entityId: change.id,
+      metadata: { kind: change.kind, reason: built.reason },
+    });
+    return { ok: false, outcome: 'rejected', executionId: execution.id, code: 'add_ads_refused', message: built.reason };
+  }
+
+  // Part of it exists: the same road as any unknown outcome.
+  await db
+    .update(adExecutions)
+    .set({ outcome: 'unknown', finishedAt: new Date(), platformResponse: { reason: built.reason } })
+    .where(eq(adExecutions.id, execution.id));
+  await db.update(adChangeRequests).set({ status: 'unknown' }).where(eq(adChangeRequests.id, change.id));
+  await db.insert(adGuardrailEvents).values({
+    adAccountId: account.id,
+    kind: 'unknown_execution_outcome',
+    detail: { changeRequestId: change.id, executionId: execution.id, reason: built.reason },
+  });
+  await engageKillSwitch(
+    db,
+    account.id,
+    'Criação de anúncios interrompida no meio: verifique a plataforma antes de continuar',
+  );
+  await writeAudit(db, {
+    actorEmployeeId: options.actorEmployeeId ?? null,
+    action: 'ads.change_outcome_unknown',
+    entity: 'ad_change_request',
+    entityId: change.id,
+    metadata: { reason: built.reason },
+  });
+  return { ok: false, outcome: 'unknown', executionId: execution.id, reason: built.reason };
 }
