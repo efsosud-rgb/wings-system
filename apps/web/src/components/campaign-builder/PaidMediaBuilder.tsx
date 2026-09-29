@@ -26,6 +26,7 @@ import {
   MIN_SEARCH_DESCRIPTIONS,
   MIN_SEARCH_HEADLINES,
   MAX_VARIATIONS,
+  adUtmContent,
   MAX_VIDEO_BYTES,
   MIN_AGE,
   MIN_CAROUSEL_CARDS,
@@ -629,7 +630,7 @@ function CarouselCards({
       </p>
       {list.fields.map((field, cardIndex) => {
         const card = cards[cardIndex];
-        const label = `Variação ${index + 1}, cartão ${cardIndex + 1}`;
+        const label = `Criativo ${index + 1}, cartão ${cardIndex + 1}`;
         const path = `variations.${index}.cards.${cardIndex}` as const;
         const mediaType = card?.mediaType ?? 'image';
         return (
@@ -794,7 +795,8 @@ export function PaidMediaBuilder({
       formatKey: 'feed_square',
       // Wings' contact page: the RD form there feeds the Formatação funnel.
       destinationUrl: 'https://wingscompany.com.br/contato/',
-      variations: Array.from({ length: MIN_VARIATIONS }, () => ({
+      // Opens with two, so the platform has something to compare; one is allowed.
+      variations: Array.from({ length: 2 }, () => ({
         creativeType: 'image' as const,
         creativeId: '',
         cards: [],
@@ -1188,7 +1190,7 @@ export function PaidMediaBuilder({
     : appliedProposal.platform === 'youtube' && appliedProposal.youtube
       ? [{ label: 'Vídeo', brief: appliedProposal.youtube.mediaBrief }]
       : appliedProposal.copy.map((copy, index) => ({
-          label: `Variação ${index + 1}`,
+          label: `Criativo ${index + 1}`,
           brief: copy.mediaBrief,
         }));
 
@@ -1204,6 +1206,27 @@ export function PaidMediaBuilder({
 
   const format = CREATIVE_FORMATS.meta.find((item) => item.key === values.formatKey);
   const formVariations = values.variations ?? [];
+  // "Usar o mesmo texto em todos": the first creative's copy is written into
+  // every other one, so the draft (and the approval) still lists each ad's text.
+  const [sameCopy, setSameCopy] = useState(false);
+  const firstCopy = formVariations[0];
+  useEffect(() => {
+    if (!sameCopy || !firstCopy) return;
+    const options = { shouldDirty: true, shouldValidate: submitCount > 0 };
+    for (let index = 1; index < variations.fields.length; index += 1) {
+      setValue(`variations.${index}.headline`, firstCopy.headline ?? '', options);
+      setValue(`variations.${index}.primaryText`, firstCopy.primaryText ?? '', options);
+      setValue(`variations.${index}.callToAction`, firstCopy.callToAction ?? 'LEARN_MORE', options);
+    }
+  }, [
+    sameCopy,
+    firstCopy?.headline,
+    firstCopy?.primaryText,
+    firstCopy?.callToAction,
+    variations.fields.length,
+    setValue,
+    submitCount,
+  ]);
   const findingsByVariation = formVariations.map((variation) => [
     ...checkCopyCompliance(variation.headline ?? ''),
     ...checkCopyCompliance(variation.primaryText ?? ''),
@@ -1254,7 +1277,11 @@ export function PaidMediaBuilder({
   const copyFields = (index: number) => (
     <div className="builder-variation" key={variations.fields[index]?.id ?? index}>
       <div className="builder-variation-head">
-        <strong>Variação {index + 1}</strong>
+        <strong>
+          {sameCopy && index === 0 && variations.fields.length > 1
+            ? 'Texto de todos os criativos'
+            : `Criativo ${index + 1}`}
+        </strong>
         {index >= MIN_VARIATIONS && (
           <button type="button" className="link-button" onClick={() => variations.remove(index)}>
             Remover
@@ -1686,6 +1713,22 @@ export function PaidMediaBuilder({
               </label>
             </div>
             {values.placements?.mode === 'manual' && (
+              <p className="builder-placement-presets">
+                <button
+                  type="button"
+                  className="link-button"
+                  onClick={() => {
+                    const options = { shouldDirty: true, shouldValidate: submitCount > 0 };
+                    setValue('placements.facebook', [], options);
+                    setValue('placements.threads', [], options);
+                    setValue('placements.instagram', ['feed', 'stories', 'reels'], options);
+                  }}
+                >
+                  Só Instagram (Feed, Stories e Reels)
+                </button>
+              </p>
+            )}
+            {values.placements?.mode === 'manual' && (
               <div className="builder-placements">
                 {PLACEMENT_PUBLISHERS.map((publisher) => (
                   <fieldset key={publisher} className="builder-placement-group">
@@ -1823,19 +1866,25 @@ export function PaidMediaBuilder({
           <BuilderSection
             step={stepOf('creative')}
             title="Criativo"
-            why="A imagem é o que faz a pessoa parar de rolar o feed. Uma por variação, para a Meta descobrir qual segura mais gente."
+            why="A imagem é o que faz a pessoa parar de rolar o feed. Cada criativo vira um anúncio, para a Meta descobrir qual segura mais gente."
           >
             <p className="field-hint">
-              Um criativo por variação: imagem única, vídeo ou carrossel. Fica guardado no Wings
+              De 1 a 5 criativos, cada um um anúncio: imagem única, vídeo ou carrossel. Fica guardado no Wings
               System — só vai para a Meta quando um pedido aprovado for executado.
             </p>
             {variations.fields.map((field, index) => {
               const variation = formVariations[index];
               const creativeType: CreativeType = variation?.creativeType ?? 'image';
-              const label = `Variação ${index + 1}`;
+              const label = `Criativo ${index + 1}`;
               const options = { shouldDirty: true, shouldValidate: submitCount > 0 };
               return (
                 <div className="builder-variation" key={field.id}>
+                  <div className="builder-variation-head">
+                    <strong>{label}</strong>
+                    <span className="cell-sub">
+                      utm_content: {adUtmContent({ creativeType, position: index + 1 })}
+                    </span>
+                  </div>
                   <div
                     className="builder-segmented"
                     role="group"
@@ -1998,10 +2047,21 @@ export function PaidMediaBuilder({
             why="A Meta testa as versões entre si e entrega mais a que dá mais resultado. Com uma só, não há o que comparar."
           >
             <p className="field-hint">
-              De {MIN_VARIATIONS} a {MAX_VARIATIONS} por campanha, para a plataforma ter o que
-              comparar.
+              De {MIN_VARIATIONS} a {MAX_VARIATIONS} criativos no mesmo conjunto: cada um vira um
+              anúncio, com o seu próprio utm_content (video-1, imagem-2…) para o lead dizer de qual
+              veio.
             </p>
-            {variations.fields.slice(1).map((_, offset) => copyFields(offset + 1))}
+            {variations.fields.length > 1 && (
+              <label className="builder-state">
+                <input
+                  type="checkbox"
+                  checked={sameCopy}
+                  onChange={(event) => setSameCopy(event.target.checked)}
+                />
+                <span>Usar o mesmo texto, título e botão em todos os criativos</span>
+              </label>
+            )}
+            {!sameCopy && variations.fields.slice(1).map((_, offset) => copyFields(offset + 1))}
             {variations.fields.length < MAX_VARIATIONS && (
               <Button
                 type="button"
@@ -2017,7 +2077,7 @@ export function PaidMediaBuilder({
                   })
                 }
               >
-                + Adicionar variação
+                + Adicionar criativo
               </Button>
             )}
             {errors.variations?.root?.message && (
@@ -2394,7 +2454,10 @@ export function PaidMediaBuilder({
           ))}
         </div>
         <p className="field-hint builder-url mono">
-          {applyUtms(values.destinationUrl ?? '', values.utms, 0) ??
+          {applyUtms(values.destinationUrl ?? '', values.utms, {
+            creativeType: values.variations?.[0]?.creativeType ?? 'image',
+            position: 1,
+          }) ??
             'Informe a página de destino para ver o endereço final.'}
         </p>
       </BuilderSection>
@@ -2541,7 +2604,10 @@ export function PaidMediaBuilder({
           <dd>Pausada</dd>
           <dt>Destino com UTMs</dt>
           <dd className="mono builder-url">
-            {applyUtms(values.destinationUrl ?? '', values.utms, 0) ?? '—'}
+            {applyUtms(values.destinationUrl ?? '', values.utms, {
+            creativeType: values.variations?.[0]?.creativeType ?? 'image',
+            position: 1,
+          }) ?? '—'}
           </dd>
         </dl>
 

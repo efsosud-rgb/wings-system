@@ -356,7 +356,10 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
         )}
         <div>
           <span className="field-label">Destino com UTMs</span>
-          <p className="mono builder-url">{applyUtms(draft.destinationUrl, draft.utms, 0)}</p>
+          <p className="mono builder-url">{applyUtms(draft.destinationUrl, draft.utms, {
+              creativeType: draft.variations[0]?.creativeType ?? 'image',
+              position: 1,
+            })}</p>
         </div>
       </div>
       <div className="readonly draft-audience">

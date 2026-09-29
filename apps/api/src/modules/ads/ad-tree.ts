@@ -386,7 +386,9 @@ export async function buildAdTree(
           media: mediaOf(card.mediaType === 'video' ? card.videoId : card.creativeId),
           headline: card.headline,
           description: card.description,
-          link: applyUtms(card.link, draft.utms, index) ?? card.link,
+          link:
+            applyUtms(card.link, draft.utms, { creativeType: 'carousel', position: index + 1 }) ??
+            card.link,
         })),
       };
     }
@@ -406,7 +408,12 @@ export async function buildAdTree(
       message: variation.primaryText,
       headline: variation.headline,
       callToAction: variation.callToAction,
-      link: applyUtms(draft.destinationUrl, draft.utms, index) ?? draft.destinationUrl,
+      // Each ad carries its own utm_content (video-1, imagem-2…).
+      link:
+        applyUtms(draft.destinationUrl, draft.utms, {
+          creativeType: variation.creativeType,
+          position: index + 1,
+        }) ?? draft.destinationUrl,
       body: bodyOf(variation, index),
     };
     // Meta judges the ad with its creative inline first, creating nothing; a

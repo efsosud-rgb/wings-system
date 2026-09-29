@@ -464,13 +464,37 @@ export function buildUtms(input: {
     utm_source: UTM_SOURCE[input.platform],
     utm_medium: UTM_MEDIUM[input.platform],
     utm_campaign: utmSlug(input.campaignName) || 'campanha',
-    // One value per campaign; each variation appends its own suffix (-v1, -v2).
+    // One value per campaign. Meta ads replace it with their own
+    // (`adUtmContent`: video-1, imagem-2…) so a lead tells which ad it came from.
     utm_content: input.objective,
   };
 }
 
-/** The destination URL with UTMs applied; null while the URL is not valid. */
-export function applyUtms(url: string, utms: UtmParams, variationIndex?: number): string | null {
+const CREATIVE_UTM_LABEL: Record<CreativeType, string> = {
+  video: 'video',
+  image: 'imagem',
+  carousel: 'carrossel',
+};
+
+/**
+ * The utm_content of one Meta ad: its kind and its position among the ads of
+ * the ad set, counted from 1 (video-1, imagem-2, carrossel-3). The RD lead and
+ * the Leads das Campanhas screen read it to say which ad brought the lead.
+ */
+export function adUtmContent(ad: { creativeType: CreativeType; position: number }): string {
+  return `${CREATIVE_UTM_LABEL[ad.creativeType]}-${ad.position}`;
+}
+
+/**
+ * The destination URL with UTMs applied; null while the URL is not valid.
+ * With `ad`, utm_content is that ad's own value (`adUtmContent`) instead of
+ * the campaign's.
+ */
+export function applyUtms(
+  url: string,
+  utms: UtmParams,
+  ad?: { creativeType: CreativeType; position: number },
+): string | null {
   // Plain string handling: this package compiles without DOM or Node types,
   // so the URL class is not available here.
   const trimmed = url.trim();
@@ -486,11 +510,9 @@ export function applyUtms(url: string, utms: UtmParams, variationIndex?: number)
     .filter((pair) => pair !== '' && !utmKeys.includes(pair.split('=')[0] ?? ''));
 
   for (const key of UTM_KEYS) {
-    const value = utms[key].trim();
+    const value = key === 'utm_content' && ad ? adUtmContent(ad) : utms[key].trim();
     if (!value) continue;
-    const suffix =
-      key === 'utm_content' && variationIndex !== undefined ? `-v${variationIndex + 1}` : '';
-    params.push(`${key}=${encodeURIComponent(`${value}${suffix}`)}`);
+    params.push(`${key}=${encodeURIComponent(value)}`);
   }
 
   const hash = hashParts.length > 0 ? `#${hashParts.join('#')}` : '';
@@ -726,8 +748,9 @@ export function describeReach(
 // The draft
 // ---------------------------------------------------------------------------
 
-export const MIN_VARIATIONS = 2;
-export const MAX_VARIATIONS = 3;
+/** Creatives per ad set: each becomes its own ad. One is enough; five at most. */
+export const MIN_VARIATIONS = 1;
+export const MAX_VARIATIONS = 5;
 export const HEADLINE_MAX = 40;
 export const PRIMARY_TEXT_MAX = 500;
 /** Meta truncates primary text around here on most placements. */
@@ -1268,7 +1291,7 @@ export const campaignDraftSchema = z
     /** Meta only: image plus copy. Google drafts send none. */
     variations: z
       .array(copyVariationSchema)
-      .max(MAX_VARIATIONS, `No máximo ${MAX_VARIATIONS} variações`)
+      .max(MAX_VARIATIONS, `No máximo ${MAX_VARIATIONS} criativos por conjunto`)
       .default([]),
     /**
      * Meta only, and absent on drafts from before ad sets existed: those create
@@ -1347,7 +1370,7 @@ export const campaignDraftSchema = z
         ctx.addIssue({
           code: 'custom',
           path: ['variations'],
-          message: `Crie pelo menos ${MIN_VARIATIONS} variações`,
+          message: 'Envie pelo menos 1 criativo',
         });
       }
       if (draft.youtube) foreign('youtube', 'O vídeo do YouTube');

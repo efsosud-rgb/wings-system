@@ -142,7 +142,7 @@ describe('the agent contract', () => {
     ['no placements', { placements: undefined }, 'Informe os posicionamentos'],
     ['no format', { formatKey: undefined }, 'Informe o formato'],
     ['no age range', { ageMin: undefined }, 'Informe a faixa de idade'],
-    ['a single variation', { copy: campaign.copy.slice(0, 1) }, 'variações de texto'],
+    ['no variation', { copy: [] }, 'variações de texto'],
     [
       'a variation with no brief for Design',
       { copy: campaign.copy.map((item) => without(item, 'mediaBrief')) },

@@ -228,7 +228,7 @@ export function AdPreviewGallery({
         {variations.map((variation, index) => (
           <AdPreview
             key={index}
-            label={`Variação ${index + 1}`}
+            label={`Criativo ${index + 1}`}
             {...variation}
             destinationUrl={destinationUrl}
             format={format}

@@ -8,6 +8,7 @@ import {
   RADIUS_NOT_ACCEPTED_HINT,
   describeReach,
   reachSchema,
+  adUtmContent,
   applyUtms,
   buildUtms,
   campaignDays,
@@ -138,11 +139,20 @@ describe('UTMs', () => {
     );
   });
 
-  it('applies them to the destination, one content value per variation', () => {
+  it('applies them to the destination, each ad with its own utm_content (video-1, imagem-2…)', () => {
     const utms = buildUtms({ platform: 'meta', objective: 'lead', campaignName: 'Teste' });
-    expect(applyUtms('https://wingscompany.com.br/franquia?x=1', utms, 1)).toBe(
-      'https://wingscompany.com.br/franquia?x=1&utm_source=facebook&utm_medium=cpc&utm_campaign=teste&utm_content=lead-v2',
+    expect(
+      applyUtms('https://wingscompany.com.br/franquia?x=1', utms, {
+        creativeType: 'image',
+        position: 2,
+      }),
+    ).toBe(
+      'https://wingscompany.com.br/franquia?x=1&utm_source=facebook&utm_medium=cpc&utm_campaign=teste&utm_content=imagem-2',
     );
+    expect(adUtmContent({ creativeType: 'video', position: 1 })).toBe('video-1');
+    expect(adUtmContent({ creativeType: 'carousel', position: 3 })).toBe('carrossel-3');
+    // Without an ad, the campaign's own value.
+    expect(applyUtms('https://x.com.br/', utms)).toContain('utm_content=lead');
     expect(applyUtms('não é url', utms)).toBeNull();
   });
 });
@@ -272,10 +282,16 @@ describe('the draft schema', () => {
     expect(result.error?.issues[0]?.message).toBe('Envie o criativo desta variação');
   });
 
-  it('demands two to three variations', () => {
+  it('takes one to five creatives in the ad set', () => {
+    expect(campaignDraftSchema.safeParse({ ...valid, variations: [] }).success).toBe(false);
     expect(campaignDraftSchema.safeParse({ ...valid, variations: [variations[0]] }).success).toBe(
-      false,
+      true,
     );
+    const five = Array.from({ length: 5 }, () => variations[0]);
+    expect(campaignDraftSchema.safeParse({ ...valid, variations: five }).success).toBe(true);
+    expect(
+      campaignDraftSchema.safeParse({ ...valid, variations: [...five, variations[0]] }).success,
+    ).toBe(false);
   });
 
   it('refuses an end before the start, an http destination and an unknown format', () => {

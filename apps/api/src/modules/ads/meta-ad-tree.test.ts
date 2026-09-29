@@ -262,12 +262,12 @@ describe('image ads, automatic placements', () => {
     expect(targeting).toMatchObject({ age_min: 25, age_max: 65, locales: [31] });
     expect(targeting).not.toHaveProperty('publisher_platforms');
 
-    // Each variation's link carries its own UTM suffix.
+    // Each ad's link carries its own utm_content: its kind and position.
     const links = api
       .writes('adcreatives')
       .map((call) => JSON.parse(call.fields.object_story_spec ?? '{}').link_data.link as string);
-    expect(links[0]).toContain('utm_content=lead-v1');
-    expect(links[1]).toContain('utm_content=lead-v2');
+    expect(links[0]).toContain('utm_content=imagem-1');
+    expect(links[1]).toContain('utm_content=imagem-2');
 
     const steps = await stepsOfExecution(db, executionIdOf(result));
     expect(steps.map((step) => [step.seq, step.kind, step.status])).toEqual([
