@@ -257,7 +257,9 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
       // Total to the end: daily × days. A new campaign runs its whole period;
       // a budget change runs from today (São Paulo) to the campaign's end.
       const dayCount = (from: string, until: string) =>
-        Math.round((Date.parse(`${until}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86_400_000) + 1;
+        Math.round(
+          (Date.parse(`${until}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86_400_000,
+        ) + 1;
       const todaySp = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(
         app.wings.now?.() ?? new Date(),
       );
@@ -265,7 +267,13 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
       if (row.change_kind === 'create_campaign' && row.draft_payload) {
         const { startDate, endDate, dailyBudgetCents } = row.draft_payload;
         const days = dayCount(startDate, endDate);
-        campaignForecast = { dailyCents: dailyBudgetCents, days, totalCents: dailyBudgetCents * days, from: startDate, until: endDate };
+        campaignForecast = {
+          dailyCents: dailyBudgetCents,
+          days,
+          totalCents: dailyBudgetCents * days,
+          from: startDate,
+          until: endDate,
+        };
       } else if (
         row.change_kind === 'set_daily_budget' &&
         row.to_value_cents !== null &&
@@ -274,7 +282,13 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
       ) {
         const days = dayCount(todaySp, row.campaign_end_date);
         const daily = Number(row.to_value_cents);
-        campaignForecast = { dailyCents: daily, days, totalCents: daily * days, from: todaySp, until: row.campaign_end_date };
+        campaignForecast = {
+          dailyCents: daily,
+          days,
+          totalCents: daily * days,
+          from: todaySp,
+          until: row.campaign_end_date,
+        };
       }
 
       const addAds =
@@ -550,7 +564,9 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
       }
       const [account] = await activeAdAccounts(db, 'meta');
       if (!account) {
-        return reply.status(409).send({ error: 'account_not_found', message: 'Nenhuma conta Meta ativa.' });
+        return reply
+          .status(409)
+          .send({ error: 'account_not_found', message: 'Nenhuma conta Meta ativa.' });
       }
       // Every image and video must be ours, as for a new campaign.
       const media = parsed.data.variations.map(variationMedia);
@@ -558,16 +574,25 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
       const videoIds = media.flatMap((item) => item.videoIds);
       const [images, videos] = await Promise.all([
         creativeIds.length
-          ? db.select({ id: adCreativeUploads.id }).from(adCreativeUploads).where(inArray(adCreativeUploads.id, creativeIds))
+          ? db
+              .select({ id: adCreativeUploads.id })
+              .from(adCreativeUploads)
+              .where(inArray(adCreativeUploads.id, creativeIds))
           : [],
         videoIds.length
-          ? db.select({ id: adVideoUploads.id }).from(adVideoUploads).where(inArray(adVideoUploads.id, videoIds))
+          ? db
+              .select({ id: adVideoUploads.id })
+              .from(adVideoUploads)
+              .where(inArray(adVideoUploads.id, videoIds))
           : [],
       ]);
       if (images.length !== new Set(creativeIds).size || videos.length !== new Set(videoIds).size) {
         return reply
           .status(400)
-          .send({ error: 'media_missing', message: 'Um dos criativos enviados não foi encontrado. Envie de novo.' });
+          .send({
+            error: 'media_missing',
+            message: 'Um dos criativos enviados não foi encontrado. Envie de novo.',
+          });
       }
 
       const reserved = await reserveAddAds(db, {

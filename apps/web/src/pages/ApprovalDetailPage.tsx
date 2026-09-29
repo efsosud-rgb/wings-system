@@ -13,6 +13,7 @@ import {
   PREVIEW_PLACEMENT_LABEL,
   adUtmContent,
   applyUtms,
+  type AddAdsPayload,
   campaignDays,
   describeReach,
   estimateCostCents,
@@ -246,7 +247,8 @@ function Summary({ approval }: { approval: ApprovalDetail }) {
           <p>
             {approval.requestedByAgent
               ? 'Agente de tráfego pago'
-              : (approval.requestedByName ?? 'Pedido pelo terminal (ops-cli), sem pessoa registrada')}
+              : (approval.requestedByName ??
+                'Pedido pelo terminal (ops-cli), sem pessoa registrada')}
           </p>
           {approval.suggestedByAgent && <span className="tag tag-agent">sugerido pelo agente</span>}
           <span className="cell-sub">{formatDateTime(approval.requestedAt)}</span>
@@ -255,6 +257,60 @@ function Summary({ approval }: { approval: ApprovalDetail }) {
       {approval.requestReason && (
         <p className="field-hint">Justificativa: {approval.requestReason}</p>
       )}
+    </section>
+  );
+}
+
+/** New ads in a campaign that exists: where they go and each creative, as they will be created. */
+function AddAdsSection({ addAds }: { addAds: AddAdsPayload }) {
+  return (
+    <section className="block">
+      <legend>Os anúncios que serão adicionados</legend>
+      <Alert kind="info">
+        Entram <strong>pausados</strong> no conjunto que a campanha já tem. A verba, o público e os
+        anúncios que já existem não mudam. Cada anúncio é validado pela Meta antes de ser criado.
+      </Alert>
+      <div className="grid-2 readonly">
+        <div>
+          <span className="field-label">Campanha</span>
+          <p>{addAds.campaignName}</p>
+          <span className="cell-sub mono">{addAds.campaignExternalId}</span>
+        </div>
+        <div>
+          <span className="field-label">Conjunto de anúncios</span>
+          <p className="mono">{addAds.adSetExternalId}</p>
+        </div>
+        <div>
+          <span className="field-label">Página e Instagram</span>
+          <p>Página {addAds.identity.pageId}</p>
+          <span className="cell-sub">
+            {addAds.identity.instagramActorId
+              ? `Instagram ${addAds.identity.instagramActorId}`
+              : 'sem conta do Instagram'}
+          </span>
+        </div>
+        <div>
+          <span className="field-label">Destino</span>
+          <p className="mono builder-url">{addAds.destinationUrl}</p>
+        </div>
+      </div>
+      <span className="field-label">Criativos ({addAds.variations.length})</span>
+      <ol className="add-ads-list">
+        {addAds.variations.map((variation, index) => (
+          <li key={index}>
+            <strong>{CREATIVE_TYPE_LABEL[variation.creativeType ?? 'image']}</strong> —{' '}
+            {variation.headline}
+            <span className="cell-sub">{variation.primaryText}</span>
+            <span className="cell-sub mono">
+              utm_content=
+              {adUtmContent({
+                creativeType: variation.creativeType ?? 'image',
+                position: addAds.firstPosition + index,
+              })}
+            </span>
+          </li>
+        ))}
+      </ol>
     </section>
   );
 }
@@ -284,8 +340,8 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
       ) : draft.platform === 'google_search' && draft.search ? (
         <Alert kind="info">
           Tudo nasce <strong>pausado</strong>: a campanha, o grupo de anúncios e o anúncio, numa
-          única escrita atômica no Google (ou entra tudo, ou nada). Não entrega e não gasta.
-          Ativar é um pedido de <strong>retomada</strong>, com aprovação própria, que liga os três.
+          única escrita atômica no Google (ou entra tudo, ou nada). Não entrega e não gasta. Ativar
+          é um pedido de <strong>retomada</strong>, com aprovação própria, que liga os três.
         </Alert>
       ) : draft.startPaused ? (
         <Alert kind="info">
@@ -379,16 +435,20 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
             <span className="field-label">Tipo no Google</span>
             <p>Pesquisa (só a rede de pesquisa do Google)</p>
             {draft.search && (
-              <span className="cell-sub">Grupo de anúncios: {draft.search.adGroupName?.trim() || draft.name}</span>
+              <span className="cell-sub">
+                Grupo de anúncios: {draft.search.adGroupName?.trim() || draft.name}
+              </span>
             )}
           </div>
         )}
         <div>
           <span className="field-label">Destino com UTMs</span>
-          <p className="mono builder-url">{applyUtms(draft.destinationUrl, draft.utms, {
+          <p className="mono builder-url">
+            {applyUtms(draft.destinationUrl, draft.utms, {
               creativeType: draft.variations[0]?.creativeType ?? 'image',
               position: 1,
-            })}</p>
+            })}
+          </p>
         </div>
       </div>
       <div className="readonly draft-audience">
@@ -412,7 +472,9 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
               {(draft.search.bidding ?? 'maximize_clicks') === 'maximize_clicks' &&
                 ` de ${formatBrl(draft.search.maxCpcCents ?? null)}`}
             </p>
-            <span className="field-label">Palavras-chave negativas (campanha, correspondência de frase)</span>
+            <span className="field-label">
+              Palavras-chave negativas (campanha, correspondência de frase)
+            </span>
             <p>{draft.search.negativeKeywords.join(' · ') || '—'}</p>
             <span className="field-label">Títulos ({draft.search.headlines.length})</span>
             <p>{draft.search.headlines.join(' | ')}</p>
@@ -593,7 +655,11 @@ function NextRequests({ approval }: { approval: ApprovalDetail }) {
         />
       </Field>
       <div className="form-actions">
-        <Button type="button" disabled={request.isPending} onClick={() => void file('resume_campaign')}>
+        <Button
+          type="button"
+          disabled={request.isPending}
+          onClick={() => void file('resume_campaign')}
+        >
           Pedir ativação da campanha
         </Button>
         <Button
@@ -722,7 +788,9 @@ export function ApprovalDetailPage() {
       <Summary approval={approval} />
       {approval.savedDraftDrift && approval.savedDraftDrift.differences.length > 0 && (
         <Alert kind="error">
-          <strong>Este pedido difere do rascunho salvo “{approval.savedDraftDrift.savedDraftName}”</strong>{' '}
+          <strong>
+            Este pedido difere do rascunho salvo “{approval.savedDraftDrift.savedDraftName}”
+          </strong>{' '}
           (salvo em {formatDateTime(approval.savedDraftDrift.savedAt)}). Confira antes de aprovar:
           <ul className="draft-drift">
             {approval.savedDraftDrift.differences.map((item) => (
@@ -741,6 +809,7 @@ export function ApprovalDetailPage() {
         </Alert>
       )}
       {approval.draft && <DraftCampaign draft={approval.draft} />}
+      {approval.addAds && <AddAdsSection addAds={approval.addAds} />}
       {approval.changeKind === 'resume_campaign' && approval.changeStatus !== 'executed' && (
         <Alert kind="info">
           {approval.platform === 'google' ? (
@@ -765,7 +834,7 @@ export function ApprovalDetailPage() {
           <Preflight approvalId={id} />
         )}
       {/* The simulator explores budgets of a campaign that exists; a draft has none yet. */}
-      {id && !approval.draft && <ApprovalSimulator approvalId={id} />}
+      {id && !approval.draft && !approval.addAds && <ApprovalSimulator approvalId={id} />}
 
       {open && canDecide && (
         <section className="block">

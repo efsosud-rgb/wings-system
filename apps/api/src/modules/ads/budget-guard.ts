@@ -1151,7 +1151,6 @@ export async function applyPlatformLimit(
   };
 }
 
-
 /** Hash an `add_ads` approval is bound to: the account and the whole stored payload. */
 export function addAdsPayloadHash(input: { adAccountId: string; payload: AddAdsPayload }): string {
   return createHash('sha256')
@@ -1208,7 +1207,11 @@ export async function reserveAddAds(
     ),
   });
   if (!campaign) {
-    return { ok: false, reason: 'campaign_not_found', message: 'Campanha não encontrada nesta conta.' };
+    return {
+      ok: false,
+      reason: 'campaign_not_found',
+      message: 'Campanha não encontrada nesta conta.',
+    };
   }
   const sets = await db.query.adSets.findMany({ where: eq(adSets.campaignId, campaign.id) });
   const adSet = input.request.adSetExternalId
@@ -1238,7 +1241,11 @@ export async function reserveAddAds(
   };
 
   return db.transaction(async (tx) => {
-    const current = await lockOpenPeriod(tx, input.adAccountId, periodMonthOf(now, account.timezone));
+    const current = await lockOpenPeriod(
+      tx,
+      input.adAccountId,
+      periodMonthOf(now, account.timezone),
+    );
     if (!current) {
       return {
         ok: false as const,

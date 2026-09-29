@@ -1152,7 +1152,10 @@ export const PLACEMENT_POSITION_LABEL: Record<PlacementPosition, string> = {
  * (`threads_stream` on the wire) and only alongside the Instagram feed
  * (`stream`), per Meta's Marketing API placement targeting reference.
  */
-export const PLACEMENT_PUBLISHER_POSITIONS: Record<PlacementPublisher, readonly PlacementPosition[]> = {
+export const PLACEMENT_PUBLISHER_POSITIONS: Record<
+  PlacementPublisher,
+  readonly PlacementPosition[]
+> = {
   facebook: PLACEMENT_POSITIONS,
   instagram: PLACEMENT_POSITIONS,
   threads: ['feed'],
@@ -1502,7 +1505,12 @@ export function draftDifferences(
   const savedReach = describeReach(saved.reach);
   const requestedReach = describeReach(requested.reach);
   if (savedReach !== requestedReach) {
-    differences.push({ field: 'reach', label: 'Área de alcance', saved: savedReach, requested: requestedReach });
+    differences.push({
+      field: 'reach',
+      label: 'Área de alcance',
+      saved: savedReach,
+      requested: requestedReach,
+    });
   }
   const audience = (draft: CampaignDraft) =>
     [
@@ -1524,7 +1532,6 @@ export function draftDifferences(
   return differences;
 }
 
-
 // ---------------------------------------------------------------------------
 // New ads in a campaign that already exists (`add_ads`)
 // ---------------------------------------------------------------------------
@@ -1537,7 +1544,10 @@ export function draftDifferences(
 export const addAdsRequestSchema = z.object({
   campaignExternalId: z.string().regex(/^\d{5,30}$/, 'Escolha a campanha'),
   /** Only when the campaign has more than one ad set. */
-  adSetExternalId: z.string().regex(/^\d{5,30}$/).optional(),
+  adSetExternalId: z
+    .string()
+    .regex(/^\d{5,30}$/)
+    .optional(),
   identity: metaIdentitySchema,
   destinationUrl: z.url({ protocol: /^https$/, error: 'Informe um endereço https:// válido' }),
   utms: z.object({

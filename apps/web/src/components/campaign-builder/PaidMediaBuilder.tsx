@@ -27,6 +27,7 @@ import {
   MIN_SEARCH_HEADLINES,
   MAX_VARIATIONS,
   adUtmContent,
+  addAdsRequestSchema,
   MAX_VIDEO_BYTES,
   MIN_AGE,
   MIN_CAROUSEL_CARDS,
@@ -97,6 +98,7 @@ import {
   useAudienceProfile,
   useCockpit,
   useMetaIdentities,
+  useRequestAddAds,
   useRequestCampaign,
   useSaveAudienceProfile,
   useSaveMetaIdentityDefault,
@@ -108,6 +110,7 @@ import {
   useSavedDrafts,
 } from '../../api/ads.js';
 import { ApiError } from '../../api/client.js';
+import { useDashboardCampaigns } from '../../api/dashboard.js';
 import { Alert, Button, Field, Input, Select } from '../ui.js';
 import { BUILDER_DRAFT_KEY, PICKED_MEDIA_KEY } from '../../api/media.js';
 import { AdPreviewGallery, creativeUrl, videoUrl } from './AdPreview.js';
@@ -155,7 +158,10 @@ function markKeywords(lines: string[], defaultMatch: SearchMatchType): string[] 
   return lines.map((line) =>
     parseSearchKeyword(line)
       ? line
-      : formatSearchKeyword({ text: line.replace(/^[["]+|[\]"]+$/g, '').trim(), match: defaultMatch }),
+      : formatSearchKeyword({
+          text: line.replace(/^[["]+|[\]"]+$/g, '').trim(),
+          match: defaultMatch,
+        }),
   );
 }
 
@@ -255,6 +261,16 @@ const META_SECTIONS = [
   'preview',
   'summary',
 ] as const;
+/** Adding creatives to a Meta campaign that exists: only what the new ads need. */
+const ADD_ADS_SECTIONS = [
+  'platform',
+  'identity',
+  'creative',
+  'copy',
+  'variations',
+  'utms',
+  'preview',
+] as const;
 const YOUTUBE_SECTIONS = [
   'platform',
   'objective',
@@ -301,6 +317,8 @@ function BuilderSection({
   why: string;
   children: ReactNode;
 }) {
+  // A section outside the current mode's list has no step: it is not shown.
+  if (step === 0) return null;
   return (
     <section className="builder-section" aria-labelledby={`builder-step-${step}`}>
       <h2 id={`builder-step-${step}`}>
@@ -334,7 +352,12 @@ function ComplianceWarning({ findings }: { findings: ComplianceFinding[] }) {
   );
 }
 
-type WingsTotal = { capCents: number; usableCents: number; committedCents: number; spentCents: number };
+type WingsTotal = {
+  capCents: number;
+  usableCents: number;
+  committedCents: number;
+  spentCents: number;
+};
 
 /** Once regardless of platform: the cross-account figure, not any one account's. */
 function WingsTotalLine({ wingsTotal }: { wingsTotal: WingsTotal | null }) {
@@ -386,9 +409,7 @@ function AccountCeiling({
     <div className="builder-ceiling">
       <span className="field-label">Teto real da conta neste mês</span>
       <p className="mono builder-ceiling-figure">{formatBrl(pacing.availableCents)}</p>
-      <p className="field-hint">
-        ainda pode ser planejado · {agoLabel(pacing.lastReconciledAt)}
-      </p>
+      <p className="field-hint">ainda pode ser planejado · {agoLabel(pacing.lastReconciledAt)}</p>
       {sharedCaption}
       <ReconcileNowButton accountId={accountId} />
       <dl>
@@ -862,16 +883,25 @@ export function PaidMediaBuilder({
 
   const values = watch();
   const { platform } = values;
+  // Meta only: a new campaign, or new creatives in one that exists (`add_ads`).
+  const [target, setTarget] = useState<'new' | 'existing'>('new');
+  const [targetCampaign, setTargetCampaign] = useState('');
+  const [addAdsProblem, setAddAdsProblem] = useState<string | null>(null);
+  const addAds = useRequestAddAds();
+  const existingCampaigns = useDashboardCampaigns(30);
   const cockpit = useCockpit({ days: 7, platform });
   const pacing = cockpit.isLoading ? undefined : (cockpit.data?.cockpit.pacing ?? null);
   const wingsTotal = cockpit.data?.cockpit.wingsTotal ?? null;
   const google = isGooglePlatform(platform);
+  const addingToExisting = platform === 'meta' && target === 'existing';
   const sections: readonly SectionKey[] =
     platform === 'youtube'
       ? YOUTUBE_SECTIONS
       : platform === 'google_search'
         ? SEARCH_SECTIONS
-        : META_SECTIONS;
+        : addingToExisting
+          ? ADD_ADS_SECTIONS
+          : META_SECTIONS;
   const stepOf = (key: SectionKey) => sections.indexOf(key) + 1;
   const platformLabel = PAID_PLATFORMS.find((item) => item.key === platform)?.label ?? '—';
 
@@ -1500,9 +1530,46 @@ export function PaidMediaBuilder({
             do tipo Vídeo. O grupo de anúncios e o anúncio em vídeo entram na próxima etapa.
           </p>
         )}
-        <Field label="Nome da campanha" error={errors.name?.message}>
-          <Input placeholder="Ex.: Expansão SP — outubro" {...register('name')} />
-        </Field>
+        {platform === 'meta' && (
+          <div className="builder-options" role="radiogroup" aria-label="O que montar">
+            <label className="builder-option">
+              <input type="radio" checked={target === 'new'} onChange={() => setTarget('new')} />
+              <span>Campanha nova</span>
+            </label>
+            <label className="builder-option">
+              <input
+                type="radio"
+                checked={target === 'existing'}
+                onChange={() => setTarget('existing')}
+              />
+              <span>
+                Adicionar criativos a uma campanha existente
+                <small className="muted"> — cada um vira um anúncio no mesmo conjunto</small>
+              </span>
+            </label>
+          </div>
+        )}
+        {addingToExisting ? (
+          <Field label="Campanha">
+            <Select
+              value={targetCampaign}
+              onChange={(event) => setTargetCampaign(event.target.value)}
+            >
+              <option value="">Escolha a campanha</option>
+              {(existingCampaigns.data?.campaigns.campaigns ?? [])
+                .filter((campaign) => campaign.platform === 'meta')
+                .map((campaign) => (
+                  <option key={campaign.externalId} value={campaign.externalId}>
+                    {campaign.name} ({campaign.status === 'ACTIVE' ? 'ativa' : 'pausada'})
+                  </option>
+                ))}
+            </Select>
+          </Field>
+        ) : (
+          <Field label="Nome da campanha" error={errors.name?.message}>
+            <Input placeholder="Ex.: Expansão SP — outubro" {...register('name')} />
+          </Field>
+        )}
       </BuilderSection>
 
       <BuilderSection
@@ -1869,8 +1936,8 @@ export function PaidMediaBuilder({
             why="A imagem é o que faz a pessoa parar de rolar o feed. Cada criativo vira um anúncio, para a Meta descobrir qual segura mais gente."
           >
             <p className="field-hint">
-              De 1 a 5 criativos, cada um um anúncio: imagem única, vídeo ou carrossel. Fica guardado no Wings
-              System — só vai para a Meta quando um pedido aprovado for executado.
+              De 1 a 5 criativos, cada um um anúncio: imagem única, vídeo ou carrossel. Fica
+              guardado no Wings System — só vai para a Meta quando um pedido aprovado for executado.
             </p>
             {variations.fields.map((field, index) => {
               const variation = formVariations[index];
@@ -2240,7 +2307,11 @@ export function PaidMediaBuilder({
               <span className="field-label" id="builder-location-mode">
                 Local
               </span>
-              <div className="builder-match" role="radiogroup" aria-labelledby="builder-location-mode">
+              <div
+                className="builder-match"
+                role="radiogroup"
+                aria-labelledby="builder-location-mode"
+              >
                 {SEARCH_LOCATION_MODES.map((mode) => (
                   <label key={mode} className="check">
                     <input type="radio" value={mode} {...register('search.locationMode')} />{' '}
@@ -2457,8 +2528,7 @@ export function PaidMediaBuilder({
           {applyUtms(values.destinationUrl ?? '', values.utms, {
             creativeType: values.variations?.[0]?.creativeType ?? 'image',
             position: 1,
-          }) ??
-            'Informe a página de destino para ver o endereço final.'}
+          }) ?? 'Informe a página de destino para ver o endereço final.'}
         </p>
       </BuilderSection>
 
@@ -2605,9 +2675,9 @@ export function PaidMediaBuilder({
           <dt>Destino com UTMs</dt>
           <dd className="mono builder-url">
             {applyUtms(values.destinationUrl ?? '', values.utms, {
-            creativeType: values.variations?.[0]?.creativeType ?? 'image',
-            position: 1,
-          }) ?? '—'}
+              creativeType: values.variations?.[0]?.creativeType ?? 'image',
+              position: 1,
+            }) ?? '—'}
           </dd>
         </dl>
 
@@ -2672,6 +2742,67 @@ export function PaidMediaBuilder({
           {!canRequest && ' Seu perfil pode montar a campanha, mas não enviar o pedido.'}
         </p>
       </BuilderSection>
+
+      {addingToExisting && (
+        <section className="builder-section" aria-label="Pedir aprovação dos anúncios">
+          <Alert kind="info">
+            Os anúncios entram no conjunto que a campanha já tem, <strong>pausados</strong>, depois
+            que a Thais ou o Umberto aprovarem e alguém executar. A verba e o público da campanha
+            não mudam. Para ligá-los, peça “Retomar campanha” ou ligue-os na Meta.
+          </Alert>
+          {hasComplianceProblem && (
+            <Alert kind="error">
+              Há texto bloqueado pelo compliance. Corrija os criativos acima.
+            </Alert>
+          )}
+          {addAdsProblem && <Alert kind="error">{addAdsProblem}</Alert>}
+          {addAds.isSuccess && (
+            <Alert kind="success">
+              Pedido criado: {values.variations?.length ?? 0} anúncio(s) a partir de{' '}
+              {adUtmContent({
+                creativeType: values.variations?.[0]?.creativeType ?? 'image',
+                position: addAds.data.firstPosition,
+              })}
+              .{' '}
+              {addAds.data.approvalId && (
+                <a href={`/marketing/trafego-pago-wings/aprovacoes/${addAds.data.approvalId}`}>
+                  Ver a aprovação
+                </a>
+              )}
+            </Alert>
+          )}
+          <div className="form-actions">
+            <Button
+              type="button"
+              disabled={!canRequest || addAds.isPending || addAds.isSuccess || hasComplianceProblem}
+              onClick={() => {
+                setAddAdsProblem(null);
+                const parsed = addAdsRequestSchema.safeParse({
+                  campaignExternalId: targetCampaign,
+                  identity: values.identity,
+                  destinationUrl: values.destinationUrl,
+                  utms: values.utms,
+                  variations: values.variations,
+                });
+                if (!parsed.success) {
+                  setAddAdsProblem(parsed.error.issues[0]?.message ?? 'Confira os campos.');
+                  return;
+                }
+                addAds.mutate(parsed.data, {
+                  onError: (error) =>
+                    setAddAdsProblem(
+                      error instanceof ApiError
+                        ? error.message
+                        : 'Não foi possível enviar o pedido.',
+                    ),
+                });
+              }}
+            >
+              {addAds.isPending ? 'Enviando…' : 'Pedir aprovação dos anúncios'}
+            </Button>
+          </div>
+        </section>
+      )}
     </form>
   );
 }

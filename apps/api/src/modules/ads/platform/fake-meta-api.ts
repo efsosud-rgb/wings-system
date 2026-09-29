@@ -151,7 +151,8 @@ export function fakeMetaApi(options: FakeMetaApiOptions = {}) {
     const campaign = state.campaigns.find((item) => item.id === path);
     if (campaign) return json(200, campaign);
     const object = state.objects.get(path);
-    if (object) return json(200, { id: path, status: object.status, effective_status: object.status });
+    if (object)
+      return json(200, { id: path, status: object.status, effective_status: object.status });
 
     if (path.endsWith('/thumbnails')) {
       return json(200, {

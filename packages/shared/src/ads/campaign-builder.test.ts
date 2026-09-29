@@ -58,7 +58,10 @@ describe('the ad platform catalog', () => {
 
   it('is waiting on the platform for TikTok, LinkedIn and X, with the reason on screen', () => {
     const awaiting = Object.fromEntries(
-      PAID_PLATFORMS.filter((p) => p.status === 'awaiting_api_access').map((p) => [p.key, p.reason]),
+      PAID_PLATFORMS.filter((p) => p.status === 'awaiting_api_access').map((p) => [
+        p.key,
+        p.reason,
+      ]),
     );
     expect(awaiting).toEqual({
       tiktok: 'Perfil de desenvolvedor em análise pelo TikTok',
@@ -565,7 +568,12 @@ describe('a request against the saved draft it came from', () => {
       reach: { states: ['RJ'], cities: [], customLocations: [] },
     };
     expect(draftDifferences(saved, requested)).toEqual([
-      { field: 'dailyBudgetCents', label: 'Verba diária', saved: 'R$ 120,00', requested: 'R$ 240,00' },
+      {
+        field: 'dailyBudgetCents',
+        label: 'Verba diária',
+        saved: 'R$ 120,00',
+        requested: 'R$ 240,00',
+      },
       { field: 'endDate', label: 'Fim', saved: '04/10/2026', requested: '29/09/2026' },
       {
         field: 'destinationUrl',
@@ -599,7 +607,10 @@ describe('Google drafts', () => {
       keywords: ['[franquia de alimentação]', '"abrir franquia"'],
       negativeKeywords: ['grátis'],
       headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
-      descriptions: ['Conheça o modelo de negócio e o suporte da Wings.', 'Suporte do início ao fim.'],
+      descriptions: [
+        'Conheça o modelo de negócio e o suporte da Wings.',
+        'Suporte do início ao fim.',
+      ],
     },
   };
 

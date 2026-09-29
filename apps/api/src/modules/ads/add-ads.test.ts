@@ -48,7 +48,12 @@ beforeAll(async () => {
     await writeFile(join(videoDir, `${seed}.mp4`), Buffer.alloc(1_000, seed.charCodeAt(0)));
     const [row] = await db
       .insert(adVideoUploads)
-      .values({ mimeType: 'video/mp4', byteSize: 1_000, sha256: seed.repeat(64), storageKey: `${seed}.mp4` })
+      .values({
+        mimeType: 'video/mp4',
+        byteSize: 1_000,
+        sha256: seed.repeat(64),
+        storageKey: `${seed}.mp4`,
+      })
       .returning({ id: adVideoUploads.id });
     videoIds.push(row!.id);
   }
@@ -65,7 +70,9 @@ const AD_SET = '120252260021860076';
 async function world(options: FakeMetaApiOptions = {}) {
   const accountId = `act_${Math.floor(1e9 + Math.random() * 9e9)}`;
   const api = fakeMetaApi({
-    existingAdSets: [{ id: AD_SET, campaign_id: CAMPAIGN, name: '28Set — conjunto', status: 'ACTIVE' }],
+    existingAdSets: [
+      { id: AD_SET, campaign_id: CAMPAIGN, name: '28Set — conjunto', status: 'ACTIVE' },
+    ],
     ...options,
     accountId,
   });
@@ -81,15 +88,34 @@ async function world(options: FakeMetaApiOptions = {}) {
     .insert(adAccounts)
     .values({ platform: 'meta', externalId: accountId, name: 'Fly High' })
     .returning({ id: adAccounts.id });
-  await openPeriod(db, { adAccountId: account!.id, periodMonth: PERIOD, capCents: 250_000, usablePercent: 70 });
-  await db.update(budgetPeriods).set({ lastReconciledAt: new Date() }).where(eq(budgetPeriods.adAccountId, account!.id));
+  await openPeriod(db, {
+    adAccountId: account!.id,
+    periodMonth: PERIOD,
+    capCents: 250_000,
+    usablePercent: 70,
+  });
+  await db
+    .update(budgetPeriods)
+    .set({ lastReconciledAt: new Date() })
+    .where(eq(budgetPeriods.adAccountId, account!.id));
   const [campaign] = await db
     .insert(adCampaigns)
-    .values({ adAccountId: account!.id, externalId: CAMPAIGN, name: 'META | 28Set', status: 'ACTIVE', dailyBudgetCents: 12_000 })
+    .values({
+      adAccountId: account!.id,
+      externalId: CAMPAIGN,
+      name: 'META | 28Set',
+      status: 'ACTIVE',
+      dailyBudgetCents: 12_000,
+    })
     .returning({ id: adCampaigns.id });
   const [adSet] = await db
     .insert(adSets)
-    .values({ campaignId: campaign!.id, externalId: AD_SET, name: '28Set — conjunto', status: 'ACTIVE' })
+    .values({
+      campaignId: campaign!.id,
+      externalId: AD_SET,
+      name: '28Set — conjunto',
+      status: 'ACTIVE',
+    })
     .returning({ id: adSets.id });
   // The two ads the ad set already has: the new ones continue from video-3.
   for (const n of [1, 2]) {
@@ -110,7 +136,12 @@ const requestOf = (count: number): AddAdsRequest =>
     campaignExternalId: CAMPAIGN,
     identity: { pageId: '104567890123456', instagramActorId: '17841400000000000' },
     destinationUrl: 'https://wingscompany.com.br/contato/',
-    utms: { utm_source: 'facebook', utm_medium: 'cpc', utm_campaign: 'formatacao_28set', utm_content: '' },
+    utms: {
+      utm_source: 'facebook',
+      utm_medium: 'cpc',
+      utm_campaign: 'formatacao_28set',
+      utm_content: '',
+    },
     variations: videoIds.slice(0, count).map((videoId, index) => ({
       creativeType: 'video',
       videoId,
@@ -122,12 +153,20 @@ const requestOf = (count: number): AddAdsRequest =>
 
 async function askAndApprove(accountDbId: string, request: AddAdsRequest) {
   const requester = await createEmployee(db, { role: 'marketing', sector: 'marketing' });
-  const reserved = await reserveAddAds(db, { adAccountId: accountDbId, request, requestedBy: requester.id });
+  const reserved = await reserveAddAds(db, {
+    adAccountId: accountDbId,
+    request,
+    requestedBy: requester.id,
+  });
   if (!reserved.ok) throw new Error(reserved.message);
   const gate = await gateChange(db, { changeRequestId: reserved.value.changeRequestId });
   if (!gate.approvalId) throw new Error('an add_ads request always needs a person');
   const admin = await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
-  const decision = await decideApproval(db, { approvalId: gate.approvalId, approverEmployeeId: admin.id, decision: 'approved' });
+  const decision = await decideApproval(db, {
+    approvalId: gate.approvalId,
+    approverEmployeeId: admin.id,
+    decision: 'approved',
+  });
   if (!decision.ok) throw new Error(decision.message);
   return reserved.value;
 }
@@ -139,22 +178,38 @@ describe('asking for new ads', () => {
   it('needs a person to approve, reserves no money and numbers the new ads after the existing ones', async () => {
     const { accountDbId, api, client } = await world();
     const requester = await createEmployee(db, { role: 'marketing', sector: 'marketing' });
-    const reserved = await reserveAddAds(db, { adAccountId: accountDbId, request: requestOf(3), requestedBy: requester.id });
+    const reserved = await reserveAddAds(db, {
+      adAccountId: accountDbId,
+      request: requestOf(3),
+      requestedBy: requester.id,
+    });
     expect(reserved.ok).toBe(true);
     if (!reserved.ok) return;
-    expect(reserved.value.payload).toMatchObject({ adSetExternalId: AD_SET, firstPosition: 3, campaignName: 'META | 28Set' });
+    expect(reserved.value.payload).toMatchObject({
+      adSetExternalId: AD_SET,
+      firstPosition: 3,
+      campaignName: 'META | 28Set',
+    });
     const gate = await gateChange(db, { changeRequestId: reserved.value.changeRequestId });
     expect(gate.status).toBe('pending_approval');
-    const row = await db.query.adChangeRequests.findFirst({ where: eq(adChangeRequests.id, reserved.value.changeRequestId) });
+    const row = await db.query.adChangeRequests.findFirst({
+      where: eq(adChangeRequests.id, reserved.value.changeRequestId),
+    });
     expect(row).toMatchObject({ kind: 'add_ads', exposureDeltaCents: 0 });
     // Unapproved: nothing goes out.
-    expect(await run(client, reserved.value.changeRequestId)).toMatchObject({ outcome: 'refused', reason: 'not_approved' });
+    expect(await run(client, reserved.value.changeRequestId)).toMatchObject({
+      outcome: 'refused',
+      reason: 'not_approved',
+    });
     expect(api.writes()).toHaveLength(0);
   });
 
   it('refuses a campaign the system does not know', async () => {
     const { accountDbId } = await world();
-    const result = await reserveAddAds(db, { adAccountId: accountDbId, request: { ...requestOf(1), campaignExternalId: '99999999' } });
+    const result = await reserveAddAds(db, {
+      adAccountId: accountDbId,
+      request: { ...requestOf(1), campaignExternalId: '99999999' },
+    });
     expect(result).toMatchObject({ ok: false, reason: 'campaign_not_found' });
   });
 });
@@ -178,16 +233,29 @@ describe('executing it', () => {
     }
     const links = api
       .writes('adcreatives')
-      .map((call) => JSON.parse(call.fields.object_story_spec ?? '{}').video_data.call_to_action.value.link as string);
-    expect(links.map((link) => new URL(link).searchParams.get('utm_content'))).toEqual(['video-3', 'video-4', 'video-5']);
+      .map(
+        (call) =>
+          JSON.parse(call.fields.object_story_spec ?? '{}').video_data.call_to_action.value
+            .link as string,
+      );
+    expect(links.map((link) => new URL(link).searchParams.get('utm_content'))).toEqual([
+      'video-3',
+      'video-4',
+      'video-5',
+    ]);
 
     // A resume would switch these on too: they are this system's.
     const companions = await companionsOf(db, campaignDbId);
     expect(companions.adIds).toHaveLength(3);
 
-    const change = await db.query.adChangeRequests.findFirst({ where: eq(adChangeRequests.id, changeRequestId) });
+    const change = await db.query.adChangeRequests.findFirst({
+      where: eq(adChangeRequests.id, changeRequestId),
+    });
     expect(change?.status).toBe('executed');
-    expect(await run(client, changeRequestId)).toMatchObject({ outcome: 'refused', reason: 'already_executed' });
+    expect(await run(client, changeRequestId)).toMatchObject({
+      outcome: 'refused',
+      reason: 'already_executed',
+    });
   });
 
   it('refuses when the ad set no longer belongs to the campaign on Meta, sending nothing', async () => {
@@ -195,7 +263,10 @@ describe('executing it', () => {
       existingAdSets: [{ id: AD_SET, campaign_id: '111111111', name: 'outra', status: 'ACTIVE' }],
     });
     const { changeRequestId } = await askAndApprove(accountDbId, requestOf(1));
-    expect(await run(client, changeRequestId)).toMatchObject({ outcome: 'refused', reason: 'platform_drift' });
+    expect(await run(client, changeRequestId)).toMatchObject({
+      outcome: 'refused',
+      reason: 'platform_drift',
+    });
     expect(api.writes()).toHaveLength(0);
   });
 
@@ -206,12 +277,17 @@ describe('executing it', () => {
       .update(adChangeRequests)
       .set({ payload: { ...payload, destinationUrl: 'https://outro.com.br/' } })
       .where(eq(adChangeRequests.id, changeRequestId));
-    expect(await run(client, changeRequestId)).toMatchObject({ outcome: 'refused', reason: 'payload_changed' });
+    expect(await run(client, changeRequestId)).toMatchObject({
+      outcome: 'refused',
+      reason: 'payload_changed',
+    });
     expect(api.writes()).toHaveLength(0);
   });
 
   it('stops at the first refused ad, records what exists and freezes the account', async () => {
-    const { accountDbId, client } = await world({ failOn: { edge: 'adcreatives', mode: 'reject' } });
+    const { accountDbId, client } = await world({
+      failOn: { edge: 'adcreatives', mode: 'reject' },
+    });
     const { changeRequestId } = await askAndApprove(accountDbId, requestOf(2));
     const result = await run(client, changeRequestId);
     // Both videos were uploaded before the first creative failed: something exists.

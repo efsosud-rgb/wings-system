@@ -69,16 +69,62 @@ const saveIdentityDefault = vi.fn();
 const uploadVideo = vi.fn();
 const videoFailure: { current: ApiError | null } = { current: null };
 
-const savedDrafts: { current: { id: string; name: string; platform: string; updatedAt: string; createdByName: string | null }[] } = { current: [] };
+const savedDrafts: {
+  current: {
+    id: string;
+    name: string;
+    platform: string;
+    updatedAt: string;
+    createdByName: string | null;
+  }[];
+} = { current: [] };
 const savedDraftPayload: { current: Record<string, unknown> | null } = { current: null };
 const saveDraft = vi.fn();
 const deleteSavedDraft = vi.fn();
 
+/** What "Pedir aprovação dos anúncios" sent, in order. */
+const requestAddAds = vi.fn();
+vi.mock('../../api/dashboard.js', () => ({
+  useDashboardCampaigns: () => ({
+    data: {
+      campaigns: {
+        campaigns: [
+          {
+            platform: 'meta',
+            externalId: '120252260012720076',
+            name: 'META | 28Set',
+            status: 'ACTIVE',
+          },
+          {
+            platform: 'google',
+            externalId: '24289782134',
+            name: 'SEARCH | Formatação',
+            status: 'ACTIVE',
+          },
+        ],
+      },
+    },
+  }),
+}));
+
 vi.mock('../../api/ads.js', () => ({
+  useRequestAddAds: () => ({
+    mutate: (input: unknown) => requestAddAds(input),
+    isPending: false,
+    isSuccess: false,
+    data: undefined,
+  }),
   useSavedDrafts: () => ({ data: { drafts: savedDrafts.current } }),
   loadSavedDraft: (id: string) =>
     Promise.resolve({ id, name: 'Rascunho real', draft: savedDraftPayload.current }),
-  useSaveDraft: () => ({ mutate: saveDraft, reset: vi.fn(), isPending: false, isSuccess: false, isError: false, error: null }),
+  useSaveDraft: () => ({
+    mutate: saveDraft,
+    reset: vi.fn(),
+    isPending: false,
+    isSuccess: false,
+    isError: false,
+    error: null,
+  }),
   useDeleteSavedDraft: () => ({ mutate: deleteSavedDraft }),
   useAudienceProfile: () => ({ data: { profile: savedAudience.current } }),
   useSaveAudienceProfile: () => ({
@@ -777,7 +823,13 @@ describe('the builder on Google', () => {
 
   it('loads a saved Google draft whole, and saving validates like a launch without sending', async () => {
     savedDrafts.current = [
-      { id: 'd1', name: 'SEARCH | Formatação', platform: 'google_search', updatedAt: '2026-09-25T15:00:00Z', createdByName: null },
+      {
+        id: 'd1',
+        name: 'SEARCH | Formatação',
+        platform: 'google_search',
+        updatedAt: '2026-09-25T15:00:00Z',
+        createdByName: null,
+      },
     ];
     savedDraftPayload.current = {
       platform: 'google_search',
@@ -789,7 +841,12 @@ describe('the builder on Google', () => {
       startDate: '2026-09-25',
       endDate: '2026-10-25',
       dailyBudgetCents: 10000,
-      utms: { utm_source: 'google', utm_medium: 'cpc', utm_campaign: 'search-formatacao', utm_content: 'lead' },
+      utms: {
+        utm_source: 'google',
+        utm_medium: 'cpc',
+        utm_campaign: 'search-formatacao',
+        utm_content: 'lead',
+      },
       startPaused: true,
       variations: [],
       search: {
@@ -801,7 +858,10 @@ describe('the builder on Google', () => {
         keywords: ['"formatação de franquia"', '[wings company]'],
         negativeKeywords: ['emprego', 'vaga'],
         headlines: ['Formate Sua Franquia', 'Consultoria de Franquias', 'Fale com um Especialista'],
-        descriptions: ['Formatamos sua empresa para virar franqueadora.', 'Fale com um especialista da Wings.'],
+        descriptions: [
+          'Formatamos sua empresa para virar franqueadora.',
+          'Fale com um especialista da Wings.',
+        ],
       },
     };
     try {
@@ -812,10 +872,12 @@ describe('the builder on Google', () => {
       expect((screen.getByLabelText(/^Nome da campanha/) as HTMLInputElement).value).toBe(
         'SEARCH | Formatação | Alta Intenção | Set26',
       );
-      expect((byField('Nome do grupo de anúncios') as HTMLInputElement).value).toBe('Formatação | Alta Intenção');
-      expect((screen.getByLabelText(/^Palavras-chave(?! negativas)/) as HTMLTextAreaElement).value).toBe(
-        '"formatação de franquia"\n[wings company]',
+      expect((byField('Nome do grupo de anúncios') as HTMLInputElement).value).toBe(
+        'Formatação | Alta Intenção',
       );
+      expect(
+        (screen.getByLabelText(/^Palavras-chave(?! negativas)/) as HTMLTextAreaElement).value,
+      ).toBe('"formatação de franquia"\n[wings company]');
       expect((byField('Título 1') as HTMLInputElement).value).toBe('Formate Sua Franquia');
       expect((screen.getByLabelText(/Verba por dia/) as HTMLInputElement).value).toBe('100,00');
       // Shown as reais at once, never as the raw cents the form holds.
@@ -1698,5 +1760,49 @@ describe('media from the library', () => {
       { timeout: 2000 },
     );
     expect(sessionStorage.getItem('wings.builder.draft')).not.toMatch(/token|password/i);
+  });
+});
+
+describe('adding creatives to a campaign that exists', () => {
+  it('shows only what the new ads need, lists the Meta campaigns and asks for approval', async () => {
+    requestAddAds.mockClear();
+    render(<PaidMediaBuilder canRequest />);
+    fireEvent.click(screen.getByLabelText(/Adicionar criativos a uma campanha existente/));
+    // No budget, dates, audience or objective: the campaign keeps its own.
+    expect(screen.queryByRole('heading', { name: /Verba diária/ })).toBeNull();
+    expect(screen.queryByRole('heading', { name: /Duração/ })).toBeNull();
+    expect(screen.queryByRole('heading', { name: /Área de alcance/ })).toBeNull();
+    expect(screen.getByRole('heading', { name: /Criativo/ })).toBeTruthy();
+    const select = screen.getByLabelText('Campanha') as HTMLSelectElement;
+    expect(Array.from(select.options).map((option) => option.textContent)).toEqual([
+      'Escolha a campanha',
+      'META | 28Set (ativa)',
+    ]);
+
+    // Nothing chosen: said on screen, nothing sent.
+    fireEvent.click(screen.getByRole('button', { name: 'Pedir aprovação dos anúncios' }));
+    expect(
+      await screen.findByText('Escolha a campanha', { selector: '.alert *, .alert' }),
+    ).toBeTruthy();
+    expect(requestAddAds).not.toHaveBeenCalled();
+  });
+
+  it('sends the campaign, page, destination, UTMs and each creative with its own copy', async () => {
+    requestAddAds.mockClear();
+    render(<PaidMediaBuilder canRequest />);
+    fillValidCampaign();
+    fireEvent.click(screen.getByLabelText(/Adicionar criativos a uma campanha existente/));
+    fireEvent.change(screen.getByLabelText('Campanha'), {
+      target: { value: '120252260012720076' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Pedir aprovação dos anúncios' }));
+    await waitFor(() => expect(requestAddAds).toHaveBeenCalledTimes(1));
+    const sent = requestAddAds.mock.calls[0]?.[0] as {
+      campaignExternalId: string;
+      variations: { headline: string }[];
+    };
+    expect(sent.campaignExternalId).toBe('120252260012720076');
+    expect(sent.variations.length).toBeGreaterThanOrEqual(1);
+    expect(sent).not.toHaveProperty('dailyBudgetCents');
   });
 });

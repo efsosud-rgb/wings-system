@@ -87,6 +87,7 @@ function buildApproval(overrides: Partial<ApprovalDetail> = {}): ApprovalDetail 
     trigger: 'policy_always',
     amountCents: 37_500,
     campaignForecast: null,
+    addAds: null,
     accountName: 'Wings Matriz',
     platform: 'meta',
     campaignName: 'Institucional',
@@ -499,7 +500,11 @@ describe('a request to create a campaign', () => {
     expect(screen.getByText('[franquia de alimentação] · "abrir franquia"')).toBeTruthy();
     expect(screen.getByText(/1 exata, 1 frase/)).toBeTruthy();
     expect(screen.getByText(/Grupo de anúncios: Grupo SP/)).toBeTruthy();
-    expect(screen.getByText(/Só Pesquisa do Google .* Presença: pessoas .* Maximizar cliques.* de R\$\s6,00/)).toBeTruthy();
+    expect(
+      screen.getByText(
+        /Só Pesquisa do Google .* Presença: pessoas .* Maximizar cliques.* de R\$\s6,00/,
+      ),
+    ).toBeTruthy();
     expect(screen.getByText(/Tudo nasce/)).toBeTruthy();
     expect(screen.getByText('Anúncio na Pesquisa do Google')).toBeTruthy();
     // The rehearsal is offered while the change is still to be executed.
@@ -518,7 +523,12 @@ describe('a request to create a campaign', () => {
         savedDraftName: draft.name,
         savedAt: '2026-09-25T18:35:00Z',
         differences: [
-          { field: 'dailyBudgetCents', label: 'Verba diária', saved: 'R$ 120,00', requested: 'R$ 240,00' },
+          {
+            field: 'dailyBudgetCents',
+            label: 'Verba diária',
+            saved: 'R$ 120,00',
+            requested: 'R$ 240,00',
+          },
           { field: 'endDate', label: 'Fim', saved: '04/10/2026', requested: '29/09/2026' },
         ],
       },
@@ -595,7 +605,12 @@ describe('a Meta request that creates the ad set and the ads', () => {
     ],
     ageMin: 25,
     ageMax: 65,
-    placements: { mode: 'manual', facebook: ['feed'], instagram: ['stories', 'reels'], threads: [] },
+    placements: {
+      mode: 'manual',
+      facebook: ['feed'],
+      instagram: ['stories', 'reels'],
+      threads: [],
+    },
     identity: { pageId: '104567890123456', instagramActorId: '17841400000000000' },
     startDate: '2026-09-20',
     endDate: '2026-09-29',
@@ -764,12 +779,62 @@ describe('the forecast to the end and who asked', () => {
       toValueCents: 12_000,
       requestedByName: null,
       requestedByAgent: false,
-      campaignForecast: { dailyCents: 12_000, days: 4, totalCents: 48_000, from: '2026-09-29', until: '2026-10-02' },
+      campaignForecast: {
+        dailyCents: 12_000,
+        days: 4,
+        totalCents: 48_000,
+        from: '2026-09-29',
+        until: '2026-10-02',
+      },
     });
     renderDetail();
-    const box = (screen.getByText('Total previsto da campanha até o fim').parentElement?.textContent ?? '').replace(/\u00a0/g, ' ');
+    const box = (
+      screen.getByText('Total previsto da campanha até o fim').parentElement?.textContent ?? ''
+    ).replace(/\u00a0/g, ' ');
     expect(box).toContain('R$ 480,00');
     expect(box).toContain('R$ 120,00 × 4 dias (29/09/2026 a 02/10/2026)');
     expect(screen.getByText('Pedido pelo terminal (ops-cli), sem pessoa registrada')).toBeTruthy();
+  });
+});
+
+describe('an add_ads request', () => {
+  it('shows the campaign, the ad set and each new ad with the utm_content it will carry', () => {
+    approval.current = buildApproval({
+      changeKind: 'add_ads',
+      fromValueCents: null,
+      toValueCents: null,
+      addAds: {
+        campaignExternalId: '120252260012720076',
+        campaignName: 'META | 28Set',
+        adSetExternalId: '120252260021860076',
+        firstPosition: 3,
+        identity: { pageId: '111543418672527', instagramActorId: '17841460839979368' },
+        destinationUrl: 'https://wingscompany.com.br/contato/',
+        utms: { utm_source: 'facebook', utm_medium: 'cpc', utm_campaign: 'x', utm_content: '' },
+        variations: [
+          {
+            creativeType: 'video',
+            videoId: '11111111-1111-4111-8111-111111111111',
+            headline: 'Sua marca pronta',
+            primaryText: 'Para negócios que já vendem.',
+            callToAction: 'SIGN_UP',
+          },
+          {
+            creativeType: 'video',
+            videoId: '22222222-2222-4222-8222-222222222222',
+            headline: 'Estruture para franquear',
+            primaryText: 'Para negócios que já vendem.',
+            callToAction: 'SIGN_UP',
+          },
+        ],
+      },
+    });
+    renderDetail();
+    expect(screen.getByText('Os anúncios que serão adicionados')).toBeTruthy();
+    expect(screen.getByText('120252260021860076')).toBeTruthy();
+    expect(screen.getByText('utm_content=video-3')).toBeTruthy();
+    expect(screen.getByText('utm_content=video-4')).toBeTruthy();
+    // No budget simulator for a change that moves no money.
+    expect(screen.queryByText(/Simular/)).toBeNull();
   });
 });

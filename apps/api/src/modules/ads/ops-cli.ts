@@ -154,7 +154,8 @@ async function main() {
               where: sql`lower(${employees.email}) = ${requesterEmail.trim().toLowerCase()}`,
             })
           : undefined;
-        if (requesterEmail && !requester) throw new Error(`--requested-by: nenhum funcionário com o e-mail ${requesterEmail}`);
+        if (requesterEmail && !requester)
+          throw new Error(`--requested-by: nenhum funcionário com o e-mail ${requesterEmail}`);
         const result = await requestCampaignChange(db, {
           requestedBy: requester?.id ?? null,
           accountExternalId: required('account'),
@@ -243,7 +244,11 @@ async function main() {
           startPaused: true,
           search: {
             adGroupName: 'Ensaio · grupo 1',
-            keywords: ['[franquear minha empresa]', '"como franquear meu negócio"', '[expandir por franquias]'],
+            keywords: [
+              '[franquear minha empresa]',
+              '"como franquear meu negócio"',
+              '[expandir por franquias]',
+            ],
             negativeKeywords: ['vaga', 'emprego', 'curso', 'grátis', 'pdf'],
             headlines: [
               'Franqueie o Seu Negócio',
@@ -286,7 +291,9 @@ async function main() {
           .insert(adCampaignSavedDrafts)
           .values({ name: arg('name') ?? draft.name, platform: draft.platform, payload: draft })
           .returning({ id: adCampaignSavedDrafts.id });
-        console.warn(`rascunho salvo: ${row?.id} — "${arg('name') ?? draft.name}" (${draft.platform})`);
+        console.warn(
+          `rascunho salvo: ${row?.id} — "${arg('name') ?? draft.name}" (${draft.platform})`,
+        );
         return;
       }
 

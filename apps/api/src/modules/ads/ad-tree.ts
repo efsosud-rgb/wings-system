@@ -90,7 +90,9 @@ export async function prepareMedia(
   db: Database,
   variations: CopyVariation[],
   options: { videoDir?: string },
-): Promise<{ ok: true; value: PreparedMedia } | { ok: false; reason: 'media_missing'; message: string }> {
+): Promise<
+  { ok: true; value: PreparedMedia } | { ok: false; reason: 'media_missing'; message: string }
+> {
   const creativeIds = new Set<string>();
   const videoIds = new Set<string>();
   for (const variation of variations) {

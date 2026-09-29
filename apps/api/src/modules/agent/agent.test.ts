@@ -725,11 +725,10 @@ describe('proposing a campaign', () => {
 describe('a proposal has to be complete and justified', () => {
   it('sends an incomplete proposal back to the model, which completes it', async () => {
     const { cookies } = await sessionFor('marketing');
-    const { copy } = metaProposal();
     const withoutPlacements = without(metaProposal(), 'placements', 'copy');
     script = [
-      // "Broad, default": no placements and a single variation.
-      use(call('propor_campanha', { ...withoutPlacements, copy: copy.slice(0, 1) })),
+      // "Broad, default": no placements and no copy at all.
+      use(call('propor_campanha', { ...withoutPlacements, copy: [] })),
       use(call('propor_campanha', metaProposal())),
       say('Proposta no cartão. A aposta é o Reels; falta a mídia.'),
     ];
@@ -739,7 +738,7 @@ describe('a proposal has to be complete and justified', () => {
     expect(refusal?.role).toBe('tool');
     expect(refusal?.content).toContain('"aceita":false');
     expect(refusal?.content).toContain('Informe os posicionamentos');
-    expect(refusal?.content).toContain('2 a 3 variações');
+    expect(refusal?.content).toContain('1 a 5 variações');
 
     expect(message?.proposals).toHaveLength(1);
     const card = message?.proposals[0];

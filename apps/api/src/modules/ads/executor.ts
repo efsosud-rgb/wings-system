@@ -668,12 +668,18 @@ export function createSpecOf(
                       search.bidding === 'maximize_conversions'
                         ? 'MAXIMIZE_CONVERSIONS'
                         : 'MAXIMIZE_CLICKS',
-                    maxCpcCents: search.bidding === 'maximize_conversions' ? undefined : search.maxCpcCents,
+                    maxCpcCents:
+                      search.bidding === 'maximize_conversions' ? undefined : search.maxCpcCents,
                     // The schema refused anything but [exact] and "phrase".
                     keywords: search.keywords.flatMap((raw) => {
                       const parsed = parseSearchKeyword(raw);
                       return parsed
-                        ? [{ text: parsed.text, match: parsed.match === 'exact' ? 'EXACT' : 'PHRASE' }]
+                        ? [
+                            {
+                              text: parsed.text,
+                              match: parsed.match === 'exact' ? 'EXACT' : 'PHRASE',
+                            },
+                          ]
                         : [];
                     }),
                     negativeKeywords: search.negativeKeywords.map(
@@ -681,7 +687,8 @@ export function createSpecOf(
                     ),
                     headlines: search.headlines,
                     descriptions: search.descriptions,
-                    finalUrl: applyUtms(payload.destinationUrl, payload.utms) ?? payload.destinationUrl,
+                    finalUrl:
+                      applyUtms(payload.destinationUrl, payload.utms) ?? payload.destinationUrl,
                   },
                 }
               : {}),
@@ -805,7 +812,6 @@ export async function preflightChange(
   return { ok: false, status: 'unavailable', reason: outcome.reason };
 }
 
-
 /**
  * Executes an approved `add_ads`: the stored payload must still hash to what
  * was approved, the ad set must still belong to the campaign on the platform,
@@ -840,7 +846,10 @@ async function executeAddAds(
   // The ad set must still be this campaign's, as the approver was told.
   const liveSets = await client.listAdSets().catch(() => null);
   if (!liveSets) {
-    return refuse('platform_unavailable', 'A Meta não respondeu à leitura dos conjuntos. Nada foi enviado.');
+    return refuse(
+      'platform_unavailable',
+      'A Meta não respondeu à leitura dos conjuntos. Nada foi enviado.',
+    );
   }
   const liveSet = liveSets.find((set) => set.id === payload.adSetExternalId);
   if (!liveSet || liveSet.campaignId !== campaign.externalId) {
@@ -868,7 +877,10 @@ async function executeAddAds(
     })
     .returning({ id: adExecutions.id });
   if (!execution) throw new Error('failed to record execution');
-  await db.update(adChangeRequests).set({ status: 'executing' }).where(eq(adChangeRequests.id, change.id));
+  await db
+    .update(adChangeRequests)
+    .set({ status: 'executing' })
+    .where(eq(adChangeRequests.id, change.id));
 
   const built = await buildAdsInAdSet(db, client, {
     executionId: execution.id,
@@ -887,7 +899,11 @@ async function executeAddAds(
   if (built.status === 'complete') {
     await db
       .update(adExecutions)
-      .set({ outcome: 'applied', finishedAt: new Date(), platformResponse: { status: 'applied', adIds: built.adIds } })
+      .set({
+        outcome: 'applied',
+        finishedAt: new Date(),
+        platformResponse: { status: 'applied', adIds: built.adIds },
+      })
       .where(eq(adExecutions.id, execution.id));
     await db
       .update(adChangeRequests)
@@ -898,7 +914,12 @@ async function executeAddAds(
       action: 'ads.change_executed',
       entity: 'ad_change_request',
       entityId: change.id,
-      metadata: { platform: account.platform, kind: change.kind, adIds: built.adIds, adSet: payload.adSetExternalId },
+      metadata: {
+        platform: account.platform,
+        kind: change.kind,
+        adIds: built.adIds,
+        adSet: payload.adSetExternalId,
+      },
     });
     return { ok: true, outcome: 'applied', executionId: execution.id };
   }
@@ -906,14 +927,23 @@ async function executeAddAds(
   const created = await db
     .select({ id: adExecutionSteps.id })
     .from(adExecutionSteps)
-    .where(and(eq(adExecutionSteps.executionId, execution.id), eq(adExecutionSteps.status, 'created')));
+    .where(
+      and(eq(adExecutionSteps.executionId, execution.id), eq(adExecutionSteps.status, 'created')),
+    );
   if (created.length === 0) {
     // Refused before anything existed (validate_only, most likely): nothing to look after.
     await db
       .update(adExecutions)
-      .set({ outcome: 'rejected', finishedAt: new Date(), platformResponse: { message: built.reason } })
+      .set({
+        outcome: 'rejected',
+        finishedAt: new Date(),
+        platformResponse: { message: built.reason },
+      })
       .where(eq(adExecutions.id, execution.id));
-    await db.update(adChangeRequests).set({ status: 'failed' }).where(eq(adChangeRequests.id, change.id));
+    await db
+      .update(adChangeRequests)
+      .set({ status: 'failed' })
+      .where(eq(adChangeRequests.id, change.id));
     await writeAudit(db, {
       actorEmployeeId: options.actorEmployeeId ?? null,
       action: 'ads.change_rejected_by_platform',
@@ -921,7 +951,13 @@ async function executeAddAds(
       entityId: change.id,
       metadata: { kind: change.kind, reason: built.reason },
     });
-    return { ok: false, outcome: 'rejected', executionId: execution.id, code: 'add_ads_refused', message: built.reason };
+    return {
+      ok: false,
+      outcome: 'rejected',
+      executionId: execution.id,
+      code: 'add_ads_refused',
+      message: built.reason,
+    };
   }
 
   // Part of it exists: the same road as any unknown outcome.
@@ -929,7 +965,10 @@ async function executeAddAds(
     .update(adExecutions)
     .set({ outcome: 'unknown', finishedAt: new Date(), platformResponse: { reason: built.reason } })
     .where(eq(adExecutions.id, execution.id));
-  await db.update(adChangeRequests).set({ status: 'unknown' }).where(eq(adChangeRequests.id, change.id));
+  await db
+    .update(adChangeRequests)
+    .set({ status: 'unknown' })
+    .where(eq(adChangeRequests.id, change.id));
   await db.insert(adGuardrailEvents).values({
     adAccountId: account.id,
     kind: 'unknown_execution_outcome',
