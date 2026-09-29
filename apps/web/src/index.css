@@ -297,6 +297,57 @@ a {
   min-width: 0;
 }
 
+/* A phone: the menu sits above the page instead of beside it, so the page
+   keeps the whole width. Without this the 250 px column left 140 px for
+   everything else at 390 px. */
+@media (max-width: 700px) {
+  .shell {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    width: auto;
+    min-width: 0;
+    height: auto;
+    position: static;
+    padding: 12px 0 0;
+    border-right: none;
+    border-bottom: 1px solid var(--wings-border);
+  }
+
+  .sidebar-brand {
+    padding: 0 16px 12px;
+  }
+
+  .sidebar-brand-mark {
+    max-width: 160px;
+  }
+
+  .sidebar-menu {
+    flex-direction: row;
+    flex-wrap: wrap;
+    overflow: visible;
+    padding: 10px 12px;
+    gap: 4px 8px;
+  }
+
+  .sidebar-user {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+    padding: 10px 16px;
+  }
+
+  .sidebar-user .btn {
+    margin-top: 0;
+  }
+
+  .content {
+    padding: 16px;
+  }
+}
+
 .page-header {
   border-bottom: 1px solid var(--wings-border);
   padding-bottom: 16px;

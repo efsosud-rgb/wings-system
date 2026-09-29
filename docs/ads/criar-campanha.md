@@ -74,6 +74,27 @@ nome repetido no pedido. Motivo: um create que dá timeout não devolve id, ent�
 
 ## Criativos e pré-visualização
 
+- **Bloco 7 "Criativo" é o único lugar dos criativos** (29/09/2026, refeito
+  depois da reprovação do Eric à versão remendada: arquivo num bloco, texto
+  noutro, botão de adicionar num terceiro). Até 5 criativos por conjunto, e
+  cada cartão escolhe o **seu** tipo — imagem única, vídeo ou carrossel (ex.:
+  1 vídeo, 2 imagem, 3 carrossel). Cada cartão tem o tipo, o anexo
+  (arrastar-e-soltar, "Escolher arquivo", "Escolher do Drive") com
+  pré-visualização e barra de progresso, Título (40), Texto (contador, ~125),
+  Botão e o `utm_content` automático pelo tipo e posição (`video-1`,
+  `imagem-2`, `carrossel-3`). Carrossel: de 2 a 10 cartões, cada um com imagem
+  ou vídeo (o arquivo diz qual), título, texto opcional e link. "+ Adicionar
+  criativo" no fim do bloco, "Remover" em cada cartão (fica sempre um), e no
+  topo a caixa "Usar o mesmo texto, título e botão em todos" (só o Criativo 1
+  mostra os textos; os outros dizem que seguem o primeiro). O bloco
+  "Variações" deixou de existir e o antigo "Copy" virou "Destino", só com a
+  página de destino. Os blocos seguintes renumeram sozinhos (`stepOf`).
+- **Vídeos sobem em partes de 8 MiB** (`docs/ads/upload-de-video.md`): o envio
+  em uma requisição só não sobrevive ao `readTimeout` de 60 s do Traefik v3 nem
+  aos 5 min do Node para arquivos grandes, e o `fetch` não mostra progresso.
+  Imagens vão em uma requisição, por `XMLHttpRequest`, também com progresso.
+  Componentes em `apps/web/src/components/campaign-builder/CreativeBlock.tsx`;
+  envio em `apps/web/src/api/uploads.ts`.
 - As imagens sobem para o **nosso** banco (`ad_creative_uploads`, `bytea`,
   PNG/JPEG até 8 MB, lado menor ≥ 600 px). Tipo e dimensões são lidos dos
   bytes no servidor; o que o navegador diz é ignorado. São imutáveis, e o hash
