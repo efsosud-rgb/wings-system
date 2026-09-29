@@ -437,3 +437,17 @@ trilha como `ads.manual_platform_change`:
   `WhatsApp_clique` e `Contato_WhatsApp` a secundárias.
 - Sem alterações de lance, horário ou local além dos 6 estados; Maximizar
   cliques não aplica ajustes de lance (só −100 % de dispositivo).
+
+### 29/09/2026 (manhã): parceiros desligados, genéricas pausadas, exatas e negativas
+
+Termos de pesquisa das 10:35: R$ 36,31 de R$ 39,71 do dia vieram da rede de
+parceiros (52 impressões, 39 cliques, CTR 75 %) pelas frases `consultoria
+empresarial` e `consultoria de negócios` do grupo Estruturação, em buscas de
+sistemas, riscos, governança e "principais consultorias"; 0 conversões.
+Aprovado e aplicado (`validateOnly` antes, uma escrita): parceiros de pesquisa
+**desligados**; as duas frases genéricas **pausadas**; exatas `[consultoria
+para estruturar empresa]` e `[consultoria empresarial para pequenas empresas]`
+criadas; +7 negativas (57). Ampla `como franquear minha empresa` (termo
+"franquia") mantida em observação. Verba R$ 100, CPC R$ 10 e os 6 estados
+inalterados. Lição registrada: em Pesquisa B2B de nicho, parceiros de
+pesquisa + frase genérica é a combinação que queima a verba.
