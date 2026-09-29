@@ -43,3 +43,20 @@ Eventos do contato trazem `payload.conversion_identifier` e `traffic_source`.
 `contacts: [{ _id }]` não funciona; agora o contato vai inteiro e o RD casa por
 e-mail — conferir na primeira criação real, `unverified` avisa); dono do negócio
 (Expansão: `EXPANSION_OWNER_RD_USER_ID`, id do usuário no RD CRM, vai em `deal.user_id`; Formatação fica sem dono; `distribution_settings` do RD não foi testado).
+
+## Auditoria de conversões (somente leitura)
+
+`GET /expansion/landing-audit?days=90` (permissão `integrations.manage`) percorre as
+conversões do RD Marketing dos últimos N dias (1 a 120) e cruza com os negócios do RD
+CRM. Só GET no RD (a única exceção é o POST de renovação do token OAuth); não cria nem
+altera nada. A primeira chamada inicia a varredura e responde **202**; as seguintes
+respondem `running` até terminar e então o resultado (`refresh=1` refaz). Uma varredura
+por vez, guardada só na memória do processo. Sem credenciais do RD: 503.
+
+A resposta traz apenas contagens, identificadores de conversão, nomes de funil e etapa e
+nomes de campanha: por identificador, conversões, pessoas, quantas viraram negócio (por
+"Funil / Etapa") e quantas vazaram; e a lista de hoje (fuso de São Paulo) com plataforma
+(gclid/fbclid/utm_source), tipo de evento, horário e um número por pessoa. Nunca nome,
+e-mail nem telefone. `registered` lista as páginas ativas da tabela
+`expansion_landing_pages`, para achar as que não tiveram conversão. O RD não expõe uma
+lista de landing pages pela API, então "página sem conversão" é a cadastrada sem conversão.

@@ -3,6 +3,9 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { expansionLandingPages } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
+import { auditConversions, type AuditResult } from './audit.js';
+import { RdCrm, RdMarketing } from './rd.js';
+import { activeRules } from './service.js';
 
 const identifierSchema = z
   .string()
@@ -37,6 +40,72 @@ export const expansionRoutes: FastifyPluginAsync = async (app) => {
         active: row.active,
       })),
     });
+  });
+
+  // Read-only audit of RD conversions -> RD CRM deals. Walking RD takes minutes
+  // (its limit is per minute), so the first GET starts the run and answers 202;
+  // the next ones answer the result. One run at a time, kept in memory only.
+  let audit:
+    | { state: 'running'; startedAt: string; days: number }
+    | { state: 'done'; finishedAt: string; result: AuditResult; registered: string[] }
+    | { state: 'failed'; finishedAt: string; error: string }
+    | null = null;
+
+  app.get('/expansion/landing-audit', guard, async (request, reply) => {
+    const query = z
+      .object({
+        days: z.coerce.number().int().min(1).max(120).default(90),
+        refresh: z.enum(['1']).optional(),
+      })
+      .safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: 'invalid_query' });
+    const { days, refresh } = query.data;
+    const env = app.wings.env;
+    if (
+      !env.RD_CRM_API_TOKEN ||
+      !env.RD_MKT_CLIENT_ID ||
+      !env.RD_MKT_CLIENT_SECRET ||
+      !env.RD_MKT_REFRESH_TOKEN
+    ) {
+      return reply.code(503).send({ error: 'rd_not_configured' });
+    }
+    if (audit?.state === 'running') return reply.code(202).send(audit);
+    const fresh = audit?.state === 'done' && audit.result.days === days && !refresh;
+    if (fresh) return reply.send(audit);
+
+    audit = { state: 'running', startedAt: new Date().toISOString(), days };
+    await writeAudit(db, {
+      actorEmployeeId: request.session.actor.employeeId,
+      action: 'expansion.landing_audit_started',
+      entity: 'expansion_landing_audit',
+      entityId: 'rd',
+      metadata: { days },
+    });
+    const credentials = {
+      clientId: env.RD_MKT_CLIENT_ID,
+      clientSecret: env.RD_MKT_CLIENT_SECRET,
+      refreshToken: env.RD_MKT_REFRESH_TOKEN,
+    };
+    const crmToken = env.RD_CRM_API_TOKEN;
+    void (async () => {
+      try {
+        const result = await auditConversions({
+          marketing: new RdMarketing(credentials, app.wings.rdFetch),
+          crm: new RdCrm(crmToken, app.wings.rdFetch),
+          days,
+        });
+        const registered = (await activeRules(db)).map((rule) => rule.identifier);
+        audit = { state: 'done', finishedAt: new Date().toISOString(), result, registered };
+      } catch (error) {
+        // The message names a path and a status only (rd.ts), never a body.
+        audit = {
+          state: 'failed',
+          finishedAt: new Date().toISOString(),
+          error: error instanceof Error ? error.message.slice(0, 200) : 'unknown',
+        };
+      }
+    })();
+    return reply.code(202).send(audit);
   });
 
   app.put('/expansion/landing-pages', guard, async (request, reply) => {

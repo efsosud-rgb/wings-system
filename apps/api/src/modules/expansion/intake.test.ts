@@ -16,6 +16,8 @@ function conversion(over: Partial<Conversion>): Conversion {
     company: null,
     utms: { source: 'meta', medium: 'cpc', campaign: 'c1', content: null },
     page: 'lp.example.com/x',
+    eventType: 'CONVERSION',
+    ads: null,
     ...over,
   };
 }
