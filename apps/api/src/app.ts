@@ -51,6 +51,8 @@ declare module 'fastify' {
       mediaFetch?: typeof fetch;
       /** Set only by tests, so no test ever reaches a real bucket. */
       storageFetch?: typeof fetch;
+      /** Set only by tests, so no test ever reaches RD Station. */
+      rdFetch?: typeof fetch;
       /** Set only by tests, so no test ever reaches BrasilAPI, ReceitaWS or ViaCEP. */
       registryFetch?: typeof fetch;
       storage?: ObjectStorage;
@@ -75,6 +77,8 @@ export async function buildApp(deps: {
   agentLlm?: AgentLlm;
   /** Overridable so tests talk to a simulated Kairogen. */
   kairogenFetch?: typeof fetch;
+  /** Overridable so tests never reach RD Station. */
+  rdFetch?: typeof fetch;
   /** Overridable so tests talk to simulated media providers. */
   mediaFetch?: typeof fetch;
   storageFetch?: typeof fetch;
@@ -106,6 +110,7 @@ export async function buildApp(deps: {
     platformFetch: deps.platformFetch,
     agentLlm: deps.agentLlm,
     kairogenFetch: deps.kairogenFetch,
+    rdFetch: deps.rdFetch,
     mediaFetch: deps.mediaFetch,
     storageFetch: deps.storageFetch,
     registryFetch: deps.registryFetch,
