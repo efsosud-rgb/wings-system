@@ -377,6 +377,28 @@ export const adVideoUploads = pgTable('ad_video_uploads', {
 });
 
 /**
+ * A video on its way up, in parts. One request per part keeps every request
+ * short (a proxy's read timeout, Node's request timeout) and moves the bar on
+ * screen. The bytes accumulate in `<storage_key>.part` on the volume; once
+ * every part is in and the bytes say "video", the file is renamed and a row
+ * goes into `ad_video_uploads`. A session nobody finishes expires in a day.
+ */
+export const adVideoUploadSessions = pgTable('ad_video_upload_sessions', {
+  tenantId: tenantId(),
+  id: uuid('id').primaryKey().defaultRandom(),
+  mimeType: text('mime_type').notNull(),
+  byteSize: bigint('byte_size', { mode: 'number' }).notNull(),
+  partSize: integer('part_size').notNull(),
+  receivedBytes: bigint('received_bytes', { mode: 'number' }).notNull().default(0),
+  nextPart: integer('next_part').notNull().default(1),
+  /** File name inside CREATIVE_VIDEO_DIR (without `.part`) — never a client's name. */
+  storageKey: text('storage_key').notNull(),
+  uploadedBy: uuid('uploaded_by').references(() => employees.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+});
+
+/**
  * Wings' standing choice of Facebook Page and Instagram account to advertise
  * as. One row per tenant; every request still carries its own copy.
  */
