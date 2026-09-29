@@ -49,22 +49,50 @@ describe('landing page audit', () => {
         u3: [conv({ contactUuid: 'u3', identifier: 'lp-b', email: 'c@example.com' })],
       },
       { 'a@example.com': { id: 'c1', deals: [{ id: 'd1', win: null }] } },
-      { d1: { createdAt: new Date('2026-09-29T14:05:00Z'), pipeline: 'Formatação', stage: 'Sem contato' } },
+      {
+        d1: {
+          createdAt: new Date('2026-09-29T14:05:00Z'),
+          pipeline: 'Formatação',
+          stage: 'Sem contato',
+        },
+      },
     );
     const a = result.pages.find((p) => p.identifier === 'lp-a')!;
     expect(a).toMatchObject({ conversions: 2, people: 2, withDeal: 1, leaked: 1 });
     expect(a.funnels).toEqual({ 'Formatação / Sem contato': 1 });
-    expect(result.pages.find((p) => p.identifier === 'lp-b')).toMatchObject({ leaked: 1, withDeal: 0 });
+    expect(result.pages.find((p) => p.identifier === 'lp-b')).toMatchObject({
+      leaked: 1,
+      withDeal: 0,
+    });
   });
 
   it("lists today's conversions with the platform, event type and one number per person", async () => {
     const result = await run(
       {
         u1: [
-          conv({ ads: 'meta', utms: { source: 'facebook', medium: 'cpc', campaign: 'Jimmy Ogro 28Set', content: null } }),
-          conv({ ads: 'google', occurredAt: new Date('2026-09-29T15:00:00Z'), eventType: 'OPPORTUNITY' }),
+          conv({
+            ads: 'meta',
+            utms: {
+              source: 'facebook',
+              medium: 'cpc',
+              campaign: 'Jimmy Ogro 28Set',
+              content: null,
+            },
+          }),
+          conv({
+            ads: 'google',
+            occurredAt: new Date('2026-09-29T15:00:00Z'),
+            eventType: 'OPPORTUNITY',
+          }),
         ],
-        u2: [conv({ contactUuid: 'u2', email: 'outra@example.com', ads: 'google', occurredAt: new Date('2026-09-28T10:00:00Z') })],
+        u2: [
+          conv({
+            contactUuid: 'u2',
+            email: 'outra@example.com',
+            ads: 'google',
+            occurredAt: new Date('2026-09-28T10:00:00Z'),
+          }),
+        ],
       },
       {},
       {},

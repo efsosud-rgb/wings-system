@@ -76,7 +76,9 @@ function pageOfTrafficSource(trafficSource: string | null | undefined): string |
 }
 
 /** 'google' for a gclid or a Google UTM source, 'meta' for an fbclid or a Meta one; else null. */
-export function adsOfTrafficSource(trafficSource: string | null | undefined): 'google' | 'meta' | null {
+export function adsOfTrafficSource(
+  trafficSource: string | null | undefined,
+): 'google' | 'meta' | null {
   if (!trafficSource) return null;
   try {
     const raw = trafficSource.startsWith('encoded_') ? trafficSource.slice(8) : trafficSource;
@@ -88,7 +90,8 @@ export function adsOfTrafficSource(trafficSource: string | null | undefined): 'g
     for (const session of [decoded.current_session, decoded.first_session]) {
       const params = new Map<string, string>();
       try {
-        if (session?.value) for (const [k, v] of new URL(session.value).searchParams) params.set(k, v);
+        if (session?.value)
+          for (const [k, v] of new URL(session.value).searchParams) params.set(k, v);
       } catch {
         // "(direct)" and the like.
       }
@@ -97,7 +100,8 @@ export function adsOfTrafficSource(trafficSource: string | null | undefined): 'g
       }
       const source = (params.get('utm_source') ?? '').toLowerCase();
       if (params.has('gclid') || /google|adwords|gads/.test(source)) return 'google';
-      if (params.has('fbclid') || /facebook|instagram|meta|^fb$|^ig$/.test(source)) found = found ?? 'meta';
+      if (params.has('fbclid') || /facebook|instagram|meta|^fb$|^ig$/.test(source))
+        found = found ?? 'meta';
     }
     return found;
   } catch {

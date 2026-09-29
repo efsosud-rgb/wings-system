@@ -60,3 +60,19 @@ nomes de campanha: por identificador, conversões, pessoas, quantas viraram neg�
 e-mail nem telefone. `registered` lista as páginas ativas da tabela
 `expansion_landing_pages`, para achar as que não tiveram conversão. O RD não expõe uma
 lista de landing pages pela API, então "página sem conversão" é a cadastrada sem conversão.
+
+## Recuperação de conversões sem negócio
+
+Tela: Integrações → "Recuperar conversões sem negócio (30 dias)" (`integrations.manage`).
+API: `GET/POST /expansion/landing-recovery`. Duas etapas, impostas pelo servidor:
+
+1. `POST { dryRun: true, days }` lê o RD e diz quantos negócios criaria. Não escreve nada.
+2. `POST { dryRun: false, planId, expectedCreated }` só vale se aquela simulação terminou há
+   menos de 2 h e o número confirmado é o que ela previu; a simulação autoriza uma execução.
+
+Escopo fixo: `wings-company-form-site`, `lp-formatacao-whatsapp` e `Formulário Simplificado. -02`
+→ Formatação / Novo Contato (sem dono); `lp-calcadao-do-frango` → Expansão / Novo Contato, dono
+`EXPANSION_OWNER_RD_USER_ID`, com a tarefa "Fazer primeiro contato". `fluentform_3` só é contado.
+Mesma regra de cobertura do job (negócio aberto, ou criado depois da conversão, cobre; nunca
+duplica) e o mesmo `expansion_intake_ledger`. A resposta e a auditoria (`expansion.recovery_*`)
+têm contagens e ids de negócio, nunca dado pessoal.

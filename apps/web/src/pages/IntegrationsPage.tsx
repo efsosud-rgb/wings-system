@@ -23,6 +23,8 @@ import {
 } from '../api/integrations.js';
 import {
   useExpansionLandingPages,
+  useRecoveryState,
+  useStartRecovery,
   useRemoveLandingPage,
   useSaveLandingPage,
 } from '../api/expansion.js';
@@ -624,6 +626,103 @@ function ExpansionIntakeSection() {
   );
 }
 
+/**
+ * Recuperar conversões vazadas: two steps, in this order. "Simular" reads RD
+ * and creates nothing; only then can the same screen create exactly the
+ * number it showed. Counts and deal ids only, never a person.
+ */
+function RecoverySection() {
+  const session = useSession();
+  const canManage = hasPermission(session.data, 'integrations.manage');
+  const recovery = useRecoveryState(canManage);
+  const start = useStartRecovery();
+  if (!canManage) return null;
+  const state = recovery.data;
+  const busy = start.isPending || state?.state === 'running';
+  const asText = (counts: Record<string, number>) =>
+    Object.entries(counts)
+      .map(([name, n]) => `${name}: ${n}`)
+      .join(' · ') || 'nenhum';
+
+  return (
+    <section aria-labelledby="recovery-title">
+      <h2 id="recovery-title">Recuperar conversões sem negócio (30 dias)</h2>
+      <p className="muted">
+        Formulários de Formatação (wings-company-form-site, lp-formatacao-whatsapp, Formulário
+        Simplificado. -02) viram negócio em Formatação / Novo Contato; o Calçadão do Frango
+        (lp-calcadao-do-frango), em Expansão / Novo Contato, com o dono da Expansão. Quem já tem
+        negócio aberto, ou negócio criado depois da conversão, não recebe outro. O fluentform_3 só é
+        listado. Primeiro simule; só depois dá para criar.
+      </p>
+      <Button
+        type="button"
+        disabled={busy}
+        onClick={() => start.mutate({ dryRun: true, days: 30 })}
+      >
+        Simular (não cria nada)
+      </Button>
+      {start.error && (
+        <Alert kind="error">
+          {start.error instanceof ApiError && start.error.code === 'already_running'
+            ? 'Já existe uma varredura em andamento.'
+            : 'Não foi possível iniciar.'}
+        </Alert>
+      )}
+      {state?.state === 'running' && (
+        <p className="muted">
+          Lendo o RD ({state.mode === 'dry' ? 'simulação' : 'criação'}). Leva alguns minutos.
+        </p>
+      )}
+      {state?.state === 'failed' && <Alert kind="error">Falhou: {state.error}</Alert>}
+      {state?.state === 'done' && (
+        <div className="integration-plan">
+          <p>
+            <strong>
+              {state.mode === 'dry'
+                ? `Simulação: criaria ${state.result.wouldCreate} negócio(s).`
+                : `Criados: ${state.result.wouldCreate} negócio(s).`}
+            </strong>{' '}
+            {asText(state.result.created)}
+          </p>
+          <ul className="muted">
+            <li>Conversões lidas: {state.result.conversionsSeen}</li>
+            <li>Já tinham negócio: {state.result.existingDeal}</li>
+            <li>Já decididas antes: {state.result.alreadyDecided}</li>
+            <li>Recentes demais (15 min): {state.result.settling}</li>
+            <li>Sem e-mail nem telefone: {state.result.noContactData}</li>
+            <li>
+              Falhas: {state.result.failed} · sem contato/origem na leitura:{' '}
+              {state.result.unverified} · tarefas recusadas: {state.result.taskFailed}
+            </li>
+            <li>Só listado: {asText(state.result.listOnly)}</li>
+            <li>Outras páginas, deixadas como estão: {asText(state.result.ignored)}</li>
+          </ul>
+          {state.mode === 'real' && state.result.createdDealIds.length > 0 && (
+            <p>
+              Ids dos negócios: <code>{state.result.createdDealIds.join(', ')}</code>
+            </p>
+          )}
+          {state.mode === 'dry' && state.result.wouldCreate > 0 && (
+            <Button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                start.mutate({
+                  dryRun: false,
+                  planId: state.planId,
+                  expectedCreated: state.result.wouldCreate,
+                })
+              }
+            >
+              Criar {state.result.wouldCreate} negócio(s)
+            </Button>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function IntegrationsPage() {
   return (
     <>
@@ -637,6 +736,7 @@ export function IntegrationsPage() {
       <KairogenCard />
       <MediaProviderCards />
       <ExpansionIntakeSection />
+      <RecoverySection />
       <BudgetCapsSection />
     </>
   );

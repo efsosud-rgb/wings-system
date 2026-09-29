@@ -21,6 +21,7 @@ import { clientRecordRoutes } from './modules/clients/record-routes.js';
 import { clientRoutes } from './modules/clients/routes.js';
 import { insightsRoutes } from './modules/insights/routes.js';
 import { driveBlobRoutes, driveRoutes } from './modules/drive/routes.js';
+import { expansionRecoveryRoutes } from './modules/expansion/recovery.js';
 import { expansionRoutes } from './modules/expansion/routes.js';
 import { kairogenRoutes } from './modules/integrations/kairogen/routes.js';
 import { leadRoutes } from './modules/leads/routes.js';
@@ -177,6 +178,7 @@ export async function buildApp(deps: {
   await app.register(driveBlobRoutes);
   await app.register(kairogenRoutes);
   await app.register(expansionRoutes);
+  await app.register(expansionRecoveryRoutes);
   await app.register(mediaRoutes);
   await app.register(mediaStudioRoutes);
   await app.register(studioRoutes);

@@ -93,7 +93,8 @@ export async function auditConversions(input: {
     for (const conversion of conversions) {
       // Covered like the job does: a deal made from an hour before the conversion on.
       const fresh = deals.find(
-        (deal) => deal.createdAt && deal.createdAt.getTime() >= conversion.occurredAt.getTime() - 3_600_000,
+        (deal) =>
+          deal.createdAt && deal.createdAt.getTime() >= conversion.occurredAt.getTime() - 3_600_000,
       );
       const placed = fresh ?? deals[0];
       const where = placed ? `${placed.pipeline} / ${placed.stage}` : null;
@@ -127,7 +128,9 @@ export async function auditConversions(input: {
       if (conversion.occurredAt >= dayStart) {
         today.push({
           identifier: conversion.identifier,
-          hour: new Date(conversion.occurredAt.getTime() - SP_OFFSET_MS).toISOString().slice(11, 16),
+          hour: new Date(conversion.occurredAt.getTime() - SP_OFFSET_MS)
+            .toISOString()
+            .slice(11, 16),
           ads: conversion.ads,
           eventType: conversion.eventType,
           utmSource: conversion.utms?.source ?? null,

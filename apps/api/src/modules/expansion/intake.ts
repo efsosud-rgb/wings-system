@@ -80,6 +80,8 @@ export interface IntakeResult {
   unverified: number;
   /** Would create (dry run) or created, per funnel and brand. */
   created: Record<string, number>;
+  /** RD CRM ids of the deals this run made (empty on a dry run). */
+  createdDealIds: string[];
 }
 
 /** The deal is "covered" when the contact has one open, or one RD made after this conversion. */
@@ -137,9 +139,10 @@ function dealFor(
   brand: string | null,
   map: CrmMap,
   ownerId: string | null,
+  stageName?: string,
 ): NewDeal | null {
   const spec = TARGETS[target];
-  const stageId = map.pipelines.get(spec.pipeline)?.stages.get(spec.stage);
+  const stageId = map.pipelines.get(spec.pipeline)?.stages.get(stageName ?? spec.stage);
   if (!stageId) return null;
   const customFields: { id: string; value: string }[] = [];
   const brandField = map.customFields.get('Nome da Marca');
@@ -174,6 +177,12 @@ export async function runExpansionIntake(input: {
   since: Date;
   dryRun: boolean;
   now?: () => Date;
+  /**
+   * A recovery pass: only these identifiers are handled (the rest are counted
+   * as ignored), and these identifiers are Formatação forms that land in the
+   * given stage instead of the site form's "Sem contato".
+   */
+  recovery?: { only: string[]; formatacaoIdentifiers: string[]; formatacaoStage: string };
 }): Promise<IntakeResult> {
   const { marketing, crm, ledger, dryRun } = input;
   const brandOf = new Map(input.rules.map((rule) => [rule.identifier, rule.brand]));
@@ -189,6 +198,7 @@ export async function runExpansionIntake(input: {
     taskFailed: 0,
     unverified: 0,
     created: {},
+    createdDealIds: [],
   };
   const uuids = await marketing.contactsConvertedSince(input.since);
   result.contacts = uuids.length;
@@ -202,12 +212,19 @@ export async function runExpansionIntake(input: {
     );
     for (const conversion of conversions) {
       result.conversions += 1;
+      const recovery = input.recovery;
       const brand = brandOf.get(conversion.identifier) ?? null;
-      const target: Target | null = brand
-        ? 'expansao'
-        : conversion.identifier === FORM_SITE_IDENTIFIER
+      const outOfScope = recovery ? !recovery.only.includes(conversion.identifier) : false;
+      const isFormatacao = recovery
+        ? recovery.formatacaoIdentifiers.includes(conversion.identifier)
+        : conversion.identifier === FORM_SITE_IDENTIFIER;
+      const target: Target | null = outOfScope
+        ? null
+        : isFormatacao
           ? 'formatacao'
-          : null;
+          : brand
+            ? 'expansao'
+            : null;
       if (!target) {
         result.ignored[conversion.identifier] = (result.ignored[conversion.identifier] ?? 0) + 1;
         continue;
@@ -240,11 +257,19 @@ export async function runExpansionIntake(input: {
           continue;
         }
         map ??= await crm.map();
-        const deal = dealFor(conversion, target, brand, map, input.expansionOwnerId ?? null);
+        const deal = dealFor(
+          conversion,
+          target,
+          brand,
+          map,
+          input.expansionOwnerId ?? null,
+          target === 'formatacao' ? input.recovery?.formatacaoStage : undefined,
+        );
         if (!deal) throw new Error('funnel or stage not found in RD CRM');
         const dealId = await crm.createDeal(deal);
         handled.add(uuid);
         result.created[label] = (result.created[label] ?? 0) + 1;
+        result.createdDealIds.push(dealId);
         await ledger.record({ key, target, outcome: 'created', dealId });
         if (target === 'expansao' && input.expansionOwnerId) {
           try {
