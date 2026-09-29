@@ -122,6 +122,19 @@ export interface ApprovalDetail extends ApprovalListItem {
   fromValueCents: number | null;
   toValueCents: number | null;
   exposureDeltaCents: number;
+  /**
+   * What the campaign will cost to its end at the daily budget asked for:
+   * daily × days, with the days counted. A new campaign from its first day to
+   * its last; a budget change from today to the campaign's end date. Null for
+   * a change that is not about budget, or a campaign without an end date.
+   */
+  campaignForecast: {
+    dailyCents: number;
+    days: number;
+    totalCents: number;
+    from: string;
+    until: string;
+  } | null;
   /** Reason given by whoever requested the change. */
   requestReason: string | null;
   decisionReason: string | null;

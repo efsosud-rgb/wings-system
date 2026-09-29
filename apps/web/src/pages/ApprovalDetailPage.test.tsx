@@ -86,6 +86,7 @@ function buildApproval(overrides: Partial<ApprovalDetail> = {}): ApprovalDetail 
     status: 'pending',
     trigger: 'policy_always',
     amountCents: 37_500,
+    campaignForecast: null,
     accountName: 'Wings Matriz',
     platform: 'meta',
     campaignName: 'Institucional',
@@ -626,8 +627,11 @@ describe('a Meta request that creates the ad set and the ads', () => {
     expect(screen.getByText('Facebook: Feed · Instagram: Stories, Reels')).toBeTruthy();
     expect(screen.getByText('Página 104567890123456')).toBeTruthy();
     expect(screen.getByText('Instagram 17841400000000000')).toBeTruthy();
-    expect(screen.getByText('1. Vídeo')).toBeTruthy();
-    expect(screen.getByText('2. Carrossel (3 cartões)')).toBeTruthy();
+    // Each creative with its title and the utm_content its ad will carry.
+    expect(screen.getByText(/^1\. Vídeo/)).toBeTruthy();
+    expect(screen.getByText(/^2\. Carrossel \(3 cartões\)/)).toBeTruthy();
+    expect(screen.getByText('utm_content=video-1')).toBeTruthy();
+    expect(screen.getByText('utm_content=carrossel-2')).toBeTruthy();
     // Nothing exists on Meta yet: no official preview is asked for.
     expect(screen.queryByText('Prévia oficial da Meta')).toBeNull();
     expect(previewsAskedFor).not.toHaveBeenCalled();
@@ -749,5 +753,23 @@ describe('a Meta request that creates the ad set and the ads', () => {
     ).toBeTruthy();
     expect(screen.getByText(/Não é a prévia oficial da Meta/)).toBeTruthy();
     expect(document.querySelector('iframe')).toBeNull();
+  });
+});
+
+describe('the forecast to the end and who asked', () => {
+  it('shows the daily budget times the days left, and names a terminal request as such', () => {
+    approval.current = buildApproval({
+      changeKind: 'set_daily_budget',
+      fromValueCents: 24_000,
+      toValueCents: 12_000,
+      requestedByName: null,
+      requestedByAgent: false,
+      campaignForecast: { dailyCents: 12_000, days: 4, totalCents: 48_000, from: '2026-09-29', until: '2026-10-02' },
+    });
+    renderDetail();
+    const box = (screen.getByText('Total previsto da campanha até o fim').parentElement?.textContent ?? '').replace(/\u00a0/g, ' ');
+    expect(box).toContain('R$ 480,00');
+    expect(box).toContain('R$ 120,00 × 4 dias (29/09/2026 a 02/10/2026)');
+    expect(screen.getByText('Pedido pelo terminal (ops-cli), sem pessoa registrada')).toBeTruthy();
   });
 });

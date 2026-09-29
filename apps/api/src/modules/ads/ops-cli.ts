@@ -1,9 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { campaignDraftSchema, type CampaignDraft } from '@wings/shared';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { createDb } from '../../db/client.js';
 import { loadDotEnv } from '../../db/load-env.js';
-import { adAccounts, adApprovalRequests, adCampaignSavedDrafts } from '../../db/schema/index.js';
+import {
+  adAccounts,
+  adApprovalRequests,
+  adCampaignSavedDrafts,
+  employees,
+} from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createSpecOf, preflightChange, type PreflightResult } from './executor.js';
 import { createApprovalNotifier } from './notifiers/factory.js';
@@ -31,7 +36,7 @@ import { formatBrl } from './platform/money.js';
  *   node dist/modules/ads/ops-cli.js preflight [--expect-user <id na Meta>]
  *   node dist/modules/ads/ops-cli.js alerts
  *   node dist/modules/ads/ops-cli.js request --account act_… --campaign 1202… \
- *        --kind pause_campaign --reason "…"
+ *        --kind pause_campaign --reason "…" [--requested-by e-mail@wingscompany.com.br]
  *   node dist/modules/ads/ops-cli.js resolve-unknown --change <uuid>
  *   node dist/modules/ads/ops-cli.js release-kill-switch --account act_… --reason "…"
  *   node dist/modules/ads/ops-cli.js preflight-google --approval <uuid>
@@ -142,7 +147,16 @@ async function main() {
           throw new Error('set_daily_budget exige --to-cents (orçamento diário em centavos)');
         }
 
+        // Who asked, when a person did: shown as "Solicitado por" on the approval.
+        const requesterEmail = arg('requested-by');
+        const requester = requesterEmail
+          ? await db.query.employees.findFirst({
+              where: sql`lower(${employees.email}) = ${requesterEmail.trim().toLowerCase()}`,
+            })
+          : undefined;
+        if (requesterEmail && !requester) throw new Error(`--requested-by: nenhum funcionário com o e-mail ${requesterEmail}`);
         const result = await requestCampaignChange(db, {
+          requestedBy: requester?.id ?? null,
           accountExternalId: required('account'),
           campaignExternalId: required('campaign'),
           kind,

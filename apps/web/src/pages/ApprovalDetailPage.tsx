@@ -11,6 +11,7 @@ import {
   PLACEMENT_PUBLISHER_LABEL,
   PREVIEW_PLACEMENTS,
   PREVIEW_PLACEMENT_LABEL,
+  adUtmContent,
   applyUtms,
   campaignDays,
   describeReach,
@@ -198,6 +199,26 @@ function Summary({ approval }: { approval: ApprovalDetail }) {
           <p className="mono">{formatBrl(approval.amountCents)}</p>
         </div>
         <div>
+          <span className="field-label">Total previsto da campanha até o fim</span>
+          {approval.campaignForecast ? (
+            <>
+              <p className="mono">{formatBrl(approval.campaignForecast.totalCents)}</p>
+              <span className="cell-sub">
+                {formatBrl(approval.campaignForecast.dailyCents)} × {approval.campaignForecast.days}{' '}
+                {approval.campaignForecast.days === 1 ? 'dia' : 'dias'} (
+                {approval.campaignForecast.from.split('-').reverse().join('/')} a{' '}
+                {approval.campaignForecast.until.split('-').reverse().join('/')})
+              </span>
+            </>
+          ) : (
+            <p className="muted">
+              {approval.changeKind === 'set_daily_budget'
+                ? '— a campanha não tem data de fim'
+                : '— não é mudança de verba'}
+            </p>
+          )}
+        </div>
+        <div>
           <span className="field-label">Motivo da aprovação</span>
           <p>{APPROVAL_TRIGGER_LABEL[approval.trigger]}</p>
         </div>
@@ -225,7 +246,7 @@ function Summary({ approval }: { approval: ApprovalDetail }) {
           <p>
             {approval.requestedByAgent
               ? 'Agente de tráfego pago'
-              : (approval.requestedByName ?? '—')}
+              : (approval.requestedByName ?? 'Pedido pelo terminal (ops-cli), sem pessoa registrada')}
           </p>
           {approval.suggestedByAgent && <span className="tag tag-agent">sugerido pelo agente</span>}
           <span className="cell-sub">{formatDateTime(approval.requestedAt)}</span>
@@ -332,7 +353,15 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
                 <p key={index}>
                   {index + 1}. {CREATIVE_TYPE_LABEL[variation.creativeType ?? 'image']}
                   {variation.creativeType === 'carousel' &&
-                    ` (${(variation.cards ?? []).length} cartões)`}
+                    ` (${(variation.cards ?? []).length} cartões)`}{' '}
+                  — {variation.headline}
+                  <span className="cell-sub mono">
+                    utm_content=
+                    {adUtmContent({
+                      creativeType: variation.creativeType ?? 'image',
+                      position: index + 1,
+                    })}
+                  </span>
                 </p>
               ))}
             </div>

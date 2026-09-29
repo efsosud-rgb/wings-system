@@ -169,6 +169,7 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
           last_execution_outcome: 'applied' | 'rejected' | 'unknown' | null;
           last_execution_id: string | null;
           draft_payload: CampaignDraft | null;
+          campaign_end_date: string | null;
         }
       >(sql`
         select ar.id, ar.status, ar.trigger, ar.amount_cents::text as amount_cents,
@@ -177,6 +178,7 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
                coalesce(c.name, d.name) as campaign_name,
                coalesce(c.external_id, '') as campaign_external_id,
                coalesce(c.budget_level, 'campaign') as budget_level, d.payload as draft_payload,
+               c.end_date::text as campaign_end_date,
                cr.kind as change_kind, cr.from_value_cents::text as from_value_cents,
                cr.to_value_cents::text as to_value_cents,
                cr.exposure_delta_cents::text as exposure_delta_cents, cr.reason as request_reason,
@@ -248,8 +250,32 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         }
       }
 
+      // Total to the end: daily × days. A new campaign runs its whole period;
+      // a budget change runs from today (São Paulo) to the campaign's end.
+      const dayCount = (from: string, until: string) =>
+        Math.round((Date.parse(`${until}T12:00:00Z`) - Date.parse(`${from}T12:00:00Z`)) / 86_400_000) + 1;
+      const todaySp = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(
+        app.wings.now?.() ?? new Date(),
+      );
+      let campaignForecast: ApprovalDetail['campaignForecast'] = null;
+      if (row.change_kind === 'create_campaign' && row.draft_payload) {
+        const { startDate, endDate, dailyBudgetCents } = row.draft_payload;
+        const days = dayCount(startDate, endDate);
+        campaignForecast = { dailyCents: dailyBudgetCents, days, totalCents: dailyBudgetCents * days, from: startDate, until: endDate };
+      } else if (
+        row.change_kind === 'set_daily_budget' &&
+        row.to_value_cents !== null &&
+        row.campaign_end_date &&
+        row.campaign_end_date >= todaySp
+      ) {
+        const days = dayCount(todaySp, row.campaign_end_date);
+        const daily = Number(row.to_value_cents);
+        campaignForecast = { dailyCents: daily, days, totalCents: daily * days, from: todaySp, until: row.campaign_end_date };
+      }
+
       const detail: ApprovalDetail = {
         ...toListItem(row),
+        campaignForecast,
         savedDraftDrift,
         accountId: row.ad_account_id,
         accountExternalId: row.account_external_id,
