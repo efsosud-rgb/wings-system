@@ -28,6 +28,12 @@ import {
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
+import {
+  sendCreativeImage,
+  sendCreativeVideo,
+  useFileUpload,
+  type FileUploadState,
+} from './uploads.js';
 
 export function useApprovals() {
   return useQuery({
@@ -250,22 +256,31 @@ export function useRequestCampaign() {
   });
 }
 
-/** Uploads one creative image. It goes to our database, never to a platform. */
-export function useUploadCreative() {
-  return useMutation({
-    mutationFn: (file: File) => api.upload<{ creative: CreativeUpload }>('/ads/creatives', file),
-  });
+/**
+ * Uploads one creative image, reporting progress. It goes to our database,
+ * never to a platform.
+ */
+export function useUploadCreative(): FileUploadState<{ creative: CreativeUpload }> {
+  return useFileUpload(uploadImage);
 }
+const uploadImage = async (
+  file: File,
+  onProgress: (fraction: number) => void,
+  signal: AbortSignal,
+) => ({ creative: await sendCreativeImage(file, onProgress, signal) });
 
 /**
- * Uploads one creative video, as the raw request body. It goes to our own
+ * Uploads one creative video in parts, reporting progress. It goes to our own
  * storage; reaching Meta is part of executing an approved request.
  */
-export function useUploadVideo() {
-  return useMutation({
-    mutationFn: (file: File) => api.upload<{ video: VideoUpload }>('/ads/videos', file),
-  });
+export function useUploadVideo(): FileUploadState<{ video: VideoUpload }> {
+  return useFileUpload(uploadVideo);
 }
+const uploadVideo = async (
+  file: File,
+  onProgress: (fraction: number) => void,
+  signal: AbortSignal,
+) => ({ video: await sendCreativeVideo(file, onProgress, signal) });
 
 /**
  * The Facebook Pages and Instagram accounts the system user can publish as,

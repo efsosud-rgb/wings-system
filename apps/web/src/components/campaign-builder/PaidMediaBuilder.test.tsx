@@ -405,7 +405,10 @@ describe('the paid-media builder', () => {
   it('opens every section with what the choice changes in practice', () => {
     render(<PaidMediaBuilder canRequest />);
     const sections = screen.getAllByRole('region').filter((el) => el.matches('.builder-section'));
-    expect(sections).toHaveLength(15);
+    // No "Variações" block: every creative, whole, sits in block 7.
+    expect(sections).toHaveLength(14);
+    expect(sections[6]?.querySelector('h2')?.textContent).toBe('7Criativo');
+    expect(screen.queryByText('Variações', { selector: 'h2' })).toBeNull();
     for (const section of sections) {
       expect(section.querySelector('.builder-why')?.textContent?.length).toBeGreaterThan(40);
     }
@@ -577,7 +580,9 @@ describe('the paid-media builder', () => {
   it('opens with two creatives, goes down to one and up to five, and no more', () => {
     render(<PaidMediaBuilder canRequest />);
     expect(screen.getAllByLabelText(/^Título/)).toHaveLength(2);
-    fireEvent.click(screen.getByRole('button', { name: 'Remover' }));
+    // Every card can go, as long as one stays.
+    expect(screen.getAllByRole('button', { name: 'Remover' })).toHaveLength(2);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remover' })[0] as Element);
     expect(screen.getAllByLabelText(/^Título/)).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Remover' })).toBeNull();
     for (let count = 2; count <= 5; count += 1) {
@@ -1302,15 +1307,9 @@ describe('the builder on Meta: ad set and ads', () => {
     type(titles[1] as Element, 'Modelo enxuto');
     type(texts[1] as Element, 'Operação simples.');
     type(links[1] as Element, 'https://wingscompany.com.br/modelo');
-    chooseImage(screen.getByLabelText(/^Imagem — Criativo 2, cartão 1/));
-    fireEvent.click(
-      Array.from(
-        screen
-          .getByRole('group', { name: 'Mídia — Criativo 2, cartão 2' })
-          .querySelectorAll('button'),
-      ).find((button) => button.textContent === 'Vídeo') as Element,
-    );
-    fireEvent.change(screen.getByLabelText(/^Vídeo — Criativo 2, cartão 2(?!,)/), {
+    // A card takes an image or a video: the file says which.
+    chooseImage(screen.getByLabelText(/^Arquivo — Criativo 2, cartão 1/));
+    fireEvent.change(screen.getByLabelText(/^Arquivo — Criativo 2, cartão 2/), {
       target: { files: [video()] },
     });
 
@@ -1337,7 +1336,7 @@ describe('the builder on Meta: ad set and ads', () => {
     ]);
   });
 
-  it('refuses a carousel of one card, and blocked copy on a card', async () => {
+  it('keeps a carousel at two cards or more, and blocks copy on a card', async () => {
     render(<PaidMediaBuilder canRequest />);
     fillValidCampaign();
     typeOf(2, 'Carrossel');
@@ -1345,11 +1344,17 @@ describe('the builder on Meta: ad set and ads', () => {
     expect(screen.getByText(/Há texto bloqueado pelo compliance/)).toBeTruthy();
     type(screen.getAllByLabelText(/^Título do cartão/)[0] as Element, 'Suporte completo');
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Remover cartão' })[1] as Element);
+    // Two cards is the floor: nothing to remove until there is a third.
+    expect(screen.queryByRole('button', { name: 'Remover cartão' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Adicionar cartão/ }));
+    expect(screen.getAllByText(/^Cartão \d$/)).toHaveLength(3);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Remover cartão' })[2] as Element);
+    expect(screen.getAllByText(/^Cartão \d$/)).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: 'Remover cartão' })).toBeNull();
+
+    // Cards without a file are still refused on check, and nothing is sent.
     fireEvent.click(screen.getByRole('button', { name: 'Conferir campanha' }));
-    await waitFor(() =>
-      expect(screen.getByText('Um carrossel tem de 2 a 10 cartões')).toBeTruthy(),
-    );
+    await waitFor(() => expect(screen.getAllByText('Envie a imagem do cartão').length).toBe(2));
     expect(requestCampaign).not.toHaveBeenCalled();
   });
 

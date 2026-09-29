@@ -2,23 +2,17 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import {
   AGENT_DRAFT_FIELD_LABEL,
   BRAZIL_STATES,
-  CALLS_TO_ACTION,
-  CALL_TO_ACTION_LABEL,
   CAMPAIGN_OBJECTIVES,
   CAMPAIGN_OBJECTIVE_HINT,
   CAMPAIGN_OBJECTIVE_LABEL,
-  CARD_DESCRIPTION_MAX,
-  COMPLIANCE_RULE_ADVICE,
-  COMPLIANCE_RULE_LABEL,
-  CREATIVE_FORMATS,
-  CREATIVE_TYPES,
+  CALL_TO_ACTION_LABEL,
   CREATIVE_TYPE_LABEL,
+  HEADLINE_MAX,
+  CREATIVE_FORMATS,
   DEFAULT_AGE_MAX,
   DEFAULT_AGE_MIN,
-  HEADLINE_MAX,
   ICP_MAX,
   MAX_AGE,
-  MAX_CAROUSEL_CARDS,
   MAX_KEYWORDS,
   MAX_NEGATIVE_KEYWORDS,
   MAX_SEARCH_DESCRIPTIONS,
@@ -28,10 +22,7 @@ import {
   MAX_VARIATIONS,
   adUtmContent,
   addAdsRequestSchema,
-  MAX_VIDEO_BYTES,
   MIN_AGE,
-  MIN_CAROUSEL_CARDS,
-  MIN_VARIATIONS,
   minDailyBudgetCents,
   PAID_PLATFORMS,
   PLACEMENT_POSITION_LABEL,
@@ -39,11 +30,9 @@ import {
   PLACEMENT_PUBLISHER_LABEL,
   PLACEMENT_PUBLISHER_POSITIONS,
   PLATFORM_STATUS_LABEL,
-  PRIMARY_TEXT_RECOMMENDED,
   SEARCH_DESCRIPTION_MAX,
   SEARCH_HEADLINE_MAX,
   UTM_KEYS,
-  VIDEO_MIME_TYPES,
   applyUtms,
   audienceProfileSchema,
   buildUtms,
@@ -60,7 +49,6 @@ import {
   keywordWithMatch,
   parseSearchKeyword,
   type SearchMatchType,
-  matchesFormat,
   periodOverdeliveryFactor,
   platformAcceptsRadius,
   usesVerticalPlacements,
@@ -68,14 +56,9 @@ import {
   type CampaignDraftInput,
   type MediaBridgeResponse,
   type BrazilState,
-  type ComplianceFinding,
   type AgentCampaignProposal,
-  type CreativeFormat,
-  type CreativeType,
-  type CreativeUpload,
   type PacingSummary,
   type Placements,
-  type VideoUpload,
   DEFAULT_MAX_CPC_CENTS,
   SEARCH_BIDDING_LABEL,
   SEARCH_BIDDING_STRATEGIES,
@@ -83,16 +66,7 @@ import {
   SEARCH_LOCATION_MODE_LABEL,
 } from '@wings/shared';
 import { useEffect, useState, type MutableRefObject, type ReactNode } from 'react';
-import {
-  useFieldArray,
-  useForm,
-  type Control,
-  type FieldErrors,
-  type Resolver,
-  type UseFormRegister,
-  type UseFormSetValue,
-  useController,
-} from 'react-hook-form';
+import { useFieldArray, useForm, type Resolver, useController } from 'react-hook-form';
 import { Link } from 'react-router-dom';
 import {
   useAudienceProfile,
@@ -102,8 +76,6 @@ import {
   useRequestCampaign,
   useSaveAudienceProfile,
   useSaveMetaIdentityDefault,
-  useUploadCreative,
-  useUploadVideo,
   loadSavedDraft,
   useDeleteSavedDraft,
   useSaveDraft,
@@ -113,10 +85,10 @@ import { ApiError } from '../../api/client.js';
 import { useDashboardCampaigns } from '../../api/dashboard.js';
 import { Alert, Button, Field, Input, Select } from '../ui.js';
 import { BUILDER_DRAFT_KEY, PICKED_MEDIA_KEY } from '../../api/media.js';
-import { AdPreviewGallery, creativeUrl, videoUrl } from './AdPreview.js';
+import { AdPreviewGallery } from './AdPreview.js';
+import { ComplianceWarning, CreativeCard } from './CreativeBlock.js';
 import { agoLabel, formatBrl, formatDate, parseBrlToCents, todayInSaoPaulo } from './format.js';
 import { SearchAdPreview, YoutubePreview } from './GooglePreview.js';
-import { LibraryPick } from './LibraryPick.js';
 import { ReconcileNowButton } from './ReconcileNowButton.js';
 import { RadiusMap } from './RadiusMap.js';
 
@@ -253,8 +225,7 @@ const META_SECTIONS = [
   'identity',
   'creative',
   'format',
-  'copy',
-  'variations',
+  'destination',
   'duration',
   'budget',
   'utms',
@@ -266,8 +237,7 @@ const ADD_ADS_SECTIONS = [
   'platform',
   'identity',
   'creative',
-  'copy',
-  'variations',
+  'destination',
   'utms',
   'preview',
 ] as const;
@@ -328,27 +298,6 @@ function BuilderSection({
       <p className="builder-why">{why}</p>
       {children}
     </section>
-  );
-}
-
-/** Shown on screen, not just refused: the operator must see why copy is blocked. */
-function ComplianceWarning({ findings }: { findings: ComplianceFinding[] }) {
-  if (findings.length === 0) return null;
-  // The same excerpt may be typed in two boxes; say it once.
-  const unique = [...new Map(findings.map((f) => [`${f.rule}:${f.excerpt}`, f])).values()];
-  return (
-    <div className="alert alert-warning" role="alert">
-      <strong>Este texto não pode ir ao ar.</strong> A conta já teve anúncios reprovados por
-      "práticas de negócios inaceitáveis".
-      <ul>
-        {unique.map((finding) => (
-          <li key={`${finding.rule}:${finding.excerpt}`}>
-            <strong>{COMPLIANCE_RULE_LABEL[finding.rule]}</strong> — “{finding.excerpt}”.{' '}
-            {COMPLIANCE_RULE_ADVICE[finding.rule]}
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 }
 
@@ -436,301 +385,6 @@ function AccountCeiling({
       <WingsTotalLine wingsTotal={wingsTotal} />
       {pacing.killSwitchEngaged && (
         <Alert kind="error">Trava de emergência acionada: a conta não aceita pedidos agora.</Alert>
-      )}
-    </div>
-  );
-}
-
-const ACCEPTED_TYPES = ['image/png', 'image/jpeg'];
-
-/**
- * One variation's image. Uploading happens on choosing the file, so the form
- * only ever holds the id of something the server has already accepted.
- */
-function CreativeSlot({
-  label,
-  creativeId,
-  format,
-  error,
-  vertical = false,
-  onUploaded,
-  library,
-}: {
-  label: string;
-  creativeId: string;
-  format: CreativeFormat | undefined;
-  error: string | undefined;
-  /** The manual placements include Stories or Reels, which are 9:16. */
-  vertical?: boolean;
-  onUploaded: (creative: CreativeUpload) => void;
-  /** "Escolher do Drive", when the person may read the media library. */
-  library?: ReactNode;
-}) {
-  const upload = useUploadCreative();
-  const [problem, setProblem] = useState<string | null>(null);
-  const [uploaded, setUploaded] = useState<CreativeUpload | null>(null);
-  const current = uploaded && uploaded.id === creativeId ? uploaded : null;
-
-  return (
-    <div className="builder-creative">
-      <div className="builder-creative-thumb">
-        {creativeId ? (
-          <img src={creativeUrl(creativeId)} alt={`Criativo — ${label}`} />
-        ) : (
-          <span className="muted">Sem imagem</span>
-        )}
-      </div>
-      <div>
-        <Field label={`Imagem — ${label}`} error={problem ?? error} hint="PNG ou JPEG, até 8 MB.">
-          <input
-            type="file"
-            className="control"
-            accept={ACCEPTED_TYPES.join(',')}
-            disabled={upload.isPending}
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (!file) return;
-              setProblem(null);
-              if (!ACCEPTED_TYPES.includes(file.type)) {
-                setProblem('Use uma imagem PNG ou JPEG.');
-                return;
-              }
-              upload.mutate(file, {
-                onSuccess: ({ creative }) => {
-                  setUploaded(creative);
-                  onUploaded(creative);
-                },
-                onError: (failure) => setProblem(failure.message),
-              });
-            }}
-          />
-        </Field>
-        {library}
-        {upload.isPending && <p className="field-hint">Enviando…</p>}
-        {current && (
-          <p className="field-hint">
-            {current.width} × {current.height} px
-            {format &&
-              (matchesFormat(current, format)
-                ? ` · ✓ proporção ${format.ratio}`
-                : ` · ⚠️ proporção diferente de ${format.ratio}: a plataforma vai cortar a imagem`)}
-          </p>
-        )}
-        {current && vertical && VERTICAL_FORMAT && !matchesFormat(current, VERTICAL_FORMAT) && (
-          <p className="field-hint builder-crop-warning">
-            ⚠️ Esta imagem não é 9:16: será cortada em Stories e Reels.
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-const VERTICAL_FORMAT = CREATIVE_FORMATS.meta.find((item) => item.key === 'stories_reels');
-
-function formatBytes(bytes: number): string {
-  const megabytes = bytes / (1024 * 1024);
-  return megabytes >= 1024
-    ? `${(megabytes / 1024).toLocaleString('pt-BR', { maximumFractionDigits: 2 })} GB`
-    : `${megabytes.toLocaleString('pt-BR', { maximumFractionDigits: 1 })} MB`;
-}
-
-/**
- * One video. Like an image, it is uploaded on choosing the file, so the form
- * only holds the id of something the server accepted. It goes to our own
- * storage — reaching Meta is part of executing an approved request.
- */
-function VideoSlot({
-  label,
-  videoId,
-  error,
-  onChange,
-  library,
-}: {
-  label: string;
-  videoId: string;
-  error: string | undefined;
-  onChange: (video: VideoUpload | null) => void;
-  library?: ReactNode;
-}) {
-  const upload = useUploadVideo();
-  const [problem, setProblem] = useState<string | null>(null);
-  const [uploaded, setUploaded] = useState<VideoUpload | null>(null);
-  const current = uploaded && uploaded.id === videoId ? uploaded : null;
-
-  return (
-    <div className="builder-creative">
-      <div className="builder-creative-thumb">
-        {videoId ? (
-          <video muted preload="metadata" src={videoUrl(videoId)} aria-label={`Vídeo — ${label}`} />
-        ) : (
-          <span className="muted">Sem vídeo</span>
-        )}
-      </div>
-      <div>
-        <Field label={`Vídeo — ${label}`} error={problem ?? error} hint="MP4 ou MOV, até 4 GB.">
-          <input
-            type="file"
-            className="control"
-            accept={VIDEO_MIME_TYPES.join(',')}
-            disabled={upload.isPending}
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (!file) return;
-              setProblem(null);
-              if (!(VIDEO_MIME_TYPES as readonly string[]).includes(file.type)) {
-                setProblem('Use um vídeo MP4 ou MOV.');
-                return;
-              }
-              // Refused here: nobody should wait on 4 GB going up to be told no.
-              if (file.size > MAX_VIDEO_BYTES) {
-                setProblem('O vídeo passa de 4 GB.');
-                return;
-              }
-              upload.mutate(file, {
-                onSuccess: ({ video }) => {
-                  setUploaded(video);
-                  onChange(video);
-                },
-                onError: (failure) => setProblem(failure.message),
-              });
-            }}
-          />
-        </Field>
-        {library}
-        {upload.isPending && (
-          <p className="field-hint" role="status">
-            <progress aria-label="Enviando vídeo" /> Enviando o vídeo… arquivos grandes levam alguns
-            minutos.
-          </p>
-        )}
-        {videoId && !upload.isPending && (
-          <p className="field-hint">
-            {current ? `${formatBytes(current.byteSize)} · ` : ''}
-            <button type="button" className="link-button" onClick={() => onChange(null)}>
-              Remover vídeo
-            </button>
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/** A carousel's cards: each with its own media, title, text and link. */
-function CarouselCards({
-  index,
-  control,
-  register,
-  setValue,
-  cards,
-  errors,
-  format,
-  vertical,
-  revalidate,
-}: {
-  index: number;
-  control: Control<CampaignDraftInput>;
-  register: UseFormRegister<CampaignDraftInput>;
-  setValue: UseFormSetValue<CampaignDraftInput>;
-  cards: CardInput[];
-  errors: FieldErrors<CampaignDraftInput>;
-  format: CreativeFormat | undefined;
-  vertical: boolean;
-  revalidate: boolean;
-}) {
-  const list = useFieldArray({ control, name: `variations.${index}.cards` });
-  const cardErrors = errors.variations?.[index]?.cards;
-  const options = { shouldDirty: true, shouldValidate: revalidate };
-
-  return (
-    <div className="builder-cards">
-      <p className="field-hint">
-        De {MIN_CAROUSEL_CARDS} a {MAX_CAROUSEL_CARDS} cartões. {list.fields.length}/
-        {MAX_CAROUSEL_CARDS}
-      </p>
-      {list.fields.map((field, cardIndex) => {
-        const card = cards[cardIndex];
-        const label = `Criativo ${index + 1}, cartão ${cardIndex + 1}`;
-        const path = `variations.${index}.cards.${cardIndex}` as const;
-        const mediaType = card?.mediaType ?? 'image';
-        return (
-          <div className="builder-card" key={field.id}>
-            <div className="builder-variation-head">
-              <strong>Cartão {cardIndex + 1}</strong>
-              <button type="button" className="link-button" onClick={() => list.remove(cardIndex)}>
-                Remover cartão
-              </button>
-            </div>
-            <div className="builder-segmented" role="group" aria-label={`Mídia — ${label}`}>
-              {(['image', 'video'] as const).map((type) => (
-                <button
-                  key={type}
-                  type="button"
-                  aria-pressed={mediaType === type}
-                  className={`builder-segmented-option ${mediaType === type ? 'is-active' : ''}`}
-                  onClick={() => setValue(`${path}.mediaType`, type, options)}
-                >
-                  {type === 'image' ? 'Imagem' : 'Vídeo'}
-                </button>
-              ))}
-            </div>
-            {mediaType === 'video' ? (
-              <VideoSlot
-                label={label}
-                videoId={card?.videoId ?? ''}
-                error={cardErrors?.[cardIndex]?.videoId?.message}
-                onChange={(video) => setValue(`${path}.videoId`, video?.id, options)}
-              />
-            ) : (
-              <CreativeSlot
-                label={label}
-                creativeId={card?.creativeId ?? ''}
-                format={format}
-                vertical={vertical}
-                error={cardErrors?.[cardIndex]?.creativeId?.message}
-                onUploaded={(creative) => setValue(`${path}.creativeId`, creative.id, options)}
-              />
-            )}
-            <Field
-              label="Título do cartão"
-              error={cardErrors?.[cardIndex]?.headline?.message}
-              hint={`${(card?.headline ?? '').length}/${HEADLINE_MAX}`}
-            >
-              <Input maxLength={HEADLINE_MAX} {...register(`${path}.headline`)} />
-            </Field>
-            <Field
-              label="Texto do cartão"
-              error={cardErrors?.[cardIndex]?.description?.message}
-              hint={`${(card?.description ?? '').length}/${CARD_DESCRIPTION_MAX}`}
-            >
-              <Input maxLength={CARD_DESCRIPTION_MAX} {...register(`${path}.description`)} />
-            </Field>
-            <Field label="Link do cartão" error={cardErrors?.[cardIndex]?.link?.message}>
-              <Input
-                type="url"
-                placeholder="https://wingscompany.com.br/contato/"
-                {...register(`${path}.link`)}
-              />
-            </Field>
-          </div>
-        );
-      })}
-      {list.fields.length < MAX_CAROUSEL_CARDS && (
-        <Button
-          type="button"
-          variant="ghost"
-          onClick={() =>
-            list.append({ mediaType: 'image', headline: '', description: '', link: '' })
-          }
-        >
-          + Adicionar cartão
-        </Button>
-      )}
-      {(cardErrors?.message ?? cardErrors?.root?.message) && (
-        <p className="field-error" role="alert">
-          {cardErrors?.message ?? cardErrors?.root?.message}
-        </p>
       )}
     </div>
   );
@@ -1303,47 +957,6 @@ export function PaidMediaBuilder({
     if (Array.isArray(error)) return error.find((item) => item?.message)?.message;
     return error.message ?? error.root?.message;
   };
-
-  const copyFields = (index: number) => (
-    <div className="builder-variation" key={variations.fields[index]?.id ?? index}>
-      <div className="builder-variation-head">
-        <strong>
-          {sameCopy && index === 0 && variations.fields.length > 1
-            ? 'Texto de todos os criativos'
-            : `Criativo ${index + 1}`}
-        </strong>
-        {index >= MIN_VARIATIONS && (
-          <button type="button" className="link-button" onClick={() => variations.remove(index)}>
-            Remover
-          </button>
-        )}
-      </div>
-      <Field
-        label="Título"
-        error={errors.variations?.[index]?.headline?.message}
-        hint={`${(formVariations[index]?.headline ?? '').length}/${HEADLINE_MAX}`}
-      >
-        <Input maxLength={HEADLINE_MAX} {...register(`variations.${index}.headline`)} />
-      </Field>
-      <Field
-        label="Texto"
-        error={errors.variations?.[index]?.primaryText?.message}
-        hint={`${(formVariations[index]?.primaryText ?? '').length} caracteres — a Meta corta perto de ${PRIMARY_TEXT_RECOMMENDED}`}
-      >
-        <textarea className="control" rows={3} {...register(`variations.${index}.primaryText`)} />
-      </Field>
-      <Field label="Botão (CTA)">
-        <Select {...register(`variations.${index}.callToAction`)}>
-          {CALLS_TO_ACTION.map((cta) => (
-            <option key={cta} value={cta}>
-              {CALL_TO_ACTION_LABEL[cta]}
-            </option>
-          ))}
-        </Select>
-      </Field>
-      <ComplianceWarning findings={findingsByVariation[index] ?? []} />
-    </div>
-  );
 
   return (
     <form
@@ -1936,133 +1549,63 @@ export function PaidMediaBuilder({
             why="A imagem é o que faz a pessoa parar de rolar o feed. Cada criativo vira um anúncio, para a Meta descobrir qual segura mais gente."
           >
             <p className="field-hint">
-              De 1 a 5 criativos, cada um um anúncio: imagem única, vídeo ou carrossel. Fica
-              guardado no Wings System — só vai para a Meta quando um pedido aprovado for executado.
+              Até {MAX_VARIATIONS} criativos, cada um do seu tipo: imagem, vídeo ou carrossel. Cada
+              um vira um anúncio, com o seu próprio utm_content (video-1, imagem-2…) para o lead
+              dizer de qual veio. Fica guardado no Wings System — só vai para a Meta quando um
+              pedido aprovado for executado.
             </p>
-            {variations.fields.map((field, index) => {
-              const variation = formVariations[index];
-              const creativeType: CreativeType = variation?.creativeType ?? 'image';
-              const label = `Criativo ${index + 1}`;
-              const options = { shouldDirty: true, shouldValidate: submitCount > 0 };
-              return (
-                <div className="builder-variation" key={field.id}>
-                  <div className="builder-variation-head">
-                    <strong>{label}</strong>
-                    <span className="cell-sub">
-                      utm_content: {adUtmContent({ creativeType, position: index + 1 })}
-                    </span>
-                  </div>
-                  <div
-                    className="builder-segmented"
-                    role="group"
-                    aria-label={`Tipo de criativo — ${label}`}
-                  >
-                    {CREATIVE_TYPES.map((type) => (
-                      <button
-                        key={type}
-                        type="button"
-                        aria-pressed={creativeType === type}
-                        className={`builder-segmented-option ${creativeType === type ? 'is-active' : ''}`}
-                        onClick={() => {
-                          setValue(`variations.${index}.creativeType`, type, options);
-                          // A carousel opens with the fewest cards it may have.
-                          if (type === 'carousel' && (variation?.cards ?? []).length === 0) {
-                            setValue(
-                              `variations.${index}.cards`,
-                              Array.from({ length: MIN_CAROUSEL_CARDS }, () => ({
-                                mediaType: 'image' as const,
-                                headline: '',
-                                description: '',
-                                link: '',
-                              })),
-                              options,
-                            );
-                          }
-                        }}
-                      >
-                        {CREATIVE_TYPE_LABEL[type]}
-                      </button>
-                    ))}
-                  </div>
-                  {creativeType === 'image' && (
-                    <CreativeSlot
-                      label={label}
-                      creativeId={variation?.creativeId ?? ''}
-                      format={format}
-                      vertical={vertical}
-                      error={errors.variations?.[index]?.creativeId?.message}
-                      onUploaded={(creative) => {
-                        setValue(`variations.${index}.creativeId`, creative.id, options);
-                        // A file from the computer is not a library asset.
-                        setValue(`variations.${index}.mediaAssetId`, undefined, options);
-                      }}
-                      library={
-                        canPickMedia && (
-                          <LibraryPick
-                            kind="image"
-                            label={label}
-                            onPicked={(picked) => {
-                              if (!picked.creative) return;
-                              setValue(
-                                `variations.${index}.creativeId`,
-                                picked.creative.id,
-                                options,
-                              );
-                              setValue(
-                                `variations.${index}.mediaAssetId`,
-                                picked.mediaAssetId,
-                                options,
-                              );
-                            }}
-                          />
-                        )
-                      }
-                    />
-                  )}
-                  {creativeType === 'video' && (
-                    <VideoSlot
-                      label={label}
-                      videoId={variation?.videoId ?? ''}
-                      error={errors.variations?.[index]?.videoId?.message}
-                      onChange={(video) => {
-                        setValue(`variations.${index}.videoId`, video?.id, options);
-                        setValue(`variations.${index}.mediaAssetId`, undefined, options);
-                      }}
-                      library={
-                        canPickMedia && (
-                          <LibraryPick
-                            kind="video"
-                            label={label}
-                            onPicked={(picked) => {
-                              if (!picked.video) return;
-                              setValue(`variations.${index}.videoId`, picked.video.id, options);
-                              setValue(
-                                `variations.${index}.mediaAssetId`,
-                                picked.mediaAssetId,
-                                options,
-                              );
-                            }}
-                          />
-                        )
-                      }
-                    />
-                  )}
-                  {creativeType === 'carousel' && (
-                    <CarouselCards
-                      index={index}
-                      control={control}
-                      register={register}
-                      setValue={setValue}
-                      cards={variation?.cards ?? []}
-                      errors={errors}
-                      format={format}
-                      vertical={vertical}
-                      revalidate={submitCount > 0}
-                    />
-                  )}
-                </div>
-              );
-            })}
+            {variations.fields.length > 1 && (
+              <label className="builder-state builder-same-copy">
+                <input
+                  type="checkbox"
+                  checked={sameCopy}
+                  onChange={(event) => setSameCopy(event.target.checked)}
+                />
+                <span>Usar o mesmo texto, título e botão em todos</span>
+              </label>
+            )}
+            {variations.fields.map((field, index) => (
+              <CreativeCard
+                key={field.id}
+                index={index}
+                count={variations.fields.length}
+                variation={formVariations[index]}
+                control={control}
+                register={register}
+                setValue={setValue}
+                errors={errors}
+                format={format}
+                vertical={vertical}
+                revalidate={submitCount > 0}
+                canPickMedia={canPickMedia}
+                sameCopy={sameCopy}
+                findings={findingsByVariation[index] ?? []}
+                onRemove={() => variations.remove(index)}
+              />
+            ))}
+            {variations.fields.length < MAX_VARIATIONS && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() =>
+                  variations.append({
+                    creativeType: 'image',
+                    creativeId: '',
+                    cards: [],
+                    headline: '',
+                    primaryText: '',
+                    callToAction: 'LEARN_MORE',
+                  })
+                }
+              >
+                + Adicionar criativo
+              </Button>
+            )}
+            {errors.variations?.root?.message && (
+              <p className="field-error" role="alert">
+                {errors.variations.root.message}
+              </p>
+            )}
           </BuilderSection>
 
           <BuilderSection
@@ -2090,14 +1633,14 @@ export function PaidMediaBuilder({
           </BuilderSection>
 
           <BuilderSection
-            step={stepOf('copy')}
-            title="Copy"
-            why="É o que convence depois que a imagem chamou atenção. Promessa de ganho reprova o anúncio e pode restringir a conta — por isso o bloqueio."
+            step={stepOf('destination')}
+            title="Destino"
+            why="Para onde o botão leva. É nesta página que o lead vira lead: se ela não abre ou não tem formulário, o anúncio só gasta."
           >
             <Field
               label="Página de destino"
               error={errors.destinationUrl?.message}
-              hint="Para onde o botão do anúncio leva. Os UTMs são aplicados a este endereço."
+              hint="Os UTMs são aplicados a este endereço."
             >
               <Input
                 type="url"
@@ -2105,53 +1648,6 @@ export function PaidMediaBuilder({
                 {...register('destinationUrl')}
               />
             </Field>
-            {copyFields(0)}
-          </BuilderSection>
-
-          <BuilderSection
-            step={stepOf('variations')}
-            title="Variações"
-            why="A Meta testa as versões entre si e entrega mais a que dá mais resultado. Com uma só, não há o que comparar."
-          >
-            <p className="field-hint">
-              De {MIN_VARIATIONS} a {MAX_VARIATIONS} criativos no mesmo conjunto: cada um vira um
-              anúncio, com o seu próprio utm_content (video-1, imagem-2…) para o lead dizer de qual
-              veio.
-            </p>
-            {variations.fields.length > 1 && (
-              <label className="builder-state">
-                <input
-                  type="checkbox"
-                  checked={sameCopy}
-                  onChange={(event) => setSameCopy(event.target.checked)}
-                />
-                <span>Usar o mesmo texto, título e botão em todos os criativos</span>
-              </label>
-            )}
-            {!sameCopy && variations.fields.slice(1).map((_, offset) => copyFields(offset + 1))}
-            {variations.fields.length < MAX_VARIATIONS && (
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() =>
-                  variations.append({
-                    creativeType: 'image',
-                    creativeId: '',
-                    cards: [],
-                    headline: '',
-                    primaryText: '',
-                    callToAction: 'LEARN_MORE',
-                  })
-                }
-              >
-                + Adicionar criativo
-              </Button>
-            )}
-            {errors.variations?.root?.message && (
-              <p className="field-error" role="alert">
-                {errors.variations.root.message}
-              </p>
-            )}
           </BuilderSection>
         </>
       )}
@@ -2609,7 +2105,7 @@ export function PaidMediaBuilder({
               </dd>
               <dt>Formato</dt>
               <dd>{format ? `${format.label} (${format.ratio})` : '—'}</dd>
-              <dt>Variações</dt>
+              <dt>Criativos</dt>
               <dd>
                 {formVariations.map((variation, index) => {
                   const type = variation.creativeType ?? 'image';

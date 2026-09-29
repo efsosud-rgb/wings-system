@@ -2144,6 +2144,128 @@ textarea.control {
   padding: 12px;
 }
 
+/* ---------- bloco 7: um cartão por criativo, com o arquivo dentro ---------- */
+.builder-creative-card {
+  gap: 12px;
+}
+
+.builder-creative-card .builder-variation-head {
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.builder-creative-card .builder-variation-head .cell-sub {
+  flex: 1 1 auto;
+}
+
+.builder-creative-card .builder-segmented {
+  margin-bottom: 0;
+}
+
+.builder-same-copy {
+  align-self: flex-start;
+}
+
+.builder-dropzone {
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+  padding: 12px;
+  border: 2px dashed var(--wings-border);
+  border-radius: 8px;
+  transition:
+    border-color 0.15s,
+    background-color 0.15s;
+}
+
+.builder-dropzone.is-over {
+  border-color: var(--wings-accent);
+  background: color-mix(in srgb, var(--wings-accent) 10%, transparent);
+}
+
+.builder-dropzone.has-file {
+  border-style: solid;
+}
+
+.builder-dropzone-preview {
+  width: 132px;
+  aspect-ratio: 1;
+  border-radius: 6px;
+  background: var(--wings-surface);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  font-size: 11px;
+  text-align: center;
+  padding: 4px;
+}
+
+.builder-dropzone-preview img,
+.builder-dropzone-preview video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.builder-dropzone-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* The real input stays for the keyboard and for tests; the button is what people see. */
+.builder-dropzone-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.builder-dropzone-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.builder-dropzone-actions .builder-library-pick {
+  margin-top: 0;
+}
+
+.builder-dropzone-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.builder-dropzone-progress progress {
+  flex: 1 1 auto;
+  height: 8px;
+  accent-color: var(--wings-accent);
+}
+
+.builder-creative-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+@media (max-width: 700px) {
+  .builder-dropzone {
+    grid-template-columns: 1fr;
+  }
+
+  .builder-dropzone-preview {
+    width: 100%;
+    max-width: 220px;
+  }
+}
+
 .ad-preview-carousel {
   display: flex;
   gap: 8px;
