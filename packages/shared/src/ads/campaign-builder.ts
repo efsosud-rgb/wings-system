@@ -783,6 +783,22 @@ const compliantText = (max: number, label: string) =>
       }
     });
 
+/** Like `compliantText`, but empty is fine. */
+const optionalCompliantText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max, `Máximo de ${max} caracteres`)
+    .default('')
+    .superRefine((value, ctx) => {
+      for (const finding of checkCopyCompliance(value)) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `${COMPLIANCE_RULE_LABEL[finding.rule]}: "${finding.excerpt}"`,
+        });
+      }
+    });
+
 // ---------------------------------------------------------------------------
 // Google: YouTube video and Search keywords
 // ---------------------------------------------------------------------------
@@ -1017,12 +1033,30 @@ export const CARD_DESCRIPTION_MAX = 60;
 /** Meta's ceiling for an ad video. */
 export const MAX_VIDEO_BYTES = 4 * 1024 * 1024 * 1024;
 export const VIDEO_MIME_TYPES = ['video/mp4', 'video/quicktime'] as const;
+/**
+ * A video goes up in parts of this size, one request each, so no single
+ * request outlives a proxy's read timeout and the bar on screen moves with
+ * every part. 4 GB is 512 parts.
+ */
+export const VIDEO_UPLOAD_PART_BYTES = 8 * 1024 * 1024;
 
 /** What the server says about a video it accepted. */
 export interface VideoUpload {
   id: string;
   mimeType: (typeof VIDEO_MIME_TYPES)[number];
   byteSize: number;
+}
+
+/**
+ * A video upload in progress: the server's own numbering of the parts. Parts
+ * are sent in order, 1 to `parts`; `nextPart` says where a resume continues.
+ */
+export interface VideoUploadSession {
+  id: string;
+  partSize: number;
+  parts: number;
+  receivedBytes: number;
+  nextPart: number;
 }
 
 const mediaRefinement = (
@@ -1044,7 +1078,8 @@ export const carouselCardSchema = z
     creativeId: z.uuid().optional(),
     videoId: z.uuid().optional(),
     headline: compliantText(HEADLINE_MAX, 'o título do cartão'),
-    description: compliantText(CARD_DESCRIPTION_MAX, 'o texto do cartão'),
+    /** Optional: a card is its image or video, a title and a link. */
+    description: optionalCompliantText(CARD_DESCRIPTION_MAX),
     link: z.url({ protocol: /^https$/, error: 'Informe um endereço https:// válido' }),
   })
   .superRefine((card, ctx) => mediaRefinement(card, ctx, 'Envie a imagem do cartão'));
