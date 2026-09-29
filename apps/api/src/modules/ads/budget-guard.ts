@@ -5,12 +5,15 @@ import {
   dailyOverdeliveryFactor,
   estimateCostCents,
   periodOverdeliveryFactor,
+  type AddAdsPayload,
+  type AddAdsRequest,
   type CampaignDraft,
 } from '@wings/shared';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   adAccounts,
+  adAds,
   adCampaignDrafts,
   adCampaigns,
   adChangeRequests,
@@ -50,7 +53,9 @@ export type GuardRefusal =
   | 'start_in_past'
   | 'duplicate_name'
   | 'platform_mismatch'
-  | 'not_supported_on_platform';
+  | 'not_supported_on_platform'
+  | 'ad_set_not_found'
+  | 'ad_set_ambiguous';
 
 export type GuardResult<T> =
   { ok: true; value: T } | { ok: false; reason: GuardRefusal; message: string };
@@ -1144,4 +1149,131 @@ export async function applyPlatformLimit(
     platformIsBinding,
     committedExceedsPlatform,
   };
+}
+
+/** Hash an `add_ads` approval is bound to: the account and the whole stored payload. */
+export function addAdsPayloadHash(input: { adAccountId: string; payload: AddAdsPayload }): string {
+  return createHash('sha256')
+    .update(canonicalJson({ kind: 'add_ads', ...input }))
+    .digest('hex');
+}
+
+/**
+ * Records a request for new ads in a campaign that exists (`add_ads`).
+ *
+ * No budget moves: the ads join an ad set whose budget is already reserved,
+ * and they are born paused. It still takes the period lock (a request belongs
+ * to a period) and the kill switch still stops it. The ad set is the
+ * campaign's only one, or the one named; the utm_content numbering resumes
+ * after the ads the ad set already has. Nothing is sent to the platform here.
+ */
+export async function reserveAddAds(
+  db: Database,
+  input: {
+    adAccountId: string;
+    request: AddAdsRequest;
+    requestedBy?: string | null;
+    reason?: string;
+    now?: Date;
+  },
+): Promise<GuardResult<{ changeRequestId: string; payload: AddAdsPayload }>> {
+  const now = input.now ?? new Date();
+  const account = await db.query.adAccounts.findFirst({
+    where: eq(adAccounts.id, input.adAccountId),
+  });
+  if (!account) return { ok: false, reason: 'period_not_open', message: 'Conta não encontrada' };
+  if (account.platform !== 'meta') {
+    return {
+      ok: false,
+      reason: 'not_supported_on_platform',
+      message: 'Adicionar criativos a uma campanha existe só na Meta.',
+    };
+  }
+  if (account.killSwitchEngaged) {
+    await recordGuardrailEvent(db, input.adAccountId, 'kill_switch_engaged', {
+      attempted: 'add_ads',
+    });
+    return {
+      ok: false,
+      reason: 'kill_switch_engaged',
+      message: 'Trava de emergência acionada: nenhuma alteração pode ser feita.',
+    };
+  }
+
+  const campaign = await db.query.adCampaigns.findFirst({
+    where: and(
+      eq(adCampaigns.adAccountId, input.adAccountId),
+      eq(adCampaigns.externalId, input.request.campaignExternalId),
+    ),
+  });
+  if (!campaign) {
+    return {
+      ok: false,
+      reason: 'campaign_not_found',
+      message: 'Campanha não encontrada nesta conta.',
+    };
+  }
+  const sets = await db.query.adSets.findMany({ where: eq(adSets.campaignId, campaign.id) });
+  const adSet = input.request.adSetExternalId
+    ? sets.find((row) => row.externalId === input.request.adSetExternalId)
+    : sets.length === 1
+      ? sets[0]
+      : undefined;
+  if (!adSet) {
+    return input.request.adSetExternalId || sets.length === 0
+      ? {
+          ok: false,
+          reason: 'ad_set_not_found',
+          message: 'O conjunto de anúncios desta campanha não foi encontrado. Rode a ingestão?',
+        }
+      : {
+          ok: false,
+          reason: 'ad_set_ambiguous',
+          message: 'Esta campanha tem mais de um conjunto de anúncios: escolha em qual entram.',
+        };
+  }
+  const existing = await db.query.adAds.findMany({ where: eq(adAds.adSetId, adSet.id) });
+  const payload: AddAdsPayload = {
+    ...input.request,
+    adSetExternalId: adSet.externalId,
+    campaignName: campaign.name,
+    firstPosition: existing.length + 1,
+  };
+
+  return db.transaction(async (tx) => {
+    const current = await lockOpenPeriod(
+      tx,
+      input.adAccountId,
+      periodMonthOf(now, account.timezone),
+    );
+    if (!current) {
+      return {
+        ok: false as const,
+        reason: 'period_not_open' as const,
+        message: 'Nenhum período de orçamento aberto para esta conta neste mês.',
+      };
+    }
+    const hash = addAdsPayloadHash({ adAccountId: input.adAccountId, payload });
+    const [request] = await tx
+      .insert(adChangeRequests)
+      .values({
+        adAccountId: input.adAccountId,
+        campaignId: campaign.id,
+        budgetPeriodId: current.id,
+        kind: 'add_ads',
+        fromValueCents: null,
+        toValueCents: null,
+        exposureDeltaCents: 0,
+        payloadHash: hash,
+        payload,
+        // Every change needs a human decision — there is no auto-approval.
+        status: 'pending_approval',
+        requestedBy: input.requestedBy ?? null,
+        requestedByAgent: false,
+        reason: input.reason ?? null,
+      })
+      .returning({ id: adChangeRequests.id });
+    if (!request) throw new Error('failed to record change request');
+    return { ok: true as const, value: { changeRequestId: request.id, payload } };
+  });
 }

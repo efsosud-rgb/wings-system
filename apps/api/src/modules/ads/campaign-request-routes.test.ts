@@ -5,7 +5,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import { eq, sql } from 'drizzle-orm';
-import { adAccounts, marketingAudienceProfiles, WINGS_TENANT_ID } from '../../db/schema/index.js';
+import {
+  adAccounts,
+  adCampaigns,
+  adSets,
+  marketingAudienceProfiles,
+  WINGS_TENANT_ID,
+} from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
@@ -457,7 +463,10 @@ describe('Google campaigns through the same request', () => {
         keywords: ['[abrir franquia]'],
         negativeKeywords: [],
         headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
-        descriptions: ['Conheça o modelo de negócio e o suporte da Wings.', 'Suporte do início ao fim.'],
+        descriptions: [
+          'Conheça o modelo de negócio e o suporte da Wings.',
+          'Suporte do início ao fim.',
+        ],
       },
     };
   };
@@ -545,17 +554,26 @@ describe('saved drafts', () => {
       },
     };
     const changesBefore = (await db.query.adChangeRequests.findMany()).length;
-    const saved = await app.inject({ method: 'POST', url: '/ads/saved-drafts', cookies, payload: { draft: payload } });
+    const saved = await app.inject({
+      method: 'POST',
+      url: '/ads/saved-drafts',
+      cookies,
+      payload: { draft: payload },
+    });
     expect(saved.statusCode).toBe(201);
     const { id } = saved.json<{ id: string }>();
 
     const list = await app.inject({ url: '/ads/saved-drafts', cookies });
-    expect(list.json<{ drafts: { id: string; name: string; platform: string }[] }>().drafts).toContainEqual(
+    expect(
+      list.json<{ drafts: { id: string; name: string; platform: string }[] }>().drafts,
+    ).toContainEqual(
       expect.objectContaining({ id, name: payload.name, platform: 'google_search' }),
     );
     const one = await app.inject({ url: `/ads/saved-drafts/${id}`, cookies });
     expect(one.statusCode).toBe(200);
-    expect(one.json<{ draft: { search: { adGroupName: string } } }>().draft.search.adGroupName).toBe('Formatação');
+    expect(
+      one.json<{ draft: { search: { adGroupName: string } } }>().draft.search.adGroupName,
+    ).toBe('Formatação');
 
     // Nothing was requested, approved or reserved.
     expect(await db.query.adChangeRequests.findMany()).toHaveLength(changesBefore);
@@ -565,14 +583,25 @@ describe('saved drafts', () => {
       method: 'POST',
       url: '/ads/saved-drafts',
       cookies,
-      payload: { draft: { ...payload, search: { ...payload.search, keywords: ['abrir franquia'] } } },
+      payload: {
+        draft: { ...payload, search: { ...payload.search, keywords: ['abrir franquia'] } },
+      },
     });
     expect(bad.statusCode).toBe(400);
 
-    expect((await app.inject({ method: 'DELETE', url: `/ads/saved-drafts/${id}`, cookies })).statusCode).toBe(204);
+    expect(
+      (await app.inject({ method: 'DELETE', url: `/ads/saved-drafts/${id}`, cookies })).statusCode,
+    ).toBe(204);
     expect((await app.inject({ url: `/ads/saved-drafts/${id}`, cookies })).statusCode).toBe(404);
     // A seller cannot see the builder's drafts.
-    expect((await app.inject({ url: '/ads/saved-drafts', cookies: await cookiesFor('vendedor_expansao') })).statusCode).toBe(403);
+    expect(
+      (
+        await app.inject({
+          url: '/ads/saved-drafts',
+          cookies: await cookiesFor('vendedor_expansao'),
+        })
+      ).statusCode,
+    ).toBe(403);
   });
 });
 
@@ -602,12 +631,21 @@ describe('a request compared with its saved draft', () => {
         keywords: ['[abrir franquia]'],
         negativeKeywords: [],
         headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
-        descriptions: ['Conheça o modelo de negócio e o suporte da Wings.', 'Suporte do início ao fim.'],
+        descriptions: [
+          'Conheça o modelo de negócio e o suporte da Wings.',
+          'Suporte do início ao fim.',
+        ],
       },
     };
     expect(
-      (await app.inject({ method: 'POST', url: '/ads/saved-drafts', cookies, payload: { draft: base } }))
-        .statusCode,
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/ads/saved-drafts',
+          cookies,
+          payload: { draft: base },
+        })
+      ).statusCode,
     ).toBe(201);
 
     // Requested with twice the budget: the approval names the difference.
@@ -624,17 +662,21 @@ describe('a request compared with its saved draft', () => {
     });
     expect(detail.json<{ approval: ApprovalDetail }>().approval.savedDraftDrift).toMatchObject({
       savedDraftName: name,
-      differences: [
-        { field: 'dailyBudgetCents', saved: 'R$ 30,00', requested: 'R$ 60,00' },
-      ],
+      differences: [{ field: 'dailyBudgetCents', saved: 'R$ 30,00', requested: 'R$ 60,00' }],
     });
 
     // Requested exactly as saved (another name: the guard refuses a repeated
     // campaign name): the approval says they agree.
     const other = { ...base, name: `${name} B` };
     expect(
-      (await app.inject({ method: 'POST', url: '/ads/saved-drafts', cookies, payload: { draft: other } }))
-        .statusCode,
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/ads/saved-drafts',
+          cookies,
+          payload: { draft: other },
+        })
+      ).statusCode,
     ).toBe(201);
     const same = await app.inject({
       method: 'POST',
@@ -650,6 +692,105 @@ describe('a request compared with its saved draft', () => {
     expect(sameDetail.json<{ approval: ApprovalDetail }>().approval.savedDraftDrift).toMatchObject({
       savedDraftName: `${name} B`,
       differences: [],
+    });
+  });
+});
+
+describe('POST /ads/add-ads', () => {
+  it('asks for new ads in a campaign that exists, and the approval shows each with its utm_content', async () => {
+    await draft();
+    const account = await db.query.adAccounts.findFirst({
+      where: eq(adAccounts.externalId, 'act_1234567890'),
+    });
+    const [campaign] = await db
+      .insert(adCampaigns)
+      .values({
+        adAccountId: account!.id,
+        externalId: '120252260012720076',
+        name: 'META | 28Set',
+        status: 'ACTIVE',
+      })
+      .returning({ id: adCampaigns.id });
+    await db
+      .insert(adSets)
+      .values({
+        campaignId: campaign!.id,
+        externalId: '120252260021860076',
+        name: 'conjunto',
+        status: 'ACTIVE',
+      });
+
+    const body = {
+      campaignExternalId: '120252260012720076',
+      identity: { pageId: '104567890123456', instagramActorId: null },
+      destinationUrl: 'https://wingscompany.com.br/contato/',
+      utms: { utm_source: 'facebook', utm_medium: 'cpc', utm_campaign: 'x', utm_content: '' },
+      variations: [
+        {
+          creativeId: creativeIds[0],
+          headline: 'Sua marca pronta',
+          primaryText: 'Para negócios que já vendem.',
+          callToAction: 'SIGN_UP',
+        },
+      ],
+    };
+    // Nobody without ads.request, and nothing for a creative that is not ours.
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/ads/add-ads',
+          cookies: await cookiesFor('vendedor_expansao'),
+          payload: body,
+        })
+      ).statusCode,
+    ).toBe(403);
+    const marketing = await cookiesFor('marketing');
+    const unknown = {
+      ...body,
+      variations: [{ ...body.variations[0], creativeId: '00000000-0000-4000-8000-000000000000' }],
+    };
+    expect(
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/ads/add-ads',
+          cookies: marketing,
+          payload: unknown,
+        })
+      ).statusCode,
+    ).toBe(400);
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/ads/add-ads',
+      cookies: marketing,
+      payload: body,
+    });
+    expect(created.statusCode).toBe(201);
+    const { approvalId, firstPosition } = created.json<{
+      approvalId: string;
+      firstPosition: number;
+    }>();
+    expect(firstPosition).toBe(1);
+
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/ads/approvals/${approvalId}`,
+      cookies: await cookiesFor('admin_master'),
+    });
+    const approval = detail.json<{
+      approval: {
+        changeKind: string;
+        addAds: { adSetExternalId: string; variations: unknown[] } | null;
+        draft: unknown;
+      };
+    }>().approval;
+    expect(approval.changeKind).toBe('add_ads');
+    expect(approval.draft).toBeNull();
+    expect(approval.addAds).toMatchObject({
+      adSetExternalId: '120252260021860076',
+      variations: [expect.objectContaining({ headline: 'Sua marca pronta' })],
     });
   });
 });

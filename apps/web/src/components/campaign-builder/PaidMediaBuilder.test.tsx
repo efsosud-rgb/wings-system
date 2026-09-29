@@ -69,16 +69,62 @@ const saveIdentityDefault = vi.fn();
 const uploadVideo = vi.fn();
 const videoFailure: { current: ApiError | null } = { current: null };
 
-const savedDrafts: { current: { id: string; name: string; platform: string; updatedAt: string; createdByName: string | null }[] } = { current: [] };
+const savedDrafts: {
+  current: {
+    id: string;
+    name: string;
+    platform: string;
+    updatedAt: string;
+    createdByName: string | null;
+  }[];
+} = { current: [] };
 const savedDraftPayload: { current: Record<string, unknown> | null } = { current: null };
 const saveDraft = vi.fn();
 const deleteSavedDraft = vi.fn();
 
+/** What "Pedir aprovação dos anúncios" sent, in order. */
+const requestAddAds = vi.fn();
+vi.mock('../../api/dashboard.js', () => ({
+  useDashboardCampaigns: () => ({
+    data: {
+      campaigns: {
+        campaigns: [
+          {
+            platform: 'meta',
+            externalId: '120252260012720076',
+            name: 'META | 28Set',
+            status: 'ACTIVE',
+          },
+          {
+            platform: 'google',
+            externalId: '24289782134',
+            name: 'SEARCH | Formatação',
+            status: 'ACTIVE',
+          },
+        ],
+      },
+    },
+  }),
+}));
+
 vi.mock('../../api/ads.js', () => ({
+  useRequestAddAds: () => ({
+    mutate: (input: unknown) => requestAddAds(input),
+    isPending: false,
+    isSuccess: false,
+    data: undefined,
+  }),
   useSavedDrafts: () => ({ data: { drafts: savedDrafts.current } }),
   loadSavedDraft: (id: string) =>
     Promise.resolve({ id, name: 'Rascunho real', draft: savedDraftPayload.current }),
-  useSaveDraft: () => ({ mutate: saveDraft, reset: vi.fn(), isPending: false, isSuccess: false, isError: false, error: null }),
+  useSaveDraft: () => ({
+    mutate: saveDraft,
+    reset: vi.fn(),
+    isPending: false,
+    isSuccess: false,
+    isError: false,
+    error: null,
+  }),
   useDeleteSavedDraft: () => ({ mutate: deleteSavedDraft }),
   useAudienceProfile: () => ({ data: { profile: savedAudience.current } }),
   useSaveAudienceProfile: () => ({
@@ -296,7 +342,7 @@ function fillValidCampaign() {
     'Empreendedor de 30 a 50 anos, com experiência em gestão.',
   );
   fireEvent.click(screen.getByRole('checkbox', { name: 'SP' }));
-  for (const input of screen.getAllByLabelText(/^Imagem — Variação/)) chooseImage(input);
+  for (const input of screen.getAllByLabelText(/^Imagem — Criativo/)) chooseImage(input);
 }
 
 const type = (element: Element, value: string) => fireEvent.change(element, { target: { value } });
@@ -423,7 +469,7 @@ describe('the paid-media builder', () => {
 
   it('takes one image per variation and says when it will be cropped', () => {
     render(<PaidMediaBuilder canRequest />);
-    const [first, second] = screen.getAllByLabelText(/^Imagem — Variação/);
+    const [first, second] = screen.getAllByLabelText(/^Imagem — Criativo/);
     chooseImage(first as Element);
     expect(screen.getByText(/1080 × 1080 px · ✓ proporção 1:1/)).toBeTruthy();
 
@@ -432,7 +478,7 @@ describe('the paid-media builder', () => {
     expect(screen.getByText(/proporção diferente de 1:1/)).toBeTruthy();
 
     // The preview shows each uploaded image next to its copy.
-    expect(screen.getAllByAltText(/^Criativo — Variação 1/).length).toBeGreaterThan(0);
+    expect(screen.getAllByAltText(/^Criativo — Criativo 1/).length).toBeGreaterThan(0);
     expect(screen.getByText(/Não é a prévia oficial da Meta/)).toBeTruthy();
   });
 
@@ -462,7 +508,7 @@ describe('the paid-media builder', () => {
 
   it('refuses a file type before sending it anywhere', () => {
     render(<PaidMediaBuilder canRequest />);
-    chooseImage(screen.getAllByLabelText(/^Imagem — Variação/)[0] as Element, 'image/webp');
+    chooseImage(screen.getAllByLabelText(/^Imagem — Criativo/)[0] as Element, 'image/webp');
     expect(screen.getByText('Use uma imagem PNG ou JPEG.')).toBeTruthy();
     expect(uploads).toBe(0);
   });
@@ -528,12 +574,34 @@ describe('the paid-media builder', () => {
     });
   });
 
-  it('allows a third variation and no more', () => {
+  it('opens with two creatives, goes down to one and up to five, and no more', () => {
     render(<PaidMediaBuilder canRequest />);
     expect(screen.getAllByLabelText(/^Título/)).toHaveLength(2);
-    fireEvent.click(screen.getByRole('button', { name: /Adicionar variação/ }));
-    expect(screen.getAllByLabelText(/^Título/)).toHaveLength(3);
-    expect(screen.queryByRole('button', { name: /Adicionar variação/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Remover' }));
+    expect(screen.getAllByLabelText(/^Título/)).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Remover' })).toBeNull();
+    for (let count = 2; count <= 5; count += 1) {
+      fireEvent.click(screen.getByRole('button', { name: /Adicionar criativo/ }));
+      expect(screen.getAllByLabelText(/^Título/)).toHaveLength(count);
+    }
+    expect(screen.queryByRole('button', { name: /Adicionar criativo/ })).toBeNull();
+  });
+
+  it('shows each creative its own utm_content, and copies one text into all on request', () => {
+    render(<PaidMediaBuilder canRequest />);
+    expect(screen.getByText('utm_content: imagem-1')).toBeTruthy();
+    expect(screen.getByText('utm_content: imagem-2')).toBeTruthy();
+    type(screen.getAllByLabelText(/^Título/)[0] as Element, 'Sua marca pronta para franquear');
+    fireEvent.click(screen.getByLabelText(/Usar o mesmo texto/));
+    // One copy block left on screen, written into every creative.
+    expect(screen.getAllByLabelText(/^Título/)).toHaveLength(1);
+    expect(screen.getByText('Texto de todos os criativos')).toBeTruthy();
+    fireEvent.click(screen.getByLabelText(/Usar o mesmo texto/));
+    const titles = screen.getAllByLabelText(/^Título/) as HTMLInputElement[];
+    expect(titles.map((input) => input.value)).toEqual([
+      'Sua marca pronta para franquear',
+      'Sua marca pronta para franquear',
+    ]);
   });
 
   it('checks the draft on demand without sending anything', async () => {
@@ -638,7 +706,7 @@ describe('the builder on Google', () => {
     expect(screen.getByLabelText(/^Palavras-chave negativas/)).toBeTruthy();
     expect(screen.queryByLabelText(/Link do vídeo/)).toBeNull();
     // Meta's image, format and variations are gone; the map stays.
-    expect(screen.queryByLabelText(/^Imagem — Variação/)).toBeNull();
+    expect(screen.queryByLabelText(/^Imagem — Criativo/)).toBeNull();
     expect(screen.queryByLabelText(/^Formato/)).toBeNull();
     expect(screen.queryByRole('button', { name: '+ Adicionar variação' })).toBeNull();
     expect(screen.getByRole('button', { name: 'clicar no mapa' })).toBeTruthy();
@@ -651,7 +719,7 @@ describe('the builder on Google', () => {
 
     choose(/^Meta/);
     expect(screen.queryByLabelText(/^Palavras-chave(?! negativas)/)).toBeNull();
-    expect(screen.getAllByLabelText(/^Imagem — Variação/)).toHaveLength(2);
+    expect(screen.getAllByLabelText(/^Imagem — Criativo/)).toHaveLength(2);
   });
 
   it('shows the video fields only on YouTube, and says what kind of campaign it is', () => {
@@ -659,7 +727,7 @@ describe('the builder on Google', () => {
     choose(/YouTube/);
     expect(screen.getByLabelText(/Link do vídeo no YouTube/)).toBeTruthy();
     expect(screen.queryByLabelText(/^Palavras-chave(?! negativas)/)).toBeNull();
-    expect(screen.queryByLabelText(/^Imagem — Variação/)).toBeNull();
+    expect(screen.queryByLabelText(/^Imagem — Criativo/)).toBeNull();
     expect(screen.getByText(/Criada como campanha Demand Gen restrita ao YouTube/)).toBeTruthy();
   });
 
@@ -755,7 +823,13 @@ describe('the builder on Google', () => {
 
   it('loads a saved Google draft whole, and saving validates like a launch without sending', async () => {
     savedDrafts.current = [
-      { id: 'd1', name: 'SEARCH | Formatação', platform: 'google_search', updatedAt: '2026-09-25T15:00:00Z', createdByName: null },
+      {
+        id: 'd1',
+        name: 'SEARCH | Formatação',
+        platform: 'google_search',
+        updatedAt: '2026-09-25T15:00:00Z',
+        createdByName: null,
+      },
     ];
     savedDraftPayload.current = {
       platform: 'google_search',
@@ -767,7 +841,12 @@ describe('the builder on Google', () => {
       startDate: '2026-09-25',
       endDate: '2026-10-25',
       dailyBudgetCents: 10000,
-      utms: { utm_source: 'google', utm_medium: 'cpc', utm_campaign: 'search-formatacao', utm_content: 'lead' },
+      utms: {
+        utm_source: 'google',
+        utm_medium: 'cpc',
+        utm_campaign: 'search-formatacao',
+        utm_content: 'lead',
+      },
       startPaused: true,
       variations: [],
       search: {
@@ -779,7 +858,10 @@ describe('the builder on Google', () => {
         keywords: ['"formatação de franquia"', '[wings company]'],
         negativeKeywords: ['emprego', 'vaga'],
         headlines: ['Formate Sua Franquia', 'Consultoria de Franquias', 'Fale com um Especialista'],
-        descriptions: ['Formatamos sua empresa para virar franqueadora.', 'Fale com um especialista da Wings.'],
+        descriptions: [
+          'Formatamos sua empresa para virar franqueadora.',
+          'Fale com um especialista da Wings.',
+        ],
       },
     };
     try {
@@ -790,10 +872,12 @@ describe('the builder on Google', () => {
       expect((screen.getByLabelText(/^Nome da campanha/) as HTMLInputElement).value).toBe(
         'SEARCH | Formatação | Alta Intenção | Set26',
       );
-      expect((byField('Nome do grupo de anúncios') as HTMLInputElement).value).toBe('Formatação | Alta Intenção');
-      expect((screen.getByLabelText(/^Palavras-chave(?! negativas)/) as HTMLTextAreaElement).value).toBe(
-        '"formatação de franquia"\n[wings company]',
+      expect((byField('Nome do grupo de anúncios') as HTMLInputElement).value).toBe(
+        'Formatação | Alta Intenção',
       );
+      expect(
+        (screen.getByLabelText(/^Palavras-chave(?! negativas)/) as HTMLTextAreaElement).value,
+      ).toBe('"formatação de franquia"\n[wings company]');
       expect((byField('Título 1') as HTMLInputElement).value).toBe('Formate Sua Franquia');
       expect((screen.getByLabelText(/Verba por dia/) as HTMLInputElement).value).toBe('100,00');
       // Shown as reais at once, never as the raw cents the form holds.
@@ -972,7 +1056,7 @@ describe('the builder on Meta: ad set and ads', () => {
   const typeOf = (variation: number, name: string) =>
     fireEvent.click(
       screen
-        .getAllByRole('group', { name: `Tipo de criativo — Variação ${variation}` })
+        .getAllByRole('group', { name: `Tipo de criativo — Criativo ${variation}` })
         .flatMap((group) => Array.from(group.querySelectorAll('button')))
         .find((button) => button.textContent === name) as Element,
     );
@@ -1101,7 +1185,7 @@ describe('the builder on Meta: ad set and ads', () => {
     ).toHaveLength(2);
 
     uploadSize.current = { width: 1080, height: 1920 };
-    chooseImage(screen.getAllByLabelText(/^Imagem — Variação/)[0] as Element);
+    chooseImage(screen.getAllByLabelText(/^Imagem — Criativo/)[0] as Element);
     expect(screen.getAllByText(/Esta imagem não é 9:16/)).toHaveLength(1);
 
     await launch();
@@ -1159,8 +1243,8 @@ describe('the builder on Meta: ad set and ads', () => {
     render(<PaidMediaBuilder canRequest />);
     fillValidCampaign();
     typeOf(2, 'Vídeo');
-    expect(screen.getAllByLabelText(/^Imagem — Variação/)).toHaveLength(1);
-    fireEvent.change(screen.getByLabelText(/^Vídeo — Variação 2(?!,)/), {
+    expect(screen.getAllByLabelText(/^Imagem — Criativo/)).toHaveLength(1);
+    fireEvent.change(screen.getByLabelText(/^Vídeo — Criativo 2(?!,)/), {
       target: { files: [video()] },
     });
     expect(uploadVideo).toHaveBeenCalledTimes(1);
@@ -1183,7 +1267,7 @@ describe('the builder on Meta: ad set and ads', () => {
   it('refuses a video over 4 GB before sending anything', () => {
     render(<PaidMediaBuilder canRequest />);
     typeOf(1, 'Vídeo');
-    fireEvent.change(screen.getByLabelText(/^Vídeo — Variação 1(?!,)/), {
+    fireEvent.change(screen.getByLabelText(/^Vídeo — Criativo 1(?!,)/), {
       target: { files: [video(4 * 1024 * 1024 * 1024 + 1)] },
     });
     expect(screen.getByText('O vídeo passa de 4 GB.')).toBeTruthy();
@@ -1197,7 +1281,7 @@ describe('the builder on Meta: ad set and ads', () => {
     });
     render(<PaidMediaBuilder canRequest />);
     typeOf(1, 'Vídeo');
-    fireEvent.change(screen.getByLabelText(/^Vídeo — Variação 1(?!,)/), {
+    fireEvent.change(screen.getByLabelText(/^Vídeo — Criativo 1(?!,)/), {
       target: { files: [video()] },
     });
     expect(screen.getByText(/O armazenamento de vídeos não está configurado/)).toBeTruthy();
@@ -1218,15 +1302,15 @@ describe('the builder on Meta: ad set and ads', () => {
     type(titles[1] as Element, 'Modelo enxuto');
     type(texts[1] as Element, 'Operação simples.');
     type(links[1] as Element, 'https://wingscompany.com.br/modelo');
-    chooseImage(screen.getByLabelText(/^Imagem — Variação 2, cartão 1/));
+    chooseImage(screen.getByLabelText(/^Imagem — Criativo 2, cartão 1/));
     fireEvent.click(
       Array.from(
         screen
-          .getByRole('group', { name: 'Mídia — Variação 2, cartão 2' })
+          .getByRole('group', { name: 'Mídia — Criativo 2, cartão 2' })
           .querySelectorAll('button'),
       ).find((button) => button.textContent === 'Vídeo') as Element,
     );
-    fireEvent.change(screen.getByLabelText(/^Vídeo — Variação 2, cartão 2(?!,)/), {
+    fireEvent.change(screen.getByLabelText(/^Vídeo — Criativo 2, cartão 2(?!,)/), {
       target: { files: [video()] },
     });
 
@@ -1434,7 +1518,7 @@ describe('applying a proposal from the agent', () => {
 
   it('fills the words of a Meta campaign and leaves the images the person chose', () => {
     const { bridge } = renderWithBridge();
-    chooseImage(screen.getAllByLabelText(/^Imagem — Variação/)[0] as Element);
+    chooseImage(screen.getAllByLabelText(/^Imagem — Criativo/)[0] as Element);
     const imagesBefore = screen.getAllByAltText(/^Criativo/).length;
     expect(imagesBefore).toBeGreaterThan(0);
 
@@ -1489,9 +1573,9 @@ describe('applying a proposal from the agent', () => {
     expect(panel.textContent).toContain('Faixa de idade');
     expect(panel.textContent).toContain('Falta escolher as imagens e a Página.');
     // What Design has to produce stays in view after the card is gone.
-    expect(panel.textContent).toContain('Briefing para o Design — Variação 1');
+    expect(panel.textContent).toContain('Briefing para o Design — Criativo 1');
     expect(panel.textContent).toContain('Dono de negócio na porta da loja');
-    expect(panel.textContent).toContain('Briefing para o Design — Variação 3');
+    expect(panel.textContent).toContain('Briefing para o Design — Criativo 3');
     expect(panel.textContent).toContain('Pendente');
     expect(panel.textContent).toContain('Página do Facebook e conta do Instagram');
     expect(requestCampaign).not.toHaveBeenCalled();
@@ -1583,7 +1667,7 @@ describe('media from the library', () => {
     expect(screen.queryByRole('button', { name: /Escolher do Drive/ })).toBeNull();
     cleanup();
     render(<PaidMediaBuilder canRequest canPickMedia />);
-    expect(screen.getAllByRole('button', { name: /Escolher do Drive — Variação/ })).toHaveLength(2);
+    expect(screen.getAllByRole('button', { name: /Escolher do Drive — Criativo/ })).toHaveLength(2);
   });
 
   it('puts a picked image in the variation, with the asset it came from, and sends both', async () => {
@@ -1602,7 +1686,7 @@ describe('media from the library', () => {
     render(<PaidMediaBuilder canRequest canPickMedia />);
     fillValidCampaign();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Escolher do Drive — Variação 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Escolher do Drive — Criativo 1' }));
     const dialog = screen.getByRole('dialog', { name: 'Escolher uma imagem da biblioteca' });
     fireEvent.click(within(dialog).getByRole('button', { name: /^Imagem, 1080 × 1080/ }));
     expect(useInBuilder).toHaveBeenCalledWith(libraryAsset().id);
@@ -1628,9 +1712,9 @@ describe('media from the library', () => {
     };
     render(<PaidMediaBuilder canRequest canPickMedia />);
     fillValidCampaign();
-    fireEvent.click(screen.getByRole('button', { name: 'Escolher do Drive — Variação 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Escolher do Drive — Criativo 1' }));
     fireEvent.click(screen.getByRole('button', { name: /^Imagem, 1080 × 1080/ }));
-    chooseImage(screen.getAllByLabelText(/^Imagem — Variação/)[0] as Element);
+    chooseImage(screen.getAllByLabelText(/^Imagem — Criativo/)[0] as Element);
 
     fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
     await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
@@ -1642,7 +1726,7 @@ describe('media from the library', () => {
   it('shows a WebP but does not let it be picked: ads take PNG and JPEG', () => {
     libraryAssets.current = [libraryAsset({ mimeType: 'image/webp' })];
     render(<PaidMediaBuilder canRequest canPickMedia />);
-    fireEvent.click(screen.getByRole('button', { name: 'Escolher do Drive — Variação 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Escolher do Drive — Criativo 1' }));
     const tile = screen.getByRole('button', { name: /^Imagem, 1080 × 1080/ });
     expect(tile).toHaveProperty('disabled', true);
     expect(within(tile).getByText('WebP não vale para anúncio')).toBeTruthy();
@@ -1663,9 +1747,9 @@ describe('media from the library', () => {
     // Handed over once: the key is gone, and the first variation shows the picture.
     expect(sessionStorage.getItem('wings.builder.pickedMedia')).toBeNull();
     // The slot's thumbnail and the ad preview both show it.
-    const [thumb] = await screen.findAllByAltText('Criativo — Variação 1');
+    const [thumb] = await screen.findAllByAltText('Criativo — Criativo 1');
     expect(thumb?.getAttribute('src')).toContain(CREATIVE);
-    expect(screen.queryByAltText('Criativo — Variação 2')).toBeNull();
+    expect(screen.queryByAltText('Criativo — Criativo 2')).toBeNull();
   });
 
   it('leaves its draft where the editing agent can read it, without media ids of its own making', async () => {
@@ -1676,5 +1760,49 @@ describe('media from the library', () => {
       { timeout: 2000 },
     );
     expect(sessionStorage.getItem('wings.builder.draft')).not.toMatch(/token|password/i);
+  });
+});
+
+describe('adding creatives to a campaign that exists', () => {
+  it('shows only what the new ads need, lists the Meta campaigns and asks for approval', async () => {
+    requestAddAds.mockClear();
+    render(<PaidMediaBuilder canRequest />);
+    fireEvent.click(screen.getByLabelText(/Adicionar criativos a uma campanha existente/));
+    // No budget, dates, audience or objective: the campaign keeps its own.
+    expect(screen.queryByRole('heading', { name: /Verba diária/ })).toBeNull();
+    expect(screen.queryByRole('heading', { name: /Duração/ })).toBeNull();
+    expect(screen.queryByRole('heading', { name: /Área de alcance/ })).toBeNull();
+    expect(screen.getByRole('heading', { name: /Criativo/ })).toBeTruthy();
+    const select = screen.getByLabelText('Campanha') as HTMLSelectElement;
+    expect(Array.from(select.options).map((option) => option.textContent)).toEqual([
+      'Escolha a campanha',
+      'META | 28Set (ativa)',
+    ]);
+
+    // Nothing chosen: said on screen, nothing sent.
+    fireEvent.click(screen.getByRole('button', { name: 'Pedir aprovação dos anúncios' }));
+    expect(
+      await screen.findByText('Escolha a campanha', { selector: '.alert *, .alert' }),
+    ).toBeTruthy();
+    expect(requestAddAds).not.toHaveBeenCalled();
+  });
+
+  it('sends the campaign, page, destination, UTMs and each creative with its own copy', async () => {
+    requestAddAds.mockClear();
+    render(<PaidMediaBuilder canRequest />);
+    fillValidCampaign();
+    fireEvent.click(screen.getByLabelText(/Adicionar criativos a uma campanha existente/));
+    fireEvent.change(screen.getByLabelText('Campanha'), {
+      target: { value: '120252260012720076' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Pedir aprovação dos anúncios' }));
+    await waitFor(() => expect(requestAddAds).toHaveBeenCalledTimes(1));
+    const sent = requestAddAds.mock.calls[0]?.[0] as {
+      campaignExternalId: string;
+      variations: { headline: string }[];
+    };
+    expect(sent.campaignExternalId).toBe('120252260012720076');
+    expect(sent.variations.length).toBeGreaterThanOrEqual(1);
+    expect(sent).not.toHaveProperty('dailyBudgetCents');
   });
 });

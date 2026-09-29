@@ -98,7 +98,9 @@ nunca palpite — igual ao Google.
 
 `object_story_spec` com `page_id` e `instagram_user_id` (o antigo
 `instagram_actor_id` foi descontinuado na v22). Link sempre com as UTMs da
-variação (`utm_content=…-v1`, `-v2`…).
+anúncio: o tipo e a posição no conjunto (`utm_content=video-1`, `imagem-2`,
+`carrossel-3`…), para o RD e a tela Leads das Campanhas dizerem de qual anúncio
+veio o lead (desde 29/09/2026; antes era `…-v1`, `-v2`).
 
 | Tipo      | Formato na Meta                                                                                                                                          |
 | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -249,3 +251,30 @@ com o link corrigido (`1100345526226556` para v1, `3651541801687471` para
 v2), `validate_only` da troca e depois a troca no anúncio, sem pausar nada;
 registrado na trilha como `ads.manual_platform_change`. A troca de criativo
 manda o anúncio de volta à revisão (`IN_PROCESS`).
+
+
+## Vários criativos e anúncios novos numa campanha que já existe (29/09/2026)
+
+- **De 1 a 5 criativos por conjunto** (antes, de 2 a 3). O construtor abre com
+  2 e deixa remover até 1. Cada criativo vira um anúncio no mesmo conjunto, com
+  texto, título e botão próprios, ou o mesmo em todos ("Usar o mesmo texto…").
+- **utm_content por anúncio**: `video-N`, `imagem-N`, `carrossel-N`, com N a
+  posição no conjunto (`adUtmContent` em `packages/shared`).
+- **Só Instagram**: atalho nos posicionamentos manuais que deixa Instagram
+  Feed, Stories e Reels e tira Facebook e Threads (Audience Network não é
+  oferecida pelo construtor).
+- **Adicionar criativos a uma campanha existente** (`add_ads`, migração
+  0046): no construtor, "Adicionar criativos a uma campanha existente". O
+  pedido guarda o conjunto (o único da campanha, ou o escolhido) e continua a
+  numeração do utm_content depois dos anúncios que já existem. Não reserva
+  verba, mas passa pela aprovação como tudo. Na execução: confere que o
+  conjunto ainda pertence à campanha na Meta, que o pedido é o aprovado (hash)
+  e que os arquivos existem; sobe a mídia; valida cada anúncio
+  (`validate_only`) e cria cada um **pausado**. Nada criado: recusado. Parte
+  criada: desconhecido e a conta travada, como toda escrita pela metade.
+  Ligar: pedido "Retomar campanha" (liga também estes anúncios, porque o
+  sistema os criou) ou na Meta.
+- **Aprovação**: lista cada criativo com o seu utm_content; "Total previsto
+  da campanha até o fim" (verba diária × dias, da criação ao fim, ou de hoje
+  ao fim numa mudança de verba); "Solicitado por" diz quando o pedido veio do
+  terminal (`ops-cli request --requested-by e-mail` registra a pessoa).

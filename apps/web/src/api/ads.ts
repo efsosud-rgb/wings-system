@@ -1,6 +1,7 @@
 import {
   AD_ACCOUNT_PLATFORM,
   type AdAccountBudgetCapView,
+  type AddAdsRequest,
   type ApprovalDecisionInput,
   type ApprovalDetail,
   type ApprovalListItem,
@@ -184,10 +185,7 @@ export function useSetBudgetCap(accountId: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: BudgetCapUpdateInput) =>
-      api.post<{ account: AdAccountBudgetCapView }>(
-        `/ads/accounts/${accountId}/budget-cap`,
-        input,
-      ),
+      api.post<{ account: AdAccountBudgetCapView }>(`/ads/accounts/${accountId}/budget-cap`, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['ads', 'accounts', 'budget-caps'] });
       void queryClient.invalidateQueries({ queryKey: ['ads', 'cockpit'] });
@@ -417,6 +415,21 @@ export function useCreateSiteDraft() {
     // Refused and unconfirmed attempts are recorded too, so refresh either way.
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ['site', 'posts'] });
+    },
+  });
+}
+
+/** New ads (1 to 5 creatives) in a Meta campaign that exists: a request an approver decides. */
+export function useRequestAddAds() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: AddAdsRequest) =>
+      api.post<{ approvalId: string | null; changeRequestId: string; firstPosition: number }>(
+        '/ads/add-ads',
+        input,
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ads'] });
     },
   });
 }

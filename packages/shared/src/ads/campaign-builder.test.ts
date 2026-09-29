@@ -8,6 +8,7 @@ import {
   RADIUS_NOT_ACCEPTED_HINT,
   describeReach,
   reachSchema,
+  adUtmContent,
   applyUtms,
   buildUtms,
   campaignDays,
@@ -57,7 +58,10 @@ describe('the ad platform catalog', () => {
 
   it('is waiting on the platform for TikTok, LinkedIn and X, with the reason on screen', () => {
     const awaiting = Object.fromEntries(
-      PAID_PLATFORMS.filter((p) => p.status === 'awaiting_api_access').map((p) => [p.key, p.reason]),
+      PAID_PLATFORMS.filter((p) => p.status === 'awaiting_api_access').map((p) => [
+        p.key,
+        p.reason,
+      ]),
     );
     expect(awaiting).toEqual({
       tiktok: 'Perfil de desenvolvedor em análise pelo TikTok',
@@ -138,11 +142,20 @@ describe('UTMs', () => {
     );
   });
 
-  it('applies them to the destination, one content value per variation', () => {
+  it('applies them to the destination, each ad with its own utm_content (video-1, imagem-2…)', () => {
     const utms = buildUtms({ platform: 'meta', objective: 'lead', campaignName: 'Teste' });
-    expect(applyUtms('https://wingscompany.com.br/franquia?x=1', utms, 1)).toBe(
-      'https://wingscompany.com.br/franquia?x=1&utm_source=facebook&utm_medium=cpc&utm_campaign=teste&utm_content=lead-v2',
+    expect(
+      applyUtms('https://wingscompany.com.br/franquia?x=1', utms, {
+        creativeType: 'image',
+        position: 2,
+      }),
+    ).toBe(
+      'https://wingscompany.com.br/franquia?x=1&utm_source=facebook&utm_medium=cpc&utm_campaign=teste&utm_content=imagem-2',
     );
+    expect(adUtmContent({ creativeType: 'video', position: 1 })).toBe('video-1');
+    expect(adUtmContent({ creativeType: 'carousel', position: 3 })).toBe('carrossel-3');
+    // Without an ad, the campaign's own value.
+    expect(applyUtms('https://x.com.br/', utms)).toContain('utm_content=lead');
     expect(applyUtms('não é url', utms)).toBeNull();
   });
 });
@@ -272,10 +285,16 @@ describe('the draft schema', () => {
     expect(result.error?.issues[0]?.message).toBe('Envie o criativo desta variação');
   });
 
-  it('demands two to three variations', () => {
+  it('takes one to five creatives in the ad set', () => {
+    expect(campaignDraftSchema.safeParse({ ...valid, variations: [] }).success).toBe(false);
     expect(campaignDraftSchema.safeParse({ ...valid, variations: [variations[0]] }).success).toBe(
-      false,
+      true,
     );
+    const five = Array.from({ length: 5 }, () => variations[0]);
+    expect(campaignDraftSchema.safeParse({ ...valid, variations: five }).success).toBe(true);
+    expect(
+      campaignDraftSchema.safeParse({ ...valid, variations: [...five, variations[0]] }).success,
+    ).toBe(false);
   });
 
   it('refuses an end before the start, an http destination and an unknown format', () => {
@@ -549,7 +568,12 @@ describe('a request against the saved draft it came from', () => {
       reach: { states: ['RJ'], cities: [], customLocations: [] },
     };
     expect(draftDifferences(saved, requested)).toEqual([
-      { field: 'dailyBudgetCents', label: 'Verba diária', saved: 'R$ 120,00', requested: 'R$ 240,00' },
+      {
+        field: 'dailyBudgetCents',
+        label: 'Verba diária',
+        saved: 'R$ 120,00',
+        requested: 'R$ 240,00',
+      },
       { field: 'endDate', label: 'Fim', saved: '04/10/2026', requested: '29/09/2026' },
       {
         field: 'destinationUrl',
@@ -583,7 +607,10 @@ describe('Google drafts', () => {
       keywords: ['[franquia de alimentação]', '"abrir franquia"'],
       negativeKeywords: ['grátis'],
       headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
-      descriptions: ['Conheça o modelo de negócio e o suporte da Wings.', 'Suporte do início ao fim.'],
+      descriptions: [
+        'Conheça o modelo de negócio e o suporte da Wings.',
+        'Suporte do início ao fim.',
+      ],
     },
   };
 

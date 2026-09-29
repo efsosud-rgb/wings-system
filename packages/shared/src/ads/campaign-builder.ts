@@ -464,13 +464,37 @@ export function buildUtms(input: {
     utm_source: UTM_SOURCE[input.platform],
     utm_medium: UTM_MEDIUM[input.platform],
     utm_campaign: utmSlug(input.campaignName) || 'campanha',
-    // One value per campaign; each variation appends its own suffix (-v1, -v2).
+    // One value per campaign. Meta ads replace it with their own
+    // (`adUtmContent`: video-1, imagem-2…) so a lead tells which ad it came from.
     utm_content: input.objective,
   };
 }
 
-/** The destination URL with UTMs applied; null while the URL is not valid. */
-export function applyUtms(url: string, utms: UtmParams, variationIndex?: number): string | null {
+const CREATIVE_UTM_LABEL: Record<CreativeType, string> = {
+  video: 'video',
+  image: 'imagem',
+  carousel: 'carrossel',
+};
+
+/**
+ * The utm_content of one Meta ad: its kind and its position among the ads of
+ * the ad set, counted from 1 (video-1, imagem-2, carrossel-3). The RD lead and
+ * the Leads das Campanhas screen read it to say which ad brought the lead.
+ */
+export function adUtmContent(ad: { creativeType: CreativeType; position: number }): string {
+  return `${CREATIVE_UTM_LABEL[ad.creativeType]}-${ad.position}`;
+}
+
+/**
+ * The destination URL with UTMs applied; null while the URL is not valid.
+ * With `ad`, utm_content is that ad's own value (`adUtmContent`) instead of
+ * the campaign's.
+ */
+export function applyUtms(
+  url: string,
+  utms: UtmParams,
+  ad?: { creativeType: CreativeType; position: number },
+): string | null {
   // Plain string handling: this package compiles without DOM or Node types,
   // so the URL class is not available here.
   const trimmed = url.trim();
@@ -486,11 +510,9 @@ export function applyUtms(url: string, utms: UtmParams, variationIndex?: number)
     .filter((pair) => pair !== '' && !utmKeys.includes(pair.split('=')[0] ?? ''));
 
   for (const key of UTM_KEYS) {
-    const value = utms[key].trim();
+    const value = key === 'utm_content' && ad ? adUtmContent(ad) : utms[key].trim();
     if (!value) continue;
-    const suffix =
-      key === 'utm_content' && variationIndex !== undefined ? `-v${variationIndex + 1}` : '';
-    params.push(`${key}=${encodeURIComponent(`${value}${suffix}`)}`);
+    params.push(`${key}=${encodeURIComponent(value)}`);
   }
 
   const hash = hashParts.length > 0 ? `#${hashParts.join('#')}` : '';
@@ -726,8 +748,9 @@ export function describeReach(
 // The draft
 // ---------------------------------------------------------------------------
 
-export const MIN_VARIATIONS = 2;
-export const MAX_VARIATIONS = 3;
+/** Creatives per ad set: each becomes its own ad. One is enough; five at most. */
+export const MIN_VARIATIONS = 1;
+export const MAX_VARIATIONS = 5;
 export const HEADLINE_MAX = 40;
 export const PRIMARY_TEXT_MAX = 500;
 /** Meta truncates primary text around here on most placements. */
@@ -1129,7 +1152,10 @@ export const PLACEMENT_POSITION_LABEL: Record<PlacementPosition, string> = {
  * (`threads_stream` on the wire) and only alongside the Instagram feed
  * (`stream`), per Meta's Marketing API placement targeting reference.
  */
-export const PLACEMENT_PUBLISHER_POSITIONS: Record<PlacementPublisher, readonly PlacementPosition[]> = {
+export const PLACEMENT_PUBLISHER_POSITIONS: Record<
+  PlacementPublisher,
+  readonly PlacementPosition[]
+> = {
   facebook: PLACEMENT_POSITIONS,
   instagram: PLACEMENT_POSITIONS,
   threads: ['feed'],
@@ -1268,7 +1294,7 @@ export const campaignDraftSchema = z
     /** Meta only: image plus copy. Google drafts send none. */
     variations: z
       .array(copyVariationSchema)
-      .max(MAX_VARIATIONS, `No máximo ${MAX_VARIATIONS} variações`)
+      .max(MAX_VARIATIONS, `No máximo ${MAX_VARIATIONS} criativos por conjunto`)
       .default([]),
     /**
      * Meta only, and absent on drafts from before ad sets existed: those create
@@ -1347,7 +1373,7 @@ export const campaignDraftSchema = z
         ctx.addIssue({
           code: 'custom',
           path: ['variations'],
-          message: `Crie pelo menos ${MIN_VARIATIONS} variações`,
+          message: 'Envie pelo menos 1 criativo',
         });
       }
       if (draft.youtube) foreign('youtube', 'O vídeo do YouTube');
@@ -1479,7 +1505,12 @@ export function draftDifferences(
   const savedReach = describeReach(saved.reach);
   const requestedReach = describeReach(requested.reach);
   if (savedReach !== requestedReach) {
-    differences.push({ field: 'reach', label: 'Área de alcance', saved: savedReach, requested: requestedReach });
+    differences.push({
+      field: 'reach',
+      label: 'Área de alcance',
+      saved: savedReach,
+      requested: requestedReach,
+    });
   }
   const audience = (draft: CampaignDraft) =>
     [
@@ -1500,3 +1531,43 @@ export function draftDifferences(
   }
   return differences;
 }
+
+// ---------------------------------------------------------------------------
+// New ads in a campaign that already exists (`add_ads`)
+// ---------------------------------------------------------------------------
+
+/**
+ * What a person asks for to add creatives to a Meta campaign that exists:
+ * 1 to 5 creatives, each a new ad in the campaign's ad set, born paused. No
+ * budget changes, but it still goes through approval like every other write.
+ */
+export const addAdsRequestSchema = z.object({
+  campaignExternalId: z.string().regex(/^\d{5,30}$/, 'Escolha a campanha'),
+  /** Only when the campaign has more than one ad set. */
+  adSetExternalId: z
+    .string()
+    .regex(/^\d{5,30}$/)
+    .optional(),
+  identity: metaIdentitySchema,
+  destinationUrl: z.url({ protocol: /^https$/, error: 'Informe um endereço https:// válido' }),
+  utms: z.object({
+    utm_source: utmValue.min(1, 'Obrigatório'),
+    utm_medium: utmValue.min(1, 'Obrigatório'),
+    utm_campaign: utmValue.min(1, 'Obrigatório'),
+    utm_content: utmValue,
+  }),
+  variations: z
+    .array(copyVariationSchema)
+    .min(MIN_VARIATIONS, 'Envie pelo menos 1 criativo')
+    .max(MAX_VARIATIONS, `No máximo ${MAX_VARIATIONS} criativos por pedido`),
+});
+export type AddAdsRequest = z.output<typeof addAdsRequestSchema>;
+
+/** The request as stored and approved: which ad set, and where the numbering of utm_content resumes. */
+export const addAdsPayloadSchema = addAdsRequestSchema.extend({
+  adSetExternalId: z.string().regex(/^\d{5,30}$/),
+  campaignName: z.string().min(1),
+  /** utm_content position of the first new ad: one after the ads the ad set already has. */
+  firstPosition: z.number().int().min(1),
+});
+export type AddAdsPayload = z.output<typeof addAdsPayloadSchema>;

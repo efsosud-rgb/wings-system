@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { CampaignDraft, DraftDifference } from './campaign-builder.js';
+import type { AddAdsPayload, CampaignDraft, DraftDifference } from './campaign-builder.js';
 
 /**
  * Contract for the approvals panel.
@@ -37,6 +37,7 @@ export const CHANGE_KIND_LABEL: Record<string, string> = {
   pause_campaign: 'Pausar campanha',
   resume_campaign: 'Retomar campanha',
   create_campaign: 'Criar campanha',
+  add_ads: 'Adicionar anúncios',
 };
 
 export interface ApprovalListItem {
@@ -108,6 +109,8 @@ export interface ApprovalDetail extends ApprovalListItem {
   campaignExternalId: string;
   /** The whole campaign being asked for; null for a change to an existing one. */
   draft: CampaignDraft | null;
+  /** The ads being added to an existing campaign (`add_ads`); null for anything else. */
+  addAds: AddAdsPayload | null;
   /**
    * How the request compares with the saved draft of the same name, when one
    * exists: the approver sees in bold what was edited after "Carregar".
@@ -122,6 +125,19 @@ export interface ApprovalDetail extends ApprovalListItem {
   fromValueCents: number | null;
   toValueCents: number | null;
   exposureDeltaCents: number;
+  /**
+   * What the campaign will cost to its end at the daily budget asked for:
+   * daily × days, with the days counted. A new campaign from its first day to
+   * its last; a budget change from today to the campaign's end date. Null for
+   * a change that is not about budget, or a campaign without an end date.
+   */
+  campaignForecast: {
+    dailyCents: number;
+    days: number;
+    totalCents: number;
+    from: string;
+    until: string;
+  } | null;
   /** Reason given by whoever requested the change. */
   requestReason: string | null;
   decisionReason: string | null;
