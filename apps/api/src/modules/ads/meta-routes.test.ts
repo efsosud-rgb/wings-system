@@ -1,14 +1,28 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SESSION_COOKIE, campaignDraftSchema, type MetaIdentities } from '@wings/shared';
+import {
+  MAX_VIDEO_BYTES,
+  SESSION_COOKIE,
+  VIDEO_UPLOAD_PART_BYTES,
+  campaignDraftSchema,
+  type MetaIdentities,
+  type VideoUpload,
+  type VideoUploadSession,
+} from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { adAccounts, adExecutions, auditLog } from '../../db/schema/index.js';
+import {
+  adAccounts,
+  adExecutions,
+  adVideoUploadSessions,
+  adVideoUploads,
+  auditLog,
+} from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
@@ -249,6 +263,264 @@ describe('videos', () => {
       payload: mp4Of(64),
     });
     expect(response.statusCode).toBe(403);
+  });
+});
+
+describe('videos in parts', () => {
+  const PART = VIDEO_UPLOAD_PART_BYTES;
+
+  async function opened(cookies: Record<string, string>, byteSize: number, on = app) {
+    const response = await on.inject({
+      method: 'POST',
+      url: '/ads/videos/uploads',
+      cookies,
+      payload: { mimeType: 'video/mp4', byteSize },
+    });
+    expect(response.statusCode).toBe(201);
+    return response.json<{ upload: VideoUploadSession }>().upload;
+  }
+
+  async function sendPart(
+    cookies: Record<string, string>,
+    id: string,
+    n: number,
+    bytes: Buffer,
+    on = app,
+  ) {
+    return on.inject({
+      method: 'PUT',
+      url: `/ads/videos/uploads/${id}/parts/${n}`,
+      cookies,
+      headers: { 'content-type': 'application/octet-stream' },
+      payload: bytes,
+    });
+  }
+
+  it('takes a video in ordered parts, keeps it under our own name and serves it back', async () => {
+    const cookies = await cookiesFor('marketing');
+    const tail = 1_000;
+    const whole = mp4Of(2 * PART + tail);
+    const upload = await opened(cookies, whole.length);
+    expect(upload).toMatchObject({ partSize: PART, parts: 3, receivedBytes: 0, nextPart: 1 });
+
+    const before = (await readdir(videoDir)).filter((name) => !name.endsWith('.part')).length;
+    for (let n = 1; n <= 3; n += 1) {
+      const response = await sendPart(
+        cookies,
+        upload.id,
+        n,
+        whole.subarray((n - 1) * PART, Math.min(n * PART, whole.length)),
+      );
+      expect(response.statusCode).toBe(200);
+      expect(response.json<{ upload: VideoUploadSession }>().upload).toMatchObject({
+        nextPart: n + 1,
+        receivedBytes: Math.min(n * PART, whole.length),
+      });
+    }
+
+    const status = await app.inject({ url: `/ads/videos/uploads/${upload.id}`, cookies });
+    expect(status.json<{ upload: VideoUploadSession }>().upload.receivedBytes).toBe(whole.length);
+
+    const complete = await app.inject({
+      method: 'POST',
+      url: `/ads/videos/uploads/${upload.id}/complete`,
+      cookies,
+    });
+    expect(complete.statusCode).toBe(201);
+    const { video } = complete.json<{ video: VideoUpload }>();
+    expect(video).toMatchObject({ byteSize: whole.length, mimeType: 'video/mp4' });
+
+    const files = (await readdir(videoDir)).filter((name) => !name.endsWith('.part'));
+    expect(files).toHaveLength(before + 1);
+
+    const served = await app.inject({ url: `/ads/videos/${video.id}`, cookies });
+    expect(served.statusCode).toBe(200);
+    expect(served.rawPayload.equals(whole)).toBe(true);
+    expect(createHash('sha256').update(whole).digest('hex')).toBe(
+      (await db.query.adVideoUploads.findFirst({ where: eq(adVideoUploads.id, video.id) }))?.sha256,
+    );
+
+    // The session is gone with the upload.
+    expect(
+      (await app.inject({ url: `/ads/videos/uploads/${upload.id}`, cookies })).statusCode,
+    ).toBe(404);
+  }, 60_000);
+
+  it('refuses a part out of order and says which one it expects', async () => {
+    const cookies = await cookiesFor('marketing');
+    const upload = await opened(cookies, 2 * PART + 10);
+    const response = await sendPart(cookies, upload.id, 2, Buffer.alloc(PART, 1));
+    expect(response.statusCode).toBe(409);
+    expect(response.json<{ error: string; expected: number }>()).toMatchObject({
+      error: 'part_out_of_order',
+      expected: 1,
+    });
+  });
+
+  it('answers a repeated part without writing it twice', async () => {
+    const cookies = await cookiesFor('marketing');
+    const whole = mp4Of(PART + 10);
+    const upload = await opened(cookies, whole.length);
+    expect((await sendPart(cookies, upload.id, 1, whole.subarray(0, PART))).statusCode).toBe(200);
+    const again = await sendPart(cookies, upload.id, 1, Buffer.alloc(PART, 9));
+    expect(again.statusCode).toBe(200);
+    expect(again.json<{ upload: VideoUploadSession }>().upload).toMatchObject({
+      nextPart: 2,
+      receivedBytes: PART,
+    });
+    expect((await sendPart(cookies, upload.id, 2, whole.subarray(PART))).statusCode).toBe(200);
+    const complete = await app.inject({
+      method: 'POST',
+      url: `/ads/videos/uploads/${upload.id}/complete`,
+      cookies,
+    });
+    expect(complete.statusCode).toBe(201);
+    const served = await app.inject({
+      url: `/ads/videos/${complete.json<{ video: VideoUpload }>().video.id}`,
+      cookies,
+    });
+    expect(served.rawPayload.equals(whole)).toBe(true);
+  }, 60_000);
+
+  it('refuses a part of the wrong size and keeps nothing of it', async () => {
+    const cookies = await cookiesFor('marketing');
+    const upload = await opened(cookies, PART + 10);
+    const short = await sendPart(cookies, upload.id, 1, Buffer.alloc(PART - 1, 1));
+    expect(short.statusCode).toBe(400);
+    expect(short.json<{ error: string }>().error).toBe('part_size_mismatch');
+    const last = await sendPart(cookies, upload.id, 1, Buffer.alloc(PART, 1));
+    expect(last.statusCode).toBe(200);
+    // The last part must be exactly what is left.
+    const wrongTail = await sendPart(cookies, upload.id, 2, Buffer.alloc(11, 1));
+    expect(wrongTail.statusCode).toBe(400);
+    expect(
+      (await app.inject({ url: `/ads/videos/uploads/${upload.id}`, cookies })).json<{
+        upload: VideoUploadSession;
+      }>().upload,
+    ).toMatchObject({ nextPart: 2, receivedBytes: PART });
+  }, 60_000);
+
+  it('will not complete before every part is in', async () => {
+    const cookies = await cookiesFor('marketing');
+    const upload = await opened(cookies, PART + 10);
+    const response = await app.inject({
+      method: 'POST',
+      url: `/ads/videos/uploads/${upload.id}/complete`,
+      cookies,
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json<{ error: string }>().error).toBe('upload_incomplete');
+  });
+
+  it('refuses bytes that are not a video at the end, and keeps nothing', async () => {
+    const cookies = await cookiesFor('marketing');
+    const junk = Buffer.from('<html>definitely not a video</html>');
+    const upload = await opened(cookies, junk.length);
+    expect((await sendPart(cookies, upload.id, 1, junk)).statusCode).toBe(200);
+    const partial = `${
+      (
+        await db.query.adVideoUploadSessions.findFirst({
+          where: eq(adVideoUploadSessions.id, upload.id),
+        })
+      )?.storageKey
+    }.part`;
+    expect((await readdir(videoDir)).includes(partial)).toBe(true);
+    const complete = await app.inject({
+      method: 'POST',
+      url: `/ads/videos/uploads/${upload.id}/complete`,
+      cookies,
+    });
+    expect(complete.statusCode).toBe(400);
+    expect(complete.json<{ error: string }>().error).toBe('invalid_video');
+    expect((await readdir(videoDir)).includes(partial)).toBe(false);
+    expect(
+      (await app.inject({ url: `/ads/videos/uploads/${upload.id}`, cookies })).statusCode,
+    ).toBe(404);
+  });
+
+  it('refuses a video over 4 GB before a byte goes up, and a bad type', async () => {
+    const cookies = await cookiesFor('marketing');
+    const big = await app.inject({
+      method: 'POST',
+      url: '/ads/videos/uploads',
+      cookies,
+      payload: { mimeType: 'video/mp4', byteSize: MAX_VIDEO_BYTES + 1 },
+    });
+    expect(big.statusCode).toBe(413);
+    const bad = await app.inject({
+      method: 'POST',
+      url: '/ads/videos/uploads',
+      cookies,
+      payload: { mimeType: 'image/png', byteSize: 10 },
+    });
+    expect(bad.statusCode).toBe(400);
+  });
+
+  it('answers 503 without a video volume, never a fake success', async () => {
+    const response = await bare.inject({
+      method: 'POST',
+      url: '/ads/videos/uploads',
+      cookies: await cookiesFor('marketing', bare),
+      payload: { mimeType: 'video/mp4', byteSize: 64 },
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json<{ error: string }>().error).toBe('video_storage_not_configured');
+  });
+
+  it('is closed to someone who may not ask for campaigns', async () => {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/ads/videos/uploads',
+      cookies: await cookiesFor('vendedor_expansao'),
+      payload: { mimeType: 'video/mp4', byteSize: 64 },
+    });
+    expect(response.statusCode).toBe(403);
+  });
+
+  it("is blind to another employee's session", async () => {
+    const owner = await cookiesFor('marketing');
+    const other = await cookiesFor('marketing');
+    const upload = await opened(owner, 64);
+    expect(
+      (await app.inject({ url: `/ads/videos/uploads/${upload.id}`, cookies: other })).statusCode,
+    ).toBe(404);
+    expect((await sendPart(other, upload.id, 1, mp4Of(64))).statusCode).toBe(404);
+    expect(
+      (
+        await app.inject({
+          method: 'DELETE',
+          url: `/ads/videos/uploads/${upload.id}`,
+          cookies: other,
+        })
+      ).statusCode,
+    ).toBe(404);
+    // The owner can still throw it away.
+    const gone = await app.inject({
+      method: 'DELETE',
+      url: `/ads/videos/uploads/${upload.id}`,
+      cookies: owner,
+    });
+    expect(gone.statusCode).toBe(204);
+    expect(
+      (await app.inject({ url: `/ads/videos/uploads/${upload.id}`, cookies: owner })).statusCode,
+    ).toBe(404);
+  });
+
+  it('purges sessions nobody finished in a day, files included', async () => {
+    const cookies = await cookiesFor('marketing');
+    const stale = await opened(cookies, 64);
+    const [row] = await db
+      .update(adVideoUploadSessions)
+      .set({ expiresAt: new Date(Date.now() - 60_000) })
+      .where(eq(adVideoUploadSessions.id, stale.id))
+      .returning({ storageKey: adVideoUploadSessions.storageKey });
+    expect((await readdir(videoDir)).includes(`${row?.storageKey}.part`)).toBe(true);
+
+    await opened(cookies, 64);
+    expect((await app.inject({ url: `/ads/videos/uploads/${stale.id}`, cookies })).statusCode).toBe(
+      404,
+    );
+    expect((await readdir(videoDir)).includes(`${row?.storageKey}.part`)).toBe(false);
   });
 });
 
