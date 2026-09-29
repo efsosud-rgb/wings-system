@@ -37,6 +37,10 @@ export interface Conversion {
   utms: Utms | null;
   /** Host and path of the page, never its query string. */
   page: string | null;
+  /** RD's event type (a form conversion is CONVERSION; anything else is not a form). */
+  eventType: string | null;
+  /** Which ad platform the visit came from: a click id or the UTM source says so. */
+  ads: 'google' | 'meta' | null;
 }
 
 async function withRetry(call: () => Promise<Response>, what: string): Promise<Response> {
@@ -69,6 +73,36 @@ function pageOfTrafficSource(trafficSource: string | null | undefined): string |
     // "(direct)" and the like: no page.
   }
   return null;
+}
+
+/** 'google' for a gclid or a Google UTM source, 'meta' for an fbclid or a Meta one; else null. */
+export function adsOfTrafficSource(trafficSource: string | null | undefined): 'google' | 'meta' | null {
+  if (!trafficSource) return null;
+  try {
+    const raw = trafficSource.startsWith('encoded_') ? trafficSource.slice(8) : trafficSource;
+    const decoded = JSON.parse(Buffer.from(raw, 'base64').toString('utf8')) as {
+      current_session?: { value?: string; extra_params?: Record<string, unknown> };
+      first_session?: { value?: string; extra_params?: Record<string, unknown> };
+    };
+    let found: 'google' | 'meta' | null = null;
+    for (const session of [decoded.current_session, decoded.first_session]) {
+      const params = new Map<string, string>();
+      try {
+        if (session?.value) for (const [k, v] of new URL(session.value).searchParams) params.set(k, v);
+      } catch {
+        // "(direct)" and the like.
+      }
+      for (const [k, v] of Object.entries(session?.extra_params ?? {})) {
+        if (typeof v === 'string' && !params.has(k)) params.set(k, v);
+      }
+      const source = (params.get('utm_source') ?? '').toLowerCase();
+      if (params.has('gclid') || /google|adwords|gads/.test(source)) return 'google';
+      if (params.has('fbclid') || /facebook|instagram|meta|^fb$|^ig$/.test(source)) found = found ?? 'meta';
+    }
+    return found;
+  } catch {
+    return null;
+  }
 }
 
 export class RdMarketing {
@@ -138,6 +172,7 @@ export class RdMarketing {
   async conversionsOf(uuid: string, since: Date): Promise<Conversion[]> {
     const events = await this.get<
       {
+        event_type?: string;
         event_identifier?: string;
         event_timestamp?: string;
         payload?: {
@@ -171,6 +206,8 @@ export class RdMarketing {
         company: payload.company_name?.trim() || null,
         utms: utmsOfTrafficSource(payload.traffic_source),
         page: pageOfTrafficSource(payload.traffic_source),
+        eventType: event.event_type ?? null,
+        ads: adsOfTrafficSource(payload.traffic_source),
       });
     }
     return conversions;
@@ -298,6 +335,22 @@ export class RdCrm {
       }
     }
     return null;
+  }
+
+  /** Where a deal sits: when RD created it, its funnel and its stage (names only). */
+  async dealPlacement(
+    dealId: string,
+  ): Promise<{ createdAt: Date | null; pipeline: string; stage: string }> {
+    const deal = await this.get<{
+      created_at?: string;
+      deal_pipeline?: { name?: string };
+      deal_stage?: { name?: string };
+    }>(`/deals/${dealId}`);
+    return {
+      createdAt: deal.created_at ? new Date(deal.created_at) : null,
+      pipeline: deal.deal_pipeline?.name ?? '?',
+      stage: deal.deal_stage?.name ?? '?',
+    };
   }
 
   /** When RD created the deal (the contact's embedded deals carry no date). */
