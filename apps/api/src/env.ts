@@ -138,6 +138,11 @@ const schema = z.object({
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',
   ),
+  /** CRM phase 1: the hourly ingestion follows RD CRM into the Funil (writes leads). Off until Eric approves the first import. */
+  CRM_RD_FOLLOW_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
   /**
    * Formatação safety net (docs/expansion-intake.md): every 5 minutes, the
    * conversions of the three Formatação forms with no deal get one in
