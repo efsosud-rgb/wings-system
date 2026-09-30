@@ -54,7 +54,14 @@ export interface RecoverySummary {
 
 export type RecoveryState =
   | { state: 'idle' }
-  | { state: 'running'; mode: 'dry' | 'real'; startedAt: string; days: number }
+  | {
+      state: 'running';
+      mode: 'dry' | 'real';
+      startedAt: string;
+      days: number;
+      progress: { done: number; total: number } | null;
+    }
+  | { state: 'interrupted'; mode: 'dry' | 'real'; startedAt: string }
   | {
       state: 'done';
       mode: 'dry' | 'real';
