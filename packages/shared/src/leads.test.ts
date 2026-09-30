@@ -69,11 +69,16 @@ describe('source rules', () => {
     expect(matchSourceRule(rules, 'landing_page', summer)?.clientId).toBe('aurora-verao');
     const home = landingPageKeysOf({ url: 'https://lp.aurora.com.br/' });
     expect(matchSourceRule(rules, 'landing_page', home)?.clientId).toBe('aurora');
-    expect(matchSourceRule(rules, 'landing_page', landingPageKeysOf({ url: 'https://other.com/x' }))).toBeNull();
+    expect(
+      matchSourceRule(rules, 'landing_page', landingPageKeysOf({ url: 'https://other.com/x' })),
+    ).toBeNull();
   });
 
   it('matches an RD conversion identifier and a Meta form id', () => {
-    expect(matchSourceRule(rules, 'landing_page', landingPageKeysOf({ identifier: 'Sushi-do-Bairro' }))?.clientId).toBe('sushi');
+    expect(
+      matchSourceRule(rules, 'landing_page', landingPageKeysOf({ identifier: 'Sushi-do-Bairro' }))
+        ?.clientId,
+    ).toBe('sushi');
     expect(matchSourceRule(rules, 'meta_form', ['123'])?.clientId).toBe('sushi');
     expect(matchSourceRule(rules, 'meta_campaign', ['123'])).toBeNull();
   });
@@ -90,7 +95,9 @@ describe('expansion area', () => {
   });
 
   it('refuses an area with an entry it cannot check and removes duplicates', () => {
-    expect(expansionAreaSchema.safeParse({ expansionArea: ['SP', 'Campinas/SP', 'sp'] }).data).toEqual({
+    expect(
+      expansionAreaSchema.safeParse({ expansionArea: ['SP', 'Campinas/SP', 'sp'] }).data,
+    ).toEqual({
       expansionArea: [
         { uf: 'SP', city: null },
         { uf: 'SP', city: 'Campinas' },
@@ -168,15 +175,42 @@ describe('the franchisee score', () => {
     const summary = enrichmentSummaryOf({ name: 'Ana Souza' }, strong, score);
     const lines = summary.split('\n');
     expect(lines).toHaveLength(5);
-    expect(lines[0]).toBe('Ana Souza: região de Campinas/SP pelo DDD 19; e-mail em domínio próprio (aurora.com.br).');
+    expect(lines[0]).toBe(
+      'Ana Souza: região de Campinas/SP pelo DDD 19; e-mail em domínio próprio (aurora.com.br).',
+    );
     expect(lines[1]).toBe('WhatsApp: perfil "Ana", com foto.');
     expect(lines[2]).toContain('LinkedIn: Ana Souza - Diretora Comercial - Aurora');
     expect(lines[3]).toContain('capital social R$ 250.000');
-    expect(lines[4]).toBe('Perfil de franqueado: 100/100 (capital provável 40/40, experiência em gestão 30/30, cidade na área de expansão 30/30).');
+    expect(lines[4]).toBe(
+      'Perfil de franqueado: 100/100 (capital provável 40/40, experiência em gestão 30/30, cidade na área de expansão 30/30).',
+    );
 
-    const empty = enrichmentSummaryOf({ name: null }, EMPTY_FACTS, franchiseeScoreOf(EMPTY_FACTS, []));
+    const empty = enrichmentSummaryOf(
+      { name: null },
+      EMPTY_FACTS,
+      franchiseeScoreOf(EMPTY_FACTS, []),
+    );
     expect(empty.split('\n')).toHaveLength(5);
     expect(empty).toContain('Busca web não realizada.');
     expect(empty).toContain('cidade na área de expansão não avaliada');
+  });
+});
+
+describe('utmLinksFor', () => {
+  it('makes one link per channel with source, medium, campaign and content, keeping other parameters', async () => {
+    const { utmLinksFor, utmValueOf } = await import('./leads.js');
+    expect(utmValueOf('Vídeos Thais — Out/26')).toBe('videos_thais_out_26');
+    const links = utmLinksFor(
+      'https://franquia.wingscompany.com.br/cenoritas?ref=x&utm_source=old',
+      {
+        campaign: 'Expansão Out26',
+        content: 'video 1',
+      },
+    );
+    const instagram = links.find((link) => link.key === 'instagram_ads');
+    expect(instagram?.url).toBe(
+      'https://franquia.wingscompany.com.br/cenoritas?ref=x&utm_source=instagram&utm_medium=cpc&utm_campaign=expansao_out26&utm_content=video_1',
+    );
+    expect(links.map((link) => link.key)).toContain('google_ads');
   });
 });

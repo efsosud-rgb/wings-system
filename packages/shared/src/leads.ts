@@ -954,3 +954,106 @@ export const funnelSummaryQuerySchema = z.object({
 //   POST   /integrations/zapi/webhook              (secret)                            no session
 //   GET    /integrations/meta/leadgen/webhook      (hub.verify_token)                  no session
 //   POST   /integrations/meta/leadgen/webhook      (X-Hub-Signature-256)               no session
+
+// --- CRM Vendas → Landing pages (CRM phase 1, Eric's list of 30/09) ---------------
+
+/** A landing page: a source rule of kind `landing_page`, with its client and funnel. */
+export interface LandingPageItem {
+  id: string;
+  /** The slug (or RD conversion identifier) the rule matches. */
+  pattern: string;
+  /** The public address, when the page was generated here or is known. */
+  url: string | null;
+  clientId: string | null;
+  clientName: string | null;
+  brand: string | null;
+  pipeline: LeadPipeline | null;
+  active: boolean;
+  archivedAt: string | null;
+  createdAt: string;
+  /** Leads of the Funil that came through this page (webhook/site). */
+  leads: number;
+  performance: LandingPagePerformance;
+}
+
+/** Only numbers with a source; a missing one is null with the reason. */
+export interface LandingPagePerformance {
+  visits: number | null;
+  visitsSource: string | null;
+  visitsReason: string | null;
+  conversions: number | null;
+  conversionsSource: string | null;
+  conversionsSince: string | null;
+  conversionsReason: string | null;
+  /** conversions ÷ visits, only when both exist. */
+  rate: number | null;
+}
+
+/** Where franchise pages live today (RD Station) until our own pages replace them. */
+export const LANDING_PAGE_BASE_URL = `https://${FRANCHISE_LP_HOST}`;
+
+export const landingPageCreateSchema = z.object({
+  clientId: z.uuid(),
+  pipeline: z.enum(LEAD_PIPELINES),
+  /** Optional: when absent the server makes one from the client's name. */
+  slug: z
+    .string()
+    .trim()
+    .max(80)
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Use letras minúsculas, números e hífen')
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+});
+export type LandingPageCreateInput = z.infer<typeof landingPageCreateSchema>;
+
+/** The channels a UTM link is made for, with the source/medium the team uses. */
+export const UTM_CHANNELS = [
+  { key: 'instagram_ads', label: 'Instagram (anúncio)', source: 'instagram', medium: 'cpc' },
+  { key: 'facebook_ads', label: 'Facebook (anúncio)', source: 'facebook', medium: 'cpc' },
+  { key: 'google_ads', label: 'Google (anúncio)', source: 'google', medium: 'cpc' },
+  {
+    key: 'instagram_bio',
+    label: 'Instagram (bio/orgânico)',
+    source: 'instagram',
+    medium: 'social',
+  },
+  { key: 'whatsapp', label: 'WhatsApp', source: 'whatsapp', medium: 'social' },
+  { key: 'email', label: 'E-mail', source: 'email', medium: 'email' },
+  { key: 'linkedin', label: 'LinkedIn', source: 'linkedin', medium: 'social' },
+] as const;
+
+/** A slug for a UTM value: lower-case, no accents, words joined by "_". */
+export function utmValueOf(text: string): string {
+  return text
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80);
+}
+
+/** One ready link per channel: the page's address with utm_source, utm_medium, utm_campaign (and utm_content when given). */
+export function utmLinksFor(
+  pageUrl: string,
+  input: { campaign: string; content?: string },
+): { key: string; label: string; url: string }[] {
+  const campaign = utmValueOf(input.campaign);
+  const content = input.content ? utmValueOf(input.content) : '';
+  const [base = '', hash] = pageUrl.split('#');
+  const [path = '', query] = base.split('?');
+  // Existing parameters stay, except the UTMs this sets.
+  const kept = (query ?? '')
+    .split('&')
+    .filter((pair) => pair && !/^utm_(source|medium|campaign|content)=/.test(pair));
+  return UTM_CHANNELS.map((channel) => {
+    const utms = [
+      ['utm_source', channel.source],
+      ['utm_medium', channel.medium],
+      ...(campaign ? [['utm_campaign', campaign]] : []),
+      ...(content ? [['utm_content', content]] : []),
+    ].map(([key, value]) => `${key}=${encodeURIComponent(value as string)}`);
+    const url = `${path}?${[...kept, ...utms].join('&')}${hash !== undefined ? `#${hash}` : ''}`;
+    return { key: channel.key, label: channel.label, url };
+  });
+}

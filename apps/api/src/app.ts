@@ -25,6 +25,7 @@ import { driveBlobRoutes, driveRoutes } from './modules/drive/routes.js';
 import { expansionRecoveryRoutes } from './modules/expansion/recovery.js';
 import { expansionRoutes } from './modules/expansion/routes.js';
 import { kairogenRoutes } from './modules/integrations/kairogen/routes.js';
+import { landingPageRoutes } from './modules/leads/landing-pages.js';
 import { rdUserRoutes } from './modules/leads/rd-users.js';
 import { leadRoutes } from './modules/leads/routes.js';
 import { leadWebhookRoutes } from './modules/leads/webhooks.js';
@@ -176,6 +177,7 @@ export async function buildApp(deps: {
   await app.register(roadmapRoutes);
   await app.register(leadRoutes);
   await app.register(rdUserRoutes);
+  await app.register(landingPageRoutes);
   await app.register(leadWebhookRoutes);
   await app.register(driveRoutes);
   await app.register(driveBlobRoutes);
