@@ -198,6 +198,7 @@ describe('the Formatação safety net', () => {
     stageName = 'Novo Contato';
     expect(pass).toMatchObject({ stageFound: false, result: null });
     expect(dealPosts()).toHaveLength(before);
-    expect(await audits('formatacao.intake_blocked')).toHaveLength(1);
+    const [blocked] = await audits('formatacao.intake_blocked');
+    expect(blocked?.metadata).toMatchObject({ pipelines: { Formatação: ['Outra etapa'] } });
   });
 });

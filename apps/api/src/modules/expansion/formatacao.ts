@@ -27,6 +27,8 @@ const TICK_MS = 5 * 60_000;
 const FIRST_LOOKBACK_HOURS = 72;
 const LOOKBACK_HOURS = 6;
 
+let blockedReported = false;
+
 export interface FormatacaoCredentials {
   rdCrmToken: string;
   rdMarketing: RdMarketingCredentials;
@@ -47,13 +49,22 @@ export async function runFormatacaoOnce(
   const crm = new RdCrm(credentials.rdCrmToken, options.fetchImpl);
   const map = await crm.map();
   if (!map.pipelines.get('Formatação')?.stages.has(FORMATACAO_STAGE)) {
-    await writeAudit(db, {
-      actorEmployeeId: null,
-      action: 'formatacao.intake_blocked',
-      entity: 'formatacao_intake',
-      entityId: 'stage',
-      metadata: { reason: 'stage "Formatação / Novo Contato" not found in RD CRM' },
-    });
+    // Once per process: pipeline and stage names are labels, and they say what to fix.
+    if (!blockedReported) {
+      blockedReported = true;
+      await writeAudit(db, {
+        actorEmployeeId: null,
+        action: 'formatacao.intake_blocked',
+        entity: 'formatacao_intake',
+        entityId: 'stage',
+        metadata: {
+          reason: 'stage "Formatação / Novo Contato" not found in RD CRM',
+          pipelines: Object.fromEntries(
+            [...map.pipelines].map(([name, pipeline]) => [name, [...pipeline.stages.keys()]]),
+          ),
+        },
+      });
+    }
     return { dryRun: options.dryRun, stageFound: false, result: null };
   }
   const result = await runExpansionIntake({
