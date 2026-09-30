@@ -117,43 +117,52 @@ describe('Formatação → Clientes', () => {
     expect(within(aurora).getByRole('button', { name: 'Desativar' })).toBeTruthy();
   });
 
-  it('registers a client by name, and says so when the name is taken', async () => {
-    post.mockRejectedValueOnce(
-      new ApiError(409, { error: 'client_exists', message: 'Já existe um cliente com este nome.' }),
-    );
-    renderPage();
-    await screen.findByRole('cell', { name: 'Padaria Aurora' });
-    const submit = screen.getByRole('button', { name: 'Cadastrar cliente' });
-    expect(submit).toHaveProperty('disabled', true);
-
-    fireEvent.change(screen.getByLabelText(/Nome do cliente/), {
-      target: { value: 'Padaria Aurora' },
+  it('keeps "Cadastrar cliente" off until the new register is complete, and shows the old ones as incomplete', async () => {
+    get.mockImplementation(async (path: string) => {
+      if (path === '/auth/me') return { user: me };
+      if (path === '/clients')
+        return {
+          clients: [WINGS, { ...AURORA, registerMissing: ['CNPJ', 'Relação com a Wings'] }],
+        };
+      if (path === '/leads/source-rules') return { rules: [] };
+      if (path.startsWith('/projects')) return { projects: [] };
+      throw new Error(`unexpected GET ${path}`);
     });
-    fireEvent.click(submit);
-    await waitFor(() =>
-      expect(post).toHaveBeenCalledWith('/clients', {
-        name: 'Padaria Aurora',
-        cnpj: null,
-        contact: null,
-      }),
+    renderPage();
+    const row = (await screen.findByRole('cell', { name: /Padaria Aurora/ })).closest(
+      'tr',
+    ) as HTMLElement;
+    expect(within(row).getByText('Cadastro incompleto')).toBeTruthy();
+    expect(within(row).getByText(/Falta: CNPJ, Relação com a Wings/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/Nome do cliente/), {
+      target: { value: 'Padaria Nova' },
+    });
+    expect(screen.getByRole('button', { name: 'Cadastrar cliente' })).toHaveProperty(
+      'disabled',
+      true,
     );
-    expect(await screen.findByText('Já existe um cliente com este nome.')).toBeTruthy();
   });
 
-  it('registers quickly with the CNPJ from the Receita and the main contact', async () => {
+  it('registers with the Receita data from the CNPJ, the main contact, the relationship and the franchise profile', async () => {
     post.mockImplementation(async (path: string) => {
       if (path === '/clients/lookup/cnpj') {
         return {
           source: 'brasilapi',
           registrationStatus: 'ATIVA',
-          company: { legalName: 'AURORA PAES LTDA', tradeName: 'Aurora Pães' },
+          company: {
+            legalName: 'AURORA PAES LTDA',
+            tradeName: 'Aurora Pães',
+            cnaeMain: '1091-1/02 - Fabricação de produtos de padaria',
+            openedOn: '2015-03-02',
+            address: { city: 'Campinas', state: 'SP' },
+          },
           partners: [],
         };
       }
       return { client: AURORA };
     });
     renderPage();
-    await screen.findByRole('cell', { name: 'Padaria Aurora' });
+    await screen.findByRole('cell', { name: /Padaria Aurora/ });
     fireEvent.change(screen.getByLabelText(/^CNPJ/), { target: { value: '11.222.333/0001-80' } });
     expect(screen.getByText('CNPJ inválido')).toBeTruthy();
     fireEvent.change(screen.getByLabelText(/^CNPJ/), { target: { value: '11.222.333/0001-81' } });
@@ -161,18 +170,49 @@ describe('Formatação → Clientes', () => {
     await waitFor(() =>
       expect(screen.getByLabelText(/Nome do cliente/)).toHaveProperty('value', 'Aurora Pães'),
     );
-    expect(screen.getByText('Receita: ATIVA')).toBeTruthy();
+    expect(screen.getByText('Receita (brasilapi): ATIVA')).toBeTruthy();
+    expect(screen.getByLabelText(/Razão social/)).toHaveProperty('value', 'AURORA PAES LTDA');
+    expect(screen.getByLabelText(/Segmento/)).toHaveProperty(
+      'value',
+      'Fabricação de produtos de padaria',
+    );
 
-    fireEvent.change(screen.getByLabelText('Contato principal'), { target: { value: 'Ana' } });
-    fireEvent.change(screen.getByLabelText('WhatsApp do contato'), {
-      target: { value: '(11) 98888-7777' },
-    });
+    const change = (label: RegExp, value: string) =>
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    change(/^Contato principal/, 'Ana');
+    change(/E-mail do contato/, 'ana@aurora.com.br');
+    change(/WhatsApp do contato/, '(11) 98888-7777');
+    change(/Relação com a Wings/, 'ambos');
+    change(/^Unidades/, '3');
+    change(/Faixa de faturamento/, 'nao_informado');
+    change(/Franqueabilidade/, 'alta');
+    change(/Fit Wings/, 'nao_avaliado');
+    change(/Fonte do dado/, 'Reunião com a sócia');
+    change(/Data do dado/, '2026-09-30');
     fireEvent.click(screen.getByRole('button', { name: 'Cadastrar cliente' }));
     await waitFor(() =>
       expect(post).toHaveBeenCalledWith('/clients', {
         name: 'Aurora Pães',
         cnpj: '11222333000181',
-        contact: { name: 'Ana', email: null, whatsapp: '(11) 98888-7777' },
+        company: {
+          legalName: 'AURORA PAES LTDA',
+          tradeName: 'Aurora Pães',
+          cnaeMain: '1091-1/02 - Fabricação de produtos de padaria',
+          openedOn: '2015-03-02',
+          city: 'Campinas',
+          state: 'SP',
+        },
+        contact: { name: 'Ana', email: 'ana@aurora.com.br', whatsapp: '(11) 98888-7777' },
+        relationship: 'ambos',
+        business: {
+          segment: 'Fabricação de produtos de padaria',
+          ownUnits: 3,
+          revenueBand: null,
+          franchisability: 'alta',
+          wingsFit: 'nao_avaliado',
+          profileSource: 'Reunião com a sócia',
+          profileDate: '2026-09-30',
+        },
       }),
     );
   });
