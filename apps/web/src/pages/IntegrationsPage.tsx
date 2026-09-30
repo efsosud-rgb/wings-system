@@ -23,6 +23,8 @@ import {
 } from '../api/integrations.js';
 import {
   useExpansionLandingPages,
+  useLinkRdUser,
+  useRdUsers,
   useRecoveryState,
   useStartRecovery,
   useRemoveLandingPage,
@@ -734,6 +736,76 @@ function RecoverySection() {
   );
 }
 
+export function RdUsersSection() {
+  const session = useSession();
+  const canManage = hasPermission(session.data, 'integrations.manage');
+  const users = useRdUsers(canManage);
+  const link = useLinkRdUser();
+  if (!canManage || users.isLoading) return null;
+  if (!users.data) return <Alert kind="error">Não foi possível ler os usuários do RD CRM.</Alert>;
+  const list = users.data.users;
+
+  return (
+    <section aria-labelledby="rd-users-title">
+      <h2 id="rd-users-title">Usuários do RD CRM</h2>
+      <p className="muted">
+        Quem é cada usuário do RD CRM aqui dentro, para o dono de cada negócio aparecer no Funil. A
+        lista vem da importação do RD; a ligação automática usa o e-mail (ou o nome completo, quando
+        é único). Sem ligação, o dono aparece como &ldquo;—&rdquo;.
+      </p>
+      {link.isError && <Alert kind="error">Não foi possível salvar a ligação.</Alert>}
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Usuário do RD</th>
+              <th>Funcionário</th>
+            </tr>
+          </thead>
+          <tbody>
+            {list.length === 0 && (
+              <tr>
+                <td colSpan={2} className="muted">
+                  Nenhum usuário ainda: a lista aparece depois da primeira importação do RD CRM.
+                </td>
+              </tr>
+            )}
+            {list.map((user) => (
+              <tr key={user.rdUserId}>
+                <td>
+                  {user.rdName}
+                  {!user.rdActive && <span className="tag">inativo no RD</span>}
+                </td>
+                <td>
+                  <select
+                    className="control"
+                    aria-label={`Funcionário de ${user.rdName}`}
+                    value={user.employeeId ?? ''}
+                    disabled={link.isPending}
+                    onChange={(event) =>
+                      link.mutate({
+                        rdUserId: user.rdUserId,
+                        employeeId: event.target.value || null,
+                      })
+                    }
+                  >
+                    <option value="">— sem ligação</option>
+                    {users.data.employees.map((employee) => (
+                      <option key={employee.id} value={employee.id}>
+                        {employee.name}
+                      </option>
+                    ))}
+                  </select>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export function IntegrationsPage() {
   return (
     <>
@@ -747,6 +819,7 @@ export function IntegrationsPage() {
       <KairogenCard />
       <MediaProviderCards />
       <ExpansionIntakeSection />
+      <RdUsersSection />
       <RecoverySection />
       <BudgetCapsSection />
     </>
