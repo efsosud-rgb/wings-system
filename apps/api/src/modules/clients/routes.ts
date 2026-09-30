@@ -6,14 +6,14 @@ import {
   type Client,
   type ExpansionEntry,
 } from '@wings/shared';
-import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ne } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { Database } from '../../db/client.js';
-import { clientContacts, clients } from '../../db/schema/index.js';
+import { clients } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { syncDriveFolders } from '../drive/folders.js';
-import { openProjectForClient } from '../projects/service.js';
+import { createClientRecord } from './create.js';
 
 const idParam = z.object({ id: z.uuid() });
 
@@ -86,36 +86,13 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
           });
         }
       }
-      // The next number, under a lock so two registrations never take the same one.
-      const row = await db.transaction(async (tx) => {
-        await tx.execute(sql`select pg_advisory_xact_lock(7301, 2)`);
-        const [last] = await tx
-          .select({ number: sql<number | null>`max(${clients.number})` })
-          .from(clients);
-        const [made] = await tx
-          .insert(clients)
-          .values({
-            name: body.data.name,
-            slug: clientSlugOf(body.data.name),
-            number: (last?.number ?? 0) + 1,
-            cnpj,
-          })
-          .onConflictDoNothing()
-          .returning();
-        if (made && contact) {
-          await tx.insert(clientContacts).values({ clientId: made.id, role: 'principal', ...contact });
-        }
-        // The client's project opens with the client: Em Andamento, at 01.
-        if (made) await openProjectForClient(tx, made.id);
-        return made;
-      });
-      if (!row) {
+      const created = await createClientRecord(db, { name: body.data.name, cnpj, contact });
+      if (!created) {
         return reply
           .status(409)
           .send({ error: 'client_exists', message: 'Já existe um cliente com este nome.' });
       }
-      // A new client gets its tree under Clientes/<NN. Nome>, at once.
-      const folders = await syncDriveFolders(db);
+      const { row } = created;
       await writeAudit(db, {
         actorEmployeeId: request.session.actor.employeeId,
         action: 'client.created',
@@ -126,7 +103,7 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
           slug: row.slug,
           withCnpj: cnpj !== null,
           withContact: contact !== null,
-          driveFoldersCreated: folders.foldersCreated,
+          driveFoldersCreated: created.driveFoldersCreated,
           projectOpened: true,
         },
       });

@@ -1,4 +1,9 @@
-import { normalizeBrazilianPhone, trackingCodeOf, type LeadLegalBasis, type LeadLinkChannel } from '@wings/shared';
+import {
+  normalizeBrazilianPhone,
+  trackingCodeOf,
+  type LeadLegalBasis,
+  type LeadLinkChannel,
+} from '@wings/shared';
 import { eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -6,8 +11,18 @@ import { leadTrackingLinks } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { tokensMatch } from '../../lib/tokens.js';
 import { shapeOf } from '../media/kairogen-adapter.js';
-import { fetchMetaLead, leadgenEventsOf, metaSignatureValid, MetaLeadFetchError } from './meta-leads.js';
-import { resolveLandingPage, resolveMetaSource, trackingLinkByCode, upsertLead } from './service.js';
+import {
+  fetchMetaLead,
+  leadgenEventsOf,
+  metaSignatureValid,
+  MetaLeadFetchError,
+} from './meta-leads.js';
+import {
+  resolveLandingPage,
+  resolveMetaSource,
+  trackingLinkByCode,
+  upsertLead,
+} from './service.js';
 
 /**
  * Where leads come in from outside, with no session: RD Station conversions,
@@ -48,7 +63,11 @@ function parseJson(raw: unknown): unknown {
 }
 
 const asString = (value: unknown): string | null =>
-  typeof value === 'string' && value.trim().length > 0 ? value.trim() : typeof value === 'number' ? String(value) : null;
+  typeof value === 'string' && value.trim().length > 0
+    ? value.trim()
+    : typeof value === 'number'
+      ? String(value)
+      : null;
 
 const asDate = (value: unknown): Date | null => {
   if (typeof value === 'number') {
@@ -89,8 +108,12 @@ export function rdConversionsOf(body: unknown): RdConversion[] {
     .map((lead) => {
       const last = (lead.last_conversion ?? {}) as Record<string, unknown>;
       const content = (last.content ?? {}) as Record<string, unknown>;
-      const bases = Array.isArray(lead.legal_bases) ? (lead.legal_bases as Record<string, unknown>[]) : [];
-      const granted = bases.find((basis) => basis.status === 'granted' || basis.status === undefined);
+      const bases = Array.isArray(lead.legal_bases)
+        ? (lead.legal_bases as Record<string, unknown>[])
+        : [];
+      const granted = bases.find(
+        (basis) => basis.status === 'granted' || basis.status === undefined,
+      );
       const legalBasis: LeadLegalBasis =
         granted?.type === 'legitimate_interest' ? 'legitimate_interest' : 'consent';
       return {
@@ -98,12 +121,26 @@ export function rdConversionsOf(body: unknown): RdConversion[] {
         name: asString(lead.name),
         email: asString(lead.email),
         phone:
-          asString(lead.mobile_phone) ?? asString(lead.personal_phone) ?? asString(lead.phone) ?? asString(content.telefone) ?? asString(content.celular),
+          asString(lead.mobile_phone) ??
+          asString(lead.personal_phone) ??
+          asString(lead.phone) ??
+          asString(content.telefone) ??
+          asString(content.celular),
         identifier:
-          asString(content.conversion_identifier) ?? asString(content.identificador) ?? asString(lead.conversion_identifier),
+          asString(content.conversion_identifier) ??
+          asString(content.identificador) ??
+          asString(lead.conversion_identifier),
         url:
-          asString(content.url) ?? asString(content.conversion_url) ?? asString(content.page_url) ?? asString(last.url) ?? asString(lead.landing_page_url),
-        at: asDate(content.created_at) ?? asDate(last.created_at) ?? asDate(lead.created_at) ?? eventAt,
+          asString(content.url) ??
+          asString(content.conversion_url) ??
+          asString(content.page_url) ??
+          asString(last.url) ??
+          asString(lead.landing_page_url),
+        at:
+          asDate(content.created_at) ??
+          asDate(last.created_at) ??
+          asDate(lead.created_at) ??
+          eventAt,
         legalBasis,
         legalBasisText:
           legalBasis === 'consent'
@@ -151,62 +188,84 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
     { parseAs: 'buffer', bodyLimit: 1024 * 1024 },
     (_request, body, done) => done(null, body),
   );
-  app.addContentTypeParser('*', { parseAs: 'buffer', bodyLimit: 1024 * 1024 }, (_request, body, done) =>
-    done(null, body),
+  app.addContentTypeParser(
+    '*',
+    { parseAs: 'buffer', bodyLimit: 1024 * 1024 },
+    (_request, body, done) => done(null, body),
   );
 
   const unavailable = (reply: FastifyReply, what: string) =>
-    reply.status(503).send({ error: 'webhook_not_configured', message: `${what} não está configurado.` });
+    reply
+      .status(503)
+      .send({ error: 'webhook_not_configured', message: `${what} não está configurado.` });
 
   const logShape = (source: string, body: unknown, extra: Record<string, unknown> = {}) =>
     app.log.info({ msg: 'lead webhook', source, shape: shapeOf(body), ...extra });
 
   // --- RD Station ------------------------------------------------------------------
 
-  app.post('/integrations/rd-station/webhook', { config: { rateLimit } }, async (request, reply) => {
-    if (!env.RD_STATION_WEBHOOK_SECRET) return unavailable(reply, 'O webhook do RD Station');
-    if (!sharedSecretOk(request, env.RD_STATION_WEBHOOK_SECRET)) {
-      return reply.status(401).send({ error: 'bad_secret', message: 'Segredo inválido.' });
-    }
-    const body = parseJson(request.body);
-    if (body === null) return reply.status(400).send({ error: 'invalid_json', message: 'Corpo inválido.' });
-    const conversions = rdConversionsOf(body);
-    logShape('rd_station', body, { conversions: conversions.length });
+  app.post(
+    '/integrations/rd-station/webhook',
+    { config: { rateLimit } },
+    async (request, reply) => {
+      if (!env.RD_STATION_WEBHOOK_SECRET) return unavailable(reply, 'O webhook do RD Station');
+      if (!sharedSecretOk(request, env.RD_STATION_WEBHOOK_SECRET)) {
+        return reply.status(401).send({ error: 'bad_secret', message: 'Segredo inválido.' });
+      }
+      const body = parseJson(request.body);
+      if (body === null)
+        return reply.status(400).send({ error: 'invalid_json', message: 'Corpo inválido.' });
+      const conversions = rdConversionsOf(body);
+      logShape('rd_station', body, { conversions: conversions.length });
 
-    const results: { leadId: string; created: boolean; clientMapped: boolean }[] = [];
-    for (const conversion of conversions) {
-      if (!conversion.email && !conversion.phone) continue;
-      const client = await resolveLandingPage(db, { url: conversion.url, identifier: conversion.identifier });
-      const result = await upsertLead(db, {
-        source: 'rd_station',
-        name: conversion.name,
-        email: conversion.email,
-        phone: conversion.phone,
-        clientId: client.clientId,
-        clientMapped: client.mapped,
-        channel: 'landing_page',
-        landingPage: conversion.url ?? conversion.identifier,
-        externalId: conversion.externalId,
-        legalBasis: conversion.legalBasis,
-        consentedAt: conversion.at ?? new Date(),
-        consentSource: `rd_station:${conversion.identifier ?? 'conversao'}`,
-        consentText: conversion.legalBasisText,
-        event: {
-          kind: 'lead.received.rd_station',
-          detail: { ruleId: client.ruleId, hasUrl: Boolean(conversion.url), hasIdentifier: Boolean(conversion.identifier) },
-        },
-      });
-      await writeAudit(db, {
-        action: result.created ? 'lead.received' : 'lead.merged',
-        entity: 'lead',
-        entityId: result.lead.id,
-        ip: request.ip,
-        metadata: { source: 'rd_station', clientMapped: client.mapped },
-      });
-      results.push({ leadId: result.lead.id, created: result.created, clientMapped: client.mapped });
-    }
-    return reply.send({ received: conversions.length, leads: results });
-  });
+      const results: { leadId: string; created: boolean; clientMapped: boolean }[] = [];
+      for (const conversion of conversions) {
+        if (!conversion.email && !conversion.phone) continue;
+        const client = await resolveLandingPage(db, {
+          url: conversion.url,
+          identifier: conversion.identifier,
+        });
+        const result = await upsertLead(db, {
+          source: 'rd_station',
+          name: conversion.name,
+          email: conversion.email,
+          phone: conversion.phone,
+          clientId: client.clientId,
+          clientMapped: client.mapped,
+          pipeline: client.pipeline,
+          brand: client.brand,
+          channel: 'landing_page',
+          landingPage: conversion.url ?? conversion.identifier,
+          externalId: conversion.externalId,
+          legalBasis: conversion.legalBasis,
+          consentedAt: conversion.at ?? new Date(),
+          consentSource: `rd_station:${conversion.identifier ?? 'conversao'}`,
+          consentText: conversion.legalBasisText,
+          event: {
+            kind: 'lead.received.rd_station',
+            detail: {
+              ruleId: client.ruleId,
+              hasUrl: Boolean(conversion.url),
+              hasIdentifier: Boolean(conversion.identifier),
+            },
+          },
+        });
+        await writeAudit(db, {
+          action: result.created ? 'lead.received' : 'lead.merged',
+          entity: 'lead',
+          entityId: result.lead.id,
+          ip: request.ip,
+          metadata: { source: 'rd_station', clientMapped: client.mapped },
+        });
+        results.push({
+          leadId: result.lead.id,
+          created: result.created,
+          clientMapped: client.mapped,
+        });
+      }
+      return reply.send({ received: conversions.length, leads: results });
+    },
+  );
 
   // --- Z-API (WhatsApp) -------------------------------------------------------------
 
@@ -216,10 +275,15 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(401).send({ error: 'bad_secret', message: 'Segredo inválido.' });
     }
     const body = parseJson(request.body);
-    if (body === null) return reply.status(400).send({ error: 'invalid_json', message: 'Corpo inválido.' });
+    if (body === null)
+      return reply.status(400).send({ error: 'invalid_json', message: 'Corpo inválido.' });
     const inbound = zapiInboundOf(body);
     const code = trackingCodeOf(inbound.text);
-    logShape('zapi', body, { hasCode: code !== null, fromMe: inbound.fromMe, isGroup: inbound.isGroup });
+    logShape('zapi', body, {
+      hasCode: code !== null,
+      fromMe: inbound.fromMe,
+      isGroup: inbound.isGroup,
+    });
 
     if (inbound.fromMe || inbound.isGroup) return reply.send({ ignored: 'not_inbound' });
     const phone = normalizeBrazilianPhone(inbound.phone);
@@ -244,8 +308,12 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
       legalBasis: 'pre_contract',
       consentedAt: at,
       consentSource: `whatsapp:${link.channel}:${link.code}`,
-      consentText: 'A pessoa iniciou a conversa no WhatsApp da Wings pelo link rastreável, pedindo informações.',
-      event: { kind: 'lead.received.whatsapp', detail: { trackingLinkId: link.id, channel: link.channel, code: link.code } },
+      consentText:
+        'A pessoa iniciou a conversa no WhatsApp da Wings pelo link rastreável, pedindo informações.',
+      event: {
+        kind: 'lead.received.whatsapp',
+        detail: { trackingLinkId: link.id, channel: link.channel, code: link.code },
+      },
     });
     await db
       .update(leadTrackingLinks)
@@ -270,83 +338,109 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /** Meta's subscription handshake: echo the challenge only for our verify token. */
-  app.get('/integrations/meta/leadgen/webhook', { config: { rateLimit } }, async (request, reply) => {
-    if (!env.META_LEADGEN_VERIFY_TOKEN) return unavailable(reply, 'O webhook do Meta Lead Ads');
-    const query = verifyQuery.safeParse(request.query);
-    if (
-      !query.success ||
-      query.data['hub.mode'] !== 'subscribe' ||
-      !tokensMatch(query.data['hub.verify_token'], env.META_LEADGEN_VERIFY_TOKEN)
-    ) {
-      return reply.status(403).send({ error: 'bad_verify_token', message: 'Token de verificação inválido.' });
-    }
-    return reply.type('text/plain').send(query.data['hub.challenge']);
-  });
-
-  app.post('/integrations/meta/leadgen/webhook', { config: { rateLimit } }, async (request, reply) => {
-    if (!env.META_APP_SECRET) return unavailable(reply, 'O webhook do Meta Lead Ads');
-    const raw = Buffer.isBuffer(request.body) ? request.body : Buffer.from(JSON.stringify(request.body ?? {}));
-    const signature = request.headers['x-hub-signature-256'];
-    if (!metaSignatureValid(env.META_APP_SECRET, raw, Array.isArray(signature) ? signature[0] : signature)) {
-      return reply.status(401).send({ error: 'bad_signature', message: 'Assinatura inválida.' });
-    }
-    const body = parseJson(raw);
-    if (body === null) return reply.status(400).send({ error: 'invalid_json', message: 'Corpo inválido.' });
-    const events = leadgenEventsOf(body);
-    logShape('meta_leadgen', body, { events: events.length });
-
-    const token = env.META_LEADS_ACCESS_TOKEN ?? env.META_WRITE_TOKEN;
-    const results: { leadId: string; created: boolean; fetched: boolean }[] = [];
-    for (const event of events) {
-      let fetched = false;
-      let details: Awaited<ReturnType<typeof fetchMetaLead>>['details'] | null = null;
-      let fetchError: string | null = null;
-      if (token) {
-        try {
-          const answer = await fetchMetaLead(event.leadgenId, { accessToken: token, fetchImpl: app.wings.platformFetch });
-          details = answer.details;
-          fetched = true;
-          app.log.info({ msg: 'meta lead fetched', shape: shapeOf(answer.raw) });
-        } catch (error) {
-          fetchError = error instanceof MetaLeadFetchError ? `graph_${error.status}` : 'graph_unreachable';
-          app.log.warn({ msg: 'meta lead fetch failed', reason: fetchError });
-        }
-      } else {
-        fetchError = 'no_token';
+  app.get(
+    '/integrations/meta/leadgen/webhook',
+    { config: { rateLimit } },
+    async (request, reply) => {
+      if (!env.META_LEADGEN_VERIFY_TOKEN) return unavailable(reply, 'O webhook do Meta Lead Ads');
+      const query = verifyQuery.safeParse(request.query);
+      if (
+        !query.success ||
+        query.data['hub.mode'] !== 'subscribe' ||
+        !tokensMatch(query.data['hub.verify_token'], env.META_LEADGEN_VERIFY_TOKEN)
+      ) {
+        return reply
+          .status(403)
+          .send({ error: 'bad_verify_token', message: 'Token de verificação inválido.' });
       }
-      const formId = details?.formId ?? event.formId;
-      const campaignId = details?.campaignId ?? null;
-      const client = await resolveMetaSource(db, { formId, campaignId });
-      const result = await upsertLead(db, {
-        source: 'meta_lead_ads',
-        name: details?.name ?? null,
-        email: details?.email ?? null,
-        phone: details?.phone ?? null,
-        clientId: client.clientId,
-        clientMapped: client.mapped,
-        channel: 'meta_lead_ads',
-        campaignId,
-        campaignName: details?.campaignName ?? null,
-        formId,
-        externalId: event.leadgenId,
-        legalBasis: 'consent',
-        consentedAt: details?.createdTime ?? event.createdTime ?? new Date(),
-        consentSource: `meta_lead_ads:form:${formId ?? 'desconhecido'}`,
-        consentText: 'Formulário de cadastro do Meta Lead Ads, com a política de privacidade do formulário.',
-        event: {
-          kind: 'lead.received.meta_lead_ads',
-          detail: { ruleId: client.ruleId, formId, campaignId, fetched, fetchError },
-        },
-      });
-      await writeAudit(db, {
-        action: result.created ? 'lead.received' : 'lead.merged',
-        entity: 'lead',
-        entityId: result.lead.id,
-        ip: request.ip,
-        metadata: { source: 'meta_lead_ads', clientMapped: client.mapped, fetched },
-      });
-      results.push({ leadId: result.lead.id, created: result.created, fetched });
-    }
-    return reply.send({ received: events.length, leads: results });
-  });
+      return reply.type('text/plain').send(query.data['hub.challenge']);
+    },
+  );
+
+  app.post(
+    '/integrations/meta/leadgen/webhook',
+    { config: { rateLimit } },
+    async (request, reply) => {
+      if (!env.META_APP_SECRET) return unavailable(reply, 'O webhook do Meta Lead Ads');
+      const raw = Buffer.isBuffer(request.body)
+        ? request.body
+        : Buffer.from(JSON.stringify(request.body ?? {}));
+      const signature = request.headers['x-hub-signature-256'];
+      if (
+        !metaSignatureValid(
+          env.META_APP_SECRET,
+          raw,
+          Array.isArray(signature) ? signature[0] : signature,
+        )
+      ) {
+        return reply.status(401).send({ error: 'bad_signature', message: 'Assinatura inválida.' });
+      }
+      const body = parseJson(raw);
+      if (body === null)
+        return reply.status(400).send({ error: 'invalid_json', message: 'Corpo inválido.' });
+      const events = leadgenEventsOf(body);
+      logShape('meta_leadgen', body, { events: events.length });
+
+      const token = env.META_LEADS_ACCESS_TOKEN ?? env.META_WRITE_TOKEN;
+      const results: { leadId: string; created: boolean; fetched: boolean }[] = [];
+      for (const event of events) {
+        let fetched = false;
+        let details: Awaited<ReturnType<typeof fetchMetaLead>>['details'] | null = null;
+        let fetchError: string | null = null;
+        if (token) {
+          try {
+            const answer = await fetchMetaLead(event.leadgenId, {
+              accessToken: token,
+              fetchImpl: app.wings.platformFetch,
+            });
+            details = answer.details;
+            fetched = true;
+            app.log.info({ msg: 'meta lead fetched', shape: shapeOf(answer.raw) });
+          } catch (error) {
+            fetchError =
+              error instanceof MetaLeadFetchError ? `graph_${error.status}` : 'graph_unreachable';
+            app.log.warn({ msg: 'meta lead fetch failed', reason: fetchError });
+          }
+        } else {
+          fetchError = 'no_token';
+        }
+        const formId = details?.formId ?? event.formId;
+        const campaignId = details?.campaignId ?? null;
+        const client = await resolveMetaSource(db, { formId, campaignId });
+        const result = await upsertLead(db, {
+          source: 'meta_lead_ads',
+          name: details?.name ?? null,
+          email: details?.email ?? null,
+          phone: details?.phone ?? null,
+          clientId: client.clientId,
+          clientMapped: client.mapped,
+          pipeline: client.pipeline,
+          brand: client.brand,
+          channel: 'meta_lead_ads',
+          campaignId,
+          campaignName: details?.campaignName ?? null,
+          formId,
+          externalId: event.leadgenId,
+          legalBasis: 'consent',
+          consentedAt: details?.createdTime ?? event.createdTime ?? new Date(),
+          consentSource: `meta_lead_ads:form:${formId ?? 'desconhecido'}`,
+          consentText:
+            'Formulário de cadastro do Meta Lead Ads, com a política de privacidade do formulário.',
+          event: {
+            kind: 'lead.received.meta_lead_ads',
+            detail: { ruleId: client.ruleId, formId, campaignId, fetched, fetchError },
+          },
+        });
+        await writeAudit(db, {
+          action: result.created ? 'lead.received' : 'lead.merged',
+          entity: 'lead',
+          entityId: result.lead.id,
+          ip: request.ip,
+          metadata: { source: 'meta_lead_ads', clientMapped: client.mapped, fetched },
+        });
+        results.push({ leadId: result.lead.id, created: result.created, fetched });
+      }
+      return reply.send({ received: events.length, leads: results });
+    },
+  );
 };

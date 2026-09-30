@@ -88,13 +88,14 @@ export function platformOfRdLabels(
   return null;
 }
 
-interface RdDeal {
+export interface RdDeal {
   id: string;
   name?: string;
   win: boolean | null;
   created_at: string;
   closed_at?: string | null;
   deal_stage?: { id?: string };
+  user?: { id?: string; _id?: string } | null;
   deal_source?: { name?: string } | null;
   campaign?: { name?: string } | null;
   deal_lost_reason?: { name?: string } | null;
@@ -136,7 +137,7 @@ export function rdCrmGetter(token: string, fetchImpl: typeof fetch = fetch) {
 export async function syncRdCrmDeals(
   db: Database,
   input: { token: string; since: string; until: string; fetchImpl?: typeof fetch; now?: Date },
-): Promise<{ deals: number }> {
+): Promise<{ deals: number; raw: RdDeal[]; pipelines: RdPipeline[] }> {
   const get = rdCrmGetter(input.token, input.fetchImpl ?? fetch);
 
   const pipelines = await get<RdPipeline[]>('/deal_pipelines', {});
@@ -203,5 +204,5 @@ export async function syncRdCrmDeals(
       .values({ rdId: deal.id, ...values })
       .onConflictDoUpdate({ target: rdCrmDeals.rdId, set: values });
   }
-  return { deals: deals.length };
+  return { deals: deals.length, raw: deals, pipelines };
 }

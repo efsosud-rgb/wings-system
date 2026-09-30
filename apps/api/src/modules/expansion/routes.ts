@@ -1,7 +1,8 @@
-import { eq } from 'drizzle-orm';
+import { normalizeSourcePattern } from '@wings/shared';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { expansionLandingPages } from '../../db/schema/index.js';
+import { clients, leadSourceRules } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { auditConversions, type AuditResult } from './audit.js';
 import { RdCrm, RdMarketing } from './rd.js';
@@ -28,18 +29,38 @@ export const expansionRoutes: FastifyPluginAsync = async (app) => {
   const { db } = app.wings;
   const guard = { preHandler: app.requirePermission('integrations.manage') };
 
+  // The brands' pages are the source rules of funnel Expansão (one list since CRM phase 1).
+  const expansionPage = (pattern: string) =>
+    and(
+      eq(leadSourceRules.kind, 'landing_page'),
+      eq(leadSourceRules.pattern, pattern),
+      eq(leadSourceRules.pipeline, 'expansao'),
+    );
+
   app.get('/expansion/landing-pages', guard, async (_request, reply) => {
-    const rows = await db.query.expansionLandingPages.findMany({
-      orderBy: (table, { asc }) => [asc(table.brand), asc(table.identifier)],
-    });
-    return reply.send({
-      enabled: app.wings.env.EXPANSION_INTAKE_ENABLED === 'true',
-      landingPages: rows.map((row) => ({
+    const rows = await db
+      .select({
+        identifier: leadSourceRules.pattern,
+        brand: leadSourceRules.brand,
+        clientName: clients.name,
+        active: leadSourceRules.active,
+      })
+      .from(leadSourceRules)
+      .leftJoin(clients, eq(clients.id, leadSourceRules.clientId))
+      .where(
+        and(eq(leadSourceRules.kind, 'landing_page'), eq(leadSourceRules.pipeline, 'expansao')),
+      );
+    const landingPages = rows
+      .map((row) => ({
         identifier: row.identifier,
-        brand: row.brand,
+        brand: row.brand ?? row.clientName ?? '',
         active: row.active,
-      })),
-    });
+      }))
+      .sort(
+        (a, b) =>
+          a.brand.localeCompare(b.brand, 'pt-BR') || a.identifier.localeCompare(b.identifier),
+      );
+    return reply.send({ enabled: app.wings.env.EXPANSION_INTAKE_ENABLED === 'true', landingPages });
   });
 
   // Read-only audit of RD conversions -> RD CRM deals. Walking RD takes minutes
@@ -111,14 +132,31 @@ export const expansionRoutes: FastifyPluginAsync = async (app) => {
   app.put('/expansion/landing-pages', guard, async (request, reply) => {
     const parsed = body.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: 'invalid_landing_page' });
-    const input = parsed.data;
-    await db
-      .insert(expansionLandingPages)
-      .values(input)
-      .onConflictDoUpdate({
-        target: expansionLandingPages.identifier,
-        set: { brand: input.brand, active: input.active },
+    const input = { ...parsed.data, identifier: normalizeSourcePattern(parsed.data.identifier) };
+    const existing = await db.query.leadSourceRules.findFirst({
+      where: and(
+        eq(leadSourceRules.kind, 'landing_page'),
+        eq(leadSourceRules.pattern, input.identifier),
+      ),
+    });
+    if (existing && existing.pipeline !== null && existing.pipeline !== 'expansao') {
+      return reply.code(409).send({ error: 'landing_page_in_other_pipeline' });
+    }
+    if (existing) {
+      await db
+        .update(leadSourceRules)
+        .set({ brand: input.brand, active: input.active, pipeline: 'expansao' })
+        .where(eq(leadSourceRules.id, existing.id));
+    } else {
+      await db.insert(leadSourceRules).values({
+        kind: 'landing_page',
+        pattern: input.identifier,
+        pipeline: 'expansao',
+        brand: input.brand,
+        active: input.active,
+        createdBy: request.session.actor.employeeId,
       });
+    }
     await writeAudit(db, {
       actorEmployeeId: request.session.actor.employeeId,
       action: 'expansion.landing_page_saved',
@@ -132,8 +170,8 @@ export const expansionRoutes: FastifyPluginAsync = async (app) => {
   app.delete('/expansion/landing-pages/:identifier', guard, async (request, reply) => {
     const params = z.object({ identifier: identifierSchema }).safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: 'invalid_landing_page' });
-    const { identifier } = params.data;
-    await db.delete(expansionLandingPages).where(eq(expansionLandingPages.identifier, identifier));
+    const identifier = normalizeSourcePattern(params.data.identifier);
+    await db.delete(leadSourceRules).where(expansionPage(identifier));
     await writeAudit(db, {
       actorEmployeeId: request.session.actor.employeeId,
       action: 'expansion.landing_page_removed',

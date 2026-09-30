@@ -116,7 +116,7 @@ describe('RD CRM deals into rd_crm_deals', () => {
   it('keeps stage, meeting, win and labels, and nothing personal', async () => {
     expect(
       await syncRdCrmDeals(db, { token: 't', since: '2026-07-01', until: '2026-09-28', fetchImpl }),
-    ).toEqual({ deals: 4 });
+    ).toMatchObject({ deals: 4 });
     const rows = await db.select().from(rdCrmDeals);
     const by = new Map(rows.map((row) => [row.rdId, row]));
     expect(by.get('d1')).toMatchObject({
