@@ -1,4 +1,4 @@
-import { WINGS_CLIENT_ID } from '@wings/shared';
+import { LANDING_PAGE_BASE_URL, normalizeSourcePattern, WINGS_CLIENT_ID } from '@wings/shared';
 import { and, eq } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { clients, leadSourceRules } from '../../db/schema/index.js';
@@ -25,6 +25,20 @@ export const EXPANSION_BRANDS = [
   'Família K',
 ];
 
+/**
+ * Brands whose landing pages were read live on 2026-09-30 at
+ * franquia.wingscompany.com.br/<slug>: the RD form's `conversion_identifier`
+ * is the slug. Wash Club's page is a draft in RD (404): client only, its rule
+ * is made by CRM Vendas → Landing pages when the page is published.
+ */
+export const EXPANSION_BRANDS_2026_09_30: { name: string; identifiers: string[] }[] = [
+  { name: 'Cenoritas', identifiers: ['cenoritas'] },
+  { name: 'Malkuth', identifiers: ['malkuth'] },
+  { name: 'Amarjon', identifiers: ['amarjon'] },
+  { name: 'Iguari', identifiers: ['iguari'] },
+  { name: 'Wash Club', identifiers: [] },
+];
+
 const STOPWORDS = new Set(['do', 'dos', 'da', 'das', 'de', 'e']);
 
 export function brandKey(name: string): string {
@@ -47,8 +61,8 @@ export interface BrandLink {
   identifier: string;
   ruleBrand: string | null;
   client: { number: number | null; name: string } | null;
-  /** linked (by this run), already (before it), none (no client matches) */
-  state: 'linked' | 'already' | 'none';
+  /** created (a new rule for a page given), linked (by this run), already (before it), none (no client matches) */
+  state: 'created' | 'linked' | 'already' | 'none';
   by: 'brand' | 'identifier' | null;
 }
 
@@ -69,7 +83,13 @@ export interface BrandReport {
  */
 export async function registerBrands(
   db: Database,
-  input: { names: readonly string[]; apply: boolean; actorEmployeeId?: string | null },
+  input: {
+    names: readonly string[];
+    /** Landing pages to make rules for (Expansão), per brand name, when there is none yet. */
+    pages?: readonly { name: string; identifiers: readonly string[] }[];
+    apply: boolean;
+    actorEmployeeId?: string | null;
+  },
 ): Promise<BrandReport> {
   const report: BrandReport = { applied: input.apply, created: [], existing: [], links: [] };
   const known = (await db.select().from(clients)).filter((client) => client.id !== WINGS_CLIENT_ID);
@@ -102,12 +122,60 @@ export async function registerBrands(
     });
   }
 
+  // Rules for the pages given, pointing at the brand's client (kept as they are when one exists).
+  const createdPatterns = new Set<string>();
+  for (const brand of input.pages ?? []) {
+    const client = byKey.get(brandKey(brand.name));
+    for (const identifier of brand.identifiers) {
+      const pattern = normalizeSourcePattern(identifier);
+      const exists = await db.query.leadSourceRules.findFirst({
+        where: and(eq(leadSourceRules.kind, 'landing_page'), eq(leadSourceRules.pattern, pattern)),
+        columns: { id: true },
+      });
+      if (exists) continue;
+      createdPatterns.add(pattern);
+      report.links.push({
+        identifier: pattern,
+        ruleBrand: brand.name,
+        client: client ? { number: client.number, name: client.name } : null,
+        state: 'created',
+        by: null,
+      });
+      if (!input.apply) continue;
+      const [rule] = await db
+        .insert(leadSourceRules)
+        .values({
+          kind: 'landing_page',
+          pattern,
+          pipeline: 'expansao',
+          brand: brand.name,
+          clientId: client?.id || null,
+          url: `${LANDING_PAGE_BASE_URL}/${pattern}`,
+          createdBy: input.actorEmployeeId ?? null,
+        })
+        .returning({ id: leadSourceRules.id });
+      await writeAudit(db, {
+        actorEmployeeId: input.actorEmployeeId ?? null,
+        action: 'lead_source_rule.created',
+        entity: 'lead_source_rule',
+        entityId: rule?.id ?? pattern,
+        metadata: {
+          kind: 'landing_page',
+          pipeline: 'expansao',
+          clientId: client?.id ?? null,
+          via: 'crm-brands',
+        },
+      });
+    }
+  }
+
   const rules = await db
     .select()
     .from(leadSourceRules)
     .where(and(eq(leadSourceRules.kind, 'landing_page'), eq(leadSourceRules.pipeline, 'expansao')));
   const byId = new Map([...byKey.values()].map((client) => [client.id, client]));
   for (const rule of rules.sort((a, b) => a.pattern.localeCompare(b.pattern))) {
+    if (createdPatterns.has(rule.pattern)) continue;
     if (rule.clientId) {
       const client = byId.get(rule.clientId);
       report.links.push({
@@ -171,11 +239,13 @@ export function formatBrandReport(report: BrandReport): string {
         ? `${link.client.number ?? '—'}. ${link.client.name}`
         : 'sem cliente';
       const how =
-        link.state === 'already'
-          ? 'já ligada'
-          : link.state === 'none'
-            ? 'NENHUM cliente casa'
-            : `${verb}ligada pel${link.by === 'brand' ? 'a marca' : 'o identificador'}`;
+        link.state === 'created'
+          ? `${verb}criada, ligada ao cliente`
+          : link.state === 'already'
+            ? 'já ligada'
+            : link.state === 'none'
+              ? 'NENHUM cliente casa'
+              : `${verb}ligada pel${link.by === 'brand' ? 'a marca' : 'o identificador'}`;
       return `  ${link.identifier} (${link.ruleBrand ?? '—'}) → ${client} [${how}]`;
     }),
   ].join('\n');

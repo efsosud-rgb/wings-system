@@ -1,7 +1,12 @@
 import { createDb } from '../db/client.js';
 import { loadDotEnv } from '../db/load-env.js';
 import { loadEnv } from '../env.js';
-import { EXPANSION_BRANDS, formatBrandReport, registerBrands } from '../modules/leads/brands.js';
+import {
+  EXPANSION_BRANDS,
+  EXPANSION_BRANDS_2026_09_30,
+  formatBrandReport,
+  registerBrands,
+} from '../modules/leads/brands.js';
 
 /**
  * Registers the Expansão brands as clients and ties their landing-page rules
@@ -17,8 +22,13 @@ async function main() {
   const env = loadEnv(process.env);
   const { db, pool } = createDb(env.DATABASE_URL);
   try {
+    // --set=2026-09-30: the brands Eric listed that day, with the pages read live (rules made for them).
+    const set = process.argv.find((arg) => arg.startsWith('--set='))?.slice(6);
+    const pages = set === '2026-09-30' ? EXPANSION_BRANDS_2026_09_30 : [];
+    const names = set === '2026-09-30' ? pages.map((brand) => brand.name) : EXPANSION_BRANDS;
     const report = await registerBrands(db, {
-      names: EXPANSION_BRANDS,
+      names,
+      pages,
       apply: process.argv.includes('--apply'),
     });
     console.warn(formatBrandReport(report));

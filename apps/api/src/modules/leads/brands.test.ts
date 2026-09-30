@@ -92,3 +92,40 @@ describe('registerBrands', () => {
     expect(again.links.filter((link) => link.state === 'linked')).toHaveLength(0);
   });
 });
+
+describe('registerBrands with pages (Eric, 30/09)', () => {
+  it('registers the new brands, makes the rule of each published page tied to its client, and a draft brand gets no rule', async () => {
+    const { EXPANSION_BRANDS_2026_09_30 } = await import('./brands.js');
+    const names = EXPANSION_BRANDS_2026_09_30.map((brand) => brand.name);
+    const simulated = await registerBrands(db, {
+      names,
+      pages: EXPANSION_BRANDS_2026_09_30,
+      apply: false,
+    });
+    expect(
+      simulated.links.filter((link) => link.state === 'created').map((link) => link.identifier),
+    ).toEqual(['cenoritas', 'malkuth', 'amarjon', 'iguari']);
+    const applied = await registerBrands(db, {
+      names,
+      pages: EXPANSION_BRANDS_2026_09_30,
+      apply: true,
+    });
+    expect(applied.created).toEqual(['Cenoritas', 'Malkuth', 'Amarjon', 'Iguari', 'Wash Club']);
+    const rule = await db.query.leadSourceRules.findFirst({
+      where: eq(leadSourceRules.pattern, 'iguari'),
+    });
+    const iguari = await db.query.clients.findFirst({ where: eq(clients.name, 'Iguari') });
+    expect(rule).toMatchObject({
+      clientId: iguari!.id,
+      pipeline: 'expansao',
+      url: 'https://franquia.wingscompany.com.br/iguari',
+    });
+    const again = await registerBrands(db, {
+      names,
+      pages: EXPANSION_BRANDS_2026_09_30,
+      apply: true,
+    });
+    expect(again.created).toEqual([]);
+    expect(again.links.filter((link) => link.state === 'created')).toEqual([]);
+  });
+});
