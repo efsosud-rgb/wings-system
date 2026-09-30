@@ -5,10 +5,15 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import { seed } from '../../db/seed.js';
-import { auditLog, clients } from '../../db/schema/index.js';
+import { auditLog, clientProjects, clients } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
-import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
+import {
+  clientRegister,
+  createEmployee,
+  TEST_CPF_KEY,
+  TEST_INDEX_KEY,
+} from '../../test/factories.js';
 
 let harness: TestDatabase;
 let db: Database;
@@ -70,7 +75,7 @@ describe('the clients register', () => {
       method: 'POST',
       url: '/clients',
       cookies,
-      payload: { name: '  Padaria Aurora ' },
+      payload: clientRegister('  Padaria Aurora '),
     });
     expect(created.statusCode).toBe(201);
     const client = created.json<{ client: Client }>().client;
@@ -81,11 +86,11 @@ describe('the clients register', () => {
       method: 'POST',
       url: '/clients',
       cookies,
-      payload: { name: 'PADARIA  AURÓRA' },
+      payload: clientRegister('PADARIA  AURÓRA'),
     });
     expect(again.statusCode).toBe(409);
     expect(
-      (await app.inject({ method: 'POST', url: '/clients', cookies, payload: { name: '!' } }))
+      (await app.inject({ method: 'POST', url: '/clients', cookies, payload: clientRegister('!') }))
         .statusCode,
     ).toBe(400);
 
@@ -134,9 +139,62 @@ describe('the clients register', () => {
           method: 'POST',
           url: '/clients',
           cookies: seller.cookies,
-          payload: { name: 'Outro Cliente' },
+          payload: clientRegister('Outro Cliente'),
         })
       ).statusCode,
     ).toBe(403);
+  });
+});
+
+describe('the new register (Eric, 30/09)', () => {
+  it('refuses a client without CNPJ, main contact with e-mail and WhatsApp, relationship or profile source', async () => {
+    const { cookies } = await sessionFor('marketing');
+    for (const payload of [
+      { name: 'Sem Nada' },
+      clientRegister('Sem CNPJ', { cnpj: null }),
+      clientRegister('Sem Whats', { contact: { name: 'Ana', email: 'ana@example.com' } }),
+      clientRegister('Sem Relação', { relationship: undefined }),
+    ]) {
+      const response = await app.inject({ method: 'POST', url: '/clients', cookies, payload });
+      expect(response.statusCode).toBe(400);
+    }
+  });
+
+  it('opens a Formatação project only when Formatação is part of the relationship, and lists what old records lack', async () => {
+    const { cookies } = await sessionFor('marketing');
+    const expansion = await app.inject({
+      method: 'POST',
+      url: '/clients',
+      cookies,
+      payload: clientRegister('Marca Só Expansão', { relationship: 'expansao' }),
+    });
+    expect(expansion.statusCode).toBe(201);
+    const expansionId = expansion.json<{ client: Client }>().client.id;
+    expect(
+      await db.query.clientProjects.findFirst({ where: eq(clientProjects.clientId, expansionId) }),
+    ).toBeUndefined();
+    const both = await app.inject({
+      method: 'POST',
+      url: '/clients',
+      cookies,
+      payload: clientRegister('Marca Ambas', { relationship: 'ambos' }),
+    });
+    const bothId = both.json<{ client: Client }>().client.id;
+    expect(
+      await db.query.clientProjects.findFirst({ where: eq(clientProjects.clientId, bothId) }),
+    ).toBeTruthy();
+
+    // An old record (only a name) shows as incomplete, with the list; a new one is complete.
+    await db
+      .insert(clients)
+      .values({ name: 'Cadastro Antigo', slug: 'cadastro-antigo', number: 900 });
+    const list = (await app.inject({ url: '/clients', cookies })).json<{ clients: Client[] }>()
+      .clients;
+    const old = list.find((client) => client.name === 'Cadastro Antigo');
+    expect(old?.registerMissing).toEqual(
+      expect.arrayContaining(['CNPJ', 'Relação com a Wings', 'Contato principal']),
+    );
+    expect(list.find((client) => client.id === expansionId)?.registerMissing).toEqual([]);
+    expect(list.find((client) => client.id === WINGS_CLIENT_ID)?.registerMissing).toEqual([]);
   });
 });

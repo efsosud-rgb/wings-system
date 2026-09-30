@@ -59,6 +59,8 @@ export const clients = pgTable(
     website: text('website'),
     /** Handle or address per network: `{ instagram: '@padaria' }`. */
     social: jsonb('social').$type<Record<string, string>>().notNull().default({}),
+    /** A ClientRelationship (formatacao | expansao | ambos); null on records made before it was asked. */
+    relationship: text('relationship'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }),
   },
@@ -140,6 +142,11 @@ export const clientBusiness = pgTable('client_business', {
   inpiProcess: text('inpi_process'),
   inpiClass: text('inpi_class'),
   inpiStatus: text('inpi_status'),
+  /** CRM plan §3.1 (Manus): a FitLevel each, and where and when the profile was told. */
+  franchisability: text('franchisability'),
+  wingsFit: text('wings_fit'),
+  profileSource: text('profile_source'),
+  profileDate: date('profile_date'),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

@@ -80,10 +80,16 @@ const notFound: Failure = { error: 'not_found', status: 404, message: 'Cliente n
 const sensitiveForbidden: Failure = {
   error: 'sensitive_forbidden',
   status: 403,
-  message: 'CPF, estado civil e regime de bens só podem ser preenchidos por Jurídico, Diretoria ou Admin Master.',
+  message:
+    'CPF, estado civil e regime de bens só podem ser preenchidos por Jurídico, Diretoria ou Admin Master.',
 };
 const invalid = (message: string): Failure => ({ error: 'invalid', status: 400, message });
-const conflict = (code: string, message: string): Failure => ({ error: 'conflict', status: 409, code, message });
+const conflict = (code: string, message: string): Failure => ({
+  error: 'conflict',
+  status: 409,
+  code,
+  message,
+});
 
 const addressOf = (value: unknown): ClientAddress => ({
   ...EMPTY_ADDRESS,
@@ -91,7 +97,10 @@ const addressOf = (value: unknown): ClientAddress => ({
 });
 
 /** The keys whose values differ: what the audit trail records, never the values. */
-export function changedKeys(before: Record<string, unknown>, after: Record<string, unknown>): string[] {
+export function changedKeys(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): string[] {
   return Object.keys(after).filter(
     (key) => JSON.stringify(before[key] ?? null) !== JSON.stringify(after[key] ?? null),
   );
@@ -131,6 +140,10 @@ const EMPTY_BUSINESS: ClientBusiness = {
   inpiProcess: null,
   inpiClass: null,
   inpiStatus: null,
+  franchisability: null,
+  wingsFit: null,
+  profileSource: null,
+  profileDate: null,
 };
 
 async function consultantOptions(db: Database) {
@@ -140,7 +153,9 @@ async function consultantOptions(db: Database) {
     .innerJoin(sectors, eq(sectors.id, employees.sectorId))
     .where(and(eq(employees.status, 'active'), inArray(sectors.slug, CONSULTANT_AREAS)))
     .orderBy(asc(employees.fullName));
-  const options = Object.fromEntries(CONSULTANT_AREAS.map((area) => [area, [] as { id: string; name: string }[]]));
+  const options = Object.fromEntries(
+    CONSULTANT_AREAS.map((area) => [area, [] as { id: string; name: string }[]]),
+  );
   for (const row of rows) options[row.sector]?.push({ id: row.id, name: row.name });
   return options as ClientRecord['consultantOptions'];
 }
@@ -155,26 +170,56 @@ export async function loadRecord(
   const row = await db.query.clients.findFirst({ where: eq(clients.id, clientId) });
   if (!row) return null;
 
-  const [partnerRows, contactRows, businessRow, contractRows, planRow, unitRows, signatureRow, witnessRows, folder] =
-    await Promise.all([
-      db.select().from(clientPartners).where(eq(clientPartners.clientId, clientId)).orderBy(asc(clientPartners.position)),
-      db.select().from(clientContacts).where(eq(clientContacts.clientId, clientId)),
-      db.query.clientBusiness.findFirst({ where: eq(clientBusiness.clientId, clientId) }),
-      db.select().from(clientContracts).where(eq(clientContracts.clientId, clientId)).orderBy(asc(clientContracts.position)),
-      db.query.clientFranchisePlans.findFirst({ where: eq(clientFranchisePlans.clientId, clientId) }),
-      db.select().from(clientUnitModels).where(eq(clientUnitModels.clientId, clientId)).orderBy(asc(clientUnitModels.position)),
-      db.query.clientSignatures.findFirst({ where: eq(clientSignatures.clientId, clientId) }),
-      db.select().from(clientWitnesses).where(eq(clientWitnesses.clientId, clientId)).orderBy(asc(clientWitnesses.position)),
-      db.query.driveFolders.findFirst({
-        where: and(eq(driveFolders.clientId, clientId), eq(driveFolders.slot, 'enviados')),
-      }),
-    ]);
+  const [
+    partnerRows,
+    contactRows,
+    businessRow,
+    contractRows,
+    planRow,
+    unitRows,
+    signatureRow,
+    witnessRows,
+    folder,
+  ] = await Promise.all([
+    db
+      .select()
+      .from(clientPartners)
+      .where(eq(clientPartners.clientId, clientId))
+      .orderBy(asc(clientPartners.position)),
+    db.select().from(clientContacts).where(eq(clientContacts.clientId, clientId)),
+    db.query.clientBusiness.findFirst({ where: eq(clientBusiness.clientId, clientId) }),
+    db
+      .select()
+      .from(clientContracts)
+      .where(eq(clientContracts.clientId, clientId))
+      .orderBy(asc(clientContracts.position)),
+    db.query.clientFranchisePlans.findFirst({ where: eq(clientFranchisePlans.clientId, clientId) }),
+    db
+      .select()
+      .from(clientUnitModels)
+      .where(eq(clientUnitModels.clientId, clientId))
+      .orderBy(asc(clientUnitModels.position)),
+    db.query.clientSignatures.findFirst({ where: eq(clientSignatures.clientId, clientId) }),
+    db
+      .select()
+      .from(clientWitnesses)
+      .where(eq(clientWitnesses.clientId, clientId))
+      .orderBy(asc(clientWitnesses.position)),
+    db.query.driveFolders.findFirst({
+      where: and(eq(driveFolders.clientId, clientId), eq(driveFolders.slot, 'enviados')),
+    }),
+  ]);
 
   const consultantRows = contractRows.length
     ? await db
         .select()
         .from(clientContractConsultants)
-        .where(inArray(clientContractConsultants.contractId, contractRows.map((c) => c.id)))
+        .where(
+          inArray(
+            clientContractConsultants.contractId,
+            contractRows.map((c) => c.id),
+          ),
+        )
     : [];
 
   const masked = (encrypted: string | null) => {
@@ -233,6 +278,10 @@ export async function loadRecord(
         inpiProcess: businessRow.inpiProcess,
         inpiClass: businessRow.inpiClass,
         inpiStatus: businessRow.inpiStatus as ClientBusiness['inpiStatus'],
+        franchisability: businessRow.franchisability as ClientBusiness['franchisability'],
+        wingsFit: businessRow.wingsFit as ClientBusiness['wingsFit'],
+        profileSource: businessRow.profileSource,
+        profileDate: businessRow.profileDate,
       }
     : EMPTY_BUSINESS;
 
@@ -254,8 +303,14 @@ export async function loadRecord(
 
   const franchise: ClientFranchise = {
     franchiseFeeCents: planRow?.franchiseFeeCents ?? null,
-    royaltiesPercent: planRow?.royaltiesPercent === null || planRow?.royaltiesPercent === undefined ? null : Number(planRow.royaltiesPercent),
-    adFundPercent: planRow?.adFundPercent === null || planRow?.adFundPercent === undefined ? null : Number(planRow.adFundPercent),
+    royaltiesPercent:
+      planRow?.royaltiesPercent === null || planRow?.royaltiesPercent === undefined
+        ? null
+        : Number(planRow.royaltiesPercent),
+    adFundPercent:
+      planRow?.adFundPercent === null || planRow?.adFundPercent === undefined
+        ? null
+        : Number(planRow.adFundPercent),
     initialInvestmentCents: planRow?.initialInvestmentCents ?? null,
     franchiseeProfile: planRow?.franchiseeProfile ?? null,
     unitModels: unitRows.map((u) => ({
@@ -330,10 +385,21 @@ export async function loadRecord(
 // --- write ------------------------------------------------------------------------
 
 async function clientExists(db: Writer, clientId: string) {
-  return (await db.query.clients.findFirst({ where: eq(clients.id, clientId), columns: { id: true } })) !== undefined;
+  return (
+    (await db.query.clients.findFirst({
+      where: eq(clients.id, clientId),
+      columns: { id: true },
+    })) !== undefined
+  );
 }
 
-const audit = (db: Writer, ctx: WriteContext, clientId: string, action: string, metadata: Record<string, unknown>) =>
+const audit = (
+  db: Writer,
+  ctx: WriteContext,
+  clientId: string,
+  action: string,
+  metadata: Record<string, unknown>,
+) =>
   writeAudit(db, {
     actorEmployeeId: ctx.actor.employeeId,
     action,
@@ -362,7 +428,8 @@ export async function saveCompany(
         where: and(eq(clients.cnpj, input.cnpj), sql`${clients.id} <> ${clientId}`),
         columns: { name: true },
       });
-      if (holder) return fail(conflict('cnpj_taken', `Este CNPJ já está no cadastro de ${holder.name}.`));
+      if (holder)
+        return fail(conflict('cnpj_taken', `Este CNPJ já está no cadastro de ${holder.name}.`));
     }
     const fields = changedKeys(companyOf(row), input);
     await tx
@@ -374,8 +441,14 @@ export async function saveCompany(
   });
 }
 
-const sensitiveSent = (input: { cpf?: unknown; maritalStatus?: unknown; propertyRegime?: unknown }) =>
-  input.cpf !== undefined || input.maritalStatus !== undefined || input.propertyRegime !== undefined;
+const sensitiveSent = (input: {
+  cpf?: unknown;
+  maritalStatus?: unknown;
+  propertyRegime?: unknown;
+}) =>
+  input.cpf !== undefined ||
+  input.maritalStatus !== undefined ||
+  input.propertyRegime !== undefined;
 
 type PartnerInput = z.output<typeof clientPartnerInputSchema>;
 
@@ -392,7 +465,10 @@ export async function savePartner(
       ? {}
       : input.cpf === null
         ? { cpfEncrypted: null, cpfIndex: null }
-        : { cpfEncrypted: ctx.cpfCrypto.encrypt(input.cpf), cpfIndex: ctx.cpfCrypto.index(input.cpf) };
+        : {
+            cpfEncrypted: ctx.cpfCrypto.encrypt(input.cpf),
+            cpfIndex: ctx.cpfCrypto.index(input.cpf),
+          };
   const values = {
     name: input.name,
     rg: input.rg,
@@ -445,7 +521,11 @@ export async function savePartner(
     });
     if (!before) return fail({ ...notFound, message: 'Sócio não encontrado.' });
     const fields = changedKeys(
-      { ...before, address: addressOf(before.address), sharePercent: before.sharePercent === null ? null : Number(before.sharePercent) },
+      {
+        ...before,
+        address: addressOf(before.address),
+        sharePercent: before.sharePercent === null ? null : Number(before.sharePercent),
+      },
       values,
     ).filter((key) => key !== 'cpfIndex');
     await tx
@@ -457,7 +537,12 @@ export async function savePartner(
   });
 }
 
-export async function deletePartner(db: Database, ctx: WriteContext, clientId: string, partnerId: string): Promise<Result> {
+export async function deletePartner(
+  db: Database,
+  ctx: WriteContext,
+  clientId: string,
+  partnerId: string,
+): Promise<Result> {
   return db.transaction(async (tx) => {
     const [gone] = await tx
       .delete(clientPartners)
@@ -477,18 +562,23 @@ export async function saveContacts(
 ): Promise<Result> {
   return db.transaction(async (tx) => {
     if (!(await clientExists(tx, clientId))) return fail(notFound);
-    const before = await tx.select().from(clientContacts).where(eq(clientContacts.clientId, clientId));
+    const before = await tx
+      .select()
+      .from(clientContacts)
+      .where(eq(clientContacts.clientId, clientId));
     await tx.delete(clientContacts).where(eq(clientContacts.clientId, clientId));
     if (input.contacts.length) {
-      await tx.insert(clientContacts).values(input.contacts.map((contact) => ({ clientId, ...contact })));
+      await tx
+        .insert(clientContacts)
+        .values(input.contacts.map((contact) => ({ clientId, ...contact })));
     }
-    const changed = [...new Set([...before.map((c) => c.role), ...input.contacts.map((c) => c.role)])].filter(
-      (role) => {
-        const old = before.find((c) => c.role === role);
-        const now = input.contacts.find((c) => c.role === role);
-        return changedKeys(old ?? {}, now ?? { name: null }).length > 0 || !old !== !now;
-      },
-    );
+    const changed = [
+      ...new Set([...before.map((c) => c.role), ...input.contacts.map((c) => c.role)]),
+    ].filter((role) => {
+      const old = before.find((c) => c.role === role);
+      const now = input.contacts.find((c) => c.role === role);
+      return changedKeys(old ?? {}, now ?? { name: null }).length > 0 || !old !== !now;
+    });
     await audit(tx, ctx, clientId, 'client.contacts_updated', { roles: changed });
     return ok(undefined);
   });
@@ -502,12 +592,19 @@ export async function saveBusiness(
 ): Promise<Result> {
   return db.transaction(async (tx) => {
     if (!(await clientExists(tx, clientId))) return fail(notFound);
-    const before = await tx.query.clientBusiness.findFirst({ where: eq(clientBusiness.clientId, clientId) });
+    const before = await tx.query.clientBusiness.findFirst({
+      where: eq(clientBusiness.clientId, clientId),
+    });
     await tx
       .insert(clientBusiness)
       .values({ clientId, ...input })
-      .onConflictDoUpdate({ target: clientBusiness.clientId, set: { ...input, updatedAt: new Date() } });
-    await audit(tx, ctx, clientId, 'client.business_updated', { fields: changedKeys(before ?? EMPTY_BUSINESS, input) });
+      .onConflictDoUpdate({
+        target: clientBusiness.clientId,
+        set: { ...input, updatedAt: new Date() },
+      });
+    await audit(tx, ctx, clientId, 'client.business_updated', {
+      fields: changedKeys(before ?? EMPTY_BUSINESS, input),
+    });
     return ok(undefined);
   });
 }
@@ -520,10 +617,14 @@ export async function saveContracts(
 ): Promise<Result> {
   return db.transaction(async (tx) => {
     if (!(await clientExists(tx, clientId))) return fail(notFound);
-    const existing = await tx.select().from(clientContracts).where(eq(clientContracts.clientId, clientId));
+    const existing = await tx
+      .select()
+      .from(clientContracts)
+      .where(eq(clientContracts.clientId, clientId));
     const existingIds = new Set(existing.map((c) => c.id));
     for (const contract of input.contracts) {
-      if (contract.id && !existingIds.has(contract.id)) return fail(invalid('Contrato não encontrado neste cliente.'));
+      if (contract.id && !existingIds.has(contract.id))
+        return fail(invalid('Contrato não encontrado neste cliente.'));
     }
     const assigned = existing.length
       ? await tx
@@ -535,18 +636,35 @@ export async function saveContracts(
     // A consultant who already was on the contract stays valid; a new one must
     // be an active employee of that very area.
     const wanted = input.contracts.flatMap((contract) =>
-      Object.entries(contract.consultants).map(([area, employeeId]) => ({ contractId: contract.id, area, employeeId })),
+      Object.entries(contract.consultants).map(([area, employeeId]) => ({
+        contractId: contract.id,
+        area,
+        employeeId,
+      })),
     );
     const fresh = wanted.filter(
       (item) =>
-        !assigned.some((a) => a.contractId === item.contractId && a.area === item.area && a.employeeId === item.employeeId),
+        !assigned.some(
+          (a) =>
+            a.contractId === item.contractId &&
+            a.area === item.area &&
+            a.employeeId === item.employeeId,
+        ),
     );
     if (fresh.length) {
       const people = await tx
         .select({ id: employees.id, sector: sectors.slug })
         .from(employees)
         .innerJoin(sectors, eq(sectors.id, employees.sectorId))
-        .where(and(inArray(employees.id, fresh.map((item) => item.employeeId as string)), eq(employees.status, 'active')));
+        .where(
+          and(
+            inArray(
+              employees.id,
+              fresh.map((item) => item.employeeId as string),
+            ),
+            eq(employees.status, 'active'),
+          ),
+        );
       for (const item of fresh) {
         if (!people.some((p) => p.id === item.employeeId && p.sector === item.area)) {
           return fail(invalid('O consultor escolhido não é um funcionário ativo desta área.'));
@@ -555,18 +673,22 @@ export async function saveContracts(
     }
 
     const knownLeads = new Set(existing.map((c) => c.leadId).filter(Boolean));
-    const newLeads = input.contracts.map((c) => c.leadId).filter((id): id is string => !!id && !knownLeads.has(id));
+    const newLeads = input.contracts
+      .map((c) => c.leadId)
+      .filter((id): id is string => !!id && !knownLeads.has(id));
     if (newLeads.length) {
       const found = await tx
         .select({ id: leads.id })
         .from(leads)
         .where(and(inArray(leads.id, newLeads), eq(leads.clientId, clientId)));
-      if (found.length !== new Set(newLeads).size) return fail(invalid('O lead de origem não é deste cliente.'));
+      if (found.length !== new Set(newLeads).size)
+        return fail(invalid('O lead de origem não é deste cliente.'));
     }
 
     const keep = new Set(input.contracts.map((c) => c.id).filter(Boolean));
     const removed = existing.filter((c) => !keep.has(c.id)).map((c) => c.id);
-    if (removed.length) await tx.delete(clientContracts).where(inArray(clientContracts.id, removed));
+    if (removed.length)
+      await tx.delete(clientContracts).where(inArray(clientContracts.id, removed));
 
     const fieldsChanged = new Set<string>();
     for (const [position, contract] of input.contracts.entries()) {
@@ -579,7 +701,9 @@ export async function saveContracts(
           .update(clientContracts)
           .set({ ...values, position, updatedAt: new Date() })
           .where(eq(clientContracts.id, contractId));
-        await tx.delete(clientContractConsultants).where(eq(clientContractConsultants.contractId, contractId));
+        await tx
+          .delete(clientContractConsultants)
+          .where(eq(clientContractConsultants.contractId, contractId));
       } else {
         const [made] = await tx
           .insert(clientContracts)
@@ -620,7 +744,9 @@ export async function saveFranchise(
   return db.transaction(async (tx) => {
     if (!(await clientExists(tx, clientId))) return fail(notFound);
     const { unitModels, ...plan } = input;
-    const before = await tx.query.clientFranchisePlans.findFirst({ where: eq(clientFranchisePlans.clientId, clientId) });
+    const before = await tx.query.clientFranchisePlans.findFirst({
+      where: eq(clientFranchisePlans.clientId, clientId),
+    });
     const beforeUnits = await tx
       .select()
       .from(clientUnitModels)
@@ -629,26 +755,41 @@ export async function saveFranchise(
     await tx
       .insert(clientFranchisePlans)
       .values({ clientId, ...plan })
-      .onConflictDoUpdate({ target: clientFranchisePlans.clientId, set: { ...plan, updatedAt: new Date() } });
+      .onConflictDoUpdate({
+        target: clientFranchisePlans.clientId,
+        set: { ...plan, updatedAt: new Date() },
+      });
     await tx.delete(clientUnitModels).where(eq(clientUnitModels.clientId, clientId));
     if (unitModels.length) {
-      await tx.insert(clientUnitModels).values(unitModels.map((unit, position) => ({ clientId, position, ...unit })));
+      await tx
+        .insert(clientUnitModels)
+        .values(unitModels.map((unit, position) => ({ clientId, position, ...unit })));
     }
     const fields = changedKeys(
       before
-        ? { ...before, royaltiesPercent: before.royaltiesPercent === null ? null : Number(before.royaltiesPercent), adFundPercent: before.adFundPercent === null ? null : Number(before.adFundPercent) }
+        ? {
+            ...before,
+            royaltiesPercent:
+              before.royaltiesPercent === null ? null : Number(before.royaltiesPercent),
+            adFundPercent: before.adFundPercent === null ? null : Number(before.adFundPercent),
+          }
         : {},
       plan,
     );
-    const unitsBefore = beforeUnits.map(({ name, description, initialInvestmentCents, franchiseFeeCents, areaM2 }) => ({
-      name,
-      description,
-      initialInvestmentCents,
-      franchiseFeeCents,
-      areaM2,
-    }));
+    const unitsBefore = beforeUnits.map(
+      ({ name, description, initialInvestmentCents, franchiseFeeCents, areaM2 }) => ({
+        name,
+        description,
+        initialInvestmentCents,
+        franchiseFeeCents,
+        areaM2,
+      }),
+    );
     if (JSON.stringify(unitsBefore) !== JSON.stringify(unitModels)) fields.push('unitModels');
-    await audit(tx, ctx, clientId, 'client.franchise_updated', { fields, unitModels: unitModels.length });
+    await audit(tx, ctx, clientId, 'client.franchise_updated', {
+      fields,
+      unitModels: unitModels.length,
+    });
     return ok(undefined);
   });
 }
@@ -659,41 +800,59 @@ export async function saveSignature(
   clientId: string,
   input: z.output<typeof clientSignatureSchema>,
 ): Promise<Result> {
-  if (input.witnesses.some((w) => w.cpf !== undefined) && !ctx.canSeeSensitive) return fail(sensitiveForbidden);
+  if (input.witnesses.some((w) => w.cpf !== undefined) && !ctx.canSeeSensitive)
+    return fail(sensitiveForbidden);
   return db.transaction(async (tx) => {
     if (!(await clientExists(tx, clientId))) return fail(notFound);
     const { witnesses, ...values } = input;
     if (values.signerPartnerId) {
       const partner = await tx.query.clientPartners.findFirst({
-        where: and(eq(clientPartners.id, values.signerPartnerId), eq(clientPartners.clientId, clientId)),
+        where: and(
+          eq(clientPartners.id, values.signerPartnerId),
+          eq(clientPartners.clientId, clientId),
+        ),
         columns: { id: true },
       });
       if (!partner) return fail(invalid('Quem assina precisa ser um sócio deste cliente.'));
     }
-    const before = await tx.query.clientSignatures.findFirst({ where: eq(clientSignatures.clientId, clientId) });
-    const existing = await tx.select().from(clientWitnesses).where(eq(clientWitnesses.clientId, clientId));
+    const before = await tx.query.clientSignatures.findFirst({
+      where: eq(clientSignatures.clientId, clientId),
+    });
+    const existing = await tx
+      .select()
+      .from(clientWitnesses)
+      .where(eq(clientWitnesses.clientId, clientId));
     for (const witness of witnesses) {
-      if (witness.id && !existing.some((w) => w.id === witness.id)) return fail(invalid('Testemunha não encontrada.'));
+      if (witness.id && !existing.some((w) => w.id === witness.id))
+        return fail(invalid('Testemunha não encontrada.'));
     }
 
     await tx
       .insert(clientSignatures)
       .values({ clientId, ...values })
-      .onConflictDoUpdate({ target: clientSignatures.clientId, set: { ...values, updatedAt: new Date() } });
+      .onConflictDoUpdate({
+        target: clientSignatures.clientId,
+        set: { ...values, updatedAt: new Date() },
+      });
 
     // Witnesses are replaced; one that keeps its id and sends no CPF keeps the CPF it had.
     const keep = new Set(witnesses.map((w) => w.id).filter(Boolean));
     const removed = existing.filter((w) => !keep.has(w.id)).map((w) => w.id);
-    if (removed.length) await tx.delete(clientWitnesses).where(inArray(clientWitnesses.id, removed));
+    if (removed.length)
+      await tx.delete(clientWitnesses).where(inArray(clientWitnesses.id, removed));
     for (const [position, witness] of witnesses.entries()) {
       const cpf =
         witness.cpf === undefined
           ? {}
           : witness.cpf === null
             ? { cpfEncrypted: null, cpfIndex: null }
-            : { cpfEncrypted: ctx.cpfCrypto.encrypt(witness.cpf), cpfIndex: ctx.cpfCrypto.index(witness.cpf) };
+            : {
+                cpfEncrypted: ctx.cpfCrypto.encrypt(witness.cpf),
+                cpfIndex: ctx.cpfCrypto.index(witness.cpf),
+              };
       const row = { position, name: witness.name, email: witness.email, ...cpf };
-      if (witness.id) await tx.update(clientWitnesses).set(row).where(eq(clientWitnesses.id, witness.id));
+      if (witness.id)
+        await tx.update(clientWitnesses).set(row).where(eq(clientWitnesses.id, witness.id));
       else await tx.insert(clientWitnesses).values({ clientId, ...row });
     }
 
@@ -729,4 +888,3 @@ export async function revealCpf(
   await audit(db, ctx, clientId, 'client.cpf_revealed', { kind, id });
   return ok({ cpf });
 }
-

@@ -20,7 +20,12 @@ import {
   roadmapReportRecipients,
   roadmapReportRuns,
 } from '../../db/schema/index.js';
-import { computeRoadmap, modulePercentOf, type CompletionEvent, type ScoringModule } from './scoring.js';
+import {
+  computeRoadmap,
+  modulePercentOf,
+  type CompletionEvent,
+  type ScoringModule,
+} from './scoring.js';
 
 export type Tx = Parameters<Parameters<Database['transaction']>[0]>[0];
 type Db = Database | Tx;
@@ -220,7 +225,10 @@ export async function updateDeliverable(
       });
     }
 
-    const [updated] = await tx.select().from(roadmapDeliverables).where(eq(roadmapDeliverables.id, id));
+    const [updated] = await tx
+      .select()
+      .from(roadmapDeliverables)
+      .where(eq(roadmapDeliverables.id, id));
     return updated ? toDeliverable(updated) : null;
   });
 }
@@ -289,7 +297,13 @@ export async function findOrCreateDraftRun(
   const built = await build(id);
   const [inserted] = await db
     .insert(roadmapReportRuns)
-    .values({ id, reportDate, status: 'rascunho', computed: built.computed, messageText: built.messageText })
+    .values({
+      id,
+      reportDate,
+      status: 'rascunho',
+      computed: built.computed,
+      messageText: built.messageText,
+    })
     .onConflictDoNothing()
     .returning();
   if (inserted) return { run: inserted, created: true };
@@ -323,8 +337,15 @@ export async function approveReportRun(
   });
 }
 
-export async function markRunSent(db: Database, id: string, status: RoadmapReportRunStatus): Promise<void> {
-  await db.update(roadmapReportRuns).set({ status, sentAt: new Date() }).where(eq(roadmapReportRuns.id, id));
+export async function markRunSent(
+  db: Database,
+  id: string,
+  status: RoadmapReportRunStatus,
+): Promise<void> {
+  await db
+    .update(roadmapReportRuns)
+    .set({ status, sentAt: new Date() })
+    .where(eq(roadmapReportRuns.id, id));
 }
 
 // --- recipients ------------------------------------------------------------------
@@ -342,7 +363,10 @@ const toRecipient = (row: RecipientRow): RoadmapReportRecipient => ({
 });
 
 export async function listRecipients(db: Db): Promise<RoadmapReportRecipient[]> {
-  const rows = await db.select().from(roadmapReportRecipients).orderBy(asc(roadmapReportRecipients.role));
+  const rows = await db
+    .select()
+    .from(roadmapReportRecipients)
+    .orderBy(asc(roadmapReportRecipients.role));
   return rows.map(toRecipient);
 }
 
@@ -363,7 +387,12 @@ export async function createRecipient(
 ): Promise<RoadmapReportRecipient> {
   const [row] = await db
     .insert(roadmapReportRecipients)
-    .values({ role: input.role, name: input.name, phone: input.phone, active: input.active ?? true })
+    .values({
+      role: input.role,
+      name: input.name,
+      phone: input.phone,
+      active: input.active ?? true,
+    })
     .returning();
   return toRecipient(row as RecipientRow);
 }
@@ -416,10 +445,18 @@ export async function applyGenerated(
   db: Database,
   modules: readonly GeneratedModuleInput[],
   deliverables: readonly GeneratedDeliverableInput[],
-): Promise<{ modulesWritten: number; deliverablesCreated: number; deliverablesUpdated: number; deliverablesSkipped: number }> {
+): Promise<{
+  modulesWritten: number;
+  deliverablesCreated: number;
+  deliverablesUpdated: number;
+  deliverablesSkipped: number;
+}> {
   const moduleIdByKey = new Map<string, string>();
   for (const module of modules) {
-    const [existing] = await db.select().from(roadmapModules).where(eq(roadmapModules.key, module.key));
+    const [existing] = await db
+      .select()
+      .from(roadmapModules)
+      .where(eq(roadmapModules.key, module.key));
     if (existing) {
       await db
         .update(roadmapModules)
@@ -454,7 +491,12 @@ export async function applyGenerated(
     const [existing] = await db
       .select()
       .from(roadmapDeliverables)
-      .where(and(eq(roadmapDeliverables.moduleId, moduleId), eq(roadmapDeliverables.label, deliverable.label)));
+      .where(
+        and(
+          eq(roadmapDeliverables.moduleId, moduleId),
+          eq(roadmapDeliverables.label, deliverable.label),
+        ),
+      );
     if (!existing) {
       await db.insert(roadmapDeliverables).values({
         moduleId,
@@ -483,5 +525,10 @@ export async function applyGenerated(
     updated += 1;
   }
 
-  return { modulesWritten: moduleIdByKey.size, deliverablesCreated: created, deliverablesUpdated: updated, deliverablesSkipped: skipped };
+  return {
+    modulesWritten: moduleIdByKey.size,
+    deliverablesCreated: created,
+    deliverablesUpdated: updated,
+    deliverablesSkipped: skipped,
+  };
 }

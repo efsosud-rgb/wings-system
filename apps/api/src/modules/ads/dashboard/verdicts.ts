@@ -86,7 +86,10 @@ export async function campaignVerdicts(
     if (!totals || totals.impressions < MEDIAN_MIN_IMPRESSIONS) continue;
     const ctr = ratiosOf(totals).ctrMilli;
     if (ctr === null) continue;
-    ctrsByAccount.set(campaign.adAccountId, [...(ctrsByAccount.get(campaign.adAccountId) ?? []), ctr]);
+    ctrsByAccount.set(campaign.adAccountId, [
+      ...(ctrsByAccount.get(campaign.adAccountId) ?? []),
+      ctr,
+    ]);
   }
   const medianByAccount = new Map(
     [...ctrsByAccount].map(([accountId, ctrs]) => [accountId, median(ctrs)]),
@@ -100,7 +103,8 @@ export async function campaignVerdicts(
     const ratios = ratiosOf(totals);
     const current = ratiosOf(last7.get(campaign.externalId) ?? EMPTY_TOTALS);
     const previous = ratiosOf(prev7.get(campaign.externalId) ?? EMPTY_TOTALS);
-    const dailyBudgetCents = campaign.budgetLevel === 'campaign' ? campaign.dailyBudgetCents || null : null;
+    const dailyBudgetCents =
+      campaign.budgetLevel === 'campaign' ? campaign.dailyBudgetCents || null : null;
     const targetKind: ObjectiveKind | null =
       objectiveKind === 'leads' ? 'leads' : objectiveKind === 'traffic' ? 'traffic' : null;
     // The account's own CPL target wins over the company's: Meta and Google

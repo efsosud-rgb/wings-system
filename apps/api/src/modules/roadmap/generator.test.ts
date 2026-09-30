@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { GithubCommitDetail, GithubCommitSummary } from '../../lib/github-repo-history.js';
 import { generateRoadmap, weightFromLinesChanged, type CommitReader } from './generator.js';
 
-function fakeReader(commits: (GithubCommitSummary & { files: GithubCommitDetail['files'] })[]): CommitReader {
+function fakeReader(
+  commits: (GithubCommitSummary & { files: GithubCommitDetail['files'] })[],
+): CommitReader {
   return {
     async listCommits() {
       return commits.map(({ sha, message, authorDate }) => ({ sha, message, authorDate }));
@@ -40,13 +42,20 @@ describe('generateRoadmap', () => {
     expect(sofia).toMatchObject({ status: 'pendente', weight: 'M', completedAt: null });
   });
 
-  it('groups a commit that touches an API module folder into that module\'s submodule', async () => {
+  it("groups a commit that touches an API module folder into that module's submodule", async () => {
     const reader = fakeReader([
       {
         sha: 'a1',
         message: 'feat(leads): funnel',
         authorDate: '2026-09-01T00:00:00Z',
-        files: [{ filename: 'apps/api/src/modules/leads/routes.ts', additions: 30, deletions: 10, changes: 40 }],
+        files: [
+          {
+            filename: 'apps/api/src/modules/leads/routes.ts',
+            additions: 30,
+            deletions: 10,
+            changes: 40,
+          },
+        ],
       },
     ]);
     const result = await generateRoadmap(reader);
@@ -61,7 +70,12 @@ describe('generateRoadmap', () => {
         message: 'feat(web): projects board',
         authorDate: '2026-09-02T00:00:00Z',
         files: [
-          { filename: 'apps/web/src/pages/ProjectsPage.tsx', additions: 200, deletions: 50, changes: 250 },
+          {
+            filename: 'apps/web/src/pages/ProjectsPage.tsx',
+            additions: 200,
+            deletions: 50,
+            changes: 250,
+          },
         ],
       },
     ]);
@@ -76,13 +90,27 @@ describe('generateRoadmap', () => {
         sha: 'c1',
         message: 'feat(drive): first pass',
         authorDate: '2026-08-01T00:00:00Z',
-        files: [{ filename: 'apps/api/src/modules/drive/routes.ts', additions: 150, deletions: 0, changes: 150 }],
+        files: [
+          {
+            filename: 'apps/api/src/modules/drive/routes.ts',
+            additions: 150,
+            deletions: 0,
+            changes: 150,
+          },
+        ],
       },
       {
         sha: 'c2',
         message: 'feat(drive): second pass',
         authorDate: '2026-08-15T00:00:00Z',
-        files: [{ filename: 'apps/api/src/modules/drive/service.ts', additions: 300, deletions: 0, changes: 300 }],
+        files: [
+          {
+            filename: 'apps/api/src/modules/drive/service.ts',
+            additions: 300,
+            deletions: 0,
+            changes: 300,
+          },
+        ],
       },
     ]);
     const result = await generateRoadmap(reader);
@@ -102,7 +130,9 @@ describe('generateRoadmap', () => {
     ]);
     const result = await generateRoadmap(reader);
     // Nothing should have picked up 10000 lines of changes.
-    expect(result.deliverables.every((d) => d.weight !== 'G' || d.completedAt !== '2026-09-03')).toBe(true);
+    expect(
+      result.deliverables.every((d) => d.weight !== 'G' || d.completedAt !== '2026-09-03'),
+    ).toBe(true);
   });
 
   it('still marks a ready submodule pronto even with a path-table gap, but with no completion date', async () => {

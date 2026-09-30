@@ -46,7 +46,10 @@ export const OBJECTIVE_KIND_LABEL: Record<ObjectiveKind, string> = {
  * campaign of Wings so far is a Search campaign after franchise leads, so a
  * Google campaign without an objective is judged as a leads campaign.
  */
-export function objectiveKindOf(objective: string | null, platform: 'meta' | 'google'): ObjectiveKind {
+export function objectiveKindOf(
+  objective: string | null,
+  platform: 'meta' | 'google',
+): ObjectiveKind {
   if (objective === null || objective === '') return platform === 'google' ? 'leads' : 'unknown';
   if (/LEAD|SALES|CONVERSION/i.test(objective)) return 'leads';
   if (/TRAFFIC|LINK_CLICKS/i.test(objective)) return 'traffic';
@@ -135,14 +138,23 @@ export interface VerdictInput {
 }
 
 const pct = (value: number) => `${value > 0 ? '+' : ''}${value}%`;
-const ctr = (milli: number) => `${(milli / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%`;
+const ctr = (milli: number) =>
+  `${(milli / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%`;
 
 function cplSignal(input: VerdictInput): VerdictReason {
   if (input.objectiveKind !== 'leads') {
-    return { signal: 'cpl', state: 'unknown', text: 'Campanha sem objetivo de leads: o CPL não é o número dela.' };
+    return {
+      signal: 'cpl',
+      state: 'unknown',
+      text: 'Campanha sem objetivo de leads: o CPL não é o número dela.',
+    };
   }
   if (input.targetCplCents === null) {
-    return { signal: 'cpl', state: 'unknown', text: 'Sem meta de CPL confirmada em Configurações do Dashboard.' };
+    return {
+      signal: 'cpl',
+      state: 'unknown',
+      text: 'Sem meta de CPL confirmada em Configurações do Dashboard.',
+    };
   }
   const target = input.targetCplCents;
   if (input.cplCents === null) {
@@ -158,7 +170,11 @@ function cplSignal(input: VerdictInput): VerdictReason {
   const ratio = input.cplCents / target;
   const delta = Math.round((ratio - 1) * 100);
   const state: SignalState =
-    ratio <= VERDICT_RULES.cplGoodRatio ? 'good' : ratio <= VERDICT_RULES.cplAttentionRatio ? 'neutral' : 'bad';
+    ratio <= VERDICT_RULES.cplGoodRatio
+      ? 'good'
+      : ratio <= VERDICT_RULES.cplAttentionRatio
+        ? 'neutral'
+        : 'bad';
   return {
     signal: 'cpl',
     state,
@@ -171,11 +187,19 @@ function ctrSignal(input: VerdictInput): VerdictReason {
     return { signal: 'ctr', state: 'unknown', text: 'Sem impressões no período.' };
   }
   if (input.accountMedianCtrMilli === null || input.accountMedianCtrMilli === 0) {
-    return { signal: 'ctr', state: 'unknown', text: `CTR ${ctr(input.ctrMilli)}; a conta ainda não tem mediana de 90 dias.` };
+    return {
+      signal: 'ctr',
+      state: 'unknown',
+      text: `CTR ${ctr(input.ctrMilli)}; a conta ainda não tem mediana de 90 dias.`,
+    };
   }
   const ratio = input.ctrMilli / input.accountMedianCtrMilli;
   const state: SignalState =
-    ratio >= VERDICT_RULES.ctrGoodRatio ? 'good' : ratio >= VERDICT_RULES.ctrAttentionRatio ? 'neutral' : 'bad';
+    ratio >= VERDICT_RULES.ctrGoodRatio
+      ? 'good'
+      : ratio >= VERDICT_RULES.ctrAttentionRatio
+        ? 'neutral'
+        : 'bad';
   return {
     signal: 'ctr',
     state,
@@ -190,7 +214,11 @@ function trendSignal(input: VerdictInput, primary: 'cpl' | 'ctr'): VerdictReason
       return { signal: 'trend', state: 'unknown', text: 'Sem CPL nas duas semanas para comparar.' };
     }
     const state: SignalState =
-      delta <= VERDICT_RULES.cplTrendGoodPercent ? 'good' : delta >= VERDICT_RULES.cplTrendBadPercent ? 'bad' : 'neutral';
+      delta <= VERDICT_RULES.cplTrendGoodPercent
+        ? 'good'
+        : delta >= VERDICT_RULES.cplTrendBadPercent
+          ? 'bad'
+          : 'neutral';
     return {
       signal: 'trend',
       state,
@@ -202,7 +230,11 @@ function trendSignal(input: VerdictInput, primary: 'cpl' | 'ctr'): VerdictReason
     return { signal: 'trend', state: 'unknown', text: 'Sem CTR nas duas semanas para comparar.' };
   }
   const state: SignalState =
-    delta >= VERDICT_RULES.ctrTrendGoodPercent ? 'good' : delta <= VERDICT_RULES.ctrTrendBadPercent ? 'bad' : 'neutral';
+    delta >= VERDICT_RULES.ctrTrendGoodPercent
+      ? 'good'
+      : delta <= VERDICT_RULES.ctrTrendBadPercent
+        ? 'bad'
+        : 'neutral';
   return {
     signal: 'trend',
     state,
@@ -231,7 +263,11 @@ function frequencySignal(input: VerdictInput): VerdictReason {
 function pacingSignal(input: VerdictInput): VerdictReason {
   const budget = input.pacing.dailyBudgetCents;
   if (budget === null || budget <= 0) {
-    return { signal: 'pacing', state: 'unknown', text: 'Orçamento diário fora da campanha (nos conjuntos) ou não informado.' };
+    return {
+      signal: 'pacing',
+      state: 'unknown',
+      text: 'Orçamento diário fora da campanha (nos conjuntos) ou não informado.',
+    };
   }
   const expected = budget * 7;
   const ratio = input.pacing.last7SpendCents / expected;
@@ -258,7 +294,10 @@ export function verdictOf(input: VerdictInput): VerdictResult {
     pacingSignal(input),
   ];
 
-  if (input.spendCents < VERDICT_RULES.minSpendCents || input.impressions < VERDICT_RULES.minImpressions) {
+  if (
+    input.spendCents < VERDICT_RULES.minSpendCents ||
+    input.impressions < VERDICT_RULES.minImpressions
+  ) {
     return { verdict: 'insufficient', primary, reasons };
   }
   if (primary === 'cpl' && input.targetCplCents === null) {

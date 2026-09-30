@@ -36,7 +36,10 @@ export interface LocalStorage extends ObjectStorage {
   /** What a token allows, or null when it is forged, altered or past its time. */
   open(token: string): LocalGrant | null;
   /** `range` is a closed byte interval, already clamped by the caller. */
-  stream(key: string, range?: { start: number; end: number }): Promise<{ stream: ReadStream; size: number } | null>;
+  stream(
+    key: string,
+    range?: { start: number; end: number },
+  ): Promise<{ stream: ReadStream; size: number } | null>;
   /** Size of the object, or null when there is none. */
   size(key: string): Promise<number | null>;
   /** Writes what arrives at the blob route. More bytes than were promised, and the file is dropped. */
@@ -79,7 +82,10 @@ export function createLocalStorage(options: LocalStorageOptions): LocalStorage {
       const path = pathOf(key);
       const info = path ? await stat(path).catch(() => null) : null;
       if (!path || !info?.isFile()) return null;
-      return { stream: createReadStream(path, range ? { start: range.start, end: range.end } : {}), size: info.size };
+      return {
+        stream: createReadStream(path, range ? { start: range.start, end: range.end } : {}),
+        size: info.size,
+      };
     },
     async size(key) {
       const path = pathOf(key);

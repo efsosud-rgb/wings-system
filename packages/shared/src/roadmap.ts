@@ -172,7 +172,12 @@ export interface RoadmapDeliverableChange {
 export const roadmapDeliverableUpdateSchema = z.object({
   status: z.enum(ROADMAP_DELIVERABLE_STATUSES).optional(),
   weight: z.enum(ROADMAP_WEIGHTS).optional(),
-  notes: z.string().trim().max(2000).optional().or(z.literal('').transform(() => undefined)),
+  notes: z
+    .string()
+    .trim()
+    .max(2000)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
   /** YYYY-MM-DD. Only meaningful when status is `pronto`. */
   completedAt: z
     .string()

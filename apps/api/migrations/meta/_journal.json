@@ -379,6 +379,13 @@
       "when": 1790799345281,
       "tag": "0053_landing_pages_and_import_batch",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1790800693601,
+      "tag": "0054_client_register_fields",
+      "breakpoints": true
     }
   ]
 }

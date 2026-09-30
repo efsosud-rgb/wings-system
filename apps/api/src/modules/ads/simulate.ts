@@ -8,11 +8,7 @@ import {
   adSets,
   budgetPeriods,
 } from '../../db/schema/index.js';
-import {
-  campaignExposure,
-  exposureOf,
-  remainingDays,
-} from './budget-guard.js';
+import { campaignExposure, exposureOf, remainingDays } from './budget-guard.js';
 
 /**
  * The scenario simulator behind the approval screen.

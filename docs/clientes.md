@@ -100,3 +100,18 @@ campos**, nunca valores: `client.created` (`withCnpj`, `withContact`),
 - editor de modelos, geração de contrato e COF pela IA do Jurídico;
 - instalação do Documenso, envio para assinatura e status;
 - revisão jurídica do que a COF exige e das regras de testemunhas e foro.
+
+## Cadastro novo (30/09/2026)
+
+"Novo cliente" (Formatação → Clientes) passou a exigir: **CNPJ** (Buscar preenche
+razão social, nome fantasia, CNAE, abertura e cidade/UF pela Receita via
+BrasilAPI; o que a Receita não disser fica para a pessoa), **contato principal**
+com e-mail e WhatsApp, **relação com a Wings** (`clients.relationship`:
+Formatação, Expansão ou ambos) e o **perfil de franquia** do plano do CRM
+(segmento, unidades, faixa de faturamento — "não informado" é resposta —,
+franqueabilidade e fit Wings — "não avaliado" é resposta —, fonte e data do
+dado; migração 0054 em `client_business`). O projeto de Formatação só abre
+quando a relação inclui Formatação. Cadastros antigos ficam como estão, com o
+selo **"Cadastro incompleto"** e a lista do que falta (`clientRegisterMissing`,
+`registerMissing` em `GET /clients`); completam-se pela ficha, e a relação
+pelo `PATCH /clients/:id`.

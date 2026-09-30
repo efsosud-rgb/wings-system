@@ -65,7 +65,9 @@ export const DRIVE_ROLE_DEPARTMENTS: Partial<Record<RoleKey, readonly DriveDepar
  * works from, so every Formatação area reads them; Processos e Projetos
  * writes them.
  */
-export const DRIVE_ROLE_READ_ONLY_DEPARTMENTS: Partial<Record<RoleKey, readonly DriveDepartment[]>> = {
+export const DRIVE_ROLE_READ_ONLY_DEPARTMENTS: Partial<
+  Record<RoleKey, readonly DriveDepartment[]>
+> = {
   marketing: ['imersao'],
   rh_dp: ['imersao'],
   formatacao_juridico: ['imersao'],
@@ -328,7 +330,11 @@ export interface DriveTemplateSeed {
   children?: DriveTemplateSeed[];
 }
 
-const plain = (name: string, department: DriveDepartment, children: DriveTemplateSeed[] = []): DriveTemplateSeed => ({
+const plain = (
+  name: string,
+  department: DriveDepartment,
+  children: DriveTemplateSeed[] = [],
+): DriveTemplateSeed => ({
   name,
   department,
   children,
@@ -341,30 +347,26 @@ const plain = (name: string, department: DriveDepartment, children: DriveTemplat
  * `08 Marketing/Mídia`.
  */
 export const DRIVE_CLIENT_TREE: DriveTemplateSeed[] = [
-  ...DRIVE_CLIENT_STAGES.map(
-    (stage): DriveTemplateSeed => ({
-      name: stage.name,
-      department: stage.department,
-      slot: stage.slot,
-      children:
-        stage.slot === '08'
-          ? [{ name: DRIVE_MEDIA_FOLDER, department: 'marketing', slot: 'midia' }]
-          : [],
-    }),
-  ),
+  ...DRIVE_CLIENT_STAGES.map((stage): DriveTemplateSeed => ({
+    name: stage.name,
+    department: stage.department,
+    slot: stage.slot,
+    children:
+      stage.slot === '08'
+        ? [{ name: DRIVE_MEDIA_FOLDER, department: 'marketing', slot: 'midia' }]
+        : [],
+  })),
   { name: 'Documentos Enviados', department: 'clientes', slot: 'enviados' },
   { name: 'Reuniões', department: 'clientes', slot: 'reunioes' },
   {
     name: 'Entrega',
     department: 'clientes',
     slot: 'entrega',
-    children: DRIVE_CLIENT_STAGES.map(
-      (stage): DriveTemplateSeed => ({
-        name: stage.name,
-        department: stage.department,
-        slot: `entrega_${stage.slot}`,
-      }),
-    ),
+    children: DRIVE_CLIENT_STAGES.map((stage): DriveTemplateSeed => ({
+      name: stage.name,
+      department: stage.department,
+      slot: `entrega_${stage.slot}`,
+    })),
   },
 ];
 

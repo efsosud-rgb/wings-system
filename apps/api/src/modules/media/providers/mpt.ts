@@ -64,7 +64,13 @@ export function mptProvider(config: MptConfig): MediaProvider {
     try {
       await http(
         config.fetch,
-        { method: 'GET', url: `${base}/ping`, headers: headers(), timeoutMs: 10_000, label: 'mpt.ping' },
+        {
+          method: 'GET',
+          url: `${base}/ping`,
+          headers: headers(),
+          timeoutMs: 10_000,
+          label: 'mpt.ping',
+        },
         config.noteShape,
       );
       return true;
@@ -174,7 +180,13 @@ export function mptProvider(config: MptConfig): MediaProvider {
         (item): item is string => typeof item === 'string' && item.length > 0,
       );
       if (state !== STATE_DONE || urls.length === 0) {
-        return { state: 'running', outputs: [], creditsCharged: null, brlCentsCharged: null, note: null };
+        return {
+          state: 'running',
+          outputs: [],
+          creditsCharged: null,
+          brlCentsCharged: null,
+          note: null,
+        };
       }
       // The file is fetched from the service itself: an address it gives is only
       // followed when it is its own, or a path under it.

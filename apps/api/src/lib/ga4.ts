@@ -129,7 +129,10 @@ export class Ga4Client {
         error?: { status?: string };
       };
       if (response.status === 403) {
-        throw new Ga4Error('forbidden', 'the consenting account cannot read this property, or the Data API is off');
+        throw new Ga4Error(
+          'forbidden',
+          'the consenting account cannot read this property, or the Data API is off',
+        );
       }
       if (!response.ok) {
         throw new Ga4Error(

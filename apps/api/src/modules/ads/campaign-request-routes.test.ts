@@ -711,14 +711,12 @@ describe('POST /ads/add-ads', () => {
         status: 'ACTIVE',
       })
       .returning({ id: adCampaigns.id });
-    await db
-      .insert(adSets)
-      .values({
-        campaignId: campaign!.id,
-        externalId: '120252260021860076',
-        name: 'conjunto',
-        status: 'ACTIVE',
-      });
+    await db.insert(adSets).values({
+      campaignId: campaign!.id,
+      externalId: '120252260021860076',
+      name: 'conjunto',
+      status: 'ACTIVE',
+    });
 
     const body = {
       campaignExternalId: '120252260012720076',

@@ -18,7 +18,12 @@ export const MEDIA_PROVIDER_LABEL: Record<MediaProviderId, string> = {
 };
 
 /** What a provider can do. A model belongs to one provider and does one of these. */
-export const MEDIA_CAPABILITIES = ['generate_image', 'generate_video', 'animate', 'upscale'] as const;
+export const MEDIA_CAPABILITIES = [
+  'generate_image',
+  'generate_video',
+  'animate',
+  'upscale',
+] as const;
 export type MediaCapability = (typeof MEDIA_CAPABILITIES)[number];
 
 /**

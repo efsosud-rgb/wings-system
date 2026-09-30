@@ -17,6 +17,7 @@ import { ForgotPasswordPage } from './pages/ForgotPasswordPage.js';
 import { IntegrationsPage } from './pages/IntegrationsPage.js';
 import { LandingRoute } from './pages/LandingRoute.js';
 import { LeadPage } from './pages/LeadPage.js';
+import { LandingPagesPage } from './pages/LandingPagesPage.js';
 import { LeadsPage } from './pages/LeadsPage.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { CampaignLeadsPage } from './pages/CampaignLeadsPage.js';
@@ -60,6 +61,7 @@ const SCREENS: Record<string, RouteObject[]> = {
     { index: true, element: <ClientsPage /> },
     { path: ':id', element: <ClientRecordPage /> },
   ],
+  '/crm-vendas/landing-pages': [{ index: true, element: <LandingPagesPage /> }],
   '/crm-vendas/funil': [
     { index: true, element: <LeadsPage /> },
     { path: ':id', element: <LeadPage /> },

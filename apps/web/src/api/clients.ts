@@ -2,6 +2,7 @@ import type {
   Client,
   ClientAddress,
   ClientCompany,
+  ClientCreateInput,
   ClientPartnerInput,
   ClientRecord,
 } from '@wings/shared';
@@ -21,11 +22,7 @@ export function useClients(enabled = true) {
 export function useCreateClient() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (input: {
-      name: string;
-      cnpj?: string | null;
-      contact?: { name: string; email?: string | null; whatsapp?: string | null } | null;
-    }) => api.post<{ client: Client }>('/clients', input),
+    mutationFn: (input: ClientCreateInput) => api.post<{ client: Client }>('/clients', input),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['clients'] }),
   });
 }
@@ -58,7 +55,8 @@ export function useClientRecord(id: string) {
   });
 }
 
-export type ClientRecordBlockPath = 'company' | 'contacts' | 'business' | 'contracts' | 'franchise' | 'signature';
+export type ClientRecordBlockPath =
+  'company' | 'contacts' | 'business' | 'contracts' | 'franchise' | 'signature';
 
 /** Saves one block; the answer is the whole record again, with its new %. */
 export function useSaveClientBlock<T>(id: string, block: ClientRecordBlockPath) {
@@ -75,7 +73,13 @@ export function useSaveClientBlock<T>(id: string, block: ClientRecordBlockPath) 
 export function useSavePartner(id: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ partnerId, payload }: { partnerId: string | null; payload: ClientPartnerInput }) =>
+    mutationFn: ({
+      partnerId,
+      payload,
+    }: {
+      partnerId: string | null;
+      payload: ClientPartnerInput;
+    }) =>
       partnerId
         ? api.put<ClientRecord>(`/clients/${id}/partners/${partnerId}`, payload)
         : api.post<ClientRecord>(`/clients/${id}/partners`, payload),
@@ -86,7 +90,8 @@ export function useSavePartner(id: string) {
 export function useDeletePartner(id: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (partnerId: string) => api.delete<ClientRecord>(`/clients/${id}/partners/${partnerId}`),
+    mutationFn: (partnerId: string) =>
+      api.delete<ClientRecord>(`/clients/${id}/partners/${partnerId}`),
     onSuccess: (record) => queryClient.setQueryData(['clients', id, 'record'], record),
   });
 }

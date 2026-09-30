@@ -119,7 +119,11 @@ beforeAll(async () => {
   // A client switched off later keeps its old folders, and gets no new tree.
   await db.update(clients).set({ active: false }).where(eq(clients.id, closed));
 
-  files.media = await putFile('/Formatação/Marketing/Clientes/03. Padaria Aurora/Mídia', 'arte.png', aurora);
+  files.media = await putFile(
+    '/Formatação/Marketing/Clientes/03. Padaria Aurora/Mídia',
+    'arte.png',
+    aurora,
+  );
   files.legal = await putFile('/Formatação/Jurídico/Clientes/03. Padaria Aurora', 'parecer.pdf');
   // A folder somebody made by hand, inside the old client folder.
   const [manual] = await db
@@ -137,8 +141,14 @@ beforeAll(async () => {
   files.nested = await putFile(manual.path, 'marcas.pdf');
   files.logistics = await putFile('/Formatação/Logística/Clientes/03. Padaria Aurora', 'rotas.pdf');
   files.document = await putFile('/Formatação/Clientes/03. Padaria Aurora/Documentos', 'cnpj.pdf');
-  files.contract = await putFile('/Formatação/Clientes/03. Padaria Aurora/Contrato', 'contrato.pdf');
-  files.proposal = await putFile('/Formatação/Clientes/03. Padaria Aurora/Propostas', 'proposta.pdf');
+  files.contract = await putFile(
+    '/Formatação/Clientes/03. Padaria Aurora/Contrato',
+    'contrato.pdf',
+  );
+  files.proposal = await putFile(
+    '/Formatação/Clientes/03. Padaria Aurora/Propostas',
+    'proposta.pdf',
+  );
   // Same name, landing in the same place (07 Comercial): nothing may be overwritten.
   files.proposalToo = await putFile('/Comercial/Clientes/03. Padaria Aurora', 'proposta.pdf');
   files.closed = await putFile('/Formatação/Jurídico/Clientes/04. Loja Fechada', 'distrato.pdf');
@@ -161,13 +171,19 @@ describe('moving the Drive to Clientes/<NN. Nome>', () => {
     expect(report.oldClientFolders).toBe(10);
     expect(report.moves).toHaveLength(8);
     expect(report.left).toEqual([
-      expect.objectContaining({ fileId: files.closed, reason: 'o cliente está inativo e não tem a pasta nova' }),
+      expect.objectContaining({
+        fileId: files.closed,
+        reason: 'o cliente está inativo e não tem a pasta nova',
+      }),
     ]);
 
     expect(await db.select().from(driveTemplateNodes)).toHaveLength(nodesBefore.length);
     expect(await db.select().from(driveFolders)).toHaveLength(foldersBefore.length);
     expect(await placeOf(files.legal as string)).toEqual(legalBefore);
-    const audits = await db.select().from(auditLog).where(eq(auditLog.action, 'drive.file_migrated'));
+    const audits = await db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, 'drive.file_migrated'));
     expect(audits).toHaveLength(0);
   });
 
@@ -178,11 +194,15 @@ describe('moving the Drive to Clientes/<NN. Nome>', () => {
       '/Formatação/Jurídico/Clientes/04. Loja Fechada',
     ]);
     const before = await db.select().from(driveFolders);
-    const error = await migrateClientFolders(db, { apply: true }).catch((caught: unknown) => caught);
+    const error = await migrateClientFolders(db, { apply: true }).catch(
+      (caught: unknown) => caught,
+    );
     expect(error).toBeInstanceOf(ClientFolderMigrationBlocked);
     expect((error as Error).message).toContain('/Formatação/Jurídico/Clientes/04. Loja Fechada');
     expect(await db.select().from(driveFolders)).toHaveLength(before.length);
-    expect((await placeOf(files.legal as string))?.path).toBe('/Formatação/Jurídico/Clientes/03. Padaria Aurora');
+    expect((await placeOf(files.legal as string))?.path).toBe(
+      '/Formatação/Jurídico/Clientes/03. Padaria Aurora',
+    );
   });
 
   it('applies: new tree, every file in its folder, nothing lost, the emptied old folders deleted', async () => {
@@ -193,7 +213,9 @@ describe('moving the Drive to Clientes/<NN. Nome>', () => {
     expect(report.blockedBy).toEqual([]);
     expect(report.moves).toHaveLength(9);
     const root = '/Clientes/03. Padaria Aurora';
-    expect(await placeOf(files.media as string)).toMatchObject({ path: `${root}/08 Marketing/Mídia` });
+    expect(await placeOf(files.media as string)).toMatchObject({
+      path: `${root}/08 Marketing/Mídia`,
+    });
     expect(await placeOf(files.legal as string)).toMatchObject({ path: `${root}/06 Jurídico` });
     // The sub-folder made by hand comes along.
     expect(await placeOf(files.nested as string)).toMatchObject({
@@ -203,11 +225,22 @@ describe('moving the Drive to Clientes/<NN. Nome>', () => {
     expect(await placeOf(files.logistics as string)).toMatchObject({
       path: `${root}/05 Operacional/Logística`,
     });
-    expect(await placeOf(files.document as string)).toMatchObject({ path: `${root}/Documentos Enviados` });
+    expect(await placeOf(files.document as string)).toMatchObject({
+      path: `${root}/Documentos Enviados`,
+    });
     expect(await placeOf(files.contract as string)).toMatchObject({ path: `${root}/06 Jurídico` });
-    const proposals = [await placeOf(files.proposal as string), await placeOf(files.proposalToo as string)];
-    expect(proposals.map((row) => row?.path)).toEqual([`${root}/07 Comercial`, `${root}/07 Comercial`]);
-    expect(proposals.map((row) => row?.name).sort()).toEqual(['proposta (migrado).pdf', 'proposta.pdf']);
+    const proposals = [
+      await placeOf(files.proposal as string),
+      await placeOf(files.proposalToo as string),
+    ];
+    expect(proposals.map((row) => row?.path)).toEqual([
+      `${root}/07 Comercial`,
+      `${root}/07 Comercial`,
+    ]);
+    expect(proposals.map((row) => row?.name).sort()).toEqual([
+      'proposta (migrado).pdf',
+      'proposta.pdf',
+    ]);
     expect(await placeOf(files.closed as string)).toMatchObject({
       path: '/Clientes/04. Loja Fechada/06 Jurídico',
     });
@@ -219,8 +252,15 @@ describe('moving the Drive to Clientes/<NN. Nome>', () => {
       .select()
       .from(driveFolders)
       .where(eq(driveFolders.path, `${root}/06 Jurídico/Pareceres 2026`));
-    expect(nestedFolder).toMatchObject({ department: 'juridico', clientId: aurora, origin: 'manual' });
-    const [legalRow] = await db.select().from(driveFiles).where(eq(driveFiles.id, files.legal as string));
+    expect(nestedFolder).toMatchObject({
+      department: 'juridico',
+      clientId: aurora,
+      origin: 'manual',
+    });
+    const [legalRow] = await db
+      .select()
+      .from(driveFiles)
+      .where(eq(driveFiles.id, files.legal as string));
     expect(legalRow?.clientId).toBe(aurora);
 
     // The model is the new one.
@@ -230,14 +270,22 @@ describe('moving the Drive to Clientes/<NN. Nome>', () => {
     ]);
     // The old layout is gone: every folder it made, and the hand-made one inside, now empty.
     const remaining = (await db.select().from(driveFolders)).map((folder) => folder.path);
-    expect(remaining.filter((path) => /\/Clientes/.test(path) && !path.startsWith('/Clientes'))).toEqual([]);
+    expect(
+      remaining.filter((path) => /\/Clientes/.test(path) && !path.startsWith('/Clientes')),
+    ).toEqual([]);
     // Every folder the old nodes made (27), plus the one made by hand inside.
     expect(report.oldFolders).toHaveLength(27);
     expect(report.foldersDeleted).toBe(28);
-    const deleted = await db.select().from(auditLog).where(eq(auditLog.action, 'drive.folder_deleted'));
+    const deleted = await db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, 'drive.folder_deleted'));
     expect(deleted).toHaveLength(report.foldersDeleted);
     // Every move is on the audit trail, by id.
-    const audits = await db.select().from(auditLog).where(eq(auditLog.action, 'drive.file_migrated'));
+    const audits = await db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, 'drive.file_migrated'));
     expect(audits).toHaveLength(9);
     expect(JSON.stringify(audits.map((row) => row.metadata))).not.toContain('.pdf');
     // The media library of the client is the new folder.
@@ -250,6 +298,11 @@ describe('moving the Drive to Clientes/<NN. Nome>', () => {
 
   it('runs again without doing anything', async () => {
     const report = await migrateClientFolders(db, { apply: true });
-    expect(report).toMatchObject({ templateChanged: false, oldClientFolders: 0, moves: [], foldersCreated: 0 });
+    expect(report).toMatchObject({
+      templateChanged: false,
+      oldClientFolders: 0,
+      moves: [],
+      foldersCreated: 0,
+    });
   });
 });

@@ -135,8 +135,12 @@ const isoDay = (value: unknown) => {
 };
 
 export function fromReceitaWsCnpj(body: Json): CnpjLookup {
-  const main = Array.isArray(body.atividade_principal) ? (body.atividade_principal as Json[])[0] : undefined;
-  const secondary = Array.isArray(body.atividades_secundarias) ? (body.atividades_secundarias as Json[]) : [];
+  const main = Array.isArray(body.atividade_principal)
+    ? (body.atividade_principal as Json[])[0]
+    : undefined;
+  const secondary = Array.isArray(body.atividades_secundarias)
+    ? (body.atividades_secundarias as Json[])
+    : [];
   const partners = Array.isArray(body.qsa) ? (body.qsa as Json[]) : [];
   const capital = Number.parseFloat(String(body.capital_social ?? ''));
   const cnae = (item: Json | undefined) => (item ? formatCnae(item.code, item.text) : null);

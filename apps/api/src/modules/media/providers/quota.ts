@@ -19,11 +19,7 @@ export function periodStarts(now: Date): { day: Date; month: Date; minute: Date 
 }
 
 /** Outputs a provider was asked for since `since`: the `quantity` of every `started` row. */
-export async function outputsStarted(
-  db: Database,
-  provider: string,
-  since: Date,
-): Promise<number> {
+export async function outputsStarted(db: Database, provider: string, since: Date): Promise<number> {
   const [row] = await db
     .select({
       total: sql<string>`coalesce(sum(coalesce((${mediaCreditLedger.params}->>'quantity')::int, 1)), 0)`,

@@ -19,7 +19,12 @@ function input(overrides: Partial<VerdictInput> = {}): VerdictInput {
     frequencyMilli: 1500,
     targetCplCents: 6000,
     accountMedianCtrMilli: 1200,
-    trend: { currentCplCents: 4800, previousCplCents: 6000, currentCtrMilli: 1500, previousCtrMilli: 1450 },
+    trend: {
+      currentCplCents: 4800,
+      previousCplCents: 6000,
+      currentCtrMilli: 1500,
+      previousCtrMilli: 1450,
+    },
     pacing: { last7SpendCents: 21_000, dailyBudgetCents: 3000 },
     ...overrides,
   };
@@ -40,7 +45,13 @@ describe('verdictOf', () => {
     const result = verdictOf(input());
     expect(result.verdict).toBe('positive');
     expect(result.primary).toBe('cpl');
-    expect(result.reasons.map((reason) => reason.state)).toEqual(['good', 'good', 'good', 'good', 'good']);
+    expect(result.reasons.map((reason) => reason.state)).toEqual([
+      'good',
+      'good',
+      'good',
+      'good',
+      'good',
+    ]);
     expect(result.reasons[0]?.text).toMatch(/R\$\s50,00 contra a meta de R\$\s60,00 \(-17%\)/);
   });
 
@@ -71,19 +82,35 @@ describe('verdictOf', () => {
   it('is attention on a primary within tolerance or on one bad secondary signal', () => {
     expect(verdictOf(input({ cplCents: 6500 })).verdict).toBe('attention');
     expect(verdictOf(input({ frequencyMilli: 3200 })).verdict).toBe('attention');
-    expect(verdictOf(input({ pacing: { last7SpendCents: 2000, dailyBudgetCents: 3000 } })).verdict).toBe('attention');
+    expect(
+      verdictOf(input({ pacing: { last7SpendCents: 2000, dailyBudgetCents: 3000 } })).verdict,
+    ).toBe('attention');
   });
 
   it('turns negative when two secondary signals are bad', () => {
     const result = verdictOf(
-      input({ frequencyMilli: 3200, trend: { currentCplCents: 7000, previousCplCents: 5000, currentCtrMilli: 1500, previousCtrMilli: 1450 } }),
+      input({
+        frequencyMilli: 3200,
+        trend: {
+          currentCplCents: 7000,
+          previousCplCents: 5000,
+          currentCtrMilli: 1500,
+          previousCtrMilli: 1450,
+        },
+      }),
     );
     expect(result.verdict).toBe('negative');
   });
 
   it('judges a traffic campaign by CTR and never by CPL', () => {
     const result = verdictOf(
-      input({ objectiveKind: 'traffic', targetCplCents: null, conversions: 0, cplCents: null, ctrMilli: 900 }),
+      input({
+        objectiveKind: 'traffic',
+        targetCplCents: null,
+        conversions: 0,
+        cplCents: null,
+        ctrMilli: 900,
+      }),
     );
     expect(result.primary).toBe('ctr');
     expect(result.verdict).toBe('negative');
@@ -92,7 +119,9 @@ describe('verdictOf', () => {
   });
 
   it('marks pacing unknown when the budget lives in the ad sets', () => {
-    const result = verdictOf(input({ pacing: { last7SpendCents: 21_000, dailyBudgetCents: null } }));
+    const result = verdictOf(
+      input({ pacing: { last7SpendCents: 21_000, dailyBudgetCents: null } }),
+    );
     expect(result.reasons[4]?.state).toBe('unknown');
     expect(result.verdict).toBe('positive');
   });

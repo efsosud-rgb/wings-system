@@ -65,6 +65,10 @@ function recordFor(canSeeSensitive: boolean): ClientRecord {
       inpiProcess: null,
       inpiClass: null,
       inpiStatus: null,
+      franchisability: null,
+      wingsFit: null,
+      profileSource: null,
+      profileDate: null,
     },
     contracts: [],
     franchise: {

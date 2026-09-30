@@ -1,19 +1,24 @@
 import {
   CLIENT_NAME_MAX,
   CLIENT_NUMBER_MAX,
+  CLIENT_RELATIONSHIPS,
+  CLIENT_RELATIONSHIP_LABELS,
+  FIT_LEVELS,
+  FIT_LEVEL_LABELS,
+  REVENUE_BANDS,
+  REVENUE_BAND_LABELS,
   LEAD_LINK_CHANNELS,
   LEAD_CHANNEL_LABELS,
-  LEAD_SOURCE_RULE_KINDS,
-  LEAD_PIPELINE_LABELS,
-  LEAD_SOURCE_RULE_KIND_LABELS,
   PROJECT_STATUS_LABELS,
   WINGS_CLIENT_ID,
   formatCnpj,
   formatExpansionEntry,
   isValidCnpj,
   type Client,
+  type ClientRelationship,
+  type FitLevel,
+  type RevenueBand,
   type LeadLinkChannel,
-  type LeadSourceRuleKind,
 } from '@wings/shared';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -21,14 +26,7 @@ import { hasPermission, useSession } from '../api/auth.js';
 import { ApiError } from '../api/client.js';
 import { useClients, useCnpjLookup, useCreateClient, useUpdateClient } from '../api/clients.js';
 import { useProjects } from '../api/projects.js';
-import {
-  useCreateSourceRule,
-  useCreateTrackingLink,
-  useDeleteSourceRule,
-  useSourceRules,
-  useTrackingLinks,
-  useUpdateExpansionArea,
-} from '../api/leads.js';
+import { useCreateTrackingLink, useTrackingLinks, useUpdateExpansionArea } from '../api/leads.js';
 import { ProjectStatusTag, StatusDialog, stageLabel } from '../components/projects/ProjectParts.js';
 import { Alert, Button, Field, Input, Select } from '../components/ui.js';
 import type { ClientProject } from '@wings/shared';
@@ -262,6 +260,20 @@ function ClientRow({
             <>
               {client.name}
               {fixed && <span className="tag">padrão</span>}
+              {client.relationship && (
+                <span className="cell-sub">
+                  {' '}
+                  · {CLIENT_RELATIONSHIP_LABELS[client.relationship]}
+                </span>
+              )}
+              {!fixed && (client.registerMissing?.length ?? 0) > 0 && (
+                <div className="cell-sub">
+                  <span className="tag" title={`Falta: ${client.registerMissing!.join(', ')}`}>
+                    Cadastro incompleto
+                  </span>{' '}
+                  Falta: {client.registerMissing!.join(', ')}.
+                </div>
+              )}
               {client.expansionArea.length > 0 && (
                 <div className="cell-sub">
                   Expansão: {client.expansionArea.map(formatExpansionEntry).join(', ')}
@@ -341,145 +353,62 @@ function ClientRow({
   );
 }
 
-function SourceRules({ clients }: { clients: Client[] }) {
-  const rules = useSourceRules();
-  const create = useCreateSourceRule();
-  const remove = useDeleteSourceRule();
-  const [kind, setKind] = useState<LeadSourceRuleKind>('landing_page');
-  const [pattern, setPattern] = useState('');
-  const [clientId, setClientId] = useState('');
-  const list = rules.data?.rules ?? [];
-
-  return (
-    <section className="block">
-      <h2>Origens de leads</h2>
-      <p className="muted">
-        De qual cliente é cada landing page ou formulário. Uma conversão sem regra vira lead mesmo
-        assim, marcado "sem regra" e arquivado na Wings Company até alguém cadastrar a regra aqui.
-      </p>
-      <form
-        className="filters"
-        onSubmit={(event) => {
-          event.preventDefault();
-          create.mutate({ kind, pattern, clientId }, { onSuccess: () => setPattern('') });
-        }}
-      >
-        <label className="field">
-          <span className="field-label">Tipo</span>
-          <select
-            className="control"
-            value={kind}
-            onChange={(event) => setKind(event.target.value as LeadSourceRuleKind)}
-          >
-            {LEAD_SOURCE_RULE_KINDS.map((item) => (
-              <option key={item} value={item}>
-                {LEAD_SOURCE_RULE_KIND_LABELS[item]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span className="field-label">Padrão</span>
-          <input
-            className="control"
-            value={pattern}
-            placeholder={
-              kind === 'landing_page' ? 'sushi-do-bairro ou lp.cliente.com.br' : 'id numérico'
-            }
-            onChange={(event) => {
-              setPattern(event.target.value);
-              create.reset();
-            }}
-          />
-        </label>
-        <label className="field">
-          <span className="field-label">Cliente</span>
-          <select
-            className="control"
-            value={clientId}
-            onChange={(event) => setClientId(event.target.value)}
-          >
-            <option value="">Escolha</option>
-            {clients
-              .filter((client) => client.active)
-              .map((client) => (
-                <option key={client.id} value={client.id}>
-                  {client.name}
-                </option>
-              ))}
-          </select>
-        </label>
-        <Button type="submit" disabled={create.isPending || pattern.trim().length < 2 || !clientId}>
-          Adicionar regra
-        </Button>
-      </form>
-      {create.error && (
-        <Alert kind="error">
-          {create.error instanceof ApiError
-            ? create.error.message
-            : 'Não foi possível salvar a regra.'}
-        </Alert>
-      )}
-      {rules.isError && <Alert kind="error">Não foi possível carregar as regras.</Alert>}
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Tipo</th>
-            <th>Padrão</th>
-            <th>Cliente</th>
-            <th>Funil</th>
-            <th>
-              <span className="sr-only">Ações</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {list.length === 0 && (
-            <tr>
-              <td colSpan={5} className="muted">
-                Nenhuma regra ainda.
-              </td>
-            </tr>
-          )}
-          {list.map((rule) => (
-            <tr key={rule.id}>
-              <td>{LEAD_SOURCE_RULE_KIND_LABELS[rule.kind].split(' (')[0]}</td>
-              <td className="mono">{rule.pattern}</td>
-              <td>
-                {rule.clientName ?? (rule.brand ? `${rule.brand} (marca sem cadastro)` : '—')}
-                {!rule.active && <span className="muted"> · inativa</span>}
-              </td>
-              <td>{rule.pipeline ? LEAD_PIPELINE_LABELS[rule.pipeline] : '—'}</td>
-              <td>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={remove.isPending}
-                  onClick={() => remove.mutate(rule.id)}
-                >
-                  Remover
-                </Button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
-  );
-}
-
 /** "Cadastro rápido": the name, and the CNPJ and main contact when already known. */
+const TODAY = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * "Novo cliente", the new register (Eric, 30/09): the CNPJ looks the company
+ * up in the Receita (BrasilAPI) and fills it; the main contact with e-mail
+ * and WhatsApp, the relationship with Wings and the franchise profile are
+ * required. Nothing is guessed: what the Receita does not say stays for a
+ * person to fill.
+ */
 function QuickCreate() {
   const create = useCreateClient();
   const lookup = useCnpjLookup();
-  const [name, setName] = useState('');
-  const [cnpj, setCnpj] = useState('');
-  const [contact, setContact] = useState({ name: '', email: '', whatsapp: '' });
-  const cnpjDigits = cnpj.replace(/[^0-9A-Za-z]/g, '').toUpperCase();
-  const cnpjOk = cnpjDigits === '' || isValidCnpj(cnpjDigits);
-  const reset = () => {
+  const empty = {
+    name: '',
+    cnpj: '',
+    legalName: '',
+    tradeName: '',
+    cnaeMain: '',
+    openedOn: '',
+    city: '',
+    state: '',
+    contactName: '',
+    email: '',
+    whatsapp: '',
+    relationship: '' as ClientRelationship | '',
+    segment: '',
+    ownUnits: '',
+    revenueBand: '' as RevenueBand | 'nao_informado' | '',
+    franchisability: '' as FitLevel | '',
+    wingsFit: '' as FitLevel | '',
+    profileSource: '',
+    profileDate: TODAY(),
+  };
+  const [form, setForm] = useState(empty);
+  const set = (key: keyof typeof empty) => (event: { target: { value: string } }) => {
+    setForm((current) => ({ ...current, [key]: event.target.value }));
     create.reset();
   };
+  const cnpjDigits = form.cnpj.replace(/[^0-9A-Za-z]/g, '').toUpperCase();
+  const cnpjOk = cnpjDigits.length === 14 && isValidCnpj(cnpjDigits);
+  const ready =
+    cnpjOk &&
+    form.name.trim().length >= 2 &&
+    form.legalName.trim().length >= 2 &&
+    form.contactName.trim().length >= 2 &&
+    form.email.trim() !== '' &&
+    form.whatsapp.trim() !== '' &&
+    form.relationship !== '' &&
+    form.segment.trim().length >= 2 &&
+    form.ownUnits !== '' &&
+    form.revenueBand !== '' &&
+    form.franchisability !== '' &&
+    form.wingsFit !== '' &&
+    form.profileSource.trim().length >= 2 &&
+    form.profileDate !== '';
 
   return (
     <section className="block clients-quick">
@@ -489,21 +418,32 @@ function QuickCreate() {
           event.preventDefault();
           create.mutate(
             {
-              name,
-              cnpj: cnpjDigits || null,
-              contact: contact.name.trim()
-                ? {
-                    name: contact.name,
-                    email: contact.email || null,
-                    whatsapp: contact.whatsapp || null,
-                  }
-                : null,
+              name: form.name,
+              cnpj: cnpjDigits,
+              company: {
+                legalName: form.legalName,
+                tradeName: form.tradeName || null,
+                cnaeMain: form.cnaeMain || null,
+                openedOn: form.openedOn || null,
+                city: form.city || null,
+                state: form.state || null,
+              },
+              contact: { name: form.contactName, email: form.email, whatsapp: form.whatsapp },
+              relationship: form.relationship as ClientRelationship,
+              business: {
+                segment: form.segment,
+                ownUnits: Number(form.ownUnits),
+                revenueBand:
+                  form.revenueBand === 'nao_informado' ? null : (form.revenueBand as RevenueBand),
+                franchisability: form.franchisability as FitLevel,
+                wingsFit: form.wingsFit as FitLevel,
+                profileSource: form.profileSource,
+                profileDate: form.profileDate,
+              },
             },
             {
               onSuccess: () => {
-                setName('');
-                setCnpj('');
-                setContact({ name: '', email: '', whatsapp: '' });
+                setForm({ ...empty, profileDate: TODAY() });
                 lookup.reset();
               },
             },
@@ -513,40 +453,53 @@ function QuickCreate() {
         <div className="grid-3">
           <Field
             label="CNPJ"
+            required
             hint={
               lookup.data
-                ? `Receita: ${lookup.data.registrationStatus ?? 'situação não informada'}`
-                : 'Opcional. Buscar preenche o nome.'
+                ? `Receita (${lookup.data.source}): ${lookup.data.registrationStatus ?? 'situação não informada'}`
+                : 'Buscar preenche os dados da Receita.'
             }
             error={
               lookup.error
                 ? lookup.error instanceof ApiError
                   ? lookup.error.message
                   : 'Não foi possível consultar o CNPJ.'
-                : cnpjOk
+                : cnpjDigits === '' || cnpjOk
                   ? undefined
                   : 'CNPJ inválido'
             }
           >
             <div className="input-row">
               <Input
-                value={cnpjDigits.length === 14 ? formatCnpj(cnpjDigits) : cnpj}
+                value={cnpjDigits.length === 14 ? formatCnpj(cnpjDigits) : form.cnpj}
                 placeholder="00.000.000/0000-00"
                 onChange={(event) => {
-                  setCnpj(event.target.value);
+                  set('cnpj')(event);
                   lookup.reset();
-                  reset();
                 }}
               />
               <Button
                 type="button"
                 variant="ghost"
-                disabled={cnpjDigits.length !== 14 || !cnpjOk || lookup.isPending}
+                disabled={!cnpjOk || lookup.isPending}
                 onClick={() =>
                   lookup.mutate(cnpjDigits, {
                     onSuccess: (found) => {
-                      const suggested = found.company.tradeName ?? found.company.legalName;
-                      if (suggested && !name.trim()) setName(suggested.slice(0, CLIENT_NAME_MAX));
+                      const company = found.company;
+                      const cnae = company.cnaeMain ?? '';
+                      setForm((current) => ({
+                        ...current,
+                        name:
+                          current.name ||
+                          (company.tradeName ?? company.legalName ?? '').slice(0, CLIENT_NAME_MAX),
+                        legalName: company.legalName ?? current.legalName,
+                        tradeName: company.tradeName ?? current.tradeName,
+                        cnaeMain: cnae || current.cnaeMain,
+                        openedOn: company.openedOn ?? current.openedOn,
+                        city: company.address?.city ?? current.city,
+                        state: company.address?.state ?? current.state,
+                        segment: current.segment || cnae.split(' - ').slice(1).join(' - '),
+                      }));
                     },
                   })
                 }
@@ -557,49 +510,113 @@ function QuickCreate() {
           </Field>
           <Field label="Nome do cliente" required>
             <Input
-              value={name}
+              value={form.name}
               maxLength={CLIENT_NAME_MAX}
               placeholder="Como a Wings chama o cliente"
-              onChange={(event) => {
-                setName(event.target.value);
-                reset();
-              }}
+              onChange={set('name')}
+            />
+          </Field>
+          <Field label="Relação com a Wings" required>
+            <Select value={form.relationship} onChange={set('relationship')}>
+              <option value="">Escolha</option>
+              {CLIENT_RELATIONSHIPS.map((item) => (
+                <option key={item} value={item}>
+                  {CLIENT_RELATIONSHIP_LABELS[item]}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+        <div className="grid-3">
+          <Field label="Razão social" required>
+            <Input value={form.legalName} onChange={set('legalName')} />
+          </Field>
+          <Field label="Nome fantasia">
+            <Input value={form.tradeName} onChange={set('tradeName')} />
+          </Field>
+          <Field label="CNAE principal">
+            <Input value={form.cnaeMain} onChange={set('cnaeMain')} />
+          </Field>
+          <Field label="Data de abertura">
+            <Input type="date" value={form.openedOn} onChange={set('openedOn')} />
+          </Field>
+          <Field label="Cidade">
+            <Input value={form.city} onChange={set('city')} />
+          </Field>
+          <Field label="UF">
+            <Input value={form.state} maxLength={2} onChange={set('state')} />
+          </Field>
+        </div>
+        <div className="grid-3">
+          <Field label="Contato principal" required>
+            <Input value={form.contactName} placeholder="Nome" onChange={set('contactName')} />
+          </Field>
+          <Field label="E-mail do contato" required>
+            <Input type="email" value={form.email} onChange={set('email')} />
+          </Field>
+          <Field label="WhatsApp do contato" required>
+            <Input
+              type="tel"
+              value={form.whatsapp}
+              placeholder="(11) 99999-9999"
+              onChange={set('whatsapp')}
             />
           </Field>
         </div>
         <div className="grid-3">
-          <Field label="Contato principal">
-            <Input
-              value={contact.name}
-              placeholder="Nome"
-              onChange={(event) => setContact({ ...contact, name: event.target.value })}
-            />
+          <Field label="Segmento" required>
+            <Input value={form.segment} onChange={set('segment')} />
           </Field>
-          <Field label="E-mail do contato">
-            <Input
-              type="email"
-              value={contact.email}
-              onChange={(event) => setContact({ ...contact, email: event.target.value })}
-            />
+          <Field label="Unidades" required>
+            <Input type="number" min={0} value={form.ownUnits} onChange={set('ownUnits')} />
           </Field>
-          <Field label="WhatsApp do contato">
-            <Input
-              type="tel"
-              value={contact.whatsapp}
-              placeholder="(11) 99999-9999"
-              onChange={(event) => setContact({ ...contact, whatsapp: event.target.value })}
-            />
+          <Field label="Faixa de faturamento" required>
+            <Select value={form.revenueBand} onChange={set('revenueBand')}>
+              <option value="">Escolha</option>
+              {REVENUE_BANDS.map((band) => (
+                <option key={band} value={band}>
+                  {REVENUE_BAND_LABELS[band]}
+                </option>
+              ))}
+              <option value="nao_informado">Não informado pelo cliente</option>
+            </Select>
+          </Field>
+          <Field label="Franqueabilidade" required>
+            <Select value={form.franchisability} onChange={set('franchisability')}>
+              <option value="">Escolha</option>
+              {FIT_LEVELS.map((level) => (
+                <option key={level} value={level}>
+                  {FIT_LEVEL_LABELS[level]}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Fit Wings" required>
+            <Select value={form.wingsFit} onChange={set('wingsFit')}>
+              <option value="">Escolha</option>
+              {FIT_LEVELS.map((level) => (
+                <option key={level} value={level}>
+                  {FIT_LEVEL_LABELS[level]}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field
+            label="Fonte do dado"
+            required
+            hint="De onde veio o perfil: reunião, site da marca, planilha do cliente…"
+          >
+            <Input value={form.profileSource} onChange={set('profileSource')} />
+          </Field>
+          <Field label="Data do dado" required>
+            <Input type="date" value={form.profileDate} onChange={set('profileDate')} />
           </Field>
         </div>
-        <Button
-          type="submit"
-          className="btn-inline"
-          disabled={create.isPending || name.trim().length < 2 || !cnpjOk}
-        >
+        <Button type="submit" className="btn-inline" disabled={create.isPending || !ready}>
           Cadastrar cliente
         </Button>
         <span className="field-hint clients-quick-hint">
-          O resto dos dados vai na ficha do cliente.
+          Sócios, contrato e franquia vão na ficha do cliente.
         </span>
       </form>
       {create.error && (
@@ -678,7 +695,6 @@ export function ClientsPage() {
         </table>
       </div>
 
-      {canManage && <SourceRules clients={list} />}
       {statusOf && <StatusDialog project={statusOf} onClose={() => setStatusOf(null)} />}
     </>
   );

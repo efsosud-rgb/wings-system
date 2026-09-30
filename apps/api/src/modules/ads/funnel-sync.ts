@@ -143,6 +143,8 @@ export function rdCrmGetter(
       } catch (error) {
         // A GET is safe to repeat: a timeout or a dropped connection waits and tries again.
         if (attempt === 7) {
+          // No `cause` on purpose: fetch's error may carry the URL, and RD's token is in its query string.
+          // eslint-disable-next-line preserve-caught-error
           throw new Error(
             `RD CRM ${path} unreachable (${error instanceof Error ? error.name : 'unknown'})`,
           );

@@ -84,7 +84,9 @@ export async function proposeTargets(
       )
       .groupBy(adMetricsDaily.entityExternalId),
   ]);
-  const platformOf = new Map(accounts.map((account) => [account.id, account.platform as 'meta' | 'google']));
+  const platformOf = new Map(
+    accounts.map((account) => [account.id, account.platform as 'meta' | 'google']),
+  );
   const kindOf = new Map(
     campaigns.map((campaign) => [
       campaign.externalId,
@@ -92,7 +94,10 @@ export async function proposeTargets(
     ]),
   );
 
-  const totals = { leads: { spend: 0, leads: 0, campaigns: 0 }, traffic: { spend: 0, clicks: 0, campaigns: 0 } };
+  const totals = {
+    leads: { spend: 0, leads: 0, campaigns: 0 },
+    traffic: { spend: 0, clicks: 0, campaigns: 0 },
+  };
   for (const row of sums) {
     const kind = kindOf.get(row.entity);
     const spend = Number(row.spendCents);
@@ -153,7 +158,10 @@ export async function dashboardTargets(db: Database, now = new Date()): Promise<
       objectiveKind: kind,
       targetCents: row?.targetCents ?? null,
       confirmedAt: row?.confirmedAt?.toISOString() ?? null,
-      confirmedByName: row?.targetCents !== null && row?.targetCents !== undefined ? (row.confirmedByName ?? null) : null,
+      confirmedByName:
+        row?.targetCents !== null && row?.targetCents !== undefined
+          ? (row.confirmedByName ?? null)
+          : null,
       proposedCents: proposal?.cents ?? null,
       proposedBasis: proposal?.basis ?? null,
     };
@@ -163,7 +171,12 @@ export async function dashboardTargets(db: Database, now = new Date()): Promise<
 /** A person confirmed (or cleared) a target. Null clears it. */
 export async function setTarget(
   db: Database,
-  input: { objectiveKind: 'leads' | 'traffic'; targetCents: number | null; employeeId: string; now?: Date },
+  input: {
+    objectiveKind: 'leads' | 'traffic';
+    targetCents: number | null;
+    employeeId: string;
+    now?: Date;
+  },
 ): Promise<void> {
   const now = input.now ?? new Date();
   const values = {
@@ -181,11 +194,15 @@ export async function setTarget(
 /** Confirmed leads targets by ad account id; accounts without one are absent. */
 export async function confirmedAccountTargets(db: Database): Promise<Map<string, number>> {
   const rows = await db
-    .select({ adAccountId: accountCplTargets.adAccountId, targetCents: accountCplTargets.targetCents })
+    .select({
+      adAccountId: accountCplTargets.adAccountId,
+      targetCents: accountCplTargets.targetCents,
+    })
     .from(accountCplTargets)
     .where(eq(accountCplTargets.objectiveKind, 'leads'));
   const targets = new Map<string, number>();
-  for (const row of rows) if (row.targetCents !== null) targets.set(row.adAccountId, row.targetCents);
+  for (const row of rows)
+    if (row.targetCents !== null) targets.set(row.adAccountId, row.targetCents);
   return targets;
 }
 

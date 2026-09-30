@@ -22,7 +22,12 @@ import { seed } from '../../db/seed.js';
 import { auditLog, driveFiles, driveFolders, driveTemplateNodes } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
-import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
+import {
+  clientRegister,
+  createEmployee,
+  TEST_CPF_KEY,
+  TEST_INDEX_KEY,
+} from '../../test/factories.js';
 
 /**
  * The Drive over the local backend in a temporary folder: no test reaches a
@@ -163,7 +168,7 @@ describe('the folder model', () => {
       method: 'POST',
       url: '/clients',
       cookies: marketing.cookies,
-      payload: { name: 'Padaria Aurora' },
+      payload: clientRegister('Padaria Aurora'),
     });
     const client = made.json<{ client: Client }>().client;
     expect(client.number).toBe(1);
@@ -211,7 +216,9 @@ describe('the folder model', () => {
       cookies: marketing.cookies,
       payload: { name: 'Aurora Pães' },
     });
-    expect((await paths()).every((path) => path.startsWith('/Clientes/01. Aurora Pães'))).toBe(true);
+    expect((await paths()).every((path) => path.startsWith('/Clientes/01. Aurora Pães'))).toBe(
+      true,
+    );
     expect(await paths()).toContain('/Clientes/01. Aurora Pães/Documentos Enviados/Alvarás');
 
     // The number is editable, and never repeated.
@@ -222,13 +229,15 @@ describe('the folder model', () => {
       payload: { number: 7 },
     });
     expect(renumbered.json<{ client: Client }>().client.number).toBe(7);
-    expect((await paths()).every((path) => path.startsWith('/Clientes/07. Aurora Pães'))).toBe(true);
+    expect((await paths()).every((path) => path.startsWith('/Clientes/07. Aurora Pães'))).toBe(
+      true,
+    );
     const next = (
       await app.inject({
         method: 'POST',
         url: '/clients',
         cookies: marketing.cookies,
-        payload: { name: 'Sushi do Bairro' },
+        payload: clientRegister('Sushi do Bairro'),
       })
     ).json<{ client: Client }>().client;
     expect(next.number).toBe(8);
@@ -340,10 +349,7 @@ describe('who sees what, decided by the server', () => {
     ['formatacao_processos_projetos', ['/Formatação/Processos', '/Formatação/Projetos']],
     ['formatacao_logistica', ['/Formatação/Logística']],
     ['formatacao_ti', ['/Formatação/TI']],
-    [
-      'rh_dp',
-      ['/Formatação/RH-DP', '/RH-DP', '/RH-DP/Contratos', '/RH-DP/Documentos'],
-    ],
+    ['rh_dp', ['/Formatação/RH-DP', '/RH-DP', '/RH-DP/Contratos', '/RH-DP/Documentos']],
     ['gerente_comercial', ['/Comercial', '/Comercial/Propostas Comerciais']],
     ['vendedor_expansao', ['/Comercial', '/Comercial/Propostas Comerciais']],
   ] as [RoleKey, string[]][])('%s works only in its own tree', async (role, expected) => {
@@ -393,14 +399,24 @@ describe('who sees what, decided by the server', () => {
         method: 'POST',
         url: '/clients',
         cookies: admin.cookies,
-        payload: { name: `Cliente de ${role}` },
+        payload: clientRegister(`Cliente de ${role}`),
       });
       const clientId = created.json<{ client: Client }>().client.id;
       const session = await sessionFor(role);
       const mine = (await tree(session)).filter((folder) => folder.clientId === clientId);
       const slotOf = (folder: DriveFolder) => folder.slot ?? 'client';
-      expect(mine.filter((folder) => folder.accessible).map(slotOf).sort()).toEqual([...reads].sort());
-      expect(mine.filter((folder) => folder.canWrite).map(slotOf).sort()).toEqual([...writes].sort());
+      expect(
+        mine
+          .filter((folder) => folder.accessible)
+          .map(slotOf)
+          .sort(),
+      ).toEqual([...reads].sort());
+      expect(
+        mine
+          .filter((folder) => folder.canWrite)
+          .map(slotOf)
+          .sort(),
+      ).toEqual([...writes].sort());
 
       // Read-only is enforced by the server, not only shown: an upload into 01 is refused.
       const imersao = mine.find((folder) => folder.slot === '01');
@@ -409,7 +425,12 @@ describe('who sees what, decided by the server', () => {
           method: 'POST',
           url: '/drive/uploads',
           cookies: session.cookies,
-          payload: { folderId: imersao.id, name: 'a.pdf', mimeType: 'application/pdf', byteSize: 3 },
+          payload: {
+            folderId: imersao.id,
+            name: 'a.pdf',
+            mimeType: 'application/pdf',
+            byteSize: 3,
+          },
         });
         expect(asked.statusCode).toBe(403);
       }

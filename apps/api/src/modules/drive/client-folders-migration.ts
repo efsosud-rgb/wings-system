@@ -139,7 +139,9 @@ async function migrate(tx: Tx): Promise<ClientFolderMigrationReport> {
   const nodes = await tx.select().from(driveTemplateNodes);
   const childrenOf = (id: string | null) => nodes.filter((node) => node.parentId === id);
   const isNewRoot = (node: NodeRow) =>
-    node.parentId === null && node.kind === 'clients' && childrenOf(node.id).some((child) => child.slot === '01');
+    node.parentId === null &&
+    node.kind === 'clients' &&
+    childrenOf(node.id).some((child) => child.slot === '01');
   const oldClientNodes = nodes.filter((node) => node.kind === 'clients' && !isNewRoot(node));
   const hasNewRoot = nodes.some(isNewRoot);
 
@@ -189,15 +191,23 @@ async function migrate(tx: Tx): Promise<ClientFolderMigrationReport> {
         node.parentId && oldNodeIds.has(node.parentId)
           ? 1 + depth(nodes.find((item) => item.id === node.parentId) as NodeRow)
           : 0;
-      const ordered = nodes.filter((node) => oldNodeIds.has(node.id)).sort((a, b) => depth(b) - depth(a));
+      const ordered = nodes
+        .filter((node) => oldNodeIds.has(node.id))
+        .sort((a, b) => depth(b) - depth(a));
       for (const node of ordered) {
         await tx.delete(driveTemplateNodes).where(eq(driveTemplateNodes.id, node.id));
       }
       report.nodesRemoved = ordered.length;
     }
     if (!hasNewRoot) {
-      const before = (await tx.select({ id: driveTemplateNodes.id }).from(driveTemplateNodes)).length;
-      await writeTemplateNodes(tx, [DRIVE_CLIENTS_ROOT], null, childrenOf(null).filter((n) => !oldNodeIds.has(n.id)).length);
+      const before = (await tx.select({ id: driveTemplateNodes.id }).from(driveTemplateNodes))
+        .length;
+      await writeTemplateNodes(
+        tx,
+        [DRIVE_CLIENTS_ROOT],
+        null,
+        childrenOf(null).filter((n) => !oldNodeIds.has(n.id)).length,
+      );
       report.nodesAdded =
         (await tx.select({ id: driveTemplateNodes.id }).from(driveTemplateNodes)).length - before;
     }
@@ -210,14 +220,22 @@ async function migrate(tx: Tx): Promise<ClientFolderMigrationReport> {
 
   const current = await tx.select().from(driveFolders).orderBy(asc(driveFolders.path));
   const slotFolder = (clientId: string, slot: DriveFolderSlot) =>
-    current.find((folder) => folder.clientId === clientId && folder.slot === slot && folder.origin === 'client_child');
+    current.find(
+      (folder) =>
+        folder.clientId === clientId && folder.slot === slot && folder.origin === 'client_child',
+    );
 
   const clientRows = await tx.execute<{ id: string; number: number | null; active: boolean }>(
     sql`select id, number, active from clients where id <> ${WINGS_CLIENT_ID} order by number nulls last`,
   );
   for (const client of clientRows.rows) {
     const folder = current.find((item) => item.clientId === client.id && item.origin === 'client');
-    report.clients.push({ id: client.id, number: client.number, folder: folder?.path ?? null, active: client.active });
+    report.clients.push({
+      id: client.id,
+      number: client.number,
+      folder: folder?.path ?? null,
+      active: client.active,
+    });
   }
 
   // --- 4: the files ----------------------------------------------------------------------
@@ -252,7 +270,15 @@ async function migrate(tx: Tx): Promise<ClientFolderMigrationReport> {
       (folder) => folder.id === plan.root.id || folder.path.startsWith(`${plan.root.path}/`),
     );
     const files = tree.length
-      ? await tx.select().from(driveFiles).where(inArray(driveFiles.folderId, tree.map((folder) => folder.id)))
+      ? await tx
+          .select()
+          .from(driveFiles)
+          .where(
+            inArray(
+              driveFiles.folderId,
+              tree.map((folder) => folder.id),
+            ),
+          )
       : [];
     for (const file of files) {
       const from = byId.get(file.folderId) as FolderRow;
@@ -285,7 +311,11 @@ async function migrate(tx: Tx): Promise<ClientFolderMigrationReport> {
       for (const name of rest) target = await subfolder(target, name);
 
       const targetDepartment = target.department;
-      if (targetDepartment !== plan.area && plan.area !== 'formatacao' && !notedAreas.has(plan.area)) {
+      if (
+        targetDepartment !== plan.area &&
+        plan.area !== 'formatacao' &&
+        !notedAreas.has(plan.area)
+      ) {
         notedAreas.add(plan.area);
         report.accessNotes.push(
           `Arquivos de clientes de ${DRIVE_DEPARTMENTS[plan.area as DriveDepartment] ?? plan.area} vão para ${target.path.split('/').slice(3).join('/') || target.name}, que é de ${DRIVE_DEPARTMENTS[targetDepartment as DriveDepartment] ?? targetDepartment}: quem é só de ${DRIVE_DEPARTMENTS[plan.area as DriveDepartment] ?? plan.area} deixa de vê-los.`,
@@ -299,13 +329,20 @@ async function migrate(tx: Tx): Promise<ClientFolderMigrationReport> {
           await tx
             .select({ id: driveFiles.id })
             .from(driveFiles)
-            .where(and(eq(driveFiles.folderId, target.id), eq(driveFiles.name, candidate), isNull(driveFiles.trashedAt)))
+            .where(
+              and(
+                eq(driveFiles.folderId, target.id),
+                eq(driveFiles.name, candidate),
+                isNull(driveFiles.trashedAt),
+              ),
+            )
             .limit(1)
         ).length > 0;
       if (!file.trashedAt) {
         for (let attempt = 1; await taken(name); attempt += 1) {
           const dot = file.name.lastIndexOf('.');
-          const [stem, extension] = dot > 0 ? [file.name.slice(0, dot), file.name.slice(dot)] : [file.name, ''];
+          const [stem, extension] =
+            dot > 0 ? [file.name.slice(0, dot), file.name.slice(dot)] : [file.name, ''];
           name = `${stem} (migrado${attempt > 1 ? ` ${attempt}` : ''})${extension}`;
         }
       }
@@ -348,15 +385,23 @@ async function migrate(tx: Tx): Promise<ClientFolderMigrationReport> {
     for (const root of oldRoots) for (const folder of under(root)) doomed.set(folder.id, folder);
     const ids = [...doomed.keys()];
     const holding = await tx.execute<{ folder_id: string }>(sql`
-      select folder_id from drive_files where folder_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+      select folder_id from drive_files where folder_id in (${sql.join(
+        ids.map((id) => sql`${id}`),
+        sql`, `,
+      )})
       union
-      select folder_id from drive_uploads where folder_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`);
+      select folder_id from drive_uploads where folder_id in (${sql.join(
+        ids.map((id) => sql`${id}`),
+        sql`, `,
+      )})`);
     const busy = new Set(holding.rows.map((row) => row.folder_id));
     const occupied = (folder: FolderRow) => under(folder).some((item) => busy.has(item.id));
     report.oldFolders = oldRoots
       .map((folder) => ({ path: folder.path, empty: !occupied(folder) }))
       .sort((a, b) => a.path.localeCompare(b.path));
-    report.blockedBy = report.oldFolders.filter((folder) => !folder.empty).map((folder) => folder.path);
+    report.blockedBy = report.oldFolders
+      .filter((folder) => !folder.empty)
+      .map((folder) => folder.path);
     if (report.blockedBy.length === 0) {
       // Deepest first, so a folder goes after everything inside it.
       const ordered = [...doomed.values()].sort((a, b) => b.path.length - a.path.length);
