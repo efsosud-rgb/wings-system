@@ -6,6 +6,7 @@ import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import { loadEnv } from '../../env.js';
 import { seed } from '../../db/seed.js';
+import { writeAudit } from '../../lib/audit.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 
@@ -230,5 +231,37 @@ describe('landing recovery', () => {
     });
     const dry = await settled(cookies);
     expect(dry.result).toMatchObject({ wouldCreate: 0, alreadyDecided: 2 });
+  });
+
+  it('shows progress while running, and "interrupted" when a restart cut a run short', async () => {
+    const cookies = await adminCookies();
+    const started = await app.inject({
+      method: 'POST',
+      url: '/expansion/landing-recovery',
+      cookies,
+      payload: { dryRun: true },
+    });
+    expect(started.json()).toMatchObject({ state: 'running', mode: 'dry', progress: null });
+    await settled(cookies);
+
+    // A run that began and never finished, seen by a process with an empty memory.
+    await writeAudit(db, {
+      actorEmployeeId: null,
+      action: 'expansion.recovery_dry_run',
+      entity: 'expansion_recovery',
+      entityId: 'cut-short',
+      metadata: { days: 30 },
+    });
+    const fresh = await buildApp({ env: app.wings.env, db, rdFetch });
+    try {
+      const state = await fresh.inject({
+        method: 'GET',
+        url: '/expansion/landing-recovery',
+        cookies,
+      });
+      expect(state.json()).toMatchObject({ state: 'interrupted', mode: 'dry' });
+    } finally {
+      await fresh.close();
+    }
   });
 });

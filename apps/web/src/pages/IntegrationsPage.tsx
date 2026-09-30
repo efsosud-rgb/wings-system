@@ -670,8 +670,19 @@ function RecoverySection() {
       )}
       {state?.state === 'running' && (
         <p className="muted">
-          Lendo o RD ({state.mode === 'dry' ? 'simulação' : 'criação'}). Leva alguns minutos.
+          Lendo o RD ({state.mode === 'dry' ? 'simulação' : 'criação'}).{' '}
+          {state.progress
+            ? `${state.progress.done} de ${state.progress.total} contatos lidos.`
+            : 'Listando os contatos com conversão.'}{' '}
+          Leva alguns minutos; não faça deploy enquanto isso.
         </p>
+      )}
+      {state?.state === 'interrupted' && (
+        <Alert kind="warning">
+          A {state.mode === 'dry' ? 'simulação' : 'criação'} iniciada em{' '}
+          {new Date(state.startedAt).toLocaleString('pt-BR')} foi interrompida (o servidor
+          reiniciou) e não terminou. Nada foi criado por ela. Simule de novo.
+        </Alert>
       )}
       {state?.state === 'failed' && <Alert kind="error">Falhou: {state.error}</Alert>}
       {state?.state === 'done' && (

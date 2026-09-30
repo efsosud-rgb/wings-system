@@ -183,6 +183,8 @@ export async function runExpansionIntake(input: {
    * given stage instead of the site form's "Sem contato".
    */
   recovery?: { only: string[]; formatacaoIdentifiers: string[]; formatacaoStage: string };
+  /** Called after each contact, so a long pass can show how far it is. */
+  onProgress?: (done: number, total: number) => void;
 }): Promise<IntakeResult> {
   const { marketing, crm, ledger, dryRun } = input;
   const brandOf = new Map(input.rules.map((rule) => [rule.identifier, rule.brand]));
@@ -206,7 +208,10 @@ export async function runExpansionIntake(input: {
   // Contacts that got a deal in this very run: a second conversion of theirs is covered.
   const handled = new Set<string>();
 
+  let done = 0;
   for (const uuid of uuids) {
+    input.onProgress?.(done, uuids.length);
+    done += 1;
     const conversions = (await marketing.conversionsOf(uuid, input.since)).sort(
       (a, b) => a.occurredAt.getTime() - b.occurredAt.getTime(),
     );

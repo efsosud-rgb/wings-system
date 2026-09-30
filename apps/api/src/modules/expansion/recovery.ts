@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { like } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+import { auditLog } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { runExpansionIntake, type IntakeResult } from './intake.js';
 import { RdCrm, RdMarketing } from './rd.js';
@@ -31,7 +33,15 @@ export const LIST_ONLY = ['fluentform_3'];
 const PLAN_TTL_MS = 2 * 3_600_000;
 
 type State =
-  | { state: 'running'; mode: 'dry' | 'real'; planId: string; startedAt: string; days: number }
+  | {
+      state: 'running';
+      mode: 'dry' | 'real';
+      planId: string;
+      startedAt: string;
+      days: number;
+      /** Contacts read so far, out of those with a conversion in the window. */
+      progress: { done: number; total: number } | null;
+    }
   | {
       state: 'done';
       mode: 'dry' | 'real';
@@ -40,7 +50,9 @@ type State =
       days: number;
       result: RecoverySummary;
     }
-  | { state: 'failed'; mode: 'dry' | 'real'; finishedAt: string; error: string };
+  | { state: 'failed'; mode: 'dry' | 'real'; finishedAt: string; error: string }
+  /** The API restarted (a deploy) while it was running: the run is gone and nothing was left half-done in memory. */
+  | { state: 'interrupted'; mode: 'dry' | 'real'; startedAt: string };
 
 export interface RecoverySummary {
   wouldCreate: number;
@@ -94,9 +106,25 @@ export const expansionRecoveryRoutes: FastifyPluginAsync = async (app) => {
   let lastDry: { planId: string; days: number; finishedAt: number; wouldCreate: number } | null =
     null;
 
-  app.get('/expansion/landing-recovery', guard, async (_request, reply) =>
-    reply.send(current ?? { state: 'idle' }),
-  );
+  app.get('/expansion/landing-recovery', guard, async (_request, reply) => {
+    if (current) return reply.send(current);
+    // After a restart the memory is empty: the audit trail says whether a run was cut short.
+    const last = await db.query.auditLog.findFirst({
+      where: like(auditLog.action, 'expansion.recovery%'),
+      orderBy: (table, { desc }) => [desc(table.at)],
+    });
+    if (
+      last &&
+      (last.action === 'expansion.recovery_dry_run' || last.action === 'expansion.recovery_run')
+    ) {
+      return reply.send({
+        state: 'interrupted',
+        mode: last.action === 'expansion.recovery_run' ? 'real' : 'dry',
+        startedAt: last.at.toISOString(),
+      });
+    }
+    return reply.send({ state: 'idle' });
+  });
 
   app.post('/expansion/landing-recovery', guard, async (request, reply) => {
     const parsed = body.safeParse(request.body);
@@ -141,9 +169,17 @@ export const expansionRecoveryRoutes: FastifyPluginAsync = async (app) => {
     if (!rules.some((rule) => rule.identifier === RECOVERY_EXPANSAO_PAGE)) {
       return reply.code(409).send({ error: 'calcadao_not_registered' });
     }
-    const mode = input.dryRun ? 'dry' : 'real';
+    const mode: 'dry' | 'real' = input.dryRun ? 'dry' : 'real';
     const startedAt = new Date().toISOString();
-    current = { state: 'running', mode, planId, startedAt, days };
+    const running = {
+      state: 'running' as const,
+      mode,
+      planId,
+      startedAt,
+      days,
+      progress: null as { done: number; total: number } | null,
+    };
+    current = running;
     await writeAudit(db, {
       actorEmployeeId: request.session.actor.employeeId,
       action: input.dryRun ? 'expansion.recovery_dry_run' : 'expansion.recovery_run',
@@ -181,6 +217,9 @@ export const expansionRecoveryRoutes: FastifyPluginAsync = async (app) => {
           since: new Date(Date.now() - days * 86_400_000),
           dryRun: input.dryRun,
           now: () => new Date(),
+          onProgress: (done, total) => {
+            running.progress = { done, total };
+          },
           recovery: {
             only: [...RECOVERY_FORMATACAO_FORMS, RECOVERY_EXPANSAO_PAGE, ...LIST_ONLY],
             formatacaoIdentifiers: RECOVERY_FORMATACAO_FORMS,
@@ -218,6 +257,13 @@ export const expansionRecoveryRoutes: FastifyPluginAsync = async (app) => {
           },
         }).catch(() => undefined);
       } catch (error) {
+        await writeAudit(db, {
+          actorEmployeeId: request.session.actor.employeeId,
+          action: 'expansion.recovery_failed',
+          entity: 'expansion_recovery',
+          entityId: planId,
+          metadata: { mode },
+        }).catch(() => undefined);
         current = {
           state: 'failed',
           mode,
