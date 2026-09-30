@@ -148,6 +148,36 @@ Checklist de migração (opção A):
 
 O que acontece com o histórico: na opção A, as conversas antigas **ficam só na exportação/backup** (não entram na API nem no CRM automaticamente); o CRM começa a partir da virada, e cada lead existente é ligado pelo telefone quando voltar a falar. Importar a exportação para a linha do tempo do lead é possível depois, como tarefa própria (arquivo de texto, dado pessoal, só com decisão do Jurídico). Na opção B, a coexistência pode trazer parte do histórico recente para a API — alcance e prazo a conferir na documentação da Meta no dia da decisão.
 
+### 3.3 Fase 2 — app da Meta e variáveis (registrado em 30/09)
+
+O Eric criou o app da Meta **"Wings CRM Vendas"** (portfólio BM "Wings Company
+01", empresa já verificada), caso de uso WhatsApp. É um app **separado** do
+"Wings Traffic Agent" (anúncios): a assinatura do webhook do WhatsApp é
+conferida com o segredo deste app, não com `META_APP_SECRET`.
+
+IDs (não são segredo):
+
+| O quê | Valor |
+| --- | --- |
+| App ID | `1579023596665415` |
+| WABA de **teste** | `2116475762622670` |
+| Phone Number ID de **teste** | `1253469287856067` (número de teste +1 555 669 6643) |
+
+Variáveis no Coolify (`wings-api-staging`), só pelos nomes:
+
+| Variável | Quem grava | Nota |
+| --- | --- | --- |
+| `WHATSAPP_APP_ID` | Opus/Sonnet (não é segredo) | `1579023596665415` |
+| `WHATSAPP_WABA_ID` | Opus/Sonnet (não é segredo) | WABA de teste até a virada do número (§3.2) |
+| `WHATSAPP_PHONE_NUMBER_ID` | Opus/Sonnet (não é segredo) | número de teste até a virada |
+| `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | gerado no servidor na Fase 2 (`openssl rand`), gravado com `wings-env set`, nunca impresso | o mesmo valor vai no campo "Verify token" do webhook no painel do app |
+| `WHATSAPP_APP_SECRET` | **Eric, direto no Coolify** | nunca impresso, nunca em log, nunca em resposta |
+| `WHATSAPP_ACCESS_TOKEN` | **Eric, direto no Coolify** | token permanente de usuário do sistema; nunca impresso, nunca ao navegador nem a modelo |
+
+Nada disso é usado na Fase 1 e nenhum deploy é feito só por causa dele. Na
+virada para o número oficial (+55 21 99947-0288), `WHATSAPP_WABA_ID` e
+`WHATSAPP_PHONE_NUMBER_ID` trocam para os de produção.
+
 Fora do plano (decisão explícita): app nativo iOS/Android, telefonia com
 central (PABX), substituir o RD Marketing (LPs, e-mail em massa), objetos
 personalizados genéricos, marketplace de integrações.
