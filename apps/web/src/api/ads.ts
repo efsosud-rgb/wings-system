@@ -11,6 +11,7 @@ import {
   type CampaignDraft,
   type ChangeSimulation,
   type CockpitSnapshot,
+  type SpendCapReset,
   type CreativeUpload,
   type MetaIdentities,
   type MetaIdentity,
@@ -169,6 +170,39 @@ export function useReconcileNow(accountId: string | undefined) {
       ),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['ads'] });
+    },
+  });
+}
+
+/**
+ * The platform's account figures, re-read when the builder opens and every
+ * few minutes while it stays open. The server skips the platform call when
+ * the account was read in the last two minutes, so this never piles up calls.
+ */
+export function usePlatformRefresh(accountId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ refreshed: boolean; reason?: string }>(
+        `/ads/accounts/${accountId ?? ''}/platform-refresh`,
+      ),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ads', 'cockpit'] });
+    },
+  });
+}
+
+/** The account's rule for when its spending limit starts over (`ads.budget_caps.manage`). */
+export function useSetSpendCapReset(accountId: string | undefined) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (reset: SpendCapReset | null) =>
+      api.put<{ ok: true; reset: SpendCapReset | null }>(
+        `/ads/accounts/${accountId ?? ''}/spend-cap-reset`,
+        { reset },
+      ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['ads', 'cockpit'] });
     },
   });
 }

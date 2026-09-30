@@ -33,6 +33,8 @@ export interface FakeMetaApiOptions {
   /** The account's spend_cap and amount_spent, both minor-unit strings — what `getAccount` reads. */
   spendCapCents?: string;
   amountSpentCents?: string;
+  /** The account's `balance` (what the next charge takes), a minor-unit string. */
+  balanceCents?: string;
   /** Ad sets that already exist on the account, as `listAdSets` reads them. */
   existingAdSets?: { id: string; campaign_id: string; name: string; status: string }[];
 }
@@ -71,6 +73,9 @@ export function fakeMetaApi(options: FakeMetaApiOptions = {}) {
     videoBytes: new Map<string, number>(),
     spendCapCents: options.spendCapCents ?? '400000',
     amountSpentCents: options.amountSpentCents ?? '0',
+    balanceCents: options.balanceCents,
+    /** When set, every read of the account itself answers this Graph error. */
+    accountError: undefined as { code: number; message: string } | undefined,
   };
   const sizes = new Map<string, number>();
   let nextId = 120_210_000_000_000;
@@ -135,6 +140,9 @@ export function fakeMetaApi(options: FakeMetaApiOptions = {}) {
     if (path === `${accountId}/campaigns`) return json(200, { data: state.campaigns });
     if (path === `${accountId}/adsets`) return json(200, { data: options.existingAdSets ?? [] });
     if (path === `${accountId}/insights`) return json(200, { data: [] });
+    if (path === accountId && state.accountError) {
+      return json(400, { error: { ...state.accountError, type: 'OAuthException' } });
+    }
     if (path === accountId && query.fields === 'funding_source_details') {
       return json(200, { id: accountId });
     }
@@ -144,6 +152,7 @@ export function fakeMetaApi(options: FakeMetaApiOptions = {}) {
         currency: 'BRL',
         spend_cap: state.spendCapCents,
         amount_spent: state.amountSpentCents,
+        ...(state.balanceCents === undefined ? {} : { balance: state.balanceCents }),
         account_status: 1,
       });
     }

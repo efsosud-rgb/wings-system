@@ -1,5 +1,6 @@
 import {
   budgetCapUpdateSchema,
+  SPEND_CAP_RESETS,
   type AdAccountBudgetCapView,
   type AlertItem,
   type CampaignPerformanceItem,
@@ -24,7 +25,8 @@ import { acknowledgeAlert, pacingFacts } from './alerts.js';
 import { getPeriodState, openPeriod } from './budget-guard.js';
 import { campaignPerformance } from './metrics.js';
 import { createPlatformClient } from './platform/factory.js';
-import { periodMonthOf, reconcileAccount } from './reconcile.js';
+import { activeBudgetsOf, platformReadingOf } from './platform-reading.js';
+import { periodMonthOf, reconcileAccount, refreshPlatformLimit } from './reconcile.js';
 
 /**
  * HTTP surface for the traffic cockpit.
@@ -58,7 +60,13 @@ function iso(value: Date | string | null): string | null {
 /** One account's cap view for the admin editing screen, current month. */
 async function budgetCapViewOf(
   db: import('../../db/client.js').Database,
-  account: { id: string; platform: 'meta' | 'google' | 'tiktok'; name: string; externalId: string; timezone: string },
+  account: {
+    id: string;
+    platform: 'meta' | 'google' | 'tiktok';
+    name: string;
+    externalId: string;
+    timezone: string;
+  },
   now: Date,
 ): Promise<AdAccountBudgetCapView> {
   const periodMonth = periodMonthOf(now, account.timezone);
@@ -86,6 +94,20 @@ async function budgetCapViewOf(
  */
 const MANUAL_RECONCILE_COOLDOWN_MS = 30_000;
 
+/**
+ * The read the campaign builder asks for when it opens: skipped when the
+ * platform was read (or tried) this recently, so opening the screen over and
+ * over costs one platform call per account per window, whoever opens it.
+ */
+const PLATFORM_REFRESH_MIN_AGE_MS = 2 * 60_000;
+
+const spendCapResetBodySchema = z.object({ reset: z.enum(SPEND_CAP_RESETS).nullable() });
+
+/** Today in the account's timezone, YYYY-MM-DD. */
+function todayIn(timezone: string, now: Date): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(now);
+}
+
 export const cockpitRoutes: FastifyPluginAsync = async (app) => {
   const { db, env, platformFetch } = app.wings;
   // In-flight guard only: two clicks a hairsbreadth apart, before either has
@@ -93,6 +115,7 @@ export const cockpitRoutes: FastifyPluginAsync = async (app) => {
   // cooldown check below is what actually survives a restart or a second
   // instance.
   const reconcilingNow = new Set<string>();
+  const refreshingNow = new Set<string>();
 
   app.get(
     '/ads/cockpit',
@@ -113,10 +136,7 @@ export const cockpitRoutes: FastifyPluginAsync = async (app) => {
       const account = accountId
         ? await db.query.adAccounts.findFirst({ where: eq(adAccounts.id, accountId) })
         : await db.query.adAccounts.findFirst({
-            where: and(
-              eq(adAccounts.platform, platform ?? 'meta'),
-              isNull(adAccounts.archivedAt),
-            ),
+            where: and(eq(adAccounts.platform, platform ?? 'meta'), isNull(adAccounts.archivedAt)),
             orderBy: asc(adAccounts.createdAt),
           });
 
@@ -232,6 +252,18 @@ export const cockpitRoutes: FastifyPluginAsync = async (app) => {
         )
         .then((result) => result.rows);
 
+      const today = todayIn(account.timezone, now);
+      const [periodRow, activeBudgets] = await Promise.all([
+        db.query.budgetPeriods.findFirst({
+          where: and(
+            eq(budgetPeriods.adAccountId, account.id),
+            eq(budgetPeriods.periodMonth, periodMonthOf(now, account.timezone)),
+          ),
+        }),
+        activeBudgetsOf(db, account.id, today),
+      ]);
+      const platformReading = platformReadingOf(periodRow ?? null, account, today, now);
+
       const pacing: PacingSummary | null = facts
         ? {
             periodMonth: facts.periodMonth,
@@ -250,6 +282,7 @@ export const cockpitRoutes: FastifyPluginAsync = async (app) => {
             platformLimitSyncedAtIso: facts.platformLimitSyncedAtIso,
             platformLimitNote: facts.platformLimitNote,
             lastReconciledAt: facts.lastReconciledAtIso,
+            platformReading,
           }
         : null;
 
@@ -315,6 +348,7 @@ export const cockpitRoutes: FastifyPluginAsync = async (app) => {
         metricsFetchedAt: iso(fetched?.fetchedAt ?? null),
         sinceDate,
         wingsTotal,
+        activeBudgets,
         counts: {
           ads: adRows.length,
           disapprovedAds: adRows.filter((ad) => ad.effectiveStatus === 'DISAPPROVED').length,
@@ -367,9 +401,7 @@ export const cockpitRoutes: FastifyPluginAsync = async (app) => {
         where: and(isNull(adAccounts.archivedAt), inArray(adAccounts.platform, ['meta', 'google'])),
         orderBy: asc(adAccounts.createdAt),
       });
-      const views = await Promise.all(
-        accounts.map((account) => budgetCapViewOf(db, account, now)),
-      );
+      const views = await Promise.all(accounts.map((account) => budgetCapViewOf(db, account, now)));
       return reply.send({ accounts: views });
     },
   );
@@ -500,6 +532,103 @@ export const cockpitRoutes: FastifyPluginAsync = async (app) => {
 
       const facts = await pacingFacts(db, accountId, now);
       return reply.send({ ok: true, lastReconciledAt: facts?.lastReconciledAtIso ?? null });
+    },
+  );
+  /**
+   * The platform's account figures, read when the campaign builder opens —
+   * one GET on the account, never a write, never `committed_cents`. Anyone
+   * who may see the builder may trigger it; the window above keeps it to one
+   * platform call per account per two minutes. A failed read is recorded, so
+   * the screen shows "—" and the reason rather than the old figure.
+   */
+  app.post(
+    '/ads/accounts/:accountId/platform-refresh',
+    { preHandler: app.requirePermission('ads.read') },
+    async (request, reply) => {
+      const params = accountIdParamSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.status(404).send({ error: 'not_found', message: 'Conta não encontrada.' });
+      }
+      const { accountId } = params.data;
+      const account = await db.query.adAccounts.findFirst({ where: eq(adAccounts.id, accountId) });
+      if (!account || account.archivedAt) {
+        return reply.status(404).send({ error: 'not_found', message: 'Conta não encontrada.' });
+      }
+
+      const now = app.wings.now?.() ?? new Date();
+      const period = await db.query.budgetPeriods.findFirst({
+        where: and(
+          eq(budgetPeriods.adAccountId, accountId),
+          eq(budgetPeriods.periodMonth, periodMonthOf(now, account.timezone)),
+        ),
+      });
+      if (!period) return reply.send({ refreshed: false, reason: 'no_period' });
+      const lastTry = period.platformReadAttemptedAt ?? period.platformLimitSyncedAt;
+      if (
+        refreshingNow.has(accountId) ||
+        (lastTry && now.getTime() - lastTry.getTime() < PLATFORM_REFRESH_MIN_AGE_MS)
+      ) {
+        return reply.send({ refreshed: false, reason: 'recent' });
+      }
+
+      const { client } = createPlatformClient(
+        { ...env, ADS_WRITES_ENABLED: false },
+        account,
+        platformFetch,
+      );
+      if (!client) return reply.send({ refreshed: false, reason: 'no_credentials' });
+
+      refreshingNow.add(accountId);
+      try {
+        await refreshPlatformLimit(db, client, accountId, now);
+      } catch {
+        // Recorded on the period by `refreshPlatformLimit`; the cockpit shows it.
+        return reply.send({ refreshed: false, reason: 'failed' });
+      } finally {
+        refreshingNow.delete(accountId);
+      }
+      return reply.send({ refreshed: true });
+    },
+  );
+
+  /**
+   * The account's rule for when its spending limit starts over. The platform
+   * API does not say (Meta prints it only on its billing screen), so a person
+   * who saw it records it here. Same hand as the internal monthly cap.
+   */
+  app.put(
+    '/ads/accounts/:accountId/spend-cap-reset',
+    { preHandler: app.requirePermission('ads.budget_caps.manage') },
+    async (request, reply) => {
+      const params = accountIdParamSchema.safeParse(request.params);
+      if (!params.success) {
+        return reply.status(404).send({ error: 'not_found', message: 'Conta não encontrada.' });
+      }
+      const body = spendCapResetBodySchema.safeParse(request.body);
+      if (!body.success) {
+        return reply.status(400).send({ error: 'invalid_request', message: 'Regra inválida.' });
+      }
+      const account = await db.query.adAccounts.findFirst({
+        where: eq(adAccounts.id, params.data.accountId),
+      });
+      if (!account) {
+        return reply.status(404).send({ error: 'not_found', message: 'Conta não encontrada.' });
+      }
+      const now = new Date();
+      await db
+        .update(adAccounts)
+        .set({ spendCapReset: body.data.reset, updatedAt: now })
+        .where(eq(adAccounts.id, account.id));
+      await writeAudit(db, {
+        actorEmployeeId: request.session.actor.employeeId,
+        action: 'ads.spend_cap_reset_set',
+        entity: 'ad_account',
+        entityId: account.id,
+        ip: request.ip,
+        userAgent: request.headers['user-agent'] ?? null,
+        metadata: { from: account.spendCapReset, to: body.data.reset },
+      });
+      return reply.send({ ok: true, reset: body.data.reset });
     },
   );
 };

@@ -104,6 +104,143 @@ export interface PacingSummary {
    * this month's period has never reconciled.
    */
   lastReconciledAt: string | null;
+  /** The platform's own account figures, each line with its reading time. */
+  platformReading: PlatformAccountReading;
+}
+
+/**
+ * The account as the platform itself last reported it. Every money figure is
+ * null unless `status` is `ok`: an old number is never shown as current.
+ */
+export interface PlatformAccountReading {
+  /**
+   * `ok` — read within `PLATFORM_READING_STALE_MINUTES`; `failed` — the last
+   * attempt failed (`reason` says why); `stale` — no successful read for too
+   * long (the scheduled task stopped); `never` — never read.
+   */
+  status: 'ok' | 'failed' | 'stale' | 'never';
+  /** Why there is no current figure, in words for the screen; null when `ok`. */
+  reason: string | null;
+  /** Last successful read. */
+  readAtIso: string | null;
+  /** Last attempt, successful or not. */
+  attemptedAtIso: string | null;
+  /** Account spending limit (Meta `spend_cap`); null when unset or unread. */
+  spendCapCents: number | null;
+  /** Spent against that limit (Meta `amount_spent`). */
+  amountSpentCents: number | null;
+  /** `spendCapCents − amountSpentCents`, never below zero. */
+  spendCapRemainingCents: number | null;
+  /** What the next charge takes (Meta `balance`); not money available. */
+  amountDueCents: number | null;
+  /** Prepaid money left, only where the platform states one. */
+  prepaidBalanceCents: number | null;
+  /** `credit_card`, `prepaid`, `invoice`, `unavailable`…; a code, never the card. */
+  fundingKind: string | null;
+  /** The account's rule for when the spending limit starts over; null when unknown. */
+  spendCapReset: SpendCapReset | null;
+  /** Next reset day (YYYY-MM-DD) under that rule; null when unknown. */
+  spendCapResetsOn: string | null;
+}
+
+/** Three missed 15-minute cycles: past this, a platform figure is not current. */
+export const PLATFORM_READING_STALE_MINUTES = 45;
+
+export const SPEND_CAP_RESETS = ['monthly'] as const;
+export type SpendCapReset = (typeof SPEND_CAP_RESETS)[number];
+
+/** A budget that keeps drawing on the account's spending limit, day by day. */
+export interface SpendStream {
+  dailyBudgetCents: number;
+  /** YYYY-MM-DD; null = already running. */
+  startDate: string | null;
+  /** YYYY-MM-DD, inclusive; null = runs until someone stops it. */
+  endDate: string | null;
+}
+
+/** An active campaign's budget as the cockpit knows it, for the projection. */
+export interface ActiveCampaignBudget extends SpendStream {
+  campaignExternalId: string;
+  name: string;
+}
+
+export interface SpendCapProjection {
+  /** Day the limit runs out; null when it holds to `horizonEnd`. */
+  pauseDate: string | null;
+  /** Last day projected. */
+  horizonEnd: string;
+  /** Spend projected from today until the pause (or the next reset / horizon). */
+  projectedCents: number;
+  /** What the limit still allowed at the start of that stretch. */
+  allowedCents: number;
+}
+
+const addDays = (day: string, days: number): string => {
+  const date = new Date(`${day}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+};
+
+/** First day of the month after `day`, YYYY-MM-DD. */
+export function firstOfNextMonth(day: string): string {
+  const date = new Date(`${day}T00:00:00Z`);
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1))
+    .toISOString()
+    .slice(0, 10);
+}
+
+/**
+ * When the platform will stop the whole account at its spending limit, if the
+ * budgets given keep running as planned. A plan, not a forecast of delivery:
+ * each day costs its full daily budget, today included (what is already spent
+ * today is in `remainingCents` too, so the date errs early — "por volta de").
+ *
+ * With a `monthly` reset the limit starts over on the 1st at `spendCapCents`;
+ * with none known, the remainder is all there is. Open-ended budgets are
+ * projected to the end of next month.
+ */
+export function projectSpendCapPause(input: {
+  today: string;
+  remainingCents: number;
+  spendCapCents: number;
+  reset: SpendCapReset | null;
+  streams: SpendStream[];
+}): SpendCapProjection {
+  const live = input.streams.filter(
+    (stream) =>
+      stream.dailyBudgetCents > 0 && (stream.endDate === null || stream.endDate >= input.today),
+  );
+  const openEnded = live.some((stream) => stream.endDate === null);
+  const lastEnd = live.reduce(
+    (latest, stream) => (stream.endDate && stream.endDate > latest ? stream.endDate : latest),
+    input.today,
+  );
+  const horizonEnd = openEnded
+    ? addDays(firstOfNextMonth(firstOfNextMonth(input.today)), -1)
+    : lastEnd;
+
+  let left = input.remainingCents;
+  let allowed = input.remainingCents;
+  let projected = 0;
+  for (let day = input.today; day <= horizonEnd; day = addDays(day, 1)) {
+    if (input.reset === 'monthly' && day !== input.today && day.endsWith('-01')) {
+      left = input.spendCapCents;
+      allowed = input.spendCapCents;
+      projected = 0;
+    }
+    const cost = live
+      .filter(
+        (stream) =>
+          (stream.startDate === null || stream.startDate <= day) &&
+          (stream.endDate === null || stream.endDate >= day),
+      )
+      .reduce((total, stream) => total + stream.dailyBudgetCents, 0);
+    projected += cost;
+    left -= cost;
+    if (left < 0)
+      return { pauseDate: day, horizonEnd, projectedCents: projected, allowedCents: allowed };
+  }
+  return { pauseDate: null, horizonEnd, projectedCents: projected, allowedCents: allowed };
 }
 
 export interface CockpitAccount {
@@ -122,6 +259,11 @@ export interface CockpitSnapshot {
   metricsFetchedAt: string | null;
   /** Window the performance figures cover. */
   sinceDate: string;
+  /**
+   * Budgets in force now (ACTIVE campaigns: a CBO campaign's own budget, or an
+   * ABO campaign's active ad sets), for the spending-limit projection.
+   */
+  activeBudgets: ActiveCampaignBudget[];
   counts: {
     ads: number;
     disapprovedAds: number;

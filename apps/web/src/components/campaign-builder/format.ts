@@ -42,6 +42,27 @@ export function formatDate(date: string): string {
   return year && month && day ? `${day}/${month}/${year}` : '—';
 }
 
+/** "30/09" from YYYY-MM-DD. */
+export function formatDayMonth(date: string): string {
+  const [, month, day] = date.split('-');
+  return month && day ? `${day}/${month}` : '—';
+}
+
+/** "30/09 13:34" (São Paulo) from an ISO instant; "—" when null. */
+export function formatDateTime(iso: string | null): string {
+  if (!iso) return '—';
+  const parts = new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(iso));
+  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? '';
+  return `${part('day')}/${part('month')} ${part('hour')}:${part('minute')}`;
+}
+
 /** "atualizado há 3 min" from an ISO instant; "nunca sincronizado" when null. */
 export function agoLabel(iso: string | null): string {
   if (!iso) return 'nunca sincronizado';

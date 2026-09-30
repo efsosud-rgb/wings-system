@@ -16,7 +16,12 @@ import {
   engageKillSwitch,
   remainingDays,
 } from './budget-guard.js';
-import { effectiveHeadroomCents, limitFrom, prepaidLimitFrom } from './platform/limits.js';
+import {
+  effectiveHeadroomCents,
+  limitFrom,
+  prepaidLimitFrom,
+  type PlatformSpendLimit,
+} from './platform/limits.js';
 import type { AdsPlatformClient } from './platform/types.js';
 
 /**
@@ -193,6 +198,110 @@ function budgetLevelOf(
 }
 
 /**
+ * What the platform itself allows, read from its own API rather than assumed,
+ * and written down with the figures behind it. Meta reports spend_cap and
+ * amount_spent on the account; a prepaid Google account reports the same
+ * shape through its account budget. On a prepaid account (Google always,
+ * Meta sometimes) the balance itself IS the headroom — spend_cap minus
+ * amount_spent is a proxy that agrees with it only when the cap was never
+ * touched mid-month.
+ */
+async function readAndApplyPlatformLimit(
+  db: Database,
+  client: AdsPlatformClient,
+  adAccountId: string,
+  periodMonth: string,
+  now: Date,
+) {
+  const platformAccount = await client.getAccount();
+  const platformLimit =
+    platformAccount.fundingKind === 'prepaid'
+      ? prepaidLimitFrom(
+          platformAccount.prepaidBalanceCents ?? null,
+          platformAccount.amountSpentCents,
+          client.spendLimitSource ?? `${client.platform}.prepaid_balance`,
+        )
+      : limitFrom(
+          platformAccount.spendCapCents,
+          platformAccount.amountSpentCents,
+          client.spendLimitSource ?? `${client.platform}.spend_cap`,
+        );
+  // The human reason a field came back empty, when the platform gave one —
+  // the "motivo" the cockpit shows next to a figure it cannot compute.
+  const platformLimitNote = platformAccount.warnings?.[0] ?? null;
+  const limitResult = await applyPlatformLimit(db, {
+    adAccountId,
+    periodMonth,
+    limit: platformLimit,
+    note: platformLimitNote,
+    figures: {
+      spendCapCents: platformAccount.spendCapCents,
+      amountSpentCents: platformAccount.amountSpentCents,
+      amountDueCents: platformAccount.amountDueCents ?? null,
+      prepaidBalanceCents: platformAccount.prepaidBalanceCents ?? null,
+      fundingKind: platformAccount.fundingKind ?? null,
+    },
+    now,
+  });
+  return { platformLimit, limitResult };
+}
+
+/**
+ * The platform's account figures alone — one read, no campaigns, no spend,
+ * and never `committed_cents` (which only `reconcileAccount` and
+ * `reserveChange` own). What the campaign builder asks for when it opens, so
+ * the balance on screen is minutes old rather than up to a cycle old. It does
+ * not move `last_reconciled_at`: the dead-man switch still answers only to a
+ * full reconciliation.
+ */
+export async function refreshPlatformLimit(
+  db: Database,
+  client: AdsPlatformClient,
+  adAccountId: string,
+  now = new Date(),
+): Promise<void> {
+  const account = await db.query.adAccounts.findFirst({ where: eq(adAccounts.id, adAccountId) });
+  if (!account) throw new Error('ad account not found');
+  assertClientServesAccount(client, account.externalId);
+  const periodMonth = periodMonthOf(now, account.timezone);
+  const period = await db.query.budgetPeriods.findFirst({
+    where: and(
+      eq(budgetPeriods.adAccountId, adAccountId),
+      eq(budgetPeriods.periodMonth, periodMonth),
+    ),
+  });
+  if (!period) throw new Error(`no budget period open for ${periodMonth}`);
+  try {
+    await readAndApplyPlatformLimit(db, client, adAccountId, periodMonth, now);
+  } catch (error) {
+    await recordPlatformReadFailure(db, { periodId: period.id, error, now });
+    throw error;
+  }
+}
+
+/** Ids and codes only — platform and database errors carry no personal data. */
+function describeReadError(error: unknown): string {
+  const text = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  const code = (error as { code?: unknown } | null)?.code;
+  const suffix = typeof code === 'number' || typeof code === 'string' ? ` (#${code})` : '';
+  return `${text.slice(0, 280)}${suffix}`;
+}
+
+async function recordPlatformReadFailure(
+  db: Database,
+  input: { periodId: string; error: unknown; now: Date },
+): Promise<void> {
+  await db
+    .update(budgetPeriods)
+    .set({
+      platformReadAttemptedAt: input.now,
+      platformReadError: describeReadError(input.error),
+      updatedAt: input.now,
+    })
+    .where(eq(budgetPeriods.id, input.periodId));
+}
+
+/**
  * Pulls reported spend, records it append-only, and re-derives the period
  * totals from what is actually on the platform.
  */
@@ -215,37 +324,25 @@ export async function reconcileAccount(
   });
   if (!period) throw new Error(`no budget period open for ${periodMonth}`);
 
-  const synced = await syncCampaigns(db, client, adAccountId, now);
-
-  // What the platform itself allows, read from its own API rather than assumed.
-  // Meta reports spend_cap and amount_spent on the account; a prepaid Google
-  // account reports the same shape through its account budget. On a prepaid
-  // account (Google always, Meta sometimes) the balance itself IS the
-  // headroom — spend_cap minus amount_spent is a proxy that agrees with it
-  // only when the cap was never touched mid-month.
-  const platformAccount = await client.getAccount();
-  const platformLimit =
-    platformAccount.fundingKind === 'prepaid'
-      ? prepaidLimitFrom(
-          platformAccount.prepaidBalanceCents ?? null,
-          platformAccount.amountSpentCents,
-          client.spendLimitSource ?? `${client.platform}.prepaid_balance`,
-        )
-      : limitFrom(
-          platformAccount.spendCapCents,
-          platformAccount.amountSpentCents,
-          client.spendLimitSource ?? `${client.platform}.spend_cap`,
-        );
-  // The human reason a field came back empty, when the platform gave one —
-  // the "motivo" the cockpit shows next to a figure it cannot compute.
-  const platformLimitNote = platformAccount.warnings?.[0] ?? null;
-  const limitResult = await applyPlatformLimit(db, {
-    adAccountId,
-    periodMonth,
-    limit: platformLimit,
-    note: platformLimitNote,
-    now,
-  });
+  // A failure here, before the platform's own figures are in, is recorded on
+  // the period: the screens then show "—" and the reason instead of the last
+  // number as if it were current.
+  let synced: { campaigns: number; adSets: number };
+  let platformLimit: PlatformSpendLimit;
+  let limitResult: Awaited<ReturnType<typeof applyPlatformLimit>>;
+  try {
+    synced = await syncCampaigns(db, client, adAccountId, now);
+    ({ platformLimit, limitResult } = await readAndApplyPlatformLimit(
+      db,
+      client,
+      adAccountId,
+      periodMonth,
+      now,
+    ));
+  } catch (error) {
+    await recordPlatformReadFailure(db, { periodId: period.id, error, now });
+    throw error;
+  }
 
   const spendRows = await client.getSpend(periodMonth);
 

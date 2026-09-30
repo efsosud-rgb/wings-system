@@ -117,3 +117,57 @@ Todo número lido da plataforma agora tem um rótulo de idade ao lado
 - **Não verificado em staging**: a segunda tarefa agendada ainda não existe no
   Coolify (passo manual acima), `ADS_RECONCILE_CRON` ainda não está definida,
   e o botão "Atualizar agora" ainda não foi clicado contra a Meta real.
+
+## Saldo, limite de gastos e próxima cobrança da Meta (2026-09-30)
+
+Problema: o construtor (bloco 11) mostrava "Saldo/crédito informado pela
+plataforma" R$ 991,79 e não mudava depois de o Eric pôr crédito na Meta. A
+rotina estava rodando (a cada 15 min, sem erro); o número era outro:
+`spend_cap − amount_spent`, o **limite de gastos da conta**, não saldo.
+
+Leitura só-GET da conta `act_694058302567457` em 30/09 16:34 UTC:
+
+| Campo da Graph API       | Valor                    | O que é                                                   |
+| ------------------------ | ------------------------ | --------------------------------------------------------- |
+| `spend_cap`              | 250000 (R$ 2.500,00)     | limite de gastos; a Meta para de entregar ao atingi-lo     |
+| `amount_spent`           | 152084 (R$ 1.520,84)     | gasto contado contra o limite                             |
+| `balance`                | 6008 (R$ 60,08)          | gasto ainda não cobrado: o que a próxima cobrança leva    |
+| `is_prepay_account`      | false                    |                                                           |
+| `funding_source_details` | type 1, "Mastercard …"   | cartão; nenhum campo traz saldo pré-pago                  |
+
+O "Saldo total R$ 1.552,67" da tela de cobrança da Meta **não existe na API**
+para esta conta. A diferença entre ele e "R$ 1.497,99 disponível após seu
+próximo pagamento" (R$ 54,68) é o `balance` daquele momento.
+
+O que mudou:
+
+- O cliente Meta lê também `balance`. Cada leitura grava em
+  `ad_budget_periods` o limite, o gasto, a próxima cobrança, o saldo
+  pré-pago (quando a plataforma diz) e o tipo de pagamento
+  (migração **0050**).
+- Toda tentativa grava `platform_read_attempted_at`; uma falha grava
+  `platform_read_error`. Falha, ou nenhuma leitura boa há mais de 45 min
+  (três ciclos), e a tela mostra **"—" e o motivo** em cada linha e no "Teto
+  real" — nunca o número antigo.
+- O construtor pede uma leitura ao abrir e a cada 5 min enquanto aberto
+  (`POST /ads/accounts/:id/platform-refresh`, `ads.read`): um GET na conta,
+  sem campanhas, sem gasto, sem tocar `committed_cents` nem
+  `last_reconciled_at`. O servidor pula a chamada se a conta foi lida (ou
+  tentada) nos últimos 2 min. A tarefa de 15 min continua sendo a cadência de
+  fundo.
+- Bloco 11: "Limite de gastos da conta na Meta" (resta X de Y), "Próxima
+  cobrança da Meta" e "Saldo pré-pago na Meta" ("—": a API não informa para
+  conta paga por cartão), cada linha com "lido em DD/MM HH:MM".
+- Alerta vermelho "A Meta vai pausar a conta por volta de DD/MM, aumente o
+  limite de gastos" quando as campanhas ativas + a nova passam do limite
+  antes do fim (`projectSpendCapPause`, `@wings/shared`). Cada dia custa a
+  verba diária cheia, hoje incluído, por isso a data erra para cedo.
+- **Redefinição do limite**: a Meta mostra "A redefinição ocorre no primeiro
+  dia de cada mês" só na tela de cobrança; a API não diz. É uma regra da
+  conta (`ad_accounts.spend_cap_reset`: `monthly` ou vazio), que quem tem
+  `ads.budget_caps.manage` muda no próprio bloco
+  (`PUT /ads/accounts/:id/spend-cap-reset`, auditado). A migração 0050 marca
+  `monthly` só para `act_694058302567457`, pelo que o Eric viu em 30/09. Com
+  `monthly`, a previsão vai até o fim do mês com o que resta e, no dia 1º,
+  volta ao limite cheio; a tela diz "limite volta a R$ 2.500,00 em 01/MM".
+  Sem regra, o que resta é tudo.
