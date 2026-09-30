@@ -41,7 +41,7 @@ export interface FormatacaoPass {
   dryRun: boolean;
   /** Counting only because a deal without a contact is unresolved (see `isHalted`). */
   halted: boolean;
-  repair?: { checked: number; orphans: number; linked: number };
+  repair?: Awaited<ReturnType<typeof repairOrphans>>;
   stageFound: boolean;
   result: IntakeResult | null;
 }
@@ -69,7 +69,13 @@ async function repairOrphans(
   crm: RdCrm,
   marketing: RdMarketing,
   now: Date,
-): Promise<{ checked: number; orphans: number; linked: number }> {
+): Promise<{
+  checked: number;
+  orphans: number;
+  linked: number;
+  /** Each deal this net made lately, as RD reads it back: deal id, has a contact, has a source. */
+  verified: { dealId: string; contact: boolean; source: boolean }[];
+}> {
   const rows = await db
     .select({ key: expansionIntakeLedger.conversionKey, dealId: expansionIntakeLedger.rdDealId })
     .from(expansionIntakeLedger)
@@ -86,9 +92,11 @@ async function repairOrphans(
   let orphans = 0;
   let linked = 0;
   let withContact = 0;
+  const verified: { dealId: string; contact: boolean; source: boolean }[] = [];
   for (const row of rows) {
     const dealId = row.dealId as string;
     const back = await crm.checkDeal(dealId).catch(() => null);
+    if (back) verified.push({ dealId, contact: back.hasContact, source: back.hasSource });
     if (back?.hasContact) withContact += 1;
     if (!back || back.hasContact) continue;
     orphans += 1;
@@ -131,7 +139,7 @@ async function repairOrphans(
       metadata: { via: 'readback', dealsWithContact: withContact },
     });
   }
-  return { checked: rows.length, orphans, linked };
+  return { checked: rows.length, orphans, linked, verified };
 }
 
 export async function runFormatacaoOnce(
