@@ -56,7 +56,7 @@ const SCREENS: Record<string, RouteObject[]> = {
     { index: true, element: <RoadmapPage /> },
     { path: 'relatorios/:id', element: <RoadmapPage /> },
   ],
-  '/administracao/clientes': [
+  '/formatacao/clientes': [
     { index: true, element: <ClientsPage /> },
     { path: ':id', element: <ClientRecordPage /> },
   ],

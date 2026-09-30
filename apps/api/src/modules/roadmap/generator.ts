@@ -28,7 +28,7 @@ const API_MODULE_SUBMODULE: Record<string, string> = {
   employees: '/administracao/usuarios',
   ads: '/marketing/trafego-pago-wings',
   agent: '/marketing/trafego-pago-wings',
-  clients: '/administracao/clientes',
+  clients: '/formatacao/clientes',
   drive: '/administracao/drive',
   leads: '/crm-vendas/funil',
   media: '/marketing/edicao',
@@ -45,7 +45,7 @@ const API_MODULE_SUBMODULE: Record<string, string> = {
 const WEB_PAGE_SUBMODULE: Record<string, string> = {
   EmployeesPage: '/administracao/usuarios',
   EmployeeFormPage: '/administracao/usuarios',
-  ClientsPage: '/administracao/clientes',
+  ClientsPage: '/formatacao/clientes',
   LeadsPage: '/crm-vendas/funil',
   LeadPage: '/crm-vendas/funil',
   DriveTemplatePage: '/administracao/drive',

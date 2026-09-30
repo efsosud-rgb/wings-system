@@ -91,7 +91,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-describe('Administração → Clientes', () => {
+describe('Formatação → Clientes', () => {
   it('lists Wings Company as the fixed default, with nothing to click on its row', async () => {
     renderPage();
     const wings = (await screen.findByRole('cell', { name: /Wings Company/ })).closest('tr') as HTMLElement;
@@ -161,7 +161,7 @@ describe('Administração → Clientes', () => {
     const aurora = (await screen.findByRole('cell', { name: 'Padaria Aurora' })).closest('tr') as HTMLElement;
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Cadastrar cliente' })).toBeNull());
     expect(within(aurora).getByRole('link', { name: 'Ficha' }).getAttribute('href')).toBe(
-      `/administracao/clientes/${AURORA.id}`,
+      `/formatacao/clientes/${AURORA.id}`,
     );
     expect(within(aurora).queryByRole('button', { name: 'Editar' })).toBeNull();
     expect(screen.queryByText('Origens de leads')).toBeNull();

@@ -11,7 +11,7 @@ import { api } from './client.js';
 
 /**
  * Gestão → Projetos: the one `/projects` API. The board, the tag on a client's
- * Drive folder and Administração → Clientes all read from here, so a change in
+ * Drive folder and Formatação → Clientes all read from here, so a change in
  * one place shows in the others as soon as the queries refresh.
  */
 

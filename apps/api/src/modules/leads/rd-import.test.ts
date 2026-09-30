@@ -224,7 +224,12 @@ describe('importRdDeals', () => {
 
   it('brings the deals in with funnel, brand, stage, owner and first contact, without queuing research', async () => {
     const jobsBefore = (await db.select().from(jobs)).length;
-    const result = await importRdDeals(db, rd, { apply: true, since, histories: true });
+    const result = await importRdDeals(db, rd, {
+      apply: true,
+      since,
+      histories: true,
+      batchId: 'rd-crm-test-1',
+    });
     expect(result).toMatchObject({
       created: 3,
       merged: 2,
@@ -284,7 +289,12 @@ describe('importRdDeals', () => {
 
   it('is safe to run again', async () => {
     const count = (await db.select().from(leads)).length;
-    const again = await importRdDeals(db, rd, { apply: true, since, histories: false });
+    const again = await importRdDeals(db, rd, {
+      apply: true,
+      since,
+      histories: false,
+      batchId: 'rd-crm-test-2',
+    });
     expect(again.created).toBe(0);
     expect((await db.select().from(leads)).length).toBe(count);
     const expansion = await db.query.leads.findFirst({ where: eq(leads.rdDealId, 'd-exp') });
@@ -452,5 +462,77 @@ describe('the Funil list and summary over imported leads', () => {
     );
     expect(summary.stages.some((stage) => stage.stage === 'Tentando contato')).toBe(true);
     expect(summary.syncedAt).not.toBeNull();
+  });
+});
+
+describe('undoRdImportBatch', () => {
+  it('removes the leads a run created and puts back the ones it changed, and nothing else', async () => {
+    const { undoRdImportBatch } = await import('./rd-import.js');
+    // A lead from before the run, which the run joins by phone and fills.
+    const before = await upsertLead(db, {
+      source: 'manual',
+      phone: '5531955550001',
+      clientId: WINGS_CLIENT_ID,
+      clientMapped: false,
+      skipResearch: true,
+      event: { kind: 'lead.created_manually' },
+    });
+    const untouched = await upsertLead(db, {
+      source: 'manual',
+      phone: '5531955550009',
+      clientId: WINGS_CLIENT_ID,
+      clientMapped: false,
+      skipResearch: true,
+      event: { kind: 'lead.created_manually' },
+    });
+    const run = fakeRd({
+      deals: [
+        {
+          id: 'u-join',
+          win: null,
+          created_at: '2026-09-25T10:00:00-03:00',
+          deal_stage: { id: 'f2' },
+        },
+        {
+          id: 'u-new',
+          win: null,
+          created_at: '2026-09-26T10:00:00-03:00',
+          deal_stage: { id: 'f1' },
+        },
+      ],
+      contacts: {
+        'u-join': [{ id: 'k1', name: 'Pessoa Junta', phones: [{ phone: '31 95555-0001' }] }],
+        'u-new': [{ id: 'k2', name: 'Pessoa Nova', phones: [{ phone: '31 95555-0002' }] }],
+      },
+    });
+    await importRdDeals(db, run, {
+      apply: true,
+      since: new Date('2026-09-01T00:00:00Z'),
+      histories: false,
+      batchId: 'rd-crm-undo-1',
+    });
+    const joined = await db.query.leads.findFirst({ where: eq(leads.id, before.lead.id) });
+    expect(joined).toMatchObject({
+      rdDealId: 'u-join',
+      name: 'Pessoa Junta',
+      stage: 'Identificação de interesse',
+    });
+
+    const simulated = await undoRdImportBatch(db, { batchId: 'rd-crm-undo-1', apply: false });
+    expect(simulated).toMatchObject({ created: 1, restored: 1 });
+    expect(await db.query.leads.findFirst({ where: eq(leads.rdDealId, 'u-new') })).toBeTruthy();
+
+    const undone = await undoRdImportBatch(db, { batchId: 'rd-crm-undo-1', apply: true });
+    expect(undone).toMatchObject({ applied: true, created: 1, restored: 1 });
+    expect(await db.query.leads.findFirst({ where: eq(leads.rdDealId, 'u-new') })).toBeUndefined();
+    const restored = await db.query.leads.findFirst({ where: eq(leads.id, before.lead.id) });
+    expect(restored).toMatchObject({
+      rdDealId: null,
+      name: null,
+      stage: null,
+      pipeline: null,
+      phone: '5531955550001',
+    });
+    expect(await db.query.leads.findFirst({ where: eq(leads.id, untouched.lead.id) })).toBeTruthy();
   });
 });

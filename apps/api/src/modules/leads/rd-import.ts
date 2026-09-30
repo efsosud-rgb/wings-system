@@ -5,9 +5,17 @@ import {
   WINGS_CLIENT_ID,
   type LeadPipeline,
 } from '@wings/shared';
-import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { clients, employees, leadEvents, leads, rdUserMap } from '../../db/schema/index.js';
+import {
+  auditLog,
+  clients,
+  employees,
+  leadEnrichmentLedger,
+  leadEvents,
+  leads,
+  rdUserMap,
+} from '../../db/schema/index.js';
 import { rdCrmGetter } from '../ads/funnel-sync.js';
 import { shapeOf } from '../media/kairogen-adapter.js';
 import { brandKey } from './brands.js';
@@ -248,6 +256,13 @@ export interface RdImportOptions {
   histories: boolean;
   /** Only deals the Funil does not have yet (incremental run). */
   onlyMissing?: boolean;
+  /**
+   * The run's batch id (required with `apply`): new leads carry it in
+   * `import_batch_id`, and a lead that already existed gets a `rd.import_batch`
+   * event with what it was before (ids and labels, never personal data), so
+   * `undoRdImportBatch` can take this run back alone.
+   */
+  batchId?: string;
   log?: (facts: Record<string, unknown>) => void;
   onProgress?: (done: number, total: number) => void;
 }
@@ -313,6 +328,37 @@ async function syncRdUsers(db: Database, rows: readonly RdUserRow[], apply: bool
 const replacesDeal = (lead: LeadRow, incomingWin: boolean | null) =>
   lead.rdDealId === null || lead.won !== null || incomingWin === null;
 
+/** The columns an import may change on an existing lead: ids, labels and dates, nothing personal. */
+const SNAPSHOT_KEYS = [
+  'rdDealId',
+  'rdContactId',
+  'rdOwnerId',
+  'rdPipeline',
+  'pipeline',
+  'brand',
+  'stage',
+  'stageOrder',
+  'stageChangedAt',
+  'firstContactAt',
+  'won',
+  'closedAt',
+  'lostReason',
+  'rdSyncedAt',
+  'ownerEmployeeId',
+  'clientId',
+  'clientMapped',
+] as const satisfies readonly (keyof LeadRow)[];
+
+/** What the lead was before the run; a column the run's upsert just filled was empty, and is left to `filled`. */
+function snapshotOf(lead: LeadRow, filled: readonly string[]): Record<string, unknown> {
+  return Object.fromEntries(
+    SNAPSHOT_KEYS.filter((key) => !filled.includes(key)).map((key) => {
+      const value = lead[key];
+      return [key, value instanceof Date ? value.toISOString() : value];
+    }),
+  );
+}
+
 export async function importRdDeals(
   db: Database,
   rd: RdCrmReader,
@@ -335,6 +381,7 @@ export async function importRdDeals(
     failed: 0,
   };
 
+  if (options.apply && !options.batchId) throw new Error('an applied RD import needs a batch id');
   const [pipelines, users, deals] = await Promise.all([
     rd.pipelines(),
     rd.users(),
@@ -468,18 +515,49 @@ export async function importRdDeals(
         arrivedAt: dateOf(deal.created_at),
         consentSource: 'rd_crm',
         skipResearch: true,
-        event: { kind: 'lead.imported.rd_crm', detail: { rdDealId: id, pipeline: place.pipeline } },
+        importBatchId: options.batchId ?? null,
+        event: {
+          kind: 'lead.imported.rd_crm',
+          detail: { rdDealId: id, pipeline: place.pipeline, batchId: options.batchId ?? null },
+        },
       });
       if (upserted.created) result.created += 1;
       else result.merged += 1;
 
       const lead = upserted.lead;
+      // A lead from before this run: remember what it was, once per run, so the run can be undone.
+      if (!upserted.created && lead.importBatchId !== options.batchId) {
+        const recorded = await db.query.leadEvents.findFirst({
+          where: and(
+            eq(leadEvents.leadId, lead.id),
+            eq(leadEvents.kind, 'rd.import_batch'),
+            sql`${leadEvents.detail}->>'batchId' = ${options.batchId ?? ''}`,
+          ),
+          columns: { id: true },
+        });
+        if (!recorded) {
+          await db.insert(leadEvents).values({
+            leadId: lead.id,
+            kind: 'rd.import_batch',
+            detail: {
+              batchId: options.batchId ?? null,
+              filled: upserted.filled,
+              before: snapshotOf(lead, upserted.filled),
+            },
+          });
+        }
+      }
       if (lead.rdDealId !== id && !replacesDeal(lead, deal.win)) {
         result.otherDealOfSamePerson += 1;
         await db.insert(leadEvents).values({
           leadId: lead.id,
           kind: 'rd.other_deal',
-          detail: { rdDealId: id, pipeline: place.pipeline, win: deal.win },
+          detail: {
+            rdDealId: id,
+            pipeline: place.pipeline,
+            win: deal.win,
+            batchId: options.batchId ?? null,
+          },
         });
         continue;
       }
@@ -624,4 +702,91 @@ export async function refreshStageTimes(
     }
   }
   return { read, failed };
+}
+
+// --- undo ---------------------------------------------------------------------------
+
+const DATE_KEYS = new Set(['stageChangedAt', 'firstContactAt', 'closedAt', 'rdSyncedAt']);
+
+export interface UndoResult {
+  applied: boolean;
+  batchId: string;
+  /** Leads this run created: removed with their timeline. */
+  created: number;
+  /** Leads from before the run: put back as they were (filled gaps emptied again). */
+  restored: number;
+}
+
+/**
+ * Takes one RD import run back: the leads it created go (with their timeline
+ * and any research ledger rows), and the leads that existed before get their
+ * columns back from the run's `rd.import_batch` event, with the gaps the run
+ * filled emptied again. Simulates unless `apply`. `rd_user_map` rows the run
+ * added stay (a list of our own RD users, nothing about leads).
+ */
+export async function undoRdImportBatch(
+  db: Database,
+  input: { batchId: string; apply: boolean; actorEmployeeId?: string | null },
+): Promise<UndoResult> {
+  const created = await db
+    .select({ id: leads.id })
+    .from(leads)
+    .where(eq(leads.importBatchId, input.batchId));
+  const touched = await db
+    .select({ id: leadEvents.id, leadId: leadEvents.leadId, detail: leadEvents.detail })
+    .from(leadEvents)
+    .where(
+      and(
+        eq(leadEvents.kind, 'rd.import_batch'),
+        sql`${leadEvents.detail}->>'batchId' = ${input.batchId}`,
+      ),
+    );
+  const createdIds = created.map((row) => row.id);
+  const createdSet = new Set(createdIds);
+  const restore = touched.filter((row) => !createdSet.has(row.leadId));
+  const result: UndoResult = {
+    applied: input.apply,
+    batchId: input.batchId,
+    created: createdIds.length,
+    restored: restore.length,
+  };
+  if (!input.apply) return result;
+
+  await db.transaction(async (tx) => {
+    for (let index = 0; index < createdIds.length; index += 500) {
+      const chunk = createdIds.slice(index, index + 500);
+      await tx.delete(leadEvents).where(inArray(leadEvents.leadId, chunk));
+      await tx.delete(leadEnrichmentLedger).where(inArray(leadEnrichmentLedger.leadId, chunk));
+      await tx.delete(leads).where(inArray(leads.id, chunk));
+    }
+    for (const row of restore) {
+      const detail = row.detail as { before?: Record<string, unknown>; filled?: string[] };
+      const patch: Record<string, unknown> = {};
+      for (const key of detail.filled ?? []) patch[key] = null;
+      if ((detail.filled ?? []).includes('clientId')) {
+        patch.clientId = WINGS_CLIENT_ID;
+        patch.clientMapped = false;
+      }
+      for (const [key, value] of Object.entries(detail.before ?? {})) {
+        patch[key] = DATE_KEYS.has(key) && typeof value === 'string' ? new Date(value) : value;
+      }
+      await tx
+        .update(leads)
+        .set({ ...(patch as Partial<LeadRow>), updatedAt: new Date() })
+        .where(eq(leads.id, row.leadId));
+      await tx.insert(leadEvents).values({
+        leadId: row.leadId,
+        kind: 'rd.import_batch_undone',
+        detail: { batchId: input.batchId },
+      });
+    }
+    await tx.insert(auditLog).values({
+      actorEmployeeId: input.actorEmployeeId ?? null,
+      action: 'leads.import_rd_undone',
+      entity: 'lead_import_batch',
+      entityId: input.batchId,
+      metadata: { created: result.created, restored: result.restored },
+    });
+  });
+  return result;
 }

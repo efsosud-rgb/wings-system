@@ -65,7 +65,7 @@ import {
 import { Alert, Button, Field, Input, Select } from '../components/ui.js';
 
 /**
- * Administração → Clientes → ficha. The client's full record, one tab per
+ * Formatação → Clientes → ficha. The client's full record, one tab per
  * block, each saved on its own. The API answers every save with the whole
  * record, so the "% preenchido" moves as soon as a block is saved.
  *
@@ -886,7 +886,7 @@ export function ClientRecordPage() {
         </header>
         <Alert kind="error">{errorText(query.error, 'Não foi possível abrir a ficha.')}</Alert>
         <p>
-          <Link to="/administracao/clientes">Voltar à lista</Link>
+          <Link to="/formatacao/clientes">Voltar à lista</Link>
         </p>
       </>
     );
@@ -914,7 +914,7 @@ export function ClientRecordPage() {
               Documentos Enviados
             </Link>
           )}
-          <Link to="/administracao/clientes" className="btn btn-ghost btn-inline">
+          <Link to="/formatacao/clientes" className="btn btn-ghost btn-inline">
             Voltar
           </Link>
         </div>

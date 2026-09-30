@@ -91,6 +91,14 @@ export const NAVIGATION: readonly NavModule[] = [
     label: 'Formatação',
     icon: '🏗️',
     submodules: [
+      {
+        path: '/formatacao/clientes',
+        label: 'Clientes',
+        description: 'Para quem o trabalho é feito',
+        permission: 'clients.read',
+        status: 'ready',
+        kind: 'crud',
+      },
       soon('/formatacao/projetos', 'Projetos', 'Projetos de formatação em andamento'),
       soon('/formatacao/consultor-juridico', 'Consultor Jurídico'),
       soon('/formatacao/consultor-financeiro', 'Consultor Financeiro'),
@@ -229,14 +237,6 @@ export const NAVIGATION: readonly NavModule[] = [
         kind: 'crud',
       },
       {
-        path: '/administracao/clientes',
-        label: 'Clientes',
-        description: 'Para quem o trabalho é feito',
-        permission: 'clients.read',
-        status: 'ready',
-        kind: 'crud',
-      },
-      {
         path: '/administracao/drive',
         label: 'Drive: modelo de pastas',
         description: 'As pastas que todo departamento e todo cliente recebem',
@@ -340,6 +340,8 @@ export const LEGACY_REDIRECTS: readonly { from: string; to: string }[] = [
   { from: '/funcionarios', to: '/administracao/usuarios' },
   { from: '/ponto', to: '/gestao/rh-dp' },
   { from: '/configuracoes', to: '/administracao/configuracoes' },
+  // Clientes moved from Administração to Formatação on 2026-09-30 (Eric).
+  { from: '/administracao/clientes', to: '/formatacao/clientes' },
 ];
 
 /** Where a signed-in user lands: the first sub-module they can actually open. */

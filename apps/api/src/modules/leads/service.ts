@@ -61,7 +61,7 @@ const UNMAPPED: ClientResolution = {
 
 /**
  * The client, funnel and brand a conversion belongs to, by the rules people
- * keep in Administração → Clientes and Integrações. A rule naming a brand that
+ * keep in Formatação → Clientes and Integrações. A rule naming a brand that
  * is not a client yet files the lead under Wings Company, unmapped, and still
  * says the funnel and the brand.
  */
@@ -163,6 +163,8 @@ export interface IncomingLead {
   brand?: string | null;
   /** When the person actually arrived, if earlier than now (an imported RD deal's creation); used only for a new lead. */
   arrivedAt?: Date | null;
+  /** The import run creating the lead (`leads.import_batch_id`); used only for a new lead. */
+  importBatchId?: string | null;
   /** An import (RD CRM) does not queue the paid research for every lead it brings. */
   skipResearch?: boolean;
   /** First touch: kept only when the lead has none yet, and then as a whole. */
@@ -225,6 +227,8 @@ export interface UpsertResult {
   created: boolean;
   /** True when a research job was queued by this call. */
   researchQueued: boolean;
+  /** Columns this call filled on a lead that already existed (names only). */
+  filled: string[];
 }
 
 /** Only the gaps: an existing value is never overwritten by a later arrival. */
@@ -331,7 +335,12 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
         !incoming.skipResearch &&
         (lead.enrichmentState === 'none' || lead.enrichmentState === 'failed');
       const researched = needsResearch ? await enqueueResearch(tx, lead.id, null) : null;
-      return { lead: researched ?? lead, created: false, researchQueued: researched !== null };
+      return {
+        lead: researched ?? lead,
+        created: false,
+        researchQueued: researched !== null,
+        filled: Object.keys(patch),
+      };
     }
 
     const [created] = await tx
@@ -362,6 +371,7 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
         brand: incoming.brand ?? null,
         ...attributionColumns(incoming.attribution),
         ...(incoming.arrivedAt ? { createdAt: incoming.arrivedAt } : {}),
+        importBatchId: incoming.importBatchId ?? null,
       })
       .returning();
     if (!created) throw new Error('lead insert returned no row');
@@ -375,9 +385,10 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
         clientMapped: incoming.clientMapped,
       },
     });
-    if (incoming.skipResearch) return { lead: created, created: true, researchQueued: false };
+    if (incoming.skipResearch)
+      return { lead: created, created: true, researchQueued: false, filled: [] };
     const researched = await enqueueResearch(tx, created.id, null);
-    return { lead: researched ?? created, created: true, researchQueued: true };
+    return { lead: researched ?? created, created: true, researchQueued: true, filled: [] };
   });
 }
 

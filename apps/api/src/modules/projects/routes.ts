@@ -46,7 +46,7 @@ async function lockProject(tx: Tx, clientId: string) {
 
 /**
  * Gestão → Projetos. The one API the board, the tag on the client's Drive
- * folder, Administração → Clientes and later the Client Portal read. Every
+ * folder, Formatação → Clientes and later the Client Portal read. Every
  * change is re-checked here against the rules of `@wings/shared` and written
  * to the audit log; a status change also goes to the append-only history.
  */

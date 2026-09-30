@@ -112,9 +112,9 @@ function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[`/administracao/clientes/${CLIENT_ID}`]}>
+      <MemoryRouter initialEntries={[`/formatacao/clientes/${CLIENT_ID}`]}>
         <Routes>
-          <Route path="/administracao/clientes/:id" element={<ClientRecordPage />} />
+          <Route path="/formatacao/clientes/:id" element={<ClientRecordPage />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -132,7 +132,7 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-describe('Administração → Clientes → ficha', () => {
+describe('Formatação → Clientes → ficha', () => {
   it('shows how much is filled, block by block, and links the Drive folder', async () => {
     renderPage();
     const percent = current.completeness.percent;
