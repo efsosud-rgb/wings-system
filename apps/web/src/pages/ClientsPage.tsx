@@ -34,7 +34,7 @@ import { Alert, Button, Field, Input, Select } from '../components/ui.js';
 import type { ClientProject } from '@wings/shared';
 
 /**
- * Administração → Clientes. The register of who work is for: a quick
+ * Formatação → Clientes. The register of who work is for: a quick
  * registration (name, and the CNPJ and main contact when known) and, per
  * client, the full record ("ficha", ClientRecordPage). Wings Company is the
  * fixed first row. Since the Funil (part 1), a client also carries its
@@ -302,7 +302,7 @@ function ClientRow({
         <td>
           <div className="clients-actions">
             {!fixed && !editing && (
-              <Link className="btn btn-ghost" to={`/administracao/clientes/${client.id}`}>
+              <Link className="btn btn-ghost" to={`/formatacao/clientes/${client.id}`}>
                 Ficha
               </Link>
             )}

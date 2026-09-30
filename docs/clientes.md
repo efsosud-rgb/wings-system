@@ -7,7 +7,7 @@ cadastro tem duas partes:
   Buscar traz o nome da Receita) e contato principal (nome, e-mail, WhatsApp).
   Cadastrar abre a pasta `Clientes/<NN. Nome>` no Drive e o projeto em Gestão
   → Projetos, como antes.
-- **Ficha completa** (`/administracao/clientes/:id`), uma aba por bloco,
+- **Ficha completa** (`/formatacao/clientes/:id`), uma aba por bloco,
   cada uma salva sozinha, com "% preenchido" no topo e o que falta em cada
   aba. É dela que o Jurídico vai tirar os contratos e a COF
   (Lei 13.966/2019). A Wings Company não tem ficha.

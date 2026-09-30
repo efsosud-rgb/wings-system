@@ -45,7 +45,7 @@ const toLink = (row: LinkRow): LeadTrackingLink => ({
 });
 
 /**
- * CRM Vendas → Funil (leads) and the pieces of Administração → Clientes the
+ * CRM Vendas → Funil (leads) and the pieces of Formatação → Clientes the
  * intake needs: source rules, tracked links and the expansion area. The
  * webhooks live in `webhooks.ts`, outside any session.
  */
@@ -162,7 +162,7 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  // --- source rules (Administração → Clientes) ------------------------------------
+  // --- source rules (Formatação → Clientes) ------------------------------------
 
   const manage = { preHandler: app.requirePermission('clients.manage') };
 

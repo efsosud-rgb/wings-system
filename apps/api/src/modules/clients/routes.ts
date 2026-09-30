@@ -44,7 +44,7 @@ export async function activeClient(db: Database, id: string): Promise<Client | n
 }
 
 /**
- * Administração → Clientes. The register is read by whoever files media under a
+ * Formatação → Clientes. The register is read by whoever files media under a
  * client and kept by whoever holds `clients.manage`. Wings Company is fixed:
  * other tables default to its id.
  */

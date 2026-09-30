@@ -61,7 +61,7 @@ const UNMAPPED: ClientResolution = {
 
 /**
  * The client, funnel and brand a conversion belongs to, by the rules people
- * keep in Administração → Clientes and Integrações. A rule naming a brand that
+ * keep in Formatação → Clientes and Integrações. A rule naming a brand that
  * is not a client yet files the lead under Wings Company, unmapped, and still
  * says the funnel and the brand.
  */

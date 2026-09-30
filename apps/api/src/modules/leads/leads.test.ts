@@ -101,7 +101,7 @@ async function createClient(cookies: Record<string, string>, name: string) {
 
 const pendingJobs = () => db.select().from(jobs).where(eq(jobs.type, 'enrich_lead'));
 
-describe('source rules, tracked links and the expansion area (Administração → Clientes)', () => {
+describe('source rules, tracked links and the expansion area (Formatação → Clientes)', () => {
   it('keeps a rule per landing page, refuses a duplicate and removes it again', async () => {
     const { cookies } = await sessionFor('marketing');
     const client = await createClient(cookies, 'Sushi do Bairro');

@@ -230,7 +230,7 @@ function Origin({ lead }: { lead: Lead }) {
           {!origin.clientMapped && (
             <span
               className="tag"
-              title="Nenhuma regra mapeou a origem para um cliente. Cadastre a regra em Administração → Clientes."
+              title="Nenhuma regra mapeou a origem para um cliente. Cadastre a regra em CRM Vendas → Landing pages."
             >
               sem regra
             </span>

@@ -154,7 +154,7 @@ export const leadEvents = pgTable(
 
 /**
  * Landing page / Meta form / Meta campaign -> client and funnel. Kept by
- * whoever holds `clients.manage` (Administração → Clientes) or, for the
+ * whoever holds `clients.manage` (Formatação → Clientes) or, for the
  * brands' landing pages, `integrations.manage` (Integrações → Entrada de
  * leads de Expansão): one list for both, since CRM phase 1. A rule may name a
  * brand that is not yet a client (`client_id` null, `brand` set): its leads
