@@ -6,7 +6,7 @@ import { auditLog } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { runExpansionIntake, type IntakeResult } from './intake.js';
 import { RdCrm, RdMarketing } from './rd.js';
-import { activeRules, dbLedger } from './service.js';
+import { activeRules, dbLedger, recordDealOnLead } from './service.js';
 
 /**
  * Recovery of conversions that leaked (no deal in RD CRM), for a fixed set of
@@ -220,6 +220,7 @@ export const expansionRecoveryRoutes: FastifyPluginAsync = async (app) => {
           onProgress: (done, total) => {
             running.progress = { done, total };
           },
+          onDealCreated: (event) => recordDealOnLead(db, event),
           recovery: {
             only: [...RECOVERY_FORMATACAO_FORMS, RECOVERY_EXPANSAO_PAGE, ...LIST_ONLY],
             formatacaoIdentifiers: RECOVERY_FORMATACAO_FORMS,

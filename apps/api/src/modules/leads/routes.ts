@@ -24,7 +24,10 @@ import { enqueueResearch, listLeads, loadLead, upsertLead } from './service.js';
 
 const idParam = z.object({ id: z.uuid() });
 
-const invalid = (message?: string) => ({ error: 'invalid_request', message: message ?? 'Dados inválidos' });
+const invalid = (message?: string) => ({
+  error: 'invalid_request',
+  message: message ?? 'Dados inválidos',
+});
 const notFound = { error: 'not_found', message: 'Lead não encontrado.' };
 
 type LinkRow = typeof leadTrackingLinks.$inferSelect;
@@ -50,7 +53,9 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
 
   /** `own` scope sees only leads it owns; a lead nobody owns is out of that scope. */
   const ownerFilter = (request: Parameters<typeof app.can>[0]) =>
-    grantedScope(request.session.actor, 'leads.read') === 'own' ? request.session.actor.employeeId : undefined;
+    grantedScope(request.session.actor, 'leads.read') === 'own'
+      ? request.session.actor.employeeId
+      : undefined;
 
   app.get('/leads', { preHandler: app.requirePermission('leads.read') }, async (request, reply) => {
     const query = leadListQuerySchema.safeParse(request.query);
@@ -59,75 +64,90 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ leads: items });
   });
 
-  app.post('/leads', { preHandler: app.requirePermission('leads.write') }, async (request, reply) => {
-    const body = leadCreateSchema.safeParse(request.body);
-    if (!body.success) return reply.status(400).send(invalid(body.error.issues[0]?.message));
-    if (!body.data.email && !body.data.phone) {
-      return reply.status(400).send(invalid('Informe um e-mail ou um telefone.'));
-    }
-    const clientId = body.data.clientId;
-    if (clientId && !(await activeClient(db, clientId))) {
-      return reply.status(400).send(invalid('Cliente inativo ou inexistente.'));
-    }
-    const actor = request.session.actor.employeeId;
-    const result = await upsertLead(db, {
-      source: 'manual',
-      name: body.data.name,
-      email: body.data.email || null,
-      phone: body.data.phone || null,
-      clientId: clientId ?? WINGS_CLIENT_ID,
-      clientMapped: Boolean(clientId),
-      channel: body.data.channel ?? null,
-      legalBasis: body.data.legalBasis,
-      consentedAt: new Date(),
-      consentSource: 'manual',
-      consentText: body.data.consentText,
-      ownerEmployeeId: actor,
-      event: { kind: 'lead.created_manually', actorEmployeeId: actor },
-    });
-    await writeAudit(db, {
-      actorEmployeeId: actor,
-      action: result.created ? 'lead.created' : 'lead.merged',
-      entity: 'lead',
-      entityId: result.lead.id,
-      ip: request.ip,
-      metadata: { source: 'manual', researchQueued: result.researchQueued },
-    });
-    const loaded = await loadLead(db, result.lead.id);
-    return reply.status(result.created ? 201 : 200).send({ lead: loaded?.lead, created: result.created });
-  });
-
-  app.get('/leads/:id', { preHandler: app.requirePermission('leads.read') }, async (request, reply) => {
-    const params = idParam.safeParse(request.params);
-    if (!params.success) return reply.status(400).send(invalid());
-    const loaded = await loadLead(db, params.data.id);
-    if (!loaded || !visible(request, loaded.lead.ownerEmployeeId)) return reply.status(404).send(notFound);
-    return reply.send(loaded);
-  });
-
-  app.post('/leads/:id/research', { preHandler: app.requirePermission('leads.write') }, async (request, reply) => {
-    const params = idParam.safeParse(request.params);
-    if (!params.success) return reply.status(400).send(invalid());
-    const row = await db.query.leads.findFirst({ where: eq(leads.id, params.data.id) });
-    if (!row || !visible(request, row.ownerEmployeeId)) return reply.status(404).send(notFound);
-    if (row.enrichmentState === 'pending' || row.enrichmentState === 'running') {
-      return reply.status(409).send({
-        error: 'research_in_progress',
-        message: 'A pesquisa deste lead já está na fila. Aguarde ela terminar.',
+  app.post(
+    '/leads',
+    { preHandler: app.requirePermission('leads.write') },
+    async (request, reply) => {
+      const body = leadCreateSchema.safeParse(request.body);
+      if (!body.success) return reply.status(400).send(invalid(body.error.issues[0]?.message));
+      if (!body.data.email && !body.data.phone) {
+        return reply.status(400).send(invalid('Informe um e-mail ou um telefone.'));
+      }
+      const clientId = body.data.clientId;
+      if (clientId && !(await activeClient(db, clientId))) {
+        return reply.status(400).send(invalid('Cliente inativo ou inexistente.'));
+      }
+      const actor = request.session.actor.employeeId;
+      const result = await upsertLead(db, {
+        source: 'manual',
+        name: body.data.name,
+        email: body.data.email || null,
+        phone: body.data.phone || null,
+        clientId: clientId ?? WINGS_CLIENT_ID,
+        clientMapped: Boolean(clientId),
+        channel: body.data.channel ?? null,
+        legalBasis: body.data.legalBasis,
+        consentedAt: new Date(),
+        consentSource: 'manual',
+        consentText: body.data.consentText,
+        ownerEmployeeId: actor,
+        event: { kind: 'lead.created_manually', actorEmployeeId: actor },
       });
-    }
-    const actor = request.session.actor.employeeId;
-    await enqueueResearch(db, row.id, actor);
-    await writeAudit(db, {
-      actorEmployeeId: actor,
-      action: 'lead.research_requested',
-      entity: 'lead',
-      entityId: row.id,
-      ip: request.ip,
-    });
-    const loaded = await loadLead(db, row.id);
-    return reply.status(202).send(loaded);
-  });
+      await writeAudit(db, {
+        actorEmployeeId: actor,
+        action: result.created ? 'lead.created' : 'lead.merged',
+        entity: 'lead',
+        entityId: result.lead.id,
+        ip: request.ip,
+        metadata: { source: 'manual', researchQueued: result.researchQueued },
+      });
+      const loaded = await loadLead(db, result.lead.id);
+      return reply
+        .status(result.created ? 201 : 200)
+        .send({ lead: loaded?.lead, created: result.created });
+    },
+  );
+
+  app.get(
+    '/leads/:id',
+    { preHandler: app.requirePermission('leads.read') },
+    async (request, reply) => {
+      const params = idParam.safeParse(request.params);
+      if (!params.success) return reply.status(400).send(invalid());
+      const loaded = await loadLead(db, params.data.id);
+      if (!loaded || !visible(request, loaded.lead.ownerEmployeeId))
+        return reply.status(404).send(notFound);
+      return reply.send(loaded);
+    },
+  );
+
+  app.post(
+    '/leads/:id/research',
+    { preHandler: app.requirePermission('leads.write') },
+    async (request, reply) => {
+      const params = idParam.safeParse(request.params);
+      if (!params.success) return reply.status(400).send(invalid());
+      const row = await db.query.leads.findFirst({ where: eq(leads.id, params.data.id) });
+      if (!row || !visible(request, row.ownerEmployeeId)) return reply.status(404).send(notFound);
+      if (row.enrichmentState === 'pending' || row.enrichmentState === 'running') {
+        return reply.status(409).send({
+          error: 'research_in_progress',
+          message: 'A pesquisa deste lead já está na fila. Aguarde ela terminar.',
+        });
+      }
+      const actor = request.session.actor.employeeId;
+      await enqueueResearch(db, row.id, actor);
+      await writeAudit(db, {
+        actorEmployeeId: actor,
+        action: 'lead.research_requested',
+        entity: 'lead',
+        entityId: row.id,
+        ip: request.ip,
+      });
+      const loaded = await loadLead(db, row.id);
+      return reply.status(202).send(loaded);
+    },
+  );
 
   // --- source rules (Administração → Clientes) ------------------------------------
 
@@ -155,7 +175,9 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
     }));
   }
 
-  app.get('/leads/source-rules', manage, async (_request, reply) => reply.send({ rules: await listRules() }));
+  app.get('/leads/source-rules', manage, async (_request, reply) =>
+    reply.send({ rules: await listRules() }),
+  );
 
   app.post('/leads/source-rules', manage, async (request, reply) => {
     const body = sourceRuleCreateSchema.safeParse(request.body);
@@ -176,7 +198,9 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
       .onConflictDoNothing()
       .returning();
     if (!row) {
-      return reply.status(409).send({ error: 'rule_exists', message: 'Já existe uma regra com este padrão.' });
+      return reply
+        .status(409)
+        .send({ error: 'rule_exists', message: 'Já existe uma regra com este padrão.' });
     }
     await writeAudit(db, {
       actorEmployeeId: actor,
@@ -193,8 +217,12 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
   app.delete('/leads/source-rules/:id', manage, async (request, reply) => {
     const params = idParam.safeParse(request.params);
     if (!params.success) return reply.status(400).send(invalid());
-    const [row] = await db.delete(leadSourceRules).where(eq(leadSourceRules.id, params.data.id)).returning();
-    if (!row) return reply.status(404).send({ error: 'not_found', message: 'Regra não encontrada.' });
+    const [row] = await db
+      .delete(leadSourceRules)
+      .where(eq(leadSourceRules.id, params.data.id))
+      .returning();
+    if (!row)
+      return reply.status(404).send({ error: 'not_found', message: 'Regra não encontrada.' });
     await writeAudit(db, {
       actorEmployeeId: request.session.actor.employeeId,
       action: 'lead_source_rule.deleted',
@@ -216,7 +244,10 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
       .from(leadTrackingLinks)
       .where(eq(leadTrackingLinks.clientId, params.data.id))
       .orderBy(asc(leadTrackingLinks.channel), desc(leadTrackingLinks.createdAt));
-    return reply.send({ links: rows.map(toLink), phoneConfigured: Boolean(env.WINGS_WHATSAPP_NUMBER) });
+    return reply.send({
+      links: rows.map(toLink),
+      phoneConfigured: Boolean(env.WINGS_WHATSAPP_NUMBER),
+    });
   });
 
   app.post('/clients/:id/tracking-links', manage, async (request, reply) => {
@@ -257,21 +288,29 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
       });
       return reply.status(201).send({ link: toLink(row) });
     }
-    return reply.status(500).send({ error: 'code_collision', message: 'Não foi possível gerar um código. Tente de novo.' });
+    return reply
+      .status(500)
+      .send({
+        error: 'code_collision',
+        message: 'Não foi possível gerar um código. Tente de novo.',
+      });
   });
 
   app.patch('/clients/:id/expansion-area', manage, async (request, reply) => {
     const params = idParam.safeParse(request.params);
     const body = expansionAreaSchema.safeParse(request.body);
     if (!params.success || !body.success) {
-      return reply.status(400).send(invalid(body.success ? undefined : body.error.issues[0]?.message));
+      return reply
+        .status(400)
+        .send(invalid(body.success ? undefined : body.error.issues[0]?.message));
     }
     const [row] = await db
       .update(clients)
       .set({ expansionArea: body.data.expansionArea })
       .where(eq(clients.id, params.data.id))
       .returning();
-    if (!row) return reply.status(404).send({ error: 'not_found', message: 'Cliente não encontrado.' });
+    if (!row)
+      return reply.status(404).send({ error: 'not_found', message: 'Cliente não encontrado.' });
     await writeAudit(db, {
       actorEmployeeId: request.session.actor.employeeId,
       action: 'client.expansion_area_updated',
@@ -285,7 +324,10 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
 
   // --- helpers ----------------------------------------------------------------------
 
-  function visible(request: Parameters<typeof app.can>[0], ownerEmployeeId: string | null): boolean {
+  function visible(
+    request: Parameters<typeof app.can>[0],
+    ownerEmployeeId: string | null,
+  ): boolean {
     const owner = ownerFilter(request);
     return owner === undefined || ownerEmployeeId === owner;
   }

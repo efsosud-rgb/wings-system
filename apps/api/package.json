@@ -14,7 +14,8 @@
     "db:seed": "tsx src/db/seed.ts",
     "drive:migrate-media": "tsx src/scripts/migrate-media-to-drive.ts",
     "drive:migrate-client-folders": "tsx src/scripts/migrate-client-folders.ts",
-    "crm:brands": "tsx src/scripts/crm-brands.ts"
+    "crm:brands": "tsx src/scripts/crm-brands.ts",
+    "leads:import-rd": "tsx src/scripts/leads-import-rd.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

@@ -5,7 +5,7 @@ import { writeAudit } from '../../lib/audit.js';
 import { runExpansionIntake, type IntakeResult } from './intake.js';
 import { RdCrm, RdMarketing, type RdMarketingCredentials } from './rd.js';
 import { RECOVERY_FORMATACAO_FORMS } from './recovery.js';
-import { dbLedger } from './service.js';
+import { dbLedger, recordDealOnLead } from './service.js';
 
 /**
  * The Formatação safety net. Every 5 minutes, the conversions of the three
@@ -183,6 +183,7 @@ export async function runFormatacaoOnce(
     since: new Date(now.getTime() - options.lookbackHours * 3_600_000),
     dryRun,
     now: () => now,
+    onDealCreated: (event) => recordDealOnLead(db, event),
     recovery: {
       only: FORMATACAO_FORMS,
       formatacaoIdentifiers: FORMATACAO_FORMS,

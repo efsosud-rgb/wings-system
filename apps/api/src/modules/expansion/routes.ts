@@ -47,14 +47,19 @@ export const expansionRoutes: FastifyPluginAsync = async (app) => {
       })
       .from(leadSourceRules)
       .leftJoin(clients, eq(clients.id, leadSourceRules.clientId))
-      .where(and(eq(leadSourceRules.kind, 'landing_page'), eq(leadSourceRules.pipeline, 'expansao')));
+      .where(
+        and(eq(leadSourceRules.kind, 'landing_page'), eq(leadSourceRules.pipeline, 'expansao')),
+      );
     const landingPages = rows
       .map((row) => ({
         identifier: row.identifier,
         brand: row.brand ?? row.clientName ?? '',
         active: row.active,
       }))
-      .sort((a, b) => a.brand.localeCompare(b.brand, 'pt-BR') || a.identifier.localeCompare(b.identifier));
+      .sort(
+        (a, b) =>
+          a.brand.localeCompare(b.brand, 'pt-BR') || a.identifier.localeCompare(b.identifier),
+      );
     return reply.send({ enabled: app.wings.env.EXPANSION_INTAKE_ENABLED === 'true', landingPages });
   });
 
@@ -129,7 +134,10 @@ export const expansionRoutes: FastifyPluginAsync = async (app) => {
     if (!parsed.success) return reply.code(400).send({ error: 'invalid_landing_page' });
     const input = { ...parsed.data, identifier: normalizeSourcePattern(parsed.data.identifier) };
     const existing = await db.query.leadSourceRules.findFirst({
-      where: and(eq(leadSourceRules.kind, 'landing_page'), eq(leadSourceRules.pattern, input.identifier)),
+      where: and(
+        eq(leadSourceRules.kind, 'landing_page'),
+        eq(leadSourceRules.pattern, input.identifier),
+      ),
     });
     if (existing && existing.pipeline !== null && existing.pipeline !== 'expansao') {
       return reply.code(409).send({ error: 'landing_page_in_other_pipeline' });

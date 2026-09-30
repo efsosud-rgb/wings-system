@@ -94,7 +94,8 @@ export async function resolveClient(
   const pipeline = (LEAD_PIPELINES as readonly string[]).includes(rule.pipeline ?? '')
     ? (rule.pipeline as LeadPipeline)
     : null;
-  const brand = rule.brand ?? (rule.clientId && rule.clientId !== WINGS_CLIENT_ID ? rule.clientName : null);
+  const brand =
+    rule.brand ?? (rule.clientId && rule.clientId !== WINGS_CLIENT_ID ? rule.clientName : null);
   return rule.clientId
     ? { clientId: rule.clientId, mapped: true, ruleId: rule.id, pipeline, brand }
     : { ...UNMAPPED, ruleId: rule.id, pipeline, brand };
@@ -155,6 +156,8 @@ export interface IncomingLead {
   ownerEmployeeId?: string | null;
   pipeline?: LeadPipeline | null;
   brand?: string | null;
+  /** An import (RD CRM) does not queue the paid research for every lead it brings. */
+  skipResearch?: boolean;
   /** First touch: kept only when the lead has none yet, and then as a whole. */
   attribution?: LeadAttribution | null;
   /** The timeline entry for this arrival. `detail` carries ids and codes, never personal data. */
@@ -197,7 +200,9 @@ const ATTRIBUTION_KEYS = [
 ] as const satisfies readonly (keyof LeadAttribution & keyof LeadRow)[];
 
 /** The attribution columns to write, trimmed and capped; empty when the conversion carried none. */
-export function attributionColumns(attribution: LeadAttribution | null | undefined): Partial<LeadRow> {
+export function attributionColumns(
+  attribution: LeadAttribution | null | undefined,
+): Partial<LeadRow> {
   const columns: Partial<Record<(typeof ATTRIBUTION_KEYS)[number], string>> = {};
   for (const key of ATTRIBUTION_KEYS) {
     const value = attribution?.[key]?.trim();
@@ -227,7 +232,8 @@ function fillGaps(existing: LeadRow, incoming: IncomingLead): Partial<typeof lea
   if (!existing.whatsappProfileName && incoming.whatsappProfileName) {
     patch.whatsappProfileName = incoming.whatsappProfileName;
   }
-  if (!existing.whatsappPhotoUrl && incoming.whatsappPhotoUrl) patch.whatsappPhotoUrl = incoming.whatsappPhotoUrl;
+  if (!existing.whatsappPhotoUrl && incoming.whatsappPhotoUrl)
+    patch.whatsappPhotoUrl = incoming.whatsappPhotoUrl;
   if (!existing.firstMessage && incoming.firstMessage) patch.firstMessage = incoming.firstMessage;
   if (!existing.legalBasis && incoming.legalBasis) {
     patch.legalBasis = incoming.legalBasis;
@@ -241,7 +247,8 @@ function fillGaps(existing: LeadRow, incoming: IncomingLead): Partial<typeof lea
     patch.clientMapped = true;
   }
   if (!existing.channel && incoming.channel) patch.channel = incoming.channel;
-  if (!existing.trackingLinkId && incoming.trackingLinkId) patch.trackingLinkId = incoming.trackingLinkId;
+  if (!existing.trackingLinkId && incoming.trackingLinkId)
+    patch.trackingLinkId = incoming.trackingLinkId;
   if (!existing.landingPage && incoming.landingPage) patch.landingPage = incoming.landingPage;
   if (!existing.campaignId && incoming.campaignId) {
     patch.campaignId = incoming.campaignId;
@@ -272,10 +279,16 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
       });
     }
     if (!existing && phone) {
-      existing = await tx.query.leads.findFirst({ where: eq(leads.phone, phone), orderBy: asc(leads.createdAt) });
+      existing = await tx.query.leads.findFirst({
+        where: eq(leads.phone, phone),
+        orderBy: asc(leads.createdAt),
+      });
     }
     if (!existing && email) {
-      existing = await tx.query.leads.findFirst({ where: eq(leads.email, email), orderBy: asc(leads.createdAt) });
+      existing = await tx.query.leads.findFirst({
+        where: eq(leads.email, email),
+        orderBy: asc(leads.createdAt),
+      });
     }
 
     if (existing) {
@@ -290,9 +303,15 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
         leadId: lead.id,
         kind: incoming.event.kind,
         actorEmployeeId: incoming.event.actorEmployeeId ?? null,
-        detail: { ...(incoming.event.detail ?? {}), matched: 'existing', filled: Object.keys(patch) },
+        detail: {
+          ...(incoming.event.detail ?? {}),
+          matched: 'existing',
+          filled: Object.keys(patch),
+        },
       });
-      const needsResearch = lead.enrichmentState === 'none' || lead.enrichmentState === 'failed';
+      const needsResearch =
+        !incoming.skipResearch &&
+        (lead.enrichmentState === 'none' || lead.enrichmentState === 'failed');
       const researched = needsResearch ? await enqueueResearch(tx, lead.id, null) : null;
       return { lead: researched ?? lead, created: false, researchQueued: researched !== null };
     }
@@ -331,8 +350,13 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
       leadId: created.id,
       kind: incoming.event.kind,
       actorEmployeeId: incoming.event.actorEmployeeId ?? null,
-      detail: { ...(incoming.event.detail ?? {}), matched: 'new', clientMapped: incoming.clientMapped },
+      detail: {
+        ...(incoming.event.detail ?? {}),
+        matched: 'new',
+        clientMapped: incoming.clientMapped,
+      },
     });
+    if (incoming.skipResearch) return { lead: created, created: true, researchQueued: false };
     const researched = await enqueueResearch(tx, created.id, null);
     return { lead: researched ?? created, created: true, researchQueued: true };
   });
@@ -351,7 +375,12 @@ export async function enqueueResearch(
   if (!job) return null;
   const [lead] = await db
     .update(leads)
-    .set({ enrichmentState: 'pending', enrichmentJobId: job.id, enrichmentError: null, updatedAt: new Date() })
+    .set({
+      enrichmentState: 'pending',
+      enrichmentJobId: job.id,
+      enrichmentError: null,
+      updatedAt: new Date(),
+    })
     .where(eq(leads.id, leadId))
     .returning();
   await db.insert(leadEvents).values({
@@ -365,10 +394,14 @@ export async function enqueueResearch(
 
 // --- reading --------------------------------------------------------------------
 
-const asCriteria = (value: unknown): ScoreCriterion[] => (Array.isArray(value) ? (value as ScoreCriterion[]) : []);
-const asLinks = (value: unknown): FoundLink[] => (Array.isArray(value) ? (value as FoundLink[]) : []);
+const asCriteria = (value: unknown): ScoreCriterion[] =>
+  Array.isArray(value) ? (value as ScoreCriterion[]) : [];
+const asLinks = (value: unknown): FoundLink[] =>
+  Array.isArray(value) ? (value as FoundLink[]) : [];
 const asFacts = (value: unknown): EnrichmentFacts | null =>
-  value && typeof value === 'object' ? { ...EMPTY_FACTS, ...(value as Partial<EnrichmentFacts>) } : null;
+  value && typeof value === 'object'
+    ? { ...EMPTY_FACTS, ...(value as Partial<EnrichmentFacts>) }
+    : null;
 
 export function toLead(
   row: LeadRow,
@@ -421,19 +454,29 @@ export function toLead(
   };
 }
 
-export async function loadLead(db: Database, id: string): Promise<{ lead: Lead; events: LeadEvent[] } | null> {
+export async function loadLead(
+  db: Database,
+  id: string,
+): Promise<{ lead: Lead; events: LeadEvent[] } | null> {
   const row = await db.query.leads.findFirst({ where: eq(leads.id, id) });
   if (!row) return null;
   const [client, link, cost, events] = await Promise.all([
     db.query.clients.findFirst({ where: eq(clients.id, row.clientId) }),
     row.trackingLinkId
-      ? db.query.leadTrackingLinks.findFirst({ where: eq(leadTrackingLinks.id, row.trackingLinkId) })
+      ? db.query.leadTrackingLinks.findFirst({
+          where: eq(leadTrackingLinks.id, row.trackingLinkId),
+        })
       : Promise.resolve(undefined),
     db
       .select({ total: sql<number>`coalesce(sum(${leadEnrichmentLedger.usdMicro}), 0)::int` })
       .from(leadEnrichmentLedger)
       .where(eq(leadEnrichmentLedger.leadId, row.id)),
-    db.select().from(leadEvents).where(eq(leadEvents.leadId, row.id)).orderBy(desc(leadEvents.at)).limit(50),
+    db
+      .select()
+      .from(leadEvents)
+      .where(eq(leadEvents.leadId, row.id))
+      .orderBy(desc(leadEvents.at))
+      .limit(50),
   ]);
   return {
     lead: toLead(row, {

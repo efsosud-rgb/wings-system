@@ -1,13 +1,21 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { normalizeBrazilianPhone, normalizeEmail } from '@wings/shared';
+import { and, asc, eq, isNull } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { clients, expansionIntakeLedger, leadSourceRules } from '../../db/schema/index.js';
+import {
+  clients,
+  expansionIntakeLedger,
+  leadEvents,
+  leadSourceRules,
+  leads,
+} from '../../db/schema/index.js';
 import {
   runExpansionIntake,
   type IntakeResult,
   type Ledger,
   type LandingPageRule,
+  type Target,
 } from './intake.js';
-import { RdCrm, RdMarketing, type RdMarketingCredentials } from './rd.js';
+import { RdCrm, RdMarketing, type Conversion, type RdMarketingCredentials } from './rd.js';
 
 export function dbLedger(db: Database): Ledger {
   return {
@@ -39,7 +47,11 @@ export function dbLedger(db: Database): Ledger {
  */
 export async function activeRules(db: Database): Promise<LandingPageRule[]> {
   const rows = await db
-    .select({ identifier: leadSourceRules.pattern, brand: leadSourceRules.brand, clientName: clients.name })
+    .select({
+      identifier: leadSourceRules.pattern,
+      brand: leadSourceRules.brand,
+      clientName: clients.name,
+    })
     .from(leadSourceRules)
     .leftJoin(clients, eq(clients.id, leadSourceRules.clientId))
     .where(
@@ -54,6 +66,41 @@ export async function activeRules(db: Database): Promise<LandingPageRule[]> {
     const brand = row.brand ?? row.clientName;
     return brand ? [{ identifier: row.identifier, brand }] : [];
   });
+}
+
+/**
+ * The lead of the Funil with this conversion's phone or e-mail gets the RD
+ * deal the intake just made, when it has none yet (CRM phase 1). No lead, no
+ * change: the RD import brings the deal in on its next pass.
+ */
+export async function recordDealOnLead(
+  db: Database,
+  event: { conversion: Conversion; dealId: string; target: Target; brand: string | null },
+): Promise<boolean> {
+  const phone = normalizeBrazilianPhone(event.conversion.phone);
+  const email = normalizeEmail(event.conversion.email);
+  const match = phone ? eq(leads.phone, phone) : email ? eq(leads.email, email) : null;
+  if (!match) return false;
+  const lead = await db.query.leads.findFirst({
+    where: and(match, isNull(leads.rdDealId)),
+    orderBy: asc(leads.createdAt),
+  });
+  if (!lead) return false;
+  await db
+    .update(leads)
+    .set({
+      rdDealId: event.dealId,
+      pipeline: lead.pipeline ?? event.target,
+      brand: lead.brand ?? event.brand,
+      updatedAt: new Date(),
+    })
+    .where(eq(leads.id, lead.id));
+  await db.insert(leadEvents).values({
+    leadId: lead.id,
+    kind: 'rd.deal_created',
+    detail: { rdDealId: event.dealId, pipeline: event.target },
+  });
+  return true;
 }
 
 export interface IntakeCredentials {
@@ -78,5 +125,6 @@ export async function runIntakeOnce(
     since: new Date(now.getTime() - options.lookbackHours * 3_600_000),
     dryRun: options.dryRun ?? false,
     now: () => now,
+    onDealCreated: (event) => recordDealOnLead(db, event),
   });
 }

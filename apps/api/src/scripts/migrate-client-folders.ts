@@ -37,7 +37,9 @@ export function formatReport(report: ClientFolderMigrationReport): string {
     `arquivos que ficam onde estão: ${report.left.length}`,
     ...report.left.map((item) => `  ${item.fileId}: ${item.from} (${item.reason})`),
     `pastas do layout antigo: ${report.oldFolders.length} (${report.oldFolders.filter((folder) => folder.empty).length} vazias)${report.blockedBy.length > 0 ? ' — alguma ainda tem arquivo: --apply PARA sem gravar nada' : `; ${report.applied ? '' : 'seriam '}apagadas ${report.foldersDeleted} pastas vazias`}`,
-    ...report.oldFolders.map((folder) => `  ${folder.path}${folder.empty ? ' (vazia)' : ' (AINDA COM ARQUIVOS)'}`),
+    ...report.oldFolders.map(
+      (folder) => `  ${folder.path}${folder.empty ? ' (vazia)' : ' (AINDA COM ARQUIVOS)'}`,
+    ),
     ...report.accessNotes.map((note) => `atenção: ${note}`),
   ];
   return lines.join('\n');

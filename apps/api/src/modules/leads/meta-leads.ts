@@ -14,7 +14,11 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 export const META_GRAPH_VERSION = 'v23.0';
 
 /** `X-Hub-Signature-256: sha256=<hex>` over the raw body, keyed with the app secret. */
-export function metaSignatureValid(appSecret: string, rawBody: Buffer, header: string | undefined): boolean {
+export function metaSignatureValid(
+  appSecret: string,
+  rawBody: Buffer,
+  header: string | undefined,
+): boolean {
   if (!header || !header.startsWith('sha256=')) return false;
   const given = Buffer.from(header.slice('sha256='.length), 'hex');
   const expected = createHmac('sha256', appSecret).update(rawBody).digest();
@@ -31,7 +35,11 @@ export interface MetaLeadgenEvent {
 }
 
 const asString = (value: unknown): string | null =>
-  typeof value === 'string' && value.length > 0 ? value : typeof value === 'number' ? String(value) : null;
+  typeof value === 'string' && value.length > 0
+    ? value
+    : typeof value === 'number'
+      ? String(value)
+      : null;
 
 /** Every leadgen change in a webhook body, whatever else the body carries. */
 export function leadgenEventsOf(body: unknown): MetaLeadgenEvent[] {
@@ -47,7 +55,8 @@ export function leadgenEventsOf(body: unknown): MetaLeadgenEvent[] {
       if (field !== 'leadgen' || !value) continue;
       const leadgenId = asString(value.leadgen_id);
       if (!leadgenId) continue;
-      const created = typeof value.created_time === 'number' ? new Date(value.created_time * 1000) : null;
+      const created =
+        typeof value.created_time === 'number' ? new Date(value.created_time * 1000) : null;
       events.push({
         leadgenId,
         formId: asString(value.form_id),
@@ -102,7 +111,8 @@ export function parseMetaLead(payload: unknown): MetaLeadDetails {
   const data = Array.isArray(body.field_data) ? (body.field_data as FieldDatum[]) : [];
   const first = firstValue(data, ['first_name', 'primeiro_nome']);
   const last = firstValue(data, ['last_name', 'sobrenome']);
-  const name = firstValue(data, NAME_FIELDS) ?? (first ? [first, last].filter(Boolean).join(' ') : null);
+  const name =
+    firstValue(data, NAME_FIELDS) ?? (first ? [first, last].filter(Boolean).join(' ') : null);
   const created = typeof body.created_time === 'string' ? new Date(body.created_time) : null;
   return {
     name,
@@ -132,7 +142,9 @@ export async function fetchMetaLead(
   leadgenId: string,
   options: { accessToken: string; fetchImpl?: typeof fetch; timeoutMs?: number; version?: string },
 ): Promise<{ details: MetaLeadDetails; raw: unknown }> {
-  const url = new URL(`https://graph.facebook.com/${options.version ?? META_GRAPH_VERSION}/${leadgenId}`);
+  const url = new URL(
+    `https://graph.facebook.com/${options.version ?? META_GRAPH_VERSION}/${leadgenId}`,
+  );
   url.searchParams.set(
     'fields',
     'id,created_time,field_data,campaign_id,campaign_name,ad_id,ad_name,adset_id,adset_name,form_id,platform,is_organic',
@@ -142,7 +154,8 @@ export async function fetchMetaLead(
     signal: AbortSignal.timeout(options.timeoutMs ?? 8_000),
   });
   const text = await response.text();
-  if (!response.ok) throw new MetaLeadFetchError(response.status, `Graph API answered ${response.status}`);
+  if (!response.ok)
+    throw new MetaLeadFetchError(response.status, `Graph API answered ${response.status}`);
   const raw = parseJsonOrNull(text);
   return { details: parseMetaLead(raw), raw };
 }

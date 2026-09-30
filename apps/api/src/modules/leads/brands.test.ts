@@ -48,14 +48,12 @@ describe('registerBrands', () => {
       .values({ name: 'Mister Russo', slug: 'mister-russo', number: 40 })
       .returning();
     // A rule a person already pointed elsewhere stays as it is.
-    await db
-      .insert(leadSourceRules)
-      .values({
-        kind: 'landing_page',
-        pattern: 'lp-sem-marca-conhecida',
-        pipeline: 'expansao',
-        brand: 'Marca Desconhecida',
-      });
+    await db.insert(leadSourceRules).values({
+      kind: 'landing_page',
+      pattern: 'lp-sem-marca-conhecida',
+      pipeline: 'expansao',
+      brand: 'Marca Desconhecida',
+    });
     const report = await registerBrands(db, { names: EXPANSION_BRANDS, apply: true });
     expect(report.created).toHaveLength(7);
     expect(report.existing).toEqual([{ wanted: 'Mister Russo', client: 'Mister Russo' }]);

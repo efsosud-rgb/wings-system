@@ -193,9 +193,21 @@ export async function runExpansionIntake(input: {
   recovery?: { only: string[]; formatacaoIdentifiers: string[]; formatacaoStage: string };
   /** Called after each contact, so a long pass can show how far it is. */
   onProgress?: (done: number, total: number) => void;
+  /**
+   * Called after RD made a deal, so the Funil's lead (when there is one) knows
+   * its deal. A failure here never undoes nor repeats the deal.
+   */
+  onDealCreated?: (event: {
+    conversion: Conversion;
+    dealId: string;
+    target: Target;
+    brand: string | null;
+  }) => Promise<unknown>;
 }): Promise<IntakeResult> {
   const { marketing, crm, ledger, dryRun } = input;
-  const brandOf = new Map(input.rules.map((rule) => [normalizeSourcePattern(rule.identifier), rule.brand]));
+  const brandOf = new Map(
+    input.rules.map((rule) => [normalizeSourcePattern(rule.identifier), rule.brand]),
+  );
   const result: IntakeResult = {
     contacts: 0,
     conversions: 0,
@@ -292,6 +304,7 @@ export async function runExpansionIntake(input: {
         result.createdByIdentifier[conversion.identifier] =
           (result.createdByIdentifier[conversion.identifier] ?? 0) + 1;
         await ledger.record({ key, target, outcome: 'created', dealId });
+        await input.onDealCreated?.({ conversion, dealId, target, brand }).catch(() => undefined);
         if (target === 'expansao' && input.expansionOwnerId) {
           try {
             await crm.createTask({

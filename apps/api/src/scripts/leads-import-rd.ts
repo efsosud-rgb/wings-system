@@ -1,0 +1,64 @@
+import { createDb } from '../db/client.js';
+import { loadDotEnv } from '../db/load-env.js';
+import { loadEnv } from '../env.js';
+import { importRdDeals, rdCrmReader, type RdImportResult } from '../modules/leads/rd-import.js';
+
+/**
+ * Brings RD CRM's Expansão and Formatação deals into the Funil (CRM phase 1,
+ * docs/crm/fase1-complemento-funil.md §2.3). Reads RD only. Simulates by
+ * default (reads RD and the Funil, writes nothing); `--apply` writes. Safe to
+ * run again: a deal already in the Funil is updated, never duplicated.
+ *
+ *   pnpm --filter @wings/api leads:import-rd [--apply] [--since=2026-06-30] [--no-histories]
+ *   node dist/scripts/leads-import-rd.js [--apply] ...        # in the API container
+ *
+ * The output is counts, brand names and RD field shapes — never a person.
+ */
+export function formatImport(result: RdImportResult): string {
+  const brands = Object.entries(result.brands).sort((a, b) => b[1] - a[1]);
+  return [
+    result.applied ? 'APLICADO' : 'SIMULAÇÃO (nada foi gravado; rode com --apply para valer)',
+    `negócios lidos no RD: ${result.dealsListed}`,
+    `no escopo: Expansão ${result.inScope.expansao}, Formatação ${result.inScope.formatacao}`,
+    `leads ${result.applied ? 'criados' : 'a criar'}: ${result.created}; ligados a um lead que já existia: ${result.merged}`,
+    `outro negócio da mesma pessoa: ${result.otherDealOfSamePerson}; sem e-mail nem telefone: ${result.noContactData}; de teste: ${result.testDeals}`,
+    `dono: ${result.owners.mapped} com funcionário, ${result.owners.unmapped} sem (ligar em Usuários do RD)`,
+    `usuários do RD: ${result.rdUsers.listed} (ligados agora por e-mail ${result.rdUsers.linkedByEmail}, por nome ${result.rdUsers.linkedByName})`,
+    `histórico de etapas: ${result.histories.read} lido(s), ${result.histories.failed} falha(s), ${result.histories.withFirstContact} com 1º contato`,
+    `marcas (Expansão):`,
+    ...brands.map(([brand, count]) => `  ${brand}: ${count}`),
+    `marcas sem cliente: ${result.unmatchedBrands.length === 0 ? 'nenhuma' : result.unmatchedBrands.join(', ')}`,
+    `falhas: ${result.failed}`,
+  ].join('\n');
+}
+
+async function main() {
+  loadDotEnv();
+  const env = loadEnv(process.env);
+  if (!env.RD_CRM_API_TOKEN) throw new Error('RD_CRM_API_TOKEN is not set');
+  const sinceArg = process.argv.find((arg) => arg.startsWith('--since='))?.slice(8) ?? '2026-06-30';
+  const since = new Date(`${sinceArg}T00:00:00-03:00`);
+  if (Number.isNaN(since.getTime())) throw new Error('--since must be YYYY-MM-DD');
+  const { db, pool } = createDb(env.DATABASE_URL);
+  try {
+    const result = await importRdDeals(db, rdCrmReader(env.RD_CRM_API_TOKEN), {
+      apply: process.argv.includes('--apply'),
+      since,
+      histories: !process.argv.includes('--no-histories'),
+      log: (facts) => console.warn(JSON.stringify(facts)),
+      onProgress: (done, total) => {
+        if (done % 50 === 0) console.warn(`${done}/${total}`);
+      },
+    });
+    console.warn(formatImport(result));
+  } finally {
+    await pool.end();
+  }
+}
+
+if (/leads-import-rd\.(ts|js)$/.test(process.argv[1] ?? '')) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : 'leads-import-rd failed');
+    process.exit(1);
+  });
+}
