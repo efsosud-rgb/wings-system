@@ -115,16 +115,32 @@ const RD_CRM = 'https://crm.rdstation.com/api/v1';
  * after a meeting is not counted, and the screen says so.
  */
 /** A GET against RD CRM with its token, waiting out 429s; errors name the path and status only. */
-export function rdCrmGetter(token: string, fetchImpl: typeof fetch = fetch) {
+export function rdCrmGetter(
+  token: string,
+  fetchImpl: typeof fetch = fetch,
+  options: { minIntervalMs?: number } = {},
+) {
+  // Optional pacing: a long read (the Funil import) spaces its calls so it
+  // does not eat the per-minute limit it shares with the intake jobs.
+  let nextAt = 0;
+  const pace = async () => {
+    const interval = options.minIntervalMs ?? 0;
+    if (interval <= 0) return;
+    const wait = nextAt - Date.now();
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    nextAt = Date.now() + interval;
+  };
   return async <T>(path: string, params: Record<string, string>): Promise<T> => {
     const url = new URL(`${RD_CRM}${path}`);
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
     // RD CRM takes the token in the query string; the URL is never logged or thrown.
     url.searchParams.set('token', token);
-    for (let attempt = 0; attempt < 5; attempt += 1) {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await pace();
       const response = await fetchImpl(url.toString(), { signal: AbortSignal.timeout(30_000) });
       if (response.status === 429) {
-        await new Promise((resolve) => setTimeout(resolve, 3000));
+        // The limit is per minute: wait a little longer each time (3 s … 24 s).
+        await new Promise((resolve) => setTimeout(resolve, 3000 * (attempt + 1)));
         continue;
       }
       if (!response.ok) throw new Error(`RD CRM ${path} answered ${response.status}`);

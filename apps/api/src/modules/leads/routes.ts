@@ -288,12 +288,10 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
       });
       return reply.status(201).send({ link: toLink(row) });
     }
-    return reply
-      .status(500)
-      .send({
-        error: 'code_collision',
-        message: 'Não foi possível gerar um código. Tente de novo.',
-      });
+    return reply.status(500).send({
+      error: 'code_collision',
+      message: 'Não foi possível gerar um código. Tente de novo.',
+    });
   });
 
   app.patch('/clients/:id/expansion-area', manage, async (request, reply) => {
