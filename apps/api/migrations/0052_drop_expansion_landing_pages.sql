@@ -1,0 +1,1 @@
+DROP TABLE "expansion_landing_pages" CASCADE;

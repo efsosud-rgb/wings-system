@@ -1,5 +1,6 @@
 import {
   EMPTY_FACTS,
+  LEAD_PIPELINES,
   landingPageKeysOf,
   matchSourceRule,
   normalizeBrazilianPhone,
@@ -12,11 +13,12 @@ import {
   type LeadEvent,
   type LeadLegalBasis,
   type LeadListItem,
+  type LeadPipeline,
   type LeadSource,
   type LeadSourceRuleKind,
   type ScoreCriterion,
 } from '@wings/shared';
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   clients,
@@ -38,33 +40,64 @@ export interface ClientResolution {
   clientId: string;
   mapped: boolean;
   ruleId: string | null;
+  /** The funnel the rule sends the lead to, when it says. */
+  pipeline: LeadPipeline | null;
+  /** The brand the rule names, even when it is not yet a client. */
+  brand: string | null;
 }
 
-/** The client a conversion belongs to, by the rules people keep in Administração → Clientes. */
+const UNMAPPED: ClientResolution = {
+  clientId: WINGS_CLIENT_ID,
+  mapped: false,
+  ruleId: null,
+  pipeline: null,
+  brand: null,
+};
+
+/**
+ * The client, funnel and brand a conversion belongs to, by the rules people
+ * keep in Administração → Clientes and Integrações. A rule naming a brand that
+ * is not a client yet files the lead under Wings Company, unmapped, and still
+ * says the funnel and the brand.
+ */
 export async function resolveClient(
   db: Executor,
   kind: LeadSourceRuleKind,
   keys: readonly string[],
 ): Promise<ClientResolution> {
-  if (keys.length === 0) return { clientId: WINGS_CLIENT_ID, mapped: false, ruleId: null };
+  if (keys.length === 0) return UNMAPPED;
   const rules = await db
     .select({
       id: leadSourceRules.id,
       kind: leadSourceRules.kind,
       pattern: leadSourceRules.pattern,
       clientId: leadSourceRules.clientId,
+      pipeline: leadSourceRules.pipeline,
+      brand: leadSourceRules.brand,
+      clientName: clients.name,
     })
     .from(leadSourceRules)
-    .innerJoin(clients, eq(clients.id, leadSourceRules.clientId))
-    .where(and(eq(leadSourceRules.kind, kind), eq(clients.active, true)));
+    .leftJoin(clients, eq(clients.id, leadSourceRules.clientId))
+    .where(
+      and(
+        eq(leadSourceRules.kind, kind),
+        eq(leadSourceRules.active, true),
+        or(isNull(leadSourceRules.clientId), eq(clients.active, true)),
+      ),
+    );
   const rule = matchSourceRule(
     rules.map((row) => ({ ...row, kind: row.kind as LeadSourceRuleKind })),
     kind,
     keys,
   );
-  return rule
-    ? { clientId: rule.clientId, mapped: true, ruleId: rule.id }
-    : { clientId: WINGS_CLIENT_ID, mapped: false, ruleId: null };
+  if (!rule) return UNMAPPED;
+  const pipeline = (LEAD_PIPELINES as readonly string[]).includes(rule.pipeline ?? '')
+    ? (rule.pipeline as LeadPipeline)
+    : null;
+  const brand = rule.brand ?? (rule.clientId && rule.clientId !== WINGS_CLIENT_ID ? rule.clientName : null);
+  return rule.clientId
+    ? { clientId: rule.clientId, mapped: true, ruleId: rule.id, pipeline, brand }
+    : { ...UNMAPPED, ruleId: rule.id, pipeline, brand };
 }
 
 export function resolveLandingPage(
@@ -81,13 +114,13 @@ export async function resolveMetaSource(
 ): Promise<ClientResolution> {
   if (input.formId) {
     const byForm = await resolveClient(db, 'meta_form', [input.formId]);
-    if (byForm.mapped) return byForm;
+    if (byForm.ruleId) return byForm;
   }
   if (input.campaignId) {
     const byCampaign = await resolveClient(db, 'meta_campaign', [input.campaignId]);
-    if (byCampaign.mapped) return byCampaign;
+    if (byCampaign.ruleId) return byCampaign;
   }
-  return { clientId: WINGS_CLIENT_ID, mapped: false, ruleId: null };
+  return UNMAPPED;
 }
 
 // --- tracking links -----------------------------------------------------------
@@ -120,9 +153,60 @@ export interface IncomingLead {
   consentSource?: string | null;
   consentText?: string | null;
   ownerEmployeeId?: string | null;
+  pipeline?: LeadPipeline | null;
+  brand?: string | null;
+  /** First touch: kept only when the lead has none yet, and then as a whole. */
+  attribution?: LeadAttribution | null;
   /** The timeline entry for this arrival. `detail` carries ids and codes, never personal data. */
   event: { kind: string; detail?: Record<string, unknown>; actorEmployeeId?: string | null };
 }
+
+/** UTMs, click ids and ad ids as the conversion carried them (spec §1.4). */
+export interface LeadAttribution {
+  utmSource?: string | null;
+  utmMedium?: string | null;
+  utmCampaign?: string | null;
+  utmContent?: string | null;
+  utmTerm?: string | null;
+  gclid?: string | null;
+  fbclid?: string | null;
+  gbraid?: string | null;
+  wbraid?: string | null;
+  adPlatform?: 'meta' | 'google' | null;
+  adCampaignExternalId?: string | null;
+  adSetExternalId?: string | null;
+  adExternalId?: string | null;
+  referrer?: string | null;
+}
+
+const ATTRIBUTION_KEYS = [
+  'utmSource',
+  'utmMedium',
+  'utmCampaign',
+  'utmContent',
+  'utmTerm',
+  'gclid',
+  'fbclid',
+  'gbraid',
+  'wbraid',
+  'adPlatform',
+  'adCampaignExternalId',
+  'adSetExternalId',
+  'adExternalId',
+  'referrer',
+] as const satisfies readonly (keyof LeadAttribution & keyof LeadRow)[];
+
+/** The attribution columns to write, trimmed and capped; empty when the conversion carried none. */
+export function attributionColumns(attribution: LeadAttribution | null | undefined): Partial<LeadRow> {
+  const columns: Partial<Record<(typeof ATTRIBUTION_KEYS)[number], string>> = {};
+  for (const key of ATTRIBUTION_KEYS) {
+    const value = attribution?.[key]?.trim();
+    if (value) columns[key] = value.slice(0, 500);
+  }
+  return columns as Partial<LeadRow>;
+}
+
+const hasAttribution = (row: LeadRow) => ATTRIBUTION_KEYS.some((key) => row[key] !== null);
 
 export interface UpsertResult {
   lead: LeadRow;
@@ -164,6 +248,9 @@ function fillGaps(existing: LeadRow, incoming: IncomingLead): Partial<typeof lea
     patch.campaignName = incoming.campaignName ?? null;
   }
   if (!existing.formId && incoming.formId) patch.formId = incoming.formId;
+  if (!existing.pipeline && incoming.pipeline) patch.pipeline = incoming.pipeline;
+  if (!existing.brand && incoming.brand) patch.brand = incoming.brand;
+  if (!hasAttribution(existing)) Object.assign(patch, attributionColumns(incoming.attribution));
   return patch;
 }
 
@@ -234,6 +321,9 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
         consentedAt: incoming.consentedAt ?? null,
         consentSource: incoming.consentSource ?? null,
         consentText: incoming.consentText ?? null,
+        pipeline: incoming.pipeline ?? null,
+        brand: incoming.brand ?? null,
+        ...attributionColumns(incoming.attribution),
       })
       .returning();
     if (!created) throw new Error('lead insert returned no row');

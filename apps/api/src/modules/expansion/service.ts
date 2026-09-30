@@ -1,6 +1,6 @@
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { expansionIntakeLedger, expansionLandingPages } from '../../db/schema/index.js';
+import { clients, expansionIntakeLedger, leadSourceRules } from '../../db/schema/index.js';
 import {
   runExpansionIntake,
   type IntakeResult,
@@ -32,13 +32,28 @@ export function dbLedger(db: Database): Ledger {
   };
 }
 
+/**
+ * The brands' landing pages: the source rules of funnel Expansão. The brand
+ * is the rule's own name for it (what RD's campaigns are named after), else
+ * the client's.
+ */
 export async function activeRules(db: Database): Promise<LandingPageRule[]> {
   const rows = await db
-    .select({ identifier: expansionLandingPages.identifier, brand: expansionLandingPages.brand })
-    .from(expansionLandingPages)
-    .where(eq(expansionLandingPages.active, true))
-    .orderBy(asc(expansionLandingPages.identifier));
-  return rows;
+    .select({ identifier: leadSourceRules.pattern, brand: leadSourceRules.brand, clientName: clients.name })
+    .from(leadSourceRules)
+    .leftJoin(clients, eq(clients.id, leadSourceRules.clientId))
+    .where(
+      and(
+        eq(leadSourceRules.kind, 'landing_page'),
+        eq(leadSourceRules.pipeline, 'expansao'),
+        eq(leadSourceRules.active, true),
+      ),
+    )
+    .orderBy(asc(leadSourceRules.pattern));
+  return rows.flatMap((row) => {
+    const brand = row.brand ?? row.clientName;
+    return brand ? [{ identifier: row.identifier, brand }] : [];
+  });
 }
 
 export interface IntakeCredentials {

@@ -1,5 +1,7 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -73,11 +75,55 @@ export const leads = pgTable(
     enrichmentFacts: jsonb('enrichment_facts'),
     enrichmentError: text('enrichment_error'),
     enrichedAt: timestamp('enriched_at', { withTimezone: true }),
+    /** A LeadPipeline (expansao | formatacao), from the source rule or the RD CRM funnel; null when nothing said. */
+    pipeline: text('pipeline'),
+    /** The brand's name as the rule or RD named it, kept even before the brand is registered as a client. */
+    brand: text('brand'),
+    /**
+     * CRM Vendas phase 1 (docs/crm/fase1-complemento-funil.md): while RD CRM
+     * is where the team works, the stage is read from it and only mirrored
+     * here. Labels and ids, never text about the person.
+     */
+    rdDealId: text('rd_deal_id'),
+    rdContactId: text('rd_contact_id'),
+    /** RD CRM user id of the deal's owner; `rd_user_map` turns it into an employee. */
+    rdOwnerId: text('rd_owner_id'),
+    rdPipeline: text('rd_pipeline'),
+    stage: text('stage'),
+    /** 1-based position of the stage in its RD pipeline. */
+    stageOrder: integer('stage_order'),
+    stageChangedAt: timestamp('stage_changed_at', { withTimezone: true }),
+    /** true won, false lost, null open. */
+    won: boolean('won'),
+    closedAt: timestamp('closed_at', { withTimezone: true }),
+    lostReason: text('lost_reason'),
+    /** When the deal first left its first stage, from RD's `deal_stage_histories`. */
+    firstContactAt: timestamp('first_contact_at', { withTimezone: true }),
+    /** When the stage columns were last read from RD CRM. */
+    rdSyncedAt: timestamp('rd_synced_at', { withTimezone: true }),
+    /** First-touch attribution, as the conversion carried it (spec §1.4); never overwritten. */
+    utmSource: text('utm_source'),
+    utmMedium: text('utm_medium'),
+    utmCampaign: text('utm_campaign'),
+    utmContent: text('utm_content'),
+    utmTerm: text('utm_term'),
+    gclid: text('gclid'),
+    fbclid: text('fbclid'),
+    gbraid: text('gbraid'),
+    wbraid: text('wbraid'),
+    /** meta | google | null */
+    adPlatform: text('ad_platform'),
+    adCampaignExternalId: text('ad_campaign_external_id'),
+    adSetExternalId: text('ad_set_external_id'),
+    adExternalId: text('ad_external_id'),
+    referrer: text('referrer'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex('leads_source_external_uq').on(table.source, table.externalId),
+    uniqueIndex('leads_rd_deal_uq').on(table.rdDealId),
+    index('leads_pipeline_stage_idx').on(table.pipeline, table.stage),
     index('leads_phone_idx').on(table.tenantId, table.phone),
     index('leads_email_idx').on(table.tenantId, table.email),
     index('leads_client_created_idx').on(table.clientId, table.createdAt),
@@ -107,9 +153,13 @@ export const leadEvents = pgTable(
 );
 
 /**
- * Landing page / Meta form / Meta campaign -> client. Kept by whoever holds
- * `clients.manage` (Administração → Clientes). A conversion that matches no
- * rule still becomes a lead, under Wings Company and flagged as unmapped.
+ * Landing page / Meta form / Meta campaign -> client and funnel. Kept by
+ * whoever holds `clients.manage` (Administração → Clientes) or, for the
+ * brands' landing pages, `integrations.manage` (Integrações → Entrada de
+ * leads de Expansão): one list for both, since CRM phase 1. A rule may name a
+ * brand that is not yet a client (`client_id` null, `brand` set): its leads
+ * are filed under Wings Company, unmapped, with the brand and funnel kept. A
+ * conversion that matches no rule still becomes a lead, the same way.
  */
 export const leadSourceRules = pgTable(
   'lead_source_rules',
@@ -120,14 +170,35 @@ export const leadSourceRules = pgTable(
     kind: text('kind').notNull(),
     /** Normalised: lower-case, no scheme, no trailing slash. */
     pattern: text('pattern').notNull(),
-    clientId: uuid('client_id')
-      .notNull()
-      .references(() => clients.id),
+    /** Null while the brand is not registered as a client; `brand` then names it. */
+    clientId: uuid('client_id').references(() => clients.id),
+    /** A LeadPipeline, or null for a rule that only names the client. */
+    pipeline: text('pipeline'),
+    brand: text('brand'),
+    active: boolean('active').notNull().default(true),
     createdBy: uuid('created_by').references(() => employees.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [uniqueIndex('lead_source_rules_kind_pattern_uq').on(table.tenantId, table.kind, table.pattern)],
+  (table) => [
+    uniqueIndex('lead_source_rules_kind_pattern_uq').on(table.tenantId, table.kind, table.pattern),
+    check('lead_source_rules_client_or_brand', sql`${table.clientId} is not null or ${table.brand} is not null`),
+  ],
 );
+
+/**
+ * RD CRM user -> employee, so a deal's owner shows as a person of ours.
+ * Edited in Administração; an RD user with no employee shows as "—". Names
+ * here are RD users (our own staff), never leads.
+ */
+export const rdUserMap = pgTable('rd_user_map', {
+  tenantId: tenantId(),
+  rdUserId: text('rd_user_id').primaryKey(),
+  rdName: text('rd_name').notNull(),
+  rdActive: boolean('rd_active').notNull().default(true),
+  employeeId: uuid('employee_id').references(() => employees.id),
+  updatedBy: uuid('updated_by').references(() => employees.id),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
 
 /**
  * One wa.me link per client and channel: `wa.me/<Wings number>?text=<code>`.

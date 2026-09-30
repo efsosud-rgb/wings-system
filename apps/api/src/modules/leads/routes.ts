@@ -9,6 +9,7 @@ import {
   whatsappLinkOf,
   WINGS_CLIENT_ID,
   type LeadSourceRule,
+  type LeadPipeline,
   type LeadSourceRuleKind,
   type LeadTrackingLink,
   type LeadLinkChannel,
@@ -138,8 +139,9 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
         id: leadSourceRules.id,
         kind: leadSourceRules.kind,
         pattern: leadSourceRules.pattern,
-        clientId: leadSourceRules.clientId,
+        clientId: clients.id,
         clientName: clients.name,
+        pipeline: leadSourceRules.pipeline,
         createdAt: leadSourceRules.createdAt,
       })
       .from(leadSourceRules)
@@ -148,6 +150,7 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
     return rows.map((row) => ({
       ...row,
       kind: row.kind as LeadSourceRuleKind,
+      pipeline: (row.pipeline as LeadPipeline | null) ?? null,
       createdAt: row.createdAt.toISOString(),
     }));
   }
@@ -163,7 +166,13 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
     const actor = request.session.actor.employeeId;
     const [row] = await db
       .insert(leadSourceRules)
-      .values({ kind: body.data.kind, pattern: body.data.pattern, clientId: body.data.clientId, createdBy: actor })
+      .values({
+        kind: body.data.kind,
+        pattern: body.data.pattern,
+        clientId: body.data.clientId,
+        pipeline: body.data.pipeline ?? null,
+        createdBy: actor,
+      })
       .onConflictDoNothing()
       .returning();
     if (!row) {

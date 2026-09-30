@@ -15,7 +15,14 @@ import { z } from 'zod';
 // --- sources and channels ---------------------------------------------------
 
 /** How the lead entered the system. */
-export const LEAD_SOURCES = ['rd_station', 'whatsapp_link', 'meta_lead_ads', 'manual'] as const;
+export const LEAD_SOURCES = [
+  'rd_station',
+  'whatsapp_link',
+  'meta_lead_ads',
+  'manual',
+  'rd_crm',
+  'site_form',
+] as const;
 export type LeadSource = (typeof LEAD_SOURCES)[number];
 
 export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
@@ -23,7 +30,32 @@ export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
   whatsapp_link: 'WhatsApp (link rastreável)',
   meta_lead_ads: 'Meta Lead Ads',
   manual: 'Cadastro manual',
+  rd_crm: 'RD CRM (importado)',
+  site_form: 'Formulário do site',
 };
+
+/**
+ * The sales funnels a lead is headed for (CRM phase 1): Formatação is the
+ * Wings product, Expansão is selling a client brand's franchise.
+ */
+export const LEAD_PIPELINES = ['expansao', 'formatacao'] as const;
+export type LeadPipeline = (typeof LEAD_PIPELINES)[number];
+
+export const LEAD_PIPELINE_LABELS: Record<LeadPipeline, string> = {
+  expansao: 'Expansão',
+  formatacao: 'Formatação',
+};
+
+/** RD CRM's funnel name -> ours; the "Vendidos"/"Negócios perdidos" archives count as their origin. */
+export function pipelineOfRdFunnel(name: string | null | undefined): LeadPipeline | null {
+  const text = (name ?? '')
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase();
+  if (/expansao/.test(text)) return 'expansao';
+  if (/formatacao/.test(text)) return 'formatacao';
+  return null;
+}
 
 /** The channels a tracked WhatsApp link can be generated for. */
 export const LEAD_LINK_CHANNELS = ['instagram', 'site', 'linktree', 'linkedin', 'tiktok'] as const;
@@ -266,6 +298,7 @@ export interface LeadSourceRule {
   pattern: string;
   clientId: string;
   clientName: string;
+  pipeline: LeadPipeline | null;
   createdAt: string;
 }
 
@@ -723,6 +756,7 @@ export const sourceRuleCreateSchema = z.object({
     .transform(normalizeSourcePattern)
     .refine((pattern) => pattern.length >= 2, 'Informe o padrão'),
   clientId: z.uuid(),
+  pipeline: z.enum(LEAD_PIPELINES).optional(),
 });
 
 export const EXPANSION_AREA_MAX = 200;

@@ -6,6 +6,7 @@ import {
   WINGS_CLIENT_ID,
   WINGS_CLIENT_NAME,
   WINGS_CLIENT_SLUG,
+  normalizeSourcePattern,
   type PermissionKey,
   type RoleKey,
   type SectorSlug,
@@ -16,7 +17,7 @@ import { seedDriveTemplate, syncDriveFolders } from '../modules/drive/folders.js
 import { loadDotEnv } from './load-env.js';
 import {
   clients,
-  expansionLandingPages,
+  leadSourceRules,
   permissions,
   rolePermissions,
   roles,
@@ -41,11 +42,10 @@ const EXPANSION_LANDING_PAGES = [
   { identifier: 'lista-de-espera-familia-k', brand: 'Família K' },
 ];
 
+/** The Formatação forms (the Formatação net's list), Wings Company's own. */
+const FORMATACAO_LANDING_PAGES = ['wings-company-form-site', 'lp-formatacao-whatsapp', 'Formulário Simplificado. -02'];
+
 export async function seed(db: Database): Promise<void> {
-  // Insert-only: a person may deactivate or rename one later and the next deploy must not undo it.
-  for (const page of EXPANSION_LANDING_PAGES) {
-    await db.insert(expansionLandingPages).values(page).onConflictDoNothing();
-  }
 
   // Sectors: parents first, then children, so parent_id can be resolved.
   const slugs = Object.keys(SECTORS) as SectorSlug[];
@@ -138,6 +138,32 @@ export async function seed(db: Database): Promise<void> {
     .insert(clients)
     .values({ id: WINGS_CLIENT_ID, name: WINGS_CLIENT_NAME, slug: WINGS_CLIENT_SLUG })
     .onConflictDoNothing();
+
+  // Source rules for the known landing pages (CRM phase 1: one list for the
+  // client, the brand and the funnel). Insert-only: a person may deactivate,
+  // re-point or rename one later and the next deploy must not undo it.
+  for (const page of EXPANSION_LANDING_PAGES) {
+    await db
+      .insert(leadSourceRules)
+      .values({
+        kind: 'landing_page',
+        pattern: normalizeSourcePattern(page.identifier),
+        pipeline: 'expansao',
+        brand: page.brand,
+      })
+      .onConflictDoNothing();
+  }
+  for (const identifier of FORMATACAO_LANDING_PAGES) {
+    await db
+      .insert(leadSourceRules)
+      .values({
+        kind: 'landing_page',
+        pattern: normalizeSourcePattern(identifier),
+        clientId: WINGS_CLIENT_ID,
+        pipeline: 'formatacao',
+      })
+      .onConflictDoNothing();
+  }
 
   // The Drive's folder model (written once, then it belongs to whoever edits it)
   // and the folders it asks for. Both only ever add.

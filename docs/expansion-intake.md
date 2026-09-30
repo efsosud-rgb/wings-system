@@ -57,8 +57,9 @@ A resposta traz apenas contagens, identificadores de conversão, nomes de funil 
 nomes de campanha: por identificador, conversões, pessoas, quantas viraram negócio (por
 "Funil / Etapa") e quantas vazaram; e a lista de hoje (fuso de São Paulo) com plataforma
 (gclid/fbclid/utm_source), tipo de evento, horário e um número por pessoa. Nunca nome,
-e-mail nem telefone. `registered` lista as páginas ativas da tabela
-`expansion_landing_pages`, para achar as que não tiveram conversão. O RD não expõe uma
+e-mail nem telefone. `registered` lista as páginas ativas das regras de
+origem do funil Expansão (`lead_source_rules`, `pipeline = 'expansao'`; até a migração
+0051 era a tabela `expansion_landing_pages`), para achar as que não tiveram conversão. O RD não expõe uma
 lista de landing pages pela API, então "página sem conversão" é a cadastrada sem conversão.
 
 ## Recuperação de conversões sem negócio
