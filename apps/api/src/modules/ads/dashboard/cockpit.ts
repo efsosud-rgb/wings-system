@@ -7,6 +7,7 @@ import {
   type AdPlatform,
   type CockpitAdWarning,
   type CockpitAlert,
+  type CockpitCampaignOption,
   type CockpitCampaign,
   type CockpitCampaignScope,
   type CockpitDay,
@@ -53,6 +54,7 @@ export async function cockpit(
   days: DashboardWindow,
   now = new Date(),
   campaignScope: CockpitCampaignScope = 'ativas',
+  pickedIds: string[] = [],
 ): Promise<DashboardCockpit> {
   const window = windowOf(days, now);
   const accounts = await activeAccounts(db);
@@ -109,6 +111,20 @@ export async function cockpit(
       (campaign) =>
         activeIds.has(campaign.id) || keys.has(`${campaign.adAccountId}:${campaign.externalId}`),
     );
+  }
+  // The picker offers every campaign of the scope; a pick narrows all that follows.
+  const campaignOptions: CockpitCampaignOption[] = inScope
+    .map((campaign) => ({
+      id: campaign.id,
+      platform: platformOf.get(campaign.adAccountId) ?? ('meta' as AdPlatform),
+      name: campaign.name,
+      delivering: activeIds.has(campaign.id),
+    }))
+    .sort((a, b) => a.platform.localeCompare(b.platform) || a.name.localeCompare(b.name));
+  const picking = pickedIds.length > 0;
+  if (picking) {
+    const picked = new Set(pickedIds);
+    inScope = inScope.filter((campaign) => picked.has(campaign.id));
   }
   const scopeIds = new Set(inScope.map((campaign) => campaign.id));
   const scopeExternal = inScope.map((campaign) => campaign.externalId);
@@ -198,6 +214,22 @@ export async function cockpit(
       : [],
   ]);
 
+  // Picked campaigns: RD's CRM figures come from the leads attributed to them
+  // (`campaign_leads`, counted from 28/09), not from the paid-platform totals.
+  const crmSince = saoPauloDayOf(new Date(CAMPAIGN_LEADS_SINCE));
+  const pickedLeads =
+    picking && scopeIds.size
+      ? await db.query.campaignLeads.findMany({
+          where: and(
+            inArray(campaignLeads.campaignId, [...scopeIds]),
+            eq(campaignLeads.isTest, false),
+            gte(campaignLeads.enteredAt, new Date(`${window.previousSince}T00:00:00-03:00`)),
+            lte(campaignLeads.enteredAt, new Date(`${window.until}T23:59:59-03:00`)),
+          ),
+          columns: { enteredAt: true, win: true },
+        })
+      : [];
+
   const inCurrent = (day: string) => day >= window.since && day <= window.until;
   const byDay = new Map(perDay.map((row) => [row.day, row]));
   const sessionsByDay = new Map(sessionsPerDay.map((row) => [row.day, Number(row.sessions)]));
@@ -209,6 +241,11 @@ export async function cockpit(
     const sum = (pick: (row: (typeof perDay)[number]) => string) =>
       rows.reduce((total, row) => total + Number(pick(row)), 0);
     const windowDeals = deals.filter((deal) => inCurrent(dealDay(deal.createdAt)) === current);
+    const windowLeads = pickedLeads.filter(
+      (lead) => inCurrent(dealDay(lead.enteredAt)) === current,
+    );
+    // The attribution starts on `crmSince`: a window that ends before it has nothing to count.
+    const attributed = (current ? window.until : window.previousUntil) >= crmSince;
     const sessions = [...sessionsByDay]
       .filter(([day]) => inCurrent(day) === current)
       .reduce((total, [, count]) => total + count, 0);
@@ -217,10 +254,14 @@ export async function cockpit(
       impressions: sum((row) => row.impressions),
       clicks: sum((row) => row.clicks),
       leads: sum((row) => row.leads),
-      sessions: siteOn ? sessions : null,
-      crmLeads: windowDeals.length,
-      meetings: windowDeals.filter((deal) => deal.reachedMeeting).length,
-      sales: windowDeals.filter((deal) => deal.win === true).length,
+      sessions: siteOn && !picking ? sessions : null,
+      crmLeads: picking ? (attributed ? windowLeads.length : null) : windowDeals.length,
+      meetings: picking ? null : windowDeals.filter((deal) => deal.reachedMeeting).length,
+      sales: picking
+        ? attributed
+          ? windowLeads.filter((lead) => lead.win === true).length
+          : null
+        : windowDeals.filter((deal) => deal.win === true).length,
     };
   };
 
@@ -264,7 +305,7 @@ export async function cockpit(
       .map((ad) => `${platformOf.get(ad.adAccountId) ?? 'meta'}:${ad.externalId}`),
   );
   for (const ad of adRows) {
-    if (!ad.campaignId || !activeIds.has(ad.campaignId)) continue;
+    if (!ad.campaignId || !activeIds.has(ad.campaignId) || !scopeIds.has(ad.campaignId)) continue;
     const platform = platformOf.get(ad.adAccountId) ?? 'meta';
     const issue = adDeliveryIssue({
       platform,
@@ -314,7 +355,7 @@ export async function cockpit(
       .map((row) => `${row.adAccountId}:${row.externalId}`),
   );
   const alertInScope = (row: (typeof alertRows)[number]) => {
-    if (!row.entityLevel || !row.entityExternalId) return true;
+    if (!row.entityLevel || !row.entityExternalId) return !picking; // account-wide: not a picked campaign's
     const key = `${row.adAccountId}:${row.entityExternalId}`;
     if (row.entityLevel === 'campaign') return activeExternalIds.has(row.entityExternalId);
     if (row.entityLevel === 'ad_set') return activeAdSets.has(row.entityExternalId);
@@ -335,17 +376,20 @@ export async function cockpit(
 
   // Performance ativa: RD leads of the active campaigns since 28/09.
   const activeSince = saoPauloDayOf(new Date(CAMPAIGN_LEADS_SINCE));
+  // With a pick, the performance block judges the picked campaigns.
+  const perfIds = picking ? scopeIds : activeIds;
+  const perfExternal = picking ? scopeExternal : activeExternal;
   const [leadRows, [activeSpend], [leadsFetched]] = await Promise.all([
-    activeIds.size
+    perfIds.size
       ? db.query.campaignLeads.findMany({
           where: and(
-            inArray(campaignLeads.campaignId, [...activeIds]),
+            inArray(campaignLeads.campaignId, [...perfIds]),
             eq(campaignLeads.isTest, false),
             gte(campaignLeads.enteredAt, new Date(CAMPAIGN_LEADS_SINCE)),
           ),
         })
       : [],
-    activeExternal.length
+    perfExternal.length
       ? db
           .select({ spend: sql<string>`coalesce(sum(${adMetricsDaily.spendCents}), 0)` })
           .from(adMetricsDaily)
@@ -353,7 +397,7 @@ export async function cockpit(
             and(
               inArray(adMetricsDaily.adAccountId, ids),
               eq(adMetricsDaily.level, 'campaign'),
-              inArray(adMetricsDaily.entityExternalId, activeExternal),
+              inArray(adMetricsDaily.entityExternalId, perfExternal),
               gte(adMetricsDaily.day, activeSince),
             ),
           )
@@ -405,6 +449,7 @@ export async function cockpit(
     campaignScope,
     activeCampaigns: inScope
       .map((campaign): CockpitCampaign => ({
+        id: campaign.id,
         platform: platformOf.get(campaign.adAccountId) ?? 'meta',
         externalId: campaign.externalId,
         name: campaign.name,
@@ -416,6 +461,26 @@ export async function cockpit(
         spentTodayCents: todayRows.get(campaign.externalId)?.spendCents ?? 0,
       }))
       .sort((a, b) => a.platform.localeCompare(b.platform) || a.name.localeCompare(b.name)),
+    campaignOptions,
+    selection: picking
+      ? {
+          ids: inScope.map((campaign) => campaign.id),
+          unknown: pickedIds.length - inScope.length,
+          crmSince: window.since < crmSince ? crmSince : null,
+          why: {
+            sessions: 'as sessões do site não são separadas por campanha',
+            crmLeads:
+              window.until < crmSince
+                ? `a atribuição de leads a campanhas começou em ${crmSince.split('-').reverse().join('/')}`
+                : null,
+            meetings: 'o RD não atribui reuniões a uma campanha',
+            sales:
+              window.until < crmSince
+                ? `a atribuição de vendas a campanhas começou em ${crmSince.split('-').reverse().join('/')}`
+                : null,
+          },
+        }
+      : null,
     adWarnings,
     activePerformance: {
       since: activeSince,

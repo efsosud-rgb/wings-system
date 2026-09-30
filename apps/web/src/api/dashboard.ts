@@ -66,14 +66,20 @@ export function useDashboardCampaigns(days: DashboardWindow) {
 export function useDashboardCockpit(
   days: DashboardWindow,
   campaigns: CockpitCampaignScope = 'ativas',
+  picked: string[] = [],
 ) {
+  const pick = picked.join(',');
   return useQuery({
-    queryKey: ['dashboard', 'cockpit', days, campaigns],
+    queryKey: ['dashboard', 'cockpit', days, campaigns, pick],
     queryFn: () =>
       api.get<{ cockpit: DashboardCockpit }>(
-        `/ads/dashboard/cockpit?days=${days}&campanhas=${campaigns}`,
+        `/ads/dashboard/cockpit?days=${days}&campanhas=${campaigns}${
+          pick ? `&campanha=${encodeURIComponent(pick)}` : ''
+        }`,
       ),
     staleTime: STALE_MS,
+    // The picker keeps its options while the pick reloads.
+    placeholderData: (previous) => previous,
   });
 }
 

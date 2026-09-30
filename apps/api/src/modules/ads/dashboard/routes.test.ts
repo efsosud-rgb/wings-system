@@ -912,4 +912,54 @@ describe('the cockpit', () => {
         .where(eq(adCampaigns.externalId, '100'));
     }
   });
+
+  it('narrows every block to the campaigns picked, keeps the picker whole, and says why a figure is "—"', async () => {
+    const all = await read<DashboardCockpit>('/ads/dashboard/cockpit?days=7', 'cockpit');
+    expect(all.selection).toBeNull();
+    expect(all.campaignOptions.map((option) => option.name).sort()).toEqual([
+      'LEAD | FORMS',
+      'Pesquisa | Franquia',
+    ]);
+    const meta = all.campaignOptions.find((option) => option.platform === 'meta')!;
+    const google = all.campaignOptions.find((option) => option.platform === 'google')!;
+
+    const onlyMeta = await read<DashboardCockpit>(
+      `/ads/dashboard/cockpit?days=7&campanha=${meta.id}`,
+      'cockpit',
+    );
+    // The picker still offers both; the figures are the picked one's alone.
+    expect(onlyMeta.campaignOptions).toEqual(all.campaignOptions);
+    expect(onlyMeta.activeCampaigns.map((campaign) => campaign.id)).toEqual([meta.id]);
+    expect(onlyMeta.current.spendCents).toBe(onlyMeta.spendByPlatform.meta);
+    expect(onlyMeta.spendByPlatform.google).toBe(0);
+    expect(onlyMeta.current.spendCents).toBeLessThan(all.current.spendCents);
+    expect(onlyMeta.daily.reduce((sum, day) => sum + day.spendCents, 0)).toBe(
+      onlyMeta.current.spendCents,
+    );
+    expect(onlyMeta.creatives.every((creative) => creative.platform === 'meta')).toBe(true);
+    // RD cannot split these by campaign: "—" and the reason, never the site-wide number.
+    expect(onlyMeta.current.sessions).toBeNull();
+    expect(onlyMeta.current.meetings).toBeNull();
+    expect(onlyMeta.selection).toMatchObject({ ids: [meta.id], unknown: 0 });
+    expect(onlyMeta.selection?.why.sessions).toContain('campanha');
+    expect(onlyMeta.selection?.why.meetings).toContain('reuniões');
+
+    // Two picked equal the unpicked view; an unknown id is ignored and counted.
+    const both = await read<DashboardCockpit>(
+      `/ads/dashboard/cockpit?days=7&campanha=${meta.id},${google.id},11111111-1111-4111-8111-111111111111`,
+      'cockpit',
+    );
+    expect(both.current.spendCents).toBe(all.current.spendCents);
+    expect(both.selection).toMatchObject({ unknown: 1 });
+  });
+
+  it('refuses a campaign list that is not ids', async () => {
+    const cookies = await sessionFor('marketing');
+    const response = await app.inject({
+      method: 'GET',
+      url: '/ads/dashboard/cockpit?days=7&campanha=abc',
+      cookies,
+    });
+    expect(response.statusCode).toBe(400);
+  });
 });

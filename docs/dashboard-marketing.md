@@ -482,3 +482,24 @@ borda sutil e cantos de 10 px, texto branco e rótulos cinza-claro.
   entregaram na janela atual ou na anterior, e as marca na faixa do topo; os
   criativos passam a ser todos os anúncios delas que entregaram. "Performance
   ativa" fica sempre nas campanhas ativas.
+
+## Cockpit: seletor de campanha
+
+Ao lado de "Campanhas: Só ativas | Todas", o seletor **Campanha** escolhe uma ou mais
+campanhas do modo em vigor. Sem escolha vale o modo inteiro ("Todas as ativas" ou
+"Todas"). A escolha vai no endereço, `?campanha=id1,id2` (ids das nossas campanhas,
+os mesmos de `campaignOptions` na resposta), então o link pode ser compartilhado.
+
+`GET /ads/dashboard/cockpit?days=&campanhas=&campanha=` estreita **todos** os blocos: cartões,
+evolução diária, funil, mapa, criativos, anúncios que não rodam, alertas e a Performance
+ativa. O que o RD não separa por campanha aparece como "—" com o motivo em
+`selection.why`, nunca com o número do site inteiro:
+
+| Cartão | Com campanhas escolhidas |
+| --- | --- |
+| Sessões no site | "—": o GA4 não separa por campanha |
+| Leads no CRM e Vendas | leads atribuídos às campanhas (`campaign_leads`, desde 28/09); "—" se a janela toda é anterior a 28/09 |
+| Reuniões | "—": o RD não atribui reuniões a uma campanha |
+| Alertas | só os de campanha, conjunto ou anúncio escolhidos (os da conta somem) |
+
+Um id que não é campanha do modo é ignorado e contado em `selection.unknown`.

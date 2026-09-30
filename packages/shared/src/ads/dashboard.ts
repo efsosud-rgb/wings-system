@@ -780,6 +780,8 @@ export const COCKPIT_CAMPAIGN_SCOPES = ['ativas', 'todas'] as const;
 export type CockpitCampaignScope = (typeof COCKPIT_CAMPAIGN_SCOPES)[number];
 
 export interface CockpitCampaign {
+  /** The campaign's id in our tables: what `?campanha=` carries. */
+  id: string;
   platform: AdPlatform;
   externalId: string;
   name: string;
@@ -804,6 +806,24 @@ export interface CockpitAdWarning {
   issue: string;
 }
 
+export interface CockpitCampaignOption {
+  id: string;
+  platform: AdPlatform;
+  name: string;
+  delivering: boolean;
+}
+
+export interface CockpitSelection {
+  /** The picked campaigns found in the scope. */
+  ids: string[];
+  /** Picked ids that are not campaigns of this scope (ignored). */
+  unknown: number;
+  /** CRM leads and sales of picked campaigns exist only from this day (attribution starts then); null when the whole window is covered. */
+  crmSince: string | null;
+  /** Why a figure is "—" while campaigns are picked. */
+  why: { sessions: string; crmLeads: string | null; meetings: string; sales: string | null };
+}
+
 export interface CockpitFigures {
   spendCents: number;
   impressions: number;
@@ -812,10 +832,10 @@ export interface CockpitFigures {
   leads: number;
   /** GA4 sessions; null while GA4 is not connected. */
   sessions: number | null;
-  /** RD CRM deals from a paid platform, meetings and sales. */
-  crmLeads: number;
-  meetings: number;
-  sales: number;
+  /** RD CRM deals from a paid platform, meetings and sales. Null when campaigns are picked and RD cannot say (see `DashboardCockpit.selection`). */
+  crmLeads: number | null;
+  meetings: number | null;
+  sales: number | null;
 }
 
 export interface CockpitDay {
@@ -885,6 +905,10 @@ export interface DashboardCockpit {
   campaignScope: CockpitCampaignScope;
   /** The campaigns every figure above is summed over (the name predates "Todas"). */
   activeCampaigns: CockpitCampaign[];
+  /** Every campaign the picker offers for this scope (before any pick). */
+  campaignOptions: CockpitCampaignOption[];
+  /** Set only when campaigns were picked: which ones, and what RD cannot say about them. */
+  selection: CockpitSelection | null;
   /** Ads switched on in those campaigns that are not serving; outside every figure. */
   adWarnings: CockpitAdWarning[];
   activePerformance: CockpitActivePerformance;

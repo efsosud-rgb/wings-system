@@ -25,6 +25,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /** Every campaign filter the page asked the Cockpit for, in order. */
 const cockpitScopes: string[] = [];
+/** Every campaign pick (ids joined by commas, '' for none) the page asked for. */
+const cockpitPicks: string[] = [];
 
 // Filled after the builders below; the mocks read it lazily.
 const data = {} as {
@@ -48,8 +50,9 @@ vi.mock('../api/dashboard.js', () => ({
   useDashboardAudience: () => ok({ audience: data.audience }),
   useDashboardSite: () => ok({ site: data.site }),
   useDashboardFunnel: () => ok({ funnel: data.funnel }),
-  useDashboardCockpit: (_days: number, scope: string) => {
+  useDashboardCockpit: (_days: number, scope: string, picked: string[] = []) => {
     cockpitScopes.push(scope);
+    cockpitPicks.push(picked.join(','));
     return ok({ cockpit: data.cockpit });
   },
 }));
@@ -922,6 +925,7 @@ describe('the cockpit', () => {
       alerts: [],
       activeCampaigns: [
         {
+          id: 'c-meta',
           platform: 'meta',
           externalId: '1',
           name: 'Meta 28Set',
@@ -933,6 +937,7 @@ describe('the cockpit', () => {
           spentTodayCents: 12_000,
         },
         {
+          id: 'c-google',
           platform: 'google',
           externalId: '2',
           name: 'SEARCH | Formatação | Alta Intenção',
@@ -967,6 +972,16 @@ describe('the cockpit', () => {
         smallSample: true,
         fetchedAt: '2026-09-28T20:00:00.000Z',
       },
+      campaignOptions: [
+        { id: 'c-meta', platform: 'meta', name: 'Meta 28Set', delivering: true },
+        {
+          id: 'c-google',
+          platform: 'google',
+          name: 'SEARCH | Formatação | Alta Intenção',
+          delivering: true,
+        },
+      ],
+      selection: null,
       campaignScope: 'ativas',
       spendByPlatform: { meta: 120_000, google: 30_000 },
       cplTargetCents: null,
@@ -1003,6 +1018,64 @@ describe('the cockpit campaign filter', () => {
     cleanup();
     renderAt('/dashboard/marketing?aba=cockpit&campanhas=todas');
     expect(cockpitScopes.at(-1)).toBe('todas');
+  });
+
+  it('picks campaigns from a list, keeps the pick in the address, and clears it', () => {
+    data.cockpit = {
+      ...data.cockpit,
+      campaignOptions: [
+        { id: 'c-meta', platform: 'meta', name: 'Jimmy Ogro 28Set', delivering: true },
+        { id: 'c-google', platform: 'google', name: 'SEARCH Formatação', delivering: true },
+      ],
+      selection: null,
+    };
+    cockpitPicks.length = 0;
+    renderAt('/dashboard/marketing?aba=cockpit');
+    expect(cockpitPicks.at(-1)).toBe('');
+    fireEvent.click(screen.getByRole('button', { name: /Todas as ativas/ }));
+    const panel = screen.getByRole('group', { name: 'Escolher campanhas' });
+    // Each active campaign, by name, with its platform.
+    expect(within(panel).getByText('Jimmy Ogro 28Set')).toBeTruthy();
+    expect(within(panel).getByText('(Meta Ads)')).toBeTruthy();
+    fireEvent.click(within(panel).getByLabelText(/Jimmy Ogro 28Set/));
+    expect(cockpitPicks.at(-1)).toBe('c-meta');
+    fireEvent.click(within(panel).getByLabelText(/SEARCH Formatação/));
+    expect(cockpitPicks.at(-1)).toBe('c-meta,c-google');
+    fireEvent.click(within(panel).getByLabelText('Todas as ativas'));
+    expect(cockpitPicks.at(-1)).toBe('');
+  });
+
+  it('opens on the campaigns named in a shared link', () => {
+    cockpitPicks.length = 0;
+    renderAt('/dashboard/marketing?aba=cockpit&campanha=c-google');
+    expect(cockpitPicks.at(-1)).toBe('c-google');
+    expect(screen.getByRole('button', { name: /SEARCH Formatação/ })).toBeTruthy();
+  });
+
+  it('says why a figure is "—" while campaigns are picked', () => {
+    data.cockpit = {
+      ...data.cockpit,
+      current: { ...data.cockpit.current, sessions: null, meetings: null, sales: null },
+      previous: { ...data.cockpit.previous, sessions: null, meetings: null, sales: null },
+      selection: {
+        ids: ['c-meta'],
+        unknown: 0,
+        crmSince: '2026-09-28',
+        why: {
+          sessions: 'as sessões do site não são separadas por campanha',
+          crmLeads: null,
+          meetings: 'o RD não atribui reuniões a uma campanha',
+          sales: null,
+        },
+      },
+    };
+    renderAt('/dashboard/marketing?aba=cockpit&campanha=c-meta');
+    expect(
+      screen.getAllByText('as sessões do site não são separadas por campanha').length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText('o RD não atribui reuniões a uma campanha').length).toBeGreaterThan(
+      0,
+    );
   });
 
   it('puts a balloon on the state with the most spend', () => {

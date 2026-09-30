@@ -80,7 +80,25 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
         .status(400)
         .send({ error: 'invalid_request', message: 'campanhas deve ser ativas ou todas.' });
     }
-    return reply.send({ cockpit: await cockpit(db, env, days, now(), scope.data) });
+    const picked = z
+      .string()
+      .max(2000)
+      .default('')
+      .transform((raw) =>
+        raw
+          .split(',')
+          .map((id) => id.trim())
+          .filter(Boolean),
+      )
+      .pipe(z.array(z.string().uuid()).max(50))
+      .safeParse((request.query as { campanha?: string }).campanha);
+    if (!picked.success) {
+      return reply.status(400).send({
+        error: 'invalid_request',
+        message: 'campanha deve ser uma lista de ids separados por vírgula.',
+      });
+    }
+    return reply.send({ cockpit: await cockpit(db, env, days, now(), scope.data, picked.data) });
   });
 
   app.get('/ads/dashboard/site', guard, async (request, reply) => {
