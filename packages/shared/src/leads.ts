@@ -361,8 +361,33 @@ export function matchSourceRule<Rule extends { kind: LeadSourceRuleKind; pattern
 // --- expansion area -----------------------------------------------------------
 
 export const BRAZIL_UFS = [
-  'AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR',
-  'PE', 'PI', 'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO',
+  'AC',
+  'AL',
+  'AP',
+  'AM',
+  'BA',
+  'CE',
+  'DF',
+  'ES',
+  'GO',
+  'MA',
+  'MT',
+  'MS',
+  'MG',
+  'PA',
+  'PB',
+  'PR',
+  'PE',
+  'PI',
+  'RJ',
+  'RN',
+  'RS',
+  'RO',
+  'RR',
+  'SC',
+  'SP',
+  'SE',
+  'TO',
 ] as const;
 export type BrazilUf = (typeof BRAZIL_UFS)[number];
 
@@ -387,7 +412,8 @@ const plainText = (text: string) =>
 export function parseExpansionEntry(raw: string): ExpansionEntry | null {
   const text = raw.trim();
   const ufOnly = text.toUpperCase();
-  if ((BRAZIL_UFS as readonly string[]).includes(ufOnly)) return { uf: ufOnly as BrazilUf, city: null };
+  if ((BRAZIL_UFS as readonly string[]).includes(ufOnly))
+    return { uf: ufOnly as BrazilUf, city: null };
   const match = /^(.+?)\s*[/,\-–]\s*([A-Za-z]{2})$/.exec(text);
   if (!match) return null;
   const uf = (match[2] as string).toUpperCase();
@@ -477,8 +503,7 @@ export interface FranchiseeScore {
 const MANAGEMENT_TERMS =
   /\b(s[oó]ci[oa]|fundador|founder|co-?founder|ceo|cfo|coo|diret|gerent|propriet[aá]ri|empres[aá]ri|owner|head of|coordenad|supervis|gestor)/i;
 
-const formatBrl = (value: number) =>
-  `R$ ${Math.round(value).toLocaleString('pt-BR')}`;
+const formatBrl = (value: number) => `R$ ${Math.round(value).toLocaleString('pt-BR')}`;
 
 /**
  * "Perfil de franqueado", 0–100, from three explainable criteria: probable
@@ -501,7 +526,9 @@ export function franchiseeScoreOf(
   };
   if (facts.company?.leadIsPartner) {
     capital.points += 15;
-    capital.reasons.push(`Consta como sócio de ${facts.company.name} (CNPJ ${facts.company.cnpj}).`);
+    capital.reasons.push(
+      `Consta como sócio de ${facts.company.name} (CNPJ ${facts.company.cnpj}).`,
+    );
   }
   if (facts.company && facts.company.capitalSocialBrl !== null) {
     const value = facts.company.capitalSocialBrl;
@@ -512,7 +539,9 @@ export function franchiseeScoreOf(
       capital.points += 8;
       capital.reasons.push(`Capital social de ${formatBrl(value)} na empresa encontrada.`);
     } else {
-      capital.reasons.push(`Capital social de ${formatBrl(value)} na empresa encontrada, abaixo de R$ 30.000.`);
+      capital.reasons.push(
+        `Capital social de ${formatBrl(value)} na empresa encontrada, abaixo de R$ 30.000.`,
+      );
     }
   }
   if (facts.emailDomain?.kind === 'corporate') {
@@ -541,14 +570,17 @@ export function franchiseeScoreOf(
   );
   if (managementHit) {
     management.points += 15;
-    const term = (MANAGEMENT_TERMS.exec(`${managementHit.title} ${managementHit.snippet}`) ?? [''])[0];
+    const term = (MANAGEMENT_TERMS.exec(`${managementHit.title} ${managementHit.snippet}`) ?? [
+      '',
+    ])[0];
     management.reasons.push(`Cargo de gestão citado em resultado público ("${term}").`);
   }
   if (facts.company?.leadIsPartner) {
     management.points += 10;
     management.reasons.push('Sócio ou administrador de empresa ativa na Receita.');
   }
-  if (management.reasons.length === 0) management.reasons.push('Nenhum sinal de gestão encontrado.');
+  if (management.reasons.length === 0)
+    management.reasons.push('Nenhum sinal de gestão encontrado.');
 
   const location: ScoreCriterion = {
     key: 'location',
@@ -567,17 +599,26 @@ export function franchiseeScoreOf(
   } else {
     const region = facts.region;
     const cityHit = expansionArea.find(
-      (entry) => entry.city !== null && entry.uf === region.uf && plainText(entry.city) === plainText(region.city),
+      (entry) =>
+        entry.city !== null &&
+        entry.uf === region.uf &&
+        plainText(entry.city) === plainText(region.city),
     );
     const ufHit = expansionArea.find((entry) => entry.uf === region.uf);
     if (cityHit) {
       location.points = 30;
-      location.reasons.push(`DDD ${region.ddd} é a região de ${region.city}/${region.uf}, cidade da área de expansão.`);
+      location.reasons.push(
+        `DDD ${region.ddd} é a região de ${region.city}/${region.uf}, cidade da área de expansão.`,
+      );
     } else if (ufHit) {
       location.points = 15;
-      location.reasons.push(`DDD ${region.ddd} (região de ${region.city}/${region.uf}): o estado está na área de expansão, a cidade não.`);
+      location.reasons.push(
+        `DDD ${region.ddd} (região de ${region.city}/${region.uf}): o estado está na área de expansão, a cidade não.`,
+      );
     } else {
-      location.reasons.push(`DDD ${region.ddd} (região de ${region.city}/${region.uf}) fora da área de expansão.`);
+      location.reasons.push(
+        `DDD ${region.ddd} (região de ${region.city}/${region.uf}) fora da área de expansão.`,
+      );
     }
   }
 
@@ -697,6 +738,10 @@ export interface Lead {
   firstMessage: string | null;
   whatsapp: LeadWhatsappProfile | null;
   origin: LeadOrigin;
+  pipeline: LeadPipeline | null;
+  brand: string | null;
+  /** The RD CRM deal, when the lead has one. */
+  crm: LeadCrm | null;
   consent: LeadConsent;
   research: LeadResearch;
   createdAt: string;
@@ -715,7 +760,64 @@ export interface LeadListItem {
   score: number | null;
   researchState: LeadEnrichmentState;
   createdAt: string;
+  /** CRM phase 1: funnel, brand and the stage read from RD CRM (null when the lead has no RD deal). */
+  pipeline: LeadPipeline | null;
+  brand: string | null;
+  stage: string | null;
+  won: boolean | null;
+  ownerName: string | null;
+  /** When the deal entered its current stage; null when unknown (never a guess). */
+  stageChangedAt: string | null;
 }
+
+/** The deal of a lead in RD CRM, as last read (CRM phase 1: RD is where the team works). */
+export interface LeadCrm {
+  rdDealId: string;
+  rdUrl: string;
+  rdPipeline: string | null;
+  stage: string | null;
+  stageOrder: number | null;
+  stageChangedAt: string | null;
+  firstContactAt: string | null;
+  won: boolean | null;
+  closedAt: string | null;
+  lostReason: string | null;
+  ownerName: string | null;
+  syncedAt: string | null;
+}
+
+export const rdDealUrl = (rdDealId: string) => `https://crm.rdstation.com/app/deals/${rdDealId}`;
+
+/** One line of the mini-funnel at the top of the Funil: a brand of Expansão, or Formatação. */
+export interface FunnelSummaryRow {
+  pipeline: LeadPipeline;
+  /** The brand, or "Formatação"; "(sem marca)" for Expansão leads no one named. */
+  label: string;
+  arrived: number;
+  /** Left the first stage, or closed. */
+  worked: number;
+  /** At "Reunião realizada" or later, or won (RD keeps no history of lost ones). */
+  meeting: number;
+  won: number;
+}
+
+export interface FunnelSummary {
+  days: number;
+  rows: FunnelSummaryRow[];
+  /** The owners and stages present, for the filters. */
+  owners: { id: string; name: string }[];
+  stages: { pipeline: LeadPipeline; stage: string; order: number }[];
+  /** Last time a lead's stage was read from RD CRM; null when never. */
+  syncedAt: string | null;
+}
+
+export const LEAD_OUTCOMES = ['open', 'won', 'lost'] as const;
+export type LeadOutcome = (typeof LEAD_OUTCOMES)[number];
+export const LEAD_OUTCOME_LABELS: Record<LeadOutcome, string> = {
+  open: 'Em andamento',
+  won: 'Ganho',
+  lost: 'Perdido',
+};
 
 export interface LeadTrackingLink {
   id: string;
@@ -779,16 +881,62 @@ export const expansionAreaSchema = z.object({
           });
           return z.NEVER;
         }
-        if (!parsed.some((seen) => seen.uf === entry.uf && seen.city === entry.city)) parsed.push(entry);
+        if (!parsed.some((seen) => seen.uf === entry.uf && seen.city === entry.city))
+          parsed.push(entry);
       }
       return parsed;
     }),
 });
 
 export const leadListQuerySchema = z.object({
-  q: z.string().trim().max(120).optional().or(z.literal('').transform(() => undefined)),
-  clientId: z.uuid().optional().or(z.literal('').transform(() => undefined)),
-  source: z.enum(LEAD_SOURCES).optional().or(z.literal('').transform(() => undefined)),
+  q: z
+    .string()
+    .trim()
+    .max(120)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  clientId: z
+    .uuid()
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  source: z
+    .enum(LEAD_SOURCES)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  pipeline: z
+    .enum(LEAD_PIPELINES)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  stage: z
+    .string()
+    .trim()
+    .max(120)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  owner: z
+    .uuid()
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  outcome: z
+    .enum(LEAD_OUTCOMES)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  /** Open leads whose stage has not changed for more than this many days. */
+  staleDays: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(3650)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+});
+
+export const funnelSummaryQuerySchema = z.object({
+  days: z.coerce
+    .number()
+    .int()
+    .refine((days) => days === 30 || days === 90, 'use 30 ou 90')
+    .default(30),
 });
 
 // Routes (docs/leads/intake.md):

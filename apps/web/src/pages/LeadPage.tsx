@@ -1,6 +1,7 @@
 import {
   LEAD_CHANNEL_LABELS,
   LEAD_LEGAL_BASIS_LABELS,
+  LEAD_PIPELINE_LABELS,
   LEAD_SOURCE_LABELS,
   type Lead,
   type LeadEvent,
@@ -11,7 +12,7 @@ import { hasPermission, useSession } from '../api/auth.js';
 import { ApiError } from '../api/client.js';
 import { useLead, useResearchLead } from '../api/leads.js';
 import { Alert, Button } from '../components/ui.js';
-import { formatDateTime, formatPhone, RESEARCH_LABELS } from './LeadsPage.js';
+import { formatDateTime, formatPhone, RESEARCH_LABELS, sinceLabel } from './LeadsPage.js';
 
 /**
  * One lead: who, the Origem block (client, channel, landing page or
@@ -29,15 +30,86 @@ const EVENT_LABELS: Record<string, string> = {
   'research.started': 'Pesquisa iniciada',
   'research.done': 'Pesquisa concluída',
   'research.failed': 'Pesquisa falhou',
+  'lead.imported.rd_crm': 'Trazido do RD CRM',
+  'rd.deal_created': 'Negócio criado no RD CRM pela entrada automática',
+  'rd.other_deal': 'Outro negócio da mesma pessoa no RD CRM',
 };
 
+function RdCrm({ lead }: { lead: Lead }) {
+  const crm = lead.crm;
+  return (
+    <fieldset className="block">
+      <legend>No RD CRM</legend>
+      {!crm ? (
+        <p className="muted">Sem negócio no RD CRM ligado a este lead.</p>
+      ) : (
+        <>
+          <dl className="lead-facts">
+            <dt>Funil</dt>
+            <dd>
+              {lead.pipeline ? LEAD_PIPELINE_LABELS[lead.pipeline] : '—'}
+              {crm.rdPipeline && <span className="cell-sub"> ({crm.rdPipeline} no RD)</span>}
+            </dd>
+            {lead.brand && (
+              <>
+                <dt>Marca</dt>
+                <dd>{lead.brand}</dd>
+              </>
+            )}
+            <dt>Etapa</dt>
+            <dd>
+              {crm.stage ?? '—'}
+              {crm.won === true && <span className="status status-active"> Ganho</span>}
+              {crm.won === false && <span className="status status-inactive"> Perdido</span>}
+            </dd>
+            <dt>Na etapa desde</dt>
+            <dd>
+              {crm.stageChangedAt
+                ? `${formatDateTime(crm.stageChangedAt)} (${sinceLabel(crm.stageChangedAt)})`
+                : '— (histórico ainda não lido)'}
+            </dd>
+            <dt>1º contato</dt>
+            <dd>{crm.firstContactAt ? formatDateTime(crm.firstContactAt) : '—'}</dd>
+            <dt>Dono</dt>
+            <dd>{crm.ownerName ?? '— (usuário do RD sem funcionário ligado)'}</dd>
+            {crm.won === false && (
+              <>
+                <dt>Motivo da perda</dt>
+                <dd>{crm.lostReason ?? '—'}</dd>
+              </>
+            )}
+            {crm.closedAt && (
+              <>
+                <dt>Fechado em</dt>
+                <dd>{formatDateTime(crm.closedAt)}</dd>
+              </>
+            )}
+          </dl>
+          <p className="muted">
+            Etapa lida do RD {sinceLabel(crm.syncedAt)}. O trabalho continua no RD CRM até a virada:{' '}
+            <a href={crm.rdUrl} target="_blank" rel="noopener noreferrer">
+              abrir o negócio no RD
+            </a>
+            .
+          </p>
+        </>
+      )}
+    </fieldset>
+  );
+}
+
 function Criterion({ criterion }: { criterion: ScoreCriterion }) {
-  const percent = criterion.evaluated && criterion.max > 0 ? Math.round((100 * criterion.points) / criterion.max) : 0;
+  const percent =
+    criterion.evaluated && criterion.max > 0
+      ? Math.round((100 * criterion.points) / criterion.max)
+      : 0;
   return (
     <li className="lead-criterion">
       <div className="lead-criterion-head">
         <span>{criterion.label}</span>
-        <span className="mono">{criterion.evaluated ? `${criterion.points}/${criterion.max}` : 'não avaliado'}</span>
+        <span className="mono">
+          {criterion.evaluated ? `${criterion.points}/${criterion.max}` : 'não avaliado'}
+        </span>
       </div>
       <div className="meter" aria-hidden="true">
         <div className="meter-fill" style={{ width: `${percent}%` }} />
@@ -60,25 +132,44 @@ function Research({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
       <legend>Pesquisa</legend>
       <div className="lead-research-head">
         <div>
-          <span className={`status status-${state === 'done' ? 'active' : state === 'failed' ? 'inactive' : 'on_leave'}`}>
+          <span
+            className={`status status-${state === 'done' ? 'active' : state === 'failed' ? 'inactive' : 'on_leave'}`}
+          >
             {RESEARCH_LABELS[state]}
           </span>
-          {lead.research.updatedAt && <span className="muted"> · {formatDateTime(lead.research.updatedAt)}</span>}
+          {lead.research.updatedAt && (
+            <span className="muted"> · {formatDateTime(lead.research.updatedAt)}</span>
+          )}
           {lead.research.costUsd > 0 && (
             <span className="muted"> · custo US$ {lead.research.costUsd.toFixed(3)}</span>
           )}
         </div>
         {canWrite && (
-          <Button type="button" variant="ghost" disabled={busy || research.isPending} onClick={() => research.mutate(lead.id)}>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={busy || research.isPending}
+            onClick={() => research.mutate(lead.id)}
+          >
             {busy ? 'Pesquisando…' : 'Refazer pesquisa'}
           </Button>
         )}
       </div>
       {research.error && (
-        <Alert kind="error">{research.error instanceof ApiError ? research.error.message : 'Não foi possível pedir a pesquisa.'}</Alert>
+        <Alert kind="error">
+          {research.error instanceof ApiError
+            ? research.error.message
+            : 'Não foi possível pedir a pesquisa.'}
+        </Alert>
       )}
-      {state === 'failed' && lead.research.error && <Alert kind="warning">A pesquisa falhou: {lead.research.error}</Alert>}
-      {busy && <p className="muted">O worker está consultando WhatsApp, busca web e Receita. A tela atualiza sozinha.</p>}
+      {state === 'failed' && lead.research.error && (
+        <Alert kind="warning">A pesquisa falhou: {lead.research.error}</Alert>
+      )}
+      {busy && (
+        <p className="muted">
+          O worker está consultando WhatsApp, busca web e Receita. A tela atualiza sozinha.
+        </p>
+      )}
       {state === 'none' && <p className="muted">Este lead ainda não foi pesquisado.</p>}
 
       {lead.research.summary && (
@@ -110,7 +201,12 @@ function Research({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
             {lead.research.links.map((link) => (
               <li key={link.url}>
                 <a href={link.url} target="_blank" rel="noopener noreferrer">
-                  {link.kind === 'linkedin' ? 'LinkedIn' : link.kind === 'instagram' ? 'Instagram' : 'Página'}: {link.title || link.url}
+                  {link.kind === 'linkedin'
+                    ? 'LinkedIn'
+                    : link.kind === 'instagram'
+                      ? 'Instagram'
+                      : 'Página'}
+                  : {link.title || link.url}
                 </a>
                 {link.snippet && <div className="cell-sub">{link.snippet}</div>}
               </li>
@@ -132,7 +228,10 @@ function Origin({ lead }: { lead: Lead }) {
         <dd>
           {origin.clientName}
           {!origin.clientMapped && (
-            <span className="tag" title="Nenhuma regra mapeou a origem para um cliente. Cadastre a regra em Administração → Clientes.">
+            <span
+              className="tag"
+              title="Nenhuma regra mapeou a origem para um cliente. Cadastre a regra em Administração → Clientes."
+            >
               sem regra
             </span>
           )}
@@ -186,7 +285,9 @@ function Consent({ lead }: { lead: Lead }) {
       <legend>LGPD</legend>
       <dl className="lead-facts">
         <dt>Base legal</dt>
-        <dd>{consent.legalBasis ? LEAD_LEGAL_BASIS_LABELS[consent.legalBasis] : 'Não registrada'}</dd>
+        <dd>
+          {consent.legalBasis ? LEAD_LEGAL_BASIS_LABELS[consent.legalBasis] : 'Não registrada'}
+        </dd>
         <dt>Consentimento em</dt>
         <dd>{formatDateTime(consent.consentedAt)}</dd>
         <dt>Onde</dt>
@@ -203,7 +304,8 @@ function Timeline({ events }: { events: LeadEvent[] }) {
       <ol className="lead-timeline">
         {events.map((event) => (
           <li key={event.id}>
-            <span className="muted">{formatDateTime(event.at)}</span> {EVENT_LABELS[event.kind] ?? event.kind}
+            <span className="muted">{formatDateTime(event.at)}</span>{' '}
+            {EVENT_LABELS[event.kind] ?? event.kind}
           </li>
         ))}
       </ol>
@@ -240,7 +342,9 @@ export function LeadPage() {
           </p>
         </div>
         <div className="lead-head-side">
-          {data.whatsapp?.photoUrl && <img className="lead-photo" src={data.whatsapp.photoUrl} alt="" />}
+          {data.whatsapp?.photoUrl && (
+            <img className="lead-photo" src={data.whatsapp.photoUrl} alt="" />
+          )}
           <Link to="/crm-vendas/funil" className="btn btn-ghost btn-inline">
             Voltar ao funil
           </Link>
@@ -248,8 +352,9 @@ export function LeadPage() {
       </header>
       <div className="grid-2 lead-grid">
         <Origin lead={data} />
-        <Consent lead={data} />
+        <RdCrm lead={data} />
       </div>
+      <Consent lead={data} />
       <Research lead={data} canWrite={canWrite} />
       <Timeline events={lead.data.events} />
     </>

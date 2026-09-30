@@ -5,6 +5,7 @@ import {
   matchSourceRule,
   normalizeBrazilianPhone,
   normalizeEmail,
+  rdDealUrl,
   WINGS_CLIENT_ID,
   type EnrichmentFacts,
   type FoundLink,
@@ -12,22 +13,26 @@ import {
   type LeadChannel,
   type LeadEvent,
   type LeadLegalBasis,
+  type FunnelSummary,
   type LeadListItem,
+  type LeadOutcome,
   type LeadPipeline,
   type LeadSource,
   type LeadSourceRuleKind,
   type ScoreCriterion,
 } from '@wings/shared';
-import { and, asc, desc, eq, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   clients,
+  employees,
   jobs,
   leadEnrichmentLedger,
   leadEvents,
   leadSourceRules,
   leadTrackingLinks,
   leads,
+  rdCrmDeals,
 } from '../../db/schema/index.js';
 
 export type LeadRow = typeof leads.$inferSelect;
@@ -417,9 +422,16 @@ const asFacts = (value: unknown): EnrichmentFacts | null =>
     ? { ...EMPTY_FACTS, ...(value as Partial<EnrichmentFacts>) }
     : null;
 
+const iso = (date: Date | null) => date?.toISOString() ?? null;
+
 export function toLead(
   row: LeadRow,
-  extra: { clientName: string; trackingCode: string | null; costUsdMicro: number },
+  extra: {
+    clientName: string;
+    trackingCode: string | null;
+    costUsdMicro: number;
+    ownerName?: string | null;
+  },
 ): Lead {
   return {
     id: row.id,
@@ -446,6 +458,24 @@ export function toLead(
       trackingCode: extra.trackingCode,
       externalId: row.externalId,
     },
+    pipeline: (row.pipeline as LeadPipeline | null) ?? null,
+    brand: row.brand,
+    crm: row.rdDealId
+      ? {
+          rdDealId: row.rdDealId,
+          rdUrl: rdDealUrl(row.rdDealId),
+          rdPipeline: row.rdPipeline,
+          stage: row.stage,
+          stageOrder: row.stageOrder,
+          stageChangedAt: iso(row.stageChangedAt),
+          firstContactAt: iso(row.firstContactAt),
+          won: row.won,
+          closedAt: iso(row.closedAt),
+          lostReason: row.lostReason,
+          ownerName: extra.ownerName ?? null,
+          syncedAt: iso(row.rdSyncedAt),
+        }
+      : null,
     consent: {
       legalBasis: (row.legalBasis as LeadLegalBasis | null) ?? null,
       consentedAt: row.consentedAt?.toISOString() ?? null,
@@ -474,7 +504,7 @@ export async function loadLead(
 ): Promise<{ lead: Lead; events: LeadEvent[] } | null> {
   const row = await db.query.leads.findFirst({ where: eq(leads.id, id) });
   if (!row) return null;
-  const [client, link, cost, events] = await Promise.all([
+  const [client, link, cost, events, owner] = await Promise.all([
     db.query.clients.findFirst({ where: eq(clients.id, row.clientId) }),
     row.trackingLinkId
       ? db.query.leadTrackingLinks.findFirst({
@@ -491,12 +521,19 @@ export async function loadLead(
       .where(eq(leadEvents.leadId, row.id))
       .orderBy(desc(leadEvents.at))
       .limit(50),
+    row.ownerEmployeeId
+      ? db.query.employees.findFirst({
+          where: eq(employees.id, row.ownerEmployeeId),
+          columns: { fullName: true },
+        })
+      : Promise.resolve(undefined),
   ]);
   return {
     lead: toLead(row, {
       clientName: client?.name ?? 'Cliente',
       trackingCode: link?.code ?? null,
       costUsdMicro: cost[0]?.total ?? 0,
+      ownerName: owner?.fullName ?? null,
     }),
     events: events.map((event) => ({
       id: event.id,
@@ -511,15 +548,33 @@ export interface LeadListFilter {
   q?: string;
   clientId?: string;
   source?: LeadSource;
+  pipeline?: LeadPipeline;
+  stage?: string;
+  owner?: string;
+  outcome?: LeadOutcome;
+  staleDays?: number;
   /** Set when the caller's scope is `own`. */
   ownerEmployeeId?: string;
 }
 
-export async function listLeads(db: Database, filter: LeadListFilter): Promise<LeadListItem[]> {
+export const LEAD_LIST_LIMIT = 200;
+
+function listConditions(filter: LeadListFilter) {
   const conditions = [];
   if (filter.ownerEmployeeId) conditions.push(eq(leads.ownerEmployeeId, filter.ownerEmployeeId));
+  if (filter.owner) conditions.push(eq(leads.ownerEmployeeId, filter.owner));
   if (filter.clientId) conditions.push(eq(leads.clientId, filter.clientId));
   if (filter.source) conditions.push(eq(leads.source, filter.source));
+  if (filter.pipeline) conditions.push(eq(leads.pipeline, filter.pipeline));
+  if (filter.stage) conditions.push(eq(leads.stage, filter.stage));
+  if (filter.outcome === 'open') conditions.push(isNull(leads.won));
+  if (filter.outcome === 'won') conditions.push(eq(leads.won, true));
+  if (filter.outcome === 'lost') conditions.push(eq(leads.won, false));
+  if (filter.staleDays) {
+    // Only open leads whose stage time is known: an unknown one is not "stale", it is unknown.
+    conditions.push(isNull(leads.won));
+    conditions.push(lt(leads.stageChangedAt, new Date(Date.now() - filter.staleDays * 86_400_000)));
+  }
   if (filter.q) {
     const needle = `%${filter.q.toLowerCase()}%`;
     const digits = filter.q.replace(/\D/g, '');
@@ -529,36 +584,125 @@ export async function listLeads(db: Database, filter: LeadListFilter): Promise<L
         : sql`(lower(coalesce(${leads.name}, '')) like ${needle} or coalesce(${leads.email}, '') like ${needle})`,
     );
   }
-  const rows = await db
-    .select({
-      id: leads.id,
-      name: leads.name,
-      email: leads.email,
-      phone: leads.phone,
-      clientName: clients.name,
-      clientMapped: leads.clientMapped,
-      source: leads.source,
-      channel: leads.channel,
-      score: leads.enrichmentScore,
-      researchState: leads.enrichmentState,
-      createdAt: leads.createdAt,
-    })
-    .from(leads)
-    .innerJoin(clients, eq(clients.id, leads.clientId))
-    .where(conditions.length > 0 ? and(...conditions) : undefined)
-    .orderBy(desc(leads.createdAt))
-    .limit(200);
-  return rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    email: row.email,
-    phone: row.phone,
-    clientName: row.clientName,
-    clientMapped: row.clientMapped,
-    source: row.source as LeadSource,
-    channel: (row.channel as LeadChannel | null) ?? null,
-    score: row.score,
-    researchState: row.researchState as LeadListItem['researchState'],
-    createdAt: row.createdAt.toISOString(),
-  }));
+  return conditions.length > 0 ? and(...conditions) : undefined;
+}
+
+export async function listLeads(
+  db: Database,
+  filter: LeadListFilter,
+): Promise<{ leads: LeadListItem[]; total: number }> {
+  const where = listConditions(filter);
+  const [rows, total] = await Promise.all([
+    db
+      .select({
+        id: leads.id,
+        name: leads.name,
+        email: leads.email,
+        phone: leads.phone,
+        clientName: clients.name,
+        clientMapped: leads.clientMapped,
+        source: leads.source,
+        channel: leads.channel,
+        score: leads.enrichmentScore,
+        researchState: leads.enrichmentState,
+        createdAt: leads.createdAt,
+        pipeline: leads.pipeline,
+        brand: leads.brand,
+        stage: leads.stage,
+        won: leads.won,
+        ownerName: employees.fullName,
+        stageChangedAt: leads.stageChangedAt,
+      })
+      .from(leads)
+      .innerJoin(clients, eq(clients.id, leads.clientId))
+      .leftJoin(employees, eq(employees.id, leads.ownerEmployeeId))
+      .where(where)
+      .orderBy(desc(leads.createdAt))
+      .limit(LEAD_LIST_LIMIT),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(leads)
+      .where(where),
+  ]);
+  return {
+    total: total[0]?.count ?? 0,
+    leads: rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      email: row.email,
+      phone: row.phone,
+      clientName: row.clientName,
+      clientMapped: row.clientMapped,
+      source: row.source as LeadSource,
+      channel: (row.channel as LeadChannel | null) ?? null,
+      score: row.score,
+      researchState: row.researchState as LeadListItem['researchState'],
+      createdAt: row.createdAt.toISOString(),
+      pipeline: (row.pipeline as LeadPipeline | null) ?? null,
+      brand: row.brand,
+      stage: row.stage,
+      won: row.won,
+      ownerName: row.ownerName,
+      stageChangedAt: iso(row.stageChangedAt),
+    })),
+  };
+}
+
+/**
+ * The mini-funnel at the top of the Funil: per Expansão brand and for
+ * Formatação, the leads that arrived in the last `days` days and how far they
+ * got. "Reunião" comes from the RD mirror (`rd_crm_deals.reached_meeting`:
+ * current stage at "Reunião realizada" or later, or won); a lead with no RD
+ * deal counts as arrived only.
+ */
+export async function funnelSummary(
+  db: Database,
+  input: { days: number; ownerEmployeeId?: string },
+): Promise<FunnelSummary> {
+  const since = new Date(Date.now() - input.days * 86_400_000);
+  const scope = input.ownerEmployeeId
+    ? eq(leads.ownerEmployeeId, input.ownerEmployeeId)
+    : undefined;
+  const label = sql<string>`case when ${leads.pipeline} = 'formatacao' then 'Formatação' else coalesce(${leads.brand}, '(sem marca)') end`;
+  const [rows, owners, stages, synced] = await Promise.all([
+    db
+      .select({
+        pipeline: leads.pipeline,
+        label,
+        arrived: sql<number>`count(*)::int`,
+        worked: sql<number>`(count(*) filter (where ${leads.stageOrder} > 1 or ${leads.won} is not null))::int`,
+        meeting: sql<number>`(count(*) filter (where ${rdCrmDeals.reachedMeeting}))::int`,
+        won: sql<number>`(count(*) filter (where ${leads.won} = true))::int`,
+      })
+      .from(leads)
+      .leftJoin(rdCrmDeals, eq(rdCrmDeals.rdId, leads.rdDealId))
+      .where(and(gte(leads.createdAt, since), isNotNull(leads.pipeline), scope))
+      .groupBy(leads.pipeline, label),
+    db
+      .selectDistinct({ id: employees.id, name: employees.fullName })
+      .from(leads)
+      .innerJoin(employees, eq(employees.id, leads.ownerEmployeeId))
+      .where(scope),
+    db
+      .selectDistinct({ pipeline: leads.pipeline, stage: leads.stage, order: leads.stageOrder })
+      .from(leads)
+      .where(and(isNotNull(leads.stage), isNotNull(leads.pipeline), scope)),
+    db.select({ at: sql<string | null>`max(${leads.rdSyncedAt})` }).from(leads),
+  ]);
+  const syncedAt = synced[0]?.at ? new Date(synced[0].at) : null;
+  return {
+    days: input.days,
+    rows: rows
+      .map((row) => ({ ...row, pipeline: row.pipeline as LeadPipeline }))
+      .sort((a, b) => a.pipeline.localeCompare(b.pipeline) || b.arrived - a.arrived),
+    owners: owners.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
+    stages: stages
+      .map((row) => ({
+        pipeline: row.pipeline as LeadPipeline,
+        stage: row.stage ?? '',
+        order: row.order ?? 0,
+      }))
+      .sort((a, b) => a.pipeline.localeCompare(b.pipeline) || a.order - b.order),
+    syncedAt: syncedAt?.toISOString() ?? null,
+  };
 }

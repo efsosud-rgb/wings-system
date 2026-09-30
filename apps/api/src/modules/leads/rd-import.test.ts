@@ -424,3 +424,33 @@ describe('recordDealOnLead does not guess', () => {
     ).toBe(false);
   });
 });
+
+describe('the Funil list and summary over imported leads', () => {
+  it('filters by funnel, stage, outcome and stale days, and sums per brand', async () => {
+    const { listLeads, funnelSummary } = await import('./service.js');
+    const expansion = await listLeads(db, { pipeline: 'expansao' });
+    expect(expansion.leads.every((lead) => lead.pipeline === 'expansao')).toBe(true);
+    expect(expansion.total).toBe(expansion.leads.length);
+
+    const lost = await listLeads(db, { outcome: 'lost' });
+    expect(lost.leads.map((lead) => lead.stage)).toContain('Identificação de interesse');
+
+    const byStage = await listLeads(db, { stage: 'Tentando contato' });
+    expect(byStage.leads.length).toBeGreaterThan(0);
+
+    // d-exp entered its stage on 2026-09-02: stale for more than 7 days; unknown stage times never count.
+    const stale = await listLeads(db, { staleDays: 7 });
+    expect(stale.leads.every((lead) => lead.stageChangedAt !== null && lead.won === null)).toBe(
+      true,
+    );
+
+    const summary = await funnelSummary(db, { days: 3650 });
+    const casal = summary.rows.find((row) => row.label === 'Casal dos Churros');
+    expect(casal).toMatchObject({ pipeline: 'expansao', arrived: 1, worked: 1 });
+    expect(summary.rows.find((row) => row.label === 'Formatação')?.arrived).toBeGreaterThanOrEqual(
+      2,
+    );
+    expect(summary.stages.some((stage) => stage.stage === 'Tentando contato')).toBe(true);
+    expect(summary.syncedAt).not.toBeNull();
+  });
+});

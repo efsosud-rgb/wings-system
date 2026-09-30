@@ -3,6 +3,7 @@ import {
   generateTrackingCode,
   grantedScope,
   leadCreateSchema,
+  funnelSummaryQuerySchema,
   leadListQuerySchema,
   sourceRuleCreateSchema,
   trackingLinkCreateSchema,
@@ -20,7 +21,7 @@ import { z } from 'zod';
 import { clients, leadSourceRules, leadTrackingLinks, leads } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { activeClient, toClient } from '../clients/routes.js';
-import { enqueueResearch, listLeads, loadLead, upsertLead } from './service.js';
+import { enqueueResearch, funnelSummary, listLeads, loadLead, upsertLead } from './service.js';
 
 const idParam = z.object({ id: z.uuid() });
 
@@ -60,9 +61,21 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
   app.get('/leads', { preHandler: app.requirePermission('leads.read') }, async (request, reply) => {
     const query = leadListQuerySchema.safeParse(request.query);
     if (!query.success) return reply.status(400).send(invalid('Filtro inválido.'));
-    const items = await listLeads(db, { ...query.data, ownerEmployeeId: ownerFilter(request) });
-    return reply.send({ leads: items });
+    const listed = await listLeads(db, { ...query.data, ownerEmployeeId: ownerFilter(request) });
+    return reply.send(listed);
   });
+
+  app.get(
+    '/leads/summary',
+    { preHandler: app.requirePermission('leads.read') },
+    async (request, reply) => {
+      const query = funnelSummaryQuerySchema.safeParse(request.query);
+      if (!query.success) return reply.status(400).send(invalid('Janela inválida.'));
+      return reply.send(
+        await funnelSummary(db, { days: query.data.days, ownerEmployeeId: ownerFilter(request) }),
+      );
+    },
+  );
 
   app.post(
     '/leads',
