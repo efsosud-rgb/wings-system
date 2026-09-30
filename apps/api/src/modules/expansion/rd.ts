@@ -519,11 +519,24 @@ export class RdCrm {
     return { linked: false, attempts };
   }
 
-  /** Reads a deal back: did RD keep its contact and its source? Booleans only. */
+  /**
+   * Reads a deal back: does it have a contact and a source? Booleans only.
+   * The contacts come from `GET /deals/:id/contacts`, the endpoint RD documents
+   * for them (the deal itself may not carry them), with the deal's own list as
+   * a second witness.
+   */
   async checkDeal(dealId: string): Promise<{ hasContact: boolean; hasSource: boolean }> {
-    const deal = await this.get<{ contacts?: unknown[]; deal_source?: unknown }>(
-      `/deals/${dealId}`,
+    const [deal, listed] = await Promise.all([
+      this.get<{ contacts?: unknown[]; deal_source?: unknown }>(`/deals/${dealId}`),
+      this.get<{ contacts?: unknown[]; total?: number }>(`/deals/${dealId}/contacts`).catch(
+        () => null,
+      ),
+    ]);
+    const count = Math.max(
+      deal.contacts?.length ?? 0,
+      listed?.contacts?.length ?? 0,
+      listed?.total ?? 0,
     );
-    return { hasContact: (deal.contacts?.length ?? 0) > 0, hasSource: Boolean(deal.deal_source) };
+    return { hasContact: count > 0, hasSource: Boolean(deal.deal_source) };
   }
 }

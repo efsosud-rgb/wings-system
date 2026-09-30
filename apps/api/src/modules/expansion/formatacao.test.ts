@@ -118,7 +118,15 @@ const rdFetch: typeof fetch = async (input, init) => {
   }
   if (method === 'GET' && path.startsWith('/deals/')) {
     const deal = world.deals.get(path.split('/')[2]!);
-    return json({ contacts: deal?.contact ? [{}] : [], deal_source: {} });
+    if (path.endsWith('/contacts')) {
+      // RD's documented list: the deal object itself may not carry them.
+      return json({
+        contacts: deal?.contact ? [{}] : [],
+        total: deal?.contact ? 1 : 0,
+        has_more: false,
+      });
+    }
+    return json({ deal_source: {} });
   }
   if (method === 'PUT' && path.startsWith('/contacts/')) {
     const ids = ((body?.contact as { deal_ids?: string[] } | undefined)?.deal_ids ??

@@ -85,9 +85,11 @@ async function repairOrphans(
     .limit(20);
   let orphans = 0;
   let linked = 0;
+  let withContact = 0;
   for (const row of rows) {
     const dealId = row.dealId as string;
     const back = await crm.checkDeal(dealId).catch(() => null);
+    if (back?.hasContact) withContact += 1;
     if (!back || back.hasContact) continue;
     orphans += 1;
     const tried = await db.$count(
@@ -117,6 +119,16 @@ async function repairOrphans(
       entity: 'formatacao_intake',
       entityId: dealId,
       metadata: { via: 'repair' },
+    });
+  }
+  // A deal read back with its contact lifts a halt that an earlier wrong read may have caused.
+  if (orphans === 0 && withContact > 0 && (await isHalted(db))) {
+    await writeAudit(db, {
+      actorEmployeeId: null,
+      action: 'formatacao.intake_linked_ok',
+      entity: 'formatacao_intake',
+      entityId: FORMATACAO_INTAKE_JOB,
+      metadata: { via: 'readback', dealsWithContact: withContact },
     });
   }
   return { checked: rows.length, orphans, linked };
