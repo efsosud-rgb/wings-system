@@ -1,16 +1,24 @@
-# GTM-MXJLC5HH — conversão do RD observada (versão 17, não publicada)
+# GTM-MXJLC5HH — conversão do RD observada (versão 17, publicada em 30/09/2026)
 
 Aplicado em 30/09/2026 pela Tag Manager API v2 (conta 6326149608, contêiner 236411221),
 primeiro no workspace 15, depois consolidado na **versão 17** ("RD conversão observada
-(30/09/2026) — não publicada"). **Nada foi publicado**: a versão ao vivo continua a 14
-("Google Ads - conversão pelo RD"). As versões 15 e 16 (tentativas intermediárias) foram
+(30/09/2026)"). **Eric publicou a 17 em 30/09/2026 ~14:16 BRT** (antes, a ao vivo era a 14,
+"Google Ads - conversão pelo RD"). O nome perdeu o sufixo "— não publicada" depois disso. As versões 15 e 16 (tentativas intermediárias) foram
 apagadas. Criar a versão fecha o workspace: o Default Workspace atual é o 18, igual à 17.
 Scripts em `scripts/gtm/` (`oauth.mjs`, `api.mjs`, `dump.mjs`, `apply.mjs`,
 `test-cases.mjs`); estados completos em `/root/wings-gtm/before-ws15.json` e
 `after-v17-ws18.json` (fora do repositório).
 
-Publicar: <https://tagmanager.google.com/#/versions/accounts/6326149608/containers/236411221/versions/17>
-(ação "Publicar" da versão 17).
+Versão: <https://tagmanager.google.com/#/versions/accounts/6326149608/containers/236411221/versions/17>
+
+## Conferência ao vivo (30/09/2026, depois da publicação)
+
+`node scripts/gtm/test-cases.mjs --container live --dialogdelay 1000` com o `gtm.js` normal do
+site (sem preview), mesmas regras (RD respondido localmente, dado fictício, WhatsApp nunca
+abre): resultado **igual ao do rascunho** nos 4 casos. Lead com `eid` e Google `rTTB…` com
+`oid` iguais ao `rd_event_id`; caso 2 nada; caso 3 GA4 `lead_rd_station` com identificador;
+caso 4 Contact + `NsLa…` + `whatsapp_click`; GA4 do caso 1 perdido pelo redirecionamento do
+RD, como no rascunho. Relatório `/root/wings-gtm/report-live-v17.json`.
 
 ## O que a leitura do contêiner mostrou
 
