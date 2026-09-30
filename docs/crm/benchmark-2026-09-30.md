@@ -102,7 +102,8 @@ a refinar quando cada uma for aberta.
 | 9 | **Celular e agenda**: PWA instalável com push (mensagem, SLA, tarefa), Google Agenda ida e volta para reuniões, `tel:` no card | 8 | fase 2 (push já previsto na fase 3 do WhatsApp) |
 | 10 | **LGPD completo e auditoria de leitura**: pedido de exclusão/anonimização com prazo, exportação auditada, log de visualização de dado pessoal, política de retenção | 5 | Jurídico |
 | 11 | **Pós-venda da Formatação** (sugestão Manus): tickets por cliente formatado, SLA de resposta e resolução, NPS por marco do projeto, ligado ao cadastro de clientes e aos projetos (Gestão → Projetos) | 8 | fase 4; Diretoria define marcos e SLA |
-| | **Total após a Fase 1** | **99** | |
+| 12 | **Agente de landing pages** (pedido do Eric, 30/09): agente lê a pasta da marca no Drive e monta a LP de Expansão na estrutura padrão (referência Cenoritas), só com conteúdo e números da marca com fonte (COF), pendências em branco, checagem de repetição; formulário ligado ao CRM e ao RD; aprovação do Eric antes de publicar; domínio novo na convivência e virada do `franquia.` página a página ([especificação](agente-landing-pages.md)) | 12 | Fase 1 T5; material no Drive; decisão do domínio |
+| | **Total após a Fase 1** | **111** | |
 
 Estimativas das fases 4, 7 e 11 atualizadas em 30/09 com a sugestão Manus
 (+9, +2 e 8 dias); Fase 2 de 8 para 10 dias pela API oficial (modelos de
