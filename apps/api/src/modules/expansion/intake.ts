@@ -1,4 +1,4 @@
-import type { Conversion, CrmMap, NewDeal, RdCrm, RdMarketing } from './rd.js';
+import type { Conversion, CrmContact, CrmMap, NewDeal, RdCrm, RdMarketing } from './rd.js';
 
 /**
  * Every new RD Marketing conversion that has no deal in RD CRM gets one, in
@@ -84,23 +84,28 @@ export interface IntakeResult {
   createdDealIds: string[];
   /** Would create (dry run) or created, per conversion identifier. */
   createdByIdentifier: Record<string, number>;
+  /** Created deals that RD read back without a contact and that got one tied afterwards. */
+  linked: number;
+  /** RD ids of created deals still without a contact after every way was tried. */
+  orphanDealIds: string[];
+  /** Statuses of the linking attempts, per way ("strategy:status"). */
+  linkAttempts: Record<string, number>;
 }
 
 /** The deal is "covered" when the contact has one open, or one RD made after this conversion. */
 async function covered(
   crm: RdCrm,
   conversion: Conversion,
-): Promise<{ covered: boolean; contactId: string | null }> {
+): Promise<{ covered: boolean; contact: CrmContact | null }> {
   const contact = await crm.findContact(conversion.email, conversion.phone);
-  if (!contact) return { covered: false, contactId: null };
-  if (contact.deals.some((deal) => deal.win === null))
-    return { covered: true, contactId: contact.id };
+  if (!contact) return { covered: false, contact: null };
+  if (contact.deals.some((deal) => deal.win === null)) return { covered: true, contact };
   const after = conversion.occurredAt.getTime() - 10 * 60_000;
   for (const deal of contact.deals) {
     const createdAt = await crm.dealCreatedAt(deal.id);
-    if (createdAt && createdAt.getTime() >= after) return { covered: true, contactId: contact.id };
+    if (createdAt && createdAt.getTime() >= after) return { covered: true, contact };
   }
-  return { covered: false, contactId: contact.id };
+  return { covered: false, contact };
 }
 
 function describeUtms(conversion: Conversion): string {
@@ -204,6 +209,9 @@ export async function runExpansionIntake(input: {
     created: {},
     createdDealIds: [],
     createdByIdentifier: {},
+    linked: 0,
+    orphanDealIds: [],
+    linkAttempts: {},
   };
   const uuids = await marketing.contactsConvertedSince(input.since);
   result.contacts = uuids.length;
@@ -295,7 +303,22 @@ export async function runExpansionIntake(input: {
             result.taskFailed += 1;
           }
         }
-        const back = await crm.checkDeal(dealId).catch(() => null);
+        let back = await crm.checkDeal(dealId).catch(() => null);
+        if (back && !back.hasContact) {
+          // A deal without a contact is no use to anyone: tie the person to it.
+          const tie = await crm.linkContact(
+            dealId,
+            { name: conversion.name, email: conversion.email, phone: conversion.phone },
+            known.contact,
+          );
+          for (const attempt of tie.attempts) {
+            const key = `${attempt.strategy}:${attempt.status}`;
+            result.linkAttempts[key] = (result.linkAttempts[key] ?? 0) + 1;
+          }
+          if (tie.linked) result.linked += 1;
+          else result.orphanDealIds.push(dealId);
+          back = await crm.checkDeal(dealId).catch(() => null);
+        }
         if (!back || !back.hasContact || !back.hasSource) result.unverified += 1;
       } catch {
         // The error names a path and a status only; the next run checks the

@@ -172,6 +172,23 @@ export class RdMarketing {
     return uuids;
   }
 
+  /** A contact's own data, to find or make its CRM twin. Never logged or returned to a screen. */
+  async contactOf(
+    uuid: string,
+  ): Promise<{ name: string | null; email: string | null; phone: string | null }> {
+    const contact = await this.get<{
+      name?: string;
+      email?: string;
+      mobile_phone?: string;
+      personal_phone?: string;
+    }>(`/platform/contacts/${uuid}`);
+    return {
+      name: contact.name?.trim() || null,
+      email: contact.email?.trim().toLowerCase() || null,
+      phone: (contact.mobile_phone ?? contact.personal_phone)?.trim() || null,
+    };
+  }
+
   /** The contact's conversions at or after `since`, dated by the event, not by the contact. */
   async conversionsOf(uuid: string, since: Date): Promise<Conversion[]> {
     const events = await this.get<
@@ -430,6 +447,76 @@ export class RdCrm {
       signal: AbortSignal.timeout(30_000),
     });
     if (!response.ok) throw new Error(`RD CRM POST /tasks answered ${response.status}`);
+  }
+
+  /** One write attempt, never retried; answers the status and nothing of the body. */
+  private async write(method: 'PUT' | 'POST', path: string, body: unknown): Promise<number> {
+    const response = await this.fetchImpl(this.url(path), {
+      method,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
+    });
+    return response.status;
+  }
+
+  /**
+   * Ties a person to a deal that has no contact, trying the ways RD CRM offers
+   * one after the other and reading the deal back after each: the first that
+   * shows a contact on the deal wins, the rest are not tried. Whether RD keeps
+   * a contact sent inside `POST /deals` depends on it already knowing that
+   * person, which is why this exists. Statuses only in the answer (never a
+   * body, never a person). Not verified live before 2026-09-30: the audit
+   * trail says which way worked.
+   */
+  async linkContact(
+    dealId: string,
+    person: { name: string | null; email: string | null; phone: string | null },
+    existing: CrmContact | null,
+  ): Promise<{ linked: boolean; attempts: { strategy: string; status: number }[] }> {
+    const attempts: { strategy: string; status: number }[] = [];
+    const named = {
+      name: person.name ?? person.email ?? 'Lead',
+      ...(person.email ? { emails: [{ email: person.email }] } : {}),
+      ...(person.phone ? { phones: [{ phone: person.phone, type: 'cellphone' }] } : {}),
+    };
+    const ways: { strategy: string; run: () => Promise<number> }[] = [];
+    if (existing) {
+      // Keeps every deal the contact already has: the list is replaced, not added to.
+      const dealIds = [...new Set([...existing.deals.map((deal) => deal.id), dealId])];
+      ways.push({
+        strategy: 'contact.deal_ids',
+        run: () =>
+          this.write('PUT', `/contacts/${existing.id}`, { contact: { deal_ids: dealIds } }),
+      });
+      ways.push({
+        strategy: 'deal.contacts_id',
+        run: () => this.write('PUT', `/deals/${dealId}`, { contacts: [{ _id: existing.id }] }),
+      });
+    } else {
+      ways.push({
+        strategy: 'contact.create_with_deal',
+        run: () => this.write('POST', '/contacts', { contact: { ...named, deal_ids: [dealId] } }),
+      });
+    }
+    ways.push({
+      strategy: 'deal.contacts_full',
+      run: () => this.write('PUT', `/deals/${dealId}`, { contacts: [named] }),
+    });
+    for (const way of ways) {
+      let status: number;
+      try {
+        status = await way.run();
+      } catch {
+        status = 0;
+      }
+      attempts.push({ strategy: way.strategy, status });
+      if (status >= 200 && status < 300) {
+        const back = await this.checkDeal(dealId).catch(() => null);
+        if (back?.hasContact) return { linked: true, attempts };
+      }
+    }
+    return { linked: false, attempts };
   }
 
   /** Reads a deal back: did RD keep its contact and its source? Booleans only. */

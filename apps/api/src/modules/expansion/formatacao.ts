@@ -1,4 +1,6 @@
+import { and, desc, eq, gte, inArray, isNotNull } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
+import { auditLog, expansionIntakeLedger } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { runExpansionIntake, type IntakeResult } from './intake.js';
 import { RdCrm, RdMarketing, type RdMarketingCredentials } from './rd.js';
@@ -37,8 +39,87 @@ export interface FormatacaoCredentials {
 
 export interface FormatacaoPass {
   dryRun: boolean;
+  /** Counting only because a deal without a contact is unresolved (see `isHalted`). */
+  halted: boolean;
+  repair?: { checked: number; orphans: number; linked: number };
   stageFound: boolean;
   result: IntakeResult | null;
+}
+
+/**
+ * The stop-loss: a deal RD keeps without a contact is no use, so when one is
+ * made (or found) and no way of tying a contact to it works, the net writes
+ * `formatacao.intake_halted` and counts instead of creating, until a deal is
+ * read back with its contact (`formatacao.intake_linked_ok`).
+ */
+async function isHalted(db: Database): Promise<boolean> {
+  const last = await db.query.auditLog.findFirst({
+    where: inArray(auditLog.action, ['formatacao.intake_halted', 'formatacao.intake_linked_ok']),
+    orderBy: [desc(auditLog.at)],
+    columns: { action: true },
+  });
+  return last?.action === 'formatacao.intake_halted';
+}
+
+const MAX_REPAIRS_PER_DEAL = 3;
+
+/** Deals this net made in the last three days that RD holds without a contact: tie the person to each. */
+async function repairOrphans(
+  db: Database,
+  crm: RdCrm,
+  marketing: RdMarketing,
+  now: Date,
+): Promise<{ checked: number; orphans: number; linked: number }> {
+  const rows = await db
+    .select({ key: expansionIntakeLedger.conversionKey, dealId: expansionIntakeLedger.rdDealId })
+    .from(expansionIntakeLedger)
+    .where(
+      and(
+        eq(expansionIntakeLedger.target, 'formatacao'),
+        eq(expansionIntakeLedger.outcome, 'created'),
+        isNotNull(expansionIntakeLedger.rdDealId),
+        gte(expansionIntakeLedger.decidedAt, new Date(now.getTime() - 3 * 86_400_000)),
+      ),
+    )
+    .orderBy(desc(expansionIntakeLedger.decidedAt))
+    .limit(20);
+  let orphans = 0;
+  let linked = 0;
+  for (const row of rows) {
+    const dealId = row.dealId as string;
+    const back = await crm.checkDeal(dealId).catch(() => null);
+    if (!back || back.hasContact) continue;
+    orphans += 1;
+    const tried = await db.$count(
+      auditLog,
+      and(eq(auditLog.action, 'formatacao.intake_repair'), eq(auditLog.entityId, dealId)),
+    );
+    if (tried >= MAX_REPAIRS_PER_DEAL) continue;
+    const uuid = row.key.split('|')[0] as string;
+    const person = await marketing.contactOf(uuid);
+    const existing = await crm.findContact(person.email, person.phone);
+    const tie = await crm.linkContact(dealId, person, existing);
+    if (tie.linked) linked += 1;
+    await writeAudit(db, {
+      actorEmployeeId: null,
+      action: 'formatacao.intake_repair',
+      entity: 'formatacao_intake',
+      entityId: dealId,
+      metadata: {
+        linked: tie.linked,
+        contactKnownToCrm: Boolean(existing),
+        attempts: tie.attempts,
+      },
+    });
+    await writeAudit(db, {
+      actorEmployeeId: null,
+      action: tie.linked ? 'formatacao.intake_linked_ok' : 'formatacao.intake_halted',
+      entity: 'formatacao_intake',
+      entityId: dealId,
+      metadata: { via: 'repair' },
+    });
+  }
+  return { checked: rows.length, orphans, linked };
 }
 
 export async function runFormatacaoOnce(
@@ -66,16 +147,21 @@ export async function runFormatacaoOnce(
         },
       });
     }
-    return { dryRun: options.dryRun, stageFound: false, result: null };
+    return { dryRun: options.dryRun, halted: false, stageFound: false, result: null };
   }
+  const marketing = new RdMarketing(credentials.rdMarketing, options.fetchImpl);
+  // First heal what was already made, so the stop-loss below sees the truth.
+  const repair = await repairOrphans(db, crm, marketing, now);
+  const halted = await isHalted(db);
+  const dryRun = options.dryRun || halted;
   const result = await runExpansionIntake({
-    marketing: new RdMarketing(credentials.rdMarketing, options.fetchImpl),
+    marketing,
     crm,
     ledger: dbLedger(db),
     rules: [],
     expansionOwnerId: null,
     since: new Date(now.getTime() - options.lookbackHours * 3_600_000),
-    dryRun: options.dryRun,
+    dryRun,
     now: () => now,
     recovery: {
       only: FORMATACAO_FORMS,
@@ -84,17 +170,33 @@ export async function runFormatacaoOnce(
     },
   });
   const created = Object.values(result.created).reduce((sum, n) => sum + n, 0);
-  if (options.dryRun || created > 0 || result.failed > 0) {
+  if (!dryRun && created > 0) {
     await writeAudit(db, {
       actorEmployeeId: null,
-      action: options.dryRun ? 'formatacao.intake_dry_run' : 'formatacao.intake_run',
+      action: result.orphanDealIds.length
+        ? 'formatacao.intake_halted'
+        : 'formatacao.intake_linked_ok',
+      entity: 'formatacao_intake',
+      entityId: FORMATACAO_INTAKE_JOB,
+      metadata: { via: 'create', orphans: result.orphanDealIds },
+    });
+  }
+  if (dryRun || created > 0 || result.failed > 0 || repair.orphans > 0) {
+    await writeAudit(db, {
+      actorEmployeeId: null,
+      action: dryRun ? 'formatacao.intake_dry_run' : 'formatacao.intake_run',
       entity: 'formatacao_intake',
       entityId: FORMATACAO_INTAKE_JOB,
       metadata: {
         lookbackHours: options.lookbackHours,
         contacts: result.contacts,
         conversions: result.conversions,
-        [options.dryRun ? 'wouldCreate' : 'created']: created,
+        [dryRun ? 'wouldCreate' : 'created']: created,
+        haltedByOrphan: halted,
+        repair,
+        linked: result.linked,
+        orphanDealIds: result.orphanDealIds,
+        linkAttempts: result.linkAttempts,
         byForm: result.createdByIdentifier,
         existingDeal: result.existingDeal,
         alreadyDecided: result.alreadyDecided,
@@ -106,7 +208,7 @@ export async function runFormatacaoOnce(
       },
     });
   }
-  return { dryRun: options.dryRun, stageFound: true, result };
+  return { dryRun, halted, repair, stageFound: true, result };
 }
 
 export function startFormatacaoIntakeScheduler(deps: {
@@ -131,6 +233,8 @@ export function startFormatacaoIntakeScheduler(deps: {
       deps.log({
         job: FORMATACAO_INTAKE_JOB,
         dryRun: pass.dryRun,
+        halted: pass.halted,
+        repair: pass.repair,
         stageFound: pass.stageFound,
         conversions: pass.result?.conversions,
         created: pass.result?.created,
