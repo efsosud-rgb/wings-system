@@ -30,7 +30,9 @@ export const rdUserRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.put('/leads/rd-users/:rdUserId', guard, async (request, reply) => {
-    const params = z.object({ rdUserId: z.string().trim().min(1).max(64) }).safeParse(request.params);
+    const params = z
+      .object({ rdUserId: z.string().trim().min(1).max(64) })
+      .safeParse(request.params);
     const body = z.object({ employeeId: z.uuid().nullable() }).safeParse(request.body);
     if (!params.success || !body.success) return reply.code(400).send({ error: 'invalid_rd_user' });
     const { employeeId } = body.data;

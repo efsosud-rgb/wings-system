@@ -1,0 +1,182 @@
+import { WINGS_CLIENT_ID } from '@wings/shared';
+import { and, eq } from 'drizzle-orm';
+import type { Database } from '../../db/client.js';
+import { clients, leadSourceRules } from '../../db/schema/index.js';
+import { writeAudit } from '../../lib/audit.js';
+import { createClientRecord } from '../clients/create.js';
+
+/**
+ * The brands Wings sells franchises for, registered as clients and tied to
+ * their landing-page rules (CRM phase 1). Names are matched loosely — no
+ * accents, no case, no "do/dos/da/das/de/e" — so "Casal dos Churros" (RD) and
+ * "Casal do Churros" (the register) are one brand; a rule is also tied by its
+ * identifier's slug (`lp-calcadao-do-frango` → "calcadao frango").
+ */
+
+/** Eric's list of 30/09/2026. */
+export const EXPANSION_BRANDS = [
+  'Casal do Churros',
+  'Açaí da Fila',
+  'Calçadão do Frango',
+  'Mister Russo',
+  'Grupo Forte Fênix',
+  'Rio Açaí Gourmet',
+  'Ginteco',
+  'Família K',
+];
+
+const STOPWORDS = new Set(['do', 'dos', 'da', 'das', 'de', 'e']);
+
+export function brandKey(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(' ')
+    .filter((word) => word && !STOPWORDS.has(word))
+    .join(' ');
+}
+
+/** The brand an identifier names: `lp-`, `le-` and `lista-de-espera-` prefixes off. */
+export function identifierKey(identifier: string): string {
+  return brandKey(identifier.replace(/^(lp|le|lista-de-espera)-/i, ''));
+}
+
+export interface BrandLink {
+  identifier: string;
+  ruleBrand: string | null;
+  client: { number: number | null; name: string } | null;
+  /** linked (by this run), already (before it), none (no client matches) */
+  state: 'linked' | 'already' | 'none';
+  by: 'brand' | 'identifier' | null;
+}
+
+export interface BrandReport {
+  applied: boolean;
+  /** Names registered by this run (or that would be). */
+  created: string[];
+  /** Names that already had a client, with the client's own name. */
+  existing: { wanted: string; client: string }[];
+  links: BrandLink[];
+}
+
+/**
+ * Registers the brands missing from the register and ties each Expansão rule
+ * without a client to the one its brand or identifier names. Without
+ * `apply`, nothing is written and the report says what would be. Rules that
+ * already point at a client are left as they are.
+ */
+export async function registerBrands(
+  db: Database,
+  input: { names: readonly string[]; apply: boolean; actorEmployeeId?: string | null },
+): Promise<BrandReport> {
+  const report: BrandReport = { applied: input.apply, created: [], existing: [], links: [] };
+  const known = (await db.select().from(clients)).filter((client) => client.id !== WINGS_CLIENT_ID);
+  const byKey = new Map(known.map((client) => [brandKey(client.name), client]));
+
+  for (const name of input.names) {
+    const found = byKey.get(brandKey(name));
+    if (found) {
+      report.existing.push({ wanted: name, client: found.name });
+      continue;
+    }
+    report.created.push(name);
+    if (!input.apply) {
+      byKey.set(brandKey(name), { id: '', name, number: null } as (typeof known)[number]);
+      continue;
+    }
+    const made = await createClientRecord(db, { name });
+    if (!made) throw new Error(`client "${name}" could not be created`);
+    byKey.set(brandKey(name), made.row);
+    await writeAudit(db, {
+      actorEmployeeId: input.actorEmployeeId ?? null,
+      action: 'client.created',
+      entity: 'client',
+      entityId: made.row.id,
+      metadata: {
+        slug: made.row.slug,
+        via: 'crm-brands',
+        driveFoldersCreated: made.driveFoldersCreated,
+      },
+    });
+  }
+
+  const rules = await db
+    .select()
+    .from(leadSourceRules)
+    .where(and(eq(leadSourceRules.kind, 'landing_page'), eq(leadSourceRules.pipeline, 'expansao')));
+  const byId = new Map([...byKey.values()].map((client) => [client.id, client]));
+  for (const rule of rules.sort((a, b) => a.pattern.localeCompare(b.pattern))) {
+    if (rule.clientId) {
+      const client = byId.get(rule.clientId);
+      report.links.push({
+        identifier: rule.pattern,
+        ruleBrand: rule.brand,
+        client: client
+          ? { number: client.number, name: client.name }
+          : { number: null, name: '(outro cliente)' },
+        state: 'already',
+        by: null,
+      });
+      continue;
+    }
+    const viaBrand = rule.brand ? byKey.get(brandKey(rule.brand)) : undefined;
+    const client = viaBrand ?? byKey.get(identifierKey(rule.pattern));
+    if (!client) {
+      report.links.push({
+        identifier: rule.pattern,
+        ruleBrand: rule.brand,
+        client: null,
+        state: 'none',
+        by: null,
+      });
+      continue;
+    }
+    if (input.apply) {
+      await db
+        .update(leadSourceRules)
+        .set({ clientId: client.id })
+        .where(eq(leadSourceRules.id, rule.id));
+      await writeAudit(db, {
+        actorEmployeeId: input.actorEmployeeId ?? null,
+        action: 'lead_source_rule.linked',
+        entity: 'lead_source_rule',
+        entityId: rule.id,
+        metadata: { clientId: client.id, by: viaBrand ? 'brand' : 'identifier', via: 'crm-brands' },
+      });
+    }
+    report.links.push({
+      identifier: rule.pattern,
+      ruleBrand: rule.brand,
+      client: { number: client.number, name: client.name },
+      state: 'linked',
+      by: viaBrand ? 'brand' : 'identifier',
+    });
+  }
+  return report;
+}
+
+export function formatBrandReport(report: BrandReport): string {
+  const verb = report.applied ? '' : 'seria ';
+  return [
+    report.applied ? 'APLICADO' : 'SIMULAÇÃO (nada foi gravado; rode com --apply para valer)',
+    `clientes ${report.applied ? 'cadastrados' : 'a cadastrar'}: ${report.created.length}`,
+    ...report.created.map((name) => `  + ${name}`),
+    `já no cadastro: ${report.existing.length}`,
+    ...report.existing.map((item) => `  = ${item.wanted} → ${item.client}`),
+    `regras de LP do funil Expansão: ${report.links.length}`,
+    ...report.links.map((link) => {
+      const client = link.client
+        ? `${link.client.number ?? '—'}. ${link.client.name}`
+        : 'sem cliente';
+      const how =
+        link.state === 'already'
+          ? 'já ligada'
+          : link.state === 'none'
+            ? 'NENHUM cliente casa'
+            : `${verb}ligada pel${link.by === 'brand' ? 'a marca' : 'o identificador'}`;
+      return `  ${link.identifier} (${link.ruleBrand ?? '—'}) → ${client} [${how}]`;
+    }),
+  ].join('\n');
+}

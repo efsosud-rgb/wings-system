@@ -77,8 +77,19 @@ describe('source rules with funnel and brand', () => {
       .returning();
     if (!client) throw new Error('no client');
     await db.insert(leadSourceRules).values([
-      { kind: 'landing_page', pattern: 'lp-marca-cadastrada', clientId: client.id, pipeline: 'expansao' },
-      { kind: 'landing_page', pattern: 'lp-desligada', clientId: client.id, pipeline: 'expansao', active: false },
+      {
+        kind: 'landing_page',
+        pattern: 'lp-marca-cadastrada',
+        clientId: client.id,
+        pipeline: 'expansao',
+      },
+      {
+        kind: 'landing_page',
+        pattern: 'lp-desligada',
+        clientId: client.id,
+        pipeline: 'expansao',
+        active: false,
+      },
     ]);
     expect(await resolveLandingPage(db, { identifier: 'lp-marca-cadastrada' })).toMatchObject({
       clientId: client.id,
@@ -95,8 +106,16 @@ describe('source rules with funnel and brand', () => {
 
   it('seeds the Formatação forms as Wings Company, funnel Formatação, and no brand', async () => {
     const resolved = await resolveLandingPage(db, { identifier: 'wings-company-form-site' });
-    expect(resolved).toMatchObject({ clientId: WINGS_CLIENT_ID, mapped: true, pipeline: 'formatacao', brand: null });
-    expect(await resolveMetaSource(db, { formId: 'sem-regra' })).toMatchObject({ mapped: false, pipeline: null });
+    expect(resolved).toMatchObject({
+      clientId: WINGS_CLIENT_ID,
+      mapped: true,
+      pipeline: 'formatacao',
+      brand: null,
+    });
+    expect(await resolveMetaSource(db, { formId: 'sem-regra' })).toMatchObject({
+      mapped: false,
+      pipeline: null,
+    });
   });
 
   it('seeds the brands landing pages as Expansão rules with the brand name', async () => {
@@ -117,7 +136,12 @@ describe('upsertLead: funnel, brand and first-touch attribution', () => {
       clientMapped: false,
       pipeline: 'expansao',
       brand: 'Açaí da Fila',
-      attribution: { utmSource: 'instagram', utmMedium: 'cpc', utmCampaign: 'camp-1', fbclid: ' abc ' },
+      attribution: {
+        utmSource: 'instagram',
+        utmMedium: 'cpc',
+        utmCampaign: 'camp-1',
+        fbclid: ' abc ',
+      },
       event: { kind: 'lead.received.manual' },
     });
     expect(first.created).toBe(true);
@@ -160,14 +184,22 @@ describe('upsertLead: funnel, brand and first-touch attribution', () => {
       event: { kind: 'lead.received.manual' },
     });
     const row = await db.query.leads.findFirst({ where: eq(leads.id, first.lead.id) });
-    expect(row).toMatchObject({ utmSource: 'facebook', adPlatform: 'meta', adCampaignExternalId: '120' });
+    expect(row).toMatchObject({
+      utmSource: 'facebook',
+      adPlatform: 'meta',
+      adCampaignExternalId: '120',
+    });
   });
 });
 
 describe('RD CRM users -> employees', () => {
   it('is closed to a salesperson', async () => {
     const seller = await sessionFor('vendedor_expansao');
-    const response = await app.inject({ method: 'GET', url: '/leads/rd-users', cookies: seller.cookies });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/leads/rd-users',
+      cookies: seller.cookies,
+    });
     expect(response.statusCode).toBe(403);
   });
 
@@ -181,9 +213,17 @@ describe('RD CRM users -> employees', () => {
       payload: { employeeId: admin.employeeId },
     });
     expect(linked.statusCode).toBe(200);
-    const list = await app.inject({ method: 'GET', url: '/leads/rd-users', cookies: admin.cookies });
+    const list = await app.inject({
+      method: 'GET',
+      url: '/leads/rd-users',
+      cookies: admin.cookies,
+    });
     expect(list.json().users).toEqual([
-      expect.objectContaining({ rdUserId: 'rd-user-1', employeeId: admin.employeeId, rdActive: true }),
+      expect.objectContaining({
+        rdUserId: 'rd-user-1',
+        employeeId: admin.employeeId,
+        rdActive: true,
+      }),
     ]);
     const unknown = await app.inject({
       method: 'PUT',
@@ -192,7 +232,9 @@ describe('RD CRM users -> employees', () => {
       payload: { employeeId: null },
     });
     expect(unknown.statusCode).toBe(404);
-    const audit = await db.query.auditLog.findMany({ where: eq(auditLog.action, 'rd_user_map.saved') });
+    const audit = await db.query.auditLog.findMany({
+      where: eq(auditLog.action, 'rd_user_map.saved'),
+    });
     expect(audit).toHaveLength(1);
   });
 });
