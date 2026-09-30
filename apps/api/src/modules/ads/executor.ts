@@ -365,6 +365,12 @@ export async function executeApprovedChange(
     if (preflight.status === 'rejected') preflightRejection = preflight;
   }
 
+  // Claimed atomically: two clicks (or two people) on Executar at once must
+  // not both get past this line and send the same write twice.
+  if (!(await claimForExecution(db, change.id))) {
+    return refuse('already_executed', 'Esta alteração já está sendo executada.');
+  }
+
   // Record the attempt before making it, so an interrupted process still
   // leaves evidence that something may have gone out.
   const idempotencyKey = randomUUID();
@@ -383,11 +389,6 @@ export async function executeApprovedChange(
     })
     .returning({ id: adExecutions.id });
   if (!execution) throw new Error('failed to record execution');
-
-  await db
-    .update(adChangeRequests)
-    .set({ status: 'executing' })
-    .where(eq(adChangeRequests.id, change.id));
 
   let outcome: MutationOutcome;
   if (preflightRejection) {
@@ -862,6 +863,11 @@ async function executeAddAds(
   const media = await prepareMedia(db, payload.variations, { videoDir: options.videoDir });
   if (!media.ok) return refuse(media.reason, media.message);
 
+  // Claimed atomically: a second click sends nothing.
+  if (!(await claimForExecution(db, change.id))) {
+    return refuse('already_executed', 'Esta alteração já está sendo executada.');
+  }
+
   const [execution] = await db
     .insert(adExecutions)
     .values({
@@ -877,10 +883,6 @@ async function executeAddAds(
     })
     .returning({ id: adExecutions.id });
   if (!execution) throw new Error('failed to record execution');
-  await db
-    .update(adChangeRequests)
-    .set({ status: 'executing' })
-    .where(eq(adChangeRequests.id, change.id));
 
   const built = await buildAdsInAdSet(db, client, {
     executionId: execution.id,
@@ -987,4 +989,18 @@ async function executeAddAds(
     metadata: { reason: built.reason },
   });
   return { ok: false, outcome: 'unknown', executionId: execution.id, reason: built.reason };
+}
+
+/**
+ * Moves an approved change to `executing` only if it is still `approved`, in
+ * one statement. The one caller that gets the row back goes on; any other
+ * (a double click, a second person) is told it is already running.
+ */
+async function claimForExecution(db: Database, changeRequestId: string): Promise<boolean> {
+  const claimed = await db
+    .update(adChangeRequests)
+    .set({ status: 'executing' })
+    .where(and(eq(adChangeRequests.id, changeRequestId), eq(adChangeRequests.status, 'approved')))
+    .returning({ id: adChangeRequests.id });
+  return claimed.length === 1;
 }

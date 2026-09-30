@@ -94,6 +94,15 @@ vi.mock('../../api/dashboard.js', () => ({
             externalId: '120252260012720076',
             name: 'META | 28Set',
             status: 'ACTIVE',
+            launchDefaults: {
+              utms: {
+                utm_source: 'facebook',
+                utm_medium: 'paid_social',
+                utm_campaign: 'formatacao_jimmyogro_set26',
+              },
+              destinationUrl: 'https://wingscompany.com.br/contato/',
+              identity: { pageId: '111543418672527', instagramActorId: '17841460839979368' },
+            },
           },
           {
             platform: 'google',
@@ -1809,5 +1818,20 @@ describe('adding creatives to a campaign that exists', () => {
     expect(sent.campaignExternalId).toBe('120252260012720076');
     expect(sent.variations.length).toBeGreaterThanOrEqual(1);
     expect(sent).not.toHaveProperty('dailyBudgetCents');
+  });
+});
+
+describe('choosing the campaign to add creatives to', () => {
+  it("takes the campaign's utm_campaign and destination, and keeps utm_medium on cpc", () => {
+    render(<PaidMediaBuilder canRequest />);
+    fireEvent.click(screen.getByLabelText(/Adicionar criativos a uma campanha existente/));
+    fireEvent.change(screen.getByLabelText('Campanha'), {
+      target: { value: '120252260012720076' },
+    });
+    const byName = (name: string) =>
+      document.querySelector<HTMLInputElement>(`[name="${name}"]`)?.value;
+    expect(byName('utms.utm_campaign')).toBe('formatacao_jimmyogro_set26');
+    expect(byName('utms.utm_medium')).toBe('cpc');
+    expect(byName('destinationUrl')).toBe('https://wingscompany.com.br/contato/');
   });
 });

@@ -1,0 +1,1 @@
+ALTER TABLE "ad_ads" ADD COLUMN "utm_content" text;

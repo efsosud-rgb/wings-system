@@ -1166,7 +1166,30 @@ export function PaidMediaBuilder({
           <Field label="Campanha">
             <Select
               value={targetCampaign}
-              onChange={(event) => setTargetCampaign(event.target.value)}
+              onChange={(event) => {
+                setTargetCampaign(event.target.value);
+                // The new ads start from what the campaign was created with:
+                // its UTMs (so leads keep attributing to it), destination and page.
+                const chosen = (existingCampaigns.data?.campaigns.campaigns ?? []).find(
+                  (campaign) => campaign.externalId === event.target.value,
+                );
+                const defaults = chosen?.launchDefaults;
+                if (!defaults) return;
+                const options = { shouldDirty: true, shouldValidate: submitCount > 0 };
+                // utm_campaign is the campaign's; source and medium stay the
+                // builder's current standard (facebook / cpc), which is what the
+                // live ads were corrected to on 28/09 — the draft may say paid_social.
+                setValue('utms.utm_campaign', defaults.utms.utm_campaign, options);
+                setValue('destinationUrl', defaults.destinationUrl, options);
+                if (defaults.identity) {
+                  setValue('identity.pageId', defaults.identity.pageId, options);
+                  setValue(
+                    'identity.instagramActorId',
+                    defaults.identity.instagramActorId,
+                    options,
+                  );
+                }
+              }}
             >
               <option value="">Escolha a campanha</option>
               {(existingCampaigns.data?.campaigns.campaigns ?? [])

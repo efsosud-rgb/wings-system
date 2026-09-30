@@ -280,6 +280,7 @@ function buildCampaigns(): DashboardCampaigns {
         accountName: 'Fly High',
         accountExternalId: 'act_694058302567457',
         systemCreated: true,
+        launchDefaults: null,
         startDate: '2026-09-28',
         endDate: '2026-10-02',
         targetCplCents: 4500,
@@ -346,6 +347,7 @@ function buildCreatives(): DashboardCreatives {
         thumbnailUrl: null,
         headline: null,
         effectiveStatus: 'ACTIVE',
+        utmContent: 'video-1',
         totals: {
           ...EMPTY_TOTALS,
           spendCents: 4_500,
@@ -737,6 +739,8 @@ describe('creatives', () => {
     expect(text(row)).toContain('30%');
     expect(text(row)).toContain('40%');
     expect(text(row)).toContain('10%');
+    // Which ad it is in the leads: its utm_content.
+    expect(text(row)).toContain('utm_content=video-1');
   });
 
   it('shows the average time watched per start, ThruPlays and the four quarters', () => {

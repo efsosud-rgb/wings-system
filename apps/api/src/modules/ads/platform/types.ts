@@ -89,6 +89,8 @@ export interface PlatformAd {
     title: string | null;
     body: string | null;
     format?: CreativeFormat;
+    /** The utm_content its link carries (video-1, imagem-2…); null when none. */
+    utmContent?: string | null;
   } | null;
   /** The real rejection reason, when the ad was disapproved. */
   reviewFeedback: unknown;

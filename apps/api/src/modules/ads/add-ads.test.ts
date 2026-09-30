@@ -175,7 +175,7 @@ const run = (client: MetaWriteClient, id: string) =>
   executeApprovedChange(db, client, id, { allowWrites: true, videoDir });
 
 describe('asking for new ads', () => {
-  it('needs a person to approve, reserves no money and numbers the new ads after the existing ones', async () => {
+  it('needs a person to approve, reserves no money and numbers from video-1 when no ad carries a number', async () => {
     const { accountDbId, api, client } = await world();
     const requester = await createEmployee(db, { role: 'marketing', sector: 'marketing' });
     const reserved = await reserveAddAds(db, {
@@ -187,9 +187,17 @@ describe('asking for new ads', () => {
     if (!reserved.ok) return;
     expect(reserved.value.payload).toMatchObject({
       adSetExternalId: AD_SET,
-      firstPosition: 3,
+      // The two ads already there carry no utm_content: numbering starts at 1.
+      firstPosition: 1,
       campaignName: 'META | 28Set',
     });
+    // A second request on the same ad set continues after the first one's numbers.
+    const second = await reserveAddAds(db, {
+      adAccountId: accountDbId,
+      request: requestOf(2),
+      requestedBy: requester.id,
+    });
+    expect(second.ok && second.value.payload.firstPosition).toBe(4);
     const gate = await gateChange(db, { changeRequestId: reserved.value.changeRequestId });
     expect(gate.status).toBe('pending_approval');
     const row = await db.query.adChangeRequests.findFirst({
@@ -215,7 +223,7 @@ describe('asking for new ads', () => {
 });
 
 describe('executing it', () => {
-  it('uploads the videos, validates and creates one paused ad each in the existing ad set, with video-3, video-4, video-5', async () => {
+  it('uploads the videos, validates and creates one paused ad each in the existing ad set, as video-1, video-2, video-3', async () => {
     const { accountDbId, campaignDbId, api, client } = await world();
     const { changeRequestId } = await askAndApprove(accountDbId, requestOf(3));
 
@@ -239,10 +247,33 @@ describe('executing it', () => {
             .link as string,
       );
     expect(links.map((link) => new URL(link).searchParams.get('utm_content'))).toEqual([
+      'video-1',
+      'video-2',
       'video-3',
-      'video-4',
-      'video-5',
     ]);
+    // The rest of the link is the request's, whole.
+    expect(Object.fromEntries(new URL(links[0]!).searchParams)).toMatchObject({
+      utm_source: 'facebook',
+      utm_medium: 'cpc',
+      utm_campaign: 'formatacao_28set',
+    });
+    // Named by utm_content, never repeating the v1, v2 of the ads already there.
+    const names = api
+      .writes('ads')
+      .filter((call) => !call.fields.execution_options)
+      .map((call) => call.fields.name);
+    expect(names).toEqual([
+      'META | 28Set — video-1',
+      'META | 28Set — video-2',
+      'META | 28Set — video-3',
+    ]);
+    // The page and the Instagram account on every creative.
+    for (const call of api.writes('adcreatives')) {
+      expect(JSON.parse(call.fields.object_story_spec ?? '{}')).toMatchObject({
+        page_id: '104567890123456',
+        instagram_user_id: '17841400000000000',
+      });
+    }
 
     // A resume would switch these on too: they are this system's.
     const companions = await companionsOf(db, campaignDbId);
@@ -300,5 +331,35 @@ describe('executing it', () => {
     ]);
     const account = await db.query.adAccounts.findFirst({ where: eq(adAccounts.id, accountDbId) });
     expect(account?.killSwitchEngaged).toBe(true);
+  });
+});
+
+describe('two clicks on Executar', () => {
+  it('runs once: the second is told it is already running, and nothing is sent twice', async () => {
+    const { accountDbId, api, client } = await world();
+    const { changeRequestId } = await askAndApprove(accountDbId, requestOf(1));
+    const results = await Promise.all([run(client, changeRequestId), run(client, changeRequestId)]);
+    expect(results.map((result) => result.outcome).sort()).toEqual(['applied', 'refused']);
+    expect(api.writes('adcreatives')).toHaveLength(1);
+  });
+});
+
+describe('an execution that stopped part way', () => {
+  it('is resolved from its steps: fewer ads than asked is not applied, and the request leaves unknown', async () => {
+    const { accountDbId, client } = await world({
+      failOn: { edge: 'adcreatives', mode: 'reject' },
+    });
+    const { changeRequestId } = await askAndApprove(accountDbId, requestOf(2));
+    expect(await run(client, changeRequestId)).toMatchObject({ outcome: 'unknown' });
+    const { resolveUnknownExecution } = await import('./ops.js');
+    const resolved = await resolveUnknownExecution(db, client, changeRequestId);
+    expect(resolved).toMatchObject({
+      ok: true,
+      value: { resolution: 'not_applied', observed: '0 de 2 anúncio(s) criados, todos pausados' },
+    });
+    const change = await db.query.adChangeRequests.findFirst({
+      where: eq(adChangeRequests.id, changeRequestId),
+    });
+    expect(change?.status).toBe('failed');
   });
 });

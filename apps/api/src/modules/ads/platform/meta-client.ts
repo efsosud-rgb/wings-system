@@ -2,6 +2,7 @@ import {
   centsFromDecimalCurrencyString,
   centsFromMinorUnitString,
   creativeFormatOf,
+  utmContentOfCreative,
   fundingKindOf,
   prepaidBalanceFromDisplay,
   spendCapFromString,
@@ -769,6 +770,9 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
             title: ad.creative.title ?? null,
             body: ad.creative.body ?? null,
             format: creativeFormatOf(ad.creative),
+            utmContent: utmContentOfCreative(
+              ad.creative as Parameters<typeof utmContentOfCreative>[0],
+            ),
           }
         : null,
       reviewFeedback: ad.ad_review_feedback ?? null,

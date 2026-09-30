@@ -1,6 +1,12 @@
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { applyUtms, variationMedia, type CampaignDraft, type CopyVariation } from '@wings/shared';
+import {
+  adUtmContent,
+  applyUtms,
+  variationMedia,
+  type CampaignDraft,
+  type CopyVariation,
+} from '@wings/shared';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
@@ -363,8 +369,10 @@ async function createAds(
   step: Stepper,
   input: {
     adSetId: string;
-    /** "<campaign name>": ads are named "<campaign name> — v<position>". */
+    /** "<campaign name>": ads are named "<campaign name> — <label>". */
     name: string;
+    /** How an ad is labelled in its name: `v1` for a new campaign, `video-1` for ads added later. */
+    labelOf?: (ad: { creativeType: CopyVariation['creativeType']; position: number }) => string;
     pageId: string;
     instagramActorId: string | null | undefined;
     destinationUrl: string;
@@ -400,7 +408,8 @@ async function createAds(
               variation.creativeType === 'video' ? variation.videoId : variation.creativeId,
             ),
           };
-    const name = `${input.name} — v${position}`;
+    const label = input.labelOf ? input.labelOf(ad) : `v${position}`;
+    const name = `${input.name} — ${label}`;
     const creativeSpec = {
       name,
       pageId: input.pageId,
@@ -545,6 +554,9 @@ export async function buildAdsInAdSet(
   const ads = await createAds(writer, step, {
     adSetId: input.adSetExternalId,
     name: input.campaignName,
+    // Named by their utm_content, so they never repeat the names v1, v2 of the
+    // ads the campaign was created with.
+    labelOf: adUtmContent,
     pageId: input.pageId,
     instagramActorId: input.instagramActorId,
     destinationUrl: input.destinationUrl,
