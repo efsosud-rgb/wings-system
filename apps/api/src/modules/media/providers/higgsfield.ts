@@ -102,7 +102,14 @@ export function higgsfieldProvider(config: HiggsfieldConfig): MediaProvider {
       config.noteShape,
     );
     return asNumber(
-      find(answer.json, ['balance_usd', 'usd', 'balance', 'credits', 'credit_balance', 'remaining']),
+      find(answer.json, [
+        'balance_usd',
+        'usd',
+        'balance',
+        'credits',
+        'credit_balance',
+        'remaining',
+      ]),
     );
   });
   const balance = async (ctx: ProviderContext) => {
@@ -115,9 +122,15 @@ export function higgsfieldProvider(config: HiggsfieldConfig): MediaProvider {
     }
   };
 
-  const usdOf = (request: { kind: 'image' | 'video'; quantity: number; durationSeconds?: number }) =>
+  const usdOf = (request: {
+    kind: 'image' | 'video';
+    quantity: number;
+    durationSeconds?: number;
+  }) =>
     request.kind === 'video'
-      ? config.usdPerVideoSecond * (request.durationSeconds ?? DEFAULT_VIDEO_SECONDS) * request.quantity
+      ? config.usdPerVideoSecond *
+        (request.durationSeconds ?? DEFAULT_VIDEO_SECONDS) *
+        request.quantity
       : config.usdPerImage * request.quantity;
 
   return {
@@ -246,9 +259,18 @@ export function higgsfieldProvider(config: HiggsfieldConfig): MediaProvider {
       const outputs = outputsFrom(answer.json);
       const charged = chargeFrom(answer.json, config.brlPerUsd);
       if (status !== null && DONE.includes(status) && outputs.length > 0) {
-        return { state: 'succeeded', outputs, creditsCharged: null, brlCentsCharged: charged, note: null };
+        return {
+          state: 'succeeded',
+          outputs,
+          creditsCharged: null,
+          brlCentsCharged: charged,
+          note: null,
+        };
       }
-      if (status !== null && (FAILED.includes(status) || (DONE.includes(status) && outputs.length === 0))) {
+      if (
+        status !== null &&
+        (FAILED.includes(status) || (DONE.includes(status) && outputs.length === 0))
+      ) {
         return {
           state: 'failed',
           outputs: [],
@@ -257,7 +279,13 @@ export function higgsfieldProvider(config: HiggsfieldConfig): MediaProvider {
           note: said(asText(find(answer.json, ['error', 'message', 'reason']))),
         };
       }
-      return { state: 'running', outputs: [], creditsCharged: null, brlCentsCharged: null, note: null };
+      return {
+        state: 'running',
+        outputs: [],
+        creditsCharged: null,
+        brlCentsCharged: null,
+        note: null,
+      };
     },
   };
 }
@@ -278,11 +306,21 @@ function outputsFrom(json: unknown): ProviderOutput[] {
       }
     }
   };
-  const results = find(json, ['results', 'result', 'output', 'outputs', 'url', 'video_url', 'image_url']);
+  const results = find(json, [
+    'results',
+    'result',
+    'output',
+    'outputs',
+    'url',
+    'video_url',
+    'image_url',
+  ]);
   walk(results, 0);
   // The full-size file first, when both a raw and a preview came.
   return [...urls]
-    .sort((a, b) => Number(/\/min\b|preview|thumb/i.test(a)) - Number(/\/min\b|preview|thumb/i.test(b)))
+    .sort(
+      (a, b) => Number(/\/min\b|preview|thumb/i.test(a)) - Number(/\/min\b|preview|thumb/i.test(b)),
+    )
     .slice(0, 1)
     .map((url) => ({ url }));
 }

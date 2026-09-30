@@ -65,8 +65,7 @@ export const seesFolder = (access: DriveAccess, folder: FolderReach) =>
   seesDepartment(access, folder.department) || (access.clientView && folder.clientId !== null);
 
 export const writesFolder = (access: DriveAccess, folder: FolderReach) =>
-  access.write &&
-  (access.all || access.writeDepartments.has(folder.department as DriveDepartment));
+  access.write && (access.all || access.writeDepartments.has(folder.department as DriveDepartment));
 
 /** The same rule as `seesFolder`, as a condition on `drive_folders` for queries over files. */
 export function folderReachSql(access: DriveAccess): SQL | undefined {

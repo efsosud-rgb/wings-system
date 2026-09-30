@@ -2,7 +2,9 @@ import {
   WINGS_CLIENT_ID,
   clientCreateSchema,
   clientSlugOf,
+  clientRegisterMissing,
   clientUpdateSchema,
+  type ClientRelationship,
   type Client,
   type ExpansionEntry,
 } from '@wings/shared';
@@ -10,7 +12,7 @@ import { and, asc, desc, eq, ne } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { Database } from '../../db/client.js';
-import { clients } from '../../db/schema/index.js';
+import { clientBusiness, clientContacts, clients } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { syncDriveFolders } from '../drive/folders.js';
 import { createClientRecord } from './create.js';
@@ -25,13 +27,41 @@ export const toClient = (row: ClientRow): Client => ({
   active: row.active,
   expansionArea: Array.isArray(row.expansionArea) ? (row.expansionArea as ExpansionEntry[]) : [],
   number: row.number ?? null,
+  relationship: (row.relationship as ClientRelationship | null) ?? null,
 });
 
-/** Wings Company first, then the active ones by name, then the inactive. */
+/**
+ * Wings Company first, then the active ones by name, then the inactive; each
+ * with what its register lacks against the new register (Wings Company: nothing).
+ */
 export async function listClients(db: Database): Promise<Client[]> {
-  const rows = await db.select().from(clients).orderBy(desc(clients.active), asc(clients.name));
+  const [rows, contacts, business] = await Promise.all([
+    db.select().from(clients).orderBy(desc(clients.active), asc(clients.name)),
+    db.select().from(clientContacts).where(eq(clientContacts.role, 'principal')),
+    db.select().from(clientBusiness),
+  ]);
+  const contactOf = new Map(contacts.map((contact) => [contact.clientId, contact]));
+  const businessOf = new Map(business.map((row) => [row.clientId, row]));
   return rows
-    .map(toClient)
+    .map((row) => {
+      const address = (row.address ?? {}) as Record<string, string | null>;
+      const registerMissing =
+        row.id === WINGS_CLIENT_ID
+          ? []
+          : clientRegisterMissing({
+              cnpj: row.cnpj,
+              legalName: row.legalName,
+              tradeName: row.tradeName,
+              cnaeMain: row.cnaeMain,
+              openedOn: row.openedOn,
+              city: address.city ?? null,
+              state: address.state ?? null,
+              relationship: row.relationship,
+              contact: contactOf.get(row.id) ?? null,
+              business: businessOf.get(row.id) ?? null,
+            });
+      return { ...toClient(row), registerMissing };
+    })
     .sort((a, b) => Number(b.id === WINGS_CLIENT_ID) - Number(a.id === WINGS_CLIENT_ID));
 }
 
@@ -73,7 +103,7 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
           message: body.error.issues[0]?.message ?? 'Dados inválidos',
         });
       }
-      const { cnpj, contact } = body.data;
+      const { cnpj, contact, relationship, company, business } = body.data;
       if (cnpj) {
         const holder = await db.query.clients.findFirst({
           where: eq(clients.cnpj, cnpj),
@@ -86,7 +116,14 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
           });
         }
       }
-      const created = await createClientRecord(db, { name: body.data.name, cnpj, contact });
+      const created = await createClientRecord(db, {
+        name: body.data.name,
+        cnpj,
+        contact,
+        relationship,
+        company,
+        business,
+      });
       if (!created) {
         return reply
           .status(409)
@@ -102,9 +139,10 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
         metadata: {
           slug: row.slug,
           withCnpj: cnpj !== null,
-          withContact: contact !== null,
+          withContact: true,
+          relationship,
           driveFoldersCreated: created.driveFoldersCreated,
-          projectOpened: true,
+          projectOpened: created.projectOpened,
         },
       });
       return reply.status(201).send({ client: toClient(row) });
@@ -157,6 +195,7 @@ export const clientRoutes: FastifyPluginAsync = async (app) => {
           ...(body.data.name !== undefined ? { name: body.data.name, slug } : {}),
           ...(body.data.active !== undefined ? { active: body.data.active } : {}),
           ...(body.data.number !== undefined ? { number: body.data.number } : {}),
+          ...(body.data.relationship !== undefined ? { relationship: body.data.relationship } : {}),
         })
         .where(eq(clients.id, params.data.id))
         .returning();

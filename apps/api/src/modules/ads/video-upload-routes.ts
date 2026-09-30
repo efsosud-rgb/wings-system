@@ -195,12 +195,10 @@ export const videoUploadRoutes: FastifyPluginAsync = async (app) => {
       try {
         await pipeline(request.body as NodeJS.ReadableStream, meter);
       } catch {
-        return reply
-          .status(400)
-          .send({
-            error: 'upload_interrupted',
-            message: 'O envio foi interrompido. Tente de novo.',
-          });
+        return reply.status(400).send({
+          error: 'upload_interrupted',
+          message: 'O envio foi interrompido. Tente de novo.',
+        });
       }
       if (received !== expectedSize) {
         return reply.status(400).send({

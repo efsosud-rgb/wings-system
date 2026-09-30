@@ -67,11 +67,21 @@ const DOC_TOPIC_SUBMODULE: Record<string, string> = {
 
 function submodulePathForFile(path: string): string | null {
   const segments = path.split('/');
-  if (segments[0] === 'apps' && segments[1] === 'api' && segments[2] === 'src' && segments[3] === 'modules') {
+  if (
+    segments[0] === 'apps' &&
+    segments[1] === 'api' &&
+    segments[2] === 'src' &&
+    segments[3] === 'modules'
+  ) {
     const name = segments[4];
     return (name && API_MODULE_SUBMODULE[name]) || null;
   }
-  if (segments[0] === 'apps' && segments[1] === 'web' && segments[2] === 'src' && segments[3] === 'pages') {
+  if (
+    segments[0] === 'apps' &&
+    segments[1] === 'web' &&
+    segments[2] === 'src' &&
+    segments[3] === 'pages'
+  ) {
     const component = (segments[4] ?? '').replace(/\.(tsx|ts)$/, '');
     return WEB_PAGE_SUBMODULE[component] || null;
   }

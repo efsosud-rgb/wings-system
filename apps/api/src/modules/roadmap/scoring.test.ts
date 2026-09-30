@@ -99,7 +99,11 @@ describe('forecastOf', () => {
 
   it('is every bound null when the observed pace is zero, never Infinity or a throw', () => {
     const forecast = forecastOf(10, { last4WeeksPerWeek: 0, sinceStartPerWeek: 0 });
-    expect(forecast).toEqual({ optimisticWeeks: null, provavelWeeks: null, pessimisticWeeks: null });
+    expect(forecast).toEqual({
+      optimisticWeeks: null,
+      provavelWeeks: null,
+      pessimisticWeeks: null,
+    });
     expect(() => forecastOf(10, { last4WeeksPerWeek: 0, sinceStartPerWeek: 0 })).not.toThrow();
   });
 

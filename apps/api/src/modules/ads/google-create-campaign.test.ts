@@ -73,7 +73,10 @@ function searchDraft(overrides: Record<string, unknown> = {}): CampaignDraft {
       keywords: ['[franquia de alimentação]', '"abrir franquia"'],
       negativeKeywords: ['grátis'],
       headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
-      descriptions: ['Conheça o modelo de negócio e o suporte da Wings.', 'Suporte do início ao fim.'],
+      descriptions: [
+        'Conheça o modelo de negócio e o suporte da Wings.',
+        'Suporte do início ao fim.',
+      ],
     },
     ...overrides,
   });
@@ -302,15 +305,27 @@ describe('executing an approved Google campaign', () => {
         { text: 'abrir franquia', matchType: 'PHRASE' },
       ],
     });
-    expect(api.negatives).toEqual([{ campaignId: api.campaigns[0]?.id, text: 'grátis', matchType: 'PHRASE' }]);
+    expect(api.negatives).toEqual([
+      { campaignId: api.campaigns[0]?.id, text: 'grátis', matchType: 'PHRASE' },
+    ]);
     expect(api.ads[0]).toMatchObject({
       status: 'PAUSED',
-      finalUrls: ['https://wingscompany.com.br/franquia?utm_source=google&utm_medium=cpc&utm_campaign=x&utm_content=lead'],
+      finalUrls: [
+        'https://wingscompany.com.br/franquia?utm_source=google&utm_medium=cpc&utm_campaign=x&utm_content=lead',
+      ],
       headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
     });
 
     // Every object is a step a person can see, by its Google id.
-    const steps = await stepsOfExecution(db, (await db.select().from(adExecutions).where(eq(adExecutions.changeRequestId, changeRequestId)))[0]!.id);
+    const steps = await stepsOfExecution(
+      db,
+      (
+        await db
+          .select()
+          .from(adExecutions)
+          .where(eq(adExecutions.changeRequestId, changeRequestId))
+      )[0]!.id,
+    );
     expect(steps.map((step) => step.kind)).toEqual([
       'campaign',
       'negative_keyword',
@@ -363,7 +378,10 @@ describe('executing an approved Google campaign', () => {
       .select()
       .from(adExecutions)
       .where(eq(adExecutions.changeRequestId, changeRequestId));
-    expect(execution?.platformResponse).toMatchObject({ preflight: true, code: 'MONEY_AMOUNT_TOO_SMALL' });
+    expect(execution?.platformResponse).toMatchObject({
+      preflight: true,
+      code: 'MONEY_AMOUNT_TOO_SMALL',
+    });
   });
 
   it('leaves the change untouched when Google does not answer the rehearsal', async () => {
@@ -497,23 +515,37 @@ describe('executing an approved Google campaign', () => {
   it('activates the campaign, ad group and ad it created, and changes its budget, through the same approval flow', async () => {
     const { accountId, api, client } = await world();
     const { changeRequestId } = await requestAndApprove(accountId, searchDraft());
-    expect(await executeApprovedChange(db, client, changeRequestId, { allowWrites: true })).toMatchObject({ ok: true });
+    expect(
+      await executeApprovedChange(db, client, changeRequestId, { allowWrites: true }),
+    ).toMatchObject({ ok: true });
     // The next ingestion would do this; the executor mirrored the campaign already.
-    const mirrored = await db.query.adCampaigns.findFirst({ where: eq(adCampaigns.adAccountId, accountId) });
+    const mirrored = await db.query.adCampaigns.findFirst({
+      where: eq(adCampaigns.adAccountId, accountId),
+    });
     if (!mirrored) throw new Error('expected the campaign mirrored');
     expect(api.campaigns[0]).toMatchObject({ status: 'PAUSED' });
 
     // Ask to resume: a request of its own, judged as the campaign's whole exposure.
-    const resume = await reserveChange(db, { adAccountId: accountId, campaignId: mirrored.id, kind: 'resume_campaign' });
+    const resume = await reserveChange(db, {
+      adAccountId: accountId,
+      campaignId: mirrored.id,
+      kind: 'resume_campaign',
+    });
     if (!resume.ok) throw new Error(resume.message);
     // Google: budget x days left x 1.0, never less than one day at 2.0 — not Meta's 1.25.
     const daysLeft = remainingDays(new Date());
     expect(resume.value.exposureDeltaCents).toBe(Math.max(3000 * daysLeft, 3000 * 2));
     const gate = await gateChange(db, { changeRequestId: resume.value.changeRequestId });
     const admin = await createEmployee(db, { role: 'admin_master', sector: 'diretoria' });
-    await decideApproval(db, { approvalId: gate.approvalId!, approverEmployeeId: admin.id, decision: 'approved' });
+    await decideApproval(db, {
+      approvalId: gate.approvalId!,
+      approverEmployeeId: admin.id,
+      decision: 'approved',
+    });
 
-    const activated = await executeApprovedChange(db, client, resume.value.changeRequestId, { allowWrites: true });
+    const activated = await executeApprovedChange(db, client, resume.value.changeRequestId, {
+      allowWrites: true,
+    });
     expect(activated).toMatchObject({ ok: true, outcome: 'applied' });
     expect(api.campaigns[0]).toMatchObject({ status: 'ENABLED' });
     expect(api.adGroups[0]).toMatchObject({ status: 'ENABLED' });
@@ -531,7 +563,9 @@ describe('executing an approved Google campaign', () => {
         [`ad:${api.ads[0]?.id.split('~')[1]}`]: 'ENABLED',
       },
     });
-    expect(await db.query.adCampaigns.findFirst({ where: eq(adCampaigns.id, mirrored.id) })).toMatchObject({ status: 'ACTIVE' });
+    expect(
+      await db.query.adCampaigns.findFirst({ where: eq(adCampaigns.id, mirrored.id) }),
+    ).toMatchObject({ status: 'ACTIVE' });
 
     // A new daily budget: one more request, one more approval, one more click.
     const budget = await reserveChange(db, {
@@ -542,21 +576,39 @@ describe('executing an approved Google campaign', () => {
     });
     if (!budget.ok) throw new Error(budget.message);
     const budgetGate = await gateChange(db, { changeRequestId: budget.value.changeRequestId });
-    await decideApproval(db, { approvalId: budgetGate.approvalId!, approverEmployeeId: admin.id, decision: 'approved' });
-    const rebudgeted = await executeApprovedChange(db, client, budget.value.changeRequestId, { allowWrites: true });
+    await decideApproval(db, {
+      approvalId: budgetGate.approvalId!,
+      approverEmployeeId: admin.id,
+      decision: 'approved',
+    });
+    const rebudgeted = await executeApprovedChange(db, client, budget.value.changeRequestId, {
+      allowWrites: true,
+    });
     expect(rebudgeted).toMatchObject({ ok: true });
     expect(api.campaigns[0]?.amountMicros).toBe('45000000');
-    expect(await db.query.adCampaigns.findFirst({ where: eq(adCampaigns.id, mirrored.id) })).toMatchObject({ dailyBudgetCents: 4500 });
+    expect(
+      await db.query.adCampaigns.findFirst({ where: eq(adCampaigns.id, mirrored.id) }),
+    ).toMatchObject({ dailyBudgetCents: 4500 });
 
     // And a pause touches only the campaign.
-    const pause = await reserveChange(db, { adAccountId: accountId, campaignId: mirrored.id, kind: 'pause_campaign' });
+    const pause = await reserveChange(db, {
+      adAccountId: accountId,
+      campaignId: mirrored.id,
+      kind: 'pause_campaign',
+    });
     if (!pause.ok) throw new Error(pause.message);
     const pauseGate = await gateChange(db, { changeRequestId: pause.value.changeRequestId });
-    await decideApproval(db, { approvalId: pauseGate.approvalId!, approverEmployeeId: admin.id, decision: 'approved' });
-    expect(await executeApprovedChange(db, client, pause.value.changeRequestId, { allowWrites: true })).toMatchObject({ ok: true });
+    await decideApproval(db, {
+      approvalId: pauseGate.approvalId!,
+      approverEmployeeId: admin.id,
+      decision: 'approved',
+    });
+    expect(
+      await executeApprovedChange(db, client, pause.value.changeRequestId, { allowWrites: true }),
+    ).toMatchObject({ ok: true });
     expect(api.campaigns[0]).toMatchObject({ status: 'PAUSED' });
     expect(api.adGroups[0]).toMatchObject({ status: 'ENABLED' });
-    expect((api.writeCalls().at(-1)?.body.mutateOperations as unknown[])).toHaveLength(1);
+    expect(api.writeCalls().at(-1)?.body.mutateOperations as unknown[]).toHaveLength(1);
   });
 
   it('carries a radius from the approved draft to a proximity criterion', async () => {

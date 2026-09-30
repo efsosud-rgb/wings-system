@@ -239,7 +239,10 @@ export const SUGGESTIONS_PER_RUN_MIN = 2;
 export const SUGGESTIONS_PER_RUN_MAX = 3;
 
 export const registerSuggestionsSchema = z.object({
-  suggestions: z.array(campaignSuggestionSchema).min(SUGGESTIONS_PER_RUN_MIN).max(SUGGESTIONS_PER_RUN_MAX),
+  suggestions: z
+    .array(campaignSuggestionSchema)
+    .min(SUGGESTIONS_PER_RUN_MIN)
+    .max(SUGGESTIONS_PER_RUN_MAX),
 });
 
 export const SUGGESTION_STATUSES = ['open', 'applied', 'dismissed'] as const;
@@ -309,7 +312,10 @@ export interface AccountCplTarget {
   suggestionNote: string | null;
 }
 
-export const ACCOUNT_CPL_SUGGESTION: Record<'meta' | 'google', { cents: number | null; note: string }> = {
+export const ACCOUNT_CPL_SUGGESTION: Record<
+  'meta' | 'google',
+  { cents: number | null; note: string }
+> = {
   meta: { cents: 8590, note: 'Sugestão inicial combinada em 28/09. Só vale depois de confirmada.' },
   google: {
     cents: null,

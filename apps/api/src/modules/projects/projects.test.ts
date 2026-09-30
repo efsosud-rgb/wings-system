@@ -19,7 +19,12 @@ import {
 } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
-import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
+import {
+  clientRegister,
+  createEmployee,
+  TEST_CPF_KEY,
+  TEST_INDEX_KEY,
+} from '../../test/factories.js';
 
 let harness: TestDatabase;
 let db: Database;
@@ -79,7 +84,7 @@ async function registerClient(session: Session, name: string) {
     method: 'POST',
     url: '/clients',
     cookies: session.cookies,
-    payload: { name },
+    payload: clientRegister(name),
   });
   expect(created.statusCode).toBe(201);
   return created.json<{ client: { id: string; number: number } }>().client;

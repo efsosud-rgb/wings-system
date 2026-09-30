@@ -42,7 +42,7 @@ describe('registerBrands', () => {
     expect(formatBrandReport(report)).toContain('SIMULAÇÃO');
   });
 
-  it('registers the missing brands with number and project, ties every seeded rule, and is safe to rerun', async () => {
+  it('registers the missing brands with a number and no Formatação project, ties every seeded rule, and is safe to rerun', async () => {
     const [existing] = await db
       .insert(clients)
       .values({ name: 'Mister Russo', slug: 'mister-russo', number: 40 })
@@ -74,9 +74,11 @@ describe('registerBrands', () => {
 
     const casal = await db.query.clients.findFirst({ where: eq(clients.name, 'Casal do Churros') });
     expect(casal?.number).toBeGreaterThan(40);
+    // Expansão brands: no Formatação project (Eric, 30/09).
     expect(
       await db.query.clientProjects.findFirst({ where: eq(clientProjects.clientId, casal!.id) }),
-    ).toBeTruthy();
+    ).toBeUndefined();
+    expect(casal?.relationship).toBe('expansao');
     const rule = await db.query.leadSourceRules.findFirst({
       where: eq(leadSourceRules.pattern, 'casal-do-churros'),
     });

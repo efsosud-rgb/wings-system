@@ -8,7 +8,12 @@ describe('ratios over a window', () => {
   });
 
   it('never turns clicks into a cost per lead', () => {
-    const ratios = ratiosOf({ ...EMPTY_TOTALS, spendCents: 10_000, impressions: 5000, clicks: 100 });
+    const ratios = ratiosOf({
+      ...EMPTY_TOTALS,
+      spendCents: 10_000,
+      impressions: 5000,
+      clicks: 100,
+    });
     expect(ratios.ctrMilli).toBe(2000);
     expect(ratios.cpcCents).toBe(100);
     expect(ratios.cpmCents).toBe(2000);

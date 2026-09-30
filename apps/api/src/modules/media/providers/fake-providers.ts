@@ -92,7 +92,10 @@ export function fakeProviders(options: FakeProvidersOptions = {}) {
     const call = record('cloudflare', url, init);
     if (options.cloudflare?.drop) throw new TypeError('fetch failed');
     if (call.headers.authorization !== 'Bearer cf_token_test') {
-      return json(403, { success: false, errors: [{ code: 10000, message: 'Authentication error' }] });
+      return json(403, {
+        success: false,
+        errors: [{ code: 10000, message: 'Authentication error' }],
+      });
     }
     if (options.cloudflare?.status && options.cloudflare.status !== 200) {
       return json(options.cloudflare.status, {
@@ -113,7 +116,9 @@ export function fakeProviders(options: FakeProvidersOptions = {}) {
   const gemini = (url: URL, init?: RequestInit): Response => {
     const call = record('gemini', url, init);
     if (call.headers['x-goog-api-key'] !== 'gemini_key_test') {
-      return json(403, { error: { code: 403, message: 'API key not valid', status: 'PERMISSION_DENIED' } });
+      return json(403, {
+        error: { code: 403, message: 'API key not valid', status: 'PERMISSION_DENIED' },
+      });
     }
     if (options.gemini?.status && options.gemini.status !== 200) {
       return json(options.gemini.status, { error: { message: `status ${options.gemini.status}` } });
@@ -121,18 +126,30 @@ export function fakeProviders(options: FakeProvidersOptions = {}) {
     if (options.gemini?.refuseWithText) {
       return json(200, {
         candidates: [
-          { content: { parts: [{ text: 'I cannot create that image.' }], role: 'model' }, finishReason: 'STOP' },
+          {
+            content: { parts: [{ text: 'I cannot create that image.' }], role: 'model' },
+            finishReason: 'STOP',
+          },
         ],
       });
     }
     const ratio = (call.body as { generationConfig?: { imageConfig?: { aspectRatio?: string } } })
       .generationConfig?.imageConfig?.aspectRatio;
-    const [w, h] = ratio === '9:16' ? [576, 1024] : ratio === '16:9' ? [1024, 576] : ratio === '4:5' ? [832, 1040] : [1024, 1024];
+    const [w, h] =
+      ratio === '9:16'
+        ? [576, 1024]
+        : ratio === '16:9'
+          ? [1024, 576]
+          : ratio === '4:5'
+            ? [832, 1040]
+            : [1024, 1024];
     return json(200, {
       candidates: [
         {
           content: {
-            parts: [{ inlineData: { mimeType: 'image/png', data: fakePng(w, h).toString('base64') } }],
+            parts: [
+              { inlineData: { mimeType: 'image/png', data: fakePng(w, h).toString('base64') } },
+            ],
             role: 'model',
           },
           finishReason: 'STOP',
@@ -150,14 +167,19 @@ export function fakeProviders(options: FakeProvidersOptions = {}) {
     }
     if (url.pathname === '/v1/credits') {
       const usd = options.higgsfield?.balanceUsd;
-      return usd === null ? json(200, { plan: 'pay_as_you_go' }) : json(200, { balance_usd: usd ?? 12.5 });
+      return usd === null
+        ? json(200, { plan: 'pay_as_you_go' })
+        : json(200, { balance_usd: usd ?? 12.5 });
     }
     if (options.higgsfield?.status && options.higgsfield.status !== 200) {
       return json(options.higgsfield.status, { detail: `status ${options.higgsfield.status}` });
     }
     if (call.method === 'POST' && /^\/v1\/(text2image|image2video)\//.test(url.pathname)) {
       const id = `hf_${randomBytes(6).toString('hex')}`;
-      state.higgsfieldJobs.set(id, { polls: 0, kind: url.pathname.includes('image2video') ? 'video' : 'image' });
+      state.higgsfieldJobs.set(id, {
+        polls: 0,
+        kind: url.pathname.includes('image2video') ? 'video' : 'image',
+      });
       return json(200, { id, status: 'queued' });
     }
     const match = url.pathname.match(/^\/v1\/requests\/(.+)$/);
@@ -168,14 +190,17 @@ export function fakeProviders(options: FakeProvidersOptions = {}) {
       if (job.polls <= (options.higgsfield?.pollsUntilDone ?? 1)) {
         return json(200, { id: match[1], status: 'in_progress' });
       }
-      if (options.higgsfield?.fail) return json(200, { id: match[1], status: 'failed', error: 'nsfw' });
+      if (options.higgsfield?.fail)
+        return json(200, { id: match[1], status: 'failed', error: 'nsfw' });
       const address = `https://${FAKE_HIGGSFIELD_OUTPUT_HOST}/${match[1]}.${job.kind === 'video' ? 'mp4' : 'png'}`;
       state.files.set(address, job.kind === 'video' ? fakeMp4() : fakePng(1024, 1024));
       return json(200, {
         id: match[1],
         status: 'completed',
         results: { raw: { url: address }, min: { url: `${address}?preview=1` } },
-        ...(options.higgsfield?.chargeUsd !== undefined ? { cost_usd: options.higgsfield.chargeUsd } : {}),
+        ...(options.higgsfield?.chargeUsd !== undefined
+          ? { cost_usd: options.higgsfield.chargeUsd }
+          : {}),
       });
     }
     return json(404, { detail: 'Not found' });
@@ -198,7 +223,8 @@ export function fakeProviders(options: FakeProvidersOptions = {}) {
       if (task.polls <= (options.mpt?.pollsUntilDone ?? 1)) {
         return json(200, { status: 200, data: { state: 4, progress: 40 } });
       }
-      if (options.mpt?.fail) return json(200, { status: 200, data: { state: -1, error: 'no footage' } });
+      if (options.mpt?.fail)
+        return json(200, { status: 200, data: { state: -1, error: 'no footage' } });
       const address = `${mptBase.origin}/tasks/${match[1]}/final-1.mp4`;
       state.files.set(address, fakeMp4());
       return json(200, { status: 200, data: { state: 1, progress: 100, videos: [address] } });
@@ -209,7 +235,9 @@ export function fakeProviders(options: FakeProvidersOptions = {}) {
   };
 
   const fetchFn = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input : input.url);
+    const url = new URL(
+      typeof input === 'string' ? input : input instanceof URL ? input : input.url,
+    );
     if (url.host === 'api.cloudflare.com') return cloudflare(url, init);
     if (url.host === 'generativelanguage.googleapis.com') return gemini(url, init);
     if (url.host === 'platform.higgsfield.ai') return higgsfield(url, init);

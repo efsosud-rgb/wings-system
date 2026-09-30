@@ -180,13 +180,11 @@ describe('CRM Vendas → Landing pages', () => {
     const empty = await db.query.leadSourceRules.findFirst({
       where: eq(leadSourceRules.pattern, 'cenoritas-2'),
     });
-    await db
-      .insert(leads)
-      .values({
-        source: 'rd_station',
-        landingPage: 'franquia.wingscompany.com.br/outra',
-        phone: '5511900000001',
-      });
+    await db.insert(leads).values({
+      source: 'rd_station',
+      landingPage: 'franquia.wingscompany.com.br/outra',
+      phone: '5511900000001',
+    });
     const wrong = await app.inject({
       method: 'DELETE',
       url: `/crm/landing-pages/${empty!.id}?confirm=outra-coisa`,

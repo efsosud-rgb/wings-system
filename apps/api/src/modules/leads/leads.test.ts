@@ -14,7 +14,12 @@ import type { Database } from '../../db/client.js';
 import { auditLog, clients, jobs, leadEvents, leads } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
-import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
+import {
+  clientRegister,
+  createEmployee,
+  TEST_CPF_KEY,
+  TEST_INDEX_KEY,
+} from '../../test/factories.js';
 
 const RD_SECRET = 'rd-secret-with-enough-length-1';
 const ZAPI_SECRET = 'zapi-secret-with-enough-length';
@@ -94,7 +99,12 @@ async function sessionFor(
 }
 
 async function createClient(cookies: Record<string, string>, name: string) {
-  const created = await app.inject({ method: 'POST', url: '/clients', cookies, payload: { name } });
+  const created = await app.inject({
+    method: 'POST',
+    url: '/clients',
+    cookies,
+    payload: clientRegister(name),
+  });
   expect(created.statusCode).toBe(201);
   return created.json<{ client: { id: string; name: string } }>().client;
 }

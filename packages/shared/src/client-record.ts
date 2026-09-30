@@ -100,6 +100,16 @@ export const REVENUE_BAND_LABELS: Record<RevenueBand, string> = {
   acima_30m: 'Acima de R$ 30 milhões/ano',
 };
 
+/** Franqueabilidade and fit Wings (CRM plan §3.1, Manus): a judgement, or explicitly not made. */
+export const FIT_LEVELS = ['alta', 'media', 'baixa', 'nao_avaliado'] as const;
+export type FitLevel = (typeof FIT_LEVELS)[number];
+export const FIT_LEVEL_LABELS: Record<FitLevel, string> = {
+  alta: 'Alta',
+  media: 'Média',
+  baixa: 'Baixa',
+  nao_avaliado: 'Não avaliado',
+};
+
 export const INPI_STATUSES = [
   'nao_depositada',
   'depositada',
@@ -178,7 +188,10 @@ const phone = z
     const digits = (value ?? '').replace(/\D/g, '');
     return digits.length === 13 && digits.startsWith('55') ? digits.slice(2) : digits || null;
   })
-  .refine((value) => value === null || /^\d{10,11}$/.test(value), 'Telefone com DDD, 10 ou 11 dígitos');
+  .refine(
+    (value) => value === null || /^\d{10,11}$/.test(value),
+    'Telefone com DDD, 10 ou 11 dígitos',
+  );
 
 const cents = z
   .number({ error: 'Informe um valor' })
@@ -201,14 +214,17 @@ const percent = z
   .min(0, 'De 0 a 100')
   .max(100, 'De 0 a 100')
   .nullish()
-  .transform((value) => (value === null || value === undefined ? null : Math.round(value * 100) / 100));
+  .transform((value) =>
+    value === null || value === undefined ? null : Math.round(value * 100) / 100,
+  );
 
 const day = z
   .string()
   .nullish()
   .transform((value) => (value ? value : null))
   .refine(
-    (value) => value === null || (/^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value))),
+    (value) =>
+      value === null || (/^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value))),
     'Data inválida',
   );
 
@@ -372,6 +388,11 @@ export const clientBusinessSchema = z.object({
   inpiProcess: text(30),
   inpiClass: text(30),
   inpiStatus: oneOf(INPI_STATUSES),
+  franchisability: oneOf(FIT_LEVELS),
+  wingsFit: oneOf(FIT_LEVELS),
+  /** Where the profile above came from ("reunião com o sócio", "site da marca") and when. */
+  profileSource: text(200),
+  profileDate: day,
 });
 export type ClientBusiness = z.output<typeof clientBusinessSchema>;
 
@@ -409,10 +430,11 @@ export const clientContractSchema = z.object({
   consultants: z
     .partialRecord(z.enum(CONSULTANT_AREAS), z.uuid().nullable())
     .nullish()
-    .transform((value) =>
-      Object.fromEntries(Object.entries(value ?? {}).filter(([, id]) => id)) as Partial<
-        Record<ConsultantArea, string>
-      >,
+    .transform(
+      (value) =>
+        Object.fromEntries(Object.entries(value ?? {}).filter(([, id]) => id)) as Partial<
+          Record<ConsultantArea, string>
+        >,
     ),
 });
 export type ClientContractInput = z.input<typeof clientContractSchema>;
@@ -562,7 +584,11 @@ export interface ClientCompletenessInput {
     | 'mobile'
     | 'sharePercent'
     | 'signsForCompany'
-  > & { cpfOnFile: boolean; maritalStatus: MaritalStatus | null; propertyRegime: PropertyRegime | null })[];
+  > & {
+    cpfOnFile: boolean;
+    maritalStatus: MaritalStatus | null;
+    propertyRegime: PropertyRegime | null;
+  })[];
   contacts: ClientContact[];
   business: ClientBusiness;
   contracts: ClientContract[];
@@ -691,7 +717,10 @@ export function clientCompleteness(record: ClientCompletenessInput): ClientCompl
     ['Celular de assinatura', Boolean(s.signingMobile)],
     ['Tipo de assinatura', Boolean(s.signatureType)],
     ['Foro', Boolean(s.forum)],
-    ['Duas testemunhas com CPF', s.witnesses.filter((w) => w.cpfOnFile).length >= CLIENT_MAX_WITNESSES],
+    [
+      'Duas testemunhas com CPF',
+      s.witnesses.filter((w) => w.cpfOnFile).length >= CLIENT_MAX_WITNESSES,
+    ],
   ]);
 
   const filled = blocks.reduce((sum, block) => sum + block.filled, 0);

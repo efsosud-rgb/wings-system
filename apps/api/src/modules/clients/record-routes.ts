@@ -62,17 +62,31 @@ export const clientRecordRoutes: FastifyPluginAsync = async (app) => {
   });
 
   const badRequest = (reply: FastifyReply, error?: z.ZodError) =>
-    reply.status(400).send({ error: 'invalid_request', message: error?.issues[0]?.message ?? 'Dados inválidos' });
+    reply
+      .status(400)
+      .send({ error: 'invalid_request', message: error?.issues[0]?.message ?? 'Dados inválidos' });
 
   const failed = (reply: FastifyReply, failure: Failure) =>
     reply.status(failure.status).send({
-      error: failure.error === 'conflict' ? failure.code : failure.error === 'invalid' ? 'invalid_request' : failure.error,
+      error:
+        failure.error === 'conflict'
+          ? failure.code
+          : failure.error === 'invalid'
+            ? 'invalid_request'
+            : failure.error,
       message: failure.message,
     });
 
   const sendRecord = async (request: FastifyRequest, reply: FastifyReply, clientId: string) => {
-    const record = await loadRecord(db, cpfCrypto, request.session.actor, clientId, access(request));
-    if (!record) return reply.status(404).send({ error: 'not_found', message: 'Cliente não encontrado.' });
+    const record = await loadRecord(
+      db,
+      cpfCrypto,
+      request.session.actor,
+      clientId,
+      access(request),
+    );
+    if (!record)
+      return reply.status(404).send({ error: 'not_found', message: 'Cliente não encontrado.' });
     return reply.send(record);
   };
 
@@ -84,23 +98,33 @@ export const clientRecordRoutes: FastifyPluginAsync = async (app) => {
       return null;
     }
     if (params.data.id === WINGS_CLIENT_ID) {
-      void reply.status(409).send({ error: 'client_fixed', message: 'Wings Company não tem ficha de cliente.' });
+      void reply
+        .status(409)
+        .send({ error: 'client_fixed', message: 'Wings Company não tem ficha de cliente.' });
       return null;
     }
     return params.data.id;
   };
 
-  app.get('/clients/:id/record', { preHandler: app.requirePermission('clients.read') }, async (request, reply) => {
-    const clientId = clientIdOf(request, reply);
-    if (!clientId) return reply;
-    return sendRecord(request, reply, clientId);
-  });
+  app.get(
+    '/clients/:id/record',
+    { preHandler: app.requirePermission('clients.read') },
+    async (request, reply) => {
+      const clientId = clientIdOf(request, reply);
+      if (!clientId) return reply;
+      return sendRecord(request, reply, clientId);
+    },
+  );
 
   /** One PUT per block: parse, save, answer with the whole record (and its new %). */
   const block = <S extends z.ZodType>(
     path: string,
     schema: S,
-    save: (ctx: WriteContext, clientId: string, input: z.output<S>) => Promise<{ ok: true } | { ok: false; failure: Failure }>,
+    save: (
+      ctx: WriteContext,
+      clientId: string,
+      input: z.output<S>,
+    ) => Promise<{ ok: true } | { ok: false; failure: Failure }>,
   ) =>
     app.put(path, { preHandler: app.requirePermission('clients.edit') }, async (request, reply) => {
       const clientId = clientIdOf(request, reply);
@@ -112,23 +136,39 @@ export const clientRecordRoutes: FastifyPluginAsync = async (app) => {
       return sendRecord(request, reply, clientId);
     });
 
-  block('/clients/:id/company', clientCompanySchema, (ctx, id, input) => saveCompany(db, ctx, id, input));
-  block('/clients/:id/contacts', clientContactsSchema, (ctx, id, input) => saveContacts(db, ctx, id, input));
-  block('/clients/:id/business', clientBusinessSchema, (ctx, id, input) => saveBusiness(db, ctx, id, input));
-  block('/clients/:id/contracts', clientContractsSchema, (ctx, id, input) => saveContracts(db, ctx, id, input));
-  block('/clients/:id/franchise', clientFranchiseSchema, (ctx, id, input) => saveFranchise(db, ctx, id, input));
-  block('/clients/:id/signature', clientSignatureSchema, (ctx, id, input) => saveSignature(db, ctx, id, input));
+  block('/clients/:id/company', clientCompanySchema, (ctx, id, input) =>
+    saveCompany(db, ctx, id, input),
+  );
+  block('/clients/:id/contacts', clientContactsSchema, (ctx, id, input) =>
+    saveContacts(db, ctx, id, input),
+  );
+  block('/clients/:id/business', clientBusinessSchema, (ctx, id, input) =>
+    saveBusiness(db, ctx, id, input),
+  );
+  block('/clients/:id/contracts', clientContractsSchema, (ctx, id, input) =>
+    saveContracts(db, ctx, id, input),
+  );
+  block('/clients/:id/franchise', clientFranchiseSchema, (ctx, id, input) =>
+    saveFranchise(db, ctx, id, input),
+  );
+  block('/clients/:id/signature', clientSignatureSchema, (ctx, id, input) =>
+    saveSignature(db, ctx, id, input),
+  );
 
-  app.post('/clients/:id/partners', { preHandler: app.requirePermission('clients.edit') }, async (request, reply) => {
-    const clientId = clientIdOf(request, reply);
-    if (!clientId) return reply;
-    const body = clientPartnerInputSchema.safeParse(request.body);
-    if (!body.success) return badRequest(reply, body.error);
-    const result = await savePartner(db, context(request), clientId, null, body.data);
-    if (!result.ok) return failed(reply, result.failure);
-    reply.status(201);
-    return sendRecord(request, reply, clientId);
-  });
+  app.post(
+    '/clients/:id/partners',
+    { preHandler: app.requirePermission('clients.edit') },
+    async (request, reply) => {
+      const clientId = clientIdOf(request, reply);
+      if (!clientId) return reply;
+      const body = clientPartnerInputSchema.safeParse(request.body);
+      if (!body.success) return badRequest(reply, body.error);
+      const result = await savePartner(db, context(request), clientId, null, body.data);
+      if (!result.ok) return failed(reply, result.failure);
+      reply.status(201);
+      return sendRecord(request, reply, clientId);
+    },
+  );
 
   app.put(
     '/clients/:id/partners/:partnerId',
@@ -140,7 +180,13 @@ export const clientRecordRoutes: FastifyPluginAsync = async (app) => {
       const body = clientPartnerInputSchema.safeParse(request.body);
       if (!params.success) return badRequest(reply);
       if (!body.success) return badRequest(reply, body.error);
-      const result = await savePartner(db, context(request), clientId, params.data.partnerId, body.data);
+      const result = await savePartner(
+        db,
+        context(request),
+        clientId,
+        params.data.partnerId,
+        body.data,
+      );
       if (!result.ok) return failed(reply, result.failure);
       return sendRecord(request, reply, clientId);
     },
@@ -166,7 +212,9 @@ export const clientRecordRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const clientId = clientIdOf(request, reply);
       if (!clientId) return reply;
-      const body = z.object({ kind: z.enum(['partner', 'witness']), id: z.uuid() }).safeParse(request.body);
+      const body = z
+        .object({ kind: z.enum(['partner', 'witness']), id: z.uuid() })
+        .safeParse(request.body);
       if (!body.success) return badRequest(reply, body.error);
       const result = await revealCpf(db, context(request), clientId, body.data.kind, body.data.id);
       if (!result.ok) return failed(reply, result.failure);
@@ -176,39 +224,52 @@ export const clientRecordRoutes: FastifyPluginAsync = async (app) => {
 
   // --- CNPJ and CEP --------------------------------------------------------------
 
-  const canLookUp = (request: FastifyRequest) => app.can(request, 'clients.edit') || app.can(request, 'clients.manage');
+  const canLookUp = (request: FastifyRequest) =>
+    app.can(request, 'clients.edit') || app.can(request, 'clients.manage');
   // The public registries throttle us per IP; keep each person to a human pace.
   const lookupLimit = { rateLimit: { max: 20, timeWindow: '1 minute' } };
 
-  app.post('/clients/lookup/cnpj', { preHandler: app.requireAuth, config: lookupLimit }, async (request, reply) => {
-    if (!canLookUp(request)) return reply.status(403).send({ error: 'forbidden', message: 'Acesso negado' });
-    const body = z.object({ cnpj: z.string().max(30) }).safeParse(request.body);
-    if (!body.success || !isValidCnpj(body.data.cnpj)) {
-      return reply.status(400).send({ error: 'invalid_request', message: 'CNPJ inválido' });
-    }
-    const result = await registry.cnpj(body.data.cnpj);
-    if (result.ok) return reply.send(result.value);
-    return result.reason === 'not_found'
-      ? reply.status(404).send({ error: 'cnpj_not_found', message: 'A Receita não tem este CNPJ.' })
-      : reply.status(503).send({
-          error: 'lookup_unavailable',
-          message: 'A consulta de CNPJ não respondeu agora. Tente de novo ou preencha à mão.',
-        });
-  });
+  app.post(
+    '/clients/lookup/cnpj',
+    { preHandler: app.requireAuth, config: lookupLimit },
+    async (request, reply) => {
+      if (!canLookUp(request))
+        return reply.status(403).send({ error: 'forbidden', message: 'Acesso negado' });
+      const body = z.object({ cnpj: z.string().max(30) }).safeParse(request.body);
+      if (!body.success || !isValidCnpj(body.data.cnpj)) {
+        return reply.status(400).send({ error: 'invalid_request', message: 'CNPJ inválido' });
+      }
+      const result = await registry.cnpj(body.data.cnpj);
+      if (result.ok) return reply.send(result.value);
+      return result.reason === 'not_found'
+        ? reply
+            .status(404)
+            .send({ error: 'cnpj_not_found', message: 'A Receita não tem este CNPJ.' })
+        : reply.status(503).send({
+            error: 'lookup_unavailable',
+            message: 'A consulta de CNPJ não respondeu agora. Tente de novo ou preencha à mão.',
+          });
+    },
+  );
 
-  app.post('/clients/lookup/cep', { preHandler: app.requireAuth, config: lookupLimit }, async (request, reply) => {
-    if (!canLookUp(request)) return reply.status(403).send({ error: 'forbidden', message: 'Acesso negado' });
-    const body = z.object({ cep: z.string().max(12) }).safeParse(request.body);
-    if (!body.success || normalizeCep(body.data.cep).length !== 8) {
-      return reply.status(400).send({ error: 'invalid_request', message: 'CEP com 8 dígitos' });
-    }
-    const result = await registry.cep(body.data.cep);
-    if (result.ok) return reply.send(result.value);
-    return result.reason === 'not_found'
-      ? reply.status(404).send({ error: 'cep_not_found', message: 'CEP não encontrado.' })
-      : reply.status(503).send({
-          error: 'lookup_unavailable',
-          message: 'A consulta de CEP não respondeu agora. Tente de novo ou preencha à mão.',
-        });
-  });
+  app.post(
+    '/clients/lookup/cep',
+    { preHandler: app.requireAuth, config: lookupLimit },
+    async (request, reply) => {
+      if (!canLookUp(request))
+        return reply.status(403).send({ error: 'forbidden', message: 'Acesso negado' });
+      const body = z.object({ cep: z.string().max(12) }).safeParse(request.body);
+      if (!body.success || normalizeCep(body.data.cep).length !== 8) {
+        return reply.status(400).send({ error: 'invalid_request', message: 'CEP com 8 dígitos' });
+      }
+      const result = await registry.cep(body.data.cep);
+      if (result.ok) return reply.send(result.value);
+      return result.reason === 'not_found'
+        ? reply.status(404).send({ error: 'cep_not_found', message: 'CEP não encontrado.' })
+        : reply.status(503).send({
+            error: 'lookup_unavailable',
+            message: 'A consulta de CEP não respondeu agora. Tente de novo ou preencha à mão.',
+          });
+    },
+  );
 };

@@ -166,12 +166,10 @@ export const landingPageRoutes: FastifyPluginAsync = async (app) => {
   app.post('/crm/landing-pages', manage, async (request, reply) => {
     const body = landingPageCreateSchema.safeParse(request.body);
     if (!body.success) {
-      return reply
-        .status(400)
-        .send({
-          error: 'invalid_request',
-          message: body.error.issues[0]?.message ?? 'Dados inválidos',
-        });
+      return reply.status(400).send({
+        error: 'invalid_request',
+        message: body.error.issues[0]?.message ?? 'Dados inválidos',
+      });
     }
     const client = await db.query.clients.findFirst({
       where: and(eq(clients.id, body.data.clientId), eq(clients.active, true)),
@@ -249,12 +247,10 @@ export const landingPageRoutes: FastifyPluginAsync = async (app) => {
     const page = (await listLandingPages(db)).find((candidate) => candidate.id === params.data.id);
     if (!page) return reply.status(404).send({ error: 'not_found' });
     if (body.data.confirm !== page.pattern) {
-      return reply
-        .status(400)
-        .send({
-          error: 'confirm_mismatch',
-          message: 'Digite o endereço da página para confirmar.',
-        });
+      return reply.status(400).send({
+        error: 'confirm_mismatch',
+        message: 'Digite o endereço da página para confirmar.',
+      });
     }
     if (page.leads > 0 || (page.performance.conversions ?? 0) > 0) {
       return reply.status(409).send({

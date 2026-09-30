@@ -115,7 +115,11 @@ describe('roadmap routes: admin_master', () => {
 
   it('lists modules with computed percentages', async () => {
     await seedModuleWithDeliverable();
-    const response = await app.inject({ method: 'GET', url: '/roadmap/modules', cookies: admin.cookies });
+    const response = await app.inject({
+      method: 'GET',
+      url: '/roadmap/modules',
+      cookies: admin.cookies,
+    });
     expect(response.statusCode).toBe(200);
     const body = response.json() as { modules: unknown[]; computed: { reportDate: string } };
     expect(Array.isArray(body.modules)).toBe(true);
@@ -131,7 +135,9 @@ describe('roadmap routes: admin_master', () => {
       payload: { status: 'pronto', weight: 'G', completedAt: '2026-09-20' },
     });
     expect(response.statusCode).toBe(200);
-    const body = response.json() as { deliverable: { status: string; weight: string; source: string } };
+    const body = response.json() as {
+      deliverable: { status: string; weight: string; source: string };
+    };
     expect(body.deliverable.status).toBe('pronto');
     expect(body.deliverable.weight).toBe('G');
     expect(body.deliverable.source).toBe('manual');
@@ -163,7 +169,11 @@ describe('roadmap routes: admin_master', () => {
     expect(create.statusCode).toBe(201);
     const created = create.json() as { recipient: { id: string } };
 
-    const list = await app.inject({ method: 'GET', url: '/roadmap/recipients', cookies: admin.cookies });
+    const list = await app.inject({
+      method: 'GET',
+      url: '/roadmap/recipients',
+      cookies: admin.cookies,
+    });
     expect(list.statusCode).toBe(200);
     expect((list.json() as { recipients: unknown[] }).recipients.length).toBeGreaterThan(0);
 

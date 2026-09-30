@@ -134,7 +134,10 @@ export async function http(
     throw new ProviderError('unauthorized', 'O provedor não aceitou a chave configurada.');
   }
   if (response.status === 429) {
-    throw new ProviderError('quota', `O provedor limitou as chamadas agora. Resposta dele: ${words}`);
+    throw new ProviderError(
+      'quota',
+      `O provedor limitou as chamadas agora. Resposta dele: ${words}`,
+    );
   }
   if (response.status >= 500) {
     throw new ProviderError(

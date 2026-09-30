@@ -155,7 +155,13 @@ export interface ComputeRoadmapInput {
 export function computeRoadmap(input: ComputeRoadmapInput): RoadmapComputed {
   const modules = input.modules.map((module) => {
     const { weightTotal, percent } = modulePercentOf(module.deliverables);
-    return { moduleId: module.moduleId, key: module.key, label: module.label, weightTotal, percent };
+    return {
+      moduleId: module.moduleId,
+      key: module.key,
+      label: module.label,
+      weightTotal,
+      percent,
+    };
   });
   const weightedTotalPercent = weightedTotalPercentOf(modules);
   const velocity = velocityOf(input.completionEvents, input.now);

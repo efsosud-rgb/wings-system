@@ -1,7 +1,12 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../../db/client.js';
-import { roadmapDeliverables, roadmapModules, roadmapReportRecipients, roadmapReportRuns } from '../../db/schema/index.js';
+import {
+  roadmapDeliverables,
+  roadmapModules,
+  roadmapReportRecipients,
+  roadmapReportRuns,
+} from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
@@ -45,14 +50,21 @@ async function seedModuleWithDeliverable(label: string) {
     .values({ key: `jobs-test-${Date.now()}-${Math.random()}`, label: 'Módulo', position: 0 })
     .returning();
   if (!module) throw new Error('seed failed');
-  await db.insert(roadmapDeliverables).values({ moduleId: module.id, label, weight: 'M', status: 'pendente' });
+  await db
+    .insert(roadmapDeliverables)
+    .values({ moduleId: module.id, label, weight: 'M', status: 'pendente' });
 }
 
 describe('runPreviewJob', () => {
   it('skips on a weekend (America/Sao_Paulo), sending nothing', async () => {
     const saturday = new Date('2026-09-26T15:00:00Z');
     const notifier = new RecordingNotifier();
-    const result = await runPreviewJob(db, fakeEnv(), { llm: null, notifier, log: () => {} }, saturday);
+    const result = await runPreviewJob(
+      db,
+      fakeEnv(),
+      { llm: null, notifier, log: () => {} },
+      saturday,
+    );
     expect(result.skipped).toBe('weekend');
     expect(result.runId).toBeNull();
     expect(notifier.sent).toHaveLength(0);
@@ -68,7 +80,12 @@ describe('runPreviewJob', () => {
     });
     const thursday = new Date('2026-10-01T15:00:00Z'); // a weekday
     const notifier = new RecordingNotifier();
-    const result = await runPreviewJob(db, fakeEnv(), { llm: null, notifier, log: () => {} }, thursday);
+    const result = await runPreviewJob(
+      db,
+      fakeEnv(),
+      { llm: null, notifier, log: () => {} },
+      thursday,
+    );
     expect(result.skipped).toBeNull();
     expect(result.runId).not.toBeNull();
     expect(notifier.sent.length).toBeGreaterThan(0);
@@ -82,10 +99,19 @@ describe('runSendJob', () => {
     await db.insert(roadmapReportRuns).values({
       reportDate,
       status: 'rascunho',
-      computed: { reportDate, modules: [], weightedTotalPercent: null, velocity: { last4WeeksPerWeek: null, sinceStartPerWeek: null }, forecast: null, scopeChangePercent: null },
+      computed: {
+        reportDate,
+        modules: [],
+        weightedTotalPercent: null,
+        velocity: { last4WeeksPerWeek: null, sinceStartPerWeek: null },
+        forecast: null,
+        scopeChangePercent: null,
+      },
       messageText: 'rascunho de teste',
     });
-    await db.insert(roadmapReportRecipients).values({ role: 'ceo', name: 'Umberto', phone: '11988887777', active: true });
+    await db
+      .insert(roadmapReportRecipients)
+      .values({ role: 'ceo', name: 'Umberto', phone: '11988887777', active: true });
 
     const notifier = new RecordingNotifier();
     const result = await runSendJob(
@@ -105,12 +131,21 @@ describe('runSendJob', () => {
       .values({
         reportDate,
         status: 'aprovado',
-        computed: { reportDate, modules: [], weightedTotalPercent: null, velocity: { last4WeeksPerWeek: null, sinceStartPerWeek: null }, forecast: null, scopeChangePercent: null },
+        computed: {
+          reportDate,
+          modules: [],
+          weightedTotalPercent: null,
+          velocity: { last4WeeksPerWeek: null, sinceStartPerWeek: null },
+          forecast: null,
+          scopeChangePercent: null,
+        },
         messageText: 'relatório aprovado de teste',
       })
       .returning();
     if (!run) throw new Error('seed failed');
-    await db.insert(roadmapReportRecipients).values({ role: 'ceo', name: 'Thais', phone: '11977776666', active: true });
+    await db
+      .insert(roadmapReportRecipients)
+      .values({ role: 'ceo', name: 'Thais', phone: '11977776666', active: true });
 
     const notifier = new RecordingNotifier();
     const result = await runSendJob(
@@ -122,7 +157,10 @@ describe('runSendJob', () => {
     expect(result.outcome).toBe('simulated');
     expect(notifier.sent).toHaveLength(0);
 
-    const [updated] = await db.select().from(roadmapReportRuns).where(eq(roadmapReportRuns.id, run.id));
+    const [updated] = await db
+      .select()
+      .from(roadmapReportRuns)
+      .where(eq(roadmapReportRuns.id, run.id));
     expect(updated?.status).toBe('enviado_simulado');
     expect(updated?.sentAt).not.toBeNull();
   });
@@ -136,7 +174,14 @@ describe('runSendJob', () => {
       .values({
         reportDate,
         status: 'aprovado',
-        computed: { reportDate, modules: [], weightedTotalPercent: null, velocity: { last4WeeksPerWeek: null, sinceStartPerWeek: null }, forecast: null, scopeChangePercent: null },
+        computed: {
+          reportDate,
+          modules: [],
+          weightedTotalPercent: null,
+          velocity: { last4WeeksPerWeek: null, sinceStartPerWeek: null },
+          forecast: null,
+          scopeChangePercent: null,
+        },
         messageText: 'relatório final de teste',
       })
       .returning();
@@ -157,7 +202,10 @@ describe('runSendJob', () => {
     expect(notifier.sent).toHaveLength(1);
     expect(notifier.sent[0]?.message).toBe('relatório final de teste');
 
-    const [updated] = await db.select().from(roadmapReportRuns).where(eq(roadmapReportRuns.id, run.id));
+    const [updated] = await db
+      .select()
+      .from(roadmapReportRuns)
+      .where(eq(roadmapReportRuns.id, run.id));
     expect(updated?.status).toBe('enviado');
   });
 

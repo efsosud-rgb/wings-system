@@ -143,8 +143,16 @@ describe('creating a Search campaign', () => {
       .map((op) => op.campaignCriterionOperation?.create)
       .filter((create) => create?.negative === true);
     expect(negatives).toEqual([
-      { campaign: 'customers/4268586278/campaigns/-2', negative: true, keyword: { text: 'grátis', matchType: 'PHRASE' } },
-      { campaign: 'customers/4268586278/campaigns/-2', negative: true, keyword: { text: 'emprego', matchType: 'PHRASE' } },
+      {
+        campaign: 'customers/4268586278/campaigns/-2',
+        negative: true,
+        keyword: { text: 'grátis', matchType: 'PHRASE' },
+      },
+      {
+        campaign: 'customers/4268586278/campaigns/-2',
+        negative: true,
+        keyword: { text: 'emprego', matchType: 'PHRASE' },
+      },
     ]);
 
     // The ad group: paused, standard search, under the temporary campaign.
@@ -157,12 +165,18 @@ describe('creating a Search campaign', () => {
     });
 
     // Keywords with the match the draft wrote; never broad.
-    const keywords = operations
-      .map((op) => op.adGroupCriterionOperation?.create)
-      .filter(Boolean);
+    const keywords = operations.map((op) => op.adGroupCriterionOperation?.create).filter(Boolean);
     expect(keywords).toEqual([
-      { adGroup: 'customers/4268586278/adGroups/-3', status: 'ENABLED', keyword: { text: 'franquia de alimentação', matchType: 'EXACT' } },
-      { adGroup: 'customers/4268586278/adGroups/-3', status: 'ENABLED', keyword: { text: 'abrir franquia', matchType: 'PHRASE' } },
+      {
+        adGroup: 'customers/4268586278/adGroups/-3',
+        status: 'ENABLED',
+        keyword: { text: 'franquia de alimentação', matchType: 'EXACT' },
+      },
+      {
+        adGroup: 'customers/4268586278/adGroups/-3',
+        status: 'ENABLED',
+        keyword: { text: 'abrir franquia', matchType: 'PHRASE' },
+      },
     ]);
 
     // The responsive search ad: paused, final URL with UTMs, headlines and descriptions.
@@ -172,8 +186,15 @@ describe('creating a Search campaign', () => {
       ad: {
         finalUrls: ['https://wingscompany.com.br/franquia?utm_source=google'],
         responsiveSearchAd: {
-          headlines: [{ text: 'Franquia Wings' }, { text: 'Expanda sua marca' }, { text: 'Fale com a Wings' }],
-          descriptions: [{ text: 'Conheça o modelo de negócio.' }, { text: 'Suporte do início ao fim.' }],
+          headlines: [
+            { text: 'Franquia Wings' },
+            { text: 'Expanda sua marca' },
+            { text: 'Fale com a Wings' },
+          ],
+          descriptions: [
+            { text: 'Conheça o modelo de negócio.' },
+            { text: 'Suporte do início ao fim.' },
+          ],
         },
       },
     });
@@ -188,11 +209,24 @@ describe('creating a Search campaign', () => {
       'ad',
     ]);
     const adGroup = api.adGroups[0];
-    expect(outcome.created?.find((object) => object.kind === 'ad_group')?.externalId).toBe(adGroup?.id);
-    expect(outcome.created?.find((object) => object.kind === 'ad')?.externalId).toBe(api.ads[0]?.id);
-    expect(adGroup).toMatchObject({ status: 'PAUSED', keywords: [{ matchType: 'EXACT' }, { matchType: 'PHRASE' }] });
+    expect(outcome.created?.find((object) => object.kind === 'ad_group')?.externalId).toBe(
+      adGroup?.id,
+    );
+    expect(outcome.created?.find((object) => object.kind === 'ad')?.externalId).toBe(
+      api.ads[0]?.id,
+    );
+    expect(adGroup).toMatchObject({
+      status: 'PAUSED',
+      keywords: [{ matchType: 'EXACT' }, { matchType: 'PHRASE' }],
+    });
     expect(api.ads[0]).toMatchObject({ status: 'PAUSED' });
-    expect(outcome.detail).toMatchObject({ adGroup: 'Franquia SP', keywords: 2, negativeKeywords: 2, headlines: 3, descriptions: 2 });
+    expect(outcome.detail).toMatchObject({
+      adGroup: 'Franquia SP',
+      keywords: 2,
+      negativeKeywords: 2,
+      headlines: 3,
+      descriptions: 2,
+    });
   });
 
   it('bids and places people as the draft says: conversions, or presence-or-interest', async () => {
@@ -628,11 +662,17 @@ describe('changes to a campaign that exists', () => {
   it('a new daily budget is one update of the campaign’s own budget, masked to the amount', async () => {
     const { api, client } = writer(existing());
     const outcome = await client.setDailyBudget('111', 5000);
-    expect(outcome).toMatchObject({ status: 'applied', campaign: { id: '111', dailyBudgetCents: 5000 } });
+    expect(outcome).toMatchObject({
+      status: 'applied',
+      campaign: { id: '111', dailyBudgetCents: 5000 },
+    });
     expect(operationsOf(api)).toEqual([
       {
         campaignBudgetOperation: {
-          update: { resourceName: 'customers/4268586278/campaignBudgets/b111', amountMicros: '50000000' },
+          update: {
+            resourceName: 'customers/4268586278/campaignBudgets/b111',
+            amountMicros: '50000000',
+          },
           updateMask: 'amount_micros',
         },
       },

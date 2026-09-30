@@ -106,7 +106,8 @@ export async function registerBrands(
       byKey.set(brandKey(name), { id: '', name, number: null } as (typeof known)[number]);
       continue;
     }
-    const made = await createClientRecord(db, { name });
+    // A brand Wings sells franchises for: Expansão, so no Formatação project opens (Eric, 30/09).
+    const made = await createClientRecord(db, { name, relationship: 'expansao' });
     if (!made) throw new Error(`client "${name}" could not be created`);
     byKey.set(brandKey(name), made.row);
     await writeAudit(db, {

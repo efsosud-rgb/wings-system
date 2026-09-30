@@ -32,25 +32,52 @@ describe('cnpj', () => {
 
 describe('consultant areas', () => {
   it('are exactly the sub-sectors of Formatação', () => {
-    const formatacao = (Object.keys(SECTORS) as SectorSlug[]).filter((slug) => SECTORS[slug].parent === 'formatacao');
+    const formatacao = (Object.keys(SECTORS) as SectorSlug[]).filter(
+      (slug) => SECTORS[slug].parent === 'formatacao',
+    );
     expect([...CONSULTANT_AREAS].sort()).toEqual(formatacao.sort());
   });
 });
 
 describe('client record schemas', () => {
-  it('normalizes the quick registration', () => {
-    const parsed = clientCreateSchema.parse({
+  it('normalizes the new register and refuses one without CNPJ, contact, relationship or profile', () => {
+    const full = {
       name: ' Sushi ',
       cnpj: '11.222.333/0001-81',
+      company: { legalName: 'Sushi Ltda', state: 'sp' },
       contact: { name: 'Ana', email: 'ANA@X.COM', whatsapp: '+55 (11) 98888-7777' },
-    });
-    expect(parsed).toEqual({
+      relationship: 'expansao',
+      business: {
+        segment: 'Alimentação',
+        ownUnits: 1,
+        revenueBand: null,
+        franchisability: 'nao_avaliado',
+        wingsFit: 'alta',
+        profileSource: 'Reunião',
+        profileDate: '2026-09-30',
+      },
+    };
+    const parsed = clientCreateSchema.parse(full);
+    expect(parsed).toMatchObject({
       name: 'Sushi',
       cnpj: '11222333000181',
+      company: { legalName: 'Sushi Ltda', state: 'SP', tradeName: null },
       contact: { name: 'Ana', jobTitle: null, email: 'ana@x.com', whatsapp: '11988887777' },
+      relationship: 'expansao',
     });
-    expect(clientCreateSchema.parse({ name: 'Sushi' })).toEqual({ name: 'Sushi', cnpj: null, contact: null });
-    expect(clientCreateSchema.safeParse({ name: 'Sushi', cnpj: '11.222.333/0001-80' }).success).toBe(false);
+    expect(clientCreateSchema.safeParse({ name: 'Sushi' }).success).toBe(false);
+    expect(clientCreateSchema.safeParse({ ...full, cnpj: '11.222.333/0001-80' }).success).toBe(
+      false,
+    );
+    expect(clientCreateSchema.safeParse({ ...full, cnpj: null }).success).toBe(false);
+    expect(
+      clientCreateSchema.safeParse({ ...full, contact: { name: 'Ana', email: 'a@x.com' } }).success,
+    ).toBe(false);
+    expect(clientCreateSchema.safeParse({ ...full, relationship: 'outro' }).success).toBe(false);
+    expect(
+      clientCreateSchema.safeParse({ ...full, business: { ...full.business, profileSource: '' } })
+        .success,
+    ).toBe(false);
   });
 
   it('turns empty fields into null and keeps the sensitive ones undefined when not sent', () => {
@@ -63,7 +90,9 @@ describe('client record schemas', () => {
     expect(partner.cpf).toBeUndefined();
     expect(partner.maritalStatus).toBeUndefined();
     expect(clientPartnerInputSchema.parse({ name: 'João', cpf: '' }).cpf).toBeNull();
-    expect(clientPartnerInputSchema.safeParse({ name: 'João', cpf: '111.111.111-11' }).success).toBe(false);
+    expect(
+      clientPartnerInputSchema.safeParse({ name: 'João', cpf: '111.111.111-11' }).success,
+    ).toBe(false);
   });
 });
 
@@ -78,6 +107,10 @@ describe('clientCompleteness', () => {
       operatingYears: null,
       ownUnits: null,
       revenueBand: null,
+      franchisability: null,
+      wingsFit: null,
+      profileSource: null,
+      profileDate: null,
       averageTicketCents: null,
       employeesCount: null,
       inpiProcess: null,
@@ -127,13 +160,23 @@ describe('clientCompleteness', () => {
       profession: 'empresária',
       maritalStatus: 'casado' as const,
       propertyRegime: null,
-      address: { cep: '01310100', street: 'R', number: '1', complement: null, district: null, city: 'SP', state: 'SP' as const },
+      address: {
+        cep: '01310100',
+        street: 'R',
+        number: '1',
+        complement: null,
+        district: null,
+        city: 'SP',
+        state: 'SP' as const,
+      },
       email: 'a@a.com',
       mobile: '11999998888',
       sharePercent: 60,
       signsForCompany: true,
     };
-    const socios = clientCompleteness({ ...empty, partners: [partner] }).blocks.find((b) => b.block === 'socios');
+    const socios = clientCompleteness({ ...empty, partners: [partner] }).blocks.find(
+      (b) => b.block === 'socios',
+    );
     expect(socios?.missing).toEqual(['Sócio 1: regime de bens', 'Participações somam 100%']);
     const single = clientCompleteness({
       ...empty,

@@ -81,3 +81,48 @@ export async function createEmployee(
 
   return { id: created.id, email, password: password ?? '' };
 }
+
+/** A valid CNPJ, different each call (check digits computed). */
+export function makeCnpj(): string {
+  const base = Array.from({ length: 8 }, () => randomInt(0, 10)).concat([0, 0, 0, 1]);
+  const digit = (numbers: number[]) => {
+    const weights =
+      numbers.length === 12
+        ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+        : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+    const sum = numbers.reduce((total, n, i) => total + n * weights[i]!, 0);
+    const rest = sum % 11;
+    return rest < 2 ? 0 : 11 - rest;
+  };
+  const first = digit(base);
+  const second = digit([...base, first]);
+  return [...base, first, second].join('');
+}
+
+/** The new register's body for POST /clients (Eric, 30/09), with a fresh CNPJ unless given. */
+export function clientRegister(name: string, overrides: Record<string, unknown> = {}) {
+  return {
+    name,
+    cnpj: makeCnpj(),
+    company: {
+      legalName: `${name} Ltda`,
+      tradeName: name,
+      cnaeMain: '5611-2/01',
+      openedOn: '2020-01-10',
+      city: 'São Paulo',
+      state: 'SP',
+    },
+    contact: { name: 'Contato Teste', email: 'contato@example.com', whatsapp: '(11) 98888-0000' },
+    relationship: 'formatacao',
+    business: {
+      segment: 'Alimentação',
+      ownUnits: 2,
+      revenueBand: null,
+      franchisability: 'nao_avaliado',
+      wingsFit: 'nao_avaliado',
+      profileSource: 'Reunião com o sócio',
+      profileDate: '2026-09-30',
+    },
+    ...overrides,
+  };
+}

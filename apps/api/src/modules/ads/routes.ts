@@ -587,12 +587,10 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
           : [],
       ]);
       if (images.length !== new Set(creativeIds).size || videos.length !== new Set(videoIds).size) {
-        return reply
-          .status(400)
-          .send({
-            error: 'media_missing',
-            message: 'Um dos criativos enviados não foi encontrado. Envie de novo.',
-          });
+        return reply.status(400).send({
+          error: 'media_missing',
+          message: 'Um dos criativos enviados não foi encontrado. Envie de novo.',
+        });
       }
 
       const reserved = await reserveAddAds(db, {

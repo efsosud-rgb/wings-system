@@ -189,7 +189,10 @@ export const leadSourceRules = pgTable(
   },
   (table) => [
     uniqueIndex('lead_source_rules_kind_pattern_uq').on(table.tenantId, table.kind, table.pattern),
-    check('lead_source_rules_client_or_brand', sql`${table.clientId} is not null or ${table.brand} is not null`),
+    check(
+      'lead_source_rules_client_or_brand',
+      sql`${table.clientId} is not null or ${table.brand} is not null`,
+    ),
   ],
 );
 

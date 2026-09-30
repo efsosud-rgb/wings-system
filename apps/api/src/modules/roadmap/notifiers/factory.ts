@@ -14,7 +14,9 @@ export interface RoadmapNotifier {
 class LoggingRoadmapNotifier implements RoadmapNotifier {
   constructor(private readonly log: (message: string) => void) {}
   async sendText(phone: string, message: string): Promise<void> {
-    this.log(`[roadmap] Z-API not configured; would send ${message.length} chars to ${phone.slice(0, 4)}***`);
+    this.log(
+      `[roadmap] Z-API not configured; would send ${message.length} chars to ${phone.slice(0, 4)}***`,
+    );
   }
 }
 

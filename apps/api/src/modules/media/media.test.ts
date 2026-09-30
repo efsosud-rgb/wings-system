@@ -11,7 +11,12 @@ import type { Database } from '../../db/client.js';
 import { clients, driveFiles, driveFolders, mediaAssets } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
-import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
+import {
+  clientRegister,
+  createEmployee,
+  TEST_CPF_KEY,
+  TEST_INDEX_KEY,
+} from '../../test/factories.js';
 import { migrateMediaToDrive } from '../../scripts/migrate-media-to-drive.js';
 import { createLocalStorage } from '../../lib/storage/local.js';
 import { mediaDirOf, storeMedia } from './library.js';
@@ -298,7 +303,7 @@ describe('the library inside the Drive', () => {
       method: 'POST',
       url: '/clients',
       cookies,
-      payload: { name: 'Cliente Do Drive' },
+      payload: clientRegister('Cliente Do Drive'),
     });
     const clientId = made.json<{ client: { id: string } }>().client.id;
     const pathOf = async (assetId: string) => {

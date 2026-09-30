@@ -43,10 +43,13 @@ const EXPANSION_LANDING_PAGES = [
 ];
 
 /** The Formatação forms (the Formatação net's list), Wings Company's own. */
-const FORMATACAO_LANDING_PAGES = ['wings-company-form-site', 'lp-formatacao-whatsapp', 'Formulário Simplificado. -02'];
+const FORMATACAO_LANDING_PAGES = [
+  'wings-company-form-site',
+  'lp-formatacao-whatsapp',
+  'Formulário Simplificado. -02',
+];
 
 export async function seed(db: Database): Promise<void> {
-
   // Sectors: parents first, then children, so parent_id can be resolved.
   const slugs = Object.keys(SECTORS) as SectorSlug[];
   const ordered = [

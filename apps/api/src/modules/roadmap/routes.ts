@@ -86,7 +86,8 @@ export const roadmapRoutes: FastifyPluginAsync = async (app) => {
       const params = idParam.safeParse(request.params);
       if (!params.success) return invalid(reply);
       const run = await getReportRun(db, params.data.id);
-      if (!run) return reply.status(404).send({ error: 'not_found', message: 'Relatório não encontrado' });
+      if (!run)
+        return reply.status(404).send({ error: 'not_found', message: 'Relatório não encontrado' });
       return reply.send({ run });
     },
   );
@@ -155,7 +156,9 @@ export const roadmapRoutes: FastifyPluginAsync = async (app) => {
       if (!body.success) return invalid(reply, body.error.issues[0]?.message);
       const recipient = await updateRecipient(db, params.data.id, body.data);
       if (!recipient) {
-        return reply.status(404).send({ error: 'not_found', message: 'Destinatário não encontrado' });
+        return reply
+          .status(404)
+          .send({ error: 'not_found', message: 'Destinatário não encontrado' });
       }
       await writeAudit(db, {
         actorEmployeeId: request.session.actor.employeeId,
@@ -177,7 +180,9 @@ export const roadmapRoutes: FastifyPluginAsync = async (app) => {
       if (!params.success) return invalid(reply);
       const removed = await deleteRecipient(db, params.data.id);
       if (!removed) {
-        return reply.status(404).send({ error: 'not_found', message: 'Destinatário não encontrado' });
+        return reply
+          .status(404)
+          .send({ error: 'not_found', message: 'Destinatário não encontrado' });
       }
       await writeAudit(db, {
         actorEmployeeId: request.session.actor.employeeId,

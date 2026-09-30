@@ -1,4 +1,11 @@
-import { SESSION_COOKIE, WINGS_CLIENT_ID, type Client, type ClientRecord, type RoleKey, type SectorSlug } from '@wings/shared';
+import {
+  SESSION_COOKIE,
+  WINGS_CLIENT_ID,
+  type Client,
+  type ClientRecord,
+  type RoleKey,
+  type SectorSlug,
+} from '@wings/shared';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -7,7 +14,13 @@ import type { Database } from '../../db/client.js';
 import { auditLog, clientContacts, clientPartners } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
-import { createEmployee, makeCpf, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
+import {
+  clientRegister,
+  createEmployee,
+  makeCpf,
+  TEST_CPF_KEY,
+  TEST_INDEX_KEY,
+} from '../../test/factories.js';
 
 let harness: TestDatabase;
 let db: Database;
@@ -24,7 +37,13 @@ async function registryFetch(input: string | URL | Request): Promise<Response> {
     return json(200, {
       uf: 'SP',
       cep: '01311902',
-      qsa: [{ nome_socio: 'MARIA DE TESTE', qualificacao_socio: 'Presidente', cnpj_cpf_do_socio: '***112108**' }],
+      qsa: [
+        {
+          nome_socio: 'MARIA DE TESTE',
+          qualificacao_socio: 'Presidente',
+          cnpj_cpf_do_socio: '***112108**',
+        },
+      ],
       cnpj: '19131243000197',
       email: null,
       bairro: 'BELA VISTA',
@@ -37,7 +56,9 @@ async function registryFetch(input: string | URL | Request): Promise<Response> {
       nome_fantasia: 'REDE PELO CONHECIMENTO LIVRE',
       capital_social: 1500.5,
       ddd_telefone_1: '1123851939',
-      cnaes_secundarios: [{ codigo: 6204000, descricao: 'Consultoria em tecnologia da informação' }],
+      cnaes_secundarios: [
+        { codigo: 6204000, descricao: 'Consultoria em tecnologia da informação' },
+      ],
       natureza_juridica: 'Associação Privada',
       codigo_natureza_juridica: 3999,
       regime_tributario: [
@@ -52,8 +73,10 @@ async function registryFetch(input: string | URL | Request): Promise<Response> {
       descricao_tipo_de_logradouro: 'AVENIDA',
     });
   }
-  if (url.includes('brasilapi.com.br/api/cnpj/v1/')) return json(404, { message: 'CNPJ não encontrado' });
-  if (url.includes('receitaws.com.br')) return json(200, { status: 'ERROR', message: 'CNPJ inválido' });
+  if (url.includes('brasilapi.com.br/api/cnpj/v1/'))
+    return json(404, { message: 'CNPJ não encontrado' });
+  if (url.includes('receitaws.com.br'))
+    return json(200, { status: 'ERROR', message: 'CNPJ inválido' });
   // BrasilAPI's CEP is down in this test: ViaCEP answers.
   if (url.includes('brasilapi.com.br/api/cep/v2/')) return json(500, { message: 'erro' });
   if (url.includes('viacep.com.br/ws/01310100/json/')) {
@@ -116,24 +139,31 @@ describe('the client record', () => {
       method: 'POST',
       url: '/clients',
       cookies: marketing.cookies,
-      payload: {
-        name: 'Sushi do Bairro',
+      payload: clientRegister('Sushi do Bairro', {
         cnpj: '19.131.243/0001-97',
         contact: { name: 'Ana Souza', email: 'ANA@SUSHI.COM.BR', whatsapp: '(11) 98888-7777' },
-      },
+      }),
     });
     expect(created.statusCode).toBe(201);
     const client = created.json<{ client: Client }>().client;
-    const contacts = await db.select().from(clientContacts).where(eq(clientContacts.clientId, client.id));
+    const contacts = await db
+      .select()
+      .from(clientContacts)
+      .where(eq(clientContacts.clientId, client.id));
     expect(contacts).toEqual([
-      expect.objectContaining({ role: 'principal', name: 'Ana Souza', email: 'ana@sushi.com.br', whatsapp: '11988887777' }),
+      expect.objectContaining({
+        role: 'principal',
+        name: 'Ana Souza',
+        email: 'ana@sushi.com.br',
+        whatsapp: '11988887777',
+      }),
     ]);
 
     const twin = await app.inject({
       method: 'POST',
       url: '/clients',
       cookies: marketing.cookies,
-      payload: { name: 'Outro Nome', cnpj: '19131243000197' },
+      payload: clientRegister('Outro Nome', { cnpj: '19131243000197' }),
     });
     expect(twin.statusCode).toBe(409);
     expect(twin.json()).toMatchObject({ error: 'cnpj_taken' });
@@ -141,11 +171,14 @@ describe('the client record', () => {
       method: 'POST',
       url: '/clients',
       cookies: marketing.cookies,
-      payload: { name: 'Terceiro', cnpj: '19131243000198' },
+      payload: clientRegister('Terceiro', { cnpj: '19131243000198' }),
     });
     expect(invalid.statusCode).toBe(400);
 
-    const record = await app.inject({ url: `/clients/${client.id}/record`, cookies: marketing.cookies });
+    const record = await app.inject({
+      url: `/clients/${client.id}/record`,
+      cookies: marketing.cookies,
+    });
     expect(record.statusCode).toBe(200);
     const body = record.json<ClientRecord>();
     expect(body.company.cnpj).toBe('19131243000197');
@@ -165,7 +198,7 @@ describe('the client record', () => {
       method: 'POST',
       url: '/clients',
       cookies: marketing.cookies,
-      payload: { name: 'Padaria Sensível' },
+      payload: clientRegister('Padaria Sensível'),
     });
     const clientId = made.json<{ client: Client }>().client.id;
 
@@ -205,7 +238,11 @@ describe('the client record', () => {
     });
     expect(completed.statusCode).toBe(200);
     const seenByLegal = completed.json<ClientRecord>().partners[0];
-    expect(seenByLegal).toMatchObject({ cpfOnFile: true, maritalStatus: 'casado', restricted: false });
+    expect(seenByLegal).toMatchObject({
+      cpfOnFile: true,
+      maritalStatus: 'casado',
+      restricted: false,
+    });
     expect(seenByLegal?.cpfMasked).toMatch(/^\*\*\*\.\d{3}\.\d{3}-\*\*$/);
     expect(JSON.stringify(completed.json())).not.toContain(cpf);
 
@@ -214,7 +251,10 @@ describe('the client record', () => {
     expect(row?.cpfEncrypted).not.toContain(cpf);
 
     // Marketing sees that there is a CPF, and nothing of it; saving other fields keeps it.
-    const seenByMarketing = await app.inject({ url: `/clients/${clientId}/record`, cookies: marketing.cookies });
+    const seenByMarketing = await app.inject({
+      url: `/clients/${clientId}/record`,
+      cookies: marketing.cookies,
+    });
     expect(seenByMarketing.json<ClientRecord>().partners[0]).toMatchObject({
       cpfOnFile: true,
       cpfMasked: null,
@@ -230,7 +270,11 @@ describe('the client record', () => {
     });
     expect(edited.statusCode).toBe(200);
     const [kept] = await db.select().from(clientPartners).where(eq(clientPartners.id, partnerId));
-    expect(kept).toMatchObject({ profession: 'Administrador', maritalStatus: 'casado', cpfIndex: row?.cpfIndex });
+    expect(kept).toMatchObject({
+      profession: 'Administrador',
+      maritalStatus: 'casado',
+      cpfIndex: row?.cpfIndex,
+    });
 
     // Revealing is Jurídico's, and audited.
     const noReveal = await app.inject({
@@ -259,7 +303,12 @@ describe('the client record', () => {
     expect(twin.json()).toMatchObject({ error: 'cpf_taken' });
 
     // ...but the same person may be a partner of another client.
-    const other = await app.inject({ method: 'POST', url: '/clients', cookies: marketing.cookies, payload: { name: 'Outra Empresa' } });
+    const other = await app.inject({
+      method: 'POST',
+      url: '/clients',
+      cookies: marketing.cookies,
+      payload: clientRegister('Outra Empresa'),
+    });
     const elsewhere = await app.inject({
       method: 'POST',
       url: `/clients/${other.json<{ client: Client }>().client.id}/partners`,
@@ -270,7 +319,11 @@ describe('the client record', () => {
 
     const actions = (await trail(clientId)).map((entry) => entry.action);
     expect(actions).toEqual(
-      expect.arrayContaining(['client.partner_created', 'client.partner_updated', 'client.cpf_revealed']),
+      expect.arrayContaining([
+        'client.partner_created',
+        'client.partner_updated',
+        'client.cpf_revealed',
+      ]),
     );
     const everything = JSON.stringify(await trail(clientId));
     expect(everything).not.toContain(cpf);
@@ -280,12 +333,28 @@ describe('the client record', () => {
 
   it('saves every block, checks consultants and signers, and reports what is still missing', async () => {
     const admin = await sessionFor('admin_master', 'diretoria');
-    const legalConsultant = await createEmployee(db, { role: 'formatacao_juridico', sector: 'formatacao-juridico' });
-    const financeConsultant = await createEmployee(db, { role: 'formatacao_financeiro', sector: 'formatacao-financeiro' });
-    const made = await app.inject({ method: 'POST', url: '/clients', cookies: admin.cookies, payload: { name: 'Açaí Completo' } });
+    const legalConsultant = await createEmployee(db, {
+      role: 'formatacao_juridico',
+      sector: 'formatacao-juridico',
+    });
+    const financeConsultant = await createEmployee(db, {
+      role: 'formatacao_financeiro',
+      sector: 'formatacao-financeiro',
+    });
+    const made = await app.inject({
+      method: 'POST',
+      url: '/clients',
+      cookies: admin.cookies,
+      payload: clientRegister('Açaí Completo', { company: { legalName: 'Razão Provisória Ltda' } }),
+    });
     const clientId = made.json<{ client: Client }>().client.id;
     const put = (path: string, payload: Record<string, unknown>) =>
-      app.inject({ method: 'PUT', url: `/clients/${clientId}/${path}`, cookies: admin.cookies, payload });
+      app.inject({
+        method: 'PUT',
+        url: `/clients/${clientId}/${path}`,
+        cookies: admin.cookies,
+        payload,
+      });
 
     const company = await put('company', {
       legalName: 'Açaí Completo Ltda',
@@ -296,7 +365,13 @@ describe('the client record', () => {
       taxRegime: 'simples_nacional',
       cnaeMain: '5611-2/03',
       shareCapitalCents: 10_000_000,
-      address: { cep: '01310-100', street: 'Avenida Paulista', number: '1000', city: 'São Paulo', state: 'SP' },
+      address: {
+        cep: '01310-100',
+        street: 'Avenida Paulista',
+        number: '1000',
+        city: 'São Paulo',
+        state: 'SP',
+      },
       phone: '1133334444',
       email: 'contato@acai.com.br',
       social: { instagram: '@acaicompleto', facebook: '' },
@@ -304,11 +379,18 @@ describe('the client record', () => {
     expect(company.statusCode).toBe(200);
     const afterCompany = company.json<ClientRecord>();
     expect(afterCompany.company.social).toEqual({ instagram: '@acaicompleto' });
-    expect(afterCompany.completeness.blocks.find((b) => b.block === 'empresa')).toMatchObject({ missing: [] });
+    expect(afterCompany.completeness.blocks.find((b) => b.block === 'empresa')).toMatchObject({
+      missing: [],
+    });
 
     // A consultant must be an active employee of that area.
     const wrongArea = await put('contracts', {
-      contracts: [{ service: 'Formatação de franquia', consultants: { 'formatacao-juridico': financeConsultant.id } }],
+      contracts: [
+        {
+          service: 'Formatação de franquia',
+          consultants: { 'formatacao-juridico': financeConsultant.id },
+        },
+      ],
     });
     expect(wrongArea.statusCode).toBe(400);
     const contracts = await put('contracts', {
@@ -335,14 +417,19 @@ describe('the client record', () => {
       'formatacao-juridico': legalConsultant.id,
       'formatacao-financeiro': financeConsultant.id,
     });
-    expect(contracts.json<ClientRecord>().consultantOptions['formatacao-juridico'].map((p) => p.id)).toContain(
-      legalConsultant.id,
-    );
+    expect(
+      contracts.json<ClientRecord>().consultantOptions['formatacao-juridico'].map((p) => p.id),
+    ).toContain(legalConsultant.id);
     // Saving again with the id keeps the same contract.
     const again = await put('contracts', { contracts: [{ ...saved[0], termMonths: 18 }] });
-    expect(again.json<ClientRecord>().contracts).toEqual([expect.objectContaining({ id: saved[0]?.id, termMonths: 18 })]);
+    expect(again.json<ClientRecord>().contracts).toEqual([
+      expect.objectContaining({ id: saved[0]?.id, termMonths: 18 }),
+    ]);
 
-    expect((await put('business', { segment: 'Alimentação', ownUnits: 3, inpiStatus: 'depositada' })).statusCode).toBe(200);
+    expect(
+      (await put('business', { segment: 'Alimentação', ownUnits: 3, inpiStatus: 'depositada' }))
+        .statusCode,
+    ).toBe(200);
     const franchise = await put('franchise', {
       franchiseFeeCents: 3_500_000,
       royaltiesPercent: 5.5,
@@ -355,7 +442,9 @@ describe('the client record', () => {
     });
 
     // Who signs must be a partner of this client.
-    const stranger = await put('signature', { signerPartnerId: '00000000-0000-4000-8000-000000000999' });
+    const stranger = await put('signature', {
+      signerPartnerId: '00000000-0000-4000-8000-000000000999',
+    });
     expect(stranger.statusCode).toBe(400);
     const partner = await app.inject({
       method: 'POST',
@@ -379,10 +468,20 @@ describe('the client record', () => {
       signerPartnerId: partnerId,
       witnesses: [{ id: witness?.id, name: 'Testemunha Um' }],
     });
-    expect(kept.json<ClientRecord>().signature.witnesses[0]).toMatchObject({ id: witness?.id, cpfOnFile: true });
+    expect(kept.json<ClientRecord>().signature.witnesses[0]).toMatchObject({
+      id: witness?.id,
+      cpfOnFile: true,
+    });
 
     const contactsSaved = await put('contacts', {
-      contacts: [{ role: 'financeiro', name: 'Beto Financeiro', email: 'beto@acai.com.br', whatsapp: '11977776666' }],
+      contacts: [
+        {
+          role: 'financeiro',
+          name: 'Beto Financeiro',
+          email: 'beto@acai.com.br',
+          whatsapp: '11977776666',
+        },
+      ],
     });
     const record = contactsSaved.json<ClientRecord>();
     expect(record.completeness.percent).toBeGreaterThan(30);
@@ -404,8 +503,12 @@ describe('the client record', () => {
     ]) {
       expect(actions).toContain(action);
     }
-    const company_ = (await trail(clientId)).find((entry) => entry.action === 'client.company_updated');
-    expect(company_?.metadata).toMatchObject({ fields: expect.arrayContaining(['legalName', 'cnpj']) });
+    const company_ = (await trail(clientId)).find(
+      (entry) => entry.action === 'client.company_updated',
+    );
+    expect(company_?.metadata).toMatchObject({
+      fields: expect.arrayContaining(['legalName', 'cnpj']),
+    });
     expect(JSON.stringify(company_?.metadata)).not.toContain('Açaí');
   });
 
@@ -414,14 +517,32 @@ describe('the client record', () => {
     const seller = await sessionFor('vendedor_expansao', 'comercial');
     const list = await app.inject({ url: '/clients', cookies: legal.cookies });
     expect(list.statusCode).toBe(200);
-    const someone = list.json<{ clients: Client[] }>().clients.find((c) => c.id !== WINGS_CLIENT_ID) as Client;
-    expect((await app.inject({ url: `/clients/${someone.id}/record`, cookies: legal.cookies })).statusCode).toBe(200);
-    expect((await app.inject({ url: `/clients/${someone.id}/record`, cookies: seller.cookies })).statusCode).toBe(403);
+    const someone = list
+      .json<{ clients: Client[] }>()
+      .clients.find((c) => c.id !== WINGS_CLIENT_ID) as Client;
+    expect(
+      (await app.inject({ url: `/clients/${someone.id}/record`, cookies: legal.cookies }))
+        .statusCode,
+    ).toBe(200);
+    expect(
+      (await app.inject({ url: `/clients/${someone.id}/record`, cookies: seller.cookies }))
+        .statusCode,
+    ).toBe(403);
     // Jurídico fills the record but does not register or rename clients.
     expect(
-      (await app.inject({ method: 'POST', url: '/clients', cookies: legal.cookies, payload: { name: 'Novo' } })).statusCode,
+      (
+        await app.inject({
+          method: 'POST',
+          url: '/clients',
+          cookies: legal.cookies,
+          payload: clientRegister('Novo'),
+        })
+      ).statusCode,
     ).toBe(403);
-    expect((await app.inject({ url: `/clients/${WINGS_CLIENT_ID}/record`, cookies: legal.cookies })).statusCode).toBe(409);
+    expect(
+      (await app.inject({ url: `/clients/${WINGS_CLIENT_ID}/record`, cookies: legal.cookies }))
+        .statusCode,
+    ).toBe(409);
   });
 
   it('pre-fills from the CNPJ and the CEP, falls back between suppliers, and answers 404 and 400', async () => {
@@ -457,7 +578,13 @@ describe('the client record', () => {
     const cep = await lookup('cep', { cep: '01310-100' });
     expect(cep.json()).toMatchObject({
       source: 'viacep',
-      address: { cep: '01310100', street: 'Avenida Paulista', district: 'Bela Vista', city: 'São Paulo', state: 'SP' },
+      address: {
+        cep: '01310100',
+        street: 'Avenida Paulista',
+        district: 'Bela Vista',
+        city: 'São Paulo',
+        state: 'SP',
+      },
     });
     expect((await lookup('cep', { cep: '99999-999' })).statusCode).toBe(404);
 
