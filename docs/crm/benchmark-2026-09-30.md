@@ -124,6 +124,30 @@ falta e ninguém o inventa.
 | Relatório investimento → receita | investimento → lead → qualificado → reunião → proposta → contrato → receita, por campanha, marca e vendedor, com a fonte e a janela de cada número e "—" quando não houver dado | 6 (até reunião), 7 (completo) | 2 | o que conta como "qualificado" (classe A/B?) e como "receita" (contrato assinado ou pagamento) |
 | Pós-venda da Formatação | tickets, SLA e NPS (Fase 11) | 11 | 8 | marcos do projeto em que o NPS é pedido; SLA por tipo de ticket |
 
+### 3.2 Fase 2 — número oficial do WhatsApp (decisão pendente, registrada em 30/09)
+
+Não muda a Fase 1. Número oficial da Wings Company para a API oficial:
+**+55 21 99947-0288**, hoje no app WhatsApp Business.
+
+| Opção | Como fica | Prós | Contras |
+| --- | --- | --- | --- |
+| **A (recomendada)** — Cloud API direto com a Meta | o número migra do app para a API **só quando a inbox do CRM estiver pronta e testada** (testes com um número de teste da Meta até lá) | sem intermediário nem mensalidade de parceiro; tokens e webhook só no nosso servidor | depois da migração **o app WhatsApp Business deixa de funcionar nesse número**; o histórico do app não passa para a API |
+| B — parceiro oficial (BSP) com coexistência | o mesmo número no app **e** na API ao mesmo tempo | o time continua no celular durante a transição | custo e dependência do parceiro; tokens e mensagens passam por terceiro (revisão LGPD e de contrato); limites da coexistência a conferir na documentação da Meta no dia |
+
+**Decisão pendente do Eric:** A ou B, e a data de virada.
+
+Checklist de migração (opção A):
+
+1. **Antes:** inbox do CRM pronta e testada ponta a ponta com número de teste (receber, responder na janela de 24 h, modelo aprovado fora dela, mídia, opt-out "PARAR").
+2. **Backup/exportação:** exportar as conversas do app (no celular, cada conversa → Mais → Exportar conversa, com mídia) e fazer o backup do app; guardar os arquivos numa pasta restrita do Drive (dado pessoal: acesso só Comercial/Diretoria, sem cópia em e-mail).
+3. **Modelos de mensagem** aprovados pela Meta antes da virada (retomar conversa fora da janela, aviso de novo canal).
+4. **Data de virada** marcada fora de campanha em pico; conferir que nenhum anúncio "clique para WhatsApp" dependa do app naquele dia.
+5. **Aviso ao time** (quem atende pelo celular): data, a partir de quando responder só pelo CRM, onde está o histórico exportado.
+6. **Virada:** registrar o número na WABA da Wings (verificação por SMS/ligação), apontar o webhook, conferir a primeira mensagem recebida e enviada.
+7. **Depois:** acompanhar por 1 semana as mensagens sem resposta; plano de volta = só com a opção B (número de volta ao app perde a API).
+
+O que acontece com o histórico: na opção A, as conversas antigas **ficam só na exportação/backup** (não entram na API nem no CRM automaticamente); o CRM começa a partir da virada, e cada lead existente é ligado pelo telefone quando voltar a falar. Importar a exportação para a linha do tempo do lead é possível depois, como tarefa própria (arquivo de texto, dado pessoal, só com decisão do Jurídico). Na opção B, a coexistência pode trazer parte do histórico recente para a API — alcance e prazo a conferir na documentação da Meta no dia da decisão.
+
 Fora do plano (decisão explícita): app nativo iOS/Android, telefonia com
 central (PABX), substituir o RD Marketing (LPs, e-mail em massa), objetos
 personalizados genéricos, marketplace de integrações.
