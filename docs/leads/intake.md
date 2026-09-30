@@ -204,7 +204,7 @@ lidos de forma tolerante (vários nomes de campo). O log de formas
 (`lead webhook`, `zapi profile`, `brave search`, `brasilapi cnpj`, `meta
 lead fetched`) é onde conferir no primeiro evento real:
 
-- RD Station: `leads[].last_conversion.content.{conversion_identifier,url,created_at}`, `legal_bases`, `mobile_phone`/`personal_phone`.
+- RD Station: `leads[].last_conversion.content.{conversion_identifier,url,created_at}`, `legal_bases`, `mobile_phone`/`personal_phone`; atribuição (CRM Fase 1, T4) de `content.utm_*`/`cf_utm_*`/`gclid`/`fbclid`, da query da `url` e de `content.traffic_source` (o formato `encoded_`+base64 foi lido ao vivo nos eventos de contato em 28/09, não num webhook).
 - Z-API "ao receber": `phone`, `text.message`, `senderName`, `senderPhoto`, `momment`, `fromMe`, `isGroup`; endpoints `profile-picture` e `contacts/<phone>`.
 - Meta: o corpo `entry[].changes[].value.leadgen_id`, e o Graph
   `GET /v23.0/<leadgen_id>?fields=field_data,campaign_id,campaign_name,form_id,…`.

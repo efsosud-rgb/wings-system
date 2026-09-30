@@ -1,5 +1,5 @@
 import { normalizeBrazilianPhone, normalizeEmail } from '@wings/shared';
-import { and, asc, eq, gte, isNull, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, isNotNull, isNull, like, or } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   clients,
@@ -119,6 +119,54 @@ export async function recordDealOnLead(
     detail: { rdDealId: event.dealId, pipeline: event.target },
   });
   return true;
+}
+
+/**
+ * The other order: the webhook's lead arrives after the intake already made
+ * the RD deal for that conversion (the intake reads every 5 minutes, and a
+ * delivery can be late or retried). The ledger key starts with RD's contact
+ * uuid and the identifier, so the deal is found without any personal data;
+ * the newest one of the last 30 days, and only if no other lead holds it.
+ */
+export async function linkIntakeDealToLead(
+  db: Database,
+  input: { leadId: string; contactUuid: string; identifier: string | null },
+): Promise<string | null> {
+  const lead = await db.query.leads.findFirst({ where: eq(leads.id, input.leadId) });
+  if (!lead || lead.rdDealId) return null;
+  const prefix = `${input.contactUuid.replace(/[\\%_]/g, '\\$&')}|${
+    input.identifier ? `${input.identifier.replace(/[\\%_]/g, '\\$&')}|` : ''
+  }%`;
+  const [entry] = await db
+    .select({ dealId: expansionIntakeLedger.rdDealId, target: expansionIntakeLedger.target })
+    .from(expansionIntakeLedger)
+    .where(
+      and(
+        like(expansionIntakeLedger.conversionKey, prefix),
+        eq(expansionIntakeLedger.outcome, 'created'),
+        isNotNull(expansionIntakeLedger.rdDealId),
+        gte(expansionIntakeLedger.decidedAt, new Date(Date.now() - 30 * 86_400_000)),
+      ),
+    )
+    .orderBy(desc(expansionIntakeLedger.decidedAt))
+    .limit(1);
+  if (!entry?.dealId) return null;
+  if (lead.pipeline && lead.pipeline !== entry.target) return null;
+  const holder = await db.query.leads.findFirst({
+    where: eq(leads.rdDealId, entry.dealId),
+    columns: { id: true },
+  });
+  if (holder) return null;
+  await db
+    .update(leads)
+    .set({ rdDealId: entry.dealId, pipeline: lead.pipeline ?? entry.target, updatedAt: new Date() })
+    .where(and(eq(leads.id, lead.id), isNull(leads.rdDealId)));
+  await db.insert(leadEvents).values({
+    leadId: lead.id,
+    kind: 'rd.deal_linked',
+    detail: { rdDealId: entry.dealId, pipeline: entry.target, via: 'intake_ledger' },
+  });
+  return entry.dealId;
 }
 
 export interface IntakeCredentials {
