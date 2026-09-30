@@ -227,6 +227,15 @@ describe('the Formatação safety net', () => {
       'POST /api/v1/deals',
     ]);
     expect(await audits('formatacao.intake_linked_ok')).toHaveLength(1);
+    // The next pass reads each made deal back: contact and source, by deal id.
+    const next = await run(false);
+    expect(next.repair?.verified).toHaveLength(2);
+    expect(next.repair?.verified).toEqual(
+      expect.arrayContaining([
+        { dealId: 'deal-1', contact: true, source: true },
+        { dealId: 'deal-2', contact: true, source: true },
+      ]),
+    );
     const [row] = await audits('formatacao.intake_run');
     expect(JSON.stringify(row?.metadata)).not.toContain('example.com');
   });
