@@ -174,6 +174,34 @@ Variáveis no Coolify (`wings-api-staging`), só pelos nomes:
 | `WHATSAPP_APP_SECRET` | **Eric, direto no Coolify** | nunca impresso, nunca em log, nunca em resposta |
 | `WHATSAPP_ACCESS_TOKEN` | **Eric, direto no Coolify** | token permanente de usuário do sistema; nunca impresso, nunca ao navegador nem a modelo |
 
+**Atualização 30/09 (noite):** `WHATSAPP_APP_SECRET` e `WHATSAPP_ACCESS_TOKEN`
+já estão no `wings-api-staging` (gravados pelo Eric; build time desligado;
+entram no próximo deploy). O token é **permanente**, do usuário do sistema
+"wings-crm" (id `61594642964237`), com acesso total ao app "Wings CRM Vendas" e
+à Test WhatsApp Business Account, permissões `whatsapp_business_management` e
+`whatsapp_business_messaging`. Os três ids não secretos (`WHATSAPP_APP_ID`,
+`WHATSAPP_WABA_ID`, `WHATSAPP_PHONE_NUMBER_ID`) o Opus grava com `wings-env
+set api-staging` no início da Fase 2, junto com o código que os lê (o Eric não
+precisa pôr); `WHATSAPP_WEBHOOK_VERIFY_TOKEN` quando o webhook for configurado.
+
+**A investigar no início da Fase 2 (só leitura):** o portfólio tem mais **duas
+contas WhatsApp Business chamadas "Wings Company"**, criadas antes. Conferir se
+alguma já tem o +55 21 99947-0288: `GET /{waba_id}/phone_numbers` de cada uma
+(campos `display_phone_number`, `verified_name`, `status`,
+`platform_type`/`code_verification_status`). O token do "wings-crm" só vê o app
+e a WABA de teste; para ler as outras duas, o Eric dá ao usuário do sistema
+acesso de leitura a elas no Business Manager (ou lê na tela: Configurações do
+negócio → Contas do WhatsApp → cada conta → Números de telefone). O que muda:
+
+- número **em nenhuma**: migração como no §3.2, na WABA de produção que for escolhida;
+- número numa delas **só cadastrado, sem API ativa**: usar essa WABA (evita
+  registrar o número duas vezes) ou removê-lo dela antes de migrar;
+- número numa delas **já na Cloud API/On-Premises** (com outro app ou
+  parceiro): o app WhatsApp Business já não estaria nele; descobrir quem opera,
+  e a migração vira troca de app/WABA (migração entre WABAs da Meta), não
+  saída do app;
+- as WABAs vazias e sem uso: arquivar depois da virada, para não confundir.
+
 Nada disso é usado na Fase 1 e nenhum deploy é feito só por causa dele. Na
 virada para o número oficial (+55 21 99947-0288), `WHATSAPP_WABA_ID` e
 `WHATSAPP_PHONE_NUMBER_ID` trocam para os de produção.
