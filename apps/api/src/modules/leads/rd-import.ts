@@ -465,6 +465,7 @@ export async function importRdDeals(
         pipeline: place.pipeline,
         brand,
         externalId: id,
+        arrivedAt: dateOf(deal.created_at),
         consentSource: 'rd_crm',
         skipResearch: true,
         event: { kind: 'lead.imported.rd_crm', detail: { rdDealId: id, pipeline: place.pipeline } },

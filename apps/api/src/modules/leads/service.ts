@@ -156,6 +156,8 @@ export interface IncomingLead {
   ownerEmployeeId?: string | null;
   pipeline?: LeadPipeline | null;
   brand?: string | null;
+  /** When the person actually arrived, if earlier than now (an imported RD deal's creation); used only for a new lead. */
+  arrivedAt?: Date | null;
   /** An import (RD CRM) does not queue the paid research for every lead it brings. */
   skipResearch?: boolean;
   /** First touch: kept only when the lead has none yet, and then as a whole. */
@@ -354,6 +356,7 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
         pipeline: incoming.pipeline ?? null,
         brand: incoming.brand ?? null,
         ...attributionColumns(incoming.attribution),
+        ...(incoming.arrivedAt ? { createdAt: incoming.arrivedAt } : {}),
       })
       .returning();
     if (!created) throw new Error('lead insert returned no row');

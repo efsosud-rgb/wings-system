@@ -258,6 +258,7 @@ describe('importRdDeals', () => {
     expect(expansion?.stageChangedAt?.toISOString()).toBe('2026-09-05T18:00:00.000Z');
 
     const formatacao = await db.query.leads.findFirst({ where: eq(leads.rdDealId, 'd-fmt') });
+    expect(formatacao?.createdAt.toISOString()).toBe('2026-09-10T13:00:00.000Z');
     expect(formatacao).toMatchObject({
       source: 'rd_crm',
       email: 'dois@example.com',
