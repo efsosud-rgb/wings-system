@@ -82,6 +82,8 @@ export interface IntakeResult {
   created: Record<string, number>;
   /** RD CRM ids of the deals this run made (empty on a dry run). */
   createdDealIds: string[];
+  /** Would create (dry run) or created, per conversion identifier. */
+  createdByIdentifier: Record<string, number>;
 }
 
 /** The deal is "covered" when the contact has one open, or one RD made after this conversion. */
@@ -201,6 +203,7 @@ export async function runExpansionIntake(input: {
     unverified: 0,
     created: {},
     createdDealIds: [],
+    createdByIdentifier: {},
   };
   const uuids = await marketing.contactsConvertedSince(input.since);
   result.contacts = uuids.length;
@@ -258,6 +261,8 @@ export async function runExpansionIntake(input: {
         const label = `${target}${brand ? `:${brand}` : ''}`;
         if (dryRun) {
           result.created[label] = (result.created[label] ?? 0) + 1;
+          result.createdByIdentifier[conversion.identifier] =
+            (result.createdByIdentifier[conversion.identifier] ?? 0) + 1;
           handled.add(uuid);
           continue;
         }
@@ -275,6 +280,8 @@ export async function runExpansionIntake(input: {
         handled.add(uuid);
         result.created[label] = (result.created[label] ?? 0) + 1;
         result.createdDealIds.push(dealId);
+        result.createdByIdentifier[conversion.identifier] =
+          (result.createdByIdentifier[conversion.identifier] ?? 0) + 1;
         await ledger.record({ key, target, outcome: 'created', dealId });
         if (target === 'expansao' && input.expansionOwnerId) {
           try {

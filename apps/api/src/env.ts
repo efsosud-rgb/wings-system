@@ -139,6 +139,20 @@ const schema = z.object({
     'must be "true" or "false"',
   ),
   /**
+   * Formatação safety net (docs/expansion-intake.md): every 5 minutes, the
+   * conversions of the three Formatação forms with no deal get one in
+   * Formatação / Novo Contato. Off unless "true"; with FORMATACAO_INTAKE_DRY_RUN
+   * "true" it only counts (in the audit trail) and creates nothing.
+   */
+  FORMATACAO_INTAKE_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  FORMATACAO_INTAKE_DRY_RUN: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  /**
    * RD Station Marketing OAuth app and its refresh token (secrets), read
    * only: the UTMs of the conversion behind each campaign lead. Without them
    * Leads das Campanhas attributes by RD's source label alone.

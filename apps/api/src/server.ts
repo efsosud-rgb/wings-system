@@ -3,6 +3,7 @@ import { createDb } from './db/client.js';
 import { loadDotEnv } from './db/load-env.js';
 import { loadEnv } from './env.js';
 import { createOpenRouterLlm } from './modules/agent/llm.js';
+import { startFormatacaoIntakeScheduler } from './modules/expansion/formatacao.js';
 import { startExpansionIntakeScheduler } from './modules/expansion/scheduler.js';
 import { startInsightsScheduler } from './modules/insights/scheduler.js';
 
@@ -47,6 +48,31 @@ async function main() {
           refreshToken: env.RD_MKT_REFRESH_TOKEN,
         },
       },
+      log: (facts) => app.log.info(facts),
+    });
+    app.addHook('onClose', async () => stop());
+  }
+
+  // Formatação safety net: off unless FORMATACAO_INTAKE_ENABLED=true. Its own
+  // switch, so the Expansão job above stays off while this one runs.
+  if (
+    env.FORMATACAO_INTAKE_ENABLED === 'true' &&
+    env.RD_CRM_API_TOKEN &&
+    env.RD_MKT_CLIENT_ID &&
+    env.RD_MKT_CLIENT_SECRET &&
+    env.RD_MKT_REFRESH_TOKEN
+  ) {
+    const stop = startFormatacaoIntakeScheduler({
+      db,
+      credentials: {
+        rdCrmToken: env.RD_CRM_API_TOKEN,
+        rdMarketing: {
+          clientId: env.RD_MKT_CLIENT_ID,
+          clientSecret: env.RD_MKT_CLIENT_SECRET,
+          refreshToken: env.RD_MKT_REFRESH_TOKEN,
+        },
+      },
+      dryRun: env.FORMATACAO_INTAKE_DRY_RUN === 'true',
       log: (facts) => app.log.info(facts),
     });
     app.addHook('onClose', async () => stop());
