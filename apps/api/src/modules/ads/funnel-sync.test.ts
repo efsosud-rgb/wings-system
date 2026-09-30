@@ -142,3 +142,20 @@ describe('RD CRM deals into rd_crm_deals', () => {
     ).toBeNull();
   });
 });
+
+describe('rdCrmGetter', () => {
+  it('reads again after a timeout (a GET is safe to repeat), and names only the path when it gives up', async () => {
+    const { rdCrmGetter } = await import('./funnel-sync.js');
+    let calls = 0;
+    const flaky = (async () => {
+      calls += 1;
+      if (calls === 1)
+        throw Object.assign(new Error('The operation was aborted due to timeout'), {
+          name: 'TimeoutError',
+        });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+    await expect(rdCrmGetter('t', flaky)('/users', {})).resolves.toEqual({ ok: true });
+    expect(calls).toBe(2);
+  }, 15_000);
+});

@@ -137,7 +137,19 @@ export function rdCrmGetter(
     url.searchParams.set('token', token);
     for (let attempt = 0; attempt < 8; attempt += 1) {
       await pace();
-      const response = await fetchImpl(url.toString(), { signal: AbortSignal.timeout(30_000) });
+      let response: Response;
+      try {
+        response = await fetchImpl(url.toString(), { signal: AbortSignal.timeout(30_000) });
+      } catch (error) {
+        // A GET is safe to repeat: a timeout or a dropped connection waits and tries again.
+        if (attempt === 7) {
+          throw new Error(
+            `RD CRM ${path} unreachable (${error instanceof Error ? error.name : 'unknown'})`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 3000 * (attempt + 1)));
+        continue;
+      }
       if (response.status === 429) {
         // The limit is per minute: wait a little longer each time (3 s … 24 s).
         await new Promise((resolve) => setTimeout(resolve, 3000 * (attempt + 1)));
