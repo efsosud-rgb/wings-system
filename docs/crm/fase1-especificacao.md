@@ -549,7 +549,7 @@ produção.
   - roda sob `pg_advisory_xact_lock` por funil (dois leads ao mesmo tempo
     não vão para a mesma pessoa por corrida);
   - cria a tarefa de primeiro contato (§4.4) e avisa no WhatsApp do
-    responsável (Z-API, já configurado), **sem dado do lead na mensagem**
+    responsável (API oficial do WhatsApp, Fase 2; decisão de 30/09), **sem dado do lead na mensagem**
     além do primeiro nome e o link.
 - **Desligamento de funcionário** (status ≠ `active`): a carteira aberta
   entra no rodízio automaticamente, com `cause = 'rotation'` e evento de

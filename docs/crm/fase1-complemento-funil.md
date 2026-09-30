@@ -77,7 +77,7 @@ especificação. Sentido dos dados nesta fase: **fontes → Wings e RD; RD CRM �
 Wings (etapa)**; a Wings só escreve no RD CRM o que já escreve hoje (o negócio
 novo do `expansion-intake`/`formatacao-intake`).
 
-### 2.1 Base (schema e regras) — migração `0052+` (a fase 0 do WhatsApp toma a 0051)
+### 2.1 Base (schema e regras) — migração `0051+` (decisão do Eric em 30/09; a fase 0 do WhatsApp, se aproveitada, renumera depois)
 
 - `clients`: cadastrar as marcas (Casal do Churros, Açaí da Fila, Calçadão do
   Frango, Mister Russo, Grupo Forte Fênix, Rio Açaí Gourmet, Ginteco, Família K)
@@ -106,7 +106,7 @@ novo do `expansion-intake`/`formatacao-intake`).
 | --- | --- | --- |
 | **LPs das marcas e da Formatação, balões do RD** | webhook lê os campos ocultos de UTM/click id; regra decide marca **e** funil; o lead novo dispara o mesmo `expansion-intake`/`formatacao-intake` que cria o negócio no RD CRM e **grava `rd_deal_id` no lead** (hoje o job não conhece o lead) | cadastra o webhook de conversão no RD Marketing apontando para `…/api/integrations/rd-station/webhook?secret=…`; confere na primeira entrega o log de forma |
 | **Site do Calçadão (calcadaodofrango.com.br)** | rota pública `POST /integrations/site-forms/:clientSlug` com token por cliente, honeypot e limite por IP: cria o lead (`site_form`), **reenvia a conversão ao RD Marketing** pela API de conversões (`POST /platform/conversions`, identificador `calcadao-do-frango`, credenciais `RD_MKT_*` que já existem) para os fluxos do RD continuarem, e responde o link de WhatsApp **rastreado** da marca para o site abrir em seguida | diz quem mantém o site (o código não está neste servidor) e pede a troca de `window.open(wa.me…)` por um `fetch` na rota + abrir o link devolvido; um número por marca |
-| **WhatsApp por marca (links rastreáveis)** | mesclar a fase 0 (`feat/whatsapp-inbox-0`, migração renumerada para 0051): toda mensagem vira conversa ligada ao lead pelo telefone; criar um link por marca e canal (bio do Instagram, site, botão da LP) na tela que já existe | `WINGS_WHATSAPP_NUMBER`, `ZAPI_WEBHOOK_SECRET` no api-staging; no painel do Z-API, "Ao receber", "Ao enviar" e "Status" para `…/api/integrations/zapi/webhook?secret=…`; trocar os botões de WhatsApp das LPs (editor do RD) e das bios pelos links rastreados |
+| **WhatsApp por marca (links rastreáveis)** | só os links: um por marca e canal (bio do Instagram, site, botão da LP) na tela que já existe; `wa.me` não depende de provedor. **Nada de Z-API** (decisão de 30/09): a fase 0 (`feat/whatsapp-inbox-0`) não é mesclada como está, e a recepção das mensagens vem na Fase 2 pela API oficial (Cloud API) | `WINGS_WHATSAPP_NUMBER` no api-staging (e um número por marca, se houver); trocar os botões de WhatsApp das LPs (editor do RD) e das bios pelos links rastreados |
 | **Meta Lead Ads** | ver §4: além do webhook, uma **leitura periódica** (a cada 15 min, na ingestão que já existe) de `GET /{form_id}/leads` dos formulários com regra, para nenhum lead depender do webhook | segredos, app público, assinatura da página, token, formulário, termos |
 | **Manual** | nada | — |
 
@@ -147,24 +147,27 @@ link para o RD). Nada de kanban ainda.
 | 2.1 base: clientes, regras com funil, colunas em `leads`, `rd_user_map`, migração | 2 |
 | 2.3 importador + sincronização de etapa + `rd_deal_id` gravado pelos jobs de entrada | 3 |
 | 2.4 tela | 2 |
+| 2.2 webhook do RD: campos ocultos de UTM/click id, regra → marca e funil | 1 |
 | 2.2 formulário de site (rota + reenvio ao RD + link rastreado) | 2 |
-| 2.2 WhatsApp: mesclar fase 0 (renumerar), links por marca | 1 |
+| 2.2 WhatsApp: links por marca (sem Z-API) | 0,5 |
 | §4 Meta Lead Ads: leitura periódica + caminho do formulário instantâneo no construtor | 3 |
-| **Total** | **13** |
+| staging (depois da revisão), conferências, docs | 1 |
+| **Total** | **14,5** |
 
 Ordem: base → importador (o Funil deixa de estar vazio no primeiro dia útil da
-etapa 2) → tela → RD webhook → site → WhatsApp → Meta. Cada etapa numa branch,
-mesclada depois da revisão do Eric; migrações sempre depois da 0051.
+etapa 2) → tela → RD webhook → site → WhatsApp → Meta. Uma branch da Fase 1
+(`feat/crm-fase1`), mesclada depois da revisão do Eric; migrações a partir da 0051;
+deploy só no staging.
 
 ## 3. Renumeração das fases
 
 | Antes | Agora |
 | --- | --- |
 | Funil Sofia parte 1 (feito) | idem |
-| WhatsApp fase 0 (feito, não mesclado) | entra na Fase 1 |
+| WhatsApp fase 0 (feito sobre Z-API, não mesclado) | **não entra** como está: a Fase 2 usa a API oficial; aproveita-se o modelo (`wa_conversations`/`wa_messages`, ligação pelo telefone, linha do tempo, mídia no armazenamento) |
 | — | **Fase 1: fontes reais + RD dentro do Funil** (este documento) |
 | CRM Fase 1 (especificação: 30 dias) | **Fase 2** — o importador do §2.3 vira a etapa 4 da importação completa (§3.1), e as colunas de etapa em `leads` migram para `crm_deals` |
-| WhatsApp fase 1 (caixa de entrada, envio, assumir) | Fase 2, junto |
+| WhatsApp fase 1 (caixa de entrada, envio, assumir) | Fase 2, pela **API oficial** (WhatsApp Business Platform / Cloud API) |
 | WhatsApp fase 2 (Sofia) / Funil Sofia parte 2 | Fase 3 |
 
 ## 4. Meta Lead Ads de ponta a ponta: o que falta
@@ -208,6 +211,10 @@ formulário para anunciar; sem o 6 o construtor não consegue criar a campanha
 com formulário (o Eric criaria na Meta à mão, e o sistema só leria).
 
 ## 5. O que o Eric decide antes de começar
+
+**Decidido em 30/09:** itens 1 (Fase 1 aprovada, com as 7 decisões do Fable) e
+o provedor do WhatsApp (API oficial, não Z-API; na Fase 1 só links). O RD
+Station CRM segue oficial até a virada (Fase 5). Seguem abertos os itens 2 a 6.
 
 1. Aprovar este recorte de Fase 1 (13 dias) na frente da especificação.
 2. As marcas como clientes: os 8 nomes acima e quem responde por cada uma.
