@@ -76,3 +76,29 @@ Escopo fixo: `wings-company-form-site`, `lp-formatacao-whatsapp` e `Formulário 
 Mesma regra de cobertura do job (negócio aberto, ou criado depois da conversão, cobre; nunca
 duplica) e o mesmo `expansion_intake_ledger`. A resposta e a auditoria (`expansion.recovery_*`)
 têm contagens e ids de negócio, nunca dado pessoal.
+
+## Rede de segurança de Formatação (`formatacao-intake`)
+
+Agendador na API, a cada 5 minutos (a primeira passada depois de subir olha 72 h, as
+seguintes 6 h; o ledger torna a sobreposição de graça). Cobre os três formulários de
+Formatação: `wings-company-form-site`, `lp-formatacao-whatsapp` (o balão de WhatsApp do
+site, um pop-up do RD) e `Formulário Simplificado. -02`. Uma conversão sem negócio vira
+negócio em **Formatação / Novo Contato**, sem dono, com a origem "Contato pelo Site", a
+campanha "SITE WINGS // FORMATAÇÃO" e, no campo OBS, identificador, UTMs e página.
+
+Mesma regra de não duplicar da recuperação e do job de Expansão: contato com negócio aberto
+em qualquer funil, ou com negócio criado depois da conversão, é deixado como está; só cria,
+nunca altera um negócio existente. Conversões com menos de 15 min esperam (os fluxos do RD
+podem estar criando o negócio). Mesmo `expansion_intake_ledger`. Se a etapa "Formatação /
+Novo Contato" não existir no RD CRM, a passada para e grava `formatacao.intake_blocked`.
+
+Chaves próprias (o job de Expansão continua desligado por `EXPANSION_INTAKE_ENABLED`):
+
+- `FORMATACAO_INTAKE_ENABLED=true` liga o agendador (precisa das credenciais do RD).
+- `FORMATACAO_INTAKE_DRY_RUN=true` só conta: grava `formatacao.intake_dry_run` na auditoria
+  (`wouldCreate`, `byForm`, motivos) e não cria nada. Sem ela, uma passada que criou ou falhou
+  grava `formatacao.intake_run` com os ids dos negócios (`dealIds`).
+
+Não ligar este job e o de Expansão juntos sem ler isto: `wings-company-form-site` está nos
+dois destinos (Expansão o manda para "Sem contato"); o ledger evita duplicar, mas o primeiro
+que decidir a conversão define a etapa.
