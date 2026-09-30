@@ -296,9 +296,12 @@ export interface LeadSourceRule {
   id: string;
   kind: LeadSourceRuleKind;
   pattern: string;
-  clientId: string;
-  clientName: string;
+  /** Null while the rule names a brand that is not a client yet (see `brand`). */
+  clientId: string | null;
+  clientName: string | null;
   pipeline: LeadPipeline | null;
+  brand: string | null;
+  active: boolean;
   createdAt: string;
 }
 

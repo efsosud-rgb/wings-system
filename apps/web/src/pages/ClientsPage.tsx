@@ -4,6 +4,7 @@ import {
   LEAD_LINK_CHANNELS,
   LEAD_CHANNEL_LABELS,
   LEAD_SOURCE_RULE_KINDS,
+  LEAD_PIPELINE_LABELS,
   LEAD_SOURCE_RULE_KIND_LABELS,
   PROJECT_STATUS_LABELS,
   WINGS_CLIENT_ID,
@@ -76,7 +77,9 @@ function ExpansionArea({ client }: { client: Client }) {
       </Field>
       {update.error && (
         <div className="field-error" role="alert">
-          {update.error instanceof ApiError ? update.error.message : 'Não foi possível salvar a área.'}
+          {update.error instanceof ApiError
+            ? update.error.message
+            : 'Não foi possível salvar a área.'}
         </div>
       )}
       {update.isSuccess && <div className="field-hint">Área salva.</div>}
@@ -98,11 +101,13 @@ function TrackingLinks({ client }: { client: Client }) {
     <div className="lead-links-admin">
       <h3 className="lead-subhead">Links rastreáveis do WhatsApp</h3>
       <p className="muted">
-        Cada link abre o WhatsApp da Wings com um código já escrito. Quem manda a mensagem é etiquetado com este
-        cliente e o canal do link.
+        Cada link abre o WhatsApp da Wings com um código já escrito. Quem manda a mensagem é
+        etiquetado com este cliente e o canal do link.
       </p>
       {links.data && !links.data.phoneConfigured && (
-        <Alert kind="warning">O número de WhatsApp da Wings (WINGS_WHATSAPP_NUMBER) não está configurado neste ambiente.</Alert>
+        <Alert kind="warning">
+          O número de WhatsApp da Wings (WINGS_WHATSAPP_NUMBER) não está configurado neste ambiente.
+        </Alert>
       )}
       <form
         className="clients-rename"
@@ -111,20 +116,30 @@ function TrackingLinks({ client }: { client: Client }) {
           create.mutate({ clientId: client.id, channel });
         }}
       >
-        <Select aria-label={`Canal do novo link de ${client.name}`} value={channel} onChange={(event) => setChannel(event.target.value as LeadLinkChannel)}>
+        <Select
+          aria-label={`Canal do novo link de ${client.name}`}
+          value={channel}
+          onChange={(event) => setChannel(event.target.value as LeadLinkChannel)}
+        >
           {LEAD_LINK_CHANNELS.map((item) => (
             <option key={item} value={item}>
               {LEAD_CHANNEL_LABELS[item]}
             </option>
           ))}
         </Select>
-        <Button type="submit" variant="ghost" disabled={create.isPending || links.data?.phoneConfigured === false}>
+        <Button
+          type="submit"
+          variant="ghost"
+          disabled={create.isPending || links.data?.phoneConfigured === false}
+        >
           Gerar link
         </Button>
       </form>
       {create.error && (
         <div className="field-error" role="alert">
-          {create.error instanceof ApiError ? create.error.message : 'Não foi possível gerar o link.'}
+          {create.error instanceof ApiError
+            ? create.error.message
+            : 'Não foi possível gerar o link.'}
         </div>
       )}
       {list.length > 0 && (
@@ -248,7 +263,9 @@ function ClientRow({
               {client.name}
               {fixed && <span className="tag">padrão</span>}
               {client.expansionArea.length > 0 && (
-                <div className="cell-sub">Expansão: {client.expansionArea.map(formatExpansionEntry).join(', ')}</div>
+                <div className="cell-sub">
+                  Expansão: {client.expansionArea.map(formatExpansionEntry).join(', ')}
+                </div>
               )}
             </>
           )}
@@ -337,8 +354,8 @@ function SourceRules({ clients }: { clients: Client[] }) {
     <section className="block">
       <h2>Origens de leads</h2>
       <p className="muted">
-        De qual cliente é cada landing page ou formulário. Uma conversão sem regra vira lead mesmo assim, marcado
-        "sem regra" e arquivado na Wings Company até alguém cadastrar a regra aqui.
+        De qual cliente é cada landing page ou formulário. Uma conversão sem regra vira lead mesmo
+        assim, marcado "sem regra" e arquivado na Wings Company até alguém cadastrar a regra aqui.
       </p>
       <form
         className="filters"
@@ -349,7 +366,11 @@ function SourceRules({ clients }: { clients: Client[] }) {
       >
         <label className="field">
           <span className="field-label">Tipo</span>
-          <select className="control" value={kind} onChange={(event) => setKind(event.target.value as LeadSourceRuleKind)}>
+          <select
+            className="control"
+            value={kind}
+            onChange={(event) => setKind(event.target.value as LeadSourceRuleKind)}
+          >
             {LEAD_SOURCE_RULE_KINDS.map((item) => (
               <option key={item} value={item}>
                 {LEAD_SOURCE_RULE_KIND_LABELS[item]}
@@ -362,7 +383,9 @@ function SourceRules({ clients }: { clients: Client[] }) {
           <input
             className="control"
             value={pattern}
-            placeholder={kind === 'landing_page' ? 'sushi-do-bairro ou lp.cliente.com.br' : 'id numérico'}
+            placeholder={
+              kind === 'landing_page' ? 'sushi-do-bairro ou lp.cliente.com.br' : 'id numérico'
+            }
             onChange={(event) => {
               setPattern(event.target.value);
               create.reset();
@@ -371,7 +394,11 @@ function SourceRules({ clients }: { clients: Client[] }) {
         </label>
         <label className="field">
           <span className="field-label">Cliente</span>
-          <select className="control" value={clientId} onChange={(event) => setClientId(event.target.value)}>
+          <select
+            className="control"
+            value={clientId}
+            onChange={(event) => setClientId(event.target.value)}
+          >
             <option value="">Escolha</option>
             {clients
               .filter((client) => client.active)
@@ -387,7 +414,11 @@ function SourceRules({ clients }: { clients: Client[] }) {
         </Button>
       </form>
       {create.error && (
-        <Alert kind="error">{create.error instanceof ApiError ? create.error.message : 'Não foi possível salvar a regra.'}</Alert>
+        <Alert kind="error">
+          {create.error instanceof ApiError
+            ? create.error.message
+            : 'Não foi possível salvar a regra.'}
+        </Alert>
       )}
       {rules.isError && <Alert kind="error">Não foi possível carregar as regras.</Alert>}
       <table className="table">
@@ -396,6 +427,7 @@ function SourceRules({ clients }: { clients: Client[] }) {
             <th>Tipo</th>
             <th>Padrão</th>
             <th>Cliente</th>
+            <th>Funil</th>
             <th>
               <span className="sr-only">Ações</span>
             </th>
@@ -404,7 +436,7 @@ function SourceRules({ clients }: { clients: Client[] }) {
         <tbody>
           {list.length === 0 && (
             <tr>
-              <td colSpan={4} className="muted">
+              <td colSpan={5} className="muted">
                 Nenhuma regra ainda.
               </td>
             </tr>
@@ -413,9 +445,18 @@ function SourceRules({ clients }: { clients: Client[] }) {
             <tr key={rule.id}>
               <td>{LEAD_SOURCE_RULE_KIND_LABELS[rule.kind].split(' (')[0]}</td>
               <td className="mono">{rule.pattern}</td>
-              <td>{rule.clientName}</td>
               <td>
-                <Button type="button" variant="ghost" disabled={remove.isPending} onClick={() => remove.mutate(rule.id)}>
+                {rule.clientName ?? (rule.brand ? `${rule.brand} (marca sem cadastro)` : '—')}
+                {!rule.active && <span className="muted"> · inativa</span>}
+              </td>
+              <td>{rule.pipeline ? LEAD_PIPELINE_LABELS[rule.pipeline] : '—'}</td>
+              <td>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={remove.isPending}
+                  onClick={() => remove.mutate(rule.id)}
+                >
                   Remover
                 </Button>
               </td>
@@ -451,7 +492,11 @@ function QuickCreate() {
               name,
               cnpj: cnpjDigits || null,
               contact: contact.name.trim()
-                ? { name: contact.name, email: contact.email || null, whatsapp: contact.whatsapp || null }
+                ? {
+                    name: contact.name,
+                    email: contact.email || null,
+                    whatsapp: contact.whatsapp || null,
+                  }
                 : null,
             },
             {
@@ -468,7 +513,11 @@ function QuickCreate() {
         <div className="grid-3">
           <Field
             label="CNPJ"
-            hint={lookup.data ? `Receita: ${lookup.data.registrationStatus ?? 'situação não informada'}` : 'Opcional. Buscar preenche o nome.'}
+            hint={
+              lookup.data
+                ? `Receita: ${lookup.data.registrationStatus ?? 'situação não informada'}`
+                : 'Opcional. Buscar preenche o nome.'
+            }
             error={
               lookup.error
                 ? lookup.error instanceof ApiError
@@ -542,14 +591,22 @@ function QuickCreate() {
             />
           </Field>
         </div>
-        <Button type="submit" className="btn-inline" disabled={create.isPending || name.trim().length < 2 || !cnpjOk}>
+        <Button
+          type="submit"
+          className="btn-inline"
+          disabled={create.isPending || name.trim().length < 2 || !cnpjOk}
+        >
           Cadastrar cliente
         </Button>
-        <span className="field-hint clients-quick-hint">O resto dos dados vai na ficha do cliente.</span>
+        <span className="field-hint clients-quick-hint">
+          O resto dos dados vai na ficha do cliente.
+        </span>
       </form>
       {create.error && (
         <Alert kind="error">
-          {create.error instanceof ApiError ? create.error.message : 'Não foi possível cadastrar o cliente.'}
+          {create.error instanceof ApiError
+            ? create.error.message
+            : 'Não foi possível cadastrar o cliente.'}
         </Alert>
       )}
     </section>
@@ -575,8 +632,8 @@ export function ClientsPage() {
         <h1>Clientes</h1>
         <p>
           Para quem o trabalho é feito. Cada cliente tem um número e uma pasta no Drive,
-          Clientes/NN. Nome, criada no cadastro. A mídia gerada é arquivada pelo cliente escolhido; o
-          nome do cliente não é enviado a fornecedores.
+          Clientes/NN. Nome, criada no cadastro. A mídia gerada é arquivada pelo cliente escolhido;
+          o nome do cliente não é enviado a fornecedores.
         </p>
       </header>
 
@@ -590,7 +647,9 @@ export function ClientsPage() {
               <th title="O número da pasta do cliente no Drive: Clientes/NN. Nome">Nº</th>
               <th>Nome</th>
               <th>Situação</th>
-              <th title="Status e etapa atual do projeto; o quadro fica em Gestão → Projetos">Projeto</th>
+              <th title="Status e etapa atual do projeto; o quadro fica em Gestão → Projetos">
+                Projeto
+              </th>
               <th>
                 <span className="sr-only">Ações</span>
               </th>

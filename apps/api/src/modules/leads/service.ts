@@ -272,6 +272,17 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
     const phone = normalizeBrazilianPhone(incoming.phone);
     const email = normalizeEmail(incoming.email);
 
+    // Two arrivals of the same person at once (webhook + import) must not both
+    // create: each key is locked for the transaction, always in the same order.
+    const keys = [
+      incoming.externalId ? `lead:ext:${incoming.source}:${incoming.externalId}` : null,
+      phone ? `lead:phone:${phone}` : null,
+      email ? `lead:email:${email}` : null,
+    ]
+      .filter((key): key is string => key !== null)
+      .sort();
+    for (const key of keys) await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${key}))`);
+
     let existing: LeadRow | undefined;
     if (incoming.externalId) {
       existing = await tx.query.leads.findFirst({

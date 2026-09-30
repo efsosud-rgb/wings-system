@@ -14,7 +14,7 @@ import {
   type LeadTrackingLink,
   type LeadLinkChannel,
 } from '@wings/shared';
-import { asc, desc, eq } from 'drizzle-orm';
+import { asc, desc, eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { clients, leadSourceRules, leadTrackingLinks, leads } from '../../db/schema/index.js';
@@ -162,11 +162,18 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
         clientId: clients.id,
         clientName: clients.name,
         pipeline: leadSourceRules.pipeline,
+        brand: leadSourceRules.brand,
+        active: leadSourceRules.active,
         createdAt: leadSourceRules.createdAt,
       })
       .from(leadSourceRules)
-      .innerJoin(clients, eq(clients.id, leadSourceRules.clientId))
-      .orderBy(asc(clients.name), asc(leadSourceRules.kind), asc(leadSourceRules.pattern));
+      // A rule may name a brand that is not a client yet: it is listed too.
+      .leftJoin(clients, eq(clients.id, leadSourceRules.clientId))
+      .orderBy(
+        asc(sql`coalesce(${clients.name}, ${leadSourceRules.brand})`),
+        asc(leadSourceRules.kind),
+        asc(leadSourceRules.pattern),
+      );
     return rows.map((row) => ({
       ...row,
       kind: row.kind as LeadSourceRuleKind,

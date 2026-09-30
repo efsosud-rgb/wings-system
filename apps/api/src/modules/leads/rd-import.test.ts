@@ -364,3 +364,62 @@ describe('recordDealOnLead (intake jobs)', () => {
     expect(events.map((event) => event.kind)).toContain('rd.deal_created');
   });
 });
+
+describe('recordDealOnLead does not guess', () => {
+  const conversionFor = (phone: string, occurredAt = new Date()) => ({
+    contactUuid: 'y',
+    identifier: 'wings-company-form-site',
+    occurredAt,
+    name: null,
+    email: null,
+    phone,
+    company: null,
+    utms: null,
+    page: null,
+    eventType: 'CONVERSION',
+    ads: null,
+  });
+
+  it('links nothing when two leads of the funnel share the phone', async () => {
+    for (const email of ['a@example.com', 'b@example.com']) {
+      await db
+        .insert(leads)
+        .values({ source: 'manual', phone: '5521966660001', email, pipeline: 'formatacao' });
+    }
+    expect(
+      await recordDealOnLead(db, {
+        conversion: conversionFor('21 96666-0001'),
+        dealId: 'rd-amb',
+        target: 'formatacao',
+        brand: null,
+      }),
+    ).toBe(false);
+  });
+
+  it('ignores a lead of the other funnel and one older than 30 days', async () => {
+    await db
+      .insert(leads)
+      .values({ source: 'manual', phone: '5521966660002', pipeline: 'expansao' });
+    await db.insert(leads).values({
+      source: 'manual',
+      phone: '5521966660003',
+      createdAt: new Date(Date.now() - 40 * 86_400_000),
+    });
+    expect(
+      await recordDealOnLead(db, {
+        conversion: conversionFor('21 96666-0002'),
+        dealId: 'rd-o1',
+        target: 'formatacao',
+        brand: null,
+      }),
+    ).toBe(false);
+    expect(
+      await recordDealOnLead(db, {
+        conversion: conversionFor('21 96666-0003'),
+        dealId: 'rd-o2',
+        target: 'formatacao',
+        brand: null,
+      }),
+    ).toBe(false);
+  });
+});
