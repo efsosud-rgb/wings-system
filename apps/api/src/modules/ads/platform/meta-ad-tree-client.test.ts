@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { fakeMetaApi, type FakeMetaApiOptions } from './fake-meta-api.js';
-import { MetaReadOnlyClient, TargetingResolutionError } from './meta-client.js';
+import { BRAZIL_STATES } from '@wings/shared';
+import {
+  BRAZIL_STATE_REGIONS,
+  MetaReadOnlyClient,
+  TargetingResolutionError,
+} from './meta-client.js';
 import { MetaWriteClient } from './meta-write-client.js';
 import type { AdSetSpec, CreativeSpec } from './types.js';
 
@@ -266,7 +271,12 @@ describe('creatives and ads', () => {
       instagramUserId: null,
       body: {
         type: 'single',
-        media: { kind: 'video', videoId: '999', thumbnailUrl: 'https://x/t.jpg', imageHash: 'h-still' },
+        media: {
+          kind: 'video',
+          videoId: '999',
+          thumbnailUrl: 'https://x/t.jpg',
+          imageHash: 'h-still',
+        },
       },
     });
 
@@ -295,7 +305,12 @@ describe('creatives and ads', () => {
             link: 'https://wingscompany.com.br/a',
           },
           {
-            media: { kind: 'video', videoId: '999', thumbnailUrl: 'https://x/t.jpg', imageHash: 'h-still' },
+            media: {
+              kind: 'video',
+              videoId: '999',
+              thumbnailUrl: 'https://x/t.jpg',
+              imageHash: 'h-still',
+            },
             headline: 'Cartão 2',
             description: 'Modelo.',
             link: 'https://wingscompany.com.br/b',
@@ -381,6 +396,31 @@ describe('reads that come before any write', () => {
       cities: [{ key: '268478', name: 'Curitiba', region: 'Paraná' }],
       localeKey: 31,
     });
+  });
+
+  it('places DF, GO, RJ and SC by the keys Meta answered, with no region search', async () => {
+    // The request of 2026-09-30 failed on "A Meta não conhece \"DF\"": Meta
+    // names it "Federal District", which a name search for "Distrito Federal"
+    // could never match.
+    const { api, client } = reader();
+    const resolved = await client.resolveTargeting({
+      states: ['DF', 'GO', 'RJ', 'SC'],
+      cities: [],
+    });
+    expect(resolved.regions).toEqual([
+      { key: '444', name: 'Federal District' },
+      { key: '462', name: 'Goiás' },
+      { key: '454', name: 'Rio de Janeiro' },
+      { key: '459', name: 'Santa Catarina' },
+    ]);
+    expect(
+      api.calls.filter((call) => (call.query.location_types ?? '').includes('region')),
+    ).toHaveLength(0);
+  });
+
+  it('has a Meta region for every state the builder offers', () => {
+    expect(Object.keys(BRAZIL_STATE_REGIONS).sort()).toEqual([...BRAZIL_STATES].sort());
+    expect(new Set(Object.values(BRAZIL_STATE_REGIONS).map((region) => region.key)).size).toBe(27);
   });
 
   it('refuses a city Meta does not know, knows twice, or knows in another state', async () => {

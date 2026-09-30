@@ -227,35 +227,44 @@ export function sliceDateRange(
   return windows;
 }
 
-/** State names as Meta's location search knows them (it folds accents itself). */
-export const BRAZIL_STATE_NAMES: Record<string, string> = {
-  AC: 'Acre',
-  AL: 'Alagoas',
-  AP: 'Amapá',
-  AM: 'Amazonas',
-  BA: 'Bahia',
-  CE: 'Ceará',
-  DF: 'Distrito Federal',
-  ES: 'Espírito Santo',
-  GO: 'Goiás',
-  MA: 'Maranhão',
-  MT: 'Mato Grosso',
-  MS: 'Mato Grosso do Sul',
-  MG: 'Minas Gerais',
-  PA: 'Pará',
-  PB: 'Paraíba',
-  PR: 'Paraná',
-  PE: 'Pernambuco',
-  PI: 'Piauí',
-  RJ: 'Rio de Janeiro',
-  RN: 'Rio Grande do Norte',
-  RS: 'Rio Grande do Sul',
-  RO: 'Rondônia',
-  RR: 'Roraima',
-  SC: 'Santa Catarina',
-  SP: 'São Paulo',
-  SE: 'Sergipe',
-  TO: 'Tocantins',
+/**
+ * Meta's region key for each Brazilian state, and the name Meta gives it.
+ *
+ * Source: Graph API v23.0 `search?type=adgeolocation&location_types=["region"]
+ * &country_code=BR`, one query per state, read 2026-09-30 17:31 UTC with the
+ * api-staging token (act_694058302567457). Every state answered exactly one
+ * region except the Federal District, which Meta names "Federal District" —
+ * why the old name search could not find "Distrito Federal". A fixed table,
+ * not a search: the keys are Meta's ids, and a search by name can miss.
+ */
+export const BRAZIL_STATE_REGIONS: Record<string, { key: string; name: string }> = {
+  AC: { key: '438', name: 'Acre' },
+  AL: { key: '439', name: 'Alagoas' },
+  AP: { key: '440', name: 'Amapá' },
+  AM: { key: '441', name: 'Amazonas' },
+  BA: { key: '442', name: 'Bahia' },
+  CE: { key: '443', name: 'Ceará' },
+  DF: { key: '444', name: 'Federal District' },
+  ES: { key: '445', name: 'Espírito Santo' },
+  MS: { key: '446', name: 'Mato Grosso do Sul' },
+  MA: { key: '447', name: 'Maranhão' },
+  MT: { key: '448', name: 'Mato Grosso' },
+  MG: { key: '449', name: 'Minas Gerais' },
+  PA: { key: '450', name: 'Pará' },
+  PB: { key: '451', name: 'Paraíba' },
+  PR: { key: '452', name: 'Paraná' },
+  PI: { key: '453', name: 'Piauí' },
+  RJ: { key: '454', name: 'Rio de Janeiro' },
+  RN: { key: '455', name: 'Rio Grande do Norte' },
+  RS: { key: '456', name: 'Rio Grande do Sul' },
+  RO: { key: '457', name: 'Rondônia' },
+  RR: { key: '458', name: 'Roraima' },
+  SC: { key: '459', name: 'Santa Catarina' },
+  SP: { key: '460', name: 'São Paulo' },
+  SE: { key: '461', name: 'Sergipe' },
+  GO: { key: '462', name: 'Goiás' },
+  PE: { key: '463', name: 'Pernambuco' },
+  TO: { key: '464', name: 'Tocantins' },
 };
 
 /** Lower case, no accents, no "(state)" suffix: how two spellings of a place compare. */
@@ -444,37 +453,19 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
     cities: { name: string; state: string }[];
   }): Promise<ResolvedTargeting> {
     const regions: ResolvedTargeting['regions'] = [];
-    const regionNameByUf = new Map<string, string>();
 
-    const regionOf = async (uf: string): Promise<{ key: string; name: string }> => {
-      const stateName = BRAZIL_STATE_NAMES[uf];
-      if (!stateName) throw new TargetingResolutionError(uf, 0);
-      const rows = await this.searchTargeting<{ key: string; name: string; country_code?: string }>(
-        {
-          type: 'adgeolocation',
-          location_types: '["region"]',
-          country_code: 'BR',
-          q: stateName,
-          limit: '25',
-        },
-      );
-      const matches = rows.filter(
-        (row) =>
-          (row.country_code ?? 'BR') === 'BR' &&
-          foldPlaceName(row.name) === foldPlaceName(stateName),
-      );
-      const match = matches[0];
-      if (matches.length !== 1 || !match) throw new TargetingResolutionError(uf, matches.length);
-      regionNameByUf.set(uf, match.name);
-      return { key: match.key, name: match.name };
+    const regionOf = (uf: string): { key: string; name: string } => {
+      const region = BRAZIL_STATE_REGIONS[uf];
+      if (!region) throw new TargetingResolutionError(uf, 0);
+      return region;
     };
 
-    for (const uf of reach.states) regions.push(await regionOf(uf));
+    for (const uf of reach.states) regions.push(regionOf(uf));
 
     const cities: ResolvedTargeting['cities'] = [];
     for (const city of reach.cities) {
       const asked = `${city.name}/${city.state}`;
-      const regionName = regionNameByUf.get(city.state) ?? (await regionOf(city.state)).name;
+      const regionName = regionOf(city.state).name;
       const rows = await this.searchTargeting<{
         key: string;
         name: string;

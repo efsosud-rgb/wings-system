@@ -39,10 +39,12 @@ export interface FakeMetaApiOptions {
   existingAdSets?: { id: string; campaign_id: string; name: string; status: string }[];
 }
 
+// Keys and names as Meta answered them on 2026-09-30 (see BRAZIL_STATE_REGIONS).
 const REGIONS = [
   { key: '460', name: 'São Paulo', type: 'region', country_code: 'BR' },
-  { key: '454', name: 'Paraná', type: 'region', country_code: 'BR' },
+  { key: '452', name: 'Paraná', type: 'region', country_code: 'BR' },
   { key: '449', name: 'Minas Gerais', type: 'region', country_code: 'BR' },
+  { key: '444', name: 'Federal District', type: 'region', country_code: 'BR' },
 ];
 
 const CITIES = [
