@@ -6,7 +6,9 @@ import {
   type MediaAsset,
   type MediaBridgeResponse,
   type MetaIdentities,
+  type ActiveCampaignBudget,
   type PacingSummary,
+  type PlatformAccountReading,
   type SessionUser,
 } from '@wings/shared';
 import {
@@ -32,6 +34,9 @@ import { ApiError } from '../../api/client.js';
 const pacing: { current: PacingSummary | null } = { current: buildPacing() };
 /** Every call the builder made to `useCockpit`, in order — what days/platform it asked for. */
 const cockpitCalls: { days: number; platform?: string }[] = [];
+/** The active budgets the cockpit reports, for the spending-limit projection. */
+const activeBudgets: { current: ActiveCampaignBudget[] } = { current: [] };
+const platformRefresh = vi.fn();
 
 const requestCampaign = vi.fn();
 const launchState: { current: { isSuccess: boolean; data?: { approvalId: string } } } = {
@@ -204,6 +209,7 @@ vi.mock('../../api/ads.js', () => ({
           account: { id: 'acc-1', name: 'Wings Matriz', platform: 'meta', externalId: 'act_1' },
           pacing: pacing.current,
           wingsTotal: null,
+          activeBudgets: activeBudgets.current,
         },
       },
       isLoading: false,
@@ -218,6 +224,8 @@ vi.mock('../../api/ads.js', () => ({
     ...launchState.current,
   }),
   useReconcileNow: () => ({ mutate: reconcileNow, isPending: false, error: null }),
+  usePlatformRefresh: () => ({ mutate: platformRefresh }),
+  useSetSpendCapReset: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 vi.mock('../../api/auth.js', () => ({
@@ -309,6 +317,25 @@ function buildPacing(overrides: Partial<PacingSummary> = {}): PacingSummary {
     platformLimitSyncedAtIso: null,
     platformLimitNote: null,
     lastReconciledAt: null,
+    platformReading: buildReading(),
+    ...overrides,
+  };
+}
+
+function buildReading(overrides: Partial<PlatformAccountReading> = {}): PlatformAccountReading {
+  return {
+    status: 'ok',
+    reason: null,
+    readAtIso: '2026-09-30T16:34:00.000Z',
+    attemptedAtIso: '2026-09-30T16:34:00.000Z',
+    spendCapCents: null,
+    amountSpentCents: null,
+    spendCapRemainingCents: null,
+    amountDueCents: null,
+    prepaidBalanceCents: null,
+    fundingKind: null,
+    spendCapReset: null,
+    spendCapResetsOn: null,
     ...overrides,
   };
 }
@@ -317,6 +344,9 @@ afterEach(() => {
   cleanup();
   pacing.current = buildPacing();
   cockpitCalls.length = 0;
+  activeBudgets.current = [];
+  platformRefresh.mockReset();
+  vi.useRealTimers();
   launchState.current = { isSuccess: false };
   requestCampaign.mockReset();
   uploadSize.current = { width: 1080, height: 1080 };
@@ -467,6 +497,85 @@ describe('the paid-media builder', () => {
     type(screen.getByLabelText(/^Fim/), '2026-09-29');
     type(screen.getByLabelText(/Verba por dia/), '20,00');
     expect(screen.getByText(/passa do que a conta ainda permite/)).toBeTruthy();
+  });
+
+  it("shows Meta's own figures line by line, each with when it was read", () => {
+    pacing.current = buildPacing({
+      availableCents: 82_916,
+      platformRemainingCents: 97_916,
+      lastReconciledAt: '2026-09-30T16:30:00.000Z',
+      platformReading: buildReading({
+        spendCapCents: 250_000,
+        amountSpentCents: 152_084,
+        spendCapRemainingCents: 97_916,
+        amountDueCents: 6_008,
+        fundingKind: 'credit_card',
+        spendCapReset: 'monthly',
+        spendCapResetsOn: '2026-10-01',
+      }),
+    });
+    render(<PaidMediaBuilder canRequest />);
+    expect(screen.getByText('R$ 829,16')).toBeTruthy();
+    expect(screen.getByText('resta R$ 979,16 de R$ 2.500,00')).toBeTruthy();
+    expect(screen.getByText('limite volta a R$ 2.500,00 em 01/10')).toBeTruthy();
+    expect(screen.getByText('R$ 60,08')).toBeTruthy();
+    expect(
+      screen.getByText(/não informa saldo para esta conta \(pagamento por cartão\)/),
+    ).toBeTruthy();
+    expect(screen.getAllByText('lido em 30/09 13:34')).toHaveLength(3);
+    expect(platformRefresh).toHaveBeenCalled();
+  });
+
+  it('shows "—" and the reason when the last read failed, never the old figure', () => {
+    pacing.current = buildPacing({
+      availableCents: 82_916,
+      platformRemainingCents: 97_916,
+      platformReading: buildReading({
+        status: 'failed',
+        reason: 'a última leitura falhou: MetaApiError: (#190) token expirado',
+        attemptedAtIso: '2026-09-30T16:45:00.000Z',
+      }),
+    });
+    render(<PaidMediaBuilder canRequest />);
+    expect(screen.queryByText('R$ 829,16')).toBeNull();
+    expect(screen.queryByText(/R\$ 979,16/)).toBeNull();
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(4);
+    expect(screen.getAllByText(/token expirado/).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/última tentativa em 30\/09 13:45 · última leitura boa em 30\/09 13:34/)
+        .length,
+    ).toBe(3);
+  });
+
+  it('warns in red when Meta would pause the account before the plan ends', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-20T15:00:00.000Z'));
+    activeBudgets.current = [
+      {
+        campaignExternalId: '1',
+        name: '28Set',
+        dailyBudgetCents: 12_000,
+        startDate: null,
+        endDate: '2026-10-05',
+      },
+    ];
+    pacing.current = buildPacing({
+      platformReading: buildReading({
+        spendCapCents: 250_000,
+        amountSpentCents: 200_000,
+        spendCapRemainingCents: 50_000,
+        spendCapReset: 'monthly',
+        spendCapResetsOn: '2026-10-01',
+      }),
+    });
+    render(<PaidMediaBuilder canRequest />);
+    type(screen.getByLabelText(/^Início/), '2026-09-20');
+    type(screen.getByLabelText(/^Fim/), '2026-09-29');
+    type(screen.getByLabelText(/Verba por dia/), '80,00');
+    // 200/day from the 20th against R$ 500: the 22nd breaks it.
+    expect(
+      screen.getByText(/A Meta vai pausar a conta por volta de 22\/09, aumente o limite de gastos/),
+    ).toBeTruthy();
   });
 
   it('generates UTMs from the name and keeps an edited one', () => {

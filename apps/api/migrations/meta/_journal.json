@@ -351,6 +351,13 @@
       "when": 1790773216710,
       "tag": "0049_ad_utm_content",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1790786362170,
+      "tag": "0050_meta_spend_limit_reads",
+      "breakpoints": true
     }
   ]
 }

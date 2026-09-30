@@ -134,6 +134,13 @@ export const adAccounts = pgTable(
      */
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     archivedReason: text('archived_reason'),
+    /**
+     * When the platform's account spending limit starts over: `monthly` (on
+     * the 1st), or null when nobody has said. The API does not report it —
+     * Meta shows "A redefinição ocorre no primeiro dia de cada mês" only on
+     * its billing screen — so it is a rule a person sets, never inferred.
+     */
+    spendCapReset: text('spend_cap_reset'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -171,6 +178,24 @@ export const budgetPeriods = pgTable(
      * permission the read token lacks). Null when the platform did answer.
      */
     platformLimitNote: text('platform_limit_note'),
+    /**
+     * The figures behind `platformRemainingCents`, as the platform printed
+     * them on the last successful read: Meta's `spend_cap` and
+     * `amount_spent`, `balance` (what the next charge will take) and a
+     * prepaid balance where the platform states one. Null when unread.
+     */
+    platformSpendCapCents: bigint('platform_spend_cap_cents', { mode: 'number' }),
+    platformAmountSpentCents: bigint('platform_amount_spent_cents', { mode: 'number' }),
+    platformAmountDueCents: bigint('platform_amount_due_cents', { mode: 'number' }),
+    platformPrepaidBalanceCents: bigint('platform_prepaid_balance_cents', { mode: 'number' }),
+    platformFundingKind: text('platform_funding_kind'),
+    /**
+     * The last attempt to read the platform, successful or not, and why it
+     * failed. A failure after the last success means every platform figure
+     * above is old and must not be shown as current.
+     */
+    platformReadAttemptedAt: timestamp('platform_read_attempted_at', { withTimezone: true }),
+    platformReadError: text('platform_read_error'),
     /** Hard ceiling for the account this month. */
     capCents: bigint('cap_cents', { mode: 'number' }).notNull(),
     /** Portion the agent may plan against (70%); the rest absorbs overdelivery. */

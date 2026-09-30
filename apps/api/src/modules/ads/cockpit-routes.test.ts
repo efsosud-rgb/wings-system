@@ -345,7 +345,11 @@ describe('admin-only budget cap editing', () => {
     expect(response.statusCode).toBe(200);
 
     const body = response.json() as {
-      account: { capCents: number | null; usableCents: number | null; usablePercent: number | null };
+      account: {
+        capCents: number | null;
+        usableCents: number | null;
+        usablePercent: number | null;
+      };
     };
     expect(body.account.capCents).toBe(500_000);
     expect(body.account.usableCents).toBe(400_000);
@@ -528,5 +532,168 @@ describe('manual reconciliation ("Atualizar agora")', () => {
     });
     expect(response.statusCode).toBe(503);
     expect(response.json()).toMatchObject({ error: 'no_credentials' });
+  });
+});
+
+describe("the platform's own figures on the builder (bloco 11)", () => {
+  let figuresAccountId: string;
+  let meta: ReturnType<typeof fakeMetaApi>;
+  let figuresApp: FastifyInstance;
+  let clock = NOW;
+
+  beforeAll(async () => {
+    const externalId = `act_${randomBytes(4).readUInt32BE(0)}`;
+    figuresAccountId = await ensureAdAccount(db, {
+      platform: 'meta',
+      externalId,
+      name: 'Conta com limite de gastos',
+    });
+    await openPeriod(db, {
+      adAccountId: figuresAccountId,
+      periodMonth: PERIOD,
+      capCents: 400_000,
+      usablePercent: 70,
+    });
+    // What act_694058302567457 answered on 2026-09-30.
+    meta = fakeMetaApi({
+      accountId: externalId,
+      spendCapCents: '250000',
+      amountSpentCents: '152084',
+      balanceCents: '6008',
+    });
+    figuresApp = await buildApp({
+      env: loadEnv({
+        NODE_ENV: 'test',
+        DATABASE_URL: harness.url,
+        SESSION_SECRET: randomBytes(48).toString('base64'),
+        CPF_ENCRYPTION_KEY: TEST_CPF_KEY,
+        CPF_INDEX_KEY: TEST_INDEX_KEY,
+        APP_BASE_URL: 'https://staging.wingssystem.online',
+        META_WRITE_TOKEN: 'token',
+      }),
+      db,
+      now: () => clock,
+      platformFetch: meta.impl,
+    });
+  });
+
+  afterAll(async () => {
+    await figuresApp?.close();
+  });
+
+  async function reading(cookies: Record<string, string>) {
+    const response = await figuresApp.inject({
+      method: 'GET',
+      url: `/ads/cockpit?accountId=${figuresAccountId}`,
+      cookies,
+    });
+    expect(response.statusCode).toBe(200);
+    return (response.json() as { cockpit: CockpitSnapshot }).cockpit.pacing?.platformReading;
+  }
+
+  const refresh = (cookies: Record<string, string>) =>
+    figuresApp.inject({
+      method: 'POST',
+      url: `/ads/accounts/${figuresAccountId}/platform-refresh`,
+      cookies,
+    });
+
+  it('reads the account when the builder opens, for anyone who may see it', async () => {
+    const { cookies } = await sessionFor('marketing');
+    expect((await reading(cookies))?.status).toBe('never');
+
+    const response = await refresh(cookies);
+    expect(response.json()).toEqual({ refreshed: true });
+
+    const figures = await reading(cookies);
+    expect(figures).toMatchObject({
+      status: 'ok',
+      readAtIso: NOW.toISOString(),
+      spendCapCents: 250_000,
+      amountSpentCents: 152_084,
+      spendCapRemainingCents: 97_916,
+      amountDueCents: 6_008,
+      // The scripted Meta answers no funding_source_details at all.
+      fundingKind: null,
+      spendCapReset: null,
+      spendCapResetsOn: null,
+    });
+  });
+
+  it('skips the platform call when the account was read in the last two minutes', async () => {
+    const { cookies } = await sessionFor('marketing');
+    const before = meta.calls.length;
+    clock = new Date(NOW.getTime() + 60_000);
+    const response = await refresh(cookies);
+    expect(response.json()).toEqual({ refreshed: false, reason: 'recent' });
+    expect(meta.calls.length).toBe(before);
+    clock = NOW;
+  });
+
+  it('records the monthly reset as the account rule, only for who manages caps', async () => {
+    const marketing = await sessionFor('marketing');
+    const refused = await figuresApp.inject({
+      method: 'PUT',
+      url: `/ads/accounts/${figuresAccountId}/spend-cap-reset`,
+      payload: { reset: 'monthly' },
+      cookies: marketing.cookies,
+    });
+    expect(refused.statusCode).toBe(403);
+
+    const admin = await sessionFor('admin_master');
+    const response = await figuresApp.inject({
+      method: 'PUT',
+      url: `/ads/accounts/${figuresAccountId}/spend-cap-reset`,
+      payload: { reset: 'monthly' },
+      cookies: admin.cookies,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(await reading(admin.cookies)).toMatchObject({
+      spendCapReset: 'monthly',
+      spendCapResetsOn: '2026-10-01',
+    });
+  });
+
+  it('shows no figure, and why, once a read fails — never the old one', async () => {
+    const { cookies } = await sessionFor('marketing');
+    meta.state.accountError = { code: 190, message: 'Error validating access token' };
+    clock = new Date(NOW.getTime() + 3 * 60_000);
+    const response = await refresh(cookies);
+    expect(response.json()).toEqual({ refreshed: false, reason: 'failed' });
+
+    const figures = await reading(cookies);
+    expect(figures?.status).toBe('failed');
+    expect(figures?.reason).toMatch(/a última leitura falhou: .*190/);
+    expect(figures?.attemptedAtIso).toBe(clock.toISOString());
+    expect(figures?.readAtIso).toBe(NOW.toISOString());
+    expect(figures?.spendCapRemainingCents).toBeNull();
+    expect(figures?.amountDueCents).toBeNull();
+
+    // The next good read clears it.
+    meta.state.accountError = undefined;
+    clock = new Date(NOW.getTime() + 6 * 60_000);
+    await refresh(cookies);
+    expect((await reading(cookies))?.status).toBe('ok');
+    clock = NOW;
+  });
+
+  it('calls a read older than three missed cycles stale', async () => {
+    const { cookies } = await sessionFor('marketing');
+    clock = new Date(NOW.getTime() + 6 * 60_000 + 46 * 60_000);
+    const figures = await reading(cookies);
+    expect(figures?.status).toBe('stale');
+    expect(figures?.spendCapRemainingCents).toBeNull();
+    clock = NOW;
+  });
+
+  it('records a failed scheduled reconciliation the same way', async () => {
+    const failing = new FakeMetaClient({ campaigns: [] });
+    failing.listCampaigns = () => Promise.reject(new Error('Graph 500'));
+    await expect(reconcileAccount(db, failing, figuresAccountId, NOW)).rejects.toThrow();
+    const [period] = await db
+      .select()
+      .from(budgetPeriods)
+      .where(eq(budgetPeriods.adAccountId, figuresAccountId));
+    expect(period?.platformReadError).toBe('Error: Graph 500');
   });
 });

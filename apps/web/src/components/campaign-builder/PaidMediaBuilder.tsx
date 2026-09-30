@@ -57,13 +57,13 @@ import {
   type MediaBridgeResponse,
   type BrazilState,
   type AgentCampaignProposal,
-  type PacingSummary,
   type Placements,
   DEFAULT_MAX_CPC_CENTS,
   SEARCH_BIDDING_LABEL,
   SEARCH_BIDDING_STRATEGIES,
   SEARCH_LOCATION_MODES,
   SEARCH_LOCATION_MODE_LABEL,
+  projectSpendCapPause,
 } from '@wings/shared';
 import { useEffect, useState, type MutableRefObject, type ReactNode } from 'react';
 import { useFieldArray, useForm, type Resolver, useController } from 'react-hook-form';
@@ -72,6 +72,7 @@ import {
   useAudienceProfile,
   useCockpit,
   useMetaIdentities,
+  usePlatformRefresh,
   useRequestAddAds,
   useRequestCampaign,
   useSaveAudienceProfile,
@@ -85,11 +86,11 @@ import { ApiError } from '../../api/client.js';
 import { useDashboardCampaigns } from '../../api/dashboard.js';
 import { Alert, Button, Field, Input, Select } from '../ui.js';
 import { BUILDER_DRAFT_KEY, PICKED_MEDIA_KEY } from '../../api/media.js';
+import { AccountCeiling } from './AccountCeiling.js';
 import { AdPreviewGallery } from './AdPreview.js';
 import { ComplianceWarning, CreativeCard } from './CreativeBlock.js';
-import { agoLabel, formatBrl, formatDate, parseBrlToCents, todayInSaoPaulo } from './format.js';
+import { formatBrl, formatDate, parseBrlToCents, todayInSaoPaulo } from './format.js';
 import { SearchAdPreview, YoutubePreview } from './GooglePreview.js';
-import { ReconcileNowButton } from './ReconcileNowButton.js';
 import { RadiusMap } from './RadiusMap.js';
 
 /**
@@ -301,95 +302,6 @@ function BuilderSection({
   );
 }
 
-type WingsTotal = {
-  capCents: number;
-  usableCents: number;
-  committedCents: number;
-  spentCents: number;
-};
-
-/** Once regardless of platform: the cross-account figure, not any one account's. */
-function WingsTotalLine({ wingsTotal }: { wingsTotal: WingsTotal | null }) {
-  if (!wingsTotal) return null;
-  const availableCents = Math.max(0, wingsTotal.usableCents - wingsTotal.committedCents);
-  return (
-    <p className="field-hint builder-ceiling-wings-total">
-      Total Wings (todas as contas): <strong className="mono">{formatBrl(availableCents)}</strong>{' '}
-      ainda planejável de {formatBrl(wingsTotal.usableCents)} utilizáveis.
-    </p>
-  );
-}
-
-function AccountCeiling({
-  accountId,
-  pacing,
-  wingsTotal,
-  platform,
-}: {
-  accountId: string | undefined;
-  pacing: PacingSummary | null | undefined;
-  wingsTotal: WingsTotal | null;
-  platform: CampaignDraftInput['platform'];
-}) {
-  if (pacing === undefined) return <p className="muted">Lendo o teto da conta…</p>;
-
-  // Search and YouTube spend from the same Google account: worth saying out
-  // loud, since the ceiling below is not this campaign's alone.
-  const sharedCaption = platform !== 'meta' && (
-    <p className="field-hint">
-      Pesquisa e YouTube compartilham a mesma conta e o mesmo teto do Google.
-    </p>
-  );
-
-  if (pacing === null) {
-    return (
-      <div className="builder-ceiling">
-        <Alert kind="error">
-          Não há período de orçamento aberto para esta conta neste mês. Sem teto, nenhum pedido é
-          aceito.
-        </Alert>
-        <p className="field-hint">sem teto próprio</p>
-        {sharedCaption}
-        <WingsTotalLine wingsTotal={wingsTotal} />
-      </div>
-    );
-  }
-  return (
-    <div className="builder-ceiling">
-      <span className="field-label">Teto real da conta neste mês</span>
-      <p className="mono builder-ceiling-figure">{formatBrl(pacing.availableCents)}</p>
-      <p className="field-hint">ainda pode ser planejado · {agoLabel(pacing.lastReconciledAt)}</p>
-      {sharedCaption}
-      <ReconcileNowButton accountId={accountId} />
-      <dl>
-        <dt>Teto do mês</dt>
-        <dd className="mono">{formatBrl(pacing.capCents)}</dd>
-        <dt>Utilizável (70%)</dt>
-        <dd className="mono">{formatBrl(pacing.usableCents)}</dd>
-        <dt>Já comprometido</dt>
-        <dd className="mono">{formatBrl(pacing.committedCents)}</dd>
-        <dt>Já gasto</dt>
-        <dd className="mono">{formatBrl(pacing.spentCents)}</dd>
-      </dl>
-      <div className="builder-ceiling-platform">
-        <span className="field-label">Saldo/crédito informado pela plataforma</span>
-        {pacing.platformRemainingCents !== null ? (
-          <p className="mono">{formatBrl(pacing.platformRemainingCents)}</p>
-        ) : (
-          <p className="field-hint">
-            {pacing.platformLimitNote ?? 'a plataforma não informa este número'}
-          </p>
-        )}
-        <p className="field-hint">{agoLabel(pacing.platformLimitSyncedAtIso)}</p>
-      </div>
-      <WingsTotalLine wingsTotal={wingsTotal} />
-      {pacing.killSwitchEngaged && (
-        <Alert kind="error">Trava de emergência acionada: a conta não aceita pedidos agora.</Alert>
-      )}
-    </div>
-  );
-}
-
 /** "Facebook: Feed, Stories · Instagram: Reels", or what automatic means. */
 function describePlacements(placements: Placements | CampaignDraftInput['placements']): string {
   if (!placements || placements.mode !== 'manual') return 'Automático (Advantage+)';
@@ -546,6 +458,17 @@ export function PaidMediaBuilder({
   const cockpit = useCockpit({ days: 7, platform });
   const pacing = cockpit.isLoading ? undefined : (cockpit.data?.cockpit.pacing ?? null);
   const wingsTotal = cockpit.data?.cockpit.wingsTotal ?? null;
+  // The platform's balance and limits, re-read on opening and every 5 minutes
+  // while the builder stays open (the scheduled task reads every 15). The
+  // server skips the call when the account was read in the last 2 minutes.
+  const cockpitAccountId = cockpit.data?.cockpit.account.id;
+  const { mutate: refreshPlatform } = usePlatformRefresh(cockpitAccountId);
+  useEffect(() => {
+    if (!cockpitAccountId) return;
+    refreshPlatform();
+    const timer = window.setInterval(() => refreshPlatform(), 5 * 60_000);
+    return () => window.clearInterval(timer);
+  }, [cockpitAccountId, refreshPlatform]);
   const google = isGooglePlatform(platform);
   const addingToExisting = platform === 'meta' && target === 'existing';
   const sections: readonly SectionKey[] =
@@ -655,7 +578,41 @@ export function PaidMediaBuilder({
   const daysThisMonth = campaignDaysInMonth(values.startDate, values.endDate, today);
   const costThisMonthCents = estimateCostCents(dailyBudgetCents, daysThisMonth, platform);
   const overCeiling =
-    pacing != null && dailyBudgetCents > 0 && costThisMonthCents > pacing.availableCents;
+    pacing != null &&
+    pacing.platformReading.status === 'ok' &&
+    dailyBudgetCents > 0 &&
+    costThisMonthCents > pacing.availableCents;
+
+  // When Meta itself would stop the whole account: the active campaigns plus
+  // this one, day by day, against the account's spending limit (which starts
+  // over on the 1st when the account's rule says so).
+  const reading = pacing?.platformReading;
+  const pauseIncludesThis =
+    platform === 'meta' && !addingToExisting && costMissing === null && dailyBudgetCents > 0;
+  const spendCapPause =
+    platform === 'meta' &&
+    reading?.status === 'ok' &&
+    reading.spendCapCents !== null &&
+    reading.spendCapRemainingCents !== null
+      ? projectSpendCapPause({
+          today,
+          remainingCents: reading.spendCapRemainingCents,
+          spendCapCents: reading.spendCapCents,
+          reset: reading.spendCapReset,
+          streams: [
+            ...(cockpit.data?.cockpit.activeBudgets ?? []),
+            ...(pauseIncludesThis
+              ? [
+                  {
+                    dailyBudgetCents,
+                    startDate: values.startDate || null,
+                    endDate: values.endDate || null,
+                  },
+                ]
+              : []),
+          ],
+        })
+      : null;
 
   // A proposal from the agent, applied by a click on its card. It fills what the
   // agent can know and leaves the rest as the person had it: images, videos,
@@ -2006,6 +1963,8 @@ export function PaidMediaBuilder({
             pacing={pacing}
             wingsTotal={wingsTotal}
             platform={platform}
+            pause={spendCapPause}
+            pauseIncludesThis={pauseIncludesThis}
           />
         </div>
         {overCeiling && pacing && (

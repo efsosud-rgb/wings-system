@@ -94,7 +94,16 @@ describe('video figures on an insights row', () => {
       data: [{ campaign_id: 'c1', date_start: '2026-09-15', spend: '1.00', impressions: '10' }],
     }));
     const [row] = await meta.getInsights('campaign', '2026-09-15', '2026-09-15');
-    expect(row?.video).toEqual({ plays: 0, thruplays: 0, p25: 0, p50: 0, p75: 0, p100: 0, starts: 0, watchMs: 0 });
+    expect(row?.video).toEqual({
+      plays: 0,
+      thruplays: 0,
+      p25: 0,
+      p50: 0,
+      p75: 0,
+      p100: 0,
+      starts: 0,
+      watchMs: 0,
+    });
   });
 
   it('sums an action list and shrugs at anything else', () => {
@@ -201,7 +210,9 @@ describe('the account and its funding', () => {
     expect(account.prepaidBalanceCents).toBe(123_456);
     expect(account.fundingKind).toBe('prepaid');
     // Two reads: the money fields first, the payment fields on their own.
-    expect(calls[0]?.query.fields).toBe('id,currency,spend_cap,amount_spent,account_status');
+    expect(calls[0]?.query.fields).toBe(
+      'id,currency,spend_cap,amount_spent,balance,account_status',
+    );
     expect(calls[1]?.query.fields).toBe('funding_source_details');
     expect(account.warnings).toEqual([]);
   });

@@ -60,6 +60,11 @@ export interface PlatformAccount {
    */
   prepaidBalanceCents?: Cents | null;
   /**
+   * What the next charge will take: Meta's `balance`, the spend not yet
+   * billed. Not money available to spend. Null where the platform is silent.
+   */
+  amountDueCents?: Cents | null;
+  /**
    * `prepaid`, `credit_card`, `unknown`; a code, never the platform's display
    * string. `unavailable` when the token may not read the payment fields.
    */

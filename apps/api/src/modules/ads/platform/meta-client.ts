@@ -541,9 +541,10 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       currency: string;
       spend_cap?: string;
       amount_spent?: string;
+      balance?: string;
       account_status?: number;
     }>(this.accountId, {
-      fields: 'id,currency,spend_cap,amount_spent,account_status',
+      fields: 'id,currency,spend_cap,amount_spent,balance,account_status',
     });
 
     const spendCapCents = body.spend_cap === undefined ? null : spendCapFromString(body.spend_cap);
@@ -558,6 +559,11 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       amountSpentCents,
       capReached: spendCapCents !== null && amountSpentCents >= spendCapCents,
       prepaidBalanceCents: null,
+      // Verified live 2026-09-30: "6008" on a card-paid account, the unbilled
+      // spend its next charge takes — the gap between Meta's "Saldo total"
+      // and "disponível após seu próximo pagamento" on the billing screen.
+      amountDueCents:
+        body.balance === undefined ? null : centsFromMinorUnitString(body.balance, 'balance'),
       fundingKind: null,
       warnings: [],
     };

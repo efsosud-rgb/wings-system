@@ -1087,6 +1087,14 @@ export async function applyPlatformLimit(
     limit: PlatformSpendLimit;
     /** Why the platform would not answer, in its own words; null when it did. */
     note?: string | null;
+    /** The account figures behind the limit, as the platform printed them. */
+    figures?: {
+      spendCapCents: Cents | null;
+      amountSpentCents: Cents;
+      amountDueCents: Cents | null;
+      prepaidBalanceCents: Cents | null;
+      fundingKind: string | null;
+    };
     now?: Date;
   },
 ): Promise<PlatformLimitResult | null> {
@@ -1120,6 +1128,13 @@ export async function applyPlatformLimit(
       platformLimitSource: input.limit.source,
       platformLimitSyncedAt: now,
       platformLimitNote: input.note ?? null,
+      platformSpendCapCents: input.figures?.spendCapCents ?? null,
+      platformAmountSpentCents: input.figures?.amountSpentCents ?? null,
+      platformAmountDueCents: input.figures?.amountDueCents ?? null,
+      platformPrepaidBalanceCents: input.figures?.prepaidBalanceCents ?? null,
+      platformFundingKind: input.figures?.fundingKind ?? null,
+      platformReadAttemptedAt: now,
+      platformReadError: null,
       updatedAt: now,
     })
     .where(eq(budgetPeriods.id, row.id));
