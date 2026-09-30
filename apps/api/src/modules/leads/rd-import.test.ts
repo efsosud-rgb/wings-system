@@ -258,6 +258,7 @@ describe('importRdDeals', () => {
     expect(expansion?.stageChangedAt?.toISOString()).toBe('2026-09-05T18:00:00.000Z');
 
     const formatacao = await db.query.leads.findFirst({ where: eq(leads.rdDealId, 'd-fmt') });
+    expect(formatacao?.createdAt.toISOString()).toBe('2026-09-10T13:00:00.000Z');
     expect(formatacao).toMatchObject({
       source: 'rd_crm',
       email: 'dois@example.com',
@@ -362,5 +363,94 @@ describe('recordDealOnLead (intake jobs)', () => {
     });
     const events = await db.query.leadEvents.findMany({ where: eq(leadEvents.leadId, lead.id) });
     expect(events.map((event) => event.kind)).toContain('rd.deal_created');
+  });
+});
+
+describe('recordDealOnLead does not guess', () => {
+  const conversionFor = (phone: string, occurredAt = new Date()) => ({
+    contactUuid: 'y',
+    identifier: 'wings-company-form-site',
+    occurredAt,
+    name: null,
+    email: null,
+    phone,
+    company: null,
+    utms: null,
+    page: null,
+    eventType: 'CONVERSION',
+    ads: null,
+  });
+
+  it('links nothing when two leads of the funnel share the phone', async () => {
+    for (const email of ['a@example.com', 'b@example.com']) {
+      await db
+        .insert(leads)
+        .values({ source: 'manual', phone: '5521966660001', email, pipeline: 'formatacao' });
+    }
+    expect(
+      await recordDealOnLead(db, {
+        conversion: conversionFor('21 96666-0001'),
+        dealId: 'rd-amb',
+        target: 'formatacao',
+        brand: null,
+      }),
+    ).toBe(false);
+  });
+
+  it('ignores a lead of the other funnel and one older than 30 days', async () => {
+    await db
+      .insert(leads)
+      .values({ source: 'manual', phone: '5521966660002', pipeline: 'expansao' });
+    await db.insert(leads).values({
+      source: 'manual',
+      phone: '5521966660003',
+      createdAt: new Date(Date.now() - 40 * 86_400_000),
+    });
+    expect(
+      await recordDealOnLead(db, {
+        conversion: conversionFor('21 96666-0002'),
+        dealId: 'rd-o1',
+        target: 'formatacao',
+        brand: null,
+      }),
+    ).toBe(false);
+    expect(
+      await recordDealOnLead(db, {
+        conversion: conversionFor('21 96666-0003'),
+        dealId: 'rd-o2',
+        target: 'formatacao',
+        brand: null,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe('the Funil list and summary over imported leads', () => {
+  it('filters by funnel, stage, outcome and stale days, and sums per brand', async () => {
+    const { listLeads, funnelSummary } = await import('./service.js');
+    const expansion = await listLeads(db, { pipeline: 'expansao' });
+    expect(expansion.leads.every((lead) => lead.pipeline === 'expansao')).toBe(true);
+    expect(expansion.total).toBe(expansion.leads.length);
+
+    const lost = await listLeads(db, { outcome: 'lost' });
+    expect(lost.leads.map((lead) => lead.stage)).toContain('Identificação de interesse');
+
+    const byStage = await listLeads(db, { stage: 'Tentando contato' });
+    expect(byStage.leads.length).toBeGreaterThan(0);
+
+    // d-exp entered its stage on 2026-09-02: stale for more than 7 days; unknown stage times never count.
+    const stale = await listLeads(db, { staleDays: 7 });
+    expect(stale.leads.every((lead) => lead.stageChangedAt !== null && lead.won === null)).toBe(
+      true,
+    );
+
+    const summary = await funnelSummary(db, { days: 3650 });
+    const casal = summary.rows.find((row) => row.label === 'Casal dos Churros');
+    expect(casal).toMatchObject({ pipeline: 'expansao', arrived: 1, worked: 1 });
+    expect(summary.rows.find((row) => row.label === 'Formatação')?.arrived).toBeGreaterThanOrEqual(
+      2,
+    );
+    expect(summary.stages.some((stage) => stage.stage === 'Tentando contato')).toBe(true);
+    expect(summary.syncedAt).not.toBeNull();
   });
 });

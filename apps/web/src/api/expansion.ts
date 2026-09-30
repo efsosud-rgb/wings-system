@@ -94,3 +94,37 @@ export function useStartRecovery() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: RECOVERY_KEY }),
   });
 }
+
+// --- RD CRM users -> employees (CRM phase 1) ----------------------------------------
+
+export interface RdUserLink {
+  rdUserId: string;
+  rdName: string;
+  rdActive: boolean;
+  employeeId: string | null;
+  employeeName: string | null;
+}
+
+const RD_USERS_KEY = ['leads', 'rd-users'];
+
+export function useRdUsers(enabled: boolean) {
+  return useQuery({
+    queryKey: RD_USERS_KEY,
+    enabled,
+    queryFn: () =>
+      api.get<{ users: RdUserLink[]; employees: { id: string; name: string }[] }>(
+        '/leads/rd-users',
+      ),
+  });
+}
+
+export function useLinkRdUser() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { rdUserId: string; employeeId: string | null }) =>
+      api.put(`/leads/rd-users/${encodeURIComponent(input.rdUserId)}`, {
+        employeeId: input.employeeId,
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: RD_USERS_KEY }),
+  });
+}

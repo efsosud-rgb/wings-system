@@ -1,5 +1,5 @@
 import { normalizeBrazilianPhone, normalizeEmail } from '@wings/shared';
-import { and, asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, gte, isNull, or } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   clients,
@@ -69,9 +69,11 @@ export async function activeRules(db: Database): Promise<LandingPageRule[]> {
 }
 
 /**
- * The lead of the Funil with this conversion's phone or e-mail gets the RD
- * deal the intake just made, when it has none yet (CRM phase 1). No lead, no
- * change: the RD import brings the deal in on its next pass.
+ * The lead of the Funil this conversion is, gets the RD deal the intake just
+ * made (CRM phase 1). Only a lead with no deal yet, in the same funnel (or
+ * none said), that arrived in the 30 days before the conversion. When more
+ * than one fits, the one with both the phone and the e-mail wins; still more
+ * than one, nothing is linked (no guess) and the RD import sorts it out.
  */
 export async function recordDealOnLead(
   db: Database,
@@ -79,12 +81,28 @@ export async function recordDealOnLead(
 ): Promise<boolean> {
   const phone = normalizeBrazilianPhone(event.conversion.phone);
   const email = normalizeEmail(event.conversion.email);
-  const match = phone ? eq(leads.phone, phone) : email ? eq(leads.email, email) : null;
-  if (!match) return false;
-  const lead = await db.query.leads.findFirst({
-    where: and(match, isNull(leads.rdDealId)),
-    orderBy: asc(leads.createdAt),
-  });
+  const byContact = [
+    phone ? eq(leads.phone, phone) : null,
+    email ? eq(leads.email, email) : null,
+  ].filter((condition) => condition !== null);
+  if (byContact.length === 0) return false;
+  const since = new Date(event.conversion.occurredAt.getTime() - 30 * 86_400_000);
+  const candidates = await db
+    .select()
+    .from(leads)
+    .where(
+      and(
+        or(...byContact),
+        isNull(leads.rdDealId),
+        or(isNull(leads.pipeline), eq(leads.pipeline, event.target)),
+        gte(leads.createdAt, since),
+      ),
+    )
+    .limit(10);
+  const both = candidates.filter(
+    (lead) => phone && email && lead.phone === phone && lead.email === email,
+  );
+  const lead = candidates.length === 1 ? candidates[0] : both.length === 1 ? both[0] : undefined;
   if (!lead) return false;
   await db
     .update(leads)

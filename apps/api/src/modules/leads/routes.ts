@@ -3,6 +3,7 @@ import {
   generateTrackingCode,
   grantedScope,
   leadCreateSchema,
+  funnelSummaryQuerySchema,
   leadListQuerySchema,
   sourceRuleCreateSchema,
   trackingLinkCreateSchema,
@@ -14,13 +15,13 @@ import {
   type LeadTrackingLink,
   type LeadLinkChannel,
 } from '@wings/shared';
-import { asc, desc, eq } from 'drizzle-orm';
+import { asc, desc, eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { clients, leadSourceRules, leadTrackingLinks, leads } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { activeClient, toClient } from '../clients/routes.js';
-import { enqueueResearch, listLeads, loadLead, upsertLead } from './service.js';
+import { enqueueResearch, funnelSummary, listLeads, loadLead, upsertLead } from './service.js';
 
 const idParam = z.object({ id: z.uuid() });
 
@@ -60,9 +61,21 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
   app.get('/leads', { preHandler: app.requirePermission('leads.read') }, async (request, reply) => {
     const query = leadListQuerySchema.safeParse(request.query);
     if (!query.success) return reply.status(400).send(invalid('Filtro inválido.'));
-    const items = await listLeads(db, { ...query.data, ownerEmployeeId: ownerFilter(request) });
-    return reply.send({ leads: items });
+    const listed = await listLeads(db, { ...query.data, ownerEmployeeId: ownerFilter(request) });
+    return reply.send(listed);
   });
+
+  app.get(
+    '/leads/summary',
+    { preHandler: app.requirePermission('leads.read') },
+    async (request, reply) => {
+      const query = funnelSummaryQuerySchema.safeParse(request.query);
+      if (!query.success) return reply.status(400).send(invalid('Janela inválida.'));
+      return reply.send(
+        await funnelSummary(db, { days: query.data.days, ownerEmployeeId: ownerFilter(request) }),
+      );
+    },
+  );
 
   app.post(
     '/leads',
@@ -162,11 +175,18 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
         clientId: clients.id,
         clientName: clients.name,
         pipeline: leadSourceRules.pipeline,
+        brand: leadSourceRules.brand,
+        active: leadSourceRules.active,
         createdAt: leadSourceRules.createdAt,
       })
       .from(leadSourceRules)
-      .innerJoin(clients, eq(clients.id, leadSourceRules.clientId))
-      .orderBy(asc(clients.name), asc(leadSourceRules.kind), asc(leadSourceRules.pattern));
+      // A rule may name a brand that is not a client yet: it is listed too.
+      .leftJoin(clients, eq(clients.id, leadSourceRules.clientId))
+      .orderBy(
+        asc(sql`coalesce(${clients.name}, ${leadSourceRules.brand})`),
+        asc(leadSourceRules.kind),
+        asc(leadSourceRules.pattern),
+      );
     return rows.map((row) => ({
       ...row,
       kind: row.kind as LeadSourceRuleKind,

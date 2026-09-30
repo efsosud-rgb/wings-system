@@ -26,7 +26,13 @@ export const rdUserRoutes: FastifyPluginAsync = async (app) => {
       .from(rdUserMap)
       .leftJoin(employees, eq(employees.id, rdUserMap.employeeId))
       .orderBy(asc(rdUserMap.rdName));
-    return reply.send({ users: rows });
+    // The people a user can be linked to: the active employees, by name only.
+    const staff = await db
+      .select({ id: employees.id, name: employees.fullName })
+      .from(employees)
+      .where(eq(employees.status, 'active'))
+      .orderBy(asc(employees.fullName));
+    return reply.send({ users: rows, employees: staff });
   });
 
   app.put('/leads/rd-users/:rdUserId', guard, async (request, reply) => {

@@ -238,3 +238,46 @@ describe('RD CRM users -> employees', () => {
     expect(audit).toHaveLength(1);
   });
 });
+
+describe('review fixes (T3)', () => {
+  it('creates one lead when the same person arrives twice at the same moment', async () => {
+    const arrival = (source: 'manual' | 'rd_crm', externalId?: string) =>
+      upsertLead(db, {
+        source,
+        phone: '5511977770001',
+        externalId,
+        clientId: WINGS_CLIENT_ID,
+        clientMapped: false,
+        skipResearch: true,
+        event: { kind: 'lead.received.manual' },
+      });
+    const results = await Promise.all([
+      arrival('manual'),
+      arrival('rd_crm', 'deal-x'),
+      arrival('manual'),
+    ]);
+    expect(results.filter((result) => result.created)).toHaveLength(1);
+    expect(await db.select().from(leads).where(eq(leads.phone, '5511977770001'))).toHaveLength(1);
+  });
+
+  it('lists a rule whose brand is not a client yet, with its funnel', async () => {
+    const admin = await sessionFor('admin_master');
+    const response = await app.inject({
+      method: 'GET',
+      url: '/leads/source-rules',
+      cookies: admin.cookies,
+    });
+    expect(response.statusCode).toBe(200);
+    const rules = response.json().rules as {
+      pattern: string;
+      clientId: string | null;
+      brand: string | null;
+      pipeline: string | null;
+    }[];
+    expect(rules.find((rule) => rule.pattern === 'lp-marca-sem-cadastro')).toMatchObject({
+      clientId: null,
+      brand: 'Marca Sem Cadastro',
+      pipeline: 'expansao',
+    });
+  });
+});
