@@ -71,7 +71,7 @@ API: `GET/POST /expansion/landing-recovery`. Duas etapas, impostas pelo servidor
    menos de 2 h e o número confirmado é o que ela previu; a simulação autoriza uma execução.
 
 Escopo fixo: `wings-company-form-site`, `lp-formatacao-whatsapp` e `Formulário Simplificado. -02`
-→ Formatação / Novo Contato (sem dono); `lp-calcadao-do-frango` → Expansão / Novo Contato, dono
+→ Formatação / Sem contato (sem dono); `lp-calcadao-do-frango` → Expansão / Novo Contato, dono
 `EXPANSION_OWNER_RD_USER_ID`, com a tarefa "Fazer primeiro contato". `fluentform_3` só é contado.
 Mesma regra de cobertura do job (negócio aberto, ou criado depois da conversão, cobre; nunca
 duplica) e o mesmo `expansion_intake_ledger`. A resposta e a auditoria (`expansion.recovery_*`)
@@ -83,14 +83,14 @@ Agendador na API, a cada 5 minutos (a primeira passada depois de subir olha 72 h
 seguintes 6 h; o ledger torna a sobreposição de graça). Cobre os três formulários de
 Formatação: `wings-company-form-site`, `lp-formatacao-whatsapp` (o balão de WhatsApp do
 site, um pop-up do RD) e `Formulário Simplificado. -02`. Uma conversão sem negócio vira
-negócio em **Formatação / Novo Contato**, sem dono, com a origem "Contato pelo Site", a
+negócio em **Formatação / Sem contato** (a primeira etapa do funil; o RD não tem "Novo Contato" em Formatação), sem dono, com a origem "Contato pelo Site", a
 campanha "SITE WINGS // FORMATAÇÃO" e, no campo OBS, identificador, UTMs e página.
 
 Mesma regra de não duplicar da recuperação e do job de Expansão: contato com negócio aberto
 em qualquer funil, ou com negócio criado depois da conversão, é deixado como está; só cria,
 nunca altera um negócio existente. Conversões com menos de 15 min esperam (os fluxos do RD
 podem estar criando o negócio). Mesmo `expansion_intake_ledger`. Se a etapa "Formatação /
-Novo Contato" não existir no RD CRM, a passada para e grava `formatacao.intake_blocked`.
+Sem contato" não existir no RD CRM, a passada para e grava `formatacao.intake_blocked`.
 
 Chaves próprias (o job de Expansão continua desligado por `EXPANSION_INTAKE_ENABLED`):
 

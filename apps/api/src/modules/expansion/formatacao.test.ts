@@ -12,7 +12,7 @@ const calls: {
   path: string;
   body?: { deal?: Record<string, unknown>; [k: string]: unknown };
 }[] = [];
-let stageName = 'Novo Contato';
+let stageName = 'Sem contato';
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -143,7 +143,7 @@ describe('the Formatação safety net', () => {
     });
   });
 
-  it('a real run makes the missing deals in Formatação / Novo Contato with the origin, never touching an open deal', async () => {
+  it('a real run makes the missing deals in Formatação / Sem contato with the origin, never touching an open deal', async () => {
     const pass = await runFormatacaoOnce(db, credentials, {
       lookbackHours: 72,
       dryRun: false,
@@ -186,7 +186,7 @@ describe('the Formatação safety net', () => {
     expect(pass.result).toMatchObject({ alreadyDecided: 3, createdDealIds: [] });
   });
 
-  it('stops and audits when the Novo Contato stage is not in Formatação', async () => {
+  it('stops and audits when the Sem contato stage is not in Formatação', async () => {
     stageName = 'Outra etapa';
     const before = dealPosts().length;
     const pass = await runFormatacaoOnce(db, credentials, {
@@ -195,7 +195,7 @@ describe('the Formatação safety net', () => {
       fetchImpl: rdFetch,
       now,
     });
-    stageName = 'Novo Contato';
+    stageName = 'Sem contato';
     expect(pass).toMatchObject({ stageFound: false, result: null });
     expect(dealPosts()).toHaveLength(before);
     const [blocked] = await audits('formatacao.intake_blocked');
