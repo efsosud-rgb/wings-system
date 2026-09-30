@@ -102,3 +102,20 @@ Chaves próprias (o job de Expansão continua desligado por `EXPANSION_INTAKE_EN
 Não ligar este job e o de Expansão juntos sem ler isto: `wings-company-form-site` está nos
 dois destinos (Expansão o manda para "Sem contato"); o ledger evita duplicar, mas o primeiro
 que decidir a conversão define a etapa.
+
+### Negócio sem contato (Formatação)
+
+O RD só mantém o contato enviado dentro do `POST /deals` quando ainda não conhece aquela
+pessoa; se o contato já existe no CRM, o negócio pode nascer **sem contato**, e um negócio
+sem contato não serve. Por isso, depois de criar, a rede lê o negócio de volta e, sem contato,
+tenta ligá-lo por estas vias, na ordem, relendo o negócio depois de cada uma (a primeira que
+mostrar contato vale): `PUT /contacts/:id` com `deal_ids` (mantendo os negócios que o contato
+já tem), `PUT /deals/:id` com `contacts: [{_id}]`, e, para pessoa que o CRM não conhece,
+`POST /contacts` com `deal_ids`; por último `PUT /deals/:id` com o contato inteiro. A
+auditoria guarda só os status por via (`linkAttempts`, `formatacao.intake_repair`).
+
+Todo passe também confere os negócios que a rede criou nos últimos 3 dias e religa os que
+estejam sem contato (até 3 tentativas por negócio). **Trava de segurança:** se nenhuma via
+ligar o contato, grava `formatacao.intake_halted` e a rede só conta (como `DRY_RUN`) até um
+negócio ser lido de volta com contato (`formatacao.intake_linked_ok`); a auditoria mostra
+`haltedByOrphan`. Vias ainda não verificadas ao vivo em 2026-09-30.
