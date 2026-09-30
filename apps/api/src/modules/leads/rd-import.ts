@@ -22,9 +22,12 @@ import { upsertLead, type LeadRow } from './service.js';
  * into `leads` and nowhere else; the result and every log are counts, ids and
  * labels.
  *
- * Formats not checked against the live API are read tolerantly and their
- * shapes logged (`shapeOf`: keys and numbers, never strings): the users list,
- * a deal's custom fields and `deal_stage_histories` ("não verificado ao vivo").
+ * Formats are read tolerantly and their shapes logged (`shapeOf`: keys and
+ * numbers, never strings). Seen live on 2026-09-30 (staging simulation): the
+ * users list (`id`, `name`, `email`, `active`, `hidden`), the deal list with
+ * `contacts` (`emails[].email`, `phones[].phone`) and `deal_custom_fields`
+ * (`custom_field.label`, `value`), and `deal_stage_histories` as
+ * `{deal_stage_id, start_date, end_date}[]`.
  */
 
 export interface RdStage {
@@ -57,6 +60,8 @@ export interface RdDealRow {
   deal_source?: { name?: string } | null;
   campaign?: { name?: string } | null;
   deal_lost_reason?: { name?: string } | null;
+  /** The deal list carries its contacts (seen live 2026-09-30); older answers may not. */
+  contacts?: RdContactRow[];
   deal_custom_fields?: {
     value?: unknown;
     custom_field?: { label?: string } | null;
@@ -84,8 +89,15 @@ export interface RdCrmReader {
 const idOf = (row: { id?: string; _id?: string } | null | undefined) => row?.id ?? row?._id ?? null;
 const ymd = (date: Date) => date.toISOString().slice(0, 10);
 
-export function rdCrmReader(token: string, fetchImpl: typeof fetch = fetch): RdCrmReader {
-  const get = rdCrmGetter(token, fetchImpl);
+/** ~85 calls a minute at most: RD CRM's limit is per minute and shared with the intake jobs. */
+export const RD_IMPORT_MIN_INTERVAL_MS = 700;
+
+export function rdCrmReader(
+  token: string,
+  fetchImpl: typeof fetch = fetch,
+  minIntervalMs = RD_IMPORT_MIN_INTERVAL_MS,
+): RdCrmReader {
+  const get = rdCrmGetter(token, fetchImpl, { minIntervalMs });
   return {
     pipelines: () => get<RdPipelineRow[]>('/deal_pipelines', {}),
     async users() {
@@ -388,7 +400,9 @@ export async function importRdDeals(
       result.testDeals += 1;
 
     try {
-      const contact = contactOf(await rd.dealContacts(id));
+      const contact = contactOf(
+        Array.isArray(deal.contacts) ? deal.contacts : await rd.dealContacts(id),
+      );
       if (!contact.email && !contact.phone) result.noContactData += 1;
 
       let times: StageTimes = { firstContactAt: null, stageChangedAt: null };

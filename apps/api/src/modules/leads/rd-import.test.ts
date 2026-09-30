@@ -144,6 +144,7 @@ describe('importRdDeals', () => {
       deals: [
         {
           id: 'd-exp',
+          contacts: [{ id: 'c1', name: 'Pessoa Um', phones: [{ phone: '(11) 91111-0001' }] }],
           win: null,
           created_at: '2026-09-01T10:00:00-03:00',
           deal_stage: { id: 'e3' },
@@ -235,6 +236,8 @@ describe('importRdDeals', () => {
       failed: 0,
     });
     expect(rd.calls).not.toContain('contacts:d-parceria');
+    // The list already carried d-exp's contacts: no second call for them.
+    expect(rd.calls).not.toContain('contacts:d-exp');
     expect(rd.calls).not.toContain('contacts:d-old-closed');
     expect((await db.select().from(jobs)).length).toBe(jobsBefore);
 
