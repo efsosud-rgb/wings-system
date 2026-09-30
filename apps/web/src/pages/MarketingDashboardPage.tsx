@@ -17,6 +17,7 @@ import {
 } from '../api/dashboard.js';
 import { AudienceTab } from '../components/dashboard/AudienceTab.js';
 import { CampaignsTab } from '../components/dashboard/CampaignsTab.js';
+import { CampaignPicker } from '../components/dashboard/CampaignPicker.js';
 import { CockpitTab } from '../components/dashboard/CockpitTab.js';
 import { CreativesTab } from '../components/dashboard/CreativesTab.js';
 import { FunnelTab } from '../components/dashboard/FunnelTab.js';
@@ -114,12 +115,20 @@ export function MarketingDashboardPage() {
   const creatives = useDashboardCreatives(days);
   const audience = useDashboardAudience(days);
   const siteTraffic = useDashboardSite(days);
-  const cockpitData = useDashboardCockpit(days, campaignScope);
+  const pickedCampaigns = (params.get('campanha') ?? '').split(',').filter(Boolean);
+  const cockpitData = useDashboardCockpit(days, campaignScope, pickedCampaigns);
   const funnel = useDashboardFunnel(days);
 
   const setParam = (key: string, value: string) => {
     const next = new URLSearchParams(params);
     next.set(key, value);
+    setParams(next, { replace: true });
+  };
+
+  const setCampaigns = (ids: string[]) => {
+    const next = new URLSearchParams(params);
+    if (ids.length) next.set('campanha', ids.join(','));
+    else next.delete('campanha');
     setParams(next, { replace: true });
   };
 
@@ -168,6 +177,14 @@ export function MarketingDashboardPage() {
                   </Button>
                 ))}
               </div>
+            )}
+            {tab === 'cockpit' && (
+              <CampaignPicker
+                options={cockpitData.data?.cockpit.campaignOptions ?? []}
+                selected={pickedCampaigns}
+                scope={campaignScope}
+                onChange={setCampaigns}
+              />
             )}
             <div className="window-picker" role="group" aria-label="Período">
               {DASHBOARD_WINDOWS.map((option) => (

@@ -85,6 +85,7 @@ function Kpi({
   format,
   better,
   big,
+  why,
 }: {
   label: string;
   value: number | null;
@@ -92,6 +93,8 @@ function Kpi({
   format: (value: number) => string;
   better: Better;
   big?: boolean;
+  /** Shown under a "—", so an empty figure always says why. */
+  why?: string | null;
 }) {
   const shown = useCountUp(value ?? 0);
   return (
@@ -104,6 +107,7 @@ function Kpi({
         {value === null ? '—' : format(shown)}
       </span>
       <Delta current={value} previous={previous} better={better} />
+      {value === null && why && <span className="kpi-why muted">{why}</span>}
     </div>
   );
 }
@@ -113,7 +117,13 @@ const cpl = (figures: CockpitFigures) =>
 const ctr = (figures: CockpitFigures) =>
   figures.impressions > 0 ? (figures.clicks / figures.impressions) * 100_000 : null;
 
-function Funnel({ figures }: { figures: CockpitFigures }) {
+function Funnel({
+  figures,
+  selection,
+}: {
+  figures: CockpitFigures;
+  selection: DashboardCockpit['selection'];
+}) {
   const [filled, setFilled] = useState(reducedMotion());
   useEffect(() => {
     const id = setTimeout(() => setFilled(true), 30);
@@ -122,11 +132,15 @@ function Funnel({ figures }: { figures: CockpitFigures }) {
   const steps = [
     { label: 'Impressões', count: figures.impressions, why: '' },
     { label: 'Cliques', count: figures.clicks, why: '' },
-    { label: 'Sessões', count: figures.sessions, why: 'GA4 ainda não conectado' },
+    {
+      label: 'Sessões',
+      count: figures.sessions,
+      why: selection?.why.sessions ?? 'GA4 ainda não conectado',
+    },
     { label: 'Leads', count: figures.leads, why: '' },
-    { label: 'Leads no CRM', count: figures.crmLeads, why: '' },
-    { label: 'Reuniões', count: figures.meetings, why: '' },
-    { label: 'Vendas', count: figures.sales, why: '' },
+    { label: 'Leads no CRM', count: figures.crmLeads, why: selection?.why.crmLeads ?? '' },
+    { label: 'Reuniões', count: figures.meetings, why: selection?.why.meetings ?? '' },
+    { label: 'Vendas', count: figures.sales, why: selection?.why.sales ?? '' },
   ];
   const top = Math.log10(Math.max(1, figures.impressions) + 1);
   return (
@@ -469,6 +483,7 @@ export function CockpitTab({ data }: { data: DashboardCockpit }) {
         />
         <Kpi
           label="Sessões no site"
+          why={data.selection?.why.sessions ?? 'GA4 ainda não conectado'}
           value={current.sessions}
           previous={previous.sessions}
           format={(v) => formatInt(Math.round(v))}
@@ -476,6 +491,7 @@ export function CockpitTab({ data }: { data: DashboardCockpit }) {
         />
         <Kpi
           label="Reuniões"
+          why={data.selection?.why.meetings}
           value={current.meetings}
           previous={previous.meetings}
           format={(v) => formatInt(Math.round(v))}
@@ -483,6 +499,7 @@ export function CockpitTab({ data }: { data: DashboardCockpit }) {
         />
         <Kpi
           label="Vendas"
+          why={data.selection?.why.sales}
           value={current.sales}
           previous={previous.sales}
           format={(v) => formatInt(Math.round(v))}
@@ -530,7 +547,7 @@ export function CockpitTab({ data }: { data: DashboardCockpit }) {
 
         <section className="cockpit-card" aria-labelledby="cockpit-funnel">
           <h2 id="cockpit-funnel">Funil</h2>
-          <Funnel figures={current} />
+          <Funnel figures={current} selection={data.selection} />
           <p className="cell-sub">
             Meta e Google somados; CRM pelas etiquetas do RD. Em cinza, o custo de cada etapa (gasto
             ÷ quantidade). Escala logarítmica. Detalhes na aba Funil.
