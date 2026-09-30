@@ -78,3 +78,23 @@ Os jobs `expansion-intake`, `formatacao-intake` e a recuperação gravam o
 negócio (`recordDealOnLead`, evento `rd.deal_created`).
 
 Mudar a etapa dentro do Funil **não** escreve no RD nesta fase.
+
+## Lote de importação e como desfazer
+
+Cada `leads-import-rd --apply` recebe um lote (`rd-crm-AAAAMMDDTHHMMZ`, impresso
+no início e gravado na auditoria `leads.import_rd`); o seguimento por hora usa
+`rd-crm-sync-…`. Leads **criados** pelo lote levam `leads.import_batch_id`;
+leads que **já existiam** e foram tocados ganham um evento `rd.import_batch` com
+o que eram antes (ids, rótulos e datas; nada pessoal) e a lista de lacunas que
+a importação preencheu.
+
+```
+node dist/scripts/leads-import-rd-undo.js --batch=rd-crm-...            # simula (contagens)
+node dist/scripts/leads-import-rd-undo.js --batch=rd-crm-... --apply    # desfaz, numa transação
+```
+
+Desfazer remove os leads criados pelo lote (com a linha do tempo) e devolve os
+que já existiam ao estado anterior, esvaziando de novo as lacunas preenchidas;
+grava `leads.import_rd_undone` na auditoria. O mapa `rd_user_map` fica (é a
+lista dos nossos usuários do RD, sem nada de lead). O seguimento por hora
+(`CRM_RD_FOLLOW_ENABLED`) deve estar desligado ao desfazer.

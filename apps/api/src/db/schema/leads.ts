@@ -117,6 +117,8 @@ export const leads = pgTable(
     adSetExternalId: text('ad_set_external_id'),
     adExternalId: text('ad_external_id'),
     referrer: text('referrer'),
+    /** The import run that created this lead (`leads-import-rd`), so one run can be undone alone. */
+    importBatchId: text('import_batch_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -124,6 +126,7 @@ export const leads = pgTable(
     uniqueIndex('leads_source_external_uq').on(table.source, table.externalId),
     uniqueIndex('leads_rd_deal_uq').on(table.rdDealId),
     index('leads_pipeline_stage_idx').on(table.pipeline, table.stage),
+    index('leads_import_batch_idx').on(table.importBatchId),
     index('leads_phone_idx').on(table.tenantId, table.phone),
     index('leads_email_idx').on(table.tenantId, table.email),
     index('leads_client_created_idx').on(table.clientId, table.createdAt),
@@ -176,6 +179,11 @@ export const leadSourceRules = pgTable(
     pipeline: text('pipeline'),
     brand: text('brand'),
     active: boolean('active').notNull().default(true),
+    /** The page's public address, when known (a landing page generated in CRM Vendas → Landing pages). */
+    url: text('url'),
+    /** Archived: it stops mapping conversions; history and reports keep it. `active` is false with it. */
+    archivedAt: timestamp('archived_at', { withTimezone: true }),
+    archivedBy: uuid('archived_by').references(() => employees.id),
     createdBy: uuid('created_by').references(() => employees.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

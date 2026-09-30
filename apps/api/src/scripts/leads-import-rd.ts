@@ -1,6 +1,7 @@
 import { createDb } from '../db/client.js';
 import { loadDotEnv } from '../db/load-env.js';
 import { loadEnv } from '../env.js';
+import { auditLog } from '../db/schema/index.js';
 import { importRdDeals, rdCrmReader, type RdImportResult } from '../modules/leads/rd-import.js';
 
 /**
@@ -39,10 +40,17 @@ async function main() {
   const sinceArg = process.argv.find((arg) => arg.startsWith('--since='))?.slice(8) ?? '2026-06-30';
   const since = new Date(`${sinceArg}T00:00:00-03:00`);
   if (Number.isNaN(since.getTime())) throw new Error('--since must be YYYY-MM-DD');
+  const apply = process.argv.includes('--apply');
+  // One id per applied run: new leads carry it, and `leads-import-rd-undo --batch=<id>` takes the run back.
+  const batchId = apply
+    ? `rd-crm-${new Date().toISOString().replace(/[-:]/g, '').slice(0, 13)}Z`
+    : undefined;
   const { db, pool } = createDb(env.DATABASE_URL);
   try {
+    if (batchId) console.warn(`lote: ${batchId}`);
     const result = await importRdDeals(db, rdCrmReader(env.RD_CRM_API_TOKEN), {
-      apply: process.argv.includes('--apply'),
+      apply,
+      batchId,
       since,
       histories: !process.argv.includes('--no-histories'),
       log: (facts) => console.warn(JSON.stringify(facts)),
@@ -51,6 +59,23 @@ async function main() {
       },
     });
     console.warn(formatImport(result));
+    if (batchId) {
+      await db.insert(auditLog).values({
+        action: 'leads.import_rd',
+        entity: 'lead_import_batch',
+        entityId: batchId,
+        metadata: {
+          since: sinceArg,
+          created: result.created,
+          merged: result.merged,
+          inScope: result.inScope,
+          failed: result.failed,
+        },
+      });
+      console.warn(
+        `para desfazer só este lote: node dist/scripts/leads-import-rd-undo.js --batch=${batchId} [--apply]`,
+      );
+    }
   } finally {
     await pool.end();
   }

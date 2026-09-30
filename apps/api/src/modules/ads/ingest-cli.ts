@@ -422,6 +422,7 @@ async function main() {
               window: { since: new Date(now.getTime() - 3 * 24 * 3600_000), until: now },
               histories: true,
               onlyMissing: true,
+              batchId: `rd-crm-sync-${now.toISOString().replace(/[-:]/g, '').slice(0, 13)}Z`,
             });
             const times = await refreshStageTimes(db, reader, {
               pipelines: read.pipelines,
