@@ -2,6 +2,8 @@ import type {
   Client,
   ExpansionEntry,
   FunnelSummary,
+  LandingPageCreateInput,
+  LandingPageItem,
   Lead,
   LeadCreateInput,
   LeadEvent,
@@ -154,5 +156,47 @@ export function useUpdateExpansionArea() {
         },
       ),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['clients'] }),
+  });
+}
+
+// --- CRM Vendas → Landing pages ----------------------------------------------------
+
+const LANDING_KEY = ['leads', 'landing-pages'];
+
+export function useLandingPages() {
+  return useQuery({
+    queryKey: LANDING_KEY,
+    queryFn: () => api.get<{ pages: LandingPageItem[]; baseUrl: string }>('/crm/landing-pages'),
+  });
+}
+
+export function useCreateLandingPage() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: LandingPageCreateInput) =>
+      api.post<{ page: LandingPageItem }>('/crm/landing-pages', input),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['leads'] }),
+  });
+}
+
+export function useArchiveLandingPage() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { id: string; archive: boolean }) =>
+      api.post<{ ok: true }>(
+        `/crm/landing-pages/${input.id}/${input.archive ? 'archive' : 'restore'}`,
+      ),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['leads'] }),
+  });
+}
+
+export function useDeleteLandingPage() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { id: string; confirm: string }) =>
+      api.delete<void>(
+        `/crm/landing-pages/${input.id}?confirm=${encodeURIComponent(input.confirm)}`,
+      ),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['leads'] }),
   });
 }

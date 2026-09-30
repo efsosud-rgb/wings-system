@@ -3,9 +3,6 @@ import {
   CLIENT_NUMBER_MAX,
   LEAD_LINK_CHANNELS,
   LEAD_CHANNEL_LABELS,
-  LEAD_SOURCE_RULE_KINDS,
-  LEAD_PIPELINE_LABELS,
-  LEAD_SOURCE_RULE_KIND_LABELS,
   PROJECT_STATUS_LABELS,
   WINGS_CLIENT_ID,
   formatCnpj,
@@ -13,7 +10,6 @@ import {
   isValidCnpj,
   type Client,
   type LeadLinkChannel,
-  type LeadSourceRuleKind,
 } from '@wings/shared';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
@@ -21,14 +17,7 @@ import { hasPermission, useSession } from '../api/auth.js';
 import { ApiError } from '../api/client.js';
 import { useClients, useCnpjLookup, useCreateClient, useUpdateClient } from '../api/clients.js';
 import { useProjects } from '../api/projects.js';
-import {
-  useCreateSourceRule,
-  useCreateTrackingLink,
-  useDeleteSourceRule,
-  useSourceRules,
-  useTrackingLinks,
-  useUpdateExpansionArea,
-} from '../api/leads.js';
+import { useCreateTrackingLink, useTrackingLinks, useUpdateExpansionArea } from '../api/leads.js';
 import { ProjectStatusTag, StatusDialog, stageLabel } from '../components/projects/ProjectParts.js';
 import { Alert, Button, Field, Input, Select } from '../components/ui.js';
 import type { ClientProject } from '@wings/shared';
@@ -341,133 +330,6 @@ function ClientRow({
   );
 }
 
-function SourceRules({ clients }: { clients: Client[] }) {
-  const rules = useSourceRules();
-  const create = useCreateSourceRule();
-  const remove = useDeleteSourceRule();
-  const [kind, setKind] = useState<LeadSourceRuleKind>('landing_page');
-  const [pattern, setPattern] = useState('');
-  const [clientId, setClientId] = useState('');
-  const list = rules.data?.rules ?? [];
-
-  return (
-    <section className="block">
-      <h2>Origens de leads</h2>
-      <p className="muted">
-        De qual cliente é cada landing page ou formulário. Uma conversão sem regra vira lead mesmo
-        assim, marcado "sem regra" e arquivado na Wings Company até alguém cadastrar a regra aqui.
-      </p>
-      <form
-        className="filters"
-        onSubmit={(event) => {
-          event.preventDefault();
-          create.mutate({ kind, pattern, clientId }, { onSuccess: () => setPattern('') });
-        }}
-      >
-        <label className="field">
-          <span className="field-label">Tipo</span>
-          <select
-            className="control"
-            value={kind}
-            onChange={(event) => setKind(event.target.value as LeadSourceRuleKind)}
-          >
-            {LEAD_SOURCE_RULE_KINDS.map((item) => (
-              <option key={item} value={item}>
-                {LEAD_SOURCE_RULE_KIND_LABELS[item]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="field">
-          <span className="field-label">Padrão</span>
-          <input
-            className="control"
-            value={pattern}
-            placeholder={
-              kind === 'landing_page' ? 'sushi-do-bairro ou lp.cliente.com.br' : 'id numérico'
-            }
-            onChange={(event) => {
-              setPattern(event.target.value);
-              create.reset();
-            }}
-          />
-        </label>
-        <label className="field">
-          <span className="field-label">Cliente</span>
-          <select
-            className="control"
-            value={clientId}
-            onChange={(event) => setClientId(event.target.value)}
-          >
-            <option value="">Escolha</option>
-            {clients
-              .filter((client) => client.active)
-              .map((client) => (
-                <option key={client.id} value={client.id}>
-                  {client.name}
-                </option>
-              ))}
-          </select>
-        </label>
-        <Button type="submit" disabled={create.isPending || pattern.trim().length < 2 || !clientId}>
-          Adicionar regra
-        </Button>
-      </form>
-      {create.error && (
-        <Alert kind="error">
-          {create.error instanceof ApiError
-            ? create.error.message
-            : 'Não foi possível salvar a regra.'}
-        </Alert>
-      )}
-      {rules.isError && <Alert kind="error">Não foi possível carregar as regras.</Alert>}
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Tipo</th>
-            <th>Padrão</th>
-            <th>Cliente</th>
-            <th>Funil</th>
-            <th>
-              <span className="sr-only">Ações</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {list.length === 0 && (
-            <tr>
-              <td colSpan={5} className="muted">
-                Nenhuma regra ainda.
-              </td>
-            </tr>
-          )}
-          {list.map((rule) => (
-            <tr key={rule.id}>
-              <td>{LEAD_SOURCE_RULE_KIND_LABELS[rule.kind].split(' (')[0]}</td>
-              <td className="mono">{rule.pattern}</td>
-              <td>
-                {rule.clientName ?? (rule.brand ? `${rule.brand} (marca sem cadastro)` : '—')}
-                {!rule.active && <span className="muted"> · inativa</span>}
-              </td>
-              <td>{rule.pipeline ? LEAD_PIPELINE_LABELS[rule.pipeline] : '—'}</td>
-              <td>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  disabled={remove.isPending}
-                  onClick={() => remove.mutate(rule.id)}
-                >
-                  Remover
-                </Button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
-  );
-}
-
 /** "Cadastro rápido": the name, and the CNPJ and main contact when already known. */
 function QuickCreate() {
   const create = useCreateClient();
@@ -678,7 +540,6 @@ export function ClientsPage() {
         </table>
       </div>
 
-      {canManage && <SourceRules clients={list} />}
       {statusOf && <StatusDialog project={statusOf} onClose={() => setStatusOf(null)} />}
     </>
   );
