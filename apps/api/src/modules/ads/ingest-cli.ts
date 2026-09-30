@@ -410,26 +410,29 @@ async function main() {
         console.warn(`rd crm: ${read.deals} negociação(ões) dos últimos 90 dias`);
         // CRM phase 1: the Funil follows RD — stages of the leads it has, the
         // deals of the last 3 days it lacks, and a few stage histories.
-        try {
-          const follow = await followRdStages(db, { deals: read.raw, pipelines: read.pipelines });
-          const reader = rdCrmReader(env.RD_CRM_API_TOKEN);
-          const imported = await importRdDeals(db, reader, {
-            apply: true,
-            since: new Date(now.getTime() - 3 * 24 * 3600_000),
-            window: { since: new Date(now.getTime() - 3 * 24 * 3600_000), until: now },
-            histories: true,
-            onlyMissing: true,
-          });
-          const times = await refreshStageTimes(db, reader, {
-            pipelines: read.pipelines,
-            limit: 40,
-          });
-          console.warn(
-            `funil: ${follow.updated} lead(s) seguiram o RD (${follow.stageChanged} mudaram de etapa); ${imported.created} novo(s), ${imported.merged} ligado(s); histórico ${times.read} lido(s), ${times.failed} falha(s)`,
-          );
-        } catch (error) {
-          console.error(`funil: falhou (${error instanceof Error ? error.name : 'unknown'})`);
-        }
+        if (env.CRM_RD_FOLLOW_ENABLED !== 'true') {
+          console.warn('funil: seguimento do RD desligado (CRM_RD_FOLLOW_ENABLED)');
+        } else
+          try {
+            const follow = await followRdStages(db, { deals: read.raw, pipelines: read.pipelines });
+            const reader = rdCrmReader(env.RD_CRM_API_TOKEN);
+            const imported = await importRdDeals(db, reader, {
+              apply: true,
+              since: new Date(now.getTime() - 3 * 24 * 3600_000),
+              window: { since: new Date(now.getTime() - 3 * 24 * 3600_000), until: now },
+              histories: true,
+              onlyMissing: true,
+            });
+            const times = await refreshStageTimes(db, reader, {
+              pipelines: read.pipelines,
+              limit: 40,
+            });
+            console.warn(
+              `funil: ${follow.updated} lead(s) seguiram o RD (${follow.stageChanged} mudaram de etapa); ${imported.created} novo(s), ${imported.merged} ligado(s); histórico ${times.read} lido(s), ${times.failed} falha(s)`,
+            );
+          } catch (error) {
+            console.error(`funil: falhou (${error instanceof Error ? error.name : 'unknown'})`);
+          }
       } catch (error) {
         console.error(`rd crm: falhou (${error instanceof Error ? error.name : 'unknown'})`);
       }
