@@ -73,6 +73,19 @@ async function runCase(n) {
       body: rdStatus === 200 ? JSON.stringify({ result: 'ok', message: 'ok' }) : JSON.stringify({ errors: [{ error_type: 'INVALID', error_message: 'simulated' }] }),
     });
   });
+  // GA4 hits seen at the network layer before they leave (routes still see keepalive beacons sent while unloading)
+  await ctx.route(/\/g\/collect/, async (route) => {
+    try {
+      const q = route.request();
+      if (/tid=G-C10F4NPBF0/.test(q.url())) {
+        for (const line of [q.url().split('?')[1] || '', ...(q.postData() || '').split(/\r?\n/)]) {
+          const p = new URLSearchParams(line);
+          if (p.get('en')) (rec.ga4routed = rec.ga4routed || []).push({ en: p.get('en'), at: Date.now() });
+        }
+      }
+    } catch {}
+    return route.continue();
+  });
   // WhatsApp never opens.
   await ctx.route(/(wa\.me|whatsapp\.com)/i, (route) => route.abort());
 
@@ -90,6 +103,18 @@ async function runCase(n) {
         rec.tags.ga4.push({ en: q.get('en'), ...ep });
       }
     } catch {}
+    // GA4 batches events in a POST body: one URL-encoded line per event
+    if (/\/g\/collect/.test(u) && req.method() === 'POST' && /tid=G-C10F4NPBF0/.test(u)) {
+      (rec.ga4raw = rec.ga4raw || []).push({ url_en: new URL(u).searchParams.get('en'), body: (req.postData() || '').slice(0, 400) });
+      for (const line of (req.postData() || '').split('\n')) {
+        const p = new URLSearchParams(line);
+        if (p.get('en')) {
+          const ep = {};
+          for (const [k, v] of p) if (k.startsWith('ep.')) ep[k.slice(3)] = v;
+          rec.tags.ga4.push({ en: p.get('en'), batched: true, ...ep });
+        }
+      }
+    }
     // the pixel may send with POST body
     if (/facebook\.com\/tr/.test(u) && req.method() === 'POST') {
       const body = req.postData() || '';
@@ -105,6 +130,30 @@ async function runCase(n) {
         rec.dl.push({ event: e.event, rd_identifier: e.rd_identifier, rd_status: e.rd_status, rd_event_id: e.rd_event_id, at: Date.now() });
     } catch {}
   });
+  await ctx.exposeBinding('__wingsBeacon', (_src, entry) => {
+    try {
+      const e = JSON.parse(entry);
+      (rec.ga4beacons = rec.ga4beacons || []).push(e);
+      for (const line of [e.url.split('?')[1] || '', ...(e.body || '').split(/\r?\n/)]) {
+        const p = new URLSearchParams(line);
+        if (p.get('en') && !rec.tags.ga4.some((x) => x.en === p.get('en') && x.viaBeacon)) {
+          const ep = {};
+          for (const [k, v] of p) if (k.startsWith('ep.')) ep[k.slice(3)] = v;
+          rec.tags.ga4.push({ en: p.get('en'), viaBeacon: true, ...ep });
+        }
+      }
+    } catch {}
+  });
+  // GA4 hits sent by sendBeacon/fetch keepalive while the page unloads may never reach the network listener:
+  // record them from inside the page.
+  await ctx.addInitScript(() => {
+    const isGa4 = (u) => /\/g\/collect/.test(String(u)) && /tid=G-C10F4NPBF0/.test(String(u));
+    const report = (u, body) => { try { window.__wingsBeacon(JSON.stringify({ url: String(u), body: typeof body === 'string' ? body.slice(0, 2000) : '', at: Date.now() })); } catch (e) {} };
+    const nb = navigator.sendBeacon.bind(navigator);
+    navigator.sendBeacon = function (u, d) { if (isGa4(u)) report(u, typeof d === 'string' ? d : ''); return nb(u, d); };
+    const nf = window.fetch;
+    window.fetch = function (input, init) { try { const u = typeof input === 'string' ? input : input && input.url; if (isGa4(u)) report(u, init && typeof init.body === 'string' ? init.body : ''); } catch (e) {} return nf.apply(this, arguments); };
+  });
   await ctx.addInitScript(() => {
     let seen = 0;
     setInterval(() => {
@@ -118,9 +167,23 @@ async function runCase(n) {
     }, 100);
   });
   const page = await ctx.newPage();
-  page.on('framenavigated', (f) => { if (f === page.mainFrame()) rec.notes.push('navigated ' + f.url().slice(0, 100)); });
+  page.on('framenavigated', (f) => { if (f === page.mainFrame()) rec.notes.push(Date.now() + ' navigated ' + f.url().slice(0, 100)); });
+  page.on('request', (q) => { if (q.isNavigationRequest() && q.frame() === page.mainFrame()) rec.notes.push(Date.now() + ' navigation request ' + q.url().slice(0, 80)); });
+  if (args.holdnav) {
+    let armed = false; rec.armHold = () => { armed = true; };
+    await ctx.route(/^https:\/\/wingscompany\.com\.br\//, async (route) => {
+      const q = route.request();
+      if (armed && q.isNavigationRequest() && q.resourceType() === 'document') { rec.notes.push(Date.now() + ' holding navigation ' + args.holdnav + 'ms'); await new Promise((r) => setTimeout(r, Number(args.holdnav))); }
+      return route.continue();
+    });
+  }
   ctx.on('page', (p) => { if (p !== page) p.close().catch(() => {}); });
   if (injectCode) await page.addInitScript(injectCode);
+  // RD shows alert(thankyou_message) and then sets location.href = redirect_to. Options to study that race:
+  //   --dialogdelay <ms>  keep the alert open that long (a person reading it) before dismissing
+  //   --noredirect        drop the form's redirect_to so the page stays after the 200
+  const dialogDelay = Number(args.dialogdelay || 0);
+  page.on('dialog', (d) => { rec.notes.push(Date.now() + ' dialog ' + d.type() + ' "' + d.message().slice(0, 40) + '"'); setTimeout(() => d.dismiss().catch(() => {}), dialogDelay); });
   await page.goto(SITE, { waitUntil: 'networkidle', timeout: 90000 });
   await page.waitForTimeout(2500);
 
@@ -196,8 +259,10 @@ async function runCase(n) {
     if (n === 1 || n === 2) {
       const sel = 'form#conversion-form-wings-company-form-site';
       await page.locator(sel).first().scrollIntoViewIfNeeded();
+      if (args.noredirect) rec.notes.push(await page.evaluate((sel) => { const f = document.querySelector(sel); const r = f.querySelector('input[name=redirect_to]'); const had = r ? 'redirect_to=' + String(r.value).slice(0, 60) : 'no redirect_to input'; if (r) r.remove(); f.removeAttribute('data-asset-action'); delete f.dataset.assetAction; return 'removed ' + had; }, sel));
       rec.notes.push(JSON.stringify(await fillForm(sel)));
-      rec.notes.push(await submitForm(sel));
+      if (rec.armHold) rec.armHold();
+      rec.notes.push(Date.now() + ' ' + (await submitForm(sel)));
     } else if (n === 3) {
       rec.notes.push(await page.evaluate(() => { const b = document.querySelector('.rdstation-popup-js-floating-button'); if (!b) return 'no floating button'; b.click(); return 'floating clicked'; }));
       const sel = 'form.rdstation-popup-js-form-identifier';
@@ -223,7 +288,7 @@ async function runCase(n) {
   } catch (e) {
     rec.notes.push('action error: ' + e.message.split('\n')[0]);
   }
-  await page.waitForTimeout(6000);
+  await page.waitForTimeout(Number(args.wait || 6000));
 
   await page.evaluate((r) => {
     window.dataLayer = window.dataLayer || [];
@@ -243,6 +308,7 @@ for (const n of cases) {
   console.log('dataLayer rd events:', JSON.stringify(r.dl));
   console.log('tags -> meta:', JSON.stringify(r.tags.meta), '| gads:', JSON.stringify(r.tags.gads), '| ga4:', JSON.stringify(r.tags.ga4));
   console.log('notes:', r.notes.join(' | '));
+  console.log('ga4 via route:', JSON.stringify((r.ga4routed || []).map((x) => x.en + '@' + (x.at - ((r.dl[0] || {}).at || x.at)))));
 }
 writeFileSync(out, JSON.stringify({ container, inject, at: new Date().toISOString(), results }, null, 2));
 console.log('\nreport:', out);

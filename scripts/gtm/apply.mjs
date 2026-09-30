@@ -15,6 +15,7 @@ if (!/rd_conversion_accepted/.test(html)) throw new Error('tag html does not loo
 const log = (...a) => console.log(...a);
 const t = (key, value) => ({ type: 'template', key, value });
 const b = (key, value) => ({ type: 'boolean', key, value: value ? 'true' : 'false' });
+const i = (key, value) => ({ type: 'integer', key, value: String(value) });
 
 // ---- current state
 const tags = await listAll(`${WS_PATH}/tags`, 'tag');
@@ -33,7 +34,14 @@ if (!builtIns.some((v) => v.type === 'clickUrl')) {
 async function ensureVariable(spec) {
   const existing = byName(variables, spec.name);
   if (existing) {
-    log(`variable exists: ${spec.name} [${existing.variableId}]`);
+    const same = JSON.stringify(existing.parameter) === JSON.stringify(spec.parameter);
+    if (same) {
+      log(`variable exists: ${spec.name} [${existing.variableId}]`);
+      return existing;
+    }
+    const updated = await call('PUT', `${WS_PATH}/variables/${existing.variableId}?fingerprint=${existing.fingerprint}`, spec);
+    Object.assign(existing, updated);
+    log(`variable updated: ${spec.name} [${existing.variableId}]`);
     return existing;
   }
   const created = await call('POST', `${WS_PATH}/variables`, spec);
@@ -45,19 +53,19 @@ await ensureVariable({
   name: 'DLV - rd_event_id',
   type: 'v',
   parentFolderId: FOLDER_VARS,
-  parameter: [t('name', 'rd_event_id'), t('dataLayerVersion', '2'), b('setDefaultValue', false)],
+  parameter: [t('name', 'rd_event_id'), i('dataLayerVersion', 2), b('setDefaultValue', false)],
 });
 await ensureVariable({
   name: 'DLV - rd_identifier',
   type: 'v',
   parentFolderId: FOLDER_VARS,
-  parameter: [t('name', 'rd_identifier'), t('dataLayerVersion', '2'), b('setDefaultValue', false)],
+  parameter: [t('name', 'rd_identifier'), i('dataLayerVersion', 2), b('setDefaultValue', false)],
 });
 await ensureVariable({
   name: 'DLV - rd_status',
   type: 'v',
   parentFolderId: FOLDER_VARS,
-  parameter: [t('name', 'rd_status'), t('dataLayerVersion', '2'), b('setDefaultValue', false)],
+  parameter: [t('name', 'rd_status'), i('dataLayerVersion', 2), b('setDefaultValue', false)],
 });
 await ensureVariable({
   name: 'Google Ads - RD form conversion',
@@ -188,6 +196,8 @@ await updateTag('Google Ads - WhatsApp_clique', (x) => {
 });
 await updateTag('GA4 - Evento WhatsApp_click', (x) => {
   x.firingTriggerId = [trigWaClick.triggerId];
+  // the event name pointed at a data layer variable that no longer exists on a link click ("undefined" in GA4)
+  setParam(x, 'eventName', 'whatsapp_click');
 });
 
 log('done');

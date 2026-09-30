@@ -12,7 +12,8 @@
   Campos: rd_identifier (conversion_identifier do formulário ou pop-up),
   rd_status (número) e rd_event_id (UUID v4, o mesmo para Pixel, Google e GA4).
   Nunca nome, e-mail, telefone ou qualquer outro campo do formulário.
-  ES5, tudo dentro de try/catch: uma falha aqui nunca quebra o site nem o envio.
+  ES5 estrito (funções internas como expressões, pois o compilador do GTM recusa
+  declarações function dentro de bloco), tudo dentro de try/catch: uma falha aqui nunca quebra o site nem o envio.
 -->
 <script>
   (function () {
@@ -27,7 +28,7 @@
       var RD_URL = /^(https?:)?\/\/([a-z0-9-]+\.)*(rdstation\.com(\.br)?|rd\.services)\/[^?#]*conversions/i;
       var IDENT = /conversion_identifier["']?\s*[:=]\s*["']?([A-Za-z0-9._\-]+)/;
 
-      function uuid() {
+      var uuid = function () {
         try {
           if (window.crypto && typeof window.crypto.randomUUID === 'function') {
             return window.crypto.randomUUID();
@@ -39,18 +40,18 @@
           t = Math.floor(t / 16);
           return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
         });
-      }
+      };
 
-      function isRd(url) {
+      var isRd = function (url) {
         try {
           return RD_URL.test(String(url || ''));
         } catch (e) {
           return false;
         }
-      }
+      };
 
       /* Só o identificador sai do corpo: o resto (nome, e-mail, telefone) nunca é lido para fora. */
-      function identifierOf(body, url) {
+      var identifierOf = function (body, url) {
         try {
           if (!body) {
             body = '';
@@ -83,9 +84,9 @@
           }
         } catch (e) {}
         return 'desconhecido';
-      }
+      };
 
-      function report(identifier, status, kind) {
+      var report = function (identifier, status, kind) {
         try {
           var accepted = status >= 200 && status < 300;
           window.dataLayer = window.dataLayer || [];
@@ -101,7 +102,7 @@
             rd_event_id: uuid(),
           });
         } catch (e) {}
-      }
+      };
 
       /* fetch */
       try {
@@ -124,7 +125,7 @@
                     try {
                       report(
                         ident,
-                        response && typeof response.status === 'number' ? response.status : 0,
+                        response && typeof response.status === 'number' ? response.status : 0
                       );
                     } catch (e) {}
                   },
@@ -132,7 +133,7 @@
                     try {
                       report(ident, 0);
                     } catch (e) {}
-                  },
+                  }
                 );
               }
             } catch (e) {}
@@ -141,7 +142,9 @@
         }
       } catch (e) {}
 
-      /* XMLHttpRequest */
+      /* XMLHttpRequest. O ouvinte entra no open(), antes do handler do RD (jQuery liga onload
+         depois do open): assim o evento sai para o GTM antes do alert() e do redirecionamento
+         que o RD faz no sucesso, e o GA4 tem tempo de enviar. */
       try {
         if (window.XMLHttpRequest && XMLHttpRequest.prototype) {
           var nativeOpen = XMLHttpRequest.prototype.open;
@@ -149,39 +152,37 @@
           XMLHttpRequest.prototype.open = function (method, url) {
             try {
               this.__wingsRdUrl = isRd(url) ? String(url) : null;
+              this.__wingsRdDone = false;
+              if (this.__wingsRdUrl && typeof this.addEventListener === 'function') {
+                var xhr = this;
+                var finish = function () {
+                  if (xhr.__wingsRdDone) {
+                    return;
+                  }
+                  xhr.__wingsRdDone = true;
+                  try {
+                    report(
+                      identifierOf(xhr.__wingsRdBody, xhr.__wingsRdUrl),
+                      typeof xhr.status === 'number' ? xhr.status : 0
+                    );
+                  } catch (e) {}
+                };
+                xhr.addEventListener('readystatechange', function () {
+                  try {
+                    if (xhr.readyState === 4) {
+                      finish();
+                    }
+                  } catch (e) {}
+                });
+                xhr.addEventListener('loadend', finish);
+              }
             } catch (e) {}
             return nativeOpen.apply(this, arguments);
           };
           XMLHttpRequest.prototype.send = function (body) {
             try {
               if (this.__wingsRdUrl) {
-                var xhr = this;
-                var ident = identifierOf(body, xhr.__wingsRdUrl);
-                var done = false;
-                var finish = function () {
-                  if (done) {
-                    return;
-                  }
-                  done = true;
-                  try {
-                    report(ident, typeof xhr.status === 'number' ? xhr.status : 0);
-                  } catch (e) {}
-                };
-                if (typeof xhr.addEventListener === 'function') {
-                  xhr.addEventListener('loadend', finish);
-                } else {
-                  var previous = xhr.onreadystatechange;
-                  xhr.onreadystatechange = function () {
-                    try {
-                      if (xhr.readyState === 4) {
-                        finish();
-                      }
-                    } catch (e) {}
-                    if (typeof previous === 'function') {
-                      return previous.apply(this, arguments);
-                    }
-                  };
-                }
+                this.__wingsRdBody = body;
               }
             } catch (e) {}
             return nativeSend.apply(this, arguments);

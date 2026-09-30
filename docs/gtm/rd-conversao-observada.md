@@ -1,10 +1,16 @@
-# GTM-MXJLC5HH — conversão do RD observada (workspace 15, não publicado)
+# GTM-MXJLC5HH — conversão do RD observada (versão 17, não publicada)
 
-Aplicado em 30/09/2026 pela Tag Manager API v2 (conta 6326149608, contêiner 236411221,
-workspace 15 "Default Workspace"). **Nada foi publicado**; a versão ao vivo continua a 14
-("Google Ads - conversão pelo RD"). Scripts em `scripts/gtm/` (`oauth.mjs`, `dump.mjs`,
-`apply.mjs`, `test-cases.mjs`); estados completos em `/root/wings-gtm/before-ws15.json` e
-`after-ws15.json` (fora do repositório).
+Aplicado em 30/09/2026 pela Tag Manager API v2 (conta 6326149608, contêiner 236411221),
+primeiro no workspace 15, depois consolidado na **versão 17** ("RD conversão observada
+(30/09/2026) — não publicada"). **Nada foi publicado**: a versão ao vivo continua a 14
+("Google Ads - conversão pelo RD"). As versões 15 e 16 (tentativas intermediárias) foram
+apagadas. Criar a versão fecha o workspace: o Default Workspace atual é o 18, igual à 17.
+Scripts em `scripts/gtm/` (`oauth.mjs`, `api.mjs`, `dump.mjs`, `apply.mjs`,
+`test-cases.mjs`); estados completos em `/root/wings-gtm/before-ws15.json` e
+`after-v17-ws18.json` (fora do repositório).
+
+Publicar: <https://tagmanager.google.com/#/versions/accounts/6326149608/containers/236411221/versions/17>
+(ação "Publicar" da versão 17).
 
 ## O que a leitura do contêiner mostrou
 
@@ -33,7 +39,7 @@ workspace 15 "Default Workspace"). **Nada foi publicado**; a versão ao vivo con
   do envio aceito ele mesmo abre o WhatsApp (não é clique em link).
 - Modelo do Pixel: galeria "Facebook Pixel" (facebookarchive), campo Event ID = `eventId`.
 
-## Antes → depois (16 mudanças no workspace 15)
+## Antes → depois (versão 14 → versão 17)
 
 | Item | Antes | Depois |
 | --- | --- | --- |
@@ -51,7 +57,7 @@ workspace 15 "Default Workspace"). **Nada foi publicado**; a versão ao vivo con
 | Google Ads - WhatsApp_clique (25) | acionador 13 (morto) | acionador 52 (rótulo `NsLa…` mantido) |
 | GA4 - Evento WhatsApp_click (16) | acionador 13 (morto) | acionador 52 |
 
-Sem mudança: acionadores 13 e 37 ficaram no contêiner sem uso (podem ser apagados depois);
+Depois disso: variáveis DLV com `dataLayerVersion` inteiro; "GA4 - Evento WhatsApp_click" com nome literal `whatsapp_click`; gancho do XHR no `open()`. Sem mudança: acionadores 13 e 37 ficaram no contêiner sem uso (podem ser apagados depois);
 tags 4, 7, 14, 15, 20, 23, 35, 39, 45 intocadas; a variável 27 (`iiAF…`) fica sem uso.
 
 A tag observadora ganhou uma correção em relação ao commit `c76694c`: a URL do RD é casada
@@ -67,22 +73,50 @@ como parâmetro não contar.
 | Envio por sendBeacon (sem resposta) | `rd_conversion_unknown` | nada |
 | Clique solto em link do WhatsApp | clique em link (`gtm.linkClick`) | Pixel **Contact**, Google Ads `NsLa…`, GA4 `whatsapp_click` |
 
+## Três coisas que o compilador e o navegador ensinaram
+
+- O compilador do GTM recusa (`compilerError`, sem mensagem) **declarações `function` dentro de
+  bloco** (`try {}`) e **vírgula final em argumentos de chamada**: ES5 estrito. As funções
+  internas viraram `var x = function`. Conferido com acorn (`ecmaVersion: 5`, `"use strict"`).
+- Variável da camada de dados: `dataLayerVersion` tem de ser `type: integer`; como `template`
+  a variável compila mas resolve `false` (Event ID e Transaction ID saíam vazios na versão 15).
+- "GA4 - Evento WhatsApp_click" tinha o nome do evento numa variável da camada de dados que não
+  existe num clique em link (chegava `undefined` no GA4); virou o literal `whatsapp_click`.
+
 ## Testes (30/09/2026, Chromium headless, site real, RD interceptado)
 
-`node scripts/gtm/test-cases.mjs --container live --inject`: contêiner **ao vivo** (versão 14)
-com a tag nova injetada na inicialização; a requisição do RD é respondida localmente (200 ou 422)
-e nenhum dado chega ao RD; o WhatsApp nunca abre. Dados fictícios.
+`node scripts/gtm/test-cases.mjs --container env:2 --dialogdelay 1000`: o contêiner da
+**versão 17** servido pelo ambiente "Latest" (o `gtm.js` do site é trocado por ele), a
+requisição do RD respondida localmente (200 ou 422) sem nenhum dado chegar ao RD, o WhatsApp
+nunca abre, o alerta "Obrigado!" fica 1 s aberto como para uma pessoa. Dados fictícios.
+Relatório: `/root/wings-gtm/report-draft-v17.json`.
 
-| Caso | Requisição do RD vista | Evento novo no dataLayer | O que o contêiner ao vivo disparou (o bug) |
-| --- | --- | --- | --- |
-| 1 formulário aceito (200) | XHR POST `cta-redirect.rdstation.com`, `wings-company-form-site` | `rd_conversion_accepted`, status 200, `rd_event_id` UUID | Lead, Google `iiAF…`, GA4 `lead_rd_station` |
-| 2 envio recusado (422) | idem, respondido 422 | `rd_conversion_refused`, status 422 | Lead, Google `iiAF…`, GA4 `lead_rd_station` (indevidos) |
-| 3 pop-up aceito (200) | XHR POST, `lp-formatacao-whatsapp` | `rd_conversion_accepted` | Lead e Google dispararam **antes** da requisição (pelo `form_start` do GA4) |
-| 4 clique solto no WhatsApp | nenhuma | nenhum evento `rd_*` | só o `click` da medição aprimorada do GA4; nada do Pixel/Google |
+| Caso | RD | Evento novo | Pixel | Google Ads | GA4 |
+| --- | --- | --- | --- | --- | --- |
+| 1 formulário aceito (200) | XHR `wings-company-form-site` | `rd_conversion_accepted` | **Lead** 1×, `eid` = rd_event_id | **rTTB…** 1×, `oid` = rd_event_id | `lead_rd_station` **não chegou** (ver abaixo) |
+| 2 envio recusado (422) | XHR, 422 | `rd_conversion_refused` | nada | nada | nada |
+| 3 pop-up aceito (200) | XHR `lp-formatacao-whatsapp` | `rd_conversion_accepted` | **Lead** 1×, `eid` | **rTTB…** 1×, `oid` | `lead_rd_station` 1× com `rd_identifier` e `rd_event_id` |
+| 4 clique solto no WhatsApp | nenhuma | nenhum | **Contact** 1× | `NsLa…` 1× | `whatsapp_click` 1× |
 
-**Pendente:** os mesmos 4 casos com o **rascunho** servido no navegador (quais tags disparam
-com o novo encadeamento). Com os escopos concedidos (`edit.containers` + `readonly`) a API
-recusa `quick_preview`, `create_version` e `environments.reauthorize` (403 "insufficient
-authentication scopes"); o ambiente de preview do workspace (22) serve uma foto de 14/12/2025.
-Precisa de um consentimento com `tagmanager.edit.containerversions` para compilar
-(`quick_preview`) e criar uma **versão sem publicar**, que o ambiente "Latest" serve.
+Nota: cada conversão do Google Ads aparece como duas requisições (doubleclick + google.com,
+uma com `oid`); é uma conversão. O "Lead antes da requisição" da tag antiga não acontece mais.
+
+**GA4 no caso 1.** O RD, no sucesso do formulário embutido, mostra `alert("Obrigado!")` e
+em seguida faz `location.href = redirect_to` (redirecionamento legado do formulário, para a
+própria home). A tag GA4 dispara (sem o redirecionamento o `lead_rd_station` chega: teste
+`--noredirect`), mas o gtag segura o evento por ~5 s para agrupar (medido: 4,93–4,95 s, também
+no caso 3) e a página troca ~1 s depois do alerta; no headless o envio no `pagehide` não
+apareceu. Pixel e Google saem na hora e não sofrem. Correção fora do GTM: no RD Station,
+trocar o redirecionamento do formulário `wings-company-form-site` por mensagem na página (ou
+por uma página de obrigado). O contêiner ao vivo tem o mesmo problema.
+
+**Preexistente, fora do pedido:** o GA4 recebe eventos chamados `undefined` (3 por
+formulário) porque "GA4 - Evento Form_start" e "Form_abort" usam variáveis da camada de dados
+que não existem; e a medição aprimorada do GA4 (`form_start`, `form_submit`) alimenta
+acionadores de evento personalizado com o mesmo nome. Vale limpar noutra onda.
+
+## Testes anteriores (contêiner ao vivo, versão 14, tag nova injetada)
+
+`--container live --inject` mostrou o bug da versão 14: Lead, Google `iiAF…` e GA4 disparavam
+no caso 2 (recusado) e, no caso 3, **antes** da requisição ao RD, pelo `form_start` do GA4.
+Relatórios `report-live-inject*.json`.
