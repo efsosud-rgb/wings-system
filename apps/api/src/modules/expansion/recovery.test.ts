@@ -203,12 +203,12 @@ describe('landing recovery', () => {
     expect(real).toMatchObject({ state: 'done', mode: 'real' });
     expect(real.result.createdDealIds).toHaveLength(2);
     const posts = dealPosts();
-    expect(posts.map((p) => p.body!.deal.deal_stage_id).sort()).toEqual(['s-exp-nc', 's-for-nc']);
+    expect(posts.map((p) => p.body!.deal.deal_stage_id).sort()).toEqual(['s-exp-nc', 's-for-sc']);
     expect(posts.find((p) => p.body!.deal.deal_stage_id === 's-exp-nc')!.body!.deal.user_id).toBe(
       'owner-fernando',
     );
     expect(
-      posts.find((p) => p.body!.deal.deal_stage_id === 's-for-nc')!.body!.deal.user_id,
+      posts.find((p) => p.body!.deal.deal_stage_id === 's-for-sc')!.body!.deal.user_id,
     ).toBeUndefined();
 
     // The plan is spent.

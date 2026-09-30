@@ -8,7 +8,7 @@ import { dbLedger } from './service.js';
 /**
  * The Formatação safety net. Every 5 minutes, the conversions of the three
  * Formatação forms (the site form, the WhatsApp pop-up and the simplified
- * form) that have no deal get one in Formatação / "Novo Contato", with the
+ * form) that have no deal get one in Formatação / "Sem contato", with the
  * origin (identifier, UTMs, campaign) on it. It is the intake job's rule and
  * ledger: a contact with an open deal in any funnel, or a deal made after the
  * conversion, is left alone, and a conversion already decided is not decided
@@ -21,7 +21,8 @@ import { dbLedger } from './service.js';
 
 export const FORMATACAO_INTAKE_JOB = 'formatacao-intake';
 export const FORMATACAO_FORMS = RECOVERY_FORMATACAO_FORMS;
-export const FORMATACAO_STAGE = 'Novo Contato';
+/** The funnel's first stage: RD's Formatação pipeline has no "Novo Contato" (that one is Expansão's). */
+export const FORMATACAO_STAGE = 'Sem contato';
 const TICK_MS = 5 * 60_000;
 /** The first pass after a start looks back three days; later ones six hours (the ledger makes the overlap free). */
 const FIRST_LOOKBACK_HOURS = 72;
@@ -58,7 +59,7 @@ export async function runFormatacaoOnce(
         entity: 'formatacao_intake',
         entityId: 'stage',
         metadata: {
-          reason: 'stage "Formatação / Novo Contato" not found in RD CRM',
+          reason: 'stage "Formatação / Sem contato" not found in RD CRM',
           pipelines: Object.fromEntries(
             [...map.pipelines].map(([name, pipeline]) => [name, [...pipeline.stages.keys()]]),
           ),

@@ -649,7 +649,7 @@ function RecoverySection() {
       <h2 id="recovery-title">Recuperar conversões sem negócio (30 dias)</h2>
       <p className="muted">
         Formulários de Formatação (wings-company-form-site, lp-formatacao-whatsapp, Formulário
-        Simplificado. -02) viram negócio em Formatação / Novo Contato; o Calçadão do Frango
+        Simplificado. -02) viram negócio em Formatação / Sem contato; o Calçadão do Frango
         (lp-calcadao-do-frango), em Expansão / Novo Contato, com o dono da Expansão. Quem já tem
         negócio aberto, ou negócio criado depois da conversão, não recebe outro. O fluentform_3 só é
         listado. Primeiro simule; só depois dá para criar.

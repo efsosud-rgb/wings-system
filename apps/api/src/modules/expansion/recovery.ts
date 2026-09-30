@@ -201,7 +201,7 @@ export const expansionRecoveryRoutes: FastifyPluginAsync = async (app) => {
         // Both landing stages must exist before anything is read or made.
         const map = await crm.map();
         for (const [pipeline, stage] of [
-          ['Formatação', 'Novo Contato'],
+          ['Formatação', 'Sem contato'],
           ['Expansão', 'Novo Contato'],
         ] as const) {
           if (!map.pipelines.get(pipeline)?.stages.has(stage)) {
@@ -223,7 +223,7 @@ export const expansionRecoveryRoutes: FastifyPluginAsync = async (app) => {
           recovery: {
             only: [...RECOVERY_FORMATACAO_FORMS, RECOVERY_EXPANSAO_PAGE, ...LIST_ONLY],
             formatacaoIdentifiers: RECOVERY_FORMATACAO_FORMS,
-            formatacaoStage: 'Novo Contato',
+            formatacaoStage: 'Sem contato',
           },
         });
         const summary = summarize(result);
