@@ -202,6 +202,15 @@ negócio → Contas do WhatsApp → cada conta → Números de telefone). O que 
   saída do app;
 - as WABAs vazias e sem uso: arquivar depois da virada, para não confundir.
 
+**Avisos internos que ainda usam o Z-API (registrado em 30/09):** o Wings
+System manda por Z-API (`apps/api/src/lib/zapi.ts`) os pedidos de aprovação de
+anúncios, os alertas críticos e o notifier do roadmap, com `ZAPI_INSTANCE_ID`,
+`ZAPI_INSTANCE_TOKEN` e `ZAPI_CLIENT_TOKEN` no staging e na produção. Na Fase 2:
+migrar esses avisos para a Cloud API com **modelo de utilidade aprovado** pela
+Meta (fora da janela de 24 h só modelo), testar a entrega de cada tipo de aviso
+(aprovação, alerta crítico, roadmap) e **só então** avisar o Eric de que pode
+cancelar o Z-API e remover as 3 variáveis. Até lá o Z-API continua.
+
 Nada disso é usado na Fase 1 e nenhum deploy é feito só por causa dele. Na
 virada para o número oficial (+55 21 99947-0288), `WHATSAPP_WABA_ID` e
 `WHATSAPP_PHONE_NUMBER_ID` trocam para os de produção.
