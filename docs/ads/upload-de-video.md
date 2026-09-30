@@ -65,12 +65,11 @@ caminho.
 Uma sessão que ninguém termina em um dia é apagada (linha e `.part`) na
 próxima abertura de sessão, de qualquer pessoa.
 
-No staging, a tabela só fica legível pelo `wings-staging-sql` depois do grant
-(ver a nota sobre `wings_ro` em tabelas novas):
-
-```sql
-GRANT SELECT ON ad_video_upload_sessions TO wings_ro;
-```
+No staging, a tabela fica legível pelo `wings-staging-sql` porque a migration
+`0048` concede `SELECT` à role `wings_ro` quando ela existe (em produção, local
+e nos bancos de teste ela não existe, e a migration não faz nada). Toda tabela
+nova que o `wings_ro` deva ler entra assim, por migration, nunca por comando à
+mão.
 
 ## Limites
 
