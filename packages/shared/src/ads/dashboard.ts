@@ -403,6 +403,16 @@ export interface CampaignNode {
    * person made by hand is changed in the platform.
    */
   systemCreated: boolean;
+  /**
+   * What the draft that created it said about its ads — UTMs, destination,
+   * page and Instagram — so new creatives added to it start from the same
+   * values. Null for a campaign a person made by hand.
+   */
+  launchDefaults: {
+    utms: { utm_source: string; utm_medium: string; utm_campaign: string };
+    destinationUrl: string;
+    identity: { pageId: string; instagramActorId: string | null } | null;
+  } | null;
   /** First and last day, as the platform reports them (or the draft's); null end = no end date. */
   startDate: string | null;
   endDate: string | null;
@@ -475,6 +485,8 @@ export interface CreativePerformance {
   thumbnailUrl: string | null;
   headline: string | null;
   effectiveStatus: string | null;
+  /** The utm_content its link carries (video-1, imagem-2…), read at ingestion; null when none. */
+  utmContent: string | null;
   totals: MetricTotals;
   fatigue: FatigueSignal;
 }

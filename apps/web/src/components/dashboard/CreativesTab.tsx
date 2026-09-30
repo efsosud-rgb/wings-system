@@ -45,7 +45,10 @@ function Fatigue({ creative }: { creative: CreativePerformance }) {
   const trend = deltaPercent(fatigue.secondHalfCtrMilli, fatigue.firstHalfCtrMilli);
   if (fatigue.wornOut) {
     return (
-      <span className="status status-worn" title={`CTR caiu ${Math.abs(trend ?? 0)}% na segunda metade do período, com frequência ${formatMilli(fatigue.frequencyMilli)}`}>
+      <span
+        className="status status-worn"
+        title={`CTR caiu ${Math.abs(trend ?? 0)}% na segunda metade do período, com frequência ${formatMilli(fatigue.frequencyMilli)}`}
+      >
         desgastado
       </span>
     );
@@ -60,7 +63,33 @@ function Fatigue({ creative }: { creative: CreativePerformance }) {
 
 export function CreativesTab({ data }: { data: DashboardCreatives }) {
   const exportCsv = () => {
-    const header = ['Anúncio', 'Campanha', 'Plataforma', 'Formato', 'Gasto', 'Impressões', 'Cliques', 'CTR %', 'Leads', 'CPL', 'Plays 3s', 'Gancho %', 'ThruPlays', 'Retenção %', 'Assistiram até o fim %', 'Inícios do vídeo', 'Tempo médio assistido (s)', '25% %', '50% %', '75% %', '100% %', 'Frequência', 'CTR 1ª metade %', 'CTR 2ª metade %', 'Desgastado'];
+    const header = [
+      'Anúncio',
+      'Campanha',
+      'Plataforma',
+      'Formato',
+      'Gasto',
+      'Impressões',
+      'Cliques',
+      'CTR %',
+      'Leads',
+      'CPL',
+      'Plays 3s',
+      'Gancho %',
+      'ThruPlays',
+      'Retenção %',
+      'Assistiram até o fim %',
+      'Inícios do vídeo',
+      'Tempo médio assistido (s)',
+      '25% %',
+      '50% %',
+      '75% %',
+      '100% %',
+      'Frequência',
+      'CTR 1ª metade %',
+      'CTR 2ª metade %',
+      'Desgastado',
+    ];
     const rows = data.creatives.map((creative) => {
       const ratios = ratiosOf(creative.totals);
       return [
@@ -98,7 +127,8 @@ export function CreativesTab({ data }: { data: DashboardCreatives }) {
     <>
       <div className="dash-toolbar">
         <p className="muted">
-          {data.creatives.length} {data.creatives.length === 1 ? 'anúncio entregou' : 'anúncios entregaram'} no período
+          {data.creatives.length}{' '}
+          {data.creatives.length === 1 ? 'anúncio entregou' : 'anúncios entregaram'} no período
         </p>
         <Button variant="ghost" onClick={exportCsv}>
           Exportar CSV
@@ -117,7 +147,9 @@ export function CreativesTab({ data }: { data: DashboardCreatives }) {
               label: (
                 <>
                   {MIRRORED_FORMAT_LABEL[format.format]}
-                  <span className="cell-sub">{format.ads} {format.ads === 1 ? 'anúncio' : 'anúncios'}</span>
+                  <span className="cell-sub">
+                    {format.ads} {format.ads === 1 ? 'anúncio' : 'anúncios'}
+                  </span>
                 </>
               ),
               amount: format.totals.spendCents,
@@ -125,7 +157,8 @@ export function CreativesTab({ data }: { data: DashboardCreatives }) {
                 <>
                   <b className="mono">{formatMoney(format.totals.spendCents)}</b>
                   <span className="cell-sub">
-                    CTR {formatPercentMilli(ratios.ctrMilli)} · CPL {formatMoney(ratios.costPerLeadCents)}
+                    CTR {formatPercentMilli(ratios.ctrMilli)} · CPL{' '}
+                    {formatMoney(ratios.costPerLeadCents)}
                   </span>
                 </>
               ),
@@ -145,17 +178,47 @@ export function CreativesTab({ data }: { data: DashboardCreatives }) {
                 <tr>
                   <th scope="col">Anúncio</th>
                   <th scope="col">Formato</th>
-                  <th scope="col" className="num">Gasto</th>
-                  <th scope="col" className="num">CTR</th>
-                  <th scope="col" className="num">Leads</th>
-                  <th scope="col" className="num">CPL</th>
-                  <th scope="col" className="num" title="Plays de 3 s por impressão">Gancho</th>
-                  <th scope="col" className="num" title="ThruPlays por play de 3 s">Retenção</th>
-                  <th scope="col" className="num" title="Assistiram até o fim, por play de 3 s">Até o fim</th>
-                  <th scope="col" className="num" title="Tempo médio assistido por início do vídeo (Meta)">Tempo médio</th>
-                  <th scope="col" className="num">ThruPlays</th>
-                  <th scope="col" className="num" title="Parcela dos inícios que chegou a 25%, 50%, 75% e 100% do vídeo">25 · 50 · 75 · 100%</th>
-                  <th scope="col" className="num">Frequência</th>
+                  <th scope="col" className="num">
+                    Gasto
+                  </th>
+                  <th scope="col" className="num">
+                    CTR
+                  </th>
+                  <th scope="col" className="num">
+                    Leads
+                  </th>
+                  <th scope="col" className="num">
+                    CPL
+                  </th>
+                  <th scope="col" className="num" title="Plays de 3 s por impressão">
+                    Gancho
+                  </th>
+                  <th scope="col" className="num" title="ThruPlays por play de 3 s">
+                    Retenção
+                  </th>
+                  <th scope="col" className="num" title="Assistiram até o fim, por play de 3 s">
+                    Até o fim
+                  </th>
+                  <th
+                    scope="col"
+                    className="num"
+                    title="Tempo médio assistido por início do vídeo (Meta)"
+                  >
+                    Tempo médio
+                  </th>
+                  <th scope="col" className="num">
+                    ThruPlays
+                  </th>
+                  <th
+                    scope="col"
+                    className="num"
+                    title="Parcela dos inícios que chegou a 25%, 50%, 75% e 100% do vídeo"
+                  >
+                    25 · 50 · 75 · 100%
+                  </th>
+                  <th scope="col" className="num">
+                    Frequência
+                  </th>
                   <th scope="col">Desgaste</th>
                 </tr>
               </thead>
@@ -167,16 +230,28 @@ export function CreativesTab({ data }: { data: DashboardCreatives }) {
                       <td>
                         <span className="tree-indent">
                           {creative.thumbnailUrl ? (
-                            <img className="thumb" src={creative.thumbnailUrl} alt="" loading="lazy" />
+                            <img
+                              className="thumb"
+                              src={creative.thumbnailUrl}
+                              alt=""
+                              loading="lazy"
+                            />
                           ) : (
                             <span className="thumb thumb-empty" aria-hidden="true" />
                           )}
                           <span>
                             {creative.name}
                             <span className="cell-sub">
-                              {creative.format === 'text' && creative.headline ? `${creative.headline} · ` : ''}
+                              {creative.format === 'text' && creative.headline
+                                ? `${creative.headline} · `
+                                : ''}
                               {creative.campaignName || AD_PLATFORM_LABEL[creative.platform]}
-                              {creative.effectiveStatus === 'DISAPPROVED' && <strong className="error-text"> · reprovado</strong>}
+                              {creative.utmContent && (
+                                <span className="mono"> · utm_content={creative.utmContent}</span>
+                              )}
+                              {creative.effectiveStatus === 'DISAPPROVED' && (
+                                <strong className="error-text"> · reprovado</strong>
+                              )}
                             </span>
                           </span>
                         </span>
@@ -186,12 +261,20 @@ export function CreativesTab({ data }: { data: DashboardCreatives }) {
                       <td className="mono num">{formatPercentMilli(ratios.ctrMilli)}</td>
                       <td className="mono num">{formatInt(creative.totals.conversions)}</td>
                       <td className="mono num">{formatMoney(ratios.costPerLeadCents)}</td>
-                      <td className="mono num">{formatPercentMilli(videoOnly(creative, ratios.hookRateMilli))}</td>
-                      <td className="mono num">{formatPercentMilli(videoOnly(creative, ratios.holdRateMilli))}</td>
-                      <td className="mono num">{formatPercentMilli(videoOnly(creative, ratios.completionRateMilli))}</td>
+                      <td className="mono num">
+                        {formatPercentMilli(videoOnly(creative, ratios.hookRateMilli))}
+                      </td>
+                      <td className="mono num">
+                        {formatPercentMilli(videoOnly(creative, ratios.holdRateMilli))}
+                      </td>
+                      <td className="mono num">
+                        {formatPercentMilli(videoOnly(creative, ratios.completionRateMilli))}
+                      </td>
                       <td className="mono num">{seconds(ratios.avgWatchMs) ?? '—'}</td>
                       <td className="mono num">
-                        {creative.totals.videoPlays > 0 ? formatInt(creative.totals.videoThruplays) : '—'}
+                        {creative.totals.videoPlays > 0
+                          ? formatInt(creative.totals.videoThruplays)
+                          : '—'}
                       </td>
                       <td className="mono num">{quartiles(creative) ?? '—'}</td>
                       <td className="mono num">{formatMilli(ratios.frequencyMilli)}</td>

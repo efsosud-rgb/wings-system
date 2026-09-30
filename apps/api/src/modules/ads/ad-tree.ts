@@ -1,6 +1,12 @@
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { applyUtms, variationMedia, type CampaignDraft, type CopyVariation } from '@wings/shared';
+import {
+  adUtmContent,
+  applyUtms,
+  variationMedia,
+  type CampaignDraft,
+  type CopyVariation,
+} from '@wings/shared';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
@@ -353,6 +359,54 @@ async function uploadMedia(
 }
 
 /**
+ * The creative one ad is made of, exactly as it is sent to Meta: page and
+ * Instagram account, words, button, media, and the destination with every UTM
+ * and this ad's own utm_content. Exported so a rehearsal validates the very
+ * same thing an execution would create.
+ */
+export function creativeSpecOf(input: {
+  name: string;
+  pageId: string;
+  instagramActorId: string | null | undefined;
+  destinationUrl: string;
+  utms: CampaignDraft['utms'];
+  variation: CopyVariation;
+  position: number;
+  mediaOf: (id: string | undefined) => CreativeMedia;
+}) {
+  const { variation, mediaOf } = input;
+  const ad = { creativeType: variation.creativeType, position: input.position };
+  const body =
+    variation.creativeType === 'carousel'
+      ? {
+          type: 'carousel' as const,
+          cards: (variation.cards ?? []).map((card) => ({
+            media: mediaOf(card.mediaType === 'video' ? card.videoId : card.creativeId),
+            headline: card.headline,
+            description: card.description,
+            link: applyUtms(card.link, input.utms, ad) ?? card.link,
+          })),
+        }
+      : {
+          type: 'single' as const,
+          media: mediaOf(
+            variation.creativeType === 'video' ? variation.videoId : variation.creativeId,
+          ),
+        };
+  return {
+    name: input.name,
+    pageId: input.pageId,
+    instagramUserId: input.instagramActorId ?? null,
+    message: variation.primaryText,
+    headline: variation.headline,
+    callToAction: variation.callToAction,
+    // Each ad carries its own utm_content (video-1, imagem-2…).
+    link: applyUtms(input.destinationUrl, input.utms, ad) ?? input.destinationUrl,
+    body,
+  };
+}
+
+/**
  * A creative and an ad per variation, in an ad set that exists. Each ad is
  * judged with its creative inline first (validate_only), and each carries its
  * own utm_content: its kind and its position in the ad set, from
@@ -363,8 +417,10 @@ async function createAds(
   step: Stepper,
   input: {
     adSetId: string;
-    /** "<campaign name>": ads are named "<campaign name> — v<position>". */
+    /** "<campaign name>": ads are named "<campaign name> — <label>". */
     name: string;
+    /** How an ad is labelled in its name: `v1` for a new campaign, `video-1` for ads added later. */
+    labelOf?: (ad: { creativeType: CopyVariation['creativeType']; position: number }) => string;
     pageId: string;
     instagramActorId: string | null | undefined;
     destinationUrl: string;
@@ -383,35 +439,9 @@ async function createAds(
   for (const [index, variation] of input.variations.entries()) {
     const position = input.firstPosition + index;
     const ad = { creativeType: variation.creativeType, position };
-    const body =
-      variation.creativeType === 'carousel'
-        ? {
-            type: 'carousel' as const,
-            cards: (variation.cards ?? []).map((card) => ({
-              media: mediaOf(card.mediaType === 'video' ? card.videoId : card.creativeId),
-              headline: card.headline,
-              description: card.description,
-              link: applyUtms(card.link, input.utms, ad) ?? card.link,
-            })),
-          }
-        : {
-            type: 'single' as const,
-            media: mediaOf(
-              variation.creativeType === 'video' ? variation.videoId : variation.creativeId,
-            ),
-          };
-    const name = `${input.name} — v${position}`;
-    const creativeSpec = {
-      name,
-      pageId: input.pageId,
-      instagramUserId: input.instagramActorId ?? null,
-      message: variation.primaryText,
-      headline: variation.headline,
-      callToAction: variation.callToAction,
-      // Each ad carries its own utm_content (video-1, imagem-2…).
-      link: applyUtms(input.destinationUrl, input.utms, ad) ?? input.destinationUrl,
-      body,
-    };
+    const label = input.labelOf ? input.labelOf(ad) : `v${position}`;
+    const name = `${input.name} — ${label}`;
+    const creativeSpec = creativeSpecOf({ ...input, name, variation, position, mediaOf });
     // Meta judges the ad with its creative inline first, creating nothing; a
     // refusal here is the same step failing, with nothing more on the platform.
     const creative = await step(
@@ -545,6 +575,9 @@ export async function buildAdsInAdSet(
   const ads = await createAds(writer, step, {
     adSetId: input.adSetExternalId,
     name: input.campaignName,
+    // Named by their utm_content, so they never repeat the names v1, v2 of the
+    // ads the campaign was created with.
+    labelOf: adUtmContent,
     pageId: input.pageId,
     instagramActorId: input.instagramActorId,
     destinationUrl: input.destinationUrl,

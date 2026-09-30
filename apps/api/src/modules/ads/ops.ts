@@ -5,6 +5,8 @@ import {
   adCampaignDrafts,
   adCampaigns,
   adChangeRequests,
+  adExecutionSteps,
+  adExecutions,
   adGuardrailEvents,
 } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
@@ -205,6 +207,9 @@ export async function resolveUnknownExecution(
   }
   if (change.kind === 'create_campaign') {
     return resolveUnknownCreation(db, client, { change, accountId: account.id, now });
+  }
+  if (change.kind === 'add_ads') {
+    return resolveUnknownAddAds(db, { change, accountId: account.id, now });
   }
 
   const campaign = change.campaignId
@@ -560,4 +565,54 @@ export function renderAlertsSheet(alerts: OpenAlertRow[], now = new Date()): str
   });
 
   return lines.join('\n');
+}
+
+/**
+ * New ads stopped part way. What exists is what the steps recorded as created
+ * (each ad is born paused, so none of it spends): every ad created means
+ * applied; fewer means not applied, and the ones that exist stay, paused,
+ * listed on the approval for a person to keep or delete.
+ */
+async function resolveUnknownAddAds(
+  db: Database,
+  input: { change: typeof adChangeRequests.$inferSelect; accountId: string; now: Date },
+): Promise<OpsResult<{ resolution: UnknownResolution; observed: string }>> {
+  const { change, accountId, now } = input;
+  const expected = (change.payload as { variations?: unknown[] } | null)?.variations?.length ?? 0;
+  const created = await db
+    .select({ id: adExecutionSteps.id })
+    .from(adExecutionSteps)
+    .innerJoin(adExecutions, eq(adExecutions.id, adExecutionSteps.executionId))
+    .where(
+      and(
+        eq(adExecutions.changeRequestId, change.id),
+        eq(adExecutionSteps.kind, 'ad'),
+        eq(adExecutionSteps.status, 'created'),
+      ),
+    );
+  const resolution: UnknownResolution =
+    expected > 0 && created.length === expected ? 'applied' : 'not_applied';
+  const observed = `${created.length} de ${expected} anúncio(s) criados, todos pausados`;
+  await db
+    .update(adChangeRequests)
+    .set(resolution === 'applied' ? { status: 'executed', executedAt: now } : { status: 'failed' })
+    .where(eq(adChangeRequests.id, change.id));
+  await db.insert(adGuardrailEvents).values({
+    adAccountId: accountId,
+    kind: 'unknown_execution_outcome',
+    detail: {
+      note: 'Anúncios novos: resultado resolvido pelos passos registrados',
+      changeRequestId: change.id,
+      resolution,
+      observed,
+    },
+  });
+  await writeAudit(db, {
+    actorEmployeeId: null,
+    action: 'ads.unknown_outcome_resolved',
+    entity: 'ad_change_request',
+    entityId: change.id,
+    metadata: { via: 'ops-cli', resolution, observed },
+  });
+  return { ok: true, value: { resolution, observed } };
 }

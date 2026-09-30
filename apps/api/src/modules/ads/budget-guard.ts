@@ -13,7 +13,6 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   adAccounts,
-  adAds,
   adCampaignDrafts,
   adCampaigns,
   adChangeRequests,
@@ -1232,12 +1231,35 @@ export async function reserveAddAds(
           message: 'Esta campanha tem mais de um conjunto de anúncios: escolha em qual entram.',
         };
   }
-  const existing = await db.query.adAds.findMany({ where: eq(adAds.adSetId, adSet.id) });
+  // utm_content numbering (video-1, video-2…) continues after the positions
+  // earlier add_ads requests on this ad set already took — pending ones
+  // included, so two requests never share a number. Ads made before the
+  // numbering existed carry no utm_content and take none.
+  const earlier = await db
+    .select({ payload: adChangeRequests.payload })
+    .from(adChangeRequests)
+    .where(
+      and(
+        eq(adChangeRequests.adAccountId, input.adAccountId),
+        eq(adChangeRequests.kind, 'add_ads'),
+        inArray(adChangeRequests.status, [
+          'pending_approval',
+          'approved',
+          'executing',
+          'executed',
+          'unknown',
+        ]),
+      ),
+    );
+  const used = earlier
+    .map((row) => row.payload as AddAdsPayload | null)
+    .filter((payload) => payload?.adSetExternalId === adSet.externalId)
+    .map((payload) => payload!.firstPosition + payload!.variations.length - 1);
   const payload: AddAdsPayload = {
     ...input.request,
     adSetExternalId: adSet.externalId,
     campaignName: campaign.name,
-    firstPosition: existing.length + 1,
+    firstPosition: Math.max(0, ...used) + 1,
   };
 
   return db.transaction(async (tx) => {

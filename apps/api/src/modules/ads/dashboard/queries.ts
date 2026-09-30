@@ -749,6 +749,7 @@ export async function campaigns(
         campaignId: adCampaignDrafts.campaignId,
         startDate: adCampaignDrafts.startDate,
         endDate: adCampaignDrafts.endDate,
+        payload: adCampaignDrafts.payload,
       })
       .from(adCampaignDrafts)
       .innerJoin(adCampaigns, eq(adCampaigns.id, adCampaignDrafts.campaignId))
@@ -820,6 +821,7 @@ export async function campaigns(
       accountName: account?.name ?? '',
       accountExternalId: account?.externalId ?? '',
       systemCreated: draftOf.has(campaign.id),
+      launchDefaults: launchDefaultsOf(draftOf.get(campaign.id)?.payload),
       // The platform's own schedule first; the draft's for a campaign not synced since.
       startDate: campaign.startDate ?? draftOf.get(campaign.id)?.startDate ?? null,
       endDate: campaign.endDate ?? draftOf.get(campaign.id)?.endDate ?? null,
@@ -895,6 +897,7 @@ export async function creatives(
       thumbnailUrl: creative?.thumbnailUrl ?? null,
       headline: creative?.title ?? null,
       effectiveStatus: ad.effectiveStatus,
+      utmContent: ad.utmContent,
       totals,
       fatigue: fatigueOf(
         ratiosOf(firstHalf.get(ad.externalId) ?? EMPTY_TOTALS).ctrMilli,
@@ -1023,5 +1026,26 @@ export async function audience(
       }))
       .sort((a, b) => b.totals.spendCents - a.totals.spendCents),
     heatmap,
+  };
+}
+
+/** The ad-level values of the draft that created a campaign, when it has them. */
+function launchDefaultsOf(payload: unknown): CampaignNode['launchDefaults'] {
+  const draft = payload as {
+    utms?: { utm_source?: string; utm_medium?: string; utm_campaign?: string };
+    destinationUrl?: string;
+    identity?: { pageId?: string; instagramActorId?: string | null };
+  } | null;
+  if (!draft?.utms?.utm_campaign || !draft.destinationUrl) return null;
+  return {
+    utms: {
+      utm_source: draft.utms.utm_source ?? '',
+      utm_medium: draft.utms.utm_medium ?? '',
+      utm_campaign: draft.utms.utm_campaign,
+    },
+    destinationUrl: draft.destinationUrl,
+    identity: draft.identity?.pageId
+      ? { pageId: draft.identity.pageId, instagramActorId: draft.identity.instagramActorId ?? null }
+      : null,
   };
 }

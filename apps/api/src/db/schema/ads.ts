@@ -707,6 +707,8 @@ export const adAds = pgTable(
     /** Meta's effective_status: DISAPPROVED, WITH_ISSUES, CAMPAIGN_PAUSED… */
     effectiveStatus: text('effective_status'),
     creativeExternalId: text('creative_external_id'),
+    /** The utm_content its creative's link carries (video-1, imagem-2…); null when none. */
+    utmContent: text('utm_content'),
     /**
      * The real rejection reason. The spike found ad_review_feedback carries it
      * while issues_info is empty on disapproved ads, so both are stored and

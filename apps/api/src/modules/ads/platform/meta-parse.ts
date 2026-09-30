@@ -119,3 +119,36 @@ export function creativeFormatOf(creative: {
   if (feed?.images?.length) return 'image';
   return 'unknown';
 }
+
+/**
+ * The utm_content an ad's creative sends people with, read from the link in
+ * its story spec (single image, video call to action, or the first carousel
+ * card). Null when the link has none — ads made before per-ad numbering.
+ */
+export function utmContentOfCreative(creative: {
+  url_tags?: string;
+  object_story_spec?: {
+    link_data?: { link?: string; child_attachments?: { link?: string }[] };
+    video_data?: { call_to_action?: { value?: { link?: string } } };
+  };
+}): string | null {
+  const story = creative.object_story_spec;
+  const links = [
+    story?.video_data?.call_to_action?.value?.link,
+    story?.link_data?.link,
+    story?.link_data?.child_attachments?.[0]?.link,
+  ];
+  for (const link of links) {
+    if (!link) continue;
+    const match = /[?&]utm_content=([^&#]*)/.exec(link);
+    if (match?.[1]) {
+      try {
+        return decodeURIComponent(match[1]);
+      } catch {
+        return match[1];
+      }
+    }
+  }
+  const tag = /(?:^|&)utm_content=([^&]*)/.exec(creative.url_tags ?? '');
+  return tag?.[1] ? decodeURIComponent(tag[1]) : null;
+}
