@@ -4,8 +4,8 @@
   Substitui a tag antiga do PerformanceObserver, que deve ficar pausada.
 
   O que faz: envolve fetch e XMLHttpRequest. Para toda requisição de conversão
-  do RD Station (URL com rdstation.com, rdstation.com.br ou rd.services e
-  "conversions"), empurra no dataLayer UM evento por envio:
+  do RD Station (host rdstation.com, rdstation.com.br ou rd.services e
+  "conversions" no caminho, nunca na query), empurra no dataLayer UM evento por envio:
     rd_conversion_accepted  quando o RD respondeu 2xx
     rd_conversion_refused   quando respondeu outra coisa, ou a rede falhou (status 0)
     rd_conversion_unknown   quando o envio foi por sendBeacon (não há resposta)
@@ -22,7 +22,9 @@
       }
       window.__wingsRdConv2 = true;
 
-      var RD_URL = /(rdstation\.com(\.br)?|rd\.services)\/.*conversions/i;
+      /* Só o host do RD e só o caminho (nunca a query): um hit do GA4 que carrega
+         "cta-redirect.rdstation.com/v2/conversions" como parâmetro não conta. */
+      var RD_URL = /^(https?:)?\/\/([a-z0-9-]+\.)*(rdstation\.com(\.br)?|rd\.services)\/[^?#]*conversions/i;
       var IDENT = /conversion_identifier["']?\s*[:=]\s*["']?([A-Za-z0-9._\-]+)/;
 
       function uuid() {
