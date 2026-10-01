@@ -82,6 +82,14 @@ export interface ReconcileResult {
   platformRemainingCents: number | null;
   /** True when the platform allows less than our own cap would. */
   platformIsBinding: boolean;
+  /**
+   * No budget period is open for this month: the reading was recorded all
+   * the same (campaigns, ad sets, spend), but nothing that belongs to the
+   * period was touched — no spent/committed totals, no `last_reconciled_at`.
+   * Spending stays blocked (the executor finds no fresh reconciliation) until
+   * someone opens the month's cap in Integrações.
+   */
+  periodMissing: boolean;
 }
 
 /**
@@ -270,11 +278,12 @@ export async function refreshPlatformLimit(
       eq(budgetPeriods.periodMonth, periodMonth),
     ),
   });
-  if (!period) throw new Error(`no budget period open for ${periodMonth}`);
+  // Reading never waits for a budget period (Eric, 01/10): without one the
+  // platform is still read; there is just no period row to write it on.
   try {
     await readAndApplyPlatformLimit(db, client, adAccountId, periodMonth, now);
   } catch (error) {
-    await recordPlatformReadFailure(db, { periodId: period.id, error, now });
+    if (period) await recordPlatformReadFailure(db, { periodId: period.id, error, now });
     throw error;
   }
 }
@@ -322,7 +331,10 @@ export async function reconcileAccount(
       eq(budgetPeriods.periodMonth, periodMonth),
     ),
   });
-  if (!period) throw new Error(`no budget period open for ${periodMonth}`);
+  // Reading never depends on a budget period (Eric, 01/10, after the month
+  // turned with no October period and the data stopped): campaigns, ad sets
+  // and spend are recorded whatever the period. The period only gates acts
+  // that spend; those stay blocked while it is missing (see `periodMissing`).
 
   // A failure here, before the platform's own figures are in, is recorded on
   // the period: the screens then show "—" and the reason instead of the last
@@ -340,7 +352,7 @@ export async function reconcileAccount(
       now,
     ));
   } catch (error) {
-    await recordPlatformReadFailure(db, { periodId: period.id, error, now });
+    if (period) await recordPlatformReadFailure(db, { periodId: period.id, error, now });
     throw error;
   }
 
@@ -373,6 +385,23 @@ export async function reconcileAccount(
       ) latest
   `);
   const spentCents = Number(totals.rows[0]?.total ?? 0);
+
+  if (!period) {
+    // Facts recorded; the period's totals, commitment and freshness wait for
+    // the period. Nothing here can spend, freeze or release anything.
+    return {
+      campaignsSynced: synced.campaigns,
+      adSetsSynced: synced.adSets,
+      spendRowsRecorded: spendRows.length,
+      spentCents,
+      committedCents: 0,
+      killSwitchEngaged: false,
+      outOfBandChangeDetected: false,
+      platformRemainingCents: platformLimit.remainingCents,
+      platformIsBinding: false,
+      periodMissing: true,
+    };
+  }
 
   const applied = await applyReportedSpend(db, { periodId: period.id, spentCents, now });
 
@@ -455,6 +484,7 @@ export async function reconcileAccount(
     outOfBandChangeDetected,
     platformRemainingCents: platformLimit.remainingCents,
     platformIsBinding: limitResult?.platformIsBinding ?? false,
+    periodMissing: false,
   };
 }
 

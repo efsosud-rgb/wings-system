@@ -24,15 +24,18 @@ export function centsFromMinorUnitString(value: unknown, field: string): Cents {
 
 export function centsFromDecimalCurrencyString(value: unknown, field: string): Cents {
   // Insights write spend with as many decimals as they like ("1.67832" on the
-  // first real breakdown run); anything beyond the cent is rounded, never a
-  // reason to drop the row.
+  // first real breakdown run); anything beyond the cent is rounded half up —
+  // the rule Google's micros follow (`centsFromMicros`) — never a reason to
+  // drop the row. The rounding is done on the digits, not in floating point,
+  // so "0.285" is 29, not 28.
   if (typeof value !== 'string' || !/^\d+(\.\d+)?$/.test(value)) {
     throw new Error(
       `${field}: expected a decimal currency string like "48.71", got ${JSON.stringify(value)}`,
     );
   }
   const [whole = '0', fraction = ''] = value.split('.');
-  const cents = Number(whole) * 100 + Math.round(Number(`0.${fraction || '0'}`) * 100);
+  const digits = `${fraction}000`.slice(0, 3);
+  const cents = Number(whole) * 100 + Number(digits.slice(0, 2)) + (Number(digits[2]) >= 5 ? 1 : 0);
   if (!Number.isSafeInteger(cents)) throw new Error(`${field}: value out of safe range`);
   return cents;
 }

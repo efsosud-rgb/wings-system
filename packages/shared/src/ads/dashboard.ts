@@ -132,6 +132,13 @@ export interface SpendStrip {
    * ingestion, for instance. Null when there is nothing to say.
    */
   setupNote: string | null;
+  /**
+   * Set when an account of this strip has no budget period open for the
+   * month: the reading goes on (spend comes from the platform's daily rows),
+   * but launching or raising budgets stays blocked until the month's cap is
+   * opened in Administração → Integrações. Null otherwise.
+   */
+  periodMissingNote: string | null;
 }
 
 /** How the ingest job is doing, so the header can say when the next run is. */

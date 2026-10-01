@@ -88,6 +88,7 @@ function Strip({ strip }: { strip: SpendStrip }) {
         </Alert>
       )}
       {strip.setupNote && <SetupNote note={strip.setupNote} />}
+      {strip.periodMissingNote && <Alert kind="warning">{strip.periodMissingNote}</Alert>}
 
       <dl className="strip-figures">
         <div>
