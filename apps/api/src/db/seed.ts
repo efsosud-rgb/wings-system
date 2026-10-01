@@ -48,6 +48,13 @@ const EXPANSION_LANDING_PAGES = [
   { identifier: 'mister-russo', brand: 'Mister Russo', rdDealIntake: false },
   { identifier: 'familia-k', brand: 'Família K', rdDealIntake: false },
   { identifier: 'wash-club', brand: 'Wash Club', rdDealIntake: false },
+  // Four new pages of the audit v2 (docs/analise/landing-pages-auditoria-2026-10-01-v2.md)
+  // and `lionhairoficial`, also Lion Hair (Eric, 01/10). Held from RD deals like the three above.
+  { identifier: 'so-criancas', brand: 'Só Crianças', rdDealIntake: false },
+  { identifier: 'lion-hair', brand: 'Lion Hair', rdDealIntake: false },
+  { identifier: 'lionhairoficial', brand: 'Lion Hair', rdDealIntake: false },
+  { identifier: 'super-dogao-da-nana', brand: 'Super Dogão da Nana', rdDealIntake: false },
+  { identifier: 'sarantopoulos', brand: 'Sarantopoulos', rdDealIntake: false },
 ];
 
 /** The Formatação forms (the Formatação net's list), Wings Company's own. */

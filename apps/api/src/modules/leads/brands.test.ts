@@ -43,10 +43,22 @@ describe('registerBrands', () => {
     const before = await db.select().from(clients);
     const report = await registerBrands(db, { names: EXPANSION_BRANDS, apply: false });
     expect(report.created).toHaveLength(8);
-    // Every seeded rule but Wash Club's, which is not on this list.
+    // Every seeded rule but those of brands not on this list (Wash Club, audit v2 pages).
     expect(
-      report.links.filter((link) => link.state !== 'linked').map((link) => link.identifier),
-    ).toEqual(['wash-club']);
+      report.links
+        .filter((link) => link.state !== 'linked')
+        .map((link) => link.identifier)
+        .sort(),
+    ).toEqual(
+      [
+        'wash-club',
+        'so-criancas',
+        'lion-hair',
+        'lionhairoficial',
+        'super-dogao-da-nana',
+        'sarantopoulos',
+      ].sort(),
+    );
     expect(await db.select().from(clients)).toHaveLength(before.length);
     expect(formatBrandReport(report)).toContain('SIMULAÇÃO');
   });
