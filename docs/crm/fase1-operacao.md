@@ -158,10 +158,18 @@ conferir o log `lead webhook` (forma) — em especial se `traffic_source` vem em
 - **Reenvio ao RD Marketing**: pronto e desligado. Com
   `SITE_FORM_RD_FORWARD_ENABLED=true` (só o Eric liga), uma chamada de conversão
   por envio, nunca repetida; resultado na auditoria (`rdForward`).
-- Domínio `lp.wingscompany.com.br`: hoje é CNAME para as páginas do RD. Testar
-  no staging (`staging.wingssystem.online/lp/<slug>`). Para o domínio próprio:
-  A `lp` → `2.24.198.232` no HostGator, depois o domínio no Coolify no web **e**
-  na API (`/api` precisa estar na mesma origem, ou o POST cai na trava de Origin).
+- Domínio `lp.wingscompany.com.br` (decisão do Eric em 01/10: continua sendo o do
+  formulário do CRM): hoje é CNAME para as páginas do RD. Testar no staging
+  (`staging.wingssystem.online/lp/<slug>`).
+  - **Pré-requisito antes de mexer no DNS:** o próprio RD publica páginas em
+    `lp.wingscompany.com.br` (pelo menos 11 em 01/10, entre elas
+    `expansao-de-franquias`, `formatar-franquia`, `plano-de-negocios`,
+    `pagina-de-obrigado-nova` e 3 políticas de privacidade). O registro A `lp` →
+    VPS **só pode ser criado depois de migrar essas páginas do RD para outro
+    domínio** (e trocar os links que apontam para elas); senão todas saem do ar.
+  - Depois disso: A `lp` → `2.24.198.232` no HostGator, então o domínio no
+    Coolify no web **e** na API (`/api` precisa estar na mesma origem, ou o POST
+    cai na trava de Origin).
 
 **Origem por página** (`lead_source_rules.deal_source`): em CRM Vendas →
 Landing pages, a "Origem" do RD CRM para os negócios **novos** que o intake de
@@ -220,3 +228,6 @@ marca certa.
   Simula por padrão; rodar de novo não muda nada; auditoria `client.company_updated` só com nomes de
   campo.
 - Nada é enviado: `wa.me` só abre a conversa no aparelho da pessoa.
+- Staging (01/10): `lista-de-espera-familia-k` também ficou com `rd_deal_intake`
+  desligado, igual à `familia-k` (decisão do Eric; auditoria `landing_page.updated`).
+  Em produção a regra nasce ligada pelo seed: desligar na tela ao publicar.
