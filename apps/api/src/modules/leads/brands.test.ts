@@ -234,6 +234,30 @@ describe('seeded rules (audit of 01/10)', () => {
       )?.brand,
     ).toBe('Renomeada por alguém');
   });
+
+  it('seeds every held page with no RD deal, the Família K waiting list included', async () => {
+    await seed(db);
+    const held = [
+      'mister-russo',
+      'familia-k',
+      'lista-de-espera-familia-k',
+      'wash-club',
+      'so-criancas',
+      'lion-hair',
+      'lionhairoficial',
+      'super-dogao-da-nana',
+      'sarantopoulos',
+    ];
+    for (const pattern of held) {
+      const rule = await db.query.leadSourceRules.findFirst({
+        where: eq(leadSourceRules.pattern, pattern),
+      });
+      expect({ pattern, rdDealIntake: rule?.rdDealIntake }).toEqual({
+        pattern,
+        rdDealIntake: false,
+      });
+    }
+  });
 });
 
 describe('T6: brand contacts (Eric, 01/10)', () => {

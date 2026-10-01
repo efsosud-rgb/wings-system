@@ -40,13 +40,14 @@ const EXPANSION_LANDING_PAGES = [
   { identifier: 'grupo-forte-fenix', brand: 'Grupo Forte Fênix' },
   { identifier: 'rio-acai-gourmet', brand: 'Rio Açaí Gourmet' },
   { identifier: 'ginteco', brand: 'Ginteco' },
-  { identifier: 'lista-de-espera-familia-k', brand: 'Família K' },
   // RD pages without a rule, found by the landing-page audit of 2026-10-01
   // (docs/analise/landing-pages-auditoria-2026-10-01.md): Mister Russo's form
   // uses the slug, while `lp-mister-russo` is only its WhatsApp balloon. They
   // make no RD deal until Eric decides: RD's own automation may already make one.
   { identifier: 'mister-russo', brand: 'Mister Russo', rdDealIntake: false },
   { identifier: 'familia-k', brand: 'Família K', rdDealIntake: false },
+  // Família K's waiting list too (Eric, 01/10), so production starts with it off.
+  { identifier: 'lista-de-espera-familia-k', brand: 'Família K', rdDealIntake: false },
   { identifier: 'wash-club', brand: 'Wash Club', rdDealIntake: false },
   // Four new pages of the audit v2 (docs/analise/landing-pages-auditoria-2026-10-01-v2.md)
   // and `lionhairoficial`, also Lion Hair (Eric, 01/10). Held from RD deals like the three above.

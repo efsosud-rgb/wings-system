@@ -230,4 +230,5 @@ marca certa.
 - Nada é enviado: `wa.me` só abre a conversa no aparelho da pessoa.
 - Staging (01/10): `lista-de-espera-familia-k` também ficou com `rd_deal_intake`
   desligado, igual à `familia-k` (decisão do Eric; auditoria `landing_page.updated`).
-  Em produção a regra nasce ligada pelo seed: desligar na tela ao publicar.
+  O seed também a cria desligada (junto com `mister-russo`, `familia-k`, `wash-club` e
+  as páginas da auditoria v2), então em produção ela já nasce desligada.
