@@ -355,10 +355,19 @@ async function paidStrip(
   // cap was opened yet) the guard has no figure, and showing zero would be a
   // lie: the platform's daily rows stand in, said so on the strip.
   const missing = accounts.filter((_account, index) => !states[index]);
-  const spent =
+  // Per account: the reconciled figure where the period exists, the daily rows where it does not.
+  const missingDaily =
     missing.length === 0
-      ? states.reduce((total, state) => total + (state?.spentCents ?? 0), 0)
-      : daily.reduce((total, row) => total + row.amount, 0);
+      ? []
+      : await dailySpend(
+          db,
+          missing.map((account) => account.id),
+          month.periodMonth,
+          month.today,
+        );
+  const spent =
+    states.reduce((total, state) => total + (state?.spentCents ?? 0), 0) +
+    missingDaily.reduce((total, row) => total + row.amount, 0);
   const periodMissingNote =
     missing.length === 0
       ? null

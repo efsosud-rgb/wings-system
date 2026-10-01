@@ -9,7 +9,7 @@ import {
   budgetPeriods,
 } from '../../db/schema/index.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
-import { getPeriodState, openPeriod, remainingDays } from './budget-guard.js';
+import { getPeriodState, openPeriod, remainingDays, reserveChange } from './budget-guard.js';
 import { FakeMetaClient } from './platform/fake-meta-client.js';
 import {
   enforceReconciliationFreshness,
@@ -125,6 +125,19 @@ describe('the month turned with no budget period (Eric, 01/10)', () => {
     expect(await enforceReconciliationFreshness(db, { now: october })).not.toContainEqual(
       expect.objectContaining({ accountId: id }),
     );
+
+    // And a request to raise a budget is refused for want of a period.
+    const [campaign] = await db.query.adCampaigns.findMany({
+      where: eq(adCampaigns.adAccountId, id),
+    });
+    const raise = await reserveChange(db, {
+      adAccountId: id,
+      campaignId: campaign!.id,
+      kind: 'set_daily_budget',
+      toDailyBudgetCents: 8000,
+      now: october,
+    });
+    expect(raise).toMatchObject({ ok: false, reason: 'period_not_open' });
 
     // Once someone opens the month, the next reconciliation fills it from the same facts.
     await openPeriod(db, {
