@@ -125,6 +125,19 @@ falta e ninguém o inventa.
 | Relatório investimento → receita | investimento → lead → qualificado → reunião → proposta → contrato → receita, por campanha, marca e vendedor, com a fonte e a janela de cada número e "—" quando não houver dado | 6 (até reunião), 7 (completo) | 2 | o que conta como "qualificado" (classe A/B?) e como "receita" (contrato assinado ou pagamento) |
 | Pós-venda da Formatação | tickets, SLA e NPS (Fase 11) | 11 | 8 | marcos do projeto em que o NPS é pedido; SLA por tipo de ticket |
 
+### 3.1.1 Itens futuros da Fase 4 (pedido do Eric, 01/10/2026)
+
+Registrados para não se perderem; **nada é construído agora**. O pedido trouxe
+só os nomes: o escopo de cada um é definido com o Eric quando a Fase 4 abrir,
+e ninguém o inventa antes. Sem estimativa até lá.
+
+| Item | Fase | Falta definir |
+| --- | --- | --- |
+| "Cérebro da empresa" | 4 | o que é (base de conhecimento? memória dos agentes?), de onde lê, quem consulta, o que nunca entra (dado pessoal, CPF, tokens) |
+| "Mapa de agentes" | 4 | quais agentes entram, o que cada um lê e propõe, e onde o mapa aparece; os agentes continuam só lendo e propondo (regra do CLAUDE.md) |
+| Dashboard Comercial | 4 | indicadores, recorte (marca, vendedor, funil), quem vê; números agregados para quem não tem acesso a dado pessoal |
+| Dashboard Operação | 4 | indicadores (projetos de Formatação? pós-venda?), recorte e quem vê |
+
 ### 3.2 Fase 2 — número oficial do WhatsApp (decisão pendente, registrada em 30/09)
 
 Não muda a Fase 1. Número oficial da Wings Company para a API oficial:
