@@ -28,8 +28,8 @@ export const EXPANSION_BRANDS = [
 /**
  * Brands whose landing pages were read live on 2026-09-30 at
  * franquia.wingscompany.com.br/<slug>: the RD form's `conversion_identifier`
- * is the slug. Wash Club's page is a draft in RD (404): client only, its rule
- * is made by CRM Vendas → Landing pages when the page is published.
+ * is the slug. Wash Club's page was a draft in RD (404) then: client only. It
+ * is published since; its `wash-club` rule comes from the seed (audit of 01/10).
  */
 export const EXPANSION_BRANDS_2026_09_30: { name: string; identifiers: string[] }[] = [
   { name: 'Cenoritas', identifiers: ['cenoritas'] },

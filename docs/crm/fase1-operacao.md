@@ -128,3 +128,64 @@ lista dos nossos usuários do RD, sem nada de lead). O seguimento por hora
 de staging e `?secret=` (o valor está só no Coolify). Na primeira entrega,
 conferir o log `lead webhook` (forma) — em especial se `traffic_source` vem em
 `last_conversion.content` no webhook como vem nos eventos de contato.
+
+## Formulário do site, origem por página e dono inativo (T5, migração 0056)
+
+**Formulário próprio** em `/lp/<slug>` (página pública do app, sem login):
+`GET`/`POST /api/public/site-forms/:slug`. Responde só para uma regra
+`landing_page` ativa com o formulário ligado; qualquer outra coisa é o mesmo 404.
+
+- Ligar por página: CRM Vendas → Landing pages → "Formulário do site"
+  (`lead_source_rules.site_form_enabled`, `PATCH /api/crm/landing-pages/:id`,
+  `integrations.manage`, auditado).
+- Antes de gravar: campo-isca (preenchido = resposta de sucesso, nada gravado,
+  `site_form.honeypot`), depois Cloudflare Turnstile conferido no servidor
+  (`site_form.captcha_refused`), e limite por IP (10 envios / 10 min; 120
+  leituras / min). O IP é o que o Traefik entrega: ele não aceita
+  `X-Forwarded-For` de fora e o domínio aponta direto para o servidor (sem proxy
+  da Cloudflare). Se um dia passar pela Cloudflare, o limite precisa usar
+  `CF-Connecting-IP`.
+- Variáveis (só nomes): `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` (sem o
+  secret: 503, nunca um falso sucesso) e `SITE_FORM_RD_FORWARD_ENABLED`.
+- O lead entra pelo mesmo `upsertLead` do webhook (T4): cliente, marca e funil
+  pela regra; atribuição de primeiro toque pelos campos ocultos (cookie
+  `wings_ft`, `lib/site-tracking.ts`) e pela URL da página; consentimento com o
+  texto `SITE_FORM_CONSENT_TEXT`. Lead novo abre a pesquisa (`enrich_lead`),
+  como os outros canais. Log só com a forma do corpo (`shapeOf`); auditoria só
+  com ids e marcas.
+- **Reenvio ao RD Marketing**: pronto e desligado. Com
+  `SITE_FORM_RD_FORWARD_ENABLED=true` (só o Eric liga), uma chamada de conversão
+  por envio, nunca repetida; resultado na auditoria (`rdForward`).
+- Domínio `lp.wingscompany.com.br`: hoje é CNAME para as páginas do RD. Testar
+  no staging (`staging.wingssystem.online/lp/<slug>`). Para o domínio próprio:
+  A `lp` → `2.24.198.232` no HostGator, depois o domínio no Coolify no web **e**
+  na API (`/api` precisa estar na mesma origem, ou o POST cai na trava de Origin).
+
+**Origem por página** (`lead_source_rules.deal_source`): em CRM Vendas →
+Landing pages, a "Origem" do RD CRM para os negócios **novos** que o intake de
+Expansão criar a partir daquela página (`GET /api/crm/landing-pages/deal-sources`
+lê a lista do RD). Sem origem, ou com uma que o RD não tem mais, vale a regra
+anterior ("Referência | <host>" ou "Contato pelo Site"), contada em
+`dealSourceMissing`. Negócios já existentes no RD não são tocados.
+
+**Regras do seed (auditoria de 01/10)**: `mister-russo` (o formulário; o balão
+é `lp-mister-russo`), `familia-k` e `wash-club`, funil Expansão. Só insere;
+uma regra nova já nasce ligada ao cliente da marca quando ele existe. Com
+`EXPANSION_INTAKE_ENABLED` ligado, conversões dessas páginas passam a virar
+negócio no RD CRM pelo intake, como as das outras marcas.
+
+**Dono inativo**: `rd_user_map.departed_at` marca quem saiu da empresa (a 0056
+marca o ex-vendedor `69ef68ab1ca7400013f89513`). No Funil, o filtro "Dono
+inativo" junta negócios do RD sem dono, com dono inativo no RD, que saiu, ou sem
+ligação a funcionário. Nada é redistribuído.
+
+**B5 — marcas antigas para Expansão**:
+
+```
+node dist/scripts/crm-brands.js --expansion-legacy           # simula
+node dist/scripts/crm-brands.js --expansion-legacy --apply   # aplica
+```
+
+As 8 marcas da primeira rodada passam a `relationship = 'expansao'` e os
+projetos de Formatação abertos para elas ficam ocultos (`client_projects.hidden_at`),
+sem apagar nada. Rodar de novo não faz nada.

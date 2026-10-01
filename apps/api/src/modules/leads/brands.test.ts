@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../../db/client.js';
 import { auditLog, clientProjects, clients, leadSourceRules } from '../../db/schema/index.js';
+import { seed } from '../../db/seed.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import {
   brandKey,
@@ -40,7 +41,10 @@ describe('registerBrands', () => {
     const before = await db.select().from(clients);
     const report = await registerBrands(db, { names: EXPANSION_BRANDS, apply: false });
     expect(report.created).toHaveLength(8);
-    expect(report.links.every((link) => link.state === 'linked')).toBe(true);
+    // Every seeded rule but Wash Club's, which is not on this list.
+    expect(
+      report.links.filter((link) => link.state !== 'linked').map((link) => link.identifier),
+    ).toEqual(['wash-club']);
     expect(await db.select().from(clients)).toHaveLength(before.length);
     expect(formatBrandReport(report)).toContain('SIMULAÇÃO');
   });
@@ -90,7 +94,12 @@ describe('registerBrands', () => {
     expect(
       (await db.query.auditLog.findMany({ where: eq(auditLog.action, 'lead_source_rule.linked') }))
         .length,
-    ).toBe(9);
+    ).toBe(11);
+    // Audit of 01/10: the form's own identifier, not only the balloon's.
+    expect(byIdentifier.get('mister-russo')?.client?.name).toBe('Mister Russo');
+    expect(byIdentifier.get('familia-k')?.client?.name).toBe('Família K');
+    // Wash Club is not on this list: no client yet, so its rule waits.
+    expect(byIdentifier.get('wash-club')).toMatchObject({ state: 'none', client: null });
 
     const again = await registerBrands(db, { names: EXPANSION_BRANDS, apply: true });
     expect(again.created).toHaveLength(0);
@@ -176,5 +185,33 @@ describe('B5: the 8 old brands move to Expansão, their projects hidden (Eric, 0
     expect(again.moves.filter((move) => move.project === 'hidden')).toHaveLength(0);
     const audit = await db.select().from(auditLog).where(eq(auditLog.action, 'project.hidden'));
     expect(audit).toHaveLength(3);
+  });
+});
+
+describe('seeded rules (audit of 01/10)', () => {
+  it('ties a new seeded rule to its brand client when one exists, and never touches an existing rule', async () => {
+    const wash =
+      (await db.query.clients.findFirst({ where: eq(clients.name, 'Wash Club') })) ??
+      (
+        await db.insert(clients).values({ name: 'Wash Club', slug: 'wash-club-seed' }).returning()
+      )[0]!;
+    await db.delete(leadSourceRules).where(eq(leadSourceRules.pattern, 'wash-club'));
+    await db
+      .update(leadSourceRules)
+      .set({ brand: 'Renomeada por alguém' })
+      .where(eq(leadSourceRules.pattern, 'familia-k'));
+
+    await seed(db);
+
+    expect(
+      await db.query.leadSourceRules.findFirst({ where: eq(leadSourceRules.pattern, 'wash-club') }),
+    ).toMatchObject({ pipeline: 'expansao', brand: 'Wash Club', clientId: wash.id });
+    expect(
+      (
+        await db.query.leadSourceRules.findFirst({
+          where: eq(leadSourceRules.pattern, 'familia-k'),
+        })
+      )?.brand,
+    ).toBe('Renomeada por alguém');
   });
 });
