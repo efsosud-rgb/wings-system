@@ -1,0 +1,210 @@
+<!--
+  Tag "HTML - RD conversão observada" para o GTM-MXJLC5HH (wingscompany.com.br).
+  Acionador: Initialization - All Pages (roda antes dos scripts do RD Station).
+  Substitui a tag antiga do PerformanceObserver, que deve ficar pausada.
+
+  O que faz: envolve fetch e XMLHttpRequest. Para toda requisição de conversão
+  do RD Station (host rdstation.com, rdstation.com.br ou rd.services e
+  "conversions" no caminho, nunca na query), empurra no dataLayer UM evento por envio:
+    rd_conversion_accepted  quando o RD respondeu 2xx
+    rd_conversion_refused   quando respondeu outra coisa, ou a rede falhou (status 0)
+    rd_conversion_unknown   quando o envio foi por sendBeacon (não há resposta)
+  Campos: rd_identifier (conversion_identifier do formulário ou pop-up),
+  rd_status (número) e rd_event_id (UUID v4, o mesmo para Pixel, Google e GA4).
+  Nunca nome, e-mail, telefone ou qualquer outro campo do formulário.
+  ES5 estrito (funções internas como expressões, pois o compilador do GTM recusa
+  declarações function dentro de bloco), tudo dentro de try/catch: uma falha aqui nunca quebra o site nem o envio.
+-->
+<script>
+  (function () {
+    try {
+      if (window.__wingsRdConv2) {
+        return;
+      }
+      window.__wingsRdConv2 = true;
+
+      /* Só o host do RD e só o caminho (nunca a query): um hit do GA4 que carrega
+         "cta-redirect.rdstation.com/v2/conversions" como parâmetro não conta. */
+      var RD_URL = /^(https?:)?\/\/([a-z0-9-]+\.)*(rdstation\.com(\.br)?|rd\.services)\/[^?#]*conversions/i;
+      var IDENT = /conversion_identifier["']?\s*[:=]\s*["']?([A-Za-z0-9._\-]+)/;
+
+      var uuid = function () {
+        try {
+          if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+            return window.crypto.randomUUID();
+          }
+        } catch (e) {}
+        var t = new Date().getTime();
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+          var r = ((t + Math.random() * 16) % 16) | 0;
+          t = Math.floor(t / 16);
+          return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+        });
+      };
+
+      var isRd = function (url) {
+        try {
+          return RD_URL.test(String(url || ''));
+        } catch (e) {
+          return false;
+        }
+      };
+
+      /* Só o identificador sai do corpo: o resto (nome, e-mail, telefone) nunca é lido para fora. */
+      var identifierOf = function (body, url) {
+        try {
+          if (!body) {
+            body = '';
+          }
+          if (typeof body === 'string') {
+            var m = body.match(IDENT);
+            if (m) {
+              return decodeURIComponent(m[1]);
+            }
+          } else if (
+            typeof FormData !== 'undefined' &&
+            body instanceof FormData &&
+            typeof body.get === 'function'
+          ) {
+            var v = body.get('conversion_identifier');
+            if (v) {
+              return String(v);
+            }
+          } else if (typeof URLSearchParams !== 'undefined' && body instanceof URLSearchParams) {
+            var u = body.get('conversion_identifier');
+            if (u) {
+              return String(u);
+            }
+          } else if (typeof body === 'object' && body.conversion_identifier) {
+            return String(body.conversion_identifier);
+          }
+          var q = String(url || '').match(IDENT);
+          if (q) {
+            return decodeURIComponent(q[1]);
+          }
+        } catch (e) {}
+        return 'desconhecido';
+      };
+
+      var report = function (identifier, status, kind) {
+        try {
+          var accepted = status >= 200 && status < 300;
+          window.dataLayer = window.dataLayer || [];
+          window.dataLayer.push({
+            event:
+              kind === 'beacon'
+                ? 'rd_conversion_unknown'
+                : accepted
+                  ? 'rd_conversion_accepted'
+                  : 'rd_conversion_refused',
+            rd_identifier: identifier || 'desconhecido',
+            rd_status: typeof status === 'number' ? status : 0,
+            rd_event_id: uuid(),
+          });
+        } catch (e) {}
+      };
+
+      /* fetch */
+      try {
+        if (typeof window.fetch === 'function') {
+          var nativeFetch = window.fetch;
+          window.fetch = function (input, init) {
+            var url = '';
+            var ident = 'desconhecido';
+            try {
+              url = typeof input === 'string' ? input : (input && input.url) || '';
+              if (isRd(url)) {
+                ident = identifierOf(init && init.body, url);
+              }
+            } catch (e) {}
+            var result = nativeFetch.apply(this, arguments);
+            try {
+              if (isRd(url) && result && typeof result.then === 'function') {
+                result.then(
+                  function (response) {
+                    try {
+                      report(
+                        ident,
+                        response && typeof response.status === 'number' ? response.status : 0
+                      );
+                    } catch (e) {}
+                  },
+                  function () {
+                    try {
+                      report(ident, 0);
+                    } catch (e) {}
+                  }
+                );
+              }
+            } catch (e) {}
+            return result;
+          };
+        }
+      } catch (e) {}
+
+      /* XMLHttpRequest. O ouvinte entra no open(), antes do handler do RD (jQuery liga onload
+         depois do open): assim o evento sai para o GTM antes do alert() e do redirecionamento
+         que o RD faz no sucesso, e o GA4 tem tempo de enviar. */
+      try {
+        if (window.XMLHttpRequest && XMLHttpRequest.prototype) {
+          var nativeOpen = XMLHttpRequest.prototype.open;
+          var nativeSend = XMLHttpRequest.prototype.send;
+          XMLHttpRequest.prototype.open = function (method, url) {
+            try {
+              this.__wingsRdUrl = isRd(url) ? String(url) : null;
+              this.__wingsRdDone = false;
+              if (this.__wingsRdUrl && typeof this.addEventListener === 'function') {
+                var xhr = this;
+                var finish = function () {
+                  if (xhr.__wingsRdDone) {
+                    return;
+                  }
+                  xhr.__wingsRdDone = true;
+                  try {
+                    report(
+                      identifierOf(xhr.__wingsRdBody, xhr.__wingsRdUrl),
+                      typeof xhr.status === 'number' ? xhr.status : 0
+                    );
+                  } catch (e) {}
+                };
+                xhr.addEventListener('readystatechange', function () {
+                  try {
+                    if (xhr.readyState === 4) {
+                      finish();
+                    }
+                  } catch (e) {}
+                });
+                xhr.addEventListener('loadend', finish);
+              }
+            } catch (e) {}
+            return nativeOpen.apply(this, arguments);
+          };
+          XMLHttpRequest.prototype.send = function (body) {
+            try {
+              if (this.__wingsRdUrl) {
+                this.__wingsRdBody = body;
+              }
+            } catch (e) {}
+            return nativeSend.apply(this, arguments);
+          };
+        }
+      } catch (e) {}
+
+      /* sendBeacon: não devolve resposta, então nunca conta como aceita. */
+      try {
+        if (window.navigator && typeof window.navigator.sendBeacon === 'function') {
+          var nativeBeacon = window.navigator.sendBeacon;
+          window.navigator.sendBeacon = function (url, data) {
+            var sent = nativeBeacon.apply(this, arguments);
+            try {
+              if (isRd(url)) {
+                report(identifierOf(data, url), sent ? 0 : 0, 'beacon');
+              }
+            } catch (e) {}
+            return sent;
+          };
+        }
+      } catch (e) {}
+    } catch (e) {}
+  })();
+</script>
