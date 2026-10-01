@@ -38,6 +38,7 @@ const WINGS: Client = {
 
 const AURORA_PROJECT: ClientProject = {
   id: 'p-1',
+  hidden: false,
   clientId: AURORA.id,
   clientName: AURORA.name,
   clientNumber: 3,

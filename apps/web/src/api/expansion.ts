@@ -101,6 +101,8 @@ export interface RdUserLink {
   rdUserId: string;
   rdName: string;
   rdActive: boolean;
+  /** "Saiu da empresa": their deals count as "dono inativo". */
+  departedAt: string | null;
   employeeId: string | null;
   employeeName: string | null;
 }
@@ -126,5 +128,16 @@ export function useLinkRdUser() {
         employeeId: input.employeeId,
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: RD_USERS_KEY }),
+  });
+}
+
+export function useMarkRdUserDeparted() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { rdUserId: string; departed: boolean }) =>
+      api.put(`/leads/rd-users/${encodeURIComponent(input.rdUserId)}/departed`, {
+        departed: input.departed,
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['leads'] }),
   });
 }

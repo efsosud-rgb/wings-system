@@ -54,7 +54,7 @@ export const projectRoutes: FastifyPluginAsync = async (app) => {
   const { db } = app.wings;
 
   const oneProject = async (clientId: string, actor: Parameters<typeof listProjects>[1]) =>
-    (await listProjects(db, actor, { clientId, inactive: true }))[0] ?? null;
+    (await listProjects(db, actor, { clientId, inactive: true, hidden: true }))[0] ?? null;
 
   app.get(
     '/projects',

@@ -218,13 +218,16 @@ describe('RD CRM users -> employees', () => {
       url: '/leads/rd-users',
       cookies: admin.cookies,
     });
-    expect(list.json().users).toEqual([
-      expect.objectContaining({
-        rdUserId: 'rd-user-1',
-        employeeId: admin.employeeId,
-        rdActive: true,
-      }),
-    ]);
+    expect(list.json().users).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          rdUserId: 'rd-user-1',
+          employeeId: admin.employeeId,
+          rdActive: true,
+          departedAt: null,
+        }),
+      ]),
+    );
     const unknown = await app.inject({
       method: 'PUT',
       url: '/leads/rd-users/nao-existe',
@@ -279,5 +282,89 @@ describe('review fixes (T3)', () => {
       brand: 'Marca Sem Cadastro',
       pipeline: 'expansao',
     });
+  });
+});
+
+describe('dono inativo (Eric, 01/10): nothing reassigned, only named', () => {
+  it('marks the departed seller by migration and counts no owner, inactive or departed owners as "dono inativo"', async () => {
+    const departed = await db.query.rdUserMap.findFirst({
+      where: eq(rdUserMap.rdUserId, '69ef68ab1ca7400013f89513'),
+    });
+    expect(departed?.departedAt).toBeInstanceOf(Date);
+
+    const admin = await sessionFor('admin_master');
+    const before = (
+      await app.inject({ method: 'GET', url: '/leads/summary', cookies: admin.cookies })
+    ).json().inactiveOwnerOpen as number;
+    await db.insert(rdUserMap).values([
+      { rdUserId: 'rd-working', rdName: 'Vendedor ativo', employeeId: admin.employeeId },
+      { rdUserId: 'rd-gone', rdName: 'Saiu', employeeId: admin.employeeId },
+    ]);
+    const base = { clientId: WINGS_CLIENT_ID, source: 'rd_crm', pipeline: 'expansao' as const };
+    const inserted = await db
+      .insert(leads)
+      .values([
+        {
+          ...base,
+          rdDealId: 'owner-ok',
+          rdOwnerId: 'rd-working',
+          ownerEmployeeId: admin.employeeId,
+        },
+        { ...base, rdDealId: 'owner-none', rdOwnerId: null, ownerEmployeeId: null },
+        {
+          ...base,
+          rdDealId: 'owner-gone',
+          rdOwnerId: 'rd-gone',
+          ownerEmployeeId: admin.employeeId,
+        },
+        {
+          ...base,
+          rdDealId: 'owner-rafael',
+          rdOwnerId: '69ef68ab1ca7400013f89513',
+          ownerEmployeeId: null,
+        },
+        { ...base, rdDealId: null, source: 'site_form' },
+      ])
+      .returning({ id: leads.id, rdDealId: leads.rdDealId });
+    const gone = await app.inject({
+      method: 'PUT',
+      url: '/leads/rd-users/rd-gone/departed',
+      cookies: admin.cookies,
+      payload: { departed: true },
+    });
+    expect(gone.statusCode).toBe(200);
+
+    const list = await app.inject({
+      method: 'GET',
+      url: '/leads?owner=inactive',
+      cookies: admin.cookies,
+    });
+    expect(list.statusCode).toBe(200);
+    const ours = new Set(inserted.map((row) => row.id));
+    const listed = (
+      list.json().leads as { id: string; ownerInactive: boolean; ownerName: string | null }[]
+    ).filter((lead) => ours.has(lead.id));
+    const byDeal = new Map(inserted.map((row) => [row.id, row.rdDealId]));
+    expect(listed.map((lead) => byDeal.get(lead.id)).sort()).toEqual([
+      'owner-gone',
+      'owner-none',
+      'owner-rafael',
+    ]);
+    expect(listed.every((lead) => lead.ownerInactive && lead.ownerName === null)).toBe(true);
+
+    const after = (
+      await app.inject({ method: 'GET', url: '/leads/summary', cookies: admin.cookies })
+    ).json().inactiveOwnerOpen as number;
+    expect(after - before).toBe(3);
+
+    // Nothing was reassigned.
+    const owners = await db
+      .select({ owner: leads.ownerEmployeeId, deal: leads.rdDealId })
+      .from(leads);
+    expect(owners.find((row) => row.deal === 'owner-gone')?.owner).toBe(admin.employeeId);
+    const audit = await db.query.auditLog.findMany({
+      where: eq(auditLog.action, 'rd_user_map.departed'),
+    });
+    expect(audit).toHaveLength(1);
   });
 });

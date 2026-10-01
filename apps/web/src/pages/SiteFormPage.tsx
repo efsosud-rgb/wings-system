@@ -1,0 +1,191 @@
+import { zodResolver } from '@hookform/resolvers/zod';
+import {
+  SITE_FORM_CONSENT_TEXT,
+  siteFormSubmitSchema,
+  type SiteFormSubmitInput,
+} from '@wings/shared';
+import { useEffect, useRef, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { useParams } from 'react-router-dom';
+import { ApiError } from '../api/client.js';
+import { useSiteForm, useSubmitSiteForm } from '../api/leads.js';
+import { Alert, AuthCard, Button, Field, Input } from '../components/ui.js';
+import { captureFirstTouch, type Tracking } from '../lib/site-tracking.js';
+
+/**
+ * The site form (CRM phase 1, T5), public: `/lp/<slug>` for the pages CRM
+ * Vendas → Landing pages turned the form on. The lead goes into the CRM with
+ * the first touch this browser arrived by (UTMs, click ids, ad ids). A robot
+ * is kept out by Cloudflare Turnstile (checked again on the server) and a
+ * field people never see.
+ */
+
+const TURNSTILE_SCRIPT = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+
+interface TurnstileApi {
+  render: (
+    element: HTMLElement,
+    options: {
+      sitekey: string;
+      callback: (token: string) => void;
+      'expired-callback': () => void;
+      'error-callback': () => void;
+      language?: string;
+    },
+  ) => string;
+  reset: (widgetId?: string) => void;
+}
+
+declare global {
+  interface Window {
+    turnstile?: TurnstileApi;
+  }
+}
+
+function loadTurnstile(): Promise<TurnstileApi> {
+  if (window.turnstile) return Promise.resolve(window.turnstile);
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector<HTMLScriptElement>(`script[src="${TURNSTILE_SCRIPT}"]`);
+    const script = existing ?? document.createElement('script');
+    script.addEventListener('load', () =>
+      window.turnstile ? resolve(window.turnstile) : reject(new Error('turnstile')),
+    );
+    script.addEventListener('error', () => reject(new Error('turnstile')));
+    if (!existing) {
+      script.src = TURNSTILE_SCRIPT;
+      script.async = true;
+      document.head.appendChild(script);
+    }
+  });
+}
+
+/** The Turnstile widget; reports the token, or null when it expires or fails. */
+function Turnstile({
+  siteKey,
+  onToken,
+}: {
+  siteKey: string;
+  onToken: (token: string | null) => void;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    loadTurnstile()
+      .then((api) => {
+        if (cancelled || !box.current) return;
+        api.render(box.current, {
+          sitekey: siteKey,
+          language: 'pt-BR',
+          callback: (token) => onToken(token),
+          'expired-callback': () => onToken(null),
+          'error-callback': () => onToken(null),
+        });
+      })
+      .catch(() => setFailed(true));
+    return () => {
+      cancelled = true;
+    };
+  }, [siteKey, onToken]);
+  return (
+    <>
+      <div ref={box} className="site-form-captcha" />
+      {failed && (
+        <Alert kind="error">
+          Não foi possível carregar a verificação anti-robô. Recarregue a página.
+        </Alert>
+      )}
+    </>
+  );
+}
+
+export function SiteFormPage() {
+  const { slug = '' } = useParams();
+  const info = useSiteForm(slug);
+  const submit = useSubmitSiteForm(slug);
+  const [tracking, setTracking] = useState<Tracking>({});
+  const [token, setToken] = useState<string | null>(null);
+  const {
+    register,
+    handleSubmit,
+    setValue,
+    formState: { errors },
+  } = useForm<SiteFormSubmitInput>({
+    resolver: zodResolver(siteFormSubmitSchema),
+    defaultValues: { turnstileToken: '', website: '' },
+  });
+
+  useEffect(() => {
+    setTracking(captureFirstTouch(document, window.location.href));
+  }, []);
+  useEffect(() => {
+    setValue('turnstileToken', token ?? '');
+  }, [token, setValue]);
+
+  if (info.isLoading) return <AuthCard title="Carregando…">{null}</AuthCard>;
+  if (!info.data) {
+    return (
+      <AuthCard title="Página não encontrada">
+        <p className="muted">Este formulário não existe ou não está mais no ar.</p>
+      </AuthCard>
+    );
+  }
+
+  const onSubmit = handleSubmit((values) =>
+    submit.mutate({ ...values, page: window.location.href, tracking }),
+  );
+  const failure = submit.error instanceof ApiError ? submit.error : null;
+
+  return (
+    <AuthCard
+      title={`Seja um franqueado ${info.data.brand}`}
+      subtitle="Deixe seus dados e o time de expansão entra em contato."
+    >
+      {submit.isSuccess ? (
+        <Alert kind="success">Recebemos seus dados. Em breve entraremos em contato.</Alert>
+      ) : (
+        <form onSubmit={onSubmit} noValidate>
+          <Field label="Nome" error={errors.name?.message} required>
+            <Input autoComplete="name" {...register('name')} />
+          </Field>
+          <Field label="E-mail" error={errors.email?.message} required>
+            <Input type="email" autoComplete="email" {...register('email')} />
+          </Field>
+          <Field label="WhatsApp com DDD" error={errors.phone?.message} required>
+            <Input type="tel" autoComplete="tel" inputMode="tel" {...register('phone')} />
+          </Field>
+          {/* People never see this field; a robot that fills it is dropped by the server. */}
+          <div className="sr-only" aria-hidden="true">
+            <label>
+              Site
+              <input tabIndex={-1} autoComplete="off" {...register('website')} />
+            </label>
+          </div>
+          <label className="field field-inline">
+            <input type="checkbox" {...register('consent')} />
+            <span>{SITE_FORM_CONSENT_TEXT}</span>
+          </label>
+          {errors.consent?.message && <p className="field-error">{errors.consent.message}</p>}
+
+          {info.data.turnstileSiteKey ? (
+            <Turnstile siteKey={info.data.turnstileSiteKey} onToken={setToken} />
+          ) : (
+            <Alert kind="warning">O formulário ainda está em configuração.</Alert>
+          )}
+          {errors.turnstileToken?.message && !token && (
+            <p className="field-error">{errors.turnstileToken.message}</p>
+          )}
+
+          {failure && <Alert kind="error">{failure.message}</Alert>}
+
+          <Button
+            type="submit"
+            disabled={submit.isPending || !info.data.turnstileSiteKey || !token}
+          >
+            {submit.isPending ? 'Enviando…' : 'Quero ser franqueado'}
+          </Button>
+        </form>
+      )}
+    </AuthCard>
+  );
+}

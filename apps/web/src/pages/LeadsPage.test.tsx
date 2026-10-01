@@ -49,6 +49,7 @@ const item: LeadListItem = {
   stage: null,
   won: null,
   ownerName: null,
+  ownerInactive: false,
   stageChangedAt: null,
 };
 
@@ -65,6 +66,7 @@ const imported: LeadListItem = {
   brand: 'Casal dos Churros',
   stage: 'Tentando contato',
   ownerName: 'Fernando Teste',
+  ownerInactive: false,
   stageChangedAt: new Date(Date.now() - 12 * 86_400_000).toISOString(),
 };
 
@@ -81,6 +83,7 @@ const summary: FunnelSummary = {
     },
     { pipeline: 'formatacao', label: 'Formatação', arrived: 4, worked: 3, meeting: 1, won: 0 },
   ],
+  inactiveOwnerOpen: 0,
   owners: [{ id: '00000000-0000-4000-8000-000000000123', name: 'Fernando Teste' }],
   stages: [{ pipeline: 'expansao', stage: 'Tentando contato', order: 2 }],
   syncedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
@@ -269,6 +272,31 @@ describe('CRM Vendas → Funil', () => {
       expect(get).toHaveBeenCalledWith(expect.stringContaining('pipeline=expansao')),
     );
     await waitFor(() => expect(screen.queryByRole('link', { name: 'Ana Souza' })).toBeNull());
+  });
+
+  it('offers "Dono inativo" with its count and names those deals so, reassigning nothing', async () => {
+    get.mockImplementation(async (path: string) => {
+      if (path === '/auth/me') return { user: manager };
+      if (path === '/clients') return { clients: [] };
+      if (path.startsWith('/leads/summary')) return { ...summary, inactiveOwnerOpen: 184 };
+      if (path.startsWith('/leads?') && path.includes('owner=inactive'))
+        return { leads: [{ ...imported, ownerName: null, ownerInactive: true }], total: 1 };
+      if (path.startsWith('/leads')) return { leads: [imported], total: 1 };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    renderAt('/crm-vendas/funil');
+    const option = await screen.findByRole('option', { name: 'Dono inativo (184 em andamento)' });
+    fireEvent.change(screen.getByLabelText('Dono'), {
+      target: { value: (option as HTMLOptionElement).value },
+    });
+    await waitFor(() =>
+      expect(get).toHaveBeenCalledWith(expect.stringContaining('owner=inactive')),
+    );
+    const row = (await screen.findByRole('link', { name: 'Bruno Lima' })).closest(
+      'tr',
+    ) as HTMLElement;
+    await waitFor(() => expect(within(row).getByText('Dono inativo')).toBeTruthy());
+    expect(post).not.toHaveBeenCalled();
   });
 
   it('registers a lead by hand with its legal basis and goes to its page', async () => {

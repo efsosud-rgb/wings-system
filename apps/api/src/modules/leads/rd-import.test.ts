@@ -219,7 +219,10 @@ describe('importRdDeals', () => {
     expect(result.merged).toBe(2);
     expect(result.created).toBe(3);
     expect(await db.select().from(leads)).toHaveLength(before.length);
-    expect(await db.select().from(rdUserMap)).toHaveLength(0);
+    // Only the departed seller marked by migration 0056 is there before any import.
+    expect(
+      (await db.select().from(rdUserMap)).filter((row) => row.departedAt === null),
+    ).toHaveLength(0);
   });
 
   it('brings the deals in with funnel, brand, stage, owner and first contact, without queuing research', async () => {

@@ -7,11 +7,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const get = vi.fn();
 const post = vi.fn();
 const del = vi.fn();
+const patch = vi.fn();
 vi.mock('../api/client.js', async (original) => ({
   ...(await original<typeof import('../api/client.js')>()),
   api: {
     get: (path: string) => get(path),
     post: (path: string, body?: unknown) => post(path, body),
+    patch: (path: string, body?: unknown) => patch(path, body),
     delete: (path: string) => del(path),
   },
 }));
@@ -43,6 +45,9 @@ const page = (overrides: Partial<LandingPageItem>): LandingPageItem => ({
   active: true,
   archivedAt: null,
   createdAt: '2026-09-28T12:00:00Z',
+  siteFormEnabled: false,
+  dealSource: null,
+  rdDealIntake: true,
   leads: 3,
   performance: {
     visits: null,
@@ -74,6 +79,8 @@ beforeEach(() => {
         ],
       };
     if (path === '/leads/source-rules') return { rules: [] };
+    if (path === '/crm/landing-pages/deal-sources')
+      return { sources: ['Contato pelo Site', 'Site próprio'] };
     if (path === '/crm/landing-pages')
       return {
         baseUrl: 'https://franquia.wingscompany.com.br',
@@ -95,6 +102,7 @@ beforeEach(() => {
   });
   post.mockReset().mockResolvedValue({ ok: true });
   del.mockReset().mockResolvedValue(undefined);
+  patch.mockReset().mockResolvedValue({ page: page({}) });
 });
 afterEach(cleanup);
 
@@ -176,5 +184,42 @@ describe('CRM Vendas → Landing pages', () => {
       }),
     );
     expect(await screen.findByText('Links da página cenoritas-2')).toBeTruthy();
+  });
+
+  it('turns the own form on and sets the "Origem" for new RD deals, choosing from RD\'s sources', async () => {
+    renderPage();
+    const row = (await screen.findByText('cenoritas')).closest('tr') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: 'Formulário e origem' }));
+    fireEvent.click(await screen.findByLabelText('Formulário próprio do Wings System'));
+    const origin = screen.getByLabelText('Origem no RD CRM (só negócios novos)');
+    await waitFor(() => expect(document.querySelectorAll('datalist option')).toHaveLength(2));
+    fireEvent.change(origin, { target: { value: 'Origem que não existe' } });
+    expect(screen.getByText(/os negócios novos ficam com a origem padrão/)).toBeTruthy();
+    fireEvent.change(origin, { target: { value: 'Site próprio' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar' }));
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith('/crm/landing-pages/p2', {
+        siteFormEnabled: true,
+        rdDealIntake: true,
+        dealSource: 'Site próprio',
+      }),
+    );
+  });
+
+  it("shows the own form's address and the page's origin on the row", async () => {
+    get.mockImplementation(async (path: string) => {
+      if (path === '/auth/me') return { user: admin };
+      if (path === '/clients') return { clients: [] };
+      if (path === '/leads/source-rules') return { rules: [] };
+      if (path === '/crm/landing-pages')
+        return {
+          baseUrl: 'https://franquia.wingscompany.com.br',
+          pages: [page({ siteFormEnabled: true, dealSource: 'Site próprio' })],
+        };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    renderPage();
+    expect(await screen.findByText('Formulário próprio: /lp/casal-do-churros')).toBeTruthy();
+    expect(screen.getByText('Origem no RD: Site próprio')).toBeTruthy();
   });
 });

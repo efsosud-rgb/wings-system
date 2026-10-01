@@ -3,6 +3,7 @@ import {
   LANDING_PAGE_BASE_URL,
   landingPageCreateSchema,
   landingPageKeysOf,
+  landingPageUpdateSchema,
   normalizeSourcePattern,
   type LandingPageItem,
   type LeadPipeline,
@@ -13,6 +14,7 @@ import { z } from 'zod';
 import type { Database } from '../../db/client.js';
 import { clients, expansionIntakeLedger, leadSourceRules, leads } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
+import { RdCrm } from '../expansion/rd.js';
 
 /**
  * CRM Vendas → Landing pages (Eric's list of 30/09, items 2–4). A landing
@@ -84,6 +86,9 @@ export async function listLandingPages(db: Database): Promise<LandingPageItem[]>
       active: leadSourceRules.active,
       archivedAt: leadSourceRules.archivedAt,
       createdAt: leadSourceRules.createdAt,
+      siteFormEnabled: leadSourceRules.siteFormEnabled,
+      dealSource: leadSourceRules.dealSource,
+      rdDealIntake: leadSourceRules.rdDealIntake,
     })
     .from(leadSourceRules)
     .leftJoin(clients, eq(clients.id, leadSourceRules.clientId))
@@ -126,6 +131,9 @@ export async function listLandingPages(db: Database): Promise<LandingPageItem[]>
               : 'A entrada automática ainda não registrou nenhuma conversão.',
           rate: null,
         },
+        siteFormEnabled: row.siteFormEnabled,
+        dealSource: row.dealSource,
+        rdDealIntake: row.rdDealIntake,
       } satisfies LandingPageItem;
     })
     .sort(
@@ -203,6 +211,55 @@ export const landingPageRoutes: FastifyPluginAsync = async (app) => {
     });
     const page = (await listLandingPages(db)).find((candidate) => candidate.id === row.id);
     return reply.status(201).send({ page });
+  });
+
+  // The RD CRM deal sources a page's "Origem" can name (read only). Without
+  // the RD token the screen still takes a typed name.
+  app.get('/crm/landing-pages/deal-sources', manage, async (_request, reply) => {
+    const token = app.wings.env.RD_CRM_API_TOKEN;
+    if (!token)
+      return reply.send({ sources: null, reason: 'RD CRM não está configurado neste ambiente.' });
+    try {
+      return reply.send({ sources: await new RdCrm(token, app.wings.rdFetch).dealSources() });
+    } catch {
+      return reply.send({ sources: null, reason: 'O RD CRM não respondeu agora.' });
+    }
+  });
+
+  // The page's own form on/off and its "Origem" for NEW deals only: a deal
+  // that already exists in RD is never touched (Eric, 01/10).
+  app.patch('/crm/landing-pages/:id', manage, async (request, reply) => {
+    const params = idParam.safeParse(request.params);
+    const body = landingPageUpdateSchema.safeParse(request.body);
+    if (!params.success) return reply.status(400).send({ error: 'invalid_request' });
+    if (!body.success) {
+      return reply.status(400).send({
+        error: 'invalid_request',
+        message: body.error.issues[0]?.message ?? 'Dados inválidos',
+      });
+    }
+    const [row] = await db
+      .update(leadSourceRules)
+      .set({
+        ...(body.data.siteFormEnabled !== undefined
+          ? { siteFormEnabled: body.data.siteFormEnabled }
+          : {}),
+        ...(body.data.rdDealIntake !== undefined ? { rdDealIntake: body.data.rdDealIntake } : {}),
+        ...(body.data.dealSource !== undefined ? { dealSource: body.data.dealSource } : {}),
+      })
+      .where(and(eq(leadSourceRules.id, params.data.id), eq(leadSourceRules.kind, 'landing_page')))
+      .returning({ id: leadSourceRules.id, pattern: leadSourceRules.pattern });
+    if (!row) return reply.status(404).send({ error: 'not_found' });
+    await writeAudit(db, {
+      actorEmployeeId: request.session.actor.employeeId,
+      action: 'landing_page.updated',
+      entity: 'lead_source_rule',
+      entityId: row.id,
+      ip: request.ip,
+      metadata: { slug: row.pattern, ...body.data },
+    });
+    const page = (await listLandingPages(db)).find((candidate) => candidate.id === row.id);
+    return reply.send({ page });
   });
 
   for (const [path, archive] of [

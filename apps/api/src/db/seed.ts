@@ -14,6 +14,7 @@ import {
 import { eq } from 'drizzle-orm';
 import { createDb, type Database } from './client.js';
 import { seedDriveTemplate, syncDriveFolders } from '../modules/drive/folders.js';
+import { brandKey } from '../modules/leads/brands.js';
 import { loadDotEnv } from './load-env.js';
 import {
   clients,
@@ -40,6 +41,13 @@ const EXPANSION_LANDING_PAGES = [
   { identifier: 'rio-acai-gourmet', brand: 'Rio Açaí Gourmet' },
   { identifier: 'ginteco', brand: 'Ginteco' },
   { identifier: 'lista-de-espera-familia-k', brand: 'Família K' },
+  // RD pages without a rule, found by the landing-page audit of 2026-10-01
+  // (docs/analise/landing-pages-auditoria-2026-10-01.md): Mister Russo's form
+  // uses the slug, while `lp-mister-russo` is only its WhatsApp balloon. They
+  // make no RD deal until Eric decides: RD's own automation may already make one.
+  { identifier: 'mister-russo', brand: 'Mister Russo', rdDealIntake: false },
+  { identifier: 'familia-k', brand: 'Família K', rdDealIntake: false },
+  { identifier: 'wash-club', brand: 'Wash Club', rdDealIntake: false },
 ];
 
 /** The Formatação forms (the Formatação net's list), Wings Company's own. */
@@ -144,7 +152,14 @@ export async function seed(db: Database): Promise<void> {
 
   // Source rules for the known landing pages (CRM phase 1: one list for the
   // client, the brand and the funnel). Insert-only: a person may deactivate,
-  // re-point or rename one later and the next deploy must not undo it.
+  // re-point or rename one later and the next deploy must not undo it. A new
+  // rule is tied to its brand's client when the register already has one.
+  const clientByBrand = new Map(
+    (await db.select({ id: clients.id, name: clients.name }).from(clients)).map((client) => [
+      brandKey(client.name),
+      client.id,
+    ]),
+  );
   for (const page of EXPANSION_LANDING_PAGES) {
     await db
       .insert(leadSourceRules)
@@ -153,6 +168,8 @@ export async function seed(db: Database): Promise<void> {
         pattern: normalizeSourcePattern(page.identifier),
         pipeline: 'expansao',
         brand: page.brand,
+        clientId: clientByBrand.get(brandKey(page.brand)) ?? null,
+        rdDealIntake: 'rdDealIntake' in page ? page.rdDealIntake : true,
       })
       .onConflictDoNothing();
   }

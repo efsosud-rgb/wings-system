@@ -45,11 +45,15 @@ export function dbLedger(db: Database): Ledger {
  * is the rule's own name for it (what RD's campaigns are named after), else
  * the client's.
  */
-export async function activeRules(db: Database): Promise<LandingPageRule[]> {
+export async function activeRules(
+  db: Database,
+  options: { forDeals?: boolean } = {},
+): Promise<LandingPageRule[]> {
   const rows = await db
     .select({
       identifier: leadSourceRules.pattern,
       brand: leadSourceRules.brand,
+      dealSource: leadSourceRules.dealSource,
       clientName: clients.name,
     })
     .from(leadSourceRules)
@@ -59,12 +63,14 @@ export async function activeRules(db: Database): Promise<LandingPageRule[]> {
         eq(leadSourceRules.kind, 'landing_page'),
         eq(leadSourceRules.pipeline, 'expansao'),
         eq(leadSourceRules.active, true),
+        // Pages held back from making RD deals are skipped by every run that makes them.
+        options.forDeals ? eq(leadSourceRules.rdDealIntake, true) : undefined,
       ),
     )
     .orderBy(asc(leadSourceRules.pattern));
   return rows.flatMap((row) => {
     const brand = row.brand ?? row.clientName;
-    return brand ? [{ identifier: row.identifier, brand }] : [];
+    return brand ? [{ identifier: row.identifier, brand, dealSource: row.dealSource }] : [];
   });
 }
 
@@ -186,7 +192,7 @@ export async function runIntakeOnce(
     marketing: new RdMarketing(credentials.rdMarketing, options.fetchImpl),
     crm: new RdCrm(credentials.rdCrmToken, options.fetchImpl),
     ledger: dbLedger(db),
-    rules: await activeRules(db),
+    rules: await activeRules(db, { forDeals: true }),
     expansionOwnerId: credentials.expansionOwnerId ?? null,
     since: new Date(now.getTime() - options.lookbackHours * 3_600_000),
     dryRun: options.dryRun ?? false,

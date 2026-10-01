@@ -1,7 +1,7 @@
 import { LANDING_PAGE_BASE_URL, normalizeSourcePattern, WINGS_CLIENT_ID } from '@wings/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { clients, leadSourceRules } from '../../db/schema/index.js';
+import { clientProjects, clients, leadSourceRules } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { createClientRecord } from '../clients/create.js';
 
@@ -28,8 +28,8 @@ export const EXPANSION_BRANDS = [
 /**
  * Brands whose landing pages were read live on 2026-09-30 at
  * franquia.wingscompany.com.br/<slug>: the RD form's `conversion_identifier`
- * is the slug. Wash Club's page is a draft in RD (404): client only, its rule
- * is made by CRM Vendas → Landing pages when the page is published.
+ * is the slug. Wash Club's page was a draft in RD (404) then: client only. It
+ * is published since; its `wash-club` rule comes from the seed (audit of 01/10).
  */
 export const EXPANSION_BRANDS_2026_09_30: { name: string; identifiers: string[] }[] = [
   { name: 'Cenoritas', identifiers: ['cenoritas'] },
@@ -248,6 +248,106 @@ export function formatBrandReport(report: BrandReport): string {
               ? 'NENHUM cliente casa'
               : `${verb}ligada pel${link.by === 'brand' ? 'a marca' : 'o identificador'}`;
       return `  ${link.identifier} (${link.ruleBrand ?? '—'}) → ${client} [${how}]`;
+    }),
+  ].join('\n');
+}
+
+export interface LegacyBrandMove {
+  wanted: string;
+  client: { number: number | null; name: string } | null;
+  relationshipBefore: string | null;
+  relationshipAfter: string | null;
+  /** hidden (by this run, or would be), already (before it), none (no project) */
+  project: 'hidden' | 'already' | 'none';
+}
+
+/**
+ * B5 (Eric, 01/10): the 8 brands of the first `crm-brands` run are Expansão
+ * clients. Their relationship becomes Expansão ("ambos" is kept, it already
+ * includes it) and their projects leave the Projetos board, hidden, never
+ * deleted. Without `apply`, nothing is written and the report says what would be.
+ */
+export async function moveLegacyBrandsToExpansion(
+  db: Database,
+  input: { apply: boolean; actorEmployeeId?: string | null },
+): Promise<{ applied: boolean; moves: LegacyBrandMove[] }> {
+  const known = (await db.select().from(clients)).filter((client) => client.id !== WINGS_CLIENT_ID);
+  const byKey = new Map(known.map((client) => [brandKey(client.name), client]));
+  const moves: LegacyBrandMove[] = [];
+  for (const wanted of EXPANSION_BRANDS) {
+    const client = byKey.get(brandKey(wanted));
+    if (!client) {
+      moves.push({
+        wanted,
+        client: null,
+        relationshipBefore: null,
+        relationshipAfter: null,
+        project: 'none',
+      });
+      continue;
+    }
+    const before = client.relationship;
+    const after = before === 'ambos' ? 'ambos' : 'expansao';
+    const project = await db.query.clientProjects.findFirst({
+      where: eq(clientProjects.clientId, client.id),
+      columns: { id: true, hiddenAt: true },
+    });
+    moves.push({
+      wanted,
+      client: { number: client.number, name: client.name },
+      relationshipBefore: before,
+      relationshipAfter: after,
+      project: !project ? 'none' : project.hiddenAt ? 'already' : 'hidden',
+    });
+    if (!input.apply) continue;
+    if (before !== after) {
+      await db.update(clients).set({ relationship: after }).where(eq(clients.id, client.id));
+      await writeAudit(db, {
+        actorEmployeeId: input.actorEmployeeId ?? null,
+        action: 'client.relationship_changed',
+        entity: 'client',
+        entityId: client.id,
+        metadata: { from: before, to: after, via: 'crm-brands --expansion-legacy' },
+      });
+    }
+    if (project && !project.hiddenAt) {
+      await db
+        .update(clientProjects)
+        .set({ hiddenAt: new Date() })
+        .where(and(eq(clientProjects.id, project.id), isNull(clientProjects.hiddenAt)));
+      await writeAudit(db, {
+        actorEmployeeId: input.actorEmployeeId ?? null,
+        action: 'project.hidden',
+        entity: 'client_project',
+        entityId: project.id,
+        metadata: { clientId: client.id, via: 'crm-brands --expansion-legacy' },
+      });
+    }
+  }
+  return { applied: input.apply, moves };
+}
+
+export function formatLegacyMoveReport(report: {
+  applied: boolean;
+  moves: LegacyBrandMove[];
+}): string {
+  const verb = report.applied ? '' : 'seria ';
+  return [
+    report.applied ? 'APLICADO' : 'SIMULAÇÃO (nada foi gravado; rode com --apply para valer)',
+    `marcas antigas: ${report.moves.length}`,
+    ...report.moves.map((move) => {
+      if (!move.client) return `  ${move.wanted} → NENHUM cliente casa`;
+      const relation =
+        move.relationshipBefore === move.relationshipAfter
+          ? `relação ${move.relationshipAfter} (já)`
+          : `relação ${move.relationshipBefore ?? '—'} → ${move.relationshipAfter} (${verb}alterada)`;
+      const project =
+        move.project === 'none'
+          ? 'sem projeto'
+          : move.project === 'already'
+            ? 'projeto já oculto'
+            : `projeto ${verb}oculto`;
+      return `  ${move.client.number ?? '—'}. ${move.client.name}: ${relation}; ${project}`;
     }),
   ].join('\n');
 }

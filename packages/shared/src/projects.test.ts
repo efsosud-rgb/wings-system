@@ -104,10 +104,13 @@ describe('the inputs', () => {
     expect(PROJECT_STAGE_SLOTS).toEqual(['01', '02', '03', '04', '05', '06', '07', '08']);
     expect(projectCurrentStageSchema.safeParse({ stage: '05' }).success).toBe(true);
     expect(projectCurrentStageSchema.safeParse({ stage: '09' }).success).toBe(false);
-    expect(projectListQuerySchema.parse({})).toEqual({ inactive: false });
-    expect(projectListQuerySchema.parse({ status: 'parado', inactive: 'true' })).toEqual({
+    expect(projectListQuerySchema.parse({})).toEqual({ inactive: false, hidden: false });
+    expect(
+      projectListQuerySchema.parse({ status: 'parado', inactive: 'true', hidden: 'true' }),
+    ).toEqual({
       status: 'parado',
       inactive: true,
+      hidden: true,
     });
   });
 });

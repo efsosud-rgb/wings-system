@@ -1,9 +1,11 @@
 import { randomBytes } from 'node:crypto';
 import { SESSION_COOKIE } from '@wings/shared';
+import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
+import { leadSourceRules } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
@@ -63,6 +65,20 @@ describe('expansion landing pages', () => {
 
     expect((await put({ identifier: 'lp-nova', brand: 'Marca Nova' })).statusCode).toBe(200);
     expect((await activeRules(db)).map((rule) => rule.identifier)).toContain('lp-nova');
+
+    // Held back from RD deals (Eric, 01/10): still a rule, but no run makes a deal from it.
+    await db
+      .update(leadSourceRules)
+      .set({ rdDealIntake: false })
+      .where(eq(leadSourceRules.pattern, 'lp-nova'));
+    expect((await activeRules(db)).map((rule) => rule.identifier)).toContain('lp-nova');
+    expect(
+      (await activeRules(db, { forDeals: true })).map((rule) => rule.identifier),
+    ).not.toContain('lp-nova');
+    await db
+      .update(leadSourceRules)
+      .set({ rdDealIntake: true })
+      .where(eq(leadSourceRules.pattern, 'lp-nova'));
 
     await put({ identifier: 'lp-nova', brand: 'Marca Nova', active: false });
     expect((await activeRules(db)).map((rule) => rule.identifier)).not.toContain('lp-nova');

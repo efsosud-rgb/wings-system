@@ -4,6 +4,7 @@ import type {
   FunnelSummary,
   LandingPageCreateInput,
   LandingPageItem,
+  LandingPageUpdateInput,
   Lead,
   LeadCreateInput,
   LeadEvent,
@@ -15,6 +16,8 @@ import type {
   LeadSourceRule,
   LeadSourceRuleKind,
   LeadTrackingLink,
+  SiteFormInfo,
+  SiteFormSubmitInput,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
@@ -198,5 +201,46 @@ export function useDeleteLandingPage() {
         `/crm/landing-pages/${input.id}?confirm=${encodeURIComponent(input.confirm)}`,
       ),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['leads'] }),
+  });
+}
+
+/** A page's own form on/off and its "Origem" for new RD deals (never applied to existing ones). */
+export function useUpdateLandingPage() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { id: string } & LandingPageUpdateInput) => {
+      const { id, ...body } = input;
+      return api.patch<{ page: LandingPageItem }>(`/crm/landing-pages/${id}`, body);
+    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['leads'] }),
+  });
+}
+
+/** RD CRM's deal sources, to choose a page's "Origem" from; null with the reason when RD cannot be read. */
+export function useDealSources(enabled: boolean) {
+  return useQuery({
+    queryKey: [...LANDING_KEY, 'deal-sources'],
+    queryFn: () =>
+      api.get<{ sources: string[] | null; reason?: string }>('/crm/landing-pages/deal-sources'),
+    enabled,
+    staleTime: 10 * 60_000,
+  });
+}
+
+// --- the public site form (T5): no session ------------------------------------------
+
+export function useSiteForm(slug: string | undefined) {
+  return useQuery({
+    queryKey: ['site-form', slug],
+    queryFn: () => api.get<SiteFormInfo>(`/public/site-forms/${encodeURIComponent(slug ?? '')}`),
+    enabled: Boolean(slug),
+    retry: false,
+  });
+}
+
+export function useSubmitSiteForm(slug: string) {
+  return useMutation({
+    mutationFn: (input: SiteFormSubmitInput) =>
+      api.post<{ ok: true }>(`/public/site-forms/${encodeURIComponent(slug)}`, input),
   });
 }
