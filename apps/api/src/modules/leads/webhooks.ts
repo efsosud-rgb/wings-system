@@ -9,6 +9,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { leadTrackingLinks } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
+import { linkIntakeDealToLead } from '../expansion/service.js';
 import { tokensMatch } from '../../lib/tokens.js';
 import { shapeOf } from '../media/kairogen-adapter.js';
 import {
@@ -17,11 +18,13 @@ import {
   metaSignatureValid,
   MetaLeadFetchError,
 } from './meta-leads.js';
+import { rdAttributionOf } from './rd-attribution.js';
 import {
   resolveLandingPage,
   resolveMetaSource,
   trackingLinkByCode,
   upsertLead,
+  type LeadAttribution,
 } from './service.js';
 
 /**
@@ -84,6 +87,7 @@ const asDate = (value: unknown): Date | null => {
 // --- RD Station ------------------------------------------------------------------
 
 interface RdConversion {
+  attribution: LeadAttribution | null;
   externalId: string | null;
   name: string | null;
   email: string | null;
@@ -116,7 +120,21 @@ export function rdConversionsOf(body: unknown): RdConversion[] {
       );
       const legalBasis: LeadLegalBasis =
         granted?.type === 'legitimate_interest' ? 'legitimate_interest' : 'consent';
+      const url =
+        asString(content.url) ??
+        asString(content.conversion_url) ??
+        asString(content.page_url) ??
+        asString(last.url) ??
+        asString(lead.landing_page_url);
       return {
+        attribution: rdAttributionOf({
+          content,
+          url,
+          trafficSource:
+            asString(content.traffic_source) ??
+            asString(last.traffic_source) ??
+            asString(lead.traffic_source),
+        }),
         externalId: asString(lead.uuid) ?? asString(lead.id),
         name: asString(lead.name),
         email: asString(lead.email),
@@ -130,12 +148,7 @@ export function rdConversionsOf(body: unknown): RdConversion[] {
           asString(content.conversion_identifier) ??
           asString(content.identificador) ??
           asString(lead.conversion_identifier),
-        url:
-          asString(content.url) ??
-          asString(content.conversion_url) ??
-          asString(content.page_url) ??
-          asString(last.url) ??
-          asString(lead.landing_page_url),
+        url,
         at:
           asDate(content.created_at) ??
           asDate(last.created_at) ??
@@ -237,6 +250,7 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
           channel: 'landing_page',
           landingPage: conversion.url ?? conversion.identifier,
           externalId: conversion.externalId,
+          attribution: conversion.attribution,
           legalBasis: conversion.legalBasis,
           consentedAt: conversion.at ?? new Date(),
           consentSource: `rd_station:${conversion.identifier ?? 'conversao'}`,
@@ -247,15 +261,32 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
               ruleId: client.ruleId,
               hasUrl: Boolean(conversion.url),
               hasIdentifier: Boolean(conversion.identifier),
+              pipeline: client.pipeline,
+              adPlatform: conversion.attribution?.adPlatform ?? null,
+              hasUtm: Boolean(
+                conversion.attribution?.utmSource || conversion.attribution?.utmCampaign,
+              ),
             },
           },
         });
+        const linkedDeal = conversion.externalId
+          ? await linkIntakeDealToLead(db, {
+              leadId: result.lead.id,
+              contactUuid: conversion.externalId,
+              identifier: conversion.identifier,
+            })
+          : null;
         await writeAudit(db, {
           action: result.created ? 'lead.received' : 'lead.merged',
           entity: 'lead',
           entityId: result.lead.id,
           ip: request.ip,
-          metadata: { source: 'rd_station', clientMapped: client.mapped },
+          metadata: {
+            source: 'rd_station',
+            clientMapped: client.mapped,
+            pipeline: client.pipeline,
+            rdDealLinked: linkedDeal !== null,
+          },
         });
         results.push({
           leadId: result.lead.id,

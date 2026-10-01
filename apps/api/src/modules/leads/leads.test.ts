@@ -11,7 +11,15 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { auditLog, clients, jobs, leadEvents, leads } from '../../db/schema/index.js';
+import {
+  auditLog,
+  clients,
+  expansionIntakeLedger,
+  jobs,
+  leadEvents,
+  leadSourceRules,
+  leads,
+} from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import {
@@ -374,6 +382,84 @@ describe('POST /integrations/rd-station/webhook', () => {
     expect(JSON.stringify(audits.map((row) => row.metadata))).not.toContain('Ana');
     const events = await db.select().from(leadEvents).where(eq(leadEvents.leadId, leadId));
     expect(JSON.stringify(events.map((row) => row.detail))).not.toMatch(/Ana|example\.com|99999/);
+  });
+
+  it('records the UTMs and click ids the conversion carried, and the funnel and brand the rule says', async () => {
+    const trafficSource = `encoded_${Buffer.from(
+      JSON.stringify({
+        current_session: {
+          value:
+            'https://franquia.wingscompany.com.br/marca-t4?utm_source=instagram&utm_medium=cpc&utm_campaign=exp_marca_t4&fbclid=IwZX&adset_id=120211112222',
+        },
+      }),
+    ).toString('base64')}`;
+    await db.insert(leadSourceRules).values({
+      kind: 'landing_page',
+      pattern: 'lp-marca-t4',
+      clientId: null,
+      pipeline: 'expansao',
+      brand: 'Marca T4',
+    });
+    const delivered = await app.inject({
+      method: 'POST',
+      url: '/integrations/rd-station/webhook',
+      headers: { 'x-wings-webhook-secret': RD_SECRET },
+      payload: {
+        leads: [
+          {
+            uuid: 'rd-uuid-t4',
+            email: 'carla@example.com',
+            last_conversion: {
+              content: {
+                conversion_identifier: 'lp-marca-t4',
+                utm_content: 'video_a',
+                traffic_source: trafficSource,
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(delivered.statusCode).toBe(200);
+    const row = await db.query.leads.findFirst({ where: eq(leads.externalId, 'rd-uuid-t4') });
+    expect(row).toMatchObject({
+      pipeline: 'expansao',
+      brand: 'Marca T4',
+      utmSource: 'instagram',
+      utmMedium: 'cpc',
+      utmCampaign: 'exp_marca_t4',
+      utmContent: 'video_a',
+      fbclid: 'IwZX',
+      adPlatform: 'meta',
+      adSetExternalId: '120211112222',
+    });
+  });
+
+  it('links the RD deal the intake already made when the delivery comes after it', async () => {
+    await db.insert(expansionIntakeLedger).values({
+      conversionKey: 'rd-uuid-late|lp-late|2026-09-30T12:00:00.000Z',
+      target: 'expansao',
+      outcome: 'created',
+      rdDealId: 'rd-deal-late-1',
+    });
+    await app.inject({
+      method: 'POST',
+      url: '/integrations/rd-station/webhook',
+      headers: { 'x-wings-webhook-secret': RD_SECRET },
+      payload: {
+        leads: [
+          {
+            uuid: 'rd-uuid-late',
+            email: 'davi@example.com',
+            last_conversion: { content: { conversion_identifier: 'lp-late' } },
+          },
+        ],
+      },
+    });
+    const row = await db.query.leads.findFirst({ where: eq(leads.externalId, 'rd-uuid-late') });
+    expect(row).toMatchObject({ rdDealId: 'rd-deal-late-1', pipeline: 'expansao' });
+    const events = await db.select().from(leadEvents).where(eq(leadEvents.leadId, row!.id));
+    expect(events.map((event) => event.kind)).toContain('rd.deal_linked');
   });
 
   it('files a conversion no rule maps under Wings Company, flagged as unmapped', async () => {

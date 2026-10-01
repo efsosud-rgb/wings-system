@@ -98,3 +98,33 @@ que já existiam ao estado anterior, esvaziando de novo as lacunas preenchidas;
 grava `leads.import_rd_undone` na auditoria. O mapa `rd_user_map` fica (é a
 lista dos nossos usuários do RD, sem nada de lead). O seguimento por hora
 (`CRM_RD_FOLLOW_ENABLED`) deve estar desligado ao desfazer.
+
+## Webhook do RD Marketing (T4)
+
+`POST /api/integrations/rd-station/webhook` (segredo em `?secret=` ou no header
+`X-Wings-Webhook-Secret`; sem `RD_STATION_WEBHOOK_SECRET` responde 503).
+
+- **Regra → cliente, marca e funil**: a regra `landing_page` (identificador,
+  slug ou domínio) decide; regra de marca que ainda não é cliente arquiva sob
+  Wings Company, com `brand` e `pipeline` gravados.
+- **Atribuição de primeiro toque** (`leads.utm_*`, `gclid`, `fbclid`, `gbraid`,
+  `wbraid`, `ad_platform`, ids de campanha/conjunto/anúncio, `referrer` só
+  origem+caminho), nesta ordem, a primeira que tiver cada chave: campos do
+  formulário (`utm_source` ou `cf_utm_source` — os campos ocultos que o GTM
+  ainda não preenche), a query da página do formulário, e o `traffic_source`
+  do RD (sessão atual, depois a primeira). Ids de anúncio só numéricos
+  (`{{ad.id}}` sem preencher fica de fora). Nunca sobrescreve a de um lead que
+  já tem.
+- **Negócio do RD**: o intake de 5 min continua sendo quem cria o negócio no
+  RD CRM (nenhuma escrita nova no RD) e grava `rd_deal_id` no lead
+  (`recordDealOnLead`). Se a entrega chega **depois** do intake, o webhook acha
+  o negócio no `expansion_intake_ledger` pela chave (uuid do contato no RD +
+  identificador, 30 dias) e liga (`rd.deal_linked`), só se nenhum outro lead
+  tem esse negócio e o funil bate.
+- Auditoria `lead.received`/`lead.merged` com `pipeline` e `rdDealLinked`;
+  evento com `adPlatform`/`hasUtm`, nada pessoal.
+
+**Falta (Eric, no RD Marketing):** cadastrar o webhook de conversão com a URL
+de staging e `?secret=` (o valor está só no Coolify). Na primeira entrega,
+conferir o log `lead webhook` (forma) — em especial se `traffic_source` vem em
+`last_conversion.content` no webhook como vem nos eventos de contato.
