@@ -16,9 +16,11 @@ import {
   useCreateLandingPage,
   useCreateSourceRule,
   useDeleteLandingPage,
+  useDealSources,
   useDeleteSourceRule,
   useLandingPages,
   useSourceRules,
+  useUpdateLandingPage,
 } from '../api/leads.js';
 import { Alert, Button } from '../components/ui.js';
 import { formatDateTime } from './LeadsPage.js';
@@ -190,10 +192,80 @@ function Performance({ page }: { page: LandingPageItem }) {
   );
 }
 
+/** The public address of a page's own form (T5): on this same site, `/lp/<slug>`. */
+export const siteFormPath = (slug: string) => `/lp/${slug}`;
+
+/**
+ * A page's own form on/off and its "Origem": the RD CRM deal source the
+ * intake gives the deals it makes from this page's NEW conversions. Deals
+ * that already exist in RD are never changed.
+ */
+function PageSettings({ page, onDone }: { page: LandingPageItem; onDone: () => void }) {
+  const update = useUpdateLandingPage();
+  const sources = useDealSources(true);
+  const [siteForm, setSiteForm] = useState(page.siteFormEnabled);
+  const [dealSource, setDealSource] = useState(page.dealSource ?? '');
+  const listId = `deal-sources-${page.id}`;
+  return (
+    <form
+      className="filters"
+      onSubmit={(event) => {
+        event.preventDefault();
+        update.mutate(
+          { id: page.id, siteFormEnabled: siteForm, dealSource: dealSource.trim() || null },
+          { onSuccess: onDone },
+        );
+      }}
+    >
+      <label className="field field-inline">
+        <input
+          type="checkbox"
+          checked={siteForm}
+          onChange={(event) => setSiteForm(event.target.checked)}
+        />
+        <span>Formulário próprio do Wings System</span>
+      </label>
+      <label className="field">
+        <span className="field-label">Origem no RD CRM (só negócios novos)</span>
+        <input
+          className="control"
+          list={listId}
+          value={dealSource}
+          maxLength={120}
+          placeholder="Padrão: Referência | domínio da página, ou Contato pelo Site"
+          onChange={(event) => setDealSource(event.target.value)}
+        />
+        <datalist id={listId}>
+          {(sources.data?.sources ?? []).map((name) => (
+            <option key={name} value={name} />
+          ))}
+        </datalist>
+        {sources.data?.sources === null && (
+          <span className="field-hint">{sources.data.reason} Digite o nome exato da origem.</span>
+        )}
+        {sources.data?.sources &&
+          dealSource.trim() &&
+          !sources.data.sources.includes(dealSource.trim()) && (
+            <span className="field-hint">
+              O RD não tem uma origem com esse nome: os negócios novos ficam com a origem padrão.
+            </span>
+          )}
+      </label>
+      <Button type="submit" disabled={update.isPending}>
+        Salvar
+      </Button>
+      {update.error && (
+        <Alert kind="error">{errorText(update.error, 'Não foi possível salvar.')}</Alert>
+      )}
+    </form>
+  );
+}
+
 function PageRow({ page, canManage }: { page: LandingPageItem; canManage: boolean }) {
   const archive = useArchiveLandingPage();
   const remove = useDeleteLandingPage();
   const [open, setOpen] = useState(false);
+  const [settings, setSettings] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [typed, setTyped] = useState('');
   const deletable = page.leads === 0 && (page.performance.conversions ?? 0) === 0;
@@ -212,6 +284,17 @@ function PageRow({ page, canManage }: { page: LandingPageItem; canManage: boolea
               {page.url}
             </a>
           )}
+          {page.siteFormEnabled && (
+            <a
+              className="cell-sub"
+              href={siteFormPath(page.pattern)}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Formulário próprio: {siteFormPath(page.pattern)}
+            </a>
+          )}
+          {page.dealSource && <div className="cell-sub">Origem no RD: {page.dealSource}</div>}
         </td>
         <td>{page.clientName ?? (page.brand ? `${page.brand} (marca sem cadastro)` : '—')}</td>
         <td>{page.pipeline ? LEAD_PIPELINE_LABELS[page.pipeline] : '—'}</td>
@@ -235,6 +318,9 @@ function PageRow({ page, canManage }: { page: LandingPageItem; canManage: boolea
           )}
           {canManage && (
             <>
+              <Button type="button" variant="ghost" onClick={() => setSettings((value) => !value)}>
+                {settings ? 'Fechar' : 'Formulário e origem'}
+              </Button>
               <Button
                 type="button"
                 variant={page.active ? 'primary' : 'ghost'}
@@ -256,6 +342,13 @@ function PageRow({ page, canManage }: { page: LandingPageItem; canManage: boolea
           )}
         </td>
       </tr>
+      {settings && (
+        <tr>
+          <td colSpan={9}>
+            <PageSettings page={page} onDone={() => setSettings(false)} />
+          </td>
+        </tr>
+      )}
       {open && page.url && (
         <tr>
           <td colSpan={9}>

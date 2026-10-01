@@ -184,6 +184,10 @@ export const leadSourceRules = pgTable(
     /** Archived: it stops mapping conversions; history and reports keep it. `active` is false with it. */
     archivedAt: timestamp('archived_at', { withTimezone: true }),
     archivedBy: uuid('archived_by').references(() => employees.id),
+    /** The page takes the Wings System's own form (T5, `/lp/<slug>`); off until someone turns it on. */
+    siteFormEnabled: boolean('site_form_enabled').notNull().default(false),
+    /** RD CRM deal source for the deals made from this page's new conversions; null keeps the default. */
+    dealSource: text('deal_source'),
     createdBy: uuid('created_by').references(() => employees.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -206,6 +210,11 @@ export const rdUserMap = pgTable('rd_user_map', {
   rdUserId: text('rd_user_id').primaryKey(),
   rdName: text('rd_name').notNull(),
   rdActive: boolean('rd_active').notNull().default(true),
+  /**
+   * Left the company (Eric, 01/10): their deals count as "dono inativo" even
+   * while RD still has the user active. Nothing is reassigned.
+   */
+  departedAt: timestamp('departed_at', { withTimezone: true }),
   employeeId: uuid('employee_id').references(() => employees.id),
   updatedBy: uuid('updated_by').references(() => employees.id),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

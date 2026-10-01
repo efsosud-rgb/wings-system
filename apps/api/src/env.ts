@@ -329,6 +329,22 @@ const schema = z.object({
     (value) => value === undefined || value.length >= 16,
     'must be at least 16 characters',
   ),
+  /**
+   * Cloudflare Turnstile for the site form (CRM phase 1, T5). The site key is
+   * public by design (the page shows it); the secret key never leaves the
+   * API. Without the secret the form answers 503, never a fake success.
+   */
+  TURNSTILE_SITE_KEY: optionalString,
+  TURNSTILE_SECRET_KEY: optionalString,
+  /**
+   * The site form also sends the conversion to RD Marketing (one call, never
+   * retried), so RD's flows and the intake keep working. A write to RD: off
+   * unless "true", and only Eric turns it on.
+   */
+  SITE_FORM_RD_FORWARD_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
   ZAPI_WEBHOOK_SECRET: optionalString.refine(
     (value) => value === undefined || value.length >= 16,
     'must be at least 16 characters',

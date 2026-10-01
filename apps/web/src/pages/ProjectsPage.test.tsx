@@ -35,6 +35,7 @@ const stages = (
 
 const project = (extra: Partial<ClientProject>): ClientProject => ({
   id: 'p-1',
+  hidden: false,
   clientId: 'c-1',
   clientName: 'Padaria Aurora',
   clientNumber: 3,

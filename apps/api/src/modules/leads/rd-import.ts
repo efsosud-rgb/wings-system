@@ -302,7 +302,8 @@ async function syncRdUsers(db: Database, rows: readonly RdUserRow[], apply: bool
       where: eq(rdUserMap.rdUserId, rdUserId),
     });
     let employeeId = existing?.employeeId ?? null;
-    if (!employeeId) {
+    // Someone who left the company is never linked by a guess (their deals stay "dono inativo").
+    if (!employeeId && !existing?.departedAt) {
       const viaEmail = row.email ? byEmail.get(row.email.toLowerCase()) : undefined;
       const viaName = row.name ? byName.get(brandKey(row.name)) : undefined;
       employeeId = viaEmail ?? viaName ?? null;

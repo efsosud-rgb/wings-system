@@ -68,9 +68,10 @@ function CurrentStageCell({ project }: { project: ClientProject }) {
 export function ProjectsPage() {
   const [status, setStatus] = useState<ProjectStatus | ''>('');
   const [inactive, setInactive] = useState(false);
+  const [hidden, setHidden] = useState(false);
   const [text, setText] = useState('');
   const [open, setOpen] = useState<Open>(null);
-  const projects = useProjects({ status: status || undefined, inactive });
+  const projects = useProjects({ status: status || undefined, inactive, hidden });
 
   const rows = useMemo(() => {
     const list = projects.data?.projects ?? [];
@@ -124,6 +125,14 @@ export function ProjectsPage() {
           />
           <span>Mostrar clientes inativos</span>
         </label>
+        <label className="field projects-check">
+          <input
+            type="checkbox"
+            checked={hidden}
+            onChange={(event) => setHidden(event.target.checked)}
+          />
+          <span>Mostrar projetos ocultos</span>
+        </label>
       </div>
 
       {projects.isError && (
@@ -174,6 +183,7 @@ export function ProjectsPage() {
                 <td>
                   {project.clientName}
                   {!project.clientActive && <span className="tag">inativo</span>}
+                  {project.hidden && <span className="tag">oculto</span>}
                   {project.updatedByName && (
                     <div className="cell-sub">
                       Última mudança: {project.updatedByName},{' '}

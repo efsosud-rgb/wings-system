@@ -27,6 +27,7 @@ import { NotFoundPage } from './pages/NotFoundPage.js';
 import { ProjectsPage } from './pages/ProjectsPage.js';
 import { RoadmapPage } from './pages/RoadmapPage.js';
 import { SetPasswordPage } from './pages/SetPasswordPage.js';
+import { SiteFormPage } from './pages/SiteFormPage.js';
 import { TrafficStudioPage } from './pages/TrafficStudioPage.js';
 
 /**
@@ -106,6 +107,8 @@ export const router = createBrowserRouter([
   // Invite and reset links land here; both post to the same endpoint.
   { path: '/definir-senha', element: <SetPasswordPage mode="invite" /> },
   { path: '/redefinir-senha', element: <SetPasswordPage mode="reset" /> },
+  // Public: a landing page's own form (CRM phase 1, T5); no session.
+  { path: '/lp/:slug', element: <SiteFormPage /> },
   {
     path: '/',
     element: (

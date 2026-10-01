@@ -137,6 +137,8 @@ export interface ClientProject {
   stages: ClientProjectStage[];
   /** Whether the person asking may change the status and the current stage. */
   canManage: boolean;
+  /** Kept but off the board (B5: the brands that moved to Expansão); never deleted. */
+  hidden: boolean;
 }
 
 export interface ProjectStatusChange {
@@ -201,6 +203,11 @@ export const projectListQuerySchema = z.object({
   status: z.enum(PROJECT_STATUSES).optional(),
   /** Inactive clients keep their project but leave the board unless asked for. */
   inactive: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((value) => value === 'true'),
+  /** Hidden projects (kept, off the board) only when asked for. */
+  hidden: z
     .enum(['true', 'false'])
     .optional()
     .transform((value) => value === 'true'),

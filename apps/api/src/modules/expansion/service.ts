@@ -50,6 +50,7 @@ export async function activeRules(db: Database): Promise<LandingPageRule[]> {
     .select({
       identifier: leadSourceRules.pattern,
       brand: leadSourceRules.brand,
+      dealSource: leadSourceRules.dealSource,
       clientName: clients.name,
     })
     .from(leadSourceRules)
@@ -64,7 +65,7 @@ export async function activeRules(db: Database): Promise<LandingPageRule[]> {
     .orderBy(asc(leadSourceRules.pattern));
   return rows.flatMap((row) => {
     const brand = row.brand ?? row.clientName;
-    return brand ? [{ identifier: row.identifier, brand }] : [];
+    return brand ? [{ identifier: row.identifier, brand, dealSource: row.dealSource }] : [];
   });
 }
 

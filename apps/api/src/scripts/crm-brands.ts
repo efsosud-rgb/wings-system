@@ -5,6 +5,8 @@ import {
   EXPANSION_BRANDS,
   EXPANSION_BRANDS_2026_09_30,
   formatBrandReport,
+  formatLegacyMoveReport,
+  moveLegacyBrandsToExpansion,
   registerBrands,
 } from '../modules/leads/brands.js';
 
@@ -14,14 +16,25 @@ import {
  * `--apply` makes it real. Safe to run again. Prints brand names and landing
  * page identifiers only — nothing about any lead.
  *
+ * `--expansion-legacy` (B5, Eric 01/10): the 8 brands of the first run move
+ * to Expansão and their projects are hidden from the board (not deleted).
+ *
  *   pnpm --filter @wings/api crm:brands [--apply]
  *   node dist/scripts/crm-brands.js [--apply]      # in the API container
+ *   node dist/scripts/crm-brands.js --expansion-legacy [--apply]
  */
 async function main() {
   loadDotEnv();
   const env = loadEnv(process.env);
   const { db, pool } = createDb(env.DATABASE_URL);
   try {
+    if (process.argv.includes('--expansion-legacy')) {
+      const report = await moveLegacyBrandsToExpansion(db, {
+        apply: process.argv.includes('--apply'),
+      });
+      console.warn(formatLegacyMoveReport(report));
+      return;
+    }
     // --set=2026-09-30: the brands Eric listed that day, with the pages read live (rules made for them).
     const set = process.argv.find((arg) => arg.startsWith('--set='))?.slice(6);
     const pages = set === '2026-09-30' ? EXPANSION_BRANDS_2026_09_30 : [];

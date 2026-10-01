@@ -766,6 +766,12 @@ export interface LeadListItem {
   stage: string | null;
   won: boolean | null;
   ownerName: string | null;
+  /**
+   * The RD deal's owner is no one of ours who still works it: no owner, an
+   * RD user inactive in RD, one marked "saiu da empresa", or one not linked
+   * to an employee. False when the lead has no RD deal.
+   */
+  ownerInactive: boolean;
   /** When the deal entered its current stage; null when unknown (never a guess). */
   stageChangedAt: string | null;
 }
@@ -806,10 +812,16 @@ export interface FunnelSummary {
   rows: FunnelSummaryRow[];
   /** The owners and stages present, for the filters. */
   owners: { id: string; name: string }[];
+  /** Open deals whose owner is inactive (see `LeadListItem.ownerInactive`), in the caller's scope. */
+  inactiveOwnerOpen: number;
   stages: { pipeline: LeadPipeline; stage: string; order: number }[];
   /** Last time a lead's stage was read from RD CRM; null when never. */
   syncedAt: string | null;
 }
+
+/** The owner filter's value for deals with no active owner of ours. */
+export const INACTIVE_OWNER = 'inactive';
+export const INACTIVE_OWNER_LABEL = 'Dono inativo';
 
 export const LEAD_OUTCOMES = ['open', 'won', 'lost'] as const;
 export type LeadOutcome = (typeof LEAD_OUTCOMES)[number];
@@ -913,8 +925,10 @@ export const leadListQuerySchema = z.object({
     .max(120)
     .optional()
     .or(z.literal('').transform(() => undefined)),
+  /** An employee id, or `inactive` for deals with an inactive owner (no one is reassigned). */
   owner: z
     .uuid()
+    .or(z.literal(INACTIVE_OWNER))
     .optional()
     .or(z.literal('').transform(() => undefined)),
   outcome: z
@@ -974,6 +988,15 @@ export interface LandingPageItem {
   /** Leads of the Funil that came through this page (webhook/site). */
   leads: number;
   performance: LandingPagePerformance;
+  /** Whether the page takes the Wings System's own form (T5, `/lp/<slug>`). */
+  siteFormEnabled: boolean;
+  /**
+   * The RD CRM deal source ("Origem") of the deals the intake makes for this
+   * page's NEW conversions; null keeps the default (the "Referência | <host>"
+   * source when RD has it, else "Contato pelo Site"). Never applied to deals
+   * that already exist.
+   */
+  dealSource: string | null;
 }
 
 /** Only numbers with a source; a missing one is null with the reason. */
@@ -1005,6 +1028,85 @@ export const landingPageCreateSchema = z.object({
     .or(z.literal('').transform(() => undefined)),
 });
 export type LandingPageCreateInput = z.infer<typeof landingPageCreateSchema>;
+
+export const DEAL_SOURCE_MAX = 120;
+
+/** CRM Vendas → Landing pages: what is edited on an existing page. */
+export const landingPageUpdateSchema = z
+  .object({
+    siteFormEnabled: z.boolean().optional(),
+    dealSource: z
+      .string()
+      .trim()
+      .max(DEAL_SOURCE_MAX)
+      .nullable()
+      .optional()
+      .transform((value) => (value === '' ? null : value)),
+  })
+  .refine(
+    (body) => body.siteFormEnabled !== undefined || body.dealSource !== undefined,
+    'Nada para alterar',
+  );
+export type LandingPageUpdateInput = z.infer<typeof landingPageUpdateSchema>;
+
+// --- the site form (CRM phase 1, T5) --------------------------------------------
+//
+//   GET  /public/site-forms/:slug  -> SiteFormInfo     no session
+//   POST /public/site-forms/:slug  -> { ok: true }     no session; Turnstile, honeypot, per-IP limit
+
+/** What the public page needs to draw the form: no id, no client data beyond the brand's name. */
+export interface SiteFormInfo {
+  slug: string;
+  brand: string;
+  /** Cloudflare Turnstile's site key (public by design); null when not configured. */
+  turnstileSiteKey: string | null;
+}
+
+/** The hidden attribution fields the page collects (first visit's address, cookie) and sends. */
+export const SITE_FORM_TRACKING_KEYS = [
+  'utm_source',
+  'utm_medium',
+  'utm_campaign',
+  'utm_content',
+  'utm_term',
+  'gclid',
+  'fbclid',
+  'gbraid',
+  'wbraid',
+  'campaign_id',
+  'campaignid',
+  'gad_campaignid',
+  'adset_id',
+  'adgroupid',
+  'ad_id',
+  'creative',
+  'hsa_cam',
+  'hsa_grp',
+  'hsa_ad',
+  'referrer',
+] as const;
+export type SiteFormTrackingKey = (typeof SITE_FORM_TRACKING_KEYS)[number];
+
+export const SITE_FORM_CONSENT_TEXT =
+  'Autorizo a Wings Company a entrar em contato comigo sobre a franquia, por telefone, WhatsApp e e-mail.';
+
+export const siteFormSubmitSchema = z.object({
+  name: z.string().trim().min(2, 'Informe o nome').max(LEAD_NAME_MAX),
+  email: z.email('E-mail inválido').trim().max(200),
+  phone: z
+    .string()
+    .trim()
+    .max(30)
+    .refine((value) => value.replace(/\D/g, '').length >= 10, 'Telefone com DDD'),
+  consent: z.literal(true, { error: 'É preciso autorizar o contato' }),
+  turnstileToken: z.string().min(1, 'Confirme que você não é um robô').max(4096),
+  /** Honeypot: a field people never see; anything in it is a robot. */
+  website: z.string().max(500).optional(),
+  /** The page the form was sent from (origin + path + query). */
+  page: z.string().max(2000).optional(),
+  tracking: z.partialRecord(z.enum(SITE_FORM_TRACKING_KEYS), z.string().trim().max(500)).optional(),
+});
+export type SiteFormSubmitInput = z.infer<typeof siteFormSubmitSchema>;
 
 /** The channels a UTM link is made for, with the source/medium the team uses. */
 export const UTM_CHANNELS = [

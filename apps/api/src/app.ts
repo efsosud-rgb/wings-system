@@ -28,6 +28,7 @@ import { kairogenRoutes } from './modules/integrations/kairogen/routes.js';
 import { landingPageRoutes } from './modules/leads/landing-pages.js';
 import { rdUserRoutes } from './modules/leads/rd-users.js';
 import { leadRoutes } from './modules/leads/routes.js';
+import { siteFormRoutes } from './modules/leads/site-forms.js';
 import { leadWebhookRoutes } from './modules/leads/webhooks.js';
 import { mediaRoutes } from './modules/media/routes.js';
 import { mediaStudioRoutes } from './modules/media/studio-routes.js';
@@ -59,6 +60,8 @@ declare module 'fastify' {
       rdFetch?: typeof fetch;
       /** Set only by tests, so no test ever reaches BrasilAPI, ReceitaWS or ViaCEP. */
       registryFetch?: typeof fetch;
+      /** Set only by tests, so no test ever reaches Cloudflare Turnstile. */
+      captchaFetch?: typeof fetch;
       storage?: ObjectStorage;
       /** Set only by tests, so a screen that reasons about "today" can be pinned to a day. */
       now?: () => Date;
@@ -88,6 +91,8 @@ export async function buildApp(deps: {
   storageFetch?: typeof fetch;
   /** Overridable so tests answer CNPJ and CEP lookups themselves. */
   registryFetch?: typeof fetch;
+  /** Overridable so tests answer Turnstile themselves. */
+  captchaFetch?: typeof fetch;
   storage?: ObjectStorage;
   /** Overridable so tests pin the dashboard's "today". */
   now?: () => Date;
@@ -118,6 +123,7 @@ export async function buildApp(deps: {
     mediaFetch: deps.mediaFetch,
     storageFetch: deps.storageFetch,
     registryFetch: deps.registryFetch,
+    captchaFetch: deps.captchaFetch,
     storage: deps.storage,
     now: deps.now,
     mailer: deps.mailer ?? createMailer(deps.env, { info: (msg) => app.log.info(msg) }),
@@ -179,6 +185,7 @@ export async function buildApp(deps: {
   await app.register(rdUserRoutes);
   await app.register(landingPageRoutes);
   await app.register(leadWebhookRoutes);
+  await app.register(siteFormRoutes);
   await app.register(driveRoutes);
   await app.register(driveBlobRoutes);
   await app.register(kairogenRoutes);

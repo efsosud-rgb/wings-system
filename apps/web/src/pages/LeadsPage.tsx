@@ -1,4 +1,6 @@
 import {
+  INACTIVE_OWNER,
+  INACTIVE_OWNER_LABEL,
   LEAD_CHANNELS,
   LEAD_CHANNEL_LABELS,
   LEAD_LEGAL_BASES,
@@ -367,6 +369,10 @@ export function LeadsPage() {
           <span className="field-label">Dono</span>
           <select className="control" value={filter.owner ?? ''} onChange={set('owner')}>
             <option value="">Todos</option>
+            <option value={INACTIVE_OWNER}>
+              {INACTIVE_OWNER_LABEL}
+              {summary.data ? ` (${summary.data.inactiveOwnerOpen} em andamento)` : ''}
+            </option>
             {(summary.data?.owners ?? []).map((owner) => (
               <option key={owner.id} value={owner.id}>
                 {owner.name}
@@ -480,7 +486,13 @@ export function LeadsPage() {
                   <div>{lead.pipeline ? LEAD_PIPELINE_LABELS[lead.pipeline] : '—'}</div>
                   {lead.stage && <div className="cell-sub">{lead.stage}</div>}
                 </td>
-                <td>{lead.ownerName ?? '—'}</td>
+                <td>
+                  {lead.ownerInactive ? (
+                    <span className="muted">{INACTIVE_OWNER_LABEL}</span>
+                  ) : (
+                    (lead.ownerName ?? '—')
+                  )}
+                </td>
                 <td>
                   <StaleCell lead={lead} />
                 </td>

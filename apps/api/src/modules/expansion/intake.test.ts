@@ -35,7 +35,11 @@ const map: CrmMap = {
   campaigns: new Map([['LP/LE Marca X - Fluxo Expansão', 'camp-x']]),
 };
 
-function harness(conversions: Conversion[], contacts: Record<string, CrmContact | null> = {}) {
+function harness(
+  conversions: Conversion[],
+  contacts: Record<string, CrmContact | null> = {},
+  pageRules: LandingPageRule[] = rules,
+) {
   const created: NewDeal[] = [];
   const tasks: unknown[] = [];
   const marketing = {
@@ -59,7 +63,7 @@ function harness(conversions: Conversion[], contacts: Record<string, CrmContact 
       marketing,
       crm,
       ledger,
-      rules,
+      rules: pageRules,
       expansionOwnerId: 'owner-1',
       since: at('2026-09-01T00:00:00Z'),
       dryRun,
@@ -170,5 +174,25 @@ describe('expansion intake', () => {
     const result = await later.run(false, () => at('2026-09-28T12:20:00Z'));
     expect(result.existingDeal).toBe(1);
     expect(later.created).toHaveLength(0);
+  });
+
+  it("uses the page's own Origem (CRM Vendas → Landing pages) when RD has it, else the default, counted", async () => {
+    map.sources.set('Site próprio', 'src-own');
+    const own = harness([conversion({})], {}, [
+      { identifier: 'lp-x', brand: 'Marca X', dealSource: 'Site próprio' },
+    ]);
+    const missing = harness([conversion({})], {}, [
+      { identifier: 'lp-x', brand: 'Marca X', dealSource: 'Não existe no RD' },
+    ]);
+    try {
+      const ownResult = await own.run();
+      const missingResult = await missing.run();
+      expect(own.created[0]?.sourceId).toBe('src-own');
+      expect(ownResult.dealSourceMissing).toBe(0);
+      expect(missing.created[0]?.sourceId).toBe('src-site');
+      expect(missingResult.dealSourceMissing).toBe(1);
+    } finally {
+      map.sources.delete('Site próprio');
+    }
   });
 });

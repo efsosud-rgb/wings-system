@@ -19,15 +19,24 @@ export interface ProjectFilter {
   status?: ProjectStatus;
   /** Inactive clients keep their project but leave the board unless asked for. */
   inactive?: boolean;
+  /** Hidden projects (B5: brands moved to Expansão) are kept and leave the board unless asked for. */
+  hidden?: boolean;
 }
 
 export function useProjects(filter: ProjectFilter = {}, enabled = true) {
   const params = new URLSearchParams();
   if (filter.status) params.set('status', filter.status);
   if (filter.inactive) params.set('inactive', 'true');
+  if (filter.hidden) params.set('hidden', 'true');
   const query = params.toString();
   return useQuery({
-    queryKey: ['projects', 'list', filter.status ?? '', Boolean(filter.inactive)],
+    queryKey: [
+      'projects',
+      'list',
+      filter.status ?? '',
+      Boolean(filter.inactive),
+      Boolean(filter.hidden),
+    ],
     queryFn: () => api.get<{ projects: ClientProject[] }>(`/projects${query ? `?${query}` : ''}`),
     enabled,
     staleTime: 30_000,

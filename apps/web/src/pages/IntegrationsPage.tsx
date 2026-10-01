@@ -24,6 +24,7 @@ import {
 import {
   useExpansionLandingPages,
   useLinkRdUser,
+  useMarkRdUserDeparted,
   useRdUsers,
   useRecoveryState,
   useStartRecovery,
@@ -741,6 +742,7 @@ export function RdUsersSection() {
   const canManage = hasPermission(session.data, 'integrations.manage');
   const users = useRdUsers(canManage);
   const link = useLinkRdUser();
+  const departed = useMarkRdUserDeparted();
   if (!canManage || users.isLoading) return null;
   if (!users.data) return <Alert kind="error">Não foi possível ler os usuários do RD CRM.</Alert>;
   const list = users.data.users;
@@ -751,21 +753,24 @@ export function RdUsersSection() {
       <p className="muted">
         Quem é cada usuário do RD CRM aqui dentro, para o dono de cada negócio aparecer no Funil. A
         lista vem da importação do RD; a ligação automática usa o e-mail (ou o nome completo, quando
-        é único). Sem ligação, o dono aparece como &ldquo;—&rdquo;.
+        é único). Sem ligação, inativo no RD ou marcado como &ldquo;saiu da empresa&rdquo;, os
+        negócios contam como &ldquo;dono inativo&rdquo; no Funil. Nenhum negócio é redistribuído.
       </p>
       {link.isError && <Alert kind="error">Não foi possível salvar a ligação.</Alert>}
+      {departed.isError && <Alert kind="error">Não foi possível salvar a saída.</Alert>}
       <div className="table-wrap">
         <table className="table">
           <thead>
             <tr>
               <th>Usuário do RD</th>
               <th>Funcionário</th>
+              <th>Saiu da empresa</th>
             </tr>
           </thead>
           <tbody>
             {list.length === 0 && (
               <tr>
-                <td colSpan={2} className="muted">
+                <td colSpan={3} className="muted">
                   Nenhum usuário ainda: a lista aparece depois da primeira importação do RD CRM.
                 </td>
               </tr>
@@ -775,6 +780,7 @@ export function RdUsersSection() {
                 <td>
                   {user.rdName}
                   {!user.rdActive && <span className="tag">inativo no RD</span>}
+                  {user.departedAt && <span className="tag">saiu da empresa</span>}
                 </td>
                 <td>
                   <select
@@ -796,6 +802,17 @@ export function RdUsersSection() {
                       </option>
                     ))}
                   </select>
+                </td>
+                <td>
+                  <input
+                    type="checkbox"
+                    aria-label={`${user.rdName} saiu da empresa`}
+                    checked={user.departedAt !== null}
+                    disabled={departed.isPending}
+                    onChange={(event) =>
+                      departed.mutate({ rdUserId: user.rdUserId, departed: event.target.checked })
+                    }
+                  />
                 </td>
               </tr>
             ))}

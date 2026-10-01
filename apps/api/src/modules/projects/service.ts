@@ -12,7 +12,7 @@ import {
   type ProjectStatusChange,
   type StageProgress,
 } from '@wings/shared';
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { Database } from '../../db/client.js';
 import {
@@ -78,6 +78,8 @@ const toStage = (row: StageRow, actor: Actor, updatedByName: string | null): Cli
 export interface ProjectListFilter {
   status?: ProjectStatus;
   inactive?: boolean;
+  /** Hidden projects too (kept, off the board unless asked for). */
+  hidden?: boolean;
   clientId?: string;
 }
 
@@ -106,6 +108,7 @@ export async function listProjects(
         filter.status ? eq(clientProjects.status, filter.status) : undefined,
         filter.clientId ? eq(clientProjects.clientId, filter.clientId) : undefined,
         filter.inactive ? undefined : eq(clients.active, true),
+        filter.hidden ? undefined : isNull(clientProjects.hiddenAt),
       ),
     )
     .orderBy(asc(clients.number), asc(clients.name));
@@ -143,6 +146,7 @@ export async function listProjects(
     updatedByName: row.updatedByName,
     stages: stagesByProject.get(row.project.id) ?? [],
     canManage,
+    hidden: row.project.hiddenAt !== null,
   }));
 }
 

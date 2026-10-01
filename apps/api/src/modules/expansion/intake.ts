@@ -30,6 +30,8 @@ export const FORM_SITE_IDENTIFIER = 'wings-company-form-site';
 export interface LandingPageRule {
   identifier: string;
   brand: string;
+  /** The RD deal source ("Origem") set in CRM Vendas → Landing pages; null keeps the default. */
+  dealSource?: string | null;
 }
 
 export type Target = 'expansao' | 'formatacao';
@@ -91,6 +93,8 @@ export interface IntakeResult {
   orphanDealIds: string[];
   /** Statuses of the linking attempts, per way ("strategy:status"). */
   linkAttempts: Record<string, number>;
+  /** Deals made with the default source because the page's own one is not in RD. */
+  dealSourceMissing: number;
 }
 
 /** The deal is "covered" when the contact has one open, or one RD made after this conversion. */
@@ -122,8 +126,19 @@ function describeUtms(conversion: Conversion): string {
   return `UTM · ${parts.join(' · ')}`;
 }
 
-/** "Referência | <the LP's host>" when RD has it (the brands' existing deals use it), else "Contato pelo Site". */
-export function sourceIdFor(conversion: Conversion, target: Target, map: CrmMap): string | null {
+/**
+ * The page's own source when CRM Vendas → Landing pages set one and RD has it;
+ * else "Referência | <the LP's host>" when RD has it (the brands' existing
+ * deals use it), else "Contato pelo Site".
+ */
+export function sourceIdFor(
+  conversion: Conversion,
+  target: Target,
+  map: CrmMap,
+  dealSource?: string | null,
+): string | null {
+  const chosen = dealSource ? map.sources.get(dealSource) : undefined;
+  if (chosen) return chosen;
   const host = conversion.page?.split('/')[0]?.replace(/^www\./, '');
   const named = target === 'expansao' && host ? map.sources.get(`Referência | ${host}`) : undefined;
   return named ?? map.sources.get('Contato pelo Site') ?? null;
@@ -148,6 +163,7 @@ function dealFor(
   map: CrmMap,
   ownerId: string | null,
   stageName?: string,
+  dealSource?: string | null,
 ): NewDeal | null {
   const spec = TARGETS[target];
   const stageId = map.pipelines.get(spec.pipeline)?.stages.get(stageName ?? spec.stage);
@@ -168,7 +184,7 @@ function dealFor(
     name: brand ? `${name} - ${brand}` : name,
     stageId,
     contact: { name, email: conversion.email, phone: conversion.phone },
-    sourceId: sourceIdFor(conversion, target, map),
+    sourceId: sourceIdFor(conversion, target, map, dealSource),
     ownerId: target === 'expansao' ? ownerId : null,
     campaignId: (campaignName && map.campaigns.get(campaignName)) || null,
     customFields,
@@ -205,8 +221,8 @@ export async function runExpansionIntake(input: {
   }) => Promise<unknown>;
 }): Promise<IntakeResult> {
   const { marketing, crm, ledger, dryRun } = input;
-  const brandOf = new Map(
-    input.rules.map((rule) => [normalizeSourcePattern(rule.identifier), rule.brand]),
+  const ruleOf = new Map(
+    input.rules.map((rule) => [normalizeSourcePattern(rule.identifier), rule]),
   );
   const result: IntakeResult = {
     contacts: 0,
@@ -225,6 +241,7 @@ export async function runExpansionIntake(input: {
     linked: 0,
     orphanDealIds: [],
     linkAttempts: {},
+    dealSourceMissing: 0,
   };
   const uuids = await marketing.contactsConvertedSince(input.since);
   result.contacts = uuids.length;
@@ -242,7 +259,8 @@ export async function runExpansionIntake(input: {
     for (const conversion of conversions) {
       result.conversions += 1;
       const recovery = input.recovery;
-      const brand = brandOf.get(normalizeSourcePattern(conversion.identifier)) ?? null;
+      const rule = ruleOf.get(normalizeSourcePattern(conversion.identifier));
+      const brand = rule?.brand ?? null;
       const outOfScope = recovery ? !recovery.only.includes(conversion.identifier) : false;
       const isFormatacao = recovery
         ? recovery.formatacaoIdentifiers.includes(conversion.identifier)
@@ -295,7 +313,12 @@ export async function runExpansionIntake(input: {
           map,
           input.expansionOwnerId ?? null,
           target === 'formatacao' ? input.recovery?.formatacaoStage : undefined,
+          target === 'expansao' ? rule?.dealSource : null,
         );
+        if (target === 'expansao' && rule?.dealSource && !map.sources.has(rule.dealSource)) {
+          // Named in Landing pages but not (or no longer) in RD: the default source, counted.
+          result.dealSourceMissing += 1;
+        }
         if (!deal) throw new Error('funnel or stage not found in RD CRM');
         const dealId = await crm.createDeal(deal);
         handled.add(uuid);

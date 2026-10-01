@@ -7,9 +7,12 @@ import {
   brandKey,
   EXPANSION_BRANDS,
   formatBrandReport,
+  formatLegacyMoveReport,
   identifierKey,
+  moveLegacyBrandsToExpansion,
   registerBrands,
 } from './brands.js';
+import { listProjects, openProjectForClient } from '../projects/service.js';
 
 let harness: TestDatabase;
 let db: Database;
@@ -129,5 +132,49 @@ describe('registerBrands with pages (Eric, 30/09)', () => {
     });
     expect(again.created).toEqual([]);
     expect(again.links.filter((link) => link.state === 'created')).toEqual([]);
+  });
+});
+
+describe('B5: the 8 old brands move to Expansão, their projects hidden (Eric, 01/10)', () => {
+  it('simulates first; then sets Expansão (keeps "ambos"), hides the projects and deletes nothing', async () => {
+    await registerBrands(db, { names: EXPANSION_BRANDS, apply: true });
+    const byName = async (name: string) =>
+      (await db.select().from(clients)).find((client) => brandKey(client.name) === brandKey(name))!;
+    const churros = await byName('Casal do Churros');
+    const ginteco = await byName('Ginteco');
+    const familia = await byName('Família K');
+    await db.update(clients).set({ relationship: null }).where(eq(clients.id, churros.id));
+    await db.update(clients).set({ relationship: 'formatacao' }).where(eq(clients.id, ginteco.id));
+    await db.update(clients).set({ relationship: 'ambos' }).where(eq(clients.id, familia.id));
+    for (const client of [churros, ginteco, familia]) await openProjectForClient(db, client.id);
+    const projectsBefore = (await db.select().from(clientProjects)).length;
+
+    const simulated = await moveLegacyBrandsToExpansion(db, { apply: false });
+    expect(simulated.moves).toHaveLength(8);
+    expect(formatLegacyMoveReport(simulated)).toContain('SIMULAÇÃO');
+    expect((await byName('Ginteco')).relationship).toBe('formatacao');
+    expect((await db.select().from(clientProjects)).every((p) => p.hiddenAt === null)).toBe(true);
+
+    const applied = await moveLegacyBrandsToExpansion(db, { apply: true });
+    expect(applied.moves.filter((move) => move.project === 'hidden')).toHaveLength(3);
+    expect((await byName('Casal do Churros')).relationship).toBe('expansao');
+    expect((await byName('Ginteco')).relationship).toBe('expansao');
+    expect((await byName('Família K')).relationship).toBe('ambos');
+    expect((await db.select().from(clientProjects)).length).toBe(projectsBefore);
+
+    const actor = {
+      role: 'admin_master',
+      sector: 'diretoria',
+      employeeId: 'x',
+    } as unknown as Parameters<typeof listProjects>[1];
+    const board = await listProjects(db, actor);
+    expect(board.some((project) => project.clientId === churros.id)).toBe(false);
+    const withHidden = await listProjects(db, actor, { hidden: true });
+    expect(withHidden.find((project) => project.clientId === churros.id)?.hidden).toBe(true);
+
+    const again = await moveLegacyBrandsToExpansion(db, { apply: true });
+    expect(again.moves.filter((move) => move.project === 'hidden')).toHaveLength(0);
+    const audit = await db.select().from(auditLog).where(eq(auditLog.action, 'project.hidden'));
+    expect(audit).toHaveLength(3);
   });
 });

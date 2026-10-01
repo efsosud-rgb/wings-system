@@ -51,6 +51,8 @@ export const clientProjects = pgTable(
     /** `01`…`08`: the stage the client is at, set by hand or advanced when the current one concludes. */
     currentStage: text('current_stage').notNull().default('01'),
     updatedBy: uuid('updated_by').references(() => employees.id),
+    /** Off the board, kept (B5: brands moved to Expansão). Never deleted. */
+    hiddenAt: timestamp('hidden_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

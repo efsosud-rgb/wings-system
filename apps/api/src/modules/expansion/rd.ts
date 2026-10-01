@@ -151,6 +151,46 @@ export class RdMarketing {
     return (await response.json()) as T;
   }
 
+  /**
+   * Sends one form conversion (CRM phase 1, T5, behind
+   * SITE_FORM_RD_FORWARD_ENABLED). Once, never retried: a lost answer may
+   * still have made the conversion, and a second one would double RD's
+   * flows. UTMs go in RD's own traffic_* fields. NOT verified live: the
+   * shape follows RD's public reference for the CONVERSION event.
+   */
+  async sendConversion(input: {
+    identifier: string;
+    name: string;
+    email: string;
+    phone: string;
+    utmSource?: string | null;
+    utmMedium?: string | null;
+    utmCampaign?: string | null;
+    utmTerm?: string | null;
+  }): Promise<number> {
+    const payload: Record<string, unknown> = {
+      conversion_identifier: input.identifier,
+      name: input.name,
+      email: input.email,
+      mobile_phone: `+${input.phone}`,
+      legal_bases: [{ category: 'communications', type: 'consent', status: 'granted' }],
+    };
+    if (input.utmSource) payload.traffic_source = input.utmSource;
+    if (input.utmMedium) payload.traffic_medium = input.utmMedium;
+    if (input.utmCampaign) payload.traffic_campaign = input.utmCampaign;
+    if (input.utmTerm) payload.traffic_value = input.utmTerm;
+    const response = await this.fetchImpl(`${MKT}/platform/events?event_type=conversion`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${await this.accessToken()}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ event_type: 'CONVERSION', event_family: 'CDP', payload }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    return response.status;
+  }
+
   /** Contacts whose latest conversion is at or after `since` (the whole segmentation is walked). */
   async contactsConvertedSince(since: Date): Promise<string[]> {
     const uuids: string[] = [];
@@ -323,6 +363,16 @@ export class RdCrm {
       sources: new Map((sources.deal_sources ?? []).map((row) => [row.name, idOf(row)])),
       campaigns: new Map((campaigns.campaigns ?? []).map((row) => [row.name, idOf(row)])),
     };
+  }
+
+  /** The names of RD CRM's deal sources ("Origem"), for CRM Vendas → Landing pages to choose from. */
+  async dealSources(): Promise<string[]> {
+    const body = await this.get<{ deal_sources?: { name: string }[] }>('/deal_sources', {
+      limit: '200',
+    });
+    return (body.deal_sources ?? [])
+      .map((row) => row.name)
+      .sort((a, b) => a.localeCompare(b, 'pt-BR'));
   }
 
   /** The contact with this e-mail or phone, or null; its deals come inside. */

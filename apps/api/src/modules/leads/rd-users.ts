@@ -20,6 +20,7 @@ export const rdUserRoutes: FastifyPluginAsync = async (app) => {
         rdUserId: rdUserMap.rdUserId,
         rdName: rdUserMap.rdName,
         rdActive: rdUserMap.rdActive,
+        departedAt: rdUserMap.departedAt,
         employeeId: rdUserMap.employeeId,
         employeeName: employees.fullName,
       })
@@ -32,7 +33,10 @@ export const rdUserRoutes: FastifyPluginAsync = async (app) => {
       .from(employees)
       .where(eq(employees.status, 'active'))
       .orderBy(asc(employees.fullName));
-    return reply.send({ users: rows, employees: staff });
+    return reply.send({
+      users: rows.map((row) => ({ ...row, departedAt: row.departedAt?.toISOString() ?? null })),
+      employees: staff,
+    });
   });
 
   app.put('/leads/rd-users/:rdUserId', guard, async (request, reply) => {
@@ -63,6 +67,35 @@ export const rdUserRoutes: FastifyPluginAsync = async (app) => {
       entityId: row.rdUserId,
       ip: request.ip,
       metadata: { employeeId },
+    });
+    return reply.send({ ok: true });
+  });
+
+  // "Saiu da empresa": their deals count as "dono inativo"; nothing is reassigned.
+  app.put('/leads/rd-users/:rdUserId/departed', guard, async (request, reply) => {
+    const params = z
+      .object({ rdUserId: z.string().trim().min(1).max(64) })
+      .safeParse(request.params);
+    const body = z.object({ departed: z.boolean() }).safeParse(request.body);
+    if (!params.success || !body.success) return reply.code(400).send({ error: 'invalid_rd_user' });
+    const actor = request.session.actor.employeeId;
+    const [row] = await db
+      .update(rdUserMap)
+      .set({
+        departedAt: body.data.departed ? new Date() : null,
+        updatedBy: actor,
+        updatedAt: new Date(),
+      })
+      .where(eq(rdUserMap.rdUserId, params.data.rdUserId))
+      .returning({ rdUserId: rdUserMap.rdUserId });
+    if (!row) return reply.code(404).send({ error: 'unknown_rd_user' });
+    await writeAudit(db, {
+      actorEmployeeId: actor,
+      action: 'rd_user_map.departed',
+      entity: 'rd_user_map',
+      entityId: row.rdUserId,
+      ip: request.ip,
+      metadata: { departed: body.data.departed },
     });
     return reply.send({ ok: true });
   });

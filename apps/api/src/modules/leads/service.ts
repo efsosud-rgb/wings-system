@@ -1,5 +1,6 @@
 import {
   EMPTY_FACTS,
+  INACTIVE_OWNER,
   LEAD_PIPELINES,
   landingPageKeysOf,
   matchSourceRule,
@@ -33,6 +34,7 @@ import {
   leadTrackingLinks,
   leads,
   rdCrmDeals,
+  rdUserMap,
 } from '../../db/schema/index.js';
 
 export type LeadRow = typeof leads.$inferSelect;
@@ -561,6 +563,7 @@ export interface LeadListFilter {
   source?: LeadSource;
   pipeline?: LeadPipeline;
   stage?: string;
+  /** An employee id, or INACTIVE_OWNER. */
   owner?: string;
   outcome?: LeadOutcome;
   staleDays?: number;
@@ -570,10 +573,18 @@ export interface LeadListFilter {
 
 export const LEAD_LIST_LIMIT = 200;
 
+/**
+ * An RD deal whose owner is no one of ours who still works it (Eric, 01/10):
+ * no owner, an RD user inactive in RD or marked as gone, or one not linked to
+ * an employee. Nothing is reassigned; this only names them.
+ */
+const ownerInactive = sql<boolean>`(${leads.rdDealId} is not null and (${leads.ownerEmployeeId} is null or exists (select 1 from ${rdUserMap} where ${rdUserMap.rdUserId} = ${leads.rdOwnerId} and (not ${rdUserMap.rdActive} or ${rdUserMap.departedAt} is not null))))`;
+
 function listConditions(filter: LeadListFilter) {
   const conditions = [];
   if (filter.ownerEmployeeId) conditions.push(eq(leads.ownerEmployeeId, filter.ownerEmployeeId));
-  if (filter.owner) conditions.push(eq(leads.ownerEmployeeId, filter.owner));
+  if (filter.owner === INACTIVE_OWNER) conditions.push(ownerInactive);
+  else if (filter.owner) conditions.push(eq(leads.ownerEmployeeId, filter.owner));
   if (filter.clientId) conditions.push(eq(leads.clientId, filter.clientId));
   if (filter.source) conditions.push(eq(leads.source, filter.source));
   if (filter.pipeline) conditions.push(eq(leads.pipeline, filter.pipeline));
@@ -622,6 +633,7 @@ export async function listLeads(
         stage: leads.stage,
         won: leads.won,
         ownerName: employees.fullName,
+        ownerInactive,
         stageChangedAt: leads.stageChangedAt,
       })
       .from(leads)
@@ -653,7 +665,8 @@ export async function listLeads(
       brand: row.brand,
       stage: row.stage,
       won: row.won,
-      ownerName: row.ownerName,
+      ownerName: row.ownerInactive ? null : row.ownerName,
+      ownerInactive: Boolean(row.ownerInactive),
       stageChangedAt: iso(row.stageChangedAt),
     })),
   };
@@ -675,7 +688,7 @@ export async function funnelSummary(
     ? eq(leads.ownerEmployeeId, input.ownerEmployeeId)
     : undefined;
   const label = sql<string>`case when ${leads.pipeline} = 'formatacao' then 'Formatação' else coalesce(${leads.brand}, '(sem marca)') end`;
-  const [rows, owners, stages, synced] = await Promise.all([
+  const [rows, owners, stages, synced, inactive] = await Promise.all([
     db
       .select({
         pipeline: leads.pipeline,
@@ -699,6 +712,10 @@ export async function funnelSummary(
       .from(leads)
       .where(and(isNotNull(leads.stage), isNotNull(leads.pipeline), scope)),
     db.select({ at: sql<string | null>`max(${leads.rdSyncedAt})` }).from(leads),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(leads)
+      .where(and(ownerInactive, isNull(leads.won), scope)),
   ]);
   const syncedAt = synced[0]?.at ? new Date(synced[0].at) : null;
   return {
@@ -707,6 +724,7 @@ export async function funnelSummary(
       .map((row) => ({ ...row, pipeline: row.pipeline as LeadPipeline }))
       .sort((a, b) => a.pipeline.localeCompare(b.pipeline) || b.arrived - a.arrived),
     owners: owners.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
+    inactiveOwnerOpen: inactive[0]?.count ?? 0,
     stages: stages
       .map((row) => ({
         pipeline: row.pipeline as LeadPipeline,
