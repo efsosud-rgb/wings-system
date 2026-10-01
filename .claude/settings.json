@@ -1,0 +1,52 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wings-staging-sql:*)",
+      "Bash(wings-deploy:*)",
+      "Bash(wings-env:*)",
+      "Bash(wings-openrouter:*)"
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/statusline.sh",
+    "refreshInterval": 30
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-production.sh",
+            "timeout": 10,
+            "statusMessage": "Checking production guard"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-secrets.sh",
+            "timeout": 10,
+            "statusMessage": "Checking secrets guard"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/context-warn.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

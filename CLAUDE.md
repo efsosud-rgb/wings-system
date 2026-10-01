@@ -68,6 +68,14 @@ The API container runs `db:migrate` then `db:seed` before serving, so both must 
 
 > ⚠️ Portaria MTP 671/2021 compliance for the time clock is **not yet legally confirmed**. Keep the model compliance-ready (append-only, sourced entries, exportable) and keep this warning visible until Jurídico signs off.
 
+## Contexto e custo
+
+- **Contexto: ao passar de ~150k tokens, avise o Eric em uma linha** (a barra de status e o hook `context-warn` mostram o tamanho) e sugira `/compact` se a tarefa continua a mesma, ou `/handoff` + `/clear` se muda a onda, a branch ou a worktree. Não pare a tarefa por isso. Sessões acima de 150k concentram a maior parte do gasto.
+- **Subagentes só quando há paralelismo real**: trabalho independente que roda ao mesmo tempo, ou uma varredura grande de arquivos em que só a conclusão importa. Um fato em arquivo conhecido, uma edição pequena e um passo que depende do anterior ficam na sessão principal.
+- No máximo **3 subagentes por tarefa**. **Nunca repetir uma busca já delegada.** Workflows multiagente (`Workflow`, "ultracode") só a pedido do Eric.
+- Pesquisa, varredura e revisão de rotina usam os agents baratos de `.claude/agents/` (`repo-researcher`, `docs-checker` em haiku; `code-reviewer` em sonnet), todos só de leitura. **Código de risco** (autenticação, CPF, verba de anúncio, migrações, permissões) continua no modelo principal, e quem revisa não é mais fraco que quem escreveu.
+- `.claude/settings.json` é versionado e traz travas: `guard-production` bloqueia deploy/escrita em produção e push/merge em `main` sem `WINGS_ALLOW_PRODUCTION=1`, que **só o Eric define** no terminal antes de iniciar o `claude`; `guard-secrets` bloqueia comandos que imprimem valores de segredo. Uma trava bloqueando não é erro a contornar: pare e peça ao Eric.
+
 ## Environments
 
 | Environment | Branch    | Domain                     | Database               |
