@@ -18,6 +18,7 @@ import {
   jobs,
   leadEvents,
   leadSourceRules,
+  leadTrackingLinks,
   leads,
 } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
@@ -177,7 +178,10 @@ describe('source rules, tracked links and the expansion area (Formatação → C
     expect(created.statusCode).toBe(201);
     const link = created.json<{ link: LeadTrackingLink }>().link;
     expect(link.code).toMatch(/^[A-HJ-NP-Z2-9]{6}$/);
-    expect(link.url).toBe(`https://wa.me/5511999990000?text=${link.code}`);
+    expect(link.url).toBe(
+      `https://wa.me/5511999990000?text=${encodeURIComponent(`${link.code} Olá! Quero saber sobre a franquia Padaria Aurora.`)}`,
+    );
+    expect(link.current).toBe(true);
     expect(link.channel).toBe('instagram');
     expect(link.hits).toBe(0);
 
@@ -199,6 +203,41 @@ describe('source rules, tracked links and the expansion area (Formatação → C
       payload: { channel: 'site' },
     });
     expect(refused.statusCode).toBe(403);
+  });
+
+  it("opens the Wings WhatsApp for a brand, never the brand's own number, with the brand in the text", async () => {
+    const { cookies } = await sessionFor('marketing');
+    const brand = await createClient(cookies, 'Cenoritas Teste');
+    // The brand's own WhatsApp is a contact on the record only.
+    await db.update(clients).set({ whatsapp: '21972055989' }).where(eq(clients.id, brand.id));
+    const created = await app.inject({
+      method: 'POST',
+      url: `/clients/${brand.id}/tracking-links`,
+      cookies,
+      payload: { channel: 'site' },
+    });
+    expect(created.statusCode).toBe(201);
+    const link = created.json<{ link: LeadTrackingLink }>().link;
+    expect(link.phone).toBe('5511999990000');
+    expect(link.url).toBe(
+      `https://wa.me/5511999990000?text=${encodeURIComponent(`${link.code} Olá! Quero saber sobre a franquia Cenoritas Teste.`)}`,
+    );
+    expect(link.url).not.toContain('21972055989');
+    expect(link.current).toBe(true);
+
+    // A link made for an older Wings number is flagged.
+    await db
+      .update(leadTrackingLinks)
+      .set({ phone: '5511900000000' })
+      .where(eq(leadTrackingLinks.id, link.id));
+    const listed = await app.inject({
+      method: 'GET',
+      url: `/clients/${brand.id}/tracking-links`,
+      cookies,
+    });
+    expect(listed.json<{ links: LeadTrackingLink[] }>().links[0]).toMatchObject({
+      current: false,
+    });
   });
 
   it('keeps the expansion area as states and cities, refusing an entry it cannot check', async () => {

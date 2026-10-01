@@ -196,3 +196,27 @@ node dist/scripts/crm-brands.js --expansion-legacy --apply   # aplica
 As 8 marcas da primeira rodada passam a `relationship = 'expansao'` e os
 projetos de Formatação abertos para elas ficam ocultos (`client_projects.hidden_at`),
 sem apagar nada. Rodar de novo não faz nada.
+
+## Links de WhatsApp por marca (T6, migração 0058)
+
+Decisão do Eric (01/10): **todo link e toda página de Expansão abrem o WhatsApp da Wings**
+(`WINGS_WHATSAPP_NUMBER`, 5521999470288), onde a Sofia atende. A marca é identificada pelo código
+do link (cliente + canal) e pelo texto pré-preenchido: `<CÓDIGO> Olá! Quero saber sobre a franquia
+<Marca>.` O lado que recebe lê só a primeira palavra (o código), então o lead cai no Funil com a
+marca certa.
+
+- **WhatsApp próprio da marca** (`clients.whatsapp`, ficha → Empresa) é só contato: nunca entra em
+  link, página ou resposta pública. Sem WhatsApp próprio, a ficha guarda o motivo
+  (`clients.whatsapp_note`) e o campo aparece vazio ("—").
+- **Instagram** (`clients.social.instagram`) é o da marca e aparece na página `/lp/<slug>`.
+- **Formulário do site**: depois do envio, a resposta traz `whatsappUrl`, o link **Site** mais
+  recente da marca feito para o número atual da Wings (ou `null`: página sem marca, sem link Site,
+  ou `WINGS_WHATSAPP_NUMBER` ausente). A rota pública não cria link; gere em Formatação → Clientes →
+  Links e expansão → canal Site.
+- Link feito para um número antigo da Wings aparece marcado ("não é mais o WhatsApp da Wings") e não
+  é devolvido pelo formulário.
+- Dados das marcas (Eric, 01/10): `node dist/scripts/crm-brands.js --contacts [--apply]` grava
+  Instagram e WhatsApp próprio de Cenoritas e Amarjon e o motivo da Iguari (sem WhatsApp próprio).
+  Simula por padrão; rodar de novo não muda nada; auditoria `client.company_updated` só com nomes de
+  campo.
+- Nada é enviado: `wa.me` só abre a conversa no aparelho da pessoa.

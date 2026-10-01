@@ -241,6 +241,9 @@ export function useSiteForm(slug: string | undefined) {
 export function useSubmitSiteForm(slug: string) {
   return useMutation({
     mutationFn: (input: SiteFormSubmitInput) =>
-      api.post<{ ok: true }>(`/public/site-forms/${encodeURIComponent(slug)}`, input),
+      api.post<{ ok: true; whatsappUrl: string | null }>(
+        `/public/site-forms/${encodeURIComponent(slug)}`,
+        input,
+      ),
   });
 }

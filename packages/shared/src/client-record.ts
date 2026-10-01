@@ -297,6 +297,13 @@ export const clientCompanySchema = z.object({
   phone,
   email,
   website: text(200),
+  /**
+   * The brand's own WhatsApp, a contact only: tracked links and Expansão pages
+   * always open the Wings WhatsApp (T6, Eric 01/10), never this number.
+   */
+  whatsapp: phone,
+  /** Why there is no WhatsApp ("a marca não tem WhatsApp próprio"), shown with "—". */
+  whatsappNote: text(200),
   social: z
     .partialRecord(z.enum(SOCIAL_NETWORKS), z.string().trim().max(200))
     .nullish()

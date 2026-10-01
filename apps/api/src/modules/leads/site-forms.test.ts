@@ -4,10 +4,18 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { auditLog, clients, jobs, leads, leadSourceRules } from '../../db/schema/index.js';
+import {
+  auditLog,
+  clients,
+  jobs,
+  leads,
+  leadSourceRules,
+  leadTrackingLinks,
+} from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
+import { instagramHandleOf } from './site-forms.js';
 
 let harness: TestDatabase;
 let db: Database;
@@ -164,6 +172,7 @@ describe('site form (T5)', () => {
       slug: 'cenoritas',
       brand: 'Cenoritas',
       turnstileSiteKey: '0x4AAAAAAA-site',
+      instagram: null,
     });
     expect(JSON.stringify(info.json())).not.toContain('secret');
   });
@@ -231,7 +240,8 @@ describe('site form (T5)', () => {
       payload: form(),
     });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ ok: true });
+    // No Wings number in this environment: no link.
+    expect(response.json()).toEqual({ ok: true, whatsappUrl: null });
     expect(rdApi.calls).toHaveLength(0);
 
     const [lead] = await db.select().from(leads).where(eq(leads.email, 'pessoa.teste@example.com'));
@@ -366,5 +376,61 @@ describe('site form (T5)', () => {
       .from(leads)
       .where(eq(leads.email, 'pesquisa.ligada@example.com'));
     expect(lead?.enrichmentState).toBe('pending');
+  });
+
+  it("answers the brand's tracked Site link on the Wings WhatsApp (T6), never the brand's own number", async () => {
+    const turnstile = captcha();
+    const app = await makeApp(
+      { TURNSTILE_SECRET_KEY: '0x4AAAAAAA-secret', WINGS_WHATSAPP_NUMBER: '5521999470288' },
+      { captchaFetch: turnstile.fetchImpl },
+    );
+    const send = (n: number) =>
+      app.inject({
+        method: 'POST',
+        url: '/public/site-forms/cenoritas',
+        payload: form({ email: `whats.${n}@example.com`, phone: `(21) 99999-01${n}` }),
+      });
+    const [page] = await db.select().from(leadSourceRules).where(eq(leadSourceRules.id, pageId));
+    const clientId = page!.clientId!;
+    await db
+      .update(clients)
+      .set({ whatsapp: '21972055989', social: { instagram: '@cenoritas.gourmet' } })
+      .where(eq(clients.id, clientId));
+    const info = await app.inject({ method: 'GET', url: '/public/site-forms/cenoritas' });
+    expect(info.json()).toMatchObject({ instagram: '@cenoritas.gourmet' });
+    expect(info.body).not.toContain('21972055989');
+
+    // No Site link yet: nothing is created by a public request.
+    expect((await send(10)).json()).toEqual({ ok: true, whatsappUrl: null });
+    expect(
+      await db.select().from(leadTrackingLinks).where(eq(leadTrackingLinks.clientId, clientId)),
+    ).toEqual([]);
+
+    await db.insert(leadTrackingLinks).values([
+      { clientId, channel: 'site', code: 'SITE22', phone: '5521999470288' },
+      { clientId, channel: 'instagram', code: 'INSTA2', phone: '5521999470288' },
+      // Made for a number that is no longer Wings': never handed out.
+      {
+        clientId,
+        channel: 'site',
+        code: 'OLD222',
+        phone: '5521972055989',
+        createdAt: new Date(Date.now() + 60_000),
+      },
+    ]);
+    const answer = (await send(11)).json<{ ok: true; whatsappUrl: string }>();
+    expect(answer.whatsappUrl).toBe(
+      `https://wa.me/5521999470288?text=${encodeURIComponent('SITE22 Olá! Quero saber sobre a franquia Cenoritas.')}`,
+    );
+  });
+
+  it('reads the Instagram handle however the record keeps it', () => {
+    expect(instagramHandleOf('@amarjonbiojoias')).toBe('@amarjonbiojoias');
+    expect(instagramHandleOf('https://www.instagram.com/iguaripasseioshopping/?hl=pt')).toBe(
+      '@iguaripasseioshopping',
+    );
+    expect(instagramHandleOf('cenoritas.gourmet')).toBe('@cenoritas.gourmet');
+    expect(instagramHandleOf('<script>')).toBeNull();
+    expect(instagramHandleOf(null)).toBeNull();
   });
 });

@@ -2,18 +2,19 @@ import {
   normalizeBrazilianPhone,
   SITE_FORM_CONSENT_TEXT,
   siteFormSubmitSchema,
+  whatsappLinkOf,
   type SiteFormInfo,
 } from '@wings/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import type { Database } from '../../db/client.js';
-import { clients, leadSourceRules } from '../../db/schema/index.js';
+import { clients, leadSourceRules, leadTrackingLinks } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { RdMarketing } from '../expansion/rd.js';
 import { shapeOf } from '../media/kairogen-adapter.js';
 import { rdAttributionOf } from './rd-attribution.js';
-import { resolveLandingPage, upsertLead } from './service.js';
+import { brandOfLink, resolveLandingPage, upsertLead } from './service.js';
 
 /**
  * The site form (CRM phase 1, T5): the Wings System's own form on a landing
@@ -32,6 +33,46 @@ import { resolveLandingPage, upsertLead } from './service.js';
  * is one call, never retried.
  */
 
+/**
+ * The brand's tracked "Site" link the page opens after the form (T6), or null.
+ * It opens the Wings WhatsApp, where Sofia answers every Expansão lead, with
+ * the brand in the text; never the brand's own number. Only a page tied to a
+ * brand, only a link made for the current Wings number; nothing is created here.
+ */
+export async function siteWhatsappUrl(
+  db: Database,
+  clientId: string,
+  mapped: boolean,
+  wingsNumber: string | undefined,
+): Promise<string | null> {
+  if (!mapped || !wingsNumber) return null;
+  const client = await db.query.clients.findFirst({ where: eq(clients.id, clientId) });
+  if (!client?.active) return null;
+  const [link] = await db
+    .select({ code: leadTrackingLinks.code })
+    .from(leadTrackingLinks)
+    .where(
+      and(
+        eq(leadTrackingLinks.clientId, clientId),
+        eq(leadTrackingLinks.channel, 'site'),
+        eq(leadTrackingLinks.phone, wingsNumber),
+      ),
+    )
+    .orderBy(desc(leadTrackingLinks.createdAt))
+    .limit(1);
+  return link ? whatsappLinkOf(wingsNumber, link.code, brandOfLink(client)) : null;
+}
+
+/** `@perfil` from what the record keeps (`@perfil`, `perfil` or an instagram.com address), or null. */
+export function instagramHandleOf(value: string | null | undefined): string | null {
+  const handle = (value ?? '')
+    .trim()
+    .replace(/^https?:\/\/(www\.)?instagram\.com\//i, '')
+    .replace(/^@/, '')
+    .replace(/[/?#].*$/, '');
+  return /^[A-Za-z0-9._]{1,30}$/.test(handle) ? `@${handle}` : null;
+}
+
 const TURNSTILE_VERIFY = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 
 const slugParam = z.object({ slug: z.string().trim().min(1).max(80) });
@@ -44,6 +85,7 @@ async function formPage(db: Database, slug: string) {
       pattern: leadSourceRules.pattern,
       brand: leadSourceRules.brand,
       clientName: clients.name,
+      social: clients.social,
     })
     .from(leadSourceRules)
     .leftJoin(clients, eq(clients.id, leadSourceRules.clientId))
@@ -103,6 +145,8 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
         slug: page.pattern,
         brand: page.clientName ?? page.brand ?? 'Wings Company',
         turnstileSiteKey: env.TURNSTILE_SITE_KEY ?? null,
+        // The brand's own Instagram (T6); its WhatsApp is never shown here.
+        instagram: instagramHandleOf(page.social?.instagram),
       } satisfies SiteFormInfo);
     },
   );
@@ -262,7 +306,13 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
           rdForward,
         },
       });
-      return reply.send({ ok: true });
+      const whatsappUrl = await siteWhatsappUrl(
+        db,
+        client.clientId,
+        client.mapped,
+        env.WINGS_WHATSAPP_NUMBER,
+      );
+      return reply.send({ ok: true, whatsappUrl });
     },
   );
 };
