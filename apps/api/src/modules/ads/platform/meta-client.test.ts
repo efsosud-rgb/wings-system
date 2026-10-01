@@ -56,6 +56,13 @@ describe('money parsing — the 100x trap', () => {
     expect(centsFromDecimalCurrencyString('61.02', 'spend')).toBe(6102);
     // Breakdowns write more decimals than a cent has; they are rounded, not refused.
     expect(centsFromDecimalCurrencyString('1.67832', 'spend')).toBe(168);
+    // Half up on the digits, like Google's micros — never floating point.
+    expect(centsFromDecimalCurrencyString('0.285', 'spend')).toBe(29);
+    expect(centsFromDecimalCurrencyString('0.2849', 'spend')).toBe(28);
+    expect(centsFromDecimalCurrencyString('12.995', 'spend')).toBe(1300);
+    expect(centsFromDecimalCurrencyString('48', 'spend')).toBe(4800);
+    expect(() => centsFromDecimalCurrencyString('-1.00', 'spend')).toThrow();
+    expect(() => centsFromDecimalCurrencyString('1,50', 'spend')).toThrow();
     expect(centsFromDecimalCurrencyString('0.005', 'spend')).toBe(1);
     expect(centsFromDecimalCurrencyString('12.999', 'spend')).toBe(1300);
     expect(centsFromDecimalCurrencyString('7', 'spend')).toBe(700);

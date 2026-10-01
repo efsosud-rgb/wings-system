@@ -22,6 +22,7 @@ import {
   reserveChange,
 } from './budget-guard.js';
 import { executeApprovedChange } from './executor.js';
+import { periodMonthOf } from './reconcile.js';
 import { FakeMetaClient } from './platform/fake-meta-client.js';
 
 /**
@@ -30,8 +31,11 @@ import { FakeMetaClient } from './platform/fake-meta-client.js';
  * write, or nothing happens.
  */
 
-const NOW = new Date('2026-09-17T12:00:00.000Z');
-const PERIOD = '2026-09-01';
+// The executor reads the clock itself (freshness of the month it runs in), so
+// the test's month is the real one: a fixed September date broke it the day
+// the month turned.
+const NOW = new Date();
+const PERIOD = periodMonthOf(NOW);
 const CAP = 400_000;
 
 let harness: TestDatabase;

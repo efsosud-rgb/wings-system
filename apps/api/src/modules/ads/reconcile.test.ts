@@ -85,6 +85,60 @@ describe('syncing campaigns from the platform', () => {
   });
 });
 
+describe('the month turned with no budget period (Eric, 01/10)', () => {
+  it('still records the reading, touches no period and leaves spending blocked', async () => {
+    const [row] = await db
+      .insert(adAccounts)
+      .values({ platform: 'meta', externalId: 'act_turned', name: 'Sem período' })
+      .returning({ id: adAccounts.id });
+    const id = row!.id;
+    const client = new FakeMetaClient({
+      spendCapCents: CAP,
+      campaigns: [{ id: 'c-oct', name: 'Outubro', status: 'ACTIVE', dailyBudgetCents: 4000 }],
+    });
+    client.simulateDay('2026-10-01');
+    client.settleReporting();
+    const october = new Date('2026-10-01T15:00:00.000Z');
+
+    const result = await reconcileAccount(db, client, id, october);
+
+    expect(result).toMatchObject({
+      periodMissing: true,
+      campaignsSynced: 1,
+      spendRowsRecorded: 1,
+      spentCents: 4000,
+      committedCents: 0,
+      killSwitchEngaged: false,
+    });
+    expect(
+      await db.query.adCampaigns.findMany({ where: eq(adCampaigns.adAccountId, id) }),
+    ).toHaveLength(1);
+    // No period was invented, and the write path still sees no reconciliation.
+    expect(
+      await db.query.budgetPeriods.findMany({ where: eq(budgetPeriods.adAccountId, id) }),
+    ).toHaveLength(0);
+    expect(await reconciliationFreshness(db, id, { now: october })).toMatchObject({
+      fresh: false,
+      reason: 'never_reconciled',
+    });
+    // Nor does the dead-man switch freeze an account that has no period to judge.
+    expect(await enforceReconciliationFreshness(db, { now: october })).not.toContainEqual(
+      expect.objectContaining({ accountId: id }),
+    );
+
+    // Once someone opens the month, the next reconciliation fills it from the same facts.
+    await openPeriod(db, {
+      adAccountId: id,
+      periodMonth: '2026-10-01',
+      capCents: CAP,
+      usablePercent: USABLE_PERCENT,
+    });
+    const opened = await reconcileAccount(db, client, id, october);
+    expect(opened.periodMissing).toBe(false);
+    expect((await getPeriodState(db, id, '2026-10-01'))?.spentCents).toBe(4000);
+  });
+});
+
 describe('reconciling spend', () => {
   it('records reported spend and re-derives the period totals', async () => {
     const id = await account();

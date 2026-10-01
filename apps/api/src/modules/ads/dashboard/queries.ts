@@ -350,8 +350,22 @@ async function paidStrip(
   ]);
   const configured = hasPlatformCredentials(env, platform) || accounts.length > 0;
 
-  // Money truth is the guard's own reconciled figure, not the analytics rows.
-  const spent = states.reduce((total, state) => total + (state?.spentCents ?? 0), 0);
+  // Money truth is the guard's own reconciled figure, not the analytics rows —
+  // while every account has its period. Without one (the month turned and no
+  // cap was opened yet) the guard has no figure, and showing zero would be a
+  // lie: the platform's daily rows stand in, said so on the strip.
+  const missing = accounts.filter((_account, index) => !states[index]);
+  const spent =
+    missing.length === 0
+      ? states.reduce((total, state) => total + (state?.spentCents ?? 0), 0)
+      : daily.reduce((total, row) => total + row.amount, 0);
+  const periodMissingNote =
+    missing.length === 0
+      ? null
+      : `Sem teto do mês aberto para ${missing.map((account) => account.externalId).join(', ')}: ` +
+        'os dados continuam sendo lidos e o gasto vem das linhas diárias da plataforma, mas ' +
+        'lançar campanha ou aumentar verba fica bloqueado até alguém com permissão abrir o teto ' +
+        'deste mês em Administração → Integrações.';
   const days = [...latest.values()];
   const balances = days.map((row) => row.prepaidBalanceCents ?? row.platformRemainingCents);
   const balanceSource =
@@ -385,6 +399,7 @@ async function paidStrip(
     killSwitchEngaged: accounts.some((account) => account.killSwitchEngaged),
     killSwitch: await killSwitchOf(db, accounts),
     setupNote: setupNoteOf(env, platform, accounts, latest),
+    periodMissingNote,
   };
 }
 
@@ -454,6 +469,7 @@ async function kairogenStrip(
     killSwitchEngaged: false,
     killSwitch: null,
     setupNote: null,
+    periodMissingNote: null,
   };
 }
 
@@ -513,6 +529,7 @@ async function aiStrip(
     killSwitchEngaged: false,
     killSwitch: null,
     setupNote: null,
+    periodMissingNote: null,
   };
 }
 
@@ -553,6 +570,7 @@ async function mediaStrip(
     killSwitchEngaged: false,
     killSwitch: null,
     setupNote: null,
+    periodMissingNote: null,
   };
 }
 

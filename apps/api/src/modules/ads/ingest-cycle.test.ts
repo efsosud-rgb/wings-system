@@ -144,7 +144,7 @@ describe('an ingestion cycle over several accounts', () => {
     expect(result.metrics.ad.rows).toBe(0);
   });
 
-  it('contains an account with no budget period, the way three of four real ones began', async () => {
+  it('reads an account with no budget period too, the way three of four real ones began', async () => {
     const unopened = await account({ withPeriod: false });
     const healthy = await account();
 
@@ -154,8 +154,14 @@ describe('an ingestion cycle over several accounts', () => {
       now: NOW,
     });
 
-    expect(cycle.accounts.map((r) => r.status)).toEqual(['failed', 'ok']);
-    expect(cycle.accounts[0]).toMatchObject({ step: 'reconcile' });
+    // Reading never depends on the period (Eric, 01/10): both accounts are read.
+    expect(cycle.accounts.map((r) => r.status)).toEqual(['ok', 'ok']);
+    const [first] = cycle.accounts;
+    if (first?.status !== 'ok') throw new Error('unreachable');
+    expect(first.reconciled.periodMissing).toBe(true);
+    expect(cycle.accounts[1]?.status === 'ok' && cycle.accounts[1].reconciled.periodMissing).toBe(
+      false,
+    );
   });
 
   it('skips an account without credentials and does not count it as failed', async () => {
