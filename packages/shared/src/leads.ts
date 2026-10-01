@@ -997,6 +997,8 @@ export interface LandingPageItem {
    * that already exist.
    */
   dealSource: string | null;
+  /** Whether the Expansão intake makes RD CRM deals from this page's conversions. */
+  rdDealIntake: boolean;
 }
 
 /** Only numbers with a source; a missing one is null with the reason. */
@@ -1035,6 +1037,7 @@ export const DEAL_SOURCE_MAX = 120;
 export const landingPageUpdateSchema = z
   .object({
     siteFormEnabled: z.boolean().optional(),
+    rdDealIntake: z.boolean().optional(),
     dealSource: z
       .string()
       .trim()
@@ -1044,7 +1047,10 @@ export const landingPageUpdateSchema = z
       .transform((value) => (value === '' ? null : value)),
   })
   .refine(
-    (body) => body.siteFormEnabled !== undefined || body.dealSource !== undefined,
+    (body) =>
+      body.siteFormEnabled !== undefined ||
+      body.rdDealIntake !== undefined ||
+      body.dealSource !== undefined,
     'Nada para alterar',
   );
 export type LandingPageUpdateInput = z.infer<typeof landingPageUpdateSchema>;

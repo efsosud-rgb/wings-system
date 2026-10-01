@@ -188,6 +188,12 @@ export const leadSourceRules = pgTable(
     siteFormEnabled: boolean('site_form_enabled').notNull().default(false),
     /** RD CRM deal source for the deals made from this page's new conversions; null keeps the default. */
     dealSource: text('deal_source'),
+    /**
+     * The Expansão intake makes RD CRM deals from this page's conversions. Off
+     * for a page whose deals RD's own automation may already make (a duplicate
+     * risk), until a person decides (Eric, 01/10).
+     */
+    rdDealIntake: boolean('rd_deal_intake').notNull().default(true),
     createdBy: uuid('created_by').references(() => employees.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

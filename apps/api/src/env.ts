@@ -341,6 +341,14 @@ const schema = z.object({
    * retried), so RD's flows and the intake keep working. A write to RD: off
    * unless "true", and only Eric turns it on.
    */
+  /**
+   * The paid lead research (`enrich_lead`) for leads from the site form: off
+   * unless "true" (Eric, 01/10), so no research is paid for automatically.
+   */
+  SITE_FORM_RESEARCH_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
   SITE_FORM_RD_FORWARD_ENABLED: optionalString.refine(
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',

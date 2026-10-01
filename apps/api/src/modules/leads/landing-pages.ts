@@ -88,6 +88,7 @@ export async function listLandingPages(db: Database): Promise<LandingPageItem[]>
       createdAt: leadSourceRules.createdAt,
       siteFormEnabled: leadSourceRules.siteFormEnabled,
       dealSource: leadSourceRules.dealSource,
+      rdDealIntake: leadSourceRules.rdDealIntake,
     })
     .from(leadSourceRules)
     .leftJoin(clients, eq(clients.id, leadSourceRules.clientId))
@@ -132,6 +133,7 @@ export async function listLandingPages(db: Database): Promise<LandingPageItem[]>
         },
         siteFormEnabled: row.siteFormEnabled,
         dealSource: row.dealSource,
+        rdDealIntake: row.rdDealIntake,
       } satisfies LandingPageItem;
     })
     .sort(
@@ -242,6 +244,7 @@ export const landingPageRoutes: FastifyPluginAsync = async (app) => {
         ...(body.data.siteFormEnabled !== undefined
           ? { siteFormEnabled: body.data.siteFormEnabled }
           : {}),
+        ...(body.data.rdDealIntake !== undefined ? { rdDealIntake: body.data.rdDealIntake } : {}),
         ...(body.data.dealSource !== undefined ? { dealSource: body.data.dealSource } : {}),
       })
       .where(and(eq(leadSourceRules.id, params.data.id), eq(leadSourceRules.kind, 'landing_page')))

@@ -43,10 +43,11 @@ const EXPANSION_LANDING_PAGES = [
   { identifier: 'lista-de-espera-familia-k', brand: 'Família K' },
   // RD pages without a rule, found by the landing-page audit of 2026-10-01
   // (docs/analise/landing-pages-auditoria-2026-10-01.md): Mister Russo's form
-  // uses the slug, while `lp-mister-russo` is only its WhatsApp balloon.
-  { identifier: 'mister-russo', brand: 'Mister Russo' },
-  { identifier: 'familia-k', brand: 'Família K' },
-  { identifier: 'wash-club', brand: 'Wash Club' },
+  // uses the slug, while `lp-mister-russo` is only its WhatsApp balloon. They
+  // make no RD deal until Eric decides: RD's own automation may already make one.
+  { identifier: 'mister-russo', brand: 'Mister Russo', rdDealIntake: false },
+  { identifier: 'familia-k', brand: 'Família K', rdDealIntake: false },
+  { identifier: 'wash-club', brand: 'Wash Club', rdDealIntake: false },
 ];
 
 /** The Formatação forms (the Formatação net's list), Wings Company's own. */
@@ -168,6 +169,7 @@ export async function seed(db: Database): Promise<void> {
         pipeline: 'expansao',
         brand: page.brand,
         clientId: clientByBrand.get(brandKey(page.brand)) ?? null,
+        rdDealIntake: 'rdDealIntake' in page ? page.rdDealIntake : true,
       })
       .onConflictDoNothing();
   }

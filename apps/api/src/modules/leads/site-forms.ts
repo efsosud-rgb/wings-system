@@ -203,6 +203,8 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
         consentedAt: now,
         consentSource: `site_form:${page.pattern}`,
         consentText: SITE_FORM_CONSENT_TEXT,
+        // Paid research only when Eric turns it on for the site form (off by default).
+        skipResearch: env.SITE_FORM_RESEARCH_ENABLED !== 'true',
         event: {
           kind: 'lead.received.site_form',
           detail: {

@@ -205,7 +205,13 @@ describe('seeded rules (audit of 01/10)', () => {
 
     expect(
       await db.query.leadSourceRules.findFirst({ where: eq(leadSourceRules.pattern, 'wash-club') }),
-    ).toMatchObject({ pipeline: 'expansao', brand: 'Wash Club', clientId: wash.id });
+    ).toMatchObject({
+      pipeline: 'expansao',
+      brand: 'Wash Club',
+      clientId: wash.id,
+      // No RD deal from it until Eric decides (01/10).
+      rdDealIntake: false,
+    });
     expect(
       (
         await db.query.leadSourceRules.findFirst({

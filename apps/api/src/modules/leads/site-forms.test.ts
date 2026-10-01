@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { auditLog, clients, leads, leadSourceRules } from '../../db/schema/index.js';
+import { auditLog, clients, jobs, leads, leadSourceRules } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
@@ -257,6 +257,13 @@ describe('site form (T5)', () => {
     });
     const [audit] = await db.select().from(auditLog).where(eq(auditLog.entityId, lead!.id));
     expect(audit?.metadata).toMatchObject({ source: 'site_form', rdForward: 'off' });
+    // No paid research while SITE_FORM_RESEARCH_ENABLED is off (Eric, 01/10).
+    expect(lead?.enrichmentState).toBe('none');
+    expect(
+      (await db.select().from(jobs).where(eq(jobs.type, 'enrich_lead'))).filter(
+        (job) => (job.input as { leadId?: string }).leadId === lead!.id,
+      ),
+    ).toHaveLength(0);
 
     // The same person again is the same lead, and first touch is never overwritten.
     const again = await app.inject({
@@ -340,5 +347,24 @@ describe('site form (T5)', () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().sources).toEqual(['Anúncio', 'Site próprio']);
     expect(rdApi.calls.every((call) => call.body === null)).toBe(true);
+  });
+
+  it('queues the paid research only when SITE_FORM_RESEARCH_ENABLED is "true"', async () => {
+    const turnstile = captcha();
+    const app = await makeApp(
+      { TURNSTILE_SECRET_KEY: '0x4AAAAAAA-secret', SITE_FORM_RESEARCH_ENABLED: 'true' },
+      { captchaFetch: turnstile.fetchImpl },
+    );
+    const response = await app.inject({
+      method: 'POST',
+      url: '/public/site-forms/cenoritas',
+      payload: form({ email: 'pesquisa.ligada@example.com', phone: '(21) 99999-0042' }),
+    });
+    expect(response.statusCode).toBe(200);
+    const [lead] = await db
+      .select()
+      .from(leads)
+      .where(eq(leads.email, 'pesquisa.ligada@example.com'));
+    expect(lead?.enrichmentState).toBe('pending');
   });
 });

@@ -205,6 +205,7 @@ function PageSettings({ page, onDone }: { page: LandingPageItem; onDone: () => v
   const sources = useDealSources(true);
   const [siteForm, setSiteForm] = useState(page.siteFormEnabled);
   const [dealSource, setDealSource] = useState(page.dealSource ?? '');
+  const [rdDeals, setRdDeals] = useState(page.rdDealIntake);
   const listId = `deal-sources-${page.id}`;
   return (
     <form
@@ -212,7 +213,12 @@ function PageSettings({ page, onDone }: { page: LandingPageItem; onDone: () => v
       onSubmit={(event) => {
         event.preventDefault();
         update.mutate(
-          { id: page.id, siteFormEnabled: siteForm, dealSource: dealSource.trim() || null },
+          {
+            id: page.id,
+            siteFormEnabled: siteForm,
+            rdDealIntake: rdDeals,
+            dealSource: dealSource.trim() || null,
+          },
           { onSuccess: onDone },
         );
       }}
@@ -224,6 +230,14 @@ function PageSettings({ page, onDone }: { page: LandingPageItem; onDone: () => v
           onChange={(event) => setSiteForm(event.target.checked)}
         />
         <span>Formulário próprio do Wings System</span>
+      </label>
+      <label className="field field-inline">
+        <input
+          type="checkbox"
+          checked={rdDeals}
+          onChange={(event) => setRdDeals(event.target.checked)}
+        />
+        <span>Criar negócio no RD CRM (entrada automática de Expansão)</span>
       </label>
       <label className="field">
         <span className="field-label">Origem no RD CRM (só negócios novos)</span>
@@ -295,6 +309,9 @@ function PageRow({ page, canManage }: { page: LandingPageItem; canManage: boolea
             </a>
           )}
           {page.dealSource && <div className="cell-sub">Origem no RD: {page.dealSource}</div>}
+          {page.pipeline === 'expansao' && !page.rdDealIntake && (
+            <div className="cell-sub">Não cria negócio no RD (em espera)</div>
+          )}
         </td>
         <td>{page.clientName ?? (page.brand ? `${page.brand} (marca sem cadastro)` : '—')}</td>
         <td>{page.pipeline ? LEAD_PIPELINE_LABELS[page.pipeline] : '—'}</td>

@@ -146,12 +146,14 @@ conferir o log `lead webhook` (forma) — em especial se `traffic_source` vem em
   da Cloudflare). Se um dia passar pela Cloudflare, o limite precisa usar
   `CF-Connecting-IP`.
 - Variáveis (só nomes): `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` (sem o
-  secret: 503, nunca um falso sucesso) e `SITE_FORM_RD_FORWARD_ENABLED`.
+  secret: 503, nunca um falso sucesso), `SITE_FORM_RD_FORWARD_ENABLED` e
+  `SITE_FORM_RESEARCH_ENABLED`.
 - O lead entra pelo mesmo `upsertLead` do webhook (T4): cliente, marca e funil
   pela regra; atribuição de primeiro toque pelos campos ocultos (cookie
   `wings_ft`, `lib/site-tracking.ts`) e pela URL da página; consentimento com o
-  texto `SITE_FORM_CONSENT_TEXT`. Lead novo abre a pesquisa (`enrich_lead`),
-  como os outros canais. Log só com a forma do corpo (`shapeOf`); auditoria só
+  texto `SITE_FORM_CONSENT_TEXT`. A pesquisa paga (`enrich_lead`) **não** roda
+  para leads do formulário enquanto `SITE_FORM_RESEARCH_ENABLED` não for
+  `true` (Eric, 01/10); pode ser pedida à mão no lead. Log só com a forma do corpo (`shapeOf`); auditoria só
   com ids e marcas.
 - **Reenvio ao RD Marketing**: pronto e desligado. Com
   `SITE_FORM_RD_FORWARD_ENABLED=true` (só o Eric liga), uma chamada de conversão
@@ -170,9 +172,14 @@ anterior ("Referência | <host>" ou "Contato pelo Site"), contada em
 
 **Regras do seed (auditoria de 01/10)**: `mister-russo` (o formulário; o balão
 é `lp-mister-russo`), `familia-k` e `wash-club`, funil Expansão. Só insere;
-uma regra nova já nasce ligada ao cliente da marca quando ele existe. Com
-`EXPANSION_INTAKE_ENABLED` ligado, conversões dessas páginas passam a virar
-negócio no RD CRM pelo intake, como as das outras marcas.
+uma regra nova já nasce ligada ao cliente da marca quando ele existe. As três
+nascem **sem criar negócio no RD** (`lead_source_rules.rd_deal_intake = false`,
+migração 0057, que também desliga as que já existissem pela tela): a automação
+do próprio RD pode já criar o negócio dessas páginas, e o intake, se rodasse
+antes dela, duplicaria. O lead entra no Funil e é atribuído à marca
+normalmente. Ligar: CRM Vendas → Landing pages → "Formulário e origem" →
+"Criar negócio no RD CRM" (decisão do Eric). Vale para qualquer página: o
+intake e a recuperação só usam regras com a chave ligada.
 
 **Dono inativo**: `rd_user_map.departed_at` marca quem saiu da empresa (a 0056
 marca o ex-vendedor `69ef68ab1ca7400013f89513`). No Funil, o filtro "Dono

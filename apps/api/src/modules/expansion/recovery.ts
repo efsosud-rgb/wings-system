@@ -165,7 +165,7 @@ export const expansionRecoveryRoutes: FastifyPluginAsync = async (app) => {
       lastDry = null; // one dry run authorises one real run
     }
 
-    const rules = await activeRules(db);
+    const rules = await activeRules(db, { forDeals: true });
     if (!rules.some((rule) => rule.identifier === RECOVERY_EXPANSAO_PAGE)) {
       return reply.code(409).send({ error: 'calcadao_not_registered' });
     }

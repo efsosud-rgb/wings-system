@@ -47,6 +47,7 @@ const page = (overrides: Partial<LandingPageItem>): LandingPageItem => ({
   createdAt: '2026-09-28T12:00:00Z',
   siteFormEnabled: false,
   dealSource: null,
+  rdDealIntake: true,
   leads: 3,
   performance: {
     visits: null,
@@ -199,6 +200,7 @@ describe('CRM Vendas → Landing pages', () => {
     await waitFor(() =>
       expect(patch).toHaveBeenCalledWith('/crm/landing-pages/p2', {
         siteFormEnabled: true,
+        rdDealIntake: true,
         dealSource: 'Site próprio',
       }),
     );
