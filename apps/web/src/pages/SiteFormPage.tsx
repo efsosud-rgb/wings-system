@@ -141,8 +141,33 @@ export function SiteFormPage() {
       title={`Seja um franqueado ${info.data.brand}`}
       subtitle="Deixe seus dados e o time de expansão entra em contato."
     >
+      {info.data.instagram && (
+        <p className="muted">
+          Instagram:{' '}
+          <a
+            href={`https://www.instagram.com/${info.data.instagram.slice(1)}/`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {info.data.instagram}
+          </a>
+        </p>
+      )}
       {submit.isSuccess ? (
-        <Alert kind="success">Recebemos seus dados. Em breve entraremos em contato.</Alert>
+        <>
+          <Alert kind="success">Recebemos seus dados. Em breve entraremos em contato.</Alert>
+          {/* The Wings WhatsApp (Sofia), with the brand in the text; no link, just the thanks. */}
+          {submit.data.whatsappUrl && (
+            <a
+              className="btn btn-primary"
+              href={submit.data.whatsappUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Falar sobre a franquia {info.data.brand} no WhatsApp
+            </a>
+          )}
+        </>
       ) : (
         <form onSubmit={onSubmit} noValidate>
           <Field label="Nome" error={errors.name?.message} required>

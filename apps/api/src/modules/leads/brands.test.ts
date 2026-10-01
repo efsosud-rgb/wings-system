@@ -5,8 +5,10 @@ import { auditLog, clientProjects, clients, leadSourceRules } from '../../db/sch
 import { seed } from '../../db/seed.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import {
+  applyBrandContacts,
   brandKey,
   EXPANSION_BRANDS,
+  formatBrandContactsReport,
   formatBrandReport,
   formatLegacyMoveReport,
   identifierKey,
@@ -219,5 +221,54 @@ describe('seeded rules (audit of 01/10)', () => {
         })
       )?.brand,
     ).toBe('Renomeada por alguém');
+  });
+});
+
+describe('T6: brand contacts (Eric, 01/10)', () => {
+  it('simulates first; then writes Instagram and the own WhatsApp (or why none), once', async () => {
+    const existing = await db.select().from(clients);
+    let number = 900;
+    for (const name of ['Cenoritas', 'Amarjon', 'Iguari']) {
+      if (existing.some((client) => brandKey(client.name) === brandKey(name))) continue;
+      await db.insert(clients).values({
+        name,
+        slug: `${name.toLowerCase()}-t6`,
+        number: number++,
+        social: { facebook: 'fb.com/x' },
+      });
+    }
+    const named = async (name: string) =>
+      (await db.select().from(clients)).find((client) => brandKey(client.name) === brandKey(name))!;
+
+    const dry = await applyBrandContacts(db, { apply: false });
+    expect(dry.changes.map((change) => change.client?.name)).toEqual([
+      'Cenoritas',
+      'Amarjon',
+      'Iguari',
+    ]);
+    expect((await named('Cenoritas')).whatsapp).toBeNull();
+    expect(formatBrandContactsReport(dry)).toMatch(/^SIMULAÇÃO/);
+
+    const applied = await applyBrandContacts(db, { apply: true });
+    expect(applied.changes[0]?.fields).toEqual(['instagram', 'whatsapp']);
+    expect(await named('Cenoritas')).toMatchObject({
+      whatsapp: '21972055989',
+      whatsappNote: null,
+      social: expect.objectContaining({ instagram: '@cenoritas.gourmet' }),
+    });
+    expect(await named('Amarjon')).toMatchObject({ whatsapp: '32988339012' });
+    const iguari = await named('Iguari');
+    expect(iguari.whatsapp).toBeNull();
+    expect(iguari.whatsappNote).toMatch(/não tem WhatsApp próprio/);
+    expect(iguari.social).toMatchObject({ instagram: '@iguaripasseioshopping' });
+
+    const again = await applyBrandContacts(db, { apply: true });
+    expect(again.changes.every((change) => change.fields.length === 0)).toBe(true);
+    const audits = await db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, 'client.company_updated'));
+    expect(audits).toHaveLength(3);
+    expect(JSON.stringify(audits.map((row) => row.metadata))).not.toMatch(/\d{8}/);
   });
 });

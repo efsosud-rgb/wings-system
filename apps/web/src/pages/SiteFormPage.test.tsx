@@ -31,10 +31,15 @@ function fakeTurnstile() {
 beforeEach(() => {
   get.mockReset().mockImplementation(async (path: string) => {
     if (path === '/public/site-forms/cenoritas')
-      return { slug: 'cenoritas', brand: 'Cenoritas', turnstileSiteKey: '0x4AAA-site' };
+      return {
+        slug: 'cenoritas',
+        brand: 'Cenoritas',
+        turnstileSiteKey: '0x4AAA-site',
+        instagram: '@cenoritas.gourmet',
+      };
     throw new ApiError(404, { error: 'not_found', message: 'Formulário não encontrado.' });
   });
-  post.mockReset().mockResolvedValue({ ok: true });
+  post.mockReset().mockResolvedValue({ ok: true, whatsappUrl: null });
   document.cookie = `${FIRST_TOUCH_COOKIE}=; Max-Age=0; Path=/`;
   fakeTurnstile();
 });
@@ -83,6 +88,32 @@ describe('site form page (T5)', () => {
       tracking: { utm_source: 'facebook', utm_campaign: 'expansao_out26', fbclid: 'fb.1' },
     });
     expect(await screen.findByText(/Recebemos seus dados/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: '@cenoritas.gourmet' }).getAttribute('href')).toBe(
+      'https://www.instagram.com/cenoritas.gourmet/',
+    );
+    // No link from the server: only the thanks.
+    expect(screen.queryByRole('link', { name: /WhatsApp/ })).toBeNull();
+  });
+
+  it('offers the Wings WhatsApp for the brand after sending, when the server gives one', async () => {
+    post.mockResolvedValueOnce({
+      ok: true,
+      whatsappUrl: 'https://wa.me/5521999470288?text=SITE22',
+    });
+    renderAt('/lp/cenoritas');
+    await screen.findByText('Seja um franqueado Cenoritas');
+    fireEvent.input(screen.getByLabelText(/^Nome/), { target: { value: 'Pessoa Teste' } });
+    fireEvent.input(screen.getByLabelText(/^E-mail/), { target: { value: 'pessoa@example.com' } });
+    fireEvent.input(screen.getByLabelText(/^WhatsApp/), { target: { value: '21999990001' } });
+    fireEvent.click(screen.getByRole('checkbox'));
+    const send = screen.getByRole('button', { name: 'Quero ser franqueado' }) as HTMLButtonElement;
+    await waitFor(() => expect(send.disabled).toBe(false));
+    fireEvent.click(send);
+    const link = await screen.findByRole('link', {
+      name: 'Falar sobre a franquia Cenoritas no WhatsApp',
+    });
+    expect(link.getAttribute('href')).toBe('https://wa.me/5521999470288?text=SITE22');
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer');
   });
 
   it('does not send without the consent', async () => {
@@ -106,6 +137,7 @@ describe('site form page (T5)', () => {
       slug: 'cenoritas',
       brand: 'Cenoritas',
       turnstileSiteKey: null,
+      instagram: null,
     }));
     renderAt('/lp/cenoritas');
     expect(await screen.findByText('O formulário ainda está em configuração.')).toBeTruthy();

@@ -133,6 +133,10 @@ export async function resolveMetaSource(
 
 // --- tracking links -----------------------------------------------------------
 
+/** The brand a link names in its text; Wings Company's own links carry just the code. */
+export const brandOfLink = (client: { id: string; name: string }) =>
+  client.id === WINGS_CLIENT_ID ? null : client.name;
+
 export async function trackingLinkByCode(db: Executor, code: string) {
   return db.query.leadTrackingLinks.findFirst({ where: eq(leadTrackingLinks.code, code) });
 }

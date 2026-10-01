@@ -355,6 +355,19 @@ function CompanyBlock({
           onChange={(website) => set({ website })}
           placeholder="https://"
         />
+        <TextField
+          label="WhatsApp próprio da marca (contato; os links de Expansão usam o da Wings)"
+          type="tel"
+          value={draft.whatsapp}
+          onChange={(whatsapp) => set({ whatsapp })}
+          placeholder="(11) 98888-7777"
+        />
+        <TextField
+          label="Sem WhatsApp: motivo"
+          value={draft.whatsappNote}
+          onChange={(whatsappNote) => set({ whatsappNote })}
+          placeholder="A marca não tem WhatsApp próprio"
+        />
         {SOCIAL_NETWORKS.map((network) => (
           <TextField
             key={network}

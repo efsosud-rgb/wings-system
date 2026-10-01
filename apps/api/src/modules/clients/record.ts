@@ -126,6 +126,8 @@ export const companyOf = (row: ClientRow): ClientCompany => ({
   phone: row.phone,
   email: row.email,
   website: row.website,
+  whatsapp: row.whatsapp,
+  whatsappNote: row.whatsappNote,
   social: (row.social ?? {}) as ClientCompany['social'],
 });
 

@@ -57,6 +57,10 @@ export const clients = pgTable(
     phone: text('phone'),
     email: text('email'),
     website: text('website'),
+    /** The brand's WhatsApp, 10 or 11 digits with the DDD: what its tracked links open (T6). */
+    whatsapp: text('whatsapp'),
+    /** Why there is no WhatsApp; shown in place of a link. */
+    whatsappNote: text('whatsapp_note'),
     /** Handle or address per network: `{ instagram: '@padaria' }`. */
     social: jsonb('social').$type<Record<string, string>>().notNull().default({}),
     /** A ClientRelationship (formatacao | expansao | ambos); null on records made before it was asked. */

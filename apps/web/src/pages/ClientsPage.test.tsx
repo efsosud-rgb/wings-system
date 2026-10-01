@@ -263,6 +263,19 @@ describe('Formatação → Clientes', () => {
               hits: 3,
               lastHitAt: null,
               createdAt: '2026-09-23T12:00:00Z',
+              current: true,
+            },
+            {
+              id: 'l0',
+              clientId: AURORA.id,
+              channel: 'site',
+              code: 'OLD222',
+              phone: '5511900000000',
+              url: 'https://wa.me/5511900000000?text=OLD222',
+              hits: 0,
+              lastHitAt: null,
+              createdAt: '2026-09-20T12:00:00Z',
+              current: false,
             },
           ],
           phoneConfigured: true,
@@ -279,6 +292,8 @@ describe('Formatação → Clientes', () => {
 
     // The existing link is on screen with its hits, and a new one is asked for the chosen channel.
     expect(await screen.findByText('https://wa.me/5511999990000?text=K7M2QX')).toBeTruthy();
+    // A link made for an older Wings number says so.
+    expect(screen.getAllByText(/não é mais o WhatsApp da Wings/)).toHaveLength(1);
     fireEvent.change(screen.getByLabelText('Canal do novo link de Padaria Aurora'), {
       target: { value: 'linktree' },
     });

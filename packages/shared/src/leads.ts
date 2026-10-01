@@ -276,9 +276,23 @@ export function trackingCodeOf(message: string | null | undefined): string | nul
   return isTrackingCode(first) ? first : null;
 }
 
-/** `https://wa.me/5511999998888?text=K7M2QX` */
-export function whatsappLinkOf(phone: string, code: string): string {
-  return `https://wa.me/${phone}?text=${encodeURIComponent(code)}`;
+/**
+ * What a tracked link pre-fills: the code first (the inbound side reads only
+ * the first word), then the brand, so the person and whoever answers see
+ * which franchise it is about.
+ */
+export function trackedLinkText(code: string, brand?: string | null): string {
+  return brand ? `${code} Olá! Quero saber sobre a franquia ${brand}.` : code;
+}
+
+/**
+ * `https://wa.me/5521999470288?text=K7M2QX%20Ol%C3%A1!...` Every tracked link,
+ * Expansão brands included, opens the Wings WhatsApp (Eric, 01/10): the brand
+ * is told by the code and the text, never by sending the lead to the brand's
+ * own number, which stays on the client record as a contact only.
+ */
+export function whatsappLinkOf(phone: string, code: string, brand?: string | null): string {
+  return `https://wa.me/${phone}?text=${encodeURIComponent(trackedLinkText(code, brand))}`;
 }
 
 // --- source rules: landing page / Meta form -> client -------------------------
@@ -836,9 +850,11 @@ export interface LeadTrackingLink {
   clientId: string;
   channel: LeadLinkChannel;
   code: string;
-  /** The Wings number the link points at, digits only. */
+  /** The Wings number the link opens, digits only, as it was when the link was made. */
   phone: string;
   url: string;
+  /** False when WINGS_WHATSAPP_NUMBER changed since: the link opens a number that is no longer Wings'. */
+  current: boolean;
   hits: number;
   lastHitAt: string | null;
   createdAt: string;
@@ -1058,7 +1074,7 @@ export type LandingPageUpdateInput = z.infer<typeof landingPageUpdateSchema>;
 // --- the site form (CRM phase 1, T5) --------------------------------------------
 //
 //   GET  /public/site-forms/:slug  -> SiteFormInfo     no session
-//   POST /public/site-forms/:slug  -> { ok: true }     no session; Turnstile, honeypot, per-IP limit
+//   POST /public/site-forms/:slug  -> { ok, whatsappUrl }  no session; Turnstile, honeypot, per-IP limit
 
 /** What the public page needs to draw the form: no id, no client data beyond the brand's name. */
 export interface SiteFormInfo {
@@ -1066,6 +1082,8 @@ export interface SiteFormInfo {
   brand: string;
   /** Cloudflare Turnstile's site key (public by design); null when not configured. */
   turnstileSiteKey: string | null;
+  /** The brand's own Instagram, `@perfil`, or null. */
+  instagram: string | null;
 }
 
 /** The hidden attribution fields the page collects (first visit's address, cookie) and sends. */

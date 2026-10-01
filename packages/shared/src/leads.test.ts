@@ -13,6 +13,7 @@ import {
   regionOfPhone,
   trackingCodeOf,
   whatsappLinkOf,
+  trackedLinkText,
   type EnrichmentFacts,
 } from './leads.js';
 
@@ -45,6 +46,16 @@ describe('tracking codes', () => {
     expect(trackingCodeOf('Olá, quero saber da franquia')).toBeNull();
     expect(trackingCodeOf('')).toBeNull();
     expect(whatsappLinkOf('5511999998888', code)).toBe(`https://wa.me/5511999998888?text=${code}`);
+  });
+
+  it('opens the Wings number with the code first and the brand in the text', () => {
+    expect(trackedLinkText('K7M2QX', 'Cenoritas')).toBe(
+      'K7M2QX Olá! Quero saber sobre a franquia Cenoritas.',
+    );
+    expect(trackingCodeOf(trackedLinkText('K7M2QX', 'Cenoritas'))).toBe('K7M2QX');
+    expect(whatsappLinkOf('5521999470288', 'K7M2QX', 'Iguari')).toBe(
+      `https://wa.me/5521999470288?text=${encodeURIComponent('K7M2QX Olá! Quero saber sobre a franquia Iguari.')}`,
+    );
   });
 });
 

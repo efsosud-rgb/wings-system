@@ -407,6 +407,13 @@
       "when": 1790882089713,
       "tag": "0057_crm_rule_rd_deal_intake",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1790882971859,
+      "tag": "0058_crm_brand_whatsapp",
+      "breakpoints": true
     }
   ]
 }

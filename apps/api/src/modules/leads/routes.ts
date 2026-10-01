@@ -21,7 +21,14 @@ import { z } from 'zod';
 import { clients, leadSourceRules, leadTrackingLinks, leads } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { activeClient, toClient } from '../clients/routes.js';
-import { enqueueResearch, funnelSummary, listLeads, loadLead, upsertLead } from './service.js';
+import {
+  brandOfLink,
+  enqueueResearch,
+  funnelSummary,
+  listLeads,
+  loadLead,
+  upsertLead,
+} from './service.js';
 
 const idParam = z.object({ id: z.uuid() });
 
@@ -32,13 +39,15 @@ const invalid = (message?: string) => ({
 const notFound = { error: 'not_found', message: 'Lead não encontrado.' };
 
 type LinkRow = typeof leadTrackingLinks.$inferSelect;
-const toLink = (row: LinkRow): LeadTrackingLink => ({
+/** Every link opens the Wings WhatsApp; the brand goes in the text (T6). */
+const toLink = (row: LinkRow, brand: string | null, wingsPhone?: string): LeadTrackingLink => ({
   id: row.id,
   clientId: row.clientId,
   channel: row.channel as LeadLinkChannel,
   code: row.code,
   phone: row.phone,
-  url: whatsappLinkOf(row.phone, row.code),
+  url: whatsappLinkOf(row.phone, row.code, brand),
+  current: row.phone === wingsPhone,
   hits: row.hits,
   lastHitAt: row.lastHitAt?.toISOString() ?? null,
   createdAt: row.createdAt.toISOString(),
@@ -259,13 +268,18 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
   app.get('/clients/:id/tracking-links', manage, async (request, reply) => {
     const params = idParam.safeParse(request.params);
     if (!params.success) return reply.status(400).send(invalid());
+    const client = await db.query.clients.findFirst({ where: eq(clients.id, params.data.id) });
+    if (!client) {
+      return reply.status(404).send({ error: 'not_found', message: 'Cliente não encontrado.' });
+    }
+    const brand = brandOfLink(client);
     const rows = await db
       .select()
       .from(leadTrackingLinks)
       .where(eq(leadTrackingLinks.clientId, params.data.id))
       .orderBy(asc(leadTrackingLinks.channel), desc(leadTrackingLinks.createdAt));
     return reply.send({
-      links: rows.map(toLink),
+      links: rows.map((row) => toLink(row, brand, env.WINGS_WHATSAPP_NUMBER)),
       phoneConfigured: Boolean(env.WINGS_WHATSAPP_NUMBER),
     });
   });
@@ -280,7 +294,8 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
         message: 'O número de WhatsApp da Wings (WINGS_WHATSAPP_NUMBER) não está configurado.',
       });
     }
-    if (!(await activeClient(db, params.data.id))) {
+    const client = await activeClient(db, params.data.id);
+    if (!client) {
       return reply.status(404).send({ error: 'not_found', message: 'Cliente não encontrado.' });
     }
     const actor = request.session.actor.employeeId;
@@ -306,7 +321,9 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
         ip: request.ip,
         metadata: { clientId: row.clientId, channel: row.channel },
       });
-      return reply.status(201).send({ link: toLink(row) });
+      return reply
+        .status(201)
+        .send({ link: toLink(row, brandOfLink(client), env.WINGS_WHATSAPP_NUMBER) });
     }
     return reply.status(500).send({
       error: 'code_collision',

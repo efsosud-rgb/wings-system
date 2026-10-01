@@ -351,3 +351,101 @@ export function formatLegacyMoveReport(report: {
     }),
   ].join('\n');
 }
+
+/**
+ * T6 (Eric, 01/10): each brand's Instagram (shown on its pages) and its own
+ * WhatsApp as a contact on the record only. Expansão links and pages always
+ * open the Wings WhatsApp, never these numbers. A brand without WhatsApp gets
+ * the reason, shown with "—".
+ */
+export const BRAND_CONTACTS_2026_10_01: {
+  name: string;
+  instagram: string;
+  whatsapp: string | null;
+  whatsappNote: string | null;
+}[] = [
+  {
+    name: 'Cenoritas',
+    instagram: '@cenoritas.gourmet',
+    whatsapp: '21972055989',
+    whatsappNote: null,
+  },
+  { name: 'Amarjon', instagram: '@amarjonbiojoias', whatsapp: '32988339012', whatsappNote: null },
+  {
+    name: 'Iguari',
+    instagram: '@iguaripasseioshopping',
+    whatsapp: null,
+    whatsappNote: 'a marca não tem WhatsApp próprio (Eric, 01/10/2026)',
+  },
+];
+
+export interface BrandContactChange {
+  wanted: string;
+  client: { number: number | null; name: string } | null;
+  /** The record fields that change (or would): instagram, whatsapp, whatsappNote. */
+  fields: string[];
+}
+
+/**
+ * Writes `BRAND_CONTACTS_2026_10_01` into the brands' records. Without
+ * `apply` nothing is written; running it again changes nothing. Each change
+ * is audited as `client.company_updated`, field names only.
+ */
+export async function applyBrandContacts(
+  db: Database,
+  input: { apply: boolean; actorEmployeeId?: string | null },
+): Promise<{ applied: boolean; changes: BrandContactChange[] }> {
+  const known = (await db.select().from(clients)).filter((client) => client.id !== WINGS_CLIENT_ID);
+  const byKey = new Map(known.map((client) => [brandKey(client.name), client]));
+  const changes: BrandContactChange[] = [];
+  for (const wanted of BRAND_CONTACTS_2026_10_01) {
+    const client = byKey.get(brandKey(wanted.name));
+    if (!client) {
+      changes.push({ wanted: wanted.name, client: null, fields: [] });
+      continue;
+    }
+    const social = { ...(client.social ?? {}), instagram: wanted.instagram };
+    const fields = [
+      client.social?.instagram !== wanted.instagram && 'instagram',
+      client.whatsapp !== wanted.whatsapp && 'whatsapp',
+      client.whatsappNote !== wanted.whatsappNote && 'whatsappNote',
+    ].filter((field): field is string => Boolean(field));
+    changes.push({
+      wanted: wanted.name,
+      client: { number: client.number, name: client.name },
+      fields,
+    });
+    if (!input.apply || fields.length === 0) continue;
+    await db
+      .update(clients)
+      .set({
+        social,
+        whatsapp: wanted.whatsapp,
+        whatsappNote: wanted.whatsappNote,
+        updatedAt: new Date(),
+      })
+      .where(eq(clients.id, client.id));
+    await writeAudit(db, {
+      actorEmployeeId: input.actorEmployeeId ?? null,
+      action: 'client.company_updated',
+      entity: 'client',
+      entityId: client.id,
+      metadata: { fields, via: 'crm-brands --contacts' },
+    });
+  }
+  return { applied: input.apply, changes };
+}
+
+export function formatBrandContactsReport(report: {
+  applied: boolean;
+  changes: BrandContactChange[];
+}): string {
+  return [
+    report.applied ? 'APLICADO' : 'SIMULAÇÃO (nada foi gravado; rode com --apply para valer)',
+    ...report.changes.map((change) =>
+      !change.client
+        ? `  ${change.wanted} → NENHUM cliente casa`
+        : `  ${change.client.name}: ${change.fields.length ? change.fields.join(', ') : 'nada a mudar'}`,
+    ),
+  ].join('\n');
+}

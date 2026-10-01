@@ -99,8 +99,9 @@ function TrackingLinks({ client }: { client: Client }) {
     <div className="lead-links-admin">
       <h3 className="lead-subhead">Links rastreáveis do WhatsApp</h3>
       <p className="muted">
-        Cada link abre o WhatsApp da Wings com um código já escrito. Quem manda a mensagem é
-        etiquetado com este cliente e o canal do link.
+        Cada link abre o WhatsApp da Wings (onde a Sofia atende) com um código e o nome da marca já
+        escritos. Quem manda a mensagem é etiquetado com este cliente e o canal do link. O WhatsApp
+        próprio da marca fica só na ficha, como contato.
       </p>
       {links.data && !links.data.phoneConfigured && (
         <Alert kind="warning">
@@ -156,7 +157,14 @@ function TrackingLinks({ client }: { client: Client }) {
             {list.map((link) => (
               <tr key={link.id}>
                 <td>{LEAD_CHANNEL_LABELS[link.channel]}</td>
-                <td className="mono lead-wrap">{link.url}</td>
+                <td className="mono lead-wrap">
+                  {link.url}
+                  {!link.current && (
+                    <div className="field-error">
+                      Abre um número que não é mais o WhatsApp da Wings. Gere um link novo.
+                    </div>
+                  )}
+                </td>
                 <td>{link.hits}</td>
                 <td>
                   <Button

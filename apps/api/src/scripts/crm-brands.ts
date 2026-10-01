@@ -2,8 +2,10 @@ import { createDb } from '../db/client.js';
 import { loadDotEnv } from '../db/load-env.js';
 import { loadEnv } from '../env.js';
 import {
+  applyBrandContacts,
   EXPANSION_BRANDS,
   EXPANSION_BRANDS_2026_09_30,
+  formatBrandContactsReport,
   formatBrandReport,
   formatLegacyMoveReport,
   moveLegacyBrandsToExpansion,
@@ -22,12 +24,22 @@ import {
  *   pnpm --filter @wings/api crm:brands [--apply]
  *   node dist/scripts/crm-brands.js [--apply]      # in the API container
  *   node dist/scripts/crm-brands.js --expansion-legacy [--apply]
+ *
+ * `--contacts` (T6, Eric 01/10): Instagram and the brand's own WhatsApp (or
+ * why it has none) for Cenoritas, Amarjon and Iguari.
+ *
+ *   node dist/scripts/crm-brands.js --contacts [--apply]
  */
 async function main() {
   loadDotEnv();
   const env = loadEnv(process.env);
   const { db, pool } = createDb(env.DATABASE_URL);
   try {
+    if (process.argv.includes('--contacts')) {
+      const report = await applyBrandContacts(db, { apply: process.argv.includes('--apply') });
+      console.warn(formatBrandContactsReport(report));
+      return;
+    }
     if (process.argv.includes('--expansion-legacy')) {
       const report = await moveLegacyBrandsToExpansion(db, {
         apply: process.argv.includes('--apply'),
