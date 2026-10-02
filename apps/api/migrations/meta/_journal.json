@@ -414,6 +414,13 @@
       "when": 1790882971859,
       "tag": "0058_crm_brand_whatsapp",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1790959667852,
+      "tag": "0059_crm_on_sale_rd_unpublished",
+      "breakpoints": true
     }
   ]
 }

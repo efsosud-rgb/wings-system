@@ -3,11 +3,13 @@ import { loadDotEnv } from '../db/load-env.js';
 import { loadEnv } from '../env.js';
 import {
   applyBrandContacts,
+  applyOnSale20261002,
   EXPANSION_BRANDS,
   EXPANSION_BRANDS_2026_09_30,
   formatBrandContactsReport,
   formatBrandReport,
   formatLegacyMoveReport,
+  formatOnSaleReport,
   moveLegacyBrandsToExpansion,
   registerBrands,
 } from '../modules/leads/brands.js';
@@ -29,12 +31,23 @@ import {
  * why it has none) for Cenoritas, Amarjon and Iguari.
  *
  *   node dist/scripts/crm-brands.js --contacts [--apply]
+ *
+ * `--on-sale` (Eric, 02/10): the 22 franchises on sale (records made for the
+ * missing ones), every other Expansão brand off sale, and the rules of the 67
+ * pages switched off in RD dated, still active.
+ *
+ *   node dist/scripts/crm-brands.js --on-sale [--apply]
  */
 async function main() {
   loadDotEnv();
   const env = loadEnv(process.env);
   const { db, pool } = createDb(env.DATABASE_URL);
   try {
+    if (process.argv.includes('--on-sale')) {
+      const report = await applyOnSale20261002(db, { apply: process.argv.includes('--apply') });
+      console.warn(formatOnSaleReport(report));
+      return;
+    }
     if (process.argv.includes('--contacts')) {
       const report = await applyBrandContacts(db, { apply: process.argv.includes('--apply') });
       console.warn(formatBrandContactsReport(report));

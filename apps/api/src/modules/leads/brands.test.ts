@@ -6,16 +6,19 @@ import { seed } from '../../db/seed.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import {
   applyBrandContacts,
+  applyOnSale20261002,
   brandKey,
   EXPANSION_BRANDS,
   formatBrandContactsReport,
   formatBrandReport,
   formatLegacyMoveReport,
+  formatOnSaleReport,
   identifierKey,
   moveLegacyBrandsToExpansion,
   registerBrands,
 } from './brands.js';
 import { listProjects, openProjectForClient } from '../projects/service.js';
+import { resolveLandingPage } from './service.js';
 
 let harness: TestDatabase;
 let db: Database;
@@ -330,5 +333,52 @@ describe('T6: brand contacts (Eric, 01/10)', () => {
       .where(eq(auditLog.action, 'client.company_updated'));
     expect(audits).toHaveLength(3);
     expect(JSON.stringify(audits.map((row) => row.metadata))).not.toMatch(/\d{8}/);
+  });
+});
+
+describe('on sale and pages switched off in RD (Eric, 02/10)', () => {
+  it('marks the brands on or off sale, dates the switched-off pages and keeps them mapping, and is safe to rerun', async () => {
+    await seed(db);
+    const familia =
+      (await db.query.clients.findFirst({ where: eq(clients.name, 'Família K') })) ??
+      (
+        await db
+          .insert(clients)
+          .values({ name: 'Família K', slug: 'familia-k-on-sale', relationship: 'expansao' })
+          .returning()
+      )[0]!;
+    const before = (await db.select().from(clients)).length;
+
+    const dry = await applyOnSale20261002(db, { apply: false });
+    expect(formatOnSaleReport(dry)).toMatch(/^SIMULAÇÃO/);
+    expect(dry.unpublished).toContain('familia-k');
+    expect(dry.noRule).toEqual(expect.arrayContaining(['teste-bot', 'socio']));
+    expect(await db.select().from(clients)).toHaveLength(before);
+
+    const applied = await applyOnSale20261002(db, { apply: true });
+    const named = (name: string) => db.query.clients.findFirst({ where: eq(clients.name, name) });
+    expect((await named('Dr Coluna'))?.franchiseOnSale).toBe(true);
+    expect((await named('A Cabana da Barra'))?.franchiseOnSale).toBe(true);
+    expect((await named('Família K'))?.franchiseOnSale).toBe(false);
+    expect(applied.marks.find((mark) => mark.name === 'Wings Company')).toBeUndefined();
+
+    // Dated but still active: a late conversion of the page keeps its brand and funnel.
+    const rule = await db.query.leadSourceRules.findFirst({
+      where: eq(leadSourceRules.pattern, 'familia-k'),
+    });
+    expect(rule).toMatchObject({ active: true, rdUnpublishedOn: '2026-10-02' });
+    expect(await resolveLandingPage(db, { identifier: 'familia-k' })).toMatchObject({
+      clientId: familia.id,
+      pipeline: 'expansao',
+    });
+    // A page still published is not dated, and the on-sale brand's rule gets its new record.
+    const drColuna = await db.query.leadSourceRules.findFirst({
+      where: eq(leadSourceRules.pattern, 'dr-coluna'),
+    });
+    expect(drColuna).toMatchObject({ rdUnpublishedOn: null });
+    expect(drColuna?.clientId).toBe((await named('Dr Coluna'))?.id);
+
+    const again = await applyOnSale20261002(db, { apply: true });
+    expect([again.brands.created, again.marks, again.unpublished]).toEqual([[], [], []]);
   });
 });

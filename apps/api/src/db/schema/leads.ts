@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   boolean,
   check,
+  date,
   index,
   integer,
   jsonb,
@@ -194,6 +195,12 @@ export const leadSourceRules = pgTable(
      * risk), until a person decides (Eric, 01/10).
      */
     rdDealIntake: boolean('rd_deal_intake').notNull().default(true),
+    /**
+     * The day the page was switched off in RD Station. Unlike archiving, the
+     * rule stays active, so late conversions and old leads of the page still
+     * map to its brand and funnel.
+     */
+    rdUnpublishedOn: date('rd_unpublished_on', { mode: 'string' }),
     createdBy: uuid('created_by').references(() => employees.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

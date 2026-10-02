@@ -232,3 +232,18 @@ marca certa.
   desligado, igual à `familia-k` (decisão do Eric; auditoria `landing_page.updated`).
   O seed também a cria desligada (junto com `mister-russo`, `familia-k`, `wash-club` e
   as páginas da auditoria v2), então em produção ela já nasce desligada.
+
+## Marcas em comercialização e páginas desativadas no RD (Eric, 02/10/2026, migração 0059)
+
+- `clients.franchise_on_sale`: `true` para as 22 franquias em comercialização, `false` para as demais marcas de
+  Expansão, nulo quando nunca foi perguntado (Wings Company, clientes só de Formatação). Não muda `clients.active`:
+  histórico, leads e projetos ficam como estão. A tela de Clientes mostra "Em/Fora de comercialização".
+- `lead_source_rules.rd_unpublished_on`: dia em que a página foi desativada no RD. A regra **segue ativa** (não é
+  arquivada), então conversões atrasadas e leads antigos da página continuam com a marca e o funil dela. A tela de
+  Landing pages mostra "Desativada no RD em dd/mm/aaaa".
+- Aplicar: `node dist/scripts/crm-brands.js --on-sale` (simula) e depois `--apply`, no container da API. Cadastra
+  só pelo nome as marcas em comercialização sem ficha, marca as fichas, data as regras e audita cada mudança
+  (`client.franchise_on_sale_changed`, `lead_source_rule.rd_unpublished`). Pode rodar de novo.
+- `parceiro` e `socio` valem para duas páginas cada (Cervejaria Odin e Circus Trattoria; Rei do Gado Carnes e Full
+  House Comida de Festa): o identificador do RD é o mesmo, então `parceiro` leva à Cervejaria Odin e `socio` não
+  tem regra.

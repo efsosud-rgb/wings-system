@@ -48,6 +48,7 @@ const page = (overrides: Partial<LandingPageItem>): LandingPageItem => ({
   siteFormEnabled: false,
   dealSource: null,
   rdDealIntake: true,
+  rdUnpublishedOn: null,
   leads: 3,
   performance: {
     visits: null,

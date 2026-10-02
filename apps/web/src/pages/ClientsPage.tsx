@@ -274,6 +274,12 @@ function ClientRow({
                   · {CLIENT_RELATIONSHIP_LABELS[client.relationship]}
                 </span>
               )}
+              {client.franchiseOnSale != null && (
+                <span className="cell-sub">
+                  {' '}
+                  · {client.franchiseOnSale ? 'Em comercialização' : 'Fora de comercialização'}
+                </span>
+              )}
               {!fixed && (client.registerMissing?.length ?? 0) > 0 && (
                 <div className="cell-sub">
                   <span className="tag" title={`Falta: ${client.registerMissing!.join(', ')}`}>
