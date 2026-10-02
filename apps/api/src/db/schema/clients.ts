@@ -65,6 +65,11 @@ export const clients = pgTable(
     social: jsonb('social').$type<Record<string, string>>().notNull().default({}),
     /** A ClientRelationship (formatacao | expansao | ambos); null on records made before it was asked. */
     relationship: text('relationship'),
+    /**
+     * Whether Wings is selling this brand's franchises now (Eric, 02/10/2026);
+     * null when never asked (Wings Company, Formatação-only clients).
+     */
+    franchiseOnSale: boolean('franchise_on_sale'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }),
   },

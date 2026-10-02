@@ -1015,6 +1015,8 @@ export interface LandingPageItem {
   dealSource: string | null;
   /** Whether the Expansão intake makes RD CRM deals from this page's conversions. */
   rdDealIntake: boolean;
+  /** YYYY-MM-DD the page was switched off in RD; the rule still maps its late conversions. */
+  rdUnpublishedOn: string | null;
 }
 
 /** Only numbers with a source; a missing one is null with the reason. */

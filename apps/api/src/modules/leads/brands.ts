@@ -1,5 +1,5 @@
 import { LANDING_PAGE_BASE_URL, normalizeSourcePattern, WINGS_CLIENT_ID } from '@wings/shared';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { clientProjects, clients, leadSourceRules } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
@@ -447,5 +447,221 @@ export function formatBrandContactsReport(report: {
         ? `  ${change.wanted} → NENHUM cliente casa`
         : `  ${change.client.name}: ${change.fields.length ? change.fields.join(', ') : 'nada a mudar'}`,
     ),
+  ].join('\n');
+}
+
+/**
+ * Eric, 02/10/2026: the only franchises on sale, as named in the register
+ * ("Amarjon Biojóias" is Amarjon, "Dr. Coluna" Dr Coluna, "Pensou; Lavou"
+ * Pensou Lavou). Every other Expansão brand is off sale.
+ */
+export const ON_SALE_2026_10_02 = [
+  'Wash Club',
+  'Casal do Churros',
+  'Mister Russo',
+  'Dr Coluna',
+  'Calçadão do Frango',
+  'Super Dogão da Nana',
+  'Só Crianças',
+  'Amarjon',
+  'Grupo Meu AP',
+  'Rio Açaí Gourmet',
+  'Lion Eletropostos',
+  'Sarantopoulos',
+  'Iguari',
+  'Malkuth',
+  'Cenoritas',
+  'Lion Hair',
+  'Ginteco',
+  'A Cabana da Barra',
+  'Pecan',
+  'Açaí da Fila',
+  'Grupo Forte Fênix',
+  'Pensou Lavou',
+];
+
+export const RD_UNPUBLISHED_ON = '2026-10-02';
+
+/**
+ * The 67 pages Eric switched off in RD on 02/10/2026, by identifier. `parceiro`
+ * stands for two pages (franquia.cervejariaodin and franquia.circustrattoria)
+ * and `socio` for two more (franquia.reidogadocarnes and franquia.fullhousecomidadefesta).
+ */
+export const RD_UNPUBLISHED_2026_10_02 = [
+  'capi-hair',
+  'lista-de-espera-florir-cafe',
+  'lista-de-espera-bazar-das-flores',
+  'conytos-lista-de-espera',
+  'conytos',
+  'lista-de-espera-grippa',
+  'lista-de-espera-verano',
+  'pizzaria-das-palmeiras',
+  'lista-de-espera-nork',
+  'lista-de-espera-mister-gulla',
+  'lista-de-espera-sorvetes-da-ilha',
+  'lista-de-espera-fm-kitchens',
+  'lista-de-espera-caval_barber_shop',
+  'donabonitex',
+  'lista-de-espera-sushi-de-feira',
+  'lista-de-espera-colab-space',
+  'lista-de-espera-mundo-dos-hots',
+  'lista-de-espera-na-chapa-muriae',
+  'lista-de-espera-familia-k',
+  'le-uni',
+  'valhalla',
+  'lista-de-espera-melhor-parada',
+  'lp-grippa-head-spa',
+  'le-fabrica-de-salgados-mongagua',
+  'pizzaria-verano',
+  'le-byker',
+  'lista-de-espera-nossa-esmalteria',
+  'lista-de-espera-renata-salgados',
+  'lista-de-espera-parro-pizzaria',
+  'le-cookie-craft',
+  'le-food-forest',
+  'lista-de-espera-petina',
+  'sushi-de-feira',
+  'lista-de-espera-gustavo-eyewear',
+  'lp-mundo-dos-hots',
+  'food-forest',
+  'dimos',
+  'salinas',
+  'raptor',
+  'flowmultas',
+  'le-manet-pizzas',
+  'lp-manet-pizzas',
+  'casa-da-dona',
+  'fabricadesalgadosmongagua',
+  'flowmultaslicenciados',
+  'familia-k',
+  'felipe-nilo',
+  'lp-mister-gulla',
+  'melhor-parada',
+  'lp-na-chapa',
+  'nork',
+  'nossa-esmalteria',
+  'lp-sorvetes-da-ilha',
+  'uni',
+  'renata-salgados',
+  'cookie-craft',
+  'florir',
+  'parro-pizzaria',
+  'bistrogro',
+  'teste-bot',
+  'lista-de-espera_espaco-felipe-nilo',
+  'politica-de-privacidade-valhalla',
+  'politica-de-privacidade-dona-bonitex',
+  'parceiro',
+  'socio',
+];
+
+export interface OnSaleReport {
+  applied: boolean;
+  brands: BrandReport;
+  /** Clients whose on-sale mark changes (or would). */
+  marks: { name: string; from: boolean | null; to: boolean }[];
+  /** Rules marked as switched off in RD (or that would be). */
+  unpublished: string[];
+  /** Identifiers with no landing-page rule: nothing to mark (pages with no form, or never mapped). */
+  noRule: string[];
+}
+
+/**
+ * Applies Eric's decision of 02/10: registers the on-sale brands that have no
+ * record yet (name only), marks every Expansão client on or off sale, and
+ * dates the rules of the pages switched off in RD. Those rules stay active,
+ * so late conversions and old leads of the pages keep their brand and funnel.
+ * Nothing is deleted. Without `apply`, nothing is written. Safe to run again.
+ */
+export async function applyOnSale20261002(
+  db: Database,
+  input: { apply: boolean; actorEmployeeId?: string | null },
+): Promise<OnSaleReport> {
+  const brands = await registerBrands(db, { names: ON_SALE_2026_10_02, apply: input.apply });
+  const onSale = new Set(ON_SALE_2026_10_02.map(brandKey));
+  const marks: OnSaleReport['marks'] = [];
+  const known = (await db.select().from(clients)).filter((client) => client.id !== WINGS_CLIENT_ID);
+  for (const client of known) {
+    const wanted = onSale.has(brandKey(client.name))
+      ? true
+      : client.relationship === 'expansao' || client.relationship === 'ambos'
+        ? false
+        : null;
+    if (wanted === null || client.franchiseOnSale === wanted) continue;
+    marks.push({ name: client.name, from: client.franchiseOnSale, to: wanted });
+    if (!input.apply) continue;
+    await db
+      .update(clients)
+      .set({ franchiseOnSale: wanted, updatedAt: new Date() })
+      .where(eq(clients.id, client.id));
+    await writeAudit(db, {
+      actorEmployeeId: input.actorEmployeeId ?? null,
+      action: 'client.franchise_on_sale_changed',
+      entity: 'client',
+      entityId: client.id,
+      metadata: { from: client.franchiseOnSale, to: wanted, via: 'crm-brands --on-sale' },
+    });
+  }
+  // Brands still to be registered by this run are on sale too.
+  if (!input.apply) {
+    for (const name of brands.created) marks.push({ name, from: null, to: true });
+  }
+
+  const rules = await db
+    .select({
+      id: leadSourceRules.id,
+      pattern: leadSourceRules.pattern,
+      rdUnpublishedOn: leadSourceRules.rdUnpublishedOn,
+    })
+    .from(leadSourceRules)
+    .where(
+      and(
+        eq(leadSourceRules.kind, 'landing_page'),
+        inArray(leadSourceRules.pattern, RD_UNPUBLISHED_2026_10_02.map(normalizeSourcePattern)),
+      ),
+    );
+  const ruled = new Set(rules.map((rule) => rule.pattern));
+  const unpublished: string[] = [];
+  for (const rule of rules) {
+    if (rule.rdUnpublishedOn) continue;
+    unpublished.push(rule.pattern);
+    if (!input.apply) continue;
+    await db
+      .update(leadSourceRules)
+      .set({ rdUnpublishedOn: RD_UNPUBLISHED_ON })
+      .where(eq(leadSourceRules.id, rule.id));
+    await writeAudit(db, {
+      actorEmployeeId: input.actorEmployeeId ?? null,
+      action: 'lead_source_rule.rd_unpublished',
+      entity: 'lead_source_rule',
+      entityId: rule.id,
+      metadata: { on: RD_UNPUBLISHED_ON, via: 'crm-brands --on-sale' },
+    });
+  }
+  return {
+    applied: input.apply,
+    brands,
+    marks,
+    unpublished: unpublished.sort(),
+    noRule: RD_UNPUBLISHED_2026_10_02.filter(
+      (identifier) => !ruled.has(normalizeSourcePattern(identifier)),
+    ),
+  };
+}
+
+export function formatOnSaleReport(report: OnSaleReport): string {
+  const verb = report.applied ? '' : 'seria ';
+  const label = (value: boolean | null) =>
+    value === null ? 'sem marcação' : value ? 'em comercialização' : 'fora de comercialização';
+  return [
+    report.applied ? 'APLICADO' : 'SIMULAÇÃO (nada foi gravado; rode com --apply para valer)',
+    `marcas a cadastrar: ${report.brands.created.length}`,
+    ...report.brands.created.map((name) => `  + ${name}`),
+    `marcações ${verb}alteradas: ${report.marks.length}`,
+    ...report.marks.map((mark) => `  ${mark.name}: ${label(mark.from)} → ${label(mark.to)}`),
+    `regras ${verb}marcadas "desativada no RD em ${RD_UNPUBLISHED_ON}" (seguem ativas): ${report.unpublished.length}`,
+    ...report.unpublished.map((pattern) => `  ${pattern}`),
+    `páginas desativadas sem regra (nada a marcar): ${report.noRule.length}`,
+    ...report.noRule.map((identifier) => `  ${identifier}`),
   ].join('\n');
 }

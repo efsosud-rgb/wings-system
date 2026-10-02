@@ -312,6 +312,12 @@ function PageRow({ page, canManage }: { page: LandingPageItem; canManage: boolea
           {page.pipeline === 'expansao' && !page.rdDealIntake && (
             <div className="cell-sub">Não cria negócio no RD (em espera)</div>
           )}
+          {page.rdUnpublishedOn && (
+            <div className="cell-sub">
+              Desativada no RD em {page.rdUnpublishedOn.split('-').reverse().join('/')}; segue
+              identificando os leads dela
+            </div>
+          )}
         </td>
         <td>{page.clientName ?? (page.brand ? `${page.brand} (marca sem cadastro)` : '—')}</td>
         <td>{page.pipeline ? LEAD_PIPELINE_LABELS[page.pipeline] : '—'}</td>

@@ -158,10 +158,18 @@ conferir o log `lead webhook` (forma) — em especial se `traffic_source` vem em
 - **Reenvio ao RD Marketing**: pronto e desligado. Com
   `SITE_FORM_RD_FORWARD_ENABLED=true` (só o Eric liga), uma chamada de conversão
   por envio, nunca repetida; resultado na auditoria (`rdForward`).
-- Domínio `lp.wingscompany.com.br`: hoje é CNAME para as páginas do RD. Testar
-  no staging (`staging.wingssystem.online/lp/<slug>`). Para o domínio próprio:
-  A `lp` → `2.24.198.232` no HostGator, depois o domínio no Coolify no web **e**
-  na API (`/api` precisa estar na mesma origem, ou o POST cai na trava de Origin).
+- Domínio `lp.wingscompany.com.br` (decisão do Eric em 01/10: continua sendo o do
+  formulário do CRM): hoje é CNAME para as páginas do RD. Testar no staging
+  (`staging.wingssystem.online/lp/<slug>`).
+  - **Pré-requisito antes de mexer no DNS:** o próprio RD publica páginas em
+    `lp.wingscompany.com.br` (pelo menos 11 em 01/10, entre elas
+    `expansao-de-franquias`, `formatar-franquia`, `plano-de-negocios`,
+    `pagina-de-obrigado-nova` e 3 políticas de privacidade). O registro A `lp` →
+    VPS **só pode ser criado depois de migrar essas páginas do RD para outro
+    domínio** (e trocar os links que apontam para elas); senão todas saem do ar.
+  - Depois disso: A `lp` → `2.24.198.232` no HostGator, então o domínio no
+    Coolify no web **e** na API (`/api` precisa estar na mesma origem, ou o POST
+    cai na trava de Origin).
 
 **Origem por página** (`lead_source_rules.deal_source`): em CRM Vendas →
 Landing pages, a "Origem" do RD CRM para os negócios **novos** que o intake de
@@ -220,3 +228,22 @@ marca certa.
   Simula por padrão; rodar de novo não muda nada; auditoria `client.company_updated` só com nomes de
   campo.
 - Nada é enviado: `wa.me` só abre a conversa no aparelho da pessoa.
+- Staging (01/10): `lista-de-espera-familia-k` também ficou com `rd_deal_intake`
+  desligado, igual à `familia-k` (decisão do Eric; auditoria `landing_page.updated`).
+  O seed também a cria desligada (junto com `mister-russo`, `familia-k`, `wash-club` e
+  as páginas da auditoria v2), então em produção ela já nasce desligada.
+
+## Marcas em comercialização e páginas desativadas no RD (Eric, 02/10/2026, migração 0059)
+
+- `clients.franchise_on_sale`: `true` para as 22 franquias em comercialização, `false` para as demais marcas de
+  Expansão, nulo quando nunca foi perguntado (Wings Company, clientes só de Formatação). Não muda `clients.active`:
+  histórico, leads e projetos ficam como estão. A tela de Clientes mostra "Em/Fora de comercialização".
+- `lead_source_rules.rd_unpublished_on`: dia em que a página foi desativada no RD. A regra **segue ativa** (não é
+  arquivada), então conversões atrasadas e leads antigos da página continuam com a marca e o funil dela. A tela de
+  Landing pages mostra "Desativada no RD em dd/mm/aaaa".
+- Aplicar: `node dist/scripts/crm-brands.js --on-sale` (simula) e depois `--apply`, no container da API. Cadastra
+  só pelo nome as marcas em comercialização sem ficha, marca as fichas, data as regras e audita cada mudança
+  (`client.franchise_on_sale_changed`, `lead_source_rule.rd_unpublished`). Pode rodar de novo.
+- `parceiro` e `socio` valem para duas páginas cada (Cervejaria Odin e Circus Trattoria; Rei do Gado Carnes e Full
+  House Comida de Festa): o identificador do RD é o mesmo, então `parceiro` leva à Cervejaria Odin e `socio` não
+  tem regra.

@@ -31,6 +31,8 @@ export interface Client {
   number: number | null;
   /** Formatação, Expansão or both; null on records made before it was asked. */
   relationship?: ClientRelationship | null;
+  /** Whether Wings is selling the brand's franchises now; null when never asked. */
+  franchiseOnSale?: boolean | null;
   /** What the register lacks (empty when complete); for Wings Company, always empty. */
   registerMissing?: string[];
 }

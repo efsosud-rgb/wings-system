@@ -28,6 +28,7 @@ export const toClient = (row: ClientRow): Client => ({
   expansionArea: Array.isArray(row.expansionArea) ? (row.expansionArea as ExpansionEntry[]) : [],
   number: row.number ?? null,
   relationship: (row.relationship as ClientRelationship | null) ?? null,
+  franchiseOnSale: row.franchiseOnSale ?? null,
 });
 
 /**

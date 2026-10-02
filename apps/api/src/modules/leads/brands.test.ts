@@ -6,16 +6,19 @@ import { seed } from '../../db/seed.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import {
   applyBrandContacts,
+  applyOnSale20261002,
   brandKey,
   EXPANSION_BRANDS,
   formatBrandContactsReport,
   formatBrandReport,
   formatLegacyMoveReport,
+  formatOnSaleReport,
   identifierKey,
   moveLegacyBrandsToExpansion,
   registerBrands,
 } from './brands.js';
 import { listProjects, openProjectForClient } from '../projects/service.js';
+import { resolveLandingPage } from './service.js';
 
 let harness: TestDatabase;
 let db: Database;
@@ -43,22 +46,32 @@ describe('registerBrands', () => {
     const before = await db.select().from(clients);
     const report = await registerBrands(db, { names: EXPANSION_BRANDS, apply: false });
     expect(report.created).toHaveLength(8);
-    // Every seeded rule but those of brands not on this list (Wash Club, audit v2 pages).
-    expect(
-      report.links
-        .filter((link) => link.state !== 'linked')
-        .map((link) => link.identifier)
-        .sort(),
-    ).toEqual(
-      [
+    // Every seeded rule but those of brands not on this list (Wash Club, the
+    // audit v2 pages and the pages of Eric's list of 02/10 of other brands).
+    const waiting = report.links
+      .filter((link) => link.state !== 'linked')
+      .map((link) => link.identifier);
+    expect(waiting).toEqual(
+      expect.arrayContaining([
         'wash-club',
         'so-criancas',
         'lion-hair',
         'lionhairoficial',
         'super-dogao-da-nana',
         'sarantopoulos',
-      ].sort(),
+        'le-byker',
+      ]),
     );
+    const listed = new Set(EXPANSION_BRANDS.map(brandKey));
+    for (const identifier of waiting) {
+      const rule = await db.query.leadSourceRules.findFirst({
+        where: eq(leadSourceRules.pattern, identifier),
+      });
+      expect({ identifier, listed: listed.has(brandKey(rule?.brand ?? '')) }).toEqual({
+        identifier,
+        listed: false,
+      });
+    }
     expect(await db.select().from(clients)).toHaveLength(before.length);
     expect(formatBrandReport(report)).toContain('SIMULAÇÃO');
   });
@@ -108,7 +121,9 @@ describe('registerBrands', () => {
     expect(
       (await db.query.auditLog.findMany({ where: eq(auditLog.action, 'lead_source_rule.linked') }))
         .length,
-    ).toBe(11);
+      // 11, plus the waiting lists of Açaí da Fila, Calçadão do Frango and
+      // Ginteco and grupo-forte-fenix2 (Eric's list of 02/10).
+    ).toBe(15);
     // Audit of 01/10: the form's own identifier, not only the balloon's.
     expect(byIdentifier.get('mister-russo')?.client?.name).toBe('Mister Russo');
     expect(byIdentifier.get('familia-k')?.client?.name).toBe('Família K');
@@ -234,6 +249,42 @@ describe('seeded rules (audit of 01/10)', () => {
       )?.brand,
     ).toBe('Renomeada por alguém');
   });
+
+  it('seeds every held page with no RD deal, the Família K waiting list included', async () => {
+    await seed(db);
+    const held = [
+      'mister-russo',
+      'familia-k',
+      'lista-de-espera-familia-k',
+      'wash-club',
+      'so-criancas',
+      'lion-hair',
+      'lionhairoficial',
+      'super-dogao-da-nana',
+      'sarantopoulos',
+      // Eric's list of 02/10: a brand's own domain, a waiting list, a Wings page.
+      'franquias',
+      'lista-de-espera-acai-da-fila',
+      'plano-de-negocios',
+      'le-cookie-cup',
+    ];
+    expect(
+      (
+        await db.query.leadSourceRules.findFirst({
+          where: eq(leadSourceRules.pattern, 'hub-de-franquias'),
+        })
+      )?.pipeline,
+    ).toBe('expansao');
+    for (const pattern of held) {
+      const rule = await db.query.leadSourceRules.findFirst({
+        where: eq(leadSourceRules.pattern, pattern),
+      });
+      expect({ pattern, rdDealIntake: rule?.rdDealIntake }).toEqual({
+        pattern,
+        rdDealIntake: false,
+      });
+    }
+  });
 });
 
 describe('T6: brand contacts (Eric, 01/10)', () => {
@@ -282,5 +333,52 @@ describe('T6: brand contacts (Eric, 01/10)', () => {
       .where(eq(auditLog.action, 'client.company_updated'));
     expect(audits).toHaveLength(3);
     expect(JSON.stringify(audits.map((row) => row.metadata))).not.toMatch(/\d{8}/);
+  });
+});
+
+describe('on sale and pages switched off in RD (Eric, 02/10)', () => {
+  it('marks the brands on or off sale, dates the switched-off pages and keeps them mapping, and is safe to rerun', async () => {
+    await seed(db);
+    const familia =
+      (await db.query.clients.findFirst({ where: eq(clients.name, 'Família K') })) ??
+      (
+        await db
+          .insert(clients)
+          .values({ name: 'Família K', slug: 'familia-k-on-sale', relationship: 'expansao' })
+          .returning()
+      )[0]!;
+    const before = (await db.select().from(clients)).length;
+
+    const dry = await applyOnSale20261002(db, { apply: false });
+    expect(formatOnSaleReport(dry)).toMatch(/^SIMULAÇÃO/);
+    expect(dry.unpublished).toContain('familia-k');
+    expect(dry.noRule).toEqual(expect.arrayContaining(['teste-bot', 'socio']));
+    expect(await db.select().from(clients)).toHaveLength(before);
+
+    const applied = await applyOnSale20261002(db, { apply: true });
+    const named = (name: string) => db.query.clients.findFirst({ where: eq(clients.name, name) });
+    expect((await named('Dr Coluna'))?.franchiseOnSale).toBe(true);
+    expect((await named('A Cabana da Barra'))?.franchiseOnSale).toBe(true);
+    expect((await named('Família K'))?.franchiseOnSale).toBe(false);
+    expect(applied.marks.find((mark) => mark.name === 'Wings Company')).toBeUndefined();
+
+    // Dated but still active: a late conversion of the page keeps its brand and funnel.
+    const rule = await db.query.leadSourceRules.findFirst({
+      where: eq(leadSourceRules.pattern, 'familia-k'),
+    });
+    expect(rule).toMatchObject({ active: true, rdUnpublishedOn: '2026-10-02' });
+    expect(await resolveLandingPage(db, { identifier: 'familia-k' })).toMatchObject({
+      clientId: familia.id,
+      pipeline: 'expansao',
+    });
+    // A page still published is not dated, and the on-sale brand's rule gets its new record.
+    const drColuna = await db.query.leadSourceRules.findFirst({
+      where: eq(leadSourceRules.pattern, 'dr-coluna'),
+    });
+    expect(drColuna).toMatchObject({ rdUnpublishedOn: null });
+    expect(drColuna?.clientId).toBe((await named('Dr Coluna'))?.id);
+
+    const again = await applyOnSale20261002(db, { apply: true });
+    expect([again.brands.created, again.marks, again.unpublished]).toEqual([[], [], []]);
   });
 });

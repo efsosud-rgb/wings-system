@@ -89,6 +89,7 @@ export async function listLandingPages(db: Database): Promise<LandingPageItem[]>
       siteFormEnabled: leadSourceRules.siteFormEnabled,
       dealSource: leadSourceRules.dealSource,
       rdDealIntake: leadSourceRules.rdDealIntake,
+      rdUnpublishedOn: leadSourceRules.rdUnpublishedOn,
     })
     .from(leadSourceRules)
     .leftJoin(clients, eq(clients.id, leadSourceRules.clientId))
@@ -134,6 +135,7 @@ export async function listLandingPages(db: Database): Promise<LandingPageItem[]>
         siteFormEnabled: row.siteFormEnabled,
         dealSource: row.dealSource,
         rdDealIntake: row.rdDealIntake,
+        rdUnpublishedOn: row.rdUnpublishedOn,
       } satisfies LandingPageItem;
     })
     .sort(
