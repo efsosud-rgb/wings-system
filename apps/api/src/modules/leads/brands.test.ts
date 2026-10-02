@@ -263,7 +263,15 @@ describe('seeded rules (audit of 01/10)', () => {
       'franquias',
       'lista-de-espera-acai-da-fila',
       'plano-de-negocios',
+      'le-cookie-cup',
     ];
+    expect(
+      (
+        await db.query.leadSourceRules.findFirst({
+          where: eq(leadSourceRules.pattern, 'hub-de-franquias'),
+        })
+      )?.pipeline,
+    ).toBe('expansao');
     for (const pattern of held) {
       const rule = await db.query.leadSourceRules.findFirst({
         where: eq(leadSourceRules.pattern, pattern),

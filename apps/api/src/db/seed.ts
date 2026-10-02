@@ -60,8 +60,8 @@ const EXPANSION_LANDING_PAGES = [
   // read live): the brand from the page's name and text, a `le-` or
   // `lista-de-espera-` page under its main page's brand. Held from RD deals
   // like the ones above. The identifier is the slug, also on a brand's own
-  // domain (franquia.<marca>.com.br). `le-cookie-cup` is left out: it names
-  // Cookie Cup but its text says Cookie Craft, and a rule needs a brand.
+  // domain (franquia.<marca>.com.br). `le-cookie-cup` is Cookie Craft's (its
+  // text says so; Eric, 02/10).
   { identifier: 'parceiro', brand: 'Cervejaria Odin', rdDealIntake: false },
   { identifier: 'conytos', brand: 'Conytos', rdDealIntake: false },
   { identifier: 'conytos-lista-de-espera', brand: 'Conytos', rdDealIntake: false },
@@ -73,6 +73,7 @@ const EXPANSION_LANDING_PAGES = [
   { identifier: 'cenoritasgg', brand: 'Cenoritas', rdDealIntake: false },
   { identifier: 'cookie-craft', brand: 'Cookie Craft', rdDealIntake: false },
   { identifier: 'le-cookie-craft', brand: 'Cookie Craft', rdDealIntake: false },
+  { identifier: 'le-cookie-cup', brand: 'Cookie Craft', rdDealIntake: false },
   { identifier: 'dimos', brand: 'Dimos', rdDealIntake: false },
   { identifier: 'donabonitex', brand: 'Dona Bonitex', rdDealIntake: false },
   { identifier: 'dr-coluna', brand: 'Dr Coluna', rdDealIntake: false },
@@ -173,7 +174,7 @@ const EXPANSION_LANDING_PAGES = [
   { identifier: 'salinas', brand: 'Salinas', rdDealIntake: false },
 ];
 
-/** The Formatação forms (the Formatação net's list), Wings Company's own. */
+/** The Formatação forms (the Formatação net's list), Wings Company's own; a Wings page may be Expansão's. */
 const FORMATACAO_LANDING_PAGES = [
   'wings-company-form-site',
   'lp-formatacao-whatsapp',
@@ -181,7 +182,8 @@ const FORMATACAO_LANDING_PAGES = [
   // Wings' own pages at lp.wingscompany.com.br (Eric's list of 02/10), held from RD deals.
   { identifier: 'expansao-de-franquias', rdDealIntake: false },
   { identifier: 'formatar-franquia', rdDealIntake: false },
-  { identifier: 'hub-de-franquias', rdDealIntake: false },
+  // Its public is franchise candidates: Expansão, with no brand (Eric, 02/10).
+  { identifier: 'hub-de-franquias', rdDealIntake: false, pipeline: 'expansao' as const },
   { identifier: 'lp-servicos-todos', rdDealIntake: false },
   { identifier: 'plano-de-negocios', rdDealIntake: false },
 ];
@@ -303,15 +305,22 @@ export async function seed(db: Database): Promise<void> {
       .onConflictDoNothing();
   }
   for (const page of FORMATACAO_LANDING_PAGES) {
-    const { identifier, rdDealIntake = true } =
-      typeof page === 'string' ? { identifier: page } : page;
+    const {
+      identifier,
+      rdDealIntake = true,
+      pipeline = 'formatacao',
+    }: {
+      identifier: string;
+      rdDealIntake?: boolean;
+      pipeline?: 'formatacao' | 'expansao';
+    } = typeof page === 'string' ? { identifier: page } : page;
     await db
       .insert(leadSourceRules)
       .values({
         kind: 'landing_page',
         pattern: normalizeSourcePattern(identifier),
         clientId: WINGS_CLIENT_ID,
-        pipeline: 'formatacao',
+        pipeline,
         rdDealIntake,
       })
       .onConflictDoNothing();
