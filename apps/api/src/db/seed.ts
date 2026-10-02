@@ -56,6 +56,121 @@ const EXPANSION_LANDING_PAGES = [
   { identifier: 'lionhairoficial', brand: 'Lion Hair', rdDealIntake: false },
   { identifier: 'super-dogao-da-nana', brand: 'Super Dogão da Nana', rdDealIntake: false },
   { identifier: 'sarantopoulos', brand: 'Sarantopoulos', rdDealIntake: false },
+  // Every other page published in RD on 2026-10-02 (Eric's list of 100, each
+  // read live): the brand from the page's name and text, a `le-` or
+  // `lista-de-espera-` page under its main page's brand. Held from RD deals
+  // like the ones above. The identifier is the slug, also on a brand's own
+  // domain (franquia.<marca>.com.br). `le-cookie-cup` is left out: it names
+  // Cookie Cup but its text says Cookie Craft, and a rule needs a brand.
+  { identifier: 'parceiro', brand: 'Cervejaria Odin', rdDealIntake: false },
+  { identifier: 'conytos', brand: 'Conytos', rdDealIntake: false },
+  { identifier: 'conytos-lista-de-espera', brand: 'Conytos', rdDealIntake: false },
+  { identifier: 'franquias', brand: 'Valhalla Burguer', rdDealIntake: false },
+  { identifier: 'valhalla', brand: 'Valhalla Burguer', rdDealIntake: false },
+  { identifier: 'amarjon-le', brand: 'Amarjon', rdDealIntake: false },
+  { identifier: 'capi-hair', brand: 'Capi Hair Plus', rdDealIntake: false },
+  { identifier: 'casa-da-dona', brand: 'Casa da Dona', rdDealIntake: false },
+  { identifier: 'cenoritasgg', brand: 'Cenoritas', rdDealIntake: false },
+  { identifier: 'cookie-craft', brand: 'Cookie Craft', rdDealIntake: false },
+  { identifier: 'le-cookie-craft', brand: 'Cookie Craft', rdDealIntake: false },
+  { identifier: 'dimos', brand: 'Dimos', rdDealIntake: false },
+  { identifier: 'donabonitex', brand: 'Dona Bonitex', rdDealIntake: false },
+  { identifier: 'dr-coluna', brand: 'Dr Coluna', rdDealIntake: false },
+  { identifier: 'le-dr-coluna', brand: 'Dr Coluna', rdDealIntake: false },
+  {
+    identifier: 'fabricadesalgadosmongagua',
+    brand: 'Fábrica de Salgados Mongaguá',
+    rdDealIntake: false,
+  },
+  {
+    identifier: 'le-fabrica-de-salgados-mongagua',
+    brand: 'Fábrica de Salgados Mongaguá',
+    rdDealIntake: false,
+  },
+  { identifier: 'felipe-nilo', brand: 'Felipe Nilo', rdDealIntake: false },
+  // These two are on lp.wingscompany.com.br, but they are a brand's franchise
+  // pages (candidates' list, "Franquia BistrOgro"), not Wings' own.
+  { identifier: 'lista-de-espera_espaco-felipe-nilo', brand: 'Felipe Nilo', rdDealIntake: false },
+  { identifier: 'bistrogro', brand: 'BistrOgro', rdDealIntake: false },
+  { identifier: 'florir', brand: 'Florir Café', rdDealIntake: false },
+  { identifier: 'lista-de-espera-florir-cafe', brand: 'Florir Café', rdDealIntake: false },
+  { identifier: 'flowmultas', brand: 'Flow Multas', rdDealIntake: false },
+  { identifier: 'flowmultaslicenciados', brand: 'Flow Multas', rdDealIntake: false },
+  { identifier: 'food-forest', brand: 'Food Forest', rdDealIntake: false },
+  { identifier: 'le-food-forest', brand: 'Food Forest', rdDealIntake: false },
+  { identifier: 'grupo-forte-fenix2', brand: 'Grupo Forte Fênix', rdDealIntake: false },
+  { identifier: 'grupo-meu-ap', brand: 'Grupo Meu AP', rdDealIntake: false },
+  { identifier: 'iguarigourmet', brand: 'Iguari', rdDealIntake: false },
+  { identifier: 'le-byker', brand: 'Byker', rdDealIntake: false },
+  { identifier: 'le-manet-pizzas', brand: 'Manet Pizzas', rdDealIntake: false },
+  { identifier: 'lp-manet-pizzas', brand: 'Manet Pizzas', rdDealIntake: false },
+  { identifier: 'uni', brand: 'Uni', rdDealIntake: false },
+  { identifier: 'le-uni', brand: 'Uni', rdDealIntake: false },
+  { identifier: 'lista-de-espera-acai-da-fila', brand: 'Açaí da Fila', rdDealIntake: false },
+  {
+    identifier: 'lista-de-espera-bazar-das-flores',
+    brand: 'Bazar das Flores',
+    rdDealIntake: false,
+  },
+  {
+    identifier: 'lista-de-espera-calcadao-do-frango',
+    brand: 'Calçadão do Frango',
+    rdDealIntake: false,
+  },
+  {
+    identifier: 'lista-de-espera-caval_barber_shop',
+    brand: 'Caval Barber Shop',
+    rdDealIntake: false,
+  },
+  { identifier: 'lista-de-espera-colab-space', brand: 'Colab Space', rdDealIntake: false },
+  { identifier: 'lista-de-espera-fm-kitchens', brand: 'FM Kitchens', rdDealIntake: false },
+  { identifier: 'lista-de-espera-ginteco', brand: 'Ginteco', rdDealIntake: false },
+  { identifier: 'lp-grippa-head-spa', brand: 'Grippa Head Spa', rdDealIntake: false },
+  { identifier: 'lista-de-espera-grippa', brand: 'Grippa Head Spa', rdDealIntake: false },
+  { identifier: 'lista-de-espera-gustavo-eyewear', brand: 'Gustavo Eyewear', rdDealIntake: false },
+  { identifier: 'melhor-parada', brand: 'Melhor Parada', rdDealIntake: false },
+  { identifier: 'lista-de-espera-melhor-parada', brand: 'Melhor Parada', rdDealIntake: false },
+  { identifier: 'lp-mister-gulla', brand: 'Mister Gulla Express', rdDealIntake: false },
+  {
+    identifier: 'lista-de-espera-mister-gulla',
+    brand: 'Mister Gulla Express',
+    rdDealIntake: false,
+  },
+  { identifier: 'lp-mundo-dos-hots', brand: 'Mundo dos Hots', rdDealIntake: false },
+  { identifier: 'lista-de-espera-mundo-dos-hots', brand: 'Mundo dos Hots', rdDealIntake: false },
+  { identifier: 'lp-na-chapa', brand: 'Na Chapa', rdDealIntake: false },
+  { identifier: 'lista-de-espera-na-chapa-muriae', brand: 'Na Chapa', rdDealIntake: false },
+  { identifier: 'nork', brand: 'Nork', rdDealIntake: false },
+  { identifier: 'lista-de-espera-nork', brand: 'Nork', rdDealIntake: false },
+  { identifier: 'nossa-esmalteria', brand: 'Nossa Esmalteria', rdDealIntake: false },
+  {
+    identifier: 'lista-de-espera-nossa-esmalteria',
+    brand: 'Nossa Esmalteria',
+    rdDealIntake: false,
+  },
+  { identifier: 'parro-pizzaria', brand: 'Parrô Pizzaria', rdDealIntake: false },
+  { identifier: 'lista-de-espera-parro-pizzaria', brand: 'Parrô Pizzaria', rdDealIntake: false },
+  { identifier: 'lista-de-espera-petina', brand: 'Petina Soluções', rdDealIntake: false },
+  { identifier: 'renata-salgados', brand: 'Renata Salgados', rdDealIntake: false },
+  { identifier: 'lista-de-espera-renata-salgados', brand: 'Renata Salgados', rdDealIntake: false },
+  { identifier: 'lp-sorvetes-da-ilha', brand: 'Sorvetes da Ilha', rdDealIntake: false },
+  {
+    identifier: 'lista-de-espera-sorvetes-da-ilha',
+    brand: 'Sorvetes da Ilha',
+    rdDealIntake: false,
+  },
+  { identifier: 'sushi-de-feira', brand: 'Sushi de Feira', rdDealIntake: false },
+  { identifier: 'lista-de-espera-sushi-de-feira', brand: 'Sushi de Feira', rdDealIntake: false },
+  { identifier: 'pizzaria-verano', brand: 'Verano Pizzaria', rdDealIntake: false },
+  { identifier: 'lista-de-espera-verano', brand: 'Verano Pizzaria', rdDealIntake: false },
+  { identifier: 'lp-so-criancas', brand: 'Só Crianças', rdDealIntake: false },
+  { identifier: 'malkutbistrocafeteria', brand: 'Malkuth', rdDealIntake: false },
+  // Its RD page title still says Só Crianças (copied); the text is Pecan's.
+  { identifier: 'pecan', brand: 'Pecan', rdDealIntake: false },
+  { identifier: 'pensoulavou', brand: 'Pensou Lavou', rdDealIntake: false },
+  { identifier: 'pizzaria-das-palmeiras', brand: 'Pizzaria das Palmeiras', rdDealIntake: false },
+  { identifier: 'raptor', brand: 'Raptor', rdDealIntake: false },
+  { identifier: 'salinas', brand: 'Salinas', rdDealIntake: false },
 ];
 
 /** The Formatação forms (the Formatação net's list), Wings Company's own. */
@@ -63,6 +178,12 @@ const FORMATACAO_LANDING_PAGES = [
   'wings-company-form-site',
   'lp-formatacao-whatsapp',
   'Formulário Simplificado. -02',
+  // Wings' own pages at lp.wingscompany.com.br (Eric's list of 02/10), held from RD deals.
+  { identifier: 'expansao-de-franquias', rdDealIntake: false },
+  { identifier: 'formatar-franquia', rdDealIntake: false },
+  { identifier: 'hub-de-franquias', rdDealIntake: false },
+  { identifier: 'lp-servicos-todos', rdDealIntake: false },
+  { identifier: 'plano-de-negocios', rdDealIntake: false },
 ];
 
 export async function seed(db: Database): Promise<void> {
@@ -181,7 +302,9 @@ export async function seed(db: Database): Promise<void> {
       })
       .onConflictDoNothing();
   }
-  for (const identifier of FORMATACAO_LANDING_PAGES) {
+  for (const page of FORMATACAO_LANDING_PAGES) {
+    const { identifier, rdDealIntake = true } =
+      typeof page === 'string' ? { identifier: page } : page;
     await db
       .insert(leadSourceRules)
       .values({
@@ -189,6 +312,7 @@ export async function seed(db: Database): Promise<void> {
         pattern: normalizeSourcePattern(identifier),
         clientId: WINGS_CLIENT_ID,
         pipeline: 'formatacao',
+        rdDealIntake,
       })
       .onConflictDoNothing();
   }

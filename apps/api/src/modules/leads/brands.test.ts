@@ -43,22 +43,32 @@ describe('registerBrands', () => {
     const before = await db.select().from(clients);
     const report = await registerBrands(db, { names: EXPANSION_BRANDS, apply: false });
     expect(report.created).toHaveLength(8);
-    // Every seeded rule but those of brands not on this list (Wash Club, audit v2 pages).
-    expect(
-      report.links
-        .filter((link) => link.state !== 'linked')
-        .map((link) => link.identifier)
-        .sort(),
-    ).toEqual(
-      [
+    // Every seeded rule but those of brands not on this list (Wash Club, the
+    // audit v2 pages and the pages of Eric's list of 02/10 of other brands).
+    const waiting = report.links
+      .filter((link) => link.state !== 'linked')
+      .map((link) => link.identifier);
+    expect(waiting).toEqual(
+      expect.arrayContaining([
         'wash-club',
         'so-criancas',
         'lion-hair',
         'lionhairoficial',
         'super-dogao-da-nana',
         'sarantopoulos',
-      ].sort(),
+        'le-byker',
+      ]),
     );
+    const listed = new Set(EXPANSION_BRANDS.map(brandKey));
+    for (const identifier of waiting) {
+      const rule = await db.query.leadSourceRules.findFirst({
+        where: eq(leadSourceRules.pattern, identifier),
+      });
+      expect({ identifier, listed: listed.has(brandKey(rule?.brand ?? '')) }).toEqual({
+        identifier,
+        listed: false,
+      });
+    }
     expect(await db.select().from(clients)).toHaveLength(before.length);
     expect(formatBrandReport(report)).toContain('SIMULAÇÃO');
   });
@@ -108,7 +118,9 @@ describe('registerBrands', () => {
     expect(
       (await db.query.auditLog.findMany({ where: eq(auditLog.action, 'lead_source_rule.linked') }))
         .length,
-    ).toBe(11);
+      // 11, plus the waiting lists of Açaí da Fila, Calçadão do Frango and
+      // Ginteco and grupo-forte-fenix2 (Eric's list of 02/10).
+    ).toBe(15);
     // Audit of 01/10: the form's own identifier, not only the balloon's.
     expect(byIdentifier.get('mister-russo')?.client?.name).toBe('Mister Russo');
     expect(byIdentifier.get('familia-k')?.client?.name).toBe('Família K');
@@ -247,6 +259,10 @@ describe('seeded rules (audit of 01/10)', () => {
       'lionhairoficial',
       'super-dogao-da-nana',
       'sarantopoulos',
+      // Eric's list of 02/10: a brand's own domain, a waiting list, a Wings page.
+      'franquias',
+      'lista-de-espera-acai-da-fila',
+      'plano-de-negocios',
     ];
     for (const pattern of held) {
       const rule = await db.query.leadSourceRules.findFirst({
