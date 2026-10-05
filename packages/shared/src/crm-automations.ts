@@ -173,6 +173,18 @@ export interface EmailTemplate {
   active: boolean;
 }
 
+/** One message recorded for a deal (sent through the CRM transport, or only recorded in test mode). */
+export interface LeadEmailSent {
+  id: string;
+  subject: string;
+  body: string;
+  mode: 'test' | 'smtp';
+  status: 'recorded' | 'sent' | 'failed';
+  at: string;
+  templateName: string | null;
+  sentByName: string | null;
+}
+
 /** Fills the variables; a missing value becomes an empty string, never "undefined". */
 export function renderTemplate(
   text: string,

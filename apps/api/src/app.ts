@@ -33,6 +33,7 @@ import { onStageEntered } from './modules/leads/automations.js';
 import { createCrmMailTransport } from './modules/leads/crm-mail.js';
 import { crmRoutes } from './modules/leads/crm-routes.js';
 import { automationRoutes } from './modules/leads/automation-routes.js';
+import { leadEmailRoutes } from './modules/leads/lead-email-routes.js';
 import { nucleoRoutes } from './modules/leads/nucleo-routes.js';
 import { leadRoutes } from './modules/leads/routes.js';
 import { siteFormRoutes } from './modules/leads/site-forms.js';
@@ -203,6 +204,7 @@ export async function buildApp(deps: {
   await app.register(leadRoutes);
   await app.register(crmRoutes);
   await app.register(automationRoutes);
+  await app.register(leadEmailRoutes);
   await app.register(nucleoRoutes);
   await app.register(rdUserRoutes);
   await app.register(landingPageRoutes);
