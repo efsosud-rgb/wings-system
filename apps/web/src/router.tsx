@@ -16,11 +16,13 @@ import { EmployeesPage } from './pages/EmployeesPage.js';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage.js';
 import { IntegrationsPage } from './pages/IntegrationsPage.js';
 import { LandingRoute } from './pages/LandingRoute.js';
-import { LeadPage } from './pages/LeadPage.js';
 import { LandingPagesPage } from './pages/LandingPagesPage.js';
-import { LeadsPage } from './pages/LeadsPage.js';
-import { TasksPage } from './pages/TasksPage.js';
-import { CrmSettingsPage } from './pages/CrmSettingsPage.js';
+import { CompaniesPage } from './pages/crm/CompaniesPage.js';
+import { ContactsPage } from './pages/crm/ContactsPage.js';
+import { CrmSettingsPage } from './pages/crm/CrmSettingsPage.js';
+import { DealPage } from './pages/crm/DealPage.js';
+import { DealsPage } from './pages/crm/DealsPage.js';
+import { TasksPage } from './pages/crm/TasksPage.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { CampaignLeadsPage } from './pages/CampaignLeadsPage.js';
 import { MarketingDashboardPage } from './pages/MarketingDashboardPage.js';
@@ -65,12 +67,21 @@ const SCREENS: Record<string, RouteObject[]> = {
     { path: ':id', element: <ClientRecordPage /> },
   ],
   '/crm-vendas/landing-pages': [{ index: true, element: <LandingPagesPage /> }],
-  '/crm-vendas/funil': [
-    { index: true, element: <LeadsPage /> },
-    { path: ':id', element: <LeadPage /> },
+  '/crm-vendas/negociacoes': [
+    { index: true, element: <DealsPage /> },
+    { path: ':id', element: <DealPage /> },
+  ],
+  '/crm-vendas/contatos': [
+    { index: true, element: <ContactsPage /> },
+    { path: ':id', element: <ContactsPage /> },
+  ],
+  '/crm-vendas/empresas': [
+    { index: true, element: <CompaniesPage /> },
+    { path: ':id', element: <CompaniesPage /> },
   ],
   '/crm-vendas/tarefas': [{ index: true, element: <TasksPage /> }],
-  '/administracao/crm': [{ index: true, element: <CrmSettingsPage /> }],
+  // `automacoes/:pipeline` under Configurações is Sonnet's page (Regras de automação).
+  '/crm-vendas/configuracoes': [{ index: true, element: <CrmSettingsPage /> }],
   '/administracao/drive': [{ index: true, element: <DriveTemplatePage /> }],
   '/drive/arquivos': [{ index: true, element: <DrivePage /> }],
   '/gestao/projetos': [{ index: true, element: <ProjectsPage /> }],

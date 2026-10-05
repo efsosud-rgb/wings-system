@@ -17,7 +17,7 @@ import {
   leadListQuerySchema,
   type CrmBrand,
 } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { employees, leads } from '../../db/schema/index.js';
@@ -70,7 +70,7 @@ const MERGE_MESSAGES = {
  * are `crm.manage`; turning a company into a client is `clients.manage`.
  */
 export const nucleoRoutes: FastifyPluginAsync = async (app) => {
-  const { db } = app.wings;
+  const { db, env } = app.wings;
   type Req = Parameters<typeof app.can>[0];
 
   const ownScope = (request: Req, permission: 'leads.read' | 'leads.write') =>
@@ -546,6 +546,38 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
       metadata: { onSale: body.data.onSale },
     });
     return reply.send({ brand });
+  });
+
+  // --- where deals come from (Administração → Integrações) ---------------------------------
+
+  /** Each door in plain words: on, off or coming, and when the last deal came through it. */
+  app.get('/crm/sources', read, async (_request, reply) => {
+    const last = await db
+      .select({
+        source: leads.source,
+        lastAt: sql<string | null>`max(${leads.createdAt})`,
+        last30: sql<number>`(count(*) filter (where ${leads.createdAt} >= now() - interval '30 days'))::int`,
+      })
+      .from(leads)
+      .groupBy(leads.source);
+    const of = (...sources: string[]) => {
+      const rows = last.filter((row) => sources.includes(row.source));
+      const lastAt = rows.map((row) => row.lastAt).filter(Boolean).sort().at(-1) ?? null;
+      return { lastAt: lastAt ? new Date(lastAt).toISOString() : null, last30: rows.reduce((sum, row) => sum + row.last30, 0) };
+    };
+    const metaOn = Boolean(env.META_APP_SECRET && env.META_LEADGEN_VERIFY_TOKEN && (env.META_LEADS_ACCESS_TOKEN ?? env.META_WRITE_TOKEN));
+    const rdOn = Boolean(env.RD_STATION_WEBHOOK_SECRET);
+    const whatsappOn = Boolean(env.ZAPI_WEBHOOK_SECRET && env.WINGS_WHATSAPP_NUMBER);
+    return reply.send({
+      sources: [
+        { key: 'meta', name: 'Meta Lead Ads', state: metaOn ? 'on' : 'off', note: metaOn ? 'Formulários do Facebook e Instagram entram sozinhos.' : 'Falta ligar a conta da Meta; os formulários não entram sozinhos.', ...of('meta_lead_ads') },
+        { key: 'site', name: 'Formulário do site', state: 'on', note: 'As páginas com formulário próprio entram na hora.', ...of('site_form') },
+        { key: 'rd', name: 'RD Station (landing pages)', state: rdOn ? 'on' : 'off', note: rdOn ? 'As conversões das landing pages entram pelo RD.' : 'Falta ligar o RD Station; as conversões não entram sozinhas.', ...of('rd_station', 'rd_crm') },
+        { key: 'whatsapp', name: 'WhatsApp', state: whatsappOn ? 'on' : 'soon', note: whatsappOn ? 'Mensagens pelos links rastreáveis entram sozinhas.' : 'Em breve: as conversas do WhatsApp da Wings entrarão aqui.', ...of('whatsapp_link') },
+        { key: 'email', name: 'E-mail', state: 'soon', note: 'Em breve: e-mails recebidos viram negociações.', lastAt: null, last30: 0 },
+        { key: 'manual', name: 'Criadas à mão e planilhas', state: 'on', note: 'O botão Criar e a importação de CSV.', ...of('manual', 'csv_import') },
+      ],
+    });
   });
 
   // --- CSV: export the filtered list, preview and run an import --------------------------------

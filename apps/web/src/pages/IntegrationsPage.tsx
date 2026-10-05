@@ -15,6 +15,8 @@ import { useSearchParams } from 'react-router-dom';
 import { useAdAccountBudgetCaps, useSetBudgetCap } from '../api/ads.js';
 import { hasPermission, useSession } from '../api/auth.js';
 import { ApiError } from '../api/client.js';
+import { useDealSources } from '../api/crm.js';
+import { ago } from './crm/format.js';
 import {
   useConnectKairogen,
   useDisconnectKairogen,
@@ -823,6 +825,48 @@ export function RdUsersSection() {
   );
 }
 
+/** "Fontes de negócios": where deals arrive from and whether each door is open, in plain words. */
+function DealSourcesSection() {
+  const sources = useDealSources();
+  if (!Array.isArray(sources.data?.sources)) return null;
+  return (
+    <section
+      aria-labelledby="deal-sources-title"
+      className="crm-panel"
+      style={{ marginBottom: 'var(--space-5)' }}
+    >
+      <h2 id="deal-sources-title">Fontes de negócios</h2>
+      <div className="crm-sources">
+        {sources.data.sources.map((source) => (
+          <div key={source.key} className="crm-source">
+            <span
+              className={`crm-source-dot${source.state === 'on' ? ' is-on' : source.state === 'off' ? ' is-warn' : ''}`}
+              aria-hidden="true"
+            />
+            <span>
+              <b>{source.name}</b>
+              <span className="crm-sub">
+                {' '}
+                ·{' '}
+                {source.state === 'on'
+                  ? 'ligada'
+                  : source.state === 'off'
+                    ? 'desligada'
+                    : 'em breve'}
+              </span>
+              <div className="crm-sub">{source.note}</div>
+            </span>
+            <span className="crm-sub" style={{ textAlign: 'right' }}>
+              {source.last30} nos últimos 30 dias
+              <div>{source.lastAt ? `última há ${ago(source.lastAt)}` : 'nenhuma ainda'}</div>
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function IntegrationsPage() {
   return (
     <>
@@ -835,6 +879,7 @@ export function IntegrationsPage() {
       </header>
       <KairogenCard />
       <MediaProviderCards />
+      <DealSourcesSection />
       <ExpansionIntakeSection />
       <RdUsersSection />
       <RecoverySection />

@@ -1,5 +1,6 @@
 import type {
   Board,
+  LeadActivity,
   Client,
   CrmStage,
   CrmStageCreateInput,
@@ -311,6 +312,7 @@ export type LoadedLead = {
   notes: LeadNote[];
   tasks: LeadTask[];
   history: LeadStageHistoryEntry[];
+  activities: LeadActivity[];
 };
 
 export function useStages(pipeline?: LeadPipeline | '') {
