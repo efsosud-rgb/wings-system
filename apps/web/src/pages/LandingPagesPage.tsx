@@ -24,6 +24,7 @@ import {
 } from '../api/leads.js';
 import { Alert, Button } from '../components/ui.js';
 import { formatDateTime } from './crm/format.js';
+import { PageHeader } from '../components/PageHeader.js';
 
 /**
  * CRM Vendas → Landing pages. Every page a lead can arrive by, with its client
@@ -575,14 +576,10 @@ export function LandingPagesPage() {
 
   return (
     <>
-      <header className="page-header">
-        <h1>Landing pages</h1>
-        <p>
-          As páginas por onde os leads chegam, de qual cliente e de qual funil cada uma é, e como
-          cada uma está indo. Só aparece número com fonte; sem fonte, "—" e o motivo (passe o
-          mouse).
-        </p>
-      </header>
+      <PageHeader
+        title="Landing pages"
+        subtitle="As páginas por onde os leads chegam, de qual cliente e funil cada uma é, e como cada uma está indo. Sem fonte para um número, aparece — e o motivo ao passar o mouse."
+      />
 
       {canManage && <NewPage onCreated={setCreated} />}
       {created?.url && (

@@ -5413,6 +5413,7 @@ textarea.control {
    scrolls, the columns scroll inside, the stage shrinks and the timeline stays
    in view at the bottom. */
 .content:has(> .ws-page) {
+  flex: none;
   height: calc(100vh - var(--topbar-h));
   height: calc(100dvh - var(--topbar-h));
   padding: 16px 20px;
@@ -6556,27 +6557,27 @@ textarea.control {
 }
 
 .project-status-em_andamento {
-  color: #60a5fa;
-  background: rgba(96, 165, 250, 0.12);
-  border-color: rgba(96, 165, 250, 0.35);
+  color: var(--info);
+  background: var(--info-soft);
+  border-color: var(--info-soft);
 }
 
 .project-status-parado {
-  color: #fbbf24;
-  background: rgba(251, 191, 36, 0.12);
-  border-color: rgba(251, 191, 36, 0.35);
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning-soft);
 }
 
 .project-status-cancelado {
-  color: var(--wings-danger);
-  background: rgba(248, 113, 113, 0.12);
-  border-color: rgba(248, 113, 113, 0.35);
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: var(--danger-soft);
 }
 
 .project-status-finalizado {
-  color: var(--wings-success);
-  background: rgba(52, 211, 153, 0.12);
-  border-color: rgba(52, 211, 153, 0.35);
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: var(--success-soft);
 }
 
 .projects-status-button {
@@ -6589,7 +6590,6 @@ textarea.control {
 
 .projects-status-button:hover .project-status,
 .projects-status-button:focus-visible .project-status {
-  filter: brightness(1.25);
   outline: 1px solid currentColor;
 }
 
@@ -6612,32 +6612,31 @@ button.stage-chip {
 
 button.stage-chip:hover,
 button.stage-chip:focus-visible {
-  filter: brightness(1.25);
 }
 
 .stage-nao_iniciada {
-  color: var(--wings-muted);
-  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-2);
+  background: var(--surface-3);
 }
 
 .stage-em_andamento {
-  color: #93c5fd;
-  background: rgba(96, 165, 250, 0.18);
+  color: var(--info);
+  background: var(--info-soft);
 }
 
 .stage-concluida {
-  color: var(--wings-success);
-  background: rgba(52, 211, 153, 0.16);
+  color: var(--success);
+  background: var(--success-soft);
 }
 
 .stage-bloqueada {
-  color: var(--wings-danger);
-  background: rgba(248, 113, 113, 0.16);
+  color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .stage-current {
-  border-color: var(--wings-accent);
-  box-shadow: 0 0 0 1px rgba(233, 82, 40, 0.5);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .projects-board-wrap {
@@ -6694,7 +6693,7 @@ button.stage-chip:focus-visible {
 .project-dialog-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.65);
+  background: var(--backdrop);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -8302,4 +8301,45 @@ tr.task-overdue td:nth-child(2) strong {
   margin-top: var(--space-2);
   font-size: var(--text-sm);
   color: var(--text-3);
+}
+
+/* ---------- a screen that failed to render ---------- */
+.route-error {
+  max-width: 480px;
+  margin: 10vh auto 0;
+  padding: var(--space-6) var(--space-5);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
+.route-error-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: var(--space-3);
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+}
+.route-error h1 {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+}
+.route-error p {
+  margin-top: var(--space-2);
+  color: var(--text-2);
+  font-size: var(--text-md);
+}
+.route-error-actions {
+  display: flex;
+  justify-content: center;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+.route-error-actions .btn {
+  width: auto;
+  text-decoration: none;
 }

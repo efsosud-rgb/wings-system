@@ -36,6 +36,7 @@ import {
 import { ClientSelect } from '../components/media-studio/MediaLibrary.js';
 import { Alert, Button } from '../components/ui.js';
 import { ProjectSummary } from '../components/projects/ProjectParts.js';
+import { PageHeader } from '../components/PageHeader.js';
 
 /**
  * The Drive. The tree on the left is what the server says this person may see;
@@ -236,12 +237,10 @@ export function DrivePage() {
 
   return (
     <>
-      <header className="page-header page-header-row">
-        <div>
-          <h1>Drive</h1>
-          <p>Pastas e arquivos por departamento e cliente.</p>
-        </div>
-        <div className="drive-head-actions">
+      <PageHeader
+        title="Drive"
+        subtitle="Pastas e arquivos por departamento e cliente."
+        actions={
           <Button
             type="button"
             variant="ghost"
@@ -252,8 +251,8 @@ export function DrivePage() {
           >
             {inTrash ? 'Voltar às pastas' : 'Lixeira'}
           </Button>
-        </div>
-      </header>
+        }
+      />
 
       {tree.data && !tree.data.storageAvailable && (
         <Alert kind="error">O armazenamento de arquivos não está configurado neste ambiente.</Alert>

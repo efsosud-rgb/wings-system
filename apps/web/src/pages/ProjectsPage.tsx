@@ -18,6 +18,7 @@ import {
   stageLabel,
 } from '../components/projects/ProjectParts.js';
 import { Alert, Button, Select } from '../components/ui.js';
+import { PageHeader } from '../components/PageHeader.js';
 
 /**
  * Gestão → Projetos: one row per client, the eight stages in columns. What is
@@ -81,14 +82,10 @@ export function ProjectsPage() {
 
   return (
     <>
-      <header className="page-header">
-        <h1>Projetos</h1>
-        <p>
-          O projeto de cada cliente: o status, a etapa em que está e o andamento das oito etapas.
-          Cada departamento marca a sua etapa; status e etapa atual são de Processos e Projetos e da
-          Diretoria.
-        </p>
-      </header>
+      <PageHeader
+        title="Projetos"
+        subtitle="O projeto de cada cliente: status, etapa atual e o andamento das oito etapas. Cada departamento marca a sua etapa."
+      />
 
       <div className="filters" role="search" aria-label="Filtros do quadro">
         <label className="field">
