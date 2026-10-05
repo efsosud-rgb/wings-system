@@ -15,6 +15,7 @@ import {
 } from '../api/drive.js';
 import { errorText } from '../components/drive/DriveParts.js';
 import { Alert, Button } from '../components/ui.js';
+import { PageHeader } from '../components/PageHeader.js';
 
 /**
  * Administração → Drive → Modelo de pastas. The folders every department gets,
@@ -174,18 +175,15 @@ export function DriveTemplatePage() {
 
   return (
     <>
-      <header className="page-header page-header-row">
-        <div>
-          <h1>Drive: modelo de pastas</h1>
-          <p>
-            As pastas que cada departamento recebe. Uma "pasta de clientes" ganha uma pasta para
-            cada cliente ativo, com o que estiver dentro dela no modelo.
-          </p>
-        </div>
-        <Button type="button" disabled={sync.isPending} onClick={() => sync.mutate()}>
-          {sync.isPending ? 'Sincronizando…' : 'Sincronizar pastas'}
-        </Button>
-      </header>
+      <PageHeader
+        title="Drive: modelo de pastas"
+        subtitle="As pastas que cada departamento recebe. Uma pasta de clientes ganha uma pasta para cada cliente ativo, com o que estiver dentro dela no modelo."
+        actions={
+          <Button type="button" disabled={sync.isPending} onClick={() => sync.mutate()}>
+            {sync.isPending ? 'Sincronizando…' : 'Sincronizar pastas'}
+          </Button>
+        }
+      />
 
       {sync.data && (
         <Alert kind="success">

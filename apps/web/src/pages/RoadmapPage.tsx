@@ -28,6 +28,7 @@ import {
 } from '../api/roadmap.js';
 import { ApiError } from '../api/client.js';
 import { Alert, Button, Field, Input, Select } from '../components/ui.js';
+import { PageHeader } from '../components/PageHeader.js';
 
 /**
  * Administração → Roadmap: o progresso do sistema, módulo a módulo, e o
@@ -92,7 +93,10 @@ function DeliverableRow({ deliverable }: { deliverable: RoadmapDeliverable }) {
           value={deliverable.status}
           disabled={update.isPending}
           onChange={(event) =>
-            update.mutate({ id: deliverable.id, status: event.target.value as RoadmapDeliverableStatus })
+            update.mutate({
+              id: deliverable.id,
+              status: event.target.value as RoadmapDeliverableStatus,
+            })
           }
         >
           {ROADMAP_DELIVERABLE_STATUSES.map((status) => (
@@ -196,7 +200,9 @@ function ModulesTab() {
   if (modules.isError) {
     return (
       <Alert kind="error">
-        {modules.error instanceof ApiError ? modules.error.message : 'Não foi possível carregar o roadmap.'}
+        {modules.error instanceof ApiError
+          ? modules.error.message
+          : 'Não foi possível carregar o roadmap.'}
       </Alert>
     );
   }
@@ -251,7 +257,9 @@ function ReportRow({ run, focused }: { run: RoadmapReportRun; focused: boolean }
         <tr>
           <td colSpan={5}>
             <div className="field-error" role="alert">
-              {approve.error instanceof ApiError ? approve.error.message : 'Não foi possível aprovar.'}
+              {approve.error instanceof ApiError
+                ? approve.error.message
+                : 'Não foi possível aprovar.'}
             </div>
           </td>
         </tr>
@@ -267,7 +275,9 @@ function ReportsTab({ focusId }: { focusId?: string }) {
   if (reports.isError) {
     return (
       <Alert kind="error">
-        {reports.error instanceof ApiError ? reports.error.message : 'Não foi possível carregar os relatórios.'}
+        {reports.error instanceof ApiError
+          ? reports.error.message
+          : 'Não foi possível carregar os relatórios.'}
       </Alert>
     );
   }
@@ -319,13 +329,17 @@ function RecipientsTab() {
         className="filters"
         onSubmit={(event) => {
           event.preventDefault();
-          create.mutate(form, { onSuccess: () => setForm({ role: 'preview', name: '', phone: '' }) });
+          create.mutate(form, {
+            onSuccess: () => setForm({ role: 'preview', name: '', phone: '' }),
+          });
         }}
       >
         <Field label="Papel">
           <Select
             value={form.role}
-            onChange={(event) => setForm({ ...form, role: event.target.value as RoadmapRecipientRole })}
+            onChange={(event) =>
+              setForm({ ...form, role: event.target.value as RoadmapRecipientRole })
+            }
           >
             {ROADMAP_RECIPIENT_ROLES.map((role) => (
               <option key={role} value={role}>
@@ -435,13 +449,10 @@ export function RoadmapPage() {
 
   return (
     <>
-      <header className="page-header">
-        <h1>Roadmap</h1>
-        <p>
-          Progresso do sistema por módulo e o relatório diário para a diretoria. O rascunho sai para
-          Eric às 17:30; aprovado, o final vai para Umberto e Thais às 18:00.
-        </p>
-      </header>
+      <PageHeader
+        title="Roadmap"
+        subtitle="Progresso do sistema por módulo e o relatório diário para a diretoria. O rascunho sai para Eric às 17:30; aprovado, o final vai para Umberto e Thais às 18:00."
+      />
 
       <div className="tab-row" role="tablist" aria-label="Seções do roadmap">
         {TABS.map((item) => (
