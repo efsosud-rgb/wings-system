@@ -363,7 +363,10 @@ describe('creatives and ads', () => {
     await client.validateAd({
       name: 'Anúncio',
       adSetId: '1',
-      creative: { ...creativeBase, body: { type: 'single', media: { kind: 'image', imageHash: 'h' } } },
+      creative: {
+        ...creativeBase,
+        body: { type: 'single', media: { kind: 'image', imageHash: 'h' } },
+      },
     });
     const inline = JSON.parse(api.writes('ads')[0]?.fields.creative ?? '{}');
     expect(inline.url_tags).toBe(META_URL_TAGS);

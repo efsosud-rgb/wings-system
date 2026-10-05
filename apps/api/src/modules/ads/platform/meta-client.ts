@@ -735,6 +735,7 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
         body?: string;
         object_type?: string;
         object_story_spec?: Parameters<typeof creativeFormatOf>[0]['object_story_spec'];
+        url_tags?: string;
       };
     }>(
       `${this.accountId}/ads`,
@@ -744,7 +745,7 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
         // spec say what the creative is made of. NOT verified live: whether the
         // story spec is readable on every creative with this token.
         fields:
-          'id,name,status,effective_status,campaign_id,adset_id,issues_info,ad_review_feedback,creative{id,name,thumbnail_url,title,body,object_type,object_story_spec}',
+          'id,name,status,effective_status,campaign_id,adset_id,issues_info,ad_review_feedback,creative{id,name,thumbnail_url,title,body,object_type,object_story_spec,url_tags}',
         // 660 ads with creatives is more than Meta will serve in one page.
         limit: ADS_PAGE_SIZE,
       },
@@ -770,6 +771,8 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
             utmContent: utmContentOfCreative(
               ad.creative as Parameters<typeof utmContentOfCreative>[0],
             ),
+            // Meta leaves the field out when empty.
+            urlTags: ad.creative.url_tags ?? '',
           }
         : null,
       reviewFeedback: ad.ad_review_feedback ?? null,

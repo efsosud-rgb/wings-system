@@ -15,6 +15,8 @@ export const ALERT_KINDS = [
   'creative_fatigue',
   'quality_below_average',
   'conversion_silence',
+  'meta_ad_without_utms',
+  'google_campaign_own_suffix',
 ] as const;
 export type AlertKind = (typeof ALERT_KINDS)[number];
 
@@ -27,6 +29,8 @@ export const ALERT_KIND_LABEL: Record<AlertKind, string> = {
   creative_fatigue: 'Desgaste de criativo',
   quality_below_average: 'Qualidade abaixo da média',
   conversion_silence: 'Silêncio de conversão',
+  meta_ad_without_utms: 'Anúncio da Meta sem as UTMs padrão',
+  google_campaign_own_suffix: 'Campanha do Google com sufixo próprio',
 };
 
 export const ALERT_SEVERITY_LABEL: Record<AlertSeverity, string> = {

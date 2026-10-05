@@ -428,6 +428,13 @@
       "when": 1791204423240,
       "tag": "0060_bi_dw_dimensional_model",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1791213296479,
+      "tag": "0063_utm_standard_alerts",
+      "breakpoints": true
     }
   ]
 }

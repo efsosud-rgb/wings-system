@@ -10,6 +10,7 @@ import {
   type PacingSummary,
   type PlatformAccountReading,
   type SessionUser,
+  META_URL_TAGS,
 } from '@wings/shared';
 import {
   act,
@@ -578,14 +579,12 @@ describe('the paid-media builder', () => {
     ).toBeTruthy();
   });
 
-  it('generates UTMs from the name and keeps an edited one', () => {
+  it('shows the Meta standard instead of UTM fields, and a destination without UTMs', () => {
     render(<PaidMediaBuilder canRequest />);
     type(screen.getByLabelText('Nome da campanha'), 'Expansão SP');
-    expect((screen.getByLabelText('utm_campaign') as HTMLInputElement).value).toBe('expansao-sp');
-
-    type(screen.getByLabelText('utm_campaign'), 'minha-tag');
-    type(screen.getByLabelText('Nome da campanha'), 'Expansão RJ');
-    expect((screen.getByLabelText('utm_campaign') as HTMLInputElement).value).toBe('minha-tag');
+    expect(screen.queryByLabelText('utm_campaign')).toBeNull();
+    expect(screen.getByText(META_URL_TAGS)).toBeTruthy();
+    expect(screen.getByText(/A Meta preenche a origem e os ids/i)).toBeTruthy();
   });
 
   it('takes one image per variation and says when it will be cropped', () => {
@@ -710,10 +709,8 @@ describe('the paid-media builder', () => {
     expect(screen.queryByRole('button', { name: /Adicionar criativo/ })).toBeNull();
   });
 
-  it('shows each creative its own utm_content, and copies one text into all on request', () => {
+  it('copies one text into all creatives on request', () => {
     render(<PaidMediaBuilder canRequest />);
-    expect(screen.getByText('utm_content: imagem-1')).toBeTruthy();
-    expect(screen.getByText('utm_content: imagem-2')).toBeTruthy();
     type(screen.getAllByLabelText(/^Título/)[0] as Element, 'Sua marca pronta para franquear');
     fireEvent.click(screen.getByLabelText(/Usar o mesmo texto/));
     // One copy block left on screen, written into every creative.
@@ -1931,7 +1928,7 @@ describe('adding creatives to a campaign that exists', () => {
 });
 
 describe('choosing the campaign to add creatives to', () => {
-  it("takes the campaign's utm_campaign and destination, and keeps utm_medium on cpc", () => {
+  it("takes the campaign's destination", () => {
     render(<PaidMediaBuilder canRequest />);
     fireEvent.click(screen.getByLabelText(/Adicionar criativos a uma campanha existente/));
     fireEvent.change(screen.getByLabelText('Campanha'), {
@@ -1939,8 +1936,6 @@ describe('choosing the campaign to add creatives to', () => {
     });
     const byName = (name: string) =>
       document.querySelector<HTMLInputElement>(`[name="${name}"]`)?.value;
-    expect(byName('utms.utm_campaign')).toBe('formatacao_jimmyogro_set26');
-    expect(byName('utms.utm_medium')).toBe('cpc');
     expect(byName('destinationUrl')).toBe('https://wingscompany.com.br/contato/');
   });
 });

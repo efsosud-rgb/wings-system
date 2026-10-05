@@ -33,6 +33,12 @@ export interface PlatformCampaign {
    * when the client does not read it.
    */
   deliveryStatus?: string | null;
+  /**
+   * Google: the campaign's own Final URL suffix ('' when none) and the
+   * account's, which campaigns inherit. Undefined when the client does not read them.
+   */
+  finalUrlSuffix?: string | null;
+  accountFinalUrlSuffix?: string | null;
 }
 
 export interface PlatformAdSet {
@@ -96,6 +102,8 @@ export interface PlatformAd {
     format?: CreativeFormat;
     /** The utm_content its link carries (video-1, imagem-2…); null when none. */
     utmContent?: string | null;
+    /** Meta: the creative's url_tags, '' when it has none. Undefined when not read. */
+    urlTags?: string;
   } | null;
   /** The real rejection reason, when the ad was disapproved. */
   reviewFeedback: unknown;

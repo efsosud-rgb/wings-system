@@ -55,7 +55,7 @@ describe('rdAttributionOf', () => {
     });
   });
 
-  it('reads the ids from the platforms\' UTM standard, and Meta\'s short source names', () => {
+  it("reads the ids from the platforms' UTM standard, and Meta's short source names", () => {
     const meta = rdAttributionOf({
       content: {},
       url: null,
@@ -76,8 +76,11 @@ describe('rdAttributionOf', () => {
     expect(
       ['msg', 'an'].map(
         (source) =>
-          rdAttributionOf({ content: {}, url: `https://x.com/?utm_source=${source}`, trafficSource: null })
-            ?.adPlatform,
+          rdAttributionOf({
+            content: {},
+            url: `https://x.com/?utm_source=${source}`,
+            trafficSource: null,
+          })?.adPlatform,
       ),
     ).toEqual(['meta', 'meta']);
 

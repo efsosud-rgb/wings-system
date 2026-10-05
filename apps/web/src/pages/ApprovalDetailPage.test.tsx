@@ -7,6 +7,7 @@ import type {
   OfficialPreview,
   SessionUser,
 } from '@wings/shared';
+import { META_URL_TAGS } from '@wings/shared';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -642,11 +643,11 @@ describe('a Meta request that creates the ad set and the ads', () => {
     expect(screen.getByText('Facebook: Feed · Instagram: Stories, Reels')).toBeTruthy();
     expect(screen.getByText('Página 104567890123456')).toBeTruthy();
     expect(screen.getByText('Instagram 17841400000000000')).toBeTruthy();
-    // Each creative with its title and the utm_content its ad will carry.
+    // Each creative with its title; the UTMs are the standard url_tags of every ad.
     expect(screen.getByText(/^1\. Vídeo/)).toBeTruthy();
     expect(screen.getByText(/^2\. Carrossel \(3 cartões\)/)).toBeTruthy();
-    expect(screen.getByText('utm_content=video-1')).toBeTruthy();
-    expect(screen.getByText('utm_content=carrossel-2')).toBeTruthy();
+    expect(screen.getByText(`Parâmetros de URL: ${META_URL_TAGS}`)).toBeTruthy();
+    expect(screen.queryByText(/utm_content=video-1/)).toBeNull();
     // Nothing exists on Meta yet: no official preview is asked for.
     expect(screen.queryByText('Prévia oficial da Meta')).toBeNull();
     expect(previewsAskedFor).not.toHaveBeenCalled();
@@ -798,7 +799,7 @@ describe('the forecast to the end and who asked', () => {
 });
 
 describe('an add_ads request', () => {
-  it('shows the campaign, the ad set and each new ad with the utm_content it will carry', () => {
+  it('shows the campaign, the ad set, the new ads and the url_tags they will carry', () => {
     approval.current = buildApproval({
       changeKind: 'add_ads',
       fromValueCents: null,
@@ -832,8 +833,7 @@ describe('an add_ads request', () => {
     renderDetail();
     expect(screen.getByText('Os anúncios que serão adicionados')).toBeTruthy();
     expect(screen.getByText('120252260021860076')).toBeTruthy();
-    expect(screen.getByText('utm_content=video-3')).toBeTruthy();
-    expect(screen.getByText('utm_content=video-4')).toBeTruthy();
+    expect(screen.getByText(`Parâmetros de URL: ${META_URL_TAGS}`)).toBeTruthy();
     // No budget simulator for a change that moves no money.
     expect(screen.queryByText(/Simular/)).toBeNull();
   });

@@ -1,3 +1,4 @@
+import { GOOGLE_ACCOUNT_URL_SUFFIX } from '@wings/shared';
 import { describe, expect, it } from 'vitest';
 import { BRAZIL_GEO, fakeGoogleApi } from './fake-google-api.js';
 import {
@@ -572,6 +573,21 @@ describe('reading the account', () => {
       expect.objectContaining({ id: '222', status: 'PAUSED', dailyBudgetCents: 5000 }),
     ]);
     expect(await client.listAdSets()).toEqual([]);
+  });
+
+  it("reads each campaign's Final URL suffix and the account's (empty when unset)", async () => {
+    const api = fakeGoogleApi({
+      campaigns: [{ ...campaigns[0], finalUrlSuffix: 'utm_source=outro' }, { ...campaigns[1] }],
+      accountFinalUrlSuffix: GOOGLE_ACCOUNT_URL_SUFFIX,
+    });
+    const list = await new GoogleAdsPlatformClient(api.reader).listCampaigns();
+    expect(list.map((c) => [c.finalUrlSuffix, c.accountFinalUrlSuffix])).toEqual([
+      ['utm_source=outro', GOOGLE_ACCOUNT_URL_SUFFIX],
+      ['', GOOGLE_ACCOUNT_URL_SUFFIX],
+    ]);
+    const query = String(api.searchCalls('campaign\\s').at(0)?.body.query);
+    expect(query).toContain('campaign.final_url_suffix');
+    expect(query).toContain('customer.final_url_suffix');
   });
 
   it('counts a shared budget once, on a campaign that is spending', async () => {

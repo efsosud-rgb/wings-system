@@ -97,10 +97,11 @@ nunca palpite — igual ao Google.
 ## Os anúncios
 
 `object_story_spec` com `page_id` e `instagram_user_id` (o antigo
-`instagram_actor_id` foi descontinuado na v22). Link sempre com as UTMs da
-anúncio: o tipo e a posição no conjunto (`utm_content=video-1`, `imagem-2`,
-`carrossel-3`…), para o RD e a tela Leads das Campanhas dizerem de qual anúncio
-veio o lead (desde 29/09/2026; antes era `…-v1`, `-v2`).
+`instagram_actor_id` foi descontinuado na v22). Desde 05/10/2026 o link vai
+**sem UTM** e o criativo leva `url_tags` = `META_URL_TAGS` (veja "Padrão de
+UTMs das plataformas" abaixo). Antes disso, o link levava as UTMs do rascunho e
+um utm_content por tipo e posição (`video-1`, `imagem-2`, `carrossel-3`; antes
+de 29/09, `…-v1`, `-v2`); esses anúncios antigos continuam como estão.
 
 | Tipo      | Formato na Meta                                                                                                                                          |
 | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -253,20 +254,49 @@ registrado na trilha como `ads.manual_platform_change`. A troca de criativo
 manda o anúncio de volta à revisão (`IN_PROCESS`).
 
 
+### Padrão de UTMs das plataformas (05/10/2026)
+
+Decidido com o Eric; o texto vive só em `packages/shared` (`campaign-builder.ts`).
+
+- **Meta** (não tem padrão por conta): todo anúncio novo do construtor grava no
+  criativo `url_tags` = `META_URL_TAGS`:
+  `utm_source={{site_source_name}}&utm_medium=cpc&utm_campaign={{campaign.id}}&utm_content={{ad.id}}&utm_term={{adset.id}}`.
+  O link vai sem nenhum `utm_*` (`adDestination`), para não haver dois
+  `utm_source` no mesmo endereço. O `validate_only` julga o criativo com os
+  mesmos `url_tags`.
+- **Google**: o Eric gravou o Sufixo do URL final **na conta** 4268586278
+  (`GOOGLE_ACCOUNT_URL_SUFFIX`) e toda campanha herda. O construtor não grava
+  sufixo na campanha (sobrescreveria o da conta) e o URL final vai sem UTM.
+- **Leitura**: `{{site_source_name}}` chega como `fb`, `ig`, `msg` ou `an` e é
+  gravado como `facebook`, `instagram`, `messenger`, `audience_network`
+  (`utmSourceName`). `utm_campaign`, `utm_content` e `utm_term` numéricos são os
+  ids da Meta (campanha, anúncio, conjunto) e casam com `external_id` das
+  tabelas de ads; no Google, `{campaignid}` e `{creative}` casam com a campanha
+  e o anúncio (`utm_term` é a palavra-chave).
+- **Alertas do cockpit** (migração 0063, só no painel, sem WhatsApp, mesma
+  deduplicação): `meta_ad_without_utms` — anúncio ACTIVE cujo criativo não tem
+  os cinco parâmetros (lidos de `creative.url_tags` na ingestão);
+  `google_campaign_own_suffix` — campanha com `final_url_suffix` próprio
+  diferente do `customer.final_url_suffix`. NÃO verificado ao vivo: a leitura
+  de `customer.final_url_suffix` pela consulta de campanhas.
+- **Nada muda nos anúncios que já existem**: o alerta aponta; a correção é de
+  uma pessoa, na plataforma.
+
 ## Vários criativos e anúncios novos numa campanha que já existe (29/09/2026)
 
 - **De 1 a 5 criativos por conjunto** (antes, de 2 a 3). O construtor abre com
   2 e deixa remover até 1. Cada criativo vira um anúncio no mesmo conjunto, com
   texto, título e botão próprios, ou o mesmo em todos ("Usar o mesmo texto…").
-- **utm_content por anúncio**: `video-N`, `imagem-N`, `carrossel-N`, com N a
-  posição no conjunto (`adUtmContent` em `packages/shared`).
+- **Nome por anúncio**: `video-N`, `imagem-N`, `carrossel-N`, com N a
+  posição no conjunto (`adUtmContent` em `packages/shared`). Até 05/10 era
+  também o utm_content do link; agora o utm_content é o id do anúncio.
 - **Só Instagram**: atalho nos posicionamentos manuais que deixa Instagram
   Feed, Stories e Reels e tira Facebook e Threads (Audience Network não é
   oferecida pelo construtor).
 - **Adicionar criativos a uma campanha existente** (`add_ads`, migração
   0046): no construtor, "Adicionar criativos a uma campanha existente". O
   pedido guarda o conjunto (o único da campanha, ou o escolhido) e continua a
-  numeração do utm_content depois dos anúncios que já existem. Não reserva
+  numeração dos nomes (video-N…) depois dos anúncios que já existem. Não reserva
   verba, mas passa pela aprovação como tudo. Na execução: confere que o
   conjunto ainda pertence à campanha na Meta, que o pedido é o aprovado (hash)
   e que os arquivos existem; sobe a mídia; valida cada anúncio
@@ -274,7 +304,7 @@ manda o anúncio de volta à revisão (`IN_PROCESS`).
   criada: desconhecido e a conta travada, como toda escrita pela metade.
   Ligar: pedido "Retomar campanha" (liga também estes anúncios, porque o
   sistema os criou) ou na Meta.
-- **Aprovação**: lista cada criativo com o seu utm_content; "Total previsto
+- **Aprovação**: lista cada criativo e os Parâmetros de URL padrão; "Total previsto
   da campanha até o fim" (verba diária × dias, da criação ao fim, ou de hoje
   ao fim numa mudança de verba); "Solicitado por" diz quando o pedido veio do
   terminal (`ops-cli request --requested-by e-mail` registra a pessoa).

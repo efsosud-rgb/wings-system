@@ -33,7 +33,10 @@ import {
   SEARCH_DESCRIPTION_MAX,
   SEARCH_HEADLINE_MAX,
   UTM_KEYS,
-  applyUtms,
+  adDestination,
+  GOOGLE_ACCOUNT_URL_SUFFIX,
+  META_URL_TAGS,
+  utmsFromPlatform,
   audienceProfileSchema,
   buildUtms,
   campaignDays,
@@ -1530,8 +1533,8 @@ export function PaidMediaBuilder({
           >
             <p className="field-hint">
               Até {MAX_VARIATIONS} criativos, cada um do seu tipo: imagem, vídeo ou carrossel. Cada
-              um vira um anúncio, com o seu próprio utm_content (video-1, imagem-2…) para o lead
-              dizer de qual veio. Fica guardado no Wings System — só vai para a Meta quando um
+              um vira um anúncio, e o lead diz de qual veio pelo utm_content, que a Meta preenche
+              com o id do anúncio. Fica guardado no Wings System — só vai para a Meta quando um
               pedido aprovado for executado.
             </p>
             {variations.fields.length > 1 && (
@@ -1994,16 +1997,31 @@ export function PaidMediaBuilder({
         title="UTMs"
         why="É assim que o lead chega no CRM com a origem certa. Sem UTM ele aparece como “direto” e ninguém sabe qual campanha pagou por ele."
       >
-        <p className="field-hint">Gerados a partir do nome e do objetivo. Edite se precisar.</p>
-        <div className="builder-utms">
-          {UTM_KEYS.map((key) => (
-            <Field key={key} label={key} error={errors.utms?.[key]?.message}>
-              <Input className="mono" {...register(`utms.${key}`)} />
-            </Field>
-          ))}
-        </div>
+        {utmsFromPlatform(values.platform ?? '') ? (
+          <>
+            <p className="field-hint">
+              {google
+                ? 'No Google, as UTMs vêm do Sufixo do URL final da conta, que toda campanha herda. A campanha não grava sufixo próprio, e o endereço vai sem UTM.'
+                : 'Na Meta, todo anúncio novo leva os Parâmetros de URL padrão, e a Meta preenche a origem e os ids da campanha, do anúncio e do conjunto a cada clique. O endereço vai sem UTM.'}
+            </p>
+            <p className="field-hint builder-url mono">
+              {google ? GOOGLE_ACCOUNT_URL_SUFFIX : META_URL_TAGS}
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="field-hint">Gerados a partir do nome e do objetivo. Edite se precisar.</p>
+            <div className="builder-utms">
+              {UTM_KEYS.map((key) => (
+                <Field key={key} label={key} error={errors.utms?.[key]?.message}>
+                  <Input className="mono" {...register(`utms.${key}`)} />
+                </Field>
+              ))}
+            </div>
+          </>
+        )}
         <p className="field-hint builder-url mono">
-          {applyUtms(values.destinationUrl ?? '', values.utms, {
+          {adDestination(values.platform ?? '', values.destinationUrl ?? '', values.utms, {
             creativeType: values.variations?.[0]?.creativeType ?? 'image',
             position: 1,
           }) ?? 'Informe a página de destino para ver o endereço final.'}
@@ -2150,9 +2168,9 @@ export function PaidMediaBuilder({
           </dd>
           <dt>Nasce</dt>
           <dd>Pausada</dd>
-          <dt>Destino com UTMs</dt>
+          <dt>{utmsFromPlatform(values.platform ?? '') ? 'Destino' : 'Destino com UTMs'}</dt>
           <dd className="mono builder-url">
-            {applyUtms(values.destinationUrl ?? '', values.utms, {
+            {adDestination(values.platform ?? '', values.destinationUrl ?? '', values.utms, {
               creativeType: values.variations?.[0]?.creativeType ?? 'image',
               position: 1,
             }) ?? '—'}

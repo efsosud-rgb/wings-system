@@ -289,7 +289,7 @@ describe('reading RD Marketing', () => {
     expect(utmsOfTrafficSource(traffic('https://x.com/'))).toBeNull();
   });
 
-  it('reads the platforms\' standard: Meta\'s short source names and the numeric ids', () => {
+  it("reads the platforms' standard: Meta's short source names and the numeric ids", () => {
     // What Meta fills in META_URL_TAGS, as RD keeps it (a query without URL).
     const meta = utmsOfTrafficSource(
       traffic(
@@ -336,9 +336,14 @@ describe('reading RD Marketing', () => {
         'https://x.com/?utm_source=google&utm_medium=cpc&utm_campaign=23479672774&utm_content=771234567890&utm_term=franquia',
       ),
     );
-    expect(attribute({ utms: google, sourceLabel: null, campaignLabel: null }, active)).toMatchObject(
-      { platform: 'google', campaignId: 'c-google', adId: 'a-google', attribution: 'utm' },
-    );
+    expect(
+      attribute({ utms: google, sourceLabel: null, campaignLabel: null }, active),
+    ).toMatchObject({
+      platform: 'google',
+      campaignId: 'c-google',
+      adId: 'a-google',
+      attribution: 'utm',
+    });
   });
 
   it('asks RD Marketing once per lead with an e-mail, and never for a test deal', () => {

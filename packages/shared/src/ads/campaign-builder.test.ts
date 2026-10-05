@@ -167,7 +167,7 @@ describe('UTMs', () => {
   });
 });
 
-describe('the platforms\' UTM standard', () => {
+describe("the platforms' UTM standard", () => {
   const utms = buildUtms({ platform: 'meta', objective: 'lead', campaignName: 'Teste' });
 
   it('is the text decided with Eric, in one place', () => {
@@ -179,7 +179,7 @@ describe('the platforms\' UTM standard', () => {
     );
   });
 
-  it('leaves the link of a Meta or Google ad without UTMs, so the platform\'s are the only ones', () => {
+  it("leaves the link of a Meta or Google ad without UTMs, so the platform's are the only ones", () => {
     const typed = 'https://x.com.br/lp?ref=a&utm_source=old&utm_term=k#form';
     expect(adDestination('meta', typed, utms, { creativeType: 'video', position: 1 })).toBe(
       'https://x.com.br/lp?ref=a#form',
@@ -200,13 +200,15 @@ describe('the platforms\' UTM standard', () => {
     expect(hasStandardUrlTags(null)).toBe(false);
   });
 
-  it('tells the platform from a utm_source, Meta\'s short names included', () => {
-    expect(['fb', 'ig', 'msg', 'an', 'facebook', 'google', 'GOOGLE', 'rd', null].map(adPlatformOfUtmSource)).toEqual(
-      ['meta', 'meta', 'meta', 'meta', 'meta', 'google', 'google', null, null],
-    );
+  it("tells the platform from a utm_source, Meta's short names included", () => {
+    expect(
+      ['fb', 'ig', 'msg', 'an', 'facebook', 'google', 'GOOGLE', 'rd', null].map(
+        adPlatformOfUtmSource,
+      ),
+    ).toEqual(['meta', 'meta', 'meta', 'meta', 'meta', 'google', 'google', null, null]);
   });
 
-  it('spells out Meta\'s site source names', () => {
+  it("spells out Meta's site source names", () => {
     expect(['fb', 'ig', 'msg', 'an', 'IG', 'google'].map(utmSourceName)).toEqual([
       'facebook',
       'instagram',
