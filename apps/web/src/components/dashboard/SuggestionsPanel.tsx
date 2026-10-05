@@ -59,7 +59,10 @@ export function SuggestionCard({
   };
 
   return (
-    <article className="agent-card suggestion" aria-label={`Sugestão de campanha: ${proposal.name}`}>
+    <article
+      className="agent-card suggestion"
+      aria-label={`Sugestão de campanha: ${proposal.name}`}
+    >
       <header className="agent-card-head">
         <span className="agent-card-kind">{platformLabel(proposal.platform)}</span>
         <strong>{proposal.name}</strong>
@@ -117,7 +120,9 @@ export function SuggestionCard({
         </div>
         <div>
           <dt>Leads esperados no período</dt>
-          <dd className="mono">{range(suggestion.expectedLeads, (n) => n.toLocaleString('pt-BR'))}</dd>
+          <dd className="mono">
+            {range(suggestion.expectedLeads, (n) => n.toLocaleString('pt-BR'))}
+          </dd>
         </div>
       </dl>
 
@@ -167,7 +172,8 @@ export function SuggestionCard({
 
       {isApplied && (
         <p className="agent-card-state" role="status">
-          Aberta no construtor{suggestion.actedByName ? ` por ${suggestion.actedByName}` : ''}. Nada foi lançado.
+          Aberta no construtor{suggestion.actedByName ? ` por ${suggestion.actedByName}` : ''}. Nada
+          foi lançado.
         </p>
       )}
       <div className="suggestion-actions">
@@ -175,13 +181,20 @@ export function SuggestionCard({
           {isApplied ? 'Abrir de novo no construtor' : 'Abrir no construtor'}
         </Button>
         {!isApplied && (
-          <Button type="button" variant="ghost" disabled={dismiss.isPending} onClick={() => dismiss.mutate(suggestion.id)}>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={dismiss.isPending}
+            onClick={() => dismiss.mutate(suggestion.id)}
+          >
             Dispensar
           </Button>
         )}
       </div>
       {!canRequest && (
-        <p className="field-hint">O construtor abre para você ver; só quem tem permissão de pedir lança dali.</p>
+        <p className="field-hint">
+          O construtor abre para você ver; só quem tem permissão de pedir lança dali.
+        </p>
       )}
       {dismiss.isError && (
         <p className="field-error" role="alert">
@@ -208,7 +221,11 @@ export function SuggestionsPanel({ canRequest }: { canRequest: boolean }) {
   }, [follow.data?.run.status, suggestions]);
 
   if (suggestions.isError) {
-    return <Alert kind="error">Não foi possível carregar as sugestões de campanha. Tente de novo em instantes.</Alert>;
+    return (
+      <Alert kind="error">
+        Não foi possível carregar as sugestões de campanha. Tente de novo em instantes.
+      </Alert>
+    );
   }
   if (!suggestions.data) return null;
   const data = suggestions.data;
@@ -234,7 +251,9 @@ export function SuggestionsPanel({ canRequest }: { canRequest: boolean }) {
         Sugestões de novas campanhas
       </span>
       {open.length === 0 ? (
-        <p className="muted dash-note">Nenhuma sugestão aberta. Nada é lançado daqui: uma sugestão só preenche o construtor.</p>
+        <p className="muted dash-note">
+          Nenhuma sugestão aberta. Nada é lançado daqui: uma sugestão só preenche o construtor.
+        </p>
       ) : (
         <div className="suggestions-grid">
           {open.map((suggestion) => (

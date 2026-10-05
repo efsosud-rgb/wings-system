@@ -11,6 +11,7 @@ import {
   useUpdateContact,
 } from '../../api/crm.js';
 import { formatDate, formatPhone, money } from './format.js';
+import { useCreateFromQuery } from '../../components/useCreateFromQuery.js';
 
 const errorText = (error: unknown, fallback: string) =>
   error instanceof ApiError ? error.message : fallback;
@@ -78,6 +79,7 @@ function ContactList() {
   const create = useCreateContact();
   const merge = useMergeContacts();
   const [creating, setCreating] = useState(false);
+  useCreateFromQuery(() => setCreating(true));
   const [form, setForm] = useState({
     name: '',
     phone: '',

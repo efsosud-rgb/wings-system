@@ -15,6 +15,7 @@ import { MediaLibrary } from '../components/media-studio/MediaLibrary.js';
 import { ProviderStrip } from '../components/media-studio/ProviderStrip.js';
 import { StudioLayout, StudioToolGroup } from '../components/StudioLayout.js';
 import { Alert } from '../components/ui.js';
+import { PageHeader } from '../components/PageHeader.js';
 
 // The editor core is a megabyte only the workspace needs.
 const StudioWorkspace = lazy(() =>
@@ -117,9 +118,7 @@ export function MediaStudioPage() {
       : null;
     return (
       <div className="ws-page">
-        <header className="page-header page-header-slim">
-          <h1>Edição de Fotos e Vídeos</h1>
-        </header>
+        <PageHeader title="Edição de Fotos e Vídeos" />
         <Notices
           state={state}
           connected={connected}

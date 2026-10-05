@@ -13,6 +13,7 @@ import {
 } from '../../api/crm.js';
 import { RelatedDeals } from './ContactsPage.js';
 import { formatDate, formatPhone } from './format.js';
+import { useCreateFromQuery } from '../../components/useCreateFromQuery.js';
 
 const errorText = (error: unknown, fallback: string) =>
   error instanceof ApiError ? error.message : fallback;
@@ -106,6 +107,7 @@ function CompanyList() {
   const [q, setQ] = useState('');
   const [mode, setMode] = useState<'list' | 'duplicates'>('list');
   const [creating, setCreating] = useState(false);
+  useCreateFromQuery(() => setCreating(true));
   const companies = useCompanies(q, mode === 'duplicates');
   const create = useCreateCompany();
   const merge = useMergeCompanies();

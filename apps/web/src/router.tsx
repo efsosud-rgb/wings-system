@@ -14,6 +14,7 @@ import { DriveTemplatePage } from './pages/DriveTemplatePage.js';
 import { EmployeeFormPage } from './pages/EmployeeFormPage.js';
 import { EmployeesPage } from './pages/EmployeesPage.js';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage.js';
+import { HomePage } from './pages/HomePage.js';
 import { IntegrationsPage } from './pages/IntegrationsPage.js';
 import { LandingRoute } from './pages/LandingRoute.js';
 import { LandingPagesPage } from './pages/LandingPagesPage.js';
@@ -28,6 +29,7 @@ import { TasksPage } from './pages/crm/TasksPage.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { CampaignLeadsPage } from './pages/CampaignLeadsPage.js';
 import { MarketingDashboardPage } from './pages/MarketingDashboardPage.js';
+import { SalesDashboardPage } from './pages/SalesDashboardPage.js';
 import { MediaStudioPage } from './pages/MediaStudioPage.js';
 import { NotFoundPage } from './pages/NotFoundPage.js';
 import { ProjectsPage } from './pages/ProjectsPage.js';
@@ -68,6 +70,7 @@ const SCREENS: Record<string, RouteObject[]> = {
     { index: true, element: <ClientsPage /> },
     { path: ':id', element: <ClientRecordPage /> },
   ],
+  '/inicio': [{ index: true, element: <HomePage /> }],
   '/crm-vendas/landing-pages': [{ index: true, element: <LandingPagesPage /> }],
   '/crm-vendas/negociacoes': [
     { index: true, element: <DealsPage /> },
@@ -91,6 +94,7 @@ const SCREENS: Record<string, RouteObject[]> = {
   '/drive/arquivos': [{ index: true, element: <DrivePage /> }],
   '/gestao/projetos': [{ index: true, element: <ProjectsPage /> }],
   '/administracao/integracoes': [{ index: true, element: <IntegrationsPage /> }],
+  '/dashboard/vendas': [{ index: true, element: <SalesDashboardPage /> }],
   '/dashboard/marketing': [{ index: true, element: <MarketingDashboardPage /> }],
   '/dashboard/leads-campanhas': [{ index: true, element: <CampaignLeadsPage /> }],
   '/marketing/edicao': [{ index: true, element: <MediaStudioPage /> }],

@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import { Icon } from './Icon.js';
+import { PageHeader } from './PageHeader.js';
 
 /**
  * The shape every agent studio takes: conversation on one side, tools on the
@@ -33,7 +35,7 @@ export interface StudioLayoutProps {
 function ConversationPlaceholder() {
   return (
     <div className="studio-chat-placeholder">
-      <span aria-hidden="true">💬</span>
+      <Icon name="message" size={28} />
       <strong>Conversa com o agente</strong>
       <p className="muted">
         O chat ainda não está ligado. Esta área receberá a conversa com o agente — briefing,
@@ -71,10 +73,7 @@ export function StudioLayout({
 
   return (
     <>
-      <header className="page-header">
-        <h1>{title}</h1>
-        {subtitle && <p>{subtitle}</p>}
-      </header>
+      <PageHeader title={title} subtitle={subtitle} />
 
       {notice}
 

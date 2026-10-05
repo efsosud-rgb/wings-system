@@ -65,6 +65,7 @@ import {
   TextField,
 } from '../components/clients/RecordFields.js';
 import { Alert, Button, Field, Input, Select } from '../components/ui.js';
+import { PageHeader } from '../components/PageHeader.js';
 
 /**
  * Formatação → Clientes → ficha. The client's full record, one tab per
@@ -1347,9 +1348,7 @@ export function ClientRecordPage() {
   if (!record) {
     return (
       <>
-        <header className="page-header">
-          <h1>Ficha do cliente</h1>
-        </header>
+        <PageHeader title="Ficha do cliente" />
         <Alert kind="error">{errorText(query.error, 'Não foi possível abrir a ficha.')}</Alert>
         <p>
           <Link to="/formatacao/clientes">Voltar à lista</Link>
@@ -1364,31 +1363,30 @@ export function ClientRecordPage() {
 
   return (
     <>
-      <header className="page-header page-header-row">
-        <div>
-          <h1>
-            {number}
-            {record.client.name}
-          </h1>
-          <p>
+      <PageHeader
+        title={`${number}${record.client.name}`}
+        subtitle={
+          <>
             Ficha completa: os dados que o Jurídico usa nos contratos e na COF.
             {!record.client.active && ' Cliente inativo.'}
-          </p>
-        </div>
-        <div className="record-header-actions">
-          {record.documentsFolderId && (
-            <Link
-              className="btn btn-ghost btn-inline"
-              to={`/drive/arquivos?pasta=${record.documentsFolderId}`}
-            >
-              Documentos Enviados
+          </>
+        }
+        actions={
+          <>
+            {record.documentsFolderId && (
+              <Link
+                className="btn btn-ghost btn-inline"
+                to={`/drive/arquivos?pasta=${record.documentsFolderId}`}
+              >
+                Documentos Enviados
+              </Link>
+            )}
+            <Link to="/formatacao/clientes" className="btn btn-ghost btn-inline">
+              Voltar
             </Link>
-          )}
-          <Link to="/formatacao/clientes" className="btn btn-ghost btn-inline">
-            Voltar
-          </Link>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       <section className="record-progress" aria-label="Preenchimento da ficha">
         <div className="record-progress-head">

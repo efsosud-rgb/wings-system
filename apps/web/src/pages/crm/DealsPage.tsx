@@ -41,6 +41,7 @@ import { useCreateLead, useSellers } from '../../api/leads.js';
 import { CreateDealModal, CreateTaskModal } from './CreateDealModal.js';
 import { DealCard } from './DealCard.js';
 import { ImportModal } from './ImportModal.js';
+import { useCreateFromQuery } from '../../components/useCreateFromQuery.js';
 import {
   ago,
   dueLabel,
@@ -127,6 +128,7 @@ export function DealsPage() {
   const brands = useBrands();
   const counters = useDealCounters(pipeline);
   const [creating, setCreating] = useState(false);
+  useCreateFromQuery(() => setCreating(true));
   const [importing, setImporting] = useState(false);
   const [menu, setMenu] = useState(false);
   const [advanced, setAdvanced] = useState(false);

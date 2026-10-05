@@ -809,3 +809,40 @@ export const sourceBadgeOf = (
   adPlatform?: string | null,
 ): { label: string; tone: string } =>
   adPlatform === 'google' ? { label: 'Google', tone: 'google' } : LEAD_SOURCE_BADGES[source];
+
+// --- sales dashboard (Dashboard › Vendas) --------------------------------------------
+
+export const salesDashboardQuerySchema = z.object({ pipeline: z.enum(LEAD_PIPELINES) });
+
+/** One slice of open deals: a count, its value and the probability-weighted value, cents. */
+export interface SalesSlice {
+  total: number;
+  valueCents: number;
+  weightedCents: number;
+}
+
+/**
+ * Aggregates of one funnel for the sales panel, in the caller's scope (a
+ * seller sees only their own deals). Names only, never a contact.
+ */
+export interface SalesDashboard {
+  pipeline: LeadPipeline;
+  /** Open deals per stage, in the funnel's order; the stageless ones first under `stage: null`. */
+  stages: (SalesSlice & { stage: { id: string; name: string; probability: number } | null })[];
+  /** Open deals per brand; `brand: null` is "sem marca". */
+  brands: (SalesSlice & { brand: string | null })[];
+  /** Per owner: open deals and deals won this month (São Paulo); `ownerEmployeeId: null` is "sem dono". */
+  sellers: (SalesSlice & {
+    ownerEmployeeId: string | null;
+    ownerName: string | null;
+    wonMonth: number;
+    wonMonthCents: number;
+  })[];
+  open: SalesSlice;
+  wonMonth: { total: number; valueCents: number };
+  /** Won ÷ (won + lost) closed in the last 90 days; `rate` null when nothing closed. */
+  conversion: { won: number; lost: number; rate: number | null; days: number };
+  /** Deals open without a value, so "valor em aberto" can say how much it leaves out. */
+  openWithoutValue: number;
+  monthStart: string;
+}
