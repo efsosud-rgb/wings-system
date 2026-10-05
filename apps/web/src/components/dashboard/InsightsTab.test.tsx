@@ -29,7 +29,11 @@ const run: InsightRun = {
   costMicroUsd: 42_000,
   produced: 2,
   consulted: [
-    { tool: 'desempenho_campanhas', label: 'Desempenho das campanhas', summary: '3 campanhas, 30 dias' },
+    {
+      tool: 'desempenho_campanhas',
+      label: 'Desempenho das campanhas',
+      summary: '3 campanhas, 30 dias',
+    },
     { tool: 'metas_de_cpl', label: 'Metas de CPL confirmadas', summary: 'CPL R$ 45,00' },
   ],
   error: null,
@@ -41,7 +45,8 @@ function insight(overrides: Partial<InsightCard>): InsightCard {
     runId: 'run-1',
     kind: 'budget_curve',
     title: 'LEAD | FORMS satura acima de R$ 120 por dia',
-    findings: 'Entre R$ 80 e R$ 120 por dia o CPL ficou em R$ 41,00; acima de R$ 120 subiu para R$ 63,00 com os mesmos 4 leads por dia.',
+    findings:
+      'Entre R$ 80 e R$ 120 por dia o CPL ficou em R$ 41,00; acima de R$ 120 subiu para R$ 63,00 com os mesmos 4 leads por dia.',
     evidence: [
       { label: 'CPL até R$ 120/dia', value: 'R$ 41,00' },
       { label: 'CPL acima', value: 'R$ 63,00' },
@@ -89,11 +94,17 @@ const requestFromInsight = vi.fn();
 const applied = vi.fn();
 const dismiss = vi.fn();
 const navigate = vi.fn();
-const mutation = (mutate: ReturnType<typeof vi.fn>) => ({ mutate, isPending: false, isError: false, error: null });
+const mutation = (mutate: ReturnType<typeof vi.fn>) => ({
+  mutate,
+  isPending: false,
+  isError: false,
+  error: null,
+});
 
 vi.mock('../../api/auth.js', () => ({
   useSession: () => ({ data: { permissions: state.canRequest ? { 'ads.request': 'all' } : {} } }),
-  hasPermission: (user: { permissions: Record<string, string> } | null, key: string) => Boolean(user?.permissions[key]),
+  hasPermission: (user: { permissions: Record<string, string> } | null, key: string) =>
+    Boolean(user?.permissions[key]),
 }));
 
 vi.mock('../../api/dashboard.js', () => ({
@@ -136,7 +147,12 @@ const suggestion: CampaignSuggestionCard = {
     idealCustomerProfile: 'Empresário dono de negócio que quer expandir por franquias.',
     reach: { states: ['SP'], cities: [], customLocations: [] },
     destinationUrl: 'https://wingscompany.com.br/franquia',
-    utms: { utm_source: 'google', utm_medium: 'cpc', utm_campaign: 'pesquisa-franquia-sp', utm_content: '' },
+    utms: {
+      utm_source: 'google',
+      utm_medium: 'cpc',
+      utm_campaign: 'pesquisa-franquia-sp',
+      utm_content: '',
+    },
     dailyBudgetCents: 4000,
     startDate: '2026-09-28',
     endDate: '2026-10-11',
@@ -179,7 +195,13 @@ beforeEach(() => {
   state.canRequest = true;
   state.insights = {
     configured: true,
-    usage: { spentMicroUsd: 42_000, limitMicroUsd: 1_000_000, failedRuns: 0, failedMicroUsd: 0, exhausted: false },
+    usage: {
+      spentMicroUsd: 42_000,
+      limitMicroUsd: 1_000_000,
+      failedRuns: 0,
+      failedMicroUsd: 0,
+      exhausted: false,
+    },
     latestRun: run,
     runningRun: null,
     open: [insight({})],
@@ -206,8 +228,20 @@ beforeEach(() => {
   };
   state.suggestions = {
     configured: true,
-    usage: { spentMicroUsd: 42_000, limitMicroUsd: 1_000_000, failedRuns: 0, failedMicroUsd: 0, exhausted: false },
-    latestRun: { ...run, id: 'run-2', kind: 'campaign_suggestions', trigger: 'manual', requestedByName: 'Ana' },
+    usage: {
+      spentMicroUsd: 42_000,
+      limitMicroUsd: 1_000_000,
+      failedRuns: 0,
+      failedMicroUsd: 0,
+      exhausted: false,
+    },
+    latestRun: {
+      ...run,
+      id: 'run-2',
+      kind: 'campaign_suggestions',
+      trigger: 'manual',
+      requestedByName: 'Ana',
+    },
     runningRun: null,
     suggestions: [suggestion],
     nextScheduledAt: '2026-09-28T10:00:00.000Z',
@@ -226,7 +260,9 @@ const text = (element: Element | null | undefined) =>
 describe('the run bar', () => {
   it('says who generated, what it cost and what it read, and counts the verdicts', () => {
     renderTab();
-    expect(screen.getByText(/Gerados 21\/09, 07:00 pela agenda · custo US\$ 0,04 · consultou 2 fontes/)).toBeTruthy();
+    expect(
+      screen.getByText(/Gerados 21\/09, 07:00 pela agenda · custo US\$ 0,04 · consultou 2 fontes/),
+    ).toBeTruthy();
     expect(screen.getAllByText(/Hoje: US\$ 0,04 de US\$ 1,00/).length).toBe(2);
     const verdicts = screen.getByRole('region', { name: 'Vereditos das campanhas em 30 dias' });
     expect(text(verdicts)).toContain('Positiva 1');
@@ -241,14 +277,27 @@ describe('the run bar', () => {
     expect(generateInsights).toHaveBeenCalledTimes(1);
 
     cleanup();
-    state.insights = { ...state.insights, runningRun: { ...run, status: 'running', finishedAt: null } };
+    state.insights = {
+      ...state.insights,
+      runningRun: { ...run, status: 'running', finishedAt: null },
+    };
     renderTab();
     const running = screen.getAllByRole('button', { name: 'Gerando…' })[0] as HTMLButtonElement;
     expect(running.disabled).toBe(true);
     expect(screen.getByText('Uma geração está em andamento.')).toBeTruthy();
 
     cleanup();
-    state.insights = { ...state.insights, runningRun: null, usage: { spentMicroUsd: 1_000_000, limitMicroUsd: 1_000_000, failedRuns: 0, failedMicroUsd: 0, exhausted: true } };
+    state.insights = {
+      ...state.insights,
+      runningRun: null,
+      usage: {
+        spentMicroUsd: 1_000_000,
+        limitMicroUsd: 1_000_000,
+        failedRuns: 0,
+        failedMicroUsd: 0,
+        exhausted: true,
+      },
+    };
     renderTab();
     expect(screen.getByText(/O teto diário de IA dos insights foi atingido/)).toBeTruthy();
 
@@ -282,7 +331,9 @@ describe('an open insight', () => {
     state.canRequest = false;
     renderTab();
     expect(screen.queryByRole('button', { name: 'Criar pedido' })).toBeNull();
-    expect(screen.getAllByText(/Você não tem permissão para pedir alterações/).length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/Você não tem permissão para pedir alterações/).length,
+    ).toBeGreaterThan(0);
 
     cleanup();
     state.canRequest = true;
@@ -290,7 +341,12 @@ describe('an open insight', () => {
       ...state.insights,
       open: [
         insight({
-          action: { ...insight({}).action!, requestable: false, notRequestableReason: 'Esta campanha tem a verba nos conjuntos de anúncios. Ajuste no Gerenciador.' },
+          action: {
+            ...insight({}).action!,
+            requestable: false,
+            notRequestableReason:
+              'Esta campanha tem a verba nos conjuntos de anúncios. Ajuste no Gerenciador.',
+          },
         }),
       ],
     };
@@ -321,7 +377,9 @@ describe('the history', () => {
 describe('campaign suggestions', () => {
   it('shows the proposal with its expected range and the numbers behind it', () => {
     renderTab();
-    const card = screen.getByRole('article', { name: 'Sugestão de campanha: Pesquisa | Franquia SP' });
+    const card = screen.getByRole('article', {
+      name: 'Sugestão de campanha: Pesquisa | Franquia SP',
+    });
     expect(text(card)).toContain('Google Pesquisa');
     expect(text(card)).toContain('R$ 40,00');
     expect(text(card)).toContain('SP (estado todo)');
@@ -336,7 +394,10 @@ describe('campaign suggestions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Abrir no construtor' }));
     expect(applied).toHaveBeenCalledWith('sug-1');
     expect(navigate).toHaveBeenCalledWith('/marketing/trafego-pago-wings');
-    const stored = JSON.parse(sessionStorage.getItem(BUILDER_HANDOFF_KEY) ?? '{}') as { proposal?: { name?: string }; pending?: string[] };
+    const stored = JSON.parse(sessionStorage.getItem(BUILDER_HANDOFF_KEY) ?? '{}') as {
+      proposal?: { name?: string };
+      pending?: string[];
+    };
     expect(stored.proposal?.name).toBe('Pesquisa | Franquia SP');
     expect(stored.pending).toEqual([]);
     expect(requestFromInsight).not.toHaveBeenCalled();

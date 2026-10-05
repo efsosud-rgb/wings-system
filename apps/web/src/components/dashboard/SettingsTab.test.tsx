@@ -8,13 +8,19 @@ const setAccountTarget = vi.fn();
 
 vi.mock('../../api/auth.js', () => ({
   useSession: () => ({ data: { permissions: state.canConfirm ? { 'ads.request': 'all' } : {} } }),
-  hasPermission: (user: { permissions: Record<string, string> } | null, key: string) => Boolean(user?.permissions[key]),
+  hasPermission: (user: { permissions: Record<string, string> } | null, key: string) =>
+    Boolean(user?.permissions[key]),
 }));
 
 vi.mock('../../api/dashboard.js', () => ({
   useDashboardSettings: () => ({ data: state.settings, isError: false }),
   useSetCplTarget: () => ({ mutate: setTarget, isPending: false, isError: false, error: null }),
-  useSetAccountCplTarget: () => ({ mutate: setAccountTarget, isPending: false, isError: false, error: null }),
+  useSetAccountCplTarget: () => ({
+    mutate: setAccountTarget,
+    isPending: false,
+    isError: false,
+    error: null,
+  }),
 }));
 
 const { SettingsTab } = await import('./SettingsTab.js');
@@ -29,7 +35,8 @@ beforeEach(() => {
         confirmedAt: null,
         confirmedByName: null,
         proposedCents: 4500,
-        proposedBasis: 'CPL médio dos últimos 90 dias: R$ 44,10 em 3 campanha(s) de leads, 27 leads por R$ 1.190,70. Arredondado para cima.',
+        proposedBasis:
+          'CPL médio dos últimos 90 dias: R$ 44,10 em 3 campanha(s) de leads, 27 leads por R$ 1.190,70. Arredondado para cima.',
       },
       {
         objectiveKind: 'traffic',
@@ -111,7 +118,9 @@ describe('Configurações do Dashboard', () => {
     state.canConfirm = false;
     render(<SettingsTab />);
     expect(screen.queryByRole('button', { name: 'Confirmar meta' })).toBeNull();
-    expect(screen.getAllByText(/Só quem pode pedir alterações de tráfego confirma uma meta/).length).toBe(3);
+    expect(
+      screen.getAllByText(/Só quem pode pedir alterações de tráfego confirma uma meta/).length,
+    ).toBe(3);
     expect(screen.queryByRole('button', { name: 'Confirmar' })).toBeNull();
     expect(screen.getByRole('heading', { name: 'Como o veredito é calculado' })).toBeTruthy();
     expect(screen.getByText(/Bom até 10% abaixo da meta, atenção até 15% acima/)).toBeTruthy();
@@ -123,8 +132,12 @@ describe('Configurações do Dashboard', () => {
     const [meta, google] = within(table).getAllByRole('row').slice(1);
     expect(text(meta)).toContain('Sem meta da conta');
     expect(text(meta)).toContain('Só vale depois de confirmada');
-    expect((within(meta!).getByLabelText('Meta de CPL em reais') as HTMLInputElement).value).toBe('85,90');
-    expect((within(google!).getByLabelText('Meta de CPL em reais') as HTMLInputElement).value).toBe('');
+    expect((within(meta!).getByLabelText('Meta de CPL em reais') as HTMLInputElement).value).toBe(
+      '85,90',
+    );
+    expect((within(google!).getByLabelText('Meta de CPL em reais') as HTMLInputElement).value).toBe(
+      '',
+    );
     expect(setAccountTarget).not.toHaveBeenCalled();
 
     fireEvent.click(within(meta!).getByRole('button', { name: 'Confirmar' }));

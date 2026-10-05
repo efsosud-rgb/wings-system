@@ -1,5 +1,7 @@
-import { ALL_SUBMODULES } from '@wings/shared';
+import { ALL_SUBMODULES, NAVIGATION } from '@wings/shared';
 import { useLocation } from 'react-router-dom';
+import { Icon } from '../components/Icon.js';
+import { PageHeader } from '../components/PageHeader.js';
 
 /**
  * The screen behind a sub-module that has no backend yet.
@@ -11,21 +13,25 @@ import { useLocation } from 'react-router-dom';
 export function ComingSoonPage() {
   const { pathname } = useLocation();
   const submodule = ALL_SUBMODULES.find((entry) => pathname.startsWith(entry.path));
+  const module = NAVIGATION.find((entry) => entry.key === submodule?.moduleKey);
 
   return (
     <>
-      <header className="page-header">
-        <h1>{submodule?.label ?? 'Em breve'}</h1>
-        <p>{submodule?.moduleLabel ?? 'Wings System'}</p>
-      </header>
+      <PageHeader
+        title={submodule?.label ?? 'Em breve'}
+        subtitle={submodule?.moduleLabel ?? 'Wings System'}
+      />
 
       <section className="card coming-soon">
+        <span className="coming-soon-icon">
+          <Icon name={submodule?.icon ?? module?.icon ?? 'sparkles'} size={22} />
+        </span>
         <span className="status coming-soon-tag">Em breve</span>
-        <h2>Este módulo ainda não foi construído</h2>
+        <h2>Esta tela ainda não foi construída</h2>
         {submodule?.description && <p className="muted">{submodule.description}</p>}
         <p className="field-hint">
-          A navegação já está no lugar para que a estrutura do sistema seja visível por inteiro.
-          Esta tela passa a funcionar quando o módulo for implementado — nada aqui está quebrado.
+          Ela já aparece no menu para que a estrutura do sistema fique visível por inteiro. Passa a
+          funcionar quando o módulo for implementado.
         </p>
       </section>
     </>

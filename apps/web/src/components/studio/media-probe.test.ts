@@ -29,12 +29,17 @@ describe('probeMediaDuration', () => {
     expect(await probeMediaDuration('https://x/v', 'video', { document: failing })).toBeNull();
 
     const endless = documentWith((element) => {
-      Object.defineProperty(element, 'duration', { value: Number.POSITIVE_INFINITY, configurable: true });
+      Object.defineProperty(element, 'duration', {
+        value: Number.POSITIVE_INFINITY,
+        configurable: true,
+      });
       element.dispatchEvent(new Event('loadedmetadata'));
     });
     expect(await probeMediaDuration('https://x/v', 'audio', { document: endless })).toBeNull();
 
     const silent = documentWith(() => undefined);
-    expect(await probeMediaDuration('https://x/v', 'video', { document: silent, timeoutMs: 20 })).toBeNull();
+    expect(
+      await probeMediaDuration('https://x/v', 'video', { document: silent, timeoutMs: 20 }),
+    ).toBeNull();
   });
 });

@@ -101,6 +101,10 @@
   --space-5: 24px;
   --space-6: 32px;
 
+  /* the frame */
+  --sidebar-w: 236px;
+  --topbar-h: 56px;
+
   /* motion */
   --ease: cubic-bezier(0.2, 0, 0, 1);
   --duration-fast: 150ms;

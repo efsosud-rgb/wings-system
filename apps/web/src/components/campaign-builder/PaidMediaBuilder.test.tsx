@@ -591,7 +591,7 @@ describe('the paid-media builder', () => {
     render(<PaidMediaBuilder canRequest />);
     const [first, second] = screen.getAllByLabelText(/^Imagem — Criativo/);
     chooseImage(first as Element);
-    expect(screen.getByText(/1080 × 1080 px · ✓ proporção 1:1/)).toBeTruthy();
+    expect(screen.getByText(/1080 × 1080 px · proporção 1:1 certa/)).toBeTruthy();
 
     uploadSize.current = { width: 1200, height: 628 };
     chooseImage(second as Element);

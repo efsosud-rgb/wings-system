@@ -48,9 +48,22 @@ function Figures({ totals }: { totals: MetricTotals }) {
 
 function Toggle({ open, onClick, label }: { open: boolean; onClick: () => void; label: string }) {
   return (
-    <button type="button" className="tree-toggle" onClick={onClick} aria-expanded={open} aria-label={label}>
+    <button
+      type="button"
+      className="tree-toggle"
+      onClick={onClick}
+      aria-expanded={open}
+      aria-label={label}
+    >
       <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-        <path d={open ? 'M3 6l5 5 5-5' : 'M6 3l5 5-5 5'} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        <path
+          d={open ? 'M3 6l5 5 5-5' : 'M6 3l5 5-5 5'}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
       </svg>
     </button>
   );
@@ -61,7 +74,9 @@ export function Verdict({ verdict, name }: { verdict: VerdictResult; name: strin
   return (
     <details className="verdict">
       <summary aria-label={`Veredito de ${name}: ${CAMPAIGN_VERDICT_LABEL[verdict.verdict]}`}>
-        <StatePill state={stateOfVerdict(verdict.verdict)}>{CAMPAIGN_VERDICT_LABEL[verdict.verdict]}</StatePill>
+        <StatePill state={stateOfVerdict(verdict.verdict)}>
+          {CAMPAIGN_VERDICT_LABEL[verdict.verdict]}
+        </StatePill>
       </summary>
       <ul className="verdict-reasons">
         {verdict.reasons.map((reason) => (
@@ -74,7 +89,9 @@ export function Verdict({ verdict, name }: { verdict: VerdictResult; name: strin
         ))}
         {verdict.verdict === 'no_target' && (
           <li className="verdict-reason verdict-hint">
-            <Link to="/dashboard/marketing?aba=configuracoes">Confirmar a meta em Configurações</Link>
+            <Link to="/dashboard/marketing?aba=configuracoes">
+              Confirmar a meta em Configurações
+            </Link>
           </li>
         )}
       </ul>
@@ -96,7 +113,9 @@ function AdRow({ ad }: { ad: AdNode }) {
             {ad.name}
             <span className="cell-sub">
               {MIRRORED_FORMAT_LABEL[ad.format]}
-              {ad.effectiveStatus === 'DISAPPROVED' && <strong className="error-text"> · reprovado</strong>}
+              {ad.effectiveStatus === 'DISAPPROVED' && (
+                <strong className="error-text"> · reprovado</strong>
+              )}
             </span>
           </span>
         </span>
@@ -105,7 +124,9 @@ function AdRow({ ad }: { ad: AdNode }) {
       <td />
       <td className="mono">—</td>
       <td>
-        <span className={`status campaign-${ad.status.toLowerCase()}`}>{statusLabel(ad.status)}</span>
+        <span className={`status campaign-${ad.status.toLowerCase()}`}>
+          {statusLabel(ad.status)}
+        </span>
       </td>
       <td className="mono">—</td>
       <Figures totals={ad.totals} />
@@ -122,7 +143,11 @@ function AdSetRows({ adSet }: { adSet: AdSetNode }) {
         <td>
           <span className="tree-indent tree-indent-1">
             {adSet.ads.length > 0 ? (
-              <Toggle open={open} onClick={() => setOpen(!open)} label={`${open ? 'Recolher' : 'Abrir'} anúncios de ${adSet.name}`} />
+              <Toggle
+                open={open}
+                onClick={() => setOpen(!open)}
+                label={`${open ? 'Recolher' : 'Abrir'} anúncios de ${adSet.name}`}
+              />
             ) : (
               <span className="tree-toggle tree-toggle-empty" aria-hidden="true" />
             )}
@@ -138,9 +163,13 @@ function AdSetRows({ adSet }: { adSet: AdSetNode }) {
         <td />
         <td className="mono">—</td>
         <td>
-          <span className={`status campaign-${adSet.status.toLowerCase()}`}>{statusLabel(adSet.status)}</span>
+          <span className={`status campaign-${adSet.status.toLowerCase()}`}>
+            {statusLabel(adSet.status)}
+          </span>
         </td>
-        <td className="mono">{adSet.dailyBudgetCents === null ? '—' : `${formatMoney(adSet.dailyBudgetCents)}/dia`}</td>
+        <td className="mono">
+          {adSet.dailyBudgetCents === null ? '—' : `${formatMoney(adSet.dailyBudgetCents)}/dia`}
+        </td>
         <Figures totals={adSet.totals} />
         <td />
       </tr>
@@ -183,7 +212,9 @@ function CampaignActions({ campaign }: { campaign: CampaignNode }) {
   const [kind, setKind] = useState<ChangeRequestInput['kind'] | null>(null);
   const [reason, setReason] = useState('');
   const [budgetText, setBudgetText] = useState(
-    campaign.dailyBudgetCents === null ? '' : (campaign.dailyBudgetCents / 100).toFixed(2).replace('.', ','),
+    campaign.dailyBudgetCents === null
+      ? ''
+      : (campaign.dailyBudgetCents / 100).toFixed(2).replace('.', ','),
   );
   const [error, setError] = useState<string | null>(null);
   const idBase = `acao-${campaign.platform}-${campaign.externalId}`;
@@ -223,7 +254,9 @@ function CampaignActions({ campaign }: { campaign: CampaignNode }) {
       <p className="cell-sub" role="status">
         Pedido registrado, aguardando aprovação.{' '}
         {request.data.approvalId && (
-          <Link to={`/marketing/trafego-pago-wings/aprovacoes/${request.data.approvalId}`}>Abrir a aprovação</Link>
+          <Link to={`/marketing/trafego-pago-wings/aprovacoes/${request.data.approvalId}`}>
+            Abrir a aprovação
+          </Link>
         )}
       </p>
     );
@@ -252,7 +285,12 @@ function CampaignActions({ campaign }: { campaign: CampaignNode }) {
       <strong>{ACTION_LABEL[kind]}</strong>
       {kind === 'set_daily_budget' && (
         <Field label="Nova verba por dia (R$)">
-          <Input id={`${idBase}-verba`} inputMode="decimal" value={budgetText} onChange={(event) => setBudgetText(event.target.value)} />
+          <Input
+            id={`${idBase}-verba`}
+            inputMode="decimal"
+            value={budgetText}
+            onChange={(event) => setBudgetText(event.target.value)}
+          />
         </Field>
       )}
       <Field label="Motivo" error={error ?? undefined} errorId={`${idBase}-erro`}>
@@ -264,16 +302,23 @@ function CampaignActions({ campaign }: { campaign: CampaignNode }) {
         />
       </Field>
       <p className="cell-sub">
-        Vira um pedido na fila de aprovações. Nada muda {campaign.platform === 'google' ? 'no Google' : 'na Meta'} até alguém
-        aprovar e clicar em Executar.
+        Vira um pedido na fila de aprovações. Nada muda{' '}
+        {campaign.platform === 'google' ? 'no Google' : 'na Meta'} até alguém aprovar e clicar em
+        Executar.
         {kind === 'resume_campaign' &&
           (campaign.platform === 'google'
             ? ' Retomar liga a campanha, o grupo e o anúncio criados pelo sistema.'
             : ' Retomar liga a campanha, o conjunto e os anúncios criados pelo sistema.')}
-        {kind === 'set_daily_budget' && campaign.dailyBudgetCents !== null && ` Hoje: ${formatBrl(campaign.dailyBudgetCents)} por dia.`}
+        {kind === 'set_daily_budget' &&
+          campaign.dailyBudgetCents !== null &&
+          ` Hoje: ${formatBrl(campaign.dailyBudgetCents)} por dia.`}
       </p>
       {request.isError && (
-        <Alert kind="error">{request.error instanceof Error ? request.error.message : 'Não foi possível registrar o pedido.'}</Alert>
+        <Alert kind="error">
+          {request.error instanceof Error
+            ? request.error.message
+            : 'Não foi possível registrar o pedido.'}
+        </Alert>
       )}
       <div className="campaign-actions">
         <Button type="submit" disabled={request.isPending}>
@@ -303,7 +348,11 @@ function CampaignRows({ campaign, canRequest }: { campaign: CampaignNode; canReq
         <td>
           <span className="tree-indent">
             {children > 0 ? (
-              <Toggle open={open} onClick={() => setOpen(!open)} label={`${open ? 'Recolher' : 'Abrir'} ${campaign.name}`} />
+              <Toggle
+                open={open}
+                onClick={() => setOpen(!open)}
+                label={`${open ? 'Recolher' : 'Abrir'} ${campaign.name}`}
+              />
             ) : (
               <span className="tree-toggle tree-toggle-empty" aria-hidden="true" />
             )}
@@ -316,7 +365,9 @@ function CampaignRows({ campaign, canRequest }: { campaign: CampaignNode; canReq
               )}
               <span className="cell-sub">
                 {campaign.objective ? campaign.objective.replace('OUTCOME_', '').toLowerCase() : ''}
-                {campaign.systemCreated ? `${campaign.objective ? ' · ' : ''}criada pelo sistema` : ''}
+                {campaign.systemCreated
+                  ? `${campaign.objective ? ' · ' : ''}criada pelo sistema`
+                  : ''}
               </span>
             </span>
           </span>
@@ -330,16 +381,26 @@ function CampaignRows({ campaign, canRequest }: { campaign: CampaignNode; canReq
           )}
         </td>
         <td>
-          <span className={`status campaign-${campaign.status.toLowerCase()}`}>{statusLabel(campaign.status)}</span>
+          <span className={`status campaign-${campaign.status.toLowerCase()}`}>
+            {statusLabel(campaign.status)}
+          </span>
         </td>
         <td className="mono">
-          {campaign.dailyBudgetCents === null ? '—' : `${formatMoney(campaign.dailyBudgetCents)}/dia`}
+          {campaign.dailyBudgetCents === null
+            ? '—'
+            : `${formatMoney(campaign.dailyBudgetCents)}/dia`}
           <span className="cell-sub">
-            {campaign.budgetLevel === 'campaign' ? 'CBO' : campaign.budgetLevel === 'ad_set' ? 'ABO, nos conjuntos' : 'sem orçamento próprio'}
+            {campaign.budgetLevel === 'campaign'
+              ? 'CBO'
+              : campaign.budgetLevel === 'ad_set'
+                ? 'ABO, nos conjuntos'
+                : 'sem orçamento próprio'}
           </span>
         </td>
         <Figures totals={campaign.totals} />
-        <td>{campaign.systemCreated && canRequest ? <CampaignActions campaign={campaign} /> : null}</td>
+        <td>
+          {campaign.systemCreated && canRequest ? <CampaignActions campaign={campaign} /> : null}
+        </td>
       </tr>
       {open && campaign.adSets.map((adSet) => <AdSetRows key={adSet.externalId} adSet={adSet} />)}
       {open && campaign.orphanAds.map((ad) => <AdRow key={ad.externalId} ad={ad} />)}
@@ -374,25 +435,94 @@ export function CampaignsTab({ data }: { data: DashboardCampaigns }) {
       : data.campaigns;
     // The API sends the newest first; the other two orders are made here.
     if (order === 'antigas') return [...matched].reverse();
-    if (order === 'gasto') return [...matched].sort((a, b) => b.totals.spendCents - a.totals.spendCents);
+    if (order === 'gasto')
+      return [...matched].sort((a, b) => b.totals.spendCents - a.totals.spendCents);
     return matched;
   }, [data.campaigns, filter, order]);
 
   const exportCsv = () => {
-    const header = ['Nível', 'Plataforma', 'Campanha', 'Conjunto', 'Anúncio', 'Formato', 'Veredito', 'Motivos', 'Situação', 'Orçamento diário', 'Gasto', 'Impressões', 'Cliques', 'CTR %', 'CPC', 'Leads', 'CPL'];
+    const header = [
+      'Nível',
+      'Plataforma',
+      'Campanha',
+      'Conjunto',
+      'Anúncio',
+      'Formato',
+      'Veredito',
+      'Motivos',
+      'Situação',
+      'Orçamento diário',
+      'Gasto',
+      'Impressões',
+      'Cliques',
+      'CTR %',
+      'CPC',
+      'Leads',
+      'CPL',
+    ];
     const rows: CsvCell[][] = [];
     for (const campaign of visible) {
       const platform = AD_PLATFORM_LABEL[campaign.platform];
-      const reasons = campaign.verdict.reasons.map((reason) => `${VERDICT_SIGNAL_LABEL[reason.signal]}: ${reason.text}`).join(' | ');
-      rows.push(['campanha', platform, campaign.name, '', '', '', CAMPAIGN_VERDICT_LABEL[campaign.verdict.verdict], reasons, statusLabel(campaign.status), reais(campaign.dailyBudgetCents), ...csvFigures(campaign.totals)]);
+      const reasons = campaign.verdict.reasons
+        .map((reason) => `${VERDICT_SIGNAL_LABEL[reason.signal]}: ${reason.text}`)
+        .join(' | ');
+      rows.push([
+        'campanha',
+        platform,
+        campaign.name,
+        '',
+        '',
+        '',
+        CAMPAIGN_VERDICT_LABEL[campaign.verdict.verdict],
+        reasons,
+        statusLabel(campaign.status),
+        reais(campaign.dailyBudgetCents),
+        ...csvFigures(campaign.totals),
+      ]);
       for (const adSet of campaign.adSets) {
-        rows.push(['conjunto', platform, campaign.name, adSet.name, '', '', '', '', statusLabel(adSet.status), reais(adSet.dailyBudgetCents), ...csvFigures(adSet.totals)]);
+        rows.push([
+          'conjunto',
+          platform,
+          campaign.name,
+          adSet.name,
+          '',
+          '',
+          '',
+          '',
+          statusLabel(adSet.status),
+          reais(adSet.dailyBudgetCents),
+          ...csvFigures(adSet.totals),
+        ]);
         for (const ad of adSet.ads) {
-          rows.push(['anúncio', platform, campaign.name, adSet.name, ad.name, MIRRORED_FORMAT_LABEL[ad.format], '', '', statusLabel(ad.status), null, ...csvFigures(ad.totals)]);
+          rows.push([
+            'anúncio',
+            platform,
+            campaign.name,
+            adSet.name,
+            ad.name,
+            MIRRORED_FORMAT_LABEL[ad.format],
+            '',
+            '',
+            statusLabel(ad.status),
+            null,
+            ...csvFigures(ad.totals),
+          ]);
         }
       }
       for (const ad of campaign.orphanAds) {
-        rows.push(['anúncio', platform, campaign.name, '', ad.name, MIRRORED_FORMAT_LABEL[ad.format], '', '', statusLabel(ad.status), null, ...csvFigures(ad.totals)]);
+        rows.push([
+          'anúncio',
+          platform,
+          campaign.name,
+          '',
+          ad.name,
+          MIRRORED_FORMAT_LABEL[ad.format],
+          '',
+          '',
+          statusLabel(ad.status),
+          null,
+          ...csvFigures(ad.totals),
+        ]);
       }
     }
     downloadCsv(`campanhas-${data.since}-a-${data.until}.csv`, toCsv(header, rows));
@@ -425,7 +555,11 @@ export function CampaignsTab({ data }: { data: DashboardCampaigns }) {
       </div>
 
       {visible.length === 0 ? (
-        <p className="muted">{data.campaigns.length === 0 ? 'Nenhuma campanha espelhada ainda.' : 'Nenhuma campanha com esse nome.'}</p>
+        <p className="muted">
+          {data.campaigns.length === 0
+            ? 'Nenhuma campanha espelhada ainda.'
+            : 'Nenhuma campanha com esse nome.'}
+        </p>
       ) : (
         <>
           <div className="table-wrap">
@@ -438,13 +572,27 @@ export function CampaignsTab({ data }: { data: DashboardCampaigns }) {
                   <th scope="col">Veredito</th>
                   <th scope="col">Situação</th>
                   <th scope="col">Orçamento</th>
-                  <th scope="col" className="num">Gasto</th>
-                  <th scope="col" className="num">Impressões</th>
-                  <th scope="col" className="num">Cliques</th>
-                  <th scope="col" className="num">CTR</th>
-                  <th scope="col" className="num">CPC</th>
-                  <th scope="col" className="num">Leads</th>
-                  <th scope="col" className="num">CPL</th>
+                  <th scope="col" className="num">
+                    Gasto
+                  </th>
+                  <th scope="col" className="num">
+                    Impressões
+                  </th>
+                  <th scope="col" className="num">
+                    Cliques
+                  </th>
+                  <th scope="col" className="num">
+                    CTR
+                  </th>
+                  <th scope="col" className="num">
+                    CPC
+                  </th>
+                  <th scope="col" className="num">
+                    Leads
+                  </th>
+                  <th scope="col" className="num">
+                    CPL
+                  </th>
                   <th scope="col">Pedidos</th>
                 </tr>
               </thead>
@@ -460,12 +608,15 @@ export function CampaignsTab({ data }: { data: DashboardCampaigns }) {
             </table>
           </div>
           <p className="dash-note cell-sub">
-            O veredito segue o número do objetivo da campanha (CPL para leads, CTR para as demais) e mais quatro sinais: CTR contra a
-            mediana da conta em 90 dias, tendência de 7 dias contra os 7 anteriores, frequência e ritmo de gasto. Positiva quando o
-            CPL fica até {pct(1 - VERDICT_RULES.cplGoodRatio)} abaixo da meta, Atenção até {pct(VERDICT_RULES.cplAttentionRatio - 1)} acima,
-            Negativa além disso ou com dois sinais ruins; frequência acima de {VERDICT_RULES.frequencyBadMilli / 1000} e gasto fora de{' '}
-            {pct(VERDICT_RULES.pacingAttentionMin)} a {pct(VERDICT_RULES.pacingAttentionMax)} do orçamento contam contra. Abaixo de{' '}
-            {formatMoney(VERDICT_RULES.minSpendCents)} ou {formatInt(VERDICT_RULES.minImpressions)} impressões não há veredito.
+            O veredito segue o número do objetivo da campanha (CPL para leads, CTR para as demais) e
+            mais quatro sinais: CTR contra a mediana da conta em 90 dias, tendência de 7 dias contra
+            os 7 anteriores, frequência e ritmo de gasto. Positiva quando o CPL fica até{' '}
+            {pct(1 - VERDICT_RULES.cplGoodRatio)} abaixo da meta, Atenção até{' '}
+            {pct(VERDICT_RULES.cplAttentionRatio - 1)} acima, Negativa além disso ou com dois sinais
+            ruins; frequência acima de {VERDICT_RULES.frequencyBadMilli / 1000} e gasto fora de{' '}
+            {pct(VERDICT_RULES.pacingAttentionMin)} a {pct(VERDICT_RULES.pacingAttentionMax)} do
+            orçamento contam contra. Abaixo de {formatMoney(VERDICT_RULES.minSpendCents)} ou{' '}
+            {formatInt(VERDICT_RULES.minImpressions)} impressões não há veredito.
           </p>
         </>
       )}
