@@ -368,7 +368,7 @@ export function leadsToCsv(items: readonly LeadListItem[]): string {
     when(lead.createdAt),
     when(lead.stageChangedAt),
   ]);
-  return `﻿${toCsv([EXPORT_HEADERS as unknown as string[], ...rows])}`;
+  return `\uFEFF${toCsv([EXPORT_HEADERS as unknown as string[], ...rows])}`;
 }
 
 export async function exportLeads(db: Database, filter: LeadListFilter, limit: number) {
