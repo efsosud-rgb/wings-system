@@ -631,7 +631,7 @@ class RankedBars3D extends Scene3D {
         },
       ]);
     }
-    const total = items.reduce((a, s) => a + (s.value || 0), 0);
+    const total = spec.shareBase ?? items.reduce((a, s) => a + (s.value || 0), 0);
     const max = Math.max(1, ...items.map((s) => s.value || 0));
     const L = 7;
     const t = 0.36;
@@ -861,6 +861,7 @@ export function makeScene(
         items: spec.stages,
         format: spec.format,
         totalLabel: spec.totalLabel ?? 'das abertas',
+        shareBase: spec.shareBase,
         sort: false,
         limit: Infinity,
       });

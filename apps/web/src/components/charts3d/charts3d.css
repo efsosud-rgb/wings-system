@@ -477,3 +477,12 @@
     font-size: clamp(17px, 5vw, var(--text-2xl));
   }
 }
+
+.sales-kpis {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.sales-kpis .sales-kpi strong {
+  font-size: clamp(18px, 1.7vw, var(--text-2xl));
+  white-space: nowrap;
+}

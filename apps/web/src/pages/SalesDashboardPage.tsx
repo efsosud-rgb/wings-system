@@ -494,7 +494,8 @@ function Funnel({ data }: { data: SalesDashboard }) {
             kind: 'funnel',
             stages: steps.map((step) => ({ label: step.stage!.name, value: step.reached })),
             format: 'int',
-            totalLabel: 'das criadas no período',
+            totalLabel: 'das que chegaram à primeira etapa',
+            shareBase: Math.max(...steps.map((step) => step.reached)),
           }}
           height={Math.max(220, steps.length * 40 + 40)}
           ariaLabel="Negociações criadas no período por etapa alcançada"
@@ -1010,13 +1011,13 @@ export function SalesDashboardPage() {
               </Card>
             )}
             {!own && (
-              <Card id="sales-brands" title={data.pipeline ? 'Por marca' : 'Por marca e serviço'}>
-                <Brands data={data} />
+              <Card id="sales-origins" title="Por origem e campanha" wide>
+                <Origins data={data} ownerFiltered={!!filters.owner} />
               </Card>
             )}
             {!own && (
-              <Card id="sales-origins" title="Por origem e campanha" wide>
-                <Origins data={data} ownerFiltered={!!filters.owner} />
+              <Card id="sales-brands" title={data.pipeline ? 'Por marca' : 'Por marca e serviço'}>
+                <Brands data={data} />
               </Card>
             )}
             {!own && (
