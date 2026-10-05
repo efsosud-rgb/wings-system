@@ -10,7 +10,8 @@ import {
 } from '@wings/shared';
 import { downloadCsv, percent, reais, toCsv } from '../../lib/csv.js';
 import { Button } from '../ui.js';
-import { BarList } from './charts.js';
+import { Chart3D } from '../charts3d/Chart3D.js';
+import { ChartTable } from './charts3d.js';
 import {
   formatInt,
   formatMilli,
@@ -137,34 +138,44 @@ export function CreativesTab({ data }: { data: DashboardCreatives }) {
 
       <section className="dash-section">
         <h2>Por formato</h2>
-        <BarList
-          color="var(--viz-meta)"
-          emptyText="Nenhum anúncio entregou no período."
-          rows={data.formats.map((format) => {
-            const ratios = ratiosOf(format.totals);
-            return {
-              key: format.format,
-              label: (
-                <>
-                  {MIRRORED_FORMAT_LABEL[format.format]}
-                  <span className="cell-sub">
-                    {format.ads} {format.ads === 1 ? 'anúncio' : 'anúncios'}
-                  </span>
-                </>
-              ),
-              amount: format.totals.spendCents,
-              detail: (
-                <>
-                  <b className="mono">{formatMoney(format.totals.spendCents)}</b>
-                  <span className="cell-sub">
-                    CTR {formatPercentMilli(ratios.ctrMilli)} · CPL{' '}
-                    {formatMoney(ratios.costPerLeadCents)}
-                  </span>
-                </>
-              ),
-            };
-          })}
-        />
+        {data.formats.length === 0 ? (
+          <p className="muted">Nenhum anúncio entregou no período.</p>
+        ) : (
+          <Chart3D
+            height={Math.min(300, 70 + Math.min(data.formats.length, 6) * 38)}
+            ariaLabel="Gasto por formato de anúncio"
+            spec={{
+              kind: 'ranked',
+              items: data.formats.map((format) => ({
+                label: MIRRORED_FORMAT_LABEL[format.format],
+                value: format.totals.spendCents,
+              })),
+              format: 'brl',
+              totalLabel: 'do gasto',
+            }}
+            table={
+              <ChartTable
+                caption="Gasto, CTR e custo por lead por formato"
+                head={['Formato', 'Anúncios', 'Gasto', 'CTR', 'CPL']}
+                rows={data.formats.map((format) => {
+                  const ratios = ratiosOf(format.totals);
+                  return {
+                    key: format.format,
+                    cells: [
+                      MIRRORED_FORMAT_LABEL[format.format],
+                      formatInt(format.ads),
+                      formatMoney(format.totals.spendCents),
+                      formatPercentMilli(ratios.ctrMilli),
+                      format.totals.conversions > 0
+                        ? formatMoney(ratios.costPerLeadCents)
+                        : '— (sem leads)',
+                    ],
+                  };
+                })}
+              />
+            }
+          />
+        )}
       </section>
 
       <section className="dash-section">

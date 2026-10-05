@@ -34,6 +34,14 @@ const board = (overrides: Partial<SalesDashboard> = {}): SalesDashboard => ({
     previousYear: results(),
   },
   goalCents: null,
+  trend: {
+    bucket: 'day',
+    days: ['2026-10-01', '2026-10-02', '2026-10-03'],
+    current: [0, 120_000, null],
+    previous: [50_000, 100_000, 100_000],
+    previousYear: [0, 0, 0],
+    goalCents: null,
+  },
   open: { total: 5, valueCents: 400_000, weightedCents: 200_000, withoutValue: 3 },
   forecast: {
     wonCents: 120_000,
@@ -282,5 +290,38 @@ describe('Dashboard › Vendas v1', () => {
     answer = board({ pipeline: null, funnel: null });
     show();
     expect(screen.getByText(/escolha um funil no filtro para ver as etapas/)).toBeTruthy();
+  });
+
+  it("draws row 2 as accumulated sales against the comparison, with its table and the goal's reason", () => {
+    show();
+    const trend = screen.getByRole('region', { name: 'Tendência · vendas acumuladas' });
+    expect(within(trend).getByText(/Meta: — \(meta do mês não cadastrada\)/)).toBeTruthy();
+    const rows = within(trend).getAllByRole('row');
+    expect(rows[0]!.textContent).toMatch(
+      /Dia.*Acumulado atual.*Acumulado período anterior.*Diferença/,
+    );
+    expect(within(rows[1]!).getByRole('cell', { name: '01/10' })).toBeTruthy();
+    expect(rows[1]!.textContent).toMatch(/−R\$\s?500,00/);
+    expect(rows[2]!.textContent).toMatch(/R\$\s?1\.200,00.*R\$\s?1\.000,00.*\+R\$\s?200,00/);
+    // After today: no value, never a zero.
+    expect(within(rows[3]!).getAllByRole('cell', { name: '—' })).toHaveLength(2);
+  });
+
+  it('says so when nothing was won in the period nor before', () => {
+    answer = board({
+      trend: {
+        bucket: 'week',
+        days: ['2026-01-01'],
+        current: [0],
+        previous: [0],
+        previousYear: [0],
+        goalCents: null,
+      },
+    });
+    show('/dashboard/vendas?comparar=none');
+    const trend = screen.getByRole('region', { name: 'Tendência · vendas acumuladas' });
+    expect(within(trend).getByText(/nenhuma venda ganha com valor no período\./)).toBeTruthy();
+    expect(within(trend).getByText(/Por semana porque o período passa de 92 dias/)).toBeTruthy();
+    expect(within(trend).queryByText(/Diferença/)).toBeNull();
   });
 });

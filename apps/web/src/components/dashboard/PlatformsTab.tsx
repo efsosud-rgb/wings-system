@@ -7,13 +7,15 @@ import {
   type DashboardPlatforms,
   type MetricRatios,
   type MetricTotals,
-  type PlatformPerformance,
 } from '@wings/shared';
 import { downloadCsv, percent, reais, toCsv, type CsvCell } from '../../lib/csv.js';
 import { Button } from '../ui.js';
-import { DailyLines } from './charts.js';
+import { Chart3D } from '../charts3d/Chart3D.js';
+import { SERIES } from '../charts3d/spec.js';
+import { ChartTable, SOURCE_SLOT } from './charts3d.js';
 import {
   formatBrl,
+  formatDayShort,
   formatInt,
   formatMilli,
   formatMoney,
@@ -78,11 +80,6 @@ export function Delta({
   );
 }
 
-const COLOR: Record<PlatformPerformance['platform'], string> = {
-  meta: 'var(--viz-meta)',
-  google: 'var(--viz-google)',
-};
-
 export function PlatformsTab({ data }: { data: DashboardPlatforms }) {
   const columns = data.platforms.map((platform) => ({
     platform,
@@ -117,6 +114,7 @@ export function PlatformsTab({ data }: { data: DashboardPlatforms }) {
   };
 
   const configured = data.platforms.filter((platform) => platform.accounts.length > 0);
+  const days = configured[0]?.daily.map((point) => point.day) ?? [];
 
   return (
     <>
@@ -133,15 +131,32 @@ export function PlatformsTab({ data }: { data: DashboardPlatforms }) {
       {configured.length === 0 ? (
         <p className="muted">Nenhuma conta de anúncios configurada.</p>
       ) : (
-        <DailyLines
-          series={configured.map((platform) => ({
-            key: platform.platform,
-            label: AD_PLATFORM_LABEL[platform.platform],
-            color: COLOR[platform.platform],
-            points: platform.daily,
-          }))}
-          format={formatBrl}
+        <Chart3D
+          height={260}
           ariaLabel="Gasto por dia, por plataforma"
+          spec={{
+            kind: 'line',
+            categories: days.map(formatDayShort),
+            series: configured.map((platform) => ({
+              name: AD_PLATFORM_LABEL[platform.platform],
+              slot: SOURCE_SLOT[platform.platform],
+              values: platform.daily.map((point) => point.amount),
+            })),
+            format: 'brl',
+          }}
+          table={
+            <ChartTable
+              caption="Gasto por dia, por plataforma"
+              head={['Dia', ...configured.map((platform) => AD_PLATFORM_LABEL[platform.platform])]}
+              rows={days.map((day, index) => ({
+                key: day,
+                cells: [
+                  formatDayShort(day),
+                  ...configured.map((platform) => formatBrl(platform.daily[index]?.amount ?? 0)),
+                ],
+              }))}
+            />
+          }
         />
       )}
 
@@ -154,7 +169,7 @@ export function PlatformsTab({ data }: { data: DashboardPlatforms }) {
                 <th key={c.platform.platform} scope="col" colSpan={2}>
                   <i
                     className="legend-dot"
-                    style={{ background: COLOR[c.platform.platform] }}
+                    style={{ background: SERIES[SOURCE_SLOT[c.platform.platform]] }}
                     aria-hidden="true"
                   />
                   {AD_PLATFORM_LABEL[c.platform.platform]}

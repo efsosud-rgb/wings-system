@@ -10,10 +10,12 @@ import {
   type HealthItem,
   type SpendStrip,
 } from '@wings/shared';
+import { SERIES } from '../charts3d/spec.js';
 import { Link } from 'react-router-dom';
 import { Alert } from '../ui.js';
-import { DailyColumns, MonthMeter } from './charts.js';
-import { formatAmount, formatDateTime, formatMonth, since } from './format.js';
+import { Chart3D } from '../charts3d/Chart3D.js';
+import { ChartTable, KpiCard, SOURCE_SLOT } from './charts3d.js';
+import { formatAmount, formatDateTime, formatDayShort, formatMonth, since } from './format.js';
 import { StatePill, stateOfHealth } from './icons.js';
 
 /**
@@ -23,14 +25,6 @@ import { StatePill, stateOfHealth } from './icons.js';
  * Below the strips, the account's health: four checks per platform, each
  * with its state, what was seen and what to do about it.
  */
-
-const COLOR: Record<SpendStrip['source'], string> = {
-  meta: 'var(--viz-meta)',
-  google: 'var(--viz-google)',
-  kairogen: 'var(--viz-kairogen)',
-  ai: 'var(--viz-ai)',
-  media: 'var(--viz-media)',
-};
 
 /** A setup note quotes the command to run; it is shown as code, not prose. */
 function SetupNote({ note }: { note: string }) {
@@ -51,12 +45,26 @@ function SetupNote({ note }: { note: string }) {
 function Strip({ strip }: { strip: SpendStrip }) {
   const money = (value: number | null) => formatAmount(value, strip.unit);
   const dailyLabel = strip.source === 'ai' ? 'Teto diário por pessoa' : 'Orçamento diário ativo';
+  const slot = SOURCE_SLOT[strip.source];
+  const paid = strip.source === 'meta' || strip.source === 'google';
+  const forecastMissing = !strip.configured
+    ? 'fonte não configurada'
+    : paid
+      ? 'nenhuma conta lida ainda'
+      : 'sai depois do primeiro dia completo';
+  // Reais arrive in cents, as the charts expect; credits are counted.
+  const format = strip.unit === 'brl' ? 'brl' : 'int';
+  const month: { label: string; value: number | null; missing: string; neutral?: boolean }[] = [
+    { label: 'Gasto no mês', value: strip.spent, missing: 'sem gasto lido' },
+    { label: 'Previsto', value: strip.forecast, missing: forecastMissing },
+    { label: 'Teto do mês', value: strip.ceiling, missing: 'não cadastrado', neutral: true },
+  ];
 
   return (
-    <li className="strip" style={{ '--strip-color': COLOR[strip.source] } as React.CSSProperties}>
+    <li className="card strip">
       <header className="strip-head">
         <h3>
-          <i className="strip-dot" aria-hidden="true" />
+          <i className="strip-dot" style={{ background: SERIES[slot] }} aria-hidden="true" />
           {SPEND_SOURCE_LABEL[strip.source]}
         </h3>
         <span className="muted">
@@ -90,53 +98,96 @@ function Strip({ strip }: { strip: SpendStrip }) {
       {strip.setupNote && <SetupNote note={strip.setupNote} />}
       {strip.periodMissingNote && <Alert kind="warning">{strip.periodMissingNote}</Alert>}
 
-      <dl className="strip-figures">
-        <div>
-          <dt>Gasto no mês</dt>
-          <dd>{money(strip.spent)}</dd>
-        </div>
-        <div>
-          <dt>Previsto para o mês</dt>
-          <dd>
-            {money(strip.forecast)}
-            {strip.forecastRule && (
-              <span className="cell-sub forecast-rule">{strip.forecastRule}</span>
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>Disponível</dt>
-          <dd>{money(strip.available)}</dd>
-        </div>
-        <div>
-          <dt>Saldo na conta</dt>
-          <dd>{money(strip.balance)}</dd>
-        </div>
-        <div>
-          <dt>Teto do mês</dt>
-          <dd>{money(strip.ceiling)}</dd>
-        </div>
-      </dl>
+      <div className="sales-kpis strip-kpis">
+        <KpiCard title="Gasto no mês" value={money(strip.spent)} />
+        <KpiCard
+          title="Previsto para o mês"
+          value={money(strip.forecast)}
+          note={strip.forecast === null ? forecastMissing : undefined}
+        />
+        <KpiCard
+          title="Disponível"
+          value={money(strip.available)}
+          note={strip.available === null ? 'nenhum teto limita esta fonte' : undefined}
+        />
+        <KpiCard
+          title="Saldo na conta"
+          value={money(strip.balance)}
+          note={strip.balance === null ? 'a plataforma não informa' : undefined}
+        />
+        <KpiCard
+          title="Teto do mês"
+          value={money(strip.ceiling)}
+          note={strip.ceiling === null ? 'não cadastrado' : undefined}
+        />
+      </div>
+      {strip.configured && (
+        <details className="strip-how">
+          <summary>Como calculamos o previsto</summary>
+          <p>
+            {strip.forecastRule ??
+              'Linha reta: o gasto até hoje dividido pelos dias passados, vezes os dias do mês.'}
+          </p>
+        </details>
+      )}
 
-      <MonthMeter
-        spent={strip.spent}
-        forecast={strip.forecast}
-        ceiling={strip.ceiling}
-        color={COLOR[strip.source]}
-        label={`${SPEND_SOURCE_LABEL[strip.source]}: gasto ${money(strip.spent)} de ${money(strip.ceiling)}`}
-      />
-
-      <DailyColumns
-        points={strip.daily}
-        color={COLOR[strip.source]}
-        format={money}
-        reference={
-          strip.activeDailyBudget !== null && strip.activeDailyBudget > 0
-            ? { amount: strip.activeDailyBudget, label: dailyLabel }
-            : null
-        }
-        ariaLabel={`${SPEND_SOURCE_LABEL[strip.source]}, gasto por dia no mês`}
-      />
+      <div className="strip-charts">
+        <Chart3D
+          className="strip-month"
+          height={170}
+          ariaLabel={`${SPEND_SOURCE_LABEL[strip.source]}: gasto, previsto e teto do mês`}
+          spec={{
+            kind: 'ranked',
+            sort: false,
+            limit: Infinity,
+            slot,
+            format,
+            totalLabel: strip.ceiling ? 'do teto' : 'do previsto',
+            shareBase: strip.ceiling ?? strip.forecast ?? undefined,
+            items: month.map((row) => ({
+              label: row.label,
+              value: row.value ?? 0,
+              neutral: row.neutral,
+            })),
+          }}
+          table={
+            <ChartTable
+              caption={`${SPEND_SOURCE_LABEL[strip.source]} no mês`}
+              head={['', 'Valor']}
+              rows={month.map((row) => ({
+                key: row.label,
+                cells: [row.label, row.value === null ? `— (${row.missing})` : money(row.value)],
+                neutral: row.neutral,
+              }))}
+            />
+          }
+        />
+        <Chart3D
+          className="strip-daily"
+          height={200}
+          ariaLabel={`${SPEND_SOURCE_LABEL[strip.source]}, gasto por dia no mês`}
+          spec={{
+            kind: 'columns',
+            categories: strip.daily.map((point) => formatDayShort(point.day)),
+            series: [{ name: 'Gasto', values: strip.daily.map((point) => point.amount), slot }],
+            format,
+            reference:
+              strip.activeDailyBudget !== null && strip.activeDailyBudget > 0
+                ? { value: strip.activeDailyBudget, label: dailyLabel }
+                : null,
+          }}
+          table={
+            <ChartTable
+              caption={`${SPEND_SOURCE_LABEL[strip.source]}, gasto por dia`}
+              head={['Dia', 'Gasto']}
+              rows={strip.daily.map((point) => ({
+                key: point.day,
+                cells: [formatDayShort(point.day), money(point.amount)],
+              }))}
+            />
+          }
+        />
+      </div>
     </li>
   );
 }

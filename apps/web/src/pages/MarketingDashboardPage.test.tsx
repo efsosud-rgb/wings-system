@@ -475,6 +475,28 @@ describe('the overview', () => {
     expect(within(ai as HTMLElement).getAllByText('—').length).toBeGreaterThanOrEqual(2);
   });
 
+  it('puts the figures in cards and the forecast arithmetic behind "como calculamos"', () => {
+    data.overview = buildOverview({
+      strips: [
+        strip({
+          forecastRule: 'R$ 1.236,10 gastos + R$ 100,00 por dia nos 11 dias que faltam',
+        }),
+      ],
+    });
+    renderAt();
+    const meta = screen
+      .getAllByRole('listitem')
+      .filter((item) => item.classList.contains('strip'))[0] as HTMLElement;
+    expect(within(meta).getByLabelText(/Previsto para o mês: R\$\s?2\.318,00/)).toBeTruthy();
+    const how = within(meta).getByText('Como calculamos o previsto').closest('details')!;
+    expect(how.open).toBe(false);
+    expect(text(how)).toContain('R$ 100,00 por dia nos 11 dias que faltam');
+    // Without WebGL each chart is its table: the month against the ceiling, then each day.
+    expect(within(meta).getByRole('table', { name: 'Meta Ads no mês' })).toBeTruthy();
+    expect(within(meta).getByRole('cell', { name: 'Teto do mês' })).toBeTruthy();
+    expect(within(meta).getByRole('table', { name: 'Meta Ads, gasto por dia' })).toBeTruthy();
+  });
+
   it('says when a source is not configured instead of showing zeros as spend', () => {
     renderAt();
     const media = screen
@@ -839,10 +861,13 @@ describe('site and funnel', () => {
       ],
     };
     renderAt('/dashboard/marketing?aba=funil');
-    const sales = screen.getByText('Vendas').closest('li');
-    expect(text(sales)).toContain('custo por etapa R$ 600,00');
-    const meetings = screen.getByText('Reuniões').closest('li');
+    // Without WebGL the funnel is its table: count, cost per step and the share that passed.
+    const sales = screen.getByRole('cell', { name: 'Vendas' }).closest('tr');
+    expect(text(sales)).toContain('R$ 600,00');
+    expect(text(sales)).toContain('33,33%');
+    const meetings = screen.getByRole('cell', { name: 'Reuniões' }).closest('tr');
     expect(text(meetings)).toContain('R$ 200,00');
+    expect(screen.getByText(/escala logarítmica/)).toBeTruthy();
     expect(screen.getByText(/3 negociação\(ões\) do período não dizem a plataforma/)).toBeTruthy();
     const row = screen.getByText('LEAD | FORMS').closest('tr');
     expect(text(row)).toContain('R$ 3,00');
@@ -862,11 +887,14 @@ describe('audience and region', () => {
   it("ranks devices in a person's words and draws the week as weekday by hour", () => {
     renderAt('/dashboard/marketing?aba=publico');
     expect(screen.getByText('Celular (app)')).toBeTruthy();
-    const map = screen.getByRole('figure', { name: /Gasto por dia da semana e hora/ });
-    // 7 × 24 cells, each readable by day and hour.
-    expect(within(map).getAllByRole('img').length).toBe(1);
-    expect(within(map).getByLabelText('Ter 20h: R$ 10,00, 8 cliques, 1 leads')).toBeTruthy();
-    expect(within(map).getByLabelText('Dom 00h: R$ 0,00')).toBeTruthy();
+    // Without WebGL the weekday × hour map is its table: one row per hour with anything in it.
+    const map = screen.getByRole('table', {
+      name: 'Gasto, cliques e leads por dia da semana e hora',
+    });
+    const cell = within(map).getByRole('cell', { name: 'Ter 20h' }).closest('tr');
+    expect(text(cell)).toMatch(/R\$\s?10,00.*8.*1/);
+    expect(within(map).queryByRole('cell', { name: 'Dom 00h' })).toBeNull();
+    expect(screen.getByText(/Laranja mais escuro, mais gasto; cinza, sem gasto/)).toBeTruthy();
     expect(screen.getByText(/Melhores horários por CPL: Ter 20h \(R\$ 10,00\)/)).toBeTruthy();
   });
 });

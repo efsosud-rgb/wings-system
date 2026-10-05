@@ -1,5 +1,7 @@
 import { AD_PLATFORM_LABEL, type DashboardFunnel, type FunnelPlatformRow } from '@wings/shared';
 import { Alert } from '../ui.js';
+import { Chart3D } from '../charts3d/Chart3D.js';
+import { ChartTable, SOURCE_SLOT } from './charts3d.js';
 import { formatDateTime, formatInt, formatMoney, formatPercentMilli } from './format.js';
 
 /**
@@ -8,8 +10,8 @@ import { formatDateTime, formatInt, formatMoney, formatPercentMilli } from './fo
  * many reached it) and the share that passed from one step to the next.
  *
  * The CRM steps (leads in RD, meetings, sales) stop at the platform: RD's
- * deals carry its own labels, not the ad campaign. Plain horizontal bars,
- * one length per count, on purpose: a 3-D or tapered funnel distorts reading.
+ * deals carry its own labels, not the ad campaign. Bars from one base, one
+ * length per count on a log scale (said under the chart), never a tapered funnel.
  */
 
 const costPer = (spendCents: number, count: number | null) =>
@@ -32,38 +34,55 @@ function PlatformFunnel({ row }: { row: FunnelPlatformRow }) {
     { label: 'Reuniões', count: row.meetings },
     { label: 'Vendas', count: row.sales },
   ];
-  // Bars on a log scale: impressions are thousands of times a sale, and a
-  // linear bar would leave every step after the click invisible.
-  const top = Math.log10(Math.max(1, row.impressions) + 1);
+  const drawn = steps.filter(
+    (step): step is typeof step & { count: number } => step.count !== null,
+  );
   return (
     <section className="dash-section funnel" aria-labelledby={`funnel-${row.platform}`}>
       <h2 id={`funnel-${row.platform}`}>
         {AD_PLATFORM_LABEL[row.platform]}{' '}
         <span className="cell-sub">gasto {formatMoney(row.spendCents)}</span>
       </h2>
-      <ol className="funnel-steps">
-        {steps.map((step, index) => {
-          const previous = index === 0 ? null : (steps[index - 1]?.count ?? null);
-          const width = step.count
-            ? Math.max(2, Math.round((Math.log10(step.count + 1) / top) * 100))
-            : 0;
-          return (
-            <li key={step.label} className="funnel-step">
-              <span className="funnel-label">{step.label}</span>
-              <span className="funnel-bar" aria-hidden="true">
-                <span style={{ width: `${width}%` }} />
-              </span>
-              <span className="mono num funnel-count">
-                {step.count === null ? '—' : formatInt(step.count)}
-              </span>
-              <span className="cell-sub funnel-meta">
-                {step.note ??
-                  `custo por etapa ${costPer(row.spendCents, step.count)}${index > 0 ? ` · passou ${passRate(step.count, previous)}` : ''}`}
-              </span>
-            </li>
-          );
-        })}
-      </ol>
+      <Chart3D
+        height={Math.min(320, 70 + drawn.length * 36)}
+        ariaLabel={`Funil de ${AD_PLATFORM_LABEL[row.platform]}, da impressão à venda, em escala logarítmica`}
+        spec={{
+          kind: 'funnel',
+          // Impressions are thousands of times a sale: a linear bar would leave every step
+          // after the click invisible, so lengths are logarithmic and the note says so.
+          log: true,
+          slot: SOURCE_SLOT[row.platform],
+          stages: drawn.map((step) => ({ label: step.label, value: step.count })),
+          format: 'int',
+          totalLabel: 'das impressões',
+          shareBase: row.impressions || undefined,
+        }}
+        table={
+          <ChartTable
+            caption={`Funil de ${AD_PLATFORM_LABEL[row.platform]}`}
+            head={['Etapa', 'Quantidade', 'Custo por etapa', 'Passou da anterior']}
+            rows={steps.map((step, index) => {
+              const previous = index === 0 ? null : (steps[index - 1]?.count ?? null);
+              return {
+                key: step.label,
+                neutral: step.count === null,
+                cells: [
+                  step.label,
+                  step.count === null ? `— (${step.note ?? 'sem dado'})` : formatInt(step.count),
+                  costPer(row.spendCents, step.count),
+                  index === 0 ? '—' : passRate(step.count, previous),
+                ],
+              };
+            })}
+          />
+        }
+      />
+      <p className="cell-sub">
+        Barras em escala logarítmica, para que as etapas depois do clique apareçam: compare pelos
+        números.
+        {steps.some((step) => step.count === null) &&
+          ' Etapas sem dado ficam fora do gráfico e aparecem na tabela com o motivo.'}
+      </p>
     </section>
   );
 }

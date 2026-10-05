@@ -1,12 +1,18 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import {
+  HEAT_EMPTY,
+  HEAT_RAMP,
   NEUTRAL,
   RANKED_LIMIT,
   SERIES,
+  heatStep,
+  seriesColor,
   type ChartSpec,
   type ColumnsSpec,
   type DonutSpec,
+  type HeatSpec,
+  type LineSpec,
   type RankedSpec,
   type ValueFormat,
 } from './spec.js';
@@ -284,6 +290,17 @@ export abstract class Scene3D {
     return line;
   }
 
+  protected dashed(points: THREE.Vector3[], color = '#8A8076') {
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const line = new THREE.Line(
+      geometry,
+      new THREE.LineDashedMaterial({ color, dashSize: 0.16, gapSize: 0.1 }),
+    );
+    line.computeLineDistances();
+    this.root.add(line);
+    return line;
+  }
+
   // ---- camera: frames the scene's box with room, at an azimuth and an elevation -------
 
   protected frame(box: THREE.Box3, az: number, el: number, margin = 1.12) {
@@ -527,15 +544,21 @@ class Columns3D extends Scene3D {
     const cats = spec.categories;
     const series = spec.series.map((s, i) => ({
       ...s,
-      color: s.neutral ? NEUTRAL : SERIES[i % SERIES.length]!,
+      color: seriesColor(s, i),
     }));
-    const max = Math.max(0, ...series.flatMap((s) => s.values));
+    const max = Math.max(0, spec.reference?.value ?? 0, ...series.flatMap((s) => s.values));
     const { top, step } = niceTicks(max, 4);
+    // Many categories (a month of days): slimmer columns, values in the tooltip and the
+    // table, and only some names on the axis.
+    const dense = cats.length > 12;
     const H = 3.4;
-    const colW = 0.5;
+    const colW = dense ? 0.42 : 0.5;
     const colGap = 0.12;
-    const d = 0.5;
-    const groupW = Math.max(1.5, series.length * (colW + colGap) + 0.7);
+    const d = dense ? 0.42 : 0.5;
+    const groupW = dense
+      ? series.length * (colW + colGap) + 0.12
+      : Math.max(1.5, series.length * (colW + colGap) + 0.7);
+    const every = dense ? Math.ceil(cats.length / (this.compact ? 5 : 10)) : 1;
     const span = cats.length * groupW;
     const x0 = -span / 2 + groupW / 2;
     const left = -span / 2 - 0.1;
@@ -580,17 +603,32 @@ class Columns3D extends Scene3D {
         item.hgt = hgt;
         item.order = ci * series.length + si;
         this.addShadow(x, 0.06, colW * 1.25, d * 1.25, 0.002, v === 0 ? 0.08 : 0.22);
-        const text = el('b', `w3d-value${v === 0 ? ' w3d-zero' : ''}`, this.fmt(v));
-        item.valueText = text;
-        item.valueLabel = this.addLabel([text], new THREE.Vector3(x, hgt + 0.2, 0), 'center');
+        if (!dense) {
+          const text = el('b', `w3d-value${v === 0 ? ' w3d-zero' : ''}`, this.fmt(v));
+          item.valueText = text;
+          item.valueLabel = this.addLabel([text], new THREE.Vector3(x, hgt + 0.2, 0), 'center');
+        }
         this.cols.push(item);
       });
-      this.addLabel(
-        [el('span', 'w3d-cat', c)],
-        new THREE.Vector3(gx, -0.42, d / 2 + 0.25),
-        'center',
-      );
+      if (ci % every === 0)
+        this.addLabel(
+          [el('span', 'w3d-cat', c)],
+          new THREE.Vector3(gx, -0.42, d / 2 + 0.25),
+          'center',
+        );
     });
+    if (spec.reference && spec.reference.value > 0) {
+      const y = (spec.reference.value / top) * H;
+      this.dashed([
+        new THREE.Vector3(left, y, d / 2 + 0.05),
+        new THREE.Vector3(right, y, d / 2 + 0.05),
+      ]);
+      this.addLabel(
+        [el('span', 'w3d-ref', `${spec.reference.label} ${this.fmt(spec.reference.value)}`)],
+        new THREE.Vector3(right, y + 0.22, d / 2 + 0.05),
+        'right',
+      );
+    }
     const box = new THREE.Box3(
       new THREE.Vector3(left - 1.2, -0.7, wallZ),
       new THREE.Vector3(right + 0.2, H + 0.5, d / 2 + 0.3),
@@ -602,7 +640,8 @@ class Columns3D extends Scene3D {
     for (const it of this.cols) {
       const p = this.reduced ? 1 : outBack(clamp01((t - 0.1 - it.order * 0.06) / 0.7));
       it.mesh.scale.y = Math.max(0.001, p);
-      it.valueLabel!.anchor.y = it.hgt * p + 0.22;
+      if (!it.valueLabel) continue;
+      it.valueLabel.anchor.y = it.hgt * p + 0.22;
       const shown = this.reduced ? it.value : it.value * clamp01(p);
       it.valueText!.textContent = this.fmt(shown);
     }
@@ -652,11 +691,16 @@ class RankedBars3D extends Scene3D {
       BASELINE,
     );
     items.forEach((s, i) => {
-      const len = Math.max(0.16, (L * (s.value || 0)) / max);
+      const len = Math.max(
+        0.16,
+        spec.log
+          ? (L * Math.log10((s.value || 0) + 1)) / Math.log10(max + 1)
+          : (L * (s.value || 0)) / max,
+      );
       const geo = new RoundedBoxGeometry(len, t, d, 5, Math.min(0.11, t / 2.4, len / 2.2));
       geo.translate(len / 2, 0, 0);
       shade(geo, 'x', 0.8);
-      const color = s.neutral ? NEUTRAL : SERIES[0];
+      const color = s.neutral ? NEUTRAL : SERIES[(spec.slot ?? 0) % SERIES.length]!;
       const mesh = new THREE.Mesh(geo, satin(color, true));
       const y = totalH / 2 - t / 2 - i * (t + gap);
       mesh.position.set(x0, y, 0);
@@ -830,6 +874,255 @@ class Donut3D extends Scene3D {
   }
 }
 
+// ---------------------------------------------------------------------------------------
+// Lines over an ordered axis: a tube per series along straight segments (no smoothing that
+// would invent a value between two days), a wash under the series marked `area`, a bead on
+// each point to hover, the last value at each line's end. A null breaks the line.
+class Lines3D extends Scene3D {
+  private tubes: { mesh: THREE.Mesh; count: number }[] = [];
+  private areas: THREE.Mesh[] = [];
+  private beads: (Item & { at: number })[] = [];
+  private ends: Label[] = [];
+  private n = 0;
+
+  build(spec: LineSpec) {
+    const cats = spec.categories;
+    const n = Math.max(1, cats.length);
+    this.n = n;
+    const values = spec.series.flatMap((s) => s.values.filter((v): v is number => v !== null));
+    const max = Math.max(0, spec.reference?.value ?? 0, ...values);
+    const { top, step } = niceTicks(max, 4);
+    const H = 3.2;
+    const L = 8.4;
+    const xAt = (i: number) => (n === 1 ? 0 : -L / 2 + (i * L) / (n - 1));
+    const yAt = (v: number) => (v / top) * H;
+    const left = -L / 2 - 0.15;
+    const right = L / 2 + 0.15;
+    const wallZ = -0.6;
+    const depth = spec.series.length;
+    const zOf = (si: number) => (depth - 1 - si) * 0.16;
+
+    for (let v = 0; v <= top + 1e-9; v += step) {
+      const y = yAt(v);
+      this.line(
+        [new THREE.Vector3(left, y, wallZ), new THREE.Vector3(right, y, wallZ)],
+        v === 0 ? BASELINE : GRID,
+      );
+      this.addLabel(
+        [el('span', 'w3d-tick', this.tick(v))],
+        new THREE.Vector3(left - 0.12, y, wallZ),
+        'right',
+      );
+    }
+    this.line(
+      [new THREE.Vector3(left, 0, zOf(0) + 0.3), new THREE.Vector3(right, 0, zOf(0) + 0.3)],
+      BASELINE,
+    );
+    const every = Math.max(1, Math.ceil(n / (this.compact ? 4 : 8)));
+    cats.forEach((c, i) => {
+      if (i % every !== 0 && i !== n - 1) return;
+      if (i !== n - 1 && n - 1 - i < every / 2) return;
+      this.addLabel(
+        [el('span', 'w3d-cat', c)],
+        new THREE.Vector3(xAt(i), -0.42, zOf(0) + 0.3),
+        'center',
+      );
+    });
+
+    let palette = 0;
+    spec.series.forEach((s, si) => {
+      const color = s.neutral ? NEUTRAL : seriesColor({ slot: s.slot ?? palette }, si);
+      if (!s.neutral && s.slot === undefined) palette++;
+      const z = zOf(si);
+      // Runs of consecutive values: a null ends one.
+      const runs: number[][] = [];
+      let run: number[] = [];
+      s.values.forEach((v, i) => {
+        if (v === null) {
+          if (run.length) runs.push(run);
+          run = [];
+        } else run.push(i);
+      });
+      if (run.length) runs.push(run);
+      for (const r of runs) {
+        const pts = r.map((i) => new THREE.Vector3(xAt(i), yAt(s.values[i]!), z));
+        if (pts.length > 1) {
+          const path = new THREE.CurvePath<THREE.Vector3>();
+          for (let k = 1; k < pts.length; k++) path.add(new THREE.LineCurve3(pts[k - 1]!, pts[k]!));
+          const geo = new THREE.TubeGeometry(
+            path,
+            Math.max(8, (pts.length - 1) * 6),
+            s.dashed ? 0.03 : 0.05,
+            10,
+            false,
+          );
+          const material = satin(color);
+          if (s.dashed) {
+            material.transparent = true;
+            material.opacity = 0.75;
+          }
+          const tube = new THREE.Mesh(geo, material);
+          this.root.add(tube);
+          this.tubes.push({ mesh: tube, count: geo.index?.count ?? 0 });
+          if (s.area) {
+            const shape = new THREE.Shape();
+            shape.moveTo(pts[0]!.x, 0);
+            for (const p of pts) shape.lineTo(p.x, p.y);
+            shape.lineTo(pts.at(-1)!.x, 0);
+            shape.closePath();
+            const areaGeo = new THREE.ExtrudeGeometry(shape, { depth: 0.12, bevelEnabled: false });
+            areaGeo.translate(0, 0, z - 0.06);
+            const wash = new THREE.MeshPhysicalMaterial({
+              color,
+              roughness: 0.6,
+              transparent: true,
+              opacity: 0.22,
+              depthWrite: false,
+            });
+            const area = new THREE.Mesh(areaGeo, wash);
+            this.root.add(area);
+            this.areas.push(area);
+          }
+        }
+        for (const i of r) {
+          const v = s.values[i]!;
+          const bead = new THREE.Mesh(
+            new THREE.SphereGeometry(s.dashed ? 0.07 : 0.09, 16, 12),
+            satin(color),
+          );
+          bead.position.set(xAt(i), yAt(v), z);
+          const item = this.addPiece(bead, {
+            value: v,
+            tip: { title: cats[i] ?? '', line: `${s.name}: ${this.fmt(v)}`, key: color },
+          }) as Item & { at: number };
+          item.at = i;
+          this.beads.push(item);
+        }
+      }
+      // The latest value at the end of the line.
+      const last = s.values.reduce<number>((at, v, i) => (v === null ? at : i), -1);
+      if (last >= 0) {
+        const tag = el('span', 'w3d-end');
+        const sw = el('i', 'w3d-key');
+        sw.style.background = color;
+        tag.append(sw, el('b', 'w3d-value', this.fmt(s.values[last]!)));
+        this.ends.push(
+          this.addLabel([tag], new THREE.Vector3(xAt(last) + 0.2, yAt(s.values[last]!), z), 'left'),
+        );
+      }
+    });
+
+    if (spec.reference && spec.reference.value > 0) {
+      const y = yAt(spec.reference.value);
+      this.dashed([new THREE.Vector3(left, y, zOf(0)), new THREE.Vector3(right, y, zOf(0))]);
+      this.addLabel(
+        [el('span', 'w3d-ref', `${spec.reference.label} ${this.fmt(spec.reference.value)}`)],
+        new THREE.Vector3(right, y + 0.22, zOf(0)),
+        'right',
+      );
+    }
+
+    const box = new THREE.Box3(
+      new THREE.Vector3(left - 1.1, -0.7, wallZ),
+      new THREE.Vector3(right + (this.compact ? 0.9 : 1.6), H + 0.4, zOf(0) + 0.3),
+    );
+    this.frame(box, -0.14, 0.12, 1.04);
+  }
+
+  animate(t: number) {
+    const p = this.reduced ? 1 : outCubic(clamp01((t - 0.1) / 1.1));
+    for (const tube of this.tubes) {
+      // Index triangles run along the path, so a draw range reveals it left to right.
+      const count = Math.floor((tube.count * p) / 3) * 3;
+      tube.mesh.geometry.setDrawRange(0, p >= 1 ? Infinity : count);
+    }
+    for (const area of this.areas) area.scale.y = Math.max(0.001, p);
+    for (const bead of this.beads) {
+      const at = this.n <= 1 ? 0 : bead.at / (this.n - 1);
+      const k = this.reduced ? 1 : outBack(clamp01((p - at) * 6));
+      bead.mesh.scale.setScalar(Math.max(0.001, k));
+    }
+    for (const end of this.ends)
+      end.el.style.opacity = this.reduced ? '1' : String(clamp01((t - 1.1) / 0.4));
+  }
+
+  protected override applyLift(it: Item) {
+    it.mesh.scale.multiplyScalar(1 + 0.5 * it.lift);
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// Heat map: a tile per row × column, in the orange ramp's five steps of the largest value;
+// a step is also a little height, so two neighbours read apart; nothing there is grey.
+class Heat3D extends Scene3D {
+  private tiles: (Item & { order: number; hgt: number })[] = [];
+
+  build(spec: HeatSpec) {
+    const rows = spec.rows;
+    const cols = spec.columns;
+    const max = Math.max(0, ...spec.values.flat());
+    const cell = 0.34;
+    const gap = 0.07;
+    const pitch = cell + gap;
+    const W = cols.length * pitch - gap;
+    const D = rows.length * pitch - gap;
+    const x0 = -W / 2 + cell / 2;
+    const z0 = -D / 2 + cell / 2;
+    const every = spec.columnEvery ?? (this.compact ? 6 : 3);
+    rows.forEach((row, ri) => {
+      const z = z0 + ri * pitch;
+      this.addLabel([el('span', 'w3d-name', row)], new THREE.Vector3(-W / 2 - 0.18, 0, z), 'right');
+      cols.forEach((col, ci) => {
+        const v = spec.values[ri]?.[ci] ?? 0;
+        const stepN = heatStep(v, max);
+        const hgt = 0.05 + stepN * 0.07;
+        const color = stepN ? HEAT_RAMP[stepN - 1]! : HEAT_EMPTY;
+        const geo = new RoundedBoxGeometry(cell, hgt, cell, 3, Math.min(0.05, hgt / 2.2));
+        geo.translate(0, hgt / 2, 0);
+        const mesh = new THREE.Mesh(geo, satin(color));
+        const x = x0 + ci * pitch;
+        mesh.position.set(x, 0, z);
+        const item = this.addPiece(mesh, {
+          value: v,
+          tip: { title: `${row} ${col}`, line: v > 0 ? this.fmt(v) : 'sem dado', key: color },
+        }) as Item & { order: number; hgt: number };
+        item.order = ci + ri * 0.5;
+        item.hgt = hgt;
+        this.tiles.push(item);
+      });
+    });
+    cols.forEach((col, ci) => {
+      if (ci % every !== 0) return;
+      this.addLabel(
+        [el('span', 'w3d-cat', col)],
+        new THREE.Vector3(x0 + ci * pitch, 0, D / 2 + 0.3),
+        'center',
+      );
+    });
+    this.addShadow(0, 0, W * 0.6, D * 0.6, 0.001, 0.12);
+    const box = new THREE.Box3(
+      new THREE.Vector3(-W / 2 - (this.compact ? 0.8 : 1.1), 0, -D / 2 - 0.1),
+      new THREE.Vector3(W / 2 + 0.1, 0.45, D / 2 + 0.55),
+    );
+    this.frame(box, 0, 0.98, 1.0);
+  }
+
+  animate(t: number) {
+    for (const it of this.tiles) {
+      const p = this.reduced ? 1 : outBack(clamp01((t - 0.1 - it.order * 0.03) / 0.6));
+      it.mesh.scale.y = Math.max(0.001, p);
+    }
+  }
+
+  protected override applyLift(it: Item) {
+    it.mesh.position.y = 0.12 * it.lift;
+  }
+
+  protected override sweepAt() {
+    return 1.6;
+  }
+}
+
 /** Below this width the ranked bars put names above the bars. */
 export const COMPACT_WIDTH = 520;
 
@@ -865,6 +1158,8 @@ export function makeScene(
         format: spec.format,
         totalLabel: spec.totalLabel ?? 'das abertas',
         shareBase: spec.shareBase,
+        slot: spec.slot,
+        log: spec.log,
         sort: false,
         limit: Infinity,
       });
@@ -872,6 +1167,16 @@ export function makeScene(
     }
     case 'donut': {
       const scene = narrow(new Donut3D(host, shared, environment, reduced, spec.format));
+      scene.build(spec);
+      return scene;
+    }
+    case 'line': {
+      const scene = narrow(new Lines3D(host, shared, environment, reduced, spec.format));
+      scene.build(spec);
+      return scene;
+    }
+    case 'heat': {
+      const scene = narrow(new Heat3D(host, shared, environment, reduced, spec.format));
       scene.build(spec);
       return scene;
     }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import './charts3d.css';
-import { NEUTRAL, SERIES, type ChartSpec } from './spec.js';
+import { NEUTRAL, SERIES, heatLegend, seriesColor, type ChartSpec } from './spec.js';
 
 /**
  * A 3D chart: the scene on a canvas, every word and number in HTML over it,
@@ -28,10 +28,17 @@ function loadEngine(): Promise<EngineModule | null> {
 /** The key of a chart whose colours carry meaning: grouped columns' series, the donut's slices. */
 function legendOf(spec: ChartSpec) {
   if (spec.kind === 'columns' && spec.series.length > 1)
-    return spec.series.map((series, i) => ({
-      label: series.name,
-      color: series.neutral ? NEUTRAL : SERIES[i % SERIES.length]!,
-    }));
+    return spec.series.map((series, i) => ({ label: series.name, color: seriesColor(series, i) }));
+  if (spec.kind === 'line') {
+    // Same colouring as the scene: neutral series take no palette colour.
+    let next = 0;
+    return spec.series.map((series) => {
+      const color = series.neutral ? NEUTRAL : seriesColor({ slot: series.slot ?? next }, 0);
+      if (!series.neutral && series.slot === undefined) next++;
+      return { label: series.name, color, dashed: series.dashed };
+    });
+  }
+  if (spec.kind === 'heat') return heatLegend(spec);
   if (spec.kind === 'donut') {
     // Same colouring as the scene: neutral slices take no palette colour.
     let next = 0;
@@ -149,7 +156,11 @@ export function Chart3D({ spec, height, ariaLabel, table, className }: Props) {
         <ul className="c3d-legend">
           {legend.map((item) => (
             <li key={item.label}>
-              <span className="c3d-swatch" style={{ background: item.color }} aria-hidden="true" />
+              <span
+                className={`c3d-swatch${'dashed' in item && item.dashed ? ' c3d-swatch-dashed' : ''}`}
+                style={{ background: item.color }}
+                aria-hidden="true"
+              />
               {item.label}
             </li>
           ))}

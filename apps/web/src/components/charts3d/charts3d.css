@@ -486,3 +486,22 @@
   font-size: clamp(18px, 1.7vw, var(--text-2xl));
   white-space: nowrap;
 }
+
+.c3d-swatch-dashed {
+  height: 3px;
+  width: 14px;
+  border-radius: 2px;
+  opacity: 0.8;
+}
+.w3d-end {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transform: translate(0, -50%);
+}
+.w3d-ref {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #5c554e;
+  white-space: nowrap;
+}

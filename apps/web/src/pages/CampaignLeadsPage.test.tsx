@@ -94,6 +94,22 @@ describe('Leads das Campanhas', () => {
     expect(screen.getByText(/A origem no RD não é mídia paga/)).toBeTruthy();
   });
 
+  it('draws stages, losses and the deals left out, each with its table', async () => {
+    get.mockResolvedValue(response());
+    renderPage();
+    const stages = await screen.findByRole('region', { name: 'Por etapa' });
+    expect(within(stages).getByRole('cell', { name: 'Tentando contato' })).toBeTruthy();
+    expect(
+      within(screen.getByRole('region', { name: 'Perdidos, com motivo' })).getByText(
+        'nenhum perdido no período',
+      ),
+    ).toBeTruthy();
+    const left = screen.getByRole('region', { name: 'Sem atribuição, por motivo' });
+    expect(
+      within(left).getByRole('cell', { name: /A origem no RD não é mídia paga/ }),
+    ).toBeTruthy();
+  });
+
   it('shows the phone masked until "revelar", which asks the server', async () => {
     get.mockResolvedValue(response());
     post.mockResolvedValue({ value: '+55 21 99876-5432' });
