@@ -44,6 +44,7 @@ export const NAV_ICONS = [
   'headset',
   'settings',
   'globe',
+  'bell',
 ] as const;
 export type NavIcon = (typeof NAV_ICONS)[number];
 
