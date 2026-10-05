@@ -21,6 +21,8 @@ import { LandingPagesPage } from './pages/LandingPagesPage.js';
 import { CompaniesPage } from './pages/crm/CompaniesPage.js';
 import { ContactsPage } from './pages/crm/ContactsPage.js';
 import { CrmSettingsPage } from './pages/crm/CrmSettingsPage.js';
+import { AutomationsPage } from './pages/crm/AutomationsPage.js';
+import { NotificationsPage } from './pages/crm/NotificationsPage.js';
 import { DealPage } from './pages/crm/DealPage.js';
 import { DealsPage } from './pages/crm/DealsPage.js';
 import { TasksPage } from './pages/crm/TasksPage.js';
@@ -83,8 +85,11 @@ const SCREENS: Record<string, RouteObject[]> = {
     { path: ':id', element: <CompaniesPage /> },
   ],
   '/crm-vendas/tarefas': [{ index: true, element: <TasksPage /> }],
-  // `automacoes/:pipeline` under Configurações is Sonnet's page (Regras de automação).
-  '/crm-vendas/configuracoes': [{ index: true, element: <CrmSettingsPage /> }],
+  '/crm-vendas/avisos': [{ index: true, element: <NotificationsPage /> }],
+  '/crm-vendas/configuracoes': [
+    { index: true, element: <CrmSettingsPage /> },
+    { path: 'automacoes/:pipeline', element: <AutomationsPage /> },
+  ],
   '/administracao/drive': [{ index: true, element: <DriveTemplatePage /> }],
   '/drive/arquivos': [{ index: true, element: <DrivePage /> }],
   '/gestao/projetos': [{ index: true, element: <ProjectsPage /> }],

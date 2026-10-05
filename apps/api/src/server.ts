@@ -6,6 +6,8 @@ import { createOpenRouterLlm } from './modules/agent/llm.js';
 import { startFormatacaoIntakeScheduler } from './modules/expansion/formatacao.js';
 import { startExpansionIntakeScheduler } from './modules/expansion/scheduler.js';
 import { startInsightsScheduler } from './modules/insights/scheduler.js';
+import { startCrmAutomationsScheduler } from './modules/leads/automations-scheduler.js';
+import { createCrmMailTransport } from './modules/leads/crm-mail.js';
 import { startMetaLeadgenIntake } from './modules/leads/meta-intake.js';
 
 async function main() {
@@ -92,6 +94,19 @@ async function main() {
     });
     app.wings.metaLeadKick = intake.kick;
     app.addHook('onClose', async () => intake.stop());
+  }
+
+  // CRM automations: due rules and sequence steps, then the deadline alerts,
+  // every CRM_AUTOMATIONS_CRON minutes (5 by default). Registered before `listen`.
+  {
+    const stop = startCrmAutomationsScheduler({
+      db,
+      mail: createCrmMailTransport(env),
+      cron: env.CRM_AUTOMATIONS_CRON,
+      stageStuckDays: env.CRM_STAGE_STUCK_DAYS === undefined ? 7 : Number(env.CRM_STAGE_STUCK_DAYS),
+      log: (facts) => app.log.info(facts),
+    });
+    app.addHook('onClose', async () => stop());
   }
 
   await app.listen({ port: env.API_PORT, host: '0.0.0.0' });
