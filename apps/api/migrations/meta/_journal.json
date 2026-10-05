@@ -421,6 +421,13 @@
       "when": 1790959667852,
       "tag": "0059_crm_on_sale_rd_unpublished",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1791204423240,
+      "tag": "0060_bi_dw_dimensional_model",
+      "breakpoints": true
     }
   ]
 }
