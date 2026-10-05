@@ -20,6 +20,8 @@ export const PERMISSIONS = {
   'timeclock.adjust': 'Aprovar ajustes de ponto',
   'leads.read': 'Ver leads do funil',
   'leads.write': 'Criar e editar leads',
+  'leads.assign': 'Atribuir e redistribuir leads entre vendedores',
+  'crm.manage': 'Configurar as etapas do funil e a distribuição de leads',
   'campaign_leads.read': 'Ver os leads das campanhas de tráfego pago (RD CRM)',
   'campaign_leads.reveal':
     'Revelar telefone e e-mail dos leads das campanhas (registrado em auditoria)',
