@@ -62,6 +62,16 @@ export function configureCrm(next: Partial<CrmConfig>): void {
 
 export const crmConfig = (): CrmConfig => config;
 
+/** Runs the hook for a lead that has just entered its stage (by a move or at birth); never throws. */
+export async function announceStageEntered(lead: typeof leads.$inferSelect): Promise<void> {
+  if (!stageEntered) return;
+  try {
+    await stageEntered(lead);
+  } catch {
+    // The move stands; the rules' own records say what ran.
+  }
+}
+
 /**
  * Called after a stage change is committed, for moves a person (or Sofia)
  * made; the automation rules of the stage start from here. A failing hook
@@ -327,11 +337,7 @@ export async function changeLead(db: Database, change: LeadChange): Promise<Lead
     stageEntered &&
     (change.source === 'wings' || change.source === 'sofia')
   ) {
-    try {
-      await stageEntered(result.lead);
-    } catch {
-      // The move stands; the rules' own records say what ran.
-    }
+    await announceStageEntered(result.lead);
   }
   return result;
 }

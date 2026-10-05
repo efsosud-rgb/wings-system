@@ -16,6 +16,7 @@ import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import { processDueRuns } from './automations.js';
+import { entryStageOf } from './crm.js';
 import { testTransport } from './crm-mail.js';
 import { upsertLead } from './service.js';
 
@@ -288,5 +289,65 @@ describe('Regras de automação', () => {
         .json<{ rules: { id: string; active: boolean }[] }>()
         .rules.find((r) => r.id === target.id)?.active,
     ).toBe(false);
+  });
+  it('starts the entry stage\u2019s rules for a lead born there, without twinning the first-contact task', async () => {
+    const entry = await entryStageOf(db, 'expansao');
+    for (const rule of [
+      {
+        kind: 'create_task',
+        config: { title: 'Primeiro contato com o lead', taskKind: 'first_contact', dueInHours: 1 },
+      },
+      { kind: 'notify', config: { recipients: ['owner'], message: 'Lead novo na entrada' } },
+    ]) {
+      const res = await post('/crm/automations/rules', {
+        pipeline: 'expansao',
+        stageId: entry.id,
+        ...rule,
+      });
+      expect(res.statusCode).toBe(201);
+    }
+    const result = await upsertLead(db, {
+      source: 'site_form',
+      name: 'Beltrana de Teste',
+      phone: '5511911110003',
+      clientId: WINGS_CLIENT_ID,
+      clientMapped: true,
+      pipeline: 'expansao',
+      brand: 'Marca Teste',
+      ownerEmployeeId: seller.employeeId,
+      skipResearch: true,
+      event: { kind: 'lead.received.site_form' },
+    });
+    const leadId = result.lead.id;
+    const tasks = await db.select().from(leadTasks).where(eq(leadTasks.leadId, leadId));
+    expect(tasks.filter((t) => t.kind === 'first_contact')).toHaveLength(1);
+    const runs = await db
+      .select()
+      .from(crmAutomationRuns)
+      .where(eq(crmAutomationRuns.leadId, leadId));
+    expect(runs.find((r) => r.kind === 'create_task')).toMatchObject({
+      status: 'skipped',
+      result: { reason: 'already_exists' },
+    });
+    expect(runs.find((r) => r.kind === 'notify')?.status).toBe('done');
+
+    // An import never starts the rules.
+    const imported = await upsertLead(db, {
+      source: 'csv_import',
+      name: 'Importada de Teste',
+      phone: '5511911110004',
+      clientId: WINGS_CLIENT_ID,
+      clientMapped: true,
+      pipeline: 'expansao',
+      importBatchId: 'lote-teste',
+      skipResearch: true,
+      event: { kind: 'lead.imported' },
+    });
+    expect(
+      await db
+        .select()
+        .from(crmAutomationRuns)
+        .where(eq(crmAutomationRuns.leadId, imported.lead.id)),
+    ).toHaveLength(0);
   });
 });

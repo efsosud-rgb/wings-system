@@ -24,10 +24,12 @@ import {
   crmEmailTemplates,
   crmSequences,
   crmSequenceSteps,
+  crmStageLimits,
   crmStages,
 } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
-import { processDueRuns } from './automations.js';
+import { runCrmCycle } from './automations-scheduler.js';
+import { markRead, notificationsOf } from './crm-alerts.js';
 import { createCrmMailTransport } from './crm-mail.js';
 
 const idParam = z.object({ id: z.uuid() });
@@ -423,11 +425,73 @@ export const automationRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ sequence });
   });
 
+  // --- stage limits and the panel's notices ----------------------------------------------------
+
+  app.get('/crm/automations/stage-limits', manage, async (_request, reply) => {
+    const rows = await db.select().from(crmStageLimits);
+    return reply.send({ limits: rows.map((r) => ({ stageId: r.stageId, maxDays: r.maxDays })) });
+  });
+
+  app.put('/crm/automations/stage-limits/:id', manage, async (request, reply) => {
+    const params = idParam.safeParse(request.params);
+    const body = z.object({ maxDays: z.number().int().min(0).max(365) }).safeParse(request.body);
+    if (!params.success || !body.success) return reply.status(400).send(invalid());
+    const stage = await db.query.crmStages.findFirst({ where: eq(crmStages.id, params.data.id) });
+    if (!stage) return reply.status(404).send(gone('Etapa'));
+    const by = request.session.actor.employeeId;
+    await db
+      .insert(crmStageLimits)
+      .values({ stageId: stage.id, maxDays: body.data.maxDays, updatedBy: by })
+      .onConflictDoUpdate({
+        target: crmStageLimits.stageId,
+        set: { maxDays: body.data.maxDays, updatedBy: by, updatedAt: new Date() },
+      });
+    await audit(request, 'crm_stage_limit.set', 'crm_stage', stage.id, {
+      maxDays: body.data.maxDays,
+    });
+    return reply.send({ stageId: stage.id, maxDays: body.data.maxDays });
+  });
+
+  /** The caller's own notices; every CRM user sees only theirs. */
+  app.get(
+    '/crm/notifications',
+    { preHandler: app.requirePermission('leads.read') },
+    async (request, reply) => {
+      const rows = await notificationsOf(db, request.session.actor.employeeId);
+      return reply.send({
+        unread: rows.filter((r) => r.readAt === null).length,
+        notifications: rows.map((r) => ({
+          ...r,
+          createdAt: r.createdAt.toISOString(),
+          readAt: r.readAt?.toISOString() ?? null,
+        })),
+      });
+    },
+  );
+
+  app.post(
+    '/crm/notifications/read',
+    { preHandler: app.requirePermission('leads.read') },
+    async (request, reply) => {
+      const body = z
+        .object({ ids: z.union([z.literal('all'), z.array(z.uuid()).min(1).max(200)]) })
+        .safeParse(request.body);
+      if (!body.success) return reply.status(400).send(invalid());
+      const marked = await markRead(db, request.session.actor.employeeId, body.data.ids);
+      return reply.send({ marked });
+    },
+  );
+
   // --- running what is due ------------------------------------------------------------------
 
   /** The delayed rules and sequence steps whose time has come; also what the scheduled task calls. */
   app.post('/crm/automations/run', manage, async (_request, reply) => {
-    const totals = await processDueRuns(db, { mail: createCrmMailTransport(env) });
-    return reply.send(totals);
+    const result = await runCrmCycle({
+      db,
+      mail: createCrmMailTransport(env),
+      stageStuckDays: env.CRM_STAGE_STUCK_DAYS === undefined ? 7 : Number(env.CRM_STAGE_STUCK_DAYS),
+      log: () => undefined,
+    });
+    return reply.send(result);
   });
 };

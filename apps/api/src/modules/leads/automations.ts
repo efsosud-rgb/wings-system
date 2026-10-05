@@ -8,7 +8,7 @@ import {
   renderTemplate,
   type LeadPipeline,
 } from '@wings/shared';
-import { and, asc, eq, inArray, lt, lte, ne } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, lt, lte, ne } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   crmAutomationRules,
@@ -20,6 +20,7 @@ import {
   crmSequenceSteps,
   employees,
   leadEvents,
+  leadTasks,
   leads,
 } from '../../db/schema/index.js';
 import { changeLead, createTask, nextInRotation } from './crm.js';
@@ -221,6 +222,20 @@ async function createTaskAction(
   if (!config.success) return skipped('bad_config');
   const assignee = await resolvePerson(lead, config.data.assignee);
   if (!assignee) return skipped('no_owner');
+  // The core already makes the first-contact task when a lead gets an owner, and a
+  // person may have made the same follow-up: a rule never makes a twin of an open task.
+  const open = await db
+    .select({ kind: leadTasks.kind, title: leadTasks.title })
+    .from(leadTasks)
+    .where(and(eq(leadTasks.leadId, lead.id), isNull(leadTasks.doneAt)));
+  if (
+    open.some(
+      (t) =>
+        (config.data.taskKind === 'first_contact' && t.kind === 'first_contact') ||
+        (t.kind === config.data.taskKind && t.title === config.data.title),
+    )
+  )
+    return skipped('already_exists');
   const dueAt = config.data.businessHours
     ? addBusinessHours(now, config.data.dueInHours)
     : new Date(now.getTime() + config.data.dueInHours * 3_600_000);

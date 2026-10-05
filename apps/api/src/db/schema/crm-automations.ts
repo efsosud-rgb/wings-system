@@ -180,10 +180,13 @@ export const crmNotifications = pgTable(
     /** automation | first_contact_overdue | task_overdue | stage_stuck */
     kind: text('kind').notNull(),
     message: text('message').notNull(),
+    /** One notice per condition and person: a later pass finding the same overdue task adds nothing. */
+    dedupeKey: text('dedupe_key'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     readAt: timestamp('read_at', { withTimezone: true }),
   },
   (table) => [
+    uniqueIndex('crm_notifications_dedupe_uq').on(table.dedupeKey),
     index('crm_notifications_recipient_idx').on(
       table.recipientEmployeeId,
       table.readAt,
@@ -191,3 +194,13 @@ export const crmNotifications = pgTable(
     ),
   ],
 );
+
+/** How long a deal may sit in a stage before the panel warns; a stage without a row uses CRM_STAGE_STUCK_DAYS. */
+export const crmStageLimits = pgTable('crm_stage_limits', {
+  stageId: uuid('stage_id')
+    .primaryKey()
+    .references(() => crmStages.id),
+  maxDays: integer('max_days').notNull(),
+  updatedBy: uuid('updated_by').references(() => employees.id),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});

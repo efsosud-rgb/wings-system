@@ -63,6 +63,7 @@ CREATE TABLE "crm_notifications" (
 	"lead_id" uuid,
 	"kind" text NOT NULL,
 	"message" text NOT NULL,
+	"dedupe_key" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"read_at" timestamp with time zone
 );
@@ -84,6 +85,13 @@ CREATE TABLE "crm_sequences" (
 	"active" boolean DEFAULT true NOT NULL,
 	"created_by" uuid,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "crm_stage_limits" (
+	"stage_id" uuid PRIMARY KEY NOT NULL,
+	"max_days" integer NOT NULL,
+	"updated_by" uuid,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
@@ -109,15 +117,19 @@ ALTER TABLE "crm_notifications" ADD CONSTRAINT "crm_notifications_lead_id_leads_
 ALTER TABLE "crm_sequence_steps" ADD CONSTRAINT "crm_sequence_steps_sequence_id_crm_sequences_id_fk" FOREIGN KEY ("sequence_id") REFERENCES "public"."crm_sequences"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "crm_sequences" ADD CONSTRAINT "crm_sequences_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "crm_sequences" ADD CONSTRAINT "crm_sequences_created_by_employees_id_fk" FOREIGN KEY ("created_by") REFERENCES "public"."employees"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "crm_stage_limits" ADD CONSTRAINT "crm_stage_limits_stage_id_crm_stages_id_fk" FOREIGN KEY ("stage_id") REFERENCES "public"."crm_stages"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "crm_stage_limits" ADD CONSTRAINT "crm_stage_limits_updated_by_employees_id_fk" FOREIGN KEY ("updated_by") REFERENCES "public"."employees"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "crm_automation_rules_stage_idx" ON "crm_automation_rules" USING btree ("stage_id","position");--> statement-breakpoint
 CREATE UNIQUE INDEX "crm_automation_runs_dedupe_uq" ON "crm_automation_runs" USING btree ("dedupe_key");--> statement-breakpoint
 CREATE INDEX "crm_automation_runs_due_idx" ON "crm_automation_runs" USING btree ("status","run_at");--> statement-breakpoint
 CREATE INDEX "crm_automation_runs_lead_idx" ON "crm_automation_runs" USING btree ("lead_id","created_at");--> statement-breakpoint
 CREATE INDEX "crm_email_outbox_lead_idx" ON "crm_email_outbox" USING btree ("lead_id","created_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "crm_email_templates_name_uq" ON "crm_email_templates" USING btree ("tenant_id","name");--> statement-breakpoint
+CREATE UNIQUE INDEX "crm_notifications_dedupe_uq" ON "crm_notifications" USING btree ("dedupe_key");--> statement-breakpoint
 CREATE INDEX "crm_notifications_recipient_idx" ON "crm_notifications" USING btree ("recipient_employee_id","read_at","created_at");--> statement-breakpoint
 CREATE UNIQUE INDEX "crm_sequence_steps_pos_uq" ON "crm_sequence_steps" USING btree ("sequence_id","position") WHERE "crm_sequence_steps"."retired" = false;--> statement-breakpoint
-CREATE UNIQUE INDEX "crm_sequences_name_uq" ON "crm_sequences" USING btree ("tenant_id","name");--> statement-breakpoint
+CREATE UNIQUE INDEX "crm_sequences_name_uq" ON "crm_sequences" USING btree ("tenant_id","name");
+--> statement-breakpoint
 -- The e-mail outbox and the notices hold message text and stay out of the read-only role.
 DO $$
 BEGIN
@@ -126,5 +138,6 @@ BEGIN
     GRANT SELECT ON TABLE "crm_automation_runs" TO wings_ro;
     GRANT SELECT ON TABLE "crm_sequences" TO wings_ro;
     GRANT SELECT ON TABLE "crm_sequence_steps" TO wings_ro;
+    GRANT SELECT ON TABLE "crm_stage_limits" TO wings_ro;
   END IF;
 END $$;

@@ -96,6 +96,14 @@ export const NAVIGATION: readonly NavModule[] = [
         status: 'ready',
         kind: 'crud',
       },
+      {
+        path: '/crm-vendas/avisos',
+        label: 'Avisos',
+        description: 'Prazos vencidos, negociações paradas e avisos das automações',
+        permission: 'leads.read',
+        status: 'ready',
+        kind: 'crud',
+      },
       soon('/crm-vendas/painel', 'Painel', 'Vendas por funil, marca e vendedor', 'leads.read'),
       {
         path: '/crm-vendas/configuracoes',

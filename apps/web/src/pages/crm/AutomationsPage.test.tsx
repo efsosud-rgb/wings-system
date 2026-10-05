@@ -31,6 +31,8 @@ vi.mock('../../api/automations.js', () => ({
   useDeleteRule: () => idle,
   useSaveTemplate: () => idle,
   useSaveSequence: () => idle,
+  useStageLimits: () => ({ data: { limits: [] } }),
+  useSetStageLimit: () => idle,
 }));
 vi.mock('../../api/leads.js', () => ({
   useStages: () => ({

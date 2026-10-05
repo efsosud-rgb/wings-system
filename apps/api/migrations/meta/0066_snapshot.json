@@ -1,5 +1,5 @@
 {
-  "id": "cacf22aa-cd57-4306-835f-dda74fff9568",
+  "id": "8909279f-8198-4491-a71d-ea1ca0561a00",
   "prevId": "969f4762-bfa9-45c1-a673-7519ef5ba863",
   "version": "7",
   "dialect": "postgresql",
@@ -8792,6 +8792,12 @@
           "primaryKey": false,
           "notNull": true
         },
+        "dedupe_key": {
+          "name": "dedupe_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp with time zone",
@@ -8807,6 +8813,21 @@
         }
       },
       "indexes": {
+        "crm_notifications_dedupe_uq": {
+          "name": "crm_notifications_dedupe_uq",
+          "columns": [
+            {
+              "expression": "dedupe_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
         "crm_notifications_recipient_idx": {
           "name": "crm_notifications_recipient_idx",
           "columns": [
@@ -9073,6 +9094,71 @@
           "tableTo": "employees",
           "columnsFrom": [
             "created_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.crm_stage_limits": {
+      "name": "crm_stage_limits",
+      "schema": "",
+      "columns": {
+        "stage_id": {
+          "name": "stage_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "max_days": {
+          "name": "max_days",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "updated_by": {
+          "name": "updated_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "crm_stage_limits_stage_id_crm_stages_id_fk": {
+          "name": "crm_stage_limits_stage_id_crm_stages_id_fk",
+          "tableFrom": "crm_stage_limits",
+          "tableTo": "crm_stages",
+          "columnsFrom": [
+            "stage_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "crm_stage_limits_updated_by_employees_id_fk": {
+          "name": "crm_stage_limits_updated_by_employees_id_fk",
+          "tableFrom": "crm_stage_limits",
+          "tableTo": "employees",
+          "columnsFrom": [
+            "updated_by"
           ],
           "columnsTo": [
             "id"

@@ -65,6 +65,51 @@ export const useUpdateRule = () =>
 export const useDeleteRule = () =>
   useInvalidating((id: string) => api.delete<void>(`/crm/automations/rules/${id}`));
 
+export function useStageLimits() {
+  return useQuery({
+    queryKey: [...KEY, 'stage-limits'],
+    queryFn: () =>
+      api.get<{ limits: { stageId: string; maxDays: number }[] }>('/crm/automations/stage-limits'),
+  });
+}
+
+export const useSetStageLimit = () =>
+  useInvalidating((input: { stageId: string; maxDays: number }) =>
+    api.put<{ stageId: string; maxDays: number }>(
+      `/crm/automations/stage-limits/${input.stageId}`,
+      {
+        maxDays: input.maxDays,
+      },
+    ),
+  );
+
+export interface CrmNotice {
+  id: string;
+  kind: string;
+  message: string;
+  leadId: string | null;
+  createdAt: string;
+  readAt: string | null;
+}
+
+/** The caller's own notices (alerts and automation warnings); polled every minute while open. */
+export function useNotifications() {
+  return useQuery({
+    queryKey: ['crm', 'notifications'],
+    queryFn: () => api.get<{ unread: number; notifications: CrmNotice[] }>('/crm/notifications'),
+    refetchInterval: 60_000,
+  });
+}
+
+export function useMarkNotificationsRead() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (ids: string[] | 'all') =>
+      api.post<{ marked: number }>('/crm/notifications/read', { ids }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['crm', 'notifications'] }),
+  });
+}
+
 export const useSaveTemplate = () =>
   useInvalidating((input: { id?: string } & EmailTemplateSaveInput) => {
     const { id, ...body } = input;

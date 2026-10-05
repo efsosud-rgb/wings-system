@@ -27,6 +27,8 @@ import {
   useSaveSequence,
   useSaveTemplate,
   useSequences,
+  useSetStageLimit,
+  useStageLimits,
   useUpdateRule,
 } from '../../api/automations.js';
 import { useSellers, useStages } from '../../api/leads.js';
@@ -143,7 +145,7 @@ function ConfigEditor({
             value={String(config.taskKind ?? 'follow_up')}
             onChange={(e) => set({ taskKind: e.target.value })}
           >
-            {LEAD_TASK_KINDS.filter((k) => k !== 'first_contact').map((k) => (
+            {LEAD_TASK_KINDS.map((k) => (
               <option key={k} value={k}>
                 {LEAD_TASK_KIND_LABELS[k]}
               </option>
@@ -403,7 +405,10 @@ function StageRules({
 }) {
   const update = useUpdateRule();
   const remove = useDeleteRule();
+  const limits = useStageLimits();
+  const setLimit = useSetStageLimit();
   const [adding, setAdding] = useState(false);
+  const limit = limits.data?.limits.find((l) => l.stageId === stage.id)?.maxDays;
   return (
     <section className="crm-panel">
       <h2>
@@ -451,6 +456,26 @@ function StageRules({
           ))}
         </div>
       )}
+      <label className="crm-sub" title="Dias parada na etapa antes de o painel avisar; 0 desliga">
+        Avisar negociação parada após{' '}
+        <input
+          className="crm-input"
+          type="number"
+          min={0}
+          max={365}
+          placeholder="7"
+          defaultValue={limit}
+          key={limit ?? 'padrao'}
+          style={{ width: 64, padding: '2px 6px' }}
+          onBlur={(e) => {
+            if (e.target.value === '') return;
+            const value = Number(e.target.value);
+            if (Number.isInteger(value) && value >= 0 && value <= 365 && value !== limit)
+              setLimit.mutate({ stageId: stage.id, maxDays: value });
+          }}
+        />{' '}
+        dias (em branco: padrão do sistema)
+      </label>
       {adding ? (
         <AddRule stage={stage} pipeline={pipeline} refs={refs} onDone={() => setAdding(false)} />
       ) : (
