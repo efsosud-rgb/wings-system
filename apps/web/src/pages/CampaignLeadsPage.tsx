@@ -11,6 +11,7 @@ import { useState } from 'react';
 import { useCampaignLeads, useRevealCampaignLead } from '../api/campaign-leads.js';
 import { formatDateTime, formatInt, formatWhen } from '../components/dashboard/format.js';
 import { Alert } from '../components/ui.js';
+import { PageHeader } from '../components/PageHeader.js';
 
 /**
  * Dashboard → Leads das Campanhas. The RD CRM deals of the Formatação funnel
@@ -158,15 +159,18 @@ export function CampaignLeadsPage() {
 
   return (
     <>
-      <header className="page-header">
-        <h1>Leads das Campanhas</h1>
-        <p>
-          Negócios do Funil Formatação no RD CRM que vieram das campanhas ativas, desde 28/09/2026.
-          A conferência com o RD roda a cada 15 minutos e só lê: nada é alterado no RD.
-          {data?.summary.fetchedAt && <> Dados do RD {formatWhen(data.summary.fetchedAt)}.</>}
-          {data && !data.summary.fetchedAt && <> A primeira conferência ainda não rodou.</>}
-        </p>
-      </header>
+      <PageHeader
+        title="Leads das Campanhas"
+        subtitle={
+          <>
+            Negócios do Funil Formatação no RD CRM que vieram das campanhas ativas, desde
+            28/09/2026. A conferência com o RD roda a cada 15 minutos e só lê: nada é alterado no
+            RD.
+            {data?.summary.fetchedAt && <> Dados do RD {formatWhen(data.summary.fetchedAt)}.</>}
+            {data && !data.summary.fetchedAt && <> A primeira conferência ainda não rodou.</>}
+          </>
+        }
+      />
 
       {leads.isError && <Alert kind="error">Não foi possível carregar os leads.</Alert>}
       {leads.isLoading && <p className="muted">Carregando…</p>}
