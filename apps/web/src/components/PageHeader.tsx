@@ -38,14 +38,13 @@ export function PageHeader({
           {subtitle && <p>{subtitle}</p>}
         </div>
         {tabs && tabs.length > 0 && (
-          <div className="page-tabs" role="tablist">
+          <div className="page-tabs" role="group" aria-label="Visões">
             {tabs.map((tab) =>
               tab.to ? (
                 <NavLink
                   key={tab.label}
                   to={tab.to}
                   end
-                  role="tab"
                   className={({ isActive }) => (isActive ? 'is-active' : '')}
                 >
                   {tab.label}
@@ -55,8 +54,7 @@ export function PageHeader({
                 <button
                   key={tab.label}
                   type="button"
-                  role="tab"
-                  aria-selected={tab.active}
+                  aria-pressed={tab.active}
                   className={tab.active ? 'is-active' : ''}
                   onClick={tab.onClick}
                 >

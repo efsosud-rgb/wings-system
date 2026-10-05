@@ -46,6 +46,7 @@ import { agoLabel } from '../components/campaign-builder/format.js';
 import { SearchAdPreview, YoutubePreview } from '../components/campaign-builder/GooglePreview.js';
 import { ReconcileNowButton } from '../components/campaign-builder/ReconcileNowButton.js';
 import { Alert, Button, Field, Input } from '../components/ui.js';
+import { PageHeader } from '../components/PageHeader.js';
 
 function formatBrl(cents: number | null): string {
   if (cents === null) return '—';
@@ -740,9 +741,7 @@ export function ApprovalDetailPage() {
   if (query.isError || !approval) {
     return (
       <>
-        <header className="page-header">
-          <h1>Aprovação</h1>
-        </header>
+        <PageHeader title="Aprovação" />
         <Alert kind="error">Solicitação não encontrada.</Alert>
         <p>
           <Link to="/marketing/trafego-pago-wings/aprovacoes">Voltar às aprovações</Link>
@@ -765,23 +764,24 @@ export function ApprovalDetailPage() {
 
   return (
     <>
-      <header className="page-header page-header-row">
-        <div>
-          <h1>Aprovação de orçamento</h1>
-          <p>
+      <PageHeader
+        title="Aprovação de orçamento"
+        subtitle={
+          <>
             {APPROVAL_STATUS_LABEL[approval.status]}
             {approval.escalatedAt && ` · escalada em ${formatDateTime(approval.escalatedAt)}`}
-          </p>
-        </div>
-        <Link to="/marketing/trafego-pago-wings/aprovacoes" className="btn btn-ghost btn-inline">
-          Voltar
-        </Link>
-      </header>
+          </>
+        }
+        actions={
+          <Link to="/marketing/trafego-pago-wings/aprovacoes" className="btn btn-ghost btn-inline">
+            Voltar
+          </Link>
+        }
+      />
 
       {approval.notificationError && (
         <Alert kind="error">
-          A notificação por WhatsApp falhou ({approval.notificationError}). A solicitação continua
-          aguardando decisão.
+          A notificação por WhatsApp não foi entregue. A solicitação continua aguardando decisão.
         </Alert>
       )}
 

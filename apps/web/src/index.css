@@ -1816,9 +1816,9 @@ a {
 }
 
 .alert-warning {
-  color: #fbbf24;
-  background: rgba(251, 191, 36, 0.08);
-  border: 1px solid rgba(251, 191, 36, 0.35);
+  color: var(--warning);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-soft);
 }
 
 .alert-warning ul {
@@ -2604,7 +2604,7 @@ textarea.control {
   align-items: center;
   gap: 1rem;
   padding: 0.4rem 0;
-  border-top: 1px solid var(--border, #e5e5e5);
+  border-top: 1px solid var(--line);
 }
 
 .builder-saved-actions {
@@ -2958,8 +2958,8 @@ textarea.control {
 .agent-message-user {
   align-self: flex-end;
   max-width: 92%;
-  background: rgba(233, 82, 40, 0.12);
-  border: 1px solid rgba(233, 82, 40, 0.3);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-soft);
   border-radius: 10px 10px 2px 10px;
   padding: 8px 10px;
 }
@@ -3201,9 +3201,9 @@ textarea.control {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  border: 1px solid rgba(233, 82, 40, 0.4);
-  background: rgba(233, 82, 40, 0.06);
-  border-radius: 8px;
+  border: 1px solid var(--accent-soft);
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
   padding: 14px 16px;
 }
 
@@ -3729,8 +3729,8 @@ textarea.control {
 /* Where a dragged file would land. */
 .drive-tree-row.over,
 .drive-main.dropping {
-  border-color: var(--wings-accent);
-  background: rgb(233 82 40 / 8%);
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .drive-tree-toggle,
@@ -3959,7 +3959,7 @@ textarea.control {
   background: var(--wings-card);
   border: 1px solid var(--wings-border);
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 50%);
+  box-shadow: var(--shadow-2);
 }
 
 .drive-queue-head {
@@ -4281,7 +4281,7 @@ textarea.control {
   padding: 0;
 }
 .provider-chip {
-  border: 1px solid var(--border, #d9d9d9);
+  border: 1px solid var(--line);
   border-radius: 999px;
   font-size: 0.85rem;
   padding: 0.25rem 0.75rem;
@@ -4291,7 +4291,7 @@ textarea.control {
 }
 .provider-chip-on strong::before {
   content: '● ';
-  color: var(--success, #2e7d32);
+  color: var(--success);
 }
 .provider-cards {
   display: grid;
@@ -4300,7 +4300,7 @@ textarea.control {
   margin-top: 1.5rem;
 }
 .provider-card {
-  border: 1px solid var(--border, #d9d9d9);
+  border: 1px solid var(--line);
   border-radius: 0.75rem;
   padding: 1rem;
 }
@@ -5406,6 +5406,9 @@ textarea.control {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+.ws-page .page-head {
+  margin-bottom: var(--space-3);
 }
 .ws-page {
   flex: 1 1 0;

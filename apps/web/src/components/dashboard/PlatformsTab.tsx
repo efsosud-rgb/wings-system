@@ -50,13 +50,27 @@ const METRICS: MetricSpec[] = [
   { key: 'cpmCents', label: 'CPM', format: formatMoney, upIsGood: false, csv: reais },
   { key: 'conversions', label: 'Leads', format: formatInt, upIsGood: true, csv: (v) => v },
   { key: 'costPerLeadCents', label: 'CPL', format: formatMoney, upIsGood: false, csv: reais },
-  { key: 'frequencyMilli', label: 'Frequência', format: formatMilli, upIsGood: false, csv: (v) => (v === null ? null : v / 1000) },
+  {
+    key: 'frequencyMilli',
+    label: 'Frequência',
+    format: formatMilli,
+    upIsGood: false,
+    csv: (v) => (v === null ? null : v / 1000),
+  },
 ];
 
-export function Delta({ current, previous, upIsGood }: { current: number | null; previous: number | null; upIsGood: boolean }) {
+export function Delta({
+  current,
+  previous,
+  upIsGood,
+}: {
+  current: number | null;
+  previous: number | null;
+  upIsGood: boolean;
+}) {
   const delta = deltaPercent(current, previous);
   if (delta === null) return <span className="delta delta-none">—</span>;
-  const tone = delta === 0 ? 'flat' : (delta > 0) === upIsGood ? 'good' : 'bad';
+  const tone = delta === 0 ? 'flat' : delta > 0 === upIsGood ? 'good' : 'bad';
   return (
     <span className={`delta delta-${tone}`} title="em relação ao período anterior">
       {formatSignedPercent(delta)}
@@ -77,11 +91,18 @@ export function PlatformsTab({ data }: { data: DashboardPlatforms }) {
   }));
   const total = {
     current: figuresOf(data.platforms.reduce((sum, p) => addTotals(sum, p.current), EMPTY_TOTALS)),
-    previous: figuresOf(data.platforms.reduce((sum, p) => addTotals(sum, p.previous), EMPTY_TOTALS)),
+    previous: figuresOf(
+      data.platforms.reduce((sum, p) => addTotals(sum, p.previous), EMPTY_TOTALS),
+    ),
   };
 
   const exportCsv = () => {
-    const header = ['Métrica', ...columns.flatMap((c) => [AD_PLATFORM_LABEL[c.platform.platform], 'Anterior', 'Variação %']), 'Total', 'Total anterior'];
+    const header = [
+      'Métrica',
+      ...columns.flatMap((c) => [AD_PLATFORM_LABEL[c.platform.platform], 'Anterior', 'Variação %']),
+      'Total',
+      'Total anterior',
+    ];
     const rows = METRICS.map((metric) => [
       metric.label,
       ...columns.flatMap((c) => [
@@ -131,7 +152,11 @@ export function PlatformsTab({ data }: { data: DashboardPlatforms }) {
               <th scope="col">Métrica</th>
               {columns.map((c) => (
                 <th key={c.platform.platform} scope="col" colSpan={2}>
-                  <i className="legend-dot" style={{ background: COLOR[c.platform.platform] }} aria-hidden="true" />
+                  <i
+                    className="legend-dot"
+                    style={{ background: COLOR[c.platform.platform] }}
+                    aria-hidden="true"
+                  />
                   {AD_PLATFORM_LABEL[c.platform.platform]}
                   {c.platform.accounts.length === 0 && <span className="cell-sub">sem conta</span>}
                 </th>
@@ -146,7 +171,12 @@ export function PlatformsTab({ data }: { data: DashboardPlatforms }) {
               <tr key={metric.key}>
                 <th scope="row">{metric.label}</th>
                 {columns.map((c) => (
-                  <MetricCells key={c.platform.platform} metric={metric} current={c.current} previous={c.previous} />
+                  <MetricCells
+                    key={c.platform.platform}
+                    metric={metric}
+                    current={c.current}
+                    previous={c.previous}
+                  />
                 ))}
                 <MetricCells metric={metric} current={total.current} previous={total.previous} />
               </tr>
@@ -155,19 +185,31 @@ export function PlatformsTab({ data }: { data: DashboardPlatforms }) {
         </table>
       </div>
       <p className="cell-sub dash-note">
-        Alcance e frequência somam dias e campanhas, então a frequência do período é um piso, não
-        a da plataforma. Leads contam só a ação de lead da conta, nunca cliques.
+        Alcance e frequência somam dias e campanhas, então a frequência do período é um piso, não a
+        da plataforma. Leads contam só a ação de lead da conta, nunca cliques.
       </p>
     </>
   );
 }
 
-function MetricCells({ metric, current, previous }: { metric: MetricSpec; current: Figures; previous: Figures }) {
+function MetricCells({
+  metric,
+  current,
+  previous,
+}: {
+  metric: MetricSpec;
+  current: Figures;
+  previous: Figures;
+}) {
   return (
     <>
       <td className="mono num">{metric.format(current[metric.key])}</td>
       <td className="num">
-        <Delta current={current[metric.key]} previous={previous[metric.key]} upIsGood={metric.upIsGood} />
+        <Delta
+          current={current[metric.key]}
+          previous={previous[metric.key]}
+          upIsGood={metric.upIsGood}
+        />
       </td>
     </>
   );

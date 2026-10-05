@@ -40,7 +40,8 @@ const VERDICTS_SHOWN: CampaignVerdict[] = ['positive', 'attention', 'negative', 
 
 /** Where the run came from, and what it cost: the line above the cards. */
 export function runLine(run: InsightRun): string {
-  const by = run.trigger === 'schedule' ? 'pela agenda' : `por ${run.requestedByName ?? 'uma pessoa'}`;
+  const by =
+    run.trigger === 'schedule' ? 'pela agenda' : `por ${run.requestedByName ?? 'uma pessoa'}`;
   const sources = run.consulted.length;
   return `${run.status === 'failed' ? 'Tentativa' : 'Gerados'} ${formatDateTime(run.startedAt)} ${by} · custo ${formatUsdMicro(run.costMicroUsd)} · consultou ${sources} ${sources === 1 ? 'fonte' : 'fontes'}`;
 }
@@ -100,12 +101,13 @@ export function RunBar({
         </p>
         {latestRun?.status === 'failed' && !runningRun && (
           <p className="field-error" role="alert">
-            A última geração falhou ({latestRun.error ?? 'sem código'}). Nada foi alterado; gere de novo.
+            A última geração falhou ({latestRun.error ?? 'sem código'}). Nada foi alterado; gere de
+            novo.
           </p>
         )}
         <p className="cell-sub">
-          Hoje: {formatUsdMicro(usage.spentMicroUsd)} de {formatUsdMicro(usage.limitMicroUsd)} · próxima geração
-          automática {formatDateTime(nextScheduledAt)}
+          Hoje: {formatUsdMicro(usage.spentMicroUsd)} de {formatUsdMicro(usage.limitMicroUsd)} ·
+          próxima geração automática {formatDateTime(nextScheduledAt)}
         </p>
       </div>
       <div className="runbar-action">
@@ -207,10 +209,14 @@ function OpenInsight({ insight, canRequest }: { insight: InsightCard; canRequest
                 {request.isPending ? 'Criando pedido…' : 'Criar pedido'}
               </Button>
             ) : (
-              <p className="field-hint">Você não tem permissão para pedir alterações. Marque como visto ou peça a quem tem.</p>
+              <p className="field-hint">
+                Você não tem permissão para pedir alterações. Marque como visto ou peça a quem tem.
+              </p>
             )
           ) : action ? (
-            <p className="field-hint">{action.notRequestableReason ?? 'O sistema não cria pedido para esta alteração.'}</p>
+            <p className="field-hint">
+              {action.notRequestableReason ?? 'O sistema não cria pedido para esta alteração.'}
+            </p>
           ) : null}
           <Button
             type="button"
@@ -223,12 +229,15 @@ function OpenInsight({ insight, canRequest }: { insight: InsightCard; canRequest
         </div>
         {action && action.requestable && canRequest && (
           <p className="cell-sub">
-            O pedido sai no seu nome, marcado "sugerido pela IA", e espera aprovação como qualquer outro.
+            O pedido sai no seu nome, marcado "sugerido pela IA", e espera aprovação como qualquer
+            outro.
           </p>
         )}
         {request.isError && (
           <p className="field-error" role="alert">
-            {request.error instanceof Error ? request.error.message : 'Não foi possível criar o pedido.'}
+            {request.error instanceof Error
+              ? request.error.message
+              : 'Não foi possível criar o pedido.'}
           </p>
         )}
         {seen.isError && (
@@ -283,7 +292,11 @@ function VerdictStrip() {
     <section className="verdict-strip" aria-label="Vereditos das campanhas em 30 dias">
       <span className="muted">Vereditos em 30 dias:</span>
       {VERDICTS_SHOWN.map((verdict) => (
-        <Link key={verdict} to="/dashboard/marketing?aba=campanhas&dias=30" className="verdict-count">
+        <Link
+          key={verdict}
+          to="/dashboard/marketing?aba=campanhas&dias=30"
+          className="verdict-count"
+        >
           <StatePill state={stateOfVerdict(verdict)}>
             {CAMPAIGN_VERDICT_LABEL[verdict]} {counts.get(verdict) ?? 0}
           </StatePill>
@@ -312,7 +325,9 @@ export function InsightsTab() {
   }, [follow.data?.run.status, insights]);
 
   if (insights.isError) {
-    return <Alert kind="error">Não foi possível carregar os insights. Tente de novo em instantes.</Alert>;
+    return (
+      <Alert kind="error">Não foi possível carregar os insights. Tente de novo em instantes.</Alert>
+    );
   }
   if (!insights.data) return <p className="muted">Carregando…</p>;
   const data = insights.data;

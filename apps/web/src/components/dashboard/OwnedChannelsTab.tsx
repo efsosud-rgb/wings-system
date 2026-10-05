@@ -15,7 +15,11 @@ export function OwnedChannelsTab({ days }: { days: DashboardWindow }) {
   const query = useOwnedChannels(days);
 
   if (query.isError) {
-    return <Alert kind="error">Não foi possível carregar os canais próprios. Tente de novo em instantes.</Alert>;
+    return (
+      <Alert kind="error">
+        Não foi possível carregar os canais próprios. Tente de novo em instantes.
+      </Alert>
+    );
   }
   if (!query.data) return <p className="muted">Carregando…</p>;
   const { blog } = query.data;
@@ -26,7 +30,12 @@ export function OwnedChannelsTab({ days }: { days: DashboardWindow }) {
       `blog-${query.data.since}-a-${query.data.until}.csv`,
       toCsv(
         header,
-        blog.posts.map((post) => [post.title, formatDateFull(post.publishedAt), post.categories.join(', '), post.link]),
+        blog.posts.map((post) => [
+          post.title,
+          formatDateFull(post.publishedAt),
+          post.categories.join(', '),
+          post.link,
+        ]),
       ),
     );
   };
@@ -79,7 +88,13 @@ export function OwnedChannelsTab({ days }: { days: DashboardWindow }) {
                       </a>
                     </td>
                     <td className="mono">{formatDateFull(post.publishedAt)}</td>
-                    <td>{post.categories.length > 0 ? post.categories.join(', ') : <span className="muted">sem categoria</span>}</td>
+                    <td>
+                      {post.categories.length > 0 ? (
+                        post.categories.join(', ')
+                      ) : (
+                        <span className="muted">sem categoria</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -90,7 +105,9 @@ export function OwnedChannelsTab({ days }: { days: DashboardWindow }) {
 
       <section className="dash-section owned-placeholder" aria-labelledby="social-title">
         <h2 id="social-title">Publicação social</h2>
-        <p className="muted">Chega na próxima onda; os posts sociais aparecem aqui no mesmo formato.</p>
+        <p className="muted">
+          Chega na próxima onda; os posts sociais aparecem aqui no mesmo formato.
+        </p>
       </section>
     </>
   );

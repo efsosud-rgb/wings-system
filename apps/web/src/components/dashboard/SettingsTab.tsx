@@ -9,7 +9,11 @@ import {
 } from '@wings/shared';
 import { useState } from 'react';
 import { hasPermission, useSession } from '../../api/auth.js';
-import { useDashboardSettings, useSetAccountCplTarget, useSetCplTarget } from '../../api/dashboard.js';
+import {
+  useDashboardSettings,
+  useSetAccountCplTarget,
+  useSetCplTarget,
+} from '../../api/dashboard.js';
 import { formatBrl, parseBrlToCents } from '../campaign-builder/format.js';
 import { Alert, Button, Field, Input } from '../ui.js';
 import { formatDateTime, formatInt, formatMoney } from './format.js';
@@ -25,7 +29,9 @@ const pct = (ratio: number) => `${Math.round(Math.abs(ratio) * 100)}%`;
 function TargetCard({ target, canConfirm }: { target: CplTarget; canConfirm: boolean }) {
   const set = useSetCplTarget();
   const kind = target.objectiveKind as 'leads' | 'traffic';
-  const [text, setText] = useState(target.targetCents === null ? '' : (target.targetCents / 100).toFixed(2).replace('.', ','));
+  const [text, setText] = useState(
+    target.targetCents === null ? '' : (target.targetCents / 100).toFixed(2).replace('.', ','),
+  );
   const [error, setError] = useState<string | null>(null);
 
   const confirm = () => {
@@ -46,12 +52,15 @@ function TargetCard({ target, canConfirm }: { target: CplTarget; canConfirm: boo
       </h3>
       <p className="target-current">
         {target.targetCents === null ? (
-          <span className="muted">Sem meta confirmada: as campanhas deste objetivo ficam "Sem meta".</span>
+          <span className="muted">
+            Sem meta confirmada: as campanhas deste objetivo ficam "Sem meta".
+          </span>
         ) : (
           <>
             <b className="mono">{formatBrl(target.targetCents)}</b>
             <span className="cell-sub">
-              confirmada{target.confirmedByName ? ` por ${target.confirmedByName}` : ''} em {formatDateTime(target.confirmedAt)}
+              confirmada{target.confirmedByName ? ` por ${target.confirmedByName}` : ''} em{' '}
+              {formatDateTime(target.confirmedAt)}
             </span>
           </>
         )}
@@ -59,7 +68,10 @@ function TargetCard({ target, canConfirm }: { target: CplTarget; canConfirm: boo
       <div className="target-proposal">
         <span className="agent-card-label">Proposta a partir do histórico</span>
         {target.proposedCents === null ? (
-          <p className="muted">Histórico curto demais para propor um valor: ainda faltam leads ou cliques nos últimos 90 dias.</p>
+          <p className="muted">
+            Histórico curto demais para propor um valor: ainda faltam leads ou cliques nos últimos
+            90 dias.
+          </p>
         ) : (
           <>
             <p>
@@ -128,7 +140,13 @@ const centsText = (cents: number) => (cents / 100).toFixed(2).replace('.', ',');
  * One account's leads CPL target. It wins over the company-wide one. The
  * suggestion only fills the box; the target exists after "Confirmar".
  */
-function AccountTargetRow({ target, canConfirm }: { target: AccountCplTarget; canConfirm: boolean }) {
+function AccountTargetRow({
+  target,
+  canConfirm,
+}: {
+  target: AccountCplTarget;
+  canConfirm: boolean;
+}) {
   const set = useSetAccountCplTarget();
   const initial = target.targetCents ?? target.suggestedCents;
   const [text, setText] = useState(initial === null ? '' : centsText(initial));
@@ -158,11 +176,14 @@ function AccountTargetRow({ target, canConfirm }: { target: AccountCplTarget; ca
           <>
             <b className="mono">{formatBrl(target.targetCents)}</b>
             <span className="cell-sub">
-              confirmada{target.confirmedByName ? ` por ${target.confirmedByName}` : ''} em {formatDateTime(target.confirmedAt)}
+              confirmada{target.confirmedByName ? ` por ${target.confirmedByName}` : ''} em{' '}
+              {formatDateTime(target.confirmedAt)}
             </span>
           </>
         )}
-        {target.targetCents === null && target.suggestionNote && <span className="cell-sub">{target.suggestionNote}</span>}
+        {target.targetCents === null && target.suggestionNote && (
+          <span className="cell-sub">{target.suggestionNote}</span>
+        )}
       </td>
       <td>
         <Field label="Meta de CPL em reais" error={error ?? undefined} errorId={`${inputId}-error`}>
@@ -217,7 +238,11 @@ export function SettingsTab() {
   const settings = useDashboardSettings();
 
   if (settings.isError) {
-    return <Alert kind="error">Não foi possível carregar as configurações. Tente de novo em instantes.</Alert>;
+    return (
+      <Alert kind="error">
+        Não foi possível carregar as configurações. Tente de novo em instantes.
+      </Alert>
+    );
   }
   if (!settings.data) return <p className="muted">Carregando…</p>;
 
@@ -235,8 +260,8 @@ export function SettingsTab() {
       <section className="dash-section" aria-labelledby="account-targets-title">
         <h2 id="account-targets-title">Meta de CPL por conta</h2>
         <p className="muted">
-          Vale para as campanhas de leads da conta e passa na frente da meta por objetivo acima. Sem meta da conta, vale a
-          meta por objetivo; sem nenhuma, a campanha fica "Sem meta".
+          Vale para as campanhas de leads da conta e passa na frente da meta por objetivo acima. Sem
+          meta da conta, vale a meta por objetivo; sem nenhuma, a campanha fica "Sem meta".
         </p>
         {settings.data.accountTargets.length === 0 ? (
           <p className="muted">Nenhuma conta de anúncios ativa.</p>
@@ -255,59 +280,70 @@ export function SettingsTab() {
               </thead>
               <tbody>
                 {settings.data.accountTargets.map((target) => (
-                  <AccountTargetRow key={target.adAccountId} target={target} canConfirm={canConfirm} />
+                  <AccountTargetRow
+                    key={target.adAccountId}
+                    target={target}
+                    canConfirm={canConfirm}
+                  />
                 ))}
               </tbody>
             </table>
           </div>
         )}
-        {!canConfirm && <p className="field-hint">Só quem pode pedir alterações de tráfego confirma uma meta.</p>}
+        {!canConfirm && (
+          <p className="field-hint">Só quem pode pedir alterações de tráfego confirma uma meta.</p>
+        )}
       </section>
 
       <section className="dash-section verdict-legend" aria-labelledby="legend-title">
         <h2 id="legend-title">Como o veredito é calculado</h2>
         <p className="muted">
           Uma campanha só é julgada com ao menos {formatMoney(VERDICT_RULES.minSpendCents)} gastos e{' '}
-          {formatInt(VERDICT_RULES.minImpressions)} impressões no período. O sinal principal decide primeiro: CPL para
-          campanhas de leads, CTR para as demais. Um sinal principal ruim, ou dois sinais ruins, dão Negativa; um sinal
-          ruim ou dois em atenção dão Atenção; o resto é Positiva.
+          {formatInt(VERDICT_RULES.minImpressions)} impressões no período. O sinal principal decide
+          primeiro: CPL para campanhas de leads, CTR para as demais. Um sinal principal ruim, ou
+          dois sinais ruins, dão Negativa; um sinal ruim ou dois em atenção dão Atenção; o resto é
+          Positiva.
         </p>
         <dl className="legend-list">
           <div>
             <dt>{VERDICT_SIGNAL_LABEL.cpl}</dt>
             <dd>
-              Bom até {pct(1 - VERDICT_RULES.cplGoodRatio)} abaixo da meta, atenção até {pct(VERDICT_RULES.cplAttentionRatio - 1)}{' '}
-              acima, ruim além disso. Sem nenhum lead, ruim quando o gasto passa de {VERDICT_RULES.cplNoLeadSpendRatio}× a meta.
+              Bom até {pct(1 - VERDICT_RULES.cplGoodRatio)} abaixo da meta, atenção até{' '}
+              {pct(VERDICT_RULES.cplAttentionRatio - 1)} acima, ruim além disso. Sem nenhum lead,
+              ruim quando o gasto passa de {VERDICT_RULES.cplNoLeadSpendRatio}× a meta.
             </dd>
           </div>
           <div>
             <dt>{VERDICT_SIGNAL_LABEL.ctr}</dt>
             <dd>
-              Bom a partir de {pct(VERDICT_RULES.ctrGoodRatio - 1)} acima da mediana da conta em 90 dias, ruim abaixo de{' '}
-              {pct(1 - VERDICT_RULES.ctrAttentionRatio)} sob ela.
+              Bom a partir de {pct(VERDICT_RULES.ctrGoodRatio - 1)} acima da mediana da conta em 90
+              dias, ruim abaixo de {pct(1 - VERDICT_RULES.ctrAttentionRatio)} sob ela.
             </dd>
           </div>
           <div>
             <dt>{VERDICT_SIGNAL_LABEL.trend}</dt>
             <dd>
               CPL: bom caindo {pct(VERDICT_RULES.cplTrendGoodPercent / 100)} ou mais, ruim subindo{' '}
-              {pct(VERDICT_RULES.cplTrendBadPercent / 100)} ou mais. CTR: bom subindo {pct(VERDICT_RULES.ctrTrendGoodPercent / 100)}, ruim
-              caindo {pct(VERDICT_RULES.ctrTrendBadPercent / 100)}.
+              {pct(VERDICT_RULES.cplTrendBadPercent / 100)} ou mais. CTR: bom subindo{' '}
+              {pct(VERDICT_RULES.ctrTrendGoodPercent / 100)}, ruim caindo{' '}
+              {pct(VERDICT_RULES.ctrTrendBadPercent / 100)}.
             </dd>
           </div>
           <div>
             <dt>{VERDICT_SIGNAL_LABEL.frequency}</dt>
             <dd>
               Atenção a partir de {VERDICT_RULES.frequencyAttentionMilli / 1000}, ruim a partir de{' '}
-              {VERDICT_RULES.frequencyBadMilli / 1000}. Como o alcance soma dias, a frequência do período é um piso.
+              {VERDICT_RULES.frequencyBadMilli / 1000}. Como o alcance soma dias, a frequência do
+              período é um piso.
             </dd>
           </div>
           <div>
             <dt>{VERDICT_SIGNAL_LABEL.pacing}</dt>
             <dd>
-              Gasto dos últimos 7 dias contra 7 vezes o orçamento diário: bom entre {pct(VERDICT_RULES.pacingGoodMin)} e{' '}
-              {pct(VERDICT_RULES.pacingGoodMax)}, atenção entre {pct(VERDICT_RULES.pacingAttentionMin)} e{' '}
-              {pct(VERDICT_RULES.pacingAttentionMax)}, ruim fora disso.
+              Gasto dos últimos 7 dias contra 7 vezes o orçamento diário: bom entre{' '}
+              {pct(VERDICT_RULES.pacingGoodMin)} e {pct(VERDICT_RULES.pacingGoodMax)}, atenção entre{' '}
+              {pct(VERDICT_RULES.pacingAttentionMin)} e {pct(VERDICT_RULES.pacingAttentionMax)},
+              ruim fora disso.
             </dd>
           </div>
         </dl>

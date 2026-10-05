@@ -58,7 +58,9 @@ export function TextField({
 
 /** "1.234,56" <-> 123456 centavos. */
 export const centsToText = (cents: number | null) =>
-  cents === null ? '' : (cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  cents === null
+    ? ''
+    : (cents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export function textToNumber(text: string): number | null {
   const clean = text.replace(/[^\d,.-]/g, '');
@@ -133,11 +135,23 @@ const intFromText = (text: string) => {
   return digits ? Number.parseInt(digits, 10) : null;
 };
 
-export function MoneyField(props: { label: string; value: number | null; onChange: Setter<number | null>; hint?: string; disabled?: boolean }) {
+export function MoneyField(props: {
+  label: string;
+  value: number | null;
+  onChange: Setter<number | null>;
+  hint?: string;
+  disabled?: boolean;
+}) {
   return <NumericField {...props} prefix="R$" toText={centsToText} fromText={moneyFromText} />;
 }
 
-export function PercentField(props: { label: string; value: number | null; onChange: Setter<number | null>; hint?: string; disabled?: boolean }) {
+export function PercentField(props: {
+  label: string;
+  value: number | null;
+  onChange: Setter<number | null>;
+  hint?: string;
+  disabled?: boolean;
+}) {
   return <NumericField {...props} suffix="%" toText={percentToText} fromText={percentFromText} />;
 }
 
@@ -204,7 +218,11 @@ export function AddressFields({
     <div className="grid-3">
       <Field
         label="CEP"
-        hint={lookup.isSuccess ? 'Endereço preenchido pelo CEP. Confira e complete o número.' : undefined}
+        hint={
+          lookup.isSuccess
+            ? 'Endereço preenchido pelo CEP. Confira e complete o número.'
+            : undefined
+        }
         error={
           lookup.error
             ? lookup.error instanceof ApiError
@@ -246,16 +264,36 @@ export function AddressFields({
           </Button>
         </div>
       </Field>
-      <TextField label="Logradouro" value={value.street} onChange={(street) => set({ street })} disabled={disabled} />
-      <TextField label="Número" value={value.number} onChange={(number) => set({ number })} disabled={disabled} />
+      <TextField
+        label="Logradouro"
+        value={value.street}
+        onChange={(street) => set({ street })}
+        disabled={disabled}
+      />
+      <TextField
+        label="Número"
+        value={value.number}
+        onChange={(number) => set({ number })}
+        disabled={disabled}
+      />
       <TextField
         label="Complemento"
         value={value.complement}
         onChange={(complement) => set({ complement })}
         disabled={disabled}
       />
-      <TextField label="Bairro" value={value.district} onChange={(district) => set({ district })} disabled={disabled} />
-      <TextField label="Cidade" value={value.city} onChange={(city) => set({ city })} disabled={disabled} />
+      <TextField
+        label="Bairro"
+        value={value.district}
+        onChange={(district) => set({ district })}
+        disabled={disabled}
+      />
+      <TextField
+        label="Cidade"
+        value={value.city}
+        onChange={(city) => set({ city })}
+        disabled={disabled}
+      />
       <Field label="UF">
         <Select
           value={value.state ?? ''}
