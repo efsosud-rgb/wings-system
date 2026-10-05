@@ -10,6 +10,8 @@ import {
 import { useState } from 'react';
 import { useCampaignLeads, useRevealCampaignLead } from '../api/campaign-leads.js';
 import { formatDateTime, formatInt, formatWhen } from '../components/dashboard/format.js';
+import { Chart3D } from '../components/charts3d/Chart3D.js';
+import { ChartTable } from '../components/dashboard/charts3d.js';
 import { Alert } from '../components/ui.js';
 import { PageHeader } from '../components/PageHeader.js';
 
@@ -121,35 +123,75 @@ function Summary({ summary }: { summary: CampaignLeadsSummary }) {
           <span className="kpi-delta muted">nenhum contato registrado</span>
         )}
       </div>
-      <div className="kpi campaign-leads-stages">
-        <span className="kpi-label">Por etapa</span>
-        {summary.stages.length === 0 ? (
-          <span className="muted">—</span>
-        ) : (
-          <ul>
-            {summary.stages.map((stage) => (
-              <li key={stage.stage}>
-                <span>{stage.stage}</span> <b className="mono">{stage.count}</b>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-      <div className="kpi campaign-leads-stages">
-        <span className="kpi-label">Perdidos, com motivo</span>
-        {summary.lost.length === 0 ? (
-          <span className="muted">nenhum</span>
-        ) : (
-          <ul>
-            {summary.lost.map((lost) => (
-              <li key={lost.reason}>
-                <span>{lost.reason}</span> <b className="mono">{lost.count}</b>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
     </section>
+  );
+}
+
+/** Stages, losses and the deals left out, each as a 3D chart with its table. */
+function Breakdown({ summary }: { summary: CampaignLeadsSummary }) {
+  const lists: {
+    title: string;
+    empty: string;
+    rows: { label: string; value: number }[];
+    ordered?: boolean;
+    head: string;
+  }[] = [
+    {
+      title: 'Por etapa',
+      empty: '— nenhum lead no período',
+      rows: summary.stages.map((stage) => ({ label: stage.stage, value: stage.count })),
+      ordered: true,
+      head: 'Etapa',
+    },
+    {
+      title: 'Perdidos, com motivo',
+      empty: 'nenhum perdido no período',
+      rows: summary.lost.map((lost) => ({ label: lost.reason, value: lost.count })),
+      head: 'Motivo',
+    },
+    {
+      title: 'Sem atribuição, por motivo',
+      empty: 'nenhum negócio sem atribuição',
+      rows: summary.unattributed.map((entry) => ({
+        label: UNATTRIBUTED_REASONS[entry.reason],
+        value: entry.count,
+      })),
+      head: 'Motivo',
+    },
+  ];
+  return (
+    <div className="sales-grid campaign-leads-charts">
+      {lists.map((list) => (
+        <section key={list.title} className="card sales-card" aria-label={list.title}>
+          <h2>{list.title}</h2>
+          {list.rows.length === 0 ? (
+            <p className="muted sales-empty">{list.empty}</p>
+          ) : (
+            <Chart3D
+              height={Math.min(300, 70 + Math.min(list.rows.length, 6) * 38)}
+              ariaLabel={list.title}
+              spec={{
+                kind: 'ranked',
+                items: list.rows,
+                format: 'int',
+                sort: !list.ordered,
+                limit: list.ordered ? Infinity : undefined,
+              }}
+              table={
+                <ChartTable
+                  caption={list.title}
+                  head={[list.head, 'Negócios']}
+                  rows={list.rows.map((row) => ({
+                    key: row.label,
+                    cells: [row.label, formatInt(row.value)],
+                  }))}
+                />
+              }
+            />
+          )}
+        </section>
+      ))}
+    </div>
   );
 }
 
@@ -190,6 +232,7 @@ export function CampaignLeadsPage() {
           )}
 
           <Summary summary={data.summary} />
+          <Breakdown summary={data.summary} />
 
           <section className="campaign-leads-attribution" aria-label="Atribuição">
             <p>
@@ -204,15 +247,6 @@ export function CampaignLeadsPage() {
                 </span>
               )}
             </p>
-            {data.summary.unattributed.length > 0 && (
-              <ul>
-                {data.summary.unattributed.map((entry) => (
-                  <li key={entry.reason}>
-                    {UNATTRIBUTED_REASONS[entry.reason]}: <b className="mono">{entry.count}</b>
-                  </li>
-                ))}
-              </ul>
-            )}
           </section>
 
           <div className="table-wrap">

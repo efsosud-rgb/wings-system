@@ -266,6 +266,41 @@ describe('Dashboard › Vendas v1', () => {
     expect(past.forecast).toMatchObject({ ended: true, wonCents: 70_000, deals: 0 });
   });
 
+  it('accumulates won value day by day against the comparison ranges, in the caller scope', async () => {
+    const board = await salesDashboardOf(db, { ...month, spendVisible: false });
+    const { trend } = board;
+    expect(trend.bucket).toBe('day');
+    expect(trend.days).toHaveLength(15);
+    expect(trend.days[0]).toBe('2026-10-01');
+    // 50 000 won on 14/10; the previous period's 70 000 on 10/09, read at the same position.
+    expect(trend.current.slice(12)).toEqual([0, 50_000, 50_000]);
+    expect(trend.previous.slice(8, 10)).toEqual([0, 70_000]);
+    expect(trend.previous.at(-1)).toBe(70_000);
+    expect(trend.previousYear.every((value) => value === 0)).toBe(true);
+    expect(trend.goalCents).toBeNull();
+
+    // Days after today have no value yet: null, never a zero.
+    const ahead = await salesDashboardOf(db, {
+      ...month,
+      period: 'custom',
+      from: '2026-10-01',
+      to: '2026-10-20',
+      spendVisible: false,
+    });
+    expect(ahead.trend.current.slice(14)).toEqual([50_000, null, null, null, null, null]);
+
+    // Every funnel adds the other funnel's sale; a seller sees only their own.
+    const all = await salesDashboardOf(db, { ...month, pipeline: 'todos', spendVisible: false });
+    expect(all.trend.current.at(-1)).toBe(1_049_000);
+    const mine = await salesDashboardOf(db, {
+      ...month,
+      ownerEmployeeId: seller.id,
+      spendVisible: false,
+    });
+    expect(mine.trend.current.at(-1)).toBe(50_000);
+    expect(mine.trend.previous.at(-1)).toBe(0);
+  });
+
   it('walks the funnel: who reached each stage, the step conversion and the days spent', async () => {
     const board = await salesDashboardOf(db, { ...month, spendVisible: false });
     expect(

@@ -9,10 +9,12 @@ import {
   type DashboardAudience,
   type MetricTotals,
 } from '@wings/shared';
-import { useMemo, type ReactNode } from 'react';
+import { useMemo } from 'react';
 import { downloadCsv, percent, reais, toCsv, type CsvCell } from '../../lib/csv.js';
 import { Button } from '../ui.js';
-import { BarList, DailyColumns, HeatGrid } from './charts.js';
+import { Chart3D } from '../charts3d/Chart3D.js';
+import { shareSpec } from '../charts3d/spec.js';
+import { ChartTable } from './charts3d.js';
 import { formatInt, formatMoney, formatPercentMilli } from './format.js';
 import { ageLabel, genderLabel, hourLabel, placementLabel } from './labels.js';
 
@@ -25,14 +27,14 @@ import { ageLabel, genderLabel, hourLabel, placementLabel } from './labels.js';
 
 interface Group {
   key: string;
-  label: ReactNode;
+  label: string;
   totals: MetricTotals;
 }
 
 function groupBy(
   rows: BreakdownRow[],
   keyOf: (row: BreakdownRow) => string | null,
-  label: (key: string) => ReactNode,
+  label: (key: string) => string,
 ): Group[] {
   const groups = new Map<string, MetricTotals>();
   for (const row of rows) {
@@ -45,35 +47,62 @@ function groupBy(
     .sort((a, b) => b.totals.spendCents - a.totals.spendCents);
 }
 
-function Detail({ totals }: { totals: MetricTotals }) {
-  const ratios = ratiosOf(totals);
-  return (
-    <>
-      <b className="mono">{formatMoney(totals.spendCents)}</b>
-      <span className="cell-sub">
-        {totals.conversions > 0
-          ? `${formatInt(totals.conversions)} leads · CPL ${formatMoney(ratios.costPerLeadCents)}`
-          : `CTR ${formatPercentMilli(ratios.ctrMilli)} · sem leads`}
-      </span>
-    </>
-  );
-}
+/** Slices that are not a real value of the split: drawn in neutral. */
+const UNKNOWN = new Set(['Não informada', 'Não informado', 'unknown']);
 
-function Panel({ title, groups, limit = 12 }: { title: string; groups: Group[]; limit?: number }) {
+function Panel({
+  title,
+  groups,
+  donut = false,
+}: {
+  title: string;
+  groups: Group[];
+  /** Parts of a whole (gender, device): a donut when it reads as one. */
+  donut?: boolean;
+}) {
+  const items = groups.map((group) => ({
+    label: group.label,
+    value: group.totals.spendCents,
+    neutral: UNKNOWN.has(group.label) || UNKNOWN.has(group.key),
+  }));
   return (
-    <section className="dash-section audience-panel">
+    <section className="dash-section audience-panel" aria-label={title}>
       <h2>{title}</h2>
-      <BarList
-        color="var(--viz-meta)"
-        emptyText="Sem dados no período."
-        rows={groups.slice(0, limit).map((group) => ({
-          key: group.key,
-          label: group.label,
-          amount: group.totals.spendCents,
-          detail: <Detail totals={group.totals} />,
-        }))}
-      />
-      {groups.length > limit && <p className="cell-sub">Mais {groups.length - limit} no CSV.</p>}
+      {groups.length === 0 ? (
+        <p className="muted">Sem dados no período.</p>
+      ) : (
+        <Chart3D
+          height={donut ? 240 : Math.min(300, 70 + Math.min(groups.length, 6) * 38)}
+          ariaLabel={`${title}: gasto por fatia`}
+          spec={
+            donut
+              ? shareSpec(items, 'brl', { totalLabel: 'do gasto', centerLabel: 'gasto' })
+              : { kind: 'ranked', items, format: 'brl', totalLabel: 'do gasto' }
+          }
+          table={
+            <ChartTable
+              caption={`${title}: gasto, leads e custo por lead`}
+              head={[title, 'Gasto', 'CTR', 'Leads', 'CPL']}
+              rows={groups.map((group) => {
+                const ratios = ratiosOf(group.totals);
+                return {
+                  key: group.key,
+                  neutral: UNKNOWN.has(group.label) || UNKNOWN.has(group.key),
+                  cells: [
+                    group.label,
+                    formatMoney(group.totals.spendCents),
+                    formatPercentMilli(ratios.ctrMilli),
+                    formatInt(group.totals.conversions),
+                    group.totals.conversions > 0
+                      ? formatMoney(ratios.costPerLeadCents)
+                      : '— (sem leads)',
+                  ],
+                };
+              })}
+            />
+          }
+        />
+      )}
     </section>
   );
 }
@@ -115,12 +144,16 @@ export function AudienceTab({ data }: { data: DashboardAudience }) {
   }));
   const hourLeads = by.hour.reduce((total, group) => total + group.totals.conversions, 0);
 
-  const heatCells = data.heatmap.map((cell) => ({
-    weekday: cell.weekday,
-    hour: cell.hour,
-    amount: cell.spendCents,
-    detail: `${formatInt(cell.clicks)} cliques, ${formatInt(cell.conversions)} leads`,
-  }));
+  const heatValues = WEEKDAY_LABEL.map((_, weekday) =>
+    HOURS.map(
+      (hour) =>
+        data.heatmap.find((cell) => cell.weekday === weekday && cell.hour === hour)?.spendCents ??
+        0,
+    ),
+  );
+  const heatRows = [...data.heatmap]
+    .filter((cell) => cell.spendCents > 0 || cell.clicks > 0 || cell.conversions > 0)
+    .sort((a, b) => a.weekday - b.weekday || a.hour.localeCompare(b.hour));
   const bestCells = [...data.heatmap]
     .filter((cell) => cell.conversions > 0)
     .sort((a, b) => a.spendCents / a.conversions - b.spendCents / b.conversions)
@@ -194,22 +227,45 @@ export function AudienceTab({ data }: { data: DashboardAudience }) {
       <div className="audience-grid">
         <Panel title="Posicionamento" groups={by.placement} />
         <Panel title="Região" groups={by.region} />
-        <Panel title="Idade" groups={by.age} limit={8} />
-        <Panel title="Gênero" groups={by.gender} limit={4} />
-        <Panel title="Dispositivo" groups={by.device} limit={6} />
+        <Panel title="Idade" groups={by.age} />
+        <Panel title="Gênero" groups={by.gender} donut />
+        <Panel title="Dispositivo" groups={by.device} donut />
         <section className="dash-section audience-panel audience-hours">
           <h2>Hora do dia</h2>
           {by.hour.length === 0 ? (
             <p className="muted">Sem dados no período.</p>
           ) : (
             <>
-              <DailyColumns
-                points={hourPoints}
-                color="var(--viz-meta)"
-                format={formatMoney}
-                label={hourLabel}
-                height={110}
+              <Chart3D
+                height={220}
                 ariaLabel="Gasto por hora do dia, no fuso do anunciante"
+                spec={{
+                  kind: 'columns',
+                  categories: hourPoints.map((point) => hourLabel(point.day)),
+                  series: [{ name: 'Gasto', values: hourPoints.map((point) => point.amount) }],
+                  format: 'brl',
+                }}
+                table={
+                  <ChartTable
+                    caption="Gasto e leads por hora do dia"
+                    head={['Hora', 'Gasto', 'Leads', 'CPL']}
+                    rows={HOURS.map((hour) => {
+                      const group = by.hour.find((item) => item.key === hour);
+                      const totals = group?.totals ?? EMPTY_TOTALS;
+                      return {
+                        key: hour,
+                        cells: [
+                          hourLabel(hour),
+                          formatMoney(totals.spendCents),
+                          formatInt(totals.conversions),
+                          totals.conversions > 0
+                            ? formatMoney(ratiosOf(totals).costPerLeadCents)
+                            : '— (sem leads)',
+                        ],
+                      };
+                    })}
+                  />
+                }
               />
               <p className="cell-sub">
                 {hourLeads > 0
@@ -237,12 +293,32 @@ export function AudienceTab({ data }: { data: DashboardAudience }) {
             <p className="muted">Sem dados no período.</p>
           ) : (
             <>
-              <HeatGrid
-                cells={heatCells}
-                rowLabels={WEEKDAY_LABEL}
-                color="var(--viz-meta)"
-                format={formatMoney}
+              <Chart3D
+                className="audience-heat"
+                height={300}
                 ariaLabel="Gasto por dia da semana e hora, no fuso do anunciante"
+                spec={{
+                  kind: 'heat',
+                  rows: [...WEEKDAY_LABEL],
+                  columns: HOURS.map((hour) => `${hour}h`),
+                  values: heatValues,
+                  format: 'brl',
+                }}
+                table={
+                  <ChartTable
+                    caption="Gasto, cliques e leads por dia da semana e hora"
+                    head={['Dia e hora', 'Gasto', 'Cliques', 'Leads']}
+                    rows={heatRows.map((cell) => ({
+                      key: `${cell.weekday}:${cell.hour}`,
+                      cells: [
+                        `${WEEKDAY_LABEL[cell.weekday]} ${cell.hour}h`,
+                        formatMoney(cell.spendCents),
+                        formatInt(cell.clicks),
+                        formatInt(cell.conversions),
+                      ],
+                    }))}
+                  />
+                }
               />
               <p className="cell-sub">
                 {bestCells.length > 0
@@ -251,8 +327,8 @@ export function AudienceTab({ data }: { data: DashboardAudience }) {
                         (cell) =>
                           `${WEEKDAY_LABEL[cell.weekday]} ${cell.hour}h (${formatMoney(Math.round(cell.spendCents / cell.conversions))})`,
                       )
-                      .join(', ')}. Cor mais forte, mais gasto.`
-                  : 'Cor mais forte, mais gasto. Nenhum lead atribuído a um horário no período.'}
+                      .join(', ')}. Laranja mais escuro, mais gasto; cinza, sem gasto.`
+                  : 'Laranja mais escuro, mais gasto; cinza, sem gasto. Nenhum lead atribuído a um horário no período.'}
               </p>
             </>
           )}

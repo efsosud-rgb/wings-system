@@ -6,8 +6,11 @@ import {
   type CockpitFigures,
   type DashboardCockpit,
 } from '@wings/shared';
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { Chart3D } from '../charts3d/Chart3D.js';
+import { COMPARISON_SLOT, HEAT_EMPTY, HEAT_RAMP, heatStep } from '../charts3d/spec.js';
 import { BRAZIL_STATES, BRAZIL_VIEWBOX } from './brazil-map.js';
+import { ChartTable } from './charts3d.js';
 import {
   formatDateTime,
   formatDayShort,
@@ -124,11 +127,6 @@ function Funnel({
   figures: CockpitFigures;
   selection: DashboardCockpit['selection'];
 }) {
-  const [filled, setFilled] = useState(reducedMotion());
-  useEffect(() => {
-    const id = setTimeout(() => setFilled(true), 30);
-    return () => clearTimeout(id);
-  }, []);
   const steps = [
     { label: 'Impressões', count: figures.impressions, why: '' },
     { label: 'Cliques', count: figures.clicks, why: '' },
@@ -142,37 +140,45 @@ function Funnel({
     { label: 'Reuniões', count: figures.meetings, why: selection?.why.meetings ?? '' },
     { label: 'Vendas', count: figures.sales, why: selection?.why.sales ?? '' },
   ];
-  const top = Math.log10(Math.max(1, figures.impressions) + 1);
+  const drawn = steps.filter(
+    (step): step is typeof step & { count: number } => step.count !== null,
+  );
   return (
-    <ol className="cockpit-funnel">
-      {steps.map((step, index) => {
-        const width = step.count
-          ? Math.max(2, Math.round((Math.log10(step.count + 1) / top) * 100))
-          : 0;
-        return (
-          <li key={step.label}>
-            <span className="cockpit-funnel-label">{step.label}</span>
-            <span className="cockpit-funnel-bar" aria-hidden="true">
-              <span
-                style={{ width: filled ? `${width}%` : '0%', transitionDelay: `${index * 70}ms` }}
-              />
-            </span>
-            <span className="mono num">{step.count === null ? '—' : formatInt(step.count)}</span>
-            <span className="cockpit-funnel-cost">
-              {step.count === null
-                ? step.why
+    <Chart3D
+      height={Math.min(320, 70 + drawn.length * 36)}
+      ariaLabel="Funil das campanhas do filtro, da impressão à venda, em escala logarítmica"
+      spec={{
+        kind: 'funnel',
+        log: true,
+        stages: drawn.map((step) => ({ label: step.label, value: step.count })),
+        format: 'int',
+        totalLabel: 'das impressões',
+        shareBase: figures.impressions || undefined,
+      }}
+      table={
+        <ChartTable
+          caption="Funil: quantidade e custo de cada etapa"
+          head={['Etapa', 'Quantidade', 'Custo por etapa']}
+          rows={steps.map((step) => ({
+            key: step.label,
+            neutral: step.count === null,
+            cells: [
+              step.label,
+              step.count === null ? `— (${step.why || 'sem dado'})` : formatInt(step.count),
+              step.count === null
+                ? '—'
                 : step.count > 0
-                  ? `${formatMoney(Math.round(figures.spendCents / step.count))} por ${step.label.toLowerCase()}`
-                  : 'sem custo por etapa: nenhum no período'}
-            </span>
-          </li>
-        );
-      })}
-    </ol>
+                  ? formatMoney(Math.round(figures.spendCents / step.count))
+                  : '— (nenhum no período)',
+            ],
+          }))}
+        />
+      }
+    />
   );
 }
 
-/** Brazil on IBGE's state outlines; spend in orange to red, a balloon on the state with the most. */
+/** Brazil on IBGE's state outlines; spend in the orange ramp's five steps, a balloon on the state with the most. */
 function StateMap({ data }: { data: DashboardCockpit }) {
   const byUf = new Map(data.regions.map((region) => [region.uf, region]));
   const max = Math.max(1, ...data.regions.map((region) => region.spendCents));
@@ -214,20 +220,14 @@ function StateMap({ data }: { data: DashboardCockpit }) {
           <g transform="scale(0.0001,-0.0001)">
             {BRAZIL_STATES.map((state) => {
               const region = byUf.get(state.uf);
-              const share = region ? region.spendCents / max : 0;
+              const step = region ? heatStep(region.spendCents, max) : 0;
               return (
                 <path
                   key={state.uf}
                   d={state.d}
                   className={region ? 'cockpit-uf cockpit-uf-on' : 'cockpit-uf'}
-                  // Orange for a little, red for the most.
-                  style={
-                    region
-                      ? {
-                          fill: `hsl(${Math.round(18 - 14 * share)} 100% ${Math.round(58 - 8 * share)}%)`,
-                        }
-                      : undefined
-                  }
+                  // Five steps of the state with the most; grey without delivery.
+                  style={{ fill: step ? HEAT_RAMP[step - 1] : HEAT_EMPTY }}
                   filter={region ? 'url(#cockpit-glow)' : undefined}
                 >
                   <title>
@@ -259,18 +259,33 @@ function StateMap({ data }: { data: DashboardCockpit }) {
         {data.otherRegionsSpendCents > 0 &&
           ` Fora de um estado (desconhecido): ${formatMoney(data.otherRegionsSpendCents)}.`}
       </figcaption>
-      <ul className="cockpit-map-list">
-        {data.regions.slice(0, 5).map((region) => (
-          <li key={region.uf}>
-            <b>{region.uf}</b> {formatMoney(region.spendCents)} · {formatInt(region.leads)} lead(s)
-          </li>
-        ))}
-      </ul>
+      {data.regions.length > 0 && (
+        <Chart3D
+          height={Math.min(300, 70 + Math.min(data.regions.length, 6) * 38)}
+          ariaLabel="Gasto por estado"
+          spec={{
+            kind: 'ranked',
+            items: data.regions.map((region) => ({ label: region.uf, value: region.spendCents })),
+            format: 'brl',
+            totalLabel: 'do gasto com estado',
+          }}
+          table={
+            <ChartTable
+              caption="Gasto e leads por estado"
+              head={['Estado', 'Gasto', 'Leads']}
+              rows={data.regions.map((region) => ({
+                key: region.uf,
+                cells: [region.uf, formatMoney(region.spendCents), formatInt(region.leads)],
+              }))}
+            />
+          }
+        />
+      )}
     </figure>
   );
 }
 
-/** Two São Paulo days of values, drawn as an orange area over the previous window in grey. */
+/** Days of values: the period as an orange area, the period before as a dashed line. */
 function AreaChart({
   days,
   current,
@@ -283,57 +298,41 @@ function AreaChart({
   days: string[];
   current: number[];
   previous: number[];
-  format: (value: number) => string;
+  format: 'brl' | 'int';
   label: string;
   currentLabel: string;
   previousLabel: string;
 }) {
-  const id = useId().replace(/:/g, '');
-  const w = 420;
-  const h = 130;
-  const pad = { top: 10, bottom: 20, left: 4, right: 4 };
-  const max = Math.max(1, ...current, ...previous);
-  const x = (index: number) =>
-    days.length > 1 ? pad.left + (index * (w - pad.left - pad.right)) / (days.length - 1) : w / 2;
-  const y = (value: number) => pad.top + (h - pad.top - pad.bottom) * (1 - value / max);
-  const line = (values: number[]) =>
-    values.map((value, index) => `${index === 0 ? 'M' : 'L'}${x(index)},${y(value)}`).join(' ');
-  const area = (values: number[]) =>
-    `${line(values)} L${x(values.length - 1)},${h - pad.bottom} L${x(0)},${h - pad.bottom} Z`;
-  const every = days.length > 16 ? 7 : days.length > 8 ? 2 : 1;
+  const show = (value: number | undefined) =>
+    value === undefined
+      ? '—'
+      : format === 'brl'
+        ? formatMoney(Math.round(value))
+        : formatInt(value);
   return (
-    <figure className="cockpit-area">
-      <div className="viz-legend">
-        <span>
-          <i style={{ background: '#ff5a1f' }} aria-hidden="true" />
-          {currentLabel}
-        </span>
-        <span>
-          <i style={{ background: '#8b919c' }} aria-hidden="true" />
-          {previousLabel}
-        </span>
-        <span className="cockpit-area-max">máx. {format(max)}</span>
-      </div>
-      <svg viewBox={`0 0 ${w} ${h}`} role="img" aria-label={label}>
-        <defs>
-          <linearGradient id={`grad-${id}`} x1="0" x2="0" y1="0" y2="1">
-            <stop offset="0%" stopColor="#ff5a1f" stopOpacity="0.55" />
-            <stop offset="100%" stopColor="#ff5a1f" stopOpacity="0" />
-          </linearGradient>
-        </defs>
-        <line x1={0} x2={w} y1={h - pad.bottom} y2={h - pad.bottom} className="cockpit-area-base" />
-        <path d={line(previous)} className="cockpit-area-prev" />
-        <path d={area(current)} fill={`url(#grad-${id})`} />
-        <path d={line(current)} className="cockpit-area-line" pathLength={1} />
-        {days.map((day, index) =>
-          index % every === 0 || index === days.length - 1 ? (
-            <text key={day} x={x(index)} y={h - 5} textAnchor="middle" className="cockpit-area-day">
-              {formatDayShort(day)}
-            </text>
-          ) : null,
-        )}
-      </svg>
-    </figure>
+    <Chart3D
+      height={230}
+      ariaLabel={label}
+      spec={{
+        kind: 'line',
+        categories: days.map(formatDayShort),
+        series: [
+          { name: currentLabel, values: current, area: true, slot: 0 },
+          { name: previousLabel, values: previous, dashed: true, slot: COMPARISON_SLOT },
+        ],
+        format,
+      }}
+      table={
+        <ChartTable
+          caption={label}
+          head={['Dia', currentLabel, previousLabel]}
+          rows={days.map((day, index) => ({
+            key: day,
+            cells: [formatDayShort(day), show(current[index]), show(previous[index])],
+          }))}
+        />
+      }
+    />
   );
 }
 
@@ -516,7 +515,7 @@ export function CockpitTab({ data }: { data: DashboardCockpit }) {
               days={dayList}
               current={spendNow}
               previous={spendBefore}
-              format={(v) => formatMoney(Math.round(v))}
+              format="brl"
               label="Investimento por dia contra o período anterior"
               currentLabel={currentLabel}
               previousLabel={previousLabel}
@@ -532,7 +531,7 @@ export function CockpitTab({ data }: { data: DashboardCockpit }) {
               days={dayList}
               current={leadsNow}
               previous={leadsBefore}
-              format={(v) => formatInt(Math.round(v))}
+              format="int"
               label="Leads por dia contra o período anterior"
               currentLabel={currentLabel}
               previousLabel={previousLabel}
@@ -549,8 +548,8 @@ export function CockpitTab({ data }: { data: DashboardCockpit }) {
           <h2 id="cockpit-funnel">Funil</h2>
           <Funnel figures={current} selection={data.selection} />
           <p className="cell-sub">
-            Meta e Google somados; CRM pelas etiquetas do RD. Em cinza, o custo de cada etapa (gasto
-            ÷ quantidade). Escala logarítmica. Detalhes na aba Funil.
+            Meta e Google somados; CRM pelas etiquetas do RD. O custo de cada etapa (gasto ÷
+            quantidade) está na tabela. Escala logarítmica. Detalhes na aba Funil.
           </p>
         </section>
 
