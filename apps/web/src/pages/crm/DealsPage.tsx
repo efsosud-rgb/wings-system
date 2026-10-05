@@ -18,7 +18,13 @@ import {
   type LeadPipeline,
   type LeadTask,
 } from '@wings/shared';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type PointerEvent as ReactPointerEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../../api/auth.js';
 import { ApiError } from '../../api/client.js';
@@ -205,7 +211,7 @@ export function DealsPage() {
         )}
         {canWrite && (
           <button type="button" className="crm-btn is-primary" onClick={() => setCreating(true)}>
-            + Criar
+            + Negociação
           </button>
         )}
         <div className="crm-menu">
@@ -584,6 +590,55 @@ function Filters({
 
 // --- board ------------------------------------------------------------------------------
 
+/**
+ * Sliding the board sideways: dragging its background (not a card, not a
+ * column's list, which scroll on their own) pans it, and Shift + wheel scrolls
+ * it horizontally. Cards keep their own drag (HTML5 DnD) untouched.
+ */
+function useBoardPan() {
+  const boardRef = useRef<HTMLDivElement>(null);
+  const [panning, setPanning] = useState(false);
+  useEffect(() => {
+    const el = boardRef.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.shiftKey || event.deltaY === 0) return;
+      event.preventDefault();
+      el.scrollLeft += event.deltaY;
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  });
+  const startPan = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const el = boardRef.current;
+    if (!el || event.button !== 0 || event.pointerType !== 'mouse') return;
+    const target = event.target as HTMLElement;
+    // The background pans — the board's, a column's head or the gaps between
+    // cards; a card (its own drag), a button, a link or a field keep theirs.
+    if (target.closest('.crm-card, button, a, input, select, textarea')) return;
+    const startX = event.clientX;
+    const startLeft = el.scrollLeft;
+    let moved = false;
+    const onMove = (move: PointerEvent) => {
+      const dx = move.clientX - startX;
+      if (!moved && Math.abs(dx) < 4) return;
+      moved = true;
+      setPanning(true);
+      el.scrollLeft = startLeft - dx;
+    };
+    const stop = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', stop);
+      window.removeEventListener('pointercancel', stop);
+      setPanning(false);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', stop);
+    window.addEventListener('pointercancel', stop);
+  };
+  return { boardRef, panning, startPan };
+}
+
 function BoardView({
   pipeline,
   filter,
@@ -599,6 +654,7 @@ function BoardView({
   const change = useDealQuickChange();
   const [dragging, setDragging] = useState<string | null>(null);
   const [over, setOver] = useState<string | null>(null);
+  const { boardRef, panning, startPan } = useBoardPan();
   const data = board.data;
   if (board.isLoading && !data)
     return (
@@ -636,9 +692,11 @@ function BoardView({
         </div>
       )}
       <div
-        className="crm-board"
+        ref={boardRef}
+        className={`crm-board${panning ? ' is-panning' : ''}`}
         role="list"
         aria-label={`Quadro ${LEAD_PIPELINE_LABELS[pipeline]}`}
+        onPointerDown={startPan}
       >
         {columns.map((column, index) => (
           <Column
