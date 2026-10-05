@@ -772,7 +772,19 @@ export async function setDistribution(
   });
 }
 
-/** Employees who may own a lead: the sales roles. For the owner dropdown and the rotation screen. */
+/**
+ * The roles that may own a lead and take part in a rotation: the sellers, the
+ * sales manager and Diretoria (Eric, 05/10: Thais stays Diretoria and works
+ * Formatação). Admin Master is not here.
+ */
+export const CRM_SELLER_ROLES = [
+  'vendedor_expansao',
+  'vendedor_formatacao',
+  'gerente_comercial',
+  'diretoria',
+] as const;
+
+/** Employees who may own a lead (`CRM_SELLER_ROLES`). For the owner dropdown and the rotation screen. */
 export async function listSellers(db: Executor): Promise<Seller[]> {
   const rows = await db
     .select({
@@ -783,7 +795,7 @@ export async function listSellers(db: Executor): Promise<Seller[]> {
     })
     .from(employees)
     .innerJoin(roles, eq(roles.id, employees.roleId))
-    .where(inArray(roles.key, ['vendedor_expansao', 'vendedor_formatacao', 'gerente_comercial']))
+    .where(inArray(roles.key, [...CRM_SELLER_ROLES]))
     .orderBy(asc(employees.fullName));
   return rows.map((row) => ({
     id: row.id,

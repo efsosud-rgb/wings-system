@@ -450,7 +450,9 @@ export const crmRoutes: FastifyPluginAsync = async (app) => {
     if (body.data.members.some((member) => !sellers.has(member.employeeId)))
       return reply
         .status(400)
-        .send(invalid('Só vendedores e gerentes comerciais ativos entram na distribuição.'));
+        .send(
+          invalid('Só vendedores, gerentes comerciais e Diretoria ativos entram na distribuição.'),
+        );
     const actor = request.session.actor.employeeId;
     const distribution = await setDistribution(db, { ...body.data, actorEmployeeId: actor });
     await writeAudit(db, {
