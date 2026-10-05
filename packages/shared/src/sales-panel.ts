@@ -272,8 +272,21 @@ export interface SalesDashboard {
   goalCents: number | null;
   /** Open deals now, whatever the period. */
   open: SalesSlice & { withoutValue: number };
-  /** Null until deals have an expected close date. */
-  forecastCents: number | null;
+  /**
+   * What the period should close: won so far plus the probability-weighted
+   * value of the open deals whose expected close date falls from today to the
+   * period's end. `dated` = open deals with any expected date (0 → nobody
+   * filled one yet); `ended` when the period is over (the result is what was won).
+   */
+  forecast: {
+    wonCents: number;
+    openCents: number;
+    weightedCents: number;
+    deals: number;
+    withoutValue: number;
+    dated: number;
+    ended: boolean;
+  };
   /** Null when every funnel is shown at once (their stages differ). */
   funnel: SalesFunnelStep[] | null;
   /** Average days from creation to a win, over the deals won in the period. */
@@ -290,8 +303,11 @@ export interface SalesDashboard {
   cities: SalesCityRow[];
   lostReasons: { reason: string | null; total: number }[];
   actions: {
-    /** Null until deals have an expected close date. */
-    closingSoon: number | null;
+    /** Open deals expected to close from today to 14 days ahead, and their value. */
+    closingSoon: number;
+    closingSoonCents: number;
+    /** Open deals whose expected close date has passed (`isCloseForecastOverdue`). */
+    forecastOverdue: number;
     /** Null until stages have a deadline. */
     stalled: number | null;
     /** Open deals whose first-contact task is past due and not done. */

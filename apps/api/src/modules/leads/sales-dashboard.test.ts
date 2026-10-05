@@ -84,6 +84,7 @@ beforeAll(async () => {
         createdAt: at('2026-10-05T12:00:00'),
         phone: '5511999990001',
         city: 'São Paulo',
+        expectedCloseAt: '2026-10-15',
         ...campaign,
       }),
       lead({
@@ -94,10 +95,16 @@ beforeAll(async () => {
         createdAt: at('2026-10-06T12:00:00'),
         phone: '5521999990002',
         city: 'sao  paulo',
+        expectedCloseAt: '2026-10-25',
         ...campaign,
       }),
       // Open since September, no value, no owner, no phone.
-      lead({ stageId: proposal!.id, brand: 'Marca B', createdAt: at('2026-09-01T12:00:00') }),
+      lead({
+        stageId: proposal!.id,
+        brand: 'Marca B',
+        createdAt: at('2026-09-01T12:00:00'),
+        expectedCloseAt: '2026-10-10',
+      }),
       // Won this period, from a number abroad.
       lead({
         won: true,
@@ -227,17 +234,36 @@ describe('Dashboard › Vendas v1', () => {
       weightedCents: 110_000,
       withoutValue: 1,
     });
-    // No goals, expected close dates or stage deadlines yet: nothing is estimated.
+    // Won so far plus the weighted open deals expected by the period's end (today included).
+    expect(board.forecast).toEqual({
+      wonCents: 50_000,
+      openCents: 100_000,
+      weightedCents: 10_000,
+      deals: 1,
+      withoutValue: 0,
+      dated: 3,
+      ended: false,
+    });
+    // No goals or stage deadlines yet: nothing is estimated.
     expect(board.goalCents).toBeNull();
-    expect(board.forecastCents).toBeNull();
     expect(board.actions).toEqual({
-      closingSoon: null,
+      closingSoon: 2,
+      closingSoonCents: 300_000,
+      forecastOverdue: 1,
       stalled: null,
       firstContactOverdue: 1,
       goalsAtRisk: null,
       noOwner: 1,
     });
     expect(board.timeToClose).toEqual({ avgDays: 12, count: 1 });
+    const past = await salesDashboardOf(db, {
+      ...month,
+      period: 'custom',
+      from: '2026-09-01',
+      to: '2026-09-30',
+      spendVisible: false,
+    });
+    expect(past.forecast).toMatchObject({ ended: true, wonCents: 70_000, deals: 0 });
   });
 
   it('walks the funnel: who reached each stage, the step conversion and the days spent', async () => {

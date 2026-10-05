@@ -35,7 +35,15 @@ const board = (overrides: Partial<SalesDashboard> = {}): SalesDashboard => ({
   },
   goalCents: null,
   open: { total: 5, valueCents: 400_000, weightedCents: 200_000, withoutValue: 3 },
-  forecastCents: null,
+  forecast: {
+    wonCents: 120_000,
+    openCents: 0,
+    weightedCents: 0,
+    deals: 0,
+    withoutValue: 0,
+    dated: 0,
+    ended: false,
+  },
   funnel: [
     {
       stage: { id: 's1', name: 'Novo Contato', probability: 10 },
@@ -105,7 +113,9 @@ const board = (overrides: Partial<SalesDashboard> = {}): SalesDashboard => ({
   cities: [{ city: 'São Paulo', leads: 4, won: 1 }],
   lostReasons: [{ reason: 'Sem capital', total: 6 }],
   actions: {
-    closingSoon: null,
+    closingSoon: 0,
+    closingSoonCents: 0,
+    forecastOverdue: 0,
     stalled: null,
     firstContactOverdue: 2,
     goalsAtRisk: null,
@@ -158,7 +168,9 @@ describe('Dashboard › Vendas v1', () => {
     expect(within(kpis).getByLabelText(/Conversão: 25% \(−25 p\.p\./)).toBeTruthy();
     expect(within(kpis).getByLabelText(/Pipeline aberto hoje: R\$\s?4\.000,00/)).toBeTruthy();
     expect(
-      within(kpis).getByLabelText(/Previsão do período: — \(as negociações ainda não têm data/),
+      within(kpis).getByLabelText(
+        /Previsão do período: — \(nenhuma negociação aberta tem data prevista/,
+      ),
     ).toBeTruthy();
     expect(
       screen.getByText(/01\/10\/2026 a 15\/10\/2026 · comparado com 01\/09\/2026/),
@@ -216,6 +228,40 @@ describe('Dashboard › Vendas v1', () => {
     expect(within(actions).getByRole('link', { name: /Primeiro contato atrasado/ })).toBeTruthy();
     expect(within(actions).getByText('as etapas ainda não têm prazo cadastrado')).toBeTruthy();
     expect(within(actions).queryByRole('link', { name: /Fecham em até 15 dias/ })).toBeNull();
+  });
+
+  it('forecasts the period from the expected close dates once someone fills them', () => {
+    answer = board({
+      forecast: {
+        wonCents: 120_000,
+        openCents: 400_000,
+        weightedCents: 200_000,
+        deals: 2,
+        withoutValue: 1,
+        dated: 3,
+        ended: false,
+      },
+      actions: {
+        closingSoon: 2,
+        closingSoonCents: 400_000,
+        forecastOverdue: 1,
+        stalled: null,
+        firstContactOverdue: 0,
+        goalsAtRisk: null,
+        noOwner: 0,
+      },
+    });
+    show();
+    expect(
+      screen.getByLabelText(
+        /Previsão do período: R\$\s?3\.200,00 \(ganho R\$\s?1\.200,00 \+ ponderado R\$\s?2\.000,00 de 2 aberta\(s\) com previsão até 15\/10\/2026 \(1 sem valor\)\)/,
+      ),
+    ).toBeTruthy();
+    const actions = screen.getByRole('region', { name: 'Ações' });
+    expect(
+      within(actions).getByText(/R\$\s?4\.000,00 · a lista do CRM ainda não filtra/),
+    ).toBeTruthy();
+    expect(within(actions).getByText('Previsão de fechamento vencida')).toBeTruthy();
   });
 
   it('shows a seller only their own numbers and next actions', () => {

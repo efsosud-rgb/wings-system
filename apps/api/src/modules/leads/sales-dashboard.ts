@@ -6,6 +6,7 @@ import {
   NO_OWNER,
   salesRanges,
   saoPauloDayStart,
+  saoPauloToday,
   type LeadPipeline,
   type LeadSource,
   type SalesCampaignRow,
@@ -154,7 +155,8 @@ export async function salesDashboardOf(
   // Spend is per platform campaign: it cannot be split by seller.
   const spendVisible = input.spendVisible && team && !input.owner;
 
-  const [current, previous, previousYear, openRows, closeTime, lostRows, overdue, noOwner] =
+  const today = saoPauloToday(now);
+  const [current, previous, previousYear, openRows, closeTime, lostRows, overdue, noOwner, dates] =
     await Promise.all([
       resultsOf(db, where, ranges.current),
       resultsOf(db, where, ranges.previous),
@@ -200,7 +202,37 @@ export async function salesDashboardOf(
         sql`select count(*)::int as total from leads l
              where ${where} and l.won is null and l.owner_employee_id is null`,
       ),
+      // Expected close dates of the open deals: the period's forecast and the next 15 days.
+      rows<{
+        dated: number;
+        deals: number;
+        open_cents: string;
+        weighted: number;
+        unvalued: number;
+        soon: number;
+        soon_cents: string;
+        overdue: number;
+      }>(
+        db,
+        sql`with d as (
+              select l.expected_close_at as day, l.value_cents as value,
+                     coalesce(s.probability, 0) as probability,
+                     l.expected_close_at between ${today}::date and ${ranges.current.to}::date as in_period,
+                     l.expected_close_at between ${today}::date and ${today}::date + 14 as soon
+                from leads l left join crm_stages s on s.id = l.stage_id
+               where ${where} and l.won is null and l.expected_close_at is not null)
+            select count(*)::int as dated,
+                   (count(*) filter (where in_period))::int as deals,
+                   coalesce(sum(value) filter (where in_period), 0)::bigint as open_cents,
+                   coalesce(sum(value * probability / 100.0) filter (where in_period), 0)::float8 as weighted,
+                   (count(*) filter (where in_period and value is null))::int as unvalued,
+                   (count(*) filter (where soon))::int as soon,
+                   coalesce(sum(value) filter (where soon), 0)::bigint as soon_cents,
+                   (count(*) filter (where day < ${today}::date))::int as overdue
+              from d`,
+      ),
     ]);
+  const dated = dates[0];
 
   const open = openRows.reduce(
     (sum, row) => ({
@@ -227,7 +259,15 @@ export async function salesDashboardOf(
     results: { current, previous, previousYear },
     goalCents: null,
     open,
-    forecastCents: null,
+    forecast: {
+      wonCents: current.wonCents,
+      openCents: num(dated?.open_cents),
+      weightedCents: Math.round(dated?.weighted ?? 0),
+      deals: dated?.deals ?? 0,
+      withoutValue: dated?.unvalued ?? 0,
+      dated: dated?.dated ?? 0,
+      ended: ranges.current.to < today,
+    },
     funnel,
     timeToClose: {
       avgDays: numOrNull(closeTime[0]?.avg_days),
@@ -245,7 +285,9 @@ export async function salesDashboardOf(
       (row) => ({ reason: row.text, total: row.total }),
     ),
     actions: {
-      closingSoon: null,
+      closingSoon: dated?.soon ?? 0,
+      closingSoonCents: num(dated?.soon_cents),
+      forecastOverdue: dated?.overdue ?? 0,
       stalled: null,
       firstContactOverdue: overdue[0]?.total ?? 0,
       goalsAtRisk: null,

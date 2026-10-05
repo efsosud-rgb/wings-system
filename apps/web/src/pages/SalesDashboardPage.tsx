@@ -34,10 +34,12 @@ import { DASH, formatInt, formatMoney } from '../components/dashboard/format.js'
 
 const REASON = {
   goal: 'meta do mês não cadastrada',
-  forecast: 'as negociações ainda não têm data prevista de fechamento',
+  forecast: 'nenhuma negociação aberta tem data prevista de fechamento',
   stalled: 'as etapas ainda não têm prazo cadastrado',
 } as const;
 
+/** The CRM's deal list has no expected-date filter yet. */
+const NO_DATE_LIST = 'a lista do CRM ainda não filtra por data prevista';
 const NO_PHONE = 'Sem telefone ou DDD inválido';
 const ABROAD = 'Telefone de fora do Brasil';
 
@@ -336,6 +338,34 @@ function deltaOf(
   return { text: `${sign}${size}${kind === 'rate' ? ' p.p.' : '%'} ${against}`, tone };
 }
 
+/** Won so far plus the weighted open deals expected by the period's end; "—" until someone fills a date. */
+function Forecast({ data }: { data: SalesDashboard }) {
+  const forecast = data.forecast;
+  const end = brDate(data.ranges.current.to);
+  if (forecast.ended)
+    return (
+      <Kpi
+        title="Previsão do período"
+        value={DASH}
+        note={`o período terminou em ${end}: vale o realizado`}
+      />
+    );
+  if (forecast.dated === 0)
+    return <Kpi title="Previsão do período" value={DASH} note={REASON.forecast} />;
+  const parts = [
+    `ganho ${formatMoney(forecast.wonCents)}`,
+    `+ ponderado ${formatMoney(forecast.weightedCents)} de ${formatInt(forecast.deals)} aberta(s) com previsão até ${end}`,
+  ];
+  if (forecast.withoutValue > 0) parts.push(`(${formatInt(forecast.withoutValue)} sem valor)`);
+  return (
+    <Kpi
+      title="Previsão do período"
+      value={formatMoney(forecast.wonCents + forecast.weightedCents)}
+      note={parts.join(' ')}
+    />
+  );
+}
+
 function Executive({ data, compare }: { data: SalesDashboard; compare: SalesComparison }) {
   const now = data.results.current;
   const before: SalesResults | null =
@@ -402,7 +432,7 @@ function Executive({ data, compare }: { data: SalesDashboard; compare: SalesComp
                 }`
         }
       />
-      <Kpi title="Previsão do período" value={DASH} note={REASON.forecast} />
+      <Forecast data={data} />
     </section>
   );
 }
@@ -875,6 +905,8 @@ interface Action {
   title: string;
   value: number | null;
   reason?: string;
+  /** Under a count: its value, or why no list opens. */
+  note?: string;
   to: string | null;
 }
 
@@ -888,12 +920,27 @@ function Actions({ data, filters }: { data: SalesDashboard; filters: Filters }) 
     if (filters.owner && !extra.owner) params.set('owner', filters.owner);
     return `/crm-vendas/negociacoes?${params.toString()}`;
   };
+  const dated = data.forecast.dated > 0;
   const items: Action[] = [
     {
       key: 'closing',
       title: 'Fecham em até 15 dias',
-      value: data.actions.closingSoon,
+      value: dated ? data.actions.closingSoon : null,
       reason: REASON.forecast,
+      note: [
+        data.actions.closingSoonCents > 0 ? formatMoney(data.actions.closingSoonCents) : null,
+        NO_DATE_LIST,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      to: null,
+    },
+    {
+      key: 'overdue',
+      title: 'Previsão de fechamento vencida',
+      value: dated ? data.actions.forecastOverdue : null,
+      reason: REASON.forecast,
+      note: NO_DATE_LIST,
       to: null,
     },
     {
@@ -934,7 +981,9 @@ function Actions({ data, filters }: { data: SalesDashboard; filters: Filters }) 
             <span>{item.title}</span>
             {item.value === null && <span className="cell-sub">{item.reason}</span>}
             {open && !item.to && (
-              <span className="cell-sub">escolha um funil no filtro para abrir a lista</span>
+              <span className="cell-sub">
+                {item.note ?? 'escolha um funil no filtro para abrir a lista'}
+              </span>
             )}
           </>
         );
