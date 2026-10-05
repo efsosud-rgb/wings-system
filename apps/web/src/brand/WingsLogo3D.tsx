@@ -46,11 +46,14 @@ export function WingsLogo3D({
       .then(({ WingsLogo3D: Engine }) => {
         const canvas = canvasRef.current;
         if (disposed || !canvas) return;
+        // Object.assign in the engine copies undefined over its defaults, so
+        // only the options actually given are passed (COMPANY is on by default
+        // and the manual does not allow the logo without it).
         engine = new Engine(canvas, {
           variant,
-          company,
-          motion,
-          fit,
+          company: company ?? true,
+          ...(motion !== undefined ? { motion } : {}),
+          ...(fit !== undefined ? { fit } : {}),
           onFallback: () => setReady(false),
         });
         setReady(true);
