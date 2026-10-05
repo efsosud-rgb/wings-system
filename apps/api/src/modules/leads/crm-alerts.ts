@@ -214,7 +214,7 @@ export async function markRead(db: Database, employeeId: string, ids: string[] |
 /** Where a new lead can arrive from for the arrival notices (not imports, not the RD mirror). */
 const ARRIVAL_SOURCES = new Set(['meta_lead_ads', 'rd_station', 'site_form']);
 
-/** The commercial managers (sector manager of Comercial, or the sales manager role) and Diretoria; active only. */
+/** Who hears of a lead with no owner: Admin Master, Diretoria and the commercial managers (sector manager of Comercial, or the sales manager role); active only. */
 async function managersAndBoard(db: Database): Promise<string[]> {
   const rows = await db
     .select({ id: employees.id })
@@ -225,6 +225,7 @@ async function managersAndBoard(db: Database): Promise<string[]> {
       and(
         eq(employees.status, 'active'),
         or(
+          eq(roles.key, 'admin_master'),
           eq(roles.key, 'diretoria'),
           eq(roles.key, 'gerente_comercial'),
           and(eq(employees.isSectorManager, true), eq(sectors.slug, 'comercial')),
@@ -332,7 +333,9 @@ export async function announceBackfill(
         .select({ id: employees.id })
         .from(employees)
         .innerJoin(roles, eq(roles.id, employees.roleId))
-        .where(and(eq(roles.key, 'diretoria'), eq(employees.status, 'active')));
+        .where(
+          and(inArray(roles.key, ['admin_master', 'diretoria']), eq(employees.status, 'active')),
+        );
       for (const person of board)
         rows.push({
           recipientEmployeeId: person.id,
