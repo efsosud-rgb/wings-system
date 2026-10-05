@@ -14,96 +14,145 @@
   border-radius: var(--radius-md);
 }
 
-.c3d-canvas {
-  display: block;
-  width: 100%;
-  height: 100%;
-  cursor: grab;
+/* From the reference module (WINGS_CHARTS_CSS), with the scene's canvas, labels and tooltip. */
+.w3d {
+  position: relative;
+  overflow: hidden;
   touch-action: pan-y;
+  cursor: grab;
+  -webkit-user-select: none;
+  user-select: none;
 }
-
-.c3d-canvas:active {
+.w3d.w3d-grabbing {
   cursor: grabbing;
 }
-
-.c3d-canvas:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+.w3d-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
 }
-
-.c3d-labels {
+.w3d-canvas:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.w3d-labels {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  font-family: var(--font);
 }
-
-/* A label is a zero-size point at its anchor; the inner span sits beside it. */
-.c3d-label {
+.w3d-label {
   position: absolute;
   left: 0;
   top: 0;
-  width: 0;
-  height: 0;
+  white-space: nowrap;
+  line-height: 1.2;
   will-change: transform;
 }
-
-.c3d-label > span {
-  position: absolute;
-  white-space: nowrap;
-  font-size: var(--text-sm);
-  line-height: 1.2;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
+.w3d-label > * {
+  display: inline-block;
 }
-
-.c3d-align-center > span {
-  transform: translate(-50%, 0);
-}
-
-.c3d-align-above > span {
-  transform: translate(-50%, -100%);
-}
-
-.c3d-align-right > span {
-  transform: translate(0, -50%);
-}
-
-.c3d-align-left > span {
+.w3d-right > *:first-child {
   transform: translate(-100%, -50%);
 }
-
-.c3d-label-axis > span {
-  color: var(--text-3);
-  font-size: var(--text-xs);
+.w3d-left > *:first-child {
+  transform: translate(0, -50%);
 }
-
-.c3d-label-value > span {
+.w3d-center > *:first-child {
+  transform: translate(-50%, -100%);
+}
+.w3d-left {
+  display: flex;
+}
+.w3d-left > * {
+  transform: translate(0, -50%);
+}
+.w3d-stack > .w3d-stackin {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform: translate(-50%, -50%);
+}
+.w3d-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #3a3733;
+}
+.w3d-cat {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #3a3733;
+  transform: translate(-50%, 0) !important;
+  padding-top: 6px;
+}
+.w3d-value {
+  font-size: 13px;
+  font-weight: 800;
+  color: #1d1b19;
+  font-variant-numeric: tabular-nums;
+}
+.w3d-zero {
+  color: #857f78;
   font-weight: 600;
 }
-
-.c3d-label-name > span {
-  padding: 2px 6px;
-  border-radius: var(--radius-xs);
-  background: color-mix(in srgb, var(--surface) 82%, transparent);
+.w3d-share {
+  font-size: 12px;
+  font-weight: 600;
+  color: #857f78;
+  margin-left: 6px;
 }
-
-.c3d-tip {
+.w3d-stackin .w3d-share {
+  margin: 2px 0 0;
+}
+.w3d-hero {
+  font-size: 28px;
+  font-weight: 800;
+  color: #1d1b19;
+  letter-spacing: -0.01em;
+}
+.w3d-tick {
+  font-size: 11px;
+  font-weight: 600;
+  color: #857f78;
+  font-variant-numeric: tabular-nums;
+}
+.w3d-tip[hidden] {
+  display: none !important;
+}
+.w3d-tip {
   position: absolute;
   left: 0;
   top: 0;
-  pointer-events: none;
   z-index: 2;
-  max-width: 260px;
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--text);
-  color: var(--surface);
-  font-size: var(--text-sm);
-  line-height: 1.3;
-  font-variant-numeric: tabular-nums;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #1d1b19;
+  color: #fff;
+  font: 600 12px/1.35 var(--font);
+  box-shadow: 0 6px 18px rgba(29, 27, 25, 0.22);
+  pointer-events: none;
   white-space: nowrap;
-  box-shadow: var(--shadow-2);
-  translate: -50% calc(-100% - 12px);
+}
+.w3d-tip b {
+  font-weight: 800;
+  font-size: 12.5px;
+}
+.w3d-tip span {
+  color: #d9d3ca;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.w3d-key {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
 }
 
 .c3d-loading {
@@ -293,14 +342,4 @@
   .sales-kpis {
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   }
-}
-
-.c3d-compact .c3d-label-name {
-  display: none;
-}
-
-.c3d-legend-below {
-  flex-direction: column;
-  margin: 4px 0 0;
-  color: var(--text);
 }
