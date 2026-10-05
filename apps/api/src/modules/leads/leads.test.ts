@@ -20,9 +20,11 @@ import {
   leadSourceRules,
   leadTrackingLinks,
   leads,
+  metaLeadgenEvents,
 } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
+import { processMetaLeadgenEvents, purgeMetaLeadgenPayloads } from './meta-intake.js';
 import {
   clientRegister,
   createEmployee,
@@ -71,7 +73,14 @@ beforeAll(async () => {
       expect((init?.headers as Record<string, string>)?.Authorization).toBe(
         'Bearer fake-leads-token',
       );
-      const leadgenId = url.pathname.split('/').pop() ?? '';
+      const segments = url.pathname.split('/');
+      // `/{form_id}/leads` lists a form; `/{leadgen_id}` reads one lead.
+      const leadgenId =
+        segments.at(-1) === 'leads' ? `form:${segments.at(-2)}` : (segments.at(-1) ?? '');
+      if (leadgenId.startsWith('form:')) {
+        expect(url.searchParams.get('filtering')).toContain('time_created');
+        expect(url.searchParams.has('fields')).toBe(true);
+      }
       const answer = graphAnswers.get(leadgenId) ?? {
         status: 404,
         body: { error: { message: 'unknown' } },
@@ -653,15 +662,107 @@ describe('Meta Lead Ads webhook', () => {
     expect(tampered.statusCode).toBe(401);
   });
 
-  it('reads the form answers from the Graph API and files the lead under the form rule, with the campaign', async () => {
+  /** Meta's published example of a leadgen change (ids only; the answers come from the Graph API). */
+  const leadgenBody = (value: Record<string, unknown>) =>
+    JSON.stringify({
+      object: 'page',
+      entry: [{ id: '555', time: 1790000000, changes: [{ field: 'leadgen', value }] }],
+    });
+  const deliver = (body: string) =>
+    app.inject({
+      method: 'POST',
+      url: '/integrations/meta/leadgen/webhook',
+      headers: { 'content-type': 'application/json', 'x-hub-signature-256': sign(body) },
+      payload: body,
+    });
+  /** What RD CRM's fake answers, per path; set by each test that turns the copy on. */
+  const rdAnswers = new Map<string, { status: number; body: unknown }>();
+  const rdCalls: { method: string; path: string; body: unknown }[] = [];
+  const rdFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(
+      typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+    );
+    // The token travels in the query string for RD CRM; the fake never records it.
+    const path = url.pathname.replace(/^\/api\/v1/, '');
+    const key = `${init?.method ?? 'GET'} ${path}${url.searchParams.has('email') ? '?email' : url.searchParams.has('phone') ? '?phone' : ''}`;
+    rdCalls.push({
+      method: init?.method ?? 'GET',
+      path,
+      body: init?.body ? JSON.parse(String(init.body)) : null,
+    });
+    const answer = rdAnswers.get(key) ??
+      rdAnswers.get(`${init?.method ?? 'GET'} ${path}`) ?? { status: 404, body: {} };
+    return new Response(JSON.stringify(answer.body), {
+      status: answer.status,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as typeof fetch;
+  const rdMapAnswers = () => {
+    rdAnswers.set('GET /deal_pipelines', {
+      status: 200,
+      body: [
+        {
+          id: 'pipe-exp',
+          name: 'Expansão',
+          deal_stages: [
+            { id: 'st-novo', name: 'Novo Contato' },
+            { id: 'st-2', name: 'Contato' },
+          ],
+        },
+        {
+          id: 'pipe-fmt',
+          name: 'Formatação',
+          deal_stages: [{ id: 'st-sem', name: 'Sem contato' }],
+        },
+      ],
+    });
+    rdAnswers.set('GET /custom_fields', {
+      status: 200,
+      body: {
+        custom_fields: [
+          { _id: 'cf-marca', label: 'Nome da Marca' },
+          { _id: 'cf-obs', label: 'OBS' },
+        ],
+      },
+    });
+    rdAnswers.set('GET /deal_sources', {
+      status: 200,
+      body: {
+        deal_sources: [
+          { _id: 'src-la', name: 'Facebook Lead Ads' },
+          { _id: 'src-site', name: 'Contato pelo Site' },
+        ],
+      },
+    });
+    rdAnswers.set('GET /campaigns', {
+      status: 200,
+      body: { campaigns: [{ _id: 'camp-1', name: 'Expansão MG' }] },
+    });
+  };
+  const runQueue = (options: { rd?: boolean } = {}) =>
+    processMetaLeadgenEvents({
+      db,
+      accessToken: 'fake-leads-token',
+      rdCrmToken: options.rd ? 'rd-token' : null,
+      expansionOwnerId: 'rd-user-fernando',
+      rdCopyEnabled: true,
+      graphFetch: app.wings.platformFetch,
+      rdFetch,
+      log: () => undefined,
+    });
+  const eventOf = (leadgenId: string) =>
+    db.query.metaLeadgenEvents.findFirst({ where: eq(metaLeadgenEvents.leadgenId, leadgenId) });
+
+  it('stores the event, answers at once, and the queue reads the answers, files the lead under the form rule with the whole origin', async () => {
     const { cookies } = await sessionFor('marketing');
     const client = await createClient(cookies, 'Café Central');
     await app.inject({
       method: 'POST',
       url: '/leads/source-rules',
       cookies,
-      payload: { kind: 'meta_form', pattern: '777001', clientId: client.id },
+      payload: { kind: 'meta_form', pattern: '777001', clientId: client.id, pipeline: 'expansao' },
     });
+    // Shape of the Graph API's lead object, from Meta's reference (field_data + ad fields).
     graphAnswers.set('900001', {
       status: 200,
       body: {
@@ -672,58 +773,61 @@ describe('Meta Lead Ads webhook', () => {
           { name: 'email', values: ['diego@example.com'] },
           { name: 'phone_number', values: ['+5531977776666'] },
           { name: 'city', values: ['Belo Horizonte'] },
+          { name: 'capital_disponivel', values: ['R$ 300 mil'] },
         ],
         campaign_id: '120001',
         campaign_name: 'Expansão MG',
+        adset_id: '130001',
+        adset_name: 'Conjunto BH',
+        ad_id: '140001',
         ad_name: 'Anúncio 1',
         form_id: '777001',
         platform: 'ig',
+        is_organic: false,
       },
     });
-    const body = JSON.stringify({
-      object: 'page',
-      entry: [
-        {
-          id: '555',
-          time: 1790000000,
-          changes: [
-            {
-              field: 'leadgen',
-              value: {
-                leadgen_id: '900001',
-                form_id: '777001',
-                page_id: '555',
-                ad_id: '1',
-                adgroup_id: '2',
-                created_time: 1790000000,
-              },
-            },
-          ],
-        },
-      ],
+    const body = leadgenBody({
+      leadgen_id: '900001',
+      form_id: '777001',
+      page_id: '555',
+      ad_id: '140001',
+      adgroup_id: '130001',
+      created_time: 1790000000,
     });
-    const delivered = await app.inject({
-      method: 'POST',
-      url: '/integrations/meta/leadgen/webhook',
-      headers: { 'content-type': 'application/json', 'x-hub-signature-256': sign(body) },
-      payload: body,
-    });
+    const delivered = await deliver(body);
     expect(delivered.statusCode).toBe(200);
-    const answer = delivered.json<{
-      leads: { leadId: string; created: boolean; fetched: boolean }[];
-    }>();
-    expect(answer.leads[0]).toMatchObject({ created: true, fetched: true });
+    expect(delivered.json()).toEqual({ received: 1, queued: 1 });
+    // Nothing read from the Graph API yet: the webhook only stores.
+    expect(graphCalls.filter((path) => path.endsWith('/900001'))).toHaveLength(0);
+    expect(await eventOf('900001')).toMatchObject({
+      status: 'pending',
+      attempts: 0,
+      formId: '777001',
+    });
+
+    const run = await runQueue();
+    expect(run).toMatchObject({ processed: 1, done: 1, failed: 0 });
     expect(graphCalls.at(-1)).toBe('/v23.0/900001');
+    const event = await eventOf('900001');
+    expect(event).toMatchObject({
+      status: 'done',
+      leadCreated: true,
+      rdOutcome: 'disabled',
+      rdDealId: null,
+    });
 
     const detail = await app.inject({
       method: 'GET',
-      url: `/leads/${answer.leads[0]?.leadId}`,
+      url: `/leads/${event?.leadId}`,
       cookies: (await sessionFor('admin_master')).cookies,
     });
     expect(detail.json<{ lead: Lead }>().lead).toMatchObject({
       name: 'Diego Alves',
       email: 'diego@example.com',
       phone: '5531977776666',
+      pipeline: 'expansao',
+      // Lands in the funnel's entry stage of the Wings System, RD or no RD.
+      crm: null,
       origin: {
         clientId: client.id,
         clientMapped: true,
@@ -740,40 +844,297 @@ describe('Meta Lead Ads webhook', () => {
         source: 'meta_lead_ads:form:777001',
       },
     });
-  });
-
-  it('still records the lead when the Graph API cannot be read, saying so on its timeline', async () => {
-    graphAnswers.set('900002', { status: 400, body: { error: { message: 'no permission' } } });
-    const body = JSON.stringify({
-      object: 'page',
-      entry: [
-        {
-          id: '555',
-          changes: [
-            {
-              field: 'leadgen',
-              value: { leadgen_id: '900002', form_id: '777999', page_id: '555' },
-            },
-          ],
-        },
-      ],
+    const row = await db.query.leads.findFirst({ where: eq(leads.id, event?.leadId as string) });
+    expect(row).toMatchObject({
+      stage: 'Novo Contato',
+      stageOrder: 1,
+      managedBy: 'wings',
+      adPlatform: 'meta',
+      adCampaignExternalId: '120001',
+      adSetExternalId: '130001',
+      adExternalId: '140001',
+      utmSource: 'meta:ig',
+      city: 'Belo Horizonte',
+      formAnswers: { capital_disponivel: 'R$ 300 mil' },
     });
-    const delivered = await app.inject({
-      method: 'POST',
-      url: '/integrations/meta/leadgen/webhook',
-      headers: { 'content-type': 'application/json', 'x-hub-signature-256': sign(body) },
-      payload: body,
-    });
-    const answer = delivered.json<{ leads: { leadId: string; fetched: boolean }[] }>();
-    expect(answer.leads[0]?.fetched).toBe(false);
+    // The timeline carries ids and counts, never an answer.
     const events = await db
       .select()
       .from(leadEvents)
-      .where(eq(leadEvents.leadId, answer.leads[0]?.leadId as string));
-    expect(events.find((e) => e.kind === 'lead.received.meta_lead_ads')?.detail).toMatchObject({
-      fetched: false,
-      fetchError: 'graph_400',
+      .where(eq(leadEvents.leadId, row?.id as string));
+    const received = events.find((e) => e.kind === 'lead.received.meta_lead_ads');
+    expect(received?.detail).toMatchObject({
+      formId: '777001',
+      adsetId: '130001',
+      platform: 'ig',
+      answers: 1,
     });
+    expect(JSON.stringify(received?.detail)).not.toContain('300 mil');
+  });
+
+  it('is a no-op for a re-sent leadgen id and merges a form whose phone the Funil already has', async () => {
+    const body = leadgenBody({ leadgen_id: '900001', form_id: '777001', page_id: '555' });
+    const again = await deliver(body);
+    expect(again.json()).toEqual({ received: 1, queued: 0 });
+    expect(
+      await db.select().from(metaLeadgenEvents).where(eq(metaLeadgenEvents.leadgenId, '900001')),
+    ).toHaveLength(1);
+
+    // Same person, another form (another leadgen id): one lead, two arrivals.
+    graphAnswers.set('900003', {
+      status: 200,
+      body: {
+        id: '900003',
+        created_time: '2026-09-24T10:00:00+0000',
+        field_data: [
+          { name: 'full_name', values: ['Diego A.'] },
+          { name: 'phone_number', values: ['31 97777-6666'] },
+        ],
+        form_id: '777002',
+      },
+    });
+    await deliver(leadgenBody({ leadgen_id: '900003', form_id: '777002', page_id: '555' }));
+    await runQueue();
+    const event = await eventOf('900003');
+    expect(event?.leadCreated).toBe(false);
+    const first = await eventOf('900001');
+    expect(event?.leadId).toBe(first?.leadId);
+  });
+
+  it('retries a Graph API outage, gives up on a permanent refusal, and never makes a lead it cannot call or write to', async () => {
+    graphAnswers.set('900002', { status: 500, body: { error: { message: 'down' } } });
+    await deliver(leadgenBody({ leadgen_id: '900002', form_id: '777999', page_id: '555' }));
+    let run = await runQueue();
+    expect(run).toMatchObject({ processed: 1, retried: 1, failed: 0 });
+    let event = await eventOf('900002');
+    expect(event).toMatchObject({
+      status: 'pending',
+      attempts: 1,
+      lastError: 'graph_500',
+      leadId: null,
+    });
+    expect(event?.nextAttemptAt.getTime()).toBeGreaterThan(Date.now());
+    // Not due yet: a second pass leaves it alone.
+    expect((await runQueue()).processed).toBe(0);
+
+    graphAnswers.set('900002', { status: 400, body: { error: { message: 'no permission' } } });
+    await db
+      .update(metaLeadgenEvents)
+      .set({ nextAttemptAt: new Date(0) })
+      .where(eq(metaLeadgenEvents.leadgenId, '900002'));
+    run = await runQueue();
+    expect(run).toMatchObject({ processed: 1, failed: 1 });
+    event = await eventOf('900002');
+    expect(event).toMatchObject({ status: 'failed', lastError: 'graph_400', leadId: null });
+
+    graphAnswers.set('900004', {
+      status: 200,
+      body: { id: '900004', field_data: [{ name: 'full_name', values: ['Só Nome'] }] },
+    });
+    await deliver(leadgenBody({ leadgen_id: '900004', form_id: '777999', page_id: '555' }));
+    await runQueue();
+    expect(await eventOf('900004')).toMatchObject({
+      status: 'failed',
+      lastError: 'no_contact_data',
+      leadId: null,
+    });
+    const orphan = await db.select().from(leads).where(eq(leads.externalId, '900004'));
+    expect(orphan).toHaveLength(0);
+  });
+
+  it('copies a Formatação form lead to RD CRM in "Sem contato" with the origin in OBS, and links an open deal instead of making a second one', async () => {
+    rdMapAnswers();
+    rdAnswers.set('GET /contacts', { status: 200, body: { contacts: [] } });
+    rdAnswers.set('POST /deals', { status: 200, body: { _id: 'deal-new-1' } });
+    graphAnswers.set('900010', {
+      status: 200,
+      body: {
+        id: '900010',
+        created_time: '2026-10-05T12:00:00+0000',
+        field_data: [
+          { name: 'full_name', values: ['Marina Costa'] },
+          { name: 'email', values: ['marina@example.com'] },
+          { name: 'phone_number', values: ['+5521988887777'] },
+        ],
+        campaign_id: '120009',
+        campaign_name: 'Formatação Outubro',
+        adset_name: 'Conjunto A',
+        ad_name: 'Anúncio B',
+        form_id: '1538007113903398',
+        platform: 'fb',
+      },
+    });
+    await deliver(
+      leadgenBody({ leadgen_id: '900010', form_id: '1538007113903398', page_id: '555' }),
+    );
+    const run = await runQueue({ rd: true });
+    expect(run).toMatchObject({ processed: 1, done: 1, rdCreated: 1 });
+    const event = await eventOf('900010');
+    expect(event).toMatchObject({ status: 'done', rdOutcome: 'created', rdDealId: 'deal-new-1' });
+    const post = rdCalls.find((call) => call.method === 'POST' && call.path === '/deals');
+    expect(post?.body).toMatchObject({
+      deal: { name: 'Marina Costa', deal_stage_id: 'st-sem' },
+      contacts: [{ name: 'Marina Costa', emails: [{ email: 'marina@example.com' }] }],
+      deal_source: { _id: 'src-la' },
+    });
+    const obs = (
+      post?.body as { deal: { deal_custom_fields: { custom_field_id: string; value: string }[] } }
+    ).deal.deal_custom_fields.find((f) => f.custom_field_id === 'cf-obs');
+    expect(obs?.value).toContain('formulário=1538007113903398');
+    expect(obs?.value).toContain('campanha=Formatação Outubro');
+    expect(obs?.value).not.toContain('Marina');
+    // Formatação deals carry no owner (the seeded form rule is Wings / formatacao).
+    expect((post?.body as { deal: Record<string, unknown> }).deal.user_id).toBeUndefined();
+    const lead = await db.query.leads.findFirst({ where: eq(leads.id, event?.leadId as string) });
+    expect(lead).toMatchObject({
+      rdDealId: 'deal-new-1',
+      pipeline: 'formatacao',
+      rdPipeline: 'Formatação',
+    });
+
+    // The contact already has an open deal: linked, no POST.
+    rdCalls.length = 0;
+    rdAnswers.set('GET /contacts', {
+      status: 200,
+      body: { contacts: [{ _id: 'c-1', deals: [{ _id: 'deal-open-9', win: null }] }] },
+    });
+    graphAnswers.set('900011', {
+      status: 200,
+      body: {
+        id: '900011',
+        field_data: [
+          { name: 'full_name', values: ['Paulo Reis'] },
+          { name: 'email', values: ['paulo@example.com'] },
+        ],
+        form_id: '1538007113903398',
+      },
+    });
+    await deliver(
+      leadgenBody({ leadgen_id: '900011', form_id: '1538007113903398', page_id: '555' }),
+    );
+    await runQueue({ rd: true });
+    expect(await eventOf('900011')).toMatchObject({
+      rdOutcome: 'existing_deal',
+      rdDealId: 'deal-open-9',
+    });
+    expect(rdCalls.some((call) => call.method === 'POST')).toBe(false);
+  });
+
+  it('puts the lead in the Wings System even when RD CRM is down, and copies it on a later try', async () => {
+    rdAnswers.clear();
+    rdAnswers.set('GET /deal_pipelines', { status: 500, body: {} });
+    graphAnswers.set('900020', {
+      status: 200,
+      body: {
+        id: '900020',
+        field_data: [
+          { name: 'full_name', values: ['Rita Lima'] },
+          { name: 'phone_number', values: ['+5511955554444'] },
+        ],
+        form_id: '1538007113903398',
+        platform: 'fb',
+      },
+    });
+    await deliver(
+      leadgenBody({ leadgen_id: '900020', form_id: '1538007113903398', page_id: '555' }),
+    );
+    let run = await runQueue({ rd: true });
+    expect(run).toMatchObject({ processed: 1, retried: 1, done: 0 });
+    let event = await eventOf('900020');
+    expect(event).toMatchObject({ status: 'pending', lastError: 'rd_failed', rdOutcome: 'failed' });
+    expect(event?.leadId).toBeTruthy();
+    const lead = await db.query.leads.findFirst({ where: eq(leads.id, event?.leadId as string) });
+    expect(lead).toMatchObject({ pipeline: 'formatacao', stage: 'Sem contato', rdDealId: null });
+
+    // RD is back: the retry copies without reading the Graph API again.
+    const graphBefore = graphCalls.filter((path) => path.endsWith('/900020')).length;
+    rdMapAnswers();
+    rdAnswers.set('GET /contacts', { status: 200, body: { contacts: [] } });
+    rdAnswers.set('POST /deals', { status: 200, body: { _id: 'deal-late-1' } });
+    await db
+      .update(metaLeadgenEvents)
+      .set({ nextAttemptAt: new Date(0) })
+      .where(eq(metaLeadgenEvents.leadgenId, '900020'));
+    run = await runQueue({ rd: true });
+    expect(run).toMatchObject({ processed: 1, done: 1, rdCreated: 1 });
+    event = await eventOf('900020');
+    expect(event).toMatchObject({ status: 'done', rdOutcome: 'created', rdDealId: 'deal-late-1' });
+    expect(graphCalls.filter((path) => path.endsWith('/900020')).length).toBe(graphBefore);
+    const post = rdCalls.filter((call) => call.method === 'POST' && call.path === '/deals').at(-1);
+    expect(post?.body).toMatchObject({ deal: { deal_stage_id: 'st-sem' } });
+  });
+
+  it('"Buscar leads da Meta" lists the last 90 days of every form with a rule and queues only what is new', async () => {
+    const admin = await sessionFor('admin_master');
+    graphAnswers.set('form:1538007113903398', {
+      status: 200,
+      body: {
+        data: [
+          { id: '900010', created_time: '2026-10-01T10:00:00+0000' },
+          { id: '900030', created_time: '2026-10-02T10:00:00+0000', ad_id: '140030' },
+        ],
+        paging: { cursors: { before: 'a', after: 'b' } },
+      },
+    });
+    graphAnswers.set('form:777001', { status: 200, body: { data: [] } });
+    graphAnswers.set('form:777002', { status: 400, body: { error: { message: 'no form' } } });
+    const marketing = await sessionFor('marketing');
+    // A seller may not start a sync.
+    const seller = await sessionFor('vendedor_expansao');
+    const refused = await app.inject({
+      method: 'POST',
+      url: '/crm/meta-leads/sync',
+      cookies: seller.cookies,
+    });
+    expect(refused.statusCode).toBe(403);
+    void marketing;
+
+    const sync = await app.inject({
+      method: 'POST',
+      url: '/crm/meta-leads/sync',
+      cookies: admin.cookies,
+    });
+    expect(sync.statusCode).toBe(202);
+    const totals = sync.json<{
+      forms: number;
+      listed: number;
+      queued: number;
+      alreadyKnown: number;
+      failed: Record<string, string>;
+    }>();
+    expect(totals).toMatchObject({ listed: 2, queued: 1, alreadyKnown: 1 });
+    expect(totals.forms).toBeGreaterThanOrEqual(2);
+    expect(JSON.stringify(totals)).not.toContain('@');
+    expect(await eventOf('900030')).toMatchObject({
+      status: 'pending',
+      formId: '1538007113903398',
+      adId: '140030',
+    });
+
+    const status = await app.inject({
+      method: 'GET',
+      url: '/crm/meta-leads/status',
+      cookies: admin.cookies,
+    });
+    expect(status.json()).toMatchObject({ pending: expect.any(Number), done: expect.any(Number) });
+    const audit = await db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, 'meta_leads.sync_requested'));
+    expect(audit).toHaveLength(1);
+  });
+
+  it('drops the raw payload after 90 days and keeps the row', async () => {
+    await db
+      .update(metaLeadgenEvents)
+      .set({ receivedAt: new Date(Date.now() - 91 * 86_400_000) })
+      .where(eq(metaLeadgenEvents.leadgenId, '900001'));
+    const { purged } = await purgeMetaLeadgenPayloads(db);
+    expect(purged).toBe(1);
+    const event = await eventOf('900001');
+    expect(event?.payload).toBeNull();
+    expect(event?.status).toBe('done');
+    expect((await purgeMetaLeadgenPayloads(db)).purged).toBe(0);
   });
 });
 

@@ -16,7 +16,10 @@ import {
   type LeadLegalBasis,
   type FunnelSummary,
   type LeadListItem,
+  type LeadNote,
   type LeadOutcome,
+  type LeadStageHistoryEntry,
+  type LeadTask,
   type LeadPipeline,
   type LeadSource,
   type LeadSourceRuleKind,
@@ -26,6 +29,7 @@ import { and, asc, desc, eq, gte, isNotNull, isNull, lt, or, sql } from 'drizzle
 import type { Database } from '../../db/client.js';
 import {
   clients,
+  crmStages,
   employees,
   jobs,
   leadEnrichmentLedger,
@@ -36,6 +40,7 @@ import {
   rdCrmDeals,
   rdUserMap,
 } from '../../db/schema/index.js';
+import { ensureFirstContactTask, nextInRotation, notesOf, stageHistoryOf, tasksOf } from './crm.js';
 
 export type LeadRow = typeof leads.$inferSelect;
 type Tx = Parameters<Parameters<Database['transaction']>[0]>[0];
@@ -160,6 +165,9 @@ export interface IncomingLead {
   firstMessage?: string | null;
   whatsappProfileName?: string | null;
   whatsappPhotoUrl?: string | null;
+  city?: string | null;
+  /** A form's other answers (question -> answer), without the contact fields. */
+  formAnswers?: Record<string, string> | null;
   legalBasis?: LeadLegalBasis | null;
   consentedAt?: Date | null;
   consentSource?: string | null;
@@ -173,6 +181,13 @@ export interface IncomingLead {
   importBatchId?: string | null;
   /** An import (RD CRM) does not queue the paid research for every lead it brings. */
   skipResearch?: boolean;
+  /**
+   * A new lead with a funnel and no owner goes to the next seller of the
+   * funnel's rotation and gets the first-contact task (CRM Fase 1). Off for
+   * the RD import (RD says the owner) and for Sofia's leads until she hands
+   * them over. Default on.
+   */
+  distribute?: boolean;
   /** First touch: kept only when the lead has none yet, and then as a whole. */
   attribution?: LeadAttribution | null;
   /** The timeline entry for this arrival. `detail` carries ids and codes, never personal data. */
@@ -235,6 +250,8 @@ export interface UpsertResult {
   researchQueued: boolean;
   /** Columns this call filled on a lead that already existed (names only). */
   filled: string[];
+  /** The seller the rotation gave a new lead to, when it did. */
+  assignedTo?: string | null;
 }
 
 /** Only the gaps: an existing value is never overwritten by a later arrival. */
@@ -252,6 +269,8 @@ function fillGaps(existing: LeadRow, incoming: IncomingLead): Partial<typeof lea
   if (!existing.whatsappPhotoUrl && incoming.whatsappPhotoUrl)
     patch.whatsappPhotoUrl = incoming.whatsappPhotoUrl;
   if (!existing.firstMessage && incoming.firstMessage) patch.firstMessage = incoming.firstMessage;
+  if (!existing.city && incoming.city) patch.city = incoming.city.trim().slice(0, 120);
+  if (!existing.formAnswers && incoming.formAnswers) patch.formAnswers = incoming.formAnswers;
   if (!existing.legalBasis && incoming.legalBasis) {
     patch.legalBasis = incoming.legalBasis;
     patch.consentedAt = incoming.consentedAt ?? null;
@@ -349,6 +368,21 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
       };
     }
 
+    // A lead born here starts in the first stage of its funnel and, with no
+    // owner, goes to the next seller in the funnel's rotation.
+    const pipeline = incoming.pipeline ?? null;
+    const distribute =
+      incoming.distribute ?? (!incoming.importBatchId && incoming.source !== 'rd_crm');
+    const entryStage = pipeline
+      ? await tx.query.crmStages.findFirst({
+          where: and(eq(crmStages.pipeline, pipeline), eq(crmStages.active, true)),
+          orderBy: [asc(crmStages.position), asc(crmStages.name)],
+        })
+      : undefined;
+    const assignedTo =
+      distribute && pipeline && !incoming.ownerEmployeeId
+        ? await nextInRotation(tx, pipeline)
+        : null;
     const [created] = await tx
       .insert(leads)
       .values({
@@ -357,7 +391,18 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
         name: incoming.name?.trim() || null,
         email,
         phone,
-        ownerEmployeeId: incoming.ownerEmployeeId ?? null,
+        ownerEmployeeId: incoming.ownerEmployeeId ?? assignedTo ?? null,
+        ...(entryStage && !incoming.importBatchId && incoming.source !== 'rd_crm'
+          ? {
+              stageId: entryStage.id,
+              stage: entryStage.name,
+              stageOrder: entryStage.position,
+              stageChangedAt: new Date(),
+            }
+          : {}),
+        // Run from here from birth when the Wings System decided something
+        // (its entry stage, its owner); else RD's follow-up still mirrors it.
+        managedBy: incoming.source !== 'rd_crm' && (entryStage || assignedTo) ? 'wings' : 'rd',
         source: incoming.source,
         channel: incoming.channel ?? null,
         landingPage: incoming.landingPage ?? null,
@@ -369,6 +414,8 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
         firstMessage: incoming.firstMessage ?? null,
         whatsappProfileName: incoming.whatsappProfileName ?? null,
         whatsappPhotoUrl: incoming.whatsappPhotoUrl ?? null,
+        city: incoming.city?.trim().slice(0, 120) || null,
+        formAnswers: incoming.formAnswers ?? null,
         legalBasis: incoming.legalBasis ?? null,
         consentedAt: incoming.consentedAt ?? null,
         consentSource: incoming.consentSource ?? null,
@@ -389,12 +436,29 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
         ...(incoming.event.detail ?? {}),
         matched: 'new',
         clientMapped: incoming.clientMapped,
+        ...(created.stageId ? { stageId: created.stageId } : {}),
       },
     });
+    if (assignedTo) {
+      await tx.insert(leadEvents).values({
+        leadId: created.id,
+        kind: 'lead.owner_changed',
+        detail: { from: null, to: assignedTo, source: 'rotation' },
+      });
+    }
+    if (distribute && created.ownerEmployeeId) {
+      await ensureFirstContactTask(tx, created, incoming.event.actorEmployeeId ?? null);
+    }
     if (incoming.skipResearch)
-      return { lead: created, created: true, researchQueued: false, filled: [] };
+      return { lead: created, created: true, researchQueued: false, filled: [], assignedTo };
     const researched = await enqueueResearch(tx, created.id, null);
-    return { lead: researched ?? created, created: true, researchQueued: true, filled: [] };
+    return {
+      lead: researched ?? created,
+      created: true,
+      researchQueued: true,
+      filled: [],
+      assignedTo,
+    };
   });
 }
 
@@ -455,6 +519,11 @@ export function toLead(
     name: row.name,
     email: row.email,
     phone: row.phone,
+    city: row.city,
+    formAnswers:
+      row.formAnswers && typeof row.formAnswers === 'object'
+        ? (row.formAnswers as Record<string, string>)
+        : null,
     status: 'new',
     ownerEmployeeId: row.ownerEmployeeId,
     firstMessage: row.firstMessage,
@@ -477,6 +546,16 @@ export function toLead(
     },
     pipeline: (row.pipeline as LeadPipeline | null) ?? null,
     brand: row.brand,
+    work: {
+      stageId: row.stageId,
+      stage: row.stage,
+      stageChangedAt: iso(row.stageChangedAt),
+      won: row.won,
+      closedAt: iso(row.closedAt),
+      lostReason: row.lostReason,
+      ownerName: extra.ownerName ?? null,
+      managedBy: row.managedBy === 'rd' ? 'rd' : 'wings',
+    },
     crm: row.rdDealId
       ? {
           rdDealId: row.rdDealId,
@@ -515,12 +594,22 @@ export function toLead(
   };
 }
 
-export async function loadLead(
-  db: Database,
-  id: string,
-): Promise<{ lead: Lead; events: LeadEvent[] } | null> {
+export interface LoadedLead {
+  lead: Lead;
+  events: LeadEvent[];
+  notes: LeadNote[];
+  tasks: LeadTask[];
+  history: LeadStageHistoryEntry[];
+}
+
+export async function loadLead(db: Database, id: string): Promise<LoadedLead | null> {
   const row = await db.query.leads.findFirst({ where: eq(leads.id, id) });
   if (!row) return null;
+  const [notes, tasks, history] = await Promise.all([
+    notesOf(db, row.id),
+    tasksOf(db, row.id),
+    stageHistoryOf(db, row.id),
+  ]);
   const [client, link, cost, events, owner] = await Promise.all([
     db.query.clients.findFirst({ where: eq(clients.id, row.clientId) }),
     row.trackingLinkId
@@ -558,6 +647,9 @@ export async function loadLead(
       kind: event.kind,
       detail: (event.detail ?? {}) as Record<string, unknown>,
     })),
+    notes,
+    tasks,
+    history,
   };
 }
 

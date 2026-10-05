@@ -747,6 +747,10 @@ export interface Lead {
   name: string | null;
   email: string | null;
   phone: string | null;
+  /** The city the person gave on a form, as typed; null when none. */
+  city: string | null;
+  /** A form's other answers (question -> answer), without the contact fields; null when none. */
+  formAnswers: Record<string, string> | null;
   status: 'new';
   ownerEmployeeId: string | null;
   firstMessage: string | null;
@@ -754,6 +758,8 @@ export interface Lead {
   origin: LeadOrigin;
   pipeline: LeadPipeline | null;
   brand: string | null;
+  /** Where the lead is in the Wings System's funnel (CRM Fase 1). */
+  work: LeadWork;
   /** The RD CRM deal, when the lead has one. */
   crm: LeadCrm | null;
   consent: LeadConsent;
@@ -790,7 +796,20 @@ export interface LeadListItem {
   stageChangedAt: string | null;
 }
 
-/** The deal of a lead in RD CRM, as last read (CRM phase 1: RD is where the team works). */
+/** The lead's place in the Wings funnel: stage, owner and outcome, as the team works it here. */
+export interface LeadWork {
+  stageId: string | null;
+  stage: string | null;
+  stageChangedAt: string | null;
+  won: boolean | null;
+  closedAt: string | null;
+  lostReason: string | null;
+  ownerName: string | null;
+  /** `wings` once the Wings System runs it; `rd` while it only mirrors RD CRM. */
+  managedBy: 'wings' | 'rd';
+}
+
+/** The deal of a lead in RD CRM, as last read (a copy since 05/10/2026). */
 export interface LeadCrm {
   rdDealId: string;
   rdUrl: string;

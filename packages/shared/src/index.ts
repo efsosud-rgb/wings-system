@@ -24,6 +24,7 @@ export * from './drive.js';
 export * from './integrations/kairogen.js';
 export * from './jobs.js';
 export * from './leads.js';
+export * from './crm.js';
 export * from './campaign-leads.js';
 export * from './marketing/camera-moves.js';
 export * from './marketing/media-providers.js';

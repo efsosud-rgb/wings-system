@@ -19,6 +19,8 @@ import { LandingRoute } from './pages/LandingRoute.js';
 import { LeadPage } from './pages/LeadPage.js';
 import { LandingPagesPage } from './pages/LandingPagesPage.js';
 import { LeadsPage } from './pages/LeadsPage.js';
+import { TasksPage } from './pages/TasksPage.js';
+import { CrmSettingsPage } from './pages/CrmSettingsPage.js';
 import { LoginPage } from './pages/LoginPage.js';
 import { CampaignLeadsPage } from './pages/CampaignLeadsPage.js';
 import { MarketingDashboardPage } from './pages/MarketingDashboardPage.js';
@@ -67,6 +69,8 @@ const SCREENS: Record<string, RouteObject[]> = {
     { index: true, element: <LeadsPage /> },
     { path: ':id', element: <LeadPage /> },
   ],
+  '/crm-vendas/tarefas': [{ index: true, element: <TasksPage /> }],
+  '/administracao/crm': [{ index: true, element: <CrmSettingsPage /> }],
   '/administracao/drive': [{ index: true, element: <DriveTemplatePage /> }],
   '/drive/arquivos': [{ index: true, element: <DrivePage /> }],
   '/gestao/projetos': [{ index: true, element: <ProjectsPage /> }],

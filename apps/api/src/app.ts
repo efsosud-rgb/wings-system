@@ -28,6 +28,8 @@ import { expansionRoutes } from './modules/expansion/routes.js';
 import { kairogenRoutes } from './modules/integrations/kairogen/routes.js';
 import { landingPageRoutes } from './modules/leads/landing-pages.js';
 import { rdUserRoutes } from './modules/leads/rd-users.js';
+import { configureCrm } from './modules/leads/crm.js';
+import { crmRoutes } from './modules/leads/crm-routes.js';
 import { leadRoutes } from './modules/leads/routes.js';
 import { siteFormRoutes } from './modules/leads/site-forms.js';
 import { leadWebhookRoutes } from './modules/leads/webhooks.js';
@@ -49,6 +51,8 @@ declare module 'fastify' {
       cpfCrypto: CpfCrypto;
       /** Set only by tests, so no test ever reaches a real ad platform. */
       platformFetch?: typeof fetch;
+      /** Set by the server once the Meta Lead Ads queue runs: the webhook pokes it after storing an event. */
+      metaLeadKick?: () => void;
       /** Set only by tests, so no test ever reaches OpenRouter. */
       agentLlm?: AgentLlm;
       /** Set only by tests, so no test ever reaches Kairogen. */
@@ -114,6 +118,10 @@ export async function buildApp(deps: {
     // Behind Traefik: needed for real client IPs in the audit log.
     trustProxy: true,
   });
+
+  if (deps.env.CRM_FIRST_CONTACT_SLA_HOURS) {
+    configureCrm({ firstContactSlaHours: Number(deps.env.CRM_FIRST_CONTACT_SLA_HOURS) });
+  }
 
   app.decorate('wings', {
     env: deps.env,
@@ -184,6 +192,7 @@ export async function buildApp(deps: {
   await app.register(projectRoutes);
   await app.register(roadmapRoutes);
   await app.register(leadRoutes);
+  await app.register(crmRoutes);
   await app.register(rdUserRoutes);
   await app.register(landingPageRoutes);
   await app.register(leadWebhookRoutes);

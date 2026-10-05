@@ -188,6 +188,11 @@ const FORMATACAO_LANDING_PAGES = [
   { identifier: 'plano-de-negocios', rdDealIntake: false },
 ];
 
+/** Meta Lead Ads instant forms → funnel. Ids given by Eric (05/10/2026); none invented. */
+const META_LEAD_FORMS: { formId: string; pipeline: 'formatacao' | 'expansao' }[] = [
+  { formId: '1538007113903398', pipeline: 'formatacao' },
+];
+
 export async function seed(db: Database): Promise<void> {
   // Sectors: parents first, then children, so parent_id can be resolved.
   const slugs = Object.keys(SECTORS) as SectorSlug[];
@@ -322,6 +327,22 @@ export async function seed(db: Database): Promise<void> {
         clientId: WINGS_CLIENT_ID,
         pipeline,
         rdDealIntake,
+      })
+      .onConflictDoNothing();
+  }
+
+  // Meta Lead Ads forms (Eric, 05/10/2026): the Formatação instant form of the
+  // Wings page. Insert-only, like the pages above; the Expansão forms are
+  // added in CRM Vendas → Landing pages as each brand gets one.
+  for (const form of META_LEAD_FORMS) {
+    await db
+      .insert(leadSourceRules)
+      .values({
+        kind: 'meta_form',
+        pattern: form.formId,
+        clientId: WINGS_CLIENT_ID,
+        pipeline: form.pipeline,
+        rdDealIntake: false,
       })
       .onConflictDoNothing();
   }

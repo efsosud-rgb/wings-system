@@ -94,6 +94,18 @@ const lead: Lead = {
   name: 'Ana Souza',
   email: 'ana@example.com',
   phone: '5519999998888',
+  city: null,
+  formAnswers: null,
+  work: {
+    stageId: null,
+    stage: null,
+    stageChangedAt: null,
+    won: null,
+    closedAt: null,
+    lostReason: null,
+    ownerName: null,
+    managedBy: 'wings',
+  },
   status: 'new',
   ownerEmployeeId: null,
   firstMessage: null,
@@ -198,9 +210,25 @@ beforeEach(() => {
   get.mockReset().mockImplementation(async (path: string) => {
     if (path === '/auth/me') return { user: manager };
     if (path === '/clients') return { clients: [] };
+    if (path === '/crm/meta-leads/status')
+      return {
+        pending: 0,
+        failed: 0,
+        done: 3,
+        rdMissing: 1,
+        lastReceivedAt: null,
+        lastProcessedAt: null,
+        webhookConfigured: true,
+        tokenConfigured: true,
+      };
+    if (path.startsWith('/crm/stages')) return { stages: [] };
+    if (path === '/crm/sellers') return { sellers: [] };
     if (path.startsWith('/leads/lead-1'))
       return {
         lead,
+        notes: [],
+        tasks: [],
+        history: [],
         events: [
           { id: 'ev1', at: '2026-09-23T14:00:00Z', kind: 'lead.received.rd_station', detail: {} },
         ],
@@ -331,6 +359,9 @@ describe('CRM Vendas → Funil', () => {
     post.mockResolvedValue({
       lead: { ...lead, research: { ...lead.research, state: 'pending' } },
       events: [],
+      notes: [],
+      tasks: [],
+      history: [],
     });
     renderAt('/crm-vendas/funil/lead-1');
     expect(await screen.findByRole('heading', { name: 'Ana Souza' })).toBeTruthy();

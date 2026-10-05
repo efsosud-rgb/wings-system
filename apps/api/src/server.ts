@@ -6,6 +6,7 @@ import { createOpenRouterLlm } from './modules/agent/llm.js';
 import { startFormatacaoIntakeScheduler } from './modules/expansion/formatacao.js';
 import { startExpansionIntakeScheduler } from './modules/expansion/scheduler.js';
 import { startInsightsScheduler } from './modules/insights/scheduler.js';
+import { startMetaLeadgenIntake } from './modules/leads/meta-intake.js';
 
 async function main() {
   loadDotEnv();
@@ -76,6 +77,21 @@ async function main() {
       log: (facts) => app.log.info(facts),
     });
     app.addHook('onClose', async () => stop());
+  }
+
+  // Meta Lead Ads queue: runs whenever the webhook can receive (app secret
+  // set). Without a leads token the events wait in the queue, not lost.
+  if (env.META_APP_SECRET) {
+    const intake = startMetaLeadgenIntake({
+      db,
+      accessToken: env.META_LEADS_ACCESS_TOKEN ?? env.META_WRITE_TOKEN ?? null,
+      rdCrmToken: env.RD_CRM_API_TOKEN ?? null,
+      expansionOwnerId: env.EXPANSION_OWNER_RD_USER_ID ?? null,
+      rdCopyEnabled: env.META_LEADS_RD_COPY_ENABLED !== 'false',
+      log: (facts) => app.log.info(facts),
+    });
+    app.wings.metaLeadKick = intake.kick;
+    app.addHook('onClose', async () => intake.stop());
   }
 
   await app.listen({ port: env.API_PORT, host: '0.0.0.0' });

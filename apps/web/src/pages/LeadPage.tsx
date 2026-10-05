@@ -1,16 +1,34 @@
 import {
+  isTaskOverdue,
   LEAD_CHANNEL_LABELS,
   LEAD_LEGAL_BASIS_LABELS,
   LEAD_PIPELINE_LABELS,
+  LEAD_PIPELINES,
   LEAD_SOURCE_LABELS,
+  LEAD_TASK_KIND_LABELS,
+  LEAD_TASK_KINDS,
   type Lead,
   type LeadEvent,
+  type LeadNote,
+  type LeadStageHistoryEntry,
+  type LeadTask,
+  type LeadTaskKind,
   type ScoreCriterion,
 } from '@wings/shared';
+import { Fragment, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../api/auth.js';
 import { ApiError } from '../api/client.js';
-import { useLead, useResearchLead } from '../api/leads.js';
+import {
+  useAddNote,
+  useCreateTask,
+  useLead,
+  useResearchLead,
+  useSellers,
+  useStages,
+  useUpdateLead,
+  useUpdateTask,
+} from '../api/leads.js';
 import { Alert, Button } from '../components/ui.js';
 import { formatDateTime, formatPhone, RESEARCH_LABELS, sinceLabel } from './LeadsPage.js';
 
@@ -25,12 +43,22 @@ const EVENT_LABELS: Record<string, string> = {
   'lead.received.rd_station': 'Conversão recebida do RD Station',
   'lead.received.whatsapp': 'Mensagem recebida no WhatsApp pelo link rastreável',
   'lead.received.meta_lead_ads': 'Cadastro recebido do Meta Lead Ads',
+  'lead.received.site_form': 'Formulário do site enviado',
+  'rd.deal_linked': 'Negócio aberto no RD CRM ligado a este lead',
   'lead.created_manually': 'Cadastrado manualmente',
   'research.queued': 'Pesquisa colocada na fila',
   'research.started': 'Pesquisa iniciada',
   'research.done': 'Pesquisa concluída',
   'research.failed': 'Pesquisa falhou',
   'lead.imported.rd_crm': 'Trazido do RD CRM',
+  'lead.stage_changed': 'Etapa alterada',
+  'lead.outcome_changed': 'Resultado alterado',
+  'lead.owner_changed': 'Dono alterado',
+  'lead.pipeline_changed': 'Funil alterado',
+  'lead.note_added': 'Anotação escrita',
+  'lead.task_created': 'Tarefa criada',
+  'lead.task_done': 'Tarefa concluída',
+  'lead.task_updated': 'Tarefa alterada',
   'rd.deal_created': 'Negócio criado no RD CRM pela entrada automática',
   'rd.other_deal': 'Outro negócio da mesma pessoa no RD CRM',
 };
@@ -39,7 +67,7 @@ function RdCrm({ lead }: { lead: Lead }) {
   const crm = lead.crm;
   return (
     <fieldset className="block">
-      <legend>No RD CRM</legend>
+      <legend>Cópia no RD CRM</legend>
       {!crm ? (
         <p className="muted">Sem negócio no RD CRM ligado a este lead.</p>
       ) : (
@@ -86,7 +114,7 @@ function RdCrm({ lead }: { lead: Lead }) {
             )}
           </dl>
           <p className="muted">
-            Etapa lida do RD {sinceLabel(crm.syncedAt)}. O trabalho continua no RD CRM até a virada:{' '}
+            Lido do RD {sinceLabel(crm.syncedAt)}. O RD é cópia durante a transição:{' '}
             <a href={crm.rdUrl} target="_blank" rel="noopener noreferrer">
               abrir o negócio no RD
             </a>
@@ -94,6 +122,401 @@ function RdCrm({ lead }: { lead: Lead }) {
           </p>
         </>
       )}
+    </fieldset>
+  );
+}
+
+const errorText = (error: unknown, fallback: string) =>
+  error instanceof ApiError ? error.message : fallback;
+
+/**
+ * Where the lead is and who works it: funnel, stage, owner and outcome. Every
+ * change is one PATCH; the API re-checks who may do what (a seller only on
+ * their own leads; handing over needs `leads.assign`).
+ */
+function Work({
+  lead,
+  canWrite,
+  canAssign,
+}: {
+  lead: Lead;
+  canWrite: boolean;
+  canAssign: boolean;
+}) {
+  const stages = useStages(lead.pipeline ?? '');
+  const sellers = useSellers();
+  const update = useUpdateLead(lead.id);
+  const [lostReason, setLostReason] = useState('');
+  const [losing, setLosing] = useState(false);
+  const { work } = lead;
+  const open = work.won === null;
+  const activeStages = (stages.data?.stages ?? []).filter(
+    (stage) => stage.active || stage.id === work.stageId,
+  );
+  return (
+    <fieldset className="block">
+      <legend>No funil</legend>
+      <dl className="lead-facts">
+        <dt>Funil</dt>
+        <dd>
+          {canWrite ? (
+            <select
+              className="control"
+              value={lead.pipeline ?? ''}
+              disabled={update.isPending}
+              onChange={(event) =>
+                event.target.value &&
+                update.mutate({ pipeline: event.target.value as (typeof LEAD_PIPELINES)[number] })
+              }
+            >
+              <option value="">—</option>
+              {LEAD_PIPELINES.map((pipeline) => (
+                <option key={pipeline} value={pipeline}>
+                  {LEAD_PIPELINE_LABELS[pipeline]}
+                </option>
+              ))}
+            </select>
+          ) : lead.pipeline ? (
+            LEAD_PIPELINE_LABELS[lead.pipeline]
+          ) : (
+            '—'
+          )}
+        </dd>
+        {lead.brand && (
+          <>
+            <dt>Marca</dt>
+            <dd>{lead.brand}</dd>
+          </>
+        )}
+        <dt>Etapa</dt>
+        <dd>
+          {canWrite && open && lead.pipeline ? (
+            <select
+              className="control"
+              value={work.stageId ?? ''}
+              disabled={update.isPending || stages.isLoading}
+              onChange={(event) =>
+                event.target.value && update.mutate({ stageId: event.target.value })
+              }
+            >
+              <option value="">— sem etapa —</option>
+              {activeStages.map((stage) => (
+                <option key={stage.id} value={stage.id}>
+                  {stage.position}. {stage.name}
+                  {stage.active ? '' : ' (desativada)'}
+                </option>
+              ))}
+            </select>
+          ) : (
+            (work.stage ?? '—')
+          )}
+          {work.won === true && <span className="status status-active"> Ganho</span>}
+          {work.won === false && <span className="status status-inactive"> Perdido</span>}
+        </dd>
+        <dt>Na etapa desde</dt>
+        <dd>
+          {work.stageChangedAt
+            ? `${formatDateTime(work.stageChangedAt)} (${sinceLabel(work.stageChangedAt)})`
+            : '—'}
+        </dd>
+        <dt>Dono</dt>
+        <dd>
+          {canAssign ? (
+            <select
+              className="control"
+              value={lead.ownerEmployeeId ?? ''}
+              disabled={update.isPending}
+              onChange={(event) => update.mutate({ ownerEmployeeId: event.target.value || null })}
+            >
+              <option value="">— sem dono —</option>
+              {(sellers.data?.sellers ?? [])
+                .filter((seller) => seller.active || seller.id === lead.ownerEmployeeId)
+                .map((seller) => (
+                  <option key={seller.id} value={seller.id}>
+                    {seller.name}
+                  </option>
+                ))}
+            </select>
+          ) : (
+            (work.ownerName ?? '—')
+          )}
+        </dd>
+        {work.won === false && (
+          <>
+            <dt>Motivo da perda</dt>
+            <dd>{work.lostReason ?? '—'}</dd>
+          </>
+        )}
+        {work.closedAt && (
+          <>
+            <dt>Fechado em</dt>
+            <dd>{formatDateTime(work.closedAt)}</dd>
+          </>
+        )}
+      </dl>
+      {canWrite && (
+        <div className="lead-actions">
+          {open && !losing && (
+            <>
+              <Button
+                type="button"
+                variant="primary"
+                disabled={update.isPending}
+                onClick={() => update.mutate({ won: true })}
+              >
+                Marcar ganho
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                disabled={update.isPending}
+                onClick={() => setLosing(true)}
+              >
+                Marcar perdido
+              </Button>
+            </>
+          )}
+          {open && losing && (
+            <form
+              className="lead-inline-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                update.mutate({ won: false, lostReason }, { onSuccess: () => setLosing(false) });
+              }}
+            >
+              <input
+                className="control"
+                placeholder="Motivo da perda"
+                value={lostReason}
+                maxLength={200}
+                onChange={(event) => setLostReason(event.target.value)}
+                autoFocus
+              />
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={update.isPending || lostReason.trim().length < 2}
+              >
+                Confirmar perda
+              </Button>
+              <Button type="button" variant="ghost" onClick={() => setLosing(false)}>
+                Cancelar
+              </Button>
+            </form>
+          )}
+          {!open && (
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={update.isPending}
+              onClick={() => update.mutate({ won: null })}
+            >
+              Reabrir
+            </Button>
+          )}
+        </div>
+      )}
+      {update.error && (
+        <Alert kind="error">{errorText(update.error, 'Não foi possível alterar o lead.')}</Alert>
+      )}
+      <p className="muted">
+        {work.managedBy === 'rd'
+          ? 'Etapa e dono ainda lidos do RD CRM; a primeira mudança feita aqui passa o lead para o Wings System.'
+          : 'Lead trabalhado no Wings System; o RD CRM recebe cópia durante a transição.'}
+      </p>
+    </fieldset>
+  );
+}
+
+function Notes({ lead, notes, canWrite }: { lead: Lead; notes: LeadNote[]; canWrite: boolean }) {
+  const add = useAddNote(lead.id);
+  const [body, setBody] = useState('');
+  return (
+    <fieldset className="block">
+      <legend>Anotações</legend>
+      {canWrite && (
+        <form
+          className="lead-note-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            add.mutate({ body }, { onSuccess: () => setBody('') });
+          }}
+        >
+          <textarea
+            className="control"
+            rows={3}
+            placeholder="O que aconteceu nesta conversa? (fica só nesta ficha)"
+            value={body}
+            maxLength={4000}
+            onChange={(event) => setBody(event.target.value)}
+          />
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={add.isPending || body.trim().length === 0}
+          >
+            Anotar
+          </Button>
+        </form>
+      )}
+      {add.error && <Alert kind="error">{errorText(add.error, 'Não foi possível anotar.')}</Alert>}
+      {notes.length === 0 && <p className="muted">Nenhuma anotação ainda.</p>}
+      <ol className="lead-notes">
+        {notes.map((note) => (
+          <li key={note.id}>
+            <div className="muted">
+              {formatDateTime(note.at)} · {note.authorName ?? 'Sistema'}
+            </div>
+            <div className="lead-wrap">{note.body}</div>
+          </li>
+        ))}
+      </ol>
+    </fieldset>
+  );
+}
+
+const toLocalInput = (date: Date) => {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+
+function Tasks({ lead, tasks, canWrite }: { lead: Lead; tasks: LeadTask[]; canWrite: boolean }) {
+  const create = useCreateTask(lead.id);
+  const update = useUpdateTask(lead.id);
+  const [form, setForm] = useState({
+    kind: 'follow_up' as LeadTaskKind,
+    title: '',
+    dueAt: toLocalInput(new Date(Date.now() + 86_400_000)),
+  });
+  const open = tasks.filter((task) => !task.doneAt);
+  const done = tasks.filter((task) => task.doneAt);
+  return (
+    <fieldset className="block">
+      <legend>Tarefas</legend>
+      {canWrite && (
+        <form
+          className="lead-task-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            create.mutate(
+              { kind: form.kind, title: form.title, dueAt: new Date(form.dueAt).toISOString() },
+              { onSuccess: () => setForm((current) => ({ ...current, title: '' })) },
+            );
+          }}
+        >
+          <select
+            className="control"
+            value={form.kind}
+            onChange={(event) =>
+              setForm((c) => ({ ...c, kind: event.target.value as LeadTaskKind }))
+            }
+          >
+            {LEAD_TASK_KINDS.map((kind) => (
+              <option key={kind} value={kind}>
+                {LEAD_TASK_KIND_LABELS[kind]}
+              </option>
+            ))}
+          </select>
+          <input
+            className="control"
+            placeholder="O que fazer"
+            value={form.title}
+            maxLength={160}
+            onChange={(event) => setForm((c) => ({ ...c, title: event.target.value }))}
+          />
+          <input
+            className="control"
+            type="datetime-local"
+            value={form.dueAt}
+            onChange={(event) => setForm((c) => ({ ...c, dueAt: event.target.value }))}
+          />
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={create.isPending || form.title.trim().length < 2}
+          >
+            Criar tarefa
+          </Button>
+        </form>
+      )}
+      {create.error && (
+        <Alert kind="error">{errorText(create.error, 'Não foi possível criar a tarefa.')}</Alert>
+      )}
+      {open.length === 0 && <p className="muted">Nenhuma tarefa aberta.</p>}
+      <ul className="lead-tasks">
+        {open.map((task) => (
+          <li key={task.id} className={isTaskOverdue(task) ? 'task-overdue' : ''}>
+            {canWrite && (
+              <input
+                type="checkbox"
+                aria-label={`Concluir: ${task.title}`}
+                checked={false}
+                disabled={update.isPending}
+                onChange={() => update.mutate({ taskId: task.id, done: true })}
+              />
+            )}
+            <span>
+              <strong>{task.title}</strong>
+              <span className="cell-sub">
+                {' '}
+                {LEAD_TASK_KIND_LABELS[task.kind]} · vence {formatDateTime(task.dueAt)}
+                {isTaskOverdue(task) ? ' · atrasada' : ''} · {task.assigneeName ?? '—'}
+                {task.auto ? ' · automática' : ''}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      {done.length > 0 && (
+        <details>
+          <summary className="muted">{done.length} concluída(s)</summary>
+          <ul className="lead-tasks">
+            {done.map((task) => (
+              <li key={task.id} className="task-done">
+                <s>{task.title}</s>
+                <span className="cell-sub">
+                  {' '}
+                  feita {formatDateTime(task.doneAt)} por {task.doneByName ?? '—'}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </fieldset>
+  );
+}
+
+const SOURCE_LABELS: Record<LeadStageHistoryEntry['source'], string> = {
+  wings: 'no Wings System',
+  rd: 'lido do RD CRM',
+  import: 'pela importação',
+  sofia: 'pela Sofia',
+};
+
+function History({ history }: { history: LeadStageHistoryEntry[] }) {
+  if (history.length === 0) return null;
+  return (
+    <fieldset className="block">
+      <legend>Histórico de etapas</legend>
+      <ol className="lead-timeline">
+        {history.map((entry) => (
+          <li key={entry.id}>
+            <span className="muted">{formatDateTime(entry.at)}</span> {entry.fromStage ?? '—'} →{' '}
+            {entry.toStage ?? '—'}
+            {entry.won === true
+              ? ' · ganho'
+              : entry.won === false
+                ? ` · perdido (${entry.lostReason ?? 'sem motivo'})`
+                : ''}
+            <span className="cell-sub">
+              {' '}
+              {SOURCE_LABELS[entry.source]}
+              {entry.actorName ? ` · ${entry.actorName}` : ''}
+            </span>
+          </li>
+        ))}
+      </ol>
     </fieldset>
   );
 }
@@ -273,6 +696,19 @@ function Origin({ lead }: { lead: Lead }) {
             <dd className="lead-wrap">{lead.firstMessage}</dd>
           </>
         )}
+        {lead.city && (
+          <>
+            <dt>Cidade</dt>
+            <dd>{lead.city}</dd>
+          </>
+        )}
+        {lead.formAnswers &&
+          Object.entries(lead.formAnswers).map(([question, answer]) => (
+            <Fragment key={question}>
+              <dt className="lead-wrap">{question.replace(/_/g, ' ')}</dt>
+              <dd className="lead-wrap">{answer}</dd>
+            </Fragment>
+          ))}
       </dl>
     </fieldset>
   );
@@ -318,6 +754,7 @@ export function LeadPage() {
   const session = useSession();
   const lead = useLead(id);
   const canWrite = hasPermission(session.data, 'leads.write');
+  const canAssign = hasPermission(session.data, 'leads.assign');
 
   if (lead.isLoading) return <div className="page-loading">Carregando…</div>;
   if (lead.isError || !lead.data) {
@@ -351,9 +788,15 @@ export function LeadPage() {
         </div>
       </header>
       <div className="grid-2 lead-grid">
+        <Work lead={data} canWrite={canWrite} canAssign={canAssign} />
+        <Tasks lead={data} tasks={lead.data.tasks} canWrite={canWrite} />
+      </div>
+      <Notes lead={data} notes={lead.data.notes} canWrite={canWrite} />
+      <div className="grid-2 lead-grid">
         <Origin lead={data} />
         <RdCrm lead={data} />
       </div>
+      <History history={lead.data.history} />
       <Consent lead={data} />
       <Research lead={data} canWrite={canWrite} />
       <Timeline events={lead.data.events} />

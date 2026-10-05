@@ -15,10 +15,12 @@ import {
   leadEvents,
   leads,
   rdUserMap,
+  leadStageHistory,
 } from '../../db/schema/index.js';
 import { rdCrmGetter } from '../ads/funnel-sync.js';
 import { shapeOf } from '../media/kairogen-adapter.js';
 import { brandKey } from './brands.js';
+import { ensureStage } from './crm.js';
 import { upsertLead, type LeadRow } from './service.js';
 
 /**
@@ -563,27 +565,51 @@ export async function importRdDeals(
         continue;
       }
       if (lead.rdDealId && lead.rdDealId !== id) result.otherDealOfSamePerson += 1;
+      // A lead already run from the Wings System (it was born here, or a person
+      // moved it) keeps what it has: RD only fills what is still empty.
+      const wingsRun = lead.managedBy === 'wings' && !upserted.created;
+      const stageRow = place.pipeline
+        ? await ensureStage(db, {
+            pipeline: place.pipeline,
+            name: place.stage,
+            position: place.order,
+            rdStageId: idOf(deal.deal_stage),
+          })
+        : null;
+      const keepStage = wingsRun && lead.stageId !== null;
+      const keepOutcome = wingsRun && lead.won !== null;
       await db
         .update(leads)
         .set({
-          rdDealId: id,
+          // The import decides which of a person's deals the lead follows; a Wings-run lead keeps its own.
+          rdDealId: wingsRun ? (lead.rdDealId ?? id) : id,
           rdContactId: contact.id,
           rdOwnerId,
           rdPipeline: place.pipelineName,
-          pipeline: place.pipeline,
+          pipeline: lead.pipeline ?? place.pipeline,
           brand: brand ?? lead.brand,
-          stage: place.stage,
-          stageOrder: place.order,
-          stageChangedAt:
-            times.stageChangedAt ??
-            (lead.rdDealId === id && lead.stage === place.stage ? lead.stageChangedAt : null),
+          ...(keepStage
+            ? {}
+            : {
+                stage: place.stage,
+                stageOrder: place.order,
+                stageId: stageRow?.id ?? null,
+                stageChangedAt:
+                  times.stageChangedAt ??
+                  (lead.rdDealId === id && lead.stage === place.stage ? lead.stageChangedAt : null),
+              }),
+          ...(wingsRun ? {} : { managedBy: 'rd' }),
           firstContactAt:
             times.firstContactAt ?? (lead.rdDealId === id ? lead.firstContactAt : null),
-          won: deal.win,
-          closedAt: dateOf(deal.closed_at),
-          lostReason: deal.deal_lost_reason?.name?.slice(0, 200) ?? null,
+          ...(keepOutcome
+            ? {}
+            : {
+                won: deal.win,
+                closedAt: dateOf(deal.closed_at),
+                lostReason: deal.deal_lost_reason?.name?.slice(0, 200) ?? null,
+              }),
           rdSyncedAt: new Date(),
-          ...(ownerEmployeeId ? { ownerEmployeeId } : {}),
+          ...(ownerEmployeeId && !(wingsRun && lead.ownerEmployeeId) ? { ownerEmployeeId } : {}),
           ...(brandClientId && !lead.clientMapped
             ? { clientId: brandClientId, clientMapped: true }
             : {}),
@@ -630,22 +656,59 @@ export async function followRdStages(
     if (!id || !place) continue;
     const lead = await db.query.leads.findFirst({ where: eq(leads.rdDealId, id) });
     if (!lead) continue;
-    const changed = lead.stage !== place.stage || lead.rdPipeline !== place.pipelineName;
     const rdOwnerId = idOf(deal.user);
+    // Run from the Wings System: RD is a copy; it fills only what is still empty here.
+    const wingsRun = lead.managedBy === 'wings';
+    const keepStage = wingsRun && lead.stageId !== null;
+    const keepOutcome = wingsRun && lead.won !== null;
+    const changed =
+      !keepStage && (lead.stage !== place.stage || lead.rdPipeline !== place.pipelineName);
     const ownerEmployeeId = rdOwnerId ? (owners.get(rdOwnerId) ?? null) : null;
+    const stageRow = place.pipeline
+      ? await ensureStage(db, {
+          pipeline: place.pipeline,
+          name: place.stage,
+          position: place.order,
+          rdStageId: idOf(deal.deal_stage),
+        })
+      : null;
+    const outcomeChanged = !keepOutcome && lead.won !== deal.win;
+    if (changed || outcomeChanged) {
+      await db.insert(leadStageHistory).values({
+        leadId: lead.id,
+        fromStageId: lead.stageId,
+        toStageId: stageRow?.id ?? null,
+        fromStage: lead.stage,
+        toStage: keepStage ? lead.stage : place.stage,
+        won: keepOutcome ? lead.won : deal.win,
+        lostReason: keepOutcome
+          ? lead.lostReason
+          : (deal.deal_lost_reason?.name?.slice(0, 200) ?? null),
+        source: 'rd',
+      });
+    }
     await db
       .update(leads)
       .set({
         rdPipeline: place.pipelineName,
-        pipeline: place.pipeline ?? lead.pipeline,
-        stage: place.stage,
-        stageOrder: place.order,
-        ...(changed ? { stageChangedAt: null } : {}),
-        won: deal.win,
-        closedAt: dateOf(deal.closed_at),
-        lostReason: deal.deal_lost_reason?.name?.slice(0, 200) ?? null,
+        pipeline: lead.pipeline ?? place.pipeline,
+        ...(keepStage
+          ? {}
+          : {
+              stage: place.stage,
+              stageOrder: place.order,
+              stageId: stageRow?.id ?? lead.stageId,
+              ...(changed ? { stageChangedAt: null } : {}),
+            }),
+        ...(keepOutcome
+          ? {}
+          : {
+              won: deal.win,
+              closedAt: dateOf(deal.closed_at),
+              lostReason: deal.deal_lost_reason?.name?.slice(0, 200) ?? null,
+            }),
         rdOwnerId,
-        ...(ownerEmployeeId ? { ownerEmployeeId } : {}),
+        ...(ownerEmployeeId && !(wingsRun && lead.ownerEmployeeId) ? { ownerEmployeeId } : {}),
         rdSyncedAt: new Date(),
         updatedAt: new Date(),
       })
