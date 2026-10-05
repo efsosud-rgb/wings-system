@@ -4,6 +4,7 @@ import { AppShell } from './components/AppShell.js';
 import { LegacyRedirect } from './components/LegacyRedirect.js';
 import { ProtectedRoute } from './components/ProtectedRoute.js';
 import { NoAccess, RequirePermission } from './components/RequirePermission.js';
+import { RouteError } from './components/RouteError.js';
 import { ApprovalDetailPage } from './pages/ApprovalDetailPage.js';
 import { ApprovalsPage } from './pages/ApprovalsPage.js';
 import { ClientRecordPage } from './pages/ClientRecordPage.js';
@@ -113,6 +114,7 @@ function submoduleRoutes(): RouteObject[] {
 
     return {
       path,
+      errorElement: <RouteError />,
       element: submodule.permission ? (
         <RequirePermission permission={submodule.permission}>
           <ModuleOutlet />
@@ -126,7 +128,7 @@ function submoduleRoutes(): RouteObject[] {
 }
 
 export const router = createBrowserRouter([
-  { path: '/login', element: <LoginPage /> },
+  { path: '/login', element: <LoginPage />, errorElement: <RouteError /> },
   { path: '/esqueci-senha', element: <ForgotPasswordPage /> },
   // Invite and reset links land here; both post to the same endpoint.
   { path: '/definir-senha', element: <SetPasswordPage mode="invite" /> },
@@ -140,6 +142,9 @@ export const router = createBrowserRouter([
         <AppShell />
       </ProtectedRoute>
     ),
+    // A screen that fails to render shows the error inside the shell (each
+    // sub-module has its own errorElement); this one catches what escapes.
+    errorElement: <RouteError />,
     children: [
       { index: true, element: <LandingRoute /> },
       { path: 'sem-acesso', element: <NoAccess /> },
@@ -158,5 +163,5 @@ export const router = createBrowserRouter([
       })),
     ],
   },
-  { path: '*', element: <NotFoundPage /> },
+  { path: '*', element: <NotFoundPage />, errorElement: <RouteError /> },
 ]);
