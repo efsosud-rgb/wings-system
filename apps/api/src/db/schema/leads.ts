@@ -93,6 +93,8 @@ export const leads = pgTable(
     companyId: uuid('company_id'),
     /** Estimated value of the deal, in cents; null while nobody said. */
     valueCents: bigint('value_cents', { mode: 'number' }),
+    /** The day the seller expects to close the deal (a calendar date, no time); null while nobody said. */
+    expectedCloseAt: date('expected_close_at'),
     /**
      * CRM Vendas phase 1 (docs/crm/fase1-complemento-funil.md): while RD CRM
      * is where the team works, the stage is read from it and only mirrored

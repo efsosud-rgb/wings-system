@@ -255,6 +255,8 @@ export interface BoardCard {
   email: string | null;
   phone: string | null;
   valueCents: number | null;
+  /** The day the seller expects to close, `AAAA-MM-DD`; null while nobody said. */
+  expectedCloseAt: string | null;
   brand: string | null;
   clientName: string;
   ownerEmployeeId: string | null;
@@ -625,13 +627,44 @@ export type LeadActivityCreateInput = z.infer<typeof leadActivityCreateSchema>;
 export const LEAD_VALUE_MAX_CENTS = 100_000_000_00;
 
 /**
+ * A calendar date as the API carries it: `AAAA-MM-DD`, and one that exists
+ * (no 31 de fevereiro). The forecast has no time and no time zone: the day
+ * the seller typed is the day everyone reads.
+ */
+const ISO_DATE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+export const isoDateSchema = z
+  .string()
+  .regex(ISO_DATE, 'Data inválida.')
+  .refine((text) => {
+    const [year, month, day] = text.split('-').map(Number) as [number, number, number];
+    const date = new Date(Date.UTC(year, month - 1, day));
+    return date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+  }, 'Data inválida.');
+
+/** Today's date as `AAAA-MM-DD` in the person's own time zone (the forecast is a plain calendar day). */
+export const localIsoDate = (now = new Date()): string =>
+  `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+/**
+ * An open deal whose forecast day is already behind us is "vencida": the
+ * forecast was missed, not the deal. A won or lost deal is never overdue,
+ * whatever its forecast said.
+ */
+export const isCloseForecastOverdue = (
+  lead: { expectedCloseAt: string | null; won: boolean | null },
+  today = localIsoDate(),
+): boolean => lead.won === null && lead.expectedCloseAt !== null && lead.expectedCloseAt < today;
+
+/**
  * The lead's deal fields a seller edits on its page: the estimated value, the
- * brand of interest (an Expansão brand from Administração → CRM; it files the
- * lead under that client) and the company.
+ * expected close date, the brand of interest (an Expansão brand from
+ * Administração → CRM; it files the lead under that client) and the company.
  */
 export const leadDealUpdateSchema = z
   .object({
     valueCents: z.number().int().min(0).max(LEAD_VALUE_MAX_CENTS).nullable().optional(),
+    /** The day the seller expects to close, `AAAA-MM-DD`; null clears the forecast. */
+    expectedCloseAt: isoDateSchema.nullable().optional(),
     /** A client id from the brand list, or null to clear the brand. */
     brandClientId: z.uuid().nullable().optional(),
     /** A company id, or null to detach; `companyName` makes (or finds) one by name. */
@@ -641,6 +674,7 @@ export const leadDealUpdateSchema = z
   .refine(
     (value) =>
       value.valueCents !== undefined ||
+      value.expectedCloseAt !== undefined ||
       value.brandClientId !== undefined ||
       value.companyId !== undefined ||
       value.companyName !== undefined,

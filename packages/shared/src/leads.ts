@@ -765,6 +765,8 @@ export interface Lead {
   brand: string | null;
   /** Estimated value of the deal in cents; null while nobody said. */
   valueCents: number | null;
+  /** The day the seller expects to close, `AAAA-MM-DD`; null while nobody said. */
+  expectedCloseAt: string | null;
   /** The company the deal is with, when one is tied. */
   company: { id: string; name: string; clientId: string | null } | null;
   /** The people of the deal; the main one first. */
@@ -797,6 +799,8 @@ export interface LeadListItem {
   stage: string | null;
   won: boolean | null;
   valueCents: number | null;
+  /** The day the seller expects to close, `AAAA-MM-DD`; null while nobody said. */
+  expectedCloseAt: string | null;
   companyName: string | null;
   city: string | null;
   campaignName: string | null;

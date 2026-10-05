@@ -948,6 +948,43 @@
   outline: none;
   border-bottom-color: var(--accent);
 }
+.crm-deal-facts .crm-date-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.crm-deal-facts input[type='date'].crm-inline-edit {
+  min-width: 0;
+}
+.crm-deal-facts .crm-inline-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.crm-deal-facts .crm-inline-clear:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.crm-deal-facts .is-overdue .crm-inline-edit,
+.crm-deal-facts .is-overdue b {
+  color: var(--danger);
+}
+.crm-forecast-overdue {
+  margin-left: var(--space-2);
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
 .crm-stagebar {
   display: flex;
   gap: 4px;
