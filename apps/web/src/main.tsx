@@ -3,7 +3,9 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { RouterProvider } from 'react-router-dom';
 import { router } from './router.js';
+import './theme.css';
 import './index.css';
+import './crm.css';
 
 const queryClient = new QueryClient({
   defaultOptions: {

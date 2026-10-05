@@ -43,7 +43,14 @@ export function AppShell() {
     <div className="shell">
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <img className="sidebar-brand-mark" src="/brand/wings-logo-mark.png" alt="Wings System" />
+          {/* The official logo component (2D / animated) mounts here when it exists; the mark is the fallback. */}
+          <div className="sidebar-logo" id="wings-logo-slot">
+            <img
+              className="sidebar-brand-mark"
+              src="/brand/wings-logo-mark-dark.png"
+              alt="Wings System"
+            />
+          </div>
           {/* Decorative: the image's alt already reads "Wings System". One span per
               letter so the word spreads across the same span "COMPANY" takes in the
               original mark, whatever the font. */}

@@ -1215,13 +1215,15 @@ describe('the Funil routes', () => {
       payload: { name: 'Sem contato', legalBasis: 'consent', consentText: 'Reunião presencial' },
     });
     expect(nothing.statusCode).toBe(400);
+    // "Criar negociação" (05/10): no LGPD fields on the modal; a deal typed in is legitimate interest.
     const noBasis = await app.inject({
       method: 'POST',
       url: '/leads',
       cookies,
       payload: { name: 'Sem base', phone: '11988887777' },
     });
-    expect(noBasis.statusCode).toBe(400);
+    expect(noBasis.statusCode).toBe(201);
+    expect(noBasis.json<{ lead: Lead }>().lead.consent.legalBasis).toBe('legitimate_interest');
   });
 
   it('queues the research again on request, but not while one is already waiting', async () => {

@@ -2,6 +2,7 @@ import {
   EMPTY_FACTS,
   INACTIVE_OWNER,
   LEAD_PIPELINES,
+  NO_OWNER,
   landingPageKeysOf,
   matchSourceRule,
   normalizeBrazilianPhone,
@@ -11,6 +12,7 @@ import {
   type EnrichmentFacts,
   type FoundLink,
   type Lead,
+  type LeadActivity,
   type LeadChannel,
   type LeadEvent,
   type LeadLegalBasis,
@@ -29,6 +31,7 @@ import { and, asc, desc, eq, gte, isNotNull, isNull, lt, or, sql } from 'drizzle
 import type { Database } from '../../db/client.js';
 import {
   clients,
+  crmCompanies,
   employees,
   jobs,
   leadEnrichmentLedger,
@@ -39,6 +42,8 @@ import {
   rdCrmDeals,
   rdUserMap,
 } from '../../db/schema/index.js';
+import { activitiesOf } from './activities.js';
+import { attachLeadContact, contactsOfLead, findOrCreateCompany } from './contacts.js';
 import {
   ensureFirstContactTask,
   entryStageOf,
@@ -181,6 +186,9 @@ export interface IncomingLead {
   ownerEmployeeId?: string | null;
   pipeline?: LeadPipeline | null;
   brand?: string | null;
+  /** The company the deal is with, found or made by name/CNPJ (CRM núcleo). */
+  company?: { name: string; cnpj?: string | null; city?: string | null } | null;
+  valueCents?: number | null;
   /** When the person actually arrived, if earlier than now (an imported RD deal's creation); used only for a new lead. */
   arrivedAt?: Date | null;
   /** The import run creating the lead (`leads.import_batch_id`); used only for a new lead. */
@@ -299,6 +307,8 @@ function fillGaps(existing: LeadRow, incoming: IncomingLead): Partial<typeof lea
   if (!existing.formId && incoming.formId) patch.formId = incoming.formId;
   if (!existing.pipeline && incoming.pipeline) patch.pipeline = incoming.pipeline;
   if (!existing.brand && incoming.brand) patch.brand = incoming.brand;
+  if (existing.valueCents === null && typeof incoming.valueCents === 'number')
+    patch.valueCents = incoming.valueCents;
   if (!hasAttribution(existing)) Object.assign(patch, attributionColumns(incoming.attribution));
   return patch;
 }
@@ -346,12 +356,21 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
 
     if (existing) {
       const patch = fillGaps(existing, incoming);
+      if (!existing.companyId && incoming.company?.name) {
+        const company = await findOrCreateCompany(
+          tx,
+          incoming.company,
+          incoming.event.actorEmployeeId ?? null,
+        );
+        if (company) patch.companyId = company.company.id;
+      }
       const [updated] = await tx
         .update(leads)
         .set({ ...patch, updatedAt: new Date() })
         .where(eq(leads.id, existing.id))
         .returning();
       const lead = updated ?? existing;
+      await attachLeadContact(tx, lead, incoming.event.actorEmployeeId ?? null);
       await tx.insert(leadEvents).values({
         leadId: lead.id,
         kind: incoming.event.kind,
@@ -387,6 +406,9 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
       distribute && pipeline && !incoming.ownerEmployeeId
         ? await nextInRotation(tx, pipeline)
         : null;
+    const company = incoming.company?.name
+      ? await findOrCreateCompany(tx, incoming.company, incoming.event.actorEmployeeId ?? null)
+      : null;
     const [created] = await tx
       .insert(leads)
       .values({
@@ -426,12 +448,15 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
         consentText: incoming.consentText ?? null,
         pipeline: incoming.pipeline ?? null,
         brand: incoming.brand ?? null,
+        companyId: company?.company.id ?? null,
+        valueCents: typeof incoming.valueCents === 'number' ? incoming.valueCents : null,
         ...attributionColumns(incoming.attribution),
         ...(incoming.arrivedAt ? { createdAt: incoming.arrivedAt } : {}),
         importBatchId: incoming.importBatchId ?? null,
       })
       .returning();
     if (!created) throw new Error('lead insert returned no row');
+    await attachLeadContact(tx, created, incoming.event.actorEmployeeId ?? null);
     await tx.insert(leadEvents).values({
       leadId: created.id,
       kind: incoming.event.kind,
@@ -516,6 +541,8 @@ export function toLead(
     trackingCode: string | null;
     costUsdMicro: number;
     ownerName?: string | null;
+    company?: Lead['company'];
+    contacts?: Lead['contacts'];
   },
 ): Lead {
   return {
@@ -550,6 +577,9 @@ export function toLead(
     },
     pipeline: (row.pipeline as LeadPipeline | null) ?? null,
     brand: row.brand,
+    valueCents: row.valueCents,
+    company: extra.company ?? null,
+    contacts: extra.contacts ?? [],
     work: {
       stageId: row.stageId,
       stage: row.stage,
@@ -604,15 +634,24 @@ export interface LoadedLead {
   notes: LeadNote[];
   tasks: LeadTask[];
   history: LeadStageHistoryEntry[];
+  activities: LeadActivity[];
 }
 
 export async function loadLead(db: Database, id: string): Promise<LoadedLead | null> {
   const row = await db.query.leads.findFirst({ where: eq(leads.id, id) });
   if (!row) return null;
-  const [notes, tasks, history] = await Promise.all([
+  const [notes, tasks, history, activities, contacts, company] = await Promise.all([
     notesOf(db, row.id),
     tasksOf(db, row.id),
     stageHistoryOf(db, row.id),
+    activitiesOf(db, row.id),
+    contactsOfLead(db, row.id),
+    row.companyId
+      ? db.query.crmCompanies.findFirst({
+          where: eq(crmCompanies.id, row.companyId),
+          columns: { id: true, name: true, clientId: true },
+        })
+      : Promise.resolve(undefined),
   ]);
   const [client, link, cost, events, owner] = await Promise.all([
     db.query.clients.findFirst({ where: eq(clients.id, row.clientId) }),
@@ -644,6 +683,8 @@ export async function loadLead(db: Database, id: string): Promise<LoadedLead | n
       trackingCode: link?.code ?? null,
       costUsdMicro: cost[0]?.total ?? 0,
       ownerName: owner?.fullName ?? null,
+      company: company ?? null,
+      contacts,
     }),
     events: events.map((event) => ({
       id: event.id,
@@ -654,6 +695,7 @@ export async function loadLead(db: Database, id: string): Promise<LoadedLead | n
     notes,
     tasks,
     history,
+    activities,
   };
 }
 
@@ -667,8 +709,47 @@ export interface LeadListFilter {
   owner?: string;
   outcome?: LeadOutcome;
   staleDays?: number;
-  /** Set when the caller's scope is `own`. */
+  createdFrom?: string;
+  createdTo?: string;
+  activityDays?: number;
+  campaign?: string;
+  sort?: 'recent' | 'oldest' | 'value_desc' | 'value_asc' | 'stage_time' | 'next_task' | 'name';
+  /** Set when the caller's scope is `own`, or when the caller asked for "Minhas". */
   ownerEmployeeId?: string;
+}
+
+/** The next open task of a lead (title and due time), as a JSON subquery. */
+export const nextTaskSql = sql<{
+  title: string;
+  dueAt: string;
+} | null>`(select json_build_object('title', t.title, 'dueAt', to_char(t.due_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')) from lead_tasks t where t.lead_id = ${leads.id} and t.done_at is null order by t.due_at asc limit 1)`;
+export const lastActivitySql = sql<
+  string | null
+>`(select max(e.at) from lead_events e where e.lead_id = ${leads.id})`;
+export const contactNameSql = sql<
+  string | null
+>`(select c.name from lead_contacts lc join crm_contacts cc on cc.id = lc.contact_id join crm_contacts c on c.id = coalesce(cc.merged_into_id, cc.id) where lc.lead_id = ${leads.id} order by lc."primary" desc, lc.created_at asc limit 1)`;
+
+export function listOrder(sort: LeadListFilter['sort']) {
+  switch (sort) {
+    case 'oldest':
+      return [asc(leads.createdAt)];
+    case 'value_desc':
+      return [sql`${leads.valueCents} desc nulls last`, desc(leads.createdAt)];
+    case 'value_asc':
+      return [sql`${leads.valueCents} asc nulls last`, desc(leads.createdAt)];
+    case 'stage_time':
+      return [sql`${leads.stageChangedAt} asc nulls last`, desc(leads.createdAt)];
+    case 'next_task':
+      return [
+        sql`(select min(t.due_at) from lead_tasks t where t.lead_id = ${leads.id} and t.done_at is null) asc nulls last`,
+        desc(leads.createdAt),
+      ];
+    case 'name':
+      return [sql`lower(coalesce(${leads.name}, '')) asc`];
+    default:
+      return [desc(leads.createdAt)];
+  }
 }
 
 export const LEAD_LIST_LIMIT = 200;
@@ -680,10 +761,25 @@ export const LEAD_LIST_LIMIT = 200;
  */
 const ownerInactive = sql<boolean>`(${leads.rdDealId} is not null and (${leads.ownerEmployeeId} is null or exists (select 1 from ${rdUserMap} where ${rdUserMap.rdUserId} = ${leads.rdOwnerId} and (not ${rdUserMap.rdActive} or ${rdUserMap.departedAt} is not null))))`;
 
-function listConditions(filter: LeadListFilter) {
+export function listConditions(filter: LeadListFilter) {
   const conditions = [];
+  if (filter.createdFrom)
+    conditions.push(gte(leads.createdAt, new Date(`${filter.createdFrom}T00:00:00-03:00`)));
+  if (filter.createdTo)
+    conditions.push(lt(leads.createdAt, new Date(`${filter.createdTo}T23:59:59.999-03:00`)));
+  if (filter.activityDays)
+    conditions.push(
+      sql`${lastActivitySql} >= ${new Date(Date.now() - filter.activityDays * 86_400_000)}`,
+    );
+  if (filter.campaign) {
+    const needle = `%${filter.campaign.toLowerCase()}%`;
+    conditions.push(
+      sql`(lower(coalesce(${leads.campaignName}, '')) like ${needle} or coalesce(${leads.campaignId}, '') = ${filter.campaign} or lower(coalesce(${leads.utmCampaign}, '')) like ${needle})`,
+    );
+  }
   if (filter.ownerEmployeeId) conditions.push(eq(leads.ownerEmployeeId, filter.ownerEmployeeId));
   if (filter.owner === INACTIVE_OWNER) conditions.push(ownerInactive);
+  else if (filter.owner === NO_OWNER) conditions.push(isNull(leads.ownerEmployeeId));
   else if (filter.owner) conditions.push(eq(leads.ownerEmployeeId, filter.owner));
   if (filter.clientId) conditions.push(eq(leads.clientId, filter.clientId));
   if (filter.source) conditions.push(eq(leads.source, filter.source));
@@ -702,8 +798,8 @@ function listConditions(filter: LeadListFilter) {
     const digits = filter.q.replace(/\D/g, '');
     conditions.push(
       digits.length >= 4
-        ? sql`(lower(coalesce(${leads.name}, '')) like ${needle} or coalesce(${leads.email}, '') like ${needle} or coalesce(${leads.phone}, '') like ${`%${digits}%`})`
-        : sql`(lower(coalesce(${leads.name}, '')) like ${needle} or coalesce(${leads.email}, '') like ${needle})`,
+        ? sql`(lower(coalesce(${leads.name}, '')) like ${needle} or coalesce(${leads.email}, '') like ${needle} or coalesce(${leads.phone}, '') like ${`%${digits}%`} or exists (select 1 from crm_companies c where c.id = ${leads.companyId} and lower(c.name) like ${needle}))`
+        : sql`(lower(coalesce(${leads.name}, '')) like ${needle} or coalesce(${leads.email}, '') like ${needle} or exists (select 1 from crm_companies c where c.id = ${leads.companyId} and lower(c.name) like ${needle}))`,
     );
   }
   return conditions.length > 0 ? and(...conditions) : undefined;
@@ -712,6 +808,7 @@ function listConditions(filter: LeadListFilter) {
 export async function listLeads(
   db: Database,
   filter: LeadListFilter,
+  limit = LEAD_LIST_LIMIT,
 ): Promise<{ leads: LeadListItem[]; total: number }> {
   const where = listConditions(filter);
   const [rows, total] = await Promise.all([
@@ -732,6 +829,13 @@ export async function listLeads(
         brand: leads.brand,
         stage: leads.stage,
         won: leads.won,
+        valueCents: leads.valueCents,
+        companyName: crmCompanies.name,
+        city: leads.city,
+        campaignName: leads.campaignName,
+        lastActivityAt: lastActivitySql,
+        nextTask: nextTaskSql,
+        ownerEmployeeId: leads.ownerEmployeeId,
         ownerName: employees.fullName,
         ownerInactive,
         stageChangedAt: leads.stageChangedAt,
@@ -739,9 +843,10 @@ export async function listLeads(
       .from(leads)
       .innerJoin(clients, eq(clients.id, leads.clientId))
       .leftJoin(employees, eq(employees.id, leads.ownerEmployeeId))
+      .leftJoin(crmCompanies, eq(crmCompanies.id, leads.companyId))
       .where(where)
-      .orderBy(desc(leads.createdAt))
-      .limit(LEAD_LIST_LIMIT),
+      .orderBy(...listOrder(filter.sort))
+      .limit(limit),
     db
       .select({ count: sql<number>`count(*)::int` })
       .from(leads)
@@ -765,6 +870,13 @@ export async function listLeads(
       brand: row.brand,
       stage: row.stage,
       won: row.won,
+      valueCents: row.valueCents,
+      companyName: row.companyName,
+      city: row.city,
+      campaignName: row.campaignName,
+      lastActivityAt: row.lastActivityAt ? new Date(row.lastActivityAt).toISOString() : null,
+      nextTask: row.nextTask,
+      ownerEmployeeId: row.ownerEmployeeId,
       ownerName: row.ownerInactive ? null : row.ownerName,
       ownerInactive: Boolean(row.ownerInactive),
       stageChangedAt: iso(row.stageChangedAt),

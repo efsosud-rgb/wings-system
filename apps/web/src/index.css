@@ -1,17 +1,16 @@
-/* Wings Company brand basics: black surfaces, orange accent. */
+/* The legacy names, mapped onto theme.css so every older screen follows the theme. */
 :root {
-  --wings-black: #000000;
-  --wings-surface: #0a0a0a;
-  --wings-card: #121212;
-  --wings-border: #262626;
-  --wings-text: #e5e5e5;
-  --wings-muted: #a3a3a3;
-  --wings-faint: #737373;
-  --wings-accent: #e95228;
-  --wings-accent-hover: #d0431d;
-  --wings-danger: #f87171;
-  --wings-success: #34d399;
-  color-scheme: dark;
+  --wings-black: var(--bg);
+  --wings-surface: var(--surface);
+  --wings-card: var(--surface-2);
+  --wings-border: var(--line);
+  --wings-text: var(--text);
+  --wings-muted: var(--text-2);
+  --wings-faint: var(--text-3);
+  --wings-accent: var(--accent);
+  --wings-accent-hover: var(--accent-hover);
+  --wings-danger: var(--danger);
+  --wings-success: var(--success);
 }
 
 * {
@@ -23,12 +22,9 @@
 body {
   background: var(--wings-black);
   color: var(--wings-text);
-  font-family:
-    system-ui,
-    -apple-system,
-    sans-serif;
+  font-family: var(--font);
   min-height: 100vh;
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 
 a {
@@ -116,9 +112,9 @@ a {
   width: 100%;
   background: var(--wings-surface);
   border: 1px solid var(--wings-border);
-  color: #fff;
+  color: var(--text);
   padding: 10px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: 14px;
   font-family: inherit;
 }
@@ -130,7 +126,7 @@ a {
 
 .btn {
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 11px 18px;
   font-weight: 600;
   font-size: 14px;
@@ -145,7 +141,7 @@ a {
 
 .btn-primary {
   background: var(--wings-accent);
-  color: #fff;
+  color: var(--text-on-accent);
   width: 100%;
 }
 
@@ -220,6 +216,11 @@ a {
   border-bottom: 1px solid var(--wings-border);
   flex-shrink: 0;
 }
+/* The slot for the official logo component (Sonnet's): it replaces the image when mounted. */
+.sidebar-logo {
+  display: block;
+  min-height: 40px;
+}
 
 .sidebar-brand-mark {
   display: block;
@@ -251,24 +252,55 @@ a {
 }
 
 .menu-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 10px 12px;
-  border-radius: 6px;
-  color: var(--wings-text);
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
   text-decoration: none;
-  font-size: 14px;
+  font-size: var(--text-base);
+  transition:
+    background var(--duration-fast) var(--ease),
+    color var(--duration-fast) var(--ease);
 }
 
 .menu-item:hover {
-  background: rgba(233, 82, 40, 0.12);
-  color: var(--wings-accent);
+  background: var(--surface-hover);
 }
 
+/* The active item: soft brand tint and a 3 px orange bar that grows from the top. */
 .menu-item.active {
-  background: var(--wings-accent);
-  color: #fff;
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  font-weight: var(--weight-medium);
+}
+.menu-item.active::before,
+.menu-module-header.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--brand);
+  transform-origin: top;
+  animation: menu-bar-grow var(--duration) var(--ease) both;
+}
+@keyframes menu-bar-grow {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+.menu-item:focus-visible,
+.menu-module-header:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .sidebar-user {
@@ -283,7 +315,7 @@ a {
 }
 
 .sidebar-user strong {
-  color: #fff;
+  color: var(--text);
   font-size: 13px;
 }
 
@@ -910,6 +942,7 @@ a {
 }
 
 .menu-module-header {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -917,20 +950,39 @@ a {
   padding: 9px 12px;
   background: none;
   border: none;
-  border-radius: 6px;
-  color: var(--wings-text);
+  border-radius: var(--radius-sm);
+  color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
   text-align: left;
   cursor: pointer;
+  text-decoration: none;
+  transition: background var(--duration-fast) var(--ease);
 }
-
+/* The icon slides 2 px to the right with a slight tilt on hover; still under reduced motion. */
+.menu-module-header > span:first-child {
+  display: inline-block;
+  transition: transform var(--duration-fast) var(--ease);
+}
 .menu-module-header:hover {
-  background: var(--wings-card);
+  background: var(--surface-hover);
 }
-
+.menu-module-header:hover > span:first-child {
+  transform: translateX(2px) rotate(-6deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .menu-module-header:hover > span:first-child {
+    transform: none;
+  }
+  .menu-item.active::before,
+  .menu-module-header.active::before {
+    animation: none;
+  }
+}
 .menu-module-header.active {
-  color: var(--wings-accent);
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
 }
 
 .menu-module-label {

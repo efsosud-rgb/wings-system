@@ -226,7 +226,7 @@ describe('importRdDeals', () => {
   it('simulates without writing anything', async () => {
     const before = await db.select().from(leads);
     const result = await importRdDeals(db, rd, { apply: false, since, histories: false });
-    expect(result.inScope).toEqual({ expansao: 2, formatacao: 3 });
+    expect(result.inScope).toEqual({ expansao: 2, formatacao: 3, consultoria: 0 });
     expect(result.merged).toBe(2);
     expect(result.created).toBe(3);
     expect(await db.select().from(leads)).toHaveLength(before.length);

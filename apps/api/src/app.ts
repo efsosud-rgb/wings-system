@@ -30,6 +30,7 @@ import { landingPageRoutes } from './modules/leads/landing-pages.js';
 import { rdUserRoutes } from './modules/leads/rd-users.js';
 import { configureCrm } from './modules/leads/crm.js';
 import { crmRoutes } from './modules/leads/crm-routes.js';
+import { nucleoRoutes } from './modules/leads/nucleo-routes.js';
 import { leadRoutes } from './modules/leads/routes.js';
 import { siteFormRoutes } from './modules/leads/site-forms.js';
 import { leadWebhookRoutes } from './modules/leads/webhooks.js';
@@ -193,6 +194,7 @@ export async function buildApp(deps: {
   await app.register(roadmapRoutes);
   await app.register(leadRoutes);
   await app.register(crmRoutes);
+  await app.register(nucleoRoutes);
   await app.register(rdUserRoutes);
   await app.register(landingPageRoutes);
   await app.register(leadWebhookRoutes);

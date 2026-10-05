@@ -11,9 +11,13 @@ import {
   auditLog,
   clients,
   employees,
+  leadActivities,
+  leadContacts,
   leadEnrichmentLedger,
   leadEvents,
+  leadNotes,
   leads,
+  leadTasks,
   rdUserMap,
   leadStageHistory,
 } from '../../db/schema/index.js';
@@ -455,7 +459,7 @@ export async function importRdDeals(
   const result: RdImportResult = {
     applied: options.apply,
     dealsListed: 0,
-    inScope: { expansao: 0, formatacao: 0 },
+    inScope: { expansao: 0, formatacao: 0, consultoria: 0 },
     inArchive: 0,
     archiveOutcome: { won: 0, lost: 0 },
     outOfScope: {},
@@ -896,6 +900,12 @@ export async function undoRdImportBatch(
       const chunk = createdIds.slice(index, index + 500);
       await tx.delete(leadEvents).where(inArray(leadEvents.leadId, chunk));
       await tx.delete(leadEnrichmentLedger).where(inArray(leadEnrichmentLedger.leadId, chunk));
+      // The CRM núcleo rows of a lead this run made (contacts stay: they are people, not this run's).
+      await tx.delete(leadContacts).where(inArray(leadContacts.leadId, chunk));
+      await tx.delete(leadActivities).where(inArray(leadActivities.leadId, chunk));
+      await tx.delete(leadNotes).where(inArray(leadNotes.leadId, chunk));
+      await tx.delete(leadTasks).where(inArray(leadTasks.leadId, chunk));
+      await tx.delete(leadStageHistory).where(inArray(leadStageHistory.leadId, chunk));
       await tx.delete(leads).where(inArray(leads.id, chunk));
     }
     for (const row of restore) {
