@@ -328,6 +328,30 @@ async function sendEmailAction(
       : skipped(outcome.reason);
 }
 
+/** The template with the lead's own values filled in (first names only). */
+export async function renderForLead(
+  db: Database,
+  lead: LeadRow,
+  template: { subject: string; body: string },
+): Promise<{ subject: string; body: string }> {
+  const seller = lead.ownerEmployeeId
+    ? await db.query.employees.findFirst({
+        where: eq(employees.id, lead.ownerEmployeeId),
+        columns: { fullName: true },
+      })
+    : null;
+  const values = {
+    nome: lead.name?.trim().split(/\s+/)[0] ?? '',
+    marca: lead.brand ?? '',
+    vendedor: seller?.fullName.trim().split(/\s+/)[0] ?? '',
+    etapa: lead.stage ?? '',
+  };
+  return {
+    subject: renderTemplate(template.subject, values),
+    body: renderTemplate(template.body, values),
+  };
+}
+
 /**
  * One template to one lead, through the transport, with the outbox row and
  * the timeline event written either way (a failed send is recorded as such,
@@ -357,20 +381,7 @@ export async function sendTemplateToLead(
   if (!template) return { ok: false, reason: 'template_gone' };
   if (!template.active) return { ok: false, reason: 'template_off' };
   if (!lead.email) return { ok: false, reason: 'no_email' };
-  const seller = lead.ownerEmployeeId
-    ? await db.query.employees.findFirst({
-        where: eq(employees.id, lead.ownerEmployeeId),
-        columns: { fullName: true },
-      })
-    : null;
-  const values = {
-    nome: lead.name?.trim().split(/\s+/)[0] ?? '',
-    marca: lead.brand ?? '',
-    vendedor: seller?.fullName.trim().split(/\s+/)[0] ?? '',
-    etapa: lead.stage ?? '',
-  };
-  const subject = renderTemplate(template.subject, values);
-  const body = renderTemplate(template.body, values);
+  const { subject, body } = await renderForLead(db, lead, template);
   let status: 'recorded' | 'sent' | 'failed' =
     input.transport.mode === 'test' ? 'recorded' : 'sent';
   try {

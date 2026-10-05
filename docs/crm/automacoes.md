@@ -53,6 +53,26 @@ Sem WhatsApp nem e-mail por enquanto.
 `{{vendedor}}`, `{{etapa}}`; qualquer outra é recusada ao salvar. O texto fica no outbox
 (a ficha do lead), nunca em log.
 
+**Pela ficha da negociação** (aba E-mail): a pessoa escolhe um modelo ativo, lê a prévia já
+preenchida e envia. Só modelos, sem texto livre. `GET /leads/:id/emails` (modelos ativos e o
+que já foi registrado), `POST /leads/:id/emails/preview` e `POST /leads/:id/emails`
+(`leads.write`, no escopo de quem chama: o vendedor só a ficha dos seus leads, o resto responde
+404). Mesmo serviço das regras (`sendTemplateToLead`), mesmo outbox e o mesmo evento
+`lead.email_sent`; auditoria `lead.email_sent` / `lead.email_failed` só com ids. Em modo `test`
+(o padrão) nada sai: a tela diz "Registrado (modo de teste)". Sem migração.
+
+## Avisos de chegada e rodízio de Formatação (05/10/2026)
+
+- **Lead novo pela Meta, pelo RD (landing) ou pelo formulário do site**, criado (não junção) e fora de importação: `announceNewLead` (`crm-alerts.ts`), chamado por `upsertLead`, direto no código, sem regra cadastrada.
+  - **Com dono** (do rodízio): o dono recebe em Avisos "Novo lead para você" com o prazo do primeiro contato (1 hora útil, horário de Brasília).
+  - **Sem dono** (rodízio do funil vazio): Admin Master, Diretoria e gerentes do comercial (papel `gerente_comercial` ou gerente de setor do Comercial), só ativos, recebem na hora "Lead sem dono". Vendedores não.
+  - O texto nunca cita a pessoa. Um aviso por lead e pessoa (`dedupe_key`); falha ao avisar não desfaz o lead. Importação, espelho do RD CRM, WhatsApp por link e junção com lead existente não geram esse aviso.
+- **Migrações do rodízio de Formatação:** a `0069_crm_rotation_formatacao_diretoria` (já rodou no staging) pôs a Thais, que é Diretoria, quando o funil estava vazio; não se edita. A `0070_crm_rotation_formatacao_vendedoras` (decisão do Eric, 05/10: só a vendedora nova, a Daniela) deixa no rodízio de Formatação **só as pessoas ativas com papel `vendedor_formatacao`**: tira quem não tem o papel ou está inativo (os leads dessa pessoa ficam com ela), inclui quem tem e ainda não está, e mantém a pausa de quem já estava. Idempotente; sem ninguém com o papel o rodízio fica vazio e a rede de segurança avisa; registra um NOTICE com as contagens. Não toca Expansão nem Consultoria. O acesso da Daniela como Vendedor Formatação precisa existir antes da migração; se vier depois, é pela tela do rodízio.
+- **Ordem das migrações:** a 0069 vem depois da 0068 (previsão de fechamento) no `_journal.json`, com `when` maior.
+- **Consultoria começa vazia (decisão do Eric):** nenhuma migração a coloca no rodízio. Lead novo de Consultoria sem dono cai na rede de segurança acima (Diretoria e gerentes recebem "Lead sem dono").
+- **Backfill (lead já velho quando lido):** lead da Meta com mais de 24 horas desde o `created_time` (`STALE_ARRIVAL_HOURS`, `isStaleArrival` em `service.ts`) entra com dono pelo rodízio, mas **sem tarefa de primeiro contato e sem o aviso de 1 hora útil**. No lugar, **uma leitura gera um aviso por dono** ("N leads antigos da Meta foram atribuídos a você", `announceBackfill`); sem dono (rodízio vazio), **um** aviso com a contagem para a Diretoria e o Admin Master, não um por lead. "Uma leitura" = uma passada de `processMetaLeadgenEvents` (a leitura de 5 min, "Buscar agora" ou o webhook). Lead com menos de 24 horas segue o fluxo de chegada.
+- **Fica para depois (decisão do Eric):** dar dono aos leads antigos sem dono.
+
 ## Migração
 
 `0066_crm_automations` (8 tabelas; renumerar no merge se outra entrar antes). `wings_ro` lê

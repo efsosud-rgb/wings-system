@@ -39,6 +39,7 @@ import {
   type LoadedLead,
 } from '../../api/leads.js';
 import { Icon, type IconName } from '../../components/Icon.js';
+import { LeadEmailTab } from './LeadEmailTab.js';
 import {
   ago,
   dueLabel,
@@ -72,6 +73,7 @@ const EVENT_LABELS: Record<string, string> = {
   'lead.imported.csv': 'Importada de planilha',
   'rd.deal_linked': 'Ligada ao negócio do RD CRM',
   'rd.deal_created': 'Cópia criada no RD CRM',
+  'lead.email_sent': 'E-mail ao lead',
   'research.queued': 'Pesquisa pedida',
   'research.done': 'Pesquisa concluída',
   'research.failed': 'Pesquisa não concluída',
@@ -933,21 +935,7 @@ function Register({ lead }: { lead: Lead }) {
           </div>
         </form>
       )}
-      {tab === 'email' && (
-        <div className="crm-record-form">
-          <p className="crm-sub">
-            O envio de e-mail pelo CRM chega em breve. Por enquanto, abra o seu e-mail e registre o
-            que foi dito como anotação.
-          </p>
-          {lead.email && (
-            <div className="crm-quick-row">
-              <a className="crm-btn" href={`mailto:${lead.email}`}>
-                Escrever para {lead.email}
-              </a>
-            </div>
-          )}
-        </div>
-      )}
+      {tab === 'email' && <LeadEmailTab leadId={lead.id} />}
       {error && <p className="crm-error">{errorText(error, 'Não foi possível registrar.')}</p>}
     </section>
   );

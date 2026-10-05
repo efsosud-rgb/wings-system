@@ -47,10 +47,11 @@ function invalidateDeals(queryClient: ReturnType<typeof useQueryClient>) {
 
 // --- sales panel (Dashboard › Vendas) -------------------------------------------------
 
-export function useSalesDashboard(pipeline: LeadPipeline) {
+export function useSalesDashboard(query: Record<string, string>) {
+  const params = new URLSearchParams(query);
   return useQuery({
-    queryKey: ['crm', 'dashboard', pipeline],
-    queryFn: () => api.get<SalesDashboard>(`/crm/dashboard?pipeline=${pipeline}`),
+    queryKey: ['crm', 'dashboard', params.toString()],
+    queryFn: () => api.get<SalesDashboard>(`/crm/dashboard?${params.toString()}`),
     placeholderData: (previous) => previous,
   });
 }

@@ -187,7 +187,9 @@ describe('Regras de automação', () => {
       .select()
       .from(crmNotifications)
       .where(eq(crmNotifications.leadId, lead.id));
-    expect(notices.map((n) => n.message)).toEqual(['Chegou na Proposta']);
+    expect(notices.filter((n) => n.kind === 'automation').map((n) => n.message)).toEqual([
+      'Chegou na Proposta',
+    ]);
 
     const [mail] = await db.select().from(crmEmailOutbox).where(eq(crmEmailOutbox.leadId, lead.id));
     expect(mail).toMatchObject({ mode: 'test', status: 'recorded', subject: 'Olá, Fulana' });

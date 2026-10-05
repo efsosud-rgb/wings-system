@@ -15,6 +15,7 @@ import {
 import { entryStageOf } from './crm.js';
 import { classifyUnruledForm, noticeUnclassifiedForm } from './meta-form-routing.js';
 import { POLL_EVERY_MS, pollMetaLeadsLocked } from './meta-poll.js';
+import { announceBackfill, type BackfillTally } from './crm-alerts.js';
 import { resolveMetaSource, upsertLead } from './service.js';
 
 /**
@@ -119,6 +120,7 @@ export async function processMetaLeadgenEvents(deps: MetaIntakeDeps): Promise<Me
     rdCreated: 0,
   };
   let rdMap: CrmMap | null | undefined;
+  const backfill: BackfillTally = new Map();
   const crm =
     deps.rdCopyEnabled && deps.rdCrmToken ? new RdCrm(deps.rdCrmToken, deps.rdFetch) : null;
   let rows: EventRow[];
@@ -148,7 +150,7 @@ export async function processMetaLeadgenEvents(deps: MetaIntakeDeps): Promise<Me
             rdMap = null;
           }
         }
-        const outcome = await processOne(deps, claimed, crm, rdMap ?? null, now);
+        const outcome = await processOne(deps, claimed, crm, rdMap ?? null, now, backfill);
         if (outcome === 'done') result.done += 1;
         if (outcome === 'rd_retry') result.retried += 1;
         if (outcome === 'rd_created') {
@@ -188,6 +190,7 @@ export async function processMetaLeadgenEvents(deps: MetaIntakeDeps): Promise<Me
       }
     }
   } while (rows.length === BATCH && result.processed < MAX_PER_PASS);
+  await announceBackfill(deps.db, backfill, now);
   return result;
 }
 
@@ -319,6 +322,7 @@ async function processOne(
   crm: RdCrm | null,
   rdMap: CrmMap | null,
   now: Date,
+  backfill: BackfillTally,
 ): Promise<'done' | 'rd_created' | 'rd_retry'> {
   // Step 1 — the lead in the Wings System (skipped on a retry that already made it).
   let leadId = row.leadId;
@@ -372,6 +376,7 @@ async function processOne(
       city: details.city,
       formAnswers: Object.keys(details.answers).length > 0 ? details.answers : null,
       legalBasis: 'consent',
+      originCreatedAt: details.createdTime ?? row.createdTime ?? null,
       consentedAt: details.createdTime ?? row.createdTime ?? now,
       consentSource: `meta_lead_ads:form:${formId ?? 'desconhecido'}`,
       consentText:
@@ -411,6 +416,11 @@ async function processOne(
       },
     });
     leadId = upserted.lead.id;
+    if (upserted.created && upserted.stale)
+      backfill.set(
+        upserted.assignedTo ?? null,
+        (backfill.get(upserted.assignedTo ?? null) ?? 0) + 1,
+      );
     if (guessed && upserted.created) {
       await deps.db.insert(leadEvents).values({
         leadId,
