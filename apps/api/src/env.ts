@@ -152,6 +152,30 @@ const schema = z.object({
     (value) => value === undefined || /^[A-Za-z0-9]+(\s*,\s*[A-Za-z0-9]+)*$/.test(value.trim()),
     'must be RD user ids separated by commas',
   ),
+  /**
+   * CRM e-mail to the lead: `test` (the default) records the message in the
+   * outbox and sends nothing; `smtp` sends through the Workspace SMTP account.
+   * Only Eric turns it to `smtp`, after the templates are approved.
+   */
+  CRM_EMAIL_MODE: optionalString.refine(
+    (value) => value === undefined || value === 'test' || value === 'smtp',
+    'must be "test" or "smtp"',
+  ),
+  /**
+   * How often the API runs the CRM automations cycle (due rules and sequence
+   * steps, then the deadline alerts), as `*\/N * * * *` minutes; every 5 when
+   * unset. Run by the API process itself, one cycle at a time (a database
+   * lock covers more than one replica); nothing is scheduled in Coolify.
+   */
+  CRM_AUTOMATIONS_CRON: optionalString.refine(
+    (value) => value === undefined || /^\*\/([1-9]|[1-5]\d) \* \* \* \*$/.test(value.trim()),
+    'must be "*/N * * * *" with N from 1 to 59 minutes',
+  ),
+  /** Days a deal may sit in a stage (without its own limit) before the panel warns; 7 when unset, 0 turns the alert off. */
+  CRM_STAGE_STUCK_DAYS: optionalString.refine(
+    (value) => value === undefined || /^\d{1,3}$/.test(value),
+    'must be a whole number of days',
+  ),
   CRM_RD_FOLLOW_ENABLED: optionalString.refine(
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',
@@ -377,6 +401,16 @@ const schema = z.object({
   ),
   /** Reads Lead Ads form answers (leads_retrieval). Falls back to META_WRITE_TOKEN, read-only use. */
   META_LEADS_ACCESS_TOKEN: optionalString,
+  /** "false" turns off reading the forms every 5 minutes (the webhook, if set, still works). */
+  META_LEADS_POLL: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  /** Page ids to read besides the ones the key lists, for a key that lists none (ids, comma-separated; not secret). */
+  META_LEADS_PAGE_IDS: optionalString.refine(
+    (value) => value === undefined || /^\d+(\s*,\s*\d+)*$/.test(value.trim()),
+    'must be page ids separated by commas',
+  ),
   /**
    * Meta Lead Ads → RD CRM copy during the transition (Eric, 05/10): on when
    * RD_CRM_API_TOKEN is set, unless "false". Formatação → "Sem contato",

@@ -62,6 +62,27 @@ export function configureCrm(next: Partial<CrmConfig>): void {
 
 export const crmConfig = (): CrmConfig => config;
 
+/** Runs the hook for a lead that has just entered its stage (by a move or at birth); never throws. */
+export async function announceStageEntered(lead: typeof leads.$inferSelect): Promise<void> {
+  if (!stageEntered) return;
+  try {
+    await stageEntered(lead);
+  } catch {
+    // The move stands; the rules' own records say what ran.
+  }
+}
+
+/**
+ * Called after a stage change is committed, for moves a person (or Sofia)
+ * made; the automation rules of the stage start from here. A failing hook
+ * never undoes or fails the move.
+ */
+export type StageEnteredHook = (lead: typeof leads.$inferSelect) => Promise<void>;
+let stageEntered: StageEnteredHook | null = null;
+export function onStageEnteredHook(hook: StageEnteredHook | null): void {
+  stageEntered = hook;
+}
+
 // --- stages ----------------------------------------------------------------------------
 
 type StageRow = typeof crmStages.$inferSelect;
@@ -309,6 +330,19 @@ export type LeadChangeResult =
  * permissions; this writes.
  */
 export async function changeLead(db: Database, change: LeadChange): Promise<LeadChangeResult> {
+  const result = await changeLeadTx(db, change);
+  if (
+    result.ok &&
+    result.changed.includes('stage') &&
+    stageEntered &&
+    (change.source === 'wings' || change.source === 'sofia')
+  ) {
+    await announceStageEntered(result.lead);
+  }
+  return result;
+}
+
+async function changeLeadTx(db: Database, change: LeadChange): Promise<LeadChangeResult> {
   return db.transaction(async (tx) => {
     const [lead] = await tx.select().from(leads).where(eq(leads.id, change.leadId)).for('update');
     if (!lead) return { ok: false, reason: 'not_found' };
@@ -835,6 +869,7 @@ const cardSelect = () => ({
   email: leads.email,
   phone: leads.phone,
   valueCents: leads.valueCents,
+  expectedCloseAt: leads.expectedCloseAt,
   brand: leads.brand,
   clientName: clients.name,
   ownerEmployeeId: leads.ownerEmployeeId,
@@ -866,6 +901,7 @@ const toCard = (row: CardRow): BoardCard => ({
   email: row.email,
   phone: row.phone,
   valueCents: row.valueCents,
+  expectedCloseAt: row.expectedCloseAt,
   brand: row.brand,
   clientName: row.clientName,
   ownerEmployeeId: row.ownerEmployeeId,

@@ -26,6 +26,7 @@ import {
 } from '../api/employees.js';
 import { SectorSelect } from '../components/SectorSelect.js';
 import { Alert, Button, Field, Input, Select } from '../components/ui.js';
+import { PageHeader } from '../components/PageHeader.js';
 
 const STATUS_LABEL: Record<EmployeeStatus, string> = {
   active: 'Ativo',
@@ -196,9 +197,7 @@ export function EmployeeFormPage() {
   if (isEdit && existing.isError) {
     return (
       <>
-        <header className="page-header">
-          <h1>Funcionário</h1>
-        </header>
+        <PageHeader title="Funcionário" />
         <Alert kind="error">Registro não encontrado ou fora do seu escopo de acesso.</Alert>
         <p>
           <Link to="/administracao/usuarios">Voltar à lista</Link>
@@ -209,17 +208,17 @@ export function EmployeeFormPage() {
 
   return (
     <>
-      <header className="page-header page-header-row">
-        <div>
-          <h1>{isEdit ? 'Editar funcionário' : 'Novo funcionário'}</h1>
-          <p>
-            {isEdit ? employee?.fullName : 'O funcionário definirá a própria senha pelo convite.'}
-          </p>
-        </div>
-        <Link to="/administracao/usuarios" className="btn btn-ghost btn-inline">
-          Voltar
-        </Link>
-      </header>
+      <PageHeader
+        title={isEdit ? 'Editar funcionário' : 'Novo funcionário'}
+        subtitle={
+          isEdit ? employee?.fullName : 'O funcionário definirá a própria senha pelo convite.'
+        }
+        actions={
+          <Link to="/administracao/usuarios" className="btn btn-ghost btn-inline">
+            Voltar
+          </Link>
+        }
+      />
 
       {inviteNotice && (
         <Alert kind={inviteNotice.kind === 'success' ? 'success' : 'error'}>

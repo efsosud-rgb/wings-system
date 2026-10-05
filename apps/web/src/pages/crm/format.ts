@@ -29,6 +29,12 @@ export const formatPhone = (phone: string | null | undefined): string => {
 export const formatDate = (iso: string | null | undefined): string =>
   iso ? new Date(iso).toLocaleDateString('pt-BR') : '—';
 
+/** A calendar day (`AAAA-MM-DD`) as `DD/MM/AAAA`, with no time zone shifting it to the day before. */
+export const formatDay = (day: string | null | undefined): string => {
+  const parts = day?.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return parts ? `${parts[3]}/${parts[2]}/${parts[1]}` : '—';
+};
+
 export const formatDateTime = (iso: string | null | undefined): string =>
   iso ? new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—';
 

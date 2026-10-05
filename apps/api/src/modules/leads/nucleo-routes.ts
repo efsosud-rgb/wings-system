@@ -565,12 +565,21 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
       const lastAt = rows.map((row) => row.lastAt).filter(Boolean).sort().at(-1) ?? null;
       return { lastAt: lastAt ? new Date(lastAt).toISOString() : null, last30: rows.reduce((sum, row) => sum + row.last30, 0) };
     };
-    const metaOn = Boolean(env.META_APP_SECRET && env.META_LEADGEN_VERIFY_TOKEN && (env.META_LEADS_ACCESS_TOKEN ?? env.META_WRITE_TOKEN));
+    const metaWebhook = Boolean(env.META_APP_SECRET && env.META_LEADGEN_VERIFY_TOKEN && (env.META_LEADS_ACCESS_TOKEN ?? env.META_WRITE_TOKEN));
+    const metaPolling = Boolean(env.META_LEADS_ACCESS_TOKEN) && env.META_LEADS_POLL !== 'false';
+    const metaOn = metaWebhook || metaPolling;
+    const metaNote = metaPolling
+      ? metaWebhook
+        ? 'Ligada, a cada 5 min, e na hora pelo webhook.'
+        : 'Ligada, a cada 5 min.'
+      : metaWebhook
+        ? 'Formulários do Facebook e Instagram entram sozinhos, na hora, pelo webhook.'
+        : 'Falta a chave da Meta; os formulários não entram sozinhos.';
     const rdOn = Boolean(env.RD_STATION_WEBHOOK_SECRET);
     const whatsappOn = Boolean(env.ZAPI_WEBHOOK_SECRET && env.WINGS_WHATSAPP_NUMBER);
     return reply.send({
       sources: [
-        { key: 'meta', name: 'Meta Lead Ads', state: metaOn ? 'on' : 'off', note: metaOn ? 'Formulários do Facebook e Instagram entram sozinhos.' : 'Falta ligar a conta da Meta; os formulários não entram sozinhos.', ...of('meta_lead_ads') },
+        { key: 'meta', name: 'Meta Lead Ads', state: metaOn ? 'on' : 'off', note: metaNote, ...of('meta_lead_ads') },
         { key: 'site', name: 'Formulário do site', state: 'on', note: 'As páginas com formulário próprio entram na hora.', ...of('site_form') },
         { key: 'rd', name: 'RD Station (landing pages)', state: rdOn ? 'on' : 'off', note: rdOn ? 'As conversões das landing pages entram pelo RD.' : 'Falta ligar o RD Station; as conversões não entram sozinhas.', ...of('rd_station', 'rd_crm') },
         { key: 'whatsapp', name: 'WhatsApp', state: whatsappOn ? 'on' : 'soon', note: whatsappOn ? 'Mensagens pelos links rastreáveis entram sozinhas.' : 'Em breve: as conversas do WhatsApp da Wings entrarão aqui.', ...of('whatsapp_link') },

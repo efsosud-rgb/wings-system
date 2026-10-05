@@ -78,6 +78,8 @@ export async function setBrandOnSale(
 export interface DealChange {
   leadId: string;
   valueCents?: number | null;
+  /** `AAAA-MM-DD`, validated by the route; null clears the forecast. */
+  expectedCloseAt?: string | null;
   /** A client id from the brand list; null clears the brand (the lead goes back to Wings Company, unmapped). */
   brandClientId?: string | null;
   companyId?: string | null;
@@ -104,6 +106,15 @@ export async function changeDeal(db: Database, change: DealChange): Promise<Deal
       events.push({
         kind: 'lead.value_changed',
         detail: { from: lead.valueCents, to: change.valueCents },
+      });
+    }
+
+    if (change.expectedCloseAt !== undefined && change.expectedCloseAt !== lead.expectedCloseAt) {
+      patch.expectedCloseAt = change.expectedCloseAt;
+      changed.push('expected_close');
+      events.push({
+        kind: 'lead.expected_close_changed',
+        detail: { from: lead.expectedCloseAt, to: change.expectedCloseAt },
       });
     }
 

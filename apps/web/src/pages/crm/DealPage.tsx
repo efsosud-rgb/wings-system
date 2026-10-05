@@ -1,5 +1,6 @@
 import {
   initialsOf,
+  isCloseForecastOverdue,
   LEAD_CALL_OUTCOME_LABELS,
   LEAD_CALL_OUTCOMES,
   LEAD_CHANNEL_LABELS,
@@ -37,10 +38,13 @@ import {
   useUpdateTask,
   type LoadedLead,
 } from '../../api/leads.js';
+import { Icon, type IconName } from '../../components/Icon.js';
+import { LeadEmailTab } from './LeadEmailTab.js';
 import {
   ago,
   dueLabel,
   formatDateTime,
+  formatDay,
   formatPhone,
   isPast,
   money,
@@ -69,6 +73,7 @@ const EVENT_LABELS: Record<string, string> = {
   'lead.imported.csv': 'Importada de planilha',
   'rd.deal_linked': 'Ligada ao negócio do RD CRM',
   'rd.deal_created': 'Cópia criada no RD CRM',
+  'lead.email_sent': 'E-mail ao lead',
   'research.queued': 'Pesquisa pedida',
   'research.done': 'Pesquisa concluída',
   'research.failed': 'Pesquisa não concluída',
@@ -77,6 +82,7 @@ const EVENT_LABELS: Record<string, string> = {
   'lead.owner_changed': 'Dono alterado',
   'lead.pipeline_changed': 'Funil alterado',
   'lead.value_changed': 'Valor alterado',
+  'lead.expected_close_changed': 'Previsão de fechamento alterada',
   'lead.brand_changed': 'Marca de interesse alterada',
   'lead.company_changed': 'Empresa alterada',
   'lead.contact_linked': 'Contato adicionado',
@@ -154,6 +160,10 @@ function Head({
   const [losing, setLosing] = useState(false);
   const [reason, setReason] = useState('');
   const open = lead.work.won === null;
+  const forecastOverdue = isCloseForecastOverdue({
+    expectedCloseAt: lead.expectedCloseAt,
+    won: lead.work.won,
+  });
   const list = (stages.data?.stages ?? []).filter(
     (stage) => stage.active || stage.id === lead.work.stageId,
   );
@@ -265,6 +275,42 @@ function Head({
           ) : (
             <b>{money(lead.valueCents, true)}</b>
           )}
+        </span>
+        <span className={forecastOverdue ? 'is-overdue' : undefined}>
+          Previsão de fechamento{' '}
+          {canWrite ? (
+            <span className="crm-date-edit">
+              <input
+                type="date"
+                className="crm-inline-edit"
+                aria-label="Previsão de fechamento"
+                value={lead.expectedCloseAt ?? ''}
+                disabled={deal.isPending}
+                onChange={(e) => {
+                  // A date input gives '' while a part is missing and the year
+                  // digit by digit; a full year is the sign the person finished.
+                  const next = e.target.value;
+                  if (next !== '' && Number(next.slice(0, 4)) < 2000) return;
+                  if (next !== (lead.expectedCloseAt ?? ''))
+                    deal.mutate({ expectedCloseAt: next || null });
+                }}
+              />
+              {lead.expectedCloseAt && (
+                <button
+                  type="button"
+                  className="crm-inline-clear"
+                  aria-label="Limpar previsão de fechamento"
+                  disabled={deal.isPending}
+                  onClick={() => deal.mutate({ expectedCloseAt: null })}
+                >
+                  <Icon name="x" size={12} />
+                </button>
+              )}
+            </span>
+          ) : (
+            <b>{formatDay(lead.expectedCloseAt)}</b>
+          )}
+          {forecastOverdue && <span className="crm-forecast-overdue">vencida</span>}
         </span>
         <span>
           Dono{' '}
@@ -889,21 +935,7 @@ function Register({ lead }: { lead: Lead }) {
           </div>
         </form>
       )}
-      {tab === 'email' && (
-        <div className="crm-record-form">
-          <p className="crm-sub">
-            O envio de e-mail pelo CRM chega em breve. Por enquanto, abra o seu e-mail e registre o
-            que foi dito como anotação.
-          </p>
-          {lead.email && (
-            <div className="crm-quick-row">
-              <a className="crm-btn" href={`mailto:${lead.email}`}>
-                Escrever para {lead.email}
-              </a>
-            </div>
-          )}
-        </div>
-      )}
+      {tab === 'email' && <LeadEmailTab leadId={lead.id} />}
       {error && <p className="crm-error">{errorText(error, 'Não foi possível registrar.')}</p>}
     </section>
   );
@@ -912,7 +944,7 @@ function Register({ lead }: { lead: Lead }) {
 interface Entry {
   id: string;
   at: string;
-  icon: string;
+  icon: IconName;
   tone: string;
   title: string;
   by: string | null;
@@ -926,7 +958,7 @@ function entriesOf(data: LoadedLead): Entry[] {
     entries.push({
       id: `n${note.id}`,
       at: note.at,
-      icon: '✎',
+      icon: 'edit',
       tone: 'note',
       title: 'Anotação',
       by: note.authorName,
@@ -937,7 +969,7 @@ function entriesOf(data: LoadedLead): Entry[] {
     entries.push({
       id: `a${activity.id}`,
       at: activity.at,
-      icon: call ? '☏' : '◉',
+      icon: call ? 'phone' : 'calendar',
       tone: call ? 'call' : 'meeting',
       title: call
         ? `Ligação · ${activity.outcome ? LEAD_CALL_OUTCOME_LABELS[activity.outcome] : ''}${activity.durationSeconds ? ` · ${Math.round(activity.durationSeconds / 60)} min` : ''}`
@@ -952,7 +984,7 @@ function entriesOf(data: LoadedLead): Entry[] {
       entries.push({
         id: `td${task.id}`,
         at: task.doneAt,
-        icon: '✓',
+        icon: 'check',
         tone: 'task',
         title: `Tarefa concluída · ${task.title}`,
         by: task.doneByName,
@@ -960,7 +992,7 @@ function entriesOf(data: LoadedLead): Entry[] {
     entries.push({
       id: `tc${task.id}`,
       at: task.createdAt,
-      icon: '☐',
+      icon: 'check-square',
       tone: 'task',
       title: `Tarefa criada · ${task.title} · para ${dueLabel(task.dueAt)}`,
       by: task.auto ? 'Sistema' : task.assigneeName,
@@ -970,7 +1002,7 @@ function entriesOf(data: LoadedLead): Entry[] {
     entries.push({
       id: `h${item.id}`,
       at: item.at,
-      icon: '→',
+      icon: 'arrow-right',
       tone: 'stage',
       title:
         item.won === true
@@ -1002,7 +1034,7 @@ function entriesOf(data: LoadedLead): Entry[] {
     entries.push({
       id: `e${event.id}`,
       at: event.at,
-      icon: '•',
+      icon: 'more',
       tone: 'event',
       title: EVENT_LABELS[event.kind] ?? 'Atualização',
       by: null,
@@ -1021,7 +1053,7 @@ function Timeline({ data }: { data: LoadedLead }) {
         {entries.map((entry) => (
           <li key={entry.id}>
             <span className={`crm-tl-icon is-${entry.tone}`} aria-hidden="true">
-              {entry.icon}
+              <Icon name={entry.icon} size={13} />
             </span>
             <div>
               <div className="crm-tl-head">

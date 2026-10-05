@@ -41,6 +41,7 @@ import {
 } from './crm.js';
 import { salesDashboardOf } from './sales-dashboard.js';
 import { metaQueueStatus, syncMetaFormLeads } from './meta-intake.js';
+import { pollMetaLeadsLocked, pollStatus, testMetaConnection } from './meta-poll.js';
 import { loadLead } from './service.js';
 
 const idParam = z.object({ id: z.uuid() });
@@ -495,6 +496,8 @@ export const crmRoutes: FastifyPluginAsync = async (app) => {
 
   // --- Meta Lead Ads: queue status and "Buscar leads da Meta" ------------------------------
 
+  const pollingOn = Boolean(env.META_LEADS_ACCESS_TOKEN) && env.META_LEADS_POLL !== 'false';
+
   app.get(
     '/crm/meta-leads/status',
     { preHandler: app.requirePermission('leads.read') },
@@ -503,7 +506,81 @@ export const crmRoutes: FastifyPluginAsync = async (app) => {
         ...(await metaQueueStatus(db)),
         webhookConfigured: Boolean(env.META_APP_SECRET && env.META_LEADGEN_VERIFY_TOKEN),
         tokenConfigured: Boolean(env.META_LEADS_ACCESS_TOKEN ?? env.META_WRITE_TOKEN),
+        polling: { enabled: pollingOn, everyMinutes: 5, ...(await pollStatus(db)) },
       }),
+  );
+
+  const metaDeps = () => ({
+    db,
+    accessToken: env.META_LEADS_ACCESS_TOKEN ?? null,
+    rdCrmToken: env.RD_CRM_API_TOKEN ?? null,
+    expansionOwnerId: env.EXPANSION_OWNER_RD_USER_ID ?? null,
+    rdCopyEnabled: env.META_LEADS_RD_COPY_ENABLED !== 'false',
+    graphFetch: app.wings.platformFetch,
+    rdFetch: app.wings.rdFetch,
+    extraPageIds: env.META_LEADS_PAGE_IDS
+      ? env.META_LEADS_PAGE_IDS.split(',').map((id) => id.trim())
+      : [],
+    log: (facts: Record<string, unknown>) => app.log.info(facts),
+  });
+  const noMetaKey = {
+    error: 'meta_token_not_configured',
+    message: 'A chave de leitura de leads da Meta (META_LEADS_ACCESS_TOKEN) não está configurada.',
+  };
+
+  /** "Testar conexão": pages, forms and leads the key sees, as totals; nothing about a person, nothing written. */
+  app.post(
+    '/crm/meta-leads/test',
+    { preHandler: app.requirePermission('integrations.manage') },
+    async (request, reply) => {
+      if (!env.META_LEADS_ACCESS_TOKEN) return reply.status(503).send(noMetaKey);
+      const result = await testMetaConnection(metaDeps());
+      await writeAudit(db, {
+        actorEmployeeId: request.session.actor.employeeId,
+        action: 'meta_leads.connection_tested',
+        entity: 'meta_leadgen',
+        entityId: 'connection',
+        ip: request.ip,
+        metadata: {
+          pages: result.pages,
+          forms: result.forms,
+          leads: result.leads,
+          failed: Object.keys(result.failed).length,
+        },
+      });
+      return reply.send(result);
+    },
+  );
+
+  /** "Buscar agora": one pass of the periodic read, at once (90 days on the first one). */
+  app.post(
+    '/crm/meta-leads/poll',
+    { preHandler: app.requirePermission('integrations.manage') },
+    async (request, reply) => {
+      if (!env.META_LEADS_ACCESS_TOKEN) return reply.status(503).send(noMetaKey);
+      const result = await pollMetaLeadsLocked(metaDeps());
+      if (result === 'locked')
+        return reply.status(409).send({
+          error: 'poll_running',
+          message: 'Já há uma busca em andamento. Tente de novo em instantes.',
+        });
+      await writeAudit(db, {
+        actorEmployeeId: request.session.actor.employeeId,
+        action: 'meta_leads.poll_requested',
+        entity: 'meta_leadgen',
+        entityId: 'forms',
+        ip: request.ip,
+        metadata: {
+          pages: result.pages,
+          forms: result.forms,
+          listed: result.listed,
+          queued: result.queued,
+          alreadyKnown: result.alreadyKnown,
+          failed: Object.keys(result.failed).length,
+        },
+      });
+      return reply.send(result);
+    },
   );
 
   /**

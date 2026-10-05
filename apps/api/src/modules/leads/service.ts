@@ -43,8 +43,10 @@ import {
   rdUserMap,
 } from '../../db/schema/index.js';
 import { activitiesOf } from './activities.js';
+import { announceNewLead } from './crm-alerts.js';
 import { attachLeadContact, contactsOfLead, findOrCreateCompany } from './contacts.js';
 import {
+  announceStageEntered,
   ensureFirstContactTask,
   entryStageOf,
   nextInRotation,
@@ -191,6 +193,12 @@ export interface IncomingLead {
   valueCents?: number | null;
   /** When the person actually arrived, if earlier than now (an imported RD deal's creation); used only for a new lead. */
   arrivedAt?: Date | null;
+  /**
+   * When the platform says the lead was made (Meta's `created_time`), if the system reads it
+   * later. Older than STALE_ARRIVAL_HOURS: the lead still gets its owner from the rotation, but
+   * no first-contact task and no arrival notice (a backfill is announced once per read instead).
+   */
+  originCreatedAt?: Date | null;
   /** The import run creating the lead (`leads.import_batch_id`); used only for a new lead. */
   importBatchId?: string | null;
   /** An import (RD CRM) does not queue the paid research for every lead it brings. */
@@ -266,6 +274,21 @@ export interface UpsertResult {
   filled: string[];
   /** The seller the rotation gave a new lead to, when it did. */
   assignedTo?: string | null;
+  /** A new lead that was already old when read (see `originCreatedAt`). */
+  stale?: boolean;
+}
+
+/** A lead older than this when the system reads it is a backfill, not an arrival. */
+export const STALE_ARRIVAL_HOURS = 24;
+
+export function isStaleArrival(
+  incoming: { originCreatedAt?: Date | null },
+  now = new Date(),
+): boolean {
+  return (
+    incoming.originCreatedAt != null &&
+    now.getTime() - incoming.originCreatedAt.getTime() > STALE_ARRIVAL_HOURS * 3_600_000
+  );
 }
 
 /** Only the gaps: an existing value is never overwritten by a later arrival. */
@@ -320,6 +343,22 @@ function fillGaps(existing: LeadRow, incoming: IncomingLead): Partial<typeof lea
  * A found lead whose research never ran, or failed, gets one too.
  */
 export async function upsertLead(db: Database, incoming: IncomingLead): Promise<UpsertResult> {
+  const result = await upsertLeadTx(db, incoming);
+  // A lead born in a stage starts that stage's automation rules, as entering it
+  // would; an import and the RD mirror never do (they can bring thousands).
+  if (
+    result.created &&
+    result.lead.stageId &&
+    !incoming.importBatchId &&
+    incoming.source !== 'rd_crm'
+  )
+    await announceStageEntered(result.lead);
+  if (result.created && !incoming.importBatchId && !result.stale)
+    await announceNewLead(db, result.lead);
+  return result;
+}
+
+async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<UpsertResult> {
   return db.transaction(async (tx) => {
     const phone = normalizeBrazilianPhone(incoming.phone);
     const email = normalizeEmail(incoming.email);
@@ -475,11 +514,12 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
         detail: { from: null, to: assignedTo, source: 'rotation' },
       });
     }
-    if (distribute && created.ownerEmployeeId) {
+    const stale = isStaleArrival(incoming);
+    if (distribute && created.ownerEmployeeId && !stale) {
       await ensureFirstContactTask(tx, created, incoming.event.actorEmployeeId ?? null);
     }
     if (incoming.skipResearch)
-      return { lead: created, created: true, researchQueued: false, filled: [], assignedTo };
+      return { lead: created, created: true, researchQueued: false, filled: [], assignedTo, stale };
     const researched = await enqueueResearch(tx, created.id, null);
     return {
       lead: researched ?? created,
@@ -487,6 +527,7 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
       researchQueued: true,
       filled: [],
       assignedTo,
+      stale,
     };
   });
 }
@@ -578,6 +619,7 @@ export function toLead(
     pipeline: (row.pipeline as LeadPipeline | null) ?? null,
     brand: row.brand,
     valueCents: row.valueCents,
+    expectedCloseAt: row.expectedCloseAt,
     company: extra.company ?? null,
     contacts: extra.contacts ?? [],
     work: {
@@ -830,6 +872,7 @@ export async function listLeads(
         stage: leads.stage,
         won: leads.won,
         valueCents: leads.valueCents,
+        expectedCloseAt: leads.expectedCloseAt,
         companyName: crmCompanies.name,
         city: leads.city,
         campaignName: leads.campaignName,
@@ -871,6 +914,7 @@ export async function listLeads(
       stage: row.stage,
       won: row.won,
       valueCents: row.valueCents,
+      expectedCloseAt: row.expectedCloseAt,
       companyName: row.companyName,
       city: row.city,
       campaignName: row.campaignName,

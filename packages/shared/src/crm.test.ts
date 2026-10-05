@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { addBusinessHours, nextBusinessInstant } from './crm.js';
+import {
+  addBusinessHours,
+  isCloseForecastOverdue,
+  isoDateSchema,
+  leadDealUpdateSchema,
+  localIsoDate,
+  nextBusinessInstant,
+} from './crm.js';
 
 // São Paulo is UTC-3 all year since 2019 (no DST).
 const sp = (iso: string) => new Date(`${iso}-03:00`);
@@ -24,5 +31,33 @@ describe('business hours (Mon–Fri, 9h–18h São Paulo)', () => {
   });
   it('exactly at 18h is after hours', () => {
     expect(addBusinessHours(sp('2026-10-06T18:00:00'), 1)).toEqual(sp('2026-10-07T10:00:00'));
+  });
+});
+
+describe('previsão de fechamento', () => {
+  it('accepts only AAAA-MM-DD days that exist on the calendar', () => {
+    expect(isoDateSchema.safeParse('2026-11-20').success).toBe(true);
+    expect(isoDateSchema.safeParse('2028-02-29').success).toBe(true);
+    for (const bad of [
+      '2026-02-30',
+      '2027-02-29',
+      '2026-13-01',
+      '2026-11-20T00:00:00Z',
+      '20/11/2026',
+      '',
+    ])
+      expect(isoDateSchema.safeParse(bad).success, bad).toBe(false);
+  });
+  it('is a deal field of its own: alone it is a change, null clears it', () => {
+    expect(leadDealUpdateSchema.safeParse({ expectedCloseAt: '2026-11-20' }).success).toBe(true);
+    expect(leadDealUpdateSchema.safeParse({ expectedCloseAt: null }).success).toBe(true);
+    expect(leadDealUpdateSchema.safeParse({}).success).toBe(false);
+  });
+  it('today is the local calendar day, and an open deal is overdue only after it', () => {
+    const today = localIsoDate(new Date(2026, 9, 5, 23, 30));
+    expect(today).toBe('2026-10-05');
+    expect(isCloseForecastOverdue({ expectedCloseAt: '2026-10-04', won: null }, today)).toBe(true);
+    expect(isCloseForecastOverdue({ expectedCloseAt: '2026-10-05', won: null }, today)).toBe(false);
+    expect(isCloseForecastOverdue({ expectedCloseAt: '2026-10-04', won: true }, today)).toBe(false);
   });
 });
