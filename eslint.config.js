@@ -14,6 +14,8 @@ export default tseslint.config(
       '**/coverage/**',
       // Official brand module, byte-exact to the hand-off (sha256 in docs); never reformatted or edited here
       'apps/web/src/brand/wings-logo3d.js',
+      // Reference 3D charts module from Eric's canvas, byte-exact (sha256 665138ea…); the app's port lives in components/charts3d
+      'docs/referencias/wings-charts3d.js',
       '.claude/**',
       '.agents/**',
       '.codex/**',

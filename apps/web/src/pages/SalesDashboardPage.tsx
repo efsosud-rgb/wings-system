@@ -8,7 +8,7 @@ import { useRef, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useSalesDashboard } from '../api/crm.js';
 import { Chart3D } from '../components/charts3d/Chart3D.js';
-import { SERIES_TONES, type Tone } from '../components/charts3d/spec.js';
+import { firstName, shareSpec } from '../components/charts3d/spec.js';
 import { DASH, formatInt, formatMoney } from '../components/dashboard/format.js';
 
 /**
@@ -21,9 +21,6 @@ const isPipeline = (value: string | null): value is LeadPipeline =>
 
 const percent = (rate: number) =>
   `${(rate * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`;
-
-const countAndValue = (total: number, valueCents: number) =>
-  valueCents > 0 ? `${formatInt(total)} · ${formatMoney(valueCents)}` : formatInt(total);
 
 /** A card that leans a few degrees towards the pointer (none with reduced motion, in CSS). */
 function TiltCard({ children, label }: { children: ReactNode; label: string }) {
@@ -117,18 +114,15 @@ function Empty({ reason }: { reason: string }) {
 
 function StageFunnel({ data, pipeline }: { data: SalesDashboard; pipeline: LeadPipeline }) {
   const steps = data.stages.map((row) => ({
-    key: row.stage?.id ?? 'none',
     label: row.stage?.name ?? 'Sem etapa',
     value: row.total,
-    text: countAndValue(row.total, row.valueCents),
   }));
   if (steps.length === 0) return <Empty reason="este funil ainda não tem etapas." />;
   if (data.open.total === 0) return <Empty reason="nenhuma negociação aberta neste funil." />;
   return (
     <Chart3D
-      spec={{ kind: 'funnel', steps }}
-      replayKey={pipeline}
-      height={Math.max(260, steps.length * 46 + 60)}
+      spec={{ kind: 'funnel', stages: steps, format: 'int', totalLabel: 'das abertas' }}
+      height={Math.max(240, steps.length * 40 + 40)}
       ariaLabel={`Funil ${LEAD_PIPELINE_LABELS[pipeline]}: negociações abertas por etapa`}
       table={
         <table>
@@ -156,39 +150,21 @@ function StageFunnel({ data, pipeline }: { data: SalesDashboard; pipeline: LeadP
   );
 }
 
-const MAX_BRANDS = 4;
-
-function BrandDonut({ data, pipeline }: { data: SalesDashboard; pipeline: LeadPipeline }) {
+function BrandDonut({ data }: { data: SalesDashboard }) {
   if (data.open.total === 0)
     return <Empty reason="nenhuma negociação aberta para dividir por marca." />;
-  const named = data.brands.slice(0, MAX_BRANDS - 1);
-  const rest = data.brands.slice(MAX_BRANDS - 1);
-  const rows =
-    rest.length > 1
-      ? [
-          ...named,
-          {
-            brand: `Outras (${rest.length})`,
-            total: rest.reduce((sum, row) => sum + row.total, 0),
-            valueCents: rest.reduce((sum, row) => sum + row.valueCents, 0),
-            weightedCents: 0,
-          },
-        ]
-      : data.brands;
-  const tones: Tone[] = SERIES_TONES;
+  const spec = shareSpec(
+    data.brands.map((row) => ({
+      label: row.brand ?? 'Sem marca',
+      value: row.total,
+      neutral: row.brand === null,
+    })),
+    'int',
+    { totalLabel: 'das abertas', centerLabel: 'abertas' },
+  );
   return (
     <Chart3D
-      spec={{
-        kind: 'donut',
-        slices: rows.map((row, i) => ({
-          key: row.brand ?? 'none',
-          label: row.brand ?? 'Sem marca',
-          value: row.total,
-          text: countAndValue(row.total, row.valueCents),
-          tone: tones[i % tones.length]!,
-        })),
-      }}
-      replayKey={pipeline}
+      spec={spec}
       height={280}
       ariaLabel="Negociações abertas por marca"
       table={
@@ -215,40 +191,22 @@ function BrandDonut({ data, pipeline }: { data: SalesDashboard; pipeline: LeadPi
   );
 }
 
-function SellerBars({ data, pipeline }: { data: SalesDashboard; pipeline: LeadPipeline }) {
+function SellerBars({ data }: { data: SalesDashboard }) {
   if (data.sellers.length === 0)
     return <Empty reason="nenhuma negociação aberta ou ganha no mês." />;
-  const nameOf = (row: SalesDashboard['sellers'][number]) => row.ownerName ?? 'Sem dono';
+  const nameOf = (row: SalesDashboard['sellers'][number]) => firstName(row.ownerName, 'Sem dono');
   return (
     <Chart3D
       spec={{
-        kind: 'bars',
-        orientation: 'vertical',
-        showValues: true,
-        categories: data.sellers.map((row) => ({
-          key: row.ownerEmployeeId ?? 'none',
-          label: nameOf(row),
-        })),
+        kind: 'columns',
+        format: 'int',
+        categories: data.sellers.map((row) => firstName(row.ownerName, 'Sem dono')),
+        neutralCategories: ['Sem dono'],
         series: [
-          {
-            key: 'open',
-            label: 'Abertas',
-            tone: 'brand',
-            values: data.sellers.map((row) => row.total),
-            texts: data.sellers.map((row) => countAndValue(row.total, row.valueCents)),
-            short: data.sellers.map((row) => formatInt(row.total)),
-          },
-          {
-            key: 'won',
-            label: 'Ganhas no mês',
-            tone: 'graphite',
-            values: data.sellers.map((row) => row.wonMonth),
-            texts: data.sellers.map((row) => countAndValue(row.wonMonth, row.wonMonthCents)),
-            short: data.sellers.map((row) => formatInt(row.wonMonth)),
-          },
+          { name: 'Abertas', values: data.sellers.map((row) => row.total) },
+          { name: 'Ganhas no mês', values: data.sellers.map((row) => row.wonMonth) },
         ],
       }}
-      replayKey={pipeline}
       height={260}
       ariaLabel="Negociações abertas e ganhas no mês por vendedor"
       table={
@@ -331,11 +289,11 @@ export function SalesDashboardPage() {
             </section>
             <section className="card sales-card" aria-labelledby="sales-brands">
               <h2 id="sales-brands">Abertas por marca</h2>
-              <BrandDonut data={data} pipeline={pipeline} />
+              <BrandDonut data={data} />
             </section>
             <section className="card sales-card" aria-labelledby="sales-sellers">
               <h2 id="sales-sellers">Por vendedor</h2>
-              <SellerBars data={data} pipeline={pipeline} />
+              <SellerBars data={data} />
             </section>
           </div>
         </>

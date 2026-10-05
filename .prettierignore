@@ -12,3 +12,4 @@ packages/studio/LICENSE
 apps/web/src/brand/wings-logo-paths.js
 apps/web/src/brand/*.svg
 apps/web/src/brand/wings-logo3d.js
+docs/referencias/wings-charts3d.js
