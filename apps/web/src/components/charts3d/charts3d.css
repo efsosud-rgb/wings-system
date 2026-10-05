@@ -16,6 +16,10 @@
 
 /* From the reference module (WINGS_CHARTS_CSS), with the scene's canvas, labels and tooltip. */
 .w3d {
+  /* Words take the page's text colours; a dark surface (the graphite Cockpit) redefines them. */
+  --w3d-ink: var(--text, #1d1b19);
+  --w3d-ink-2: #3a3733;
+  --w3d-ink-3: var(--text-3, #857f78);
   position: relative;
   overflow: hidden;
   touch-action: pan-y;
@@ -78,29 +82,29 @@
 .w3d-name {
   font-size: 12.5px;
   font-weight: 600;
-  color: #3a3733;
+  color: var(--w3d-ink-2);
 }
 .w3d-cat {
   font-size: 12.5px;
   font-weight: 600;
-  color: #3a3733;
+  color: var(--w3d-ink-2);
   transform: translate(-50%, 0) !important;
   padding-top: 6px;
 }
 .w3d-value {
   font-size: 13px;
   font-weight: 800;
-  color: #1d1b19;
+  color: var(--w3d-ink);
   font-variant-numeric: tabular-nums;
 }
 .w3d-zero {
-  color: #857f78;
+  color: var(--w3d-ink-3);
   font-weight: 600;
 }
 .w3d-share {
   font-size: 12px;
   font-weight: 600;
-  color: #857f78;
+  color: var(--w3d-ink-3);
   margin-left: 6px;
 }
 .w3d-stackin .w3d-share {
@@ -109,13 +113,13 @@
 .w3d-hero {
   font-size: 28px;
   font-weight: 800;
-  color: #1d1b19;
+  color: var(--w3d-ink);
   letter-spacing: -0.01em;
 }
 .w3d-tick {
   font-size: 11px;
   font-weight: 600;
-  color: #857f78;
+  color: var(--w3d-ink-3);
   font-variant-numeric: tabular-nums;
 }
 .w3d-tip[hidden] {
@@ -502,6 +506,36 @@
 .w3d-ref {
   font-size: 11.5px;
   font-weight: 700;
-  color: #5c554e;
+  color: var(--w3d-ink-2);
   white-space: nowrap;
+}
+
+:root[data-theme='dark'] .w3d {
+  --w3d-ink-2: var(--text-2);
+  --w3d-grid: #2c2c2c;
+  --w3d-base: #4a4a4a;
+}
+
+/* Long names stop at the column's edge; the tooltip and the table carry them whole. */
+.w3d-right .w3d-name {
+  display: block;
+  max-width: var(--w3d-name-max, 150px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.w3d-ref {
+  background: color-mix(in srgb, var(--surface, #fff) 85%, transparent);
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+
+/* A narrow chart: the donut's total sits inside its hole. */
+.c3d-stage {
+  container-type: inline-size;
+}
+@container (max-width: 520px) {
+  .w3d-hero {
+    font-size: 19px;
+  }
 }

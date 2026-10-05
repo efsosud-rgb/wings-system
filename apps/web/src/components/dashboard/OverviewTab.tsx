@@ -131,63 +131,68 @@ function Strip({ strip }: { strip: SpendStrip }) {
         </details>
       )}
 
-      <div className="strip-charts">
-        <Chart3D
-          className="strip-month"
-          height={170}
-          ariaLabel={`${SPEND_SOURCE_LABEL[strip.source]}: gasto, previsto e teto do mês`}
-          spec={{
-            kind: 'ranked',
-            sort: false,
-            limit: Infinity,
-            slot,
-            format,
-            totalLabel: strip.ceiling ? 'do teto' : 'do previsto',
-            shareBase: strip.ceiling ?? strip.forecast ?? undefined,
-            items: month.map((row) => ({
-              label: row.label,
-              value: row.value ?? 0,
-              neutral: row.neutral,
-            })),
-          }}
-          table={
-            <ChartTable
-              caption={`${SPEND_SOURCE_LABEL[strip.source]} no mês`}
-              head={['', 'Valor']}
-              rows={month.map((row) => ({
-                key: row.label,
-                cells: [row.label, row.value === null ? `— (${row.missing})` : money(row.value)],
-                neutral: row.neutral,
-              }))}
-            />
-          }
-        />
-        <Chart3D
-          className="strip-daily"
-          height={200}
-          ariaLabel={`${SPEND_SOURCE_LABEL[strip.source]}, gasto por dia no mês`}
-          spec={{
-            kind: 'columns',
-            categories: strip.daily.map((point) => formatDayShort(point.day)),
-            series: [{ name: 'Gasto', values: strip.daily.map((point) => point.amount), slot }],
-            format,
-            reference:
-              strip.activeDailyBudget !== null && strip.activeDailyBudget > 0
-                ? { value: strip.activeDailyBudget, label: dailyLabel }
-                : null,
-          }}
-          table={
-            <ChartTable
-              caption={`${SPEND_SOURCE_LABEL[strip.source]}, gasto por dia`}
-              head={['Dia', 'Gasto']}
-              rows={strip.daily.map((point) => ({
-                key: point.day,
-                cells: [formatDayShort(point.day), money(point.amount)],
-              }))}
-            />
-          }
-        />
-      </div>
+      {!strip.configured ? (
+        <p className="muted strip-empty">
+          — Sem gráficos: a fonte não está configurada, então não há gasto para desenhar.
+        </p>
+      ) : (
+        <div className="strip-charts">
+          <Chart3D
+            className="strip-month"
+            height={170}
+            ariaLabel={`${SPEND_SOURCE_LABEL[strip.source]}: gasto, previsto e teto do mês`}
+            spec={{
+              kind: 'ranked',
+              sort: false,
+              limit: Infinity,
+              slot,
+              format,
+              totalLabel: strip.ceiling ? 'do teto' : 'do previsto',
+              shareBase: strip.ceiling ?? strip.forecast ?? undefined,
+              // A figure nobody knows stays out of the bars; the table says why.
+              items: month
+                .filter((row) => row.value !== null)
+                .map((row) => ({ label: row.label, value: row.value ?? 0, neutral: row.neutral })),
+            }}
+            table={
+              <ChartTable
+                caption={`${SPEND_SOURCE_LABEL[strip.source]} no mês`}
+                head={['', 'Valor']}
+                rows={month.map((row) => ({
+                  key: row.label,
+                  cells: [row.label, row.value === null ? `— (${row.missing})` : money(row.value)],
+                  neutral: row.neutral,
+                }))}
+              />
+            }
+          />
+          <Chart3D
+            className="strip-daily"
+            height={200}
+            ariaLabel={`${SPEND_SOURCE_LABEL[strip.source]}, gasto por dia no mês`}
+            spec={{
+              kind: 'columns',
+              categories: strip.daily.map((point) => formatDayShort(point.day)),
+              series: [{ name: 'Gasto', values: strip.daily.map((point) => point.amount), slot }],
+              format,
+              reference:
+                strip.activeDailyBudget !== null && strip.activeDailyBudget > 0
+                  ? { value: strip.activeDailyBudget, label: dailyLabel }
+                  : null,
+            }}
+            table={
+              <ChartTable
+                caption={`${SPEND_SOURCE_LABEL[strip.source]}, gasto por dia`}
+                head={['Dia', 'Gasto']}
+                rows={strip.daily.map((point) => ({
+                  key: point.day,
+                  cells: [formatDayShort(point.day), money(point.amount)],
+                }))}
+              />
+            }
+          />
+        </div>
+      )}
     </li>
   );
 }

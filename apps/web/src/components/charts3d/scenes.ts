@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import {
   HEAT_EMPTY,
   HEAT_RAMP,
@@ -26,8 +27,8 @@ import {
  */
 
 const DIM = new THREE.Color('#E4DED6');
-const GRID = '#EAE5DE';
-const BASELINE = '#D3CBC0';
+const GRID_DEFAULT = '#EAE5DE';
+const BASELINE_DEFAULT = '#D3CBC0';
 
 const intFmt = new Intl.NumberFormat('pt-BR');
 const brlFmt = new Intl.NumberFormat('pt-BR', {
@@ -35,7 +36,12 @@ const brlFmt = new Intl.NumberFormat('pt-BR', {
   currency: 'BRL',
   maximumFractionDigits: 0,
 });
-const pct = new Intl.NumberFormat('pt-BR', { style: 'percent', maximumFractionDigits: 0 });
+const pctWhole = new Intl.NumberFormat('pt-BR', { style: 'percent', maximumFractionDigits: 0 });
+const pctSmall = new Intl.NumberFormat('pt-BR', { style: 'percent', maximumSignificantDigits: 2 });
+/** A share; under 1% keeps two significant digits, so a funnel's last steps never read "0%". */
+const pct = {
+  format: (share: number) => (share > 0 && share < 0.01 ? pctSmall : pctWhole).format(share),
+};
 /** Values arrive as counts or as cents; reais show whole. */
 const formatOf = (format: ValueFormat) => (value: number) =>
   format === 'brl' ? brlFmt.format(Math.round(value / 100)) : intFmt.format(Math.round(value));
@@ -197,6 +203,9 @@ export abstract class Scene3D {
   private sweepLight: THREE.RectAreaLight;
   private raycaster = new THREE.Raycaster();
   private disposers: (() => void)[] = [];
+  /** Hairline colours: the page may redefine them for a dark surface (`--w3d-grid`, `--w3d-base`). */
+  protected readonly grid: string;
+  protected readonly base: string;
 
   constructor(
     protected host: SceneHost,
@@ -208,6 +217,9 @@ export abstract class Scene3D {
     const ctx = host.canvas.getContext('2d');
     if (!ctx) throw new Error('2d canvas unavailable');
     this.ctx = ctx;
+    const style = getComputedStyle(host.stage);
+    this.grid = style.getPropertyValue('--w3d-grid').trim() || GRID_DEFAULT;
+    this.base = style.getPropertyValue('--w3d-base').trim() || BASELINE_DEFAULT;
     this.reduced = reduced;
     this.t = reduced ? 99 : 0;
     this.fmt = formatOf(format);
@@ -283,7 +295,7 @@ export abstract class Scene3D {
     return item;
   }
 
-  protected line(points: THREE.Vector3[], color = GRID) {
+  protected line(points: THREE.Vector3[], color = this.grid) {
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
     const line = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color }));
     this.root.add(line);
@@ -570,7 +582,7 @@ class Columns3D extends Scene3D {
       const y = (v / top) * H;
       this.line(
         [new THREE.Vector3(left, y, wallZ), new THREE.Vector3(right, y, wallZ)],
-        v === 0 ? BASELINE : GRID,
+        v === 0 ? this.base : this.grid,
       );
       this.addLabel(
         [el('span', 'w3d-tick', this.tick(v))],
@@ -580,7 +592,7 @@ class Columns3D extends Scene3D {
     }
     this.line(
       [new THREE.Vector3(left, 0, d / 2 + 0.25), new THREE.Vector3(right, 0, d / 2 + 0.25)],
-      BASELINE,
+      this.base,
     );
 
     cats.forEach((c, ci) => {
@@ -630,7 +642,7 @@ class Columns3D extends Scene3D {
       );
     }
     const box = new THREE.Box3(
-      new THREE.Vector3(left - 1.2, -0.7, wallZ),
+      new THREE.Vector3(left - (this.compact ? 1.9 : 1.2), -1.1, wallZ),
       new THREE.Vector3(right + 0.2, H + 0.5, d / 2 + 0.3),
     );
     this.frame(box, -0.17, 0.16, 1.04);
@@ -657,6 +669,19 @@ class Columns3D extends Scene3D {
 // stages' order (funnel). Name on the left; number and share at each bar's tip.
 class RankedBars3D extends Scene3D {
   private bars: (Item & { len: number; x0: number })[] = [];
+  /** The names' column, left and right edge in scene units, at the bars' depth. */
+  private names: { from: number; to: number; z: number } | null = null;
+
+  /** Names stop at their column's edge, measured on the screen at this size. */
+  override resize(w: number, h: number) {
+    super.resize(w, h);
+    if (this.compact || !this.names) return;
+    this.camera.updateMatrixWorld();
+    const a = new THREE.Vector3(this.names.from, 0, this.names.z).project(this.camera);
+    const b = new THREE.Vector3(this.names.to, 0, this.names.z).project(this.camera);
+    const px = Math.floor(Math.abs(b.x - a.x) * 0.5 * w) - 4;
+    this.host.layer.style.setProperty('--w3d-name-max', `${Math.max(60, px)}px`);
+  }
 
   build(spec: RankedSpec) {
     const sort = spec.sort !== false;
@@ -678,17 +703,18 @@ class RankedBars3D extends Scene3D {
     const L = 7;
     const t = 0.36;
     const d = t;
-    const gap = this.compact ? 0.62 : 0.24;
+    const gap = this.compact ? 0.95 : 0.24;
     const n = items.length;
     const totalH = n * t + (n - 1) * gap;
     const x0 = -L / 2;
+    this.names = { from: x0 - 3.6, to: x0 - 0.32, z: d / 2 };
     // The base line every bar starts from.
     this.line(
       [
         new THREE.Vector3(x0 - 0.06, -totalH / 2 - 0.22, d / 2),
         new THREE.Vector3(x0 - 0.06, totalH / 2 + 0.22, d / 2),
       ],
-      BASELINE,
+      this.base,
     );
     items.forEach((s, i) => {
       const len = Math.max(
@@ -751,7 +777,12 @@ class RankedBars3D extends Scene3D {
     });
     const box = new THREE.Box3(
       new THREE.Vector3(x0 - (this.compact ? 0.3 : 3.6), -totalH / 2 - 0.3, -d / 2),
-      new THREE.Vector3(L / 2 + 2.3, totalH / 2 + (this.compact ? 0.6 : 0.3), d / 2),
+      // Room at the right for the longest bar's value and share.
+      new THREE.Vector3(
+        L / 2 + (this.compact ? 4.6 : 3.2),
+        totalH / 2 + (this.compact ? 0.6 : 0.3),
+        d / 2,
+      ),
     );
     this.frame(box, 0.16, 0.12, 1.02);
   }
@@ -874,6 +905,37 @@ class Donut3D extends Scene3D {
   }
 }
 
+/** A tube in dashes along straight segments, as one geometry whose index runs along the path. */
+function dashedTube(pts: THREE.Vector3[], radius: number, dash = 0.16, gap = 0.1) {
+  const pieces: THREE.BufferGeometry[] = [];
+  const up = new THREE.Vector3(0, 1, 0);
+  let phase = 0;
+  for (let k = 1; k < pts.length; k++) {
+    const a = pts[k - 1]!;
+    const b = pts[k]!;
+    const len = a.distanceTo(b);
+    const dir = b.clone().sub(a).normalize();
+    let at = 0;
+    while (at < len) {
+      const inDash = phase < dash;
+      const room = inDash ? dash - phase : dash + gap - phase;
+      const stepLen = Math.min(room, len - at);
+      if (inDash && stepLen > 0.01) {
+        const piece = new THREE.CylinderGeometry(radius, radius, stepLen, 8, 1, false);
+        piece.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(up, dir));
+        const mid = a.clone().addScaledVector(dir, at + stepLen / 2);
+        piece.translate(mid.x, mid.y, mid.z);
+        pieces.push(piece);
+      }
+      at += stepLen;
+      phase = (phase + stepLen) % (dash + gap);
+    }
+  }
+  const merged = pieces.length ? mergeGeometries(pieces) : new THREE.BufferGeometry();
+  for (const piece of pieces) piece.dispose();
+  return merged ?? new THREE.BufferGeometry();
+}
+
 // ---------------------------------------------------------------------------------------
 // Lines over an ordered axis: a tube per series along straight segments (no smoothing that
 // would invent a value between two days), a wash under the series marked `area`, a bead on
@@ -906,7 +968,7 @@ class Lines3D extends Scene3D {
       const y = yAt(v);
       this.line(
         [new THREE.Vector3(left, y, wallZ), new THREE.Vector3(right, y, wallZ)],
-        v === 0 ? BASELINE : GRID,
+        v === 0 ? this.base : this.grid,
       );
       this.addLabel(
         [el('span', 'w3d-tick', this.tick(v))],
@@ -916,12 +978,12 @@ class Lines3D extends Scene3D {
     }
     this.line(
       [new THREE.Vector3(left, 0, zOf(0) + 0.3), new THREE.Vector3(right, 0, zOf(0) + 0.3)],
-      BASELINE,
+      this.base,
     );
     const every = Math.max(1, Math.ceil(n / (this.compact ? 4 : 8)));
     cats.forEach((c, i) => {
       if (i % every !== 0 && i !== n - 1) return;
-      if (i !== n - 1 && n - 1 - i < every / 2) return;
+      if (i !== n - 1 && n - 1 - i < every * 0.75) return;
       this.addLabel(
         [el('span', 'w3d-cat', c)],
         new THREE.Vector3(xAt(i), -0.42, zOf(0) + 0.3),
@@ -949,13 +1011,9 @@ class Lines3D extends Scene3D {
         if (pts.length > 1) {
           const path = new THREE.CurvePath<THREE.Vector3>();
           for (let k = 1; k < pts.length; k++) path.add(new THREE.LineCurve3(pts[k - 1]!, pts[k]!));
-          const geo = new THREE.TubeGeometry(
-            path,
-            Math.max(8, (pts.length - 1) * 6),
-            s.dashed ? 0.03 : 0.05,
-            10,
-            false,
-          );
+          const geo = s.dashed
+            ? dashedTube(pts, 0.032)
+            : new THREE.TubeGeometry(path, Math.max(8, (pts.length - 1) * 6), 0.05, 10, false);
           const material = satin(color);
           if (s.dashed) {
             material.transparent = true;
@@ -1001,7 +1059,8 @@ class Lines3D extends Scene3D {
       }
       // The latest value at the end of the line.
       const last = s.values.reduce<number>((at, v, i) => (v === null ? at : i), -1);
-      if (last >= 0) {
+      // Narrow: the legend, the tooltip and the table carry the last value instead.
+      if (last >= 0 && !this.compact) {
         const tag = el('span', 'w3d-end');
         const sw = el('i', 'w3d-key');
         sw.style.background = color;
@@ -1023,8 +1082,8 @@ class Lines3D extends Scene3D {
     }
 
     const box = new THREE.Box3(
-      new THREE.Vector3(left - 1.1, -0.7, wallZ),
-      new THREE.Vector3(right + (this.compact ? 0.9 : 1.6), H + 0.4, zOf(0) + 0.3),
+      new THREE.Vector3(left - 1.1, -1.1, wallZ),
+      new THREE.Vector3(right + (this.compact ? 0.3 : 1.6), H + 0.4, zOf(0) + 0.3),
     );
     this.frame(box, -0.14, 0.12, 1.04);
   }
@@ -1064,41 +1123,56 @@ class Heat3D extends Scene3D {
     const cell = 0.34;
     const gap = 0.07;
     const pitch = cell + gap;
-    const W = cols.length * pitch - gap;
-    const D = rows.length * pitch - gap;
+    // Narrow: the columns split in two blocks, one under the other, so a day's name has room.
+    const blocks = this.compact && cols.length > 12 ? 2 : 1;
+    const per = Math.ceil(cols.length / blocks);
+    const blockGap = 0.75;
+    const W = per * pitch - gap;
+    const blockD = rows.length * pitch - gap;
+    const D = blocks * blockD + (blocks - 1) * blockGap;
     const x0 = -W / 2 + cell / 2;
-    const z0 = -D / 2 + cell / 2;
-    const every = spec.columnEvery ?? (this.compact ? 6 : 3);
-    rows.forEach((row, ri) => {
-      const z = z0 + ri * pitch;
-      this.addLabel([el('span', 'w3d-name', row)], new THREE.Vector3(-W / 2 - 0.18, 0, z), 'right');
-      cols.forEach((col, ci) => {
-        const v = spec.values[ri]?.[ci] ?? 0;
-        const stepN = heatStep(v, max);
-        const hgt = 0.05 + stepN * 0.07;
-        const color = stepN ? HEAT_RAMP[stepN - 1]! : HEAT_EMPTY;
-        const geo = new RoundedBoxGeometry(cell, hgt, cell, 3, Math.min(0.05, hgt / 2.2));
-        geo.translate(0, hgt / 2, 0);
-        const mesh = new THREE.Mesh(geo, satin(color));
-        const x = x0 + ci * pitch;
-        mesh.position.set(x, 0, z);
-        const item = this.addPiece(mesh, {
-          value: v,
-          tip: { title: `${row} ${col}`, line: v > 0 ? this.fmt(v) : 'sem dado', key: color },
-        }) as Item & { order: number; hgt: number };
-        item.order = ci + ri * 0.5;
-        item.hgt = hgt;
-        this.tiles.push(item);
+    const every = spec.columnEvery ?? 3;
+    for (let b = 0; b < blocks; b++) {
+      const zb = -D / 2 + cell / 2 + b * (blockD + blockGap);
+      rows.forEach((row, ri) => {
+        const z = zb + ri * pitch;
+        this.addLabel(
+          [el('span', 'w3d-name', row)],
+          new THREE.Vector3(-W / 2 - 0.18, 0, z),
+          'right',
+        );
+        for (let k = 0; k < per; k++) {
+          const ci = b * per + k;
+          const col = cols[ci];
+          if (col === undefined) break;
+          const v = spec.values[ri]?.[ci] ?? 0;
+          const stepN = heatStep(v, max);
+          const hgt = 0.05 + stepN * 0.07;
+          const color = stepN ? HEAT_RAMP[stepN - 1]! : HEAT_EMPTY;
+          const geo = new RoundedBoxGeometry(cell, hgt, cell, 3, Math.min(0.05, hgt / 2.2));
+          geo.translate(0, hgt / 2, 0);
+          const mesh = new THREE.Mesh(geo, satin(color));
+          mesh.position.set(x0 + k * pitch, 0, z);
+          const item = this.addPiece(mesh, {
+            value: v,
+            tip: { title: `${row} ${col}`, line: v > 0 ? this.fmt(v) : 'sem dado', key: color },
+          }) as Item & { order: number; hgt: number };
+          item.order = k + ri * 0.5 + b * 4;
+          item.hgt = hgt;
+          this.tiles.push(item);
+        }
       });
-    });
-    cols.forEach((col, ci) => {
-      if (ci % every !== 0) return;
-      this.addLabel(
-        [el('span', 'w3d-cat', col)],
-        new THREE.Vector3(x0 + ci * pitch, 0, D / 2 + 0.3),
-        'center',
-      );
-    });
+      for (let k = 0; k < per; k++) {
+        const ci = b * per + k;
+        const col = cols[ci];
+        if (col === undefined || ci % every !== 0) continue;
+        this.addLabel(
+          [el('span', 'w3d-cat', col)],
+          new THREE.Vector3(x0 + k * pitch, 0, zb + blockD - cell / 2 + 0.3),
+          'center',
+        );
+      }
+    }
     this.addShadow(0, 0, W * 0.6, D * 0.6, 0.001, 0.12);
     const box = new THREE.Box3(
       new THREE.Vector3(-W / 2 - (this.compact ? 0.8 : 1.1), 0, -D / 2 - 0.1),

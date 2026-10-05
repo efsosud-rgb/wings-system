@@ -294,6 +294,7 @@ export function AudienceTab({ data }: { data: DashboardAudience }) {
           ) : (
             <>
               <Chart3D
+                className="audience-heat"
                 height={300}
                 ariaLabel="Gasto por dia da semana e hora, no fuso do anunciante"
                 spec={{
