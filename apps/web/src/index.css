@@ -1633,30 +1633,38 @@ a {
 }
 
 .studio-tabs {
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid var(--wings-border);
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
   margin-bottom: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
 }
 
 .studio-tab {
   background: none;
   border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--wings-muted);
+  border-radius: 6px;
+  color: var(--text-2);
   font: inherit;
-  font-weight: 600;
-  padding: 10px 16px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  padding: 5px 14px;
   cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease),
+    color var(--duration-fast) var(--ease);
 }
 
 .studio-tab:hover {
-  color: var(--wings-text);
+  color: var(--text);
 }
 
 .studio-tab-active {
-  color: var(--wings-text);
-  border-bottom-color: var(--wings-accent);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
 }
 
 .builder {
