@@ -3,6 +3,7 @@ import {
   boolean,
   index,
   integer,
+  jsonb,
   pgTable,
   primaryKey,
   text,
@@ -50,6 +51,8 @@ export const crmStages = pgTable(
     rdStageId: text('rd_stage_id'),
     /** Sofia's entry stage (Fase 4): a lead there is hers until she hands it over. */
     sofiaEntry: boolean('sofia_entry').notNull().default(false),
+    /** Chance (0–100) a deal here closes; weights the column's value on the board. */
+    probability: integer('probability').notNull().default(10),
     createdBy: uuid('created_by').references(() => employees.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -285,4 +288,22 @@ export const leadActivities = pgTable(
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index('lead_activities_lead_idx').on(table.leadId, table.at)],
+);
+
+/** A person's saved filter set on a funnel: a tab of Negociações next to "Todas" and "Minhas". */
+export const crmSavedViews = pgTable(
+  'crm_saved_views',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    employeeId: uuid('employee_id')
+      .notNull()
+      .references(() => employees.id),
+    pipeline: text('pipeline').notNull(),
+    name: text('name').notNull(),
+    /** The list query's fields, strings only. */
+    filters: jsonb('filters').$type<Record<string, string>>().notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('crm_saved_views_employee_idx').on(table.employeeId, table.pipeline)],
 );

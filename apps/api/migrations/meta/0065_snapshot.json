@@ -1,5 +1,5 @@
 {
-  "id": "9afeba48-7a8a-4b1b-93c7-1a377e8a7c48",
+  "id": "969f4762-bfa9-45c1-a673-7519ef5ba863",
   "prevId": "f76cf9d5-22b7-4409-8b83-9b599ea19106",
   "version": "7",
   "dialect": "postgresql",
@@ -7055,6 +7055,114 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.crm_saved_views": {
+      "name": "crm_saved_views",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'00000000-0000-0000-0000-000000000001'"
+        },
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "employee_id": {
+          "name": "employee_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "pipeline": {
+          "name": "pipeline",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "filters": {
+          "name": "filters",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "crm_saved_views_employee_idx": {
+          "name": "crm_saved_views_employee_idx",
+          "columns": [
+            {
+              "expression": "employee_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "pipeline",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "crm_saved_views_tenant_id_tenants_id_fk": {
+          "name": "crm_saved_views_tenant_id_tenants_id_fk",
+          "tableFrom": "crm_saved_views",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "crm_saved_views_employee_id_employees_id_fk": {
+          "name": "crm_saved_views_employee_id_employees_id_fk",
+          "tableFrom": "crm_saved_views",
+          "tableTo": "employees",
+          "columnsFrom": [
+            "employee_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.crm_stages": {
       "name": "crm_stages",
       "schema": "",
@@ -7110,6 +7218,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": false
+        },
+        "probability": {
+          "name": "probability",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 10
         },
         "created_by": {
           "name": "created_by",

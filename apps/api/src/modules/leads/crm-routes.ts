@@ -1,6 +1,8 @@
 import {
-  boardQuerySchema,
+  boardColumnQuerySchema,
   can,
+  crmSavedViewCreateSchema,
+  leadListQuerySchema,
   crmStageCreateSchema,
   crmStageOrderSchema,
   crmStageUpdateSchema,
@@ -14,13 +16,15 @@ import {
   LEAD_PIPELINES,
   type LeadPipeline,
 } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { employees, leadTasks, leads } from '../../db/schema/index.js';
+import { crmSavedViews, employees, leadTasks, leads } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import {
   addNote,
+  boardColumn,
+  boardCounters,
   boardOf,
   changeLead,
   createStage,
@@ -343,8 +347,9 @@ export const crmRoutes: FastifyPluginAsync = async (app) => {
       const everyone = query.data.everyone === true && own === undefined;
       return reply.send({
         tasks: await listTasks(db, {
-          assigneeEmployeeId: everyone ? undefined : request.session.actor.employeeId,
+          assigneeEmployeeId: everyone ? query.data.assignee : request.session.actor.employeeId,
           status: query.data.status,
+          kind: query.data.kind,
         }),
       });
     },
@@ -352,20 +357,118 @@ export const crmRoutes: FastifyPluginAsync = async (app) => {
 
   // --- kanban --------------------------------------------------------------------------
 
+  const boardQuery = leadListQuerySchema.extend({ pipeline: z.enum(LEAD_PIPELINES) });
+
   app.get(
     '/leads/board',
     { preHandler: app.requirePermission('leads.read') },
     async (request, reply) => {
-      const query = boardQuerySchema.safeParse(request.query);
+      const query = boardQuery.safeParse(request.query);
       if (!query.success) return reply.status(400).send(invalid('Informe o funil.'));
+      const own = ownScope(request, 'leads.read');
+      const mine = query.data.mine ? request.session.actor.employeeId : undefined;
+      return reply.send(await boardOf(db, { ...query.data, ownerEmployeeId: own ?? mine }));
+    },
+  );
+
+  app.get(
+    '/leads/board/column',
+    { preHandler: app.requirePermission('leads.read') },
+    async (request, reply) => {
+      const query = boardQuery.extend(boardColumnQuerySchema.shape).safeParse(request.query);
+      if (!query.success) return reply.status(400).send(invalid('Informe o funil e a etapa.'));
+      const own = ownScope(request, 'leads.read');
+      const mine = query.data.mine ? request.session.actor.employeeId : undefined;
+      return reply.send({
+        cards: await boardColumn(db, {
+          ...query.data,
+          stageId: query.data.stageId === 'none' ? null : query.data.stageId,
+          ownerEmployeeId: own ?? mine,
+        }),
+      });
+    },
+  );
+
+  app.get(
+    '/leads/board/counters',
+    { preHandler: app.requirePermission('leads.read') },
+    async (request, reply) => {
+      const query = pipelineQuery.safeParse(request.query);
+      if (!query.success || !query.data.pipeline)
+        return reply.status(400).send(invalid('Informe o funil.'));
       return reply.send(
-        await boardOf(db, {
+        await boardCounters(db, {
           pipeline: query.data.pipeline,
           ownerEmployeeId: ownScope(request, 'leads.read'),
-          owner: query.data.owner,
-          clientId: query.data.clientId,
         }),
       );
+    },
+  );
+
+  // --- saved views (a person's own tabs) -------------------------------------------------
+
+  app.get(
+    '/crm/views',
+    { preHandler: app.requirePermission('leads.read') },
+    async (request, reply) => {
+      const rows = await db
+        .select()
+        .from(crmSavedViews)
+        .where(eq(crmSavedViews.employeeId, request.session.actor.employeeId))
+        .orderBy(asc(crmSavedViews.createdAt));
+      return reply.send({
+        views: rows.map((row) => ({
+          id: row.id,
+          pipeline: row.pipeline as LeadPipeline,
+          name: row.name,
+          filters: row.filters,
+          createdAt: row.createdAt.toISOString(),
+        })),
+      });
+    },
+  );
+
+  app.post(
+    '/crm/views',
+    { preHandler: app.requirePermission('leads.read') },
+    async (request, reply) => {
+      const body = crmSavedViewCreateSchema.safeParse(request.body);
+      if (!body.success) return reply.status(400).send(invalid(body.error.issues[0]?.message));
+      const [row] = await db
+        .insert(crmSavedViews)
+        .values({ ...body.data, employeeId: request.session.actor.employeeId })
+        .returning();
+      if (!row) throw new Error('view insert returned no row');
+      return reply.status(201).send({
+        view: {
+          id: row.id,
+          pipeline: row.pipeline,
+          name: row.name,
+          filters: row.filters,
+          createdAt: row.createdAt.toISOString(),
+        },
+      });
+    },
+  );
+
+  app.delete(
+    '/crm/views/:id',
+    { preHandler: app.requirePermission('leads.read') },
+    async (request, reply) => {
+      const params = idParam.safeParse(request.params);
+      if (!params.success) return reply.status(400).send(invalid());
+      const removed = await db
+        .delete(crmSavedViews)
+        .where(
+          and(
+            eq(crmSavedViews.id, params.data.id),
+            eq(crmSavedViews.employeeId, request.session.actor.employeeId),
+          ),
+        )
+        .returning({ id: crmSavedViews.id });
+      if (removed.length === 0)
+        return reply.status(404).send({ error: 'not_found', message: 'Visão não encontrada.' });
+      return reply.status(204).send();
     },
   );
 

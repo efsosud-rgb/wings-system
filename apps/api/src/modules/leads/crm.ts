@@ -4,6 +4,7 @@ import {
   LEAD_PIPELINES,
   type Board,
   type BoardCard,
+  type BoardColumn,
   type CrmStage,
   type Distribution,
   type LeadChangeSource,
@@ -16,6 +17,7 @@ import {
 } from '@wings/shared';
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
+import { contactNameSql, listConditions, nextTaskSql, type LeadListFilter } from './service.js';
 import {
   clients,
   crmDistributionMembers,
@@ -72,6 +74,7 @@ export const toStage = (row: StageRow, openCount?: number): CrmStage => ({
   active: row.active,
   rdStageId: row.rdStageId,
   sofiaEntry: row.sofiaEntry,
+  probability: row.probability,
   ...(openCount === undefined ? {} : { openCount }),
 });
 
@@ -103,6 +106,7 @@ export async function listStages(
 export const CRM_ENTRY_STAGES: Record<LeadPipeline, string> = {
   expansao: 'Novo Contato',
   formatacao: 'Sem contato',
+  consultoria: 'Novo contato',
 };
 
 /**
@@ -223,7 +227,7 @@ async function renumber(tx: Executor, ids: readonly string[]): Promise<void> {
 export async function updateStage(
   db: Database,
   id: string,
-  patch: { name?: string; active?: boolean },
+  patch: { name?: string; active?: boolean; probability?: number },
 ): Promise<CrmStage | null | 'exists'> {
   const row = await db.query.crmStages.findFirst({ where: eq(crmStages.id, id) });
   if (!row) return null;
@@ -238,6 +242,7 @@ export async function updateStage(
     .set({
       ...(patch.name !== undefined ? { name: patch.name } : {}),
       ...(patch.active !== undefined ? { active: patch.active } : {}),
+      ...(patch.probability !== undefined ? { probability: patch.probability } : {}),
       updatedAt: new Date(),
     })
     .where(eq(crmStages.id, id))
@@ -502,6 +507,9 @@ async function taskRows(db: Executor, where: ReturnType<typeof and>, limit: numb
       id: leadTasks.id,
       leadId: leadTasks.leadId,
       leadName: leads.name,
+      leadCompanyName: sql<
+        string | null
+      >`(select c.name from crm_companies c where c.id = ${leads.companyId})`,
       kind: leadTasks.kind,
       title: leadTasks.title,
       dueAt: leadTasks.dueAt,
@@ -532,12 +540,18 @@ export const tasksOf = (db: Executor, leadId: string) =>
 
 export async function listTasks(
   db: Executor,
-  input: { assigneeEmployeeId?: string; status: 'open' | 'overdue' | 'done' | 'all'; now?: Date },
+  input: {
+    assigneeEmployeeId?: string;
+    status: 'open' | 'overdue' | 'done' | 'all';
+    kind?: LeadTaskKind;
+    now?: Date;
+  },
 ): Promise<LeadTask[]> {
   const now = input.now ?? new Date();
   const conditions = [];
   if (input.assigneeEmployeeId)
     conditions.push(eq(leadTasks.assigneeEmployeeId, input.assigneeEmployeeId));
+  if (input.kind) conditions.push(eq(leadTasks.kind, input.kind));
   if (input.status === 'open') conditions.push(isNull(leadTasks.doneAt));
   if (input.status === 'overdue')
     conditions.push(and(isNull(leadTasks.doneAt), lt(leadTasks.dueAt, now)));
@@ -795,67 +809,188 @@ export async function listSellers(db: Executor): Promise<Seller[]> {
 
 // --- kanban ---------------------------------------------------------------------------
 
-export async function boardOf(
-  db: Executor,
-  input: { pipeline: LeadPipeline; ownerEmployeeId?: string; owner?: string; clientId?: string },
-): Promise<Board> {
-  const stages = await listStages(db, { pipeline: input.pipeline });
-  const scope = and(
-    eq(leads.pipeline, input.pipeline),
-    isNull(leads.won),
-    input.ownerEmployeeId ? eq(leads.ownerEmployeeId, input.ownerEmployeeId) : undefined,
-    input.owner ? eq(leads.ownerEmployeeId, input.owner) : undefined,
-    input.clientId ? eq(leads.clientId, input.clientId) : undefined,
-  );
-  const nextTask = sql<
+export interface BoardFilter extends LeadListFilter {
+  pipeline: LeadPipeline;
+}
+
+const cardSelect = () => ({
+  id: leads.id,
+  name: leads.name,
+  companyName: sql<
     string | null
-  >`(select min(t.due_at) from lead_tasks t where t.lead_id = ${leads.id} and t.done_at is null)`;
+  >`(select c.name from crm_companies c where c.id = ${leads.companyId})`,
+  contactName: contactNameSql,
+  email: leads.email,
+  phone: leads.phone,
+  valueCents: leads.valueCents,
+  brand: leads.brand,
+  clientName: clients.name,
+  ownerEmployeeId: leads.ownerEmployeeId,
+  ownerName: employees.fullName,
+  stageId: leads.stageId,
+  stageChangedAt: leads.stageChangedAt,
+  createdAt: leads.createdAt,
+  nextTask: nextTaskSql,
+  source: leads.source,
+  adPlatform: leads.adPlatform,
+  won: leads.won,
+});
+
+type CardRow = Awaited<ReturnType<ReturnType<typeof cardQuery>['execute']>>[number];
+
+function cardQuery(db: Executor) {
+  return db
+    .select(cardSelect())
+    .from(leads)
+    .innerJoin(clients, eq(clients.id, leads.clientId))
+    .leftJoin(employees, eq(employees.id, leads.ownerEmployeeId));
+}
+
+const toCard = (row: CardRow): BoardCard => ({
+  id: row.id,
+  name: row.name,
+  companyName: row.companyName,
+  contactName: row.contactName,
+  email: row.email,
+  phone: row.phone,
+  valueCents: row.valueCents,
+  brand: row.brand,
+  clientName: row.clientName,
+  ownerEmployeeId: row.ownerEmployeeId,
+  ownerName: row.ownerName,
+  stageChangedAt: iso(row.stageChangedAt),
+  nextTask: row.nextTask,
+  source: (row.adPlatform === 'google' ? row.source : row.source) as BoardCard['source'],
+  won: row.won,
+  createdAt: row.createdAt.toISOString(),
+});
+
+/**
+ * The board of one funnel under the list's filters: a column per stage with
+ * its count, value and probability-weighted value, and the first page of
+ * cards (`BOARD_CARDS_PER_STAGE`); `boardColumn` pages the rest. Lost deals
+ * are out unless the outcome filter asks for them; the default is "open".
+ */
+export async function boardOf(db: Executor, filter: BoardFilter): Promise<Board> {
+  const stages = await listStages(db, { pipeline: filter.pipeline });
+  const outcome = filter.outcome ?? 'open';
+  const where = and(
+    eq(leads.pipeline, filter.pipeline),
+    listConditions({ ...filter, outcome, pipeline: undefined }),
+  );
+  const probabilityOf = new Map(stages.map((stage) => [stage.id, stage.probability]));
+  const totals = await db
+    .select({
+      stageId: leads.stageId,
+      total: sql<number>`count(*)::int`,
+      valueCents: sql<number>`coalesce(sum(${leads.valueCents}), 0)::bigint`,
+    })
+    .from(leads)
+    .where(where)
+    .groupBy(leads.stageId);
   const rows = await db
     .select({
-      id: leads.id,
-      name: leads.name,
-      brand: leads.brand,
-      clientName: clients.name,
-      ownerName: employees.fullName,
-      stageId: leads.stageId,
-      stageChangedAt: leads.stageChangedAt,
-      createdAt: leads.createdAt,
-      nextTaskDueAt: nextTask,
+      ...cardSelect(),
       rank: sql<number>`row_number() over (partition by ${leads.stageId} order by ${leads.stageChangedAt} desc nulls last, ${leads.createdAt} desc)`,
     })
     .from(leads)
     .innerJoin(clients, eq(clients.id, leads.clientId))
     .leftJoin(employees, eq(employees.id, leads.ownerEmployeeId))
-    .where(scope);
-  const totals = new Map<string | null, number>();
+    .where(and(where, sql`true`));
   const cards = new Map<string | null, BoardCard[]>();
   for (const row of rows) {
-    totals.set(row.stageId, (totals.get(row.stageId) ?? 0) + 1);
     if (row.rank > BOARD_CARDS_PER_STAGE) continue;
     const list = cards.get(row.stageId) ?? [];
-    list.push({
-      id: row.id,
-      name: row.name,
-      brand: row.brand,
-      clientName: row.clientName,
-      ownerName: row.ownerName,
-      stageChangedAt: iso(row.stageChangedAt),
-      nextTaskDueAt: row.nextTaskDueAt ? new Date(row.nextTaskDueAt).toISOString() : null,
-      createdAt: row.createdAt.toISOString(),
-    });
+    list.push(toCard(row));
     cards.set(row.stageId, list);
   }
-  const columns: Board['columns'] = stages
-    .filter((stage) => stage.active || (totals.get(stage.id) ?? 0) > 0)
-    .map((stage) => ({
+  const totalOf = new Map(totals.map((row) => [row.stageId, row]));
+  const column = (stage: CrmStage | null): BoardColumn => {
+    const total = totalOf.get(stage?.id ?? null);
+    const valueCents = Number(total?.valueCents ?? 0);
+    const probability = stage ? (probabilityOf.get(stage.id) ?? 0) : 0;
+    return {
       stage,
-      total: totals.get(stage.id) ?? 0,
-      cards: cards.get(stage.id) ?? [],
-    }));
-  if ((totals.get(null) ?? 0) > 0) {
-    columns.unshift({ stage: null, total: totals.get(null) ?? 0, cards: cards.get(null) ?? [] });
-  }
-  return { pipeline: input.pipeline, columns };
+      total: total?.total ?? 0,
+      valueCents,
+      weightedCents: Math.round((valueCents * probability) / 100),
+      cards: cards.get(stage?.id ?? null) ?? [],
+    };
+  };
+  const columns = stages
+    .filter((stage) => stage.active || (totalOf.get(stage.id)?.total ?? 0) > 0)
+    .map(column);
+  if ((totalOf.get(null)?.total ?? 0) > 0) columns.unshift(column(null));
+  return {
+    pipeline: filter.pipeline,
+    columns,
+    total: columns.reduce((sum, item) => sum + item.total, 0),
+    valueCents: columns.reduce((sum, item) => sum + item.valueCents, 0),
+    weightedCents: columns.reduce((sum, item) => sum + item.weightedCents, 0),
+  };
+}
+
+/** The next page of one column's cards ("carregar mais"). */
+export async function boardColumn(
+  db: Executor,
+  filter: BoardFilter & { stageId: string | null; offset: number },
+): Promise<BoardCard[]> {
+  const outcome = filter.outcome ?? 'open';
+  const rows = await cardQuery(db)
+    .where(
+      and(
+        eq(leads.pipeline, filter.pipeline),
+        filter.stageId ? eq(leads.stageId, filter.stageId) : isNull(leads.stageId),
+        listConditions({ ...filter, outcome, pipeline: undefined }),
+      ),
+    )
+    .orderBy(sql`${leads.stageChangedAt} desc nulls last`, desc(leads.createdAt))
+    .offset(filter.offset)
+    .limit(BOARD_CARDS_PER_STAGE);
+  return rows.map(toCard);
+}
+
+/** The three numbers at the top of Negociações: new deals nobody touched, today's and overdue tasks. */
+export async function boardCounters(
+  db: Executor,
+  input: { pipeline: LeadPipeline; ownerEmployeeId?: string; now?: Date },
+): Promise<{ untouched: number; today: number; overdue: number }> {
+  const now = input.now ?? new Date();
+  const dayStart = new Date(now);
+  dayStart.setUTCHours(dayStart.getUTCHours() - 3);
+  const spDay = new Date(
+    Date.UTC(dayStart.getUTCFullYear(), dayStart.getUTCMonth(), dayStart.getUTCDate(), 3),
+  );
+  const spNext = new Date(spDay.getTime() + 86_400_000);
+  const scope = input.ownerEmployeeId
+    ? eq(leads.ownerEmployeeId, input.ownerEmployeeId)
+    : undefined;
+  const [untouched] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(leads)
+    .where(
+      and(
+        eq(leads.pipeline, input.pipeline),
+        isNull(leads.won),
+        scope,
+        sql`not exists (select 1 from lead_activities a where a.lead_id = ${leads.id})`,
+        sql`not exists (select 1 from lead_notes n where n.lead_id = ${leads.id})`,
+        sql`not exists (select 1 from lead_stage_history h where h.lead_id = ${leads.id} and h.source = 'wings')`,
+      ),
+    );
+  const [tasks] = await db
+    .select({
+      today: sql<number>`(count(*) filter (where ${leadTasks.dueAt} >= ${spDay} and ${leadTasks.dueAt} < ${spNext}))::int`,
+      overdue: sql<number>`(count(*) filter (where ${leadTasks.dueAt} < ${now}))::int`,
+    })
+    .from(leadTasks)
+    .innerJoin(leads, eq(leads.id, leadTasks.leadId))
+    .where(and(eq(leads.pipeline, input.pipeline), isNull(leadTasks.doneAt), scope));
+  return {
+    untouched: untouched?.count ?? 0,
+    today: tasks?.today ?? 0,
+    overdue: tasks?.overdue ?? 0,
+  };
 }
 
 export const isPipeline = (value: unknown): value is LeadPipeline =>

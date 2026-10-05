@@ -65,9 +65,25 @@ export const NAVIGATION: readonly NavModule[] = [
     icon: '🎯',
     submodules: [
       {
-        path: '/crm-vendas/funil',
-        label: 'Funil',
-        description: 'Leads captados, de onde vieram e o que a pesquisa encontrou',
+        path: '/crm-vendas/negociacoes',
+        label: 'Negociações',
+        description: 'O quadro de cada funil: etapas, valores e o que fazer a seguir',
+        permission: 'leads.read',
+        status: 'ready',
+        kind: 'crud',
+      },
+      {
+        path: '/crm-vendas/contatos',
+        label: 'Contatos',
+        description: 'As pessoas das negociações',
+        permission: 'leads.read',
+        status: 'ready',
+        kind: 'crud',
+      },
+      {
+        path: '/crm-vendas/empresas',
+        label: 'Empresas',
+        description: 'As empresas das negociações e as que viraram clientes',
         permission: 'leads.read',
         status: 'ready',
         kind: 'crud',
@@ -75,8 +91,17 @@ export const NAVIGATION: readonly NavModule[] = [
       {
         path: '/crm-vendas/tarefas',
         label: 'Tarefas',
-        description: 'Follow-ups e primeiros contatos dos seus leads',
+        description: 'Atrasadas, de hoje e próximas',
         permission: 'leads.read',
+        status: 'ready',
+        kind: 'crud',
+      },
+      soon('/crm-vendas/painel', 'Painel', 'Vendas por funil, marca e vendedor', 'leads.read'),
+      {
+        path: '/crm-vendas/configuracoes',
+        label: 'Configurações',
+        description: 'Etapas e probabilidades, distribuição de negociações e marcas',
+        permission: 'crm.manage',
         status: 'ready',
         kind: 'crud',
       },
@@ -89,7 +114,6 @@ export const NAVIGATION: readonly NavModule[] = [
         kind: 'crud',
       },
       soon('/crm-vendas/sofia', 'Sofia (SDR IA)', 'Agente de pré-venda'),
-      soon('/crm-vendas/clientes', 'Clientes', 'Base de clientes e histórico', 'leads.read'),
     ],
   },
   {
@@ -260,14 +284,6 @@ export const NAVIGATION: readonly NavModule[] = [
         status: 'ready',
         kind: 'crud',
       },
-      {
-        path: '/administracao/crm',
-        label: 'CRM Vendas: etapas e distribuição',
-        description: 'Etapas de cada funil e o rodízio de leads novos entre vendedores',
-        permission: 'crm.manage',
-        status: 'ready',
-        kind: 'crud',
-      },
       soon('/administracao/configuracoes', 'Configurações', undefined, 'settings.manage'),
       {
         path: '/administracao/integracoes',
@@ -366,6 +382,9 @@ export const LEGACY_REDIRECTS: readonly { from: string; to: string }[] = [
   { from: '/configuracoes', to: '/administracao/configuracoes' },
   // Clientes moved from Administração to Formatação on 2026-09-30 (Eric).
   { from: '/administracao/clientes', to: '/formatacao/clientes' },
+  // CRM Vendas redesigned on 2026-10-05 (Eric): Funil became Negociações, settings moved into the module.
+  { from: '/crm-vendas/funil', to: '/crm-vendas/negociacoes' },
+  { from: '/administracao/crm', to: '/crm-vendas/configuracoes' },
 ];
 
 /** Where a signed-in user lands: the first sub-module they can actually open. */

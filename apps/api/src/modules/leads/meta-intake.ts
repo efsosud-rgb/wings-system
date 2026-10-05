@@ -50,6 +50,7 @@ const MAX_PER_PASS = 1000;
 const RD_TARGETS: Record<LeadPipeline, { pipeline: string; stage: string }> = {
   expansao: { pipeline: 'Expansão', stage: 'Novo Contato' },
   formatacao: { pipeline: 'Formatação', stage: 'Sem contato' },
+  consultoria: { pipeline: 'Consultoria', stage: 'Novo contato' },
 };
 /** RD CRM "Origem" names tried for a Lead Ads deal, first that exists wins; none invented. */
 const RD_SOURCE_CANDIDATES = ['Meta Lead Ads', 'Facebook Lead Ads', 'Lead Ads', 'Facebook Ads'];

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { LEAD_PIPELINES, type LeadPipeline } from './leads.js';
+import { LEAD_PIPELINES, type LeadPipeline, type LeadSource } from './leads.js';
 
 /**
  * CRM Vendas — the Funil as the team's place of work (plano
@@ -27,6 +27,8 @@ export interface CrmStage {
   rdStageId: string | null;
   /** Sofia's pre-qualification entry stage (Fase 4); false until Sofia is ready. */
   sofiaEntry: boolean;
+  /** Chance (0–100) a deal in this stage closes; weights the column's value. Configurable. */
+  probability: number;
   /** Open leads in the stage, when the caller asked for counts. */
   openCount?: number;
 }
@@ -45,10 +47,13 @@ export const crmStageUpdateSchema = z
   .object({
     name: z.string().trim().min(2, 'Informe o nome da etapa').max(CRM_STAGE_NAME_MAX).optional(),
     active: z.boolean().optional(),
+    probability: z.number().int().min(0).max(100).optional(),
   })
-  .refine((value) => value.name !== undefined || value.active !== undefined, {
-    message: 'Nada para alterar.',
-  });
+  .refine(
+    (value) =>
+      value.name !== undefined || value.active !== undefined || value.probability !== undefined,
+    { message: 'Nada para alterar.' },
+  );
 export type CrmStageUpdateInput = z.infer<typeof crmStageUpdateSchema>;
 
 /** The whole order of a funnel's stages, every active stage once. */
@@ -142,6 +147,7 @@ export interface LeadTask {
   leadId: string;
   /** For the task list: who the lead is (as the list already shows it). */
   leadName: string | null;
+  leadCompanyName: string | null;
   kind: LeadTaskKind;
   title: string;
   dueAt: string;
@@ -180,6 +186,15 @@ export const taskListQuerySchema = z.object({
   status: z.enum(['open', 'overdue', 'done', 'all']).default('open'),
   /** Only with a scope wider than own: every seller's tasks. */
   everyone: z.coerce.boolean().optional(),
+  /** With `everyone`: one seller's tasks. */
+  assignee: z
+    .uuid()
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  kind: z
+    .enum(LEAD_TASK_KINDS)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
 });
 export type TaskListQuery = z.infer<typeof taskListQuerySchema>;
 
@@ -229,17 +244,26 @@ export interface Seller {
 
 // --- kanban ---------------------------------------------------------------------------
 
-export const BOARD_CARDS_PER_STAGE = 60;
+export const BOARD_CARDS_PER_STAGE = 30;
 
+/** A compact card: the deal, who it is with, its value, its owner, its clock and where it came from. */
 export interface BoardCard {
   id: string;
   name: string | null;
+  companyName: string | null;
+  contactName: string | null;
+  email: string | null;
+  phone: string | null;
+  valueCents: number | null;
   brand: string | null;
   clientName: string;
+  ownerEmployeeId: string | null;
   ownerName: string | null;
   stageChangedAt: string | null;
-  /** The next open task's due time, when there is one. */
-  nextTaskDueAt: string | null;
+  /** The next open task, when there is one. */
+  nextTask: { title: string; dueAt: string } | null;
+  source: LeadSource;
+  won: boolean | null;
   createdAt: string;
 }
 
@@ -247,18 +271,27 @@ export interface BoardColumn {
   /** Null for the leads of the funnel that have no stage yet. */
   stage: CrmStage | null;
   total: number;
+  /** Sum of the deals' values in the column, cents. */
+  valueCents: number;
+  /** The sum weighted by the stage's probability, cents. */
+  weightedCents: number;
   cards: BoardCard[];
 }
 
 export interface Board {
   pipeline: LeadPipeline;
   columns: BoardColumn[];
+  total: number;
+  valueCents: number;
+  weightedCents: number;
 }
 
-export const boardQuerySchema = z.object({
+/** One column's next page of cards. */
+export const boardColumnQuerySchema = z.object({
   pipeline: z.enum(LEAD_PIPELINES),
-  owner: z.string().max(60).optional(),
-  clientId: z.uuid().optional(),
+  /** A stage id, or `none` for the leads without a stage. */
+  stageId: z.uuid().or(z.literal('none')),
+  offset: z.coerce.number().int().min(0).max(5000).default(0),
 });
 
 // --- business hours (the first-contact SLA) ----------------------------------------
@@ -728,3 +761,51 @@ export interface CsvImportReport {
   skipped: number;
   errors: { line: number; message: string }[];
 }
+
+// --- saved views (the tabs of Negociações) ------------------------------------------------
+
+export const CRM_VIEW_NAME_MAX = 40;
+
+/** A person's saved filter set on a funnel: a tab next to "Todas" and "Minhas". */
+export interface CrmSavedView {
+  id: string;
+  pipeline: LeadPipeline;
+  name: string;
+  /** The list query's fields, as the screen keeps them. */
+  filters: Record<string, string>;
+  createdAt: string;
+}
+
+export const crmSavedViewCreateSchema = z.object({
+  pipeline: z.enum(LEAD_PIPELINES),
+  name: z.string().trim().min(2, 'Dê um nome à visão').max(CRM_VIEW_NAME_MAX),
+  filters: z.record(z.string().max(40), z.string().max(200)),
+});
+export type CrmSavedViewCreateInput = z.infer<typeof crmSavedViewCreateSchema>;
+
+/** The two letters a card shows for the owner: "Thais Lima" -> "TL". */
+export function initialsOf(name: string | null | undefined): string {
+  const parts = (name ?? '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '—';
+  const first = parts[0]![0] ?? '';
+  const last = parts.length > 1 ? (parts[parts.length - 1]![0] ?? '') : '';
+  return `${first}${last}`.toUpperCase();
+}
+
+/** The badge a source gets on a card: short label and a tone the CSS knows. */
+export const LEAD_SOURCE_BADGES: Record<LeadSource, { label: string; tone: string }> = {
+  meta_lead_ads: { label: 'Meta', tone: 'meta' },
+  rd_station: { label: 'RD', tone: 'rd' },
+  rd_crm: { label: 'RD', tone: 'rd' },
+  site_form: { label: 'Site', tone: 'site' },
+  whatsapp_link: { label: 'WhatsApp', tone: 'whatsapp' },
+  manual: { label: 'Manual', tone: 'manual' },
+  csv_import: { label: 'Planilha', tone: 'manual' },
+};
+
+/** Google shows when the attribution says so, whatever the door was. */
+export const sourceBadgeOf = (
+  source: LeadSource,
+  adPlatform?: string | null,
+): { label: string; tone: string } =>
+  adPlatform === 'google' ? { label: 'Google', tone: 'google' } : LEAD_SOURCE_BADGES[source];

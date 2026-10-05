@@ -425,7 +425,7 @@ export async function importRdDeals(
   const result: RdImportResult = {
     applied: options.apply,
     dealsListed: 0,
-    inScope: { expansao: 0, formatacao: 0 },
+    inScope: { expansao: 0, formatacao: 0, consultoria: 0 },
     inArchive: 0,
     outOfScope: {},
     created: 0,

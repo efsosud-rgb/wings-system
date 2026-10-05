@@ -41,12 +41,13 @@ export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
  * The sales funnels a lead is headed for (CRM phase 1): Formatação is the
  * Wings product, Expansão is selling a client brand's franchise.
  */
-export const LEAD_PIPELINES = ['expansao', 'formatacao'] as const;
+export const LEAD_PIPELINES = ['expansao', 'formatacao', 'consultoria'] as const;
 export type LeadPipeline = (typeof LEAD_PIPELINES)[number];
 
 export const LEAD_PIPELINE_LABELS: Record<LeadPipeline, string> = {
   expansao: 'Expansão',
   formatacao: 'Formatação',
+  consultoria: 'Consultoria',
 };
 
 /** RD CRM's funnel name -> ours; the "Vendidos"/"Negócios perdidos" archives count as their origin. */
@@ -57,6 +58,7 @@ export function pipelineOfRdFunnel(name: string | null | undefined): LeadPipelin
     .toLowerCase();
   if (/expansao/.test(text)) return 'expansao';
   if (/formatacao/.test(text)) return 'formatacao';
+  if (/consultoria/.test(text)) return 'consultoria';
   return null;
 }
 
@@ -797,6 +799,10 @@ export interface LeadListItem {
   valueCents: number | null;
   companyName: string | null;
   city: string | null;
+  campaignName: string | null;
+  lastActivityAt: string | null;
+  nextTask: { title: string; dueAt: string } | null;
+  ownerEmployeeId: string | null;
   ownerName: string | null;
   /**
    * The RD deal's owner is no one of ours who still works it: no owner, an
@@ -895,14 +901,27 @@ export interface LeadTrackingLink {
 
 export const LEAD_NAME_MAX = 120;
 
+/**
+ * "Criar negociação": the deal's name is the person's (the contact), with the
+ * company, funnel, stage, owner (the rotation when left empty), value and
+ * where it came from. Phone or e-mail is required so the person is found
+ * again. The LGPD basis is kept, with a short default for a deal typed in.
+ */
 export const leadCreateSchema = z.object({
   name: z.string().trim().min(2, 'Informe o nome').max(LEAD_NAME_MAX),
   email: z.string().trim().max(200).optional().or(z.literal('')),
   phone: z.string().trim().max(30).optional().or(z.literal('')),
-  clientId: z.uuid().optional(),
-  channel: z.enum(LEAD_CHANNELS).optional(),
-  legalBasis: z.enum(LEAD_LEGAL_BASES),
-  consentText: z.string().trim().min(5, 'Descreva onde o titular autorizou o contato').max(500),
+  companyName: z.string().trim().max(120).optional().or(z.literal('')),
+  /** The brand of interest (Expansão) or the client; optional. */
+  clientId: z.uuid().optional().or(z.literal('')),
+  pipeline: z.enum(LEAD_PIPELINES).optional().or(z.literal('')),
+  stageId: z.uuid().optional().or(z.literal('')),
+  /** Empty: the funnel's rotation decides; `me` is the caller. */
+  ownerEmployeeId: z.uuid().optional().or(z.literal('')).or(z.literal('me')),
+  valueCents: z.number().int().min(0).max(100_000_000_00).nullable().optional(),
+  channel: z.enum(LEAD_CHANNELS).optional().or(z.literal('')),
+  legalBasis: z.enum(LEAD_LEGAL_BASES).default('legitimate_interest'),
+  consentText: z.string().trim().max(500).optional().or(z.literal('')),
 });
 export type LeadCreateInput = z.infer<typeof leadCreateSchema>;
 
@@ -990,7 +1009,50 @@ export const leadListQuerySchema = z.object({
     .max(3650)
     .optional()
     .or(z.literal('').transform(() => undefined)),
+  /** Created on or after / before (YYYY-MM-DD). */
+  createdFrom: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  createdTo: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  /** Last activity (any event on the lead) within this many days, or `none` for no activity in the window. */
+  activityDays: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(3650)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  /** Campaign name or id, as the lead carries it. */
+  campaign: z
+    .string()
+    .trim()
+    .max(200)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  /** `mine` keeps only the caller's deals (the "Minhas" tab). */
+  mine: z.coerce.boolean().optional(),
+  sort: z
+    .enum(['recent', 'oldest', 'value_desc', 'value_asc', 'stage_time', 'next_task', 'name'])
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
 });
+export type LeadListQuery = z.infer<typeof leadListQuerySchema>;
+
+export const LEAD_SORT_LABELS: Record<NonNullable<LeadListQuery['sort']>, string> = {
+  recent: 'Mais recentes',
+  oldest: 'Mais antigas',
+  value_desc: 'Maior valor',
+  value_asc: 'Menor valor',
+  stage_time: 'Mais tempo na etapa',
+  next_task: 'Próxima tarefa',
+  name: 'Nome',
+};
 
 export const funnelSummaryQuerySchema = z.object({
   days: z.coerce
