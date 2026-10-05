@@ -44,6 +44,8 @@ export interface RankedSpec {
   /** Keep the given order (the funnel's stages) instead of ranking. */
   sort?: boolean;
   limit?: number;
+  /** What a bar's share is of; the sum of the bars when absent. */
+  shareBase?: number;
 }
 
 /** A funnel by stage: the same bars, in the stages' order, never regrouped. */
@@ -52,6 +54,8 @@ export interface FunnelSpec {
   stages: { label: string; value: number }[];
   format: ValueFormat;
   totalLabel?: string;
+  /** What a bar's share is of (a cohort funnel: the first stage); the sum of the bars when absent. */
+  shareBase?: number;
 }
 
 /** A donut: only for 3 to 6 slices with none above 80% (see `shareSpec`). */

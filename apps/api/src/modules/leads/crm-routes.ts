@@ -379,11 +379,15 @@ export const crmRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: app.requirePermission('leads.read') },
     async (request, reply) => {
       const query = salesDashboardQuerySchema.safeParse(request.query);
-      if (!query.success) return reply.status(400).send(invalid('Informe o funil.'));
+      if (!query.success)
+        return reply
+          .status(400)
+          .send(invalid(query.error.issues[0]?.message ?? 'Filtros inválidos.'));
       return reply.send(
         await salesDashboardOf(db, {
-          pipeline: query.data.pipeline,
+          ...query.data,
           ownerEmployeeId: ownScope(request, 'leads.read'),
+          spendVisible: can(request.session.actor, 'ads.read').allowed,
         }),
       );
     },

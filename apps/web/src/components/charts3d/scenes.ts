@@ -242,6 +242,8 @@ export abstract class Scene3D {
     const node = document.createElement('div');
     node.className = `w3d-label w3d-${align}`;
     node.append(...parts);
+    // Hidden until the first frame places it, so labels never pile up at the corner.
+    node.style.visibility = 'hidden';
     this.host.layer.append(node);
     const label = { el: node, anchor: anchor.clone() };
     this.labels.push(label);
@@ -497,6 +499,7 @@ export abstract class Scene3D {
       const x = (v.x * 0.5 + 0.5) * this.size.w;
       const y = (-v.y * 0.5 + 0.5) * this.size.h;
       label.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+      if (label.el.style.visibility) label.el.style.visibility = '';
     }
   }
 
@@ -631,7 +634,7 @@ class RankedBars3D extends Scene3D {
         },
       ]);
     }
-    const total = items.reduce((a, s) => a + (s.value || 0), 0);
+    const total = spec.shareBase ?? items.reduce((a, s) => a + (s.value || 0), 0);
     const max = Math.max(1, ...items.map((s) => s.value || 0));
     const L = 7;
     const t = 0.36;
@@ -861,6 +864,7 @@ export function makeScene(
         items: spec.stages,
         format: spec.format,
         totalLabel: spec.totalLabel ?? 'das abertas',
+        shareBase: spec.shareBase,
         sort: false,
         limit: Infinity,
       });
