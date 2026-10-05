@@ -124,6 +124,7 @@ export async function syncAds(
         effectiveStatus: ad.effectiveStatus,
         creativeExternalId: ad.creative?.id ?? null,
         utmContent: ad.creative?.utmContent ?? null,
+        urlTags: ad.creative?.urlTags ?? null,
         reviewFeedback: ad.reviewFeedback ?? null,
         issuesInfo: ad.issuesInfo ?? null,
         lastSyncedAt: now,
@@ -137,6 +138,7 @@ export async function syncAds(
           creativeExternalId: ad.creative?.id ?? null,
           // A client that does not read links (Google, the fake) never erases one.
           ...(ad.creative?.utmContent !== undefined ? { utmContent: ad.creative.utmContent } : {}),
+          ...(ad.creative?.urlTags !== undefined ? { urlTags: ad.creative.urlTags } : {}),
           reviewFeedback: ad.reviewFeedback ?? null,
           issuesInfo: ad.issuesInfo ?? null,
           lastSyncedAt: now,

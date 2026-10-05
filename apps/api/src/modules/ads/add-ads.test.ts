@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { addAdsRequestSchema, type AddAdsRequest } from '@wings/shared';
+import { addAdsRequestSchema, META_URL_TAGS, type AddAdsRequest } from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../../db/client.js';
@@ -246,18 +246,15 @@ describe('executing it', () => {
           JSON.parse(call.fields.object_story_spec ?? '{}').video_data.call_to_action.value
             .link as string,
       );
-    expect(links.map((link) => new URL(link).searchParams.get('utm_content'))).toEqual([
-      'video-1',
-      'video-2',
-      'video-3',
+    // No UTM in the link: every creative carries the standard url_tags, and
+    // Meta fills utm_content with the ad's own id.
+    for (const link of links) expect(new URL(link).search).toBe('');
+    expect(api.writes('adcreatives').map((call) => call.fields.url_tags)).toEqual([
+      META_URL_TAGS,
+      META_URL_TAGS,
+      META_URL_TAGS,
     ]);
-    // The rest of the link is the request's, whole.
-    expect(Object.fromEntries(new URL(links[0]!).searchParams)).toMatchObject({
-      utm_source: 'facebook',
-      utm_medium: 'cpc',
-      utm_campaign: 'formatacao_28set',
-    });
-    // Named by utm_content, never repeating the v1, v2 of the ads already there.
+    // Named by kind and position, never repeating the v1, v2 of the ads already there.
     const names = api
       .writes('ads')
       .filter((call) => !call.fields.execution_options)

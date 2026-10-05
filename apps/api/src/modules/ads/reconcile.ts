@@ -129,6 +129,7 @@ export async function syncCampaigns(
         startDate: campaign.startDate ?? null,
         endDate: campaign.endDate ?? null,
         deliveryStatus: campaign.deliveryStatus ?? null,
+        finalUrlSuffix: campaign.finalUrlSuffix ?? null,
         lastSyncedAt: now,
       })
       .onConflictDoUpdate({
@@ -147,10 +148,24 @@ export async function syncCampaigns(
           ...(campaign.deliveryStatus !== undefined
             ? { deliveryStatus: campaign.deliveryStatus }
             : {}),
+          ...(campaign.finalUrlSuffix !== undefined
+            ? { finalUrlSuffix: campaign.finalUrlSuffix }
+            : {}),
           lastSyncedAt: now,
           updatedAt: now,
         },
       });
+  }
+
+  // Google tells the account's Final URL suffix with every campaign row.
+  const accountSuffix = campaigns.find(
+    (campaign) => campaign.accountFinalUrlSuffix !== undefined,
+  )?.accountFinalUrlSuffix;
+  if (accountSuffix !== undefined) {
+    await db
+      .update(adAccounts)
+      .set({ finalUrlSuffix: accountSuffix, updatedAt: now })
+      .where(eq(adAccounts.id, adAccountId));
   }
 
   // Ad sets are stored under the campaign row we just upserted.

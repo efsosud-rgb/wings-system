@@ -104,6 +104,8 @@ export interface FakeAdSeed {
   issuesInfo?: unknown;
   /** What the creative is made of; image unless said otherwise. */
   format?: CreativeFormat;
+  /** The creative's url_tags; left unread (undefined) unless given. */
+  urlTags?: string;
 }
 
 export interface FakeMetaOptions {
@@ -340,6 +342,7 @@ export class FakeMetaClient implements AdsPlatformClient {
         title: 'Título',
         body: 'Corpo do anúncio',
         format: ad.format ?? 'image',
+        ...(ad.urlTags !== undefined ? { urlTags: ad.urlTags } : {}),
       },
       reviewFeedback: ad.reviewFeedback ?? null,
       issuesInfo: ad.issuesInfo ?? null,

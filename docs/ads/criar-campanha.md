@@ -81,8 +81,8 @@ nome repetido no pedido. Motivo: um create que dá timeout não devolve id, ent�
   1 vídeo, 2 imagem, 3 carrossel). Cada cartão tem o tipo, o anexo
   (arrastar-e-soltar, "Escolher arquivo", "Escolher do Drive") com
   pré-visualização e barra de progresso, Título (40), Texto (contador, ~125),
-  Botão e o `utm_content` automático pelo tipo e posição (`video-1`,
-  `imagem-2`, `carrossel-3`). Carrossel: de 2 a 10 cartões, cada um com imagem
+  Botão (desde 05/10/2026 o utm_content é o id do anúncio, que a Meta preenche
+  pelos `url_tags` padrão; veja `meta-conjunto-anuncios.md`). Carrossel: de 2 a 10 cartões, cada um com imagem
   ou vídeo (o arquivo diz qual), título, texto opcional e link. "+ Adicionar
   criativo" no fim do bloco, "Remover" em cada cartão (fica sempre um), e no
   topo a caixa "Usar o mesmo texto, título e botão em todos" (só o Criativo 1

@@ -57,7 +57,9 @@ interface CampaignRow {
     servingStatus?: string;
     startDate?: string;
     endDate?: string;
+    finalUrlSuffix?: string;
   };
+  customer?: { finalUrlSuffix?: string };
   campaignBudget?: {
     resourceName?: string;
     amountMicros?: string;
@@ -250,7 +252,8 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
   private async campaignRows(where: string): Promise<CampaignRow[]> {
     return this.reader.search<CampaignRow>(`
       SELECT campaign.id, campaign.name, campaign.status, campaign.serving_status,
-             campaign.start_date, campaign.end_date,
+             campaign.start_date, campaign.end_date, campaign.final_url_suffix,
+             customer.final_url_suffix,
              campaign_budget.resource_name, campaign_budget.amount_micros,
              campaign_budget.total_amount_micros, campaign_budget.period,
              campaign_budget.explicitly_shared
@@ -306,6 +309,10 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
       endDate:
         row.campaign?.endDate && row.campaign.endDate < '2037-01-01' ? row.campaign.endDate : null,
       deliveryStatus: row.campaign?.servingStatus ?? null,
+      // Google leaves an unset suffix out of the answer. NOT verified live:
+      // customer.final_url_suffix read through the campaign resource.
+      finalUrlSuffix: row.campaign?.finalUrlSuffix ?? '',
+      accountFinalUrlSuffix: row.customer?.finalUrlSuffix ?? '',
     };
   }
 

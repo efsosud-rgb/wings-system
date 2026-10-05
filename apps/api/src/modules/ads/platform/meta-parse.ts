@@ -153,5 +153,8 @@ export function utmContentOfCreative(creative: {
     }
   }
   const tag = /(?:^|&)utm_content=([^&]*)/.exec(creative.url_tags ?? '');
-  return tag?.[1] ? decodeURIComponent(tag[1]) : null;
+  // A macro ({{ad.id}}, the standard url_tags) is the ad's own id, filled per
+  // click: there is no fixed value to show.
+  if (!tag?.[1] || tag[1].includes('{{')) return null;
+  return decodeURIComponent(tag[1]);
 }

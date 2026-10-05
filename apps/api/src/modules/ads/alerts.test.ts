@@ -1,8 +1,9 @@
 import { randomBytes } from 'node:crypto';
+import { META_URL_TAGS } from '@wings/shared';
 import { and, eq, isNull } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../../db/client.js';
-import { adAlerts, adMetricsDaily } from '../../db/schema/index.js';
+import { adAccounts, adAlerts, adCampaigns, adMetricsDaily } from '../../db/schema/index.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee } from '../../test/factories.js';
 import {
@@ -59,6 +60,8 @@ function only(overrides: Partial<AlertRuleConfig>): AlertRuleConfig {
     creativeFatigue: { ...DEFAULT_ALERT_CONFIG.creativeFatigue, enabled: false },
     qualityBelowAverage: { ...DEFAULT_ALERT_CONFIG.qualityBelowAverage, enabled: false },
     conversionSilence: { ...DEFAULT_ALERT_CONFIG.conversionSilence, enabled: false },
+    metaAdWithoutUtms: { enabled: false },
+    googleCampaignOwnSuffix: { enabled: false },
     ...overrides,
   };
 }
@@ -404,6 +407,97 @@ describe('conversion silence', () => {
     });
 
     expect(await detectAlerts(db, id, config, NOW)).toHaveLength(0);
+  });
+});
+
+describe("the platforms' UTM standard", () => {
+  it('flags an active Meta ad without the standard url_tags, on the panel only', async () => {
+    const id = await account();
+    await seedAdsWith(id, [
+      { id: 'ad-std', campaignId: 'c1', adSetId: 'as1', name: 'Padrão', urlTags: META_URL_TAGS },
+      // Same parameters, another order: still the standard.
+      {
+        id: 'ad-reordered',
+        campaignId: 'c1',
+        adSetId: 'as1',
+        name: 'Ordem trocada',
+        urlTags: META_URL_TAGS.split('&').reverse().join('&'),
+      },
+      { id: 'ad-none', campaignId: 'c1', adSetId: 'as1', name: 'Sem UTM', urlTags: '' },
+      {
+        id: 'ad-old',
+        campaignId: 'c1',
+        adSetId: 'as1',
+        name: 'Antigo',
+        urlTags: 'utm_source=facebook&utm_medium=cpc',
+      },
+      {
+        id: 'ad-paused',
+        campaignId: 'c1',
+        adSetId: 'as1',
+        name: 'Pausado',
+        status: 'PAUSED',
+        effectiveStatus: 'PAUSED',
+        urlTags: '',
+      },
+      // Never read: waits for the next ingest instead of crying wolf.
+      { id: 'ad-unread', campaignId: 'c1', adSetId: 'as1', name: 'Não lido' },
+    ]);
+    const config = only({ metaAdWithoutUtms: { enabled: true } });
+
+    const found = await detectAlerts(db, id, config, NOW);
+    expect(found.map((alert) => alert.entityExternalId).sort()).toEqual(['ad-none', 'ad-old']);
+    expect(found[0]).toMatchObject({ kind: 'meta_ad_without_utms', severity: 'warning' });
+
+    const { notifier, sent } = recordingNotifier();
+    const first = await runAlerts(db, id, { config, notifier, now: NOW });
+    const second = await runAlerts(db, id, { config, notifier, now: NOW });
+    // Deduplicated like every alert, and never sent to WhatsApp.
+    expect([first.opened, second.opened, second.refreshed]).toEqual([2, 0, 2]);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("flags a Google campaign whose own suffix differs from the account's", async () => {
+    const id = await ensureAdAccount(db, {
+      platform: 'google',
+      externalId: randomBytes(4).toString('hex'),
+      name: 'Google Wings',
+    });
+    const accountSuffix =
+      'utm_source=google&utm_medium=cpc&utm_campaign={campaignid}&utm_content={creative}&utm_term={keyword}';
+    const campaign = (externalId: string, finalUrlSuffix: string | null) => ({
+      adAccountId: id,
+      externalId,
+      name: `Campanha ${externalId}`,
+      status: 'ACTIVE' as const,
+      finalUrlSuffix,
+    });
+    await db
+      .insert(adCampaigns)
+      .values([
+        campaign('1001', ''),
+        campaign('1002', accountSuffix),
+        campaign('1003', 'utm_source=outro'),
+        campaign('1004', null),
+      ]);
+    const config = only({ googleCampaignOwnSuffix: { enabled: true } });
+
+    // The account's suffix not read yet: nothing to compare with.
+    expect(await detectAlerts(db, id, config, NOW)).toEqual([]);
+
+    await db.update(adAccounts).set({ finalUrlSuffix: accountSuffix }).where(eq(adAccounts.id, id));
+    const found = await detectAlerts(db, id, config, NOW);
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({
+      kind: 'google_campaign_own_suffix',
+      severity: 'warning',
+      entityLevel: 'campaign',
+      entityExternalId: '1003',
+    });
+
+    const { notifier, sent } = recordingNotifier();
+    await runAlerts(db, id, { config, notifier, now: NOW });
+    expect(sent).toHaveLength(0);
   });
 });
 

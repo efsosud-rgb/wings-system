@@ -141,6 +141,12 @@ export const adAccounts = pgTable(
      * its billing screen — so it is a rule a person sets, never inferred.
      */
     spendCapReset: text('spend_cap_reset'),
+    /**
+     * Google only: the account's Final URL suffix, as last read ('' when it
+     * has none, null when never read). Campaigns inherit it; the cockpit
+     * flags one that sets its own.
+     */
+    finalUrlSuffix: text('final_url_suffix'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -271,6 +277,8 @@ export const adCampaigns = pgTable(
      * and SERVING (Google). Null until the next ingestion reads it.
      */
     deliveryStatus: text('delivery_status'),
+    /** Google only: the campaign's own Final URL suffix ('' when none, null when never read). */
+    finalUrlSuffix: text('final_url_suffix'),
     lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -734,6 +742,8 @@ export const adAds = pgTable(
     creativeExternalId: text('creative_external_id'),
     /** The utm_content its creative's link carries (video-1, imagem-2…); null when none. */
     utmContent: text('utm_content'),
+    /** Meta: its creative's url_tags ('' when none, null when never read). */
+    urlTags: text('url_tags'),
     /**
      * The real rejection reason. The spike found ad_review_feedback carries it
      * while issues_info is empty on disapproved ads, so both are stored and
@@ -966,6 +976,8 @@ export const alertKindEnum = pgEnum('ad_alert_kind', [
   'creative_fatigue',
   'quality_below_average',
   'conversion_silence',
+  'meta_ad_without_utms',
+  'google_campaign_own_suffix',
 ]);
 
 export const alertSeverityEnum = pgEnum('ad_alert_severity', ['info', 'warning', 'critical']);

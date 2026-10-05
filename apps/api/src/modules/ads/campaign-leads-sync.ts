@@ -7,6 +7,7 @@ import {
   maskPhone,
   type AdPlatform,
   type AttributionMethod,
+  utmSourceName,
   type UnattributedReason,
 } from '@wings/shared';
 import { eq, inArray, isNull, sql } from 'drizzle-orm';
@@ -19,6 +20,7 @@ import {
   campaignLeads,
   employees,
 } from '../../db/schema/index.js';
+import { paramsOfAddress } from '../../lib/query-params.js';
 import type { SecretBox } from '../../lib/secret-box.js';
 import { platformOfRdLabels, rdCrmGetter, type RdPipeline } from './funnel-sync.js';
 
@@ -89,8 +91,8 @@ const norm = (value: string) =>
 /**
  * RD Marketing keeps a conversion's origin as `traffic_source`:
  * "encoded_" + base64 of `{ first_session, current_session }`, each with the
- * landing URL (`value`) and `extra_params`. The UTMs are read from the
- * current session's URL, then its extra params, then the first session's.
+ * landing URL or query string (`value`) and `extra_params`. The UTMs are read
+ * from the current session's `value`, then its extra params, then the first session's.
  */
 export function utmsOfTrafficSource(trafficSource: string | null | undefined): Utms | null {
   if (!trafficSource) return null;
@@ -106,19 +108,15 @@ export function utmsOfTrafficSource(trafficSource: string | null | undefined): U
   }
   const read = (session?: { value?: string; extra_params?: Record<string, unknown> }) => {
     const params = new Map<string, string>();
-    try {
-      if (session?.value) {
-        for (const [key, value] of new URL(session.value).searchParams) params.set(key, value);
-      }
-    } catch {
-      // Not a URL (RD writes "(direct)" and the like): nothing to read.
-    }
+    for (const [key, value] of paramsOfAddress(session?.value)) params.set(key, value);
     for (const [key, value] of Object.entries(session?.extra_params ?? {})) {
       if (typeof value === 'string' && !params.has(key)) params.set(key, value);
     }
     const pick = (key: string) => params.get(`utm_${key}`)?.trim() || null;
+    const source = pick('source');
     return {
-      source: pick('source'),
+      // Meta's {{site_source_name}} (fb, ig, msg, an) spelled out.
+      source: source ? utmSourceName(source) : null,
       medium: pick('medium'),
       campaign: pick('campaign'),
       content: pick('content'),

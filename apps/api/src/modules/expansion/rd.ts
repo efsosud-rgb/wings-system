@@ -1,3 +1,5 @@
+import { adPlatformOfUtmSource } from '@wings/shared';
+import { paramsOfAddress } from '../../lib/query-params.js';
 import { utmsOfTrafficSource, type Utms } from '../ads/campaign-leads-sync.js';
 
 /**
@@ -88,20 +90,13 @@ export function adsOfTrafficSource(
     };
     let found: 'google' | 'meta' | null = null;
     for (const session of [decoded.current_session, decoded.first_session]) {
-      const params = new Map<string, string>();
-      try {
-        if (session?.value)
-          for (const [k, v] of new URL(session.value).searchParams) params.set(k, v);
-      } catch {
-        // "(direct)" and the like.
-      }
+      const params = new Map<string, string>(paramsOfAddress(session?.value));
       for (const [k, v] of Object.entries(session?.extra_params ?? {})) {
         if (typeof v === 'string' && !params.has(k)) params.set(k, v);
       }
-      const source = (params.get('utm_source') ?? '').toLowerCase();
-      if (params.has('gclid') || /google|adwords|gads/.test(source)) return 'google';
-      if (params.has('fbclid') || /facebook|instagram|meta|^fb$|^ig$/.test(source))
-        found = found ?? 'meta';
+      const platform = adPlatformOfUtmSource(params.get('utm_source'));
+      if (params.has('gclid') || platform === 'google') return 'google';
+      if (params.has('fbclid') || platform === 'meta') found = found ?? 'meta';
     }
     return found;
   } catch {
