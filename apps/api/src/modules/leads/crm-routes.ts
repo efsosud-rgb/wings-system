@@ -1,5 +1,6 @@
 import {
   boardColumnQuerySchema,
+  salesDashboardQuerySchema,
   can,
   crmSavedViewCreateSchema,
   leadListQuerySchema,
@@ -38,6 +39,7 @@ import {
   updateStage,
   updateTask,
 } from './crm.js';
+import { salesDashboardOf } from './sales-dashboard.js';
 import { metaQueueStatus, syncMetaFormLeads } from './meta-intake.js';
 import { loadLead } from './service.js';
 
@@ -368,6 +370,21 @@ export const crmRoutes: FastifyPluginAsync = async (app) => {
       const own = ownScope(request, 'leads.read');
       const mine = query.data.mine ? request.session.actor.employeeId : undefined;
       return reply.send(await boardOf(db, { ...query.data, ownerEmployeeId: own ?? mine }));
+    },
+  );
+
+  app.get(
+    '/crm/dashboard',
+    { preHandler: app.requirePermission('leads.read') },
+    async (request, reply) => {
+      const query = salesDashboardQuerySchema.safeParse(request.query);
+      if (!query.success) return reply.status(400).send(invalid('Informe o funil.'));
+      return reply.send(
+        await salesDashboardOf(db, {
+          pipeline: query.data.pipeline,
+          ownerEmployeeId: ownScope(request, 'leads.read'),
+        }),
+      );
     },
   );
 
