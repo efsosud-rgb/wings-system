@@ -10,6 +10,7 @@ import type { Database } from '../../db/client.js';
 import {
   auditLog,
   clients,
+  crmStages,
   employees,
   leadEnrichmentLedger,
   leadEvents,
@@ -151,6 +152,25 @@ export interface StagePlace {
   order: number;
   /** Id of the first stage of the pipeline. */
   firstStageId: string | null;
+  /**
+   * An RD archive funnel of the pipeline ("Negócios perdidos - Expansão",
+   * "Vendidos | Expansão🏆"): its stages are filing labels, not steps of the
+   * work, so they never become a Wings stage (`stageRowOf`).
+   */
+  archive: boolean;
+}
+
+const plainName = (name: string) =>
+  name
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .trim()
+    .toLowerCase();
+
+/** The RD funnel is the pipeline's own ("Expansão", "Formatação"), not one of its archives. */
+export function isArchiveFunnel(name: string, pipeline: LeadPipeline | null): boolean {
+  return pipeline !== null && plainName(name) !== pipeline;
 }
 
 export function stagePlaces(pipelines: readonly RdPipelineRow[]): Map<string, StagePlace> {
@@ -164,10 +184,37 @@ export function stagePlaces(pipelines: readonly RdPipelineRow[]): Map<string, St
         stage: stage.name,
         order: index + 1,
         firstStageId: first,
+        archive: isArchiveFunnel(pipeline.name, pipelineOfRdFunnel(pipeline.name)),
       });
     });
   }
   return places;
+}
+
+/**
+ * The Wings stage a deal sits in: the pipeline's own funnel learns its stages
+ * (`ensureStage`); an archive funnel only reuses a stage of the same name that
+ * already exists, and otherwise leaves the lead with the RD label and no stage
+ * row (closed leads are off the board anyway).
+ */
+async function stageRowOf(db: Database, place: StagePlace, rdStageId: string | null) {
+  if (!place.pipeline) return null;
+  if (!place.archive) {
+    return ensureStage(db, {
+      pipeline: place.pipeline,
+      name: place.stage,
+      position: place.order,
+      rdStageId,
+    });
+  }
+  return (
+    (await db.query.crmStages.findFirst({
+      where: and(
+        eq(crmStages.pipeline, place.pipeline),
+        eq(crmStages.name, place.stage.trim().slice(0, 60)),
+      ),
+    })) ?? null
+  );
 }
 
 const EXPANSION_CAMPAIGN = /^LP(?:\/LE)?\s+(.+?)\s+-\s+Fluxo Expans[aã]o/i;
@@ -231,6 +278,10 @@ export interface RdImportResult {
   dealsListed: number;
   /** In Expansão/Formatação and inside the window (or open). */
   inScope: Record<LeadPipeline, number>;
+  /** Of `inScope`, deals filed in an archive funnel (no Wings stage is created for them). */
+  inArchive: number;
+  /** Deals of RD funnels with no Wings pipeline (Parcerias, Estruturação, Lista de espera…), per funnel. */
+  outOfScope: Record<string, number>;
   created: number;
   /** Joined to a lead that already existed (same deal, phone or e-mail). */
   merged: number;
@@ -371,6 +422,8 @@ export async function importRdDeals(
     applied: options.apply,
     dealsListed: 0,
     inScope: { expansao: 0, formatacao: 0 },
+    inArchive: 0,
+    outOfScope: {},
     created: 0,
     merged: 0,
     otherDealOfSamePerson: 0,
@@ -407,6 +460,11 @@ export async function importRdDeals(
   );
 
   result.dealsListed = deals.length;
+  for (const deal of deals) {
+    const place = places.get(idOf(deal.deal_stage) ?? '');
+    if (place && !place.pipeline)
+      result.outOfScope[place.pipelineName] = (result.outOfScope[place.pipelineName] ?? 0) + 1;
+  }
   const scoped = deals
     .map((deal) => ({ deal, id: idOf(deal), place: places.get(idOf(deal.deal_stage) ?? '') }))
     .filter(
@@ -429,6 +487,7 @@ export async function importRdDeals(
     options.onProgress?.(done, scoped.length);
     done += 1;
     result.inScope[place.pipeline] += 1;
+    if (place.archive) result.inArchive += 1;
     const already = await db.query.leads.findFirst({
       where: eq(leads.rdDealId, id),
       columns: { id: true },
@@ -568,14 +627,7 @@ export async function importRdDeals(
       // A lead already run from the Wings System (it was born here, or a person
       // moved it) keeps what it has: RD only fills what is still empty.
       const wingsRun = lead.managedBy === 'wings' && !upserted.created;
-      const stageRow = place.pipeline
-        ? await ensureStage(db, {
-            pipeline: place.pipeline,
-            name: place.stage,
-            position: place.order,
-            rdStageId: idOf(deal.deal_stage),
-          })
-        : null;
+      const stageRow = await stageRowOf(db, place, idOf(deal.deal_stage));
       const keepStage = wingsRun && lead.stageId !== null;
       const keepOutcome = wingsRun && lead.won !== null;
       await db
@@ -664,14 +716,7 @@ export async function followRdStages(
     const changed =
       !keepStage && (lead.stage !== place.stage || lead.rdPipeline !== place.pipelineName);
     const ownerEmployeeId = rdOwnerId ? (owners.get(rdOwnerId) ?? null) : null;
-    const stageRow = place.pipeline
-      ? await ensureStage(db, {
-          pipeline: place.pipeline,
-          name: place.stage,
-          position: place.order,
-          rdStageId: idOf(deal.deal_stage),
-        })
-      : null;
+    const stageRow = await stageRowOf(db, place, idOf(deal.deal_stage));
     const outcomeChanged = !keepOutcome && lead.won !== deal.win;
     if (changed || outcomeChanged) {
       await db.insert(leadStageHistory).values({

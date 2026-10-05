@@ -12,7 +12,7 @@ import {
   type MetaLeadDetails,
   type MetaLeadgenEvent,
 } from './meta-leads.js';
-import { ensureStage } from './crm.js';
+import { entryStageOf } from './crm.js';
 import { resolveMetaSource, upsertLead } from './service.js';
 
 /**
@@ -487,7 +487,7 @@ const originFactsOfLead = (lead: typeof leads.$inferSelect): OriginFacts => ({
 
 /** The first stage of each funnel, as RD CRM names them; made once, then the manager owns the list. */
 export async function ensureEntryStage(db: Database, pipeline: LeadPipeline): Promise<void> {
-  await ensureStage(db, { pipeline, name: RD_TARGETS[pipeline].stage, position: 1 });
+  await entryStageOf(db, pipeline);
 }
 
 type RdOutcome =
