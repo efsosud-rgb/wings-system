@@ -147,6 +147,11 @@ const schema = z.object({
     'must be a whole number of hours',
   ),
   /** CRM phase 1: the hourly ingestion follows RD CRM into the Funil (writes leads). Off until Eric approves the first import. */
+  /** RD user ids whose deals keep their owner in the Funil (Eric, 05/10: Eric, Thais, Fernando); unset keeps every linked one. */
+  CRM_RD_OWNER_USER_IDS: optionalString.refine(
+    (value) => value === undefined || /^[A-Za-z0-9]+(\s*,\s*[A-Za-z0-9]+)*$/.test(value.trim()),
+    'must be RD user ids separated by commas',
+  ),
   CRM_RD_FOLLOW_ENABLED: optionalString.refine(
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',

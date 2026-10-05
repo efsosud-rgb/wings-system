@@ -179,6 +179,54 @@ describe('stages (Administração → CRM)', () => {
 });
 
 describe('the rotation and the first-contact task', () => {
+  it('takes sellers, the sales manager and Diretoria as owners and rotation members, never Admin Master', async () => {
+    const seller = await createEmployee(db, { role: 'vendedor_formatacao', sector: 'comercial' });
+    const salesManager = await createEmployee(db, {
+      role: 'gerente_comercial',
+      sector: 'comercial',
+    });
+    const board = await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
+    const admin = await createEmployee(db, { role: 'admin_master', sector: 'diretoria' });
+    const listed = await app.inject({
+      method: 'GET',
+      url: '/crm/sellers',
+      cookies: manager.cookies,
+    });
+    expect(listed.statusCode).toBe(200);
+    const ids = listed.json<{ sellers: { id: string }[] }>().sellers.map((s) => s.id);
+    expect(ids).toEqual(expect.arrayContaining([seller.id, salesManager.id, board.id]));
+    expect(ids).not.toContain(admin.id);
+
+    const members = [seller.id, salesManager.id, board.id].map((employeeId) => ({
+      employeeId,
+      active: true,
+    }));
+    const set = await app.inject({
+      method: 'PUT',
+      url: '/crm/distribution',
+      cookies: manager.cookies,
+      payload: { pipeline: 'formatacao', members },
+    });
+    expect(set.statusCode).toBe(200);
+    const refused = await app.inject({
+      method: 'PUT',
+      url: '/crm/distribution',
+      cookies: manager.cookies,
+      payload: {
+        pipeline: 'formatacao',
+        members: [...members, { employeeId: admin.id, active: true }],
+      },
+    });
+    expect(refused.statusCode).toBe(400);
+    // Leave the Formatação rotation as the other tests expect it: empty.
+    await app.inject({
+      method: 'PUT',
+      url: '/crm/distribution',
+      cookies: manager.cookies,
+      payload: { pipeline: 'formatacao', members: [] },
+    });
+  });
+
   it('hands new leads to the active sellers in turn, each with a first-contact task; a paused one gets none', async () => {
     const set = await app.inject({
       method: 'PUT',
