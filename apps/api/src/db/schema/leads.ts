@@ -195,7 +195,7 @@ export const leadSourceRules = pgTable(
   {
     tenantId: tenantId(),
     id: uuid('id').primaryKey().defaultRandom(),
-    /** landing_page | meta_form | meta_campaign */
+    /** landing_page | meta_form | meta_campaign | tiktok_form | tiktok_campaign */
     kind: text('kind').notNull(),
     /** Normalised: lower-case, no scheme, no trailing slash. */
     pattern: text('pattern').notNull(),

@@ -212,7 +212,7 @@ export async function markRead(db: Database, employeeId: string, ids: string[] |
 }
 
 /** Where a new lead can arrive from for the arrival notices (not imports, not the RD mirror). */
-const ARRIVAL_SOURCES = new Set(['meta_lead_ads', 'rd_station', 'site_form']);
+const ARRIVAL_SOURCES = new Set(['meta_lead_ads', 'tiktok_lead_ads', 'rd_station', 'site_form']);
 
 /** Who hears of a lead with no owner: Admin Master, Diretoria and the commercial managers (sector manager of Comercial, or the sales manager role); active only. */
 async function managersAndBoard(db: Database): Promise<string[]> {

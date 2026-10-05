@@ -20,6 +20,7 @@ export const LEAD_SOURCES = [
   'rd_station',
   'whatsapp_link',
   'meta_lead_ads',
+  'tiktok_lead_ads',
   'manual',
   'rd_crm',
   'site_form',
@@ -31,6 +32,7 @@ export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
   rd_station: 'Landing page (RD Station)',
   whatsapp_link: 'WhatsApp (link rastreável)',
   meta_lead_ads: 'Meta Lead Ads',
+  tiktok_lead_ads: 'TikTok Lead Ads',
   manual: 'Cadastro manual',
   rd_crm: 'RD CRM (importado)',
   site_form: 'Formulário do site',
@@ -67,7 +69,12 @@ export const LEAD_LINK_CHANNELS = ['instagram', 'site', 'linktree', 'linkedin', 
 export type LeadLinkChannel = (typeof LEAD_LINK_CHANNELS)[number];
 
 /** Every channel a lead may carry: the link channels plus the two that come from a platform. */
-export const LEAD_CHANNELS = [...LEAD_LINK_CHANNELS, 'landing_page', 'meta_lead_ads'] as const;
+export const LEAD_CHANNELS = [
+  ...LEAD_LINK_CHANNELS,
+  'landing_page',
+  'meta_lead_ads',
+  'tiktok_lead_ads',
+] as const;
 export type LeadChannel = (typeof LEAD_CHANNELS)[number];
 
 export const LEAD_CHANNEL_LABELS: Record<LeadChannel, string> = {
@@ -78,6 +85,7 @@ export const LEAD_CHANNEL_LABELS: Record<LeadChannel, string> = {
   tiktok: 'TikTok',
   landing_page: 'Landing page',
   meta_lead_ads: 'Meta Lead Ads',
+  tiktok_lead_ads: 'TikTok Lead Ads',
 };
 
 // --- LGPD ---------------------------------------------------------------------
@@ -302,13 +310,21 @@ export function whatsappLinkOf(phone: string, code: string, brand?: string | nul
 
 // --- source rules: landing page / Meta form -> client -------------------------
 
-export const LEAD_SOURCE_RULE_KINDS = ['landing_page', 'meta_form', 'meta_campaign'] as const;
+export const LEAD_SOURCE_RULE_KINDS = [
+  'landing_page',
+  'meta_form',
+  'meta_campaign',
+  'tiktok_form',
+  'tiktok_campaign',
+] as const;
 export type LeadSourceRuleKind = (typeof LEAD_SOURCE_RULE_KINDS)[number];
 
 export const LEAD_SOURCE_RULE_KIND_LABELS: Record<LeadSourceRuleKind, string> = {
   landing_page: 'Landing page (slug, domínio ou identificador da conversão)',
   meta_form: 'Formulário do Meta Lead Ads (id do formulário)',
   meta_campaign: 'Campanha do Meta (id da campanha)',
+  tiktok_form: 'Formulário do TikTok Lead Ads (id do formulário)',
+  tiktok_campaign: 'Campanha do TikTok (id da campanha)',
 };
 
 export interface LeadSourceRule {

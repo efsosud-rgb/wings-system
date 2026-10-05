@@ -27,6 +27,7 @@ Três regras valem para tudo aqui:
 | Landing page (RD) | `POST /integrations/rd-station/webhook`     | `RD_STATION_WEBHOOK_SECRET` (header ou `?secret=`) | regra `landing_page` (slug, domínio ou identificador) | consentimento na LP (`legal_bases` do RD, senão `consent`) |
 | WhatsApp (link)   | `POST /integrations/zapi/webhook`           | `ZAPI_WEBHOOK_SECRET` (header ou `?secret=`) | o link rastreável cujo código abre a mensagem | diligências pré-contratuais (art. 7º, V): a pessoa escreveu primeiro |
 | Meta Lead Ads     | `GET`/`POST /integrations/meta/leadgen/webhook` | `META_APP_SECRET` (assinatura `X-Hub-Signature-256`) e `META_LEADGEN_VERIFY_TOKEN` | regra `meta_form` (id do formulário), senão `meta_campaign` | consentimento no formulário do Meta |
+| TikTok Lead Ads   | `POST /integrations/tiktok/leads/webhook` | `TIKTOK_LEADS_WEBHOOK_SECRET` (cabeçalho `X-Wings-Webhook-Secret`, bearer ou `?secret=`) | regra `tiktok_form`, senão `tiktok_campaign` | consentimento no formulário da TikTok (ver `tiktok-lead-ads.md`) |
 | Manual            | `POST /leads` (`leads.write`)               | sessão                                    | escolhido na tela                              | escolhida na tela, com "onde e quando" |
 
 > ⚠️ **Qual base legal vale para cada porta é decisão do Jurídico.** O sistema
