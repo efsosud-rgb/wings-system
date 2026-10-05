@@ -1,0 +1,306 @@
+/* 3D charts: the scene is a transparent canvas on the card; words are HTML on top. */
+
+.c3d {
+  position: relative;
+  margin: 0;
+  width: 100%;
+  min-width: 0;
+}
+
+.c3d-stage {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+}
+
+.c3d-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: pan-y;
+}
+
+.c3d-canvas:active {
+  cursor: grabbing;
+}
+
+.c3d-canvas:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.c3d-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* A label is a zero-size point at its anchor; the inner span sits beside it. */
+.c3d-label {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  will-change: transform;
+}
+
+.c3d-label > span {
+  position: absolute;
+  white-space: nowrap;
+  font-size: var(--text-sm);
+  line-height: 1.2;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.c3d-align-center > span {
+  transform: translate(-50%, 0);
+}
+
+.c3d-align-above > span {
+  transform: translate(-50%, -100%);
+}
+
+.c3d-align-right > span {
+  transform: translate(0, -50%);
+}
+
+.c3d-align-left > span {
+  transform: translate(-100%, -50%);
+}
+
+.c3d-label-axis > span {
+  color: var(--text-3);
+  font-size: var(--text-xs);
+}
+
+.c3d-label-value > span {
+  font-weight: 600;
+}
+
+.c3d-label-name > span {
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+}
+
+.c3d-tip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: 2;
+  max-width: 260px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--text);
+  color: var(--surface);
+  font-size: var(--text-sm);
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  box-shadow: var(--shadow-2);
+  translate: -50% calc(-100% - 12px);
+}
+
+.c3d-loading {
+  position: absolute;
+  inset: 12px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(90deg, var(--surface-3), var(--surface), var(--surface-3));
+  background-size: 200% 100%;
+  animation: c3d-shimmer 1.2s linear infinite;
+  opacity: 0.6;
+}
+
+@keyframes c3d-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.c3d-table {
+  margin-top: 6px;
+  font-size: var(--text-sm);
+}
+
+.c3d-table > summary {
+  cursor: pointer;
+  color: var(--text-2);
+  width: fit-content;
+}
+
+.c3d-table table {
+  margin-top: 8px;
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.c3d-table th,
+.c3d-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.c3d-table td.num,
+.c3d-table th.num {
+  text-align: right;
+}
+
+/* Indicator cards that lean a little towards the pointer. */
+.kpi3d {
+  transform: perspective(700px) rotateX(var(--tilt-x, 0deg)) rotateY(var(--tilt-y, 0deg))
+    translateZ(0);
+  transition:
+    transform 180ms ease-out,
+    box-shadow 180ms ease-out;
+  will-change: transform;
+}
+
+.kpi3d:hover {
+  box-shadow: var(--shadow-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .c3d-loading {
+    animation: none;
+  }
+  .kpi3d {
+    transform: none;
+    transition: none;
+  }
+}
+
+.c3d-flat-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.c3d-flat-table th,
+.c3d-flat-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.c3d-flat-table .num {
+  text-align: right;
+}
+
+/* ---------- Dashboard › Vendas ---------- */
+
+.sales-funnels {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sales-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.sales-kpi {
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sales-kpi strong {
+  font-size: var(--text-2xl);
+  font-variant-numeric: tabular-nums;
+}
+
+.sales-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.sales-card h2 {
+  font-size: var(--text-base);
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.sales-card-wide {
+  grid-column: 1 / -1;
+}
+
+.sales-empty {
+  padding: 24px 0;
+}
+
+@media (max-width: 760px) {
+  .sales-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.c3d-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0 0 4px;
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm);
+  color: var(--text-2);
+}
+
+.c3d-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.c3d-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+}
+
+.sales-funnels {
+  flex: none;
+  align-self: center;
+}
+
+.sales-funnels .btn {
+  width: auto;
+}
+
+@media (max-width: 760px) {
+  .sales-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .sales-funnels {
+    align-self: flex-start;
+  }
+  .sales-kpi strong {
+    font-size: clamp(17px, 5vw, var(--text-2xl));
+  }
+  .sales-kpis {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  }
+}
+
+.c3d-compact .c3d-label-name {
+  display: none;
+}
+
+.c3d-legend-below {
+  flex-direction: column;
+  margin: 4px 0 0;
+  color: var(--text);
+}

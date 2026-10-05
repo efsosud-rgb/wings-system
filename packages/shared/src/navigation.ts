@@ -44,6 +44,7 @@ export const NAV_ICONS = [
   'headset',
   'settings',
   'globe',
+  'bell',
 ] as const;
 export type NavIcon = (typeof NAV_ICONS)[number];
 
@@ -160,6 +161,15 @@ export const NAVIGATION: readonly NavModule[] = [
         kind: 'crud',
       },
       {
+        path: '/crm-vendas/avisos',
+        label: 'Avisos',
+        icon: 'bell',
+        description: 'Prazos vencidos, negociações paradas e avisos das automações',
+        permission: 'leads.read',
+        status: 'ready',
+        kind: 'crud',
+      },
+      {
         ...soon('/crm-vendas/painel', 'Painel', 'Vendas por funil, marca e vendedor', 'leads.read'),
         icon: 'pie-chart',
       },
@@ -256,7 +266,14 @@ export const NAVIGATION: readonly NavModule[] = [
     icon: 'bar-chart',
     group: 'modulos',
     submodules: [
-      soon('/dashboard/vendas', 'Vendas', 'Resultado comercial consolidado', 'leads.read'),
+      {
+        path: '/dashboard/vendas',
+        label: 'Vendas',
+        description: 'Painel de vendas do CRM: funil, marcas e vendedores',
+        permission: 'leads.read',
+        status: 'ready',
+        kind: 'report',
+      },
       {
         path: '/dashboard/marketing',
         label: 'Marketing',

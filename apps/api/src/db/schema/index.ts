@@ -5,6 +5,7 @@ export * from './audit.js';
 export * from './campaign-leads.js';
 export * from './clients.js';
 export * from './crm.js';
+export * from './crm-automations.js';
 export * from './credentials.js';
 export * from './drive.js';
 export * from './employees.js';

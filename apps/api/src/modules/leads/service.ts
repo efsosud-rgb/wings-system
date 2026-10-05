@@ -45,6 +45,7 @@ import {
 import { activitiesOf } from './activities.js';
 import { attachLeadContact, contactsOfLead, findOrCreateCompany } from './contacts.js';
 import {
+  announceStageEntered,
   ensureFirstContactTask,
   entryStageOf,
   nextInRotation,
@@ -320,6 +321,20 @@ function fillGaps(existing: LeadRow, incoming: IncomingLead): Partial<typeof lea
  * A found lead whose research never ran, or failed, gets one too.
  */
 export async function upsertLead(db: Database, incoming: IncomingLead): Promise<UpsertResult> {
+  const result = await upsertLeadTx(db, incoming);
+  // A lead born in a stage starts that stage's automation rules, as entering it
+  // would; an import and the RD mirror never do (they can bring thousands).
+  if (
+    result.created &&
+    result.lead.stageId &&
+    !incoming.importBatchId &&
+    incoming.source !== 'rd_crm'
+  )
+    await announceStageEntered(result.lead);
+  return result;
+}
+
+async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<UpsertResult> {
   return db.transaction(async (tx) => {
     const phone = normalizeBrazilianPhone(incoming.phone);
     const email = normalizeEmail(incoming.email);
