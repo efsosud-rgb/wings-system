@@ -99,6 +99,35 @@ export async function listStages(
   return rows.map((row) => toStage(row, byStage.get(row.id) ?? 0));
 }
 
+/** Where a new lead lands in each funnel, by RD CRM's names ("Novo Contato", "Sem contato"). */
+export const CRM_ENTRY_STAGES: Record<LeadPipeline, string> = {
+  expansao: 'Novo Contato',
+  formatacao: 'Sem contato',
+};
+
+/**
+ * The stage a lead born here starts in: the funnel's entry stage by name; if a
+ * manager renamed or switched it off, the first active stage; and on an empty
+ * list (a fresh database, as production starts) the entry stage is made, so
+ * no door ever leaves a new lead without a stage. Positions alone do not
+ * decide, because stages learned from RD can share a position.
+ */
+export async function entryStageOf(db: Executor, pipeline: LeadPipeline): Promise<StageRow> {
+  const named = await db.query.crmStages.findFirst({
+    where: and(
+      eq(crmStages.pipeline, pipeline),
+      eq(crmStages.name, CRM_ENTRY_STAGES[pipeline]),
+      eq(crmStages.active, true),
+    ),
+  });
+  if (named) return named;
+  const first = await db.query.crmStages.findFirst({
+    where: and(eq(crmStages.pipeline, pipeline), eq(crmStages.active, true)),
+    orderBy: [asc(crmStages.position), asc(crmStages.name)],
+  });
+  return first ?? ensureStage(db, { pipeline, name: CRM_ENTRY_STAGES[pipeline], position: 1 });
+}
+
 /**
  * The stage row for a name RD CRM (or a person) uses, made on first sight at
  * the given position. The default list of stages is whatever RD has today;

@@ -29,7 +29,6 @@ import { and, asc, desc, eq, gte, isNotNull, isNull, lt, or, sql } from 'drizzle
 import type { Database } from '../../db/client.js';
 import {
   clients,
-  crmStages,
   employees,
   jobs,
   leadEnrichmentLedger,
@@ -40,7 +39,14 @@ import {
   rdCrmDeals,
   rdUserMap,
 } from '../../db/schema/index.js';
-import { ensureFirstContactTask, nextInRotation, notesOf, stageHistoryOf, tasksOf } from './crm.js';
+import {
+  ensureFirstContactTask,
+  entryStageOf,
+  nextInRotation,
+  notesOf,
+  stageHistoryOf,
+  tasksOf,
+} from './crm.js';
 
 export type LeadRow = typeof leads.$inferSelect;
 type Tx = Parameters<Parameters<Database['transaction']>[0]>[0];
@@ -373,12 +379,10 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
     const pipeline = incoming.pipeline ?? null;
     const distribute =
       incoming.distribute ?? (!incoming.importBatchId && incoming.source !== 'rd_crm');
-    const entryStage = pipeline
-      ? await tx.query.crmStages.findFirst({
-          where: and(eq(crmStages.pipeline, pipeline), eq(crmStages.active, true)),
-          orderBy: [asc(crmStages.position), asc(crmStages.name)],
-        })
-      : undefined;
+    const entryStage =
+      pipeline && !incoming.importBatchId && incoming.source !== 'rd_crm'
+        ? await entryStageOf(tx, pipeline)
+        : undefined;
     const assignedTo =
       distribute && pipeline && !incoming.ownerEmployeeId
         ? await nextInRotation(tx, pipeline)
