@@ -12,6 +12,8 @@ export default tseslint.config(
       '**/dist/**',
       '**/node_modules/**',
       '**/coverage/**',
+      // Official brand module, byte-exact to the hand-off (sha256 in docs); never reformatted or edited here
+      'apps/web/src/brand/wings-logo3d.js',
       '.claude/**',
       '.agents/**',
       '.codex/**',

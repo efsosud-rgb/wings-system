@@ -4,7 +4,8 @@ import { useForm } from 'react-hook-form';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { useLogin, useSession } from '../api/auth.js';
 import { ApiError } from '../api/client.js';
-import { Alert, AuthCard, Button, Field, Input } from '../components/ui.js';
+import { LoginShell } from '../brand/LoginShell.js';
+import { Alert, Button, Field, Input } from '../components/ui.js';
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -26,7 +27,7 @@ export function LoginPage() {
   const failure = login.error instanceof ApiError ? login.error : null;
 
   return (
-    <AuthCard title="Entrar" subtitle="Acesse com seu e-mail corporativo">
+    <LoginShell title="Entrar" subtitle="Acesse com seu e-mail corporativo">
       <form onSubmit={onSubmit} noValidate>
         <Field label="E-mail" error={errors.email?.message}>
           <Input type="email" autoComplete="username" autoFocus {...register('email')} />
@@ -52,6 +53,6 @@ export function LoginPage() {
       <p className="auth-footer">
         <Link to="/esqueci-senha">Esqueci minha senha</Link>
       </p>
-    </AuthCard>
+    </LoginShell>
   );
 }
