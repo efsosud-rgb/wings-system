@@ -2,6 +2,7 @@ import {
   EMPTY_FACTS,
   INACTIVE_OWNER,
   LEAD_PIPELINES,
+  NO_OWNER,
   landingPageKeysOf,
   matchSourceRule,
   normalizeBrazilianPhone,
@@ -778,6 +779,7 @@ export function listConditions(filter: LeadListFilter) {
   }
   if (filter.ownerEmployeeId) conditions.push(eq(leads.ownerEmployeeId, filter.ownerEmployeeId));
   if (filter.owner === INACTIVE_OWNER) conditions.push(ownerInactive);
+  else if (filter.owner === NO_OWNER) conditions.push(isNull(leads.ownerEmployeeId));
   else if (filter.owner) conditions.push(eq(leads.ownerEmployeeId, filter.owner));
   if (filter.clientId) conditions.push(eq(leads.clientId, filter.clientId));
   if (filter.source) conditions.push(eq(leads.source, filter.source));

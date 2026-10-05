@@ -1,6 +1,8 @@
 import {
   INACTIVE_OWNER,
   INACTIVE_OWNER_LABEL,
+  NO_OWNER,
+  NO_OWNER_LABEL,
   LEAD_OUTCOME_LABELS,
   LEAD_OUTCOMES,
   LEAD_PIPELINE_LABELS,
@@ -47,7 +49,7 @@ import {
   isPast,
   money,
   moneyShort,
-  stageHue,
+  stageTone,
 } from './format.js';
 
 /**
@@ -97,7 +99,8 @@ export function DealsPage() {
     }
     return next;
   }, [params]);
-  const tab = params.get('aba') ?? (filter.mine ? 'mine' : 'all');
+  const tab =
+    params.get('aba') ?? (filter.mine ? 'mine' : filter.owner === NO_OWNER ? 'unowned' : 'all');
 
   const update = (patch: Record<string, string | undefined>) => {
     const next = new URLSearchParams(params);
@@ -129,12 +132,14 @@ export function DealsPage() {
   const [advanced, setAdvanced] = useState(false);
   const [taskFor, setTaskFor] = useState<{ id: string; name: string | null } | null>(null);
   const activeFilters = FILTER_KEYS.filter(
-    (key) => key !== 'sort' && key !== 'mine' && filter[key],
+    (key) =>
+      key !== 'sort' && key !== 'mine' && filter[key] && !(key === 'owner' && tab === 'unowned'),
   ).length;
 
   const applyTab = (next: string) => {
-    if (next === 'all') update({ aba: 'all', mine: undefined });
-    else if (next === 'mine') update({ aba: 'mine', mine: 'true' });
+    if (next === 'all') update({ aba: 'all', mine: undefined, owner: undefined });
+    else if (next === 'mine') update({ aba: 'mine', mine: 'true', owner: undefined });
+    else if (next === 'unowned') update({ aba: 'unowned', mine: undefined, owner: NO_OWNER });
     else {
       const saved = myViews.find((item) => item.id === next);
       if (!saved) return;
@@ -258,6 +263,15 @@ export function DealsPage() {
         >
           Minhas
         </button>
+        <button
+          type="button"
+          className={`crm-tab${tab === 'unowned' ? ' is-active' : ''}`}
+          onClick={() => applyTab('unowned')}
+          title="Negociações sem vendedor, como as que vieram do RD sem dono"
+        >
+          {NO_OWNER_LABEL}
+        </button>
+
         {myViews.map((saved) => (
           <button
             key={saved.id}
@@ -417,6 +431,7 @@ function Filters({
           onChange={(e) => set('owner', e.target.value)}
         >
           <option value="">Dono: todos</option>
+          <option value={NO_OWNER}>{NO_OWNER_LABEL}</option>
           <option value={INACTIVE_OWNER}>{INACTIVE_OWNER_LABEL}</option>
           {sellers.map((seller) => (
             <option key={seller.id} value={seller.id}>
@@ -711,11 +726,7 @@ function Column({
     >
       <div
         className={`crm-col-head${column.stage ? '' : ' is-none'}`}
-        style={
-          column.stage
-            ? ({ '--arrow': stageHue(column.stage.position) } as React.CSSProperties)
-            : undefined
-        }
+        style={column.stage ? (stageTone(column.stage.position) as React.CSSProperties) : undefined}
         title={column.stage ? `${column.stage.probability}% de chance de fechar` : undefined}
       >
         <div className="crm-col-title">

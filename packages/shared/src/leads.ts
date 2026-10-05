@@ -873,6 +873,9 @@ export interface FunnelSummary {
 /** The owner filter's value for deals with no active owner of ours. */
 export const INACTIVE_OWNER = 'inactive';
 export const INACTIVE_OWNER_LABEL = 'Dono inativo';
+/** The owner filter's value for deals nobody owns (e.g. brought from RD without a seller of ours). */
+export const NO_OWNER = 'none';
+export const NO_OWNER_LABEL = 'Sem dono';
 
 export const LEAD_OUTCOMES = ['open', 'won', 'lost'] as const;
 export type LeadOutcome = (typeof LEAD_OUTCOMES)[number];
@@ -991,10 +994,11 @@ export const leadListQuerySchema = z.object({
     .max(120)
     .optional()
     .or(z.literal('').transform(() => undefined)),
-  /** An employee id, or `inactive` for deals with an inactive owner (no one is reassigned). */
+  /** An employee id, `inactive` for deals with an inactive owner (no one is reassigned), or `none` for deals with no owner. */
   owner: z
     .uuid()
     .or(z.literal(INACTIVE_OWNER))
+    .or(z.literal(NO_OWNER))
     .optional()
     .or(z.literal('').transform(() => undefined)),
   outcome: z

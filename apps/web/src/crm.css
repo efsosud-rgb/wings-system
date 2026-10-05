@@ -360,7 +360,7 @@
   flex-direction: column;
   min-height: 0;
   border-radius: var(--radius-md);
-  background: var(--surface);
+  background: var(--surface-3);
   border: 1px solid transparent;
   transition: border-color var(--duration-fast) var(--ease);
 }
@@ -370,8 +370,9 @@
 /* the arrow: Bitrix-like, one hue per stage */
 .crm-col-head {
   --arrow: var(--stage-1);
+  --arrow-fg: var(--stage-1-fg);
   position: relative;
-  color: var(--stage-fg);
+  color: var(--arrow-fg);
   background: var(--arrow);
   padding: var(--space-2) var(--space-3) var(--space-2) var(--space-3);
   margin-right: 10px;
@@ -393,7 +394,7 @@
 }
 .crm-col-head.is-none {
   --arrow: var(--surface-3);
-  color: var(--text-2);
+  --arrow-fg: var(--text-2);
 }
 .crm-col-title {
   display: flex;
@@ -466,6 +467,7 @@
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-1);
   padding: var(--space-2) var(--space-3);
   cursor: grab;
   transition:
@@ -810,7 +812,7 @@
 .crm-modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.6);
+  background: var(--backdrop);
   display: grid;
   place-items: center;
   z-index: 50;
@@ -920,6 +922,7 @@
 }
 .crm-stagebar button {
   --arrow: var(--surface-3);
+  --arrow-fg: var(--text-2);
   position: relative;
   flex: 1 0 auto;
   min-width: 120px;
@@ -938,11 +941,11 @@
   clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 0 100%);
 }
 .crm-stagebar button.is-done {
-  color: var(--stage-fg);
+  color: var(--arrow-fg);
   opacity: 0.85;
 }
 .crm-stagebar button.is-current {
-  color: var(--stage-fg);
+  color: var(--arrow-fg);
   font-weight: var(--weight-semibold);
 }
 .crm-stagebar button:disabled {
@@ -968,6 +971,7 @@
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
   padding: var(--space-3) var(--space-4);
   display: grid;
   gap: var(--space-2);
@@ -1009,6 +1013,11 @@
   display: flex;
   gap: var(--space-1);
   border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.crm-record-tabs button {
+  white-space: nowrap;
 }
 .crm-record-tabs button {
   background: none;

@@ -56,8 +56,11 @@ export function dueLabel(iso: string, now = new Date()): string {
   return date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
 }
 
-/** The hue of a stage by its position, cycling through the eight tokens. */
-export const stageHue = (position: number): string => `var(--stage-${((position - 1) % 8) + 1})`;
+/** The tone of a stage by its position (background and text), cycling through the eight tokens. */
+export const stageTone = (position: number): Record<string, string> => {
+  const n = ((position - 1) % 8) + 1;
+  return { '--arrow': `var(--stage-${n})`, '--arrow-fg': `var(--stage-${n}-fg)` };
+};
 
 export const isPast = (iso: string | null | undefined, now = Date.now()) =>
   Boolean(iso) && new Date(iso!).getTime() < now;

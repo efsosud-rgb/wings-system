@@ -131,6 +131,6 @@ describe('the brand', () => {
     renderShell();
 
     const mark = screen.getByRole('img', { name: 'Wings System' });
-    expect(mark.getAttribute('src')).toBe('/brand/wings-logo-mark.png');
+    expect(mark.getAttribute('src')).toBe('/brand/wings-logo-mark-dark.png');
   });
 });

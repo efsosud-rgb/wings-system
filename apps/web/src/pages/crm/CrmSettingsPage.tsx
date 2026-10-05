@@ -17,7 +17,7 @@ import {
   useStages,
   useUpdateStage,
 } from '../../api/leads.js';
-import { ago, stageHue } from './format.js';
+import { ago, stageTone } from './format.js';
 
 /**
  * CRM Vendas → Configurações: the stages of each funnel with their chance of
@@ -56,7 +56,7 @@ function Stages({ pipeline }: { pipeline: LeadPipeline }) {
           <div key={stage.id} className="crm-stage-row" style={{ opacity: stage.active ? 1 : 0.6 }}>
             <span
               className="crm-stage-dot"
-              style={{ '--arrow': stageHue(stage.position) } as React.CSSProperties}
+              style={stageTone(stage.position) as React.CSSProperties}
             />
             {editing?.id === stage.id ? (
               <form

@@ -45,7 +45,7 @@ import {
   isPast,
   money,
   parseMoney,
-  stageHue,
+  stageTone,
   toLocalInput,
 } from './format.js';
 
@@ -310,7 +310,7 @@ function Head({
               }
               style={
                 index <= currentIndex
-                  ? ({ '--arrow': stageHue(stage.position) } as React.CSSProperties)
+                  ? (stageTone(stage.position) as React.CSSProperties)
                   : undefined
               }
               disabled={
@@ -678,7 +678,7 @@ function Register({ lead }: { lead: Lead }) {
     ['call', 'Ligação', false],
     ['meeting', 'Reunião', false],
     ['email', 'E-mail', false],
-    ['whatsapp', 'WhatsApp (em breve)', true],
+    ['whatsapp', 'WhatsApp · em breve', true],
   ];
   return (
     <section className="crm-panel">
