@@ -44,6 +44,7 @@ export const NAV_ICONS = [
   'headset',
   'settings',
   'globe',
+  'bell',
 ] as const;
 export type NavIcon = (typeof NAV_ICONS)[number];
 
@@ -155,6 +156,15 @@ export const NAVIGATION: readonly NavModule[] = [
         label: 'Tarefas',
         icon: 'check-square',
         description: 'Atrasadas, de hoje e próximas',
+        permission: 'leads.read',
+        status: 'ready',
+        kind: 'crud',
+      },
+      {
+        path: '/crm-vendas/avisos',
+        label: 'Avisos',
+        icon: 'bell',
+        description: 'Prazos vencidos, negociações paradas e avisos das automações',
         permission: 'leads.read',
         status: 'ready',
         kind: 'crud',

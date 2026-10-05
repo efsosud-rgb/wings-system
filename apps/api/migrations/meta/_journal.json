@@ -449,6 +449,20 @@
       "when": 1791217384713,
       "tag": "0065_crm_nucleo",
       "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1791222844471,
+      "tag": "0066_crm_automations",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1791225312156,
+      "tag": "0067_meta_lead_forms",
+      "breakpoints": true
     }
   ]
 }

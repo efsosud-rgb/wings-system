@@ -12,6 +12,7 @@ import { hasPermission, useSession } from '../api/auth.js';
 import { useEmployees } from '../api/employees.js';
 import { SectorSelect } from '../components/SectorSelect.js';
 import { Alert, Button, Input, Select } from '../components/ui.js';
+import { PageHeader } from '../components/PageHeader.js';
 
 const STATUS_LABEL: Record<EmployeeStatus, string> = {
   active: 'Ativo',
@@ -54,19 +55,17 @@ export function EmployeesPage() {
 
   return (
     <>
-      <header className="page-header page-header-row">
-        <div>
-          <h1>Cadastro de Funcionários</h1>
-          <p>
-            {total} {total === 1 ? 'funcionário' : 'funcionários'} no seu escopo de acesso
-          </p>
-        </div>
-        {canCreate && (
-          <Link to="/administracao/usuarios/novo" className="btn btn-primary btn-inline">
-            Novo funcionário
-          </Link>
-        )}
-      </header>
+      <PageHeader
+        title="Usuários e acessos"
+        subtitle={`${total} ${total === 1 ? 'funcionário' : 'funcionários'} no seu escopo de acesso`}
+        actions={
+          canCreate && (
+            <Link to="/administracao/usuarios/novo" className="btn btn-primary btn-inline">
+              Novo funcionário
+            </Link>
+          )
+        }
+      />
 
       <section className="filters">
         <Input

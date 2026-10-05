@@ -2,6 +2,23 @@
 
 05/10/2026 (branch `feat/crm-trabalho`, migração 0064). Decisão do Eric: o **destino principal é o CRM do Wings System** — todo lead de formulário instantâneo da Meta cai sozinho no funil do segmento (Formatação na etapa de entrada "Sem contato", Expansão em "Novo Contato"), com a origem completa, e vai para o vendedor pelo rodízio do funil. O RD CRM recebe uma cópia enquanto durar a transição, **sem travar a entrada no Wings**: se o RD falhar, o lead já está no Wings e a cópia volta para nova tentativa. O histórico dos últimos 90 dias (limite da Meta) entra pelo botão **"Buscar leads da Meta"** (Funil → bloco Meta Lead Ads), acionado pelo Eric.
 
+## Entrada só com a chave (sem webhook), a cada 5 minutos
+
+Branch `feat/leads-meta-polling` (migração 0067). Com `META_LEADS_ACCESS_TOKEN` e **sem** `META_APP_SECRET` nem webhook, os leads entram sozinhos: a cada 5 minutos o processo da API (`meta-poll.ts`, dentro do mesmo laço da fila, com trava de banco entre réplicas) faz:
+
+1. `GET /me/accounts` → as páginas que a chave enxerga (e o token próprio de cada página, usado só para ler as coisas dela); `META_LEADS_PAGE_IDS` (ids, opcional) acrescenta páginas que a chave não liste;
+2. `GET /{página}/leadgen_forms` → todos os formulários, gravados em `meta_lead_forms` (id, nome, status; sem dado pessoal);
+3. `GET /{formulário}/leads` desde a última leitura daquele formulário (`polled_through` menos 30 min de folga). **Na primeira execução volta 90 dias**, o máximo que a Meta guarda;
+4. cada id de lead vai para a fila `meta_leadgen_events` (`leadgen_id` único: **nunca duplica**, venha pelo webhook ou pela leitura) e a fila cria a negociação exatamente como no webhook.
+
+Funil: a regra do Fable manda (`meta_form`, depois `meta_campaign`). **Sem regra**, o nome do formulário decide: contém "formatação" → Formatação; contém o nome de uma marca de Expansão cadastrada → Expansão com a marca; senão → **Formatação com um aviso** (evento `lead.pipeline_guessed` no lead e um aviso em Avisos para a Diretoria, um por formulário). Origem gravada: `utm_source = meta:<plataforma>` (a Meta manda `fb` ou `ig`), campanha (id e nome), conjunto, anúncio, formulário, cidade e **todas as respostas** (`form_answers`, na ficha).
+
+O webhook continua como caminho rápido opcional. Cartão **Administração → Integrações → Fontes de negócios**: "Ligada, a cada 5 min" (e "na hora pelo webhook" se houver), botões **Testar conexão** (páginas, formulários e leads de 90 dias que a chave enxerga, só totais) e **Buscar agora** (uma leitura imediata), ambos `integrations.manage`. `META_LEADS_POLL=false` desliga a leitura periódica.
+
+**Onde a chave entra (Coolify):** recurso **`wings-api-staging`** → Environment Variables → `META_LEADS_ACCESS_TOKEN` (é a mesma variável da produção, no recurso `wings-api-production`, só na janela de produção). A API lê a variável ao iniciar: **depois de salvar, é preciso reiniciar/reimplantar `wings-api-staging`** (`wings-deploy staging` ou o botão Restart). Permissões da chave: `leads_retrieval`, `pages_show_list`, `pages_read_engagement`, `pages_manage_ads`.
+
+**Não verificado ao vivo:** a forma de `/me/accounts` e de `/{página}/leadgen_forms` para a chave de usuário do sistema (lidas com tolerância; se `/me/accounts` vier vazio, "Testar conexão" mostra 0 páginas e `META_LEADS_PAGE_IDS` resolve), e se a leitura do lead pelo id exige token de página em vez do da chave.
+
 ## Como funciona
 
 1. **Webhook** `POST /api/integrations/meta/leadgen/webhook` (campo `leadgen` da Página). Antes de qualquer coisa valida `X-Hub-Signature-256` (HMAC SHA-256 do corpo bruto com `META_APP_SECRET`); assinatura errada → 401 e nada gravado; sem `META_APP_SECRET` → 503. O `GET` do mesmo endereço responde o `hub.challenge` só para `META_LEADGEN_VERIFY_TOKEN`.

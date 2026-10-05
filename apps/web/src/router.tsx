@@ -4,6 +4,7 @@ import { AppShell } from './components/AppShell.js';
 import { LegacyRedirect } from './components/LegacyRedirect.js';
 import { ProtectedRoute } from './components/ProtectedRoute.js';
 import { NoAccess, RequirePermission } from './components/RequirePermission.js';
+import { RouteError } from './components/RouteError.js';
 import { ApprovalDetailPage } from './pages/ApprovalDetailPage.js';
 import { ApprovalsPage } from './pages/ApprovalsPage.js';
 import { ClientRecordPage } from './pages/ClientRecordPage.js';
@@ -21,6 +22,8 @@ import { LandingPagesPage } from './pages/LandingPagesPage.js';
 import { CompaniesPage } from './pages/crm/CompaniesPage.js';
 import { ContactsPage } from './pages/crm/ContactsPage.js';
 import { CrmSettingsPage } from './pages/crm/CrmSettingsPage.js';
+import { AutomationsPage } from './pages/crm/AutomationsPage.js';
+import { NotificationsPage } from './pages/crm/NotificationsPage.js';
 import { DealPage } from './pages/crm/DealPage.js';
 import { DealsPage } from './pages/crm/DealsPage.js';
 import { TasksPage } from './pages/crm/TasksPage.js';
@@ -83,8 +86,11 @@ const SCREENS: Record<string, RouteObject[]> = {
     { path: ':id', element: <CompaniesPage /> },
   ],
   '/crm-vendas/tarefas': [{ index: true, element: <TasksPage /> }],
-  // `automacoes/:pipeline` under Configurações is Sonnet's page (Regras de automação).
-  '/crm-vendas/configuracoes': [{ index: true, element: <CrmSettingsPage /> }],
+  '/crm-vendas/avisos': [{ index: true, element: <NotificationsPage /> }],
+  '/crm-vendas/configuracoes': [
+    { index: true, element: <CrmSettingsPage /> },
+    { path: 'automacoes/:pipeline', element: <AutomationsPage /> },
+  ],
   '/administracao/drive': [{ index: true, element: <DriveTemplatePage /> }],
   '/drive/arquivos': [{ index: true, element: <DrivePage /> }],
   '/gestao/projetos': [{ index: true, element: <ProjectsPage /> }],
@@ -108,6 +114,7 @@ function submoduleRoutes(): RouteObject[] {
 
     return {
       path,
+      errorElement: <RouteError />,
       element: submodule.permission ? (
         <RequirePermission permission={submodule.permission}>
           <ModuleOutlet />
@@ -121,7 +128,7 @@ function submoduleRoutes(): RouteObject[] {
 }
 
 export const router = createBrowserRouter([
-  { path: '/login', element: <LoginPage /> },
+  { path: '/login', element: <LoginPage />, errorElement: <RouteError /> },
   { path: '/esqueci-senha', element: <ForgotPasswordPage /> },
   // Invite and reset links land here; both post to the same endpoint.
   { path: '/definir-senha', element: <SetPasswordPage mode="invite" /> },
@@ -135,6 +142,9 @@ export const router = createBrowserRouter([
         <AppShell />
       </ProtectedRoute>
     ),
+    // A screen that fails to render shows the error inside the shell (each
+    // sub-module has its own errorElement); this one catches what escapes.
+    errorElement: <RouteError />,
     children: [
       { index: true, element: <LandingRoute /> },
       { path: 'sem-acesso', element: <NoAccess /> },
@@ -153,5 +163,5 @@ export const router = createBrowserRouter([
       })),
     ],
   },
-  { path: '*', element: <NotFoundPage /> },
+  { path: '*', element: <NotFoundPage />, errorElement: <RouteError /> },
 ]);
