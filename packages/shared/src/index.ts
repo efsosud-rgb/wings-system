@@ -25,6 +25,7 @@ export * from './integrations/kairogen.js';
 export * from './jobs.js';
 export * from './leads.js';
 export * from './crm.js';
+export * from './sales-panel.js';
 export * from './crm-automations.js';
 export * from './csv.js';
 export * from './campaign-leads.js';

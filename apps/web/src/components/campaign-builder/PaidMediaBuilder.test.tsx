@@ -492,6 +492,10 @@ describe('the paid-media builder', () => {
   });
 
   it('warns when the campaign would not fit under the ceiling', () => {
+    // Only the campaign days inside the current month count: pin "today" to
+    // that month, or the test only passes in September 2026.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-20T15:00:00.000Z'));
     pacing.current = buildPacing({ availableCents: 10_000 });
     render(<PaidMediaBuilder canRequest />);
     type(screen.getByLabelText(/^Início/), '2026-09-20');

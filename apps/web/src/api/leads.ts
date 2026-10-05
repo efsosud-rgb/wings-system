@@ -461,11 +461,17 @@ export function useSetDistribution() {
   });
 }
 
+/** Stages are read on their own and inside the board's columns: both go stale together. */
+function invalidateStages(queryClient: ReturnType<typeof useQueryClient>) {
+  void queryClient.invalidateQueries({ queryKey: ['crm', 'stages'] });
+  void queryClient.invalidateQueries({ queryKey: ['leads', 'board'] });
+}
+
 export function useCreateStage() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: CrmStageCreateInput) => api.post<{ stage: CrmStage }>('/crm/stages', input),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['crm', 'stages'] }),
+    onSuccess: () => invalidateStages(queryClient),
   });
 }
 
@@ -474,7 +480,7 @@ export function useUpdateStage() {
   return useMutation({
     mutationFn: ({ id, ...input }: CrmStageUpdateInput & { id: string }) =>
       api.patch<{ stage: CrmStage }>(`/crm/stages/${id}`, input),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['crm', 'stages'] }),
+    onSuccess: () => invalidateStages(queryClient),
   });
 }
 
@@ -483,6 +489,6 @@ export function useReorderStages() {
   return useMutation({
     mutationFn: (input: CrmStageOrderInput) =>
       api.put<{ stages: CrmStage[] }>('/crm/stages/order', input),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['crm', 'stages'] }),
+    onSuccess: () => invalidateStages(queryClient),
   });
 }
