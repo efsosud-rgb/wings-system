@@ -81,7 +81,10 @@ export function WingsLogo3D({
           transition: 'opacity 0.4s',
         }}
       >
-        <WingsLogo variant={variant === 'dark' ? 'negativo' : 'principal'} height={height * 0.5} />
+        <WingsLogo
+          variant={variant === 'dark' ? 'negativo' : 'principal'}
+          height={Math.min(height * 0.7, 120)}
+        />
       </div>
       {enabled ? (
         <canvas
