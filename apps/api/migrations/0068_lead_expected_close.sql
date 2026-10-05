@@ -1,0 +1,1 @@
+ALTER TABLE "leads" ADD COLUMN "expected_close_at" date;

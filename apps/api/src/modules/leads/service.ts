@@ -593,6 +593,7 @@ export function toLead(
     pipeline: (row.pipeline as LeadPipeline | null) ?? null,
     brand: row.brand,
     valueCents: row.valueCents,
+    expectedCloseAt: row.expectedCloseAt,
     company: extra.company ?? null,
     contacts: extra.contacts ?? [],
     work: {
@@ -845,6 +846,7 @@ export async function listLeads(
         stage: leads.stage,
         won: leads.won,
         valueCents: leads.valueCents,
+        expectedCloseAt: leads.expectedCloseAt,
         companyName: crmCompanies.name,
         city: leads.city,
         campaignName: leads.campaignName,
@@ -886,6 +888,7 @@ export async function listLeads(
       stage: row.stage,
       won: row.won,
       valueCents: row.valueCents,
+      expectedCloseAt: row.expectedCloseAt,
       companyName: row.companyName,
       city: row.city,
       campaignName: row.campaignName,

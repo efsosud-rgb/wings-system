@@ -463,6 +463,13 @@
       "when": 1791225312156,
       "tag": "0067_meta_lead_forms",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1791226444658,
+      "tag": "0068_lead_expected_close",
+      "breakpoints": true
     }
   ]
 }

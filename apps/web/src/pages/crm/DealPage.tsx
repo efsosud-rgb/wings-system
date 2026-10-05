@@ -1,5 +1,6 @@
 import {
   initialsOf,
+  isCloseForecastOverdue,
   LEAD_CALL_OUTCOME_LABELS,
   LEAD_CALL_OUTCOMES,
   LEAD_CHANNEL_LABELS,
@@ -42,6 +43,7 @@ import {
   ago,
   dueLabel,
   formatDateTime,
+  formatDay,
   formatPhone,
   isPast,
   money,
@@ -78,6 +80,7 @@ const EVENT_LABELS: Record<string, string> = {
   'lead.owner_changed': 'Dono alterado',
   'lead.pipeline_changed': 'Funil alterado',
   'lead.value_changed': 'Valor alterado',
+  'lead.expected_close_changed': 'Previsão de fechamento alterada',
   'lead.brand_changed': 'Marca de interesse alterada',
   'lead.company_changed': 'Empresa alterada',
   'lead.contact_linked': 'Contato adicionado',
@@ -155,6 +158,10 @@ function Head({
   const [losing, setLosing] = useState(false);
   const [reason, setReason] = useState('');
   const open = lead.work.won === null;
+  const forecastOverdue = isCloseForecastOverdue({
+    expectedCloseAt: lead.expectedCloseAt,
+    won: lead.work.won,
+  });
   const list = (stages.data?.stages ?? []).filter(
     (stage) => stage.active || stage.id === lead.work.stageId,
   );
@@ -266,6 +273,42 @@ function Head({
           ) : (
             <b>{money(lead.valueCents, true)}</b>
           )}
+        </span>
+        <span className={forecastOverdue ? 'is-overdue' : undefined}>
+          Previsão de fechamento{' '}
+          {canWrite ? (
+            <span className="crm-date-edit">
+              <input
+                type="date"
+                className="crm-inline-edit"
+                aria-label="Previsão de fechamento"
+                value={lead.expectedCloseAt ?? ''}
+                disabled={deal.isPending}
+                onChange={(e) => {
+                  // A date input gives '' while a part is missing and the year
+                  // digit by digit; a full year is the sign the person finished.
+                  const next = e.target.value;
+                  if (next !== '' && Number(next.slice(0, 4)) < 2000) return;
+                  if (next !== (lead.expectedCloseAt ?? ''))
+                    deal.mutate({ expectedCloseAt: next || null });
+                }}
+              />
+              {lead.expectedCloseAt && (
+                <button
+                  type="button"
+                  className="crm-inline-clear"
+                  aria-label="Limpar previsão de fechamento"
+                  disabled={deal.isPending}
+                  onClick={() => deal.mutate({ expectedCloseAt: null })}
+                >
+                  <Icon name="x" size={12} />
+                </button>
+              )}
+            </span>
+          ) : (
+            <b>{formatDay(lead.expectedCloseAt)}</b>
+          )}
+          {forecastOverdue && <span className="crm-forecast-overdue">vencida</span>}
         </span>
         <span>
           Dono{' '}
