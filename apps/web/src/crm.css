@@ -7,7 +7,7 @@
 
 /* ---------- page frame: full height, the board scrolls, not the page ---------- */
 .content:has(> .crm-page) {
-  height: 100vh;
+  height: calc(100vh - var(--topbar-h));
   overflow: hidden;
   padding: 0;
   display: flex;

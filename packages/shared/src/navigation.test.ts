@@ -53,12 +53,16 @@ describe('the tree itself', () => {
     // A ready screen has a backend, so it must be gated. Placeholders have
     // nothing to protect yet.
     for (const submodule of ALL_SUBMODULES) {
+      // Início has nothing of its own to protect: it only lists what the
+      // viewer may already open, so any login may see it.
+      if (submodule.path === '/inicio') continue;
       if (submodule.status === 'ready') expect(submodule.permission).toBeTruthy();
     }
   });
 
   it('carries the modules the business asked for, in order', () => {
     expect(NAVIGATION.map((module) => module.label)).toEqual([
+      'Início',
       'CRM Vendas',
       'Contratos',
       'Formatação',
@@ -122,10 +126,10 @@ describe('who sees what', () => {
 
 describe('where a viewer lands', () => {
   it('opens on the first screen that actually exists for them', () => {
-    // Marketing reaches the traffic studio; Admin Master can open the Funil,
-    // which sits earlier in the tree, so that is where it lands.
-    expect(defaultPathFor(marketing)).toBe('/marketing/trafego-pago-wings');
-    expect(defaultPathFor(adminMaster)).toBe('/crm-vendas/negociacoes');
+    // Início is open to every login and sits first in the tree, so everyone
+    // lands there; the first module screen is one click away.
+    expect(defaultPathFor(marketing)).toBe('/inicio');
+    expect(defaultPathFor(adminMaster)).toBe('/inicio');
   });
 
   it('never lands on a placeholder', () => {
