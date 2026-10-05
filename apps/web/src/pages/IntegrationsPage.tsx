@@ -37,6 +37,7 @@ import {
 import { useMediaProviders, useSaveKairogenPlan } from '../api/media.js';
 import { providerHolding } from '../components/media-studio/ProviderStrip.js';
 import { Alert, Button, Field, Input } from '../components/ui.js';
+import { PageHeader } from '../components/PageHeader.js';
 
 /**
  * Configurações → Integrações. One card per external service the SYSTEM is
@@ -947,13 +948,10 @@ function DealSourcesSection() {
 export function IntegrationsPage() {
   return (
     <>
-      <header className="page-header">
-        <h1>Integrações</h1>
-        <p>
-          Contas de serviços externos ligadas ao sistema. A conexão é uma só, da Wings, e vale para
-          todos os módulos que usam o serviço.
-        </p>
-      </header>
+      <PageHeader
+        title="Integrações"
+        subtitle="Contas de serviços externos ligadas ao sistema. A conexão é uma só, da Wings, e vale para todos os módulos que usam o serviço."
+      />
       <KairogenCard />
       <MediaProviderCards />
       <DealSourcesSection />

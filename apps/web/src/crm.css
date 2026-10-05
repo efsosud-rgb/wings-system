@@ -6,8 +6,13 @@
  */
 
 /* ---------- page frame: full height, the board scrolls, not the page ---------- */
+/* `flex: none`: as an item of the shell's column, `flex: 1` would let the
+   content grow with a tall column (600 cards) instead of keeping the window's
+   height — the page would scroll and the board's scrollbar would hide below. */
 .content:has(> .crm-page) {
+  flex: none;
   height: calc(100vh - var(--topbar-h));
+  height: calc(100dvh - var(--topbar-h));
   overflow: hidden;
   padding: 0;
   display: flex;
@@ -348,17 +353,40 @@
   flex: 1;
   min-height: 0;
   display: flex;
+  align-items: stretch;
   gap: var(--space-3);
   overflow-x: auto;
   overflow-y: hidden;
-  padding: var(--space-2) var(--space-5) var(--space-4);
-  scrollbar-width: thin;
+  /* The horizontal bar sits at the window's bottom edge, always in view. */
+  padding: var(--space-2) var(--space-5) var(--space-2);
+  overscroll-behavior-x: contain;
+  cursor: grab;
+}
+.crm-board.is-panning {
+  cursor: grabbing;
+  user-select: none;
+}
+.crm-board.is-panning * {
+  cursor: grabbing;
+}
+.crm-board::-webkit-scrollbar {
+  height: 10px;
+}
+.crm-board::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--bg);
+}
+.crm-board::-webkit-scrollbar-track {
+  background: var(--bg);
 }
 .crm-col {
   flex: 0 0 272px;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  max-height: 100%;
+  cursor: default;
   border-radius: var(--radius-md);
   background: var(--surface-3);
   border: 1px solid transparent;
@@ -520,11 +548,17 @@
   font-variant-numeric: tabular-nums;
 }
 .crm-card-task {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: var(--text-xs);
   color: var(--text-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.crm-card-task .icon {
+  flex-shrink: 0;
 }
 .crm-card-task.is-late {
   color: var(--danger);

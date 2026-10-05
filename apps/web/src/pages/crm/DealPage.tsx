@@ -37,6 +37,7 @@ import {
   useUpdateTask,
   type LoadedLead,
 } from '../../api/leads.js';
+import { Icon, type IconName } from '../../components/Icon.js';
 import {
   ago,
   dueLabel,
@@ -912,7 +913,7 @@ function Register({ lead }: { lead: Lead }) {
 interface Entry {
   id: string;
   at: string;
-  icon: string;
+  icon: IconName;
   tone: string;
   title: string;
   by: string | null;
@@ -926,7 +927,7 @@ function entriesOf(data: LoadedLead): Entry[] {
     entries.push({
       id: `n${note.id}`,
       at: note.at,
-      icon: '✎',
+      icon: 'edit',
       tone: 'note',
       title: 'Anotação',
       by: note.authorName,
@@ -937,7 +938,7 @@ function entriesOf(data: LoadedLead): Entry[] {
     entries.push({
       id: `a${activity.id}`,
       at: activity.at,
-      icon: call ? '☏' : '◉',
+      icon: call ? 'phone' : 'calendar',
       tone: call ? 'call' : 'meeting',
       title: call
         ? `Ligação · ${activity.outcome ? LEAD_CALL_OUTCOME_LABELS[activity.outcome] : ''}${activity.durationSeconds ? ` · ${Math.round(activity.durationSeconds / 60)} min` : ''}`
@@ -952,7 +953,7 @@ function entriesOf(data: LoadedLead): Entry[] {
       entries.push({
         id: `td${task.id}`,
         at: task.doneAt,
-        icon: '✓',
+        icon: 'check',
         tone: 'task',
         title: `Tarefa concluída · ${task.title}`,
         by: task.doneByName,
@@ -960,7 +961,7 @@ function entriesOf(data: LoadedLead): Entry[] {
     entries.push({
       id: `tc${task.id}`,
       at: task.createdAt,
-      icon: '☐',
+      icon: 'check-square',
       tone: 'task',
       title: `Tarefa criada · ${task.title} · para ${dueLabel(task.dueAt)}`,
       by: task.auto ? 'Sistema' : task.assigneeName,
@@ -970,7 +971,7 @@ function entriesOf(data: LoadedLead): Entry[] {
     entries.push({
       id: `h${item.id}`,
       at: item.at,
-      icon: '→',
+      icon: 'arrow-right',
       tone: 'stage',
       title:
         item.won === true
@@ -1002,7 +1003,7 @@ function entriesOf(data: LoadedLead): Entry[] {
     entries.push({
       id: `e${event.id}`,
       at: event.at,
-      icon: '•',
+      icon: 'more',
       tone: 'event',
       title: EVENT_LABELS[event.kind] ?? 'Atualização',
       by: null,
@@ -1021,7 +1022,7 @@ function Timeline({ data }: { data: LoadedLead }) {
         {entries.map((entry) => (
           <li key={entry.id}>
             <span className={`crm-tl-icon is-${entry.tone}`} aria-hidden="true">
-              {entry.icon}
+              <Icon name={entry.icon} size={13} />
             </span>
             <div>
               <div className="crm-tl-head">
