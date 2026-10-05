@@ -364,6 +364,15 @@ const schema = z.object({
   ),
   /** Reads Lead Ads form answers (leads_retrieval). Falls back to META_WRITE_TOKEN, read-only use. */
   META_LEADS_ACCESS_TOKEN: optionalString,
+  /**
+   * Meta Lead Ads → RD CRM copy during the transition (Eric, 05/10): on when
+   * RD_CRM_API_TOKEN is set, unless "false". Formatação → "Sem contato",
+   * Expansão → "Novo Contato".
+   */
+  META_LEADS_RD_COPY_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
   /** The WhatsApp number the tracked links point at, digits only. Not a secret. */
   WINGS_WHATSAPP_NUMBER: optionalString.refine(
     (value) => value === undefined || /^55\d{10,11}$/.test(value),

@@ -7,6 +7,7 @@ import {
   type LeadEvent,
   type ScoreCriterion,
 } from '@wings/shared';
+import { Fragment } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../api/auth.js';
 import { ApiError } from '../api/client.js';
@@ -25,6 +26,8 @@ const EVENT_LABELS: Record<string, string> = {
   'lead.received.rd_station': 'Conversão recebida do RD Station',
   'lead.received.whatsapp': 'Mensagem recebida no WhatsApp pelo link rastreável',
   'lead.received.meta_lead_ads': 'Cadastro recebido do Meta Lead Ads',
+  'lead.received.site_form': 'Formulário do site enviado',
+  'rd.deal_linked': 'Negócio aberto no RD CRM ligado a este lead',
   'lead.created_manually': 'Cadastrado manualmente',
   'research.queued': 'Pesquisa colocada na fila',
   'research.started': 'Pesquisa iniciada',
@@ -273,6 +276,19 @@ function Origin({ lead }: { lead: Lead }) {
             <dd className="lead-wrap">{lead.firstMessage}</dd>
           </>
         )}
+        {lead.city && (
+          <>
+            <dt>Cidade</dt>
+            <dd>{lead.city}</dd>
+          </>
+        )}
+        {lead.formAnswers &&
+          Object.entries(lead.formAnswers).map(([question, answer]) => (
+            <Fragment key={question}>
+              <dt className="lead-wrap">{question.replace(/_/g, ' ')}</dt>
+              <dd className="lead-wrap">{answer}</dd>
+            </Fragment>
+          ))}
       </dl>
     </fieldset>
   );

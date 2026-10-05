@@ -160,6 +160,9 @@ export interface IncomingLead {
   firstMessage?: string | null;
   whatsappProfileName?: string | null;
   whatsappPhotoUrl?: string | null;
+  city?: string | null;
+  /** A form's other answers (question -> answer), without the contact fields. */
+  formAnswers?: Record<string, string> | null;
   legalBasis?: LeadLegalBasis | null;
   consentedAt?: Date | null;
   consentSource?: string | null;
@@ -252,6 +255,8 @@ function fillGaps(existing: LeadRow, incoming: IncomingLead): Partial<typeof lea
   if (!existing.whatsappPhotoUrl && incoming.whatsappPhotoUrl)
     patch.whatsappPhotoUrl = incoming.whatsappPhotoUrl;
   if (!existing.firstMessage && incoming.firstMessage) patch.firstMessage = incoming.firstMessage;
+  if (!existing.city && incoming.city) patch.city = incoming.city.trim().slice(0, 120);
+  if (!existing.formAnswers && incoming.formAnswers) patch.formAnswers = incoming.formAnswers;
   if (!existing.legalBasis && incoming.legalBasis) {
     patch.legalBasis = incoming.legalBasis;
     patch.consentedAt = incoming.consentedAt ?? null;
@@ -369,6 +374,8 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
         firstMessage: incoming.firstMessage ?? null,
         whatsappProfileName: incoming.whatsappProfileName ?? null,
         whatsappPhotoUrl: incoming.whatsappPhotoUrl ?? null,
+        city: incoming.city?.trim().slice(0, 120) || null,
+        formAnswers: incoming.formAnswers ?? null,
         legalBasis: incoming.legalBasis ?? null,
         consentedAt: incoming.consentedAt ?? null,
         consentSource: incoming.consentSource ?? null,
@@ -455,6 +462,11 @@ export function toLead(
     name: row.name,
     email: row.email,
     phone: row.phone,
+    city: row.city,
+    formAnswers:
+      row.formAnswers && typeof row.formAnswers === 'object'
+        ? (row.formAnswers as Record<string, string>)
+        : null,
     status: 'new',
     ownerEmployeeId: row.ownerEmployeeId,
     firstMessage: row.firstMessage,

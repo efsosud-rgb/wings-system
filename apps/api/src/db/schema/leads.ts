@@ -61,6 +61,14 @@ export const leads = pgTable(
     firstMessage: text('first_message'),
     whatsappProfileName: text('whatsapp_profile_name'),
     whatsappPhotoUrl: text('whatsapp_photo_url'),
+    /** City the person gave (a form field), as typed. */
+    city: text('city'),
+    /**
+     * The other answers of a form (Meta Lead Ads, WhatsApp Flow): question ->
+     * answer, without the contact fields. Personal data: shown on the lead
+     * only, never in an event, an audit row or a log.
+     */
+    formAnswers: jsonb('form_answers'),
     /** LGPD: a LeadLegalBasis, when it was given and where (docs/leads/intake.md). */
     legalBasis: text('legal_basis'),
     consentedAt: timestamp('consented_at', { withTimezone: true }),

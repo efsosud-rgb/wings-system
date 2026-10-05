@@ -12,16 +12,11 @@ import { writeAudit } from '../../lib/audit.js';
 import { linkIntakeDealToLead } from '../expansion/service.js';
 import { tokensMatch } from '../../lib/tokens.js';
 import { shapeOf } from '../media/kairogen-adapter.js';
-import {
-  fetchMetaLead,
-  leadgenEventsOf,
-  metaSignatureValid,
-  MetaLeadFetchError,
-} from './meta-leads.js';
+import { enqueueMetaLeadgenEvents } from './meta-intake.js';
+import { leadgenEventsOf, metaSignatureValid } from './meta-leads.js';
 import { rdAttributionOf } from './rd-attribution.js';
 import {
   resolveLandingPage,
-  resolveMetaSource,
   trackingLinkByCode,
   upsertLead,
   type LeadAttribution,
@@ -411,67 +406,12 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(400).send({ error: 'invalid_json', message: 'Corpo inválido.' });
       const events = leadgenEventsOf(body);
       logShape('meta_leadgen', body, { events: events.length });
-
-      const token = env.META_LEADS_ACCESS_TOKEN ?? env.META_WRITE_TOKEN;
-      const results: { leadId: string; created: boolean; fetched: boolean }[] = [];
-      for (const event of events) {
-        let fetched = false;
-        let details: Awaited<ReturnType<typeof fetchMetaLead>>['details'] | null = null;
-        let fetchError: string | null = null;
-        if (token) {
-          try {
-            const answer = await fetchMetaLead(event.leadgenId, {
-              accessToken: token,
-              fetchImpl: app.wings.platformFetch,
-            });
-            details = answer.details;
-            fetched = true;
-            app.log.info({ msg: 'meta lead fetched', shape: shapeOf(answer.raw) });
-          } catch (error) {
-            fetchError =
-              error instanceof MetaLeadFetchError ? `graph_${error.status}` : 'graph_unreachable';
-            app.log.warn({ msg: 'meta lead fetch failed', reason: fetchError });
-          }
-        } else {
-          fetchError = 'no_token';
-        }
-        const formId = details?.formId ?? event.formId;
-        const campaignId = details?.campaignId ?? null;
-        const client = await resolveMetaSource(db, { formId, campaignId });
-        const result = await upsertLead(db, {
-          source: 'meta_lead_ads',
-          name: details?.name ?? null,
-          email: details?.email ?? null,
-          phone: details?.phone ?? null,
-          clientId: client.clientId,
-          clientMapped: client.mapped,
-          pipeline: client.pipeline,
-          brand: client.brand,
-          channel: 'meta_lead_ads',
-          campaignId,
-          campaignName: details?.campaignName ?? null,
-          formId,
-          externalId: event.leadgenId,
-          legalBasis: 'consent',
-          consentedAt: details?.createdTime ?? event.createdTime ?? new Date(),
-          consentSource: `meta_lead_ads:form:${formId ?? 'desconhecido'}`,
-          consentText:
-            'Formulário de cadastro do Meta Lead Ads, com a política de privacidade do formulário.',
-          event: {
-            kind: 'lead.received.meta_lead_ads',
-            detail: { ruleId: client.ruleId, formId, campaignId, fetched, fetchError },
-          },
-        });
-        await writeAudit(db, {
-          action: result.created ? 'lead.received' : 'lead.merged',
-          entity: 'lead',
-          entityId: result.lead.id,
-          ip: request.ip,
-          metadata: { source: 'meta_lead_ads', clientMapped: client.mapped, fetched },
-        });
-        results.push({ leadId: result.lead.id, created: result.created, fetched });
-      }
-      return reply.send({ received: events.length, leads: results });
+      // Stored and answered at once; the queue (`meta-intake.ts`) reads the
+      // answers from the Graph API, makes the lead and the copy in RD CRM. A
+      // re-sent leadgen id is a no-op here.
+      const queued = await enqueueMetaLeadgenEvents(db, events);
+      if (queued > 0) app.wings.metaLeadKick?.();
+      return reply.send({ received: events.length, queued });
     },
   );
 };

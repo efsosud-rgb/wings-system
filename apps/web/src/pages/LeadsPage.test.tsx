@@ -94,6 +94,8 @@ const lead: Lead = {
   name: 'Ana Souza',
   email: 'ana@example.com',
   phone: '5519999998888',
+  city: null,
+  formAnswers: null,
   status: 'new',
   ownerEmployeeId: null,
   firstMessage: null,

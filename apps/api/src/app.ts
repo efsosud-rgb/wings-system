@@ -49,6 +49,8 @@ declare module 'fastify' {
       cpfCrypto: CpfCrypto;
       /** Set only by tests, so no test ever reaches a real ad platform. */
       platformFetch?: typeof fetch;
+      /** Set by the server once the Meta Lead Ads queue runs: the webhook pokes it after storing an event. */
+      metaLeadKick?: () => void;
       /** Set only by tests, so no test ever reaches OpenRouter. */
       agentLlm?: AgentLlm;
       /** Set only by tests, so no test ever reaches Kairogen. */

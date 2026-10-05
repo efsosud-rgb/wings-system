@@ -747,6 +747,10 @@ export interface Lead {
   name: string | null;
   email: string | null;
   phone: string | null;
+  /** The city the person gave on a form, as typed; null when none. */
+  city: string | null;
+  /** A form's other answers (question -> answer), without the contact fields; null when none. */
+  formAnswers: Record<string, string> | null;
   status: 'new';
   ownerEmployeeId: string | null;
   firstMessage: string | null;

@@ -32,6 +32,8 @@ export interface MetaLeadgenEvent {
   adId: string | null;
   adgroupId: string | null;
   createdTime: Date | null;
+  /** The change as Meta sent it (ids and times, no answers), kept 90 days in the queue. */
+  raw: unknown;
 }
 
 const asString = (value: unknown): string | null =>
@@ -64,6 +66,7 @@ export function leadgenEventsOf(body: unknown): MetaLeadgenEvent[] {
         adId: asString(value.ad_id),
         adgroupId: asString(value.adgroup_id),
         createdTime: created && !Number.isNaN(created.getTime()) ? created : null,
+        raw: value,
       });
     }
   }
@@ -77,11 +80,22 @@ export interface MetaLeadDetails {
   city: string | null;
   campaignId: string | null;
   campaignName: string | null;
+  adsetId: string | null;
+  adsetName: string | null;
+  adId: string | null;
   adName: string | null;
   formId: string | null;
+  /** fb | ig | ..., as Meta names where the form was shown. */
+  platform: string | null;
   createdTime: Date | null;
   /** True when the lead came from the organic form, not an ad. */
   organic: boolean;
+  /**
+   * The other answers of the form (question name -> answer), without the
+   * name, e-mail, phone and city fields above. Shown to the seller on the
+   * lead; never logged.
+   */
+  answers: Record<string, string>;
 }
 
 interface FieldDatum {
@@ -93,6 +107,17 @@ const NAME_FIELDS = ['full_name', 'name', 'nome', 'nome_completo'];
 const EMAIL_FIELDS = ['email', 'e-mail', 'e_mail'];
 const PHONE_FIELDS = ['phone_number', 'phone', 'telefone', 'whatsapp', 'celular', 'mobile'];
 const CITY_FIELDS = ['city', 'cidade'];
+const CONTACT_FIELDS = new Set([
+  ...NAME_FIELDS,
+  ...EMAIL_FIELDS,
+  ...PHONE_FIELDS,
+  ...CITY_FIELDS,
+  'first_name',
+  'primeiro_nome',
+  'last_name',
+  'sobrenome',
+]);
+const ANSWER_MAX = 500;
 
 function firstValue(data: FieldDatum[], names: string[]): string | null {
   for (const datum of data) {
@@ -114,6 +139,15 @@ export function parseMetaLead(payload: unknown): MetaLeadDetails {
   const name =
     firstValue(data, NAME_FIELDS) ?? (first ? [first, last].filter(Boolean).join(' ') : null);
   const created = typeof body.created_time === 'string' ? new Date(body.created_time) : null;
+  const answers: Record<string, string> = {};
+  for (const datum of data) {
+    const key = (datum.name ?? '').trim();
+    if (!key || CONTACT_FIELDS.has(key.toLowerCase())) continue;
+    const values = (datum.values ?? []).filter(
+      (value): value is string => typeof value === 'string' && value.trim().length > 0,
+    );
+    if (values.length > 0) answers[key.slice(0, 120)] = values.join(', ').slice(0, ANSWER_MAX);
+  }
   return {
     name,
     email: firstValue(data, EMAIL_FIELDS),
@@ -121,10 +155,15 @@ export function parseMetaLead(payload: unknown): MetaLeadDetails {
     city: firstValue(data, CITY_FIELDS),
     campaignId: asString(body.campaign_id),
     campaignName: asString(body.campaign_name),
+    adsetId: asString(body.adset_id),
+    adsetName: asString(body.adset_name),
+    adId: asString(body.ad_id),
     adName: asString(body.ad_name),
     formId: asString(body.form_id),
+    platform: asString(body.platform),
     createdTime: created && !Number.isNaN(created.getTime()) ? created : null,
     organic: body.is_organic === true,
+    answers,
   };
 }
 
