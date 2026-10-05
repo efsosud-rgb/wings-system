@@ -152,6 +152,15 @@ const schema = z.object({
     (value) => value === undefined || /^[A-Za-z0-9]+(\s*,\s*[A-Za-z0-9]+)*$/.test(value.trim()),
     'must be RD user ids separated by commas',
   ),
+  /**
+   * CRM e-mail to the lead: `test` (the default) records the message in the
+   * outbox and sends nothing; `smtp` sends through the Workspace SMTP account.
+   * Only Eric turns it to `smtp`, after the templates are approved.
+   */
+  CRM_EMAIL_MODE: optionalString.refine(
+    (value) => value === undefined || value === 'test' || value === 'smtp',
+    'must be "test" or "smtp"',
+  ),
   CRM_RD_FOLLOW_ENABLED: optionalString.refine(
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',

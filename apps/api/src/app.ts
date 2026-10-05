@@ -28,8 +28,11 @@ import { expansionRoutes } from './modules/expansion/routes.js';
 import { kairogenRoutes } from './modules/integrations/kairogen/routes.js';
 import { landingPageRoutes } from './modules/leads/landing-pages.js';
 import { rdUserRoutes } from './modules/leads/rd-users.js';
-import { configureCrm } from './modules/leads/crm.js';
+import { configureCrm, onStageEnteredHook } from './modules/leads/crm.js';
+import { onStageEntered } from './modules/leads/automations.js';
+import { createCrmMailTransport } from './modules/leads/crm-mail.js';
 import { crmRoutes } from './modules/leads/crm-routes.js';
+import { automationRoutes } from './modules/leads/automation-routes.js';
 import { nucleoRoutes } from './modules/leads/nucleo-routes.js';
 import { leadRoutes } from './modules/leads/routes.js';
 import { siteFormRoutes } from './modules/leads/site-forms.js';
@@ -123,6 +126,11 @@ export async function buildApp(deps: {
   if (deps.env.CRM_FIRST_CONTACT_SLA_HOURS) {
     configureCrm({ firstContactSlaHours: Number(deps.env.CRM_FIRST_CONTACT_SLA_HOURS) });
   }
+  // Regras de automação: a deal entering a stage starts that stage's rules.
+  const crmMail = createCrmMailTransport(deps.env);
+  onStageEnteredHook(async (lead) => {
+    await onStageEntered(deps.db, lead, { mail: crmMail });
+  });
 
   app.decorate('wings', {
     env: deps.env,
@@ -194,6 +202,7 @@ export async function buildApp(deps: {
   await app.register(roadmapRoutes);
   await app.register(leadRoutes);
   await app.register(crmRoutes);
+  await app.register(automationRoutes);
   await app.register(nucleoRoutes);
   await app.register(rdUserRoutes);
   await app.register(landingPageRoutes);
