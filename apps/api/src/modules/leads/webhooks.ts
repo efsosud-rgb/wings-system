@@ -14,6 +14,7 @@ import { tokensMatch } from '../../lib/tokens.js';
 import { shapeOf } from '../media/kairogen-adapter.js';
 import { enqueueMetaLeadgenEvents } from './meta-intake.js';
 import { leadgenEventsOf, metaSignatureValid } from './meta-leads.js';
+import { ingestTikTokLeads, secretMatches, tiktokLeadsIn } from './tiktok-leads.js';
 import { rdAttributionOf } from './rd-attribution.js';
 import {
   resolveLandingPage,
@@ -183,6 +184,36 @@ export function zapiInboundOf(body: unknown): ZapiInbound {
     fromMe: root.fromMe === true,
     isGroup: root.isGroup === true,
   };
+}
+
+// --- TikTok Lead Ads ------------------------------------------------------------------
+
+/** The secret in the header, as a bearer token, or in `?secret=` (Zapier and TikTok both can set one of them). */
+function tiktokSecretOf(request: FastifyRequest): string | undefined {
+  const header = request.headers['x-wings-webhook-secret'];
+  const fromHeader = Array.isArray(header) ? header[0] : header;
+  const bearer = /^Bearer\s+(.+)$/i.exec(request.headers.authorization ?? '')?.[1];
+  const fromQuery = (request.query as { secret?: unknown } | undefined)?.secret;
+  return fromHeader ?? bearer ?? (typeof fromQuery === 'string' ? fromQuery : undefined);
+}
+
+/** JSON, or the form-encoded body Zapier's Webhooks sends by default. null = unreadable. */
+export function tiktokBodyOf(raw: unknown, contentType: string | undefined): unknown {
+  if (!Buffer.isBuffer(raw)) return raw ?? {};
+  const text = raw.toString('utf8').trim();
+  if (text === '') return {};
+  const form = () => {
+    if (!text.includes('=')) return null;
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of new URLSearchParams(text)) out[key] = value;
+    return Object.keys(out).length > 0 ? out : null;
+  };
+  if (contentType?.includes('x-www-form-urlencoded')) return form();
+  try {
+    return JSON.parse(text);
+  } catch {
+    return form();
+  }
 }
 
 // --- the plugin --------------------------------------------------------------------
@@ -412,6 +443,38 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
       const queued = await enqueueMetaLeadgenEvents(db, events);
       if (queued > 0) app.wings.metaLeadKick?.();
       return reply.send({ received: events.length, queued });
+    },
+  );
+
+  // --- TikTok Lead Ads (TikTok's own webhook, or Zapier) ------------------------------------
+
+  app.post(
+    '/integrations/tiktok/leads/webhook',
+    { config: { rateLimit } },
+    async (request, reply) => {
+      if (!env.TIKTOK_LEADS_WEBHOOK_SECRET) return unavailable(reply, 'O webhook do TikTok');
+      if (!secretMatches(tiktokSecretOf(request), env.TIKTOK_LEADS_WEBHOOK_SECRET)) {
+        return reply.status(401).send({ error: 'bad_secret', message: 'Segredo inválido.' });
+      }
+      const body = tiktokBodyOf(request.body, request.headers['content-type']);
+      if (body === null)
+        return reply.status(400).send({ error: 'invalid_body', message: 'Corpo inválido.' });
+      const found = tiktokLeadsIn(body);
+      logShape('tiktok_leads', body, { leads: found.length });
+      const result = await ingestTikTokLeads(
+        {
+          db,
+          rdCrmToken: env.RD_CRM_API_TOKEN ?? null,
+          expansionOwnerId: env.EXPANSION_OWNER_RD_USER_ID ?? null,
+          rdCopyEnabled: env.TIKTOK_LEADS_RD_COPY_ENABLED === 'true',
+          rdFetch: app.wings.rdFetch,
+          log: (facts) => app.log.info(facts),
+        },
+        found,
+        { ip: request.ip },
+      );
+      // A failure is the sender's cue to try again; the lead id makes the repeat harmless.
+      return reply.status(result.failed > 0 ? 500 : 200).send(result);
     },
   );
 };

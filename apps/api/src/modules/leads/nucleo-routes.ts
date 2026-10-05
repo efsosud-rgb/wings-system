@@ -575,11 +575,13 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
       : metaWebhook
         ? 'Formulários do Facebook e Instagram entram sozinhos, na hora, pelo webhook.'
         : 'Falta a chave da Meta; os formulários não entram sozinhos.';
+    const tiktokOn = Boolean(env.TIKTOK_LEADS_WEBHOOK_SECRET);
     const rdOn = Boolean(env.RD_STATION_WEBHOOK_SECRET);
     const whatsappOn = Boolean(env.ZAPI_WEBHOOK_SECRET && env.WINGS_WHATSAPP_NUMBER);
     return reply.send({
       sources: [
         { key: 'meta', name: 'Meta Lead Ads', state: metaOn ? 'on' : 'off', note: metaNote, ...of('meta_lead_ads') },
+        { key: 'tiktok', name: 'TikTok Lead Ads', state: tiktokOn ? 'on' : 'off', note: tiktokOn ? 'Formulários da TikTok entram na hora, pelo webhook (TikTok ou Zapier).' : 'Falta o segredo do webhook; os formulários da TikTok não entram sozinhos.', ...of('tiktok_lead_ads') },
         { key: 'site', name: 'Formulário do site', state: 'on', note: 'As páginas com formulário próprio entram na hora.', ...of('site_form') },
         { key: 'rd', name: 'RD Station (landing pages)', state: rdOn ? 'on' : 'off', note: rdOn ? 'As conversões das landing pages entram pelo RD.' : 'Falta ligar o RD Station; as conversões não entram sozinhas.', ...of('rd_station', 'rd_crm') },
         { key: 'whatsapp', name: 'WhatsApp', state: whatsappOn ? 'on' : 'soon', note: whatsappOn ? 'Mensagens pelos links rastreáveis entram sozinhas.' : 'Em breve: as conversas do WhatsApp da Wings entrarão aqui.', ...of('whatsapp_link') },

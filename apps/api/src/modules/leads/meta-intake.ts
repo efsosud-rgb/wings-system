@@ -57,6 +57,8 @@ const RD_TARGETS: Record<LeadPipeline, { pipeline: string; stage: string }> = {
 };
 /** RD CRM "Origem" names tried for a Lead Ads deal, first that exists wins; none invented. */
 const RD_SOURCE_CANDIDATES = ['Meta Lead Ads', 'Facebook Lead Ads', 'Lead Ads', 'Facebook Ads'];
+/** Same for a TikTok Lead Ads deal. */
+export const RD_TIKTOK_SOURCE_CANDIDATES = ['TikTok Lead Ads', 'TikTok Ads', 'TikTok'];
 
 export interface MetaIntakeDeps {
   db: Database;
@@ -483,7 +485,11 @@ async function processOne(
 }
 
 /** What the RD deal's OBS says about where the lead came from: ids and ad names, never the person. */
-interface OriginFacts {
+export interface OriginFacts {
+  /** What the OBS says first; Meta Lead Ads when absent. */
+  label?: string;
+  /** RD CRM "Origem" names to try, in order; Meta's list when absent. */
+  sourceCandidates?: readonly string[];
   platform: string | null;
   formId: string | null;
   campaignId: string | null;
@@ -525,7 +531,7 @@ export async function ensureEntryStage(db: Database, pipeline: LeadPipeline): Pr
   await entryStageOf(db, pipeline);
 }
 
-type RdOutcome =
+export type RdOutcome =
   | 'created'
   | 'existing_deal'
   | 'no_pipeline'
@@ -541,8 +547,8 @@ type RdOutcome =
  * has a deal, or whose contact has an open one in RD, gets no second deal.
  * One POST, never retried: an answer lost on the way leaves `unknown`.
  */
-async function copyToRd(
-  deps: MetaIntakeDeps,
+export async function copyToRd(
+  deps: Pick<MetaIntakeDeps, 'db' | 'expansionOwnerId'>,
   input: {
     crm: RdCrm | null;
     rdMap: CrmMap | null;
@@ -552,6 +558,8 @@ async function copyToRd(
     brand: string | null;
     person: { name: string | null; email: string | null; phone: string | null };
     origin: OriginFacts;
+    /** The `via` the timeline records; Meta's when absent. */
+    via?: string;
   },
 ): Promise<{ outcome: RdOutcome; dealId: string | null }> {
   if (input.rdDealId) return { outcome: 'existing_deal', dealId: input.rdDealId };
@@ -569,7 +577,7 @@ async function copyToRd(
   }
   const open = contact?.deals.find((deal) => deal.win === null);
   if (open) {
-    await recordDeal(deps.db, input.leadId, open.id, input.pipeline, 'rd.deal_linked');
+    await recordDeal(deps.db, input.leadId, open.id, input.pipeline, 'rd.deal_linked', input.via);
     return { outcome: 'existing_deal', dealId: open.id };
   }
 
@@ -582,7 +590,7 @@ async function copyToRd(
     // The POST may have gone through: nobody retries it (a duplicate in RD is worse).
     return { outcome: 'unknown', dealId: null };
   }
-  await recordDeal(deps.db, input.leadId, dealId, input.pipeline, 'rd.deal_created');
+  await recordDeal(deps.db, input.leadId, dealId, input.pipeline, 'rd.deal_created', input.via);
   return { outcome: 'created', dealId };
 }
 
@@ -606,7 +614,9 @@ function dealFor(
   if (input.brand && brandField) customFields.push({ id: brandField, value: input.brand });
   const obsField = map.customFields.get('OBS');
   if (obsField) customFields.push({ id: obsField, value: describeOrigin(input.origin) });
-  const sourceName = RD_SOURCE_CANDIDATES.find((candidate) => map.sources.has(candidate));
+  const sourceName = (input.origin.sourceCandidates ?? RD_SOURCE_CANDIDATES).find((candidate) =>
+    map.sources.has(candidate),
+  );
   const campaignId = input.origin.campaignName
     ? (map.campaigns.get(input.origin.campaignName) ?? null)
     : null;
@@ -625,7 +635,7 @@ function dealFor(
 /** The OBS field of the RD deal: where the lead came from, ids and names of the ad, never the person. */
 export function describeOrigin(details: OriginFacts): string {
   const parts = [
-    'Meta Lead Ads',
+    details.label ?? 'Meta Lead Ads',
     details.platform && `plataforma=${details.platform}`,
     details.formId && `formulário=${details.formId}`,
     details.campaignName && `campanha=${details.campaignName}`,
@@ -645,6 +655,7 @@ async function recordDeal(
   dealId: string,
   pipeline: LeadPipeline,
   kind: 'rd.deal_created' | 'rd.deal_linked',
+  via = 'meta_lead_ads',
 ): Promise<void> {
   await db
     .update(leads)
@@ -653,7 +664,7 @@ async function recordDeal(
   await db.insert(leadEvents).values({
     leadId,
     kind,
-    detail: { rdDealId: dealId, pipeline, via: 'meta_lead_ads' },
+    detail: { rdDealId: dealId, pipeline, via },
   });
 }
 

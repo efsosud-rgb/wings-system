@@ -829,6 +829,7 @@ export function initialsOf(name: string | null | undefined): string {
 /** The badge a source gets on a card: short label and a tone the CSS knows. */
 export const LEAD_SOURCE_BADGES: Record<LeadSource, { label: string; tone: string }> = {
   meta_lead_ads: { label: 'Meta', tone: 'meta' },
+  tiktok_lead_ads: { label: 'TikTok', tone: 'tiktok' },
   rd_station: { label: 'RD', tone: 'rd' },
   rd_crm: { label: 'RD', tone: 'rd' },
   site_form: { label: 'Site', tone: 'site' },

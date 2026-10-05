@@ -67,6 +67,7 @@ const EVENT_LABELS: Record<string, string> = {
   'lead.received.rd_station': 'Chegou pela landing page',
   'lead.received.whatsapp': 'Chegou pelo WhatsApp',
   'lead.received.meta_lead_ads': 'Chegou pelo Meta Lead Ads',
+  'lead.received.tiktok_lead_ads': 'Chegou pelo TikTok Lead Ads',
   'lead.received.site_form': 'Chegou pelo formulário do site',
   'lead.created_manually': 'Negociação criada',
   'lead.imported.rd_crm': 'Trazida do RD CRM',
