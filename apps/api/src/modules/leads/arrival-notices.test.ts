@@ -6,7 +6,6 @@ import type { Database } from '../../db/client.js';
 import {
   crmDistributionMembers,
   crmNotifications,
-  employees,
   leadTasks,
 } from '../../db/schema/index.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
@@ -117,7 +116,7 @@ describe('arrival notices', () => {
   });
 });
 
-describe('migration 0069: Thais in the Formatação rotation', () => {
+describe('migration 0069: the vendedor_formatacao people in the Formatação rotation', () => {
   const file = readFileSync(
     new URL('../../../migrations/0069_crm_rotation_formatacao_diretoria.sql', import.meta.url),
     'utf8',
@@ -128,32 +127,40 @@ describe('migration 0069: Thais in the Formatação rotation', () => {
       .select()
       .from(crmDistributionMembers)
       .where(eq(crmDistributionMembers.pipeline, 'formatacao'));
+  const clear = () =>
+    db.delete(crmDistributionMembers).where(eq(crmDistributionMembers.pipeline, 'formatacao'));
 
-  it('does not fail when she is not in the database, and leaves the rotation empty', async () => {
-    await db
-      .delete(crmDistributionMembers)
-      .where(eq(crmDistributionMembers.pipeline, 'formatacao'));
+  it('does not fail when nobody has the role, and leaves the rotation empty', async () => {
+    await clear();
+    await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
+    await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
     await run();
     expect(await members()).toHaveLength(0);
   });
 
-  it('adds her when the rotation is empty, even as Diretoria, and a second run changes nothing', async () => {
-    const thais = await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
-    await db.update(employees).set({ fullName: 'Thaís Exemplo' }).where(eq(employees.id, thais.id));
+  it('adds the active vendedor_formatacao (not Diretoria, not other sellers, not inactive), once', async () => {
+    await clear();
+    const daniela = await createEmployee(db, { role: 'vendedor_formatacao', sector: 'comercial' });
+    await createEmployee(db, {
+      role: 'vendedor_formatacao',
+      sector: 'comercial',
+      status: 'inactive',
+    });
+    await createEmployee(db, { role: 'gerente_comercial', sector: 'comercial' });
     await run();
-    expect((await members()).map((m) => m.employeeId)).toEqual([thais.id]);
+    expect((await members()).map((m) => m.employeeId)).toEqual([daniela.id]);
+    expect((await members())[0]?.active).toBe(true);
     await run();
     expect(await members()).toHaveLength(1);
   });
 
   it('never touches a rotation that already has someone', async () => {
-    const someone = await createEmployee(db, { role: 'vendedor_formatacao', sector: 'comercial' });
-    await db
-      .delete(crmDistributionMembers)
-      .where(eq(crmDistributionMembers.pipeline, 'formatacao'));
+    const someone = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
+    await clear();
     await db
       .insert(crmDistributionMembers)
       .values({ pipeline: 'formatacao', employeeId: someone.id, active: false });
+    await createEmployee(db, { role: 'vendedor_formatacao', sector: 'comercial' });
     await run();
     const rows = await members();
     expect(rows).toHaveLength(1);

@@ -1,27 +1,23 @@
--- Rotation of Formatação (Eric, 05/10/2026): Thais works Formatação although she is Diretoria, and
--- 0065 (already applied on staging) only looked at the seller roles, so her rotation came out empty.
--- Adds her ONLY when the funnel has no member at all; nobody already there is touched. Matched by
--- first name among active staff of those roles; not found -> a NOTICE in the log, never a failure.
+-- Rotation of Formatação (Eric, 05/10/2026): the funnel's rotation is the active people with the role
+-- vendedor_formatacao (the new seller, Daniela). 0065 (already applied on staging) came out empty
+-- there. Adds them ONLY when the funnel has no member at all; nobody already there is touched.
+-- No one with that role -> a NOTICE in the log, never a failure.
 DO $$
 DECLARE
-  person uuid;
+  added integer;
 BEGIN
   IF EXISTS (SELECT 1 FROM "crm_distribution_members" WHERE "pipeline" = 'formatacao') THEN
     RAISE NOTICE '0069: rotation of formatacao already has members, nothing changed';
     RETURN;
   END IF;
-  SELECT e.id INTO person
-  FROM "employees" e JOIN "roles" r ON r.id = e.role_id
-  WHERE e.status = 'active'
-    AND r.key IN ('diretoria', 'vendedor_expansao', 'vendedor_formatacao', 'gerente_comercial')
-    AND lower(split_part(e.full_name, ' ', 1)) IN ('thais', 'thaís')
-  ORDER BY e.created_at
-  LIMIT 1;
-  IF person IS NULL THEN
-    RAISE NOTICE '0069: no active employee named Thais found, rotation of formatacao left empty';
-    RETURN;
-  END IF;
   INSERT INTO "crm_distribution_members" ("pipeline", "employee_id", "active")
-  VALUES ('formatacao', person, true);
-  RAISE NOTICE '0069: Thais added to the rotation of formatacao';
+  SELECT 'formatacao', e.id, true
+  FROM "employees" e JOIN "roles" r ON r.id = e.role_id
+  WHERE e.status = 'active' AND r.key = 'vendedor_formatacao';
+  GET DIAGNOSTICS added = ROW_COUNT;
+  IF added = 0 THEN
+    RAISE NOTICE '0069: no active vendedor_formatacao found, rotation of formatacao left empty';
+  ELSE
+    RAISE NOTICE '0069: % vendedor_formatacao added to the rotation of formatacao', added;
+  END IF;
 END $$;
