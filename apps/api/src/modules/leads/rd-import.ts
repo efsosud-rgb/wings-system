@@ -10,7 +10,6 @@ import type { Database } from '../../db/client.js';
 import {
   auditLog,
   clients,
-  crmStages,
   employees,
   leadEnrichmentLedger,
   leadEvents,
@@ -193,29 +192,60 @@ export function stagePlaces(pipelines: readonly RdPipelineRow[]): Map<string, St
 
 /**
  * The Wings stage a deal sits in: the pipeline's own funnel learns its stages
- * (`ensureStage`); an archive funnel only reuses a stage of the same name that
- * already exists, and otherwise leaves the lead with the RD label and no stage
- * row (closed leads are off the board anyway).
+ * (`ensureStage`); an archive funnel gives none (Eric, 05/10: never a column
+ * from "Vendidos" or "Negócios perdidos"; the deal is won or lost instead).
  */
 async function stageRowOf(db: Database, place: StagePlace, rdStageId: string | null) {
-  if (!place.pipeline) return null;
-  if (!place.archive) {
-    return ensureStage(db, {
-      pipeline: place.pipeline,
-      name: place.stage,
-      position: place.order,
-      rdStageId,
-    });
-  }
-  return (
-    (await db.query.crmStages.findFirst({
-      where: and(
-        eq(crmStages.pipeline, place.pipeline),
-        eq(crmStages.name, place.stage.trim().slice(0, 60)),
-      ),
-    })) ?? null
-  );
+  if (!place.pipeline || place.archive) return null;
+  return ensureStage(db, {
+    pipeline: place.pipeline,
+    name: place.stage,
+    position: place.order,
+    rdStageId,
+  });
 }
+
+/** The stage label a lead keeps: RD's, except from an archive funnel, which has none. */
+const stageLabelOf = (place: StagePlace) => (place.archive ? null : place.stage);
+
+/**
+ * The outcome in the funnel of origin. An archive funnel files the deal (Eric,
+ * 05/10): "Vendidos…" is won and "Negócios perdidos…" is lost, whatever the
+ * deal's own flag says; its stage label becomes the reason when RD gives none.
+ */
+export function rdOutcomeOf(
+  deal: Pick<RdDealRow, 'win' | 'closed_at' | 'deal_lost_reason'>,
+  place: Pick<StagePlace, 'archive' | 'pipelineName' | 'stage'>,
+): { won: boolean | null; closedAt: Date | null; lostReason: string | null } {
+  const filed = place.archive ? plainName(place.pipelineName) : '';
+  const won = /^vendid/.test(filed) ? true : /^negocios perdidos/.test(filed) ? false : deal.win;
+  const reason = deal.deal_lost_reason?.name ?? (place.archive ? place.stage : null);
+  return {
+    won,
+    closedAt: dateOf(deal.closed_at),
+    lostReason: won === false ? (reason?.slice(0, 200) ?? null) : null,
+  };
+}
+
+/**
+ * Who keeps the RD owner (Eric, 05/10: only Eric, Thais and Fernando, named by
+ * their RD user ids in CRM_RD_OWNER_USER_IDS). Anyone else's deal comes in with
+ * no owner: no rotation, no first-contact task, no alert. Unset keeps every
+ * linked owner, as before.
+ */
+export function rdOwnerAllowlist(value: string | undefined): ReadonlySet<string> | null {
+  const ids = (value ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
+  return ids.length > 0 ? new Set(ids) : null;
+}
+
+const ownerOf = (
+  owners: ReadonlyMap<string, string | null>,
+  allowed: ReadonlySet<string> | null | undefined,
+  rdOwnerId: string | null,
+) => (rdOwnerId && (!allowed || allowed.has(rdOwnerId)) ? (owners.get(rdOwnerId) ?? null) : null);
 
 const EXPANSION_CAMPAIGN = /^LP(?:\/LE)?\s+(.+?)\s+-\s+Fluxo Expans[aã]o/i;
 
@@ -280,6 +310,8 @@ export interface RdImportResult {
   inScope: Record<LeadPipeline, number>;
   /** Of `inScope`, deals filed in an archive funnel (no Wings stage is created for them). */
   inArchive: number;
+  /** What the archive funnels became in the funnel of origin. */
+  archiveOutcome: { won: number; lost: number };
   /** Deals of RD funnels with no Wings pipeline (Parcerias, Estruturação, Lista de espera…), per funnel. */
   outOfScope: Record<string, number>;
   created: number;
@@ -309,6 +341,8 @@ export interface RdImportOptions {
   histories: boolean;
   /** Only deals the Funil does not have yet (incremental run). */
   onlyMissing?: boolean;
+  /** RD users whose deals keep their owner (`rdOwnerAllowlist`); null or absent keeps every linked one. */
+  ownerRdUserIds?: ReadonlySet<string> | null;
   /**
    * The run's batch id (required with `apply`): new leads carry it in
    * `import_batch_id`, and a lead that already existed gets a `rd.import_batch`
@@ -423,6 +457,7 @@ export async function importRdDeals(
     dealsListed: 0,
     inScope: { expansao: 0, formatacao: 0 },
     inArchive: 0,
+    archiveOutcome: { won: 0, lost: 0 },
     outOfScope: {},
     created: 0,
     merged: 0,
@@ -502,7 +537,9 @@ export async function importRdDeals(
     const brandClientId = brand ? (brandClients.get(brandKey(brand)) ?? null) : null;
     if (brand && !brandClientId) unmatched.add(brand);
     const rdOwnerId = idOf(deal.user);
-    const ownerEmployeeId = rdOwnerId ? (owners.get(rdOwnerId) ?? null) : null;
+    const ownerEmployeeId = ownerOf(owners, options.ownerRdUserIds, rdOwnerId);
+    const outcome = rdOutcomeOf(deal, place);
+    if (place.archive) result.archiveOutcome[outcome.won ? 'won' : 'lost'] += 1;
     if (ownerEmployeeId) result.owners.mapped += 1;
     else result.owners.unmapped += 1;
     if (/\bteste\b/i.test(`${deal.name ?? ''} ${deal.deal_lost_reason?.name ?? ''}`))
@@ -609,7 +646,7 @@ export async function importRdDeals(
           });
         }
       }
-      if (lead.rdDealId !== id && !replacesDeal(lead, deal.win)) {
+      if (lead.rdDealId !== id && !replacesDeal(lead, outcome.won)) {
         result.otherDealOfSamePerson += 1;
         await db.insert(leadEvents).values({
           leadId: lead.id,
@@ -643,23 +680,19 @@ export async function importRdDeals(
           ...(keepStage
             ? {}
             : {
-                stage: place.stage,
-                stageOrder: place.order,
+                stage: stageLabelOf(place),
+                stageOrder: place.archive ? null : place.order,
                 stageId: stageRow?.id ?? null,
                 stageChangedAt:
                   times.stageChangedAt ??
-                  (lead.rdDealId === id && lead.stage === place.stage ? lead.stageChangedAt : null),
+                  (lead.rdDealId === id && lead.stage === stageLabelOf(place)
+                    ? lead.stageChangedAt
+                    : null),
               }),
           ...(wingsRun ? {} : { managedBy: 'rd' }),
           firstContactAt:
             times.firstContactAt ?? (lead.rdDealId === id ? lead.firstContactAt : null),
-          ...(keepOutcome
-            ? {}
-            : {
-                won: deal.win,
-                closedAt: dateOf(deal.closed_at),
-                lostReason: deal.deal_lost_reason?.name?.slice(0, 200) ?? null,
-              }),
+          ...(keepOutcome ? {} : outcome),
           rdSyncedAt: new Date(),
           ...(ownerEmployeeId && !(wingsRun && lead.ownerEmployeeId) ? { ownerEmployeeId } : {}),
           ...(brandClientId && !lead.clientMapped
@@ -690,7 +723,11 @@ export async function importRdDeals(
  */
 export async function followRdStages(
   db: Database,
-  input: { deals: readonly RdDealRow[]; pipelines: readonly RdPipelineRow[] },
+  input: {
+    deals: readonly RdDealRow[];
+    pipelines: readonly RdPipelineRow[];
+    ownerRdUserIds?: ReadonlySet<string> | null;
+  },
 ): Promise<{ updated: number; stageChanged: number }> {
   const places = stagePlaces(input.pipelines);
   const owners = new Map(
@@ -713,22 +750,21 @@ export async function followRdStages(
     const wingsRun = lead.managedBy === 'wings';
     const keepStage = wingsRun && lead.stageId !== null;
     const keepOutcome = wingsRun && lead.won !== null;
-    const changed =
-      !keepStage && (lead.stage !== place.stage || lead.rdPipeline !== place.pipelineName);
-    const ownerEmployeeId = rdOwnerId ? (owners.get(rdOwnerId) ?? null) : null;
+    const label = stageLabelOf(place);
+    const changed = !keepStage && (lead.stage !== label || lead.rdPipeline !== place.pipelineName);
+    const ownerEmployeeId = ownerOf(owners, input.ownerRdUserIds, rdOwnerId);
     const stageRow = await stageRowOf(db, place, idOf(deal.deal_stage));
-    const outcomeChanged = !keepOutcome && lead.won !== deal.win;
+    const outcome = rdOutcomeOf(deal, place);
+    const outcomeChanged = !keepOutcome && lead.won !== outcome.won;
     if (changed || outcomeChanged) {
       await db.insert(leadStageHistory).values({
         leadId: lead.id,
         fromStageId: lead.stageId,
         toStageId: stageRow?.id ?? null,
         fromStage: lead.stage,
-        toStage: keepStage ? lead.stage : place.stage,
-        won: keepOutcome ? lead.won : deal.win,
-        lostReason: keepOutcome
-          ? lead.lostReason
-          : (deal.deal_lost_reason?.name?.slice(0, 200) ?? null),
+        toStage: keepStage ? lead.stage : label,
+        won: keepOutcome ? lead.won : outcome.won,
+        lostReason: keepOutcome ? lead.lostReason : outcome.lostReason,
         source: 'rd',
       });
     }
@@ -740,18 +776,12 @@ export async function followRdStages(
         ...(keepStage
           ? {}
           : {
-              stage: place.stage,
-              stageOrder: place.order,
-              stageId: stageRow?.id ?? lead.stageId,
+              stage: label,
+              stageOrder: place.archive ? null : place.order,
+              stageId: place.archive ? null : (stageRow?.id ?? lead.stageId),
               ...(changed ? { stageChangedAt: null } : {}),
             }),
-        ...(keepOutcome
-          ? {}
-          : {
-              won: deal.win,
-              closedAt: dateOf(deal.closed_at),
-              lostReason: deal.deal_lost_reason?.name?.slice(0, 200) ?? null,
-            }),
+        ...(keepOutcome ? {} : outcome),
         rdOwnerId,
         ...(ownerEmployeeId && !(wingsRun && lead.ownerEmployeeId) ? { ownerEmployeeId } : {}),
         rdSyncedAt: new Date(),
