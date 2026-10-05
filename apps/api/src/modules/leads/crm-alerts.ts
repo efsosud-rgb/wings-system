@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   crmNotifications,
@@ -7,6 +7,7 @@ import {
   leadTasks,
   leads,
   roles,
+  sectors,
 } from '../../db/schema/index.js';
 
 /**
@@ -208,4 +209,140 @@ export async function markRead(db: Database, employeeId: string, ids: string[] |
     .where(where)
     .returning({ id: crmNotifications.id });
   return done.length;
+}
+
+/** Where a new lead can arrive from for the arrival notices (not imports, not the RD mirror). */
+const ARRIVAL_SOURCES = new Set(['meta_lead_ads', 'rd_station', 'site_form']);
+
+/** The commercial managers (sector manager of Comercial, or the sales manager role) and Diretoria; active only. */
+async function managersAndBoard(db: Database): Promise<string[]> {
+  const rows = await db
+    .select({ id: employees.id })
+    .from(employees)
+    .innerJoin(roles, eq(roles.id, employees.roleId))
+    .leftJoin(sectors, eq(sectors.id, employees.sectorId))
+    .where(
+      and(
+        eq(employees.status, 'active'),
+        or(
+          eq(roles.key, 'diretoria'),
+          eq(roles.key, 'gerente_comercial'),
+          and(eq(employees.isSectorManager, true), eq(sectors.slug, 'comercial')),
+        ),
+      ),
+    );
+  return [...new Set(rows.map((r) => r.id))];
+}
+
+/**
+ * The notice of a new lead's arrival (Meta, RD landing, site form), written in
+ * code so it does not depend on a rule set on the screen. With an owner (from
+ * the rotation) the owner is told, with the first-contact deadline; with none,
+ * Diretoria and the commercial managers are told at once that it has no owner.
+ * Names nothing about the person. Best effort: a failure here never undoes the
+ * lead, and one notice per lead and person (`dedupe_key`).
+ */
+export async function announceNewLead(
+  db: Database,
+  lead: { id: string; source: string; ownerEmployeeId: string | null },
+): Promise<void> {
+  if (!ARRIVAL_SOURCES.has(lead.source)) return;
+  try {
+    if (lead.ownerEmployeeId) {
+      const task = await db.query.leadTasks.findFirst({
+        where: and(
+          eq(leadTasks.leadId, lead.id),
+          eq(leadTasks.kind, 'first_contact'),
+          isNull(leadTasks.doneAt),
+        ),
+        columns: { dueAt: true },
+      });
+      const due = task
+        ? ` Primeiro contato até ${task.dueAt.toLocaleString('pt-BR', {
+            timeZone: 'America/Sao_Paulo',
+            day: '2-digit',
+            month: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+          })} (1 hora útil).`
+        : '';
+      await db
+        .insert(crmNotifications)
+        .values({
+          recipientEmployeeId: lead.ownerEmployeeId,
+          leadId: lead.id,
+          kind: 'new_lead',
+          message: `Novo lead para você.${due}`,
+          dedupeKey: `new_lead:${lead.id}:${lead.ownerEmployeeId}`,
+        })
+        .onConflictDoNothing();
+      return;
+    }
+    const people = await managersAndBoard(db);
+    if (people.length === 0) return;
+    await db
+      .insert(crmNotifications)
+      .values(
+        people.map((person) => ({
+          recipientEmployeeId: person,
+          leadId: lead.id,
+          kind: 'lead_unassigned',
+          message: 'Há um lead novo sem dono: o rodízio do funil está vazio. Atribua alguém.',
+          dedupeKey: `lead_unassigned:${lead.id}:${person}`,
+        })),
+      )
+      .onConflictDoNothing();
+  } catch {
+    // The lead is already saved; the overdue alert still catches a missed first contact.
+  }
+}
+
+/** Old leads (see `STALE_ARRIVAL_HOURS`) a read of the platform brought, counted per owner (`null` = no owner). */
+export type BackfillTally = Map<string | null, number>;
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * One notice per owner for a whole read, instead of one per old lead: "N leads
+ * antigos da Meta foram atribuídos a você". Old leads that found no owner
+ * (empty rotation) become one notice to Diretoria with the count. Counts only,
+ * nothing about a person. `readKey` (the read's start time) keeps a repeated
+ * pass from writing the same notice twice. Best effort, like `announceNewLead`.
+ */
+export async function announceBackfill(
+  db: Database,
+  tally: BackfillTally,
+  readAt: Date,
+): Promise<void> {
+  if (tally.size === 0) return;
+  const readKey = readAt.getTime();
+  try {
+    const rows: (typeof crmNotifications.$inferInsert)[] = [];
+    for (const [owner, count] of tally) {
+      if (owner) {
+        rows.push({
+          recipientEmployeeId: owner,
+          kind: 'backfill_assigned',
+          message: `${plural(count, 'lead antigo da Meta foi atribuído', 'leads antigos da Meta foram atribuídos')} a você.`,
+          dedupeKey: `backfill_assigned:${readKey}:${owner}`,
+        });
+        continue;
+      }
+      const board = await db
+        .select({ id: employees.id })
+        .from(employees)
+        .innerJoin(roles, eq(roles.id, employees.roleId))
+        .where(and(eq(roles.key, 'diretoria'), eq(employees.status, 'active')));
+      for (const person of board)
+        rows.push({
+          recipientEmployeeId: person.id,
+          kind: 'backfill_unassigned',
+          message: `${plural(count, 'lead antigo da Meta entrou sem dono', 'leads antigos da Meta entraram sem dono')}: o rodízio do funil está vazio.`,
+          dedupeKey: `backfill_unassigned:${readKey}:${person.id}`,
+        });
+    }
+    if (rows.length > 0) await db.insert(crmNotifications).values(rows).onConflictDoNothing();
+  } catch {
+    // The leads are already saved; this only tells people about them.
+  }
 }

@@ -1,12 +1,14 @@
-import { SESSION_COOKIE } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { SESSION_COOKIE, WINGS_CLIENT_ID } from '@wings/shared';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
+  crmDistributionMembers,
   crmNotifications,
   leadEvents,
+  leadTasks,
   leads,
   metaLeadForms,
   metaLeadgenEvents,
@@ -15,6 +17,8 @@ import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import { createBrand } from './deal.js';
+import { setDistribution } from './crm.js';
+import { upsertLead } from './service.js';
 import { pollMetaLeadsLocked, testMetaConnection, type PollDeps } from './meta-poll.js';
 
 /**
@@ -48,6 +52,12 @@ const DETAILS: Record<string, { platform: string; phone: string; campaign: strin
   'lead-4': { platform: 'ig', phone: '+5511933330004', campaign: 'camp-c' },
 };
 
+// Old leads (3 days) a read brings in a backfill; set per test, empty by default.
+let oldBatch: string[] = [];
+const isOld = (id: string) => oldBatch.includes(id);
+const createdAt = (id: string) =>
+  new Date(Date.now() - (isOld(id) ? 72 * 3_600_000 : 0)).toISOString();
+
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
@@ -68,19 +78,27 @@ const fakeGraph = (async (input: string | URL | Request, init?: RequestInit) => 
     return formsStatus === 200 ? json({ data: FORMS }) : json({ error: {} }, formsStatus);
   if (parts[1] === 'leads')
     return json({
-      data: (LEADS[parts[0]!] ?? []).map((id) => ({
-        id,
-        created_time: new Date().toISOString(),
-        ad_id: `ad-${id}`,
-        adset_id: `adset-${id}`,
-        campaign_id: DETAILS[id]?.campaign,
-      })),
+      data: [...(LEADS[parts[0]!] ?? []), ...(parts[0] === 'form-fmt' ? oldBatch : [])].map(
+        (id) => ({
+          id,
+          created_time: createdAt(id),
+          ad_id: `ad-${id}`,
+          adset_id: `adset-${id}`,
+          campaign_id: DETAILS[id]?.campaign,
+        }),
+      ),
     });
-  const detail = DETAILS[parts[0]!];
+  const detail = isOld(parts[0]!)
+    ? {
+        platform: 'fb',
+        phone: `+55119444${parts[0]!.replace(/\D/g, '').padStart(4, '0')}`,
+        campaign: 'camp-old',
+      }
+    : DETAILS[parts[0]!];
   if (detail)
     return json({
       id: parts[0],
-      created_time: new Date().toISOString(),
+      created_time: createdAt(parts[0]!),
       field_data: [
         { name: 'full_name', values: ['Fulano de Teste'] },
         { name: 'email', values: [`${parts[0]}@example.test`] },
@@ -92,7 +110,9 @@ const fakeGraph = (async (input: string | URL | Request, init?: RequestInit) => 
       campaign_name: `Campanha ${detail.campaign}`,
       adset_id: `adset-${parts[0]}`,
       ad_id: `ad-${parts[0]}`,
-      form_id: Object.entries(LEADS).find(([, ids]) => ids.includes(parts[0]!))?.[0],
+      form_id: isOld(parts[0]!)
+        ? 'form-fmt'
+        : Object.entries(LEADS).find(([, ids]) => ids.includes(parts[0]!))?.[0],
       platform: detail.platform,
     });
   return json({ error: {} }, 404);
@@ -172,7 +192,12 @@ describe('Lead Ads read with only the key', () => {
     const notices = await db
       .select()
       .from(crmNotifications)
-      .where(eq(crmNotifications.recipientEmployeeId, board.id));
+      .where(
+        and(
+          eq(crmNotifications.recipientEmployeeId, board.id),
+          eq(crmNotifications.kind, 'automation'),
+        ),
+      );
     expect(notices).toHaveLength(1);
     expect(notices[0]!.message).not.toMatch(/Fulano|example|5511/);
   });
@@ -253,5 +278,90 @@ describe('Lead Ads read with only the key', () => {
       cookies: sellerCookies,
     });
     expect(denied.statusCode).toBe(403);
+  });
+});
+
+describe('backfill: leads already old when read', () => {
+  const notices = (recipient: string, kind: string) =>
+    db
+      .select()
+      .from(crmNotifications)
+      .where(
+        and(eq(crmNotifications.recipientEmployeeId, recipient), eq(crmNotifications.kind, kind)),
+      );
+
+  it('gives the owner by rotation, with no deadline task and no arrival notice, and one counted notice per read', async () => {
+    const owner = await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
+    await setDistribution(db, {
+      pipeline: 'formatacao',
+      members: [{ employeeId: owner.id, active: true }],
+      actorEmployeeId: owner.id,
+    });
+    oldBatch = ['lead-51', 'lead-52'];
+    const result = await pollMetaLeadsLocked(deps());
+    if (result === 'locked') throw new Error('lock held');
+    expect(result.processed?.done).toBe(2);
+    const rows = await db.select().from(leads).where(inArray(leads.externalId, oldBatch));
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.ownerEmployeeId === owner.id)).toBe(true);
+    expect(
+      await db.$count(
+        leadTasks,
+        inArray(
+          leadTasks.leadId,
+          rows.map((r) => r.id),
+        ),
+      ),
+    ).toBe(0);
+    expect(await notices(owner.id, 'new_lead')).toHaveLength(0);
+    const counted = await notices(owner.id, 'backfill_assigned');
+    expect(counted).toHaveLength(1);
+    expect(counted[0]?.message).toBe('2 leads antigos da Meta foram atribuídos a você.');
+  });
+
+  it('with an empty rotation, Diretoria gets one counted notice, not one per lead', async () => {
+    await db
+      .delete(crmDistributionMembers)
+      .where(eq(crmDistributionMembers.pipeline, 'formatacao'));
+    const board = await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
+    const manager = await createEmployee(db, {
+      role: 'gerente_comercial',
+      sector: 'comercial',
+      isSectorManager: true,
+    });
+    oldBatch = ['lead-61', 'lead-62', 'lead-63'];
+    const result = await pollMetaLeadsLocked(deps());
+    if (result === 'locked') throw new Error('lock held');
+    expect(result.processed?.done).toBe(3);
+    const counted = await notices(board.id, 'backfill_unassigned');
+    expect(counted).toHaveLength(1);
+    expect(counted[0]?.message).toContain('3 leads antigos da Meta entraram sem dono');
+    expect(await notices(board.id, 'lead_unassigned')).toHaveLength(0);
+    expect(await notices(manager.id, 'lead_unassigned')).toHaveLength(0);
+    oldBatch = [];
+  });
+
+  it('a lead made minutes ago still gets the arrival notice and the deadline task', async () => {
+    const owner = await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
+    await setDistribution(db, {
+      pipeline: 'formatacao',
+      members: [{ employeeId: owner.id, active: true }],
+      actorEmployeeId: owner.id,
+    });
+    const born = await upsertLead(db, {
+      source: 'meta_lead_ads',
+      name: 'Pessoa Nova',
+      phone: '5511900001234',
+      clientId: WINGS_CLIENT_ID,
+      clientMapped: true,
+      pipeline: 'formatacao',
+      skipResearch: true,
+      originCreatedAt: new Date(Date.now() - 10 * 60_000),
+      event: { kind: 'lead.received.meta_lead_ads' },
+    });
+    expect(born.stale).toBe(false);
+    expect(born.lead.ownerEmployeeId).toBe(owner.id);
+    expect(await notices(owner.id, 'new_lead')).toHaveLength(1);
+    expect(await db.$count(leadTasks, eq(leadTasks.leadId, born.lead.id))).toBe(1);
   });
 });

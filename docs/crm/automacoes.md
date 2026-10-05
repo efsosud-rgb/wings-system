@@ -61,6 +61,18 @@ que já foi registrado), `POST /leads/:id/emails/preview` e `POST /leads/:id/ema
 `lead.email_sent`; auditoria `lead.email_sent` / `lead.email_failed` só com ids. Em modo `test`
 (o padrão) nada sai: a tela diz "Registrado (modo de teste)". Sem migração.
 
+## Avisos de chegada e rodízio de Formatação (05/10/2026)
+
+- **Lead novo pela Meta, pelo RD (landing) ou pelo formulário do site**, criado (não junção) e fora de importação: `announceNewLead` (`crm-alerts.ts`), chamado por `upsertLead`, direto no código, sem regra cadastrada.
+  - **Com dono** (do rodízio): o dono recebe em Avisos "Novo lead para você" com o prazo do primeiro contato (1 hora útil, horário de Brasília).
+  - **Sem dono** (rodízio do funil vazio): Diretoria e gerentes do comercial (papel `gerente_comercial` ou gerente de setor do Comercial), só ativos, recebem na hora "Lead sem dono". Vendedores não.
+  - O texto nunca cita a pessoa. Um aviso por lead e pessoa (`dedupe_key`); falha ao avisar não desfaz o lead. Importação, espelho do RD CRM, WhatsApp por link e junção com lead existente não geram esse aviso.
+- **Migração `0069_crm_rotation_formatacao_diretoria`:** a 0065 só aceitava papéis de vendedor/gerente e deixou o rodízio de Formatação vazio quando a Thais é Diretoria. A 0069 a coloca no rodízio de Formatação **só se o funil não tiver nenhum membro**; quem já está lá não é tocado; se ela não existir, só registra um NOTICE. Consultoria não foi incluída.
+- **Ordem das migrações:** a 0069 vem depois da 0068 (previsão de fechamento) no `_journal.json`, com `when` maior.
+- **Consultoria começa vazia (decisão do Eric):** nenhuma migração a coloca no rodízio. Lead novo de Consultoria sem dono cai na rede de segurança acima (Diretoria e gerentes recebem "Lead sem dono").
+- **Backfill (lead já velho quando lido):** lead da Meta com mais de 24 horas desde o `created_time` (`STALE_ARRIVAL_HOURS`, `isStaleArrival` em `service.ts`) entra com dono pelo rodízio, mas **sem tarefa de primeiro contato e sem o aviso de 1 hora útil**. No lugar, **uma leitura gera um aviso por dono** ("N leads antigos da Meta foram atribuídos a você", `announceBackfill`); sem dono (rodízio vazio), **um** aviso com a contagem para a Diretoria, não um por lead. "Uma leitura" = uma passada de `processMetaLeadgenEvents` (a leitura de 5 min, "Buscar agora" ou o webhook). Lead com menos de 24 horas segue o fluxo de chegada.
+- **Fica para depois (decisão do Eric):** dar dono aos leads antigos sem dono.
+
 ## Migração
 
 `0066_crm_automations` (8 tabelas; renumerar no merge se outra entrar antes). `wings_ro` lê

@@ -69,12 +69,14 @@ describe('CRM deadline and deviation alerts', () => {
       .select()
       .from(crmNotifications)
       .where(eq(crmNotifications.leadId, born.lead.id));
-    const who = new Set(rows.map((r) => r.recipientEmployeeId));
+    // The arrival notice (new_lead) is covered in arrival-notices.test.ts.
+    const overdue = rows.filter((r) => r.kind !== 'new_lead');
+    const who = new Set(overdue.map((r) => r.recipientEmployeeId));
     expect(who.has(seller.id)).toBe(true);
     expect(who.has(manager.id)).toBe(true);
     expect(who.has(board.id)).toBe(true);
     expect(who.has(other.id)).toBe(false);
-    expect(rows.every((r) => r.kind === 'first_contact_overdue')).toBe(true);
+    expect(overdue.every((r) => r.kind === 'first_contact_overdue')).toBe(true);
     // The text names the problem, not the person.
     expect(rows.some((r) => /Cicrana|5511/.test(r.message))).toBe(false);
 
@@ -130,7 +132,9 @@ describe('CRM deadline and deviation alerts', () => {
       .select()
       .from(crmNotifications)
       .where(eq(crmNotifications.leadId, born.lead.id));
-    expect(rows.every((r) => r.kind === 'stage_stuck')).toBe(true);
+    expect(rows.filter((r) => r.kind !== 'new_lead').every((r) => r.kind === 'stage_stuck')).toBe(
+      true,
+    );
     expect((await runCrmAlerts(db, { stageStuckDays: 7 }, eightDaysLater)).written).toBe(0);
     // 0 turns the alert off.
     expect(
