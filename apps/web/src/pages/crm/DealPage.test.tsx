@@ -17,7 +17,7 @@ const { dealMutate, queryState, idle, mutation } = vi.hoisted(() => ({
   mutation: (mutate = vi.fn()) => ({ mutate, isPending: false, error: null }),
 }));
 
-const lead = (over: Partial<Lead> & { work?: Partial<Lead['work']> }): Lead => ({
+const lead = (over: Omit<Partial<Lead>, 'work'> & { work?: Partial<Lead['work']> }): Lead => ({
   id: 'l1',
   name: 'Elena',
   email: null,
