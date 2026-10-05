@@ -193,6 +193,12 @@ export interface IncomingLead {
   valueCents?: number | null;
   /** When the person actually arrived, if earlier than now (an imported RD deal's creation); used only for a new lead. */
   arrivedAt?: Date | null;
+  /**
+   * When the platform says the lead was made (Meta's `created_time`), if the system reads it
+   * later. Older than STALE_ARRIVAL_HOURS: the lead still gets its owner from the rotation, but
+   * no first-contact task and no arrival notice (a backfill is announced once per read instead).
+   */
+  originCreatedAt?: Date | null;
   /** The import run creating the lead (`leads.import_batch_id`); used only for a new lead. */
   importBatchId?: string | null;
   /** An import (RD CRM) does not queue the paid research for every lead it brings. */
@@ -268,6 +274,21 @@ export interface UpsertResult {
   filled: string[];
   /** The seller the rotation gave a new lead to, when it did. */
   assignedTo?: string | null;
+  /** A new lead that was already old when read (see `originCreatedAt`). */
+  stale?: boolean;
+}
+
+/** A lead older than this when the system reads it is a backfill, not an arrival. */
+export const STALE_ARRIVAL_HOURS = 24;
+
+export function isStaleArrival(
+  incoming: { originCreatedAt?: Date | null },
+  now = new Date(),
+): boolean {
+  return (
+    incoming.originCreatedAt != null &&
+    now.getTime() - incoming.originCreatedAt.getTime() > STALE_ARRIVAL_HOURS * 3_600_000
+  );
 }
 
 /** Only the gaps: an existing value is never overwritten by a later arrival. */
@@ -332,7 +353,8 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
     incoming.source !== 'rd_crm'
   )
     await announceStageEntered(result.lead);
-  if (result.created && !incoming.importBatchId) await announceNewLead(db, result.lead);
+  if (result.created && !incoming.importBatchId && !result.stale)
+    await announceNewLead(db, result.lead);
   return result;
 }
 
@@ -492,11 +514,12 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
         detail: { from: null, to: assignedTo, source: 'rotation' },
       });
     }
-    if (distribute && created.ownerEmployeeId) {
+    const stale = isStaleArrival(incoming);
+    if (distribute && created.ownerEmployeeId && !stale) {
       await ensureFirstContactTask(tx, created, incoming.event.actorEmployeeId ?? null);
     }
     if (incoming.skipResearch)
-      return { lead: created, created: true, researchQueued: false, filled: [], assignedTo };
+      return { lead: created, created: true, researchQueued: false, filled: [], assignedTo, stale };
     const researched = await enqueueResearch(tx, created.id, null);
     return {
       lead: researched ?? created,
@@ -504,6 +527,7 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
       researchQueued: true,
       filled: [],
       assignedTo,
+      stale,
     };
   });
 }

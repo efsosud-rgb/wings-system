@@ -61,6 +61,8 @@ Sem WhatsApp nem e-mail por enquanto.
   - O texto nunca cita a pessoa. Um aviso por lead e pessoa (`dedupe_key`); falha ao avisar não desfaz o lead. Importação, espelho do RD CRM, WhatsApp por link e junção com lead existente não geram esse aviso.
 - **Migração `0069_crm_rotation_formatacao_diretoria`:** a 0065 só aceitava papéis de vendedor/gerente e deixou o rodízio de Formatação vazio quando a Thais é Diretoria. A 0069 a coloca no rodízio de Formatação **só se o funil não tiver nenhum membro**; quem já está lá não é tocado; se ela não existir, só registra um NOTICE. Consultoria não foi incluída.
 - **Ordem de merge:** 0068 é da previsão de fechamento; na junção conferir que o `when` da 0069 no `_journal.json` é maior que o da 0068 (o Drizzle ignora migração com data anterior à última aplicada).
+- **Consultoria começa vazia (decisão do Eric):** nenhuma migração a coloca no rodízio. Lead novo de Consultoria sem dono cai na rede de segurança acima (Diretoria e gerentes recebem "Lead sem dono").
+- **Backfill (lead já velho quando lido):** lead da Meta com mais de 24 horas desde o `created_time` (`STALE_ARRIVAL_HOURS`, `isStaleArrival` em `service.ts`) entra com dono pelo rodízio, mas **sem tarefa de primeiro contato e sem o aviso de 1 hora útil**. No lugar, **uma leitura gera um aviso por dono** ("N leads antigos da Meta foram atribuídos a você", `announceBackfill`); sem dono (rodízio vazio), **um** aviso com a contagem para a Diretoria, não um por lead. "Uma leitura" = uma passada de `processMetaLeadgenEvents` (a leitura de 5 min, "Buscar agora" ou o webhook). Lead com menos de 24 horas segue o fluxo de chegada.
 - **Fica para depois (decisão do Eric):** dar dono aos leads antigos sem dono.
 
 ## Migração

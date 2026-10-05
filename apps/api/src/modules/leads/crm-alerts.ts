@@ -296,3 +296,53 @@ export async function announceNewLead(
     // The lead is already saved; the overdue alert still catches a missed first contact.
   }
 }
+
+/** Old leads (see `STALE_ARRIVAL_HOURS`) a read of the platform brought, counted per owner (`null` = no owner). */
+export type BackfillTally = Map<string | null, number>;
+
+const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/**
+ * One notice per owner for a whole read, instead of one per old lead: "N leads
+ * antigos da Meta foram atribuídos a você". Old leads that found no owner
+ * (empty rotation) become one notice to Diretoria with the count. Counts only,
+ * nothing about a person. `readKey` (the read's start time) keeps a repeated
+ * pass from writing the same notice twice. Best effort, like `announceNewLead`.
+ */
+export async function announceBackfill(
+  db: Database,
+  tally: BackfillTally,
+  readAt: Date,
+): Promise<void> {
+  if (tally.size === 0) return;
+  const readKey = readAt.getTime();
+  try {
+    const rows: (typeof crmNotifications.$inferInsert)[] = [];
+    for (const [owner, count] of tally) {
+      if (owner) {
+        rows.push({
+          recipientEmployeeId: owner,
+          kind: 'backfill_assigned',
+          message: `${plural(count, 'lead antigo da Meta foi atribuído', 'leads antigos da Meta foram atribuídos')} a você.`,
+          dedupeKey: `backfill_assigned:${readKey}:${owner}`,
+        });
+        continue;
+      }
+      const board = await db
+        .select({ id: employees.id })
+        .from(employees)
+        .innerJoin(roles, eq(roles.id, employees.roleId))
+        .where(and(eq(roles.key, 'diretoria'), eq(employees.status, 'active')));
+      for (const person of board)
+        rows.push({
+          recipientEmployeeId: person.id,
+          kind: 'backfill_unassigned',
+          message: `${plural(count, 'lead antigo da Meta entrou sem dono', 'leads antigos da Meta entraram sem dono')}: o rodízio do funil está vazio.`,
+          dedupeKey: `backfill_unassigned:${readKey}:${person.id}`,
+        });
+    }
+    if (rows.length > 0) await db.insert(crmNotifications).values(rows).onConflictDoNothing();
+  } catch {
+    // The leads are already saved; this only tells people about them.
+  }
+}
