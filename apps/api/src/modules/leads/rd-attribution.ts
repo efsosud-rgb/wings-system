@@ -1,3 +1,4 @@
+import { paramsOfAddress } from '../../lib/query-params.js';
 import type { LeadAttribution } from './service.js';
 
 /**
@@ -44,12 +45,7 @@ function merge(into: Params, entries: Iterable<[string, unknown]>) {
 }
 
 function queryOf(url: string | null): [string, string][] {
-  if (!url) return [];
-  try {
-    return [...new URL(url).searchParams];
-  } catch {
-    return [];
-  }
+  return [...paramsOfAddress(url)];
 }
 
 interface Session {

@@ -273,6 +273,18 @@ describe('reading RD Marketing', () => {
         traffic('https://x.com/?utm_source=google&utm_campaign=abc&utm_content=lead'),
       ),
     ).toEqual({ source: 'google', medium: null, campaign: 'abc', content: 'lead' });
+    expect(
+      utmsOfTrafficSource(
+        traffic('utm_source=facebook&utm_medium=cpc&utm_campaign=formatacao_set26'),
+      ),
+    ).toEqual({ source: 'facebook', medium: 'cpc', campaign: 'formatacao_set26', content: null });
+    expect(utmsOfTrafficSource(traffic('?utm_source=instagram&utm_content=video-2'))).toEqual({
+      source: 'instagram',
+      medium: null,
+      campaign: null,
+      content: 'video-2',
+    });
+    expect(utmsOfTrafficSource(traffic('(direct)'))).toBeNull();
     expect(utmsOfTrafficSource('encoded_não-é-base64')).toBeNull();
     expect(utmsOfTrafficSource(traffic('https://x.com/'))).toBeNull();
   });
