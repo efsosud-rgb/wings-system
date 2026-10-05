@@ -16,6 +16,7 @@ import { useAdAccountBudgetCaps, useSetBudgetCap } from '../api/ads.js';
 import { hasPermission, useSession } from '../api/auth.js';
 import { ApiError } from '../api/client.js';
 import { useDealSources } from '../api/crm.js';
+import { useMetaLeadsStatus, usePollMetaLeads, useTestMetaConnection } from '../api/leads.js';
 import { ago } from './crm/format.js';
 import {
   useConnectKairogen,
@@ -825,6 +826,81 @@ export function RdUsersSection() {
   );
 }
 
+/** Meta Lead Ads, under the sources: how it runs, and the two buttons (totals only, never a person). */
+function MetaLeadAdsActions() {
+  const session = useSession();
+  const canManage = hasPermission(session.data, 'integrations.manage');
+  const status = useMetaLeadsStatus(true);
+  const test = useTestMetaConnection();
+  const poll = usePollMetaLeads();
+  const polling = status.data?.polling;
+  const failedCount = (failed: Record<string, string> | undefined) =>
+    Object.keys(failed ?? {}).length;
+  return (
+    <div className="crm-stack" style={{ marginTop: 'var(--space-3)' }}>
+      <p className="crm-sub">
+        Meta Lead Ads:{' '}
+        {polling?.enabled
+          ? `ligada, a cada ${polling.everyMinutes} min${status.data?.webhookConfigured ? ', e na hora pelo webhook' : ''}.`
+          : status.data?.webhookConfigured
+            ? 'só pelo webhook; falta a chave de leitura para buscar a cada 5 min.'
+            : 'desligada: falta a chave da Meta (META_LEADS_ACCESS_TOKEN).'}
+        {polling?.lastOkAt ? ` Última busca completa há ${ago(polling.lastOkAt)}.` : ''}
+        {polling && polling.forms > 0
+          ? ` ${polling.forms} formulários${polling.formsWithError > 0 ? `, ${polling.formsWithError} com erro` : ''}.`
+          : ''}
+      </p>
+      {canManage ? (
+        <div className="crm-quick-row" style={{ justifyContent: 'flex-start' }}>
+          <Button
+            variant="ghost"
+            type="button"
+            disabled={test.isPending || !status.data?.tokenConfigured}
+            onClick={() => test.mutate()}
+          >
+            {test.isPending ? 'Testando…' : 'Testar conexão'}
+          </Button>
+          <Button
+            type="button"
+            disabled={poll.isPending || !polling?.enabled}
+            onClick={() => poll.mutate()}
+          >
+            {poll.isPending ? 'Buscando…' : 'Buscar agora'}
+          </Button>
+        </div>
+      ) : null}
+      {test.data ? (
+        <p role="status">
+          A chave enxerga {test.data.pages} {test.data.pages === 1 ? 'página' : 'páginas'},{' '}
+          {test.data.forms} {test.data.forms === 1 ? 'formulário' : 'formulários'} e{' '}
+          {test.data.truncated ? 'pelo menos ' : ''}
+          {test.data.leads} {test.data.leads === 1 ? 'lead' : 'leads'} dos últimos 90 dias.
+          {failedCount(test.data.failed) > 0
+            ? ` ${failedCount(test.data.failed)} leitura(s) falharam (${[...new Set(Object.values(test.data.failed))].join(', ')}).`
+            : ''}
+        </p>
+      ) : null}
+      {poll.data ? (
+        <p role="status">
+          Busca feita: {poll.data.forms} formulários, {poll.data.queued} leads novos,{' '}
+          {poll.data.alreadyKnown} já conhecidos.
+          {failedCount(poll.data.failed) > 0
+            ? ` ${failedCount(poll.data.failed)} leitura(s) falharam.`
+            : ''}
+        </p>
+      ) : null}
+      {test.error || poll.error ? (
+        <Alert kind="error">
+          {(() => {
+            const error = test.error ?? poll.error;
+            return error instanceof ApiError ? error.message : 'Não foi possível falar com a Meta.';
+          })()}
+        </Alert>
+      ) : null}
+    </div>
+  );
+}
+
 /** "Fontes de negócios": where deals arrive from and whether each door is open, in plain words. */
 function DealSourcesSection() {
   const sources = useDealSources();
@@ -863,6 +939,7 @@ function DealSourcesSection() {
           </div>
         ))}
       </div>
+      <MetaLeadAdsActions />
     </section>
   );
 }

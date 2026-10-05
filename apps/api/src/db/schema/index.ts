@@ -15,6 +15,7 @@ export * from './insights.js';
 export * from './integrations.js';
 export * from './jobs.js';
 export * from './leads.js';
+export * from './meta-forms.js';
 export * from './meta-leads.js';
 export * from './org.js';
 export * from './projects.js';
