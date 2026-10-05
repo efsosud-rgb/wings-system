@@ -551,6 +551,14 @@ export function utmSourceName(value: string): string {
   return META_SITE_SOURCE_NAMES[trimmed.toLowerCase()] ?? trimmed;
 }
 
+/** The ad platform a utm_source names, Meta's short names included; null when neither. */
+export function adPlatformOfUtmSource(value: string | null | undefined): 'google' | 'meta' | null {
+  const source = utmSourceName(value ?? '').toLowerCase();
+  if (/google|adwords|gads/.test(source)) return 'google';
+  if (/facebook|instagram|messenger|audience_network|meta/.test(source)) return 'meta';
+  return null;
+}
+
 /** Whether `urlTags` carries every parameter of `META_URL_TAGS`, in any order. */
 export function hasStandardUrlTags(urlTags: string | null | undefined): boolean {
   const present = new Set(

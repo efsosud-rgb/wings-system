@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { META_URL_TAGS } from '@wings/shared';
 import { utmContentOfCreative } from './meta-parse.js';
 
 describe('utm_content of a creative', () => {
@@ -29,6 +30,15 @@ describe('utm_content of a creative', () => {
     expect(utmContentOfCreative({ url_tags: 'utm_source=facebook&utm_content=video-9' })).toBe(
       'video-9',
     );
+  });
+
+  it('is null for the standard url_tags, whose utm_content is the ad id Meta fills per click', () => {
+    expect(
+      utmContentOfCreative({
+        object_story_spec: { link_data: { link: 'https://x.com.br/' } },
+        url_tags: META_URL_TAGS,
+      }),
+    ).toBeNull();
   });
 
   it('is null for an ad whose link has none (the ads made before per-ad numbering)', () => {

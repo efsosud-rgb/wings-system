@@ -55,6 +55,54 @@ describe('rdAttributionOf', () => {
     });
   });
 
+  it('reads the ids from the platforms\' UTM standard, and Meta\'s short source names', () => {
+    const meta = rdAttributionOf({
+      content: {},
+      url: null,
+      trafficSource: encoded({
+        current_session: {
+          value:
+            'utm_source=ig&utm_medium=cpc&utm_campaign=120230596004630670&utm_content=120230596004640670&utm_term=120230596004620670',
+        },
+      }),
+    });
+    expect(meta).toMatchObject({
+      utmSource: 'instagram',
+      adPlatform: 'meta',
+      adCampaignExternalId: '120230596004630670',
+      adSetExternalId: '120230596004620670',
+      adExternalId: '120230596004640670',
+    });
+    expect(
+      ['msg', 'an'].map(
+        (source) =>
+          rdAttributionOf({ content: {}, url: `https://x.com/?utm_source=${source}`, trafficSource: null })
+            ?.adPlatform,
+      ),
+    ).toEqual(['meta', 'meta']);
+
+    const google = rdAttributionOf({
+      content: {},
+      url: 'https://x.com/?utm_source=google&utm_medium=cpc&utm_campaign=23479672774&utm_content=771234567890&utm_term=123',
+      trafficSource: null,
+    });
+    // utm_term is Google's keyword, never an ad group.
+    expect(google).toMatchObject({
+      adPlatform: 'google',
+      adCampaignExternalId: '23479672774',
+      adSetExternalId: null,
+      adExternalId: '771234567890',
+    });
+    // A slug in utm_campaign is not an id.
+    expect(
+      rdAttributionOf({
+        content: {},
+        url: 'https://x.com/?utm_source=facebook&utm_campaign=formatacao_set26',
+        trafficSource: null,
+      })?.adCampaignExternalId,
+    ).toBeNull();
+  });
+
   it('is null when the conversion carries nothing, and survives a broken traffic_source', () => {
     expect(
       rdAttributionOf({ content: {}, url: 'https://x.com/a', trafficSource: 'encoded_%%%' }),

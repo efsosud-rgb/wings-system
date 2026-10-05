@@ -9,6 +9,7 @@ import {
   describeReach,
   reachSchema,
   adDestination,
+  adPlatformOfUtmSource,
   adUtmContent,
   applyUtms,
   GOOGLE_ACCOUNT_URL_SUFFIX,
@@ -197,6 +198,12 @@ describe('the platforms\' UTM standard', () => {
     expect(hasStandardUrlTags(META_URL_TAGS.split('&').reverse().join('&'))).toBe(true);
     expect(hasStandardUrlTags('utm_source=facebook&utm_medium=cpc')).toBe(false);
     expect(hasStandardUrlTags(null)).toBe(false);
+  });
+
+  it('tells the platform from a utm_source, Meta\'s short names included', () => {
+    expect(['fb', 'ig', 'msg', 'an', 'facebook', 'google', 'GOOGLE', 'rd', null].map(adPlatformOfUtmSource)).toEqual(
+      ['meta', 'meta', 'meta', 'meta', 'meta', 'google', 'google', null, null],
+    );
   });
 
   it('spells out Meta\'s site source names', () => {

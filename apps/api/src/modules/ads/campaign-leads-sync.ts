@@ -7,6 +7,7 @@ import {
   maskPhone,
   type AdPlatform,
   type AttributionMethod,
+  utmSourceName,
   type UnattributedReason,
 } from '@wings/shared';
 import { eq, inArray, isNull, sql } from 'drizzle-orm';
@@ -112,8 +113,10 @@ export function utmsOfTrafficSource(trafficSource: string | null | undefined): U
       if (typeof value === 'string' && !params.has(key)) params.set(key, value);
     }
     const pick = (key: string) => params.get(`utm_${key}`)?.trim() || null;
+    const source = pick('source');
     return {
-      source: pick('source'),
+      // Meta's {{site_source_name}} (fb, ig, msg, an) spelled out.
+      source: source ? utmSourceName(source) : null,
       medium: pick('medium'),
       campaign: pick('campaign'),
       content: pick('content'),

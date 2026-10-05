@@ -1,3 +1,4 @@
+import { adPlatformOfUtmSource, utmSourceName } from '@wings/shared';
 import { paramsOfAddress } from '../../lib/query-params.js';
 import type { LeadAttribution } from './service.js';
 
@@ -108,17 +109,18 @@ export function rdAttributionOf(input: {
 
   const utm = Object.fromEntries(UTM_KEYS.map((key) => [key, params.get(`utm_${key}`) ?? null]));
   const click = Object.fromEntries(CLICK_KEYS.map((key) => [key, params.get(key) ?? null]));
-  const source = (utm.source ?? '').toLowerCase();
+  const sourcePlatform = adPlatformOfUtmSource(utm.source);
   const adPlatform =
-    click.gclid || click.gbraid || click.wbraid || /google|adwords|gads/.test(source)
+    click.gclid || click.gbraid || click.wbraid || sourcePlatform === 'google'
       ? 'google'
-      : click.fbclid || /facebook|instagram|meta|^fb$|^ig$/.test(source)
+      : click.fbclid || sourcePlatform === 'meta'
         ? 'meta'
         : null;
   const referrer = pageOf(params.get('referrer') ?? null);
 
   const attribution: LeadAttribution = {
-    utmSource: utm.source,
+    // Meta's {{site_source_name}} (fb, ig, msg, an) spelled out.
+    utmSource: utm.source ? utmSourceName(utm.source) : null,
     utmMedium: utm.medium,
     utmCampaign: utm.campaign,
     utmContent: utm.content,
@@ -128,9 +130,18 @@ export function rdAttributionOf(input: {
     gbraid: click.gbraid,
     wbraid: click.wbraid,
     adPlatform,
-    adCampaignExternalId: idOf(params, CAMPAIGN_ID_KEYS),
-    adSetExternalId: idOf(params, AD_SET_ID_KEYS),
-    adExternalId: idOf(params, AD_ID_KEYS),
+    // The platforms' UTM standard carries the ids in the UTMs themselves
+    // (Meta's url_tags: campaign, ad, ad set; Google's account suffix:
+    // campaign and ad, utm_term being the keyword). Digits only, as above.
+    adCampaignExternalId: idOf(
+      params,
+      adPlatform ? [...CAMPAIGN_ID_KEYS, 'utm_campaign'] : CAMPAIGN_ID_KEYS,
+    ),
+    adSetExternalId: idOf(
+      params,
+      adPlatform === 'meta' ? [...AD_SET_ID_KEYS, 'utm_term'] : AD_SET_ID_KEYS,
+    ),
+    adExternalId: idOf(params, adPlatform ? [...AD_ID_KEYS, 'utm_content'] : AD_ID_KEYS),
     referrer,
   };
   return Object.values(attribution).some((value) => value !== null) ? attribution : null;
