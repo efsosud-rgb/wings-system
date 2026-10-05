@@ -520,11 +520,17 @@
   font-variant-numeric: tabular-nums;
 }
 .crm-card-task {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: var(--text-xs);
   color: var(--text-2);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.crm-card-task .icon {
+  flex-shrink: 0;
 }
 .crm-card-task.is-late {
   color: var(--danger);

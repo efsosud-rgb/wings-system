@@ -2,6 +2,7 @@ import { initialsOf, sourceBadgeOf, type BoardCard } from '@wings/shared';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ago, dueLabel, formatPhone, isPast, money } from './format.js';
+import { Icon } from '../../components/Icon.js';
 
 /**
  * A compact card: name, company, contact, value, the owner's initials, time
@@ -63,7 +64,7 @@ export function DealCard({
       </div>
       {card.nextTask && (
         <div className={`crm-card-task${late ? ' is-late' : ''}`}>
-          {late ? '⚑ ' : '◷ '}
+          <Icon name={late ? 'alert' : 'clock'} size={12} />
           {card.nextTask.title} · {dueLabel(card.nextTask.dueAt)}
         </div>
       )}
