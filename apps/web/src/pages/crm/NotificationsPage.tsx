@@ -12,6 +12,8 @@ const KIND_LABEL: Record<string, string> = {
   first_contact_overdue: 'Primeiro contato atrasado',
   task_overdue: 'Tarefa atrasada',
   stage_stuck: 'Negociação parada',
+  new_lead: 'Novo lead',
+  lead_unassigned: 'Lead sem dono',
   automation: 'Aviso da automação',
 };
 

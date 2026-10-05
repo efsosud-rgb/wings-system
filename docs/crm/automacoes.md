@@ -53,6 +53,16 @@ Sem WhatsApp nem e-mail por enquanto.
 `{{vendedor}}`, `{{etapa}}`; qualquer outra é recusada ao salvar. O texto fica no outbox
 (a ficha do lead), nunca em log.
 
+## Avisos de chegada e rodízio de Formatação (05/10/2026)
+
+- **Lead novo pela Meta, pelo RD (landing) ou pelo formulário do site**, criado (não junção) e fora de importação: `announceNewLead` (`crm-alerts.ts`), chamado por `upsertLead`, direto no código, sem regra cadastrada.
+  - **Com dono** (do rodízio): o dono recebe em Avisos "Novo lead para você" com o prazo do primeiro contato (1 hora útil, horário de Brasília).
+  - **Sem dono** (rodízio do funil vazio): Diretoria e gerentes do comercial (papel `gerente_comercial` ou gerente de setor do Comercial), só ativos, recebem na hora "Lead sem dono". Vendedores não.
+  - O texto nunca cita a pessoa. Um aviso por lead e pessoa (`dedupe_key`); falha ao avisar não desfaz o lead. Importação, espelho do RD CRM, WhatsApp por link e junção com lead existente não geram esse aviso.
+- **Migração `0069_crm_rotation_formatacao_diretoria`:** a 0065 só aceitava papéis de vendedor/gerente e deixou o rodízio de Formatação vazio quando a Thais é Diretoria. A 0069 a coloca no rodízio de Formatação **só se o funil não tiver nenhum membro**; quem já está lá não é tocado; se ela não existir, só registra um NOTICE. Consultoria não foi incluída.
+- **Ordem de merge:** 0068 é da previsão de fechamento; na junção conferir que o `when` da 0069 no `_journal.json` é maior que o da 0068 (o Drizzle ignora migração com data anterior à última aplicada).
+- **Fica para depois (decisão do Eric):** dar dono aos leads antigos sem dono.
+
 ## Migração
 
 `0066_crm_automations` (8 tabelas; renumerar no merge se outra entrar antes). `wings_ro` lê

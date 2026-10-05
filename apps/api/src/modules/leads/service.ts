@@ -43,6 +43,7 @@ import {
   rdUserMap,
 } from '../../db/schema/index.js';
 import { activitiesOf } from './activities.js';
+import { announceNewLead } from './crm-alerts.js';
 import { attachLeadContact, contactsOfLead, findOrCreateCompany } from './contacts.js';
 import {
   announceStageEntered,
@@ -331,6 +332,7 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
     incoming.source !== 'rd_crm'
   )
     await announceStageEntered(result.lead);
+  if (result.created && !incoming.importBatchId) await announceNewLead(db, result.lead);
   return result;
 }
 

@@ -1,5 +1,5 @@
 import { SESSION_COOKIE } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
@@ -172,7 +172,12 @@ describe('Lead Ads read with only the key', () => {
     const notices = await db
       .select()
       .from(crmNotifications)
-      .where(eq(crmNotifications.recipientEmployeeId, board.id));
+      .where(
+        and(
+          eq(crmNotifications.recipientEmployeeId, board.id),
+          eq(crmNotifications.kind, 'automation'),
+        ),
+      );
     expect(notices).toHaveLength(1);
     expect(notices[0]!.message).not.toMatch(/Fulano|example|5511/);
   });
