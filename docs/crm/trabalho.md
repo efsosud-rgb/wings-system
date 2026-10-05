@@ -1,6 +1,6 @@
 # CRM Vendas — o Funil como lugar de trabalho (Fase 1)
 
-05/10/2026, branch `feat/crm-trabalho`, migração **0062** (a 0061 é a fila do Lead Ads, `docs/leads/meta-lead-ads.md`; a 0060 é do BI). Decisão do Eric: o Wings System é o CRM oficial; o RD Station CRM recebe cópia durante a transição. O que existia (`fase1-operacao.md`: importador, seguimento por hora, webhook, formulário do site, links) continua valendo; este documento diz o que mudou.
+05/10/2026, branch `feat/crm-trabalho`, migração **0064** (uma só, Lead Ads + Fase 1, renumerada depois da 0063 do Opus; a 0060 é do BI). Decisão do Eric: o Wings System é o CRM oficial; o RD Station CRM recebe cópia durante a transição. O que existia (`fase1-operacao.md`: importador, seguimento por hora, webhook, formulário do site, links) continua valendo; este documento diz o que mudou.
 
 ## Etapas (`crm_stages`)
 

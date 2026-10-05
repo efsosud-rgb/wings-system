@@ -1,6 +1,6 @@
 # Meta Lead Ads → Wings System → RD CRM
 
-05/10/2026 (branch `feat/crm-trabalho`, migrações 0061 e 0062). Decisão do Eric: o **destino principal é o CRM do Wings System** — todo lead de formulário instantâneo da Meta cai sozinho no funil do segmento (Formatação na etapa de entrada "Sem contato", Expansão em "Novo Contato"), com a origem completa, e vai para o vendedor pelo rodízio do funil. O RD CRM recebe uma cópia enquanto durar a transição, **sem travar a entrada no Wings**: se o RD falhar, o lead já está no Wings e a cópia volta para nova tentativa. O histórico dos últimos 90 dias (limite da Meta) entra pelo botão **"Buscar leads da Meta"** (Funil → bloco Meta Lead Ads), acionado pelo Eric.
+05/10/2026 (branch `feat/crm-trabalho`, migração 0064). Decisão do Eric: o **destino principal é o CRM do Wings System** — todo lead de formulário instantâneo da Meta cai sozinho no funil do segmento (Formatação na etapa de entrada "Sem contato", Expansão em "Novo Contato"), com a origem completa, e vai para o vendedor pelo rodízio do funil. O RD CRM recebe uma cópia enquanto durar a transição, **sem travar a entrada no Wings**: se o RD falhar, o lead já está no Wings e a cópia volta para nova tentativa. O histórico dos últimos 90 dias (limite da Meta) entra pelo botão **"Buscar leads da Meta"** (Funil → bloco Meta Lead Ads), acionado pelo Eric.
 
 ## Como funciona
 
