@@ -8,3 +8,6 @@ packages/studio/src/
 packages/studio/tests/
 packages/studio/UPSTREAM-*.md
 packages/studio/LICENSE
+# Official brand files, byte-exact to the manual extraction (sha256 in wings-logo.test.ts)
+apps/web/src/brand/wings-logo-paths.js
+apps/web/src/brand/*.svg
