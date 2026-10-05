@@ -1,0 +1,340 @@
+{
+  "version": "7.3",
+  "screens": [
+    {
+      "id": "SEU_NEGOCIO",
+      "title": "Seu negócio",
+      "data": {
+        "campanhas": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            }
+          },
+          "__example__": [
+            {
+              "id": "nao_vi",
+              "title": "Não vi anúncio"
+            },
+            {
+              "id": "camp_exemplo",
+              "title": "Campanha de exemplo"
+            }
+          ]
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextHeading",
+            "text": "Conte um pouco do seu negócio"
+          },
+          {
+            "type": "TextInput",
+            "name": "nome",
+            "label": "Seu nome",
+            "input-type": "text",
+            "required": true
+          },
+          {
+            "type": "Dropdown",
+            "name": "segmento_negocio",
+            "label": "Segmento",
+            "required": true,
+            "data-source": [
+              {
+                "id": "alimentacao",
+                "title": "Alimentação"
+              },
+              {
+                "id": "beleza",
+                "title": "Beleza e estética"
+              },
+              {
+                "id": "educacao",
+                "title": "Educação"
+              },
+              {
+                "id": "saude",
+                "title": "Saúde e bem-estar"
+              },
+              {
+                "id": "servicos",
+                "title": "Serviços"
+              },
+              {
+                "id": "varejo",
+                "title": "Varejo"
+              },
+              {
+                "id": "outro",
+                "title": "Outro"
+              }
+            ]
+          },
+          {
+            "type": "RadioButtonsGroup",
+            "name": "tempo",
+            "label": "Há quanto tempo opera?",
+            "required": true,
+            "data-source": [
+              {
+                "id": "menos_1",
+                "title": "Menos de 1 ano"
+              },
+              {
+                "id": "1_3",
+                "title": "De 1 a 3 anos"
+              },
+              {
+                "id": "3_5",
+                "title": "De 3 a 5 anos"
+              },
+              {
+                "id": "mais_5",
+                "title": "Mais de 5 anos"
+              }
+            ]
+          },
+          {
+            "type": "RadioButtonsGroup",
+            "name": "unidades",
+            "label": "Quantas unidades tem hoje?",
+            "required": true,
+            "data-source": [
+              {
+                "id": "1",
+                "title": "1 unidade"
+              },
+              {
+                "id": "2_3",
+                "title": "2 ou 3 unidades"
+              },
+              {
+                "id": "4_mais",
+                "title": "4 ou mais"
+              }
+            ]
+          },
+          {
+            "type": "TextInput",
+            "name": "cidade",
+            "label": "Cidade e estado",
+            "input-type": "text",
+            "required": true
+          },
+          {
+            "type": "Footer",
+            "label": "Continuar",
+            "on-click-action": {
+              "name": "navigate",
+              "next": {
+                "type": "screen",
+                "name": "SEU_OBJETIVO"
+              },
+              "payload": {
+                "campanhas": "${data.campanhas}",
+                "nome": "${form.nome}",
+                "segmento_negocio": "${form.segmento_negocio}",
+                "tempo": "${form.tempo}",
+                "unidades": "${form.unidades}",
+                "cidade": "${form.cidade}"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "SEU_OBJETIVO",
+      "title": "Seu objetivo",
+      "terminal": true,
+      "success": true,
+      "data": {
+        "campanhas": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            }
+          },
+          "__example__": [
+            {
+              "id": "nao_vi",
+              "title": "Não vi anúncio"
+            },
+            {
+              "id": "camp_exemplo",
+              "title": "Campanha de exemplo"
+            }
+          ]
+        },
+        "nome": {
+          "type": "string",
+          "__example__": "Ana"
+        },
+        "segmento_negocio": {
+          "type": "string",
+          "__example__": "alimentacao"
+        },
+        "tempo": {
+          "type": "string",
+          "__example__": "3_5"
+        },
+        "unidades": {
+          "type": "string",
+          "__example__": "2_3"
+        },
+        "cidade": {
+          "type": "string",
+          "__example__": "Niterói, RJ"
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "RadioButtonsGroup",
+            "name": "objetivo",
+            "label": "O que você quer agora?",
+            "required": true,
+            "data-source": [
+              {
+                "id": "franquear",
+                "title": "Transformar o negócio em franquia"
+              },
+              {
+                "id": "crescer_proprio",
+                "title": "Crescer com unidades próprias"
+              },
+              {
+                "id": "organizar",
+                "title": "Organizar a operação para crescer"
+              },
+              {
+                "id": "avaliando",
+                "title": "Ainda estou avaliando"
+              }
+            ]
+          },
+          {
+            "type": "RadioButtonsGroup",
+            "name": "prazo",
+            "label": "Quando quer começar?",
+            "required": true,
+            "data-source": [
+              {
+                "id": "3m",
+                "title": "Nos próximos 3 meses"
+              },
+              {
+                "id": "6m",
+                "title": "Em 3 a 6 meses"
+              },
+              {
+                "id": "12m",
+                "title": "Em 6 a 12 meses"
+              },
+              {
+                "id": "pesquisando",
+                "title": "Ainda estou pesquisando"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "origem",
+            "label": "Como conheceu a Wings?",
+            "required": true,
+            "data-source": [
+              {
+                "id": "instagram",
+                "title": "Instagram"
+              },
+              {
+                "id": "facebook",
+                "title": "Facebook"
+              },
+              {
+                "id": "google",
+                "title": "Google"
+              },
+              {
+                "id": "tiktok",
+                "title": "TikTok"
+              },
+              {
+                "id": "linkedin",
+                "title": "LinkedIn"
+              },
+              {
+                "id": "indicacao",
+                "title": "Indicação"
+              },
+              {
+                "id": "evento",
+                "title": "Evento ou feira"
+              },
+              {
+                "id": "outro",
+                "title": "Outro"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "campanha",
+            "label": "Viu algum anúncio nosso? Qual?",
+            "required": true,
+            "data-source": "${data.campanhas}"
+          },
+          {
+            "type": "TextCaption",
+            "text": "Ao enviar, você concorda que a Wings use estes dados para falar com você sobre o seu interesse."
+          },
+          {
+            "type": "EmbeddedLink",
+            "text": "Ler a política de privacidade",
+            "on-click-action": {
+              "name": "open_url",
+              "url": "https://wingscompany.com.br/"
+            }
+          },
+          {
+            "type": "Footer",
+            "label": "Enviar",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {
+                "segmento": "formatacao",
+                "nome": "${data.nome}",
+                "segmento_negocio": "${data.segmento_negocio}",
+                "tempo": "${data.tempo}",
+                "unidades": "${data.unidades}",
+                "cidade": "${data.cidade}",
+                "objetivo": "${form.objetivo}",
+                "prazo": "${form.prazo}",
+                "origem": "${form.origem}",
+                "campanha": "${form.campanha}"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

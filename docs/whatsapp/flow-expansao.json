@@ -1,0 +1,260 @@
+{
+  "version": "7.3",
+  "screens": [
+    {
+      "id": "SOBRE_VOCE",
+      "title": "Sobre você",
+      "data": {
+        "marca": {
+          "type": "string",
+          "__example__": "Marca de exemplo"
+        },
+        "campanhas": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            }
+          },
+          "__example__": [
+            {
+              "id": "nao_vi",
+              "title": "Não vi anúncio"
+            },
+            {
+              "id": "camp_exemplo",
+              "title": "Campanha de exemplo"
+            }
+          ]
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "TextSubheading",
+            "text": "Franquia de interesse"
+          },
+          {
+            "type": "TextBody",
+            "text": "${data.marca}"
+          },
+          {
+            "type": "TextInput",
+            "name": "nome",
+            "label": "Seu nome",
+            "input-type": "text",
+            "required": true
+          },
+          {
+            "type": "TextInput",
+            "name": "cidade",
+            "label": "Cidade e estado onde quer abrir",
+            "input-type": "text",
+            "required": true
+          },
+          {
+            "type": "Footer",
+            "label": "Continuar",
+            "on-click-action": {
+              "name": "navigate",
+              "next": {
+                "type": "screen",
+                "name": "SEU_MOMENTO"
+              },
+              "payload": {
+                "marca": "${data.marca}",
+                "campanhas": "${data.campanhas}",
+                "nome": "${form.nome}",
+                "cidade": "${form.cidade}"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "SEU_MOMENTO",
+      "title": "Seu momento",
+      "terminal": true,
+      "success": true,
+      "data": {
+        "marca": {
+          "type": "string",
+          "__example__": "Marca de exemplo"
+        },
+        "campanhas": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            }
+          },
+          "__example__": [
+            {
+              "id": "nao_vi",
+              "title": "Não vi anúncio"
+            },
+            {
+              "id": "camp_exemplo",
+              "title": "Campanha de exemplo"
+            }
+          ]
+        },
+        "nome": {
+          "type": "string",
+          "__example__": "Ana"
+        },
+        "cidade": {
+          "type": "string",
+          "__example__": "Niterói, RJ"
+        }
+      },
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "RadioButtonsGroup",
+            "name": "investimento",
+            "label": "Quanto pretende investir?",
+            "required": true,
+            "data-source": [
+              {
+                "id": "ate_100",
+                "title": "Até R$ 100 mil"
+              },
+              {
+                "id": "100_300",
+                "title": "De R$ 100 mil a R$ 300 mil"
+              },
+              {
+                "id": "300_600",
+                "title": "De R$ 300 mil a R$ 600 mil"
+              },
+              {
+                "id": "acima_600",
+                "title": "Acima de R$ 600 mil"
+              },
+              {
+                "id": "nao_informar",
+                "title": "Prefiro não informar agora"
+              }
+            ]
+          },
+          {
+            "type": "RadioButtonsGroup",
+            "name": "prazo",
+            "label": "Quando quer começar?",
+            "required": true,
+            "data-source": [
+              {
+                "id": "3m",
+                "title": "Nos próximos 3 meses"
+              },
+              {
+                "id": "6m",
+                "title": "Em 3 a 6 meses"
+              },
+              {
+                "id": "12m",
+                "title": "Em 6 a 12 meses"
+              },
+              {
+                "id": "pesquisando",
+                "title": "Ainda estou pesquisando"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "origem",
+            "label": "Como conheceu a Wings?",
+            "required": true,
+            "data-source": [
+              {
+                "id": "instagram",
+                "title": "Instagram"
+              },
+              {
+                "id": "facebook",
+                "title": "Facebook"
+              },
+              {
+                "id": "google",
+                "title": "Google"
+              },
+              {
+                "id": "tiktok",
+                "title": "TikTok"
+              },
+              {
+                "id": "linkedin",
+                "title": "LinkedIn"
+              },
+              {
+                "id": "indicacao",
+                "title": "Indicação"
+              },
+              {
+                "id": "evento",
+                "title": "Evento ou feira"
+              },
+              {
+                "id": "outro",
+                "title": "Outro"
+              }
+            ]
+          },
+          {
+            "type": "Dropdown",
+            "name": "campanha",
+            "label": "Viu algum anúncio nosso? Qual?",
+            "required": true,
+            "data-source": "${data.campanhas}"
+          },
+          {
+            "type": "TextCaption",
+            "text": "Ao enviar, você concorda que a Wings use estes dados para falar com você sobre o seu interesse."
+          },
+          {
+            "type": "EmbeddedLink",
+            "text": "Ler a política de privacidade",
+            "on-click-action": {
+              "name": "open_url",
+              "url": "https://wingscompany.com.br/"
+            }
+          },
+          {
+            "type": "Footer",
+            "label": "Enviar",
+            "on-click-action": {
+              "name": "complete",
+              "payload": {
+                "segmento": "expansao",
+                "marca": "${data.marca}",
+                "nome": "${data.nome}",
+                "cidade": "${data.cidade}",
+                "investimento": "${form.investimento}",
+                "prazo": "${form.prazo}",
+                "origem": "${form.origem}",
+                "campanha": "${form.campanha}"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
