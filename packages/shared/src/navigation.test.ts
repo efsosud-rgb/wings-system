@@ -125,7 +125,7 @@ describe('where a viewer lands', () => {
     // Marketing reaches the traffic studio; Admin Master can open the Funil,
     // which sits earlier in the tree, so that is where it lands.
     expect(defaultPathFor(marketing)).toBe('/marketing/trafego-pago-wings');
-    expect(defaultPathFor(adminMaster)).toBe('/crm-vendas/funil');
+    expect(defaultPathFor(adminMaster)).toBe('/crm-vendas/negociacoes');
   });
 
   it('never lands on a placeholder', () => {

@@ -1,4 +1,5 @@
 import {
+  can,
   expansionAreaSchema,
   generateTrackingCode,
   grantedScope,
@@ -18,9 +19,17 @@ import {
 import { asc, desc, eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { clients, leadSourceRules, leadTrackingLinks, leads } from '../../db/schema/index.js';
+import {
+  clients,
+  crmStages,
+  employees,
+  leadSourceRules,
+  leadTrackingLinks,
+  leads,
+} from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { activeClient, toClient } from '../clients/routes.js';
+import { changeLead } from './crm.js';
 import {
   brandOfLink,
   enqueueResearch,
@@ -95,11 +104,45 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
       if (!body.data.email && !body.data.phone) {
         return reply.status(400).send(invalid('Informe um e-mail ou um telefone.'));
       }
-      const clientId = body.data.clientId;
-      if (clientId && !(await activeClient(db, clientId))) {
+      const clientId = body.data.clientId || undefined;
+      const client = clientId ? await activeClient(db, clientId) : null;
+      if (clientId && !client) {
         return reply.status(400).send(invalid('Cliente inativo ou inexistente.'));
       }
       const actor = request.session.actor.employeeId;
+      const pipeline = body.data.pipeline || null;
+      // The owner: the one named (leads.assign to name someone else), the caller, or the rotation.
+      let ownerEmployeeId: string | null | undefined;
+      if (body.data.ownerEmployeeId === 'me') ownerEmployeeId = actor;
+      else if (body.data.ownerEmployeeId) {
+        if (
+          body.data.ownerEmployeeId !== actor &&
+          !can(request.session.actor, 'leads.assign').allowed
+        )
+          return reply
+            .status(403)
+            .send({
+              error: 'forbidden',
+              message: 'Só quem pode atribuir negociações escolhe outro dono.',
+            });
+        const owner = await db.query.employees.findFirst({
+          where: eq(employees.id, body.data.ownerEmployeeId),
+          columns: { id: true, status: true },
+        });
+        if (!owner || owner.status !== 'active')
+          return reply.status(400).send(invalid('Funcionário inexistente ou inativo.'));
+        ownerEmployeeId = owner.id;
+      } else
+        ownerEmployeeId =
+          pipeline && grantedScope(request.session.actor, 'leads.write') !== 'own' ? null : actor;
+      const stage = body.data.stageId
+        ? await db.query.crmStages.findFirst({ where: eq(crmStages.id, body.data.stageId) })
+        : null;
+      if (
+        body.data.stageId &&
+        (!stage || !stage.active || (pipeline && stage.pipeline !== pipeline))
+      )
+        return reply.status(400).send(invalid('Etapa inexistente ou de outro funil.'));
       const result = await upsertLead(db, {
         source: 'manual',
         name: body.data.name,
@@ -107,14 +150,26 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
         phone: body.data.phone || null,
         clientId: clientId ?? WINGS_CLIENT_ID,
         clientMapped: Boolean(clientId),
-        channel: body.data.channel ?? null,
+        brand: client && client.id !== WINGS_CLIENT_ID ? client.name : null,
+        pipeline: (stage?.pipeline as LeadPipeline | undefined) ?? pipeline,
+        company: body.data.companyName ? { name: body.data.companyName } : null,
+        valueCents: body.data.valueCents ?? null,
+        channel: body.data.channel || null,
         legalBasis: body.data.legalBasis,
         consentedAt: new Date(),
         consentSource: 'manual',
-        consentText: body.data.consentText,
-        ownerEmployeeId: actor,
+        consentText: body.data.consentText || 'Negociação criada no Wings System',
+        ownerEmployeeId,
         event: { kind: 'lead.created_manually', actorEmployeeId: actor },
       });
+      if (result.created && stage && result.lead.stageId !== stage.id) {
+        await changeLead(db, {
+          leadId: result.lead.id,
+          stageId: stage.id,
+          source: 'wings',
+          actorEmployeeId: actor,
+        });
+      }
       await writeAudit(db, {
         actorEmployeeId: actor,
         action: result.created ? 'lead.created' : 'lead.merged',

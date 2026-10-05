@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { LEAD_PIPELINES, type LeadPipeline } from './leads.js';
+import { LEAD_PIPELINES, type LeadPipeline, type LeadSource } from './leads.js';
 
 /**
  * CRM Vendas — the Funil as the team's place of work (plano
@@ -27,6 +27,8 @@ export interface CrmStage {
   rdStageId: string | null;
   /** Sofia's pre-qualification entry stage (Fase 4); false until Sofia is ready. */
   sofiaEntry: boolean;
+  /** Chance (0–100) a deal in this stage closes; weights the column's value. Configurable. */
+  probability: number;
   /** Open leads in the stage, when the caller asked for counts. */
   openCount?: number;
 }
@@ -45,10 +47,13 @@ export const crmStageUpdateSchema = z
   .object({
     name: z.string().trim().min(2, 'Informe o nome da etapa').max(CRM_STAGE_NAME_MAX).optional(),
     active: z.boolean().optional(),
+    probability: z.number().int().min(0).max(100).optional(),
   })
-  .refine((value) => value.name !== undefined || value.active !== undefined, {
-    message: 'Nada para alterar.',
-  });
+  .refine(
+    (value) =>
+      value.name !== undefined || value.active !== undefined || value.probability !== undefined,
+    { message: 'Nada para alterar.' },
+  );
 export type CrmStageUpdateInput = z.infer<typeof crmStageUpdateSchema>;
 
 /** The whole order of a funnel's stages, every active stage once. */
@@ -142,6 +147,7 @@ export interface LeadTask {
   leadId: string;
   /** For the task list: who the lead is (as the list already shows it). */
   leadName: string | null;
+  leadCompanyName: string | null;
   kind: LeadTaskKind;
   title: string;
   dueAt: string;
@@ -180,6 +186,15 @@ export const taskListQuerySchema = z.object({
   status: z.enum(['open', 'overdue', 'done', 'all']).default('open'),
   /** Only with a scope wider than own: every seller's tasks. */
   everyone: z.coerce.boolean().optional(),
+  /** With `everyone`: one seller's tasks. */
+  assignee: z
+    .uuid()
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  kind: z
+    .enum(LEAD_TASK_KINDS)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
 });
 export type TaskListQuery = z.infer<typeof taskListQuerySchema>;
 
@@ -229,17 +244,26 @@ export interface Seller {
 
 // --- kanban ---------------------------------------------------------------------------
 
-export const BOARD_CARDS_PER_STAGE = 60;
+export const BOARD_CARDS_PER_STAGE = 30;
 
+/** A compact card: the deal, who it is with, its value, its owner, its clock and where it came from. */
 export interface BoardCard {
   id: string;
   name: string | null;
+  companyName: string | null;
+  contactName: string | null;
+  email: string | null;
+  phone: string | null;
+  valueCents: number | null;
   brand: string | null;
   clientName: string;
+  ownerEmployeeId: string | null;
   ownerName: string | null;
   stageChangedAt: string | null;
-  /** The next open task's due time, when there is one. */
-  nextTaskDueAt: string | null;
+  /** The next open task, when there is one. */
+  nextTask: { title: string; dueAt: string } | null;
+  source: LeadSource;
+  won: boolean | null;
   createdAt: string;
 }
 
@@ -247,18 +271,27 @@ export interface BoardColumn {
   /** Null for the leads of the funnel that have no stage yet. */
   stage: CrmStage | null;
   total: number;
+  /** Sum of the deals' values in the column, cents. */
+  valueCents: number;
+  /** The sum weighted by the stage's probability, cents. */
+  weightedCents: number;
   cards: BoardCard[];
 }
 
 export interface Board {
   pipeline: LeadPipeline;
   columns: BoardColumn[];
+  total: number;
+  valueCents: number;
+  weightedCents: number;
 }
 
-export const boardQuerySchema = z.object({
+/** One column's next page of cards. */
+export const boardColumnQuerySchema = z.object({
   pipeline: z.enum(LEAD_PIPELINES),
-  owner: z.string().max(60).optional(),
-  clientId: z.uuid().optional(),
+  /** A stage id, or `none` for the leads without a stage. */
+  stageId: z.uuid().or(z.literal('none')),
+  offset: z.coerce.number().int().min(0).max(5000).default(0),
 });
 
 // --- business hours (the first-contact SLA) ----------------------------------------
@@ -351,3 +384,428 @@ export function addBusinessHours(from: Date, hours: number): Date {
   }
   return cursor;
 }
+
+// --- contacts and companies (CRM núcleo) ----------------------------------------------
+
+/**
+ * A lead is a deal; the person and the company it is with are records of
+ * their own, found again by e-mail, phone or CNPJ so a second arrival or an
+ * import never makes a twin. A won deal turns the company into a client of
+ * the Formatação register with one click.
+ */
+
+export const CRM_COMPANY_NAME_MAX = 120;
+export const CRM_CONTACT_NAME_MAX = 120;
+
+/** Accent- and case-blind, no punctuation, single spaces: how a company is found again by name. */
+export function companyKey(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+    .replace(/\b(ltda|me|epp|eireli|s\.?a\.?|sa)\b\.?/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+export interface CrmCompany {
+  id: string;
+  name: string;
+  cnpj: string | null;
+  phone: string | null;
+  email: string | null;
+  website: string | null;
+  city: string | null;
+  state: string | null;
+  segment: string | null;
+  /** The Formatação client this company became, when it did. */
+  clientId: string | null;
+  clientName: string | null;
+  contacts: number;
+  leads: number;
+  openLeads: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CrmContact {
+  id: string;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  jobTitle: string | null;
+  companyId: string | null;
+  companyName: string | null;
+  leads: number;
+  openLeads: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** A contact as the lead's page shows it. */
+export interface LeadContactRef {
+  id: string;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  jobTitle: string | null;
+  primary: boolean;
+}
+
+/** A lead as a contact's or a company's page lists it. */
+export interface CrmRelatedLead {
+  id: string;
+  name: string | null;
+  pipeline: LeadPipeline | null;
+  brand: string | null;
+  stage: string | null;
+  won: boolean | null;
+  ownerName: string | null;
+  valueCents: number | null;
+  createdAt: string;
+}
+
+const optionalText = (max: number) =>
+  z
+    .string()
+    .trim()
+    .max(max)
+    .optional()
+    .or(z.literal('').transform(() => undefined));
+
+export const crmCompanyInputSchema = z.object({
+  name: z.string().trim().min(2, 'Informe o nome da empresa').max(CRM_COMPANY_NAME_MAX),
+  cnpj: optionalText(20),
+  phone: optionalText(30),
+  email: optionalText(200),
+  website: optionalText(200),
+  city: optionalText(120),
+  state: optionalText(2),
+  segment: optionalText(80),
+});
+export type CrmCompanyInput = z.infer<typeof crmCompanyInputSchema>;
+
+export const crmCompanyUpdateSchema = crmCompanyInputSchema.partial().extend({
+  name: z.string().trim().min(2).max(CRM_COMPANY_NAME_MAX).optional(),
+});
+export type CrmCompanyUpdateInput = z.infer<typeof crmCompanyUpdateSchema>;
+
+export const crmContactInputSchema = z
+  .object({
+    name: optionalText(CRM_CONTACT_NAME_MAX),
+    email: optionalText(200),
+    phone: optionalText(30),
+    jobTitle: optionalText(80),
+    /** A company id, a new company's name, or null for none. */
+    companyId: z.uuid().nullable().optional(),
+    companyName: optionalText(CRM_COMPANY_NAME_MAX),
+  })
+  .refine((value) => value.email || value.phone, { message: 'Informe um e-mail ou um telefone.' });
+export type CrmContactInput = z.infer<typeof crmContactInputSchema>;
+
+export const crmContactUpdateSchema = z.object({
+  name: optionalText(CRM_CONTACT_NAME_MAX),
+  email: optionalText(200),
+  phone: optionalText(30),
+  jobTitle: optionalText(80),
+  companyId: z.uuid().nullable().optional(),
+  companyName: optionalText(CRM_COMPANY_NAME_MAX),
+});
+export type CrmContactUpdateInput = z.infer<typeof crmContactUpdateSchema>;
+
+/** Merge `fromId` into `intoId`: links move, gaps of the kept row are filled, the other is retired. */
+export const crmMergeSchema = z
+  .object({ fromId: z.uuid(), intoId: z.uuid() })
+  .refine((value) => value.fromId !== value.intoId, {
+    message: 'Escolha dois registros diferentes.',
+  });
+export type CrmMergeInput = z.infer<typeof crmMergeSchema>;
+
+export const crmSearchQuerySchema = z.object({
+  q: z
+    .string()
+    .trim()
+    .max(120)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
+  /** Pairs that share a phone, an e-mail (contacts) or a name (companies). */
+  duplicates: z.coerce.boolean().optional(),
+});
+
+/** Which contacts a lead has: add one (by id or by data), set the main one, take one off. */
+export const leadContactLinkSchema = z.object({
+  contactId: z.uuid().optional(),
+  contact: crmContactInputSchema.optional(),
+  primary: z.boolean().optional(),
+});
+
+/** A duplicate pair the server found, for the merge screen. */
+export interface CrmDuplicatePair<T> {
+  /** phone | email | name */
+  by: string;
+  a: T;
+  b: T;
+}
+
+// --- activities: calls and meetings ------------------------------------------------------
+
+export const LEAD_ACTIVITY_KINDS = ['call', 'meeting'] as const;
+export type LeadActivityKind = (typeof LEAD_ACTIVITY_KINDS)[number];
+export const LEAD_ACTIVITY_KIND_LABELS: Record<LeadActivityKind, string> = {
+  call: 'Ligação',
+  meeting: 'Reunião',
+};
+
+export const LEAD_CALL_OUTCOMES = [
+  'answered',
+  'no_answer',
+  'busy',
+  'voicemail',
+  'wrong_number',
+  'callback',
+] as const;
+export type LeadCallOutcome = (typeof LEAD_CALL_OUTCOMES)[number];
+export const LEAD_CALL_OUTCOME_LABELS: Record<LeadCallOutcome, string> = {
+  answered: 'Atendeu',
+  no_answer: 'Não atendeu',
+  busy: 'Ocupado',
+  voicemail: 'Caixa postal',
+  wrong_number: 'Número errado',
+  callback: 'Pediu retorno',
+};
+
+export const LEAD_ACTIVITY_NOTE_MAX = 2000;
+
+export interface LeadActivity {
+  id: string;
+  kind: LeadActivityKind;
+  at: string;
+  outcome: LeadCallOutcome | null;
+  durationSeconds: number | null;
+  participants: string | null;
+  meetUrl: string | null;
+  note: string | null;
+  actorName: string | null;
+  createdAt: string;
+}
+
+const meetUrl = z
+  .string()
+  .trim()
+  .max(300)
+  .refine(
+    (value) =>
+      /^https:\/\/(meet\.google\.com|[\w.-]+\.zoom\.us|teams\.microsoft\.com)\//.test(value),
+    {
+      message: 'Informe o link completo do Meet (https://meet.google.com/…).',
+    },
+  );
+
+export const leadActivityCreateSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('call'),
+    at: z.iso.datetime({ offset: true }).optional(),
+    outcome: z.enum(LEAD_CALL_OUTCOMES),
+    durationSeconds: z.number().int().min(0).max(86_400).optional(),
+    note: optionalText(LEAD_ACTIVITY_NOTE_MAX),
+  }),
+  z.object({
+    kind: z.literal('meeting'),
+    at: z.iso.datetime({ offset: true }),
+    participants: optionalText(500),
+    meetUrl: meetUrl.optional().or(z.literal('').transform(() => undefined)),
+    note: optionalText(LEAD_ACTIVITY_NOTE_MAX),
+  }),
+]);
+export type LeadActivityCreateInput = z.infer<typeof leadActivityCreateSchema>;
+
+// --- value and brand of interest -----------------------------------------------------
+
+export const LEAD_VALUE_MAX_CENTS = 100_000_000_00;
+
+/**
+ * The lead's deal fields a seller edits on its page: the estimated value, the
+ * brand of interest (an Expansão brand from Administração → CRM; it files the
+ * lead under that client) and the company.
+ */
+export const leadDealUpdateSchema = z
+  .object({
+    valueCents: z.number().int().min(0).max(LEAD_VALUE_MAX_CENTS).nullable().optional(),
+    /** A client id from the brand list, or null to clear the brand. */
+    brandClientId: z.uuid().nullable().optional(),
+    /** A company id, or null to detach; `companyName` makes (or finds) one by name. */
+    companyId: z.uuid().nullable().optional(),
+    companyName: optionalText(CRM_COMPANY_NAME_MAX),
+  })
+  .refine(
+    (value) =>
+      value.valueCents !== undefined ||
+      value.brandClientId !== undefined ||
+      value.companyId !== undefined ||
+      value.companyName !== undefined,
+    { message: 'Nada para alterar.' },
+  );
+export type LeadDealUpdateInput = z.infer<typeof leadDealUpdateSchema>;
+
+/** An Expansão brand a lead may be interested in: a client with its franchise on sale. */
+export interface CrmBrand {
+  clientId: string;
+  name: string;
+  onSale: boolean;
+  openLeads: number;
+}
+
+export const crmBrandCreateSchema = z.object({
+  name: z.string().trim().min(2, 'Informe o nome da marca').max(80),
+});
+
+export const crmBrandUpdateSchema = z.object({ onSale: z.boolean() });
+
+// --- CSV import and export ------------------------------------------------------------
+
+export const CSV_IMPORT_MAX_BYTES = 2_000_000;
+export const CSV_IMPORT_MAX_ROWS = 5_000;
+export const CSV_EXPORT_MAX_ROWS = 10_000;
+
+/** The lead fields a CSV column may feed. */
+export const CSV_IMPORT_FIELDS = [
+  'name',
+  'email',
+  'phone',
+  'company',
+  'cnpj',
+  'city',
+  'brand',
+  'pipeline',
+  'stage',
+  'value',
+  'owner',
+  'note',
+] as const;
+export type CsvImportField = (typeof CSV_IMPORT_FIELDS)[number];
+export const CSV_IMPORT_FIELD_LABELS: Record<CsvImportField, string> = {
+  name: 'Nome',
+  email: 'E-mail',
+  phone: 'Telefone',
+  company: 'Empresa',
+  cnpj: 'CNPJ',
+  city: 'Cidade',
+  brand: 'Marca de interesse',
+  pipeline: 'Funil',
+  stage: 'Etapa',
+  value: 'Valor estimado',
+  owner: 'Dono (e-mail do vendedor)',
+  note: 'Anotação',
+};
+
+/** Header names (accent- and case-blind) that map to each field on their own. */
+export const CSV_HEADER_ALIASES: Record<CsvImportField, string[]> = {
+  name: ['nome', 'name', 'lead', 'contato', 'nome completo'],
+  email: ['email', 'e-mail', 'e mail'],
+  phone: ['telefone', 'celular', 'whatsapp', 'phone', 'fone', 'tel'],
+  company: ['empresa', 'company', 'organizacao', 'razao social', 'nome fantasia'],
+  cnpj: ['cnpj'],
+  city: ['cidade', 'city', 'municipio'],
+  brand: ['marca', 'marca de interesse', 'franquia', 'brand', 'cliente'],
+  pipeline: ['funil', 'pipeline'],
+  stage: ['etapa', 'stage', 'estagio', 'fase'],
+  value: ['valor', 'valor estimado', 'value', 'ticket'],
+  owner: ['dono', 'vendedor', 'responsavel', 'owner', 'usuario'],
+  note: ['anotacao', 'observacao', 'observacoes', 'nota', 'notes', 'comentario'],
+};
+
+export const csvImportMappingSchema = z.record(z.string().max(200), z.enum(CSV_IMPORT_FIELDS));
+
+export const csvImportRequestSchema = z.object({
+  /** The file's text, UTF-8. */
+  csv: z.string().min(1, 'Envie um arquivo CSV.').max(CSV_IMPORT_MAX_BYTES),
+  /** Column header -> field. Headers left out are ignored. */
+  mapping: csvImportMappingSchema,
+  pipeline: z.enum(LEAD_PIPELINES).optional(),
+  /** Default brand (a client id) for rows without one. */
+  brandClientId: z.uuid().optional(),
+  /** Default owner; a seller's own imports always land on them. */
+  ownerEmployeeId: z.uuid().optional(),
+});
+export type CsvImportRequest = z.infer<typeof csvImportRequestSchema>;
+
+export interface CsvPreviewRow {
+  line: number;
+  values: Record<CsvImportField, string>;
+  /** Empty when the row would import. */
+  errors: string[];
+  /** The lead the row would join (same e-mail or phone), when there is one. */
+  matchesLeadId: string | null;
+}
+
+export interface CsvImportPreview {
+  headers: string[];
+  /** The mapping the server guessed from the headers (the caller may change it). */
+  suggestedMapping: Record<string, CsvImportField>;
+  rows: number;
+  valid: number;
+  invalid: number;
+  /** Rows that would join a lead the system already has. */
+  existing: number;
+  /** Rows that repeat another row of the same file (same e-mail or phone). */
+  repeated: number;
+  sample: CsvPreviewRow[];
+}
+
+export interface CsvImportReport {
+  batchId: string;
+  rows: number;
+  created: number;
+  matched: number;
+  skipped: number;
+  errors: { line: number; message: string }[];
+}
+
+// --- saved views (the tabs of Negociações) ------------------------------------------------
+
+export const CRM_VIEW_NAME_MAX = 40;
+
+/** A person's saved filter set on a funnel: a tab next to "Todas" and "Minhas". */
+export interface CrmSavedView {
+  id: string;
+  pipeline: LeadPipeline;
+  name: string;
+  /** The list query's fields, as the screen keeps them. */
+  filters: Record<string, string>;
+  createdAt: string;
+}
+
+export const crmSavedViewCreateSchema = z.object({
+  pipeline: z.enum(LEAD_PIPELINES),
+  name: z.string().trim().min(2, 'Dê um nome à visão').max(CRM_VIEW_NAME_MAX),
+  filters: z.record(z.string().max(40), z.string().max(200)),
+});
+export type CrmSavedViewCreateInput = z.infer<typeof crmSavedViewCreateSchema>;
+
+/** The two letters a card shows for the owner: "Thais Lima" -> "TL". */
+export function initialsOf(name: string | null | undefined): string {
+  const parts = (name ?? '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '—';
+  const first = parts[0]![0] ?? '';
+  const last = parts.length > 1 ? (parts[parts.length - 1]![0] ?? '') : '';
+  return `${first}${last}`.toUpperCase();
+}
+
+/** The badge a source gets on a card: short label and a tone the CSS knows. */
+export const LEAD_SOURCE_BADGES: Record<LeadSource, { label: string; tone: string }> = {
+  meta_lead_ads: { label: 'Meta', tone: 'meta' },
+  rd_station: { label: 'RD', tone: 'rd' },
+  rd_crm: { label: 'RD', tone: 'rd' },
+  site_form: { label: 'Site', tone: 'site' },
+  whatsapp_link: { label: 'WhatsApp', tone: 'whatsapp' },
+  manual: { label: 'Manual', tone: 'manual' },
+  csv_import: { label: 'Planilha', tone: 'manual' },
+};
+
+/** Google shows when the attribution says so, whatever the door was. */
+export const sourceBadgeOf = (
+  source: LeadSource,
+  adPlatform?: string | null,
+): { label: string; tone: string } =>
+  adPlatform === 'google' ? { label: 'Google', tone: 'google' } : LEAD_SOURCE_BADGES[source];

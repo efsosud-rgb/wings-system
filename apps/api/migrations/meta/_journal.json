@@ -442,6 +442,13 @@
       "when": 1791215025409,
       "tag": "0064_crm_fase1_lead_ads",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1791217384713,
+      "tag": "0065_crm_nucleo",
+      "breakpoints": true
     }
   ]
 }

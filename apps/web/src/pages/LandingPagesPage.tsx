@@ -23,7 +23,7 @@ import {
   useUpdateLandingPage,
 } from '../api/leads.js';
 import { Alert, Button } from '../components/ui.js';
-import { formatDateTime } from './LeadsPage.js';
+import { formatDateTime } from './crm/format.js';
 
 /**
  * CRM Vendas → Landing pages. Every page a lead can arrive by, with its client

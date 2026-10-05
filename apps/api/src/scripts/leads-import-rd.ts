@@ -2,7 +2,12 @@ import { createDb } from '../db/client.js';
 import { loadDotEnv } from '../db/load-env.js';
 import { loadEnv } from '../env.js';
 import { auditLog } from '../db/schema/index.js';
-import { importRdDeals, rdCrmReader, type RdImportResult } from '../modules/leads/rd-import.js';
+import {
+  importRdDeals,
+  rdCrmReader,
+  rdOwnerAllowlist,
+  type RdImportResult,
+} from '../modules/leads/rd-import.js';
 
 /**
  * Brings RD CRM's Expansão and Formatação deals into the Funil (CRM phase 1,
@@ -15,15 +20,21 @@ import { importRdDeals, rdCrmReader, type RdImportResult } from '../modules/lead
  *
  * The output is counts, brand names and RD field shapes — never a person.
  */
-export function formatImport(result: RdImportResult): string {
+export function formatImport(result: RdImportResult, ownerAllowlist = false): string {
   const brands = Object.entries(result.brands).sort((a, b) => b[1] - a[1]);
   return [
     result.applied ? 'APLICADO' : 'SIMULAÇÃO (nada foi gravado; rode com --apply para valer)',
     `negócios lidos no RD: ${result.dealsListed}`,
     `no escopo: Expansão ${result.inScope.expansao}, Formatação ${result.inScope.formatacao}`,
+    `  nos funis de arquivo do RD (sem etapa; ganho ${result.archiveOutcome.won}, perdido ${result.archiveOutcome.lost}): ${result.inArchive}`,
+    `fora do escopo (funil do RD sem funil no Wings): ${
+      Object.entries(result.outOfScope)
+        .map(([funnel, count]) => `${funnel} ${count}`)
+        .join(', ') || 'nenhum'
+    }`,
     `leads ${result.applied ? 'criados' : 'a criar'}: ${result.created}; ligados a um lead que já existia: ${result.merged}`,
     `outro negócio da mesma pessoa: ${result.otherDealOfSamePerson}; sem e-mail nem telefone: ${result.noContactData}; de teste: ${result.testDeals}`,
-    `dono: ${result.owners.mapped} com funcionário, ${result.owners.unmapped} sem (ligar em Usuários do RD)`,
+    `dono: ${result.owners.mapped} mantêm o dono do RD, ${result.owners.unmapped} entram sem dono${ownerAllowlist ? ' (só os donos de CRM_RD_OWNER_USER_IDS ficam)' : ''}`,
     `usuários do RD: ${result.rdUsers.listed} (ligados agora por e-mail ${result.rdUsers.linkedByEmail}, por nome ${result.rdUsers.linkedByName})`,
     `histórico de etapas: ${result.histories.read} lido(s), ${result.histories.failed} falha(s), ${result.histories.withFirstContact} com 1º contato`,
     `marcas (Expansão):`,
@@ -53,12 +64,13 @@ async function main() {
       batchId,
       since,
       histories: !process.argv.includes('--no-histories'),
+      ownerRdUserIds: rdOwnerAllowlist(env.CRM_RD_OWNER_USER_IDS),
       log: (facts) => console.warn(JSON.stringify(facts)),
       onProgress: (done, total) => {
         if (done % 50 === 0) console.warn(`${done}/${total}`);
       },
     });
-    console.warn(formatImport(result));
+    console.warn(formatImport(result, Boolean(env.CRM_RD_OWNER_USER_IDS)));
     if (batchId) {
       await db.insert(auditLog).values({
         action: 'leads.import_rd',

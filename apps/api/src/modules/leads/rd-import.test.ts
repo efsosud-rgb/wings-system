@@ -1,8 +1,16 @@
 import { WINGS_CLIENT_ID } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../../db/client.js';
-import { clients, jobs, leadEvents, leads, rdUserMap } from '../../db/schema/index.js';
+import {
+  clients,
+  crmStages,
+  jobs,
+  leadEvents,
+  leadTasks,
+  leads,
+  rdUserMap,
+} from '../../db/schema/index.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee } from '../../test/factories.js';
 import { recordDealOnLead } from '../expansion/service.js';
@@ -10,6 +18,8 @@ import {
   brandOfDeal,
   followRdStages,
   importRdDeals,
+  isArchiveFunnel,
+  rdOwnerAllowlist,
   refreshStageTimes,
   stageTimesOf,
   type RdContactRow,
@@ -58,11 +68,12 @@ function fakeRd(input: {
   contacts: Record<string, RdContactRow[]>;
   details?: Record<string, RdDealDetail>;
   users?: { id: string; name: string; email: string }[];
+  pipelines?: RdPipelineRow[];
 }): RdCrmReader & { calls: string[] } {
   const calls: string[] = [];
   return {
     calls,
-    pipelines: async () => PIPELINES,
+    pipelines: async () => input.pipelines ?? PIPELINES,
     users: async () => input.users ?? [],
     deals: async () => input.deals,
     dealContacts: async (id) => {
@@ -215,7 +226,7 @@ describe('importRdDeals', () => {
   it('simulates without writing anything', async () => {
     const before = await db.select().from(leads);
     const result = await importRdDeals(db, rd, { apply: false, since, histories: false });
-    expect(result.inScope).toEqual({ expansao: 2, formatacao: 3 });
+    expect(result.inScope).toEqual({ expansao: 2, formatacao: 3, consultoria: 0 });
     expect(result.merged).toBe(2);
     expect(result.created).toBe(3);
     expect(await db.select().from(leads)).toHaveLength(before.length);
@@ -327,6 +338,137 @@ describe('importRdDeals', () => {
     expect(refreshed.read).toBeGreaterThanOrEqual(1);
     lead = await db.query.leads.findFirst({ where: eq(leads.rdDealId, 'd-exp') });
     expect(lead?.stageChangedAt?.toISOString()).toBe('2026-09-02T12:00:00.000Z');
+  });
+});
+
+describe('RD archive funnels', () => {
+  const ARCHIVE_PIPELINES: RdPipelineRow[] = [
+    { name: 'Expansão', deal_stages: [{ id: 'ae1', name: 'Novo Contato' }] },
+    {
+      name: 'Negócios perdidos - Expansão',
+      deal_stages: [
+        { id: 'ax1', name: 'Com motivo de perda' },
+        { id: 'ax2', name: 'Novo Contato' },
+      ],
+    },
+    { name: 'Vendidos | Expansão🏆', deal_stages: [{ id: 'av1', name: 'Vendidos' }] },
+    { name: 'Lista de espera', deal_stages: [{ id: 'al1', name: 'Sem contato' }] },
+  ];
+  const deal = (id: string, stage: string, win: boolean | null): RdDealRow => ({
+    id,
+    win,
+    created_at: '2024-03-01T10:00:00-03:00',
+    deal_stage: { id: stage },
+  });
+  const phoneOf = (n: number) => [
+    { id: `ac${n}`, name: 'Pessoa Arquivo', phones: [{ phone: `(21) 97777-000${n}` }] },
+  ];
+
+  it('tells an archive funnel from the pipeline own one', () => {
+    expect(isArchiveFunnel('Expansão', 'expansao')).toBe(false);
+    expect(isArchiveFunnel(' Formatação ', 'formatacao')).toBe(false);
+    expect(isArchiveFunnel('Negócios perdidos - Expansão', 'expansao')).toBe(true);
+    expect(isArchiveFunnel('Vendidos | Formatação🥇', 'formatacao')).toBe(true);
+    expect(isArchiveFunnel('Parcerias', null)).toBe(false);
+  });
+
+  it('files archive deals as won or lost in the funnel of origin, with no stage, and keeps only the listed owners', async () => {
+    const keeper = await createEmployee(db, { role: 'vendedor_expansao' });
+    const other = await createEmployee(db, { role: 'vendedor_expansao' });
+    await db.insert(rdUserMap).values([
+      { rdUserId: 'rd-keep', rdName: 'Quem fica', employeeId: keeper.id },
+      { rdUserId: 'rd-other', rdName: 'Quem não fica', employeeId: other.id },
+    ]);
+    const rd = fakeRd({
+      pipelines: ARCHIVE_PIPELINES,
+      deals: [
+        deal('a-lost', 'ax1', false),
+        // Filed in the archive without RD's own flag: the funnel decides.
+        deal('a-lost-open', 'ax2', null),
+        deal('a-won-open', 'av1', null),
+        deal('a-wait', 'al1', null),
+        { ...deal('a-owned', 'ae1', null), user: { id: 'rd-keep' } },
+        { ...deal('a-other', 'ae1', null), user: { id: 'rd-other' } },
+      ],
+      contacts: {
+        'a-lost': phoneOf(1),
+        'a-lost-open': phoneOf(2),
+        'a-won-open': phoneOf(3),
+        'a-owned': phoneOf(4),
+        'a-other': phoneOf(5),
+      },
+    });
+    const since = new Date('2024-01-01T03:00:00Z');
+    const ownerRdUserIds = rdOwnerAllowlist(' rd-keep ,');
+    const simulated = await importRdDeals(db, rd, {
+      apply: false,
+      since,
+      histories: false,
+      ownerRdUserIds,
+    });
+    expect(simulated).toMatchObject({
+      inArchive: 3,
+      archiveOutcome: { won: 1, lost: 2 },
+      outOfScope: { 'Lista de espera': 1 },
+      owners: { mapped: 1, unmapped: 4 },
+    });
+
+    const applied = await importRdDeals(db, rd, {
+      apply: true,
+      since,
+      histories: false,
+      batchId: 'rd-crm-archive',
+      ownerRdUserIds,
+    });
+    expect(applied).toMatchObject({ created: 5, inArchive: 3, failed: 0 });
+    const names = (
+      await db
+        .select({ name: crmStages.name })
+        .from(crmStages)
+        .where(eq(crmStages.pipeline, 'expansao'))
+    ).map((row) => row.name);
+    expect(names).not.toContain('Com motivo de perda');
+    expect(names).not.toContain('Vendidos');
+
+    const byDeal = (id: string) => db.query.leads.findFirst({ where: eq(leads.rdDealId, id) });
+    expect(await byDeal('a-lost')).toMatchObject({
+      pipeline: 'expansao',
+      stage: null,
+      stageId: null,
+      won: false,
+      lostReason: 'Com motivo de perda',
+      rdPipeline: 'Negócios perdidos - Expansão',
+    });
+    expect(await byDeal('a-lost-open')).toMatchObject({ won: false, stage: null, stageId: null });
+    expect(await byDeal('a-won-open')).toMatchObject({
+      won: true,
+      lostReason: null,
+      stage: null,
+      stageId: null,
+    });
+
+    // Only a listed RD user keeps the owner; anyone else's deal waits with no owner, no task.
+    expect((await byDeal('a-owned'))?.ownerEmployeeId).toBe(keeper.id);
+    const unowned = await byDeal('a-other');
+    expect(unowned?.ownerEmployeeId).toBeNull();
+    expect(await db.select().from(leadTasks).where(eq(leadTasks.leadId, unowned!.id))).toEqual([]);
+
+    // The hourly follow-up keeps all of it.
+    await followRdStages(db, {
+      deals: [
+        deal('a-won-open', 'av1', null),
+        { ...deal('a-other', 'ae1', null), user: { id: 'rd-other' } },
+      ],
+      pipelines: ARCHIVE_PIPELINES,
+      ownerRdUserIds,
+    });
+    expect(await byDeal('a-won-open')).toMatchObject({ won: true, stage: null });
+    expect((await byDeal('a-other'))?.ownerEmployeeId).toBeNull();
+    expect(
+      await db.query.crmStages.findFirst({
+        where: and(eq(crmStages.pipeline, 'expansao'), eq(crmStages.name, 'Vendidos')),
+      }),
+    ).toBeUndefined();
   });
 });
 

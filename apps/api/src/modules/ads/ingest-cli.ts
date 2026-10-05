@@ -17,6 +17,7 @@ import { syncCampaignLeads } from './campaign-leads-sync.js';
 import { syncGa4Traffic, syncRdCrmDeals } from './funnel-sync.js';
 import {
   followRdStages,
+  rdOwnerAllowlist,
   importRdDeals,
   rdCrmReader,
   refreshStageTimes,
@@ -414,7 +415,11 @@ async function main() {
           console.warn('funil: seguimento do RD desligado (CRM_RD_FOLLOW_ENABLED)');
         } else
           try {
-            const follow = await followRdStages(db, { deals: read.raw, pipelines: read.pipelines });
+            const follow = await followRdStages(db, {
+              deals: read.raw,
+              pipelines: read.pipelines,
+              ownerRdUserIds: rdOwnerAllowlist(env.CRM_RD_OWNER_USER_IDS),
+            });
             const reader = rdCrmReader(env.RD_CRM_API_TOKEN);
             const imported = await importRdDeals(db, reader, {
               apply: true,
@@ -422,6 +427,7 @@ async function main() {
               window: { since: new Date(now.getTime() - 3 * 24 * 3600_000), until: now },
               histories: true,
               onlyMissing: true,
+              ownerRdUserIds: rdOwnerAllowlist(env.CRM_RD_OWNER_USER_IDS),
               batchId: `rd-crm-sync-${now.toISOString().replace(/[-:]/g, '').slice(0, 13)}Z`,
             });
             const times = await refreshStageTimes(db, reader, {
