@@ -1,13 +1,18 @@
 import { initialsOf, sourceBadgeOf, type BoardCard } from '@wings/shared';
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { type KeyboardEvent, type MouseEvent, useRef, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { ago, dueLabel, formatPhone, isPast, money } from './format.js';
 import { Icon } from '../../components/Icon.js';
+
+/** What a click inside the card keeps for itself: links, buttons and the lost-reason form. */
+const OWN_CONTROLS = 'a, button, input, select, textarea, form, label';
 
 /**
  * A compact card: name, company, contact, value, the owner's initials, time
  * in the stage, the next task (red when late), the source badge and the
- * brand. Hovering shows the quick actions; nothing else moves.
+ * brand. Hovering shows the quick actions; nothing else moves. The whole
+ * card opens the deal — by click or Enter — except its own links and
+ * buttons, and never right after a drag.
  */
 export function DealCard({
   card,
@@ -28,25 +33,51 @@ export function DealCard({
   onLost: (reason: string) => void;
   onTask: () => void;
 }) {
+  const navigate = useNavigate();
   const [losing, setLosing] = useState(false);
   const [reason, setReason] = useState('');
+  // A drop ends with no click, but a drag cancelled over the card does: swallow that one.
+  const dragged = useRef(false);
   const badge = sourceBadgeOf(card.source);
   const stale = isPast(card.stageChangedAt, Date.now() - 7 * 86_400_000);
   const late = card.nextTask ? isPast(card.nextTask.dueAt) : false;
   const contact = card.contactName && card.contactName !== card.name ? card.contactName : null;
+  const href = `/crm-vendas/negociacoes/${card.id}`;
+  const open = (event: MouseEvent<HTMLElement>) => {
+    if (dragged.current) {
+      dragged.current = false;
+      return;
+    }
+    if ((event.target as HTMLElement).closest(OWN_CONTROLS)) return;
+    if (window.getSelection()?.toString()) return; // the person was selecting text
+    navigate(href);
+  };
+  const openByKey = (event: KeyboardEvent<HTMLElement>) => {
+    if (event.key !== 'Enter' || event.target !== event.currentTarget) return;
+    event.preventDefault();
+    navigate(href);
+  };
   return (
     <article
       className={`crm-card${dragging ? ' is-dragging' : ''}`}
       draggable={canWrite}
       tabIndex={0}
+      aria-label={card.name ?? 'Sem nome'}
+      onClick={open}
+      onKeyDown={openByKey}
       onDragStart={(event) => {
         event.dataTransfer.setData('text/plain', card.id);
         event.dataTransfer.effectAllowed = 'move';
+        dragged.current = true;
         onDragStart();
       }}
-      onDragEnd={onDragEnd}
+      onDragEnd={() => {
+        // Let a click born of the same gesture see the flag, then forget it.
+        setTimeout(() => (dragged.current = false), 0);
+        onDragEnd();
+      }}
     >
-      <Link className="crm-card-name" to={`/crm-vendas/negociacoes/${card.id}`}>
+      <Link className="crm-card-name" to={href} tabIndex={-1}>
         {card.name ?? 'Sem nome'}
       </Link>
       {(card.companyName || contact) && (

@@ -27,7 +27,15 @@ export async function classifyUnruledForm(
   const form = formId
     ? await db.query.metaLeadForms.findFirst({ where: eq(metaLeadForms.formId, formId) })
     : null;
-  const key = brandKey(form?.name ?? '');
+  return classifyFormName(db, form?.name ?? null);
+}
+
+/** Same reading for a form whose name arrives with the lead (TikTok has no form catalogue here). */
+export async function classifyFormName(
+  db: Database,
+  formName: string | null,
+): Promise<FormClassification> {
+  const key = brandKey(formName ?? '');
   if (key) {
     if (/\bformata/.test(key))
       return { pipeline: 'formatacao', brand: null, clientId: null, guessed: false };
@@ -48,7 +56,11 @@ export async function classifyUnruledForm(
 }
 
 /** One notice per form (not per lead) to Diretoria: a form with no rule and no telling name. */
-export async function noticeUnclassifiedForm(db: Database, formId: string | null): Promise<void> {
+export async function noticeUnclassifiedForm(
+  db: Database,
+  formId: string | null,
+  platform: 'meta' | 'tiktok' = 'meta',
+): Promise<void> {
   const board = await db
     .select({ id: employees.id })
     .from(employees)
@@ -62,8 +74,10 @@ export async function noticeUnclassifiedForm(db: Database, formId: string | null
         recipientEmployeeId: person.id,
         kind: 'automation',
         message:
-          'Um formulário do Meta sem regra trouxe lead: ele entrou em Formatação. Crie a regra do formulário (Landing pages) para mandar ao funil certo.',
-        dedupeKey: `meta_form_unclassified:${formId ?? 'desconhecido'}:${person.id}`,
+          platform === 'tiktok'
+            ? 'Um formulário da TikTok sem regra trouxe lead: ele entrou em Formatação. Crie a regra do formulário (Landing pages) para mandar ao funil certo.'
+            : 'Um formulário do Meta sem regra trouxe lead: ele entrou em Formatação. Crie a regra do formulário (Landing pages) para mandar ao funil certo.',
+        dedupeKey: `${platform}_form_unclassified:${formId ?? 'desconhecido'}:${person.id}`,
       })),
     )
     .onConflictDoNothing();

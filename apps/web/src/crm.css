@@ -439,6 +439,77 @@
   font-variant-numeric: tabular-nums;
   opacity: 0.9;
 }
+/* the name as a button for who manages the stages: looks like text, edits on click */
+.crm-col-rename {
+  all: unset;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: text;
+  border-bottom: 1px dashed transparent;
+  transition: border-color var(--duration-fast) var(--ease);
+}
+.crm-col-rename:hover,
+.crm-col-rename:focus-visible {
+  border-bottom-color: currentColor;
+}
+.crm-col-rename:focus-visible {
+  box-shadow: var(--focus-ring);
+  border-radius: 2px;
+}
+.crm-col-edit {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.crm-col-edit .crm-input {
+  padding: 1px var(--space-2);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  min-width: 0;
+  width: 100%;
+}
+.crm-col-edit .crm-error,
+.crm-col-new .crm-error {
+  font-size: var(--text-xs);
+  white-space: normal;
+}
+/* "+ Coluna" after the last column */
+.crm-col.is-new {
+  flex-basis: 220px;
+  align-self: flex-start;
+  background: transparent;
+  border: 1px dashed var(--line-strong);
+}
+.crm-col-add {
+  all: unset;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  padding: var(--space-3);
+  text-align: center;
+  color: var(--text-2);
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-md);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    color var(--duration-fast) var(--ease),
+    background var(--duration-fast) var(--ease);
+}
+.crm-col-add:hover {
+  color: var(--text);
+  background: var(--surface-3);
+}
+.crm-col-add:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+.crm-col-new {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
 .crm-col-money {
   display: flex;
   justify-content: space-between;
@@ -497,7 +568,8 @@
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-1);
   padding: var(--space-2) var(--space-3);
-  cursor: grab;
+  /* the whole card opens the deal; dragging still works from anywhere on it */
+  cursor: pointer;
   transition:
     border-color var(--duration-fast) var(--ease),
     background var(--duration-fast) var(--ease);
@@ -622,6 +694,9 @@
 }
 .crm-badge.tone-whatsapp {
   --tone: var(--source-whatsapp);
+}
+.crm-badge.tone-tiktok {
+  --tone: var(--source-tiktok);
 }
 .crm-badge.is-brand::before {
   display: none;

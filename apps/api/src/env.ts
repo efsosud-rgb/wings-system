@@ -420,6 +420,22 @@ const schema = z.object({
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',
   ),
+  /**
+   * TikTok Lead Ads door (TikTok's webhook or Zapier): the shared secret the sender puts in
+   * the `X-Wings-Webhook-Secret` header or `?secret=`. Without it the route answers 503.
+   */
+  TIKTOK_LEADS_WEBHOOK_SECRET: optionalString.refine(
+    (value) => value === undefined || value.length >= 16,
+    'must be at least 16 characters',
+  ),
+  /**
+   * TikTok Lead Ads → RD CRM copy: its own switch, OFF unless "true" (needs RD_CRM_API_TOKEN).
+   * Off in staging; production turns it on when Eric says so.
+   */
+  TIKTOK_LEADS_RD_COPY_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
   /** The WhatsApp number the tracked links point at, digits only. Not a secret. */
   WINGS_WHATSAPP_NUMBER: optionalString.refine(
     (value) => value === undefined || /^55\d{10,11}$/.test(value),
