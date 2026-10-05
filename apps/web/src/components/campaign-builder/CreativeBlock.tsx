@@ -13,7 +13,6 @@ import {
   MIN_CAROUSEL_CARDS,
   PRIMARY_TEXT_RECOMMENDED,
   VIDEO_MIME_TYPES,
-  adUtmContent,
   matchesFormat,
   type CampaignDraftInput,
   type ComplianceFinding,
@@ -485,9 +484,6 @@ export function CreativeCard({
     <div className="builder-variation builder-creative-card" data-creative={index + 1}>
       <div className="builder-variation-head">
         <strong>{label}</strong>
-        <span className="cell-sub">
-          utm_content: {adUtmContent({ creativeType, position: index + 1 })}
-        </span>
         {count > 1 && (
           <button type="button" className="link-button" onClick={onRemove}>
             Remover

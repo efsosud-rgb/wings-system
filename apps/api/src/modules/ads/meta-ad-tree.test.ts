@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { campaignDraftSchema, type CampaignDraft } from '@wings/shared';
+import { campaignDraftSchema, META_URL_TAGS, type CampaignDraft } from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../../db/client.js';
@@ -262,12 +262,13 @@ describe('image ads, automatic placements', () => {
     expect(targeting).toMatchObject({ age_min: 25, age_max: 65, locales: [31] });
     expect(targeting).not.toHaveProperty('publisher_platforms');
 
-    // Each ad's link carries its own utm_content: its kind and position.
-    const links = api
-      .writes('adcreatives')
-      .map((call) => JSON.parse(call.fields.object_story_spec ?? '{}').link_data.link as string);
-    expect(links[0]).toContain('utm_content=imagem-1');
-    expect(links[1]).toContain('utm_content=imagem-2');
+    // The link carries no UTM; the standard url_tags do, on every ad.
+    const creatives = api.writes('adcreatives');
+    const links = creatives.map(
+      (call) => JSON.parse(call.fields.object_story_spec ?? '{}').link_data.link as string,
+    );
+    expect(links.every((link) => !link.includes('utm_'))).toBe(true);
+    expect(creatives.map((call) => call.fields.url_tags)).toEqual([META_URL_TAGS, META_URL_TAGS]);
 
     const steps = await stepsOfExecution(db, executionIdOf(result));
     expect(steps.map((step) => [step.seq, step.kind, step.status])).toEqual([

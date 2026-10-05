@@ -15,7 +15,7 @@ import { loadEnv } from '../../env.js';
 import { createSecretBox } from '../../lib/secret-box.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
-import { syncCampaignLeads, utmsOfTrafficSource } from './campaign-leads-sync.js';
+import { attribute, syncCampaignLeads, utmsOfTrafficSource } from './campaign-leads-sync.js';
 import { ensureAdAccount } from './metrics.js';
 
 /**
@@ -287,6 +287,63 @@ describe('reading RD Marketing', () => {
     expect(utmsOfTrafficSource(traffic('(direct)'))).toBeNull();
     expect(utmsOfTrafficSource('encoded_não-é-base64')).toBeNull();
     expect(utmsOfTrafficSource(traffic('https://x.com/'))).toBeNull();
+  });
+
+  it("reads the platforms' standard: Meta's short source names and the numeric ids", () => {
+    // What Meta fills in META_URL_TAGS, as RD keeps it (a query without URL).
+    const meta = utmsOfTrafficSource(
+      traffic(
+        'utm_source=ig&utm_medium=cpc&utm_campaign=120230596004630670&utm_content=120230596004640670&utm_term=120230596004620670',
+      ),
+    );
+    expect(meta).toEqual({
+      source: 'instagram',
+      medium: 'cpc',
+      campaign: '120230596004630670',
+      content: '120230596004640670',
+    });
+    expect(
+      ['fb', 'msg', 'an'].map(
+        (source) => utmsOfTrafficSource(traffic(`utm_source=${source}&utm_campaign=1`))?.source,
+      ),
+    ).toEqual(['facebook', 'messenger', 'audience_network']);
+
+    // The ids are the platforms' own, so they meet the mirrored campaign and ad.
+    const active = [
+      {
+        id: 'c-meta',
+        platform: 'meta' as const,
+        keys: ['120230596004630670', 'meta | formatacao'],
+        ads: [{ id: 'a-meta', keys: ['120230596004640670', 'meta | formatacao — v1'] }],
+      },
+      {
+        id: 'c-google',
+        platform: 'google' as const,
+        keys: ['23479672774', 'search | formatacao'],
+        ads: [{ id: 'a-google', keys: ['771234567890', 'anuncio'] }],
+      },
+    ];
+    expect(attribute({ utms: meta, sourceLabel: null, campaignLabel: null }, active)).toEqual({
+      platform: 'meta',
+      campaignId: 'c-meta',
+      adId: 'a-meta',
+      attribution: 'utm',
+      reason: null,
+    });
+    // Google's account suffix: {campaignid} and {creative} (the ad's id).
+    const google = utmsOfTrafficSource(
+      traffic(
+        'https://x.com/?utm_source=google&utm_medium=cpc&utm_campaign=23479672774&utm_content=771234567890&utm_term=franquia',
+      ),
+    );
+    expect(
+      attribute({ utms: google, sourceLabel: null, campaignLabel: null }, active),
+    ).toMatchObject({
+      platform: 'google',
+      campaignId: 'c-google',
+      adId: 'a-google',
+      attribution: 'utm',
+    });
   });
 
   it('asks RD Marketing once per lead with an e-mail, and never for a test deal', () => {

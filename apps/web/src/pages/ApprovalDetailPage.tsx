@@ -11,8 +11,10 @@ import {
   PLACEMENT_PUBLISHER_LABEL,
   PREVIEW_PLACEMENTS,
   PREVIEW_PLACEMENT_LABEL,
-  adUtmContent,
-  applyUtms,
+  adDestination,
+  GOOGLE_ACCOUNT_URL_SUFFIX,
+  META_URL_TAGS,
+  utmsFromPlatform,
   type AddAdsPayload,
   campaignDays,
   describeReach,
@@ -291,7 +293,10 @@ function AddAdsSection({ addAds }: { addAds: AddAdsPayload }) {
         </div>
         <div>
           <span className="field-label">Destino</span>
-          <p className="mono builder-url">{addAds.destinationUrl}</p>
+          <p className="mono builder-url">
+            {adDestination('meta', addAds.destinationUrl, addAds.utms) ?? addAds.destinationUrl}
+          </p>
+          <span className="cell-sub mono builder-url">Parâmetros de URL: {META_URL_TAGS}</span>
         </div>
       </div>
       <span className="field-label">Criativos ({addAds.variations.length})</span>
@@ -301,13 +306,6 @@ function AddAdsSection({ addAds }: { addAds: AddAdsPayload }) {
             <strong>{CREATIVE_TYPE_LABEL[variation.creativeType ?? 'image']}</strong> —{' '}
             {variation.headline}
             <span className="cell-sub">{variation.primaryText}</span>
-            <span className="cell-sub mono">
-              utm_content=
-              {adUtmContent({
-                creativeType: variation.creativeType ?? 'image',
-                position: addAds.firstPosition + index,
-              })}
-            </span>
           </li>
         ))}
       </ol>
@@ -411,13 +409,6 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
                   {variation.creativeType === 'carousel' &&
                     ` (${(variation.cards ?? []).length} cartões)`}{' '}
                   — {variation.headline}
-                  <span className="cell-sub mono">
-                    utm_content=
-                    {adUtmContent({
-                      creativeType: variation.creativeType ?? 'image',
-                      position: index + 1,
-                    })}
-                  </span>
                 </p>
               ))}
             </div>
@@ -442,13 +433,22 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
           </div>
         )}
         <div>
-          <span className="field-label">Destino com UTMs</span>
+          <span className="field-label">
+            {utmsFromPlatform(draft.platform) ? 'Destino' : 'Destino com UTMs'}
+          </span>
           <p className="mono builder-url">
-            {applyUtms(draft.destinationUrl, draft.utms, {
+            {adDestination(draft.platform, draft.destinationUrl, draft.utms, {
               creativeType: draft.variations[0]?.creativeType ?? 'image',
               position: 1,
             })}
           </p>
+          {utmsFromPlatform(draft.platform) && (
+            <span className="cell-sub mono builder-url">
+              {isGooglePlatform(draft.platform)
+                ? `Sufixo do URL final, da conta: ${GOOGLE_ACCOUNT_URL_SUFFIX}`
+                : `Parâmetros de URL: ${META_URL_TAGS}`}
+            </span>
+          )}
         </div>
       </div>
       <div className="readonly draft-audience">

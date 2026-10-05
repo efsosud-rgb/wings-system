@@ -1,4 +1,9 @@
-import type { AlertKind, AlertSeverity } from '@wings/shared';
+import {
+  hasStandardUrlTags,
+  META_URL_TAGS,
+  type AlertKind,
+  type AlertSeverity,
+} from '@wings/shared';
 import { and, eq, gte, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { adAccounts, adAds, adAlerts, adCampaigns, adMetricsDaily } from '../../db/schema/index.js';
@@ -33,6 +38,8 @@ export interface AlertRuleConfig {
   creativeFatigue: { enabled: boolean; frequencyMilli: number; lookbackDays: number };
   qualityBelowAverage: { enabled: boolean; lookbackDays: number };
   conversionSilence: { enabled: boolean; spendCents: number; windowHours: number };
+  metaAdWithoutUtms: { enabled: boolean };
+  googleCampaignOwnSuffix: { enabled: boolean };
 }
 
 /**
@@ -54,6 +61,9 @@ export const DEFAULT_ALERT_CONFIG: AlertRuleConfig = {
   creativeFatigue: { enabled: true, frequencyMilli: 3000, lookbackDays: 7 },
   qualityBelowAverage: { enabled: true, lookbackDays: 7 },
   conversionSilence: { enabled: false, spendCents: 5_000, windowHours: 24 },
+  // The platforms' UTM standard (2026-10-05): on the panel only, never a phone.
+  metaAdWithoutUtms: { enabled: true },
+  googleCampaignOwnSuffix: { enabled: true },
 };
 
 /** Which alerts are worth a phone buzzing at 23:00. */
@@ -442,6 +452,71 @@ async function detectConversionSilence(
   return found;
 }
 
+/**
+ * Rule 6 — a Meta ad delivering without the standard url_tags
+ * (`META_URL_TAGS`): its leads reach RD with no campaign or ad to name. An ad
+ * whose creative was never read (null) waits for the next ingest.
+ */
+async function detectMetaAdsWithoutUtms(
+  db: Database,
+  adAccountId: string,
+): Promise<DetectedAlert[]> {
+  const ads = await db.query.adAds.findMany({
+    where: and(eq(adAds.adAccountId, adAccountId), eq(adAds.effectiveStatus, 'ACTIVE')),
+  });
+  return ads
+    .filter((ad) => ad.urlTags !== null && !hasStandardUrlTags(ad.urlTags))
+    .map((ad) => ({
+      kind: 'meta_ad_without_utms' as const,
+      severity: 'warning' as const,
+      entityLevel: 'ad' as const,
+      entityExternalId: ad.externalId,
+      title: `Anúncio ativo sem as UTMs padrão: ${ad.name}`,
+      detail: {
+        adName: ad.name,
+        adExternalId: ad.externalId,
+        urlTags: ad.urlTags,
+        expected: META_URL_TAGS,
+      },
+    }));
+}
+
+/**
+ * Rule 7 — a Google campaign with a Final URL suffix of its own, unlike the
+ * account's: it overrides the account's UTMs on every click. Waits until both
+ * suffixes have been read.
+ */
+async function detectGoogleCampaignOwnSuffix(
+  db: Database,
+  account: { id: string; finalUrlSuffix: string | null },
+): Promise<DetectedAlert[]> {
+  if (account.finalUrlSuffix === null) return [];
+  const accountSuffix = account.finalUrlSuffix.trim();
+  const campaigns = await db.query.adCampaigns.findMany({
+    where: eq(adCampaigns.adAccountId, account.id),
+  });
+  return campaigns
+    .filter(
+      (campaign) =>
+        campaign.status !== 'DELETED' &&
+        campaign.status !== 'ARCHIVED' &&
+        Boolean(campaign.finalUrlSuffix?.trim()) &&
+        campaign.finalUrlSuffix?.trim() !== accountSuffix,
+    )
+    .map((campaign) => ({
+      kind: 'google_campaign_own_suffix' as const,
+      severity: 'warning' as const,
+      entityLevel: 'campaign' as const,
+      entityExternalId: campaign.externalId,
+      title: `Campanha com sufixo próprio, diferente do da conta: ${campaign.name}`,
+      detail: {
+        campaignName: campaign.name,
+        campaignSuffix: campaign.finalUrlSuffix,
+        accountSuffix: account.finalUrlSuffix,
+      },
+    }));
+}
+
 /** Runs every enabled rule. Pure read — nothing is written here. */
 export async function detectAlerts(
   db: Database,
@@ -470,6 +545,12 @@ export async function detectAlerts(
   }
   if (config.conversionSilence.enabled) {
     found.push(...(await detectConversionSilence(db, adAccountId, config.conversionSilence, now)));
+  }
+  if (config.metaAdWithoutUtms.enabled && account.platform === 'meta') {
+    found.push(...(await detectMetaAdsWithoutUtms(db, adAccountId)));
+  }
+  if (config.googleCampaignOwnSuffix.enabled && account.platform === 'google') {
+    found.push(...(await detectGoogleCampaignOwnSuffix(db, account)));
   }
 
   return found;

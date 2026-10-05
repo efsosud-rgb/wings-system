@@ -22,6 +22,8 @@ export interface FakeGoogleCampaign {
   endDate?: string;
   /** campaign.serving_status; SERVING for an enabled campaign when omitted. */
   servingStatus?: string;
+  /** campaign.final_url_suffix; left out of the answer when unset, as Google does. */
+  finalUrlSuffix?: string;
 }
 
 /** What a create left under a campaign, as the fake keeps it. */
@@ -77,6 +79,8 @@ export interface FakeGoogleMetricsRow {
 export interface FakeGoogleApiOptions {
   customerId?: string;
   campaigns?: FakeGoogleCampaign[];
+  /** customer.final_url_suffix; left out of the answer when unset. */
+  accountFinalUrlSuffix?: string;
   /** Approved account budget, in micros. Null means no account budget row. */
   accountBudget?: { limitMicros: string; servedMicros: string } | null;
   /** Rows answered for `FROM geo_target_constant`. */
@@ -181,7 +185,11 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
       servingStatus: campaign.servingStatus ?? (campaign.status === 'ENABLED' ? 'SERVING' : 'NONE'),
       ...(campaign.startDate ? { startDate: campaign.startDate } : {}),
       ...(campaign.endDate ? { endDate: campaign.endDate } : {}),
+      ...(campaign.finalUrlSuffix ? { finalUrlSuffix: campaign.finalUrlSuffix } : {}),
     },
+    customer: options.accountFinalUrlSuffix
+      ? { finalUrlSuffix: options.accountFinalUrlSuffix }
+      : {},
     campaignBudget: {
       resourceName:
         campaign.budgetResourceName ?? `customers/${customerId}/campaignBudgets/b${campaign.id}`,

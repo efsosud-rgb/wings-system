@@ -8,8 +8,15 @@ import {
   RADIUS_NOT_ACCEPTED_HINT,
   describeReach,
   reachSchema,
+  adDestination,
+  adPlatformOfUtmSource,
   adUtmContent,
   applyUtms,
+  GOOGLE_ACCOUNT_URL_SUFFIX,
+  hasStandardUrlTags,
+  META_URL_TAGS,
+  stripUtms,
+  utmSourceName,
   buildUtms,
   campaignDays,
   campaignDaysInMonth,
@@ -157,6 +164,59 @@ describe('UTMs', () => {
     // Without an ad, the campaign's own value.
     expect(applyUtms('https://x.com.br/', utms)).toContain('utm_content=lead');
     expect(applyUtms('não é url', utms)).toBeNull();
+  });
+});
+
+describe("the platforms' UTM standard", () => {
+  const utms = buildUtms({ platform: 'meta', objective: 'lead', campaignName: 'Teste' });
+
+  it('is the text decided with Eric, in one place', () => {
+    expect(META_URL_TAGS).toBe(
+      'utm_source={{site_source_name}}&utm_medium=cpc&utm_campaign={{campaign.id}}&utm_content={{ad.id}}&utm_term={{adset.id}}',
+    );
+    expect(GOOGLE_ACCOUNT_URL_SUFFIX).toBe(
+      'utm_source=google&utm_medium=cpc&utm_campaign={campaignid}&utm_content={creative}&utm_term={keyword}',
+    );
+  });
+
+  it("leaves the link of a Meta or Google ad without UTMs, so the platform's are the only ones", () => {
+    const typed = 'https://x.com.br/lp?ref=a&utm_source=old&utm_term=k#form';
+    expect(adDestination('meta', typed, utms, { creativeType: 'video', position: 1 })).toBe(
+      'https://x.com.br/lp?ref=a#form',
+    );
+    expect(adDestination('google_search', 'https://x.com.br/', utms)).toBe('https://x.com.br/');
+    expect(adDestination('youtube', 'https://x.com.br/?utm_medium=x', utms)).toBe(
+      'https://x.com.br/',
+    );
+    // Other platforms keep the draft's UTMs.
+    expect(adDestination('tiktok', 'https://x.com.br/', utms)).toContain('utm_source=facebook');
+    expect(stripUtms('não é url')).toBeNull();
+  });
+
+  it('knows a Meta ad that carries the standard, in any order', () => {
+    expect(hasStandardUrlTags(META_URL_TAGS)).toBe(true);
+    expect(hasStandardUrlTags(META_URL_TAGS.split('&').reverse().join('&'))).toBe(true);
+    expect(hasStandardUrlTags('utm_source=facebook&utm_medium=cpc')).toBe(false);
+    expect(hasStandardUrlTags(null)).toBe(false);
+  });
+
+  it("tells the platform from a utm_source, Meta's short names included", () => {
+    expect(
+      ['fb', 'ig', 'msg', 'an', 'facebook', 'google', 'GOOGLE', 'rd', null].map(
+        adPlatformOfUtmSource,
+      ),
+    ).toEqual(['meta', 'meta', 'meta', 'meta', 'meta', 'google', 'google', null, null]);
+  });
+
+  it("spells out Meta's site source names", () => {
+    expect(['fb', 'ig', 'msg', 'an', 'IG', 'google'].map(utmSourceName)).toEqual([
+      'facebook',
+      'instagram',
+      'messenger',
+      'audience_network',
+      'instagram',
+      'google',
+    ]);
   });
 });
 

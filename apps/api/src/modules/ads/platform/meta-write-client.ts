@@ -605,6 +605,7 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
       creative: JSON.stringify({
         name: spec.creative.name,
         object_story_spec: this.objectStorySpec(spec.creative),
+        url_tags: spec.creative.urlTags,
       }),
       execution_options: '["validate_only"]',
     });
@@ -673,7 +674,12 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
   async createCreative(spec: CreativeSpec): Promise<StepOutcome<{ id: string }>> {
     const outcome = await this.create(
       `${this.accountPath()}/adcreatives`,
-      { name: spec.name, object_story_spec: JSON.stringify(this.objectStorySpec(spec)) },
+      {
+        name: spec.name,
+        object_story_spec: JSON.stringify(this.objectStorySpec(spec)),
+        // Meta appends these to every link of the ad, carousel cards included.
+        url_tags: spec.urlTags,
+      },
       (body) => body.id,
     );
     return outcome.status === 'created'
