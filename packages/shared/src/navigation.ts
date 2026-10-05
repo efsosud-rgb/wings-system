@@ -184,7 +184,14 @@ export const NAVIGATION: readonly NavModule[] = [
     label: 'Dashboard',
     icon: '📊',
     submodules: [
-      soon('/dashboard/vendas', 'Vendas', 'Resultado comercial consolidado', 'leads.read'),
+      {
+        path: '/dashboard/vendas',
+        label: 'Vendas',
+        description: 'Painel de vendas do CRM: funil, marcas e vendedores',
+        permission: 'leads.read',
+        status: 'ready',
+        kind: 'report',
+      },
       {
         path: '/dashboard/marketing',
         label: 'Marketing',

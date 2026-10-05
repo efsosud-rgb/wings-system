@@ -23,6 +23,7 @@ import type {
   LeadPipeline,
   LeadTask,
   LeadTaskKind,
+  SalesDashboard,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
@@ -42,6 +43,16 @@ export function filterParams(filter: DealFilter): URLSearchParams {
 function invalidateDeals(queryClient: ReturnType<typeof useQueryClient>) {
   void queryClient.invalidateQueries({ queryKey: ['leads'] });
   void queryClient.invalidateQueries({ queryKey: ['crm'] });
+}
+
+// --- sales panel (Dashboard › Vendas) -------------------------------------------------
+
+export function useSalesDashboard(pipeline: LeadPipeline) {
+  return useQuery({
+    queryKey: ['crm', 'dashboard', pipeline],
+    queryFn: () => api.get<SalesDashboard>(`/crm/dashboard?pipeline=${pipeline}`),
+    placeholderData: (previous) => previous,
+  });
 }
 
 // --- board ------------------------------------------------------------------------------
