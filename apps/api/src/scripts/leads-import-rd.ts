@@ -21,6 +21,12 @@ export function formatImport(result: RdImportResult): string {
     result.applied ? 'APLICADO' : 'SIMULAÇÃO (nada foi gravado; rode com --apply para valer)',
     `negócios lidos no RD: ${result.dealsListed}`,
     `no escopo: Expansão ${result.inScope.expansao}, Formatação ${result.inScope.formatacao}`,
+    `  nos funis de arquivo do RD (sem etapa nova no Wings): ${result.inArchive}`,
+    `fora do escopo (funil do RD sem funil no Wings): ${
+      Object.entries(result.outOfScope)
+        .map(([funnel, count]) => `${funnel} ${count}`)
+        .join(', ') || 'nenhum'
+    }`,
     `leads ${result.applied ? 'criados' : 'a criar'}: ${result.created}; ligados a um lead que já existia: ${result.merged}`,
     `outro negócio da mesma pessoa: ${result.otherDealOfSamePerson}; sem e-mail nem telefone: ${result.noContactData}; de teste: ${result.testDeals}`,
     `dono: ${result.owners.mapped} com funcionário, ${result.owners.unmapped} sem (ligar em Usuários do RD)`,
