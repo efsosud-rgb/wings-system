@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { campaignDraftSchema, type CampaignDraft } from '@wings/shared';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Database } from '../../db/client.js';
 import {
   adAccounts,
@@ -34,7 +34,11 @@ import { reconcileAccount } from './reconcile.js';
  * The Google API here is scripted; nothing in this file reaches Google.
  */
 
-const NOW = new Date();
+// The guard sizes a commitment by the days left in the month, so the sums
+// below (R$ 1.050 usable, R$ 30 then R$ 45 a day) only hold on some days of
+// a real month: the clock is pinned to the 20th and the file reads the same
+// every day of the year. Only Date is faked; timers stay real.
+const NOW = new Date('2026-10-20T15:00:00Z');
 const TODAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(NOW);
 const PERIOD = `${TODAY.slice(0, 7)}-01`;
 const CUSTOMER = '4268586278';
@@ -43,12 +47,15 @@ let harness: TestDatabase;
 let db: Database;
 
 beforeAll(async () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(NOW);
   harness = await createTestDatabase();
   db = harness.db;
 }, 60_000);
 
 afterAll(async () => {
   await harness?.drop();
+  vi.useRealTimers();
 });
 
 const common = () => ({

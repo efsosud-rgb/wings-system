@@ -1,4 +1,5 @@
 import {
+  CRM_STAGE_NAME_MAX,
   INACTIVE_OWNER,
   INACTIVE_OWNER_LABEL,
   NO_OWNER,
@@ -43,7 +44,7 @@ import {
   useTaskList,
   type DealFilter,
 } from '../../api/crm.js';
-import { useCreateLead, useSellers } from '../../api/leads.js';
+import { useCreateLead, useCreateStage, useSellers, useUpdateStage } from '../../api/leads.js';
 import { CreateDealModal, CreateTaskModal } from './CreateDealModal.js';
 import { DealCard } from './DealCard.js';
 import { ImportModal } from './ImportModal.js';
@@ -363,6 +364,7 @@ export function DealsPage() {
           pipeline={pipeline}
           filter={filter}
           canWrite={canWrite}
+          canManage={canManage}
           onTask={(card) => setTaskFor({ id: card.id, name: card.name })}
         />
       )}
@@ -643,11 +645,14 @@ function BoardView({
   pipeline,
   filter,
   canWrite,
+  canManage,
   onTask,
 }: {
   pipeline: LeadPipeline;
   filter: DealFilter;
   canWrite: boolean;
+  /** `crm.manage`: may add a column at the end and rename one in its head. */
+  canManage: boolean;
   onTask: (card: BoardCard) => void;
 }) {
   const board = useDealBoard(pipeline, filter);
@@ -706,6 +711,7 @@ function BoardView({
             column={column}
             first={index === 0 || (index === 1 && columns[0]?.stage === null)}
             canWrite={canWrite}
+            canManage={canManage}
             isOver={over === (column.stage?.id ?? 'none')}
             onDragOver={() => setOver(column.stage?.id ?? 'none')}
             onDragLeave={() => setOver(null)}
@@ -733,6 +739,7 @@ function BoardView({
             )}
           />
         ))}
+        {canManage && <NewColumn pipeline={pipeline} />}
       </div>
     </>
   );
@@ -744,6 +751,7 @@ function Column({
   column,
   first,
   canWrite,
+  canManage,
   isOver,
   onDragOver,
   onDragLeave,
@@ -755,6 +763,7 @@ function Column({
   column: BoardColumn;
   first: boolean;
   canWrite: boolean;
+  canManage: boolean;
   isOver: boolean;
   onDragOver: () => void;
   onDragLeave: () => void;
@@ -790,10 +799,14 @@ function Column({
         title={column.stage ? `${column.stage.probability}% de chance de fechar` : undefined}
       >
         <div className="crm-col-title">
-          <span>
-            {title}
-            {column.stage && !column.stage.active ? ' (desativada)' : ''}
-          </span>
+          {canManage && column.stage ? (
+            <ColumnTitle stage={column.stage} />
+          ) : (
+            <span>
+              {title}
+              {column.stage && !column.stage.active ? ' (desativada)' : ''}
+            </span>
+          )}
           <span>{column.total}</span>
         </div>
         <div className="crm-col-money">
@@ -827,6 +840,139 @@ function Column({
           </button>
         )}
       </div>
+    </section>
+  );
+}
+
+/**
+ * The column's name, editable in place for who manages the CRM: click to
+ * edit, Enter saves, Esc (or leaving the field) cancels. Same rename as
+ * Configurações › Etapas, same id kept — only the name changes.
+ */
+function ColumnTitle({ stage }: { stage: NonNullable<BoardColumn['stage']> }) {
+  const update = useUpdateStage();
+  const [draft, setDraft] = useState<string | null>(null);
+  const label = `${stage.name}${stage.active ? '' : ' (desativada)'}`;
+  if (draft === null)
+    return (
+      <button
+        type="button"
+        className="crm-col-rename"
+        title="Renomear a etapa"
+        aria-label={`Renomear ${stage.name}`}
+        onClick={() => setDraft(stage.name)}
+      >
+        {label}
+      </button>
+    );
+  const save = () => {
+    const name = draft.trim();
+    if (name.length < 2 || update.isPending) return;
+    if (name === stage.name) {
+      setDraft(null);
+      return;
+    }
+    update.mutate({ id: stage.id, name }, { onSuccess: () => setDraft(null) });
+  };
+  return (
+    <span className="crm-col-edit">
+      <input
+        className="crm-input"
+        value={draft}
+        maxLength={CRM_STAGE_NAME_MAX}
+        aria-label="Nome da etapa"
+        autoFocus
+        disabled={update.isPending}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => !update.isPending && setDraft(null)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            save();
+          } else if (event.key === 'Escape') {
+            event.preventDefault();
+            setDraft(null);
+          }
+        }}
+      />
+      {update.error && (
+        <span className="crm-error" role="alert">
+          {errorText(update.error, 'Não foi possível renomear.')}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** "+ Coluna" after the last column: names a new stage and puts it at the end of the funnel. */
+function NewColumn({ pipeline }: { pipeline: LeadPipeline }) {
+  const create = useCreateStage();
+  const [draft, setDraft] = useState<string | null>(null);
+  const submit = () => {
+    const name = (draft ?? '').trim();
+    if (name.length < 2 || create.isPending) return;
+    create.mutate({ pipeline, name }, { onSuccess: () => setDraft(null) });
+  };
+  return (
+    <section className="crm-col is-new" aria-label="Nova coluna">
+      {draft === null ? (
+        <button
+          type="button"
+          className="crm-col-add"
+          onClick={() => {
+            create.reset();
+            setDraft('');
+          }}
+        >
+          + Coluna
+        </button>
+      ) : (
+        <form
+          className="crm-col-new"
+          onSubmit={(event) => {
+            event.preventDefault();
+            submit();
+          }}
+        >
+          <input
+            className="crm-input"
+            placeholder="Nome da etapa"
+            aria-label="Nome da nova etapa"
+            value={draft}
+            maxLength={CRM_STAGE_NAME_MAX}
+            autoFocus
+            disabled={create.isPending}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                setDraft(null);
+              }
+            }}
+          />
+          {create.error && (
+            <span className="crm-error" role="alert">
+              {errorText(create.error, 'Não foi possível criar a etapa.')}
+            </span>
+          )}
+          <div className="crm-quick-row">
+            <button
+              type="button"
+              className="crm-btn is-small is-quiet"
+              onClick={() => setDraft(null)}
+            >
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              className="crm-btn is-small is-primary"
+              disabled={create.isPending || draft.trim().length < 2}
+            >
+              {create.isPending ? 'Criando…' : 'Criar no fim'}
+            </button>
+          </div>
+        </form>
+      )}
     </section>
   );
 }
