@@ -401,6 +401,16 @@ const schema = z.object({
   ),
   /** Reads Lead Ads form answers (leads_retrieval). Falls back to META_WRITE_TOKEN, read-only use. */
   META_LEADS_ACCESS_TOKEN: optionalString,
+  /** "false" turns off reading the forms every 5 minutes (the webhook, if set, still works). */
+  META_LEADS_POLL: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  /** Page ids to read besides the ones the key lists, for a key that lists none (ids, comma-separated; not secret). */
+  META_LEADS_PAGE_IDS: optionalString.refine(
+    (value) => value === undefined || /^\d+(\s*,\s*\d+)*$/.test(value.trim()),
+    'must be page ids separated by commas',
+  ),
   /**
    * Meta Lead Ads → RD CRM copy during the transition (Eric, 05/10): on when
    * RD_CRM_API_TOKEN is set, unless "false". Formatação → "Sem contato",

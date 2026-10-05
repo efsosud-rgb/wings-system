@@ -10,6 +10,14 @@ import { startCrmAutomationsScheduler } from './modules/leads/automations-schedu
 import { createCrmMailTransport } from './modules/leads/crm-mail.js';
 import { startMetaLeadgenIntake } from './modules/leads/meta-intake.js';
 
+const pageIdsOf = (value: string | undefined) =>
+  value
+    ? value
+        .split(',')
+        .map((id) => id.trim())
+        .filter(Boolean)
+    : [];
+
 async function main() {
   loadDotEnv();
   const env = loadEnv();
@@ -83,7 +91,9 @@ async function main() {
 
   // Meta Lead Ads queue: runs whenever the webhook can receive (app secret
   // set). Without a leads token the events wait in the queue, not lost.
-  if (env.META_APP_SECRET) {
+  // The key alone is enough: with META_LEADS_ACCESS_TOKEN the loop also reads the
+  // forms every 5 minutes, webhook or not (META_LEADS_POLL=false turns that off).
+  if (env.META_APP_SECRET || env.META_LEADS_ACCESS_TOKEN) {
     const intake = startMetaLeadgenIntake({
       db,
       accessToken: env.META_LEADS_ACCESS_TOKEN ?? env.META_WRITE_TOKEN ?? null,
@@ -91,6 +101,10 @@ async function main() {
       expansionOwnerId: env.EXPANSION_OWNER_RD_USER_ID ?? null,
       rdCopyEnabled: env.META_LEADS_RD_COPY_ENABLED !== 'false',
       log: (facts) => app.log.info(facts),
+      poll: {
+        enabled: Boolean(env.META_LEADS_ACCESS_TOKEN) && env.META_LEADS_POLL !== 'false',
+        extraPageIds: pageIdsOf(env.META_LEADS_PAGE_IDS),
+      },
     });
     app.wings.metaLeadKick = intake.kick;
     app.addHook('onClose', async () => intake.stop());

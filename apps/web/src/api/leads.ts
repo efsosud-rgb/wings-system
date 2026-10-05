@@ -121,6 +121,49 @@ export interface MetaLeadsStatus {
   lastProcessedAt: string | null;
   webhookConfigured: boolean;
   tokenConfigured: boolean;
+  /** The periodic read with only the key (every `everyMinutes`). */
+  polling?: {
+    enabled: boolean;
+    everyMinutes: number;
+    lastRunAt: string | null;
+    lastOkAt: string | null;
+    lastError: string | null;
+    forms: number;
+    formsWithError: number;
+  };
+}
+
+export interface MetaConnectionTest {
+  pages: number;
+  forms: number;
+  leads: number;
+  truncated: boolean;
+  failed: Record<string, string>;
+}
+
+export interface MetaPollResult {
+  pages: number;
+  forms: number;
+  listed: number;
+  queued: number;
+  alreadyKnown: number;
+  failed: Record<string, string>;
+}
+
+/** "Testar conexão": what the key sees, as totals (pages, forms, leads of 90 days). */
+export function useTestMetaConnection() {
+  return useMutation({
+    mutationFn: () => api.post<MetaConnectionTest>('/crm/meta-leads/test'),
+  });
+}
+
+/** "Buscar agora": one pass of the periodic read at once. */
+export function usePollMetaLeads() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<MetaPollResult>('/crm/meta-leads/poll'),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['leads'] }),
+  });
 }
 
 export interface MetaLeadsSyncResult {

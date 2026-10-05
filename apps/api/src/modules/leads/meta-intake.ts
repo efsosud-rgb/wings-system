@@ -13,6 +13,8 @@ import {
   type MetaLeadgenEvent,
 } from './meta-leads.js';
 import { entryStageOf } from './crm.js';
+import { classifyUnruledForm, noticeUnclassifiedForm } from './meta-form-routing.js';
+import { POLL_EVERY_MS, pollMetaLeadsLocked } from './meta-poll.js';
 import { resolveMetaSource, upsertLead } from './service.js';
 
 /**
@@ -336,7 +338,21 @@ async function processOne(
 
     const formId = details.formId ?? row.formId;
     const campaignId = details.campaignId ?? null;
-    const client = await resolveMetaSource(deps.db, { formId, campaignId });
+    let client = await resolveMetaSource(deps.db, { formId, campaignId });
+    // No rule for the form or the campaign: the form's own name says the funnel; if it does
+    // not, Formatação, and Diretoria gets one notice about the form.
+    let guessed = false;
+    if (!client.ruleId) {
+      const guess = await classifyUnruledForm(deps.db, formId);
+      client = {
+        clientId: guess.clientId ?? client.clientId,
+        mapped: guess.clientId !== null,
+        ruleId: null,
+        pipeline: guess.pipeline,
+        brand: guess.brand,
+      };
+      guessed = guess.guessed;
+    }
     // The entry stage of the segment's funnel exists before the lead lands in it (names are RD's).
     if (client.pipeline) await ensureEntryStage(deps.db, client.pipeline);
     const upserted = await upsertLead(deps.db, {
@@ -395,6 +411,14 @@ async function processOne(
       },
     });
     leadId = upserted.lead.id;
+    if (guessed && upserted.created) {
+      await deps.db.insert(leadEvents).values({
+        leadId,
+        kind: 'lead.pipeline_guessed',
+        detail: { formId, pipeline: client.pipeline, reason: 'form_without_rule' },
+      });
+      await noticeUnclassifiedForm(deps.db, formId);
+    }
     origin = originFactsOf(details);
     // In the Wings System now, whatever RD says next.
     await deps.db
@@ -642,7 +666,13 @@ export async function purgeMetaLeadgenPayloads(
  * right after a webhook so a new lead is in the Funil within seconds. One
  * pass at a time per process. Never started by `buildApp`.
  */
-export function startMetaLeadgenIntake(deps: MetaIntakeDeps & { tickMs?: number }): {
+export function startMetaLeadgenIntake(
+  deps: MetaIntakeDeps & {
+    tickMs?: number;
+    /** Reading the forms with just the key, every `everyMs` (5 min); on whenever there is a key. */
+    poll?: { enabled: boolean; everyMs?: number; extraPageIds?: string[] };
+  },
+): {
   kick: () => void;
   runOnce: () => Promise<MetaIntakeRunResult>;
   stop: () => void;
@@ -664,7 +694,28 @@ export function startMetaLeadgenIntake(deps: MetaIntakeDeps & { tickMs?: number 
     return running;
   };
   let purgedOn = '';
+  let lastPollAt = 0;
+  let polling = false;
+  const pollIfDue = async () => {
+    if (!deps.poll?.enabled || !deps.accessToken || polling) return;
+    const clock = (deps.now?.() ?? new Date()).getTime();
+    if (lastPollAt !== 0 && clock - lastPollAt < (deps.poll.everyMs ?? POLL_EVERY_MS)) return;
+    polling = true;
+    lastPollAt = clock;
+    try {
+      await pollMetaLeadsLocked({ ...deps, extraPageIds: deps.poll.extraPageIds });
+    } catch (error) {
+      deps.log({
+        job: META_LEADGEN_JOB,
+        msg: 'meta poll failed',
+        error: error instanceof Error ? error.message.slice(0, 120) : 'unknown',
+      });
+    } finally {
+      polling = false;
+    }
+  };
   const tick = async () => {
+    await pollIfDue();
     const result = await runOnce();
     if (result.processed > 0) deps.log({ job: META_LEADGEN_JOB, ...result });
     const today = (deps.now?.() ?? new Date()).toISOString().slice(0, 10);
