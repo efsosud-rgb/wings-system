@@ -7113,32 +7113,48 @@ button.stage-chip:focus-visible {
 
 /* Administração → Roadmap */
 
+/* Segmented tabs, the same drawing as .page-tabs in the page head. */
 .tab-row {
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid var(--wings-border);
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 2px;
+  padding: 3px;
   margin-bottom: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-3);
 }
 
 .tab-button {
-  background: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
   border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--wings-muted);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 10px 4px;
-  margin-right: 16px;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
   cursor: pointer;
+  transition:
+    background var(--duration-fast) var(--ease),
+    color var(--duration-fast) var(--ease);
 }
 
 .tab-button:hover {
-  color: var(--wings-text);
+  color: var(--text);
 }
 
 .tab-button-active {
-  color: var(--wings-accent);
-  border-bottom-color: var(--wings-accent);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+.tab-button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
 .roadmap-module {
@@ -7244,8 +7260,9 @@ button.stage-chip:focus-visible {
 }
 
 .record-tabs {
+  display: flex;
   flex-wrap: wrap;
-  overflow-x: auto;
+  max-width: 100%;
 }
 
 .record-tab-count {
