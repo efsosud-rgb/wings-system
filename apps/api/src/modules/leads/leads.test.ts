@@ -73,7 +73,14 @@ beforeAll(async () => {
       expect((init?.headers as Record<string, string>)?.Authorization).toBe(
         'Bearer fake-leads-token',
       );
-      const leadgenId = url.pathname.split('/').pop() ?? '';
+      const segments = url.pathname.split('/');
+      // `/{form_id}/leads` lists a form; `/{leadgen_id}` reads one lead.
+      const leadgenId =
+        segments.at(-1) === 'leads' ? `form:${segments.at(-2)}` : (segments.at(-1) ?? '');
+      if (leadgenId.startsWith('form:')) {
+        expect(url.searchParams.get('filtering')).toContain('time_created');
+        expect(url.searchParams.has('fields')).toBe(true);
+      }
       const answer = graphAnswers.get(leadgenId) ?? {
         status: 404,
         body: { error: { message: 'unknown' } },
@@ -819,6 +826,8 @@ describe('Meta Lead Ads webhook', () => {
       email: 'diego@example.com',
       phone: '5531977776666',
       pipeline: 'expansao',
+      // Lands in the funnel's entry stage of the Wings System, RD or no RD.
+      crm: null,
       origin: {
         clientId: client.id,
         clientMapped: true,
@@ -837,6 +846,9 @@ describe('Meta Lead Ads webhook', () => {
     });
     const row = await db.query.leads.findFirst({ where: eq(leads.id, event?.leadId as string) });
     expect(row).toMatchObject({
+      stage: 'Novo Contato',
+      stageOrder: 1,
+      managedBy: 'wings',
       adPlatform: 'meta',
       adCampaignExternalId: '120001',
       adSetExternalId: '130001',
@@ -1006,6 +1018,110 @@ describe('Meta Lead Ads webhook', () => {
       rdDealId: 'deal-open-9',
     });
     expect(rdCalls.some((call) => call.method === 'POST')).toBe(false);
+  });
+
+  it('puts the lead in the Wings System even when RD CRM is down, and copies it on a later try', async () => {
+    rdAnswers.clear();
+    rdAnswers.set('GET /deal_pipelines', { status: 500, body: {} });
+    graphAnswers.set('900020', {
+      status: 200,
+      body: {
+        id: '900020',
+        field_data: [
+          { name: 'full_name', values: ['Rita Lima'] },
+          { name: 'phone_number', values: ['+5511955554444'] },
+        ],
+        form_id: '1538007113903398',
+        platform: 'fb',
+      },
+    });
+    await deliver(
+      leadgenBody({ leadgen_id: '900020', form_id: '1538007113903398', page_id: '555' }),
+    );
+    let run = await runQueue({ rd: true });
+    expect(run).toMatchObject({ processed: 1, retried: 1, done: 0 });
+    let event = await eventOf('900020');
+    expect(event).toMatchObject({ status: 'pending', lastError: 'rd_failed', rdOutcome: 'failed' });
+    expect(event?.leadId).toBeTruthy();
+    const lead = await db.query.leads.findFirst({ where: eq(leads.id, event?.leadId as string) });
+    expect(lead).toMatchObject({ pipeline: 'formatacao', stage: 'Sem contato', rdDealId: null });
+
+    // RD is back: the retry copies without reading the Graph API again.
+    const graphBefore = graphCalls.filter((path) => path.endsWith('/900020')).length;
+    rdMapAnswers();
+    rdAnswers.set('GET /contacts', { status: 200, body: { contacts: [] } });
+    rdAnswers.set('POST /deals', { status: 200, body: { _id: 'deal-late-1' } });
+    await db
+      .update(metaLeadgenEvents)
+      .set({ nextAttemptAt: new Date(0) })
+      .where(eq(metaLeadgenEvents.leadgenId, '900020'));
+    run = await runQueue({ rd: true });
+    expect(run).toMatchObject({ processed: 1, done: 1, rdCreated: 1 });
+    event = await eventOf('900020');
+    expect(event).toMatchObject({ status: 'done', rdOutcome: 'created', rdDealId: 'deal-late-1' });
+    expect(graphCalls.filter((path) => path.endsWith('/900020')).length).toBe(graphBefore);
+    const post = rdCalls.filter((call) => call.method === 'POST' && call.path === '/deals').at(-1);
+    expect(post?.body).toMatchObject({ deal: { deal_stage_id: 'st-sem' } });
+  });
+
+  it('"Buscar leads da Meta" lists the last 90 days of every form with a rule and queues only what is new', async () => {
+    const admin = await sessionFor('admin_master');
+    graphAnswers.set('form:1538007113903398', {
+      status: 200,
+      body: {
+        data: [
+          { id: '900010', created_time: '2026-10-01T10:00:00+0000' },
+          { id: '900030', created_time: '2026-10-02T10:00:00+0000', ad_id: '140030' },
+        ],
+        paging: { cursors: { before: 'a', after: 'b' } },
+      },
+    });
+    graphAnswers.set('form:777001', { status: 200, body: { data: [] } });
+    graphAnswers.set('form:777002', { status: 400, body: { error: { message: 'no form' } } });
+    const marketing = await sessionFor('marketing');
+    // A seller may not start a sync.
+    const seller = await sessionFor('vendedor_expansao');
+    const refused = await app.inject({
+      method: 'POST',
+      url: '/crm/meta-leads/sync',
+      cookies: seller.cookies,
+    });
+    expect(refused.statusCode).toBe(403);
+    void marketing;
+
+    const sync = await app.inject({
+      method: 'POST',
+      url: '/crm/meta-leads/sync',
+      cookies: admin.cookies,
+    });
+    expect(sync.statusCode).toBe(202);
+    const totals = sync.json<{
+      forms: number;
+      listed: number;
+      queued: number;
+      alreadyKnown: number;
+      failed: Record<string, string>;
+    }>();
+    expect(totals).toMatchObject({ listed: 2, queued: 1, alreadyKnown: 1 });
+    expect(totals.forms).toBeGreaterThanOrEqual(2);
+    expect(JSON.stringify(totals)).not.toContain('@');
+    expect(await eventOf('900030')).toMatchObject({
+      status: 'pending',
+      formId: '1538007113903398',
+      adId: '140030',
+    });
+
+    const status = await app.inject({
+      method: 'GET',
+      url: '/crm/meta-leads/status',
+      cookies: admin.cookies,
+    });
+    expect(status.json()).toMatchObject({ pending: expect.any(Number), done: expect.any(Number) });
+    const audit = await db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, 'meta_leads.sync_requested'));
+    expect(audit).toHaveLength(1);
   });
 
   it('drops the raw payload after 90 days and keeps the row', async () => {

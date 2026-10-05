@@ -28,6 +28,7 @@ import { expansionRoutes } from './modules/expansion/routes.js';
 import { kairogenRoutes } from './modules/integrations/kairogen/routes.js';
 import { landingPageRoutes } from './modules/leads/landing-pages.js';
 import { rdUserRoutes } from './modules/leads/rd-users.js';
+import { crmRoutes } from './modules/leads/crm-routes.js';
 import { leadRoutes } from './modules/leads/routes.js';
 import { siteFormRoutes } from './modules/leads/site-forms.js';
 import { leadWebhookRoutes } from './modules/leads/webhooks.js';
@@ -186,6 +187,7 @@ export async function buildApp(deps: {
   await app.register(projectRoutes);
   await app.register(roadmapRoutes);
   await app.register(leadRoutes);
+  await app.register(crmRoutes);
   await app.register(rdUserRoutes);
   await app.register(landingPageRoutes);
   await app.register(leadWebhookRoutes);

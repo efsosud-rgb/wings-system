@@ -1,16 +1,18 @@
 import { normalizeBrazilianPhone, normalizeEmail, type LeadPipeline } from '@wings/shared';
 import { and, asc, eq, isNotNull, lt, lte, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { leadEvents, leads, metaLeadgenEvents } from '../../db/schema/index.js';
+import { leadEvents, leadSourceRules, leads, metaLeadgenEvents } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { RdCrm, type CrmMap, type NewDeal } from '../expansion/rd.js';
 import { shapeOf } from '../media/kairogen-adapter.js';
 import {
+  fetchFormLeads,
   fetchMetaLead,
   MetaLeadFetchError,
   type MetaLeadDetails,
   type MetaLeadgenEvent,
 } from './meta-leads.js';
+import { ensureStage } from './crm.js';
 import { resolveMetaSource, upsertLead } from './service.js';
 
 /**
@@ -41,7 +43,9 @@ export const META_PAYLOAD_RETENTION_DAYS = 90;
 const MAX_ATTEMPTS = 8;
 /** Minutes until the next try, by attempt number (1-based). */
 const BACKOFF_MINUTES = [1, 5, 15, 60, 180, 360, 720, 1440];
-const BATCH = 20;
+const BATCH = 50;
+/** Rows one pass may take (a historical sync can queue hundreds). */
+const MAX_PER_PASS = 1000;
 
 const RD_TARGETS: Record<LeadPipeline, { pipeline: string; stage: string }> = {
   expansao: { pipeline: 'Expansão', stage: 'Novo Contato' },
@@ -111,71 +115,185 @@ export async function processMetaLeadgenEvents(deps: MetaIntakeDeps): Promise<Me
     failed: 0,
     rdCreated: 0,
   };
-  const rows = await deps.db
-    .select()
-    .from(metaLeadgenEvents)
-    .where(and(eq(metaLeadgenEvents.status, 'pending'), lte(metaLeadgenEvents.nextAttemptAt, now)))
-    .orderBy(asc(metaLeadgenEvents.receivedAt))
-    .limit(BATCH);
   let rdMap: CrmMap | null | undefined;
   const crm =
     deps.rdCopyEnabled && deps.rdCrmToken ? new RdCrm(deps.rdCrmToken, deps.rdFetch) : null;
-  for (const row of rows) {
-    // Claim the row: two loops (webhook kick + scheduler) never take the same one.
-    const [claimed] = await deps.db
-      .update(metaLeadgenEvents)
-      .set({ attempts: row.attempts + 1, nextAttemptAt: new Date(now.getTime() + 10 * 60_000) })
-      .where(and(eq(metaLeadgenEvents.id, row.id), eq(metaLeadgenEvents.attempts, row.attempts)))
-      .returning();
-    if (!claimed) continue;
-    result.processed += 1;
-    try {
-      if (rdMap === undefined && crm) {
-        try {
-          rdMap = await crm.map();
-        } catch {
-          rdMap = null;
-        }
-      }
-      const outcome = await processOne(deps, claimed, crm, rdMap ?? null, now);
-      if (outcome === 'done') result.done += 1;
-      if (outcome === 'rd_created') {
-        result.done += 1;
-        result.rdCreated += 1;
-      }
-    } catch (error) {
-      const code =
-        error instanceof MetaLeadFetchError
-          ? `graph_${error.status}`
-          : error instanceof IntakeRefusal
-            ? error.code
-            : 'error';
-      const permanent =
-        error instanceof IntakeRefusal
-          ? error.permanent
-          : error instanceof MetaLeadFetchError && error.status !== 429 && error.status < 500;
-      const exhausted = claimed.attempts >= MAX_ATTEMPTS;
-      await deps.db
+  let rows: EventRow[] = [];
+  do {
+    rows = await deps.db
+      .select()
+      .from(metaLeadgenEvents)
+      .where(
+        and(eq(metaLeadgenEvents.status, 'pending'), lte(metaLeadgenEvents.nextAttemptAt, now)),
+      )
+      .orderBy(asc(metaLeadgenEvents.receivedAt))
+      .limit(BATCH);
+    for (const row of rows) {
+      // Claim the row: two loops (webhook kick + scheduler) never take the same one.
+      const [claimed] = await deps.db
         .update(metaLeadgenEvents)
-        .set({
-          lastError: code,
-          ...(permanent || exhausted
-            ? { status: 'failed', processedAt: now }
-            : { nextAttemptAt: new Date(now.getTime() + backoffMs(claimed.attempts)) }),
-        })
-        .where(eq(metaLeadgenEvents.id, claimed.id));
-      if (permanent || exhausted) result.failed += 1;
-      else result.retried += 1;
-      deps.log({
-        job: META_LEADGEN_JOB,
-        eventId: claimed.id,
-        attempt: claimed.attempts,
-        error: code,
-        permanent: permanent || exhausted,
+        .set({ attempts: row.attempts + 1, nextAttemptAt: new Date(now.getTime() + 10 * 60_000) })
+        .where(and(eq(metaLeadgenEvents.id, row.id), eq(metaLeadgenEvents.attempts, row.attempts)))
+        .returning();
+      if (!claimed) continue;
+      result.processed += 1;
+      try {
+        if (rdMap === undefined && crm) {
+          try {
+            rdMap = await crm.map();
+          } catch {
+            rdMap = null;
+          }
+        }
+        const outcome = await processOne(deps, claimed, crm, rdMap ?? null, now);
+        if (outcome === 'done') result.done += 1;
+        if (outcome === 'rd_retry') result.retried += 1;
+        if (outcome === 'rd_created') {
+          result.done += 1;
+          result.rdCreated += 1;
+        }
+      } catch (error) {
+        const code =
+          error instanceof MetaLeadFetchError
+            ? `graph_${error.status}`
+            : error instanceof IntakeRefusal
+              ? error.code
+              : 'error';
+        const permanent =
+          error instanceof IntakeRefusal
+            ? error.permanent
+            : error instanceof MetaLeadFetchError && error.status !== 429 && error.status < 500;
+        const exhausted = claimed.attempts >= MAX_ATTEMPTS;
+        await deps.db
+          .update(metaLeadgenEvents)
+          .set({
+            lastError: code,
+            ...(permanent || exhausted
+              ? { status: 'failed', processedAt: now }
+              : { nextAttemptAt: new Date(now.getTime() + backoffMs(claimed.attempts)) }),
+          })
+          .where(eq(metaLeadgenEvents.id, claimed.id));
+        if (permanent || exhausted) result.failed += 1;
+        else result.retried += 1;
+        deps.log({
+          job: META_LEADGEN_JOB,
+          eventId: claimed.id,
+          attempt: claimed.attempts,
+          error: code,
+          permanent: permanent || exhausted,
+        });
+      }
+    }
+  } while (rows.length === BATCH && result.processed < MAX_PER_PASS);
+  return result;
+}
+
+export interface MetaSyncResult {
+  forms: number;
+  /** Lead ids the Graph API listed for the forms in the window. */
+  listed: number;
+  /** New to the queue (not seen by webhook or an earlier sync). */
+  queued: number;
+  alreadyKnown: number;
+  /** Forms whose listing failed (code per form id). */
+  failed: Record<string, string>;
+  truncated: number;
+}
+
+/**
+ * "Buscar leads da Meta": for every active `meta_form` rule, lists the form's
+ * leads of the last `days` days (Meta keeps 90) and queues the ones the
+ * queue has not seen (`leadgen_id` unique). Each then goes through the same
+ * path as a webhook event: Graph read, dedupe by phone and e-mail, the lead,
+ * the RD copy. Totals only; nothing about a person is read here.
+ */
+export async function syncMetaFormLeads(
+  deps: MetaIntakeDeps & { days?: number },
+): Promise<MetaSyncResult> {
+  const result: MetaSyncResult = {
+    forms: 0,
+    listed: 0,
+    queued: 0,
+    alreadyKnown: 0,
+    failed: {},
+    truncated: 0,
+  };
+  if (!deps.accessToken) throw new IntakeRefusal('no_token', false);
+  const now = deps.now?.() ?? new Date();
+  const since = new Date(now.getTime() - (deps.days ?? META_PAYLOAD_RETENTION_DAYS) * 86_400_000);
+  const rules = await deps.db
+    .select({ pattern: leadSourceRules.pattern })
+    .from(leadSourceRules)
+    .where(and(eq(leadSourceRules.kind, 'meta_form'), eq(leadSourceRules.active, true)));
+  for (const rule of rules) {
+    result.forms += 1;
+    try {
+      const page = await fetchFormLeads(rule.pattern, {
+        accessToken: deps.accessToken,
+        since,
+        fetchImpl: deps.graphFetch,
       });
+      result.listed += page.leads.length;
+      if (page.truncated) result.truncated += 1;
+      const queued = await enqueueMetaLeadgenEvents(
+        deps.db,
+        page.leads.map((lead) => ({
+          leadgenId: lead.leadgenId,
+          formId: rule.pattern,
+          pageId: null,
+          adId: lead.adId,
+          adgroupId: lead.adsetId,
+          createdTime: lead.createdTime,
+          raw: {
+            source: 'sync',
+            id: lead.leadgenId,
+            form_id: rule.pattern,
+            ad_id: lead.adId,
+            adset_id: lead.adsetId,
+            campaign_id: lead.campaignId,
+          },
+        })),
+      );
+      result.queued += queued;
+      result.alreadyKnown += page.leads.length - queued;
+    } catch (error) {
+      result.failed[rule.pattern] =
+        error instanceof MetaLeadFetchError ? `graph_${error.status}` : 'graph_unreachable';
     }
   }
+  deps.log({ job: META_LEADGEN_JOB, msg: 'meta form sync', ...result });
   return result;
+}
+
+export interface MetaQueueStatus {
+  pending: number;
+  failed: number;
+  done: number;
+  /** Done events whose RD copy did not happen (no_pipeline, unknown, failed, stage_missing, disabled). */
+  rdMissing: number;
+  lastReceivedAt: string | null;
+  lastProcessedAt: string | null;
+}
+
+export async function metaQueueStatus(db: Database): Promise<MetaQueueStatus> {
+  const [row] = await db
+    .select({
+      pending: sql<number>`(count(*) filter (where ${metaLeadgenEvents.status} = 'pending'))::int`,
+      failed: sql<number>`(count(*) filter (where ${metaLeadgenEvents.status} = 'failed'))::int`,
+      done: sql<number>`(count(*) filter (where ${metaLeadgenEvents.status} = 'done'))::int`,
+      rdMissing: sql<number>`(count(*) filter (where ${metaLeadgenEvents.status} = 'done' and ${metaLeadgenEvents.rdDealId} is null and ${metaLeadgenEvents.rdOutcome} not in ('existing_deal')))::int`,
+      lastReceivedAt: sql<string | null>`max(${metaLeadgenEvents.receivedAt})`,
+      lastProcessedAt: sql<string | null>`max(${metaLeadgenEvents.processedAt})`,
+    })
+    .from(metaLeadgenEvents);
+  return {
+    pending: row?.pending ?? 0,
+    failed: row?.failed ?? 0,
+    done: row?.done ?? 0,
+    rdMissing: row?.rdMissing ?? 0,
+    lastReceivedAt: row?.lastReceivedAt ? new Date(row.lastReceivedAt).toISOString() : null,
+    lastProcessedAt: row?.lastProcessedAt ? new Date(row.lastProcessedAt).toISOString() : null,
+  };
 }
 
 const backoffMs = (attempt: number) =>
@@ -198,110 +316,178 @@ async function processOne(
   crm: RdCrm | null,
   rdMap: CrmMap | null,
   now: Date,
-): Promise<'done' | 'rd_created'> {
-  if (!deps.accessToken) throw new IntakeRefusal('no_token', false);
-  const answer = await fetchMetaLead(row.leadgenId, {
-    accessToken: deps.accessToken,
-    fetchImpl: deps.graphFetch,
-  });
-  const details = answer.details;
-  deps.log({ job: META_LEADGEN_JOB, msg: 'meta lead fetched', shape: shapeOf(answer.raw) });
+): Promise<'done' | 'rd_created' | 'rd_retry'> {
+  // Step 1 — the lead in the Wings System (skipped on a retry that already made it).
+  let leadId = row.leadId;
+  let origin: OriginFacts | null = null;
+  if (!leadId) {
+    if (!deps.accessToken) throw new IntakeRefusal('no_token', false);
+    const answer = await fetchMetaLead(row.leadgenId, {
+      accessToken: deps.accessToken,
+      fetchImpl: deps.graphFetch,
+    });
+    const details = answer.details;
+    deps.log({ job: META_LEADGEN_JOB, msg: 'meta lead fetched', shape: shapeOf(answer.raw) });
 
-  const phone = normalizeBrazilianPhone(details.phone);
-  const email = normalizeEmail(details.email);
-  if (!phone && !email) throw new IntakeRefusal('no_contact_data', true);
+    const phone = normalizeBrazilianPhone(details.phone);
+    const email = normalizeEmail(details.email);
+    if (!phone && !email) throw new IntakeRefusal('no_contact_data', true);
 
-  const formId = details.formId ?? row.formId;
-  const campaignId = details.campaignId ?? null;
-  const client = await resolveMetaSource(deps.db, { formId, campaignId });
-  const upserted = await upsertLead(deps.db, {
-    source: 'meta_lead_ads',
-    name: details.name,
-    email,
-    phone,
-    clientId: client.clientId,
-    clientMapped: client.mapped,
-    pipeline: client.pipeline,
-    brand: client.brand,
-    channel: 'meta_lead_ads',
-    campaignId,
-    campaignName: details.campaignName,
-    formId,
-    externalId: row.leadgenId,
-    city: details.city,
-    formAnswers: Object.keys(details.answers).length > 0 ? details.answers : null,
-    legalBasis: 'consent',
-    consentedAt: details.createdTime ?? row.createdTime ?? now,
-    consentSource: `meta_lead_ads:form:${formId ?? 'desconhecido'}`,
-    consentText:
-      'Formulário de cadastro do Meta Lead Ads, com a política de privacidade do formulário.',
-    attribution: {
-      adPlatform: 'meta',
-      adCampaignExternalId: campaignId,
-      adSetExternalId: details.adsetId,
-      adExternalId: details.adId ?? row.adId,
-      utmSource: details.platform ? `meta:${details.platform}` : null,
-    },
-    event: {
-      kind: 'lead.received.meta_lead_ads',
-      detail: {
-        ruleId: client.ruleId,
-        formId,
-        campaignId,
-        adsetId: details.adsetId,
-        adId: details.adId ?? row.adId,
-        platform: details.platform,
-        organic: details.organic,
-        answers: Object.keys(details.answers).length,
-      },
-    },
-  });
-  await writeAudit(deps.db, {
-    action: upserted.created ? 'lead.received' : 'lead.merged',
-    entity: 'lead',
-    entityId: upserted.lead.id,
-    metadata: {
+    const formId = details.formId ?? row.formId;
+    const campaignId = details.campaignId ?? null;
+    const client = await resolveMetaSource(deps.db, { formId, campaignId });
+    // The entry stage of the segment's funnel exists before the lead lands in it (names are RD's).
+    if (client.pipeline) await ensureEntryStage(deps.db, client.pipeline);
+    const upserted = await upsertLead(deps.db, {
       source: 'meta_lead_ads',
+      name: details.name,
+      email,
+      phone,
+      clientId: client.clientId,
       clientMapped: client.mapped,
       pipeline: client.pipeline,
-      leadgenEventId: row.id,
-    },
-  });
+      brand: client.brand,
+      channel: 'meta_lead_ads',
+      campaignId,
+      campaignName: details.campaignName,
+      formId,
+      externalId: row.leadgenId,
+      city: details.city,
+      formAnswers: Object.keys(details.answers).length > 0 ? details.answers : null,
+      legalBasis: 'consent',
+      consentedAt: details.createdTime ?? row.createdTime ?? now,
+      consentSource: `meta_lead_ads:form:${formId ?? 'desconhecido'}`,
+      consentText:
+        'Formulário de cadastro do Meta Lead Ads, com a política de privacidade do formulário.',
+      attribution: {
+        adPlatform: 'meta',
+        adCampaignExternalId: campaignId,
+        adSetExternalId: details.adsetId,
+        adExternalId: details.adId ?? row.adId,
+        utmSource: details.platform ? `meta:${details.platform}` : null,
+      },
+      event: {
+        kind: 'lead.received.meta_lead_ads',
+        detail: {
+          ruleId: client.ruleId,
+          formId,
+          campaignId,
+          adsetId: details.adsetId,
+          adId: details.adId ?? row.adId,
+          platform: details.platform,
+          organic: details.organic,
+          answers: Object.keys(details.answers).length,
+          leadgenEventId: row.id,
+        },
+      },
+    });
+    await writeAudit(deps.db, {
+      action: upserted.created ? 'lead.received' : 'lead.merged',
+      entity: 'lead',
+      entityId: upserted.lead.id,
+      metadata: {
+        source: 'meta_lead_ads',
+        clientMapped: client.mapped,
+        pipeline: client.pipeline,
+        leadgenEventId: row.id,
+        assignedTo: upserted.assignedTo ?? null,
+      },
+    });
+    leadId = upserted.lead.id;
+    origin = originFactsOf(details);
+    // In the Wings System now, whatever RD says next.
+    await deps.db
+      .update(metaLeadgenEvents)
+      .set({ leadId, leadCreated: upserted.created, lastError: null })
+      .where(eq(metaLeadgenEvents.id, row.id));
+    deps.log({
+      job: META_LEADGEN_JOB,
+      eventId: row.id,
+      leadId,
+      created: upserted.created,
+      pipeline: client.pipeline,
+      mapped: client.mapped,
+    });
+  }
 
+  // Step 2 — the copy in RD CRM, never in the way of step 1.
+  const lead = await deps.db.query.leads.findFirst({ where: eq(leads.id, leadId) });
+  if (!lead) throw new IntakeRefusal('lead_missing', true);
   const rd = await copyToRd(deps, {
     crm,
     rdMap,
-    leadId: upserted.lead.id,
-    rdDealId: upserted.lead.rdDealId,
-    pipeline: (upserted.lead.pipeline as LeadPipeline | null) ?? client.pipeline,
-    brand: upserted.lead.brand ?? client.brand,
-    person: { name: upserted.lead.name, email, phone },
-    details,
-    now,
+    leadId: lead.id,
+    rdDealId: lead.rdDealId,
+    pipeline: (lead.pipeline as LeadPipeline | null) ?? null,
+    brand: lead.brand,
+    person: { name: lead.name, email: lead.email, phone: lead.phone },
+    origin: origin ?? originFactsOfLead(lead),
   });
-
+  const retryRd = rd.outcome === 'failed' && row.attempts < MAX_ATTEMPTS;
   await deps.db
     .update(metaLeadgenEvents)
-    .set({
-      status: 'done',
-      processedAt: now,
-      lastError: null,
-      leadId: upserted.lead.id,
-      leadCreated: upserted.created,
-      rdDealId: rd.dealId,
-      rdOutcome: rd.outcome,
-    })
+    .set(
+      retryRd
+        ? {
+            lastError: 'rd_failed',
+            rdOutcome: 'failed',
+            nextAttemptAt: new Date(now.getTime() + backoffMs(row.attempts)),
+          }
+        : {
+            status: 'done',
+            processedAt: now,
+            lastError: rd.outcome === 'failed' ? 'rd_failed' : null,
+            rdDealId: rd.dealId,
+            rdOutcome: rd.outcome,
+          },
+    )
     .where(eq(metaLeadgenEvents.id, row.id));
-  deps.log({
-    job: META_LEADGEN_JOB,
-    eventId: row.id,
-    leadId: upserted.lead.id,
-    created: upserted.created,
-    pipeline: client.pipeline,
-    mapped: client.mapped,
-    rd: rd.outcome,
-  });
+  deps.log({ job: META_LEADGEN_JOB, eventId: row.id, leadId, rd: rd.outcome, retryRd });
+  if (retryRd) return 'rd_retry';
   return rd.outcome === 'created' ? 'rd_created' : 'done';
+}
+
+/** What the RD deal's OBS says about where the lead came from: ids and ad names, never the person. */
+interface OriginFacts {
+  platform: string | null;
+  formId: string | null;
+  campaignId: string | null;
+  campaignName: string | null;
+  adsetId: string | null;
+  adsetName: string | null;
+  adId: string | null;
+  adName: string | null;
+  organic: boolean;
+}
+
+const originFactsOf = (details: MetaLeadDetails): OriginFacts => ({
+  platform: details.platform,
+  formId: details.formId,
+  campaignId: details.campaignId,
+  campaignName: details.campaignName,
+  adsetId: details.adsetId,
+  adsetName: details.adsetName,
+  adId: details.adId,
+  adName: details.adName,
+  organic: details.organic,
+});
+
+/** On a retry the Graph answer is gone; the lead's own columns say the same, by id. */
+const originFactsOfLead = (lead: typeof leads.$inferSelect): OriginFacts => ({
+  platform: lead.utmSource?.startsWith('meta:') ? lead.utmSource.slice(5) : null,
+  formId: lead.formId,
+  campaignId: lead.adCampaignExternalId,
+  campaignName: lead.campaignName,
+  adsetId: lead.adSetExternalId,
+  adsetName: null,
+  adId: lead.adExternalId,
+  adName: null,
+  organic: false,
+});
+
+/** The first stage of each funnel, as RD CRM names them; made once, then the manager owns the list. */
+export async function ensureEntryStage(db: Database, pipeline: LeadPipeline): Promise<void> {
+  await ensureStage(db, { pipeline, name: RD_TARGETS[pipeline].stage, position: 1 });
 }
 
 type RdOutcome =
@@ -330,8 +516,7 @@ async function copyToRd(
     pipeline: LeadPipeline | null;
     brand: string | null;
     person: { name: string | null; email: string | null; phone: string | null };
-    details: MetaLeadDetails;
-    now: Date;
+    origin: OriginFacts;
   },
 ): Promise<{ outcome: RdOutcome; dealId: string | null }> {
   if (input.rdDealId) return { outcome: 'existing_deal', dealId: input.rdDealId };
@@ -371,7 +556,7 @@ function dealFor(
     pipeline: LeadPipeline | null;
     brand: string | null;
     person: { name: string | null; email: string | null; phone: string | null };
-    details: MetaLeadDetails;
+    origin: OriginFacts;
   },
   map: CrmMap,
   expansionOwnerId: string | null,
@@ -385,10 +570,10 @@ function dealFor(
   const brandField = map.customFields.get('Nome da Marca');
   if (input.brand && brandField) customFields.push({ id: brandField, value: input.brand });
   const obsField = map.customFields.get('OBS');
-  if (obsField) customFields.push({ id: obsField, value: describeOrigin(input.details) });
+  if (obsField) customFields.push({ id: obsField, value: describeOrigin(input.origin) });
   const sourceName = RD_SOURCE_CANDIDATES.find((candidate) => map.sources.has(candidate));
-  const campaignId = input.details.campaignName
-    ? (map.campaigns.get(input.details.campaignName) ?? null)
+  const campaignId = input.origin.campaignName
+    ? (map.campaigns.get(input.origin.campaignName) ?? null)
     : null;
   return {
     name: input.brand ? `${name} - ${input.brand}` : name,
@@ -403,15 +588,17 @@ function dealFor(
 }
 
 /** The OBS field of the RD deal: where the lead came from, ids and names of the ad, never the person. */
-export function describeOrigin(details: MetaLeadDetails): string {
+export function describeOrigin(details: OriginFacts): string {
   const parts = [
     'Meta Lead Ads',
     details.platform && `plataforma=${details.platform}`,
     details.formId && `formulário=${details.formId}`,
     details.campaignName && `campanha=${details.campaignName}`,
     details.campaignId && `campanha_id=${details.campaignId}`,
-    details.adsetName && `conjunto=${details.adsetName}`,
-    details.adName && `anúncio=${details.adName}`,
+    details.adsetName
+      ? `conjunto=${details.adsetName}`
+      : details.adsetId && `conjunto_id=${details.adsetId}`,
+    details.adName ? `anúncio=${details.adName}` : details.adId && `anúncio_id=${details.adId}`,
     details.organic && 'orgânico',
   ].filter(Boolean);
   return parts.join(' · ').slice(0, 1000);

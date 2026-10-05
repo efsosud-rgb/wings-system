@@ -94,6 +94,46 @@ export function useResearchLead() {
   });
 }
 
+// --- Meta Lead Ads queue ----------------------------------------------------------------
+
+export interface MetaLeadsStatus {
+  pending: number;
+  failed: number;
+  done: number;
+  rdMissing: number;
+  lastReceivedAt: string | null;
+  lastProcessedAt: string | null;
+  webhookConfigured: boolean;
+  tokenConfigured: boolean;
+}
+
+export interface MetaLeadsSyncResult {
+  forms: number;
+  listed: number;
+  queued: number;
+  alreadyKnown: number;
+  failed: Record<string, string>;
+  truncated: number;
+}
+
+export function useMetaLeadsStatus(enabled = true) {
+  return useQuery({
+    queryKey: ['leads', 'meta-status'],
+    queryFn: () => api.get<MetaLeadsStatus>('/crm/meta-leads/status'),
+    enabled,
+    refetchInterval: (state) => ((state.state.data?.pending ?? 0) > 0 ? 5_000 : false),
+  });
+}
+
+/** "Buscar leads da Meta": the last 90 days of every form with a rule; totals only. */
+export function useSyncMetaLeads() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<MetaLeadsSyncResult>('/crm/meta-leads/sync'),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['leads'] }),
+  });
+}
+
 // --- source rules -----------------------------------------------------------------
 
 export function useSourceRules(enabled = true) {

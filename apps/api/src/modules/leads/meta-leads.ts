@@ -206,3 +206,81 @@ function parseJsonOrNull(text: string): unknown {
     return null;
   }
 }
+
+export const META_LEAD_FIELDS =
+  'id,created_time,field_data,campaign_id,campaign_name,ad_id,ad_name,adset_id,adset_name,form_id,platform,is_organic';
+
+export interface FormLeadRef {
+  leadgenId: string;
+  createdTime: Date | null;
+  adId: string | null;
+  adsetId: string | null;
+  campaignId: string | null;
+}
+
+/**
+ * The leads of one form since `since` (Meta keeps them 90 days), ids and
+ * ad ids only: each is then read one by one by the queue, like a webhook
+ * event. Pages by cursor (`paging.cursors.after`), never by `paging.next`,
+ * whose URL carries the token. Reads only.
+ */
+export async function fetchFormLeads(
+  formId: string,
+  options: {
+    accessToken: string;
+    since: Date;
+    fetchImpl?: typeof fetch;
+    version?: string;
+    maxPages?: number;
+    timeoutMs?: number;
+  },
+): Promise<{ leads: FormLeadRef[]; pages: number; truncated: boolean }> {
+  const leads: FormLeadRef[] = [];
+  let after: string | null = null;
+  let pages = 0;
+  const maxPages = options.maxPages ?? 50;
+  do {
+    const url = new URL(
+      `https://graph.facebook.com/${options.version ?? META_GRAPH_VERSION}/${formId}/leads`,
+    );
+    url.searchParams.set('fields', 'id,created_time,ad_id,adset_id,campaign_id');
+    url.searchParams.set('limit', '100');
+    url.searchParams.set(
+      'filtering',
+      JSON.stringify([
+        {
+          field: 'time_created',
+          operator: 'GREATER_THAN',
+          value: Math.floor(options.since.getTime() / 1000),
+        },
+      ]),
+    );
+    if (after) url.searchParams.set('after', after);
+    const response = await (options.fetchImpl ?? fetch)(url, {
+      headers: { Authorization: `Bearer ${options.accessToken}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(options.timeoutMs ?? 15_000),
+    });
+    const text = await response.text();
+    if (!response.ok)
+      throw new MetaLeadFetchError(response.status, `Graph API answered ${response.status}`);
+    const body = (parseJsonOrNull(text) ?? {}) as {
+      data?: Record<string, unknown>[];
+      paging?: { cursors?: { after?: string }; next?: string };
+    };
+    for (const item of body.data ?? []) {
+      const id = asString(item.id);
+      if (!id) continue;
+      const created = typeof item.created_time === 'string' ? new Date(item.created_time) : null;
+      leads.push({
+        leadgenId: id,
+        createdTime: created && !Number.isNaN(created.getTime()) ? created : null,
+        adId: asString(item.ad_id),
+        adsetId: asString(item.adset_id),
+        campaignId: asString(item.campaign_id),
+      });
+    }
+    pages += 1;
+    after = body.paging?.next && body.paging.cursors?.after ? body.paging.cursors.after : null;
+  } while (after && pages < maxPages);
+  return { leads, pages, truncated: after !== null };
+}

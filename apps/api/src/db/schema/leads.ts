@@ -102,6 +102,14 @@ export const leads = pgTable(
     /** 1-based position of the stage in its RD pipeline. */
     stageOrder: integer('stage_order'),
     stageChangedAt: timestamp('stage_changed_at', { withTimezone: true }),
+    /** The Wings stage (`crm_stages`); `stage`/`stage_order` are kept in step with it. */
+    stageId: uuid('stage_id'),
+    /**
+     * Who runs this lead's stage, owner and outcome: `rd` while nobody touched
+     * it in the Wings System (the hourly follow-up mirrors RD), `wings` from the
+     * first change made here (RD is then only a copy and never overwrites).
+     */
+    managedBy: text('managed_by').notNull().default('wings'),
     /** true won, false lost, null open. */
     won: boolean('won'),
     closedAt: timestamp('closed_at', { withTimezone: true }),
@@ -135,6 +143,7 @@ export const leads = pgTable(
     uniqueIndex('leads_source_external_uq').on(table.source, table.externalId),
     uniqueIndex('leads_rd_deal_uq').on(table.rdDealId),
     index('leads_pipeline_stage_idx').on(table.pipeline, table.stage),
+    index('leads_stage_id_idx').on(table.stageId),
     index('leads_import_batch_idx').on(table.importBatchId),
     index('leads_phone_idx').on(table.tenantId, table.phone),
     index('leads_email_idx').on(table.tenantId, table.email),

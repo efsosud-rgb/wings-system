@@ -1,0 +1,469 @@
+import {
+  boardQuerySchema,
+  can,
+  crmStageCreateSchema,
+  crmStageOrderSchema,
+  crmStageUpdateSchema,
+  distributionUpdateSchema,
+  grantedScope,
+  leadNoteCreateSchema,
+  leadTaskCreateSchema,
+  leadTaskUpdateSchema,
+  leadUpdateSchema,
+  taskListQuerySchema,
+  LEAD_PIPELINES,
+  type LeadPipeline,
+} from '@wings/shared';
+import { eq } from 'drizzle-orm';
+import type { FastifyPluginAsync } from 'fastify';
+import { z } from 'zod';
+import { employees, leadTasks, leads } from '../../db/schema/index.js';
+import { writeAudit } from '../../lib/audit.js';
+import {
+  addNote,
+  boardOf,
+  changeLead,
+  createStage,
+  createTask,
+  distributionOf,
+  listSellers,
+  listStages,
+  listTasks,
+  reorderStages,
+  setDistribution,
+  updateStage,
+  updateTask,
+} from './crm.js';
+import { metaQueueStatus, syncMetaFormLeads } from './meta-intake.js';
+import { loadLead } from './service.js';
+
+const idParam = z.object({ id: z.uuid() });
+const taskParam = z.object({ id: z.uuid(), taskId: z.uuid() });
+const pipelineQuery = z.object({ pipeline: z.enum(LEAD_PIPELINES).optional() });
+const invalid = (message?: string) => ({
+  error: 'invalid_request',
+  message: message ?? 'Dados inválidos',
+});
+const notFound = { error: 'not_found', message: 'Lead não encontrado.' };
+
+/**
+ * CRM Vendas, Fase 1: the Funil as the place of work. Stages and the
+ * rotation are configuration (`crm.manage`); moving, closing and annotating
+ * a lead is `leads.write` in the caller's scope (a seller only on their own
+ * leads); handing a lead to someone else is `leads.assign`. Every change is
+ * recorded on the lead and in the audit log by id.
+ */
+export const crmRoutes: FastifyPluginAsync = async (app) => {
+  const { db, env } = app.wings;
+  type Req = Parameters<typeof app.can>[0];
+
+  const ownScope = (request: Req, permission: 'leads.read' | 'leads.write') =>
+    grantedScope(request.session.actor, permission) === 'own'
+      ? request.session.actor.employeeId
+      : undefined;
+
+  /** The lead, when the caller may see it (own scope sees only their leads). */
+  async function visibleLead(request: Req, id: string, permission: 'leads.read' | 'leads.write') {
+    const row = await db.query.leads.findFirst({ where: eq(leads.id, id) });
+    if (!row) return null;
+    const own = ownScope(request, permission);
+    return own === undefined || row.ownerEmployeeId === own ? row : null;
+  }
+
+  // --- stages --------------------------------------------------------------------------
+
+  app.get(
+    '/crm/stages',
+    { preHandler: app.requirePermission('leads.read') },
+    async (request, reply) => {
+      const query = pipelineQuery.safeParse(request.query);
+      if (!query.success) return reply.status(400).send(invalid());
+      return reply.send({
+        stages: await listStages(db, {
+          pipeline: query.data.pipeline,
+          withCounts: true,
+          ownerEmployeeId: ownScope(request, 'leads.read'),
+        }),
+      });
+    },
+  );
+
+  const manage = { preHandler: app.requirePermission('crm.manage') };
+
+  app.post('/crm/stages', manage, async (request, reply) => {
+    const body = crmStageCreateSchema.safeParse(request.body);
+    if (!body.success) return reply.status(400).send(invalid(body.error.issues[0]?.message));
+    const actor = request.session.actor.employeeId;
+    const stage = await createStage(db, { ...body.data, actorEmployeeId: actor });
+    if (stage === 'exists')
+      return reply
+        .status(409)
+        .send({ error: 'stage_exists', message: 'Já existe uma etapa com este nome.' });
+    await writeAudit(db, {
+      actorEmployeeId: actor,
+      action: 'crm_stage.created',
+      entity: 'crm_stage',
+      entityId: stage.id,
+      ip: request.ip,
+      metadata: { pipeline: stage.pipeline, position: stage.position },
+    });
+    return reply.status(201).send({ stage });
+  });
+
+  app.patch('/crm/stages/:id', manage, async (request, reply) => {
+    const params = idParam.safeParse(request.params);
+    const body = crmStageUpdateSchema.safeParse(request.body);
+    if (!params.success || !body.success)
+      return reply
+        .status(400)
+        .send(invalid(body.success ? undefined : body.error.issues[0]?.message));
+    const stage = await updateStage(db, params.data.id, body.data);
+    if (stage === null)
+      return reply.status(404).send({ error: 'not_found', message: 'Etapa não encontrada.' });
+    if (stage === 'exists')
+      return reply
+        .status(409)
+        .send({ error: 'stage_exists', message: 'Já existe uma etapa com este nome.' });
+    await writeAudit(db, {
+      actorEmployeeId: request.session.actor.employeeId,
+      action: 'crm_stage.updated',
+      entity: 'crm_stage',
+      entityId: stage.id,
+      ip: request.ip,
+      metadata: { fields: Object.keys(body.data) },
+    });
+    return reply.send({ stage });
+  });
+
+  app.put('/crm/stages/order', manage, async (request, reply) => {
+    const body = crmStageOrderSchema.safeParse(request.body);
+    if (!body.success) return reply.status(400).send(invalid(body.error.issues[0]?.message));
+    const stages = await reorderStages(db, body.data.pipeline, body.data.ids);
+    if (stages === 'mismatch')
+      return reply
+        .status(400)
+        .send(invalid('A ordem precisa conter cada etapa ativa do funil uma vez.'));
+    await writeAudit(db, {
+      actorEmployeeId: request.session.actor.employeeId,
+      action: 'crm_stage.reordered',
+      entity: 'crm_pipeline',
+      entityId: body.data.pipeline,
+      ip: request.ip,
+      metadata: { count: body.data.ids.length },
+    });
+    return reply.send({ stages });
+  });
+
+  // --- the lead -------------------------------------------------------------------------
+
+  app.patch(
+    '/leads/:id',
+    { preHandler: app.requirePermission('leads.write') },
+    async (request, reply) => {
+      const params = idParam.safeParse(request.params);
+      const body = leadUpdateSchema.safeParse(request.body);
+      if (!params.success || !body.success)
+        return reply
+          .status(400)
+          .send(invalid(body.success ? undefined : body.error.issues[0]?.message));
+      const row = await visibleLead(request, params.data.id, 'leads.write');
+      if (!row) return reply.status(404).send(notFound);
+      const actor = request.session.actor.employeeId;
+      if (
+        body.data.ownerEmployeeId !== undefined &&
+        body.data.ownerEmployeeId !== row.ownerEmployeeId
+      ) {
+        // Taking a lead for oneself is `leads.write`; giving it to someone else is `leads.assign`.
+        const toSelf = body.data.ownerEmployeeId === actor;
+        if (!toSelf && !can(request.session.actor, 'leads.assign').allowed) {
+          return reply.status(403).send({
+            error: 'forbidden',
+            message: 'Só quem pode atribuir leads (leads.assign) muda o dono para outra pessoa.',
+          });
+        }
+        if (body.data.ownerEmployeeId) {
+          const owner = await db.query.employees.findFirst({
+            where: eq(employees.id, body.data.ownerEmployeeId),
+            columns: { id: true, status: true },
+          });
+          if (!owner || owner.status !== 'active')
+            return reply.status(400).send(invalid('Funcionário inexistente ou inativo.'));
+        }
+      }
+      const result = await changeLead(db, {
+        leadId: row.id,
+        stageId: body.data.stageId,
+        pipeline: body.data.pipeline,
+        ownerEmployeeId: body.data.ownerEmployeeId,
+        won: body.data.won,
+        lostReason: body.data.lostReason,
+        source: 'wings',
+        actorEmployeeId: actor,
+      });
+      if (!result.ok) {
+        const messages = {
+          not_found: notFound.message,
+          stage_not_found: 'Etapa não encontrada.',
+          stage_wrong_pipeline: 'A etapa pertence a outro funil.',
+          stage_inactive: 'Esta etapa foi desativada.',
+        } as const;
+        return reply
+          .status(result.reason === 'not_found' ? 404 : 400)
+          .send({ error: result.reason, message: messages[result.reason] });
+      }
+      if (result.changed.length > 0) {
+        await writeAudit(db, {
+          actorEmployeeId: actor,
+          action: 'lead.updated',
+          entity: 'lead',
+          entityId: row.id,
+          ip: request.ip,
+          metadata: {
+            changed: result.changed,
+            stageId: result.lead.stageId,
+            won: result.lead.won,
+            ownerEmployeeId: result.lead.ownerEmployeeId,
+          },
+        });
+      }
+      return reply.send(await loadLead(db, row.id));
+    },
+  );
+
+  app.post(
+    '/leads/:id/notes',
+    { preHandler: app.requirePermission('leads.write') },
+    async (request, reply) => {
+      const params = idParam.safeParse(request.params);
+      const body = leadNoteCreateSchema.safeParse(request.body);
+      if (!params.success || !body.success)
+        return reply
+          .status(400)
+          .send(invalid(body.success ? undefined : body.error.issues[0]?.message));
+      const row = await visibleLead(request, params.data.id, 'leads.write');
+      if (!row) return reply.status(404).send(notFound);
+      const actor = request.session.actor.employeeId;
+      const note = await addNote(db, {
+        leadId: row.id,
+        body: body.data.body,
+        authorEmployeeId: actor,
+      });
+      await writeAudit(db, {
+        actorEmployeeId: actor,
+        action: 'lead.note_added',
+        entity: 'lead',
+        entityId: row.id,
+        ip: request.ip,
+        metadata: { noteId: note.id },
+      });
+      return reply.status(201).send({ note });
+    },
+  );
+
+  // --- tasks ---------------------------------------------------------------------------
+
+  app.post(
+    '/leads/:id/tasks',
+    { preHandler: app.requirePermission('leads.write') },
+    async (request, reply) => {
+      const params = idParam.safeParse(request.params);
+      const body = leadTaskCreateSchema.safeParse(request.body);
+      if (!params.success || !body.success)
+        return reply
+          .status(400)
+          .send(invalid(body.success ? undefined : body.error.issues[0]?.message));
+      const row = await visibleLead(request, params.data.id, 'leads.write');
+      if (!row) return reply.status(404).send(notFound);
+      const actor = request.session.actor.employeeId;
+      const task = await createTask(db, {
+        leadId: row.id,
+        kind: body.data.kind,
+        title: body.data.title,
+        dueAt: new Date(body.data.dueAt),
+        assigneeEmployeeId: body.data.assigneeEmployeeId ?? row.ownerEmployeeId ?? actor,
+        createdBy: actor,
+      });
+      await writeAudit(db, {
+        actorEmployeeId: actor,
+        action: 'lead.task_created',
+        entity: 'lead',
+        entityId: row.id,
+        ip: request.ip,
+        metadata: { taskId: task.id, kind: task.kind },
+      });
+      return reply.status(201).send({ task });
+    },
+  );
+
+  app.patch(
+    '/leads/:id/tasks/:taskId',
+    { preHandler: app.requirePermission('leads.write') },
+    async (request, reply) => {
+      const params = taskParam.safeParse(request.params);
+      const body = leadTaskUpdateSchema.safeParse(request.body);
+      if (!params.success || !body.success)
+        return reply
+          .status(400)
+          .send(invalid(body.success ? undefined : body.error.issues[0]?.message));
+      const row = await visibleLead(request, params.data.id, 'leads.write');
+      if (!row) return reply.status(404).send(notFound);
+      const existing = await db.query.leadTasks.findFirst({
+        where: eq(leadTasks.id, params.data.taskId),
+      });
+      if (!existing || existing.leadId !== row.id)
+        return reply.status(404).send({ error: 'not_found', message: 'Tarefa não encontrada.' });
+      const actor = request.session.actor.employeeId;
+      const task = await updateTask(db, {
+        taskId: existing.id,
+        done: body.data.done,
+        dueAt: body.data.dueAt ? new Date(body.data.dueAt) : undefined,
+        title: body.data.title,
+        actorEmployeeId: actor,
+      });
+      await writeAudit(db, {
+        actorEmployeeId: actor,
+        action: 'lead.task_updated',
+        entity: 'lead',
+        entityId: row.id,
+        ip: request.ip,
+        metadata: { taskId: existing.id, fields: Object.keys(body.data) },
+      });
+      return reply.send({ task });
+    },
+  );
+
+  /** The caller's tasks (every seller's, with `everyone=true`, for a scope wider than own). */
+  app.get(
+    '/crm/tasks',
+    { preHandler: app.requirePermission('leads.read') },
+    async (request, reply) => {
+      const query = taskListQuerySchema.safeParse(request.query);
+      if (!query.success) return reply.status(400).send(invalid());
+      const own = ownScope(request, 'leads.read');
+      const everyone = query.data.everyone === true && own === undefined;
+      return reply.send({
+        tasks: await listTasks(db, {
+          assigneeEmployeeId: everyone ? undefined : request.session.actor.employeeId,
+          status: query.data.status,
+        }),
+      });
+    },
+  );
+
+  // --- kanban --------------------------------------------------------------------------
+
+  app.get(
+    '/leads/board',
+    { preHandler: app.requirePermission('leads.read') },
+    async (request, reply) => {
+      const query = boardQuerySchema.safeParse(request.query);
+      if (!query.success) return reply.status(400).send(invalid('Informe o funil.'));
+      return reply.send(
+        await boardOf(db, {
+          pipeline: query.data.pipeline,
+          ownerEmployeeId: ownScope(request, 'leads.read'),
+          owner: query.data.owner,
+          clientId: query.data.clientId,
+        }),
+      );
+    },
+  );
+
+  // --- Meta Lead Ads: queue status and "Buscar leads da Meta" ------------------------------
+
+  app.get(
+    '/crm/meta-leads/status',
+    { preHandler: app.requirePermission('leads.read') },
+    async (_request, reply) =>
+      reply.send({
+        ...(await metaQueueStatus(db)),
+        webhookConfigured: Boolean(env.META_APP_SECRET && env.META_LEADGEN_VERIFY_TOKEN),
+        tokenConfigured: Boolean(env.META_LEADS_ACCESS_TOKEN ?? env.META_WRITE_TOKEN),
+      }),
+  );
+
+  /**
+   * Lists the last 90 days of every form with a rule and queues what the
+   * webhook did not bring (Eric, 05/10). A person's click; totals only.
+   */
+  app.post(
+    '/crm/meta-leads/sync',
+    { preHandler: app.requirePermission('integrations.manage') },
+    async (request, reply) => {
+      const token = env.META_LEADS_ACCESS_TOKEN ?? env.META_WRITE_TOKEN;
+      if (!token) {
+        return reply.status(503).send({
+          error: 'meta_token_not_configured',
+          message:
+            'O token de leitura de leads da Meta (META_LEADS_ACCESS_TOKEN) não está configurado.',
+        });
+      }
+      const actor = request.session.actor.employeeId;
+      const result = await syncMetaFormLeads({
+        db,
+        accessToken: token,
+        rdCrmToken: env.RD_CRM_API_TOKEN ?? null,
+        expansionOwnerId: env.EXPANSION_OWNER_RD_USER_ID ?? null,
+        rdCopyEnabled: env.META_LEADS_RD_COPY_ENABLED !== 'false',
+        graphFetch: app.wings.platformFetch,
+        rdFetch: app.wings.rdFetch,
+        log: (facts) => app.log.info(facts),
+      });
+      await writeAudit(db, {
+        actorEmployeeId: actor,
+        action: 'meta_leads.sync_requested',
+        entity: 'meta_leadgen',
+        entityId: 'forms',
+        ip: request.ip,
+        metadata: {
+          forms: result.forms,
+          listed: result.listed,
+          queued: result.queued,
+          alreadyKnown: result.alreadyKnown,
+          failed: Object.keys(result.failed).length,
+        },
+      });
+      if (result.queued > 0) app.wings.metaLeadKick?.();
+      return reply.status(202).send(result);
+    },
+  );
+
+  // --- distribution and sellers ----------------------------------------------------------
+
+  app.get(
+    '/crm/sellers',
+    { preHandler: app.requirePermission('leads.read') },
+    async (_request, reply) => reply.send({ sellers: await listSellers(db) }),
+  );
+
+  app.get('/crm/distribution', manage, async (_request, reply) => {
+    const distributions = await Promise.all(
+      LEAD_PIPELINES.map((pipeline: LeadPipeline) => distributionOf(db, pipeline)),
+    );
+    return reply.send({ distributions });
+  });
+
+  app.put('/crm/distribution', manage, async (request, reply) => {
+    const body = distributionUpdateSchema.safeParse(request.body);
+    if (!body.success) return reply.status(400).send(invalid(body.error.issues[0]?.message));
+    const sellers = new Set((await listSellers(db)).filter((s) => s.active).map((s) => s.id));
+    if (body.data.members.some((member) => !sellers.has(member.employeeId)))
+      return reply
+        .status(400)
+        .send(invalid('Só vendedores e gerentes comerciais ativos entram na distribuição.'));
+    const actor = request.session.actor.employeeId;
+    const distribution = await setDistribution(db, { ...body.data, actorEmployeeId: actor });
+    await writeAudit(db, {
+      actorEmployeeId: actor,
+      action: 'crm_distribution.updated',
+      entity: 'crm_pipeline',
+      entityId: body.data.pipeline,
+      ip: request.ip,
+      metadata: {
+        members: body.data.members.length,
+        active: body.data.members.filter((m) => m.active).length,
+      },
+    });
+    return reply.send({ distribution });
+  });
+};
