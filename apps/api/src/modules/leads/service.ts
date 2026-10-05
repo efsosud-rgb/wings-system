@@ -11,6 +11,7 @@ import {
   type EnrichmentFacts,
   type FoundLink,
   type Lead,
+  type LeadActivity,
   type LeadChannel,
   type LeadEvent,
   type LeadLegalBasis,
@@ -29,6 +30,7 @@ import { and, asc, desc, eq, gte, isNotNull, isNull, lt, or, sql } from 'drizzle
 import type { Database } from '../../db/client.js';
 import {
   clients,
+  crmCompanies,
   employees,
   jobs,
   leadEnrichmentLedger,
@@ -39,6 +41,8 @@ import {
   rdCrmDeals,
   rdUserMap,
 } from '../../db/schema/index.js';
+import { activitiesOf } from './activities.js';
+import { attachLeadContact, contactsOfLead, findOrCreateCompany } from './contacts.js';
 import {
   ensureFirstContactTask,
   entryStageOf,
@@ -181,6 +185,9 @@ export interface IncomingLead {
   ownerEmployeeId?: string | null;
   pipeline?: LeadPipeline | null;
   brand?: string | null;
+  /** The company the deal is with, found or made by name/CNPJ (CRM núcleo). */
+  company?: { name: string; cnpj?: string | null; city?: string | null } | null;
+  valueCents?: number | null;
   /** When the person actually arrived, if earlier than now (an imported RD deal's creation); used only for a new lead. */
   arrivedAt?: Date | null;
   /** The import run creating the lead (`leads.import_batch_id`); used only for a new lead. */
@@ -299,6 +306,8 @@ function fillGaps(existing: LeadRow, incoming: IncomingLead): Partial<typeof lea
   if (!existing.formId && incoming.formId) patch.formId = incoming.formId;
   if (!existing.pipeline && incoming.pipeline) patch.pipeline = incoming.pipeline;
   if (!existing.brand && incoming.brand) patch.brand = incoming.brand;
+  if (existing.valueCents === null && typeof incoming.valueCents === 'number')
+    patch.valueCents = incoming.valueCents;
   if (!hasAttribution(existing)) Object.assign(patch, attributionColumns(incoming.attribution));
   return patch;
 }
@@ -346,12 +355,21 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
 
     if (existing) {
       const patch = fillGaps(existing, incoming);
+      if (!existing.companyId && incoming.company?.name) {
+        const company = await findOrCreateCompany(
+          tx,
+          incoming.company,
+          incoming.event.actorEmployeeId ?? null,
+        );
+        if (company) patch.companyId = company.company.id;
+      }
       const [updated] = await tx
         .update(leads)
         .set({ ...patch, updatedAt: new Date() })
         .where(eq(leads.id, existing.id))
         .returning();
       const lead = updated ?? existing;
+      await attachLeadContact(tx, lead, incoming.event.actorEmployeeId ?? null);
       await tx.insert(leadEvents).values({
         leadId: lead.id,
         kind: incoming.event.kind,
@@ -387,6 +405,9 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
       distribute && pipeline && !incoming.ownerEmployeeId
         ? await nextInRotation(tx, pipeline)
         : null;
+    const company = incoming.company?.name
+      ? await findOrCreateCompany(tx, incoming.company, incoming.event.actorEmployeeId ?? null)
+      : null;
     const [created] = await tx
       .insert(leads)
       .values({
@@ -426,12 +447,15 @@ export async function upsertLead(db: Database, incoming: IncomingLead): Promise<
         consentText: incoming.consentText ?? null,
         pipeline: incoming.pipeline ?? null,
         brand: incoming.brand ?? null,
+        companyId: company?.company.id ?? null,
+        valueCents: typeof incoming.valueCents === 'number' ? incoming.valueCents : null,
         ...attributionColumns(incoming.attribution),
         ...(incoming.arrivedAt ? { createdAt: incoming.arrivedAt } : {}),
         importBatchId: incoming.importBatchId ?? null,
       })
       .returning();
     if (!created) throw new Error('lead insert returned no row');
+    await attachLeadContact(tx, created, incoming.event.actorEmployeeId ?? null);
     await tx.insert(leadEvents).values({
       leadId: created.id,
       kind: incoming.event.kind,
@@ -516,6 +540,8 @@ export function toLead(
     trackingCode: string | null;
     costUsdMicro: number;
     ownerName?: string | null;
+    company?: Lead['company'];
+    contacts?: Lead['contacts'];
   },
 ): Lead {
   return {
@@ -550,6 +576,9 @@ export function toLead(
     },
     pipeline: (row.pipeline as LeadPipeline | null) ?? null,
     brand: row.brand,
+    valueCents: row.valueCents,
+    company: extra.company ?? null,
+    contacts: extra.contacts ?? [],
     work: {
       stageId: row.stageId,
       stage: row.stage,
@@ -604,15 +633,24 @@ export interface LoadedLead {
   notes: LeadNote[];
   tasks: LeadTask[];
   history: LeadStageHistoryEntry[];
+  activities: LeadActivity[];
 }
 
 export async function loadLead(db: Database, id: string): Promise<LoadedLead | null> {
   const row = await db.query.leads.findFirst({ where: eq(leads.id, id) });
   if (!row) return null;
-  const [notes, tasks, history] = await Promise.all([
+  const [notes, tasks, history, activities, contacts, company] = await Promise.all([
     notesOf(db, row.id),
     tasksOf(db, row.id),
     stageHistoryOf(db, row.id),
+    activitiesOf(db, row.id),
+    contactsOfLead(db, row.id),
+    row.companyId
+      ? db.query.crmCompanies.findFirst({
+          where: eq(crmCompanies.id, row.companyId),
+          columns: { id: true, name: true, clientId: true },
+        })
+      : Promise.resolve(undefined),
   ]);
   const [client, link, cost, events, owner] = await Promise.all([
     db.query.clients.findFirst({ where: eq(clients.id, row.clientId) }),
@@ -644,6 +682,8 @@ export async function loadLead(db: Database, id: string): Promise<LoadedLead | n
       trackingCode: link?.code ?? null,
       costUsdMicro: cost[0]?.total ?? 0,
       ownerName: owner?.fullName ?? null,
+      company: company ?? null,
+      contacts,
     }),
     events: events.map((event) => ({
       id: event.id,
@@ -654,6 +694,7 @@ export async function loadLead(db: Database, id: string): Promise<LoadedLead | n
     notes,
     tasks,
     history,
+    activities,
   };
 }
 
@@ -712,6 +753,7 @@ function listConditions(filter: LeadListFilter) {
 export async function listLeads(
   db: Database,
   filter: LeadListFilter,
+  limit = LEAD_LIST_LIMIT,
 ): Promise<{ leads: LeadListItem[]; total: number }> {
   const where = listConditions(filter);
   const [rows, total] = await Promise.all([
@@ -732,6 +774,9 @@ export async function listLeads(
         brand: leads.brand,
         stage: leads.stage,
         won: leads.won,
+        valueCents: leads.valueCents,
+        companyName: crmCompanies.name,
+        city: leads.city,
         ownerName: employees.fullName,
         ownerInactive,
         stageChangedAt: leads.stageChangedAt,
@@ -739,9 +784,10 @@ export async function listLeads(
       .from(leads)
       .innerJoin(clients, eq(clients.id, leads.clientId))
       .leftJoin(employees, eq(employees.id, leads.ownerEmployeeId))
+      .leftJoin(crmCompanies, eq(crmCompanies.id, leads.companyId))
       .where(where)
       .orderBy(desc(leads.createdAt))
-      .limit(LEAD_LIST_LIMIT),
+      .limit(limit),
     db
       .select({ count: sql<number>`count(*)::int` })
       .from(leads)
@@ -765,6 +811,9 @@ export async function listLeads(
       brand: row.brand,
       stage: row.stage,
       won: row.won,
+      valueCents: row.valueCents,
+      companyName: row.companyName,
+      city: row.city,
       ownerName: row.ownerInactive ? null : row.ownerName,
       ownerInactive: Boolean(row.ownerInactive),
       stageChangedAt: iso(row.stageChangedAt),

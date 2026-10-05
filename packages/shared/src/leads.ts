@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { LeadContactRef } from './crm.js';
 
 /**
  * Funil Sofia, part 1: how a lead enters the CRM (capture) and what the
@@ -22,6 +23,7 @@ export const LEAD_SOURCES = [
   'manual',
   'rd_crm',
   'site_form',
+  'csv_import',
 ] as const;
 export type LeadSource = (typeof LEAD_SOURCES)[number];
 
@@ -32,6 +34,7 @@ export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
   manual: 'Cadastro manual',
   rd_crm: 'RD CRM (importado)',
   site_form: 'Formulário do site',
+  csv_import: 'Planilha importada',
 };
 
 /**
@@ -758,6 +761,12 @@ export interface Lead {
   origin: LeadOrigin;
   pipeline: LeadPipeline | null;
   brand: string | null;
+  /** Estimated value of the deal in cents; null while nobody said. */
+  valueCents: number | null;
+  /** The company the deal is with, when one is tied. */
+  company: { id: string; name: string; clientId: string | null } | null;
+  /** The people of the deal; the main one first. */
+  contacts: LeadContactRef[];
   /** Where the lead is in the Wings System's funnel (CRM Fase 1). */
   work: LeadWork;
   /** The RD CRM deal, when the lead has one. */
@@ -785,6 +794,9 @@ export interface LeadListItem {
   brand: string | null;
   stage: string | null;
   won: boolean | null;
+  valueCents: number | null;
+  companyName: string | null;
+  city: string | null;
   ownerName: string | null;
   /**
    * The RD deal's owner is no one of ours who still works it: no owner, an

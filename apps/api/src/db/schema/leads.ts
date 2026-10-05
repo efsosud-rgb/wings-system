@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   boolean,
   check,
   date,
@@ -88,6 +89,10 @@ export const leads = pgTable(
     pipeline: text('pipeline'),
     /** The brand's name as the rule or RD named it, kept even before the brand is registered as a client. */
     brand: text('brand'),
+    /** The company the deal is with (`crm_companies`); no FK, a merge re-points it. */
+    companyId: uuid('company_id'),
+    /** Estimated value of the deal, in cents; null while nobody said. */
+    valueCents: bigint('value_cents', { mode: 'number' }),
     /**
      * CRM Vendas phase 1 (docs/crm/fase1-complemento-funil.md): while RD CRM
      * is where the team works, the stage is read from it and only mirrored
@@ -149,6 +154,7 @@ export const leads = pgTable(
     index('leads_email_idx').on(table.tenantId, table.email),
     index('leads_client_created_idx').on(table.clientId, table.createdAt),
     index('leads_owner_idx').on(table.ownerEmployeeId),
+    index('leads_company_idx').on(table.companyId),
     index('leads_created_idx').on(table.createdAt),
   ],
 );
