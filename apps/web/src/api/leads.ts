@@ -1,5 +1,12 @@
 import type {
+  Board,
   Client,
+  CrmStage,
+  CrmStageCreateInput,
+  CrmStageOrderInput,
+  CrmStageUpdateInput,
+  Distribution,
+  DistributionUpdateInput,
   ExpansionEntry,
   FunnelSummary,
   LandingPageCreateInput,
@@ -10,8 +17,16 @@ import type {
   LeadEvent,
   LeadLinkChannel,
   LeadListItem,
+  LeadNote,
+  LeadNoteCreateInput,
   LeadOutcome,
   LeadPipeline,
+  LeadStageHistoryEntry,
+  LeadTask,
+  LeadTaskCreateInput,
+  LeadTaskUpdateInput,
+  LeadUpdateInput,
+  Seller,
   LeadSource,
   LeadSourceRule,
   LeadSourceRuleKind,
@@ -64,7 +79,7 @@ export function useFunnelSummary(days: 30 | 90) {
 export function useLead(id: string | undefined) {
   return useQuery({
     queryKey: ['leads', 'one', id],
-    queryFn: () => api.get<{ lead: Lead; events: LeadEvent[] }>(`/leads/${id}`),
+    queryFn: () => api.get<LoadedLead>(`/leads/${id}`),
     enabled: Boolean(id),
     refetchInterval: (state) => {
       const research = state.state.data?.lead.research.state;
@@ -285,5 +300,144 @@ export function useSubmitSiteForm(slug: string) {
         `/public/site-forms/${encodeURIComponent(slug)}`,
         input,
       ),
+  });
+}
+
+// --- CRM Fase 1: stages, the lead's work, notes, tasks, board, distribution -------------
+
+export type LoadedLead = {
+  lead: Lead;
+  events: LeadEvent[];
+  notes: LeadNote[];
+  tasks: LeadTask[];
+  history: LeadStageHistoryEntry[];
+};
+
+export function useStages(pipeline?: LeadPipeline | '') {
+  return useQuery({
+    queryKey: ['crm', 'stages', pipeline ?? ''],
+    queryFn: () =>
+      api.get<{ stages: CrmStage[] }>(`/crm/stages${pipeline ? `?pipeline=${pipeline}` : ''}`),
+  });
+}
+
+function invalidateLead(queryClient: ReturnType<typeof useQueryClient>, id: string) {
+  void queryClient.invalidateQueries({ queryKey: ['leads', 'one', id] });
+  void queryClient.invalidateQueries({ queryKey: ['leads'] });
+  void queryClient.invalidateQueries({ queryKey: ['crm'] });
+}
+
+export function useUpdateLead(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: LeadUpdateInput) => api.patch<LoadedLead>(`/leads/${id}`, input),
+    onSuccess: () => invalidateLead(queryClient, id),
+  });
+}
+
+export function useAddNote(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: LeadNoteCreateInput) =>
+      api.post<{ note: LeadNote }>(`/leads/${id}/notes`, input),
+    onSuccess: () => invalidateLead(queryClient, id),
+  });
+}
+
+export function useCreateTask(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: LeadTaskCreateInput) =>
+      api.post<{ task: LeadTask }>(`/leads/${id}/tasks`, input),
+    onSuccess: () => invalidateLead(queryClient, id),
+  });
+}
+
+export function useUpdateTask(leadId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ taskId, ...input }: LeadTaskUpdateInput & { taskId: string }) =>
+      api.patch<{ task: LeadTask }>(`/leads/${leadId}/tasks/${taskId}`, input),
+    onSuccess: () => invalidateLead(queryClient, leadId),
+  });
+}
+
+export function useMyTasks(status: 'open' | 'overdue' | 'done' | 'all', everyone: boolean) {
+  return useQuery({
+    queryKey: ['crm', 'tasks', status, everyone],
+    queryFn: () =>
+      api.get<{ tasks: LeadTask[] }>(
+        `/crm/tasks?status=${status}${everyone ? '&everyone=true' : ''}`,
+      ),
+  });
+}
+
+export function useBoard(pipeline: LeadPipeline, filter: { owner?: string; clientId?: string }) {
+  const params = new URLSearchParams({ pipeline });
+  if (filter.owner) params.set('owner', filter.owner);
+  if (filter.clientId) params.set('clientId', filter.clientId);
+  return useQuery({
+    queryKey: ['leads', 'board', pipeline, filter],
+    queryFn: () => api.get<Board>(`/leads/board?${params.toString()}`),
+  });
+}
+
+/** Moves a card on the board: the same PATCH as the lead's page. */
+export function useMoveLead() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, stageId }: { id: string; stageId: string }) =>
+      api.patch<LoadedLead>(`/leads/${id}`, { stageId }),
+    onSuccess: (_data, { id }) => invalidateLead(queryClient, id),
+  });
+}
+
+export function useSellers() {
+  return useQuery({
+    queryKey: ['crm', 'sellers'],
+    queryFn: () => api.get<{ sellers: Seller[] }>('/crm/sellers'),
+  });
+}
+
+export function useDistribution(enabled = true) {
+  return useQuery({
+    queryKey: ['crm', 'distribution'],
+    queryFn: () => api.get<{ distributions: Distribution[] }>('/crm/distribution'),
+    enabled,
+  });
+}
+
+export function useSetDistribution() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: DistributionUpdateInput) =>
+      api.put<{ distribution: Distribution }>('/crm/distribution', input),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['crm', 'distribution'] }),
+  });
+}
+
+export function useCreateStage() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CrmStageCreateInput) => api.post<{ stage: CrmStage }>('/crm/stages', input),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['crm', 'stages'] }),
+  });
+}
+
+export function useUpdateStage() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...input }: CrmStageUpdateInput & { id: string }) =>
+      api.patch<{ stage: CrmStage }>(`/crm/stages/${id}`, input),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['crm', 'stages'] }),
+  });
+}
+
+export function useReorderStages() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CrmStageOrderInput) =>
+      api.put<{ stages: CrmStage[] }>('/crm/stages/order', input),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['crm', 'stages'] }),
   });
 }

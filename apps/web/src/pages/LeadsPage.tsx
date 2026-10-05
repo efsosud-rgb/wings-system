@@ -30,6 +30,7 @@ import {
   useSyncMetaLeads,
   type LeadFilter,
 } from '../api/leads.js';
+import { LeadBoard } from '../components/LeadBoard.js';
 import { Alert, Button, Field, Input, Select } from '../components/ui.js';
 
 /**
@@ -342,7 +343,7 @@ function MiniFunnel({
         {summary?.syncedAt
           ? `Etapas lidas do RD CRM ${sinceLabel(summary.syncedAt)}.`
           : 'Etapas ainda não lidas do RD CRM.'}{' '}
-        O trabalho continua no RD CRM; mudar a etapa aqui ainda não é possível.
+        Lead movido no Wings System deixa de seguir o RD.
       </p>
     </section>
   );
@@ -355,6 +356,7 @@ export function LeadsPage() {
   const [filter, setFilter] = useState<LeadFilter>({});
   const [days, setDays] = useState<30 | 90>(30);
   const [creating, setCreating] = useState(false);
+  const [view, setView] = useState<'list' | 'board'>('list');
   const leads = useLeads(filter);
   const summary = useFunnelSummary(days);
   const canWrite = hasPermission(session.data, 'leads.write');
@@ -377,8 +379,8 @@ export function LeadsPage() {
           <h1>Funil</h1>
           <p>
             Leads das landing pages, dos links do WhatsApp, do Meta Lead Ads e os negócios de
-            Expansão e Formatação do RD CRM, com marca, etapa e dono. A etapa é lida do RD CRM, onde
-            a equipe trabalha até a virada.
+            Expansão e Formatação, com marca, etapa e dono. O trabalho é feito aqui; o RD CRM recebe
+            cópia durante a transição.
           </p>
         </div>
         {canWrite && (
@@ -499,7 +501,45 @@ export function LeadsPage() {
         </label>
       </form>
 
-      {leads.isError && <Alert kind="error">Não foi possível carregar os leads.</Alert>}
+      <div className="page-header-row">
+        <div className="segmented view-toggle" role="group" aria-label="Visão">
+          <Button
+            type="button"
+            variant={view === 'list' ? 'primary' : 'ghost'}
+            onClick={() => setView('list')}
+          >
+            Lista
+          </Button>
+          <Button
+            type="button"
+            variant={view === 'board' ? 'primary' : 'ghost'}
+            onClick={() => {
+              setView('board');
+              if (!filter.pipeline) setFilter((current) => ({ ...current, pipeline: 'expansao' }));
+            }}
+          >
+            Kanban
+          </Button>
+        </div>
+        {view === 'board' && (
+          <p className="muted">Arraste um card para outra etapa, ou use "Mover para…" no card.</p>
+        )}
+      </div>
+
+      {view === 'board' && (
+        <LeadBoard
+          pipeline={filter.pipeline || 'expansao'}
+          canWrite={canWrite}
+          filter={{
+            owner: filter.owner && filter.owner !== INACTIVE_OWNER ? filter.owner : undefined,
+            clientId: filter.clientId || undefined,
+          }}
+        />
+      )}
+
+      {view === 'list' && leads.isError && (
+        <Alert kind="error">Não foi possível carregar os leads.</Alert>
+      )}
       {total > list.length && (
         <p className="muted">
           Mostrando os {list.length} mais recentes de {total}. Use os filtros para achar os outros.
@@ -511,79 +551,81 @@ export function LeadsPage() {
         </p>
       )}
 
-      <div className="table-wrap">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Lead</th>
-              <th>Contato</th>
-              <th>Marca / cliente</th>
-              <th>Funil · etapa</th>
-              <th>Dono</th>
-              <th title="Dias desde a entrada na etapa atual (lido do RD CRM)">Parado há</th>
-              <th>Origem</th>
-              <th>Perfil</th>
-              <th>Chegou em</th>
-            </tr>
-          </thead>
-          <tbody>
-            {leads.isLoading && (
+      {view === 'list' && (
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
               <tr>
-                <td colSpan={9} className="muted">
-                  Carregando…
-                </td>
+                <th>Lead</th>
+                <th>Contato</th>
+                <th>Marca / cliente</th>
+                <th>Funil · etapa</th>
+                <th>Dono</th>
+                <th title="Dias desde a entrada na etapa atual">Parado há</th>
+                <th>Origem</th>
+                <th>Perfil</th>
+                <th>Chegou em</th>
               </tr>
-            )}
-            {!leads.isLoading && list.length === 0 && (
-              <tr>
-                <td colSpan={9} className="muted">
-                  Nenhum lead com esses filtros. Os negócios do RD CRM entram pela importação;
-                  conversões novas, pelas landing pages, links rastreáveis e formulários do Meta.
-                </td>
-              </tr>
-            )}
-            {list.map((lead) => (
-              <tr key={lead.id}>
-                <td>
-                  <Link to={`/crm-vendas/funil/${lead.id}`}>{lead.name ?? 'Sem nome'}</Link>
-                </td>
-                <td>
-                  <div>{formatPhone(lead.phone)}</div>
-                  {lead.email && <div className="cell-sub">{lead.email}</div>}
-                </td>
-                <td>
-                  {lead.clientMapped ? lead.clientName : (lead.brand ?? lead.clientName)}
-                  {!lead.clientMapped && <span className="tag">sem regra</span>}
-                </td>
-                <td>
-                  <div>{lead.pipeline ? LEAD_PIPELINE_LABELS[lead.pipeline] : '—'}</div>
-                  {lead.stage && <div className="cell-sub">{lead.stage}</div>}
-                </td>
-                <td>
-                  {lead.ownerInactive ? (
-                    <span className="muted">{INACTIVE_OWNER_LABEL}</span>
-                  ) : (
-                    (lead.ownerName ?? '—')
-                  )}
-                </td>
-                <td>
-                  <StaleCell lead={lead} />
-                </td>
-                <td>
-                  <div>{LEAD_SOURCE_LABELS[lead.source]}</div>
-                  {lead.channel && (
-                    <div className="cell-sub">{LEAD_CHANNEL_LABELS[lead.channel]}</div>
-                  )}
-                </td>
-                <td>
-                  <ScorePill score={lead.score} state={lead.researchState} />
-                </td>
-                <td>{formatDateTime(lead.createdAt)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {leads.isLoading && (
+                <tr>
+                  <td colSpan={9} className="muted">
+                    Carregando…
+                  </td>
+                </tr>
+              )}
+              {!leads.isLoading && list.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="muted">
+                    Nenhum lead com esses filtros. Os negócios do RD CRM entram pela importação;
+                    conversões novas, pelas landing pages, links rastreáveis e formulários do Meta.
+                  </td>
+                </tr>
+              )}
+              {list.map((lead) => (
+                <tr key={lead.id}>
+                  <td>
+                    <Link to={`/crm-vendas/funil/${lead.id}`}>{lead.name ?? 'Sem nome'}</Link>
+                  </td>
+                  <td>
+                    <div>{formatPhone(lead.phone)}</div>
+                    {lead.email && <div className="cell-sub">{lead.email}</div>}
+                  </td>
+                  <td>
+                    {lead.clientMapped ? lead.clientName : (lead.brand ?? lead.clientName)}
+                    {!lead.clientMapped && <span className="tag">sem regra</span>}
+                  </td>
+                  <td>
+                    <div>{lead.pipeline ? LEAD_PIPELINE_LABELS[lead.pipeline] : '—'}</div>
+                    {lead.stage && <div className="cell-sub">{lead.stage}</div>}
+                  </td>
+                  <td>
+                    {lead.ownerInactive ? (
+                      <span className="muted">{INACTIVE_OWNER_LABEL}</span>
+                    ) : (
+                      (lead.ownerName ?? '—')
+                    )}
+                  </td>
+                  <td>
+                    <StaleCell lead={lead} />
+                  </td>
+                  <td>
+                    <div>{LEAD_SOURCE_LABELS[lead.source]}</div>
+                    {lead.channel && (
+                      <div className="cell-sub">{LEAD_CHANNEL_LABELS[lead.channel]}</div>
+                    )}
+                  </td>
+                  <td>
+                    <ScorePill score={lead.score} state={lead.researchState} />
+                  </td>
+                  <td>{formatDateTime(lead.createdAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </>
   );
 }

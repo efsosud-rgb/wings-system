@@ -118,7 +118,7 @@ export async function processMetaLeadgenEvents(deps: MetaIntakeDeps): Promise<Me
   let rdMap: CrmMap | null | undefined;
   const crm =
     deps.rdCopyEnabled && deps.rdCrmToken ? new RdCrm(deps.rdCrmToken, deps.rdFetch) : null;
-  let rows: EventRow[] = [];
+  let rows: EventRow[];
   do {
     rows = await deps.db
       .select()

@@ -300,9 +300,8 @@ export async function changeLead(db: Database, change: LeadChange): Promise<Lead
     }
 
     let stageMoved = false;
-    let toStageRow: StageRow | null = null;
     if (change.stageId && change.stageId !== lead.stageId) {
-      toStageRow =
+      const toStageRow =
         (await tx.query.crmStages.findFirst({ where: eq(crmStages.id, change.stageId) })) ?? null;
       if (!toStageRow) return { ok: false, reason: 'stage_not_found' };
       if (!toStageRow.active) return { ok: false, reason: 'stage_inactive' };

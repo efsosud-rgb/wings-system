@@ -221,9 +221,14 @@ beforeEach(() => {
         webhookConfigured: true,
         tokenConfigured: true,
       };
+    if (path.startsWith('/crm/stages')) return { stages: [] };
+    if (path === '/crm/sellers') return { sellers: [] };
     if (path.startsWith('/leads/lead-1'))
       return {
         lead,
+        notes: [],
+        tasks: [],
+        history: [],
         events: [
           { id: 'ev1', at: '2026-09-23T14:00:00Z', kind: 'lead.received.rd_station', detail: {} },
         ],
@@ -354,6 +359,9 @@ describe('CRM Vendas → Funil', () => {
     post.mockResolvedValue({
       lead: { ...lead, research: { ...lead.research, state: 'pending' } },
       events: [],
+      notes: [],
+      tasks: [],
+      history: [],
     });
     renderAt('/crm-vendas/funil/lead-1');
     expect(await screen.findByRole('heading', { name: 'Ana Souza' })).toBeTruthy();
