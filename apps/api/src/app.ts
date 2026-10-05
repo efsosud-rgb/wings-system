@@ -28,6 +28,7 @@ import { expansionRoutes } from './modules/expansion/routes.js';
 import { kairogenRoutes } from './modules/integrations/kairogen/routes.js';
 import { landingPageRoutes } from './modules/leads/landing-pages.js';
 import { rdUserRoutes } from './modules/leads/rd-users.js';
+import { configureCrm } from './modules/leads/crm.js';
 import { crmRoutes } from './modules/leads/crm-routes.js';
 import { leadRoutes } from './modules/leads/routes.js';
 import { siteFormRoutes } from './modules/leads/site-forms.js';
@@ -117,6 +118,10 @@ export async function buildApp(deps: {
     // Behind Traefik: needed for real client IPs in the audit log.
     trustProxy: true,
   });
+
+  if (deps.env.CRM_FIRST_CONTACT_SLA_HOURS) {
+    configureCrm({ firstContactSlaHours: Number(deps.env.CRM_FIRST_CONTACT_SLA_HOURS) });
+  }
 
   app.decorate('wings', {
     env: deps.env,

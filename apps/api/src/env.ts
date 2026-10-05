@@ -138,6 +138,14 @@ const schema = z.object({
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',
   ),
+  /**
+   * CRM Fase 1: hours a seller has for the first contact after a lead lands on
+   * them (the automatic task's due time). 24 until Eric sets it (plan §5).
+   */
+  CRM_FIRST_CONTACT_SLA_HOURS: optionalString.refine(
+    (value) => value === undefined || /^\d{1,3}$/.test(value),
+    'must be a whole number of hours',
+  ),
   /** CRM phase 1: the hourly ingestion follows RD CRM into the Funil (writes leads). Off until Eric approves the first import. */
   CRM_RD_FOLLOW_ENABLED: optionalString.refine(
     (value) => value === undefined || value === 'true' || value === 'false',
