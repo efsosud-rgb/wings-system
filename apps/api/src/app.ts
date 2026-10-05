@@ -5,6 +5,7 @@ import type { Database } from './db/client.js';
 import type { Env } from './env.js';
 import { createCpfCrypto, type CpfCrypto } from './lib/cpf-crypto.js';
 import { createMailer, type Mailer } from './lib/mailer.js';
+import { loggedUrl } from './lib/log-url.js';
 import type { ObjectStorage } from './lib/storage/index.js';
 import { authRoutes } from './modules/auth/routes.js';
 import { audienceRoutes } from './modules/ads/audience-routes.js';
@@ -99,13 +100,14 @@ export async function buildApp(deps: {
 }): Promise<FastifyInstance> {
   const app = Fastify({
     // Personal data must never reach the logs (LGPD), so request bodies are
-    // never logged and only a minimal request line is kept.
+    // never logged and only a minimal request line is kept, without the query
+    // string (a webhook secret may travel there).
     logger: {
       level: deps.env.NODE_ENV === 'test' ? 'silent' : 'info',
       redact: ['req.headers.cookie', 'req.headers.authorization'],
       serializers: {
         req(request) {
-          return { method: request.method, url: request.url, ip: request.ip };
+          return { method: request.method, url: loggedUrl(request.url), ip: request.ip };
         },
       },
     },
