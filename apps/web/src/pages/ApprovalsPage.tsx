@@ -8,7 +8,8 @@ import {
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApprovalGroups, useApprovals } from '../api/ads.js';
-import { Alert, Button } from '../components/ui.js';
+import { Alert } from '../components/ui.js';
+import { PageHeader } from '../components/PageHeader.js';
 
 function formatBrl(cents: number): string {
   return (cents / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -195,23 +196,19 @@ export function ApprovalsPage() {
 
   return (
     <>
-      <header className="page-header page-header-row">
-        <div>
-          <h1>Tráfego pago — aprovações</h1>
-          <p>Nenhuma alteração de orçamento é executada sem uma decisão registrada aqui.</p>
-        </div>
-        <div className="window-picker">
-          <Button variant={byCampaign ? 'ghost' : 'primary'} onClick={() => setByCampaign(false)}>
-            Lista
-          </Button>
-          <Button variant={byCampaign ? 'primary' : 'ghost'} onClick={() => setByCampaign(true)}>
-            Por campanha
-          </Button>
+      <PageHeader
+        title="Aprovações de tráfego pago"
+        subtitle="Nenhuma alteração de orçamento é executada sem uma decisão registrada aqui."
+        tabs={[
+          { label: 'Lista', active: !byCampaign, onClick: () => setByCampaign(false) },
+          { label: 'Por campanha', active: byCampaign, onClick: () => setByCampaign(true) },
+        ]}
+        actions={
           <Link to="/dashboard/marketing" className="btn btn-ghost btn-inline">
             Ver cockpit
           </Link>
-        </div>
-      </header>
+        }
+      />
 
       {list.isError && <Alert kind="error">Não foi possível carregar as solicitações.</Alert>}
       {list.isLoading && <p className="muted">Carregando…</p>}

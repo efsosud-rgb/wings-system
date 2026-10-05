@@ -271,7 +271,7 @@ describe('what the approver sees', () => {
   it('warns when the WhatsApp notification failed', () => {
     approval.current = buildApproval({ notificationError: 'instance disconnected' });
     renderDetail();
-    expect(screen.getByText(/notificação por WhatsApp falhou/i)).toBeTruthy();
+    expect(screen.getByText(/notificação por WhatsApp não foi entregue/i)).toBeTruthy();
     expect(screen.getByText(/continua\s+aguardando decisão/i)).toBeTruthy();
   });
 });

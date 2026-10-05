@@ -42,7 +42,9 @@ describe('Canais próprios', () => {
     state.data = response({});
     render(<OwnedChannelsTab days={30} />);
     const link = screen.getByRole('link', { name: 'Como formatar uma franquia' });
-    expect(link.getAttribute('href')).toBe('https://wingscompany.com.br/como-formatar-uma-franquia');
+    expect(link.getAttribute('href')).toBe(
+      'https://wingscompany.com.br/como-formatar-uma-franquia',
+    );
     expect(link.getAttribute('target')).toBe('_blank');
     expect(link.getAttribute('rel')).toContain('noopener');
     expect(screen.getByText('10/09/2026')).toBeTruthy();
@@ -54,7 +56,9 @@ describe('Canais próprios', () => {
   it('tells an empty period apart from an empty mirror', () => {
     state.data = response({ posts: [] });
     render(<OwnedChannelsTab days={7} />);
-    expect(screen.getByText(/Nenhum post publicado nos últimos 7 dias\. O espelho tem 12 posts/)).toBeTruthy();
+    expect(
+      screen.getByText(/Nenhum post publicado nos últimos 7 dias\. O espelho tem 12 posts/),
+    ).toBeTruthy();
   });
 
   it('says when WordPress is not configured, with no fake rows', () => {

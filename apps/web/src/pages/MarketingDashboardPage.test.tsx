@@ -541,9 +541,7 @@ describe('the overview', () => {
   it('says when the schedule was never told to the system', () => {
     data.overview = buildOverview({ ingestion: { ...ingestion, schedule: null, nextRunAt: null } });
     renderAt();
-    expect(
-      screen.getByText(/agendamento não informado ao sistema \(ADS_INGEST_CRON\)/),
-    ).toBeTruthy();
+    expect(screen.getByText(/agendamento ainda não configurado/)).toBeTruthy();
   });
 
   it('says in the header when the fast reconciliation last ran and when the next one is due', () => {

@@ -30,7 +30,7 @@ const API_MODULE_SUBMODULE: Record<string, string> = {
   agent: '/marketing/trafego-pago-wings',
   clients: '/formatacao/clientes',
   drive: '/administracao/drive',
-  leads: '/crm-vendas/funil',
+  leads: '/crm-vendas/negociacoes',
   media: '/marketing/edicao',
   studio: '/marketing/edicao',
   projects: '/gestao/projetos',
@@ -46,8 +46,14 @@ const WEB_PAGE_SUBMODULE: Record<string, string> = {
   EmployeesPage: '/administracao/usuarios',
   EmployeeFormPage: '/administracao/usuarios',
   ClientsPage: '/formatacao/clientes',
-  LeadsPage: '/crm-vendas/funil',
-  LeadPage: '/crm-vendas/funil',
+  DealsPage: '/crm-vendas/negociacoes',
+  DealPage: '/crm-vendas/negociacoes',
+  ContactsPage: '/crm-vendas/contatos',
+  CompaniesPage: '/crm-vendas/empresas',
+  TasksPage: '/crm-vendas/tarefas',
+  CrmSettingsPage: '/crm-vendas/configuracoes',
+  LandingPagesPage: '/crm-vendas/landing-pages',
+  HomePage: '/inicio',
   DriveTemplatePage: '/administracao/drive',
   DrivePage: '/drive/arquivos',
   ProjectsPage: '/gestao/projetos',
@@ -82,7 +88,9 @@ function submodulePathForFile(path: string): string | null {
     segments[2] === 'src' &&
     segments[3] === 'pages'
   ) {
-    const component = (segments[4] ?? '').replace(/\.(tsx|ts)$/, '');
+    // `pages/<Component>.tsx` or `pages/<folder>/<Component>.tsx` (the CRM screens).
+    const file = segments.length > 5 ? segments[5] : segments[4];
+    const component = (file ?? '').replace(/\.(tsx|ts)$/, '');
     return WEB_PAGE_SUBMODULE[component] || null;
   }
   if (segments[0] === 'docs') {

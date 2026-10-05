@@ -14,6 +14,7 @@ import { DriveTemplatePage } from './pages/DriveTemplatePage.js';
 import { EmployeeFormPage } from './pages/EmployeeFormPage.js';
 import { EmployeesPage } from './pages/EmployeesPage.js';
 import { ForgotPasswordPage } from './pages/ForgotPasswordPage.js';
+import { HomePage } from './pages/HomePage.js';
 import { IntegrationsPage } from './pages/IntegrationsPage.js';
 import { LandingRoute } from './pages/LandingRoute.js';
 import { LandingPagesPage } from './pages/LandingPagesPage.js';
@@ -67,6 +68,7 @@ const SCREENS: Record<string, RouteObject[]> = {
     { index: true, element: <ClientsPage /> },
     { path: ':id', element: <ClientRecordPage /> },
   ],
+  '/inicio': [{ index: true, element: <HomePage /> }],
   '/crm-vendas/landing-pages': [{ index: true, element: <LandingPagesPage /> }],
   '/crm-vendas/negociacoes': [
     { index: true, element: <DealsPage /> },

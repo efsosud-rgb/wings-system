@@ -30,6 +30,7 @@ import { OwnedChannelsTab } from '../components/dashboard/OwnedChannelsTab.js';
 import { PlatformsTab } from '../components/dashboard/PlatformsTab.js';
 import { SettingsTab } from '../components/dashboard/SettingsTab.js';
 import { Alert, Button } from '../components/ui.js';
+import { PageHeader } from '../components/PageHeader.js';
 
 /**
  * Dashboard → Marketing.
@@ -83,7 +84,7 @@ function Loading({
 }
 
 /** One line: when a job last ran, how it went, and when the next one is due. */
-function jobLine(label: string, status: IngestionStatus, cronEnvVar: string): string {
+function jobLine(label: string, status: IngestionStatus): string {
   const last = status.lastRunAt
     ? `${label} ${formatDateTime(status.lastRunAt)}${
         status.lastRunStatus === 'running'
@@ -95,7 +96,7 @@ function jobLine(label: string, status: IngestionStatus, cronEnvVar: string): st
     : `${label} nunca registrada`;
   const next = status.nextRunAt
     ? `próxima ${formatWhen(status.nextRunAt)}`
-    : `agendamento não informado ao sistema (${cronEnvVar})`;
+    : 'agendamento ainda não configurado';
   return `${last} · ${next}.`;
 }
 
@@ -137,84 +138,78 @@ export function MarketingDashboardPage() {
 
   return (
     <>
-      <header className="page-header page-header-row">
-        <div>
-          <h1>Dashboard de marketing</h1>
-          <p>
-            Gastos, saldos e desempenho lidos das plataformas pela ingestão. Nada aqui altera uma
-            conta.
-            {ingestion && (
-              <span className="dash-ingestion">
-                {' '}
-                {jobLine('Última ingestão', ingestion, 'ADS_INGEST_CRON')}
-              </span>
-            )}
-          </p>
-          {reconciliation && (
-            <p className="field-hint">
-              {jobLine('Última reconciliação', reconciliation, 'ADS_RECONCILE_CRON')}
-            </p>
-          )}
-        </div>
-        {windowed && (
-          <div className="dash-controls">
-            {tab === 'cockpit' && (
-              <div className="window-picker" role="group" aria-label="Campanhas">
-                <span className="window-picker-label">Campanhas:</span>
-                {(
-                  [
-                    ['ativas', 'Só ativas'],
-                    ['todas', 'Todas'],
-                  ] as const
-                ).map(([value, label]) => (
+      <PageHeader
+        title="Dashboard de marketing"
+        subtitle="Gastos, saldos e desempenho lidos das plataformas. Nada aqui altera uma conta."
+        actions={
+          windowed && (
+            <div className="dash-controls">
+              {tab === 'cockpit' && (
+                <div className="window-picker" role="group" aria-label="Campanhas">
+                  <span className="window-picker-label">Campanhas:</span>
+                  {(
+                    [
+                      ['ativas', 'Só ativas'],
+                      ['todas', 'Todas'],
+                    ] as const
+                  ).map(([value, label]) => (
+                    <Button
+                      key={value}
+                      variant={value === campaignScope ? 'primary' : 'ghost'}
+                      onClick={() => setParam('campanhas', value)}
+                      aria-pressed={value === campaignScope}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+              )}
+              {tab === 'cockpit' && (
+                <CampaignPicker
+                  options={cockpitData.data?.cockpit.campaignOptions ?? []}
+                  selected={pickedCampaigns}
+                  scope={campaignScope}
+                  onChange={setCampaigns}
+                />
+              )}
+              <div className="window-picker" role="group" aria-label="Período">
+                {DASHBOARD_WINDOWS.map((option) => (
                   <Button
-                    key={value}
-                    variant={value === campaignScope ? 'primary' : 'ghost'}
-                    onClick={() => setParam('campanhas', value)}
-                    aria-pressed={value === campaignScope}
+                    key={option}
+                    variant={option === days ? 'primary' : 'ghost'}
+                    onClick={() => setParam('dias', String(option))}
+                    aria-pressed={option === days}
                   >
-                    {label}
+                    {option} dias
                   </Button>
                 ))}
               </div>
-            )}
-            {tab === 'cockpit' && (
-              <CampaignPicker
-                options={cockpitData.data?.cockpit.campaignOptions ?? []}
-                selected={pickedCampaigns}
-                scope={campaignScope}
-                onChange={setCampaigns}
-              />
-            )}
-            <div className="window-picker" role="group" aria-label="Período">
-              {DASHBOARD_WINDOWS.map((option) => (
-                <Button
-                  key={option}
-                  variant={option === days ? 'primary' : 'ghost'}
-                  onClick={() => setParam('dias', String(option))}
-                  aria-pressed={option === days}
-                >
-                  {option} dias
-                </Button>
-              ))}
             </div>
-          </div>
+          )
+        }
+      >
+        {(ingestion || reconciliation) && (
+          <p className="field-hint dash-ingestion">
+            {ingestion && jobLine('Última ingestão', ingestion)}
+            {ingestion && reconciliation && ' '}
+            {reconciliation && jobLine('Última reconciliação', reconciliation)}
+          </p>
         )}
-      </header>
+      </PageHeader>
 
       {overview.data && <DashboardRefresh overview={overview.data.overview} />}
 
       {ingestion?.overdue && (
         <Alert kind="warning">
-          A ingestão agendada não rodou desde {formatDateTime(ingestion.lastRunAt)}: confira a
-          tarefa agendada no Coolify. Os números desta tela param nessa data.
+          A ingestão agendada não rodou desde {formatDateTime(ingestion.lastRunAt)}. Os números
+          desta tela param nessa data; avise quem cuida do servidor.
         </Alert>
       )}
       {reconciliation?.overdue && (
         <Alert kind="warning">
           A reconciliação agendada (15 min) não rodou desde{' '}
-          {formatDateTime(reconciliation.lastRunAt)}: confira a tarefa agendada no Coolify. O teto
-          real da conta pode estar desatualizado.
+          {formatDateTime(reconciliation.lastRunAt)}. O teto real da conta pode estar desatualizado;
+          avise quem cuida do servidor.
         </Alert>
       )}
 

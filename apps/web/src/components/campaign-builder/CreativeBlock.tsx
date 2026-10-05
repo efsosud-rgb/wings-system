@@ -278,8 +278,8 @@ export function MediaDropzone({
             {currentImage.width} × {currentImage.height} px
             {format &&
               (matchesFormat(currentImage, format)
-                ? ` · ✓ proporção ${format.ratio}`
-                : ` · ⚠️ proporção diferente de ${format.ratio}: a plataforma vai cortar a imagem`)}
+                ? ` · proporção ${format.ratio} certa`
+                : ` · proporção diferente de ${format.ratio}: a plataforma vai cortar a imagem`)}
           </p>
         )}
         {currentImage &&
@@ -287,7 +287,7 @@ export function MediaDropzone({
           VERTICAL_FORMAT &&
           !matchesFormat(currentImage, VERTICAL_FORMAT) && (
             <p className="field-hint builder-crop-warning">
-              ⚠️ Esta imagem não é 9:16: será cortada em Stories e Reels.
+              Esta imagem não é 9:16: será cortada em Stories e Reels.
             </p>
           )}
         {currentVideo && <p className="field-hint">{formatBytes(currentVideo.byteSize)}</p>}

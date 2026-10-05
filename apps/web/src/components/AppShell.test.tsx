@@ -1,5 +1,5 @@
 import type { SessionUser } from '@wings/shared';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -37,6 +37,9 @@ function makeUser(overrides: Partial<SessionUser> = {}): SessionUser {
   };
 }
 
+/** The side menu alone: the top bar also names the person's role, which can read like a module. */
+const menu = () => within(screen.getByRole('navigation', { name: 'Módulos' }));
+
 function renderShell(path = '/marketing/trafego-pago-wings') {
   render(
     <MemoryRouter initialEntries={[path]}>
@@ -58,7 +61,7 @@ afterEach(() => {
 describe('which modules appear', () => {
   it('shows the module containing the current screen, expanded', () => {
     renderShell();
-    expect(screen.getByRole('button', { name: /Marketing/ })).toBeTruthy();
+    expect(menu().getByRole('button', { name: /Marketing/ })).toBeTruthy();
     // Its sub-modules are visible because the active module starts open.
     expect(screen.getByRole('link', { name: /Agente de Tráfego Pago — Wings/ })).toBeTruthy();
   });
@@ -81,7 +84,7 @@ describe('which modules appear', () => {
 
   it('collapses and expands a module on click', () => {
     renderShell();
-    const marketing = screen.getByRole('button', { name: /Marketing/ });
+    const marketing = menu().getByRole('button', { name: /Marketing/ });
     expect(marketing.getAttribute('aria-expanded')).toBe('true');
 
     fireEvent.click(marketing);
@@ -130,7 +133,9 @@ describe('the brand', () => {
   it('is the Wings mark, named for screen readers', () => {
     renderShell();
 
-    const mark = screen.getByRole('img', { name: 'Wings System' });
-    expect(mark.getAttribute('src')).toBe('/brand/wings-logo-mark-dark.png');
+    // The official logo (brand/SidebarLogo) sits in the slot and names itself.
+    const slot = document.getElementById('wings-logo-slot');
+    expect(slot).not.toBeNull();
+    expect(within(slot as HTMLElement).getByRole('img', { name: /Wings/ })).toBeTruthy();
   });
 });

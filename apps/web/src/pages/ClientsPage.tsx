@@ -30,6 +30,7 @@ import { useCreateTrackingLink, useTrackingLinks, useUpdateExpansionArea } from 
 import { ProjectStatusTag, StatusDialog, stageLabel } from '../components/projects/ProjectParts.js';
 import { Alert, Button, Field, Input, Select } from '../components/ui.js';
 import type { ClientProject } from '@wings/shared';
+import { PageHeader } from '../components/PageHeader.js';
 
 /**
  * Formatação → Clientes. The register of who work is for: a quick
@@ -425,7 +426,7 @@ function QuickCreate() {
     form.profileDate !== '';
 
   return (
-    <section className="block clients-quick">
+    <section className="block clients-quick" id="novo">
       <h2>Novo cliente</h2>
       <form
         onSubmit={(event) => {
@@ -659,14 +660,10 @@ export function ClientsPage() {
 
   return (
     <>
-      <header className="page-header">
-        <h1>Clientes</h1>
-        <p>
-          Para quem o trabalho é feito. Cada cliente tem um número e uma pasta no Drive,
-          Clientes/NN. Nome, criada no cadastro. A mídia gerada é arquivada pelo cliente escolhido;
-          o nome do cliente não é enviado a fornecedores.
-        </p>
-      </header>
+      <PageHeader
+        title="Clientes"
+        subtitle="Para quem o trabalho é feito: cada cliente tem um número e uma pasta no Drive, criada no cadastro."
+      />
 
       {canManage && <QuickCreate />}
       {clients.isError && <Alert kind="error">Não foi possível carregar os clientes.</Alert>}

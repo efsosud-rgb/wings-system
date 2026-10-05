@@ -18,10 +18,50 @@ export type SubmoduleStatus = 'ready' | 'coming_soon';
 /** What kind of screen sits behind a sub-module, for layout purposes. */
 export type SubmoduleKind = 'studio' | 'report' | 'crud' | 'placeholder';
 
+/**
+ * The icons the menu may use, by name. The web app draws each one as a
+ * stroke SVG; the tree only says which. Keeping the set here means a module
+ * cannot ask for an icon the app does not have.
+ */
+export const NAV_ICONS = [
+  'home',
+  'target',
+  'columns',
+  'users',
+  'building',
+  'check-square',
+  'pie-chart',
+  'sliders',
+  'layout',
+  'sparkles',
+  'file-text',
+  'hammer',
+  'megaphone',
+  'bar-chart',
+  'briefcase',
+  'calendar',
+  'folder',
+  'headset',
+  'settings',
+  'globe',
+] as const;
+export type NavIcon = (typeof NAV_ICONS)[number];
+
+/** The three blocks of the side menu, in order: the home, the CRM, the rest. */
+export const NAV_GROUPS = ['inicio', 'crm', 'modulos'] as const;
+export type NavGroup = (typeof NAV_GROUPS)[number];
+export const NAV_GROUP_LABELS: Record<NavGroup, string> = {
+  inicio: 'Início',
+  crm: 'CRM Vendas',
+  modulos: 'Módulos',
+};
+
 export interface NavSubmodule {
   /** Full path, always absolute. */
   path: string;
   label: string;
+  /** Shown beside the label when the sub-module is listed flat (the CRM group). */
+  icon?: NavIcon;
   /**
    * Permission required to see and open it. When absent, the sub-module is a
    * placeholder visible to anyone who can see its module — there is no backend
@@ -38,7 +78,9 @@ export interface NavSubmodule {
 export interface NavModule {
   key: string;
   label: string;
-  icon: string;
+  icon: NavIcon;
+  /** Which block of the menu lists it. */
+  group: NavGroup;
   /** SaaS administration is for the operator of the platform, not the tenant. */
   roles?: readonly RoleKey[];
   submodules: readonly NavSubmodule[];
@@ -60,13 +102,31 @@ const soon = (
 
 export const NAVIGATION: readonly NavModule[] = [
   {
+    key: 'inicio',
+    label: 'Início',
+    icon: 'home',
+    group: 'inicio',
+    submodules: [
+      {
+        path: '/inicio',
+        label: 'Início',
+        icon: 'home',
+        description: 'Atalhos para o que a pessoa pode abrir e o que precisa de atenção hoje',
+        status: 'ready',
+        kind: 'report',
+      },
+    ],
+  },
+  {
     key: 'crm-vendas',
     label: 'CRM Vendas',
-    icon: '🎯',
+    icon: 'target',
+    group: 'crm',
     submodules: [
       {
         path: '/crm-vendas/negociacoes',
         label: 'Negociações',
+        icon: 'columns',
         description: 'O quadro de cada funil: etapas, valores e o que fazer a seguir',
         permission: 'leads.read',
         status: 'ready',
@@ -75,6 +135,7 @@ export const NAVIGATION: readonly NavModule[] = [
       {
         path: '/crm-vendas/contatos',
         label: 'Contatos',
+        icon: 'users',
         description: 'As pessoas das negociações',
         permission: 'leads.read',
         status: 'ready',
@@ -83,6 +144,7 @@ export const NAVIGATION: readonly NavModule[] = [
       {
         path: '/crm-vendas/empresas',
         label: 'Empresas',
+        icon: 'building',
         description: 'As empresas das negociações e as que viraram clientes',
         permission: 'leads.read',
         status: 'ready',
@@ -91,15 +153,20 @@ export const NAVIGATION: readonly NavModule[] = [
       {
         path: '/crm-vendas/tarefas',
         label: 'Tarefas',
+        icon: 'check-square',
         description: 'Atrasadas, de hoje e próximas',
         permission: 'leads.read',
         status: 'ready',
         kind: 'crud',
       },
-      soon('/crm-vendas/painel', 'Painel', 'Vendas por funil, marca e vendedor', 'leads.read'),
+      {
+        ...soon('/crm-vendas/painel', 'Painel', 'Vendas por funil, marca e vendedor', 'leads.read'),
+        icon: 'pie-chart',
+      },
       {
         path: '/crm-vendas/configuracoes',
         label: 'Configurações',
+        icon: 'sliders',
         description: 'Etapas e probabilidades, distribuição de negociações e marcas',
         permission: 'crm.manage',
         status: 'ready',
@@ -108,18 +175,20 @@ export const NAVIGATION: readonly NavModule[] = [
       {
         path: '/crm-vendas/landing-pages',
         label: 'Landing pages',
+        icon: 'layout',
         description: 'Páginas por cliente e funil, desempenho e links com UTM',
         permission: 'leads.read',
         status: 'ready',
         kind: 'crud',
       },
-      soon('/crm-vendas/sofia', 'Sofia (SDR IA)', 'Agente de pré-venda'),
+      { ...soon('/crm-vendas/sofia', 'Sofia (SDR IA)', 'Agente de pré-venda'), icon: 'sparkles' },
     ],
   },
   {
     key: 'contratos',
     label: 'Contratos',
-    icon: '📄',
+    icon: 'file-text',
+    group: 'modulos',
     submodules: [
       soon('/contratos/cof', 'COF', 'Circular de Oferta de Franquia'),
       soon('/contratos/franquia', 'Contratos de franquia', 'Emissão e assinatura'),
@@ -129,7 +198,8 @@ export const NAVIGATION: readonly NavModule[] = [
   {
     key: 'formatacao',
     label: 'Formatação',
-    icon: '🏗️',
+    icon: 'hammer',
+    group: 'modulos',
     submodules: [
       {
         path: '/formatacao/clientes',
@@ -151,7 +221,8 @@ export const NAVIGATION: readonly NavModule[] = [
   {
     key: 'marketing',
     label: 'Marketing',
-    icon: '🚀',
+    icon: 'megaphone',
+    group: 'modulos',
     submodules: [
       {
         path: '/marketing/trafego-pago-wings',
@@ -182,7 +253,8 @@ export const NAVIGATION: readonly NavModule[] = [
   {
     key: 'dashboard',
     label: 'Dashboard',
-    icon: '📊',
+    icon: 'bar-chart',
+    group: 'modulos',
     submodules: [
       {
         path: '/dashboard/vendas',
@@ -212,7 +284,8 @@ export const NAVIGATION: readonly NavModule[] = [
   {
     key: 'gestao',
     label: 'Gestão',
-    icon: '🏢',
+    icon: 'briefcase',
+    group: 'modulos',
     submodules: [
       {
         path: '/gestao/projetos',
@@ -233,7 +306,8 @@ export const NAVIGATION: readonly NavModule[] = [
   {
     key: 'produtividade',
     label: 'Produtividade',
-    icon: '🗓️',
+    icon: 'calendar',
+    group: 'modulos',
     submodules: [
       soon('/produtividade/agenda', 'Agenda'),
       soon('/produtividade/reunioes', 'Reuniões'),
@@ -245,7 +319,8 @@ export const NAVIGATION: readonly NavModule[] = [
     // decides folder by folder what each person sees.
     key: 'drive',
     label: 'Drive',
-    icon: '🗂️',
+    icon: 'folder',
+    group: 'modulos',
     submodules: [
       {
         path: '/drive/arquivos',
@@ -260,13 +335,15 @@ export const NAVIGATION: readonly NavModule[] = [
   {
     key: 'atendimento',
     label: 'Atendimento',
-    icon: '☎️',
+    icon: 'headset',
+    group: 'modulos',
     submodules: [soon('/atendimento/pabx', 'PABX virtual', 'Ramais e gravações')],
   },
   {
     key: 'administracao',
     label: 'Administração',
-    icon: '⚙️',
+    icon: 'settings',
+    group: 'modulos',
     submodules: [
       {
         path: '/administracao/usuarios',
@@ -318,7 +395,8 @@ export const NAVIGATION: readonly NavModule[] = [
   {
     key: 'saas',
     label: 'SaaS',
-    icon: '🛰️',
+    icon: 'globe',
+    group: 'modulos',
     // Platform administration, not tenant administration.
     roles: ['admin_master'],
     submodules: [

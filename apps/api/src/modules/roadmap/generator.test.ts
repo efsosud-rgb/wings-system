@@ -59,7 +59,7 @@ describe('generateRoadmap', () => {
       },
     ]);
     const result = await generateRoadmap(reader);
-    const funil = result.deliverables.find((d) => d.submodulePath === '/crm-vendas/funil');
+    const funil = result.deliverables.find((d) => d.submodulePath === '/crm-vendas/negociacoes');
     expect(funil).toMatchObject({ status: 'pronto', weight: 'P', completedAt: '2026-09-01' });
   });
 
@@ -137,7 +137,7 @@ describe('generateRoadmap', () => {
 
   it('still marks a ready submodule pronto even with a path-table gap, but with no completion date', async () => {
     const result = await generateRoadmap(fakeReader([]));
-    const funil = result.deliverables.find((d) => d.submodulePath === '/crm-vendas/funil');
+    const funil = result.deliverables.find((d) => d.submodulePath === '/crm-vendas/negociacoes');
     expect(funil).toMatchObject({ status: 'pronto', weight: 'M', completedAt: null });
   });
 

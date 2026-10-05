@@ -29,7 +29,11 @@ interface Group {
   totals: MetricTotals;
 }
 
-function groupBy(rows: BreakdownRow[], keyOf: (row: BreakdownRow) => string | null, label: (key: string) => ReactNode): Group[] {
+function groupBy(
+  rows: BreakdownRow[],
+  keyOf: (row: BreakdownRow) => string | null,
+  label: (key: string) => ReactNode,
+): Group[] {
   const groups = new Map<string, MetricTotals>();
   for (const row of rows) {
     const key = keyOf(row);
@@ -69,11 +73,7 @@ function Panel({ title, groups, limit = 12 }: { title: string; groups: Group[]; 
           detail: <Detail totals={group.totals} />,
         }))}
       />
-      {groups.length > limit && (
-        <p className="cell-sub">
-          Mais {groups.length - limit} no CSV.
-        </p>
-      )}
+      {groups.length > limit && <p className="cell-sub">Mais {groups.length - limit} no CSV.</p>}
     </section>
   );
 }
@@ -89,13 +89,21 @@ export function AudienceTab({ data }: { data: DashboardAudience }) {
     const of = (kind: BreakdownRow['kind']) => data.rows.filter((row) => row.kind === kind);
     const ageGender = of('age_gender');
     return {
-      placement: groupBy(of('placement'), (row) => `${row.key}|${row.subKey}`, (key) => {
-        const [platform = '', position = ''] = key.split('|');
-        return placementLabel(platform, position);
-      }),
+      placement: groupBy(
+        of('placement'),
+        (row) => `${row.key}|${row.subKey}`,
+        (key) => {
+          const [platform = '', position = ''] = key.split('|');
+          return placementLabel(platform, position);
+        },
+      ),
       age: groupBy(ageGender, (row) => (row.key === 'all' ? null : row.key), ageLabel),
       gender: groupBy(ageGender, (row) => (row.subKey === 'all' ? null : row.subKey), genderLabel),
-      region: groupBy(of('region'), (row) => row.key, (key) => key || 'Não informada'),
+      region: groupBy(
+        of('region'),
+        (row) => row.key,
+        (key) => key || 'Não informada',
+      ),
       hour: groupBy(of('hour'), (row) => row.key, hourLabel),
       device: groupBy(of('device'), (row) => row.key || 'unknown', deviceLabel),
     };
@@ -119,7 +127,18 @@ export function AudienceTab({ data }: { data: DashboardAudience }) {
     .slice(0, 3);
 
   const exportCsv = () => {
-    const header = ['Quebra', 'Chave', 'Subchave', 'Gasto', 'Impressões', 'Cliques', 'CTR %', 'Alcance', 'Leads', 'CPL'];
+    const header = [
+      'Quebra',
+      'Chave',
+      'Subchave',
+      'Gasto',
+      'Impressões',
+      'Cliques',
+      'CTR %',
+      'Alcance',
+      'Leads',
+      'CPL',
+    ];
     const rows: CsvCell[][] = data.rows.map((row) => {
       const ratios = ratiosOf(row.totals);
       return [
@@ -136,8 +155,25 @@ export function AudienceTab({ data }: { data: DashboardAudience }) {
       ];
     });
     for (const cell of data.heatmap) {
-      const ratios = ratiosOf({ ...EMPTY_TOTALS, spendCents: cell.spendCents, impressions: cell.impressions, clicks: cell.clicks, conversions: cell.conversions });
-      rows.push(['Dia × hora', WEEKDAY_LABEL[cell.weekday] ?? String(cell.weekday), `${cell.hour}h`, reais(cell.spendCents), cell.impressions, cell.clicks, percent(ratios.ctrMilli), null, cell.conversions, reais(ratios.costPerLeadCents)]);
+      const ratios = ratiosOf({
+        ...EMPTY_TOTALS,
+        spendCents: cell.spendCents,
+        impressions: cell.impressions,
+        clicks: cell.clicks,
+        conversions: cell.conversions,
+      });
+      rows.push([
+        'Dia × hora',
+        WEEKDAY_LABEL[cell.weekday] ?? String(cell.weekday),
+        `${cell.hour}h`,
+        reais(cell.spendCents),
+        cell.impressions,
+        cell.clicks,
+        percent(ratios.ctrMilli),
+        null,
+        cell.conversions,
+        reais(ratios.costPerLeadCents),
+      ]);
     }
     downloadCsv(`publico-${data.since}-a-${data.until}.csv`, toCsv(header, rows));
   };
@@ -179,9 +215,16 @@ export function AudienceTab({ data }: { data: DashboardAudience }) {
                 {hourLeads > 0
                   ? `Melhores horas por CPL: ${by.hour
                       .filter((group) => group.totals.conversions > 0)
-                      .sort((a, b) => (ratiosOf(a.totals).costPerLeadCents ?? Infinity) - (ratiosOf(b.totals).costPerLeadCents ?? Infinity))
+                      .sort(
+                        (a, b) =>
+                          (ratiosOf(a.totals).costPerLeadCents ?? Infinity) -
+                          (ratiosOf(b.totals).costPerLeadCents ?? Infinity),
+                      )
                       .slice(0, 3)
-                      .map((group) => `${hourLabel(group.key)} (${formatMoney(ratiosOf(group.totals).costPerLeadCents)})`)
+                      .map(
+                        (group) =>
+                          `${hourLabel(group.key)} (${formatMoney(ratiosOf(group.totals).costPerLeadCents)})`,
+                      )
                       .join(', ')}.`
                   : 'Nenhum lead atribuído a uma hora no período.'}
               </p>
@@ -204,7 +247,10 @@ export function AudienceTab({ data }: { data: DashboardAudience }) {
               <p className="cell-sub">
                 {bestCells.length > 0
                   ? `Melhores horários por CPL: ${bestCells
-                      .map((cell) => `${WEEKDAY_LABEL[cell.weekday]} ${cell.hour}h (${formatMoney(Math.round(cell.spendCents / cell.conversions))})`)
+                      .map(
+                        (cell) =>
+                          `${WEEKDAY_LABEL[cell.weekday]} ${cell.hour}h (${formatMoney(Math.round(cell.spendCents / cell.conversions))})`,
+                      )
                       .join(', ')}. Cor mais forte, mais gasto.`
                   : 'Cor mais forte, mais gasto. Nenhum lead atribuído a um horário no período.'}
               </p>
