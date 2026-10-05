@@ -1,4 +1,5 @@
 import {
+  addBusinessHours,
   SESSION_COOKIE,
   WINGS_CLIENT_ID,
   type Board,
@@ -207,7 +208,9 @@ describe('the rotation and the first-contact task', () => {
       auto: true,
       assigneeEmployeeId: first.lead.ownerEmployeeId,
     });
-    expect(Math.round((tasks[0]!.dueAt.getTime() - tasks[0]!.createdAt.getTime()) / 60_000)).toBe(24 * 60);
+    // One working hour (Mon–Fri 9h–18h São Paulo): the same instant the shared helper gives.
+    expect(tasks[0]!.dueAt).toEqual(addBusinessHours(tasks[0]!.createdAt, 1));
+    expect(tasks[0]!.dueAt.getTime()).toBeGreaterThan(tasks[0]!.createdAt.getTime());
 
     // Pause B: the next two go to A.
     await app.inject({

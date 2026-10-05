@@ -13,20 +13,20 @@
 - Um pedido, várias coisas: `stageId`, `pipeline`, `ownerEmployeeId` (ou `null`), `won` (`true` ganho, `false` perdido com `lostReason`, `null` reabre).
 - Permissões: `leads.write` no escopo do papel (vendedor só nos próprios leads; outro lead responde 404); mudar o dono para **outra pessoa** exige `leads.assign` (Admin Master, Diretoria, Gerente Comercial); assumir para si é `leads.write`.
 - Cada mudança de etapa ou resultado é uma linha em **`lead_stage_history`** (append-only: de, para, ganho/perda, origem `wings | rd | import | sofia`, quem) e um evento na linha do tempo; dono mudado é evento `lead.owner_changed` com ids. Auditoria `lead.updated` com os campos que mudaram.
-- **`leads.managed_by`**: `wings` quando o lead nasceu aqui com etapa/dono ou quando alguém o mexeu aqui; `rd` enquanto só espelha o RD. O importador e o seguimento por hora **não sobrescrevem** etapa, dono e resultado de um lead `wings`: só preenchem o que ainda está vazio. O espelho Wings → RD (`moveDeal`) **não** foi feito nesta entrega; o RD continua recebendo os leads novos pela cópia do Lead Ads e pelos intakes.
+- **`leads.managed_by`**: `wings` quando o lead nasceu aqui com etapa/dono ou quando alguém o mexeu aqui; `rd` enquanto só espelha o RD. O importador e o seguimento por hora **não sobrescrevem** etapa, dono e resultado de um lead `wings`: só preenchem o que ainda está vazio. **Decisão do Eric (05/10): sem espelho Wings → RD de etapa e dono**; o RD só recebe a cópia na entrada (Lead Ads, intakes).
 
 ## Anotações e tarefas
 
 - `lead_notes` (append-only; texto livre só na ficha do lead; o evento guarda id e tamanho). `POST /leads/:id/notes`.
 - `lead_tasks`: tipo (`first_contact`, `follow_up`, `call`, `meeting`, `other`), título, vencimento, responsável (padrão: dono do lead), feita em/por. `POST /leads/:id/tasks`, `PATCH /leads/:id/tasks/:taskId` (`done`, `dueAt`, `title`), `GET /crm/tasks?status=open|overdue|done|all[&everyone=true]` (a lista do vendedor; `everyone` só para quem vê todos).
-- **SLA de 1º contato**: quando um lead ganha dono (rodízio ou atribuição) e está em andamento, nasce a tarefa automática "Primeiro contato com o lead" vencendo em `CRM_FIRST_CONTACT_SLA_HOURS` (24 enquanto o Eric não definir); trocar o dono passa a tarefa aberta para o novo dono.
+- **SLA de 1º contato** (Eric, 05/10): **1 hora útil**, contando só de segunda a sexta, 9h–18h (São Paulo); feriados ficam para depois. Quando um lead ganha dono (rodízio ou atribuição) e está em andamento, nasce a tarefa automática "Primeiro contato com o lead" vencendo em `addBusinessHours(agora, CRM_FIRST_CONTACT_SLA_HOURS)` (1 por padrão): lead de sexta 17h30 vence segunda 9h30. Trocar o dono passa a tarefa aberta para o novo dono.
 
 ## Distribuição (`crm_distribution_members`)
 
 - Um rodízio por funil: lead novo **sem dono** e **com funil** vai para o membro ativo que está há mais tempo sem receber (trava por funil, dois leads simultâneos vão a duas pessoas). Pausado não recebe e mantém os seus. Vazio: o lead fica sem dono até alguém assumir.
 - Não distribui: importação do RD (o RD diz o dono), leads de Sofia até a transferência (`distribute: false`), lead manual (dono = quem cadastrou).
 - Semente: os usuários do RD ligados a funcionários (`rd_user_map`) com papel `vendedor_expansao` → Expansão, `vendedor_formatacao` → Formatação. Administração → CRM adiciona, pausa e remove (só papéis de venda e gerente comercial).
-- O pacote da Sofia (`docs/whatsapp/regras-negocio.md` §6) pede **sorteio** para os leads qualificados por ela: entra na Fase 4 como modo da mesma tabela; o Eric escolhe.
+- Eric (05/10): **rodízio também para a Sofia** — na Fase 4 a transferência chama o mesmo `nextInRotation`; o "sorteio" do pacote (`docs/whatsapp/regras-negocio.md` §6) fica substituído.
 
 ## Telas
 
@@ -42,7 +42,6 @@
 
 ## Pendências
 
-- Espelho Wings → RD da etapa/dono (`CRM_RD_MIRROR_ENABLED`) — só se o Eric quiser o RD acompanhando o Wings durante a transição.
 - Teste de tela do kanban e da ficha editável (browser, no staging).
-- `CRM_FIRST_CONTACT_SLA_HOURS`, lista final de etapas e de vendedores: decisões do Eric (plano §5).
+- Etapas e vendedores: os do RD por enquanto (decisão do Eric, 05/10), ajustáveis em `/administracao/crm`. Feriados no cálculo do SLA.
 - Painel técnico do Lead Ads com os eventos com falha (hoje só contagens no Funil).

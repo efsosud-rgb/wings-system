@@ -260,3 +260,94 @@ export const boardQuerySchema = z.object({
   owner: z.string().max(60).optional(),
   clientId: z.uuid().optional(),
 });
+
+// --- business hours (the first-contact SLA) ----------------------------------------
+
+/** Wings' working hours (Eric, 05/10/2026): Monday to Friday, 9h–18h, São Paulo. Holidays come later. */
+export const BUSINESS_HOURS = { start: 9, end: 18, timeZone: 'America/Sao_Paulo' } as const;
+
+interface LocalParts {
+  weekday: number;
+  hour: number;
+  minute: number;
+  offsetMinutes: number;
+}
+
+/** The São Paulo wall clock of an instant, and the zone offset at that instant. */
+function localParts(date: Date): LocalParts {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: BUSINESS_HOURS.timeZone,
+    hourCycle: 'h23',
+    weekday: 'short',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
+  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(get('weekday'));
+  const asUtc = Date.UTC(
+    Number(get('year')),
+    Number(get('month')) - 1,
+    Number(get('day')),
+    Number(get('hour')),
+    Number(get('minute')),
+    Number(get('second')),
+  );
+  return {
+    weekday,
+    hour: Number(get('hour')),
+    minute: Number(get('minute')),
+    offsetMinutes: Math.round((asUtc - date.getTime()) / 60_000),
+  };
+}
+
+const isWorkday = (weekday: number) => weekday >= 1 && weekday <= 5;
+
+/** The next instant inside working hours, `from` itself when it already is. */
+export function nextBusinessInstant(from: Date): Date {
+  let cursor = new Date(from.getTime());
+  cursor.setUTCSeconds(0, 0);
+  for (let guard = 0; guard < 14; guard++) {
+    const local = localParts(cursor);
+    const minutesOfDay = local.hour * 60 + local.minute;
+    if (
+      isWorkday(local.weekday) &&
+      minutesOfDay >= BUSINESS_HOURS.start * 60 &&
+      minutesOfDay < BUSINESS_HOURS.end * 60
+    ) {
+      return cursor;
+    }
+    // Jump to the next 9h (today if before 9h, else tomorrow), in local time.
+    const toStart =
+      isWorkday(local.weekday) && minutesOfDay < BUSINESS_HOURS.start * 60
+        ? BUSINESS_HOURS.start * 60 - minutesOfDay
+        : 24 * 60 - minutesOfDay + BUSINESS_HOURS.start * 60;
+    cursor = new Date(cursor.getTime() + toStart * 60_000);
+    // A DST change between the two instants shifts the wall clock: re-align to 9h exactly.
+    const after = localParts(cursor);
+    const drift = after.hour * 60 + after.minute - BUSINESS_HOURS.start * 60;
+    if (drift !== 0) cursor = new Date(cursor.getTime() - drift * 60_000);
+  }
+  return cursor;
+}
+
+/**
+ * `from` plus `hours` of working time (Mon–Fri, 9h–18h São Paulo). Time
+ * outside those hours does not count: a lead that arrives Friday 17h30 with
+ * a 1-hour SLA is due Monday 9h30.
+ */
+export function addBusinessHours(from: Date, hours: number): Date {
+  let remaining = Math.max(0, hours) * 60;
+  let cursor = nextBusinessInstant(from);
+  for (let guard = 0; guard < 400 && remaining > 0; guard++) {
+    const local = localParts(cursor);
+    const untilClose = BUSINESS_HOURS.end * 60 - (local.hour * 60 + local.minute);
+    if (remaining <= untilClose) return new Date(cursor.getTime() + remaining * 60_000);
+    remaining -= untilClose;
+    cursor = nextBusinessInstant(new Date(cursor.getTime() + untilClose * 60_000));
+  }
+  return cursor;
+}

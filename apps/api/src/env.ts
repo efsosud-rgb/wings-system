@@ -139,8 +139,8 @@ const schema = z.object({
     'must be "true" or "false"',
   ),
   /**
-   * CRM Fase 1: hours a seller has for the first contact after a lead lands on
-   * them (the automatic task's due time). 24 until Eric sets it (plan §5).
+   * CRM Fase 1: working hours (Mon–Fri 9h–18h São Paulo) a seller has for the
+   * first contact after a lead lands on them. Eric, 05/10/2026: 1.
    */
   CRM_FIRST_CONTACT_SLA_HOURS: optionalString.refine(
     (value) => value === undefined || /^\d{1,3}$/.test(value),

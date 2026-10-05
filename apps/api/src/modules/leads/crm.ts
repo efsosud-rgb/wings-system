@@ -1,4 +1,5 @@
 import {
+  addBusinessHours,
   BOARD_CARDS_PER_STAGE,
   LEAD_PIPELINES,
   type Board,
@@ -44,12 +45,12 @@ const iso = (date: Date | null | undefined) => date?.toISOString() ?? null;
 // --- configuration -------------------------------------------------------------------
 
 export interface CrmConfig {
-  /** Hours a seller has to make the first contact after a lead lands on them; the auto task's due time. */
+  /** Working hours a seller has to make the first contact after a lead lands on them; the auto task's due time. */
   firstContactSlaHours: number;
 }
 
-/** Placeholder until Eric sets the SLA (plan §5); read from CRM_FIRST_CONTACT_SLA_HOURS. */
-export const DEFAULT_FIRST_CONTACT_SLA_HOURS = 24;
+/** Eric, 05/10/2026: one working hour (Mon–Fri, 9h–18h São Paulo); CRM_FIRST_CONTACT_SLA_HOURS overrides the number. */
+export const DEFAULT_FIRST_CONTACT_SLA_HOURS = 1;
 
 let config: CrmConfig = { firstContactSlaHours: DEFAULT_FIRST_CONTACT_SLA_HOURS };
 
@@ -622,7 +623,7 @@ export async function ensureFirstContactTask(
       leadId: lead.id,
       kind: 'first_contact',
       title: 'Primeiro contato com o lead',
-      dueAt: new Date(now.getTime() + config.firstContactSlaHours * 3_600_000),
+      dueAt: addBusinessHours(now, config.firstContactSlaHours),
       assigneeEmployeeId: lead.ownerEmployeeId,
       auto: true,
       createdBy: actorEmployeeId,
