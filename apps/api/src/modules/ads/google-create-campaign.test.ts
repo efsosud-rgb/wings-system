@@ -310,11 +310,13 @@ describe('executing an approved Google campaign', () => {
     ]);
     expect(api.ads[0]).toMatchObject({
       status: 'PAUSED',
-      finalUrls: [
-        'https://wingscompany.com.br/franquia?utm_source=google&utm_medium=cpc&utm_campaign=x&utm_content=lead',
-      ],
+      // No UTM in the address and no suffix on the campaign: the account's
+      // Final URL suffix puts them on every click, and one here would override it.
+      finalUrls: ['https://wingscompany.com.br/franquia'],
       headlines: ['Franquia Wings', 'Expanda sua marca', 'Fale com a Wings'],
     });
+    const written = JSON.stringify(api.mutateCalls().map((call) => call.body));
+    expect(written).not.toMatch(/finalUrlSuffix|trackingUrlTemplate|utm_/);
 
     // Every object is a step a person can see, by its Google id.
     const steps = await stepsOfExecution(

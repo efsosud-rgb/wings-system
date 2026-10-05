@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { fakeMetaApi, type FakeMetaApiOptions } from './fake-meta-api.js';
-import { BRAZIL_STATES } from '@wings/shared';
+import { BRAZIL_STATES, META_URL_TAGS } from '@wings/shared';
 import {
   BRAZIL_STATE_REGIONS,
   MetaReadOnlyClient,
@@ -68,7 +68,8 @@ const creativeBase: Omit<CreativeSpec, 'body'> = {
   message: 'Fale com a gente.',
   headline: 'Leve a Wings',
   callToAction: 'LEARN_MORE',
-  link: 'https://wingscompany.com.br/franquia?utm_source=meta',
+  link: 'https://wingscompany.com.br/franquia',
+  urlTags: META_URL_TAGS,
 };
 
 describe('the ad set', () => {
@@ -258,6 +259,10 @@ describe('creatives and ads', () => {
         call_to_action: { type: 'LEARN_MORE', value: { link: creativeBase.link } },
       },
     });
+    // The UTMs travel as url_tags, which Meta appends to every link of the ad.
+    expect(api.writes('adcreatives')[0]?.fields.url_tags).toBe(
+      'utm_source={{site_source_name}}&utm_medium=cpc&utm_campaign={{campaign.id}}&utm_content={{ad.id}}&utm_term={{adset.id}}',
+    );
     // The retired field must never come back.
     expect(api.writes('adcreatives')[0]?.fields.object_story_spec).not.toContain(
       'instagram_actor_id',
@@ -351,6 +356,18 @@ describe('creatives and ads', () => {
       creative: JSON.stringify({ creative_id: '2' }),
       status: 'PAUSED',
     });
+  });
+
+  it('the validate-only ad judges the creative with the same url_tags', async () => {
+    const { api, client } = writer();
+    await client.validateAd({
+      name: 'Anúncio',
+      adSetId: '1',
+      creative: { ...creativeBase, body: { type: 'single', media: { kind: 'image', imageHash: 'h' } } },
+    });
+    const inline = JSON.parse(api.writes('ads')[0]?.fields.creative ?? '{}');
+    expect(inline.url_tags).toBe(META_URL_TAGS);
+    expect(inline.object_story_spec.link_data.link).toBe('https://wingscompany.com.br/franquia');
   });
 
   it.each([

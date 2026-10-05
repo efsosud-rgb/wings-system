@@ -4,7 +4,7 @@ import {
   GOOGLE_CHANNEL_TYPE,
   addAdsPayloadSchema,
   META_OBJECTIVE,
-  applyUtms,
+  adDestination,
   isGooglePlatform,
   parseSearchKeyword,
   type CampaignDraft,
@@ -688,8 +688,11 @@ export function createSpecOf(
                     ),
                     headlines: search.headlines,
                     descriptions: search.descriptions,
+                    // No UTM and no suffix of its own: the account's Final URL
+                    // suffix (GOOGLE_ACCOUNT_URL_SUFFIX) puts them on every click.
                     finalUrl:
-                      applyUtms(payload.destinationUrl, payload.utms) ?? payload.destinationUrl,
+                      adDestination(payload.platform, payload.destinationUrl, payload.utms) ??
+                      payload.destinationUrl,
                   },
                 }
               : {}),

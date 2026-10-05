@@ -441,8 +441,10 @@ export interface CreativeSpec {
   message: string;
   headline: string;
   callToAction: string;
-  /** Destination with UTMs already applied. */
+  /** Destination without UTMs: they come from `urlTags`. */
   link: string;
+  /** The creative's `url_tags`, which Meta appends to every link of the ad (`META_URL_TAGS`). */
+  urlTags: string;
   body:
     | { type: 'single'; media: CreativeMedia }
     | {

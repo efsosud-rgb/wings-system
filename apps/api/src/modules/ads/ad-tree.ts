@@ -1,8 +1,9 @@
 import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
+  adDestination,
   adUtmContent,
-  applyUtms,
+  META_URL_TAGS,
   variationMedia,
   type CampaignDraft,
   type CopyVariation,
@@ -360,9 +361,9 @@ async function uploadMedia(
 
 /**
  * The creative one ad is made of, exactly as it is sent to Meta: page and
- * Instagram account, words, button, media, and the destination with every UTM
- * and this ad's own utm_content. Exported so a rehearsal validates the very
- * same thing an execution would create.
+ * Instagram account, words, button, media, the destination without UTMs and
+ * the standard `url_tags` that put them on every click. Exported so a
+ * rehearsal validates the very same thing an execution would create.
  */
 export function creativeSpecOf(input: {
   name: string;
@@ -384,7 +385,7 @@ export function creativeSpecOf(input: {
             media: mediaOf(card.mediaType === 'video' ? card.videoId : card.creativeId),
             headline: card.headline,
             description: card.description,
-            link: applyUtms(card.link, input.utms, ad) ?? card.link,
+            link: adDestination('meta', card.link, input.utms, ad) ?? card.link,
           })),
         }
       : {
@@ -400,17 +401,18 @@ export function creativeSpecOf(input: {
     message: variation.primaryText,
     headline: variation.headline,
     callToAction: variation.callToAction,
-    // Each ad carries its own utm_content (video-1, imagem-2…).
-    link: applyUtms(input.destinationUrl, input.utms, ad) ?? input.destinationUrl,
+    // No UTM in the link: Meta appends `url_tags`, with the ad's own ids.
+    link: adDestination('meta', input.destinationUrl, input.utms, ad) ?? input.destinationUrl,
+    urlTags: META_URL_TAGS,
     body,
   };
 }
 
 /**
  * A creative and an ad per variation, in an ad set that exists. Each ad is
- * judged with its creative inline first (validate_only), and each carries its
- * own utm_content: its kind and its position in the ad set, from
- * `firstPosition`. Ads are born paused, like everything this system creates.
+ * judged with its creative inline first (validate_only), and each carries the
+ * standard url_tags, so Meta fills utm_content with the ad's own id. Ads are
+ * born paused, like everything this system creates.
  */
 async function createAds(
   writer: AdTreeWriter,
@@ -575,8 +577,8 @@ export async function buildAdsInAdSet(
   const ads = await createAds(writer, step, {
     adSetId: input.adSetExternalId,
     name: input.campaignName,
-    // Named by their utm_content, so they never repeat the names v1, v2 of the
-    // ads the campaign was created with.
+    // Named by kind and position (video-1, imagem-2), so they never repeat the
+    // names v1, v2 of the ads the campaign was created with.
     labelOf: adUtmContent,
     pageId: input.pageId,
     instagramActorId: input.instagramActorId,

@@ -519,6 +519,84 @@ export function applyUtms(
   return `${base}${params.length > 0 ? `?${params.join('&')}` : ''}${hash}`;
 }
 
+/**
+ * The UTMs every new Meta ad carries, as its creative's `url_tags`: Meta has
+ * no account-wide default, so the builder writes this on each ad, and Meta
+ * fills the macros per click (`{{site_source_name}}` is fb, ig, msg or an).
+ * The one place this text lives; decided with Eric on 2026-10-05.
+ */
+export const META_URL_TAGS =
+  'utm_source={{site_source_name}}&utm_medium=cpc&utm_campaign={{campaign.id}}&utm_content={{ad.id}}&utm_term={{adset.id}}';
+
+/**
+ * The Final URL suffix Eric set on the Google Ads account (2026-10-05). Every
+ * campaign inherits it, so the builder writes no suffix of its own: one would
+ * override the account's. Shown on screen; the cockpit compares campaigns with
+ * the suffix read from the account, not with this text.
+ */
+export const GOOGLE_ACCOUNT_URL_SUFFIX =
+  'utm_source=google&utm_medium=cpc&utm_campaign={campaignid}&utm_content={creative}&utm_term={keyword}';
+
+/** What Meta's `{{site_source_name}}` stands for. */
+export const META_SITE_SOURCE_NAMES: Readonly<Record<string, string>> = {
+  fb: 'facebook',
+  ig: 'instagram',
+  msg: 'messenger',
+  an: 'audience_network',
+};
+
+/** A utm_source as people read it: Meta's short names spelled out, anything else as it came. */
+export function utmSourceName(value: string): string {
+  const trimmed = value.trim();
+  return META_SITE_SOURCE_NAMES[trimmed.toLowerCase()] ?? trimmed;
+}
+
+/** Whether `urlTags` carries every parameter of `META_URL_TAGS`, in any order. */
+export function hasStandardUrlTags(urlTags: string | null | undefined): boolean {
+  const present = new Set(
+    (urlTags ?? '')
+      .trim()
+      .replace(/^\?/, '')
+      .split('&')
+      .map((pair) => pair.trim()),
+  );
+  return META_URL_TAGS.split('&').every((pair) => present.has(pair));
+}
+
+/** The address without any utm_* parameter; null while the URL is not valid. */
+export function stripUtms(url: string): string | null {
+  const trimmed = url.trim();
+  if (!/^https?:\/\/[^\s/?#]+[^\s]*$/i.test(trimmed)) return null;
+  const [beforeHash = '', ...hashParts] = trimmed.split('#');
+  const [base = '', ...queryParts] = beforeHash.split('?');
+  const params = queryParts
+    .join('?')
+    .split('&')
+    .filter((pair) => pair !== '' && !/^utm_/i.test(pair));
+  const hash = hashParts.length > 0 ? `#${hashParts.join('#')}` : '';
+  return `${base}${params.length > 0 ? `?${params.join('&')}` : ''}${hash}`;
+}
+
+/** Whether the platform puts the UTMs on the click itself (Meta's url_tags, Google's account suffix). */
+export function utmsFromPlatform(platform: string): boolean {
+  return platform === 'meta' || isGooglePlatform(platform);
+}
+
+/**
+ * The address an ad is created with. On Meta and Google the UTMs come from
+ * the platform (`META_URL_TAGS`, the account's suffix), so the link carries
+ * none: with two utm_source in one address, the first one wins. Elsewhere,
+ * the draft's UTMs as before (`applyUtms`).
+ */
+export function adDestination(
+  platform: string,
+  url: string,
+  utms: UtmParams,
+  ad?: { creativeType: CreativeType; position: number },
+): string | null {
+  return utmsFromPlatform(platform) ? stripUtms(url) : applyUtms(url, utms, ad);
+}
+
 // ---------------------------------------------------------------------------
 // Duration and cost
 // ---------------------------------------------------------------------------
