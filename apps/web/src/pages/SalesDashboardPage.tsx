@@ -1,26 +1,270 @@
 import {
+  ALL_PIPELINES,
   LEAD_PIPELINE_LABELS,
   LEAD_PIPELINES,
+  LEAD_SOURCE_LABELS,
+  LEAD_SOURCES,
+  NO_BRAND,
+  NO_OWNER,
+  SALES_COMPARISON_LABELS,
+  SALES_COMPARISONS,
+  SALES_PERIOD_LABELS,
+  SALES_PERIODS,
   type LeadPipeline,
+  type SalesComparison,
   type SalesDashboard,
+  type SalesPeriod,
+  type SalesRange,
+  type SalesResults,
 } from '@wings/shared';
-import { useRef, type ReactNode } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { useSalesDashboard } from '../api/crm.js';
+import { useRef, useState, type ReactNode } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { useBrands, useSalesDashboard } from '../api/crm.js';
+import { useSellers } from '../api/leads.js';
 import { Chart3D } from '../components/charts3d/Chart3D.js';
-import { firstName, shareSpec } from '../components/charts3d/spec.js';
+import { firstName, type RankedSpec } from '../components/charts3d/spec.js';
 import { DASH, formatInt, formatMoney } from '../components/dashboard/format.js';
 
 /**
- * Dashboard › Vendas: one funnel's deals in the caller's scope (a seller sees
- * their own), from the CRM's own tables. Aggregates only, never a contact.
+ * Dashboard › Vendas v1: filters in one line, the executive row, the
+ * diagnosis and the actions. Every number is what the API aggregated in the
+ * caller's scope (a seller sees their own deals); a figure the data cannot
+ * give yet shows "—" with the reason, never an estimate.
  */
 
-const isPipeline = (value: string | null): value is LeadPipeline =>
-  (LEAD_PIPELINES as readonly string[]).includes(value ?? '');
+const REASON = {
+  goal: 'meta do mês não cadastrada',
+  forecast: 'as negociações ainda não têm data prevista de fechamento',
+  stalled: 'as etapas ainda não têm prazo cadastrado',
+} as const;
+
+const NO_PHONE = 'Sem telefone ou DDD inválido';
+const ABROAD = 'Telefone de fora do Brasil';
 
 const percent = (rate: number) =>
   `${(rate * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`;
+const decimal = (value: number) => value.toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+const brDate = (day: string) => day.split('-').reverse().join('/');
+const rangeText = (range: SalesRange) => `${brDate(range.from)} a ${brDate(range.to)}`;
+
+const isIn = <T extends string>(list: readonly T[], value: string | null): value is T =>
+  value !== null && (list as readonly string[]).includes(value);
+
+// --- filters --------------------------------------------------------------------------
+
+interface Filters {
+  period: SalesPeriod;
+  from: string;
+  to: string;
+  compare: SalesComparison;
+  pipeline: LeadPipeline | typeof ALL_PIPELINES;
+  owner: string;
+  brand: string;
+  source: string;
+  campaign: string;
+}
+
+function useFilters() {
+  const [params, setParams] = useSearchParams();
+  const get = (key: string) => params.get(key) ?? '';
+  const period = params.get('periodo');
+  const compare = params.get('comparar');
+  const pipeline = params.get('funil');
+  const filters: Filters = {
+    period: isIn(SALES_PERIODS, period) ? period : 'month',
+    from: get('de'),
+    to: get('ate'),
+    compare: isIn(SALES_COMPARISONS, compare) ? compare : 'previous',
+    pipeline: isIn(LEAD_PIPELINES, pipeline) ? pipeline : ALL_PIPELINES,
+    owner: get('vendedor'),
+    brand: get('marca'),
+    source: isIn(LEAD_SOURCES, params.get('origem')) ? get('origem') : '',
+    campaign: get('campanha'),
+  };
+  const set = (patch: Record<string, string>) => {
+    const next = new URLSearchParams(params);
+    for (const [key, value] of Object.entries(patch)) {
+      if (value) next.set(key, value);
+      else next.delete(key);
+    }
+    setParams(next, { replace: true });
+  };
+  return { filters, set, clear: () => setParams(new URLSearchParams(), { replace: true }) };
+}
+
+/** What the API is asked; a custom period waits for both ends (the month stands in meanwhile). */
+function queryOf(filters: Filters): Record<string, string> {
+  const custom = filters.period === 'custom' && filters.from && filters.to;
+  const query: Record<string, string> = {
+    pipeline: filters.pipeline,
+    period: filters.period === 'custom' && !custom ? 'month' : filters.period,
+  };
+  if (custom) Object.assign(query, { from: filters.from, to: filters.to });
+  if (filters.owner) query.owner = filters.owner;
+  if (filters.brand) query.brand = filters.brand;
+  if (filters.source) query.source = filters.source;
+  if (filters.campaign) query.campaign = filters.campaign;
+  return query;
+}
+
+function FilterBar({
+  filters,
+  set,
+  clear,
+  data,
+}: ReturnType<typeof useFilters> & { data: SalesDashboard | undefined }) {
+  const sellers = useSellers();
+  const brands = useBrands();
+  const own = data?.scope === 'own';
+  const brandNames = [
+    ...new Set([
+      ...(brands.data?.brands ?? []).map((brand) => brand.name),
+      ...(data?.brands ?? []).map((row) => row.brand).filter((name): name is string => !!name),
+      ...(filters.brand && filters.brand !== NO_BRAND ? [filters.brand] : []),
+    ]),
+  ].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const campaigns = [
+    ...new Set([...(data?.campaignOptions ?? []), ...(filters.campaign ? [filters.campaign] : [])]),
+  ];
+  const active =
+    filters.period !== 'month' ||
+    filters.compare !== 'previous' ||
+    filters.pipeline !== ALL_PIPELINES ||
+    !!(filters.owner || filters.brand || filters.source || filters.campaign);
+
+  return (
+    <div className="filters-row sales-filters" role="group" aria-label="Filtros do painel">
+      <label>
+        <span className="sr-only">Período</span>
+        <select
+          value={filters.period}
+          onChange={(event) =>
+            set({ periodo: event.target.value === 'month' ? '' : event.target.value })
+          }
+        >
+          {SALES_PERIODS.map((key) => (
+            <option key={key} value={key}>
+              {SALES_PERIOD_LABELS[key]}
+            </option>
+          ))}
+        </select>
+      </label>
+      {filters.period === 'custom' && (
+        <>
+          <label>
+            <span className="sr-only">De</span>
+            <input
+              type="date"
+              value={filters.from}
+              max={filters.to || undefined}
+              onChange={(event) => set({ de: event.target.value })}
+            />
+          </label>
+          <label>
+            <span className="sr-only">Até</span>
+            <input
+              type="date"
+              value={filters.to}
+              min={filters.from || undefined}
+              onChange={(event) => set({ ate: event.target.value })}
+            />
+          </label>
+        </>
+      )}
+      <label>
+        <span className="sr-only">Comparar com</span>
+        <select
+          value={filters.compare}
+          onChange={(event) =>
+            set({ comparar: event.target.value === 'previous' ? '' : event.target.value })
+          }
+        >
+          {SALES_COMPARISONS.map((key) => (
+            <option key={key} value={key}>
+              {key === 'none'
+                ? SALES_COMPARISON_LABELS[key]
+                : `vs. ${SALES_COMPARISON_LABELS[key].toLowerCase()}`}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span className="sr-only">Funil</span>
+        <select
+          value={filters.pipeline}
+          onChange={(event) =>
+            set({ funil: event.target.value === ALL_PIPELINES ? '' : event.target.value })
+          }
+        >
+          <option value={ALL_PIPELINES}>Todos os funis</option>
+          {LEAD_PIPELINES.map((key) => (
+            <option key={key} value={key}>
+              {LEAD_PIPELINE_LABELS[key]}
+            </option>
+          ))}
+        </select>
+      </label>
+      {!own && (
+        <label>
+          <span className="sr-only">Vendedor</span>
+          <select value={filters.owner} onChange={(event) => set({ vendedor: event.target.value })}>
+            <option value="">Todos os vendedores</option>
+            <option value={NO_OWNER}>Sem dono</option>
+            {(sellers.data?.sellers ?? []).map((seller) => (
+              <option key={seller.id} value={seller.id}>
+                {seller.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <label>
+        <span className="sr-only">Marca</span>
+        <select value={filters.brand} onChange={(event) => set({ marca: event.target.value })}>
+          <option value="">Todas as marcas</option>
+          <option value={NO_BRAND}>Sem marca</option>
+          {brandNames.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span className="sr-only">Origem</span>
+        <select value={filters.source} onChange={(event) => set({ origem: event.target.value })}>
+          <option value="">Todas as origens</option>
+          {LEAD_SOURCES.map((key) => (
+            <option key={key} value={key}>
+              {LEAD_SOURCE_LABELS[key]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        <span className="sr-only">Campanha</span>
+        <select
+          value={filters.campaign}
+          onChange={(event) => set({ campanha: event.target.value })}
+        >
+          <option value="">Todas as campanhas</option>
+          {campaigns.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {active && (
+        <button type="button" className="btn btn-sm btn-ghost" onClick={clear}>
+          Limpar filtros
+        </button>
+      )}
+    </div>
+  );
+}
+
+// --- row 1: executive -----------------------------------------------------------------
 
 /** A card that leans a few degrees towards the pointer (none with reduced motion, in CSS). */
 function TiltCard({ children, label }: { children: ReactNode; label: string }) {
@@ -51,58 +295,119 @@ function TiltCard({ children, label }: { children: ReactNode; label: string }) {
   );
 }
 
-function Kpi({ title, value, note }: { title: string; value: string; note?: string }) {
+type Delta = { text: string; tone: 'up' | 'down' | 'flat' };
+
+function Kpi({
+  title,
+  value,
+  note,
+  delta,
+}: {
+  title: string;
+  value: string;
+  note?: string;
+  delta?: Delta | null;
+}) {
+  const parts = [delta?.text, note].filter(Boolean).join('; ');
   return (
-    <TiltCard label={`${title}: ${value}${note ? ` (${note})` : ''}`}>
+    <TiltCard label={`${title}: ${value}${parts ? ` (${parts})` : ''}`}>
       <span className="muted">{title}</span>
       <strong>{value}</strong>
+      {delta && <span className={`sales-delta is-${delta.tone}`}>{delta.text}</span>}
       {note && <span className="cell-sub">{note}</span>}
     </TiltCard>
   );
 }
 
-function Indicators({ data }: { data: SalesDashboard }) {
-  const valued = data.open.total - data.openWithoutValue;
-  const noValue =
-    data.open.total === 0
-      ? 'nenhuma negociação aberta'
-      : valued === 0
-        ? 'nenhuma negociação aberta tem valor'
+/** Change against the comparison range: a share for amounts, points for a rate. */
+function deltaOf(
+  now: number | null,
+  before: number | null,
+  kind: 'amount' | 'rate',
+  against: string,
+): Delta | null {
+  if (now === null) return null;
+  if (before === null || (kind === 'amount' && before === 0))
+    return { text: `sem base ${against}`, tone: 'flat' };
+  const change = kind === 'rate' ? (now - before) * 100 : ((now - before) / before) * 100;
+  const tone = Math.abs(change) < 0.05 ? 'flat' : change > 0 ? 'up' : 'down';
+  const sign = change >= 0.05 ? '+' : change <= -0.05 ? '−' : '';
+  const size = Math.abs(change).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+  return { text: `${sign}${size}${kind === 'rate' ? ' p.p.' : '%'} ${against}`, tone };
+}
+
+function Executive({ data, compare }: { data: SalesDashboard; compare: SalesComparison }) {
+  const now = data.results.current;
+  const before: SalesResults | null =
+    compare === 'previous'
+      ? data.results.previous
+      : compare === 'previous_year'
+        ? data.results.previousYear
         : null;
-  const missing =
-    data.openWithoutValue > 0 && valued > 0
-      ? `${formatInt(data.openWithoutValue)} sem valor ficam de fora`
-      : undefined;
+  const against = compare === 'previous' ? 'no período anterior' : 'no ano anterior';
+  const delta = (pick: (r: SalesResults) => number | null, kind: 'amount' | 'rate') =>
+    before ? deltaOf(pick(now), pick(before), kind, against) : null;
+  const closed = now.won + now.lost;
+  const valued = data.open.total - data.open.withoutValue;
+  const unvalued = now.won > 0 && now.wonCents === 0;
+
   return (
     <section className="sales-kpis" aria-label="Indicadores">
-      <Kpi title="Negociações abertas" value={formatInt(data.open.total)} />
       <Kpi
-        title="Valor em aberto"
-        value={noValue ? DASH : formatMoney(data.open.valueCents)}
-        note={noValue ?? missing}
-      />
-      <Kpi
-        title="Valor ponderado"
-        value={noValue ? DASH : formatMoney(data.open.weightedCents)}
-        note={noValue ?? 'pela probabilidade de cada etapa'}
-      />
-      <Kpi
-        title="Ganhas no mês"
-        value={formatInt(data.wonMonth.total)}
-        note={data.wonMonth.valueCents > 0 ? formatMoney(data.wonMonth.valueCents) : undefined}
-      />
-      <Kpi
-        title="Taxa de conversão"
-        value={data.conversion.rate === null ? DASH : percent(data.conversion.rate)}
+        title="Vendas fechadas"
+        value={unvalued ? DASH : formatMoney(now.wonCents)}
         note={
-          data.conversion.rate === null
-            ? `nada fechado nos últimos ${data.conversion.days} dias`
-            : `${formatInt(data.conversion.won)} ganhas, ${formatInt(data.conversion.lost)} perdidas em ${data.conversion.days} dias`
+          unvalued
+            ? 'nenhuma ganha no período tem valor'
+            : now.wonWithoutValue > 0
+              ? `${formatInt(now.wonWithoutValue)} ganha(s) sem valor ficam de fora`
+              : undefined
+        }
+        delta={unvalued ? null : delta((r) => r.wonCents, 'amount')}
+      />
+      <Kpi title="Meta x realizado" value={DASH} note={REASON.goal} />
+      <Kpi
+        title="Contratos ganhos"
+        value={formatInt(now.won)}
+        delta={delta((r) => r.won, 'amount')}
+      />
+      <Kpi
+        title="Ticket médio"
+        value={now.ticketCents === null ? DASH : formatMoney(now.ticketCents)}
+        note={now.ticketCents === null ? 'nenhuma ganha com valor no período' : undefined}
+        delta={delta((r) => r.ticketCents, 'amount')}
+      />
+      <Kpi
+        title="Conversão"
+        value={now.conversionRate === null ? DASH : percent(now.conversionRate)}
+        note={
+          closed === 0
+            ? 'nada fechado no período'
+            : `${formatInt(now.won)} ganhas de ${formatInt(closed)} fechadas`
+        }
+        delta={delta((r) => r.conversionRate, 'rate')}
+      />
+      <Kpi
+        title="Pipeline aberto hoje"
+        value={valued === 0 ? DASH : formatMoney(data.open.valueCents)}
+        note={
+          data.open.total === 0
+            ? 'nenhuma negociação aberta'
+            : valued === 0
+              ? `${formatInt(data.open.total)} abertas, nenhuma com valor`
+              : `ponderado ${formatMoney(data.open.weightedCents)} · ${formatInt(data.open.total)} abertas${
+                  data.open.withoutValue > 0
+                    ? `, ${formatInt(data.open.withoutValue)} sem valor`
+                    : ''
+                }`
         }
       />
+      <Kpi title="Previsão do período" value={DASH} note={REASON.forecast} />
     </section>
   );
 }
+
+// --- row 3: diagnosis -----------------------------------------------------------------
 
 function Empty({ reason }: { reason: string }) {
   return (
@@ -112,122 +417,447 @@ function Empty({ reason }: { reason: string }) {
   );
 }
 
-function StageFunnel({ data, pipeline }: { data: SalesDashboard; pipeline: LeadPipeline }) {
-  const steps = data.stages.map((row) => ({
-    label: row.stage?.name ?? 'Sem etapa',
-    value: row.total,
-  }));
-  if (steps.length === 0) return <Empty reason="este funil ainda não tem etapas." />;
-  if (data.open.total === 0) return <Empty reason="nenhuma negociação aberta neste funil." />;
+function Card({
+  id,
+  title,
+  note,
+  wide,
+  children,
+}: {
+  id: string;
+  title: string;
+  note?: ReactNode;
+  wide?: boolean;
+  children: ReactNode;
+}) {
   return (
-    <Chart3D
-      spec={{ kind: 'funnel', stages: steps, format: 'int', totalLabel: 'das abertas' }}
-      height={Math.max(240, steps.length * 40 + 40)}
-      ariaLabel={`Funil ${LEAD_PIPELINE_LABELS[pipeline]}: negociações abertas por etapa`}
-      table={
-        <table>
-          <thead>
-            <tr>
-              <th>Etapa</th>
-              <th className="num">Abertas</th>
-              <th className="num">Valor</th>
-              <th className="num">Ponderado</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.stages.map((row) => (
-              <tr key={row.stage?.id ?? 'none'}>
-                <td>{row.stage?.name ?? 'Sem etapa'}</td>
-                <td className="num">{formatInt(row.total)}</td>
-                <td className="num">{formatMoney(row.valueCents)}</td>
-                <td className="num">{formatMoney(row.weightedCents)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      }
-    />
+    <section className={`card sales-card${wide ? ' sales-card-wide' : ''}`} aria-labelledby={id}>
+      <h2 id={id}>{title}</h2>
+      {note && <p className="sales-note">{note}</p>}
+      {children}
+    </section>
   );
 }
 
-function BrandDonut({ data }: { data: SalesDashboard }) {
-  if (data.open.total === 0)
-    return <Empty reason="nenhuma negociação aberta para dividir por marca." />;
-  const spec = shareSpec(
-    data.brands.map((row) => ({
-      label: row.brand ?? 'Sem marca',
-      value: row.total,
-      neutral: row.brand === null,
-    })),
-    'int',
-    { totalLabel: 'das abertas', centerLabel: 'abertas' },
+const rankedHeight = (count: number) => Math.max(180, Math.min(count, 7) * 36 + 50);
+
+/** A table shown as is, with the reason the chart is not drawn. */
+function TableOnly({ reason, table }: { reason: string; table: ReactNode }) {
+  return (
+    <>
+      <Empty reason={reason} />
+      <div className="c3d-flat-table">{table}</div>
+    </>
+  );
+}
+
+function Funnel({ data }: { data: SalesDashboard }) {
+  if (!data.funnel)
+    return (
+      <Empty reason="escolha um funil no filtro para ver as etapas: cada funil tem as suas." />
+    );
+  const steps = data.funnel.filter((step) => step.stage);
+  if (steps.length === 0) return <Empty reason="este funil ainda não tem etapas." />;
+  const table = (
+    <table>
+      <thead>
+        <tr>
+          <th>Etapa</th>
+          <th className="num">Abertas hoje</th>
+          <th className="num">Chegaram</th>
+          <th className="num">Passaram à seguinte</th>
+          <th className="num">Dias na etapa</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.funnel.map((step) => (
+          <tr key={step.stage?.id ?? 'none'}>
+            <td>{step.stage?.name ?? 'Sem etapa'}</td>
+            <td className="num">{formatInt(step.open.total)}</td>
+            <td className="num">{step.stage ? formatInt(step.reached) : DASH}</td>
+            <td className="num">{step.toNext === null ? DASH : percent(step.toNext)}</td>
+            <td className="num">
+              {step.avgDays === null
+                ? DASH
+                : `${decimal(step.avgDays)} (${formatInt(step.exits)} saídas)`}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
   return (
+    <>
+      {steps.some((step) => step.reached > 0) ? (
+        <Chart3D
+          spec={{
+            kind: 'funnel',
+            stages: steps.map((step) => ({ label: step.stage!.name, value: step.reached })),
+            format: 'int',
+            totalLabel: 'das criadas no período',
+          }}
+          height={Math.max(220, steps.length * 40 + 40)}
+          ariaLabel="Negociações criadas no período por etapa alcançada"
+          table={table}
+        />
+      ) : (
+        <TableOnly reason="nenhuma negociação criada no período neste funil." table={table} />
+      )}
+      <p className="sales-note">
+        Tempo médio até ganhar:{' '}
+        {data.timeToClose.avgDays === null
+          ? `${DASH} nenhuma ganha no período`
+          : `${decimal(data.timeToClose.avgDays)} dias, da criação ao ganho (${formatInt(data.timeToClose.count)} ganhas)`}
+      </p>
+    </>
+  );
+}
+
+function Sellers({ data }: { data: SalesDashboard }) {
+  if (data.sellers.length === 0)
+    return <Empty reason="nenhuma negociação aberta ou ganha no período." />;
+  const name = (row: SalesDashboard['sellers'][number]) => firstName(row.ownerName, 'Sem dono');
+  const byValue = data.sellers.some((row) => row.wonCents > 0);
+  const spec: RankedSpec = {
+    kind: 'ranked',
+    format: byValue ? 'brl' : 'int',
+    totalLabel: byValue ? 'do valor ganho' : 'das ganhas',
+    items: data.sellers.map((row) => ({
+      label: name(row),
+      value: byValue ? row.wonCents : row.won,
+      neutral: row.ownerEmployeeId === null,
+    })),
+  };
+  const table = (
+    <table>
+      <thead>
+        <tr>
+          <th>Vendedor</th>
+          <th className="num">Ganhas</th>
+          <th className="num">Valor ganho</th>
+          <th className="num">Meta</th>
+          <th className="num">Abertas</th>
+          <th className="num">Valor aberto</th>
+          <th className="num">Atividades</th>
+          <th className="num">1º contato (horas)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.sellers.map((row) => (
+          <tr key={row.ownerEmployeeId ?? 'none'}>
+            <td>{name(row)}</td>
+            <td className="num">{formatInt(row.won)}</td>
+            <td className="num">{formatMoney(row.wonCents)}</td>
+            <td className="num">{row.goalCents === null ? DASH : formatMoney(row.goalCents)}</td>
+            <td className="num">{formatInt(row.open)}</td>
+            <td className="num">{formatMoney(row.openCents)}</td>
+            <td className="num">{row.ownerEmployeeId ? formatInt(row.activities) : DASH}</td>
+            <td className="num">
+              {row.firstContactHours === null
+                ? DASH
+                : `${decimal(row.firstContactHours)} (${formatInt(row.firstContactCount)})`}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+  return data.sellers.some((row) => row.won > 0) ? (
     <Chart3D
       spec={spec}
-      height={280}
-      ariaLabel="Negociações abertas por marca"
-      table={
-        <table>
+      height={rankedHeight(data.sellers.length)}
+      ariaLabel="Ranking de vendedores pelas ganhas no período"
+      table={table}
+    />
+  ) : (
+    <TableOnly reason="ninguém ganhou negociação no período." table={table} />
+  );
+}
+
+function Brands({ data }: { data: SalesDashboard }) {
+  if (data.brands.length === 0)
+    return <Empty reason="nenhuma negociação aberta ou ganha no período." />;
+  const byWon = data.brands.some((row) => row.won > 0);
+  const label = (brand: string | null) => brand ?? 'Sem marca';
+  return (
+    <>
+      <Chart3D
+        spec={{
+          kind: 'ranked',
+          format: 'int',
+          totalLabel: byWon ? 'das ganhas' : 'das abertas',
+          items: data.brands.map((row) => ({
+            label: label(row.brand),
+            value: byWon ? row.won : row.open,
+            neutral: row.brand === null,
+          })),
+        }}
+        height={rankedHeight(data.brands.length)}
+        ariaLabel={byWon ? 'Ganhas no período por marca' : 'Negociações abertas por marca'}
+        table={
+          <table>
+            <thead>
+              <tr>
+                <th>Marca</th>
+                <th className="num">Ganhas</th>
+                <th className="num">Valor ganho</th>
+                <th className="num">Abertas</th>
+                <th className="num">Valor aberto</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.brands.map((row) => (
+                <tr key={row.brand ?? 'none'}>
+                  <td>{label(row.brand)}</td>
+                  <td className="num">{formatInt(row.won)}</td>
+                  <td className="num">{formatMoney(row.wonCents)}</td>
+                  <td className="num">{formatInt(row.open)}</td>
+                  <td className="num">{formatMoney(row.openCents)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        }
+      />
+      {data.services.length > 0 && (
+        <div className="c3d-flat-table sales-subtable">
+          <table aria-label="Por serviço">
+            <thead>
+              <tr>
+                <th>Serviço (funil)</th>
+                <th className="num">Ganhas</th>
+                <th className="num">Valor ganho</th>
+                <th className="num">Abertas</th>
+                <th className="num">Valor aberto</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.services.map((row) => (
+                <tr key={row.pipeline ?? 'none'}>
+                  <td>{row.pipeline ? LEAD_PIPELINE_LABELS[row.pipeline] : 'Sem funil'}</td>
+                  <td className="num">{formatInt(row.won)}</td>
+                  <td className="num">{formatMoney(row.wonCents)}</td>
+                  <td className="num">{formatInt(row.open)}</td>
+                  <td className="num">{formatMoney(row.openCents)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
+function Origins({ data, ownerFiltered }: { data: SalesDashboard; ownerFiltered: boolean }) {
+  if (data.sources.length === 0 && data.campaigns.length === 0)
+    return <Empty reason="nenhuma negociação criada ou ganha no período." />;
+  const spendReason = data.spendVisible
+    ? null
+    : ownerFiltered
+      ? 'o investimento é da campanha inteira e não se divide por vendedor'
+      : 'investimento, CPL, CAC e ROAS aparecem só para quem vê os gastos de tráfego pago';
+  const money = (cents: number | null) => (cents === null ? DASH : formatMoney(cents));
+  const sourceTable = (
+    <table>
+      <thead>
+        <tr>
+          <th>Origem</th>
+          <th className="num">Criadas</th>
+          <th className="num">Ganhas</th>
+          <th className="num">Valor ganho</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.sources.map((row) => (
+          <tr key={row.source}>
+            <td>{LEAD_SOURCE_LABELS[row.source]}</td>
+            <td className="num">{formatInt(row.leads)}</td>
+            <td className="num">{formatInt(row.won)}</td>
+            <td className="num">{formatMoney(row.wonCents)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+  return (
+    <>
+      {data.sources.some((row) => row.leads > 0) ? (
+        <Chart3D
+          spec={{
+            kind: 'ranked',
+            format: 'int',
+            totalLabel: 'das criadas no período',
+            items: data.sources.map((row) => ({
+              label: LEAD_SOURCE_LABELS[row.source],
+              value: row.leads,
+            })),
+          }}
+          height={rankedHeight(data.sources.length)}
+          ariaLabel="Negociações criadas no período por origem"
+          table={sourceTable}
+        />
+      ) : (
+        <TableOnly reason="nenhuma negociação criada no período." table={sourceTable} />
+      )}
+      <div className="c3d-flat-table sales-subtable">
+        <table aria-label="Por campanha">
           <thead>
             <tr>
-              <th>Marca</th>
-              <th className="num">Abertas</th>
-              <th className="num">Valor</th>
+              <th>Campanha</th>
+              <th className="num">Criadas</th>
+              <th className="num">Ganhas</th>
+              <th className="num">Valor ganho</th>
+              <th className="num">Investimento</th>
+              <th className="num">CPL</th>
+              <th className="num">CAC</th>
+              <th className="num">ROAS</th>
             </tr>
           </thead>
           <tbody>
-            {data.brands.map((row) => (
-              <tr key={row.brand ?? 'none'}>
-                <td>{row.brand ?? 'Sem marca'}</td>
-                <td className="num">{formatInt(row.total)}</td>
-                <td className="num">{formatMoney(row.valueCents)}</td>
+            {data.campaigns.map((row) => (
+              <tr key={row.campaign ?? 'none'}>
+                <td>{row.campaign ?? 'Sem campanha'}</td>
+                <td className="num">{formatInt(row.leads)}</td>
+                <td className="num">{formatInt(row.won)}</td>
+                <td className="num">{formatMoney(row.wonCents)}</td>
+                <td className="num">{money(row.spendCents)}</td>
+                <td className="num">{money(row.cplCents)}</td>
+                <td className="num">{money(row.cacCents)}</td>
+                <td className="num">{row.roas === null ? DASH : `${decimal(row.roas)}x`}</td>
               </tr>
             ))}
           </tbody>
         </table>
-      }
-    />
+      </div>
+      <p className="sales-note">
+        {spendReason
+          ? `${DASH} ${spendReason}.`
+          : `Investimento do período nas campanhas da Meta e do Google ligadas às negociações. CPL = investimento ÷ criadas; CAC = investimento ÷ ganhas; ROAS = valor ganho ÷ investimento. ${DASH} na linha: campanha sem gasto ligado.`}
+      </p>
+    </>
   );
 }
 
-function SellerBars({ data }: { data: SalesDashboard }) {
-  if (data.sellers.length === 0)
-    return <Empty reason="nenhuma negociação aberta ou ganha no mês." />;
-  const nameOf = (row: SalesDashboard['sellers'][number]) => firstName(row.ownerName, 'Sem dono');
+function Regions({ data }: { data: SalesDashboard }) {
+  const [view, setView] = useState<'uf' | 'city'>('uf');
+  if (data.regions.length === 0)
+    return <Empty reason="nenhuma negociação criada ou ganha no período." />;
+  const rows =
+    view === 'uf'
+      ? data.regions.map((row) => ({
+          key: row.uf ?? row.kind,
+          label: row.kind === 'uf' ? row.uf! : row.kind === 'abroad' ? ABROAD : NO_PHONE,
+          neutral: row.kind !== 'uf',
+          leads: row.leads,
+          won: row.won,
+        }))
+      : data.cities.map((row) => ({
+          key: row.city ?? 'none',
+          label: row.city ?? 'Cidade não informada',
+          neutral: row.city === null,
+          leads: row.leads,
+          won: row.won,
+        }));
+  const table = (
+    <table>
+      <thead>
+        <tr>
+          <th>{view === 'uf' ? 'UF pelo DDD do telefone' : 'Cidade informada'}</th>
+          <th className="num">Criadas</th>
+          <th className="num">Ganhas</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.key} className={row.neutral ? 'is-neutral' : undefined}>
+            <td>{row.label}</td>
+            <td className="num">{formatInt(row.leads)}</td>
+            <td className="num">{formatInt(row.won)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+  return (
+    <>
+      <div className="sales-toggle" role="group" aria-label="Ver por">
+        {(
+          [
+            ['uf', 'UF'],
+            ['city', 'Cidade'],
+          ] as const
+        ).map(([key, text]) => (
+          <button
+            key={key}
+            type="button"
+            className={`btn btn-sm${view === key ? ' btn-primary' : ''}`}
+            aria-pressed={view === key}
+            onClick={() => setView(key)}
+          >
+            {text}
+          </button>
+        ))}
+      </div>
+      {rows.some((row) => row.leads > 0) ? (
+        <Chart3D
+          key={view}
+          spec={{
+            kind: 'ranked',
+            format: 'int',
+            totalLabel: 'das criadas no período',
+            items: rows.map((row) => ({
+              label: row.label,
+              value: row.leads,
+              neutral: row.neutral,
+            })),
+          }}
+          height={rankedHeight(rows.length)}
+          ariaLabel={
+            view === 'uf'
+              ? 'Negociações criadas no período por UF, pelo DDD do telefone'
+              : 'Negociações criadas no período por cidade informada'
+          }
+          table={table}
+        />
+      ) : (
+        <TableOnly reason="nenhuma negociação criada no período." table={table} />
+      )}
+    </>
+  );
+}
+
+function LostReasons({ data }: { data: SalesDashboard }) {
+  if (data.lostReasons.length === 0)
+    return <Empty reason="nenhuma negociação perdida no período." />;
+  const label = (reason: string | null) => reason ?? 'Sem motivo';
   return (
     <Chart3D
       spec={{
-        kind: 'columns',
+        kind: 'ranked',
         format: 'int',
-        categories: data.sellers.map((row) => firstName(row.ownerName, 'Sem dono')),
-        neutralCategories: ['Sem dono'],
-        series: [
-          { name: 'Abertas', values: data.sellers.map((row) => row.total) },
-          { name: 'Ganhas no mês', values: data.sellers.map((row) => row.wonMonth) },
-        ],
+        totalLabel: 'das perdidas',
+        items: data.lostReasons.map((row) => ({
+          label: label(row.reason),
+          value: row.total,
+          neutral: row.reason === null,
+        })),
       }}
-      height={260}
-      ariaLabel="Negociações abertas e ganhas no mês por vendedor"
+      height={rankedHeight(data.lostReasons.length)}
+      ariaLabel="Motivos de perda no período"
       table={
         <table>
           <thead>
             <tr>
-              <th>Vendedor</th>
-              <th className="num">Abertas</th>
-              <th className="num">Valor em aberto</th>
-              <th className="num">Ganhas no mês</th>
-              <th className="num">Valor ganho</th>
+              <th>Motivo</th>
+              <th className="num">Perdidas</th>
             </tr>
           </thead>
           <tbody>
-            {data.sellers.map((row) => (
-              <tr key={row.ownerEmployeeId ?? 'none'}>
-                <td>{nameOf(row)}</td>
+            {data.lostReasons.map((row) => (
+              <tr key={row.reason ?? 'none'}>
+                <td>{label(row.reason)}</td>
                 <td className="num">{formatInt(row.total)}</td>
-                <td className="num">{formatMoney(row.valueCents)}</td>
-                <td className="num">{formatInt(row.wonMonth)}</td>
-                <td className="num">{formatMoney(row.wonMonthCents)}</td>
               </tr>
             ))}
           </tbody>
@@ -237,41 +867,119 @@ function SellerBars({ data }: { data: SalesDashboard }) {
   );
 }
 
+// --- row 4: actions -------------------------------------------------------------------
+
+interface Action {
+  key: string;
+  title: string;
+  value: number | null;
+  reason?: string;
+  to: string | null;
+}
+
+function Actions({ data, filters }: { data: SalesDashboard; filters: Filters }) {
+  /** The CRM's list of one funnel, with the filters it understands carried over. */
+  const crm = (extra: Record<string, string>) => {
+    if (!data.pipeline) return null;
+    const params = new URLSearchParams({ funil: data.pipeline, ...extra });
+    if (filters.source) params.set('source', filters.source);
+    if (filters.campaign) params.set('campaign', filters.campaign);
+    if (filters.owner && !extra.owner) params.set('owner', filters.owner);
+    return `/crm-vendas/negociacoes?${params.toString()}`;
+  };
+  const items: Action[] = [
+    {
+      key: 'closing',
+      title: 'Fecham em até 15 dias',
+      value: data.actions.closingSoon,
+      reason: REASON.forecast,
+      to: null,
+    },
+    {
+      key: 'stalled',
+      title: 'Paradas além do prazo da etapa',
+      value: data.actions.stalled,
+      reason: REASON.stalled,
+      to: null,
+    },
+    {
+      key: 'first',
+      title: 'Primeiro contato atrasado',
+      value: data.actions.firstContactOverdue,
+      to: crm({ visao: 'activities' }),
+    },
+    {
+      key: 'goals',
+      title: 'Metas em risco',
+      value: data.actions.goalsAtRisk,
+      reason: REASON.goal,
+      to: null,
+    },
+  ];
+  if (data.scope === 'all')
+    items.push({
+      key: 'owner',
+      title: 'Sem dono',
+      value: data.actions.noOwner,
+      to: crm({ owner: NO_OWNER, aba: 'unowned', outcome: 'open', visao: 'list' }),
+    });
+  return (
+    <ul className="sales-actions">
+      {items.map((item) => {
+        const open = item.value !== null && item.value > 0;
+        const body = (
+          <>
+            <strong>{item.value === null ? DASH : formatInt(item.value)}</strong>
+            <span>{item.title}</span>
+            {item.value === null && <span className="cell-sub">{item.reason}</span>}
+            {open && !item.to && (
+              <span className="cell-sub">escolha um funil no filtro para abrir a lista</span>
+            )}
+          </>
+        );
+        return (
+          <li key={item.key}>
+            {open && item.to ? (
+              <Link className="card sales-action is-alert" to={item.to}>
+                {body}
+                <span className="sales-action-go" aria-hidden="true">
+                  Abrir no CRM →
+                </span>
+              </Link>
+            ) : (
+              <div className="card sales-action">{body}</div>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+// --- page -----------------------------------------------------------------------------
+
 export function SalesDashboardPage() {
-  const [params, setParams] = useSearchParams();
-  const raw = params.get('funil');
-  const pipeline: LeadPipeline = isPipeline(raw) ? raw : 'expansao';
-  const query = useSalesDashboard(pipeline);
+  const controls = useFilters();
+  const { filters } = controls;
+  const query = useSalesDashboard(queryOf(filters));
   const data = query.data;
+  const own = data?.scope === 'own';
+  const compared =
+    data && filters.compare !== 'none'
+      ? rangeText(filters.compare === 'previous' ? data.ranges.previous : data.ranges.previousYear)
+      : null;
 
   return (
     <>
-      <header className="page-header page-header-row sales-header">
-        <div>
-          <h1>Painel de vendas</h1>
-          <p>
-            Negociações do CRM por etapa, marca e vendedor. Conversão: ganhas ÷ (ganhas + perdidas)
-            fechadas nos últimos 90 dias.
-          </p>
-        </div>
-        <div className="sales-funnels" role="group" aria-label="Funil">
-          {LEAD_PIPELINES.map((key) => (
-            <button
-              key={key}
-              type="button"
-              className={`btn btn-sm${key === pipeline ? ' btn-primary' : ''}`}
-              aria-pressed={key === pipeline}
-              onClick={() => {
-                const next = new URLSearchParams(params);
-                next.set('funil', key);
-                setParams(next, { replace: true });
-              }}
-            >
-              {LEAD_PIPELINE_LABELS[key]}
-            </button>
-          ))}
-        </div>
+      <header className="page-header sales-header">
+        <h1>Painel de vendas</h1>
+        <p>
+          {own ? 'As suas negociações' : 'Negociações do CRM'}
+          {data ? ` · ${rangeText(data.ranges.current)}` : ''}
+          {compared ? ` · comparado com ${compared}` : ''}
+        </p>
       </header>
+      <FilterBar {...controls} data={data} />
 
       {query.isError && !data && (
         <p className="muted">
@@ -281,21 +989,49 @@ export function SalesDashboardPage() {
       {!data && query.isLoading && <p className="muted">Carregando…</p>}
       {data && (
         <>
-          <Indicators data={data} />
+          <Executive data={data} compare={filters.compare} />
           <div className="sales-grid">
-            <section className="card sales-card sales-card-wide" aria-labelledby="sales-funnel">
-              <h2 id="sales-funnel">Funil por etapa · {LEAD_PIPELINE_LABELS[pipeline]}</h2>
-              <StageFunnel data={data} pipeline={pipeline} />
-            </section>
-            <section className="card sales-card" aria-labelledby="sales-brands">
-              <h2 id="sales-brands">Abertas por marca</h2>
-              <BrandDonut data={data} />
-            </section>
-            <section className="card sales-card" aria-labelledby="sales-sellers">
-              <h2 id="sales-sellers">Por vendedor</h2>
-              <SellerBars data={data} />
-            </section>
+            <Card
+              id="sales-funnel"
+              title={`Funil${data.pipeline ? ` · ${LEAD_PIPELINE_LABELS[data.pipeline]}` : ''}`}
+              note="Das negociações criadas no período, quantas chegaram a cada etapa e quantas passaram à seguinte. Dias na etapa: média das saídas no período."
+              wide
+            >
+              <Funnel data={data} />
+            </Card>
+            {!own && (
+              <Card
+                id="sales-sellers"
+                title="Ranking de vendedores"
+                note={`Pelas ganhas no período. Meta: ${DASH} ${REASON.goal}.`}
+                wide
+              >
+                <Sellers data={data} />
+              </Card>
+            )}
+            {!own && (
+              <Card id="sales-brands" title={data.pipeline ? 'Por marca' : 'Por marca e serviço'}>
+                <Brands data={data} />
+              </Card>
+            )}
+            {!own && (
+              <Card id="sales-origins" title="Por origem e campanha" wide>
+                <Origins data={data} ownerFiltered={!!filters.owner} />
+              </Card>
+            )}
+            {!own && (
+              <Card id="sales-regions" title="Por região · UF pelo DDD do telefone">
+                <Regions data={data} />
+              </Card>
+            )}
+            <Card id="sales-lost" title="Motivos de perda" wide>
+              <LostReasons data={data} />
+            </Card>
           </div>
+          <section aria-labelledby="sales-actions" className="sales-actions-row">
+            <h2 id="sales-actions">Ações</h2>
+            <Actions data={data} filters={filters} />
+          </section>
         </>
       )}
     </>
