@@ -225,7 +225,11 @@ describe('Dashboard › Vendas v1', () => {
       outcome: 'open',
       source: 'rd_station',
     });
-    expect(within(actions).getByRole('link', { name: /Primeiro contato atrasado/ })).toBeTruthy();
+    expect(
+      within(actions).getByRole('link', {
+        name: /Primeiro contato atrasado.*a lista abre todas as tarefas/,
+      }),
+    ).toBeTruthy();
     expect(within(actions).getByText('as etapas ainda não têm prazo cadastrado')).toBeTruthy();
     expect(within(actions).queryByRole('link', { name: /Fecham em até 15 dias/ })).toBeNull();
   });

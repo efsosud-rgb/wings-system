@@ -907,6 +907,8 @@ interface Action {
   reason?: string;
   /** Under a count: its value, or why no list opens. */
   note?: string;
+  /** Under a count with a list: what the list shows. */
+  hint?: string;
   to: string | null;
 }
 
@@ -954,6 +956,7 @@ function Actions({ data, filters }: { data: SalesDashboard; filters: Filters }) 
       key: 'first',
       title: 'Primeiro contato atrasado',
       value: data.actions.firstContactOverdue,
+      hint: 'a lista abre todas as tarefas do funil, não só as de primeiro contato',
       to: crm({ visao: 'activities' }),
     },
     {
@@ -980,6 +983,7 @@ function Actions({ data, filters }: { data: SalesDashboard; filters: Filters }) 
             <strong>{item.value === null ? DASH : formatInt(item.value)}</strong>
             <span>{item.title}</span>
             {item.value === null && <span className="cell-sub">{item.reason}</span>}
+            {open && item.to && item.hint && <span className="cell-sub">{item.hint}</span>}
             {open && !item.to && (
               <span className="cell-sub">
                 {item.note ?? 'escolha um funil no filtro para abrir a lista'}
