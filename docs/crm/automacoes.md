@@ -53,6 +53,14 @@ Sem WhatsApp nem e-mail por enquanto.
 `{{vendedor}}`, `{{etapa}}`; qualquer outra é recusada ao salvar. O texto fica no outbox
 (a ficha do lead), nunca em log.
 
+**Pela ficha da negociação** (aba E-mail): a pessoa escolhe um modelo ativo, lê a prévia já
+preenchida e envia. Só modelos, sem texto livre. `GET /leads/:id/emails` (modelos ativos e o
+que já foi registrado), `POST /leads/:id/emails/preview` e `POST /leads/:id/emails`
+(`leads.write`, no escopo de quem chama: o vendedor só a ficha dos seus leads, o resto responde
+404). Mesmo serviço das regras (`sendTemplateToLead`), mesmo outbox e o mesmo evento
+`lead.email_sent`; auditoria `lead.email_sent` / `lead.email_failed` só com ids. Em modo `test`
+(o padrão) nada sai: a tela diz "Registrado (modo de teste)". Sem migração.
+
 ## Migração
 
 `0066_crm_automations` (8 tabelas; renumerar no merge se outra entrar antes). `wings_ro` lê
