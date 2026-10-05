@@ -1,12 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { WINGS_CLIENT_ID } from '@wings/shared';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../../db/client.js';
 import {
   crmDistributionMembers,
   crmNotifications,
+  employees,
   leadTasks,
+  roles,
 } from '../../db/schema/index.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee } from '../../test/factories.js';
@@ -100,6 +102,16 @@ describe('arrival notices', () => {
     expect(await db.$count(leadTasks, eq(leadTasks.leadId, born.lead.id))).toBe(0);
   });
 
+  it('Admin Master also hears of a lead with no owner, so the notice never has nobody to receive it', async () => {
+    const admin = await createEmployee(db, { role: 'admin_master', sector: 'diretoria' });
+    const born = await arrive({ phone: '5511900005555', pipeline: 'consultoria' });
+    expect(born.lead.ownerEmployeeId).toBeNull();
+    const notices = await noticesOf(born.lead.id);
+    expect(
+      notices.some((n) => n.recipientEmployeeId === admin.id && n.kind === 'lead_unassigned'),
+    ).toBe(true);
+  });
+
   it('an import and the RD mirror make no arrival notice', async () => {
     const imported = await arrive({
       phone: '5511900007001',
@@ -116,54 +128,79 @@ describe('arrival notices', () => {
   });
 });
 
-describe('migration 0069: the vendedor_formatacao people in the Formatação rotation', () => {
+describe('migration 0070: Formatação rotation = active vendedor_formatacao only', () => {
   const file = readFileSync(
-    new URL('../../../migrations/0069_crm_rotation_formatacao_diretoria.sql', import.meta.url),
+    new URL('../../../migrations/0070_crm_rotation_formatacao_vendedoras.sql', import.meta.url),
     'utf8',
   );
   const run = () => db.execute(sql.raw(file));
-  const members = () =>
-    db
-      .select()
-      .from(crmDistributionMembers)
-      .where(eq(crmDistributionMembers.pipeline, 'formatacao'));
-  const clear = () =>
-    db.delete(crmDistributionMembers).where(eq(crmDistributionMembers.pipeline, 'formatacao'));
+  const members = (pipeline = 'formatacao') =>
+    db.select().from(crmDistributionMembers).where(eq(crmDistributionMembers.pipeline, pipeline));
+  const clear = (pipeline = 'formatacao') =>
+    db.delete(crmDistributionMembers).where(eq(crmDistributionMembers.pipeline, pipeline));
+  const put = (pipeline: string, employeeId: string, active = true) =>
+    db.insert(crmDistributionMembers).values({ pipeline, employeeId, active });
 
-  it('does not fail when nobody has the role, and leaves the rotation empty', async () => {
+  it('removes who has no vendedor_formatacao role (Thais as Diretoria), adds who has it, once', async () => {
     await clear();
-    await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
-    await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
-    await run();
-    expect(await members()).toHaveLength(0);
-  });
-
-  it('adds the active vendedor_formatacao (not Diretoria, not other sellers, not inactive), once', async () => {
-    await clear();
+    const thais = await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
     const daniela = await createEmployee(db, { role: 'vendedor_formatacao', sector: 'comercial' });
+    const paused = await createEmployee(db, { role: 'vendedor_formatacao', sector: 'comercial' });
     await createEmployee(db, {
       role: 'vendedor_formatacao',
       sector: 'comercial',
       status: 'inactive',
     });
-    await createEmployee(db, { role: 'gerente_comercial', sector: 'comercial' });
-    await run();
-    expect((await members()).map((m) => m.employeeId)).toEqual([daniela.id]);
-    expect((await members())[0]?.active).toBe(true);
-    await run();
-    expect(await members()).toHaveLength(1);
-  });
-
-  it('never touches a rotation that already has someone', async () => {
-    const someone = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
-    await clear();
-    await db
-      .insert(crmDistributionMembers)
-      .values({ pipeline: 'formatacao', employeeId: someone.id, active: false });
-    await createEmployee(db, { role: 'vendedor_formatacao', sector: 'comercial' });
+    await put('formatacao', thais.id);
+    await put('formatacao', paused.id, false);
     await run();
     const rows = await members();
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ employeeId: someone.id, active: false });
+    expect(rows.map((m) => m.employeeId).sort()).toEqual([daniela.id, paused.id].sort());
+    expect(rows.find((m) => m.employeeId === paused.id)?.active).toBe(false);
+    expect(rows.find((m) => m.employeeId === daniela.id)?.active).toBe(true);
+    await run();
+    expect(await members()).toHaveLength(2);
+  });
+
+  it('removes a deactivated seller too, and leaves Expansão and Consultoria untouched', async () => {
+    await clear();
+    await clear('expansao');
+    await clear('consultoria');
+    const gone = await createEmployee(db, {
+      role: 'vendedor_formatacao',
+      sector: 'comercial',
+      status: 'inactive',
+    });
+    const fernando = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
+    const boss = await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
+    await put('formatacao', gone.id);
+    await put('expansao', fernando.id);
+    await put('consultoria', boss.id);
+    await run();
+    expect((await members()).map((m) => m.employeeId)).not.toContain(gone.id);
+    expect((await members('expansao')).map((m) => m.employeeId)).toEqual([fernando.id]);
+    expect((await members('consultoria')).map((m) => m.employeeId)).toEqual([boss.id]);
+  });
+
+  it('with nobody holding the role the rotation ends up empty without failing, and a new Formatação lead warns Diretoria', async () => {
+    await clear();
+    await db
+      .update(employees)
+      .set({ status: 'inactive', deactivatedAt: new Date() })
+      .where(
+        inArray(
+          employees.roleId,
+          db.select({ id: roles.id }).from(roles).where(eq(roles.key, 'vendedor_formatacao')),
+        ),
+      );
+    await run();
+    expect(await members()).toHaveLength(0);
+    const board = await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
+    const born = await arrive({ phone: '5511900006666', pipeline: 'formatacao' });
+    expect(born.lead.ownerEmployeeId).toBeNull();
+    const warned = await noticesOf(born.lead.id);
+    expect(
+      warned.some((n) => n.recipientEmployeeId === board.id && n.kind === 'lead_unassigned'),
+    ).toBe(true);
   });
 });

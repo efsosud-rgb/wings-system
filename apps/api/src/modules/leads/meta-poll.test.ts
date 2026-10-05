@@ -324,6 +324,7 @@ describe('backfill: leads already old when read', () => {
       .delete(crmDistributionMembers)
       .where(eq(crmDistributionMembers.pipeline, 'formatacao'));
     const board = await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
+    const admin = await createEmployee(db, { role: 'admin_master', sector: 'diretoria' });
     const manager = await createEmployee(db, {
       role: 'gerente_comercial',
       sector: 'comercial',
@@ -336,6 +337,9 @@ describe('backfill: leads already old when read', () => {
     const counted = await notices(board.id, 'backfill_unassigned');
     expect(counted).toHaveLength(1);
     expect(counted[0]?.message).toContain('3 leads antigos da Meta entraram sem dono');
+    expect((await notices(admin.id, 'backfill_unassigned'))[0]?.message).toContain(
+      '3 leads antigos',
+    );
     expect(await notices(board.id, 'lead_unassigned')).toHaveLength(0);
     expect(await notices(manager.id, 'lead_unassigned')).toHaveLength(0);
     oldBatch = [];
