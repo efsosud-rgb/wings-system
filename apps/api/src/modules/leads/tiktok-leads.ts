@@ -9,7 +9,7 @@ import { announceBackfill, type BackfillTally } from './crm-alerts.js';
 import { entryStageOf } from './crm.js';
 import { classifyFormName, noticeUnclassifiedForm } from './meta-form-routing.js';
 import { copyToRd, RD_TIKTOK_SOURCE_CANDIDATES, type OriginFacts } from './meta-intake.js';
-import { resolveTikTokSource, upsertLead } from './service.js';
+import { answersPhone, resolveTikTokSource, upsertLead } from './service.js';
 
 /**
  * TikTok Lead Ads → Funil (docs/leads/tiktok-lead-ads.md).
@@ -390,7 +390,7 @@ export async function ingestTikTokLeads(
 
   for (const lead of incoming) {
     try {
-      const phone = normalizeBrazilianPhone(lead.phone);
+      const phone = normalizeBrazilianPhone(lead.phone ?? answersPhone(lead.answers));
       const email = normalizeEmail(lead.email);
       if (!phone && !email) {
         result.skipped += 1;

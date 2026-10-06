@@ -1,6 +1,6 @@
 import { tmpdir } from 'node:os';
 import { runFfmpeg, runFfprobe, runWhisper } from './lib/commands.js';
-import { createBraveSearch, createBrasilApi, createZapiProfileClient } from './lib/enrichment.js';
+import { createBraveSearch, createBrasilApi, createLeadResearchProvider, createZapiProfileClient } from './lib/enrichment.js';
 import { createS3Storage } from './lib/storage.js';
 import { concurrencyOf, threadsPerJob } from './concurrency.js';
 import { createPool, waitForJobsTable } from './db/client.js';
@@ -63,6 +63,7 @@ async function main() {
         search,
         cnpj: createBrasilApi({ baseUrl: env.BRASILAPI_BASE_URL, log }),
         budget: { dailyUsd: env.ENRICH_DAILY_USD, searchUsdPerQuery: env.ENRICH_SEARCH_USD_PER_QUERY },
+        research: createLeadResearchProvider(),
       },
     },
     { jobTypes, concurrency, pollIntervalMs: env.WORKER_POLL_INTERVAL_MS, maxAttempts: env.WORKER_MAX_ATTEMPTS },

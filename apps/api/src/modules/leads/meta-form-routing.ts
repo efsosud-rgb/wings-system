@@ -59,7 +59,7 @@ export async function classifyFormName(
 export async function noticeUnclassifiedForm(
   db: Database,
   formId: string | null,
-  platform: 'meta' | 'tiktok' = 'meta',
+  platform: 'meta' | 'tiktok' | 'google' = 'meta',
 ): Promise<void> {
   const board = await db
     .select({ id: employees.id })
@@ -76,7 +76,9 @@ export async function noticeUnclassifiedForm(
         message:
           platform === 'tiktok'
             ? 'Um formulário da TikTok sem regra trouxe lead: ele entrou em Formatação. Crie a regra do formulário (Landing pages) para mandar ao funil certo.'
-            : 'Um formulário do Meta sem regra trouxe lead: ele entrou em Formatação. Crie a regra do formulário (Landing pages) para mandar ao funil certo.',
+            : platform === 'google'
+              ? 'Um formulário do Google Ads sem regra trouxe lead: ele entrou em Formatação. Crie a regra do formulário ou da campanha (Landing pages) para mandar ao funil certo.'
+              : 'Um formulário do Meta sem regra trouxe lead: ele entrou em Formatação. Crie a regra do formulário (Landing pages) para mandar ao funil certo.',
         dedupeKey: `${platform}_form_unclassified:${formId ?? 'desconhecido'}:${person.id}`,
       })),
     )

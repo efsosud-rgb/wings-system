@@ -1,3 +1,4 @@
+import type { LeadChecks } from './lead-fields.js';
 import { z } from 'zod';
 import type { LeadContactRef } from './crm.js';
 
@@ -21,6 +22,7 @@ export const LEAD_SOURCES = [
   'whatsapp_link',
   'meta_lead_ads',
   'tiktok_lead_ads',
+  'google_lead_form',
   'manual',
   'rd_crm',
   'site_form',
@@ -33,6 +35,7 @@ export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
   whatsapp_link: 'WhatsApp (link rastreável)',
   meta_lead_ads: 'Meta Lead Ads',
   tiktok_lead_ads: 'TikTok Lead Ads',
+  google_lead_form: 'Formulário do Google Ads',
   manual: 'Cadastro manual',
   rd_crm: 'RD CRM (importado)',
   site_form: 'Formulário do site',
@@ -74,6 +77,7 @@ export const LEAD_CHANNELS = [
   'landing_page',
   'meta_lead_ads',
   'tiktok_lead_ads',
+  'google_lead_form',
 ] as const;
 export type LeadChannel = (typeof LEAD_CHANNELS)[number];
 
@@ -86,6 +90,7 @@ export const LEAD_CHANNEL_LABELS: Record<LeadChannel, string> = {
   landing_page: 'Landing page',
   meta_lead_ads: 'Meta Lead Ads',
   tiktok_lead_ads: 'TikTok Lead Ads',
+  google_lead_form: 'Google Ads (formulário)',
 };
 
 // --- LGPD ---------------------------------------------------------------------
@@ -316,6 +321,8 @@ export const LEAD_SOURCE_RULE_KINDS = [
   'meta_campaign',
   'tiktok_form',
   'tiktok_campaign',
+  'google_form',
+  'google_campaign',
 ] as const;
 export type LeadSourceRuleKind = (typeof LEAD_SOURCE_RULE_KINDS)[number];
 
@@ -325,6 +332,8 @@ export const LEAD_SOURCE_RULE_KIND_LABELS: Record<LeadSourceRuleKind, string> = 
   meta_campaign: 'Campanha do Meta (id da campanha)',
   tiktok_form: 'Formulário do TikTok Lead Ads (id do formulário)',
   tiktok_campaign: 'Campanha do TikTok (id da campanha)',
+  google_form: 'Formulário de lead do Google Ads (id do formulário)',
+  google_campaign: 'Campanha do Google Ads (id da campanha)',
 };
 
 export interface LeadSourceRule {
@@ -763,6 +772,13 @@ export interface LeadEvent {
   detail: Record<string, unknown>;
 }
 
+export interface LeadFormFields {
+  instagram: string | null;
+  website: string | null;
+  companyName: string | null;
+  cnpj: string | null;
+}
+
 export interface Lead {
   id: string;
   name: string | null;
@@ -772,6 +788,10 @@ export interface Lead {
   city: string | null;
   /** A form's other answers (question -> answer), without the contact fields; null when none. */
   formAnswers: Record<string, string> | null;
+  /** The form fields in their own place (Instagram, site, company, CNPJ); null when the form did not bring them. */
+  fields: LeadFormFields;
+  /** What was checked on arrival, per field; a missing key = not checked yet. */
+  checks: LeadChecks;
   status: 'new';
   ownerEmployeeId: string | null;
   firstMessage: string | null;
@@ -1243,6 +1263,15 @@ export const siteFormSubmitSchema = z.object({
     .refine((value) => value.replace(/\D/g, '').length >= 10, 'Telefone com DDD'),
   consent: z.literal(true, { error: 'É preciso autorizar o contato' }),
   turnstileToken: z.string().min(1, 'Confirme que você não é um robô').max(4096),
+  /**
+   * The form fields every campaign asks (docs/leads/formularios.md). Optional
+   * here so an older page still works; the page asks for them. `siteUrl`, not
+   * `website`: that name is the honeypot below.
+   */
+  instagram: z.string().trim().max(120).optional(),
+  siteUrl: z.string().trim().max(300).optional(),
+  companyName: z.string().trim().max(200).optional(),
+  cnpj: z.string().trim().max(30).optional(),
   /** Honeypot: a field people never see; anything in it is a robot. */
   website: z.string().max(500).optional(),
   /** The page the form was sent from (origin + path + query). */

@@ -16,8 +16,12 @@ import {
   type LeadNote,
   type LeadTask,
   type LeadTaskKind,
+  LEAD_CHECK_LABELS,
+  normalizeInstagram,
+  normalizeWebsite,
+  type LeadCheck,
 } from '@wings/shared';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../../api/auth.js';
 import { ApiError } from '../../api/client.js';
@@ -30,6 +34,7 @@ import {
 } from '../../api/crm.js';
 import {
   useAddNote,
+  useCheckLead,
   useCreateTask,
   useLead,
   useSellers,
@@ -126,7 +131,7 @@ export function DealPage() {
           <div className="crm-stack">
             <ContactPanel data={data} canWrite={canWrite} />
             <CompanyPanel lead={data.lead} canWrite={canWrite} />
-            <OriginPanel lead={data.lead} />
+            <OriginPanel lead={data.lead} canWrite={canWrite} />
           </div>
           <div className="crm-stack">
             {canWrite && <Register lead={data.lead} />}
@@ -616,7 +621,97 @@ function CompanyPanel({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
   );
 }
 
-function OriginPanel({ lead }: { lead: Lead }) {
+/** One form field and what the arrival check said about it; "—" and the reason when missing. */
+function FieldCheckRow({
+  label,
+  value,
+  check,
+}: {
+  label: string;
+  value: ReactNode | null;
+  /** null: a field that is not checked (shown without a badge). */
+  check: LeadCheck | undefined | null;
+}) {
+  return (
+    <>
+      <dt>{label}</dt>
+      <dd>
+        <span className="crm-field-value">{value ?? '—'}</span>
+        {check === null ? null : check ? (
+          <span className={`crm-check is-${check.status}`}>{LEAD_CHECK_LABELS[check.status]}</span>
+        ) : (
+          <span className="crm-check is-nao_verificado">Não conferido ainda</span>
+        )}
+        {check?.reason ? <span className="crm-sub crm-check-reason">{check.reason}</span> : null}
+      </dd>
+    </>
+  );
+}
+
+function FormFields({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
+  const recheck = useCheckLead();
+  const { fields, checks } = lead;
+  const site = fields.website;
+  // Links only for what passed the format check: never an IP, never a broken @.
+  const siteLink =
+    site && normalizeWebsite(site) === site ? (
+      <a href={site} target="_blank" rel="noopener noreferrer nofollow">
+        {site.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+      </a>
+    ) : (
+      site
+    );
+  return (
+    <>
+      <h3 className="crm-subhead">Dados do formulário</h3>
+      <dl className="crm-kv crm-checks">
+        <FieldCheckRow label="Nome" value={lead.name} check={null} />
+        <FieldCheckRow
+          label="WhatsApp"
+          value={lead.phone ? 'ver em Contato' : null}
+          check={checks.whatsapp}
+        />
+        <FieldCheckRow
+          label="Instagram"
+          value={
+            fields.instagram && normalizeInstagram(fields.instagram) === fields.instagram ? (
+              <a
+                href={`https://www.instagram.com/${fields.instagram}/`}
+                target="_blank"
+                rel="noopener noreferrer nofollow"
+              >
+                @{fields.instagram}
+              </a>
+            ) : (
+              fields.instagram
+            )
+          }
+          check={checks.instagram}
+        />
+        <FieldCheckRow label="Site" value={siteLink} check={checks.website} />
+        <FieldCheckRow label="Nome da empresa" value={fields.companyName} check={null} />
+        <FieldCheckRow label="CNPJ" value={fields.cnpj} check={checks.cnpj} />
+      </dl>
+      {canWrite ? (
+        <p>
+          <button
+            type="button"
+            className="crm-btn"
+            disabled={recheck.isPending}
+            onClick={() => recheck.mutate(lead.id)}
+          >
+            {recheck.isPending ? 'Conferindo…' : 'Conferir de novo'}
+          </button>
+          {recheck.isError ? (
+            <span className="crm-sub"> Não foi possível conferir agora.</span>
+          ) : null}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+function OriginPanel({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
   const { origin } = lead;
   return (
     <section className="crm-panel">
@@ -662,6 +757,7 @@ function OriginPanel({ lead }: { lead: Lead }) {
           </>
         )}
       </dl>
+      <FormFields lead={lead} canWrite={canWrite} />
       {lead.formAnswers && Object.keys(lead.formAnswers).length > 0 && (
         <details>
           <summary className="crm-sub">
