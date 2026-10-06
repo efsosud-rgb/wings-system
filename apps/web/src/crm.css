@@ -1112,6 +1112,252 @@
   .crm-deal-body {
     grid-template-columns: 1fr;
   }
+  /* on one column, what is next (the first contact, the register) comes first */
+  .crm-deal-body .crm-stack.is-center {
+    order: -1;
+  }
+}
+
+/* the deal's name: a heading until clicked, then a field */
+.crm-name-edit {
+  all: unset;
+  cursor: text;
+  border-bottom: 1px dashed transparent;
+}
+.crm-name-edit:hover,
+.crm-name-edit:focus-visible {
+  border-bottom-color: var(--line-strong);
+}
+.crm-name-edit:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-xs);
+}
+.crm-name-form {
+  display: inline-grid;
+  gap: var(--space-1);
+}
+.crm-name-form .crm-input {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  min-width: 240px;
+  max-width: 100%;
+}
+.crm-badge.is-new {
+  --tone: var(--accent);
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+}
+.crm-stage-days {
+  font-weight: var(--weight-regular);
+  opacity: 0.85;
+}
+
+/* the action bar: icon above label, one tab stop each */
+.crm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-5);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.crm-action {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  min-width: 64px;
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.crm-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+}
+.crm-action:hover:not(:disabled) {
+  color: var(--text);
+}
+.crm-action:hover:not(:disabled) .crm-action-icon,
+.crm-action.is-active .crm-action-icon {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.crm-action.is-active {
+  color: var(--accent);
+}
+.crm-action:disabled {
+  cursor: default;
+  color: var(--text-3);
+}
+.crm-action:disabled .crm-action-icon {
+  color: var(--text-3);
+  border-style: dashed;
+  background: none;
+}
+.crm-action small {
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-3);
+}
+.crm-action:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.crm-action-more .crm-menu-list {
+  right: auto;
+  left: 0;
+}
+
+/* "Nova negociação: faça o primeiro contato até HH:MM" */
+.crm-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--accent);
+  border-left-width: 4px;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft, var(--surface));
+  color: var(--accent);
+}
+.crm-strip > div {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text);
+}
+.crm-strip .crm-sub {
+  color: var(--text-2);
+}
+.crm-strip.is-late {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.crm-strip .crm-quick-row {
+  flex-wrap: wrap;
+}
+.crm-countdown.is-inline {
+  font-size: inherit;
+  font-weight: var(--weight-semibold);
+}
+/* "Sobre a negociação" and the cards on the right */
+.crm-about {
+  grid-template-columns: 110px 1fr;
+}
+.crm-about dd {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.crm-about .crm-inline-edit {
+  background: none;
+  border: none;
+  border-bottom: 1px dashed var(--line-strong);
+  color: var(--text);
+  font: inherit;
+  padding: 0 2px;
+  min-width: 80px;
+  max-width: 100%;
+}
+.crm-about .crm-inline-edit:focus {
+  outline: none;
+  border-bottom-color: var(--accent);
+}
+.crm-about .crm-date-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.crm-about .crm-inline-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.crm-about .crm-record-form {
+  width: 100%;
+}
+.crm-about-company {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+.crm-fields-custom {
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-md);
+}
+.crm-fields-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.crm-fields-row label {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.crm-reach {
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-md);
+}
+.crm-reach > span {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.crm-reach a {
+  overflow-wrap: anywhere;
+}
+.crm-copy {
+  padding: 0 var(--space-2);
+}
+.crm-count {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+.crm-assoc-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-md);
+}
+.crm-copy-phone {
+  display: inline-flex;
+  gap: var(--space-1);
 }
 .crm-panel {
   background: var(--surface);
@@ -1409,12 +1655,7 @@
   }
 }
 
-/* Origem → Dados do formulário: each field with what the arrival check said. */
-.crm-subhead {
-  margin: 14px 0 6px;
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-}
+/* Dados do formulário: each field with what the arrival check said. */
 .crm-checks dd {
   display: flex;
   flex-wrap: wrap;
@@ -1447,4 +1688,356 @@
 }
 .crm-check-reason {
   flex-basis: 100%;
+}
+/* ---------- deal page: the sections in the centre (Etapa 3) ---------- */
+.crm-deal-tabs .crm-record-tabs button small {
+  font-size: var(--text-xs);
+  color: var(--text-3);
+  margin-left: 2px;
+}
+.crm-deal-tab-body {
+  padding-top: var(--space-3);
+  display: grid;
+  gap: var(--space-3);
+}
+.crm-history {
+  display: grid;
+  gap: var(--space-3);
+}
+.crm-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.crm-chip {
+  font: inherit;
+  font-size: var(--text-xs);
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.crm-chip.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.crm-tl-icon.is-email {
+  background: var(--info-soft);
+}
+.crm-tl-icon.is-file {
+  background: var(--accent-soft);
+}
+.crm-tasks-tab {
+  display: grid;
+  gap: var(--space-2);
+}
+.crm-tasks-tab .crm-quick-row,
+.crm-files .crm-quick-row {
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2);
+}
+.crm-task-line.is-done {
+  color: var(--text-2);
+}
+.crm-task-line.is-done > svg {
+  margin-top: 3px;
+  color: var(--success);
+}
+.crm-first-message {
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--text-md);
+}
+.crm-files {
+  display: grid;
+  gap: var(--space-2);
+}
+.crm-file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+.crm-file-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-md);
+}
+.crm-file-row > svg {
+  flex: none;
+  color: var(--text-2);
+}
+.crm-file-name {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+}
+.crm-file-name .crm-sub {
+  font-size: var(--text-xs);
+}
+.crm-link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.crm-link-btn:hover {
+  text-decoration: underline;
+}
+.crm-deal-tabs .crm-record-tabs {
+  flex-wrap: wrap;
+  overflow: visible;
+}
+.crm-deal-tabs .crm-record-tabs button {
+  padding-inline: var(--space-2);
+  font-size: var(--text-sm);
+}
+.crm-deal-tabs .crm-record-tabs button:disabled small {
+  display: block;
+  line-height: 1;
+  margin: 0;
+}
+
+/* ---------- deal page: the AI summary (Etapa 4) ---------- */
+.crm-summary {
+  display: grid;
+  gap: var(--space-2);
+}
+.crm-summary-text {
+  margin: 0;
+  font-size: var(--text-md);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.crm-summary-text.is-empty {
+  color: var(--text-2);
+}
+.crm-summary-ask {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+.crm-summary-answer {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--accent-soft);
+  border-radius: var(--radius-md);
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+.crm-summary .crm-error {
+  grid-column: 1 / -1;
+}
+
+/* ---------- WhatsApp conversation of a deal ---------- */
+.crm-wa {
+  background: var(--surface-2, var(--surface));
+}
+.crm-wa-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.crm-wa-who {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1;
+  min-width: 0;
+}
+.crm-wa-who h1 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crm-wa-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--success-soft);
+  color: var(--success);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.crm-wa-calls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.crm-icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.crm-icon-btn:disabled {
+  color: var(--text-3);
+  cursor: default;
+}
+.crm-wa-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5) var(--space-5);
+}
+.crm-wa-chat {
+  display: flex;
+  flex-direction: column;
+  min-height: 420px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.crm-wa-messages {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: var(--space-5);
+  background-image: radial-gradient(var(--line) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+.crm-wa-empty {
+  margin: 0;
+  max-width: 360px;
+  text-align: center;
+  color: var(--text-2);
+  font-size: var(--text-md);
+  background: var(--surface);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+}
+.crm-wa-compose {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-top: 1px solid var(--line);
+}
+.crm-wa-compose .crm-input {
+  flex: 1;
+}
+.crm-wa-side {
+  display: grid;
+  gap: var(--space-3);
+  align-content: start;
+  min-width: 0;
+}
+@media (max-width: 1100px) {
+  .crm-wa-body {
+    grid-template-columns: minmax(0, 1fr);
+    padding: var(--space-3) var(--space-4);
+  }
+  .crm-wa-chat {
+    min-height: 320px;
+  }
+}
+@media (max-width: 640px) {
+  .crm-wa-head {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+  }
+  .crm-wa-body {
+    padding: var(--space-3);
+  }
+}
+
+/* ---------- deal page: Reunião ---------- */
+.crm-meetings {
+  display: grid;
+  gap: var(--space-2);
+}
+.crm-meetings-actions {
+  flex-wrap: wrap;
+}
+.crm-meetings-buttons {
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+.crm-meetings-buttons small {
+  font-size: var(--text-xs);
+  margin-left: 4px;
+  opacity: 0.8;
+}
+.crm-meeting-client {
+  display: grid;
+  gap: 2px;
+}
+.crm-meeting-list,
+.crm-plain-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--text-md);
+}
+.crm-meeting-row {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+}
+.crm-meeting-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.crm-meeting-line .crm-link-btn {
+  font-weight: var(--weight-medium);
+}
+.crm-meeting-detail {
+  margin-top: var(--space-2);
+  display: grid;
+  gap: var(--space-2);
+}
+.crm-meeting-block h3 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--text-2);
+  font-weight: var(--weight-medium);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2);
+}
+.crm-meeting-block p {
+  margin: 0;
+  font-size: var(--text-md);
+}
+.crm-next-step {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  align-items: center;
 }

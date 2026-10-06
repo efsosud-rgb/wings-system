@@ -25,6 +25,7 @@ import { CrmSettingsPage } from './pages/crm/CrmSettingsPage.js';
 import { AutomationsPage } from './pages/crm/AutomationsPage.js';
 import { NotificationsPage } from './pages/crm/NotificationsPage.js';
 import { DealPage } from './pages/crm/DealPage.js';
+import { DealWhatsAppPage } from './pages/crm/DealWhatsAppPage.js';
 import { DealsPage } from './pages/crm/DealsPage.js';
 import { TasksPage } from './pages/crm/TasksPage.js';
 import { LoginPage } from './pages/LoginPage.js';
@@ -77,6 +78,7 @@ const SCREENS: Record<string, RouteObject[]> = {
   '/crm-vendas/negociacoes': [
     { index: true, element: <DealsPage /> },
     { path: ':id', element: <DealPage /> },
+    { path: ':id/whatsapp', element: <DealWhatsAppPage /> },
   ],
   '/crm-vendas/contatos': [
     { index: true, element: <ContactsPage /> },

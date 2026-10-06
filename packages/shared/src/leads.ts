@@ -1,6 +1,6 @@
 import type { LeadChecks } from './lead-fields.js';
 import { z } from 'zod';
-import type { LeadContactRef } from './crm.js';
+import type { LeadAiSummary, LeadContactRef } from './crm.js';
 
 /**
  * Funil Sofia, part 1: how a lead enters the CRM (capture) and what the
@@ -813,6 +813,8 @@ export interface Lead {
   crm: LeadCrm | null;
   consent: LeadConsent;
   research: LeadResearch;
+  /** The AI summary of the deal (ficha do cliente, Etapa 4); null until asked for. */
+  aiSummary: LeadAiSummary | null;
   createdAt: string;
   updatedAt: string;
 }

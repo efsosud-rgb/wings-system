@@ -155,6 +155,13 @@ export const leads = pgTable(
     referrer: text('referrer'),
     /** The import run that created this lead (`leads-import-rd`), so one run can be undone alone. */
     importBatchId: text('import_batch_id'),
+    /**
+     * The deal's AI summary (ficha do cliente, Etapa 4): `{ text, generatedAt,
+     * model, basedOn: { events, answers } }`, made only from the timeline and
+     * the form answers, never from a phone, an e-mail or a document. Null
+     * until somebody asks for one; re-made on request.
+     */
+    aiSummary: jsonb('ai_summary'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

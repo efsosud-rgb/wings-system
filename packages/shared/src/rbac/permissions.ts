@@ -50,6 +50,8 @@ export const PERMISSIONS = {
   'projects.read': 'Ver o quadro de projetos dos clientes',
   'projects.manage': 'Mudar status, etapa atual e andamento das etapas dos projetos dos clientes',
   'roadmap.manage': 'Editar o roadmap e aprovar o relatório diário para a diretoria',
+  'meetings.approve_send':
+    'Aprovar e mandar o resumo de uma reunião de Expansão ao dono da franqueadora',
   'office.read': 'Ver o escritório virtual (laboratório): equipe, tarefas e eventos do CRM',
 } as const;
 
@@ -106,6 +108,7 @@ const SECTOR_STAFF: RolePermissions = {
  */
 export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   admin_master: {
+    'meetings.approve_send': 'all',
     ...DRIVE_ALL,
     ...PROJECT_ALL,
     // The one connection to Kairogen belongs to the system: only an Admin Master makes it.
@@ -149,6 +152,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'office.read': 'all',
   },
   diretoria: {
+    'meetings.approve_send': 'all',
     ...DRIVE_ALL,
     ...PROJECT_ALL,
     ...CLIENT_RECORD_LEGAL,
@@ -186,6 +190,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'timeclock.read': 'all',
   },
   gerente_comercial: {
+    'meetings.approve_send': 'all',
     ...DRIVE_STAFF,
     ...PROJECT_STAFF,
     'employees.read': 'sector',

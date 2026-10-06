@@ -84,6 +84,7 @@ export interface DealChange {
   brandClientId?: string | null;
   companyId?: string | null;
   companyName?: string;
+  name?: string;
   actorEmployeeId: string | null;
 }
 
@@ -99,6 +100,14 @@ export async function changeDeal(db: Database, change: DealChange): Promise<Deal
     const patch: Partial<typeof leads.$inferInsert> = { updatedAt: now };
     const changed: string[] = [];
     const events: { kind: string; detail: Record<string, unknown> }[] = [];
+
+    if (change.name !== undefined && change.name !== lead.name) {
+      patch.name = change.name;
+      changed.push('name');
+      // The old and new names stay in the event: a person's name is personal
+      // data, but the timeline of the deal is where the team is meant to see it.
+      events.push({ kind: 'lead.renamed', detail: { from: lead.name, to: change.name } });
+    }
 
     if (change.valueCents !== undefined && change.valueCents !== lead.valueCents) {
       patch.valueCents = change.valueCents;
