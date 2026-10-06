@@ -17,13 +17,15 @@ import {
   adExecutions,
   adVideoUploads,
 } from '../../db/schema/index.js';
+import { metaLeadFormSpecOf, registerLeadFormIntake, reusableLeadForm } from './lead-forms.js';
 import { TargetingResolutionError } from './platform/meta-client.js';
-import type {
-  AdSetOptimization,
-  AdTreeWriter,
-  CreativeMedia,
-  ResolvedTargeting,
-  StepOutcome,
+import {
+  isLeadFormWriter,
+  type AdSetOptimization,
+  type AdTreeWriter,
+  type CreativeMedia,
+  type ResolvedTargeting,
+  type StepOutcome,
 } from './platform/types.js';
 
 /**
@@ -41,6 +43,7 @@ export type StepKind =
   | 'campaign'
   | 'image'
   | 'video'
+  | 'lead_form'
   | 'ad_set'
   | 'creative'
   | 'ad'
@@ -255,13 +258,20 @@ export async function priorVideo(
 function optimizationFor(draft: TreeDraft, pixelId: string): AdSetOptimization {
   // Traffic buys landing-page views. Leads — and conversions, which on this
   // account means the same site form — optimise for the pixel's Lead event.
+  // A lead campaign with the form on the ad optimises for the form itself.
+  if (draft.leadCapture === 'instant_form') {
+    return { goal: 'LEAD_GENERATION', pageId: draft.identity.pageId };
+  }
   return draft.objective === 'traffic'
     ? { goal: 'LANDING_PAGE_VIEWS' }
     : { goal: 'OFFSITE_CONVERSIONS', pixelId, event: 'LEAD' };
 }
 
+/** The ad's link when the form is on the ad: the Page itself, as Meta's examples do. */
+export const pageLink = (pageId: string) => `https://www.facebook.com/${pageId}/`;
+
 export type BuildResult =
-  | { status: 'complete'; adSetId: string; adIds: string[] }
+  | { status: 'complete'; adSetId: string; adIds: string[]; leadFormId?: string }
   | { status: 'incomplete'; reason: string };
 
 type Stepper = <T>(
@@ -374,8 +384,41 @@ export function creativeSpecOf(input: {
   variation: CopyVariation;
   position: number;
   mediaOf: (id: string | undefined) => CreativeMedia;
+  /** Lead Ads: the instant form the button opens; the ad then links to the Page, not a site. */
+  leadGenFormId?: string;
 }) {
   const { variation, mediaOf } = input;
+  if (input.leadGenFormId) {
+    const link = pageLink(input.pageId);
+    return {
+      name: input.name,
+      pageId: input.pageId,
+      instagramUserId: input.instagramActorId ?? null,
+      message: variation.primaryText,
+      headline: variation.headline,
+      callToAction: variation.callToAction,
+      link,
+      urlTags: META_URL_TAGS,
+      leadGenFormId: input.leadGenFormId,
+      body:
+        variation.creativeType === 'carousel'
+          ? {
+              type: 'carousel' as const,
+              cards: (variation.cards ?? []).map((card) => ({
+                media: mediaOf(card.mediaType === 'video' ? card.videoId : card.creativeId),
+                headline: card.headline,
+                description: card.description,
+                link,
+              })),
+            }
+          : {
+              type: 'single' as const,
+              media: mediaOf(
+                variation.creativeType === 'video' ? variation.videoId : variation.creativeId,
+              ),
+            },
+    };
+  }
   const ad = { creativeType: variation.creativeType, position: input.position };
   const body =
     variation.creativeType === 'carousel'
@@ -430,6 +473,7 @@ async function createAds(
     variations: CopyVariation[];
     uploaded: Map<string, CreativeMedia>;
     firstPosition: number;
+    leadGenFormId?: string;
   },
 ): Promise<{ ok: true; adIds: string[] } | { ok: false; reason: string }> {
   const mediaOf = (id: string | undefined): CreativeMedia => {
@@ -495,6 +539,8 @@ export async function buildAdTree(
     draft: TreeDraft;
     prepared: PreparedTree;
     pixelId: string;
+    /** Who clicked "executar": recorded as the form's and the funnel rule's author. */
+    actorEmployeeId?: string | null;
   },
 ): Promise<BuildResult> {
   const { draft, prepared } = input;
@@ -503,6 +549,44 @@ export async function buildAdTree(
   // 1. Media.
   const media = await uploadMedia(db, writer, step, input.adAccountId, prepared);
   if (!media.ok) return { status: 'incomplete', reason: media.reason };
+
+  // 1b. The instant form, when the lead is captured on the ad. A form with
+  // the same definition already on the Page is used again; a new one is
+  // created on the Page and, the moment it exists, registered for the lead
+  // intake with its funnel rule — so no lead of it falls into Formatação by
+  // default, whatever happens to the steps after this one.
+  let leadFormId: string | undefined;
+  if (draft.leadCapture === 'instant_form' && draft.leadForm) {
+    const form = draft.leadForm;
+    const pageId = draft.identity.pageId;
+    const name = `${draft.name} — formulário`;
+    if (!isLeadFormWriter(writer)) {
+      return {
+        status: 'incomplete',
+        reason: 'Formulário: este ambiente não cria formulários instantâneos.',
+      };
+    }
+    const existing = await reusableLeadForm(db, { pageId, form });
+    const created = await step(
+      'lead_form',
+      existing ? `Formulário ${existing.name} (reaproveitado)` : `Formulário ${name}`,
+      () =>
+        existing
+          ? Promise.resolve({ status: 'created' as const, value: { id: existing.externalId } })
+          : writer.createLeadForm(metaLeadFormSpecOf({ form, pageId, name })),
+      (value) => value.id,
+    );
+    if (!created.ok) return { status: 'incomplete', reason: created.reason };
+    leadFormId = created.value.id;
+    await registerLeadFormIntake(db, {
+      pageId,
+      formExternalId: leadFormId,
+      name: existing?.name ?? name,
+      form,
+      executionId: input.executionId,
+      createdBy: input.actorEmployeeId ?? null,
+    });
+  }
 
   // 2. The ad set.
   const adSet = await step(
@@ -544,9 +628,15 @@ export async function buildAdTree(
     variations: draft.variations,
     uploaded: media.uploaded,
     firstPosition: 1,
+    ...(leadFormId ? { leadGenFormId: leadFormId } : {}),
   });
   if (!ads.ok) return { status: 'incomplete', reason: ads.reason };
-  return { status: 'complete', adSetId: adSet.value.id, adIds: ads.adIds };
+  return {
+    status: 'complete',
+    adSetId: adSet.value.id,
+    adIds: ads.adIds,
+    ...(leadFormId ? { leadFormId } : {}),
+  };
 }
 
 /**

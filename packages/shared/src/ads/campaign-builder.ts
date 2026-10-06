@@ -1644,8 +1644,10 @@ const brDate = (value: string) => value.split('-').reverse().join('/');
 export function describeLeadCapture(
   draft: Pick<CampaignDraft, 'leadCapture' | 'leadForm'>,
 ): string {
-  if (!draft.leadForm) return draft.leadCapture === 'instant_form' ? 'Formulário no anúncio' : 'Página de destino';
-  const where = draft.leadCapture === 'instant_form' ? 'Formulário no anúncio' : 'Formulário na página';
+  if (!draft.leadForm)
+    return draft.leadCapture === 'instant_form' ? 'Formulário no anúncio' : 'Página de destino';
+  const where =
+    draft.leadCapture === 'instant_form' ? 'Formulário no anúncio' : 'Formulário na página';
   const questions = 5 + (draft.leadForm.qualifier ? 1 : 0);
   const funnel = draft.leadForm.funnel.brand
     ? `${draft.leadForm.funnel.pipeline} · ${draft.leadForm.funnel.brand}`

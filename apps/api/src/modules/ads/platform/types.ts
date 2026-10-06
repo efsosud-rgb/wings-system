@@ -405,7 +405,10 @@ export interface ResolvedTargeting {
 }
 
 export type AdSetOptimization =
-  { goal: 'OFFSITE_CONVERSIONS'; pixelId: string; event: 'LEAD' } | { goal: 'LANDING_PAGE_VIEWS' };
+  | { goal: 'OFFSITE_CONVERSIONS'; pixelId: string; event: 'LEAD' }
+  | { goal: 'LANDING_PAGE_VIEWS' }
+  /** Lead Ads: the form is on the ad (`destination_type: ON_AD`), promoted object is the Page. */
+  | { goal: 'LEAD_GENERATION'; pageId: string };
 
 export interface AdSetSpec {
   campaignId: string;
@@ -453,6 +456,12 @@ export interface CreativeSpec {
   link: string;
   /** The creative's `url_tags`, which Meta appends to every link of the ad (`META_URL_TAGS`). */
   urlTags: string;
+  /**
+   * Lead Ads: the instant form the button opens (`call_to_action.value.lead_gen_form_id`).
+   * With it, `link` is the Page's own address, as Meta's examples do: the ad
+   * leads nowhere outside the form.
+   */
+  leadGenFormId?: string;
   body:
     | { type: 'single'; media: CreativeMedia }
     | {
@@ -503,6 +512,55 @@ export interface AdTreeWriter {
     adSetId: string;
     creativeId: string;
   }): Promise<StepOutcome<{ id: string }>>;
+}
+
+// ---------------------------------------------------------------------------
+// Lead Ads: the instant form
+// ---------------------------------------------------------------------------
+
+/**
+ * Meta's shape of an instant form, as `POST /{page_id}/leadgen_forms` takes
+ * it, already translated from the shared `LeadForm`. The Page token the call
+ * needs is fetched by the client and never leaves it.
+ *
+ * NOT yet verified against the live API (2026-10-06): question `type`s and
+ * keys, `privacy_policy`, `thank_you_page` and `locale` follow the Marketing
+ * API reference; the first real form will say what Meta accepts.
+ */
+export interface MetaLeadFormSpec {
+  pageId: string;
+  name: string;
+  questions: (
+    | { type: 'FULL_NAME' | 'PHONE' | 'COMPANY_NAME'; key: string }
+    | { type: 'CUSTOM'; key: string; label: string; options?: { value: string; key: string }[] }
+  )[];
+  privacyPolicy: { url: string; linkText: string };
+  thankYou: { title: string; body: string; buttonText: string; buttonUrl: string };
+  locale: 'pt_BR';
+}
+
+/** What `GET /{page_id}/leadgen_forms` says about the forms the Page already has: ids, names and the policy link; never a lead. */
+export interface ExistingLeadForm {
+  id: string;
+  name: string;
+  status: string | null;
+  privacyPolicyUrl: string | null;
+}
+
+/** Whether the token can act for the Page (a Page token can be read): `pages_manage_ads` on the system user. */
+export interface PageAccess {
+  pageId: string;
+  canManage: boolean;
+  /** Short code when not: `no_page_token`, `graph_<code>`, `unreachable`. Never the token itself. */
+  reason: string | null;
+}
+
+export interface LeadFormWriter {
+  createLeadForm(spec: MetaLeadFormSpec): Promise<StepOutcome<{ id: string }>>;
+}
+
+export function isLeadFormWriter(client: unknown): client is LeadFormWriter {
+  return typeof (client as Partial<LeadFormWriter>).createLeadForm === 'function';
 }
 
 export function isAdTreeWriter(client: unknown): client is AdTreeWriter {

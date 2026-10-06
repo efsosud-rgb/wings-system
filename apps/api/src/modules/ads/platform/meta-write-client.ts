@@ -7,6 +7,8 @@ import type {
   CreateCampaignSpec,
   CreativeMedia,
   CreativeSpec,
+  LeadFormWriter,
+  MetaLeadFormSpec,
   MutationOutcome,
   ResumeCompanions,
   StepOutcome,
@@ -45,7 +47,7 @@ function asStepFailure(failure: MutationOutcome): StepOutcome<never> {
   return { status: 'unknown', reason: 'unexpected outcome' };
 }
 
-export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter {
+export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter, LeadFormWriter {
   private readonly writeToken: string;
   private readonly writeVersion: string;
   private readonly writeTimeoutMs: number;
@@ -85,6 +87,8 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
     path: string,
     params: Record<string, string> | FormData,
     timeoutMs = this.writeTimeoutMs,
+    /** A Page token for the one edge that needs it (`leadgen_forms`); the account token otherwise. */
+    token = this.writeToken,
   ): Promise<{ failure: MutationOutcome } | { body: string }> {
     const url = `https://graph.facebook.com/${this.writeVersion}/${path}`;
     const multipart = params instanceof FormData;
@@ -95,9 +99,9 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
         method: 'POST',
         // For multipart, fetch sets the content type itself, boundary included.
         headers: multipart
-          ? { Authorization: `Bearer ${this.writeToken}` }
+          ? { Authorization: `Bearer ${token}` }
           : {
-              Authorization: `Bearer ${this.writeToken}`,
+              Authorization: `Bearer ${token}`,
               'Content-Type': 'application/x-www-form-urlencoded',
             },
         body: multipart ? params : new URLSearchParams(params).toString(),
@@ -302,8 +306,9 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
     params: Record<string, string> | FormData,
     pick: (body: Record<string, unknown>) => unknown,
     timeoutMs?: number,
+    token?: string,
   ): Promise<StepOutcome<string>> {
-    const result = await this.send(path, params, timeoutMs);
+    const result = await this.send(path, params, timeoutMs, token);
     if ('failure' in result) return asStepFailure(result.failure);
 
     let value: unknown;
@@ -565,7 +570,8 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
         status: 'PAUSED',
         billing_event: 'IMPRESSIONS',
         optimization_goal: spec.optimization.goal,
-        destination_type: 'WEBSITE',
+        // Lead Ads: the form is on the ad itself; the promoted object is the Page.
+        destination_type: spec.optimization.goal === 'LEAD_GENERATION' ? 'ON_AD' : 'WEBSITE',
         ...(spec.optimization.goal === 'OFFSITE_CONVERSIONS'
           ? {
               promoted_object: JSON.stringify({
@@ -573,7 +579,9 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
                 custom_event_type: spec.optimization.event,
               }),
             }
-          : {}),
+          : spec.optimization.goal === 'LEAD_GENERATION'
+            ? { promoted_object: JSON.stringify({ page_id: spec.optimization.pageId }) }
+            : {}),
         targeting: JSON.stringify(targeting),
         // The account runs on America/Sao_Paulo, which has no daylight saving.
         start_time: `${spec.startDate}T00:00:00-0300`,
@@ -614,7 +622,11 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
   }
 
   private objectStorySpec(spec: CreativeSpec): Record<string, unknown> {
-    const callToAction = (link: string) => ({ type: spec.callToAction, value: { link } });
+    // Lead Ads: the button opens the instant form, not a link. NOT verified live.
+    const callToAction = (link: string) =>
+      spec.leadGenFormId
+        ? { type: spec.callToAction, value: { lead_gen_form_id: spec.leadGenFormId } }
+        : { type: spec.callToAction, value: { link } };
     // A video's picture is the ad image made from its still, never the CDN
     // address (refused live on 2026-09-25). Carousel video cards: NOT verified live.
     const mediaFields = (media: CreativeMedia) =>
@@ -701,6 +713,63 @@ export class MetaWriteClient extends MetaReadOnlyClient implements AdTreeWriter 
         status: 'PAUSED',
       },
       (body) => body.id,
+    );
+    return outcome.status === 'created'
+      ? { status: 'created', value: { id: outcome.value } }
+      : outcome;
+  }
+
+  /**
+   * The instant form, on the Page: `POST /{page_id}/leadgen_forms` with the
+   * Page's own token, read from the Page with the account token and used for
+   * this one call. The token is never stored, logged or returned. A system
+   * user without `pages_manage_ads` on the Page gets `rejected` here, before
+   * anything is written.
+   *
+   * NOT yet verified against the live API (2026-10-06).
+   */
+  async createLeadForm(spec: MetaLeadFormSpec): Promise<StepOutcome<{ id: string }>> {
+    const access = await this.pageToken(spec.pageId);
+    if (!access.token) {
+      return {
+        status: 'rejected',
+        code: access.reason ?? 'no_page_token',
+        message:
+          'O token não administra a Página: falta pages_manage_ads (e a Página como ativo do usuário de sistema).',
+      };
+    }
+    const outcome = await this.create(
+      `${spec.pageId}/leadgen_forms`,
+      {
+        name: spec.name,
+        locale: spec.locale,
+        questions: JSON.stringify(
+          spec.questions.map((question) =>
+            question.type === 'CUSTOM'
+              ? {
+                  type: 'CUSTOM',
+                  key: question.key,
+                  label: question.label,
+                  ...(question.options ? { options: question.options } : {}),
+                }
+              : { type: question.type, key: question.key },
+          ),
+        ),
+        privacy_policy: JSON.stringify({
+          url: spec.privacyPolicy.url,
+          link_text: spec.privacyPolicy.linkText,
+        }),
+        thank_you_page: JSON.stringify({
+          title: spec.thankYou.title,
+          body: spec.thankYou.body,
+          button_type: 'VIEW_WEBSITE',
+          button_text: spec.thankYou.buttonText,
+          website_url: spec.thankYou.buttonUrl,
+        }),
+      },
+      (body) => body.id,
+      this.writeTimeoutMs,
+      access.token,
     );
     return outcome.status === 'created'
       ? { status: 'created', value: { id: outcome.value } }

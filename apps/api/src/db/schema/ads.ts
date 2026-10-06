@@ -410,6 +410,36 @@ export const adVideoUploads = pgTable('ad_video_uploads', {
 });
 
 /**
+ * Wings' standard lead form as it was created on a platform (Meta's instant
+ * form on the Page), so the same form is created once and used again: the
+ * `fingerprint` is the sha-256 of `leadFormFingerprint` (questions, policy
+ * and thank-you, not the funnel). `spec` is the shared `LeadForm` as approved;
+ * `external_id` is the platform's id, null while the form was not created.
+ * The lead's funnel is not here: it is a `lead_source_rules` row on the
+ * form's id, written together with it (`registerLeadFormIntake`).
+ */
+export const adLeadForms = pgTable(
+  'ad_lead_forms',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** meta */
+    platform: text('platform').notNull(),
+    /** The Facebook Page the form belongs to. */
+    pageId: text('page_id').notNull(),
+    fingerprint: text('fingerprint').notNull(),
+    spec: jsonb('spec').notNull(),
+    name: text('name').notNull(),
+    externalId: text('external_id'),
+    /** The execution that created it, for the trail. */
+    executionId: uuid('execution_id').references(() => adExecutions.id),
+    createdBy: uuid('created_by').references(() => employees.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('ad_lead_forms_page_fingerprint_idx').on(table.pageId, table.fingerprint)],
+);
+
+/**
  * A video on its way up, in parts. One request per part keeps every request
  * short (a proxy's read timeout, Node's request timeout) and moves the bar on
  * screen. The bytes accumulate in `<storage_key>.part` on the volume; once

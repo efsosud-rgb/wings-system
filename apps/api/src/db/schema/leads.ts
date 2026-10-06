@@ -233,6 +233,20 @@ export const leadSourceRules = pgTable(
      * map to its brand and funnel.
      */
     rdUnpublishedOn: date('rd_unpublished_on', { mode: 'string' }),
+    /**
+     * The site page's form (`/lp/<slug>`), as the shared `LeadForm` without
+     * the funnel: the optional multiple-choice question, the thank-you text
+     * and the policy link. Null means the page's plain form. What is live is
+     * `site_form_spec`; a change proposed by the campaign builder waits in
+     * `site_form_spec_pending` until Diretoria approves it (Eric, 2026-10-06:
+     * nothing on the site changes without a preview and their approval).
+     */
+    siteFormSpec: jsonb('site_form_spec'),
+    siteFormSpecPending: jsonb('site_form_spec_pending'),
+    siteFormPendingBy: uuid('site_form_pending_by').references(() => employees.id),
+    siteFormPendingAt: timestamp('site_form_pending_at', { withTimezone: true }),
+    siteFormApprovedBy: uuid('site_form_approved_by').references(() => employees.id),
+    siteFormApprovedAt: timestamp('site_form_approved_at', { withTimezone: true }),
     createdBy: uuid('created_by').references(() => employees.id),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

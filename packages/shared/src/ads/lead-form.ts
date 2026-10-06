@@ -15,7 +15,13 @@ import { LEAD_PIPELINES } from '../leads.js';
  * columns would be a silent bug.
  */
 
-export const LEAD_FORM_FIELDS = ['name', 'whatsapp', 'companyName', 'instagram', 'website'] as const;
+export const LEAD_FORM_FIELDS = [
+  'name',
+  'whatsapp',
+  'companyName',
+  'instagram',
+  'website',
+] as const;
 export type LeadFormFieldKey = (typeof LEAD_FORM_FIELDS)[number];
 
 /** How Meta names each question on the wire; a `CUSTOM` question is known by its `key`. */
@@ -105,14 +111,20 @@ export const leadFormQualifierSchema = z.object({
     .string()
     .trim()
     .min(5, 'Escreva a pergunta')
-    .max(LEAD_FORM_QUALIFIER_QUESTION_MAX, `Máximo de ${LEAD_FORM_QUALIFIER_QUESTION_MAX} caracteres`),
+    .max(
+      LEAD_FORM_QUALIFIER_QUESTION_MAX,
+      `Máximo de ${LEAD_FORM_QUALIFIER_QUESTION_MAX} caracteres`,
+    ),
   options: z
     .array(
       z
         .string()
         .trim()
         .min(1, 'Escreva a opção')
-        .max(LEAD_FORM_QUALIFIER_OPTION_MAX, `Máximo de ${LEAD_FORM_QUALIFIER_OPTION_MAX} caracteres`),
+        .max(
+          LEAD_FORM_QUALIFIER_OPTION_MAX,
+          `Máximo de ${LEAD_FORM_QUALIFIER_OPTION_MAX} caracteres`,
+        ),
     )
     .min(LEAD_FORM_QUALIFIER_MIN_OPTIONS, `Pelo menos ${LEAD_FORM_QUALIFIER_MIN_OPTIONS} opções`)
     .max(LEAD_FORM_QUALIFIER_MAX_OPTIONS, `No máximo ${LEAD_FORM_QUALIFIER_MAX_OPTIONS} opções`)
@@ -220,7 +232,13 @@ export function leadFormQuestionsInOrder(form: Pick<LeadForm, 'qualifier'>): {
 }[] {
   return [
     ...(form.qualifier
-      ? [{ kind: 'qualifier' as const, label: form.qualifier.question, options: form.qualifier.options }]
+      ? [
+          {
+            kind: 'qualifier' as const,
+            label: form.qualifier.question,
+            options: form.qualifier.options,
+          },
+        ]
       : []),
     ...LEAD_FORM_QUESTIONS.map((question) => ({
       kind: 'field' as const,
@@ -242,7 +260,11 @@ export function leadFormFingerprint(form: LeadForm): string {
     qualifier: form.qualifier
       ? { question: form.qualifier.question, options: form.qualifier.options }
       : null,
-    questions: LEAD_FORM_QUESTIONS.map((question) => [question.metaType, question.metaKey, question.label]),
+    questions: LEAD_FORM_QUESTIONS.map((question) => [
+      question.metaType,
+      question.metaKey,
+      question.label,
+    ]),
     privacyPolicyUrl: form.privacyPolicyUrl,
     thankYou: {
       title: form.thankYou.title,

@@ -173,6 +173,8 @@ export interface ExecutionStepView {
     | 'campaign'
     | 'image'
     | 'video'
+    /** Meta's instant form, created on the Page before the ad set (or reused). */
+    | 'lead_form'
     | 'ad_set'
     | 'creative'
     | 'ad'

@@ -64,17 +64,25 @@ describe('leadFormSchema', () => {
   it('puts the qualifier first when it is on', () => {
     const parsed = leadFormSchema.parse({
       ...valid,
-      qualifier: { ...LEAD_FORM_QUALIFIER_SUGGESTION, options: [...LEAD_FORM_QUALIFIER_SUGGESTION.options] },
+      qualifier: {
+        ...LEAD_FORM_QUALIFIER_SUGGESTION,
+        options: [...LEAD_FORM_QUALIFIER_SUGGESTION.options],
+      },
     });
     const order = leadFormQuestionsInOrder(parsed);
     expect(order).toHaveLength(6);
-    expect(order[0]).toMatchObject({ kind: 'qualifier', options: ['1', '2 a 5', '6 a 20', 'Mais de 20'] });
+    expect(order[0]).toMatchObject({
+      kind: 'qualifier',
+      options: ['1', '2 a 5', '6 a 20', 'Mais de 20'],
+    });
   });
 
   it('refuses a qualifier with one option or repeated options', () => {
     expect(
-      leadFormSchema.safeParse({ ...valid, qualifier: { question: 'Quantas lojas?', options: ['1'] } })
-        .success,
+      leadFormSchema.safeParse({
+        ...valid,
+        qualifier: { question: 'Quantas lojas?', options: ['1'] },
+      }).success,
     ).toBe(false);
     expect(
       leadFormSchema.safeParse({
@@ -86,7 +94,8 @@ describe('leadFormSchema', () => {
 
   it('refuses an http privacy policy and Expansão without a brand', () => {
     expect(
-      leadFormSchema.safeParse({ ...valid, privacyPolicyUrl: 'http://wingscompany.com.br/p' }).success,
+      leadFormSchema.safeParse({ ...valid, privacyPolicyUrl: 'http://wingscompany.com.br/p' })
+        .success,
     ).toBe(false);
     const result = leadFormSchema.safeParse({
       ...valid,

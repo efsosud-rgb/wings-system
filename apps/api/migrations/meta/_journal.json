@@ -491,6 +491,13 @@
       "when": 1791310373681,
       "tag": "0071_ficha_lead_files_ai_summary",
       "breakpoints": true
+    },
+    {
+      "idx": 74,
+      "version": "7",
+      "when": 1791316401768,
+      "tag": "0074_lead_form_in_ad",
+      "breakpoints": true
     }
   ]
 }
