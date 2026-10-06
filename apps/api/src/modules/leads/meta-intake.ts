@@ -16,7 +16,7 @@ import { entryStageOf } from './crm.js';
 import { classifyUnruledForm, noticeUnclassifiedForm } from './meta-form-routing.js';
 import { POLL_EVERY_MS, pollMetaLeadsLocked } from './meta-poll.js';
 import { announceBackfill, type BackfillTally } from './crm-alerts.js';
-import { resolveMetaSource, upsertLead } from './service.js';
+import { resolveMetaSource, upsertLead, answersPhone } from './service.js';
 
 /**
  * Meta Lead Ads → Funil → RD CRM (docs/leads/meta-lead-ads.md).
@@ -338,7 +338,7 @@ async function processOne(
     const details = answer.details;
     deps.log({ job: META_LEADGEN_JOB, msg: 'meta lead fetched', shape: shapeOf(answer.raw) });
 
-    const phone = normalizeBrazilianPhone(details.phone);
+    const phone = normalizeBrazilianPhone(details.phone ?? answersPhone(details.answers));
     const email = normalizeEmail(details.email);
     if (!phone && !email) throw new IntakeRefusal('no_contact_data', true);
 

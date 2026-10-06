@@ -283,3 +283,39 @@ export async function reserveSpend(
     client.release();
   }
 }
+
+// --- external research provider (extension point) -----------------------------------------
+
+/**
+ * A paid research service that studies a lead's company (site, Instagram,
+ * name) and returns a summary with its sources: the place where one plugs in
+ * once it is approved (Manus is being evaluated; the decision is not ours).
+ *
+ * Nothing implements it yet, so `createLeadResearchProvider` always answers
+ * null and the step is skipped. A real provider must: be switched on by its
+ * own env var, reserve its cost with `reserveSpend` under the daily ceiling,
+ * write its own ledger step, receive no phone, e-mail or CPF, and have its
+ * answers logged as shapes only.
+ */
+export interface LeadResearchInput {
+  leadId: string;
+  companyName: string | null;
+  website: string | null;
+  instagram: string | null;
+  city: string | null;
+}
+
+export interface LeadResearchFinding {
+  summary: string | null;
+  links: { url: string; title: string | null }[];
+  costUsd: number;
+}
+
+export interface LeadResearchProvider {
+  readonly name: string;
+  research(input: LeadResearchInput): Promise<LeadResearchFinding>;
+}
+
+export function createLeadResearchProvider(): LeadResearchProvider | null {
+  return null;
+}

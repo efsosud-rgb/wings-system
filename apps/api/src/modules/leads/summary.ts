@@ -54,6 +54,7 @@ const EVENT_TEXT: Record<string, string> = {
   'lead.received.whatsapp': 'chegou pelo WhatsApp',
   'lead.received.meta_lead_ads': 'chegou pelo Meta Lead Ads',
   'lead.received.tiktok_lead_ads': 'chegou pelo TikTok Lead Ads',
+  'lead.received.google_lead_form': 'chegou pelo formulário do Google Ads',
   'lead.received.site_form': 'chegou pelo formulário do site',
   'lead.created_manually': 'negociação criada à mão',
   'lead.imported.rd_crm': 'trazida do RD CRM',

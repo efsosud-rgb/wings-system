@@ -1,5 +1,5 @@
 import type { Pool } from '../db/client.js';
-import type { CnpjLookup, EnrichmentBudget, WebSearch, ZapiProfileClient } from '../lib/enrichment.js';
+import type { CnpjLookup, EnrichmentBudget, LeadResearchProvider, WebSearch, ZapiProfileClient } from '../lib/enrichment.js';
 import type { ObjectStorage } from '../lib/storage.js';
 import type { Job } from '../queue.js';
 
@@ -30,6 +30,8 @@ export interface JobContext {
     search: WebSearch | null;
     cnpj: CnpjLookup;
     budget: EnrichmentBudget;
+    /** An external research service, once one is approved; null today (the step is skipped). */
+    research?: LeadResearchProvider | null;
   };
   /** Set only by tests, to pin "today" for the daily ceiling. */
   now?: () => Date;

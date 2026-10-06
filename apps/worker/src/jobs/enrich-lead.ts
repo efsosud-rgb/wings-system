@@ -255,6 +255,10 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
       }
     }
 
+    // --- external research provider (none approved yet: see LeadResearchProvider) -------
+    // When one is approved, its call goes here: after the CNPJ, before the score, with its
+    // cost reserved first and its own ledger step. Today `research` is always null.
+
     // --- score and summary -------------------------------------------------------------
     const area = await db.query<{ expansion_area: unknown }>(`select expansion_area from clients where id = $1`, [lead.client_id]);
     const expansionArea = Array.isArray(area.rows[0]?.expansion_area) ? (area.rows[0]?.expansion_area as ExpansionEntry[]) : [];

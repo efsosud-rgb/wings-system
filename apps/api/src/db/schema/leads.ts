@@ -70,6 +70,18 @@ export const leads = pgTable(
      * only, never in an event, an audit row or a log.
      */
     formAnswers: jsonb('form_answers'),
+    /**
+     * The fields every lead form asks, in their own place (docs/leads/formularios.md):
+     * mapped from the answers by the text of the question. Kept as typed when it
+     * could not be normalised; the check says why.
+     */
+    instagram: text('instagram'),
+    website: text('website'),
+    companyName: text('company_name'),
+    /** Digits only (or the new alphanumeric form), when the form asked for it. */
+    companyCnpj: text('company_cnpj'),
+    /** LeadChecks: confere / não confere / não verificado per field, with the reason. */
+    fieldChecks: jsonb('field_checks').notNull().default({}),
     /** LGPD: a LeadLegalBasis, when it was given and where (docs/leads/intake.md). */
     legalBasis: text('legal_basis'),
     consentedAt: timestamp('consented_at', { withTimezone: true }),
