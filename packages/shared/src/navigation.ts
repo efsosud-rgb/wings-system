@@ -415,6 +415,24 @@ export const NAVIGATION: readonly NavModule[] = [
       soon('/saas/onboarding', 'Onboarding'),
     ],
   },
+  {
+    // Experiments shown to the Admin Master before they become a module.
+    key: 'laboratorio',
+    label: 'Laboratório',
+    icon: 'sparkles',
+    group: 'modulos',
+    roles: ['admin_master'],
+    submodules: [
+      {
+        path: '/laboratorio/escritorio',
+        label: 'Escritório virtual',
+        description: 'A equipe e os agentes no escritório em 3D, com tarefas e eventos reais do CRM',
+        permission: 'office.read',
+        status: 'ready',
+        kind: 'report',
+      },
+    ],
+  },
 ];
 
 /** Every sub-module, flattened — used to build routes. */

@@ -41,6 +41,7 @@ import { leadWebhookRoutes } from './modules/leads/webhooks.js';
 import { mediaRoutes } from './modules/media/routes.js';
 import { mediaStudioRoutes } from './modules/media/studio-routes.js';
 import { projectRoutes } from './modules/projects/routes.js';
+import { officeRoutes } from './modules/office/routes.js';
 import { roadmapRoutes } from './modules/roadmap/routes.js';
 import { siteRoutes } from './modules/site/routes.js';
 import { studioRoutes } from './modules/studio/routes.js';
@@ -201,6 +202,7 @@ export async function buildApp(deps: {
   await app.register(clientRecordRoutes);
   await app.register(projectRoutes);
   await app.register(roadmapRoutes);
+  await app.register(officeRoutes);
   await app.register(leadRoutes);
   await app.register(crmRoutes);
   await app.register(automationRoutes);
