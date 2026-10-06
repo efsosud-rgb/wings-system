@@ -44,7 +44,9 @@ import {
   campaignDraftSchema,
   checkCopyCompliance,
   dailyOverdeliveryFactor,
+  describeLeadCapture,
   describeReach,
+  LEAD_FORM_THANK_YOU_DEFAULT,
   estimateCostCents,
   isGooglePlatform,
   isPlatformEnabled,
@@ -94,6 +96,8 @@ import { AdPreviewGallery } from './AdPreview.js';
 import { ComplianceWarning, CreativeCard } from './CreativeBlock.js';
 import { formatBrl, formatDate, parseBrlToCents, todayInSaoPaulo } from './format.js';
 import { SearchAdPreview, YoutubePreview } from './GooglePreview.js';
+import { LeadFormPreviewGallery } from './LeadFormPreview.js';
+import { LeadFormSection, siteFormOf } from './LeadFormSection.js';
 import { RadiusMap } from './RadiusMap.js';
 
 /**
@@ -147,6 +151,29 @@ function markKeywords(lines: string[], defaultMatch: SearchMatchType): string[] 
  * back and forth loses nothing; the schema refuses foreign parts, so they are
  * dropped here — once, for the check and for the request alike.
  */
+/**
+ * The form travels only on a lead campaign, and only on Meta when the lead is
+ * captured on the ad (`instant_form`). A site page's form is a proposal of its
+ * own (section "Formulário"), so a draft never carries it. The thank-you button
+ * leads to the destination page.
+ */
+function shapeLeadForm(
+  values: CampaignDraftInput,
+): Pick<CampaignDraftInput, 'leadCapture' | 'leadForm'> {
+  if (values.objective !== 'lead') return {};
+  const instant = values.platform === 'meta' && values.leadCapture === 'instant_form';
+  if (!instant || !values.leadForm) return { leadCapture: 'page' };
+  const form = values.leadForm;
+  return {
+    leadCapture: 'instant_form',
+    leadForm: {
+      ...form,
+      qualifier: form.qualifier ?? null,
+      thankYou: { ...form.thankYou, buttonUrl: form.thankYou.buttonUrl || values.destinationUrl },
+    },
+  };
+}
+
 function shapeDraft(values: CampaignDraftInput): CampaignDraftInput {
   const {
     youtube,
@@ -157,8 +184,13 @@ function shapeDraft(values: CampaignDraftInput): CampaignDraftInput {
     ageMax,
     placements,
     identity,
-    ...common
+    leadCapture: _capture,
+    leadForm: _form,
+    ...rest
   } = values;
+  void _capture;
+  void _form;
+  const common = { ...rest, ...shapeLeadForm(values) };
   if (!isGooglePlatform(values.platform)) {
     return {
       ...common,
@@ -230,6 +262,7 @@ const META_SECTIONS = [
   'creative',
   'format',
   'destination',
+  'leadForm',
   'duration',
   'budget',
   'utms',
@@ -251,6 +284,7 @@ const YOUTUBE_SECTIONS = [
   'icp',
   'reach',
   'video',
+  'leadForm',
   'duration',
   'budget',
   'utms',
@@ -350,9 +384,12 @@ function padTo(list: string[], length: number): string[] {
 export function PaidMediaBuilder({
   canRequest,
   canPickMedia = false,
+  canApprove = false,
   applyRef,
 }: {
   canRequest: boolean;
+  /** `ads.approve`: may approve a site page's pending form from the builder. */
+  canApprove?: boolean;
   /** `marketing.media.read`: shows "Escolher do Drive" beside the uploads. */
   canPickMedia?: boolean;
   /** Filled while the builder is on screen, null otherwise. */
@@ -385,6 +422,13 @@ export function PaidMediaBuilder({
       formatKey: 'feed_square',
       // Wings' contact page: the RD form there feeds the Formatação funnel.
       destinationUrl: 'https://wingscompany.com.br/contato/',
+      leadCapture: 'page',
+      leadForm: {
+        qualifier: null,
+        privacyPolicyUrl: '',
+        thankYou: { ...LEAD_FORM_THANK_YOU_DEFAULT, buttonUrl: '' },
+        funnel: { pipeline: 'formatacao', brand: null, clientId: null },
+      },
       // Opens with two, so the platform has something to compare; one is allowed.
       variations: Array.from({ length: 2 }, () => ({
         creativeType: 'image' as const,
@@ -766,6 +810,8 @@ export function PaidMediaBuilder({
     replaceCities(draft.reach.cities);
     setValue('reach.customLocations', draft.reach.customLocations, filled);
     setValue('destinationUrl', draft.destinationUrl, filled);
+    setValue('leadCapture', draft.leadCapture ?? 'page', filled);
+    if (draft.leadForm) setValue('leadForm', draft.leadForm, filled);
     for (const key of UTM_KEYS) setValue(`utms.${key}`, draft.utms[key], filled);
     setValue('dailyBudgetCents', draft.dailyBudgetCents, filled);
     setBudgetText(centsToBudgetText(draft.dailyBudgetCents));
@@ -1891,6 +1937,34 @@ export function PaidMediaBuilder({
       )}
 
       <BuilderSection
+        step={stepOf('leadForm')}
+        title="Formulário"
+        why="Onde o lead responde e o que ele responde. As cinco perguntas caem direto na ficha; a regra de funil nasce junto, para ninguém cair em Formatação por engano."
+      >
+        {values.objective === 'lead' ? (
+          <LeadFormSection
+            platform={
+              platform === 'google_search'
+                ? 'google_search'
+                : platform === 'youtube'
+                  ? 'youtube'
+                  : 'meta'
+            }
+            leadCapture={values.leadCapture}
+            leadForm={values.leadForm}
+            pageId={values.identity?.pageId}
+            destinationUrl={values.destinationUrl ?? ''}
+            register={register}
+            setValue={setValue}
+            errors={errors}
+            canApprove={canApprove}
+          />
+        ) : (
+          <p className="field-hint">Só para campanhas de geração de leads.</p>
+        )}
+      </BuilderSection>
+
+      <BuilderSection
         step={stepOf('duration')}
         title="Duração"
         why={`Por quanto tempo o anúncio roda. Nos primeiros dias ${google ? 'o Google' : 'a Meta'} ainda está aprendendo quem responde; campanha muito curta termina antes disso.`}
@@ -2051,6 +2125,29 @@ export function PaidMediaBuilder({
             destinationUrl={values.destinationUrl ?? ''}
           />
         )}
+        {!google && values.objective === 'lead' && values.leadCapture === 'instant_form' && (
+          <LeadFormPreviewGallery
+            media={{
+              mediaType: formVariations[0]?.creativeType === 'video' ? 'video' : 'image',
+              creativeId: formVariations[0]?.creativeId,
+              videoId: formVariations[0]?.videoId,
+              headline: formVariations[0]?.headline ?? '',
+              primaryText: formVariations[0]?.primaryText ?? '',
+              callToAction: formVariations[0]?.callToAction ?? 'SIGN_UP',
+            }}
+            form={
+              siteFormOf(values.leadForm, values.destinationUrl || undefined) ?? {
+                qualifier: null,
+                privacyPolicyUrl: 'https://wingscompany.com.br/',
+                thankYou: {
+                  ...LEAD_FORM_THANK_YOU_DEFAULT,
+                  buttonUrl: 'https://wingscompany.com.br/',
+                },
+              }
+            }
+            brand={pages.find((page) => page.id === values.identity?.pageId)?.name ?? 'Wings'}
+          />
+        )}
         {!google && (
           <AdPreviewGallery
             variations={formVariations.map((variation) => ({
@@ -2086,6 +2183,12 @@ export function PaidMediaBuilder({
           <dd>{values.name || '—'}</dd>
           <dt>Objetivo</dt>
           <dd>{CAMPAIGN_OBJECTIVE_LABEL[values.objective]}</dd>
+          {values.objective === 'lead' && (
+            <>
+              <dt>Formulário</dt>
+              <dd>{describeLeadCapture(shapeDraft(values) as CampaignDraft)}</dd>
+            </>
+          )}
           <dt>Cliente ideal</dt>
           <dd className="builder-summary-clamp">{values.idealCustomerProfile || '—'}</dd>
           <dt>Alcance</dt>

@@ -275,7 +275,36 @@ const libraryAssets: { current: MediaAsset[] } = { current: [] };
 const useInBuilder = vi.fn();
 const bridgeAnswer: { current: MediaBridgeResponse | null } = { current: null };
 // The library picker's "Cliente" filter reads the register; the builder tests need no clients.
-vi.mock('../../api/clients.js', () => ({ useClients: () => ({ data: { clients: [] } }) }));
+vi.mock('../../api/clients.js', () => ({
+  useClients: () => ({
+    data: {
+      clients: [
+        { id: '00000000-0000-4000-8000-0000000000c1', name: 'Wings Company', active: true },
+        { id: '00000000-0000-4000-8000-0000000000c2', name: 'Cenoritas', active: true },
+      ],
+    },
+  }),
+}));
+
+// The standard lead form's reads: the Page's readiness and the site pages.
+const leadFormReadiness: {
+  current: import('../../api/lead-forms.js').MetaLeadFormReadiness | null;
+} = { current: null };
+const siteFormPages: { current: import('../../api/lead-forms.js').SiteFormPage[] } = {
+  current: [],
+};
+const proposeSiteForm = vi.fn();
+const approveSiteForm = vi.fn();
+vi.mock('../../api/lead-forms.js', () => ({
+  useMetaLeadFormReadiness: () => ({
+    data: leadFormReadiness.current ?? undefined,
+    isError: false,
+  }),
+  useSiteFormPages: () => ({ data: { pages: siteFormPages.current } }),
+  useProposeSiteForm: () => ({ mutate: proposeSiteForm, isPending: false, isSuccess: false }),
+  useApproveSiteForm: () => ({ mutate: approveSiteForm, isPending: false, isError: false }),
+  useRejectSiteForm: () => ({ mutate: vi.fn(), isPending: false }),
+}));
 vi.mock('../../api/media.js', async (original) => ({
   ...(await original<typeof import('../../api/media.js')>()),
   useMediaAssets: (filters: { kind?: string }) => ({
@@ -361,6 +390,10 @@ afterEach(() => {
   videoFailure.current = null;
   session.current = null;
   reconcileNow.mockReset();
+  leadFormReadiness.current = null;
+  siteFormPages.current = [];
+  proposeSiteForm.mockReset();
+  approveSiteForm.mockReset();
 });
 
 function chooseImage(input: Element, type = 'image/png') {
@@ -445,8 +478,10 @@ describe('the paid-media builder', () => {
   it('opens every section with what the choice changes in practice', () => {
     render(<PaidMediaBuilder canRequest />);
     const sections = screen.getAllByRole('region').filter((el) => el.matches('.builder-section'));
-    // No "Variações" block: every creative, whole, sits in block 7.
-    expect(sections).toHaveLength(14);
+    // No "Variações" block: every creative, whole, sits in block 7. Block 10 is
+    // the lead form (2026-10-06).
+    expect(sections).toHaveLength(15);
+    expect(sections[9]?.querySelector('h2')?.textContent).toBe('10Formulário');
     expect(sections[6]?.querySelector('h2')?.textContent).toBe('7Criativo');
     expect(screen.queryByText('Variações', { selector: 'h2' })).toBeNull();
     for (const section of sections) {
@@ -1941,5 +1976,184 @@ describe('choosing the campaign to add creatives to', () => {
     const byName = (name: string) =>
       document.querySelector<HTMLInputElement>(`[name="${name}"]`)?.value;
     expect(byName('destinationUrl')).toBe('https://wingscompany.com.br/contato/');
+  });
+});
+
+describe('the standard lead form in the ad', () => {
+  const sitePage = (): import('../../api/lead-forms.js').SiteFormPage => ({
+    id: '6f1b2c3d-0000-4000-8000-000000000001',
+    slug: 'cenoritas',
+    path: '/lp/cenoritas',
+    brand: 'Cenoritas',
+    pipeline: 'expansao',
+    clientId: '00000000-0000-4000-8000-0000000000c2',
+    form: null,
+    pending: null,
+    approvedAt: null,
+  });
+
+  it('is only for lead campaigns, and on Meta asks where the lead is captured', () => {
+    render(<PaidMediaBuilder canRequest />);
+    expect(screen.getByRole('radio', { name: /Na página para onde o botão leva/ })).toBeTruthy();
+    expect(
+      screen.getByRole('radio', { name: /No anúncio \(formulário instantâneo\)/ }),
+    ).toBeTruthy();
+    // The five questions and the form's fields appear only with the form on the ad.
+    expect(screen.queryByText('Perguntas obrigatórias')).toBeNull();
+
+    fireEvent.click(screen.getByRole('radio', { name: /Tráfego/ }));
+    expect(screen.getByText('Só para campanhas de geração de leads.')).toBeTruthy();
+  });
+
+  it('with the form on the ad: fixed questions, optional multiple choice off, policy from the Page, preview rising over the ad', async () => {
+    leadFormReadiness.current = {
+      access: { pageId: PAGE, canManage: true, reason: null },
+      forms: [],
+      privacyPolicyUrl: 'https://wingscompany.com.br/politica/',
+    };
+    render(<PaidMediaBuilder canRequest />);
+    fireEvent.click(screen.getByRole('radio', { name: /No anúncio \(formulário instantâneo\)/ }));
+
+    const questions = screen.getByText('Perguntas obrigatórias').parentElement;
+    expect(questions?.textContent).toContain('Nome');
+    expect(questions?.textContent).toContain('WhatsApp');
+    expect(questions?.textContent).toContain('Nome da empresa');
+    expect(questions?.textContent).toContain('Instagram da empresa');
+    expect(questions?.textContent).toContain('Site da empresa');
+    const qualifier = screen.getByRole('checkbox', {
+      name: /Abrir com uma pergunta de múltipla escolha/,
+    }) as HTMLInputElement;
+    expect(qualifier.checked).toBe(false);
+    await waitFor(() =>
+      expect((byField('Política de privacidade') as HTMLInputElement).value).toBe(
+        'https://wingscompany.com.br/politica/',
+      ),
+    );
+
+    // The drawn preview: the three Instagram placements and the sheet.
+    expect(screen.getByText('Instagram Feed')).toBeTruthy();
+    expect(screen.getByText('Instagram Stories')).toBeTruthy();
+    expect(screen.getByText('Instagram Reels')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Perguntas' }));
+    expect(screen.getAllByText('Ana Exemplo').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Não é a prévia oficial da Meta/).length).toBeGreaterThan(0);
+
+    // Switching the multiple choice on puts the suggestion first.
+    fireEvent.click(qualifier);
+    expect((byField('Pergunta') as HTMLInputElement).value).toBe('Quantas unidades você tem hoje?');
+    expect(screen.getAllByText('2 a 5').length).toBeGreaterThan(0);
+  });
+
+  it('sends the form with the draft only when it is on the ad, funnel included, thank-you button to the destination', async () => {
+    leadFormReadiness.current = {
+      access: { pageId: PAGE, canManage: true, reason: null },
+      forms: [],
+      privacyPolicyUrl: 'https://wingscompany.com.br/politica/',
+    };
+    render(<PaidMediaBuilder canRequest />);
+    fillValidCampaign();
+    fireEvent.click(screen.getByRole('radio', { name: /No anúncio \(formulário instantâneo\)/ }));
+    await waitFor(() =>
+      expect((byField('Política de privacidade') as HTMLInputElement).value).toContain('politica'),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalled());
+    const draft = requestCampaign.mock.calls[0]?.[0] as CampaignDraftInput;
+    expect(draft.leadCapture).toBe('instant_form');
+    expect(draft.leadForm).toMatchObject({
+      qualifier: null,
+      privacyPolicyUrl: 'https://wingscompany.com.br/politica/',
+      thankYou: { buttonUrl: 'https://wingscompany.com.br/franquia' },
+      funnel: { pipeline: 'formatacao', brand: null, clientId: null },
+    });
+    expect(screen.getByText(/Formulário no anúncio · 5 perguntas · formatacao/)).toBeTruthy();
+  });
+
+  it('warns when this environment\u2019s token cannot act for the Page, and keeps the preview', () => {
+    leadFormReadiness.current = {
+      access: { pageId: PAGE, canManage: false, reason: 'no_page_token' },
+      forms: [],
+      privacyPolicyUrl: null,
+    };
+    render(<PaidMediaBuilder canRequest />);
+    fireEvent.click(screen.getByRole('radio', { name: /No anúncio \(formulário instantâneo\)/ }));
+    expect(screen.getByText(/o token não administra a Página \(no_page_token\)/)).toBeTruthy();
+    expect(screen.getByText('Instagram Reels')).toBeTruthy();
+  });
+
+  it('a lead campaign without the form sends the draft as before', async () => {
+    render(<PaidMediaBuilder canRequest />);
+    fillValidCampaign();
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalled());
+    const draft = requestCampaign.mock.calls[0]?.[0] as CampaignDraftInput;
+    expect(draft.leadCapture).toBe('page');
+    expect(draft.leadForm).toBeUndefined();
+  });
+
+  it('on YouTube the ad leads to a site page with the standard form, proposed for Diretoria', () => {
+    siteFormPages.current = [sitePage()];
+    render(<PaidMediaBuilder canRequest canApprove={false} />);
+    fireEvent.click(screen.getByRole('radio', { name: /YouTube/ }));
+    expect(
+      screen.getByText(/O Google não aceita formulário de lead em campanhas Demand Gen/),
+    ).toBeTruthy();
+    fireEvent.change(byField('Página do site'), {
+      target: { value: '6f1b2c3d-0000-4000-8000-000000000001' },
+    });
+    expect((screen.getByLabelText(/Página de destino/) as HTMLInputElement).value).toMatch(
+      /\/lp\/cenoritas$/,
+    );
+    // The page's funnel, not an editable one.
+    expect((byField('Funil dos leads') as HTMLSelectElement).disabled).toBe(true);
+    expect((byField('Funil dos leads') as HTMLSelectElement).value).toBe('expansao');
+    expect(screen.getByText(/Página do site ·/).textContent).toContain('/lp/cenoritas');
+    expect(screen.getByText('Seja um franqueado Cenoritas')).toBeTruthy();
+    expect(
+      screen.getByText(/Mudança no site só vai ao ar com prévia e aprovação da Diretoria/),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Aprovar e publicar na página/ })).toBeNull();
+
+    type(byField('Política de privacidade'), 'https://wingscompany.com.br/politica/');
+    fireEvent.click(screen.getByRole('button', { name: /Propor este formulário para a página/ }));
+    expect(proposeSiteForm).toHaveBeenCalledWith({
+      id: '6f1b2c3d-0000-4000-8000-000000000001',
+      form: expect.objectContaining({
+        qualifier: null,
+        privacyPolicyUrl: 'https://wingscompany.com.br/politica/',
+      }),
+    });
+  });
+
+  it('shows Diretoria the pending change with the approve button; Marketing sees only that it waits', () => {
+    siteFormPages.current = [
+      {
+        ...sitePage(),
+        pending: {
+          form: {
+            qualifier: null,
+            privacyPolicyUrl: 'https://wingscompany.com.br/politica/',
+            thankYou: {
+              title: 'Obrigado!',
+              body: 'Falamos em breve.',
+              buttonText: 'Site',
+              buttonUrl: 'https://wingscompany.com.br/',
+            },
+          },
+          by: 'Marketing Teste',
+          at: '2026-10-06T12:00:00.000Z',
+        },
+      },
+    ];
+    render(<PaidMediaBuilder canRequest canApprove />);
+    fireEvent.click(screen.getByRole('radio', { name: /YouTube/ }));
+    fireEvent.change(byField('Página do site'), {
+      target: { value: '6f1b2c3d-0000-4000-8000-000000000001' },
+    });
+    expect(
+      screen.getByText(/Há uma alteração aguardando aprovação \(Marketing Teste\)/),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Aprovar e publicar na página/ }));
+    expect(approveSiteForm).toHaveBeenCalledWith({ id: '6f1b2c3d-0000-4000-8000-000000000001' });
   });
 });

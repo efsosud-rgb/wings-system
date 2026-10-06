@@ -96,6 +96,7 @@ export function TrafficStudioPage() {
                 canRequest={canRequest}
                 canPickMedia={canPickMedia}
                 applyRef={builder}
+                canApprove={canApprove}
               />
             ) : (
               <OwnedChannelsPanel canPublish={canPublish} />

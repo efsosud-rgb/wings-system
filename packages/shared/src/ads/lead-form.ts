@@ -226,8 +226,8 @@ export const LEAD_CAPTURES = ['page', 'instant_form'] as const;
 export type LeadCapture = (typeof LEAD_CAPTURES)[number];
 
 export const LEAD_CAPTURE_LABEL: Record<LeadCapture, string> = {
-  page: 'Página de destino',
-  instant_form: 'Formulário no anúncio (instantâneo)',
+  page: 'Na página para onde o botão leva',
+  instant_form: 'No anúncio (formulário instantâneo)',
 };
 
 /** The questions in the order the person sees them: the optional one first. */
