@@ -42,6 +42,7 @@ import {
   type LoadedLead,
 } from '../../api/leads.js';
 import { Icon, type IconName } from '../../components/Icon.js';
+import { CompanyResearchPanel } from './CompanyResearchPanel.js';
 import { DealSummary } from './DealSummary.js';
 import { DealTabs, type View } from './DealTabs.js';
 import {
@@ -128,6 +129,7 @@ export function DealPage() {
           <div className="crm-stack">
             <AboutPanel lead={data.lead} canWrite={canWrite} canAssign={canAssign} />
             <FormFieldsPanel lead={data.lead} canWrite={canWrite} />
+            <CompanyResearchPanel research={data.lead.research} />
             <ContactPanel data={data} canWrite={canWrite} ref={contacts} />
           </div>
           <div className="crm-stack is-center">

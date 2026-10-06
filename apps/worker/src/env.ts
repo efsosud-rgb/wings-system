@@ -1,4 +1,4 @@
-import { JOB_TYPES, JOB_TYPES_IMPLEMENTED, type JobType } from '@wings/shared';
+import { AGENT_MODELS, JOB_TYPES, JOB_TYPES_IMPLEMENTED, type JobType } from '@wings/shared';
 import { z } from 'zod';
 
 const requiredString = z.string().trim().min(1);
@@ -65,6 +65,24 @@ const schema = z.object({
   /** The ceiling on paid enrichment for everyone, per day (America/Sao_Paulo). */
   ENRICH_DAILY_USD: z.coerce.number().positive().max(100).default(2),
   BRASILAPI_BASE_URL: optionalString,
+
+  /**
+   * Company research on arrival (docs/leads/pesquisa-da-empresa.md): OpenRouter
+   * with a web search of at most 5 results, told only the company's name, site,
+   * Instagram and CNPJ. Off unless LEAD_RESEARCH_ENABLED is "true" AND the key
+   * is set (the same OpenRouter account the API uses). It has its own ceiling,
+   * apart from ENRICH_DAILY_USD, summed over the ledger per day in São Paulo.
+   */
+  OPENROUTER_API_KEY: optionalString,
+  LEAD_RESEARCH_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  LEAD_RESEARCH_MODEL: z.enum(AGENT_MODELS).default('anthropic/claude-haiku-4.5'),
+  /** The company research's ceiling per day (America/Sao_Paulo), in US dollars. */
+  LEAD_RESEARCH_DAILY_USD: z.coerce.number().positive().max(100).default(1),
+  /** What one research is expected to cost (5 web results plus the model); reserved before the call. */
+  LEAD_RESEARCH_USD_PER_CALL: z.coerce.number().positive().max(1).default(0.06),
 });
 
 export type Env = z.infer<typeof schema>;

@@ -73,13 +73,11 @@ sem o dado, "—" e "o formulário não trouxe…".
   Instagram. O token vai em cabeçalho, nunca na URL.
 - Formato de erro do Instagram **não verificado ao vivo** (códigos 110, 190, 4/17/32).
 
-## Pesquisa por provedor externo (ponto de encaixe)
+## Pesquisa da empresa pela web (OpenRouter)
 
-`LeadResearchProvider` em `apps/worker/src/lib/enrichment.ts`: interface e lugar da chamada
-(depois do CNPJ, antes da nota, no job `enrich_lead`). Nenhum provedor está ligado
-(`createLeadResearchProvider()` responde `null`). A escolha (o Manus está em avaliação) é do
-orquestrador; quando aprovado, ganha variável própria, reserva de custo no teto diário, passo no
-ledger e nenhum telefone, e-mail ou CPF no pedido.
+O ponto de encaixe `LeadResearchProvider` agora tem um provedor: o OpenRouter, com busca na web
+de até 5 resultados. Funcionamento, variáveis e limites em
+[pesquisa-da-empresa.md](pesquisa-da-empresa.md). O Manus não foi usado.
 
 ## Migração
 

@@ -30,7 +30,7 @@ export interface JobContext {
     search: WebSearch | null;
     cnpj: CnpjLookup;
     budget: EnrichmentBudget;
-    /** An external research service, once one is approved; null today (the step is skipped). */
+    /** The company research (OpenRouter); null when switched off or without the key (the step is skipped). */
     research?: LeadResearchProvider | null;
   };
   /** Set only by tests, to pin "today" for the daily ceiling. */
