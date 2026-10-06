@@ -1,4 +1,4 @@
-import { SESSION_COOKIE, WINGS_CLIENT_ID } from '@wings/shared';
+import { SESSION_COOKIE, WINGS_CLIENT_ID, type RoleKey } from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -22,7 +22,7 @@ let app: FastifyInstance;
 let seller: { employeeId: string; cookies: Record<string, string> };
 let other: { employeeId: string; cookies: Record<string, string> };
 
-const loginAs = async (role: string) => {
+const loginAs = async (role: RoleKey) => {
   const employee = await createEmployee(db, { role, sector: 'comercial' });
   const login = await app.inject({
     method: 'POST',

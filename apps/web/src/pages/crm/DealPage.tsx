@@ -10,10 +10,7 @@ import {
   LEAD_TASK_KINDS,
   sourceBadgeOf,
   type Lead,
-  type LeadActivity,
   type LeadCallOutcome,
-  type LeadEvent,
-  type LeadNote,
   type LeadTask,
   type LeadTaskKind,
 } from '@wings/shared';
@@ -24,6 +21,7 @@ import { ApiError } from '../../api/client.js';
 import {
   useAddActivity,
   useBrands,
+  useLeadFiles,
   useLinkContact,
   useUnlinkContact,
   useUpdateDeal,
@@ -39,7 +37,7 @@ import {
   type LoadedLead,
 } from '../../api/leads.js';
 import { Icon, type IconName } from '../../components/Icon.js';
-import { LeadEmailTab } from './LeadEmailTab.js';
+import { DealTabs, type View } from './DealTabs.js';
 import {
   dueLabel,
   formatDateTime,
@@ -62,35 +60,6 @@ import {
 const errorText = (error: unknown, fallback: string) =>
   error instanceof ApiError ? error.message : fallback;
 
-const EVENT_LABELS: Record<string, string> = {
-  'lead.received.rd_station': 'Chegou pela landing page',
-  'lead.received.whatsapp': 'Chegou pelo WhatsApp',
-  'lead.received.meta_lead_ads': 'Chegou pelo Meta Lead Ads',
-  'lead.received.site_form': 'Chegou pelo formulário do site',
-  'lead.created_manually': 'Negociação criada',
-  'lead.imported.rd_crm': 'Trazida do RD CRM',
-  'lead.imported.csv': 'Importada de planilha',
-  'rd.deal_linked': 'Ligada ao negócio do RD CRM',
-  'rd.deal_created': 'Cópia criada no RD CRM',
-  'lead.email_sent': 'E-mail ao lead',
-  'research.queued': 'Pesquisa pedida',
-  'research.done': 'Pesquisa concluída',
-  'research.failed': 'Pesquisa não concluída',
-  'lead.stage_changed': 'Etapa alterada',
-  'lead.outcome_changed': 'Resultado alterado',
-  'lead.owner_changed': 'Dono alterado',
-  'lead.pipeline_changed': 'Funil alterado',
-  'lead.value_changed': 'Valor alterado',
-  'lead.expected_close_changed': 'Previsão de fechamento alterada',
-  'lead.brand_changed': 'Marca de interesse alterada',
-  'lead.company_changed': 'Empresa alterada',
-  'lead.contact_linked': 'Contato adicionado',
-  'lead.contact_unlinked': 'Contato removido',
-  'lead.task_done': 'Tarefa concluída',
-  'lead.task_updated': 'Tarefa alterada',
-  'lead.renamed': 'Nome alterado',
-};
-
 export function DealPage() {
   const { id } = useParams<{ id: string }>();
   const session = useSession();
@@ -98,7 +67,10 @@ export function DealPage() {
   const canWrite = hasPermission(session.data, 'leads.write');
   const canAssign = hasPermission(session.data, 'leads.assign');
   const [tab, setTab] = useState<Tab>('note');
+  const [view, setView] = useState<View>('history');
   const register = useRef<HTMLElement>(null);
+  const sections = useRef<HTMLElement>(null);
+  const filePick = useRef<HTMLInputElement>(null);
   const contacts = useRef<{ add: () => void }>(null);
   if (loaded.isLoading)
     return (
@@ -120,9 +92,26 @@ export function DealPage() {
       </div>
     );
   const data = loaded.data;
+  const scrollTo = (ref: RefObject<HTMLElement | null>) =>
+    ref.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  // E-mail lives in the sections below; everything else is registered in "Registrar".
   const act = (next: Tab) => {
+    if (next === 'email') {
+      setView('email');
+      scrollTo(sections);
+      return;
+    }
     setTab(next);
-    register.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    scrollTo(register);
+  };
+  const show = (next: View) => {
+    setView(next);
+    scrollTo(sections);
+  };
+  const addFile = () => {
+    show('files');
+    // The input only exists once the tab is on screen.
+    setTimeout(() => filePick.current?.click(), 0);
   };
   return (
     <div className="crm-page">
@@ -138,13 +127,23 @@ export function DealPage() {
             <FirstContactStrip data={data} canWrite={canWrite} onAct={act} />
             <NextPanel data={data} canWrite={canWrite} onAct={act} />
             {canWrite && <Register lead={data.lead} tab={tab} onTab={setTab} ref={register} />}
-            <Timeline data={data} />
+            <DealTabs
+              data={data}
+              view={view}
+              onView={setView}
+              canWrite={canWrite}
+              onCreateTask={() => act('task')}
+              pickRef={filePick}
+              ref={sections}
+            />
           </div>
           <div className="crm-stack">
             <AssociationCards
               data={data}
               canWrite={canWrite}
               onAddContact={() => contacts.current?.add()}
+              onAddFile={addFile}
+              onShowFiles={() => show('files')}
             />
           </div>
         </div>
@@ -1167,11 +1166,10 @@ function Register({
     ['task', 'Tarefa', false],
     ['call', 'Ligação', false],
     ['meeting', 'Reunião', false],
-    ['email', 'E-mail', false],
   ];
   return (
     <section className="crm-panel" ref={ref} id="registrar">
-      <div className="crm-record-tabs" role="tablist">
+      <div className="crm-record-tabs" role="tablist" aria-label="Registrar">
         {tabs.map(([key, label, disabled]) => (
           <button
             key={key}
@@ -1374,7 +1372,6 @@ function Register({
           </div>
         </form>
       )}
-      {tab === 'email' && <LeadEmailTab leadId={lead.id} />}
       {error && <p className="crm-error">{errorText(error, 'Não foi possível registrar.')}</p>}
     </section>
   );
@@ -1405,142 +1402,6 @@ function CopyPhone({ phone }: { phone: string }) {
         {copied ? 'Copiado' : 'Copiar'}
       </button>
     </span>
-  );
-}
-
-interface Entry {
-  id: string;
-  at: string;
-  icon: IconName;
-  tone: string;
-  title: string;
-  by: string | null;
-  body?: string | null;
-  link?: { href: string; label: string };
-}
-
-function entriesOf(data: LoadedLead): Entry[] {
-  const entries: Entry[] = [];
-  for (const note of data.notes as LeadNote[])
-    entries.push({
-      id: `n${note.id}`,
-      at: note.at,
-      icon: 'edit',
-      tone: 'note',
-      title: 'Anotação',
-      by: note.authorName,
-      body: note.body,
-    });
-  for (const activity of data.activities as LeadActivity[]) {
-    const call = activity.kind === 'call';
-    entries.push({
-      id: `a${activity.id}`,
-      at: activity.at,
-      icon: call ? 'phone' : 'calendar',
-      tone: call ? 'call' : 'meeting',
-      title: call
-        ? `Ligação · ${activity.outcome ? LEAD_CALL_OUTCOME_LABELS[activity.outcome] : ''}${activity.durationSeconds ? ` · ${Math.round(activity.durationSeconds / 60)} min` : ''}`
-        : `Reunião${activity.participants ? ` · ${activity.participants}` : ''}`,
-      by: activity.actorName,
-      body: activity.note,
-      link: activity.meetUrl ? { href: activity.meetUrl, label: 'Abrir o Meet' } : undefined,
-    });
-  }
-  for (const task of data.tasks as LeadTask[]) {
-    if (task.doneAt)
-      entries.push({
-        id: `td${task.id}`,
-        at: task.doneAt,
-        icon: 'check',
-        tone: 'task',
-        title: `Tarefa concluída · ${task.title}`,
-        by: task.doneByName,
-      });
-    entries.push({
-      id: `tc${task.id}`,
-      at: task.createdAt,
-      icon: 'check-square',
-      tone: 'task',
-      title: `Tarefa criada · ${task.title} · para ${dueLabel(task.dueAt)}`,
-      by: task.auto ? 'Sistema' : task.assigneeName,
-    });
-  }
-  for (const item of data.history)
-    entries.push({
-      id: `h${item.id}`,
-      at: item.at,
-      icon: 'arrow-right',
-      tone: 'stage',
-      title:
-        item.won === true
-          ? 'Marcada como venda'
-          : item.won === false
-            ? `Marcada como perda${item.lostReason ? ` · ${item.lostReason}` : ''}`
-            : `${item.fromStage ?? '—'} → ${item.toStage ?? '—'}`,
-      by:
-        item.actorName ??
-        (item.source === 'rd'
-          ? 'RD CRM'
-          : item.source === 'import'
-            ? 'Importação'
-            : item.source === 'sofia'
-              ? 'Sofia'
-              : null),
-    });
-  const skip = new Set([
-    'lead.note_added',
-    'lead.task_created',
-    'lead.task_done',
-    'lead.stage_changed',
-    'lead.outcome_changed',
-    'lead.call_logged',
-    'lead.meeting_logged',
-  ]);
-  for (const event of data.events as LeadEvent[]) {
-    if (skip.has(event.kind)) continue;
-    entries.push({
-      id: `e${event.id}`,
-      at: event.at,
-      icon: 'more',
-      tone: 'event',
-      title: EVENT_LABELS[event.kind] ?? 'Atualização',
-      by: null,
-    });
-  }
-  return entries.sort((a, b) => b.at.localeCompare(a.at));
-}
-
-function Timeline({ data }: { data: LoadedLead }) {
-  const entries = entriesOf(data);
-  return (
-    <section className="crm-panel">
-      <h2>Linha do tempo</h2>
-      {entries.length === 0 && <p className="crm-muted">Nada registrado ainda.</p>}
-      <ol className="crm-timeline">
-        {entries.map((entry) => (
-          <li key={entry.id}>
-            <span className={`crm-tl-icon is-${entry.tone}`} aria-hidden="true">
-              <Icon name={entry.icon} size={13} />
-            </span>
-            <div>
-              <div className="crm-tl-head">
-                <b>{entry.title}</b>
-                <span>
-                  {formatDateTime(entry.at)}
-                  {entry.by ? ` · ${entry.by}` : ''}
-                </span>
-              </div>
-              {entry.body && <div className="crm-tl-body">{entry.body}</div>}
-              {entry.link && (
-                <a href={entry.link.href} target="_blank" rel="noopener noreferrer">
-                  {entry.link.label}
-                </a>
-              )}
-            </div>
-          </li>
-        ))}
-      </ol>
-    </section>
   );
 }
 
@@ -1588,13 +1449,18 @@ function AssociationCards({
   data,
   canWrite,
   onAddContact,
+  onAddFile,
+  onShowFiles,
 }: {
   data: LoadedLead;
   canWrite: boolean;
   onAddContact: () => void;
+  onAddFile: () => void;
+  onShowFiles: () => void;
 }) {
   const { lead } = data;
   const deal = useUpdateDeal(lead.id);
+  const files = useLeadFiles(lead.id);
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState('');
   return (
@@ -1667,8 +1533,29 @@ function AssociationCards({
       <AssocCard title="Propostas" count={0} soon="Em breve: propostas feitas e enviadas daqui">
         <p className="crm-muted">Nenhuma proposta.</p>
       </AssocCard>
-      <AssocCard title="Arquivos" count={0} soon="Na próxima etapa: arquivos no Drive do sistema">
-        <p className="crm-muted">Nenhum arquivo.</p>
+      <AssocCard
+        title="Arquivos"
+        count={files.data?.length ?? 0}
+        onAdd={canWrite ? onAddFile : undefined}
+      >
+        {!files.data || files.data.length === 0 ? (
+          <p className="crm-muted">Nenhum arquivo.</p>
+        ) : (
+          <>
+            {files.data.slice(0, 3).map((file) => (
+              <div key={file.id} className="crm-assoc-row">
+                <button type="button" className="crm-link-btn" onClick={onShowFiles}>
+                  {file.name}
+                </button>
+              </div>
+            ))}
+            {files.data.length > 3 && (
+              <button type="button" className="crm-link-btn crm-sub" onClick={onShowFiles}>
+                Ver todos
+              </button>
+            )}
+          </>
+        )}
       </AssocCard>
     </>
   );

@@ -12,7 +12,7 @@ import { DealPage } from './DealPage.js';
 
 const { dealMutate, queryState, idle, mutation } = vi.hoisted(() => ({
   dealMutate: vi.fn(),
-  queryState: { lead: null as Lead | null },
+  queryState: { lead: null as Lead | null, files: [] as unknown[] },
   idle: () => ({ data: undefined, isLoading: false, isError: false }),
   mutation: (mutate = vi.fn()) => ({ mutate, isPending: false, error: null }),
 }));
@@ -120,6 +120,9 @@ vi.mock('../../api/crm.js', () => ({
   useUnlinkContact: () => mutation(),
   useContacts: idle,
   useCompanies: idle,
+  useLeadFiles: () => ({ data: queryState.files ?? [], isLoading: false, isError: false }),
+  useRemoveLeadFile: () => mutation(),
+  useSendLeadFile: () => ({ ...mutation(), mutateAsync: vi.fn() }),
 }));
 
 const show = () =>

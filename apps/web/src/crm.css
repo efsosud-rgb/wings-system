@@ -1651,3 +1651,119 @@
     flex-basis: 240px;
   }
 }
+
+/* ---------- deal page: the sections in the centre (Etapa 3) ---------- */
+.crm-deal-tabs .crm-record-tabs button small {
+  font-size: var(--text-xs);
+  color: var(--text-3);
+  margin-left: 2px;
+}
+.crm-deal-tab-body {
+  padding-top: var(--space-3);
+  display: grid;
+  gap: var(--space-3);
+}
+.crm-history {
+  display: grid;
+  gap: var(--space-3);
+}
+.crm-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.crm-chip {
+  font: inherit;
+  font-size: var(--text-xs);
+  padding: 2px var(--space-2);
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.crm-chip.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--text);
+}
+.crm-tl-icon.is-email {
+  background: var(--info-soft);
+}
+.crm-tl-icon.is-file {
+  background: var(--accent-soft);
+}
+.crm-tasks-tab {
+  display: grid;
+  gap: var(--space-2);
+}
+.crm-tasks-tab .crm-quick-row,
+.crm-files .crm-quick-row {
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2);
+}
+.crm-task-line.is-done {
+  color: var(--text-2);
+}
+.crm-task-line.is-done > svg {
+  margin-top: 3px;
+  color: var(--success);
+}
+.crm-first-message {
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--text-md);
+}
+.crm-files {
+  display: grid;
+  gap: var(--space-2);
+}
+.crm-file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1);
+}
+.crm-file-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--text-md);
+}
+.crm-file-row > svg {
+  flex: none;
+  color: var(--text-2);
+}
+.crm-file-name {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+}
+.crm-file-name .crm-sub {
+  font-size: var(--text-xs);
+}
+.crm-link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.crm-link-btn:hover {
+  text-decoration: underline;
+}
+.crm-deal-tabs .crm-record-tabs {
+  flex-wrap: wrap;
+  overflow: visible;
+}
+.crm-deal-tabs .crm-record-tabs button {
+  padding-inline: var(--space-2);
+  font-size: var(--text-sm);
+}

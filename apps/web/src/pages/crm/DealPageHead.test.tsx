@@ -1,4 +1,4 @@
-import type { CrmStage, Lead, LeadTask } from '@wings/shared';
+import type { CrmStage, Lead, LeadEvent, LeadFile, LeadNote, LeadTask } from '@wings/shared';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,6 +19,9 @@ const { dealMutate, taskMutate, leadMutate, queryState, idle, mutation } = vi.ho
     tasks: [] as LeadTask[],
     stages: [] as CrmStage[],
     permissions: {} as Record<string, string>,
+    files: [] as LeadFile[],
+    events: [] as LeadEvent[],
+    notes: [] as LeadNote[],
   },
   idle: () => ({ data: undefined, isLoading: false, isError: false }),
   mutation: (mutate = vi.fn()) => ({ mutate, isPending: false, error: null }),
@@ -135,8 +138,8 @@ vi.mock('../../api/leads.js', () => ({
     isError: false,
     data: queryState.lead && {
       lead: queryState.lead,
-      events: [],
-      notes: [],
+      events: queryState.events,
+      notes: queryState.notes,
       tasks: queryState.tasks,
       history: [],
       activities: [],
@@ -158,6 +161,9 @@ vi.mock('../../api/crm.js', () => ({
   useUnlinkContact: () => mutation(),
   useContacts: idle,
   useCompanies: idle,
+  useLeadFiles: () => ({ data: queryState.files ?? [], isLoading: false, isError: false }),
+  useRemoveLeadFile: () => mutation(),
+  useSendLeadFile: () => ({ ...mutation(), mutateAsync: vi.fn() }),
 }));
 
 vi.mock('./LeadEmailTab.js', () => ({
@@ -173,7 +179,12 @@ const show = () =>
     </MemoryRouter>,
   );
 
-const selectedTab = () => screen.getByRole('tab', { selected: true }).textContent;
+const registerTabs = () => screen.getByRole('tablist', { name: 'Registrar' });
+const sectionTabs = () => screen.getByRole('tablist', { name: 'Seções da negociação' });
+const selectedTab = () =>
+  within(registerTabs()).getByRole('tab', { selected: true }).textContent;
+const selectedSection = () =>
+  within(sectionTabs()).getByRole('tab', { selected: true }).textContent;
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -298,13 +309,14 @@ describe('the action bar', () => {
     fireEvent.click(within(bar).getByRole('button', { name: 'Ligação' }));
     expect(selectedTab()).toBe('Ligação');
     expect(
-      within(screen.getByRole('tablist').parentElement!).getByRole('button', {
+      within(registerTabs().parentElement!).getByRole('button', {
         name: 'Copiar telefone',
       }),
     ).toBeTruthy();
     fireEvent.click(within(bar).getByRole('button', { name: 'Tarefa' }));
     expect(selectedTab()).toBe('Tarefa');
     fireEvent.click(within(bar).getByRole('button', { name: 'E-mail' }));
+    expect(selectedSection()).toBe('E-mail');
     expect(screen.getByText('Aba de e-mail')).toBeTruthy();
     const whatsapp = within(bar).getByRole('button', { name: 'WhatsApp (em breve)' });
     const meet = within(bar).getByRole('button', { name: 'Reunião (em breve)' });
@@ -441,7 +453,19 @@ describe('the contacts', () => {
 });
 
 describe('the right column', () => {
-  it('counts contacts, the company, proposals and files; proposals and files wait', () => {
+  it('counts contacts, the company, proposals and files; proposals wait, files open the tab', () => {
+    queryState.files = [
+      {
+        id: 'f1',
+        fileId: 'd1',
+        name: 'proposta.pdf',
+        mimeType: 'application/pdf',
+        byteSize: 2048,
+        version: 1,
+        addedByName: 'Eric',
+        createdAt: '2026-10-05T12:00:00.000Z',
+      },
+    ];
     queryState.lead = lead({
       company: { id: 'c1', name: 'Padaria Sol', clientId: null },
       contacts: [
@@ -468,9 +492,98 @@ describe('the right column', () => {
     const summary = cards.map((c) =>
       c.querySelector('h2 > span')!.textContent!.replace(/\s+/g, ' ').trim(),
     );
-    expect(summary).toEqual(['Contatos 2', 'Empresa 1', 'Propostas 0', 'Arquivos 0']);
+    expect(summary).toEqual(['Contatos 2', 'Empresa 1', 'Propostas 0', 'Arquivos 1']);
     expect(within(cards[2]!).getByRole('button', { name: 'em breve' })).toBeTruthy();
-    expect(within(cards[3]!).getByRole('button', { name: 'em breve' })).toBeTruthy();
     expect(within(cards[1]!).getByRole('link', { name: 'Padaria Sol' })).toBeTruthy();
+    fireEvent.click(within(cards[3]!).getByRole('button', { name: 'proposta.pdf' }));
+    expect(selectedSection()).toBe('Arquivos');
+    expect(screen.getByText('1 arquivo · na pasta Comercial › Negociações do Drive')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remover proposta.pdf da negociação' })).toBeTruthy();
+  });
+});
+
+describe('the sections in the centre', () => {
+  beforeEach(() => {
+    queryState.notes = [{ id: 'n1', at: '2026-10-04T10:00:00.000Z', authorName: 'Eric', body: 'Ligar amanhã' }];
+    queryState.events = [
+      { id: 'ev1', at: '2026-10-03T12:00:00.000Z', kind: 'lead.received.meta_lead_ads', detail: {} },
+      { id: 'ev2', at: '2026-10-05T09:00:00.000Z', kind: 'lead.file_added', detail: { fileId: 'd1' } },
+    ];
+    queryState.tasks = [
+      firstContact(),
+      firstContact({
+        id: 't2',
+        kind: 'follow_up',
+        title: 'Enviar proposta',
+        dueAt: '2026-10-08T12:00:00.000Z',
+        auto: false,
+      }),
+      firstContact({
+        id: 't3',
+        kind: 'follow_up',
+        title: 'Mandar material',
+        dueAt: '2026-10-02T12:00:00.000Z',
+        auto: false,
+        doneAt: '2026-10-02T13:00:00.000Z',
+        doneByName: 'Eric',
+      }),
+    ];
+  });
+
+  it('opens on Histórico and filters the timeline by kind', () => {
+    show();
+    expect(selectedSection()).toBe('Histórico');
+    const filter = within(screen.getByRole('group', { name: 'Filtrar histórico' }));
+    expect(filter.getAllByRole('button').map((b) => b.textContent)).toEqual([
+      'Tudo',
+      'Anotações',
+      'Tarefas',
+      'Arquivos',
+      'Sistema',
+    ]);
+    expect(screen.getByText('Ligar amanhã')).toBeTruthy();
+    expect(screen.getByText('Arquivo adicionado')).toBeTruthy();
+    fireEvent.click(filter.getByRole('button', { name: 'Anotações' }));
+    expect(screen.getByText('Ligar amanhã')).toBeTruthy();
+    expect(screen.queryByText('Arquivo adicionado')).toBeNull();
+    expect(screen.queryByText('Chegou pelo Meta Lead Ads')).toBeNull();
+    fireEvent.click(filter.getByRole('button', { name: 'Anotações' }));
+    expect(screen.getByText('Chegou pelo Meta Lead Ads')).toBeTruthy();
+  });
+
+  it('Tarefas lists the open ones with a checkbox and the done ones after; "Criar tarefa" opens the form', () => {
+    show();
+    fireEvent.click(within(sectionTabs()).getByRole('tab', { name: 'Tarefas' }));
+    const body = within(sectionTabs().parentElement!);
+    expect(body.getByText('2 abertas · 1 concluída')).toBeTruthy();
+    fireEvent.click(body.getByRole('checkbox', { name: 'Concluir Enviar proposta' }));
+    expect(taskMutate).toHaveBeenCalledWith({ taskId: 't2', done: true });
+    expect(body.getByText(/concluída 02\/10\/2026/)).toBeTruthy();
+    fireEvent.click(body.getByRole('button', { name: 'Criar tarefa' }));
+    expect(selectedTab()).toBe('Tarefa');
+  });
+
+  it('Questionários shows the answers as they came, or says there are none', () => {
+    queryState.lead = lead({
+      formAnswers: { Budget: 'R$ 100 mil', 'Já trabalha com franquia': 'Não' },
+      firstMessage: 'Quero saber mais',
+    });
+    show();
+    fireEvent.click(within(sectionTabs()).getByRole('tab', { name: 'Questionários' }));
+    const answers = within(screen.getByLabelText('Respostas do formulário'));
+    expect(answers.getByText('Budget')).toBeTruthy();
+    expect(answers.getByText('R$ 100 mil')).toBeTruthy();
+    expect(screen.getAllByText('Quero saber mais').length).toBeGreaterThan(0);
+    cleanup();
+    queryState.lead = lead({});
+    show();
+    fireEvent.click(within(sectionTabs()).getByRole('tab', { name: 'Questionários' }));
+    expect(screen.getByText('Nenhum questionário respondido por esta pessoa.')).toBeTruthy();
+  });
+
+  it('Propostas waits, disabled, "em breve"', () => {
+    show();
+    const tab = within(sectionTabs()).getByRole('tab', { name: 'Propostas (em breve)' });
+    expect((tab as HTMLButtonElement).disabled).toBe(true);
   });
 });

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { driveUploadRequestSchema } from './drive.js';
 import { LEAD_NAME_MAX, LEAD_PIPELINES, type LeadPipeline, type LeadSource } from './leads.js';
 
 /**
@@ -684,6 +685,41 @@ export const leadDealUpdateSchema = z
     { message: 'Nada para alterar.' },
   );
 export type LeadDealUpdateInput = z.infer<typeof leadDealUpdateSchema>;
+
+/**
+ * A Drive file attached to a deal (ficha do cliente). The Drive keeps the
+ * bytes and decides who opens it; this is the link, read with `leads.read` in
+ * the caller's scope. Opening or downloading goes through `/drive/files/:id/link`.
+ */
+export interface LeadFile {
+  id: string;
+  fileId: string;
+  name: string;
+  mimeType: string;
+  byteSize: number;
+  version: number;
+  addedByName: string | null;
+  createdAt: string;
+}
+
+/** `POST /leads/:id/files/uploads`: the folder is the deal's own, chosen by the server. */
+export const leadFileUploadSchema = driveUploadRequestSchema.omit({
+  folderId: true,
+  replaceFileId: true,
+});
+export type LeadFileUploadInput = z.output<typeof leadFileUploadSchema>;
+
+/**
+ * The deal's AI summary (Etapa 4), kept on the lead with the date it was
+ * made. Built only from the timeline and the form answers: no phone, e-mail
+ * or document ever goes to the model (`docs/crm/ficha-do-cliente.md`).
+ */
+export interface LeadAiSummary {
+  text: string;
+  generatedAt: string;
+  model: string;
+  basedOn: { events: number; answers: number };
+}
 
 /** An Expansão brand a lead may be interested in: a client with its franchise on sale. */
 export interface CrmBrand {
