@@ -1770,6 +1770,11 @@
   padding-inline: var(--space-2);
   font-size: var(--text-sm);
 }
+.crm-deal-tabs .crm-record-tabs button:disabled small {
+  display: block;
+  line-height: 1;
+  margin: 0;
+}
 
 /* ---------- deal page: the AI summary (Etapa 4) ---------- */
 .crm-summary {
@@ -1930,4 +1935,75 @@
   .crm-wa-body {
     padding: var(--space-3);
   }
+}
+
+/* ---------- deal page: Reunião ---------- */
+.crm-meetings {
+  display: grid;
+  gap: var(--space-2);
+}
+.crm-meetings-actions {
+  flex-wrap: wrap;
+}
+.crm-meetings-buttons {
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+.crm-meetings-buttons small {
+  font-size: var(--text-xs);
+  margin-left: 4px;
+  opacity: 0.8;
+}
+.crm-meeting-client {
+  display: grid;
+  gap: 2px;
+}
+.crm-meeting-list,
+.crm-plain-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1);
+  font-size: var(--text-md);
+}
+.crm-meeting-row {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+}
+.crm-meeting-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.crm-meeting-line .crm-link-btn {
+  font-weight: var(--weight-medium);
+}
+.crm-meeting-detail {
+  margin-top: var(--space-2);
+  display: grid;
+  gap: var(--space-2);
+}
+.crm-meeting-block h3 {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--text-2);
+  font-weight: var(--weight-medium);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2);
+}
+.crm-meeting-block p {
+  margin: 0;
+  font-size: var(--text-md);
+}
+.crm-next-step {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  align-items: center;
 }

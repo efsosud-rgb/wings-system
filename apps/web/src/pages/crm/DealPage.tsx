@@ -97,8 +97,8 @@ export function DealPage() {
     ref.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   // E-mail lives in the sections below; everything else is registered in "Registrar".
   const act = (next: Tab) => {
-    if (next === 'email') {
-      setView('email');
+    if (next === 'email' || next === 'meet') {
+      setView(next === 'email' ? 'email' : 'meetings');
       scrollTo(sections);
       return;
     }
@@ -135,6 +135,12 @@ export function DealPage() {
               onView={setView}
               canWrite={canWrite}
               onCreateTask={() => act('task')}
+              onRegisterMeeting={() => act('meeting')}
+              client={
+                data.lead.pipeline === 'expansao' ? (
+                  <BrandEdit lead={data.lead} canWrite={canWrite} />
+                ) : undefined
+              }
               pickRef={filePick}
               ref={sections}
             />
@@ -494,12 +500,8 @@ const ACTIONS: Action[] = [
   { tab: 'call', icon: 'phone', label: 'Ligação' },
   // Opens the conversation screen; sending waits there for the official API.
   { tab: 'whatsapp', icon: 'message', label: 'WhatsApp', href: 'whatsapp' },
-  {
-    tab: 'meet',
-    icon: 'video',
-    label: 'Reunião',
-    soon: 'Em breve: Google Meet com a agenda do vendedor e da Wings',
-  },
+  // Opens the Reunião section; agendar/iniciar wait there for the Google integration.
+  { tab: 'meet', icon: 'video', label: 'Reunião' },
   { tab: 'task', icon: 'check', label: 'Tarefa' },
 ];
 

@@ -25,6 +25,8 @@ import type {
   LeadPipeline,
   LeadTask,
   LeadTaskKind,
+  Meeting,
+  MeetingSummary,
   SalesDashboard,
   DriveUploadTicket,
 } from '@wings/shared';
@@ -490,3 +492,38 @@ export const useAskDeal = (id: string) =>
     mutationFn: (question: string) =>
       api.post<{ answer: string; model: string }>(`/leads/${id}/resumo/pergunta`, { question }),
   });
+
+// --- meetings of a deal (docs/crm/reunioes-api.md) ----------------------------------------
+
+/**
+ * The deal's meetings. The API is the Opus's (contract in docs/crm/reunioes-api.md);
+ * until it is on, the route answers 404 and the screen shows "—" with the reason.
+ */
+export const useMeetings = (leadId: string) =>
+  useQuery({
+    queryKey: ['leads', leadId, 'meetings'],
+    queryFn: () =>
+      api.get<{ meetings: MeetingSummary[] }>(`/leads/${leadId}/meetings`).then((r) => r.meetings),
+    retry: false,
+  });
+
+export const useMeeting = (id: string | null) =>
+  useQuery({
+    queryKey: ['meetings', id],
+    queryFn: () => api.get<{ meeting: Meeting }>(`/meetings/${id}`).then((r) => r.meeting),
+    enabled: id !== null,
+    retry: false,
+  });
+
+/** One click turns a next step of the analysis into a task of the deal. */
+export function useNextStepTask(meetingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (index: number) =>
+      api.post<{ task: LeadTask }>(`/meetings/${meetingId}/next-steps/${index}/task`),
+    onSuccess: () => {
+      invalidateDeals(queryClient);
+      void queryClient.invalidateQueries({ queryKey: ['meetings', meetingId] });
+    },
+  });
+}

@@ -8,13 +8,14 @@ import {
   type LeadNote,
   type LeadTask,
 } from '@wings/shared';
-import { useRef, useState, type RefObject } from 'react';
+import { useRef, useState, type ReactNode, type RefObject } from 'react';
 import { ApiError } from '../../api/client.js';
 import { useLeadFiles, useRemoveLeadFile, useSendLeadFile } from '../../api/crm.js';
 import { driveLink } from '../../api/drive.js';
 import { useUpdateTask, type LoadedLead } from '../../api/leads.js';
 import { formatBytes } from '../../components/drive/DriveParts.js';
 import { Icon, type IconName } from '../../components/Icon.js';
+import { MeetingsTab } from './DealMeetings.js';
 import { dueLabel, formatDateTime, isPast } from './format.js';
 import { LeadEmailTab } from './LeadEmailTab.js';
 
@@ -25,12 +26,13 @@ import { LeadEmailTab } from './LeadEmailTab.js';
  * Drive); Propostas waits, "em breve".
  */
 
-export type View = 'history' | 'email' | 'tasks' | 'answers' | 'files' | 'proposals';
+export type View = 'history' | 'email' | 'tasks' | 'meetings' | 'answers' | 'files' | 'proposals';
 
 const VIEWS: { key: View; label: string; soon?: string }[] = [
   { key: 'history', label: 'Histórico' },
   { key: 'email', label: 'E-mail' },
   { key: 'tasks', label: 'Tarefas' },
+  { key: 'meetings', label: 'Reunião' },
   { key: 'answers', label: 'Questionários' },
   { key: 'files', label: 'Arquivos' },
   { key: 'proposals', label: 'Propostas', soon: 'Em breve: propostas feitas e enviadas daqui' },
@@ -489,6 +491,8 @@ export function DealTabs({
   onView,
   canWrite,
   onCreateTask,
+  onRegisterMeeting,
+  client,
   pickRef,
   ref,
 }: {
@@ -497,6 +501,9 @@ export function DealTabs({
   onView: (view: View) => void;
   canWrite: boolean;
   onCreateTask: () => void;
+  onRegisterMeeting: () => void;
+  /** The "Cliente" (franchisor brand) field for Expansão deals, rendered by the page. */
+  client?: ReactNode;
   pickRef: RefObject<HTMLInputElement | null>;
   ref: RefObject<HTMLElement | null>;
 }) {
@@ -524,6 +531,14 @@ export function DealTabs({
         {view === 'history' && <Timeline data={data} />}
         {view === 'email' && <LeadEmailTab leadId={data.lead.id} />}
         {view === 'tasks' && <TasksTab data={data} canWrite={canWrite} onCreate={onCreateTask} />}
+        {view === 'meetings' && (
+          <MeetingsTab
+            data={data}
+            canWrite={canWrite}
+            client={client}
+            onRegisterHeld={onRegisterMeeting}
+          />
+        )}
         {view === 'answers' && <AnswersTab lead={data.lead} />}
         {view === 'files' && <FilesTab lead={data.lead} canWrite={canWrite} pickRef={pickRef} />}
       </div>

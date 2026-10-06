@@ -128,6 +128,9 @@ vi.mock('../../api/crm.js', () => ({
   useRemoveLeadFile: () => mutation(),
   useSendLeadFile: () => ({ ...mutation(), mutateAsync: vi.fn() }),
   useGenerateSummary: () => mutation(summaryMutate),
+  useMeetings: () => ({ data: undefined, isLoading: false, isError: true, error: null }),
+  useMeeting: () => ({ data: undefined, isLoading: false, isError: false, error: null }),
+  useNextStepTask: () => mutation(),
   useAskDeal: () => ({ ...mutation(askMutate), data: askState.data, error: askState.error }),
 }));
 

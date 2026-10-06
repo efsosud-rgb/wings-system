@@ -31,8 +31,12 @@ Branch `feat/ficha-cliente` (06/10/2026), sobre o develop 7a6349b. Pedido do Eri
 - Web: `DealPage.test.tsx` (previsão) e `DealPageHead.test.tsx` (cabeçalho, barra, faixa, Sobre, Personalizar, contatos, cartões, resumo, seções).
 - Capturas a 1440 e 390 px ao fim de cada etapa (sem rolagem lateral a 390).
 
+## Depois da Etapa 5 (mesma branch)
+
+- Em "Sobre a negociação", a linha "Preencheu o formulário em DD/MM/AAAA HH:MM" (`consent.consentedAt`), só para leads da Meta e do TikTok.
+- **Conversa do WhatsApp** (`/crm-vendas/negociacoes/:id/whatsapp`, `DealWhatsAppPage`): conversa no centro, campo de mensagem embaixo, painel à direita com Visão geral, Anotações (funcionam) e Arquivos (os da negociação); ligação de voz e vídeo no topo. Até a API oficial do WhatsApp ser ligada, abre vazia (sem mensagem de exemplo), com envio, ligação e vídeo desabilitados "em breve". A ação WhatsApp da barra e o ícone ao lado do telefone abrem a tela.
+- **Reunião** (seção do centro, `DealMeetings.tsx`, sobre o contrato `docs/crm/reunioes-api.md` do Opus e os tipos de `@wings/shared/meetings`): "Agendar reunião" (agenda do Google do vendedor ou da Wings) e "Iniciar reunião" (Meet numa janela ao lado, `window.open(..., 'wings-meet', 'popup…')`) desabilitados "em breve" até a integração do Google. Lista `GET /leads/:id/meetings` e, por reunião, `GET /meetings/:id`: resumo, participantes, assuntos, próximos compromissos ("Virar tarefa" → `POST /meetings/:id/next-steps/:index/task`) e avaliação do lead; sem dado, "—" com o motivo (enquanto a API do Opus não existe, "A API de reuniões ainda não está ligada."). Em Expansão, o campo "Cliente (marca franqueadora)" (a marca de interesse, `brandClientId`). As reuniões registradas à mão (`lead_activities`) seguem listadas abaixo.
+
 ## Fica para depois
 
-- Propostas; WhatsApp, vídeo e agenda do Google (contas de API).
-- No quadro Origem: "Preencheu o formulário em DD/MM/AAAA HH:MM" (`consentedAt`, só Meta e TikTok).
-- Tela de conversa do WhatsApp aberta pela ficha; reunião com Google (agendar/iniciar) e pós-reunião, conforme `docs/crm/reunioes-api.md` quando existir.
+- Propostas; a API oficial do WhatsApp; a integração do Google (agenda, Meet, gravação) e as rotas de reuniões (Opus).

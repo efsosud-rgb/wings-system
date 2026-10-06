@@ -2,6 +2,7 @@ import type { CrmStage, Lead, LeadEvent, LeadFile, LeadNote, LeadTask } from '@w
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client.js';
 import { DealPage, daysInStage, orderFields } from './DealPage.js';
 
 /**
@@ -10,10 +11,15 @@ import { DealPage, daysInStage, orderFields } from './DealPage.js';
  * and the "new deal: first contact until HH:MM" strip.
  */
 
-const { dealMutate, taskMutate, leadMutate, summaryMutate, askMutate, askState, queryState, idle, mutation } = vi.hoisted(() => ({
+const { dealMutate, taskMutate, leadMutate, summaryMutate, askMutate, askState, nextStepMutate, meetingState, queryState, idle, mutation } = vi.hoisted(() => ({
   dealMutate: vi.fn(),
   summaryMutate: vi.fn(),
   askMutate: vi.fn(),
+  nextStepMutate: vi.fn(),
+  meetingState: {
+    list: { data: undefined as unknown, isLoading: false, isError: true, error: null as unknown },
+    one: { data: undefined as unknown, isLoading: false, isError: false, error: null as unknown },
+  },
   askState: { data: undefined as { answer: string; model: string } | undefined, error: null as unknown },
   taskMutate: vi.fn(),
   leadMutate: vi.fn(),
@@ -169,6 +175,9 @@ vi.mock('../../api/crm.js', () => ({
   useRemoveLeadFile: () => mutation(),
   useSendLeadFile: () => ({ ...mutation(), mutateAsync: vi.fn() }),
   useGenerateSummary: () => mutation(summaryMutate),
+  useMeetings: () => meetingState.list,
+  useMeeting: () => meetingState.one,
+  useNextStepTask: () => mutation(nextStepMutate),
   useAskDeal: () => ({ ...mutation(askMutate), data: askState.data, error: askState.error }),
 }));
 
@@ -308,7 +317,7 @@ describe('win or lose', () => {
 });
 
 describe('the action bar', () => {
-  it('opens the register tab of each action; WhatsApp opens the conversation; Reunião waits, "em breve"', () => {
+  it('opens the register tab of each action; WhatsApp opens the conversation; Reunião opens its section', () => {
     show();
     const bar = screen.getByRole('toolbar', { name: 'Ações' });
     expect(selectedTab()).toBe('Anotação');
@@ -326,9 +335,8 @@ describe('the action bar', () => {
     expect(screen.getByText('Aba de e-mail')).toBeTruthy();
     const whatsapp = within(bar).getByRole('link', { name: 'WhatsApp' });
     expect(whatsapp.getAttribute('href')).toBe('/crm-vendas/negociacoes/l1/whatsapp');
-    const meet = within(bar).getByRole('button', { name: 'Reunião (em breve)' });
-    expect((meet as HTMLButtonElement).disabled).toBe(true);
-    expect(meet.textContent).toContain('em breve');
+    fireEvent.click(within(bar).getByRole('button', { name: 'Reunião' }));
+    expect(selectedSection()).toBe('Reunião');
   });
 
   it('"Mais" keeps the meeting already held', () => {
@@ -570,6 +578,99 @@ describe('the AI summary', () => {
     expect(askMutate).toHaveBeenCalledWith('Ela já tem ponto?');
     expect(panel.getByRole('status').textContent).toBe('Não consta no registro.');
     askState.data = undefined;
+  });
+});
+
+describe('the Reunião section', () => {
+  it('keeps Agendar and Iniciar disabled "em breve", shows "—" with the reason while the API is off, and the Cliente field on Expansão', () => {
+    meetingState.list = { data: undefined, isLoading: false, isError: true, error: new ApiError(404, { error: 'not_found', message: 'x' }) };
+    show();
+    fireEvent.click(within(sectionTabs()).getByRole('tab', { name: 'Reunião' }));
+    const body = within(sectionTabs().parentElement!);
+    expect((body.getByRole('button', { name: /Agendar reunião/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((body.getByRole('button', { name: /Iniciar reunião/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(body.getByText('A API de reuniões ainda não está ligada.')).toBeTruthy();
+    expect(body.getByText('Cliente (marca franqueadora)')).toBeTruthy();
+    expect(body.getByLabelText('Marca')).toBeTruthy();
+    fireEvent.click(body.getByRole('button', { name: 'Registrar reunião feita' }));
+    expect(selectedTab()).toBe('Reunião');
+  });
+
+  it('shows, for a meeting that ended, the summary, participants, topics, next steps (each a task on a click) and the evaluation', () => {
+    meetingState.list = {
+      data: [
+        {
+          id: 'm1',
+          leadId: 'l1',
+          title: 'Diagnóstico',
+          startsAt: '2026-10-05T14:00:00.000Z',
+          endsAt: '2026-10-05T15:00:00.000Z',
+          status: 'encerrada',
+          calendar: 'vendedor',
+          meetUrl: 'https://meet.google.com/abc-defg-hij',
+          ownerEmployeeId: 'e1',
+          recordingState: 'guardada',
+          transcriptState: 'pronta',
+          analysisState: 'pronta',
+          summarySendState: 'nenhum',
+        },
+      ],
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+    meetingState.one = {
+      data: {
+        ...(meetingState.list.data as unknown[])[0]!,
+        attendees: [{ email: 'p@example.com', name: 'Paulo', responseStatus: 'aceitou' }],
+        googleEventId: null,
+        recording: { state: 'guardada', fileId: 'f', durationSeconds: 100, sizeBytes: 10 },
+        transcript: { state: 'pronta', segments: 10, error: null },
+        analysis: {
+          state: 'pronta',
+          summary: 'Conversa sobre o modelo quiosque.',
+          topics: ['Faturamento', 'Prazo de abertura'],
+          participants: [{ speaker: 'S2', role: 'cliente', suggestedName: 'Paulo' }],
+          nextSteps: [
+            { what: 'Enviar proposta', owner: 'vendedor', dueAt: '2026-10-10', taskId: null },
+            { what: 'Falar com o sócio', owner: 'cliente', dueAt: null, taskId: 't9' },
+          ],
+          leadEvaluation: { score: 72, fit: 'bom', reasons: ['Tem capital'], risks: ['Sócio'] },
+          model: 'anthropic/claude-sonnet-5',
+          costUsd: 0.01,
+          analyzedAt: '2026-10-05T15:20:00.000Z',
+          reason: null,
+        },
+        summarySend: null,
+        createdAt: '2026-10-01T00:00:00.000Z',
+        updatedAt: '2026-10-01T00:00:00.000Z',
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+    };
+    window.open = vi.fn();
+    show();
+    fireEvent.click(within(sectionTabs()).getByRole('tab', { name: 'Reunião' }));
+    const body = within(sectionTabs().parentElement!);
+    expect(body.getByText('1 reunião')).toBeTruthy();
+    fireEvent.click(body.getByRole('button', { name: 'Abrir o Meet ao lado' }));
+    expect(window.open).toHaveBeenCalledWith(
+      'https://meet.google.com/abc-defg-hij',
+      'wings-meet',
+      expect.stringContaining('popup'),
+    );
+    fireEvent.click(body.getByRole('button', { name: 'Diagnóstico' }));
+    expect(body.getByText('Conversa sobre o modelo quiosque.')).toBeTruthy();
+    expect(body.getByText(/Paulo · aceitou/)).toBeTruthy();
+    expect(body.getByText('Faturamento')).toBeTruthy();
+    expect(body.getByText(/Enviar proposta · vendedor · até 10\/10\/2026/)).toBeTruthy();
+    expect(body.getByText('já é tarefa')).toBeTruthy();
+    fireEvent.click(body.getByRole('button', { name: 'Virar tarefa' }));
+    expect(nextStepMutate).toHaveBeenCalledWith(0);
+    expect(body.getByText('72/100')).toBeTruthy();
+    expect(body.getByText(/Riscos: Sócio/)).toBeTruthy();
+    meetingState.list = { data: undefined, isLoading: false, isError: true, error: null };
   });
 });
 
