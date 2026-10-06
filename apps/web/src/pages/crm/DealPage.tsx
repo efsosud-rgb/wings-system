@@ -13,6 +13,10 @@ import {
   type LeadCallOutcome,
   type LeadTask,
   type LeadTaskKind,
+  LEAD_CHECK_LABELS,
+  normalizeInstagram,
+  normalizeWebsite,
+  type LeadCheck,
 } from '@wings/shared';
 import { useImperativeHandle, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Link, useParams } from 'react-router-dom';
@@ -28,6 +32,7 @@ import {
 } from '../../api/crm.js';
 import {
   useAddNote,
+  useCheckLead,
   useCreateTask,
   useLead,
   useSellers,
@@ -37,6 +42,7 @@ import {
   type LoadedLead,
 } from '../../api/leads.js';
 import { Icon, type IconName } from '../../components/Icon.js';
+import { CompanyResearchPanel } from './CompanyResearchPanel.js';
 import { DealSummary } from './DealSummary.js';
 import { DealTabs, type View } from './DealTabs.js';
 import {
@@ -122,6 +128,8 @@ export function DealPage() {
         <div className="crm-deal-body">
           <div className="crm-stack">
             <AboutPanel lead={data.lead} canWrite={canWrite} canAssign={canAssign} />
+            <FormFieldsPanel lead={data.lead} canWrite={canWrite} />
+            <CompanyResearchPanel research={data.lead.research} />
             <ContactPanel data={data} canWrite={canWrite} ref={contacts} />
           </div>
           <div className="crm-stack is-center">
@@ -716,9 +724,11 @@ function AboutPanel({
       ? [{ key: 'campaign', label: 'Campanha', value: origin.campaignName ?? origin.campaignId }]
       : []),
     ...(origin.landingPage ? [{ key: 'page', label: 'Página', value: origin.landingPage }] : []),
-    // Meta and TikTok forms carry the moment the person submitted them (`consentedAt`).
+    // Meta, TikTok and Google forms carry the moment the person submitted them (`consentedAt`).
     ...(lead.consent.consentedAt &&
-    (origin.source === 'meta_lead_ads' || origin.source === 'tiktok_lead_ads')
+    (origin.source === 'meta_lead_ads' ||
+      origin.source === 'tiktok_lead_ads' ||
+      origin.source === 'google_lead_form')
       ? [
           {
             key: 'form',
@@ -1152,6 +1162,101 @@ function ContactPanel({
           </div>
         </form>
       )}
+    </section>
+  );
+}
+
+/** One form field and what the arrival check said about it; "—" and the reason when missing. */
+function FieldCheckRow({
+  label,
+  value,
+  check,
+}: {
+  label: string;
+  value: ReactNode | null;
+  /** null: a field that is not checked (shown without a badge). */
+  check: LeadCheck | undefined | null;
+}) {
+  return (
+    <>
+      <dt>{label}</dt>
+      <dd>
+        <span className="crm-field-value">{value ?? '—'}</span>
+        {check === null ? null : check ? (
+          <span className={`crm-check is-${check.status}`}>{LEAD_CHECK_LABELS[check.status]}</span>
+        ) : (
+          <span className="crm-check is-nao_verificado">Não conferido ainda</span>
+        )}
+        {check?.reason ? <span className="crm-sub crm-check-reason">{check.reason}</span> : null}
+      </dd>
+    </>
+  );
+}
+
+/**
+ * "Dados do formulário": the five fields a lead form asks (name, WhatsApp,
+ * Instagram, site, company and CNPJ), each with what the arrival check said,
+ * and "Conferir de novo".
+ */
+function FormFieldsPanel({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
+  const recheck = useCheckLead();
+  const { fields, checks } = lead;
+  const site = fields.website;
+  // Links only for what passed the format check: never an IP, never a broken @.
+  const siteLink =
+    site && normalizeWebsite(site) === site ? (
+      <a href={site} target="_blank" rel="noopener noreferrer nofollow">
+        {site.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+      </a>
+    ) : (
+      site
+    );
+  return (
+    <section className="crm-panel" aria-label="Dados do formulário">
+      <h2>Dados do formulário</h2>
+      <dl className="crm-kv crm-checks">
+        <FieldCheckRow label="Nome" value={lead.name} check={null} />
+        <FieldCheckRow
+          label="WhatsApp"
+          value={lead.phone ? 'ver em Contato' : null}
+          check={checks.whatsapp}
+        />
+        <FieldCheckRow
+          label="Instagram"
+          value={
+            fields.instagram && normalizeInstagram(fields.instagram) === fields.instagram ? (
+              <a
+                href={`https://www.instagram.com/${fields.instagram}/`}
+                target="_blank"
+                rel="noopener noreferrer nofollow"
+              >
+                @{fields.instagram}
+              </a>
+            ) : (
+              fields.instagram
+            )
+          }
+          check={checks.instagram}
+        />
+        <FieldCheckRow label="Site" value={siteLink} check={checks.website} />
+        <FieldCheckRow label="Nome da empresa" value={fields.companyName} check={null} />
+        <FieldCheckRow label="CNPJ" value={fields.cnpj} check={checks.cnpj} />
+      </dl>
+      {canWrite ? (
+        <p>
+          <button
+            type="button"
+            className="crm-btn"
+            disabled={recheck.isPending}
+            onClick={() => recheck.mutate(lead.id)}
+          >
+            {recheck.isPending ? 'Conferindo…' : 'Conferir de novo'}
+          </button>
+          {recheck.isError ? (
+            <span className="crm-sub"> Não foi possível conferir agora.</span>
+          ) : null}
+        </p>
+      ) : null}
     </section>
   );
 }

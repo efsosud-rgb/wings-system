@@ -324,6 +324,8 @@ const schema = z.object({
     .default(DEFAULT_AGENT_MODEL)
     .or(z.literal('').transform(() => DEFAULT_AGENT_MODEL)),
   AGENT_DAILY_USD: z.coerce.number().positive().max(100).default(DEFAULT_AGENT_DAILY_USD),
+  /** Reuniões: the company's daily ceiling (USD) for AI analyses of meetings (docs/crm/reunioes-api.md). */
+  MEETINGS_DAILY_USD: z.coerce.number().positive().max(100).default(1),
   /**
    * The dashboard's insights and campaign suggestions: the same OpenRouter key
    * and model, under a ceiling of their own, in US dollars per day for the
@@ -433,6 +435,27 @@ const schema = z.object({
    * Off in staging; production turns it on when Eric says so.
    */
   TIKTOK_LEADS_RD_COPY_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  /**
+   * Google Ads lead forms (YouTube, Search) → Funil: the key typed in the form's
+   * webhook settings; Google sends it in the body as `google_key`. Without it
+   * the route answers 503 (docs/leads/formularios.md).
+   */
+  GOOGLE_ADS_LEADS_WEBHOOK_KEY: optionalString.refine(
+    (value) => value === undefined || value.length >= 16,
+    'must be at least 16 characters',
+  ),
+  /** Wings' Instagram business account id, for Business Discovery checks. Not a secret. */
+  INSTAGRAM_DISCOVERY_ACCOUNT_ID: optionalString.refine(
+    (value) => value === undefined || /^\d{5,30}$/.test(value),
+    'must be the numeric Instagram business account id',
+  ),
+  /** Token that may read Business Discovery through that account (secret). */
+  INSTAGRAM_DISCOVERY_TOKEN: optionalString,
+  /** Arrival checks that leave the server (site, Instagram, CNPJ); on unless "false". */
+  LEAD_CHECKS_ENABLED: optionalString.refine(
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',
   ),

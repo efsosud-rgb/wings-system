@@ -22,3 +22,4 @@ export * from './projects.js';
 export * from './roadmap.js';
 export * from './sessions.js';
 export * from './timeclock.js';
+export * from './meetings.js';

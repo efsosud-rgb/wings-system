@@ -1,5 +1,11 @@
 import type { Pool } from '../db/client.js';
-import type { CnpjLookup, EnrichmentBudget, WebSearch, ZapiProfileClient } from '../lib/enrichment.js';
+import type {
+  CnpjLookup,
+  EnrichmentBudget,
+  LeadResearchProvider,
+  WebSearch,
+  ZapiProfileClient,
+} from '../lib/enrichment.js';
 import type { ObjectStorage } from '../lib/storage.js';
 import type { Job } from '../queue.js';
 
@@ -10,7 +16,10 @@ export interface JobContext {
   /** CPU threads this one job may hand to ffmpeg/ffprobe/whisper. */
   threads: number;
   runFfprobe: (filePath: string) => Promise<string>;
-  runWhisper: (filePath: string, options: { threads: number; language?: string }) => Promise<string>;
+  runWhisper: (
+    filePath: string,
+    options: { threads: number; language?: string; timeoutMs?: number },
+  ) => Promise<string>;
   /** Resolves on exit 0; rejects with a message of exactly
    * `ffmpeg exited with status <code>` otherwise — never ffmpeg's stderr,
    * which can carry a temp file path. */
@@ -30,6 +39,8 @@ export interface JobContext {
     search: WebSearch | null;
     cnpj: CnpjLookup;
     budget: EnrichmentBudget;
+    /** The company research (OpenRouter); null when switched off or without the key (the step is skipped). */
+    research?: LeadResearchProvider | null;
   };
   /** Set only by tests, to pin "today" for the daily ceiling. */
   now?: () => Date;

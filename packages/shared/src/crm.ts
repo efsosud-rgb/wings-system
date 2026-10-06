@@ -869,6 +869,7 @@ export function initialsOf(name: string | null | undefined): string {
 export const LEAD_SOURCE_BADGES: Record<LeadSource, { label: string; tone: string }> = {
   meta_lead_ads: { label: 'Meta', tone: 'meta' },
   tiktok_lead_ads: { label: 'TikTok', tone: 'tiktok' },
+  google_lead_form: { label: 'Google', tone: 'google' },
   rd_station: { label: 'RD', tone: 'rd' },
   rd_crm: { label: 'RD', tone: 'rd' },
   site_form: { label: 'Site', tone: 'site' },

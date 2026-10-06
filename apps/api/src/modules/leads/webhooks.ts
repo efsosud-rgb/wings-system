@@ -4,6 +4,7 @@ import {
   type LeadLegalBasis,
   type LeadLinkChannel,
 } from '@wings/shared';
+import { googleLeadOf, ingestGoogleLead } from './google-leads.js';
 import { eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -475,6 +476,39 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
       );
       // A failure is the sender's cue to try again; the lead id makes the repeat harmless.
       return reply.status(result.failed > 0 ? 500 : 200).send(result);
+    },
+  );
+
+  // --- Google Ads lead forms (YouTube, Search) ------------------------------------
+  // Same rules as TikTok's door: 503 without the key, 401 with a wrong one. Google
+  // sends the key in the body (`google_key`); a header or ?secret= also works.
+  app.post(
+    '/integrations/google-ads/leads/webhook',
+    { config: { rateLimit } },
+    async (request, reply) => {
+      if (!env.GOOGLE_ADS_LEADS_WEBHOOK_KEY) return unavailable(reply, 'O webhook do Google Ads');
+      const body = tiktokBodyOf(request.body, request.headers['content-type']);
+      const lead = body === null ? null : googleLeadOf(body);
+      if (!secretMatches(lead?.key ?? tiktokSecretOf(request), env.GOOGLE_ADS_LEADS_WEBHOOK_KEY)) {
+        return reply.status(401).send({ error: 'bad_secret', message: 'Segredo inválido.' });
+      }
+      if (!lead)
+        return reply.status(400).send({ error: 'invalid_body', message: 'Corpo inválido.' });
+      logShape('google_leads', body, { test: lead.isTest });
+      try {
+        const result = await ingestGoogleLead(
+          { db, now: app.wings.now, log: (facts) => app.log.info(facts) },
+          lead,
+          { ip: request.ip },
+        );
+        return reply.send(result);
+      } catch {
+        // Google retries a failed delivery; the lead id makes the repeat harmless.
+        app.log.warn({ msg: 'google lead failed' });
+        return reply
+          .status(500)
+          .send({ error: 'intake_failed', message: 'Falha ao gravar o lead.' });
+      }
     },
   );
 };

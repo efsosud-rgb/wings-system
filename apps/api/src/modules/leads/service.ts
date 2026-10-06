@@ -6,6 +6,13 @@ import {
   landingPageKeysOf,
   matchSourceRule,
   normalizeBrazilianPhone,
+  extractLeadFields,
+  isValidCnpj,
+  normalizeCnpj,
+  normalizeInstagram,
+  normalizeWebsite,
+  type LeadChecks,
+  type LeadFields,
   normalizeEmail,
   rdDealUrl,
   WINGS_CLIENT_ID,
@@ -45,6 +52,7 @@ import {
 import { activitiesOf } from './activities.js';
 import { announceNewLead } from './crm-alerts.js';
 import { attachLeadContact, contactsOfLead, findOrCreateCompany } from './contacts.js';
+import { scheduleLeadChecks } from './field-checks.js';
 import {
   announceStageEntered,
   ensureFirstContactTask,
@@ -165,6 +173,22 @@ export async function resolveTikTokSource(
   return UNMAPPED;
 }
 
+/** Same as TikTok's: the form's rule wins over the campaign's. */
+export async function resolveGoogleSource(
+  db: Executor,
+  input: { formId?: string | null; campaignId?: string | null },
+): Promise<ClientResolution> {
+  if (input.formId) {
+    const byForm = await resolveClient(db, 'google_form', [input.formId]);
+    if (byForm.ruleId) return byForm;
+  }
+  if (input.campaignId) {
+    const byCampaign = await resolveClient(db, 'google_campaign', [input.campaignId]);
+    if (byCampaign.ruleId) return byCampaign;
+  }
+  return UNMAPPED;
+}
+
 // --- tracking links -----------------------------------------------------------
 
 /** The brand a link names in its text; Wings Company's own links carry just the code. */
@@ -197,6 +221,11 @@ export interface IncomingLead {
   city?: string | null;
   /** A form's other answers (question -> answer), without the contact fields. */
   formAnswers?: Record<string, string> | null;
+  /**
+   * Form fields given by name (the site's form, Google's columns). Whatever is
+   * missing is looked for in `formAnswers` by the text of the question.
+   */
+  fields?: LeadFields | null;
   legalBasis?: LeadLegalBasis | null;
   consentedAt?: Date | null;
   consentSource?: string | null;
@@ -324,6 +353,11 @@ function fillGaps(existing: LeadRow, incoming: IncomingLead): Partial<typeof lea
   if (!existing.firstMessage && incoming.firstMessage) patch.firstMessage = incoming.firstMessage;
   if (!existing.city && incoming.city) patch.city = incoming.city.trim().slice(0, 120);
   if (!existing.formAnswers && incoming.formAnswers) patch.formAnswers = incoming.formAnswers;
+  const fields = storedFields(incoming.fields);
+  if (!existing.instagram && fields.instagram) patch.instagram = fields.instagram;
+  if (!existing.website && fields.website) patch.website = fields.website;
+  if (!existing.companyName && fields.companyName) patch.companyName = fields.companyName;
+  if (!existing.companyCnpj && fields.companyCnpj) patch.companyCnpj = fields.companyCnpj;
   if (!existing.legalBasis && incoming.legalBasis) {
     patch.legalBasis = incoming.legalBasis;
     patch.consentedAt = incoming.consentedAt ?? null;
@@ -358,8 +392,64 @@ function fillGaps(existing: LeadRow, incoming: IncomingLead): Partial<typeof lea
  * gaps filled and the arrival on its timeline; a new one gets a research job.
  * A found lead whose research never ran, or failed, gets one too.
  */
-export async function upsertLead(db: Database, incoming: IncomingLead): Promise<UpsertResult> {
+/**
+ * The five form fields (docs/leads/formularios.md): what came by name wins;
+ * the rest is looked for in the answers by the text of the question. A name
+ * or WhatsApp found there fills the lead's own name and phone when the
+ * platform did not map them.
+ */
+export function withFormFields(incoming: IncomingLead): IncomingLead {
+  const answers = Object.entries(incoming.formAnswers ?? {}).map(([question, answer]) => ({
+    question,
+    answer,
+  }));
+  const mapped = { ...extractLeadFields(answers), ...stripEmpty(incoming.fields ?? {}) };
+  return {
+    ...incoming,
+    name: incoming.name?.trim() ? incoming.name : (mapped.name ?? incoming.name ?? null),
+    phone: incoming.phone?.trim() ? incoming.phone : (mapped.whatsapp ?? incoming.phone ?? null),
+    fields: mapped,
+  };
+}
+
+/** A WhatsApp asked as a question of the form (not the platform's phone field). */
+export function answersPhone(answers: Record<string, string> | null | undefined): string | null {
+  const pairs = Object.entries(answers ?? {}).map(([question, answer]) => ({ question, answer }));
+  return extractLeadFields(pairs).whatsapp ?? null;
+}
+
+const stripEmpty = (fields: LeadFields): LeadFields =>
+  Object.fromEntries(Object.entries(fields).filter(([, v]) => typeof v === 'string' && v.trim()));
+
+/** Column values: normalised when possible, else as typed (the check says what is wrong). */
+function storedFields(fields: LeadFields | null | undefined) {
+  const text = (value: string | undefined, max: number) => value?.trim().slice(0, max) || null;
+  const instagram = fields?.instagram;
+  const website = fields?.website;
+  const cnpj = fields?.cnpj;
+  return {
+    instagram: instagram ? (normalizeInstagram(instagram) ?? text(instagram, 120)) : null,
+    website: website ? (normalizeWebsite(website) ?? text(website, 300)) : null,
+    companyName: text(fields?.companyName, 200),
+    companyCnpj: cnpj ? (isValidCnpj(cnpj) ? normalizeCnpj(cnpj) : text(cnpj, 30)) : null,
+  };
+}
+
+const CHECKED_COLUMNS = ['phone', 'website', 'instagram', 'companyCnpj'];
+
+export async function upsertLead(db: Database, given: IncomingLead): Promise<UpsertResult> {
+  const incoming = withFormFields(given);
   const result = await upsertLeadTx(db, incoming);
+  // Checked on arrival, and again when a later arrival fills a checked field;
+  // never for an import or the RD mirror (thousands at once would flood the
+  // public lookups): those are checked on "Conferir de novo".
+  const bulk = Boolean(incoming.importBatchId) || incoming.source === 'rd_crm';
+  if (
+    !bulk &&
+    (result.created || result.filled.some((column) => CHECKED_COLUMNS.includes(column)))
+  ) {
+    scheduleLeadChecks(result.lead.id);
+  }
   // A lead born in a stage starts that stage's automation rules, as entering it
   // would; an import and the RD mirror never do (they can bring thousands).
   if (
@@ -497,6 +587,7 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
         whatsappPhotoUrl: incoming.whatsappPhotoUrl ?? null,
         city: incoming.city?.trim().slice(0, 120) || null,
         formAnswers: incoming.formAnswers ?? null,
+        ...storedFields(incoming.fields),
         legalBasis: incoming.legalBasis ?? null,
         consentedAt: incoming.consentedAt ?? null,
         consentSource: incoming.consentSource ?? null,
@@ -612,6 +703,14 @@ export function toLead(
       row.formAnswers && typeof row.formAnswers === 'object'
         ? (row.formAnswers as Record<string, string>)
         : null,
+    fields: {
+      instagram: row.instagram,
+      website: row.website,
+      companyName: row.companyName,
+      cnpj: row.companyCnpj,
+    },
+    checks:
+      row.fieldChecks && typeof row.fieldChecks === 'object' ? (row.fieldChecks as LeadChecks) : {},
     status: 'new',
     ownerEmployeeId: row.ownerEmployeeId,
     firstMessage: row.firstMessage,

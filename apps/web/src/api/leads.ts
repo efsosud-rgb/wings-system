@@ -98,6 +98,18 @@ export function useCreateLead() {
   });
 }
 
+/** "Conferir de novo": the arrival checks of the form fields, again (answers when done). */
+export function useCheckLead() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ lead: Lead; events: LeadEvent[] }>(`/leads/${id}/checks`),
+    onSuccess: (_data, id) => {
+      void queryClient.invalidateQueries({ queryKey: ['leads', 'one', id] });
+    },
+  });
+}
+
 export function useResearchLead() {
   const queryClient = useQueryClient();
   return useMutation({

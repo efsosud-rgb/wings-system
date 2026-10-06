@@ -68,9 +68,16 @@ describe('site form page (T5)', () => {
     )}; Path=/`;
     renderAt('/lp/cenoritas');
     expect(await screen.findByText('Seja um franqueado Cenoritas')).toBeTruthy();
-    fireEvent.input(screen.getByLabelText(/^Nome/), { target: { value: 'Pessoa Teste' } });
+    fireEvent.input(screen.getByLabelText(/^Nome(?! da)/), { target: { value: 'Pessoa Teste' } });
     fireEvent.input(screen.getByLabelText(/^E-mail/), { target: { value: 'pessoa@example.com' } });
     fireEvent.input(screen.getByLabelText(/^WhatsApp/), { target: { value: '21999990001' } });
+    fireEvent.input(screen.getByLabelText(/^Nome da empresa/), {
+      target: { value: 'Empresa Teste' },
+    });
+    fireEvent.input(screen.getByLabelText(/^Instagram/), { target: { value: '@empresa.teste' } });
+    fireEvent.input(screen.getByLabelText(/^Site da empresa/), {
+      target: { value: 'empresa-teste.com.br' },
+    });
     fireEvent.click(screen.getByRole('checkbox'));
     const send = screen.getByRole('button', { name: 'Quero ser franqueado' }) as HTMLButtonElement;
     await waitFor(() => expect(send.disabled).toBe(false));
@@ -82,6 +89,9 @@ describe('site form page (T5)', () => {
       name: 'Pessoa Teste',
       email: 'pessoa@example.com',
       phone: '21999990001',
+      companyName: 'Empresa Teste',
+      instagram: '@empresa.teste',
+      siteUrl: 'empresa-teste.com.br',
       consent: true,
       turnstileToken: 'turnstile-token',
       website: '',
@@ -102,9 +112,16 @@ describe('site form page (T5)', () => {
     });
     renderAt('/lp/cenoritas');
     await screen.findByText('Seja um franqueado Cenoritas');
-    fireEvent.input(screen.getByLabelText(/^Nome/), { target: { value: 'Pessoa Teste' } });
+    fireEvent.input(screen.getByLabelText(/^Nome(?! da)/), { target: { value: 'Pessoa Teste' } });
     fireEvent.input(screen.getByLabelText(/^E-mail/), { target: { value: 'pessoa@example.com' } });
     fireEvent.input(screen.getByLabelText(/^WhatsApp/), { target: { value: '21999990001' } });
+    fireEvent.input(screen.getByLabelText(/^Nome da empresa/), {
+      target: { value: 'Empresa Teste' },
+    });
+    fireEvent.input(screen.getByLabelText(/^Instagram/), { target: { value: '@empresa.teste' } });
+    fireEvent.input(screen.getByLabelText(/^Site da empresa/), {
+      target: { value: 'empresa-teste.com.br' },
+    });
     fireEvent.click(screen.getByRole('checkbox'));
     const send = screen.getByRole('button', { name: 'Quero ser franqueado' }) as HTMLButtonElement;
     await waitFor(() => expect(send.disabled).toBe(false));
@@ -119,9 +136,16 @@ describe('site form page (T5)', () => {
   it('does not send without the consent', async () => {
     renderAt('/lp/cenoritas');
     await screen.findByText('Seja um franqueado Cenoritas');
-    fireEvent.input(screen.getByLabelText(/^Nome/), { target: { value: 'Pessoa Teste' } });
+    fireEvent.input(screen.getByLabelText(/^Nome(?! da)/), { target: { value: 'Pessoa Teste' } });
     fireEvent.input(screen.getByLabelText(/^E-mail/), { target: { value: 'pessoa@example.com' } });
     fireEvent.input(screen.getByLabelText(/^WhatsApp/), { target: { value: '21999990001' } });
+    fireEvent.input(screen.getByLabelText(/^Nome da empresa/), {
+      target: { value: 'Empresa Teste' },
+    });
+    fireEvent.input(screen.getByLabelText(/^Instagram/), { target: { value: '@empresa.teste' } });
+    fireEvent.input(screen.getByLabelText(/^Site da empresa/), {
+      target: { value: 'empresa-teste.com.br' },
+    });
     const send = screen.getByRole('button', { name: 'Quero ser franqueado' }) as HTMLButtonElement;
     await waitFor(() => expect(send.disabled).toBe(false));
     fireEvent.click(send);

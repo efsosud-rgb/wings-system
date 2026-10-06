@@ -1,8 +1,8 @@
+import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
   SITE_FORM_CONSENT_TEXT,
   siteFormSubmitSchema,
-  type SiteFormSubmitInput,
 } from '@wings/shared';
 import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
@@ -11,6 +11,18 @@ import { ApiError } from '../api/client.js';
 import { useSiteForm, useSubmitSiteForm } from '../api/leads.js';
 import { Alert, AuthCard, Button, Field, Input } from '../components/ui.js';
 import { captureFirstTouch, type Tracking } from '../lib/site-tracking.js';
+
+/**
+ * On the page the campaign fields are asked for (docs/leads/formularios.md);
+ * the API still accepts a page without them. "Não tenho" is an answer.
+ */
+const askedField = (message: string) => z.string().trim().min(1, message).max(300);
+const pageSchema = siteFormSubmitSchema.extend({
+  companyName: askedField('Informe o nome da empresa'),
+  instagram: askedField('Informe o Instagram (ou “não tenho”)'),
+  siteUrl: askedField('Informe o site (ou “não tenho”)'),
+});
+type PageInput = z.infer<typeof pageSchema>;
 
 /**
  * The site form (CRM phase 1, T5), public: `/lp/<slug>` for the pages CRM
@@ -110,8 +122,8 @@ export function SiteFormPage() {
     handleSubmit,
     setValue,
     formState: { errors },
-  } = useForm<SiteFormSubmitInput>({
-    resolver: zodResolver(siteFormSubmitSchema),
+  } = useForm<PageInput>({
+    resolver: zodResolver(pageSchema),
     defaultValues: { turnstileToken: '', website: '' },
   });
 
@@ -211,6 +223,23 @@ export function SiteFormPage() {
           </Field>
           <Field label="WhatsApp com DDD" error={errors.phone?.message} required>
             <Input type="tel" autoComplete="tel" inputMode="tel" {...register('phone')} />
+          </Field>
+          <Field label="Nome da empresa" error={errors.companyName?.message} required>
+            <Input autoComplete="organization" {...register('companyName')} />
+          </Field>
+          <Field label="Instagram da empresa" error={errors.instagram?.message} required>
+            <Input placeholder="@suaempresa" autoCapitalize="none" {...register('instagram')} />
+          </Field>
+          <Field label="Site da empresa" error={errors.siteUrl?.message} required>
+            <Input
+              placeholder="suaempresa.com.br"
+              autoCapitalize="none"
+              inputMode="url"
+              {...register('siteUrl')}
+            />
+          </Field>
+          <Field label="CNPJ (se tiver)" error={errors.cnpj?.message}>
+            <Input inputMode="numeric" {...register('cnpj')} />
           </Field>
           {/* People never see this field; a robot that fills it is dropped by the server. */}
           <div className="sr-only" aria-hidden="true">

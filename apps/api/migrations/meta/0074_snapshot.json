@@ -1,6 +1,6 @@
 {
-  "id": "dc3d5ba8-41af-4fc7-874d-c570a26b2e04",
-  "prevId": "51cfc7a9-8a79-4d48-9954-ef1dcdce5fa2",
+  "id": "781818b9-bdf6-4926-b4f7-a816c1321654",
+  "prevId": "a1254379-588d-4bc2-9cf5-36043ff71708",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -13750,6 +13750,37 @@
           "primaryKey": false,
           "notNull": false
         },
+        "instagram": {
+          "name": "instagram",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "website": {
+          "name": "website",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "company_name": {
+          "name": "company_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "company_cnpj": {
+          "name": "company_cnpj",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "field_checks": {
+          "name": "field_checks",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
         "legal_basis": {
           "name": "legal_basis",
           "type": "text",
@@ -16368,6 +16399,441 @@
       },
       "indexes": {},
       "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.crm_meeting_analysis_runs": {
+      "name": "crm_meeting_analysis_runs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "meeting_id": {
+          "name": "meeting_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "reserved_micro_usd": {
+          "name": "reserved_micro_usd",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cost_micro_usd": {
+          "name": "cost_micro_usd",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "crm_meeting_analysis_runs_started_idx": {
+          "name": "crm_meeting_analysis_runs_started_idx",
+          "columns": [
+            {
+              "expression": "started_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "crm_meeting_analysis_runs_meeting_id_crm_meetings_id_fk": {
+          "name": "crm_meeting_analysis_runs_meeting_id_crm_meetings_id_fk",
+          "tableFrom": "crm_meeting_analysis_runs",
+          "tableTo": "crm_meetings",
+          "columnsFrom": [
+            "meeting_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.crm_meetings": {
+      "name": "crm_meetings",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "lead_id": {
+          "name": "lead_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "owner_employee_id": {
+          "name": "owner_employee_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "title": {
+          "name": "title",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "starts_at": {
+          "name": "starts_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "ends_at": {
+          "name": "ends_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "calendar": {
+          "name": "calendar",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'vendedor'"
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'agendada'"
+        },
+        "meet_url": {
+          "name": "meet_url",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "google_event_id": {
+          "name": "google_event_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "attendees": {
+          "name": "attendees",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "recording_state": {
+          "name": "recording_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'nenhuma'"
+        },
+        "recording_key": {
+          "name": "recording_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recording_file_id": {
+          "name": "recording_file_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recording_content_type": {
+          "name": "recording_content_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recording_size_bytes": {
+          "name": "recording_size_bytes",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recording_duration_seconds": {
+          "name": "recording_duration_seconds",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "transcript_state": {
+          "name": "transcript_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'nenhuma'"
+        },
+        "transcript": {
+          "name": "transcript",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "speakers": {
+          "name": "speakers",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'[]'::jsonb"
+        },
+        "speakers_reason": {
+          "name": "speakers_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "transcript_error": {
+          "name": "transcript_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "transcript_job_id": {
+          "name": "transcript_job_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "analysis_state": {
+          "name": "analysis_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'nenhuma'"
+        },
+        "analysis": {
+          "name": "analysis",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "analysis_cost_micro_usd": {
+          "name": "analysis_cost_micro_usd",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "analysis_reason": {
+          "name": "analysis_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "analyzed_at": {
+          "name": "analyzed_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "send_state": {
+          "name": "send_state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'nenhum'"
+        },
+        "send_channel": {
+          "name": "send_channel",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "send_contact_role": {
+          "name": "send_contact_role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "send_text": {
+          "name": "send_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "send_destination_hash": {
+          "name": "send_destination_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "send_approved_by": {
+          "name": "send_approved_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "send_approved_at": {
+          "name": "send_approved_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sent_at": {
+          "name": "sent_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "send_error": {
+          "name": "send_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_by": {
+          "name": "created_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "crm_meetings_lead_idx": {
+          "name": "crm_meetings_lead_idx",
+          "columns": [
+            {
+              "expression": "lead_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "starts_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "crm_meetings_analysis_idx": {
+          "name": "crm_meetings_analysis_idx",
+          "columns": [
+            {
+              "expression": "analysis_state",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "crm_meetings_lead_id_leads_id_fk": {
+          "name": "crm_meetings_lead_id_leads_id_fk",
+          "tableFrom": "crm_meetings",
+          "tableTo": "leads",
+          "columnsFrom": [
+            "lead_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "crm_meetings_owner_employee_id_employees_id_fk": {
+          "name": "crm_meetings_owner_employee_id_employees_id_fk",
+          "tableFrom": "crm_meetings",
+          "tableTo": "employees",
+          "columnsFrom": [
+            "owner_employee_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "crm_meetings_send_approved_by_employees_id_fk": {
+          "name": "crm_meetings_send_approved_by_employees_id_fk",
+          "tableFrom": "crm_meetings",
+          "tableTo": "employees",
+          "columnsFrom": [
+            "send_approved_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "crm_meetings_created_by_employees_id_fk": {
+          "name": "crm_meetings_created_by_employees_id_fk",
+          "tableFrom": "crm_meetings",
+          "tableTo": "employees",
+          "columnsFrom": [
+            "created_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},

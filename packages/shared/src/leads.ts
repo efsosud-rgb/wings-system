@@ -1,3 +1,4 @@
+import type { LeadChecks } from './lead-fields.js';
 import { z } from 'zod';
 import type { LeadAiSummary, LeadContactRef } from './crm.js';
 
@@ -21,6 +22,7 @@ export const LEAD_SOURCES = [
   'whatsapp_link',
   'meta_lead_ads',
   'tiktok_lead_ads',
+  'google_lead_form',
   'manual',
   'rd_crm',
   'site_form',
@@ -33,6 +35,7 @@ export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
   whatsapp_link: 'WhatsApp (link rastreável)',
   meta_lead_ads: 'Meta Lead Ads',
   tiktok_lead_ads: 'TikTok Lead Ads',
+  google_lead_form: 'Formulário do Google Ads',
   manual: 'Cadastro manual',
   rd_crm: 'RD CRM (importado)',
   site_form: 'Formulário do site',
@@ -74,6 +77,7 @@ export const LEAD_CHANNELS = [
   'landing_page',
   'meta_lead_ads',
   'tiktok_lead_ads',
+  'google_lead_form',
 ] as const;
 export type LeadChannel = (typeof LEAD_CHANNELS)[number];
 
@@ -86,6 +90,7 @@ export const LEAD_CHANNEL_LABELS: Record<LeadChannel, string> = {
   landing_page: 'Landing page',
   meta_lead_ads: 'Meta Lead Ads',
   tiktok_lead_ads: 'TikTok Lead Ads',
+  google_lead_form: 'Google Ads (formulário)',
 };
 
 // --- LGPD ---------------------------------------------------------------------
@@ -316,6 +321,8 @@ export const LEAD_SOURCE_RULE_KINDS = [
   'meta_campaign',
   'tiktok_form',
   'tiktok_campaign',
+  'google_form',
+  'google_campaign',
 ] as const;
 export type LeadSourceRuleKind = (typeof LEAD_SOURCE_RULE_KINDS)[number];
 
@@ -325,6 +332,8 @@ export const LEAD_SOURCE_RULE_KIND_LABELS: Record<LeadSourceRuleKind, string> = 
   meta_campaign: 'Campanha do Meta (id da campanha)',
   tiktok_form: 'Formulário do TikTok Lead Ads (id do formulário)',
   tiktok_campaign: 'Campanha do TikTok (id da campanha)',
+  google_form: 'Formulário de lead do Google Ads (id do formulário)',
+  google_campaign: 'Campanha do Google Ads (id da campanha)',
 };
 
 export interface LeadSourceRule {
@@ -495,6 +504,57 @@ export interface LeadWhatsappProfile {
   photoUrl: string | null;
 }
 
+// --- company research by web search + model (OpenRouter) --------------------------
+
+/** What the research tries to say about the company, in the order the card shows it. */
+export const WEB_RESEARCH_FIELD_KEYS = [
+  'activity',
+  'location',
+  'size',
+  'time_in_market',
+  'online_presence',
+] as const;
+export type WebResearchFieldKey = (typeof WEB_RESEARCH_FIELD_KEYS)[number];
+
+export const WEB_RESEARCH_FIELD_LABELS: Record<WebResearchFieldKey, string> = {
+  activity: 'O que a empresa faz',
+  location: 'Cidade e estado',
+  size: 'Porte',
+  time_in_market: 'Tempo de mercado',
+  online_presence: 'Presença online',
+};
+
+/** done: it ran; skipped: nothing to search; refused: the daily ceiling; failed: the provider did not answer. */
+export type WebResearchStatus = 'done' | 'skipped' | 'refused' | 'failed';
+
+export interface WebResearchField {
+  key: WebResearchFieldKey;
+  /** Null when the sources did not say; then `reason` says why. Never a guess. */
+  value: string | null;
+  reason: string | null;
+}
+
+export interface WebResearchSource {
+  url: string;
+  title: string | null;
+}
+
+/**
+ * What the web research of the lead's COMPANY found (company name, site,
+ * Instagram and CNPJ were the only things sent). `sources` are the pages the
+ * search itself returned, never links the model wrote.
+ */
+export interface LeadWebResearch {
+  status: WebResearchStatus;
+  /** When the research ran (ISO 8601). */
+  at: string;
+  /** Why there is nothing, when `status` is not "done". */
+  reason: string | null;
+  fields: WebResearchField[];
+  sources: WebResearchSource[];
+  model: string | null;
+}
+
 /** Everything the worker found. Every field may be null: a step that failed leaves its fact empty. */
 export interface EnrichmentFacts {
   region: LeadRegion | null;
@@ -504,6 +564,8 @@ export interface EnrichmentFacts {
   company: LeadCompany | null;
   /** How many web searches were run (each is a paid call). */
   searches: number;
+  /** The company research (OpenRouter); absent on leads researched before it existed. */
+  webResearch?: LeadWebResearch | null;
 }
 
 export const EMPTY_FACTS: EnrichmentFacts = {
@@ -763,6 +825,13 @@ export interface LeadEvent {
   detail: Record<string, unknown>;
 }
 
+export interface LeadFormFields {
+  instagram: string | null;
+  website: string | null;
+  companyName: string | null;
+  cnpj: string | null;
+}
+
 export interface Lead {
   id: string;
   name: string | null;
@@ -772,6 +841,10 @@ export interface Lead {
   city: string | null;
   /** A form's other answers (question -> answer), without the contact fields; null when none. */
   formAnswers: Record<string, string> | null;
+  /** The form fields in their own place (Instagram, site, company, CNPJ); null when the form did not bring them. */
+  fields: LeadFormFields;
+  /** What was checked on arrival, per field; a missing key = not checked yet. */
+  checks: LeadChecks;
   status: 'new';
   ownerEmployeeId: string | null;
   firstMessage: string | null;
@@ -1255,6 +1328,15 @@ export const siteFormSubmitSchema = z.object({
     .refine((value) => value.replace(/\D/g, '').length >= 10, 'Telefone com DDD'),
   consent: z.literal(true, { error: 'É preciso autorizar o contato' }),
   turnstileToken: z.string().min(1, 'Confirme que você não é um robô').max(4096),
+  /**
+   * The form fields every campaign asks (docs/leads/formularios.md). Optional
+   * here so an older page still works; the page asks for them. `siteUrl`, not
+   * `website`: that name is the honeypot below.
+   */
+  instagram: z.string().trim().max(120).optional(),
+  siteUrl: z.string().trim().max(300).optional(),
+  companyName: z.string().trim().max(200).optional(),
+  cnpj: z.string().trim().max(30).optional(),
   /** Honeypot: a field people never see; anything in it is a robot. */
   website: z.string().max(500).optional(),
   /** The page the form was sent from (origin + path + query). */

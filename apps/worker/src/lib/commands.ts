@@ -39,14 +39,14 @@ const TRANSCRIBE_SCRIPT = resolve(import.meta.dirname, '../../scripts/transcribe
 /** faster-whisper, "small" model, CPU: segments and their times, as JSON on stdout. */
 export async function runWhisper(
   filePath: string,
-  options: { threads: number; language?: string },
+  options: { threads: number; language?: string; timeoutMs?: number },
 ): Promise<string> {
   const args = [TRANSCRIBE_SCRIPT, filePath, '--threads', String(options.threads)];
   if (options.language) args.push('--language', options.language);
   const { stdout } = await run('python3', args, {
     maxBuffer: MAX_BUFFER_BYTES,
     // A small-model CPU transcription can run long on a big file.
-    timeout: 30 * 60_000,
+    timeout: options.timeoutMs ?? 30 * 60_000,
   });
   return stdout;
 }
