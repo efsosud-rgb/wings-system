@@ -379,6 +379,7 @@ describe('public probe (SSRF guard)', () => {
     ['fe80::1%eth0', false],
     ['fec0::1', false],
     ['ff02::1', false],
+    ['100::1', false],
     ['::ffff:808:808', true],
     ['2606:4700::1111', true],
   ])('%s public? %s', (ip, expected) => {

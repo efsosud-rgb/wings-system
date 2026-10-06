@@ -61,10 +61,10 @@ export function isPublicAddress(ip: string): boolean {
     ];
     // An IPv4 inside an IPv6 is judged as that IPv4, whatever the spelling (the
     // URL parser turns `::ffff:169.254.169.254` into `::ffff:a9fe:a9fe`):
-    // unspecified, loopback and compatible (::/96), mapped (::ffff:0:0/96),
-    // translated (::ffff:0:0:0/96) and 6to4 (2002::/16).
-    if (zeros(6))
-      return seventh === 0 && eighth <= 1 ? false : isPublicAddress(v4(seventh, eighth));
+    // unspecified, loopback and compatible (::/96; `::` and `::1` read as
+    // 0.0.0.0 and 0.0.0.1, refused), mapped (::ffff:0:0/96), translated
+    // (::ffff:0:0:0/96) and 6to4 (2002::/16).
+    if (zeros(6)) return isPublicAddress(v4(seventh, eighth));
     if (zeros(5) && sixth === 0xffff) return isPublicAddress(v4(seventh, eighth));
     if (zeros(4) && g[4] === 0xffff && sixth === 0) return isPublicAddress(v4(seventh, eighth));
     if (first === 0x2002) return isPublicAddress(v4(second, third));
@@ -73,7 +73,7 @@ export function isPublicAddress(ip: string): boolean {
     if ((first & 0xff00) === 0xff00) return false; // multicast
     if (first === 0x64 && second === 0xff9b) return false; // NAT64 64:ff9b::/96 and 64:ff9b:1::/48
     if (first === 0x2001 && (second === 0xdb8 || second === 0)) return false; // documentation, Teredo
-    if (first === 0x100 && zeros(4)) return false; // discard-only 100::/64
+    if (first === 0x100 && second === 0 && third === 0 && g[3] === 0) return false; // discard 100::/64
     return true;
   }
   return false;
