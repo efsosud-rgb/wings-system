@@ -5,6 +5,7 @@ import {
   NO_BRAND,
   NO_OWNER,
   salesRanges,
+  salesTrendOf,
   saoPauloDayStart,
   saoPauloToday,
   type LeadPipeline,
@@ -76,6 +77,20 @@ function filterSql(input: SalesDashboardInput): SQL {
 
 async function rows<T extends Record<string, unknown>>(db: Executor, query: SQL) {
   return (await db.execute<T>(query)).rows;
+}
+
+/** Won cents per São Paulo day (UTC−3) of a range, for the trend. */
+async function wonByDayOf(db: Executor, where: SQL, range: SalesRange) {
+  const { start, end } = bounds(range);
+  const found = await rows<{ day: string; cents: string }>(
+    db,
+    sql`select to_char(l.closed_at at time zone 'UTC' - interval '3 hours', 'YYYY-MM-DD') as day,
+               coalesce(sum(l.value_cents), 0)::bigint as cents
+          from leads l
+         where ${where} and l.won and l.closed_at >= ${start} and l.closed_at < ${end}
+         group by 1`,
+  );
+  return new Map(found.map((row) => [row.day, num(row.cents)]));
 }
 
 async function resultsOf(db: Executor, where: SQL, range: SalesRange): Promise<SalesResults> {
@@ -245,11 +260,14 @@ export async function salesDashboardOf(
   );
   open.weightedCents = Math.round(open.weightedCents);
 
-  const [funnel, views] = await Promise.all([
+  const [funnel, views, wonCurrent, wonPrevious, wonPreviousYear] = await Promise.all([
     pipeline ? funnelOf(db, { where, pipeline, start, end, openRows }) : null,
     team
       ? teamViewsOf(db, { where, start, end, wonIn, range: ranges.current, spendVisible, pipeline })
       : null,
+    wonByDayOf(db, where, ranges.current),
+    wonByDayOf(db, where, ranges.previous),
+    wonByDayOf(db, where, ranges.previousYear),
   ]);
 
   return {
@@ -258,6 +276,11 @@ export async function salesDashboardOf(
     ranges,
     results: { current, previous, previousYear },
     goalCents: null,
+    trend: salesTrendOf(ranges, today, {
+      current: wonCurrent,
+      previous: wonPrevious,
+      previousYear: wonPreviousYear,
+    }),
     open,
     forecast: {
       wonCents: current.wonCents,

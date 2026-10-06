@@ -695,6 +695,9 @@
 .crm-badge.tone-whatsapp {
   --tone: var(--source-whatsapp);
 }
+.crm-badge.tone-tiktok {
+  --tone: var(--source-tiktok);
+}
 .crm-badge.is-brand::before {
   display: none;
 }

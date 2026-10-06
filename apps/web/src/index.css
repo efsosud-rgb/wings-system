@@ -8343,3 +8343,87 @@ tr.task-overdue td:nth-child(2) strong {
   width: auto;
   text-decoration: none;
 }
+
+/* Visão geral: each source as a card, the figures as the sales panel's KPI cards. */
+.strips {
+  display: grid;
+  gap: 16px;
+  border-top: 0;
+}
+.strip.card {
+  display: block;
+  padding: 16px 18px;
+  border-bottom: 0;
+}
+.strip.card > * + * {
+  margin-top: 12px;
+}
+.strip-kpis {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  margin-bottom: 0;
+}
+.strip-how {
+  font-size: 13px;
+  color: var(--text-2);
+}
+.strip-how summary {
+  cursor: pointer;
+  width: fit-content;
+  font-weight: 600;
+}
+.strip-how p {
+  margin: 6px 0 0;
+  max-width: 90ch;
+  line-height: 1.5;
+}
+.strip-charts {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: 16px;
+  align-items: end;
+}
+@media (max-width: 600px) {
+  .strip-kpis {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+  }
+}
+@media (max-width: 900px) {
+  .strip.card {
+    display: block;
+  }
+  .strip-charts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Leads das Campanhas: stages, losses and the deals left out, side by side. */
+.sales-grid.campaign-leads-charts {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  margin: 16px 0;
+}
+.campaign-leads-charts .sales-card {
+  padding: 16px;
+}
+
+/* 3D charts on the graphite Cockpit: words in its own text colours, hairlines one step up. */
+.cockpit-grafite .w3d {
+  --w3d-ink: var(--cg-text);
+  --w3d-ink-2: var(--cg-label);
+  --w3d-ink-3: var(--cg-dim);
+  --w3d-grid: #444a55;
+  --w3d-base: #5a616d;
+}
+.cockpit-grafite .c3d-legend,
+.cockpit-grafite .c3d-table summary {
+  color: var(--cg-label);
+}
+.cockpit-grafite .w3d-ref {
+  background: color-mix(in srgb, var(--cg-card) 85%, transparent);
+}
+
+/* On a phone the weekday × hour map is drawn in two blocks of hours: it needs the height. */
+@media (max-width: 600px) {
+  .audience-heat .c3d-stage {
+    height: 440px !important;
+  }
+}

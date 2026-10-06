@@ -262,6 +262,25 @@ export interface SalesCityRow {
   won: number;
 }
 
+/**
+ * Row 2: won value accumulated over the period, against the comparison
+ * ranges at the same position (day 1 with day 1). Long periods go by week so
+ * the axis stays readable. `null` = no value there yet (after today) or the
+ * comparison range has no such day; never a zero in its place.
+ */
+export interface SalesTrend {
+  bucket: 'day' | 'week';
+  /** First day of each bucket in the current range (São Paulo dates). */
+  days: string[];
+  /** Won cents accumulated through each bucket's end; null for buckets after today. */
+  current: (number | null)[];
+  /** The same, in the previous range, by position; null past its end. */
+  previous: (number | null)[];
+  previousYear: (number | null)[];
+  /** Null until goals exist (Metas, CRM Configurações). */
+  goalCents: number | null;
+}
+
 export interface SalesDashboard {
   pipeline: LeadPipeline | null;
   /** `own`: a seller's own deals only; ranking, brands, campaigns and region are not sent. */
@@ -270,6 +289,7 @@ export interface SalesDashboard {
   results: { current: SalesResults; previous: SalesResults; previousYear: SalesResults };
   /** Null until goals exist (Metas, CRM Configurações). */
   goalCents: number | null;
+  trend: SalesTrend;
   /** Open deals now, whatever the period. */
   open: SalesSlice & { withoutValue: number };
   /**
@@ -319,6 +339,52 @@ export interface SalesDashboard {
   };
   /** Campaign names in scope, for the filter. */
   campaignOptions: string[];
+}
+
+// --- trend --------------------------------------------------------------------------
+
+/** Periods longer than this many days are drawn by week. */
+export const SALES_TREND_DAILY_MAX = 92;
+
+/**
+ * Builds the trend from each range's won cents per day (`YYYY-MM-DD` → cents).
+ * Buckets follow the current range; the comparison ranges are read at the
+ * same offsets from their own start.
+ */
+export function salesTrendOf(
+  ranges: { current: SalesRange; previous: SalesRange; previousYear: SalesRange },
+  today: string,
+  wonByDay: {
+    current: Map<string, number>;
+    previous: Map<string, number>;
+    previousYear: Map<string, number>;
+  },
+): SalesTrend {
+  const length = daysBetween(ranges.current.from, ranges.current.to);
+  const bucket = length > SALES_TREND_DAILY_MAX ? 'week' : 'day';
+  const size = bucket === 'week' ? 7 : 1;
+  const starts: number[] = [];
+  for (let offset = 0; offset < length; offset += size) starts.push(offset);
+
+  const cumulative = (range: SalesRange, won: Map<string, number>, last: string) => {
+    const span = daysBetween(range.from, range.to);
+    let sum = 0;
+    let read = 0;
+    return starts.map((start) => {
+      if (start >= span || addDays(range.from, start) > last) return null;
+      const end = Math.min(start + size, span);
+      for (; read < end; read++) sum += won.get(addDays(range.from, read)) ?? 0;
+      return sum;
+    });
+  };
+  return {
+    bucket,
+    days: starts.map((offset) => addDays(ranges.current.from, offset)),
+    current: cumulative(ranges.current, wonByDay.current, today),
+    previous: cumulative(ranges.previous, wonByDay.previous, today),
+    previousYear: cumulative(ranges.previousYear, wonByDay.previousYear, today),
+    goalCents: null,
+  };
 }
 
 // --- region helpers -----------------------------------------------------------------

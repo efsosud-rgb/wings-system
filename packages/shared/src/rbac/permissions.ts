@@ -50,6 +50,7 @@ export const PERMISSIONS = {
   'projects.read': 'Ver o quadro de projetos dos clientes',
   'projects.manage': 'Mudar status, etapa atual e andamento das etapas dos projetos dos clientes',
   'roadmap.manage': 'Editar o roadmap e aprovar o relatório diário para a diretoria',
+  'office.read': 'Ver o escritório virtual (laboratório): equipe, tarefas e eventos do CRM',
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;
@@ -144,6 +145,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'site.publish': 'all',
     // The roadmap report goes to the CEOs; only an Admin Master edits and approves it.
     'roadmap.manage': 'all',
+    // Laboratório: only the Admin Master sees the virtual office while it is a prototype.
+    'office.read': 'all',
   },
   diretoria: {
     ...DRIVE_ALL,

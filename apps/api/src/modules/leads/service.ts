@@ -149,6 +149,22 @@ export async function resolveMetaSource(
   return UNMAPPED;
 }
 
+/** Same as Meta's: the form's rule wins over the campaign's. */
+export async function resolveTikTokSource(
+  db: Executor,
+  input: { formId?: string | null; campaignId?: string | null },
+): Promise<ClientResolution> {
+  if (input.formId) {
+    const byForm = await resolveClient(db, 'tiktok_form', [input.formId]);
+    if (byForm.ruleId) return byForm;
+  }
+  if (input.campaignId) {
+    const byCampaign = await resolveClient(db, 'tiktok_campaign', [input.campaignId]);
+    if (byCampaign.ruleId) return byCampaign;
+  }
+  return UNMAPPED;
+}
+
 // --- tracking links -----------------------------------------------------------
 
 /** The brand a link names in its text; Wings Company's own links carry just the code. */
@@ -227,7 +243,7 @@ export interface LeadAttribution {
   fbclid?: string | null;
   gbraid?: string | null;
   wbraid?: string | null;
-  adPlatform?: 'meta' | 'google' | null;
+  adPlatform?: 'meta' | 'google' | 'tiktok' | null;
   adCampaignExternalId?: string | null;
   adSetExternalId?: string | null;
   adExternalId?: string | null;

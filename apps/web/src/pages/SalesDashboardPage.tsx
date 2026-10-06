@@ -22,7 +22,12 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useBrands, useSalesDashboard } from '../api/crm.js';
 import { useSellers } from '../api/leads.js';
 import { Chart3D } from '../components/charts3d/Chart3D.js';
-import { firstName, type RankedSpec } from '../components/charts3d/spec.js';
+import {
+  COMPARISON_SLOT,
+  firstName,
+  type LineSpec,
+  type RankedSpec,
+} from '../components/charts3d/spec.js';
 import { DASH, formatInt, formatMoney } from '../components/dashboard/format.js';
 
 /**
@@ -434,6 +439,81 @@ function Executive({ data, compare }: { data: SalesDashboard; compare: SalesComp
       />
       <Forecast data={data} />
     </section>
+  );
+}
+
+// --- row 2: trend ---------------------------------------------------------------------
+
+const dayMonth = (day: string) => `${day.slice(8, 10)}/${day.slice(5, 7)}`;
+const signedMoney = (cents: number) =>
+  cents === 0 ? formatMoney(0) : `${cents > 0 ? '+' : '−'}${formatMoney(Math.abs(cents))}`;
+
+/** Won value accumulated over the period, against the comparison at the same position. */
+function Trend({ data, compare }: { data: SalesDashboard; compare: SalesComparison }) {
+  const trend = data.trend;
+  const before =
+    compare === 'previous'
+      ? trend.previous
+      : compare === 'previous_year'
+        ? trend.previousYear
+        : null;
+  const beforeName = compare === 'previous_year' ? 'Ano anterior' : 'Período anterior';
+  const categories = trend.days.map(dayMonth);
+  const spec: LineSpec = {
+    kind: 'line',
+    categories,
+    format: 'brl',
+    series: [
+      { name: 'Este período', values: trend.current, slot: 0, area: true },
+      ...(before
+        ? [{ name: beforeName, values: before, slot: COMPARISON_SLOT, dashed: true }]
+        : []),
+    ],
+    reference: trend.goalCents === null ? null : { value: trend.goalCents, label: 'Meta' },
+  };
+  const table = (
+    <table>
+      <thead>
+        <tr>
+          <th>{trend.bucket === 'week' ? 'Semana de' : 'Dia'}</th>
+          <th className="num">Acumulado atual</th>
+          {before && <th className="num">Acumulado {beforeName.toLowerCase()}</th>}
+          {before && <th className="num">Diferença</th>}
+        </tr>
+      </thead>
+      <tbody>
+        {trend.days.map((day, i) => {
+          const now = trend.current[i] ?? null;
+          const then = before?.[i] ?? null;
+          return (
+            <tr key={day}>
+              <td>{categories[i]}</td>
+              <td className="num">{now === null ? DASH : formatMoney(now)}</td>
+              {before && <td className="num">{then === null ? DASH : formatMoney(then)}</td>}
+              {before && (
+                <td className="num">
+                  {now === null || then === null ? DASH : signedMoney(now - then)}
+                </td>
+              )}
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+  const anything = [...trend.current, ...(before ?? [])].some((value) => (value ?? 0) > 0);
+  return anything ? (
+    <Chart3D
+      spec={spec}
+      height={260}
+      ariaLabel={`Vendas acumuladas no período${before ? `, comparadas com o ${beforeName.toLowerCase()}` : ''}`}
+      table={table}
+    />
+  ) : (
+    <TableOnly
+      reason={`nenhuma venda ganha com valor no período${before ? ` nem no ${beforeName.toLowerCase()}` : ''}.`}
+      table={table}
+    />
   );
 }
 
@@ -1045,6 +1125,26 @@ export function SalesDashboardPage() {
         <>
           <Executive data={data} compare={filters.compare} />
           <div className="sales-grid">
+            <Card
+              id="sales-trend"
+              title="Tendência · vendas acumuladas"
+              note={
+                <>
+                  Valor das ganhas somado{' '}
+                  {data.trend.bucket === 'week' ? 'semana a semana' : 'dia a dia'}
+                  {filters.compare === 'none'
+                    ? '.'
+                    : `, contra o ${filters.compare === 'previous_year' ? 'mesmo período do ano anterior' : 'período anterior'} no mesmo ponto do período.`}
+                  {data.trend.bucket === 'week' && ' Por semana porque o período passa de 92 dias.'}{' '}
+                  {data.trend.goalCents === null
+                    ? `Meta: ${DASH} (${REASON.goal}).`
+                    : `Meta: ${formatMoney(data.trend.goalCents)}.`}
+                </>
+              }
+              wide
+            >
+              <Trend data={data} compare={filters.compare} />
+            </Card>
             <Card
               id="sales-funnel"
               title={`Funil${data.pipeline ? ` · ${LEAD_PIPELINE_LABELS[data.pipeline]}` : ''}`}

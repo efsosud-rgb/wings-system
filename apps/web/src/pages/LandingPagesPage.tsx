@@ -34,7 +34,12 @@ import { PageHeader } from '../components/PageHeader.js';
  * Station until the landing-page agent phase.
  */
 
-const META_KINDS: LeadSourceRuleKind[] = ['meta_form', 'meta_campaign'];
+const META_KINDS: LeadSourceRuleKind[] = [
+  'meta_form',
+  'meta_campaign',
+  'tiktok_form',
+  'tiktok_campaign',
+];
 
 function errorText(error: unknown, fallback: string): string {
   return error instanceof ApiError ? error.message : fallback;
@@ -434,9 +439,9 @@ function MetaRules() {
   const list = (rules.data?.rules ?? []).filter((rule) => META_KINDS.includes(rule.kind));
   return (
     <section className="block">
-      <h2>Outras origens (Meta Lead Ads)</h2>
+      <h2>Outras origens (Meta e TikTok Lead Ads)</h2>
       <p className="muted">
-        Formulário ou campanha do Meta → cliente e funil. Um lead sem regra fica na Wings, marcado
+        Formulário ou campanha do Meta ou da TikTok → cliente e funil. Um lead sem regra fica na Wings, marcado
         "sem regra".
       </p>
       <form

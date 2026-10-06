@@ -33,6 +33,7 @@ import { MarketingDashboardPage } from './pages/MarketingDashboardPage.js';
 import { SalesDashboardPage } from './pages/SalesDashboardPage.js';
 import { MediaStudioPage } from './pages/MediaStudioPage.js';
 import { NotFoundPage } from './pages/NotFoundPage.js';
+import { OfficePage } from './pages/OfficePage.js';
 import { ProjectsPage } from './pages/ProjectsPage.js';
 import { RoadmapPage } from './pages/RoadmapPage.js';
 import { SetPasswordPage } from './pages/SetPasswordPage.js';
@@ -99,6 +100,7 @@ const SCREENS: Record<string, RouteObject[]> = {
   '/dashboard/marketing': [{ index: true, element: <MarketingDashboardPage /> }],
   '/dashboard/leads-campanhas': [{ index: true, element: <CampaignLeadsPage /> }],
   '/marketing/edicao': [{ index: true, element: <MediaStudioPage /> }],
+  '/laboratorio/escritorio': [{ index: true, element: <OfficePage /> }],
   '/marketing/trafego-pago-wings': [
     { index: true, element: <TrafficStudioPage /> },
     { path: 'aprovacoes', element: <ApprovalsPage /> },
