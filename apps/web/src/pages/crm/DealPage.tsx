@@ -4,6 +4,7 @@ import {
   LEAD_CALL_OUTCOME_LABELS,
   LEAD_CALL_OUTCOMES,
   LEAD_CHANNEL_LABELS,
+  LEAD_NAME_MAX,
   LEAD_PIPELINE_LABELS,
   LEAD_SOURCE_LABELS,
   LEAD_TASK_KIND_LABELS,
@@ -17,7 +18,7 @@ import {
   type LeadTask,
   type LeadTaskKind,
 } from '@wings/shared';
-import { useState } from 'react';
+import { useRef, useState, type RefObject } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../../api/auth.js';
 import { ApiError } from '../../api/client.js';
@@ -41,7 +42,6 @@ import {
 import { Icon, type IconName } from '../../components/Icon.js';
 import { LeadEmailTab } from './LeadEmailTab.js';
 import {
-  ago,
   dueLabel,
   formatDateTime,
   formatDay,
@@ -89,6 +89,7 @@ const EVENT_LABELS: Record<string, string> = {
   'lead.contact_unlinked': 'Contato removido',
   'lead.task_done': 'Tarefa concluída',
   'lead.task_updated': 'Tarefa alterada',
+  'lead.renamed': 'Nome alterado',
 };
 
 export function DealPage() {
@@ -97,6 +98,8 @@ export function DealPage() {
   const loaded = useLead(id);
   const canWrite = hasPermission(session.data, 'leads.write');
   const canAssign = hasPermission(session.data, 'leads.assign');
+  const [tab, setTab] = useState<Tab>('note');
+  const register = useRef<HTMLElement>(null);
   if (loaded.isLoading)
     return (
       <div className="crm-page">
@@ -117,27 +120,52 @@ export function DealPage() {
       </div>
     );
   const data = loaded.data;
+  const act = (next: Tab) => {
+    setTab(next);
+    register.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
   return (
     <div className="crm-page">
       <div className="crm-page-scroll" style={{ padding: 0 }}>
         <Head data={data} canWrite={canWrite} canAssign={canAssign} />
+        {canWrite && <ActionBar lead={data.lead} active={tab} onAct={act} />}
         <div className="crm-deal-body">
           <div className="crm-stack">
             <ContactPanel data={data} canWrite={canWrite} />
             <CompanyPanel lead={data.lead} canWrite={canWrite} />
             <OriginPanel lead={data.lead} />
           </div>
-          <div className="crm-stack">
-            {canWrite && <Register lead={data.lead} />}
+          <div className="crm-stack is-center">
+            <FirstContactStrip data={data} canWrite={canWrite} onAct={act} />
+            {canWrite && <Register lead={data.lead} tab={tab} onTab={setTab} ref={register} />}
             <Timeline data={data} />
           </div>
           <div className="crm-stack">
-            <NextPanel data={data} canWrite={canWrite} />
+            <NextPanel data={data} canWrite={canWrite} onAct={act} />
           </div>
         </div>
       </div>
     </div>
   );
+}
+
+/** The open first-contact task: the deal is "new" until someone does it. */
+const firstContactOf = (data: LoadedLead): LeadTask | undefined =>
+  data.tasks.find((task) => task.kind === 'first_contact' && !task.doneAt);
+
+/** Whole days since the deal entered its stage: "0 dias", "1 dia", "12 dias". */
+export function daysInStage(since: string, now = Date.now()): string {
+  const days = Math.max(0, Math.floor((now - new Date(since).getTime()) / 86_400_000));
+  return `${days} ${days === 1 ? 'dia' : 'dias'}`;
+}
+
+/** The time of day a deadline falls on, "14:35"; with the day when it is not today. */
+function deadlineLabel(iso: string, now = new Date()): string {
+  const at = new Date(iso);
+  const time = at.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  return at.toDateString() === now.toDateString()
+    ? time
+    : `${at.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} às ${time}`;
 }
 
 // --- head ------------------------------------------------------------------------------------
@@ -178,12 +206,16 @@ function Head({
         >
           ‹ Negociações
         </Link>
-        <h1>{lead.name ?? 'Sem nome'}</h1>
+        <DealName lead={lead} canWrite={canWrite} />
         {lead.work.won === true && <span className="crm-status is-won">Ganha</span>}
         {lead.work.won === false && (
           <span className="crm-status is-lost">
             Perdida{lead.work.lostReason ? ` · ${lead.work.lostReason}` : ''}
           </span>
+        )}
+        {open && firstContactOf(data) && <span className="crm-badge is-new">Nova</span>}
+        {lead.pipeline && (
+          <span className="crm-badge">{LEAD_PIPELINE_LABELS[lead.pipeline]}</span>
         )}
         <span className={`crm-badge tone-${badge.tone}`}>{badge.label}</span>
         {lead.brand && <span className="crm-badge is-brand">{lead.brand}</span>}
@@ -336,12 +368,6 @@ function Head({
           )}
         </span>
         <span>
-          Funil <b>{lead.pipeline ? LEAD_PIPELINE_LABELS[lead.pipeline] : '—'}</b>
-        </span>
-        <span>
-          Na etapa há <b>{ago(lead.work.stageChangedAt ?? lead.createdAt)}</b>
-        </span>
-        <span>
           Criada em <b>{formatDateTime(lead.createdAt)}</b>
         </span>
       </div>
@@ -370,6 +396,12 @@ function Head({
               onClick={() => update.mutate({ stageId: stage.id })}
             >
               {stage.name}
+              {index === currentIndex && (
+                <span className="crm-stage-days">
+                  {' · '}
+                  {daysInStage(lead.work.stageChangedAt ?? lead.createdAt)}
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -380,6 +412,174 @@ function Head({
         </p>
       )}
     </header>
+  );
+}
+
+/** The deal's name: a heading that becomes a field on click; Enter saves, Esc cancels. */
+function DealName({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
+  const deal = useUpdateDeal(lead.id);
+  const [draft, setDraft] = useState<string | null>(null);
+  const name = lead.name ?? 'Sem nome';
+  if (!canWrite) return <h1>{name}</h1>;
+  if (draft === null)
+    return (
+      <h1>
+        <button
+          type="button"
+          className="crm-name-edit"
+          aria-label={`Renomear ${name}`}
+          title="Clique para renomear"
+          onClick={() => setDraft(lead.name ?? '')}
+        >
+          {name}
+        </button>
+      </h1>
+    );
+  const save = () => {
+    const next = draft.trim();
+    if (next.length < 2 || next === lead.name) return setDraft(null);
+    deal.mutate({ name: next }, { onSuccess: () => setDraft(null) });
+  };
+  return (
+    <span className="crm-name-form">
+      <input
+        className="crm-input"
+        aria-label="Nome da negociação"
+        value={draft}
+        maxLength={LEAD_NAME_MAX}
+        autoFocus
+        disabled={deal.isPending}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            save();
+          } else if (e.key === 'Escape') setDraft(null);
+        }}
+        onBlur={() => deal.isPending || setDraft(null)}
+      />
+      {deal.error && <span className="crm-error">{errorText(deal.error, 'Não foi possível renomear.')}</span>}
+    </span>
+  );
+}
+
+type Action = { tab: Tab; icon: IconName; label: string; soon?: string };
+const ACTIONS: Action[] = [
+  { tab: 'note', icon: 'edit', label: 'Anotação' },
+  { tab: 'email', icon: 'mail', label: 'E-mail' },
+  { tab: 'call', icon: 'phone', label: 'Ligação' },
+  { tab: 'whatsapp', icon: 'message', label: 'WhatsApp', soon: 'Em breve: conversa e ligação pelo número comercial, dentro do CRM' },
+  { tab: 'meet', icon: 'video', label: 'Reunião', soon: 'Em breve: Google Meet com a agenda do vendedor e da Wings' },
+  { tab: 'task', icon: 'check', label: 'Tarefa' },
+];
+
+/**
+ * One row of icon-and-label actions under the head: each opens the matching
+ * register tab. WhatsApp and Reunião wait for their integrations; "Mais"
+ * holds what is rarer (a meeting already held, the RD copy).
+ */
+function ActionBar({ lead, active, onAct }: { lead: Lead; active: Tab; onAct: (tab: Tab) => void }) {
+  const [more, setMore] = useState(false);
+  return (
+    <div className="crm-actions" role="toolbar" aria-label="Ações">
+      {ACTIONS.map((action) => (
+        <button
+          key={action.tab}
+          type="button"
+          className={`crm-action${active === action.tab ? ' is-active' : ''}`}
+          disabled={Boolean(action.soon)}
+          title={action.soon}
+          aria-label={action.soon ? `${action.label} (em breve)` : action.label}
+          onClick={() => onAct(action.tab)}
+        >
+          <span className="crm-action-icon" aria-hidden="true">
+            <Icon name={action.icon} size={18} />
+          </span>
+          <span>{action.label}</span>
+          {action.soon && <small>em breve</small>}
+        </button>
+      ))}
+      <span className="crm-action-more crm-menu">
+        <button
+          type="button"
+          className={`crm-action${more ? ' is-active' : ''}`}
+          aria-label="Mais"
+          aria-expanded={more}
+          onClick={() => setMore((v) => !v)}
+        >
+          <span className="crm-action-icon" aria-hidden="true">
+            <Icon name="more" size={18} />
+          </span>
+          <span>Mais</span>
+        </button>
+        {more && (
+          <div className="crm-menu-list" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMore(false);
+                onAct('meeting');
+              }}
+            >
+              Registrar reunião feita
+            </button>
+            {lead.crm && (
+              <a role="menuitem" href={lead.crm.rdUrl} target="_blank" rel="noopener noreferrer">
+                Abrir a cópia no RD CRM
+              </a>
+            )}
+          </div>
+        )}
+      </span>
+    </div>
+  );
+}
+
+/** "Nova negociação: faça o primeiro contato até HH:MM" while the first-contact task is open. */
+function FirstContactStrip({
+  data,
+  canWrite,
+  onAct,
+}: {
+  data: LoadedLead;
+  canWrite: boolean;
+  onAct: (tab: Tab) => void;
+}) {
+  const update = useUpdateTask(data.lead.id);
+  const first = firstContactOf(data);
+  if (!first || data.lead.work.won !== null) return null;
+  const late = isPast(first.dueAt);
+  return (
+    <section className={`crm-strip${late ? ' is-late' : ''}`} aria-label="Primeiro contato">
+      <Icon name={late ? 'alert' : 'clock'} size={16} />
+      <div>
+        <b>
+          {late
+            ? 'Nova negociação: o prazo do primeiro contato venceu'
+            : `Nova negociação: faça o primeiro contato até ${deadlineLabel(first.dueAt)}`}
+        </b>
+        <div className="crm-sub">
+          1 hora útil desde a chegada · <Countdown dueAt={first.dueAt} inline />
+          {first.assigneeName ? ` · ${first.assigneeName}` : ''}
+        </div>
+      </div>
+      {canWrite && (
+        <div className="crm-quick-row">
+          <button type="button" className="crm-btn is-small" onClick={() => onAct('call')}>
+            Ligar
+          </button>
+          <button
+            type="button"
+            className="crm-btn is-small is-primary"
+            disabled={update.isPending}
+            onClick={() => update.mutate({ taskId: first.id, done: true })}
+          >
+            Contato feito
+          </button>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -693,10 +893,20 @@ function OriginPanel({ lead }: { lead: Lead }) {
 
 // --- center: register + timeline ---------------------------------------------------------------
 
-type Tab = 'note' | 'task' | 'call' | 'meeting' | 'email' | 'whatsapp';
+type Tab = 'note' | 'task' | 'call' | 'meeting' | 'email' | 'whatsapp' | 'meet';
 
-function Register({ lead }: { lead: Lead }) {
-  const [tab, setTab] = useState<Tab>('note');
+function Register({
+  lead,
+  tab,
+  onTab,
+  ref,
+}: {
+  lead: Lead;
+  tab: Tab;
+  onTab: (tab: Tab) => void;
+  ref: RefObject<HTMLElement | null>;
+}) {
+  const setTab = onTab;
   const note = useAddNote(lead.id);
   const task = useCreateTask(lead.id);
   const activity = useAddActivity(lead.id);
@@ -724,10 +934,9 @@ function Register({ lead }: { lead: Lead }) {
     ['call', 'Ligação', false],
     ['meeting', 'Reunião', false],
     ['email', 'E-mail', false],
-    ['whatsapp', 'WhatsApp · em breve', true],
   ];
   return (
-    <section className="crm-panel">
+    <section className="crm-panel" ref={ref} id="registrar">
       <div className="crm-record-tabs" role="tablist">
         {tabs.map(([key, label, disabled]) => (
           <button
@@ -869,11 +1078,7 @@ function Register({ lead }: { lead: Lead }) {
             onChange={(e) => setCall((c) => ({ ...c, note: e.target.value }))}
           />
           <div className="crm-quick-row">
-            {lead.phone && (
-              <a className="crm-btn" href={`tel:+${lead.phone}`}>
-                Ligar para {formatPhone(lead.phone)}
-              </a>
-            )}
+            {lead.phone && <CopyPhone phone={lead.phone} />}
             <button type="submit" className="crm-btn is-primary" disabled={activity.isPending}>
               Registrar ligação
             </button>
@@ -938,6 +1143,31 @@ function Register({ lead }: { lead: Lead }) {
       {tab === 'email' && <LeadEmailTab leadId={lead.id} />}
       {error && <p className="crm-error">{errorText(error, 'Não foi possível registrar.')}</p>}
     </section>
+  );
+}
+
+/** The phone to dial, with a button that copies it; "Copiado" for a moment after. */
+function CopyPhone({ phone }: { phone: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <span className="crm-copy-phone">
+      <a className="crm-btn" href={`tel:+${phone}`}>
+        {formatPhone(phone)}
+      </a>
+      <button
+        type="button"
+        className="crm-btn is-quiet"
+        aria-label="Copiar telefone"
+        onClick={() => {
+          void navigator.clipboard?.writeText(`+${phone}`).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          });
+        }}
+      >
+        {copied ? 'Copiado' : 'Copiar'}
+      </button>
+    </span>
   );
 }
 
@@ -1079,7 +1309,7 @@ function Timeline({ data }: { data: LoadedLead }) {
 
 // --- right column ------------------------------------------------------------------------------
 
-function Countdown({ dueAt }: { dueAt: string }) {
+function Countdown({ dueAt, inline }: { dueAt: string; inline?: boolean }) {
   const diff = new Date(dueAt).getTime() - Date.now();
   const late = diff < 0;
   const abs = Math.abs(diff);
@@ -1089,67 +1319,57 @@ function Countdown({ dueAt }: { dueAt: string }) {
     hours >= 48
       ? `${Math.floor(hours / 24)} d`
       : `${hours}h ${String(minutes).padStart(2, '0')}min`;
-  return (
-    <div className={`crm-countdown ${late ? 'is-late' : 'is-ok'}`}>{late ? `−${text}` : text}</div>
-  );
+  const label = late ? `−${text}` : text;
+  if (inline) return <span className={`crm-countdown is-inline ${late ? 'is-late' : 'is-ok'}`}>{label}</span>;
+  return <div className={`crm-countdown ${late ? 'is-late' : 'is-ok'}`}>{label}</div>;
 }
 
-function NextPanel({ data, canWrite }: { data: LoadedLead; canWrite: boolean }) {
+function NextPanel({
+  data,
+  canWrite,
+  onAct,
+}: {
+  data: LoadedLead;
+  canWrite: boolean;
+  onAct: (tab: Tab) => void;
+}) {
   const update = useUpdateTask(data.lead.id);
   const open = data.tasks
-    .filter((task) => !task.doneAt)
+    .filter((task) => !task.doneAt && task.kind !== 'first_contact')
     .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
-  const first = open.find((task) => task.kind === 'first_contact');
   const owner = data.lead.work.ownerName;
   return (
     <>
-      {first && (
-        <section className="crm-panel">
-          <h2>Primeiro contato</h2>
-          <Countdown dueAt={first.dueAt} />
-          <div className="crm-sub">
-            {isPast(first.dueAt) ? 'Prazo vencido' : 'Prazo'} · {dueLabel(first.dueAt)} ·{' '}
-            {first.assigneeName ?? '—'}
-          </div>
+      <section className="crm-panel">
+        <h2>
+          Próximas tarefas
           {canWrite && (
-            <button
-              type="button"
-              className="crm-btn is-small"
-              disabled={update.isPending}
-              onClick={() => update.mutate({ taskId: first.id, done: true })}
-            >
-              Contato feito
+            <button type="button" className="crm-btn is-small" onClick={() => onAct('task')}>
+              Criar tarefa
             </button>
           )}
-        </section>
-      )}
-      <section className="crm-panel">
-        <h2>Próximas tarefas</h2>
-        {open.filter((task) => task.id !== first?.id).length === 0 && (
-          <p className="crm-muted">Nenhuma tarefa aberta.</p>
-        )}
-        {open
-          .filter((task) => task.id !== first?.id)
-          .map((task) => (
-            <label key={task.id} className={`crm-task-line${isPast(task.dueAt) ? ' is-late' : ''}`}>
-              {canWrite && (
-                <input
-                  type="checkbox"
-                  checked={false}
-                  disabled={update.isPending}
-                  onChange={() => update.mutate({ taskId: task.id, done: true })}
-                  aria-label={`Concluir ${task.title}`}
-                />
-              )}
-              <span>
-                {task.title}
-                <div className="crm-task-when">
-                  {LEAD_TASK_KIND_LABELS[task.kind]} · {dueLabel(task.dueAt)}
-                  {isPast(task.dueAt) ? ' · atrasada' : ''} · {task.assigneeName ?? '—'}
-                </div>
-              </span>
-            </label>
-          ))}
+        </h2>
+        {open.length === 0 && <p className="crm-muted">Nenhuma tarefa aberta.</p>}
+        {open.map((task) => (
+          <label key={task.id} className={`crm-task-line${isPast(task.dueAt) ? ' is-late' : ''}`}>
+            {canWrite && (
+              <input
+                type="checkbox"
+                checked={false}
+                disabled={update.isPending}
+                onChange={() => update.mutate({ taskId: task.id, done: true })}
+                aria-label={`Concluir ${task.title}`}
+              />
+            )}
+            <span>
+              {task.title}
+              <div className="crm-task-when">
+                {LEAD_TASK_KIND_LABELS[task.kind]} · {dueLabel(task.dueAt)}
+                {isPast(task.dueAt) ? ' · atrasada' : ''} · {task.assigneeName ?? '—'}
+              </div>
+            </span>
+          </label>
+        ))}
       </section>
       <section className="crm-panel">
         <h2>Dono</h2>

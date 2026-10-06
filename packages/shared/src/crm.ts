@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { LEAD_PIPELINES, type LeadPipeline, type LeadSource } from './leads.js';
+import { LEAD_NAME_MAX, LEAD_PIPELINES, type LeadPipeline, type LeadSource } from './leads.js';
 
 /**
  * CRM Vendas — the Funil as the team's place of work (plano
@@ -662,6 +662,8 @@ export const isCloseForecastOverdue = (
  */
 export const leadDealUpdateSchema = z
   .object({
+    /** The deal's name (the person or the company), as the seller edits it in the head of the page. */
+    name: z.string().trim().min(2, 'Informe o nome').max(LEAD_NAME_MAX).optional(),
     valueCents: z.number().int().min(0).max(LEAD_VALUE_MAX_CENTS).nullable().optional(),
     /** The day the seller expects to close, `AAAA-MM-DD`; null clears the forecast. */
     expectedCloseAt: isoDateSchema.nullable().optional(),
@@ -673,6 +675,7 @@ export const leadDealUpdateSchema = z
   })
   .refine(
     (value) =>
+      value.name !== undefined ||
       value.valueCents !== undefined ||
       value.expectedCloseAt !== undefined ||
       value.brandClientId !== undefined ||

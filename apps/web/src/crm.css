@@ -1109,6 +1109,150 @@
   .crm-deal-body {
     grid-template-columns: 1fr;
   }
+  /* on one column, what is next (the first contact, the register) comes first */
+  .crm-deal-body .crm-stack.is-center {
+    order: -1;
+  }
+}
+
+/* the deal's name: a heading until clicked, then a field */
+.crm-name-edit {
+  all: unset;
+  cursor: text;
+  border-bottom: 1px dashed transparent;
+}
+.crm-name-edit:hover,
+.crm-name-edit:focus-visible {
+  border-bottom-color: var(--line-strong);
+}
+.crm-name-edit:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-xs);
+}
+.crm-name-form {
+  display: inline-grid;
+  gap: var(--space-1);
+}
+.crm-name-form .crm-input {
+  font-size: var(--text-xl);
+  font-weight: var(--weight-semibold);
+  min-width: 240px;
+  max-width: 100%;
+}
+.crm-badge.is-new {
+  --tone: var(--accent);
+  color: var(--accent);
+  font-weight: var(--weight-semibold);
+}
+.crm-stage-days {
+  font-weight: var(--weight-regular);
+  opacity: 0.85;
+}
+
+/* the action bar: icon above label, one tab stop each */
+.crm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-5);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.crm-action {
+  display: grid;
+  justify-items: center;
+  gap: 2px;
+  min-width: 64px;
+  padding: var(--space-1) var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.crm-action-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+}
+.crm-action:hover:not(:disabled) {
+  color: var(--text);
+}
+.crm-action:hover:not(:disabled) .crm-action-icon,
+.crm-action.is-active .crm-action-icon {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.crm-action.is-active {
+  color: var(--accent);
+}
+.crm-action:disabled {
+  cursor: default;
+  color: var(--text-3);
+}
+.crm-action:disabled .crm-action-icon {
+  color: var(--text-3);
+  border-style: dashed;
+  background: none;
+}
+.crm-action small {
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-3);
+}
+.crm-action:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.crm-action-more .crm-menu-list {
+  right: auto;
+  left: 0;
+}
+
+/* "Nova negociação: faça o primeiro contato até HH:MM" */
+.crm-strip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--accent);
+  border-left-width: 4px;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft, var(--surface));
+  color: var(--accent);
+}
+.crm-strip > div {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text);
+}
+.crm-strip .crm-sub {
+  color: var(--text-2);
+}
+.crm-strip.is-late {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.crm-strip .crm-quick-row {
+  flex-wrap: wrap;
+}
+.crm-countdown.is-inline {
+  font-size: inherit;
+  font-weight: var(--weight-semibold);
+}
+.crm-copy-phone {
+  display: inline-flex;
+  gap: var(--space-1);
 }
 .crm-panel {
   background: var(--surface);
