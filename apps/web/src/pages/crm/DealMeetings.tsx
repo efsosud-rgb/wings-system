@@ -1,39 +1,58 @@
 import {
+  MEETING_RECORDING_MAX_BYTES,
+  MEETING_RECORDING_TYPES,
   MEETING_STATUS_LABELS,
+  meetingCreateSchema,
   type LeadActivity,
   type Meeting,
   type MeetingSummary,
+  type MeetingTranscript,
+  type SummarySendChannel,
 } from '@wings/shared';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { hasPermission, useSession } from '../../api/auth.js';
 import { ApiError } from '../../api/client.js';
-import { useMeeting, useMeetings, useNextStepTask } from '../../api/crm.js';
+import {
+  fetchRecordingLink,
+  useCreateMeeting,
+  useMeeting,
+  useMeetings,
+  useMeetingTranscript,
+  useNameSpeakers,
+  useNextStepTask,
+  useRequestAnalysis,
+  useSummarySend,
+  useUpdateMeeting,
+  useUploadRecording,
+} from '../../api/crm.js';
 import type { LoadedLead } from '../../api/leads.js';
 import { Icon } from '../../components/Icon.js';
-import { formatDateTime, formatDay } from './format.js';
+import { formatDateTime, formatDay, toLocalInput } from './format.js';
 
 /**
- * The Reunião section of the deal (docs/crm/reunioes-api.md, the Opus's
- * contract). "Agendar reunião" (the seller's and Wings' Google calendars) and
- * "Iniciar reunião" (the Meet in a window beside the Wings) wait, disabled,
- * "em breve", for the Google integration. What the API already answers is
- * shown as it comes: the list, and for a meeting that ended, the analysis —
- * summary, participants, topics, next steps (each one a task on a click) and
- * the lead's evaluation. Any field without data shows "—" and why. Expansão
- * deals carry the "Cliente" field (the franchisor brand), chosen before or
- * after the meeting.
+ * The Reunião section of the deal, on the Opus's meetings API
+ * (docs/crm/reunioes-api.md). Scheduling takes a pasted Meet/Zoom/Teams link
+ * today; "criar o Meet pelo Google" asks the API and shows its 503 until the
+ * Workspace is authorised. "Iniciar" opens the next meeting's link beside the
+ * Wings. A meeting that happened takes its recording (straight to storage, by a
+ * signed address), shows the transcription with voices a person can name, the
+ * analysis (each next step a task on a click) and, on Expansão, the summary to
+ * the franchisor's owner: drafted, edited, approved by `meetings.approve_send`
+ * with the exact text the approver read, sent once. Any field without data
+ * shows "—" and why.
  */
-
-const GOOGLE_SOON = 'Em breve: depende da integração do Google (agenda e Meet)';
 
 const FIT_LABELS = { bom: 'bom', medio: 'médio', fraco: 'fraco' } as const;
 const OWNER_LABELS = { vendedor: 'vendedor', cliente: 'cliente', wings: 'Wings', outro: 'outro' };
 
-const reasonOf = (error: unknown) =>
-  error instanceof ApiError && error.status === 404
-    ? 'A API de reuniões ainda não está ligada.'
-    : error instanceof ApiError
+const messageOf = (error: unknown, fallback: string) =>
+  error instanceof ApiError
+    ? error.status === 404
+      ? 'A API de reuniões ainda não está ligada.'
+      : error.message
+    : error instanceof Error
       ? error.message
-      : 'Não foi possível ler as reuniões.';
+      : fallback;
 
 /** Opens the Meet in its own window beside the Wings, which stays on the deal. */
 export function openMeetBeside(url: string) {
@@ -64,6 +83,11 @@ function Block({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
+function Problem({ error, fallback }: { error: unknown; fallback: string }) {
+  if (!error) return null;
+  return <p className="crm-error">{messageOf(error, fallback)}</p>;
+}
+
 const ANALYSIS_REASONS: Record<Meeting['analysis']['state'], string> = {
   nenhuma: 'Sem análise ainda: ela é feita quando a transcrição fica pronta.',
   na_fila: 'Análise na fila.',
@@ -73,19 +97,569 @@ const ANALYSIS_REASONS: Record<Meeting['analysis']['state'], string> = {
   sem_verba: 'A análise passou do teto diário; fica para amanhã.',
 };
 
-/** What the deal learns from one meeting that ended. */
-function MeetingDetail({ id, canWrite }: { id: string; canWrite: boolean }) {
+const RECORDING_REASONS: Record<Meeting['recording']['state'], string> = {
+  nenhuma: 'Nenhuma gravação enviada.',
+  enviando: 'Gravação a caminho do armazenamento…',
+  guardada: '',
+  falhou: 'A gravação não chegou inteira; envie de novo.',
+};
+
+const TRANSCRIPT_REASONS: Record<Meeting['transcript']['state'], string> = {
+  nenhuma: 'Sem transcrição: ela começa quando a gravação é guardada.',
+  na_fila: 'Transcrição na fila do worker.',
+  transcrevendo: 'Transcrevendo…',
+  pronta: '',
+  falhou: 'A transcrição falhou.',
+};
+
+const SEND_LABELS: Record<NonNullable<Meeting['summarySend']>['state'], string> = {
+  nenhum: 'Nenhum envio',
+  rascunho: 'Rascunho — aguarda aprovação',
+  aprovado: 'Aprovado — pronto para enviar',
+  enviando: 'Enviando…',
+  enviado: 'Enviado',
+  recusado: 'Recusado',
+  falhou: 'O envio falhou',
+};
+
+const formatBytes = (bytes: number | null) =>
+  bytes === null ? '' : `${(bytes / 1024 / 1024).toFixed(bytes > 100 * 1024 * 1024 ? 0 : 1)} MB`;
+
+const formatSeconds = (seconds: number | null) => {
+  if (seconds === null) return '';
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+};
+
+// --- scheduling ------------------------------------------------------------------------------
+
+function ScheduleForm({ leadId, onDone }: { leadId: string; onDone: () => void }) {
+  const create = useCreateMeeting(leadId);
+  const start = new Date(Date.now() + 60 * 60_000);
+  start.setMinutes(0, 0, 0);
+  const [title, setTitle] = useState('Reunião de diagnóstico');
+  const [startsAt, setStartsAt] = useState(toLocalInput(start));
+  const [endsAt, setEndsAt] = useState(toLocalInput(new Date(start.getTime() + 60 * 60_000)));
+  const [calendar, setCalendar] = useState<'vendedor' | 'wings'>('vendedor');
+  const [meetUrl, setMeetUrl] = useState('');
+  const [createMeet, setCreateMeet] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  const submit = () => {
+    const parsed = meetingCreateSchema.safeParse({
+      title,
+      startsAt: startsAt ? new Date(startsAt).toISOString() : '',
+      endsAt: endsAt ? new Date(endsAt).toISOString() : '',
+      calendar,
+      meetUrl: meetUrl.trim() || null,
+      createMeet,
+    });
+    if (!parsed.success) {
+      setProblem(parsed.error.issues[0]?.message ?? 'Confira os campos');
+      return;
+    }
+    setProblem(null);
+    create.mutate(parsed.data, {
+      onSuccess: onDone,
+      onError: (error) => {
+        if (error instanceof ApiError && error.status === 503) {
+          setProblem(
+            'O Google ainda não está autorizado (depende da Thais). Cole o link da reunião para marcar mesmo assim.',
+          );
+          setCreateMeet(false);
+        } else setProblem(messageOf(error, 'Não foi possível marcar a reunião.'));
+      },
+    });
+  };
+
+  return (
+    <div className="crm-meeting-form">
+      <label className="crm-field">
+        <span>Título</span>
+        <input value={title} onChange={(e) => setTitle(e.target.value)} maxLength={160} />
+      </label>
+      <div className="crm-meeting-form-row">
+        <label className="crm-field">
+          <span>Início</span>
+          <input
+            type="datetime-local"
+            value={startsAt}
+            onChange={(e) => setStartsAt(e.target.value)}
+          />
+        </label>
+        <label className="crm-field">
+          <span>Fim</span>
+          <input type="datetime-local" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />
+        </label>
+        <label className="crm-field">
+          <span>Agenda</span>
+          <select
+            value={calendar}
+            onChange={(e) => setCalendar(e.target.value as 'vendedor' | 'wings')}
+          >
+            <option value="vendedor">do vendedor</option>
+            <option value="wings">da Wings</option>
+          </select>
+        </label>
+      </div>
+      <label className="crm-field">
+        <span>Link da reunião (Google Meet, Zoom ou Teams)</span>
+        <input
+          type="url"
+          placeholder="https://meet.google.com/…"
+          value={meetUrl}
+          onChange={(e) => setMeetUrl(e.target.value)}
+          disabled={createMeet}
+        />
+      </label>
+      <label className="crm-checkbox">
+        <input
+          type="checkbox"
+          checked={createMeet}
+          onChange={(e) => setCreateMeet(e.target.checked)}
+        />
+        Criar o evento e o Meet pelo Google{' '}
+        <small>(responde 503 até a autorização do Workspace)</small>
+      </label>
+      <p className="crm-sub">O convite e a tela avisam que a reunião é gravada.</p>
+      {problem && <p className="crm-error">{problem}</p>}
+      <div className="crm-quick-row">
+        <button
+          type="button"
+          className="crm-btn is-small is-primary"
+          disabled={create.isPending}
+          onClick={submit}
+        >
+          {create.isPending ? 'Marcando…' : 'Marcar reunião'}
+        </button>
+        <button type="button" className="crm-btn is-small is-quiet" onClick={onDone}>
+          Cancelar
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// --- recording and transcript --------------------------------------------------------------
+
+function RecordingBlock({ meeting, canWrite }: { meeting: Meeting; canWrite: boolean }) {
+  const upload = useUploadRecording(meeting.id);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [problem, setProblem] = useState<string | null>(null);
+  const { recording } = meeting;
+  const canSend = canWrite && (recording.state === 'nenhuma' || recording.state === 'falhou');
+  const listen = async () => {
+    try {
+      const link = await fetchRecordingLink(meeting.id);
+      window.open(link.url, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      setProblem(messageOf(error, 'Não foi possível abrir a gravação.'));
+    }
+  };
+  return (
+    <Block title="Gravação">
+      {recording.state === 'guardada' ? (
+        <p>
+          Guardada
+          {recording.durationSeconds !== null && ` · ${formatSeconds(recording.durationSeconds)}`}
+          {recording.sizeBytes !== null && ` · ${formatBytes(recording.sizeBytes)}`}{' '}
+          <button type="button" className="crm-link-btn" onClick={() => void listen()}>
+            Ouvir (link de 5 minutos)
+          </button>
+        </p>
+      ) : (
+        <Dash reason={RECORDING_REASONS[recording.state]} />
+      )}
+      {canSend && (
+        <p>
+          <input
+            ref={fileInput}
+            type="file"
+            accept={MEETING_RECORDING_TYPES.join(',')}
+            className="crm-file-input"
+            aria-label="Arquivo da gravação"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (!file) return;
+              if (!(MEETING_RECORDING_TYPES as readonly string[]).includes(file.type)) {
+                setProblem('Tipo de arquivo não aceito: use áudio ou vídeo do Meet.');
+                return;
+              }
+              if (file.size > MEETING_RECORDING_MAX_BYTES) {
+                setProblem('A gravação passa de 1,5 GB.');
+                return;
+              }
+              setProblem(null);
+              upload.mutate(file);
+            }}
+          />
+          <button
+            type="button"
+            className="crm-btn is-small"
+            disabled={upload.isPending}
+            onClick={() => fileInput.current?.click()}
+          >
+            {upload.isPending ? 'Enviando…' : 'Enviar gravação'}
+          </button>{' '}
+          <span className="crm-sub">
+            Vai direto ao armazenamento; a transcrição começa sozinha.
+          </span>
+        </p>
+      )}
+      <Problem error={upload.error} fallback="Não foi possível enviar a gravação." />
+      {problem && <p className="crm-error">{problem}</p>}
+    </Block>
+  );
+}
+
+function SpeakerName({
+  speaker,
+  canWrite,
+  onName,
+}: {
+  speaker: MeetingTranscript['speakers'][number];
+  canWrite: boolean;
+  onName: (label: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [label, setLabel] = useState(speaker.label ?? '');
+  if (!editing) {
+    return (
+      <li>
+        <b>{speaker.key}</b> · {speaker.label ?? speaker.attendeeEmail ?? '—'}
+        {canWrite && (
+          <>
+            {' '}
+            <button type="button" className="crm-link-btn" onClick={() => setEditing(true)}>
+              {speaker.label ? 'renomear' : 'dizer quem é'}
+            </button>
+          </>
+        )}
+      </li>
+    );
+  }
+  return (
+    <li className="crm-quick-row">
+      <b>{speaker.key}</b>
+      <input
+        value={label}
+        maxLength={60}
+        placeholder="Quem fala aqui"
+        onChange={(e) => setLabel(e.target.value)}
+        aria-label={`Nome da voz ${speaker.key}`}
+      />
+      <button
+        type="button"
+        className="crm-btn is-small"
+        disabled={!label.trim()}
+        onClick={() => {
+          onName(label.trim());
+          setEditing(false);
+        }}
+      >
+        Salvar
+      </button>
+    </li>
+  );
+}
+
+function TranscriptBlock({ meeting, canWrite }: { meeting: Meeting; canWrite: boolean }) {
+  const ready = meeting.transcript.state === 'pronta';
+  const [open, setOpen] = useState(false);
+  const transcript = useMeetingTranscript(meeting.id, ready && open);
+  const name = useNameSpeakers(meeting.id);
+  if (!ready) {
+    return (
+      <Block title="Transcrição">
+        <Dash reason={meeting.transcript.error ?? TRANSCRIPT_REASONS[meeting.transcript.state]} />
+      </Block>
+    );
+  }
+  return (
+    <Block title="Transcrição">
+      <p>
+        {meeting.transcript.segments} trechos{' '}
+        <button type="button" className="crm-link-btn" onClick={() => setOpen((v) => !v)}>
+          {open ? 'ocultar' : 'ler'}
+        </button>
+      </p>
+      {open && transcript.isLoading && <p className="crm-muted">Carregando…</p>}
+      {open && transcript.isError && (
+        <Dash reason={messageOf(transcript.error, 'Não foi possível ler a transcrição.')} />
+      )}
+      {open && transcript.data && (
+        <div className="crm-transcript">
+          <div className="crm-sub">
+            {transcript.data.language ? `Idioma ${transcript.data.language}` : ''}
+            {transcript.data.durationSeconds !== null &&
+              ` · ${formatSeconds(transcript.data.durationSeconds)}`}
+          </div>
+          {transcript.data.speakers.length > 0 ? (
+            <ul className="crm-plain-list">
+              {transcript.data.speakers.map((speaker) => (
+                <SpeakerName
+                  key={speaker.key}
+                  speaker={speaker}
+                  canWrite={canWrite}
+                  onName={(label) => name.mutate({ [speaker.key]: { label } })}
+                />
+              ))}
+            </ul>
+          ) : (
+            <Dash
+              reason={
+                transcript.data.speakersReason ?? 'A separação de quem falou ainda não está ligada.'
+              }
+            />
+          )}
+          <Problem error={name.error} fallback="Não foi possível nomear a voz." />
+          <ol className="crm-transcript-segments">
+            {transcript.data.segments.map((segment, index) => (
+              <li key={index}>
+                <span className="crm-sub">
+                  {formatSeconds(segment.start)}
+                  {segment.speaker ? ` · ${segment.speaker}` : ''}
+                </span>{' '}
+                {segment.text}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </Block>
+  );
+}
+
+// --- the summary to the franchisor -----------------------------------------------------------
+
+function SummarySendCard({
+  meeting,
+  canWrite,
+  canApprove,
+}: {
+  meeting: Meeting;
+  canWrite: boolean;
+  canApprove: boolean;
+}) {
+  const actions = useSummarySend(meeting.id);
+  const send = meeting.summarySend;
+  const state = send?.state ?? 'nenhum';
+  const [channel, setChannel] = useState<SummarySendChannel>('email');
+  const [draft, setDraft] = useState(send?.text ?? '');
+  const [editing, setEditing] = useState(false);
+  // The text on screen is the server's: what the approver reads is what is approved.
+  useEffect(() => {
+    if (!editing) setDraft(send?.text ?? '');
+  }, [send?.text, editing]);
+  const analysisReady = meeting.analysis.state === 'pronta';
+  const error =
+    actions.create.error ??
+    actions.edit.error ??
+    actions.approve.error ??
+    actions.refuse.error ??
+    actions.send.error;
+  const busy =
+    actions.create.isPending ||
+    actions.edit.isPending ||
+    actions.approve.isPending ||
+    actions.refuse.isPending ||
+    actions.send.isPending;
+
+  return (
+    <Block title="Resumo para o dono da franqueadora">
+      <p className="crm-sub">
+        Só sai depois de lido e aprovado por quem tem a permissão; vai uma vez, ao contato principal
+        da marca, sem dados do candidato além do primeiro nome.
+      </p>
+      <p>
+        <b>{SEND_LABELS[state]}</b>
+        {send?.channel && ` · ${send.channel === 'whatsapp' ? 'WhatsApp' : 'e-mail'}`}
+        {send?.to && ` · para ${send.to}`}
+        {send?.approvedAt && ` · aprovado em ${formatDateTime(send.approvedAt)}`}
+        {send?.sentAt && ` · enviado em ${formatDateTime(send.sentAt)}`}
+      </p>
+      {send?.error && <p className="crm-error">{send.error}</p>}
+
+      {(state === 'nenhum' || state === 'recusado' || state === 'falhou') && canWrite && (
+        <div className="crm-quick-row">
+          <select
+            value={channel}
+            aria-label="Canal do envio"
+            onChange={(e) => setChannel(e.target.value as SummarySendChannel)}
+          >
+            <option value="email">por e-mail</option>
+            <option value="whatsapp">por WhatsApp</option>
+          </select>
+          <button
+            type="button"
+            className="crm-btn is-small"
+            disabled={busy || !analysisReady}
+            title={analysisReady ? undefined : 'Precisa da análise pronta'}
+            onClick={() => actions.create.mutate(channel)}
+          >
+            Gerar rascunho do resumo
+          </button>
+        </div>
+      )}
+
+      {send?.text && (state === 'rascunho' || state === 'aprovado') && (
+        <>
+          {editing ? (
+            <textarea
+              className="crm-summary-text"
+              value={draft}
+              rows={10}
+              maxLength={4000}
+              aria-label="Texto do resumo"
+              onChange={(e) => setDraft(e.target.value)}
+            />
+          ) : (
+            <pre className="crm-summary-text" aria-label="Texto do resumo">
+              {send.text}
+            </pre>
+          )}
+          <div className="crm-quick-row">
+            {state === 'rascunho' && canWrite && !editing && (
+              <button
+                type="button"
+                className="crm-btn is-small is-quiet"
+                onClick={() => setEditing(true)}
+              >
+                Editar texto
+              </button>
+            )}
+            {editing && (
+              <>
+                <button
+                  type="button"
+                  className="crm-btn is-small"
+                  disabled={busy || draft.trim().length < 20}
+                  onClick={() =>
+                    actions.edit.mutate(draft.trim(), { onSuccess: () => setEditing(false) })
+                  }
+                >
+                  Salvar texto
+                </button>
+                <button
+                  type="button"
+                  className="crm-btn is-small is-quiet"
+                  onClick={() => {
+                    setEditing(false);
+                    setDraft(send.text ?? '');
+                  }}
+                >
+                  Descartar
+                </button>
+              </>
+            )}
+            {state === 'rascunho' && canApprove && !editing && (
+              <button
+                type="button"
+                className="crm-btn is-small is-primary"
+                disabled={busy}
+                // Exactly the text rendered above, as the server gave it.
+                onClick={() => actions.approve.mutate(send.text as string)}
+              >
+                Li e aprovo este texto
+              </button>
+            )}
+            {state === 'aprovado' && canApprove && (
+              <button
+                type="button"
+                className="crm-btn is-small is-primary"
+                disabled={busy}
+                onClick={() => actions.send.mutate()}
+              >
+                Enviar agora (uma vez)
+              </button>
+            )}
+            {canApprove && !editing && (
+              <button
+                type="button"
+                className="crm-btn is-small is-quiet"
+                disabled={busy}
+                onClick={() => actions.refuse.mutate()}
+              >
+                Recusar
+              </button>
+            )}
+          </div>
+          {state === 'rascunho' && !canApprove && (
+            <p className="crm-sub">A aprovação é de quem tem a permissão de aprovar o envio.</p>
+          )}
+        </>
+      )}
+      <Problem error={error} fallback="Não foi possível concluir." />
+    </Block>
+  );
+}
+
+// --- one meeting --------------------------------------------------------------------------
+
+function MeetingDetail({
+  id,
+  canWrite,
+  canApprove,
+  expansion,
+}: {
+  id: string;
+  canWrite: boolean;
+  canApprove: boolean;
+  expansion: boolean;
+}) {
   const meeting = useMeeting(id);
   const toTask = useNextStepTask(id);
+  const analyze = useRequestAnalysis(id);
+  const update = useUpdateMeeting(id);
   if (meeting.isLoading) return <p className="crm-muted">Carregando…</p>;
-  if (meeting.isError || !meeting.data) return <Dash reason={reasonOf(meeting.error)} />;
-  const { analysis, attendees } = meeting.data;
+  if (meeting.isError || !meeting.data) {
+    return <Dash reason={messageOf(meeting.error, 'Não foi possível ler a reunião.')} />;
+  }
+  const data = meeting.data;
+  const { analysis, attendees } = data;
   const ready = analysis.state === 'pronta';
   const reason = analysis.reason ?? ANALYSIS_REASONS[analysis.state];
+  const canAnalyze =
+    canWrite &&
+    data.transcript.state === 'pronta' &&
+    analysis.state !== 'na_fila' &&
+    analysis.state !== 'analisando';
   return (
     <div className="crm-meeting-detail">
+      {canWrite && data.status === 'agendada' && (
+        <p>
+          <button
+            type="button"
+            className="crm-btn is-small is-quiet"
+            disabled={update.isPending}
+            onClick={() => {
+              if (window.confirm('Cancelar esta reunião?')) update.mutate({ status: 'cancelada' });
+            }}
+          >
+            Cancelar reunião
+          </button>
+          <Problem error={update.error} fallback="Não foi possível cancelar." />
+        </p>
+      )}
+      <RecordingBlock meeting={data} canWrite={canWrite} />
+      <TranscriptBlock meeting={data} canWrite={canWrite} />
       <Block title="Resumo">
         {ready && analysis.summary ? <p>{analysis.summary}</p> : <Dash reason={reason} />}
+        {canAnalyze && (
+          <p>
+            <button
+              type="button"
+              className="crm-btn is-small is-quiet"
+              disabled={analyze.isPending}
+              onClick={() => analyze.mutate()}
+            >
+              {ready ? 'Analisar de novo' : 'Analisar agora'}
+            </button>{' '}
+            <span className="crm-sub">Conta no teto diário da IA.</span>
+          </p>
+        )}
+        <Problem error={analyze.error} fallback="Não foi possível pedir a análise." />
       </Block>
       <Block title="Participantes">
         {attendees.length === 0 && analysis.participants.length === 0 ? (
@@ -147,6 +721,7 @@ function MeetingDetail({ id, canWrite }: { id: string; canWrite: boolean }) {
         ) : (
           <Dash reason={ready ? 'A análise não apontou próximos passos.' : reason} />
         )}
+        <Problem error={toTask.error} fallback="Não foi possível criar a tarefa." />
       </Block>
       <Block title="Avaliação do lead">
         {ready && analysis.leadEvaluation ? (
@@ -172,13 +747,7 @@ function MeetingDetail({ id, canWrite }: { id: string; canWrite: boolean }) {
           {analysis.model ? ` · ${analysis.model}` : ''} · não muda etapa, valor nem tarefa sozinha
         </p>
       )}
-      {toTask.error && (
-        <p className="crm-error">
-          {toTask.error instanceof ApiError
-            ? toTask.error.message
-            : 'Não foi possível criar a tarefa.'}
-        </p>
-      )}
+      {expansion && <SummarySendCard meeting={data} canWrite={canWrite} canApprove={canApprove} />}
     </div>
   );
 }
@@ -188,11 +757,15 @@ function MeetingRow({
   open,
   onToggle,
   canWrite,
+  canApprove,
+  expansion,
 }: {
   meeting: MeetingSummary;
   open: boolean;
   onToggle: () => void;
   canWrite: boolean;
+  canApprove: boolean;
+  expansion: boolean;
 }) {
   return (
     <li className={`crm-meeting-row${open ? ' is-open' : ''}`}>
@@ -203,6 +776,9 @@ function MeetingRow({
         <span className="crm-sub">
           {formatDateTime(meeting.startsAt)} · {MEETING_STATUS_LABELS[meeting.status]} · agenda{' '}
           {meeting.calendar === 'wings' ? 'da Wings' : 'do vendedor'}
+          {meeting.recordingState === 'guardada' && ' · gravada'}
+          {meeting.analysisState === 'pronta' && ' · analisada'}
+          {meeting.summarySendState === 'enviado' && ' · resumo enviado'}
         </span>
         {meeting.meetUrl && meeting.status !== 'cancelada' && (
           <button
@@ -214,8 +790,32 @@ function MeetingRow({
           </button>
         )}
       </div>
-      {open && <MeetingDetail id={meeting.id} canWrite={canWrite} />}
+      {open && (
+        <MeetingDetail
+          id={meeting.id}
+          canWrite={canWrite}
+          canApprove={canApprove}
+          expansion={expansion}
+        />
+      )}
     </li>
+  );
+}
+
+/** The meeting "Iniciar" opens: the one in progress, else the next one scheduled, with a link. */
+export function meetingToStart(
+  meetings: MeetingSummary[],
+  now = Date.now(),
+): MeetingSummary | null {
+  const live = meetings.filter(
+    (m) => m.meetUrl && m.status !== 'cancelada' && m.status !== 'encerrada',
+  );
+  const running = live.find((m) => m.status === 'em_andamento');
+  if (running) return running;
+  return (
+    live
+      .filter((m) => Date.parse(m.endsAt) >= now)
+      .sort((a, b) => a.startsAt.localeCompare(b.startsAt))[0] ?? null
   );
 }
 
@@ -232,8 +832,13 @@ export function MeetingsTab({
   onRegisterHeld: () => void;
 }) {
   const { lead } = data;
+  const session = useSession();
+  const canApprove = hasPermission(session.data, 'meetings.approve_send');
   const meetings = useMeetings(lead.id);
   const [openId, setOpenId] = useState<string | null>(null);
+  const [scheduling, setScheduling] = useState(false);
+  const next = meetings.data ? meetingToStart(meetings.data) : null;
+  const expansion = lead.pipeline === 'expansao';
   const held = (data.activities as LeadActivity[])
     .filter((activity) => activity.kind === 'meeting')
     .sort((a, b) => b.at.localeCompare(a.at));
@@ -250,25 +855,43 @@ export function MeetingsTab({
               : 'Carregando…'}
         </span>
         <span className="crm-meetings-buttons">
-          <button type="button" className="crm-btn is-small" disabled title={GOOGLE_SOON}>
-            Agendar reunião <small>em breve</small>
-          </button>
-          <button type="button" className="crm-btn is-small is-primary" disabled title={GOOGLE_SOON}>
-            Iniciar reunião <small>em breve</small>
+          {canWrite && (
+            <button
+              type="button"
+              className="crm-btn is-small"
+              onClick={() => setScheduling((v) => !v)}
+              aria-expanded={scheduling}
+            >
+              Agendar reunião
+            </button>
+          )}
+          <button
+            type="button"
+            className="crm-btn is-small is-primary"
+            disabled={!next}
+            title={
+              next ? `Abre ${next.title} ao lado do Wings` : 'Nenhuma reunião com link para iniciar'
+            }
+            onClick={() => next?.meetUrl && openMeetBeside(next.meetUrl)}
+          >
+            Iniciar reunião
           </button>
         </span>
       </div>
       <p className="crm-sub">
-        Agendar usa a agenda do Google do vendedor ou da Wings; Iniciar abre o Meet numa janela
-        ao lado do Wings. Os dois esperam a integração do Google.
+        Agendar marca a reunião com o link colado (o Meet pelo Google espera a autorização do
+        Workspace); Iniciar abre o Meet numa janela ao lado do Wings.
       </p>
-      {lead.pipeline === 'expansao' && client && (
+      {scheduling && <ScheduleForm leadId={lead.id} onDone={() => setScheduling(false)} />}
+      {expansion && client && (
         <div className="crm-meeting-client">
           <span className="crm-sub">Cliente (marca franqueadora)</span>
           {client}
         </div>
       )}
-      {meetings.isError && <Dash reason={reasonOf(meetings.error)} />}
+      {meetings.isError && (
+        <Dash reason={messageOf(meetings.error, 'Não foi possível ler as reuniões.')} />
+      )}
       {meetings.data && meetings.data.length > 0 && (
         <ul className="crm-meeting-list">
           {meetings.data.map((meeting) => (
@@ -278,6 +901,8 @@ export function MeetingsTab({
               open={openId === meeting.id}
               onToggle={() => setOpenId(openId === meeting.id ? null : meeting.id)}
               canWrite={canWrite}
+              canApprove={canApprove}
+              expansion={expansion}
             />
           ))}
         </ul>

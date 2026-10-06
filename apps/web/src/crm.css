@@ -2049,3 +2049,69 @@
   gap: var(--space-2);
   align-items: center;
 }
+
+/* ---------- ficha: reunião (agenda, gravação, transcrição, resumo ao franqueador) ---------- */
+.crm-meeting-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--wings-border);
+  border-radius: 10px;
+  margin-top: 8px;
+}
+
+.crm-meeting-form-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.crm-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.crm-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+}
+
+.crm-summary-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.45;
+  margin: 8px 0;
+  padding: 12px;
+  border: 1px solid var(--wings-border);
+  border-radius: 8px;
+  background: var(--surface);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.crm-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.crm-transcript-segments {
+  margin: 0;
+  padding-left: 18px;
+  max-height: 360px;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.crm-transcript-segments li + li {
+  margin-top: 4px;
+}
