@@ -195,7 +195,7 @@ export function SiteFormPage() {
               <legend className="field-label">{info.data.form.qualifier.question}</legend>
               <div className="lead-sheet-options">
                 {info.data.form.qualifier.options.map((option) => (
-                  <label key={option} className="check">
+                  <label key={option} className="check lead-sheet-option">
                     <input type="radio" value={option} {...register('qualifierAnswer')} />
                     {option}
                   </label>

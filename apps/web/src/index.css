@@ -8837,3 +8837,17 @@ tr.task-overdue td:nth-child(2) strong {
 .site-form-qualifier .lead-sheet-options {
   margin-top: 6px;
 }
+
+.site-form-qualifier .lead-sheet-option {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.site-form-qualifier .lead-sheet-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  font-weight: 600;
+}
