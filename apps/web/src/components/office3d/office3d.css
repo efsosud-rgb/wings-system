@@ -1,0 +1,489 @@
+/* Escritório virtual (Laboratório). Colours come from the theme tokens; the
+   sky behind the floor follows the hour in Rio (data-light), not the theme. */
+
+.o3d {
+  --o3d-card: var(--surface, #fff);
+  --o3d-line: var(--line, #e7e3dd);
+  --o3d-ink: var(--text, #1d1b19);
+  --o3d-ink-2: var(--text-3, #857f78);
+  --o3d-glass: rgba(255, 255, 255, 0.72);
+  --o3d-glass-ink: #1d1b19;
+  --o3d-glass-ink-2: #5b554f;
+  color: var(--o3d-ink);
+  min-width: 0;
+}
+
+.o3d-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 16px;
+  align-items: start;
+}
+
+.o3d-main {
+  min-width: 0;
+}
+
+.o3d-world {
+  position: relative;
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid var(--o3d-line);
+  background: linear-gradient(180deg, #fbf3e6 0%, #efe3d2 100%);
+}
+.o3d-world[data-light='manha'] {
+  background: linear-gradient(180deg, #fde7c8 0%, #f3dcc0 55%, #e9d8c6 100%);
+}
+.o3d-world[data-light='dia'] {
+  background: linear-gradient(180deg, #eef3f7 0%, #f4efe7 100%);
+}
+.o3d-world[data-light='por_do_sol'] {
+  background: linear-gradient(180deg, #ffcf9e 0%, #f2a27c 50%, #b97b7a 100%);
+}
+.o3d-world[data-light='noite'] {
+  --o3d-glass: rgba(20, 24, 36, 0.72);
+  --o3d-glass-ink: #f1f0ee;
+  --o3d-glass-ink-2: #b9bccb;
+  background: linear-gradient(180deg, #1a2036 0%, #2a3150 60%, #343a58 100%);
+}
+
+.o3d-kpis {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 12px 0;
+}
+
+.o3d-kpi {
+  flex: 1 1 140px;
+  display: grid;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--o3d-glass);
+  color: var(--o3d-glass-ink);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.08);
+}
+.o3d-kpi__label {
+  font-size: var(--text-sm, 12px);
+  color: var(--o3d-glass-ink-2);
+}
+.o3d-kpi__value {
+  font-size: 22px;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.o3d-kpi__reason {
+  font-size: var(--text-xs, 11px);
+  color: var(--o3d-glass-ink-2);
+}
+
+.o3d-stage {
+  position: relative;
+  height: clamp(420px, 68vh, 720px);
+  touch-action: none;
+}
+.o3d-stage[hidden] {
+  display: none;
+}
+
+.o3d-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  outline: none;
+  cursor: grab;
+}
+.o3d-canvas:focus-visible {
+  box-shadow: inset 0 0 0 3px var(--accent, #c8461a);
+}
+
+.o3d-labels {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+/* Hidden until the first frame has placed them, or they pile up in a corner. */
+.o3d-labels:not(.is-placed) {
+  visibility: hidden;
+}
+
+.o3d-tag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: auto;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 999px;
+  font: inherit;
+  font-size: var(--text-xs, 11px);
+  font-weight: 600;
+  background: #1f2227;
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
+  cursor: pointer;
+}
+.o3d-tag.is-away {
+  background: rgba(31, 34, 39, 0.55);
+  font-weight: 500;
+}
+.o3d-tag.is-agent {
+  background: #137d73;
+}
+.o3d-tag.is-selected {
+  background: var(--brand, #e95228);
+}
+/* The monitor's colour as a dot: task, overdue, deal, agent at work, nothing. */
+.o3d-tag::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 5px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: #6b6f78;
+}
+.o3d-tag[data-state='task']::before {
+  background: #ff7a45;
+}
+.o3d-tag[data-state='overdue']::before {
+  background: #ff4b3e;
+}
+.o3d-tag[data-state='deal']::before {
+  background: #6fa2ff;
+}
+.o3d-tag[data-state='agent']::before {
+  background: #5ff0df;
+}
+.o3d-tag.is-celebrating {
+  z-index: 1;
+  max-width: none;
+  background: #1f7a3d;
+  box-shadow: 0 0 0 3px rgba(255, 194, 61, 0.9);
+}
+.o3d-tag.is-celebrating::after {
+  content: ' · Venda ganha!';
+}
+
+.o3d-room {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-size: var(--text-xs, 11px);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: rgba(29, 27, 25, 0.62);
+  white-space: nowrap;
+}
+.o3d-world[data-light='noite'] .o3d-room {
+  color: rgba(241, 240, 238, 0.7);
+}
+
+.o3d-stage.is-compact .o3d-room {
+  display: none;
+}
+.o3d-stage.is-compact .o3d-tag {
+  max-width: 96px;
+  padding: 1px 6px;
+}
+/* On a phone the page still scrolls vertically over the floor; sideways drags pan it. */
+.o3d-stage.is-compact {
+  touch-action: pan-y;
+}
+
+.o3d-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--o3d-glass-ink-2);
+}
+
+.o3d-controls {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  gap: 6px;
+}
+.o3d-controls button {
+  min-width: 36px;
+  height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  font: inherit;
+  font-size: var(--text-sm, 12px);
+  font-weight: 600;
+  background: var(--o3d-glass);
+  color: var(--o3d-glass-ink);
+  backdrop-filter: blur(6px);
+  cursor: pointer;
+}
+.o3d-controls button:focus-visible {
+  outline: 2px solid var(--accent, #c8461a);
+}
+
+.o3d-legend {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  max-width: calc(100% - 200px);
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: var(--text-xs, 11px);
+  background: var(--o3d-glass);
+  color: var(--o3d-glass-ink);
+}
+.o3d-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.o3d-dot {
+  width: 10px;
+  height: 7px;
+  border-radius: 2px;
+  display: inline-block;
+}
+.o3d-dot.is-task {
+  background: #ff7a45;
+}
+.o3d-dot.is-overdue {
+  background: #d8342a;
+}
+.o3d-dot.is-deal {
+  background: #4f8df5;
+}
+.o3d-dot.is-agent {
+  background: #2bc4b4;
+}
+.o3d-dot.is-idle {
+  background: #2a2d33;
+}
+
+.o3d-bar {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 6px 16px;
+  margin: 8px 2px 0;
+  font-size: var(--text-sm, 12px);
+  color: var(--o3d-ink-2);
+}
+
+.o3d-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--accent, #c8461a);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.o3d-muted {
+  color: var(--o3d-ink-2);
+}
+
+.o3d-side {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.o3d-card {
+  padding: 14px 16px;
+  border: 1px solid var(--o3d-line);
+  border-radius: 12px;
+  background: var(--o3d-card);
+  min-width: 0;
+}
+.o3d-card h2 {
+  margin: 0 0 8px;
+  font-size: var(--text-lg, 16px);
+}
+.o3d-card h3 {
+  margin: 12px 0 4px;
+  font-size: var(--text-md, 13px);
+}
+.o3d-card p {
+  margin: 4px 0;
+  font-size: var(--text-md, 13px);
+}
+.o3d-card__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.o3d-facts {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 8px 0 0;
+}
+.o3d-facts div {
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--surface-hover, #f4f2ee);
+}
+.o3d-facts dt {
+  font-size: var(--text-xs, 11px);
+  color: var(--o3d-ink-2);
+}
+.o3d-facts dd {
+  margin: 0;
+  font-size: var(--text-lg, 16px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.o3d-feed ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 560px;
+  overflow-y: auto;
+}
+.o3d-event {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 7px 0;
+  border-top: 1px solid var(--o3d-line);
+  font-size: var(--text-md, 13px);
+}
+.o3d-event:first-child {
+  border-top: 0;
+}
+.o3d-event time {
+  color: var(--o3d-ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.o3d-event__text .o3d-link {
+  margin-left: 4px;
+}
+.o3d-event__text .o3d-link::before {
+  content: '· ';
+  color: var(--o3d-ink-2);
+}
+.o3d-event.is-deal_won .o3d-event__text {
+  font-weight: 700;
+  color: var(--success, #15803d);
+}
+.o3d-open {
+  font-size: var(--text-sm, 12px);
+}
+
+.o3d-mini {
+  margin: 0;
+  padding-left: 16px;
+  font-size: var(--text-sm, 12px);
+}
+
+.o3d-list section {
+  margin-top: 16px;
+}
+.o3d-list h3 {
+  margin: 0 0 6px;
+  font-size: var(--text-md, 13px);
+}
+.o3d-list table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-md, 13px);
+}
+.o3d-list th,
+.o3d-list td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--o3d-line);
+  text-align: left;
+  vertical-align: top;
+}
+.o3d-list tr[aria-selected='true'] {
+  background: var(--accent-soft, #fceae3);
+}
+
+@media (max-width: 1100px) {
+  .o3d-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .o3d-kpis {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 8px 8px 0;
+    gap: 6px;
+  }
+  .o3d-kpi {
+    padding: 6px 8px;
+  }
+  .o3d-kpi__value {
+    font-size: 18px;
+  }
+  .o3d-stage {
+    height: clamp(360px, 58vh, 520px);
+  }
+  .o3d-legend {
+    display: none;
+  }
+  .o3d-list table,
+  .o3d-list thead,
+  .o3d-list tbody,
+  .o3d-list tr,
+  .o3d-list td {
+    display: block;
+  }
+  .o3d-list thead {
+    display: none;
+  }
+  .o3d-list td {
+    border: 0;
+    padding: 2px 0;
+  }
+  .o3d-list tr {
+    padding: 6px 0;
+    border-bottom: 1px solid var(--o3d-line);
+  }
+}
+
+:root[data-theme='dark'] .o3d {
+  --o3d-glass: rgba(28, 30, 34, 0.74);
+  --o3d-glass-ink: #f1f0ee;
+  --o3d-glass-ink-2: #b4b0aa;
+}
+:root[data-theme='dark'] .o3d-world:not([data-light='noite']) .o3d-room {
+  color: rgba(29, 27, 25, 0.66);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .o3d * {
+    scroll-behavior: auto;
+  }
+}
+
+.o3d-stage.is-compact .o3d-tag.is-celebrating {
+  max-width: none;
+}
