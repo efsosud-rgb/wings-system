@@ -39,6 +39,8 @@ export const SUMMARY_SEND_STATES = [
   'nenhum',
   'rascunho',
   'aprovado',
+  /** The one attempt is under way (claimed so a double click never sends twice). */
+  'enviando',
   'enviado',
   'recusado',
   'falhou',

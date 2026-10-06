@@ -23,7 +23,7 @@ passa por quatro trilhas independentes, cada uma com o seu estado:
 | Análise por IA (`analysis.state`) | `nenhuma` → `na_fila` → `analisando` → `pronta`; `falhou`; `sem_verba` | o pedido da pessoa ou o fim da transcrição                    |
 
 Nos leads de **Expansão** há uma quinta trilha: o **envio do resumo ao dono da franqueadora**
-(`summarySend.state`: `nenhum` → `rascunho` → `aprovado` → `enviado`; `recusado`; `falhou`).
+(`summarySend.state`: `nenhum` → `rascunho` → `aprovado` → `enviando` → `enviado`; `recusado`; `falhou`).
 **Nada sai sem aprovação de uma pessoa** com `meetings.approve_send`.
 
 ## Permissões
@@ -80,7 +80,7 @@ Google Meet), que também depende da Thais.
 
 ### Gravação
 
-`POST /meetings/:id/recording/upload-url` → `{ uploadUrl, fileId, expiresAt }`
+`POST /meetings/:id/recording/upload-url` → `{ uploadUrl, headers, fileId, expiresAt }` (o navegador manda o arquivo com `PUT` e exatamente esses cabeçalhos)
 
 ```json
 { "contentType": "audio/webm", "sizeBytes": 48211234 }
@@ -90,8 +90,11 @@ Google Meet), que também depende da Thais.
   minutos; o navegador manda direto para o armazenamento.
 - Tipos: `audio/webm`, `audio/ogg`, `audio/mpeg`, `audio/mp4`, `audio/wav`, `video/webm`,
   `video/mp4`. Até 1,5 GB (cerca de 3 horas de vídeo do Meet).
-- Fica na pasta do Drive do Comercial, departamento "Comercial", nunca com o nome de alguém no
-  nome do arquivo.
+- Fica na área de gravações do armazenamento do sistema, com chave escolhida pelo servidor (o id
+  da reunião e o da gravação, nunca um nome de pessoa); a chave nunca aparece numa resposta. Fora
+  das pastas do Drive nesta fase; mostrar também no Drive do Comercial é uma decisão para depois.
+- Para ouvir: `GET /meetings/:id/recording/link` → `{ url, expiresAt }`, endereço assinado de 5
+  minutos, só para quem vê a negociação.
 
 `POST /meetings/:id/recording/complete` → `202 { meeting }` com `{ fileId }`: o servidor confere
 que o arquivo chegou com o tamanho combinado, marca `guardada` e põe a transcrição na fila.
@@ -209,3 +212,21 @@ colar link quando vier 503 `google_not_connected`), detalhe com "Abrir o Meet ao
 gravação, transcrição com falantes nomeáveis, análise com "virar tarefa" por próximo passo e, em
 Expansão, o cartão do envio ao franqueador com os botões conforme a permissão. Sem dado em
 qualquer campo: "—" e o motivo.
+
+## O que já está construído (06/10, `feat/reunioes`)
+
+- **API** (`apps/api/src/modules/meetings/`): todas as rotas acima. As do Google respondem 503
+  `google_not_connected`; marcar com link colado, gravação, transcrição, falantes, análise,
+  "virar tarefa" e o envio ao franqueador funcionam.
+- **Worker**: job `transcribe_meeting` (faster-whisper "small", português), conferido contra um
+  banco descartável. Grava a transcrição na reunião e põe a análise na fila; a API pega a fila a
+  cada minuto (o modelo e o teto ficam na API). **No staging, `WORKER_JOB_TYPES` precisa incluir
+  `transcribe_meeting`.**
+- **Teto**: `MEETINGS_DAILY_USD` (padrão 1), soma do dia das análises, falhas incluídas.
+- **Migração `0073_crm_meetings`** (tabela `crm_meetings`): número provisório, à espera da
+  confirmação do orquestrador; sem permissão para `wings_ro` (dado pessoal).
+- **Separação de quem falou: não ligada.** Faltam a escolha do motor (pyannote, que pede token do
+  Hugging Face e cerca de 2 GB, ou SpeechBrain com agrupamento) e um teste com áudio real de
+  reunião. Até lá, `speaker: null` com o motivo, e a tela permite nomear as vozes quando houver.
+- **Depende da Thais:** autorizar o app no Admin do Google Workspace (agenda, Meet e importação
+  de gravações do Drive) e a conta de serviço ou OAuth por pessoa.
