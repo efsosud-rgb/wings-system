@@ -10,8 +10,11 @@ import { DealPage } from './DealPage.js';
  * behind us and the deal is still open.
  */
 
-const { dealMutate, queryState, idle, mutation } = vi.hoisted(() => ({
+const { dealMutate, summaryMutate, askMutate, askState, queryState, idle, mutation } = vi.hoisted(() => ({
   dealMutate: vi.fn(),
+  summaryMutate: vi.fn(),
+  askMutate: vi.fn(),
+  askState: { data: undefined as { answer: string; model: string } | undefined, error: null as unknown },
   queryState: { lead: null as Lead | null, files: [] as unknown[] },
   idle: () => ({ data: undefined, isLoading: false, isError: false }),
   mutation: (mutate = vi.fn()) => ({ mutate, isPending: false, error: null }),
@@ -49,6 +52,7 @@ const lead = (over: Omit<Partial<Lead>, 'work'> & { work?: Partial<Lead['work']>
   contacts: [],
   crm: null,
   consent: { legalBasis: null, consentedAt: null, source: null, text: null },
+  aiSummary: null,
   research: {
     state: 'none',
     summary: null,
@@ -123,6 +127,8 @@ vi.mock('../../api/crm.js', () => ({
   useLeadFiles: () => ({ data: queryState.files ?? [], isLoading: false, isError: false }),
   useRemoveLeadFile: () => mutation(),
   useSendLeadFile: () => ({ ...mutation(), mutateAsync: vi.fn() }),
+  useGenerateSummary: () => mutation(summaryMutate),
+  useAskDeal: () => ({ ...mutation(askMutate), data: askState.data, error: askState.error }),
 }));
 
 const show = () =>

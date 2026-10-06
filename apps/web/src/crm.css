@@ -1767,3 +1767,36 @@
   padding-inline: var(--space-2);
   font-size: var(--text-sm);
 }
+
+/* ---------- deal page: the AI summary (Etapa 4) ---------- */
+.crm-summary {
+  display: grid;
+  gap: var(--space-2);
+}
+.crm-summary-text {
+  margin: 0;
+  font-size: var(--text-md);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.crm-summary-text.is-empty {
+  color: var(--text-2);
+}
+.crm-summary-ask {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+.crm-summary-answer {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--accent-soft);
+  border-radius: var(--radius-md);
+  font-size: var(--text-md);
+  line-height: 1.5;
+}
+.crm-summary .crm-error {
+  grid-column: 1 / -1;
+}

@@ -10,8 +10,11 @@ import { DealPage, daysInStage, orderFields } from './DealPage.js';
  * and the "new deal: first contact until HH:MM" strip.
  */
 
-const { dealMutate, taskMutate, leadMutate, queryState, idle, mutation } = vi.hoisted(() => ({
+const { dealMutate, taskMutate, leadMutate, summaryMutate, askMutate, askState, queryState, idle, mutation } = vi.hoisted(() => ({
   dealMutate: vi.fn(),
+  summaryMutate: vi.fn(),
+  askMutate: vi.fn(),
+  askState: { data: undefined as { answer: string; model: string } | undefined, error: null as unknown },
   taskMutate: vi.fn(),
   leadMutate: vi.fn(),
   queryState: {
@@ -61,6 +64,7 @@ const lead = (over: Omit<Partial<Lead>, 'work'> & { work?: Partial<Lead['work']>
   contacts: [],
   crm: null,
   consent: { legalBasis: null, consentedAt: null, source: null, text: null },
+  aiSummary: null,
   research: {
     state: 'none',
     summary: null,
@@ -164,6 +168,8 @@ vi.mock('../../api/crm.js', () => ({
   useLeadFiles: () => ({ data: queryState.files ?? [], isLoading: false, isError: false }),
   useRemoveLeadFile: () => mutation(),
   useSendLeadFile: () => ({ ...mutation(), mutateAsync: vi.fn() }),
+  useGenerateSummary: () => mutation(summaryMutate),
+  useAskDeal: () => ({ ...mutation(askMutate), data: askState.data, error: askState.error }),
 }));
 
 vi.mock('./LeadEmailTab.js', () => ({
@@ -499,6 +505,48 @@ describe('the right column', () => {
     expect(selectedSection()).toBe('Arquivos');
     expect(screen.getByText('1 arquivo · na pasta Comercial › Negociações do Drive')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Remover proposta.pdf da negociação' })).toBeTruthy();
+  });
+});
+
+describe('the AI summary', () => {
+  it('shows "—" and "Ainda não gerado." until asked; "Gerar resumo" asks', () => {
+    show();
+    const panel = within(screen.getByRole('region', { name: 'Resumo da IA' }));
+    expect(panel.getByText('Ainda não gerado.')).toBeTruthy();
+    fireEvent.click(panel.getByRole('button', { name: 'Gerar resumo' }));
+    expect(summaryMutate).toHaveBeenCalled();
+  });
+
+  it('shows the text, when it was made and what it came from; "Atualizar" asks again', () => {
+    queryState.lead = lead({
+      aiSummary: {
+        text: 'Em aberto na etapa inicial. Quer abrir em Niterói.',
+        generatedAt: '2026-10-06T13:00:00.000Z',
+        model: 'anthropic/claude-sonnet-5',
+        basedOn: { events: 4, answers: 2 },
+      },
+    });
+    show();
+    const panel = within(screen.getByRole('region', { name: 'Resumo da IA' }));
+    expect(panel.getByText('Em aberto na etapa inicial. Quer abrir em Niterói.')).toBeTruthy();
+    expect(panel.getByText(/com base em 4 registros e 2 respostas/).textContent).toContain(
+      `Gerado em ${new Date('2026-10-06T13:00:00.000Z').toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}`,
+    );
+    expect(panel.getByRole('button', { name: 'Atualizar' })).toBeTruthy();
+  });
+
+  it('"Faça uma pergunta" sends the question and shows the answer', () => {
+    askState.data = { answer: 'Não consta no registro.', model: 'x' };
+    show();
+    const panel = within(screen.getByRole('region', { name: 'Resumo da IA' }));
+    fireEvent.click(panel.getByRole('button', { name: 'Faça uma pergunta' }));
+    fireEvent.change(panel.getByLabelText('Pergunta sobre a negociação'), {
+      target: { value: 'Ela já tem ponto?' },
+    });
+    fireEvent.click(panel.getByRole('button', { name: 'Perguntar' }));
+    expect(askMutate).toHaveBeenCalledWith('Ela já tem ponto?');
+    expect(panel.getByRole('status').textContent).toBe('Não consta no registro.');
+    askState.data = undefined;
   });
 });
 

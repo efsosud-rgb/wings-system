@@ -37,6 +37,7 @@ import {
   type LoadedLead,
 } from '../../api/leads.js';
 import { Icon, type IconName } from '../../components/Icon.js';
+import { DealSummary } from './DealSummary.js';
 import { DealTabs, type View } from './DealTabs.js';
 import {
   dueLabel,
@@ -125,6 +126,7 @@ export function DealPage() {
           </div>
           <div className="crm-stack is-center">
             <FirstContactStrip data={data} canWrite={canWrite} onAct={act} />
+            <DealSummary lead={data.lead} canWrite={canWrite} />
             <NextPanel data={data} canWrite={canWrite} onAct={act} />
             {canWrite && <Register lead={data.lead} tab={tab} onTab={setTab} ref={register} />}
             <DealTabs

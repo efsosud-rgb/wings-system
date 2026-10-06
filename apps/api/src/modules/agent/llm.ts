@@ -59,6 +59,12 @@ export interface LlmRequest {
    * last word); never on the chat, where the model must be free to answer.
    */
   toolChoice?: string;
+  /**
+   * Asks OpenRouter to route only to providers that neither store nor train
+   * on the prompt (its `data_collection: deny`). Used where the text is about
+   * a person, like the deal's summary.
+   */
+  noDataCollection?: boolean;
   signal?: AbortSignal;
   /** Called with each piece of visible text as it arrives. */
   onText?: (delta: string) => void;
@@ -169,6 +175,7 @@ export function createOpenRouterLlm(options: {
             ...(request.toolChoice
               ? { tool_choice: { type: 'function', function: { name: request.toolChoice } } }
               : {}),
+            ...(request.noDataCollection ? { provider: { data_collection: 'deny' } } : {}),
           }),
           signal: AbortSignal.any(signals),
         });

@@ -17,6 +17,7 @@ import type {
   CsvImportRequest,
   LeadActivity,
   LeadActivityCreateInput,
+  LeadAiSummary,
   LeadDealUpdateInput,
   LeadFile,
   LeadListItem,
@@ -472,3 +473,20 @@ export function useRemoveLeadFile(id: string) {
     onSuccess: () => invalidateDeals(queryClient),
   });
 }
+
+// --- the AI summary of a deal (ficha do cliente, Etapa 4) ---------------------------------
+
+export function useGenerateSummary(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<{ summary: LeadAiSummary }>(`/leads/${id}/resumo`),
+    onSuccess: () => invalidateDeals(queryClient),
+  });
+}
+
+/** One question about the deal, answered from the same record; nothing is stored. */
+export const useAskDeal = (id: string) =>
+  useMutation({
+    mutationFn: (question: string) =>
+      api.post<{ answer: string; model: string }>(`/leads/${id}/resumo/pergunta`, { question }),
+  });

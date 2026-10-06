@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { leads } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { storageOf } from '../../lib/storage/index.js';
+import { createOpenRouterLlm, type AgentLlm } from '../agent/llm.js';
 import { driveAccessOf } from '../drive/access.js';
 import { DriveError, fileFor, type DriveDeps } from '../drive/service.js';
 import {
@@ -14,11 +15,19 @@ import {
   listLeadFiles,
   requestLeadUpload,
 } from './files.js';
+import { loadLead } from './service.js';
+import { answerQuestion, generateSummary, SummaryError } from './summary.js';
 
 const idParam = z.object({ id: z.uuid() });
 const uploadParams = z.object({ id: z.uuid(), uploadId: z.uuid() });
 const fileParams = z.object({ id: z.uuid(), fileId: z.uuid() });
 const attachBody = z.object({ fileId: z.uuid() });
+const questionBody = z.object({ question: z.string().trim().min(3, 'Escreva a pergunta').max(500) });
+
+const SUMMARY_MESSAGES: Record<SummaryError['code'], string> = {
+  ai_unavailable: 'A IA não está configurada neste ambiente.',
+  ai_failed: 'A IA não respondeu agora. Tente de novo em instantes.',
+};
 
 const STATUS: Record<string, number> = {
   not_found: 404,
@@ -74,6 +83,11 @@ export const leadFilesRoutes: FastifyPluginAsync = async (app) => {
     reply.status(404).send({ error: 'not_found', message: 'Lead não encontrado.' });
   const read = { preHandler: app.requirePermission('leads.read') };
   const write = { preHandler: app.requirePermission('leads.write') };
+
+  /** Null while the key is missing: the summary then answers 503 and the screen shows "—" with the reason. */
+  const llm: AgentLlm | null =
+    app.wings.agentLlm ??
+    (env.OPENROUTER_API_KEY ? createOpenRouterLlm({ apiKey: env.OPENROUTER_API_KEY }) : null);
 
   const audit = (request: Req, action: string, leadId: string, fileId: string) =>
     writeAudit(db, {
@@ -178,5 +192,56 @@ export const leadFilesRoutes: FastifyPluginAsync = async (app) => {
     if (!removed) return refuse(reply, new DriveError('not_found'));
     await audit(request, 'lead.file_removed', row.id, params.data.fileId);
     return reply.status(204).send();
+  });
+
+  // --- the AI summary (Etapa 4) --------------------------------------------------------------
+
+  const refuseSummary = (reply: FastifyReply, error: SummaryError) =>
+    reply
+      .status(error.code === 'ai_unavailable' ? 503 : 502)
+      .send({ error: error.code, message: SUMMARY_MESSAGES[error.code] });
+
+  app.post('/leads/:id/resumo', write, async (request, reply) => {
+    const params = idParam.safeParse(request.params);
+    if (!params.success) return notFound(reply);
+    const row = await visibleLead(request, params.data.id, 'leads.write');
+    if (!row) return notFound(reply);
+    const data = await loadLead(db, row.id);
+    if (!data) return notFound(reply);
+    try {
+      const summary = await generateSummary(db, llm, data, request.session.actor.employeeId);
+      await writeAudit(db, {
+        actorEmployeeId: request.session.actor.employeeId,
+        action: 'lead.summary_generated',
+        entity: 'lead',
+        entityId: row.id,
+        ip: request.ip,
+        metadata: { model: summary.model, ...summary.basedOn },
+      });
+      return reply.send({ summary });
+    } catch (error) {
+      if (error instanceof SummaryError) return refuseSummary(reply, error);
+      throw error;
+    }
+  });
+
+  app.post('/leads/:id/resumo/pergunta', read, async (request, reply) => {
+    const params = idParam.safeParse(request.params);
+    const body = questionBody.safeParse(request.body);
+    if (!params.success) return notFound(reply);
+    if (!body.success)
+      return reply
+        .status(400)
+        .send({ error: 'invalid_request', message: body.error.issues[0]?.message });
+    const row = await visibleLead(request, params.data.id, 'leads.read');
+    if (!row) return notFound(reply);
+    const data = await loadLead(db, row.id);
+    if (!data) return notFound(reply);
+    try {
+      return reply.send(await answerQuestion(llm, data, body.data.question));
+    } catch (error) {
+      if (error instanceof SummaryError) return refuseSummary(reply, error);
+      throw error;
+    }
   });
 };
