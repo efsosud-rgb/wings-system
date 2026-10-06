@@ -14,6 +14,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { tenants, WINGS_TENANT_ID } from './ads.js';
 import { clients } from './clients.js';
+import { driveFiles } from './drive.js';
 import { employees } from './employees.js';
 import { leads } from './leads.js';
 
@@ -133,6 +134,31 @@ export const leadTasks = pgTable(
   (table) => [
     index('lead_tasks_lead_idx').on(table.leadId, table.dueAt),
     index('lead_tasks_assignee_due_idx').on(table.assigneeEmployeeId, table.doneAt, table.dueAt),
+  ],
+);
+
+/**
+ * A Drive file attached to a deal (ficha do cliente, 06/10/2026). The bytes,
+ * the name and who may open it stay the Drive's: this row only says "this
+ * file belongs to this deal". Removing the row leaves the file in the Drive.
+ */
+export const leadFiles = pgTable(
+  'lead_files',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    leadId: uuid('lead_id')
+      .notNull()
+      .references(() => leads.id),
+    driveFileId: uuid('drive_file_id')
+      .notNull()
+      .references(() => driveFiles.id, { onDelete: 'cascade' }),
+    addedBy: uuid('added_by').references(() => employees.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('lead_files_lead_file_uq').on(table.leadId, table.driveFileId),
+    index('lead_files_lead_idx').on(table.leadId, table.createdAt),
   ],
 );
 

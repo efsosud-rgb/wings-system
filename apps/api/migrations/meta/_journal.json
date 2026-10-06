@@ -484,6 +484,13 @@
       "when": 1791229491810,
       "tag": "0070_crm_rotation_formatacao_vendedoras",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "7",
+      "when": 1791310373681,
+      "tag": "0071_ficha_lead_files_ai_summary",
+      "breakpoints": true
     }
   ]
 }

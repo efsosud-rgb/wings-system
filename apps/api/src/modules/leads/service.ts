@@ -681,6 +681,10 @@ export function toLead(
       updatedAt: row.enrichedAt?.toISOString() ?? null,
       costUsd: extra.costUsdMicro / 1_000_000,
     },
+    aiSummary:
+      row.aiSummary && typeof row.aiSummary === 'object'
+        ? (row.aiSummary as Lead['aiSummary'])
+        : null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
