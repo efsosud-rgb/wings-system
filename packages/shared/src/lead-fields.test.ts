@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   extractLeadFields,
-  isValidCnpj,
   leadFieldOfQuestion,
   normalizeInstagram,
   normalizeWebsite,
@@ -68,12 +67,6 @@ describe('normalisation', () => {
     expect(normalizeWebsite('192.168.0.1')).toBeNull();
     expect(normalizeWebsite('não tenho site')).toBeNull();
     expect(normalizeWebsite('ftp://exemplo.com')).toBeNull();
-  });
-
-  it('validates CNPJ check digits', () => {
-    expect(isValidCnpj('11.222.333/0001-81')).toBe(true);
-    expect(isValidCnpj('11.222.333/0001-80')).toBe(false);
-    expect(isValidCnpj('11111111111111')).toBe(false);
   });
 });
 

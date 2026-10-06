@@ -1,3 +1,5 @@
+import { DDD_REGIONS } from './leads.js';
+
 /**
  * The five fields every lead form asks (Instagram, Site, Nome da empresa,
  * Nome, WhatsApp), plus the CNPJ when a form asks it, lifted out of the form
@@ -98,112 +100,19 @@ export function normalizeInstagram(value: string): string | null {
 export function normalizeWebsite(value: string): string | null {
   const text = value.trim();
   if (!text || /\s/.test(text) || /instagr(am\.com|\.am)\//i.test(text)) return null;
-  try {
-    const url = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
-    if (url.username || url.password) return null;
-    if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(url.hostname)) return null;
-    if (/^\d+(\.\d+){3}$/.test(url.hostname)) return null;
-    return url.toString();
-  } catch {
-    return null;
-  }
-}
-
-export const CNPJ_LENGTH = 14;
-
-export function cnpjDigits(value: string): string {
-  return value.replace(/\D/g, '');
-}
-
-/** The two check digits of a CNPJ. */
-export function isValidCnpj(value: string): boolean {
-  const digits = cnpjDigits(value);
-  if (digits.length !== CNPJ_LENGTH || /^(\d)\1+$/.test(digits)) return false;
-  const check = (length: number) => {
-    const weights =
-      length === 12
-        ? [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
-        : [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
-    const sum = weights.reduce((acc, weight, i) => acc + Number(digits[i]) * weight, 0);
-    const rest = sum % 11;
-    return rest < 2 ? 0 : 11 - rest;
-  };
-  return check(12) === Number(digits[12]) && check(13) === Number(digits[13]);
+  // No URL class here (the shared package runs without DOM or Node types): a strict pattern instead.
+  const match = text.match(
+    /^(?:(https?):\/\/)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?::(\d{1,5}))?(\/[^\s]*)?$/i,
+  );
+  if (!match) return null;
+  const [, scheme, rawHost, port, path] = match;
+  const host = rawHost!.toLowerCase();
+  if (/^\d+(\.\d+){3}$/.test(host)) return null;
+  if (!/[a-z]/.test(host.split('.').pop() ?? '')) return null;
+  return `${(scheme ?? 'https').toLowerCase()}://${host}${port ? `:${port}` : ''}${path ?? '/'}`;
 }
 
 // --- WhatsApp ---------------------------------------------------------------------------------
-
-/** Brazilian area codes in use (Anatel), 67 of them. */
-export const BR_AREA_CODES: ReadonlySet<string> = new Set([
-  '11',
-  '12',
-  '13',
-  '14',
-  '15',
-  '16',
-  '17',
-  '18',
-  '19',
-  '21',
-  '22',
-  '24',
-  '27',
-  '28',
-  '31',
-  '32',
-  '33',
-  '34',
-  '35',
-  '37',
-  '38',
-  '41',
-  '42',
-  '43',
-  '44',
-  '45',
-  '46',
-  '47',
-  '48',
-  '49',
-  '51',
-  '53',
-  '54',
-  '55',
-  '61',
-  '62',
-  '63',
-  '64',
-  '65',
-  '66',
-  '67',
-  '68',
-  '69',
-  '71',
-  '73',
-  '74',
-  '75',
-  '77',
-  '79',
-  '81',
-  '82',
-  '83',
-  '84',
-  '85',
-  '86',
-  '87',
-  '88',
-  '89',
-  '91',
-  '92',
-  '93',
-  '94',
-  '95',
-  '96',
-  '97',
-  '98',
-  '99',
-]);
 
 /** Digits of a Brazilian number without the country code and the trunk 0. */
 export function brazilianNumber(value: string): string {
@@ -264,7 +173,7 @@ export function whatsappCheck(value: string | null | undefined, at: Date): LeadC
       checkedAt,
     };
   }
-  if (!BR_AREA_CODES.has(digits.slice(0, 2))) {
+  if (!(digits.slice(0, 2) in DDD_REGIONS)) {
     return { status: 'nao_confere', reason: 'DDD inexistente', checkedAt };
   }
   if (digits.length === 10) {

@@ -47,4 +47,3 @@ export * from './rbac/sectors.js';
 export * from './roadmap.js';
 export * from './studio.js';
 export * from './studio-agent.js';
-export * from './meetings.js';
