@@ -27,6 +27,7 @@ interface LeadRow {
   phone: string | null;
   whatsapp_profile_name: string | null;
   whatsapp_photo_url: string | null;
+  enrichment_facts: unknown;
 }
 
 export interface EnrichLeadOutput {
@@ -140,7 +141,7 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
   const now = ctx.now?.() ?? new Date();
 
   const found = await db.query<LeadRow>(
-    `select id, client_id, name, email, phone, whatsapp_profile_name, whatsapp_photo_url from leads where id = $1`,
+    `select id, client_id, name, email, phone, whatsapp_profile_name, whatsapp_photo_url, enrichment_facts from leads where id = $1`,
     [leadId],
   );
   const lead = found.rows[0];
@@ -259,17 +260,35 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
 
     // --- company research (OpenRouter), only the company's own data ------------------------
     // Reserved under its own ceiling first, called once, never retried; what the search did not
-    // bring stays empty with the reason (docs/leads/pesquisa-da-empresa.md).
-    if (enrichment.research) {
+    // bring stays empty with the reason (docs/leads/pesquisa-da-empresa.md). A result that
+    // came back with pages is kept: a re-run (or a switched-off provider) never pays for it again
+    // and never overwrites it with a refusal.
+    const previous = webResearchOf(lead.enrichment_facts);
+    if (previous?.status === 'done' && previous.sources.length > 0) {
+      facts.webResearch = previous;
+      if (enrichment.research) {
+        await writeLedger(db, { leadId, jobId: job.id, step: 'ai_research', status: 'skipped', usdMicro: 0, detail: { reason: 'already_done' } });
+        steps.web_research = 'skipped';
+      }
+    } else if (enrichment.research) {
       const research = enrichment.research;
       const at = now.toISOString();
-      const company = await companyFieldsOf(db, leadId);
-      const input = researchInputOf(leadId, company);
-      if (!input) {
+      let input: ReturnType<typeof researchInputOf> = null;
+      let prepared = true;
+      try {
+        input = researchInputOf(leadId, await companyFieldsOf(db, leadId), lead.name);
+      } catch (error) {
+        // Not being able to read or clean the company fields is this step's failure, not the job's.
+        prepared = false;
+        await writeLedger(db, { leadId, jobId: job.id, step: 'ai_research', status: 'failed', usdMicro: 0, detail: { reason: messageOf(error) } });
+        facts.webResearch = noResearch('failed', at, 'Não foi possível preparar a pesquisa; nada foi enviado');
+        steps.web_research = 'failed';
+      }
+      if (prepared && !input) {
         facts.webResearch = noResearch('skipped', at, 'O formulário não trouxe dado da empresa (nome, site, Instagram ou CNPJ)');
         await writeLedger(db, { leadId, jobId: job.id, step: 'ai_research', status: 'skipped', usdMicro: 0, detail: { reason: 'no_company_data' } });
         steps.web_research = 'skipped';
-      } else {
+      } else if (prepared && input) {
         const reserved = await reserveSpend(db, {
           leadId,
           jobId: job.id,
@@ -286,15 +305,16 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
           costUsdMicro += research.reserveUsdMicro;
           try {
             const finding = await research.research(input);
-            // The reserving row stays; only a cost above the reservation is added, so the ceiling stays honest.
-            const extra = Math.max(0, finding.costUsdMicro - research.reserveUsdMicro);
-            costUsdMicro += extra;
+            // The reserving row stays; a second row settles it to what the call really cost
+            // (above the reservation or below it), so the ceiling follows the real spend.
+            const settle = finding.costUsdMicro - research.reserveUsdMicro;
+            costUsdMicro += settle;
             await writeLedger(db, {
               leadId,
               jobId: job.id,
               step: 'ai_research',
               status: 'done',
-              usdMicro: extra,
+              usdMicro: settle,
               detail: {
                 actualUsdMicro: finding.costUsdMicro,
                 sources: finding.sources.length,
@@ -311,6 +331,9 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
           }
         }
       }
+    } else if (previous) {
+      // Switched off now: what an earlier run found stays on the lead.
+      facts.webResearch = previous;
     }
 
     // --- score and summary -------------------------------------------------------------
@@ -354,7 +377,7 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
   }
 };
 
-/** The company fields a lead form may have filled; none when the columns are not there yet. */
+/** The company fields a lead form may have filled; none when the columns are not there yet (42703). */
 async function companyFieldsOf(db: JobContext['db'], leadId: string) {
   try {
     const result = await db.query<{
@@ -364,9 +387,24 @@ async function companyFieldsOf(db: JobContext['db'], leadId: string) {
       company_cnpj: string | null;
     }>(`select company_name, website, instagram, company_cnpj from leads where id = $1`, [leadId]);
     return result.rows[0] ?? {};
-  } catch {
-    return {};
+  } catch (error) {
+    if ((error as { code?: string }).code === '42703') return {};
+    throw error;
   }
+}
+
+/** What an earlier run stored under `webResearch`, when it has the shape this code writes. */
+function webResearchOf(facts: unknown): LeadWebResearch | null {
+  const value = (facts as { webResearch?: Partial<LeadWebResearch> } | null)?.webResearch;
+  if (!value || typeof value !== 'object' || typeof value.status !== 'string') return null;
+  return {
+    status: value.status,
+    at: typeof value.at === 'string' ? value.at : new Date(0).toISOString(),
+    reason: value.reason ?? null,
+    fields: Array.isArray(value.fields) ? value.fields : [],
+    sources: Array.isArray(value.sources) ? value.sources : [],
+    model: value.model ?? null,
+  };
 }
 
 const noResearch = (status: LeadWebResearch['status'], at: string, reason: string): LeadWebResearch => ({

@@ -155,20 +155,20 @@ describe('the company research step of enrich_lead', () => {
     expect(new Date(research?.at ?? '').getTime()).toBeGreaterThan(Date.now() - 60_000);
     expect((await leadRow(leadId)).enrichment_state).toBe('done');
     expect(output.steps.web_research).toBe('done');
-    // The reservation (60,000) stays; the real cost (31,000) is below it, so nothing is added.
-    expect(output.costUsdMicro).toBe(60_000);
+    // The reservation (60,000) is settled to what the call really cost (31,000): a second row of -29,000.
+    expect(output.costUsdMicro).toBe(31_000);
     expect(await ledger(leadId)).toEqual([
       expect.objectContaining({ step: 'ai_research', status: 'started', usd_micro: 60_000 }),
       expect.objectContaining({
         step: 'ai_research',
         status: 'done',
-        usd_micro: 0,
+        usd_micro: -29_000,
         detail: { actualUsdMicro: 31_000, sources: 1, answered: 3 },
       }),
     ]);
   });
 
-  it('adds only the part of the cost that went above the reservation', async () => {
+  it('settles the reservation to the real cost, above it as well', async () => {
     const leadId = await companyLead();
     const { provider } = fakeProvider({ finding: { ...FINDING, costUsdMicro: 100_000 } });
     const output = await run(leadId, provider);
@@ -213,9 +213,17 @@ describe('the company research step of enrich_lead', () => {
           )
         ).rows[0]?.total,
       );
-    // The research rows of the tests above are already in today's sum: a search reservation
-    // under a ceiling smaller than that sum still fits, so it does not see them.
-    expect(await sumOf(true)).toBeGreaterThan(100_000);
+    // Research spend of its own, put here so this test does not depend on the ones above: a
+    // search reservation under a ceiling smaller than that sum still fits, so it does not see it.
+    expect(
+      await reserveSpend(database.pool, {
+        ...base,
+        step: 'ai_research',
+        usdMicro: 50_000,
+        dailyUsd: 100,
+      }),
+    ).toBe(true);
+    expect(await sumOf(true)).toBeGreaterThanOrEqual(50_000);
     expect(
       await reserveSpend(database.pool, {
         ...base,
@@ -293,5 +301,67 @@ describe('the company research step of enrich_lead', () => {
     expect(output.steps.web_research).toBeUndefined();
     expect(await researchOf(leadId)).toBeUndefined();
     expect(await ledger(leadId)).toEqual([]);
+  });
+
+  it('keeps a finished research on a re-run: no second call, no second payment, no overwrite', async () => {
+    const leadId = await companyLead();
+    const { provider, inputs } = fakeProvider();
+    await run(leadId, provider);
+    const first = await researchOf(leadId);
+    const second = await run(leadId, provider);
+    expect(inputs).toHaveLength(1);
+    expect(second.steps.web_research).toBe('skipped');
+    expect(second.costUsdMicro).toBe(0);
+    expect(await researchOf(leadId)).toEqual(first);
+    expect((await ledger(leadId)).at(-1)).toMatchObject({
+      step: 'ai_research',
+      status: 'skipped',
+      usd_micro: 0,
+      detail: { reason: 'already_done' },
+    });
+  });
+
+  it('keeps what an earlier run found when the provider is switched off, and does not let a refusal overwrite it', async () => {
+    const leadId = await companyLead();
+    await run(leadId, fakeProvider().provider);
+    const first = await researchOf(leadId);
+    await run(leadId, null);
+    expect(await researchOf(leadId)).toEqual(first);
+    // At a ceiling that refuses everything, the finished research is still not replaced.
+    await run(leadId, fakeProvider().provider, 0.01);
+    expect(await researchOf(leadId)).toEqual(first);
+  });
+
+  it('searches again when the earlier result brought no page', async () => {
+    const leadId = await companyLead();
+    const empty: LeadResearchFinding = {
+      ...FINDING,
+      sources: [],
+      fields: FINDING.fields.map((f) => ({
+        ...f,
+        value: null,
+        reason: 'A busca não trouxe páginas para confirmar',
+      })),
+    };
+    await run(leadId, fakeProvider({ finding: empty }).provider);
+    const { provider, inputs } = fakeProvider();
+    await run(leadId, provider);
+    expect(inputs).toHaveLength(1);
+    expect((await researchOf(leadId))?.sources).toEqual(FINDING.sources);
+  });
+
+  it('never sends the person name as the company, and a site the URL parser rejects does not fail the job', async () => {
+    const leadId = await companyLead({
+      company_name: 'ana souza',
+      website: 'empresa.com.br:99999',
+      instagram: null,
+      company_cnpj: null,
+    });
+    const { provider, inputs } = fakeProvider();
+    const output = await run(leadId, provider);
+    // The only thing left is nothing: the name is the person's and the site is unusable.
+    expect(inputs).toHaveLength(0);
+    expect(output.steps.web_research).toBe('skipped');
+    expect((await leadRow(leadId)).enrichment_state).toBe('done');
   });
 });

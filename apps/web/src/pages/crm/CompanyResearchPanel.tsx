@@ -11,13 +11,19 @@ function isWebUrl(url: string): boolean {
   }
 }
 
-function sourceLabel(source: WebResearchSource): string {
-  if (source.title) return source.title;
+function hostOf(url: string): string {
   try {
-    return new URL(source.url).hostname.replace(/^www\./, '');
+    return new URL(url).hostname.replace(/^www\./, '');
   } catch {
-    return source.url;
+    return '';
   }
+}
+
+/** The page's own title can say anything (a lead may choose the site), so the host goes with it. */
+function sourceLabel(source: WebResearchSource): string {
+  const host = hostOf(source.url);
+  if (source.title) return host ? `${source.title} — ${host}` : source.title;
+  return host || source.url;
 }
 
 /**
@@ -45,7 +51,9 @@ export function CompanyResearchPanel({ research }: { research: Lead['research'] 
                     <span className="crm-field-value">{field.value}</span>
                   ) : (
                     <>
-                      <span aria-label="sem dado">—</span>
+                      <span role="img" aria-label="sem dado">
+                        —
+                      </span>
                       {field.reason ? (
                         <span className="crm-sub crm-check-reason">{field.reason}</span>
                       ) : null}
@@ -74,8 +82,10 @@ export function CompanyResearchPanel({ research }: { research: Lead['research'] 
             </>
           ) : null}
           <p className="crm-sub">
-            Pesquisado em {formatDateTime(web.at)}. Resumo automático por IA, só do que as páginas
-            acima dizem; confira nas fontes antes de usar.
+            Pesquisado em {formatDateTime(web.at)}.{' '}
+            {web.sources.length > 0
+              ? 'Resumo automático por IA, só do que as páginas acima dizem; confira nas fontes antes de usar.'
+              : 'A busca não trouxe páginas para confirmar; nada foi guardado.'}
           </p>
         </>
       ) : (

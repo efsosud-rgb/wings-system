@@ -3,6 +3,8 @@ import { z } from 'zod';
 
 const requiredString = z.string().trim().min(1);
 const optionalString = requiredString.optional().or(z.literal('').transform(() => undefined));
+/** An empty variable counts as unset, so its default applies (a blank line copied from .env.example must not stop the worker). */
+const emptyAsUnset = (value: unknown) => (value === '' ? undefined : value);
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -78,11 +80,11 @@ const schema = z.object({
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',
   ),
-  LEAD_RESEARCH_MODEL: z.enum(AGENT_MODELS).default('anthropic/claude-haiku-4.5'),
+  LEAD_RESEARCH_MODEL: z.preprocess(emptyAsUnset, z.enum(AGENT_MODELS).default('anthropic/claude-haiku-4.5')),
   /** The company research's ceiling per day (America/Sao_Paulo), in US dollars. */
-  LEAD_RESEARCH_DAILY_USD: z.coerce.number().positive().max(100).default(1),
+  LEAD_RESEARCH_DAILY_USD: z.preprocess(emptyAsUnset, z.coerce.number().positive().max(100).default(1)),
   /** What one research is expected to cost (5 web results plus the model); reserved before the call. */
-  LEAD_RESEARCH_USD_PER_CALL: z.coerce.number().positive().max(1).default(0.06),
+  LEAD_RESEARCH_USD_PER_CALL: z.preprocess(emptyAsUnset, z.coerce.number().positive().max(1).default(0.06)),
 });
 
 export type Env = z.infer<typeof schema>;

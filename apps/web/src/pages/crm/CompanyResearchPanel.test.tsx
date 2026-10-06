@@ -69,7 +69,9 @@ describe('CompanyResearchPanel', () => {
       'Resumo automático por IA',
     );
 
-    const link = within(panel).getByRole('link', { name: 'Sobre a Açaí da Fila' });
+    const link = within(panel).getByRole('link', {
+      name: 'Sobre a Açaí da Fila — acai.example.com.br',
+    });
     expect(link.getAttribute('href')).toBe('https://acai.example.com.br/sobre');
     expect(link.getAttribute('rel')).toBe('noopener noreferrer nofollow');
     // A title-less source is named by its host; a non-web address is text, not a link.
@@ -96,5 +98,27 @@ describe('CompanyResearchPanel', () => {
     expect(within(panel).getByText(/teto diário da pesquisa foi atingido/)).toBeTruthy();
     expect(within(panel).queryByText('O que a empresa faz')).toBeNull();
     expect(within(panel).queryByRole('link')).toBeNull();
+  });
+
+  it('does not claim the pages say it when the search brought none', () => {
+    render(
+      <CompanyResearchPanel
+        research={research({
+          ...DONE,
+          fields: DONE.fields.map((field) => ({
+            ...field,
+            value: null,
+            reason: 'A busca não trouxe páginas para confirmar',
+          })),
+          sources: [],
+        })}
+      />,
+    );
+    const panel = screen.getByRole('region', { name: 'Pesquisa da empresa' });
+    expect(within(panel).queryByText('Fontes')).toBeNull();
+    expect(panel.textContent).toContain(
+      'A busca não trouxe páginas para confirmar; nada foi guardado.',
+    );
+    expect(panel.textContent).not.toContain('só do que as páginas acima dizem');
   });
 });
