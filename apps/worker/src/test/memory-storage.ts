@@ -1,3 +1,4 @@
+import { writeFile } from 'node:fs/promises';
 import type { ObjectStorage } from '../lib/storage.js';
 
 /** An `ObjectStorage` backed by a `Map`, for job-handler tests: no bucket, no
@@ -17,6 +18,12 @@ export function createMemoryStorage(seed: Record<string, Buffer> = {}): ObjectSt
     },
     async get(key) {
       return objects.get(key) ?? null;
+    },
+    async download(key, file) {
+      const bytes = objects.get(key);
+      if (!bytes) return false;
+      await writeFile(file, bytes);
+      return true;
     },
   };
 }

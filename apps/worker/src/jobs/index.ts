@@ -2,6 +2,7 @@ import type { JobType } from '@wings/shared';
 import { runEnrichLeadJob } from './enrich-lead.js';
 import { runFfprobeJob } from './ffprobe.js';
 import { runRenderJob } from './render/index.js';
+import { runTranscribeMeetingJob } from './transcribe-meeting.js';
 import { runTranscribeJob } from './transcribe.js';
 import type { JobHandler } from './types.js';
 
@@ -10,6 +11,7 @@ export const JOB_HANDLERS: Record<JobType, JobHandler> = {
   transcribe: runTranscribeJob,
   render: runRenderJob,
   enrich_lead: runEnrichLeadJob,
+  transcribe_meeting: runTranscribeMeetingJob,
 };
 
 export type { JobContext, JobHandler } from './types.js';

@@ -5,7 +5,13 @@
  * contract; the table's columns and the worker's SQL are not (see
  * `apps/api/src/db/schema/jobs.ts` and `apps/worker/src/queue.ts`).
  */
-export const JOB_TYPES = ['ffprobe', 'transcribe', 'render', 'enrich_lead'] as const;
+export const JOB_TYPES = [
+  'ffprobe',
+  'transcribe',
+  'render',
+  'enrich_lead',
+  'transcribe_meeting',
+] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
 /** What a worker claims by default: every type it has a handler for. Kept
@@ -16,6 +22,7 @@ export const JOB_TYPES_IMPLEMENTED = [
   'transcribe',
   'render',
   'enrich_lead',
+  'transcribe_meeting',
 ] as const satisfies readonly JobType[];
 
 export type JobState = 'pending' | 'running' | 'done' | 'failed';

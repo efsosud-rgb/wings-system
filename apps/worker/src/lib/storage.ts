@@ -1,4 +1,8 @@
 import { createHash, createHmac } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 
 /**
  * The Drive's storage, read and written the same way `apps/api` does it
@@ -12,6 +16,8 @@ export interface ObjectStorage {
   head(key: string): Promise<{ size: number; etag: string | null } | null>;
   put(key: string, bytes: Buffer, contentType: string): Promise<void>;
   get(key: string): Promise<Buffer | null>;
+  /** Streams the object into `file` (never whole in memory); false when it does not exist. */
+  download(key: string, file: string): Promise<boolean>;
 }
 
 export interface S3Options {
@@ -93,6 +99,7 @@ export function createS3Storage(options: S3Options): ObjectStorage {
     key: string,
     body?: Buffer,
     contentType?: string,
+    timeoutMs = 300_000,
   ): Promise<Response> {
     const stamp = stampOf(now());
     const payloadHash = body ? sha256(body) : EMPTY_SHA256;
@@ -111,7 +118,7 @@ export function createS3Storage(options: S3Options): ObjectStorage {
         ...sent,
         Authorization: `AWS4-HMAC-SHA256 Credential=${options.accessKeyId}/${stamp.slice(0, 8)}/${region}/s3/aws4_request, SignedHeaders=${Object.keys(headers).sort().join(';')}, Signature=${signature}`,
       },
-      signal: AbortSignal.timeout(300_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   }
 
@@ -134,6 +141,17 @@ export function createS3Storage(options: S3Options): ObjectStorage {
       if (response.status === 404) return null;
       if (!response.ok) throw new StorageError(response.status, 'get');
       return Buffer.from(await response.arrayBuffer());
+    },
+    async download(key, file) {
+      // A meeting recording can reach 1.5 GB: an hour to arrive, straight to disk.
+      const response = await request('GET', key, undefined, undefined, 3_600_000);
+      if (response.status === 404) return false;
+      if (!response.ok || !response.body) throw new StorageError(response.status, 'get');
+      await pipeline(
+        Readable.fromWeb(response.body as unknown as WebReadableStream<Uint8Array>),
+        createWriteStream(file),
+      );
+      return true;
     },
   };
 }

@@ -12,8 +12,14 @@ const validSource = {
 describe('loadEnv', () => {
   it('defaults job types to everything the worker implements', () => {
     const env = loadEnv(validSource);
-    expect(env.WORKER_JOB_TYPES).toBe('ffprobe,transcribe,render,enrich_lead');
-    expect(jobTypesOf(env)).toEqual(['ffprobe', 'transcribe', 'render', 'enrich_lead']);
+    expect(env.WORKER_JOB_TYPES).toBe('ffprobe,transcribe,render,enrich_lead,transcribe_meeting');
+    expect(jobTypesOf(env)).toEqual([
+      'ffprobe',
+      'transcribe',
+      'render',
+      'enrich_lead',
+      'transcribe_meeting',
+    ]);
   });
 
   it('requires the R2 variables: no local-volume fallback for the worker', () => {

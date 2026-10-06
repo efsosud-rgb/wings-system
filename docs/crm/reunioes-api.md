@@ -23,7 +23,7 @@ passa por quatro trilhas independentes, cada uma com o seu estado:
 | Análise por IA (`analysis.state`) | `nenhuma` → `na_fila` → `analisando` → `pronta`; `falhou`; `sem_verba` | o pedido da pessoa ou o fim da transcrição                    |
 
 Nos leads de **Expansão** há uma quinta trilha: o **envio do resumo ao dono da franqueadora**
-(`summarySend.state`: `nenhum` → `rascunho` → `aprovado` → `enviado`; `recusado`; `falhou`).
+(`summarySend.state`: `nenhum` → `rascunho` → `aprovado` → `enviando` → `enviado`; `recusado`; `falhou`).
 **Nada sai sem aprovação de uma pessoa** com `meetings.approve_send`.
 
 ## Permissões
@@ -80,7 +80,7 @@ Google Meet), que também depende da Thais.
 
 ### Gravação
 
-`POST /meetings/:id/recording/upload-url` → `{ uploadUrl, fileId, expiresAt }`
+`POST /meetings/:id/recording/upload-url` → `{ uploadUrl, headers, fileId, expiresAt }` (o navegador manda o arquivo com `PUT` e exatamente esses cabeçalhos)
 
 ```json
 { "contentType": "audio/webm", "sizeBytes": 48211234 }
@@ -90,8 +90,14 @@ Google Meet), que também depende da Thais.
   minutos; o navegador manda direto para o armazenamento.
 - Tipos: `audio/webm`, `audio/ogg`, `audio/mpeg`, `audio/mp4`, `audio/wav`, `video/webm`,
   `video/mp4`. Até 1,5 GB (cerca de 3 horas de vídeo do Meet).
-- Fica na pasta do Drive do Comercial, departamento "Comercial", nunca com o nome de alguém no
-  nome do arquivo.
+- Reunião que já tem gravação: `409 recording_exists`, salvo quando a transcrição falhou (ou o job
+  foi abandonado); aí uma gravação nova substitui a anterior, que é apagada do armazenamento.
+- `complete` repetido (clique duplo, nova tentativa do navegador) põe **um** job na fila só.
+- Fica na área de gravações do armazenamento do sistema, com chave escolhida pelo servidor (o id
+  da reunião e o da gravação, nunca um nome de pessoa); a chave nunca aparece numa resposta. Fora
+  das pastas do Drive nesta fase; mostrar também no Drive do Comercial é uma decisão para depois.
+- Para ouvir: `GET /meetings/:id/recording/link` → `{ url, expiresAt }`, endereço assinado de 5
+  minutos, só para quem vê a negociação.
 
 `POST /meetings/:id/recording/complete` → `202 { meeting }` com `{ fileId }`: o servidor confere
 que o arquivo chegou com o tamanho combinado, marca `guardada` e põe a transcrição na fila.
@@ -131,7 +137,9 @@ não adivinha nomes para gravar: ela só sugere na análise.
 `POST /meetings/:id/analysis` → `202 { meeting }`. Também roda sozinha quando a transcrição fica
 pronta. Usa o modelo do sistema (OpenRouter, `AGENT_MODEL`) com **teto diário próprio**
 (`MEETINGS_DAILY_USD`); passou do teto: `analysis.state = "sem_verba"` e nenhuma chamada. O texto
-vai sem telefone, e-mail ou CPF (o mesmo filtro do agente).
+vai sem telefone, e-mail ou CPF (o mesmo filtro do agente, e mais qualquer sequência de 8 ou mais
+dígitos, como o whisper escreve números ditos). Uma análise interrompida por reinício da API
+(todo deploy) volta à fila depois de 15 minutos.
 
 `analysis` (quando `pronta`):
 
@@ -168,11 +176,14 @@ destinatário é o contato **principal** da ficha do cliente (`client_contacts`,
 1. `POST /meetings/:id/summary-send` → `201`: rascunho (`rascunho`) com texto gerado a partir da
    análise, sem dados do candidato além do primeiro nome, canal `email` ou `whatsapp`.
 2. `PATCH /meetings/:id/summary-send` → edição do texto (só em `rascunho`).
-3. `POST /meetings/:id/summary-send/approve` (`meetings.approve_send`) → `aprovado`, com quem e
-   quando.
+3. `POST /meetings/:id/summary-send/approve` (`meetings.approve_send`) com
+   `{ "text": "<o texto exato que a pessoa leu>" }` → `aprovado`, com quem e quando. Texto
+   diferente do rascunho atual: `409 draft_changed` (alguém editou depois da leitura). A aprovação
+   vale para o contato da marca daquele momento (guardado só como hash).
 4. `POST /meetings/:id/summary-send/send` (`meetings.approve_send`) → manda **uma vez**, só se
-   `aprovado`; falhou: `falhou`, sem nova tentativa automática. Grava auditoria
-   `meeting.summary_sent` sem o texto.
+   `aprovado`; falhou: `falhou`, sem nova tentativa automática. Se o contato principal da marca
+   mudou desde a aprovação: `409 contact_changed`, volta a `rascunho` e precisa de nova
+   aprovação. Grava auditoria `meeting.summary_sent` sem o texto.
 5. `POST /meetings/:id/summary-send/refuse` → `recusado`.
 
 ### Google (depois da Thais)
@@ -209,3 +220,24 @@ colar link quando vier 503 `google_not_connected`), detalhe com "Abrir o Meet ao
 gravação, transcrição com falantes nomeáveis, análise com "virar tarefa" por próximo passo e, em
 Expansão, o cartão do envio ao franqueador com os botões conforme a permissão. Sem dado em
 qualquer campo: "—" e o motivo.
+
+## O que já está construído (06/10, `feat/reunioes`)
+
+- **API** (`apps/api/src/modules/meetings/`): todas as rotas acima. As do Google respondem 503
+  `google_not_connected`; marcar com link colado, gravação, transcrição, falantes, análise,
+  "virar tarefa" e o envio ao franqueador funcionam.
+- **Worker**: job `transcribe_meeting` (faster-whisper "small", português), conferido contra um
+  banco descartável. Grava a transcrição na reunião e põe a análise na fila; a API pega a fila a
+  cada minuto (o modelo e o teto ficam na API). **No staging, `WORKER_JOB_TYPES` precisa incluir
+  `transcribe_meeting`.**
+- **Teto**: `MEETINGS_DAILY_USD` (padrão 1). Cada chamada reserva US$ 0,25 sob uma trava antes de
+  ir ao modelo (tabela `crm_meeting_analysis_runs`, uma linha por chamada) e depois fica com o
+  custo real; reanálises e falhas contam, e uma chamada que deu erro fica com a reserva.
+- **Migração `0073_crm_meetings`** (tabelas `crm_meetings` e `crm_meeting_analysis_runs`).
+  `wings_ro` lê a view `crm_meetings_analysis` (estados, horários, tamanhos, custo e ids, sem dado
+  pessoal) e `crm_meeting_analysis_runs`; nunca a tabela `crm_meetings`.
+- **Separação de quem falou: não ligada.** Faltam a escolha do motor (pyannote, que pede token do
+  Hugging Face e cerca de 2 GB, ou SpeechBrain com agrupamento) e um teste com áudio real de
+  reunião. Até lá, `speaker: null` com o motivo, e a tela permite nomear as vozes quando houver.
+- **Depende da Thais:** autorizar o app no Admin do Google Workspace (agenda, Meet e importação
+  de gravações do Drive) e a conta de serviço ou OAuth por pessoa.
