@@ -74,6 +74,7 @@ describe('the tree itself', () => {
       'Atendimento',
       'Administração',
       'SaaS',
+      'Laboratório',
     ]);
   });
 });
