@@ -508,6 +508,29 @@ describe('the right column', () => {
   });
 });
 
+describe('the form line in Origem', () => {
+  it('says when the person filled the form, for Meta and TikTok leads only', () => {
+    const consent = {
+      legalBasis: 'consent' as const,
+      consentedAt: '2026-10-03T12:00:00.000Z',
+      source: 'meta_lead_ads',
+      text: null,
+    };
+    const whenFilled = `Preencheu o formulário em ${new Date(consent.consentedAt).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}`;
+    queryState.lead = lead({ consent, origin: { ...lead({}).origin, source: 'meta_lead_ads' } });
+    show();
+    expect(screen.getByText(whenFilled)).toBeTruthy();
+    cleanup();
+    queryState.lead = lead({ consent, origin: { ...lead({}).origin, source: 'tiktok_lead_ads' } });
+    show();
+    expect(screen.getByText(whenFilled)).toBeTruthy();
+    cleanup();
+    queryState.lead = lead({ consent, origin: { ...lead({}).origin, source: 'site_form' } });
+    show();
+    expect(screen.queryByText(whenFilled)).toBeNull();
+  });
+});
+
 describe('the AI summary', () => {
   it('shows "—" and "Ainda não gerado." until asked; "Gerar resumo" asks', () => {
     show();

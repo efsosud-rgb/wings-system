@@ -704,6 +704,17 @@ function AboutPanel({
       ? [{ key: 'campaign', label: 'Campanha', value: origin.campaignName ?? origin.campaignId }]
       : []),
     ...(origin.landingPage ? [{ key: 'page', label: 'Página', value: origin.landingPage }] : []),
+    // Meta and TikTok forms carry the moment the person submitted them (`consentedAt`).
+    ...(lead.consent.consentedAt &&
+    (origin.source === 'meta_lead_ads' || origin.source === 'tiktok_lead_ads')
+      ? [
+          {
+            key: 'form',
+            label: 'Origem',
+            value: `Preencheu o formulário em ${formatDateTime(lead.consent.consentedAt)}`,
+          },
+        ]
+      : []),
     ...Object.entries(lead.formAnswers ?? {}).map(([question, answer]) => ({
       key: `answer:${question}`,
       label: question.replace(/_/g, ' '),
