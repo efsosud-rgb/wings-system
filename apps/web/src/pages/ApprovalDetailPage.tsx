@@ -1,4 +1,5 @@
 import {
+  describeLeadCapture,
   APPROVAL_STATUS_LABEL,
   APPROVAL_TRIGGER_LABEL,
   CAMPAIGN_OBJECTIVE_LABEL,
@@ -42,6 +43,7 @@ import {
 import { ApiError } from '../api/client.js';
 import { ApprovalSimulator } from '../components/ApprovalSimulator.js';
 import { AdPreviewGallery } from '../components/campaign-builder/AdPreview.js';
+import { LeadFormPreviewGallery } from '../components/campaign-builder/LeadFormPreview.js';
 import { agoLabel } from '../components/campaign-builder/format.js';
 import { SearchAdPreview, YoutubePreview } from '../components/campaign-builder/GooglePreview.js';
 import { ReconcileNowButton } from '../components/campaign-builder/ReconcileNowButton.js';
@@ -433,6 +435,21 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
             )}
           </div>
         )}
+        {draft.objective === 'lead' && (
+          <div>
+            <span className="field-label">Formulário</span>
+            <p>{describeLeadCapture(draft)}</p>
+            {draft.leadForm && (
+              <span className="cell-sub">
+                {draft.leadForm.qualifier
+                  ? `Abre com “${draft.leadForm.qualifier.question}” (${draft.leadForm.qualifier.options.join(' · ')}); `
+                  : ''}
+                Nome, WhatsApp, Nome da empresa, Instagram da empresa, Site da empresa · política{' '}
+                {draft.leadForm.privacyPolicyUrl} · agradecimento “{draft.leadForm.thankYou.title}”
+              </span>
+            )}
+          </div>
+        )}
         <div>
           <span className="field-label">
             {utmsFromPlatform(draft.platform) ? 'Destino' : 'Destino com UTMs'}
@@ -505,6 +522,20 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
           headlines={draft.search.headlines}
           descriptions={draft.search.descriptions}
           destinationUrl={draft.destinationUrl}
+        />
+      )}
+      {!google && draft.leadCapture === 'instant_form' && draft.leadForm && (
+        <LeadFormPreviewGallery
+          media={{
+            mediaType: draft.variations[0]?.creativeType === 'video' ? 'video' : 'image',
+            creativeId: draft.variations[0]?.creativeId,
+            videoId: draft.variations[0]?.videoId,
+            headline: draft.variations[0]?.headline ?? '',
+            primaryText: draft.variations[0]?.primaryText ?? '',
+            callToAction: draft.variations[0]?.callToAction ?? 'SIGN_UP',
+          }}
+          form={draft.leadForm}
+          brand="Wings"
         />
       )}
       {!google && (
