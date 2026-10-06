@@ -48,6 +48,8 @@ export const EVENT_LABELS: Record<string, string> = {
   'lead.created_manually': 'Negociação criada',
   'lead.imported.rd_crm': 'Trazida do RD CRM',
   'lead.imported.csv': 'Importada de planilha',
+  'lead.duplicates_merged': 'Negociação repetida juntada a esta',
+  'lead.duplicates_merge_undone': 'Junção de repetidas desfeita',
   'rd.deal_linked': 'Ligada ao negócio do RD CRM',
   'rd.deal_created': 'Cópia criada no RD CRM',
   'lead.email_sent': 'E-mail ao lead',

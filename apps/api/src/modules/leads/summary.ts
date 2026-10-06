@@ -59,6 +59,7 @@ const EVENT_TEXT: Record<string, string> = {
   'lead.created_manually': 'negociação criada à mão',
   'lead.imported.rd_crm': 'trazida do RD CRM',
   'lead.imported.csv': 'importada de planilha',
+  'lead.duplicates_merged': 'negociação repetida juntada a esta',
   'lead.email_sent': 'e-mail enviado ao lead',
   'lead.owner_changed': 'dono alterado',
   'lead.value_changed': 'valor alterado',
