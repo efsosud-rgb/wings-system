@@ -722,9 +722,11 @@ function AboutPanel({
       ? [{ key: 'campaign', label: 'Campanha', value: origin.campaignName ?? origin.campaignId }]
       : []),
     ...(origin.landingPage ? [{ key: 'page', label: 'Página', value: origin.landingPage }] : []),
-    // Meta and TikTok forms carry the moment the person submitted them (`consentedAt`).
+    // Meta, TikTok and Google forms carry the moment the person submitted them (`consentedAt`).
     ...(lead.consent.consentedAt &&
-    (origin.source === 'meta_lead_ads' || origin.source === 'tiktok_lead_ads')
+    (origin.source === 'meta_lead_ads' ||
+      origin.source === 'tiktok_lead_ads' ||
+      origin.source === 'google_lead_form')
       ? [
           {
             key: 'form',

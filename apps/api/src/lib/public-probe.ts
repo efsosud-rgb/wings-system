@@ -45,15 +45,57 @@ export function isPublicAddress(ip: string): boolean {
     return true;
   }
   if (net.isIPv6(ip)) {
-    const x = ip.toLowerCase();
-    if (x === '::' || x === '::1') return false;
-    const mapped = x.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-    if (mapped?.[1]) return isPublicAddress(mapped[1]);
-    if (/^(fe[89ab]|fc|fd|ff)/.test(x)) return false;
-    if (x.startsWith('64:ff9b:') || x.startsWith('2001:db8:')) return false;
+    const g = ipv6Groups(ip);
+    if (!g) return false;
+    const v4 = (hi: number, lo: number) => `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+    const zeros = (n: number) => g.slice(0, n).every((group) => group === 0);
+    const [first, second, third, , , sixth, seventh, eighth] = g as [
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+    ];
+    // An IPv4 inside an IPv6 is judged as that IPv4, whatever the spelling (the
+    // URL parser turns `::ffff:169.254.169.254` into `::ffff:a9fe:a9fe`):
+    // unspecified, loopback and compatible (::/96), mapped (::ffff:0:0/96),
+    // translated (::ffff:0:0:0/96) and 6to4 (2002::/16).
+    if (zeros(6))
+      return seventh === 0 && eighth <= 1 ? false : isPublicAddress(v4(seventh, eighth));
+    if (zeros(5) && sixth === 0xffff) return isPublicAddress(v4(seventh, eighth));
+    if (zeros(4) && g[4] === 0xffff && sixth === 0) return isPublicAddress(v4(seventh, eighth));
+    if (first === 0x2002) return isPublicAddress(v4(second, third));
+    if ((first & 0xfe00) === 0xfc00) return false; // unique local fc00::/7
+    if ((first & 0xffc0) === 0xfe80 || (first & 0xffc0) === 0xfec0) return false; // link/site-local
+    if ((first & 0xff00) === 0xff00) return false; // multicast
+    if (first === 0x64 && second === 0xff9b) return false; // NAT64 64:ff9b::/96 and 64:ff9b:1::/48
+    if (first === 0x2001 && (second === 0xdb8 || second === 0)) return false; // documentation, Teredo
+    if (first === 0x100 && zeros(4)) return false; // discard-only 100::/64
     return true;
   }
   return false;
+}
+
+/** The eight 16-bit groups of an IPv6 address (`::` expanded, a dotted IPv4 tail as two groups). */
+function ipv6Groups(ip: string): number[] | null {
+  let x = ip.toLowerCase().replace(/%.*$/, '');
+  const dotted = x.match(/^(.*:)(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (dotted) {
+    const [a, b, c, d] = dotted.slice(2).map(Number) as [number, number, number, number];
+    x = `${dotted[1]}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+  const halves = x.split('::');
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const fill = halves.length === 2 ? 8 - head.length - tail.length : 0;
+  if (fill < 0) return null;
+  const groups = [...head, ...Array<string>(fill).fill('0'), ...tail];
+  if (groups.length !== 8 || groups.some((group) => !/^[0-9a-f]{1,4}$/.test(group))) return null;
+  return groups.map((group) => parseInt(group, 16));
 }
 
 class Blocked extends Error {}

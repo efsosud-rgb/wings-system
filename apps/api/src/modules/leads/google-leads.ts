@@ -4,7 +4,7 @@ import { leadEvents } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { entryStageOf } from './crm.js';
 import { classifyFormName, noticeUnclassifiedForm } from './meta-form-routing.js';
-import { resolveGoogleSource, upsertLead } from './service.js';
+import { answersPhone, resolveGoogleSource, upsertLead } from './service.js';
 
 /**
  * Google Ads lead forms (YouTube, Search, Discovery) → Funil, by webhook
@@ -124,11 +124,8 @@ export async function ingestGoogleLead(
     return result;
   }
   const now = deps.now?.() ?? new Date();
-  // WhatsApp asked as a question of the form still counts as the contact.
-  const answersPhone = Object.entries(lead.answers).find(([q]) =>
-    /whats|celular|telefone/i.test(q),
-  )?.[1];
-  const phone = normalizeBrazilianPhone(lead.phone ?? answersPhone ?? null);
+  // WhatsApp asked as a question of the form still counts as the contact (same rule as Meta and TikTok).
+  const phone = normalizeBrazilianPhone(lead.phone ?? answersPhone(lead.answers));
   const email = normalizeEmail(lead.email);
   if (!phone && !email) {
     result.skipped = 1;

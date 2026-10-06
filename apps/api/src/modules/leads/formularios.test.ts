@@ -197,6 +197,47 @@ describe('upsertLead and the form fields', () => {
   });
 });
 
+describe('upsertLead and the question texts', () => {
+  it('takes "WhatsApp da empresa" as the WhatsApp and only a name question as the company', async () => {
+    const result = await upsertLead(db, {
+      source: 'meta_lead_ads',
+      clientId: WINGS_CLIENT_ID,
+      clientMapped: false,
+      name: 'Pessoa Dois',
+      email: 'pessoa.dois@example.com',
+      phone: null,
+      formAnswers: {
+        'Melhor horário para contato': 'Manhã',
+        'Quantos funcionários a empresa tem?': '10 a 50',
+        'WhatsApp da empresa': '(11) 96666-5555',
+        'Nome da sua empresa': 'Loja Dois',
+      },
+      event: { kind: 'lead.received.meta_lead_ads' },
+    });
+    expect(result.lead).toMatchObject({ phone: '5511966665555', companyName: 'Loja Dois' });
+  });
+
+  it('does not check what an import or the RD mirror brings (checked on "Conferir de novo")', async () => {
+    const result = await upsertLead(db, {
+      source: 'rd_crm',
+      clientId: WINGS_CLIENT_ID,
+      clientMapped: false,
+      name: 'Pessoa Três',
+      email: 'pessoa.tres@example.com',
+      phone: '5521977776666',
+      formAnswers: { 'Site da empresa': 'empresa-tres.com.br' },
+      event: { kind: 'lead.received.rd_crm' },
+    });
+    expect(result.created).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const [row] = await db
+      .select({ checks: leads.fieldChecks })
+      .from(leads)
+      .where(eq(leads.id, result.lead.id));
+    expect(row?.checks).toEqual({});
+  });
+});
+
 describe('arrival checks', () => {
   const base: LeadCheckDeps = { probe: null, instagram: null, cnpj: null, now: () => NOW, log };
 
@@ -250,6 +291,39 @@ describe('arrival checks', () => {
     expect(gone.cnpj?.reason).toBe('Os dígitos verificadores do CNPJ não batem');
   });
 
+  it('takes "não tenho" as an answer and a site that refuses robots as not verified', async () => {
+    const none = await checkLeadFields(
+      { phone: null, website: 'Não tenho', instagram: 'não tenho', companyCnpj: '-' },
+      {
+        ...base,
+        probe: async () => {
+          throw new Error('"não tenho" is never probed');
+        },
+      },
+    );
+    expect(none.website).toMatchObject({
+      status: 'nao_verificado',
+      reason: 'Respondeu que não tem site',
+    });
+    expect(none.instagram).toMatchObject({
+      status: 'nao_verificado',
+      reason: 'Respondeu que não tem Instagram',
+    });
+    expect(none.cnpj).toMatchObject({
+      status: 'nao_verificado',
+      reason: 'Respondeu que não tem CNPJ',
+    });
+
+    const refused = await checkLeadFields(
+      { phone: null, website: 'https://exemplo.com.br/', instagram: null, companyCnpj: null },
+      { ...base, probe: async () => ({ kind: 'http_error', status: 403 }) },
+    );
+    expect(refused.website).toMatchObject({
+      status: 'nao_verificado',
+      reason: 'O site recusou a conferência automática (erro 403)',
+    });
+  });
+
   it('asks Instagram with the token in a header and reads its answers', async () => {
     const seen: { url: string; auth: string | null }[] = [];
     const answer = (status: number, body: unknown) =>
@@ -293,9 +367,34 @@ describe('public probe (SSRF guard)', () => {
     ['::1', false],
     ['fd00::1', false],
     ['::ffff:10.0.0.1', false],
+    // The URL parser writes an IPv4 inside an IPv6 in hex: still judged as that IPv4.
+    ['::ffff:a9fe:a9fe', false],
+    ['::ffff:7f00:1', false],
+    ['0:0:0:0:0:ffff:a00:1', false],
+    ['::ffff:0:7f00:1', false],
+    ['::7f00:1', false],
+    ['::', false],
+    ['2002:a9fe:a9fe::1', false],
+    ['64:ff9b::a9fe:a9fe', false],
+    ['fe80::1%eth0', false],
+    ['fec0::1', false],
+    ['ff02::1', false],
+    ['::ffff:808:808', true],
     ['2606:4700::1111', true],
   ])('%s public? %s', (ip, expected) => {
     expect(isPublicAddress(ip)).toBe(expected);
+  });
+
+  it('refuses an IPv4 inside an IPv6 literal in any spelling (a redirect hop is parsed by URL)', async () => {
+    for (const url of [
+      'http://[::ffff:169.254.169.254]/latest/meta-data/',
+      'http://[::ffff:127.0.0.1]/',
+      'http://[::ffff:7f00:1]/',
+      'http://[::1]/',
+    ]) {
+      expect(new URL(url).hostname).not.toContain('.');
+      expect(await probePublicUrl(url)).toEqual({ kind: 'blocked' });
+    }
   });
 
   it('refuses our own network, odd ports and other schemes before any request', async () => {

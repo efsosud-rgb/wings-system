@@ -44,25 +44,35 @@ const fold = (text: string) =>
 
 /**
  * Which field a question (or a platform field key such as `full_name`,
- * `phone_number`, `company_name`) asks for. Order matters: "Nome da empresa"
- * is the company, not the person; "@ do Instagram" is not a site.
+ * `phone_number`, `company_name`) asks for. Order matters: "Site da empresa"
+ * is the site and "WhatsApp da empresa" the WhatsApp, not the company; the
+ * company is only a question that asks its name ("Nome da empresa", or just
+ * "Empresa"), never one that merely mentions it ("Quantos funcionários a
+ * empresa tem?"); "Nome da empresa" is the company, not the person.
  */
 export function leadFieldOfQuestion(question: string): LeadFieldKey | null {
   const q = fold(question.replace(/_/g, ' '));
   if (!q) return null;
+  // When or how much is never one of the fields ("Melhor horário para contato").
+  if (/\b(horario|melhor hora|quando|periodo|turno|quantos|quantas)\b/.test(q)) return null;
   if (/\bcnpj\b/.test(q)) return 'cnpj';
   if (/\b(instagram|insta)\b|@ do insta|\big\b/.test(q)) return 'instagram';
-  // "Site da empresa" is the site: the site word wins over the company word.
   if (/\b(site|website|web site|url|pagina|endereco eletronico)\b/.test(q)) return 'website';
   if (
-    /\b(nome da empresa|nome do negocio|nome fantasia|razao social|empresa|company( name)?|negocio|marca)\b/.test(
+    /\b(whats ?app|whats|wpp|zap|celular|telefone|fone|phone( number)?|numero (de|para) contato)\b|^(seu )?contato$/.test(
       q,
     )
   ) {
+    return 'whatsapp';
+  }
+  if (
+    /\b(nome (da|de sua|da sua|do|de seu|do seu) (empresa|negocio|marca|loja)|nome fantasia|razao social|company name|business name)\b/.test(
+      q,
+    ) ||
+    /^(qual (e )?)?(o |a )?(sua |seu )?(empresa|negocio|marca|loja|company)$/.test(q)
+  ) {
     return 'companyName';
   }
-  if (/\b(whats ?app|whats|zap|celular|telefone|fone|phone( number)?|contato)\b/.test(q))
-    return 'whatsapp';
   if (
     /^(nome|seu nome|qual (e )?(o )?seu nome|nome completo|full name|first name|name)\b/.test(q)
   ) {
@@ -71,7 +81,11 @@ export function leadFieldOfQuestion(question: string): LeadFieldKey | null {
   return null;
 }
 
-/** First answer for each field; empty answers do not count. */
+/**
+ * First answer for each field; empty answers do not count, nor a WhatsApp
+ * answer without a number in it ("Prefiro WhatsApp"), so a later question
+ * that does carry the number still fills it.
+ */
 export function extractLeadFields(
   answers: { question: string; answer: string | null }[],
 ): LeadFields {
@@ -80,9 +94,22 @@ export function extractLeadFields(
     const key = leadFieldOfQuestion(question);
     const value = (answer ?? '').trim();
     if (!key || !value || fields[key]) continue;
+    if (key === 'whatsapp' && value.replace(/\D/g, '').length < 8) continue;
     fields[key] = value.slice(0, 300);
   }
   return fields;
+}
+
+/**
+ * "Não tenho", "nenhum", "-": the person said there is none (the site form asks
+ * for exactly that). Not a wrong answer, so its check is "não verificado".
+ */
+export function declaresNone(value: string): boolean {
+  const text = fold(value);
+  if (!text) return true;
+  return /^(n|nao|na|n a|nada|nenhum|nenhuma|sem|nao se aplica|(ainda )?nao (tenho|tem|possuo|possui))( (site|instagram|insta|cnpj|ainda|no momento))?$/.test(
+    text,
+  );
 }
 
 // --- normalisation ---------------------------------------------------------------------------

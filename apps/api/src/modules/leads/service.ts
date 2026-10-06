@@ -440,8 +440,14 @@ const CHECKED_COLUMNS = ['phone', 'website', 'instagram', 'companyCnpj'];
 export async function upsertLead(db: Database, given: IncomingLead): Promise<UpsertResult> {
   const incoming = withFormFields(given);
   const result = await upsertLeadTx(db, incoming);
-  // Checked on arrival, and again when a later arrival fills a checked field.
-  if (result.created || result.filled.some((column) => CHECKED_COLUMNS.includes(column))) {
+  // Checked on arrival, and again when a later arrival fills a checked field;
+  // never for an import or the RD mirror (thousands at once would flood the
+  // public lookups): those are checked on "Conferir de novo".
+  const bulk = Boolean(incoming.importBatchId) || incoming.source === 'rd_crm';
+  if (
+    !bulk &&
+    (result.created || result.filled.some((column) => CHECKED_COLUMNS.includes(column)))
+  ) {
     scheduleLeadChecks(result.lead.id);
   }
   // A lead born in a stage starts that stage's automation rules, as entering it

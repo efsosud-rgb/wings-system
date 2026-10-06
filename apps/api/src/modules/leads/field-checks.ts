@@ -1,11 +1,13 @@
 import {
   LEAD_CHECK_KEYS,
+  declaresNone,
   isValidCnpj,
   missingCheck,
   normalizeInstagram,
   normalizeWebsite,
   whatsappCheck,
   type LeadCheck,
+  type LeadCheckKey,
   type LeadChecks,
 } from '@wings/shared';
 import { eq } from 'drizzle-orm';
@@ -50,9 +52,21 @@ const result = (status: LeadCheck['status'], reason: string | null, at: Date): L
   checkedAt: at.toISOString(),
 });
 
+/** "Não tenho" (what the site form asks for): not verified, never "não confere". */
+function noneCheck(field: LeadCheckKey, at: Date): LeadCheck {
+  const label = { whatsapp: 'WhatsApp', website: 'site', instagram: 'Instagram', cnpj: 'CNPJ' }[
+    field
+  ];
+  return result('nao_verificado', `Respondeu que não tem ${label}`, at);
+}
+
+/** Answers that say "do not let robots in" or "too many requests": the site exists. */
+const REFUSED_STATUSES = new Set([401, 403, 407, 429, 503]);
+
 async function websiteCheck(raw: string | null, deps: LeadCheckDeps): Promise<LeadCheck> {
   const at = deps.now();
   if (!raw) return missingCheck('website', at);
+  if (declaresNone(raw)) return noneCheck('website', at);
   const url = normalizeWebsite(raw);
   if (!url) return result('nao_confere', 'Não é um endereço de site', at);
   if (!deps.probe)
@@ -62,7 +76,13 @@ async function websiteCheck(raw: string | null, deps: LeadCheckDeps): Promise<Le
     case 'ok':
       return result('confere', null, deps.now());
     case 'http_error':
-      return result('nao_confere', `O site respondeu com erro ${answer.status}`, deps.now());
+      return REFUSED_STATUSES.has(answer.status)
+        ? result(
+            'nao_verificado',
+            `O site recusou a conferência automática (erro ${answer.status})`,
+            deps.now(),
+          )
+        : result('nao_confere', `O site respondeu com erro ${answer.status}`, deps.now());
     case 'not_found':
       return result('nao_confere', 'O domínio não existe', deps.now());
     case 'blocked':
@@ -77,6 +97,7 @@ async function websiteCheck(raw: string | null, deps: LeadCheckDeps): Promise<Le
 async function instagramCheck(raw: string | null, deps: LeadCheckDeps): Promise<LeadCheck> {
   const at = deps.now();
   if (!raw) return missingCheck('instagram', at);
+  if (declaresNone(raw)) return noneCheck('instagram', at);
   const handle = normalizeInstagram(raw);
   if (!handle) return result('nao_confere', 'Não é um @ de Instagram válido', at);
   if (!deps.instagram) {
@@ -92,6 +113,7 @@ async function instagramCheck(raw: string | null, deps: LeadCheckDeps): Promise<
 async function cnpjCheck(raw: string | null, deps: LeadCheckDeps): Promise<LeadCheck> {
   const at = deps.now();
   if (!raw) return missingCheck('cnpj', at);
+  if (declaresNone(raw)) return noneCheck('cnpj', at);
   if (!isValidCnpj(raw))
     return result('nao_confere', 'Os dígitos verificadores do CNPJ não batem', at);
   if (!deps.cnpj)

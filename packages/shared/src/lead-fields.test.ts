@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  declaresNone,
   extractLeadFields,
   leadFieldOfQuestion,
   normalizeInstagram,
@@ -27,8 +28,32 @@ describe('leadFieldOfQuestion', () => {
     ['CNPJ (se tiver)', 'cnpj'],
     ['Qual seu faturamento mensal?', null],
     ['E-mail', null],
+    ['WhatsApp da empresa', 'whatsapp'],
+    ['Telefone da empresa', 'whatsapp'],
+    ['Número para contato', 'whatsapp'],
+    ['Melhor horário para contato', null],
+    ['Quantos funcionários a empresa tem?', null],
+    ['Empresa', 'companyName'],
+    ['Qual é a sua empresa?', 'companyName'],
+    ['Nome da sua marca', 'companyName'],
+    ['Segmento da empresa', null],
   ])('%s → %s', (question, field) => {
     expect(leadFieldOfQuestion(question)).toBe(field);
+  });
+});
+
+describe('declaresNone', () => {
+  it.each([
+    ['não tenho', true],
+    ['Não tenho site', true],
+    ['nenhum', true],
+    ['-', true],
+    ['N/A', true],
+    ['ainda não tenho', true],
+    ['@empresa.exemplo', false],
+    ['empresa-exemplo.com.br', false],
+  ])('%s → %s', (value, none) => {
+    expect(declaresNone(value)).toBe(none);
   });
 });
 
@@ -47,6 +72,15 @@ describe('extractLeadFields', () => {
       companyName: 'Empresa Exemplo',
       instagram: '@empresa.exemplo',
     });
+  });
+
+  it('skips a WhatsApp answer without a number, so the one with the number fills it', () => {
+    expect(
+      extractLeadFields([
+        { question: 'Contato preferido (WhatsApp ou e-mail)', answer: 'WhatsApp' },
+        { question: 'WhatsApp com DDD', answer: '(11) 98888-7777' },
+      ]),
+    ).toEqual({ whatsapp: '(11) 98888-7777' });
   });
 });
 
