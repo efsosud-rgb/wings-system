@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createS3Storage, StorageError } from './storage.js';
 
@@ -14,7 +17,8 @@ describe('the worker’s copy of the R2 client', () => {
     const headers = Object.fromEntries(new Headers(init?.headers).entries());
     calls.push({ method: init?.method ?? 'GET', url: url.toString(), headers });
     const key = decodeURIComponent(url.pathname.replace('/wings-files/', ''));
-    if (key.includes('broken')) return new Response('<Error>secret detail</Error>', { status: 500 });
+    if (key.includes('broken'))
+      return new Response('<Error>secret detail</Error>', { status: 500 });
     if (init?.method === 'PUT') {
       objects.set(key, Buffer.from(init.body as Buffer));
       return new Response(null, { status: 200 });
@@ -57,5 +61,18 @@ describe('the worker’s copy of the R2 client', () => {
   it('a missing object is null, not an error', async () => {
     expect(await storage.get('drive/2026-09/missing.mp4')).toBeNull();
     expect(await storage.head('drive/2026-09/missing.mp4')).toBeNull();
+  });
+
+  it('streams an object straight into a file, and says false when it is missing', async () => {
+    await storage.put('meetings/m1/f1.webm', Buffer.from('gravação'), 'audio/webm');
+    const dir = await mkdtemp(join(tmpdir(), 'wings-storage-test-'));
+    try {
+      const file = join(dir, 'input');
+      expect(await storage.download('meetings/m1/f1.webm', file)).toBe(true);
+      expect((await readFile(file)).toString()).toBe('gravação');
+      expect(await storage.download('meetings/m1/missing.webm', join(dir, 'other'))).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

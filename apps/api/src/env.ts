@@ -324,6 +324,8 @@ const schema = z.object({
     .default(DEFAULT_AGENT_MODEL)
     .or(z.literal('').transform(() => DEFAULT_AGENT_MODEL)),
   AGENT_DAILY_USD: z.coerce.number().positive().max(100).default(DEFAULT_AGENT_DAILY_USD),
+  /** Reuniões: the company's daily ceiling (USD) for AI analyses of meetings (docs/crm/reunioes-api.md). */
+  MEETINGS_DAILY_USD: z.coerce.number().positive().max(100).default(1),
   /**
    * The dashboard's insights and campaign suggestions: the same OpenRouter key
    * and model, under a ceiling of their own, in US dollars per day for the
