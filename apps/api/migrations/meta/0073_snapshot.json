@@ -1,5 +1,5 @@
 {
-  "id": "0d047532-1be5-496c-acc0-57efb12d30cb",
+  "id": "a1254379-588d-4bc2-9cf5-36043ff71708",
   "prevId": "906ca823-240d-47e4-bc35-e8d97c000ac2",
   "version": "7",
   "dialect": "postgresql",
@@ -16199,6 +16199,87 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.crm_meeting_analysis_runs": {
+      "name": "crm_meeting_analysis_runs",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "meeting_id": {
+          "name": "meeting_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "started_at": {
+          "name": "started_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "reserved_micro_usd": {
+          "name": "reserved_micro_usd",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cost_micro_usd": {
+          "name": "cost_micro_usd",
+          "type": "bigint",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "finished_at": {
+          "name": "finished_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "crm_meeting_analysis_runs_started_idx": {
+          "name": "crm_meeting_analysis_runs_started_idx",
+          "columns": [
+            {
+              "expression": "started_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "crm_meeting_analysis_runs_meeting_id_crm_meetings_id_fk": {
+          "name": "crm_meeting_analysis_runs_meeting_id_crm_meetings_id_fk",
+          "tableFrom": "crm_meeting_analysis_runs",
+          "tableTo": "crm_meetings",
+          "columnsFrom": [
+            "meeting_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.crm_meetings": {
       "name": "crm_meetings",
       "schema": "",
@@ -16400,6 +16481,12 @@
         },
         "send_text": {
           "name": "send_text",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "send_destination_hash": {
+          "name": "send_destination_hash",
           "type": "text",
           "primaryKey": false,
           "notNull": false

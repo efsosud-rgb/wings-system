@@ -9,10 +9,10 @@ import {
   type MeetingSummarySend,
   type MeetingTranscript,
 } from '@wings/shared';
-import { and, eq, gte, sql } from 'drizzle-orm';
+import { and, eq, gte, lt, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Database } from '../../db/client.js';
-import { crmMeetings, leads } from '../../db/schema/index.js';
+import { crmMeetingAnalysisRuns, crmMeetings, leads } from '../../db/schema/index.js';
 import type { AgentLlm } from '../agent/llm.js';
 import { analyzeMeeting } from './analysis.js';
 
@@ -140,14 +140,45 @@ export interface MeetingAnalysisDeps {
   log: FastifyBaseLogger;
 }
 
-/** Spent today (UTC day) on meeting analyses, in micro-USD, failed runs included. */
-async function spentToday(db: Database, now: Date): Promise<number> {
+/**
+ * The most one call may cost, reserved before it is made: a transcript of
+ * MAX_TRANSCRIPT_CHARS and 2,000 tokens of answer, at a generous price.
+ */
+export const ANALYSIS_RESERVE_MICRO_USD = 250_000;
+
+/** An "analisando" older than this was cut short by a restart (every deploy does it). */
+const STALE_ANALYSIS_MS = 15 * 60_000;
+
+/**
+ * Reserves one call under MEETINGS_DAILY_USD, or null when it would pass it.
+ * Checked and written under one lock, so calls at the same time never all pass;
+ * every call counts (one row each, re-analyses and failures included), at its
+ * real cost once known and at its reservation until then or if it threw.
+ */
+async function reserveAnalysis(
+  deps: MeetingAnalysisDeps,
+  meetingId: string,
+): Promise<string | null> {
+  const now = deps.now();
   const day = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const [row] = await db
-    .select({ total: sql<string | null>`sum(${crmMeetings.analysisCostMicroUsd})` })
-    .from(crmMeetings)
-    .where(gte(crmMeetings.analyzedAt, day));
-  return Number(row?.total ?? 0);
+  const ceiling = Math.round(deps.dailyUsd * 1e6);
+  const reserve = Math.min(ANALYSIS_RESERVE_MICRO_USD, ceiling);
+  const runs = crmMeetingAnalysisRuns;
+  return deps.db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('crm_meeting_analysis_ceiling'))`);
+    const [row] = await tx
+      .select({
+        total: sql<string | null>`sum(coalesce(${runs.costMicroUsd}, ${runs.reservedMicroUsd}))`,
+      })
+      .from(runs)
+      .where(gte(runs.startedAt, day));
+    if (Number(row?.total ?? 0) + reserve > ceiling) return null;
+    const [run] = await tx
+      .insert(runs)
+      .values({ meetingId, startedAt: now, reservedMicroUsd: reserve })
+      .returning({ id: runs.id });
+    return run!.id;
+  });
 }
 
 /** Runs one queued analysis; never throws (a failure is a state with a reason). */
@@ -175,18 +206,33 @@ export async function runMeetingAnalysis(
     });
     return;
   }
-  if ((await spentToday(deps.db, deps.now())) >= deps.dailyUsd * 1e6) {
+  const segments = segmentsOf(claimed);
+  if (!segments.length) {
+    await finish({ analysisState: 'falhou', analysisReason: 'A transcrição está vazia' });
+    return;
+  }
+  const runId = await reserveAnalysis(deps, meetingId);
+  if (!runId) {
     await finish({
       analysisState: 'sem_verba',
       analysisReason: `Teto diário de análise de reuniões (US$ ${deps.dailyUsd}) atingido; tente amanhã`,
     });
     return;
   }
-  const segments = segmentsOf(claimed);
-  if (!segments.length) {
-    await finish({ analysisState: 'falhou', analysisReason: 'A transcrição está vazia' });
-    return;
-  }
+  const settle = (costMicroUsd: number | null) =>
+    deps.db
+      .update(crmMeetingAnalysisRuns)
+      .set({ costMicroUsd, finishedAt: deps.now() })
+      .where(eq(crmMeetingAnalysisRuns.id, runId));
+  // Tasks already made from a next step stay linked when the same step comes back.
+  const madeTasks = new Map(
+    (
+      (claimed.analysis as { nextSteps?: { what: string; taskId: string | null }[] } | null)
+        ?.nextSteps ?? []
+    )
+      .filter((step) => step.taskId)
+      .map((step) => [step.what, step.taskId] as const),
+  );
   const [lead] = await deps.db
     .select({ pipeline: leads.pipeline, stage: leads.stage })
     .from(leads)
@@ -199,6 +245,7 @@ export async function runMeetingAnalysis(
       now: deps.now(),
     });
     const cost = Math.round(outcome.costUsd * 1e6);
+    await settle(cost);
     if (!outcome.ok) {
       await finish({
         analysisState: 'falhou',
@@ -210,12 +257,20 @@ export async function runMeetingAnalysis(
     }
     await finish({
       analysisState: 'pronta',
-      analysis: outcome.analysis,
+      analysis: {
+        ...outcome.analysis,
+        nextSteps: outcome.analysis.nextSteps.map((step) => ({
+          ...step,
+          taskId: madeTasks.get(step.what) ?? null,
+        })),
+      },
       analysisCostMicroUsd: cost,
       analyzedAt: deps.now(),
     });
     deps.log.info({ meetingId, costMicroUsd: cost }, 'meeting analysed');
   } catch {
+    // The call may have been billed: its reservation stays as its cost.
+    await settle(null);
     await finish({
       analysisState: 'falhou',
       analysisReason: 'O modelo não respondeu; tente de novo',
@@ -226,6 +281,16 @@ export async function runMeetingAnalysis(
 
 /** Every queued analysis (the worker queues one when a transcript is ready), a few at a time. */
 export async function runQueuedAnalyses(deps: MeetingAnalysisDeps, limit = 3): Promise<number> {
+  // A run cut short by a restart goes back to the queue (its reservation still counts).
+  await deps.db
+    .update(crmMeetings)
+    .set({ analysisState: 'na_fila', updatedAt: deps.now() })
+    .where(
+      and(
+        eq(crmMeetings.analysisState, 'analisando'),
+        lt(crmMeetings.updatedAt, new Date(deps.now().getTime() - STALE_ANALYSIS_MS)),
+      ),
+    );
   const queued = await deps.db
     .select({ id: crmMeetings.id })
     .from(crmMeetings)

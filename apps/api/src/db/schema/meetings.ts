@@ -58,6 +58,11 @@ export const crmMeetings = pgTable(
     /** The franchisor contact the summary goes to: its role on the client record ('principal'). */
     sendContactRole: text('send_contact_role'),
     sendText: text('send_text'),
+    /**
+     * SHA-256 of the address shown to the approver (the franchisor's WhatsApp or
+     * e-mail at approval time): the send refuses if the contact changed since.
+     */
+    sendDestinationHash: text('send_destination_hash'),
     sendApprovedBy: uuid('send_approved_by').references(() => employees.id),
     sendApprovedAt: timestamp('send_approved_at', { withTimezone: true }),
     sentAt: timestamp('sent_at', { withTimezone: true }),
@@ -71,4 +76,25 @@ export const crmMeetings = pgTable(
     index('crm_meetings_lead_idx').on(table.leadId, table.startsAt),
     index('crm_meetings_analysis_idx').on(table.analysisState),
   ],
+);
+
+/**
+ * One row per paid call of the meeting analysis (MEETINGS_DAILY_USD): reserved
+ * before the call under a lock, then the real cost once the model answers. A
+ * call that threw keeps its reservation as its cost (it may have been billed).
+ * Ids, times and amounts only.
+ */
+export const crmMeetingAnalysisRuns = pgTable(
+  'crm_meeting_analysis_runs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    meetingId: uuid('meeting_id')
+      .notNull()
+      .references(() => crmMeetings.id),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    reservedMicroUsd: bigint('reserved_micro_usd', { mode: 'number' }).notNull(),
+    costMicroUsd: bigint('cost_micro_usd', { mode: 'number' }),
+    finishedAt: timestamp('finished_at', { withTimezone: true }),
+  },
+  (table) => [index('crm_meeting_analysis_runs_started_idx').on(table.startedAt)],
 );

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -42,23 +42,37 @@ export const runTranscribeMeetingJob: JobHandler = async (job: Job, ctx) => {
       [meetingId, reason],
     );
 
-  const bytes = await ctx.storage.get(key);
-  if (!bytes) {
-    await fail('A gravação não está no armazenamento');
-    throw new Error('recording missing from storage');
-  }
   const dir = await mkdtemp(join(tmpdir(), 'wings-meeting-'));
   try {
     const file = join(dir, 'input');
-    await writeFile(file, bytes);
-    let raw: WhisperRaw;
+    if (!(await ctx.storage.download(key, file))) {
+      await fail('A gravação não está no armazenamento');
+      throw new Error('recording missing from storage');
+    }
+    let output: string;
     try {
-      raw = JSON.parse(
-        await ctx.runWhisper(file, { threads: ctx.threads, language: 'pt' }),
-      ) as WhisperRaw;
+      // A meeting can last hours: up to 3 h of CPU time for its transcription.
+      output = await ctx.runWhisper(file, {
+        threads: ctx.threads,
+        language: 'pt',
+        timeoutMs: 3 * 3_600_000,
+      });
     } catch (error) {
       await fail('A transcrição falhou no servidor; envie a gravação de novo');
-      throw error;
+      // execFile's message carries whisper's stderr and the error its stdout: only the
+      // code goes into the message (the job record keeps the message, never the cause).
+      const code = (error as { code?: unknown; signal?: unknown }).code ?? (error as { signal?: unknown }).signal;
+      throw new Error(`whisper failed (${typeof code === 'number' || typeof code === 'string' ? code : 'unknown'})`, {
+        cause: error,
+      });
+    }
+    let raw: WhisperRaw;
+    try {
+      raw = JSON.parse(output) as WhisperRaw;
+    } catch {
+      // A parse error quotes the input, which is the transcript: never into the job record.
+      await fail('A transcrição falhou no servidor; envie a gravação de novo');
+      throw new Error('whisper output is not the expected JSON');
     }
     const transcript = {
       language: raw.language,

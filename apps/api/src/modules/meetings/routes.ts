@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   WINGS_CLIENT_ID,
   grantedScope,
@@ -8,6 +8,7 @@ import {
   meetingUpdateSchema,
   meetingUploadUrlSchema,
   summarySendCreateSchema,
+  summarySendApproveSchema,
   summarySendUpdateSchema,
   type MeetingSpeaker,
 } from '@wings/shared';
@@ -137,6 +138,21 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
     }
     return toMeeting(row, to);
   }
+
+  /** The stored recording's transcription failed, or its job was given up. */
+  async function transcriptionFailed(row: MeetingRow): Promise<boolean> {
+    if (row.transcriptState === 'falhou') return true;
+    if (!row.transcriptJobId || row.transcriptState === 'pronta') return false;
+    const [job] = await db
+      .select({ state: jobs.state })
+      .from(jobs)
+      .where(eq(jobs.id, row.transcriptJobId));
+    return job?.state === 'failed';
+  }
+
+  /** The address an approval was given for, kept as a hash only. */
+  const destinationHash = (address: string) =>
+    createHash('sha256').update(address.trim().toLowerCase()).digest('hex');
 
   const update = async (id: string, patch: Partial<typeof crmMeetings.$inferInsert>) => {
     const [row] = await db
@@ -288,8 +304,16 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
       }
       const found = await visibleMeeting(request, params.data.id);
       if (!found) return notFound(reply);
-      if (found.row.recordingState === 'guardada') {
+      // A new recording replaces one only when its transcription failed (the
+      // screen then says "envie a gravação de novo") or its job was given up.
+      const replacing = found.row.recordingState === 'guardada';
+      if (replacing && !(await transcriptionFailed(found.row))) {
         return conflict(reply, 'recording_exists', 'Esta reunião já tem gravação.');
+      }
+      if (replacing && found.row.recordingKey) {
+        await storage.delete(found.row.recordingKey).catch(() => {
+          request.log.warn({ meetingId: found.row.id }, 'old meeting recording not deleted');
+        });
       }
       const fileId = randomUUID();
       const key = `meetings/${found.row.id}/${fileId}.${EXTENSION[body.data.contentType] ?? 'bin'}`;
@@ -348,16 +372,38 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
           'A gravação chegou com tamanho diferente do combinado.',
         );
       }
-      const [job] = await db
-        .insert(jobs)
-        .values({ type: 'transcribe_meeting', input: { meetingId: row.id } })
-        .returning({ id: jobs.id });
-      const updated = await update(row.id, {
-        recordingState: 'guardada',
-        transcriptState: 'na_fila',
-        transcriptJobId: job!.id,
-        transcriptError: null,
+      // Claimed in one statement, so a retried or double "complete" queues one job only.
+      const updated = await db.transaction(async (tx) => {
+        const [claimed] = await tx
+          .update(crmMeetings)
+          .set({
+            recordingState: 'guardada',
+            transcriptState: 'na_fila',
+            transcriptError: null,
+            updatedAt: now(),
+          })
+          .where(
+            and(
+              eq(crmMeetings.id, row.id),
+              eq(crmMeetings.recordingState, 'enviando'),
+              eq(crmMeetings.recordingFileId, body.data.fileId),
+            ),
+          )
+          .returning({ id: crmMeetings.id });
+        if (!claimed) return null;
+        const [job] = await tx
+          .insert(jobs)
+          .values({ type: 'transcribe_meeting', input: { meetingId: row.id } })
+          .returning({ id: jobs.id });
+        const [stored] = await tx
+          .update(crmMeetings)
+          .set({ transcriptJobId: job!.id })
+          .where(eq(crmMeetings.id, row.id))
+          .returning();
+        return stored!;
       });
+      if (!updated)
+        return conflict(reply, 'upload_unknown', 'Este envio não é o que foi combinado.');
       await writeAudit(db, {
         actorEmployeeId: request.session.actor.employeeId,
         action: 'meeting.recording_stored',
@@ -385,7 +431,13 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
       const storage = app.wings.storage;
       const found = await visibleMeeting(request, params.data.id);
       if (!found) return notFound(reply);
-      if (!storage || found.row.recordingState !== 'guardada' || !found.row.recordingKey) {
+      if (!storage) {
+        return reply.status(503).send({
+          error: 'storage_not_configured',
+          message: 'O armazenamento não está configurado.',
+        });
+      }
+      if (found.row.recordingState !== 'guardada' || !found.row.recordingKey) {
         return conflict(reply, 'no_recording', 'Esta reunião não tem gravação guardada.');
       }
       const url = await storage.presignGet(found.row.recordingKey, {
@@ -478,27 +530,41 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
       if (!params.success) return bad(reply);
       const found = await visibleMeeting(request, params.data.id);
       if (!found) return notFound(reply);
-      const analysis = (found.row.analysis ?? null) as {
-        nextSteps?: { what: string; dueAt: string | null; taskId: string | null }[];
-      } | null;
-      const step = analysis?.nextSteps?.[params.data.index];
-      if (found.row.analysisState !== 'pronta' || !step) return notFound(reply);
-      if (step.taskId) return conflict(reply, 'task_exists', 'Este próximo passo já virou tarefa.');
-      // Noon in Rio of the day said, else of tomorrow; the seller edits it on the task.
-      const day = step.dueAt ?? new Date(now().getTime() + 86_400_000).toISOString().slice(0, 10);
-      const task = await createTask(db, {
-        leadId: found.row.leadId,
-        kind: 'follow_up',
-        title: step.what.slice(0, 160),
-        dueAt: new Date(`${day}T15:00:00Z`),
-        assigneeEmployeeId: found.lead.ownerEmployeeId ?? request.session.actor.employeeId,
-        createdBy: request.session.actor.employeeId,
+      type Steps = { nextSteps?: { what: string; dueAt: string | null; taskId: string | null }[] };
+      // Read and written under the row's lock, so a double click makes one task.
+      const outcome = await db.transaction(async (tx) => {
+        const [row] = await tx
+          .select({ analysis: crmMeetings.analysis, analysisState: crmMeetings.analysisState })
+          .from(crmMeetings)
+          .where(eq(crmMeetings.id, found.row.id))
+          .for('update');
+        const analysis = (row?.analysis ?? null) as Steps | null;
+        const step = analysis?.nextSteps?.[params.data.index];
+        if (row?.analysisState !== 'pronta' || !step) return 'not_found' as const;
+        if (step.taskId) return 'task_exists' as const;
+        // Noon in Rio of the day said, else of tomorrow; the seller edits it on the task.
+        const day = step.dueAt ?? new Date(now().getTime() + 86_400_000).toISOString().slice(0, 10);
+        const task = await createTask(tx as unknown as typeof db, {
+          leadId: found.row.leadId,
+          kind: 'follow_up',
+          title: step.what.slice(0, 160),
+          dueAt: new Date(`${day}T15:00:00Z`),
+          assigneeEmployeeId: found.lead.ownerEmployeeId ?? request.session.actor.employeeId,
+          createdBy: request.session.actor.employeeId,
+        });
+        const nextSteps = analysis!.nextSteps!.map((s, i) =>
+          i === params.data.index ? { ...s, taskId: task.id } : s,
+        );
+        await tx
+          .update(crmMeetings)
+          .set({ analysis: { ...analysis, nextSteps }, updatedAt: now() })
+          .where(eq(crmMeetings.id, found.row.id));
+        return task;
       });
-      const nextSteps = analysis!.nextSteps!.map((s, i) =>
-        i === params.data.index ? { ...s, taskId: task.id } : s,
-      );
-      await update(found.row.id, { analysis: { ...analysis, nextSteps } });
-      return reply.status(201).send({ task });
+      if (outcome === 'not_found') return notFound(reply);
+      if (outcome === 'task_exists')
+        return conflict(reply, 'task_exists', 'Este próximo passo já virou tarefa.');
+      return reply.status(201).send({ task: outcome });
     },
   );
 
@@ -550,6 +616,7 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
         sendChannel: body.data.channel,
         sendContactRole: 'principal',
         sendText: text.slice(0, 4000),
+        sendDestinationHash: null,
         sendApprovedBy: null,
         sendApprovedAt: null,
         sentAt: null,
@@ -569,9 +636,13 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
       if (!body.success) return bad(reply, 'O texto precisa de 20 a 4.000 caracteres');
       const found = await visibleMeeting(request, params.data.id);
       if (!found) return notFound(reply);
-      if (found.row.sendState !== 'rascunho')
-        return conflict(reply, 'not_draft', 'Só o rascunho pode ser editado.');
-      const updated = await update(found.row.id, { sendText: body.data.text });
+      // Only while still a draft, checked in the same statement as the write.
+      const [updated] = await db
+        .update(crmMeetings)
+        .set({ sendText: body.data.text, updatedAt: now() })
+        .where(and(eq(crmMeetings.id, found.row.id), eq(crmMeetings.sendState, 'rascunho')))
+        .returning();
+      if (!updated) return conflict(reply, 'not_draft', 'Só o rascunho pode ser editado.');
       return reply.send({ meeting: await answer(updated, found.lead.clientId) });
     },
   );
@@ -581,17 +652,48 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
     { preHandler: app.requirePermission('meetings.approve_send') },
     async (request, reply) => {
       const params = idParam.safeParse(request.params);
+      const body = summarySendApproveSchema.safeParse(request.body ?? {});
       if (!params.success) return bad(reply);
+      if (!body.success) return bad(reply, 'Aprovar exige o texto que foi lido');
       const found = await visibleMeeting(request, params.data.id);
       if (!found) return notFound(reply);
       if (found.row.sendState !== 'rascunho')
         return conflict(reply, 'not_draft', 'Só um rascunho pode ser aprovado.');
+      // The approval is for this text and this address: the send refuses if either changed.
+      const contact = await franchisorContact(found.lead.clientId);
+      const address = found.row.sendChannel === 'whatsapp' ? contact?.whatsapp : contact?.email;
+      if (!address) {
+        return conflict(
+          reply,
+          'no_franchisor_contact',
+          'A ficha da marca não tem o contato principal com esse canal.',
+        );
+      }
       const actor = request.session.actor.employeeId;
-      const updated = await update(found.row.id, {
-        sendState: 'aprovado',
-        sendApprovedBy: actor,
-        sendApprovedAt: now(),
-      });
+      const [updated] = await db
+        .update(crmMeetings)
+        .set({
+          sendState: 'aprovado',
+          sendApprovedBy: actor,
+          sendApprovedAt: now(),
+          sendDestinationHash: destinationHash(address),
+          updatedAt: now(),
+        })
+        .where(
+          and(
+            eq(crmMeetings.id, found.row.id),
+            eq(crmMeetings.sendState, 'rascunho'),
+            eq(crmMeetings.sendText, body.data.text),
+          ),
+        )
+        .returning();
+      if (!updated) {
+        return conflict(
+          reply,
+          'draft_changed',
+          'O rascunho mudou depois de lido; leia de novo antes de aprovar.',
+        );
+      }
       await writeAudit(db, {
         actorEmployeeId: actor,
         action: 'meeting.summary_approved',
@@ -639,6 +741,21 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
         return conflict(reply, 'not_approved', 'O resumo só sai depois de aprovado.');
       }
       const contact = await franchisorContact(lead.clientId);
+      const address = row.sendChannel === 'whatsapp' ? contact?.whatsapp : contact?.email;
+      if (!address || destinationHash(address) !== row.sendDestinationHash) {
+        // The franchisor's contact changed since the approval: approve again.
+        const reopened = await update(row.id, {
+          sendState: 'rascunho',
+          sendApprovedBy: null,
+          sendApprovedAt: null,
+          sendDestinationHash: null,
+        });
+        return reply.status(409).send({
+          error: 'contact_changed',
+          message: 'O contato da marca mudou depois da aprovação; aprove de novo.',
+          meeting: await answer(reopened, lead.clientId),
+        });
+      }
       // Claim before the one attempt, so a double click never sends twice.
       const [claimed] = await db
         .update(crmMeetings)
@@ -649,7 +766,6 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
       let error: string | null = null;
       try {
         if (row.sendChannel === 'whatsapp') {
-          if (!contact?.whatsapp) throw new Error('no_whatsapp');
           if (!env.ZAPI_INSTANCE_ID || !env.ZAPI_INSTANCE_TOKEN || !env.ZAPI_CLIENT_TOKEN) {
             throw new Error('zapi_off');
           }
@@ -658,12 +774,11 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
             instanceToken: env.ZAPI_INSTANCE_TOKEN,
             clientToken: env.ZAPI_CLIENT_TOKEN,
           });
-          await zapi.sendText(contact.whatsapp, row.sendText);
+          await zapi.sendText(address, row.sendText);
         } else {
-          if (!contact?.email) throw new Error('no_email');
           if (!app.wings.mailer.enabled) throw new Error('smtp_off');
           await app.wings.mailer.send({
-            to: contact.email,
+            to: address,
             subject: 'Resumo da reunião com um candidato à sua franquia',
             text: row.sendText,
             html: row.sendText

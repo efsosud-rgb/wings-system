@@ -7,8 +7,8 @@ import { scrubSensitive } from '../agent/scrub.js';
  * The AI reading of a meeting (docs/crm/reunioes-api.md): summary, topics,
  * participants as roles, next steps and an evaluation of the lead. The model
  * must answer through one tool with a fixed shape; the transcript goes without
- * phones, e-mails or CPF (the agent's scrub). It decides nothing: no stage, no
- * value, no task changes from here.
+ * phones, e-mails or CPF (the agent's scrub, plus any long run of digits). It
+ * decides nothing: no stage, no value, no task changes from here.
  */
 
 const MAX_TRANSCRIPT_CHARS = 60_000;
@@ -105,9 +105,17 @@ const SYSTEM = [
   'A avaliação do lead mede aderência e prontidão para comprar, com os motivos e os riscos ditos na conversa.',
 ].join(' ');
 
+/**
+ * Speech written by whisper carries numbers without the dots and dashes the
+ * agent's scrub looks for ("meu CPF é 123 456 789 09"): any run of 8 or more
+ * digits, whatever separates them, is a phone, a CPF or a CNPJ here, and goes
+ * out as "[número]". (Money of up to 7 digits, dates and counts stay.)
+ */
+const LONG_NUMBER = /\(?\d(?:[\s.\-/()]*\d){7,}/g;
+
 export function transcriptText(segments: MeetingSegment[]): string {
   const lines = segments.map((s) => `${s.speaker ?? '?'}: ${s.text.trim()}`);
-  const text = scrubSensitive(lines.join('\n'));
+  const text = scrubSensitive(lines.join('\n')).replace(LONG_NUMBER, '[número]');
   return text.length > MAX_TRANSCRIPT_CHARS ? text.slice(0, MAX_TRANSCRIPT_CHARS) : text;
 }
 

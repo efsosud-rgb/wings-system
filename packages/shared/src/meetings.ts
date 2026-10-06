@@ -156,6 +156,10 @@ export const summarySendCreateSchema = z.object({
 export const summarySendUpdateSchema = z.object({
   text: z.string().trim().min(20).max(4000),
 });
+/** Approval names the exact text the approver read: a draft changed since is refused. */
+export const summarySendApproveSchema = z.object({
+  text: z.string().min(1).max(4000),
+});
 
 // --- answers ---------------------------------------------------------------------------------
 

@@ -6,6 +6,7 @@ import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
   clientContacts,
+  crmMeetingAnalysisRuns,
   clients,
   crmMeetings,
   jobs,
@@ -25,7 +26,7 @@ let app: FastifyInstance;
 const NOW = new Date('2026-10-06T15:00:00Z');
 const stored = new Map<string, number>();
 const sent: Mail[] = [];
-let llmCost = 0.01;
+const llmCost = 0.01;
 
 const storage = {
   kind: 'local',
@@ -226,10 +227,37 @@ describe('Reuniões', () => {
       recordingState: 'guardada',
       transcriptState: 'na_fila',
     });
+    const repeated = await app.inject({
+      method: 'POST',
+      url: `/meetings/${meeting.id}/recording/complete`,
+      cookies: seller.cookies,
+      payload: { fileId },
+    });
+    expect(repeated.statusCode).toBe(409);
     const queued = await db.select().from(jobs).where(eq(jobs.type, 'transcribe_meeting'));
-    expect(queued.some((j) => (j.input as { meetingId?: string }).meetingId === meeting.id)).toBe(
-      true,
-    );
+    expect(
+      queued.filter((j) => (j.input as { meetingId?: string }).meetingId === meeting.id),
+    ).toHaveLength(1);
+
+    // A stored recording is replaced only after its transcription failed.
+    const exists = await app.inject({
+      method: 'POST',
+      url: `/meetings/${meeting.id}/recording/upload-url`,
+      cookies: seller.cookies,
+      payload: { contentType: 'audio/webm', sizeBytes: 2000 },
+    });
+    expect(exists.json()).toMatchObject({ error: 'recording_exists' });
+    await db
+      .update(crmMeetings)
+      .set({ transcriptState: 'falhou' })
+      .where(eq(crmMeetings.id, meeting.id));
+    const again = await app.inject({
+      method: 'POST',
+      url: `/meetings/${meeting.id}/recording/upload-url`,
+      cookies: seller.cookies,
+      payload: { contentType: 'audio/webm', sizeBytes: 2000 },
+    });
+    expect(again.statusCode).toBe(200);
   });
 
   it('analyses a ready transcript, turns a next step into a task on a click, and stops at the daily ceiling', async () => {
@@ -288,18 +316,8 @@ describe('Reuniões', () => {
     });
     expect(again.json()).toMatchObject({ error: 'task_exists' });
 
-    // Ceiling 0.05 USD: with 0.06 already spent today the next run never calls the model.
-    llmCost = 0.06;
-    await db
-      .update(crmMeetings)
-      .set({ analysisState: 'falhou' })
-      .where(eq(crmMeetings.id, meeting.id));
-    await app.inject({
-      method: 'POST',
-      url: `/meetings/${meeting.id}/analysis`,
-      cookies: seller.cookies,
-    });
-    await new Promise((r) => setTimeout(r, 200));
+    // Ceiling 0.05 USD: each call reserves up to the ceiling under a lock before it is made,
+    // so with 0.01 spent today a second run (a re-analysis counts) never calls the model.
     await db
       .update(crmMeetings)
       .set({ analysisState: 'falhou' })
@@ -317,7 +335,12 @@ describe('Reuniões', () => {
       ).json().meeting;
     }
     expect(capped?.analysisState).toBe('sem_verba');
-    llmCost = 0.01;
+    const runs = await db
+      .select()
+      .from(crmMeetingAnalysisRuns)
+      .where(eq(crmMeetingAnalysisRuns.meetingId, meeting.id));
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({ reservedMicroUsd: 50_000, costMicroUsd: 10_000 });
   });
 
   it('sends the Expansão summary to the franchisor only after approval, once', async () => {
@@ -327,14 +350,12 @@ describe('Reuniões', () => {
       .insert(clients)
       .values({ name: 'Marca Exemplo', slug: 'marca-exemplo' })
       .returning({ id: clients.id });
-    await db
-      .insert(clientContacts)
-      .values({
-        clientId: brand!.id,
-        role: 'principal',
-        name: 'Dona Exemplo',
-        email: 'dona@marca-exemplo.com.br',
-      });
+    await db.insert(clientContacts).values({
+      clientId: brand!.id,
+      role: 'principal',
+      name: 'Dona Exemplo',
+      email: 'dona@marca-exemplo.com.br',
+    });
     const leadId = await deal(seller.id, 'expansao', brand!.id);
     const meeting = await schedule(seller.cookies, leadId);
     await db
@@ -375,15 +396,42 @@ describe('Reuniões', () => {
     });
     expect(sellerApproves.statusCode).toBe(403);
 
-    expect(
-      (
-        await app.inject({
-          method: 'POST',
-          url: `/meetings/${meeting.id}/summary-send/approve`,
-          cookies: manager.cookies,
-        })
-      ).statusCode,
-    ).toBe(200);
+    const text = draft.json().meeting.summarySend.text as string;
+    const unread = await app.inject({
+      method: 'POST',
+      url: `/meetings/${meeting.id}/summary-send/approve`,
+      cookies: manager.cookies,
+      payload: { text: `${text} (outra versão)` },
+    });
+    expect(unread.json()).toMatchObject({ error: 'draft_changed' });
+    const approve = () =>
+      app.inject({
+        method: 'POST',
+        url: `/meetings/${meeting.id}/summary-send/approve`,
+        cookies: manager.cookies,
+        payload: { text },
+      });
+    expect((await approve()).statusCode).toBe(200);
+
+    // The franchisor's contact changes after the approval: nothing goes out, approve again.
+    await db
+      .update(clientContacts)
+      .set({ email: 'outra@marca-exemplo.com.br' })
+      .where(eq(clientContacts.clientId, brand!.id));
+    const moved = await app.inject({
+      method: 'POST',
+      url: `/meetings/${meeting.id}/summary-send/send`,
+      cookies: manager.cookies,
+    });
+    expect(moved.statusCode).toBe(409);
+    expect(moved.json()).toMatchObject({ error: 'contact_changed' });
+    expect(moved.json().meeting.summarySend.state).toBe('rascunho');
+    expect(sent.filter((m) => m.to.includes('marca-exemplo'))).toHaveLength(0);
+    await db
+      .update(clientContacts)
+      .set({ email: 'dona@marca-exemplo.com.br' })
+      .where(eq(clientContacts.clientId, brand!.id));
+    expect((await approve()).statusCode).toBe(200);
     const send = await app.inject({
       method: 'POST',
       url: `/meetings/${meeting.id}/summary-send/send`,
