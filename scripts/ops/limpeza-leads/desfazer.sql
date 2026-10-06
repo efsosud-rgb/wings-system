@@ -31,6 +31,7 @@ $c$;
 do $c$
 declare
   r record;
+  mais_novo text;
 begin
   select * into r from ops.lead_cleanup_runs where batch_id = current_setting('limpeza.lote') for update;
   if not found then
@@ -38,6 +39,21 @@ begin
   end if;
   if r.undone_at is not null then
     raise exception 'lote % já foi desfeito em %', r.batch_id, r.undone_at;
+  end if;
+  -- Lotes se desfazem do mais novo para o mais antigo quando mexeram nos mesmos leads.
+  select r2.batch_id into mais_novo
+  from ops.lead_cleanup_runs r2
+  join ops.lead_cleanup_rows b2 on b2.batch_id = r2.batch_id
+  where r2.created_at > r.created_at and r2.undone_at is null
+    and exists (
+      select 1 from ops.lead_cleanup_rows b
+      where b.batch_id = r.batch_id
+        and (b.lead_id in (b2.lead_id, b2.new_lead_id) or b.new_lead_id in (b2.lead_id, b2.new_lead_id))
+    )
+  order by r2.created_at desc
+  limit 1;
+  if mais_novo is not null then
+    raise exception 'lote % mexeu nos mesmos leads depois deste: desfaça antes o lote %', mais_novo, mais_novo;
   end if;
 end
 $c$;
@@ -53,7 +69,6 @@ declare
   lote text := current_setting('limpeza.lote');
   t record;
   w record;
-  campo text;
   colunas text;
   valores text;
   cond text;
@@ -103,28 +118,92 @@ begin
       raise exception 'sem chave primária para devolver as linhas de %', t.table_name;
     end if;
     execute format(
-      'update public.%I t set lead_id = b.lead_id
+      'update public.%I t set lead_id = b.lead_id%s
        from ops.lead_cleanup_rows b
        cross join lateral jsonb_populate_record(null::public.%I, b.row_data) x
        where b.batch_id = $1 and b.table_name = $2 and b.action = $3 and %s and %s',
-      t.table_name, t.table_name, cond,
+      t.table_name,
+      case
+        -- a marca de contato principal que a junção tirou
+        when t.table_name = 'lead_contacts' then ', "primary" = x."primary"'
+        -- a marca da Meta que a limpeza fechou volta a ficar pendente
+        when t.table_name = 'meta_leadgen_events' then
+          ', status = case when t.last_error = ''limpeza_teste'' then x.status else t.status end,'
+          ' last_error = case when t.last_error = ''limpeza_teste'' then x.last_error else t.last_error end'
+        else ''
+      end,
+      t.table_name, cond,
       case when t.action = 'repoint' then 't.lead_id = b.new_lead_id' else 't.lead_id is null' end)
       using lote, t.table_name, t.action;
     get diagnostics qtd = row_count;
     perform pg_temp.somar(t.action, qtd);
   end loop;
 
-  -- 3. no lead que ficou, volta o que a junção escreveu, campo a campo, se ninguém mudou depois.
+  -- Linhas que tinham ido para o lead que ficou e já não existem (o desfazer do lote do RD
+  -- apaga o lead que ficou com tudo o que é dele): voltam da cópia, no lead de antes.
+  for t in
+    select table_name, step from ops.lead_cleanup_rows
+    where batch_id = lote and action = 'repoint'
+    group by table_name, step
+    order by step, table_name
+  loop
+    select string_agg(format('t.%1$I = x.%1$I', a.attname), ' and ') into cond
+    from pg_constraint c
+    join pg_attribute a on a.attrelid = c.conrelid and a.attnum = any (c.conkey)
+    where c.conrelid = format('public.%I', t.table_name)::regclass and c.contype = 'p';
+    select string_agg(format('%I', a.attname), ', ' order by a.attnum),
+           string_agg(format('x.%I', a.attname), ', ' order by a.attnum)
+      into colunas, valores
+    from pg_attribute a
+    where a.attrelid = format('public.%I', t.table_name)::regclass
+      and a.attnum > 0 and not a.attisdropped and a.attgenerated = ''
+      and a.attname in (
+        select jsonb_object_keys((
+          select b.row_data from ops.lead_cleanup_rows b
+          where b.batch_id = lote and b.table_name = t.table_name and b.action = 'repoint' and b.step = t.step
+          limit 1
+        ))
+      );
+    execute format(
+      'insert into public.%I (%s) overriding system value
+       select %s from ops.lead_cleanup_rows b
+       cross join lateral jsonb_populate_record(null::public.%I, b.row_data) x
+       where b.batch_id = $1 and b.table_name = $2 and b.action = ''repoint'' and b.step = $3
+         and not exists (select 1 from public.%I t where %s)',
+      t.table_name, colunas, valores, t.table_name, t.table_name, cond) using lote, t.table_name, t.step;
+    get diagnostics qtd = row_count;
+    perform pg_temp.somar('recriadas', qtd);
+  end loop;
+
+  -- 3. no lead que ficou, volta o que a junção escreveu, se ninguém mudou depois. Campos que
+  -- andam juntos (cliente, campanha, base legal, atribuição) voltam juntos ou ficam juntos.
   for w in
     select lead_id, row_data, changed from ops.lead_cleanup_rows
     where batch_id = lote and action = 'winner'
   loop
-    for campo in select jsonb_object_keys(coalesce(w.changed, '{}')) loop
+    for t in
+      select
+        string_agg(format('%1$I = a.%1$I', k), ', ') as sets,
+        string_agg(format('l.%1$I is not distinct from d.%1$I', k), ' and ') as iguais
+      from (
+        select k, case
+            when k in ('client_id', 'client_mapped') then 'cliente'
+            when k in ('campaign_id', 'campaign_name') then 'campanha'
+            when k in ('legal_basis', 'consented_at', 'consent_source', 'consent_text') then 'base_legal'
+            when k in ('utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'gclid',
+              'fbclid', 'gbraid', 'wbraid', 'ad_platform', 'ad_campaign_external_id',
+              'ad_set_external_id', 'ad_external_id', 'referrer') then 'atribuicao'
+            else k
+          end as unidade
+        from jsonb_object_keys(coalesce(w.changed, '{}')) k
+      ) u
+      group by unidade
+    loop
       execute format(
-        'update public.leads l set %1$I = a.%1$I
+        'update public.leads l set %s
          from jsonb_populate_record(null::public.leads, $1) a, jsonb_populate_record(null::public.leads, $2) d
-         where l.id = $3 and l.%1$I is not distinct from d.%1$I',
-        campo) using w.row_data, w.changed, w.lead_id;
+         where l.id = $3 and %s',
+        t.sets, t.iguais) using w.row_data, w.changed, w.lead_id;
       get diagnostics qtd = row_count;
       perform pg_temp.somar(case when qtd > 0 then 'campos_devolvidos' else 'campos_mantidos' end, 1);
     end loop;
@@ -139,19 +218,20 @@ begin
   update ops.lead_cleanup_runs set undone_at = now() where batch_id = lote;
 
   insert into public.audit_log (action, entity, entity_id, metadata)
-  select 'leads.cleanup_undone', 'lead_cleanup_batch', lote, jsonb_object_agg(chave, n) from feito;
+  select 'leads.cleanup_undone', 'lead_cleanup_batch', lote, coalesce(jsonb_object_agg(chave, n), '{}') from feito;
 end
 $u$;
 
 select format(
-  'desfeito: %s lead(s) de volta; %s outra(s) linha(s) re-inseridas; %s linha(s) devolvidas ao lead de antes; %s religada(s) ao lead (marca da Meta, contrato)',
+  'desfeito: %s lead(s) de volta; %s outra(s) linha(s) re-inseridas; %s linha(s) devolvidas ao lead de antes (%s recriadas da cópia); %s religada(s) ao lead (marca da Meta, contrato)',
   coalesce((select n from feito where chave = 'leads'), 0),
   coalesce((select n from feito where chave = 'linhas'), 0),
   coalesce((select n from feito where chave = 'repoint'), 0),
+  coalesce((select n from feito where chave = 'recriadas'), 0),
   coalesce((select n from feito where chave = 'detach'), 0)
 );
 select format(
-  'desfeito: nos leads que ficaram, %s campo(s) voltaram ao que eram; %s mantido(s) porque mudaram depois da limpeza',
+  'desfeito: nos leads que ficaram, %s campo(s) ou grupo(s) de campos voltaram ao que eram; %s mantido(s) porque mudaram depois da limpeza',
   coalesce((select n from feito where chave = 'campos_devolvidos'), 0),
   coalesce((select n from feito where chave = 'campos_mantidos'), 0)
 );

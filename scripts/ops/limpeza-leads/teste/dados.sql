@@ -20,7 +20,8 @@ insert into crm_companies (id, name, name_key) values
 insert into crm_contacts (id, name, email, phone) values
   ('cccccccc-0000-4000-8000-000000000001', 'Teste Contato', 'teste@x.example', null),
   ('cccccccc-0000-4000-8000-000000000002', 'Maria', 'maria@x.example', null),
-  ('cccccccc-0000-4000-8000-000000000003', 'Duplo', null, '5511922220001');
+  ('cccccccc-0000-4000-8000-000000000003', 'Duplo', null, '5511922220001'),
+  ('cccccccc-0000-4000-8000-000000000004', 'Outro Contato', 'outro@x.example', null);
 
 -- leads: (id, name, email, phone, pipeline, won, stage_order, created_at, extras)
 insert into leads (id, source, name, email, phone, pipeline, won, stage_order, created_at, import_batch_id, company_id, owner_employee_id, managed_by, lost_reason, rd_deal_id, utm_source, utm_campaign, value_cents)
@@ -40,6 +41,10 @@ values
   ('aaaaaaaa-0000-4000-8000-00000000000c', 'manual', 'Teste', null, '5511944440001', null, null, null, '2026-02-12', null, null, null, 'wings', null, null, null, null, null),
   ('aaaaaaaa-0000-4000-8000-00000000000d', 'manual', 'Testa Nome', 'n13@x.example', '5511911110013', 'expansao', null, 1, '2026-02-13', null, null, null, 'wings', null, null, null, null, null),
   ('aaaaaaaa-0000-4000-8000-00000000000e', 'manual', 'Real Doze', null, '5511944440001', 'expansao', null, 1, '2026-02-14', null, null, null, 'wings', null, null, null, null, null),
+  -- lead da Meta anterior à importação que passou a seguir um negócio de teste do RD: fica
+  ('aaaaaaaa-0000-4000-8000-00000000000f', 'meta_lead_ads', 'Pessoa Anterior', 'p15@x.example', '5511911110015', 'expansao', false, null, '2026-02-15', null, null, null, 'rd', null, 'rdT14', null, null, null),
+  -- só começa com "teste": fica
+  ('aaaaaaaa-0000-4000-8000-000000000010', 'manual', 'Testemunha Silva', 't16@x.example', '5511911110016', 'formatacao', null, 1, '2026-02-16', null, null, null, 'wings', null, null, null, null, null),
   -- D1: mesmo telefone, abertas, sem dono; fica a mais antiga (11), que herda e-mail e atribuição
   ('aaaaaaaa-0000-4000-8000-000000000011', 'rd_crm', 'Dup Um', null, '5511922220001', 'expansao', null, 1, '2026-01-01', 'rd-crm-20261006T1840Z', null, null, 'rd', null, 'rdD1a', null, null, null),
   ('aaaaaaaa-0000-4000-8000-000000000012', 'meta_lead_ads', 'Dup Um B', 'd1@x.example', '+55 (11) 92222-0001', 'expansao', null, 1, '2026-03-01', null, null, null, 'rd', null, null, 'facebook', 'camp-1', 150000),
@@ -51,8 +56,8 @@ values
   ('aaaaaaaa-0000-4000-8000-000000000032', 'rd_crm', 'Tres B', 'd3@x.example', '5511933330001', 'expansao', false, null, '2025-02-01', null, null, null, 'rd', null, null, null, null, null),
   ('aaaaaaaa-0000-4000-8000-000000000033', 'rd_crm', 'Tres C', 'd3@x.example', '5511933339999', 'expansao', false, null, '2025-03-01', null, null, null, 'rd', null, null, null, null, null),
   -- D4: o mesmo celular com e sem o 9
-  ('aaaaaaaa-0000-4000-8000-000000000041', 'rd_crm', 'Quatro A', null, '551187650001', 'formatacao', false, null, '2025-04-01', null, null, null, 'rd', null, null, null, null, null),
-  ('aaaaaaaa-0000-4000-8000-000000000042', 'meta_lead_ads', 'Quatro B', null, '5511987650001', 'formatacao', null, 1, '2026-04-01', null, null, null, 'wings', null, null, null, null, null),
+  ('aaaaaaaa-0000-4000-8000-000000000041', 'rd_crm', 'Quatro A', null, '551187650001', 'formatacao', null, 1, '2025-04-01', null, null, null, 'rd', null, null, null, null, null),
+  ('aaaaaaaa-0000-4000-8000-000000000042', 'meta_lead_ads', 'Quatro B', null, '5511987650001', 'formatacao', false, null, '2026-04-01', null, null, null, 'wings', null, null, null, null, null),
   -- D5: ganha e aberta -> conflito, ficam separadas
   ('aaaaaaaa-0000-4000-8000-000000000051', 'manual', 'Cinco A', null, '5511955550001', 'expansao', true, 6, '2025-05-01', null, null, null, 'wings', null, null, null, null, null),
   ('aaaaaaaa-0000-4000-8000-000000000052', 'manual', 'Cinco B', null, '5511955550001', 'expansao', null, 1, '2026-05-01', null, null, null, 'wings', null, null, null, null, null),
@@ -88,7 +93,8 @@ insert into lead_events (lead_id, kind, detail) values
   ('aaaaaaaa-0000-4000-8000-000000000001', 'lead.imported.rd_crm', '{}'),
   ('aaaaaaaa-0000-4000-8000-000000000001', 'lead.stage_changed', '{}'),
   ('aaaaaaaa-0000-4000-8000-000000000012', 'lead.received.meta_lead_ads', '{}'),
-  ('aaaaaaaa-0000-4000-8000-000000000011', 'lead.imported.rd_crm', '{}');
+  ('aaaaaaaa-0000-4000-8000-000000000011', 'lead.imported.rd_crm', '{}'),
+  ('aaaaaaaa-0000-4000-8000-000000000021', 'rd.import_batch', '{"batchId": "rd-crm-20261006T1840Z", "filled": ["phone"], "before": {}}');
 insert into lead_notes (lead_id, body) values
   ('aaaaaaaa-0000-4000-8000-000000000001', 'nota do teste'),
   ('aaaaaaaa-0000-4000-8000-000000000012', 'nota do repetido');
@@ -113,14 +119,18 @@ insert into crm_email_outbox (lead_id, subject, body, mode, status, run_id) valu
 insert into lead_enrichment_ledger (lead_id, step, status) values
   ('aaaaaaaa-0000-4000-8000-000000000001', 'ddd', 'done');
 insert into meta_leadgen_events (leadgen_id, lead_id, status) values
-  ('lg-t1', 'aaaaaaaa-0000-4000-8000-000000000001', 'done'),
+  ('lg-t1', 'aaaaaaaa-0000-4000-8000-000000000001', 'pending'),
   ('lg-d2a', 'aaaaaaaa-0000-4000-8000-000000000021', 'done');
 insert into lead_contacts (lead_id, contact_id) values
   ('aaaaaaaa-0000-4000-8000-000000000001', 'cccccccc-0000-4000-8000-000000000001'),
   ('aaaaaaaa-0000-4000-8000-000000000001', 'cccccccc-0000-4000-8000-000000000002'),
   ('aaaaaaaa-0000-4000-8000-00000000000e', 'cccccccc-0000-4000-8000-000000000002'),
-  ('aaaaaaaa-0000-4000-8000-000000000011', 'cccccccc-0000-4000-8000-000000000003'),
-  ('aaaaaaaa-0000-4000-8000-000000000012', 'cccccccc-0000-4000-8000-000000000003');
+  ('aaaaaaaa-0000-4000-8000-000000000011', 'cccccccc-0000-4000-8000-000000000003');
+insert into lead_contacts (lead_id, contact_id, "primary") values
+  ('aaaaaaaa-0000-4000-8000-000000000012', 'cccccccc-0000-4000-8000-000000000003', true),
+  ('aaaaaaaa-0000-4000-8000-000000000012', 'cccccccc-0000-4000-8000-000000000004', true);
+update lead_contacts set "primary" = true
+where lead_id = 'aaaaaaaa-0000-4000-8000-000000000011' and contact_id = 'cccccccc-0000-4000-8000-000000000003';
 insert into client_contracts (client_id, position, service, lead_id) values
   ('c11e0000-0000-4000-8000-000000000002', 1, 'formatacao', 'aaaaaaaa-0000-4000-8000-000000000009'),
   ('c11e0000-0000-4000-8000-000000000002', 2, 'formatacao', 'aaaaaaaa-0000-4000-8000-000000000021');

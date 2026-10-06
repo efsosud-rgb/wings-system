@@ -4,7 +4,6 @@ do $v$
 declare
   n bigint;
   r record;
-  function_ok boolean;
 begin
   -- testes apagados; suspeitos e controles ficam
   select count(*) into n from leads where id in (
@@ -16,16 +15,18 @@ begin
   select count(*) into n from leads where id in (
     'aaaaaaaa-0000-4000-8000-000000000007', 'aaaaaaaa-0000-4000-8000-000000000008',
     'aaaaaaaa-0000-4000-8000-000000000009', 'aaaaaaaa-0000-4000-8000-00000000000a',
-    'aaaaaaaa-0000-4000-8000-00000000000d', 'aaaaaaaa-0000-4000-8000-00000000000e');
-  if n <> 6 then raise exception 'suspeitos/controles: % de 6 ficaram', n; end if;
+    'aaaaaaaa-0000-4000-8000-00000000000d', 'aaaaaaaa-0000-4000-8000-00000000000e',
+    'aaaaaaaa-0000-4000-8000-00000000000f', 'aaaaaaaa-0000-4000-8000-000000000010');
+  if n <> 8 then raise exception 'suspeitos/controles: % de 8 ficaram', n; end if;
 
   -- filhas do teste T1 apagadas; a marca da Meta fica, sem lead
   select count(*) into n from lead_events where lead_id = 'aaaaaaaa-0000-4000-8000-000000000001';
   if n <> 0 then raise exception 'eventos do teste ficaram'; end if;
   select count(*) into n from crm_email_outbox where run_id = 'a0700000-0000-4000-8000-000000000001';
   if n <> 0 then raise exception 'e-mail da automação do teste ficou'; end if;
-  select count(*) into n from meta_leadgen_events where leadgen_id = 'lg-t1' and lead_id is null;
-  if n <> 1 then raise exception 'marca da Meta do teste devia ficar, sem lead'; end if;
+  select count(*) into n from meta_leadgen_events
+  where leadgen_id = 'lg-t1' and lead_id is null and status = 'failed' and last_error = 'limpeza_teste';
+  if n <> 1 then raise exception 'marca da Meta do teste devia ficar, sem lead e fechada'; end if;
 
   -- contato e empresa só do teste somem; os compartilhados ficam
   if exists (select 1 from crm_contacts where id = 'cccccccc-0000-4000-8000-000000000001') then
@@ -52,6 +53,11 @@ begin
   if n <> 1 then raise exception 'D1: e-mail do repetido não passou'; end if;
   select count(*) into n from lead_contacts where contact_id = 'cccccccc-0000-4000-8000-000000000003';
   if n <> 1 then raise exception 'D1: vínculo com o contato devia ser um só (%)', n; end if;
+  select count(*) into n from lead_contacts where lead_id = 'aaaaaaaa-0000-4000-8000-000000000011' and "primary";
+  if n <> 1 then raise exception 'D1: contatos principais: % (esperado 1)', n; end if;
+  if not exists (select 1 from lead_contacts where lead_id = 'aaaaaaaa-0000-4000-8000-000000000011'
+                 and contact_id = 'cccccccc-0000-4000-8000-000000000003' and "primary") then
+    raise exception 'D1: o principal devia ser o do lead que ficou'; end if;
   select count(*) into n from lead_events
   where lead_id = 'aaaaaaaa-0000-4000-8000-000000000011' and kind = 'lead.duplicates_merged'
     and detail -> 'merged' -> 0 ->> 'id' = 'aaaaaaaa-0000-4000-8000-000000000012';
@@ -68,6 +74,8 @@ begin
   if n <> 1 then raise exception 'D2: contrato não passou'; end if;
   select count(*) into n from meta_leadgen_events where leadgen_id = 'lg-d2a' and lead_id = 'aaaaaaaa-0000-4000-8000-000000000022';
   if n <> 1 then raise exception 'D2: marca da Meta não passou'; end if;
+  select count(*) into n from lead_events where kind = 'rd.import_batch';
+  if n <> 0 then raise exception 'D2: retrato da importação do RD foi junto para o lead que fica'; end if;
 
   -- D3: cadeia de três vira um (31), que herda o e-mail; a atividade de 33 passa
   select count(*) into n from leads where id in ('aaaaaaaa-0000-4000-8000-000000000031', 'aaaaaaaa-0000-4000-8000-000000000032', 'aaaaaaaa-0000-4000-8000-000000000033');
@@ -77,9 +85,9 @@ begin
   select count(*) into n from lead_activities where lead_id = 'aaaaaaaa-0000-4000-8000-000000000031';
   if n <> 1 then raise exception 'D3: atividade não passou'; end if;
 
-  -- D4: com e sem o 9 -> fica a aberta (42)
-  if exists (select 1 from leads where id = 'aaaaaaaa-0000-4000-8000-000000000041')
-     or not exists (select 1 from leads where id = 'aaaaaaaa-0000-4000-8000-000000000042') then
+  -- D4: com e sem o 9 -> fica a aberta (41), que passa a ter o número com o 9
+  if exists (select 1 from leads where id = 'aaaaaaaa-0000-4000-8000-000000000042')
+     or (select phone from leads where id = 'aaaaaaaa-0000-4000-8000-000000000041') is distinct from '5511987650001' then
     raise exception 'D4: 9º dígito'; end if;
 
   -- conflitos, enfeites e telefone da casa: tudo fica
@@ -100,7 +108,7 @@ begin
     raise exception 'D12: ficou o lead errado'; end if;
 
   select count(*) into n from leads;
-  if n <> 27 then raise exception 'leads: % (esperado 27)', n; end if;
+  if n <> 29 then raise exception 'leads: % (esperado 29)', n; end if;
   select count(*) into n from lead_events where kind = 'lead.duplicates_merged';
   if n <> 5 then raise exception 'eventos de junção: % (esperado 5)', n; end if;
   select count(*) into n from audit_log where action = 'leads.cleanup';

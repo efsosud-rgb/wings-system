@@ -30,6 +30,8 @@
 begin;
 set local lock_timeout = '15s';
 set local client_min_messages = warning;
+-- Se algo travar, a transação cai inteira em vez de segurar os leads.
+set local statement_timeout = '5min';
 
 -- Ninguém grava em leads enquanto isto roda (leituras seguem); dura segundos.
 lock table public.leads in exclusive mode;
@@ -42,37 +44,40 @@ create function pg_temp.sem_acento(t text) returns text language sql immutable a
   select translate(lower(coalesce(t, '')), 'áàâãäåéèêëíìîïóòôõöúùûüçñý', 'aaaaaaeeeeiiiiooooouuuucny')
 $f$;
 
--- Uma palavra que começa com "teste" (teste, testes, teste1, joao.teste@...).
+-- A palavra "teste" ou "testes", sozinha ou colada a número e pontuação (teste1, joao.teste@,
+-- teste_x). Palavras que só começam assim (testemunho, testeira) não contam: o pedido deu
+-- teste, testes, teste1 como exemplos, e essas são palavras de verdade.
 create function pg_temp.tem_teste(t text) returns boolean language sql immutable as $f$
+  select pg_temp.sem_acento(t) ~ '(^|[^a-z0-9])testes?([^a-z]|$)'
+$f$;
+
+-- O critério ao pé da letra (começa com "teste"), só para contar o que ficou de fora.
+create function pg_temp.comeca_com_teste(t text) returns boolean language sql immutable as $f$
   select pg_temp.sem_acento(t) ~ '(^|[^a-z0-9])teste'
 $f$;
 
--- O WhatsApp: como normalizeBrazilianPhone (55 + DDD + número) e, num celular gravado
--- sem o 9 (12 dígitos começando em 6-9 depois do DDD), com o 9.
-create function pg_temp.fone(p text) returns text language sql immutable as $f$
-  select case
-      when n is not null and length(n) = 12 and substr(n, 5, 1) in ('6', '7', '8', '9')
-        then substr(n, 1, 4) || '9' || substr(n, 5)
-      else n
-    end
-  from (
-    select case
-        when d = '' or d ~ '^(\d)\1*$' then null
-        when length(d) in (10, 11) then '55' || d
-        when length(d) in (12, 13) and d like '55%' then d
-      end as n
-    from (select regexp_replace(coalesce(p, ''), '\D', '', 'g') as d) a
-  ) b
+-- O WhatsApp: como normalizeBrazilianPhone (55 + DDD + número; nada para dígitos todos iguais).
+create function pg_temp.fone_sem_9(p text) returns text language plpgsql immutable as $f$
+declare
+  d text := regexp_replace(coalesce(p, ''), '\D', '', 'g');
+begin
+  if d = '' or d = repeat(left(d, 1), length(d)) then return null; end if;
+  if length(d) in (10, 11) then return '55' || d; end if;
+  if length(d) in (12, 13) and left(d, 2) = '55' then return d; end if;
+  return null;
+end
 $f$;
 
--- Sem o passo do 9, para contar os grupos que só existem por causa dele.
-create function pg_temp.fone_sem_9(p text) returns text language sql immutable as $f$
-  select case
-      when d = '' or d ~ '^(\d)\1*$' then null
-      when length(d) in (10, 11) then '55' || d
-      when length(d) in (12, 13) and d like '55%' then d
-    end
-  from (select regexp_replace(coalesce(p, ''), '\D', '', 'g') as d) a
+-- E, num celular gravado sem o 9 (12 dígitos começando em 6-9 depois do DDD), com o 9.
+create function pg_temp.fone(p text) returns text language plpgsql immutable as $f$
+declare
+  n text := pg_temp.fone_sem_9(p);
+begin
+  if length(n) = 12 and substr(n, 5, 1) in ('6', '7', '8', '9') then
+    return substr(n, 1, 4) || '9' || substr(n, 5);
+  end if;
+  return n;
+end
 $f$;
 
 create function pg_temp.email(e text) returns text language sql immutable as $f$
@@ -212,6 +217,30 @@ begin
   if ruim is not null then
     raise exception 'índice único com lead_id e mais de uma coluna: % (revise o script)', ruim;
   end if;
+
+  -- Colunas de leads: as da produção em 0501fcf e as de 0071-0072 (tratadas abaixo quando existem).
+  select string_agg(column_name, ', ') into ruim
+  from information_schema.columns
+  where table_schema = 'public' and table_name = 'leads'
+    and column_name not in (
+      'tenant_id', 'id', 'client_id', 'client_mapped', 'name', 'email', 'phone', 'status',
+      'owner_employee_id', 'source', 'channel', 'landing_page', 'campaign_id', 'campaign_name',
+      'form_id', 'tracking_link_id', 'external_id', 'first_message', 'whatsapp_profile_name',
+      'whatsapp_photo_url', 'legal_basis', 'consented_at', 'consent_source', 'consent_text',
+      'enrichment_state', 'enrichment_job_id', 'enrichment_summary', 'enrichment_score',
+      'enrichment_criteria', 'enrichment_links', 'enrichment_facts', 'enrichment_error',
+      'enriched_at', 'created_at', 'updated_at', 'pipeline', 'brand', 'rd_deal_id',
+      'rd_contact_id', 'rd_owner_id', 'rd_pipeline', 'stage', 'stage_order', 'stage_changed_at',
+      'won', 'closed_at', 'lost_reason', 'first_contact_at', 'rd_synced_at', 'utm_source',
+      'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'gclid', 'fbclid', 'gbraid',
+      'wbraid', 'ad_platform', 'ad_campaign_external_id', 'ad_set_external_id', 'ad_external_id',
+      'referrer', 'import_batch_id', 'city', 'form_answers', 'stage_id', 'managed_by',
+      'company_id', 'value_cents', 'expected_close_at',
+      'ai_summary', 'company_name', 'company_cnpj', 'instagram', 'website', 'field_checks'
+    );
+  if ruim is not null then
+    raise exception 'coluna de leads que este script não conhece: % (revise o script)', ruim;
+  end if;
 end
 $g$;
 
@@ -225,6 +254,9 @@ select
   coalesce(pg_temp.tem_teste(co.name), false) as por_empresa,
   (l.rd_deal_id is not null and l.rd_deal_id in (select rd_deal_id from rd_teste)) as por_rd,
   (l.won is false and pg_temp.tem_teste(l.lost_reason)) as por_motivo,
+  -- só para contar: começa com "teste" mas não é a palavra teste/testes
+  (pg_temp.comeca_com_teste(l.name) or pg_temp.comeca_com_teste(l.email)
+    or coalesce(pg_temp.comeca_com_teste(co.name), false)) as por_comeco,
   (l.rd_deal_id is not null and (
     exists (select 1 from public.rd_crm_deals d where d.rd_id = l.rd_deal_id and d.is_test)
     or exists (select 1 from public.campaign_leads c where c.rd_deal_id = l.rd_deal_id and c.is_test)
@@ -238,16 +270,40 @@ select
 from public.leads l
 left join public.crm_companies co on co.id = l.company_id;
 
+-- O nome da empresa digitado no lead (leads.company_name, migração 0072), quando a coluna existe.
+do $n$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'leads' and column_name = 'company_name'
+  ) then
+    execute $q$
+      update plano_teste p
+      set por_empresa = p.por_empresa or pg_temp.tem_teste(l.company_name),
+          por_comeco = p.por_comeco or pg_temp.comeca_com_teste(l.company_name)
+      from public.leads l where l.id = p.id
+    $q$;
+  end if;
+end
+$n$;
+
+create temp table so_pelo_comeco on commit drop as
+select id from plano_teste
+where por_comeco and not (por_nome or por_email or por_empresa or por_rd or por_motivo or por_painel);
+
 delete from plano_teste
 where not (por_nome or por_email or por_empresa or por_rd or por_motivo or por_painel);
 
 alter table plano_teste add column suspeito text, add column apagar boolean;
 
 -- Com cara de negociação de verdade: fica, a não ser que peçam (limpeza.apagar_suspeitos).
+-- Um lead que já existia antes da importação do RD (import_batch_id vazio) e que só é "teste"
+-- porque passou a seguir um negócio de teste do RD também fica: o lead é de uma pessoa.
 update plano_teste set suspeito = case
   when won is true then 'ganha'
   when tem_contrato then 'contrato'
   when won is null and coalesce(stage_order, 0) >= 3 then 'etapa_3_ou_mais'
+  when not (por_nome or por_email or por_empresa) and import_batch_id is null then 'so_pelo_negocio_do_rd'
 end;
 
 update plano_teste
@@ -271,7 +327,9 @@ select
   pg_temp.fone_sem_9(l.phone) as fone_sem_9,
   pg_temp.email(l.email) as email
 from public.leads l
-where l.id not in (select id from apagar);
+-- Nenhum lead marcado como teste entra nas junções, nem os que ficam para conferir: um
+-- suspeito que juntasse com um lead real passaria o "teste" para ele.
+where l.id not in (select id from plano_teste);
 
 create temp table chaves on commit drop as
 select id, 'fone'::text as tipo, fone as chave from base where fone is not null
@@ -308,7 +366,12 @@ delete from chaves k
 where (k.tipo, k.chave) in (select tipo, chave from chaves group by tipo, chave having count(*) = 1);
 
 -- Grupos: leads ligados por qualquer telefone ou e-mail em comum, mesmo em cadeia.
+create index on chaves (tipo, chave);
+create index on chaves (id);
+analyze chaves;
 create temp table comp on commit drop as select distinct id, id::text as raiz from chaves;
+alter table comp add primary key (id);
+analyze comp;
 
 do $c$
 declare
@@ -336,7 +399,7 @@ select
   count(*) as tamanho,
   count(*) filter (where g.won is true) as ganhas,
   count(*) filter (where g.won is null) as abertas,
-  count(distinct g.pipeline) filter (where g.won is null) as funis_abertos,
+  count(distinct g.pipeline) as funis,
   count(distinct g.owner_employee_id) filter (where g.won is null) as donos_abertos,
   bool_or(exists (select 1 from chaves k where k.id = g.id and k.tipo = 'fone')) as por_fone,
   bool_or(exists (select 1 from chaves k where k.id = g.id and k.tipo = 'email')) as por_email
@@ -349,7 +412,9 @@ alter table grupo_info add column conflito text;
 update grupo_info set conflito = case
   when ganhas >= 2 then 'duas_ganhas'
   when ganhas >= 1 and abertas >= 1 then 'ganha_e_aberta'
-  when funis_abertos >= 2 then 'abertas_em_funis_diferentes'
+  -- Expansão e Formatação são negociações diferentes da mesma pessoa; juntar levaria o
+  -- histórico de etapas de um funil para o outro.
+  when funis >= 2 then 'funis_diferentes'
   when donos_abertos >= 2 then 'abertas_com_donos_diferentes'
 end;
 
@@ -408,29 +473,31 @@ select format(
   count(*) filter (where por_motivo), count(*) filter (where por_painel)
 ) from plano_teste;
 
-select format(
-  'teste: %s lead(s) (do lote rd-crm-20261006T1840Z: %s; de outros lotes do RD: %s; sem lote: %s)',
-  count(*),
-  count(*) filter (where import_batch_id = 'rd-crm-20261006T1840Z'),
-  count(*) filter (where import_batch_id is not null and import_batch_id <> 'rd-crm-20261006T1840Z'),
-  count(*) filter (where import_batch_id is null)
-) from plano_teste;
-
-select 'teste por funil: ' || coalesce(string_agg(format('%s %s', funil, n), ', ' order by funil), 'nenhum')
-from (select coalesce(pipeline, 'sem funil') as funil, count(*) as n from plano_teste group by 1) f;
+select format('teste: %s lead(s) marcados; %s com palavra que só começa com "teste" (testemunho...) ficam fora',
+  (select count(*) from plano_teste), (select count(*) from so_pelo_comeco));
 
 select format(
-  'teste com cara de negociação de verdade: %s (ganha %s, etapa 3 ou mais %s, com contrato %s) -> %s',
+  'teste com cara de negociação de verdade: %s (ganha %s, etapa 3 ou mais %s, com contrato %s, lead anterior que só segue negócio de teste do RD %s) -> %s',
   count(*) filter (where suspeito is not null),
   count(*) filter (where suspeito = 'ganha'),
   count(*) filter (where suspeito = 'etapa_3_ou_mais'),
   count(*) filter (where suspeito = 'contrato'),
+  count(*) filter (where suspeito = 'so_pelo_negocio_do_rd'),
   case when current_setting('limpeza.apagar_suspeitos') = '1'
     then 'APAGADOS JUNTO (APAGAR_SUSPEITOS=1)'
     else 'ficam (para apagar também: APAGAR_SUSPEITOS=1)' end
 ) from plano_teste;
 
-select format('teste a apagar: %s', count(*)) from apagar;
+select format(
+  'teste a apagar: %s (do lote rd-crm-20261006T1840Z: %s; de outros lotes do RD: %s; sem lote: %s)',
+  count(*),
+  count(*) filter (where import_batch_id = 'rd-crm-20261006T1840Z'),
+  count(*) filter (where import_batch_id is not null and import_batch_id <> 'rd-crm-20261006T1840Z'),
+  count(*) filter (where import_batch_id is null)
+) from plano_teste where apagar;
+
+select 'teste a apagar por funil: ' || coalesce(string_agg(format('%s %s', funil, n), ', ' order by funil), 'nenhum')
+from (select coalesce(pipeline, 'sem funil') as funil, count(*) as n from plano_teste where apagar group by 1) f;
 
 select format(
   'repetidos: telefones/e-mails ignorados: %s da própria Wings, %s em mais de %s leads (%s lead(s) nesses)',
@@ -456,12 +523,12 @@ select format(
 ) from grupo_info;
 
 select format(
-  'repetidos em conflito (ficam separados): %s grupo(s), %s lead(s) (duas ganhas %s, ganha e aberta %s, abertas em funis diferentes %s, abertas com donos diferentes %s)',
+  'repetidos em conflito (ficam separados): %s grupo(s), %s lead(s) (duas ganhas %s, ganha e aberta %s, em funis diferentes %s, abertas com donos diferentes %s)',
   count(*) filter (where conflito is not null),
   coalesce(sum(tamanho) filter (where conflito is not null), 0),
   count(*) filter (where conflito = 'duas_ganhas'),
   count(*) filter (where conflito = 'ganha_e_aberta'),
-  count(*) filter (where conflito = 'abertas_em_funis_diferentes'),
+  count(*) filter (where conflito = 'funis_diferentes'),
   count(*) filter (where conflito = 'abertas_com_donos_diferentes')
 ) from grupo_info;
 
@@ -476,10 +543,18 @@ from (
   from perdedor p join public.leads l on l.id = p.id group by 1
 ) f;
 
+-- A negociação de quem some fica só no histórico do lead que fica (evento lead.duplicates_merged).
+select format(
+  'repetidos que somem: %s aberto(s), %s ganho(s), %s perdido(s); %s com negócio no RD; %s tinham dono',
+  count(*) filter (where l.won is null), count(*) filter (where l.won is true),
+  count(*) filter (where l.won is false), count(*) filter (where l.rd_deal_id is not null),
+  count(*) filter (where l.owner_employee_id is not null)
+) from perdedor p join public.leads l on l.id = p.id;
+
 -- O seguimento do RD (a cada hora, com CRM_RD_FOLLOW_ENABLED) traz de novo os negócios
 -- dos últimos 3 dias que não acha no Funil pelo id do negócio.
 select format(
-  'aviso: %s teste(s) e %s repetido(s) que somem têm negócio do RD criado nos últimos 3 dias; com o seguimento do RD ligado, podem voltar na hora seguinte',
+  'aviso: %s teste(s) e %s repetido(s) que somem têm negócio do RD criado nos últimos 3 a 4 dias; com o seguimento do RD ligado, podem voltar na hora seguinte',
   count(*) filter (where x.teste), count(*) filter (where not x.teste)
 )
 from (
@@ -489,12 +564,13 @@ from (
 ) x
 where x.rd_deal_id is not null
   and (
-    exists (select 1 from public.rd_crm_deals d where d.rd_id = x.rd_deal_id and d.created_at > now() - interval '3 days')
-    or (x.source = 'rd_crm' and x.created_at > now() - interval '3 days')
+    exists (select 1 from public.rd_crm_deals d where d.rd_id = x.rd_deal_id and d.created_at > now() - interval '4 days')
+    or (x.source = 'rd_crm' and x.created_at > now() - interval '4 days')
   );
 
 -- Para conferir na tela do CRM (/crm-vendas/negociacoes/<id>): só no log.
 select format('  conferir teste %s: %s', suspeito, id) from plano_teste where suspeito is not null order by suspeito, id;
+select format('  fica (só começa com teste): %s', id) from so_pelo_comeco order by id;
 select format('  conflito %s: %s', i.conflito, string_agg(g.id::text, ' ' order by g.created_at))
 from grupo_info i join grupo g using (raiz) where i.conflito is not null group by i.raiz, i.conflito order by 1;
 
@@ -580,7 +656,17 @@ begin
         'insert into ops.lead_cleanup_rows (batch_id, step, table_name, action, lead_id, row_data)
          select $1, %s, %L, ''detach'', t.lead_id, to_jsonb(t) from public.%I t where t.lead_id in (select id from apagar)',
         f.passo, f.tabela, f.tabela) using lote;
-      execute format('update public.%I set lead_id = null where lead_id in (select id from apagar)', f.tabela);
+      if f.tabela = 'meta_leadgen_events' then
+        -- Uma marca ainda 'pending' (cópia para o RD em nova tentativa) faria a leitura da Meta
+        -- buscar o lead de novo: ela fecha como 'failed' (o desfazer reabre).
+        update public.meta_leadgen_events
+        set lead_id = null,
+            status = case when status = 'pending' then 'failed' else status end,
+            last_error = case when status = 'pending' then 'limpeza_teste' else last_error end
+        where lead_id in (select id from apagar);
+      else
+        execute format('update public.%I set lead_id = null where lead_id in (select id from apagar)', f.tabela);
+      end if;
       get diagnostics n = row_count;
       perform pg_temp.somar('teste_soltas', n);
       continue;
@@ -651,6 +737,15 @@ declare
   outras text;
   n bigint;
 begin
+  -- O retrato que a importação do RD guardou de um lead que some ("rd.import_batch") não pode ir
+  -- para o lead que fica: desfazer o lote do RD escreveria esse retrato em cima dele.
+  insert into ops.lead_cleanup_rows (batch_id, step, table_name, action, lead_id, row_data)
+  select lote, 4, 'lead_events', 'delete', e.lead_id, to_jsonb(e)
+  from public.lead_events e where e.lead_id in (select id from perdedor) and e.kind = 'rd.import_batch';
+  delete from public.lead_events e where e.lead_id in (select id from perdedor) and e.kind = 'rd.import_batch';
+  get diagnostics n = row_count;
+  perform pg_temp.somar('juncao_retratos_rd', n);
+
   for f in select * from filhas where tem_lead order by tabela loop
     -- Um vínculo que o lead que fica já tem (o mesmo contato, o mesmo arquivo) não é duplicado.
     for u in
@@ -696,11 +791,27 @@ begin
     get diagnostics n = row_count;
     perform pg_temp.somar('juncao_filhas', n);
   end loop;
+
+  -- Um contato principal por lead: fica o do lead que fica; se ele não tinha, o do primeiro
+  -- repetido. O desfazer devolve a marca de cada vínculo.
+  update public.lead_contacts lc set "primary" = false
+  from (
+    select c.lead_id, c.contact_id,
+      row_number() over (partition by c.lead_id order by (b.id is null) desc, p.ordem nulls first, c.contact_id) as rn
+    from public.lead_contacts c
+    left join ops.lead_cleanup_rows b
+      on b.batch_id = lote and b.table_name = 'lead_contacts' and b.action = 'repoint'
+      and b.new_lead_id = c.lead_id and (b.row_data ->> 'contact_id')::uuid = c.contact_id
+    left join perdedor p on p.id = b.lead_id
+    where c.lead_id in (select id from vencedores) and c."primary"
+  ) x
+  where lc.lead_id = x.lead_id and lc.contact_id = x.contact_id and x.rn > 1;
 end
 $j$;
 
--- 4c. o lead que fica guarda o que tem e herda só o que está vazio (como uma chegada
--- repetida faz hoje): contato, origem, empresa, valor, dono. Etapa e resultado são dele.
+-- 4c. o lead que fica guarda o que tem e herda só o que está vazio nele, como fillGaps faz
+-- com uma chegada repetida (contato, origem, campanha, marca, valor), mais a empresa.
+-- Etapa, resultado, dono e previsão de fechamento são só dele.
 insert into ops.lead_cleanup_rows (batch_id, step, table_name, action, lead_id, row_data)
 select current_setting('limpeza.lote'), 3, 'leads', 'winner', l.id, to_jsonb(l)
 from public.leads l where l.id in (select id from vencedores);
@@ -708,84 +819,116 @@ from public.leads l where l.id in (select id from vencedores);
 create temp table doador on commit drop as
 select p.vencedor, p.ordem, l.*
 from perdedor p join public.leads l on l.id = p.id;
+create index on doador (vencedor, ordem);
+analyze doador;
+
+-- O primeiro valor não vazio de cada campo entre os repetidos, na ordem de quem fica.
+create temp table heranca on commit drop as
+select
+  d.vencedor,
+  (array_agg(d.name order by d.ordem) filter (where d.name is not null))[1] as name,
+  (array_agg(d.email order by d.ordem) filter (where d.email is not null))[1] as email,
+  (array_agg(d.phone order by d.ordem) filter (where d.phone is not null))[1] as phone,
+  (array_agg(d.whatsapp_profile_name order by d.ordem) filter (where d.whatsapp_profile_name is not null))[1] as whatsapp_profile_name,
+  (array_agg(d.whatsapp_photo_url order by d.ordem) filter (where d.whatsapp_photo_url is not null))[1] as whatsapp_photo_url,
+  (array_agg(d.first_message order by d.ordem) filter (where d.first_message is not null))[1] as first_message,
+  (array_agg(d.city order by d.ordem) filter (where d.city is not null))[1] as city,
+  (array_agg(d.form_answers order by d.ordem) filter (where d.form_answers is not null))[1] as form_answers,
+  (array_agg(d.channel order by d.ordem) filter (where d.channel is not null))[1] as channel,
+  (array_agg(d.tracking_link_id order by d.ordem) filter (where d.tracking_link_id is not null))[1] as tracking_link_id,
+  (array_agg(d.landing_page order by d.ordem) filter (where d.landing_page is not null))[1] as landing_page,
+  (array_agg(d.form_id order by d.ordem) filter (where d.form_id is not null))[1] as form_id,
+  (array_agg(d.brand order by d.ordem) filter (where d.brand is not null))[1] as brand,
+  (array_agg(d.company_id order by d.ordem) filter (where d.company_id is not null))[1] as company_id,
+  -- O valor só vem de uma negociação no mesmo pé (aberta com aberta, perdida com perdida).
+  (array_agg(d.value_cents order by d.ordem) filter (where d.value_cents is not null and d.won is not distinct from w.won))[1] as value_cents,
+  (array_agg(d.pipeline order by d.ordem) filter (where d.pipeline is not null))[1] as pipeline,
+  -- Os que andam juntos vêm inteiros de um repetido só.
+  min(d.ordem) filter (where d.legal_basis is not null) as ordem_base_legal,
+  min(d.ordem) filter (where d.campaign_id is not null) as ordem_campanha,
+  min(d.ordem) filter (where d.client_mapped) as ordem_cliente,
+  min(d.ordem) filter (where coalesce(d.utm_source, d.utm_medium, d.utm_campaign, d.utm_content, d.utm_term, d.gclid, d.fbclid, d.gbraid, d.wbraid, d.ad_platform, d.ad_campaign_external_id, d.ad_set_external_id, d.ad_external_id, d.referrer) is not null) as ordem_atribuicao
+from doador d
+join public.leads w on w.id = d.vencedor
+group by d.vencedor;
+alter table heranca add primary key (vencedor);
 
 update public.leads l set
-  name = coalesce(l.name, (select d.name from doador d where d.vencedor = l.id and d.name is not null order by d.ordem limit 1)),
-  email = coalesce(l.email, (select d.email from doador d where d.vencedor = l.id and d.email is not null order by d.ordem limit 1)),
-  phone = coalesce(l.phone, (select d.phone from doador d where d.vencedor = l.id and d.phone is not null order by d.ordem limit 1)),
-  whatsapp_profile_name = coalesce(l.whatsapp_profile_name, (select d.whatsapp_profile_name from doador d where d.vencedor = l.id and d.whatsapp_profile_name is not null order by d.ordem limit 1)),
-  whatsapp_photo_url = coalesce(l.whatsapp_photo_url, (select d.whatsapp_photo_url from doador d where d.vencedor = l.id and d.whatsapp_photo_url is not null order by d.ordem limit 1)),
-  first_message = coalesce(l.first_message, (select d.first_message from doador d where d.vencedor = l.id and d.first_message is not null order by d.ordem limit 1)),
-  city = coalesce(l.city, (select d.city from doador d where d.vencedor = l.id and d.city is not null order by d.ordem limit 1)),
-  form_answers = coalesce(l.form_answers, (select d.form_answers from doador d where d.vencedor = l.id and d.form_answers is not null order by d.ordem limit 1)),
-  channel = coalesce(l.channel, (select d.channel from doador d where d.vencedor = l.id and d.channel is not null order by d.ordem limit 1)),
-  tracking_link_id = coalesce(l.tracking_link_id, (select d.tracking_link_id from doador d where d.vencedor = l.id and d.tracking_link_id is not null order by d.ordem limit 1)),
-  landing_page = coalesce(l.landing_page, (select d.landing_page from doador d where d.vencedor = l.id and d.landing_page is not null order by d.ordem limit 1)),
-  form_id = coalesce(l.form_id, (select d.form_id from doador d where d.vencedor = l.id and d.form_id is not null order by d.ordem limit 1)),
-  brand = coalesce(l.brand, (select d.brand from doador d where d.vencedor = l.id and d.brand is not null order by d.ordem limit 1)),
-  company_id = coalesce(l.company_id, (select d.company_id from doador d where d.vencedor = l.id and d.company_id is not null order by d.ordem limit 1)),
-  value_cents = coalesce(l.value_cents, (select d.value_cents from doador d where d.vencedor = l.id and d.value_cents is not null order by d.ordem limit 1)),
-  expected_close_at = coalesce(l.expected_close_at, (select d.expected_close_at from doador d where d.vencedor = l.id and d.expected_close_at is not null order by d.ordem limit 1)),
-  owner_employee_id = coalesce(l.owner_employee_id, (select d.owner_employee_id from doador d where d.vencedor = l.id and d.owner_employee_id is not null order by d.ordem limit 1)),
+  name = coalesce(l.name, h.name),
+  email = coalesce(l.email, h.email),
+  phone = coalesce(l.phone, h.phone),
+  whatsapp_profile_name = coalesce(l.whatsapp_profile_name, h.whatsapp_profile_name),
+  whatsapp_photo_url = coalesce(l.whatsapp_photo_url, h.whatsapp_photo_url),
+  first_message = coalesce(l.first_message, h.first_message),
+  city = coalesce(l.city, h.city),
+  form_answers = coalesce(l.form_answers, h.form_answers),
+  channel = coalesce(l.channel, h.channel),
+  tracking_link_id = coalesce(l.tracking_link_id, h.tracking_link_id),
+  landing_page = coalesce(l.landing_page, h.landing_page),
+  form_id = coalesce(l.form_id, h.form_id),
+  brand = coalesce(l.brand, h.brand),
+  company_id = coalesce(l.company_id, h.company_id),
+  value_cents = coalesce(l.value_cents, h.value_cents),
   -- O funil só vem junto quando o lead que fica não tem etapa (a etapa diz o funil).
-  pipeline = case when l.pipeline is null and l.stage_id is null
-    then (select d.pipeline from doador d where d.vencedor = l.id and d.pipeline is not null order by d.ordem limit 1)
-    else l.pipeline end,
-  -- Base legal e consentimento andam juntos.
+  pipeline = case when l.pipeline is null and l.stage_id is null then h.pipeline else l.pipeline end,
   legal_basis = coalesce(l.legal_basis, lb.legal_basis),
   consented_at = case when l.legal_basis is null and lb.legal_basis is not null then lb.consented_at else l.consented_at end,
   consent_source = case when l.legal_basis is null and lb.legal_basis is not null then lb.consent_source else l.consent_source end,
   consent_text = case when l.legal_basis is null and lb.legal_basis is not null then lb.consent_text else l.consent_text end,
-  -- Campanha: id e nome juntos.
   campaign_id = coalesce(l.campaign_id, cp.campaign_id),
   campaign_name = case when l.campaign_id is null and cp.campaign_id is not null then cp.campaign_name else l.campaign_name end,
   -- Cliente: um lead sem cliente definido pega o de um repetido que tem.
   client_id = case when not l.client_mapped and cl.id is not null then cl.client_id else l.client_id end,
   client_mapped = l.client_mapped or cl.id is not null,
   -- Atribuição (primeiro toque): inteira, e só se o lead que fica não tem nenhuma.
-  utm_source = case when sem_atrib then atr.utm_source else l.utm_source end,
-  utm_medium = case when sem_atrib then atr.utm_medium else l.utm_medium end,
-  utm_campaign = case when sem_atrib then atr.utm_campaign else l.utm_campaign end,
-  utm_content = case when sem_atrib then atr.utm_content else l.utm_content end,
-  utm_term = case when sem_atrib then atr.utm_term else l.utm_term end,
-  gclid = case when sem_atrib then atr.gclid else l.gclid end,
-  fbclid = case when sem_atrib then atr.fbclid else l.fbclid end,
-  gbraid = case when sem_atrib then atr.gbraid else l.gbraid end,
-  wbraid = case when sem_atrib then atr.wbraid else l.wbraid end,
-  ad_platform = case when sem_atrib then atr.ad_platform else l.ad_platform end,
-  ad_campaign_external_id = case when sem_atrib then atr.ad_campaign_external_id else l.ad_campaign_external_id end,
-  ad_set_external_id = case when sem_atrib then atr.ad_set_external_id else l.ad_set_external_id end,
-  ad_external_id = case when sem_atrib then atr.ad_external_id else l.ad_external_id end,
-  referrer = case when sem_atrib then atr.referrer else l.referrer end,
+  utm_source = case when coalesce(l.utm_source, l.utm_medium, l.utm_campaign, l.utm_content, l.utm_term, l.gclid, l.fbclid, l.gbraid, l.wbraid, l.ad_platform, l.ad_campaign_external_id, l.ad_set_external_id, l.ad_external_id, l.referrer) is null and atr.id is not null then atr.utm_source else l.utm_source end,
+  utm_medium = case when coalesce(l.utm_source, l.utm_medium, l.utm_campaign, l.utm_content, l.utm_term, l.gclid, l.fbclid, l.gbraid, l.wbraid, l.ad_platform, l.ad_campaign_external_id, l.ad_set_external_id, l.ad_external_id, l.referrer) is null and atr.id is not null then atr.utm_medium else l.utm_medium end,
+  utm_campaign = case when coalesce(l.utm_source, l.utm_medium, l.utm_campaign, l.utm_content, l.utm_term, l.gclid, l.fbclid, l.gbraid, l.wbraid, l.ad_platform, l.ad_campaign_external_id, l.ad_set_external_id, l.ad_external_id, l.referrer) is null and atr.id is not null then atr.utm_campaign else l.utm_campaign end,
+  utm_content = case when coalesce(l.utm_source, l.utm_medium, l.utm_campaign, l.utm_content, l.utm_term, l.gclid, l.fbclid, l.gbraid, l.wbraid, l.ad_platform, l.ad_campaign_external_id, l.ad_set_external_id, l.ad_external_id, l.referrer) is null and atr.id is not null then atr.utm_content else l.utm_content end,
+  utm_term = case when coalesce(l.utm_source, l.utm_medium, l.utm_campaign, l.utm_content, l.utm_term, l.gclid, l.fbclid, l.gbraid, l.wbraid, l.ad_platform, l.ad_campaign_external_id, l.ad_set_external_id, l.ad_external_id, l.referrer) is null and atr.id is not null then atr.utm_term else l.utm_term end,
+  gclid = case when coalesce(l.utm_source, l.utm_medium, l.utm_campaign, l.utm_content, l.utm_term, l.gclid, l.fbclid, l.gbraid, l.wbraid, l.ad_platform, l.ad_campaign_external_id, l.ad_set_external_id, l.ad_external_id, l.referrer) is null and atr.id is not null then atr.gclid else l.gclid end,
+  fbclid = case when coalesce(l.utm_source, l.utm_medium, l.utm_campaign, l.utm_content, l.utm_term, l.gclid, l.fbclid, l.gbraid, l.wbraid, l.ad_platform, l.ad_campaign_external_id, l.ad_set_external_id, l.ad_external_id, l.referrer) is null and atr.id is not null then atr.fbclid else l.fbclid end,
+  gbraid = case when coalesce(l.utm_source, l.utm_medium, l.utm_campaign, l.utm_content, l.utm_term, l.gclid, l.fbclid, l.gbraid, l.wbraid, l.ad_platform, l.ad_campaign_external_id, l.ad_set_external_id, l.ad_external_id, l.referrer) is null and atr.id is not null then atr.gbraid else l.gbraid end,
+  wbraid = case when coalesce(l.utm_source, l.utm_medium, l.utm_campaign, l.utm_content, l.utm_term, l.gclid, l.fbclid, l.gbraid, l.wbraid, l.ad_platform, l.ad_campaign_external_id, l.ad_set_external_id, l.ad_external_id, l.referrer) is null and atr.id is not null then atr.wbraid else l.wbraid end,
+  ad_platform = case when coalesce(l.utm_source, l.utm_medium, l.utm_campaign, l.utm_content, l.utm_term, l.gclid, l.fbclid, l.gbraid, l.wbraid, l.ad_platform, l.ad_campaign_external_id, l.ad_set_external_id, l.ad_external_id, l.referrer) is null and atr.id is not null then atr.ad_platform else l.ad_platform end,
+  ad_campaign_external_id = case when coalesce(l.utm_source, l.utm_medium, l.utm_campaign, l.utm_content, l.utm_term, l.gclid, l.fbclid, l.gbraid, l.wbraid, l.ad_platform, l.ad_campaign_external_id, l.ad_set_external_id, l.ad_external_id, l.referrer) is null and atr.id is not null then atr.ad_campaign_external_id else l.ad_campaign_external_id end,
+  ad_set_external_id = case when coalesce(l.utm_source, l.utm_medium, l.utm_campaign, l.utm_content, l.utm_term, l.gclid, l.fbclid, l.gbraid, l.wbraid, l.ad_platform, l.ad_campaign_external_id, l.ad_set_external_id, l.ad_external_id, l.referrer) is null and atr.id is not null then atr.ad_set_external_id else l.ad_set_external_id end,
+  ad_external_id = case when coalesce(l.utm_source, l.utm_medium, l.utm_campaign, l.utm_content, l.utm_term, l.gclid, l.fbclid, l.gbraid, l.wbraid, l.ad_platform, l.ad_campaign_external_id, l.ad_set_external_id, l.ad_external_id, l.referrer) is null and atr.id is not null then atr.ad_external_id else l.ad_external_id end,
+  referrer = case when coalesce(l.utm_source, l.utm_medium, l.utm_campaign, l.utm_content, l.utm_term, l.gclid, l.fbclid, l.gbraid, l.wbraid, l.ad_platform, l.ad_campaign_external_id, l.ad_set_external_id, l.ad_external_id, l.referrer) is null and atr.id is not null then atr.referrer else l.referrer end,
   updated_at = now()
-from public.leads w
-left join lateral (
-  select d.legal_basis, d.consented_at, d.consent_source, d.consent_text
-  from doador d where d.vencedor = w.id and d.legal_basis is not null order by d.ordem limit 1
-) lb on true
-left join lateral (
-  select d.campaign_id, d.campaign_name
-  from doador d where d.vencedor = w.id and d.campaign_id is not null order by d.ordem limit 1
-) cp on true
-left join lateral (
-  select d.id, d.client_id
-  from doador d where d.vencedor = w.id and d.client_mapped order by d.ordem limit 1
-) cl on true
-left join lateral (
-  select d.*
-  from doador d
-  where d.vencedor = w.id
-    and coalesce(d.utm_source, d.utm_medium, d.utm_campaign, d.utm_content, d.utm_term, d.gclid,
-      d.fbclid, d.gbraid, d.wbraid, d.ad_platform, d.ad_campaign_external_id, d.ad_set_external_id,
-      d.ad_external_id, d.referrer) is not null
-  order by d.ordem limit 1
-) atr on true
-cross join lateral (
-  select atr.id is not null and coalesce(w.utm_source, w.utm_medium, w.utm_campaign, w.utm_content,
-    w.utm_term, w.gclid, w.fbclid, w.gbraid, w.wbraid, w.ad_platform, w.ad_campaign_external_id,
-    w.ad_set_external_id, w.ad_external_id, w.referrer) is null as sem_atrib
-) sa
-where l.id = w.id and w.id in (select id from vencedores);
+from heranca h
+left join doador lb on lb.vencedor = h.vencedor and lb.ordem = h.ordem_base_legal
+left join doador cp on cp.vencedor = h.vencedor and cp.ordem = h.ordem_campanha
+left join doador cl on cl.vencedor = h.vencedor and cl.ordem = h.ordem_cliente
+left join doador atr on atr.vencedor = h.vencedor and atr.ordem = h.ordem_atribuicao
+where l.id = h.vencedor;
+
+-- Colunas de 0072 (empresa digitada, CNPJ, Instagram, site), quando existem.
+do $x$
+declare
+  c text;
+begin
+  for c in
+    select column_name from information_schema.columns
+    where table_schema = 'public' and table_name = 'leads'
+      and column_name in ('company_name', 'company_cnpj', 'instagram', 'website')
+  loop
+    execute format(
+      'update public.leads l set %1$I = (
+         select d.%1$I from doador d where d.vencedor = l.id and d.%1$I is not null order by d.ordem limit 1)
+       where l.id in (select id from vencedores) and l.%1$I is null', c);
+  end loop;
+end
+$x$;
+
+-- Um grupo juntado pelo 9º dígito: o lead que fica passa a ter o número com o 9, que um dos
+-- repetidos já usava; senão a próxima chegada com o 9 não o acharia (a entrada compara igual).
+update public.leads l set phone = pg_temp.fone(l.phone)
+where l.id in (select id from vencedores)
+  and pg_temp.fone(l.phone) is distinct from pg_temp.fone_sem_9(l.phone)
+  and exists (
+    select 1 from doador d where d.vencedor = l.id and pg_temp.fone_sem_9(d.phone) = pg_temp.fone(l.phone)
+  );
 
 -- O que a junção escreveu em cada lead que fica (para desfazer só isso, se ninguém mexeu depois).
 update ops.lead_cleanup_rows b set changed = (
@@ -820,13 +963,18 @@ insert into feito select 'juncao_leads', count(*) from perdedor;
 -- 5. registro e conferência -----------------------------------------------------------------
 
 update ops.lead_cleanup_runs
-set summary = (select jsonb_object_agg(chave, n) from feito)
+set summary = coalesce((select jsonb_object_agg(chave, n) from feito), '{}')
   || jsonb_build_object(
     'testes', (select count(*) from apagar),
     'suspeitosMantidos', (select count(*) from plano_teste where not apagar),
     'gruposJuntados', (select count(*) from vencedores),
     'gruposEmConflito', (select count(*) from grupo_info where conflito is not null),
-    'rdLido', current_setting('limpeza.rd_lido') = '1'
+    'rdLido', current_setting('limpeza.rd_lido') = '1',
+    -- O custo da pesquisa dos testes apagados (lead_enrichment_ledger) fica registrado aqui.
+    'pesquisaApagadaUsdMicro', (
+      select coalesce(sum((row_data ->> 'usd_micro')::bigint), 0) from ops.lead_cleanup_rows
+      where batch_id = current_setting('limpeza.lote') and table_name = 'lead_enrichment_ledger'
+    )
   )
 where batch_id = current_setting('limpeza.lote');
 
@@ -865,11 +1013,12 @@ select format(
   coalesce((select n from feito where chave = 'teste_empresas'), 0)
 );
 select format(
-  'feito: %s lead(s) repetidos juntados em %s; %s linha(s) passaram para o lead que fica; %s vínculo(s) repetido(s) removidos',
+  'feito: %s lead(s) repetidos juntados em %s; %s linha(s) passaram para o lead que fica; %s vínculo(s) repetido(s) removidos; %s retrato(s) da importação do RD guardados e tirados',
   coalesce((select n from feito where chave = 'juncao_leads'), 0),
   (select count(*) from vencedores),
   coalesce((select n from feito where chave = 'juncao_filhas'), 0),
-  coalesce((select n from feito where chave = 'juncao_vinculos_repetidos'), 0)
+  coalesce((select n from feito where chave = 'juncao_vinculos_repetidos'), 0),
+  coalesce((select n from feito where chave = 'juncao_retratos_rd'), 0)
 );
 select format('cópia para desfazer: %s linha(s) guardadas', count(*))
 from ops.lead_cleanup_rows where batch_id = current_setting('limpeza.lote');
