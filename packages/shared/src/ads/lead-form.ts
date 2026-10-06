@@ -188,13 +188,21 @@ export type LeadFormFunnel = z.output<typeof leadFormFunnelSchema>;
 
 // --- the whole form -------------------------------------------------------------------------
 
-export const leadFormSchema = z
-  .object({
-    /** Off by default: it exists for campaigns that want one qualifying answer first. */
-    qualifier: leadFormQualifierSchema.nullable().default(null),
-    /** The same link the current Meta forms use, read from the Page when available. */
-    privacyPolicyUrl: httpsUrl,
-    thankYou: leadFormThankYouSchema,
+/**
+ * The form without its funnel: what the site page (`/lp/<slug>`) keeps as its
+ * `site_form_spec`, since the page's funnel is the page's own rule.
+ */
+export const siteFormSpecSchema = z.object({
+  /** Off by default: it exists for campaigns that want one qualifying answer first. */
+  qualifier: leadFormQualifierSchema.nullable().default(null),
+  /** The same link the current Meta forms use, read from the Page when available. */
+  privacyPolicyUrl: httpsUrl,
+  thankYou: leadFormThankYouSchema,
+});
+export type SiteFormSpec = z.output<typeof siteFormSpecSchema>;
+
+export const leadFormSchema = siteFormSpecSchema
+  .extend({
     funnel: leadFormFunnelSchema,
   })
   .superRefine((form, ctx) => {

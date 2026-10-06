@@ -1205,6 +1205,16 @@ export interface SiteFormInfo {
   turnstileSiteKey: string | null;
   /** The brand's own Instagram, `@perfil`, or null. */
   instagram: string | null;
+  /**
+   * The page's standard form, when Diretoria approved one: the optional
+   * multiple-choice question and the thank-you screen (`SiteFormSpec`); null
+   * is the page's plain form.
+   */
+  form?: {
+    qualifier: { question: string; options: string[] } | null;
+    privacyPolicyUrl: string;
+    thankYou: { title: string; body: string; buttonText: string; buttonUrl: string };
+  } | null;
 }
 
 /** The hidden attribution fields the page collects (first visit's address, cookie) and sends. */
@@ -1250,6 +1260,12 @@ export const siteFormSubmitSchema = z.object({
   /** The page the form was sent from (origin + path + query). */
   page: z.string().max(2000).optional(),
   tracking: z.partialRecord(z.enum(SITE_FORM_TRACKING_KEYS), z.string().trim().max(500)).optional(),
+  /**
+   * The answer to the page's optional multiple-choice question (the standard
+   * form's `qualifier`, `site_form_spec`); kept with the form's answers, never
+   * read as a contact field.
+   */
+  qualifierAnswer: z.string().trim().max(80).optional(),
 });
 export type SiteFormSubmitInput = z.infer<typeof siteFormSubmitSchema>;
 
