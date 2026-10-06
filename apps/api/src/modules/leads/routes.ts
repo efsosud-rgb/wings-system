@@ -27,6 +27,7 @@ import {
   leadTrackingLinks,
   leads,
 } from '../../db/schema/index.js';
+import { leadCheckDepsOf, runLeadChecks } from './field-checks.js';
 import { writeAudit } from '../../lib/audit.js';
 import { activeClient, toClient } from '../clients/routes.js';
 import { changeLead } from './crm.js';
@@ -119,12 +120,10 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
           body.data.ownerEmployeeId !== actor &&
           !can(request.session.actor, 'leads.assign').allowed
         )
-          return reply
-            .status(403)
-            .send({
-              error: 'forbidden',
-              message: 'Só quem pode atribuir negociações escolhe outro dono.',
-            });
+          return reply.status(403).send({
+            error: 'forbidden',
+            message: 'Só quem pode atribuir negociações escolhe outro dono.',
+          });
         const owner = await db.query.employees.findFirst({
           where: eq(employees.id, body.data.ownerEmployeeId),
           columns: { id: true, status: true },
@@ -195,6 +194,28 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
       if (!loaded || !visible(request, loaded.lead.ownerEmployeeId))
         return reply.status(404).send(notFound);
       return reply.send(loaded);
+    },
+  );
+
+  // "Conferir de novo": the arrival checks again (docs/leads/formularios.md). Answers when done.
+  app.post(
+    '/leads/:id/checks',
+    { preHandler: app.requirePermission('leads.write') },
+    async (request, reply) => {
+      const params = idParam.safeParse(request.params);
+      if (!params.success) return reply.status(400).send(invalid());
+      const row = await db.query.leads.findFirst({ where: eq(leads.id, params.data.id) });
+      if (!row || !visible(request, row.ownerEmployeeId)) return reply.status(404).send(notFound);
+      const deps = leadCheckDepsOf(app);
+      await runLeadChecks(db, row.id, deps);
+      await writeAudit(db, {
+        actorEmployeeId: request.session.actor.employeeId,
+        action: 'lead.checks_requested',
+        entity: 'lead',
+        entityId: row.id,
+        ip: request.ip,
+      });
+      return reply.send(await loadLead(db, row.id));
     },
   );
 

@@ -17,13 +17,18 @@ import type {
   CsvImportRequest,
   LeadActivity,
   LeadActivityCreateInput,
+  LeadAiSummary,
   LeadDealUpdateInput,
+  LeadFile,
   LeadListItem,
   LeadListQuery,
   LeadPipeline,
   LeadTask,
   LeadTaskKind,
+  Meeting,
+  MeetingSummary,
   SalesDashboard,
+  DriveUploadTicket,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
@@ -401,5 +406,124 @@ export function useDealSources() {
   return useQuery({
     queryKey: ['crm', 'sources'],
     queryFn: () => api.get<{ sources: DealSource[] }>('/crm/sources'),
+  });
+}
+
+// --- files of a deal (ficha do cliente, Etapa 3) ----------------------------------------
+
+export const useLeadFiles = (id: string) =>
+  useQuery({
+    queryKey: ['leads', id, 'files'],
+    queryFn: () => api.get<{ files: LeadFile[] }>(`/leads/${id}/files`).then((r) => r.files),
+  });
+
+/**
+ * One file to the deal, start to finish: the server picks the deal's folder in
+ * the Drive and hands an address; the bytes go there (not to the API); then
+ * the server checks they arrived and links the file to the deal.
+ */
+export async function sendLeadFile(input: {
+  leadId: string;
+  file: File;
+  onProgress: (fraction: number) => void;
+}): Promise<LeadFile> {
+  const { ticket } = await api.post<{ ticket: DriveUploadTicket }>(
+    `/leads/${input.leadId}/files/uploads`,
+    {
+      name: input.file.name,
+      mimeType: input.file.type || 'application/octet-stream',
+      byteSize: input.file.size,
+    },
+  );
+  await new Promise<void>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open(ticket.method, ticket.url);
+    for (const [name, value] of Object.entries(ticket.headers)) {
+      request.setRequestHeader(name, value);
+    }
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) input.onProgress(event.loaded / event.total);
+    };
+    request.onload = () =>
+      request.status >= 200 && request.status < 300
+        ? resolve()
+        : reject(new Error('O armazenamento recusou o arquivo. Tente de novo.'));
+    request.onerror = () => reject(new Error('A conexão caiu durante o envio. Tente de novo.'));
+    request.send(input.file);
+  });
+  input.onProgress(1);
+  const { file } = await api.post<{ file: LeadFile }>(
+    `/leads/${input.leadId}/files/uploads/${ticket.uploadId}/complete`,
+  );
+  return file;
+}
+
+/** Sends one file to the deal; afterwards the list, the count on the right and the timeline read again. */
+export function useSendLeadFile(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { file: File; onProgress: (fraction: number) => void }) =>
+      sendLeadFile({ leadId: id, ...input }),
+    onSettled: () => invalidateDeals(queryClient),
+  });
+}
+
+export function useRemoveLeadFile(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (fileId: string) => api.delete(`/leads/${id}/files/${fileId}`),
+    onSuccess: () => invalidateDeals(queryClient),
+  });
+}
+
+// --- the AI summary of a deal (ficha do cliente, Etapa 4) ---------------------------------
+
+export function useGenerateSummary(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<{ summary: LeadAiSummary }>(`/leads/${id}/resumo`),
+    onSuccess: () => invalidateDeals(queryClient),
+  });
+}
+
+/** One question about the deal, answered from the same record; nothing is stored. */
+export const useAskDeal = (id: string) =>
+  useMutation({
+    mutationFn: (question: string) =>
+      api.post<{ answer: string; model: string }>(`/leads/${id}/resumo/pergunta`, { question }),
+  });
+
+// --- meetings of a deal (docs/crm/reunioes-api.md) ----------------------------------------
+
+/**
+ * The deal's meetings. The API is the Opus's (contract in docs/crm/reunioes-api.md);
+ * until it is on, the route answers 404 and the screen shows "—" with the reason.
+ */
+export const useMeetings = (leadId: string) =>
+  useQuery({
+    queryKey: ['leads', leadId, 'meetings'],
+    queryFn: () =>
+      api.get<{ meetings: MeetingSummary[] }>(`/leads/${leadId}/meetings`).then((r) => r.meetings),
+    retry: false,
+  });
+
+export const useMeeting = (id: string | null) =>
+  useQuery({
+    queryKey: ['meetings', id],
+    queryFn: () => api.get<{ meeting: Meeting }>(`/meetings/${id}`).then((r) => r.meeting),
+    enabled: id !== null,
+    retry: false,
+  });
+
+/** One click turns a next step of the analysis into a task of the deal. */
+export function useNextStepTask(meetingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (index: number) =>
+      api.post<{ task: LeadTask }>(`/meetings/${meetingId}/next-steps/${index}/task`),
+    onSuccess: () => {
+      invalidateDeals(queryClient);
+      void queryClient.invalidateQueries({ queryKey: ['meetings', meetingId] });
+    },
   });
 }

@@ -34,6 +34,7 @@ import { createCrmMailTransport } from './modules/leads/crm-mail.js';
 import { crmRoutes } from './modules/leads/crm-routes.js';
 import { automationRoutes } from './modules/leads/automation-routes.js';
 import { leadEmailRoutes } from './modules/leads/lead-email-routes.js';
+import { leadFilesRoutes } from './modules/leads/lead-files-routes.js';
 import { nucleoRoutes } from './modules/leads/nucleo-routes.js';
 import { leadRoutes } from './modules/leads/routes.js';
 import { siteFormRoutes } from './modules/leads/site-forms.js';
@@ -42,6 +43,13 @@ import { mediaRoutes } from './modules/media/routes.js';
 import { mediaStudioRoutes } from './modules/media/studio-routes.js';
 import { projectRoutes } from './modules/projects/routes.js';
 import { meetingRoutes } from './modules/meetings/routes.js';
+import { createRegistryLookup } from './modules/clients/lookup.js';
+import {
+  configureLeadChecks,
+  createInstagramDiscovery,
+  type LeadCheckDeps,
+} from './modules/leads/field-checks.js';
+import { probePublicUrl } from './lib/public-probe.js';
 import { officeRoutes } from './modules/office/routes.js';
 import { roadmapRoutes } from './modules/roadmap/routes.js';
 import { siteRoutes } from './modules/site/routes.js';
@@ -103,6 +111,8 @@ export async function buildApp(deps: {
   storageFetch?: typeof fetch;
   /** Overridable so tests answer CNPJ and CEP lookups themselves. */
   registryFetch?: typeof fetch;
+  /** Arrival checks of a lead's form fields; tests pass stubs, or get none at all. */
+  leadChecks?: Partial<LeadCheckDeps>;
   /** Overridable so tests answer Turnstile themselves. */
   captchaFetch?: typeof fetch;
   storage?: ObjectStorage;
@@ -128,6 +138,35 @@ export async function buildApp(deps: {
 
   if (deps.env.CRM_FIRST_CONTACT_SLA_HOURS) {
     configureCrm({ firstContactSlaHours: Number(deps.env.CRM_FIRST_CONTACT_SLA_HOURS) });
+  }
+  // Lead arrival checks (docs/leads/formularios.md). Off in tests unless a test brings its stubs.
+  {
+    const env = deps.env;
+    const log = app.log.child({ module: 'lead-checks' });
+    const online = env.LEAD_CHECKS_ENABLED !== 'false';
+    const registry = createRegistryLookup({ fetch: deps.registryFetch, log });
+    const now = () => deps.now?.() ?? new Date();
+    configureLeadChecks(
+      deps.db,
+      env.NODE_ENV === 'test' && !deps.leadChecks
+        ? null
+        : {
+            probe: deps.leadChecks?.probe ?? (online ? probePublicUrl : null),
+            instagram:
+              deps.leadChecks?.instagram ??
+              (online && env.INSTAGRAM_DISCOVERY_ACCOUNT_ID && env.INSTAGRAM_DISCOVERY_TOKEN
+                ? createInstagramDiscovery({
+                    accountId: env.INSTAGRAM_DISCOVERY_ACCOUNT_ID,
+                    token: env.INSTAGRAM_DISCOVERY_TOKEN,
+                    now,
+                    log,
+                  })
+                : null),
+            cnpj: deps.leadChecks?.cnpj ?? (online ? (cnpj) => registry.cnpj(cnpj) : null),
+            now,
+            log,
+          },
+    );
   }
   // Regras de automação: a deal entering a stage starts that stage's rules.
   const crmMail = createCrmMailTransport(deps.env);
@@ -210,6 +249,7 @@ export async function buildApp(deps: {
   await app.register(automationRoutes);
   await app.register(leadEmailRoutes);
   await app.register(nucleoRoutes);
+  await app.register(leadFilesRoutes);
   await app.register(rdUserRoutes);
   await app.register(landingPageRoutes);
   await app.register(leadWebhookRoutes);

@@ -242,6 +242,12 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
         brand: client.brand,
         channel: 'landing_page',
         landingPage: page.pattern,
+        fields: {
+          instagram: body.data.instagram,
+          website: body.data.siteUrl,
+          companyName: body.data.companyName,
+          cnpj: body.data.cnpj,
+        },
         attribution,
         legalBasis: 'consent',
         consentedAt: now,

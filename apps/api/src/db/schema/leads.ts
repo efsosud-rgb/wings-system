@@ -70,6 +70,18 @@ export const leads = pgTable(
      * only, never in an event, an audit row or a log.
      */
     formAnswers: jsonb('form_answers'),
+    /**
+     * The fields every lead form asks, in their own place (docs/leads/formularios.md):
+     * mapped from the answers by the text of the question. Kept as typed when it
+     * could not be normalised; the check says why.
+     */
+    instagram: text('instagram'),
+    website: text('website'),
+    companyName: text('company_name'),
+    /** Digits only (or the new alphanumeric form), when the form asked for it. */
+    companyCnpj: text('company_cnpj'),
+    /** LeadChecks: confere / não confere / não verificado per field, with the reason. */
+    fieldChecks: jsonb('field_checks').notNull().default({}),
     /** LGPD: a LeadLegalBasis, when it was given and where (docs/leads/intake.md). */
     legalBasis: text('legal_basis'),
     consentedAt: timestamp('consented_at', { withTimezone: true }),
@@ -143,6 +155,13 @@ export const leads = pgTable(
     referrer: text('referrer'),
     /** The import run that created this lead (`leads-import-rd`), so one run can be undone alone. */
     importBatchId: text('import_batch_id'),
+    /**
+     * The deal's AI summary (ficha do cliente, Etapa 4): `{ text, generatedAt,
+     * model, basedOn: { events, answers } }`, made only from the timeline and
+     * the form answers, never from a phone, an e-mail or a document. Null
+     * until somebody asks for one; re-made on request.
+     */
+    aiSummary: jsonb('ai_summary'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

@@ -1,6 +1,6 @@
 {
-  "id": "0dc0c6f9-0659-469b-b5bc-6aab32f42af5",
-  "prevId": "1004794d-1f99-4fab-b790-fcefd4853014",
+  "id": "0d047532-1be5-496c-acc0-57efb12d30cb",
+  "prevId": "906ca823-240d-47e4-bc35-e8d97c000ac2",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -7571,6 +7571,154 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.lead_files": {
+      "name": "lead_files",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'00000000-0000-0000-0000-000000000001'"
+        },
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "lead_id": {
+          "name": "lead_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "drive_file_id": {
+          "name": "drive_file_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "added_by": {
+          "name": "added_by",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "lead_files_lead_file_uq": {
+          "name": "lead_files_lead_file_uq",
+          "columns": [
+            {
+              "expression": "lead_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "drive_file_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "lead_files_lead_idx": {
+          "name": "lead_files_lead_idx",
+          "columns": [
+            {
+              "expression": "lead_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "lead_files_tenant_id_tenants_id_fk": {
+          "name": "lead_files_tenant_id_tenants_id_fk",
+          "tableFrom": "lead_files",
+          "tableTo": "tenants",
+          "columnsFrom": [
+            "tenant_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "lead_files_lead_id_leads_id_fk": {
+          "name": "lead_files_lead_id_leads_id_fk",
+          "tableFrom": "lead_files",
+          "tableTo": "leads",
+          "columnsFrom": [
+            "lead_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "lead_files_drive_file_id_drive_files_id_fk": {
+          "name": "lead_files_drive_file_id_drive_files_id_fk",
+          "tableFrom": "lead_files",
+          "tableTo": "drive_files",
+          "columnsFrom": [
+            "drive_file_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "lead_files_added_by_employees_id_fk": {
+          "name": "lead_files_added_by_employees_id_fk",
+          "tableFrom": "lead_files",
+          "tableTo": "employees",
+          "columnsFrom": [
+            "added_by"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.lead_notes": {
       "name": "lead_notes",
       "schema": "",
@@ -13396,6 +13544,37 @@
           "primaryKey": false,
           "notNull": false
         },
+        "instagram": {
+          "name": "instagram",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "website": {
+          "name": "website",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "company_name": {
+          "name": "company_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "company_cnpj": {
+          "name": "company_cnpj",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "field_checks": {
+          "name": "field_checks",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
+        },
         "legal_basis": {
           "name": "legal_basis",
           "type": "text",
@@ -13679,6 +13858,12 @@
         "import_batch_id": {
           "name": "import_batch_id",
           "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "ai_summary": {
+          "name": "ai_summary",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },

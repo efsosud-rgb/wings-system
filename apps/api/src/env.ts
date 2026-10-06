@@ -438,6 +438,27 @@ const schema = z.object({
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',
   ),
+  /**
+   * Google Ads lead forms (YouTube, Search) → Funil: the key typed in the form's
+   * webhook settings; Google sends it in the body as `google_key`. Without it
+   * the route answers 503 (docs/leads/formularios.md).
+   */
+  GOOGLE_ADS_LEADS_WEBHOOK_KEY: optionalString.refine(
+    (value) => value === undefined || value.length >= 16,
+    'must be at least 16 characters',
+  ),
+  /** Wings' Instagram business account id, for Business Discovery checks. Not a secret. */
+  INSTAGRAM_DISCOVERY_ACCOUNT_ID: optionalString.refine(
+    (value) => value === undefined || /^\d{5,30}$/.test(value),
+    'must be the numeric Instagram business account id',
+  ),
+  /** Token that may read Business Discovery through that account (secret). */
+  INSTAGRAM_DISCOVERY_TOKEN: optionalString,
+  /** Arrival checks that leave the server (site, Instagram, CNPJ); on unless "false". */
+  LEAD_CHECKS_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
   /** The WhatsApp number the tracked links point at, digits only. Not a secret. */
   WINGS_WHATSAPP_NUMBER: optionalString.refine(
     (value) => value === undefined || /^55\d{10,11}$/.test(value),

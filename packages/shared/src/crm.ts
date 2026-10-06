@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import { LEAD_PIPELINES, type LeadPipeline, type LeadSource } from './leads.js';
+import { driveUploadRequestSchema } from './drive.js';
+import { LEAD_NAME_MAX, LEAD_PIPELINES, type LeadPipeline, type LeadSource } from './leads.js';
 
 /**
  * CRM Vendas — the Funil as the team's place of work (plano
@@ -662,6 +663,8 @@ export const isCloseForecastOverdue = (
  */
 export const leadDealUpdateSchema = z
   .object({
+    /** The deal's name (the person or the company), as the seller edits it in the head of the page. */
+    name: z.string().trim().min(2, 'Informe o nome').max(LEAD_NAME_MAX).optional(),
     valueCents: z.number().int().min(0).max(LEAD_VALUE_MAX_CENTS).nullable().optional(),
     /** The day the seller expects to close, `AAAA-MM-DD`; null clears the forecast. */
     expectedCloseAt: isoDateSchema.nullable().optional(),
@@ -673,6 +676,7 @@ export const leadDealUpdateSchema = z
   })
   .refine(
     (value) =>
+      value.name !== undefined ||
       value.valueCents !== undefined ||
       value.expectedCloseAt !== undefined ||
       value.brandClientId !== undefined ||
@@ -681,6 +685,41 @@ export const leadDealUpdateSchema = z
     { message: 'Nada para alterar.' },
   );
 export type LeadDealUpdateInput = z.infer<typeof leadDealUpdateSchema>;
+
+/**
+ * A Drive file attached to a deal (ficha do cliente). The Drive keeps the
+ * bytes and decides who opens it; this is the link, read with `leads.read` in
+ * the caller's scope. Opening or downloading goes through `/drive/files/:id/link`.
+ */
+export interface LeadFile {
+  id: string;
+  fileId: string;
+  name: string;
+  mimeType: string;
+  byteSize: number;
+  version: number;
+  addedByName: string | null;
+  createdAt: string;
+}
+
+/** `POST /leads/:id/files/uploads`: the folder is the deal's own, chosen by the server. */
+export const leadFileUploadSchema = driveUploadRequestSchema.omit({
+  folderId: true,
+  replaceFileId: true,
+});
+export type LeadFileUploadInput = z.output<typeof leadFileUploadSchema>;
+
+/**
+ * The deal's AI summary (Etapa 4), kept on the lead with the date it was
+ * made. Built only from the timeline and the form answers: no phone, e-mail
+ * or document ever goes to the model (`docs/crm/ficha-do-cliente.md`).
+ */
+export interface LeadAiSummary {
+  text: string;
+  generatedAt: string;
+  model: string;
+  basedOn: { events: number; answers: number };
+}
 
 /** An Expansão brand a lead may be interested in: a client with its franchise on sale. */
 export interface CrmBrand {
@@ -830,6 +869,7 @@ export function initialsOf(name: string | null | undefined): string {
 export const LEAD_SOURCE_BADGES: Record<LeadSource, { label: string; tone: string }> = {
   meta_lead_ads: { label: 'Meta', tone: 'meta' },
   tiktok_lead_ads: { label: 'TikTok', tone: 'tiktok' },
+  google_lead_form: { label: 'Google', tone: 'google' },
   rd_station: { label: 'RD', tone: 'rd' },
   rd_crm: { label: 'RD', tone: 'rd' },
   site_form: { label: 'Site', tone: 'site' },

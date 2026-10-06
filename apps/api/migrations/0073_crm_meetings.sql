@@ -46,4 +46,31 @@ ALTER TABLE "crm_meetings" ADD CONSTRAINT "crm_meetings_send_approved_by_employe
 ALTER TABLE "crm_meetings" ADD CONSTRAINT "crm_meetings_created_by_employees_id_fk" FOREIGN KEY ("created_by") REFERENCES "public"."employees"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "crm_meetings_lead_idx" ON "crm_meetings" USING btree ("lead_id","starts_at");--> statement-breakpoint
 CREATE INDEX "crm_meetings_analysis_idx" ON "crm_meetings" USING btree ("analysis_state");
--- Meeting attendees, transcripts and analyses are personal data: no grant to wings_ro.
+--> statement-breakpoint
+-- The read-only role behind `wings-staging-sql` reads meetings through this
+-- view only, like "leads_analysis" (0055) and "crm_activities_analysis" (0065):
+-- states, times, sizes, costs and ids, never the title, the Meet link, the
+-- attendees, the storage key, the transcript, the speakers, the analysis or the
+-- text sent (personal data), and errors only as "there was one". The view runs
+-- with its owner's rights, so the role needs no access to "crm_meetings".
+CREATE OR REPLACE VIEW "crm_meetings_analysis" AS
+SELECT m.id, m.lead_id, m.owner_employee_id, m.starts_at, m.ends_at, m.calendar, m.status,
+  (m.meet_url IS NOT NULL) AS has_meet_url,
+  (m.google_event_id IS NOT NULL) AS has_google_event,
+  CASE WHEN jsonb_typeof(m.attendees) = 'array' THEN jsonb_array_length(m.attendees) END AS attendees_count,
+  m.recording_state, m.recording_content_type, m.recording_size_bytes, m.recording_duration_seconds,
+  m.transcript_state, m.transcript_job_id,
+  (m.transcript_error IS NOT NULL) AS has_transcript_error,
+  CASE WHEN jsonb_typeof(m.speakers) = 'array' THEN jsonb_array_length(m.speakers) END AS speakers_count,
+  m.analysis_state, m.analysis_cost_micro_usd, m.analyzed_at,
+  m.send_state, m.send_channel, m.send_contact_role, m.send_approved_by, m.send_approved_at, m.sent_at,
+  (m.send_error IS NOT NULL) AS has_send_error,
+  m.created_by, m.created_at, m.updated_at
+FROM "crm_meetings" m;--> statement-breakpoint
+-- Guarded: the role does not exist on production, locally or in the throwaway test databases.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'wings_ro') THEN
+    GRANT SELECT ON TABLE "crm_meetings_analysis" TO wings_ro;
+  END IF;
+END $$;
