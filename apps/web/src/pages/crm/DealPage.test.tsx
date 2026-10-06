@@ -1,5 +1,5 @@
 import type { Lead } from '@wings/shared';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DealPage } from './DealPage.js';
@@ -131,7 +131,9 @@ const show = () =>
     </MemoryRouter>,
   );
 
-const field = () => screen.getByLabelText('Previsão de fechamento') as HTMLInputElement;
+// The head and "Sobre a negociação" both edit the forecast; these tests read the head.
+const head = () => within(screen.getByRole('banner'));
+const field = () => head().getByLabelText('Previsão de fechamento') as HTMLInputElement;
 
 beforeEach(() => dealMutate.mockClear());
 afterEach(cleanup);
@@ -142,8 +144,8 @@ describe('Previsão de fechamento', () => {
     show();
     expect(field().type).toBe('date');
     expect(field().value).toBe('');
-    expect(screen.queryByText('vencida')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Limpar previsão de fechamento' })).toBeNull();
+    expect(head().queryByText('vencida')).toBeNull();
+    expect(head().queryByRole('button', { name: 'Limpar previsão de fechamento' })).toBeNull();
     fireEvent.change(field(), { target: { value: '2026-12-15' } });
     expect(dealMutate).toHaveBeenCalledWith({ expectedCloseAt: '2026-12-15' });
   });
@@ -159,7 +161,7 @@ describe('Previsão de fechamento', () => {
     queryState.lead = lead({ expectedCloseAt: '2099-01-10' });
     show();
     expect(field().value).toBe('2099-01-10');
-    fireEvent.click(screen.getByRole('button', { name: 'Limpar previsão de fechamento' }));
+    fireEvent.click(head().getByRole('button', { name: 'Limpar previsão de fechamento' }));
     expect(dealMutate).toHaveBeenCalledWith({ expectedCloseAt: null });
     dealMutate.mockClear();
     fireEvent.change(field(), { target: { value: '' } });
@@ -169,17 +171,17 @@ describe('Previsão de fechamento', () => {
   it('says "vencida" in words when the day passed and the deal is still open', () => {
     queryState.lead = lead({ expectedCloseAt: '2020-01-10' });
     show();
-    expect(screen.getByText('vencida')).toBeTruthy();
+    expect(head().getByText('vencida')).toBeTruthy();
   });
 
   it('is not "vencida" for a deal already won, nor for a day still ahead', () => {
     queryState.lead = lead({ expectedCloseAt: '2020-01-10', work: { won: true } });
     show();
-    expect(screen.queryByText('vencida')).toBeNull();
+    expect(head().queryByText('vencida')).toBeNull();
     cleanup();
     queryState.lead = lead({ expectedCloseAt: '2099-01-10' });
     show();
-    expect(screen.queryByText('vencida')).toBeNull();
+    expect(head().queryByText('vencida')).toBeNull();
   });
 
   it('reads as plain text, in DD/MM/AAAA, for who cannot edit', async () => {
@@ -194,7 +196,7 @@ describe('Previsão de fechamento', () => {
     } as unknown as ReturnType<typeof auth.useSession>);
     queryState.lead = lead({ expectedCloseAt: '2026-11-20' });
     show();
-    expect(screen.queryByLabelText('Previsão de fechamento')).toBeNull();
-    expect(screen.getByText('20/11/2026')).toBeTruthy();
+    expect(head().queryByLabelText('Previsão de fechamento')).toBeNull();
+    expect(head().getByText('20/11/2026')).toBeTruthy();
   });
 });

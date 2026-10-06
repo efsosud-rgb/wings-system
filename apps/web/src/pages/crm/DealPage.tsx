@@ -1,5 +1,4 @@
 import {
-  initialsOf,
   isCloseForecastOverdue,
   LEAD_CALL_OUTCOME_LABELS,
   LEAD_CALL_OUTCOMES,
@@ -18,7 +17,7 @@ import {
   type LeadTask,
   type LeadTaskKind,
 } from '@wings/shared';
-import { useRef, useState, type RefObject } from 'react';
+import { useImperativeHandle, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../../api/auth.js';
 import { ApiError } from '../../api/client.js';
@@ -100,6 +99,7 @@ export function DealPage() {
   const canAssign = hasPermission(session.data, 'leads.assign');
   const [tab, setTab] = useState<Tab>('note');
   const register = useRef<HTMLElement>(null);
+  const contacts = useRef<{ add: () => void }>(null);
   if (loaded.isLoading)
     return (
       <div className="crm-page">
@@ -131,17 +131,21 @@ export function DealPage() {
         {canWrite && <ActionBar lead={data.lead} active={tab} onAct={act} />}
         <div className="crm-deal-body">
           <div className="crm-stack">
-            <ContactPanel data={data} canWrite={canWrite} />
-            <CompanyPanel lead={data.lead} canWrite={canWrite} />
-            <OriginPanel lead={data.lead} />
+            <AboutPanel lead={data.lead} canWrite={canWrite} canAssign={canAssign} />
+            <ContactPanel data={data} canWrite={canWrite} ref={contacts} />
           </div>
           <div className="crm-stack is-center">
             <FirstContactStrip data={data} canWrite={canWrite} onAct={act} />
+            <NextPanel data={data} canWrite={canWrite} onAct={act} />
             {canWrite && <Register lead={data.lead} tab={tab} onTab={setTab} ref={register} />}
             <Timeline data={data} />
           </div>
           <div className="crm-stack">
-            <NextPanel data={data} canWrite={canWrite} onAct={act} />
+            <AssociationCards
+              data={data}
+              canWrite={canWrite}
+              onAddContact={() => contacts.current?.add()}
+            />
           </div>
         </div>
       </div>
@@ -181,10 +185,7 @@ function Head({
 }) {
   const { lead } = data;
   const stages = useStages(lead.pipeline ?? '');
-  const sellers = useSellers();
   const update = useUpdateLead(lead.id);
-  const deal = useUpdateDeal(lead.id);
-  const [value, setValue] = useState<string | null>(null);
   const [losing, setLosing] = useState(false);
   const [reason, setReason] = useState('');
   const open = lead.work.won === null;
@@ -214,9 +215,7 @@ function Head({
           </span>
         )}
         {open && firstContactOf(data) && <span className="crm-badge is-new">Nova</span>}
-        {lead.pipeline && (
-          <span className="crm-badge">{LEAD_PIPELINE_LABELS[lead.pipeline]}</span>
-        )}
+        {lead.pipeline && <span className="crm-badge">{LEAD_PIPELINE_LABELS[lead.pipeline]}</span>}
         <span className={`crm-badge tone-${badge.tone}`}>{badge.label}</span>
         {lead.brand && <span className="crm-badge is-brand">{lead.brand}</span>}
         <span className="crm-head-spacer" />
@@ -282,90 +281,13 @@ function Head({
           Empresa <b>{lead.company?.name ?? '—'}</b>
         </span>
         <span>
-          Valor{' '}
-          {canWrite ? (
-            <input
-              className="crm-inline-edit"
-              aria-label="Valor estimado"
-              value={
-                value ??
-                (lead.valueCents === null
-                  ? ''
-                  : (lead.valueCents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 }))
-              }
-              placeholder="R$ 0,00"
-              onChange={(e) => setValue(e.target.value)}
-              onBlur={() => {
-                if (value === null) return;
-                const cents = parseMoney(value);
-                if (cents !== undefined && cents !== lead.valueCents)
-                  deal.mutate({ valueCents: cents });
-                setValue(null);
-              }}
-              onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-            />
-          ) : (
-            <b>{money(lead.valueCents, true)}</b>
-          )}
+          Valor <ValueEdit lead={lead} canWrite={canWrite} />
         </span>
         <span className={forecastOverdue ? 'is-overdue' : undefined}>
-          Previsão de fechamento{' '}
-          {canWrite ? (
-            <span className="crm-date-edit">
-              <input
-                type="date"
-                className="crm-inline-edit"
-                aria-label="Previsão de fechamento"
-                value={lead.expectedCloseAt ?? ''}
-                disabled={deal.isPending}
-                onChange={(e) => {
-                  // A date input gives '' while a part is missing and the year
-                  // digit by digit; a full year is the sign the person finished.
-                  const next = e.target.value;
-                  if (next !== '' && Number(next.slice(0, 4)) < 2000) return;
-                  if (next !== (lead.expectedCloseAt ?? ''))
-                    deal.mutate({ expectedCloseAt: next || null });
-                }}
-              />
-              {lead.expectedCloseAt && (
-                <button
-                  type="button"
-                  className="crm-inline-clear"
-                  aria-label="Limpar previsão de fechamento"
-                  disabled={deal.isPending}
-                  onClick={() => deal.mutate({ expectedCloseAt: null })}
-                >
-                  <Icon name="x" size={12} />
-                </button>
-              )}
-            </span>
-          ) : (
-            <b>{formatDay(lead.expectedCloseAt)}</b>
-          )}
-          {forecastOverdue && <span className="crm-forecast-overdue">vencida</span>}
+          Previsão de fechamento <ForecastEdit lead={lead} canWrite={canWrite} />
         </span>
         <span>
-          Dono{' '}
-          {canAssign ? (
-            <select
-              className="crm-inline-edit"
-              aria-label="Dono"
-              value={lead.ownerEmployeeId ?? ''}
-              disabled={update.isPending}
-              onChange={(e) => update.mutate({ ownerEmployeeId: e.target.value || null })}
-            >
-              <option value="">— sem dono —</option>
-              {(sellers.data?.sellers ?? [])
-                .filter((s) => s.active || s.id === lead.ownerEmployeeId)
-                .map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-            </select>
-          ) : (
-            <b>{lead.work.ownerName ?? '—'}</b>
-          )}
+          Dono <OwnerEdit lead={lead} canAssign={canAssign} />
         </span>
         <span>
           Criada em <b>{formatDateTime(lead.createdAt)}</b>
@@ -406,12 +328,111 @@ function Head({
           ))}
         </div>
       )}
-      {(update.error || deal.error) && (
+      {update.error && (
         <p className="crm-error">
-          {errorText(update.error ?? deal.error, 'Não foi possível alterar a negociação.')}
+          {errorText(update.error, 'Não foi possível alterar a negociação.')}
         </p>
       )}
     </header>
+  );
+}
+
+/** The estimated value, edited in place: blur or Enter saves. */
+function ValueEdit({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
+  const deal = useUpdateDeal(lead.id);
+  const [value, setValue] = useState<string | null>(null);
+  if (!canWrite) return <b>{money(lead.valueCents, true)}</b>;
+  return (
+    <input
+      className="crm-inline-edit"
+      aria-label="Valor estimado"
+      value={
+        value ??
+        (lead.valueCents === null
+          ? ''
+          : (lead.valueCents / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2 }))
+      }
+      placeholder="R$ 0,00"
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={() => {
+        if (value === null) return;
+        const cents = parseMoney(value);
+        if (cents !== undefined && cents !== lead.valueCents) deal.mutate({ valueCents: cents });
+        setValue(null);
+      }}
+      onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+    />
+  );
+}
+
+/** The expected close date: a date field, clearable, "vencida" when behind us. */
+function ForecastEdit({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
+  const deal = useUpdateDeal(lead.id);
+  const forecastOverdue = isCloseForecastOverdue({
+    expectedCloseAt: lead.expectedCloseAt,
+    won: lead.work.won,
+  });
+  return (
+    <>
+      {canWrite ? (
+        <span className="crm-date-edit">
+          <input
+            type="date"
+            className="crm-inline-edit"
+            aria-label="Previsão de fechamento"
+            value={lead.expectedCloseAt ?? ''}
+            disabled={deal.isPending}
+            onChange={(e) => {
+              // A date input gives '' while a part is missing and the year
+              // digit by digit; a full year is the sign the person finished.
+              const next = e.target.value;
+              if (next !== '' && Number(next.slice(0, 4)) < 2000) return;
+              if (next !== (lead.expectedCloseAt ?? ''))
+                deal.mutate({ expectedCloseAt: next || null });
+            }}
+          />
+          {lead.expectedCloseAt && (
+            <button
+              type="button"
+              className="crm-inline-clear"
+              aria-label="Limpar previsão de fechamento"
+              disabled={deal.isPending}
+              onClick={() => deal.mutate({ expectedCloseAt: null })}
+            >
+              <Icon name="x" size={12} />
+            </button>
+          )}
+        </span>
+      ) : (
+        <b>{formatDay(lead.expectedCloseAt)}</b>
+      )}
+      {forecastOverdue && <span className="crm-forecast-overdue">vencida</span>}
+    </>
+  );
+}
+
+/** The owner: a select for who assigns, a name for everyone else. */
+function OwnerEdit({ lead, canAssign }: { lead: Lead; canAssign: boolean }) {
+  const sellers = useSellers();
+  const update = useUpdateLead(lead.id);
+  if (!canAssign) return <b>{lead.work.ownerName ?? '—'}</b>;
+  return (
+    <select
+      className="crm-inline-edit"
+      aria-label="Dono"
+      value={lead.ownerEmployeeId ?? ''}
+      disabled={update.isPending}
+      onChange={(e) => update.mutate({ ownerEmployeeId: e.target.value || null })}
+    >
+      <option value="">— sem dono —</option>
+      {(sellers.data?.sellers ?? [])
+        .filter((s) => s.active || s.id === lead.ownerEmployeeId)
+        .map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.name}
+          </option>
+        ))}
+    </select>
   );
 }
 
@@ -458,7 +479,9 @@ function DealName({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
         }}
         onBlur={() => deal.isPending || setDraft(null)}
       />
-      {deal.error && <span className="crm-error">{errorText(deal.error, 'Não foi possível renomear.')}</span>}
+      {deal.error && (
+        <span className="crm-error">{errorText(deal.error, 'Não foi possível renomear.')}</span>
+      )}
     </span>
   );
 }
@@ -468,8 +491,18 @@ const ACTIONS: Action[] = [
   { tab: 'note', icon: 'edit', label: 'Anotação' },
   { tab: 'email', icon: 'mail', label: 'E-mail' },
   { tab: 'call', icon: 'phone', label: 'Ligação' },
-  { tab: 'whatsapp', icon: 'message', label: 'WhatsApp', soon: 'Em breve: conversa e ligação pelo número comercial, dentro do CRM' },
-  { tab: 'meet', icon: 'video', label: 'Reunião', soon: 'Em breve: Google Meet com a agenda do vendedor e da Wings' },
+  {
+    tab: 'whatsapp',
+    icon: 'message',
+    label: 'WhatsApp',
+    soon: 'Em breve: conversa e ligação pelo número comercial, dentro do CRM',
+  },
+  {
+    tab: 'meet',
+    icon: 'video',
+    label: 'Reunião',
+    soon: 'Em breve: Google Meet com a agenda do vendedor e da Wings',
+  },
   { tab: 'task', icon: 'check', label: 'Tarefa' },
 ];
 
@@ -478,7 +511,15 @@ const ACTIONS: Action[] = [
  * register tab. WhatsApp and Reunião wait for their integrations; "Mais"
  * holds what is rarer (a meeting already held, the RD copy).
  */
-function ActionBar({ lead, active, onAct }: { lead: Lead; active: Tab; onAct: (tab: Tab) => void }) {
+function ActionBar({
+  lead,
+  active,
+  onAct,
+}: {
+  lead: Lead;
+  active: Tab;
+  onAct: (tab: Tab) => void;
+}) {
   const [more, setMore] = useState(false);
   return (
     <div className="crm-actions" role="toolbar" aria-label="Ações">
@@ -585,14 +626,396 @@ function FirstContactStrip({
 
 // --- left column -----------------------------------------------------------------------------
 
-function ContactPanel({ data, canWrite }: { data: LoadedLead; canWrite: boolean }) {
+const FIELDS_KEY = 'crm.deal.fields';
+
+interface Field {
+  key: string;
+  label: string;
+  value: ReactNode;
+}
+
+/** The person's choice of fields and their order, kept in this browser only. */
+function readFieldPrefs(): { order: string[]; hidden: string[] } | null {
+  try {
+    const raw = localStorage.getItem(FIELDS_KEY);
+    return raw ? (JSON.parse(raw) as { order: string[]; hidden: string[] }) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The fields in the person's order; new ones (a form's question never seen) go at the end. */
+export function orderFields<T extends { key: string }>(
+  fields: T[],
+  prefs: { order: string[]; hidden: string[] } | null,
+): { shown: T[]; all: T[] } {
+  if (!prefs) return { shown: fields, all: fields };
+  const rank = new Map(prefs.order.map((key, index) => [key, index] as const));
+  const all = [...fields].sort(
+    (a, b) =>
+      (rank.get(a.key) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.key) ?? Number.MAX_SAFE_INTEGER),
+  );
+  return { shown: all.filter((field) => !prefs.hidden.includes(field.key)), all };
+}
+
+/**
+ * "Sobre a negociação": every field of the deal and every answer of the
+ * forms, the deal's own fields edited in place, the answers as the person
+ * gave them. "Personalizar" chooses and orders the fields for this browser.
+ */
+function AboutPanel({
+  lead,
+  canWrite,
+  canAssign,
+}: {
+  lead: Lead;
+  canWrite: boolean;
+  canAssign: boolean;
+}) {
+  const { origin } = lead;
+  const [prefs, setPrefs] = useState(readFieldPrefs);
+  const [customizing, setCustomizing] = useState(false);
+  const fields: Field[] = [
+    { key: 'value', label: 'Valor', value: <ValueEdit lead={lead} canWrite={canWrite} /> },
+    {
+      key: 'forecast',
+      label: 'Previsão',
+      value: <ForecastEdit lead={lead} canWrite={canWrite} />,
+    },
+    { key: 'owner', label: 'Dono', value: <OwnerEdit lead={lead} canAssign={canAssign} /> },
+    {
+      key: 'pipeline',
+      label: 'Funil',
+      value: lead.pipeline ? LEAD_PIPELINE_LABELS[lead.pipeline] : '—',
+    },
+    { key: 'stage', label: 'Etapa', value: lead.work.stage ?? '—' },
+    { key: 'company', label: 'Empresa', value: <CompanyEdit lead={lead} canWrite={canWrite} /> },
+    ...(lead.pipeline === 'expansao'
+      ? [{ key: 'brand', label: 'Marca', value: <BrandEdit lead={lead} canWrite={canWrite} /> }]
+      : []),
+    ...(lead.city ? [{ key: 'city', label: 'Cidade', value: lead.city }] : []),
+    {
+      key: 'source',
+      label: 'Fonte',
+      value: `${LEAD_SOURCE_LABELS[origin.source]}${origin.channel ? ` · ${LEAD_CHANNEL_LABELS[origin.channel]}` : ''}`,
+    },
+    ...(origin.campaignName || origin.campaignId
+      ? [{ key: 'campaign', label: 'Campanha', value: origin.campaignName ?? origin.campaignId }]
+      : []),
+    ...(origin.landingPage ? [{ key: 'page', label: 'Página', value: origin.landingPage }] : []),
+    ...Object.entries(lead.formAnswers ?? {}).map(([question, answer]) => ({
+      key: `answer:${question}`,
+      label: question.replace(/_/g, ' '),
+      value: answer,
+    })),
+    ...(lead.firstMessage
+      ? [{ key: 'firstMessage', label: '1ª mensagem', value: lead.firstMessage }]
+      : []),
+    { key: 'createdAt', label: 'Criada em', value: formatDateTime(lead.createdAt) },
+    ...(lead.crm
+      ? [
+          {
+            key: 'rd',
+            label: 'RD CRM',
+            value: (
+              <a href={lead.crm.rdUrl} target="_blank" rel="noopener noreferrer">
+                abrir a cópia
+              </a>
+            ),
+          },
+        ]
+      : []),
+    ...(lead.research.summary
+      ? [
+          {
+            key: 'research',
+            label: 'Pesquisa',
+            value: (
+              <details>
+                <summary className="crm-sub">
+                  Pesquisa automática
+                  {lead.research.score !== null ? ` · perfil ${lead.research.score}/100` : ''}
+                </summary>
+                <p className="crm-sub" style={{ whiteSpace: 'pre-wrap' }}>
+                  {lead.research.summary}
+                </p>
+              </details>
+            ),
+          },
+        ]
+      : []),
+  ];
+  const { shown, all } = orderFields(fields, prefs);
+  const save = (next: { order: string[]; hidden: string[] } | null) => {
+    setPrefs(next);
+    try {
+      if (next) localStorage.setItem(FIELDS_KEY, JSON.stringify(next));
+      else localStorage.removeItem(FIELDS_KEY);
+    } catch {
+      // a private window: the choice lasts this page only
+    }
+  };
+  const move = (key: string, by: -1 | 1) => {
+    const order = all.map((field) => field.key);
+    const index = order.indexOf(key);
+    const target = index + by;
+    if (target < 0 || target >= order.length) return;
+    order.splice(index, 1);
+    order.splice(target, 0, key);
+    save({ order, hidden: prefs?.hidden ?? [] });
+  };
+  const toggle = (key: string) => {
+    const hidden = prefs?.hidden ?? [];
+    save({
+      order: all.map((field) => field.key),
+      hidden: hidden.includes(key) ? hidden.filter((k) => k !== key) : [...hidden, key],
+    });
+  };
+  return (
+    <section className="crm-panel" aria-label="Sobre a negociação">
+      <h2>
+        Sobre a negociação
+        <button
+          type="button"
+          className="crm-btn is-small is-quiet"
+          aria-expanded={customizing}
+          onClick={() => setCustomizing((v) => !v)}
+        >
+          {customizing ? 'Pronto' : 'Personalizar'}
+        </button>
+      </h2>
+      {customizing ? (
+        <div className="crm-fields-custom" role="group" aria-label="Campos">
+          {all.map((field, index) => (
+            <div key={field.key} className="crm-fields-row">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={!prefs?.hidden.includes(field.key)}
+                  onChange={() => toggle(field.key)}
+                />
+                {field.label}
+              </label>
+              <button
+                type="button"
+                className="crm-btn is-small is-quiet"
+                aria-label={`Subir ${field.label}`}
+                disabled={index === 0}
+                onClick={() => move(field.key, -1)}
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                className="crm-btn is-small is-quiet"
+                aria-label={`Descer ${field.label}`}
+                disabled={index === all.length - 1}
+                onClick={() => move(field.key, 1)}
+              >
+                ↓
+              </button>
+            </div>
+          ))}
+          <button type="button" className="crm-btn is-small is-quiet" onClick={() => save(null)}>
+            Voltar ao padrão
+          </button>
+        </div>
+      ) : (
+        <dl className="crm-kv crm-about">
+          {shown.map((field) => (
+            <div key={field.key} style={{ display: 'contents' }}>
+              <dt>{field.label}</dt>
+              <dd>{field.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </section>
+  );
+}
+
+/** The company: a link, "Trocar" to name another (made or found by name), "Desligar". */
+function CompanyEdit({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
+  const deal = useUpdateDeal(lead.id);
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState('');
+  if (editing)
+    return (
+      <form
+        className="crm-record-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          deal.mutate({ companyName: name }, { onSuccess: () => setEditing(false) });
+        }}
+      >
+        <input
+          className="crm-input"
+          aria-label="Nome da empresa"
+          placeholder="Nome da empresa"
+          value={name}
+          autoFocus
+          onChange={(e) => setName(e.target.value)}
+        />
+        {deal.error && (
+          <span className="crm-error">{errorText(deal.error, 'Não foi possível salvar.')}</span>
+        )}
+        <div className="crm-quick-row">
+          {lead.company && (
+            <button
+              type="button"
+              className="crm-btn is-small is-quiet"
+              onClick={() =>
+                deal.mutate({ companyId: null }, { onSuccess: () => setEditing(false) })
+              }
+            >
+              Desligar
+            </button>
+          )}
+          <button
+            type="button"
+            className="crm-btn is-small is-quiet"
+            onClick={() => setEditing(false)}
+          >
+            Cancelar
+          </button>
+          <button
+            type="submit"
+            className="crm-btn is-small is-primary"
+            disabled={name.trim().length < 2 || deal.isPending}
+          >
+            Salvar
+          </button>
+        </div>
+      </form>
+    );
+  return (
+    <span className="crm-about-company">
+      {lead.company ? (
+        <Link to={`/crm-vendas/empresas/${lead.company.id}`}>{lead.company.name}</Link>
+      ) : (
+        <span className="crm-muted">Nenhuma</span>
+      )}
+      {lead.company?.clientId && <span className="crm-sub"> · já é cliente</span>}
+      {canWrite && (
+        <button
+          type="button"
+          className="crm-btn is-small is-quiet"
+          onClick={() => {
+            setName(lead.company?.name ?? '');
+            setEditing(true);
+          }}
+        >
+          {lead.company ? 'Trocar' : '+ Definir'}
+        </button>
+      )}
+    </span>
+  );
+}
+
+/** The brand of interest (Expansão): one of the brands registered as clients. */
+function BrandEdit({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
+  const deal = useUpdateDeal(lead.id);
+  const brands = useBrands();
+  if (!canWrite) return <>{lead.brand ?? '—'}</>;
+  return (
+    <>
+      <select
+        className="crm-select"
+        aria-label="Marca"
+        value={lead.origin.clientMapped ? lead.origin.clientId : ''}
+        disabled={deal.isPending}
+        onChange={(e) => deal.mutate({ brandClientId: e.target.value || null })}
+      >
+        <option value="">{lead.brand ? `${lead.brand} (não cadastrada)` : 'Sem marca'}</option>
+        {(brands.data?.brands ?? []).map((brand) => (
+          <option key={brand.clientId} value={brand.clientId}>
+            {brand.name}
+          </option>
+        ))}
+      </select>
+      {deal.error && (
+        <span className="crm-error">{errorText(deal.error, 'Não foi possível salvar.')}</span>
+      )}
+    </>
+  );
+}
+
+/** A small "Copiar" that says "Copiado" for a moment. */
+function CopyButton({ value, label }: { value: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="crm-btn is-small is-quiet crm-copy"
+      aria-label={label}
+      title={label}
+      onClick={() => {
+        void navigator.clipboard
+          ?.writeText(value)
+          .then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          })
+          .catch(() => undefined); // the browser refused: the value stays on the screen to select
+      }}
+    >
+      {copied ? 'Copiado' : 'Copiar'}
+    </button>
+  );
+}
+
+/** A phone and an e-mail with their copy buttons, and the WhatsApp that waits. */
+function Reach({ phone, email }: { phone: string | null; email: string | null }) {
+  return (
+    <div className="crm-reach">
+      {phone && (
+        <span>
+          <a href={`tel:+${phone}`}>{formatPhone(phone)}</a>
+          <CopyButton value={`+${phone}`} label="Copiar telefone" />
+          <button
+            type="button"
+            className="crm-btn is-small is-quiet"
+            disabled
+            title="Em breve: WhatsApp pelo número comercial, dentro do CRM"
+            aria-label="WhatsApp (em breve)"
+          >
+            <Icon name="message" size={13} />
+          </button>
+        </span>
+      )}
+      {email && (
+        <span>
+          <a href={`mailto:${email}`}>{email}</a>
+          <CopyButton value={email} label="Copiar e-mail" />
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ContactPanel({
+  data,
+  canWrite,
+  ref,
+}: {
+  data: LoadedLead;
+  canWrite: boolean;
+  ref: RefObject<{ add: () => void } | null>;
+}) {
   const { lead } = data;
   const link = useLinkContact(lead.id);
   const unlink = useUnlinkContact(lead.id);
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ name: '', phone: '', email: '', jobTitle: '' });
+  const panel = useRef<HTMLElement>(null);
+  useImperativeHandle(ref, () => ({
+    add: () => {
+      setAdding(true);
+      panel.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    },
+  }));
   return (
-    <section className="crm-panel">
+    <section className="crm-panel" ref={panel} aria-label="Contatos">
       <h2>
         Contatos
         {canWrite && !adding && (
@@ -601,15 +1024,15 @@ function ContactPanel({ data, canWrite }: { data: LoadedLead; canWrite: boolean 
             className="crm-btn is-small is-quiet"
             onClick={() => setAdding(true)}
           >
-            + Adicionar
+            + Adicionar contato
           </button>
         )}
       </h2>
       {lead.contacts.length === 0 && (
-        <p className="crm-muted">
-          Sem contato ligado. A pessoa da negociação: {formatPhone(lead.phone)}
-          {lead.email ? ` · ${lead.email}` : ''}
-        </p>
+        <div className="crm-stack" style={{ gap: 2 }}>
+          <div className="crm-sub">A pessoa da negociação</div>
+          <Reach phone={lead.phone} email={lead.email} />
+        </div>
       )}
       {lead.contacts.map((contact) => (
         <div key={contact.id} className="crm-stack" style={{ gap: 2 }}>
@@ -617,6 +1040,7 @@ function ContactPanel({ data, canWrite }: { data: LoadedLead; canWrite: boolean 
             <b>
               <Link to={`/crm-vendas/contatos/${contact.id}`}>{contact.name ?? 'Sem nome'}</Link>
               {contact.primary ? ' · principal' : ''}
+              {contact.jobTitle ? ` · ${contact.jobTitle}` : ''}
             </b>
             {canWrite && lead.contacts.length > 1 && (
               <button
@@ -628,14 +1052,7 @@ function ContactPanel({ data, canWrite }: { data: LoadedLead; canWrite: boolean 
               </button>
             )}
           </div>
-          <div className="crm-sub">
-            {contact.jobTitle ? `${contact.jobTitle} · ` : ''}
-            {contact.phone ? (
-              <a href={`tel:+${contact.phone}`}>{formatPhone(contact.phone)}</a>
-            ) : null}
-            {contact.phone && contact.email ? ' · ' : ''}
-            {contact.email ? <a href={`mailto:${contact.email}`}>{contact.email}</a> : null}
-          </div>
+          <Reach phone={contact.phone} email={contact.email} />
         </div>
       ))}
       {adding && (
@@ -703,189 +1120,6 @@ function ContactPanel({ data, canWrite }: { data: LoadedLead; canWrite: boolean 
             </button>
           </div>
         </form>
-      )}
-    </section>
-  );
-}
-
-function CompanyPanel({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
-  const deal = useUpdateDeal(lead.id);
-  const brands = useBrands();
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState('');
-  return (
-    <section className="crm-panel">
-      <h2>
-        Empresa
-        {canWrite && !editing && (
-          <button
-            type="button"
-            className="crm-btn is-small is-quiet"
-            onClick={() => {
-              setName(lead.company?.name ?? '');
-              setEditing(true);
-            }}
-          >
-            {lead.company ? 'Trocar' : '+ Definir'}
-          </button>
-        )}
-      </h2>
-      {lead.company ? (
-        <div>
-          <Link to={`/crm-vendas/empresas/${lead.company.id}`}>{lead.company.name}</Link>
-          {lead.company.clientId && <div className="crm-sub">Já é cliente da Wings</div>}
-        </div>
-      ) : (
-        !editing && <p className="crm-muted">Nenhuma empresa ligada.</p>
-      )}
-      {editing && (
-        <form
-          className="crm-record-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            deal.mutate({ companyName: name }, { onSuccess: () => setEditing(false) });
-          }}
-        >
-          <input
-            className="crm-input"
-            placeholder="Nome da empresa"
-            value={name}
-            autoFocus
-            onChange={(e) => setName(e.target.value)}
-          />
-          <div className="crm-quick-row">
-            {lead.company && (
-              <button
-                type="button"
-                className="crm-btn is-small is-quiet"
-                onClick={() =>
-                  deal.mutate({ companyId: null }, { onSuccess: () => setEditing(false) })
-                }
-              >
-                Desligar
-              </button>
-            )}
-            <button
-              type="button"
-              className="crm-btn is-small is-quiet"
-              onClick={() => setEditing(false)}
-            >
-              Cancelar
-            </button>
-            <button
-              type="submit"
-              className="crm-btn is-small is-primary"
-              disabled={name.trim().length < 2 || deal.isPending}
-            >
-              Salvar
-            </button>
-          </div>
-        </form>
-      )}
-      {lead.pipeline === 'expansao' && (
-        <dl className="crm-kv" style={{ marginTop: 'var(--space-2)' }}>
-          <dt>Marca</dt>
-          <dd>
-            {canWrite ? (
-              <select
-                className="crm-select"
-                value={lead.origin.clientMapped ? lead.origin.clientId : ''}
-                disabled={deal.isPending}
-                onChange={(e) => deal.mutate({ brandClientId: e.target.value || null })}
-              >
-                <option value="">
-                  {lead.brand ? `${lead.brand} (não cadastrada)` : 'Sem marca'}
-                </option>
-                {(brands.data?.brands ?? []).map((brand) => (
-                  <option key={brand.clientId} value={brand.clientId}>
-                    {brand.name}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              (lead.brand ?? '—')
-            )}
-          </dd>
-        </dl>
-      )}
-      {deal.error && (
-        <span className="crm-error">{errorText(deal.error, 'Não foi possível salvar.')}</span>
-      )}
-    </section>
-  );
-}
-
-function OriginPanel({ lead }: { lead: Lead }) {
-  const { origin } = lead;
-  return (
-    <section className="crm-panel">
-      <h2>Origem</h2>
-      <dl className="crm-kv">
-        <dt>Como chegou</dt>
-        <dd>
-          {LEAD_SOURCE_LABELS[origin.source]}
-          {origin.channel ? ` · ${LEAD_CHANNEL_LABELS[origin.channel]}` : ''}
-        </dd>
-        {origin.landingPage && (
-          <>
-            <dt>Página</dt>
-            <dd>{origin.landingPage}</dd>
-          </>
-        )}
-        {(origin.campaignName || origin.campaignId) && (
-          <>
-            <dt>Campanha</dt>
-            <dd>{origin.campaignName ?? origin.campaignId}</dd>
-          </>
-        )}
-        {lead.city && (
-          <>
-            <dt>Cidade</dt>
-            <dd>{lead.city}</dd>
-          </>
-        )}
-        {lead.firstMessage && (
-          <>
-            <dt>1ª mensagem</dt>
-            <dd>{lead.firstMessage}</dd>
-          </>
-        )}
-        {lead.crm && (
-          <>
-            <dt>RD CRM</dt>
-            <dd>
-              <a href={lead.crm.rdUrl} target="_blank" rel="noopener noreferrer">
-                abrir a cópia
-              </a>
-            </dd>
-          </>
-        )}
-      </dl>
-      {lead.formAnswers && Object.keys(lead.formAnswers).length > 0 && (
-        <details>
-          <summary className="crm-sub">
-            Respostas do formulário ({Object.keys(lead.formAnswers).length})
-          </summary>
-          <dl className="crm-kv">
-            {Object.entries(lead.formAnswers).map(([question, answer]) => (
-              <div key={question} style={{ display: 'contents' }}>
-                <dt>{question.replace(/_/g, ' ')}</dt>
-                <dd>{answer}</dd>
-              </div>
-            ))}
-          </dl>
-        </details>
-      )}
-      {lead.research.summary && (
-        <details>
-          <summary className="crm-sub">
-            Pesquisa automática
-            {lead.research.score !== null ? ` · perfil ${lead.research.score}/100` : ''}
-          </summary>
-          <p className="crm-sub" style={{ whiteSpace: 'pre-wrap' }}>
-            {lead.research.summary}
-          </p>
-        </details>
       )}
     </section>
   );
@@ -1159,10 +1393,13 @@ function CopyPhone({ phone }: { phone: string }) {
         className="crm-btn is-quiet"
         aria-label="Copiar telefone"
         onClick={() => {
-          void navigator.clipboard?.writeText(`+${phone}`).then(() => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
-          });
+          void navigator.clipboard
+            ?.writeText(`+${phone}`)
+            .then(() => {
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            })
+            .catch(() => undefined);
         }}
       >
         {copied ? 'Copiado' : 'Copiar'}
@@ -1309,6 +1546,134 @@ function Timeline({ data }: { data: LoadedLead }) {
 
 // --- right column ------------------------------------------------------------------------------
 
+/** One card of the right column: a title with its count, "Adicionar", and the rows. */
+function AssocCard({
+  title,
+  count,
+  onAdd,
+  soon,
+  children,
+}: {
+  title: string;
+  count: number;
+  onAdd?: () => void;
+  soon?: string;
+  children?: ReactNode;
+}) {
+  return (
+    <section className="crm-panel crm-assoc" aria-label={`${title}: ${count}`}>
+      <h2>
+        <span>
+          {title} <span className="crm-count">{count}</span>
+        </span>
+        {soon ? (
+          <button type="button" className="crm-btn is-small is-quiet" disabled title={soon}>
+            em breve
+          </button>
+        ) : (
+          onAdd && (
+            <button type="button" className="crm-btn is-small is-quiet" onClick={onAdd}>
+              + Adicionar
+            </button>
+          )
+        )}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+/** Contatos, Empresa, Propostas and Arquivos, with counts, as HubSpot keeps them on the right. */
+function AssociationCards({
+  data,
+  canWrite,
+  onAddContact,
+}: {
+  data: LoadedLead;
+  canWrite: boolean;
+  onAddContact: () => void;
+}) {
+  const { lead } = data;
+  const deal = useUpdateDeal(lead.id);
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState('');
+  return (
+    <>
+      <AssocCard
+        title="Contatos"
+        count={lead.contacts.length}
+        onAdd={canWrite ? onAddContact : undefined}
+      >
+        {lead.contacts.length === 0 ? (
+          <p className="crm-muted">A pessoa da negociação, ao lado.</p>
+        ) : (
+          lead.contacts.map((contact) => (
+            <div key={contact.id} className="crm-assoc-row">
+              <Link to={`/crm-vendas/contatos/${contact.id}`}>{contact.name ?? 'Sem nome'}</Link>
+              <span className="crm-sub">
+                {contact.jobTitle ?? (contact.primary ? 'principal' : '')}
+              </span>
+            </div>
+          ))
+        )}
+      </AssocCard>
+      <AssocCard
+        title="Empresa"
+        count={lead.company ? 1 : 0}
+        onAdd={canWrite && !lead.company && !naming ? () => setNaming(true) : undefined}
+      >
+        {lead.company && (
+          <div className="crm-assoc-row">
+            <Link to={`/crm-vendas/empresas/${lead.company.id}`}>{lead.company.name}</Link>
+            {lead.company.clientId && <span className="crm-sub">já é cliente</span>}
+          </div>
+        )}
+        {!lead.company && !naming && <p className="crm-muted">Nenhuma empresa ligada.</p>}
+        {naming && (
+          <form
+            className="crm-record-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              deal.mutate({ companyName: name }, { onSuccess: () => setNaming(false) });
+            }}
+          >
+            <input
+              className="crm-input"
+              aria-label="Nome da empresa"
+              placeholder="Nome da empresa"
+              value={name}
+              autoFocus
+              onChange={(e) => setName(e.target.value)}
+            />
+            <div className="crm-quick-row">
+              <button
+                type="button"
+                className="crm-btn is-small is-quiet"
+                onClick={() => setNaming(false)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="crm-btn is-small is-primary"
+                disabled={name.trim().length < 2 || deal.isPending}
+              >
+                Salvar
+              </button>
+            </div>
+          </form>
+        )}
+      </AssocCard>
+      <AssocCard title="Propostas" count={0} soon="Em breve: propostas feitas e enviadas daqui">
+        <p className="crm-muted">Nenhuma proposta.</p>
+      </AssocCard>
+      <AssocCard title="Arquivos" count={0} soon="Na próxima etapa: arquivos no Drive do sistema">
+        <p className="crm-muted">Nenhum arquivo.</p>
+      </AssocCard>
+    </>
+  );
+}
+
 function Countdown({ dueAt, inline }: { dueAt: string; inline?: boolean }) {
   const diff = new Date(dueAt).getTime() - Date.now();
   const late = diff < 0;
@@ -1320,7 +1685,8 @@ function Countdown({ dueAt, inline }: { dueAt: string; inline?: boolean }) {
       ? `${Math.floor(hours / 24)} d`
       : `${hours}h ${String(minutes).padStart(2, '0')}min`;
   const label = late ? `−${text}` : text;
-  if (inline) return <span className={`crm-countdown is-inline ${late ? 'is-late' : 'is-ok'}`}>{label}</span>;
+  if (inline)
+    return <span className={`crm-countdown is-inline ${late ? 'is-late' : 'is-ok'}`}>{label}</span>;
   return <div className={`crm-countdown ${late ? 'is-late' : 'is-ok'}`}>{label}</div>;
 }
 
@@ -1337,7 +1703,6 @@ function NextPanel({
   const open = data.tasks
     .filter((task) => !task.doneAt && task.kind !== 'first_contact')
     .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
-  const owner = data.lead.work.ownerName;
   return (
     <>
       <section className="crm-panel">
@@ -1370,13 +1735,6 @@ function NextPanel({
             </span>
           </label>
         ))}
-      </section>
-      <section className="crm-panel">
-        <h2>Dono</h2>
-        <div className="crm-task-line">
-          <span className={`crm-avatar${owner ? '' : ' is-empty'}`}>{initialsOf(owner)}</span>
-          <span>{owner ?? 'Sem dono'}</span>
-        </div>
       </section>
     </>
   );

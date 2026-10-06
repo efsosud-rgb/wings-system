@@ -2,7 +2,7 @@ import type { CrmStage, Lead, LeadTask } from '@wings/shared';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DealPage, daysInStage } from './DealPage.js';
+import { DealPage, daysInStage, orderFields } from './DealPage.js';
 
 /**
  * The deal's page, part 1: the head (name edited in place, tags, win or
@@ -100,13 +100,17 @@ const stage = (over: Partial<CrmStage>): CrmStage => ({
 const firstContact = (over: Partial<LeadTask> = {}): LeadTask => ({
   id: 't1',
   leadId: 'l1',
+  leadName: 'Elena',
+  leadCompanyName: null,
   kind: 'first_contact',
   title: 'Primeiro contato',
   dueAt: '2026-10-06T15:30:00.000Z',
   doneAt: null,
   assigneeEmployeeId: 'e1',
   assigneeName: 'Eric',
+  auto: true,
   createdAt: '2026-10-03T12:00:00.000Z',
+  doneByName: null,
   ...over,
 });
 
@@ -186,6 +190,7 @@ beforeEach(() => {
     stage({ id: 's3', name: 'Proposta', position: 3, probability: 60 }),
   ];
   Element.prototype.scrollIntoView = vi.fn();
+  localStorage.clear();
 });
 afterEach(() => {
   cleanup();
@@ -233,8 +238,9 @@ describe('the name', () => {
 describe('the tags and the stage bar', () => {
   it('says "Nova" while the first contact is open, with the funnel and the source', () => {
     show();
-    expect(screen.getByText('Nova')).toBeTruthy();
-    expect(screen.getByText('Expansão')).toBeTruthy();
+    const head = within(screen.getByRole('banner'));
+    expect(head.getByText('Nova')).toBeTruthy();
+    expect(head.getByText('Expansão')).toBeTruthy();
   });
 
   it('drops "Nova" once the first contact is done', () => {
@@ -247,7 +253,9 @@ describe('the tags and the stage bar', () => {
   it('shows the days in the current stage on its button only, and a click moves the deal', () => {
     show();
     const bar = screen.getByRole('group', { name: 'Etapas' });
-    expect(within(bar).getByRole('button', { name: /Sem contato/ }).textContent).toBe('Sem contato · 3 dias');
+    expect(within(bar).getByRole('button', { name: /Sem contato/ }).textContent).toBe(
+      'Sem contato · 3 dias',
+    );
     fireEvent.click(within(bar).getByRole('button', { name: 'Proposta' }));
     expect(leadMutate).toHaveBeenCalledWith({ stageId: 's3' });
   });
@@ -289,7 +297,11 @@ describe('the action bar', () => {
     expect(selectedTab()).toBe('Anotação');
     fireEvent.click(within(bar).getByRole('button', { name: 'Ligação' }));
     expect(selectedTab()).toBe('Ligação');
-    expect(screen.getByRole('button', { name: 'Copiar telefone' })).toBeTruthy();
+    expect(
+      within(screen.getByRole('tablist').parentElement!).getByRole('button', {
+        name: 'Copiar telefone',
+      }),
+    ).toBeTruthy();
     fireEvent.click(within(bar).getByRole('button', { name: 'Tarefa' }));
     expect(selectedTab()).toBe('Tarefa');
     fireEvent.click(within(bar).getByRole('button', { name: 'E-mail' }));
@@ -340,5 +352,125 @@ describe('the first-contact strip', () => {
     show();
     expect(screen.queryByRole('region', { name: 'Primeiro contato' })).toBeNull();
     expect(screen.getByText('Nenhuma tarefa aberta.')).toBeTruthy();
+  });
+});
+
+describe('"Sobre a negociação"', () => {
+  const section = () => screen.getByRole('region', { name: 'Sobre a negociação' });
+  const about = () => within(section());
+  const labels = () => Array.from(section().querySelectorAll('dt')).map((dt) => dt.textContent);
+
+  it('lists the deal fields and every form answer, the answers as given', () => {
+    queryState.lead = lead({
+      city: 'Niterói',
+      formAnswers: {
+        Budget: 'R$ 60 mil',
+        'Nome da marca': 'Casal do Churros',
+        Qualificação: 'Quente',
+      },
+    });
+    show();
+    for (const label of [
+      'Valor',
+      'Previsão',
+      'Dono',
+      'Funil',
+      'Etapa',
+      'Empresa',
+      'Marca',
+      'Cidade',
+      'Fonte',
+      'Budget',
+      'Nome da marca',
+      'Qualificação',
+      'Criada em',
+    ])
+      expect(labels()).toContain(label);
+    expect(about().getByText('R$ 60 mil')).toBeTruthy();
+    expect(about().getByText('Niterói')).toBeTruthy();
+    expect(about().getByLabelText('Valor estimado')).toBeTruthy();
+    expect(about().getByLabelText('Marca')).toBeTruthy();
+  });
+
+  it('"Personalizar" hides a field and moves another up, and the choice survives a reload of the page', () => {
+    show();
+    fireEvent.click(about().getByRole('button', { name: 'Personalizar' }));
+    fireEvent.click(about().getByLabelText('Funil'));
+    fireEvent.click(about().getByRole('button', { name: 'Subir Dono' }));
+    fireEvent.click(about().getByRole('button', { name: 'Pronto' }));
+    expect(labels()).not.toContain('Funil');
+    expect(labels().slice(0, 3)).toEqual(['Valor', 'Dono', 'Previsão']);
+    cleanup();
+    show();
+    expect(labels()).not.toContain('Funil');
+    expect(labels().slice(0, 3)).toEqual(['Valor', 'Dono', 'Previsão']);
+    fireEvent.click(about().getByRole('button', { name: 'Personalizar' }));
+    fireEvent.click(about().getByRole('button', { name: 'Voltar ao padrão' }));
+    fireEvent.click(about().getByRole('button', { name: 'Pronto' }));
+    expect(labels().slice(0, 3)).toEqual(['Valor', 'Previsão', 'Dono']);
+  });
+
+  it('keeps a field never seen before (a new form question) at the end of a saved order', () => {
+    const fields = [{ key: 'a' }, { key: 'answer:Nova pergunta' }, { key: 'b' }];
+    const { shown } = orderFields(fields, { order: ['b', 'a'], hidden: ['a'] });
+    expect(shown.map((f) => f.key)).toEqual(['b', 'answer:Nova pergunta']);
+  });
+});
+
+describe('the contacts', () => {
+  it('shows the phone and the e-mail with a copy button each, and the WhatsApp that waits', () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.assign(navigator, { clipboard: { writeText } });
+    show();
+    const contacts = within(screen.getByRole('region', { name: 'Contatos' }));
+    fireEvent.click(contacts.getByRole('button', { name: 'Copiar telefone' }));
+    expect(writeText).toHaveBeenCalledWith('+5511999990000');
+    fireEvent.click(contacts.getByRole('button', { name: 'Copiar e-mail' }));
+    expect(writeText).toHaveBeenCalledWith('elena@example.com');
+    expect(
+      (contacts.getByRole('button', { name: 'WhatsApp (em breve)' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('"+ Adicionar" on the right opens the contact form on the left', () => {
+    show();
+    const card = within(screen.getByRole('region', { name: 'Contatos: 0' }));
+    fireEvent.click(card.getByRole('button', { name: '+ Adicionar' }));
+    expect(screen.getByPlaceholderText('Nome')).toBeTruthy();
+  });
+});
+
+describe('the right column', () => {
+  it('counts contacts, the company, proposals and files; proposals and files wait', () => {
+    queryState.lead = lead({
+      company: { id: 'c1', name: 'Padaria Sol', clientId: null },
+      contacts: [
+        {
+          id: 'k1',
+          name: 'Elena',
+          email: null,
+          phone: '5511999990000',
+          jobTitle: 'Sócia',
+          primary: true,
+        },
+        {
+          id: 'k2',
+          name: 'Paulo',
+          email: 'p@example.com',
+          phone: null,
+          jobTitle: null,
+          primary: false,
+        },
+      ],
+    });
+    show();
+    const cards = screen.getAllByRole('region').filter((r) => r.classList.contains('crm-assoc'));
+    const summary = cards.map((c) =>
+      c.querySelector('h2 > span')!.textContent!.replace(/\s+/g, ' ').trim(),
+    );
+    expect(summary).toEqual(['Contatos 2', 'Empresa 1', 'Propostas 0', 'Arquivos 0']);
+    expect(within(cards[2]!).getByRole('button', { name: 'em breve' })).toBeTruthy();
+    expect(within(cards[3]!).getByRole('button', { name: 'em breve' })).toBeTruthy();
+    expect(within(cards[1]!).getByRole('link', { name: 'Padaria Sol' })).toBeTruthy();
   });
 });

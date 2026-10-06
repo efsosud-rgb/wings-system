@@ -1250,6 +1250,108 @@
   font-size: inherit;
   font-weight: var(--weight-semibold);
 }
+/* "Sobre a negociação" and the cards on the right */
+.crm-about {
+  grid-template-columns: 110px 1fr;
+}
+.crm-about dd {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.crm-about .crm-inline-edit {
+  background: none;
+  border: none;
+  border-bottom: 1px dashed var(--line-strong);
+  color: var(--text);
+  font: inherit;
+  padding: 0 2px;
+  min-width: 80px;
+  max-width: 100%;
+}
+.crm-about .crm-inline-edit:focus {
+  outline: none;
+  border-bottom-color: var(--accent);
+}
+.crm-about .crm-date-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.crm-about .crm-inline-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.crm-about .crm-record-form {
+  width: 100%;
+}
+.crm-about-company {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+.crm-fields-custom {
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-md);
+}
+.crm-fields-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.crm-fields-row label {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.crm-reach {
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-md);
+}
+.crm-reach > span {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.crm-reach a {
+  overflow-wrap: anywhere;
+}
+.crm-copy {
+  padding: 0 var(--space-2);
+}
+.crm-count {
+  display: inline-block;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+.crm-assoc-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: var(--text-md);
+}
 .crm-copy-phone {
   display: inline-flex;
   gap: var(--space-1);
