@@ -426,7 +426,8 @@ export const NAVIGATION: readonly NavModule[] = [
       {
         path: '/laboratorio/escritorio',
         label: 'Escritório virtual',
-        description: 'A equipe e os agentes no escritório em 3D, com tarefas e eventos reais do CRM',
+        description:
+          'A equipe e os agentes no escritório em 3D, com tarefas e eventos reais do CRM',
         permission: 'office.read',
         status: 'ready',
         kind: 'report',
