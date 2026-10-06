@@ -28,6 +28,48 @@ describe('loadEnv', () => {
   });
 });
 
+describe('the company research variables', () => {
+  it('is off by default, with its own ceiling and the cheaper model', () => {
+    const env = loadEnv(validSource);
+    expect(env.LEAD_RESEARCH_ENABLED).toBeUndefined();
+    expect(env.OPENROUTER_API_KEY).toBeUndefined();
+    expect(env.LEAD_RESEARCH_DAILY_USD).toBe(1);
+    expect(env.LEAD_RESEARCH_USD_PER_CALL).toBe(0.06);
+    expect(env.LEAD_RESEARCH_MODEL).toBe('anthropic/claude-haiku-4.5');
+  });
+
+  it('takes a blank variable as unset, so a line copied from .env.example cannot stop the worker', () => {
+    const env = loadEnv({
+      ...validSource,
+      LEAD_RESEARCH_ENABLED: '',
+      LEAD_RESEARCH_DAILY_USD: '',
+      LEAD_RESEARCH_USD_PER_CALL: '',
+      LEAD_RESEARCH_MODEL: '',
+      OPENROUTER_API_KEY: '',
+    });
+    expect(env.LEAD_RESEARCH_DAILY_USD).toBe(1);
+    expect(env.LEAD_RESEARCH_MODEL).toBe('anthropic/claude-haiku-4.5');
+    expect(env.OPENROUTER_API_KEY).toBeUndefined();
+  });
+
+  it('reads the ceiling and refuses nonsense: zero, above 100, a model nobody priced, a flag that is not true/false', () => {
+    expect(
+      loadEnv({
+        ...validSource,
+        LEAD_RESEARCH_DAILY_USD: '0.5',
+        LEAD_RESEARCH_MODEL: 'anthropic/claude-sonnet-5',
+      }),
+    ).toMatchObject({
+      LEAD_RESEARCH_DAILY_USD: 0.5,
+      LEAD_RESEARCH_MODEL: 'anthropic/claude-sonnet-5',
+    });
+    expect(() => loadEnv({ ...validSource, LEAD_RESEARCH_DAILY_USD: '0' })).toThrow();
+    expect(() => loadEnv({ ...validSource, LEAD_RESEARCH_DAILY_USD: '101' })).toThrow();
+    expect(() => loadEnv({ ...validSource, LEAD_RESEARCH_MODEL: 'openai/gpt-x' })).toThrow();
+    expect(() => loadEnv({ ...validSource, LEAD_RESEARCH_ENABLED: 'yes' })).toThrow();
+  });
+});
+
 describe('jobTypesOf', () => {
   it('refuses an unknown job type rather than silently ignore it', () => {
     const env = loadEnv({ ...validSource, WORKER_JOB_TYPES: 'ffprobe,made_up' });

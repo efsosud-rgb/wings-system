@@ -504,6 +504,57 @@ export interface LeadWhatsappProfile {
   photoUrl: string | null;
 }
 
+// --- company research by web search + model (OpenRouter) --------------------------
+
+/** What the research tries to say about the company, in the order the card shows it. */
+export const WEB_RESEARCH_FIELD_KEYS = [
+  'activity',
+  'location',
+  'size',
+  'time_in_market',
+  'online_presence',
+] as const;
+export type WebResearchFieldKey = (typeof WEB_RESEARCH_FIELD_KEYS)[number];
+
+export const WEB_RESEARCH_FIELD_LABELS: Record<WebResearchFieldKey, string> = {
+  activity: 'O que a empresa faz',
+  location: 'Cidade e estado',
+  size: 'Porte',
+  time_in_market: 'Tempo de mercado',
+  online_presence: 'Presença online',
+};
+
+/** done: it ran; skipped: nothing to search; refused: the daily ceiling; failed: the provider did not answer. */
+export type WebResearchStatus = 'done' | 'skipped' | 'refused' | 'failed';
+
+export interface WebResearchField {
+  key: WebResearchFieldKey;
+  /** Null when the sources did not say; then `reason` says why. Never a guess. */
+  value: string | null;
+  reason: string | null;
+}
+
+export interface WebResearchSource {
+  url: string;
+  title: string | null;
+}
+
+/**
+ * What the web research of the lead's COMPANY found (company name, site,
+ * Instagram and CNPJ were the only things sent). `sources` are the pages the
+ * search itself returned, never links the model wrote.
+ */
+export interface LeadWebResearch {
+  status: WebResearchStatus;
+  /** When the research ran (ISO 8601). */
+  at: string;
+  /** Why there is nothing, when `status` is not "done". */
+  reason: string | null;
+  fields: WebResearchField[];
+  sources: WebResearchSource[];
+  model: string | null;
+}
+
 /** Everything the worker found. Every field may be null: a step that failed leaves its fact empty. */
 export interface EnrichmentFacts {
   region: LeadRegion | null;
@@ -513,6 +564,8 @@ export interface EnrichmentFacts {
   company: LeadCompany | null;
   /** How many web searches were run (each is a paid call). */
   searches: number;
+  /** The company research (OpenRouter); absent on leads researched before it existed. */
+  webResearch?: LeadWebResearch | null;
 }
 
 export const EMPTY_FACTS: EnrichmentFacts = {

@@ -8,10 +8,12 @@ import {
   type ExpansionEntry,
   type FoundLink,
   type LeadCompany,
+  type LeadWebResearch,
   type LeadWhatsappProfile,
 } from '@wings/shared';
 import { z } from 'zod';
 import { formatCnpj, reserveSpend, writeLedger, type CnpjRecord, type SearchResult } from '../lib/enrichment.js';
+import { researchInputOf } from '../lib/lead-research.js';
 import type { Job } from '../queue.js';
 import type { JobContext, JobHandler } from './types.js';
 
@@ -25,6 +27,7 @@ interface LeadRow {
   phone: string | null;
   whatsapp_profile_name: string | null;
   whatsapp_photo_url: string | null;
+  enrichment_facts: unknown;
 }
 
 export interface EnrichLeadOutput {
@@ -138,7 +141,7 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
   const now = ctx.now?.() ?? new Date();
 
   const found = await db.query<LeadRow>(
-    `select id, client_id, name, email, phone, whatsapp_profile_name, whatsapp_photo_url from leads where id = $1`,
+    `select id, client_id, name, email, phone, whatsapp_profile_name, whatsapp_photo_url, enrichment_facts from leads where id = $1`,
     [leadId],
   );
   const lead = found.rows[0];
@@ -255,9 +258,83 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
       }
     }
 
-    // --- external research provider (none approved yet: see LeadResearchProvider) -------
-    // When one is approved, its call goes here: after the CNPJ, before the score, with its
-    // cost reserved first and its own ledger step. Today `research` is always null.
+    // --- company research (OpenRouter), only the company's own data ------------------------
+    // Reserved under its own ceiling first, called once, never retried; what the search did not
+    // bring stays empty with the reason (docs/leads/pesquisa-da-empresa.md). A result that
+    // came back with pages is kept: a re-run (or a switched-off provider) never pays for it again
+    // and never overwrites it with a refusal.
+    const previous = webResearchOf(lead.enrichment_facts);
+    if (previous?.status === 'done' && previous.sources.length > 0) {
+      facts.webResearch = previous;
+      if (enrichment.research) {
+        await writeLedger(db, { leadId, jobId: job.id, step: 'ai_research', status: 'skipped', usdMicro: 0, detail: { reason: 'already_done' } });
+        steps.web_research = 'skipped';
+      }
+    } else if (enrichment.research) {
+      const research = enrichment.research;
+      const at = now.toISOString();
+      let input: ReturnType<typeof researchInputOf> = null;
+      let prepared = true;
+      try {
+        input = researchInputOf(leadId, await companyFieldsOf(db, leadId), lead.name);
+      } catch (error) {
+        // Not being able to read or clean the company fields is this step's failure, not the job's.
+        prepared = false;
+        await writeLedger(db, { leadId, jobId: job.id, step: 'ai_research', status: 'failed', usdMicro: 0, detail: { reason: messageOf(error) } });
+        facts.webResearch = noResearch('failed', at, 'Não foi possível preparar a pesquisa; nada foi enviado');
+        steps.web_research = 'failed';
+      }
+      if (prepared && !input) {
+        facts.webResearch = noResearch('skipped', at, 'O formulário não trouxe dado da empresa (nome, site, Instagram ou CNPJ)');
+        await writeLedger(db, { leadId, jobId: job.id, step: 'ai_research', status: 'skipped', usdMicro: 0, detail: { reason: 'no_company_data' } });
+        steps.web_research = 'skipped';
+      } else if (prepared && input) {
+        const reserved = await reserveSpend(db, {
+          leadId,
+          jobId: job.id,
+          step: 'ai_research',
+          usdMicro: research.reserveUsdMicro,
+          dailyUsd: enrichment.budget.researchDailyUsd,
+          now,
+          detail: { provider: research.name },
+        });
+        if (!reserved) {
+          facts.webResearch = noResearch('refused', at, 'O teto diário da pesquisa foi atingido; nenhuma chamada foi feita');
+          steps.web_research = 'refused';
+        } else {
+          costUsdMicro += research.reserveUsdMicro;
+          try {
+            const finding = await research.research(input);
+            // The reserving row stays; a second row settles it to what the call really cost
+            // (above the reservation or below it), so the ceiling follows the real spend.
+            const settle = finding.costUsdMicro - research.reserveUsdMicro;
+            costUsdMicro += settle;
+            await writeLedger(db, {
+              leadId,
+              jobId: job.id,
+              step: 'ai_research',
+              status: 'done',
+              usdMicro: settle,
+              detail: {
+                actualUsdMicro: finding.costUsdMicro,
+                sources: finding.sources.length,
+                answered: finding.fields.filter((field) => field.value !== null).length,
+              },
+            });
+            facts.webResearch = { status: 'done', at, reason: null, fields: finding.fields, sources: finding.sources, model: finding.model };
+            steps.web_research = 'done';
+          } catch (error) {
+            // The call was made, whatever it answered: the reserving row stays.
+            await writeLedger(db, { leadId, jobId: job.id, step: 'ai_research', status: 'failed', usdMicro: 0, detail: { reason: messageOf(error) } });
+            facts.webResearch = noResearch('failed', at, 'A pesquisa não terminou (o provedor não respondeu); nada foi inventado');
+            steps.web_research = 'failed';
+          }
+        }
+      }
+    } else if (previous) {
+      // Switched off now: what an earlier run found stays on the lead.
+      facts.webResearch = previous;
+    }
 
     // --- score and summary -------------------------------------------------------------
     const area = await db.query<{ expansion_area: unknown }>(`select expansion_area from clients where id = $1`, [lead.client_id]);
@@ -299,6 +376,45 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
     throw error;
   }
 };
+
+/** The company fields a lead form may have filled; none when the columns are not there yet (42703). */
+async function companyFieldsOf(db: JobContext['db'], leadId: string) {
+  try {
+    const result = await db.query<{
+      company_name: string | null;
+      website: string | null;
+      instagram: string | null;
+      company_cnpj: string | null;
+    }>(`select company_name, website, instagram, company_cnpj from leads where id = $1`, [leadId]);
+    return result.rows[0] ?? {};
+  } catch (error) {
+    if ((error as { code?: string }).code === '42703') return {};
+    throw error;
+  }
+}
+
+/** What an earlier run stored under `webResearch`, when it has the shape this code writes. */
+function webResearchOf(facts: unknown): LeadWebResearch | null {
+  const value = (facts as { webResearch?: Partial<LeadWebResearch> } | null)?.webResearch;
+  if (!value || typeof value !== 'object' || typeof value.status !== 'string') return null;
+  return {
+    status: value.status,
+    at: typeof value.at === 'string' ? value.at : new Date(0).toISOString(),
+    reason: value.reason ?? null,
+    fields: Array.isArray(value.fields) ? value.fields : [],
+    sources: Array.isArray(value.sources) ? value.sources : [],
+    model: value.model ?? null,
+  };
+}
+
+const noResearch = (status: LeadWebResearch['status'], at: string, reason: string): LeadWebResearch => ({
+  status,
+  at,
+  reason,
+  fields: [],
+  sources: [],
+  model: null,
+});
 
 /** A message, never a stack, a query or a name. */
 function messageOf(error: unknown): string {

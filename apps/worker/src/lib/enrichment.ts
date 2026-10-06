@@ -1,3 +1,4 @@
+import type { WebResearchField, WebResearchSource } from '@wings/shared';
 import type { Pool } from '../db/client.js';
 
 /**
@@ -213,9 +214,11 @@ export function formatCnpj(digits: string): string {
 export interface EnrichmentBudget {
   dailyUsd: number;
   searchUsdPerQuery: number;
+  /** The company research has its own ceiling (LEAD_RESEARCH_DAILY_USD), apart from `dailyUsd`. */
+  researchDailyUsd: number;
 }
 
-export type LedgerStep = 'zapi_profile' | 'web_search' | 'brasilapi_cnpj';
+export type LedgerStep = 'zapi_profile' | 'web_search' | 'brasilapi_cnpj' | 'ai_research';
 export type LedgerStatus = 'started' | 'done' | 'failed' | 'skipped' | 'refused';
 
 /** 00:00 of today in São Paulo (UTC-3, no DST since 2019). */
@@ -250,15 +253,27 @@ export async function writeLedger(
  */
 export async function reserveSpend(
   pool: Pool,
-  input: { leadId: string; jobId: string; step: LedgerStep; usdMicro: number; dailyUsd: number; now: Date; detail?: Record<string, unknown> },
+  input: {
+    leadId: string;
+    jobId: string;
+    step: LedgerStep;
+    usdMicro: number;
+    dailyUsd: number;
+    now: Date;
+    detail?: Record<string, unknown>;
+  },
 ): Promise<boolean> {
+  // Two ceilings, two sums: the company research (`ai_research`) counts only against its own,
+  // and the searches and lookups count only against ENRICH_DAILY_USD.
+  const research = input.step === 'ai_research';
   const client = await pool.connect();
   try {
     await client.query('begin');
     await client.query(`select pg_advisory_xact_lock(hashtext('lead_enrichment_budget'))`);
     const spent = await client.query<{ total: string }>(
-      `select coalesce(sum(usd_micro), 0)::bigint as total from lead_enrichment_ledger where created_at >= $1`,
-      [saoPauloDayStart(input.now)],
+      `select coalesce(sum(usd_micro), 0)::bigint as total from lead_enrichment_ledger
+        where created_at >= $1 and (step = 'ai_research') = $2`,
+      [saoPauloDayStart(input.now), research],
     );
     const total = Number(spent.rows[0]?.total ?? 0);
     const ceiling = Math.round(input.dailyUsd * 1_000_000);
@@ -284,38 +299,36 @@ export async function reserveSpend(
   }
 }
 
-// --- external research provider (extension point) -----------------------------------------
+// --- company research provider (OpenRouter: `lib/lead-research.ts`) -------------------------
 
 /**
- * A paid research service that studies a lead's company (site, Instagram,
- * name) and returns a summary with its sources: the place where one plugs in
- * once it is approved (Manus is being evaluated; the decision is not ours).
- *
- * Nothing implements it yet, so `createLeadResearchProvider` always answers
- * null and the step is skipped. A real provider must: be switched on by its
- * own env var, reserve its cost with `reserveSpend` under the daily ceiling,
- * write its own ledger step, receive no phone, e-mail or CPF, and have its
- * answers logged as shapes only.
+ * What the research may be told about a lead: the COMPANY's name, site,
+ * Instagram and CNPJ, nothing else. There is no field for a person's name,
+ * phone, e-mail or CPF, so none can be sent by mistake (`researchInputOf`
+ * also drops a value that looks like one).
  */
 export interface LeadResearchInput {
   leadId: string;
   companyName: string | null;
   website: string | null;
   instagram: string | null;
-  city: string | null;
+  cnpj: string | null;
 }
 
 export interface LeadResearchFinding {
-  summary: string | null;
-  links: { url: string; title: string | null }[];
-  costUsd: number;
+  /** One entry per `WEB_RESEARCH_FIELD_KEYS`; a value is null, with the reason, when the sources did not say. */
+  fields: WebResearchField[];
+  /** The pages the search returned (never links the model wrote). */
+  sources: WebResearchSource[];
+  model: string;
+  /** What the call cost, as the provider reported it (or an estimate), in millionths of a dollar. */
+  costUsdMicro: number;
 }
 
 export interface LeadResearchProvider {
   readonly name: string;
+  /** What one call is expected to cost: reserved under the ceiling before the call is made. */
+  readonly reserveUsdMicro: number;
+  /** One attempt, never retried: the call is paid even when its answer is useless. */
   research(input: LeadResearchInput): Promise<LeadResearchFinding>;
-}
-
-export function createLeadResearchProvider(): LeadResearchProvider | null {
-  return null;
 }

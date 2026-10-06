@@ -141,7 +141,7 @@ describe('the enrich_lead job', () => {
               };
             },
           },
-          budget: { dailyUsd: 2, searchUsdPerQuery: 0.005 },
+          budget: { dailyUsd: 2, searchUsdPerQuery: 0.005, researchDailyUsd: 1 },
         },
       }),
     )) as EnrichLeadOutput;
@@ -198,7 +198,7 @@ describe('the enrich_lead job', () => {
           },
           cnpj: { lookup: async () => null },
           // Two cents a day, and the first test already spent one cent.
-          budget: { dailyUsd: 0.01, searchUsdPerQuery: 0.005 },
+          budget: { dailyUsd: 0.01, searchUsdPerQuery: 0.005, researchDailyUsd: 1 },
         },
       }),
     )) as EnrichLeadOutput;
@@ -234,7 +234,7 @@ describe('the enrich_lead job', () => {
             },
           },
           cnpj: { lookup: async () => null },
-          budget: { dailyUsd: 5, searchUsdPerQuery: 0.005 },
+          budget: { dailyUsd: 5, searchUsdPerQuery: 0.005, researchDailyUsd: 1 },
         },
       }),
     )) as EnrichLeadOutput;
@@ -263,7 +263,7 @@ describe('the enrich_lead job', () => {
             },
           },
           cnpj: { lookup: async () => null },
-          budget: { dailyUsd: 5, searchUsdPerQuery: 0.005 },
+          budget: { dailyUsd: 5, searchUsdPerQuery: 0.005, researchDailyUsd: 1 },
         },
       }),
     )) as EnrichLeadOutput;
@@ -287,7 +287,7 @@ describe('the enrich_lead job', () => {
         job,
         baseContext({
           db: broken,
-          enrichment: { zapi: null, search: null, cnpj: { lookup: async () => null }, budget: { dailyUsd: 5, searchUsdPerQuery: 0.005 } },
+          enrichment: { zapi: null, search: null, cnpj: { lookup: async () => null }, budget: { dailyUsd: 5, searchUsdPerQuery: 0.005, researchDailyUsd: 1 } },
         }),
       ),
     ).rejects.toThrow('connection lost');

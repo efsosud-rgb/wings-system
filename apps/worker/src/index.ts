@@ -1,6 +1,7 @@
 import { tmpdir } from 'node:os';
 import { runFfmpeg, runFfprobe, runWhisper } from './lib/commands.js';
-import { createBraveSearch, createBrasilApi, createLeadResearchProvider, createZapiProfileClient } from './lib/enrichment.js';
+import { createBraveSearch, createBrasilApi, createZapiProfileClient } from './lib/enrichment.js';
+import { createLeadResearchProvider } from './lib/lead-research.js';
 import { createS3Storage } from './lib/storage.js';
 import { concurrencyOf, threadsPerJob } from './concurrency.js';
 import { createPool, waitForJobsTable } from './db/client.js';
@@ -39,8 +40,15 @@ async function main() {
         })
       : null;
   const search = env.BRAVE_SEARCH_API_KEY ? createBraveSearch({ apiKey: env.BRAVE_SEARCH_API_KEY, log }) : null;
+  const research = createLeadResearchProvider({
+    enabled: env.LEAD_RESEARCH_ENABLED === 'true',
+    apiKey: env.OPENROUTER_API_KEY,
+    model: env.LEAD_RESEARCH_MODEL,
+    reserveUsd: env.LEAD_RESEARCH_USD_PER_CALL,
+    log,
+  });
   console.warn(
-    `wings-worker: enrich_lead with zapi=${zapi ? 'on' : 'off'}, search=${search ? 'brave' : 'off'}, ceiling US$ ${env.ENRICH_DAILY_USD}/day`,
+    `wings-worker: enrich_lead with zapi=${zapi ? 'on' : 'off'}, search=${search ? 'brave' : 'off'}, ceiling US$ ${env.ENRICH_DAILY_USD}/day; company research=${research ? `openrouter (${env.LEAD_RESEARCH_MODEL})` : 'off'}, ceiling US$ ${env.LEAD_RESEARCH_DAILY_USD}/day`,
   );
 
   const stop = runWorker(
@@ -62,8 +70,12 @@ async function main() {
         zapi,
         search,
         cnpj: createBrasilApi({ baseUrl: env.BRASILAPI_BASE_URL, log }),
-        budget: { dailyUsd: env.ENRICH_DAILY_USD, searchUsdPerQuery: env.ENRICH_SEARCH_USD_PER_QUERY },
-        research: createLeadResearchProvider(),
+        budget: {
+          dailyUsd: env.ENRICH_DAILY_USD,
+          searchUsdPerQuery: env.ENRICH_SEARCH_USD_PER_QUERY,
+          researchDailyUsd: env.LEAD_RESEARCH_DAILY_USD,
+        },
+        research,
       },
     },
     { jobTypes, concurrency, pollIntervalMs: env.WORKER_POLL_INTERVAL_MS, maxAttempts: env.WORKER_MAX_ATTEMPTS },

@@ -38,7 +38,7 @@ export function baseContext(overrides: Partial<JobContext> = {}): JobContext {
           throw new Error('cnpj lookup was not stubbed for this test');
         },
       },
-      budget: { dailyUsd: 2, searchUsdPerQuery: 0.005 },
+      budget: { dailyUsd: 2, searchUsdPerQuery: 0.005, researchDailyUsd: 1 },
     },
     ...overrides,
   };
