@@ -487,17 +487,13 @@ function DealName({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
   );
 }
 
-type Action = { tab: Tab; icon: IconName; label: string; soon?: string };
+type Action = { tab: Tab; icon: IconName; label: string; soon?: string; href?: string };
 const ACTIONS: Action[] = [
   { tab: 'note', icon: 'edit', label: 'Anotação' },
   { tab: 'email', icon: 'mail', label: 'E-mail' },
   { tab: 'call', icon: 'phone', label: 'Ligação' },
-  {
-    tab: 'whatsapp',
-    icon: 'message',
-    label: 'WhatsApp',
-    soon: 'Em breve: conversa e ligação pelo número comercial, dentro do CRM',
-  },
+  // Opens the conversation screen; sending waits there for the official API.
+  { tab: 'whatsapp', icon: 'message', label: 'WhatsApp', href: 'whatsapp' },
   {
     tab: 'meet',
     icon: 'video',
@@ -524,23 +520,37 @@ function ActionBar({
   const [more, setMore] = useState(false);
   return (
     <div className="crm-actions" role="toolbar" aria-label="Ações">
-      {ACTIONS.map((action) => (
-        <button
-          key={action.tab}
-          type="button"
-          className={`crm-action${active === action.tab ? ' is-active' : ''}`}
-          disabled={Boolean(action.soon)}
-          title={action.soon}
-          aria-label={action.soon ? `${action.label} (em breve)` : action.label}
-          onClick={() => onAct(action.tab)}
-        >
-          <span className="crm-action-icon" aria-hidden="true">
-            <Icon name={action.icon} size={18} />
-          </span>
-          <span>{action.label}</span>
-          {action.soon && <small>em breve</small>}
-        </button>
-      ))}
+      {ACTIONS.map((action) =>
+        action.href ? (
+          <Link
+            key={action.tab}
+            className="crm-action"
+            to={`/crm-vendas/negociacoes/${lead.id}/${action.href}`}
+            aria-label={action.label}
+          >
+            <span className="crm-action-icon" aria-hidden="true">
+              <Icon name={action.icon} size={18} />
+            </span>
+            <span>{action.label}</span>
+          </Link>
+        ) : (
+          <button
+            key={action.tab}
+            type="button"
+            className={`crm-action${active === action.tab ? ' is-active' : ''}`}
+            disabled={Boolean(action.soon)}
+            title={action.soon}
+            aria-label={action.soon ? `${action.label} (em breve)` : action.label}
+            onClick={() => onAct(action.tab)}
+          >
+            <span className="crm-action-icon" aria-hidden="true">
+              <Icon name={action.icon} size={18} />
+            </span>
+            <span>{action.label}</span>
+            {action.soon && <small>em breve</small>}
+          </button>
+        ),
+      )}
       <span className="crm-action-more crm-menu">
         <button
           type="button"
@@ -977,22 +987,29 @@ function CopyButton({ value, label }: { value: string; label: string }) {
 }
 
 /** A phone and an e-mail with their copy buttons, and the WhatsApp that waits. */
-function Reach({ phone, email }: { phone: string | null; email: string | null }) {
+function Reach({
+  phone,
+  email,
+  leadId,
+}: {
+  phone: string | null;
+  email: string | null;
+  leadId: string;
+}) {
   return (
     <div className="crm-reach">
       {phone && (
         <span>
           <a href={`tel:+${phone}`}>{formatPhone(phone)}</a>
           <CopyButton value={`+${phone}`} label="Copiar telefone" />
-          <button
-            type="button"
+          <Link
             className="crm-btn is-small is-quiet"
-            disabled
-            title="Em breve: WhatsApp pelo número comercial, dentro do CRM"
-            aria-label="WhatsApp (em breve)"
+            to={`/crm-vendas/negociacoes/${leadId}/whatsapp`}
+            title="Abrir a conversa do WhatsApp"
+            aria-label="Conversa do WhatsApp"
           >
             <Icon name="message" size={13} />
-          </button>
+          </Link>
         </span>
       )}
       {email && (
@@ -1043,7 +1060,7 @@ function ContactPanel({
       {lead.contacts.length === 0 && (
         <div className="crm-stack" style={{ gap: 2 }}>
           <div className="crm-sub">A pessoa da negociação</div>
-          <Reach phone={lead.phone} email={lead.email} />
+          <Reach phone={lead.phone} email={lead.email} leadId={lead.id} />
         </div>
       )}
       {lead.contacts.map((contact) => (
@@ -1064,7 +1081,7 @@ function ContactPanel({
               </button>
             )}
           </div>
-          <Reach phone={contact.phone} email={contact.email} />
+          <Reach phone={contact.phone} email={contact.email} leadId={lead.id} />
         </div>
       ))}
       {adding && (

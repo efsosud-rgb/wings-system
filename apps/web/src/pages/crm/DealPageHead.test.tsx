@@ -308,7 +308,7 @@ describe('win or lose', () => {
 });
 
 describe('the action bar', () => {
-  it('opens the register tab of each action; WhatsApp and Reunião wait, disabled, "em breve"', () => {
+  it('opens the register tab of each action; WhatsApp opens the conversation; Reunião waits, "em breve"', () => {
     show();
     const bar = screen.getByRole('toolbar', { name: 'Ações' });
     expect(selectedTab()).toBe('Anotação');
@@ -324,11 +324,11 @@ describe('the action bar', () => {
     fireEvent.click(within(bar).getByRole('button', { name: 'E-mail' }));
     expect(selectedSection()).toBe('E-mail');
     expect(screen.getByText('Aba de e-mail')).toBeTruthy();
-    const whatsapp = within(bar).getByRole('button', { name: 'WhatsApp (em breve)' });
+    const whatsapp = within(bar).getByRole('link', { name: 'WhatsApp' });
+    expect(whatsapp.getAttribute('href')).toBe('/crm-vendas/negociacoes/l1/whatsapp');
     const meet = within(bar).getByRole('button', { name: 'Reunião (em breve)' });
-    expect((whatsapp as HTMLButtonElement).disabled).toBe(true);
     expect((meet as HTMLButtonElement).disabled).toBe(true);
-    expect(whatsapp.textContent).toContain('em breve');
+    expect(meet.textContent).toContain('em breve');
   });
 
   it('"Mais" keeps the meeting already held', () => {
@@ -446,8 +446,8 @@ describe('the contacts', () => {
     fireEvent.click(contacts.getByRole('button', { name: 'Copiar e-mail' }));
     expect(writeText).toHaveBeenCalledWith('elena@example.com');
     expect(
-      (contacts.getByRole('button', { name: 'WhatsApp (em breve)' }) as HTMLButtonElement).disabled,
-    ).toBe(true);
+      contacts.getByRole('link', { name: 'Conversa do WhatsApp' }).getAttribute('href'),
+    ).toBe('/crm-vendas/negociacoes/l1/whatsapp');
   });
 
   it('"+ Adicionar" on the right opens the contact form on the left', () => {
