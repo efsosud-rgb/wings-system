@@ -1,6 +1,7 @@
 import {
   normalizeBrazilianPhone,
   SITE_FORM_CONSENT_TEXT,
+  siteFormSpecSchema,
   siteFormSubmitSchema,
   whatsappLinkOf,
   type SiteFormInfo,
@@ -86,6 +87,7 @@ async function formPage(db: Database, slug: string) {
       brand: leadSourceRules.brand,
       clientName: clients.name,
       social: clients.social,
+      siteFormSpec: leadSourceRules.siteFormSpec,
     })
     .from(leadSourceRules)
     .leftJoin(clients, eq(clients.id, leadSourceRules.clientId))
@@ -127,6 +129,23 @@ async function verifyTurnstile(
   }
 }
 
+/** The page's approved standard form, or null when it shows the plain one. */
+function liveSiteForm(spec: unknown): SiteFormInfo['form'] {
+  const parsed = siteFormSpecSchema.safeParse(spec);
+  return parsed.success ? parsed.data : null;
+}
+
+/** The multiple-choice answer only when the page asks the question and the answer is one of its options. */
+function qualifierAnswerOf(
+  spec: unknown,
+  answer: string | undefined,
+): Record<string, string> | null {
+  const form = liveSiteForm(spec);
+  if (!form?.qualifier || !answer) return null;
+  if (!form.qualifier.options.includes(answer)) return null;
+  return { [form.qualifier.question]: answer };
+}
+
 const notFound = (reply: FastifyReply) =>
   reply.status(404).send({ error: 'not_found', message: 'Formulário não encontrado.' });
 
@@ -147,6 +166,8 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
         turnstileSiteKey: env.TURNSTILE_SITE_KEY ?? null,
         // The brand's own Instagram (T6); its WhatsApp is never shown here.
         instagram: instagramHandleOf(page.social?.instagram),
+        // The standard form Diretoria approved for this page, if any.
+        form: liveSiteForm(page.siteFormSpec),
       } satisfies SiteFormInfo);
     },
   );
@@ -253,6 +274,9 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
         consentedAt: now,
         consentSource: `site_form:${page.pattern}`,
         consentText: SITE_FORM_CONSENT_TEXT,
+        // The page's optional multiple-choice answer, kept as a form answer
+        // under the question's text; never read as a contact field.
+        formAnswers: qualifierAnswerOf(page.siteFormSpec, body.data.qualifierAnswer),
         // Paid research only when Eric turns it on for the site form (off by default).
         skipResearch: env.SITE_FORM_RESEARCH_ENABLED !== 'true',
         event: {

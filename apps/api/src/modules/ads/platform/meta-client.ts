@@ -16,9 +16,11 @@ import type {
   CampaignStatus,
   ConversionSource,
   CreateCampaignSpec,
+  ExistingLeadForm,
   InsightRow,
   MetricsLevel,
   MutationOutcome,
+  PageAccess,
   PlatformAccount,
   PlatformAd,
   PlatformAdSet,
@@ -338,6 +340,7 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
     params: Record<string, string> = {},
     maxPages = 50,
     timeoutMs?: number,
+    token?: string,
   ): Promise<T[]> {
     const collected: T[] = [];
     let after: string | undefined;
@@ -347,7 +350,7 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       const body = await this.get<{
         data: T[];
         paging?: { next?: string; cursors?: { after?: string } };
-      }>(path, { ...params, ...(after ? { after } : {}) }, timeoutMs);
+      }>(path, { ...params, ...(after ? { after } : {}) }, timeoutMs, token);
 
       collected.push(...(body.data ?? []));
 
@@ -366,6 +369,8 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
     path: string,
     params: Record<string, string> = {},
     timeoutMs = this.timeoutMs,
+    /** A Page token for the Page edges that need one; the account token otherwise. */
+    token = this.token,
   ): Promise<T> {
     const url = new URL(`https://graph.facebook.com/${this.version}/${path}`);
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
@@ -373,7 +378,7 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
     // end up in a proxy log or an error message containing the URL.
     const response = await this.fetchImpl(url.toString(), {
       method: 'GET',
-      headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/json' },
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       signal: AbortSignal.timeout(timeoutMs),
     });
 
@@ -388,6 +393,66 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       );
     }
     return body as T;
+  }
+
+  // --- the Page: token, access and the forms it already has ---------------------
+
+  /**
+   * The Page's own token, read with the account token (`?fields=access_token`),
+   * which Meta answers only to a user with a Page role or a system user holding
+   * the Page as an asset with `pages_manage_ads`. Held in memory for one call;
+   * never stored, logged or returned to a route.
+   */
+  protected async pageToken(
+    pageId: string,
+  ): Promise<{ token: string | null; reason: string | null }> {
+    try {
+      const page = await this.get<{ access_token?: unknown }>(pageId, { fields: 'access_token' });
+      const token = typeof page.access_token === 'string' ? page.access_token : '';
+      return token ? { token, reason: null } : { token: null, reason: 'no_page_token' };
+    } catch (error) {
+      if (error instanceof MetaApiError) return { token: null, reason: `graph_${error.code}` };
+      return { token: null, reason: 'unreachable' };
+    }
+  }
+
+  /** Whether this token can act for the Page: what the lead-form pre-check shows. Reads only. */
+  async pageAccess(pageId: string): Promise<PageAccess> {
+    const access = await this.pageToken(pageId);
+    return { pageId, canManage: access.token !== null, reason: access.reason };
+  }
+
+  /**
+   * The instant forms the Page already has: id, name, status and the privacy
+   * policy link each one uses, so the builder can offer "the same policy as
+   * the current forms". Never a lead, never a token.
+   */
+  async listLeadForms(pageId: string): Promise<ExistingLeadForm[]> {
+    const access = await this.pageToken(pageId);
+    if (!access.token) return [];
+    const rows = await this.getAllPages<{
+      id?: string;
+      name?: string;
+      status?: string;
+      privacy_policy_url?: string;
+    }>(
+      `${pageId}/leadgen_forms`,
+      { fields: 'id,name,status,privacy_policy_url', limit: '50' },
+      10,
+      undefined,
+      access.token,
+    );
+    return rows
+      .filter((row) => typeof row.id === 'string' && row.id)
+      .map((row) => ({
+        id: row.id as string,
+        name: row.name ?? '',
+        status: row.status ?? null,
+        privacyPolicyUrl:
+          typeof row.privacy_policy_url === 'string' && /^https:\/\//.test(row.privacy_policy_url)
+            ? row.privacy_policy_url
+            : null,
+      }));
   }
 
   // --- reads behind ad sets and ads -----------------------------------------

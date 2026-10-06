@@ -7,7 +7,8 @@
  * with a person watching, and everything before that is rehearsal.
  */
 
-export type MetaEdge = 'campaigns' | 'adimages' | 'advideos' | 'adsets' | 'adcreatives' | 'ads';
+export type MetaEdge =
+  'campaigns' | 'adimages' | 'advideos' | 'adsets' | 'adcreatives' | 'ads' | 'leadgen_forms';
 
 export interface RecordedMetaCall {
   method: string;
@@ -37,6 +38,10 @@ export interface FakeMetaApiOptions {
   balanceCents?: string;
   /** Ad sets that already exist on the account, as `listAdSets` reads them. */
   existingAdSets?: { id: string; campaign_id: string; name: string; status: string }[];
+  /** The token cannot act for the Pages: `?fields=access_token` answers without one. */
+  noPageToken?: boolean;
+  /** Instant forms the Page already has, as `GET /{page}/leadgen_forms` lists them. */
+  existingLeadForms?: { id: string; name: string; status?: string; privacy_policy_url?: string }[];
 }
 
 // Keys and names as Meta answered them on 2026-09-30 (see BRAZIL_STATE_REGIONS).
@@ -78,6 +83,8 @@ export function fakeMetaApi(options: FakeMetaApiOptions = {}) {
     balanceCents: options.balanceCents,
     /** When set, every read of the account itself answers this Graph error. */
     accountError: undefined as { code: number; message: string } | undefined,
+    /** Instant forms created here, by Page. */
+    leadForms: new Map<string, { id: string; name: string; fields: Record<string, string> }[]>(),
   };
   const sizes = new Map<string, number>();
   let nextId = 120_210_000_000_000;
@@ -124,6 +131,19 @@ export function fakeMetaApi(options: FakeMetaApiOptions = {}) {
           { key: 31, name: 'Portuguese (Brazil)' },
           { key: 32, name: 'Portuguese (Portugal)' },
         ],
+      });
+    }
+    // A Page read for its token: what a system user with pages_manage_ads gets.
+    if (query.fields === 'access_token' && /^\d+$/.test(path)) {
+      return json(
+        200,
+        options.noPageToken ? { id: path } : { id: path, access_token: `page-${path}` },
+      );
+    }
+    if (path.endsWith('/leadgen_forms')) {
+      const pageId = path.split('/')[0] ?? '';
+      return json(200, {
+        data: [...(options.existingLeadForms ?? []), ...(state.leadForms.get(pageId) ?? [])],
       });
     }
     if (path === 'me/accounts') {
@@ -252,6 +272,14 @@ export function fakeMetaApi(options: FakeMetaApiOptions = {}) {
     }
     if (edge === 'adimages') {
       return json(200, { images: { [fields.name ?? 'image']: { hash: `hash-${newId()}` } } });
+    }
+    if (edge === 'leadgen_forms') {
+      const pageId = path.split('/')[0] ?? '';
+      const id = newId();
+      const forms = state.leadForms.get(pageId) ?? [];
+      forms.push({ id, name: fields.name ?? '', fields });
+      state.leadForms.set(pageId, forms);
+      return json(200, { id });
     }
     // Like Meta: a validate-only ad is judged and never created.
     if (edge === 'ads' && (fields.execution_options ?? '').includes('validate_only')) {

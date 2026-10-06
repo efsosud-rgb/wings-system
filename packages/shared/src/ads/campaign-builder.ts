@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { LEAD_CAPTURES, leadFormSchema } from './lead-form.js';
 
 /**
  * Contract for the campaign builder in the traffic studio.
@@ -1412,6 +1413,18 @@ export const campaignDraftSchema = z
     /** Meta only. */
     formatKey: z.string().optional(),
     destinationUrl: z.url({ protocol: /^https$/, error: 'Informe um endereço https:// válido' }),
+    /**
+     * Lead campaigns: where the lead is captured. Absent on drafts from before
+     * the form existed, which means the destination page. `instant_form` is
+     * Meta only and requires `leadForm`.
+     */
+    leadCapture: z.enum(LEAD_CAPTURES).optional(),
+    /**
+     * Wings' standard form, when the campaign carries one: Meta's instant form
+     * (`leadCapture: instant_form`) or the site page's form (YouTube, and Meta
+     * with a `/lp/<slug>` destination). Carries the funnel rule born with it.
+     */
+    leadForm: leadFormSchema.optional(),
     /** Meta only: image plus copy. Google drafts send none. */
     variations: z
       .array(copyVariationSchema)
@@ -1466,6 +1479,47 @@ export const campaignDraftSchema = z
     const reachProblem = reachRefusal(draft.platform, draft.reach);
     if (reachProblem) {
       ctx.addIssue({ code: 'custom', path: ['reach', 'customLocations'], message: reachProblem });
+    }
+
+    // The form rides only on a lead campaign; the instant form only on Meta
+    // (the Google docs say Demand Gen takes no lead form, 2026-10-06).
+    if (draft.leadCapture === 'instant_form') {
+      if (draft.platform !== 'meta') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['leadCapture'],
+          message: 'O formulário no anúncio só existe na Meta',
+        });
+      }
+      if (!draft.leadForm) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['leadForm', 'privacyPolicyUrl'],
+          message: 'Preencha o formulário do anúncio',
+        });
+      }
+    }
+    if ((draft.leadCapture || draft.leadForm) && draft.objective !== 'lead') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['leadForm'],
+        message: 'O formulário de leads só vai numa campanha de geração de leads',
+      });
+    }
+    if (draft.leadForm) {
+      for (const [path, text] of [
+        [['leadForm', 'thankYou', 'title'], draft.leadForm.thankYou.title],
+        [['leadForm', 'thankYou', 'body'], draft.leadForm.thankYou.body],
+        [['leadForm', 'qualifier', 'question'], draft.leadForm.qualifier?.question ?? ''],
+      ] as const) {
+        for (const finding of checkCopyCompliance(text)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [...path],
+            message: `${COMPLIANCE_RULE_LABEL[finding.rule]}: "${finding.excerpt}"`,
+          });
+        }
+      }
     }
 
     const foreign = (field: 'youtube' | 'search' | 'variations' | 'formatKey', label: string) =>
@@ -1571,13 +1625,35 @@ export type CampaignDraft = z.output<typeof campaignDraftSchema>;
 // ---------------------------------------------------------------------------
 
 export interface DraftDifference {
-  field: 'dailyBudgetCents' | 'startDate' | 'endDate' | 'destinationUrl' | 'reach' | 'audience';
+  field:
+    | 'dailyBudgetCents'
+    | 'startDate'
+    | 'endDate'
+    | 'destinationUrl'
+    | 'reach'
+    | 'audience'
+    | 'leadForm';
   label: string;
   saved: string;
   requested: string;
 }
 
 const brDate = (value: string) => value.split('-').reverse().join('/');
+
+/** The form in one line, for the approval's comparison: where, how many questions, which funnel. */
+export function describeLeadCapture(
+  draft: Pick<CampaignDraft, 'leadCapture' | 'leadForm'>,
+): string {
+  if (!draft.leadForm)
+    return draft.leadCapture === 'instant_form' ? 'Formulário no anúncio' : 'Página de destino';
+  const where =
+    draft.leadCapture === 'instant_form' ? 'Formulário no anúncio' : 'Formulário na página';
+  const questions = 5 + (draft.leadForm.qualifier ? 1 : 0);
+  const funnel = draft.leadForm.funnel.brand
+    ? `${draft.leadForm.funnel.pipeline} · ${draft.leadForm.funnel.brand}`
+    : draft.leadForm.funnel.pipeline;
+  return `${where} · ${questions} perguntas · ${funnel}`;
+}
 const brl = (cents: number) => `R$ ${(cents / 100).toFixed(2).replace('.', ',')}`;
 
 /**
@@ -1648,6 +1724,14 @@ export function draftDifferences(
       label: 'Público',
       saved: audience(saved),
       requested: audience(requested),
+    });
+  }
+  if (describeLeadCapture(saved) !== describeLeadCapture(requested)) {
+    differences.push({
+      field: 'leadForm',
+      label: 'Formulário',
+      saved: describeLeadCapture(saved),
+      requested: describeLeadCapture(requested),
     });
   }
   return differences;

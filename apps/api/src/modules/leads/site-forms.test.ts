@@ -173,6 +173,8 @@ describe('site form (T5)', () => {
       brand: 'Cenoritas',
       turnstileSiteKey: '0x4AAAAAAA-site',
       instagram: null,
+      // The plain form until Diretoria approves a standard one for the page.
+      form: null,
     });
     expect(JSON.stringify(info.json())).not.toContain('secret');
   });

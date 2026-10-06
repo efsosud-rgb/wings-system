@@ -167,7 +167,26 @@ export function SiteFormPage() {
       )}
       {submit.isSuccess ? (
         <>
-          <Alert kind="success">Recebemos seus dados. Em breve entraremos em contato.</Alert>
+          {/* The thank-you Diretoria approved for this page, or the plain one. */}
+          {info.data.form ? (
+            <Alert kind="success">
+              <strong>{info.data.form.thankYou.title}</strong>
+              <br />
+              {info.data.form.thankYou.body}
+            </Alert>
+          ) : (
+            <Alert kind="success">Recebemos seus dados. Em breve entraremos em contato.</Alert>
+          )}
+          {info.data.form && (
+            <a
+              className="btn btn-ghost"
+              href={info.data.form.thankYou.buttonUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {info.data.form.thankYou.buttonText}
+            </a>
+          )}
           {/* The Wings WhatsApp (Sofia), with the brand in the text; no link, just the thanks. */}
           {submit.data.whatsappUrl && (
             <a
@@ -182,6 +201,20 @@ export function SiteFormPage() {
         </>
       ) : (
         <form onSubmit={onSubmit} noValidate>
+          {/* The page's optional multiple-choice question comes first, as on the ad. */}
+          {info.data.form?.qualifier && (
+            <fieldset className="site-form-qualifier">
+              <legend className="field-label">{info.data.form.qualifier.question}</legend>
+              <div className="lead-sheet-options">
+                {info.data.form.qualifier.options.map((option) => (
+                  <label key={option} className="check lead-sheet-option">
+                    <input type="radio" value={option} {...register('qualifierAnswer')} />
+                    {option}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
           <Field label="Nome" error={errors.name?.message} required>
             <Input autoComplete="name" {...register('name')} />
           </Field>

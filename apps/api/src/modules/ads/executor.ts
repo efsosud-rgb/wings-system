@@ -471,6 +471,7 @@ export async function executeApprovedChange(
           draft: tree.draft,
           prepared: tree.prepared,
           pixelId: options.metaPixelId ?? '',
+          actorEmployeeId: options.actorEmployeeId ?? null,
         });
         if (built.status === 'incomplete') {
           // The campaign exists and the rest does not, or not all of it. That is

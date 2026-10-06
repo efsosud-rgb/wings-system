@@ -13,6 +13,7 @@ import { campaignLeadsRoutes } from './modules/ads/campaign-leads-routes.js';
 import { cockpitRoutes } from './modules/ads/cockpit-routes.js';
 import { creativeRoutes } from './modules/ads/creative-routes.js';
 import { dashboardRoutes } from './modules/ads/dashboard/routes.js';
+import { leadFormRoutes } from './modules/ads/lead-form-routes.js';
 import { metaRoutes } from './modules/ads/meta-routes.js';
 import { videoUploadRoutes } from './modules/ads/video-upload-routes.js';
 import { adsRoutes } from './modules/ads/routes.js';
@@ -263,6 +264,7 @@ export async function buildApp(deps: {
   await app.register(mediaStudioRoutes);
   await app.register(studioRoutes);
   await app.register(metaRoutes);
+  await app.register(leadFormRoutes);
   await app.register(videoUploadRoutes);
   await app.register(siteRoutes, { wordpressFetch: deps.wordpressFetch });
 
