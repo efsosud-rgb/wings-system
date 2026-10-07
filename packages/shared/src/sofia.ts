@@ -154,6 +154,40 @@ export const sofiaQuestionSchema = z
   });
 export type SofiaQuestion = z.infer<typeof sofiaQuestionSchema>;
 
+// --- who Sofia speaks for (Eric, 07/10) ------------------------------------------------------
+
+/**
+ * A franchise lead never hears of Wings: in an Expansão conversation whose
+ * brand is known, Sofia (and the seller, and the templates) speak for the
+ * brand's expansion team. In Formatação, or before the brand is known, she is
+ * Wings Company's. She always says she is a virtual assistant.
+ *
+ * Her texts say who she is with placeholders, never with the name itself:
+ * `{quem}` → "da Wings Company" | "do time de expansão da <marca>";
+ * `{empresa}` → "Wings Company" | "<marca>"; `{marca}` → the brand.
+ */
+export const SOFIA_WINGS_NAME = 'Wings Company';
+
+export function sofiaVoice(brand: string | null) {
+  return brand
+    ? { quem: `do time de expansão da ${brand}`, empresa: brand }
+    : { quem: `da ${SOFIA_WINGS_NAME}`, empresa: SOFIA_WINGS_NAME };
+}
+
+/** A text of Sofia's with its placeholders filled for this conversation. */
+export function sofiaWords(text: string, brand: string | null): string {
+  const voice = sofiaVoice(brand);
+  return text
+    .replaceAll('{quem}', voice.quem)
+    .replaceAll('{empresa}', voice.empresa)
+    .replaceAll('{marca}', brand ?? voice.empresa);
+}
+
+/** Whether a text names Wings (forbidden in a brand's conversation). */
+export const mentionsWings = (text: string) => /wings/i.test(text);
+
+const NO_WINGS = 'Não escreva "Wings": use {empresa} ou {quem}, que viram a marca na Expansão.';
+
 const questionList = z
   .array(sofiaQuestionSchema)
   .min(1, 'Ao menos uma pergunta.')
@@ -165,14 +199,24 @@ const questionList = z
     message: 'Só uma pergunta pode ser o nome da pessoa.',
   });
 
-const line = (max: number) => z.string().trim().min(2).max(max);
+const line = (max: number) =>
+  z
+    .string()
+    .trim()
+    .min(2)
+    .max(max)
+    .refine((t) => !mentionsWings(t), { message: NO_WINGS });
 
 /** Everything Sofia says that is not a question; Eric approves the wording. */
 export const sofiaTextsSchema = z.object({
-  /** First words of every conversation: who she is. Must say "atendente virtual". */
-  greeting: line(400).refine((t) => /atendente virtual/i.test(t), {
-    message: 'A apresentação precisa dizer que a Sofia é atendente virtual.',
-  }),
+  /** First words of every conversation: "atendente virtual {quem}". */
+  greeting: line(400)
+    .refine((t) => /atendente virtual/i.test(t), {
+      message: 'A apresentação precisa dizer que a Sofia é atendente virtual.',
+    })
+    .refine((t) => t.includes('{quem}'), {
+      message: 'A apresentação precisa de {quem} (Wings Company ou o time de expansão da marca).',
+    }),
   /** Goes with three buttons: Franquear negócio · Abrir uma franquia · Outro assunto. */
   objective: line(300),
   /** After "Outro assunto": what it is about. */
@@ -205,7 +249,11 @@ export const sofiaSettingsSchema = z.object({
   enabled: z.boolean(),
   texts: sofiaTextsSchema,
   formatacao: questionList,
-  expansao: questionList,
+  /** Asked for a brand: never with the word Wings. */
+  expansao: questionList.refine(
+    (list) => !list.some((q) => [q.text, q.label, ...q.options].some(mentionsWings)),
+    { message: NO_WINGS },
+  ),
 });
 export type SofiaSettings = z.infer<typeof sofiaSettingsSchema>;
 
@@ -225,14 +273,14 @@ export const SOFIA_DEFAULT_SETTINGS: SofiaSettings = {
   enabled: false,
   texts: {
     greeting:
-      'Olá! Eu sou a Sofia, atendente virtual da Wings. Vou te fazer algumas perguntas rápidas para te direcionar ao consultor certo.',
+      'Olá! Eu sou a Sofia, atendente virtual {quem}. Vou te fazer algumas perguntas rápidas para te direcionar ao consultor certo.',
     objective:
       'Você quer transformar o seu negócio em franquia, abrir uma franquia de uma das nossas marcas ou é outro assunto?',
     otherSubject: 'Claro! Me conta em poucas palavras sobre o que você quer falar.',
     brandConfirm: 'Vi que você se interessou pela franquia {marca}. É isso mesmo?',
     brandQuestion: 'Qual marca de franquia te interessa?',
     handoffSeller:
-      'Obrigada! Já passei as suas respostas para um consultor da Wings, que vai continuar o atendimento por aqui.',
+      'Obrigada! Já passei as suas respostas para um consultor {quem}, que vai continuar o atendimento por aqui.',
     handoffHuman:
       'Vou te passar para uma pessoa da nossa equipe, que continua o atendimento por aqui.',
     outOfHours:
@@ -325,7 +373,7 @@ export const SOFIA_DEFAULT_SETTINGS: SofiaSettings = {
     {
       key: 'origem',
       label: 'Como conheceu a Wings',
-      text: 'Por último: como você conheceu a Wings?',
+      text: 'Por último: como você conheceu a {empresa}?',
       kind: 'choice',
       options: ORIGIN_OPTIONS,
       optional: false,
@@ -377,8 +425,8 @@ export const SOFIA_DEFAULT_SETTINGS: SofiaSettings = {
     },
     {
       key: 'origem',
-      label: 'Como conheceu a Wings',
-      text: 'Por último: como você conheceu a Wings?',
+      label: 'Como conheceu a marca',
+      text: 'Por último: como você chegou até nós?',
       kind: 'choice',
       options: ORIGIN_OPTIONS,
       optional: false,
@@ -469,4 +517,4 @@ export type SofiaAttendanceAction = z.infer<typeof sofiaAttendanceSchema>['actio
 export const SOFIA_MODEL = 'deepseek/deepseek-v4-flash';
 export type SofiaModel = typeof SOFIA_MODEL;
 /** Bumped whenever the prompt changes; stored with every AI call. */
-export const SOFIA_PROMPT_VERSION = 'sofia-2026-10-07.1';
+export const SOFIA_PROMPT_VERSION = 'sofia-2026-10-07.2';

@@ -1,5 +1,6 @@
 import {
   brazilianPhoneVariants,
+  WINGS_CLIENT_ID,
   WA_MEDIA_KINDS,
   WA_WINDOW_HOURS,
   type DealWhatsApp,
@@ -12,7 +13,14 @@ import {
 } from '@wings/shared';
 import { desc, eq, inArray } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { employees, waContacts, waConversations, waMessages } from '../../db/schema/index.js';
+import {
+  clients,
+  employees,
+  leads,
+  waContacts,
+  waConversations,
+  waMessages,
+} from '../../db/schema/index.js';
 import type { Env } from '../../env.js';
 import { callingOn } from './calling.js';
 import { errorText, whatsappConfigOf } from './graph.js';
@@ -104,6 +112,34 @@ export async function contactOfPhone(db: Database, phone: string | null) {
   return found[0] ?? null;
 }
 
+/**
+ * The brand a conversation speaks for (Eric, 07/10): an Expansão deal of a
+ * brand client, or Sofia's Expansão conversation once she knows the brand.
+ * Null means Wings Company.
+ */
+export async function brandVoiceOf(
+  db: Database,
+  leadId: string | null,
+  conversationId: string | null,
+): Promise<string | null> {
+  if (leadId) {
+    const [row] = await db
+      .select({ pipeline: leads.pipeline, clientId: leads.clientId, name: clients.name })
+      .from(leads)
+      .innerJoin(clients, eq(clients.id, leads.clientId))
+      .where(eq(leads.id, leadId));
+    if (row)
+      return row.pipeline === 'expansao' && row.clientId !== WINGS_CLIENT_ID ? row.name : null;
+  }
+  if (!conversationId) return null;
+  const [row] = await db
+    .select({ segment: waConversations.segment, name: clients.name })
+    .from(waConversations)
+    .innerJoin(clients, eq(clients.id, waConversations.brandClientId))
+    .where(eq(waConversations.id, conversationId));
+  return row?.segment === 'expansao' ? row.name : null;
+}
+
 export interface ThreadDeps {
   db: Database;
   env: Env;
@@ -158,6 +194,7 @@ export async function buildThread(
     optedOut: Boolean(contact?.optOutAt),
     callPermission: permissionOf(contact, deps.now),
     attendance: (conversation?.attendance as SofiaState | undefined) ?? null,
+    speaksFor: await brandVoiceOf(db, leadId, conversation?.id ?? null),
     messages: rows.map((row) => toMessage(row, authors)),
   };
 }

@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 import {
   SESSION_COOKIE,
   SOFIA_DEFAULT_SETTINGS,
+  sofiaWords,
   WINGS_CLIENT_ID,
   type RoleKey,
   type SofiaConversationDetail,
@@ -21,6 +22,7 @@ import {
   leadTrackingLinks,
   leads,
   sofiaAiRuns,
+  waTemplates,
   waContacts,
   waConversations,
   waMessages,
@@ -60,6 +62,7 @@ let app: FastifyInstance;
 let env: ReturnType<typeof loadEnv>;
 let formatSeller: string;
 let expansionSeller: string;
+let brandId: string;
 
 const sends: Record<string, unknown>[] = [];
 const json = (body: unknown, status = 200) =>
@@ -141,6 +144,14 @@ beforeAll(async () => {
     { pipeline: 'formatacao', employeeId: formatSeller },
     { pipeline: 'expansao', employeeId: expansionSeller },
   ]);
+  const [brand] = await db
+    .insert(clients)
+    .values({ name: 'Casa do Churros', slug: 'casa-do-churros' })
+    .returning();
+  brandId = brand!.id;
+  await db
+    .insert(leadTrackingLinks)
+    .values({ clientId: brandId, channel: 'site', code: 'WCHUR2', phone: '5521999470288' });
 }, 60_000);
 
 afterAll(async () => {
@@ -154,6 +165,8 @@ beforeEach(async () => {
   llmAnswers = [];
   clock = NOW.getTime();
   await saveSofiaSettings(db, { ...SOFIA_DEFAULT_SETTINGS, enabled: true }, null, NOW);
+  // A turn left waiting by an earlier test is not this test's.
+  await db.update(waConversations).set({ sofiaDueAt: null });
 });
 
 async function sessionFor(role: RoleKey) {
@@ -301,7 +314,7 @@ describe('Sofia, Formatação from first message to the seller', () => {
     out = lastSent();
     expect(out.interactive.type).toBe('list');
     expect(bodyOf(out)).toBe('Que legal!\n\nEm qual segmento ela atua?');
-    expect(out.interactive.action.sections[0].rows[0]).toEqual({
+    expect(out.interactive.action.sections[0]!.rows[0]).toEqual({
       id: 'sofia:q:segmento:0',
       title: 'Alimentação',
     });
@@ -402,7 +415,7 @@ describe('Sofia, Formatação from first message to the seller', () => {
     await write(phone, text('Quero transformar minha hamburgueria em franquia'));
     await sofiaAnswers();
     expect(bodyOf(lastSent())).toBe(
-      `${SOFIA_DEFAULT_SETTINGS.texts.greeting}\n\nPara começar, qual é o seu nome?`,
+      `${sofiaWords(SOFIA_DEFAULT_SETTINGS.texts.greeting, null)}\n\nPara começar, qual é o seu nome?`,
     );
   });
 
@@ -635,33 +648,215 @@ describe('the screen and the settings', () => {
 
 describe('a tracking link', () => {
   it('with Sofia on, counts the click and leaves the deal to her; off, makes the lead at once as before', async () => {
-    const [brand] = await db
-      .insert(clients)
-      .values({ name: 'Casa do Churros', slug: 'casa-do-churros' })
-      .returning();
-    await db
-      .insert(leadTrackingLinks)
-      .values({ clientId: brand!.id, channel: 'site', code: 'WCHUR2', phone: '5521999470288' });
+    const [before] = await db
+      .select()
+      .from(leadTrackingLinks)
+      .where(eq(leadTrackingLinks.code, 'WCHUR2'));
     const phone = newPhone();
     await write(phone, text('WCHUR2 Olá! Quero saber da franquia Casa do Churros.'));
     const on = await conversationOf(phone);
     expect(on).toMatchObject({
       attendance: 'sofia',
       segment: 'expansao',
-      brandClientId: brand!.id,
+      brandClientId: brandId,
     });
     expect(on.leadId).toBeNull();
     const [link] = await db
       .select()
       .from(leadTrackingLinks)
       .where(eq(leadTrackingLinks.code, 'WCHUR2'));
-    expect(link!.hits).toBe(1);
+    expect(link!.hits).toBe(before!.hits + 1);
 
     await saveSofiaSettings(db, SOFIA_DEFAULT_SETTINGS, null, NOW);
     const other = newPhone();
     await write(other, text('WCHUR2 Olá! Quero saber da franquia Casa do Churros.'));
     const off = await conversationOf(other);
     expect(off.leadId).not.toBeNull();
+  });
+});
+
+describe('a franchise lead never hears of Wings (Eric, 07/10)', () => {
+  /** Every word Sofia sent in a conversation. */
+  const sofiaWordsIn = async (conversationId: string) =>
+    (
+      await db
+        .select({ text: waMessages.text })
+        .from(waMessages)
+        .where(and(eq(waMessages.conversationId, conversationId), eq(waMessages.author, 'sofia')))
+    ).map((m) => m.text ?? '');
+
+  it('a brand link: she speaks for the brand’s expansion team and hands an Expansão deal with the brand', async () => {
+    const phone = newPhone();
+    const from = sends.length;
+    llmAnswers = [said({ intent: 'expansao' })];
+    await write(phone, text('WCHUR2 Olá! Quero saber da franquia Casa do Churros.'));
+    await sofiaAnswers();
+    let out = lastSent();
+    expect(bodyOf(out)).toContain('atendente virtual do time de expansão da Casa do Churros');
+    expect(bodyOf(out)).toContain('Vi que você se interessou pela franquia Casa do Churros');
+    expect(out.interactive.action.buttons.map((b) => b.reply.title)).toEqual([
+      'Sim',
+      'Outra marca',
+      'Outro assunto',
+    ]);
+
+    await write(phone, tap('sofia:marca-sim', 'Sim'));
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toBe('Qual é o seu nome?');
+    await write(phone, text('Carlos Lima'));
+    await sofiaAnswers();
+    llmAnswers = [
+      said({
+        intent: 'expansao',
+        answers: { cidade: 'Campinas, SP' },
+        reply: 'A Wings agradece!',
+      }),
+    ];
+    await write(phone, text('Campinas, SP'));
+    await sofiaAnswers();
+    out = lastSent();
+    // The model's line named Wings: dropped, only the question went.
+    expect(bodyOf(out)).toBe('Quanto você pretende investir?');
+    await write(phone, pick('sofia:q:investimento:1'));
+    await sofiaAnswers();
+    await write(phone, pick('sofia:q:prazo:0'));
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toBe('Por último: como você chegou até nós?');
+    await write(phone, pick('sofia:q:origem:0'));
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toContain('consultor do time de expansão da Casa do Churros');
+
+    const conversation = await conversationOf(phone);
+    expect(conversation.attendance).toBe('waiting_seller');
+    const [lead] = await db.select().from(leads).where(eq(leads.id, conversation.leadId!));
+    expect(lead).toMatchObject({
+      pipeline: 'expansao',
+      clientId: brandId,
+      brand: 'Casa do Churros',
+      ownerEmployeeId: expansionSeller,
+      source: 'whatsapp_link',
+      name: 'Carlos Lima',
+    });
+    // Not one word about Wings, in what was stored or what went to Meta.
+    const words = await sofiaWordsIn(conversation.id);
+    expect(words.length).toBeGreaterThanOrEqual(7);
+    expect(words.some((w) => /wings/i.test(w))).toBe(false);
+    expect(JSON.stringify(sends.slice(from))).not.toMatch(/wings/i);
+    // The model was told whom she speaks for.
+    expect(JSON.stringify(llmCalls.at(-1)?.messages)).toContain(
+      'time de expansão da Casa do Churros',
+    );
+  });
+
+  it('Formatação and an unknown origin speak for Wings Company, until the brand is known', async () => {
+    const phone = newPhone();
+    await write(phone, tap('sofia:expansao', 'Abrir uma franquia'));
+    await sofiaAnswers();
+    expect(bodyOf(lastSent())).toContain('atendente virtual da Wings Company');
+    expect(bodyOf(lastSent())).toContain(SOFIA_DEFAULT_SETTINGS.texts.brandQuestion);
+
+    llmAnswers = [said({ intent: 'expansao', brand: 'casa do churros' })];
+    await write(phone, text('a casa do churros'));
+    await sofiaAnswers();
+    const conversation = await conversationOf(phone);
+    expect(conversation.brandClientId).toBe(brandId);
+    // From here on she is the brand's: the next question carries no Wings.
+    expect(bodyOf(lastSent())).toBe('Qual é o seu nome?');
+    const thread = await app.inject({
+      method: 'GET',
+      url: `/sofia/conversations/${conversation.id}`,
+      cookies: (await sessionFor('admin_master')).cookies,
+    });
+    expect(thread.json<SofiaConversationDetail>().thread.speaksFor).toBe('Casa do Churros');
+  });
+
+  it('the seller of a brand deal cannot send a text or a template that names Wings', async () => {
+    const seller = await sessionFor('vendedor_expansao');
+    const phone = newPhone();
+    const [lead] = await db
+      .insert(leads)
+      .values({
+        source: 'manual',
+        name: 'Lead da marca',
+        phone,
+        pipeline: 'expansao',
+        clientId: brandId,
+        ownerEmployeeId: seller.id,
+      })
+      .returning();
+    await write(phone, text('oi, quero saber da franquia'));
+    const refused = await app.inject({
+      method: 'POST',
+      url: `/leads/${lead!.id}/whatsapp/text`,
+      cookies: seller.cookies,
+      payload: { text: 'Olá! Aqui é da Wings Company.' },
+    });
+    expect(refused.statusCode).toBe(422);
+    expect(refused.json()).toMatchObject({ error: 'brand_voice' });
+    expect(refused.json().message).toContain('Casa do Churros');
+
+    await db.insert(waTemplates).values({
+      name: 'retomada_wings',
+      language: 'pt_BR',
+      category: 'UTILITY',
+      status: 'APPROVED',
+      components: [{ type: 'BODY', text: 'Oi! Aqui é a equipe da Wings, tudo bem?' }],
+    });
+    const template = await app.inject({
+      method: 'POST',
+      url: `/leads/${lead!.id}/whatsapp/template`,
+      cookies: seller.cookies,
+      payload: { name: 'retomada_wings', language: 'pt_BR', params: [] },
+    });
+    expect(template.statusCode).toBe(422);
+
+    const ok = await app.inject({
+      method: 'POST',
+      url: `/leads/${lead!.id}/whatsapp/text`,
+      cookies: seller.cookies,
+      payload: { text: 'Olá! Aqui é do time de expansão da Casa do Churros.' },
+    });
+    expect(ok.statusCode).toBe(201);
+    const permission = await app.inject({
+      method: 'POST',
+      url: `/leads/${lead!.id}/whatsapp/call-permission`,
+      cookies: seller.cookies,
+    });
+    expect(permission.statusCode).toBe(201);
+    expect(JSON.stringify(sends.at(-1))).toContain('A Casa do Churros gostaria de poder te ligar');
+  });
+
+  it('the settings refuse the word Wings, and the greeting must say who she speaks for', async () => {
+    const board = await sessionFor('diretoria');
+    const put = (settings: SofiaSettings) =>
+      app.inject({
+        method: 'PUT',
+        url: '/sofia/settings',
+        cookies: board.cookies,
+        payload: settings,
+      });
+    const base = SOFIA_DEFAULT_SETTINGS;
+    expect(
+      (
+        await put({
+          ...base,
+          texts: { ...base.texts, handoffSeller: 'Um consultor da Wings fala com você.' },
+        })
+      ).statusCode,
+    ).toBe(400);
+    expect(
+      (
+        await put({
+          ...base,
+          texts: { ...base.texts, greeting: 'Olá! Sou a Sofia, atendente virtual.' },
+        })
+      ).statusCode,
+    ).toBe(400);
+    const expansao = base.expansao.map((q) =>
+      q.key === 'origem' ? { ...q, text: 'Como conheceu a Wings?' } : q,
+    );
+    expect((await put({ ...base, expansao })).statusCode).toBe(400);
+    expect((await put(base)).statusCode).toBe(200);
   });
 });
 

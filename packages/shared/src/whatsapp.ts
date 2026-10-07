@@ -128,6 +128,11 @@ export interface DealWhatsApp {
   callPermission: WaCallPermissionState;
   /** Who has the conversation now (Sofia, a seller, ...); null before any message. */
   attendance: SofiaState | null;
+  /**
+   * The brand whose expansion team this conversation speaks for (a franchise
+   * lead never hears of Wings), or null for Wings Company.
+   */
+  speaksFor: string | null;
   messages: WaMessage[];
 }
 

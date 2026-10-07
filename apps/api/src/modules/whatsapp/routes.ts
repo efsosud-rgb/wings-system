@@ -1,4 +1,5 @@
 import {
+  mentionsWings,
   canonicalWhatsAppPhone,
   templateParamCount,
   waSendTemplateSchema,
@@ -31,6 +32,7 @@ import {
 import { deliverWhatsApp, type Contact } from './outbox.js';
 import {
   authorsOf,
+  brandVoiceOf,
   buildThread,
   contactOfPhone,
   permissionOf,
@@ -54,9 +56,10 @@ const TEMPLATES_FRESH_MS = 6 * 3_600_000;
 
 const idParams = z.object({ id: z.uuid() });
 
-/** What the person sees above Meta's "Permitir ligações" buttons. */
-export const CALL_PERMISSION_TEXT =
-  'A Wings gostaria de poder te ligar pelo WhatsApp para continuar o seu atendimento.';
+/** What the person sees above Meta's "Permitir ligações" buttons (a brand's lead hears the brand). */
+export const callPermissionText = (brand: string | null) =>
+  `A ${brand ?? 'Wings'} gostaria de poder te ligar pelo WhatsApp para continuar o seu atendimento.`;
+export const CALL_PERMISSION_TEXT = callPermissionText(null);
 
 export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   const { db, env } = app.wings;
@@ -179,13 +182,27 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   async function send(
     request: FastifyRequest,
     reply: FastifyReply,
-    target: { leadId: string | null; phone: string; contact: Contact | null },
+    target: {
+      leadId: string | null;
+      phone: string;
+      contact: Contact | null;
+      conversationId?: string;
+    },
     outgoing: Outgoing,
   ) {
     const config = whatsappConfigOf(env);
     if (!config) return off(reply);
     const at = now();
     const window = windowOf(target.contact, at);
+    // A franchise lead speaks with the brand's expansion team, never with Wings (Eric, 07/10).
+    const brand = await brandVoiceOf(db, target.leadId, target.conversationId ?? null);
+    const offBrand = (words: string) =>
+      brand && mentionsWings(words)
+        ? reply.status(422).send({
+            error: 'brand_voice',
+            message: `Nesta conversa você fala pelo time de expansão da ${brand}: não cite a Wings.`,
+          })
+        : null;
     let payload: OutgoingPayload;
     let shown: string;
     let content: Record<string, unknown> = {};
@@ -196,8 +213,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
           message:
             'Fora das 24 horas: o pedido de ligação vai por um modelo de pedido de ligação (em "Usar modelo").',
         });
-      shown = CALL_PERMISSION_TEXT;
-      payload = callPermissionPayload(CALL_PERMISSION_TEXT);
+      shown = callPermissionText(brand);
+      payload = callPermissionPayload(shown);
       content = { callPermissionRequest: true };
     } else if (outgoing.kind === 'text') {
       if (!window.open)
@@ -206,6 +223,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
           message:
             'Fora das 24 horas desde a última mensagem da pessoa: escolha um modelo aprovado.',
         });
+      const refused = offBrand(outgoing.text);
+      if (refused) return refused;
       payload = textPayload(outgoing.text);
       shown = outgoing.text;
     } else {
@@ -235,6 +254,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         });
       payload = templatePayload(outgoing.name, outgoing.language, outgoing.params);
       shown = fillTemplate(body, outgoing.params) ?? outgoing.name;
+      const refused = offBrand(`${shown} ${JSON.stringify(template.components ?? [])}`);
+      if (refused) return refused;
       content = {
         template: { name: outgoing.name, language: outgoing.language, params: outgoing.params },
       };
@@ -346,7 +367,12 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       return send(
         request,
         reply,
-        { leadId: null, phone: found.contact.phone, contact: found.contact },
+        {
+          leadId: null,
+          phone: found.contact.phone,
+          contact: found.contact,
+          conversationId: found.conversation.id,
+        },
         outgoing,
       );
     });

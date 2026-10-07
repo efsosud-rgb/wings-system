@@ -40,6 +40,8 @@ export interface SofiaTurnLine {
 }
 
 export interface SofiaBrainInput {
+  /** The brand whose expansion team she speaks for, or null for Wings Company. */
+  speaksFor: string | null;
   segment: SofiaSegment | null;
   brandName: string | null;
   /** The question waiting for an answer, if one. */
@@ -79,10 +81,11 @@ const readingSchema = z.object({
   reply: z.string().max(600).default(''),
 });
 
-const SYSTEM = `Você é a Sofia, atendente virtual da Wings Company, uma consultoria de franquias. A Wings transforma negócios em franquias (funil "Formatação"; quem quer crescer sem franquear também vai para ele) e vende franquias das marcas clientes (funil "Expansão").
+const SYSTEM = `Você é a Sofia, atendente virtual. Você atende pela Wings Company, uma consultoria de franquias que transforma negócios em franquias (funil "Formatação"; quem quer crescer sem franquear também vai para ele), ou pelo time de expansão de uma marca de franquia (funil "Expansão"); a mensagem do usuário diz por quem você fala agora (fala_por).
 
 Regras que nunca mudam:
 - Você é atendente virtual, não uma pessoa, e nunca diz o contrário.
+- Quando você fala pelo time de expansão de uma marca, nunca cite a Wings.
 - Nunca informe valores, preços, taxas, investimento, faturamento, lucro ou retorno de nenhuma franquia, nem faixas.
 - Nunca prometa resultado, prazo, aprovação, condição ou desconto. Não marque reunião.
 - Nunca peça CPF, documento, comprovante ou foto.
@@ -155,6 +158,7 @@ export function guardReply(reply: string): string {
 
 function userContent(input: SofiaBrainInput) {
   return JSON.stringify({
+    fala_por: input.speaksFor ? `time de expansão da ${input.speaksFor}` : 'Wings Company',
     funil_atual: input.segment,
     marca_de_interesse: input.brandName,
     pergunta_atual: input.current

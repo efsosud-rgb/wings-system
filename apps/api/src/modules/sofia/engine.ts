@@ -8,6 +8,8 @@ import {
   SOFIA_MODEL,
   SOFIA_OBJECTIVE_BUTTONS,
   SOFIA_PROMPT_VERSION,
+  mentionsWings,
+  sofiaWords,
   WA_MEDIA_KINDS,
   WA_WINDOW_HOURS,
   type SofiaCloseReason,
@@ -218,6 +220,13 @@ class Turn {
     return this.deps.db;
   }
 
+  /** The brand Sofia speaks for (Expansão with a known brand), or null for Wings Company. */
+  private voice: string | null = null;
+
+  private async decideVoice() {
+    this.voice = this.segment === 'expansao' && this.brandClientId ? await this.brandName() : null;
+  }
+
   async run() {
     const { db } = this;
     this.settings = await loadSofiaSettings(db);
@@ -315,9 +324,12 @@ class Turn {
     } else if (progress) this.misses = 0;
 
     // --- what comes next -------------------------------------------------------------
+    await this.decideVoice();
     if (!this.facts.greeted) this.parts.unshift(this.settings.texts.greeting);
     this.facts.greeted = true;
-    if (reading?.reply && !missed) this.parts.push(reading.reply);
+    // A brand's lead never hears of Wings, not even from the model.
+    if (reading?.reply && !missed && !(this.voice && mentionsWings(reading.reply)))
+      this.parts.push(reading.reply);
     if (reading?.askedValues) this.parts.push(this.settings.texts.values);
 
     const step = await this.nextStep();
@@ -403,7 +415,9 @@ class Turn {
     const name = questions.find((q) => q.kind === 'name');
     const known = { ...this.facts.answers };
     if (name) delete known[name.key];
+    await this.decideVoice();
     const result = await readTurn(llm, {
+      speaksFor: this.voice,
       segment: this.segment,
       brandName: await this.brandName(),
       current: questions.find((q) => q.key === this.facts.step) ?? null,
@@ -536,7 +550,7 @@ class Turn {
     const { question } = step;
     this.facts.step = question.key;
     if (question.kind === 'choice') {
-      const shown = body(question.text);
+      const shown = sofiaWords(body(question.text), this.voice);
       const rows = question.options.map((title, i) => ({
         id: `sofia:q:${question.key}:${i}`,
         title,
@@ -551,7 +565,8 @@ class Turn {
     return this.text(body(question.text));
   }
 
-  private text(shown: string): Outgoing {
+  private text(raw: string): Outgoing {
+    const shown = sofiaWords(raw, this.voice);
     return {
       shown,
       payload: textPayload(shown),
@@ -560,7 +575,8 @@ class Turn {
     };
   }
 
-  private buttons(shown: string, buttons: readonly { id: string; title: string }[]): Outgoing {
+  private buttons(raw: string, buttons: readonly { id: string; title: string }[]): Outgoing {
+    const shown = sofiaWords(raw, this.voice);
     return {
       shown: `${shown}\n\n${buttons.map((b) => `[${b.title}]`).join(' ')}`,
       payload: buttonsPayload(shown, buttons),
@@ -584,6 +600,7 @@ class Turn {
 
   /** The questions are done: the deal is made and given to its seller. */
   private async handOver() {
+    await this.decideVoice();
     const segment = this.segment === 'expansao' ? 'expansao' : 'formatacao';
     const deal = await sofiaHandOver(this.db, {
       conversation: this.conversation,
@@ -622,6 +639,7 @@ class Turn {
 
   /** A person of the team takes over: no deal is made. */
   private async toHuman(reason: SofiaHandoffReason, say: boolean) {
+    await this.decideVoice();
     const text = say ? this.introduced(this.withHours(this.settings.texts.handoffHuman)) : null;
     await this.save({ attendance: 'waiting_human', reason });
     await this.notifyTeam(reason);
@@ -629,6 +647,7 @@ class Turn {
   }
 
   private async aiDown(reason: 'ia_indisponivel' | 'teto_diario') {
+    await this.decideVoice();
     const text = this.introduced(this.withHours(this.settings.texts.aiDown));
     await this.save({ attendance: 'waiting_human', reason });
     await this.notifyTeam(reason);
@@ -641,6 +660,7 @@ class Turn {
    * owner is lost with that reason; one with an owner is never touched.
    */
   private async close(reason: Exclude<SofiaCloseReason, 'encerrada'>, confirm: boolean) {
+    await this.decideVoice();
     if (reason === 'nao_contatar')
       await this.db
         .update(waContacts)
