@@ -4,6 +4,7 @@ import type {
   WaCallPermissionLive,
   WaConversationItem,
   WaMessage,
+  WaNewTarget,
   WaSendTemplate,
   WaSendText,
   WaTemplate,
@@ -46,6 +47,52 @@ export function useWhatsAppConversations(unanswered: boolean) {
         `/whatsapp/conversations${unanswered ? '?unanswered=1' : ''}`,
       ),
     refetchInterval: 15_000,
+  });
+}
+
+export type WhatsAppInboxFilter = 'all' | 'unread' | 'unanswered';
+
+/** The reader's WhatsApp list (WhatsApp Web): search, unread per reader, last status. */
+export function useWhatsAppInbox(filter: WhatsAppInboxFilter, q: string) {
+  const params = new URLSearchParams({ filter });
+  if (q.trim()) params.set('q', q.trim());
+  return useQuery({
+    queryKey: ['whatsapp', 'conversations', 'list', filter, q.trim()],
+    queryFn: () =>
+      api.poll<{ conversations: WaConversationItem[] }>(`/whatsapp/conversations?${params}`),
+    refetchInterval: 10_000,
+  });
+}
+
+/** One conversation by its id (a deal's or one with no deal), refreshed while open. */
+export function useWhatsAppConversation(id: string | undefined) {
+  return useQuery({
+    queryKey: ['whatsapp', 'conversations', 'one', id],
+    queryFn: () => api.poll<DealWhatsApp>(`/whatsapp/conversations/${id}`),
+    enabled: Boolean(id),
+    refetchInterval: REFRESH_MS,
+  });
+}
+
+/** The reader opened the conversation: its unread count goes to zero, for them only. */
+export function useMarkWhatsAppRead() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.passivePost<void>(`/whatsapp/conversations/${id}/read`),
+    onSuccess: () =>
+      void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations', 'list'] }),
+  });
+}
+
+/** "Nova conversa": deals and contacts in the reader's scope matching the search. */
+export function useWhatsAppTargets(q: string) {
+  const term = q.trim();
+  return useQuery({
+    queryKey: ['whatsapp', 'targets', term],
+    queryFn: () =>
+      api.get<{ targets: WaNewTarget[] }>(`/whatsapp/targets?q=${encodeURIComponent(term)}`),
+    enabled: term.length >= 2,
+    staleTime: 10_000,
   });
 }
 

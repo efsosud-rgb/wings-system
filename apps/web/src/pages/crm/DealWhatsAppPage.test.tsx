@@ -36,6 +36,8 @@ const thread = (over: Partial<DealWhatsApp> = {}): DealWhatsApp => ({
   window: { open: true, expiresAt: '2026-10-07T18:00:00.000Z' },
   optedOut: false,
   callPermission: { status: null, expiresAt: null, requestedAt: null },
+  attendance: null,
+  speaksFor: null,
   messages: [],
   ...over,
 });
@@ -212,6 +214,7 @@ describe('the WhatsApp conversation screen', () => {
           status: null,
           error: null,
           authorName: null,
+          bySofia: false,
           at: '2026-10-07T14:00:00.000Z',
         },
         {
@@ -224,6 +227,7 @@ describe('the WhatsApp conversation screen', () => {
           status: 'read',
           error: null,
           authorName: 'Eric Souza',
+          bySofia: false,
           at: '2026-10-07T14:01:00.000Z',
         },
         {
@@ -236,6 +240,7 @@ describe('the WhatsApp conversation screen', () => {
           status: 'failed',
           error: 'Não entregue: o número pode não ter WhatsApp.',
           authorName: 'Eric Souza',
+          bySofia: false,
           at: '2026-10-07T14:02:00.000Z',
         },
         {
@@ -248,6 +253,7 @@ describe('the WhatsApp conversation screen', () => {
           status: null,
           error: null,
           authorName: null,
+          bySofia: false,
           at: '2026-10-07T14:03:00.000Z',
         },
       ],
