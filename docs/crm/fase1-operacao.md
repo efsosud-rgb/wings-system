@@ -73,6 +73,21 @@ chamada extra); negócios dos últimos 3 dias que o Funil ainda não tem
 para quem mudou de etapa (`refreshStageTimes`). Etapa que mudou fica com
 "parado há" vazio até o histórico ser lido: nunca "agora".
 
+**Testes e rodízio no seguimento (07/10).** O importador (script e seguimento)
+**pula negócio de teste**: "teste" no nome do negócio ou no motivo de perda
+(`isTestDeal`), ou no nome ou e-mail do contato (`hasTestWord`: "teste"/"testes"
+sozinho ou colado a número e pontuação, como no script de limpeza; "testemunho"
+não conta). Só conta em `testDeals`; um lead que já segue o negócio continua
+espelhado. Só o seguimento por hora (`distributeNew`, nunca o script) dá o
+**negócio novo ao rodízio**, na transação do lead, com tarefa de primeiro contato
+(1 hora útil), evento `lead.owner_changed` (`rotation`) e o aviso "Novo lead
+para você". Condições, todas juntas: lead **criado** agora (não ligado a um
+existente); sem dono liberado em `CRM_RD_OWNER_USER_IDS`; negócio aberto, fora
+dos funis de arquivo; Expansão ou Formatação; criado há menos de 24 h
+(`STALE_ARRIVAL_HOURS`). Rodízio sem membro ativo: sem dono e aviso "lead sem
+dono" à Diretoria e aos gerentes. `managed_by` segue `rd`; desfazer o lote também
+apaga esses avisos.
+
 Os jobs `expansion-intake`, `formatacao-intake` e a recuperação gravam o
 `rd_deal_id` no lead do Funil com o mesmo telefone/e-mail quando criam o
 negócio (`recordDealOnLead`, evento `rd.deal_created`).

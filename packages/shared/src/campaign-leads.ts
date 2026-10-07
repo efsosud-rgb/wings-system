@@ -23,6 +23,26 @@ export function isTestDeal(name: string | null, lostReason: string | null): bool
   return /\bteste\b/i.test(lostReason ?? '') || /\bteste\b/i.test(name ?? '');
 }
 
+const ACCENTED = 'áàâãäåéèêëíìîïóòôõöúùûüçñý';
+const PLAIN = 'aaaaaaeeeeiiiiooooouuuucny';
+const WITHOUT_ACCENTS = new Map([...ACCENTED].map((letter, index) => [letter, PLAIN[index]!]));
+
+/**
+ * The word "teste" or "testes" on its own or stuck to digits and punctuation
+ * ("Teste 2", "teste1", "joao.teste@x", "teste_x"), accents and case ignored.
+ * Words that merely start that way ("testemunho", "testeira") do not count.
+ * The same rule as the lead cleanup script (scripts/ops/limpeza-leads); used to
+ * keep test contacts out of the RD import. Unlike `isTestDeal`, which feeds the
+ * dashboard, it also reads names and e-mails. Empty values are never a test.
+ */
+export function hasTestWord(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const plain = text
+    .toLowerCase()
+    .replace(/./gu, (letter) => WITHOUT_ACCENTS.get(letter) ?? letter);
+  return /(^|[^a-z0-9])testes?([^a-z]|$)/.test(plain);
+}
+
 /**
  * A qualified lead: won, or in the Formatação pipeline at "Identificação de
  * interesse" (third stage) or later. Leads that moved to a "perdidos"

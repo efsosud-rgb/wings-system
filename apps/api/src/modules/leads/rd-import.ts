@@ -1,4 +1,6 @@
 import {
+  hasTestWord,
+  isTestDeal,
   normalizeBrazilianPhone,
   normalizeEmail,
   pipelineOfRdFunnel,
@@ -10,6 +12,7 @@ import type { Database } from '../../db/client.js';
 import {
   auditLog,
   clients,
+  crmNotifications,
   employees,
   leadActivities,
   leadContacts,
@@ -24,8 +27,9 @@ import {
 import { rdCrmGetter } from '../ads/funnel-sync.js';
 import { shapeOf } from '../media/kairogen-adapter.js';
 import { brandKey } from './brands.js';
+import { announceLeadArrival } from './crm-alerts.js';
 import { ensureStage } from './crm.js';
-import { upsertLead, type LeadRow } from './service.js';
+import { isStaleArrival, upsertLead, type LeadRow } from './service.js';
 
 /**
  * CRM phase 1 (docs/crm/fase1-complemento-funil.md §2.3): RD Station CRM's
@@ -324,7 +328,10 @@ export interface RdImportResult {
   /** A person with more than one deal: the lead keeps the open or the latest. */
   otherDealOfSamePerson: number;
   noContactData: number;
+  /** Test deals (by deal name, loss reason, contact name or e-mail): counted and skipped, never a lead. */
   testDeals: number;
+  /** New leads the hourly follow-up gave to the rotation (`distributeNew`): with an owner, or with the rotation empty. */
+  rotation: { assigned: number; empty: number };
   owners: { mapped: number; unmapped: number };
   /** Expansão deals per brand as RD names it; "(sem marca)" when neither field nor campaign says. */
   brands: Record<string, number>;
@@ -347,6 +354,16 @@ export interface RdImportOptions {
   onlyMissing?: boolean;
   /** RD users whose deals keep their owner (`rdOwnerAllowlist`); null or absent keeps every linked one. */
   ownerRdUserIds?: ReadonlySet<string> | null;
+  /**
+   * Only the hourly follow-up sets this (never the import script): a lead this
+   * run creates goes to the funnel's rotation, with the first-contact task and
+   * the "Novo lead para você" notice, when the RD gave it no owner, the deal is
+   * open, not filed in an archive funnel, in Expansão or Formatação, and was
+   * created less than `STALE_ARRIVAL_HOURS` ago. With the rotation empty it
+   * stays ownerless and Diretoria and the managers are told. Default off: an
+   * import leaves every lead without an owner, as RD says.
+   */
+  distributeNew?: boolean;
   /**
    * The run's batch id (required with `apply`): new leads carry it in
    * `import_batch_id`, and a lead that already existed gets a `rd.import_batch`
@@ -468,6 +485,7 @@ export async function importRdDeals(
     otherDealOfSamePerson: 0,
     noContactData: 0,
     testDeals: 0,
+    rotation: { assigned: 0, empty: 0 },
     owners: { mapped: 0, unmapped: 0 },
     brands: {},
     unmatchedBrands: [],
@@ -546,13 +564,21 @@ export async function importRdDeals(
     if (place.archive) result.archiveOutcome[outcome.won ? 'won' : 'lost'] += 1;
     if (ownerEmployeeId) result.owners.mapped += 1;
     else result.owners.unmapped += 1;
-    if (/\bteste\b/i.test(`${deal.name ?? ''} ${deal.deal_lost_reason?.name ?? ''}`))
-      result.testDeals += 1;
 
     try {
       const contact = contactOf(
         Array.isArray(deal.contacts) ? deal.contacts : await rd.dealContacts(id),
       );
+      // A test deal or test contact never becomes a lead (nor is linked to one);
+      // a lead that already follows a deal is still mirrored by `followRdStages`.
+      if (
+        isTestDeal(deal.name ?? null, deal.deal_lost_reason?.name ?? null) ||
+        hasTestWord(contact.name) ||
+        hasTestWord(contact.email)
+      ) {
+        result.testDeals += 1;
+        continue;
+      }
       if (!contact.email && !contact.phone) result.noContactData += 1;
 
       let times: StageTimes = { firstContactAt: null, stageChangedAt: null };
@@ -605,6 +631,18 @@ export async function importRdDeals(
       }
 
       const mapped = place.pipeline === 'formatacao' || brandClientId !== null;
+      // The follow-up's new, recent, open deals with no owner from RD go to the
+      // rotation inside the lead's own transaction (`upsertLead`); an existing
+      // lead found by the upsert is never distributed.
+      const createdAt = dateOf(deal.created_at);
+      const distribute =
+        options.distributeNew === true &&
+        !ownerEmployeeId &&
+        outcome.won === null &&
+        !place.archive &&
+        (place.pipeline === 'expansao' || place.pipeline === 'formatacao') &&
+        createdAt !== null &&
+        !isStaleArrival({ originCreatedAt: createdAt });
       const upserted = await upsertLead(db, {
         source: 'rd_crm',
         name: contact.name,
@@ -619,6 +657,7 @@ export async function importRdDeals(
         consentSource: 'rd_crm',
         skipResearch: true,
         importBatchId: options.batchId ?? null,
+        distribute,
         event: {
           kind: 'lead.imported.rd_crm',
           detail: { rdDealId: id, pipeline: place.pipeline, batchId: options.batchId ?? null },
@@ -626,6 +665,12 @@ export async function importRdDeals(
       });
       if (upserted.created) result.created += 1;
       else result.merged += 1;
+      if (upserted.created && distribute) {
+        // `rd_crm` is not an arrival source, so the notice is asked for directly.
+        if (upserted.lead.ownerEmployeeId) result.rotation.assigned += 1;
+        else result.rotation.empty += 1;
+        await announceLeadArrival(db, upserted.lead);
+      }
 
       const lead = upserted.lead;
       // A lead from before this run: remember what it was, once per run, so the run can be undone.
@@ -905,6 +950,8 @@ export async function undoRdImportBatch(
       await tx.delete(leadActivities).where(inArray(leadActivities.leadId, chunk));
       await tx.delete(leadNotes).where(inArray(leadNotes.leadId, chunk));
       await tx.delete(leadTasks).where(inArray(leadTasks.leadId, chunk));
+      // The arrival notices of a lead the hourly follow-up gave to the rotation.
+      await tx.delete(crmNotifications).where(inArray(crmNotifications.leadId, chunk));
       await tx.delete(leadStageHistory).where(inArray(leadStageHistory.leadId, chunk));
       await tx.delete(leads).where(inArray(leads.id, chunk));
     }
