@@ -49,6 +49,12 @@ export function WhatsAppChat({
 
   return (
     <section className="crm-wa-chat" aria-label="Conversa">
+      {data.speaksFor && (
+        <p className="crm-wa-window is-brand">
+          Lead de franquia: você fala pelo time de expansão da {data.speaksFor}. Não cite a Wings
+          nas mensagens nem nos modelos.
+        </p>
+      )}
       <WindowNotice data={data} />
       <div className={`crm-wa-messages${data.messages.length > 0 ? ' has-messages' : ''}`}>
         {data.messages.length === 0 ? (
@@ -113,7 +119,9 @@ function Bubble({ message }: { message: WaMessage }) {
   const out = message.direction === 'out';
   const failed = message.status === 'failed' || (message.status === 'pending' && message.error);
   return (
-    <li className={`crm-wa-bubble ${out ? 'is-out' : 'is-in'}${failed ? ' is-failed' : ''}`}>
+    <li
+      className={`crm-wa-bubble ${out ? 'is-out' : 'is-in'}${message.bySofia ? ' is-sofia' : ''}${failed ? ' is-failed' : ''}`}
+    >
       {message.template && <span className="crm-wa-tag">Modelo · {message.template.name}</span>}
       {message.media && (
         <a
@@ -135,6 +143,7 @@ function Bubble({ message }: { message: WaMessage }) {
         )
       )}
       <span className="crm-wa-meta">
+        {out && message.bySofia ? 'Sofia (IA) · ' : ''}
         {out && message.authorName ? `${message.authorName} · ` : ''}
         <time dateTime={message.at} title={formatDateTime(message.at)}>
           {timeOf(message.at)}

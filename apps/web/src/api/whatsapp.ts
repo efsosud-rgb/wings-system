@@ -80,6 +80,8 @@ function useSend<T>(thread: WhatsAppThread, kind: 'text' | 'template') {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: threadKey(thread) });
       void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations'] });
+      // A person writing takes the conversation from Sofia: her screen shows it at once.
+      void queryClient.invalidateQueries({ queryKey: ['sofia'] });
     },
   });
 }

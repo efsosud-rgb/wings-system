@@ -2096,6 +2096,13 @@
 .crm-wa-window.is-open {
   color: var(--success);
 }
+.crm-wa-window.is-brand {
+  color: var(--accent, var(--text-1));
+  font-weight: 600;
+}
+.crm-wa-bubble.is-sofia {
+  border-style: dashed;
+}
 .crm-wa-off {
   margin: 0;
   padding: var(--space-3);
