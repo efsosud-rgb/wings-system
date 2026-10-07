@@ -16,10 +16,11 @@ permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em `/
 - **Reenvios:** a Meta reenvia por até 7 dias. Cada mensagem tem o id da Meta (`wamid`) único; um reenvio não
   faz nada. O corpo guardado é apagado depois de 90 dias (a linha fica).
 - **Mensagem recebida:** vai para a negociação **aberta mais recente** do mesmo telefone (o do lead ou o de um
-  contato da negociação), testando o número com e sem o 9º dígito (o `wa_id` da Meta pode vir sem ele). Uma
-  mensagem que começa com o código de um link rastreado cria ou junta o lead, como a porta da Z-API. Sem
-  negociação, a conversa espera em CRM Vendas → WhatsApp, visível só para quem tem escopo total; quando
-  alguém cria a negociação com aquele telefone, as mensagens passam para ela.
+  contato da negociação), testando o número com e sem o 9º dígito (o `wa_id` da Meta pode vir sem ele). Quem
+  responde: o dono, se a negociação tem dono; senão a Sofia (`sofia.md`). Com a Sofia ligada, a mensagem com o
+  código de um link rastreado só conta o clique e diz a marca (ela cria a negociação no fim); desligada, o link
+  cria ou junta o lead na hora, como a porta da Z-API. Sem negociação, a conversa é da Sofia ou espera um
+  atendente; quando alguém cria a negociação com aquele telefone, as mensagens passam para ela.
 - **Janela de 24 h:** abre na última mensagem da pessoa (por telefone, regra da Meta). Dentro dela vai texto
   livre; fora, só modelo aprovado. O servidor confere de novo (409 `window_closed`).
 - **Envio:** a linha é gravada antes (`pending`), a Meta é chamada **uma vez**, nunca de novo sozinha. Recusada:
