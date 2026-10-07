@@ -63,6 +63,10 @@ vi.mock('../../api/auth.js', async () => {
   };
 });
 
+vi.mock('../../api/whatsapp.js', () => ({
+  useMarkWhatsAppRead: () => ({ mutate: () => undefined }),
+}));
+
 vi.mock('./WhatsAppChat.js', () => ({
   WhatsAppChat: ({ canSend }: { canSend: boolean }) => (
     <section aria-label="Conversa">{canSend ? 'chat com envio' : 'chat só leitura'}</section>

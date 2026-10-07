@@ -9,7 +9,7 @@ import {
   type SofiaSegment,
   type SofiaState,
 } from '@wings/shared';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../../api/auth.js';
 import { ApiError } from '../../api/client.js';
@@ -20,6 +20,7 @@ import {
   useSofiaOverview,
   type SofiaFilter,
 } from '../../api/sofia.js';
+import { useMarkWhatsAppRead } from '../../api/whatsapp.js';
 import { Icon } from '../../components/Icon.js';
 import { ago, formatPhone } from './format.js';
 import { SofiaSettingsForm } from './SofiaSettingsForm.js';
@@ -279,6 +280,12 @@ function ConversationDetail({ id }: { id: string }) {
   const session = useSession();
   const detail = useSofiaConversation(id);
   const attendance = useSofiaAttendance(id);
+  const { mutate: markRead } = useMarkWhatsAppRead();
+  const last = detail.data?.thread.messages.at(-1)?.id;
+  // Opening the conversation here counts as read too, as on the WhatsApp screen.
+  useEffect(() => {
+    if (last) markRead(id);
+  }, [id, last, markRead]);
   const back = (
     <Link className="crm-btn is-quiet is-small sofia-back" to={BASE}>
       ‹ Conversas
