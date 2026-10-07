@@ -27,6 +27,15 @@ export const crmMeetings = pgTable(
     status: text('status').notNull().default('agendada'),
     meetUrl: text('meet_url'),
     googleEventId: text('google_event_id'),
+    /** The Google calendar the event lives on ('primary' or the Wings Company id); null for a pasted link. */
+    googleCalendarId: text('google_calendar_id'),
+    /** The event's page on Google Agenda, for the person to open it there. */
+    googleHtmlLink: text('google_html_link'),
+    /** ok | falhou — the last attempt to mirror a change (reschedule/cancel) on Google. */
+    googleSync: text('google_sync'),
+    /** A code, never Google's message. */
+    googleSyncError: text('google_sync_error'),
+    googleSyncedAt: timestamp('google_synced_at', { withTimezone: true }),
     /** MeetingAttendee[] (e-mails: personal data). */
     attendees: jsonb('attendees').notNull().default([]),
 

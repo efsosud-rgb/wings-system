@@ -31,7 +31,7 @@ import { landingPageRoutes } from './modules/leads/landing-pages.js';
 import { rdUserRoutes } from './modules/leads/rd-users.js';
 import { configureCrm, onStageEnteredHook } from './modules/leads/crm.js';
 import { onStageEntered } from './modules/leads/automations.js';
-import { createCrmMailTransport } from './modules/leads/crm-mail.js';
+import { crmMailOf } from './modules/leads/crm-mail.js';
 import { crmRoutes } from './modules/leads/crm-routes.js';
 import { automationRoutes } from './modules/leads/automation-routes.js';
 import { leadEmailRoutes } from './modules/leads/lead-email-routes.js';
@@ -45,6 +45,7 @@ import { whatsappWebhookRoutes } from './modules/whatsapp/webhook-routes.js';
 import { mediaRoutes } from './modules/media/routes.js';
 import { mediaStudioRoutes } from './modules/media/studio-routes.js';
 import { projectRoutes } from './modules/projects/routes.js';
+import { googleWorkspaceRoutes } from './modules/google-workspace/routes.js';
 import { meetingRoutes } from './modules/meetings/routes.js';
 import { createRegistryLookup } from './modules/clients/lookup.js';
 import {
@@ -89,6 +90,8 @@ declare module 'fastify' {
       registryFetch?: typeof fetch;
       /** Set only by tests, so no test ever reaches Cloudflare Turnstile. */
       captchaFetch?: typeof fetch;
+      /** Set only by tests, so no test ever reaches Google Agenda or Gmail. */
+      googleFetch?: typeof fetch;
       storage?: ObjectStorage;
       /** Set only by tests, so a screen that reasons about "today" can be pinned to a day. */
       now?: () => Date;
@@ -124,6 +127,8 @@ export async function buildApp(deps: {
   captchaFetch?: typeof fetch;
   /** Overridable so tests talk to a simulated WhatsApp Cloud API. */
   whatsappFetch?: typeof fetch;
+  /** Overridable so tests play Google Agenda and Gmail themselves. */
+  googleFetch?: typeof fetch;
   storage?: ObjectStorage;
   /** Overridable so tests pin the dashboard's "today". */
   now?: () => Date;
@@ -178,9 +183,9 @@ export async function buildApp(deps: {
     );
   }
   // Regras de automação: a deal entering a stage starts that stage's rules.
-  const crmMail = createCrmMailTransport(deps.env);
+  // (built per call: in `gmail` mode the sender is the lead's owner, read at send time)
   onStageEnteredHook(async (lead) => {
-    await onStageEntered(deps.db, lead, { mail: crmMail });
+    await onStageEntered(deps.db, lead, { mail: crmMailOf(app.wings) });
   });
 
   app.decorate('wings', {
@@ -195,6 +200,7 @@ export async function buildApp(deps: {
     registryFetch: deps.registryFetch,
     captchaFetch: deps.captchaFetch,
     whatsappFetch: deps.whatsappFetch,
+    googleFetch: deps.googleFetch,
     storage: deps.storage,
     now: deps.now,
     mailer: deps.mailer ?? createMailer(deps.env, { info: (msg) => app.log.info(msg) }),
@@ -254,6 +260,7 @@ export async function buildApp(deps: {
   await app.register(roadmapRoutes);
   await app.register(officeRoutes);
   await app.register(meetingRoutes);
+  await app.register(googleWorkspaceRoutes);
   await app.register(leadRoutes);
   await app.register(crmRoutes);
   await app.register(automationRoutes);

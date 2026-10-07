@@ -31,7 +31,7 @@ import { writeAudit } from '../../lib/audit.js';
 import { runCrmCycle } from './automations-scheduler.js';
 import { canChangeLeadOwner, leadOwnerFilter } from './access.js';
 import { markRead, notificationsOf } from './crm-alerts.js';
-import { createCrmMailTransport } from './crm-mail.js';
+import { crmMailOf } from './crm-mail.js';
 
 const idParam = z.object({ id: z.uuid() });
 const pipelineQuery = z.object({ pipeline: z.enum(LEAD_PIPELINES) });
@@ -504,7 +504,7 @@ export const automationRoutes: FastifyPluginAsync = async (app) => {
   app.post('/crm/automations/run', manage, async (_request, reply) => {
     const result = await runCrmCycle({
       db,
-      mail: createCrmMailTransport(env),
+      mail: crmMailOf(app.wings),
       stageStuckDays: env.CRM_STAGE_STUCK_DAYS === undefined ? 7 : Number(env.CRM_STAGE_STUCK_DAYS),
       log: () => undefined,
     });

@@ -157,11 +157,18 @@ export const crmEmailOutbox = pgTable(
     runId: uuid('run_id').references(() => crmAutomationRuns.id),
     subject: text('subject').notNull(),
     body: text('body').notNull(),
-    /** test | smtp */
+    /** test | smtp | gmail */
     mode: text('mode').notNull(),
     /** recorded | sent | failed */
     status: text('status').notNull(),
     sentBy: uuid('sent_by').references(() => employees.id),
+    /** The address the message left from (the seller's, with Gmail; the company's, with SMTP). */
+    fromEmail: text('from_email'),
+    /** The RFC 5322 Message-ID the message carried: a reply cites it in In-Reply-To. */
+    messageId: text('message_id'),
+    /** Gmail's own ids, to find the thread the lead answers in. */
+    gmailMessageId: text('gmail_message_id'),
+    gmailThreadId: text('gmail_thread_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [index('crm_email_outbox_lead_idx').on(table.leadId, table.createdAt)],

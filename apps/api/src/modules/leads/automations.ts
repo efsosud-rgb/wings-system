@@ -24,7 +24,12 @@ import {
   leads,
 } from '../../db/schema/index.js';
 import { changeLead, createTask, nextInRotation } from './crm.js';
-import { testTransport, type CrmMailTransport } from './crm-mail.js';
+import {
+  testTransport,
+  type CrmMailMode,
+  type CrmMailSent,
+  type CrmMailTransport,
+} from './crm-mail.js';
 
 /**
  * Regras de automação: when a deal enters a stage, its rules become rows of
@@ -367,7 +372,7 @@ export async function sendTemplateToLead(
     sentBy: string | null;
   },
 ): Promise<
-  | { ok: true; outboxId: string; mode: 'test' | 'smtp' }
+  | { ok: true; outboxId: string; mode: CrmMailMode }
   | {
       ok: false;
       reason: 'template_gone' | 'template_off' | 'no_email' | 'send_failed';
@@ -384,11 +389,19 @@ export async function sendTemplateToLead(
   const { subject, body } = await renderForLead(db, lead, template);
   let status: 'recorded' | 'sent' | 'failed' =
     input.transport.mode === 'test' ? 'recorded' : 'sent';
+  let sent: CrmMailSent | null = null;
   try {
-    await input.transport.send({ to: lead.email, subject, text: body });
+    // A person sends from their own Gmail; an automation sends from the lead's owner's.
+    sent = await input.transport.send({
+      to: lead.email,
+      subject,
+      text: body,
+      senderEmployeeId: input.sentBy ?? lead.ownerEmployeeId,
+    });
   } catch {
     status = 'failed';
   }
+  const mode = sent?.mode ?? input.transport.mode;
   const [row] = await db
     .insert(crmEmailOutbox)
     .values({
@@ -397,9 +410,13 @@ export async function sendTemplateToLead(
       runId: input.runId,
       subject,
       body,
-      mode: input.transport.mode,
+      mode,
       status,
       sentBy: input.sentBy,
+      fromEmail: sent?.fromEmail ?? null,
+      messageId: sent?.messageId ?? null,
+      gmailMessageId: sent?.gmailMessageId ?? null,
+      gmailThreadId: sent?.gmailThreadId ?? null,
     })
     .returning({ id: crmEmailOutbox.id });
   if (!row) throw new Error('outbox_failed');
@@ -407,11 +424,11 @@ export async function sendTemplateToLead(
     leadId: lead.id,
     kind: 'lead.email_sent',
     actorEmployeeId: input.sentBy,
-    detail: { outboxId: row.id, templateId: template.id, mode: input.transport.mode, status },
+    detail: { outboxId: row.id, templateId: template.id, mode, status },
   });
   return status === 'failed'
     ? { ok: false, reason: 'send_failed', outboxId: row.id }
-    : { ok: true, outboxId: row.id, mode: input.transport.mode };
+    : { ok: true, outboxId: row.id, mode };
 }
 
 async function startSequenceAction(

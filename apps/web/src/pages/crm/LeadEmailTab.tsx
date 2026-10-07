@@ -25,7 +25,7 @@ export function LeadEmailTab({ leadId }: { leadId: string }) {
   if (emails.isPending) return <p className="crm-muted">Carregando…</p>;
   if (emails.isError || !emails.data)
     return <p className="crm-error">Não foi possível carregar os e-mails.</p>;
-  const { to, mode, templates, sent } = emails.data;
+  const { to, mode, from, templates, sent } = emails.data;
 
   const choose = (id: string) => {
     setTemplateId(id);
@@ -45,9 +45,21 @@ export function LeadEmailTab({ leadId }: { leadId: string }) {
 
   return (
     <div className="crm-record-form">
-      {mode === 'test' && (
+      {mode === 'test' ? (
         <p className="crm-sub">
           Modo de teste: a mensagem fica registrada na negociação, mas nenhum e-mail sai de verdade.
+        </p>
+      ) : from ? (
+        <p className="crm-sub">
+          Sai de <b>{from}</b>
+          {mode === 'gmail'
+            ? ' (a sua conta Google; a resposta chega na sua caixa).'
+            : ' (remetente da empresa).'}
+        </p>
+      ) : (
+        <p className="crm-error">
+          Ninguém pode enviar agora: conecte a sua conta Google em{' '}
+          <a href="/minha-conta">Minha conta</a> ou peça ao Eric o remetente da empresa.
         </p>
       )}
       {templates.length === 0 ? (

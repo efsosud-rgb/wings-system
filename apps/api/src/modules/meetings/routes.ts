@@ -14,11 +14,20 @@ import {
 import { and, desc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { clientContacts, crmMeetings, jobs, leadEvents } from '../../db/schema/index.js';
+import { clientContacts, crmMeetings, jobs, leadEvents, leads } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { leadInScope } from '../leads/access.js';
 import { ZapiClient } from '../../lib/zapi.js';
+import { googleWorkspaceDepsOf } from '../google-workspace/service.js';
 import { createTask } from '../leads/crm.js';
+import {
+  cancelMeetingEvent,
+  createMeetingEvent,
+  MeetingGoogleError,
+  mirrored,
+  patchMeetingEvent,
+  type GoogleSyncDeps,
+} from './google-sync.js';
 import {
   maskContact,
   runMeetingAnalysis,
@@ -34,8 +43,9 @@ import {
  * Reuniões (docs/crm/reunioes-api.md). Seeing a meeting follows the deal's
  * `leads.read` scope (another seller's meeting is a 404 for an `own` seller);
  * changing it needs `leads.write`; the franchisor summary is approved and
- * sent only by `meetings.approve_send`. Google routes answer 503 until the
- * Workspace is authorised. Nothing personal reaches a log.
+ * sent only by `meetings.approve_send`. Creating on Google needs the person's
+ * own connection (`/me/google`); until then the pasted link is the way, and
+ * the screen is told so with a 503. Nothing personal reaches a log.
  */
 
 const idParam = z.object({ id: z.uuid() });
@@ -65,10 +75,21 @@ const googleOff = (reply: FastifyReply) =>
     message:
       'O Google Workspace ainda não foi autorizado: cole o link do Meet ou envie a gravação pela tela.',
   });
+const googleFailed = (reply: FastifyReply, error: MeetingGoogleError) =>
+  reply.status(error.status).send({ error: error.code, message: error.message });
 
 export const meetingRoutes: FastifyPluginAsync = async (app) => {
   const { db, env } = app.wings;
   const now = () => app.wings.now?.() ?? new Date();
+  const googleSync = (): GoogleSyncDeps => ({
+    db,
+    google: googleWorkspaceDepsOf(app.wings),
+    wingsCalendarId: env.GOOGLE_WORKSPACE_WINGS_CALENDAR_ID ?? null,
+    sleep:
+      env.NODE_ENV === 'test'
+        ? async () => {}
+        : (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  });
 
   const analysisDeps = (): MeetingAnalysisDeps => ({
     db,
@@ -188,24 +209,58 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
       if (!body.success) return bad(reply, body.error.issues[0]?.message);
       const lead = await visibleLead(request, params.data.id);
       if (!lead) return notFound(reply);
-      // Creating the event (and its Meet) needs the Workspace authorisation (Thais).
-      if (body.data.createMeet) return googleOff(reply);
       const actor = request.session.actor.employeeId;
+      const startsAt = new Date(body.data.startsAt);
+      const endsAt = new Date(body.data.endsAt);
+      let google: Awaited<ReturnType<typeof createMeetingEvent>> | null = null;
+      if (body.data.createMeet) {
+        // The event, its Meet and the invitations, on the calendar chosen, as this person.
+        const [contact] = await db
+          .select({ name: leads.name, email: leads.email, ownerEmployeeId: leads.ownerEmployeeId })
+          .from(leads)
+          .where(eq(leads.id, lead.id));
+        try {
+          google = await createMeetingEvent(googleSync(), {
+            title: body.data.title,
+            startsAt,
+            endsAt,
+            calendar: body.data.calendar,
+            attendees: body.data.attendees,
+            lead: { name: contact?.name ?? null, email: contact?.email ?? null },
+            ownerEmployeeId: contact?.ownerEmployeeId ?? actor,
+            actorEmployeeId: actor,
+          });
+        } catch (error) {
+          if (error instanceof MeetingGoogleError) return googleFailed(reply, error);
+          throw error;
+        }
+      }
       const [row] = await db
         .insert(crmMeetings)
         .values({
           leadId: lead.id,
           ownerEmployeeId: actor,
           title: body.data.title,
-          startsAt: new Date(body.data.startsAt),
-          endsAt: new Date(body.data.endsAt),
+          startsAt,
+          endsAt,
           calendar: body.data.calendar,
-          meetUrl: body.data.meetUrl ?? null,
-          attendees: body.data.attendees.map((a) => ({
-            email: a.email,
-            name: a.name ?? null,
-            responseStatus: null,
-          })),
+          meetUrl: google?.meetUrl ?? body.data.meetUrl ?? null,
+          attendees: google
+            ? google.attendees
+            : body.data.attendees.map((a) => ({
+                email: a.email,
+                name: a.name ?? null,
+                responseStatus: null,
+              })),
+          ...(google
+            ? {
+                googleEventId: google.eventId,
+                googleCalendarId: google.calendarId,
+                googleHtmlLink: google.htmlLink,
+                googleSync: 'ok',
+                googleSyncedAt: now(),
+              }
+            : {}),
           createdBy: actor,
         })
         .returning();
@@ -213,7 +268,11 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
         leadId: lead.id,
         kind: 'meeting.scheduled',
         actorEmployeeId: actor,
-        detail: { meetingId: row!.id, attendees: body.data.attendees.length },
+        detail: {
+          meetingId: row!.id,
+          attendees: (google?.attendees ?? body.data.attendees).length,
+          google: Boolean(google),
+        },
       });
       await writeAudit(db, {
         actorEmployeeId: actor,
@@ -255,28 +314,86 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
       const startsAt = body.data.startsAt ? new Date(body.data.startsAt) : row.startsAt;
       const endsAt = body.data.endsAt ? new Date(body.data.endsAt) : row.endsAt;
       if (startsAt >= endsAt) return bad(reply, 'O fim vem depois do início');
+      const actor = request.session.actor.employeeId;
+      const cancelling = body.data.status === 'cancelada';
+      const moved =
+        body.data.title !== undefined ||
+        body.data.startsAt !== undefined ||
+        body.data.endsAt !== undefined ||
+        body.data.attendees !== undefined;
+      let googleAttendees: typeof row.attendees | null = null;
+      let googlePatch: Partial<typeof crmMeetings.$inferInsert> = {};
+      if (mirrored(row) && (cancelling || moved)) {
+        // Google first: guests must never hold a time or a cancellation the screen does not.
+        const mirror = {
+          googleEventId: row.googleEventId,
+          googleCalendarId: row.googleCalendarId,
+          calendar: row.calendar,
+          createdBy: row.createdBy,
+        };
+        if (body.data.skipGoogle) {
+          googlePatch = { googleSync: 'falhou', googleSyncError: 'skipped', googleSyncedAt: now() };
+        } else {
+          try {
+            if (cancelling) {
+              await cancelMeetingEvent(googleSync(), mirror, actor);
+            } else {
+              googleAttendees = await patchMeetingEvent(googleSync(), mirror, actor, {
+                ...(body.data.title !== undefined ? { title: body.data.title } : {}),
+                ...(body.data.startsAt !== undefined ? { startsAt } : {}),
+                ...(body.data.endsAt !== undefined ? { endsAt } : {}),
+                ...(body.data.attendees
+                  ? {
+                      attendees: body.data.attendees.map((a) => ({
+                        email: a.email,
+                        name: a.name ?? null,
+                      })),
+                    }
+                  : {}),
+              });
+            }
+            googlePatch = { googleSync: 'ok', googleSyncError: null, googleSyncedAt: now() };
+          } catch (error) {
+            if (error instanceof MeetingGoogleError) {
+              await update(row.id, {
+                googleSync: 'falhou',
+                googleSyncError: error.code,
+                googleSyncedAt: now(),
+              });
+              return googleFailed(reply, error);
+            }
+            throw error;
+          }
+        }
+      }
       const updated = await update(row.id, {
         title: body.data.title ?? row.title,
         startsAt,
         endsAt,
         meetUrl: body.data.meetUrl === undefined ? row.meetUrl : body.data.meetUrl,
         status: body.data.status ?? row.status,
-        ...(body.data.attendees
-          ? {
-              attendees: body.data.attendees.map((a) => ({
-                email: a.email,
-                name: a.name ?? null,
-                responseStatus: null,
-              })),
-            }
-          : {}),
+        ...(googleAttendees
+          ? { attendees: googleAttendees }
+          : body.data.attendees
+            ? {
+                attendees: body.data.attendees.map((a) => ({
+                  email: a.email,
+                  name: a.name ?? null,
+                  responseStatus: null,
+                })),
+              }
+            : {}),
+        ...googlePatch,
       });
       await writeAudit(db, {
-        actorEmployeeId: request.session.actor.employeeId,
-        action: body.data.status === 'cancelada' ? 'meeting.cancelled' : 'meeting.updated',
+        actorEmployeeId: actor,
+        action: cancelling ? 'meeting.cancelled' : 'meeting.updated',
         entity: 'meeting',
         entityId: row.id,
         ip: request.ip,
+        metadata: {
+          google: mirrored(row) ? (body.data.skipGoogle ? 'skipped' : 'mirrored') : 'none',
+        },
       });
       return reply.send({ meeting: await answer(updated, found.lead.clientId) });
     },
@@ -811,24 +928,5 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
         .status(error ? 502 : 200)
         .send({ meeting: await answer(updated, lead.clientId) });
     },
-  );
-
-  // --- Google Workspace (after Thais authorises the app) ------------------------------------
-
-  app.get(
-    '/integrations/google-workspace',
-    { preHandler: app.requireAuth },
-    async (_request, reply) =>
-      reply.send({
-        connected: false,
-        reason:
-          'A autorização do Google Workspace ainda não foi dada (administradora do Workspace).',
-        scopes: [],
-        calendars: { wings: null, mine: null },
-      }),
-  );
-
-  app.get('/me/google/connect', { preHandler: app.requireAuth }, async (_request, reply) =>
-    googleOff(reply),
   );
 };

@@ -5,10 +5,11 @@ Contrato entre a API (Opus) e a tela da ficha (Fable). Os tipos ficam em
 volta. Tudo sob `/api`, mesma origem, sessão por cookie. Respostas de erro no padrão do sistema:
 `{ error, message }`.
 
-> **Estado em 06/10/2026:** contrato e tipos prontos. A autorização do Google Workspace depende
-> da Thais; até lá as rotas do Google respondem **503 `google_not_connected`**, e a reunião
-> funciona com link do Meet colado e gravação enviada pela tela. Nada aqui foi verificado contra
-> o Google ao vivo.
+> **Estado em 07/10/2026:** o evento, o Meet e os convites são criados no Google Agenda com a
+> conta de **cada pessoa** (`docs/integracoes/google-workspace.md`): quem conectou a conta em
+> Minha conta cria pelo Google; quem não conectou marca com o link colado e recebe **503**. A
+> importação da gravação pelo Drive continua 503. **Não verificado ao vivo**: o Meet na agenda
+> compartilhada e o convite real esperam o teste do Eric.
 
 ## O que é uma reunião
 
@@ -56,20 +57,34 @@ Nos leads de **Expansão** há uma quinta trilha: o **envio do resumo ao dono da
 }
 ```
 
-- `calendar`: `vendedor` (a agenda Google de quem marca) ou `wings` (a agenda da empresa).
-- `createMeet: true` cria o evento no Google com link do Meet e convida os participantes. Sem o
-  Google conectado: **503 `google_not_connected`**; a tela oferece "colar o link do Meet"
-  (`createMeet: false`, `meetUrl` preenchido; aceita meet.google.com, como hoje em
-  `lead_activities`).
-- `startsAt` < `endsAt`, no máximo 8 horas; até 20 participantes.
-- Grava `lead_events` `meeting.scheduled` (sem e-mail de ninguém no detalhe).
+- `calendar`: `vendedor` (a agenda `primary` de quem marca) ou `wings` (a agenda compartilhada
+  "Wings Company", id em `GOOGLE_WORKSPACE_WINGS_CALENDAR_ID`).
+- `createMeet: true` cria o evento no Google Agenda **com a conta de quem marca**
+  (`POST calendars/{id}/events?conferenceDataVersion=1&sendUpdates=all`, `createRequest`
+  `hangoutsMeet`), espera o Meet ficar pronto (relê até 3 vezes) e convida: os `attendees` do
+  corpo, o e-mail do lead (se tiver), o dono da negociação e, na agenda da Wings, quem marcou (para
+  o evento aparecer na agenda dele). Guarda `googleEventId`, `googleCalendarId`, `googleHtmlLink`
+  e os convidados como o Google devolveu (`responseStatus` `sem_resposta`).
+  - **503 `google_not_configured`** (sem cliente OAuth no sistema), **503 `google_not_connected`**
+    (a pessoa não conectou), **503 `google_needs_reconnect`** (o Google recusou o refresh): a
+    tela oferece "colar o link do Meet" (`createMeet: false`, `meetUrl`).
+  - **409 `wings_calendar_unavailable`** (id não configurado) e **409 `wings_calendar_forbidden`**
+    (a agenda não foi compartilhada com a pessoa como "Fazer alterações nos eventos").
+  - **502 `meet_failed`**: o Google criou o evento sem Meet; o evento é apagado e nada é gravado.
+- `startsAt` < `endsAt`, no máximo 8 horas; até 20 participantes. Fuso `America/Sao_Paulo`.
+- Grava `lead_events` `meeting.scheduled` (sem e-mail de ninguém no detalhe; `google: true|false`).
 
 `GET /meetings/:id` → `{ meeting: Meeting }` (tudo: agenda, gravação, transcrição, análise,
 envio).
 
 `PATCH /meetings/:id` → `{ meeting }`. Aceita `title`, `startsAt`, `endsAt`, `attendees`,
-`meetUrl`, `status: "cancelada"`. Com Google conectado, atualiza o evento (o Google avisa os
-convidados). Uma reunião encerrada não volta a agendada.
+`meetUrl`, `status: "cancelada"`, `skipGoogle`. Quando a reunião tem `googleEventId`, o Google
+vem **primeiro**: remarcar é `PATCH .../events/{id}?sendUpdates=all`, cancelar é `DELETE` (um
+evento já apagado lá conta como cancelado); só depois a cópia do CRM muda. Token usado: o de quem
+criou o evento; se essa pessoa não está mais conectada, o de quem está mudando. Se o Google
+recusar: **502 `google_sync_failed`** (ou 503/409 acima), a cópia do CRM fica como estava e
+`googleSync` vira `falhou` com o código; a tela oferece "Mudar só no sistema" (`skipGoogle:
+true`, que grava `googleSync.error = skipped`). Uma reunião encerrada não volta a agendada.
 
 ### Abrir o Meet ao lado do Wings
 
@@ -186,21 +201,29 @@ destinatário é o contato **principal** da ficha do cliente (`client_contacts`,
    aprovação. Grava auditoria `meeting.summary_sent` sem o texto.
 5. `POST /meetings/:id/summary-send/refuse` → `recusado`.
 
-### Google (depois da Thais)
+### Google, por pessoa (`apps/api/src/modules/google-workspace/`)
 
-- `GET /integrations/google-workspace` → `{ connected, scopes, calendars: { wings, mine } }`.
-- `GET /me/google/connect` → endereço de autorização do Google para a agenda do vendedor;
-  `GET /me/google/callback` grava os tokens **cifrados** (`INTEGRATIONS_ENCRYPTION_KEY`) em
-  tabela por pessoa. Tokens nunca vão ao navegador, a um modelo nem a um log.
-- Escopos pedidos: `calendar.events` (agenda e Meet), `drive.readonly` só para importar
-  gravações do Meet. A Thais autoriza o app no Admin do Workspace.
+- `GET /me/google` → `{ status: GoogleWorkspaceStatus }` da própria sessão: `configured`,
+  `state` (`disconnected | pending | connected | needs_reconnect`), `email`, `scopes`,
+  `calendars.mine` e `calendars.wings` (`access: writer | reader | none`, lido ao vivo em
+  `calendarList`), `wingsCalendarConfigured`, `lastError` (código).
+- `POST /me/google/connect` → `{ url }` da tela de consentimento (PKCE S256 + `state`,
+  `access_type=offline`, `prompt=consent`); `GET /me/google/callback?code&state` troca o código,
+  grava os tokens **cifrados** (`INTEGRATIONS_ENCRYPTION_KEY`) em `google_workspace_connections`
+  (uma linha por funcionário, migração 0078) e redireciona para `/minha-conta?google=ok|erro`.
+  `DELETE /me/google` revoga e apaga. Tokens nunca vão ao navegador, a um modelo nem a um log; o
+  refresh acontece sob trava de linha, 60 s antes de vencer; `invalid_grant` → `needs_reconnect`.
+- Escopos: `openid email`, `calendar.events`, `calendar.calendarlist.readonly`, `gmail.send`.
+  Autorização = consentimento de cada pessoa num app **Interno** do Cloud da Wings (sem
+  delegação de domínio). Passo a passo: `docs/integracoes/google-workspace.md`.
 
 ## Tipos (resumo; a fonte é `packages/shared/src/meetings.ts`)
 
 - `MeetingSummary`: `id`, `leadId`, `title`, `startsAt`, `endsAt`, `status`, `calendar`,
   `meetUrl`, `ownerEmployeeId`, `recordingState`, `transcriptState`, `analysisState`,
   `summarySendState`.
-- `Meeting`: o resumo + `attendees` (`{ email, name, responseStatus }`), `googleEventId`,
+- `Meeting`: o resumo (que inclui `googleEventId`) + `attendees` (`{ email, name, responseStatus }`),
+  `googleHtmlLink`, `googleSync` (`{ state: ok | falhou, error, at }` ou null),
   `recording` (`state`, `fileId`, `durationSeconds`, `sizeBytes`), `transcript` (estado e
   contagem; o texto vem em `/transcript`), `analysis`, `summarySend` (`state`, `channel`, `to`
   mascarado, `text`, `approvedBy`, `approvedAt`, `sentAt`), `createdAt`, `updatedAt`.

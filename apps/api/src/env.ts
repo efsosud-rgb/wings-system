@@ -155,12 +155,14 @@ const schema = z.object({
   ),
   /**
    * CRM e-mail to the lead: `test` (the default) records the message in the
-   * outbox and sends nothing; `smtp` sends through the Workspace SMTP account.
-   * Only Eric turns it to `smtp`, after the templates are approved.
+   * outbox and sends nothing; `smtp` sends through the Workspace SMTP account;
+   * `gmail` sends from the sender's own Gmail (their Google connection), with
+   * SMTP as the fallback for whoever is not connected. Only Eric turns it on,
+   * after the templates are approved (docs/integracoes/google-workspace.md).
    */
   CRM_EMAIL_MODE: optionalString.refine(
-    (value) => value === undefined || value === 'test' || value === 'smtp',
-    'must be "test" or "smtp"',
+    (value) => value === undefined || value === 'test' || value === 'smtp' || value === 'gmail',
+    'must be "test", "smtp" or "gmail"',
   ),
   /**
    * How often the API runs the CRM automations cycle (due rules and sequence
@@ -217,6 +219,18 @@ const schema = z.object({
    * id registered by hand. Public client (PKCE / device code), so no secret.
    */
   KAIROGEN_CLIENT_ID: optionalString,
+  /**
+   * Google Workspace per person (Agenda, Meet, Gmail): the OAuth client of the
+   * Wings Cloud project, audience "Internal", redirect
+   * `${APP_BASE_URL}/api/me/google/callback`. Each person consents once; their
+   * tokens live in `google_workspace_connections` under
+   * INTEGRATIONS_ENCRYPTION_KEY. Without the client the Google routes answer 503.
+   * See docs/integracoes/google-workspace.md.
+   */
+  GOOGLE_WORKSPACE_CLIENT_ID: optionalString,
+  GOOGLE_WORKSPACE_CLIENT_SECRET: optionalString,
+  /** The shared "Wings Company" calendar (its id in Google Agenda's settings), for `calendar: 'wings'`. */
+  GOOGLE_WORKSPACE_WINGS_CALENDAR_ID: optionalString,
   /**
    * Ceilings on Kairogen credits, enforced by this system on top of the
    * account's own balance: per person per day, and for everyone per month
