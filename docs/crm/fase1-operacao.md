@@ -47,6 +47,22 @@ node dist/scripts/leads-import-rd.js --apply [--since=2026-06-30] [--no-historie
   "Vendidos"/"Negócios perdidos" de cada um) criados desde `--since`, mais os
   **abertos** de qualquer idade. Parcerias, Estruturação e Lista de espera
   ficam fora.
+- **Negócios que o seguimento horário não viu.** O seguimento só olha os últimos
+  3 dias e só os que o Funil ainda não tem; um negócio criado no RD e não
+  ligado em até 3 dias fica de fora para sempre. Para buscá-los depois:
+
+  ```
+  node dist/scripts/leads-import-rd.js --since=2026-09-28 --window --only-missing --rotate --pipeline=formatacao [--apply]
+  ```
+
+  `--window` lê só os negócios criados desde `--since`; `--only-missing` pula
+  os que o Funil já tem (nada existente é tocado); `--pipeline=` limita o funil
+  (`formatacao`, `expansao`, `consultoria`, separados por vírgula); `--rotate`
+  dá o dono pelo rodízio do funil a quem chega sem dono do RD, **mesmo velho**
+  (os de mais de 24 h ficam sem tarefa de primeiro contato e sem o aviso
+  "Novo lead para você"). Negócio fechado, de arquivo ou de teste não entra no
+  rodízio. O roteiro de produção é `/root/relatorios/negocios-rd/negocios-rd.sh`
+  (estado, simular, aplicar, desfazer LOTE).
 - Por negócio: `GET /deals/:id/contacts` (nome, e-mail, telefone do primeiro
   contato) e, sem `--no-histories`, `GET /deals/:id` para
   `deal_stage_histories` (1º contato = primeira entrada numa etapa depois da

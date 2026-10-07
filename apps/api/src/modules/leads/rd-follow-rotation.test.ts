@@ -90,7 +90,14 @@ function fakeRd(deals: RdDealRow[]): RdCrmReader {
 }
 
 /** One hourly cycle, as ingest-cli runs it (the only caller that asks to distribute). */
-const follow = (deals: RdDealRow[], options: { distributeNew?: boolean } = {}) =>
+const follow = (
+  deals: RdDealRow[],
+  options: {
+    distributeNew?: boolean;
+    rotateOld?: boolean;
+    onlyPipelines?: readonly ('expansao' | 'formatacao' | 'consultoria')[];
+  } = {},
+) =>
   importRdDeals(db, fakeRd(deals), {
     apply: true,
     since: new Date(Date.now() - 3 * 24 * HOUR),
@@ -100,6 +107,8 @@ const follow = (deals: RdDealRow[], options: { distributeNew?: boolean } = {}) =
     ownerRdUserIds: rdOwnerAllowlist('rd-keep'),
     batchId: `rd-crm-sync-test-${counter}`,
     distributeNew: options.distributeNew ?? true,
+    ...(options.rotateOld ? { rotateOld: true } : {}),
+    ...(options.onlyPipelines ? { onlyPipelines: options.onlyPipelines } : {}),
   });
 
 async function setRotation(pipeline: 'formatacao' | 'expansao', employeeIds: string[]) {
@@ -337,5 +346,75 @@ describe('the RD follow-up gives new recent deals to the rotation', () => {
     expect(row).toMatchObject({ rdDealId: joined.id, ownerEmployeeId: null });
     expect(await tasksOf(existing.lead.id)).toEqual([]);
     expect(await noticesOf(existing.lead.id)).toEqual([]);
+  });
+
+  it('with rotateOld a backlog deal gets its owner from the rotation, with no task and no notice', async () => {
+    const old = newDeal('f1', { created_at: hoursAgo(5 * 24) });
+    const fresh = newDeal('f1', { created_at: hoursAgo(1) });
+    const lost = newDeal('f1', {
+      created_at: hoursAgo(30),
+      win: false,
+      deal_lost_reason: { name: 'Preço' },
+    });
+    const testName = newDeal('f1', { created_at: hoursAgo(5 * 24), name: 'Teste Y' });
+    const result = await follow([old.deal, fresh.deal, lost.deal, testName.deal], {
+      rotateOld: true,
+    });
+    expect(result).toMatchObject({
+      created: 3,
+      rotation: { assigned: 2, empty: 0 },
+      testDeals: 1,
+      failed: 0,
+    });
+
+    const oldRow = await leadOf(old.id);
+    expect([sellerA, sellerB]).toContain(oldRow?.ownerEmployeeId);
+    expect(await eventKinds(oldRow!.id)).toContain('lead.owner_changed');
+    expect(await tasksOf(oldRow!.id)).toEqual([]);
+    expect(await noticesOf(oldRow!.id)).toEqual([]);
+    // The date it entered is still the deal's own, five days back.
+    expect(oldRow?.enteredAt.getTime()).toBeLessThan(Date.now() - 4 * 24 * HOUR);
+
+    // The fresh one is announced as always.
+    const freshRow = await leadOf(fresh.id);
+    expect([sellerA, sellerB]).toContain(freshRow?.ownerEmployeeId);
+    expect(await tasksOf(freshRow!.id)).toHaveLength(1);
+    expect(await noticesOf(freshRow!.id)).toHaveLength(1);
+
+    // A closed deal is brought in as RD says, with no owner and not rotated.
+    const lostRow = await leadOf(lost.id);
+    expect(lostRow).toMatchObject({ ownerEmployeeId: null, won: false });
+    expect(await leadOf(testName.id)).toBeUndefined();
+  });
+
+  it('without rotateOld the old deal is still left out of the rotation', async () => {
+    const old = newDeal('f1', { created_at: hoursAgo(5 * 24) });
+    const result = await follow([old.deal]);
+    expect(result).toMatchObject({ created: 1, rotation: { assigned: 0, empty: 0 } });
+    expect((await leadOf(old.id))?.ownerEmployeeId).toBeNull();
+  });
+
+  it('onlyPipelines brings in just the funnel asked for', async () => {
+    const formatacao = newDeal('f1');
+    const expansao = newDeal('e1');
+    const result = await follow([formatacao.deal, expansao.deal], {
+      rotateOld: true,
+      onlyPipelines: ['formatacao'],
+    });
+    expect(result).toMatchObject({ created: 1, failed: 0 });
+    expect(await leadOf(formatacao.id)).toMatchObject({ pipeline: 'formatacao' });
+    expect(await leadOf(expansao.id)).toBeUndefined();
+  });
+
+  it('undoing a rotateOld batch takes the backlog leads back too', async () => {
+    const old = newDeal('f1', { created_at: hoursAgo(6 * 24) });
+    await follow([old.deal], { rotateOld: true });
+    const row = await leadOf(old.id);
+    expect(row?.ownerEmployeeId).not.toBeNull();
+    const batchId = (await eventsOf(row!.id)).find((e) => e.kind === 'lead.imported.rd_crm')
+      ?.detail as { batchId: string };
+    const undone = await undoRdImportBatch(db, { batchId: batchId.batchId, apply: true });
+    expect(undone.created).toBe(1);
+    expect(await leadOf(old.id)).toBeUndefined();
   });
 });
