@@ -1,3 +1,4 @@
+import { LEAD_PIPELINES, type LeadPipeline } from '@wings/shared';
 import { createDb } from '../db/client.js';
 import { loadDotEnv } from '../db/load-env.js';
 import { loadEnv } from '../env.js';
@@ -18,6 +19,13 @@ import {
  *   pnpm --filter @wings/api leads:import-rd [--apply] [--since=2026-06-30] [--no-histories]
  *   node dist/scripts/leads-import-rd.js [--apply] ...        # in the API container
  *
+ * A backlog of recent deals the hourly follow-up never saw (it only looks 3 days back):
+ *   --window             list only deals created from --since until now (older open ones are not read)
+ *   --only-missing       skip deals the Funil already has (nothing existing is touched)
+ *   --rotate             new leads with no owner from RD go to the funnel's rotation, however old
+ *                        (no first-contact task and no notice for those over 24 h)
+ *   --pipeline=formatacao[,expansao]   only these funnels
+ *
  * The output is counts, brand names and RD field shapes — never a person.
  */
 export function formatImport(result: RdImportResult, ownerAllowlist = false): string {
@@ -35,6 +43,7 @@ export function formatImport(result: RdImportResult, ownerAllowlist = false): st
     `leads ${result.applied ? 'criados' : 'a criar'}: ${result.created}; ligados a um lead que já existia: ${result.merged}`,
     `outro negócio da mesma pessoa: ${result.otherDealOfSamePerson}; sem e-mail nem telefone: ${result.noContactData}; de teste (não entram): ${result.testDeals}`,
     `dono: ${result.owners.mapped} mantêm o dono do RD, ${result.owners.unmapped} entram sem dono${ownerAllowlist ? ' (só os donos de CRM_RD_OWNER_USER_IDS ficam)' : ''}`,
+    `rodízio: ${result.rotation.assigned} com dono do rodízio, ${result.rotation.empty} sem dono (rodízio vazio)`,
     `usuários do RD: ${result.rdUsers.listed} (ligados agora por e-mail ${result.rdUsers.linkedByEmail}, por nome ${result.rdUsers.linkedByName})`,
     `histórico de etapas: ${result.histories.read} lido(s), ${result.histories.failed} falha(s), ${result.histories.withFirstContact} com 1º contato`,
     `marcas (Expansão):`,
@@ -52,6 +61,13 @@ async function main() {
   const since = new Date(`${sinceArg}T00:00:00-03:00`);
   if (Number.isNaN(since.getTime())) throw new Error('--since must be YYYY-MM-DD');
   const apply = process.argv.includes('--apply');
+  const rotate = process.argv.includes('--rotate');
+  const pipelineArg = process.argv.find((arg) => arg.startsWith('--pipeline='))?.slice(11);
+  const onlyPipelines = pipelineArg
+    ? (pipelineArg.split(',').map((name) => name.trim()) as LeadPipeline[])
+    : undefined;
+  if (onlyPipelines?.some((name) => !LEAD_PIPELINES.includes(name)))
+    throw new Error(`--pipeline must be a list of: ${LEAD_PIPELINES.join(', ')}`);
   // One id per applied run: new leads carry it, and `leads-import-rd-undo --batch=<id>` takes the run back.
   const batchId = apply
     ? `rd-crm-${new Date().toISOString().replace(/[-:]/g, '').slice(0, 13)}Z`
@@ -63,7 +79,12 @@ async function main() {
       apply,
       batchId,
       since,
+      ...(process.argv.includes('--window') ? { window: { since, until: new Date() } } : {}),
       histories: !process.argv.includes('--no-histories'),
+      onlyMissing: process.argv.includes('--only-missing'),
+      distributeNew: rotate,
+      rotateOld: rotate,
+      ...(onlyPipelines ? { onlyPipelines } : {}),
       ownerRdUserIds: rdOwnerAllowlist(env.CRM_RD_OWNER_USER_IDS),
       log: (facts) => console.warn(JSON.stringify(facts)),
       onProgress: (done, total) => {
@@ -80,6 +101,7 @@ async function main() {
           since: sinceArg,
           created: result.created,
           merged: result.merged,
+          rotation: result.rotation,
           inScope: result.inScope,
           failed: result.failed,
         },

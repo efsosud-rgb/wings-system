@@ -365,6 +365,15 @@ export interface RdImportOptions {
    */
   distributeNew?: boolean;
   /**
+   * With `distributeNew`: deals older than `STALE_ARRIVAL_HOURS` go to the rotation too (a backlog
+   * import of deals the follow-up never saw). They get their owner from the rotation but no
+   * first-contact task and no "Novo lead para você" notice: a seller is not told about a
+   * days-old deal as if it had just arrived. Default off.
+   */
+  rotateOld?: boolean;
+  /** Only these funnels come in; the others are listed and left alone. Absent = every funnel in scope. */
+  onlyPipelines?: readonly LeadPipeline[];
+  /**
    * The run's batch id (required with `apply`): new leads carry it in
    * `import_batch_id`, and a lead that already existed gets a `rd.import_batch`
    * event with what it was before (ids and labels, never personal data), so
@@ -529,6 +538,7 @@ export async function importRdDeals(
         row,
       ): row is { deal: RdDealRow; id: string; place: StagePlace & { pipeline: LeadPipeline } } =>
         Boolean(row.id && row.place?.pipeline) &&
+        (!options.onlyPipelines || options.onlyPipelines.includes(row.place!.pipeline!)) &&
         (row.deal.win === null ||
           new Date(row.deal.created_at).getTime() >= options.since.getTime()),
     )
@@ -635,6 +645,7 @@ export async function importRdDeals(
       // rotation inside the lead's own transaction (`upsertLead`); an existing
       // lead found by the upsert is never distributed.
       const createdAt = dateOf(deal.created_at);
+      const stale = createdAt !== null && isStaleArrival({ originCreatedAt: createdAt });
       const distribute =
         options.distributeNew === true &&
         !ownerEmployeeId &&
@@ -642,7 +653,7 @@ export async function importRdDeals(
         !place.archive &&
         (place.pipeline === 'expansao' || place.pipeline === 'formatacao') &&
         createdAt !== null &&
-        !isStaleArrival({ originCreatedAt: createdAt });
+        (!stale || options.rotateOld === true);
       const upserted = await upsertLead(db, {
         source: 'rd_crm',
         name: contact.name,
@@ -654,6 +665,8 @@ export async function importRdDeals(
         brand,
         externalId: id,
         arrivedAt: dateOf(deal.created_at),
+        // Only read by the first-contact task of a rotated lead: an old deal gets none.
+        originCreatedAt: distribute ? createdAt : null,
         enteredAt: dateOf(deal.created_at),
         enteredAtSource: 'rd_deal_created',
         consentSource: 'rd_crm',
@@ -671,7 +684,7 @@ export async function importRdDeals(
         // `rd_crm` is not an arrival source, so the notice is asked for directly.
         if (upserted.lead.ownerEmployeeId) result.rotation.assigned += 1;
         else result.rotation.empty += 1;
-        await announceLeadArrival(db, upserted.lead);
+        if (!stale) await announceLeadArrival(db, upserted.lead);
       }
 
       const lead = upserted.lead;
