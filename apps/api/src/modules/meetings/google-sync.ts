@@ -1,4 +1,10 @@
-import type { MeetingAttendee, MeetingCalendar } from '@wings/shared';
+import {
+  leadHidesWings,
+  MEETING_GOOGLE_COLOR,
+  meetingTitleOf,
+  type MeetingAttendee,
+  type MeetingCalendar,
+} from '@wings/shared';
 import { inArray } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { employees } from '../../db/schema/index.js';
@@ -48,17 +54,26 @@ export interface GoogleSyncDeps {
 }
 
 export interface MeetingEventInput {
-  title: string;
   startsAt: Date;
   endsAt: Date;
   calendar: MeetingCalendar;
   attendees: Array<{ email: string; name?: string | null }>;
-  lead: { name: string | null; email: string | null };
+  lead: {
+    name: string | null;
+    email: string | null;
+    pipeline: string | null;
+    brand: string | null;
+    companyName: string | null;
+  };
+  /** Invite the lead by e-mail (Formatação, when the person asked). */
+  inviteLead: boolean;
   ownerEmployeeId: string;
   actorEmployeeId: string;
 }
 
 export interface MeetingEvent {
+  /** The title as written on Google (the team's pattern). */
+  title: string;
   eventId: string;
   calendarId: string;
   htmlLink: string | null;
@@ -133,15 +148,19 @@ function mapCalendarError(error: unknown, calendar: MeetingCalendar): never {
   throw error;
 }
 
-const descriptionOf = (leadName: string | null) =>
-  [
-    `Reunião com a Wings Company${leadName ? ` — ${leadName}` : ''}.`,
-    'Esta reunião é gravada para registro e resumo; ao entrar, você concorda com a gravação.',
-    'Marcada pelo Wings System.',
-  ].join('\n');
+/** Only an invited lead reads the description: the recording notice the screen promises. */
+const RECORDING_NOTICE =
+  'Esta reunião é gravada para registro e resumo; ao entrar, você concorda com a gravação.';
 
-/** The guests: who the screen named, the lead, the deal's owner and, on the shared calendar, the person creating. */
+/**
+ * The guests. The team's calls carry no lead by default; the lead comes only
+ * when asked (Formatação), never on a deal that hides the Wings, and the same
+ * goes for any outside address typed on the screen. The deal's owner is always
+ * told, and on the shared calendar so is the person creating (it then shows on
+ * their own calendar too).
+ */
 async function guestsOf(deps: GoogleSyncDeps, input: MeetingEventInput) {
+  const hidden = leadHidesWings(input.lead);
   const ids = [
     input.ownerEmployeeId,
     ...(input.calendar === 'wings' ? [input.actorEmployeeId] : []),
@@ -155,10 +174,15 @@ async function guestsOf(deps: GoogleSyncDeps, input: MeetingEventInput) {
     const key = email?.trim().toLowerCase();
     if (key && !guests.has(key)) guests.set(key, { email: key, name });
   };
-  for (const a of input.attendees) add(a.email, a.name ?? null);
-  add(input.lead.email, input.lead.name);
   for (const p of people) add(p.email, p.name);
-  return [...guests.values()];
+  if (!hidden) {
+    for (const a of input.attendees) add(a.email, a.name ?? null);
+    if (input.inviteLead) add(input.lead.email, input.lead.name);
+  }
+  return {
+    guests: [...guests.values()],
+    leadInvited: !hidden && input.inviteLead && Boolean(input.lead.email),
+  };
 }
 
 async function meetOf(
@@ -189,12 +213,14 @@ export async function createMeetingEvent(
 ): Promise<MeetingEvent> {
   const token = await tokenOf(deps, input.actorEmployeeId);
   const calendarId = calendarIdOf(deps, input.calendar);
-  const attendees = await guestsOf(deps, input);
+  const { guests: attendees, leadInvited } = await guestsOf(deps, input);
+  const title = meetingTitleOf(input.lead.pipeline, input.lead);
   let created: CalendarEvent;
   try {
     created = await createEvent(deps.google!.transport, token, calendarId, {
-      title: input.title,
-      description: descriptionOf(input.lead.name),
+      title,
+      description: leadInvited ? RECORDING_NOTICE : null,
+      colorId: MEETING_GOOGLE_COLOR[input.lead.pipeline ?? ''] ?? null,
       startsAt: input.startsAt,
       endsAt: input.endsAt,
       attendees,
@@ -205,6 +231,7 @@ export async function createMeetingEvent(
   }
   const meetUrl = await meetOf(deps, token, calendarId, created);
   return {
+    title,
     eventId: created.id,
     calendarId,
     htmlLink: created.htmlLink,

@@ -25,7 +25,16 @@ export function LeadEmailTab({ leadId }: { leadId: string }) {
   if (emails.isPending) return <p className="crm-muted">Carregando…</p>;
   if (emails.isError || !emails.data)
     return <p className="crm-error">Não foi possível carregar os e-mails.</p>;
-  const { to, mode, from, templates, sent } = emails.data;
+  const { to, hidden, mode, from, templates, sent } = emails.data;
+  if (hidden)
+    return (
+      <div className="crm-record-form">
+        <p className="crm-sub" data-testid="brand-rule">
+          Expansão com marca: o lead não recebe e-mail da Wings (não pode ver a Wings). Fale pelo{' '}
+          <a href={`/crm-vendas/negociacoes/${leadId}/whatsapp`}>WhatsApp</a> em nome da marca.
+        </p>
+      </div>
+    );
 
   const choose = (id: string) => {
     setTemplateId(id);

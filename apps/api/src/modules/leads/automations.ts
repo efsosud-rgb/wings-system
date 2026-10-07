@@ -7,6 +7,7 @@ import {
   automationTaskConfigSchema,
   renderTemplate,
   type LeadPipeline,
+  leadHidesWings,
 } from '@wings/shared';
 import { and, asc, eq, inArray, isNull, lt, lte, ne } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
@@ -375,7 +376,7 @@ export async function sendTemplateToLead(
   | { ok: true; outboxId: string; mode: CrmMailMode }
   | {
       ok: false;
-      reason: 'template_gone' | 'template_off' | 'no_email' | 'send_failed';
+      reason: 'template_gone' | 'template_off' | 'no_email' | 'brand_hidden' | 'send_failed';
       outboxId?: string;
     }
 > {
@@ -385,6 +386,8 @@ export async function sendTemplateToLead(
   });
   if (!template) return { ok: false, reason: 'template_gone' };
   if (!template.active) return { ok: false, reason: 'template_off' };
+  // Expansão with a brand: no e-mail from a Wings address reaches the lead (the brand rule).
+  if (leadHidesWings(lead)) return { ok: false, reason: 'brand_hidden' };
   if (!lead.email) return { ok: false, reason: 'no_email' };
   const { subject, body } = await renderForLead(db, lead, template);
   let status: 'recorded' | 'sent' | 'failed' =

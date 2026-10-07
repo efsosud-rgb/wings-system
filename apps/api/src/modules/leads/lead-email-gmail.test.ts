@@ -5,7 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { crmEmailOutbox, crmEmailTemplates, leadEvents } from '../../db/schema/index.js';
+import { crmEmailOutbox, crmEmailTemplates, leadEvents, leads } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import type { Mail } from '../../lib/mailer.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
@@ -87,7 +87,11 @@ async function connect(cookies: Record<string, string>) {
   expect(callback.headers.location).toBe('/minha-conta?google=ok');
 }
 
-const arrive = async (owner: string, email = 'paula@exemplo.com.br') =>
+const arrive = async (
+  owner: string,
+  email = 'paula@exemplo.com.br',
+  pipeline: 'formatacao' | 'expansao' = 'formatacao',
+) =>
   (
     await upsertLead(db, {
       source: 'site_form',
@@ -96,7 +100,7 @@ const arrive = async (owner: string, email = 'paula@exemplo.com.br') =>
       email,
       clientId: WINGS_CLIENT_ID,
       clientMapped: false,
-      pipeline: 'formatacao',
+      pipeline,
       ownerEmployeeId: owner,
       distribute: false,
       skipResearch: true,
@@ -230,5 +234,29 @@ describe('e-mail to the lead through the sender’s Gmail', () => {
       .where(eq(crmEmailOutbox.leadId, lead.id))
       .orderBy(desc(crmEmailOutbox.createdAt));
     expect(rows[0]).toMatchObject({ status: 'failed', mode: 'gmail' });
+  });
+
+  it('sends nothing to the lead of an Expansão deal with a brand (the brand rule), connected or not', async () => {
+    const seller = await sessionFor('vendedor_expansao');
+    await connect(seller.cookies);
+    const lead = await arrive(seller.id, 'marca@exemplo.com.br', 'expansao');
+    await db.update(leads).set({ brand: 'Marca Exemplo' }).where(eq(leads.id, lead.id));
+    const status = await app.inject({
+      method: 'GET',
+      url: `/leads/${lead.id}/emails`,
+      cookies: seller.cookies,
+    });
+    expect(status.json()).toMatchObject({ hidden: true });
+    const refused = await app.inject({
+      method: 'POST',
+      url: `/leads/${lead.id}/emails`,
+      cookies: seller.cookies,
+      payload: { templateId },
+    });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ error: 'brand_hidden' });
+    expect(google.sentMail).toHaveLength(0);
+    expect(smtpSent).toHaveLength(0);
+    expect(await db.$count(crmEmailOutbox, eq(crmEmailOutbox.leadId, lead.id))).toBe(0);
   });
 });

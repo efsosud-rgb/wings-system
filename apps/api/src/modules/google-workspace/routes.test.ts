@@ -101,7 +101,15 @@ async function status(cookies: Record<string, string>) {
   return response.json<{ status: GoogleWorkspaceStatus }>().status;
 }
 
-async function deal(ownerId: string, email: string | null = 'candidato@exemplo.com.br') {
+async function deal(
+  ownerId: string,
+  email: string | null = 'candidato@exemplo.com.br',
+  extra: {
+    pipeline?: 'formatacao' | 'expansao';
+    brand?: string | null;
+    companyName?: string | null;
+  } = {},
+) {
   const [row] = await db
     .insert(leads)
     .values({
@@ -109,7 +117,9 @@ async function deal(ownerId: string, email: string | null = 'candidato@exemplo.c
       name: 'Candidato Exemplo',
       email,
       ownerEmployeeId: ownerId,
-      pipeline: 'formatacao',
+      pipeline: extra.pipeline ?? 'formatacao',
+      brand: extra.brand ?? null,
+      companyName: extra.companyName ?? 'Padaria Exemplo',
       stage: 'Diagnóstico',
     })
     .returning({ id: leads.id });
@@ -184,11 +194,18 @@ describe('Google Workspace por pessoa', () => {
       method: 'POST',
       url: `/leads/${leadId}/meetings`,
       cookies: seller.cookies,
-      payload: { ...slot, createMeet: true, attendees: [{ email: 'socio@exemplo.com.br' }] },
+      payload: {
+        ...slot,
+        createMeet: true,
+        inviteLead: true,
+        attendees: [{ email: 'socio@exemplo.com.br' }],
+      },
     });
     expect(created.statusCode).toBe(201);
     const meeting = created.json<{ meeting: Meeting }>().meeting;
     expect(meeting).toMatchObject({
+      // The team's pattern replaces the typed title on a Google-made call.
+      title: '@ Formatação ( Padaria Exemplo - Candidato Exemplo ) - CALL',
       meetUrl: 'https://meet.google.com/evt1',
       googleEventId: 'evt1',
       googleHtmlLink: 'https://calendar.google.com/event?eid=evt1',
@@ -202,8 +219,11 @@ describe('Google Workspace por pessoa', () => {
     expect(guestsOf(insert!.body)).toEqual(
       ['socio@exemplo.com.br', 'candidato@exemplo.com.br', seller.email.toLowerCase()].sort(),
     );
-    expect((insert!.body as { conferenceData: unknown }).conferenceData).toMatchObject({
-      createRequest: { conferenceSolutionKey: { type: 'hangoutsMeet' } },
+    expect(insert!.body).toMatchObject({
+      summary: '@ Formatação ( Padaria Exemplo - Candidato Exemplo ) - CALL',
+      colorId: '5',
+      description: expect.stringContaining('gravada'),
+      conferenceData: { createRequest: { conferenceSolutionKey: { type: 'hangoutsMeet' } } },
     });
     // The Meet was still pending on the insert: one re-read fetched it.
     expect(
@@ -242,10 +262,10 @@ describe('Google Workspace por pessoa', () => {
     expect(google.events.get('evt1')!.deleted).toBe(true);
   });
 
-  it('puts the event on the Wings Company calendar with the scheduler as a guest', async () => {
+  it('puts the event on the Wings Company calendar, the team\u2019s way: no lead, no colour, no description', async () => {
     const seller = await sessionFor('vendedor_expansao');
     await connect(seller.cookies);
-    const leadId = await deal(seller.id, null);
+    const leadId = await deal(seller.id, 'candidato@exemplo.com.br', { pipeline: 'expansao' });
     const created = await app.inject({
       method: 'POST',
       url: `/leads/${leadId}/meetings`,
@@ -255,9 +275,49 @@ describe('Google Workspace por pessoa', () => {
     expect(created.statusCode).toBe(201);
     const insert = google.calls.find((c) => c.method === 'POST' && c.url.includes('/events'));
     expect(insert!.url).toContain(`/calendars/${encodeURIComponent(WINGS_CALENDAR)}/events`);
-    // A lead without e-mail gets no invitation; the seller (owner and scheduler) does.
+    // The lead is not invited unless asked; the seller (owner and scheduler) is.
     expect(guestsOf(insert!.body)).toEqual([seller.email.toLowerCase()]);
+    expect(insert!.body).toMatchObject({ summary: '@ Candidato Exemplo - CALL' });
+    expect(insert!.body).not.toHaveProperty('colorId');
+    expect(insert!.body).not.toHaveProperty('description');
     expect(created.json<{ meeting: Meeting }>().meeting.calendar).toBe('wings');
+  });
+
+  it('never invites the lead or an outside guest on an Expansão deal with a brand, even when asked', async () => {
+    const seller = await sessionFor('vendedor_expansao');
+    await connect(seller.cookies);
+    const leadId = await deal(seller.id, 'candidato@exemplo.com.br', {
+      pipeline: 'expansao',
+      brand: 'Marca Exemplo',
+    });
+    const created = await app.inject({
+      method: 'POST',
+      url: `/leads/${leadId}/meetings`,
+      cookies: seller.cookies,
+      payload: {
+        ...slot,
+        createMeet: true,
+        inviteLead: true,
+        attendees: [{ email: 'socio@exemplo.com.br' }],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const insert = google.calls.find((c) => c.method === 'POST' && c.url.includes('/events'));
+    expect(guestsOf(insert!.body)).toEqual([seller.email.toLowerCase()]);
+    expect(insert!.body).toMatchObject({ summary: '@ Candidato Exemplo ( Marca Exemplo ) - CALL' });
+    const meeting = created.json<{ meeting: Meeting }>().meeting;
+    expect(meeting.attendees.map((a) => a.email)).toEqual([seller.email.toLowerCase()]);
+
+    // Nor later, through a reschedule that names guests.
+    const moved = await app.inject({
+      method: 'PATCH',
+      url: `/meetings/${meeting.id}`,
+      cookies: seller.cookies,
+      payload: { attendees: [{ email: 'candidato@exemplo.com.br' }], title: 'Outro' },
+    });
+    expect(moved.statusCode).toBe(200);
+    const patch = google.calls.find((c) => c.method === 'PATCH');
+    expect((patch!.body as Record<string, unknown>).attendees).toBeUndefined();
   });
 
   it('answers 503 google_not_connected to someone who never connected, and leaves the CRM alone when Google refuses a move', async () => {

@@ -53,7 +53,10 @@ Sem WhatsApp nem e-mail por enquanto.
 dono do lead numa automação — pela conexão Google de cada pessoa em Minha conta
 (`docs/integracoes/google-workspace.md`); quem não conectou cai no SMTP da empresa, e sem SMTP o
 envio é recusado e fica `failed`). O outbox guarda `from_email`, o `Message-ID` e, no Gmail, o
-id da mensagem e da conversa (`gmail_thread_id`), para a leitura das respostas numa etapa seguinte. Variáveis dos modelos: `{{nome}}` (primeiro nome), `{{marca}}`,
+id da mensagem e da conversa (`gmail_thread_id`), para a leitura das respostas numa etapa seguinte.
+**Expansão com marca** (`leadHidesWings`): nenhum e-mail sai para o lead, pela ficha
+(`409 brand_hidden`) nem por automação (`reason: brand_hidden`, sem linha no outbox) — o lead não
+pode ver a Wings; o contato é pelo WhatsApp em nome da marca. Variáveis dos modelos: `{{nome}}` (primeiro nome), `{{marca}}`,
 `{{vendedor}}`, `{{etapa}}`; qualquer outra é recusada ao salvar. O texto fica no outbox
 (a ficha do lead), nunca em log.
 

@@ -38,7 +38,10 @@ export interface CalendarListEntry {
 
 export interface CalendarEventInput {
   title: string;
-  description: string;
+  /** Null = none, as the team writes its calls. */
+  description: string | null;
+  /** Google colorId; null keeps the calendar's own colour. */
+  colorId: string | null;
   startsAt: Date;
   endsAt: Date;
   attendees: Array<{ email: string; name: string | null }>;
@@ -161,7 +164,8 @@ export async function listCalendars(
 
 const eventBody = (input: CalendarEventInput) => ({
   summary: input.title,
-  description: input.description,
+  ...(input.description ? { description: input.description } : {}),
+  ...(input.colorId ? { colorId: input.colorId } : {}),
   start: { dateTime: input.startsAt.toISOString(), timeZone: MEETING_TIME_ZONE },
   end: { dateTime: input.endsAt.toISOString(), timeZone: MEETING_TIME_ZONE },
   attendees: input.attendees.map((a) => ({

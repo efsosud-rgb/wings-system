@@ -1,4 +1,4 @@
-import { type LeadEmailSent } from '@wings/shared';
+import { leadHidesWings, type LeadEmailSent } from '@wings/shared';
 import { and, desc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
@@ -20,6 +20,10 @@ const SEND_ERRORS = {
   template_gone: [404, 'Modelo não encontrado.'],
   template_off: [409, 'Este modelo está desativado.'],
   no_email: [422, 'Esta negociação não tem e-mail.'],
+  brand_hidden: [
+    409,
+    'Expansão com marca: o lead não recebe e-mail da Wings. Fale por WhatsApp em nome da marca.',
+  ],
   send_failed: [502, 'Não foi possível enviar o e-mail. Nada foi enviado.'],
 } as const;
 
@@ -85,6 +89,8 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
     const transport = crmMailOf(app.wings);
     return reply.send({
       to: lead.email,
+      // Expansão with a brand: the lead must not see the Wings, so no e-mail leaves (brand rule).
+      hidden: leadHidesWings(lead),
       mode: transport.mode,
       // Where a message sent now by this person would leave from (their Gmail, or the company's).
       from: await transport.senderOf(request.session.actor.employeeId),

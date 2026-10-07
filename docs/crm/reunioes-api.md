@@ -61,10 +61,13 @@ Nos leads de **Expansão** há uma quinta trilha: o **envio do resumo ao dono da
   "Wings Company", id em `GOOGLE_WORKSPACE_WINGS_CALENDAR_ID`).
 - `createMeet: true` cria o evento no Google Agenda **com a conta de quem marca**
   (`POST calendars/{id}/events?conferenceDataVersion=1&sendUpdates=all`, `createRequest`
-  `hangoutsMeet`), espera o Meet ficar pronto (relê até 3 vezes) e convida: os `attendees` do
-  corpo, o e-mail do lead (se tiver), o dono da negociação e, na agenda da Wings, quem marcou (para
-  o evento aparecer na agenda dele). Guarda `googleEventId`, `googleCalendarId`, `googleHtmlLink`
-  e os convidados como o Google devolveu (`responseStatus` `sem_resposta`).
+  `hangoutsMeet`), espera o Meet ficar pronto (relê até 3 vezes). Título e cor seguem o padrão da
+  equipe (`meetingTitleOf`, `MEETING_GOOGLE_COLOR`) e substituem o `title` do corpo. Convidados: o
+  dono da negociação, quem marcou (na agenda da Wings), os `attendees` do corpo e o lead só com
+  `inviteLead: true` — nunca o lead nem endereços de fora numa Expansão com marca
+  (`leadHidesWings`; a regra da marca em `docs/integracoes/google-workspace.md`). Descrição só o
+  aviso de gravação, e só quando o lead é convidado. Guarda `googleEventId`, `googleCalendarId`,
+  `googleHtmlLink` e os convidados como o Google devolveu (`responseStatus` `sem_resposta`).
   - **503 `google_not_configured`** (sem cliente OAuth no sistema), **503 `google_not_connected`**
     (a pessoa não conectou), **503 `google_needs_reconnect`** (o Google recusou o refresh): a
     tela oferece "colar o link do Meet" (`createMeet: false`, `meetUrl`).
