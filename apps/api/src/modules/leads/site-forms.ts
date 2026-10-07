@@ -1,9 +1,11 @@
 import {
+  LEAD_PIPELINES,
   normalizeBrazilianPhone,
-  SITE_FORM_CONSENT_TEXT,
+  siteFormCopyOf,
   siteFormSpecSchema,
   siteFormSubmitSchema,
   whatsappLinkOf,
+  type LeadPipeline,
   type SiteFormInfo,
 } from '@wings/shared';
 import { and, desc, eq } from 'drizzle-orm';
@@ -85,6 +87,7 @@ async function formPage(db: Database, slug: string) {
       id: leadSourceRules.id,
       pattern: leadSourceRules.pattern,
       brand: leadSourceRules.brand,
+      pipeline: leadSourceRules.pipeline,
       clientName: clients.name,
       social: clients.social,
       siteFormSpec: leadSourceRules.siteFormSpec,
@@ -146,6 +149,13 @@ function qualifierAnswerOf(
   return { [form.qualifier.question]: answer };
 }
 
+/** The rule's funnel, when it names one. */
+function pipelineOf(value: string | null): LeadPipeline | null {
+  return (LEAD_PIPELINES as readonly string[]).includes(value ?? '')
+    ? (value as LeadPipeline)
+    : null;
+}
+
 const notFound = (reply: FastifyReply) =>
   reply.status(404).send({ error: 'not_found', message: 'Formulário não encontrado.' });
 
@@ -168,6 +178,12 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
         instagram: instagramHandleOf(page.social?.instagram),
         // The standard form Diretoria approved for this page, if any.
         form: liveSiteForm(page.siteFormSpec),
+        pipeline: pipelineOf(page.pipeline),
+        // Public ids only; the page loads a tag only when its id is here.
+        tracking: {
+          metaPixelId: env.SITE_FORM_META_PIXEL_ENABLED === 'true' ? env.META_PIXEL_ID : null,
+          googleAdsConversion: env.SITE_FORM_GOOGLE_ADS_CONVERSION ?? null,
+        },
       } satisfies SiteFormInfo);
     },
   );
@@ -252,10 +268,15 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
       });
       const client = await resolveLandingPage(db, { identifier: page.pattern });
       const now = new Date();
+      // The consent line the page showed is the funnel's (the rule is the same one the page read).
+      const consentText = siteFormCopyOf(
+        pipelineOf(page.pipeline),
+        page.clientName ?? page.brand ?? 'Wings Company',
+      ).consentText;
       const result = await upsertLead(db, {
         source: 'site_form',
         name: body.data.name,
-        email: body.data.email,
+        email: body.data.email ?? null,
         phone,
         clientId: client.clientId,
         clientMapped: client.mapped,
@@ -273,7 +294,7 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
         legalBasis: 'consent',
         consentedAt: now,
         consentSource: `site_form:${page.pattern}`,
-        consentText: SITE_FORM_CONSENT_TEXT,
+        consentText,
         // The page's optional multiple-choice answer, kept as a form answer
         // under the question's text; never read as a contact field.
         formAnswers: qualifierAnswerOf(page.siteFormSpec, body.data.qualifierAnswer),
@@ -291,10 +312,13 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
       });
 
       // To RD Marketing, only when Eric turned it on: one call, never retried.
-      let rdForward: 'off' | 'not_configured' | 'sent' | 'refused' | 'failed' = 'off';
+      // RD identifies a conversion by e-mail, which the standard form no longer asks: no e-mail, no copy.
+      let rdForward: 'off' | 'not_configured' | 'no_email' | 'sent' | 'refused' | 'failed' = 'off';
       if (env.SITE_FORM_RD_FORWARD_ENABLED === 'true') {
         if (!env.RD_MKT_CLIENT_ID || !env.RD_MKT_CLIENT_SECRET || !env.RD_MKT_REFRESH_TOKEN) {
           rdForward = 'not_configured';
+        } else if (!body.data.email) {
+          rdForward = 'no_email';
         } else {
           try {
             const status = await new RdMarketing(

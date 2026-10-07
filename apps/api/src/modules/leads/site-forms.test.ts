@@ -1,4 +1,4 @@
-import { SESSION_COOKIE } from '@wings/shared';
+import { SESSION_COOKIE, WINGS_CLIENT_ID } from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -175,8 +175,76 @@ describe('site form (T5)', () => {
       instagram: null,
       // The plain form until Diretoria approves a standard one for the page.
       form: null,
+      pipeline: 'expansao',
+      // No tag until its id is set: the pixel is explicit, Google Ads is the conversion id.
+      tracking: { metaPixelId: null, googleAdsConversion: null },
     });
     expect(JSON.stringify(info.json())).not.toContain('secret');
+  });
+
+  it('a Formatação page: five questions, no e-mail, the funnel and the tags the environment names', async () => {
+    const turnstile = captcha();
+    const app = await makeApp(
+      {
+        TURNSTILE_SITE_KEY: '0x4AAAAAAA-site',
+        TURNSTILE_SECRET_KEY: '0x4AAAAAAA-secret',
+        SITE_FORM_META_PIXEL_ENABLED: 'true',
+        SITE_FORM_GOOGLE_ADS_CONVERSION: 'AW-123456789/AbCdEfGhIj',
+        // The forward would need an e-mail: with none it is skipped, never a fake call.
+        SITE_FORM_RD_FORWARD_ENABLED: 'true',
+        RD_MKT_CLIENT_ID: 'id',
+        RD_MKT_CLIENT_SECRET: 'secret',
+        RD_MKT_REFRESH_TOKEN: 'refresh',
+      },
+      { captchaFetch: turnstile.fetchImpl, rdFetch: rd().fetchImpl },
+    );
+    // A Formatação page is Wings Company's own (the seeded client), as Landing pages creates it.
+    await db.insert(leadSourceRules).values({
+      kind: 'landing_page',
+      pattern: 'formatacao',
+      clientId: WINGS_CLIENT_ID,
+      pipeline: 'formatacao',
+      siteFormEnabled: true,
+    });
+    const info = await app.inject({ method: 'GET', url: '/public/site-forms/formatacao' });
+    expect(info.json()).toMatchObject({
+      brand: 'Wings Company',
+      pipeline: 'formatacao',
+      tracking: {
+        metaPixelId: '1116678872845520',
+        googleAdsConversion: 'AW-123456789/AbCdEfGhIj',
+      },
+    });
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/public/site-forms/formatacao',
+      payload: form({
+        email: undefined,
+        phone: '(21) 99999-0077',
+        companyName: 'Padaria Teste',
+        instagram: '@padaria.teste',
+        siteUrl: 'padaria-teste.com.br',
+      }),
+    });
+    expect(response.statusCode).toBe(200);
+    const [lead] = await db.select().from(leads).where(eq(leads.phone, '5521999990077'));
+    expect(lead).toMatchObject({
+      source: 'site_form',
+      pipeline: 'formatacao',
+      email: null,
+      companyName: 'Padaria Teste',
+      instagram: 'padaria.teste',
+      website: 'https://padaria-teste.com.br/',
+      consentText:
+        'Autorizo a Wings Company a entrar em contato comigo sobre a formatação da minha empresa em franquia, por telefone e WhatsApp.',
+    });
+    const [audit] = await db.select().from(auditLog).where(eq(auditLog.entityId, lead!.id));
+    expect(audit?.metadata).toMatchObject({ rdForward: 'no_email', pipeline: 'formatacao' });
+  });
+
+  it('refuses a Google Ads conversion id that is not AW-<id>/<label>', () => {
+    expect(() => baseEnv(harness.url, { SITE_FORM_GOOGLE_ADS_CONVERSION: 'AW-1' })).toThrow();
   });
 
   it('answers 503 (never a fake success) while the Turnstile secret is not configured', async () => {

@@ -8,6 +8,7 @@ import {
   DEFAULT_INSIGHTS_DAILY_USD,
   DEFAULT_KAIROGEN_MONTHLY_CREDITS,
   DEFAULT_MEDIA_MONTHLY_BRL,
+  GOOGLE_ADS_CONVERSION_PATTERN,
 } from '@wings/shared';
 import { z } from 'zod';
 
@@ -391,6 +392,21 @@ const schema = z.object({
   SITE_FORM_RD_FORWARD_ENABLED: optionalString.refine(
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',
+  ),
+  /**
+   * The conversion tags of the site form page (`/lp/<slug>`, 2026-10-07).
+   * Meta's pixel is META_PIXEL_ID (the one the leads ad sets optimise for),
+   * loaded only when this is "true", so staging visits do not reach the real
+   * pixel by accident. Google Ads is the conversion action's `AW-<id>/<label>`
+   * from "Metas → Conversões" (unset: no Google tag). Both ids are public.
+   */
+  SITE_FORM_META_PIXEL_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  SITE_FORM_GOOGLE_ADS_CONVERSION: optionalString.refine(
+    (value) => value === undefined || GOOGLE_ADS_CONVERSION_PATTERN.test(value),
+    'must look like AW-123456789/AbCdEfGhIj',
   ),
   ZAPI_WEBHOOK_SECRET: optionalString.refine(
     (value) => value === undefined || value.length >= 16,

@@ -1,20 +1,20 @@
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
-import {
-  SITE_FORM_CONSENT_TEXT,
-  siteFormSubmitSchema,
-} from '@wings/shared';
+import { siteFormCopyOf, siteFormSubmitSchema } from '@wings/shared';
 import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useParams } from 'react-router-dom';
 import { ApiError } from '../api/client.js';
 import { useSiteForm, useSubmitSiteForm } from '../api/leads.js';
 import { Alert, AuthCard, Button, Field, Input } from '../components/ui.js';
+import { fireLeadConversion, loadConversionTags } from '../lib/site-conversion.js';
 import { captureFirstTouch, type Tracking } from '../lib/site-tracking.js';
 
 /**
- * On the page the campaign fields are asked for (docs/leads/formularios.md);
- * the API still accepts a page without them. "Não tenho" is an answer.
+ * The page asks the standard form's five questions and nothing else (Nome,
+ * WhatsApp, Nome da empresa, Instagram, Site — `lead-form.ts`, 2026-10-07):
+ * the same the Meta instant form asks, so both land in the same lead fields.
+ * The API still accepts an older page's e-mail and CNPJ. "Não tenho" is an answer.
  */
 const askedField = (message: string) => z.string().trim().min(1, message).max(300);
 const pageSchema = siteFormSubmitSchema.extend({
@@ -133,6 +133,11 @@ export function SiteFormPage() {
   useEffect(() => {
     setValue('turnstileToken', token ?? '');
   }, [token, setValue]);
+  // The ad platforms' tags, only for the ids the API handed over (none: no script).
+  const tags = info.data?.tracking ?? null;
+  useEffect(() => {
+    if (tags) loadConversionTags(window, document, tags);
+  }, [tags]);
 
   if (info.isLoading) return <AuthCard title="Carregando…">{null}</AuthCard>;
   if (!info.data) {
@@ -144,15 +149,20 @@ export function SiteFormPage() {
   }
 
   const onSubmit = handleSubmit((values) =>
-    submit.mutate({ ...values, page: window.location.href, tracking }),
+    submit.mutate(
+      { ...values, page: window.location.href, tracking },
+      {
+        onSuccess: () => {
+          if (tags) fireLeadConversion(window, tags);
+        },
+      },
+    ),
   );
   const failure = submit.error instanceof ApiError ? submit.error : null;
+  const copy = siteFormCopyOf(info.data.pipeline, info.data.brand);
 
   return (
-    <AuthCard
-      title={`Seja um franqueado ${info.data.brand}`}
-      subtitle="Deixe seus dados e o time de expansão entra em contato."
-    >
+    <AuthCard title={copy.title} subtitle={copy.subtitle}>
       {info.data.instagram && (
         <p className="muted">
           Instagram:{' '}
@@ -218,9 +228,6 @@ export function SiteFormPage() {
           <Field label="Nome" error={errors.name?.message} required>
             <Input autoComplete="name" {...register('name')} />
           </Field>
-          <Field label="E-mail" error={errors.email?.message} required>
-            <Input type="email" autoComplete="email" {...register('email')} />
-          </Field>
           <Field label="WhatsApp com DDD" error={errors.phone?.message} required>
             <Input type="tel" autoComplete="tel" inputMode="tel" {...register('phone')} />
           </Field>
@@ -238,9 +245,6 @@ export function SiteFormPage() {
               {...register('siteUrl')}
             />
           </Field>
-          <Field label="CNPJ (se tiver)" error={errors.cnpj?.message}>
-            <Input inputMode="numeric" {...register('cnpj')} />
-          </Field>
           {/* People never see this field; a robot that fills it is dropped by the server. */}
           <div className="sr-only" aria-hidden="true">
             <label>
@@ -250,9 +254,16 @@ export function SiteFormPage() {
           </div>
           <label className="field field-inline">
             <input type="checkbox" {...register('consent')} />
-            <span>{SITE_FORM_CONSENT_TEXT}</span>
+            <span>{copy.consentText}</span>
           </label>
           {errors.consent?.message && <p className="field-error">{errors.consent.message}</p>}
+          {info.data.form?.privacyPolicyUrl && (
+            <p className="muted site-form-privacy">
+              <a href={info.data.form.privacyPolicyUrl} target="_blank" rel="noopener noreferrer">
+                Política de Privacidade
+              </a>
+            </p>
+          )}
 
           {info.data.turnstileSiteKey ? (
             <Turnstile siteKey={info.data.turnstileSiteKey} onToken={setToken} />
@@ -269,7 +280,7 @@ export function SiteFormPage() {
             type="submit"
             disabled={submit.isPending || !info.data.turnstileSiteKey || !token}
           >
-            {submit.isPending ? 'Enviando…' : 'Quero ser franqueado'}
+            {submit.isPending ? 'Enviando…' : copy.button}
           </Button>
         </form>
       )}
