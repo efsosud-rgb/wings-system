@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { SessionUser } from '@wings/shared';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -10,6 +11,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const session: { current: SessionUser | null } = { current: null };
+
+// The WhatsApp call center has its own tests; here it only wraps the screen.
+vi.mock('../pages/crm/WhatsAppCalls.js', () => ({
+  WhatsAppCallProvider: ({ children }: { children: ReactNode }) => children,
+}));
 
 vi.mock('../api/auth.js', () => ({
   useSession: () => ({ data: session.current, isLoading: false }),

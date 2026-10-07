@@ -9,10 +9,23 @@ import { CallPanel } from './CallPanel.js';
  * under it.
  */
 
-const { activityMutate } = vi.hoisted(() => ({ activityMutate: vi.fn() }));
+const { activityMutate, centerState } = vi.hoisted(() => ({
+  activityMutate: vi.fn(),
+  centerState: { value: null as null | { calling: boolean; active: null; placeCall: () => void } },
+}));
 
 vi.mock('../../api/crm.js', () => ({
   useAddActivity: () => ({ mutate: activityMutate, isPending: false, error: null }),
+}));
+
+// The WhatsApp part has its own tests (WhatsAppCalls.test.tsx); here only where it goes.
+vi.mock('./WhatsAppCalls.js', () => ({
+  useWhatsAppCallCenter: () => centerState.value,
+  WhatsAppCallSection: ({ onCalling }: { onCalling: () => void }) => (
+    <button type="button" onClick={onCalling}>
+      Ligar pelo WhatsApp
+    </button>
+  ),
 }));
 
 const onClose = vi.fn();
@@ -55,21 +68,18 @@ describe('the call panel', () => {
     ).toBeTruthy();
   });
 
-  it('turns "Ligar pelo WhatsApp" on when the server says calling is on', () => {
-    show({ whatsappCalling: true });
-    const whatsapp = screen.getByRole('button', {
-      name: /Ligar pelo WhatsApp/,
-    }) as HTMLButtonElement;
-    expect(whatsapp.disabled).toBe(false);
+  it('hands the WhatsApp part to the call center when there is one, and closes when a call starts', () => {
+    centerState.value = { calling: true, active: null, placeCall: vi.fn() };
+    show();
     expect(screen.queryByText(/Fica ativo quando/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Ligar pelo WhatsApp/ }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    centerState.value = null;
   });
 
-  it('keeps WhatsApp calling off without a phone, and offers no copy', () => {
-    show({ phone: null, whatsappCalling: true });
+  it('offers no copy without a phone', () => {
+    show({ phone: null });
     expect(screen.getByText('Sem telefone')).toBeTruthy();
-    expect(
-      (screen.getByRole('button', { name: /Ligar pelo WhatsApp/ }) as HTMLButtonElement).disabled,
-    ).toBe(true);
     expect(screen.queryByRole('button', { name: 'Copiar número' })).toBeNull();
   });
 

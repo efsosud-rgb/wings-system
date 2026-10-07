@@ -1,5 +1,7 @@
 import type {
   DealWhatsApp,
+  WaCall,
+  WaCallPermissionLive,
   WaConversationItem,
   WaMessage,
   WaSendTemplate,
@@ -88,3 +90,52 @@ export const useSendWhatsAppTemplate = (thread: WhatsAppThread) =>
 
 /** Where the browser opens a received file (the API checks access and fetches it from Meta). */
 export const whatsappMediaUrl = (messageId: string) => `/api/whatsapp/messages/${messageId}/media`;
+
+// --- calls ----------------------------------------------------------------------------
+
+/** The person's call permission, asked of Meta now (only when the call panel opens). */
+export function useCallPermission(leadId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['whatsapp', 'call-permission', leadId],
+    queryFn: () => api.get<WaCallPermissionLive>(`/leads/${leadId}/whatsapp/call-permission`),
+    enabled,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+export function useRequestCallPermission(leadId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.post<{ message: WaMessage }>(`/leads/${leadId}/whatsapp/call-permission`),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'call-permission', leadId] });
+      void queryClient.invalidateQueries({ queryKey: threadKey({ leadId }) });
+    },
+  });
+}
+
+/** Calls ringing for the viewer: asked every few seconds while calling is on, slower when off. */
+export function useRingingCalls(enabled: boolean) {
+  return useQuery({
+    queryKey: ['whatsapp', 'ringing'],
+    queryFn: () => api.poll<{ calling: boolean; calls: WaCall[] }>('/whatsapp/calls/ringing'),
+    enabled,
+    refetchInterval: (query) => (query.state.data?.calling ? 3_000 : 60_000),
+    refetchIntervalInBackground: true,
+  });
+}
+
+/** The call steps, run by the call center in order (no cache: each is one action). */
+export const whatsappCalls = {
+  start: (leadId: string, sdp: string) =>
+    api.post<{ call: WaCall }>(`/leads/${leadId}/whatsapp/calls`, { sdp }),
+  get: (id: string) => api.poll<{ call: WaCall }>(`/whatsapp/calls/${id}`),
+  connected: (id: string) => api.post<{ call: WaCall }>(`/whatsapp/calls/${id}/connected`),
+  pickup: (id: string) =>
+    api.post<{ offerSdp: string; call: WaCall }>(`/whatsapp/calls/${id}/pickup`),
+  accept: (id: string, sdp: string) =>
+    api.post<{ call: WaCall }>(`/whatsapp/calls/${id}/accept`, { sdp }),
+  reject: (id: string) => api.post<{ call: WaCall }>(`/whatsapp/calls/${id}/reject`),
+  hangup: (id: string) => api.post<{ call: WaCall }>(`/whatsapp/calls/${id}/hangup`),
+};

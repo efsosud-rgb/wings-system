@@ -1,9 +1,9 @@
 # WhatsApp oficial (Cloud API) no CRM
 
-Versão de 07/10/2026 (branch `feat/whatsapp-oficial`). A conversa do lead pelo WhatsApp oficial da Meta,
-dentro do Wings System: receber, responder, modelos, status e arquivos. A ligação pelo WhatsApp (Calling API)
-é a etapa seguinte e usa a mesma permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em
-`/root/relatorios/whatsapp-oficial/` (fora do repositório).
+Versão de 07/10/2026. A conversa do lead pelo WhatsApp oficial da Meta, dentro do Wings System (receber,
+responder, modelos, status e arquivos) e a ligação de voz pelo WhatsApp no navegador (Calling API), com a mesma
+permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em `/root/relatorios/whatsapp-oficial/`
+(fora do repositório).
 
 ## Como funciona
 
@@ -36,6 +36,35 @@ dentro do Wings System: receber, responder, modelos, status e arquivos. A ligaç
   outro tipo só baixa, com `Content-Security-Policy: sandbox`, para nada rodar na origem do sistema. O token só
   vai para os servidores da Meta.
 
+## Ligação de voz (Calling API)
+
+- **Áudio no navegador:** WebRTC do próprio navegador (`apps/web/src/lib/whatsapp-call.ts`), sem biblioteca e
+  sem servidor STUN/TURN (a Meta é ICE-lite com endereço público). Uma faixa Opus, pacotes de 20 ms; a
+  descrição de mídia (SDP) é feita uma vez, com os candidatos, e nunca renegociada.
+- **Ligar:** o navegador faz a oferta → `POST /leads/:id/whatsapp/calls` → a API grava a ligação e chama a Meta
+  uma vez (`connect`, com o nosso id em `biz_opaque_callback_data`) → a resposta da Meta chega pelo webhook
+  `calls` e o navegador que ligou a busca em `GET /whatsapp/calls/:id`. Só com as ligações ligadas no número
+  (`GET /{phone}/settings`, lido a cada 5 min) e, na prática, com a permissão da pessoa (sem ela a Meta recusa,
+  erro 138006).
+- **Receber:** o webhook traz a oferta do celular da pessoa; a ligação toca (consulta a cada 3 s,
+  `GET /whatsapp/calls/ringing`) para quem vê a negociação daquele telefone (sem negociação: só escopo total).
+  O primeiro a clicar em Atender leva (`pickup`, os outros recebem "já atendida"); o navegador responde e a API
+  manda `accept` direto, sem `pre_accept` (o navegador não segura o áudio; regra do FAQ da Meta). A Meta dá 30 a
+  60 s.
+- **Recusar e desligar:** `reject` (tocando) e `terminate`; a ligação fecha na hora aqui e o aviso final da Meta
+  traz a duração real.
+- **Permissão:** `GET /leads/:id/whatsapp/call-permission` pergunta à Meta (sem permissão, temporária de 7
+  dias, permanente) e se dá para pedir ou ligar agora; `POST` manda o pedido interativo da Meta, só dentro das
+  24 h (fora delas, por um modelo com o componente de pedido de ligação). A resposta da pessoa chega como
+  mensagem e atualiza o contato. A Meta limita a 1 pedido por dia e 2 por semana; 4 ligações sem resposta
+  revogam.
+- **Registro:** toda ligação terminada com negociação entra no histórico dela uma vez (`lead_activities`,
+  "Pelo WhatsApp · ligação feita/recebida", atendida com a duração, ou não atendida/recusada). Uma que falhou
+  antes de sair não entra. Avisos que não chegam: a ligação que tocou e ninguém fechou vira "não atendida" em
+  3 min; a que ficou aberta, "não completou" em 4 h.
+- Webhooks repetidos e fora de ordem (o fim pode vir antes do começo) são aceitos.
+- A ligação é uma por navegador, e continua ao trocar de tela (fica num cartão no canto).
+
 ## Acesso
 
 Uma permissão, `leads.whatsapp` (ver, enviar e ligar), pela regra única `leadInScope`
@@ -60,7 +89,7 @@ mexer na hora de saída do ponto.
 
 ## Dados
 
-Migração 0077: `wa_contacts` (telefone único, `wa_id`, nome do perfil, última mensagem recebida, opt-out),
+Migrações 0077 e 0079 (`wa_calls`; permissão de ligação no contato): `wa_contacts` (telefone único, `wa_id`, nome do perfil, última mensagem recebida, opt-out),
 `wa_conversations` (uma por telefone e negociação; a sem negociação é única por telefone), `wa_messages`,
 `wa_webhook_events`, `wa_templates`. Telefone e texto são dados pessoais: sem GRANT ao `wings_ro`, nada disso
 em log (o webhook registra só o formato do corpo, `shapeOf`). A auditoria `whatsapp.message_sent` guarda ids,

@@ -121,6 +121,8 @@ export interface DealWhatsApp {
   /** Meta's 24-hour window for free text, from the person's last message. */
   window: { open: boolean; expiresAt: string | null };
   optedOut: boolean;
+  /** Whether the person lets the business call them, as last known. */
+  callPermission: WaCallPermissionState;
   messages: WaMessage[];
 }
 
@@ -190,3 +192,83 @@ export interface WaConversationItem {
   unanswered: boolean;
   windowOpen: boolean;
 }
+
+// --- calls (Calling API) ---------------------------------------------------------------
+
+/**
+ * Meta's words for the person's call permission, plus `requested` while our
+ * request waits. Temporary lasts 7 days; four unanswered calls revoke it.
+ */
+export const WA_CALL_PERMISSIONS = ['no_permission', 'requested', 'temporary', 'permanent'] as const;
+export type WaCallPermission = (typeof WA_CALL_PERMISSIONS)[number];
+
+export const WA_CALL_PERMISSION_LABELS: Record<WaCallPermission, string> = {
+  no_permission: 'Sem permissão para ligar',
+  requested: 'Permissão pedida, esperando a resposta',
+  temporary: 'Permitiu ligações',
+  permanent: 'Permitiu ligações (sem prazo)',
+};
+
+export interface WaCallPermissionState {
+  /** Null while nobody asked Meta yet. */
+  status: WaCallPermission | null;
+  expiresAt: string | null;
+  requestedAt: string | null;
+}
+
+/** What Meta answers live: the state, and whether a request or a call may go now. */
+export interface WaCallPermissionLive extends WaCallPermissionState {
+  canRequest: boolean | null;
+  canCall: boolean | null;
+}
+
+export const WA_CALL_STATUSES = [
+  'dialing',
+  'ringing',
+  'accepted',
+  'completed',
+  'rejected',
+  'missed',
+  'failed',
+] as const;
+export type WaCallStatus = (typeof WA_CALL_STATUSES)[number];
+
+export const WA_CALL_STATUS_LABELS: Record<WaCallStatus, string> = {
+  dialing: 'Chamando…',
+  ringing: 'Tocando',
+  accepted: 'Em ligação',
+  completed: 'Encerrada',
+  rejected: 'Recusada',
+  missed: 'Não atendida',
+  failed: 'Não completou',
+};
+
+/** A call still being set up or going on. */
+export const WA_CALL_LIVE: readonly WaCallStatus[] = ['dialing', 'ringing', 'accepted'];
+
+export interface WaCall {
+  id: string;
+  direction: 'in' | 'out';
+  status: WaCallStatus;
+  leadId: string | null;
+  /** The deal's name, or the person's WhatsApp profile name. */
+  name: string | null;
+  phone: string;
+  /** Meta's SDP answer (outgoing), for the browser that placed the call only. */
+  answerSdp: string | null;
+  error: string | null;
+  startedAt: string;
+  connectedAt: string | null;
+  endedAt: string | null;
+  durationSeconds: number | null;
+}
+
+/** An SDP as the browser made it: the offer (to call) or the answer (to pick up). */
+export const waCallSdpSchema = z.object({
+  sdp: z
+    .string()
+    .min(20, 'Descrição de mídia inválida.')
+    .max(20_000, 'Descrição de mídia grande demais.')
+    .refine((sdp) => sdp.startsWith('v=0'), 'Descrição de mídia inválida.'),
+});
+export type WaCallSdp = z.infer<typeof waCallSdpSchema>;

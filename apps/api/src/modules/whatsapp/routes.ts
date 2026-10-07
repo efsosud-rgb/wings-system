@@ -13,6 +13,9 @@ import {
   type WaMessageKind,
   type WaMessageStatus,
   type WaTemplate,
+  type WaCallPermission,
+  type WaCallPermissionLive,
+  type WaCallPermissionState,
 } from '@wings/shared';
 import { and, asc, desc, eq, inArray, isNull, max, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
@@ -34,10 +37,13 @@ import {
   sendWhatsAppMessage,
   templatePayload,
   textPayload,
+  callPermissionPayload,
+  readCallPermission,
   UNKNOWN_OUTCOME,
   whatsappConfigOf,
   type OutgoingPayload,
 } from './graph.js';
+import { callingOn } from './calling.js';
 import { adoptUnmatched, conversationFor } from './intake.js';
 
 /**
@@ -54,6 +60,36 @@ const TEMPLATES_FRESH_MS = 6 * 3_600_000;
 const MESSAGES_SHOWN = 500;
 
 const idParams = z.object({ id: z.uuid() });
+
+/** What the person sees above Meta's "Permitir ligações" buttons. */
+export const CALL_PERMISSION_TEXT =
+  'A Wings gostaria de poder te ligar pelo WhatsApp para continuar o seu atendimento.';
+
+/** The stored permission, with a temporary one that ran out read as none. */
+function permissionOf(
+  contact:
+    | {
+        callPermission: string | null;
+        callPermissionExpiresAt: Date | null;
+        callPermissionRequestedAt: Date | null;
+      }
+    | null
+    | undefined,
+  now: Date,
+): WaCallPermissionState {
+  if (!contact) return { status: null, expiresAt: null, requestedAt: null };
+  const expired =
+    contact.callPermission === 'temporary' &&
+    contact.callPermissionExpiresAt !== null &&
+    contact.callPermissionExpiresAt <= now;
+  return {
+    status: expired
+      ? 'no_permission'
+      : ((contact.callPermission as WaCallPermission | null) ?? null),
+    expiresAt: expired ? null : (contact.callPermissionExpiresAt?.toISOString() ?? null),
+    requestedAt: contact.callPermissionRequestedAt?.toISOString() ?? null,
+  };
+}
 
 type Contact = typeof waContacts.$inferSelect;
 type MessageRow = typeof waMessages.$inferSelect;
@@ -152,10 +188,11 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       leadId,
       profileName: contact?.profileName ?? null,
       configured: whatsappConfigOf(env) !== null,
-      calling: false,
+      calling: await callingOn(fetchImpl(), whatsappConfigOf(env)),
       phone: contact?.phone ?? null,
       window: windowOf(contact, now()),
       optedOut: Boolean(contact?.optOutAt),
+      callPermission: permissionOf(contact, now()),
       messages: rows.map((row) => toMessage(row, authors)),
     };
   }
@@ -252,6 +289,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
 
   type Outgoing =
     | { kind: 'text'; text: string }
+    | { kind: 'call_permission' }
     | { kind: 'template'; name: string; language: string; params: string[] };
 
   async function send(
@@ -267,7 +305,17 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     let payload: OutgoingPayload;
     let shown: string;
     let content: Record<string, unknown> = {};
-    if (outgoing.kind === 'text') {
+    if (outgoing.kind === 'call_permission') {
+      if (!window.open)
+        return reply.status(409).send({
+          error: 'window_closed',
+          message:
+            'Fora das 24 horas: o pedido de ligação vai por um modelo de pedido de ligação (em "Usar modelo").',
+        });
+      shown = CALL_PERMISSION_TEXT;
+      payload = callPermissionPayload(CALL_PERMISSION_TEXT);
+      content = { callPermissionRequest: true };
+    } else if (outgoing.kind === 'text') {
       if (!window.open)
         return reply.status(409).send({
           error: 'window_closed',
@@ -336,7 +384,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         direction: 'out',
         author: 'employee',
         employeeId: actor.employeeId,
-        kind: outgoing.kind,
+        kind: outgoing.kind === 'call_permission' ? 'interactive' : outgoing.kind,
         text: shown,
         content,
         status: 'pending',
@@ -367,6 +415,17 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       )
       .where(eq(waMessages.id, row!.id))
       .returning();
+    if (result.ok && outgoing.kind === 'call_permission')
+      await db
+        .update(waContacts)
+        .set({
+          callPermission:
+            contact.callPermission === 'temporary' || contact.callPermission === 'permanent'
+              ? contact.callPermission
+              : 'requested',
+          callPermissionRequestedAt: at,
+        })
+        .where(eq(waContacts.id, contact.id));
     if (result.ok && result.data.waId && result.data.waId !== contact.waId)
       await db
         .update(waContacts)
@@ -441,6 +500,74 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       );
     });
   }
+
+  // --- call permission ----------------------------------------------------------------
+
+  /** Asks Meta now whether the person lets us call, and keeps the answer. */
+  app.get('/leads/:id/whatsapp/call-permission', use, async (request, reply) => {
+    const params = idParams.safeParse(request.params);
+    if (!params.success) return notFound(reply);
+    const lead = await leadInScope(db, request.session.actor, params.data.id, 'leads.whatsapp');
+    if (!lead) return notFound(reply);
+    const config = whatsappConfigOf(env);
+    if (!config) return off(reply);
+    const contact = await contactOfPhone(db, lead.phone);
+    if (!contact)
+      return reply.send({
+        ...permissionOf(null, now()),
+        status: 'no_permission',
+        canRequest: null,
+        canCall: false,
+      } satisfies WaCallPermissionLive);
+    const live = await readCallPermission(fetchImpl(), config, contact.waId ?? contact.phone);
+    if (!live.ok)
+      return reply.status(502).send({
+        error: 'meta_error',
+        message: errorText(live.code, live.title) ?? 'A Meta não respondeu.',
+      });
+    const said = live.data.permission?.status;
+    const status: WaCallPermission =
+      said === 'temporary' || said === 'permanent'
+        ? said
+        : contact.callPermission === 'requested'
+          ? 'requested'
+          : 'no_permission';
+    const expiresAt =
+      said === 'temporary' && live.data.permission?.expiration_time
+        ? new Date(live.data.permission.expiration_time * 1000)
+        : null;
+    const [saved] = await db
+      .update(waContacts)
+      .set({ callPermission: status, callPermissionExpiresAt: expiresAt })
+      .where(eq(waContacts.id, contact.id))
+      .returning();
+    const can = (name: string) =>
+      live.data.actions?.find((a) => a.action_name === name)?.can_perform_action ?? null;
+    return reply.send({
+      ...permissionOf(saved, now()),
+      canRequest: can('send_call_permission_request'),
+      canCall: can('start_call'),
+    } satisfies WaCallPermissionLive);
+  });
+
+  /** Sends Meta's "may we call you?" message (inside the 24-hour window). */
+  app.post('/leads/:id/whatsapp/call-permission', use, async (request, reply) => {
+    const params = idParams.safeParse(request.params);
+    if (!params.success) return notFound(reply);
+    const lead = await leadInScope(db, request.session.actor, params.data.id, 'leads.whatsapp');
+    if (!lead) return notFound(reply);
+    if (!lead.phone)
+      return reply
+        .status(422)
+        .send({ error: 'no_phone', message: 'A negociação não tem telefone.' });
+    const contact = await contactOfPhone(db, lead.phone);
+    return send(
+      request,
+      reply,
+      { leadId: lead.id, phone: lead.phone, contact },
+      { kind: 'call_permission' },
+    );
+  });
 
   // --- templates ----------------------------------------------------------------------
 

@@ -40,6 +40,7 @@ import { nucleoRoutes } from './modules/leads/nucleo-routes.js';
 import { leadRoutes } from './modules/leads/routes.js';
 import { siteFormRoutes } from './modules/leads/site-forms.js';
 import { leadWebhookRoutes } from './modules/leads/webhooks.js';
+import { whatsappCallRoutes } from './modules/whatsapp/call-routes.js';
 import { whatsappRoutes } from './modules/whatsapp/routes.js';
 import { whatsappWebhookRoutes } from './modules/whatsapp/webhook-routes.js';
 import { mediaRoutes } from './modules/media/routes.js';
@@ -272,6 +273,7 @@ export async function buildApp(deps: {
   await app.register(leadWebhookRoutes);
   await app.register(whatsappWebhookRoutes);
   await app.register(whatsappRoutes);
+  await app.register(whatsappCallRoutes);
   await app.register(siteFormRoutes);
   await app.register(driveRoutes);
   await app.register(driveBlobRoutes);
