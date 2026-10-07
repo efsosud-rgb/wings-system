@@ -20,9 +20,27 @@ O mapeamento é pelo **texto da pergunta**, sem acento e sem diferença de maiú
 originais continuam em "Respostas do formulário". Um lead que chega de novo só preenche o que
 estava vazio.
 
-**Formulário do site** (`/lp/<slug>`): a página pede Nome da empresa, Instagram e Site (com
-"não tenho" valendo como resposta) e CNPJ opcional. A API aceita uma página antiga sem eles. O
-campo do site se chama `siteUrl`, porque `website` é a armadilha anti-robô.
+**Formulário do site** (`/lp/<slug>`, desde 2026-10-07): a página pede **só as cinco perguntas do
+formulário padrão** — Nome, WhatsApp, Nome da empresa, Instagram e Site ("não tenho" vale como
+resposta) — as mesmas do formulário instantâneo da Meta. Não pede e-mail nem CNPJ (a API ainda
+aceita os dois de uma página antiga; sem e-mail, a cópia ao RD é pulada com `rdForward: no_email`).
+O campo do site se chama `siteUrl`, porque `website` é a armadilha anti-robô.
+
+- **Texto pelo funil da página** (`siteFormCopyOf`, `packages/shared/src/leads.ts`): Expansão
+  "Seja um franqueado <marca>"; Formatação "Transforme a sua empresa em franquia", botão "Quero
+  formatar minha franquia"; Consultoria "Fale com a consultoria da Wings". A linha de consentimento
+  também muda e é a que fica gravada no lead (`consent_text`). O funil vem da regra da página em
+  CRM Vendas → Landing pages; sem funil na regra, o texto é o de Expansão.
+- **Conversão nas plataformas** (`apps/web/src/lib/site-conversion.ts`): a página carrega o pixel
+  da Meta (`META_PIXEL_ID`, só com `SITE_FORM_META_PIXEL_ENABLED=true`: PageView ao abrir e `Lead`
+  no envio) e a tag do Google Ads (`SITE_FORM_GOOGLE_ADS_CONVERSION=AW-<id>/<rótulo>`, da ação de
+  conversão em Metas → Conversões: `conversion` no envio). Sem a variável, o script nem é
+  carregado. Nada digitado vai às tags, só o evento. Os ids chegam à página por
+  `GET /public/site-forms/:slug` (`tracking`); a página nunca os tem no código.
+- Link "Política de Privacidade" quando a página tem o formulário padrão aprovado (`site_form_spec`).
+- **Não verificado ao vivo** (2026-10-07): o disparo real do pixel e da conversão do Google só
+  pode ser conferido em produção, com os ids definidos (Meta: Gerenciador de Eventos → Testar
+  eventos; Google: Metas → Conversões → "Diagnóstico").
 
 ## Google Ads (YouTube, Pesquisa) → Funil
 

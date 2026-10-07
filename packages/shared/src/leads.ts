@@ -1288,7 +1288,65 @@ export interface SiteFormInfo {
     privacyPolicyUrl: string;
     thankYou: { title: string; body: string; buttonText: string; buttonUrl: string };
   } | null;
+  /** The page's funnel (its rule's); null when the rule does not say. The copy follows it. */
+  pipeline?: LeadPipeline | null;
+  /**
+   * The ad platforms' conversion tags the page fires (2026-10-07): Meta's
+   * pixel (PageView on load, Lead on a sent form) and Google Ads' conversion
+   * (`AW-<id>/<label>`, on a sent form). Null means the tag is not loaded. Both
+   * are public ids, set in the API's environment, never typed into the page.
+   */
+  tracking?: {
+    metaPixelId: string | null;
+    googleAdsConversion: string | null;
+  };
 }
+
+/**
+ * What the page says, by funnel: a Formatação page talks to the owner of a
+ * business, an Expansão page to someone who wants the brand's franchise. The
+ * consent line is kept on the lead as it was read, so it says what the contact
+ * is about.
+ */
+export interface SiteFormCopy {
+  title: string;
+  subtitle: string;
+  button: string;
+  consentText: string;
+}
+
+export function siteFormCopyOf(
+  pipeline: LeadPipeline | null | undefined,
+  brand: string,
+): SiteFormCopy {
+  if (pipeline === 'formatacao') {
+    return {
+      title: 'Transforme a sua empresa em franquia',
+      subtitle: 'Deixe seus dados e o time da Wings entra em contato pelo WhatsApp.',
+      button: 'Quero formatar minha franquia',
+      consentText:
+        'Autorizo a Wings Company a entrar em contato comigo sobre a formatação da minha empresa em franquia, por telefone e WhatsApp.',
+    };
+  }
+  if (pipeline === 'consultoria') {
+    return {
+      title: 'Fale com a consultoria da Wings',
+      subtitle: 'Deixe seus dados e o time da Wings entra em contato pelo WhatsApp.',
+      button: 'Quero falar com a Wings',
+      consentText:
+        'Autorizo a Wings Company a entrar em contato comigo sobre a consultoria, por telefone e WhatsApp.',
+    };
+  }
+  return {
+    title: `Seja um franqueado ${brand}`,
+    subtitle: 'Deixe seus dados e o time de expansão entra em contato.',
+    button: 'Quero ser franqueado',
+    consentText: SITE_FORM_CONSENT_TEXT,
+  };
+}
+
+/** `AW-123456789/AbCdEfGhIj`: a Google Ads conversion action's id and label. */
+export const GOOGLE_ADS_CONVERSION_PATTERN = /^AW-\d{6,15}\/[A-Za-z0-9_-]{4,40}$/;
 
 /** The hidden attribution fields the page collects (first visit's address, cookie) and sends. */
 export const SITE_FORM_TRACKING_KEYS = [
@@ -1320,7 +1378,8 @@ export const SITE_FORM_CONSENT_TEXT =
 
 export const siteFormSubmitSchema = z.object({
   name: z.string().trim().min(2, 'Informe o nome').max(LEAD_NAME_MAX),
-  email: z.email('E-mail inválido').trim().max(200),
+  /** The standard form (2026-10-07) asks no e-mail: the WhatsApp is the contact. An older page may still send one. */
+  email: z.email('E-mail inválido').trim().max(200).optional(),
   phone: z
     .string()
     .trim()

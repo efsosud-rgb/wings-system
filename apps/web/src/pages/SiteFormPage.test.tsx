@@ -36,6 +36,31 @@ beforeEach(() => {
         brand: 'Cenoritas',
         turnstileSiteKey: '0x4AAA-site',
         instagram: '@cenoritas.gourmet',
+        form: null,
+        pipeline: 'expansao',
+        tracking: { metaPixelId: null, googleAdsConversion: null },
+      };
+    if (path === '/public/site-forms/formatacao')
+      return {
+        slug: 'formatacao',
+        brand: 'Wings Company',
+        turnstileSiteKey: '0x4AAA-site',
+        instagram: null,
+        form: {
+          qualifier: null,
+          privacyPolicyUrl: 'https://wingscompany.com.br/politica-de-privacidade/',
+          thankYou: {
+            title: 'Recebemos os seus dados',
+            body: 'O time da Wings entra em contato pelo WhatsApp em até um dia útil.',
+            buttonText: 'Conhecer a Wings',
+            buttonUrl: 'https://wingscompany.com.br/',
+          },
+        },
+        pipeline: 'formatacao',
+        tracking: {
+          metaPixelId: '1116678872845520',
+          googleAdsConversion: 'AW-123456789/AbCdEfGhIj',
+        },
       };
     throw new ApiError(404, { error: 'not_found', message: 'Formulário não encontrado.' });
   });
@@ -46,6 +71,12 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   delete window.turnstile;
+  // The tags' scripts and globals of one test never reach the next.
+  document.querySelectorAll('script').forEach((script) => script.remove());
+  delete window.fbq;
+  delete window._fbq;
+  delete window.gtag;
+  delete window.dataLayer;
 });
 
 function renderAt(path: string) {
@@ -69,7 +100,6 @@ describe('site form page (T5)', () => {
     renderAt('/lp/cenoritas');
     expect(await screen.findByText('Seja um franqueado Cenoritas')).toBeTruthy();
     fireEvent.input(screen.getByLabelText(/^Nome(?! da)/), { target: { value: 'Pessoa Teste' } });
-    fireEvent.input(screen.getByLabelText(/^E-mail/), { target: { value: 'pessoa@example.com' } });
     fireEvent.input(screen.getByLabelText(/^WhatsApp/), { target: { value: '21999990001' } });
     fireEvent.input(screen.getByLabelText(/^Nome da empresa/), {
       target: { value: 'Empresa Teste' },
@@ -78,6 +108,8 @@ describe('site form page (T5)', () => {
     fireEvent.input(screen.getByLabelText(/^Site da empresa/), {
       target: { value: 'empresa-teste.com.br' },
     });
+    expect(screen.queryByLabelText(/^E-mail/)).toBeNull();
+    expect(screen.queryByLabelText(/^CNPJ/)).toBeNull();
     fireEvent.click(screen.getByRole('checkbox'));
     const send = screen.getByRole('button', { name: 'Quero ser franqueado' }) as HTMLButtonElement;
     await waitFor(() => expect(send.disabled).toBe(false));
@@ -87,7 +119,6 @@ describe('site form page (T5)', () => {
     expect(path).toBe('/public/site-forms/cenoritas');
     expect(body).toMatchObject({
       name: 'Pessoa Teste',
-      email: 'pessoa@example.com',
       phone: '21999990001',
       companyName: 'Empresa Teste',
       instagram: '@empresa.teste',
@@ -97,6 +128,8 @@ describe('site form page (T5)', () => {
       website: '',
       tracking: { utm_source: 'facebook', utm_campaign: 'expansao_out26', fbclid: 'fb.1' },
     });
+    // The standard form's five questions and nothing else: no e-mail, no CNPJ.
+    expect(body).not.toHaveProperty('email');
     expect(await screen.findByText(/Recebemos seus dados/)).toBeTruthy();
     expect(screen.getByRole('link', { name: '@cenoritas.gourmet' }).getAttribute('href')).toBe(
       'https://www.instagram.com/cenoritas.gourmet/',
@@ -113,7 +146,6 @@ describe('site form page (T5)', () => {
     renderAt('/lp/cenoritas');
     await screen.findByText('Seja um franqueado Cenoritas');
     fireEvent.input(screen.getByLabelText(/^Nome(?! da)/), { target: { value: 'Pessoa Teste' } });
-    fireEvent.input(screen.getByLabelText(/^E-mail/), { target: { value: 'pessoa@example.com' } });
     fireEvent.input(screen.getByLabelText(/^WhatsApp/), { target: { value: '21999990001' } });
     fireEvent.input(screen.getByLabelText(/^Nome da empresa/), {
       target: { value: 'Empresa Teste' },
@@ -137,7 +169,6 @@ describe('site form page (T5)', () => {
     renderAt('/lp/cenoritas');
     await screen.findByText('Seja um franqueado Cenoritas');
     fireEvent.input(screen.getByLabelText(/^Nome(?! da)/), { target: { value: 'Pessoa Teste' } });
-    fireEvent.input(screen.getByLabelText(/^E-mail/), { target: { value: 'pessoa@example.com' } });
     fireEvent.input(screen.getByLabelText(/^WhatsApp/), { target: { value: '21999990001' } });
     fireEvent.input(screen.getByLabelText(/^Nome da empresa/), {
       target: { value: 'Empresa Teste' },
@@ -153,6 +184,67 @@ describe('site form page (T5)', () => {
     expect(post).not.toHaveBeenCalled();
   });
 
+  it('a Formatação page talks to the business owner, loads the tags it has ids for and fires them on a sent form', async () => {
+    delete window.fbq;
+    delete window.gtag;
+    window.dataLayer = [];
+    renderAt('/lp/formatacao');
+    expect(await screen.findByText('Transforme a sua empresa em franquia')).toBeTruthy();
+    expect(screen.getByText(/formatação da minha empresa em franquia/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Política de Privacidade' }).getAttribute('href')).toBe(
+      'https://wingscompany.com.br/politica-de-privacidade/',
+    );
+    // Both scripts asked for, the pixel initialised with the page view, gtag configured.
+    await waitFor(() =>
+      expect(
+        document.querySelector('script[src="https://connect.facebook.net/en_US/fbevents.js"]'),
+      ).toBeTruthy(),
+    );
+    expect(
+      document.querySelector(
+        'script[src="https://www.googletagmanager.com/gtag/js?id=AW-123456789"]',
+      ),
+    ).toBeTruthy();
+    expect(window.fbq?.queue).toEqual([
+      ['init', '1116678872845520'],
+      ['track', 'PageView'],
+    ]);
+    const configured = (window.dataLayer ?? []).map((entry) =>
+      Array.from(entry as ArrayLike<unknown>),
+    );
+    expect(configured[1]).toEqual(['config', 'AW-123456789']);
+
+    fireEvent.input(screen.getByLabelText(/^Nome(?! da)/), { target: { value: 'Pessoa Teste' } });
+    fireEvent.input(screen.getByLabelText(/^WhatsApp/), { target: { value: '21999990001' } });
+    fireEvent.input(screen.getByLabelText(/^Nome da empresa/), {
+      target: { value: 'Padaria Teste' },
+    });
+    fireEvent.input(screen.getByLabelText(/^Instagram/), { target: { value: '@padaria.teste' } });
+    fireEvent.input(screen.getByLabelText(/^Site da empresa/), { target: { value: 'não tenho' } });
+    fireEvent.click(screen.getByRole('checkbox'));
+    const send = screen.getByRole('button', {
+      name: 'Quero formatar minha franquia',
+    }) as HTMLButtonElement;
+    await waitFor(() => expect(send.disabled).toBe(false));
+    fireEvent.click(send);
+    expect(await screen.findByText('Recebemos os seus dados')).toBeTruthy();
+    expect(window.fbq?.queue?.at(-1)).toEqual(['track', 'Lead']);
+    const events = (window.dataLayer ?? []).map((entry) => Array.from(entry as ArrayLike<unknown>));
+    expect(events.at(-1)).toEqual(['event', 'conversion', { send_to: 'AW-123456789/AbCdEfGhIj' }]);
+    // Nothing typed reaches the tags.
+    expect(JSON.stringify([window.fbq?.queue, events])).not.toContain('Pessoa Teste');
+  });
+
+  it('loads no tag when the API hands over no id', async () => {
+    delete window.fbq;
+    delete window.gtag;
+    renderAt('/lp/cenoritas');
+    await screen.findByText('Seja um franqueado Cenoritas');
+    expect(document.querySelector('script[src^="https://connect.facebook.net"]')).toBeNull();
+    expect(document.querySelector('script[src^="https://www.googletagmanager.com"]')).toBeNull();
+    expect(window.fbq).toBeUndefined();
+  });
+
   it('says so for a page that does not take the form, and blocks sending while Turnstile is unset', async () => {
     renderAt('/lp/nao-existe');
     expect(await screen.findByText('Página não encontrada')).toBeTruthy();
@@ -162,6 +254,9 @@ describe('site form page (T5)', () => {
       brand: 'Cenoritas',
       turnstileSiteKey: null,
       instagram: null,
+      form: null,
+      pipeline: 'expansao',
+      tracking: { metaPixelId: null, googleAdsConversion: null },
     }));
     renderAt('/lp/cenoritas');
     expect(await screen.findByText('O formulário ainda está em configuração.')).toBeTruthy();
