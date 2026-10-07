@@ -31,7 +31,7 @@ import { landingPageRoutes } from './modules/leads/landing-pages.js';
 import { rdUserRoutes } from './modules/leads/rd-users.js';
 import { configureCrm, onStageEnteredHook } from './modules/leads/crm.js';
 import { onStageEntered } from './modules/leads/automations.js';
-import { createCrmMailTransport } from './modules/leads/crm-mail.js';
+import { crmMailOf } from './modules/leads/crm-mail.js';
 import { crmRoutes } from './modules/leads/crm-routes.js';
 import { automationRoutes } from './modules/leads/automation-routes.js';
 import { leadEmailRoutes } from './modules/leads/lead-email-routes.js';
@@ -183,9 +183,9 @@ export async function buildApp(deps: {
     );
   }
   // Regras de automação: a deal entering a stage starts that stage's rules.
-  const crmMail = createCrmMailTransport(deps.env);
+  // (built per call: in `gmail` mode the sender is the lead's owner, read at send time)
   onStageEnteredHook(async (lead) => {
-    await onStageEntered(deps.db, lead, { mail: crmMail });
+    await onStageEntered(deps.db, lead, { mail: crmMailOf(app.wings) });
   });
 
   app.decorate('wings', {

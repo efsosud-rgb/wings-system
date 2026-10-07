@@ -178,11 +178,14 @@ export interface LeadEmailSent {
   id: string;
   subject: string;
   body: string;
-  mode: 'test' | 'smtp';
+  /** test = only recorded; smtp = the company's address; gmail = the sender's own Gmail. */
+  mode: 'test' | 'smtp' | 'gmail';
   status: 'recorded' | 'sent' | 'failed';
   at: string;
   templateName: string | null;
   sentByName: string | null;
+  /** The address it left from; null in test mode. */
+  fromEmail: string | null;
 }
 
 /** Fills the variables; a missing value becomes an empty string, never "undefined". */

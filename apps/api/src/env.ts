@@ -155,12 +155,14 @@ const schema = z.object({
   ),
   /**
    * CRM e-mail to the lead: `test` (the default) records the message in the
-   * outbox and sends nothing; `smtp` sends through the Workspace SMTP account.
-   * Only Eric turns it to `smtp`, after the templates are approved.
+   * outbox and sends nothing; `smtp` sends through the Workspace SMTP account;
+   * `gmail` sends from the sender's own Gmail (their Google connection), with
+   * SMTP as the fallback for whoever is not connected. Only Eric turns it on,
+   * after the templates are approved (docs/integracoes/google-workspace.md).
    */
   CRM_EMAIL_MODE: optionalString.refine(
-    (value) => value === undefined || value === 'test' || value === 'smtp',
-    'must be "test" or "smtp"',
+    (value) => value === undefined || value === 'test' || value === 'smtp' || value === 'gmail',
+    'must be "test", "smtp" or "gmail"',
   ),
   /**
    * How often the API runs the CRM automations cycle (due rules and sequence

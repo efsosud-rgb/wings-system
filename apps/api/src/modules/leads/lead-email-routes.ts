@@ -6,7 +6,7 @@ import { crmEmailOutbox, crmEmailTemplates, employees } from '../../db/schema/in
 import { writeAudit } from '../../lib/audit.js';
 import { leadInScope, type LeadPermission } from './access.js';
 import { renderForLead, sendTemplateToLead } from './automations.js';
-import { createCrmMailTransport } from './crm-mail.js';
+import { crmMailOf } from './crm-mail.js';
 
 const idParam = z.object({ id: z.uuid() });
 const bodySchema = z.object({ templateId: z.uuid() });
@@ -32,7 +32,7 @@ const SEND_ERRORS = {
  * writes to their own leads). Audit entries carry ids, never the text.
  */
 export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
-  const { db, env } = app.wings;
+  const { db } = app.wings;
   type Req = Parameters<typeof app.can>[0];
 
   const visibleLead = (request: Req, id: string, permission: LeadPermission) =>
@@ -62,6 +62,7 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
           createdAt: crmEmailOutbox.createdAt,
           templateName: crmEmailTemplates.name,
           sentByName: employees.fullName,
+          fromEmail: crmEmailOutbox.fromEmail,
         })
         .from(crmEmailOutbox)
         .leftJoin(crmEmailTemplates, eq(crmEmailTemplates.id, crmEmailOutbox.templateId))
@@ -74,15 +75,19 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
       id: r.id,
       subject: r.subject,
       body: r.body,
-      mode: r.mode === 'smtp' ? 'smtp' : 'test',
+      mode: r.mode === 'smtp' || r.mode === 'gmail' ? r.mode : 'test',
       status: r.status === 'sent' ? 'sent' : r.status === 'failed' ? 'failed' : 'recorded',
       at: r.createdAt.toISOString(),
       templateName: r.templateName,
       sentByName: r.sentByName,
+      fromEmail: r.fromEmail,
     }));
+    const transport = crmMailOf(app.wings);
     return reply.send({
       to: lead.email,
-      mode: createCrmMailTransport(env).mode,
+      mode: transport.mode,
+      // Where a message sent now by this person would leave from (their Gmail, or the company's).
+      from: await transport.senderOf(request.session.actor.employeeId),
       templates,
       sent,
     });
@@ -115,7 +120,7 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
     const outcome = await sendTemplateToLead(db, {
       lead,
       templateId: body.data.templateId,
-      transport: createCrmMailTransport(env),
+      transport: crmMailOf(app.wings),
       runId: null,
       sentBy: actor,
     });

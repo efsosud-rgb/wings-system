@@ -16,7 +16,13 @@ nome, canto superior direito). A partir daí, com a conta dela:
 - **Remarcar** e **Cancelar** no sistema vão primeiro ao Google (os convidados recebem o aviso) e
   só depois mudam a cópia do CRM. Se o Google recusar, a tela oferece "mudar só no sistema".
 - **Iniciar reunião** abre o Meet do evento ao lado do Wings.
-- (Etapa seguinte) o e-mail ao lead sai do endereço dela pelo Gmail.
+- Com `CRM_EMAIL_MODE=gmail`, o **e-mail ao lead** (aba E-mail da negociação e as automações)
+  sai do endereço dela pelo Gmail (`users.messages.send`), com o nome dela no remetente; a
+  resposta do lead chega na caixa dela. Quem não conectou cai no SMTP da empresa (`SMTP_FROM`);
+  sem SMTP o envio é recusado e fica registrado como falho. Numa automação o remetente é o dono
+  do lead. O outbox guarda `from_email`, `Message-ID`, `gmail_message_id` e `gmail_thread_id`.
+- (Etapa seguinte) as respostas do lead na linha do tempo: exige o escopo restrito
+  `gmail.readonly` e uma leitura periódica (`history.list`) por pessoa conectada.
 
 O token é da pessoa e age só como ela: o sistema nunca cria evento nem manda e-mail em nome de
 outra. Quem não conectou continua marcando com o link colado.
@@ -130,6 +136,7 @@ Nada disso é delegação de domínio: a Thais não autoriza o sistema a agir po
 | `GOOGLE_WORKSPACE_CLIENT_SECRET` | api | Chave secreta do mesmo cliente |
 | `GOOGLE_WORKSPACE_WINGS_CALENDAR_ID` | api | ID da agenda compartilhada "Wings Company" |
 | `INTEGRATIONS_ENCRYPTION_KEY` | api | Já existe (Kairogen); cifra os tokens |
+| `CRM_EMAIL_MODE` | api | `gmail` liga o envio pelo Gmail de cada pessoa (com `smtp` de reserva); `test` até os modelos serem aprovados |
 | `APP_BASE_URL` | api | Já existe; monta a URI de redirecionamento |
 
 ## Limites conhecidos
