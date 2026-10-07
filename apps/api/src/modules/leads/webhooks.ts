@@ -96,13 +96,33 @@ interface RdConversion {
   legalBasisText: string;
 }
 
+/** The only event of the `contact` shape that is a landing-page conversion. */
+const RD_CONVERTED_EVENT = 'WEBHOOK.CONVERTED';
+
 /**
- * RD Station Marketing sends `{ leads: [...] }` (classic) or an event with
- * `leads` (webhooks v2); each lead carries its last conversion. Read leniently.
+ * RD Station Marketing sends `{ leads: [...] }` (classic), or the webhook the RD screen
+ * creates: `{ event_type, entity_type: 'CONTACT', event_identifier, contact: {...} }`, where
+ * the contact carries no conversion and `event_identifier` names the form that converted.
+ * Read leniently; a `contact` event that is not a conversion yields nothing.
  */
 export function rdConversionsOf(body: unknown): RdConversion[] {
   const root = (body ?? {}) as Record<string, unknown>;
-  const list = Array.isArray(root.leads) ? root.leads : root.email || root.uuid ? [root] : [];
+  const contact =
+    root.contact && typeof root.contact === 'object' && !Array.isArray(root.contact)
+      ? (root.contact as Record<string, unknown>)
+      : null;
+  const eventType = asString(root.event_type);
+  const convertedEvent = eventType === null || eventType === RD_CONVERTED_EVENT;
+  const eventIdentifier = convertedEvent ? asString(root.event_identifier) : null;
+  const list = Array.isArray(root.leads)
+    ? root.leads
+    : contact
+      ? convertedEvent
+        ? [contact]
+        : []
+      : root.email || root.uuid
+        ? [root]
+        : [];
   const eventAt = asDate(root.event_timestamp);
   return list
     .filter((lead): lead is Record<string, unknown> => Boolean(lead && typeof lead === 'object'))
@@ -144,7 +164,8 @@ export function rdConversionsOf(body: unknown): RdConversion[] {
         identifier:
           asString(content.conversion_identifier) ??
           asString(content.identificador) ??
-          asString(lead.conversion_identifier),
+          asString(lead.conversion_identifier) ??
+          eventIdentifier,
         url,
         at:
           asDate(content.created_at) ??
@@ -320,6 +341,11 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
           created: result.created,
           clientMapped: client.mapped,
         });
+      }
+      // Still a 200 (RD would retry and then switch the webhook off), but saying why nothing came in.
+      if (conversions.length === 0) {
+        app.log.warn({ msg: 'rd webhook without a conversion', shape: shapeOf(body) });
+        return reply.send({ received: 0, leads: [], ignored: 'no_conversion' });
       }
       return reply.send({ received: conversions.length, leads: results });
     },

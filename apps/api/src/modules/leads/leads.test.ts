@@ -510,6 +510,75 @@ describe('POST /integrations/rd-station/webhook', () => {
     expect(events.map((event) => event.kind)).toContain('rd.deal_linked');
   });
 
+  it('takes the CONTACT event the RD screen webhook sends: the form identifier picks the funnel', async () => {
+    await db.insert(leadSourceRules).values({
+      kind: 'landing_page',
+      pattern: 'lp-formatacao-contato',
+      clientId: null,
+      pipeline: 'formatacao',
+      brand: 'Marca Formatacao',
+    });
+    const event = {
+      event_type: 'WEBHOOK.CONVERTED',
+      entity_type: 'CONTACT',
+      event_timestamp: '2026-10-07T09:26:40.000-03:00',
+      event_identifier: 'lp-formatacao-contato',
+      timestamp: '2026-10-07T12:26:41.000Z',
+      contact: {
+        uuid: 'rd-uuid-contact-1',
+        email: 'Eva@Example.com',
+        name: 'Eva Lima',
+        personal_phone: '(11) 97777-6666',
+        tags: ['lp'],
+        legal_bases: [{ category: 'communications', type: 'consent', status: 'granted' }],
+        funnel: { name: 'Default', lifecycle_stage: 'Lead', opportunity: false },
+      },
+    };
+    const delivered = await app.inject({
+      method: 'POST',
+      url: `/integrations/rd-station/webhook?secret=${RD_SECRET}`,
+      payload: event,
+    });
+    expect(delivered.statusCode).toBe(200);
+    const answer = delivered.json<{ received: number; leads: { created: boolean }[] }>();
+    expect(answer.received).toBe(1);
+    expect(answer.leads[0]?.created).toBe(true);
+    const row = await db.query.leads.findFirst({
+      where: eq(leads.externalId, 'rd-uuid-contact-1'),
+    });
+    expect(row).toMatchObject({
+      source: 'rd_station',
+      email: 'eva@example.com',
+      phone: '5511977776666',
+      pipeline: 'formatacao',
+      consentSource: 'rd_station:lp-formatacao-contato',
+    });
+
+    // The same event again is the same lead.
+    const again = await app.inject({
+      method: 'POST',
+      url: `/integrations/rd-station/webhook?secret=${RD_SECRET}`,
+      payload: event,
+    });
+    expect(again.json<{ leads: { created: boolean }[] }>().leads[0]?.created).toBe(false);
+
+    // An opportunity event of the same shape is not a conversion: answered 200 and ignored, said so.
+    const other = await app.inject({
+      method: 'POST',
+      url: `/integrations/rd-station/webhook?secret=${RD_SECRET}`,
+      payload: {
+        ...event,
+        event_type: 'WEBHOOK.MARKED_OPPORTUNITY',
+        contact: { ...event.contact, uuid: 'rd-uuid-contact-2', email: 'fabio@example.com' },
+      },
+    });
+    expect(other.statusCode).toBe(200);
+    expect(other.json()).toMatchObject({ received: 0, ignored: 'no_conversion' });
+    expect(
+      await db.query.leads.findFirst({ where: eq(leads.externalId, 'rd-uuid-contact-2') }),
+    ).toBeUndefined();
+  });
+
   it('files a conversion no rule maps under Wings Company, flagged as unmapped', async () => {
     const delivered = await app.inject({
       method: 'POST',
