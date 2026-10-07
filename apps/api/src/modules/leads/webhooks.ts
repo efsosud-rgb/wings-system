@@ -96,8 +96,8 @@ interface RdConversion {
   legalBasisText: string;
 }
 
-/** The only event of the `contact` shape that is a landing-page conversion. */
-const RD_CONVERTED_EVENT = 'WEBHOOK.CONVERTED';
+/** The only event of the `contact` shape that is a landing-page conversion (RD spells it either way). */
+const RD_CONVERTED_EVENT = 'webhook.converted';
 
 /**
  * RD Station Marketing sends `{ leads: [...] }` (classic), or the webhook the RD screen
@@ -112,7 +112,7 @@ export function rdConversionsOf(body: unknown): RdConversion[] {
       ? (root.contact as Record<string, unknown>)
       : null;
   const eventType = asString(root.event_type);
-  const convertedEvent = eventType === null || eventType === RD_CONVERTED_EVENT;
+  const convertedEvent = eventType === null || eventType.toLowerCase() === RD_CONVERTED_EVENT;
   const eventIdentifier = convertedEvent ? asString(root.event_identifier) : null;
   const list = Array.isArray(root.leads)
     ? root.leads
