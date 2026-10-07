@@ -21,6 +21,7 @@ export const PERMISSIONS = {
   'leads.read': 'Ver leads do funil',
   'leads.write': 'Criar e editar leads',
   'leads.assign': 'Atribuir e redistribuir leads entre vendedores',
+  'leads.whatsapp': 'Conversar e ligar pelo WhatsApp do sistema (ver, enviar e ligar)',
   'crm.manage': 'Configurar as etapas do funil e a distribuição de leads',
   'campaign_leads.read': 'Ver os leads das campanhas de tráfego pago (RD CRM)',
   'campaign_leads.reveal':
@@ -130,6 +131,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'leads.read': 'all',
     'leads.write': 'all',
     'leads.assign': 'all',
+    'leads.whatsapp': 'all',
     'crm.manage': 'all',
     'campaign_leads.read': 'all',
     'campaign_leads.reveal': 'all',
@@ -167,6 +169,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'timeclock.read': 'all',
     'leads.read': 'all',
     'leads.assign': 'all',
+    // Eric, 07/10: Diretoria reads, sends and calls on any lead's WhatsApp, though it does not edit the deal.
+    'leads.whatsapp': 'all',
     'campaign_leads.read': 'all',
     'campaign_leads.reveal': 'all',
     'audit.read': 'all',
@@ -202,6 +206,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'leads.write': 'all',
     // Runs the team: hands leads over and keeps the funnel's stages and rotation.
     'leads.assign': 'all',
+    'leads.whatsapp': 'all',
     'crm.manage': 'all',
     'campaign_leads.read': 'all',
     'campaign_leads.reveal': 'all',
@@ -240,6 +245,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     ...PROJECT_STAFF,
     'leads.read': 'own',
     'leads.write': 'own',
+    'leads.whatsapp': 'own',
   },
   // Leads das Campanhas: only the leads RD assigns to them.
   vendedor_formatacao: {
@@ -247,6 +253,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     ...PROJECT_STAFF,
     'leads.read': 'own',
     'leads.write': 'own',
+    'leads.whatsapp': 'own',
     'campaign_leads.read': 'own',
     'campaign_leads.reveal': 'own',
   },

@@ -264,7 +264,11 @@ function toFile(row: FileJoin, access: DriveAccess): DriveFile {
     purgeAt: file.trashedAt
       ? new Date(file.trashedAt.getTime() + DRIVE_TRASH_DAYS * DAY_MS).toISOString()
       : null,
-    canWrite: writesFolder(access, { department: row.department, clientId: row.folderClientId }),
+    canWrite: writesFolder(access, {
+      department: row.department,
+      clientId: row.folderClientId,
+      path: row.folderPath,
+    }),
   };
 }
 
@@ -330,7 +334,11 @@ export async function fileFor(
   need: 'read' | 'write' = 'read',
 ): Promise<FileJoin> {
   const [row] = await selectFiles(deps.db).where(eq(driveFiles.id, id));
-  const reach = { department: row?.department ?? '', clientId: row?.folderClientId ?? null };
+  const reach = {
+    department: row?.department ?? '',
+    clientId: row?.folderClientId ?? null,
+    path: row?.folderPath ?? '',
+  };
   if (!row || !seesFolder(access, reach)) throw new DriveError('not_found');
   if (need === 'write' && !writesFolder(access, reach)) throw new DriveError('forbidden');
   return row;

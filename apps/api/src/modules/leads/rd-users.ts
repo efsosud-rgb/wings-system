@@ -3,6 +3,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { employees, rdUserMap } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
+import { canChangeLeadOwner } from './access.js';
 
 /**
  * Administração → Usuários do RD CRM: which employee each RD CRM user is, so
@@ -13,6 +14,12 @@ import { writeAudit } from '../../lib/audit.js';
 export const rdUserRoutes: FastifyPluginAsync = async (app) => {
   const { db } = app.wings;
   const guard = { preHandler: app.requirePermission('integrations.manage') };
+
+  // Who an RD user is decides who owns the deals read from RD: changing it is an owner change.
+  const refuse = {
+    error: 'forbidden',
+    message: 'Só quem pode atribuir negociações liga ou desliga um usuário do RD.',
+  };
 
   app.get('/leads/rd-users', guard, async (_request, reply) => {
     const rows = await db
@@ -40,6 +47,7 @@ export const rdUserRoutes: FastifyPluginAsync = async (app) => {
   });
 
   app.put('/leads/rd-users/:rdUserId', guard, async (request, reply) => {
+    if (!canChangeLeadOwner(request.session.actor)) return reply.code(403).send(refuse);
     const params = z
       .object({ rdUserId: z.string().trim().min(1).max(64) })
       .safeParse(request.params);
@@ -73,6 +81,7 @@ export const rdUserRoutes: FastifyPluginAsync = async (app) => {
 
   // "Saiu da empresa": their deals count as "dono inativo"; nothing is reassigned.
   app.put('/leads/rd-users/:rdUserId/departed', guard, async (request, reply) => {
+    if (!canChangeLeadOwner(request.session.actor)) return reply.code(403).send(refuse);
     const params = z
       .object({ rdUserId: z.string().trim().min(1).max(64) })
       .safeParse(request.params);

@@ -256,6 +256,12 @@ export interface IncomingLead {
   originCreatedAt?: Date | null;
   /** The import run creating the lead (`leads.import_batch_id`); used only for a new lead. */
   importBatchId?: string | null;
+  /**
+   * A person typing the lead in who sees only their own leads (a seller): the arrival may merge into
+   * an existing lead of the same phone or e-mail only when that lead is theirs. Another owner's
+   * lead, or one nobody owns, throws `ForeignLeadError` and nothing is written or shown.
+   */
+  mergeOnlyIfOwnedBy?: string;
   /** An import (RD CRM) does not queue the paid research for every lead it brings. */
   skipResearch?: boolean;
   /**
@@ -447,6 +453,13 @@ function storedFields(fields: LeadFields | null | undefined) {
 
 const CHECKED_COLUMNS = ['phone', 'website', 'instagram', 'companyCnpj'];
 
+/** The phone or e-mail already belongs to a lead the person may not touch (see `mergeOnlyIfOwnedBy`). */
+export class ForeignLeadError extends Error {
+  constructor() {
+    super('foreign_lead');
+  }
+}
+
 export async function upsertLead(db: Database, given: IncomingLead): Promise<UpsertResult> {
   const incoming = withFormFields(given);
   const result = await upsertLeadTx(db, incoming);
@@ -508,6 +521,13 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
         orderBy: asc(leads.createdAt),
       });
     }
+
+    if (
+      existing &&
+      incoming.mergeOnlyIfOwnedBy !== undefined &&
+      existing.ownerEmployeeId !== incoming.mergeOnlyIfOwnedBy
+    )
+      throw new ForeignLeadError();
 
     if (existing) {
       const patch = fillGaps(existing, incoming);

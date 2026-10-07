@@ -11,7 +11,7 @@ import {
   type LeadContactRef,
   type LeadPipeline,
 } from '@wings/shared';
-import { and, asc, desc, eq, isNull, ne, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   clients,
@@ -185,18 +185,40 @@ export async function updateCompany(
   });
 }
 
-const companyCounts = {
-  contacts: sql<number>`(select count(*) from ${crmContacts} c where c.company_id = ${crmCompanies.id} and c.merged_into_id is null)::int`,
-  leads: sql<number>`(select count(*) from ${leads} l where l.company_id = ${crmCompanies.id})::int`,
-  openLeads: sql<number>`(select count(*) from ${leads} l where l.company_id = ${crmCompanies.id} and l.won is null)::int`,
+/**
+ * What a seller (own scope) sees of the people: the contacts of their own leads, plus the ones they
+ * made themselves that no lead has yet. `id` and `createdBy` are the contact's columns, whatever the
+ * query calls the table.
+ */
+const contactVisible = (id: SQL, createdBy: SQL, ownerEmployeeId: string) =>
+  sql`(exists (select 1 from ${leadContacts} lc join ${leads} l on l.id = lc.lead_id where lc.contact_id = ${id} and l.owner_employee_id = ${ownerEmployeeId}) or (${createdBy} = ${ownerEmployeeId} and not exists (select 1 from ${leadContacts} lc where lc.contact_id = ${id})))`;
+
+/**
+ * The companies a seller (own scope) sees: those of their own leads or of the contacts on their own
+ * leads, plus the ones they made that nothing is tied to yet. A NULL owner never matches.
+ */
+const companyVisible = (ownerEmployeeId: string) =>
+  sql`(exists (select 1 from ${leads} l where l.company_id = ${crmCompanies.id} and l.owner_employee_id = ${ownerEmployeeId}) or exists (select 1 from ${crmContacts} c where c.company_id = ${crmCompanies.id} and c.merged_into_id is null and ${contactVisible(sql`c.id`, sql`c.created_by`, ownerEmployeeId)}) or (${crmCompanies.createdBy} = ${ownerEmployeeId} and not exists (select 1 from ${leads} l where l.company_id = ${crmCompanies.id}) and not exists (select 1 from ${crmContacts} c where c.company_id = ${crmCompanies.id} and c.merged_into_id is null)))`;
+
+/** The counts on a company; for a seller, only what their own leads and contacts add up to. */
+const companyCounts = (ownerEmployeeId?: string) => {
+  const mine = ownerEmployeeId ? sql` and l.owner_employee_id = ${ownerEmployeeId}` : sql``;
+  const visibleContact = ownerEmployeeId
+    ? sql` and ${contactVisible(sql`c.id`, sql`c.created_by`, ownerEmployeeId)}`
+    : sql``;
+  return {
+    contacts: sql<number>`(select count(*) from ${crmContacts} c where c.company_id = ${crmCompanies.id} and c.merged_into_id is null${visibleContact})::int`,
+    leads: sql<number>`(select count(*) from ${leads} l where l.company_id = ${crmCompanies.id}${mine})::int`,
+    openLeads: sql<number>`(select count(*) from ${leads} l where l.company_id = ${crmCompanies.id} and l.won is null${mine})::int`,
+  };
 };
 
-function companyQuery(db: Executor) {
+function companyQuery(db: Executor, ownerEmployeeId?: string) {
   return db
     .select({
       row: crmCompanies,
       clientName: clients.name,
-      ...companyCounts,
+      ...companyCounts(ownerEmployeeId),
     })
     .from(crmCompanies)
     .leftJoin(clients, eq(clients.id, crmCompanies.clientId));
@@ -229,13 +251,18 @@ const toCompany = (item: {
 
 export const COMPANY_LIST_LIMIT = 200;
 
-export async function listCompanies(db: Executor, input: { q?: string }): Promise<CrmCompany[]> {
+/** A seller (own scope) sees only the companies of their own leads and contacts. */
+export async function listCompanies(
+  db: Executor,
+  input: { q?: string; ownerEmployeeId?: string },
+): Promise<CrmCompany[]> {
   const needle = input.q ? `%${companyKey(input.q)}%` : null;
   const digits = input.q?.replace(/\D/g, '') ?? '';
-  const rows = await companyQuery(db)
+  const rows = await companyQuery(db, input.ownerEmployeeId)
     .where(
       and(
         live(crmCompanies),
+        input.ownerEmployeeId ? companyVisible(input.ownerEmployeeId) : undefined,
         needle
           ? or(
               sql`${crmCompanies.nameKey} like ${needle}`,
@@ -252,12 +279,26 @@ export async function listCompanies(db: Executor, input: { q?: string }): Promis
   return rows.map(toCompany);
 }
 
-export async function companyOf(db: Executor, id: string): Promise<CrmCompany | null> {
-  const [row] = await companyQuery(db).where(eq(crmCompanies.id, id)).limit(1);
+export async function companyOf(
+  db: Executor,
+  id: string,
+  ownerEmployeeId?: string,
+): Promise<CrmCompany | null> {
+  const [row] = await companyQuery(db, ownerEmployeeId).where(eq(crmCompanies.id, id)).limit(1);
   if (!row) return null;
   // A merged row answers as the one it was merged into.
-  if (row.row.mergedIntoId) return companyOf(db, row.row.mergedIntoId);
+  if (row.row.mergedIntoId) return companyOf(db, row.row.mergedIntoId, ownerEmployeeId);
   return toCompany(row);
+}
+
+/** Whether a seller (own scope) may see a company: see `companyVisible`. */
+export async function companyVisibleTo(db: Executor, companyId: string, ownerEmployeeId: string) {
+  const [row] = await db
+    .select({ one: sql<number>`1` })
+    .from(crmCompanies)
+    .where(and(eq(crmCompanies.id, companyId), companyVisible(ownerEmployeeId)))
+    .limit(1);
+  return Boolean(row);
 }
 
 /** Pairs of live companies that share a name key or a CNPJ (a CNPJ clash cannot exist, so by name only). */
@@ -585,14 +626,18 @@ export async function attachLeadContact(
   return found.contact;
 }
 
-const contactCounts = {
-  leads: sql<number>`(select count(*) from ${leadContacts} lc where lc.contact_id = ${crmContacts.id})::int`,
-  openLeads: sql<number>`(select count(*) from ${leadContacts} lc join ${leads} l on l.id = lc.lead_id where lc.contact_id = ${crmContacts.id} and l.won is null)::int`,
+/** The counts on a contact; for a seller, only their own leads. */
+const contactCounts = (ownerEmployeeId?: string) => {
+  const mine = ownerEmployeeId ? sql` and l.owner_employee_id = ${ownerEmployeeId}` : sql``;
+  return {
+    leads: sql<number>`(select count(*) from ${leadContacts} lc join ${leads} l on l.id = lc.lead_id where lc.contact_id = ${crmContacts.id}${mine})::int`,
+    openLeads: sql<number>`(select count(*) from ${leadContacts} lc join ${leads} l on l.id = lc.lead_id where lc.contact_id = ${crmContacts.id} and l.won is null${mine})::int`,
+  };
 };
 
-function contactQuery(db: Executor) {
+function contactQuery(db: Executor, ownerEmployeeId?: string) {
   return db
-    .select({ row: crmContacts, companyName: crmCompanies.name, ...contactCounts })
+    .select({ row: crmContacts, companyName: crmCompanies.name, ...contactCounts(ownerEmployeeId) })
     .from(crmContacts)
     .leftJoin(crmCompanies, eq(crmCompanies.id, crmContacts.companyId));
 }
@@ -618,7 +663,7 @@ const toContact = (item: {
 
 export const CONTACT_LIST_LIMIT = 200;
 
-/** A seller (own scope) sees only the contacts of their leads. */
+/** A seller (own scope) sees only the contacts of their leads (see `contactVisible`). */
 export async function listContacts(
   db: Executor,
   input: { q?: string; ownerEmployeeId?: string },
@@ -626,9 +671,9 @@ export async function listContacts(
   const needle = input.q ? `%${input.q.toLowerCase()}%` : null;
   const digits = input.q?.replace(/\D/g, '') ?? '';
   const scope = input.ownerEmployeeId
-    ? sql`exists (select 1 from ${leadContacts} lc join ${leads} l on l.id = lc.lead_id where lc.contact_id = ${crmContacts.id} and l.owner_employee_id = ${input.ownerEmployeeId})`
+    ? contactVisible(sql`${crmContacts.id}`, sql`${crmContacts.createdBy}`, input.ownerEmployeeId)
     : undefined;
-  const rows = await contactQuery(db)
+  const rows = await contactQuery(db, input.ownerEmployeeId)
     .where(
       and(
         live(crmContacts),
@@ -650,20 +695,28 @@ export async function listContacts(
   return rows.map(toContact);
 }
 
-export async function contactOf(db: Executor, id: string): Promise<CrmContact | null> {
-  const [row] = await contactQuery(db).where(eq(crmContacts.id, id)).limit(1);
+export async function contactOf(
+  db: Executor,
+  id: string,
+  ownerEmployeeId?: string,
+): Promise<CrmContact | null> {
+  const [row] = await contactQuery(db, ownerEmployeeId).where(eq(crmContacts.id, id)).limit(1);
   if (!row) return null;
-  if (row.row.mergedIntoId) return contactOf(db, row.row.mergedIntoId);
+  if (row.row.mergedIntoId) return contactOf(db, row.row.mergedIntoId, ownerEmployeeId);
   return toContact(row);
 }
 
-/** Whether a seller (own scope) may see a contact: one of their leads has it. */
+/** Whether a seller (own scope) may see a contact: one of their leads has it, or they made it and no lead has it yet. */
 export async function contactVisibleTo(db: Executor, contactId: string, ownerEmployeeId: string) {
   const [row] = await db
     .select({ one: sql<number>`1` })
-    .from(leadContacts)
-    .innerJoin(leads, eq(leads.id, leadContacts.leadId))
-    .where(and(eq(leadContacts.contactId, contactId), eq(leads.ownerEmployeeId, ownerEmployeeId)))
+    .from(crmContacts)
+    .where(
+      and(
+        eq(crmContacts.id, contactId),
+        contactVisible(sql`${crmContacts.id}`, sql`${crmContacts.createdBy}`, ownerEmployeeId),
+      ),
+    )
     .limit(1);
   return Boolean(row);
 }
@@ -868,9 +921,21 @@ export async function leadsOfCompany(
   }));
 }
 
-export async function contactsOfCompany(db: Executor, companyId: string): Promise<CrmContact[]> {
-  const rows = await contactQuery(db)
-    .where(and(eq(crmContacts.companyId, companyId), live(crmContacts)))
+export async function contactsOfCompany(
+  db: Executor,
+  companyId: string,
+  ownerEmployeeId?: string,
+): Promise<CrmContact[]> {
+  const rows = await contactQuery(db, ownerEmployeeId)
+    .where(
+      and(
+        eq(crmContacts.companyId, companyId),
+        live(crmContacts),
+        ownerEmployeeId
+          ? contactVisible(sql`${crmContacts.id}`, sql`${crmContacts.createdBy}`, ownerEmployeeId)
+          : undefined,
+      ),
+    )
     .orderBy(asc(crmContacts.name));
   return rows.map(toContact);
 }

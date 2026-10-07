@@ -1,8 +1,6 @@
 import {
-  can,
   expansionAreaSchema,
   generateTrackingCode,
-  grantedScope,
   leadCreateSchema,
   funnelSummaryQuerySchema,
   leadListQuerySchema,
@@ -25,15 +23,16 @@ import {
   employees,
   leadSourceRules,
   leadTrackingLinks,
-  leads,
 } from '../../db/schema/index.js';
 import { leadCheckDepsOf, runLeadChecks } from './field-checks.js';
 import { writeAudit } from '../../lib/audit.js';
+import { canChangeLeadOwner, leadInScope, leadOwnerFilter } from './access.js';
 import { activeClient, toClient } from '../clients/routes.js';
 import { changeLead } from './crm.js';
 import {
   brandOfLink,
   enqueueResearch,
+  ForeignLeadError,
   funnelSummary,
   listLeads,
   loadLead,
@@ -73,9 +72,7 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
 
   /** `own` scope sees only leads it owns; a lead nobody owns is out of that scope. */
   const ownerFilter = (request: Parameters<typeof app.can>[0]) =>
-    grantedScope(request.session.actor, 'leads.read') === 'own'
-      ? request.session.actor.employeeId
-      : undefined;
+    leadOwnerFilter(request.session.actor, 'leads.read');
 
   app.get('/leads', { preHandler: app.requirePermission('leads.read') }, async (request, reply) => {
     const query = leadListQuerySchema.safeParse(request.query);
@@ -116,10 +113,7 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
       let ownerEmployeeId: string | null | undefined;
       if (body.data.ownerEmployeeId === 'me') ownerEmployeeId = actor;
       else if (body.data.ownerEmployeeId) {
-        if (
-          body.data.ownerEmployeeId !== actor &&
-          !can(request.session.actor, 'leads.assign').allowed
-        )
+        if (body.data.ownerEmployeeId !== actor && !canChangeLeadOwner(request.session.actor))
           return reply.status(403).send({
             error: 'forbidden',
             message: 'Só quem pode atribuir negociações escolhe outro dono.',
@@ -133,7 +127,9 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
         ownerEmployeeId = owner.id;
       } else
         ownerEmployeeId =
-          pipeline && grantedScope(request.session.actor, 'leads.write') !== 'own' ? null : actor;
+          pipeline && leadOwnerFilter(request.session.actor, 'leads.write') === undefined
+            ? null
+            : actor;
       const stage = body.data.stageId
         ? await db.query.crmStages.findFirst({ where: eq(crmStages.id, body.data.stageId) })
         : null;
@@ -142,25 +138,37 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
         (!stage || !stage.active || (pipeline && stage.pipeline !== pipeline))
       )
         return reply.status(400).send(invalid('Etapa inexistente ou de outro funil.'));
-      const result = await upsertLead(db, {
-        source: 'manual',
-        name: body.data.name,
-        email: body.data.email || null,
-        phone: body.data.phone || null,
-        clientId: clientId ?? WINGS_CLIENT_ID,
-        clientMapped: Boolean(clientId),
-        brand: client && client.id !== WINGS_CLIENT_ID ? client.name : null,
-        pipeline: (stage?.pipeline as LeadPipeline | undefined) ?? pipeline,
-        company: body.data.companyName ? { name: body.data.companyName } : null,
-        valueCents: body.data.valueCents ?? null,
-        channel: body.data.channel || null,
-        legalBasis: body.data.legalBasis,
-        consentedAt: new Date(),
-        consentSource: 'manual',
-        consentText: body.data.consentText || 'Negociação criada no Wings System',
-        ownerEmployeeId,
-        event: { kind: 'lead.created_manually', actorEmployeeId: actor },
-      });
+      let result: Awaited<ReturnType<typeof upsertLead>>;
+      try {
+        result = await upsertLead(db, {
+          source: 'manual',
+          name: body.data.name,
+          email: body.data.email || null,
+          phone: body.data.phone || null,
+          clientId: clientId ?? WINGS_CLIENT_ID,
+          clientMapped: Boolean(clientId),
+          brand: client && client.id !== WINGS_CLIENT_ID ? client.name : null,
+          pipeline: (stage?.pipeline as LeadPipeline | undefined) ?? pipeline,
+          company: body.data.companyName ? { name: body.data.companyName } : null,
+          valueCents: body.data.valueCents ?? null,
+          channel: body.data.channel || null,
+          legalBasis: body.data.legalBasis,
+          consentedAt: new Date(),
+          consentSource: 'manual',
+          consentText: body.data.consentText || 'Negociação criada no Wings System',
+          ownerEmployeeId,
+          // A seller's new lead never merges into somebody else's (or nobody's): same phone or e-mail is refused.
+          mergeOnlyIfOwnedBy: leadOwnerFilter(request.session.actor, 'leads.write'),
+          event: { kind: 'lead.created_manually', actorEmployeeId: actor },
+        });
+      } catch (error) {
+        if (error instanceof ForeignLeadError)
+          return reply.status(409).send({
+            error: 'duplicate',
+            message: 'Já existe uma negociação com este telefone ou e-mail.',
+          });
+        throw error;
+      }
       if (result.created && stage && result.lead.stageId !== stage.id) {
         await changeLead(db, {
           leadId: result.lead.id,
@@ -190,9 +198,11 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const params = idParam.safeParse(request.params);
       if (!params.success) return reply.status(400).send(invalid());
-      const loaded = await loadLead(db, params.data.id);
-      if (!loaded || !visible(request, loaded.lead.ownerEmployeeId))
+      // Authorized first: a lead out of reach is never even loaded.
+      if (!(await leadInScope(db, request.session.actor, params.data.id, 'leads.read')))
         return reply.status(404).send(notFound);
+      const loaded = await loadLead(db, params.data.id);
+      if (!loaded) return reply.status(404).send(notFound);
       return reply.send(loaded);
     },
   );
@@ -204,8 +214,8 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const params = idParam.safeParse(request.params);
       if (!params.success) return reply.status(400).send(invalid());
-      const row = await db.query.leads.findFirst({ where: eq(leads.id, params.data.id) });
-      if (!row || !visible(request, row.ownerEmployeeId)) return reply.status(404).send(notFound);
+      const row = await leadInScope(db, request.session.actor, params.data.id, 'leads.write');
+      if (!row) return reply.status(404).send(notFound);
       const deps = leadCheckDepsOf(app);
       await runLeadChecks(db, row.id, deps);
       await writeAudit(db, {
@@ -225,8 +235,8 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
     async (request, reply) => {
       const params = idParam.safeParse(request.params);
       if (!params.success) return reply.status(400).send(invalid());
-      const row = await db.query.leads.findFirst({ where: eq(leads.id, params.data.id) });
-      if (!row || !visible(request, row.ownerEmployeeId)) return reply.status(404).send(notFound);
+      const row = await leadInScope(db, request.session.actor, params.data.id, 'leads.write');
+      if (!row) return reply.status(404).send(notFound);
       if (row.enrichmentState === 'pending' || row.enrichmentState === 'running') {
         return reply.status(409).send({
           error: 'research_in_progress',
@@ -432,14 +442,4 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
     });
     return reply.send({ client: toClient(row) });
   });
-
-  // --- helpers ----------------------------------------------------------------------
-
-  function visible(
-    request: Parameters<typeof app.can>[0],
-    ownerEmployeeId: string | null,
-  ): boolean {
-    const owner = ownerFilter(request);
-    return owner === undefined || ownerEmployeeId === owner;
-  }
 };

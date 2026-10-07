@@ -10,8 +10,7 @@ import {
 } from '@wings/shared';
 import { useRef, useState, type ReactNode, type RefObject } from 'react';
 import { ApiError } from '../../api/client.js';
-import { useLeadFiles, useRemoveLeadFile, useSendLeadFile } from '../../api/crm.js';
-import { driveLink } from '../../api/drive.js';
+import { leadFileLink, useLeadFiles, useRemoveLeadFile, useSendLeadFile } from '../../api/crm.js';
 import { useUpdateTask, type LoadedLead } from '../../api/leads.js';
 import { formatBytes } from '../../components/drive/DriveParts.js';
 import { Icon, type IconName } from '../../components/Icon.js';
@@ -403,7 +402,7 @@ export function FilesTab({
 
   const open = async (file: LeadFile) => {
     try {
-      const link = await driveLink(file.fileId, 'inline');
+      const link = await leadFileLink(lead.id, file.fileId, 'inline');
       window.open(link.url, '_blank', 'noopener');
     } catch {
       setError('Não foi possível abrir o arquivo agora.');

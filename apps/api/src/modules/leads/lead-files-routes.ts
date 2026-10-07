@@ -1,17 +1,17 @@
-import { grantedScope, leadFileUploadSchema } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { leadFileUploadSchema } from '@wings/shared';
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { leads } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
+import { leadInScope, type LeadPermission } from './access.js';
 import { storageOf } from '../../lib/storage/index.js';
 import { createOpenRouterLlm, type AgentLlm } from '../agent/llm.js';
-import { driveAccessOf } from '../drive/access.js';
-import { DriveError, fileFor, type DriveDeps } from '../drive/service.js';
+import { dealFilesAccess, driveAccessOf } from '../drive/access.js';
+import { DriveError, fileFor, linkFor, type DriveDeps } from '../drive/service.js';
 import {
   attachFile,
   completeLeadUpload,
   detachFile,
+  leadHasFile,
   listLeadFiles,
   requestLeadUpload,
 } from './files.js';
@@ -22,7 +22,9 @@ const idParam = z.object({ id: z.uuid() });
 const uploadParams = z.object({ id: z.uuid(), uploadId: z.uuid() });
 const fileParams = z.object({ id: z.uuid(), fileId: z.uuid() });
 const attachBody = z.object({ fileId: z.uuid() });
-const questionBody = z.object({ question: z.string().trim().min(3, 'Escreva a pergunta').max(500) });
+const questionBody = z.object({
+  question: z.string().trim().min(3, 'Escreva a pergunta').max(500),
+});
 
 const SUMMARY_MESSAGES: Record<SummaryError['code'], string> = {
   ai_unavailable: 'A IA não está configurada neste ambiente.',
@@ -70,14 +72,8 @@ export const leadFilesRoutes: FastifyPluginAsync = async (app) => {
     now: () => new Date(),
   };
 
-  async function visibleLead(request: Req, id: string, permission: 'leads.read' | 'leads.write') {
-    const row = await db.query.leads.findFirst({ where: eq(leads.id, id) });
-    if (!row) return null;
-    const scope = grantedScope(request.session.actor, permission);
-    return scope !== 'own' || row.ownerEmployeeId === request.session.actor.employeeId
-      ? row
-      : null;
-  }
+  const visibleLead = (request: Req, id: string, permission: LeadPermission) =>
+    leadInScope(db, request.session.actor, id, permission);
 
   const notFound = (reply: FastifyReply) =>
     reply.status(404).send({ error: 'not_found', message: 'Lead não encontrado.' });
@@ -107,6 +103,44 @@ export const leadFilesRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ files: await listLeadFiles(db, row.id) });
   });
 
+  // The address to open one of the deal's files. The Drive routes do not open the deals' folders for a
+  // seller (the folder is named after the deal), so this is the way: the lead is checked first, then the
+  // file must be one of this lead's own.
+  app.get('/leads/:id/files/:fileId/link', read, async (request, reply) => {
+    const params = fileParams.safeParse(request.params);
+    const query = z
+      .object({ disposition: z.enum(['inline', 'attachment']).default('attachment') })
+      .safeParse(request.query);
+    if (!params.success) return notFound(reply);
+    if (!query.success)
+      return reply.status(400).send({ error: 'invalid_request', message: 'Dados inválidos' });
+    const row = await visibleLead(request, params.data.id, 'leads.read');
+    if (!row) return notFound(reply);
+    const access = driveAccessOf(request.session.actor);
+    if (!access) return refuse(reply, new DriveError('not_found'));
+    if (!(await leadHasFile(db, row.id, params.data.fileId))) {
+      return refuse(reply, new DriveError('not_found'));
+    }
+    try {
+      const link = await linkFor(deps, dealFilesAccess(access), params.data.fileId, query.data);
+      await writeAudit(db, {
+        actorEmployeeId: access.employeeId,
+        action:
+          query.data.disposition === 'inline' ? 'drive.file_previewed' : 'drive.file_downloaded',
+        entity: 'drive_file',
+        entityId: link.fileId,
+        ip: request.ip,
+        metadata: { version: link.version, leadId: row.id },
+      });
+      return reply
+        .header('Cache-Control', 'no-store')
+        .send({ url: link.url, expiresAt: link.expiresAt });
+    } catch (error) {
+      if (error instanceof DriveError) return refuse(reply, error);
+      throw error;
+    }
+  });
+
   app.post('/leads/:id/files/uploads', write, async (request, reply) => {
     const params = idParam.safeParse(request.params);
     const body = leadFileUploadSchema.safeParse(request.body);
@@ -120,7 +154,7 @@ export const leadFilesRoutes: FastifyPluginAsync = async (app) => {
     const access = driveAccessOf(request.session.actor);
     if (!access?.write) return refuse(reply, new DriveError('forbidden'));
     try {
-      const ticket = await requestLeadUpload(deps, access, row, body.data);
+      const ticket = await requestLeadUpload(deps, dealFilesAccess(access), row, body.data);
       await writeAudit(db, {
         actorEmployeeId: access.employeeId,
         action: 'lead.file_upload_requested',
@@ -144,7 +178,12 @@ export const leadFilesRoutes: FastifyPluginAsync = async (app) => {
     const access = driveAccessOf(request.session.actor);
     if (!access?.write) return refuse(reply, new DriveError('forbidden'));
     try {
-      const file = await completeLeadUpload(deps, access, row.id, params.data.uploadId);
+      const file = await completeLeadUpload(
+        deps,
+        dealFilesAccess(access),
+        row.id,
+        params.data.uploadId,
+      );
       await audit(request, 'lead.file_added', row.id, file.fileId);
       return reply.status(201).send({ file });
     } catch (error) {

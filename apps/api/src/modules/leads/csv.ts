@@ -21,13 +21,13 @@ import {
   type LeadListItem,
   type LeadPipeline,
 } from '@wings/shared';
-import { asc, eq, or } from 'drizzle-orm';
+import { and, asc, eq, or } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 import type { Database } from '../../db/client.js';
 import { employees, leads } from '../../db/schema/index.js';
 import { addNote, changeLead, ensureStage, type Executor } from './crm.js';
 import { brandsOnSale } from './deal.js';
-import { upsertLead, type LeadListFilter, listLeads } from './service.js';
+import { ForeignLeadError, upsertLead, type LeadListFilter, listLeads } from './service.js';
 
 /**
  * The Funil's spreadsheet door (CRM núcleo). Import: the file is parsed, each
@@ -141,7 +141,12 @@ export const PREVIEW_SAMPLE = 20;
 
 export async function previewImport(
   db: Executor,
-  input: { csv: string; mapping?: Record<string, CsvImportField> },
+  input: {
+    csv: string;
+    mapping?: Record<string, CsvImportField>;
+    /** A seller (own scope): only a lead of theirs counts as already there; nobody else's is shown. */
+    ownerEmployeeId?: string;
+  },
 ): Promise<CsvImportPreview> {
   const table = parseCsv(input.csv);
   const headers = (table[0] ?? []).map((header) => header.trim());
@@ -154,7 +159,7 @@ export async function previewImport(
   for (const row of rows) {
     let matchesLeadId: string | null = null;
     if (row.errors.length === 0 && row.repeatOf === null) {
-      const found = await existingLeadOf(db, row.values);
+      const found = await existingLeadOf(db, row.values, input.ownerEmployeeId);
       if (found) {
         existing++;
         matchesLeadId = found;
@@ -177,7 +182,11 @@ export async function previewImport(
   };
 }
 
-async function existingLeadOf(db: Executor, values: Record<CsvImportField, string>) {
+async function existingLeadOf(
+  db: Executor,
+  values: Record<CsvImportField, string>,
+  ownerEmployeeId?: string,
+) {
   const phone = normalizeBrazilianPhone(values.phone);
   const email = normalizeEmail(values.email);
   const conditions = [
@@ -186,7 +195,10 @@ async function existingLeadOf(db: Executor, values: Record<CsvImportField, strin
   ].filter((condition): condition is NonNullable<typeof condition> => Boolean(condition));
   if (conditions.length === 0) return null;
   const row = await db.query.leads.findFirst({
-    where: conditions.length === 1 ? conditions[0] : or(...conditions),
+    where: and(
+      conditions.length === 1 ? conditions[0] : or(...conditions),
+      ownerEmployeeId ? eq(leads.ownerEmployeeId, ownerEmployeeId) : undefined,
+    ),
     orderBy: asc(leads.createdAt),
     columns: { id: true },
   });
@@ -202,6 +214,12 @@ export interface ImportInput {
   brandClientId?: string;
   ownerEmployeeId?: string | null;
   actorEmployeeId: string;
+  /**
+   * Whether the caller may give a lead to somebody else (`leads.assign`). When not, a row's "Dono" may
+   * name only the caller, and a row whose phone or e-mail already belongs to another owner's lead (or
+   * to nobody's) is skipped: nothing of that lead is read, changed or shown.
+   */
+  canAssign: boolean;
 }
 
 export async function runImport(db: Database, input: ImportInput): Promise<CsvImportReport> {
@@ -262,6 +280,15 @@ export async function runImport(db: Database, input: ImportInput): Promise<CsvIm
     let owner: string | null = input.ownerEmployeeId ?? null;
     if (values.owner) {
       const found = sellerByEmail.get(values.owner.toLowerCase());
+      if (!input.canAssign && found !== input.ownerEmployeeId) {
+        // The same answer for an unknown person and for another one: the file tells nothing about who is who.
+        report.skipped++;
+        report.errors.push({
+          line: row.line,
+          message: 'Só quem pode atribuir negociações escolhe outro dono.',
+        });
+        continue;
+      }
       if (!found) {
         report.skipped++;
         report.errors.push({
@@ -272,34 +299,46 @@ export async function runImport(db: Database, input: ImportInput): Promise<CsvIm
       }
       owner = found;
     }
-    const result = await upsertLead(db, {
-      source: 'csv_import',
-      name: values.name || null,
-      email: values.email || null,
-      phone: values.phone || null,
-      clientId: chosenBrand?.clientId ?? WINGS_CLIENT_ID,
-      clientMapped: Boolean(chosenBrand),
-      brand: chosenBrand?.name ?? null,
-      pipeline,
-      city: values.city || null,
-      company: values.company
-        ? { name: values.company, cnpj: values.cnpj || null, city: values.city || null }
-        : null,
-      valueCents: values.value ? parseMoneyCents(values.value) : null,
-      ownerEmployeeId: owner,
-      legalBasis: 'legitimate_interest',
-      consentedAt: new Date(),
-      consentSource: 'csv_import',
-      consentText: 'Planilha importada no Wings System',
-      importBatchId: batchId,
-      skipResearch: true,
-      distribute: false,
-      event: {
-        kind: 'lead.imported.csv',
-        actorEmployeeId: input.actorEmployeeId,
-        detail: { batchId, line: row.line },
-      },
-    });
+    let result: Awaited<ReturnType<typeof upsertLead>>;
+    try {
+      result = await upsertLead(db, {
+        source: 'csv_import',
+        name: values.name || null,
+        email: values.email || null,
+        phone: values.phone || null,
+        clientId: chosenBrand?.clientId ?? WINGS_CLIENT_ID,
+        clientMapped: Boolean(chosenBrand),
+        brand: chosenBrand?.name ?? null,
+        pipeline,
+        city: values.city || null,
+        company: values.company
+          ? { name: values.company, cnpj: values.cnpj || null, city: values.city || null }
+          : null,
+        valueCents: values.value ? parseMoneyCents(values.value) : null,
+        ownerEmployeeId: owner,
+        legalBasis: 'legitimate_interest',
+        consentedAt: new Date(),
+        consentSource: 'csv_import',
+        consentText: 'Planilha importada no Wings System',
+        importBatchId: batchId,
+        skipResearch: true,
+        distribute: false,
+        event: {
+          kind: 'lead.imported.csv',
+          actorEmployeeId: input.actorEmployeeId,
+          detail: { batchId, line: row.line },
+        },
+        mergeOnlyIfOwnedBy: input.canAssign ? undefined : input.actorEmployeeId,
+      });
+    } catch (error) {
+      if (!(error instanceof ForeignLeadError)) throw error;
+      report.skipped++;
+      report.errors.push({
+        line: row.line,
+        message: 'Já existe uma negociação com este telefone ou e-mail.',
+      });
+      continue;
+    }
     if (result.created) report.created++;
     else report.matched++;
     // A stage named in the file: found (or made) in the funnel's list, set only on a lead that has none.

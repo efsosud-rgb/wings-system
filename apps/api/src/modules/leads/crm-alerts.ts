@@ -1,5 +1,6 @@
 import { and, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
+import { LEAD_ADMIN_ROLE_KEYS } from './access.js';
 import {
   crmNotifications,
   crmStageLimits,
@@ -7,7 +8,6 @@ import {
   leadTasks,
   leads,
   roles,
-  sectors,
 } from '../../db/schema/index.js';
 
 /**
@@ -61,7 +61,8 @@ async function findings(db: Database, now: Date, config: AlertConfig): Promise<F
     found.push({
       kind: first ? 'first_contact_overdue' : 'task_overdue',
       leadId: task.leadId,
-      ownerEmployeeId: task.assignee ?? task.owner,
+      // The lead's owner hears of it, never an assignee who is not the owner (the title may name people).
+      ownerEmployeeId: task.owner,
       occurrence: task.dueAt.toISOString(),
       entityId: task.id,
       message: first
@@ -117,14 +118,17 @@ async function recipientsOf(db: Database, ownerEmployeeId: string | null): Promi
     });
     if (owner?.status === 'active') people.add(owner.id);
     if (owner?.sectorId) {
+      // Only roles that see every lead: a seller flagged as sector manager still sees just their own.
       const managers = await db
         .select({ id: employees.id })
         .from(employees)
+        .innerJoin(roles, eq(roles.id, employees.roleId))
         .where(
           and(
             eq(employees.sectorId, owner.sectorId),
             eq(employees.isSectorManager, true),
             eq(employees.status, 'active'),
+            inArray(roles.key, LEAD_ADMIN_ROLE_KEYS),
           ),
         );
       for (const m of managers) people.add(m.id);
@@ -177,8 +181,17 @@ export async function runCrmAlerts(
   return { written };
 }
 
-/** The panel of one person: unread first, newest first. */
-export async function notificationsOf(db: Database, employeeId: string, limit = 100) {
+/**
+ * The panel of one person: unread first, newest first. A scoped caller (a seller, `ownedOnly`) only
+ * gets the notices that name a lead they own today, so a lead reassigned away, or one nobody owns,
+ * disappears from their panel even if a notice was written while it was theirs.
+ */
+export async function notificationsOf(
+  db: Database,
+  employeeId: string,
+  limit = 100,
+  ownedOnly = false,
+) {
   return db
     .select({
       id: crmNotifications.id,
@@ -189,7 +202,15 @@ export async function notificationsOf(db: Database, employeeId: string, limit = 
       readAt: crmNotifications.readAt,
     })
     .from(crmNotifications)
-    .where(eq(crmNotifications.recipientEmployeeId, employeeId))
+    .leftJoin(leads, eq(leads.id, crmNotifications.leadId))
+    .where(
+      and(
+        eq(crmNotifications.recipientEmployeeId, employeeId),
+        ownedOnly
+          ? or(isNull(crmNotifications.leadId), eq(leads.ownerEmployeeId, employeeId))
+          : undefined,
+      ),
+    )
     .orderBy(sql`${crmNotifications.readAt} is not null`, sql`${crmNotifications.createdAt} desc`)
     .limit(limit);
 }
@@ -226,16 +247,11 @@ async function managersAndBoard(db: Database): Promise<string[]> {
     .select({ id: employees.id })
     .from(employees)
     .innerJoin(roles, eq(roles.id, employees.roleId))
-    .leftJoin(sectors, eq(sectors.id, employees.sectorId))
     .where(
       and(
         eq(employees.status, 'active'),
-        or(
-          eq(roles.key, 'admin_master'),
-          eq(roles.key, 'diretoria'),
-          eq(roles.key, 'gerente_comercial'),
-          and(eq(employees.isSectorManager, true), eq(sectors.slug, 'comercial')),
-        ),
+        // Only the roles that see every lead: a lead nobody owns is theirs alone to know.
+        inArray(roles.key, LEAD_ADMIN_ROLE_KEYS),
       ),
     );
   return [...new Set(rows.map((r) => r.id))];

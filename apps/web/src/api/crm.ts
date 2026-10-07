@@ -33,6 +33,7 @@ import type {
   MeetingUpdateInput,
   SummarySendChannel,
   SalesDashboard,
+  DriveLink,
   DriveUploadTicket,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -421,6 +422,13 @@ export const useLeadFiles = (id: string) =>
     queryKey: ['leads', id, 'files'],
     queryFn: () => api.get<{ files: LeadFile[] }>(`/leads/${id}/files`).then((r) => r.files),
   });
+
+/** A short address to open one file of a deal; the lead is checked first, so only its owner (or an Admin) gets it. */
+export const leadFileLink = (
+  leadId: string,
+  fileId: string,
+  disposition: 'inline' | 'attachment',
+) => api.get<DriveLink>(`/leads/${leadId}/files/${fileId}/link?disposition=${disposition}`);
 
 /**
  * One file to the deal, start to finish: the server picks the deal's folder in
