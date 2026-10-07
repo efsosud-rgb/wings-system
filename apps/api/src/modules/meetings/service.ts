@@ -31,6 +31,7 @@ export function toMeetingSummary(row: MeetingRow): MeetingSummary {
     calendar: row.calendar as MeetingSummary['calendar'],
     meetUrl: row.meetUrl,
     ownerEmployeeId: row.ownerEmployeeId,
+    googleEventId: row.googleEventId,
     recordingState: row.recordingState as MeetingSummary['recordingState'],
     transcriptState: row.transcriptState as MeetingSummary['transcriptState'],
     analysisState: row.analysisState as MeetingSummary['analysisState'],
@@ -96,7 +97,11 @@ export function toMeeting(row: MeetingRow, sendTo: string | null = null): Meetin
   return {
     ...toMeetingSummary(row),
     attendees: Array.isArray(row.attendees) ? (row.attendees as MeetingAttendee[]) : [],
-    googleEventId: row.googleEventId,
+    googleHtmlLink: row.googleHtmlLink,
+    googleSync:
+      row.googleSync === 'ok' || row.googleSync === 'falhou'
+        ? { state: row.googleSync, error: row.googleSyncError, at: iso(row.googleSyncedAt) }
+        : null,
     recording: {
       state: row.recordingState as Meeting['recording']['state'],
       fileId: row.recordingFileId,

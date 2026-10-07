@@ -218,6 +218,18 @@ const schema = z.object({
    */
   KAIROGEN_CLIENT_ID: optionalString,
   /**
+   * Google Workspace per person (Agenda, Meet, Gmail): the OAuth client of the
+   * Wings Cloud project, audience "Internal", redirect
+   * `${APP_BASE_URL}/api/me/google/callback`. Each person consents once; their
+   * tokens live in `google_workspace_connections` under
+   * INTEGRATIONS_ENCRYPTION_KEY. Without the client the Google routes answer 503.
+   * See docs/integracoes/google-workspace.md.
+   */
+  GOOGLE_WORKSPACE_CLIENT_ID: optionalString,
+  GOOGLE_WORKSPACE_CLIENT_SECRET: optionalString,
+  /** The shared "Wings Company" calendar (its id in Google Agenda's settings), for `calendar: 'wings'`. */
+  GOOGLE_WORKSPACE_WINGS_CALENDAR_ID: optionalString,
+  /**
    * Ceilings on Kairogen credits, enforced by this system on top of the
    * account's own balance: per person per day, and for everyone per month
    * (America/Sao_Paulo). Reaching one refuses the generation before it is sent.

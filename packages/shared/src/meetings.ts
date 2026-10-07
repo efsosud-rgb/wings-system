@@ -123,6 +123,8 @@ export const meetingUpdateSchema = z
     attendees: z.array(attendeeSchema).max(MEETING_MAX_ATTENDEES).optional(),
     meetUrl: meetUrlSchema.nullish(),
     status: z.literal('cancelada').optional(),
+    /** Change only the CRM's copy when Google refused the mirror (the screen offers it after a 502). */
+    skipGoogle: z.boolean().default(false),
   })
   .refine(meetingWindow, {
     message: 'O fim vem depois do início, em até 8 horas',
@@ -180,6 +182,8 @@ export interface MeetingSummary {
   calendar: MeetingCalendar;
   meetUrl: string | null;
   ownerEmployeeId: string;
+  /** Set when the event lives on Google Agenda (created by this system). */
+  googleEventId: string | null;
   recordingState: RecordingState;
   transcriptState: TranscriptState;
   analysisState: AnalysisState;
@@ -252,7 +256,10 @@ export interface MeetingSummarySend {
 
 export interface Meeting extends MeetingSummary {
   attendees: MeetingAttendee[];
-  googleEventId: string | null;
+  /** The event's page on Google Agenda; null for a pasted link. */
+  googleHtmlLink: string | null;
+  /** The last mirror of a change on Google: ok, falhou (with a code) or null when never mirrored. */
+  googleSync: { state: 'ok' | 'falhou'; error: string | null; at: string | null } | null;
   recording: {
     state: RecordingState;
     fileId: string | null;
@@ -264,4 +271,26 @@ export interface Meeting extends MeetingSummary {
   summarySend: MeetingSummarySend | null;
   createdAt: string;
   updatedAt: string;
+}
+
+// --- Google Workspace, per person ------------------------------------------------------------
+
+export type GoogleWorkspaceState = 'disconnected' | 'pending' | 'connected' | 'needs_reconnect';
+
+/** The account page's card: the connection of the person asking, never anyone else's. */
+export interface GoogleWorkspaceStatus {
+  /** False while the system has no OAuth client: the card explains it is Eric's step. */
+  configured: boolean;
+  state: GoogleWorkspaceState;
+  /** The Google account that consented. */
+  email: string | null;
+  scopes: string[];
+  calendars: {
+    mine: { id: 'primary'; name: string } | null;
+    /** Null while GOOGLE_WORKSPACE_WINGS_CALENDAR_ID is unset; access 'none' when not shared with this person. */
+    wings: { id: string; name: string; access: 'writer' | 'reader' | 'none' } | null;
+  };
+  wingsCalendarConfigured: boolean;
+  /** A code (invalid_grant, calendar_forbidden…), never Google's text. */
+  lastError: string | null;
 }

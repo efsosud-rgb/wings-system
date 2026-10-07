@@ -145,7 +145,7 @@ async function schedule(cookies: Record<string, string>, leadId: string) {
 }
 
 describe('Reuniões', () => {
-  it('schedules with a pasted Meet link, and answers 503 for a Google-made Meet', async () => {
+  it('schedules with a pasted Meet link, and answers 503 for a Google-made Meet while unconfigured', async () => {
     const seller = await sessionFor('vendedor_formatacao');
     const leadId = await deal(seller.id);
     const google = await app.inject({
@@ -155,7 +155,7 @@ describe('Reuniões', () => {
       payload: { ...slot, createMeet: true },
     });
     expect(google.statusCode).toBe(503);
-    expect(google.json()).toMatchObject({ error: 'google_not_connected' });
+    expect(google.json()).toMatchObject({ error: 'google_not_configured' });
 
     const meeting = await schedule(seller.cookies, leadId);
     expect(meeting).toMatchObject({
