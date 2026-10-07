@@ -42,6 +42,7 @@ import {
   type LoadedLead,
 } from '../../api/leads.js';
 import { Icon, type IconName } from '../../components/Icon.js';
+import { CallPanel } from './CallPanel.js';
 import { CompanyResearchPanel } from './CompanyResearchPanel.js';
 import { DealSummary } from './DealSummary.js';
 import { DealTabs, type View } from './DealTabs.js';
@@ -76,6 +77,7 @@ export function DealPage() {
   const canAssign = hasPermission(session.data, 'leads.assign');
   const [tab, setTab] = useState<Tab>('note');
   const [view, setView] = useState<View>('history');
+  const [calling, setCalling] = useState(false);
   const register = useRef<HTMLElement>(null);
   const sections = useRef<HTMLElement>(null);
   const filePick = useRef<HTMLInputElement>(null);
@@ -104,6 +106,11 @@ export function DealPage() {
     ref.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   // E-mail lives in the sections below; everything else is registered in "Registrar".
   const act = (next: Tab) => {
+    // "Ligação" opens the call panel, never the browser's tel: prompt.
+    if (next === 'call') {
+      setCalling(true);
+      return;
+    }
     if (next === 'email' || next === 'meet') {
       setView(next === 'email' ? 'email' : 'meetings');
       scrollTo(sections);
@@ -126,6 +133,15 @@ export function DealPage() {
       <div className="crm-page-scroll" style={{ padding: 0 }}>
         <Head data={data} canWrite={canWrite} canAssign={canAssign} />
         {canWrite && <ActionBar lead={data.lead} active={tab} onAct={act} />}
+        {calling && (
+          <CallPanel
+            leadId={data.lead.id}
+            name={data.lead.name}
+            phone={data.lead.phone}
+            canWrite={canWrite}
+            onClose={() => setCalling(false)}
+          />
+        )}
         <div className="crm-deal-body">
           <div className="crm-stack">
             <AboutPanel lead={data.lead} canWrite={canWrite} canAssign={canAssign} />
@@ -1006,22 +1022,39 @@ function CopyButton({ value, label }: { value: string; label: string }) {
   );
 }
 
-/** A phone and an e-mail with their copy buttons, and the WhatsApp that waits. */
+/**
+ * A phone and an e-mail with their copy buttons, the call panel and the
+ * WhatsApp conversation. The number is text, never a tel: link.
+ */
 function Reach({
   phone,
   email,
   leadId,
+  name,
+  canWrite,
 }: {
   phone: string | null;
   email: string | null;
   leadId: string;
+  name: string | null;
+  canWrite: boolean;
 }) {
+  const [calling, setCalling] = useState(false);
   return (
     <div className="crm-reach">
       {phone && (
         <span>
-          <a href={`tel:+${phone}`}>{formatPhone(phone)}</a>
+          <span>{formatPhone(phone)}</span>
           <CopyButton value={`+${phone}`} label="Copiar telefone" />
+          <button
+            type="button"
+            className="crm-btn is-small is-quiet"
+            title="Ligar"
+            aria-label="Ligar"
+            onClick={() => setCalling(true)}
+          >
+            <Icon name="phone" size={13} />
+          </button>
           <Link
             className="crm-btn is-small is-quiet"
             to={`/crm-vendas/negociacoes/${leadId}/whatsapp`}
@@ -1037,6 +1070,15 @@ function Reach({
           <a href={`mailto:${email}`}>{email}</a>
           <CopyButton value={email} label="Copiar e-mail" />
         </span>
+      )}
+      {calling && (
+        <CallPanel
+          leadId={leadId}
+          name={name}
+          phone={phone}
+          canWrite={canWrite}
+          onClose={() => setCalling(false)}
+        />
       )}
     </div>
   );
@@ -1080,7 +1122,13 @@ function ContactPanel({
       {lead.contacts.length === 0 && (
         <div className="crm-stack" style={{ gap: 2 }}>
           <div className="crm-sub">A pessoa da negociação</div>
-          <Reach phone={lead.phone} email={lead.email} leadId={lead.id} />
+          <Reach
+            phone={lead.phone}
+            email={lead.email}
+            leadId={lead.id}
+            name={lead.name}
+            canWrite={canWrite}
+          />
         </div>
       )}
       {lead.contacts.map((contact) => (
@@ -1101,7 +1149,13 @@ function ContactPanel({
               </button>
             )}
           </div>
-          <Reach phone={contact.phone} email={contact.email} leadId={lead.id} />
+          <Reach
+            phone={contact.phone}
+            email={contact.email}
+            leadId={lead.id}
+            name={contact.name}
+            canWrite={canWrite}
+          />
         </div>
       ))}
       {adding && (
@@ -1522,14 +1576,12 @@ function Register({
   );
 }
 
-/** The phone to dial, with a button that copies it; "Copiado" for a moment after. */
+/** The phone to dial, as text, with a button that copies it; "Copiado" for a moment after. */
 function CopyPhone({ phone }: { phone: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <span className="crm-copy-phone">
-      <a className="crm-btn" href={`tel:+${phone}`}>
-        {formatPhone(phone)}
-      </a>
+      <span className="crm-call-number-inline">{formatPhone(phone)}</span>
       <button
         type="button"
         className="crm-btn is-quiet"
