@@ -2026,6 +2026,183 @@
   }
 }
 
+/* ---------- WhatsApp oficial: conversa e lista ---------- */
+.crm-wa-messages.has-messages {
+  display: block;
+  place-items: initial;
+  overflow-y: auto;
+  max-height: 62vh;
+}
+.crm-wa-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.crm-wa-bubble {
+  max-width: min(520px, 85%);
+  display: grid;
+  gap: 2px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.crm-wa-bubble.is-out {
+  align-self: flex-end;
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+.crm-wa-bubble.is-in {
+  align-self: flex-start;
+}
+.crm-wa-bubble.is-failed {
+  border-color: color-mix(in srgb, var(--danger) 55%, var(--line));
+}
+.crm-wa-text {
+  white-space: pre-wrap;
+}
+.crm-wa-text.is-muted,
+.crm-wa-meta {
+  color: var(--text-2);
+}
+.crm-wa-meta {
+  font-size: var(--text-xs, 12px);
+  justify-self: end;
+}
+.crm-wa-tag {
+  font-size: var(--text-xs, 12px);
+  color: var(--text-2);
+}
+.crm-wa-media {
+  color: var(--accent);
+  font-weight: 600;
+}
+.crm-wa-error {
+  font-size: var(--text-xs, 12px);
+  color: var(--danger);
+}
+.crm-wa-window {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-sm, 13px);
+  border-bottom: 1px solid var(--line);
+  color: var(--text-2);
+}
+.crm-wa-window.is-open {
+  color: var(--success);
+}
+.crm-wa-off {
+  margin: 0;
+  padding: var(--space-3);
+  border-top: 1px solid var(--line);
+  color: var(--text-2);
+}
+.crm-wa-compose {
+  flex-wrap: wrap;
+}
+.crm-wa-compose textarea.crm-input {
+  resize: vertical;
+  min-height: 44px;
+}
+.crm-wa-compose.is-template {
+  flex-direction: column;
+}
+.crm-wa-compose-actions {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+.crm-wa-compose .crm-error {
+  flex-basis: 100%;
+  margin: 0;
+}
+.crm-wa-preview {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  white-space: pre-wrap;
+}
+.crm-wa-inbox-body {
+  padding: 0 var(--space-5) var(--space-5);
+}
+.crm-wa-badge {
+  font-size: var(--text-xs);
+  padding: 1px var(--space-2);
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--text-2);
+}
+.crm-wa-badge.is-warn {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+@media (max-width: 640px) {
+  .crm-wa-inbox-body {
+    padding: 0 var(--space-3) var(--space-3);
+  }
+}
+.crm-wa-inbox {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+.crm-wa-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+}
+.crm-wa-row:hover {
+  border-color: var(--accent);
+}
+.crm-wa-row.is-unanswered b {
+  color: var(--accent);
+}
+.crm-wa-row-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.crm-wa-row-main .crm-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.crm-wa-row-side {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+@media (max-width: 640px) {
+  .crm-wa-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .crm-wa-row .crm-wa-avatar {
+    display: none;
+  }
+  .crm-wa-row-side {
+    justify-items: start;
+    grid-auto-flow: column;
+  }
+  .crm-wa-bubble {
+    max-width: 92%;
+  }
+}
+
 /* ---------- deal page: Reunião ---------- */
 .crm-meetings {
   display: grid;

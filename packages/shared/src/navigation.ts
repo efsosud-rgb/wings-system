@@ -45,6 +45,7 @@ export const NAV_ICONS = [
   'settings',
   'globe',
   'bell',
+  'message',
 ] as const;
 export type NavIcon = (typeof NAV_ICONS)[number];
 
@@ -130,6 +131,15 @@ export const NAVIGATION: readonly NavModule[] = [
         icon: 'columns',
         description: 'O quadro de cada funil: etapas, valores e o que fazer a seguir',
         permission: 'leads.read',
+        status: 'ready',
+        kind: 'crud',
+      },
+      {
+        path: '/crm-vendas/whatsapp',
+        label: 'WhatsApp',
+        icon: 'message',
+        description: 'As conversas pelo WhatsApp oficial, as sem resposta primeiro',
+        permission: 'leads.whatsapp',
         status: 'ready',
         kind: 'crud',
       },

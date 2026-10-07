@@ -49,6 +49,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
+  /**
+   * A GET the screen repeats on its own (a chat refreshing itself): the API
+   * answers it without counting it as the person's activity, so an open
+   * screen never keeps an idle session alive.
+   */
+  poll: <T>(path: string) => request<T>(path, { headers: { 'x-wings-passive': '1' } }),
   post: <T>(path: string, payload?: unknown) =>
     request<T>(path, { method: 'POST', body: payload ? JSON.stringify(payload) : undefined }),
   /** Sends a file as the raw request body, typed as the file says it is. */

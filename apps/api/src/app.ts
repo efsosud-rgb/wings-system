@@ -40,6 +40,8 @@ import { nucleoRoutes } from './modules/leads/nucleo-routes.js';
 import { leadRoutes } from './modules/leads/routes.js';
 import { siteFormRoutes } from './modules/leads/site-forms.js';
 import { leadWebhookRoutes } from './modules/leads/webhooks.js';
+import { whatsappRoutes } from './modules/whatsapp/routes.js';
+import { whatsappWebhookRoutes } from './modules/whatsapp/webhook-routes.js';
 import { mediaRoutes } from './modules/media/routes.js';
 import { mediaStudioRoutes } from './modules/media/studio-routes.js';
 import { projectRoutes } from './modules/projects/routes.js';
@@ -69,6 +71,10 @@ declare module 'fastify' {
       platformFetch?: typeof fetch;
       /** Set by the server once the Meta Lead Ads queue runs: the webhook pokes it after storing an event. */
       metaLeadKick?: () => void;
+      /** Set by the server once the WhatsApp queue runs: the webhook pokes it after storing a body. */
+      whatsappKick?: () => void;
+      /** Set only by tests, so no test ever reaches the WhatsApp Cloud API. */
+      whatsappFetch?: typeof fetch;
       /** Set only by tests, so no test ever reaches OpenRouter. */
       agentLlm?: AgentLlm;
       /** Set only by tests, so no test ever reaches Kairogen. */
@@ -116,6 +122,8 @@ export async function buildApp(deps: {
   leadChecks?: Partial<LeadCheckDeps>;
   /** Overridable so tests answer Turnstile themselves. */
   captchaFetch?: typeof fetch;
+  /** Overridable so tests talk to a simulated WhatsApp Cloud API. */
+  whatsappFetch?: typeof fetch;
   storage?: ObjectStorage;
   /** Overridable so tests pin the dashboard's "today". */
   now?: () => Date;
@@ -186,6 +194,7 @@ export async function buildApp(deps: {
     storageFetch: deps.storageFetch,
     registryFetch: deps.registryFetch,
     captchaFetch: deps.captchaFetch,
+    whatsappFetch: deps.whatsappFetch,
     storage: deps.storage,
     now: deps.now,
     mailer: deps.mailer ?? createMailer(deps.env, { info: (msg) => app.log.info(msg) }),
@@ -254,6 +263,8 @@ export async function buildApp(deps: {
   await app.register(rdUserRoutes);
   await app.register(landingPageRoutes);
   await app.register(leadWebhookRoutes);
+  await app.register(whatsappWebhookRoutes);
+  await app.register(whatsappRoutes);
   await app.register(siteFormRoutes);
   await app.register(driveRoutes);
   await app.register(driveBlobRoutes);

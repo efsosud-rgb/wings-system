@@ -526,6 +526,13 @@
       "when": 1791386061381,
       "tag": "0076_lead_entered_at",
       "breakpoints": true
+    },
+    {
+      "idx": 77,
+      "version": "7",
+      "when": 1791396762709,
+      "tag": "0077_whatsapp_cloud_api",
+      "breakpoints": true
     }
   ]
 }

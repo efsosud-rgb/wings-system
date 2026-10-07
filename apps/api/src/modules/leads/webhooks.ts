@@ -2,13 +2,10 @@ import {
   normalizeBrazilianPhone,
   trackingCodeOf,
   type LeadLegalBasis,
-  type LeadLinkChannel,
 } from '@wings/shared';
 import { googleLeadOf, ingestGoogleLead } from './google-leads.js';
-import { eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { leadTrackingLinks } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { linkIntakeDealToLead } from '../expansion/service.js';
 import { tokensMatch } from '../../lib/tokens.js';
@@ -17,9 +14,9 @@ import { enqueueMetaLeadgenEvents } from './meta-intake.js';
 import { leadgenEventsOf, metaSignatureValid } from './meta-leads.js';
 import { ingestTikTokLeads, secretMatches, tiktokLeadsIn } from './tiktok-leads.js';
 import { rdAttributionOf } from './rd-attribution.js';
+import { leadFromTrackedMessage } from './tracked-link.js';
 import {
   resolveLandingPage,
-  trackingLinkByCode,
   upsertLead,
   type LeadAttribution,
 } from './service.js';
@@ -375,46 +372,18 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
     const phone = normalizeBrazilianPhone(inbound.phone);
     if (!phone) return reply.send({ ignored: 'no_phone' });
     if (!code) return reply.send({ ignored: 'no_code' });
-    const link = await trackingLinkByCode(db, code);
-    if (!link) return reply.send({ ignored: 'unknown_code' });
-
-    const at = inbound.at ?? new Date();
-    const result = await upsertLead(db, {
-      source: 'whatsapp_link',
-      name: inbound.senderName,
+    const result = await leadFromTrackedMessage(db, {
+      code,
       phone,
-      clientId: link.clientId,
-      clientMapped: true,
-      channel: link.channel as LeadLinkChannel,
-      trackingLinkId: link.id,
-      firstMessage: inbound.text,
-      whatsappProfileName: inbound.senderName,
-      whatsappPhotoUrl: inbound.senderPhoto,
-      // The person wrote first, asking about the franchise: LGPD art. 7º, V.
-      legalBasis: 'pre_contract',
-      consentedAt: at,
-      enteredAt: inbound.at,
-      enteredAtSource: 'whatsapp_message',
-      consentSource: `whatsapp:${link.channel}:${link.code}`,
-      consentText:
-        'A pessoa iniciou a conversa no WhatsApp da Wings pelo link rastreável, pedindo informações.',
-      event: {
-        kind: 'lead.received.whatsapp',
-        detail: { trackingLinkId: link.id, channel: link.channel, code: link.code },
-      },
-    });
-    await db
-      .update(leadTrackingLinks)
-      .set({ hits: sql`${leadTrackingLinks.hits} + 1`, lastHitAt: at })
-      .where(eq(leadTrackingLinks.id, link.id));
-    await writeAudit(db, {
-      action: result.created ? 'lead.received' : 'lead.merged',
-      entity: 'lead',
-      entityId: result.lead.id,
+      text: inbound.text,
+      senderName: inbound.senderName,
+      senderPhoto: inbound.senderPhoto,
+      at: inbound.at,
       ip: request.ip,
-      metadata: { source: 'whatsapp_link', channel: link.channel, trackingLinkId: link.id },
+      via: 'zapi',
     });
-    return reply.send({ leadId: result.lead.id, created: result.created, channel: link.channel });
+    if (!result) return reply.send({ ignored: 'unknown_code' });
+    return reply.send({ leadId: result.lead.id, created: result.created, channel: result.channel });
   });
 
   // --- Meta Lead Ads --------------------------------------------------------------------
