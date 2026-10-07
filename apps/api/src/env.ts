@@ -417,6 +417,29 @@ const schema = z.object({
     (value) => value === undefined || value.length >= 16,
     'must be at least 16 characters',
   ),
+  /**
+   * The official WhatsApp (Cloud API) of the CRM, app "Wings CRM Vendas"
+   * (docs/whatsapp/cloud-api.md). The three ids are not secret. The chat is on
+   * once the token and the number id are set; the webhook once the app
+   * secret and the verify token are.
+   */
+  WHATSAPP_APP_ID: optionalString,
+  WHATSAPP_WABA_ID: optionalString.refine(
+    (value) => value === undefined || /^\d+$/.test(value),
+    'must be digits',
+  ),
+  WHATSAPP_PHONE_NUMBER_ID: optionalString.refine(
+    (value) => value === undefined || /^\d+$/.test(value),
+    'must be digits',
+  ),
+  WHATSAPP_WEBHOOK_VERIFY_TOKEN: optionalString.refine(
+    (value) => value === undefined || value.length >= 16,
+    'must be at least 16 characters',
+  ),
+  /** Signs Meta's webhook calls. "Wings CRM Vendas"'s own secret, not META_APP_SECRET (another app). Secret. */
+  WHATSAPP_APP_SECRET: optionalString,
+  /** The system user's permanent token (whatsapp_business_messaging + whatsapp_business_management). Secret. */
+  WHATSAPP_ACCESS_TOKEN: optionalString,
   /** Reads Lead Ads form answers (leads_retrieval). Falls back to META_WRITE_TOKEN, read-only use. */
   META_LEADS_ACCESS_TOKEN: optionalString,
   /** "false" turns off reading the forms every 5 minutes (the webhook, if set, still works). */

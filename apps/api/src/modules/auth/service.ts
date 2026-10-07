@@ -24,6 +24,12 @@ import { PERMISSION_KEYS } from '@wings/shared';
 export interface RequestContext {
   ip?: string | null;
   userAgent?: string | null;
+  /**
+   * A request the screen made on its own (a chat refreshing itself), not the
+   * person: it is answered, but does not count as activity, so an open screen
+   * never keeps an idle session alive or moves its clock-out time.
+   */
+  passive?: boolean;
 }
 
 export interface LoginSuccess {
@@ -337,7 +343,7 @@ export async function resolveSession(
   }
 
   // Throttled write: refreshing on every request would be a write per call.
-  if (now.getTime() - session.lastSeenAt.getTime() > 60_000) {
+  if (!ctx.passive && now.getTime() - session.lastSeenAt.getTime() > 60_000) {
     await db.update(sessions).set({ lastSeenAt: now }).where(eq(sessions.id, sessionId));
   }
 

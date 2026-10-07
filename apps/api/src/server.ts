@@ -9,6 +9,7 @@ import { startInsightsScheduler } from './modules/insights/scheduler.js';
 import { startCrmAutomationsScheduler } from './modules/leads/automations-scheduler.js';
 import { createCrmMailTransport } from './modules/leads/crm-mail.js';
 import { startMetaLeadgenIntake } from './modules/leads/meta-intake.js';
+import { startWhatsAppIntake } from './modules/whatsapp/intake.js';
 
 const pageIdsOf = (value: string | undefined) =>
   value
@@ -107,6 +108,18 @@ async function main() {
       },
     });
     app.wings.metaLeadKick = intake.kick;
+    app.addHook('onClose', async () => intake.stop());
+  }
+
+  // WhatsApp (Cloud API) queue: runs whenever the webhook can receive. The
+  // webhook stores each signed body; this reads them into the deals.
+  if (env.WHATSAPP_APP_SECRET && env.WHATSAPP_WEBHOOK_VERIFY_TOKEN) {
+    const intake = startWhatsAppIntake({
+      db,
+      phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID ?? null,
+      log: (facts) => app.log.info(facts),
+    });
+    app.wings.whatsappKick = intake.kick;
     app.addHook('onClose', async () => intake.stop());
   }
 

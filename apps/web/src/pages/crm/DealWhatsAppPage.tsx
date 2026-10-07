@@ -4,8 +4,10 @@ import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../../api/auth.js';
 import { useAddNote, useLead, type LoadedLead } from '../../api/leads.js';
 import { Icon } from '../../components/Icon.js';
+import { useWhatsAppThread } from '../../api/whatsapp.js';
 import { CallPanel } from './CallPanel.js';
 import { FilesTab } from './DealTabs.js';
+import { WhatsAppChat } from './WhatsAppChat.js';
 import { EnteredAt } from './EnteredAt.js';
 import { formatDateTime, formatDay, formatPhone, money } from './format.js';
 
@@ -13,10 +15,11 @@ import { formatDateTime, formatDay, formatPhone, money } from './format.js';
  * The WhatsApp conversation of a deal, opened from its page (Eric, 06/10/2026):
  * the conversation in the centre, the message field below, and on the right
  * Visão geral, Anotações and Arquivos of the lead; voice and video calls by
- * WhatsApp at the top. Until the official WhatsApp API is connected the
- * screen opens empty — no sample message — with sending and video disabled,
- * "em breve"; the voice button opens the call panel (copy the number,
- * register the call). Notes and files are the deal's own and work now.
+ * WhatsApp at the top. The conversation is the official WhatsApp (Cloud API,
+ * docs/whatsapp/cloud-api.md), refreshed every few seconds while open; until
+ * the API is connected on the server it says so and sending stays off. The
+ * voice button opens the call panel; video is "em breve". Reading and sending
+ * are `leads.whatsapp` (Admin and Diretoria any lead, a seller their own).
  */
 
 const SOON = 'Em breve: pela API oficial do WhatsApp, quando a conta estiver ligada';
@@ -26,6 +29,8 @@ export function DealWhatsAppPage() {
   const session = useSession();
   const loaded = useLead(id);
   const canWrite = hasPermission(session.data, 'leads.write');
+  const canWhatsApp = hasPermission(session.data, 'leads.whatsapp');
+  const thread = useWhatsAppThread({ leadId: id ?? '' }, Boolean(id) && canWhatsApp);
   const [calling, setCalling] = useState(false);
   if (loaded.isLoading)
     return (
@@ -93,29 +98,12 @@ export function DealWhatsAppPage() {
           name={lead.name}
           phone={lead.phone}
           canWrite={canWrite}
+          whatsappCalling={thread.data?.calling ?? false}
           onClose={() => setCalling(false)}
         />
       )}
       <div className="crm-wa-body">
-        <section className="crm-wa-chat" aria-label="Conversa">
-          <div className="crm-wa-messages">
-            <p className="crm-wa-empty">
-              Nenhuma mensagem ainda. A conversa aparece aqui quando a API oficial do WhatsApp
-              estiver ligada.
-            </p>
-          </div>
-          <form className="crm-wa-compose" onSubmit={(event) => event.preventDefault()}>
-            <input
-              className="crm-input"
-              aria-label="Mensagem"
-              placeholder="Escreva uma mensagem (em breve)"
-              disabled
-            />
-            <button type="submit" className="crm-btn is-primary" disabled title={SOON}>
-              Enviar
-            </button>
-          </form>
-        </section>
+        <DealChat leadId={lead.id} canSend={canWhatsApp} />
         <aside className="crm-wa-side">
           <section className="crm-panel" aria-label="Visão geral">
             <h2>Visão geral</h2>
@@ -218,4 +206,27 @@ function NotesPanel({ data, canWrite }: { data: LoadedLead; canWrite: boolean })
       </ol>
     </section>
   );
+}
+
+function DealChat({ leadId, canSend }: { leadId: string; canSend: boolean }) {
+  const thread = useWhatsAppThread({ leadId }, canSend);
+  if (!canSend)
+    return (
+      <section className="crm-wa-chat" aria-label="Conversa">
+        <p className="crm-wa-off">Seu acesso não inclui o WhatsApp desta negociação.</p>
+      </section>
+    );
+  if (thread.isLoading)
+    return (
+      <section className="crm-wa-chat" aria-label="Conversa">
+        <p className="crm-muted crm-wa-off">Carregando a conversa…</p>
+      </section>
+    );
+  if (thread.isError || !thread.data)
+    return (
+      <section className="crm-wa-chat" aria-label="Conversa">
+        <p className="crm-error crm-wa-off">Não foi possível abrir a conversa.</p>
+      </section>
+    );
+  return <WhatsAppChat thread={{ leadId }} data={thread.data} canSend={canSend} />;
 }

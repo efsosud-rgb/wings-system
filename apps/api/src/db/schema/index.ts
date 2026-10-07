@@ -23,3 +23,4 @@ export * from './roadmap.js';
 export * from './sessions.js';
 export * from './timeclock.js';
 export * from './meetings.js';
+export * from './whatsapp.js';

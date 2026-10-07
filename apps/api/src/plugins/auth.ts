@@ -8,6 +8,9 @@ import type {
 import fp from 'fastify-plugin';
 import { resolveSession, type ResolvedSession } from '../modules/auth/service.js';
 
+/** Sent by a screen's own refresh: answered, not counted as the person's activity. */
+export const PASSIVE_HEADER = 'x-wings-passive';
+
 declare module 'fastify' {
   interface FastifyRequest {
     /** Present only after requireAuth has run. */
@@ -41,6 +44,7 @@ const plugin: FastifyPluginAsync = async (app) => {
     const session = await resolveSession(app.wings.db, token, {
       ip: request.ip,
       userAgent: request.headers['user-agent'] ?? null,
+      passive: request.headers[PASSIVE_HEADER] === '1',
     });
 
     if (!session) {
