@@ -681,3 +681,114 @@ describe('undoRdImportBatch', () => {
     expect(await db.query.leads.findFirst({ where: eq(leads.id, untouched.lead.id) })).toBeTruthy();
   });
 });
+
+describe('test deals and test contacts never become leads', () => {
+  const since = new Date('2026-09-01T00:00:00Z');
+  const deal = (id: string, over: Partial<RdDealRow> = {}): RdDealRow => ({
+    id,
+    win: null,
+    created_at: '2026-09-27T10:00:00-03:00',
+    deal_stage: { id: 'f1' },
+    ...over,
+  });
+  const person = (n: number, over: Partial<RdContactRow> = {}): RdContactRow[] => [
+    {
+      id: `tc${n}`,
+      name: `Pessoa Sintética ${n}`,
+      emails: [{ email: `sintetica${n}@example.com` }],
+      phones: [{ phone: `(21) 98888-000${n}` }],
+      ...over,
+    },
+  ];
+
+  it('skips a test deal, a test contact name and a test e-mail, and brings the others in', async () => {
+    const rd = fakeRd({
+      deals: [
+        deal('t-name', { name: 'Teste X' }),
+        deal('t-reason', { win: false, deal_lost_reason: { name: 'Era um teste' } }),
+        deal('t-contact-name'),
+        deal('t-email'),
+        deal('t-ok', { name: 'Testemunho de franqueado' }),
+      ],
+      contacts: {
+        't-name': person(1),
+        't-reason': person(2),
+        't-contact-name': person(3, { name: 'Contato Teste 2' }),
+        't-email': person(4, { emails: [{ email: 'teste@example.com' }] }),
+        't-ok': person(5),
+      },
+    });
+    const result = await importRdDeals(db, rd, {
+      apply: true,
+      since,
+      histories: false,
+      batchId: 'rd-crm-tests-skip',
+    });
+    expect(result).toMatchObject({ created: 1, merged: 0, testDeals: 4, failed: 0 });
+    for (const id of ['t-name', 't-reason', 't-contact-name', 't-email']) {
+      expect(await db.query.leads.findFirst({ where: eq(leads.rdDealId, id) }), id).toBeUndefined();
+    }
+    // The test contacts left nothing behind by phone or e-mail either.
+    for (const phone of ['5521988880001', '5521988880002', '5521988880003']) {
+      expect(
+        await db.query.leads.findFirst({ where: eq(leads.phone, phone) }),
+        phone,
+      ).toBeUndefined();
+    }
+    expect(await db.query.leads.findFirst({ where: eq(leads.email, 'teste@example.com') })).toBe(
+      undefined,
+    );
+    // "testemunho" only starts like the word: an ordinary deal.
+    expect(await db.query.leads.findFirst({ where: eq(leads.rdDealId, 't-ok') })).toMatchObject({
+      source: 'rd_crm',
+      pipeline: 'formatacao',
+    });
+  });
+
+  it('a simulation does not count a test deal as a lead to create', async () => {
+    const rd = fakeRd({
+      deals: [deal('t-sim-1', { name: 'Teste 1' }), deal('t-sim-2')],
+      contacts: { 't-sim-1': person(6), 't-sim-2': person(7) },
+    });
+    const result = await importRdDeals(db, rd, { apply: false, since, histories: false });
+    expect(result).toMatchObject({ created: 1, testDeals: 1 });
+  });
+
+  it('a lead that already follows the deal is still mirrored, even if the deal became a test', async () => {
+    const original = deal('t-follow', { name: 'Negócio comum' });
+    const run = fakeRd({ deals: [original], contacts: { 't-follow': person(8) } });
+    await importRdDeals(db, run, {
+      apply: true,
+      since,
+      histories: false,
+      batchId: 'rd-crm-tests-follow',
+    });
+    expect(await db.query.leads.findFirst({ where: eq(leads.rdDealId, 't-follow') })).toMatchObject(
+      {
+        stage: 'Sem contato',
+      },
+    );
+
+    const renamed = deal('t-follow', { name: 'Teste Y', deal_stage: { id: 'f2' } });
+    const moved = await followRdStages(db, { deals: [renamed], pipelines: PIPELINES });
+    expect(moved).toEqual({ updated: 1, stageChanged: 1 });
+    expect(await db.query.leads.findFirst({ where: eq(leads.rdDealId, 't-follow') })).toMatchObject(
+      {
+        stage: 'Identificação de interesse',
+      },
+    );
+
+    // Importing the renamed deal again neither creates nor changes anything.
+    const again = await importRdDeals(
+      db,
+      fakeRd({ deals: [renamed], contacts: { 't-follow': person(8) } }),
+      {
+        apply: true,
+        since,
+        histories: false,
+        batchId: 'rd-crm-tests-follow-2',
+      },
+    );
+    expect(again).toMatchObject({ created: 0, merged: 0, testDeals: 1 });
+  });
+});

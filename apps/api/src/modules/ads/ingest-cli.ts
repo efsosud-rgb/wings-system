@@ -428,6 +428,8 @@ async function main() {
               histories: true,
               onlyMissing: true,
               ownerRdUserIds: rdOwnerAllowlist(env.CRM_RD_OWNER_USER_IDS),
+              // Only this hourly cycle: recent new deals with no owner join the rotation.
+              distributeNew: true,
               batchId: `rd-crm-sync-${now.toISOString().replace(/[-:]/g, '').slice(0, 13)}Z`,
             });
             const times = await refreshStageTimes(db, reader, {
@@ -435,7 +437,7 @@ async function main() {
               limit: 40,
             });
             console.warn(
-              `funil: ${follow.updated} lead(s) seguiram o RD (${follow.stageChanged} mudaram de etapa); ${imported.created} novo(s), ${imported.merged} ligado(s); histórico ${times.read} lido(s), ${times.failed} falha(s)`,
+              `funil: ${follow.updated} lead(s) seguiram o RD (${follow.stageChanged} mudaram de etapa); ${imported.created} novo(s), ${imported.merged} ligado(s), ${imported.testDeals} de teste pulado(s); rodízio ${imported.rotation.assigned} com dono, ${imported.rotation.empty} sem dono; histórico ${times.read} lido(s), ${times.failed} falha(s)`,
             );
           } catch (error) {
             console.error(`funil: falhou (${error instanceof Error ? error.name : 'unknown'})`);

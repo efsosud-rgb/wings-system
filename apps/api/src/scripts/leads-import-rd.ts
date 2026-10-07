@@ -33,7 +33,7 @@ export function formatImport(result: RdImportResult, ownerAllowlist = false): st
         .join(', ') || 'nenhum'
     }`,
     `leads ${result.applied ? 'criados' : 'a criar'}: ${result.created}; ligados a um lead que já existia: ${result.merged}`,
-    `outro negócio da mesma pessoa: ${result.otherDealOfSamePerson}; sem e-mail nem telefone: ${result.noContactData}; de teste: ${result.testDeals}`,
+    `outro negócio da mesma pessoa: ${result.otherDealOfSamePerson}; sem e-mail nem telefone: ${result.noContactData}; de teste (não entram): ${result.testDeals}`,
     `dono: ${result.owners.mapped} mantêm o dono do RD, ${result.owners.unmapped} entram sem dono${ownerAllowlist ? ' (só os donos de CRM_RD_OWNER_USER_IDS ficam)' : ''}`,
     `usuários do RD: ${result.rdUsers.listed} (ligados agora por e-mail ${result.rdUsers.linkedByEmail}, por nome ${result.rdUsers.linkedByName})`,
     `histórico de etapas: ${result.histories.read} lido(s), ${result.histories.failed} falha(s), ${result.histories.withFirstContact} com 1º contato`,

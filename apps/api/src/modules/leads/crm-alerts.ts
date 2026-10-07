@@ -254,6 +254,19 @@ export async function announceNewLead(
   lead: { id: string; source: string; ownerEmployeeId: string | null },
 ): Promise<void> {
   if (!ARRIVAL_SOURCES.has(lead.source)) return;
+  await announceLeadArrival(db, lead);
+}
+
+/**
+ * The same notice with no look at the lead's source, for a caller that has
+ * already decided this lead is an arrival (the RD follow-up gives the recent
+ * deals it creates to the rotation). `rd_crm` stays out of `ARRIVAL_SOURCES`:
+ * the notice is never written for an import that brings thousands of old deals.
+ */
+export async function announceLeadArrival(
+  db: Database,
+  lead: { id: string; ownerEmployeeId: string | null },
+): Promise<void> {
   try {
     if (lead.ownerEmployeeId) {
       const task = await db.query.leadTasks.findFirst({
