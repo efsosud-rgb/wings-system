@@ -38,8 +38,8 @@ describe('generateRoadmap', () => {
 
   it('marks a coming_soon submodule pendente with no commits, weight M', async () => {
     const result = await generateRoadmap(fakeReader([]));
-    const sofia = result.deliverables.find((d) => d.submodulePath === '/crm-vendas/sofia');
-    expect(sofia).toMatchObject({ status: 'pendente', weight: 'M', completedAt: null });
+    const painel = result.deliverables.find((d) => d.submodulePath === '/crm-vendas/painel');
+    expect(painel).toMatchObject({ status: 'pendente', weight: 'M', completedAt: null });
   });
 
   it("groups a commit that touches an API module folder into that module's submodule", async () => {
