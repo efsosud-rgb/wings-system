@@ -4,10 +4,8 @@ import {
   templateParamCount,
   waSendTemplateSchema,
   waSendTextSchema,
-  WA_KIND_LABELS,
-  WA_WINDOW_HOURS,
   type WaConversationItem,
-  type WaMessageKind,
+  type WaNewTarget,
   type WaTemplate,
   type WaCallPermission,
   type WaCallPermissionLive,
@@ -34,6 +32,10 @@ import {
   authorsOf,
   brandVoiceOf,
   buildThread,
+  conversationItemOf,
+  conversationListSql,
+  markConversationRead,
+  type ConversationListRow,
   contactOfPhone,
   permissionOf,
   toMessage,
@@ -98,58 +100,142 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ ...data, phone: lead.phone });
   });
 
+  /**
+   * The reader's WhatsApp, as in WhatsApp Web: the conversations of their deals
+   * (every conversation for Admin and Diretoria), newest first, with search,
+   * unread (per reader) and the last message's status.
+   */
   app.get('/whatsapp/conversations', use, async (request, reply) => {
-    const query = z.object({ unanswered: z.enum(['1', '0']).optional() }).safeParse(request.query);
+    const query = z
+      .object({
+        unanswered: z.enum(['1', '0']).optional(),
+        filter: z.enum(['all', 'unread', 'unanswered']).optional(),
+        q: z.string().trim().max(80).optional(),
+      })
+      .safeParse(request.query);
     if (!query.success)
       return reply.status(400).send({ error: 'invalid', message: 'Filtro inválido.' });
-    const owner = leadOwnerFilter(request.session.actor, 'leads.whatsapp');
-    const rows = await db.execute<{
-      id: string;
-      lead_id: string | null;
-      lead_name: string | null;
-      profile_name: string | null;
-      phone: string;
-      last_inbound_at: Date | string | null;
-      last_message_at: Date | string | null;
-      direction: string | null;
-      kind: string | null;
-      text: string | null;
-    }>(sql`
-      select c.id, c.lead_id, l.name as lead_name, k.profile_name, k.phone, k.last_inbound_at,
-             c.last_message_at, m.direction, m.kind, m.text
-      from wa_conversations c
-      join wa_contacts k on k.id = c.contact_id
-      left join leads l on l.id = c.lead_id
-      left join lateral (
-        select direction, kind, text from wa_messages
-        where conversation_id = c.id order by created_at desc limit 1
-      ) m on true
-      where c.last_message_at is not null
-        ${owner === undefined ? sql`` : sql`and l.owner_employee_id = ${owner}`}
-        ${query.data.unanswered === '1' ? sql`and m.direction = 'in'` : sql``}
-      order by c.last_message_at desc
-      limit 100`);
+    const filter = query.data.filter ?? (query.data.unanswered === '1' ? 'unanswered' : 'all');
+    const q = query.data.q;
+    const digits = q?.replace(/\D/g, '') ?? '';
+    const rows = await db.execute<ConversationListRow>(
+      conversationListSql({
+        owner: leadOwnerFilter(request.session.actor, 'leads.whatsapp'),
+        readerId: request.session.actor.employeeId,
+        limit: 200,
+        where: sql`
+          ${filter === 'unanswered' ? sql`and m.direction = 'in'` : sql``}
+          ${
+            q
+              ? sql`and (k.profile_name ilike ${`%${q}%`} or l.name ilike ${`%${q}%`}
+                    ${digits.length >= 4 ? sql`or k.phone like ${`%${digits}%`}` : sql``})`
+              : sql``
+          }`,
+      }),
+    );
     const at = now();
-    const items: WaConversationItem[] = rows.rows.map((row) => {
-      const lastInbound = row.last_inbound_at ? new Date(row.last_inbound_at) : null;
-      const kind = (row.kind ?? 'text') as WaMessageKind;
-      return {
-        conversationId: row.id,
-        leadId: row.lead_id,
-        leadName: row.lead_name,
-        profileName: row.profile_name,
-        phone: row.phone,
-        lastAt: row.last_message_at ? new Date(row.last_message_at).toISOString() : null,
-        lastDirection: row.direction === 'in' ? 'in' : row.direction === 'out' ? 'out' : null,
-        preview: row.text ? row.text.slice(0, 80) : row.kind ? WA_KIND_LABELS[kind] : null,
-        unanswered: row.direction === 'in',
-        windowOpen:
-          lastInbound !== null &&
-          lastInbound.getTime() + WA_WINDOW_HOURS * 3_600_000 > at.getTime(),
-      };
-    });
+    const items: WaConversationItem[] = rows.rows
+      .map((row) => conversationItemOf(row, at))
+      .filter((item) => filter !== 'unread' || item.unreadCount > 0);
     return reply.send({ conversations: items });
   });
+
+  /** The reader opened the conversation: its messages so far are read, for them only. */
+  app.post('/whatsapp/conversations/:id/read', use, async (request, reply) => {
+    const params = idParams.safeParse(request.params);
+    const found = params.success ? await visibleConversation(request, params.data.id) : null;
+    if (!found) return notFound(reply);
+    await markConversationRead(db, found.conversation.id, request.session.actor.employeeId);
+    return reply.status(204).send();
+  });
+
+  /**
+   * "Nova conversa": the deals in the reader's scope whose name, phone or
+   * contact matches, open ones first, with the conversation each already has.
+   */
+  app.get('/whatsapp/targets', use, async (request, reply) => {
+    const query = z.object({ q: z.string().trim().min(2).max(80) }).safeParse(request.query);
+    if (!query.success) return reply.send({ targets: [] });
+    const q = query.data.q;
+    const digits = q.replace(/\D/g, '');
+    const owner = leadOwnerFilter(request.session.actor, 'leads.whatsapp');
+    const like = `%${q}%`;
+    const phoneLike = digits.length >= 4 ? `%${digits}%` : null;
+    const rows = await db.execute<{
+      lead_id: string;
+      name: string | null;
+      phone: string | null;
+      contact_name: string | null;
+      pipeline: string | null;
+      owner_name: string | null;
+      won: boolean | null;
+    }>(sql`
+      select * from (
+        select l.id as lead_id, l.name, l.phone, null::text as contact_name, l.pipeline,
+               e.full_name as owner_name, l.won, l.created_at
+        from leads l left join employees e on e.id = l.owner_employee_id
+        where l.phone is not null
+          and (l.name ilike ${like} ${phoneLike ? sql`or l.phone like ${phoneLike}` : sql``})
+          ${owner === undefined ? sql`` : sql`and l.owner_employee_id = ${owner}`}
+        union all
+        select l.id, l.name, ct.phone, ct.name, l.pipeline, e.full_name, l.won, l.created_at
+        from leads l
+        join lead_contacts lc on lc.lead_id = l.id
+        join crm_contacts ct on ct.id = lc.contact_id and ct.merged_into_id is null
+        left join employees e on e.id = l.owner_employee_id
+        where ct.phone is not null
+          and (ct.name ilike ${like} ${phoneLike ? sql`or ct.phone like ${phoneLike}` : sql``})
+          ${owner === undefined ? sql`` : sql`and l.owner_employee_id = ${owner}`}
+      ) t
+      order by (t.won is null) desc, t.created_at desc
+      limit 20`);
+    const targets: WaNewTarget[] = [];
+    for (const row of rows.rows) {
+      if (!row.phone) continue;
+      const contact = await contactOfPhone(db, row.phone);
+      const conversation = contact
+        ? await db.query.waConversations.findFirst({
+            where: and(
+              eq(waConversations.contactId, contact.id),
+              eq(waConversations.leadId, row.lead_id),
+            ),
+            columns: { id: true },
+          })
+        : undefined;
+      targets.push({
+        leadId: row.lead_id,
+        name: row.name,
+        phone: row.phone,
+        contactName: row.contact_name,
+        pipeline: row.pipeline,
+        ownerName: row.owner_name,
+        open: row.won === null,
+        conversationId: conversation?.id ?? null,
+      });
+    }
+    return reply.send({ targets });
+  });
+
+  /** Any conversation the reader may see: a deal's in its owner scope, one with no deal at full scope. */
+  async function visibleConversation(request: FastifyRequest, id: string) {
+    const conversation = await db.query.waConversations.findFirst({
+      where: eq(waConversations.id, id),
+    });
+    if (!conversation) return null;
+    if (conversation.leadId) {
+      const lead = await leadInScope(
+        db,
+        request.session.actor,
+        conversation.leadId,
+        'leads.whatsapp',
+      );
+      if (!lead) return null;
+    } else if (!fullScope(request)) return null;
+    const contact = await db.query.waContacts.findFirst({
+      where: eq(waContacts.id, conversation.contactId),
+    });
+    return contact ? { conversation, contact } : null;
+  }
 
   /** A conversation no deal took yet: full scope only (a deal's opens from the deal). */
   async function waitingConversation(request: FastifyRequest, id: string) {
@@ -167,9 +253,11 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   app.get('/whatsapp/conversations/:id', use, async (request, reply) => {
     const params = idParams.safeParse(request.params);
     if (!params.success) return notFound(reply);
-    const found = await waitingConversation(request, params.data.id);
+    const found = await visibleConversation(request, params.data.id);
     if (!found) return notFound(reply);
-    return reply.send(await threadOf(found.contact, null, found.conversation.id));
+    return reply.send(
+      await threadOf(found.contact, found.conversation.leadId, found.conversation.id),
+    );
   });
 
   // --- sending ------------------------------------------------------------------------

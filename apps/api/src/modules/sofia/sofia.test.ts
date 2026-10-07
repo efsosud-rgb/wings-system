@@ -860,6 +860,117 @@ describe('a franchise lead never hears of Wings (Eric, 07/10)', () => {
   });
 });
 
+describe('the WhatsApp screen (WhatsApp Web of each person)', () => {
+  type Item = {
+    conversationId: string;
+    unreadCount: number;
+    attendance: string;
+    lastStatus: string | null;
+  };
+  const list = async (cookies: Record<string, string>, query = '') =>
+    (await app.inject({ method: 'GET', url: `/whatsapp/conversations${query}`, cookies })).json<{
+      conversations: Item[];
+    }>().conversations;
+
+  it('counts unread per reader, clears on opening, and finds by name', async () => {
+    const seller = await sessionFor('vendedor_formatacao');
+    const admin = await sessionFor('admin_master');
+    const phone = newPhone();
+    await db.insert(leads).values({
+      source: 'manual',
+      name: 'Rita Moura',
+      phone,
+      pipeline: 'formatacao',
+      ownerEmployeeId: seller.id,
+    });
+    await write(phone, text('oi'));
+    await write(phone, text('tem alguém aí?'));
+    const conversation = await conversationOf(phone);
+    const mine = (await list(seller.cookies)).find((c) => c.conversationId === conversation.id);
+    expect(mine).toMatchObject({ unreadCount: 2, attendance: 'waiting_seller' });
+    expect((await list(seller.cookies, '?filter=unread')).map((c) => c.conversationId)).toContain(
+      conversation.id,
+    );
+
+    const opened = await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${conversation.id}/read`,
+      cookies: seller.cookies,
+    });
+    expect(opened.statusCode).toBe(204);
+    expect(
+      (await list(seller.cookies)).find((c) => c.conversationId === conversation.id)?.unreadCount,
+    ).toBe(0);
+    // Another reader's unread is theirs.
+    expect(
+      (await list(admin.cookies)).find((c) => c.conversationId === conversation.id)?.unreadCount,
+    ).toBe(2);
+    await write(phone, text('?'));
+    expect(
+      (await list(seller.cookies)).find((c) => c.conversationId === conversation.id)?.unreadCount,
+    ).toBe(1);
+    expect((await list(seller.cookies, '?q=rita')).map((c) => c.conversationId)).toEqual([
+      conversation.id,
+    ]);
+  });
+
+  it('a seller opens only the conversations of their own deals', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const other = await sessionFor('vendedor_formatacao');
+    const phone = newPhone();
+    await db.insert(leads).values({
+      source: 'manual',
+      name: 'Bruno Sales',
+      phone,
+      pipeline: 'formatacao',
+      ownerEmployeeId: owner.id,
+    });
+    await write(phone, text('bom dia'));
+    const conversation = await conversationOf(phone);
+    const url = `/whatsapp/conversations/${conversation.id}`;
+    expect((await app.inject({ method: 'GET', url, cookies: owner.cookies })).statusCode).toBe(200);
+    expect((await app.inject({ method: 'GET', url, cookies: other.cookies })).statusCode).toBe(404);
+    expect(
+      (await app.inject({ method: 'POST', url: `${url}/read`, cookies: other.cookies })).statusCode,
+    ).toBe(404);
+    expect((await list(other.cookies)).some((c) => c.conversationId === conversation.id)).toBe(
+      false,
+    );
+  });
+
+  it('"Nova conversa" finds the reader’s deals (and contacts), with the conversation each has', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const other = await sessionFor('vendedor_formatacao');
+    const phone = newPhone();
+    const [lead] = await db
+      .insert(leads)
+      .values({
+        source: 'manual',
+        name: 'Patrícia Nogueira',
+        phone,
+        pipeline: 'formatacao',
+        ownerEmployeeId: owner.id,
+      })
+      .returning();
+    const find = async (cookies: Record<string, string>, q: string) =>
+      (
+        await app.inject({
+          method: 'GET',
+          url: `/whatsapp/targets?q=${encodeURIComponent(q)}`,
+          cookies,
+        })
+      ).json<{ targets: { leadId: string; conversationId: string | null; open: boolean }[] }>()
+        .targets;
+    expect(await find(owner.cookies, 'Patrícia')).toEqual([
+      expect.objectContaining({ leadId: lead!.id, conversationId: null, open: true }),
+    ]);
+    expect(await find(other.cookies, 'Patrícia')).toEqual([]);
+    await write(phone, text('oi'));
+    const byPhone = await find(owner.cookies, phone.slice(-8));
+    expect(byPhone[0]?.conversationId).toBe((await conversationOf(phone)).id);
+  });
+});
+
 describe('the guards', () => {
   it('drops a model line with a number, a price word, a promise, a question or a claim to be a person', () => {
     expect(guardReply('Que legal!')).toBe('Que legal!');

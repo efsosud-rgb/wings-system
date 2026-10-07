@@ -1,9 +1,11 @@
 import {
   brazilianPhoneVariants,
   WINGS_CLIENT_ID,
+  WA_KIND_LABELS,
   WA_MEDIA_KINDS,
   WA_WINDOW_HOURS,
   type DealWhatsApp,
+  type WaConversationItem,
   type SofiaState,
   type WaCallPermission,
   type WaCallPermissionState,
@@ -11,7 +13,7 @@ import {
   type WaMessageKind,
   type WaMessageStatus,
 } from '@wings/shared';
-import { desc, eq, inArray } from 'drizzle-orm';
+import { desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   clients,
@@ -138,6 +140,106 @@ export async function brandVoiceOf(
     .innerJoin(clients, eq(clients.id, waConversations.brandClientId))
     .where(eq(waConversations.id, conversationId));
   return row?.segment === 'expansao' ? row.name : null;
+}
+
+/** A row of the conversation lists (the WhatsApp screen and Sofia's), in the reader's scope. */
+export interface ConversationListRow extends Record<string, unknown> {
+  id: string;
+  lead_id: string | null;
+  lead_name: string | null;
+  lead_pipeline: string | null;
+  owner_name: string | null;
+  profile_name: string | null;
+  phone: string;
+  last_inbound_at: Date | string | null;
+  last_message_at: Date | string | null;
+  attendance: string;
+  segment: string | null;
+  state_changed_at: Date | string | null;
+  reason: string | null;
+  brand_name: string | null;
+  direction: string | null;
+  kind: string | null;
+  text: string | null;
+  status: string | null;
+  unread: number;
+}
+
+/**
+ * The conversations a reader may see (`owner` = their id when they see only
+ * their own deals' ones), newest first, with the last message and how many
+ * of the person's messages this reader has not opened (after their last
+ * opening, or after our last reply when they never opened it).
+ */
+export function conversationListSql(input: {
+  owner: string | undefined;
+  readerId: string;
+  where: SQL;
+  limit: number;
+}) {
+  return sql`
+    select c.id, c.lead_id, l.name as lead_name, l.pipeline as lead_pipeline,
+           e.full_name as owner_name, k.profile_name, k.phone, k.last_inbound_at,
+           c.last_message_at, c.attendance, c.segment, c.state_changed_at, c.reason,
+           b.name as brand_name, m.direction, m.kind, m.text, m.status,
+           (select count(*)::int from wa_messages u
+             where u.conversation_id = c.id and u.direction = 'in'
+               and u.created_at > coalesce(
+                 (select r.read_at from wa_conversation_reads r
+                   where r.conversation_id = c.id and r.employee_id = ${input.readerId}),
+                 (select max(o.created_at) from wa_messages o
+                   where o.conversation_id = c.id and o.direction = 'out'),
+                 '-infinity'::timestamptz)) as unread
+    from wa_conversations c
+    join wa_contacts k on k.id = c.contact_id
+    left join leads l on l.id = c.lead_id
+    left join employees e on e.id = l.owner_employee_id
+    left join clients b on b.id = c.brand_client_id
+    left join lateral (
+      select direction, kind, text, status from wa_messages
+      where conversation_id = c.id order by created_at desc limit 1
+    ) m on true
+    where c.last_message_at is not null
+      ${input.owner === undefined ? sql`` : sql`and l.owner_employee_id = ${input.owner}`}
+      ${input.where}
+    order by c.last_message_at desc
+    limit ${input.limit}`;
+}
+
+export function conversationItemOf(row: ConversationListRow, now: Date): WaConversationItem {
+  const lastInbound = row.last_inbound_at ? new Date(row.last_inbound_at) : null;
+  const kind = (row.kind ?? 'text') as WaMessageKind;
+  return {
+    conversationId: row.id,
+    leadId: row.lead_id,
+    leadName: row.lead_name,
+    profileName: row.profile_name,
+    phone: row.phone,
+    lastAt: row.last_message_at ? new Date(row.last_message_at).toISOString() : null,
+    lastDirection: row.direction === 'in' ? 'in' : row.direction === 'out' ? 'out' : null,
+    preview: row.text ? row.text.slice(0, 80) : row.kind ? WA_KIND_LABELS[kind] : null,
+    unanswered: row.direction === 'in',
+    windowOpen:
+      lastInbound !== null && lastInbound.getTime() + WA_WINDOW_HOURS * 3_600_000 > now.getTime(),
+    unreadCount: Number(row.unread ?? 0),
+    lastStatus: row.direction === 'out' ? ((row.status ?? 'pending') as WaMessageStatus) : null,
+    attendance: row.attendance as SofiaState,
+    ownerName: row.owner_name,
+  };
+}
+
+/** The reader has seen the conversation up to its last message (the database's clock). */
+export async function markConversationRead(
+  db: Database,
+  conversationId: string,
+  employeeId: string,
+) {
+  await db.execute(sql`
+    insert into wa_conversation_reads (conversation_id, employee_id, read_at)
+    select ${conversationId}, ${employeeId}, coalesce(max(created_at), now())
+    from wa_messages where conversation_id = ${conversationId}
+    on conflict (conversation_id, employee_id)
+    do update set read_at = greatest(wa_conversation_reads.read_at, excluded.read_at)`);
 }
 
 export interface ThreadDeps {

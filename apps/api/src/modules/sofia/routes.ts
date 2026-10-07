@@ -5,8 +5,6 @@ import {
   SOFIA_MODEL,
   SOFIA_SEGMENTS,
   SOFIA_STATES,
-  WA_KIND_LABELS,
-  WA_WINDOW_HOURS,
   sofiaAttendanceSchema,
   sofiaSettingsSchema,
   type LeadPipeline,
@@ -18,7 +16,6 @@ import {
   type SofiaOverview,
   type SofiaSegment,
   type SofiaState,
-  type WaMessageKind,
 } from '@wings/shared';
 import { eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyRequest } from 'fastify';
@@ -27,7 +24,12 @@ import { employees, waConversations } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { leadInScope, leadOwnerFilter } from '../leads/access.js';
 import { whatsappConfigOf } from '../whatsapp/graph.js';
-import { buildThread } from '../whatsapp/thread.js';
+import {
+  buildThread,
+  conversationItemOf,
+  conversationListSql,
+  type ConversationListRow,
+} from '../whatsapp/thread.js';
 import { sofiaSpentToday } from './engine.js';
 import { loadSofiaSettings, saveSofiaSettings } from './settings.js';
 import { factsOf, giveBackToSofia, setAttendance, takeConversation } from './state.js';
@@ -58,48 +60,16 @@ export function reasonLabel(reason: string | null): string | null {
   );
 }
 
-interface Row extends Record<string, unknown> {
-  id: string;
-  lead_id: string | null;
-  lead_name: string | null;
-  lead_pipeline: string | null;
-  owner_name: string | null;
-  profile_name: string | null;
-  phone: string;
-  last_inbound_at: Date | string | null;
-  last_message_at: Date | string | null;
-  attendance: string;
-  segment: string | null;
-  state_changed_at: Date | string | null;
-  reason: string | null;
-  brand_name: string | null;
-  direction: string | null;
-  kind: string | null;
-  text: string | null;
-}
-
 const iso = (value: Date | string | null) => (value ? new Date(value).toISOString() : null);
 
-export function itemOf(row: Row, now: Date): SofiaConversationItem {
-  const lastInbound = row.last_inbound_at ? new Date(row.last_inbound_at) : null;
-  const kind = (row.kind ?? 'text') as WaMessageKind;
+export function itemOf(row: ConversationListRow, now: Date): SofiaConversationItem {
   const segment =
     (row.segment as SofiaSegment | null) ??
     (row.lead_pipeline === 'expansao' || row.lead_pipeline === 'formatacao'
       ? (row.lead_pipeline as SofiaSegment)
       : null);
   return {
-    conversationId: row.id,
-    leadId: row.lead_id,
-    leadName: row.lead_name,
-    profileName: row.profile_name,
-    phone: row.phone,
-    lastAt: iso(row.last_message_at),
-    lastDirection: row.direction === 'in' ? 'in' : row.direction === 'out' ? 'out' : null,
-    preview: row.text ? row.text.slice(0, 80) : row.kind ? WA_KIND_LABELS[kind] : null,
-    unanswered: row.direction === 'in',
-    windowOpen:
-      lastInbound !== null && lastInbound.getTime() + WA_WINDOW_HOURS * 3_600_000 > now.getTime(),
+    ...conversationItemOf(row, now),
     state: row.attendance as SofiaState,
     segment,
     brandName: row.brand_name,
@@ -108,21 +78,6 @@ export function itemOf(row: Row, now: Date): SofiaConversationItem {
     ownerName: row.owner_name,
   };
 }
-
-const SELECT = sql`
-  select c.id, c.lead_id, l.name as lead_name, l.pipeline as lead_pipeline,
-         e.full_name as owner_name, k.profile_name, k.phone, k.last_inbound_at,
-         c.last_message_at, c.attendance, c.segment, c.state_changed_at, c.reason,
-         b.name as brand_name, m.direction, m.kind, m.text
-  from wa_conversations c
-  join wa_contacts k on k.id = c.contact_id
-  left join leads l on l.id = c.lead_id
-  left join employees e on e.id = l.owner_employee_id
-  left join clients b on b.id = c.brand_client_id
-  left join lateral (
-    select direction, kind, text from wa_messages
-    where conversation_id = c.id order by created_at desc limit 1
-  ) m on true`;
 
 export const sofiaRoutes: FastifyPluginAsync = async (app) => {
   const { db, env } = app.wings;
@@ -169,9 +124,12 @@ export const sofiaRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: 'invalid', message: 'Filtro inválido.' });
     const { state, segment, q } = query.data;
     const digits = q?.replace(/\D/g, '') ?? '';
-    const rows = await db.execute<Row>(sql`${SELECT}
-      where c.last_message_at is not null
-        ${scopeSql(ownerOf(request))}
+    const rows = await db.execute<ConversationListRow>(
+      conversationListSql({
+        owner: ownerOf(request),
+        readerId: request.session.actor.employeeId,
+        limit: 200,
+        where: sql`
         ${state ? sql`and c.attendance = ${state}` : sql``}
         ${
           segment === 'none'
@@ -185,9 +143,9 @@ export const sofiaRoutes: FastifyPluginAsync = async (app) => {
             ? sql`and (k.profile_name ilike ${`%${q}%`} or l.name ilike ${`%${q}%`}
                   ${digits.length >= 4 ? sql`or k.phone like ${`%${digits}%`}` : sql``})`
             : sql``
-        }
-      order by c.last_message_at desc
-      limit 200`);
+        }`,
+      }),
+    );
     const at = now();
     return reply.send({ conversations: rows.rows.map((row) => itemOf(row, at)) });
   });
@@ -217,8 +175,19 @@ export const sofiaRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(404).send({ error: 'not_found', message: 'Conversa não encontrada.' });
     const settings = await loadSofiaSettings(db);
     const at = now();
-    const [row] = (await db.execute<Row>(sql`${SELECT} where c.id = ${conversation.id}`)).rows;
-    const item = itemOf(row!, at);
+    const [row] = (
+      await db.execute<ConversationListRow>(
+        conversationListSql({
+          owner: undefined,
+          readerId: request.session.actor.employeeId,
+          limit: 1,
+          where: sql`and c.id = ${conversation.id}`,
+        }),
+      )
+    ).rows;
+    if (!row)
+      return reply.status(404).send({ error: 'not_found', message: 'Conversa não encontrada.' });
+    const item = itemOf(row, at);
     const facts = factsOf(conversation);
     const questions = item.segment === 'expansao' ? settings.expansao : settings.formatacao;
     const listed: SofiaFact[] = questions

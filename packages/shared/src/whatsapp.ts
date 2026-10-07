@@ -201,6 +201,29 @@ export interface WaConversationItem {
   /** The person wrote last. */
   unanswered: boolean;
   windowOpen: boolean;
+  /** The person's messages this reader has not opened yet. */
+  unreadCount: number;
+  /** The last message's status, when it was ours. */
+  lastStatus: WaMessageStatus | null;
+  /** Who has the conversation (Sofia, a seller, ...). */
+  attendance: SofiaState;
+  /** The deal's owner, when there is a deal. */
+  ownerName: string | null;
+}
+
+/** "Nova conversa": a deal (or a contact's deal) in the reader's scope to write to. */
+export interface WaNewTarget {
+  leadId: string;
+  name: string | null;
+  /** The person written to: the deal's own phone, or the contact's. */
+  phone: string;
+  /** The contact's name when the match was a contact of the deal. */
+  contactName: string | null;
+  pipeline: string | null;
+  ownerName: string | null;
+  open: boolean;
+  /** The conversation of that phone and deal, when one exists. */
+  conversationId: string | null;
 }
 
 // --- calls (Calling API) ---------------------------------------------------------------
