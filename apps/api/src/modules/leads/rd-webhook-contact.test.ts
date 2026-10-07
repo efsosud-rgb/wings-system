@@ -39,6 +39,11 @@ describe('rdConversionsOf — the CONTACT event of the RD screen webhook', () =>
     expect(conversion?.at?.toISOString()).toBe('2026-10-07T12:26:40.000Z');
   });
 
+  it('reads the event name in either case (the RD API lists it in lower case)', () => {
+    expect(rdConversionsOf(contactEvent({ event_type: 'webhook.converted' }))).toHaveLength(1);
+    expect(rdConversionsOf(contactEvent({ event_type: 'webhook.marked_opportunity' }))).toEqual([]);
+  });
+
   it('reads a contact event with no event_type as a conversion', () => {
     const body = contactEvent();
     delete (body as Record<string, unknown>).event_type;
