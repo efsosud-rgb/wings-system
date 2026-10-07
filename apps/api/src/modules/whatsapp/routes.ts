@@ -94,8 +94,16 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     const lead = await leadInScope(db, request.session.actor, params.data.id, 'leads.whatsapp');
     if (!lead) return notFound(reply);
     const contact = await contactOfPhone(db, lead.phone);
-    // Messages that waited with no deal come to this one (same phone).
-    if (contact) await adoptUnmatched(db, contact.id, lead.id);
+    // Messages that waited with no deal come to this one (same phone) — but a
+    // conversation Sofia or the team is still handling is not a seller's to take.
+    if (contact) {
+      const waiting = await db.query.waConversations.findFirst({
+        where: and(eq(waConversations.contactId, contact.id), isNull(waConversations.leadId)),
+        columns: { attendance: true },
+      });
+      if (waiting && (fullScope(request) || waiting.attendance === 'closed'))
+        await adoptUnmatched(db, contact.id, lead.id);
+    }
     const data = await threadOf(contact, lead.id, null);
     return reply.send({ ...data, phone: lead.phone });
   });
@@ -213,7 +221,20 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         conversationId: conversation?.id ?? null,
       });
     }
-    return reply.send({ targets });
+    // A number someone is already attending with no deal yet (Sofia or the
+    // team): an owner-scoped reader may not start it as their own deal.
+    let busy = false;
+    if (owner !== undefined && digits.length >= 10) {
+      const contact = await contactOfPhone(db, digits.startsWith('55') ? digits : `55${digits}`);
+      if (contact) {
+        const waiting = await db.query.waConversations.findFirst({
+          where: and(eq(waConversations.contactId, contact.id), isNull(waConversations.leadId)),
+          columns: { attendance: true },
+        });
+        busy = Boolean(waiting && waiting.attendance !== 'closed');
+      }
+    }
+    return reply.send({ targets, busy });
   });
 
   /** Any conversation the reader may see: a deal's in its owner scope, one with no deal at full scope. */
@@ -231,19 +252,6 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       );
       if (!lead) return null;
     } else if (!fullScope(request)) return null;
-    const contact = await db.query.waContacts.findFirst({
-      where: eq(waContacts.id, conversation.contactId),
-    });
-    return contact ? { conversation, contact } : null;
-  }
-
-  /** A conversation no deal took yet: full scope only (a deal's opens from the deal). */
-  async function waitingConversation(request: FastifyRequest, id: string) {
-    if (!fullScope(request)) return null;
-    const conversation = await db.query.waConversations.findFirst({
-      where: and(eq(waConversations.id, id), isNull(waConversations.leadId)),
-    });
-    if (!conversation) return null;
     const contact = await db.query.waContacts.findFirst({
       where: eq(waContacts.id, conversation.contactId),
     });
@@ -447,7 +455,9 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     app.post(`/whatsapp/conversations/:id/${kind}`, use, async (request, reply) => {
       const params = idParams.safeParse(request.params);
       if (!params.success) return notFound(reply);
-      const found = await waitingConversation(request, params.data.id);
+      // Any conversation the reader may see: the reply goes to that
+      // conversation's own number (a deal's contact may not be its main phone).
+      const found = await visibleConversation(request, params.data.id);
       if (!found) return notFound(reply);
       const outgoing = outgoingOf(kind, request.body);
       if (typeof outgoing === 'string')
@@ -456,7 +466,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         request,
         reply,
         {
-          leadId: null,
+          leadId: found.conversation.leadId,
           phone: found.contact.phone,
           contact: found.contact,
           conversationId: found.conversation.id,

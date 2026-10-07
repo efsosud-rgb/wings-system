@@ -1,6 +1,8 @@
 import { WINGS_CLIENT_ID, type SofiaState } from '@wings/shared';
 import { and, eq, inArray, sql } from 'drizzle-orm';
+import type { PgUpdateSetSource } from 'drizzle-orm/pg-core';
 import type { Database } from '../../db/client.js';
+import type { Executor } from '../leads/crm.js';
 import { waConversations } from '../../db/schema/index.js';
 
 /**
@@ -37,6 +39,9 @@ export function factsOf(row: { sofiaFacts: unknown }): SofiaFacts {
   const raw = (row.sofiaFacts ?? {}) as Partial<SofiaFacts>;
   return { ...raw, answers: { ...(raw.answers ?? {}) }, step: raw.step ?? null };
 }
+
+/** `reason` of a conversation a person gave back to Sofia. */
+export const SOFIA_GIVEN_BACK = 'devolvida';
 
 /** Quiet time before Sofia answers, so a burst of short messages gets one reply. */
 export const SOFIA_DEBOUNCE_MS = 4_000;
@@ -76,6 +81,10 @@ export async function setAttendance(
 
 export interface InboundRoute {
   conversation: ConversationRow;
+  /** The message being routed (already stored). */
+  messageId: string;
+  /** The person asked not to be written to, and this message is not talk (a sticker, a file). */
+  quietOptOut: boolean;
   /** The conversation was opened by this message. */
   created: boolean;
   lead: {
@@ -91,19 +100,32 @@ export interface InboundRoute {
 }
 
 /** Decides who answers an incoming message, and wakes Sofia when it is hers. */
-export async function routeInbound(db: Database, input: InboundRoute): Promise<SofiaState> {
+export async function routeInbound(db: Executor, input: InboundRoute): Promise<SofiaState> {
   const { conversation, now } = input;
   const current = conversation.attendance as SofiaState;
   const fresh = input.created || current === 'closed';
   let next: SofiaState = current;
   let reason = conversation.reason;
-  const patch: Partial<typeof waConversations.$inferInsert> = {};
+  const patch: PgUpdateSetSource<typeof waConversations> = {};
+  // Whatever was said before the conversation became hers is not hers to answer
+  // (an old PARAR, a question a person already took): she reads from here on.
+  const readFromHere = () => {
+    patch.sofiaReadUntil = sql`(select max(m.created_at) from wa_messages m where m.conversation_id = ${conversation.id} and m.id <> ${input.messageId})`;
+  };
 
   if (input.lead?.ownerEmployeeId) {
-    // The deal has its seller: the message is the seller's, unless the
-    // seller gave the conversation back to Sofia.
-    if (fresh || current === 'waiting_human') next = 'waiting_seller';
+    // The deal has its seller: the message is the seller's. Sofia keeps it
+    // only when the seller gave it back; a deal that got its owner while she
+    // talked goes to the owner.
+    if (
+      fresh ||
+      current === 'waiting_human' ||
+      (current === 'sofia' && conversation.reason !== SOFIA_GIVEN_BACK)
+    )
+      next = 'waiting_seller';
     if (next !== current) reason = null;
+  } else if (fresh && input.quietOptOut) {
+    // Someone who said SAIR and then sent a sticker: nobody writes back.
   } else if (fresh) {
     next = input.sofiaOn ? 'sofia' : 'waiting_human';
     reason = input.sofiaOn ? null : 'sofia_desligada';
@@ -124,6 +146,7 @@ export async function routeInbound(db: Database, input: InboundRoute): Promise<S
       channel: input.link?.channel ?? old.channel ?? null,
     } satisfies SofiaFacts;
     patch.sofiaMisses = 0;
+    if (next === 'sofia') readFromHere();
     patch.segment = brand
       ? 'expansao'
       : input.lead?.pipeline === 'formatacao'
@@ -135,6 +158,7 @@ export async function routeInbound(db: Database, input: InboundRoute): Promise<S
     if (input.sofiaOn) {
       next = 'sofia';
       reason = null;
+      readFromHere();
     }
   }
 
@@ -168,7 +192,8 @@ export async function giveBackToSofia(db: Database, conversationId: string, at: 
     .set({
       attendance: 'sofia',
       stateChangedAt: at,
-      reason: null,
+      // Marks a give-back: Sofia keeps a deal's conversation only after one.
+      reason: SOFIA_GIVEN_BACK,
       sofiaMisses: 0,
       sofiaFacts: sql`jsonb_set(coalesce(${waConversations.sofiaFacts}, '{}'::jsonb), '{step}', 'null'::jsonb)`,
       // Messages the person sent while a person held it are not hers to answer

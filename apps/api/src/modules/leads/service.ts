@@ -265,6 +265,12 @@ export interface IncomingLead {
   /** An import (RD CRM) does not queue the paid research for every lead it brings. */
   skipResearch?: boolean;
   /**
+   * Always a new lead, never merged into one of the same phone or e-mail
+   * (Sofia: the phone's other deals are closed, or the open one is another
+   * funnel or brand, and a closed deal or a sale is never reopened by her).
+   */
+  forceNew?: boolean;
+  /**
    * A new lead with a funnel and no owner goes to the next seller of the
    * funnel's rotation and gets the first-contact task (CRM Fase 1). Off for
    * the RD import (RD says the owner) and for Sofia's leads until she hands
@@ -504,18 +510,20 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
     for (const key of keys) await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${key}))`);
 
     let existing: LeadRow | undefined;
-    if (incoming.externalId) {
+    if (incoming.forceNew) {
+      // Looked up by nothing: the insert below makes a lead of its own.
+    } else if (incoming.externalId) {
       existing = await tx.query.leads.findFirst({
         where: and(eq(leads.source, incoming.source), eq(leads.externalId, incoming.externalId)),
       });
     }
-    if (!existing && phone) {
+    if (!existing && phone && !incoming.forceNew) {
       existing = await tx.query.leads.findFirst({
         where: eq(leads.phone, phone),
         orderBy: asc(leads.createdAt),
       });
     }
-    if (!existing && email) {
+    if (!existing && email && !incoming.forceNew) {
       existing = await tx.query.leads.findFirst({
         where: eq(leads.email, email),
         orderBy: asc(leads.createdAt),

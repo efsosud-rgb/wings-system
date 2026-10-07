@@ -161,9 +161,9 @@ describe('the WhatsApp screen', () => {
     expect(screen.getByText(/Escolha uma conversa/)).toBeTruthy();
   });
 
-  it('opens a deal’s conversation on the right, sends by the deal and marks it read', async () => {
+  it('opens a deal’s conversation on the right, sends in that conversation and marks it read', async () => {
     renderAt('/crm-vendas/whatsapp/c1');
-    expect(screen.getByTestId('chat').textContent).toBe('deal:l1');
+    expect(screen.getByTestId('chat').textContent).toBe('conversation:c1');
     expect(screen.getByRole('link', { name: 'Abrir negociação' }).getAttribute('href')).toBe(
       '/crm-vendas/negociacoes/l1',
     );

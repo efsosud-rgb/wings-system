@@ -151,6 +151,12 @@ export const sofiaQuestionSchema = z
   .refine((q) => q.kind !== 'choice' || q.options.length >= 2, {
     message: 'Uma pergunta de opções precisa de ao menos 2 opções.',
     path: ['options'],
+  })
+  // The name never goes to the AI: only a "Nome da pessoa" question fills it, and it always does.
+  .refine((q) => (q.kind === 'name') === (q.field === 'name'), {
+    message:
+      'O nome da pessoa só pode ser uma pergunta do tipo "Nome da pessoa", que vai para Nome.',
+    path: ['field'],
   });
 export type SofiaQuestion = z.infer<typeof sofiaQuestionSchema>;
 

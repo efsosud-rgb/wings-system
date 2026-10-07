@@ -32,7 +32,13 @@ import {
 } from '../whatsapp/thread.js';
 import { sofiaSpentToday } from './engine.js';
 import { loadSofiaSettings, saveSofiaSettings } from './settings.js';
-import { factsOf, giveBackToSofia, setAttendance, takeConversation } from './state.js';
+import {
+  factsOf,
+  giveBackToSofia,
+  setAttendance,
+  SOFIA_GIVEN_BACK,
+  takeConversation,
+} from './state.js';
 
 /**
  * Sofia's screen (docs/whatsapp/sofia.md): every WhatsApp conversation with
@@ -53,6 +59,7 @@ const listQuery = z.object({
 
 export function reasonLabel(reason: string | null): string | null {
   if (!reason) return null;
+  if (reason === SOFIA_GIVEN_BACK) return 'Devolvida à Sofia';
   return (
     SOFIA_HANDOFF_LABELS[reason as SofiaHandoffReason] ??
     SOFIA_CLOSE_LABELS[reason as SofiaCloseReason] ??

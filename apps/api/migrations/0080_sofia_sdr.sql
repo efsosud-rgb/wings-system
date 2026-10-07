@@ -44,6 +44,11 @@ CREATE INDEX "sofia_ai_runs_started_idx" ON "sofia_ai_runs" USING btree ("starte
 ALTER TABLE "wa_conversations" ADD CONSTRAINT "wa_conversations_brand_client_id_clients_id_fk" FOREIGN KEY ("brand_client_id") REFERENCES "public"."clients"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "wa_conversations_attendance_idx" ON "wa_conversations" USING btree ("attendance","last_message_at");--> statement-breakpoint
 CREATE INDEX "wa_conversations_sofia_due_idx" ON "wa_conversations" USING btree ("sofia_due_at") WHERE "wa_conversations"."sofia_due_at" is not null;--> statement-breakpoint
--- Conversations from before Sofia: one with a deal stays with its seller; one without waits for a person.
-UPDATE "wa_conversations" SET "attendance" = 'waiting_human', "reason" = 'sofia_desligada' WHERE "lead_id" IS NULL;--> statement-breakpoint
+-- Conversations from before Sofia. Everything said so far counts as read (Sofia never answers the past).
+UPDATE "wa_conversations" c SET "sofia_read_until" = (SELECT max(m."created_at") FROM "wa_messages" m WHERE m."conversation_id" = c."id");--> statement-breakpoint
+-- One a person of the team already answered stays with them; one nobody answered, with no deal or
+-- with an open deal that has no owner, waits for a person (and goes to Sofia once she is on).
+UPDATE "wa_conversations" c SET "attendance" = 'waiting_human', "reason" = 'sofia_desligada'
+WHERE NOT EXISTS (SELECT 1 FROM "wa_messages" m WHERE m."conversation_id" = c."id" AND m."author" = 'employee')
+  AND (c."lead_id" IS NULL OR EXISTS (SELECT 1 FROM "leads" l WHERE l."id" = c."lead_id" AND l."won" IS NULL AND l."owner_employee_id" IS NULL));--> statement-breakpoint
 UPDATE "wa_conversations" SET "state_changed_at" = coalesce("last_message_at", "created_at");

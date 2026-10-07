@@ -4,7 +4,7 @@ import type {
   WaCallPermissionLive,
   WaConversationItem,
   WaMessage,
-  WaNewTarget,
+  WaTargets,
   WaSendTemplate,
   WaSendText,
   WaTemplate,
@@ -89,8 +89,7 @@ export function useWhatsAppTargets(q: string) {
   const term = q.trim();
   return useQuery({
     queryKey: ['whatsapp', 'targets', term],
-    queryFn: () =>
-      api.get<{ targets: WaNewTarget[] }>(`/whatsapp/targets?q=${encodeURIComponent(term)}`),
+    queryFn: () => api.get<WaTargets>(`/whatsapp/targets?q=${encodeURIComponent(term)}`),
     enabled: term.length >= 2,
     staleTime: 10_000,
   });

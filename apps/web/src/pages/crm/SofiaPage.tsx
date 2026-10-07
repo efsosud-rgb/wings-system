@@ -382,7 +382,7 @@ function ConversationDetail({ id }: { id: string }) {
             <p className="sofia-note">Escrever na conversa tira a conversa da Sofia.</p>
           )}
           <WhatsAppChat
-            thread={data.lead ? { leadId: data.lead.id } : { conversationId: item.conversationId }}
+            thread={{ conversationId: item.conversationId }}
             data={data.thread}
             canSend={hasPermission(session.data, 'leads.whatsapp')}
           />

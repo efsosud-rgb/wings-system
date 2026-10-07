@@ -225,8 +225,9 @@ export async function adoptUnmatched(db: Database, contactId: string, leadId: st
                 brandClientId: waiting.brandClientId,
                 sofiaFacts: waiting.sofiaFacts,
                 sofiaMisses: waiting.sofiaMisses,
-                sofiaDueAt: waiting.sofiaDueAt,
-                sofiaReadUntil: waiting.sofiaReadUntil,
+                // Copied in SQL: a JS Date would drop the microseconds Sofia compares.
+                sofiaDueAt: sql`(select w.sofia_due_at from wa_conversations w where w.id = ${waiting.id})`,
+                sofiaReadUntil: sql`(select w.sofia_read_until from wa_conversations w where w.id = ${waiting.id})`,
               }
             : {}),
         })
@@ -353,55 +354,93 @@ async function applyInbound(db: Database, message: WaInboundMessage, now: Date) 
         .set({ hits: sql`${leadTrackingLinks.hits} + 1`, lastHitAt: at })
         .where(eq(leadTrackingLinks.id, link.id));
   }
+  // No open deal, but a seller is talking to this person from a closed one
+  // (a reactivation template): the answer is that seller's, in that conversation.
+  if (!leadId) leadId = await heldDealOf(db, contact!.id, now);
   if (leadId) await adoptUnmatched(db, contact!.id, leadId);
   const { conversation, created } = await openConversation(db, contact!.id, leadId, {
     referral: message.referral,
     originCode: link ? code : null,
   });
 
-  await db
-    .insert(waMessages)
-    .values({
-      wamid: message.wamid,
-      conversationId: conversation.id,
-      contactId: contact!.id,
-      leadId,
-      direction: 'in',
-      author: 'contact',
-      kind: message.kind,
-      text: message.text,
-      content: message.content,
-      waTimestamp: message.at,
-    })
-    .onConflictDoNothing();
-  await db
-    .update(waConversations)
-    .set({
-      lastMessageAt: sql`greatest(${waConversations.lastMessageAt}, ${at.toISOString()}::timestamptz)`,
-      ...(link && !conversation.originCode ? { originCode: code } : {}),
-      ...(message.referral && !conversation.referral ? { referral: message.referral } : {}),
-    })
-    .where(eq(waConversations.id, conversation.id));
+  // The message and who answers it are one step: a failure in between is
+  // retried whole (a stored message is never left without its routing).
+  await db.transaction(async (tx) => {
+    const [stored] = await tx
+      .insert(waMessages)
+      .values({
+        wamid: message.wamid,
+        conversationId: conversation.id,
+        contactId: contact!.id,
+        leadId,
+        direction: 'in',
+        author: 'contact',
+        kind: message.kind,
+        text: message.text,
+        content: message.content,
+        waTimestamp: message.at,
+      })
+      .onConflictDoNothing()
+      .returning({ id: waMessages.id });
+    if (!stored) return;
+    await tx
+      .update(waConversations)
+      .set({
+        lastMessageAt: sql`greatest(${waConversations.lastMessageAt}, ${at.toISOString()}::timestamptz)`,
+        ...(link && !conversation.originCode ? { originCode: code } : {}),
+        ...(message.referral && !conversation.referral ? { referral: message.referral } : {}),
+      })
+      .where(eq(waConversations.id, conversation.id));
 
-  const [lead] = leadId
-    ? await db
-        .select({
-          id: leads.id,
-          ownerEmployeeId: leads.ownerEmployeeId,
-          pipeline: leads.pipeline,
-          clientId: leads.clientId,
-        })
-        .from(leads)
-        .where(eq(leads.id, leadId))
-    : [];
-  await routeInbound(db, {
-    conversation,
-    created,
-    lead: lead ?? null,
-    link: link ? { id: link.id, clientId: link.clientId, channel: link.channel } : null,
-    sofiaOn,
-    now,
+    const [lead] = leadId
+      ? await tx
+          .select({
+            id: leads.id,
+            ownerEmployeeId: leads.ownerEmployeeId,
+            pipeline: leads.pipeline,
+            clientId: leads.clientId,
+          })
+          .from(leads)
+          .where(eq(leads.id, leadId))
+      : [];
+    await routeInbound(tx, {
+      conversation,
+      created,
+      messageId: stored.id,
+      quietOptOut: Boolean(contact!.optOutAt) && !talks,
+      lead: lead ?? null,
+      link: link ? { id: link.id, clientId: link.clientId, channel: link.channel } : null,
+      sofiaOn,
+      now,
+    });
   });
+}
+
+/** How long a seller's message from a closed deal keeps the person's answers with that seller. */
+const HELD_DAYS = 30;
+
+/**
+ * The closed deal whose conversation a seller holds with this person (they
+ * wrote from it in the last 30 days), so the person's answer reaches them
+ * rather than starting over with Sofia.
+ */
+async function heldDealOf(db: Database, contactId: string, now: Date): Promise<string | null> {
+  const [held] = await db
+    .select({ leadId: waConversations.leadId })
+    .from(waConversations)
+    .where(
+      and(
+        eq(waConversations.contactId, contactId),
+        sql`${waConversations.leadId} is not null`,
+        inArray(waConversations.attendance, ['with_person', 'waiting_seller']),
+        sql`exists (select 1 from wa_messages o where o.conversation_id = ${waConversations.id}
+              and o.author = 'employee'
+              and o.created_at > ${new Date(now.getTime() - HELD_DAYS * 86_400_000).toISOString()}::timestamptz)`,
+      ),
+    )
+    .orderBy(desc(waConversations.lastMessageAt))
+    .limit(1);
+  return held?.leadId ?? null;
 }
 
 // --- a status of one of our messages --------------------------------------------------------

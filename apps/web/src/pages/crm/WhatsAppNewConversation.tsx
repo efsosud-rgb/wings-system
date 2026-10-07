@@ -81,7 +81,13 @@ export function WhatsAppNewConversation({ onClose }: { onClose: () => void }) {
       {q.trim().length >= 2 && !targets.isFetching && found.length === 0 && !isNumber && (
         <p className="crm-muted">Nada encontrado nas suas negociações.</p>
       )}
-      {isNumber && !sameNumber && !targets.isFetching && (
+      {isNumber && !sameNumber && !targets.isFetching && targets.data?.busy && (
+        <p className="crm-muted">
+          Esta pessoa já está em atendimento (com a Sofia ou com a equipe) e ainda não tem
+          negociação. Peça à Diretoria para passar a conversa a você.
+        </p>
+      )}
+      {isNumber && !sameNumber && !targets.isFetching && !targets.data?.busy && (
         <NewNumber
           phone={digits}
           canCreate={canCreate}

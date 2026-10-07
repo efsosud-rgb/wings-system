@@ -246,7 +246,8 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
         </p>
       )}
       <WhatsAppChat
-        thread={leadId ? { leadId } : { conversationId: id }}
+        // Sent in this conversation, to its own number (a deal's contact may not be its main phone).
+        thread={{ conversationId: id }}
         data={data}
         canSend={canSend}
       />

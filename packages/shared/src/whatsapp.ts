@@ -226,6 +226,15 @@ export interface WaNewTarget {
   conversationId: string | null;
 }
 
+export interface WaTargets {
+  targets: WaNewTarget[];
+  /**
+   * The typed number is already being attended with no deal (Sofia or the
+   * team): a seller may not start it as their own deal.
+   */
+  busy?: boolean;
+}
+
 // --- calls (Calling API) ---------------------------------------------------------------
 
 /**

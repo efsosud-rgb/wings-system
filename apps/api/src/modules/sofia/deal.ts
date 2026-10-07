@@ -85,13 +85,26 @@ export async function sofiaHandOver(
       : null;
   const companyName = field('companyName');
 
-  // The open deal (without owner) the conversation already belongs to, or the entry rule.
+  // The conversation's own deal is completed when it is open and fits: no
+  // owner yet (or one the seller gave back to Sofia), the same funnel, and for
+  // a brand the same brand (or none yet). Anything else — a closed deal, a
+  // won sale, another brand — is never touched: a new deal is made.
   const own = conversation.leadId
     ? await db.query.leads.findFirst({ where: eq(leads.id, conversation.leadId) })
     : undefined;
-  const result = own
+  const fits =
+    own &&
+    own.won === null &&
+    (own.pipeline === null || own.pipeline === pipeline) &&
+    (!brand ||
+      own.clientId === brand.id ||
+      (own.clientId === WINGS_CLIENT_ID && !own.ownerEmployeeId));
+  const result = fits
     ? { lead: own, created: false }
     : await upsertLead(db, {
+        // Never merged into another deal of the phone (all of them are closed,
+        // or the open one does not fit): a deal of its own.
+        forceNew: true,
         source: facts.trackingLinkId ? 'whatsapp_link' : 'whatsapp',
         name: field('name') ?? contact.profileName,
         phone: contact.phone,
@@ -133,33 +146,32 @@ export async function sofiaHandOver(
         },
       });
 
-  let lead = result.lead;
+  let lead = result.lead!;
   if (!result.created) {
-    // The phone had a deal already: its answers are filled in, then it is
-    // reopened if it was closed, put in this funnel and given an owner.
+    // The conversation's open deal: its answers are filled in. One with an
+    // owner (given back to Sofia) keeps its funnel, brand and owner; one
+    // without gets this funnel, the brand when it had none, and the rotation.
     await db
       .update(leads)
       .set({
         formAnswers: sql`coalesce(${leads.formAnswers}, '{}'::jsonb) || ${JSON.stringify(formAnswers)}::jsonb`,
+        ...(!lead.ownerEmployeeId && brand && lead.clientId !== brand.id
+          ? { clientId: brand.id, clientMapped: true, brand: brand.name }
+          : {}),
         updatedAt: now,
       })
       .where(eq(leads.id, lead.id));
-    const owner = lead.ownerEmployeeId
-      ? await db.query.employees.findFirst({
-          where: and(eq(employees.id, lead.ownerEmployeeId), eq(employees.status, 'active')),
-          columns: { id: true },
-        })
-      : undefined;
-    const ownerId = owner?.id ?? (await db.transaction((tx) => nextInRotation(tx, pipeline, now)));
-    const changed = await changeLead(db, {
-      leadId: lead.id,
-      ...(lead.pipeline !== pipeline ? { pipeline } : {}),
-      ...(ownerId && ownerId !== lead.ownerEmployeeId ? { ownerEmployeeId: ownerId } : {}),
-      ...(lead.won !== null ? { won: null } : {}),
-      source: 'sofia',
-      actorEmployeeId: null,
-    });
-    if (changed.ok) lead = changed.lead;
+    if (!lead.ownerEmployeeId) {
+      const ownerId = await db.transaction((tx) => nextInRotation(tx, pipeline, now));
+      const changed = await changeLead(db, {
+        leadId: lead.id,
+        ...(lead.pipeline !== pipeline ? { pipeline } : {}),
+        ...(ownerId ? { ownerEmployeeId: ownerId } : {}),
+        source: 'sofia',
+        actorEmployeeId: null,
+      });
+      if (changed.ok) lead = changed.lead;
+    }
     await ensureFirstContactTask(db, lead, null, now);
   }
   // Sofia's leads are an arrival like a form: the owner hears of it (or

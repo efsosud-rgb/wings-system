@@ -16,8 +16,10 @@ import type { Database } from '../../db/client.js';
 import {
   auditLog,
   clients,
+  crmContacts,
   crmDistributionMembers,
   crmNotifications,
+  leadContacts,
   leadTasks,
   leadTrackingLinks,
   leads,
@@ -968,6 +970,214 @@ describe('the WhatsApp screen (WhatsApp Web of each person)', () => {
     await write(phone, text('oi'));
     const byPhone = await find(owner.cookies, phone.slice(-8));
     expect(byPhone[0]?.conversationId).toBe((await conversationOf(phone)).id);
+  });
+});
+
+describe('what the review found (each was a real path)', () => {
+  it('an old PARAR is never read again: Sofia reads only what came after the conversation became hers', async () => {
+    const admin = await sessionFor('admin_master');
+    const phone = newPhone();
+    llmAnswers = [said({ intent: 'indefinido' })];
+    await write(phone, text('oi'));
+    await sofiaAnswers();
+    const conversation = await conversationOf(phone);
+    await app.inject({
+      method: 'POST',
+      url: `/sofia/conversations/${conversation.id}/attendance`,
+      cookies: admin.cookies,
+      payload: { action: 'take' },
+    });
+    await write(phone, text('PARAR'));
+    await write(phone, text('desculpa, pode continuar'));
+    await app.inject({
+      method: 'POST',
+      url: `/sofia/conversations/${conversation.id}/attendance`,
+      cookies: admin.cookies,
+      payload: { action: 'close' },
+    });
+    llmAnswers = [said({ intent: 'formatacao' })];
+    await write(phone, text('Quero franquear minha empresa'));
+    await sofiaAnswers();
+    const after = await conversationOf(phone);
+    expect(after.attendance).toBe('sofia');
+    expect(bodyOf(lastSent())).toContain('qual é o seu nome?');
+    // The model saw the new message as the last one, and the old PARAR was not acted on.
+    const [contact] = await db.select().from(waContacts).where(eq(waContacts.phone, phone));
+    expect(contact!.optOutAt).toBeNull();
+  });
+
+  it('a deal that gets an owner while Sofia talks goes to the owner, and its funnel is not changed', async () => {
+    const phone = newPhone();
+    llmAnswers = [said({ intent: 'indefinido' })];
+    await write(phone, text('oi'));
+    await sofiaAnswers();
+    const [owned] = await db
+      .insert(leads)
+      .values({
+        source: 'site_form',
+        name: 'Lead do site',
+        phone,
+        pipeline: 'expansao',
+        clientId: brandId,
+        ownerEmployeeId: expansionSeller,
+      })
+      .returning();
+    await write(phone, tap('sofia:formatacao'));
+    expect(await sofiaAnswers()).toBe(0);
+    const conversation = await conversationOf(phone);
+    expect(conversation).toMatchObject({ attendance: 'waiting_seller', leadId: owned!.id });
+    const [lead] = await db.select().from(leads).where(eq(leads.id, owned!.id));
+    expect(lead).toMatchObject({ pipeline: 'expansao', clientId: brandId });
+  });
+
+  it('a sticker after SAIR gets no answer', async () => {
+    const phone = newPhone();
+    await write(phone, text('SAIR'));
+    await sofiaAnswers();
+    const before = sends.length;
+    await write(phone, { type: 'sticker', sticker: { id: 'st1', mime_type: 'image/webp' } });
+    await sofiaAnswers();
+    expect(sends.length).toBe(before);
+    expect((await conversationOf(phone)).attendance).toBe('closed');
+  });
+
+  it('a person taking the conversation while the model thinks stops Sofia: nothing sent, nothing overwritten', async () => {
+    const phone = newPhone();
+    await write(phone, tap('sofia:formatacao'));
+    await sofiaAnswers();
+    await write(phone, text('Bia'));
+    await sofiaAnswers();
+    const conversation = await conversationOf(phone);
+    const before = sends.length;
+    const slow: AgentLlm = {
+      async complete() {
+        // A seller clicks "Assumir" during the call.
+        await db
+          .update(waConversations)
+          .set({ attendance: 'with_person' })
+          .where(eq(waConversations.id, conversation.id));
+        return {
+          text: '',
+          toolCalls: [
+            {
+              id: 'c1',
+              name: 'sofia_turn',
+              arguments: JSON.stringify(said({ intent: 'quer_pessoa' })),
+            },
+          ],
+          usage: { inputTokens: 10, outputTokens: 10, costUsd: 0.0001 },
+          finishReason: 'tool_calls',
+        };
+      },
+    };
+    await write(phone, text('Burger da Bia'));
+    clock += 5_000;
+    await runDueSofiaTurns({ ...deps(), llm: slow });
+    expect(sends.length).toBe(before);
+    expect((await conversationOf(phone)).attendance).toBe('with_person');
+  });
+
+  it('a name the rule cannot read is asked again by rule; the model never gets it', async () => {
+    const phone = newPhone();
+    await write(phone, tap('sofia:formatacao'));
+    await sofiaAnswers();
+    await write(phone, text('😀😀'));
+    await sofiaAnswers();
+    expect(llmCalls).toHaveLength(0);
+    expect(bodyOf(lastSent())).toBe(
+      `${SOFIA_DEFAULT_SETTINGS.texts.notUnderstood}\n\nPara começar, qual é o seu nome?`,
+    );
+    await write(phone, text('Ana Paula Souza, prazer!'));
+    await sofiaAnswers();
+    expect(llmCalls).toHaveLength(0);
+    expect(bodyOf(lastSent())).toBe('Qual é o nome da sua empresa?');
+    const conversation = await conversationOf(phone);
+    expect((conversation.sofiaFacts as { answers: Record<string, string> }).answers.nome).toBe(
+      'Ana Paula Souza',
+    );
+  });
+
+  it('a brand lead whose phone had a won Formatação sale gets a new Expansão deal with the brand; the sale stays won', async () => {
+    const phone = newPhone();
+    const [sale] = await db
+      .insert(leads)
+      .values({
+        source: 'manual',
+        name: 'Cliente antigo',
+        phone,
+        pipeline: 'formatacao',
+        won: true,
+        ownerEmployeeId: formatSeller,
+      })
+      .returning();
+    llmAnswers = [said({ intent: 'expansao' })];
+    await write(phone, text('WCHUR2 Olá! Quero saber da franquia Casa do Churros.'));
+    await sofiaAnswers();
+    await write(phone, tap('sofia:marca-sim'));
+    await sofiaAnswers();
+    await write(phone, text('Rui'));
+    await sofiaAnswers();
+    llmAnswers = [said({ intent: 'expansao', answers: { cidade: 'Santos, SP' } })];
+    await write(phone, text('Santos, SP'));
+    await sofiaAnswers();
+    await write(phone, pick('sofia:q:investimento:0'));
+    await sofiaAnswers();
+    await write(phone, pick('sofia:q:prazo:0'));
+    await sofiaAnswers();
+    await write(phone, pick('sofia:q:origem:0'));
+    await sofiaAnswers();
+    const conversation = await conversationOf(phone);
+    expect(conversation.leadId).not.toBe(sale!.id);
+    const [deal] = await db.select().from(leads).where(eq(leads.id, conversation.leadId!));
+    expect(deal).toMatchObject({ pipeline: 'expansao', clientId: brandId, won: null });
+    const [old] = await db.select().from(leads).where(eq(leads.id, sale!.id));
+    expect(old!.won).toBe(true);
+  });
+
+  it('a reply in a deal’s conversation goes to that conversation’s number, not the deal’s main phone', async () => {
+    const admin = await sessionFor('admin_master');
+    const main = newPhone();
+    const other = newPhone();
+    const [lead] = await db
+      .insert(leads)
+      .values({
+        source: 'manual',
+        name: 'Negócio com contato',
+        phone: main,
+        pipeline: 'formatacao',
+        ownerEmployeeId: formatSeller,
+      })
+      .returning();
+    const [contact] = await db
+      .insert(crmContacts)
+      .values({ name: 'Sócio', phone: other })
+      .returning();
+    await db.insert(leadContacts).values({ leadId: lead!.id, contactId: contact!.id });
+    await write(other, text('oi, sou o sócio'));
+    const conversation = await conversationOf(other);
+    expect(conversation.leadId).toBe(lead!.id);
+    const res = await app.inject({
+      method: 'POST',
+      url: `/whatsapp/conversations/${conversation.id}/text`,
+      cookies: admin.cookies,
+      payload: { text: 'Olá! Recebemos sua mensagem.' },
+    });
+    expect(res.statusCode).toBe(201);
+    expect((sends.at(-1) as { to: string }).to).not.toBe(main);
+  });
+
+  it('the settings refuse a name question that is not of the name kind', async () => {
+    const board = await sessionFor('diretoria');
+    const formatacao = SOFIA_DEFAULT_SETTINGS.formatacao.map((q) =>
+      q.key === 'nome' ? { ...q, kind: 'text' as const } : q,
+    );
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/sofia/settings',
+      cookies: board.cookies,
+      payload: { ...SOFIA_DEFAULT_SETTINGS, formatacao },
+    });
+    expect(res.statusCode).toBe(400);
   });
 });
 

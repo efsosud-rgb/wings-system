@@ -193,7 +193,12 @@ interface Outgoing {
   payload: OutgoingPayload;
   kind: WaMessageKind;
   content: Record<string, unknown>;
+  /** Sent first as its own text, when one interactive message would pass Meta's body limit. */
+  preface?: string;
 }
+
+/** Meta's limit for the body of a button or list message is 1,024 characters. */
+const INTERACTIVE_BODY_MAX = 1_000;
 
 class Turn {
   private facts: SofiaFacts;
@@ -247,10 +252,15 @@ class Turn {
           sql`${waMessages.createdAt} > coalesce((select c.sofia_read_until from wa_conversations c where c.id = ${this.conversation.id}), '-infinity'::timestamptz)`,
         ),
       )
-      .orderBy(asc(waMessages.createdAt))
+      .orderBy(desc(waMessages.createdAt))
       .limit(30);
+    fresh.reverse();
     this.newIds = fresh.map((m) => m.id);
     if (fresh.length === 0) return this.release();
+    // Someone who asked not to be written to and sent only a sticker or a file: quiet.
+    const talks = fresh.some((m) => ['text', 'button', 'interactive'].includes(m.kind));
+    if (contact.optOutAt && !talks)
+      return this.save({ attendance: 'closed', reason: 'nao_contatar' });
 
     if (!this.settings.enabled) return this.toHuman('sofia_desligada', false);
     const windowOpen =
@@ -288,7 +298,9 @@ class Turn {
     let missed = false;
     if (texts.length > 0) {
       const text = texts.join('\n');
-      if (this.readWithoutAi(text)) progress = true;
+      const ruled = this.readWithoutAi(text);
+      if (ruled === 'read') progress = true;
+      else if (ruled === 'miss') missed = true;
       else {
         const read = await this.readWithAi();
         if (read === 'ceiling') return this.aiDown('teto_diario');
@@ -335,7 +347,7 @@ class Turn {
     const step = await this.nextStep();
     if (step.kind === 'done') return this.handOver();
     const outgoing = this.ask(step);
-    await this.save({});
+    if (!(await this.save({}))) return;
     await this.send(outgoing);
   }
 
@@ -374,35 +386,40 @@ class Turn {
     return false;
   }
 
-  /** The name step, a yes/no to the brand and "não tenho": read by rule, never by the AI. */
-  private readWithoutAi(text: string): boolean {
+  /**
+   * The name step, a yes/no to the brand and "não tenho": read by rule, never
+   * by the AI. At the name step the AI is never called: an answer the rule
+   * cannot read is a miss, and she asks again.
+   */
+  private readWithoutAi(text: string): 'read' | 'miss' | 'ai' {
     const step = this.facts.step;
     if (step === 'brand_confirm') {
       if (YES.test(text)) {
         this.facts.brandConfirmed = true;
-        return true;
+        return 'read';
       }
       if (NO.test(text) && text.length < 30) {
         this.brandClientId = null;
         this.facts.brandConfirmed = false;
         this.facts.step = 'brand';
-        return true;
+        return 'read';
       }
-      return false;
+      return 'ai';
     }
     const question = questionsOf(this.settings, this.segment).find((q) => q.key === step);
-    if (!question) return false;
+    if (!question) return 'ai';
     if (question.kind === 'name') {
-      const name = nameFrom(text);
-      if (!name) return false;
+      // "Ana Paula Souza, prazer!": the name is what comes before the first stop.
+      const name = nameFrom(text) ?? nameFrom(text.split(/[,;!?\n(]|\s[-–]\s/)[0] ?? '');
+      if (!name) return 'miss';
       this.facts.answers[question.key] = name;
-      return true;
+      return 'read';
     }
     if (question.optional && NOTHING.test(text)) {
       this.facts.answers[question.key] = 'Não tem';
-      return true;
+      return 'read';
     }
-    return false;
+    return 'ai';
   }
 
   /** One AI call under the daily ceiling; 'ceiling' when it would pass it, null when it failed. */
@@ -527,6 +544,26 @@ class Turn {
   private ask(step: Exclude<Step, { kind: 'done' }>): Outgoing {
     const texts = this.settings.texts;
     const body = (last: string) => [...this.parts, last].join('\n\n');
+    const outgoing = this.compose(step, body, texts);
+    // Over Meta's body limit (a long greeting and a long question together):
+    // what comes before the question goes as its own text first.
+    if (
+      outgoing.kind === 'interactive' &&
+      this.parts.length > 0 &&
+      sofiaWords(body(''), this.voice).length + 40 > INTERACTIVE_BODY_MAX
+    ) {
+      const preface = this.parts.join('\n\n');
+      this.parts = [];
+      return { ...this.compose(step, body, texts), preface: sofiaWords(preface, this.voice) };
+    }
+    return outgoing;
+  }
+
+  private compose(
+    step: Exclude<Step, { kind: 'done' }>,
+    body: (last: string) => string,
+    texts: SofiaSettings['texts'],
+  ): Outgoing {
     if (step.kind === 'objective') {
       this.facts.step = 'objective';
       return this.buttons(body(texts.objective), SOFIA_OBJECTIVE_BUTTONS);
@@ -600,6 +637,7 @@ class Turn {
 
   /** The questions are done: the deal is made and given to its seller. */
   private async handOver() {
+    if (!(await this.isHers())) return;
     await this.decideVoice();
     const segment = this.segment === 'expansao' ? 'expansao' : 'formatacao';
     const deal = await sofiaHandOver(this.db, {
@@ -624,9 +662,11 @@ class Turn {
         ),
       )
       .limit(1);
+    const merged = Boolean(target && target.id !== this.conversation.id);
     if (target) this.conversation = target;
     this.facts.step = null;
-    await this.save({ attendance: 'waiting_seller', reason: null });
+    await this.save({ attendance: 'waiting_seller', reason: null }, { anyHolder: merged });
+    this.stillHers = true;
     await writeAudit(this.db, {
       action: 'sofia.handed_over',
       entity: 'lead',
@@ -639,17 +679,21 @@ class Turn {
 
   /** A person of the team takes over: no deal is made. */
   private async toHuman(reason: SofiaHandoffReason, say: boolean) {
+    if (!(await this.isHers())) return;
     await this.decideVoice();
     const text = say ? this.introduced(this.withHours(this.settings.texts.handoffHuman)) : null;
-    await this.save({ attendance: 'waiting_human', reason });
+    if (!(await this.save({ attendance: 'waiting_human', reason }))) return;
+    this.stillHers = true;
     await this.notifyTeam(reason);
     if (text) await this.send(this.text(text));
   }
 
   private async aiDown(reason: 'ia_indisponivel' | 'teto_diario') {
+    if (!(await this.isHers())) return;
     await this.decideVoice();
     const text = this.introduced(this.withHours(this.settings.texts.aiDown));
-    await this.save({ attendance: 'waiting_human', reason });
+    if (!(await this.save({ attendance: 'waiting_human', reason }))) return;
+    this.stillHers = true;
     await this.notifyTeam(reason);
     await this.send(this.text(text));
   }
@@ -660,6 +704,7 @@ class Turn {
    * owner is lost with that reason; one with an owner is never touched.
    */
   private async close(reason: Exclude<SofiaCloseReason, 'encerrada'>, confirm: boolean) {
+    if (!(await this.isHers())) return;
     await this.decideVoice();
     if (reason === 'nao_contatar')
       await this.db
@@ -680,7 +725,8 @@ class Turn {
           actorEmployeeId: null,
         });
     }
-    await this.save({ attendance: 'closed', reason });
+    if (!(await this.save({ attendance: 'closed', reason }))) return;
+    this.stillHers = true;
     await writeAudit(this.db, {
       action: 'sofia.closed',
       entity: 'wa_conversation',
@@ -719,10 +765,13 @@ class Turn {
    * person sent while this turn ran pushed `sofia_due_at` forward: that wake-up
    * is kept.
    */
-  private async save(change: { attendance?: string; reason?: string | null }) {
+  private async save(
+    change: { attendance?: string; reason?: string | null },
+    options: { anyHolder?: boolean } = {},
+  ): Promise<boolean> {
     const ids = this.newIds;
     const dueAtClaim = this.conversation.sofiaDueAt;
-    await this.db
+    const saved = await this.db
       .update(waConversations)
       .set({
         sofiaFacts: this.facts,
@@ -749,7 +798,34 @@ class Turn {
             }
           : {}),
       })
+      .where(
+        and(
+          eq(waConversations.id, this.conversation.id),
+          // A person took the conversation while she thought: it is theirs, and she stays quiet.
+          ...(options.anyHolder
+            ? []
+            : [
+                eq(waConversations.attendance, 'sofia'),
+                eq(waConversations.sofiaClaimedAt, this.now),
+              ]),
+        ),
+      )
+      .returning({ id: waConversations.id });
+    this.stillHers = saved.length > 0;
+    return this.stillHers;
+  }
+
+  /** False once a save found the conversation taken by a person: nothing more is sent. */
+  private stillHers = true;
+
+  /** Whether the conversation is still hers in this turn (checked before a side effect). */
+  private async isHers(): Promise<boolean> {
+    const [row] = await this.db
+      .select({ attendance: waConversations.attendance, claimed: waConversations.sofiaClaimedAt })
+      .from(waConversations)
       .where(eq(waConversations.id, this.conversation.id));
+    this.stillHers = row?.attendance === 'sofia' && row.claimed?.getTime() === this.now.getTime();
+    return this.stillHers;
   }
 
   /** Nothing to answer: the messages count as read, the turn ends. */
@@ -757,9 +833,14 @@ class Turn {
     await this.save({});
   }
 
-  private async send(outgoing: Outgoing, leadId?: string) {
+  private async send(outgoing: Outgoing, leadId?: string): Promise<void> {
     const { config } = this.deps;
-    if (!config) return;
+    if (!config || !this.stillHers) return;
+    if (outgoing.preface) {
+      const { preface, ...rest } = outgoing;
+      await this.send(this.text(preface), leadId);
+      return this.send(rest, leadId);
+    }
     const delivered = await deliverWhatsApp(this.db, this.deps.fetchImpl, config, {
       contact: this.contact,
       conversationId: this.conversation.id,

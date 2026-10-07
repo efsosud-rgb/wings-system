@@ -124,6 +124,24 @@ export async function brandVoiceOf(
   leadId: string | null,
   conversationId: string | null,
 ): Promise<string | null> {
+  // Sofia's brand in the conversation wins: the deal may still be Wings' when
+  // the person came by a brand's link.
+  const [conversation] = conversationId
+    ? await db
+        .select({ segment: waConversations.segment, name: clients.name })
+        .from(waConversations)
+        .leftJoin(clients, eq(clients.id, waConversations.brandClientId))
+        .where(eq(waConversations.id, conversationId))
+    : leadId
+      ? await db
+          .select({ segment: waConversations.segment, name: clients.name })
+          .from(waConversations)
+          .leftJoin(clients, eq(clients.id, waConversations.brandClientId))
+          .where(eq(waConversations.leadId, leadId))
+          .orderBy(desc(waConversations.lastMessageAt))
+          .limit(1)
+      : [];
+  if (conversation?.segment === 'expansao' && conversation.name) return conversation.name;
   if (leadId) {
     const [row] = await db
       .select({ pipeline: leads.pipeline, clientId: leads.clientId, name: clients.name })
@@ -133,13 +151,7 @@ export async function brandVoiceOf(
     if (row)
       return row.pipeline === 'expansao' && row.clientId !== WINGS_CLIENT_ID ? row.name : null;
   }
-  if (!conversationId) return null;
-  const [row] = await db
-    .select({ segment: waConversations.segment, name: clients.name })
-    .from(waConversations)
-    .innerJoin(clients, eq(clients.id, waConversations.brandClientId))
-    .where(eq(waConversations.id, conversationId));
-  return row?.segment === 'expansao' ? row.name : null;
+  return null;
 }
 
 /** A row of the conversation lists (the WhatsApp screen and Sofia's), in the reader's scope. */
