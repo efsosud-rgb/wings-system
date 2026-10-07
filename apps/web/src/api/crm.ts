@@ -26,7 +26,12 @@ import type {
   LeadTask,
   LeadTaskKind,
   Meeting,
+  MeetingCreateInput,
+  MeetingSpeakersInput,
   MeetingSummary,
+  MeetingTranscript,
+  MeetingUpdateInput,
+  SummarySendChannel,
   SalesDashboard,
   DriveUploadTicket,
 } from '@wings/shared';
@@ -526,4 +531,139 @@ export function useNextStepTask(meetingId: string) {
       void queryClient.invalidateQueries({ queryKey: ['meetings', meetingId] });
     },
   });
+}
+
+/** Everything of one meeting the screen may have read: the deal's list, the meeting, its transcript. */
+function invalidateMeeting(queryClient: ReturnType<typeof useQueryClient>, meeting: Meeting) {
+  void queryClient.invalidateQueries({ queryKey: ['meetings', meeting.id] });
+  void queryClient.invalidateQueries({ queryKey: ['leads', meeting.leadId, 'meetings'] });
+}
+
+/** "Agendar reunião": a pasted link today; `createMeet` answers 503 until the Workspace is authorised. */
+export function useCreateMeeting(leadId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: MeetingCreateInput) =>
+      api.post<{ meeting: Meeting }>(`/leads/${leadId}/meetings`, input).then((r) => r.meeting),
+    onSuccess: (meeting) => {
+      invalidateMeeting(queryClient, meeting);
+      invalidateDeals(queryClient);
+    },
+  });
+}
+
+/** Title, window, link or cancellation of a meeting that has not ended. */
+export function useUpdateMeeting(meetingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: MeetingUpdateInput) =>
+      api.patch<{ meeting: Meeting }>(`/meetings/${meetingId}`, input).then((r) => r.meeting),
+    onSuccess: (meeting) => invalidateMeeting(queryClient, meeting),
+  });
+}
+
+/**
+ * The recording goes straight to storage: a signed address for one type and
+ * one exact size (15 minutes), the file by PUT with exactly the headers given,
+ * then `complete`, which checks the bytes arrived and queues the transcription.
+ * The storage key never reaches the browser.
+ */
+export function useUploadRecording(meetingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const signed = await api.post<{
+        uploadUrl: string;
+        headers: Record<string, string>;
+        fileId: string;
+      }>(`/meetings/${meetingId}/recording/upload-url`, {
+        contentType: file.type,
+        sizeBytes: file.size,
+      });
+      const sent = await fetch(signed.uploadUrl, {
+        method: 'PUT',
+        headers: signed.headers,
+        body: file,
+      });
+      if (!sent.ok) throw new Error(`O armazenamento recusou o arquivo (${sent.status}).`);
+      return api
+        .post<{ meeting: Meeting }>(`/meetings/${meetingId}/recording/complete`, {
+          fileId: signed.fileId,
+        })
+        .then((r) => r.meeting);
+    },
+    onSuccess: (meeting) => invalidateMeeting(queryClient, meeting),
+  });
+}
+
+/** A 5-minute signed address to listen to the recording; asked for on the click, never kept. */
+export const fetchRecordingLink = (meetingId: string) =>
+  api.get<{ url: string; expiresAt: string }>(`/meetings/${meetingId}/recording/link`);
+
+export const useMeetingTranscript = (meetingId: string, enabled: boolean) =>
+  useQuery({
+    queryKey: ['meetings', meetingId, 'transcript'],
+    queryFn: () =>
+      api
+        .get<{ transcript: MeetingTranscript }>(`/meetings/${meetingId}/transcript`)
+        .then((r) => r.transcript),
+    enabled,
+    retry: false,
+  });
+
+/** Names the voices ("S1" is the seller, "S2" the candidate…). */
+export function useNameSpeakers(meetingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: MeetingSpeakersInput) =>
+      api
+        .patch<{ transcript: MeetingTranscript }>(`/meetings/${meetingId}/speakers`, input)
+        .then((r) => r.transcript),
+    onSuccess: () =>
+      void queryClient.invalidateQueries({ queryKey: ['meetings', meetingId, 'transcript'] }),
+  });
+}
+
+/** Asks for the analysis (again): queued under the daily ceiling; 202. */
+export function useRequestAnalysis(meetingId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ meeting: Meeting }>(`/meetings/${meetingId}/analysis`).then((r) => r.meeting),
+    onSuccess: (meeting) => invalidateMeeting(queryClient, meeting),
+  });
+}
+
+/**
+ * The summary to the franchisor's owner (Expansão): a draft from the analysis,
+ * edited while a draft, approved by `meetings.approve_send` **with the exact
+ * text the approver read** (the API refuses a draft edited since), sent once.
+ */
+export function useSummarySend(meetingId: string) {
+  const queryClient = useQueryClient();
+  const done = (meeting: Meeting) => invalidateMeeting(queryClient, meeting);
+  const post = (path: string, body?: unknown) =>
+    api
+      .post<{ meeting: Meeting }>(`/meetings/${meetingId}/summary-send${path}`, body)
+      .then((r) => r.meeting);
+  return {
+    create: useMutation({
+      mutationFn: (channel: SummarySendChannel) => post('', { channel }),
+      onSuccess: done,
+    }),
+    edit: useMutation({
+      mutationFn: (text: string) =>
+        api
+          .patch<{ meeting: Meeting }>(`/meetings/${meetingId}/summary-send`, { text })
+          .then((r) => r.meeting),
+      onSuccess: done,
+    }),
+    approve: useMutation({
+      /** `text` is what is on the screen, verbatim: the approval is for it and nothing else. */
+      mutationFn: (text: string) => post('/approve', { text }),
+      onSuccess: done,
+    }),
+    refuse: useMutation({ mutationFn: () => post('/refuse'), onSuccess: done }),
+    send: useMutation({ mutationFn: () => post('/send'), onSuccess: done }),
+  };
 }

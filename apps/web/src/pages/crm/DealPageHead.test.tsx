@@ -181,6 +181,20 @@ vi.mock('../../api/crm.js', () => ({
   useMeetings: () => meetingState.list,
   useMeeting: () => meetingState.one,
   useNextStepTask: () => mutation(nextStepMutate),
+  useCreateMeeting: () => mutation(),
+  useUpdateMeeting: () => mutation(),
+  useUploadRecording: () => mutation(),
+  fetchRecordingLink: vi.fn(),
+  useMeetingTranscript: () => ({ data: undefined, isLoading: false, isError: false }),
+  useNameSpeakers: () => mutation(),
+  useRequestAnalysis: () => mutation(),
+  useSummarySend: () => ({
+    create: mutation(),
+    edit: mutation(),
+    approve: mutation(),
+    refuse: mutation(),
+    send: mutation(),
+  }),
   useAskDeal: () => ({ ...mutation(askMutate), data: askState.data, error: askState.error }),
 }));
 
@@ -585,12 +599,12 @@ describe('the AI summary', () => {
 });
 
 describe('the Reunião section', () => {
-  it('keeps Agendar and Iniciar disabled "em breve", shows "—" with the reason while the API is off, and the Cliente field on Expansão', () => {
+  it('offers Agendar, keeps Iniciar off without a meeting, shows "—" with the reason while the API is off, and the Cliente field on Expansão', () => {
     meetingState.list = { data: undefined, isLoading: false, isError: true, error: new ApiError(404, { error: 'not_found', message: 'x' }) };
     show();
     fireEvent.click(within(sectionTabs()).getByRole('tab', { name: 'Reunião' }));
     const body = within(sectionTabs().parentElement!);
-    expect((body.getByRole('button', { name: /Agendar reunião/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect((body.getByRole('button', { name: /Agendar reunião/ }) as HTMLButtonElement).disabled).toBe(false);
     expect((body.getByRole('button', { name: /Iniciar reunião/ }) as HTMLButtonElement).disabled).toBe(true);
     expect(body.getByText('A API de reuniões ainda não está ligada.')).toBeTruthy();
     expect(body.getByText('Cliente (marca franqueadora)')).toBeTruthy();
