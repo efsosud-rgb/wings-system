@@ -4,6 +4,7 @@ import {
   CSV_IMPORT_MAX_ROWS,
   csvHeaderKey,
   isValidCnpj,
+  LEAD_ENTERED_SOURCE_LABELS,
   LEAD_OUTCOME_LABELS,
   LEAD_PIPELINE_LABELS,
   LEAD_SOURCE_LABELS,
@@ -342,7 +343,8 @@ export const EXPORT_HEADERS = [
   'Valor estimado (R$)',
   'Dono',
   'Origem',
-  'Chegou em',
+  'Entrou em',
+  'Data vinda de',
   'Na etapa desde',
 ] as const;
 
@@ -365,7 +367,8 @@ export function leadsToCsv(items: readonly LeadListItem[]): string {
     money(lead.valueCents),
     lead.ownerName ?? '',
     LEAD_SOURCE_LABELS[lead.source],
-    when(lead.createdAt),
+    when(lead.enteredAt),
+    LEAD_ENTERED_SOURCE_LABELS[lead.enteredAtSource],
     when(lead.stageChangedAt),
   ]);
   return `\uFEFF${toCsv([EXPORT_HEADERS as unknown as string[], ...rows])}`;

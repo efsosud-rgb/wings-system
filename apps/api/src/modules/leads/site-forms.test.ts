@@ -231,6 +231,7 @@ describe('site form (T5)', () => {
     const [lead] = await db.select().from(leads).where(eq(leads.phone, '5521999990077'));
     expect(lead).toMatchObject({
       source: 'site_form',
+      enteredAtSource: 'form_submitted',
       pipeline: 'formatacao',
       email: null,
       companyName: 'Padaria Teste',

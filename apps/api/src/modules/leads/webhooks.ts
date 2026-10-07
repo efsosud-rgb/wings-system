@@ -301,6 +301,8 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
           attribution: conversion.attribution,
           legalBasis: conversion.legalBasis,
           consentedAt: conversion.at ?? new Date(),
+          enteredAt: conversion.at,
+          enteredAtSource: 'rd_conversion',
           consentSource: `rd_station:${conversion.identifier ?? 'conversao'}`,
           consentText: conversion.legalBasisText,
           event: {
@@ -391,6 +393,8 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
       // The person wrote first, asking about the franchise: LGPD art. 7º, V.
       legalBasis: 'pre_contract',
       consentedAt: at,
+      enteredAt: inbound.at,
+      enteredAtSource: 'whatsapp_message',
       consentSource: `whatsapp:${link.channel}:${link.code}`,
       consentText:
         'A pessoa iniciou a conversa no WhatsApp da Wings pelo link rastreável, pedindo informações.',

@@ -84,6 +84,8 @@ const lead = (over: Omit<Partial<Lead>, 'work'> & { work?: Partial<Lead['work']>
     updatedAt: null,
     costUsd: 0,
   },
+  enteredAt: '2026-10-03T11:30:00.000Z',
+  enteredAtSource: 'meta_created_time',
   createdAt: '2026-10-03T12:00:00.000Z',
   updatedAt: '2026-10-03T12:00:00.000Z',
   ...over,
@@ -426,13 +428,33 @@ describe('"Sobre a negociação"', () => {
       'Budget',
       'Nome da marca',
       'Qualificação',
-      'Criada em',
+      'Entrou em',
     ])
       expect(labels()).toContain(label);
     expect(about().getByText('R$ 60 mil')).toBeTruthy();
     expect(about().getByText('Niterói')).toBeTruthy();
     expect(about().getByLabelText('Valor estimado')).toBeTruthy();
     expect(about().getByLabelText('Marca')).toBeTruthy();
+  });
+
+  it("shows when the deal entered, in Brasília time, right after the source", () => {
+    queryState.lead = lead({
+      enteredAt: '2026-10-07T17:32:00.000Z',
+      enteredAtSource: 'meta_created_time',
+    });
+    show();
+    expect(about().getByText(/07\/10\/2026 às 14:32/)).toBeTruthy();
+    expect(about().queryByText(/recebido pelo sistema/)).toBeNull();
+    expect(labels().indexOf('Entrou em')).toBe(labels().indexOf('Fonte') + 1);
+  });
+
+  it('says "recebido pelo sistema" when the source brought no date', () => {
+    queryState.lead = lead({
+      enteredAt: '2026-10-07T17:32:00.000Z',
+      enteredAtSource: 'received',
+    });
+    show();
+    expect(about().getByText(/recebido pelo sistema/)).toBeTruthy();
   });
 
   it('"Personalizar" hides a field and moves another up, and the choice survives a reload of the page', () => {

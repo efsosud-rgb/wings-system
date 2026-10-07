@@ -275,6 +275,8 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
       ).consentText;
       const result = await upsertLead(db, {
         source: 'site_form',
+        enteredAt: new Date(),
+        enteredAtSource: 'form_submitted',
         name: body.data.name,
         email: body.data.email ?? null,
         phone,

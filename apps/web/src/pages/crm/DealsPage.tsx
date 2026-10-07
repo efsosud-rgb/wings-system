@@ -4,6 +4,7 @@ import {
   INACTIVE_OWNER_LABEL,
   NO_OWNER,
   NO_OWNER_LABEL,
+  LEAD_ENTERED_SOURCE_LABELS,
   LEAD_OUTCOME_LABELS,
   LEAD_OUTCOMES,
   LEAD_PIPELINE_LABELS,
@@ -52,7 +53,7 @@ import { useCreateFromQuery } from '../../components/useCreateFromQuery.js';
 import {
   ago,
   dueLabel,
-  formatDate,
+  formatEnteredShort,
   formatPhone,
   isPast,
   money,
@@ -509,7 +510,7 @@ function Filters({
           value={filter.sort ?? ''}
           onChange={(e) => set('sort', e.target.value)}
         >
-          <option value="">Mais recentes</option>
+          <option value="">Entrada mais recente</option>
           {(Object.keys(LEAD_SORT_LABELS) as (keyof typeof LEAD_SORT_LABELS)[])
             .filter((key) => key !== 'recent')
             .map((key) => (
@@ -535,7 +536,7 @@ function Filters({
       {advanced && (
         <div className="crm-advanced">
           <label>
-            Criadas de
+            Entrada de
             <input
               className="crm-input"
               type="date"
@@ -544,7 +545,7 @@ function Filters({
             />
           </label>
           <label>
-            Criadas até
+            Entrada até
             <input
               className="crm-input"
               type="date"
@@ -1086,7 +1087,7 @@ function ListView({ pipeline, filter }: { pipeline: LeadPipeline; filter: DealFi
             <th>Na etapa há</th>
             <th>Próxima tarefa</th>
             <th>Origem</th>
-            <th>Criada em</th>
+            <th>Entrou em</th>
           </tr>
         </thead>
         <tbody>
@@ -1141,7 +1142,16 @@ function ListView({ pipeline, filter }: { pipeline: LeadPipeline; filter: DealFi
                   <span className={`crm-badge tone-${badge.tone}`}>{badge.label}</span>
                   {lead.brand && <div className="crm-sub">{lead.brand}</div>}
                 </td>
-                <td>{formatDate(lead.createdAt)}</td>
+                <td
+                  title={
+                    lead.enteredAtSource === 'received'
+                      ? 'A fonte não trouxe a data: hora em que o sistema recebeu o lead'
+                      : `Data da fonte: ${LEAD_ENTERED_SOURCE_LABELS[lead.enteredAtSource]}`
+                  }
+                >
+                  {formatEnteredShort(lead.enteredAt)}
+                  {lead.enteredAtSource === 'received' && <span className="crm-sub"> *</span>}
+                </td>
               </tr>
             );
           })}

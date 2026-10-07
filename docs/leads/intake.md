@@ -61,6 +61,30 @@ mesmo assim**, arquivada na Wings Company com `client_mapped = false`. A tela
 mostra "sem regra" e diz onde cadastrar. Uma regra criada depois não
 reprocessa leads antigos (parte 2, se precisar).
 
+## Data de entrada (`leads.entered_at`)
+
+A ficha, a lista e o kanban mostram "Entrou em", no horário de Brasília, com a data da própria fonte.
+`leads.created_at` continua sendo a hora em que a linha foi escrita e não muda. A coluna
+`entered_at_source` diz de quem é o relógio (`LEAD_ENTERED_SOURCES` em `packages/shared`):
+
+| Fonte | `entered_at` | `entered_at_source` |
+| --- | --- | --- |
+| Meta Lead Ads | `created_time` do lead na Meta | `meta_created_time` |
+| TikTok Lead Ads | `create_time` do lead | `tiktok_created_time` |
+| RD CRM (importação e seguimento) | criação do negócio no RD | `rd_deal_created` |
+| Webhook do RD Marketing | data da conversão (`event_timestamp` no corpo CONTACT) | `rd_conversion` |
+| Formulário do site ou da `/lp` | hora do envio | `form_submitted` |
+| WhatsApp (link rastreável) | hora da primeira mensagem | `whatsapp_message` |
+| Google Ads, importação de CSV, criação manual | não trazem data | `received` |
+
+`received` mostra a hora em que o sistema recebeu, com o aviso "recebido pelo sistema". Uma data
+no futuro (além de 5 minutos de relógio) ou inválida também vira `received`. Um lead que já existe
+nunca tem a data movida por uma chegada posterior. A lista ordena e filtra por `entered_at`
+(`createdFrom` e `createdTo` mantêm os nomes, para não quebrar as visões salvas). A migração 0076
+copia `created_at` para os leads existentes e marca os do RD CRM como `rd_deal_created`; os da
+Meta e do RD Marketing que já existem são preenchidos pelo script `entrada-leads.sh`
+(simulação primeiro; na produção, só com PRODUCAO digitado).
+
 ## Regras de origem (Administração → Clientes → "Origens de leads")
 
 `lead_source_rules`, mantida por quem tem `clients.manage`. Três tipos:

@@ -164,6 +164,13 @@ describe('Lead Ads read with only the key', () => {
     const rows = await db.select().from(leads).where(eq(leads.source, 'meta_lead_ads'));
     const byExternal = new Map(rows.map((r) => [r.externalId, r]));
     expect(byExternal.get('lead-1')).toMatchObject({ pipeline: 'formatacao' });
+    // The date the lead entered is Meta's own created_time, not the moment the poll read it.
+    for (const [externalId, row] of byExternal) {
+      expect(row.enteredAtSource).toBe('meta_created_time');
+      const gapHours = (row.createdAt.getTime() - row.enteredAt.getTime()) / 3_600_000;
+      if (isOld(externalId!)) expect(gapHours).toBeGreaterThan(71);
+      else expect(gapHours).toBeLessThan(1);
+    }
     expect(byExternal.get('lead-2')).toMatchObject({
       pipeline: 'expansao',
       brand: 'Marca Exemplo',

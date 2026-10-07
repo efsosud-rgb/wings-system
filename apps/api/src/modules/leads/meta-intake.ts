@@ -379,6 +379,8 @@ async function processOne(
       formAnswers: Object.keys(details.answers).length > 0 ? details.answers : null,
       legalBasis: 'consent',
       originCreatedAt: details.createdTime ?? row.createdTime ?? null,
+      enteredAt: details.createdTime ?? row.createdTime ?? null,
+      enteredAtSource: 'meta_created_time',
       consentedAt: details.createdTime ?? row.createdTime ?? now,
       consentSource: `meta_lead_ads:form:${formId ?? 'desconhecido'}`,
       consentText:

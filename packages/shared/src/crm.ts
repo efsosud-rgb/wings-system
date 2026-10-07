@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { driveUploadRequestSchema } from './drive.js';
-import { LEAD_NAME_MAX, LEAD_PIPELINES, type LeadPipeline, type LeadSource } from './leads.js';
+import {
+  LEAD_NAME_MAX,
+  LEAD_PIPELINES,
+  type LeadEnteredSource,
+  type LeadPipeline,
+  type LeadSource,
+} from './leads.js';
 
 /**
  * CRM Vendas — the Funil as the team's place of work (plano
@@ -267,6 +273,8 @@ export interface BoardCard {
   nextTask: { title: string; dueAt: string } | null;
   source: LeadSource;
   won: boolean | null;
+  enteredAt: string;
+  enteredAtSource: LeadEnteredSource;
   createdAt: string;
 }
 

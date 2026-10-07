@@ -832,6 +832,57 @@ export interface LeadFormFields {
   cnpj: string | null;
 }
 
+/**
+ * Whose clock a lead's `enteredAt` is. 'received' = the source brought no date, so it is when the
+ * system received the lead (the screens say "recebido pelo sistema").
+ */
+export const LEAD_ENTERED_SOURCES = [
+  'meta_created_time',
+  'tiktok_created_time',
+  'rd_deal_created',
+  'rd_conversion',
+  'form_submitted',
+  'whatsapp_message',
+  'received',
+] as const;
+export type LeadEnteredSource = (typeof LEAD_ENTERED_SOURCES)[number];
+
+export const LEAD_ENTERED_SOURCE_LABELS: Record<LeadEnteredSource, string> = {
+  meta_created_time: 'data de criação do lead na Meta',
+  tiktok_created_time: 'data de criação do lead no TikTok',
+  rd_deal_created: 'data de criação do negócio no RD',
+  rd_conversion: 'data da conversão no RD Marketing',
+  form_submitted: 'hora do envio do formulário',
+  whatsapp_message: 'hora da primeira mensagem no WhatsApp',
+  received: 'recebido pelo sistema',
+};
+
+/** A source's date more than this far ahead of now is a clock error: the lead gets the receipt time. */
+export const LEAD_ENTERED_FUTURE_TOLERANCE_MS = 5 * 60_000;
+
+/**
+ * The date and source a new lead is stored with: the source's own date when it brought a usable
+ * one, else the moment the system received it. A date in the future (beyond a little clock skew)
+ * or not a real date is not used.
+ */
+export function resolveLeadEntered(
+  given: { enteredAt?: Date | null; enteredAtSource?: LeadEnteredSource | null },
+  now: Date = new Date(),
+): { enteredAt: Date; enteredAtSource: LeadEnteredSource } {
+  const at = given.enteredAt;
+  const source = given.enteredAtSource;
+  if (
+    !(at instanceof Date) ||
+    Number.isNaN(at.getTime()) ||
+    at.getTime() > now.getTime() + LEAD_ENTERED_FUTURE_TOLERANCE_MS ||
+    source == null ||
+    source === 'received'
+  ) {
+    return { enteredAt: now, enteredAtSource: 'received' };
+  }
+  return { enteredAt: at.getTime() > now.getTime() ? now : at, enteredAtSource: source };
+}
+
 export interface Lead {
   id: string;
   name: string | null;
@@ -868,6 +919,9 @@ export interface Lead {
   research: LeadResearch;
   /** The AI summary of the deal (ficha do cliente, Etapa 4); null until asked for. */
   aiSummary: LeadAiSummary | null;
+  /** When the person entered, by the source's own clock (see `LEAD_ENTERED_SOURCES`). */
+  enteredAt: string;
+  enteredAtSource: LeadEnteredSource;
   createdAt: string;
   updatedAt: string;
 }
@@ -883,6 +937,8 @@ export interface LeadListItem {
   channel: LeadChannel | null;
   score: number | null;
   researchState: LeadEnrichmentState;
+  enteredAt: string;
+  enteredAtSource: LeadEnteredSource;
   createdAt: string;
   /** CRM phase 1: funnel, brand and the stage read from RD CRM (null when the lead has no RD deal). */
   pipeline: LeadPipeline | null;
@@ -1144,8 +1200,8 @@ export const leadListQuerySchema = z.object({
 export type LeadListQuery = z.infer<typeof leadListQuerySchema>;
 
 export const LEAD_SORT_LABELS: Record<NonNullable<LeadListQuery['sort']>, string> = {
-  recent: 'Mais recentes',
-  oldest: 'Mais antigas',
+  recent: 'Entrada mais recente',
+  oldest: 'Entrada mais antiga',
   value_desc: 'Maior valor',
   value_asc: 'Menor valor',
   stage_time: 'Mais tempo na etapa',

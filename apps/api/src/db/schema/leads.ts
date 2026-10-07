@@ -162,6 +162,17 @@ export const leads = pgTable(
      * until somebody asks for one; re-made on request.
      */
     aiSummary: jsonb('ai_summary'),
+    /**
+     * When the person really entered, by the source's own clock (Meta's `created_time`, the RD
+     * deal's creation, the RD Marketing conversion, the moment a site form was sent). The CRM
+     * shows, sorts and filters by this. `created_at` stays the row's own time and is not changed.
+     */
+    enteredAt: timestamp('entered_at', { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * Whose clock `entered_at` is (`LEAD_ENTERED_SOURCES` in packages/shared). 'received' means
+     * the source brought no date and `entered_at` is when the system received the lead.
+     */
+    enteredAtSource: text('entered_at_source').notNull().default('received'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -177,6 +188,7 @@ export const leads = pgTable(
     index('leads_owner_idx').on(table.ownerEmployeeId),
     index('leads_company_idx').on(table.companyId),
     index('leads_created_idx').on(table.createdAt),
+    index('leads_entered_idx').on(table.enteredAt),
   ],
 );
 

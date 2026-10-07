@@ -309,6 +309,14 @@ describe('the RD follow-up gives new recent deals to the rotation', () => {
     expect(await eventKinds(row!.id)).not.toContain('lead.owner_changed');
   });
 
+  it("stores the RD deal's own creation date as the date the lead entered", async () => {
+    const imported = newDeal('f1', { created_at: hoursAgo(30) });
+    await follow([imported.deal], { distributeNew: false });
+    const row = await leadOf(imported.id);
+    expect(row?.enteredAtSource).toBe('rd_deal_created');
+    expect(row?.enteredAt.toISOString()).toBe(new Date(imported.deal.created_at!).toISOString());
+  });
+
   it('a deal that joins a lead already there is not distributed', async () => {
     const joined = newDeal('f1');
     const phone = joined.contact.phones![0]!.phone!;

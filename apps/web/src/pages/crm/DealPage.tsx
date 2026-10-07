@@ -56,6 +56,7 @@ import {
   stageTone,
   toLocalInput,
 } from './format.js';
+import { EnteredAt } from './EnteredAt.js';
 
 /**
  * The deal's page: who and how much on top, the stage bar you click, win or
@@ -305,7 +306,10 @@ function Head({
           Dono <OwnerEdit lead={lead} canAssign={canAssign} />
         </span>
         <span>
-          Criada em <b>{formatDateTime(lead.createdAt)}</b>
+          Entrou em{' '}
+          <b>
+            <EnteredAt at={lead.enteredAt} source={lead.enteredAtSource} />
+          </b>
         </span>
       </div>
       {list.length > 0 && (
@@ -720,6 +724,11 @@ function AboutPanel({
       label: 'Fonte',
       value: `${LEAD_SOURCE_LABELS[origin.source]}${origin.channel ? ` · ${LEAD_CHANNEL_LABELS[origin.channel]}` : ''}`,
     },
+    {
+      key: 'enteredAt',
+      label: 'Entrou em',
+      value: <EnteredAt at={lead.enteredAt} source={lead.enteredAtSource} />,
+    },
     ...(origin.campaignName || origin.campaignId
       ? [{ key: 'campaign', label: 'Campanha', value: origin.campaignName ?? origin.campaignId }]
       : []),
@@ -745,7 +754,6 @@ function AboutPanel({
     ...(lead.firstMessage
       ? [{ key: 'firstMessage', label: '1ª mensagem', value: lead.firstMessage }]
       : []),
-    { key: 'createdAt', label: 'Criada em', value: formatDateTime(lead.createdAt) },
     ...(lead.crm
       ? [
           {

@@ -8,6 +8,7 @@ import {
   type CrmStage,
   type Distribution,
   type LeadChangeSource,
+  type LeadEnteredSource,
   type LeadNote,
   type LeadPipeline,
   type LeadStageHistoryEntry,
@@ -876,6 +877,8 @@ const cardSelect = () => ({
   ownerName: employees.fullName,
   stageId: leads.stageId,
   stageChangedAt: leads.stageChangedAt,
+  enteredAt: leads.enteredAt,
+  enteredAtSource: leads.enteredAtSource,
   createdAt: leads.createdAt,
   nextTask: nextTaskSql,
   source: leads.source,
@@ -910,6 +913,8 @@ const toCard = (row: CardRow): BoardCard => ({
   nextTask: row.nextTask,
   source: (row.adPlatform === 'google' ? row.source : row.source) as BoardCard['source'],
   won: row.won,
+  enteredAt: row.enteredAt.toISOString(),
+  enteredAtSource: row.enteredAtSource as LeadEnteredSource,
   createdAt: row.createdAt.toISOString(),
 });
 

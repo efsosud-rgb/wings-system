@@ -66,6 +66,8 @@ const lead = (over: Omit<Partial<Lead>, 'work'> & { work?: Partial<Lead['work']>
     updatedAt: null,
     costUsd: 0,
   },
+  enteredAt: '2026-10-01T11:30:00.000Z',
+  enteredAtSource: 'meta_created_time',
   createdAt: '2026-10-01T12:00:00.000Z',
   updatedAt: '2026-10-01T12:00:00.000Z',
   ...over,

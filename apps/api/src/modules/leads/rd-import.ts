@@ -654,6 +654,8 @@ export async function importRdDeals(
         brand,
         externalId: id,
         arrivedAt: dateOf(deal.created_at),
+        enteredAt: dateOf(deal.created_at),
+        enteredAtSource: 'rd_deal_created',
         consentSource: 'rd_crm',
         skipResearch: true,
         importBatchId: options.batchId ?? null,
