@@ -15,7 +15,7 @@ import {
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
-import { processDueRuns } from './automations.js';
+import { processDueRuns, sendTemplateToLead } from './automations.js';
 import { entryStageOf } from './crm.js';
 import { testTransport } from './crm-mail.js';
 import { upsertLead } from './service.js';
@@ -67,7 +67,9 @@ let sequenceId = '';
 const post = (url: string, payload: unknown, who = manager) =>
   app.inject({ method: 'POST', url, cookies: who.cookies, payload: payload as object });
 
-async function newLead(phone: string, email: string | null) {
+// An Expansão lead WITHOUT a brand: with one, no e-mail may reach the lead (the brand rule,
+// docs/integracoes/google-workspace.md), which the last test covers.
+async function newLead(phone: string, email: string | null, brand: string | null = null) {
   const result = await upsertLead(db, {
     source: 'site_form',
     name: 'Fulana de Teste',
@@ -76,7 +78,7 @@ async function newLead(phone: string, email: string | null) {
     clientId: WINGS_CLIENT_ID,
     clientMapped: true,
     pipeline: 'expansao',
-    brand: 'Marca Teste',
+    brand,
     skipResearch: true,
     event: { kind: 'lead.received.site_form' },
   });
@@ -193,7 +195,8 @@ describe('Regras de automação', () => {
 
     const [mail] = await db.select().from(crmEmailOutbox).where(eq(crmEmailOutbox.leadId, lead.id));
     expect(mail).toMatchObject({ mode: 'test', status: 'recorded', subject: 'Olá, Fulana' });
-    expect(mail?.body).toContain('Marca Teste');
+    // No brand on this deal (a branded Expansão deal gets no e-mail at all), so {{marca}} is empty.
+    expect(mail?.body).toContain('Oi Fulana, sobre a .');
     const events = await db
       .select({ kind: leadEvents.kind, detail: leadEvents.detail })
       .from(leadEvents)
@@ -351,5 +354,20 @@ describe('Regras de automação', () => {
         .from(crmAutomationRuns)
         .where(eq(crmAutomationRuns.leadId, imported.lead.id)),
     ).toHaveLength(0);
+  });
+
+  it('sends no e-mail to the lead of an Expansão deal with a brand (brand_hidden), nothing in the outbox', async () => {
+    const lead = await newLead('5511911110009', 'marca@exemplo.com.br', 'Marca Teste');
+    const outcome = await sendTemplateToLead(db, {
+      lead,
+      templateId,
+      transport: testTransport,
+      runId: null,
+      sentBy: null,
+    });
+    expect(outcome).toEqual({ ok: false, reason: 'brand_hidden' });
+    expect(
+      (await db.select().from(crmEmailOutbox).where(eq(crmEmailOutbox.leadId, lead.id))).length,
+    ).toBe(0);
   });
 });

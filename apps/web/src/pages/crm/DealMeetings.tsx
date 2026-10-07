@@ -2,8 +2,11 @@ import {
   MEETING_RECORDING_MAX_BYTES,
   MEETING_RECORDING_TYPES,
   MEETING_STATUS_LABELS,
+  leadHidesWings,
   meetingCreateSchema,
+  meetingTitleOf,
   meetingUpdateSchema,
+  type Lead,
   type LeadActivity,
   type Meeting,
   type MeetingSummary,
@@ -149,23 +152,27 @@ const splitEmails = (value: string) =>
     .filter(Boolean);
 
 function ScheduleForm({
-  leadId,
-  leadEmail,
+  lead,
   ownerName,
   onDone,
 }: {
-  leadId: string;
-  leadEmail: string | null;
+  lead: Pick<Lead, 'id' | 'name' | 'email' | 'pipeline' | 'brand' | 'fields'>;
   ownerName: string | null;
   onDone: () => void;
 }) {
+  const leadId = lead.id;
+  const leadEmail = lead.email;
+  const named = { name: lead.name, brand: lead.brand, companyName: lead.fields.companyName };
+  // Expansão with a brand: the lead must not see the Wings — no invitation, no e-mail.
+  const hidden = leadHidesWings(lead);
   const create = useCreateMeeting(leadId);
   const google = useGoogleStatus();
   const connected = google.data?.status.state === 'connected';
   const wings = google.data?.status.calendars.wings ?? null;
   const start = new Date(Date.now() + 60 * 60_000);
   start.setMinutes(0, 0, 0);
-  const [title, setTitle] = useState('Reunião de diagnóstico');
+  const [title, setTitle] = useState(() => meetingTitleOf(lead.pipeline, named));
+  const [inviteLead, setInviteLead] = useState(false);
   const [startsAt, setStartsAt] = useState(toLocalInput(start));
   const [endsAt, setEndsAt] = useState(toLocalInput(new Date(start.getTime() + 60 * 60_000)));
   const [calendar, setCalendar] = useState<'vendedor' | 'wings'>('vendedor');
@@ -183,9 +190,10 @@ function ScheduleForm({
       startsAt: startsAt ? new Date(startsAt).toISOString() : '',
       endsAt: endsAt ? new Date(endsAt).toISOString() : '',
       calendar,
-      attendees: splitEmails(guests).map((email) => ({ email })),
+      attendees: hidden ? [] : splitEmails(guests).map((email) => ({ email })),
       meetUrl: meetUrl.trim() || null,
       createMeet: onGoogle,
+      inviteLead: !hidden && inviteLead,
     });
     if (!parsed.success) {
       setProblem(parsed.error.issues[0]?.message ?? 'Confira os campos');
@@ -259,20 +267,39 @@ function ScheduleForm({
         )}
       </label>
       {onGoogle ? (
-        <>
-          <p className="crm-sub">
-            Convidados: {leadEmail ? `lead (${leadEmail})` : 'lead sem e-mail — não recebe convite'}
-            {ownerName ? ` · dono (${ownerName})` : ''}
+        hidden ? (
+          <p className="crm-sub" data-testid="brand-rule">
+            Expansão com marca: o lead não recebe convite do Google nem e-mail (não pode ver a
+            Wings). Mande o link do Meet pelo{' '}
+            <a href={`/crm-vendas/negociacoes/${leadId}/whatsapp`}>WhatsApp</a> com o modelo{' '}
+            <code>expansao_lembrete_reuniao</code>.
+            {ownerName ? ` O dono (${ownerName}) é avisado.` : ''}
           </p>
-          <label className="crm-field">
-            <span>Outros convidados (e-mails separados por vírgula)</span>
-            <input
-              value={guests}
-              placeholder="socio@empresa.com.br, contador@empresa.com.br"
-              onChange={(e) => setGuests(e.target.value)}
-            />
-          </label>
-        </>
+        ) : (
+          <>
+            <label className="crm-checkbox">
+              <input
+                type="checkbox"
+                checked={inviteLead}
+                disabled={!leadEmail}
+                onChange={(e) => setInviteLead(e.target.checked)}
+              />
+              Convidar o lead por e-mail{' '}
+              <small>
+                {leadEmail ? `(${leadEmail}; a equipe costuma não convidar)` : '(lead sem e-mail)'}
+              </small>
+            </label>
+            <label className="crm-field">
+              <span>Outros convidados (e-mails separados por vírgula)</span>
+              <input
+                value={guests}
+                placeholder="socio@empresa.com.br, contador@empresa.com.br"
+                onChange={(e) => setGuests(e.target.value)}
+              />
+            </label>
+            {ownerName && <p className="crm-sub">O dono ({ownerName}) é avisado.</p>}
+          </>
+        )
       ) : (
         <label className="crm-field">
           <span>Link da reunião (Google Meet, Zoom ou Teams)</span>
@@ -284,7 +311,11 @@ function ScheduleForm({
           />
         </label>
       )}
-      <p className="crm-sub">O convite e a tela avisam que a reunião é gravada.</p>
+      <p className="crm-sub">
+        {onGoogle
+          ? 'Título, cor e Meet seguem o padrão da agenda da equipe; a tela avisa que a reunião é gravada.'
+          : 'A tela avisa que a reunião é gravada.'}
+      </p>
       {problem && <p className="crm-error">{problem}</p>}
       <div className="crm-quick-row">
         <button
@@ -1073,8 +1104,7 @@ export function MeetingsTab({
       </p>
       {scheduling && (
         <ScheduleForm
-          leadId={lead.id}
-          leadEmail={lead.email}
+          lead={lead}
           ownerName={lead.work?.ownerName ?? null}
           onDone={() => setScheduling(false)}
         />

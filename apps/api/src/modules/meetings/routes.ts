@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   WINGS_CLIENT_ID,
+  leadHidesWings,
   meetingCreateSchema,
   meetingRecordingCompleteSchema,
   meetingSpeakersSchema,
@@ -120,6 +121,7 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
           id: lead.id,
           ownerEmployeeId: lead.ownerEmployeeId,
           pipeline: lead.pipeline,
+          brand: lead.brand,
           clientId: lead.clientId,
         }
       : null;
@@ -213,20 +215,35 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
       const startsAt = new Date(body.data.startsAt);
       const endsAt = new Date(body.data.endsAt);
       let google: Awaited<ReturnType<typeof createMeetingEvent>> | null = null;
+      const [contact] = await db
+        .select({
+          name: leads.name,
+          email: leads.email,
+          ownerEmployeeId: leads.ownerEmployeeId,
+          pipeline: leads.pipeline,
+          brand: leads.brand,
+          companyName: leads.companyName,
+        })
+        .from(leads)
+        .where(eq(leads.id, lead.id));
+      const hidden = contact ? leadHidesWings(contact) : false;
       if (body.data.createMeet) {
-        // The event, its Meet and the invitations, on the calendar chosen, as this person.
-        const [contact] = await db
-          .select({ name: leads.name, email: leads.email, ownerEmployeeId: leads.ownerEmployeeId })
-          .from(leads)
-          .where(eq(leads.id, lead.id));
+        // The event, its Meet and the invitations, on the calendar chosen, as this person,
+        // titled and coloured the way the team writes its calls.
         try {
           google = await createMeetingEvent(googleSync(), {
-            title: body.data.title,
             startsAt,
             endsAt,
             calendar: body.data.calendar,
             attendees: body.data.attendees,
-            lead: { name: contact?.name ?? null, email: contact?.email ?? null },
+            lead: {
+              name: contact?.name ?? null,
+              email: contact?.email ?? null,
+              pipeline: contact?.pipeline ?? null,
+              brand: contact?.brand ?? null,
+              companyName: contact?.companyName ?? null,
+            },
+            inviteLead: body.data.inviteLead,
             ownerEmployeeId: contact?.ownerEmployeeId ?? actor,
             actorEmployeeId: actor,
           });
@@ -240,14 +257,14 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
         .values({
           leadId: lead.id,
           ownerEmployeeId: actor,
-          title: body.data.title,
+          title: google?.title ?? body.data.title,
           startsAt,
           endsAt,
           calendar: body.data.calendar,
           meetUrl: google?.meetUrl ?? body.data.meetUrl ?? null,
           attendees: google
             ? google.attendees
-            : body.data.attendees.map((a) => ({
+            : (hidden ? [] : body.data.attendees).map((a) => ({
                 email: a.email,
                 name: a.name ?? null,
                 responseStatus: null,
@@ -316,6 +333,8 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
       if (startsAt >= endsAt) return bad(reply, 'O fim vem depois do início');
       const actor = request.session.actor.employeeId;
       const cancelling = body.data.status === 'cancelada';
+      // A deal that hides the Wings never gets outside guests, on Google or here.
+      if (body.data.attendees && leadHidesWings(found.lead)) delete body.data.attendees;
       const moved =
         body.data.title !== undefined ||
         body.data.startsAt !== undefined ||

@@ -10,9 +10,11 @@
 Cada pessoa conecta **a própria conta** Google do Workspace, uma vez, em **Minha conta** (menu do
 nome, canto superior direito). A partir daí, com a conta dela:
 
-- **Agendar reunião** na negociação cria o evento no Google Agenda, com Meet gerado e convite para
-  o lead (se tiver e-mail), para o dono da negociação e para outros convidados que ela digitar, na
-  agenda dela (`primary`) ou na agenda compartilhada **Wings Company**.
+- **Agendar reunião** na negociação cria o evento no Google Agenda, com Meet gerado, na agenda
+  dela (`primary`) ou na agenda **Wings Company** (a agenda principal da Thais,
+  `thais@wingscompany.com.br`, já compartilhada com a equipe), do jeito que a equipe escreve as
+  calls (ver "Padrão da equipe"). O dono da negociação é avisado; o lead só é convidado por e-mail
+  quando a pessoa marca "Convidar o lead" (Formatação) — e nunca numa Expansão com marca.
 - **Remarcar** e **Cancelar** no sistema vão primeiro ao Google (os convidados recebem o aviso) e
   só depois mudam a cópia do CRM. Se o Google recusar, a tela oferece "mudar só no sistema".
 - **Iniciar reunião** abre o Meet do evento ao lado do Wings.
@@ -26,6 +28,36 @@ nome, canto superior direito). A partir daí, com a conta dela:
 
 O token é da pessoa e age só como ela: o sistema nunca cria evento nem manda e-mail em nome de
 outra. Quem não conectou continua marcando com o link colado.
+
+## Padrão da equipe na agenda (81 eventos lidos em 07/10/2026)
+
+| | Expansão | Formatação |
+| --- | --- | --- |
+| Título | `@ <Nome do lead> ( <Marca> ) - CALL` | `@ Formatação ( <Empresa> - <Nome do lead> ) - CALL` |
+| Cor | a da agenda (sem `colorId`) | Banana (`colorId` 5) |
+| Meet | gerado | gerado |
+| Duração | 60 min | 60 min |
+| Convidados | nenhum (a equipe não põe o lead) | nenhum por padrão; "Convidar o lead" é opção |
+| Descrição | nenhuma | só o aviso de gravação, e só quando o lead é convidado |
+
+O sistema escreve exatamente isso (`meetingTitleOf`, `MEETING_GOOGLE_COLOR` em
+`packages/shared/src/meetings.ts`): o título do evento no Google e no CRM vem do padrão, com o nome,
+a marca e a empresa do lead. Flamingo (4, trabalho de formatação `FMT | <cliente>`), Tangerina (6,
+reuniões internas) e Tomate (11, jurídico e externos) são de outros usos e o sistema nunca as usa.
+Lembretes: os padrões da agenda.
+
+## Regra da marca (Eric, 07/10 17:06)
+
+Numa negociação de **Expansão com marca**, o lead não pode ver a Wings. Um convite do Google ou um
+e-mail de uma conta `@wingscompany.com.br` mostra a Wings, então nessas negociações
+(`leadHidesWings`: funil `expansao` com `brand` preenchida):
+
+- o sistema **não convida o lead** nem aceita convidados de fora (na criação e no remarcar);
+- a aba E-mail **não envia** (`409 brand_hidden`), e as automações também não;
+- o link do Meet vai pelo **WhatsApp**, no modelo `expansao_lembrete_reuniao`, que não cita a Wings;
+- a tela mostra isso no lugar da caixa de convidar.
+
+Na Formatação, "Convidar o lead por e-mail" continua como opção, desmarcada por padrão.
 
 ## Qual autorização é — e por que não a delegação de domínio
 
@@ -80,7 +112,7 @@ Tudo em [console.cloud.google.com](https://console.cloud.google.com), logado com
    ```
    wings-env set api-staging GOOGLE_WORKSPACE_CLIENT_ID '<id>.apps.googleusercontent.com'
    wings-env set api-staging GOOGLE_WORKSPACE_CLIENT_SECRET '<chave>'
-   wings-env set api-staging GOOGLE_WORKSPACE_WINGS_CALENDAR_ID '<id da agenda, passo da Thais>'
+   wings-env set api-staging GOOGLE_WORKSPACE_WINGS_CALENDAR_ID 'thais@wingscompany.com.br'
    ```
    Confira que `INTEGRATIONS_ENCRYPTION_KEY` existe na API (é a mesma chave do Kairogen; se não
    existir em produção, gere com `openssl rand -base64 32` e **não** reutilize a do CPF). Depois
@@ -92,21 +124,21 @@ Tudo em [console.cloud.google.com](https://console.cloud.google.com), logado com
    Agenda" marcado → Marcar. Deve aparecer o link do Meet, "Abrir no Google Agenda", e o convite deve
    chegar no e-mail do lead (use um lead com o seu e-mail). Remarque e cancele para ver os avisos.
 
-## Passo da Thais (~5 min)
+## A agenda "Wings Company"
 
-1. **Compartilhar a agenda Wings Company.** Em [calendar.google.com](https://calendar.google.com),
-   ao lado da agenda "Wings Company" → ⋮ → "Configurações e compartilhamento" → "Compartilhar com
-   pessoas e grupos" → "Adicionar pessoas e grupos" → cada vendedor, permissão **"Fazer alterações
-   nos eventos"** → Enviar. Na mesma tela, em "Integrar agenda", copie o **ID da agenda**
-   (`…@group.calendar.google.com`) e mande ao Eric (passo 7).
-2. **Só se o Google bloquear.** Se ao conectar a tela do Google disser que o administrador não
-   permite o acesso, em [admin.google.com](https://admin.google.com) → Segurança → "Controle de
-   acesso e de dados" → "Controles de API" → "Gerenciar acesso de apps de terceiros" → "Configurar
-   apps internos" → marcar **"Confiar em apps internos"** → Salvar. Para a Agenda e o `gmail.send`
-   isso normalmente **não** é necessário; para a leitura das respostas (`gmail.readonly`, escopo
-   restrito) pode ser.
+É a agenda **principal da Thais** (`thais@wingscompany.com.br`), renomeada "Wings Company", e já
+está compartilhada com Fernando, Daniele, Luana e Eric com permissão de criar eventos (todos já
+criaram eventos nela). Não há pedido a fazer à Thais; o id vai direto na variável
+`GOOGLE_WORKSPACE_WINGS_CALENDAR_ID`. Um vendedor novo precisa ser adicionado por ela em
+Configurações e compartilhamento → "Fazer alterações nos eventos"; a tela Minha conta mostra
+"só leitura" ou "não compartilhada" quando falta isso.
 
-Nada disso é delegação de domínio: a Thais não autoriza o sistema a agir por ninguém.
+**Só se o Google bloquear** ao conectar ("o administrador não permite"): em
+[admin.google.com](https://admin.google.com) → Segurança → "Controle de acesso e de dados" →
+"Controles de API" → "Gerenciar acesso de apps de terceiros" → "Configurar apps internos" →
+**"Confiar em apps internos"** → Salvar. Para a Agenda e o `gmail.send` isso normalmente não é
+necessário; para a leitura das respostas (`gmail.readonly`, escopo restrito) pode ser. Nada disso é
+delegação de domínio.
 
 ## Como funciona por dentro
 
@@ -134,13 +166,15 @@ Nada disso é delegação de domínio: a Thais não autoriza o sistema a agir po
 | --- | --- | --- |
 | `GOOGLE_WORKSPACE_CLIENT_ID` | api | ID do cliente OAuth "Aplicativo da Web" (passo 6) |
 | `GOOGLE_WORKSPACE_CLIENT_SECRET` | api | Chave secreta do mesmo cliente |
-| `GOOGLE_WORKSPACE_WINGS_CALENDAR_ID` | api | ID da agenda compartilhada "Wings Company" |
+| `GOOGLE_WORKSPACE_WINGS_CALENDAR_ID` | api | `thais@wingscompany.com.br` (a agenda "Wings Company") |
 | `INTEGRATIONS_ENCRYPTION_KEY` | api | Já existe (Kairogen); cifra os tokens |
 | `CRM_EMAIL_MODE` | api | `gmail` liga o envio pelo Gmail de cada pessoa (com `smtp` de reserva); `test` até os modelos serem aprovados |
 | `APP_BASE_URL` | api | Já existe; monta a URI de redirecionamento |
 
 ## Limites conhecidos
 
+- Numa Expansão com marca o lembrete pelo WhatsApp (`expansao_lembrete_reuniao`) ainda é um clique
+  da pessoa na tela do WhatsApp; o sistema não o dispara sozinho ao marcar.
 - Resposta dos convidados (`responseStatus`) é a do momento da criação; não há leitura periódica
   do Google (um `events.get` ao abrir a reunião pode vir numa etapa seguinte).
 - Um evento movido ou apagado **no Google** não volta ao CRM (sem `watch`); o CRM é a cópia.

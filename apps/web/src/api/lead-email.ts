@@ -6,6 +6,8 @@ import { api } from './client.js';
 
 export interface LeadEmails {
   to: string | null;
+  /** Expansão with a brand: no e-mail leaves (the lead must not see the Wings). */
+  hidden: boolean;
   mode: 'test' | 'smtp' | 'gmail';
   /** The address a message sent now by this person leaves from; null in test mode or with no sender. */
   from: string | null;

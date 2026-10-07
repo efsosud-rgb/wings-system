@@ -11,6 +11,45 @@ export const MEETING_STATUSES = ['agendada', 'em_andamento', 'encerrada', 'cance
 export type MeetingStatus = (typeof MEETING_STATUSES)[number];
 
 export const MEETING_CALENDARS = ['vendedor', 'wings'] as const;
+
+// --- the team's pattern on Google Agenda (read from the Wings Company calendar, 2026-10-07) ----
+
+/**
+ * The title the team gives a call: Expansão "@ <lead> ( <marca> ) - CALL",
+ * Formatação "@ Formatação ( <empresa> - <lead> ) - CALL". The system writes
+ * the same so the shared calendar reads as one hand.
+ */
+export function meetingTitleOf(
+  pipeline: string | null,
+  lead: { name: string | null; brand: string | null; companyName: string | null },
+): string {
+  const who = lead.name?.trim() || 'Lead';
+  if (pipeline === 'formatacao') {
+    const company = lead.companyName?.trim();
+    return `@ Formatação ( ${company ? `${company} - ${who}` : who} ) - CALL`;
+  }
+  const brand = lead.brand?.trim();
+  return `@ ${who}${brand ? ` ( ${brand} )` : ''} - CALL`;
+}
+
+/**
+ * Google colorId by funnel: Formatação calls are Banana (5); Expansão calls
+ * keep the calendar's own colour. Flamingo (4), Tangerina (6) and Tomate (11)
+ * belong to other kinds of event on that calendar and are never used here.
+ */
+export const MEETING_GOOGLE_COLOR: Record<string, string | null> = {
+  formatacao: '5',
+  expansao: null,
+};
+
+/**
+ * Expansão with a brand: the lead must never see the Wings (Eric, 2026-10-07).
+ * A Google invitation or an e-mail from an @wingscompany.com.br account shows
+ * it, so for such a deal the system sends neither; the Meet link goes by
+ * WhatsApp (template `expansao_lembrete_reuniao`), which names only the brand.
+ */
+export const leadHidesWings = (lead: { pipeline: string | null; brand: string | null }) =>
+  lead.pipeline === 'expansao' && Boolean(lead.brand?.trim());
 export type MeetingCalendar = (typeof MEETING_CALENDARS)[number];
 
 export const RECORDING_STATES = ['nenhuma', 'enviando', 'guardada', 'falhou'] as const;
@@ -104,6 +143,11 @@ export const meetingCreateSchema = z
     meetUrl: meetUrlSchema.nullish(),
     /** Create the event (and its Meet) on Google; 503 google_not_connected until authorised. */
     createMeet: z.boolean().default(false),
+    /**
+     * Also invite the lead by e-mail (Formatação only; the team's default is not
+     * to). Ignored, always false, when the deal hides the Wings (`leadHidesWings`).
+     */
+    inviteLead: z.boolean().default(false),
   })
   .refine(meetingWindow, {
     message: 'O fim vem depois do início, em até 8 horas',

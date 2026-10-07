@@ -143,7 +143,14 @@ const meeting = (over: Partial<Meeting> = {}): Meeting => ({
 
 const loaded = (pipeline: Lead['pipeline'] = 'expansao'): LoadedLead =>
   ({
-    lead: { id: 'l1', pipeline, email: 'candidato@exemplo.com.br' } as Lead,
+    lead: {
+      id: 'l1',
+      pipeline,
+      name: 'Candidato Exemplo',
+      email: 'candidato@exemplo.com.br',
+      brand: pipeline === 'expansao' ? 'Marca Exemplo' : null,
+      fields: { instagram: null, website: null, companyName: 'Padaria Exemplo', cnpj: null },
+    } as Lead,
     events: [],
     notes: [],
     tasks: [],
@@ -198,7 +205,7 @@ describe('the Reunião section', () => {
     await waitFor(() => expect(calls.create).toHaveBeenCalled());
     const sent = calls.create.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(sent).toMatchObject({
-      title: 'Reunião de diagnóstico',
+      title: '@ Candidato Exemplo ( Marca Exemplo ) - CALL',
       calendar: 'vendedor',
       meetUrl: 'https://meet.google.com/abc-defg-hij',
       createMeet: false,
@@ -232,7 +239,7 @@ describe('the Reunião section', () => {
     );
   });
 
-  it('creates on Google by default for a connected person, inviting the lead, the owner and extra guests', async () => {
+  it('creates on Google by default for a connected person, with the team\u2019s title, inviting the lead only when asked', async () => {
     state.google = {
       ...state.google,
       state: 'connected',
@@ -242,14 +249,21 @@ describe('the Reunião section', () => {
         wings: { id: 'w@group.calendar.google.com', name: 'Wings Company', access: 'writer' },
       },
     };
-    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    render(<MeetingsTab data={loaded('formatacao')} canWrite onRegisterHeld={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: 'Agendar reunião' }));
     const box = screen.getByRole('checkbox', {
       name: /Criar o evento e o Meet/,
     }) as HTMLInputElement;
     expect(box.checked).toBe(true);
     expect(screen.queryByLabelText(/Link da reunião/)).toBeNull();
-    expect(screen.getByText(/lead \(candidato@exemplo.com.br\)/)).toBeTruthy();
+    expect((screen.getByLabelText('Título') as HTMLInputElement).value).toBe(
+      '@ Formatação ( Padaria Exemplo - Candidato Exemplo ) - CALL',
+    );
+    const invite = screen.getByRole('checkbox', {
+      name: /Convidar o lead por e-mail/,
+    }) as HTMLInputElement;
+    expect(invite.checked).toBe(false);
+    fireEvent.click(invite);
     fireEvent.change(screen.getByLabelText(/Outros convidados/), {
       target: { value: 'socio@exemplo.com.br, Contador@exemplo.com.br' },
     });
@@ -258,8 +272,32 @@ describe('the Reunião section', () => {
     await waitFor(() => expect(calls.create).toHaveBeenCalled());
     expect(calls.create.mock.calls[0]?.[0]).toMatchObject({
       createMeet: true,
+      inviteLead: true,
       calendar: 'wings',
       attendees: [{ email: 'socio@exemplo.com.br' }, { email: 'contador@exemplo.com.br' }],
+    });
+  });
+
+  it('offers no invitation on an Expansão deal with a brand: the Meet link goes by WhatsApp', async () => {
+    state.google = { ...state.google, state: 'connected' };
+    render(<MeetingsTab data={loaded('expansao')} canWrite onRegisterHeld={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Agendar reunião' }));
+    expect((screen.getByLabelText('Título') as HTMLInputElement).value).toBe(
+      '@ Candidato Exemplo ( Marca Exemplo ) - CALL',
+    );
+    expect(screen.queryByRole('checkbox', { name: /Convidar o lead/ })).toBeNull();
+    expect(screen.queryByLabelText(/Outros convidados/)).toBeNull();
+    const rule = screen.getByTestId('brand-rule');
+    expect(rule.textContent).toContain('expansao_lembrete_reuniao');
+    expect(rule.querySelector('a')?.getAttribute('href')).toBe(
+      '/crm-vendas/negociacoes/l1/whatsapp',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Marcar reunião' }));
+    await waitFor(() => expect(calls.create).toHaveBeenCalled());
+    expect(calls.create.mock.calls[0]?.[0]).toMatchObject({
+      createMeet: true,
+      inviteLead: false,
+      attendees: [],
     });
   });
 
