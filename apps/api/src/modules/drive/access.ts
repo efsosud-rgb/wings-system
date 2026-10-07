@@ -21,6 +21,13 @@ import { driveFolders } from '../../db/schema/index.js';
  * it does not write (every Formatação area reads 01–03 of each client), and a
  * whole-client role reads every folder of every client while writing only in
  * its own departments.
+ *
+ * The deals' folders (Comercial / Negociações / <deal>) follow the lead rule, not
+ * the department (2026-10-07): the files of a deal are as private as the deal. Only
+ * somebody who sees every lead (`dealFolders`) reaches that subtree here; a seller
+ * reaches the files of their own deals through the deal's own routes
+ * (`dealFilesAccess`, used only after the lead was checked), and the folder name is
+ * the deal's name, so even the tree does not list it for them.
  */
 export interface DriveAccess {
   employeeId: string;
@@ -31,9 +38,27 @@ export interface DriveAccess {
   writeDepartments: ReadonlySet<DriveDepartment>;
   /** Reads every folder that belongs to a client, whatever its department. */
   clientView: boolean;
+  /** Reaches the deals' folders: holds `leads.read` with scope `all`. Anything else is closed. */
+  dealFolders: boolean;
   write: boolean;
   manage: boolean;
 }
+
+/** The folder every deal's folder sits under; a deal's files are filed at `<this>/<deal name>`. */
+export const DEALS_PATH = '/Comercial/Negociações';
+
+/** Whether a folder path is the deals' folder itself or anything below it. */
+export const isDealsPath = (path: string) =>
+  path === DEALS_PATH || path.startsWith(`${DEALS_PATH}/`);
+
+/**
+ * The same person's access with the deals' folders open. Only for a route that already checked the
+ * lead itself (`leadInScope`), and only to touch that lead's own files.
+ */
+export const dealFilesAccess = (access: DriveAccess): DriveAccess => ({
+  ...access,
+  dealFolders: true,
+});
 
 export function driveAccessOf(actor: Actor): DriveAccess | null {
   const read = grantedScope(actor, 'drive.read');
@@ -47,6 +72,7 @@ export function driveAccessOf(actor: Actor): DriveAccess | null {
     departments: new Set([...own, ...readOnly]),
     writeDepartments: new Set(own),
     clientView: !all && DRIVE_CLIENT_VIEW_ROLES.includes(actor.role),
+    dealFolders: grantedScope(actor, 'leads.read') === 'all',
     write: grantedScope(actor, 'drive.write') !== null,
     manage: grantedScope(actor, 'drive.manage') !== null,
   };
@@ -56,20 +82,29 @@ export function driveAccessOf(actor: Actor): DriveAccess | null {
 export interface FolderReach {
   department: string;
   clientId: string | null;
+  /** The folder's path (names from the root); decides the deals' folders. Never optional: a missing one must not open them. */
+  path: string;
 }
 
 export const seesDepartment = (access: DriveAccess, department: string) =>
   access.all || access.departments.has(department as DriveDepartment);
 
 export const seesFolder = (access: DriveAccess, folder: FolderReach) =>
-  seesDepartment(access, folder.department) || (access.clientView && folder.clientId !== null);
+  (access.dealFolders || !isDealsPath(folder.path)) &&
+  (seesDepartment(access, folder.department) || (access.clientView && folder.clientId !== null));
 
 export const writesFolder = (access: DriveAccess, folder: FolderReach) =>
-  access.write && (access.all || access.writeDepartments.has(folder.department as DriveDepartment));
+  (access.dealFolders || !isDealsPath(folder.path)) &&
+  access.write &&
+  (access.all || access.writeDepartments.has(folder.department as DriveDepartment));
 
 /** The same rule as `seesFolder`, as a condition on `drive_folders` for queries over files. */
 export function folderReachSql(access: DriveAccess): SQL | undefined {
-  if (access.all) return undefined;
+  if (access.all && access.dealFolders) return undefined;
+  const outsideDeals = access.dealFolders
+    ? sql`true`
+    : sql`not (${driveFolders.path} = ${DEALS_PATH} or starts_with(${driveFolders.path}, ${`${DEALS_PATH}/`}))`;
+  if (access.all) return outsideDeals;
   const departments = [...access.departments];
   const byDepartment =
     departments.length > 0
@@ -78,7 +113,8 @@ export function folderReachSql(access: DriveAccess): SQL | undefined {
           sql`, `,
         )})`
       : sql`false`;
-  return access.clientView
+  const byReach = access.clientView
     ? sql`(${byDepartment} or ${driveFolders.clientId} is not null)`
     : byDepartment;
+  return access.dealFolders ? byReach : sql`(${byReach} and ${outsideDeals})`;
 }

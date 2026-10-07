@@ -22,11 +22,18 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { employees, leads } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
+import {
+  canChangeLeadOwner,
+  leadInScope,
+  leadOwnerFilter,
+  type LeadPermission,
+} from './access.js';
 import { addActivity } from './activities.js';
 import {
   companyOf,
   companyToClient,
   contactOf,
+  companyVisibleTo,
   contactVisibleTo,
   contactsOfCompany,
   duplicateCompanies,
@@ -45,6 +52,7 @@ import {
   updateContact,
 } from './contacts.js';
 import { exportLeads, previewImport, runImport } from './csv.js';
+import type { Executor } from './crm.js';
 import { brandsOnSale, changeDeal, createBrand, listBrands, setBrandOnSale } from './deal.js';
 import { loadLead } from './service.js';
 
@@ -69,25 +77,52 @@ const MERGE_MESSAGES = {
  * of their own leads); writing is `leads.write`; merging and the brand list
  * are `crm.manage`; turning a company into a client is `clients.manage`.
  */
+class HiddenMatch extends Error {}
+
 export const nucleoRoutes: FastifyPluginAsync = async (app) => {
   const { db, env } = app.wings;
   type Req = Parameters<typeof app.can>[0];
 
-  const ownScope = (request: Req, permission: 'leads.read' | 'leads.write') =>
-    grantedScope(request.session.actor, permission) === 'own'
-      ? request.session.actor.employeeId
-      : undefined;
+  /** The employee to filter queries by, or undefined for a caller who sees every lead (`access.ts`). */
+  const ownScope = (request: Req, permission: LeadPermission) =>
+    leadOwnerFilter(request.session.actor, permission);
 
-  async function visibleLead(request: Req, id: string, permission: 'leads.read' | 'leads.write') {
-    const row = await db.query.leads.findFirst({ where: eq(leads.id, id) });
-    if (!row) return null;
-    const own = ownScope(request, permission);
-    return own === undefined || row.ownerEmployeeId === own ? row : null;
-  }
+  const visibleLead = (request: Req, id: string, permission: LeadPermission) =>
+    leadInScope(db, request.session.actor, id, permission);
 
   const read = { preHandler: app.requirePermission('leads.read') };
   const write = { preHandler: app.requirePermission('leads.write') };
   const manage = { preHandler: app.requirePermission('crm.manage') };
+
+  /**
+   * A find-or-create that, for a seller, hands back only what they may see. When the person or the
+   * company already exists but belongs to somebody else's deals, nothing is written (the transaction
+   * is undone, so no gap is filled in the other record) and nothing is shown: the answer is `hidden`.
+   */
+  async function findOrCreateFor<T extends { created: boolean }>(
+    own: string | undefined,
+    run: (tx: Executor) => Promise<T | null>,
+    visible: (tx: Executor, found: T) => Promise<boolean>,
+  ): Promise<T | null | 'hidden'> {
+    try {
+      return await db.transaction(async (tx) => {
+        const found = await run(tx);
+        if (found && own !== undefined && !found.created && !(await visible(tx, found)))
+          throw new HiddenMatch();
+        return found;
+      });
+    } catch (error) {
+      if (error instanceof HiddenMatch) return 'hidden';
+      throw error;
+    }
+  }
+  const alreadyThere = (what: 'contact' | 'company') => ({
+    error: 'already_exists',
+    message:
+      what === 'contact'
+        ? 'Já existe um contato com este e-mail ou telefone em outra negociação. Peça a um Admin para ligá-lo.'
+        : 'Já existe uma empresa com este nome ou CNPJ em outra negociação. Peça a um Admin para ligá-la.',
+  });
 
   // --- contacts ---------------------------------------------------------------------------
 
@@ -109,16 +144,21 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     const body = crmContactInputSchema.safeParse(request.body);
     if (!body.success) return reply.status(400).send(invalid(body.error.issues[0]?.message));
     const actor = request.session.actor.employeeId;
-    const companyId = await resolveCompany(body.data, actor);
+    const own = ownScope(request, 'leads.write');
+    const companyId = await resolveCompany(body.data, actor, own);
     if (companyId === 'not_found')
       return reply.status(400).send(invalid('Empresa não encontrada.'));
-    const found = await db.transaction((tx) =>
-      findOrCreateContact(
-        tx,
-        { ...body.data, companyId: companyId ?? body.data.companyId ?? null },
-        actor,
-      ),
+    const found = await findOrCreateFor(
+      own,
+      (tx) =>
+        findOrCreateContact(
+          tx,
+          { ...body.data, companyId: companyId ?? body.data.companyId ?? null },
+          actor,
+        ),
+      (tx, { contact }) => contactVisibleTo(tx, contact.id, own!),
     );
+    if (found === 'hidden') return reply.status(409).send(alreadyThere('contact'));
     if (!found) return reply.status(400).send(invalid('Informe um e-mail ou um telefone válido.'));
     await writeAudit(db, {
       actorEmployeeId: actor,
@@ -128,7 +168,7 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
       ip: request.ip,
     });
     return reply.status(found.created ? 201 : 200).send({
-      contact: await contactOf(db, found.contact.id),
+      contact: await contactOf(db, found.contact.id, own),
       created: found.created,
     });
   });
@@ -137,7 +177,7 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     const params = idParam.safeParse(request.params);
     if (!params.success) return reply.status(400).send(invalid());
     const own = ownScope(request, 'leads.read');
-    const contact = await contactOf(db, params.data.id);
+    const contact = await contactOf(db, params.data.id, own);
     if (!contact || (own !== undefined && !(await contactVisibleTo(db, contact.id, own))))
       return reply.status(404).send(notFound('Contato'));
     return reply.send({ contact, leads: await leadsOfContact(db, contact.id, own) });
@@ -154,7 +194,7 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     if (own !== undefined && !(await contactVisibleTo(db, params.data.id, own)))
       return reply.status(404).send(notFound('Contato'));
     const actor = request.session.actor.employeeId;
-    const companyId = await resolveCompany(body.data, actor);
+    const companyId = await resolveCompany(body.data, actor, own);
     if (companyId === 'not_found')
       return reply.status(400).send(invalid('Empresa não encontrada.'));
     const result = await updateContact(db, params.data.id, {
@@ -180,7 +220,7 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
       ip: request.ip,
       metadata: { fields: Object.keys(body.data) },
     });
-    return reply.send({ contact: await contactOf(db, result.contact.id) });
+    return reply.send({ contact: await contactOf(db, result.contact.id, own) });
   });
 
   app.post('/crm/contacts/merge', manage, async (request, reply) => {
@@ -207,6 +247,7 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
   async function resolveCompany(
     input: { companyId?: string | null; companyName?: string },
     actor: string,
+    own: string | undefined,
   ): Promise<string | null | undefined | 'not_found'> {
     if (input.companyName) {
       const found = await db.transaction((tx) =>
@@ -216,6 +257,9 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     }
     if (input.companyId === undefined) return undefined;
     if (input.companyId === null) return null;
+    // By id a seller names only a company they already see; by name the system finds or makes it.
+    if (own !== undefined && !(await companyVisibleTo(db, input.companyId, own)))
+      return 'not_found';
     return (await companyOf(db, input.companyId)) ? input.companyId : 'not_found';
   }
 
@@ -231,23 +275,31 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     const row = await visibleLead(request, params.data.id, 'leads.write');
     if (!row) return reply.status(404).send(notFound());
     const actor = request.session.actor.employeeId;
+    const own = ownScope(request, 'leads.write');
     let contactId = body.data.contactId ?? null;
     if (!contactId && body.data.contact) {
-      const companyId = await resolveCompany(body.data.contact, actor);
+      const companyId = await resolveCompany(body.data.contact, actor, own);
       if (companyId === 'not_found')
         return reply.status(400).send(invalid('Empresa não encontrada.'));
-      const found = await db.transaction((tx) =>
-        findOrCreateContact(
-          tx,
-          { ...body.data.contact, companyId: companyId ?? row.companyId ?? null },
-          actor,
-        ),
+      const found = await findOrCreateFor(
+        own,
+        (tx) =>
+          findOrCreateContact(
+            tx,
+            { ...body.data.contact, companyId: companyId ?? row.companyId ?? null },
+            actor,
+          ),
+        (tx, { contact }) => contactVisibleTo(tx, contact.id, own!),
       );
+      if (found === 'hidden') return reply.status(409).send(alreadyThere('contact'));
       if (!found)
         return reply.status(400).send(invalid('Informe um e-mail ou um telefone válido.'));
       contactId = found.contact.id;
     }
     if (!contactId) return reply.status(400).send(invalid('Informe o contato.'));
+    // A seller links only a person they already see (one of their leads has them, or they made them).
+    if (own !== undefined && !(await contactVisibleTo(db, contactId, own)))
+      return reply.status(404).send(notFound('Contato'));
     if (!(await contactOf(db, contactId))) return reply.status(404).send(notFound('Contato'));
     await db.transaction((tx) =>
       linkContact(tx, {
@@ -303,7 +355,13 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
         return reply.send({ companies: [], duplicates: [] });
       return reply.send({ companies: [], duplicates: await duplicateCompanies(db) });
     }
-    return reply.send({ companies: await listCompanies(db, { q: query.data.q }), duplicates: [] });
+    return reply.send({
+      companies: await listCompanies(db, {
+        q: query.data.q,
+        ownerEmployeeId: ownScope(request, 'leads.read'),
+      }),
+      duplicates: [],
+    });
   });
 
   app.post('/crm/companies', write, async (request, reply) => {
@@ -312,7 +370,13 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     if (body.data.cnpj && !isValidCnpj(body.data.cnpj))
       return reply.status(400).send(invalid('CNPJ inválido.'));
     const actor = request.session.actor.employeeId;
-    const found = await db.transaction((tx) => findOrCreateCompany(tx, body.data, actor));
+    const own = ownScope(request, 'leads.write');
+    const found = await findOrCreateFor(
+      own,
+      (tx) => findOrCreateCompany(tx, body.data, actor),
+      (tx, { company }) => companyVisibleTo(tx, company.id, own!),
+    );
+    if (found === 'hidden') return reply.status(409).send(alreadyThere('company'));
     if (!found) return reply.status(400).send(invalid('Informe o nome da empresa.'));
     await writeAudit(db, {
       actorEmployeeId: actor,
@@ -323,22 +387,22 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     });
     return reply
       .status(found.created ? 201 : 200)
-      .send({ company: await companyOf(db, found.company.id), created: found.created });
+      .send({ company: await companyOf(db, found.company.id, own), created: found.created });
   });
 
   app.get('/crm/companies/:id', read, async (request, reply) => {
     const params = idParam.safeParse(request.params);
     if (!params.success) return reply.status(400).send(invalid());
-    const company = await companyOf(db, params.data.id);
-    if (!company) return reply.status(404).send(notFound('Empresa'));
     const own = ownScope(request, 'leads.read');
+    const company = await companyOf(db, params.data.id, own);
+    if (!company) return reply.status(404).send(notFound('Empresa'));
+    // A seller sees a company through their own leads and contacts only, and only those on the page.
+    if (own !== undefined && !(await companyVisibleTo(db, company.id, own)))
+      return reply.status(404).send(notFound('Empresa'));
     const [related, contacts] = await Promise.all([
       leadsOfCompany(db, company.id, own),
-      contactsOfCompany(db, company.id),
+      contactsOfCompany(db, company.id, own),
     ]);
-    // A seller sees a company through their own leads only.
-    if (own !== undefined && related.length === 0)
-      return reply.status(404).send(notFound('Empresa'));
     return reply.send({ company, leads: related, contacts });
   });
 
@@ -350,7 +414,7 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
         .status(400)
         .send(invalid(body.success ? undefined : body.error.issues[0]?.message));
     const own = ownScope(request, 'leads.write');
-    if (own !== undefined && (await leadsOfCompany(db, params.data.id, own)).length === 0)
+    if (own !== undefined && !(await companyVisibleTo(db, params.data.id, own)))
       return reply.status(404).send(notFound('Empresa'));
     const result = await updateCompany(db, params.data.id, body.data);
     if (!result.ok) {
@@ -372,7 +436,7 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
       ip: request.ip,
       metadata: { fields: Object.keys(body.data) },
     });
-    return reply.send({ company: await companyOf(db, result.company.id) });
+    return reply.send({ company: await companyOf(db, result.company.id, own) });
   });
 
   app.post('/crm/companies/merge', manage, async (request, reply) => {
@@ -471,6 +535,16 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
         .send(invalid(body.success ? undefined : body.error.issues[0]?.message));
     const row = await visibleLead(request, params.data.id, 'leads.write');
     if (!row) return reply.status(404).send(notFound());
+    // A seller links a company by id only when they already see it.
+    const own = ownScope(request, 'leads.write');
+    if (
+      own !== undefined &&
+      body.data.companyId &&
+      !(await companyVisibleTo(db, body.data.companyId, own))
+    )
+      return reply
+        .status(400)
+        .send({ error: 'company_not_found', message: 'Empresa não encontrada.' });
     if (body.data.brandClientId) {
       const brands = await brandsOnSale(db);
       if (!brands.some((brand: CrmBrand) => brand.clientId === body.data.brandClientId))
@@ -509,7 +583,11 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     const all = z.object({ all: z.coerce.boolean().optional() }).safeParse(request.query);
     const everything =
       all.success && all.data.all && grantedScope(request.session.actor, 'crm.manage');
-    return reply.send({ brands: everything ? await listBrands(db) : await brandsOnSale(db) });
+    // The number of open deals per brand counts a seller's own deals only.
+    const own = ownScope(request, 'leads.read');
+    return reply.send({
+      brands: everything ? await listBrands(db, own) : await brandsOnSale(db, own),
+    });
   });
 
   app.post('/crm/brands', manage, async (request, reply) => {
@@ -551,7 +629,7 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
   // --- where deals come from (Administração → Integrações) ---------------------------------
 
   /** Each door in plain words: on, off or coming, and when the last deal came through it. */
-  app.get('/crm/sources', read, async (_request, reply) => {
+  app.get('/crm/sources', manage, async (_request, reply) => {
     const last = await db
       .select({
         source: leads.source,
@@ -632,7 +710,13 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
       .extend({ mapping: csvImportRequestSchema.shape.mapping.optional() })
       .safeParse(request.body);
     if (!body.success) return reply.status(400).send(invalid(body.error.issues[0]?.message));
-    return reply.send(await previewImport(db, { csv: body.data.csv, mapping: body.data.mapping }));
+    return reply.send(
+      await previewImport(db, {
+        csv: body.data.csv,
+        mapping: body.data.mapping,
+        ownerEmployeeId: ownScope(request, 'leads.write'),
+      }),
+    );
   });
 
   app.post('/leads/import', write, async (request, reply) => {
@@ -643,6 +727,11 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     // A seller's import lands on the seller; a manager may name an owner or leave it empty.
     let owner: string | null | undefined = own ?? body.data.ownerEmployeeId ?? null;
     if (own === undefined && body.data.ownerEmployeeId) {
+      if (!canChangeLeadOwner(request.session.actor))
+        return reply.status(403).send({
+          error: 'forbidden',
+          message: 'Só quem pode atribuir negociações escolhe outro dono.',
+        });
       const found = await db.query.employees.findFirst({
         where: eq(employees.id, body.data.ownerEmployeeId),
         columns: { id: true, status: true },
@@ -665,6 +754,7 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
       brandClientId: body.data.brandClientId,
       ownerEmployeeId: owner,
       actorEmployeeId: actor,
+      canAssign: canChangeLeadOwner(request.session.actor),
     });
     await writeAudit(db, {
       actorEmployeeId: actor,

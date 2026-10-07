@@ -110,8 +110,8 @@ describe('CRM Vendas → Landing pages', () => {
         outcome: 'existing_deal',
       },
     ]);
-    const seller = await cookiesFor('vendedor_expansao');
-    const list = await app.inject({ method: 'GET', url: '/crm/landing-pages', cookies: seller });
+    const admin = await cookiesFor('admin_master');
+    const list = await app.inject({ method: 'GET', url: '/crm/landing-pages', cookies: admin });
     expect(list.statusCode).toBe(200);
     const page = list
       .json()
@@ -212,10 +212,14 @@ describe('CRM Vendas → Landing pages', () => {
       landingPage: 'https://franquia.wingscompany.com.br/cenoritas',
       phone: '5511900000002',
     });
+    const admin = await cookiesFor('admin_master');
+    const list = await app.inject({ method: 'GET', url: '/crm/landing-pages', cookies: admin });
+    const countOf = (body: { pages: { pattern: string; leads: number }[] }) =>
+      body.pages.find((item) => item.pattern === 'cenoritas')?.leads;
+    expect(countOf(list.json())).toBe(1);
+    // A seller counts only their own leads, and this one has no owner.
     const seller = await cookiesFor('vendedor_expansao');
-    const list = await app.inject({ method: 'GET', url: '/crm/landing-pages', cookies: seller });
-    expect(
-      list.json().pages.find((item: { pattern: string }) => item.pattern === 'cenoritas').leads,
-    ).toBe(1);
+    const mine = await app.inject({ method: 'GET', url: '/crm/landing-pages', cookies: seller });
+    expect(countOf(mine.json())).toBe(0);
   });
 });

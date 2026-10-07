@@ -1,9 +1,10 @@
-import { grantedScope, type LeadEmailSent } from '@wings/shared';
+import { type LeadEmailSent } from '@wings/shared';
 import { and, desc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { crmEmailOutbox, crmEmailTemplates, employees, leads } from '../../db/schema/index.js';
+import { crmEmailOutbox, crmEmailTemplates, employees } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
+import { leadInScope, type LeadPermission } from './access.js';
 import { renderForLead, sendTemplateToLead } from './automations.js';
 import { createCrmMailTransport } from './crm-mail.js';
 
@@ -34,12 +35,8 @@ export const leadEmailRoutes: FastifyPluginAsync = async (app) => {
   const { db, env } = app.wings;
   type Req = Parameters<typeof app.can>[0];
 
-  async function visibleLead(request: Req, id: string, permission: 'leads.read' | 'leads.write') {
-    const row = await db.query.leads.findFirst({ where: eq(leads.id, id) });
-    if (!row) return null;
-    const scope = grantedScope(request.session.actor, permission);
-    return scope !== 'own' || row.ownerEmployeeId === request.session.actor.employeeId ? row : null;
-  }
+  const visibleLead = (request: Req, id: string, permission: LeadPermission) =>
+    leadInScope(db, request.session.actor, id, permission);
 
   const read = { preHandler: app.requirePermission('leads.read') };
   const write = { preHandler: app.requirePermission('leads.write') };

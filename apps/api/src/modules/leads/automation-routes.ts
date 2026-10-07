@@ -29,6 +29,7 @@ import {
 } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { runCrmCycle } from './automations-scheduler.js';
+import { canChangeLeadOwner, leadOwnerFilter } from './access.js';
 import { markRead, notificationsOf } from './crm-alerts.js';
 import { createCrmMailTransport } from './crm-mail.js';
 
@@ -125,9 +126,17 @@ export const automationRoutes: FastifyPluginAsync = async (app) => {
     return null;
   }
 
+  const ownerRuleRefusal = {
+    error: 'forbidden',
+    message: 'Só quem pode atribuir negociações cria ou muda uma regra que troca o dono.',
+  };
+
   app.post('/crm/automations/rules', manage, async (request, reply) => {
     const body = automationRuleCreateSchema.safeParse(request.body);
     if (!body.success) return reply.status(400).send(invalid(body.error.issues[0]?.message));
+    // A rule that changes the owner is an owner change: only who may assign leads sets one up.
+    if (body.data.kind === 'change_owner' && !canChangeLeadOwner(request.session.actor))
+      return reply.status(403).send(ownerRuleRefusal);
     const stage = await db.query.crmStages.findFirst({
       where: eq(crmStages.id, body.data.stageId),
     });
@@ -171,6 +180,8 @@ export const automationRoutes: FastifyPluginAsync = async (app) => {
       where: eq(crmAutomationRules.id, params.data.id),
     });
     if (!rule) return reply.status(404).send(gone('Regra'));
+    if (rule.kind === 'change_owner' && !canChangeLeadOwner(request.session.actor))
+      return reply.status(403).send(ownerRuleRefusal);
     let config: Record<string, unknown> | undefined;
     if (body.data.config) {
       const parsed = CONFIG_SCHEMAS[rule.kind as AutomationRuleKind].safeParse(body.data.config);
@@ -457,7 +468,12 @@ export const automationRoutes: FastifyPluginAsync = async (app) => {
     '/crm/notifications',
     { preHandler: app.requirePermission('leads.read') },
     async (request, reply) => {
-      const rows = await notificationsOf(db, request.session.actor.employeeId);
+      const rows = await notificationsOf(
+        db,
+        request.session.actor.employeeId,
+        100,
+        leadOwnerFilter(request.session.actor, 'leads.read') !== undefined,
+      );
       return reply.send({
         unread: rows.filter((r) => r.readAt === null).length,
         notifications: rows.map((r) => ({

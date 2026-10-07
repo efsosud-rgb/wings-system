@@ -314,6 +314,12 @@ export interface LeadChange {
   lostReason?: string | null;
   source: LeadChangeSource;
   actorEmployeeId: string | null;
+  /**
+   * A scoped caller (a seller) is only allowed to change a lead that is theirs at the moment of the
+   * write: set to their own id, the change answers `not_found` if the lead was reassigned (or has no
+   * owner) between the route's check and the row lock.
+   */
+  requireOwnerEmployeeId?: string;
 }
 
 export type LeadChangeResult =
@@ -347,6 +353,8 @@ async function changeLeadTx(db: Database, change: LeadChange): Promise<LeadChang
   return db.transaction(async (tx) => {
     const [lead] = await tx.select().from(leads).where(eq(leads.id, change.leadId)).for('update');
     if (!lead) return { ok: false, reason: 'not_found' };
+    if (change.requireOwnerEmployeeId && lead.ownerEmployeeId !== change.requireOwnerEmployeeId)
+      return { ok: false, reason: 'not_found' };
     const now = new Date();
     const patch: Partial<typeof leads.$inferInsert> = { updatedAt: now };
     const changed: string[] = [];
@@ -577,6 +585,8 @@ export async function listTasks(
   db: Executor,
   input: {
     assigneeEmployeeId?: string;
+    /** A scoped caller: only tasks of leads this employee owns (a task left behind on a reassigned lead is not theirs to see). */
+    ownerEmployeeId?: string;
     status: 'open' | 'overdue' | 'done' | 'all';
     kind?: LeadTaskKind;
     now?: Date;
@@ -584,6 +594,7 @@ export async function listTasks(
 ): Promise<LeadTask[]> {
   const now = input.now ?? new Date();
   const conditions = [];
+  if (input.ownerEmployeeId) conditions.push(eq(leads.ownerEmployeeId, input.ownerEmployeeId));
   if (input.assigneeEmployeeId)
     conditions.push(eq(leadTasks.assigneeEmployeeId, input.assigneeEmployeeId));
   if (input.kind) conditions.push(eq(leadTasks.kind, input.kind));

@@ -15,6 +15,7 @@ import type { Database } from '../../db/client.js';
 import { clients, expansionIntakeLedger, leadSourceRules, leads } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { RdCrm } from '../expansion/rd.js';
+import { leadOwnerFilter } from './access.js';
 
 /**
  * CRM Vendas → Landing pages (Eric's list of 30/09, items 2–4). A landing
@@ -53,11 +54,16 @@ async function conversionsByIdentifier(db: Database) {
 }
 
 /** Leads of the Funil per page: the page each one arrived by, matched the way the rules match. */
-async function leadsByPattern(db: Database, patterns: readonly string[]) {
+async function leadsByPattern(db: Database, patterns: readonly string[], ownerEmployeeId?: string) {
   const rows = await db
     .select({ page: leads.landingPage, count: sql<number>`count(*)::int` })
     .from(leads)
-    .where(isNotNull(leads.landingPage))
+    .where(
+      and(
+        isNotNull(leads.landingPage),
+        ownerEmployeeId ? eq(leads.ownerEmployeeId, ownerEmployeeId) : undefined,
+      ),
+    )
     .groupBy(leads.landingPage);
   const wanted = new Set(patterns);
   const counts = new Map<string, number>();
@@ -73,7 +79,14 @@ async function leadsByPattern(db: Database, patterns: readonly string[]) {
   return counts;
 }
 
-export async function listLandingPages(db: Database): Promise<LandingPageItem[]> {
+/**
+ * `ownerEmployeeId` is a seller (own scope): the number of leads then counts only their own, and the
+ * company-wide conversion count (not theirs to see) is left out.
+ */
+export async function listLandingPages(
+  db: Database,
+  ownerEmployeeId?: string,
+): Promise<LandingPageItem[]> {
   const rows = await db
     .select({
       id: leadSourceRules.id,
@@ -99,6 +112,7 @@ export async function listLandingPages(db: Database): Promise<LandingPageItem[]>
     leadsByPattern(
       db,
       rows.map((row) => row.pattern),
+      ownerEmployeeId,
     ),
   ]);
   return rows
@@ -122,14 +136,16 @@ export async function listLandingPages(db: Database): Promise<LandingPageItem[]>
           visits: null,
           visitsSource: null,
           visitsReason: VISITS_REASON,
-          conversions: seen && conversions.since ? count : null,
+          conversions: seen && conversions.since && !ownerEmployeeId ? count : null,
           conversionsSource: seen && conversions.since ? CONVERSIONS_SOURCE : null,
           conversionsSince: seen ? conversions.since : null,
-          conversionsReason: !seen
-            ? 'Página sem funil: a entrada automática não acompanha as conversões dela.'
-            : conversions.since
-              ? null
-              : 'A entrada automática ainda não registrou nenhuma conversão.',
+          conversionsReason: ownerEmployeeId
+            ? 'As conversões da página somam todos os leads; quem vê só os seus não as vê.'
+            : !seen
+              ? 'Página sem funil: a entrada automática não acompanha as conversões dela.'
+              : conversions.since
+                ? null
+                : 'A entrada automática ainda não registrou nenhuma conversão.',
           rate: null,
         },
         siteFormEnabled: row.siteFormEnabled,
@@ -169,8 +185,11 @@ export const landingPageRoutes: FastifyPluginAsync = async (app) => {
   const manage = { preHandler: app.requirePermission('clients.manage') };
   const idParam = z.object({ id: z.uuid() });
 
-  app.get('/crm/landing-pages', read, async (_request, reply) =>
-    reply.send({ pages: await listLandingPages(db), baseUrl: LANDING_PAGE_BASE_URL }),
+  app.get('/crm/landing-pages', read, async (request, reply) =>
+    reply.send({
+      pages: await listLandingPages(db, leadOwnerFilter(request.session.actor, 'leads.read')),
+      baseUrl: LANDING_PAGE_BASE_URL,
+    }),
   );
 
   app.post('/crm/landing-pages', manage, async (request, reply) => {

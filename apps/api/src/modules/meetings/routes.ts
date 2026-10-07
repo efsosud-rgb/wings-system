@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   WINGS_CLIENT_ID,
-  grantedScope,
   meetingCreateSchema,
   meetingRecordingCompleteSchema,
   meetingSpeakersSchema,
@@ -15,8 +14,9 @@ import {
 import { and, desc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { clientContacts, crmMeetings, jobs, leadEvents, leads } from '../../db/schema/index.js';
+import { clientContacts, crmMeetings, jobs, leadEvents } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
+import { leadInScope } from '../leads/access.js';
 import { ZapiClient } from '../../lib/zapi.js';
 import { createTask } from '../leads/crm.js';
 import {
@@ -93,18 +93,15 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
 
   /** The deal, when this person may see it; null otherwise (answered as 404). */
   async function visibleLead(request: FastifyRequest, leadId: string) {
-    const [lead] = await db
-      .select({
-        id: leads.id,
-        ownerEmployeeId: leads.ownerEmployeeId,
-        pipeline: leads.pipeline,
-        clientId: leads.clientId,
-      })
-      .from(leads)
-      .where(eq(leads.id, leadId));
-    if (!lead) return null;
-    const own = grantedScope(request.session.actor, 'leads.read') === 'own';
-    return own && lead.ownerEmployeeId !== request.session.actor.employeeId ? null : lead;
+    const lead = await leadInScope(db, request.session.actor, leadId, 'leads.read');
+    return lead
+      ? {
+          id: lead.id,
+          ownerEmployeeId: lead.ownerEmployeeId,
+          pipeline: lead.pipeline,
+          clientId: lead.clientId,
+        }
+      : null;
   }
 
   async function visibleMeeting(request: FastifyRequest, id: string) {

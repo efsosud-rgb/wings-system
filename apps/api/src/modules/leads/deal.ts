@@ -16,13 +16,14 @@ import type { Executor } from './crm.js';
 
 // --- brands of interest ---------------------------------------------------------------
 
-export async function listBrands(db: Executor): Promise<CrmBrand[]> {
+export async function listBrands(db: Executor, ownerEmployeeId?: string): Promise<CrmBrand[]> {
+  const mine = ownerEmployeeId ? sql` and l.owner_employee_id = ${ownerEmployeeId}` : sql``;
   const rows = await db
     .select({
       clientId: clients.id,
       name: clients.name,
       onSale: clients.franchiseOnSale,
-      openLeads: sql<number>`(select count(*) from ${leads} l where l.client_id = ${clients.id} and l.won is null and l.pipeline = 'expansao')::int`,
+      openLeads: sql<number>`(select count(*) from ${leads} l where l.client_id = ${clients.id} and l.won is null and l.pipeline = 'expansao'${mine})::int`,
     })
     .from(clients)
     .where(
@@ -41,8 +42,8 @@ export async function listBrands(db: Executor): Promise<CrmBrand[]> {
 }
 
 /** The brand list a seller picks from: only the ones on sale. */
-export async function brandsOnSale(db: Executor): Promise<CrmBrand[]> {
-  return (await listBrands(db)).filter((brand) => brand.onSale);
+export async function brandsOnSale(db: Executor, ownerEmployeeId?: string): Promise<CrmBrand[]> {
+  return (await listBrands(db, ownerEmployeeId)).filter((brand) => brand.onSale);
 }
 
 /** Registers a brand as an Expansão client with its franchise on sale (Novo cliente's path). */

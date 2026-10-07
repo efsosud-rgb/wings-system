@@ -34,6 +34,7 @@ let dir: string;
 type Session = { employeeId: string; cookies: Record<string, string> };
 let seller: Session;
 let other: Session;
+let admin: Session;
 
 const loginAs = async (role: RoleKey) => {
   const employee = await createEmployee(db, { role, sector: 'comercial' });
@@ -67,6 +68,7 @@ beforeAll(async () => {
   await syncDriveFolders(db);
   seller = await loginAs('vendedor_expansao');
   other = await loginAs('vendedor_expansao');
+  admin = await loginAs('admin_master');
 }, 60_000);
 
 afterAll(async () => {
@@ -166,9 +168,10 @@ describe('files of a deal', () => {
     });
     expect(removed.statusCode).toBe(204);
     expect((await listed(seller, lead.lead.id)).json<{ files: LeadFile[] }>().files).toEqual([]);
+    // Still in the Drive for somebody who sees every deal; the seller reaches deals' files only through the deal.
     const stillThere = await app.inject({
       url: `/drive/files/${file?.fileId}/link`,
-      cookies: seller.cookies,
+      cookies: admin.cookies,
     });
     expect(stillThere.statusCode).toBe(200);
   });

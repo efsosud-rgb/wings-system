@@ -8,7 +8,6 @@ import {
   crmStageOrderSchema,
   crmStageUpdateSchema,
   distributionUpdateSchema,
-  grantedScope,
   leadNoteCreateSchema,
   leadTaskCreateSchema,
   leadTaskUpdateSchema,
@@ -20,8 +19,9 @@ import {
 import { and, asc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { crmSavedViews, employees, leadTasks, leads } from '../../db/schema/index.js';
+import { crmSavedViews, employees, leadTasks } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
+import { canChangeLeadOwner, leadInScope, leadOwnerFilter, type LeadPermission } from './access.js';
 import {
   addNote,
   boardColumn,
@@ -64,18 +64,13 @@ export const crmRoutes: FastifyPluginAsync = async (app) => {
   const { db, env } = app.wings;
   type Req = Parameters<typeof app.can>[0];
 
-  const ownScope = (request: Req, permission: 'leads.read' | 'leads.write') =>
-    grantedScope(request.session.actor, permission) === 'own'
-      ? request.session.actor.employeeId
-      : undefined;
+  /** The employee to filter queries by, or undefined for a caller who sees every lead (`access.ts`). */
+  const ownScope = (request: Req, permission: LeadPermission) =>
+    leadOwnerFilter(request.session.actor, permission);
 
-  /** The lead, when the caller may see it (own scope sees only their leads). */
-  async function visibleLead(request: Req, id: string, permission: 'leads.read' | 'leads.write') {
-    const row = await db.query.leads.findFirst({ where: eq(leads.id, id) });
-    if (!row) return null;
-    const own = ownScope(request, permission);
-    return own === undefined || row.ownerEmployeeId === own ? row : null;
-  }
+  /** The lead, when the caller may see it (a seller sees only their own leads; an ownerless one is the Admin's). */
+  const visibleLead = (request: Req, id: string, permission: LeadPermission) =>
+    leadInScope(db, request.session.actor, id, permission);
 
   // --- stages --------------------------------------------------------------------------
 
@@ -180,12 +175,11 @@ export const crmRoutes: FastifyPluginAsync = async (app) => {
         body.data.ownerEmployeeId !== undefined &&
         body.data.ownerEmployeeId !== row.ownerEmployeeId
       ) {
-        // Taking a lead for oneself is `leads.write`; giving it to someone else is `leads.assign`.
-        const toSelf = body.data.ownerEmployeeId === actor;
-        if (!toSelf && !can(request.session.actor, 'leads.assign').allowed) {
+        // Only the Admin (`leads.assign`) changes who owns a lead: to someone else, to oneself or to nobody.
+        if (!canChangeLeadOwner(request.session.actor)) {
           return reply.status(403).send({
             error: 'forbidden',
-            message: 'Só quem pode atribuir leads (leads.assign) muda o dono para outra pessoa.',
+            message: 'Só quem pode atribuir leads (leads.assign) muda o dono.',
           });
         }
         if (body.data.ownerEmployeeId) {
@@ -201,11 +195,15 @@ export const crmRoutes: FastifyPluginAsync = async (app) => {
         leadId: row.id,
         stageId: body.data.stageId,
         pipeline: body.data.pipeline,
-        ownerEmployeeId: body.data.ownerEmployeeId,
+        // Whoever may not assign never reaches the owner column, whatever the body says.
+        ownerEmployeeId: canChangeLeadOwner(request.session.actor)
+          ? body.data.ownerEmployeeId
+          : undefined,
         won: body.data.won,
         lostReason: body.data.lostReason,
         source: 'wings',
         actorEmployeeId: actor,
+        requireOwnerEmployeeId: ownScope(request, 'leads.write'),
       });
       if (!result.ok) {
         const messages = {
@@ -282,12 +280,23 @@ export const crmRoutes: FastifyPluginAsync = async (app) => {
       const row = await visibleLead(request, params.data.id, 'leads.write');
       if (!row) return reply.status(404).send(notFound);
       const actor = request.session.actor.employeeId;
+      // Only whoever may assign leads puts a task on someone else; the others' tasks stay with the lead's owner.
+      let assignee = row.ownerEmployeeId ?? actor;
+      if (body.data.assigneeEmployeeId && canChangeLeadOwner(request.session.actor)) {
+        const target = await db.query.employees.findFirst({
+          where: eq(employees.id, body.data.assigneeEmployeeId),
+          columns: { id: true, status: true },
+        });
+        if (!target || target.status !== 'active')
+          return reply.status(400).send(invalid('Funcionário inexistente ou inativo.'));
+        assignee = target.id;
+      }
       const task = await createTask(db, {
         leadId: row.id,
         kind: body.data.kind,
         title: body.data.title,
         dueAt: new Date(body.data.dueAt),
-        assigneeEmployeeId: body.data.assigneeEmployeeId ?? row.ownerEmployeeId ?? actor,
+        assigneeEmployeeId: assignee,
         createdBy: actor,
       });
       await writeAudit(db, {
@@ -351,6 +360,7 @@ export const crmRoutes: FastifyPluginAsync = async (app) => {
       return reply.send({
         tasks: await listTasks(db, {
           assigneeEmployeeId: everyone ? query.data.assignee : request.session.actor.employeeId,
+          ownerEmployeeId: own,
           status: query.data.status,
           kind: query.data.kind,
         }),

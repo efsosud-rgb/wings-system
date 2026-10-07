@@ -52,6 +52,27 @@ export async function listLeadFiles(db: Database, leadId: string): Promise<LeadF
   }));
 }
 
+/** Whether the file is one of the deal's own (linked to it and not in the trash). */
+export async function leadHasFile(
+  db: Database,
+  leadId: string,
+  driveFileId: string,
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: leadFiles.id })
+    .from(leadFiles)
+    .innerJoin(driveFiles, eq(driveFiles.id, leadFiles.driveFileId))
+    .where(
+      and(
+        eq(leadFiles.leadId, leadId),
+        eq(leadFiles.driveFileId, driveFileId),
+        isNull(driveFiles.trashedAt),
+      ),
+    )
+    .limit(1);
+  return row !== undefined;
+}
+
 /** A folder name the Drive accepts: no separators, no control characters, within the limit. */
 export const folderNameFor = (leadName: string | null) => {
   const clean = (leadName ?? '')
