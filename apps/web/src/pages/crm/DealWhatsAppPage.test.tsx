@@ -6,7 +6,8 @@ import { DealWhatsAppPage } from './DealWhatsAppPage.js';
 
 /**
  * The WhatsApp conversation screen of a deal: empty while the official API is
- * not connected (no sample message), sending and calls disabled "em breve";
+ * not connected (no sample message), sending and video disabled "em breve",
+ * the voice button opening the call panel;
  * the panel on the right carries Visão geral, Anotações and Arquivos.
  */
 
@@ -111,6 +112,7 @@ vi.mock('../../api/leads.js', () => ({
 }));
 
 vi.mock('../../api/crm.js', () => ({
+  useAddActivity: () => mutation(),
   useLeadFiles: () => ({ data: [], isLoading: false, isError: false }),
   useRemoveLeadFile: () => mutation(),
   useSendLeadFile: () => ({ ...mutation(), mutateAsync: vi.fn() }),
@@ -137,7 +139,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('the WhatsApp conversation screen', () => {
-  it('opens empty, with no sample message, and sending, voice and video disabled "em breve"', () => {
+  it('opens empty, with no sample message, and sending and video disabled "em breve"', () => {
     show();
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Elena Prado');
     expect(screen.getByText('(21) 99999-0001 · WhatsApp')).toBeTruthy();
@@ -148,16 +150,29 @@ describe('the WhatsApp conversation screen', () => {
     expect((chat.getByRole('button', { name: 'Enviar' }) as HTMLButtonElement).disabled).toBe(true);
     const calls = within(screen.getByRole('group', { name: 'Chamadas pelo WhatsApp' }));
     expect(
-      (calls.getByRole('button', { name: 'Ligação de voz (em breve)' }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
-    expect(
       (calls.getByRole('button', { name: 'Chamada de vídeo (em breve)' }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
     expect(screen.getByRole('link', { name: '‹ Negociação' }).getAttribute('href')).toBe(
       '/crm-vendas/negociacoes/l1',
     );
+  });
+
+  it('the voice button opens the call panel, with WhatsApp calling off until the API is on', () => {
+    show();
+    const calls = within(screen.getByRole('group', { name: 'Chamadas pelo WhatsApp' }));
+    fireEvent.click(calls.getByRole('button', { name: 'Ligação de voz' }));
+    const panel = within(screen.getByRole('dialog', { name: 'Ligação' }));
+    expect(panel.getByText('(21) 99999-0001')).toBeTruthy();
+    expect(
+      (panel.getByRole('button', { name: /Ligar pelo WhatsApp/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      panel.getByText(/Fica ativo quando a API oficial do WhatsApp estiver ligada/),
+    ).toBeTruthy();
+    expect(panel.getByRole('button', { name: 'Registrar ligação' })).toBeTruthy();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Ligação' })).toBeNull();
   });
 
   it('keeps Visão geral, Anotações (working) and Arquivos on the right', () => {

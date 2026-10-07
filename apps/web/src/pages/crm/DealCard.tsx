@@ -8,6 +8,7 @@ import { type KeyboardEvent, type MouseEvent, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { ago, dueLabel, formatEnteredShort, formatPhone, isPast, money } from './format.js';
 import { Icon } from '../../components/Icon.js';
+import { CallPanel } from './CallPanel.js';
 
 /** What a click inside the card keeps for itself: links, buttons and the lost-reason form. */
 const OWN_CONTROLS = 'a, button, input, select, textarea, form, label';
@@ -41,6 +42,7 @@ export function DealCard({
   const navigate = useNavigate();
   const [losing, setLosing] = useState(false);
   const [reason, setReason] = useState('');
+  const [calling, setCalling] = useState(false);
   // A drop ends with no click, but a drag cancelled over the card does: swallow that one.
   const dragged = useRef(false);
   const badge = sourceBadgeOf(card.source);
@@ -128,9 +130,14 @@ export function DealCard({
       {canWrite && !losing && (
         <div className="crm-card-actions">
           {card.phone && (
-            <a className="crm-btn" href={`tel:+${card.phone}`} title={formatPhone(card.phone)}>
+            <button
+              type="button"
+              className="crm-btn"
+              title={formatPhone(card.phone)}
+              onClick={() => setCalling(true)}
+            >
               Ligar
-            </a>
+            </button>
           )}
           {card.email && (
             <a className="crm-btn" href={`mailto:${card.email}`}>
@@ -183,6 +190,15 @@ export function DealCard({
             </button>
           </div>
         </form>
+      )}
+      {calling && (
+        <CallPanel
+          leadId={card.id}
+          name={card.name}
+          phone={card.phone}
+          canWrite={canWrite}
+          onClose={() => setCalling(false)}
+        />
       )}
     </article>
   );

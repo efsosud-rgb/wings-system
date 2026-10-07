@@ -380,7 +380,7 @@ function ContactRecord({ id }: { id: string }) {
               <dt>Telefone</dt>
               <dd>
                 {contact.phone ? (
-                  <a href={`tel:+${contact.phone}`}>{formatPhone(contact.phone)}</a>
+                  <span className="crm-call-number-inline">{formatPhone(contact.phone)}</span>
                 ) : (
                   '—'
                 )}

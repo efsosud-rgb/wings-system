@@ -11,22 +11,24 @@ import { DealsPage } from './DealsPage.js';
  * plain titles.
  */
 
-const { state, stageMutate, createMutate, quickMutate, idle, mutation } = vi.hoisted(() => ({
-  state: {
-    permissions: {} as Record<string, string>,
-    board: null as Board | null,
-  },
-  stageMutate: vi.fn(),
-  createMutate: vi.fn(),
-  quickMutate: vi.fn(),
-  idle: () => ({ data: undefined, isLoading: false, isError: false }),
-  mutation: (mutate = vi.fn()) => ({
-    mutate,
-    isPending: false,
-    error: null,
-    reset: vi.fn(),
-  }),
-}));
+const { state, stageMutate, createMutate, quickMutate, activityMutate, idle, mutation } =
+  vi.hoisted(() => ({
+    state: {
+      permissions: {} as Record<string, string>,
+      board: null as Board | null,
+    },
+    stageMutate: vi.fn(),
+    createMutate: vi.fn(),
+    quickMutate: vi.fn(),
+    activityMutate: vi.fn(),
+    idle: () => ({ data: undefined, isLoading: false, isError: false }),
+    mutation: (mutate = vi.fn()) => ({
+      mutate,
+      isPending: false,
+      error: null,
+      reset: vi.fn(),
+    }),
+  }));
 
 vi.mock('../../api/auth.js', async () => {
   const actual = await vi.importActual<typeof import('../../api/auth.js')>('../../api/auth.js');
@@ -46,6 +48,7 @@ vi.mock('../../api/leads.js', () => ({
 }));
 
 vi.mock('../../api/crm.js', () => ({
+  useAddActivity: () => mutation(activityMutate),
   useBrands: idle,
   useCompleteTask: () => mutation(),
   useDealBoard: () => ({ data: state.board, isLoading: false, isError: false }),
@@ -148,9 +151,6 @@ describe('the deal card', () => {
   it('keeps the phone and e-mail links, and the quick actions, to themselves', () => {
     show();
     const article = theCard();
-    expect(within(article).getByRole('link', { name: 'Ligar' }).getAttribute('href')).toBe(
-      'tel:+5511999990000',
-    );
     fireEvent.click(within(article).getByRole('link', { name: 'E-mail' }));
     expect(screen.queryByText('Ficha da negociação')).toBeNull();
     fireEvent.click(within(article).getByRole('button', { name: 'Ganho' }));
@@ -158,6 +158,27 @@ describe('the deal card', () => {
     expect(screen.queryByText('Ficha da negociação')).toBeNull();
   });
 
+  it('"Ligar" opens the call panel in the system, never a tel: link, and its clicks stay in it', () => {
+    show();
+    const article = theCard();
+    expect(article.querySelector('a[href^="tel:"]')).toBeNull();
+    fireEvent.click(within(article).getByRole('button', { name: 'Ligar' }));
+    const panel = within(screen.getByRole('dialog', { name: 'Ligação' }));
+    expect(screen.queryByText('Ficha da negociação')).toBeNull();
+    expect(panel.getByText('(11) 99999-0000')).toBeTruthy();
+    expect(
+      (panel.getByRole('button', { name: /Ligar pelo WhatsApp/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    fireEvent.change(panel.getByLabelText('Duração em minutos'), { target: { value: '3' } });
+    fireEvent.click(panel.getByRole('button', { name: 'Registrar ligação' }));
+    expect(activityMutate).toHaveBeenCalledWith(
+      { kind: 'call', outcome: 'answered', durationSeconds: 180, note: undefined },
+      expect.anything(),
+    );
+    fireEvent.click(panel.getByRole('button', { name: 'Fechar' }));
+    expect(screen.queryByRole('dialog', { name: 'Ligação' })).toBeNull();
+    expect(screen.queryByText('Ficha da negociação')).toBeNull();
+  });
   it('does not open the deal from the click that ends a drag', () => {
     show();
     const article = theCard();

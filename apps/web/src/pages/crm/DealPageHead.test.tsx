@@ -11,7 +11,19 @@ import { DealPage, daysInStage, orderFields } from './DealPage.js';
  * and the "new deal: first contact until HH:MM" strip.
  */
 
-const { dealMutate, taskMutate, leadMutate, summaryMutate, askMutate, askState, nextStepMutate, meetingState, queryState, idle, mutation } = vi.hoisted(() => ({
+const {
+  dealMutate,
+  taskMutate,
+  leadMutate,
+  summaryMutate,
+  askMutate,
+  askState,
+  nextStepMutate,
+  meetingState,
+  queryState,
+  idle,
+  mutation,
+} = vi.hoisted(() => ({
   dealMutate: vi.fn(),
   summaryMutate: vi.fn(),
   askMutate: vi.fn(),
@@ -20,7 +32,10 @@ const { dealMutate, taskMutate, leadMutate, summaryMutate, askMutate, askState, 
     list: { data: undefined as unknown, isLoading: false, isError: true, error: null as unknown },
     one: { data: undefined as unknown, isLoading: false, isError: false, error: null as unknown },
   },
-  askState: { data: undefined as { answer: string; model: string } | undefined, error: null as unknown },
+  askState: {
+    data: undefined as { answer: string; model: string } | undefined,
+    error: null as unknown,
+  },
   taskMutate: vi.fn(),
   leadMutate: vi.fn(),
   queryState: {
@@ -215,8 +230,7 @@ const show = () =>
 
 const registerTabs = () => screen.getByRole('tablist', { name: 'Registrar' });
 const sectionTabs = () => screen.getByRole('tablist', { name: 'Seções da negociação' });
-const selectedTab = () =>
-  within(registerTabs()).getByRole('tab', { selected: true }).textContent;
+const selectedTab = () => within(registerTabs()).getByRole('tab', { selected: true }).textContent;
 const selectedSection = () =>
   within(sectionTabs()).getByRole('tab', { selected: true }).textContent;
 
@@ -336,17 +350,17 @@ describe('win or lose', () => {
 });
 
 describe('the action bar', () => {
-  it('opens the register tab of each action; WhatsApp opens the conversation; Reunião opens its section', () => {
+  it('opens the register tab of each action; Ligação the call panel; WhatsApp the conversation; Reunião its section', () => {
     show();
     const bar = screen.getByRole('toolbar', { name: 'Ações' });
     expect(selectedTab()).toBe('Anotação');
     fireEvent.click(within(bar).getByRole('button', { name: 'Ligação' }));
-    expect(selectedTab()).toBe('Ligação');
-    expect(
-      within(registerTabs().parentElement!).getByRole('button', {
-        name: 'Copiar telefone',
-      }),
-    ).toBeTruthy();
+    const panel = within(screen.getByRole('dialog', { name: 'Ligação' }));
+    expect(panel.getByRole('button', { name: 'Copiar número' })).toBeTruthy();
+    expect(panel.getByRole('button', { name: 'Registrar ligação' })).toBeTruthy();
+    expect(document.querySelector('a[href^="tel:"]')).toBeNull();
+    fireEvent.click(panel.getByRole('button', { name: 'Fechar' }));
+    expect(screen.queryByRole('dialog', { name: 'Ligação' })).toBeNull();
     fireEvent.click(within(bar).getByRole('button', { name: 'Tarefa' }));
     expect(selectedTab()).toBe('Tarefa');
     fireEvent.click(within(bar).getByRole('button', { name: 'E-mail' }));
@@ -379,7 +393,7 @@ describe('the first-contact strip', () => {
       }),
     );
     fireEvent.click(within(strip).getByRole('button', { name: 'Ligar' }));
-    expect(selectedTab()).toBe('Ligação');
+    expect(screen.getByRole('dialog', { name: 'Ligação' })).toBeTruthy();
     fireEvent.click(within(strip).getByRole('button', { name: 'Contato feito' }));
     expect(taskMutate).toHaveBeenCalledWith({ taskId: 't1', done: true });
   });
@@ -437,7 +451,7 @@ describe('"Sobre a negociação"', () => {
     expect(about().getByLabelText('Marca')).toBeTruthy();
   });
 
-  it("shows when the deal entered, in Brasília time, right after the source", () => {
+  it('shows when the deal entered, in Brasília time, right after the source', () => {
     queryState.lead = lead({
       enteredAt: '2026-10-07T17:32:00.000Z',
       enteredAtSource: 'meta_created_time',
@@ -492,9 +506,11 @@ describe('the contacts', () => {
     expect(writeText).toHaveBeenCalledWith('+5511999990000');
     fireEvent.click(contacts.getByRole('button', { name: 'Copiar e-mail' }));
     expect(writeText).toHaveBeenCalledWith('elena@example.com');
-    expect(
-      contacts.getByRole('link', { name: 'Conversa do WhatsApp' }).getAttribute('href'),
-    ).toBe('/crm-vendas/negociacoes/l1/whatsapp');
+    expect(contacts.getByRole('link', { name: 'Conversa do WhatsApp' }).getAttribute('href')).toBe(
+      '/crm-vendas/negociacoes/l1/whatsapp',
+    );
+    fireEvent.click(contacts.getByRole('button', { name: 'Ligar' }));
+    expect(screen.getByRole('dialog', { name: 'Ligação' })).toBeTruthy();
   });
 
   it('"+ Adicionar" on the right opens the contact form on the left', () => {
@@ -622,12 +638,21 @@ describe('the AI summary', () => {
 
 describe('the Reunião section', () => {
   it('offers Agendar, keeps Iniciar off without a meeting, shows "—" with the reason while the API is off, and the Cliente field on Expansão', () => {
-    meetingState.list = { data: undefined, isLoading: false, isError: true, error: new ApiError(404, { error: 'not_found', message: 'x' }) };
+    meetingState.list = {
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: new ApiError(404, { error: 'not_found', message: 'x' }),
+    };
     show();
     fireEvent.click(within(sectionTabs()).getByRole('tab', { name: 'Reunião' }));
     const body = within(sectionTabs().parentElement!);
-    expect((body.getByRole('button', { name: /Agendar reunião/ }) as HTMLButtonElement).disabled).toBe(false);
-    expect((body.getByRole('button', { name: /Iniciar reunião/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(
+      (body.getByRole('button', { name: /Agendar reunião/ }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect(
+      (body.getByRole('button', { name: /Iniciar reunião/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
     expect(body.getByText('A API de reuniões ainda não está ligada.')).toBeTruthy();
     expect(body.getByText('Cliente (marca franqueadora)')).toBeTruthy();
     expect(body.getByLabelText('Marca')).toBeTruthy();
@@ -715,10 +740,22 @@ describe('the Reunião section', () => {
 
 describe('the sections in the centre', () => {
   beforeEach(() => {
-    queryState.notes = [{ id: 'n1', at: '2026-10-04T10:00:00.000Z', authorName: 'Eric', body: 'Ligar amanhã' }];
+    queryState.notes = [
+      { id: 'n1', at: '2026-10-04T10:00:00.000Z', authorName: 'Eric', body: 'Ligar amanhã' },
+    ];
     queryState.events = [
-      { id: 'ev1', at: '2026-10-03T12:00:00.000Z', kind: 'lead.received.meta_lead_ads', detail: {} },
-      { id: 'ev2', at: '2026-10-05T09:00:00.000Z', kind: 'lead.file_added', detail: { fileId: 'd1' } },
+      {
+        id: 'ev1',
+        at: '2026-10-03T12:00:00.000Z',
+        kind: 'lead.received.meta_lead_ads',
+        detail: {},
+      },
+      {
+        id: 'ev2',
+        at: '2026-10-05T09:00:00.000Z',
+        kind: 'lead.file_added',
+        detail: { fileId: 'd1' },
+      },
     ];
     queryState.tasks = [
       firstContact(),

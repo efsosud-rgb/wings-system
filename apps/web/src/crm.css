@@ -946,6 +946,48 @@
   font-weight: var(--weight-semibold);
   margin: 0;
 }
+/* the call panel: who, the ways to call, and the register form */
+.crm-call {
+  max-width: 460px;
+}
+.crm-call-who {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.crm-call-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--success-soft);
+  color: var(--success);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.crm-call-number {
+  font-size: var(--text-lg);
+  font-variant-numeric: tabular-nums;
+  user-select: all;
+  overflow-wrap: anywhere;
+}
+.crm-call-ways {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.crm-call-ways .crm-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.crm-call-title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text-2);
+  margin: 0;
+}
 .crm-form-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -1357,7 +1399,12 @@
 }
 .crm-copy-phone {
   display: inline-flex;
+  align-items: center;
   gap: var(--space-1);
+}
+.crm-call-number-inline {
+  font-variant-numeric: tabular-nums;
+  user-select: all;
 }
 .crm-panel {
   background: var(--surface);

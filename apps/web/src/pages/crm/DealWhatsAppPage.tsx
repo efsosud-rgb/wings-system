@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../../api/auth.js';
 import { useAddNote, useLead, type LoadedLead } from '../../api/leads.js';
 import { Icon } from '../../components/Icon.js';
+import { CallPanel } from './CallPanel.js';
 import { FilesTab } from './DealTabs.js';
 import { EnteredAt } from './EnteredAt.js';
 import { formatDateTime, formatDay, formatPhone, money } from './format.js';
@@ -13,8 +14,9 @@ import { formatDateTime, formatDay, formatPhone, money } from './format.js';
  * the conversation in the centre, the message field below, and on the right
  * Visão geral, Anotações and Arquivos of the lead; voice and video calls by
  * WhatsApp at the top. Until the official WhatsApp API is connected the
- * screen opens empty — no sample message — with sending, voice and video
- * disabled, "em breve". Notes and files are the deal's own and work now.
+ * screen opens empty — no sample message — with sending and video disabled,
+ * "em breve"; the voice button opens the call panel (copy the number,
+ * register the call). Notes and files are the deal's own and work now.
  */
 
 const SOON = 'Em breve: pela API oficial do WhatsApp, quando a conta estiver ligada';
@@ -24,6 +26,7 @@ export function DealWhatsAppPage() {
   const session = useSession();
   const loaded = useLead(id);
   const canWrite = hasPermission(session.data, 'leads.write');
+  const [calling, setCalling] = useState(false);
   if (loaded.isLoading)
     return (
       <div className="crm-page">
@@ -63,15 +66,36 @@ export function DealWhatsAppPage() {
           </div>
         </div>
         <div className="crm-wa-calls" role="group" aria-label="Chamadas pelo WhatsApp">
-          <button type="button" className="crm-icon-btn" disabled title={SOON} aria-label="Ligação de voz (em breve)">
+          <button
+            type="button"
+            className="crm-icon-btn"
+            title="Ligação"
+            aria-label="Ligação de voz"
+            onClick={() => setCalling(true)}
+          >
             <Icon name="phone" size={18} />
           </button>
-          <button type="button" className="crm-icon-btn" disabled title={SOON} aria-label="Chamada de vídeo (em breve)">
+          <button
+            type="button"
+            className="crm-icon-btn"
+            disabled
+            title={SOON}
+            aria-label="Chamada de vídeo (em breve)"
+          >
             <Icon name="video" size={18} />
           </button>
-          <small className="crm-sub">em breve</small>
+          <small className="crm-sub">vídeo em breve</small>
         </div>
       </header>
+      {calling && (
+        <CallPanel
+          leadId={lead.id}
+          name={lead.name}
+          phone={lead.phone}
+          canWrite={canWrite}
+          onClose={() => setCalling(false)}
+        />
+      )}
       <div className="crm-wa-body">
         <section className="crm-wa-chat" aria-label="Conversa">
           <div className="crm-wa-messages">
