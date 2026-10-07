@@ -1,21 +1,43 @@
-import type { Lead, LeadNote } from '@wings/shared';
+import type { DealWhatsApp, Lead, LeadNote, WaTemplate } from '@wings/shared';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DealWhatsAppPage } from './DealWhatsAppPage.js';
 
 /**
- * The WhatsApp conversation screen of a deal: empty while the official API is
- * not connected (no sample message), sending and video disabled "em breve",
- * the voice button opening the call panel;
- * the panel on the right carries Visão geral, Anotações and Arquivos.
+ * The WhatsApp conversation screen of a deal: the official conversation with
+ * its statuses; free text inside the 24-hour window and an approved template
+ * outside it; off, and saying so, while the API is not connected; video "em
+ * breve"; the voice button opening the call panel; the panel on the right
+ * carries Visão geral, Anotações and Arquivos.
  */
 
-const { noteMutate, queryState, mutation } = vi.hoisted(() => ({
+const { noteMutate, textMutate, templateMutate, queryState, mutation } = vi.hoisted(() => ({
   noteMutate: vi.fn(),
-  queryState: { lead: null as Lead | null, notes: [] as LeadNote[] },
+  textMutate: vi.fn(),
+  templateMutate: vi.fn(),
+  queryState: {
+    lead: null as Lead | null,
+    notes: [] as LeadNote[],
+    thread: null as DealWhatsApp | null,
+    templates: [] as WaTemplate[],
+    permissions: {} as Record<string, string>,
+  },
   mutation: (mutate = vi.fn()) => ({ mutate, isPending: false, error: null }),
 }));
+
+const thread = (over: Partial<DealWhatsApp> = {}): DealWhatsApp => ({
+  conversationId: null,
+  leadId: 'l1',
+  profileName: 'Elena',
+  configured: true,
+  calling: false,
+  phone: '5521999990001',
+  window: { open: true, expiresAt: '2026-10-07T18:00:00.000Z' },
+  optedOut: false,
+  messages: [],
+  ...over,
+});
 
 const lead = (): Lead => ({
   id: 'l1',
@@ -88,7 +110,7 @@ vi.mock('../../api/auth.js', async () => {
         id: 'e1',
         fullName: 'Eric Souza',
         role: 'vendedor_expansao',
-        permissions: { 'leads.read': 'own', 'leads.write': 'own' },
+        permissions: queryState.permissions,
       },
     }),
   };
@@ -118,6 +140,18 @@ vi.mock('../../api/crm.js', () => ({
   useSendLeadFile: () => ({ ...mutation(), mutateAsync: vi.fn() }),
 }));
 
+vi.mock('../../api/whatsapp.js', () => ({
+  useWhatsAppThread: () => ({ isLoading: false, isError: false, data: queryState.thread }),
+  useWhatsAppTemplates: () => ({
+    isLoading: false,
+    data: { templates: queryState.templates, configured: true, syncError: null },
+  }),
+  useRefreshWhatsAppTemplates: () => mutation(),
+  useSendWhatsAppText: () => mutation(textMutate),
+  useSendWhatsAppTemplate: () => mutation(templateMutate),
+  whatsappMediaUrl: (id: string) => `/api/whatsapp/messages/${id}/media`,
+}));
+
 vi.mock('./LeadEmailTab.js', () => ({ LeadEmailTab: () => <div>Aba de e-mail</div> }));
 
 const show = () =>
@@ -131,6 +165,11 @@ const show = () =>
 
 beforeEach(() => {
   noteMutate.mockClear();
+  textMutate.mockClear();
+  templateMutate.mockClear();
+  queryState.thread = thread();
+  queryState.templates = [];
+  queryState.permissions = { 'leads.read': 'own', 'leads.write': 'own', 'leads.whatsapp': 'own' };
   queryState.lead = lead();
   queryState.notes = [
     { id: 'n1', at: '2026-10-04T10:00:00.000Z', authorName: 'Eric', body: 'Pediu o catálogo' },
@@ -139,15 +178,16 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('the WhatsApp conversation screen', () => {
-  it('opens empty, with no sample message, and sending and video disabled "em breve"', () => {
+  it('says when the official API is off: no sample message, no sending, video "em breve"', () => {
+    queryState.thread = thread({ configured: false, window: { open: false, expiresAt: null } });
     show();
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Elena Prado');
     expect(screen.getByText('(21) 99999-0001 · WhatsApp')).toBeTruthy();
     const chat = within(screen.getByRole('region', { name: 'Conversa' }));
-    expect(chat.getByText(/Nenhuma mensagem ainda/)).toBeTruthy();
+    expect(chat.getByText(/A conversa aparece aqui quando a API oficial/)).toBeTruthy();
     expect(chat.queryAllByRole('listitem')).toHaveLength(0);
-    expect((chat.getByLabelText('Mensagem') as HTMLInputElement).disabled).toBe(true);
-    expect((chat.getByRole('button', { name: 'Enviar' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(chat.queryByLabelText('Mensagem')).toBeNull();
+    expect(chat.getByText(/O envio liga quando a API oficial/)).toBeTruthy();
     const calls = within(screen.getByRole('group', { name: 'Chamadas pelo WhatsApp' }));
     expect(
       (calls.getByRole('button', { name: 'Chamada de vídeo (em breve)' }) as HTMLButtonElement)
@@ -156,6 +196,121 @@ describe('the WhatsApp conversation screen', () => {
     expect(screen.getByRole('link', { name: '‹ Negociação' }).getAttribute('href')).toBe(
       '/crm-vendas/negociacoes/l1',
     );
+  });
+
+  it('shows the conversation with statuses and the reason a message did not go', () => {
+    queryState.thread = thread({
+      messages: [
+        {
+          id: 'm1',
+          direction: 'in',
+          kind: 'text',
+          text: 'Oi, quero saber da franquia',
+          media: null,
+          template: null,
+          status: null,
+          error: null,
+          authorName: null,
+          at: '2026-10-07T14:00:00.000Z',
+        },
+        {
+          id: 'm2',
+          direction: 'out',
+          kind: 'text',
+          text: 'Olá Elena!',
+          media: null,
+          template: null,
+          status: 'read',
+          error: null,
+          authorName: 'Eric Souza',
+          at: '2026-10-07T14:01:00.000Z',
+        },
+        {
+          id: 'm3',
+          direction: 'out',
+          kind: 'text',
+          text: 'Segue o material',
+          media: null,
+          template: null,
+          status: 'failed',
+          error: 'Não entregue: o número pode não ter WhatsApp.',
+          authorName: 'Eric Souza',
+          at: '2026-10-07T14:02:00.000Z',
+        },
+        {
+          id: 'm4',
+          direction: 'in',
+          kind: 'document',
+          text: null,
+          media: { mimeType: 'application/pdf', filename: 'cnpj.pdf' },
+          template: null,
+          status: null,
+          error: null,
+          authorName: null,
+          at: '2026-10-07T14:03:00.000Z',
+        },
+      ],
+    });
+    show();
+    const chat = within(screen.getByRole('region', { name: 'Conversa' }));
+    expect(chat.getAllByRole('listitem')).toHaveLength(4);
+    expect(chat.getByText('Oi, quero saber da franquia')).toBeTruthy();
+    const metas = chat.getAllByText(
+      (_, el) =>
+        Boolean(el?.classList.contains('crm-wa-meta')) &&
+        /Eric Souza · .+ · Lida/.test(el?.textContent ?? ''),
+    );
+    expect(metas).toHaveLength(1);
+    expect(chat.getByText('Não entregue: o número pode não ter WhatsApp.')).toBeTruthy();
+    expect(
+      chat.getByRole('link', { name: /Baixar documento · cnpj.pdf/ }).getAttribute('href'),
+    ).toBe('/api/whatsapp/messages/m4/media');
+    expect(chat.getByText(/Janela de 24 h aberta até/)).toBeTruthy();
+  });
+
+  it('sends free text inside the window with Enter', () => {
+    show();
+    const chat = within(screen.getByRole('region', { name: 'Conversa' }));
+    const field = chat.getByLabelText('Mensagem');
+    fireEvent.change(field, { target: { value: 'Podemos falar às 15h?' } });
+    fireEvent.keyDown(field, { key: 'Enter' });
+    expect(textMutate).toHaveBeenCalledWith({ text: 'Podemos falar às 15h?' }, expect.anything());
+  });
+
+  it('outside the window offers only an approved template, with its fields filled in', () => {
+    queryState.thread = thread({ window: { open: false, expiresAt: '2026-10-05T10:00:00.000Z' } });
+    queryState.templates = [
+      {
+        name: 'retomar_conversa',
+        language: 'pt_BR',
+        category: 'UTILITY',
+        body: 'Olá {{1}}, aqui é {{2}} da Wings.',
+        paramCount: 2,
+      },
+    ];
+    show();
+    const chat = within(screen.getByRole('region', { name: 'Conversa' }));
+    expect(chat.getByText(/Fora das 24 h/)).toBeTruthy();
+    expect(chat.queryByLabelText('Mensagem')).toBeNull();
+    fireEvent.change(chat.getByLabelText('Modelo'), {
+      target: { value: 'retomar_conversa|pt_BR' },
+    });
+    const send = chat.getByRole('button', { name: 'Enviar modelo' }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    fireEvent.change(chat.getByLabelText('Campo 1 do modelo'), { target: { value: 'Elena' } });
+    fireEvent.change(chat.getByLabelText('Campo 2 do modelo'), { target: { value: 'Eric' } });
+    expect(chat.getByText('Olá Elena, aqui é Eric da Wings.')).toBeTruthy();
+    fireEvent.click(send);
+    expect(templateMutate).toHaveBeenCalledWith(
+      { name: 'retomar_conversa', language: 'pt_BR', params: ['Elena', 'Eric'] },
+      expect.anything(),
+    );
+  });
+
+  it('keeps the conversation closed to who has no WhatsApp access', () => {
+    queryState.permissions = { 'leads.read': 'own', 'leads.write': 'own' };
+    show();
+    expect(screen.getByText('Seu acesso não inclui o WhatsApp desta negociação.')).toBeTruthy();
   });
 
   it('the voice button opens the call panel, with WhatsApp calling off until the API is on', () => {

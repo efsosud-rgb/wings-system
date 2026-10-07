@@ -1,7 +1,6 @@
 import {
   brazilianPhoneVariants,
   canonicalWhatsAppPhone,
-  grantedScope,
   templateParamCount,
   waSendTemplateSchema,
   waSendTextSchema,
@@ -27,7 +26,7 @@ import {
   waTemplates,
 } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
-import { leadInScope } from '../leads/access.js';
+import { leadInScope, leadOwnerFilter } from '../leads/access.js';
 import {
   downloadWhatsAppMedia,
   errorText,
@@ -124,7 +123,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       message: 'O WhatsApp oficial ainda não está ligado no sistema.',
     });
   const fullScope = (request: FastifyRequest) =>
-    grantedScope(request.session.actor, 'leads.whatsapp') === 'all';
+    leadOwnerFilter(request.session.actor, 'leads.whatsapp') === undefined;
 
   async function threadOf(
     contact: Contact | null,
@@ -179,8 +178,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     const query = z.object({ unanswered: z.enum(['1', '0']).optional() }).safeParse(request.query);
     if (!query.success)
       return reply.status(400).send({ error: 'invalid', message: 'Filtro inválido.' });
-    const actor = request.session.actor;
-    const scope = grantedScope(actor, 'leads.whatsapp');
+    const owner = leadOwnerFilter(request.session.actor, 'leads.whatsapp');
     const rows = await db.execute<{
       id: string;
       lead_id: string | null;
@@ -203,7 +201,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         where conversation_id = c.id order by created_at desc limit 1
       ) m on true
       where c.last_message_at is not null
-        ${scope === 'all' ? sql`` : sql`and l.owner_employee_id = ${actor.employeeId}`}
+        ${owner === undefined ? sql`` : sql`and l.owner_employee_id = ${owner}`}
         ${query.data.unanswered === '1' ? sql`and m.direction = 'in'` : sql``}
       order by c.last_message_at desc
       limit 100`);
