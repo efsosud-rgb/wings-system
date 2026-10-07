@@ -281,3 +281,12 @@ ignorada.
 - Lixeira e mover para pastas inteiras (hoje só arquivos vão para a lixeira).
 - Escolher qualquer imagem do Drive no construtor de campanhas.
 - Apagar do volume os arquivos já migrados, depois de conferidos.
+
+## Deals' folders follow the lead rule (2026-10-07)
+
+`Comercial / Negociações` and everything below it is reached only by who sees every lead (`DriveAccess.dealFolders`,
+from `leads.read` with scope `all`: Admin Master, Diretoria, Gerente comercial). For any other profile those folders and
+their files answer 404 on every Drive route (tree, folder, files, search, trash, link, versions, upload, rename, move,
+trash) and the Studio's file link. A seller opens a deal's file through `GET /leads/:id/files/:fileId/link`, which checks
+the lead first. See `docs/crm/permissoes-por-dono.md`.
+

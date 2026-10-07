@@ -74,7 +74,8 @@ export function DealPage() {
   const session = useSession();
   const loaded = useLead(id);
   const canWrite = hasPermission(session.data, 'leads.write');
-  const canAssign = hasPermission(session.data, 'leads.assign');
+  // Only who edits deals and may assign them (the Admin) picks the owner; for everyone else it is read-only.
+  const canAssign = canWrite && hasPermission(session.data, 'leads.assign');
   const [tab, setTab] = useState<Tab>('note');
   const [view, setView] = useState<View>('history');
   const [calling, setCalling] = useState(false);

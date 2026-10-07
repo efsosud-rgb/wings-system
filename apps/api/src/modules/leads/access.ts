@@ -17,7 +17,7 @@ import type { LeadRow } from './service.js';
  *    owner: `scopeSatisfied` takes an undefined owner as "no owner to compare".
  *  - Any scope that is not `all`, or none at all, is treated as `own`: the rule
  *    fails closed.
- *  - Only a holder of `leads.assign` changes who owns a lead (`canChangeLeadOwner`).
+ *  - Only the Admin changes who owns a lead (`canChangeLeadOwner`: assign and write, over all leads).
  *
  * A lead out of reach is answered as not found (404), never as forbidden, so a
  * URL does not even tell a seller that the lead exists.
@@ -59,9 +59,15 @@ export async function leadInScope(
   return leadVisibleTo(actor, permission, row) ? row : null;
 }
 
-/** Only a holder of `leads.assign` (the Admin) moves a lead to another owner, or to nobody. */
+/**
+ * Only the Admin moves a lead to another owner, or to nobody: who may assign leads AND edit them,
+ * both over every lead (Admin Master; the Gerente comercial role, which nobody holds yet). Diretoria
+ * sees every lead and the team's views (`leads.assign`) but does not edit a deal (no `leads.write`).
+ */
 export function canChangeLeadOwner(actor: Actor): boolean {
-  return grantedScope(actor, 'leads.assign') !== null;
+  return (
+    grantedScope(actor, 'leads.assign') === 'all' && grantedScope(actor, 'leads.write') === 'all'
+  );
 }
 
 /**

@@ -27,7 +27,7 @@ import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import { seedDriveTemplate, syncDriveFolders } from '../drive/folders.js';
-import { leadInScope, leadOwnerFilter } from './access.js';
+import { canChangeLeadOwner, leadInScope, leadOwnerFilter } from './access.js';
 import { findOrCreateCompany, findOrCreateContact, linkContact } from './contacts.js';
 import { upsertLead } from './service.js';
 
@@ -504,6 +504,20 @@ describe('only the Admin changes the owner', () => {
       (await call(admin, 'PATCH', `/leads/${lead.id}`, { ownerEmployeeId: sellerB.id })).statusCode,
     ).toBe(200);
     expect((await call(sellerB, 'GET', `/leads/${lead.id}`)).statusCode).toBe(200);
+  });
+});
+
+describe('who may change the owner', () => {
+  it('is the Admin only: Diretoria sees and talks on every lead but does not hand leads over', async () => {
+    expect(canChangeLeadOwner(actorOf(admin))).toBe(true);
+    expect(canChangeLeadOwner(actorOf(board))).toBe(false);
+    expect(canChangeLeadOwner(actorOf(sellerA))).toBe(false);
+    const byBoard = await call(board, 'PATCH', `/leads/${dealB.id}`, {
+      ownerEmployeeId: sellerA.id,
+    });
+    expect(byBoard.statusCode).toBe(403);
+    const lead = await db.query.leads.findFirst({ where: eq(leads.id, dealB.id) });
+    expect(lead?.ownerEmployeeId).toBe(sellerB.id);
   });
 });
 
