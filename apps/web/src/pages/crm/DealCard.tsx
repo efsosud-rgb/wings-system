@@ -1,7 +1,12 @@
-import { initialsOf, sourceBadgeOf, type BoardCard } from '@wings/shared';
+import {
+  initialsOf,
+  LEAD_ENTERED_SOURCE_LABELS,
+  sourceBadgeOf,
+  type BoardCard,
+} from '@wings/shared';
 import { type KeyboardEvent, type MouseEvent, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ago, dueLabel, formatPhone, isPast, money } from './format.js';
+import { ago, dueLabel, formatEnteredShort, formatPhone, isPast, money } from './format.js';
 import { Icon } from '../../components/Icon.js';
 
 /** What a click inside the card keeps for itself: links, buttons and the lost-reason form. */
@@ -92,6 +97,17 @@ export function DealCard({
         <span className={`crm-clock${stale ? ' is-stale' : ''}`} title="Tempo na etapa">
           {ago(card.stageChangedAt ?? card.createdAt)}
         </span>
+      </div>
+      <div
+        className="crm-sub"
+        title={
+          card.enteredAtSource === 'received'
+            ? 'A fonte não trouxe a data: hora em que o sistema recebeu o lead'
+            : `Data da fonte: ${LEAD_ENTERED_SOURCE_LABELS[card.enteredAtSource]}`
+        }
+      >
+        Entrou {formatEnteredShort(card.enteredAt)}
+        {card.enteredAtSource === 'received' ? ' *' : ''}
       </div>
       {card.nextTask && (
         <div className={`crm-card-task${late ? ' is-late' : ''}`}>

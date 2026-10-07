@@ -552,7 +552,10 @@ describe('POST /integrations/rd-station/webhook', () => {
       phone: '5511977776666',
       pipeline: 'formatacao',
       consentSource: 'rd_station:lp-formatacao-contato',
+      enteredAtSource: 'rd_conversion',
     });
+    // The date of the conversion RD reports (event_timestamp, 09:26:40 in Brasília).
+    expect(row!.enteredAt.toISOString()).toBe('2026-10-07T12:26:40.000Z');
 
     // The same event again is the same lead.
     const again = await app.inject({

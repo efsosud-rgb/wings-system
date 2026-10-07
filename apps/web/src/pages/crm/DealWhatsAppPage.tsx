@@ -5,6 +5,7 @@ import { hasPermission, useSession } from '../../api/auth.js';
 import { useAddNote, useLead, type LoadedLead } from '../../api/leads.js';
 import { Icon } from '../../components/Icon.js';
 import { FilesTab } from './DealTabs.js';
+import { EnteredAt } from './EnteredAt.js';
 import { formatDateTime, formatDay, formatPhone, money } from './format.js';
 
 /**
@@ -122,8 +123,10 @@ export function DealWhatsAppPage() {
                 </div>
               )}
               <div style={{ display: 'contents' }}>
-                <dt>Criada em</dt>
-                <dd>{formatDateTime(lead.createdAt)}</dd>
+                <dt>Entrou em</dt>
+                <dd>
+                  <EnteredAt at={lead.enteredAt} source={lead.enteredAtSource} />
+                </dd>
               </div>
             </dl>
           </section>

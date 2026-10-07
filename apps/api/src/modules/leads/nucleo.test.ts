@@ -621,6 +621,10 @@ describe('CSV import and export', () => {
     const rows = parseCsv(mine.body);
     expect(rows[0]?.[0]).toBe('Nome');
     expect(rows.slice(1).every((row) => row[10] === 'Funcionário de Teste')).toBe(true);
+    // The entry date is the source's own, and the next column says whose clock it is.
+    expect(rows[0]).toContain('Entrou em');
+    const sourceColumn = rows[0]!.indexOf('Data vinda de');
+    expect(rows.slice(1).every((row) => (row[sourceColumn] ?? '').length > 0)).toBe(true);
     const names = rows.slice(1).map((row) => row[0]);
     expect(names).toContain('Fábio');
     expect(names).not.toContain('Carla');

@@ -88,6 +88,8 @@ const card = (over: Partial<BoardCard>): BoardCard => ({
   nextTask: null,
   source: 'site_form',
   won: null,
+  enteredAt: '2026-10-01T11:30:00.000Z',
+  enteredAtSource: 'meta_created_time',
   createdAt: '2026-10-01T12:00:00.000Z',
   ...over,
 });
@@ -170,6 +172,22 @@ describe('the deal card', () => {
     expect(within(theCard()).getByRole('link', { name: 'Elena' }).getAttribute('tabindex')).toBe(
       '-1',
     );
+  });
+});
+
+describe('when the deal entered', () => {
+  it("shows the source's date and time on the card, in Brasília time", () => {
+    show();
+    const entered = within(theCard()).getByText(/^Entrou 01\/10\/2026 08:30/);
+    expect(entered.getAttribute('title')).toBe('Data da fonte: data de criação do lead na Meta');
+    expect(entered.textContent).not.toContain('*');
+  });
+
+  it('marks a card whose source brought no date as received by the system', () => {
+    state.board!.columns[0]!.cards[0] = card({ enteredAtSource: 'received' });
+    show();
+    const entered = within(theCard()).getByText(/^Entrou 01\/10\/2026 08:30 \*/);
+    expect(entered.getAttribute('title')).toContain('recebeu o lead');
   });
 });
 

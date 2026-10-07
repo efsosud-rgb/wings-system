@@ -6,6 +6,7 @@ import {
   landingPageKeysOf,
   matchSourceRule,
   normalizeBrazilianPhone,
+  resolveLeadEntered,
   extractLeadFields,
   isValidCnpj,
   normalizeCnpj,
@@ -21,6 +22,7 @@ import {
   type Lead,
   type LeadActivity,
   type LeadChannel,
+  type LeadEnteredSource,
   type LeadEvent,
   type LeadLegalBasis,
   type FunnelSummary,
@@ -238,6 +240,14 @@ export interface IncomingLead {
   valueCents?: number | null;
   /** When the person actually arrived, if earlier than now (an imported RD deal's creation); used only for a new lead. */
   arrivedAt?: Date | null;
+  /**
+   * When the person entered, by the source's own clock (Meta's `created_time`, the RD deal's
+   * creation, the RD Marketing conversion, the moment a site form was sent), and whose clock it
+   * is. Without both the lead is stored as 'received' at the moment the system got it. Used only
+   * for a new lead: a later arrival never moves the date of a lead that already exists.
+   */
+  enteredAt?: Date | null;
+  enteredAtSource?: LeadEnteredSource | null;
   /**
    * When the platform says the lead was made (Meta's `created_time`), if the system reads it
    * later. Older than STALE_ARRIVAL_HOURS: the lead still gets its owner from the rotation, but
@@ -598,6 +608,7 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
         valueCents: typeof incoming.valueCents === 'number' ? incoming.valueCents : null,
         ...attributionColumns(incoming.attribution),
         ...(incoming.arrivedAt ? { createdAt: incoming.arrivedAt } : {}),
+        ...resolveLeadEntered(incoming),
         importBatchId: incoming.importBatchId ?? null,
       })
       .returning();
@@ -784,6 +795,8 @@ export function toLead(
       row.aiSummary && typeof row.aiSummary === 'object'
         ? (row.aiSummary as Lead['aiSummary'])
         : null,
+    enteredAt: row.enteredAt.toISOString(),
+    enteredAtSource: row.enteredAtSource as LeadEnteredSource,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -894,22 +907,22 @@ export const contactNameSql = sql<
 export function listOrder(sort: LeadListFilter['sort']) {
   switch (sort) {
     case 'oldest':
-      return [asc(leads.createdAt)];
+      return [asc(leads.enteredAt)];
     case 'value_desc':
-      return [sql`${leads.valueCents} desc nulls last`, desc(leads.createdAt)];
+      return [sql`${leads.valueCents} desc nulls last`, desc(leads.enteredAt)];
     case 'value_asc':
-      return [sql`${leads.valueCents} asc nulls last`, desc(leads.createdAt)];
+      return [sql`${leads.valueCents} asc nulls last`, desc(leads.enteredAt)];
     case 'stage_time':
-      return [sql`${leads.stageChangedAt} asc nulls last`, desc(leads.createdAt)];
+      return [sql`${leads.stageChangedAt} asc nulls last`, desc(leads.enteredAt)];
     case 'next_task':
       return [
         sql`(select min(t.due_at) from lead_tasks t where t.lead_id = ${leads.id} and t.done_at is null) asc nulls last`,
-        desc(leads.createdAt),
+        desc(leads.enteredAt),
       ];
     case 'name':
       return [sql`lower(coalesce(${leads.name}, '')) asc`];
     default:
-      return [desc(leads.createdAt)];
+      return [desc(leads.enteredAt)];
   }
 }
 
@@ -925,9 +938,9 @@ const ownerInactive = sql<boolean>`(${leads.rdDealId} is not null and (${leads.o
 export function listConditions(filter: LeadListFilter) {
   const conditions = [];
   if (filter.createdFrom)
-    conditions.push(gte(leads.createdAt, new Date(`${filter.createdFrom}T00:00:00-03:00`)));
+    conditions.push(gte(leads.enteredAt, new Date(`${filter.createdFrom}T00:00:00-03:00`)));
   if (filter.createdTo)
-    conditions.push(lt(leads.createdAt, new Date(`${filter.createdTo}T23:59:59.999-03:00`)));
+    conditions.push(lt(leads.enteredAt, new Date(`${filter.createdTo}T23:59:59.999-03:00`)));
   if (filter.activityDays)
     conditions.push(
       sql`${lastActivitySql} >= ${new Date(Date.now() - filter.activityDays * 86_400_000)}`,
@@ -985,6 +998,8 @@ export async function listLeads(
         channel: leads.channel,
         score: leads.enrichmentScore,
         researchState: leads.enrichmentState,
+        enteredAt: leads.enteredAt,
+        enteredAtSource: leads.enteredAtSource,
         createdAt: leads.createdAt,
         pipeline: leads.pipeline,
         brand: leads.brand,
@@ -1027,6 +1042,8 @@ export async function listLeads(
       channel: (row.channel as LeadChannel | null) ?? null,
       score: row.score,
       researchState: row.researchState as LeadListItem['researchState'],
+      enteredAt: row.enteredAt.toISOString(),
+      enteredAtSource: row.enteredAtSource as LeadEnteredSource,
       createdAt: row.createdAt.toISOString(),
       pipeline: (row.pipeline as LeadPipeline | null) ?? null,
       brand: row.brand,

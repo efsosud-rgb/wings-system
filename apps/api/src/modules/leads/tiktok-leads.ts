@@ -437,6 +437,8 @@ export async function ingestTikTokLeads(
         formAnswers: Object.keys(lead.answers).length > 0 ? lead.answers : null,
         legalBasis: 'consent',
         originCreatedAt: arrived,
+        enteredAt: arrived,
+        enteredAtSource: 'tiktok_created_time',
         consentedAt: arrived ?? now,
         consentSource: `tiktok_lead_ads:form:${lead.formId ?? 'desconhecido'}`,
         consentText:

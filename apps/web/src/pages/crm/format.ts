@@ -38,6 +38,30 @@ export const formatDay = (day: string | null | undefined): string => {
 export const formatDateTime = (iso: string | null | undefined): string =>
   iso ? new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' }) : '—';
 
+const BRASILIA = 'America/Sao_Paulo';
+
+/** `07/10/2026 às 14:32` in Brasília time, whatever the viewer's own time zone. */
+export function formatEntered(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const at = new Date(iso);
+  const day = at.toLocaleDateString('pt-BR', {
+    timeZone: BRASILIA,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  });
+  const time = at.toLocaleTimeString('pt-BR', {
+    timeZone: BRASILIA,
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return `${day} às ${time}`;
+}
+
+/** The same moment for a table cell: `07/10/2026 14:32`. */
+export const formatEnteredShort = (iso: string | null | undefined): string =>
+  formatEntered(iso).replace(' às ', ' ');
+
 /** "3 d", "5 h", "12 min": how long since. */
 export function ago(iso: string | null | undefined, now = Date.now()): string {
   if (!iso) return '—';
