@@ -138,7 +138,7 @@ export const NAVIGATION: readonly NavModule[] = [
         path: '/crm-vendas/whatsapp',
         label: 'WhatsApp',
         icon: 'message',
-        description: 'As conversas pelo WhatsApp oficial, as sem resposta primeiro',
+        description: 'As suas conversas pelo WhatsApp da empresa, como no WhatsApp Web',
         permission: 'leads.whatsapp',
         status: 'ready',
         kind: 'crud',
@@ -201,7 +201,16 @@ export const NAVIGATION: readonly NavModule[] = [
         status: 'ready',
         kind: 'crud',
       },
-      { ...soon('/crm-vendas/sofia', 'Sofia (SDR IA)', 'Agente de pré-venda'), icon: 'sparkles' },
+      {
+        path: '/crm-vendas/sofia',
+        label: 'Sofia (SDR IA)',
+        icon: 'sparkles',
+        description:
+          'A atendente virtual: recebe toda conversa nova, qualifica e passa ao vendedor',
+        permission: 'leads.whatsapp',
+        status: 'ready',
+        kind: 'crud',
+      },
     ],
   },
   {

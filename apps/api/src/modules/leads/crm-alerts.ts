@@ -242,7 +242,7 @@ const ARRIVAL_SOURCES = new Set([
 ]);
 
 /** Who hears of a lead with no owner: Admin Master, Diretoria and the commercial managers (sector manager of Comercial, or the sales manager role); active only. */
-async function managersAndBoard(db: Database): Promise<string[]> {
+export async function managersAndBoard(db: Database): Promise<string[]> {
   const rows = await db
     .select({ id: employees.id })
     .from(employees)

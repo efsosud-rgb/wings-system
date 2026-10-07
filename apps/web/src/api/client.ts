@@ -55,6 +55,12 @@ export const api = {
    * screen never keeps an idle session alive.
    */
   poll: <T>(path: string) => request<T>(path, { headers: { 'x-wings-passive': '1' } }),
+  /**
+   * A POST the screen makes on its own (marking an open conversation read as
+   * messages arrive): like `poll`, it is not counted as the person's activity.
+   */
+  passivePost: <T>(path: string) =>
+    request<T>(path, { method: 'POST', headers: { 'x-wings-passive': '1' } }),
   post: <T>(path: string, payload?: unknown) =>
     request<T>(path, { method: 'POST', body: payload ? JSON.stringify(payload) : undefined }),
   /** Sends a file as the raw request body, typed as the file says it is. */

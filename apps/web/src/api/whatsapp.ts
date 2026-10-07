@@ -4,6 +4,7 @@ import type {
   WaCallPermissionLive,
   WaConversationItem,
   WaMessage,
+  WaTargets,
   WaSendTemplate,
   WaSendText,
   WaTemplate,
@@ -49,6 +50,51 @@ export function useWhatsAppConversations(unanswered: boolean) {
   });
 }
 
+export type WhatsAppInboxFilter = 'all' | 'unread' | 'unanswered';
+
+/** The reader's WhatsApp list (WhatsApp Web): search, unread per reader, last status. */
+export function useWhatsAppInbox(filter: WhatsAppInboxFilter, q: string) {
+  const params = new URLSearchParams({ filter });
+  if (q.trim()) params.set('q', q.trim());
+  return useQuery({
+    queryKey: ['whatsapp', 'conversations', 'list', filter, q.trim()],
+    queryFn: () =>
+      api.poll<{ conversations: WaConversationItem[] }>(`/whatsapp/conversations?${params}`),
+    refetchInterval: 10_000,
+  });
+}
+
+/** One conversation by its id (a deal's or one with no deal), refreshed while open. */
+export function useWhatsAppConversation(id: string | undefined) {
+  return useQuery({
+    queryKey: ['whatsapp', 'conversations', 'one', id],
+    queryFn: () => api.poll<DealWhatsApp>(`/whatsapp/conversations/${id}`),
+    enabled: Boolean(id),
+    refetchInterval: REFRESH_MS,
+  });
+}
+
+/** The reader opened the conversation: its unread count goes to zero, for them only. */
+export function useMarkWhatsAppRead() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api.passivePost<void>(`/whatsapp/conversations/${id}/read`),
+    onSuccess: () =>
+      void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations', 'list'] }),
+  });
+}
+
+/** "Nova conversa": deals and contacts in the reader's scope matching the search. */
+export function useWhatsAppTargets(q: string) {
+  const term = q.trim();
+  return useQuery({
+    queryKey: ['whatsapp', 'targets', term],
+    queryFn: () => api.get<WaTargets>(`/whatsapp/targets?q=${encodeURIComponent(term)}`),
+    enabled: term.length >= 2,
+    staleTime: 10_000,
+  });
+}
+
 export function useWhatsAppTemplates(enabled: boolean) {
   return useQuery({
     queryKey: ['whatsapp', 'templates'],
@@ -80,6 +126,8 @@ function useSend<T>(thread: WhatsAppThread, kind: 'text' | 'template') {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: threadKey(thread) });
       void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations'] });
+      // A person writing takes the conversation from Sofia: her screen shows it at once.
+      void queryClient.invalidateQueries({ queryKey: ['sofia'] });
     },
   });
 }

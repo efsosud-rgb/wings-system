@@ -11,7 +11,9 @@ import type { Database } from '../../db/client.js';
 import {
   crmContacts,
   leadContacts,
+  leadTrackingLinks,
   leads,
+  sofiaAiRuns,
   waCalls,
   waContacts,
   waConversations,
@@ -20,7 +22,10 @@ import {
   waWebhookEvents,
 } from '../../db/schema/index.js';
 import { addActivity } from '../leads/activities.js';
+import { trackingLinkByCode } from '../leads/service.js';
 import { leadFromTrackedMessage } from '../leads/tracked-link.js';
+import { loadSofiaSettings } from '../sofia/settings.js';
+import { routeInbound } from '../sofia/state.js';
 import {
   isOptOut,
   whatsappChangesOf,
@@ -139,7 +144,8 @@ export async function applyWhatsAppPayload(deps: WhatsAppIntakeDeps, body: unkno
   for (const change of whatsappChangesOf(body)) {
     if (deps.phoneNumberId && change.phoneNumberId && change.phoneNumberId !== deps.phoneNumberId)
       continue;
-    for (const message of change.messages) await applyInbound(deps.db, message);
+    for (const message of change.messages)
+      await applyInbound(deps.db, message, deps.now?.() ?? new Date());
     for (const status of change.statuses) await applyStatus(deps.db, status);
     for (const template of change.templates) await applyTemplateReview(deps.db, template);
     for (const call of change.calls) await applyCallEvent(deps.db, call);
@@ -197,10 +203,33 @@ export async function adoptUnmatched(db: Database, contactId: string, leadId: st
         .set({ conversationId: existing.id, leadId })
         .where(eq(waMessages.conversationId, waiting.id));
       await tx
+        .update(waCalls)
+        .set({ conversationId: existing.id, leadId })
+        .where(eq(waCalls.conversationId, waiting.id));
+      await tx
+        .update(sofiaAiRuns)
+        .set({ conversationId: existing.id })
+        .where(eq(sofiaAiRuns.conversationId, waiting.id));
+      await tx
         .update(waConversations)
         .set({
           lastMessageAt: sql`greatest(${waConversations.lastMessageAt}, ${waiting.lastMessageAt?.toISOString() ?? null}::timestamptz)`,
           referral: sql`coalesce(${waConversations.referral}, ${waiting.referral === null ? null : JSON.stringify(waiting.referral)}::jsonb)`,
+          // A deal's conversation that had ended takes the live one's state.
+          ...(existing.attendance === 'closed'
+            ? {
+                attendance: waiting.attendance,
+                stateChangedAt: waiting.stateChangedAt,
+                reason: waiting.reason,
+                segment: waiting.segment,
+                brandClientId: waiting.brandClientId,
+                sofiaFacts: waiting.sofiaFacts,
+                sofiaMisses: waiting.sofiaMisses,
+                // Copied in SQL: a JS Date would drop the microseconds Sofia compares.
+                sofiaDueAt: sql`(select w.sofia_due_at from wa_conversations w where w.id = ${waiting.id})`,
+                sofiaReadUntil: sql`(select w.sofia_read_until from wa_conversations w where w.id = ${waiting.id})`,
+              }
+            : {}),
         })
         .where(eq(waConversations.id, existing.id));
       await tx.delete(waConversations).where(eq(waConversations.id, waiting.id));
@@ -211,7 +240,7 @@ export async function adoptUnmatched(db: Database, contactId: string, leadId: st
   });
 }
 
-export async function conversationFor(
+export async function openConversation(
   db: Database,
   contactId: string,
   leadId: string | null,
@@ -225,15 +254,27 @@ export async function conversationFor(
       ),
     });
   const found = await match();
-  if (found) return found;
-  await db
+  if (found) return { conversation: found, created: false };
+  const [inserted] = await db
     .insert(waConversations)
     .values({ contactId, leadId, referral: first.referral, originCode: first.originCode })
-    .onConflictDoNothing();
-  return (await match())!;
+    .onConflictDoNothing()
+    .returning();
+  return inserted
+    ? { conversation: inserted, created: true }
+    : { conversation: (await match())!, created: false };
 }
 
-async function applyInbound(db: Database, message: WaInboundMessage) {
+export async function conversationFor(
+  db: Database,
+  contactId: string,
+  leadId: string | null,
+  first: { referral: Record<string, unknown> | null; originCode: string | null },
+) {
+  return (await openConversation(db, contactId, leadId, first)).conversation;
+}
+
+async function applyInbound(db: Database, message: WaInboundMessage, now: Date) {
   // A re-sent webhook: the message is already here, and nothing runs twice.
   const known = await db.query.waMessages.findFirst({
     where: eq(waMessages.wamid, message.wamid),
@@ -289,46 +330,117 @@ async function applyInbound(db: Database, message: WaInboundMessage) {
       })
       .where(eq(waContacts.id, contact!.id));
 
+  // A tracking code tells the brand and the channel. With Sofia on, she makes
+  // the deal at the end of her questions; off, the link makes it at once, as
+  // before her (and as the Z-API door still does).
+  const sofiaOn = (await loadSofiaSettings(db)).enabled;
   const code = trackingCodeOf(message.text);
-  const tracked =
-    code && normalizeBrazilianPhone(message.from)
-      ? await leadFromTrackedMessage(db, {
-          code,
-          phone,
-          text: message.text,
-          senderName: message.profileName,
-          at: message.at,
-          via: 'cloud_api',
-        })
-      : null;
-  const leadId = tracked?.lead.id ?? (await openLeadByPhone(db, phone));
+  const link = code ? await trackingLinkByCode(db, code) : null;
+  let leadId = await openLeadByPhone(db, phone);
+  if (link && code && normalizeBrazilianPhone(message.from)) {
+    if (!sofiaOn) {
+      const tracked = await leadFromTrackedMessage(db, {
+        code,
+        phone,
+        text: message.text,
+        senderName: message.profileName,
+        at: message.at,
+        via: 'cloud_api',
+      });
+      leadId = tracked?.lead.id ?? leadId;
+    } else
+      await db
+        .update(leadTrackingLinks)
+        .set({ hits: sql`${leadTrackingLinks.hits} + 1`, lastHitAt: at })
+        .where(eq(leadTrackingLinks.id, link.id));
+  }
+  // No open deal, but a seller is talking to this person from a closed one
+  // (a reactivation template): the answer is that seller's, in that conversation.
+  if (!leadId) leadId = await heldDealOf(db, contact!.id, now);
   if (leadId) await adoptUnmatched(db, contact!.id, leadId);
-  const conversation = await conversationFor(db, contact!.id, leadId, {
+  const { conversation, created } = await openConversation(db, contact!.id, leadId, {
     referral: message.referral,
-    originCode: tracked ? code : null,
+    originCode: link ? code : null,
   });
 
-  await db
-    .insert(waMessages)
-    .values({
-      wamid: message.wamid,
-      conversationId: conversation.id,
-      contactId: contact!.id,
-      leadId,
-      direction: 'in',
-      author: 'contact',
-      kind: message.kind,
-      text: message.text,
-      content: message.content,
-      waTimestamp: message.at,
-    })
-    .onConflictDoNothing();
-  await db
-    .update(waConversations)
-    .set({
-      lastMessageAt: sql`greatest(${waConversations.lastMessageAt}, ${at.toISOString()}::timestamptz)`,
-    })
-    .where(eq(waConversations.id, conversation.id));
+  // The message and who answers it are one step: a failure in between is
+  // retried whole (a stored message is never left without its routing).
+  await db.transaction(async (tx) => {
+    const [stored] = await tx
+      .insert(waMessages)
+      .values({
+        wamid: message.wamid,
+        conversationId: conversation.id,
+        contactId: contact!.id,
+        leadId,
+        direction: 'in',
+        author: 'contact',
+        kind: message.kind,
+        text: message.text,
+        content: message.content,
+        waTimestamp: message.at,
+      })
+      .onConflictDoNothing()
+      .returning({ id: waMessages.id });
+    if (!stored) return;
+    await tx
+      .update(waConversations)
+      .set({
+        lastMessageAt: sql`greatest(${waConversations.lastMessageAt}, ${at.toISOString()}::timestamptz)`,
+        ...(link && !conversation.originCode ? { originCode: code } : {}),
+        ...(message.referral && !conversation.referral ? { referral: message.referral } : {}),
+      })
+      .where(eq(waConversations.id, conversation.id));
+
+    const [lead] = leadId
+      ? await tx
+          .select({
+            id: leads.id,
+            ownerEmployeeId: leads.ownerEmployeeId,
+            pipeline: leads.pipeline,
+            clientId: leads.clientId,
+          })
+          .from(leads)
+          .where(eq(leads.id, leadId))
+      : [];
+    await routeInbound(tx, {
+      conversation,
+      created,
+      messageId: stored.id,
+      quietOptOut: Boolean(contact!.optOutAt) && !talks,
+      lead: lead ?? null,
+      link: link ? { id: link.id, clientId: link.clientId, channel: link.channel } : null,
+      sofiaOn,
+      now,
+    });
+  });
+}
+
+/** How long a seller's message from a closed deal keeps the person's answers with that seller. */
+const HELD_DAYS = 30;
+
+/**
+ * The closed deal whose conversation a seller holds with this person (they
+ * wrote from it in the last 30 days), so the person's answer reaches them
+ * rather than starting over with Sofia.
+ */
+async function heldDealOf(db: Database, contactId: string, now: Date): Promise<string | null> {
+  const [held] = await db
+    .select({ leadId: waConversations.leadId })
+    .from(waConversations)
+    .where(
+      and(
+        eq(waConversations.contactId, contactId),
+        sql`${waConversations.leadId} is not null`,
+        inArray(waConversations.attendance, ['with_person', 'waiting_seller']),
+        sql`exists (select 1 from wa_messages o where o.conversation_id = ${waConversations.id}
+              and o.author = 'employee'
+              and o.created_at > ${new Date(now.getTime() - HELD_DAYS * 86_400_000).toISOString()}::timestamptz)`,
+      ),
+    )
+    .orderBy(desc(waConversations.lastMessageAt))
+    .limit(1);
+  return held?.leadId ?? null;
 }
 
 // --- a status of one of our messages --------------------------------------------------------

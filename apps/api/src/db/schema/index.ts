@@ -24,4 +24,5 @@ export * from './sessions.js';
 export * from './timeclock.js';
 export * from './meetings.js';
 export * from './whatsapp.js';
+export * from './sofia.js';
 export * from './google-workspace.js';

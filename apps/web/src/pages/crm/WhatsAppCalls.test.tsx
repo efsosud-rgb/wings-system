@@ -107,6 +107,8 @@ const thread = (over: Partial<DealWhatsApp> = {}): DealWhatsApp => ({
   window: { open: true, expiresAt: new Date(Date.now() + 3_600_000).toISOString() },
   optedOut: false,
   callPermission: { status: null, expiresAt: null, requestedAt: null },
+  attendance: null,
+  speaksFor: null,
   messages: [],
   ...over,
 });

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { SofiaState } from './sofia.js';
 
 /**
  * The official WhatsApp (Cloud API) in the CRM (docs/whatsapp/cloud-api.md):
@@ -104,6 +105,8 @@ export interface WaMessage {
   error: string | null;
   /** Who in the team sent it (outgoing), or null. */
   authorName: string | null;
+  /** Sent by Sofia, the virtual SDR. */
+  bySofia: boolean;
   at: string;
 }
 
@@ -123,6 +126,13 @@ export interface DealWhatsApp {
   optedOut: boolean;
   /** Whether the person lets the business call them, as last known. */
   callPermission: WaCallPermissionState;
+  /** Who has the conversation now (Sofia, a seller, ...); null before any message. */
+  attendance: SofiaState | null;
+  /**
+   * The brand whose expansion team this conversation speaks for (a franchise
+   * lead never hears of Wings), or null for Wings Company.
+   */
+  speaksFor: string | null;
   messages: WaMessage[];
 }
 
@@ -191,6 +201,38 @@ export interface WaConversationItem {
   /** The person wrote last. */
   unanswered: boolean;
   windowOpen: boolean;
+  /** The person's messages this reader has not opened yet. */
+  unreadCount: number;
+  /** The last message's status, when it was ours. */
+  lastStatus: WaMessageStatus | null;
+  /** Who has the conversation (Sofia, a seller, ...). */
+  attendance: SofiaState;
+  /** The deal's owner, when there is a deal. */
+  ownerName: string | null;
+}
+
+/** "Nova conversa": a deal (or a contact's deal) in the reader's scope to write to. */
+export interface WaNewTarget {
+  leadId: string;
+  name: string | null;
+  /** The person written to: the deal's own phone, or the contact's. */
+  phone: string;
+  /** The contact's name when the match was a contact of the deal. */
+  contactName: string | null;
+  pipeline: string | null;
+  ownerName: string | null;
+  open: boolean;
+  /** The conversation of that phone and deal, when one exists. */
+  conversationId: string | null;
+}
+
+export interface WaTargets {
+  targets: WaNewTarget[];
+  /**
+   * The typed number is already being attended with no deal (Sofia or the
+   * team): a seller may not start it as their own deal.
+   */
+  busy?: boolean;
 }
 
 // --- calls (Calling API) ---------------------------------------------------------------
@@ -199,7 +241,12 @@ export interface WaConversationItem {
  * Meta's words for the person's call permission, plus `requested` while our
  * request waits. Temporary lasts 7 days; four unanswered calls revoke it.
  */
-export const WA_CALL_PERMISSIONS = ['no_permission', 'requested', 'temporary', 'permanent'] as const;
+export const WA_CALL_PERMISSIONS = [
+  'no_permission',
+  'requested',
+  'temporary',
+  'permanent',
+] as const;
 export type WaCallPermission = (typeof WA_CALL_PERMISSIONS)[number];
 
 export const WA_CALL_PERMISSION_LABELS: Record<WaCallPermission, string> = {

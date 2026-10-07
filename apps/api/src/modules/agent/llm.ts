@@ -1,4 +1,4 @@
-import type { AgentModel } from '@wings/shared';
+import type { AgentModel, SofiaModel } from '@wings/shared';
 
 /**
  * The one door to the language model.
@@ -49,7 +49,7 @@ export interface LlmTurn {
 }
 
 export interface LlmRequest {
-  model: AgentModel;
+  model: AgentModel | SofiaModel;
   messages: LlmMessage[];
   tools: LlmToolDefinition[];
   maxOutputTokens: number;

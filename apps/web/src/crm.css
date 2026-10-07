@@ -2096,6 +2096,13 @@
 .crm-wa-window.is-open {
   color: var(--success);
 }
+.crm-wa-window.is-brand {
+  color: var(--accent, var(--text-1));
+  font-weight: 600;
+}
+.crm-wa-bubble.is-sofia {
+  border-style: dashed;
+}
 .crm-wa-off {
   margin: 0;
   padding: var(--space-3);
@@ -2396,4 +2403,137 @@
 
 .crm-transcript-segments li + li {
   margin-top: 4px;
+}
+
+/* ---------- WhatsApp Web (CRM Vendas → WhatsApp) ---------- */
+.crm-wa-web {
+  flex-direction: row;
+  min-height: 0;
+}
+.crm-wa-web-list {
+  width: 360px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+  min-height: 0;
+  overflow: auto;
+}
+.crm-wa-web-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.crm-wa-web-head h1 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+.crm-wa-web-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+.crm-wa-row.is-active {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+.crm-wa-unread {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--success);
+  color: var(--surface);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  display: inline-grid;
+  place-items: center;
+}
+.crm-wa-tick {
+  color: var(--text-3);
+}
+.crm-wa-tick.is-read {
+  color: var(--accent);
+}
+.crm-wa-web-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-2);
+}
+.crm-wa-web-open {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.crm-wa-web-none {
+  margin: auto;
+  padding: var(--space-5);
+  text-align: center;
+}
+.crm-wa-web-back {
+  display: none;
+}
+.crm-wa-targets {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+  max-height: 320px;
+  overflow: auto;
+}
+.crm-wa-target {
+  width: 100%;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+.crm-wa-target:hover {
+  border-color: var(--accent);
+}
+.crm-wa-new-number {
+  display: grid;
+  gap: var(--space-3);
+}
+@media (max-width: 760px) {
+  .crm-wa-web-list {
+    width: 100%;
+    border-right: 0;
+    padding: var(--space-3) var(--space-4);
+  }
+  .crm-wa-web .crm-wa-web-main {
+    display: none;
+  }
+  .crm-wa-web.has-open .crm-wa-web-list {
+    display: none;
+  }
+  .crm-wa-web.has-open .crm-wa-web-main {
+    display: flex;
+  }
+  .crm-wa-web-back {
+    display: inline-flex;
+  }
+}
+.crm-wa-web-open .crm-wa-chat {
+  flex: 1;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
 }

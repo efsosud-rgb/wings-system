@@ -882,6 +882,7 @@ export const LEAD_SOURCE_BADGES: Record<LeadSource, { label: string; tone: strin
   rd_crm: { label: 'RD', tone: 'rd' },
   site_form: { label: 'Site', tone: 'site' },
   whatsapp_link: { label: 'WhatsApp', tone: 'whatsapp' },
+  whatsapp: { label: 'WhatsApp', tone: 'whatsapp' },
   manual: { label: 'Manual', tone: 'manual' },
   csv_import: { label: 'Planilha', tone: 'manual' },
 };

@@ -342,6 +342,17 @@ const schema = z.object({
   /** Reuniões: the company's daily ceiling (USD) for AI analyses of meetings (docs/crm/reunioes-api.md). */
   MEETINGS_DAILY_USD: z.coerce.number().positive().max(100).default(1),
   /**
+   * Sofia (docs/whatsapp/sofia.md): the company's daily ceiling (USD) for her
+   * AI calls, same OpenRouter key. Reaching it hands each new turn to a person
+   * until the next day (UTC).
+   */
+  SOFIA_DAILY_USD: z.coerce
+    .number()
+    .positive()
+    .max(100)
+    .default(1)
+    .or(z.literal('').transform(() => 1)),
+  /**
    * The dashboard's insights and campaign suggestions: the same OpenRouter key
    * and model, under a ceiling of their own, in US dollars per day for the
    * whole company (scheduled and on-demand runs alike).
