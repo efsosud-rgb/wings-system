@@ -99,6 +99,25 @@ export type OutgoingPayload =
         language: { code: string };
         components?: { type: 'body'; parameters: { type: 'text'; text: string }[] }[];
       };
+    }
+  | {
+      type: 'interactive';
+      interactive: {
+        type: 'button';
+        body: { text: string };
+        action: { buttons: { type: 'reply'; reply: { id: string; title: string } }[] };
+      };
+    }
+  | {
+      type: 'interactive';
+      interactive: {
+        type: 'list';
+        body: { text: string };
+        action: {
+          button: string;
+          sections: { rows: { id: string; title: string }[] }[];
+        };
+      };
     };
 
 export const textPayload = (body: string): OutgoingPayload => ({
@@ -122,6 +141,42 @@ export const templatePayload = (
           ],
         }
       : {}),
+  },
+});
+
+/** Up to 3 reply buttons (titles of up to 20 characters), inside the 24-hour window. */
+export const buttonsPayload = (
+  body: string,
+  buttons: readonly { id: string; title: string }[],
+): OutgoingPayload => ({
+  type: 'interactive',
+  interactive: {
+    type: 'button',
+    body: { text: body },
+    action: {
+      buttons: buttons
+        .slice(0, 3)
+        .map((b) => ({ type: 'reply', reply: { id: b.id, title: b.title.slice(0, 20) } })),
+    },
+  },
+});
+
+/** A list of up to 10 options (titles of up to 24 characters), inside the 24-hour window. */
+export const listPayload = (
+  body: string,
+  button: string,
+  rows: readonly { id: string; title: string }[],
+): OutgoingPayload => ({
+  type: 'interactive',
+  interactive: {
+    type: 'list',
+    body: { text: body },
+    action: {
+      button: button.slice(0, 20),
+      sections: [
+        { rows: rows.slice(0, 10).map((r) => ({ id: r.id, title: r.title.slice(0, 24) })) },
+      ],
+    },
   },
 });
 

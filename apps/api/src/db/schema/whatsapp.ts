@@ -4,12 +4,14 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 import { tenants, WINGS_TENANT_ID } from './ads.js';
+import { clients } from './clients.js';
 import { employees } from './employees.js';
 import { leads } from './leads.js';
 
@@ -85,8 +87,38 @@ export const waConversations = pgTable(
     originCode: text('origin_code'),
     lastMessageAt: timestamp('last_message_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * Who has the conversation (a SofiaState): Sofia, waiting for the seller or
+     * for a person of the team, with a person, or closed (docs/whatsapp/sofia.md).
+     */
+    attendance: text('attendance').notNull().default('with_person'),
+    stateChangedAt: timestamp('state_changed_at', { withTimezone: true }),
+    /** A SofiaHandoffReason or SofiaCloseReason code. */
+    reason: text('reason'),
+    /** What the person came for (a SofiaSegment), once known. */
+    segment: text('segment'),
+    /** Expansão: the brand of interest (a client), from the link, the ad or the person's answer. */
+    brandClientId: uuid('brand_client_id').references(() => clients.id),
+    /**
+     * What Sofia found out: answers by question key, and her place in the
+     * script (`step`, the question waiting for an answer). Personal data, read
+     * only in the lead's access rule.
+     */
+    sofiaFacts: jsonb('sofia_facts').notNull().default({}),
+    /** Times in a row Sofia did not understand (2 = a person takes over). */
+    sofiaMisses: integer('sofia_misses').notNull().default(0),
+    /** A turn is waiting: the person wrote and Sofia answers at this time (a few seconds later). */
+    sofiaDueAt: timestamp('sofia_due_at', { withTimezone: true }),
+    /** A server took the turn (cleared when done; an old one was cut short by a restart). */
+    sofiaClaimedAt: timestamp('sofia_claimed_at', { withTimezone: true }),
+    /** The person's messages up to here were already answered. */
+    sofiaReadUntil: timestamp('sofia_read_until', { withTimezone: true }),
   },
   (table) => [
+    index('wa_conversations_attendance_idx').on(table.attendance, table.lastMessageAt),
+    index('wa_conversations_sofia_due_idx')
+      .on(table.sofiaDueAt)
+      .where(sql`${table.sofiaDueAt} is not null`),
     uniqueIndex('wa_conversations_contact_lead_uq')
       .on(table.contactId, table.leadId)
       .where(sql`${table.leadId} is not null`),
@@ -121,7 +153,7 @@ export const waMessages = pgTable(
     leadId: uuid('lead_id').references(() => leads.id),
     /** in | out */
     direction: text('direction').notNull(),
-    /** contact | employee | system */
+    /** contact | employee | sofia | system */
     author: text('author').notNull(),
     employeeId: uuid('employee_id').references(() => employees.id),
     /** A WaMessageKind. */
@@ -154,6 +186,24 @@ export const waMessages = pgTable(
     index('wa_messages_conversation_idx').on(table.conversationId, table.createdAt),
     index('wa_messages_lead_idx').on(table.leadId, table.createdAt),
   ],
+);
+
+/**
+ * When each person last opened a conversation: the WhatsApp screen counts the
+ * person's messages after it as unread, for that reader only.
+ */
+export const waConversationReads = pgTable(
+  'wa_conversation_reads',
+  {
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => waConversations.id, { onDelete: 'cascade' }),
+    employeeId: uuid('employee_id')
+      .notNull()
+      .references(() => employees.id),
+    readAt: timestamp('read_at', { withTimezone: true }).notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.conversationId, table.employeeId] })],
 );
 
 /**

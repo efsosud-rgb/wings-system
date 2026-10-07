@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { SofiaState } from './sofia.js';
 
 /**
  * The official WhatsApp (Cloud API) in the CRM (docs/whatsapp/cloud-api.md):
@@ -104,6 +105,8 @@ export interface WaMessage {
   error: string | null;
   /** Who in the team sent it (outgoing), or null. */
   authorName: string | null;
+  /** Sent by Sofia, the virtual SDR. */
+  bySofia: boolean;
   at: string;
 }
 
@@ -123,6 +126,8 @@ export interface DealWhatsApp {
   optedOut: boolean;
   /** Whether the person lets the business call them, as last known. */
   callPermission: WaCallPermissionState;
+  /** Who has the conversation now (Sofia, a seller, ...); null before any message. */
+  attendance: SofiaState | null;
   messages: WaMessage[];
 }
 
@@ -199,7 +204,12 @@ export interface WaConversationItem {
  * Meta's words for the person's call permission, plus `requested` while our
  * request waits. Temporary lasts 7 days; four unanswered calls revoke it.
  */
-export const WA_CALL_PERMISSIONS = ['no_permission', 'requested', 'temporary', 'permanent'] as const;
+export const WA_CALL_PERMISSIONS = [
+  'no_permission',
+  'requested',
+  'temporary',
+  'permanent',
+] as const;
 export type WaCallPermission = (typeof WA_CALL_PERMISSIONS)[number];
 
 export const WA_CALL_PERMISSION_LABELS: Record<WaCallPermission, string> = {

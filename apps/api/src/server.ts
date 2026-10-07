@@ -9,6 +9,8 @@ import { startInsightsScheduler } from './modules/insights/scheduler.js';
 import { startCrmAutomationsScheduler } from './modules/leads/automations-scheduler.js';
 import { createCrmMailTransport } from './modules/leads/crm-mail.js';
 import { startMetaLeadgenIntake } from './modules/leads/meta-intake.js';
+import { startSofia } from './modules/sofia/engine.js';
+import { whatsappConfigOf } from './modules/whatsapp/graph.js';
 import { startWhatsAppIntake } from './modules/whatsapp/intake.js';
 
 const pageIdsOf = (value: string | undefined) =>
@@ -121,6 +123,19 @@ async function main() {
     });
     app.wings.whatsappKick = intake.kick;
     app.addHook('onClose', async () => intake.stop());
+
+    // Sofia answers the conversations that are hers (docs/whatsapp/sofia.md).
+    // Her on/off switch is on the screen; this loop only finds the due turns.
+    const sofia = startSofia({
+      db,
+      llm: env.OPENROUTER_API_KEY ? createOpenRouterLlm({ apiKey: env.OPENROUTER_API_KEY }) : null,
+      fetchImpl: fetch,
+      config: whatsappConfigOf(env),
+      dailyUsd: env.SOFIA_DAILY_USD,
+      now: () => new Date(),
+      log: (facts) => app.log.info(facts),
+    });
+    app.addHook('onClose', async () => sofia.stop());
   }
 
   // CRM automations: due rules and sequence steps, then the deadline alerts,

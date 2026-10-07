@@ -1,49 +1,43 @@
 import {
-  brazilianPhoneVariants,
   canonicalWhatsAppPhone,
   templateParamCount,
   waSendTemplateSchema,
   waSendTextSchema,
   WA_KIND_LABELS,
-  WA_MEDIA_KINDS,
   WA_WINDOW_HOURS,
-  type DealWhatsApp,
   type WaConversationItem,
-  type WaMessage,
   type WaMessageKind,
-  type WaMessageStatus,
   type WaTemplate,
   type WaCallPermission,
   type WaCallPermissionLive,
-  type WaCallPermissionState,
 } from '@wings/shared';
-import { and, asc, desc, eq, inArray, isNull, max, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, max, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import type { Database } from '../../db/client.js';
-import {
-  employees,
-  waContacts,
-  waConversations,
-  waMessages,
-  waTemplates,
-} from '../../db/schema/index.js';
+import { waContacts, waConversations, waMessages, waTemplates } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { leadInScope, leadOwnerFilter } from '../leads/access.js';
 import {
   downloadWhatsAppMedia,
   errorText,
   listWhatsAppTemplates,
-  sendWhatsAppMessage,
   templatePayload,
   textPayload,
   callPermissionPayload,
   readCallPermission,
-  UNKNOWN_OUTCOME,
   whatsappConfigOf,
   type OutgoingPayload,
 } from './graph.js';
-import { callingOn } from './calling.js';
+import { deliverWhatsApp, type Contact } from './outbox.js';
+import {
+  authorsOf,
+  buildThread,
+  contactOfPhone,
+  permissionOf,
+  toMessage,
+  windowOf,
+} from './thread.js';
+import { takeConversation } from '../sofia/state.js';
 import { adoptUnmatched, conversationFor } from './intake.js';
 
 /**
@@ -57,93 +51,12 @@ import { adoptUnmatched, conversationFor } from './intake.js';
  */
 
 const TEMPLATES_FRESH_MS = 6 * 3_600_000;
-const MESSAGES_SHOWN = 500;
 
 const idParams = z.object({ id: z.uuid() });
 
 /** What the person sees above Meta's "Permitir ligações" buttons. */
 export const CALL_PERMISSION_TEXT =
   'A Wings gostaria de poder te ligar pelo WhatsApp para continuar o seu atendimento.';
-
-/** The stored permission, with a temporary one that ran out read as none. */
-function permissionOf(
-  contact:
-    | {
-        callPermission: string | null;
-        callPermissionExpiresAt: Date | null;
-        callPermissionRequestedAt: Date | null;
-      }
-    | null
-    | undefined,
-  now: Date,
-): WaCallPermissionState {
-  if (!contact) return { status: null, expiresAt: null, requestedAt: null };
-  const expired =
-    contact.callPermission === 'temporary' &&
-    contact.callPermissionExpiresAt !== null &&
-    contact.callPermissionExpiresAt <= now;
-  return {
-    status: expired
-      ? 'no_permission'
-      : ((contact.callPermission as WaCallPermission | null) ?? null),
-    expiresAt: expired ? null : (contact.callPermissionExpiresAt?.toISOString() ?? null),
-    requestedAt: contact.callPermissionRequestedAt?.toISOString() ?? null,
-  };
-}
-
-type Contact = typeof waContacts.$inferSelect;
-type MessageRow = typeof waMessages.$inferSelect;
-
-const windowOf = (contact: Contact | null | undefined, now: Date) => {
-  const expires = contact?.lastInboundAt
-    ? new Date(contact.lastInboundAt.getTime() + WA_WINDOW_HOURS * 3_600_000)
-    : null;
-  return { open: expires !== null && expires > now, expiresAt: expires?.toISOString() ?? null };
-};
-
-function toMessage(row: MessageRow, authors: Map<string, string>): WaMessage {
-  const content = (row.content ?? {}) as Record<string, unknown>;
-  const media = content.media as { mimeType?: string | null; filename?: string | null } | undefined;
-  const template = content.template as { name?: string; language?: string } | undefined;
-  return {
-    id: row.id,
-    direction: row.direction === 'out' ? 'out' : 'in',
-    kind: row.kind as WaMessageKind,
-    text: row.text,
-    media:
-      media && WA_MEDIA_KINDS.includes(row.kind as WaMessageKind)
-        ? { mimeType: media.mimeType ?? null, filename: media.filename ?? null }
-        : null,
-    template:
-      template?.name && template.language
-        ? { name: template.name, language: template.language }
-        : null,
-    status: row.direction === 'out' ? ((row.status ?? 'pending') as WaMessageStatus) : null,
-    error: row.direction === 'out' ? errorText(row.errorCode, row.errorTitle) : null,
-    authorName: row.employeeId ? (authors.get(row.employeeId) ?? null) : null,
-    at: (row.waTimestamp ?? row.createdAt).toISOString(),
-  };
-}
-
-async function authorsOf(db: Database, rows: MessageRow[]) {
-  const ids = [...new Set(rows.map((r) => r.employeeId).filter((id): id is string => id !== null))];
-  if (ids.length === 0) return new Map<string, string>();
-  const found = await db
-    .select({ id: employees.id, name: employees.fullName })
-    .from(employees)
-    .where(inArray(employees.id, ids));
-  return new Map(found.map((e) => [e.id, e.name]));
-}
-
-async function contactOfPhone(db: Database, phone: string | null) {
-  if (!phone) return null;
-  const found = await db
-    .select()
-    .from(waContacts)
-    .where(inArray(waContacts.phone, brazilianPhoneVariants(phone)))
-    .limit(1);
-  return found[0] ?? null;
-}
 
 export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   const { db, env } = app.wings;
@@ -161,41 +74,12 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   const fullScope = (request: FastifyRequest) =>
     leadOwnerFilter(request.session.actor, 'leads.whatsapp') === undefined;
 
-  async function threadOf(
+  const threadOf = (
     contact: Contact | null,
     leadId: string | null,
     conversationId: string | null,
-  ): Promise<DealWhatsApp> {
-    const rows = conversationId
-      ? await db
-          .select()
-          .from(waMessages)
-          .where(eq(waMessages.conversationId, conversationId))
-          .orderBy(desc(waMessages.createdAt))
-          .limit(MESSAGES_SHOWN)
-      : leadId
-        ? await db
-            .select()
-            .from(waMessages)
-            .where(eq(waMessages.leadId, leadId))
-            .orderBy(desc(waMessages.createdAt))
-            .limit(MESSAGES_SHOWN)
-        : [];
-    rows.reverse();
-    const authors = await authorsOf(db, rows);
-    return {
-      conversationId,
-      leadId,
-      profileName: contact?.profileName ?? null,
-      configured: whatsappConfigOf(env) !== null,
-      calling: await callingOn(fetchImpl(), whatsappConfigOf(env)),
-      phone: contact?.phone ?? null,
-      window: windowOf(contact, now()),
-      optedOut: Boolean(contact?.optOutAt),
-      callPermission: permissionOf(contact, now()),
-      messages: rows.map((row) => toMessage(row, authors)),
-    };
-  }
+  ) =>
+    buildThread({ db, env, fetchImpl: fetchImpl(), now: now() }, contact, leadId, conversationId);
 
   // --- reading ------------------------------------------------------------------------
 
@@ -375,47 +259,21 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       originCode: null,
     });
     const actor = request.session.actor;
-    const [row] = await db
-      .insert(waMessages)
-      .values({
-        conversationId: conversation.id,
-        contactId: contact.id,
-        leadId: target.leadId,
-        direction: 'out',
-        author: 'employee',
-        employeeId: actor.employeeId,
-        kind: outgoing.kind === 'call_permission' ? 'interactive' : outgoing.kind,
-        text: shown,
-        content,
-        status: 'pending',
-      })
-      .returning();
-
-    const result = await sendWhatsAppMessage(
-      fetchImpl(),
-      config,
-      contact.waId ?? contact.phone,
+    const delivered = await deliverWhatsApp(db, fetchImpl(), config, {
+      contact,
+      conversationId: conversation.id,
+      leadId: target.leadId,
+      author: 'employee',
+      employeeId: actor.employeeId,
+      kind: outgoing.kind === 'call_permission' ? 'interactive' : outgoing.kind,
+      shown,
+      content,
       payload,
-    );
-    const outcome = result.ok ? 'sent' : result.unknown ? 'unknown' : 'failed';
-    const [saved] = await db
-      .update(waMessages)
-      .set(
-        result.ok
-          ? { wamid: result.data.wamid, status: 'sent', sentAt: at, waTimestamp: at }
-          : result.unknown
-            ? { errorTitle: UNKNOWN_OUTCOME, waTimestamp: at }
-            : {
-                status: 'failed',
-                errorCode: result.code,
-                errorTitle: result.title,
-                failedAt: at,
-                waTimestamp: at,
-              },
-      )
-      .where(eq(waMessages.id, row!.id))
-      .returning();
-    if (result.ok && outgoing.kind === 'call_permission')
+      at,
+    });
+    const saved = delivered.row;
+    const outcome = delivered.outcome;
+    if (outcome === 'sent' && outgoing.kind === 'call_permission')
       await db
         .update(waContacts)
         .set({
@@ -426,15 +284,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
           callPermissionRequestedAt: at,
         })
         .where(eq(waContacts.id, contact.id));
-    if (result.ok && result.data.waId && result.data.waId !== contact.waId)
-      await db
-        .update(waContacts)
-        .set({ waId: result.data.waId, updatedAt: at })
-        .where(eq(waContacts.id, contact.id));
-    await db
-      .update(waConversations)
-      .set({ lastMessageAt: at })
-      .where(eq(waConversations.id, conversation.id));
+    // A person writing takes the conversation: Sofia stops, the wait is over.
+    await takeConversation(db, conversation.id, at);
     await writeAudit(db, {
       actorEmployeeId: actor.employeeId,
       action: 'whatsapp.message_sent',
@@ -442,16 +293,16 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       entityId: target.leadId ?? conversation.id,
       ip: request.ip,
       metadata: {
-        messageId: row!.id,
+        messageId: saved.id,
         kind: outgoing.kind,
         ...(outgoing.kind === 'template' ? { template: outgoing.name } : {}),
         outcome,
-        ...(result.ok ? {} : { errorCode: result.code }),
+        ...(delivered.errorCode === null ? {} : { errorCode: delivered.errorCode }),
       },
     });
-    const authors = await authorsOf(db, [saved!]);
+    const authors = await authorsOf(db, [saved]);
     // Written either way: the bubble shows whether it went, and why not.
-    return reply.status(201).send({ message: toMessage(saved!, authors) });
+    return reply.status(201).send({ message: toMessage(saved, authors) });
   }
 
   const outgoingOf = (kind: 'text' | 'template', body: unknown): Outgoing | string => {

@@ -23,6 +23,7 @@ export const PERMISSIONS = {
   'leads.assign': 'Atribuir e redistribuir leads entre vendedores',
   'leads.whatsapp': 'Conversar e ligar pelo WhatsApp do sistema (ver, enviar e ligar)',
   'crm.manage': 'Configurar as etapas do funil e a distribuição de leads',
+  'sofia.manage': 'Ligar e desligar a Sofia e editar as perguntas e mensagens dela',
   'campaign_leads.read': 'Ver os leads das campanhas de tráfego pago (RD CRM)',
   'campaign_leads.reveal':
     'Revelar telefone e e-mail dos leads das campanhas (registrado em auditoria)',
@@ -132,6 +133,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'leads.write': 'all',
     'leads.assign': 'all',
     'leads.whatsapp': 'all',
+    'sofia.manage': 'all',
     'crm.manage': 'all',
     'campaign_leads.read': 'all',
     'campaign_leads.reveal': 'all',
@@ -171,6 +173,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'leads.assign': 'all',
     // Eric, 07/10: Diretoria reads, sends and calls on any lead's WhatsApp, though it does not edit the deal.
     'leads.whatsapp': 'all',
+    'sofia.manage': 'all',
     'campaign_leads.read': 'all',
     'campaign_leads.reveal': 'all',
     'audit.read': 'all',
@@ -207,6 +210,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     // Runs the team: hands leads over and keeps the funnel's stages and rotation.
     'leads.assign': 'all',
     'leads.whatsapp': 'all',
+    'sofia.manage': 'all',
     'crm.manage': 'all',
     'campaign_leads.read': 'all',
     'campaign_leads.reveal': 'all',

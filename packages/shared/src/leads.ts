@@ -27,6 +27,7 @@ export const LEAD_SOURCES = [
   'rd_crm',
   'site_form',
   'csv_import',
+  'whatsapp',
 ] as const;
 export type LeadSource = (typeof LEAD_SOURCES)[number];
 
@@ -40,6 +41,7 @@ export const LEAD_SOURCE_LABELS: Record<LeadSource, string> = {
   rd_crm: 'RD CRM (importado)',
   site_form: 'Formulário do site',
   csv_import: 'Planilha importada',
+  whatsapp: 'WhatsApp (Sofia)',
 };
 
 /**
