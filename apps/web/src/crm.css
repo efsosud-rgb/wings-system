@@ -2203,6 +2203,64 @@
   }
 }
 
+/* ---------- WhatsApp: ligação ---------- */
+.crm-call-wa {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+}
+.crm-call-dock {
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 60;
+  display: grid;
+  gap: var(--space-2);
+  width: min(380px, calc(100vw - 32px));
+}
+.crm-call-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+.crm-call-card.is-ringing {
+  border-color: var(--success);
+}
+.crm-call-card.is-ended {
+  opacity: 0.85;
+}
+.crm-call-card-who {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.crm-call-card-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+.crm-btn.is-danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+@media (max-width: 640px) {
+  .crm-call-dock {
+    right: 16px;
+    left: 16px;
+    bottom: 16px;
+    width: auto;
+  }
+}
+
 /* ---------- deal page: Reunião ---------- */
 .crm-meetings {
   display: grid;

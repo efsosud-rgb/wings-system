@@ -85,6 +85,14 @@ async function graph<T>(
 export type OutgoingPayload =
   | { type: 'text'; text: { body: string; preview_url: boolean } }
   | {
+      type: 'interactive';
+      interactive: {
+        type: 'call_permission_request';
+        action: { name: 'call_permission_request' };
+        body?: { text: string };
+      };
+    }
+  | {
       type: 'template';
       template: {
         name: string;
@@ -136,6 +144,99 @@ export async function sendWhatsAppMessage(
   // Accepted without an id: we cannot follow it, and it may have gone.
   if (!wamid) return { ok: false, code: null, title: 'no_message_id', unknown: true };
   return { ok: true, data: { wamid, waId: result.data.contacts?.[0]?.wa_id ?? null } };
+}
+
+/** The request to let the business call (inside the 24-hour window only). */
+export const callPermissionPayload = (body: string): OutgoingPayload => ({
+  type: 'interactive',
+  interactive: {
+    type: 'call_permission_request',
+    action: { name: 'call_permission_request' },
+    body: { text: body },
+  },
+});
+
+// --- calls (Calling API) ----------------------------------------------------------------
+
+/** POST /{phone-number-id}/calls, action connect, once: the browser's offer goes to Meta. */
+export async function startWhatsAppCall(
+  fetchImpl: Fetch,
+  config: WhatsAppConfig,
+  to: string,
+  offerSdp: string,
+  opaque: string,
+): Promise<GraphResult<{ callId: string }>> {
+  const result = await graph<{ calls?: { id?: string }[] }>(
+    fetchImpl,
+    config.token,
+    'POST',
+    `/${config.phoneNumberId}/calls`,
+    {
+      messaging_product: 'whatsapp',
+      to,
+      action: 'connect',
+      session: { sdp_type: 'offer', sdp: offerSdp },
+      biz_opaque_callback_data: opaque,
+    },
+  );
+  if (!result.ok) return result;
+  const callId = result.data.calls?.[0]?.id;
+  if (!callId) return { ok: false, code: null, title: 'no_call_id', unknown: true };
+  return { ok: true, data: { callId } };
+}
+
+/** accept (with the browser's answer), reject or terminate a call. */
+export async function whatsappCallAction(
+  fetchImpl: Fetch,
+  config: WhatsAppConfig,
+  callId: string,
+  action: 'accept' | 'reject' | 'terminate',
+  answerSdp?: string,
+): Promise<GraphResult<{ success: boolean }>> {
+  return graph<{ success: boolean }>(
+    fetchImpl,
+    config.token,
+    'POST',
+    `/${config.phoneNumberId}/calls`,
+    {
+      messaging_product: 'whatsapp',
+      call_id: callId,
+      action,
+      ...(answerSdp ? { session: { sdp_type: 'answer', sdp: answerSdp } } : {}),
+    },
+  );
+}
+
+export interface GraphCallPermission {
+  permission?: { status?: string; expiration_time?: number };
+  actions?: { action_name?: string; can_perform_action?: boolean }[];
+}
+
+/** GET /{phone-number-id}/call_permissions: may the business call this person now? */
+export async function readCallPermission(
+  fetchImpl: Fetch,
+  config: WhatsAppConfig,
+  waId: string,
+): Promise<GraphResult<GraphCallPermission>> {
+  return graph<GraphCallPermission>(
+    fetchImpl,
+    config.token,
+    'GET',
+    `/${config.phoneNumberId}/call_permissions?${new URLSearchParams({ user_wa_id: waId })}`,
+  );
+}
+
+/** GET /{phone-number-id}/settings: is calling on for the number? */
+export async function readCallingSettings(
+  fetchImpl: Fetch,
+  config: WhatsAppConfig,
+): Promise<GraphResult<{ calling?: { status?: string } }>> {
+  return graph<{ calling?: { status?: string } }>(
+    fetchImpl,
+    config.token,
+    'GET',
+    `/${config.phoneNumberId}/settings`,
+  );
 }
 
 // --- templates --------------------------------------------------------------------------
@@ -261,6 +362,25 @@ const ERRORS: Record<number, string> = {
   100: 'A Meta recusou um campo do pedido.',
   368: 'A conta foi bloqueada temporariamente por política da Meta.',
   131000: 'A Meta teve um erro ao enviar. Tente de novo mais tarde.',
+  131044: 'A conta do WhatsApp está sem forma de pagamento, e a Meta não completa a ligação.',
+  138000: 'As ligações estão desligadas neste número do WhatsApp.',
+  138001: 'Este número não pode receber ligações pelo WhatsApp.',
+  138003: 'Já existe uma ligação em andamento com esta pessoa.',
+  138005: 'Limite de ligações da Meta atingido. Tente mais tarde.',
+  138006: 'A pessoa ainda não permitiu ligações: peça a permissão primeiro.',
+  138007: 'A ligação não conectou a tempo. Tente de novo.',
+  138009: 'Limite de pedidos de permissão atingido (1 por dia, 2 por semana).',
+  138012: 'Limite de ligações por dia para esta pessoa atingido.',
+  138013: 'Este número não pode fazer ligações pelo WhatsApp.',
+  138014: 'A Meta pausou as ligações por qualidade baixa.',
+  138015: 'As ligações exigem limite de 2.000 mensagens por dia.',
+  138017: 'A pessoa já deu permissão permanente.',
+  138018: 'Falta um ajuste técnico na Meta para as ligações (assinatura do campo calls).',
+  138019: 'A ligação não conectou.',
+  138020: 'A conexão de áudio falhou.',
+  138021: 'O áudio da pessoa não chegou.',
+  138022: 'O áudio do sistema não chegou à pessoa.',
+  138023: 'A ligação foi atendida, mas o áudio não passou.',
 };
 
 export const UNKNOWN_OUTCOME = 'unknown_outcome';

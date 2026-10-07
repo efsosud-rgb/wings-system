@@ -43,8 +43,9 @@ export interface WaChange {
   messages: WaInboundMessage[];
   statuses: WaStatusUpdate[];
   templates: WaTemplateUpdate[];
-  /** `calls` changes are kept as they came, for the calling part. */
-  calls: unknown[];
+  /** The `calls` field: a call starting or ending, and the statuses of our calls. */
+  calls: WaCallEvent[];
+  callStatuses: WaCallStatusUpdate[];
 }
 
 type Obj = Record<string, unknown>;
@@ -176,6 +177,69 @@ function statusOf(raw: Obj): WaStatusUpdate | null {
   };
 }
 
+export interface WaCallEvent {
+  callId: string;
+  event: 'connect' | 'terminate';
+  /** in: the person called; out: the business did. */
+  direction: 'in' | 'out';
+  /** The person's wa_id, whichever side they are on. */
+  person: string | null;
+  profileName: string | null;
+  at: Date | null;
+  sdpType: 'offer' | 'answer' | null;
+  sdp: string | null;
+  /** Our own id, sent with an outgoing call and echoed back. */
+  opaque: string | null;
+  /** terminate only: COMPLETED or FAILED (Meta's casing varies). */
+  outcome: 'completed' | 'failed' | null;
+  startedAt: Date | null;
+  endedAt: Date | null;
+  durationSeconds: number | null;
+  errorCode: number | null;
+  errorTitle: string | null;
+}
+
+export interface WaCallStatusUpdate {
+  callId: string;
+  status: 'RINGING' | 'ACCEPTED' | 'REJECTED';
+  at: Date | null;
+  opaque: string | null;
+}
+
+function callOf(
+  raw: Obj,
+  names: Map<string, string>,
+  error: { code: number | null; title: string | null },
+): WaCallEvent | null {
+  const callId = str(raw.id);
+  const event = str(raw.event);
+  if (!callId || (event !== 'connect' && event !== 'terminate')) return null;
+  const direction = str(raw.direction)?.toUpperCase() === 'BUSINESS_INITIATED' ? 'out' : 'in';
+  const person = direction === 'out' ? str(raw.to) : str(raw.from);
+  const session = obj(raw.session);
+  const sdpType = str(session.sdp_type);
+  const outcome = str(Array.isArray(raw.status) ? raw.status[0] : raw.status)?.toLowerCase();
+  const duration =
+    num(raw.duration) ?? (typeof raw.duration === 'string' ? Number(raw.duration) : null);
+  return {
+    callId,
+    event,
+    direction,
+    person,
+    profileName: person ? (names.get(person) ?? null) : null,
+    at: unixAt(raw.timestamp),
+    sdpType: sdpType === 'offer' || sdpType === 'answer' ? sdpType : null,
+    sdp: str(session.sdp),
+    opaque: str(raw.biz_opaque_callback_data),
+    outcome: outcome === 'completed' || outcome === 'failed' ? outcome : null,
+    startedAt: unixAt(raw.start_time),
+    endedAt: unixAt(raw.end_time),
+    durationSeconds: duration !== null && Number.isFinite(duration) ? Math.round(duration) : null,
+    errorCode: event === 'terminate' ? error.code : null,
+    errorTitle: event === 'terminate' ? error.title : null,
+  };
+}
+
 /** Every change in one webhook body. An unknown body gives none. */
 export function whatsappChangesOf(body: unknown): WaChange[] {
   const root = obj(body);
@@ -198,6 +262,7 @@ export function whatsappChangesOf(body: unknown): WaChange[] {
         statuses: [],
         templates: [],
         calls: [],
+        callStatuses: [],
       };
       if (field === 'messages') {
         for (const message of arr(value.messages)) {
@@ -220,7 +285,26 @@ export function whatsappChangesOf(body: unknown): WaChange[] {
             status: event,
           });
       } else if (field === 'calls') {
-        parsed.calls.push(...arr(value.calls));
+        const error = obj(arr(value.errors)[0]);
+        for (const call of arr(value.calls)) {
+          const read = callOf(obj(call), names, {
+            code: num(error.code),
+            title: str(error.message)?.slice(0, 200) ?? null,
+          });
+          if (read) parsed.calls.push(read);
+        }
+        for (const status of arr(value.statuses)) {
+          const raw = obj(status);
+          const callId = str(raw.id);
+          const said = str(raw.status)?.toUpperCase();
+          if (callId && (said === 'RINGING' || said === 'ACCEPTED' || said === 'REJECTED'))
+            parsed.callStatuses.push({
+              callId,
+              status: said,
+              at: unixAt(raw.timestamp),
+              opaque: str(raw.biz_opaque_callback_data),
+            });
+        }
       }
       out.push(parsed);
     }

@@ -30,7 +30,6 @@ export function DealWhatsAppPage() {
   const loaded = useLead(id);
   const canWrite = hasPermission(session.data, 'leads.write');
   const canWhatsApp = hasPermission(session.data, 'leads.whatsapp');
-  const thread = useWhatsAppThread({ leadId: id ?? '' }, Boolean(id) && canWhatsApp);
   const [calling, setCalling] = useState(false);
   if (loaded.isLoading)
     return (
@@ -98,7 +97,6 @@ export function DealWhatsAppPage() {
           name={lead.name}
           phone={lead.phone}
           canWrite={canWrite}
-          whatsappCalling={thread.data?.calling ?? false}
           onClose={() => setCalling(false)}
         />
       )}

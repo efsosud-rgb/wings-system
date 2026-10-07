@@ -5,13 +5,15 @@ import { ApiError } from '../../api/client.js';
 import { useAddActivity } from '../../api/crm.js';
 import { Icon } from '../../components/Icon.js';
 import { formatPhone } from './format.js';
+import { useWhatsAppCallCenter, WhatsAppCallSection } from './WhatsAppCalls.js';
 
 /**
  * The call panel (Eric, 07/10/2026): "Ligar" opens this inside the system
  * instead of the browser's tel: link, whose "open the app?" prompt led
- * nowhere. Three things: call through WhatsApp (on once the official API is
- * connected), copy the number to dial from a phone, and register the call on
- * the deal. Drawn in a portal and stopping its events, so that a click in it
+ * nowhere. Three things: call through WhatsApp (Calling API, `WhatsAppCalls.tsx`:
+ * on once calling is on for the number and the person allows calls), copy the
+ * number to dial from a phone, and register a call made outside the system (a
+ * WhatsApp call registers itself). Drawn in a portal and stopping its events, so that a click in it
  * never reaches a kanban card underneath (which opens the deal).
  */
 
@@ -28,17 +30,15 @@ export function CallPanel({
   name,
   phone,
   canWrite,
-  whatsappCalling = false,
   onClose,
 }: {
   leadId: string;
   name: string | null;
   phone: string | null;
   canWrite: boolean;
-  /** True once the server says WhatsApp calling is on for this deal. */
-  whatsappCalling?: boolean;
   onClose: () => void;
 }) {
+  const center = useWhatsAppCallCenter();
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -65,18 +65,27 @@ export function CallPanel({
             <div className="crm-call-number">{phone ? formatPhone(phone) : 'Sem telefone'}</div>
           </div>
         </div>
-        <div className="crm-call-ways">
-          <button
-            type="button"
-            className="crm-btn is-primary"
-            disabled={!whatsappCalling || !phone}
-            title={whatsappCalling ? undefined : WHATSAPP_CALL_OFF}
-          >
-            <Icon name="message" size={15} /> Ligar pelo WhatsApp
-          </button>
-          {phone && <CopyNumber phone={phone} />}
-        </div>
-        {!whatsappCalling && <p className="crm-sub">{WHATSAPP_CALL_OFF}</p>}
+        {center ? (
+          <WhatsAppCallSection
+            center={center}
+            leadId={leadId}
+            name={name}
+            phone={phone}
+            onCalling={onClose}
+          />
+        ) : (
+          <>
+            <button type="button" className="crm-btn is-primary" disabled title={WHATSAPP_CALL_OFF}>
+              <Icon name="message" size={15} /> Ligar pelo WhatsApp
+            </button>
+            <p className="crm-sub">{WHATSAPP_CALL_OFF}</p>
+          </>
+        )}
+        {phone && (
+          <div className="crm-call-ways">
+            <CopyNumber phone={phone} />
+          </div>
+        )}
         {phone && (
           <p className="crm-sub">
             Para ligar do seu telefone, copie o número e registre a ligação aqui.

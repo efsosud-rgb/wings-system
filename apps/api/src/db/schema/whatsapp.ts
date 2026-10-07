@@ -46,6 +46,14 @@ export const waContacts = pgTable(
     lastInboundAt: timestamp('last_inbound_at', { withTimezone: true }),
     /** The person asked not to receive messages: only replies inside the window go out. */
     optOutAt: timestamp('opt_out_at', { withTimezone: true }),
+    /**
+     * Whether the person lets the business call them on WhatsApp, as Meta last
+     * said: no_permission | temporary | permanent (Meta's words), or
+     * `requested` while our request waits for an answer.
+     */
+    callPermission: text('call_permission'),
+    callPermissionExpiresAt: timestamp('call_permission_expires_at', { withTimezone: true }),
+    callPermissionRequestedAt: timestamp('call_permission_requested_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -191,5 +199,50 @@ export const waTemplates = pgTable(
   },
   (table) => [
     uniqueIndex('wa_templates_name_lang_uq').on(table.tenantId, table.name, table.language),
+  ],
+);
+
+/**
+ * Every WhatsApp voice call, both ways (Calling API; the browser carries the
+ * audio). An outgoing call is written before Meta is called and its id is
+ * sent as `biz_opaque_callback_data`, so a webhook that beats Meta's answer
+ * still finds it. The SDP lives here only while the call is being set up and
+ * is cleared when it ends. A finished call goes on the deal once
+ * (`activity_logged_at`).
+ */
+export const waCalls = pgTable(
+  'wa_calls',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Meta's call id (wacid...). */
+    callId: text('call_id'),
+    contactId: uuid('contact_id')
+      .notNull()
+      .references(() => waContacts.id),
+    conversationId: uuid('conversation_id').references(() => waConversations.id),
+    leadId: uuid('lead_id').references(() => leads.id),
+    /** in (the person called) | out (the business called) */
+    direction: text('direction').notNull(),
+    /** dialing | ringing | accepted | completed | rejected | missed | failed */
+    status: text('status').notNull(),
+    /** Who placed it, or who answered it. */
+    employeeId: uuid('employee_id').references(() => employees.id),
+    /** The person's SDP offer (incoming) or Meta's answer (outgoing), while setting up. */
+    remoteSdp: text('remote_sdp'),
+    errorCode: integer('error_code'),
+    errorTitle: text('error_title'),
+    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
+    connectedAt: timestamp('connected_at', { withTimezone: true }),
+    endedAt: timestamp('ended_at', { withTimezone: true }),
+    durationSeconds: integer('duration_seconds'),
+    activityLoggedAt: timestamp('activity_logged_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('wa_calls_call_id_uq')
+      .on(table.callId)
+      .where(sql`${table.callId} is not null`),
+    index('wa_calls_status_idx').on(table.status, table.startedAt),
+    index('wa_calls_lead_idx').on(table.leadId, table.startedAt),
   ],
 );

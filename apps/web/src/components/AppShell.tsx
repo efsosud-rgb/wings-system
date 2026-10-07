@@ -12,6 +12,7 @@ import { useSession } from '../api/auth.js';
 import { SidebarLogo } from '../brand/SidebarLogo.js';
 import { Icon } from './Icon.js';
 import { Topbar } from './Topbar.js';
+import { WhatsAppCallProvider } from '../pages/crm/WhatsAppCalls.js';
 
 /**
  * Sidebar, top bar and frame.
@@ -129,7 +130,9 @@ export function AppShell() {
       <div className="shell-main">
         <Topbar />
         <main className="content">
-          <Outlet />
+          <WhatsAppCallProvider>
+            <Outlet />
+          </WhatsAppCallProvider>
         </main>
       </div>
     </div>

@@ -12,16 +12,20 @@ import {
   crmContacts,
   leadContacts,
   leads,
+  waCalls,
   waContacts,
   waConversations,
   waMessages,
   waTemplates,
   waWebhookEvents,
 } from '../../db/schema/index.js';
+import { addActivity } from '../leads/activities.js';
 import { leadFromTrackedMessage } from '../leads/tracked-link.js';
 import {
   isOptOut,
   whatsappChangesOf,
+  type WaCallEvent,
+  type WaCallStatusUpdate,
   type WaInboundMessage,
   type WaStatusUpdate,
   type WaTemplateUpdate,
@@ -111,6 +115,7 @@ export async function processWhatsAppEvents(
       deps.log({ job: WHATSAPP_JOB, event: event.id, error: code });
     }
   }
+  await sweepCalls(db, now());
   return result;
 }
 
@@ -137,6 +142,8 @@ export async function applyWhatsAppPayload(deps: WhatsAppIntakeDeps, body: unkno
     for (const message of change.messages) await applyInbound(deps.db, message);
     for (const status of change.statuses) await applyStatus(deps.db, status);
     for (const template of change.templates) await applyTemplateReview(deps.db, template);
+    for (const call of change.calls) await applyCallEvent(deps.db, call);
+    for (const status of change.callStatuses) await applyCallStatus(deps.db, status);
   }
 }
 
@@ -263,6 +270,25 @@ async function applyInbound(db: Database, message: WaInboundMessage) {
     })
     .returning();
 
+  const permission = message.content.callPermission as
+    { response?: string | null; isPermanent?: boolean; expiresAt?: string | null } | undefined;
+  if (permission)
+    await db
+      .update(waContacts)
+      .set({
+        callPermission:
+          permission.response === 'accept'
+            ? permission.isPermanent
+              ? 'permanent'
+              : 'temporary'
+            : 'no_permission',
+        callPermissionExpiresAt:
+          permission.response === 'accept' && permission.expiresAt
+            ? new Date(permission.expiresAt)
+            : null,
+      })
+      .where(eq(waContacts.id, contact!.id));
+
   const code = trackingCodeOf(message.text);
   const tracked =
     code && normalizeBrazilianPhone(message.from)
@@ -353,6 +379,201 @@ async function applyTemplateReview(db: Database, update: WaTemplateUpdate) {
         update.language ? eq(waTemplates.language, update.language) : sql`true`,
       ),
     );
+}
+
+// --- calls ---------------------------------------------------------------------------------
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ENDED = ['completed', 'rejected', 'missed', 'failed'];
+
+/** Our row for a call: by Meta's id, or by our own id that went out as opaque data. */
+async function callRow(db: Database, callId: string, opaque: string | null) {
+  const byId = await db.query.waCalls.findFirst({ where: eq(waCalls.callId, callId) });
+  if (byId) return byId;
+  if (opaque && UUID.test(opaque)) {
+    const ours = await db.query.waCalls.findFirst({ where: eq(waCalls.id, opaque) });
+    if (ours && (ours.callId === null || ours.callId === callId)) {
+      if (ours.callId === null)
+        await db.update(waCalls).set({ callId }).where(eq(waCalls.id, ours.id));
+      return { ...ours, callId };
+    }
+  }
+  return null;
+}
+
+/** A person calling in: their contact, the deal of the phone, a ringing row. */
+async function incomingCall(db: Database, event: WaCallEvent) {
+  if (!event.person) return null;
+  const phone = canonicalWhatsAppPhone(normalizeBrazilianPhone(event.person) ?? event.person);
+  const at = event.at ?? new Date();
+  // A call opens the 24-hour window like a message (Meta's rule), answered or not.
+  const [contact] = await db
+    .insert(waContacts)
+    .values({ phone, waId: event.person, profileName: event.profileName, lastInboundAt: at })
+    .onConflictDoUpdate({
+      target: [waContacts.tenantId, waContacts.phone],
+      set: {
+        waId: event.person,
+        profileName: sql`coalesce(excluded.profile_name, ${waContacts.profileName})`,
+        lastInboundAt: sql`greatest(${waContacts.lastInboundAt}, excluded.last_inbound_at)`,
+        updatedAt: new Date(),
+      },
+    })
+    .returning();
+  const leadId = await openLeadByPhone(db, phone);
+  if (leadId) await adoptUnmatched(db, contact!.id, leadId);
+  const conversation = await conversationFor(db, contact!.id, leadId, {
+    referral: null,
+    originCode: null,
+  });
+  const [row] = await db
+    .insert(waCalls)
+    .values({
+      callId: event.callId,
+      contactId: contact!.id,
+      conversationId: conversation.id,
+      leadId,
+      direction: 'in',
+      status: 'ringing',
+      remoteSdp: event.event === 'connect' ? event.sdp : null,
+      startedAt: at,
+    })
+    .onConflictDoNothing()
+    .returning();
+  return (
+    row ?? (await db.query.waCalls.findFirst({ where: eq(waCalls.callId, event.callId) })) ?? null
+  );
+}
+
+async function applyCallEvent(db: Database, event: WaCallEvent) {
+  let row = await callRow(db, event.callId, event.opaque);
+  if (event.event === 'connect') {
+    if (event.direction === 'in') {
+      if (!row) await incomingCall(db, event);
+      return;
+    }
+    // Meta's answer to the offer our browser made: the browser applies it.
+    if (row && !ENDED.includes(row.status) && event.sdpType === 'answer' && event.sdp)
+      await db
+        .update(waCalls)
+        .set({ remoteSdp: event.sdp, status: row.status === 'dialing' ? 'ringing' : row.status })
+        .where(eq(waCalls.id, row.id));
+    return;
+  }
+  // terminate: may come before the connect, and more than once.
+  if (!row && event.direction === 'in') row = await incomingCall(db, event);
+  if (!row || row.endedAt !== null) {
+    // Already closed here (our hang-up): Meta's duration is the real one.
+    if (row && row.activityLoggedAt === null && event.durationSeconds !== null)
+      await db
+        .update(waCalls)
+        .set({
+          durationSeconds: event.durationSeconds,
+          ...(event.durationSeconds > 0 ? { status: 'completed' } : {}),
+        })
+        .where(eq(waCalls.id, row.id));
+    if (row) await logCallOnDeal(db, row.id);
+    return;
+  }
+  const talked = event.outcome === 'completed' && (event.durationSeconds ?? 0) > 0;
+  const status = talked
+    ? 'completed'
+    : row.status === 'rejected'
+      ? 'rejected'
+      : event.outcome === 'failed' && row.status === 'accepted'
+        ? 'failed'
+        : 'missed';
+  await db
+    .update(waCalls)
+    .set({
+      status,
+      remoteSdp: null,
+      endedAt: event.endedAt ?? event.at ?? new Date(),
+      connectedAt: row.connectedAt ?? (talked ? event.startedAt : null),
+      durationSeconds: talked ? event.durationSeconds : 0,
+      errorCode: event.errorCode,
+      errorTitle: event.errorTitle,
+    })
+    .where(eq(waCalls.id, row.id));
+  await logCallOnDeal(db, row.id);
+}
+
+async function applyCallStatus(db: Database, update: WaCallStatusUpdate) {
+  const row = await callRow(db, update.callId, update.opaque);
+  if (!row || ENDED.includes(row.status)) return;
+  if (update.status === 'RINGING' && row.status === 'dialing')
+    await db.update(waCalls).set({ status: 'ringing' }).where(eq(waCalls.id, row.id));
+  else if (update.status === 'ACCEPTED')
+    await db
+      .update(waCalls)
+      .set({ status: 'accepted', connectedAt: row.connectedAt ?? update.at ?? new Date() })
+      .where(eq(waCalls.id, row.id));
+  else if (update.status === 'REJECTED')
+    await db.update(waCalls).set({ status: 'rejected' }).where(eq(waCalls.id, row.id));
+}
+
+/**
+ * A finished call goes on its deal's history once: who called or answered,
+ * the result and the real duration, "pelo WhatsApp". A call with no deal
+ * stays only in the WhatsApp record.
+ */
+export async function logCallOnDeal(db: Database, callRowId: string) {
+  const claimed = await db
+    .update(waCalls)
+    .set({ activityLoggedAt: new Date() })
+    .where(
+      and(
+        eq(waCalls.id, callRowId),
+        isNull(waCalls.activityLoggedAt),
+        sql`${waCalls.leadId} is not null`,
+        sql`${waCalls.endedAt} is not null`,
+      ),
+    )
+    .returning();
+  const call = claimed[0];
+  if (!call?.leadId) return;
+  const answered = call.status === 'completed';
+  const way = call.direction === 'in' ? 'ligação recebida' : 'ligação feita';
+  await addActivity(db, {
+    leadId: call.leadId,
+    actorEmployeeId: call.employeeId,
+    kind: 'call',
+    outcome: answered ? 'answered' : 'no_answer',
+    durationSeconds: answered ? (call.durationSeconds ?? undefined) : undefined,
+    note: `Pelo WhatsApp · ${way}${answered ? '' : call.status === 'rejected' ? ', recusada' : ', não atendida'}`,
+    at: call.startedAt.toISOString(),
+  });
+}
+
+/**
+ * Calls nobody closed: one that rang out without a webhook becomes missed; one
+ * ended by our hang-up but whose final webhook never came goes on the deal
+ * with what we know; one that never ended is closed after 4 hours.
+ */
+export async function sweepCalls(db: Database, now: Date) {
+  const ago = (ms: number) => new Date(now.getTime() - ms);
+  await db
+    .update(waCalls)
+    .set({ status: 'missed', endedAt: now, remoteSdp: null, durationSeconds: 0 })
+    .where(
+      and(inArray(waCalls.status, ['dialing', 'ringing']), lt(waCalls.startedAt, ago(3 * 60_000))),
+    );
+  await db
+    .update(waCalls)
+    .set({ status: 'failed', endedAt: now, remoteSdp: null })
+    .where(and(eq(waCalls.status, 'accepted'), lt(waCalls.startedAt, ago(4 * 3_600_000))));
+  const late = await db
+    .select({ id: waCalls.id })
+    .from(waCalls)
+    .where(
+      and(
+        isNull(waCalls.activityLoggedAt),
+        sql`${waCalls.leadId} is not null`,
+        lt(waCalls.endedAt, ago(2 * 60_000)),
+      ),
+    )
+    .limit(50);
+  for (const call of late) await logCallOnDeal(db, call.id);
 }
 
 // --- the loop -----------------------------------------------------------------------------
