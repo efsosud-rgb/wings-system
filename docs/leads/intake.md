@@ -205,7 +205,8 @@ lidos de forma tolerante (vários nomes de campo). O log de formas
 (`lead webhook`, `zapi profile`, `brave search`, `brasilapi cnpj`, `meta
 lead fetched`) é onde conferir no primeiro evento real:
 
-- RD Station: `leads[].last_conversion.content.{conversion_identifier,url,created_at}`, `legal_bases`, `mobile_phone`/`personal_phone`; atribuição (CRM Fase 1, T4) de `content.utm_*`/`cf_utm_*`/`gclid`/`fbclid`, da query da `url` e de `content.traffic_source` (o formato `encoded_`+base64 foi lido ao vivo nos eventos de contato em 28/09, não num webhook).
+- RD Station, webhook criado na tela do RD (visto ao vivo no staging em 07/10): `{event_type: 'WEBHOOK.CONVERTED', entity_type: 'CONTACT', event_identifier, event_timestamp, contact: {uuid, email, name, personal_phone, tags, legal_bases, cf_*, company, funnel}}`. Não traz `last_conversion` nem o endereço da página: o identificador do formulário vem em `event_identifier` (a regra `landing_page` casa por ele) e a atribuição (UTM) fica vazia. Eventos `contact` que não são `WEBHOOK.CONVERTED` respondem 200 com `ignored: 'no_conversion'`. Ainda não confirmado: se `event_identifier` é mesmo o identificador de conversão que as regras usam.
+- RD Station, formato clássico: `leads[].last_conversion.content.{conversion_identifier,url,created_at}`, `legal_bases`, `mobile_phone`/`personal_phone`; atribuição (CRM Fase 1, T4) de `content.utm_*`/`cf_utm_*`/`gclid`/`fbclid`, da query da `url` e de `content.traffic_source` (o formato `encoded_`+base64 foi lido ao vivo nos eventos de contato em 28/09, não num webhook).
 - Z-API "ao receber": `phone`, `text.message`, `senderName`, `senderPhoto`, `momment`, `fromMe`, `isGroup`; endpoints `profile-picture` e `contacts/<phone>`.
 - Meta: o corpo `entry[].changes[].value.leadgen_id`, e o Graph
   `GET /v23.0/<leadgen_id>?fields=field_data,campaign_id,campaign_name,form_id,…`.
