@@ -180,9 +180,7 @@ export async function disconnect(deps: GoogleWorkspaceDeps, employeeId: string):
       // A token we cannot even open is forgotten all the same.
     }
   }
-  await deps.db
-    .delete(googleWorkspaceConnections)
-    .where(eq(googleWorkspaceConnections.id, row.id));
+  await deps.db.delete(googleWorkspaceConnections).where(eq(googleWorkspaceConnections.id, row.id));
 }
 
 export interface GoogleAccess {
@@ -201,7 +199,9 @@ export async function accessTokenFor(
 ): Promise<GoogleAccess> {
   const current = await connectionOf(deps, employeeId);
   if (!current || current.state !== 'connected' || !current.refreshTokenEnc) {
-    throw new GoogleOAuthError(current?.state === 'needs_reconnect' ? 'needs_reconnect' : 'not_connected');
+    throw new GoogleOAuthError(
+      current?.state === 'needs_reconnect' ? 'needs_reconnect' : 'not_connected',
+    );
   }
   const fresh = (row: Row) =>
     row.accessTokenEnc &&
@@ -308,7 +308,8 @@ export async function statusFor(
     return {
       ...base,
       state: 'connected',
-      lastError: error instanceof GoogleCalendarError ? `calendar_${error.code}` : 'calendar_failed',
+      lastError:
+        error instanceof GoogleCalendarError ? `calendar_${error.code}` : 'calendar_failed',
     };
   }
 }

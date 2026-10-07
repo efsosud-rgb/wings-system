@@ -47,7 +47,8 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
     const pending = event.meetReadsLeft > 0;
     if (pending) event.meetReadsLeft -= 1;
     const hasMeet = Boolean(event.body.conferenceData);
-    const attendees = (event.body.attendees as Array<{ email: string; displayName?: string }>) ?? [];
+    const attendees =
+      (event.body.attendees as Array<{ email: string; displayName?: string }>) ?? [];
     return {
       id: event.id,
       htmlLink: `https://calendar.google.com/event?eid=${event.id}`,
@@ -73,11 +74,14 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
   };
 
   const transport: typeof fetch = async (input, init) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    const url =
+      typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     const method = init?.method ?? 'GET';
     const rawBody = typeof init?.body === 'string' ? init.body : null;
     const body =
-      rawBody && init?.headers && (init.headers as Record<string, string>)['content-type'] === 'application/json'
+      rawBody &&
+      init?.headers &&
+      (init.headers as Record<string, string>)['content-type'] === 'application/json'
         ? (JSON.parse(rawBody) as Record<string, unknown>)
         : rawBody
           ? Object.fromEntries(new URLSearchParams(rawBody))
@@ -93,7 +97,9 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
       tokenCounter += 1;
       return json(200, {
         access_token: `access-${tokenCounter}`,
-        ...(grant === 'authorization_code' ? { refresh_token: 'refresh-1', id_token: idToken } : {}),
+        ...(grant === 'authorization_code'
+          ? { refresh_token: 'refresh-1', id_token: idToken }
+          : {}),
         expires_in: 3600,
         scope: 'openid email https://www.googleapis.com/auth/calendar.events',
         token_type: 'Bearer',
@@ -107,9 +113,12 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
     if (u.pathname === '/calendar/v3/users/me/calendarList') {
       return json(200, { items: calendars });
     }
-    const eventsMatch = u.pathname.match(/^\/calendar\/v3\/calendars\/([^/]+)\/events(?:\/([^/]+))?$/);
+    const eventsMatch = u.pathname.match(
+      /^\/calendar\/v3\/calendars\/([^/]+)\/events(?:\/([^/]+))?$/,
+    );
     if (eventsMatch) {
-      if (options.eventsStatus) return json(options.eventsStatus, { error: { code: options.eventsStatus } });
+      if (options.eventsStatus)
+        return json(options.eventsStatus, { error: { code: options.eventsStatus } });
       const calendarId = decodeURIComponent(eventsMatch[1]!);
       const eventId = eventsMatch[2] ? decodeURIComponent(eventsMatch[2]) : null;
       if (method === 'POST') {
@@ -139,7 +148,10 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
     if (u.pathname === '/gmail/v1/users/me/messages/send') {
       const sent = body as { raw: string; threadId?: string };
       sentMail.push({ raw: sent.raw, threadId: sent.threadId ?? null });
-      return json(200, { id: `msg${sentMail.length}`, threadId: sent.threadId ?? `thr${sentMail.length}` });
+      return json(200, {
+        id: `msg${sentMail.length}`,
+        threadId: sent.threadId ?? `thr${sentMail.length}`,
+      });
     }
     return json(404, { error: { code: 404, message: 'fake google: unknown route' } });
   };

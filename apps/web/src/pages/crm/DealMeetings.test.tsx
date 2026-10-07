@@ -1,4 +1,4 @@
-import type { Lead, Meeting, MeetingSummary } from '@wings/shared';
+import type { GoogleWorkspaceStatus, Lead, Meeting, MeetingSummary } from '@wings/shared';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../api/client.js';
@@ -31,6 +31,15 @@ const { state, calls, mutation } = vi.hoisted(() => {
       meeting: null as Meeting | null,
       createError: null as unknown,
       openSpy: vi.fn(),
+      google: {
+        configured: true,
+        state: 'disconnected',
+        email: null,
+        scopes: [],
+        calendars: { mine: null, wings: null },
+        wingsCalendarConfigured: true,
+        lastError: null,
+      } as GoogleWorkspaceStatus,
     },
   };
 });
@@ -39,6 +48,10 @@ vi.mock('../../api/auth.js', () => ({
   useSession: () => ({ data: { id: 'e1', permissions: state.permissions } }),
   hasPermission: (user: { permissions: Record<string, string> } | undefined, key: string) =>
     Boolean(user?.permissions[key]),
+}));
+
+vi.mock('../../api/google.js', () => ({
+  useGoogleStatus: () => ({ data: { status: state.google }, isPending: false }),
 }));
 
 vi.mock('../../api/crm.js', () => ({
@@ -83,6 +96,7 @@ const summary = (over: Partial<MeetingSummary> = {}): MeetingSummary => ({
   calendar: 'vendedor',
   meetUrl: 'https://meet.google.com/abc-defg-hij',
   ownerEmployeeId: 'e1',
+  googleEventId: null,
   recordingState: 'nenhuma',
   transcriptState: 'nenhuma',
   analysisState: 'nenhuma',
@@ -96,7 +110,8 @@ const SUMMARY_TEXT =
 const meeting = (over: Partial<Meeting> = {}): Meeting => ({
   ...summary({ status: 'encerrada', analysisState: 'pronta', summarySendState: 'rascunho' }),
   attendees: [],
-  googleEventId: null,
+  googleHtmlLink: null,
+  googleSync: null,
   recording: { state: 'guardada', fileId: 'f1', durationSeconds: 1800, sizeBytes: 50_000_000 },
   transcript: { state: 'pronta', segments: 42, error: null },
   analysis: {
@@ -128,7 +143,7 @@ const meeting = (over: Partial<Meeting> = {}): Meeting => ({
 
 const loaded = (pipeline: Lead['pipeline'] = 'expansao'): LoadedLead =>
   ({
-    lead: { id: 'l1', pipeline } as Lead,
+    lead: { id: 'l1', pipeline, email: 'candidato@exemplo.com.br' } as Lead,
     events: [],
     notes: [],
     tasks: [],
@@ -142,6 +157,12 @@ afterEach(() => {
   state.meetings = [];
   state.meeting = null;
   state.createError = null;
+  state.google = {
+    ...state.google,
+    state: 'disconnected',
+    email: null,
+    calendars: { mine: null, wings: null },
+  };
   for (const fn of Object.values(calls)) fn.mockReset();
   vi.restoreAllMocks();
 });
@@ -198,22 +219,83 @@ describe('the Reunião section', () => {
     expect(calls.create).not.toHaveBeenCalled();
   });
 
-  it('says the Google is not authorised yet when the API answers 503, and keeps the pasted-link path', async () => {
+  it('keeps the Google checkbox off and explains how to connect while the person is not connected', () => {
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Agendar reunião' }));
+    const box = screen.getByRole('checkbox', {
+      name: /Criar o evento e o Meet/,
+    }) as HTMLInputElement;
+    expect(box.checked).toBe(false);
+    expect(box.disabled).toBe(true);
+    expect(screen.getByText('conecte a sua conta Google').getAttribute('href')).toBe(
+      '/minha-conta',
+    );
+  });
+
+  it('creates on Google by default for a connected person, inviting the lead, the owner and extra guests', async () => {
+    state.google = {
+      ...state.google,
+      state: 'connected',
+      email: 'vendedor@wingscompany.com.br',
+      calendars: {
+        mine: { id: 'primary', name: 'Vendedor' },
+        wings: { id: 'w@group.calendar.google.com', name: 'Wings Company', access: 'writer' },
+      },
+    };
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Agendar reunião' }));
+    const box = screen.getByRole('checkbox', {
+      name: /Criar o evento e o Meet/,
+    }) as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    expect(screen.queryByLabelText(/Link da reunião/)).toBeNull();
+    expect(screen.getByText(/lead \(candidato@exemplo.com.br\)/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/Outros convidados/), {
+      target: { value: 'socio@exemplo.com.br, Contador@exemplo.com.br' },
+    });
+    fireEvent.change(screen.getByLabelText('Agenda'), { target: { value: 'wings' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Marcar reunião' }));
+    await waitFor(() => expect(calls.create).toHaveBeenCalled());
+    expect(calls.create.mock.calls[0]?.[0]).toMatchObject({
+      createMeet: true,
+      calendar: 'wings',
+      attendees: [{ email: 'socio@exemplo.com.br' }, { email: 'contador@exemplo.com.br' }],
+    });
+  });
+
+  it('blocks the Wings Company calendar when it is not shared with the person', () => {
+    state.google = {
+      ...state.google,
+      state: 'connected',
+      calendars: {
+        mine: { id: 'primary', name: 'Vendedor' },
+        wings: { id: 'w@group.calendar.google.com', name: 'Wings Company', access: 'reader' },
+      },
+    };
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Agendar reunião' }));
+    fireEvent.change(screen.getByLabelText('Agenda'), { target: { value: 'wings' } });
+    expect(screen.getByText(/Você só lê a agenda Wings Company/)).toBeTruthy();
+    expect(
+      (screen.getByRole('button', { name: 'Marcar reunião' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('falls back to the pasted link, with the hint, when the API answers 503', async () => {
+    state.google = { ...state.google, state: 'connected' };
     state.createError = new ApiError(503, {
-      error: 'google_not_connected',
-      message: 'Google não conectado',
+      error: 'google_needs_reconnect',
+      message: 'Sua conexão com o Google expirou',
     });
     render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: 'Agendar reunião' }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /Criar o evento e o Meet pelo Google/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Marcar reunião' }));
-    await waitFor(() =>
-      expect(screen.getByText(/O Google ainda não está autorizado/)).toBeTruthy(),
-    );
+    await waitFor(() => expect(screen.getByText(/conecte de novo em Minha conta/)).toBeTruthy());
     expect(
       (screen.getByRole('checkbox', { name: /Criar o evento e o Meet/ }) as HTMLInputElement)
         .checked,
     ).toBe(false);
+    expect(screen.getByLabelText(/Link da reunião/)).toBeTruthy();
   });
 
   it('"Iniciar reunião" opens the next meeting with a link beside the Wings', () => {

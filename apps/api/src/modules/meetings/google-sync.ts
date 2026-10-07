@@ -142,7 +142,10 @@ const descriptionOf = (leadName: string | null) =>
 
 /** The guests: who the screen named, the lead, the deal's owner and, on the shared calendar, the person creating. */
 async function guestsOf(deps: GoogleSyncDeps, input: MeetingEventInput) {
-  const ids = [input.ownerEmployeeId, ...(input.calendar === 'wings' ? [input.actorEmployeeId] : [])];
+  const ids = [
+    input.ownerEmployeeId,
+    ...(input.calendar === 'wings' ? [input.actorEmployeeId] : []),
+  ];
   const people = await deps.db
     .select({ id: employees.id, email: employees.email, name: employees.fullName })
     .from(employees)

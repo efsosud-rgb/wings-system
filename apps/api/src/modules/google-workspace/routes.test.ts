@@ -1,5 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { SESSION_COOKIE, type GoogleWorkspaceStatus, type Meeting, type RoleKey } from '@wings/shared';
+import {
+  SESSION_COOKIE,
+  type GoogleWorkspaceStatus,
+  type Meeting,
+  type RoleKey,
+} from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -151,7 +156,9 @@ describe('Google Workspace por pessoa', () => {
     const off = await app.inject({ method: 'DELETE', url: '/me/google', cookies: seller.cookies });
     expect(off.statusCode).toBe(200);
     expect(off.json<{ status: GoogleWorkspaceStatus }>().status.state).toBe('disconnected');
-    expect(google.calls.some((c) => c.url.startsWith('https://oauth2.googleapis.com/revoke'))).toBe(true);
+    expect(google.calls.some((c) => c.url.startsWith('https://oauth2.googleapis.com/revoke'))).toBe(
+      true,
+    );
   });
 
   it('refuses a callback whose state is not the one this person started', async () => {
@@ -199,7 +206,9 @@ describe('Google Workspace por pessoa', () => {
       createRequest: { conferenceSolutionKey: { type: 'hangoutsMeet' } },
     });
     // The Meet was still pending on the insert: one re-read fetched it.
-    expect(google.calls.filter((c) => c.method === 'GET' && c.url.includes('/events/evt1'))).toHaveLength(1);
+    expect(
+      google.calls.filter((c) => c.method === 'GET' && c.url.includes('/events/evt1')),
+    ).toHaveLength(1);
     expect(meeting.attendees.map((a) => a.responseStatus)).toEqual([
       'sem_resposta',
       'sem_resposta',
@@ -284,7 +293,11 @@ describe('Google Workspace por pessoa', () => {
     });
     expect(moved.statusCode).toBe(502);
     expect(moved.json()).toMatchObject({ error: 'google_sync_failed' });
-    const kept = await app.inject({ method: 'GET', url: `/meetings/${meeting.id}`, cookies: seller.cookies });
+    const kept = await app.inject({
+      method: 'GET',
+      url: `/meetings/${meeting.id}`,
+      cookies: seller.cookies,
+    });
     expect(kept.json<{ meeting: Meeting }>().meeting).toMatchObject({
       startsAt: '2026-10-08T17:00:00.000Z',
       googleSync: { state: 'falhou', error: 'google_sync_failed' },
@@ -344,7 +357,11 @@ describe('Google Workspace por pessoa', () => {
     const meeting = created.json<{ meeting: Meeting }>().meeting;
 
     const other = await sessionFor('vendedor_expansao');
-    const peek = await app.inject({ method: 'GET', url: `/meetings/${meeting.id}`, cookies: other.cookies });
+    const peek = await app.inject({
+      method: 'GET',
+      url: `/meetings/${meeting.id}`,
+      cookies: other.cookies,
+    });
     expect(peek.statusCode).toBe(404);
 
     // The Admin never connected: the creator's token cancels it on Google.

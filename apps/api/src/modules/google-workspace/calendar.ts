@@ -271,7 +271,10 @@ export async function deleteEvent(
       { sendUpdates: 'all' },
     );
   } catch (error) {
-    if (error instanceof GoogleCalendarError && (error.code === 'gone' || error.code === 'not_found'))
+    if (
+      error instanceof GoogleCalendarError &&
+      (error.code === 'gone' || error.code === 'not_found')
+    )
       return;
     throw error;
   }

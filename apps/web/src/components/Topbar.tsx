@@ -350,6 +350,10 @@ function UserMenu({ user }: { user: SessionUser }) {
             <small>{SECTORS[user.sector].name}</small>
           </span>
         </div>
+        <Link to="/minha-conta" role="menuitem" className="topbar-menu-item">
+          <Icon name="user" size={16} />
+          Minha conta (Google)
+        </Link>
         <button
           type="button"
           role="menuitem"

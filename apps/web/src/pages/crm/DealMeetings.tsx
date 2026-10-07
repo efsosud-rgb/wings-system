@@ -3,6 +3,7 @@ import {
   MEETING_RECORDING_TYPES,
   MEETING_STATUS_LABELS,
   meetingCreateSchema,
+  meetingUpdateSchema,
   type LeadActivity,
   type Meeting,
   type MeetingSummary,
@@ -12,6 +13,7 @@ import {
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { hasPermission, useSession } from '../../api/auth.js';
 import { ApiError } from '../../api/client.js';
+import { useGoogleStatus } from '../../api/google.js';
 import {
   fetchRecordingLink,
   useCreateMeeting,
@@ -134,8 +136,33 @@ const formatSeconds = (seconds: number | null) => {
 
 // --- scheduling ------------------------------------------------------------------------------
 
-function ScheduleForm({ leadId, onDone }: { leadId: string; onDone: () => void }) {
+const GOOGLE_HINT: Record<string, string> = {
+  google_not_configured: 'O Google ainda não foi configurado no sistema (passo do Eric).',
+  google_not_connected: 'Conecte a sua conta Google em Minha conta para criar o evento e o Meet.',
+  google_needs_reconnect: 'A sua conexão com o Google expirou: conecte de novo em Minha conta.',
+};
+
+const splitEmails = (value: string) =>
+  value
+    .split(/[,;\s]+/)
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+
+function ScheduleForm({
+  leadId,
+  leadEmail,
+  ownerName,
+  onDone,
+}: {
+  leadId: string;
+  leadEmail: string | null;
+  ownerName: string | null;
+  onDone: () => void;
+}) {
   const create = useCreateMeeting(leadId);
+  const google = useGoogleStatus();
+  const connected = google.data?.status.state === 'connected';
+  const wings = google.data?.status.calendars.wings ?? null;
   const start = new Date(Date.now() + 60 * 60_000);
   start.setMinutes(0, 0, 0);
   const [title, setTitle] = useState('Reunião de diagnóstico');
@@ -143,8 +170,12 @@ function ScheduleForm({ leadId, onDone }: { leadId: string; onDone: () => void }
   const [endsAt, setEndsAt] = useState(toLocalInput(new Date(start.getTime() + 60 * 60_000)));
   const [calendar, setCalendar] = useState<'vendedor' | 'wings'>('vendedor');
   const [meetUrl, setMeetUrl] = useState('');
-  const [createMeet, setCreateMeet] = useState(false);
+  const [guests, setGuests] = useState('');
+  const [createMeet, setCreateMeet] = useState<boolean | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  // Google-made by default for whoever is connected; the pasted link for everyone else.
+  const onGoogle = createMeet ?? connected;
+  const wingsBlocked = onGoogle && wings !== null && wings.access !== 'writer';
 
   const submit = () => {
     const parsed = meetingCreateSchema.safeParse({
@@ -152,8 +183,9 @@ function ScheduleForm({ leadId, onDone }: { leadId: string; onDone: () => void }
       startsAt: startsAt ? new Date(startsAt).toISOString() : '',
       endsAt: endsAt ? new Date(endsAt).toISOString() : '',
       calendar,
+      attendees: splitEmails(guests).map((email) => ({ email })),
       meetUrl: meetUrl.trim() || null,
-      createMeet,
+      createMeet: onGoogle,
     });
     if (!parsed.success) {
       setProblem(parsed.error.issues[0]?.message ?? 'Confira os campos');
@@ -165,7 +197,7 @@ function ScheduleForm({ leadId, onDone }: { leadId: string; onDone: () => void }
       onError: (error) => {
         if (error instanceof ApiError && error.status === 503) {
           setProblem(
-            'O Google ainda não está autorizado (depende da Thais). Cole o link da reunião para marcar mesmo assim.',
+            `${GOOGLE_HINT[error.code] ?? error.message} Ou cole o link da reunião para marcar mesmo assim.`,
           );
           setCreateMeet(false);
         } else setProblem(messageOf(error, 'Não foi possível marcar a reunião.'));
@@ -198,41 +230,150 @@ function ScheduleForm({ leadId, onDone }: { leadId: string; onDone: () => void }
             value={calendar}
             onChange={(e) => setCalendar(e.target.value as 'vendedor' | 'wings')}
           >
-            <option value="vendedor">do vendedor</option>
-            <option value="wings">da Wings</option>
+            <option value="vendedor">Minha agenda</option>
+            <option value="wings">Wings Company</option>
           </select>
         </label>
       </div>
-      <label className="crm-field">
-        <span>Link da reunião (Google Meet, Zoom ou Teams)</span>
-        <input
-          type="url"
-          placeholder="https://meet.google.com/…"
-          value={meetUrl}
-          onChange={(e) => setMeetUrl(e.target.value)}
-          disabled={createMeet}
-        />
-      </label>
+      {wingsBlocked && (
+        <p className="crm-error">
+          {wings.access === 'reader'
+            ? 'Você só lê a agenda Wings Company: peça à Thais "Fazer alterações nos eventos".'
+            : 'A agenda Wings Company não está compartilhada com você: peça à Thais.'}
+        </p>
+      )}
       <label className="crm-checkbox">
         <input
           type="checkbox"
-          checked={createMeet}
+          checked={onGoogle}
+          disabled={!connected}
           onChange={(e) => setCreateMeet(e.target.checked)}
         />
-        Criar o evento e o Meet pelo Google{' '}
-        <small>(responde 503 até a autorização do Workspace)</small>
+        Criar o evento e o Meet no Google Agenda{' '}
+        {connected ? (
+          <small>(convida o lead e o dono da negociação)</small>
+        ) : (
+          <small>
+            (<a href="/minha-conta">conecte a sua conta Google</a> para ligar)
+          </small>
+        )}
       </label>
+      {onGoogle ? (
+        <>
+          <p className="crm-sub">
+            Convidados: {leadEmail ? `lead (${leadEmail})` : 'lead sem e-mail — não recebe convite'}
+            {ownerName ? ` · dono (${ownerName})` : ''}
+          </p>
+          <label className="crm-field">
+            <span>Outros convidados (e-mails separados por vírgula)</span>
+            <input
+              value={guests}
+              placeholder="socio@empresa.com.br, contador@empresa.com.br"
+              onChange={(e) => setGuests(e.target.value)}
+            />
+          </label>
+        </>
+      ) : (
+        <label className="crm-field">
+          <span>Link da reunião (Google Meet, Zoom ou Teams)</span>
+          <input
+            type="url"
+            placeholder="https://meet.google.com/…"
+            value={meetUrl}
+            onChange={(e) => setMeetUrl(e.target.value)}
+          />
+        </label>
+      )}
       <p className="crm-sub">O convite e a tela avisam que a reunião é gravada.</p>
       {problem && <p className="crm-error">{problem}</p>}
       <div className="crm-quick-row">
         <button
           type="button"
           className="crm-btn is-small is-primary"
-          disabled={create.isPending}
+          disabled={create.isPending || wingsBlocked}
           onClick={submit}
         >
           {create.isPending ? 'Marcando…' : 'Marcar reunião'}
         </button>
+        <button type="button" className="crm-btn is-small is-quiet" onClick={onDone}>
+          Cancelar
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Moves a scheduled meeting; on Google Agenda too when the event lives there (guests are told). */
+function RescheduleForm({
+  meeting,
+  onDone,
+}: {
+  meeting: { id: string; startsAt: string; endsAt: string; googleEventId: string | null };
+  onDone: () => void;
+}) {
+  const update = useUpdateMeeting(meeting.id);
+  const [startsAt, setStartsAt] = useState(toLocalInput(new Date(meeting.startsAt)));
+  const [endsAt, setEndsAt] = useState(toLocalInput(new Date(meeting.endsAt)));
+  const [problem, setProblem] = useState<string | null>(null);
+  const [googleRefused, setGoogleRefused] = useState(false);
+  const submit = (skipGoogle: boolean) => {
+    const parsed = meetingUpdateSchema.safeParse({
+      startsAt: startsAt ? new Date(startsAt).toISOString() : undefined,
+      endsAt: endsAt ? new Date(endsAt).toISOString() : undefined,
+      skipGoogle,
+    });
+    if (!parsed.success) {
+      setProblem(parsed.error.issues[0]?.message ?? 'Confira as datas');
+      return;
+    }
+    setProblem(null);
+    update.mutate(parsed.data, {
+      onSuccess: onDone,
+      onError: (error) => {
+        setProblem(messageOf(error, 'Não foi possível remarcar.'));
+        setGoogleRefused(error instanceof ApiError && error.status === 502);
+      },
+    });
+  };
+  return (
+    <div className="crm-meeting-form">
+      <div className="crm-meeting-form-row">
+        <label className="crm-field">
+          <span>Novo início</span>
+          <input
+            type="datetime-local"
+            value={startsAt}
+            onChange={(e) => setStartsAt(e.target.value)}
+          />
+        </label>
+        <label className="crm-field">
+          <span>Novo fim</span>
+          <input type="datetime-local" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />
+        </label>
+      </div>
+      {meeting.googleEventId && (
+        <p className="crm-sub">A mudança vai para o Google Agenda e os convidados são avisados.</p>
+      )}
+      {problem && <p className="crm-error">{problem}</p>}
+      <div className="crm-quick-row">
+        <button
+          type="button"
+          className="crm-btn is-small is-primary"
+          disabled={update.isPending}
+          onClick={() => submit(false)}
+        >
+          {update.isPending ? 'Remarcando…' : 'Remarcar'}
+        </button>
+        {googleRefused && (
+          <button
+            type="button"
+            className="crm-btn is-small is-quiet"
+            disabled={update.isPending}
+            onClick={() => submit(true)}
+          >
+            Mudar só no sistema
+          </button>
+        )}
         <button type="button" className="crm-btn is-small is-quiet" onClick={onDone}>
           Cancelar
         </button>
@@ -612,6 +753,7 @@ function MeetingDetail({
   const toTask = useNextStepTask(id);
   const analyze = useRequestAnalysis(id);
   const update = useUpdateMeeting(id);
+  const [rescheduling, setRescheduling] = useState(false);
   if (meeting.isLoading) return <p className="crm-muted">Carregando…</p>;
   if (meeting.isError || !meeting.data) {
     return <Dash reason={messageOf(meeting.error, 'Não foi possível ler a reunião.')} />;
@@ -627,20 +769,67 @@ function MeetingDetail({
     analysis.state !== 'analisando';
   return (
     <div className="crm-meeting-detail">
+      {data.googleEventId && (
+        <p className="crm-sub">
+          Criada no Google Agenda
+          {data.googleHtmlLink && (
+            <>
+              {' · '}
+              <a href={data.googleHtmlLink} target="_blank" rel="noreferrer">
+                Abrir no Google Agenda
+              </a>
+            </>
+          )}
+          {data.googleSync?.state === 'falhou' && (
+            <>
+              {' · '}
+              <span className="crm-error">
+                {data.googleSync.error === 'skipped'
+                  ? 'a última mudança ficou só no sistema'
+                  : 'a última mudança não chegou ao Google'}
+              </span>
+            </>
+          )}
+        </p>
+      )}
       {canWrite && data.status === 'agendada' && (
-        <p>
+        <div className="crm-quick-row">
+          <button
+            type="button"
+            className="crm-btn is-small is-quiet"
+            onClick={() => setRescheduling((v) => !v)}
+            aria-expanded={rescheduling}
+          >
+            Remarcar
+          </button>
           <button
             type="button"
             className="crm-btn is-small is-quiet"
             disabled={update.isPending}
             onClick={() => {
-              if (window.confirm('Cancelar esta reunião?')) update.mutate({ status: 'cancelada' });
+              const question = data.googleEventId
+                ? 'Cancelar esta reunião? Ela sai do Google Agenda e os convidados são avisados.'
+                : 'Cancelar esta reunião?';
+              if (window.confirm(question)) update.mutate({ status: 'cancelada' });
             }}
           >
             Cancelar reunião
           </button>
           <Problem error={update.error} fallback="Não foi possível cancelar." />
-        </p>
+          {update.error instanceof ApiError && update.error.status === 502 && (
+            <button
+              type="button"
+              className="crm-btn is-small is-quiet"
+              disabled={update.isPending}
+              onClick={() => update.mutate({ status: 'cancelada', skipGoogle: true })}
+            >
+              Cancelar só no sistema
+            </button>
+          )}
+        </div>
+      )}
+      {rescheduling && data.status === 'agendada' && (
+        <RescheduleForm meeting={data} onDone={() => setRescheduling(false)} />
       )}
       <RecordingBlock meeting={data} canWrite={canWrite} />
       <TranscriptBlock meeting={data} canWrite={canWrite} />
@@ -879,10 +1068,17 @@ export function MeetingsTab({
         </span>
       </div>
       <p className="crm-sub">
-        Agendar marca a reunião com o link colado (o Meet pelo Google espera a autorização do
-        Workspace); Iniciar abre o Meet numa janela ao lado do Wings.
+        Agendar cria o evento e o Meet no Google Agenda com a sua conta (ou marca com um link
+        colado); Iniciar abre o Meet numa janela ao lado do Wings.
       </p>
-      {scheduling && <ScheduleForm leadId={lead.id} onDone={() => setScheduling(false)} />}
+      {scheduling && (
+        <ScheduleForm
+          leadId={lead.id}
+          leadEmail={lead.email}
+          ownerName={lead.work?.ownerName ?? null}
+          onDone={() => setScheduling(false)}
+        />
+      )}
       {expansion && client && (
         <div className="crm-meeting-client">
           <span className="crm-sub">Cliente (marca franqueadora)</span>

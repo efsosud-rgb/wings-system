@@ -343,7 +343,12 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
                 ...(body.data.startsAt !== undefined ? { startsAt } : {}),
                 ...(body.data.endsAt !== undefined ? { endsAt } : {}),
                 ...(body.data.attendees
-                  ? { attendees: body.data.attendees.map((a) => ({ email: a.email, name: a.name ?? null })) }
+                  ? {
+                      attendees: body.data.attendees.map((a) => ({
+                        email: a.email,
+                        name: a.name ?? null,
+                      })),
+                    }
                   : {}),
               });
             }
@@ -386,7 +391,9 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
         entity: 'meeting',
         entityId: row.id,
         ip: request.ip,
-        metadata: { google: mirrored(row) ? (body.data.skipGoogle ? 'skipped' : 'mirrored') : 'none' },
+        metadata: {
+          google: mirrored(row) ? (body.data.skipGoogle ? 'skipped' : 'mirrored') : 'none',
+        },
       });
       return reply.send({ meeting: await answer(updated, found.lead.clientId) });
     },
@@ -922,5 +929,4 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
         .send({ meeting: await answer(updated, lead.clientId) });
     },
   );
-
 };

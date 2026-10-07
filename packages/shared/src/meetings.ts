@@ -124,7 +124,7 @@ export const meetingUpdateSchema = z
     meetUrl: meetUrlSchema.nullish(),
     status: z.literal('cancelada').optional(),
     /** Change only the CRM's copy when Google refused the mirror (the screen offers it after a 502). */
-    skipGoogle: z.boolean().default(false),
+    skipGoogle: z.boolean().optional(),
   })
   .refine(meetingWindow, {
     message: 'O fim vem depois do início, em até 8 horas',

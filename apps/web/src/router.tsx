@@ -30,6 +30,7 @@ import { WhatsAppInboxPage, WhatsAppWaitingPage } from './pages/crm/WhatsAppInbo
 import { DealsPage } from './pages/crm/DealsPage.js';
 import { TasksPage } from './pages/crm/TasksPage.js';
 import { LoginPage } from './pages/LoginPage.js';
+import { MyAccountPage } from './pages/MyAccountPage.js';
 import { CampaignLeadsPage } from './pages/CampaignLeadsPage.js';
 import { MarketingDashboardPage } from './pages/MarketingDashboardPage.js';
 import { SalesDashboardPage } from './pages/SalesDashboardPage.js';
@@ -157,6 +158,8 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <LandingRoute /> },
       { path: 'sem-acesso', element: <NoAccess /> },
+      // The person's own connections (Google): any login, no permission.
+      { path: 'minha-conta', element: <MyAccountPage />, errorElement: <RouteError /> },
       ...submoduleRoutes(),
       // Screens that moved in Phase 0. Links already sent cannot be edited —
       // the WhatsApp approval link points at the old path, and a 404 there
