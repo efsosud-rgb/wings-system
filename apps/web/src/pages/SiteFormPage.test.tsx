@@ -79,6 +79,9 @@ afterEach(() => {
   delete window.dataLayer;
 });
 
+// Read through a function: the `delete window.fbq` at the top of a test would otherwise narrow the type to never.
+const pixelQueue = () => window.fbq?.queue;
+
 function renderAt(path: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -205,7 +208,7 @@ describe('site form page (T5)', () => {
         'script[src="https://www.googletagmanager.com/gtag/js?id=AW-123456789"]',
       ),
     ).toBeTruthy();
-    expect(window.fbq?.queue).toEqual([
+    expect(pixelQueue()).toEqual([
       ['init', '1116678872845520'],
       ['track', 'PageView'],
     ]);
@@ -228,11 +231,11 @@ describe('site form page (T5)', () => {
     await waitFor(() => expect(send.disabled).toBe(false));
     fireEvent.click(send);
     expect(await screen.findByText('Recebemos os seus dados')).toBeTruthy();
-    expect(window.fbq?.queue?.at(-1)).toEqual(['track', 'Lead']);
+    expect(pixelQueue()?.at(-1)).toEqual(['track', 'Lead']);
     const events = (window.dataLayer ?? []).map((entry) => Array.from(entry as ArrayLike<unknown>));
     expect(events.at(-1)).toEqual(['event', 'conversion', { send_to: 'AW-123456789/AbCdEfGhIj' }]);
     // Nothing typed reaches the tags.
-    expect(JSON.stringify([window.fbq?.queue, events])).not.toContain('Pessoa Teste');
+    expect(JSON.stringify([pixelQueue(), events])).not.toContain('Pessoa Teste');
   });
 
   it('loads no tag when the API hands over no id', async () => {
