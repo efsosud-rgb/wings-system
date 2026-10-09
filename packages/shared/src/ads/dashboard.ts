@@ -907,6 +907,22 @@ export interface CockpitActivePerformance {
   fetchedAt: string | null;
 }
 
+/**
+ * How the campaigns that carry the "active" status split once the rule of
+ * what is really delivering (`campaignDelivering`) is applied: the screen says
+ * "2 de 4 com status ativo; 2 encerradas em 05/10" instead of a bare count.
+ */
+export interface CockpitStatusSummary {
+  /** Campaigns whose own status is ACTIVE. */
+  withStatus: number;
+  /** Of those, the ones delivering now (the ones every figure is summed over). */
+  delivering: number;
+  /** Of those, the ones whose end date has passed. */
+  ended: { platform: AdPlatform; name: string; endDate: string }[];
+  /** Of those, the ones neither delivering nor ended (in review, no budget, …). */
+  notDelivering: number;
+}
+
 export interface DashboardCockpit {
   days: DashboardWindow;
   since: string;
@@ -931,6 +947,10 @@ export interface DashboardCockpit {
   /** Ads switched on in those campaigns that are not serving; outside every figure. */
   adWarnings: CockpitAdWarning[];
   activePerformance: CockpitActivePerformance;
+  /** Status "ativo" against really delivering, for the scope chip. */
+  statusSummary: CockpitStatusSummary;
+  /** When the spend of the campaigns above was last read from the platforms (ISO); null before the first read. */
+  spendReadAt: string | null;
   /** Spend of the window per platform, active campaigns only. */
   spendByPlatform: Record<AdPlatform, number>;
   /** The company's confirmed CPL target for leads campaigns; null until a person confirms one. */

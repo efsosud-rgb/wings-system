@@ -240,6 +240,13 @@ export function CampaignLeadsPage() {
               {data.summary.unattributedPercent === null
                 ? '—'
                 : `${data.summary.unattributedPercent}% dos negócios do Funil Formatação no período`}
+              {data.summary.outOfAccount > 0 && (
+                <span className="cell-sub">
+                  {' '}
+                  · {data.summary.outOfAccount} negócio(s) de lead que chegou antes de 28/09 ficam
+                  fora de todos os números (continuam no CRM)
+                </span>
+              )}
               {data.summary.tests > 0 && (
                 <span className="cell-sub">
                   {' '}

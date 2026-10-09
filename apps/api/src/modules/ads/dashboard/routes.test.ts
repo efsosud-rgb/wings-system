@@ -913,6 +913,32 @@ describe('the cockpit', () => {
     }
   });
 
+  it('says how many campaigns carry the active status against how many deliver, and when the spend was read', async () => {
+    const before = await read<DashboardCockpit>('/ads/dashboard/cockpit?days=7', 'cockpit');
+    expect(before.spendReadAt).toEqual(expect.any(String));
+    expect(before.statusSummary.withStatus).toBeGreaterThanOrEqual(before.statusSummary.delivering);
+    expect(before.statusSummary.delivering).toBe(before.activeCampaigns.length);
+    expect(before.statusSummary.ended).toEqual([]);
+
+    // The end date of the Google campaign passed, yet its status is still active:
+    // it leaves every figure, and the summary says it ended, not that it vanished.
+    await db
+      .update(adCampaigns)
+      .set({ endDate: '2026-09-15' })
+      .where(eq(adCampaigns.externalId, '100'));
+    try {
+      const after = await read<DashboardCockpit>('/ads/dashboard/cockpit?days=7', 'cockpit');
+      expect(after.activeCampaigns.map((campaign) => campaign.name)).toEqual(['LEAD | FORMS']);
+      expect(after.statusSummary.withStatus).toBe(before.statusSummary.withStatus);
+      expect(after.statusSummary.delivering).toBe(before.statusSummary.delivering - 1);
+      expect(after.statusSummary.ended).toEqual([
+        { platform: 'google', name: 'Pesquisa | Franquia', endDate: '2026-09-15' },
+      ]);
+    } finally {
+      await db.update(adCampaigns).set({ endDate: null }).where(eq(adCampaigns.externalId, '100'));
+    }
+  });
+
   it('narrows every block to the campaigns picked, keeps the picker whole, and says why a figure is "—"', async () => {
     const all = await read<DashboardCockpit>('/ads/dashboard/cockpit?days=7', 'cockpit');
     expect(all.selection).toBeNull();

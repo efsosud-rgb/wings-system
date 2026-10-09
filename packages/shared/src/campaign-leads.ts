@@ -100,20 +100,35 @@ export function maskEmail(email: string): string {
   return `${user.slice(0, 1)}•••@${host.slice(0, 1)}•••${tld}`;
 }
 
-export type AttributionMethod = 'utm' | 'rd_origin';
+export type AttributionMethod = 'utm' | 'rd_origin' | 'lead_ads';
 
 export const UNATTRIBUTED_REASONS = {
   not_paid: 'A origem no RD não é mídia paga (orgânico, indicação, site…)',
   paid_no_platform: 'Mídia paga sem dizer a plataforma, e sem UTM na conversão',
-  utm_other_campaign: 'A UTM aponta para uma campanha que não está ativa',
+  utm_other_campaign: 'A UTM aponta para uma campanha que não estava ativa na data de entrada',
   platform_ambiguous: 'Mais de uma campanha ativa na plataforma, e sem UTM para escolher',
   platform_without_active_campaign: 'Plataforma sem campanha ativa no momento da entrada',
+  lead_ads_campaign_unknown:
+    'Veio de um formulário da Meta, mas a campanha dele não está no cadastro',
+  arrived_before_cutoff: 'Chegou antes de 28/09 (lead antigo copiado ao RD depois): fora da conta',
 } as const;
 export type UnattributedReason = keyof typeof UNATTRIBUTED_REASONS;
+
+/**
+ * Reasons that take a deal out of every figure, like a test deal: it stays in
+ * the "sem atribuição" table so the account can be followed, but it is not
+ * part of any total or percentage.
+ */
+export const OUT_OF_ACCOUNT_REASONS: readonly UnattributedReason[] = ['arrived_before_cutoff'];
+
+export function isOutOfAccountReason(reason: string | null | undefined): boolean {
+  return OUT_OF_ACCOUNT_REASONS.includes(reason as UnattributedReason);
+}
 
 export const ATTRIBUTION_METHOD_LABEL: Record<AttributionMethod, string> = {
   utm: 'UTM da conversão no RD',
   rd_origin: 'Origem do RD (única campanha ativa da plataforma)',
+  lead_ads: 'Formulário da Meta (a campanha do próprio lead)',
 };
 
 export interface CampaignLeadRow {
@@ -157,9 +172,12 @@ export interface CampaignLeadsSummary {
   averageFirstContactMinutes: number | null;
   stages: { stage: string; count: number }[];
   lost: { reason: string; count: number }[];
-  /** Formatação deals since `since` that are not from an active campaign, per reason. */
+  /** Formatação deals since `since` that are not from a campaign, per reason (the ones out of the account included). */
   unattributed: { reason: UnattributedReason; count: number }[];
+  /** Share of the deals in the account (tests and `outOfAccount` left out) that no campaign claims. */
   unattributedPercent: number | null;
+  /** Deals that arrived before `since` (old leads copied to RD later): in no total or percentage. */
+  outOfAccount: number;
   /** Test deals ignored everywhere. */
   tests: number;
   /** Fewer than 10 leads: read the rates with care. */

@@ -1013,12 +1013,26 @@ describe('the cockpit', () => {
       ],
       selection: null,
       campaignScope: 'ativas',
+      statusSummary: {
+        withStatus: 4,
+        delivering: 2,
+        ended: [
+          { platform: 'meta', name: 'Meta Jimmy Ogro', endDate: '2026-10-05' },
+          { platform: 'meta', name: 'Meta Vídeos Thais', endDate: '2026-10-05' },
+        ],
+        notDelivering: 0,
+      },
+      spendReadAt: '2026-09-22T12:00:00.000Z',
       spendByPlatform: { meta: 120_000, google: 30_000 },
       cplTargetCents: null,
       today: '2026-09-28',
     };
     renderAt('/dashboard/marketing?aba=cockpit');
     expect(screen.getByText(/Só campanhas ativas \(2\)/)).toBeTruthy();
+    // The status a person set against what delivers, so 4 "ativas" and 2 in the figures read as intended.
+    expect(screen.getByText(/2 de 4 com status ativo; 2 encerradas em 05\/10/)).toBeTruthy();
+    // When the spend was last read, beside both investment figures.
+    expect(screen.getAllByText(/lido em 22\/09,? 09:00/)).toHaveLength(2);
     expect(screen.getByText('Meta 28Set')).toBeTruthy();
     const warnings = screen
       .getByRole('heading', { name: 'Anúncios ligados que não estão rodando' })

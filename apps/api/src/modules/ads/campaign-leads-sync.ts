@@ -10,15 +10,17 @@ import {
   utmSourceName,
   type UnattributedReason,
 } from '@wings/shared';
-import { eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, gte, inArray, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   adAccounts,
   adAds,
   adCampaignDrafts,
   adCampaigns,
+  adMetricsDaily,
   campaignLeads,
   employees,
+  leads,
 } from '../../db/schema/index.js';
 import { paramsOfAddress } from '../../lib/query-params.js';
 import type { SecretBox } from '../../lib/secret-box.js';
@@ -30,12 +32,17 @@ import { platformOfRdLabels, rdCrmGetter, type RdPipeline } from './funnel-sync.
  * contact (name in text, e-mail and phone sealed), their owner, their stage
  * and the campaign and ad they came from.
  *
- * Attribution, in this order:
- *  1. the UTMs of the contact's conversion in RD Marketing (asked once per
- *     lead): utm_campaign names the campaign, utm_content the ad;
- *  2. RD's own source label ("Busca Paga | Facebook" / "| Google") when the
- *     platform has exactly one active campaign;
- *  3. otherwise not attributed, with the reason.
+ * Attribution, in this order (see `attribute`):
+ *  0. a person who arrived before 28/09 (an old lead copied to RD later) is
+ *     out of the account;
+ *  1. the Wings lead behind the deal names its campaign and ad (Meta instant forms);
+ *  2. the UTMs of the contact's conversion in RD Marketing (asked once per
+ *     lead): utm_campaign names the campaign (id, name, a slug of the name, the
+ *     UTM of its drafts or ads), utm_content the ad;
+ *  3. RD's own source label ("Busca Paga | Facebook" / "| Google") when the
+ *     platform has exactly one campaign in force;
+ *  4. otherwise not attributed, with the reason.
+ * "In force" is judged on the day the deal entered, not on the day of the sync.
  *
  * Read only on both RD products. Nothing personal reaches a log: the caller
  * prints the counts this returns, and errors carry no RD text.
@@ -188,72 +195,238 @@ export function rdMarketingReader(
   };
 }
 
-interface ActiveCampaign {
+/** What attribution knows of a campaign: the words a UTM may use for it and its ads, and when it was in force. */
+export interface AttributionCampaign {
   id: string;
   platform: AdPlatform;
+  /** The platform's own id, normalized. */
+  externalId?: string;
+  /** The campaign's id, name, the UTMs of its drafts and of its ads' URL tags, normalized. */
   keys: string[];
-  ads: { id: string; keys: string[] }[];
+  /** The campaign's name, normalized: a UTM slug of it ("formatacao_videos_thais_out26") sits inside it. */
+  nameKey?: string;
+  ads: { id: string; externalId?: string; keys: string[] }[];
+  startDate?: string | null;
+  endDate?: string | null;
+  /** Delivering as of the sync (`campaignDelivering`). */
+  deliveringNow?: boolean;
+  /** São Paulo days (YYYY-MM-DD) on which the campaign spent. */
+  spendDays?: ReadonlySet<string>;
 }
 
-/** The campaigns delivering now, with the words a UTM may use for each and for their ads. */
-async function activeCampaigns(db: Database, now: Date): Promise<ActiveCampaign[]> {
-  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(now);
+/** What the Wings lead behind a deal says about where it came from. */
+export interface LeadOrigin {
+  /** When the person really arrived, not when the deal was copied to RD. */
+  enteredAt: Date;
+  adPlatform: string | null;
+  adCampaignExternalId: string | null;
+  adExternalId: string | null;
+}
+
+const saoPauloDayOf = (at: Date) =>
+  new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(at);
+
+const dayBefore = (day: string) =>
+  new Date(Date.parse(`${day}T00:00:00Z`) - 24 * 3600_000).toISOString().slice(0, 10);
+
+/**
+ * Whether a campaign was in force on `day`: inside its start and end dates and
+ * either delivering now or having spent that day or the day before. Judging
+ * "now" instead would drop a lead the day its campaign ends. Without a day
+ * (callers that only have the words), every campaign counts.
+ */
+export function inForceOn(campaign: AttributionCampaign, day: string | undefined): boolean {
+  if (!day) return true;
+  if (campaign.startDate && campaign.startDate > day) return false;
+  if (campaign.endDate && campaign.endDate < day) return false;
+  if (campaign.deliveringNow) return true;
+  const spent = campaign.spendDays;
+  return Boolean(spent && (spent.has(day) || spent.has(dayBefore(day))));
+}
+
+const only = <T>(items: T[]): T | undefined => (items.length === 1 ? items[0] : undefined);
+
+/** The static `utm_campaign` a URL tag string carries; the ones with a {{macro}} expand to the name already. */
+export function utmCampaignOfUrlTags(urlTags: string | null | undefined): string | null {
+  if (!urlTags) return null;
+  const value = new URLSearchParams(urlTags.replace(/^\?/, '')).get('utm_campaign')?.trim();
+  return value && !value.includes('{{') ? value : null;
+}
+
+type CampaignRow = typeof adCampaigns.$inferSelect;
+type DraftRow = typeof adCampaignDrafts.$inferSelect;
+type AdRow = typeof adAds.$inferSelect;
+
+/**
+ * Every campaign, with the words a UTM may use for each and for their ads and
+ * the days they spent: the lead is judged by the campaigns in force the day it
+ * entered, not by the ones delivering when the sync happens to run. Pure, so a
+ * read-only rehearsal on a copy of the rows gives what the sync will give.
+ */
+export function buildAttributionCampaigns(input: {
+  campaigns: { campaign: CampaignRow; platform: string }[];
+  drafts: Pick<DraftRow, 'campaignId' | 'payload'>[];
+  ads: Pick<AdRow, 'id' | 'campaignId' | 'externalId' | 'name' | 'utmContent' | 'urlTags'>[];
+  spend: { campaignId: string | null; day: string }[];
+  now: Date;
+}): AttributionCampaign[] {
+  const today = saoPauloDayOf(input.now);
+  const spendDays = new Map<string, Set<string>>();
+  for (const row of input.spend) {
+    if (!row.campaignId) continue;
+    const days = spendDays.get(row.campaignId) ?? new Set<string>();
+    days.add(row.day);
+    spendDays.set(row.campaignId, days);
+  }
+  return input.campaigns.map(({ campaign, platform }) => {
+    const campaignAds = input.ads.filter((ad) => ad.campaignId === campaign.id);
+    const utm = [
+      ...input.drafts
+        .filter((draft) => draft.campaignId === campaign.id)
+        .map(
+          (draft) =>
+            (draft.payload as { utms?: { utm_campaign?: string } } | null)?.utms?.utm_campaign,
+        ),
+      ...campaignAds.map((ad) => utmCampaignOfUrlTags(ad.urlTags)),
+    ].filter((value): value is string => Boolean(value));
+    return {
+      id: campaign.id,
+      platform: platform as AdPlatform,
+      externalId: norm(campaign.externalId),
+      keys: [...new Set([campaign.externalId, campaign.name, ...utm].map(norm))],
+      nameKey: norm(campaign.name),
+      ads: campaignAds.map((ad) => ({
+        id: ad.id,
+        externalId: norm(ad.externalId),
+        keys: [
+          ...new Set(
+            [ad.externalId, ad.name, ad.utmContent]
+              .filter((value): value is string => Boolean(value))
+              .map(norm),
+          ),
+        ],
+      })),
+      startDate: campaign.startDate,
+      endDate: campaign.endDate,
+      deliveringNow: campaignDelivering(
+        {
+          platform: platform as AdPlatform,
+          status: campaign.status,
+          deliveryStatus: campaign.deliveryStatus,
+          endDate: campaign.endDate,
+        },
+        today,
+      ),
+      spendDays: spendDays.get(campaign.id) ?? new Set<string>(),
+    };
+  });
+}
+
+async function attributionCampaigns(
+  db: Database,
+  now: Date,
+  since: Date,
+): Promise<AttributionCampaign[]> {
   const rows = await db
     .select({ campaign: adCampaigns, platform: adAccounts.platform })
     .from(adCampaigns)
     .innerJoin(adAccounts, eq(adAccounts.id, adCampaigns.adAccountId))
     .where(isNull(adAccounts.archivedAt));
-  const active = rows.filter(({ campaign, platform }) =>
-    campaignDelivering(
-      {
-        platform: platform as AdPlatform,
-        status: campaign.status,
-        deliveryStatus: campaign.deliveryStatus,
-        endDate: campaign.endDate,
-      },
-      today,
-    ),
-  );
-  if (active.length === 0) return [];
-  const ids = active.map(({ campaign }) => campaign.id);
-  const [drafts, ads] = await Promise.all([
+  if (rows.length === 0) return [];
+  const ids = rows.map(({ campaign }) => campaign.id);
+  const [drafts, ads, spend] = await Promise.all([
     db.query.adCampaignDrafts.findMany({ where: inArray(adCampaignDrafts.campaignId, ids) }),
     db.query.adAds.findMany({ where: inArray(adAds.campaignId, ids) }),
+    db
+      .select({ campaignId: adMetricsDaily.campaignId, day: adMetricsDaily.day })
+      .from(adMetricsDaily)
+      .where(
+        and(
+          eq(adMetricsDaily.level, 'campaign'),
+          gt(adMetricsDaily.spendCents, 0),
+          gte(adMetricsDaily.day, dayBefore(saoPauloDayOf(since))),
+        ),
+      ),
   ]);
-  return active.map(({ campaign, platform }) => {
-    const utm = drafts
-      .filter((draft) => draft.campaignId === campaign.id)
-      .map(
-        (draft) =>
-          (draft.payload as { utms?: { utm_campaign?: string } } | null)?.utms?.utm_campaign,
-      )
-      .filter((value): value is string => Boolean(value));
-    return {
-      id: campaign.id,
-      platform: platform as AdPlatform,
-      keys: [...new Set([campaign.externalId, campaign.name, ...utm].map(norm))],
-      ads: ads
-        .filter((ad) => ad.campaignId === campaign.id)
-        .map((ad) => ({ id: ad.id, keys: [norm(ad.externalId), norm(ad.name)] })),
-    };
-  });
+  return buildAttributionCampaigns({ campaigns: rows, drafts, ads, spend, now });
 }
 
-export function attribute(
-  input: { utms: Utms | null; sourceLabel: string | null; campaignLabel: string | null },
-  active: ActiveCampaign[],
-): {
+type Attributed = {
   platform: AdPlatform | null;
   campaignId: string | null;
   adId: string | null;
   attribution: AttributionMethod | null;
   reason: UnattributedReason | null;
-} {
+};
+
+const unattributedAs = (
+  reason: UnattributedReason,
+  platform: AdPlatform | null = null,
+): Attributed => ({
+  platform,
+  campaignId: null,
+  adId: null,
+  attribution: null,
+  reason,
+});
+
+/**
+ * Which campaign a deal came from, in this order:
+ *  0. the person arrived before the first day counted (an old lead copied to
+ *     RD later): out of the account, whatever else is known;
+ *  1. the Wings lead behind the deal says its campaign (Meta instant forms
+ *     carry no UTM, but the lead keeps the campaign and ad ids);
+ *  2. the UTMs of the conversion: utm_campaign against the campaign's id, name,
+ *     the UTMs of its drafts and ads, or a slug of its name; failing that,
+ *     utm_content against the ads of one campaign in force;
+ *  3. RD's source label, when the platform has exactly one campaign in force.
+ * Only campaigns in force on the day the deal entered can claim it (`enteredDay`).
+ */
+export function attribute(
+  input: {
+    utms: Utms | null;
+    sourceLabel: string | null;
+    campaignLabel: string | null;
+    enteredDay?: string;
+    lead?: LeadOrigin | null;
+    since?: Date;
+  },
+  campaigns: AttributionCampaign[],
+): Attributed {
+  if (input.lead && input.since && input.lead.enteredAt.getTime() < input.since.getTime()) {
+    return unattributedAs('arrived_before_cutoff');
+  }
+  if (input.lead?.adCampaignExternalId) {
+    const wanted = norm(input.lead.adCampaignExternalId);
+    const platform = input.lead.adPlatform;
+    const campaign = campaigns.find(
+      (candidate) =>
+        candidate.externalId === wanted && (!platform || candidate.platform === platform),
+    );
+    if (!campaign) return unattributedAs('lead_ads_campaign_unknown');
+    const adId = input.lead.adExternalId ? norm(input.lead.adExternalId) : null;
+    const ad = adId ? campaign.ads.find((candidate) => candidate.externalId === adId) : undefined;
+    return {
+      platform: campaign.platform,
+      campaignId: campaign.id,
+      adId: ad?.id ?? null,
+      attribution: 'lead_ads',
+      reason: null,
+    };
+  }
+  const inForce = campaigns.filter((candidate) => inForceOn(candidate, input.enteredDay));
   const utmCampaign = input.utms?.campaign ? norm(input.utms.campaign) : null;
   if (utmCampaign) {
-    const campaign = active.find((candidate) => candidate.keys.includes(utmCampaign));
+    const content = input.utms?.content ? norm(input.utms.content) : null;
+    const campaign =
+      inForce.find((candidate) => candidate.keys.includes(utmCampaign)) ??
+      (utmCampaign.length >= 12
+        ? only(inForce.filter((candidate) => candidate.nameKey?.includes(utmCampaign)))
+        : undefined) ??
+      (content && content.length >= 10
+        ? only(inForce.filter((candidate) => candidate.ads.some((ad) => ad.keys.includes(content))))
+        : undefined);
     if (campaign) {
-      const content = input.utms?.content ? norm(input.utms.content) : null;
       const ad = content
         ? campaign.ads.find((candidate) => candidate.keys.includes(content))
         : undefined;
@@ -265,17 +438,11 @@ export function attribute(
         reason: null,
       };
     }
-    return {
-      platform: null,
-      campaignId: null,
-      adId: null,
-      attribution: null,
-      reason: 'utm_other_campaign',
-    };
+    return unattributedAs('utm_other_campaign');
   }
   const platform = platformOfRdLabels(input.sourceLabel, input.campaignLabel);
   if (platform) {
-    const candidates = active.filter((campaign) => campaign.platform === platform);
+    const candidates = inForce.filter((campaign) => campaign.platform === platform);
     if (candidates.length === 1) {
       return {
         platform,
@@ -285,24 +452,15 @@ export function attribute(
         reason: null,
       };
     }
-    return {
+    return unattributedAs(
+      candidates.length === 0 ? 'platform_without_active_campaign' : 'platform_ambiguous',
       platform,
-      campaignId: null,
-      adId: null,
-      attribution: null,
-      reason: candidates.length === 0 ? 'platform_without_active_campaign' : 'platform_ambiguous',
-    };
+    );
   }
   const paid = /busca paga|tr[aá]fego pago|m[ií]dia paga|\bads\b/i.test(
     `${input.sourceLabel ?? ''} ${input.campaignLabel ?? ''}`,
   );
-  return {
-    platform: null,
-    campaignId: null,
-    adId: null,
-    attribution: null,
-    reason: paid ? 'paid_no_platform' : 'not_paid',
-  };
+  return unattributedAs(paid ? 'paid_no_platform' : 'not_paid');
 }
 
 export interface CampaignLeadsSyncResult {
@@ -310,6 +468,8 @@ export interface CampaignLeadsSyncResult {
   tests: number;
   attributed: number;
   unattributed: number;
+  /** Deals of people who arrived before the first day counted: in no figure. */
+  beforeCutoff: number;
   utmLookups: number;
   utmFailures: number;
 }
@@ -370,13 +530,14 @@ export async function syncCampaignLeads(
     tests: 0,
     attributed: 0,
     unattributed: 0,
+    beforeCutoff: 0,
     utmLookups: 0,
     utmFailures: 0,
   };
   if (formatacao.length === 0) return result;
 
-  const [active, existingRows, staff] = await Promise.all([
-    activeCampaigns(db, now),
+  const [campaigns, existingRows, wingsLeads, staff] = await Promise.all([
+    attributionCampaigns(db, now, since),
     db.query.campaignLeads.findMany({
       where: inArray(
         campaignLeads.rdDealId,
@@ -384,11 +545,29 @@ export async function syncCampaignLeads(
       ),
     }),
     db
+      .select({
+        rdDealId: leads.rdDealId,
+        enteredAt: leads.enteredAt,
+        adPlatform: leads.adPlatform,
+        adCampaignExternalId: leads.adCampaignExternalId,
+        adExternalId: leads.adExternalId,
+      })
+      .from(leads)
+      .where(
+        inArray(
+          leads.rdDealId,
+          formatacao.map((deal) => deal.id),
+        ),
+      ),
+    db
       .select({ id: employees.id, email: sql<string>`lower(${employees.email})` })
       .from(employees)
       .where(eq(employees.status, 'active')),
   ]);
   const existing = new Map(existingRows.map((row) => [row.rdDealId, row]));
+  const wingsLeadOf = new Map(
+    wingsLeads.flatMap((row) => (row.rdDealId ? [[row.rdDealId, row] as const] : [])),
+  );
   const employeeByEmail = new Map(staff.map((row) => [row.email, row.id]));
 
   for (const deal of formatacao) {
@@ -442,9 +621,20 @@ export async function syncCampaignLeads(
             attribution: before.attribution as AttributionMethod,
             reason: null,
           }
-        : attribute({ utms, sourceLabel, campaignLabel }, active);
+        : attribute(
+            {
+              utms,
+              sourceLabel,
+              campaignLabel,
+              enteredDay: saoPauloDayOf(enteredAt),
+              lead: wingsLeadOf.get(deal.id) ?? null,
+              since,
+            },
+            campaigns,
+          );
     if (!isTest) {
       if (decided.campaignId) result.attributed += 1;
+      else if (decided.reason === 'arrived_before_cutoff') result.beforeCutoff += 1;
       else result.unattributed += 1;
     }
 
