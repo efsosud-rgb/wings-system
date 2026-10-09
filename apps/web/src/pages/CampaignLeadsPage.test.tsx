@@ -30,6 +30,7 @@ const response = (overrides: Partial<CampaignLeadsResponse> = {}): CampaignLeads
     lost: [],
     unattributed: [{ reason: 'not_paid', count: 1 }],
     unattributedPercent: 50,
+    outOfAccount: 0,
     tests: 2,
     smallSample: true,
   },
@@ -108,6 +109,27 @@ describe('Leads das Campanhas', () => {
     expect(
       within(left).getByRole('cell', { name: /A origem no RD não é mídia paga/ }),
     ).toBeTruthy();
+  });
+
+  it('says how many deals arrived before 28/09 and stay out of every number', async () => {
+    const base = response();
+    get.mockResolvedValue({
+      ...base,
+      summary: {
+        ...base.summary,
+        outOfAccount: 18,
+        unattributed: [
+          { reason: 'arrived_before_cutoff', count: 18 },
+          { reason: 'not_paid', count: 2 },
+        ],
+      },
+    });
+    renderPage();
+    expect(
+      await screen.findByText(/18 negócio\(s\) de lead que chegou antes de 28\/09 ficam fora/),
+    ).toBeTruthy();
+    const left = screen.getByRole('region', { name: 'Sem atribuição, por motivo' });
+    expect(within(left).getByRole('cell', { name: /Chegou antes de 28\/09/ })).toBeTruthy();
   });
 
   it('shows the phone masked until "revelar", which asks the server', async () => {

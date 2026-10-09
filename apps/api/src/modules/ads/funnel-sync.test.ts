@@ -137,6 +137,12 @@ describe('RD CRM deals into rd_crm_deals', () => {
     expect(platformOfRdLabels(null, 'META ADS')).toBe('meta');
     expect(platformOfRdLabels('Busca Paga | Google', null)).toBe('google');
     expect(platformOfRdLabels('Tráfego pago - msg direta', null)).toBeNull();
+    // The source names the platform: a campaign typed "Meta - Formatação" on a Google deal does not win.
+    expect(platformOfRdLabels('Busca Paga | google', 'Meta - Formatação')).toBe('google');
+    expect(platformOfRdLabels('Busca Paga | Facebook', 'Google - Alta Intenção')).toBe('meta');
+    // A source that says only "Busca Paga" still reads the campaign beside it.
+    expect(platformOfRdLabels('Busca Paga', 'Meta - Formatação')).toBe('meta');
+    expect(platformOfRdLabels('Busca Paga', 'Google Ads - Marca')).toBe('google');
     expect(
       platformOfRdLabels('Referência | casaldochurros.com.br', 'LP/LE Casal dos Churros'),
     ).toBeNull();

@@ -14,6 +14,7 @@ import { ChartTable } from './charts3d.js';
 import {
   formatDateTime,
   formatDayShort,
+  statusSummaryText,
   formatInt,
   formatMoney,
   formatPercentMilli,
@@ -89,6 +90,7 @@ function Kpi({
   better,
   big,
   why,
+  note,
 }: {
   label: string;
   value: number | null;
@@ -98,6 +100,8 @@ function Kpi({
   big?: boolean;
   /** Shown under a "—", so an empty figure always says why. */
   why?: string | null;
+  /** Always shown under the figure (when it was read, for spend). */
+  note?: string | null;
 }) {
   const shown = useCountUp(value ?? 0);
   return (
@@ -111,6 +115,7 @@ function Kpi({
       </span>
       <Delta current={value} previous={previous} better={better} />
       {value === null && why && <span className="kpi-why muted">{why}</span>}
+      {note && <span className="kpi-why muted">{note}</span>}
     </div>
   );
 }
@@ -337,7 +342,13 @@ function AreaChart({
 }
 
 /** Performance ativa: the active campaigns judged by the RD leads they brought since 28/09. */
-function ActivePerformance({ data }: { data: DashboardCockpit['activePerformance'] }) {
+function ActivePerformance({
+  data,
+  spendReadAt,
+}: {
+  data: DashboardCockpit['activePerformance'];
+  spendReadAt: string | null;
+}) {
   const cell = (label: string, value: string, why?: string) => (
     <div className="kpi" key={label}>
       <span className="kpi-label">{label}</span>
@@ -364,7 +375,11 @@ function ActivePerformance({ data }: { data: DashboardCockpit['activePerformance
           : ' A conferência do RD ainda não rodou.'}
       </p>
       <div className="cockpit-kpis">
-        {cell('Investimento', formatMoney(data.spendCents))}
+        {cell(
+          'Investimento',
+          formatMoney(data.spendCents),
+          spendReadAt ? `lido em ${formatDateTime(spendReadAt)}` : undefined,
+        )}
         {cell('Leads no CRM', formatInt(data.leads))}
         {cell('CPL', cpl.value, cpl.why)}
         {cell('Qualificados', formatInt(data.qualified))}
@@ -396,6 +411,7 @@ export function CockpitTab({ data }: { data: DashboardCockpit }) {
   const leadsBefore = data.daily.map((day) => day.previousLeads);
   const hasAny = (values: number[]) => values.some((value) => value > 0);
   const scopeAll = data.campaignScope === 'todas';
+  const statusNote = statusSummaryText(data.statusSummary);
 
   return (
     <div className="cockpit cockpit-grafite">
@@ -412,6 +428,7 @@ export function CockpitTab({ data }: { data: DashboardCockpit }) {
               {scopeAll ? 'Todas as campanhas do período' : 'Só campanhas ativas'} (
               {data.activeCampaigns.length}):
             </b>{' '}
+            {!scopeAll && statusNote && <span className="cell-sub">{statusNote} · </span>}
             {data.activeCampaigns.map((campaign, index) => (
               <span key={`${campaign.platform}:${campaign.externalId}`}>
                 {index > 0 && ' · '}
@@ -446,7 +463,7 @@ export function CockpitTab({ data }: { data: DashboardCockpit }) {
         </section>
       )}
 
-      <ActivePerformance data={data.activePerformance} />
+      <ActivePerformance data={data.activePerformance} spendReadAt={data.spendReadAt} />
 
       <section className="cockpit-kpis" aria-label="Indicadores do período">
         <Kpi
@@ -456,6 +473,7 @@ export function CockpitTab({ data }: { data: DashboardCockpit }) {
           previous={previous.spendCents}
           format={(v) => formatMoney(Math.round(v))}
           better="up"
+          note={data.spendReadAt ? `lido em ${formatDateTime(data.spendReadAt)}` : null}
         />
         <Kpi
           big

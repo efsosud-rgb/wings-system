@@ -1,6 +1,7 @@
 import {
   CAMPAIGN_LEADS_SINCE,
   grantedScope,
+  isOutOfAccountReason,
   temperatureOfRating,
   type AdPlatform,
   type AttributionMethod,
@@ -35,7 +36,11 @@ const saoPauloDay = (at: Date) =>
 export function summaryOf(rows: Row[], now: Date): CampaignLeadsSummary {
   const tests = rows.filter((row) => row.isTest).length;
   const real = rows.filter((row) => !row.isTest);
-  const leads = real.filter((row) => row.campaignId);
+  // People who arrived before 28/09 (old leads copied to RD later) are listed by
+  // reason so the account can be followed, but they are in no total or percentage.
+  const outOfAccount = real.filter((row) => isOutOfAccountReason(row.unattributedReason));
+  const counted = real.filter((row) => !isOutOfAccountReason(row.unattributedReason));
+  const leads = counted.filter((row) => row.campaignId);
   const today = saoPauloDay(now);
   const weekStart = now.getTime() - 7 * 24 * 3600_000;
   const contacted = leads.filter((row) => row.firstContactAt);
@@ -46,6 +51,7 @@ export function summaryOf(rows: Row[], now: Date): CampaignLeadsSummary {
   };
   const stageOrder = new Map(leads.map((row) => [row.stage, row.stageOrder]));
   const unattributed = real.filter((row) => !row.campaignId);
+  const unattributedCounted = counted.filter((row) => !row.campaignId);
   const fetched = rows.reduce<Date | null>(
     (latest, row) => (!latest || row.fetchedAt > latest ? row.fetchedAt : latest),
     null,
@@ -74,7 +80,10 @@ export function summaryOf(rows: Row[], now: Date): CampaignLeadsSummary {
     unattributed: count(
       unattributed.map((row) => (row.unattributedReason ?? 'not_paid') as UnattributedReason),
     ).map(([reason, n]) => ({ reason, count: n })),
-    unattributedPercent: real.length ? Math.round((unattributed.length / real.length) * 100) : null,
+    unattributedPercent: counted.length
+      ? Math.round((unattributedCounted.length / counted.length) * 100)
+      : null,
+    outOfAccount: outOfAccount.length,
     tests,
     smallSample: leads.length < 10,
   };

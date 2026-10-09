@@ -82,7 +82,15 @@ export function platformOfRdLabels(
   source: string | null,
   campaign: string | null,
 ): 'meta' | 'google' | null {
-  const text = `${source ?? ''} | ${campaign ?? ''}`.toLowerCase();
+  // The source names the platform ("Busca Paga | Google"); the campaign label is
+  // free text a person typed ("Meta - Formatação" sat on Google deals), so it
+  // only decides when the source says nothing, and the two read together as
+  // "source | campaign" for sources like "Busca Paga" with the platform in the campaign.
+  return platformOfText(source ?? '') ?? platformOfText(`${source ?? ''} | ${campaign ?? ''}`);
+}
+
+function platformOfText(raw: string): 'meta' | 'google' | null {
+  const text = raw.toLowerCase();
   if (/busca paga \| (facebook|instagram)|facebook ads|meta ads|\bmeta\b/.test(text)) return 'meta';
   if (/busca paga \| google|google ads/.test(text)) return 'google';
   return null;
