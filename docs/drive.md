@@ -296,3 +296,11 @@ Exceção à regra de departamentos, decidida no plano da arte nos modelos: o ar
 Mídia da marca) é enviado e trocado por quem preenche a ficha da marca (`clients.edit`; a arte da Wings, por
 `clients.manage`), e o vendedor que vê a negociação recebe um link de 5 minutos só desse arquivo, para a prévia
 do modelo. Nenhuma outra rota do Drive muda. Detalhes em `docs/whatsapp/arte-modelos.md`.
+
+## A logo de uma campanha de YouTube na aprovação (2026-10-09)
+
+Segunda exceção, do mesmo tipo: quem pede uma campanha de YouTube escolhe a logo no Drive com o próprio acesso (um
+arquivo de outro departamento é "não encontrado"), mas quem aprova (`ads.read`) recebe um link de 5 minutos só desse
+arquivo, para ver a imagem que o Google vai receber (`GET /ads/approvals/:id/youtube-logo`, auditado por id como
+`drive.file_previewed`). O executor lê os bytes do armazenamento na hora de escrever e confere o SHA-256 gravado no
+pedido. Nenhuma outra rota do Drive muda. Detalhes em `docs/ads/google-escrita.md`.

@@ -3,12 +3,18 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SESSION_COOKIE, YOUTUBE_FORMATACAO_OUT26 } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { adAccounts, adCampaignDrafts, driveFiles, driveFolders } from '../../db/schema/index.js';
+import {
+  adAccounts,
+  adCampaignDrafts,
+  auditLog,
+  driveFiles,
+  driveFolders,
+} from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createLocalStorage } from '../../lib/storage/local.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
@@ -20,6 +26,7 @@ import {
   TEST_INDEX_KEY,
 } from '../../test/factories.js';
 import { openPeriod } from './budget-guard.js';
+import { sha256Of } from './demand-gen.js';
 import { fakeGoogleApi } from './platform/fake-google-api.js';
 
 /**
@@ -34,7 +41,7 @@ const TODAY = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }
 );
 
 /** YouTube's oEmbed as the test wants it: public, private, missing, or silent. */
-const videoStatus = new Map<string, number | 'down'>();
+const videoStatus = new Map<string, number | 'down' | 'html'>();
 const youtubeCalls: string[] = [];
 const youtubeFetch = ((url: unknown) => {
   const href = String(url);
@@ -42,6 +49,10 @@ const youtubeFetch = ((url: unknown) => {
   const id = /watch%3Fv%3D([A-Za-z0-9_-]{11})/.exec(href)?.[1] ?? '';
   const status = videoStatus.get(id) ?? 200;
   if (status === 'down') return Promise.reject(new TypeError('fetch failed'));
+  // A consent page that answers 200 is not YouTube saying yes.
+  if (status === 'html') {
+    return Promise.resolve(new Response('<html>Antes de continuar</html>', { status: 200 }));
+  }
   return Promise.resolve(
     new Response(status === 200 ? JSON.stringify({ title: `Vídeo ${id}` }) : 'Unauthorized', {
       status,
@@ -178,7 +189,11 @@ describe('asking for a YouTube campaign', () => {
     const before = google.mutateCalls().length;
 
     const payload = out26(logo);
-    const response = await ask(cookies, payload);
+    // Whatever the browser says the logo's fingerprint is, the server writes its own.
+    const response = await ask(cookies, {
+      ...payload,
+      youtube: { ...payload.youtube, logoSha256: 'f'.repeat(64) },
+    });
 
     expect(response.statusCode).toBe(201);
     expect(response.json<{ approvalId: string | null }>().approvalId).toBeTruthy();
@@ -190,8 +205,28 @@ describe('asking for a YouTube campaign', () => {
     expect(stored?.payload).toMatchObject({
       platform: 'youtube',
       reach: { states: ['DF', 'GO', 'RJ', 'SC'] },
-      youtube: { logoFileId: logo, conversionAction: { id: '7804997444' }, ageMin: 25 },
+      youtube: {
+        logoFileId: logo,
+        logoSha256: sha256Of(fakePng(512, 512, 4096)),
+        conversionAction: { id: '7804997444' },
+        ageMin: 25,
+      },
     });
+
+    // The approver sees the logo itself, through a short link, audited by id.
+    const approvalId = response.json<{ approvalId: string }>().approvalId;
+    const shown = await app.inject({
+      method: 'GET',
+      url: `/ads/approvals/${approvalId}/youtube-logo`,
+      cookies,
+    });
+    expect(shown.statusCode).toBe(200);
+    expect(shown.json()).toMatchObject({ fileId: logo, unchanged: true });
+    expect(shown.json<{ url: string }>().url).not.toContain('drive/2026-10');
+    const audit = await db.query.auditLog.findFirst({
+      where: and(eq(auditLog.action, 'drive.file_previewed'), eq(auditLog.entityId, logo)),
+    });
+    expect(audit?.metadata).toMatchObject({ purpose: 'ads_approval_logo', approvalId });
     expect(google.mutateCalls().length).toBe(before);
     expect(youtubeCalls.some((url) => url.includes('34zzJBPHlYg'))).toBe(true);
   });
@@ -210,11 +245,15 @@ describe('asking for a YouTube campaign', () => {
     const missing = await ask(cookies, out26(logo, { videos: ['MissingVid0'] }));
     expect(missing.json<{ message: string }>().message).toMatch(/não existe/);
 
-    // YouTube silent: no yes by default.
+    // YouTube silent, busy, or answering with a page that is not its own: no yes.
     videoStatus.set('SilentVid00', 'down');
-    const silent = await ask(cookies, out26(logo, { videos: ['SilentVid00'] }));
-    expect(silent.statusCode).toBe(503);
-    expect(silent.json()).toMatchObject({ error: 'video_check_unavailable' });
+    videoStatus.set('BusyVideo00', 429);
+    videoStatus.set('ConsentPage', 'html');
+    for (const id of ['SilentVid00', 'BusyVideo00', 'ConsentPage']) {
+      const silent = await ask(cookies, out26(logo, { videos: [id] }));
+      expect(silent.statusCode).toBe(503);
+      expect(silent.json()).toMatchObject({ error: 'video_check_unavailable' });
+    }
   });
 
   it('refuses a logo from a Drive folder the person cannot see, as if it did not exist', async () => {
@@ -235,6 +274,9 @@ describe('asking for a YouTube campaign', () => {
     expect(wide.json<{ message: string }>().message).toMatch(/quadrada/);
     const small = await ask(cookies, out26(await driveLogo({ bytes: fakePng(100, 100, 1024) })));
     expect(small.json<{ message: string }>().message).toMatch(/128/);
+    // Square within 1 %, but one side under 128 px.
+    const short = await ask(cookies, out26(await driveLogo({ bytes: fakePng(128, 127, 1024) })));
+    expect(short.json<{ message: string }>().message).toMatch(/128/);
     // Said to be a JPEG, but the bytes are a PNG.
     const lying = await ask(
       cookies,

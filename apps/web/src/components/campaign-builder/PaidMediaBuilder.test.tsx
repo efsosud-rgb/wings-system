@@ -1159,6 +1159,21 @@ describe('the builder on Google', () => {
     expect(requestCampaign).not.toHaveBeenCalled();
   });
 
+  it('keeps the CPA box and the logo preview in step with a template loaded over them', () => {
+    render(<PaidMediaBuilder canRequest canPickMedia />);
+    choose(/YouTube/);
+    pickLogo();
+    expect(screen.getByAltText('Logo escolhida para o anúncio')).toBeTruthy();
+    type(byField('CPA alvo (opcional)'), '90,00');
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Usar modelo YouTube · Formatação · Out26' }),
+    );
+    // The template has no target and no logo: the screen says the same.
+    expect((byField('CPA alvo (opcional)') as HTMLInputElement).value).toBe('');
+    expect(screen.queryByAltText('Logo escolhida para o anúncio')).toBeNull();
+  });
+
   it('checks the videos on YouTube and says which one Google would not take', () => {
     privateVideos.add('M0v5U4AaTvo');
     render(<PaidMediaBuilder canRequest />);

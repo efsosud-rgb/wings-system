@@ -28,6 +28,7 @@ import {
   reserveChange,
 } from './budget-guard.js';
 import { companionsOf, executeApprovedChange, preflightChange } from './executor.js';
+import { sha256Of } from './demand-gen.js';
 import { stepsOfExecution } from './ad-tree.js';
 import { fakeGoogleApi } from './platform/fake-google-api.js';
 import { GoogleAdsPlatformClient, GoogleAdsWriteClient } from './platform/google-ads-client.js';
@@ -98,7 +99,7 @@ async function driveLogo(width = 512, height = 512) {
       ownerId: owner.id,
     })
     .returning({ id: driveFiles.id });
-  return { fileId: file!.id, bytes };
+  return { fileId: file!.id, bytes, storageKey, sha256: sha256Of(bytes) };
 }
 
 const common = () => ({
@@ -132,7 +133,11 @@ function searchDraft(overrides: Record<string, unknown> = {}): CampaignDraft {
   });
 }
 
-function youtubeDraft(logoFileId: string, patch: Record<string, unknown> = {}): CampaignDraft {
+/** As the request route leaves it: the logo's fingerprint written by the server. */
+function youtubeDraft(
+  logo: { fileId: string; sha256: string },
+  patch: Record<string, unknown> = {},
+): CampaignDraft {
   return campaignDraftSchema.parse({
     ...common(),
     platform: 'youtube',
@@ -143,7 +148,8 @@ function youtubeDraft(logoFileId: string, patch: Record<string, unknown> = {}): 
       longHeadlines: ['Sua empresa tem potencial para virar uma rede de franquias'],
       descriptions: ['O sucesso começa com um diagnóstico.'],
       businessName: 'Wings Company',
-      logoFileId,
+      logoFileId: logo.fileId,
+      logoSha256: logo.sha256,
       conversionAction: { id: '77', name: 'RD form conversion' },
       ...patch,
     },
@@ -171,7 +177,10 @@ async function world(options: { externalId?: string; reconciled?: boolean } = {}
       .set({ lastReconciledAt: new Date() })
       .where(eq(budgetPeriods.adAccountId, account.id));
   }
-  const api = fakeGoogleApi({ customerId: externalId });
+  const api = fakeGoogleApi({
+    customerId: externalId,
+    conversionActions: [{ id: '77', name: 'RD form conversion', status: 'ENABLED' }],
+  });
   const client = new GoogleAdsWriteClient(api.reader, { confirmWrites: true });
   return { accountId: account.id, externalId, api, client };
 }
@@ -492,7 +501,7 @@ describe('executing an approved Google campaign', () => {
   it('creates a YouTube (Demand Gen) campaign whole: logo from the Drive, video ad, all paused', async () => {
     const { accountId, api, client } = await world();
     const logo = await driveLogo();
-    const { changeRequestId } = await requestAndApprove(accountId, youtubeDraft(logo.fileId));
+    const { changeRequestId } = await requestAndApprove(accountId, youtubeDraft(logo));
 
     const result = await executeApprovedChange(db, client, changeRequestId, {
       allowWrites: true,
@@ -546,7 +555,7 @@ describe('executing an approved Google campaign', () => {
   it('sends nothing when the logo is no longer in the Drive', async () => {
     const { accountId, api, client } = await world();
     const logo = await driveLogo();
-    const { changeRequestId } = await requestAndApprove(accountId, youtubeDraft(logo.fileId));
+    const { changeRequestId } = await requestAndApprove(accountId, youtubeDraft(logo));
     await db
       .update(driveFiles)
       .set({ trashedAt: new Date() })
@@ -564,13 +573,36 @@ describe('executing an approved Google campaign', () => {
     expect(change?.status).toBe('approved');
   });
 
+  it('refuses a logo replaced in the Drive after approval: Google never gets an unseen image', async () => {
+    const { accountId, api, client } = await world();
+    const logo = await driveLogo();
+    const { changeRequestId } = await requestAndApprove(accountId, youtubeDraft(logo));
+    // Same file, same size, other picture: a new version written over it.
+    const other = fakePng(512, 512, 4096);
+    other[100] = (other[100] ?? 0) ^ 0xff;
+    await storage.put(logo.storageKey, other, 'image/png');
+
+    const result = await executeApprovedChange(db, client, changeRequestId, {
+      allowWrites: true,
+      storage,
+    });
+    expect(result).toMatchObject({ ok: false, outcome: 'refused', reason: 'media_missing' });
+    if (!result.ok && result.outcome === 'refused') expect(result.message).toMatch(/A logo mudou/);
+    expect(api.mutateCalls()).toHaveLength(0);
+  });
+
   it('rehearses a YouTube request on the approval screen, the logo read the same way', async () => {
     const { accountId, api, externalId } = await world();
     const logo = await driveLogo();
-    const reserved = await request(accountId, youtubeDraft(logo.fileId));
+    const reserved = await request(accountId, youtubeDraft(logo));
     if (!reserved.ok) throw new Error(reserved.message);
 
-    const reader = new GoogleAdsPlatformClient(fakeGoogleApi({ customerId: externalId }).reader);
+    const reader = new GoogleAdsPlatformClient(
+      fakeGoogleApi({
+        customerId: externalId,
+        conversionActions: [{ id: '77', name: 'RD form conversion', status: 'ENABLED' }],
+      }).reader,
+    );
     const noStorage = await preflightChange(db, reader, reserved.value.changeRequestId);
     expect(noStorage).toMatchObject({ ok: false, status: 'refused', reason: 'media_missing' });
 

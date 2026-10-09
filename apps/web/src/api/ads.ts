@@ -384,6 +384,24 @@ export function useDemandGenOptions(enabled: boolean) {
   });
 }
 
+/**
+ * The logo of a YouTube request, for the approver: a 5-minute link, and
+ * whether it is still the image that was asked for.
+ */
+export function useApprovalYoutubeLogo(approvalId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ['ads', 'approval-youtube-logo', approvalId],
+    enabled: enabled && Boolean(approvalId),
+    staleTime: 4 * 60_000,
+    refetchInterval: 4 * 60_000,
+    retry: false,
+    queryFn: () =>
+      api.get<{ fileId: string; url: string; unchanged: boolean }>(
+        `/ads/approvals/${approvalId ?? ''}/youtube-logo`,
+      ),
+  });
+}
+
 /** Whether YouTube videos can go in an ad: public or unlisted, one answer each. */
 export function useCheckYoutubeVideos() {
   return useMutation({

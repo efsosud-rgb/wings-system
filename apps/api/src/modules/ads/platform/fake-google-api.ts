@@ -107,7 +107,12 @@ export interface FakeGoogleApiOptions {
     primaryForGoal?: boolean;
   }[];
   /** Rows answered for `FROM custom_conversion_goal`; none by default. */
-  customConversionGoals?: { resourceName: string; conversionActions: string[]; status: string }[];
+  customConversionGoals?: {
+    resourceName: string;
+    name?: string;
+    conversionActions: string[];
+    status: string;
+  }[];
   /** Rows answered for `FROM user_list` and `FROM custom_audience`; none by default. */
   userLists?: { id: string; name: string }[];
   customAudiences?: { id: string; name: string }[];

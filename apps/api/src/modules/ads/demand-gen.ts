@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   DEMAND_GEN_LOGO_MAX_BYTES,
   DEMAND_GEN_LOGO_MIN_PX,
@@ -45,7 +46,15 @@ export async function checkYoutubeVideo(
     return { videoId, status: 'unavailable' };
   }
   if (response.status === 200) {
-    const body = (await response.json().catch(() => null)) as { title?: unknown } | null;
+    // Only YouTube's own answer counts: a 200 that is not oEmbed JSON (a
+    // consent or error page) is no answer, never a yes.
+    const body = (await response.json().catch(() => null)) as {
+      type?: unknown;
+      title?: unknown;
+    } | null;
+    if (body?.type !== 'video' && typeof body?.title !== 'string') {
+      return { videoId, status: 'unavailable' };
+    }
     return {
       videoId,
       status: 'ok',
@@ -91,6 +100,9 @@ export function videoRefusal(
 }
 
 // --- logo --------------------------------------------------------------------------------
+
+/** The logo's fingerprint, as the approved draft records it. */
+export const sha256Of = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 
 export type LogoCheck =
   | { ok: true; data: Buffer }
@@ -153,7 +165,7 @@ export async function readDemandGenLogo(
   if (Math.abs(width - height) > Math.max(width, height) * 0.01) {
     return refused(`A logo precisa ser quadrada (esta tem ${width} × ${height}).`);
   }
-  if (width < DEMAND_GEN_LOGO_MIN_PX) {
+  if (Math.min(width, height) < DEMAND_GEN_LOGO_MIN_PX) {
     return refused(
       `A logo precisa ter ao menos ${DEMAND_GEN_LOGO_MIN_PX} × ${DEMAND_GEN_LOGO_MIN_PX} pixels.`,
     );
@@ -175,6 +187,14 @@ export async function withDemandGenLogo(
   if (write.kind !== 'create_campaign' || !demandGen) return { ok: true, write };
   const logo = await readDemandGenLogo(db, storage, demandGen.logo.driveFileId);
   if (!logo.ok) return { ok: false, message: logo.message };
+  // The image Google receives is the one that was approved, byte for byte.
+  if (!demandGen.logo.sha256 || sha256Of(logo.data) !== demandGen.logo.sha256) {
+    return {
+      ok: false,
+      message:
+        'A logo mudou no Drive depois do pedido (ou o pedido não a registrou): nada foi enviado. Peça a campanha de novo com a logo atual.',
+    };
+  }
   return {
     ok: true,
     write: {

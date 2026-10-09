@@ -315,8 +315,11 @@ export interface GoogleDemandGenSpec {
   ageMin: number;
   ageMax: number | null;
   includeUnknownAge: boolean;
-  /** Signals from the account: its audience lists and custom segments, by id. */
-  audienceSegments: { kind: 'user_list' | 'custom_audience'; id: string }[];
+  /**
+   * Signals from the account: its audience lists and custom segments, by id,
+   * with the name the approver saw (checked against the account before writing).
+   */
+  audienceSegments: { kind: 'user_list' | 'custom_audience'; id: string; name: string }[];
   /** The one conversion action the campaign bids for. */
   conversionActionId: string;
   conversionActionName: string;
@@ -332,7 +335,7 @@ export interface GoogleDemandGenSpec {
    * The logo, a Drive file. `data` (base64) is filled by the executor from
    * storage right before the write; a spec without it cannot be planned.
    */
-  logo: { driveFileId: string; data?: string };
+  logo: { driveFileId: string; sha256?: string; data?: string };
   /** The destination without UTMs: the campaign's suffix carries them. */
   finalUrl: string;
   finalUrlSuffix: string;

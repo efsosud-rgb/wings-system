@@ -40,6 +40,7 @@ import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../api/auth.js';
 import {
   useApproval,
+  useApprovalYoutubeLogo,
   useDecideApproval,
   useExecuteApproval,
   useOfficialPreviews,
@@ -334,10 +335,13 @@ function AddAdsSection({ addAds }: { addAds: AddAdsPayload }) {
 function YoutubeApprovalDetails({
   youtube,
   name,
+  approvalId,
 }: {
   youtube: NonNullable<CampaignDraft['youtube']>;
   name: string;
+  approvalId?: string;
 }) {
+  const logo = useApprovalYoutubeLogo(approvalId, Array.isArray(youtube.videos));
   if (!Array.isArray(youtube.videos)) {
     return (
       <div>
@@ -370,9 +374,28 @@ function YoutubeApprovalDetails({
           <dd>{youtube.descriptions.join(' · ')}</dd>
         </div>
         <div>
-          <dt>Nome da empresa</dt>
+          <dt>Nome da empresa e logo</dt>
           <dd>
-            {youtube.businessName} (logo do Drive, arquivo {youtube.logoFileId.slice(0, 8)}…)
+            {youtube.businessName}
+            {logo.data ? (
+              <>
+                <img
+                  className="builder-logo-preview"
+                  src={logo.data.url}
+                  alt="Logo que vai para o Google"
+                />
+                {!logo.data.unchanged && (
+                  <Alert kind="warning">
+                    A logo mudou no Drive depois do pedido: Executar vai recusar. Peça de novo.
+                  </Alert>
+                )}
+              </>
+            ) : (
+              <span className="cell-sub">
+                {' '}
+                {logo.isLoading ? '(carregando a logo…)' : '(logo não encontrada no Drive)'}
+              </span>
+            )}
           </dd>
         </div>
         <div>
@@ -415,7 +438,7 @@ function YoutubeApprovalDetails({
   );
 }
 
-function DraftCampaign({ draft }: { draft: CampaignDraft }) {
+function DraftCampaign({ draft, approvalId }: { draft: CampaignDraft; approvalId?: string }) {
   const days = campaignDays(draft.startDate, draft.endDate) ?? 0;
   const format = CREATIVE_FORMATS[draft.platform].find((item) => item.key === draft.formatKey);
   const google = isGooglePlatform(draft.platform);
@@ -513,7 +536,11 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
           </>
         )}
         {draft.platform === 'youtube' && draft.youtube && (
-          <YoutubeApprovalDetails youtube={draft.youtube} name={draft.name} />
+          <YoutubeApprovalDetails
+            youtube={draft.youtube}
+            name={draft.name}
+            approvalId={approvalId}
+          />
         )}
         {draft.platform === 'google_search' && (
           <div>
@@ -933,7 +960,7 @@ export function ApprovalDetailPage() {
           {approval.savedDraftDrift.savedDraftName}”.
         </Alert>
       )}
-      {approval.draft && <DraftCampaign draft={approval.draft} />}
+      {approval.draft && <DraftCampaign draft={approval.draft} approvalId={approval.id} />}
       {approval.addAds && <AddAdsSection addAds={approval.addAds} />}
       {approval.changeKind === 'resume_campaign' && approval.changeStatus !== 'executed' && (
         <Alert kind="info">

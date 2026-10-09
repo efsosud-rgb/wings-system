@@ -16,7 +16,10 @@ import { z } from 'zod';
 import {
   adAccounts,
   adApprovalRequests,
+  adCampaignDrafts,
   adCampaignSavedDrafts,
+  adChangeRequests,
+  driveFiles,
   adCreativeUploads,
   adVideoUploads,
   auditLog,
@@ -28,7 +31,7 @@ import { activeAdAccounts } from './metrics.js';
 import { nextPendingInGroup, pendingGroups } from './batches.js';
 import { stepsOfExecution } from './ad-tree.js';
 import { executeApprovedChange, preflightChange } from './executor.js';
-import { checkYoutubeVideos, readDemandGenLogo, videoRefusal } from './demand-gen.js';
+import { checkYoutubeVideos, readDemandGenLogo, sha256Of, videoRefusal } from './demand-gen.js';
 import { driveAccessOf } from '../drive/access.js';
 import { storageOf } from '../../lib/storage/index.js';
 import { GoogleAdsPlatformClient } from './platform/google-ads-client.js';
@@ -535,6 +538,9 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
             .status(logo.code === 'storage_unavailable' ? 503 : 400)
             .send({ error: logo.code, message: logo.message, path: ['youtube', 'logoFileId'] });
         }
+        // The approved draft names the logo's exact bytes: one changed in the
+        // Drive after approval is refused at Executar, never sent.
+        youtube.logoSha256 = sha256Of(logo.data);
       }
 
       // The account the studio works on: for Meta, the one the cockpit shows;
@@ -573,6 +579,67 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         approvalId: gate.approvalId ?? null,
         changeRequestId: reserved.value.changeRequestId,
         exposureDeltaCents: reserved.value.exposureDeltaCents,
+      });
+    },
+  );
+
+  /**
+   * The logo of a YouTube request, for the approver to see before deciding:
+   * a 5-minute link to the file, never its storage key, and whether it is
+   * still the image that was asked for. The approval's own permission
+   * decides, not the Drive's departments: what Google would receive must be
+   * visible to whoever approves it. Audited by id.
+   */
+  app.get(
+    '/ads/approvals/:id/youtube-logo',
+    { preHandler: app.requirePermission('ads.read') },
+    async (request, reply) => {
+      const notFound = () =>
+        reply.status(404).send({ error: 'not_found', message: 'Logo não encontrada.' });
+      const params = idParamSchema.safeParse(request.params);
+      if (!params.success) return notFound();
+      const approval = await db.query.adApprovalRequests.findFirst({
+        where: eq(adApprovalRequests.id, params.data.id),
+      });
+      const change = approval
+        ? await db.query.adChangeRequests.findFirst({
+            where: eq(adChangeRequests.id, approval.changeRequestId),
+          })
+        : undefined;
+      const draft = change?.draftId
+        ? await db.query.adCampaignDrafts.findFirst({
+            where: eq(adCampaignDrafts.id, change.draftId),
+          })
+        : undefined;
+      const youtube = (draft?.payload as CampaignDraft | undefined)?.youtube;
+      if (!youtube?.logoFileId) return notFound();
+      const [file] = await db
+        .select()
+        .from(driveFiles)
+        .where(eq(driveFiles.id, youtube.logoFileId))
+        .limit(1);
+      const storage = storageOf(app.wings);
+      if (!file || file.trashedAt || !storage) return notFound();
+      const bytes = await storage.get(file.storageKey);
+      if (!bytes) return notFound();
+      const url = await storage.presignGet(file.storageKey, {
+        expiresSeconds: 300,
+        disposition: 'inline',
+        filename: file.name,
+        contentType: file.mimeType,
+      });
+      await writeAudit(db, {
+        actorEmployeeId: request.session.actor.employeeId,
+        action: 'drive.file_previewed',
+        entity: 'drive_file',
+        entityId: file.id,
+        ip: request.ip,
+        metadata: { purpose: 'ads_approval_logo', approvalId: params.data.id },
+      });
+      return reply.send({
+        fileId: file.id,
+        url,
+        unchanged: sha256Of(bytes) === youtube.logoSha256,
       });
     },
   );

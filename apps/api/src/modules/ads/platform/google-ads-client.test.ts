@@ -567,6 +567,8 @@ describe('creating a YouTube (Demand Gen) campaign', () => {
   it("reuses the account's goal, bids at the target CPA and sends the signals", async () => {
     const api = fakeGoogleApi({
       conversionActions: [RD_FORM],
+      customAudiences: [{ id: '1019547251', name: 'Concorrentes' }],
+      userLists: [{ id: '9291286078', name: 'All visitors' }],
       customConversionGoals: [
         {
           resourceName: 'customers/4268586278/customConversionGoals/555',
@@ -584,8 +586,8 @@ describe('creating a YouTube (Demand Gen) campaign', () => {
         includeUnknownAge: true,
         channels: { youtubeInStream: true, youtubeInFeed: false, youtubeShorts: false },
         audienceSegments: [
-          { kind: 'custom_audience', id: '1019547251' },
-          { kind: 'user_list', id: '9291286078' },
+          { kind: 'custom_audience', id: '1019547251', name: 'Concorrentes' },
+          { kind: 'user_list', id: '9291286078', name: 'All visitors' },
         ],
       }),
     );
@@ -648,7 +650,7 @@ describe('creating a YouTube (Demand Gen) campaign', () => {
   });
 
   it('sends no audience when it would restrict nothing', async () => {
-    const { api, client } = writer();
+    const { api, client } = writer(fakeGoogleApi({ conversionActions: [RD_FORM] }));
     const outcome = await client.createCampaign(
       withDemandGen({ ageMin: 18, ageMax: null, includeUnknownAge: true }),
     );
@@ -669,6 +671,65 @@ describe('creating a YouTube (Demand Gen) campaign', () => {
 
     expect(outcome).toMatchObject({ status: 'rejected', code: 'google_conversion_unavailable' });
     expect(api.mutateCalls()).toHaveLength(0);
+  });
+
+  it('sends 65+ as an open end: no maximum age', async () => {
+    const { api, client } = writer(fakeGoogleApi({ conversionActions: [RD_FORM] }));
+    await client.createCampaign(withDemandGen({ ageMin: 65, ageMax: null }));
+    expect(operationsOf(api).find((op) => op.audienceOperation)).toMatchObject({
+      audienceOperation: {
+        create: { dimensions: [{ age: { ageRanges: [{ minAge: 65 }] } }] },
+      },
+    });
+    const range = (
+      operationsOf(api).find((op) => op.audienceOperation)?.audienceOperation?.create
+        ?.dimensions as { age: { ageRanges: Record<string, number>[] } }[]
+    )[0]?.age.ageRanges[0];
+    expect(range).not.toHaveProperty('maxAge');
+  });
+
+  it('refuses when what the approver read no longer matches the account, with nothing written', async () => {
+    // The conversion was renamed in Google Ads after approval.
+    const renamed = fakeGoogleApi({
+      conversionActions: [{ id: '77', name: 'Formulário antigo', status: 'ENABLED' }],
+    });
+    expect(await writer(renamed).client.createCampaign(youtubeSpec)).toMatchObject({
+      status: 'rejected',
+      code: 'google_conversion_changed',
+    });
+    expect(renamed.mutateCalls()).toHaveLength(0);
+
+    // A signal that left the account.
+    const gone = fakeGoogleApi({ conversionActions: [RD_FORM], customAudiences: [] });
+    const withSignal = withDemandGen({
+      audienceSegments: [{ kind: 'custom_audience', id: '1019547251', name: 'Concorrentes' }],
+    });
+    expect(await writer(gone).client.createCampaign(withSignal)).toMatchObject({
+      status: 'rejected',
+      code: 'google_audience_changed',
+    });
+    expect(gone.mutateCalls()).toHaveLength(0);
+
+    // The goal this system would make exists, edited to hold other conversions.
+    const conflict = fakeGoogleApi({
+      conversionActions: [RD_FORM],
+      customConversionGoals: [
+        {
+          resourceName: 'customers/4268586278/customConversionGoals/9',
+          name: 'Wings System · RD form conversion (77)',
+          conversionActions: [
+            'customers/4268586278/conversionActions/77',
+            'customers/4268586278/conversionActions/12',
+          ],
+          status: 'ENABLED',
+        },
+      ],
+    });
+    expect(await writer(conflict).client.createCampaign(youtubeSpec)).toMatchObject({
+      status: 'rejected',
+      code: 'google_conversion_goal_conflict',
+    });
+    expect(conflict.mutateCalls()).toHaveLength(0);
   });
 
   it('refuses a spec without its video ad or its logo, with nothing sent', async () => {

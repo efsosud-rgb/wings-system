@@ -1148,6 +1148,15 @@ export const youtubeDraftSchema = z
     businessName: compliantText(DEMAND_GEN_BUSINESS_NAME_MAX, 'o nome da empresa'),
     /** A square logo from the Drive, by the Drive file's id. */
     logoFileId: z.uuid({ error: 'Escolha a logo no Drive' }),
+    /**
+     * The SHA-256 of the logo's bytes when it was asked for. Written by the
+     * server (whatever the browser sent is replaced), so it is in the approved
+     * hash: a logo changed in the Drive after approval is refused, never sent.
+     */
+    logoSha256: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
     /** The one conversion the campaign bids for, from the account's list. */
     conversionAction: z.object(
       { id: numericId, name: z.string().trim().min(1).max(200) },

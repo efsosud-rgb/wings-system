@@ -1040,9 +1040,14 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
     // account's own custom goal holding just it is reused, or one is made.
     let goal: ConversionGoalChoice | null = null;
     if (demandGen) {
-      const found = await this.conversionGoalFor(demandGen.conversionActionId);
+      const found = await this.conversionGoalFor(
+        demandGen.conversionActionId,
+        demandGen.conversionActionName,
+      );
       if (!found.ok) return found;
       goal = found.goal;
+      const segments = await this.segmentsAsApproved(demandGen.audienceSegments);
+      if (!segments.ok) return segments;
     }
 
     const budgetName = `${this.customer}/campaignBudgets/-1`;
@@ -1204,6 +1209,7 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
    */
   private async conversionGoalFor(
     conversionActionId: string,
+    approvedName: string,
   ): Promise<
     { ok: true; goal: ConversionGoalChoice } | { ok: false; code: string; message: string }
   > {
@@ -1233,10 +1239,19 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
           'A ação de conversão escolhida não está ativa na conta do Google. Escolha outra no construtor.',
       };
     }
+    // The approver read a name; Google bids on an id. They must still agree.
+    if ((action.name ?? '') !== approvedName) {
+      return {
+        ok: false,
+        code: 'google_conversion_changed',
+        message: `A ação de conversão aprovada ("${approvedName}") hoje se chama "${action.name ?? conversionActionId}" na conta. Nada foi enviado: peça a campanha de novo.`,
+      };
+    }
     const actionResource = `${this.customer}/conversionActions/${conversionActionId}`;
     const goals = await this.reader.search<{
       customConversionGoal?: {
         resourceName?: string;
+        name?: string;
         conversionActions?: string[];
         status?: string;
       };
@@ -1253,15 +1268,65 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
           item.conversionActions?.length === 1 &&
           item.conversionActions[0] === actionResource,
       );
+    const actionName = action.name ?? conversionActionId;
+    // The goal this system would create already exists, edited into something
+    // else: say so, rather than let Google refuse a duplicate name.
+    const ownName = customGoalName(actionName, conversionActionId);
+    if (!existing && goals.some((row) => row.customConversionGoal?.name === ownName)) {
+      return {
+        ok: false,
+        code: 'google_conversion_goal_conflict',
+        message: `A conta já tem a meta "${ownName}" com outras conversões. Ajuste-a no Google Ads (só esta conversão) e peça de novo.`,
+      };
+    }
     return {
       ok: true,
       goal: {
         actionResource,
-        actionName: action.name ?? conversionActionId,
+        actionName,
         actionId: conversionActionId,
         existing: existing?.resourceName ?? null,
       },
     };
+  }
+
+  /**
+   * The signals as the approver saw them: every list and custom segment still
+   * in the account, under the same name. Reads only; a missing or renamed one
+   * is a refusal with nothing sent.
+   */
+  private async segmentsAsApproved(
+    segments: GoogleDemandGenSpec['audienceSegments'],
+  ): Promise<{ ok: true } | { ok: false; code: string; message: string }> {
+    const ids = (kind: 'user_list' | 'custom_audience') =>
+      segments.filter((item) => item.kind === kind && /^\d+$/.test(item.id)).map((item) => item.id);
+    const lists = ids('user_list');
+    const customs = ids('custom_audience');
+    const found = new Map<string, string>();
+    if (lists.length > 0) {
+      const rows = await this.reader.search<{ userList?: { id?: string; name?: string } }>(
+        `SELECT user_list.id, user_list.name FROM user_list WHERE user_list.id IN (${lists.join(', ')})`,
+      );
+      for (const row of rows)
+        if (row.userList?.id) found.set(`user_list:${row.userList.id}`, row.userList.name ?? '');
+    }
+    if (customs.length > 0) {
+      const rows = await this.reader.search<{ customAudience?: { id?: string; name?: string } }>(
+        `SELECT custom_audience.id, custom_audience.name FROM custom_audience WHERE custom_audience.id IN (${customs.join(', ')})`,
+      );
+      for (const row of rows)
+        if (row.customAudience?.id)
+          found.set(`custom_audience:${row.customAudience.id}`, row.customAudience.name ?? '');
+    }
+    const changed = segments.find((item) => found.get(`${item.kind}:${item.id}`) !== item.name);
+    if (changed) {
+      return {
+        ok: false,
+        code: 'google_audience_changed',
+        message: `O sinal de público "${changed.name}" não está mais na conta com esse nome. Nada foi enviado: peça a campanha de novo.`,
+      };
+    }
+    return { ok: true };
   }
 
   /**
@@ -1531,6 +1596,10 @@ interface PlanLabel {
   label: string;
 }
 
+/** The custom goal this system makes for one conversion action. */
+const customGoalName = (actionName: string, actionId: string) =>
+  `Wings System · ${actionName} (${actionId})`;
+
 /** The conversion a Demand Gen campaign bids for, and the custom goal holding it. */
 interface ConversionGoalChoice {
   actionResource: string;
@@ -1701,7 +1770,7 @@ export function googleDemandGenOperations(input: {
       customConversionGoalOperation: {
         create: {
           resourceName: goalResource,
-          name: `Wings System · ${goal.actionName} (${goal.actionId})`,
+          name: customGoalName(goal.actionName, goal.actionId),
           conversionActions: [goal.actionResource],
           status: 'ENABLED',
         },

@@ -39,7 +39,13 @@ vi.mock('../api/auth.js', () => ({
     Boolean(user?.permissions[permission as keyof SessionUser['permissions']]),
 }));
 
+/** The approval's YouTube logo, as the server links it. */
+const approvalLogo: { current: { fileId: string; url: string; unchanged: boolean } | undefined } = {
+  current: undefined,
+};
+
 vi.mock('../api/ads.js', () => ({
+  useApprovalYoutubeLogo: () => ({ data: approvalLogo.current, isLoading: false }),
   useApproval: () => ({ data: { approval: approval.current }, isLoading: false, isError: false }),
   useDecideApproval: () => ({ mutateAsync: decide, isPending: false, error: null }),
   useExecuteApproval: () => ({
@@ -580,6 +586,47 @@ describe('a request to create a campaign', () => {
       (screen.getByAltText('Miniatura do vídeo no YouTube') as HTMLImageElement).src,
     ).toContain('/vi/dQw4w9WgXcQ/');
     expect(screen.getByText(/Vai tudo para o Google na mesma escrita, pausado/)).toBeTruthy();
+    // Without the server's link, it says so instead of showing an id.
+    expect(screen.getByText(/logo não encontrada no Drive/)).toBeTruthy();
+  });
+
+  it('shows the YouTube logo the approver is deciding on, and warns when it changed', () => {
+    approvalLogo.current = {
+      fileId: '7c1f4a52-2b8e-4d0a-9f3e-1a2b3c4d5e6f',
+      url: 'https://files.example/logo?sig=x',
+      unchanged: false,
+    };
+    approval.current = buildApproval({
+      platform: 'google',
+      changeKind: 'create_campaign',
+      draft: {
+        ...draft,
+        formatKey: undefined,
+        platform: 'youtube',
+        reach: { ...draft.reach, customLocations: [] },
+        variations: [],
+        youtube: {
+          videos: ['dQw4w9WgXcQ'],
+          headlines: ['Conheça a Wings'],
+          longHeadlines: ['Sua empresa pode virar uma rede de franquias'],
+          descriptions: ['Diagnóstico com quem já formatou centenas de marcas.'],
+          businessName: 'Wings Company',
+          logoFileId: '7c1f4a52-2b8e-4d0a-9f3e-1a2b3c4d5e6f',
+          conversionAction: { id: '7804997444', name: 'RD form conversion' },
+          ageMin: 25,
+          ageMax: 65,
+          includeUnknownAge: false,
+          channels: ['youtube_in_stream'],
+          audienceSegments: [],
+        },
+      },
+    });
+    renderDetail();
+    expect((screen.getByAltText('Logo que vai para o Google') as HTMLImageElement).src).toBe(
+      'https://files.example/logo?sig=x',
+    );
+    expect(screen.getByText(/A logo mudou no Drive depois do pedido/)).toBeTruthy();
+    approvalLogo.current = undefined;
   });
 
   it('says so in red when the campaign would be born active', () => {

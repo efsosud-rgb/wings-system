@@ -22,7 +22,7 @@ import {
   type MediaAsset,
   type YoutubeVideoCheck,
 } from '@wings/shared';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FieldErrors, UseFormRegister, UseFormSetValue } from 'react-hook-form';
 import { ApiError } from '../../api/client.js';
 import { useCheckYoutubeVideos } from '../../api/ads.js';
@@ -51,6 +51,10 @@ interface FormBits {
 }
 
 const filled = { shouldDirty: true, shouldValidate: false } as const;
+
+/** The target CPA as the box shows it: 9000 -> "90,00"; none -> "". */
+const cpaTextOf = (cents: number | undefined) =>
+  cents === undefined || Number.isNaN(cents) ? '' : (cents / 100).toFixed(2).replace('.', ',');
 
 /** Every piece of copy the ad carries, for the compliance warning and the lock on Lançar. */
 export function youtubeCopy(youtube: Partial<YoutubeInput> | undefined): string[] {
@@ -210,7 +214,9 @@ export function YoutubeAdFields({
           Do Drive: PNG ou JPEG quadrado, de pelo menos {DEMAND_GEN_LOGO_MIN_PX} ×{' '}
           {DEMAND_GEN_LOGO_MIN_PX} px e até 5 MB. O Google mostra ao lado do nome da empresa.
         </p>
-        {logo ? (
+        {/* The picture shown is the one the draft names: a template or a saved
+            draft that brings another logo replaces it here too. */}
+        {logo && logo.driveFileId === youtube?.logoFileId ? (
           <img
             className="builder-logo-preview"
             src={mediaFileUrl(logo)}
@@ -260,9 +266,17 @@ export function YoutubeBiddingFields({
 }: Omit<FormBits, 'listError'> & {
   options: { data?: DemandGenOptions; isLoading: boolean; error: unknown };
 }) {
-  const [cpaText, setCpaText] = useState(
-    youtube?.targetCpaCents ? (youtube.targetCpaCents / 100).toFixed(2).replace('.', ',') : '',
-  );
+  const [cpaText, setCpaText] = useState(cpaTextOf(youtube?.targetCpaCents));
+  // A template or a saved draft sets the target from outside the box: the box
+  // follows, so what is on screen is what goes in the request.
+  const targetCpa = youtube?.targetCpaCents;
+  useEffect(() => {
+    setCpaText((typed) => {
+      const read = typed.trim() === '' ? undefined : parseBrlToCents(typed);
+      const same = read === targetCpa || (Number.isNaN(read) && Number.isNaN(targetCpa));
+      return same ? typed : cpaTextOf(targetCpa);
+    });
+  }, [targetCpa]);
   const channels = (youtube?.channels ?? []) as DemandGenChannel[];
   const segments = youtube?.audienceSegments ?? [];
   const actions = options.data?.conversionActions ?? [];

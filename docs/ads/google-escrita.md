@@ -483,15 +483,27 @@ o clique em Executar.
 
 ### O que o servidor confere no pedido (`POST /ads/campaign-requests`)
 
-- **Vídeos** pela consulta pública do YouTube (oEmbed, sem chave): 200 = público
-  ou não listado (a consulta não distingue, e o Google aceita os dois); 401/403 =
-  privado ou sem incorporação → 400 `video_unavailable`; 400/404 = não existe →
-  400; YouTube sem resposta → 503 `video_check_unavailable` (nunca um "sim").
+- **Vídeos** pela consulta pública do YouTube (oEmbed, sem chave): 200 com o JSON
+  do oEmbed = público ou não listado (a consulta não distingue, e o Google aceita
+  os dois); 401/403 = privado ou sem incorporação → 400 `video_unavailable`;
+  400/404 = não existe → 400; sem resposta, 429/5xx ou 200 que não é o JSON do
+  YouTube → 503 `video_check_unavailable` (nunca um "sim").
 - **Logo** pelo Drive de quem pede (`driveAccessOf` + `fileFor`): arquivo de
   outro departamento é "não encontrado" (`logo_not_found`); tipo pelo conteúdo
   (`readImageHeader`), quadrada, tamanho mínimo e máximo (`logo_refused`).
+- **A logo aprovada é a logo enviada:** o servidor grava no rascunho o SHA-256
+  dos bytes (`youtube.logoSha256`; o valor que o navegador mandar é trocado), e
+  isso entra no hash aprovado. Se o arquivo mudar no Drive depois, Executar e a
+  validação recusam (`media_missing`) com nada enviado.
 - Depois, o caminho de sempre: `reserveCampaignCreation` (período aberto,
   tetos, trava) → `gateChange` → aprovação → Executar.
+
+**Na aprovação:** a página mostra a própria logo por
+`GET /ads/approvals/:id/youtube-logo` (`ads.read`): endereço de 5 minutos, sem
+chave de armazenamento, auditado como `drive.file_previewed` (`purpose:
+ads_approval_logo`), e avisa se o arquivo mudou desde o pedido. É uma exceção
+de propósito à regra de departamentos do Drive, como a arte do WhatsApp: quem
+aprova precisa ver o que o Google vai receber.
 
 Rotas de leitura do construtor (`ads.request`): `GET /ads/google/demand-gen-options`
 (conversões ativas, listas abertas e segmentos ativos da conta, sempre com o
@@ -520,8 +532,12 @@ O executor lê a logo do Drive **na hora** (`withDemandGenLogo`, também no
    textos, logo e `businessName`; `finalUrls` sem UTM).
 
 Grupo e anúncio viram passos (`ad_group`, `ad`): `resume_campaign` liga os três,
-como na Pesquisa. A ação de conversão é relida antes (`google_conversion_unavailable`
-se não estiver ativa); o rascunho antigo de YouTube (só link e título) é recusado
+como na Pesquisa. Antes de escrever (e na validação), a conta é relida para
+conferir o que o aprovador leu: a ação de conversão ativa e com o mesmo nome
+(`google_conversion_unavailable`, `google_conversion_changed`), cada sinal ainda
+na conta com o mesmo nome (`google_audience_changed`) e a meta "Wings System ·
+…" não editada para outras conversões (`google_conversion_goal_conflict`). O
+rascunho antigo de YouTube (só link e título) é recusado
 (`google_demand_gen_spec_missing`).
 
 **UTMs:** a campanha grava o sufixo `utm_source=youtube&utm_medium=cpc&utm_campaign={campaignid}&utm_content={creative}`

@@ -738,7 +738,7 @@ function demandGenSpecOf(name: string, payload: CampaignDraft): GoogleDemandGenS
     ageMin: youtube.ageMin,
     ageMax: youtube.ageMax === DEMAND_GEN_AGE_OPEN_END ? null : youtube.ageMax,
     includeUnknownAge: youtube.includeUnknownAge,
-    audienceSegments: youtube.audienceSegments.map(({ kind, id }) => ({ kind, id })),
+    audienceSegments: youtube.audienceSegments.map(({ kind, id, name }) => ({ kind, id, name })),
     conversionActionId: youtube.conversionAction.id,
     conversionActionName: youtube.conversionAction.name,
     targetCpaCents: youtube.targetCpaCents,
@@ -750,7 +750,7 @@ function demandGenSpecOf(name: string, payload: CampaignDraft): GoogleDemandGenS
     longHeadlines: youtube.longHeadlines,
     descriptions: youtube.descriptions,
     businessName: youtube.businessName,
-    logo: { driveFileId: youtube.logoFileId },
+    logo: { driveFileId: youtube.logoFileId, sha256: youtube.logoSha256 },
     // The UTMs ride on the campaign's own suffix, never on the link.
     finalUrl: stripUtms(payload.destinationUrl) ?? payload.destinationUrl,
     finalUrlSuffix: YOUTUBE_CAMPAIGN_URL_SUFFIX,
