@@ -1135,6 +1135,30 @@ describe('the builder on Google', () => {
     });
   });
 
+  it('reads the target CPA the Brazilian way, and refuses what it cannot read', async () => {
+    render(<PaidMediaBuilder canRequest canPickMedia />);
+    choose(/YouTube/);
+    fillYoutube();
+    type(byField('CPA alvo (opcional)'), '1.234,56');
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
+    expect(requestCampaign.mock.calls[0]?.[0]).toMatchObject({
+      youtube: { targetCpaCents: 123456 },
+    });
+
+    requestCampaign.mockClear();
+    type(byField('CPA alvo (opcional)'), '90.50');
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
+    expect(requestCampaign.mock.calls[0]?.[0]).toMatchObject({ youtube: { targetCpaCents: 9050 } });
+
+    requestCampaign.mockClear();
+    type(byField('CPA alvo (opcional)'), 'noventa');
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+    await waitFor(() => expect(screen.getByText('Informe o CPA alvo')).toBeTruthy());
+    expect(requestCampaign).not.toHaveBeenCalled();
+  });
+
   it('checks the videos on YouTube and says which one Google would not take', () => {
     privateVideos.add('M0v5U4AaTvo');
     render(<PaidMediaBuilder canRequest />);

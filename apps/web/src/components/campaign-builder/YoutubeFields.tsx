@@ -30,6 +30,7 @@ import { mediaFileUrl } from '../../api/media.js';
 import { MediaPicker } from '../media-studio/MediaLibrary.js';
 import { Alert, Button, Field, Input, Select } from '../ui.js';
 import { ComplianceWarning } from './CreativeBlock.js';
+import { parseBrlToCents } from './format.js';
 
 /**
  * The YouTube (Demand Gen) parts of the builder: the video ad (videos, texts,
@@ -325,10 +326,11 @@ export function YoutubeBiddingFields({
           onChange={(event) => {
             const text = event.target.value;
             setCpaText(text);
-            const number = Number(text.replace(/\./g, '').replace(',', '.'));
+            // Blank is "no target"; anything unreadable stays unreadable, so the
+            // schema says so instead of the draft silently losing the target.
             setValue(
               'youtube.targetCpaCents',
-              text.trim() === '' || !Number.isFinite(number) ? undefined : Math.round(number * 100),
+              text.trim() === '' ? undefined : parseBrlToCents(text),
               filled,
             );
           }}
