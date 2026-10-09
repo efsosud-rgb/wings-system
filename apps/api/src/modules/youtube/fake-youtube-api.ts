@@ -15,8 +15,12 @@ export interface FakeYoutubeVideo {
   /** Null: the channel hides it (the API leaves the field out). */
   likes?: number | null;
   comments?: number | null;
-  /** How youtube.com answers /shorts/<id>: 200, a redirect to /watch, a consent page, or a network error. */
-  short?: true | false | 'consent' | 'error';
+  /**
+   * How youtube.com answers /shorts/<id>: the Short's page, a redirect to
+   * /watch, a redirect to a consent page, a 200 bot-check page that is not
+   * the Short, or a network error.
+   */
+  short?: true | false | 'consent' | 'bot' | 'error';
 }
 
 export interface FakeYoutubeOptions {
@@ -55,11 +59,20 @@ export function fakeYoutube(options: FakeYoutubeOptions) {
     if (url.startsWith(SHORTS)) {
       const id = decodeURIComponent(url.slice(SHORTS.length));
       shortsAsked.push(id);
-      if (init?.method !== 'HEAD' || init.redirect !== 'manual')
+      if ((init?.method ?? 'GET') !== 'GET' || init?.redirect !== 'manual')
         return new Response(null, { status: 400 });
       const video = options.videos.find((item) => item.id === id);
       if (video?.short === 'error') throw new TypeError('fetch failed');
-      if (video?.short === true) return new Response(null, { status: 200 });
+      if (video?.short === true)
+        return new Response(
+          `<html><head><link rel="canonical" href="https://www.youtube.com/shorts/${id}"></head></html>`,
+          { status: 200, headers: { 'content-type': 'text/html' } },
+        );
+      if (video?.short === 'bot')
+        return new Response('<html><head><title>Before you continue</title></head></html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
       if (video?.short === 'consent')
         return new Response(null, {
           status: 302,

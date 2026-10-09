@@ -7,7 +7,7 @@ import {
 } from '@wings/shared';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import { clients, ingestRuns, youtubeVideoDaily, youtubeVideos } from '../../db/schema/index.js';
@@ -67,6 +67,14 @@ const videos: FakeYoutubeVideo[] = [
     likes: null,
     comments: null,
     short: 'consent',
+  },
+  {
+    // Published on 02/10 at 23:00 São Paulo: after that day's reading.
+    id: 'fffffffffff',
+    title: 'Live da noite',
+    publishedAt: '2026-10-02T23:00:00-03:00',
+    duration: 'PT5M',
+    views: 0,
   },
   {
     id: 'aaaaaaaaaaa',
@@ -134,7 +142,9 @@ function ingest(
     key: KEY,
     channelId: CHANNEL,
     handle: HANDLE,
-    videos: videos.filter((video) => video.publishedAt < `${day}T23:59:59-03:00`),
+    videos: videos.filter(
+      (video) => Date.parse(video.publishedAt) <= Date.parse(`${day}T12:00:00-03:00`),
+    ),
     failOn: options.failOn ?? null,
   });
   return {
@@ -246,6 +256,25 @@ describe('the daily reading', () => {
     await db.delete(ingestRuns).where(eq(ingestRuns.id, failed!.id));
   });
 
+  it('stops at the deadline mid-run and writes nothing', async () => {
+    const before = await db.select().from(youtubeVideoDaily);
+    const { yt, run } = ingest('2026-09-11');
+    const realNow = Date.now.bind(Date);
+    // Two calls in, the clock jumps past the run's deadline.
+    const clock = vi
+      .spyOn(Date, 'now')
+      .mockImplementation(() => realNow() + (yt.calls.length >= 2 ? 3_600_000 : 0));
+    try {
+      expect(await run).toMatchObject({ status: 'failed', error: 'deadline', units: 2 });
+    } finally {
+      clock.mockRestore();
+    }
+    expect(yt.calls.map((call) => call.resource)).toEqual(['channels', 'playlistItems']);
+    expect(await db.select().from(youtubeVideoDaily)).toEqual(before);
+    const failed = await latestIngestRun(db, { kind: 'youtube' });
+    await db.delete(ingestRuns).where(eq(ingestRuns.id, failed!.id));
+  });
+
   it('keeps one row per video per day: a second reading the same day replaces the first', async () => {
     byId('aaaaaaaaaaa').views = 1500;
     byId('ccccccccccc').views = 400;
@@ -290,6 +319,7 @@ describe('the screen', () => {
     byId('bbbbbbbbbbb').views = 300;
     byId('ccccccccccc').views = 900;
     byId('eeeeeeeeeee').views = 100;
+    byId('fffffffffff').views = 50;
     const { yt, run } = ingest('2026-10-09');
     await run;
     // The new Short is asked; E's unclear answer is a week old, so it is asked again.
@@ -307,6 +337,7 @@ describe('the screen', () => {
       'ccccccccccc',
       'bbbbbbbbbbb',
       'eeeeeeeeeee',
+      'fffffffffff',
     ]);
     expect(find('bbbbbbbbbbb')).toMatchObject({ isShort: true, durationSeconds: 30, views: 300 });
     expect(find('eeeeeeeeeee')).toMatchObject({ isShort: null, likes: null, comments: null });
@@ -331,6 +362,12 @@ describe('the screen', () => {
     expect(find('eeeeeeeeeee').growth).toEqual({
       7: { value: 30, fromDay: '2026-10-02' },
       30: { value: null, gap: 'history_short', fromDay: '2026-09-09' },
+    });
+    // Published on 02/10 itself, after that day's reading: its views on 02/10
+    // are not known to be zero, so no figure.
+    expect(find('fffffffffff').growth).toEqual({
+      7: { value: null, gap: 'history_short', fromDay: '2026-10-02' },
+      30: { value: 50, fromDay: '2026-09-09' },
     });
   });
 
@@ -362,7 +399,7 @@ describe('the screen', () => {
     const noKey = await youtubeChannelView(db, { ...env, YOUTUBE_API_KEY: undefined });
     expect(noKey).toMatchObject({ gap: 'no_key', nextRunAt: null });
     // The data already read stays visible.
-    expect(noKey.videos).toHaveLength(4);
+    expect(noKey.videos).toHaveLength(5);
 
     await setLink('https://www.youtube.com/c/Wings');
     expect((await youtubeChannelView(db, env)).gap).toBe('bad_link');
@@ -394,7 +431,7 @@ describe('the screen', () => {
     const view = await youtubeChannelView(db, env, at('2026-10-10'));
     expect(view.lastRun).toMatchObject({ status: 'failed', error: 'key_invalid' });
     expect(view.history?.lastDay).toBe('2026-10-09');
-    expect(view.videos).toHaveLength(4);
+    expect(view.videos).toHaveLength(5);
   });
 });
 
@@ -421,5 +458,49 @@ describe('GET /marketing/youtube/videos', () => {
     expect(denied.statusCode).toBe(403);
     const anonymous = await app.inject({ method: 'GET', url: '/marketing/youtube/videos' });
     expect(anonymous.statusCode).toBe(401);
+  });
+});
+
+describe('a different channel', () => {
+  it('shows only the new channel once its first reading is in', async () => {
+    const other = 'UCzzzzzzzzzzzzzzzzzzzzzz';
+    await setLink(`https://www.youtube.com/channel/${other}`);
+    try {
+      const yt = fakeYoutube({
+        key: KEY,
+        channelId: other,
+        title: 'Outro canal',
+        videos: [
+          {
+            id: 'zzzzzzzzzzz',
+            title: 'Primeiro vídeo do outro canal',
+            publishedAt: '2026-01-10T15:00:00Z',
+            duration: 'PT4M',
+            views: 7,
+          },
+        ],
+      });
+      expect(
+        await runYoutubeIngestion({
+          db,
+          apiKey: KEY,
+          channelEnv: undefined,
+          trigger: 'manual_youtube',
+          fetchImpl: yt.fetch,
+          now: at('2026-10-11'),
+        }),
+      ).toMatchObject({ status: 'ok', videos: 1 });
+      const view = await youtubeChannelView(db, env, at('2026-10-11'));
+      expect(view.channel).toEqual({ id: other, title: 'Outro canal' });
+      expect(view.videos.map((video) => video.id)).toEqual(['zzzzzzzzzzz']);
+      expect(view.history).toEqual({ firstDay: '2026-10-11', lastDay: '2026-10-11', days: 1 });
+      expect(view.videos[0]?.growth[7]).toEqual({
+        value: null,
+        gap: 'history_short',
+        fromDay: '2026-10-04',
+      });
+    } finally {
+      await setLink(`https://www.youtube.com/${HANDLE}`);
+    }
   });
 });

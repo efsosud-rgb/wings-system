@@ -7,6 +7,7 @@ import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { fakeYoutube } from './fake-youtube-api.js';
 import {
   DEFAULT_YOUTUBE_CRON,
+  nextCheckAt,
   runYoutubeLocked,
   startYoutubeScheduler,
   youtubeCronOf,
@@ -69,6 +70,19 @@ describe('youtubeCronOf', () => {
     expect(DEFAULT_YOUTUBE_CRON).toBe('0 7 * * *');
     expect(youtubeCronOf('30 6 * * 1-5')).toBe('30 6 * * 1-5');
     expect(youtubeCronOf('every day')).toBe(DEFAULT_YOUTUBE_CRON);
+  });
+});
+
+describe('nextCheckAt', () => {
+  it('waits for the next slot after a run, and looks again soon when the slot was held back', () => {
+    const now = new Date('2026-10-09T10:00:00Z'); // 07:00 São Paulo
+    expect(new Date(nextCheckAt(DEFAULT_YOUTUBE_CRON, now, false)).toISOString()).toBe(
+      '2026-10-10T10:00:00.000Z',
+    );
+    // A manual run at 06:30 holds the 07:00 slot back; the day's reading still happens.
+    expect(new Date(nextCheckAt(DEFAULT_YOUTUBE_CRON, now, true)).toISOString()).toBe(
+      '2026-10-09T10:10:00.000Z',
+    );
   });
 });
 

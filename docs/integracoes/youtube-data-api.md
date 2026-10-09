@@ -68,9 +68,14 @@ Um canal com 80 vídeos gasta 1 + 2 + 2 = **5 unidades por dia**.
   leitura (qualquer resultado). Assim recupera um horário perdido com a API
   fora do ar, não repete depois de um restart e **não tenta de novo uma
   leitura que falhou antes do próximo horário** (a quota não vira laço).
-  Nunca duas leituras em menos de 55 minutos. Uma trava no banco
+  Nunca duas leituras em menos de 55 minutos; quando o horário fica preso
+  por isso (ex.: alguém rodou à mão às 06:30), a API olha de novo a cada 10
+  minutos até a leitura do dia sair. Uma trava no banco
   (`pg_try_advisory_xact_lock(7202603)`) evita duas réplicas ao mesmo tempo;
-  o CLI usa a mesma trava. Prazo de 10 minutos por leitura.
+  o CLI usa a mesma trava. A trava fica na conexão de uma transação aberta
+  durante a leitura, o que depende do padrão do Postgres
+  (`idle_in_transaction_session_timeout` desligado). Prazo de 10 minutos por
+  leitura.
 
 ### Short
 
@@ -78,11 +83,14 @@ A Data API **não diz** se um vídeo é Short. A regra:
 
 1. Vídeo com mais de 3 minutos **não é** Short (limite do YouTube desde
    15/10/2024) — sem pergunta nenhuma.
-2. Os outros: `HEAD https://www.youtube.com/shorts/<id>` sem seguir
-   redirecionamento. **200** = Short; redireciona para `/watch` = não é;
-   qualquer outra resposta (página de consentimento, erro) = **não sabido**
-   (`null`, "—" na tela), perguntado de novo no dia seguinte. Não usa a chave
-   nem a quota. Até 50 perguntas por leitura.
+2. Os outros: `GET https://www.youtube.com/shorts/<id>` sem seguir
+   redirecionamento. Redireciona para `/watch` = **não é**; responde **200 com
+   a página que se declara aquele Short** (`<link rel="canonical"
+href="https://www.youtube.com/shorts/<id>">`) = **é**; qualquer outra
+   resposta (página de consentimento ou de verificação, erro, 200 sem esse
+   canonical) = **não sabido** (`null`, "—" na tela), perguntado de novo no
+   dia seguinte. Não usa a chave nem a quota. Até 50 perguntas por leitura,
+   8 s cada, e para no prazo da leitura.
 
 ## Tabelas (migração 0082)
 
@@ -142,6 +150,7 @@ nenhuma chamada real foi feita. Conferir na primeira leitura real:
 - formato das respostas de `channels`, `playlistItems` e `videos` (campos lidos
   acima) e os `reason` de erro (`quotaExceeded`, `keyInvalid`, `accessNotConfigured`);
 - `forHandle` com o `@` (a documentação aceita com e sem);
-- o `HEAD` em `/shorts/<id>` a partir do servidor (país do servidor pode
-  mostrar página de consentimento — aí fica "não sabido");
+- o `GET` em `/shorts/<id>` a partir do servidor e o `rel="canonical"` da
+  página (país do servidor pode mostrar página de consentimento — aí fica
+  "não sabido");
 - se a chave tem restrição de API/IP no Google Cloud que bloqueie o servidor.

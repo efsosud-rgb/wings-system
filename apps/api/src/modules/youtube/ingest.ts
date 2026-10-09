@@ -235,13 +235,17 @@ async function classifyShorts(
     .limit(YOUTUBE_SHORTS_CHECKS_PER_RUN);
 
   let known = 0;
+  let asked = 0;
   for (const video of pending) {
+    // The run's deadline covers this step too; what is left waits for tomorrow.
+    if (client.pastDeadline) break;
     const isShort = await client.isShort(video.videoId);
+    asked += 1;
     if (isShort !== null) known += 1;
     await db
       .update(youtubeVideos)
       .set({ isShort, shortCheckedAt: now })
       .where(eq(youtubeVideos.id, video.id));
   }
-  return { asked: pending.length, byDuration: byDuration.length, known };
+  return { asked, byDuration: byDuration.length, known };
 }

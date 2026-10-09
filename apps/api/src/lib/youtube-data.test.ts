@@ -169,6 +169,7 @@ describe('YoutubeDataClient', () => {
         { ...base, id: 'short000001', short: true },
         { ...base, id: 'long0000001', short: false },
         { ...base, id: 'consent0001', short: 'consent' },
+        { ...base, id: 'botcheck001', short: 'bot' },
         { ...base, id: 'error000001', short: 'error' },
       ],
     });
@@ -176,8 +177,10 @@ describe('YoutubeDataClient', () => {
     expect(await client.isShort('short000001')).toBe(true);
     expect(await client.isShort('long0000001')).toBe(false);
     expect(await client.isShort('consent0001')).toBeNull();
+    // A 200 that is not the Short's own page (consent, bot check) is not taken for one.
+    expect(await client.isShort('botcheck001')).toBeNull();
     expect(await client.isShort('error000001')).toBeNull();
-    expect(yt.shortsAsked).toHaveLength(4);
+    expect(yt.shortsAsked).toHaveLength(5);
     expect(client.units).toBe(0);
   });
 });

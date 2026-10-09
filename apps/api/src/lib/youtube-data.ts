@@ -15,12 +15,16 @@ import type { YoutubeChannelRef } from '@wings/shared';
  *
  * The Shorts check is not the Data API: the API does not say whether a video
  * is a Short, so `isShort` asks youtube.com whether `/shorts/<id>` serves it
- * (200) or sends it to `/watch` (3xx). Any other answer is "not known".
+ * as a Short (its page, canonical on `/shorts/<id>`) or sends it to `/watch`
+ * (3xx). Any other answer is "not known".
  */
 
 const API_BASE = 'https://www.googleapis.com/youtube/v3';
 const SHORTS_BASE = 'https://www.youtube.com/shorts/';
 const DEFAULT_TIMEOUT_MS = 15_000;
+/** The Shorts page check is a courtesy request: short timeout, head of the page only. */
+const SHORTS_TIMEOUT_MS = 8_000;
+const SHORTS_PAGE_MAX_CHARS = 400_000;
 /** YouTube's own page size ceiling for playlistItems and videos. */
 export const YOUTUBE_PAGE_SIZE = 50;
 
@@ -226,24 +230,35 @@ export class YoutubeDataClient {
     return out;
   }
 
+  /** Whether the run's deadline has passed: no further request of any kind should be made. */
+  get pastDeadline(): boolean {
+    return this.config.deadlineAt !== undefined && Date.now() > this.config.deadlineAt;
+  }
+
   /**
-   * Whether youtube.com serves the video as a Short: 200 on `/shorts/<id>`
-   * is a Short, a redirect to `/watch` is not, anything else is null. Not a
-   * Data API call (no quota, no key sent).
+   * Whether youtube.com serves the video as a Short. `/shorts/<id>` answers
+   * a regular video with a redirect to `/watch` (false); it answers a Short
+   * with its page, which is taken as true only when the page names itself as
+   * that Short (`rel="canonical"` on `/shorts/<id>`), so a consent or
+   * bot-check page answered with 200 is not mistaken for one. Anything else
+   * is null. Not a Data API call (no quota, no key sent).
    */
   async isShort(videoId: string): Promise<boolean | null> {
     try {
       const response = await this.fetchImpl(`${SHORTS_BASE}${encodeURIComponent(videoId)}`, {
-        method: 'HEAD',
+        method: 'GET',
         redirect: 'manual',
-        signal: AbortSignal.timeout(this.timeoutMs),
+        headers: { accept: 'text/html' },
+        signal: AbortSignal.timeout(Math.min(this.timeoutMs, SHORTS_TIMEOUT_MS)),
       });
-      if (response.status === 200) return true;
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get('location') ?? '';
         return /^(https:\/\/(www\.)?youtube\.com)?\/watch\?/.test(location) ? false : null;
       }
-      return null;
+      if (response.status !== 200) return null;
+      const page = (await response.text()).slice(0, SHORTS_PAGE_MAX_CHARS);
+      const canonical = /<link[^>]+rel="canonical"[^>]+href="([^"]+)"/i.exec(page)?.[1];
+      return canonical === `https://www.youtube.com/shorts/${videoId}` ? true : null;
     } catch {
       return null;
     }

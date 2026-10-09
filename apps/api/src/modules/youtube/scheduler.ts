@@ -25,6 +25,18 @@ export const DEFAULT_YOUTUBE_CRON = '0 7 * * *';
 export const YOUTUBE_LOCK_KEY = 7_202_603;
 export const MIN_GAP_MS = 55 * 60_000;
 const TICK_MS = 60_000;
+/** When a slot was held back (another replica, or the minimum gap), look again this soon. */
+const RECHECK_MS = 10 * 60_000;
+
+/**
+ * When the scheduler looks next: the next slot after a run, but sooner when
+ * this slot was held back (busy elsewhere, or inside the minimum gap after a
+ * manual run), so the day's reading still happens once the gap is over.
+ */
+export function nextCheckAt(cron: string, now: Date, heldBack: boolean): number {
+  const slot = nextCronRun(cron, now, SAO_PAULO)?.getTime() ?? Number.POSITIVE_INFINITY;
+  return heldBack ? Math.min(slot, now.getTime() + RECHECK_MS) : slot;
+}
 
 /** The cron in force: the variable when it parses, else the default. */
 export function youtubeCronOf(cron: string | undefined): string {
@@ -52,6 +64,10 @@ export async function runYoutubeLocked(
   deps: YoutubeIngestDeps & { cron: string; force?: boolean },
 ): Promise<LockedRun> {
   const now = deps.now ?? new Date();
+  // The lock lives on this transaction's connection, idle while the run uses
+  // other connections, and is released when it ends. That relies on Postgres'
+  // default `idle_in_transaction_session_timeout` (0, off); a server that
+  // sets one shorter than a run would drop the lock mid-run.
   return deps.db.transaction(async (tx) => {
     const lock = await tx.execute<{ got: boolean }>(
       sql`select pg_try_advisory_xact_lock(${YOUTUBE_LOCK_KEY}) as got`,
@@ -79,9 +95,12 @@ export function startYoutubeScheduler(
     const now = new Date();
     if (busy || now.getTime() < checkAt) return;
     busy = true;
+    let heldBack = false;
     try {
       const result = await runYoutubeLocked({ ...deps, cron, trigger: 'scheduled_youtube', now });
-      if (!('ran' in result)) {
+      if ('ran' in result) {
+        heldBack = true;
+      } else {
         deps.log({
           job: 'youtube-ingest',
           status: result.status,
@@ -95,7 +114,7 @@ export function startYoutubeScheduler(
         error: error instanceof Error ? error.name : 'unknown',
       });
     } finally {
-      checkAt = nextCronRun(cron, now, SAO_PAULO)?.getTime() ?? Number.POSITIVE_INFINITY;
+      checkAt = nextCheckAt(cron, now, heldBack);
       busy = false;
     }
   };
