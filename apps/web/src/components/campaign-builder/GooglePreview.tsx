@@ -1,4 +1,4 @@
-import { parseYoutubeVideoId, youtubeThumbnailUrl } from '@wings/shared';
+import { parseYoutubeVideoRef, youtubeThumbnailUrl } from '@wings/shared';
 
 /**
  * Approximate renderings of the two Google ads, drawn by us.
@@ -30,13 +30,16 @@ function ApproximateNote() {
 export function YoutubePreview({
   videoUrl,
   headline,
+  businessName,
   destinationUrl,
 }: {
+  /** A link or the bare id. */
   videoUrl: string;
   headline: string;
+  businessName?: string;
   destinationUrl: string;
 }) {
-  const videoId = parseYoutubeVideoId(videoUrl);
+  const videoId = parseYoutubeVideoRef(videoUrl);
 
   if (!videoId) {
     return (
@@ -60,7 +63,9 @@ export function YoutubePreview({
           <div className="ad-preview-footer">
             <span>
               <strong>{headline || 'Título do anúncio'}</strong>
-              <small className="muted">Patrocinado · {addressOf(destinationUrl).host}</small>
+              <small className="muted">
+                Patrocinado · {businessName?.trim() || addressOf(destinationUrl).host}
+              </small>
             </span>
           </div>
         </div>

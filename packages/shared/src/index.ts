@@ -14,6 +14,7 @@ export * from './ads/insights.js';
 export * from './ads/lead-form.js';
 export * from './ads/simulation.js';
 export * from './ads/verdicts.js';
+export * from './ads/youtube-templates.js';
 export * from './auth/credentials.js';
 export * from './auth/schema.js';
 export * from './cpf.js';

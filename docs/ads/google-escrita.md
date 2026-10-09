@@ -23,9 +23,8 @@ O que ela oferece para vídeo no YouTube é **Demand Gen**, o mesmo tipo da
 
 Consequência que o aprovador precisa saber: em Demand Gen, **localização,
 idioma e o controle de canais (só YouTube) ficam no grupo de anúncios**, não na
-campanha. Como o grupo é da onda seguinte, a casca do YouTube é **campanha +
-orçamento**; região, idioma e "só YouTube" ficam gravados no rascunho aprovado
-e a tela de aprovação diz isso.
+campanha. Até 09/10/2026 a casca do YouTube era só campanha + orçamento; desde
+então a campanha nasce inteira (seção "YouTube (Demand Gen) completo", no fim).
 
 ## Regras — as mesmas da Meta
 
@@ -103,10 +102,9 @@ Um alcance só de raios não consulta `geo_target_constant`. O nome do ponto
 ficam na execução (`platform_response.radii`). Os limites do construtor (1 a
 80 km, até 5 pontos) são os da Meta e cabem com folga nos do Google (até 800 km).
 
-**YouTube (Demand Gen):** o rascunho aceita o raio, mas — como estados e
-cidades — ele **fica guardado e não é enviado**: Demand Gen recebe localização
-no grupo de anúncios, que o sistema ainda não cria. Quando criar, o tradutor é
-o mesmo.
+**YouTube (Demand Gen):** sem raio. Demand Gen recebe a localização no grupo
+de anúncios, e o critério de grupo da v22 só tem local e idioma: o construtor
+desliga o mapa ("Esta plataforma não aceita raio") e o esquema recusa (09/10/2026).
 
 TikTok e LinkedIn já estão no contrato (`PLATFORM_REACH` em
 `packages/shared`): não aceitam raio, o construtor mostra o mapa desabilitado
@@ -451,3 +449,100 @@ criadas; +7 negativas (57). Ampla `como franquear minha empresa` (termo
 "franquia") mantida em observação. Verba R$ 100, CPC R$ 10 e os 6 estados
 inalterados. Lição registrada: em Pesquisa B2B de nicho, parceiros de
 pesquisa + frase genérica é a combinação que queima a verba.
+
+## YouTube (Demand Gen) completo (09/10/2026)
+
+Pedido do Eric (09/10, 11:28): o construtor cria a campanha Demand Gen inteira,
+sem montar à mão no Google Ads. Exercitado só contra a API roteirizada
+(`fake-google-api.ts`); **nenhuma chamada ao Google Ads real** nesta onda, nem
+`validateOnly`. Regra permanente do Eric (09/10, 11:59): nada sobe sozinho — a
+criação só existe como pedido na fila, aprovado por uma pessoa e executado com
+o clique em Executar.
+
+### O rascunho (`youtubeDraftSchema`, `packages/shared`)
+
+- **Vídeos:** 1 a 5, por link ou id do YouTube, sem repetir.
+- **Textos:** 1 a 5 títulos (40), títulos longos (90) e descrições (90); nome da
+  empresa (25). As mesmas regras de conformidade de qualquer texto.
+- **Logo:** um arquivo do Drive (`logoFileId`), PNG ou JPEG quadrado (±1 %), de
+  128 px ou mais, até 5 MB.
+- **Lance:** Maximizar conversões para **uma** ação de conversão escolhida numa
+  lista lida da conta (`conversionAction {id, name}`), com CPA alvo opcional
+  (R$ 1 a R$ 10.000). Objetivo "Tráfego" é recusado no YouTube.
+- **Público:** idades nas faixas do Google (início 18/25/35/45/55/65, fim
+  24/34/44/54/64 ou "65 ou mais"; padrão 25 a 65+), idade desconhecida fora por
+  padrão; sinais opcionais = listas e segmentos personalizados da conta.
+- **Canais:** in-stream, in-feed e Shorts (ao menos um). Discover, Gmail e
+  Display **sempre** desligados.
+- **Alcance:** estados e cidades; raio recusado.
+- **Modelo "YouTube · Formatação · Out26"** (`YOUTUBE_FORMATACAO_OUT26`): R$ 50/dia,
+  7 dias a partir de hoje, "RD form conversion" (casada pelo nome na lista da
+  conta), `https://wingssystem.online/lp/formatacao`, 25–65+, DF/GO/RJ/SC, os três
+  canais, vídeo da cafeteria (`34zzJBPHlYg`) até o do Jimmy Ogro estar no canal
+  (análise de 09/10, item 3.2). A logo é sempre escolhida pela pessoa.
+
+### O que o servidor confere no pedido (`POST /ads/campaign-requests`)
+
+- **Vídeos** pela consulta pública do YouTube (oEmbed, sem chave): 200 = público
+  ou não listado (a consulta não distingue, e o Google aceita os dois); 401/403 =
+  privado ou sem incorporação → 400 `video_unavailable`; 400/404 = não existe →
+  400; YouTube sem resposta → 503 `video_check_unavailable` (nunca um "sim").
+- **Logo** pelo Drive de quem pede (`driveAccessOf` + `fileFor`): arquivo de
+  outro departamento é "não encontrado" (`logo_not_found`); tipo pelo conteúdo
+  (`readImageHeader`), quadrada, tamanho mínimo e máximo (`logo_refused`).
+- Depois, o caminho de sempre: `reserveCampaignCreation` (período aberto,
+  tetos, trava) → `gateChange` → aprovação → Executar.
+
+Rotas de leitura do construtor (`ads.request`): `GET /ads/google/demand-gen-options`
+(conversões ativas, listas abertas e segmentos ativos da conta, sempre com o
+cliente leitor) e `POST /ads/youtube/videos/check` (de 1 a 5 vídeos).
+
+### A escrita: uma só, atômica, tudo pausado
+
+O executor lê a logo do Drive **na hora** (`withDemandGenLogo`, também no
+`preflightChange` e no `ops-cli preflight-google`); logo sumida ou fora da regra
+é recusa `media_missing` com **nada enviado**. Depois, como na Pesquisa,
+`validateOnly` e então o mesmo `mutate`:
+
+1. `campaignBudget` (-1) · 2. `campaign` (-2, `DEMAND_GEN`, `PAUSED`,
+   `maximizeConversions {targetCpaMicros?}`, `demandGenCampaignSettings.upgradedTargeting: true`,
+   `finalUrlSuffix` próprio) · 3. meta de conversão: a `customConversionGoal` da
+   conta que tem só aquela ação é reutilizada, ou uma nova (-5, "Wings System ·
+   <ação> (<id>)") é criada; `conversionGoalCampaignConfig` da campanha passa a
+   `goalConfigLevel: CAMPAIGN` com essa meta · 4. recursos: logo (-10,
+   `imageAsset.data`) e um `youtubeVideoAsset` por vídeo (-11…) · 5. `audience`
+   (-4): idade (`ageRanges [{minAge, maxAge?}]`, `includeUndetermined`) e os
+   sinais (`audienceSegments`) — omitido quando não restringe nada · 6. `adGroup`
+   (-3, `PAUSED`, `demandGenAdGroupSettings.channelControls.selectedChannels`,
+   `audienceSetting.useAudienceGrouped: true`; com sinais, `optimizedTargetingEnabled`
+   e `excludeDemographicExpansion`) · 7. critérios do grupo: locais, português e
+   o público · 8. `adGroupAd` (`PAUSED`, `demandGenVideoResponsiveAd` com vídeos,
+   textos, logo e `businessName`; `finalUrls` sem UTM).
+
+Grupo e anúncio viram passos (`ad_group`, `ad`): `resume_campaign` liga os três,
+como na Pesquisa. A ação de conversão é relida antes (`google_conversion_unavailable`
+se não estiver ativa); o rascunho antigo de YouTube (só link e título) é recusado
+(`google_demand_gen_spec_missing`).
+
+**UTMs:** a campanha grava o sufixo `utm_source=youtube&utm_medium=cpc&utm_campaign={campaignid}&utm_content={creative}`
+(`YOUTUBE_CAMPAIGN_URL_SUFFIX`), que substitui o da conta (`utm_source=google`).
+O `utm_campaign` continua sendo o id da campanha, que é o que "Leads das
+Campanhas" lê; o lead do YouTube é atribuído ao Google pelo `gclid`.
+
+### Não verificado — o primeiro `validateOnly` (com ordem do Eric) responde
+
+- [ ] Todos os nomes de campo acima: conferidos nas definições oficiais da v22
+      (googleapis, commit anterior à remoção da v22 em 07/10/2026), nunca enviados.
+- [ ] `conversionGoalCampaignConfigs/-2` com id temporário no mesmo `mutate`
+      (o exemplo do Google faz o mesmo com `campaignConversionGoals` na P-Max).
+- [ ] `{creative}` no sufixo de uma Demand Gen; se o Google preenche o id do anúncio.
+- [ ] Nome do público repetido (`<campanha> · público · <início>`) e da meta.
+- [ ] Orçamento mínimo de Demand Gen e a regra "verba ≥ 15 × CPA alvo".
+- [ ] A consulta oEmbed para vídeo não listado e para vídeo com incorporação
+      desligada (tratado como privado).
+- [ ] **A v22 sai do ar em outubro de 2026** (tabela do Google, "tentative"; as
+      definições já foram apagadas em 07/10). Quando sair, leitura, Cockpit e
+      criação param juntos: a troca para v23+ é a próxima onda do Google.
+- [ ] O período de verba do mês precisa estar aberto (Integrações → teto da
+      conta Google); sem ele o pedido volta `period_not_open`.
+

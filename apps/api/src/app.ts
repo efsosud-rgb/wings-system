@@ -95,6 +95,8 @@ declare module 'fastify' {
       captchaFetch?: typeof fetch;
       /** Set only by tests, so no test ever reaches Google Agenda or Gmail. */
       googleFetch?: typeof fetch;
+      /** Set only by tests, so no test ever reaches YouTube's public video check. */
+      youtubeFetch?: typeof fetch;
       storage?: ObjectStorage;
       /** Set only by tests, so a screen that reasons about "today" can be pinned to a day. */
       now?: () => Date;
@@ -132,6 +134,8 @@ export async function buildApp(deps: {
   whatsappFetch?: typeof fetch;
   /** Overridable so tests play Google Agenda and Gmail themselves. */
   googleFetch?: typeof fetch;
+  /** Overridable so tests answer YouTube's public video check themselves. */
+  youtubeFetch?: typeof fetch;
   storage?: ObjectStorage;
   /** Overridable so tests pin the dashboard's "today". */
   now?: () => Date;
@@ -204,6 +208,7 @@ export async function buildApp(deps: {
     captchaFetch: deps.captchaFetch,
     whatsappFetch: deps.whatsappFetch,
     googleFetch: deps.googleFetch,
+    youtubeFetch: deps.youtubeFetch,
     storage: deps.storage,
     now: deps.now,
     mailer: deps.mailer ?? createMailer(deps.env, { info: (msg) => app.log.info(msg) }),

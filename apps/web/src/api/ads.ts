@@ -11,6 +11,7 @@ import {
   type CampaignDraft,
   type ChangeSimulation,
   type CockpitSnapshot,
+  type DemandGenOptions,
   type SpendCapReset,
   type CreativeUpload,
   type MetaIdentities,
@@ -26,6 +27,7 @@ import {
   type SiteStatus,
   type SiteTerms,
   type VideoUpload,
+  type YoutubeVideoCheck,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
@@ -368,6 +370,28 @@ export function useAudienceProfile() {
 }
 
 /** Campaigns saved in the builder to come back to. Loading one fills the form only. */
+/**
+ * What a YouTube campaign can bid for and use as signals, read from the
+ * Google Ads account (never written). Read once per builder visit.
+ */
+export function useDemandGenOptions(enabled: boolean) {
+  return useQuery({
+    queryKey: ['ads', 'demand-gen-options'],
+    enabled,
+    staleTime: 5 * 60_000,
+    retry: false,
+    queryFn: () => api.get<DemandGenOptions>('/ads/google/demand-gen-options'),
+  });
+}
+
+/** Whether YouTube videos can go in an ad: public or unlisted, one answer each. */
+export function useCheckYoutubeVideos() {
+  return useMutation({
+    mutationFn: (videos: string[]) =>
+      api.post<{ videos: YoutubeVideoCheck[] }>('/ads/youtube/videos/check', { videos }),
+  });
+}
+
 export function useSavedDrafts(enabled: boolean) {
   return useQuery({
     queryKey: ['ads', 'saved-drafts'],

@@ -28,6 +28,10 @@ import { activeAdAccounts } from './metrics.js';
 import { nextPendingInGroup, pendingGroups } from './batches.js';
 import { stepsOfExecution } from './ad-tree.js';
 import { executeApprovedChange, preflightChange } from './executor.js';
+import { checkYoutubeVideos, readDemandGenLogo, videoRefusal } from './demand-gen.js';
+import { driveAccessOf } from '../drive/access.js';
+import { storageOf } from '../../lib/storage/index.js';
+import { GoogleAdsPlatformClient } from './platform/google-ads-client.js';
 import { createApprovalNotifier } from './notifiers/factory.js';
 import { requestCampaignChange } from './ops.js';
 import { createPlatformClient } from './platform/factory.js';
@@ -506,6 +510,33 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
+      // YouTube: every video exists on YouTube and is not private, and the
+      // logo is a Drive file this person sees, in the shape Google takes.
+      // Checked here so a request never waits on approval to fail.
+      const youtube = parsed.data.platform === 'youtube' ? parsed.data.youtube : undefined;
+      if (youtube) {
+        const videos = await checkYoutubeVideos(app.wings.youtubeFetch ?? fetch, youtube.videos);
+        const refusal = videoRefusal(videos);
+        if (refusal) {
+          return reply
+            .status(refusal.code === 'video_check_unavailable' ? 503 : 400)
+            .send({ error: refusal.code, message: refusal.message, path: ['youtube', 'videos'] });
+        }
+        const access = driveAccessOf(request.session.actor);
+        const logo = access
+          ? await readDemandGenLogo(db, storageOf(app.wings), youtube.logoFileId, access)
+          : ({
+              ok: false,
+              code: 'logo_not_found',
+              message: 'A logo não foi encontrada no Drive. Escolha de novo.',
+            } as const);
+        if (!logo.ok) {
+          return reply
+            .status(logo.code === 'storage_unavailable' ? 503 : 400)
+            .send({ error: logo.code, message: logo.message, path: ['youtube', 'logoFileId'] });
+        }
+      }
+
       // The account the studio works on: for Meta, the one the cockpit shows;
       // for Google Pesquisa and YouTube, the Google Ads account.
       const accountPlatform = AD_ACCOUNT_PLATFORM[parsed.data.platform];
@@ -543,6 +574,71 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         changeRequestId: reserved.value.changeRequestId,
         exposureDeltaCents: reserved.value.exposureDeltaCents,
       });
+    },
+  );
+
+  /**
+   * What the builder offers for a YouTube campaign, read from the Google Ads
+   * account: its conversion actions (the one "RD form conversion" is picked
+   * by default on screen) and its audience lists and custom segments. Always
+   * a reader; nothing is written.
+   */
+  app.get(
+    '/ads/google/demand-gen-options',
+    { preHandler: app.requirePermission('ads.request') },
+    async (request, reply) => {
+      const [account] = await activeAdAccounts(db, 'google');
+      if (!account) {
+        return reply.status(409).send({
+          error: 'account_not_found',
+          message: 'Nenhuma conta Google Ads ativa neste ambiente.',
+        });
+      }
+      const { client } = createPlatformClient(
+        { ...env, ADS_WRITES_ENABLED: false },
+        account,
+        platformFetch,
+      );
+      if (!(client instanceof GoogleAdsPlatformClient)) {
+        return reply.status(503).send({
+          error: 'no_credentials',
+          message: 'Sem credenciais de leitura do Google Ads neste ambiente.',
+        });
+      }
+      try {
+        return reply.send(await client.demandGenOptions());
+      } catch (error) {
+        request.log.warn(
+          { err: error instanceof Error ? error.name : 'unknown' },
+          'demand gen options read failed',
+        );
+        return reply.status(502).send({
+          error: 'platform_unavailable',
+          message: 'O Google Ads não respondeu. Tente de novo em instantes.',
+        });
+      }
+    },
+  );
+
+  /**
+   * Whether YouTube videos can go in an ad: they exist and are not private
+   * (public or unlisted). YouTube's public check, no key; the builder shows
+   * the answer next to each link. The same check runs again on the request.
+   */
+  app.post(
+    '/ads/youtube/videos/check',
+    { preHandler: app.requirePermission('ads.request') },
+    async (request, reply) => {
+      const body = z
+        .object({ videos: z.array(z.string().trim().max(300)).min(1).max(5) })
+        .safeParse(request.body);
+      if (!body.success) {
+        return reply
+          .status(400)
+          .send({ error: 'invalid_request', message: 'Informe de 1 a 5 vídeos.' });
+      }
+      const videos = await checkYoutubeVideos(app.wings.youtubeFetch ?? fetch, body.data.videos);
+      return reply.send({ videos });
     },
   );
 
@@ -687,7 +783,9 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         });
       }
 
-      const result = await preflightChange(db, client, approval.changeRequestId);
+      const result = await preflightChange(db, client, approval.changeRequestId, {
+        storage: storageOf(app.wings),
+      });
       await writeAudit(db, {
         actorEmployeeId: request.session.actor.employeeId,
         action: 'ads.preflight',
@@ -762,6 +860,7 @@ export const adsRoutes: FastifyPluginAsync = async (app) => {
         actorEmployeeId: request.session.actor.employeeId,
         metaPixelId: env.META_PIXEL_ID,
         videoDir: env.CREATIVE_VIDEO_DIR,
+        storage: storageOf(app.wings),
       });
 
       if (result.outcome === 'applied') return reply.send({ ok: true, outcome: 'applied' });

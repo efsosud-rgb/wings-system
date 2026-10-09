@@ -282,12 +282,11 @@ export interface CreateCampaignSpec {
 }
 
 /**
- * What a Google campaign shell needs beyond the common fields.
+ * What a Google campaign needs beyond the common fields.
  *
  * Search takes its locations (radii included) and language on the campaign.
- * Demand Gen takes them on the ad group, which this system does not create yet
- * — so for Demand Gen they stay in the approved draft and nothing about them
- * is sent.
+ * Demand Gen takes locations, language and ages on its ad group (upgraded
+ * targeting, the default since v19), and no radius at all.
  */
 export interface GoogleCampaignSpec {
   channel: 'SEARCH' | 'DEMAND_GEN';
@@ -304,6 +303,39 @@ export interface GoogleCampaignSpec {
   reach: PlatformReach;
   /** Search only: the one ad group, its keywords and its responsive search ad. */
   search?: GoogleSearchSpec;
+  /** Demand Gen only: the one ad group restricted to YouTube and its video ad. */
+  demandGen?: GoogleDemandGenSpec;
+}
+
+export interface GoogleDemandGenSpec {
+  adGroupName: string;
+  /** Which YouTube surfaces; Discover, Gmail and Display are always off. */
+  channels: { youtubeInStream: boolean; youtubeInFeed: boolean; youtubeShorts: boolean };
+  /** Google's brackets: 18/25/35/45/55/65 to 24/34/44/54/64, or no end (null). */
+  ageMin: number;
+  ageMax: number | null;
+  includeUnknownAge: boolean;
+  /** Signals from the account: its audience lists and custom segments, by id. */
+  audienceSegments: { kind: 'user_list' | 'custom_audience'; id: string }[];
+  /** The one conversion action the campaign bids for. */
+  conversionActionId: string;
+  conversionActionName: string;
+  /** Maximize conversions at this target, when set. */
+  targetCpaCents?: Cents;
+  /** 1 to 5 YouTube video ids. */
+  videoIds: string[];
+  headlines: string[];
+  longHeadlines: string[];
+  descriptions: string[];
+  businessName: string;
+  /**
+   * The logo, a Drive file. `data` (base64) is filled by the executor from
+   * storage right before the write; a spec without it cannot be planned.
+   */
+  logo: { driveFileId: string; data?: string };
+  /** The destination without UTMs: the campaign's suffix carries them. */
+  finalUrl: string;
+  finalUrlSuffix: string;
 }
 
 export interface GoogleSearchSpec {

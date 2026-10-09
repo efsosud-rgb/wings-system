@@ -1,3 +1,4 @@
+import type { DemandGenOptions } from '@wings/shared';
 import { GOOGLE_ADS_API_VERSION, GoogleAdsReadClient, centsFromMicros } from './google-client.js';
 import type { Cents } from './money.js';
 import type {
@@ -8,6 +9,7 @@ import type {
   ConversionSource,
   CreateCampaignSpec,
   CreatedObject,
+  GoogleDemandGenSpec,
   GoogleSearchSpec,
   InsightRow,
   MetricsLevel,
@@ -31,10 +33,12 @@ import type {
  * a Google account be reconciled — and an account that is never reconciled can
  * never be written to: the executor's dead-man switch refuses it.
  *
- * Writing (the write client only) is four things: creating a Search campaign
- * with everything it needs to deliver — budget, locations, language,
- * negatives, one ad group, its keywords and one responsive search ad — in ONE
- * atomic mutate, all of it PAUSED; and, on a campaign that exists, changing
+ * Writing (the write client only) is four things: creating a Search or a
+ * Demand Gen campaign with everything it needs to deliver — budget, places,
+ * language, one ad group and one ad (keywords and a responsive search ad, or
+ * YouTube videos in a video responsive ad, with its audience and the
+ * conversion it bids for) — in ONE atomic mutate, all of it PAUSED; and, on a
+ * campaign that exists, changing
  * its daily budget, pausing it and resuming it. Nothing else: no delete, no
  * edit of an ad group or an ad. What the client cannot express, no bug and no
  * agent can do.
@@ -993,10 +997,35 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
         message: 'Rascunho de Pesquisa sem grupo de anúncios, palavras-chave ou anúncio.',
       };
     }
+    const demandGen = google.channel === 'DEMAND_GEN' ? google.demandGen : undefined;
+    if (google.channel === 'DEMAND_GEN') {
+      if (!demandGen) {
+        return {
+          ok: false,
+          code: 'google_demand_gen_spec_missing',
+          message:
+            'Rascunho de YouTube sem grupo de anúncios e anúncio de vídeo: monte de novo no construtor.',
+        };
+      }
+      if (!demandGen.logo.data) {
+        return {
+          ok: false,
+          code: 'google_logo_missing',
+          message: 'A logo do anúncio não foi lida do Drive.',
+        };
+      }
+      if (google.reach.customLocations.length > 0) {
+        return {
+          ok: false,
+          code: 'google_radius_not_supported',
+          message: 'No YouTube (Demand Gen) o alcance é por estados e cidades, sem raio.',
+        };
+      }
+    }
 
     // Reads first. A location Google cannot place is a refusal with nothing sent.
     let locations: ResolvedLocation[] = [];
-    if (google.channel === 'SEARCH') {
+    if (google.channel === 'SEARCH' || demandGen) {
       try {
         locations = await this.resolveLocations(google.reach);
       } catch (error) {
@@ -1005,6 +1034,15 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
         }
         throw error;
       }
+    }
+
+    // The conversion the campaign bids for must be live in the account; the
+    // account's own custom goal holding just it is reused, or one is made.
+    let goal: ConversionGoalChoice | null = null;
+    if (demandGen) {
+      const found = await this.conversionGoalFor(demandGen.conversionActionId);
+      if (!found.ok) return found;
+      goal = found.goal;
     }
 
     const budgetName = `${this.customer}/campaignBudgets/-1`;
@@ -1035,6 +1073,13 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
       campaign.geoTargetTypeSetting = {
         positiveGeoTargetType: google.search?.locationMode ?? 'PRESENCE',
       };
+    }
+    if (demandGen) {
+      // Places, language and ages on the ad group (upgraded targeting, also
+      // Google's default), and the UTMs of a YouTube click on the campaign's
+      // own suffix, which replaces the account's.
+      campaign.demandGenCampaignSettings = { upgradedTargeting: true };
+      campaign.finalUrlSuffix = demandGen.finalUrlSuffix;
     }
 
     const operations: Record<string, unknown>[] = [
@@ -1076,6 +1121,21 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
       labels.push(...tree.labels);
     }
 
+    if (demandGen && goal) {
+      const tree = googleDemandGenOperations({
+        customer: this.customer,
+        campaignName: spec.name,
+        campaignResource: campaignName,
+        adGroupResource: adGroupName,
+        startDate: google.startDate,
+        locations,
+        goal,
+        spec: demandGen,
+      });
+      operations.push(...tree.operations);
+      labels.push(...tree.labels);
+    }
+
     return {
       ok: true,
       operations,
@@ -1091,7 +1151,34 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
                 radiusKm,
               }))
             : [],
-        language: google.channel === 'SEARCH' ? PORTUGUESE_LANGUAGE_CONSTANT : null,
+        language: google.channel === 'SEARCH' || demandGen ? PORTUGUESE_LANGUAGE_CONSTANT : null,
+        ...(demandGen && goal
+          ? {
+              demandGen: {
+                adGroup: demandGen.adGroupName,
+                channels: demandGen.channels,
+                ages: {
+                  min: demandGen.ageMin,
+                  max: demandGen.ageMax,
+                  unknown: demandGen.includeUnknownAge,
+                },
+                audienceSegments: demandGen.audienceSegments,
+                conversionAction: {
+                  id: demandGen.conversionActionId,
+                  name: demandGen.conversionActionName,
+                },
+                conversionGoal: goal.existing ?? 'criada nesta escrita',
+                targetCpaCents: demandGen.targetCpaCents ?? null,
+                videos: demandGen.videoIds,
+                headlines: demandGen.headlines.length,
+                longHeadlines: demandGen.longHeadlines.length,
+                descriptions: demandGen.descriptions.length,
+                logoFileId: demandGen.logo.driveFileId,
+                finalUrl: demandGen.finalUrl,
+                finalUrlSuffix: demandGen.finalUrlSuffix,
+              },
+            }
+          : {}),
         ...(google.search
           ? {
               adGroup: google.search.adGroupName,
@@ -1106,6 +1193,150 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
             }
           : {}),
       },
+    };
+  }
+
+  /**
+   * The conversion action a Demand Gen campaign bids for, read from the
+   * account, and the custom goal that holds exactly it: the account's own,
+   * reused when there is one, or one to create in the same write (named after
+   * the action, so the next campaign finds it).
+   */
+  private async conversionGoalFor(
+    conversionActionId: string,
+  ): Promise<
+    { ok: true; goal: ConversionGoalChoice } | { ok: false; code: string; message: string }
+  > {
+    if (!/^\d+$/.test(conversionActionId)) {
+      return {
+        ok: false,
+        code: 'google_conversion_unavailable',
+        message: 'Ação de conversão inválida.',
+      };
+    }
+    const actions = await this.reader.search<{
+      conversionAction?: { id?: string; name?: string; status?: string; resourceName?: string };
+    }>(`
+      SELECT conversion_action.resource_name, conversion_action.id, conversion_action.name,
+             conversion_action.status
+        FROM conversion_action
+       WHERE conversion_action.id = ${conversionActionId}
+    `);
+    const action = actions
+      .map((row) => row.conversionAction)
+      .find((item) => String(item?.id ?? '') === conversionActionId);
+    if (!action || action.status !== 'ENABLED') {
+      return {
+        ok: false,
+        code: 'google_conversion_unavailable',
+        message:
+          'A ação de conversão escolhida não está ativa na conta do Google. Escolha outra no construtor.',
+      };
+    }
+    const actionResource = `${this.customer}/conversionActions/${conversionActionId}`;
+    const goals = await this.reader.search<{
+      customConversionGoal?: {
+        resourceName?: string;
+        conversionActions?: string[];
+        status?: string;
+      };
+    }>(`
+      SELECT custom_conversion_goal.resource_name, custom_conversion_goal.name,
+             custom_conversion_goal.conversion_actions, custom_conversion_goal.status
+        FROM custom_conversion_goal
+    `);
+    const existing = goals
+      .map((row) => row.customConversionGoal)
+      .find(
+        (item) =>
+          item?.status === 'ENABLED' &&
+          item.conversionActions?.length === 1 &&
+          item.conversionActions[0] === actionResource,
+      );
+    return {
+      ok: true,
+      goal: {
+        actionResource,
+        actionName: action.name ?? conversionActionId,
+        actionId: conversionActionId,
+        existing: existing?.resourceName ?? null,
+      },
+    };
+  }
+
+  /**
+   * What the builder offers for a YouTube campaign, read from the account:
+   * the conversion actions that can be bid for, and the audience lists and
+   * custom segments that can be signals. Reads only. NOT verified live.
+   */
+  async demandGenOptions(): Promise<DemandGenOptions> {
+    const [actions, lists, customs] = await Promise.all([
+      this.reader.search<{
+        conversionAction?: {
+          id?: string;
+          name?: string;
+          status?: string;
+          category?: string;
+          primaryForGoal?: boolean;
+        };
+      }>(`
+        SELECT conversion_action.id, conversion_action.name, conversion_action.status,
+               conversion_action.category, conversion_action.primary_for_goal
+          FROM conversion_action
+         WHERE conversion_action.status = 'ENABLED'
+      `),
+      this.reader.search<{ userList?: { id?: string; name?: string } }>(`
+        SELECT user_list.id, user_list.name
+          FROM user_list
+         WHERE user_list.membership_status = 'OPEN'
+      `),
+      this.reader.search<{ customAudience?: { id?: string; name?: string } }>(`
+        SELECT custom_audience.id, custom_audience.name
+          FROM custom_audience
+         WHERE custom_audience.status = 'ENABLED'
+      `),
+    ]);
+    const byName = <T extends { name: string }>(list: T[]) =>
+      list.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+    return {
+      conversionActions: byName(
+        actions.flatMap((row) => {
+          const action = row.conversionAction;
+          if (!action?.id || action.status !== 'ENABLED') return [];
+          return [
+            {
+              id: String(action.id),
+              name: action.name ?? String(action.id),
+              category: action.category ?? null,
+              primary: action.primaryForGoal === true,
+            },
+          ];
+        }),
+      ),
+      audienceSegments: byName([
+        ...lists.flatMap((row) =>
+          row.userList?.id
+            ? [
+                {
+                  kind: 'user_list' as const,
+                  id: String(row.userList.id),
+                  name: row.userList.name ?? String(row.userList.id),
+                },
+              ]
+            : [],
+        ),
+        ...customs.flatMap((row) =>
+          row.customAudience?.id
+            ? [
+                {
+                  kind: 'custom_audience' as const,
+                  id: String(row.customAudience.id),
+                  name: row.customAudience.name ?? String(row.customAudience.id),
+                },
+              ]
+            : [],
+        ),
+      ]),
     };
   }
 
@@ -1289,8 +1520,24 @@ export class GoogleAdsWriteClient extends GoogleAdsPlatformClient {
 }
 
 interface PlanLabel {
-  kind: 'budget' | 'campaign' | 'criterion' | CreatedObject['kind'];
+  kind:
+    | 'budget'
+    | 'campaign'
+    | 'criterion'
+    | 'asset'
+    | 'audience'
+    | 'conversion_goal'
+    | CreatedObject['kind'];
   label: string;
+}
+
+/** The conversion a Demand Gen campaign bids for, and the custom goal holding it. */
+interface ConversionGoalChoice {
+  actionResource: string;
+  actionId: string;
+  actionName: string;
+  /** The account's custom goal with exactly this action, or null: one is created. */
+  existing: string | null;
 }
 
 type Plan =
@@ -1318,6 +1565,12 @@ function labelOf(label: PlanLabel): string {
  * conversions); Demand Gen keeps the objective-derived choice.
  */
 function googleBidding(google: NonNullable<CreateCampaignSpec['google']>): Record<string, unknown> {
+  // Demand Gen bids Maximize conversions for the chosen conversion, at a
+  // target cost per conversion when the draft sets one.
+  if (google.channel === 'DEMAND_GEN' && google.demandGen) {
+    const target = google.demandGen.targetCpaCents;
+    return { maximizeConversions: target ? { targetCpaMicros: microsFromCents(target) } : {} };
+  }
   const bidding = google.search?.bidding ?? google.bidding;
   if (bidding === 'MAXIMIZE_CLICKS') {
     const ceiling = google.search?.maxCpcCents;
@@ -1405,6 +1658,211 @@ export function googleSearchOperations(
     },
   });
   labels.push({ kind: 'ad', label: 'Anúncio responsivo de pesquisa' });
+
+  return { operations, labels };
+}
+
+/**
+ * A Demand Gen campaign's tree, after its budget and campaign (temporary ids
+ * -1 and -2), in the order Google needs each id to exist before it is used:
+ *
+ * 1. the conversion it bids for — the account's custom goal holding just that
+ *    action, or a new one (-5) — set on the campaign's goal config, so the
+ *    campaign optimises for it alone and not for the account's other goals;
+ * 2. the assets: the logo (-10) and one per YouTube video (-11…);
+ * 3. the audience (-4): ages as Google's brackets, plus the optional signals
+ *    (the account's lists and custom segments) — left out when it would
+ *    restrict nothing;
+ * 4. the ad group (-3), PAUSED, on YouTube only: in-stream, in-feed and Shorts
+ *    as the draft says; Discover, Gmail and Display always off. With signals,
+ *    optimized targeting may look beyond them, but never beyond the ages;
+ * 5. its places, language and audience, as ad group criteria;
+ * 6. the video responsive ad, PAUSED, with the destination without UTMs.
+ */
+export function googleDemandGenOperations(input: {
+  customer: string;
+  campaignName: string;
+  campaignResource: string;
+  adGroupResource: string;
+  startDate: string;
+  locations: Pick<ResolvedLocation, 'resourceName'>[];
+  goal: ConversionGoalChoice;
+  spec: GoogleDemandGenSpec;
+}): { operations: Record<string, unknown>[]; labels: PlanLabel[] } {
+  const { customer, spec, goal } = input;
+  const operations: Record<string, unknown>[] = [];
+  const labels: PlanLabel[] = [];
+  const campaignId = input.campaignResource.slice(input.campaignResource.lastIndexOf('/') + 1);
+
+  let goalResource = goal.existing;
+  if (!goalResource) {
+    goalResource = `${customer}/customConversionGoals/-5`;
+    operations.push({
+      customConversionGoalOperation: {
+        create: {
+          resourceName: goalResource,
+          name: `Wings System · ${goal.actionName} (${goal.actionId})`,
+          conversionActions: [goal.actionResource],
+          status: 'ENABLED',
+        },
+      },
+    });
+    labels.push({ kind: 'conversion_goal', label: `Meta de conversão "${goal.actionName}"` });
+  }
+  operations.push({
+    conversionGoalCampaignConfigOperation: {
+      update: {
+        resourceName: `${customer}/conversionGoalCampaignConfigs/${campaignId}`,
+        goalConfigLevel: 'CAMPAIGN',
+        customConversionGoal: goalResource,
+      },
+      updateMask: 'goal_config_level,custom_conversion_goal',
+    },
+  });
+  labels.push({ kind: 'conversion_goal', label: `Lance para "${goal.actionName}"` });
+
+  const logoResource = `${customer}/assets/-10`;
+  operations.push({
+    assetOperation: {
+      create: {
+        resourceName: logoResource,
+        name: `Logo · ${input.campaignName}`,
+        imageAsset: { data: spec.logo.data },
+      },
+    },
+  });
+  labels.push({ kind: 'asset', label: 'Logo' });
+  const videoResources = spec.videoIds.map((videoId, index) => {
+    const resourceName = `${customer}/assets/-${11 + index}`;
+    operations.push({
+      assetOperation: {
+        create: {
+          resourceName,
+          name: `YouTube ${videoId}`,
+          youtubeVideoAsset: { youtubeVideoId: videoId },
+        },
+      },
+    });
+    labels.push({ kind: 'asset', label: `Vídeo ${videoId}` });
+    return resourceName;
+  });
+
+  const restrictsAge = spec.ageMin > 18 || spec.ageMax !== null || !spec.includeUnknownAge;
+  const audienceResource =
+    restrictsAge || spec.audienceSegments.length > 0 ? `${customer}/audiences/-4` : null;
+  if (audienceResource) {
+    const dimensions: Record<string, unknown>[] = [
+      {
+        age: {
+          ageRanges: [
+            spec.ageMax === null
+              ? { minAge: spec.ageMin }
+              : { minAge: spec.ageMin, maxAge: spec.ageMax },
+          ],
+          includeUndetermined: spec.includeUnknownAge,
+        },
+      },
+    ];
+    if (spec.audienceSegments.length > 0) {
+      dimensions.push({
+        audienceSegments: {
+          segments: spec.audienceSegments.map((segment) =>
+            segment.kind === 'user_list'
+              ? { userList: { userList: `${customer}/userLists/${segment.id}` } }
+              : { customAudience: { customAudience: `${customer}/customAudiences/${segment.id}` } },
+          ),
+        },
+      });
+    }
+    operations.push({
+      audienceOperation: {
+        create: {
+          resourceName: audienceResource,
+          name: `${input.campaignName} · público · ${input.startDate}`,
+          dimensions,
+        },
+      },
+    });
+    labels.push({ kind: 'audience', label: 'Público (idade e sinais)' });
+  }
+
+  const signals = spec.audienceSegments.length > 0;
+  operations.push({
+    adGroupOperation: {
+      create: {
+        resourceName: input.adGroupResource,
+        name: spec.adGroupName,
+        campaign: input.campaignResource,
+        status: 'PAUSED',
+        demandGenAdGroupSettings: {
+          channelControls: {
+            selectedChannels: {
+              youtubeInStream: spec.channels.youtubeInStream,
+              youtubeInFeed: spec.channels.youtubeInFeed,
+              youtubeShorts: spec.channels.youtubeShorts,
+              discover: false,
+              gmail: false,
+              display: false,
+            },
+          },
+        },
+        audienceSetting: { useAudienceGrouped: true },
+        optimizedTargetingEnabled: signals,
+        ...(signals ? { excludeDemographicExpansion: true } : {}),
+      },
+    },
+  });
+  labels.push({ kind: 'ad_group', label: `Grupo ${spec.adGroupName}` });
+
+  for (const location of input.locations) {
+    operations.push({
+      adGroupCriterionOperation: {
+        create: {
+          adGroup: input.adGroupResource,
+          location: { geoTargetConstant: location.resourceName },
+        },
+      },
+    });
+    labels.push({ kind: 'criterion', label: 'Localização' });
+  }
+  operations.push({
+    adGroupCriterionOperation: {
+      create: {
+        adGroup: input.adGroupResource,
+        language: { languageConstant: PORTUGUESE_LANGUAGE_CONSTANT },
+      },
+    },
+  });
+  labels.push({ kind: 'criterion', label: 'Idioma português' });
+  if (audienceResource) {
+    operations.push({
+      adGroupCriterionOperation: {
+        create: { adGroup: input.adGroupResource, audience: { audience: audienceResource } },
+      },
+    });
+    labels.push({ kind: 'criterion', label: 'Público' });
+  }
+
+  operations.push({
+    adGroupAdOperation: {
+      create: {
+        adGroup: input.adGroupResource,
+        status: 'PAUSED',
+        ad: {
+          finalUrls: [spec.finalUrl],
+          demandGenVideoResponsiveAd: {
+            headlines: spec.headlines.map((text) => ({ text })),
+            longHeadlines: spec.longHeadlines.map((text) => ({ text })),
+            descriptions: spec.descriptions.map((text) => ({ text })),
+            videos: videoResources.map((asset) => ({ asset })),
+            logoImages: [{ asset: logoResource }],
+            businessName: { text: spec.businessName },
+          },
+        },
+      },
+    },
+  });
+  labels.push({ kind: 'ad', label: 'Anúncio de vídeo (Demand Gen)' });
 
   return { operations, labels };
 }

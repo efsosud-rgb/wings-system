@@ -760,7 +760,9 @@ export type Reach = z.output<typeof reachSchema>;
 export const PLATFORM_REACH: Record<PaidPlatformKey, { radius: boolean }> = {
   meta: { radius: true },
   google_search: { radius: true },
-  youtube: { radius: true },
+  // Demand Gen places the ad group, and an ad group criterion has no radius
+  // (only locations and languages, v22). States and cities go; a radius does not.
+  youtube: { radius: false },
   tiktok: { radius: false },
   linkedin: { radius: false },
   x_twitter: { radius: false },
@@ -911,6 +913,13 @@ export function parseYoutubeVideoId(url: string): string | null {
   return null;
 }
 
+/** A video's id from a YouTube link or from the bare 11-character id; null otherwise. */
+export function parseYoutubeVideoRef(value: string): string | null {
+  const trimmed = value.trim();
+  if (new RegExp(`^${YOUTUBE_ID}$`).test(trimmed)) return trimmed;
+  return parseYoutubeVideoId(trimmed);
+}
+
 /** YouTube's own still for a video; needs no API key. */
 export function youtubeThumbnailUrl(videoId: string): string {
   return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
@@ -1028,15 +1037,193 @@ const keywordList = (item: z.ZodType<string>, max: number, label: string) =>
       'Há palavras-chave repetidas',
     );
 
-export const youtubeDraftSchema = z.object({
-  videoUrl: z
-    .string()
-    .trim()
-    .refine((value) => parseYoutubeVideoId(value) !== null, 'Informe um link https:// do YouTube'),
-  /** Shown over the video in the preview, and the ad's headline next wave. */
-  headline: compliantText(HEADLINE_MAX, 'o título'),
+// Demand Gen's video responsive ad and its ad group (v22,
+// `DemandGenVideoResponsiveAdInfo`, `DemandGenAdGroupSettings`). Text limits
+// are the Google Ads ones for Demand Gen video ads.
+export const DEMAND_GEN_MAX_VIDEOS = 5;
+export const DEMAND_GEN_MAX_TEXTS = 5;
+export const DEMAND_GEN_HEADLINE_MAX = 40;
+export const DEMAND_GEN_LONG_HEADLINE_MAX = 90;
+export const DEMAND_GEN_DESCRIPTION_MAX = 90;
+export const DEMAND_GEN_BUSINESS_NAME_MAX = 25;
+export const DEMAND_GEN_MAX_AUDIENCE_SEGMENTS = 10;
+/** Google's logo rule for the ad: square (within 1 %), at least 128 px, up to 5 MB. */
+export const DEMAND_GEN_LOGO_MIN_PX = 128;
+export const DEMAND_GEN_LOGO_MAX_BYTES = 5 * 1024 * 1024;
+export const DEMAND_GEN_LOGO_TYPES = ['image/png', 'image/jpeg'] as const;
+/** R$ 1,00 to R$ 10.000,00 per conversion. */
+export const MIN_TARGET_CPA_CENTS = 100;
+export const MAX_TARGET_CPA_CENTS = 1_000_000;
+
+/** Only YouTube: Discover, Gmail and Display are never selected. */
+export const DEMAND_GEN_CHANNELS = [
+  'youtube_in_stream',
+  'youtube_in_feed',
+  'youtube_shorts',
+] as const;
+export type DemandGenChannel = (typeof DEMAND_GEN_CHANNELS)[number];
+export const DEMAND_GEN_CHANNEL_LABEL: Record<DemandGenChannel, string> = {
+  youtube_in_stream: 'YouTube in-stream',
+  youtube_in_feed: 'YouTube in-feed',
+  youtube_shorts: 'YouTube Shorts',
+};
+
+/**
+ * Google's age brackets: an audience starts at 18, 25, 35, 45, 55 or 65 and
+ * ends at 24, 34, 44, 54, 64 — or has no end, which this contract writes as
+ * 65 ("65 ou mais").
+ */
+export const DEMAND_GEN_AGE_MINS = [18, 25, 35, 45, 55, 65] as const;
+export const DEMAND_GEN_AGE_MAXES = [24, 34, 44, 54, 64, 65] as const;
+export const DEMAND_GEN_AGE_OPEN_END = 65;
+export const demandGenAgeLabel = (age: number, end: boolean) =>
+  end && age === DEMAND_GEN_AGE_OPEN_END ? '65 ou mais' : String(age);
+
+/** Who the campaign may reach beyond age: the account's lists and custom segments. */
+export const DEMAND_GEN_SEGMENT_KINDS = ['user_list', 'custom_audience'] as const;
+export type DemandGenSegmentKind = (typeof DEMAND_GEN_SEGMENT_KINDS)[number];
+export const DEMAND_GEN_SEGMENT_KIND_LABEL: Record<DemandGenSegmentKind, string> = {
+  user_list: 'Lista de público',
+  custom_audience: 'Segmento personalizado',
+};
+
+/**
+ * The Demand Gen campaign's own Final URL suffix. It replaces the account's
+ * (which says utm_source=google) so a click from YouTube says youtube, while
+ * utm_campaign stays Google's campaign id — what "Leads das Campanhas" reads —
+ * and utm_content the ad's id, as on the account's suffix.
+ */
+export const YOUTUBE_CAMPAIGN_URL_SUFFIX =
+  'utm_source=youtube&utm_medium=cpc&utm_campaign={campaignid}&utm_content={creative}';
+
+const numericId = z.string().trim().regex(/^\d+$/, 'Id inválido');
+
+const uniqueTexts = (list: string[]) =>
+  new Set(list.map((text) => text.toLowerCase())).size === list.length;
+
+const demandGenTexts = (max: number, label: string, plural: string) =>
+  z
+    .array(compliantText(max, label))
+    .min(1, `Escreva ao menos 1 ${label.replace(/^(o|a) /, '')}`)
+    .max(DEMAND_GEN_MAX_TEXTS, `No máximo ${DEMAND_GEN_MAX_TEXTS} ${plural}`)
+    .refine(uniqueTexts, `Há ${plural} repetidos`);
+
+export const demandGenSegmentSchema = z.object({
+  kind: z.enum(DEMAND_GEN_SEGMENT_KINDS),
+  id: numericId,
+  /** For people: the approval shows it. Google receives the id only. */
+  name: z.string().trim().min(1).max(200),
 });
+export type DemandGenSegment = z.output<typeof demandGenSegmentSchema>;
+
+/**
+ * A YouTube (Demand Gen) campaign as it is born: one ad group restricted to
+ * YouTube, one video responsive ad, the conversion it bids for. Everything
+ * here goes to Google in the one atomic write, and is in the approved hash.
+ */
+export const youtubeDraftSchema = z
+  .object({
+    /** The ad group's name; the campaign's when blank. */
+    adGroupName: z.string().trim().max(AD_GROUP_NAME_MAX).optional(),
+    /** 1 to 5 YouTube videos, by link or id: public or unlisted, checked when asked for. */
+    videos: z
+      .array(
+        z
+          .string()
+          .trim()
+          .refine(
+            (value) => parseYoutubeVideoRef(value) !== null,
+            'Informe um link https:// do YouTube ou o id do vídeo',
+          ),
+      )
+      .min(1, 'Informe ao menos 1 vídeo')
+      .max(DEMAND_GEN_MAX_VIDEOS, `No máximo ${DEMAND_GEN_MAX_VIDEOS} vídeos`)
+      .refine(
+        (list) => new Set(list.map((value) => parseYoutubeVideoRef(value))).size === list.length,
+        'Há vídeos repetidos',
+      ),
+    headlines: demandGenTexts(DEMAND_GEN_HEADLINE_MAX, 'o título', 'títulos'),
+    longHeadlines: demandGenTexts(DEMAND_GEN_LONG_HEADLINE_MAX, 'o título longo', 'títulos longos'),
+    descriptions: demandGenTexts(DEMAND_GEN_DESCRIPTION_MAX, 'a descrição', 'descrições'),
+    businessName: compliantText(DEMAND_GEN_BUSINESS_NAME_MAX, 'o nome da empresa'),
+    /** A square logo from the Drive, by the Drive file's id. */
+    logoFileId: z.uuid({ error: 'Escolha a logo no Drive' }),
+    /** The one conversion the campaign bids for, from the account's list. */
+    conversionAction: z.object(
+      { id: numericId, name: z.string().trim().min(1).max(200) },
+      { error: 'Escolha a ação de conversão' },
+    ),
+    /** Maximize conversions, optionally at a target cost per conversion. */
+    targetCpaCents: z
+      .number({ error: 'Informe o CPA alvo' })
+      .int()
+      .min(MIN_TARGET_CPA_CENTS, 'O CPA alvo mínimo é R$ 1,00')
+      .max(MAX_TARGET_CPA_CENTS, 'O CPA alvo vai até R$ 10.000,00')
+      .optional(),
+    ageMin: z
+      .number()
+      .int()
+      .refine(
+        (age) => (DEMAND_GEN_AGE_MINS as readonly number[]).includes(age),
+        'A idade mínima é 18, 25, 35, 45, 55 ou 65',
+      )
+      .default(25),
+    ageMax: z
+      .number()
+      .int()
+      .refine(
+        (age) => (DEMAND_GEN_AGE_MAXES as readonly number[]).includes(age),
+        'A idade máxima é 24, 34, 44, 54, 64 ou 65 ou mais',
+      )
+      .default(DEMAND_GEN_AGE_OPEN_END),
+    /** People whose age Google does not know. Off: the campaign reaches the ages above only. */
+    includeUnknownAge: z.boolean().default(false),
+    channels: z
+      .array(z.enum(DEMAND_GEN_CHANNELS))
+      .min(1, 'Escolha ao menos um canal do YouTube')
+      .default([...DEMAND_GEN_CHANNELS])
+      .refine((list) => new Set(list).size === list.length, 'Há canais repetidos'),
+    /** Optional signals: Google may reach beyond them (optimized targeting), never other ages. */
+    audienceSegments: z
+      .array(demandGenSegmentSchema)
+      .max(
+        DEMAND_GEN_MAX_AUDIENCE_SEGMENTS,
+        `No máximo ${DEMAND_GEN_MAX_AUDIENCE_SEGMENTS} sinais de público`,
+      )
+      .default([])
+      .refine(
+        (list) => new Set(list.map((item) => `${item.kind}:${item.id}`)).size === list.length,
+        'Há sinais de público repetidos',
+      ),
+  })
+  .superRefine((youtube, ctx) => {
+    if (youtube.ageMax < youtube.ageMin) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['ageMax'],
+        message: 'A idade máxima não pode ser menor que a mínima',
+      });
+    }
+  });
 export type YoutubeDraft = z.output<typeof youtubeDraftSchema>;
+
+/** What the builder offers for a YouTube campaign, read from the Google Ads account. */
+export interface DemandGenOptions {
+  conversionActions: { id: string; name: string; category: string | null; primary: boolean }[];
+  audienceSegments: { kind: DemandGenSegmentKind; id: string; name: string }[];
+}
+
+/** YouTube's answer about one video: in an ad only when `ok` (public or unlisted). */
+export type YoutubeVideoCheck =
+  | { videoId: string; status: 'ok'; title: string | null }
+  | { videoId: string; status: 'not_found' | 'private' | 'unavailable' };
+
+export const YOUTUBE_VIDEO_STATUS_LABEL: Record<YoutubeVideoCheck['status'], string> = {
+  ok: 'Publicado (público ou não listado)',
+  private: 'Privado ou sem incorporação: o Google não aceita',
+  not_found: 'Não existe no YouTube',
+  unavailable: 'Não deu para conferir agora',
+};
 
 /**
  * Where a Search campaign shows, whom it reaches and how it bids. All three
@@ -1602,7 +1789,17 @@ export const campaignDraftSchema = z
 
     if (draft.platform === 'youtube') {
       if (!draft.youtube) {
-        ctx.addIssue({ code: 'custom', path: ['youtube', 'videoUrl'], message: 'Informe o vídeo' });
+        ctx.addIssue({ code: 'custom', path: ['youtube', 'videos'], message: 'Informe o vídeo' });
+      }
+      // Demand Gen here bids Maximize conversions, for the conversion chosen
+      // in the draft: a traffic campaign has nothing to bid for.
+      if (draft.objective === 'traffic') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['objective'],
+          message:
+            'No YouTube o lance é Maximizar conversões: escolha Geração de leads ou Conversão',
+        });
       }
       if (draft.search) foreign('search', 'As palavras-chave');
     } else {

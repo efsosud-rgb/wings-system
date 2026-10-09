@@ -541,7 +541,7 @@ describe('a request to create a campaign', () => {
     expect(screen.getByText(/rascunho 04\/10\/2026 → pedido/)).toBeTruthy();
   });
 
-  it('shows a YouTube draft with its still and says it is Demand Gen', () => {
+  it('shows a YouTube draft whole: videos, copy, conversion, ages, channels, suffix', () => {
     approval.current = buildApproval({
       platform: 'google',
       changeKind: 'create_campaign',
@@ -551,16 +551,35 @@ describe('a request to create a campaign', () => {
         platform: 'youtube',
         reach: { ...draft.reach, customLocations: [] },
         variations: [],
-        youtube: { videoUrl: 'https://youtu.be/dQw4w9WgXcQ', headline: 'Conheça a Wings' },
+        youtube: {
+          videos: ['https://youtu.be/dQw4w9WgXcQ', '34zzJBPHlYg'],
+          headlines: ['Conheça a Wings'],
+          longHeadlines: ['Sua empresa pode virar uma rede de franquias'],
+          descriptions: ['Diagnóstico com quem já formatou centenas de marcas.'],
+          businessName: 'Wings Company',
+          logoFileId: '7c1f4a52-2b8e-4d0a-9f3e-1a2b3c4d5e6f',
+          conversionAction: { id: '7804997444', name: 'RD form conversion' },
+          targetCpaCents: 9000,
+          ageMin: 25,
+          ageMax: 65,
+          includeUnknownAge: false,
+          channels: ['youtube_in_stream', 'youtube_in_feed', 'youtube_shorts'],
+          audienceSegments: [],
+        },
       },
     });
     renderDetail();
 
-    expect(screen.getByText('Demand Gen, restrita ao YouTube')).toBeTruthy();
+    expect(screen.getByText(/Demand Gen, só YouTube/)).toBeTruthy();
+    expect(screen.getByText('dQw4w9WgXcQ · 34zzJBPHlYg')).toBeTruthy();
+    expect(screen.getByText(/só “RD form conversion” · CPA alvo R\$ 90,00/)).toBeTruthy();
+    expect(screen.getByText(/25 a 65 ou mais anos/)).toBeTruthy();
+    expect(screen.getByText(/YouTube in-stream · YouTube in-feed · YouTube Shorts/)).toBeTruthy();
+    expect(screen.getAllByText(/utm_source=youtube&utm_medium=cpc/).length).toBeGreaterThan(0);
     expect(
       (screen.getByAltText('Miniatura do vídeo no YouTube') as HTMLImageElement).src,
     ).toContain('/vi/dQw4w9WgXcQ/');
-    expect(screen.getByText(/moram no grupo de anúncios/)).toBeTruthy();
+    expect(screen.getByText(/Vai tudo para o Google na mesma escrita, pausado/)).toBeTruthy();
   });
 
   it('says so in red when the campaign would be born active', () => {

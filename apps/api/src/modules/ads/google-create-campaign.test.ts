@@ -1,4 +1,7 @@
 import { randomBytes } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { campaignDraftSchema, type CampaignDraft } from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -10,9 +13,12 @@ import {
   adChangeRequests,
   adExecutions,
   budgetPeriods,
+  driveFiles,
+  driveFolders,
 } from '../../db/schema/index.js';
+import { createLocalStorage } from '../../lib/storage/local.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
-import { createEmployee } from '../../test/factories.js';
+import { createEmployee, fakePng } from '../../test/factories.js';
 import { decideApproval, gateChange } from './approvals.js';
 import {
   getPeriodState,
@@ -21,7 +27,7 @@ import {
   reserveCampaignCreation,
   reserveChange,
 } from './budget-guard.js';
-import { executeApprovedChange, preflightChange } from './executor.js';
+import { companionsOf, executeApprovedChange, preflightChange } from './executor.js';
 import { stepsOfExecution } from './ad-tree.js';
 import { fakeGoogleApi } from './platform/fake-google-api.js';
 import { GoogleAdsPlatformClient, GoogleAdsWriteClient } from './platform/google-ads-client.js';
@@ -45,18 +51,55 @@ const CUSTOMER = '4268586278';
 
 let harness: TestDatabase;
 let db: Database;
+let mediaDir: string;
+let storage: ReturnType<typeof createLocalStorage>;
 
 beforeAll(async () => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(NOW);
   harness = await createTestDatabase();
   db = harness.db;
+  mediaDir = await mkdtemp(join(tmpdir(), 'wings-demand-gen-'));
+  storage = createLocalStorage({
+    dir: mediaDir,
+    publicApiBase: 'http://localhost/api',
+    linkKey: randomBytes(32),
+  });
 }, 60_000);
 
 afterAll(async () => {
   await harness?.drop();
+  await rm(mediaDir, { recursive: true, force: true });
   vi.useRealTimers();
 });
+
+/** A logo in the Drive, as the builder picks it: a PNG in a Marketing folder. */
+async function driveLogo(width = 512, height = 512) {
+  const owner = await createEmployee(db, { role: 'marketing', sector: 'marketing' });
+  const [folder] = await db
+    .insert(driveFolders)
+    .values({
+      name: `Logos ${randomBytes(3).toString('hex')}`,
+      path: `/Marketing/Logos ${randomBytes(3).toString('hex')}`,
+      department: 'marketing',
+    })
+    .returning({ id: driveFolders.id });
+  const bytes = fakePng(width, height, 4096);
+  const storageKey = `drive/2026-10/${randomBytes(8).toString('hex')}`;
+  await storage.put(storageKey, bytes, 'image/png');
+  const [file] = await db
+    .insert(driveFiles)
+    .values({
+      folderId: folder!.id,
+      name: 'logo.png',
+      mimeType: 'image/png',
+      byteSize: bytes.length,
+      storageKey,
+      ownerId: owner.id,
+    })
+    .returning({ id: driveFiles.id });
+  return { fileId: file!.id, bytes };
+}
 
 const common = () => ({
   name: `Google ${randomBytes(3).toString('hex')}`,
@@ -89,11 +132,21 @@ function searchDraft(overrides: Record<string, unknown> = {}): CampaignDraft {
   });
 }
 
-function youtubeDraft(): CampaignDraft {
+function youtubeDraft(logoFileId: string, patch: Record<string, unknown> = {}): CampaignDraft {
   return campaignDraftSchema.parse({
     ...common(),
     platform: 'youtube',
-    youtube: { videoUrl: 'https://youtu.be/dQw4w9WgXcQ', headline: 'Conheça a Wings' },
+    destinationUrl: 'https://wingssystem.online/lp/formatacao?utm_source=x',
+    youtube: {
+      videos: ['https://www.youtube.com/watch?v=34zzJBPHlYg', 'M0v5U4AaTvo'],
+      headlines: ['Sua empresa pode virar franquia?'],
+      longHeadlines: ['Sua empresa tem potencial para virar uma rede de franquias'],
+      descriptions: ['O sucesso começa com um diagnóstico.'],
+      businessName: 'Wings Company',
+      logoFileId,
+      conversionAction: { id: '77', name: 'RD form conversion' },
+      ...patch,
+    },
   });
 }
 
@@ -436,28 +489,97 @@ describe('executing an approved Google campaign', () => {
     expect(change?.status).toBe('pending_approval');
   });
 
-  it('creates a paused Demand Gen campaign for YouTube, keeping the video in the draft', async () => {
+  it('creates a YouTube (Demand Gen) campaign whole: logo from the Drive, video ad, all paused', async () => {
     const { accountId, api, client } = await world();
-    const { changeRequestId, draftId } = await requestAndApprove(accountId, youtubeDraft());
+    const logo = await driveLogo();
+    const { changeRequestId } = await requestAndApprove(accountId, youtubeDraft(logo.fileId));
 
-    const result = await executeApprovedChange(db, client, changeRequestId, { allowWrites: true });
+    const result = await executeApprovedChange(db, client, changeRequestId, {
+      allowWrites: true,
+      storage,
+    });
     expect(result).toMatchObject({ ok: true, outcome: 'applied' });
 
-    const operations = api.mutateCalls()[0]?.body.mutateOperations as Record<
+    // Rehearsed first, then written: the same request twice.
+    const [rehearsal, write] = api.mutateCalls();
+    expect(rehearsal?.body.validateOnly).toBe(true);
+    expect(write?.body.mutateOperations).toEqual(rehearsal?.body.mutateOperations);
+    const operations = write?.body.mutateOperations as Record<
       string,
-      { create: Record<string, unknown> }
+      { create?: Record<string, unknown> }
     >[];
-    expect(operations).toHaveLength(2);
     expect(operations[1]?.campaignOperation?.create).toMatchObject({
       advertisingChannelType: 'DEMAND_GEN',
       status: 'PAUSED',
+      maximizeConversions: {},
+      finalUrlSuffix:
+        'utm_source=youtube&utm_medium=cpc&utm_campaign={campaignid}&utm_content={creative}',
     });
-    const stored = await db.query.adCampaignDrafts.findFirst({
-      where: eq(adCampaignDrafts.id, draftId),
-    });
-    expect((stored?.payload as CampaignDraft).youtube?.videoUrl).toBe(
-      'https://youtu.be/dQw4w9WgXcQ',
+    // The logo's own bytes, read from the Drive at the moment of the write.
+    const logoAsset = operations.find((op) => op.assetOperation?.create?.imageAsset);
+    expect((logoAsset?.assetOperation?.create?.imageAsset as { data: string }).data).toBe(
+      logo.bytes.toString('base64'),
     );
+    // The link goes without UTMs: the campaign's suffix carries them.
+    expect(operations.at(-1)?.adGroupAdOperation?.create).toMatchObject({
+      status: 'PAUSED',
+      ad: { finalUrls: ['https://wingssystem.online/lp/formatacao'] },
+    });
+    expect(api.adGroups.at(-1)?.status).toBe('PAUSED');
+    expect(api.ads.at(-1)?.status).toBe('PAUSED');
+
+    // The ad group and the ad are steps of the execution: a resume finds them.
+    const execution = await db.query.adExecutions.findFirst({
+      where: eq(adExecutions.changeRequestId, changeRequestId),
+    });
+    const steps = await stepsOfExecution(db, execution!.id);
+    expect(steps.map((step) => step.kind)).toEqual(expect.arrayContaining(['ad_group', 'ad']));
+    const campaign = await db.query.adCampaigns.findFirst({
+      where: eq(adCampaigns.adAccountId, accountId),
+    });
+    expect(await companionsOf(db, campaign!.id)).toMatchObject({
+      adGroupIds: [api.adGroups.at(-1)?.id],
+      adIds: [api.ads.at(-1)?.id],
+    });
+  });
+
+  it('sends nothing when the logo is no longer in the Drive', async () => {
+    const { accountId, api, client } = await world();
+    const logo = await driveLogo();
+    const { changeRequestId } = await requestAndApprove(accountId, youtubeDraft(logo.fileId));
+    await db
+      .update(driveFiles)
+      .set({ trashedAt: new Date() })
+      .where(eq(driveFiles.id, logo.fileId));
+
+    const result = await executeApprovedChange(db, client, changeRequestId, {
+      allowWrites: true,
+      storage,
+    });
+    expect(result).toMatchObject({ ok: false, outcome: 'refused', reason: 'media_missing' });
+    expect(api.mutateCalls()).toHaveLength(0);
+    const change = await db.query.adChangeRequests.findFirst({
+      where: eq(adChangeRequests.id, changeRequestId),
+    });
+    expect(change?.status).toBe('approved');
+  });
+
+  it('rehearses a YouTube request on the approval screen, the logo read the same way', async () => {
+    const { accountId, api, externalId } = await world();
+    const logo = await driveLogo();
+    const reserved = await request(accountId, youtubeDraft(logo.fileId));
+    if (!reserved.ok) throw new Error(reserved.message);
+
+    const reader = new GoogleAdsPlatformClient(fakeGoogleApi({ customerId: externalId }).reader);
+    const noStorage = await preflightChange(db, reader, reserved.value.changeRequestId);
+    expect(noStorage).toMatchObject({ ok: false, status: 'refused', reason: 'media_missing' });
+
+    const rehearsal = await preflightChange(db, reader, reserved.value.changeRequestId, {
+      storage,
+    });
+    expect(rehearsal).toMatchObject({ ok: true, status: 'ok' });
+    if (rehearsal.ok) expect(rehearsal.operations).toContain('Anúncio de vídeo (Demand Gen)');
+    expect(api.writeCalls()).toHaveLength(0);
   });
 
   it('refuses a client bound to another Google customer', async () => {
