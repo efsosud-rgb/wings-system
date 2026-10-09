@@ -21,6 +21,7 @@ import {
 import { LEAD_TASK_KIND_LABELS } from '@wings/shared';
 import { and, count, desc, eq, gte, inArray, isNotNull, isNull, lt, max, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
+import { trackedTaskSql } from '../leads/crm.js';
 import {
   agentConversations,
   agentMessages,
@@ -115,7 +116,7 @@ export async function officeSnapshot(db: Database, now: Date): Promise<OfficeSna
     })
     .from(leadTasks)
     .innerJoin(leads, eq(leads.id, leadTasks.leadId))
-    .where(and(isNull(leadTasks.doneAt), isNull(leads.won)))
+    .where(and(isNull(leadTasks.doneAt), isNull(leads.won), trackedTaskSql()))
     .orderBy(leadTasks.dueAt)
     .limit(MAX_OPEN_ROWS);
 
@@ -341,7 +342,9 @@ async function indicators(
     .select({ n: count() })
     .from(leadTasks)
     .innerJoin(leads, eq(leads.id, leadTasks.leadId))
-    .where(and(isNull(leadTasks.doneAt), lt(leadTasks.dueAt, now), isNull(leads.won)));
+    .where(
+      and(isNull(leadTasks.doneAt), lt(leadTasks.dueAt, now), isNull(leads.won), trackedTaskSql()),
+    );
 
   const kpi = (key: OfficeKpi['key'], label: string, value: number | undefined): OfficeKpi => ({
     key,
