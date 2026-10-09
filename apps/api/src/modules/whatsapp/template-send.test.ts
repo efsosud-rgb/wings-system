@@ -10,6 +10,7 @@ import {
   type PlanInput,
   type TemplateRow,
 } from './template-send.js';
+import { callPermissionText } from './routes.js';
 
 /**
  * Which message a template becomes, with no database and no Meta: the window,
@@ -140,6 +141,10 @@ describe('which template goes with the window closed', () => {
     });
     const masculine = ok(base({ voice: { name: 'Casal do Churros', article: 'o' } }));
     expect(masculine.params[2]).toBe('do Casal do Churros');
+    // A brand whose name starts with an article is not given a second one.
+    const cabana = ok(base({ voice: { name: 'A Cabana da Barra', article: 'a' } }));
+    expect(cabana.params[2]).toBe('da Cabana da Barra');
+    expect(cabana.preview.text).toContain('do time de expansão da Cabana da Barra.');
   });
 
   it('the first version, with a notice, when the brand has no art', () => {
@@ -153,6 +158,83 @@ describe('which template goes with the window closed', () => {
     });
     // Wings' own conversation names where the Wings art is kept.
     expect(ok(base({ hasArt: false, voice: null })).preview.notices).toEqual([ART_MISSING_WINGS]);
+  });
+
+  it('never doubles the article of a name that has its own in the first version either', () => {
+    // A Cabana da Barra has no art: its templates go by the first version ("expansão da {{3}}").
+    const cabana = { name: 'A Cabana da Barra', article: 'a' as const };
+    const plan = ok(base({ hasArt: false, voice: cabana }));
+    expect(plan.version.name).toBe('expansao_boas_vindas');
+    expect(plan.params[2]).toBe('Cabana da Barra');
+    expect(plan.preview.text).toContain('do time de expansão da Cabana da Barra.');
+    // The seller still sees the brand as it is registered.
+    expect(plan.preview.fields[2]).toMatchObject({ value: 'A Cabana da Barra', locked: true });
+    // The art version not approved yet, and the old text on the art version: the same.
+    expect(ok(base({ voice: cabana, templates: [T.boasVindas] })).params[2]).toBe(
+      'Cabana da Barra',
+    );
+    expect(
+      ok(base({ voice: cabana, templates: [T.boasVindas, T.boasVindasArteAntigo] })).preview.text,
+    ).toContain('do time de expansão da Cabana da Barra.');
+    const cof = ok(
+      base({
+        hasArt: false,
+        voice: cabana,
+        request: {
+          name: 'expansao_cof_enviada',
+          language: 'pt_BR',
+          params: [],
+          companyArticle: 'a',
+        },
+        templates: [T.cof, T.cofArte],
+      }),
+    );
+    expect(cof.preview.text).toContain('(COF) da Cabana da Barra foi enviada');
+    // Where the text has no article before the name, the name keeps its own.
+    const retomar = ok(
+      base({
+        hasArt: false,
+        voice: cabana,
+        request: {
+          name: 'expansao_retomar_contato',
+          language: 'pt_BR',
+          params: [],
+          companyArticle: 'a',
+        },
+        templates: [T.retomar],
+      }),
+    );
+    expect(retomar.preview.text).toContain('sobre a franquia A Cabana da Barra.');
+    // The same for the lead's company in Formatação: "transformar a Padaria Real".
+    const formatacao = ok(
+      base({
+        hasArt: false,
+        voice: null,
+        request: {
+          name: 'wings_formatacao_boas_vindas',
+          language: 'pt_BR',
+          params: ['Mariana', 'Daniele', 'A Padaria Real'],
+          companyArticle: 'a',
+        },
+        templates: [T.formatacaoBoasVindas, T.formatacaoBoasVindasArte],
+      }),
+    );
+    expect(formatacao.preview.text).toContain('transformar a Padaria Real em franquia');
+    // A name whose article disagrees with the text's stays whole: never "a Bar do Zé".
+    const masculine = ok({
+      ...base({
+        hasArt: false,
+        voice: null,
+        templates: [T.formatacaoBoasVindas, T.formatacaoBoasVindasArte],
+      }),
+      request: {
+        name: 'wings_formatacao_boas_vindas',
+        language: 'pt_BR',
+        params: ['Mariana', 'Daniele', 'O Bar do Zé'],
+        companyArticle: 'o',
+      },
+    });
+    expect(masculine.params[2]).toBe('O Bar do Zé');
   });
 
   it('the first version when the art version is not approved yet, saying so', () => {
@@ -247,6 +329,20 @@ describe('which template goes with the window closed', () => {
 
 describe('with the window open', () => {
   const open = { open: true, expiresAt: '2026-10-08T15:00:00.000Z' };
+
+  it('a common message from the first version keeps the article single too', () => {
+    const plan = ok(
+      base({
+        window: open,
+        hasArt: false,
+        voice: { name: 'A Cabana da Barra', article: 'a' },
+      }),
+    );
+    expect(plan.free).not.toBeNull();
+    expect(plan.preview.sendAs).toBe('free');
+    expect(plan.preview.text).toContain('do time de expansão da Cabana da Barra.');
+    expect(JSON.stringify(payloadOf(plan, null))).not.toContain('da A Cabana');
+  });
 
   it('goes as a common message: the art in the header, the reply buttons, no charge', () => {
     const plan = ok(base({ window: open }));
@@ -440,5 +536,19 @@ describe('refusals', () => {
         }),
       ),
     ).toMatchObject({ ok: false, error: 'template_unknown' });
+  });
+});
+
+describe('the call-permission text', () => {
+  it('names the brand with its own article, capitalised', () => {
+    expect(callPermissionText(null)).toMatch(/^A Wings gostaria de poder te ligar/);
+    expect(callPermissionText({ name: 'Malkuth', article: 'a' })).toMatch(/^A Malkuth gostaria/);
+    expect(callPermissionText({ name: 'Casal do Churros', article: 'o' })).toMatch(
+      /^O Casal do Churros gostaria/,
+    );
+    expect(callPermissionText({ name: 'A Cabana da Barra', article: 'a' })).toMatch(
+      /^A Cabana da Barra gostaria/,
+    );
+    expect(callPermissionText({ name: 'Pecan', article: null })).toMatch(/^A Pecan gostaria/);
   });
 });
