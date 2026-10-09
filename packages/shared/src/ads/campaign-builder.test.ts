@@ -14,6 +14,7 @@ import {
   applyUtms,
   GOOGLE_ACCOUNT_URL_SUFFIX,
   hasStandardUrlTags,
+  isPaidUtmMedium,
   META_URL_TAGS,
   stripUtms,
   utmSourceName,
@@ -954,5 +955,37 @@ describe('what of the reach each platform takes', () => {
     expect(reachRefusal('tiktok', { customLocations: [] })).toBeNull();
     expect(reachRefusal('tiktok', {})).toBeNull();
     expect(reachRefusal('google_search', { customLocations: [point] })).toBeNull();
+  });
+});
+
+describe('which utm_medium says the click was bought', () => {
+  it('takes cpc, ppc, cpm and the paid_* family as paid', () => {
+    for (const medium of [
+      'cpc',
+      'CPC',
+      'ppc',
+      'cpm',
+      'paid_social',
+      'paid-search',
+      'paid',
+      'paidsocial',
+    ]) {
+      expect(isPaidUtmMedium(medium)).toBe(true);
+    }
+  });
+
+  it('does not take organic, social, email, referral or nothing for paid', () => {
+    for (const medium of [
+      'social',
+      'organic',
+      'email',
+      'referral',
+      '(none)',
+      '',
+      null,
+      undefined,
+    ]) {
+      expect(isPaidUtmMedium(medium)).toBe(false);
+    }
   });
 });

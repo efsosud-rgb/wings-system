@@ -561,6 +561,13 @@
       "when": 1791550997663,
       "tag": "0081_whatsapp_art",
       "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1791566515438,
+      "tag": "0082_ad_sets_end_placements",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,6 @@
 import {
   addTotals,
+  effectiveCampaignEnd,
   EMPTY_TOTALS,
   fatigueOf,
   killSwitchRuleOf,
@@ -299,6 +300,7 @@ async function budgetForecast(
         campaignId: adSets.campaignId,
         status: adSets.status,
         dailyBudgetCents: adSets.dailyBudgetCents,
+        endDate: adSets.endDate,
       })
       .from(adSets)
       .innerJoin(adCampaigns, eq(adCampaigns.id, adSets.campaignId))
@@ -317,7 +319,12 @@ async function budgetForecast(
             .reduce((total, row) => total + (row.dailyBudgetCents ?? 0), 0)
         : campaign.dailyBudgetCents;
     if (!daily) continue;
-    const lastDay = campaign.endDate && campaign.endDate < monthEnd ? campaign.endDate : monthEnd;
+    // The schedule may live on the ad sets (Meta): the campaign ends with the ones that are on.
+    const endsOn = effectiveCampaignEnd(
+      campaign.endDate,
+      adSetRows.filter((row) => row.campaignId === campaign.id),
+    );
+    const lastDay = endsOn && endsOn < monthEnd ? endsOn : monthEnd;
     if (lastDay < month.today) continue;
     running += 1;
     activeDaily += daily;
@@ -831,6 +838,8 @@ export async function campaigns(
         name: adSet.name,
         status: adSet.status,
         dailyBudgetCents: adSet.dailyBudgetCents || null,
+        endDate: adSet.endDate,
+        placements: adSet.placements ?? null,
         totals: adSetSums.get(adSet.externalId) ?? EMPTY_TOTALS,
         ads: adRows
           .filter((ad) => ad.adSetId === adSet.id)
@@ -851,7 +860,10 @@ export async function campaigns(
       launchDefaults: launchDefaultsOf(draftOf.get(campaign.id)?.payload),
       // The platform's own schedule first; the draft's for a campaign not synced since.
       startDate: campaign.startDate ?? draftOf.get(campaign.id)?.startDate ?? null,
-      endDate: campaign.endDate ?? draftOf.get(campaign.id)?.endDate ?? null,
+      endDate:
+        effectiveCampaignEnd(campaign.endDate, ownAdSets) ??
+        draftOf.get(campaign.id)?.endDate ??
+        null,
       mirroredAt: campaign.createdAt.toISOString(),
       targetCplCents: targetOf.get(campaign.id) ?? null,
       name: campaign.name,

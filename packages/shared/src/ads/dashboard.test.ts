@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { addTotals, deltaPercent, EMPTY_TOTALS, fatigueOf, ratiosOf } from './dashboard.js';
+import {
+  addTotals,
+  deltaPercent,
+  effectiveCampaignEnd,
+  EMPTY_TOTALS,
+  fatigueOf,
+  placementsLabel,
+  ratiosOf,
+} from './dashboard.js';
 
 describe('ratios over a window', () => {
   it('leaves every ratio empty when nothing was delivered', () => {
@@ -64,5 +72,45 @@ describe('creative fatigue', () => {
   it('cannot judge an ad that did not deliver in both halves', () => {
     expect(fatigueOf(null, 1500, 2300).wornOut).toBe(false);
     expect(fatigueOf(2000, null, 2300).wornOut).toBe(false);
+  });
+});
+
+describe('where a campaign ends when its schedule lives on the ad sets', () => {
+  it('keeps the campaign own end date', () => {
+    expect(effectiveCampaignEnd('2026-10-05', [{ status: 'ACTIVE', endDate: '2026-10-13' }])).toBe(
+      '2026-10-05',
+    );
+  });
+
+  it('ends with the latest end among the ad sets that are on, when every one has an end', () => {
+    expect(
+      effectiveCampaignEnd(null, [
+        { status: 'ACTIVE', endDate: '2026-10-13' },
+        { status: 'ACTIVE', endDate: '2026-10-11' },
+        { status: 'PAUSED', endDate: null },
+      ]),
+    ).toBe('2026-10-13');
+  });
+
+  it('stays open while one ad set that is on has no end, or none is on', () => {
+    expect(
+      effectiveCampaignEnd(null, [
+        { status: 'ACTIVE', endDate: '2026-10-13' },
+        { status: 'ACTIVE', endDate: null },
+      ]),
+    ).toBeNull();
+    expect(effectiveCampaignEnd(null, [{ status: 'PAUSED', endDate: '2026-10-13' }])).toBeNull();
+    expect(effectiveCampaignEnd(null, [])).toBeNull();
+  });
+
+  it('names the platforms an ad set delivers on, and nothing for automatic placements', () => {
+    expect(placementsLabel({ platforms: ['instagram'], positions: ['instagram:stream'] })).toBe(
+      'Instagram',
+    );
+    expect(placementsLabel({ platforms: ['instagram', 'facebook'], positions: [] })).toBe(
+      'Instagram, Facebook',
+    );
+    expect(placementsLabel(null)).toBeNull();
+    expect(placementsLabel({ platforms: [], positions: [] })).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../../db/client.js';
-import { ga4TrafficDaily, rdCrmDeals } from '../../db/schema/index.js';
+import { campaignLeads, ga4TrafficDaily, rdCrmDeals } from '../../db/schema/index.js';
 import type { Ga4Client } from '../../lib/ga4.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { platformOfRdLabels, syncGa4Traffic, syncRdCrmDeals } from './funnel-sync.js';
@@ -130,6 +130,27 @@ describe('RD CRM deals into rd_crm_deals', () => {
     expect(by.get('d4')).toMatchObject({ win: false, reachedMeeting: false });
     const stored = JSON.stringify(rows);
     for (const personal of ['Fulano', 'Beltrano', 'x@y.z']) expect(stored).not.toContain(personal);
+  });
+
+  it('takes the platform the lead attribution found when the RD labels say none, never over them', async () => {
+    const base = {
+      enteredAt: new Date('2026-09-28T13:00:00Z'),
+      pipeline: 'Formatação',
+      stage: 'Sem contato',
+      stageOrder: 1,
+    };
+    await db.insert(campaignLeads).values([
+      // "Social | Instagram" names no platform; the lead came from a Meta form / a paid Meta UTM.
+      { ...base, rdDealId: 'd3', platform: 'meta' },
+      // RD's own source says Google: the attribution does not overrule it.
+      { ...base, rdDealId: 'd2', platform: 'meta' },
+    ]);
+    await syncRdCrmDeals(db, { token: 't', since: '2026-07-01', until: '2026-09-28', fetchImpl });
+    const rows = await db.select().from(rdCrmDeals);
+    const by = new Map(rows.map((row) => [row.rdId, row]));
+    expect(by.get('d3')?.platform).toBe('meta');
+    expect(by.get('d2')?.platform).toBe('google');
+    expect(by.get('d4')?.platform).toBe('meta');
   });
 
   it("names a paid platform only when RD's labels say which", () => {

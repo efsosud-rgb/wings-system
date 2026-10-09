@@ -21,6 +21,7 @@ import {
   ga4TrafficDaily,
   adCampaignDrafts,
   adCampaigns,
+  adSets,
   agentConversations,
   agentMessages,
   ingestRuns,
@@ -936,6 +937,51 @@ describe('the cockpit', () => {
       ]);
     } finally {
       await db.update(adCampaigns).set({ endDate: null }).where(eq(adCampaigns.externalId, '100'));
+    }
+  });
+
+  it('ends a campaign with its ad sets when the campaign has no end of its own (Meta keeps the schedule there)', async () => {
+    const instagram = { platforms: ['instagram'], positions: ['instagram:stream'] };
+    await db
+      .update(adSets)
+      .set({ endDate: '2026-09-15', placements: instagram })
+      .where(eq(adSets.externalId, 'as1'));
+    try {
+      const cockpit = await read<DashboardCockpit>('/ads/dashboard/cockpit?days=7', 'cockpit');
+      // The ad set ended, the campaign row says nothing about it, and it still stops counting.
+      expect(cockpit.activeCampaigns.map((campaign) => campaign.name)).toEqual([
+        'Pesquisa | Franquia',
+      ]);
+      expect(cockpit.statusSummary.ended).toEqual([
+        { platform: 'meta', name: 'LEAD | FORMS', endDate: '2026-09-15' },
+      ]);
+
+      const tree = await read<DashboardCampaigns>('/ads/dashboard/campaigns?days=30', 'campaigns');
+      const leads = tree.campaigns.find((campaign) => campaign.name === 'LEAD | FORMS');
+      expect(leads?.endDate).toBe('2026-09-15');
+      expect(leads?.adSets[0]).toMatchObject({ endDate: '2026-09-15', placements: instagram });
+    } finally {
+      await db
+        .update(adSets)
+        .set({ endDate: null, placements: null })
+        .where(eq(adSets.externalId, 'as1'));
+    }
+  });
+
+  it('keeps a campaign open while one of its ad sets that is on has no end', async () => {
+    const [leads] = await db.select().from(adCampaigns).where(eq(adCampaigns.name, 'LEAD | FORMS'));
+    await db.update(adSets).set({ endDate: '2026-09-15' }).where(eq(adSets.externalId, 'as1'));
+    const [extra] = await db
+      .insert(adSets)
+      .values({ campaignId: leads!.id, externalId: 'as-open', name: 'Sem fim', status: 'ACTIVE' })
+      .returning();
+    try {
+      const cockpit = await read<DashboardCockpit>('/ads/dashboard/cockpit?days=7', 'cockpit');
+      expect(cockpit.activeCampaigns.map((campaign) => campaign.name)).toContain('LEAD | FORMS');
+      expect(cockpit.statusSummary.ended).toEqual([]);
+    } finally {
+      await db.delete(adSets).where(eq(adSets.id, extra!.id));
+      await db.update(adSets).set({ endDate: null }).where(eq(adSets.externalId, 'as1'));
     }
   });
 

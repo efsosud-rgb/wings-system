@@ -297,6 +297,8 @@ function buildCampaigns(): DashboardCampaigns {
             name: 'Conjunto SP',
             status: 'ACTIVE',
             dailyBudgetCents: 3000,
+            endDate: '2026-10-13',
+            placements: { platforms: ['instagram'], positions: ['instagram:stream'] },
             totals: { ...EMPTY_TOTALS, spendCents: 4_500, impressions: 2000, clicks: 40 },
             ads: [
               {
@@ -645,6 +647,8 @@ describe('campaigns', () => {
     expect(screen.queryByText('Conjunto SP')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Abrir LEAD | FORMS' }));
     expect(screen.getByText('Conjunto SP')).toBeTruthy();
+    // Where the ad set delivers and its own end, when the platform told them.
+    expect(screen.getByText(/conjunto, 1 anúncio · Instagram · até 13\/10/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Abrir anúncios de Conjunto SP' }));
     expect(screen.getByText('Reels 15s')).toBeTruthy();
     expect(screen.getByText('Vídeo')).toBeTruthy();

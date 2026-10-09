@@ -9,6 +9,7 @@ import {
 import { and, eq, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { adCampaigns, adSets } from '../../db/schema/index.js';
+import { effectiveCampaignEnds } from './campaign-end.js';
 
 /**
  * The platform's account figures as the screens may show them: current, or
@@ -99,8 +100,13 @@ export async function activeBudgetsOf(
     .groupBy(adSets.campaignId);
   const byCampaign = new Map(adSetTotals.map((row) => [row.campaignId, Number(row.total)]));
 
+  // The schedule may live on the ad sets (Meta): the campaign ends with the ones that are on.
+  const endOf = await effectiveCampaignEnds(db, campaigns);
   return campaigns
-    .filter((campaign) => campaign.endDate === null || campaign.endDate >= today)
+    .filter((campaign) => {
+      const end = endOf.get(campaign.id) ?? null;
+      return end === null || end >= today;
+    })
     .map((campaign) => ({
       campaignExternalId: campaign.externalId,
       name: campaign.name,
@@ -109,7 +115,7 @@ export async function activeBudgetsOf(
           ? (byCampaign.get(campaign.id) ?? 0)
           : campaign.dailyBudgetCents,
       startDate: campaign.startDate && campaign.startDate > today ? campaign.startDate : null,
-      endDate: campaign.endDate,
+      endDate: endOf.get(campaign.id) ?? null,
     }))
     .filter((budget) => budget.dailyBudgetCents > 0);
 }

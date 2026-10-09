@@ -1,3 +1,4 @@
+import type { AdSetPlacements } from '@wings/shared';
 import {
   centsFromDecimalCurrencyString,
   centsFromMinorUnitString,
@@ -729,8 +730,10 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       campaign_id: string;
       daily_budget?: string;
       lifetime_budget?: string;
+      end_time?: string;
+      targeting?: unknown;
     }>(`${this.accountId}/adsets`, {
-      fields: 'id,name,status,campaign_id,daily_budget,lifetime_budget',
+      fields: 'id,name,status,campaign_id,daily_budget,lifetime_budget,end_time,targeting',
       limit: '50',
     });
 
@@ -751,6 +754,11 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
         // Meta reports "0" for a budget that lives at the other level.
         dailyBudgetCents: daily === 0 ? null : daily,
         lifetimeBudgetCents: lifetime === 0 ? null : lifetime,
+        // The schedule and the placements live on the ad set; the campaign's own do not show them.
+        endDate: saoPauloDay(adSet.end_time),
+        ...(adSet.targeting !== undefined
+          ? { placements: placementsOfTargeting(adSet.targeting) }
+          : {}),
       };
     });
   }
@@ -1036,6 +1044,33 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
   ): Promise<{ status: 'applied' | 'rejected'; message?: string }> {
     throw new MetaWritesDisabledError('setAccountSpendCap');
   }
+}
+
+const POSITION_KEYS: Record<string, string> = {
+  facebook_positions: 'facebook',
+  instagram_positions: 'instagram',
+  messenger_positions: 'messenger',
+  audience_network_positions: 'audience_network',
+  threads_positions: 'threads',
+};
+
+/**
+ * Where an ad set delivers, from Meta's `targeting`: the publisher platforms and
+ * the positions chosen inside them. Without `publisher_platforms` the
+ * placements are automatic (Advantage+), which is null. Only these keys are
+ * kept: the rest of `targeting` (audiences, locations) is never stored.
+ */
+export function placementsOfTargeting(targeting: unknown): AdSetPlacements | null {
+  if (!targeting || typeof targeting !== 'object') return null;
+  const spec = targeting as Record<string, unknown>;
+  const strings = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+  const platforms = strings(spec.publisher_platforms);
+  if (platforms.length === 0) return null;
+  const positions = Object.entries(POSITION_KEYS).flatMap(([key, platform]) =>
+    strings(spec[key]).map((position) => `${platform}:${position}`),
+  );
+  return { platforms, positions };
 }
 
 /** Meta's ISO time ("2026-09-28T09:59:32-0300") as the São Paulo day it falls on; null when absent or unreadable. */

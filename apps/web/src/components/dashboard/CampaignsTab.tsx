@@ -4,6 +4,7 @@ import {
   MIRRORED_FORMAT_LABEL,
   VERDICT_RULES,
   VERDICT_SIGNAL_LABEL,
+  placementsLabel,
   ratiosOf,
   type AdNode,
   type AdSetNode,
@@ -135,6 +136,15 @@ function AdRow({ ad }: { ad: AdNode }) {
   );
 }
 
+/** " · Instagram · até 13/10": where the ad set delivers and its own end, when the platform told them. */
+function adSetDetail(adSet: AdSetNode): string {
+  const parts = [
+    placementsLabel(adSet.placements),
+    adSet.endDate ? `até ${dayMonth(adSet.endDate)}` : null,
+  ].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? ` · ${parts.join(' · ')}` : '';
+}
+
 function AdSetRows({ adSet }: { adSet: AdSetNode }) {
   const [open, setOpen] = useState(false);
   return (
@@ -155,6 +165,7 @@ function AdSetRows({ adSet }: { adSet: AdSetNode }) {
               {adSet.name}
               <span className="cell-sub">
                 conjunto, {adSet.ads.length} {adSet.ads.length === 1 ? 'anúncio' : 'anúncios'}
+                {adSetDetail(adSet)}
               </span>
             </span>
           </span>

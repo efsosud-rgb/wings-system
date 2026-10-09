@@ -187,6 +187,8 @@ export async function syncCampaigns(
         status: adSet.status,
         dailyBudgetCents: adSet.dailyBudgetCents ?? 0,
         lifetimeBudgetCents: adSet.lifetimeBudgetCents,
+        endDate: adSet.endDate ?? null,
+        placements: adSet.placements ?? null,
         lastSyncedAt: now,
       })
       .onConflictDoUpdate({
@@ -196,6 +198,9 @@ export async function syncCampaigns(
           status: adSet.status,
           dailyBudgetCents: adSet.dailyBudgetCents ?? 0,
           lifetimeBudgetCents: adSet.lifetimeBudgetCents,
+          // undefined means "not read" (never erases a known value); null means "no end" / "automatic".
+          ...(adSet.endDate !== undefined ? { endDate: adSet.endDate } : {}),
+          ...(adSet.placements !== undefined ? { placements: adSet.placements } : {}),
           lastSyncedAt: now,
           updatedAt: now,
         },

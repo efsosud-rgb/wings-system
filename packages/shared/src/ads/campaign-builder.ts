@@ -560,6 +560,14 @@ export function adPlatformOfUtmSource(value: string | null | undefined): 'google
   return null;
 }
 
+/**
+ * Whether a utm_medium says the click was bought: "cpc", "ppc", "cpm", "paid_social",
+ * "paid-search", "paid"… "social", "organic", "email" and "referral" are not.
+ */
+export function isPaidUtmMedium(value: string | null | undefined): boolean {
+  return /paid|cpc|ppc|cpm|cpv/i.test(value ?? '');
+}
+
 /** Whether `urlTags` carries every parameter of `META_URL_TAGS`, in any order. */
 export function hasStandardUrlTags(urlTags: string | null | undefined): boolean {
   const present = new Set(

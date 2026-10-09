@@ -135,6 +135,66 @@ describe('reading the account', () => {
     expect(open).toMatchObject({ startDate: '2026-09-28', endDate: null });
   });
 
+  it("reads each ad set's own end as a São Paulo day and where it delivers", async () => {
+    const meta = client(() => ({
+      body: {
+        data: [
+          {
+            id: 'as1',
+            name: 'Só Instagram',
+            status: 'ACTIVE',
+            campaign_id: 'c1',
+            end_time: '2026-10-13T23:59:00-0300',
+            targeting: {
+              geo_locations: { countries: ['BR'] },
+              publisher_platforms: ['instagram'],
+              instagram_positions: ['stream', 'story', 'reels'],
+            },
+          },
+          // Advantage+ placements: no publisher_platforms, and no end.
+          {
+            id: 'as2',
+            name: 'Automático',
+            status: 'PAUSED',
+            campaign_id: 'c1',
+            targeting: { geo_locations: { countries: ['BR'] } },
+          },
+          // 01:30 UTC on the 14th is still the 13th in São Paulo.
+          {
+            id: 'as3',
+            name: 'Sem leitura',
+            status: 'PAUSED',
+            campaign_id: 'c1',
+            end_time: '2026-10-14T01:30:00+0000',
+          },
+        ],
+      },
+    }));
+    const [instagram, automatic, unread] = await meta.listAdSets();
+    expect(instagram).toMatchObject({
+      endDate: '2026-10-13',
+      placements: {
+        platforms: ['instagram'],
+        positions: ['instagram:stream', 'instagram:story', 'instagram:reels'],
+      },
+    });
+    expect(automatic).toMatchObject({ endDate: null, placements: null });
+    expect(unread?.endDate).toBe('2026-10-13');
+    expect('placements' in (unread ?? {})).toBe(false);
+    // Only the placements are kept of the targeting: no audience, no location.
+    expect(JSON.stringify(instagram)).not.toContain('geo_locations');
+  });
+
+  it('asks Meta for the ad set end and targeting', async () => {
+    const urls: string[] = [];
+    const meta = client((url) => {
+      urls.push(url);
+      return { body: { data: [] } };
+    });
+    await meta.listAdSets();
+    expect(decodeURIComponent(urls[0] ?? '')).toContain('end_time,targeting');
+  });
+
   it('parses daily spend from Insights', async () => {
     const meta = client(() => ({ body: INSIGHTS_RESPONSE }));
     const rows = await meta.getSpend('2026-09-01');

@@ -1,6 +1,7 @@
 import { isTestDeal } from '@wings/shared';
+import { isNotNull } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { ga4TrafficDaily, rdCrmDeals } from '../../db/schema/index.js';
+import { campaignLeads, ga4TrafficDaily, rdCrmDeals } from '../../db/schema/index.js';
 import type { Ga4Client } from '../../lib/ga4.js';
 
 /**
@@ -215,6 +216,16 @@ export async function syncRdCrmDeals(
   } while (next);
 
   const now = input.now ?? new Date();
+  // The RD labels often say nothing ("Contato pelo Site", a Lead Ads form that made no origin): the
+  // platform the lead attribution found (Lead Ads form, paid UTM) stands in for them.
+  const attributedPlatform = new Map(
+    (
+      await db
+        .select({ rdDealId: campaignLeads.rdDealId, platform: campaignLeads.platform })
+        .from(campaignLeads)
+        .where(isNotNull(campaignLeads.platform))
+    ).map((row) => [row.rdDealId, row.platform as string] as const),
+  );
   for (const deal of deals) {
     const stage = stageOf.get(deal.deal_stage?.id ?? '');
     const sourceLabel = deal.deal_source?.name ?? null;
@@ -232,7 +243,8 @@ export async function syncRdCrmDeals(
       closedAt: deal.closed_at ? new Date(deal.closed_at) : null,
       sourceLabel,
       campaignLabel,
-      platform: platformOfRdLabels(sourceLabel, campaignLabel),
+      platform:
+        platformOfRdLabels(sourceLabel, campaignLabel) ?? attributedPlatform.get(deal.id) ?? null,
       lostReason: deal.deal_lost_reason?.name ?? null,
       isTest: isTestDeal(deal.name ?? null, deal.deal_lost_reason?.name ?? null),
       fetchedAt: now,
