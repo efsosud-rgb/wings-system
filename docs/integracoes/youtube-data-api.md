@@ -121,25 +121,15 @@ A migração dá `SELECT` ao `wings_ro` nas duas tabelas novas, quando o papel e
 
 ## Construtor (Demand Gen)
 
-`apps/web/src/components/campaign-builder/YoutubeChannelVideoPicker.tsx`:
-lista "Vídeos do canal" com o botão **Usar este vídeo**. Não depende do
-formulário: recebe `selected` (ids já no anúncio), `max` (quantos cabem) e
-`onPick(videoId)`. Ligação depois do merge do Demand Gen
-(`feat/google-demand-gen`), em `YoutubeAdFields`:
+No construtor (Marketing → Agente de Tráfego Pago — Wings → YouTube), embaixo
+das caixas de vídeo, a lista **Vídeos do canal**
+(`YoutubeChannelVideoPicker`, ligada em `YoutubeAdFields`) mostra os vídeos
+públicos da última leitura, do mais visto ao menos visto, com o botão **Usar
+este vídeo**: ele põe o link do vídeo na primeira caixa vazia. Um vídeo já nas
+caixas aparece como "Escolhido"; sem caixa livre, os botões ficam desligados.
+Sem chave, sem canal ou sem leitura, a lista diz o motivo e pede o link colado.
 
-```tsx
-<YoutubeChannelVideoPicker
-  selected={videos.map((value) => parseYoutubeVideoRef(value ?? '')).filter(Boolean)}
-  max={DEMAND_GEN_MAX_VIDEOS}
-  onPick={(id) => {
-    const empty = videos.findIndex((value) => !(value ?? '').trim());
-    if (empty !== -1)
-      setValue(`youtube.videos.${empty}`, youtubeVideoLink(id), { shouldDirty: true });
-  }}
-/>
-```
-
-O vídeo escolhido entra no mesmo campo que o link colado, então a conferência
+O vídeo escolhido entra na mesma caixa que o link colado, então a conferência
 do servidor (público/não listado pelo oEmbed) é a mesma.
 
 ## Não verificado ao vivo

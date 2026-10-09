@@ -11,8 +11,8 @@ import { Button } from '../ui.js';
  * place that holds the campaign's videos, so the server's checks are the same
  * whether a video was picked here or pasted.
  *
- * Self-contained on purpose: the Demand Gen builder plugs it next to its
- * video boxes (`selected` = the ids in the boxes, `onPick` fills the first
+ * Self-contained on purpose: the Demand Gen video boxes (`YoutubeAdFields`)
+ * plug it in (`selected` = the ids in the boxes, `onPick` fills the first
  * empty one), and nothing here depends on that form.
  */
 
@@ -28,16 +28,19 @@ const GAP_TEXT: Record<NonNullable<YoutubeChannelResponse['gap']>, string> = {
 export function YoutubeChannelVideoPicker({
   selected,
   max,
+  full: noRoom,
   onPick,
 }: {
   /** Video ids already in the form. */
   selected: readonly string[];
   /** How many videos the form takes. */
   max: number;
+  /** The form's own word that no box is free (a box may hold something that is not a video yet). */
+  full?: boolean;
   onPick: (videoId: string) => void;
 }) {
   const query = useYoutubeChannel();
-  const full = selected.length >= max;
+  const full = noRoom ?? selected.length >= max;
 
   return (
     <div className="builder-fieldset" role="group" aria-labelledby="youtube-picker-title">

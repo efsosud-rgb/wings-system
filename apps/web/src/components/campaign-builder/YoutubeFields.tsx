@@ -16,6 +16,7 @@ import {
   checkCopyCompliance,
   demandGenAgeLabel,
   parseYoutubeVideoRef,
+  youtubeVideoLink,
   type CampaignDraftInput,
   type DemandGenChannel,
   type DemandGenOptions,
@@ -31,6 +32,7 @@ import { MediaPicker } from '../media-studio/MediaLibrary.js';
 import { Alert, Button, Field, Input, Select } from '../ui.js';
 import { ComplianceWarning } from './CreativeBlock.js';
 import { parseBrlToCents } from './format.js';
+import { YoutubeChannelVideoPicker } from './YoutubeChannelVideoPicker.js';
 
 /**
  * The YouTube (Demand Gen) parts of the builder: the video ad (videos, texts,
@@ -94,6 +96,8 @@ export function YoutubeAdFields({
   const [picking, setPicking] = useState(false);
   const [logo, setLogo] = useState<MediaAsset | null>(null);
   const videos = youtube?.videos ?? [];
+  /** The first empty video box: where a video picked from the channel goes. */
+  const freeBox = videos.findIndex((value) => !(value ?? '').trim());
   const headlines = youtube?.headlines ?? [];
   const longHeadlines = youtube?.longHeadlines ?? [];
   const descriptions = youtube?.descriptions ?? [];
@@ -156,6 +160,16 @@ export function YoutubeAdFields({
               : 'Não deu para conferir os vídeos agora.'}
           </p>
         )}
+        <YoutubeChannelVideoPicker
+          selected={videos
+            .map((value) => parseYoutubeVideoRef(value ?? ''))
+            .filter((id): id is string => id !== null)}
+          max={DEMAND_GEN_MAX_VIDEOS}
+          full={freeBox === -1}
+          onPick={(id) => {
+            if (freeBox !== -1) setValue(`youtube.videos.${freeBox}`, youtubeVideoLink(id), filled);
+          }}
+        />
       </fieldset>
 
       <p className="field-hint">
