@@ -7,6 +7,20 @@ const state = { data: {} as OwnedChannelsResponse };
 vi.mock('../../api/dashboard.js', () => ({
   useOwnedChannels: () => ({ data: state.data, isError: false }),
 }));
+vi.mock('../../api/youtube.js', () => ({
+  useYoutubeChannel: () => ({
+    isError: false,
+    data: {
+      configured: { key: false, source: null },
+      gap: 'no_key',
+      channel: null,
+      lastRun: null,
+      nextRunAt: null,
+      history: null,
+      videos: [],
+    },
+  }),
+}));
 
 const { OwnedChannelsTab } = await import('./OwnedChannelsTab.js');
 
@@ -51,6 +65,7 @@ describe('Canais próprios', () => {
     expect(screen.getByText('Franchising, Gestão')).toBeTruthy();
     expect(screen.getByText(/Espelho do site atualizado há 30 min/)).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Publicação social' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'YouTube' })).toBeTruthy();
   });
 
   it('tells an empty period apart from an empty mirror', () => {

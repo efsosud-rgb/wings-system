@@ -43,7 +43,11 @@ export const ingestRuns = pgTable(
   {
     tenantId: tenantId(),
     id: uuid('id').primaryKey().defaultRandom(),
-    /** `scheduled` from the Coolify task, `manual` from a shell. */
+    /**
+     * `scheduled` from the Coolify task, `manual` from a shell; the YouTube
+     * ingestion writes `scheduled_youtube` (the API's own timer) and
+     * `manual_youtube`.
+     */
     trigger: text('trigger').notNull().default('scheduled'),
     /** running | ok | failed */
     status: text('status').notNull().default('running'),
@@ -55,6 +59,12 @@ export const ingestRuns = pgTable(
     accounts: jsonb('accounts').notNull().default([]),
     /** `{ status, posts?, error? }` of the blog mirror step; null when WordPress is not configured. */
     site: jsonb('site'),
+    /**
+     * The YouTube ingestion's own outcome (`{ channelId, source, videos,
+     * calls, units, shorts }`) on its rows (`scheduled_youtube` /
+     * `manual_youtube`); null on the ads cycles' rows.
+     */
+    youtube: jsonb('youtube'),
     /** Codes and names only, never personal data. */
     error: text('error'),
   },
