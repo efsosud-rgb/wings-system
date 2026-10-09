@@ -1129,6 +1129,7 @@ describe('Meta Lead Ads webhook', () => {
       .where(eq(leads.id, old.lead.id));
     expect(old.lead.ownerEmployeeId).toBeNull();
     expect(old.lead.stageId).toBeNull();
+    const untouchedEnteredAt = old.lead.enteredAt;
 
     rdMapAnswers();
     rdCalls.length = 0;
@@ -1168,15 +1169,22 @@ describe('Meta Lead Ads webhook', () => {
     });
     expect(event?.leadId).not.toBe(old.lead.id);
     const fresh = await db.query.leads.findFirst({ where: eq(leads.id, event?.leadId as string) });
+    // Its own row: the form's arrival time and ad ids, and the new RD deal
+    // (Leads das Campanhas attributes by these, and drops entered_at before 28/09).
     expect(fresh).toMatchObject({
       pipeline: 'formatacao',
       stage: 'Sem contato',
       ownerEmployeeId: seller.id,
       managedBy: 'wings',
       rdDealId: 'deal-new-2',
+      adPlatform: 'meta',
+      adCampaignExternalId: '120252401895850076',
       adExternalId: '120252401896000076',
+      enteredAt: new Date('2026-10-08T04:18:53Z'),
+      enteredAtSource: 'meta_created_time',
       formAnswers: { faturamento: 'até 100 mil' },
     });
+    expect(fresh?.enteredAt?.getTime()).not.toBe(untouchedEnteredAt.getTime());
     // The old deal is as it was; the two are tied on both timelines.
     const untouched = await db.query.leads.findFirst({ where: eq(leads.id, old.lead.id) });
     expect(untouched).toMatchObject({ rdDealId: 'deal-lost-1', ownerEmployeeId: null, won: false });
