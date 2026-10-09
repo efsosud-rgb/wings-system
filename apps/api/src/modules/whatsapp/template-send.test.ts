@@ -140,6 +140,10 @@ describe('which template goes with the window closed', () => {
     });
     const masculine = ok(base({ voice: { name: 'Casal do Churros', article: 'o' } }));
     expect(masculine.params[2]).toBe('do Casal do Churros');
+    // A brand whose name starts with an article is not given a second one.
+    const cabana = ok(base({ voice: { name: 'A Cabana da Barra', article: 'a' } }));
+    expect(cabana.params[2]).toBe('da Cabana da Barra');
+    expect(cabana.preview.text).toContain('do time de expansão da Cabana da Barra.');
   });
 
   it('the first version, with a notice, when the brand has no art', () => {

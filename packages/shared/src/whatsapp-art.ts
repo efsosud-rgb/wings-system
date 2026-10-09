@@ -65,11 +65,28 @@ export const waArticleSchema = z.object({
  */
 export type WaNameForm = 'plain' | 'article' | 'of';
 
+/** "A Cabana da Barra" → `{ own: 'a', rest: 'Cabana da Barra' }`: a name that already starts with an article. */
+function leadingArticle(name: string): { own: 'o' | 'a' | 'os' | 'as'; rest: string } | null {
+  const match = /^(o|a|os|as)\s+(\S.*)$/i.exec(name);
+  if (!match) return null;
+  return { own: match[1]!.toLowerCase() as 'o' | 'a' | 'os' | 'as', rest: match[2]! };
+}
+
+const OF: Record<'o' | 'a' | 'os' | 'as', string> = { o: 'do', a: 'da', os: 'dos', as: 'das' };
+
+/**
+ * A name that already starts with an article ("A Cabana da Barra", "O
+ * Boticário") keeps its own: "a Cabana da Barra", "da Cabana da Barra" —
+ * never "a A Cabana" or "da A Cabana". The name's article wins over the
+ * stored one, since it is what the name says.
+ */
 export function withArticle(name: string, article: BrandArticle, form: WaNameForm): string {
-  const clean = name.trim();
+  const clean = name.trim().replace(/\s+/g, ' ');
   if (!clean || form === 'plain') return clean;
+  const own = leadingArticle(clean);
+  if (own) return form === 'article' ? `${own.own} ${own.rest}` : `${OF[own.own]} ${own.rest}`;
   if (form === 'article') return `${article} ${clean}`;
-  return `${article === 'o' ? 'do' : 'da'} ${clean}`;
+  return `${OF[article]} ${clean}`;
 }
 
 // --- what each field of our templates is -------------------------------------------------
