@@ -22,13 +22,15 @@ import { Icon } from './Icon.js';
  * decides access: each entry only appears when the session already carries
  * the permission, and the API re-checks on the way in.
  */
-export function Topbar() {
+export function Topbar({ leading }: { leading?: ReactNode } = {}) {
   const session = useSession();
   const user = session.data;
   if (!user) return null;
   const modules = visibleNavigation({ role: user.role, permissions: user.permissions });
   return (
     <header className="topbar">
+      {/* The shell's ☰ (phones only). */}
+      {leading}
       <SearchButton modules={modules} />
       <span className="topbar-spacer" />
       <CreateMenu user={user} />

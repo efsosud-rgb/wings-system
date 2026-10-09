@@ -16,6 +16,7 @@ export type IconName =
   | 'chevron-right'
   | 'log-out'
   | 'x'
+  | 'menu'
   | 'arrow-right'
   | 'clock'
   | 'alert'
@@ -79,6 +80,7 @@ const PATHS: Record<IconName, string> = {
   'chevron-right': 'M9 6l6 6-6 6',
   'log-out': 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9',
   x: 'M18 6 6 18M6 6l12 12',
+  menu: 'M4 6h16M4 12h16M4 18h16',
   'arrow-right': 'M5 12h14M12 5l7 7-7 7',
   clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-14v5l3 2',
   alert:
