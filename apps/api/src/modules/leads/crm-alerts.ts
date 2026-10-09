@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { LEAD_ADMIN_ROLE_KEYS } from './access.js';
+import { trackedTaskSql } from './crm.js';
 import {
   crmNotifications,
   crmStageLimits,
@@ -54,7 +55,10 @@ async function findings(db: Database, now: Date, config: AlertConfig): Promise<F
     })
     .from(leadTasks)
     .innerJoin(leads, eq(leads.id, leadTasks.leadId))
-    .where(and(isNull(leadTasks.doneAt), lt(leadTasks.dueAt, now), isNull(leads.won)))
+    // A first-contact task of RD history (entered before the start of use) raises no alert.
+    .where(
+      and(isNull(leadTasks.doneAt), lt(leadTasks.dueAt, now), isNull(leads.won), trackedTaskSql()),
+    )
     .limit(MAX_FINDINGS);
   for (const task of overdue) {
     const first = task.kind === 'first_contact';

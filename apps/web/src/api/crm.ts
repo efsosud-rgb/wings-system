@@ -100,7 +100,7 @@ export function useDealCounters(pipeline: LeadPipeline) {
   return useQuery({
     queryKey: ['leads', 'counters', pipeline],
     queryFn: () =>
-      api.get<{ untouched: number; today: number; overdue: number }>(
+      api.get<{ untouched: number; today: number; overdue: number; since: string }>(
         `/leads/board/counters?pipeline=${pipeline}`,
       ),
   });

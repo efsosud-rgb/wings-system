@@ -906,7 +906,7 @@ export async function reprocessMetaLeadgenEvent(
   // The form is old, so the queue made no task and no notice: the seller gets both now.
   let task = false;
   if (lead && after?.leadCreated && lead.ownerEmployeeId) {
-    await ensureFirstContactTask(deps.db, lead, null, now);
+    await ensureFirstContactTask(deps.db, lead, null, now, { force: true });
     await announceLeadArrival(deps.db, lead);
     task = true;
   }
