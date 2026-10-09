@@ -1,10 +1,11 @@
 import type { AdPlatform } from './ads/dashboard.js';
 
 /**
- * Leads das Campanhas: RD CRM deals that came from the paid campaigns
- * running now, one row per deal. The contract between the list screen and
- * the API; the API decides who sees which row (`campaign_leads.read`: all
- * for Diretoria and Gerente Comercial, own for Vendedor Formatação).
+ * Leads das Campanhas: the leads of the Formatação funnel that came from the
+ * paid campaigns, one row per person: an RD CRM deal, a Wings lead, or the
+ * two joined. The contract between the list screen and the API; the API
+ * decides who sees which row (`campaign_leads.read`: all for Diretoria and
+ * Gerente Comercial, own for Vendedor Formatação).
  */
 
 /** The first moment counted: 28/09/2026 00:00 in Brasília. */
@@ -141,6 +142,8 @@ export interface CampaignLeadRow {
   city: string | null;
   platform: AdPlatform | null;
   campaignName: string | null;
+  /** The ad set of the ad, when the ad is known. */
+  adSetName: string | null;
   adName: string | null;
   attribution: AttributionMethod | null;
   utmCampaign: string | null;

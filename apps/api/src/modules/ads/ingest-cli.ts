@@ -239,32 +239,33 @@ async function main() {
         );
       }
 
-      // Leads das Campanhas, after the statuses are fresh: counts only in the log.
-      if (env.RD_CRM_API_TOKEN) {
-        try {
-          const leads = await syncCampaignLeads(db, {
-            rdCrmToken: env.RD_CRM_API_TOKEN,
-            rdMarketing:
-              env.RD_MKT_CLIENT_ID && env.RD_MKT_CLIENT_SECRET && env.RD_MKT_REFRESH_TOKEN
-                ? {
-                    clientId: env.RD_MKT_CLIENT_ID,
-                    clientSecret: env.RD_MKT_CLIENT_SECRET,
-                    refreshToken: env.RD_MKT_REFRESH_TOKEN,
-                  }
-                : null,
-            box: createSecretBox(env.CPF_ENCRYPTION_KEY),
-            now,
-          });
-          console.warn(
-            `leads das campanhas: ${leads.deals} negócio(s) do Funil Formatação, ` +
-              `${leads.attributed} atribuído(s), ${leads.unattributed} sem atribuição, ` +
-              `${leads.tests} de teste; UTM consultada ${leads.utmLookups}x (${leads.utmFailures} falha(s))`,
-          );
-        } catch (error) {
-          console.error(
-            `leads das campanhas: falhou (${error instanceof Error ? error.name : 'unknown'})`,
-          );
-        }
+      // Leads das Campanhas, after the statuses are fresh: counts only in the log. Without the RD
+      // token only the Wings leads are read (RD is left alone).
+      try {
+        const leads = await syncCampaignLeads(db, {
+          rdCrmToken: env.RD_CRM_API_TOKEN ?? null,
+          rdMarketing:
+            env.RD_MKT_CLIENT_ID && env.RD_MKT_CLIENT_SECRET && env.RD_MKT_REFRESH_TOKEN
+              ? {
+                  clientId: env.RD_MKT_CLIENT_ID,
+                  clientSecret: env.RD_MKT_CLIENT_SECRET,
+                  refreshToken: env.RD_MKT_REFRESH_TOKEN,
+                }
+              : null,
+          box: createSecretBox(env.CPF_ENCRYPTION_KEY),
+          now,
+        });
+        console.warn(
+          `leads das campanhas: ${leads.deals} negócio(s) do Funil Formatação, ` +
+            `${leads.paired} ligado(s) a lead do Wings pelo contato, ` +
+            `${leads.wingsLeads} lead(s) do Wings sem negócio, ` +
+            `${leads.attributed} atribuído(s), ${leads.unattributed} sem atribuição, ` +
+            `${leads.tests} de teste; UTM consultada ${leads.utmLookups}x (${leads.utmFailures} falha(s))`,
+        );
+      } catch (error) {
+        console.error(
+          `leads das campanhas: falhou (${error instanceof Error ? error.name : 'unknown'})`,
+        );
       }
 
       if (failures > 0) {
