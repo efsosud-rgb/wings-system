@@ -171,6 +171,11 @@ export async function runCrmAlerts(
         kind: item.kind,
         message: item.message,
         dedupeKey: `${item.kind}:${item.entityId}:${item.occurrence}:${person}`,
+        // The overdue first contact is also e-mailed, to the owner alone (crm-notice-mail.ts).
+        emailState:
+          item.kind === 'first_contact_overdue' && person === item.ownerEmployeeId
+            ? 'pending'
+            : 'none',
       });
   }
   let written = 0;
@@ -262,6 +267,16 @@ export async function managersAndBoard(db: Database): Promise<string[]> {
 }
 
 /**
+ * What runs right after an arrival notice is written: the app registers the
+ * e-mail pass here (`sendPendingNoticeMails`), so the owner's e-mail leaves at
+ * once instead of at the next cycle. Fire-and-forget; its failures are its own.
+ */
+let leadArrivedKick: (() => void) | null = null;
+export function onLeadArrivedKick(kick: (() => void) | null): void {
+  leadArrivedKick = kick;
+}
+
+/**
  * The notice of a new lead's arrival (Meta, RD landing, site form), written in
  * code so it does not depend on a rule set on the screen. With an owner (from
  * the rotation) the owner is told, with the first-contact deadline; with none,
@@ -314,8 +329,11 @@ export async function announceLeadArrival(
           kind: 'new_lead',
           message: `Novo lead para você.${due}`,
           dedupeKey: `new_lead:${lead.id}:${lead.ownerEmployeeId}`,
+          // The owner also gets it by e-mail (crm-notice-mail.ts): sent by the kick below or the next cycle.
+          emailState: 'pending',
         })
         .onConflictDoNothing();
+      leadArrivedKick?.();
       return;
     }
     const people = await managersAndBoard(db);

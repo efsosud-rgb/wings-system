@@ -378,6 +378,10 @@ export function nextBusinessInstant(from: Date): Date {
   return cursor;
 }
 
+/** Whether an instant is inside working hours (Mon–Fri, 9h–18h São Paulo). */
+export const isBusinessInstant = (date: Date): boolean =>
+  nextBusinessInstant(date).getTime() <= date.getTime();
+
 /**
  * `from` plus `hours` of working time (Mon–Fri, 9h–18h São Paulo). Time
  * outside those hours does not count: a lead that arrives Friday 17h30 with
