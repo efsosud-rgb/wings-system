@@ -2,8 +2,11 @@ import {
   mentionsWings,
   canonicalWhatsAppPhone,
   templateParamCount,
-  waSendTemplateSchema,
+  waTemplateFamily,
+  waTemplateSendSchema,
   waSendTextSchema,
+  WA_ART_SUFFIX,
+  type WaArtLink,
   type WaConversationItem,
   type WaNewTarget,
   type WaTemplate,
@@ -16,11 +19,18 @@ import { z } from 'zod';
 import { waContacts, waConversations, waMessages, waTemplates } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { leadInScope, leadOwnerFilter } from '../leads/access.js';
+import { storageOf } from '../../lib/storage/index.js';
+import {
+  ART_MEDIA_GONE_CODES,
+  artLink,
+  artMediaId,
+  invalidateArtMedia,
+  type ArtDeps,
+} from './art.js';
 import {
   downloadWhatsAppMedia,
   errorText,
   listWhatsAppTemplates,
-  templatePayload,
   textPayload,
   callPermissionPayload,
   readCallPermission,
@@ -43,6 +53,15 @@ import {
 } from './thread.js';
 import { takeConversation } from '../sofia/state.js';
 import { adoptUnmatched, conversationFor } from './intake.js';
+import {
+  payloadOf,
+  planTemplateFor,
+  templateBody,
+  templateContextOf,
+  type TemplatePlan,
+} from './template-send.js';
+
+export { templateBody } from './template-send.js';
 
 /**
  * The deal's WhatsApp (docs/whatsapp/cloud-api.md). One permission,
@@ -68,6 +87,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   const now = () => app.wings.now?.() ?? new Date();
   const fetchImpl = () => app.wings.whatsappFetch ?? fetch;
   const use = { preHandler: app.requirePermission('leads.whatsapp') };
+  const artDeps = (): ArtDeps => ({ db, storage: storageOf(app.wings), now });
 
   const notFound = (reply: FastifyReply) =>
     reply.status(404).send({ error: 'not_found', message: 'Conversa não encontrada.' });
@@ -273,7 +293,14 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   type Outgoing =
     | { kind: 'text'; text: string }
     | { kind: 'call_permission' }
-    | { kind: 'template'; name: string; language: string; params: string[] };
+    | {
+        kind: 'template';
+        name: string;
+        language: string;
+        params: string[];
+        companyArticle: 'a' | 'o';
+        expect?: { sendAs: 'free' | 'template'; charged: boolean };
+      };
 
   async function send(
     request: FastifyRequest,
@@ -302,6 +329,11 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     let payload: OutgoingPayload;
     let shown: string;
     let content: Record<string, unknown> = {};
+    let planned: {
+      plan: Extract<TemplatePlan, { ok: true }>;
+      mediaId: string | null;
+      artFileId: string | null;
+    } | null = null;
     if (outgoing.kind === 'call_permission') {
       if (!window.open)
         return reply.status(409).send({
@@ -324,36 +356,88 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       payload = textPayload(outgoing.text);
       shown = outgoing.text;
     } else {
+      // Who asked not to receive messages gets no template, not even as a common message:
+      // only what a person writes, inside the window.
       if (target.contact?.optOutAt)
         return reply.status(409).send({
           error: 'opted_out',
           message:
             'A pessoa pediu para não receber mensagens. Só dá para responder quando ela escrever.',
         });
-      const template = await db.query.waTemplates.findFirst({
-        where: and(
-          eq(waTemplates.name, outgoing.name),
-          eq(waTemplates.language, outgoing.language),
-          eq(waTemplates.status, 'APPROVED'),
-        ),
-      });
-      if (!template)
-        return reply.status(422).send({
-          error: 'template_unknown',
-          message: 'Modelo não encontrado ou não aprovado pela Meta.',
-        });
-      const body = templateBody(template.components);
-      if (templateParamCount(body) !== outgoing.params.length)
+      const context = await templateContextOf(
+        db,
+        {
+          leadId: target.leadId,
+          conversationId: target.conversationId ?? null,
+          contact: target.contact,
+          senderEmployeeId: request.session.actor.employeeId,
+        },
+        at,
+      );
+      const plan = await planTemplateFor(db, context, outgoing);
+      if (!plan.ok)
+        return reply.status(plan.status).send({ error: plan.error, message: plan.message });
+      const { preview } = plan;
+      // One value per field, as the preview gave them: a short or long list is refused, never completed.
+      if (outgoing.params.length !== preview.fields.length || !preview.ready)
         return reply.status(422).send({
           error: 'template_params',
-          message: `Este modelo pede ${templateParamCount(body)} campo(s).`,
+          message:
+            outgoing.params.length !== preview.fields.length
+              ? `Este modelo pede ${preview.fields.length} campo(s).`
+              : 'Preencha cada campo do modelo.',
         });
-      payload = templatePayload(outgoing.name, outgoing.language, outgoing.params);
-      shown = fillTemplate(body, outgoing.params) ?? outgoing.name;
-      const refused = offBrand(`${shown} ${JSON.stringify(template.components ?? [])}`);
+      // The window may have closed since the preview: the seller sees the new cost before it goes.
+      if (
+        outgoing.expect &&
+        (outgoing.expect.sendAs !== preview.sendAs || outgoing.expect.charged !== preview.charged)
+      )
+        return reply.status(409).send({
+          error: 'send_mode_changed',
+          message:
+            preview.sendAs === 'template'
+              ? `A janela de 24 h fechou: agora vai como modelo aprovado${
+                  preview.charged ? ', cobrado pela Meta' : ''
+                }. Confira e envie de novo.`
+              : 'A janela de 24 h abriu: agora vai como mensagem comum, sem custo. Confira e envie de novo.',
+          preview,
+        });
+      // The voice covers every word that leaves: the text, the buttons, the footer, the header.
+      const refused = offBrand(`${preview.text} ${JSON.stringify(plan.version.components ?? [])}`);
       if (refused) return refused;
+      let mediaId: string | null = null;
+      if (plan.needsArt) {
+        if (!context.art)
+          return reply
+            .status(422)
+            .send({ error: 'art_missing', message: preview.notices[0] ?? 'Falta a arte.' });
+        const media = await artMediaId(
+          { ...artDeps(), fetchImpl: fetchImpl(), config },
+          context.art,
+        );
+        if (!media.ok)
+          return reply.status(502).send({
+            error: 'art_upload_failed',
+            message:
+              media.why === 'meta'
+                ? `A arte não subiu para a Meta${errorText(media.code, null) ? ` (${errorText(media.code, null)})` : ''}. Nada foi enviado; tente de novo em instantes.`
+                : 'Não deu para ler a arte no Drive. Nada foi enviado; confira a arte no cadastro.',
+          });
+        mediaId = media.mediaId;
+      }
+      planned = { plan, mediaId, artFileId: plan.needsArt ? (context.art?.id ?? null) : null };
+      payload = payloadOf(plan, mediaId);
+      shown = preview.text;
+      const sent = {
+        name: plan.version.name,
+        language: plan.version.language,
+        params: plan.params,
+      };
       content = {
-        template: { name: outgoing.name, language: outgoing.language, params: outgoing.params },
+        ...(preview.sendAs === 'free'
+          ? { fromTemplate: { ...sent, family: preview.family } }
+          : { template: sent }),
+        ...(planned.artFileId ? { art: { fileId: planned.artFileId, mediaId } } : {}),
       };
     }
 
@@ -382,7 +466,16 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       leadId: target.leadId,
       author: 'employee',
       employeeId: actor.employeeId,
-      kind: outgoing.kind === 'call_permission' ? 'interactive' : outgoing.kind,
+      kind:
+        outgoing.kind === 'call_permission'
+          ? 'interactive'
+          : planned?.plan.free
+            ? planned.plan.free.kind === 'image'
+              ? 'image'
+              : planned.plan.free.kind === 'text'
+                ? 'text'
+                : 'interactive'
+            : outgoing.kind,
       shown,
       content,
       payload,
@@ -390,6 +483,14 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     });
     const saved = delivered.row;
     const outcome = delivered.outcome;
+    // Meta said the art behind the id is gone: the next send uploads it again (this one stays failed).
+    if (
+      outcome === 'failed' &&
+      planned?.mediaId &&
+      delivered.errorCode !== null &&
+      ART_MEDIA_GONE_CODES.has(delivered.errorCode)
+    )
+      await invalidateArtMedia(db, planned.mediaId, at);
     if (outcome === 'sent' && outgoing.kind === 'call_permission')
       await db
         .update(waContacts)
@@ -412,7 +513,13 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       metadata: {
         messageId: saved.id,
         kind: outgoing.kind,
-        ...(outgoing.kind === 'template' ? { template: outgoing.name } : {}),
+        ...(planned
+          ? {
+              template: planned.plan.version.name,
+              sentAs: planned.plan.preview.sendAs,
+              artFileId: planned.artFileId,
+            }
+          : {}),
         outcome,
         ...(delivered.errorCode === null ? {} : { errorCode: delivered.errorCode }),
       },
@@ -429,7 +536,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         ? { kind: 'text', text: parsed.data.text }
         : (parsed.error.issues[0]?.message ?? 'Mensagem inválida.');
     }
-    const parsed = waSendTemplateSchema.safeParse(body);
+    const parsed = waTemplateSendSchema.safeParse(body);
     return parsed.success
       ? { kind: 'template', ...parsed.data }
       : (parsed.error.issues[0]?.message ?? 'Modelo inválido.');
@@ -473,6 +580,88 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         },
         outgoing,
       );
+    });
+  }
+
+  // --- what a template becomes, before it goes ---------------------------------------
+
+  /** The deal's or the conversation's target, in the reader's scope; null answers 404. */
+  async function targetOf(request: FastifyRequest, by: 'lead' | 'conversation', id: string) {
+    if (by === 'lead') {
+      const lead = await leadInScope(db, request.session.actor, id, 'leads.whatsapp');
+      if (!lead) return null;
+      return {
+        leadId: lead.id,
+        conversationId: null,
+        contact: await contactOfPhone(db, lead.phone),
+      };
+    }
+    const found = await visibleConversation(request, id);
+    if (!found) return null;
+    return {
+      leadId: found.conversation.leadId,
+      conversationId: found.conversation.id,
+      contact: found.contact,
+    };
+  }
+
+  for (const [by, base] of [
+    ['lead', '/leads/:id/whatsapp'],
+    ['conversation', '/whatsapp/conversations/:id'],
+  ] as const) {
+    /**
+     * What the chosen template becomes now: a common message (window open) or
+     * the approved template, with the fields filled and the notices. Nothing
+     * is sent; the send plans again from the database.
+     */
+    app.post(`${base}/template-preview`, use, async (request, reply) => {
+      const params = idParams.safeParse(request.params);
+      if (!params.success) return notFound(reply);
+      const target = await targetOf(request, by, params.data.id);
+      if (!target) return notFound(reply);
+      const body = waTemplateSendSchema.safeParse(request.body);
+      if (!body.success)
+        return reply.status(400).send({ error: 'invalid', message: 'Modelo inválido.' });
+      const context = await templateContextOf(
+        db,
+        { ...target, senderEmployeeId: request.session.actor.employeeId },
+        now(),
+      );
+      const plan = await planTemplateFor(db, context, body.data);
+      if (!plan.ok)
+        return reply.status(plan.status).send({ error: plan.error, message: plan.message });
+      return reply.header('Cache-Control', 'no-store').send({ preview: plan.preview });
+    });
+
+    /** The art this conversation's templates carry, for the preview: an address of 5 minutes. */
+    app.get(`${base}/art`, use, async (request, reply) => {
+      const params = idParams.safeParse(request.params);
+      if (!params.success) return notFound(reply);
+      const target = await targetOf(request, by, params.data.id);
+      if (!target) return notFound(reply);
+      const context = await templateContextOf(db, { ...target, senderEmployeeId: null }, now());
+      if (!context.art)
+        return reply.status(404).send({ error: 'no_art', message: 'Sem arte cadastrada.' });
+      const deps = artDeps();
+      if (!deps.storage)
+        return reply
+          .status(503)
+          .send({ error: 'storage_unavailable', message: 'O Drive não está disponível agora.' });
+      const link: WaArtLink = await artLink(deps, context.art);
+      await writeAudit(db, {
+        actorEmployeeId: request.session.actor.employeeId,
+        action: 'drive.file_previewed',
+        entity: 'drive_file',
+        entityId: link.fileId,
+        ip: request.ip,
+        metadata: {
+          purpose: 'whatsapp_template_preview',
+          ...(target.leadId
+            ? { leadId: target.leadId }
+            : { conversationId: target.conversationId }),
+        },
+      });
+      return reply.header('Cache-Control', 'no-store').send(link);
     });
   }
 
@@ -589,16 +778,27 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       .from(waTemplates)
       .where(eq(waTemplates.status, 'APPROVED'))
       .orderBy(asc(waTemplates.name), asc(waTemplates.language));
-    const templates: WaTemplate[] = rows.map((row) => {
-      const body = templateBody(row.components);
-      return {
-        name: row.name,
-        language: row.language,
-        category: row.category,
-        body,
-        paramCount: templateParamCount(body),
-      };
-    });
+    // One entry per template for the seller: the `_arte` version is chosen when it goes.
+    const approved = new Set(rows.map((row) => `${row.name}|${row.language}`));
+    const templates: WaTemplate[] = rows
+      .filter(
+        (row) =>
+          !row.name.endsWith(WA_ART_SUFFIX) ||
+          !approved.has(`${waTemplateFamily(row.name)}|${row.language}`),
+      )
+      .map((row) => {
+        const body = templateBody(row.components);
+        return {
+          name: row.name,
+          language: row.language,
+          category: row.category,
+          body,
+          paramCount: templateParamCount(body),
+          artVersion:
+            row.name.endsWith(WA_ART_SUFFIX) ||
+            approved.has(`${row.name}${WA_ART_SUFFIX}|${row.language}`),
+        };
+      });
     return reply.send({ templates, configured: config !== null, syncError });
   });
 
@@ -650,17 +850,3 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       .send(file.data.bytes);
   });
 };
-
-/** The BODY text of a template as Meta lists it. */
-export function templateBody(components: unknown): string | null {
-  if (!Array.isArray(components)) return null;
-  const body = components.find(
-    (c) => c && typeof c === 'object' && (c as { type?: string }).type === 'BODY',
-  ) as { text?: unknown } | undefined;
-  return typeof body?.text === 'string' ? body.text : null;
-}
-
-function fillTemplate(body: string | null, params: string[]): string | null {
-  if (!body) return null;
-  return body.replace(/\{\{\s*(\d+)\s*\}\}/g, (all, n: string) => params[Number(n) - 1] ?? all);
-}

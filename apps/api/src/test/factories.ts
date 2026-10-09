@@ -126,3 +126,37 @@ export function clientRegister(name: string, overrides: Record<string, unknown> 
     ...overrides,
   };
 }
+
+/**
+ * The first bytes of a PNG of this size (signature and IHDR), padded to
+ * `byteSize`: enough for every check that reads the header, never decoded.
+ */
+export function fakePng(width: number, height: number, byteSize = 2048): Buffer {
+  const ihdr = Buffer.alloc(25);
+  ihdr.writeUInt32BE(13, 0);
+  ihdr.write('IHDR', 4, 'latin1');
+  ihdr.writeUInt32BE(width, 8);
+  ihdr.writeUInt32BE(height, 12);
+  ihdr.writeUInt8(8, 16); // bit depth
+  ihdr.writeUInt8(6, 17); // RGBA
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const head = Buffer.concat([signature, ihdr]);
+  return Buffer.concat([head, Buffer.alloc(Math.max(0, byteSize - head.length), 7)]);
+}
+
+/** The first bytes of a JPEG of this size (SOI, an APP0 and a baseline frame header), padded. */
+export function fakeJpeg(width: number, height: number, byteSize = 2048): Buffer {
+  const app0 = Buffer.from([
+    0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01,
+    0x00, 0x00,
+  ]);
+  const sof = Buffer.alloc(19);
+  sof.writeUInt16BE(0xffc0, 0);
+  sof.writeUInt16BE(17, 2);
+  sof.writeUInt8(8, 4);
+  sof.writeUInt16BE(height, 5);
+  sof.writeUInt16BE(width, 7);
+  sof.writeUInt8(3, 9);
+  const head = Buffer.concat([Buffer.from([0xff, 0xd8]), app0, sof]);
+  return Buffer.concat([head, Buffer.alloc(Math.max(0, byteSize - head.length), 0)]);
+}

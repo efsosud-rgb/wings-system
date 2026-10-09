@@ -1,9 +1,12 @@
 import {
   WA_KIND_LABELS,
   WA_STATUS_LABELS,
+  waTemplateFamily,
+  type BrandArticle,
   type DealWhatsApp,
   type WaMessage,
   type WaTemplate,
+  type WaTemplatePreview,
 } from '@wings/shared';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError } from '../../api/client.js';
@@ -11,6 +14,8 @@ import {
   useRefreshWhatsAppTemplates,
   useSendWhatsAppTemplate,
   useSendWhatsAppText,
+  useTemplatePreview,
+  useWhatsAppArt,
   useWhatsAppTemplates,
   whatsappMediaUrl,
   type WhatsAppThread,
@@ -122,7 +127,18 @@ function Bubble({ message }: { message: WaMessage }) {
     <li
       className={`crm-wa-bubble ${out ? 'is-out' : 'is-in'}${message.bySofia ? ' is-sofia' : ''}${failed ? ' is-failed' : ''}`}
     >
-      {message.template && <span className="crm-wa-tag">Modelo · {message.template.name}</span>}
+      {message.template && (
+        <span className="crm-wa-tag">
+          Modelo · {message.template.name}
+          {message.withArt ? ' · com arte' : ''}
+        </span>
+      )}
+      {message.fromTemplate && (
+        <span className="crm-wa-tag">
+          Do modelo {message.fromTemplate}, como mensagem comum
+          {message.withArt ? ' · com arte' : ''}
+        </span>
+      )}
       {message.media && (
         <a
           className="crm-wa-media"
@@ -205,6 +221,36 @@ function TextCompose({ thread, onTemplate }: { thread: WhatsAppThread; onTemplat
   );
 }
 
+const CATEGORY_LABELS: Record<string, string> = {
+  MARKETING: 'marketing',
+  UTILITY: 'utilidade',
+  AUTHENTICATION: 'autenticação',
+};
+
+/** The value after the person stopped typing for a moment (the preview asks the server then). */
+function useSettled<T>(value: T, ms = 400): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), ms);
+    return () => clearTimeout(timer);
+  }, [value, ms]);
+  return settled;
+}
+
+/** What goes out: a common message inside the window, or the approved template, and its cost. */
+export function sendModeText(preview: WaTemplatePreview): string {
+  if (preview.sendAs === 'free')
+    return `Mensagem comum, sem custo${
+      preview.windowExpiresAt ? ` (janela aberta até ${timeOf(preview.windowExpiresAt)})` : ''
+    }`;
+  const category = preview.category
+    ? (CATEGORY_LABELS[preview.category] ?? preview.category.toLowerCase())
+    : null;
+  return `Modelo aprovado (${category ? `${category}: ` : ''}${
+    preview.charged ? 'cobrado pela Meta' : 'sem custo dentro da janela'
+  })`;
+}
+
 function TemplateCompose({
   thread,
   optedOut,
@@ -222,32 +268,94 @@ function TemplateCompose({
   const list = templates.data?.templates ?? [];
   const [chosen, setChosen] = useState('');
   const template: WaTemplate | undefined = list.find((t) => `${t.name}|${t.language}` === chosen);
-  const [params, setParams] = useState<string[]>([]);
-  const paramCount = template?.paramCount ?? 0;
-  useEffect(() => setParams(Array.from({ length: paramCount }, () => '')), [chosen, paramCount]);
-  const preview = useMemo(
+  // What the seller typed, for this template only: switching templates starts from the server's values.
+  const [draft, setDraft] = useState<{ key: string; params: string[] } | null>(null);
+  const [companyArticle, setCompanyArticle] = useState<BrandArticle>('a');
+  useEffect(() => setCompanyArticle('a'), [chosen]);
+  const typed = draft?.key === chosen ? draft.params : null;
+  const settledParams = useSettled(typed);
+  const input = useMemo(
     () =>
-      template?.body?.replace(
-        /\{\{\s*(\d+)\s*\}\}/g,
-        (all, n: string) => params[Number(n) - 1] || all,
-      ),
-    [template, params],
+      template
+        ? {
+            name: template.name,
+            language: template.language,
+            // Empty: the server fills what it knows (lead, seller, brand, company).
+            params: settledParams ?? [],
+            companyArticle,
+          }
+        : null,
+    [template, settledParams, companyArticle],
   );
-  const ready = template && params.every((p) => p.trim().length > 0);
+  const previewQuery = useTemplatePreview(thread, input);
+  const data = previewQuery.data?.preview;
+  // Only a preview of the chosen template counts, never the previous one shown while this one loads.
+  const preview =
+    template &&
+    data &&
+    !previewQuery.isPlaceholderData &&
+    data.family === waTemplateFamily(template.name) &&
+    data.language === template.language
+      ? data
+      : undefined;
+  const { refetch } = previewQuery;
+  // When the window closes, what goes changes (a common message becomes a paid template): ask again.
+  const closesAt = preview?.windowExpiresAt ? new Date(preview.windowExpiresAt).getTime() : null;
+  useEffect(() => {
+    if (closesAt === null) return;
+    const timer = setTimeout(() => void refetch(), Math.max(0, closesAt - Date.now()) + 1_000);
+    return () => clearTimeout(timer);
+  }, [closesAt, refetch]);
+  const art = useWhatsAppArt(thread, Boolean(preview?.withArt));
+  const values = preview
+    ? preview.fields.map((field, i) => (field.locked ? field.value : (typed?.[i] ?? field.value)))
+    : [];
+  const ready =
+    preview !== undefined &&
+    preview.fields.every((field, i) => (field.locked ? true : (values[i] ?? '').trim() !== ''));
   const syncError = refresh.data?.syncError ?? templates.data?.syncError;
 
-  if (optedOut && !windowOpen)
-    return <p className="crm-wa-off">Envio pausado: a pessoa pediu para não receber mensagens.</p>;
+  if (optedOut)
+    return (
+      <div className="crm-wa-compose is-template">
+        <p className="crm-wa-off">
+          Modelos pausados: a pessoa pediu para não receber mensagens.{' '}
+          {windowOpen ? 'Responda escrevendo livre.' : 'Só dá para responder quando ela escrever.'}
+        </p>
+        {windowOpen && (
+          <div className="crm-wa-compose-actions">
+            <button type="button" className="crm-btn is-quiet is-small" onClick={onText}>
+              Escrever livre
+            </button>
+          </div>
+        )}
+      </div>
+    );
   return (
     <form
       className="crm-wa-compose is-template"
       aria-label="Enviar modelo"
       onSubmit={(event) => {
         event.preventDefault();
-        if (!template || !ready) return;
+        if (!template || !preview || !ready || send.isPending) return;
         send.mutate(
-          { name: template.name, language: template.language, params: params.map((p) => p.trim()) },
-          { onSuccess: () => setChosen('') },
+          {
+            name: template.name,
+            language: template.language,
+            params: values.map((value) => value.trim()),
+            companyArticle,
+            // What the screen showed: if it changed (the window closed), the server asks again.
+            expect: { sendAs: preview.sendAs, charged: preview.charged },
+          },
+          {
+            onSuccess: () => {
+              setChosen('');
+              setDraft(null);
+            },
+            onError: (error) => {
+              if (error instanceof ApiError && error.code === 'send_mode_changed') void refetch();
+            },
+          },
         );
       }}
     >
@@ -263,7 +371,7 @@ function TemplateCompose({
           </option>
           {list.map((t) => (
             <option key={`${t.name}|${t.language}`} value={`${t.name}|${t.language}`}>
-              {t.name} ({t.language})
+              {t.name} ({t.language}){t.artVersion ? ' · com arte' : ''}
             </option>
           ))}
         </select>
@@ -282,24 +390,93 @@ function TemplateCompose({
         </p>
       )}
       {syncError && <p className="crm-error">{syncError}</p>}
-      {template &&
-        params.map((value, index) => (
-          <input
-            key={index}
-            className="crm-input"
-            aria-label={`Campo ${index + 1} do modelo`}
-            placeholder={`Campo {{${index + 1}}}`}
-            maxLength={1024}
-            value={value}
-            onChange={(event) =>
-              setParams((current) => current.map((p, i) => (i === index ? event.target.value : p)))
-            }
-          />
-        ))}
-      {preview && <p className="crm-wa-preview">{preview}</p>}
+      {template && previewQuery.isError && (
+        <p className="crm-error">
+          {errorText(previewQuery.error, 'Não deu para montar a prévia deste modelo.')}
+        </p>
+      )}
+      {template && !preview && !previewQuery.isError && (
+        <p className="crm-sub">Montando a prévia…</p>
+      )}
+      {preview && (
+        <>
+          {preview.fields.length > 0 && (
+            <div className="crm-wa-fields">
+              {preview.fields.map((field, index) => (
+                <label key={field.index}>
+                  {field.label}
+                  <input
+                    className="crm-input"
+                    aria-label={`${field.label} ({{${field.index}}})`}
+                    maxLength={1024}
+                    value={field.locked ? field.value : (values[index] ?? '')}
+                    disabled={field.locked}
+                    title={field.locked ? 'A marca desta conversa' : undefined}
+                    onChange={(event) =>
+                      setDraft({
+                        key: chosen,
+                        params: values.map((value, i) =>
+                          i === index ? event.target.value : value,
+                        ),
+                      })
+                    }
+                  />
+                </label>
+              ))}
+            </div>
+          )}
+          {preview.usesCompanyArticle && (
+            <fieldset className="crm-wa-article">
+              <legend className="sr-only">Artigo da empresa</legend>
+              <span>Empresa:</span>
+              <label>
+                <input
+                  type="radio"
+                  name="company-article"
+                  checked={companyArticle === 'a'}
+                  onChange={() => setCompanyArticle('a')}
+                />{' '}
+                a (da Padaria)
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="company-article"
+                  checked={companyArticle === 'o'}
+                  onChange={() => setCompanyArticle('o')}
+                />{' '}
+                o (do Bar)
+              </label>
+            </fieldset>
+          )}
+          <p className={`crm-wa-mode ${preview.charged ? 'is-charged' : 'is-free'}`}>
+            {sendModeText(preview)}
+          </p>
+          {preview.reason && (
+            <p className="crm-wa-reason">Por que vai como modelo: {preview.reason}</p>
+          )}
+          {preview.notices.map((notice) => (
+            <p key={notice} className="crm-wa-notice">
+              {notice}
+            </p>
+          ))}
+          <div className="crm-wa-card" aria-label="Prévia da mensagem">
+            {preview.withArt && art.data && <img src={art.data.url} alt="Arte do cabeçalho" />}
+            <p className="crm-wa-preview">{preview.text}</p>
+            {preview.footer && <span className="crm-wa-card-footer">{preview.footer}</span>}
+            {preview.buttons.length > 0 && (
+              <div className="crm-wa-card-buttons">
+                {preview.buttons.map((title) => (
+                  <span key={title}>{title}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
       <div className="crm-wa-compose-actions">
         <button type="submit" className="crm-btn is-primary" disabled={!ready || send.isPending}>
-          Enviar modelo
+          {preview?.sendAs === 'free' ? 'Enviar mensagem' : 'Enviar modelo'}
         </button>
         {windowOpen && (
           <button type="button" className="crm-btn is-quiet is-small" onClick={onText}>

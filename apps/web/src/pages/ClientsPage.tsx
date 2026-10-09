@@ -31,6 +31,7 @@ import { ProjectStatusTag, StatusDialog, stageLabel } from '../components/projec
 import { Alert, Button, Field, Input, Select } from '../components/ui.js';
 import type { ClientProject } from '@wings/shared';
 import { PageHeader } from '../components/PageHeader.js';
+import { WhatsAppArtPanel } from '../components/WhatsAppArtPanel.js';
 
 /**
  * Formatação → Clientes. The register of who work is for: a quick
@@ -281,6 +282,21 @@ function ClientRow({
                   · {client.franchiseOnSale ? 'Em comercialização' : 'Fora de comercialização'}
                 </span>
               )}
+              {!fixed &&
+                (client.relationship === 'expansao' || client.relationship === 'ambos') &&
+                (!client.whatsappArt || !client.article) && (
+                  <div className="cell-sub">
+                    <span
+                      className="tag"
+                      title="Cadastre na ficha da marca: vai no cabeçalho dos modelos de WhatsApp"
+                    >
+                      WhatsApp: falta{' '}
+                      {[!client.whatsappArt && 'a arte', !client.article && 'o artigo (o/a)']
+                        .filter(Boolean)
+                        .join(' e ')}
+                    </span>
+                  </div>
+                )}
               {!fixed && (client.registerMissing?.length ?? 0) > 0 && (
                 <div className="cell-sub">
                   <span className="tag" title={`Falta: ${client.registerMissing!.join(', ')}`}>
@@ -666,6 +682,9 @@ export function ClientsPage() {
       />
 
       {canManage && <QuickCreate />}
+      {canManage && (
+        <WhatsAppArtPanel clientId={WINGS_CLIENT_ID} name="Wings Company" canEdit wings />
+      )}
       {clients.isError && <Alert kind="error">Não foi possível carregar os clientes.</Alert>}
 
       <div className="table-wrap">

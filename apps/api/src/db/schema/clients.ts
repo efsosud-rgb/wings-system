@@ -17,6 +17,7 @@ import {
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
 import { tenants, WINGS_TENANT_ID } from './ads.js';
+import { driveFiles } from './drive.js';
 import { employees } from './employees.js';
 
 /**
@@ -70,6 +71,20 @@ export const clients = pgTable(
      * null when never asked (Wings Company, Formatação-only clients).
      */
     franchiseOnSale: boolean('franchise_on_sale'),
+    /**
+     * "o" or "a" before the brand's name in the WhatsApp templates ("do Casal
+     * do Churros", "da Malkuth"); null while nobody said (the templates use "da").
+     */
+    article: text('article'),
+    /**
+     * The art at the head of the WhatsApp templates (1125 × 600, PNG or JPEG),
+     * a file of the client's Mídia folder in the Drive. On Wings Company, the
+     * Wings art of the Formatação templates (docs/whatsapp/arte-modelos.md).
+     */
+    whatsappArtFileId: uuid('whatsapp_art_file_id').references((): AnyPgColumn => driveFiles.id, {
+      onDelete: 'set null',
+    }),
+    whatsappArtSetAt: timestamp('whatsapp_art_set_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }),
   },

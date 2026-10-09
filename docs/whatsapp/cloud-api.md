@@ -29,7 +29,9 @@ permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em `/
 - **Status:** enviada → entregue → lida (→ ouvida, para áudio); só avançam. "Falhou" vale só antes da entrega.
   Um status atrasado preenche só a hora.
 - **Modelos:** lidos da Meta (`GET /{WABA}/message_templates`) a cada 6 h, ou em "Atualizar lista"; o aviso de
-  revisão da Meta (`message_template_status_update`) atualiza a situação. Só os aprovados aparecem.
+  revisão da Meta (`message_template_status_update`) atualiza a situação. Só os aprovados aparecem, um por nome:
+  a versão `_arte` é escolhida no envio. Dentro da janela o modelo vira mensagem comum; fora, vai o modelo com a
+  arte da marca no cabeçalho (`arte-modelos.md`).
 - **Pedido para parar:** "SAIR", "PARAR", "PARE", "STOP", "CANCELAR" ou "DESCADASTRAR" sozinhos bloqueiam
   modelos para aquele telefone até a pessoa escrever outra coisa.
 - **Arquivos recebidos:** não são copiados; `GET /whatsapp/messages/:id/media` busca na Meta na hora (a Meta
@@ -74,15 +76,16 @@ seus. A Diretoria conversa e liga sem editar a negociação. Fora do alcance res
 
 ## Rotas (com sessão)
 
-| Rota                                                            | O quê                                                 |
-| --------------------------------------------------------------- | ----------------------------------------------------- |
-| `GET /leads/:id/whatsapp`                                       | Conversa da negociação, janela, opt-out, `configured` |
-| `POST /leads/:id/whatsapp/text`                                 | Texto livre (só dentro das 24 h)                      |
-| `POST /leads/:id/whatsapp/template`                             | Modelo aprovado com os campos `{{n}}`                 |
-| `GET /whatsapp/conversations[?unanswered=1]`                    | Lista no escopo de quem lê                            |
-| `GET /whatsapp/conversations/:id` e `POST …/text`, `…/template` | Conversa sem negociação (escopo total)                |
-| `GET /whatsapp/templates[?refresh=1]`                           | Modelos aprovados                                     |
-| `GET /whatsapp/messages/:id/media`                              | Arquivo recebido                                      |
+| Rota                                                            | O quê                                                  |
+| --------------------------------------------------------------- | ------------------------------------------------------ |
+| `GET /leads/:id/whatsapp`                                       | Conversa da negociação, janela, opt-out, `configured`  |
+| `POST /leads/:id/whatsapp/text`                                 | Texto livre (só dentro das 24 h)                       |
+| `POST /leads/:id/whatsapp/template`                             | Modelo aprovado com os campos `{{n}}`                  |
+| `GET /whatsapp/conversations[?unanswered=1]`                    | Lista no escopo de quem lê                             |
+| `GET /whatsapp/conversations/:id` e `POST …/text`, `…/template` | Conversa sem negociação (escopo total)                 |
+| `GET /whatsapp/templates[?refresh=1]`                           | Modelos aprovados                                      |
+| `GET /whatsapp/messages/:id/media`                              | Arquivo recebido                                       |
+| `POST /leads/:id/whatsapp/template-preview`, `GET …/art`        | O que o modelo vira agora e a arte (`arte-modelos.md`) |
 
 A tela da conversa se atualiza a cada 5 s e a lista a cada 15 s, com o cabeçalho `x-wings-passive: 1`: o
 servidor responde sem contar como atividade da pessoa, para uma tela aberta não segurar uma sessão ociosa nem
@@ -90,7 +93,8 @@ mexer na hora de saída do ponto.
 
 ## Dados
 
-Migrações 0077 e 0079 (`wa_calls`; permissão de ligação no contato): `wa_contacts` (telefone único, `wa_id`, nome do perfil, última mensagem recebida, opt-out),
+Migrações 0077, 0079 (`wa_calls`; permissão de ligação no contato) e 0081 (`wa_media_uploads`: o id da arte na
+Meta, só ids e datas, legível pelo `wings_ro`; arte e artigo em `clients`): `wa_contacts` (telefone único, `wa_id`, nome do perfil, última mensagem recebida, opt-out),
 `wa_conversations` (uma por telefone e negociação; a sem negociação é única por telefone), `wa_messages`,
 `wa_webhook_events`, `wa_templates`. Telefone e texto são dados pessoais: sem GRANT ao `wings_ro`, nada disso
 em log (o webhook registra só o formato do corpo, `shapeOf`). A auditoria `whatsapp.message_sent` guarda ids,

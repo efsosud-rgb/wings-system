@@ -79,6 +79,8 @@ const thread: DealWhatsApp = {
       error: null,
       authorName: null,
       bySofia: false,
+      fromTemplate: null,
+      withArt: false,
       at: new Date().toISOString(),
     },
   ],

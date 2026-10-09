@@ -51,7 +51,14 @@ function recordFor(canSeeSensitive: boolean): ClientRecord {
   const base = {
     company: clientCompanySchema.parse({ tradeName: 'Aurora Pães', cnpj: '11222333000181' }),
     partners: canSeeSensitive
-      ? [{ ...partner, cpfMasked: '***.456.789-**', maritalStatus: 'casado' as const, restricted: false }]
+      ? [
+          {
+            ...partner,
+            cpfMasked: '***.456.789-**',
+            maritalStatus: 'casado' as const,
+            restricted: false,
+          },
+        ]
       : [partner],
     contacts: [],
     business: {
@@ -90,7 +97,14 @@ function recordFor(canSeeSensitive: boolean): ClientRecord {
   };
   return {
     ...base,
-    client: { id: CLIENT_ID, name: 'Padaria Aurora', slug: 'padaria-aurora', active: true, expansionArea: [], number: 3 },
+    client: {
+      id: CLIENT_ID,
+      name: 'Padaria Aurora',
+      slug: 'padaria-aurora',
+      active: true,
+      expansionArea: [],
+      number: 3,
+    },
     completeness: clientCompleteness({
       ...base,
       partners: base.partners.map((p) => ({ ...p, maritalStatus: 'casado', propertyRegime: null })),
@@ -162,8 +176,12 @@ describe('Formatação → Clientes → ficha', () => {
     });
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: 'Buscar na Receita' }));
-    await waitFor(() => expect(post).toHaveBeenCalledWith('/clients/lookup/cnpj', { cnpj: '11222333000181' }));
-    await waitFor(() => expect(screen.getByLabelText('Razão social')).toHaveProperty('value', 'AURORA PAES LTDA'));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith('/clients/lookup/cnpj', { cnpj: '11222333000181' }),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText('Razão social')).toHaveProperty('value', 'AURORA PAES LTDA'),
+    );
     expect(screen.getByLabelText('Cidade')).toHaveProperty('value', 'SAO PAULO');
     expect(screen.getByText(/MARIA NOVA/)).toBeTruthy();
 
@@ -207,6 +225,71 @@ describe('Formatação → Clientes → ficha', () => {
     expect(screen.getByLabelText('Regime de bens')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Revelar' }));
     expect(await screen.findByText('529.982.247-25')).toBeTruthy();
-    expect(post).toHaveBeenCalledWith(`/clients/${CLIENT_ID}/reveal-cpf`, { kind: 'partner', id: partner.id });
+    expect(post).toHaveBeenCalledWith(`/clients/${CLIENT_ID}/reveal-cpf`, {
+      kind: 'partner',
+      id: partner.id,
+    });
+  });
+});
+
+describe('Formatação → Clientes → ficha: WhatsApp da marca', () => {
+  it('a brand without art says so, and the article is saved on its own', async () => {
+    current = {
+      ...recordFor(false),
+      client: { ...recordFor(false).client, relationship: 'expansao', name: 'Malkuth' },
+    };
+    get.mockImplementation(async (path: string) => {
+      if (path === `/clients/${CLIENT_ID}/record`) return current;
+      if (path === `/clients/${CLIENT_ID}/whatsapp`)
+        return { clientId: CLIENT_ID, article: null, art: null };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    put.mockImplementation(async (path: string, body: unknown) =>
+      path.endsWith('/whatsapp/article')
+        ? { clientId: CLIENT_ID, article: (body as { article: string }).article, art: null }
+        : current,
+    );
+    renderPage();
+    expect(await screen.findByText(/Cadastre a arte do WhatsApp desta marca/)).toBeTruthy();
+    expect(screen.getByText(/PNG ou JPEG, 1125 × 600 pixels, até 2 MB/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Enviar a arte' })).toBeTruthy();
+    expect(screen.getByText(/Não informado: os modelos usam "da"/)).toBeTruthy();
+    fireEvent.change(screen.getByLabelText(/Artigo do nome nos modelos/), {
+      target: { value: 'o' },
+    });
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith(`/clients/${CLIENT_ID}/whatsapp/article`, { article: 'o' }),
+    );
+  });
+
+  it('shows the art of a brand that has one, and nothing of it for a Formatação client', async () => {
+    current = {
+      ...recordFor(false),
+      client: { ...recordFor(false).client, relationship: 'expansao', name: 'Malkuth' },
+    };
+    get.mockImplementation(async (path: string) => {
+      if (path === `/clients/${CLIENT_ID}/record`) return current;
+      if (path === `/clients/${CLIENT_ID}/whatsapp`)
+        return {
+          clientId: CLIENT_ID,
+          article: 'a',
+          art: { fileId: 'f1', url: 'https://r2.example/a?sig=1', expiresAt: '', setAt: null },
+        };
+      throw new Error(`unexpected GET ${path}`);
+    });
+    renderPage();
+    const image = await screen.findByRole('img', { name: 'Arte do WhatsApp de Malkuth' });
+    expect(image.getAttribute('src')).toBe('https://r2.example/a?sig=1');
+    expect(screen.getByRole('button', { name: 'Trocar a arte' })).toBeTruthy();
+    cleanup();
+
+    current = recordFor(false);
+    get.mockImplementation(async (path: string) => {
+      if (path === `/clients/${CLIENT_ID}/record`) return current;
+      throw new Error(`unexpected GET ${path}`);
+    });
+    renderPage();
+    expect(await screen.findByText(/% preenchido/)).toBeTruthy();
+    expect(screen.queryByText('WhatsApp da marca')).toBeNull();
   });
 });

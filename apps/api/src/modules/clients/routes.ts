@@ -8,11 +8,11 @@ import {
   type Client,
   type ExpansionEntry,
 } from '@wings/shared';
-import { and, asc, desc, eq, ne } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, ne } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { Database } from '../../db/client.js';
-import { clientBusiness, clientContacts, clients } from '../../db/schema/index.js';
+import { clientBusiness, clientContacts, clients, driveFiles } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { syncDriveFolders } from '../drive/folders.js';
 import { createClientRecord } from './create.js';
@@ -29,6 +29,8 @@ export const toClient = (row: ClientRow): Client => ({
   number: row.number ?? null,
   relationship: (row.relationship as ClientRelationship | null) ?? null,
   franchiseOnSale: row.franchiseOnSale ?? null,
+  article: row.article === 'o' || row.article === 'a' ? row.article : null,
+  whatsappArt: row.whatsappArtFileId !== null,
 });
 
 /**
@@ -36,11 +38,18 @@ export const toClient = (row: ClientRow): Client => ({
  * with what its register lacks against the new register (Wings Company: nothing).
  */
 export async function listClients(db: Database): Promise<Client[]> {
-  const [rows, contacts, business] = await Promise.all([
+  const [rows, contacts, business, arts] = await Promise.all([
     db.select().from(clients).orderBy(desc(clients.active), asc(clients.name)),
     db.select().from(clientContacts).where(eq(clientContacts.role, 'principal')),
     db.select().from(clientBusiness),
+    // An art whose file went to the Drive's trash counts as none.
+    db
+      .select({ clientId: clients.id })
+      .from(clients)
+      .innerJoin(driveFiles, eq(driveFiles.id, clients.whatsappArtFileId))
+      .where(isNull(driveFiles.trashedAt)),
   ]);
+  const withArt = new Set(arts.map((row) => row.clientId));
   const contactOf = new Map(contacts.map((contact) => [contact.clientId, contact]));
   const businessOf = new Map(business.map((row) => [row.clientId, row]));
   return rows
@@ -61,7 +70,7 @@ export async function listClients(db: Database): Promise<Client[]> {
               contact: contactOf.get(row.id) ?? null,
               business: businessOf.get(row.id) ?? null,
             });
-      return { ...toClient(row), registerMissing };
+      return { ...toClient(row), whatsappArt: withArt.has(row.id), registerMissing };
     })
     .sort((a, b) => Number(b.id === WINGS_CLIENT_ID) - Number(a.id === WINGS_CLIENT_ID));
 }

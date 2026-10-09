@@ -20,6 +20,7 @@ import { adsRoutes } from './modules/ads/routes.js';
 import { savedDraftRoutes } from './modules/ads/saved-draft-routes.js';
 import type { AgentLlm } from './modules/agent/llm.js';
 import { agentRoutes } from './modules/agent/routes.js';
+import { clientArtRoutes } from './modules/clients/art-routes.js';
 import { clientRecordRoutes } from './modules/clients/record-routes.js';
 import { clientRoutes } from './modules/clients/routes.js';
 import { insightsRoutes } from './modules/insights/routes.js';
@@ -258,6 +259,7 @@ export async function buildApp(deps: {
   await app.register(insightsRoutes);
   await app.register(clientRoutes);
   await app.register(clientRecordRoutes);
+  await app.register(clientArtRoutes);
   await app.register(projectRoutes);
   await app.register(roadmapRoutes);
   await app.register(officeRoutes);

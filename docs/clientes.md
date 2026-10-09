@@ -18,15 +18,15 @@ com o % recalculado.
 
 ## Blocos e tabelas (migração `0037_client_record`)
 
-| Bloco | Onde fica |
-| ----- | --------- |
-| 1. Empresa | colunas novas em `clients` (razão social, CNPJ único por tenant, IE, IM, abertura, natureza jurídica, regime, CNAEs, capital, endereço, telefone, e-mail, site, redes) |
-| 2. Sócios | `client_partners` (N por cliente) |
-| 3. Contatos do projeto | `client_contacts` (um por papel: principal, financeiro, marketing) |
-| 4. Negócio atual | `client_business` (1:1) |
-| 5. Contrato com a Wings | `client_contracts` (N) e `client_contract_consultants` (um funcionário por área da Formatação) |
-| 6. Franquia planejada | `client_franchise_plans` (1:1) e `client_unit_models` (N); a área de expansão continua em `clients.expansion_area` |
-| 7. Assinatura | `client_signatures` (1:1) e `client_witnesses` (até 2) |
+| Bloco                   | Onde fica                                                                                                                                                              |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1. Empresa              | colunas novas em `clients` (razão social, CNPJ único por tenant, IE, IM, abertura, natureza jurídica, regime, CNAEs, capital, endereço, telefone, e-mail, site, redes) |
+| 2. Sócios               | `client_partners` (N por cliente)                                                                                                                                      |
+| 3. Contatos do projeto  | `client_contacts` (um por papel: principal, financeiro, marketing)                                                                                                     |
+| 4. Negócio atual        | `client_business` (1:1)                                                                                                                                                |
+| 5. Contrato com a Wings | `client_contracts` (N) e `client_contract_consultants` (um funcionário por área da Formatação)                                                                         |
+| 6. Franquia planejada   | `client_franchise_plans` (1:1) e `client_unit_models` (N); a área de expansão continua em `clients.expansion_area`                                                     |
+| 7. Assinatura           | `client_signatures` (1:1) e `client_witnesses` (até 2)                                                                                                                 |
 
 Dinheiro em centavos, percentuais com duas casas. A migração dá `GRANT SELECT`
 das tabelas novas (e de `clients` de novo) a `wings_ro` quando o papel existe.
@@ -37,12 +37,12 @@ ficha só leva até essa pasta.
 
 ## Permissões
 
-| Permissão | Quem | O que dá |
-| --------- | ---- | -------- |
-| `clients.manage` | Admin Master, Diretoria, Marketing | cadastrar, renomear, desativar, links e regras de origem |
-| `clients.read` | os mesmos e Jurídico | ver a lista e a ficha |
-| `clients.edit` | os mesmos e Jurídico | preencher a ficha; consultar CNPJ e CEP |
-| `clients.sensitive` | Admin Master, Diretoria, Jurídico | ver e gravar CPF, estado civil e regime de bens dos sócios e o CPF das testemunhas |
+| Permissão           | Quem                               | O que dá                                                                           |
+| ------------------- | ---------------------------------- | ---------------------------------------------------------------------------------- |
+| `clients.manage`    | Admin Master, Diretoria, Marketing | cadastrar, renomear, desativar, links e regras de origem                           |
+| `clients.read`      | os mesmos e Jurídico               | ver a lista e a ficha                                                              |
+| `clients.edit`      | os mesmos e Jurídico               | preencher a ficha; consultar CNPJ e CEP                                            |
+| `clients.sensitive` | Admin Master, Diretoria, Jurídico  | ver e gravar CPF, estado civil e regime de bens dos sócios e o CPF das testemunhas |
 
 Sem `clients.sensitive`, a API devolve esses campos nulos (`restricted: true`,
 só `cpfOnFile` diz se há CPF) e recusa com 403 `sensitive_forbidden` quem os
@@ -115,3 +115,11 @@ quando a relação inclui Formatação. Cadastros antigos ficam como estão, com
 selo **"Cadastro incompleto"** e a lista do que falta (`clientRegisterMissing`,
 `registerMissing` em `GET /clients`); completam-se pela ficha, e a relação
 pelo `PATCH /clients/:id`.
+
+## WhatsApp da marca (09/10/2026)
+
+Na ficha de uma marca de Expansão (ou "ambos"), o quadro "WhatsApp da marca" guarda a **arte do cabeçalho** dos
+modelos (PNG ou JPEG, 1125 × 600, até 2 MB, na pasta Mídia da marca no Drive) e o **artigo** do nome (o/a: "do
+Casal do Churros", "da Malkuth"). A arte da Wings, dos modelos da Formatação, fica em Administração → Clientes.
+Migração 0081 (`clients.article`, `clients.whatsapp_art_file_id`, `clients.whatsapp_art_set_at`). Detalhes em
+`docs/whatsapp/arte-modelos.md`.

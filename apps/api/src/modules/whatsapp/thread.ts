@@ -4,6 +4,7 @@ import {
   WA_KIND_LABELS,
   WA_MEDIA_KINDS,
   WA_WINDOW_HOURS,
+  type BrandArticle,
   type DealWhatsApp,
   type WaConversationItem,
   type SofiaState,
@@ -86,6 +87,11 @@ export function toMessage(row: MessageRow, authors: Map<string, string>): WaMess
       template?.name && template.language
         ? { name: template.name, language: template.language }
         : null,
+    fromTemplate:
+      typeof (content.fromTemplate as { name?: unknown } | undefined)?.name === 'string'
+        ? (content.fromTemplate as { name: string }).name
+        : null,
+    withArt: Boolean(content.art),
     status: row.direction === 'out' ? ((row.status ?? 'pending') as WaMessageStatus) : null,
     error: row.direction === 'out' ? errorText(row.errorCode, row.errorTitle) : null,
     authorName: row.employeeId ? (authors.get(row.employeeId) ?? null) : null,
@@ -114,44 +120,85 @@ export async function contactOfPhone(db: Database, phone: string | null) {
   return found[0] ?? null;
 }
 
+/** The brand a conversation speaks for, with what its WhatsApp header needs. */
+export interface BrandVoice {
+  clientId: string;
+  name: string;
+  /** "o"/"a" before the name; null while nobody said. */
+  article: BrandArticle | null;
+  /** The art at the head of its templates, when registered. */
+  artFileId: string | null;
+}
+
+const voiceColumns = {
+  clientId: clients.id,
+  name: clients.name,
+  article: clients.article,
+  artFileId: clients.whatsappArtFileId,
+};
+
+const voiceOf = (row: {
+  clientId: string | null;
+  name: string | null;
+  article: string | null;
+  artFileId: string | null;
+}): BrandVoice | null =>
+  row.clientId && row.name
+    ? {
+        clientId: row.clientId,
+        name: row.name,
+        article: row.article === 'o' || row.article === 'a' ? row.article : null,
+        artFileId: row.artFileId,
+      }
+    : null;
+
 /**
  * The brand a conversation speaks for (Eric, 07/10): an Expansão deal of a
  * brand client, or Sofia's Expansão conversation once she knows the brand.
  * Null means Wings Company.
  */
-export async function brandVoiceOf(
+export async function brandOf(
   db: Database,
   leadId: string | null,
   conversationId: string | null,
-): Promise<string | null> {
+): Promise<BrandVoice | null> {
   // Sofia's brand in the conversation wins: the deal may still be Wings' when
   // the person came by a brand's link.
   const [conversation] = conversationId
     ? await db
-        .select({ segment: waConversations.segment, name: clients.name })
+        .select({ segment: waConversations.segment, ...voiceColumns })
         .from(waConversations)
         .leftJoin(clients, eq(clients.id, waConversations.brandClientId))
         .where(eq(waConversations.id, conversationId))
     : leadId
       ? await db
-          .select({ segment: waConversations.segment, name: clients.name })
+          .select({ segment: waConversations.segment, ...voiceColumns })
           .from(waConversations)
           .leftJoin(clients, eq(clients.id, waConversations.brandClientId))
           .where(eq(waConversations.leadId, leadId))
           .orderBy(desc(waConversations.lastMessageAt))
           .limit(1)
       : [];
-  if (conversation?.segment === 'expansao' && conversation.name) return conversation.name;
+  if (conversation?.segment === 'expansao' && conversation.name) return voiceOf(conversation);
   if (leadId) {
     const [row] = await db
-      .select({ pipeline: leads.pipeline, clientId: leads.clientId, name: clients.name })
+      .select({ pipeline: leads.pipeline, ...voiceColumns })
       .from(leads)
       .innerJoin(clients, eq(clients.id, leads.clientId))
       .where(eq(leads.id, leadId));
     if (row)
-      return row.pipeline === 'expansao' && row.clientId !== WINGS_CLIENT_ID ? row.name : null;
+      return row.pipeline === 'expansao' && row.clientId !== WINGS_CLIENT_ID ? voiceOf(row) : null;
   }
   return null;
+}
+
+/** The brand's name only (null: Wings Company). */
+export async function brandVoiceOf(
+  db: Database,
+  leadId: string | null,
+  conversationId: string | null,
+): Promise<string | null> {
+  return (await brandOf(db, leadId, conversationId))?.name ?? null;
 }
 
 /** A row of the conversation lists (the WhatsApp screen and Sofia's), in the reader's scope. */

@@ -7309,6 +7309,41 @@ button.stage-chip:focus-visible {
   min-width: 0;
 }
 
+/* WhatsApp header of a brand (or the Wings art): docs/whatsapp/arte-modelos.md */
+.wa-art-panel {
+  border: 1px solid var(--wings-border);
+  background: var(--wings-card);
+  border-radius: 8px;
+  padding: 14px 16px;
+  margin-bottom: 20px;
+  display: grid;
+  gap: 12px;
+}
+.wa-art-head .record-subhead {
+  margin-top: 0;
+}
+.wa-art-head p {
+  margin: 0;
+}
+.wa-art-image {
+  display: block;
+  width: 100%;
+  max-width: 375px;
+  height: auto;
+  aspect-ratio: 1125 / 600;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--wings-border);
+}
+.wa-art-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.wa-art-article {
+  max-width: 320px;
+}
+
 .record-subhead {
   font-size: 12px;
   text-transform: uppercase;

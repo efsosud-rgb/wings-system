@@ -12,6 +12,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { tenants, WINGS_TENANT_ID } from './ads.js';
 import { clients } from './clients.js';
+import { driveFiles } from './drive.js';
 import { employees } from './employees.js';
 import { leads } from './leads.js';
 
@@ -294,5 +295,37 @@ export const waCalls = pgTable(
       .where(sql`${table.callId} is not null`),
     index('wa_calls_status_idx').on(table.status, table.startedAt),
     index('wa_calls_lead_idx').on(table.leadId, table.startedAt),
+  ],
+);
+
+/**
+ * The art of a template's header as Meta holds it (docs/whatsapp/arte-modelos.md):
+ * `POST /{phone-number-id}/media` once per art and number, and the id kept with
+ * the day it went up. Meta keeps an uploaded file for 30 days, so it goes up
+ * again after 25, when the Drive file changed (`fileVersion`), or when Meta
+ * answered a send saying the file is gone (`invalidAt`). Never retried inside
+ * a send: the message that failed stays failed.
+ */
+export const waMediaUploads = pgTable(
+  'wa_media_uploads',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    driveFileId: uuid('drive_file_id')
+      .notNull()
+      .references(() => driveFiles.id, { onDelete: 'cascade' }),
+    fileVersion: integer('file_version').notNull(),
+    phoneNumberId: text('phone_number_id').notNull(),
+    mediaId: text('media_id').notNull(),
+    uploadedAt: timestamp('uploaded_at', { withTimezone: true }).notNull(),
+    invalidAt: timestamp('invalid_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('wa_media_uploads_file_number_uq').on(
+      table.tenantId,
+      table.driveFileId,
+      table.phoneNumberId,
+    ),
+    index('wa_media_uploads_media_idx').on(table.mediaId),
   ],
 );
