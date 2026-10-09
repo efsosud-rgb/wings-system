@@ -11,6 +11,7 @@ import {
   GOOGLE_ADS_CONVERSION_PATTERN,
 } from '@wings/shared';
 import { z } from 'zod';
+import { parseCron } from './lib/cron.js';
 
 /** A positive number with a default, where an empty variable means the default too. */
 const numberOr = (fallback: number, options: { integer?: boolean } = {}) => {
@@ -105,6 +106,33 @@ const schema = z.object({
   ),
   WORDPRESS_USERNAME: optionalString,
   WORDPRESS_APP_PASSWORD: optionalString,
+  /**
+   * YouTube Data API v3, public data only (docs/integracoes/youtube-data-api.md).
+   * The key reads what anyone may read and nothing more; it stays on the
+   * server and never enters an answer or a log. Without it the daily
+   * ingestion does not run and Canais próprios says why.
+   */
+  YOUTUBE_API_KEY: optionalString,
+  /**
+   * The channel to read when the Wings Company client record has no YouTube
+   * link: a `UC…` id or an `@handle`. The record's link wins when both exist.
+   */
+  YOUTUBE_CHANNEL_ID: optionalString.refine(
+    (value) =>
+      value === undefined ||
+      /^UC[A-Za-z0-9_-]{22}$/.test(value.trim()) ||
+      /^@[A-Za-z0-9._-]{3,30}$/.test(value.trim()),
+    'must be a UC… channel id or an @handle',
+  ),
+  /**
+   * When the API runs the YouTube ingestion (5 fields, America/Sao_Paulo);
+   * `0 7 * * *` (once a day at 07:00) when unset. Run by the API process
+   * itself, one run at a time across replicas; nothing is scheduled in Coolify.
+   */
+  YOUTUBE_INGEST_CRON: optionalString.refine(
+    (value) => value === undefined || parseCron(value) !== null,
+    'must be a 5-field cron expression (digits, *, ranges, steps, lists)',
+  ),
   /**
    * Google Analytics 4, read through the Data API. The property id is the
    * number in GA4 → Admin → Detalhes da propriedade (not the G-… measurement

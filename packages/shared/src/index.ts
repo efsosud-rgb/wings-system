@@ -39,6 +39,7 @@ export * from './marketing/owned-channels.js';
 export * from './marketing/seo-checklist.js';
 export * from './marketing/site-content.js';
 export * from './marketing/site-post.js';
+export * from './marketing/youtube-channel.js';
 export * from './navigation.js';
 export * from './office.js';
 export * from './projects.js';

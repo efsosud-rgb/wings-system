@@ -26,3 +26,4 @@ export * from './meetings.js';
 export * from './whatsapp.js';
 export * from './sofia.js';
 export * from './google-workspace.js';
+export * from './youtube.js';

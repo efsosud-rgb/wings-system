@@ -12,6 +12,7 @@ import { startMetaLeadgenIntake } from './modules/leads/meta-intake.js';
 import { startSofia } from './modules/sofia/engine.js';
 import { whatsappConfigOf } from './modules/whatsapp/graph.js';
 import { startWhatsAppIntake } from './modules/whatsapp/intake.js';
+import { startYoutubeScheduler } from './modules/youtube/scheduler.js';
 
 const pageIdsOf = (value: string | undefined) =>
   value
@@ -146,6 +147,19 @@ async function main() {
       mail: createCrmMailTransport(env),
       cron: env.CRM_AUTOMATIONS_CRON,
       stageStuckDays: env.CRM_STAGE_STUCK_DAYS === undefined ? 7 : Number(env.CRM_STAGE_STUCK_DAYS),
+      log: (facts) => app.log.info(facts),
+    });
+    app.addHook('onClose', async () => stop());
+  }
+
+  // YouTube channel (public data, docs/integracoes/youtube-data-api.md): one
+  // reading a day at YOUTUBE_INGEST_CRON (07:00 by default). Off without a key.
+  if (env.YOUTUBE_API_KEY) {
+    const stop = startYoutubeScheduler({
+      db,
+      apiKey: env.YOUTUBE_API_KEY,
+      channelEnv: env.YOUTUBE_CHANNEL_ID,
+      cron: env.YOUTUBE_INGEST_CRON,
       log: (facts) => app.log.info(facts),
     });
     app.addHook('onClose', async () => stop());

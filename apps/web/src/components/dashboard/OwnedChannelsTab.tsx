@@ -3,11 +3,13 @@ import { useOwnedChannels } from '../../api/dashboard.js';
 import { downloadCsv, toCsv } from '../../lib/csv.js';
 import { Alert, Button } from '../ui.js';
 import { formatDateFull, since } from './format.js';
+import { YoutubeChannelSection } from './YoutubeChannelSection.js';
 
 /**
  * Canais próprios: what Wings published on its own channels in the period,
  * read from the mirror the ingest job keeps. Opening the tab calls no site.
- * The blog is the first channel; social publishing arrives in the same
+ * The blog is the first channel and YouTube the second (its own section,
+ * from the daily YouTube reading); social publishing arrives in the same
  * shape, so its place is already here.
  */
 
@@ -102,6 +104,8 @@ export function OwnedChannelsTab({ days }: { days: DashboardWindow }) {
           </div>
         )}
       </section>
+
+      <YoutubeChannelSection />
 
       <section className="dash-section owned-placeholder" aria-labelledby="social-title">
         <h2 id="social-title">Publicação social</h2>

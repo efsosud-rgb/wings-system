@@ -66,7 +66,10 @@ import {
  * connection: it dies with the process, so a run that is killed can never
  * leave the next one blocked. A second run that finds it taken leaves quietly.
  */
-const LOCK_KEYS: Record<IngestKind, number> = { full: 7_202_601, reconcile: 7_202_602 };
+const LOCK_KEYS: Record<Exclude<IngestKind, 'youtube'>, number> = {
+  full: 7_202_601,
+  reconcile: 7_202_602,
+};
 
 /**
  * The run in progress, so a SIGTERM (a redeploy replacing the container) or
@@ -108,7 +111,7 @@ async function main() {
       return;
     }
 
-    const kind: IngestKind = flag('reconcile-only') ? 'reconcile' : 'full';
+    const kind: Exclude<IngestKind, 'youtube'> = flag('reconcile-only') ? 'reconcile' : 'full';
     const lockClient = await pool.connect();
     const locked = await lockClient.query<{ ok: boolean }>(
       'select pg_try_advisory_lock($1) as ok',

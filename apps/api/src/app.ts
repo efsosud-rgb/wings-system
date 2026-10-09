@@ -60,6 +60,7 @@ import { probePublicUrl } from './lib/public-probe.js';
 import { officeRoutes } from './modules/office/routes.js';
 import { roadmapRoutes } from './modules/roadmap/routes.js';
 import { siteRoutes } from './modules/site/routes.js';
+import { youtubeRoutes } from './modules/youtube/routes.js';
 import { studioRoutes } from './modules/studio/routes.js';
 import { employeeRoutes } from './modules/employees/routes.js';
 import { authPlugin } from './plugins/auth.js';
@@ -296,6 +297,7 @@ export async function buildApp(deps: {
   await app.register(leadFormRoutes);
   await app.register(videoUploadRoutes);
   await app.register(siteRoutes, { wordpressFetch: deps.wordpressFetch });
+  await app.register(youtubeRoutes);
 
   return app;
 }

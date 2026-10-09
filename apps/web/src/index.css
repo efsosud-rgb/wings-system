@@ -5392,6 +5392,47 @@ textarea.control {
   border-top: 1px solid var(--wings-border);
 }
 
+/* Canais próprios → YouTube, and the builder's list of the channel's videos. */
+.youtube-video {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 220px;
+}
+
+.youtube-video img {
+  flex: none;
+  width: 96px;
+  height: 54px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--wings-border);
+}
+
+.youtube-gap {
+  display: block;
+  font-size: 0.78em;
+  white-space: nowrap;
+}
+
+.youtube-picker {
+  display: grid;
+  gap: 8px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.youtube-picker li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 @media (max-width: 720px) {
   .insight {
     grid-template-columns: 1fr;

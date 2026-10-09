@@ -17,9 +17,17 @@ import type { AccountCycleResult, ReconcileCycleAccountResult } from './ingest-c
  * `manual_reconcile` are the fast cycle added for the 15-min dead-man window:
  * balance, platform limit and campaign status only, nothing else.
  */
-export type IngestTrigger = 'scheduled' | 'manual' | 'scheduled_reconcile' | 'manual_reconcile';
+export type IngestTrigger =
+  | 'scheduled'
+  | 'manual'
+  | 'scheduled_reconcile'
+  | 'manual_reconcile'
+  | 'scheduled_youtube'
+  | 'manual_youtube';
 
 const RECONCILE_TRIGGERS: readonly IngestTrigger[] = ['scheduled_reconcile', 'manual_reconcile'];
+/** The YouTube channel's daily reading (modules/youtube): its own kind, never an ads cycle. */
+const YOUTUBE_TRIGGERS: readonly IngestTrigger[] = ['scheduled_youtube', 'manual_youtube'];
 
 /** One account as the run recorded it. Errors carry codes and ids, never personal data. */
 export interface IngestRunAccount {
@@ -36,10 +44,14 @@ export interface IngestRunSite {
   error?: string;
 }
 
-export type IngestKind = 'full' | 'reconcile';
+export type IngestKind = 'full' | 'reconcile' | 'youtube';
 
 export const kindOfTrigger = (trigger: IngestTrigger): IngestKind =>
-  RECONCILE_TRIGGERS.includes(trigger) ? 'reconcile' : 'full';
+  RECONCILE_TRIGGERS.includes(trigger)
+    ? 'reconcile'
+    : YOUTUBE_TRIGGERS.includes(trigger)
+      ? 'youtube'
+      : 'full';
 
 /**
  * How long a run may say `running` before it is taken for dead. Above the
@@ -51,18 +63,22 @@ export const kindOfTrigger = (trigger: IngestTrigger): IngestKind =>
 export const ABANDONED_AFTER_MS: Record<IngestKind, number> = {
   full: 20 * 60_000,
   reconcile: 6 * 60_000,
+  youtube: 15 * 60_000,
 };
 
 /** The CLI stops itself and records the run as failed after this long. */
 export const INGEST_DEADLINE_MS: Record<IngestKind, number> = {
   full: 14 * 60_000,
   reconcile: 4 * 60_000,
+  youtube: 10 * 60_000,
 };
 
 const triggersOf = (kind: IngestKind) =>
   kind === 'reconcile'
     ? inArray(ingestRuns.trigger, [...RECONCILE_TRIGGERS])
-    : notInArray(ingestRuns.trigger, [...RECONCILE_TRIGGERS]);
+    : kind === 'youtube'
+      ? inArray(ingestRuns.trigger, [...YOUTUBE_TRIGGERS])
+      : notInArray(ingestRuns.trigger, [...RECONCILE_TRIGGERS, ...YOUTUBE_TRIGGERS]);
 
 /**
  * Closes the `running` rows a dead process left behind, as failed with
@@ -108,6 +124,8 @@ export async function finishIngestRun(
     status: 'ok' | 'failed';
     accounts: IngestRunAccount[];
     site: IngestRunSite | null;
+    /** The YouTube run's outcome; only its own rows carry one. */
+    youtube?: Record<string, unknown> | null;
     error?: string | null;
     now?: Date;
   },
@@ -118,6 +136,7 @@ export async function finishIngestRun(
       status: input.status,
       accounts: input.accounts,
       site: input.site,
+      ...(input.youtube === undefined ? {} : { youtube: input.youtube }),
       error: input.error ?? null,
       finishedAt: input.now ?? new Date(),
     })
@@ -147,7 +166,7 @@ export function reconcileRecordOf(result: ReconcileCycleAccountResult): IngestRu
  */
 export async function latestIngestRun(
   db: Database,
-  options: { kind?: 'full' | 'reconcile'; status?: 'ok' } = {},
+  options: { kind?: IngestKind; status?: 'ok' } = {},
 ) {
   const kind = options.kind ?? 'full';
   const [row] = await db

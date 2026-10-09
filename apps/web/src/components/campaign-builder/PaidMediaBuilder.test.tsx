@@ -90,6 +90,39 @@ const deleteSavedDraft = vi.fn();
 
 /** What "Pedir aprovação dos anúncios" sent, in order. */
 const requestAddAds = vi.fn();
+/** The channel's videos as the daily YouTube reading keeps them (Canais próprios). */
+vi.mock('../../api/youtube.js', () => ({
+  useYoutubeChannel: () => ({
+    isError: false,
+    data: {
+      configured: { key: true, source: 'client_record' },
+      gap: null,
+      channel: { id: 'UCabcdefghijklmnopqrstuv', title: 'Wings Company' },
+      lastRun: null,
+      nextRunAt: null,
+      history: { firstDay: '2026-10-01', lastDay: '2026-10-09', days: 9 },
+      videos: [
+        {
+          id: '34zzJBPHlYg',
+          title: 'Cafeteria que virou rede',
+          publishedAt: '2026-09-20T15:00:00.000Z',
+          durationSeconds: 45,
+          thumbnailUrl: null,
+          isShort: true,
+          views: 1200,
+          likes: 30,
+          comments: 2,
+          growth: {
+            7: { value: 100, fromDay: '2026-10-02' },
+            30: { value: null, gap: 'history_short', fromDay: '2026-09-09' },
+          },
+          link: 'https://www.youtube.com/watch?v=34zzJBPHlYg',
+        },
+      ],
+    },
+  }),
+}));
+
 vi.mock('../../api/dashboard.js', () => ({
   useDashboardCampaigns: () => ({
     data: {
@@ -1186,6 +1219,21 @@ describe('the builder on Google', () => {
     expect(screen.getByText('Publicado (público ou não listado)')).toBeTruthy();
     expect(screen.getByText('Privado ou sem incorporação: o Google não aceita')).toBeTruthy();
     privateVideos.clear();
+  });
+
+  it('fills the first free video box with a video picked from the channel', () => {
+    render(<PaidMediaBuilder canRequest />);
+    choose(/YouTube/);
+    type(byField('Vídeo 1'), 'https://youtu.be/dQw4w9WgXcQ');
+    const channel = screen.getByRole('group', { name: 'Vídeos do canal' });
+    fireEvent.click(within(channel).getByRole('button', { name: 'Usar Cafeteria que virou rede' }));
+    expect((byField('Vídeo 1') as HTMLInputElement).value).toBe('https://youtu.be/dQw4w9WgXcQ');
+    expect((byField('Vídeo 2 (opcional)') as HTMLInputElement).value).toBe(
+      'https://www.youtube.com/watch?v=34zzJBPHlYg',
+    );
+    expect(
+      within(channel).getByRole('button', { name: 'Cafeteria que virou rede: já escolhido' }),
+    ).toBeTruthy();
   });
 
   it('refuses a logo the ad cannot carry, in the picker itself', () => {
