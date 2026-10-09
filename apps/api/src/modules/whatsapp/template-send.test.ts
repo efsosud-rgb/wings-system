@@ -220,6 +220,21 @@ describe('which template goes with the window closed', () => {
       }),
     );
     expect(formatacao.preview.text).toContain('transformar a Padaria Real em franquia');
+    // A name whose article disagrees with the text's stays whole: never "a Bar do Zé".
+    const masculine = ok({
+      ...base({
+        hasArt: false,
+        voice: null,
+        templates: [T.formatacaoBoasVindas, T.formatacaoBoasVindasArte],
+      }),
+      request: {
+        name: 'wings_formatacao_boas_vindas',
+        language: 'pt_BR',
+        params: ['Mariana', 'Daniele', 'O Bar do Zé'],
+        companyArticle: 'o',
+      },
+    });
+    expect(masculine.params[2]).toBe('O Bar do Zé');
   });
 
   it('the first version when the art version is not approved yet, saying so', () => {

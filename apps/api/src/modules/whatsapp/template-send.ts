@@ -205,7 +205,8 @@ export function planTemplate(input: PlanInput): TemplatePlan {
     if (form === 'plain') {
       // The text carries the article ("expansão da {{3}}"): "A Cabana da Barra" goes without its own.
       const named = field.role === 'brand' || field.role === 'company';
-      return named && waArticleBefore(body, i + 1) ? withoutArticle(field.value) : field.value;
+      const carried = named ? waArticleBefore(body, i + 1) : null;
+      return carried ? withoutArticle(field.value, carried) : field.value;
     }
     if (field.role === 'company') {
       usesCompanyArticle = true;

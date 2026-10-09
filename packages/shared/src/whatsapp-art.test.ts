@@ -40,29 +40,50 @@ describe('withArticle', () => {
     // A number is a word: "As 3 Marias" starts with its article.
     expect(withArticle('As 3 Marias', 'a', 'of')).toBe('das 3 Marias');
     expect(withArticle('A Doceria Real', 'a', 'of')).toBe('da Doceria Real');
+    // Initials in capitals before a common word are part of the name.
+    expect(withArticle('AS Construtora', 'a', 'of')).toBe('da AS Construtora');
+    expect(withArticle('OS Informática', 'a', 'article')).toBe('a OS Informática');
+    // A name all in capitals still starts with its article.
+    expect(withArticle('A CABANA DA BARRA', 'a', 'of')).toBe('da CABANA DA BARRA');
+    expect(withArticle('OS 2 IRMÃOS', 'o', 'of')).toBe('dos 2 IRMÃOS');
+  });
+
+  it('reads an accented first letter however it was typed (composed or not)', () => {
+    expect(withArticle('O \u0045\u0301den', 'a', 'of')).toBe('do Éden');
+    expect(withArticle('A A\u0301rvore', 'o', 'article')).toBe('a Árvore');
   });
 });
 
 describe('a text that already carries the article ("expansão da {{3}}")', () => {
-  it('takes the name without its own article', () => {
-    expect(withoutArticle('A Cabana da Barra')).toBe('Cabana da Barra');
-    expect(withoutArticle('  O   Boticário ')).toBe('Boticário');
-    expect(withoutArticle('Malkuth')).toBe('Malkuth');
-    expect(withoutArticle('A & B Lanches')).toBe('A & B Lanches');
-    expect(withoutArticle('A')).toBe('A');
+  it('takes the name without its own article when the text carries the same one', () => {
+    expect(withoutArticle('A Cabana da Barra', 'a')).toBe('Cabana da Barra');
+    expect(withoutArticle('  O   Boticário ', 'o')).toBe('Boticário');
+    expect(withoutArticle('As 3 Marias', 'as')).toBe('3 Marias');
+    expect(withoutArticle('Malkuth', 'a')).toBe('Malkuth');
+    expect(withoutArticle('A & B Lanches', 'a')).toBe('A & B Lanches');
+    expect(withoutArticle('AS Construtora', 'as')).toBe('AS Construtora');
+    expect(withoutArticle('A', 'a')).toBe('A');
   });
 
-  it('sees the article or "da"/"do" right before the field, and not a bare "de"', () => {
+  it('keeps the name whole when the text carries another article', () => {
+    // "da Bar do Zé" would cut the name and still be wrong: "da O Bar do Zé" stays as it was.
+    expect(withoutArticle('O Bar do Zé', 'a')).toBe('O Bar do Zé');
+    expect(withoutArticle('As 3 Marias', 'a')).toBe('As 3 Marias');
+    expect(withoutArticle('Os 2 Irmãos', 'o')).toBe('Os 2 Irmãos');
+  });
+
+  it('reads the article or "da"/"do" right before the field, and not a bare "de"', () => {
     const body = 'Aqui é {{2}}, do time de expansão da {{3}}. A franquia {{4}} e o {{5}} de {{6}}.';
-    expect(waArticleBefore(body, 3)).toBe(true);
-    expect(waArticleBefore(body, 2)).toBe(false);
-    expect(waArticleBefore(body, 4)).toBe(false);
-    expect(waArticleBefore(body, 5)).toBe(true);
-    expect(waArticleBefore(body, 6)).toBe(false);
-    expect(waArticleBefore('transformar a {{3}} em franquia', 3)).toBe(true);
-    expect(waArticleBefore('(COF) DA {{ 2 }} foi enviada', 2)).toBe(true);
-    expect(waArticleBefore(body, 9)).toBe(false);
-    expect(waArticleBefore(null, 3)).toBe(false);
+    expect(waArticleBefore(body, 3)).toBe('a');
+    expect(waArticleBefore(body, 2)).toBeNull();
+    expect(waArticleBefore(body, 4)).toBeNull();
+    expect(waArticleBefore(body, 5)).toBe('o');
+    expect(waArticleBefore(body, 6)).toBeNull();
+    expect(waArticleBefore('transformar a {{3}} em franquia', 3)).toBe('a');
+    expect(waArticleBefore('(COF) DA {{ 2 }} foi enviada', 2)).toBe('a');
+    expect(waArticleBefore('o time dos {{1}}', 1)).toBe('os');
+    expect(waArticleBefore(body, 9)).toBeNull();
+    expect(waArticleBefore(null, 3)).toBeNull();
   });
 });
 
