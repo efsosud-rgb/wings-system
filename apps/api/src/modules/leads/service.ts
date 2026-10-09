@@ -271,6 +271,15 @@ export interface IncomingLead {
    */
   forceNew?: boolean;
   /**
+   * A form arrival (Meta Lead Ads) whose phone or e-mail lands on a lead
+   * nobody can work — closed (won or lost) or with neither owner nor stage —
+   * opens a deal of its own instead of being attached to it: the funnel's
+   * entry stage and rotation, the first-contact task, the same contact. An
+   * open lead with an owner or in a stage still only gets its gaps filled.
+   * Default off; never applies to a retry of the same external id.
+   */
+  reopenClosed?: boolean;
+  /**
    * A new lead with a funnel and no owner goes to the next seller of the
    * funnel's rotation and gets the first-contact task (CRM Fase 1). Off for
    * the RD import (RD says the owner) and for Sofia's leads until she hands
@@ -343,6 +352,27 @@ export interface UpsertResult {
   assignedTo?: string | null;
   /** A new lead that was already old when read (see `originCreatedAt`). */
   stale?: boolean;
+  /** The closed or unworked lead of the same person this new deal was opened beside (`reopenClosed`). */
+  reopenedFromLeadId?: string;
+}
+
+/**
+ * A lead somebody can still work: open (no outcome) and with an owner or in a
+ * stage. A closed one, or one with neither, is what `reopenClosed` opens a
+ * new deal beside.
+ */
+export function isWorkableLead(row: {
+  won: boolean | null;
+  closedAt: Date | null;
+  ownerEmployeeId: string | null;
+  stageId: string | null;
+  stage: string | null;
+}): boolean {
+  return (
+    row.won === null &&
+    row.closedAt === null &&
+    (row.ownerEmployeeId !== null || row.stageId !== null || row.stage !== null)
+  );
 }
 
 /** A lead older than this when the system reads it is a backfill, not an arrival. */
@@ -517,18 +547,19 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
         where: and(eq(leads.source, incoming.source), eq(leads.externalId, incoming.externalId)),
       });
     }
-    if (!existing && phone && !incoming.forceNew) {
-      existing = await tx.query.leads.findFirst({
-        where: eq(leads.phone, phone),
+    // The oldest lead of the phone (then of the e-mail); with `reopenClosed`,
+    // the oldest one somebody can still work, so a person with a closed deal
+    // and an open one lands on the open one.
+    const byContact = async (column: typeof leads.phone | typeof leads.email, value: string) => {
+      const rows = await tx.query.leads.findMany({
+        where: eq(column, value),
         orderBy: asc(leads.createdAt),
+        limit: incoming.reopenClosed ? 50 : 1,
       });
-    }
-    if (!existing && email && !incoming.forceNew) {
-      existing = await tx.query.leads.findFirst({
-        where: eq(leads.email, email),
-        orderBy: asc(leads.createdAt),
-      });
-    }
+      return (incoming.reopenClosed ? rows.find(isWorkableLead) : undefined) ?? rows[0];
+    };
+    if (!existing && phone && !incoming.forceNew) existing = await byContact(leads.phone, phone);
+    if (!existing && email && !incoming.forceNew) existing = await byContact(leads.email, email);
 
     if (
       existing &&
@@ -536,6 +567,20 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
       existing.ownerEmployeeId !== incoming.mergeOnlyIfOwnedBy
     )
       throw new ForeignLeadError();
+
+    // The person is known, but their lead is closed or nobody works it: the
+    // arrival opens a deal of its own (same contact, the two tied on the
+    // timeline). A retry of the same external id always finds its own lead.
+    let reopenedFrom: LeadRow | undefined;
+    if (
+      existing &&
+      incoming.reopenClosed &&
+      !(incoming.externalId && existing.externalId === incoming.externalId) &&
+      !isWorkableLead(existing)
+    ) {
+      reopenedFrom = existing;
+      existing = undefined;
+    }
 
     if (existing) {
       const patch = fillGaps(existing, incoming);
@@ -648,11 +693,24 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
       actorEmployeeId: incoming.event.actorEmployeeId ?? null,
       detail: {
         ...(incoming.event.detail ?? {}),
-        matched: 'new',
+        matched: reopenedFrom ? 'reopened' : 'new',
         clientMapped: incoming.clientMapped,
         ...(created.stageId ? { stageId: created.stageId } : {}),
+        ...(reopenedFrom ? { reopenedFrom: reopenedFrom.id } : {}),
       },
     });
+    if (reopenedFrom) {
+      await tx.insert(leadEvents).values({
+        leadId: reopenedFrom.id,
+        kind: 'lead.reopened_as',
+        actorEmployeeId: incoming.event.actorEmployeeId ?? null,
+        detail: {
+          newLeadId: created.id,
+          source: incoming.source,
+          reason: reopenedFrom.won !== null || reopenedFrom.closedAt !== null ? 'closed' : 'unworked',
+        },
+      });
+    }
     if (assignedTo) {
       await tx.insert(leadEvents).values({
         leadId: created.id,
@@ -664,8 +722,17 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
     if (distribute && created.ownerEmployeeId && !stale) {
       await ensureFirstContactTask(tx, created, incoming.event.actorEmployeeId ?? null);
     }
+    const reopened = reopenedFrom ? { reopenedFromLeadId: reopenedFrom.id } : {};
     if (incoming.skipResearch)
-      return { lead: created, created: true, researchQueued: false, filled: [], assignedTo, stale };
+      return {
+        lead: created,
+        created: true,
+        researchQueued: false,
+        filled: [],
+        assignedTo,
+        stale,
+        ...reopened,
+      };
     const researched = await enqueueResearch(tx, created.id, null);
     return {
       lead: researched ?? created,
@@ -674,6 +741,7 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
       filled: [],
       assignedTo,
       stale,
+      ...reopened,
     };
   });
 }
