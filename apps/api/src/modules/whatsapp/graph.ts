@@ -46,17 +46,20 @@ async function graph<T>(
   method: 'GET' | 'POST',
   path: string,
   body?: unknown,
+  timeoutMs = TIMEOUT_MS,
 ): Promise<GraphResult<T>> {
   let response: Response;
+  // A file goes as multipart (fetch writes the boundary); everything else as JSON.
+  const form = body instanceof FormData;
   try {
     response = await fetchImpl(`${GRAPH}${path}`, {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...(body === undefined || form ? {} : { 'Content-Type': 'application/json' }),
       },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      body: body === undefined ? undefined : form ? body : JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
     // Timed out or cut: a POST may have been delivered all the same.
@@ -82,8 +85,13 @@ async function graph<T>(
 
 // --- sending ---------------------------------------------------------------------------
 
+/** The header of an interactive message: the art by its Meta media id, or a short text. */
+export type InteractiveHeader =
+  { type: 'image'; image: { id: string } } | { type: 'text'; text: string };
+
 export type OutgoingPayload =
   | { type: 'text'; text: { body: string; preview_url: boolean } }
+  | { type: 'image'; image: { id: string; caption?: string } }
   | {
       type: 'interactive';
       interactive: {
@@ -97,15 +105,30 @@ export type OutgoingPayload =
       template: {
         name: string;
         language: { code: string };
-        components?: { type: 'body'; parameters: { type: 'text'; text: string }[] }[];
+        components?: (
+          | { type: 'header'; parameters: { type: 'image'; image: { id: string } }[] }
+          | { type: 'body'; parameters: { type: 'text'; text: string }[] }
+        )[];
       };
     }
   | {
       type: 'interactive';
       interactive: {
         type: 'button';
+        header?: InteractiveHeader;
         body: { text: string };
+        footer?: { text: string };
         action: { buttons: { type: 'reply'; reply: { id: string; title: string } }[] };
+      };
+    }
+  | {
+      type: 'interactive';
+      interactive: {
+        type: 'cta_url';
+        header?: InteractiveHeader;
+        body: { text: string };
+        footer?: { text: string };
+        action: { name: 'cta_url'; parameters: { display_text: string; url: string } };
       };
     }
   | {
@@ -125,22 +148,52 @@ export const textPayload = (body: string): OutgoingPayload => ({
   text: { body, preview_url: false },
 });
 
+/** An approved template; `headerImageId` fills an IMAGE header (the art, by its Meta media id). */
 export const templatePayload = (
   name: string,
   language: string,
   params: string[],
+  headerImageId: string | null = null,
+): OutgoingPayload => {
+  const components: NonNullable<
+    Extract<OutgoingPayload, { type: 'template' }>['template']['components']
+  > = [];
+  if (headerImageId)
+    components.push({
+      type: 'header',
+      parameters: [{ type: 'image', image: { id: headerImageId } }],
+    });
+  if (params.length > 0)
+    components.push({ type: 'body', parameters: params.map((text) => ({ type: 'text', text })) });
+  return {
+    type: 'template',
+    template: {
+      name,
+      language: { code: language },
+      ...(components.length > 0 ? { components } : {}),
+    },
+  };
+};
+
+/** An image (the art) with the text under it, inside the 24-hour window. */
+export const imagePayload = (mediaId: string, caption: string): OutgoingPayload => ({
+  type: 'image',
+  image: { id: mediaId, ...(caption ? { caption } : {}) },
+});
+
+/** One link button (title of up to 20 characters), inside the 24-hour window. */
+export const ctaUrlPayload = (
+  body: string,
+  link: { title: string; url: string },
+  extra: { header?: InteractiveHeader; footer?: string } = {},
 ): OutgoingPayload => ({
-  type: 'template',
-  template: {
-    name,
-    language: { code: language },
-    ...(params.length > 0
-      ? {
-          components: [
-            { type: 'body', parameters: params.map((text) => ({ type: 'text', text })) },
-          ],
-        }
-      : {}),
+  type: 'interactive',
+  interactive: {
+    type: 'cta_url',
+    ...(extra.header ? { header: extra.header } : {}),
+    body: { text: body },
+    ...(extra.footer ? { footer: { text: extra.footer } } : {}),
+    action: { name: 'cta_url', parameters: { display_text: link.title, url: link.url } },
   },
 });
 
@@ -148,11 +201,14 @@ export const templatePayload = (
 export const buttonsPayload = (
   body: string,
   buttons: readonly { id: string; title: string }[],
+  extra: { header?: InteractiveHeader; footer?: string } = {},
 ): OutgoingPayload => ({
   type: 'interactive',
   interactive: {
     type: 'button',
+    ...(extra.header ? { header: extra.header } : {}),
     body: { text: body },
+    ...(extra.footer ? { footer: { text: extra.footer } } : {}),
     action: {
       buttons: buttons
         .slice(0, 3)
@@ -292,6 +348,34 @@ export async function readCallingSettings(
     'GET',
     `/${config.phoneNumberId}/settings`,
   );
+}
+
+// --- files we send (the art) -------------------------------------------------------------
+
+/**
+ * POST /{phone-number-id}/media: the art goes up to Meta once and is sent by
+ * its id (Meta keeps it 30 days). Uploading sends nothing to anybody.
+ */
+export async function uploadWhatsAppMedia(
+  fetchImpl: Fetch,
+  config: WhatsAppConfig,
+  file: { bytes: Buffer; mimeType: string; filename: string },
+): Promise<GraphResult<{ id: string }>> {
+  const form = new FormData();
+  form.append('messaging_product', 'whatsapp');
+  form.append('type', file.mimeType);
+  form.append('file', new Blob([file.bytes], { type: file.mimeType }), file.filename);
+  const result = await graph<{ id?: string }>(
+    fetchImpl,
+    config.token,
+    'POST',
+    `/${config.phoneNumberId}/media`,
+    form,
+    60_000,
+  );
+  if (!result.ok) return result;
+  if (!result.data.id) return { ok: false, code: null, title: 'no_media_id', unknown: true };
+  return { ok: true, data: { id: result.data.id } };
 }
 
 // --- templates --------------------------------------------------------------------------

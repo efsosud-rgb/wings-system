@@ -99,6 +99,13 @@ export interface WaMessage {
   /** Present when the message has a file, opened at `/whatsapp/messages/:id/media`. */
   media: { mimeType: string | null; filename: string | null } | null;
   template: { name: string; language: string } | null;
+  /**
+   * A template that went as a common message inside the 24-hour window (no
+   * charge): its name, for the bubble.
+   */
+  fromTemplate: string | null;
+  /** The brand's (or Wings') art went in the header. */
+  withArt: boolean;
   /** Outgoing only. */
   status: WaMessageStatus | null;
   /** Why it was not sent, in plain Portuguese (from Meta's error code). */
@@ -144,22 +151,14 @@ export interface WaTemplate {
   body: string | null;
   /** How many {{n}} the body takes. */
   paramCount: number;
+  /** An approved `<name>_arte` exists: with the art registered, that one goes. */
+  artVersion: boolean;
 }
 
 export const waSendTextSchema = z.object({
   text: z.string().trim().min(1, 'Escreva a mensagem.').max(4096, 'Até 4096 caracteres.'),
 });
 export type WaSendText = z.infer<typeof waSendTextSchema>;
-
-export const waSendTemplateSchema = z.object({
-  name: z.string().trim().min(1).max(512),
-  language: z.string().trim().min(2).max(15),
-  params: z
-    .array(z.string().trim().min(1, 'Preencha cada campo do modelo.').max(1024))
-    .max(20)
-    .default([]),
-});
-export type WaSendTemplate = z.infer<typeof waSendTemplateSchema>;
 
 /**
  * The forms a Brazilian mobile takes on WhatsApp: Meta's `wa_id` may lack the

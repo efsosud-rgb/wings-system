@@ -26,6 +26,7 @@ import { trackingLinkByCode } from '../leads/service.js';
 import { leadFromTrackedMessage } from '../leads/tracked-link.js';
 import { loadSofiaSettings } from '../sofia/settings.js';
 import { routeInbound } from '../sofia/state.js';
+import { ART_MEDIA_GONE_CODES, invalidateArtMedia } from './art.js';
 import {
   isOptOut,
   whatsappChangesOf,
@@ -470,6 +471,15 @@ async function applyStatus(db: Database, update: WaStatusUpdate) {
           : {}),
       })
       .where(eq(waMessages.id, row.id));
+    // A message with the art that Meta failed later because of the file: the art goes up again next time.
+    const art = (row.content as { art?: { mediaId?: unknown } } | null)?.art;
+    if (
+      update.status === 'failed' &&
+      typeof art?.mediaId === 'string' &&
+      update.errorCode !== null &&
+      ART_MEDIA_GONE_CODES.has(update.errorCode)
+    )
+      await invalidateArtMedia(db, art.mediaId, at);
   } else if (stamp && stamp !== 'failedAt' && row[stamp] === null && current !== 'failed') {
     // Arrived late (a "delivered" after the "read"): only its time is filled in.
     await db

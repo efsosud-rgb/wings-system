@@ -50,4 +50,5 @@ export * from './studio.js';
 export * from './studio-agent.js';
 export * from './meetings.js';
 export * from './whatsapp.js';
+export * from './whatsapp-art.js';
 export * from './sofia.js';

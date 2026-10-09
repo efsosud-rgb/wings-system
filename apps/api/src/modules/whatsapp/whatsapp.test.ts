@@ -538,6 +538,7 @@ describe('sending', () => {
         category: 'UTILITY',
         body: 'Olá {{1}}, aqui é {{2}} da Wings. Podemos continuar?',
         paramCount: 2,
+        artVersion: false,
       },
     ]);
     const wrong = await app.inject({

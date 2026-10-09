@@ -554,6 +554,13 @@
       "when": 1791402724517,
       "tag": "0080_sofia_sdr",
       "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1791550997663,
+      "tag": "0081_whatsapp_art",
+      "breakpoints": true
     }
   ]
 }

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { clientQuickContactSchema, cnpjField, FIT_LEVELS, REVENUE_BANDS } from './client-record.js';
 import type { ExpansionEntry } from './leads.js';
+import type { BrandArticle } from './whatsapp-art.js';
 
 /**
  * Clients: who a piece of work is for. Wings Company itself is the first one,
@@ -35,6 +36,10 @@ export interface Client {
   franchiseOnSale?: boolean | null;
   /** What the register lacks (empty when complete); for Wings Company, always empty. */
   registerMissing?: string[];
+  /** "o"/"a" before the brand's name in the WhatsApp templates; null while nobody said. */
+  article?: BrandArticle | null;
+  /** The art at the head of the WhatsApp templates is registered (Wings Company: the Wings art). */
+  whatsappArt?: boolean;
 }
 
 /** Accent- and case-blind, with every run of anything else collapsed to one space. */
