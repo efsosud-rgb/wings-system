@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import type { SessionUser } from '@wings/shared';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -205,18 +205,61 @@ describe('on a phone, the menu is a drawer behind ☰', () => {
     expect(document.querySelector('.sidebar-backdrop')).toBeNull();
   });
 
-  it('closes when a screen is chosen, and stays closed coming back', () => {
+  it('closes when a screen is chosen and gives focus back to ☰', () => {
     renderShell();
     fireEvent.click(toggle());
     fireEvent.click(screen.getByRole('link', { name: /Copywriter/ }));
 
     expect(toggle().getAttribute('aria-expanded')).toBe('false');
     expect(document.body.style.overflow).toBe('');
-    // The new page keeps the focus: it is not pulled back to ☰.
-    expect(document.activeElement).not.toBe(toggle());
+    // The entry is hidden with the drawer; focus must not fall to the page body.
+    expect(document.activeElement).toBe(toggle());
+  });
 
-    fireEvent.click(screen.getByRole('link', { name: /Agente de Tráfego Pago — Wings/ }));
+  it('closes when the screen changes by other means (the browser back button)', () => {
+    let go: ((to: string) => void) | null = null;
+    function Page() {
+      const navigate = useNavigate();
+      go = (to) => void navigate(to);
+      return null;
+    }
+    render(
+      <MemoryRouter initialEntries={['/marketing/trafego-pago-wings']}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="*" element={<Page />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(toggle());
+    expect(toggle().getAttribute('aria-expanded')).toBe('true');
+
+    act(() => go?.('/inicio'));
+
     expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    expect(document.body.style.overflow).toBe('');
+    expect(main().hasAttribute('inert')).toBe(false);
+  });
+
+  it('is announced as a dialog only while open', () => {
+    renderShell();
+    const sidebar = () => document.getElementById('app-sidebar') as HTMLElement;
+    expect(sidebar().getAttribute('role')).toBeNull();
+    fireEvent.click(toggle());
+    expect(sidebar().getAttribute('role')).toBe('dialog');
+    expect(sidebar().getAttribute('aria-modal')).toBe('true');
+    expect(screen.getByRole('dialog', { name: 'Menu' })).toBe(sidebar());
+  });
+
+  it('gives way to the search (Ctrl K) without pulling focus to ☰', () => {
+    renderShell();
+    fireEvent.click(toggle());
+    fireEvent.keyDown(document, { key: 'k', ctrlKey: true });
+
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    expect(main().hasAttribute('inert')).toBe(false);
+    expect(document.activeElement).not.toBe(toggle());
   });
 
   it('closes when the entry chosen is the screen already open', () => {

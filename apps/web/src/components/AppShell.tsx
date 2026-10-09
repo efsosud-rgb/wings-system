@@ -56,11 +56,12 @@ export function AppShell() {
   }
   const toggleRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
-  // Closed by Escape, the × or the backdrop, focus goes back to ☰; closed by
-  // choosing a screen, it stays with the new page.
+  // Closed by Escape, the ×, the backdrop or choosing an entry, focus goes back
+  // to ☰ (the entry itself is hidden with the drawer, so the browser would
+  // drop focus on the page body).
   const returnFocus = useRef(false);
-  const closeMenu = (refocus: boolean) => {
-    returnFocus.current = refocus;
+  const closeMenu = () => {
+    returnFocus.current = true;
     setMenuOpen(false);
   };
 
@@ -72,12 +73,15 @@ export function AppShell() {
       }
       return;
     }
-    closeRef.current?.focus();
+    closeRef.current?.focus({ preventScroll: true });
     const { overflow } = document.body.style;
     document.body.style.overflow = 'hidden';
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      returnFocus.current = true;
+      // Ctrl K opens the search in the top bar: the drawer gives way to it in
+      // the same render, so the page is no longer inert when the search focuses.
+      const search = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k';
+      if (event.key !== 'Escape' && !search) return;
+      returnFocus.current = !search;
       setMenuOpen(false);
     };
     // Turning a tablet or widening the window past 700 px leaves no drawer to
@@ -165,7 +169,7 @@ export function AppShell() {
 
   // Choosing an entry closes the drawer even when it is the screen already open.
   const onMenuClick = (event: MouseEvent<HTMLElement>) => {
-    if ((event.target as Element).closest('a')) closeMenu(false);
+    if (menuOpen && (event.target as Element).closest('a')) closeMenu();
   };
 
   const menuButton = (
@@ -184,7 +188,12 @@ export function AppShell() {
 
   return (
     <div className={menuOpen ? 'shell is-menu-open' : 'shell'}>
-      <aside className="sidebar" id={SIDEBAR_ID}>
+      <aside
+        className="sidebar"
+        id={SIDEBAR_ID}
+        // Open on a phone it covers the page like a dialog, and says so.
+        {...(menuOpen ? { role: 'dialog', 'aria-modal': true, 'aria-label': 'Menu' } : {})}
+      >
         <div className="sidebar-brand">
           <div className="sidebar-logo" id="wings-logo-slot">
             <SidebarLogo />
@@ -194,7 +203,7 @@ export function AppShell() {
             type="button"
             className="topbar-icon-btn sidebar-close"
             aria-label="Fechar menu"
-            onClick={() => closeMenu(true)}
+            onClick={() => closeMenu()}
           >
             <Icon name="x" size={20} />
           </button>
@@ -214,7 +223,7 @@ export function AppShell() {
         </nav>
       </aside>
       {menuOpen && (
-        <div className="sidebar-backdrop" aria-hidden="true" onClick={() => closeMenu(true)} />
+        <div className="sidebar-backdrop" aria-hidden="true" onClick={() => closeMenu()} />
       )}
 
       {/* inert while the drawer is open: Tab stays in the menu, as in a dialog. */}
