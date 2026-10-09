@@ -325,8 +325,11 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
             steps.web_research = 'done';
           } catch (error) {
             // The call was made, whatever it answered: the reserving row stays.
-            await writeLedger(db, { leadId, jobId: job.id, step: 'ai_research', status: 'failed', usdMicro: 0, detail: { reason: messageOf(error) } });
-            facts.webResearch = noResearch('failed', at, 'A pesquisa não terminou (o provedor não respondeu); nada foi inventado');
+            const reason = messageOf(error);
+            await writeLedger(db, { leadId, jobId: job.id, step: 'ai_research', status: 'failed', usdMicro: 0, detail: { reason } });
+            // Also in the worker's log (status and lead id only), so a refused key shows without reading the ledger.
+            console.warn(JSON.stringify({ worker: 'enrich_lead', msg: 'lead research failed', leadId, reason }));
+            facts.webResearch = noResearch('failed', at, researchFailureReasonOf(reason));
             steps.web_research = 'failed';
           }
         }
@@ -415,6 +418,32 @@ const noResearch = (status: LeadWebResearch['status'], at: string, reason: strin
   sources: [],
   model: null,
 });
+
+/**
+ * What the deal page says when the research failed, from the provider's message
+ * (`OpenRouter answered 401`, `OpenRouter did not answer (TimeoutError)`...): a
+ * refused key, no credit and no answer are different problems for whoever reads
+ * it, and each is already a status, never the person or the key.
+ */
+export function researchFailureReasonOf(message: string): string {
+  if (/answered (401|403)\b/.test(message)) {
+    return 'A pesquisa não rodou: o OpenRouter recusou a chave do worker (401/403); nada foi inventado';
+  }
+  if (/answered 402\b/.test(message)) {
+    return 'A pesquisa não rodou: a conta do OpenRouter está sem crédito (402); nada foi inventado';
+  }
+  if (/answered 429\b/.test(message)) {
+    return 'A pesquisa não terminou: o OpenRouter limitou as chamadas (429); nada foi inventado';
+  }
+  const status = /answered (\d{3})\b/.exec(message)?.[1];
+  if (status) {
+    return `A pesquisa não terminou: o OpenRouter respondeu com erro (${status}); nada foi inventado`;
+  }
+  if (/without the JSON|not JSON|reported an error/.test(message)) {
+    return 'A pesquisa não terminou: o OpenRouter respondeu, mas não no formato pedido; nada foi inventado';
+  }
+  return 'A pesquisa não terminou (o provedor não respondeu); nada foi inventado';
+}
 
 /** A message, never a stack, a query or a name. */
 function messageOf(error: unknown): string {

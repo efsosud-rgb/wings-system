@@ -218,6 +218,16 @@ const schema = z.object({
     (value) => value === undefined || /^\d{1,3}$/.test(value),
     'must be a whole number of days',
   ),
+  /**
+   * E-mail copy of two panel notices to the deal's owner, through the company
+   * SMTP (SMTP_*): a new lead that is theirs, and a first contact past the
+   * 1-business-hour SLA (docs/crm/avisos-por-email.md). Off when unset: the
+   * notices are marked skipped, never kept for the day it is switched on.
+   */
+  CRM_NOTICE_EMAIL_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
   CRM_RD_FOLLOW_ENABLED: optionalString.refine(
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',

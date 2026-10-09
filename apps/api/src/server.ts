@@ -7,7 +7,9 @@ import { startFormatacaoIntakeScheduler } from './modules/expansion/formatacao.j
 import { startExpansionIntakeScheduler } from './modules/expansion/scheduler.js';
 import { startInsightsScheduler } from './modules/insights/scheduler.js';
 import { startCrmAutomationsScheduler } from './modules/leads/automations-scheduler.js';
+import { onLeadArrivedKick } from './modules/leads/crm-alerts.js';
 import { createCrmMailTransport } from './modules/leads/crm-mail.js';
+import { sendPendingNoticeMails } from './modules/leads/crm-notice-mail.js';
 import { startMetaLeadgenIntake } from './modules/leads/meta-intake.js';
 import { startSofia } from './modules/sofia/engine.js';
 import { whatsappConfigOf } from './modules/whatsapp/graph.js';
@@ -139,17 +141,38 @@ async function main() {
     app.addHook('onClose', async () => sofia.stop());
   }
 
-  // CRM automations: due rules and sequence steps, then the deadline alerts,
-  // every CRM_AUTOMATIONS_CRON minutes (5 by default). Registered before `listen`.
+  // CRM automations: due rules and sequence steps, then the deadline alerts, then
+  // the owners' notice e-mails, every CRM_AUTOMATIONS_CRON minutes (5 by default).
+  // Registered before `listen`. A new lead's e-mail does not wait for the cycle:
+  // the arrival kicks one pass of the e-mail step on its own.
   {
+    const log = (facts: Record<string, unknown>) => app.log.info(facts);
+    const noticeMail = {
+      mailer: app.wings.mailer,
+      enabled: env.CRM_NOTICE_EMAIL_ENABLED === 'true',
+      baseUrl: env.APP_BASE_URL,
+      log,
+    };
     const stop = startCrmAutomationsScheduler({
       db,
       mail: createCrmMailTransport(env),
       cron: env.CRM_AUTOMATIONS_CRON,
       stageStuckDays: env.CRM_STAGE_STUCK_DAYS === undefined ? 7 : Number(env.CRM_STAGE_STUCK_DAYS),
-      log: (facts) => app.log.info(facts),
+      noticeMail,
+      log,
     });
-    app.addHook('onClose', async () => stop());
+    onLeadArrivedKick(() => {
+      sendPendingNoticeMails(db, noticeMail).catch((error: unknown) => {
+        log({
+          job: 'crm-notice-mail',
+          error: error instanceof Error ? error.name : 'unknown',
+        });
+      });
+    });
+    app.addHook('onClose', async () => {
+      onLeadArrivedKick(null);
+      stop();
+    });
   }
 
   // YouTube channel (public data, docs/integracoes/youtube-data-api.md): one
