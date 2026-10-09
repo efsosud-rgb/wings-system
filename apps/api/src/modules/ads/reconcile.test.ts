@@ -6,6 +6,7 @@ import {
   adAccounts,
   adCampaigns,
   adGuardrailEvents,
+  adSets,
   budgetPeriods,
 } from '../../db/schema/index.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
@@ -82,6 +83,101 @@ describe('syncing campaigns from the platform', () => {
     await syncCampaigns(db, client, id, NOW);
     const stored = await db.query.adCampaigns.findMany({ where: eq(adCampaigns.adAccountId, id) });
     expect(stored).toHaveLength(1);
+  });
+});
+
+describe('the ad sets keep their own end and placements', () => {
+  const INSTAGRAM = {
+    platforms: ['instagram'],
+    positions: ['instagram:stream', 'instagram:reels'],
+  };
+  const storedSet = async (accountId: string, externalId: string) => {
+    const campaigns = await db.query.adCampaigns.findMany({
+      where: eq(adCampaigns.adAccountId, accountId),
+    });
+    const [row] = await db.select().from(adSets).where(eq(adSets.externalId, externalId));
+    return campaigns.some((campaign) => campaign.id === row?.campaignId) ? row : undefined;
+  };
+
+  it('stores the end day and the placements the platform reported', async () => {
+    const id = await account();
+    const client = new FakeMetaClient({
+      campaigns: [{ id: 'c-end', name: 'Form', status: 'ACTIVE', dailyBudgetCents: 15000 }],
+      adSets: [
+        {
+          id: 'as-ig',
+          campaignId: 'c-end',
+          name: 'Instagram',
+          endDate: '2026-10-13',
+          placements: INSTAGRAM,
+        },
+        {
+          id: 'as-auto',
+          campaignId: 'c-end',
+          name: 'Automático',
+          status: 'PAUSED',
+          endDate: null,
+          placements: null,
+        },
+      ],
+    });
+    await syncCampaigns(db, client, id, NOW);
+    expect(await storedSet(id, 'as-ig')).toMatchObject({
+      endDate: '2026-10-13',
+      placements: INSTAGRAM,
+    });
+    expect(await storedSet(id, 'as-auto')).toMatchObject({ endDate: null, placements: null });
+  });
+
+  it('follows a change on the platform, and null means "no end" and "automatic"', async () => {
+    const id = await account();
+    const first = new FakeMetaClient({
+      campaigns: [{ id: 'c-move', name: 'Form', status: 'ACTIVE', dailyBudgetCents: 15000 }],
+      adSets: [
+        {
+          id: 'as-move',
+          campaignId: 'c-move',
+          name: 'Conjunto',
+          endDate: '2026-10-13',
+          placements: INSTAGRAM,
+        },
+      ],
+    });
+    await syncCampaigns(db, first, id, NOW);
+    const later = new FakeMetaClient({
+      campaigns: [{ id: 'c-move', name: 'Form', status: 'ACTIVE', dailyBudgetCents: 15000 }],
+      adSets: [
+        { id: 'as-move', campaignId: 'c-move', name: 'Conjunto', endDate: null, placements: null },
+      ],
+    });
+    await syncCampaigns(db, later, id, NOW);
+    expect(await storedSet(id, 'as-move')).toMatchObject({ endDate: null, placements: null });
+  });
+
+  it('never erases what it knew when a client does not read them', async () => {
+    const id = await account();
+    const reads = new FakeMetaClient({
+      campaigns: [{ id: 'c-keep', name: 'Form', status: 'ACTIVE', dailyBudgetCents: 15000 }],
+      adSets: [
+        {
+          id: 'as-keep',
+          campaignId: 'c-keep',
+          name: 'Conjunto',
+          endDate: '2026-10-13',
+          placements: INSTAGRAM,
+        },
+      ],
+    });
+    await syncCampaigns(db, reads, id, NOW);
+    const blind = new FakeMetaClient({
+      campaigns: [{ id: 'c-keep', name: 'Form', status: 'ACTIVE', dailyBudgetCents: 15000 }],
+      adSets: [{ id: 'as-keep', campaignId: 'c-keep', name: 'Conjunto' }],
+    });
+    await syncCampaigns(db, blind, id, NOW);
+    expect(await storedSet(id, 'as-keep')).toMatchObject({
+      endDate: '2026-10-13',
+      placements: INSTAGRAM,
+    });
   });
 });
 

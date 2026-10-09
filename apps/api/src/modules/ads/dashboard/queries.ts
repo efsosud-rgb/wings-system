@@ -1,5 +1,7 @@
 import {
   addTotals,
+  earliestEnd,
+  effectiveCampaignEnd,
   EMPTY_TOTALS,
   fatigueOf,
   killSwitchRuleOf,
@@ -299,6 +301,7 @@ async function budgetForecast(
         campaignId: adSets.campaignId,
         status: adSets.status,
         dailyBudgetCents: adSets.dailyBudgetCents,
+        endDate: adSets.endDate,
       })
       .from(adSets)
       .innerJoin(adCampaigns, eq(adCampaigns.id, adSets.campaignId))
@@ -310,20 +313,40 @@ async function budgetForecast(
   let activeDaily = 0;
   let running = 0;
   for (const campaign of campaignRows) {
-    const daily =
+    const ownAdSets = adSetRows.filter((row) => row.campaignId === campaign.id);
+    // The schedule may live on the ad sets (Meta). A campaign that holds the budget ends with the
+    // ad sets that are on; one whose ad sets hold it counts each ad set until its own end.
+    const streams =
       campaign.budgetLevel === 'ad_set'
-        ? adSetRows
-            .filter((row) => row.campaignId === campaign.id && row.status === 'ACTIVE')
-            .reduce((total, row) => total + (row.dailyBudgetCents ?? 0), 0)
-        : campaign.dailyBudgetCents;
-    if (!daily) continue;
-    const lastDay = campaign.endDate && campaign.endDate < monthEnd ? campaign.endDate : monthEnd;
-    if (lastDay < month.today) continue;
+        ? ownAdSets
+            .filter((row) => row.status === 'ACTIVE')
+            .map((row) => ({
+              daily: row.dailyBudgetCents ?? 0,
+              end: earliestEnd(campaign.endDate, row.endDate),
+            }))
+        : [
+            {
+              daily: campaign.dailyBudgetCents,
+              end: effectiveCampaignEnd(campaign.endDate, ownAdSets),
+            },
+          ];
+    const alive = streams
+      .filter((stream) => stream.daily > 0)
+      .map((stream) => ({
+        daily: stream.daily,
+        lastDay: stream.end && stream.end < monthEnd ? stream.end : monthEnd,
+      }))
+      .filter((stream) => stream.lastDay >= month.today);
+    if (alive.length === 0) continue;
     running += 1;
-    activeDaily += daily;
+    const todayDaily = alive.reduce((total, stream) => total + stream.daily, 0);
+    activeDaily += todayDaily;
     const spentToday = todayRows.get(campaign.externalId)?.spendCents ?? 0;
-    const fullDaysLeft = daysBetween(addDays(month.today, 1), lastDay).length;
-    rest += Math.max(0, daily - spentToday) + daily * fullDaysLeft;
+    // What is left of today's budget is the campaign's; the days after count ad set by ad set.
+    rest += Math.max(0, todayDaily - spentToday);
+    for (const stream of alive) {
+      rest += stream.daily * daysBetween(addDays(month.today, 1), stream.lastDay).length;
+    }
   }
   const daysLeft = daysBetween(addDays(month.today, 1), monthEnd).length;
   const forecastRule =
@@ -831,6 +854,8 @@ export async function campaigns(
         name: adSet.name,
         status: adSet.status,
         dailyBudgetCents: adSet.dailyBudgetCents || null,
+        endDate: adSet.endDate,
+        placements: adSet.placements ?? null,
         totals: adSetSums.get(adSet.externalId) ?? EMPTY_TOTALS,
         ads: adRows
           .filter((ad) => ad.adSetId === adSet.id)
@@ -851,7 +876,10 @@ export async function campaigns(
       launchDefaults: launchDefaultsOf(draftOf.get(campaign.id)?.payload),
       // The platform's own schedule first; the draft's for a campaign not synced since.
       startDate: campaign.startDate ?? draftOf.get(campaign.id)?.startDate ?? null,
-      endDate: campaign.endDate ?? draftOf.get(campaign.id)?.endDate ?? null,
+      endDate:
+        effectiveCampaignEnd(campaign.endDate, ownAdSets) ??
+        draftOf.get(campaign.id)?.endDate ??
+        null,
       mirroredAt: campaign.createdAt.toISOString(),
       targetCplCents: targetOf.get(campaign.id) ?? null,
       name: campaign.name,

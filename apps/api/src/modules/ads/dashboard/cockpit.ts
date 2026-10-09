@@ -32,6 +32,7 @@ import {
 } from '../../../db/schema/index.js';
 import type { Env } from '../../../env.js';
 import { ga4CredentialsOf } from '../../../lib/ga4.js';
+import { effectiveCampaignEnds } from '../campaign-end.js';
 import { activeAccounts, creatives, sumsByEntity } from './queries.js';
 import { confirmedTargets } from './targets.js';
 import { addDays, daysBetween, windowOf } from './window.js';
@@ -71,13 +72,15 @@ export async function cockpit(
       ])
     : [[], []];
   const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo' }).format(now);
+  // A campaign with no end of its own ends with its ad sets that are on (Meta keeps the schedule there).
+  const endOf = await effectiveCampaignEnds(db, campaignRows);
   const active = campaignRows.filter((campaign) =>
     campaignDelivering(
       {
         platform: platformOf.get(campaign.adAccountId) ?? 'meta',
         status: campaign.status,
         deliveryStatus: campaign.deliveryStatus,
-        endDate: campaign.endDate,
+        endDate: endOf.get(campaign.id) ?? null,
       },
       today,
     ),
@@ -87,9 +90,10 @@ export async function cockpit(
   // "Ativo" is the status a person set; "entregando" is the rule above. The chip
   // says both, so 4 campaigns marked active and 2 in the figures do not look like a mistake.
   const withActiveStatus = campaignRows.filter((campaign) => campaign.status === 'ACTIVE');
-  const endedCampaigns = withActiveStatus.filter(
-    (campaign) => campaign.endDate && campaign.endDate < today,
-  );
+  const endedCampaigns = withActiveStatus.filter((campaign) => {
+    const end = endOf.get(campaign.id);
+    return Boolean(end && end < today);
+  });
   const deliveringCount = withActiveStatus.filter((campaign) => activeIds.has(campaign.id)).length;
   const statusSummary: CockpitStatusSummary = {
     withStatus: withActiveStatus.length,
@@ -98,7 +102,7 @@ export async function cockpit(
       .map((campaign) => ({
         platform: platformOf.get(campaign.adAccountId) ?? ('meta' as AdPlatform),
         name: campaign.name,
-        endDate: campaign.endDate!,
+        endDate: endOf.get(campaign.id)!,
       }))
       .sort((a, b) => a.endDate.localeCompare(b.endDate) || a.name.localeCompare(b.name)),
     notDelivering: withActiveStatus.length - deliveringCount - endedCampaigns.length,
@@ -490,7 +494,7 @@ export async function cockpit(
         deliveryStatus: campaign.deliveryStatus,
         delivering: activeIds.has(campaign.id),
         startDate: campaign.startDate,
-        endDate: campaign.endDate,
+        endDate: endOf.get(campaign.id) ?? null,
         dailyBudgetCents: dailyBudgetOf(campaign),
         spentTodayCents: todayRows.get(campaign.externalId)?.spendCents ?? 0,
       }))

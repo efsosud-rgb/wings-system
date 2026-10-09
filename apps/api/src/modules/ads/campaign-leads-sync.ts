@@ -1,7 +1,10 @@
 import {
+  adPlatformOfUtmSource,
   CAMPAIGN_LEADS_SINCE,
   campaignDelivering,
+  effectiveCampaignEnd,
   isFormatacaoPipeline,
+  isPaidUtmMedium,
   isTestDeal,
   maskEmail,
   maskPhone,
@@ -18,6 +21,7 @@ import {
   adCampaignDrafts,
   adCampaigns,
   adMetricsDaily,
+  adSets,
   campaignLeads,
   employees,
   leads,
@@ -268,6 +272,8 @@ export function buildAttributionCampaigns(input: {
   drafts: Pick<DraftRow, 'campaignId' | 'payload'>[];
   ads: Pick<AdRow, 'id' | 'campaignId' | 'externalId' | 'name' | 'utmContent' | 'urlTags'>[];
   spend: { campaignId: string | null; day: string }[];
+  /** The ad sets, for a schedule that lives on them (Meta): the campaign ends with the ones that are on. */
+  adSets?: { campaignId: string; status: string; endDate: string | null }[];
   now: Date;
 }): AttributionCampaign[] {
   const today = saoPauloDayOf(input.now);
@@ -280,6 +286,15 @@ export function buildAttributionCampaigns(input: {
   }
   return input.campaigns.map(({ campaign, platform }) => {
     const campaignAds = input.ads.filter((ad) => ad.campaignId === campaign.id);
+    const ownAdSets = (input.adSets ?? []).filter((adSet) => adSet.campaignId === campaign.id);
+    // The days a campaign may have delivered: judged for a deal that entered in the past, so an ad
+    // set paused since still counts (spend that day decides the rest). Whether it delivers now
+    // looks only at the ad sets that are on.
+    const endDate = effectiveCampaignEnd(
+      campaign.endDate,
+      ownAdSets.map((adSet) => ({ ...adSet, status: 'ACTIVE' })),
+    );
+    const endNow = effectiveCampaignEnd(campaign.endDate, ownAdSets);
     const utm = [
       ...input.drafts
         .filter((draft) => draft.campaignId === campaign.id)
@@ -307,13 +322,13 @@ export function buildAttributionCampaigns(input: {
         ],
       })),
       startDate: campaign.startDate,
-      endDate: campaign.endDate,
+      endDate,
       deliveringNow: campaignDelivering(
         {
           platform: platform as AdPlatform,
           status: campaign.status,
           deliveryStatus: campaign.deliveryStatus,
-          endDate: campaign.endDate,
+          endDate: endNow,
         },
         today,
       ),
@@ -334,9 +349,13 @@ async function attributionCampaigns(
     .where(isNull(adAccounts.archivedAt));
   if (rows.length === 0) return [];
   const ids = rows.map(({ campaign }) => campaign.id);
-  const [drafts, ads, spend] = await Promise.all([
+  const [drafts, ads, adSetRows, spend] = await Promise.all([
     db.query.adCampaignDrafts.findMany({ where: inArray(adCampaignDrafts.campaignId, ids) }),
     db.query.adAds.findMany({ where: inArray(adAds.campaignId, ids) }),
+    db
+      .select({ campaignId: adSets.campaignId, status: adSets.status, endDate: adSets.endDate })
+      .from(adSets)
+      .where(inArray(adSets.campaignId, ids)),
     db
       .select({ campaignId: adMetricsDaily.campaignId, day: adMetricsDaily.day })
       .from(adMetricsDaily)
@@ -348,7 +367,7 @@ async function attributionCampaigns(
         ),
       ),
   ]);
-  return buildAttributionCampaigns({ campaigns: rows, drafts, ads, spend, now });
+  return buildAttributionCampaigns({ campaigns: rows, drafts, ads, spend, adSets: adSetRows, now });
 }
 
 type Attributed = {
@@ -377,10 +396,15 @@ const unattributedAs = (
  *  1. the Wings lead behind the deal says its campaign (Meta instant forms
  *     carry no UTM, but the lead keeps the campaign and ad ids);
  *  2. the UTMs of the conversion: utm_campaign against the campaign's id, name,
- *     the UTMs of its drafts and ads, or a slug of its name; failing that,
- *     utm_content against the ads of one campaign in force;
- *  3. RD's source label, when the platform has exactly one campaign in force.
- * Only campaigns in force on the day the deal entered can claim it (`enteredDay`).
+ *     the UTMs of its drafts and ads, or a slug of its name; failing that, and
+ *     also when there is no utm_campaign at all, utm_content against the ads
+ *     of one campaign in force;
+ *  3. a paid utm_medium with a utm_source that names a platform (the deal is
+ *     bought media whatever RD's source says), else RD's source label: either
+ *     way the platform's only campaign in force;
+ *  4. otherwise unattributed, with the reason.
+ * Only campaigns in force on the day the deal entered can claim it (`enteredDay`);
+ * a campaign ends with its own end date or, failing that, with its ad sets.
  */
 export function attribute(
   input: {
@@ -416,39 +440,48 @@ export function attribute(
   }
   const inForce = campaigns.filter((candidate) => inForceOn(candidate, input.enteredDay));
   const utmCampaign = input.utms?.campaign ? norm(input.utms.campaign) : null;
+  const content = input.utms?.content ? norm(input.utms.content) : null;
+  // The one campaign in force whose ad carries this utm_content (an ad id or name, long enough not to be a word).
+  const campaignOfContent =
+    content && content.length >= 10
+      ? only(inForce.filter((candidate) => candidate.ads.some((ad) => ad.keys.includes(content))))
+      : undefined;
+  const utmMatch = (campaign: AttributionCampaign): Attributed => {
+    const ad = content
+      ? campaign.ads.find((candidate) => candidate.keys.includes(content))
+      : undefined;
+    return {
+      platform: campaign.platform,
+      campaignId: campaign.id,
+      adId: ad?.id ?? null,
+      attribution: 'utm',
+      reason: null,
+    };
+  };
   if (utmCampaign) {
-    const content = input.utms?.content ? norm(input.utms.content) : null;
     const campaign =
       inForce.find((candidate) => candidate.keys.includes(utmCampaign)) ??
       (utmCampaign.length >= 12
         ? only(inForce.filter((candidate) => candidate.nameKey?.includes(utmCampaign)))
         : undefined) ??
-      (content && content.length >= 10
-        ? only(inForce.filter((candidate) => candidate.ads.some((ad) => ad.keys.includes(content))))
-        : undefined);
-    if (campaign) {
-      const ad = content
-        ? campaign.ads.find((candidate) => candidate.keys.includes(content))
-        : undefined;
-      return {
-        platform: campaign.platform,
-        campaignId: campaign.id,
-        adId: ad?.id ?? null,
-        attribution: 'utm',
-        reason: null,
-      };
-    }
-    return unattributedAs('utm_other_campaign');
+      campaignOfContent;
+    return campaign ? utmMatch(campaign) : unattributedAs('utm_other_campaign');
   }
-  const platform = platformOfRdLabels(input.sourceLabel, input.campaignLabel);
-  if (platform) {
+  // No utm_campaign (a link without it, or a macro that did not expand): the ad alone still names the campaign.
+  if (campaignOfContent) return utmMatch(campaignOfContent);
+
+  // A paid utm_medium with a utm_source that names a platform says the click was bought, whatever
+  // RD's origin says. Each platform guess claims the deal only when it has exactly one campaign in
+  // force; a guess that fails does not stop the other (UTM says Google with none running, RD says
+  // Facebook with one).
+  const claimByPlatform = (platform: AdPlatform, method: AttributionMethod): Attributed => {
     const candidates = inForce.filter((campaign) => campaign.platform === platform);
     if (candidates.length === 1) {
       return {
         platform,
         campaignId: candidates[0]!.id,
         adId: null,
-        attribution: 'rd_origin',
+        attribution: method,
         reason: null,
       };
     }
@@ -456,11 +489,61 @@ export function attribute(
       candidates.length === 0 ? 'platform_without_active_campaign' : 'platform_ambiguous',
       platform,
     );
+  };
+  const utmPlatform = isPaidUtmMedium(input.utms?.medium)
+    ? adPlatformOfUtmSource(input.utms?.source)
+    : null;
+  const labelPlatform = platformOfRdLabels(input.sourceLabel, input.campaignLabel);
+  const guesses: { platform: AdPlatform; method: AttributionMethod }[] = [];
+  if (utmPlatform) guesses.push({ platform: utmPlatform, method: 'utm' });
+  if (labelPlatform && labelPlatform !== utmPlatform) {
+    guesses.push({ platform: labelPlatform, method: 'rd_origin' });
   }
-  const paid = /busca paga|tr[aá]fego pago|m[ií]dia paga|\bads\b/i.test(
-    `${input.sourceLabel ?? ''} ${input.campaignLabel ?? ''}`,
-  );
+  let failure: Attributed | null = null;
+  for (const guess of guesses) {
+    const claimed = claimByPlatform(guess.platform, guess.method);
+    if (claimed.campaignId) return claimed;
+    failure ??= claimed;
+  }
+  if (failure) return failure;
+  const paid =
+    isPaidUtmMedium(input.utms?.medium) ||
+    /busca paga|tr[aá]fego pago|m[ií]dia paga|\bads\b/i.test(
+      `${input.sourceLabel ?? ''} ${input.campaignLabel ?? ''}`,
+    );
   return unattributedAs(paid ? 'paid_no_platform' : 'not_paid');
+}
+
+/**
+ * An attribution that was a guess, not a finding: RD's origin picking the platform's only campaign,
+ * or a paid UTM that named the platform and no campaign or ad. The real UTM may still refine it.
+ */
+export function isGuessedAttribution(row: {
+  attribution: string | null;
+  utmCampaign: string | null;
+  utmContent: string | null;
+}): boolean {
+  return (
+    row.attribution === 'rd_origin' ||
+    (row.attribution === 'utm' && !row.utmCampaign && !row.utmContent)
+  );
+}
+
+/** How long after a deal enters the UTM of its conversion is asked again while RD has none to give. */
+export const UTM_RETRY_MS = 24 * 3_600_000;
+
+/**
+ * Whether the UTM of a deal's conversion is to be asked now: never asked, or
+ * asked and empty while the deal is still young (RD may have been late).
+ */
+export function utmLookupDue(
+  checkedAt: Date | null,
+  stored: Utms | null,
+  stillSettling: boolean,
+): boolean {
+  if (!checkedAt) return true;
+  const empty = !stored || !(stored.source || stored.medium || stored.campaign || stored.content);
+  return empty && stillSettling;
 }
 
 export interface CampaignLeadsSyncResult {
@@ -589,7 +672,9 @@ export async function syncCampaignLeads(
     const phone = contact?.phones?.find((entry) => entry.phone)?.phone?.trim() ?? null;
     const enteredAt = new Date(deal.created_at);
 
-    // UTMs: asked once per lead; a failed call is asked again next time.
+    // UTMs: asked once per lead once RD answered with one; a failed call is asked again next time.
+    // An empty answer is asked again for UTM_RETRY_MS after the deal entered: RD Marketing may
+    // not have recorded the conversion yet when the deal first shows up in the CRM.
     let utms: Utms | null = before?.utmCheckedAt
       ? {
           source: before.utmSource,
@@ -599,11 +684,22 @@ export async function syncCampaignLeads(
         }
       : null;
     let utmCheckedAt = before?.utmCheckedAt ?? null;
-    if (!utmCheckedAt && !isTest && marketing && email) {
+    // Only a deal that nobody has claimed for sure is worth asking again: one filed under a campaign
+    // by something firmer than a guess, or whose Wings lead names it (Meta instant form), has no
+    // need of a UTM. A guess (RD's origin, or a paid UTM that only names the platform) stays open to
+    // the real UTM while the deal is young.
+    const young = now.getTime() - enteredAt.getTime() < UTM_RETRY_MS;
+    const filed = Boolean(before?.campaignId && before.attribution);
+    const guessed = filed && isGuessedAttribution(before!);
+    const firmlyFiled = filed && !(guessed && young);
+    const claimed = firmlyFiled || Boolean(wingsLeadOf.get(deal.id)?.adCampaignExternalId);
+    const stillSettling = !claimed && young;
+    if (!isTest && marketing && email && utmLookupDue(utmCheckedAt, utms, stillSettling)) {
       result.utmLookups += 1;
       try {
-        utms = await marketing.utmsOf(email, enteredAt);
-        utmCheckedAt = now;
+        const found = await marketing.utmsOf(email, enteredAt);
+        if (found) utms = found;
+        if (found || !stillSettling) utmCheckedAt = now;
       } catch {
         result.utmFailures += 1;
       }
@@ -611,9 +707,10 @@ export async function syncCampaignLeads(
 
     const sourceLabel = deal.deal_source?.name ?? null;
     const campaignLabel = deal.campaign?.name ?? null;
-    // Once attributed, a lead keeps its campaign even after the campaign ends.
-    const decided =
-      before?.campaignId && before.attribution
+    // Once attributed, a lead keeps its campaign even after the campaign ends. A young guess is
+    // judged again, and kept if nothing firmer turns up.
+    const kept =
+      filed && before
         ? {
             platform: before.platform as AdPlatform | null,
             campaignId: before.campaignId,
@@ -621,17 +718,21 @@ export async function syncCampaignLeads(
             attribution: before.attribution as AttributionMethod,
             reason: null,
           }
-        : attribute(
-            {
-              utms,
-              sourceLabel,
-              campaignLabel,
-              enteredDay: saoPauloDayOf(enteredAt),
-              lead: wingsLeadOf.get(deal.id) ?? null,
-              since,
-            },
-            campaigns,
-          );
+        : null;
+    const judged = firmlyFiled
+      ? null
+      : attribute(
+          {
+            utms,
+            sourceLabel,
+            campaignLabel,
+            enteredDay: saoPauloDayOf(enteredAt),
+            lead: wingsLeadOf.get(deal.id) ?? null,
+            since,
+          },
+          campaigns,
+        );
+    const decided: Attributed = firmlyFiled ? kept! : judged!.campaignId || !kept ? judged! : kept;
     if (!isTest) {
       if (decided.campaignId) result.attributed += 1;
       else if (decided.reason === 'arrived_before_cutoff') result.beforeCutoff += 1;

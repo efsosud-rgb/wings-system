@@ -316,6 +316,29 @@ botão: muda-se na plataforma.
   para a mais antiga pelo início, com a opção de inverter ou ordenar por
   gasto. A campanha Search de 28/09 sumia porque a ordem era por gasto e ela
   tinha R$ 0 entre mais de 90 campanhas.
+- **Fim e posicionamento do conjunto** (migração 0082, só acréscimo):
+  `ad_sets.end_date` (o `end_time` do conjunto na Meta, em dia de São Paulo) e
+  `ad_sets.placements` (de `targeting`: `publisher_platforms` e as posições, sem
+  nada de público nem de local; `null` = posicionamento automático). A Meta
+  guarda o cronograma **no conjunto** quando é assim que a campanha é criada, e
+  a linha da campanha fica sem fim. Um `end_time` à **meia-noite** (00:00) conta
+  o dia anterior como último dia; uma data de época (1970) é "sem fim"; se a
+  Meta recusar a página com `targeting` ("reduce the amount of data"), a leitura
+  repete sem ele e os posicionamentos já conhecidos ficam como estavam. O **fim
+  efetivo** da campanha (`effectiveCampaignEnd`, no `@wings/shared`) é o **menor**
+  entre o fim dela e o último fim dos conjuntos **ativos**, este só quando todos
+  eles têm fim (um conjunto ativo sem fim mantém a campanha aberta; sem
+  conjunto ativo, não há fim). Na **previsão do mês** e na **leitura de verba
+  da plataforma**, a campanha com verba no conjunto (ABO) conta cada conjunto
+  ativo até o seu próprio fim; a de verba na campanha (CBO) acaba com os
+  conjuntos. Na **atribuição**, o passado é julgado por todos os conjuntos
+  (um pausado depois não puxa o fim para trás; o gasto do dia decide) e "entrega
+  hoje" só pelos ativos. É o que o chip do Cockpit ("2 de 4 com status ativo; 2
+  encerradas em …"), "Só campanhas ativas", a aba Campanhas (período e a linha
+  do conjunto: "Instagram · até 13/10") e as contas acima usam. A leitura de 15
+  min já atualiza tudo isso. O
+  Google não informa fim nem posicionamento por grupo de anúncios aqui (a
+  ingestão não apaga o que já sabe).
 - **Google em Criativos**: `listAds` do Google lê os anúncios responsivos de
   pesquisa (títulos, descrições, status de aprovação) e `getInsights('ad')`
   traz o dia de cada anúncio. O formato novo é "Texto (pesquisa)". São duas
@@ -450,23 +473,47 @@ roteirizado para o WordPress e banco descartável
   instantâneo da Meta, que não tem UTM; método `lead_ads`; sem a campanha no
   cadastro, motivo `lead_ads_campaign_unknown`; (2) UTMs da conversão do contato
   no RD Marketing (`traffic_source` é `encoded_` + base64 com a URL de entrada),
-  consultadas uma vez por lead; `utm_campaign` casa com o id, o nome, a UTM do
+  consultadas uma vez por lead **quando o RD respondeu com uma UTM**: uma
+  resposta vazia (o RD ainda não gravou a conversão quando o negócio aparece no
+  CRM) é refeita a cada conferência por **24 h** depois da entrada do negócio
+  (`UTM_RETRY_MS`), e só então fecha como "sem UTM"; um erro do RD é sempre
+  refeito. A repetição vale só para o negócio que ninguém reivindicou: o que
+  o lead do Wings já nomeia (formulário da Meta) ou que já tem campanha por
+  uma UTM firme fecha na hora. Uma atribuição **de palpite** (a origem do RD
+  escolhendo a única campanha da plataforma, ou uma UTM paga que só nomeou a
+  plataforma) continua aberta à UTM de verdade enquanto o negócio é novo, e é
+  julgada de novo quando ela chega (fica o palpite se nada mais firme aparece); `utm_campaign` casa com o id, o nome, a UTM do
   rascunho, a UTM estática das `url_tags` dos anúncios ou um **trecho do nome**
   (`formatacao_videos_thais_out26` dentro de "META | IG | Formatação | Vídeos
   Thais | Out26", com 12 letras ou mais e uma só campanha); se o texto não casa,
   `utm_content` com o id ou o nome longo (10 caracteres ou mais) de um anúncio
-  de uma só campanha; (3) a origem do RD ("Busca Paga | Facebook" / "| Google")
-  quando a plataforma tem uma única campanha; (4) senão, sem atribuição, com o
-  motivo (`UNATTRIBUTED_REASONS`).
+  de uma só campanha. **`utm_content` vale sozinho**, sem `utm_campaign`, com
+  a mesma regra (o link do site `…/contato/?utm_source=meta&utm_medium=paid_social&utm_campaign={{campaign.name}}&utm_content={{ad.id}}`
+  casa por nome e por id); (3) um **`utm_medium` pago** (palavras `cpc`, `ppc`,
+  `cpm`, `cpv`, `paid`, `paid_*`; `unpaid` não é) com um `utm_source` que nomeia a plataforma (`meta`, `facebook`,
+  `ig`, `google`…) marca o negócio como mídia paga **e acha a plataforma**,
+  seja qual for a origem do RD ("Contato pelo Site"): com uma só campanha em
+  vigor ela leva o negócio (método `utm`), com várias é
+  `platform_ambiguous`, com nenhuma `platform_without_active_campaign`; sem
+  plataforma conhecida é `paid_no_platform`; (3b) a origem do RD ("Busca Paga |
+  Facebook" / "| Google") quando a plataforma tem uma única campanha — o
+  palpite da UTM e o da origem são tentados em ordem e um que falha não
+  impede o outro; (4)
+  senão, sem atribuição, com o motivo (`UNATTRIBUTED_REASONS`). Mídia
+  orgânica (`social`, `organic`, `email`) nunca é paga.
   **"Em vigor" é julgado no dia da entrada do negócio**, e não no dia da
   conferência: a campanha vale se estava dentro das datas de início e fim e
-  entregava (ou gastou no dia ou na véspera, por `ad_metrics_daily`). Um lead
+  entregava (ou gastou no dia ou na véspera, por `ad_metrics_daily`). O fim da
+  campanha é o **fim efetivo** (abaixo). Um lead
   atribuído guarda a campanha mesmo depois que ela termina; um sem atribuição é
   julgado de novo a cada conferência.
 - **Plataforma do negócio** (`platformOfRdLabels`): a **origem** do RD manda
   ("Busca Paga | Google"); a campanha do RD é texto livre e só decide quando a
   origem não diz a plataforma (havia negócios do Google com campanha "Meta -
-  Formatação").
+  Formatação"). Quando os rótulos do RD não dizem a plataforma, vale a que a
+  atribuição achou (`campaign_leads.platform`: formulário da Meta, UTM paga),
+  para o Cockpit contar o negócio ("Leads no CRM"); os rótulos nunca perdem
+  para ela.
 - **Primeiro contato**: a primeira anotação ou tarefa concluída no RD; sem
   isso, a saída de "Sem contato" como a conferência viu (precisão de 15 min).
 - **Temperatura**: estrelas do RD (1–2 Frio, 3 Morno, 4–5 Quente).

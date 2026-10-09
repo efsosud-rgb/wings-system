@@ -1,3 +1,4 @@
+import type { AdSetPlacements } from '@wings/shared';
 import {
   centsFromDecimalCurrencyString,
   centsFromMinorUnitString,
@@ -722,17 +723,33 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
   }
 
   async listAdSets(): Promise<PlatformAdSet[]> {
-    const data = await this.getAllPages<{
+    type AdSetRow = {
       id: string;
       name: string;
       status: string;
       campaign_id: string;
       daily_budget?: string;
       lifetime_budget?: string;
-    }>(`${this.accountId}/adsets`, {
-      fields: 'id,name,status,campaign_id,daily_budget,lifetime_budget',
-      limit: '50',
-    });
+      end_time?: string;
+      targeting?: unknown;
+    };
+    const base = 'id,name,status,campaign_id,daily_budget,lifetime_budget,end_time';
+    let data: AdSetRow[];
+    try {
+      data = await this.getAllPages<AdSetRow>(`${this.accountId}/adsets`, {
+        fields: `${base},targeting`,
+        limit: '25',
+      });
+    } catch (error) {
+      // `targeting` is heavy on an account with many audiences, and Meta may refuse the page ("reduce
+      // the amount of data"). The budgets and the ends matter more than the placements: read
+      // without them, and the placements stay as they were (undefined = not read).
+      if (!(error instanceof MetaApiError) || !isTooMuchData(error)) throw error;
+      data = await this.getAllPages<AdSetRow>(`${this.accountId}/adsets`, {
+        fields: base,
+        limit: '50',
+      });
+    }
 
     return data.map((adSet) => {
       const daily =
@@ -751,6 +768,11 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
         // Meta reports "0" for a budget that lives at the other level.
         dailyBudgetCents: daily === 0 ? null : daily,
         lifetimeBudgetCents: lifetime === 0 ? null : lifetime,
+        // The schedule and the placements live on the ad set; the campaign's own do not show them.
+        endDate: lastDeliveryDay(adSet.end_time),
+        ...(adSet.targeting !== undefined
+          ? { placements: placementsOfTargeting(adSet.targeting) }
+          : {}),
       };
     });
   }
@@ -1036,6 +1058,60 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
   ): Promise<{ status: 'applied' | 'rejected'; message?: string }> {
     throw new MetaWritesDisabledError('setAccountSpendCap');
   }
+}
+
+const POSITION_KEYS: Record<string, string> = {
+  facebook_positions: 'facebook',
+  instagram_positions: 'instagram',
+  messenger_positions: 'messenger',
+  audience_network_positions: 'audience_network',
+  threads_positions: 'threads',
+};
+
+/**
+ * Where an ad set delivers, from Meta's `targeting`: the publisher platforms and
+ * the positions chosen inside them. Without `publisher_platforms` the
+ * placements are automatic (Advantage+), which is null. Only these keys are
+ * kept: the rest of `targeting` (audiences, locations) is never stored.
+ */
+export function placementsOfTargeting(targeting: unknown): AdSetPlacements | null {
+  if (!targeting || typeof targeting !== 'object') return null;
+  const spec = targeting as Record<string, unknown>;
+  const strings = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+  const platforms = strings(spec.publisher_platforms);
+  if (platforms.length === 0) return null;
+  const positions = Object.entries(POSITION_KEYS).flatMap(([key, platform]) =>
+    strings(spec[key]).map((position) => `${platform}:${position}`),
+  );
+  return { platforms, positions };
+}
+
+/** Meta's "reduce the amount of data you're asking for" (code 1): the page was too heavy to answer. */
+function isTooMuchData(error: MetaApiError): boolean {
+  return error.code === 1 || /reduce the amount of data/i.test(error.message);
+}
+
+/**
+ * The last São Paulo day an ad set delivers, from its `end_time`: the day the time falls on, or the
+ * day before when it is exactly midnight (an end at 00:00 on the 14th stops before the 14th starts).
+ * Null when absent, unreadable or an epoch placeholder for "no end".
+ */
+export function lastDeliveryDay(time: string | undefined): string | null {
+  const day = saoPauloDay(time);
+  if (!day || day < '2000-01-01') return null;
+  const instant = new Date((time ?? '').replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
+  const clock = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'America/Sao_Paulo',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).format(instant);
+  if (clock !== '00:00:00') return day;
+  const before = new Date(`${day}T00:00:00.000Z`);
+  before.setUTCDate(before.getUTCDate() - 1);
+  return before.toISOString().slice(0, 10);
 }
 
 /** Meta's ISO time ("2026-09-28T09:59:32-0300") as the São Paulo day it falls on; null when absent or unreadable. */

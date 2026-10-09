@@ -1,3 +1,4 @@
+import type { AdSetPlacements } from '@wings/shared';
 import { sql } from 'drizzle-orm';
 import {
   bigint,
@@ -306,6 +307,18 @@ export const adSets = pgTable(
     status: adCampaignStatusEnum('status').notNull().default('PAUSED'),
     dailyBudgetCents: bigint('daily_budget_cents', { mode: 'number' }).notNull().default(0),
     lifetimeBudgetCents: bigint('lifetime_budget_cents', { mode: 'number' }),
+    /**
+     * The last day this ad set delivers (Meta's `end_time`, in São Paulo). A
+     * schedule set on the ad set never reaches the campaign's `end_date`. Null:
+     * no end, or not read yet.
+     */
+    endDate: date('end_date'),
+    /**
+     * Where it delivers, as the platform reports it (Meta's `targeting`
+     * publisher platforms and positions). Null: automatic placements (the
+     * platform chooses), or not read yet.
+     */
+    placements: jsonb('placements').$type<AdSetPlacements>(),
     lastSyncedAt: timestamp('last_synced_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

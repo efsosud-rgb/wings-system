@@ -1,4 +1,5 @@
 import {
+  earliestEnd,
   firstOfNextMonth,
   PLATFORM_READING_STALE_MINUTES,
   SPEND_CAP_RESETS,
@@ -9,6 +10,7 @@ import {
 import { and, eq, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { adCampaigns, adSets } from '../../db/schema/index.js';
+import { effectiveCampaignEnds } from './campaign-end.js';
 
 /**
  * The platform's account figures as the screens may show them: current, or
@@ -88,28 +90,46 @@ export async function activeBudgetsOf(
   const campaigns = await db.query.adCampaigns.findMany({
     where: and(eq(adCampaigns.adAccountId, adAccountId), eq(adCampaigns.status, 'ACTIVE')),
   });
-  const adSetTotals = await db
+  const ownAdSets = await db
     .select({
       campaignId: adSets.campaignId,
-      total: sql<string>`coalesce(sum(${adSets.dailyBudgetCents}), 0)`,
+      dailyBudgetCents: adSets.dailyBudgetCents,
+      endDate: adSets.endDate,
     })
     .from(adSets)
     .innerJoin(adCampaigns, eq(adCampaigns.id, adSets.campaignId))
-    .where(sql`${adCampaigns.adAccountId} = ${adAccountId} and ${adSets.status} = 'ACTIVE'`)
-    .groupBy(adSets.campaignId);
-  const byCampaign = new Map(adSetTotals.map((row) => [row.campaignId, Number(row.total)]));
+    .where(sql`${adCampaigns.adAccountId} = ${adAccountId} and ${adSets.status} = 'ACTIVE'`);
 
-  return campaigns
-    .filter((campaign) => campaign.endDate === null || campaign.endDate >= today)
-    .map((campaign) => ({
-      campaignExternalId: campaign.externalId,
-      name: campaign.name,
-      dailyBudgetCents:
-        campaign.budgetLevel === 'ad_set'
-          ? (byCampaign.get(campaign.id) ?? 0)
-          : campaign.dailyBudgetCents,
-      startDate: campaign.startDate && campaign.startDate > today ? campaign.startDate : null,
-      endDate: campaign.endDate,
-    }))
-    .filter((budget) => budget.dailyBudgetCents > 0);
+  // The schedule may live on the ad sets (Meta): a campaign that holds the budget ends with the
+  // ones that are on; one whose ad sets hold it is one stream per ad set, each until its own end.
+  const endOf = await effectiveCampaignEnds(db, campaigns);
+  return campaigns.flatMap((campaign): ActiveCampaignBudget[] => {
+    const startDate = campaign.startDate && campaign.startDate > today ? campaign.startDate : null;
+    const streams =
+      campaign.budgetLevel === 'ad_set'
+        ? ownAdSets
+            .filter((row) => row.campaignId === campaign.id)
+            .map((row) => ({
+              dailyBudgetCents: row.dailyBudgetCents,
+              endDate: earliestEnd(campaign.endDate, row.endDate),
+            }))
+        : [
+            {
+              dailyBudgetCents: campaign.dailyBudgetCents,
+              endDate: endOf.get(campaign.id) ?? null,
+            },
+          ];
+    return streams
+      .filter(
+        (stream) =>
+          stream.dailyBudgetCents > 0 && (stream.endDate === null || stream.endDate >= today),
+      )
+      .map((stream) => ({
+        campaignExternalId: campaign.externalId,
+        name: campaign.name,
+        dailyBudgetCents: stream.dailyBudgetCents,
+        startDate,
+        endDate: stream.endDate,
+      }));
+  });
 }

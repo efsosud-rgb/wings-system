@@ -1,3 +1,4 @@
+import type { AdSetPlacements } from '@wings/shared';
 import type { Cents } from './money.js';
 
 /**
@@ -49,6 +50,13 @@ export interface PlatformAdSet {
   /** Ad-set level budget in cents (ABO). Null when the campaign owns it (CBO). */
   dailyBudgetCents: Cents | null;
   lifetimeBudgetCents: Cents | null;
+  /**
+   * Last day the ad set delivers (São Paulo day). Null: no end. Undefined: a
+   * client that does not read it, which never erases a known one.
+   */
+  endDate?: string | null;
+  /** Where it delivers. Null: automatic placements. Undefined: not read. */
+  placements?: AdSetPlacements | null;
 }
 
 export interface PlatformAccount {

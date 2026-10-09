@@ -1,3 +1,4 @@
+import type { AdSetPlacements } from '@wings/shared';
 import { assertCents, type Cents } from './money.js';
 import { META_DAILY_OVERDELIVERY_FACTOR } from './fixtures.js';
 import { MetaApiError } from './meta-client.js';
@@ -82,6 +83,10 @@ export interface FakeAdSetSeed {
   status?: 'ACTIVE' | 'PAUSED';
   /** Ad-set level budget (ABO). */
   dailyBudgetCents?: Cents;
+  /** Last day it delivers; left unread (undefined) unless given. */
+  endDate?: string | null;
+  /** Where it delivers (null: automatic); left unread (undefined) unless given. */
+  placements?: AdSetPlacements | null;
 }
 
 export type InjectedFailure =
@@ -205,6 +210,8 @@ export class FakeMetaClient implements AdsPlatformClient {
         status: seed.status ?? 'ACTIVE',
         dailyBudgetCents: seed.dailyBudgetCents ?? null,
         lifetimeBudgetCents: null,
+        ...(seed.endDate !== undefined ? { endDate: seed.endDate } : {}),
+        ...(seed.placements !== undefined ? { placements: seed.placements } : {}),
         actualSpendCents: 0,
       });
     }

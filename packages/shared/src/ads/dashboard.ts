@@ -394,6 +394,10 @@ export interface AdSetNode {
   name: string;
   status: string;
   dailyBudgetCents: number | null;
+  /** Last day it delivers, when the ad set carries its own schedule. */
+  endDate: string | null;
+  /** Where it delivers; null: automatic placements (or not read yet). */
+  placements: AdSetPlacements | null;
   totals: MetricTotals;
   ads: AdNode[];
 }
@@ -732,6 +736,58 @@ export function ufOfRegion(name: string): string | null {
   const folded = foldName(name);
   if (folded === 'federal district' || folded === 'distrito federal') return 'DF';
   return BRAZIL_STATE_TILES.find((state) => foldName(state.name) === folded)?.uf ?? null;
+}
+
+/**
+ * Where an ad set delivers, as the platform reports it. `platforms` are the
+ * publisher platforms ("instagram", "facebook"…); `positions` the placements
+ * inside them, prefixed by platform ("instagram:stream", "instagram:reels").
+ * Absent (null) means automatic placements: the platform chooses.
+ */
+export interface AdSetPlacements {
+  platforms: string[];
+  positions: string[];
+}
+
+/** "Instagram" or "Instagram, Facebook"; null when placements are automatic. */
+export function placementsLabel(placements: AdSetPlacements | null | undefined): string | null {
+  if (!placements || placements.platforms.length === 0) return null;
+  const names: Record<string, string> = {
+    instagram: 'Instagram',
+    facebook: 'Facebook',
+    messenger: 'Messenger',
+    audience_network: 'Audience Network',
+    threads: 'Threads',
+  };
+  return placements.platforms.map((platform) => names[platform] ?? platform).join(', ');
+}
+
+/** The earlier of two end days; null is "no end", so the other one stands. */
+export function earliestEnd(a: string | null, b: string | null): string | null {
+  if (!a) return b;
+  if (!b) return a;
+  return a < b ? a : b;
+}
+
+/**
+ * The day a campaign stops delivering. A campaign whose schedule lives on the
+ * ad sets (Meta keeps `end_time` there) has no end of its own, so it ends on
+ * the latest end among the ad sets that are on, but only when every one of
+ * them has an end: a single ad set without one keeps it open. Paused ad sets
+ * do not count; with none on, there is no end to speak of. With both, the
+ * earlier wins: a campaign ending on the 20th whose only ad set stops on the
+ * 10th delivers until the 10th.
+ */
+export function effectiveCampaignEnd(
+  campaignEnd: string | null,
+  adSets: { status: string; endDate: string | null }[],
+): string | null {
+  const on = adSets.filter((adSet) => adSet.status === 'ACTIVE');
+  const setsEnd =
+    on.length > 0 && on.every((adSet) => adSet.endDate)
+      ? on.reduce((latest, adSet) => (adSet.endDate! > latest ? adSet.endDate! : latest), '')
+      : null;
+  return earliestEnd(campaignEnd, setsEnd);
 }
 
 /**
