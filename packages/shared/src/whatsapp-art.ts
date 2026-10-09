@@ -65,14 +65,21 @@ export const waArticleSchema = z.object({
  */
 export type WaNameForm = 'plain' | 'article' | 'of';
 
-/** "A Cabana da Barra" → `{ own: 'a', rest: 'Cabana da Barra' }`: a name that already starts with an article. */
+/**
+ * "A Cabana da Barra" → `{ own: 'a', rest: 'Cabana da Barra' }`: a name that
+ * already starts with an article. Only when a real word follows (a number, or
+ * two letters on): "A J Silva", "A & B" and "A e B" are names, not articles.
+ */
 function leadingArticle(name: string): { own: 'o' | 'a' | 'os' | 'as'; rest: string } | null {
-  const match = /^(o|a|os|as)\s+(\S.*)$/i.exec(name);
+  const match =
+    /^(o|a|os|as)\s+(?!(?:e|de|do|da|dos|das)\s)((?:\p{N}|\p{L}[\p{L}\p{N}]).*)$/iu.exec(name);
   if (!match) return null;
   return { own: match[1]!.toLowerCase() as 'o' | 'a' | 'os' | 'as', rest: match[2]! };
 }
 
 const OF: Record<'o' | 'a' | 'os' | 'as', string> = { o: 'do', a: 'da', os: 'dos', as: 'das' };
+
+const tidy = (name: string) => name.trim().replace(/\s+/g, ' ');
 
 /**
  * A name that already starts with an article ("A Cabana da Barra", "O
@@ -81,12 +88,21 @@ const OF: Record<'o' | 'a' | 'os' | 'as', string> = { o: 'do', a: 'da', os: 'dos
  * stored one, since it is what the name says.
  */
 export function withArticle(name: string, article: BrandArticle, form: WaNameForm): string {
-  const clean = name.trim().replace(/\s+/g, ' ');
+  const clean = tidy(name);
   if (!clean || form === 'plain') return clean;
   const own = leadingArticle(clean);
   if (own) return form === 'article' ? `${own.own} ${own.rest}` : `${OF[own.own]} ${own.rest}`;
   if (form === 'article') return `${article} ${clean}`;
   return `${OF[article]} ${clean}`;
+}
+
+/**
+ * A name for a text that already carries the article ("expansão da {{3}}"):
+ * without the name's own, so "A Cabana da Barra" reads "da Cabana da Barra".
+ */
+export function withoutArticle(name: string): string {
+  const clean = tidy(name);
+  return leadingArticle(clean)?.rest ?? clean;
 }
 
 // --- what each field of our templates is -------------------------------------------------
@@ -172,6 +188,20 @@ export function waFieldForm(body: string | null, index: number, spec: WaFieldSpe
   const at = body.search(new RegExp(`\\{\\{\\s*${index}\\s*\\}\\}`));
   if (at < 0) return form;
   return ARTICLE_BEFORE.test(body.slice(0, at)) ? 'plain' : form;
+}
+
+const DEFINITE_BEFORE = /(?:^|[\s(])(?:da|do|das|dos|a|o|as|os)\s*$/i;
+
+/**
+ * Whether the words just before `{{n}}` end in an article or "da"/"do"
+ * ("expansão da {{3}}", "transformar a {{3}}"): a name that starts with its
+ * own article then goes without it (`withoutArticle`). After a bare "de" the
+ * name keeps it, since nothing else would carry the article.
+ */
+export function waArticleBefore(body: string | null, index: number): boolean {
+  if (!body) return false;
+  const at = body.search(new RegExp(`\\{\\{\\s*${index}\\s*\\}\\}`));
+  return at >= 0 && DEFINITE_BEFORE.test(body.slice(0, at));
 }
 
 /** The fields of a template with `count` placeholders: the listed ones, or free ones. */

@@ -4,10 +4,12 @@ import {
   WA_TEMPLATE_FIELDS,
   WINGS_CLIENT_ID,
   templateParamCount,
+  waArticleBefore,
   waFieldForm,
   waTemplateFamily,
   waTemplateFields,
   withArticle,
+  withoutArticle,
   type BrandArticle,
   type WaTemplateField,
   type WaTemplatePreview,
@@ -200,7 +202,11 @@ export function planTemplate(input: PlanInput): TemplatePlan {
   let brandArticleMissing = false;
   const params = fields.map((field, i) => {
     const form = waFieldForm(body, i + 1, specs[i]!);
-    if (form === 'plain') return field.value;
+    if (form === 'plain') {
+      // The text carries the article ("expansão da {{3}}"): "A Cabana da Barra" goes without its own.
+      const named = field.role === 'brand' || field.role === 'company';
+      return named && waArticleBefore(body, i + 1) ? withoutArticle(field.value) : field.value;
+    }
     if (field.role === 'company') {
       usesCompanyArticle = true;
       return withArticle(field.value, request.companyArticle, form);
