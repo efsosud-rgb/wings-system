@@ -10,6 +10,7 @@ import {
   type CockpitCampaignOption,
   type CockpitCampaign,
   type CockpitCampaignScope,
+  type CockpitStatusSummary,
   type CockpitDay,
   type CockpitFigures,
   type CockpitRegion,
@@ -83,6 +84,25 @@ export async function cockpit(
   );
   const activeIds = new Set(active.map((campaign) => campaign.id));
   const activeExternal = active.map((campaign) => campaign.externalId);
+  // "Ativo" is the status a person set; "entregando" is the rule above. The chip
+  // says both, so 4 campaigns marked active and 2 in the figures do not look like a mistake.
+  const withActiveStatus = campaignRows.filter((campaign) => campaign.status === 'ACTIVE');
+  const endedCampaigns = withActiveStatus.filter(
+    (campaign) => campaign.endDate && campaign.endDate < today,
+  );
+  const deliveringCount = withActiveStatus.filter((campaign) => activeIds.has(campaign.id)).length;
+  const statusSummary: CockpitStatusSummary = {
+    withStatus: withActiveStatus.length,
+    delivering: deliveringCount,
+    ended: endedCampaigns
+      .map((campaign) => ({
+        platform: platformOf.get(campaign.adAccountId) ?? ('meta' as AdPlatform),
+        name: campaign.name,
+        endDate: campaign.endDate!,
+      }))
+      .sort((a, b) => a.endDate.localeCompare(b.endDate) || a.name.localeCompare(b.name)),
+    notDelivering: withActiveStatus.length - deliveringCount - endedCampaigns.length,
+  };
   // No active campaign: every sum below is over nothing, not over everything.
   const none = ['-'];
   const dayRange = (column: typeof adMetricsDaily.day) =>
@@ -379,7 +399,7 @@ export async function cockpit(
   // With a pick, the performance block judges the picked campaigns.
   const perfIds = picking ? scopeIds : activeIds;
   const perfExternal = picking ? scopeExternal : activeExternal;
-  const [leadRows, [activeSpend], [leadsFetched]] = await Promise.all([
+  const [leadRows, [activeSpend], [leadsFetched], [spendRead]] = await Promise.all([
     perfIds.size
       ? db.query.campaignLeads.findMany({
           where: and(
@@ -403,6 +423,20 @@ export async function cockpit(
           )
       : [{ spend: '0' }],
     db.select({ at: sql<string | null>`max(${campaignLeads.fetchedAt})` }).from(campaignLeads),
+    // When the platforms were last read for the campaigns every figure is summed over.
+    scopeExternal.length
+      ? db
+          .select({ at: sql<string | null>`max(${adMetricsDaily.fetchedAt})` })
+          .from(adMetricsDaily)
+          .where(
+            and(
+              inArray(adMetricsDaily.adAccountId, ids),
+              eq(adMetricsDaily.level, 'campaign'),
+              inArray(adMetricsDaily.entityExternalId, scopeExternal),
+              gte(adMetricsDaily.day, window.previousSince),
+            ),
+          )
+      : [{ at: null }],
   ]);
   const spendSince = Number(activeSpend?.spend ?? 0);
   const qualified = leadRows.filter(isQualifiedLead).length;
@@ -497,6 +531,8 @@ export async function cockpit(
       smallSample: leadRows.length < 10,
       fetchedAt: leadsFetched?.at ? new Date(leadsFetched.at).toISOString() : null,
     },
+    statusSummary,
+    spendReadAt: spendRead?.at ? new Date(spendRead.at).toISOString() : null,
     spendByPlatform,
     cplTargetCents: targets.get('leads') ?? null,
     today,

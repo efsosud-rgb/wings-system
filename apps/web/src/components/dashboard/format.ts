@@ -1,4 +1,4 @@
-import { formatBrl, type SpendUnit } from '@wings/shared';
+import { formatBrl, type CockpitStatusSummary, type SpendUnit } from '@wings/shared';
 
 /**
  * Number formatting for the dashboard. One rule everywhere: a figure that is
@@ -120,4 +120,21 @@ export function since(iso: string | null | undefined, now = Date.now()): string 
   if (hours < 24) return `há ${hours} h`;
   const days = Math.floor(hours / 24);
   return `há ${days} ${days === 1 ? 'dia' : 'dias'}`;
+}
+
+/**
+ * "2 de 4 com status ativo; 2 encerradas em 05/10": the status a person set
+ * against what is really delivering. Null when the two agree.
+ */
+export function statusSummaryText(summary: CockpitStatusSummary): string | null {
+  if (summary.withStatus === summary.delivering) return null;
+  const parts = [`${summary.delivering} de ${summary.withStatus} com status ativo`];
+  if (summary.ended.length > 0) {
+    const days = [...new Set(summary.ended.map((campaign) => formatDayShort(campaign.endDate)))];
+    parts.push(
+      `${summary.ended.length} ${summary.ended.length === 1 ? 'encerrada' : 'encerradas'} em ${days.join(' e ')}`,
+    );
+  }
+  if (summary.notDelivering > 0) parts.push(`${summary.notDelivering} sem entregar`);
+  return parts.join('; ');
 }

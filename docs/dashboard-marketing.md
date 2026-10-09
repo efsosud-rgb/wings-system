@@ -411,6 +411,11 @@ roteirizado para o WordPress e banco descartável
   fim ainda não passou (`campaignDelivering`, em `packages/shared`). O status
   de entrega vem de cada reconciliação (`ad_campaigns.delivery_status`,
   migração 0043). Antes da primeira leitura, vale o status ligado.
+  O aviso do filtro diz as duas contas: "2 de 4 com status ativo; 2 encerradas
+  em 05/10" (`statusSummary`): o status ativo que uma pessoa pôs contra o que
+  entrega de fato. Ao lado dos dois "Investimento" sai a hora da última
+  leitura das plataformas (`spendReadAt`, o maior `ad_metrics_daily.fetched_at`
+  das campanhas somadas); o gasto de hoje cresce a cada leitura.
 - Anúncios ligados que não rodam (em análise, em processamento, reprovados)
   aparecem só como aviso, fora de todos os números e do ranking.
 - Alertas: só os da conta ou das campanhas ativas (e dos conjuntos e anúncios
@@ -434,14 +439,34 @@ roteirizado para o WordPress e banco descartável
 - **Conferência a cada 15 min**: roda junto de `ingest-cli --reconcile-only`,
   depois da reconciliação. Só lê o RD CRM e o RD Marketing. O log mostra só
   contagens.
-- **Atribuição**, nesta ordem: (1) UTMs da conversão do contato no RD
-  Marketing (`traffic_source` é `encoded_` + base64 com a URL de entrada),
-  consultadas uma vez por lead; `utm_campaign` casa com a UTM do rascunho, o
-  nome ou o id da campanha ativa, `utm_content` com o id ou o nome do anúncio;
-  (2) a origem do RD ("Busca Paga | Facebook" / "| Google") quando a
-  plataforma tem uma única campanha ativa; (3) senão, sem atribuição, com o
-  motivo (`UNATTRIBUTED_REASONS`). Um lead atribuído guarda a campanha mesmo
-  depois que ela termina.
+- **Atribuição**, nesta ordem (`attribute`, em `campaign-leads-sync.ts`):
+  (0) quem chegou **antes de 28/09** (`leads.entered_at`, a chegada real, e não
+  o dia em que o negócio nasceu no RD) fica **fora da conta**: motivo
+  `arrived_before_cutoff` ("Chegou antes de 28/09"), listado em "Sem atribuição,
+  por motivo", mas em nenhum total nem porcentagem (como o teste); são os leads
+  antigos da Meta copiados ao RD em 05 e 06/10; (1) o **lead do Wings** atrás do
+  negócio (`leads.rd_deal_id`) diz a campanha e o anúncio
+  (`ad_campaign_external_id`, `ad_external_id`): é o caminho do formulário
+  instantâneo da Meta, que não tem UTM; método `lead_ads`; sem a campanha no
+  cadastro, motivo `lead_ads_campaign_unknown`; (2) UTMs da conversão do contato
+  no RD Marketing (`traffic_source` é `encoded_` + base64 com a URL de entrada),
+  consultadas uma vez por lead; `utm_campaign` casa com o id, o nome, a UTM do
+  rascunho, a UTM estática das `url_tags` dos anúncios ou um **trecho do nome**
+  (`formatacao_videos_thais_out26` dentro de "META | IG | Formatação | Vídeos
+  Thais | Out26", com 12 letras ou mais e uma só campanha); se o texto não casa,
+  `utm_content` com o id ou o nome longo (10 caracteres ou mais) de um anúncio
+  de uma só campanha; (3) a origem do RD ("Busca Paga | Facebook" / "| Google")
+  quando a plataforma tem uma única campanha; (4) senão, sem atribuição, com o
+  motivo (`UNATTRIBUTED_REASONS`).
+  **"Em vigor" é julgado no dia da entrada do negócio**, e não no dia da
+  conferência: a campanha vale se estava dentro das datas de início e fim e
+  entregava (ou gastou no dia ou na véspera, por `ad_metrics_daily`). Um lead
+  atribuído guarda a campanha mesmo depois que ela termina; um sem atribuição é
+  julgado de novo a cada conferência.
+- **Plataforma do negócio** (`platformOfRdLabels`): a **origem** do RD manda
+  ("Busca Paga | Google"); a campanha do RD é texto livre e só decide quando a
+  origem não diz a plataforma (havia negócios do Google com campanha "Meta -
+  Formatação").
 - **Primeiro contato**: a primeira anotação ou tarefa concluída no RD; sem
   isso, a saída de "Sem contato" como a conferência viu (precisão de 15 min).
 - **Temperatura**: estrelas do RD (1–2 Frio, 3 Morno, 4–5 Quente).
