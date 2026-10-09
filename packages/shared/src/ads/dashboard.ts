@@ -762,21 +762,32 @@ export function placementsLabel(placements: AdSetPlacements | null | undefined):
   return placements.platforms.map((platform) => names[platform] ?? platform).join(', ');
 }
 
+/** The earlier of two end days; null is "no end", so the other one stands. */
+export function earliestEnd(a: string | null, b: string | null): string | null {
+  if (!a) return b;
+  if (!b) return a;
+  return a < b ? a : b;
+}
+
 /**
- * The day a campaign stops delivering. Its own end date wins. A campaign whose
- * schedule lives on the ad sets (Meta keeps `end_time` there) has none, so it
- * ends on the latest end among the ad sets that are on, but only when every
- * one of them has an end: a single ad set without one keeps it open. Paused
- * ad sets do not count; with none on, there is no end to speak of (null).
+ * The day a campaign stops delivering. A campaign whose schedule lives on the
+ * ad sets (Meta keeps `end_time` there) has no end of its own, so it ends on
+ * the latest end among the ad sets that are on, but only when every one of
+ * them has an end: a single ad set without one keeps it open. Paused ad sets
+ * do not count; with none on, there is no end to speak of. With both, the
+ * earlier wins: a campaign ending on the 20th whose only ad set stops on the
+ * 10th delivers until the 10th.
  */
 export function effectiveCampaignEnd(
   campaignEnd: string | null,
   adSets: { status: string; endDate: string | null }[],
 ): string | null {
-  if (campaignEnd) return campaignEnd;
   const on = adSets.filter((adSet) => adSet.status === 'ACTIVE');
-  if (on.length === 0 || on.some((adSet) => !adSet.endDate)) return null;
-  return on.reduce((latest, adSet) => (adSet.endDate! > latest ? adSet.endDate! : latest), '');
+  const setsEnd =
+    on.length > 0 && on.every((adSet) => adSet.endDate)
+      ? on.reduce((latest, adSet) => (adSet.endDate! > latest ? adSet.endDate! : latest), '')
+      : null;
+  return earliestEnd(campaignEnd, setsEnd);
 }
 
 /**

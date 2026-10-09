@@ -13,7 +13,7 @@ export async function effectiveCampaignEnds(
   db: Database,
   campaigns: { id: string; endDate: string | null }[],
 ): Promise<Map<string, string | null>> {
-  const ids = campaigns.filter((campaign) => !campaign.endDate).map((campaign) => campaign.id);
+  const ids = campaigns.map((campaign) => campaign.id);
   const rows = ids.length
     ? await db
         .select({ campaignId: adSets.campaignId, status: adSets.status, endDate: adSets.endDate })

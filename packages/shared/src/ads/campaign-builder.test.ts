@@ -980,6 +980,8 @@ describe('which utm_medium says the click was bought', () => {
       'organic',
       'email',
       'referral',
+      'unpaid',
+      'prepaid-gift',
       '(none)',
       '',
       null,

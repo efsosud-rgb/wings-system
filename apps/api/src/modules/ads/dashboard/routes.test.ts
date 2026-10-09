@@ -386,6 +386,61 @@ describe('the overview', () => {
     }
   });
 
+  it('forecasts a campaign whose ad sets hold the budget one ad set at a time, each until its own end', async () => {
+    const mirrored = await db.query.adCampaigns.findMany({
+      where: eq(adCampaigns.adAccountId, metaAccountId),
+    });
+    const saved = mirrored.map((campaign) => ({ ...campaign }));
+    const created = await db
+      .insert(adSets)
+      .values([
+        {
+          campaignId: mirrored[0]!.id,
+          externalId: 'abo-a',
+          name: 'A',
+          status: 'ACTIVE',
+          dailyBudgetCents: 10_000,
+          endDate: '2026-09-17',
+        },
+        {
+          campaignId: mirrored[0]!.id,
+          externalId: 'abo-b',
+          name: 'B',
+          status: 'ACTIVE',
+          dailyBudgetCents: 5_000,
+          endDate: '2026-09-18',
+        },
+      ])
+      .returning({ id: adSets.id });
+    try {
+      await db
+        .update(adCampaigns)
+        .set({ status: 'PAUSED' })
+        .where(eq(adCampaigns.adAccountId, metaAccountId));
+      await db
+        .update(adCampaigns)
+        .set({ status: 'ACTIVE', budgetLevel: 'ad_set', dailyBudgetCents: 0, endDate: null })
+        .where(eq(adCampaigns.id, mirrored[0]!.id));
+      const overview = await read<DashboardOverview>('/ads/dashboard/overview', 'overview');
+      const meta = overview.strips.find((strip) => strip.source === 'meta');
+      // Day 16, nothing spent today: R$ 150 of today, R$ 150 on the 17th (both), R$ 50 on the 18th (only B).
+      expect(meta?.forecast).toBe(60_000 + 15_000 + 15_000 + 5_000);
+    } finally {
+      for (const row of created) await db.delete(adSets).where(eq(adSets.id, row.id));
+      for (const campaign of saved) {
+        await db
+          .update(adCampaigns)
+          .set({
+            status: campaign.status,
+            budgetLevel: campaign.budgetLevel,
+            dailyBudgetCents: campaign.dailyBudgetCents,
+            endDate: campaign.endDate,
+          })
+          .where(eq(adCampaigns.id, campaign.id));
+      }
+    }
+  });
+
   it('reads Google as a prepaid balance', async () => {
     const overview = await read<DashboardOverview>('/ads/dashboard/overview', 'overview');
     const google = overview.strips.find((strip) => strip.source === 'google');

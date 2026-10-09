@@ -195,6 +195,86 @@ describe('reading the account', () => {
     expect(decodeURIComponent(urls[0] ?? '')).toContain('end_time,targeting');
   });
 
+  it('counts an end at midnight as the day before, and an epoch placeholder as no end', async () => {
+    const meta = client(() => ({
+      body: {
+        data: [
+          {
+            id: 'as1',
+            name: 'Meia-noite',
+            status: 'ACTIVE',
+            campaign_id: 'c1',
+            end_time: '2026-10-14T00:00:00-0300',
+          },
+          {
+            id: 'as2',
+            name: 'Fim do dia',
+            status: 'ACTIVE',
+            campaign_id: 'c1',
+            end_time: '2026-10-13T23:59:00-0300',
+          },
+          {
+            id: 'as3',
+            name: 'Sentinela',
+            status: 'ACTIVE',
+            campaign_id: 'c1',
+            end_time: '1970-01-01T00:00:00+0000',
+          },
+          { id: 'as4', name: 'Sem fim', status: 'ACTIVE', campaign_id: 'c1' },
+        ],
+      },
+    }));
+    const adSets = await meta.listAdSets();
+    expect(adSets.map((adSet) => adSet.endDate)).toEqual(['2026-10-13', '2026-10-13', null, null]);
+  });
+
+  it('falls back to reading the ad sets without targeting when Meta says the page is too heavy', async () => {
+    const urls: string[] = [];
+    const meta = client((url) => {
+      urls.push(decodeURIComponent(url));
+      if (url.includes('targeting')) {
+        return {
+          status: 500,
+          body: {
+            error: {
+              message:
+                "Please reduce the amount of data you're asking for, then retry your request",
+              code: 1,
+            },
+          },
+        };
+      }
+      return {
+        body: {
+          data: [
+            {
+              id: 'as1',
+              name: 'Conjunto',
+              status: 'ACTIVE',
+              campaign_id: 'c1',
+              daily_budget: '15000',
+              end_time: '2026-10-13T23:59:00-0300',
+            },
+          ],
+        },
+      };
+    });
+    const [adSet] = await meta.listAdSets();
+    expect(urls).toHaveLength(2);
+    expect(urls[1]).not.toContain('targeting');
+    expect(adSet).toMatchObject({ dailyBudgetCents: 15000, endDate: '2026-10-13' });
+    // Not read, so the placements already known are never erased.
+    expect('placements' in (adSet ?? {})).toBe(false);
+  });
+
+  it('does not swallow any other error of the ad set listing', async () => {
+    const meta = client(() => ({
+      status: 400,
+      body: { error: { message: 'Invalid OAuth access token', code: 190 } },
+    }));
+    await expect(meta.listAdSets()).rejects.toMatchObject({ code: 190 });
+  });
+
   it('parses daily spend from Insights', async () => {
     const meta = client(() => ({ body: INSIGHTS_RESPONSE }));
     const rows = await meta.getSpend('2026-09-01');

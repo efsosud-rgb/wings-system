@@ -565,7 +565,10 @@ export function adPlatformOfUtmSource(value: string | null | undefined): 'google
  * "paid-search", "paid"… "social", "organic", "email" and "referral" are not.
  */
 export function isPaidUtmMedium(value: string | null | undefined): boolean {
-  return /paid|cpc|ppc|cpm|cpv/i.test(value ?? '');
+  return (value ?? '')
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .some((word) => /^(cpc|ppc|cpm|cpv|paid|paidsocial|paidsearch|paidmedia)$/.test(word));
 }
 
 /** Whether `urlTags` carries every parameter of `META_URL_TAGS`, in any order. */

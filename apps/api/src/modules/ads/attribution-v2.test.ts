@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Database } from '../../db/client.js';
-import { adAds, adCampaigns, adSets, campaignLeads } from '../../db/schema/index.js';
+import { adAds, adCampaigns, adSets, campaignLeads, leads } from '../../db/schema/index.js';
 import { createSecretBox } from '../../lib/secret-box.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { TEST_CPF_KEY } from '../../test/factories.js';
@@ -225,6 +225,70 @@ describe('(d) a paid utm_source and utm_medium make the deal bought media', () =
   });
 });
 
+describe('(d) the guesses do not trip over each other', () => {
+  it('falls back to the RD origin when the UTM platform has no campaign in force and the RD origin has one', () => {
+    const result = attribute(
+      {
+        utms: { source: 'google', medium: 'cpc', campaign: null, content: null },
+        sourceLabel: 'Busca Paga | Facebook',
+        campaignLabel: null,
+        enteredDay: day,
+      },
+      [form],
+    );
+    expect(result).toMatchObject({
+      platform: 'meta',
+      campaignId: 'c-form',
+      attribution: 'rd_origin',
+    });
+  });
+
+  it('lets the paid UTM win over a different platform in the RD origin when it has its campaign', () => {
+    const result = attribute(
+      {
+        utms: { source: 'google', medium: 'cpc', campaign: null, content: null },
+        sourceLabel: 'Busca Paga | Facebook',
+        campaignLabel: null,
+        enteredDay: day,
+      },
+      [form, search],
+    );
+    expect(result).toMatchObject({
+      platform: 'google',
+      campaignId: 'c-search',
+      attribution: 'utm',
+    });
+  });
+
+  it('reports the first failure when neither guess finds a single campaign', () => {
+    const result = attribute(
+      {
+        utms: { source: 'google', medium: 'cpc', campaign: null, content: null },
+        sourceLabel: 'Busca Paga | Facebook',
+        campaignLabel: null,
+        enteredDay: day,
+      },
+      [form, other],
+    );
+    expect(result).toMatchObject({
+      platform: 'google',
+      reason: 'platform_without_active_campaign',
+    });
+  });
+
+  it('does not take "unpaid" for a paid medium', () => {
+    const result = attribute(
+      {
+        utms: { source: 'meta', medium: 'unpaid', campaign: null, content: null },
+        ...site,
+        enteredDay: day,
+      },
+      [form],
+    );
+    expect(result.reason).toBe('not_paid');
+  });
+});
+
 describe('(e) a campaign ends with its ad sets that are on', () => {
   const row = (fields: Record<string, unknown>) =>
     ({
@@ -250,12 +314,37 @@ describe('(e) a campaign ends with its ad sets that are on', () => {
   it('takes the ad set end when the campaign has none, and stops delivering after it', () => {
     const built = build([
       { status: 'ACTIVE', endDate: '2026-10-13' },
-      { status: 'PAUSED', endDate: null },
+      { status: 'PAUSED', endDate: '2026-10-12' },
     ]);
     expect(built.endDate).toBe('2026-10-13');
     expect(built.deliveringNow).toBe(false);
     expect(inForceOn(built, '2026-10-13')).toBe(true);
     expect(inForceOn(built, '2026-10-14')).toBe(false);
+  });
+
+  it('leaves the past open when an ad set paused since never had an end, and lets the spend decide', () => {
+    const built = build([
+      { status: 'ACTIVE', endDate: '2026-10-13' },
+      { status: 'PAUSED', endDate: null },
+    ]);
+    expect(built.endDate).toBeNull();
+    // It does not deliver today (the one that is on has ended)...
+    expect(built.deliveringNow).toBe(false);
+    // ...and a day it spent is judged by the spend, not by a date.
+    expect(inForceOn(built, '2026-10-13')).toBe(true);
+  });
+
+  it('judges a past day by every ad set, so one paused since does not pull the end back', () => {
+    const built = build([
+      { status: 'ACTIVE', endDate: '2026-10-05' },
+      { status: 'PAUSED', endDate: '2026-10-15' },
+    ]);
+    // Today only the first one is on and it ended on the 5th: the campaign no longer delivers...
+    expect(built.deliveringNow).toBe(false);
+    // ...but a deal that entered on the 13th, while the second one ran and the campaign spent, is still judged.
+    expect(built.endDate).toBe('2026-10-15');
+    expect(inForceOn(built, '2026-10-13')).toBe(true);
+    expect(inForceOn(built, '2026-10-16')).toBe(false);
   });
 
   it('stays open when one ad set that is on has no end', () => {
@@ -438,6 +527,64 @@ describe('(a) the sync', () => {
       new Date(enteredAt + UTM_RETRY_MS + 120_000),
     );
     expect(after.utmLookups).toBe(0);
+  });
+
+  it('does not keep asking about a deal whose Wings lead already names the campaign', async () => {
+    events.length = 0;
+    const entered = '2026-10-09T12:30:00.000-03:00';
+    await db.insert(leads).values({
+      source: 'meta_lead_ads',
+      email: 'form.meta@example.com',
+      rdDealId: 'dAds',
+      enteredAt: new Date(entered),
+      adPlatform: 'meta',
+      adCampaignExternalId: '120252401895850076',
+      adExternalId: AD_ID,
+    });
+    const first = await run([deal('dAds', entered)], new Date('2026-10-09T15:45:00.000Z'));
+    expect(first.utmLookups).toBe(1);
+    const row = await rowOf('dAds');
+    expect(row).toMatchObject({ attribution: 'lead_ads' });
+    // Nothing to wait for: the lookup is closed on the spot, not repeated for a day.
+    expect(row?.utmCheckedAt).not.toBeNull();
+    const second = await run([deal('dAds', entered)], new Date('2026-10-09T16:00:00.000Z'));
+    expect(second.utmLookups).toBe(0);
+  });
+
+  it('lets a guess made from the RD origin be refined by the UTM that arrives later, then firms up', async () => {
+    events.length = 0;
+    const entered = '2026-10-09T12:40:00.000-03:00';
+    const guess = {
+      ...deal('dGuess', entered),
+      deal_source: { name: 'Busca Paga | Facebook' },
+      campaign: null,
+    };
+    await run([guess], new Date('2026-10-09T15:45:00.000Z'));
+    expect(await rowOf('dGuess')).toMatchObject({
+      attribution: 'rd_origin',
+      adId: null,
+      utmCheckedAt: null,
+    });
+
+    events.push({
+      event_timestamp: '2026-10-09T12:40:30.000-03:00',
+      payload: {
+        traffic_source: traffic(
+          `https://wingscompany.com.br/contato/?utm_source=meta&utm_medium=paid_social&utm_campaign=${encodeURIComponent(FORM_NAME)}&utm_content=${AD_ID}`,
+        ),
+      },
+    });
+    await run([guess], new Date('2026-10-09T16:00:00.000Z'));
+    const refined = await rowOf('dGuess');
+    expect(refined).toMatchObject({ attribution: 'utm', utmContent: AD_ID });
+    expect(refined?.adId).toBeTruthy();
+    expect(refined?.utmCheckedAt).not.toBeNull();
+
+    // Firm now: not asked again.
+    const before = marketingCalls;
+    await run([guess], new Date('2026-10-09T16:15:00.000Z'));
+    expect(marketingCalls).toBe(before);
+    events.length = 0;
   });
 
   it('reads the end of the campaign from its ad sets when attributing', async () => {

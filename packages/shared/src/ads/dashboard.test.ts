@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addTotals,
   deltaPercent,
+  earliestEnd,
   effectiveCampaignEnd,
   EMPTY_TOTALS,
   fatigueOf,
@@ -90,6 +91,25 @@ describe('where a campaign ends when its schedule lives on the ad sets', () => {
         { status: 'PAUSED', endDate: null },
       ]),
     ).toBe('2026-10-13');
+  });
+
+  it('ends with the ad sets when they stop before the campaign does, and not before them when they stop after', () => {
+    expect(effectiveCampaignEnd('2026-10-20', [{ status: 'ACTIVE', endDate: '2026-10-10' }])).toBe(
+      '2026-10-10',
+    );
+    expect(effectiveCampaignEnd('2026-10-10', [{ status: 'ACTIVE', endDate: '2026-10-20' }])).toBe(
+      '2026-10-10',
+    );
+    // The campaign has an end and one ad set that is on has none: the campaign's end stands.
+    expect(
+      effectiveCampaignEnd('2026-10-20', [
+        { status: 'ACTIVE', endDate: '2026-10-10' },
+        { status: 'ACTIVE', endDate: null },
+      ]),
+    ).toBe('2026-10-20');
+    expect(earliestEnd(null, '2026-10-05')).toBe('2026-10-05');
+    expect(earliestEnd('2026-10-05', null)).toBe('2026-10-05');
+    expect(earliestEnd(null, null)).toBeNull();
   });
 
   it('stays open while one ad set that is on has no end, or none is on', () => {
