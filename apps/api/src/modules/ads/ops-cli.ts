@@ -25,6 +25,7 @@ import {
 import { createPlatformClient } from './platform/factory.js';
 import { canPreflight } from './platform/types.js';
 import { formatBrl } from './platform/money.js';
+import { storageOf } from '../../lib/storage/index.js';
 
 /**
  * Operator commands for a supervised write session. See docs/ads/primeira-escrita.md.
@@ -212,7 +213,9 @@ async function main() {
             where: eq(adApprovalRequests.id, approvalId),
           });
           if (!approval) throw new Error('aprovação não encontrada');
-          const result = await preflightChange(db, client, approval.changeRequestId);
+          const result = await preflightChange(db, client, approval.changeRequestId, {
+            storage: storageOf({ env }),
+          });
           printPreflight(result);
           if (!result.ok) process.exitCode = 1;
           return;

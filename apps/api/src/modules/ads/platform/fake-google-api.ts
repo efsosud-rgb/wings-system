@@ -98,7 +98,24 @@ export interface FakeGoogleApiOptions {
     | 'server_error_writes'
     | 'network_failure';
   /** Rows answered for `FROM conversion_action`; one enabled action by default. */
-  conversionActions?: { id: string; name: string; status: string; type?: string }[];
+  conversionActions?: {
+    id: string;
+    name: string;
+    status: string;
+    type?: string;
+    category?: string;
+    primaryForGoal?: boolean;
+  }[];
+  /** Rows answered for `FROM custom_conversion_goal`; none by default. */
+  customConversionGoals?: {
+    resourceName: string;
+    name?: string;
+    conversionActions: string[];
+    status: string;
+  }[];
+  /** Rows answered for `FROM user_list` and `FROM custom_audience`; none by default. */
+  userLists?: { id: string; name: string }[];
+  customAudiences?: { id: string; name: string }[];
   /** Ads already in the account (not made by a create here), with the campaign they sit under. */
   existingAds?: (FakeGoogleAd & { campaignId: string; approvalStatus?: string })[];
   /** One day of one ad, for the ad-level report. */
@@ -158,6 +175,45 @@ export const BRAZIL_GEO = [
   },
 ] as const satisfies FakeGoogleApiOptions['geo'];
 
+/**
+ * The first temporary resource name (`…/-3`) an operation points at before
+ * any earlier operation of the request created it; null when all resolve. A
+ * goal config names its campaign's temporary id (`conversionGoalCampaignConfigs/-2`).
+ */
+function danglingTemporaryId(
+  operations: Record<
+    string,
+    { create?: Record<string, unknown>; update?: Record<string, unknown> }
+  >[],
+): string | null {
+  const created = new Set<string>();
+  const references = (value: unknown, own: unknown): string[] => {
+    if (typeof value === 'string') {
+      return /\/-\d+$/.test(value) && value !== own ? [value] : [];
+    }
+    if (Array.isArray(value)) return value.flatMap((item) => references(item, own));
+    if (value && typeof value === 'object') {
+      return Object.values(value).flatMap((item) => references(item, own));
+    }
+    return [];
+  };
+  for (const operation of operations) {
+    for (const body of Object.values(operation)) {
+      const own = body.create?.resourceName;
+      const wanted = [
+        ...references(body.create ?? {}, own),
+        ...references(body.update ?? {}, undefined).map((name) =>
+          name.replace(/conversionGoalCampaignConfigs\/(-\d+)$/, 'campaigns/$1'),
+        ),
+      ];
+      const missing = wanted.find((name) => !created.has(name));
+      if (missing) return missing;
+      if (typeof own === 'string') created.add(own);
+    }
+  }
+  return null;
+}
+
 export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
   const customerId = options.customerId ?? '4268586278';
   const campaigns: FakeGoogleCampaign[] = [...(options.campaigns ?? [])];
@@ -166,6 +222,11 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
     ...(options.existingAds ?? []),
   ];
   const negatives: { campaignId: string; text: string; matchType: string }[] = [];
+  /** What a Demand Gen create left besides its ad group and ad. */
+  const assets: { id: string; name: string; youtubeVideoId?: string; imageBytes?: number }[] = [];
+  const audiences: { id: string; name: string; dimensions: unknown[] }[] = [];
+  const goalConfigs: { campaignId: string; customConversionGoal: string }[] = [];
+  const customGoals = [...(options.customConversionGoals ?? [])];
   const geo = options.geo ?? [...BRAZIL_GEO];
   const calls: RecordedGoogleCall[] = [];
   const state = { mutate: options.mutate ?? 'ok', accountBudget: options.accountBudget };
@@ -258,6 +319,15 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
         .map((row) => ({
           geoTargetConstant: { resourceName: `geoTargetConstants/${row.id}`, name: row.name },
         }));
+    }
+    if (/FROM\s+custom_conversion_goal/i.test(query)) {
+      return customGoals.map((goal) => ({ customConversionGoal: goal }));
+    }
+    if (/FROM\s+user_list/i.test(query)) {
+      return (options.userLists ?? []).map((list) => ({ userList: list }));
+    }
+    if (/FROM\s+custom_audience/i.test(query)) {
+      return (options.customAudiences ?? []).map((audience) => ({ customAudience: audience }));
     }
     if (/FROM\s+conversion_action/i.test(query)) {
       const actions = options.conversionActions ?? [
@@ -409,6 +479,26 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
     }
 
     const operations = (body.mutateOperations ?? []) as Operation[];
+    // Like Google, a temporary id must be created earlier in the same request
+    // than anything that points at it — checked on a rehearsal as on a write.
+    const unresolved = danglingTemporaryId(operations);
+    if (unresolved) {
+      return json(400, {
+        error: {
+          message: 'Request contains an invalid argument.',
+          details: [
+            {
+              errors: [
+                {
+                  errorCode: { mutateError: 'RESOURCE_NOT_FOUND' },
+                  message: `Temporary resource ${unresolved} is not created before it is used.`,
+                },
+              ],
+            },
+          ],
+        },
+      });
+    }
     if (body.validateOnly === true) return json(200, { mutateOperationResponses: [] });
 
     const tempIds = new Map<string, string>();
@@ -508,6 +598,57 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
             resourceName: `customers/${customerId}/adGroupCriteria/${groupId}~${nextId++}`,
           },
         });
+      } else if (op.assetOperation) {
+        const create = op.assetOperation.create ?? {};
+        const id = String(nextId++);
+        const resourceName = `customers/${customerId}/assets/${id}`;
+        tempIds.set(String(create.resourceName), resourceName);
+        const video = create.youtubeVideoAsset as { youtubeVideoId?: string } | undefined;
+        const image = create.imageAsset as { data?: string } | undefined;
+        assets.push({
+          id,
+          name: String(create.name ?? ''),
+          ...(video?.youtubeVideoId ? { youtubeVideoId: video.youtubeVideoId } : {}),
+          ...(image?.data ? { imageBytes: Buffer.from(image.data, 'base64').length } : {}),
+        });
+        responses.push({ assetResult: { resourceName } });
+      } else if (op.audienceOperation) {
+        const create = op.audienceOperation.create ?? {};
+        const id = String(nextId++);
+        const resourceName = `customers/${customerId}/audiences/${id}`;
+        tempIds.set(String(create.resourceName), resourceName);
+        audiences.push({
+          id,
+          name: String(create.name ?? ''),
+          dimensions: (create.dimensions as unknown[]) ?? [],
+        });
+        responses.push({ audienceResult: { resourceName } });
+      } else if (op.customConversionGoalOperation) {
+        const create = op.customConversionGoalOperation.create ?? {};
+        const resourceName = `customers/${customerId}/customConversionGoals/${nextId++}`;
+        tempIds.set(String(create.resourceName), resourceName);
+        customGoals.push({
+          resourceName,
+          conversionActions: (create.conversionActions as string[]) ?? [],
+          status: String(create.status ?? 'ENABLED'),
+        });
+        responses.push({ customConversionGoalResult: { resourceName } });
+      } else if (op.conversionGoalCampaignConfigOperation) {
+        const update = op.conversionGoalCampaignConfigOperation.update ?? {};
+        const campaignTemp = String(update.resourceName ?? '').replace(
+          /conversionGoalCampaignConfigs\/(-?\d+)$/,
+          'campaigns/$1',
+        );
+        const campaignId = lastSegment(resolve(campaignTemp));
+        goalConfigs.push({
+          campaignId,
+          customConversionGoal: resolve(update.customConversionGoal),
+        });
+        responses.push({
+          conversionGoalCampaignConfigResult: {
+            resourceName: `customers/${customerId}/conversionGoalCampaignConfigs/${campaignId}`,
+          },
+        });
       } else if (op.adGroupAdOperation) {
         const { create, update } = op.adGroupAdOperation;
         if (create) {
@@ -519,14 +660,19 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
               headlines?: { text: string }[];
               descriptions?: { text: string }[];
             };
+            demandGenVideoResponsiveAd?: {
+              headlines?: { text: string }[];
+              descriptions?: { text: string }[];
+            };
           };
+          const copy = ad.responsiveSearchAd ?? ad.demandGenVideoResponsiveAd;
           ads.push({
             id,
             adGroupId: groupId,
             status: String(create.status ?? 'ENABLED'),
             finalUrls: ad.finalUrls ?? [],
-            headlines: (ad.responsiveSearchAd?.headlines ?? []).map((item) => item.text),
-            descriptions: (ad.responsiveSearchAd?.descriptions ?? []).map((item) => item.text),
+            headlines: (copy?.headlines ?? []).map((item) => item.text),
+            descriptions: (copy?.descriptions ?? []).map((item) => item.text),
           });
           responses.push({
             adGroupAdResult: { resourceName: `customers/${customerId}/adGroupAds/${id}` },
@@ -619,11 +765,17 @@ export function fakeGoogleApi(options: FakeGoogleApiOptions = {}) {
 
   return {
     reader,
+    /** The scripted transport itself, for an app built with `platformFetch`. */
+    fetch: impl,
     calls,
     campaigns,
     adGroups,
     ads,
     negatives,
+    assets,
+    audiences,
+    goalConfigs,
+    customGoals,
     state,
     mutateCalls: () => calls.filter((call) => call.url.endsWith('googleAds:mutate')),
     /** Only the mutates that could change something: validate-only ones are left out. */

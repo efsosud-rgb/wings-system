@@ -678,8 +678,13 @@ describe('Google drafts', () => {
     ...common,
     platform: 'youtube',
     youtube: {
-      videoUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-      headline: 'Conheça a Wings',
+      videos: ['https://www.youtube.com/watch?v=dQw4w9WgXcQ'],
+      headlines: ['Conheça a Wings'],
+      longHeadlines: ['Sua empresa pode virar uma rede de franquias'],
+      descriptions: ['Diagnóstico com quem já formatou centenas de marcas.'],
+      businessName: 'Wings Company',
+      logoFileId: '7c1f4a52-2b8e-4d0a-9f3e-1a2b3c4d5e6f',
+      conversionAction: { id: '7804997444', name: 'RD form conversion' },
     },
   };
 
@@ -762,9 +767,73 @@ describe('Google drafts', () => {
     expect(campaignDraftSchema.safeParse({ ...youtube, youtube: undefined }).success).toBe(false);
   });
 
-  it('accepts a radius on the map, alone or alongside states and cities', () => {
+  it('fills a YouTube draft with Demand Gen defaults: 25 to 65+, the three YouTube channels, no signals', () => {
+    const parsed = campaignDraftSchema.parse(youtube);
+    expect(parsed.youtube).toMatchObject({
+      ageMin: 25,
+      ageMax: 65,
+      includeUnknownAge: false,
+      channels: ['youtube_in_stream', 'youtube_in_feed', 'youtube_shorts'],
+      audienceSegments: [],
+    });
+    expect(parsed.youtube?.targetCpaCents).toBeUndefined();
+  });
+
+  it('wants a Demand Gen video ad Google would accept', () => {
+    const withAd = (patch: Record<string, unknown>) =>
+      campaignDraftSchema.safeParse({ ...youtube, youtube: { ...youtube.youtube, ...patch } });
+    const ok = (patch: Record<string, unknown>) => withAd(patch).success;
+    const ids = ['dQw4w9WgXcQ', 'M0v5U4AaTvo', '34zzJBPHlYg', 'aaaaaaaaaaa', 'bbbbbbbbbbb'];
+    // 1 to 5 videos, by link or bare id, never the same one twice.
+    expect(ok({ videos: ids })).toBe(true);
+    expect(ok({ videos: [...ids, 'ccccccccccc'] })).toBe(false);
+    expect(ok({ videos: [] })).toBe(false);
+    expect(ok({ videos: ['dQw4w9WgXcQ', 'https://youtu.be/dQw4w9WgXcQ'] })).toBe(false);
+    expect(ok({ videos: ['https://vimeo.com/123'] })).toBe(false);
+    // Texts: 1 to 5 each, 40 / 90 / 90 characters, 25 for the business name.
+    expect(ok({ headlines: ['x'.repeat(40)] })).toBe(true);
+    expect(ok({ headlines: ['x'.repeat(41)] })).toBe(false);
+    expect(ok({ headlines: [] })).toBe(false);
+    expect(ok({ headlines: ['a', 'b', 'c', 'd', 'e', 'f'] })).toBe(false);
+    expect(ok({ longHeadlines: ['x'.repeat(91)] })).toBe(false);
+    expect(ok({ descriptions: ['Igual', 'igual'] })).toBe(false);
+    expect(ok({ businessName: 'x'.repeat(26) })).toBe(false);
+    // The same compliance rules as any copy.
+    expect(ok({ descriptions: ['Retorno garantido em 12 meses'] })).toBe(false);
+    // A logo from the Drive and the conversion it bids for.
+    expect(ok({ logoFileId: '' })).toBe(false);
+    expect(ok({ conversionAction: { id: '', name: 'RD form conversion' } })).toBe(false);
+    expect(ok({ targetCpaCents: 9000 })).toBe(true);
+    expect(ok({ targetCpaCents: 50 })).toBe(false);
+  });
+
+  it("takes Google's age brackets, YouTube channels only and the account's segments", () => {
+    const ok = (patch: Record<string, unknown>) =>
+      campaignDraftSchema.safeParse({ ...youtube, youtube: { ...youtube.youtube, ...patch } })
+        .success;
+    expect(ok({ ageMin: 18, ageMax: 24 })).toBe(true);
+    expect(ok({ ageMin: 65, ageMax: 65 })).toBe(true);
+    expect(ok({ ageMin: 30 })).toBe(false);
+    expect(ok({ ageMax: 60 })).toBe(false);
+    expect(ok({ ageMin: 45, ageMax: 34 })).toBe(false);
+    expect(ok({ channels: ['youtube_shorts'] })).toBe(true);
+    expect(ok({ channels: [] })).toBe(false);
+    expect(ok({ channels: ['discover'] })).toBe(false);
+    expect(ok({ channels: ['gmail'] })).toBe(false);
+    const segment = { kind: 'custom_audience', id: '1019547251', name: 'Concorrentes' };
+    expect(ok({ audienceSegments: [segment] })).toBe(true);
+    expect(ok({ audienceSegments: [segment, segment] })).toBe(false);
+    expect(ok({ audienceSegments: [{ ...segment, kind: 'user_interest' }] })).toBe(false);
+  });
+
+  it('bids for conversions on YouTube, so a traffic objective is refused', () => {
+    const result = campaignDraftSchema.safeParse({ ...youtube, objective: 'traffic' });
+    expect(result.error?.issues[0]?.message).toMatch(/Maximizar conversões/);
+  });
+
+  it('accepts a radius on the map for Search, alone or alongside states and cities', () => {
     const point = { latitude: -23.5, longitude: -46.6, radiusKm: 10 };
-    for (const base of [search, youtube]) {
+    for (const base of [search]) {
       expect(
         campaignDraftSchema.safeParse({
           ...base,
@@ -782,6 +851,13 @@ describe('Google drafts', () => {
         }).success,
       ).toBe(true);
     }
+    // Demand Gen places the ad group, which takes no radius: refused, not dropped.
+    expect(
+      campaignDraftSchema.safeParse({
+        ...youtube,
+        reach: { states: ['SP'], cities: [], customLocations: [point] },
+      }).error?.issues[0]?.message,
+    ).toBe(RADIUS_NOT_ACCEPTED_HINT);
   });
 });
 
@@ -856,11 +932,11 @@ describe('what of the reach each platform takes', () => {
     expect(Object.keys(PLATFORM_REACH).sort()).toEqual(PAID_PLATFORMS.map((p) => p.key).sort());
   });
 
-  it('takes a radius on Meta, Google Pesquisa and YouTube; not on TikTok or LinkedIn', () => {
+  it('takes a radius on Meta and Google Pesquisa; not on YouTube, TikTok or LinkedIn', () => {
     expect(['meta', 'google_search', 'youtube'].map(platformAcceptsRadius)).toEqual([
       true,
       true,
-      true,
+      false,
     ]);
     expect(['tiktok', 'linkedin', 'unheard-of'].map(platformAcceptsRadius)).toEqual([
       false,

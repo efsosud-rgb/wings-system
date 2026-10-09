@@ -68,8 +68,9 @@ describe('the radius map, platform by platform', () => {
     },
   );
 
-  it('takes a radius only on Meta, Google Pesquisa and YouTube', () => {
+  it('takes a radius only on Meta and Google Pesquisa (Demand Gen places the ad group, without radius)', () => {
     expect(PAID_PLATFORMS.filter((p) => !platformAcceptsRadius(p.key)).map((p) => p.key)).toEqual([
+      'youtube',
       'tiktok',
       'linkedin',
       'x_twitter',

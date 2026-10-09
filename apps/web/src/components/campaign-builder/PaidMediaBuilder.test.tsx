@@ -123,6 +123,25 @@ vi.mock('../../api/dashboard.js', () => ({
 }));
 
 vi.mock('../../api/ads.js', () => ({
+  useDemandGenOptions: () => ({ data: demandGenOptions.current, isLoading: false, error: null }),
+  useCheckYoutubeVideos: () => ({
+    isPending: false,
+    error: null,
+    mutate: (
+      videos: string[],
+      options?: { onSuccess?: (answer: { videos: Record<string, unknown>[] }) => void },
+    ) => {
+      checkVideos(videos);
+      options?.onSuccess?.({
+        videos: videos.map((video) => {
+          const videoId = video.slice(-11);
+          return privateVideos.has(videoId)
+            ? { videoId, status: 'private' }
+            : { videoId, status: 'ok', title: 'Vídeo' };
+        }),
+      });
+    },
+  }),
   useRequestAddAds: () => ({
     mutate: (input: unknown) => requestAddAds(input),
     isPending: false,
@@ -272,6 +291,21 @@ vi.mock('./RadiusMap.js', () => ({
 
 /** The media library, scripted: what it lists and what the bridge answers. */
 const libraryAssets: { current: MediaAsset[] } = { current: [] };
+/** What the Google Ads account offers a YouTube campaign, as the builder reads it. */
+const demandGenOptions = {
+  current: {
+    conversionActions: [
+      { id: '7804997444', name: 'RD form conversion', category: 'SUBMIT_LEAD_FORM', primary: true },
+      { id: '12', name: 'form_submit', category: 'SUBMIT_LEAD_FORM', primary: false },
+    ],
+    audienceSegments: [
+      { kind: 'custom_audience' as const, id: '1019547251', name: 'Concorrentes' },
+    ],
+  },
+};
+/** YouTube's answer per video id: public unless listed here. */
+const privateVideos = new Set<string>();
+const checkVideos = vi.fn();
 const useInBuilder = vi.fn();
 const bridgeAnswer: { current: MediaBridgeResponse | null } = { current: null };
 // The library picker's "Cliente" filter reads the register; the builder tests need no clients.
@@ -830,6 +864,50 @@ describe('the builder on Google', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'SP' }));
   }
 
+  /** A square PNG logo in the Drive, as the media library lists it. */
+  const LOGO_FILE = '55555555-5555-4555-8555-555555555555';
+  const logoAsset = (): MediaAsset => ({
+    id: '66666666-6666-4666-8666-666666666666',
+    kind: 'image',
+    origin: 'upload',
+    mimeType: 'image/png',
+    byteSize: 40_000,
+    width: 512,
+    height: 512,
+    aspect: '1:1',
+    durationSeconds: null,
+    prompt: null,
+    model: null,
+    credits: null,
+    clientId: '00000000-0000-4000-8000-0000000000c1',
+    client: 'Wings Company',
+    folder: null,
+    tags: [],
+    ownerName: 'Marketing',
+    createdAt: '2026-10-01T12:00:00.000Z',
+    downloadPath: '/media/assets/66666666-6666-4666-8666-666666666666/file',
+    driveFileId: LOGO_FILE,
+  });
+
+  function pickLogo() {
+    libraryAssets.current = [logoAsset()];
+    fireEvent.click(screen.getByRole('button', { name: 'Escolher a logo no Drive' }));
+    const dialog = screen.getByRole('dialog', { name: 'Escolher a logo do anúncio' });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Imagem, 512 × 512/ }));
+  }
+
+  function fillYoutube() {
+    fillCommon();
+    type(byField('Vídeo 1'), 'https://youtu.be/dQw4w9WgXcQ');
+    type(byField('Título 1'), 'Conheça a Wings');
+    type(byField('Título longo 1'), 'Sua empresa pode virar uma rede de franquias');
+    type(byField('Descrição 1'), 'Diagnóstico com quem já formatou centenas de marcas.');
+    pickLogo();
+    fireEvent.change(byField('Ação de conversão (lance: Maximizar conversões)'), {
+      target: { value: '7804997444' },
+    });
+  }
+
   function fillSearch() {
     fillCommon();
     type(
@@ -884,7 +962,10 @@ describe('the builder on Google', () => {
   it('shows the video fields only on YouTube, and says what kind of campaign it is', () => {
     render(<PaidMediaBuilder canRequest />);
     choose(/YouTube/);
-    expect(screen.getByLabelText(/Link do vídeo no YouTube/)).toBeTruthy();
+    expect(byField('Vídeo 1')).toBeTruthy();
+    expect(byField('Título longo 1')).toBeTruthy();
+    expect(byField('Nome da empresa')).toBeTruthy();
+    expect(screen.getByText('Discover, Gmail e Display ficam sempre desligados.')).toBeTruthy();
     expect(screen.queryByLabelText(/^Palavras-chave(?! negativas)/)).toBeNull();
     expect(screen.queryByLabelText(/^Imagem — Criativo/)).toBeNull();
     expect(screen.getByText(/Criada como campanha Demand Gen restrita ao YouTube/)).toBeTruthy();
@@ -960,11 +1041,9 @@ describe('the builder on Google', () => {
   });
 
   it('launches a YouTube request carrying only what belongs to it', async () => {
-    render(<PaidMediaBuilder canRequest />);
+    render(<PaidMediaBuilder canRequest canPickMedia />);
     choose(/YouTube/);
-    fillCommon();
-    type(screen.getByLabelText(/Link do vídeo/), 'https://youtu.be/dQw4w9WgXcQ');
-    type(screen.getByLabelText(/^Título/), 'Conheça a Wings');
+    fillYoutube();
     fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
 
     await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
@@ -973,11 +1052,153 @@ describe('the builder on Google', () => {
       platform: 'youtube',
       startPaused: true,
       variations: [],
-      youtube: { videoUrl: 'https://youtu.be/dQw4w9WgXcQ', headline: 'Conheça a Wings' },
-      utms: { utm_source: 'youtube', utm_medium: 'paid_video' },
+      youtube: {
+        // Boxes left empty are not sent.
+        videos: ['https://youtu.be/dQw4w9WgXcQ'],
+        headlines: ['Conheça a Wings'],
+        longHeadlines: ['Sua empresa pode virar uma rede de franquias'],
+        descriptions: ['Diagnóstico com quem já formatou centenas de marcas.'],
+        businessName: 'Wings Company',
+        logoFileId: '55555555-5555-4555-8555-555555555555',
+        conversionAction: { id: '7804997444', name: 'RD form conversion' },
+        ageMin: 25,
+        ageMax: 65,
+        includeUnknownAge: false,
+        channels: ['youtube_in_stream', 'youtube_in_feed', 'youtube_shorts'],
+        audienceSegments: [],
+      },
     });
     expect(sent).not.toHaveProperty('formatKey');
     expect(sent).not.toHaveProperty('search');
+    expect((sent.youtube as Record<string, unknown>).targetCpaCents).toBeUndefined();
+  });
+
+  it('fills the Out26 template, matches the conversion by name and waits for the logo', async () => {
+    render(<PaidMediaBuilder canRequest canPickMedia />);
+    choose(/YouTube/);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Usar modelo YouTube · Formatação · Out26' }),
+    );
+
+    expect((screen.getByLabelText(/^Nome da campanha/) as HTMLInputElement).value).toBe(
+      'YouTube · Formatação · Out26',
+    );
+    expect((byField('Vídeo 1') as HTMLInputElement).value).toContain('34zzJBPHlYg');
+    expect(
+      (byField('Ação de conversão (lance: Maximizar conversões)') as HTMLSelectElement).value,
+    ).toBe('7804997444');
+    expect(screen.getByText(/Modelo “YouTube · Formatação · Out26” carregado/)).toBeTruthy();
+
+    // Without the logo, nothing is asked for.
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+    await waitFor(() => expect(screen.getByText('Escolha a logo no Drive')).toBeTruthy());
+    expect(requestCampaign).not.toHaveBeenCalled();
+
+    pickLogo();
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
+    expect(requestCampaign.mock.calls[0]?.[0]).toMatchObject({
+      name: 'YouTube · Formatação · Out26',
+      dailyBudgetCents: 5000,
+      destinationUrl: 'https://wingssystem.online/lp/formatacao',
+      reach: { states: ['DF', 'GO', 'RJ', 'SC'], cities: [], customLocations: [] },
+      youtube: {
+        videos: ['https://www.youtube.com/watch?v=34zzJBPHlYg'],
+        conversionAction: { id: '7804997444', name: 'RD form conversion' },
+        logoFileId: '55555555-5555-4555-8555-555555555555',
+        ageMin: 25,
+        ageMax: 65,
+      },
+    });
+  });
+
+  it('takes a target CPA, other ages, fewer channels and a signal from the account', async () => {
+    render(<PaidMediaBuilder canRequest canPickMedia />);
+    choose(/YouTube/);
+    fillYoutube();
+    type(byField('CPA alvo (opcional)'), '90,00');
+    fireEvent.change(byField('Idade mínima'), { target: { value: '35' } });
+    fireEvent.change(byField('Idade máxima'), { target: { value: '54' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'YouTube Shorts' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Concorrentes/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
+    expect(requestCampaign.mock.calls[0]?.[0]).toMatchObject({
+      youtube: {
+        targetCpaCents: 9000,
+        ageMin: 35,
+        ageMax: 54,
+        channels: ['youtube_in_stream', 'youtube_in_feed'],
+        audienceSegments: [{ kind: 'custom_audience', id: '1019547251', name: 'Concorrentes' }],
+      },
+    });
+  });
+
+  it('reads the target CPA the Brazilian way, and refuses what it cannot read', async () => {
+    render(<PaidMediaBuilder canRequest canPickMedia />);
+    choose(/YouTube/);
+    fillYoutube();
+    type(byField('CPA alvo (opcional)'), '1.234,56');
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
+    expect(requestCampaign.mock.calls[0]?.[0]).toMatchObject({
+      youtube: { targetCpaCents: 123456 },
+    });
+
+    requestCampaign.mockClear();
+    type(byField('CPA alvo (opcional)'), '90.50');
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
+    expect(requestCampaign.mock.calls[0]?.[0]).toMatchObject({ youtube: { targetCpaCents: 9050 } });
+
+    requestCampaign.mockClear();
+    type(byField('CPA alvo (opcional)'), 'noventa');
+    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
+    await waitFor(() => expect(screen.getByText('Informe o CPA alvo')).toBeTruthy());
+    expect(requestCampaign).not.toHaveBeenCalled();
+  });
+
+  it('keeps the CPA box and the logo preview in step with a template loaded over them', () => {
+    render(<PaidMediaBuilder canRequest canPickMedia />);
+    choose(/YouTube/);
+    pickLogo();
+    expect(screen.getByAltText('Logo escolhida para o anúncio')).toBeTruthy();
+    type(byField('CPA alvo (opcional)'), '90,00');
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Usar modelo YouTube · Formatação · Out26' }),
+    );
+    // The template has no target and no logo: the screen says the same.
+    expect((byField('CPA alvo (opcional)') as HTMLInputElement).value).toBe('');
+    expect(screen.queryByAltText('Logo escolhida para o anúncio')).toBeNull();
+  });
+
+  it('checks the videos on YouTube and says which one Google would not take', () => {
+    privateVideos.add('M0v5U4AaTvo');
+    render(<PaidMediaBuilder canRequest />);
+    choose(/YouTube/);
+    type(byField('Vídeo 1'), 'https://youtu.be/dQw4w9WgXcQ');
+    type(byField('Vídeo 2 (opcional)'), 'M0v5U4AaTvo');
+    fireEvent.click(screen.getByRole('button', { name: 'Conferir vídeos no YouTube' }));
+
+    expect(checkVideos).toHaveBeenCalledWith(['https://youtu.be/dQw4w9WgXcQ', 'M0v5U4AaTvo']);
+    expect(screen.getByText('Publicado (público ou não listado)')).toBeTruthy();
+    expect(screen.getByText('Privado ou sem incorporação: o Google não aceita')).toBeTruthy();
+    privateVideos.clear();
+  });
+
+  it('refuses a logo the ad cannot carry, in the picker itself', () => {
+    render(<PaidMediaBuilder canRequest canPickMedia />);
+    choose(/YouTube/);
+    libraryAssets.current = [
+      { ...logoAsset(), width: 1125, height: 600, aspect: '16:9' },
+      { ...logoAsset(), id: '77777777-7777-4777-8777-777777777777', driveFileId: null },
+    ];
+    fireEvent.click(screen.getByRole('button', { name: 'Escolher a logo no Drive' }));
+    const dialog = screen.getByRole('dialog', { name: 'Escolher a logo do anúncio' });
+    expect(within(dialog).getByText('Não é quadrada')).toBeTruthy();
+    expect(within(dialog).getByText('Ainda não está no Drive')).toBeTruthy();
   });
 
   it('loads a saved Google draft whole, and saving validates like a launch without sending', async () => {
@@ -1076,48 +1297,30 @@ describe('the builder on Google', () => {
     });
   });
 
-  it('shows the same reach block, map included, on every platform that can be chosen', () => {
+  it('shows the same reach block on every platform, the map off where no radius is taken', () => {
     render(<PaidMediaBuilder canRequest />);
     for (const name of [/^Meta/, /Google Pesquisa/, /YouTube/]) {
       choose(name);
       const reach = screen.getByRole('region', { name: /Área de alcance/ });
       expect(reach.querySelector('.builder-states')).toBeTruthy();
       expect(reach.textContent).toContain('Cidades');
+      // Demand Gen places the ad group, which takes states and cities, no radius.
+      const radius = name.source === 'YouTube' ? 'yes' : 'no';
       expect(reach.querySelector('[data-testid="radius-map"]')?.getAttribute('data-disabled')).toBe(
-        'no',
+        radius,
       );
-      expect(reach.textContent).not.toContain('não aceita raio');
     }
   });
 
-  it('sends a radius alone as a whole reach on YouTube too', async () => {
-    render(<PaidMediaBuilder canRequest />);
-    choose(/YouTube/);
-    fillCommon();
-    fireEvent.click(screen.getByRole('checkbox', { name: 'SP' }));
-    fireEvent.click(screen.getByRole('button', { name: 'clicar no mapa' }));
-    type(screen.getByLabelText(/Link do vídeo/), 'https://youtu.be/dQw4w9WgXcQ');
-    type(screen.getByLabelText(/^Título/), 'Conheça a Wings');
-    fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
-
-    await waitFor(() => expect(requestCampaign).toHaveBeenCalledTimes(1));
-    expect(requestCampaign.mock.calls[0]?.[0].reach).toMatchObject({
-      states: [],
-      cities: [],
-      customLocations: [{ radiusKm: 15 }],
-    });
-  });
-
   it('refuses a link that is not a YouTube video, and sends nothing', async () => {
-    render(<PaidMediaBuilder canRequest />);
+    render(<PaidMediaBuilder canRequest canPickMedia />);
     choose(/YouTube/);
-    fillCommon();
-    type(screen.getByLabelText(/Link do vídeo/), 'https://vimeo.com/123456');
-    type(screen.getByLabelText(/^Título/), 'Conheça a Wings');
+    fillYoutube();
+    type(byField('Vídeo 1'), 'https://vimeo.com/123456');
     fireEvent.click(screen.getByRole('button', { name: 'Lançar campanha' }));
 
     await waitFor(() =>
-      expect(screen.getByText('Informe um link https:// do YouTube')).toBeTruthy(),
+      expect(screen.getByText('Informe um link https:// do YouTube ou o id do vídeo')).toBeTruthy(),
     );
     expect(requestCampaign).not.toHaveBeenCalled();
   });
@@ -1154,8 +1357,9 @@ describe('the builder on Google', () => {
     choose(/YouTube/);
     expect(screen.getByText('Cole um link do YouTube para ver a prévia')).toBeTruthy();
 
-    type(screen.getByLabelText(/Link do vídeo/), 'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
-    type(screen.getByLabelText(/^Título/), 'Conheça a Wings');
+    type(byField('Vídeo 1'), 'https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+    type(byField('Título 1'), 'Conheça a Wings');
+    type(byField('Nome da empresa'), '');
     type(screen.getByLabelText(/Página de destino/), 'https://www.wingscompany.com.br/franquia');
 
     const still = screen.getByAltText('Miniatura do vídeo no YouTube') as HTMLImageElement;
@@ -1769,7 +1973,7 @@ describe('applying a proposal from the agent', () => {
         }),
       ),
     );
-    expect((screen.getByLabelText(/^Título/) as HTMLInputElement).value).toBe('Conheça a Wings');
+    expect((byField('Título 1') as HTMLInputElement).value).toBe('Conheça a Wings');
     expect(screen.getByText('Falta o link do vídeo.')).toBeTruthy();
     const panel = screen.getByRole('region', { name: 'Proposta do agente aplicada' });
     expect(panel.textContent).toContain('Briefing para o Design — Vídeo');

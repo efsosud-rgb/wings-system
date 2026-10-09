@@ -7,7 +7,15 @@ import {
   CAMPAIGN_OBJECTIVE_LABEL,
   CALL_TO_ACTION_LABEL,
   CREATIVE_TYPE_LABEL,
-  HEADLINE_MAX,
+  DEMAND_GEN_AGE_OPEN_END,
+  DEMAND_GEN_CHANNEL_LABEL,
+  DEMAND_GEN_MAX_TEXTS,
+  DEMAND_GEN_MAX_VIDEOS,
+  YOUTUBE_CAMPAIGN_URL_SUFFIX,
+  YOUTUBE_TEMPLATES,
+  demandGenAgeLabel,
+  parseYoutubeVideoRef,
+  type YoutubeTemplate,
   CREATIVE_FORMATS,
   DEFAULT_AGE_MAX,
   DEFAULT_AGE_MIN,
@@ -86,6 +94,7 @@ import {
   useDeleteSavedDraft,
   useSaveDraft,
   useSavedDrafts,
+  useDemandGenOptions,
 } from '../../api/ads.js';
 import { ApiError } from '../../api/client.js';
 import { useDashboardCampaigns } from '../../api/dashboard.js';
@@ -96,6 +105,7 @@ import { AdPreviewGallery } from './AdPreview.js';
 import { ComplianceWarning, CreativeCard } from './CreativeBlock.js';
 import { formatBrl, formatDate, parseBrlToCents, todayInSaoPaulo } from './format.js';
 import { SearchAdPreview, YoutubePreview } from './GooglePreview.js';
+import { YoutubeAdFields, YoutubeBiddingFields, youtubeCopy } from './YoutubeFields.js';
 import { LeadFormPreviewGallery } from './LeadFormPreview.js';
 import { LeadFormSection, siteFormOf } from './LeadFormSection.js';
 import { RadiusMap } from './RadiusMap.js';
@@ -211,7 +221,22 @@ function shapeDraft(values: CampaignDraftInput): CampaignDraftInput {
   }
 
   const google = { ...common, startPaused: true };
-  if (values.platform === 'youtube') return { ...google, youtube };
+  if (values.platform === 'youtube') {
+    // Boxes left empty are not videos or texts.
+    const filledIn = (list: string[] | undefined) =>
+      (list ?? []).filter((item) => (item ?? '').trim() !== '');
+    return {
+      ...google,
+      youtube: youtube && {
+        ...youtube,
+        adGroupName: youtube.adGroupName?.trim() || undefined,
+        videos: filledIn(youtube.videos),
+        headlines: filledIn(youtube.headlines),
+        longHeadlines: filledIn(youtube.longHeadlines),
+        descriptions: filledIn(youtube.descriptions),
+      },
+    };
+  }
   return {
     ...google,
     search: search && {
@@ -284,6 +309,7 @@ const YOUTUBE_SECTIONS = [
   'icp',
   'reach',
   'video',
+  'youtubeSettings',
   'leadForm',
   'duration',
   'budget',
@@ -381,6 +407,30 @@ function padTo(list: string[], length: number): string[] {
   return Array.from({ length }, (_, index) => list[index] ?? '');
 }
 
+/** A YouTube ad with its boxes open: 5 videos and 5 of each text, all optional past the first. */
+function youtubeBoxes(
+  youtube: Partial<NonNullable<CampaignDraftInput['youtube']>>,
+): NonNullable<CampaignDraftInput['youtube']> {
+  return {
+    adGroupName: youtube.adGroupName ?? '',
+    videos: padTo(youtube.videos ?? [], DEMAND_GEN_MAX_VIDEOS),
+    headlines: padTo(youtube.headlines ?? [], DEMAND_GEN_MAX_TEXTS),
+    longHeadlines: padTo(youtube.longHeadlines ?? [], DEMAND_GEN_MAX_TEXTS),
+    descriptions: padTo(youtube.descriptions ?? [], DEMAND_GEN_MAX_TEXTS),
+    businessName: youtube.businessName ?? 'Wings Company',
+    logoFileId: youtube.logoFileId ?? '',
+    conversionAction: youtube.conversionAction ?? { id: '', name: '' },
+    targetCpaCents: youtube.targetCpaCents,
+    ageMin: youtube.ageMin ?? 25,
+    ageMax: youtube.ageMax ?? DEMAND_GEN_AGE_OPEN_END,
+    includeUnknownAge: youtube.includeUnknownAge ?? false,
+    channels: youtube.channels ?? ['youtube_in_stream', 'youtube_in_feed', 'youtube_shorts'],
+    audienceSegments: youtube.audienceSegments ?? [],
+  };
+}
+
+const emptyYoutube = () => youtubeBoxes({});
+
 export function PaidMediaBuilder({
   canRequest,
   canPickMedia = false,
@@ -442,7 +492,7 @@ export function PaidMediaBuilder({
       ageMax: DEFAULT_AGE_MAX,
       placements: { mode: 'automatic', facebook: [], instagram: [], threads: [] },
       identity: { pageId: '', instagramActorId: null },
-      youtube: { videoUrl: '', headline: '' },
+      youtube: emptyYoutube(),
       search: {
         adGroupName: '',
         network: 'google_search_only',
@@ -517,6 +567,23 @@ export function PaidMediaBuilder({
     return () => window.clearInterval(timer);
   }, [cockpitAccountId, refreshPlatform]);
   const google = isGooglePlatform(platform);
+  const demandGenOptions = useDemandGenOptions(canRequest && platform === 'youtube');
+  const [appliedTemplate, setAppliedTemplate] = useState<string | null>(null);
+  // A template (or a draft) names its conversion; the account's list gives its id.
+  const wantedConversion = values.youtube?.conversionAction;
+  useEffect(() => {
+    if (!wantedConversion?.name || wantedConversion.id) return;
+    const match = demandGenOptions.data?.conversionActions.find(
+      (action) => action.name === wantedConversion.name,
+    );
+    if (match) {
+      setValue(
+        'youtube.conversionAction',
+        { id: match.id, name: match.name },
+        { shouldDirty: true },
+      );
+    }
+  }, [wantedConversion?.name, wantedConversion?.id, demandGenOptions.data, setValue]);
   const addingToExisting = platform === 'meta' && target === 'existing';
   const sections: readonly SectionKey[] =
     platform === 'youtube'
@@ -740,9 +807,16 @@ export function PaidMediaBuilder({
       setMaxCpcText(centsToBudgetText(cpc));
     }
     if (proposal.platform === 'youtube' && proposal.youtube) {
-      setValue('youtube.headline', proposal.youtube.headline, filled);
-      if (proposal.youtube.videoUrl)
-        setValue('youtube.videoUrl', proposal.youtube.videoUrl, filled);
+      const current = getValues('youtube') ?? emptyYoutube();
+      setValue(
+        'youtube',
+        youtubeBoxes({
+          ...current,
+          headlines: [proposal.youtube.headline],
+          videos: proposal.youtube.videoUrl ? [proposal.youtube.videoUrl] : [],
+        }),
+        filled,
+      );
     }
     setChecked(null);
     setAppliedProposal(proposal);
@@ -830,10 +904,7 @@ export function PaidMediaBuilder({
       }
       if (draft.variations.length > 0) variations.replace(draft.variations);
     }
-    if (draft.youtube) {
-      setValue('youtube.videoUrl', draft.youtube.videoUrl, filled);
-      setValue('youtube.headline', draft.youtube.headline, filled);
-    }
+    if (draft.youtube) setValue('youtube', youtubeBoxes(draft.youtube), filled);
     const search = draft.search;
     if (search) {
       setValue('search.adGroupName', search.adGroupName ?? '', filled);
@@ -848,6 +919,50 @@ export function PaidMediaBuilder({
       setValue('search.headlines', padTo(search.headlines, MAX_SEARCH_HEADLINES), filled);
       setValue('search.descriptions', padTo(search.descriptions, MAX_SEARCH_DESCRIPTIONS), filled);
     }
+    setChecked(null);
+    launch.reset();
+  };
+
+  /**
+   * A ready-made YouTube campaign: the form filled in as the template says,
+   * the conversion matched by name in the account's list (below). The logo is
+   * the person's to pick. Nothing is submitted.
+   */
+  const applyYoutubeTemplate = (template: YoutubeTemplate) => {
+    const form = template.draft(today);
+    const filled = { shouldDirty: true, shouldValidate: false };
+    setAudienceLoaded(true);
+    setUtmsFromProposal(true);
+    setAppliedProposal(null);
+    setValue('platform', 'youtube', filled);
+    setValue('name', form.name, filled);
+    setValue('objective', form.objective, filled);
+    setValue('idealCustomerProfile', form.idealCustomerProfile, filled);
+    setValue('reach.states', form.reach.states, filled);
+    replaceCities(form.reach.cities ?? []);
+    setValue('reach.customLocations', [], filled);
+    setValue('destinationUrl', form.destinationUrl, filled);
+    setValue('leadCapture', 'page', filled);
+    for (const key of UTM_KEYS) setValue(`utms.${key}`, form.utms[key], filled);
+    setValue('dailyBudgetCents', form.dailyBudgetCents, filled);
+    setBudgetText(centsToBudgetText(form.dailyBudgetCents));
+    setValue('startDate', form.startDate, filled);
+    setValue('endDate', form.endDate, filled);
+    setValue('startPaused', true, filled);
+    const match = demandGenOptions.data?.conversionActions.find(
+      (action) => action.name === template.conversion.name,
+    );
+    setValue(
+      'youtube',
+      youtubeBoxes({
+        ...form.youtube,
+        conversionAction: match
+          ? { id: match.id, name: match.name }
+          : { id: '', name: template.conversion.name },
+      }),
+      filled,
+    );
+    setAppliedTemplate(template.label);
     setChecked(null);
     launch.reset();
   };
@@ -928,7 +1043,9 @@ export function PaidMediaBuilder({
   ]);
   const searchHeadlines = values.search?.headlines ?? [];
   const searchDescriptions = values.search?.descriptions ?? [];
-  const youtubeFindings = checkCopyCompliance(values.youtube?.headline ?? '');
+  const youtubeFindings = youtubeCopy(values.youtube).flatMap((text) =>
+    checkCopyCompliance(text ?? ''),
+  );
   const searchFindings = [...searchHeadlines, ...searchDescriptions].flatMap((text) =>
     checkCopyCompliance(text ?? ''),
   );
@@ -1145,9 +1262,31 @@ export function PaidMediaBuilder({
         </div>
         {platform === 'youtube' && (
           <p className="field-hint">
-            Criada como campanha Demand Gen restrita ao YouTube — a API do Google não cria campanhas
-            do tipo Vídeo. O grupo de anúncios e o anúncio em vídeo entram na próxima etapa.
+            Criada como campanha Demand Gen restrita ao YouTube (a API do Google não cria campanhas
+            do tipo Vídeo), já com o grupo de anúncios e o anúncio de vídeo, tudo pausado.
           </p>
+        )}
+        {canRequest && platform === 'youtube' && (
+          <div className="builder-templates" aria-label="Modelos de campanha">
+            <span className="field-label">Modelos:</span>
+            {YOUTUBE_TEMPLATES.map((template) => (
+              <Button
+                key={template.key}
+                type="button"
+                variant="ghost"
+                title={template.source}
+                onClick={() => applyYoutubeTemplate(template)}
+              >
+                Usar modelo {template.label}
+              </Button>
+            ))}
+            {appliedTemplate && (
+              <span className="field-hint">
+                Modelo “{appliedTemplate}” carregado. Escolha a logo no Drive e confira o vídeo.
+                Nada é enviado: a campanha só vira pedido em Lançar campanha.
+              </span>
+            )}
+          </div>
         )}
         {platform === 'meta' && (
           <div className="builder-options" role="radiogroup" aria-label="O que montar">
@@ -1682,42 +1821,36 @@ export function PaidMediaBuilder({
       )}
 
       {platform === 'youtube' && (
-        <BuilderSection
-          step={stepOf('video')}
-          title="Vídeo"
-          why="O vídeo é o anúncio: os primeiros segundos decidem se a pessoa pula. Ele precisa estar publicado no YouTube — o link é o que o Google usa para achá-lo."
-        >
-          <Field
-            label="Link do vídeo no YouTube"
-            error={errors.youtube?.videoUrl?.message}
-            hint="Ex.: https://www.youtube.com/watch?v=… ou https://youtu.be/…"
+        <>
+          <BuilderSection
+            step={stepOf('video')}
+            title="Anúncio de vídeo"
+            why="O vídeo é o anúncio: os primeiros segundos decidem se a pessoa pula. Títulos, descrições, nome da empresa e logo aparecem junto, e o Google combina as versões."
           >
-            <Input
-              type="url"
-              placeholder="https://www.youtube.com/watch?v=…"
-              {...register('youtube.videoUrl')}
+            <YoutubeAdFields
+              register={register}
+              setValue={setValue}
+              youtube={values.youtube}
+              errors={errors}
+              listError={listError as (error: unknown) => string | undefined}
+              destinationError={errors.destinationUrl?.message}
+              canPickMedia={canPickMedia}
             />
-          </Field>
-          <Field
-            label="Título"
-            error={errors.youtube?.headline?.message}
-            hint={`${(values.youtube?.headline ?? '').length}/${HEADLINE_MAX}`}
+          </BuilderSection>
+          <BuilderSection
+            step={stepOf('youtubeSettings')}
+            title="Lance, público e canais"
+            why="O Google gasta a verba atrás da conversão escolhida, nas pessoas e nos lugares do YouTube marcados aqui. Uma conversão errada ensina a campanha a buscar o lead errado."
           >
-            <Input maxLength={HEADLINE_MAX} {...register('youtube.headline')} />
-          </Field>
-          <Field
-            label="Página de destino"
-            error={errors.destinationUrl?.message}
-            hint="Para onde o anúncio leva. Os UTMs são aplicados a este endereço."
-          >
-            <Input
-              type="url"
-              placeholder="https://wingscompany.com.br/contato/"
-              {...register('destinationUrl')}
+            <YoutubeBiddingFields
+              register={register}
+              setValue={setValue}
+              youtube={values.youtube}
+              errors={errors}
+              options={demandGenOptions}
             />
-          </Field>
-          <ComplianceWarning findings={youtubeFindings} />
-        </BuilderSection>
+          </BuilderSection>
+        </>
       )}
 
       {platform === 'google_search' && (
@@ -2074,12 +2207,18 @@ export function PaidMediaBuilder({
         {utmsFromPlatform(values.platform ?? '') ? (
           <>
             <p className="field-hint">
-              {google
-                ? 'No Google, as UTMs vêm do Sufixo do URL final da conta, que toda campanha herda. A campanha não grava sufixo próprio, e o endereço vai sem UTM.'
-                : 'Na Meta, todo anúncio novo leva os Parâmetros de URL padrão, e a Meta preenche a origem e os ids da campanha, do anúncio e do conjunto a cada clique. O endereço vai sem UTM.'}
+              {platform === 'youtube'
+                ? 'No YouTube, a campanha grava um Sufixo do URL final próprio, no lugar do da conta: o clique chega com utm_source=youtube, e o utm_campaign é o id da campanha, como nas outras do Google. O endereço vai sem UTM.'
+                : google
+                  ? 'No Google, as UTMs vêm do Sufixo do URL final da conta, que toda campanha herda. A campanha não grava sufixo próprio, e o endereço vai sem UTM.'
+                  : 'Na Meta, todo anúncio novo leva os Parâmetros de URL padrão, e a Meta preenche a origem e os ids da campanha, do anúncio e do conjunto a cada clique. O endereço vai sem UTM.'}
             </p>
             <p className="field-hint builder-url mono">
-              {google ? GOOGLE_ACCOUNT_URL_SUFFIX : META_URL_TAGS}
+              {platform === 'youtube'
+                ? YOUTUBE_CAMPAIGN_URL_SUFFIX
+                : google
+                  ? GOOGLE_ACCOUNT_URL_SUFFIX
+                  : META_URL_TAGS}
             </p>
           </>
         ) : (
@@ -2113,8 +2252,9 @@ export function PaidMediaBuilder({
       >
         {platform === 'youtube' && (
           <YoutubePreview
-            videoUrl={values.youtube?.videoUrl ?? ''}
-            headline={values.youtube?.headline ?? ''}
+            videoUrl={(values.youtube?.videos ?? []).find((item) => (item ?? '').trim()) ?? ''}
+            headline={(values.youtube?.headlines ?? []).find((item) => (item ?? '').trim()) ?? ''}
+            businessName={values.youtube?.businessName ?? ''}
             destinationUrl={values.destinationUrl ?? ''}
           />
         )}
@@ -2227,11 +2367,44 @@ export function PaidMediaBuilder({
           {platform === 'youtube' && (
             <>
               <dt>Tipo no Google</dt>
-              <dd>Demand Gen, restrita ao YouTube</dd>
-              <dt>Vídeo</dt>
-              <dd className="mono builder-url">{values.youtube?.videoUrl || '—'}</dd>
-              <dt>Título</dt>
-              <dd>{values.youtube?.headline || '—'}</dd>
+              <dd>Demand Gen, só YouTube</dd>
+              <dt>Vídeos</dt>
+              <dd className="mono builder-url">
+                {(values.youtube?.videos ?? [])
+                  .map((item) => parseYoutubeVideoRef(item ?? ''))
+                  .filter(Boolean)
+                  .join(' · ') || '—'}
+              </dd>
+              <dt>Títulos</dt>
+              <dd>
+                {(values.youtube?.headlines ?? [])
+                  .filter((item) => (item ?? '').trim())
+                  .join(' · ') || '—'}
+              </dd>
+              <dt>Lance</dt>
+              <dd>
+                Maximizar conversões: {values.youtube?.conversionAction?.name || '—'}
+                {values.youtube?.targetCpaCents
+                  ? ` · CPA alvo ${formatBrl(values.youtube.targetCpaCents)}`
+                  : ''}
+              </dd>
+              <dt>Idade</dt>
+              <dd>
+                {values.youtube?.ageMin ?? 25} a{' '}
+                {demandGenAgeLabel(values.youtube?.ageMax ?? DEMAND_GEN_AGE_OPEN_END, true)} anos
+                {values.youtube?.includeUnknownAge ? ', com idade desconhecida' : ''}
+              </dd>
+              <dt>Canais</dt>
+              <dd>
+                {(values.youtube?.channels ?? [])
+                  .map((channel) => DEMAND_GEN_CHANNEL_LABEL[channel])
+                  .join(' · ') || '—'}
+              </dd>
+              <dt>Sinais de público</dt>
+              <dd>
+                {(values.youtube?.audienceSegments ?? []).map((item) => item?.name).join(' · ') ||
+                  'Nenhum'}
+              </dd>
             </>
           )}
           {platform === 'google_search' && (

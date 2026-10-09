@@ -1732,6 +1732,39 @@ a {
   border-color: var(--wings-accent);
 }
 
+.builder-fieldset {
+  border: 1px solid var(--wings-border);
+  border-radius: 6px;
+  padding: 10px 12px 12px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.builder-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.builder-logo-preview {
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+  border: 1px solid var(--wings-border);
+  border-radius: 6px;
+  background: var(--wings-surface, transparent);
+}
+
+.builder-templates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .builder-option-disabled {
   opacity: 0.55;
   cursor: not-allowed;

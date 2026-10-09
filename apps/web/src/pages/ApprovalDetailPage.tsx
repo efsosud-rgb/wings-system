@@ -1,4 +1,10 @@
 import {
+  DEMAND_GEN_AGE_OPEN_END,
+  DEMAND_GEN_CHANNEL_LABEL,
+  DEMAND_GEN_SEGMENT_KIND_LABEL,
+  YOUTUBE_CAMPAIGN_URL_SUFFIX,
+  demandGenAgeLabel,
+  parseYoutubeVideoRef,
   describeLeadCapture,
   APPROVAL_STATUS_LABEL,
   APPROVAL_TRIGGER_LABEL,
@@ -34,6 +40,7 @@ import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../api/auth.js';
 import {
   useApproval,
+  useApprovalYoutubeLogo,
   useDecideApproval,
   useExecuteApproval,
   useOfficialPreviews,
@@ -320,7 +327,118 @@ function AddAdsSection({ addAds }: { addAds: AddAdsPayload }) {
  * The campaign being asked for, whole. An approval of a creation is bound to
  * exactly this, so the approver reads everything the requester submitted.
  */
-function DraftCampaign({ draft }: { draft: CampaignDraft }) {
+/**
+ * What the approver must see of a YouTube (Demand Gen) campaign before
+ * deciding: every video, the copy, the conversion it bids for, whom it reaches
+ * and where. All of it goes to Google in the one write.
+ */
+function YoutubeApprovalDetails({
+  youtube,
+  name,
+  approvalId,
+}: {
+  youtube: NonNullable<CampaignDraft['youtube']>;
+  name: string;
+  approvalId?: string;
+}) {
+  const logo = useApprovalYoutubeLogo(approvalId, Array.isArray(youtube.videos));
+  if (!Array.isArray(youtube.videos)) {
+    return (
+      <div>
+        <span className="field-label">Tipo no Google</span>
+        <p>Demand Gen (rascunho antigo, sem anúncio de vídeo: refaça no construtor)</p>
+      </div>
+    );
+  }
+  return (
+    <div>
+      <span className="field-label">Tipo no Google</span>
+      <p>Demand Gen, só YouTube · grupo “{youtube.adGroupName?.trim() || name}”</p>
+      <dl className="builder-applied-list">
+        <div>
+          <dt>Vídeos</dt>
+          <dd className="mono builder-url">
+            {youtube.videos.map((video) => parseYoutubeVideoRef(video) ?? video).join(' · ')}
+          </dd>
+        </div>
+        <div>
+          <dt>Títulos</dt>
+          <dd>{youtube.headlines.join(' · ')}</dd>
+        </div>
+        <div>
+          <dt>Títulos longos</dt>
+          <dd>{youtube.longHeadlines.join(' · ')}</dd>
+        </div>
+        <div>
+          <dt>Descrições</dt>
+          <dd>{youtube.descriptions.join(' · ')}</dd>
+        </div>
+        <div>
+          <dt>Nome da empresa e logo</dt>
+          <dd>
+            {youtube.businessName}
+            {logo.data ? (
+              <>
+                <img
+                  className="builder-logo-preview"
+                  src={logo.data.url}
+                  alt="Logo que vai para o Google"
+                />
+                {!logo.data.unchanged && (
+                  <Alert kind="warning">
+                    A logo mudou no Drive depois do pedido: Executar vai recusar. Peça de novo.
+                  </Alert>
+                )}
+              </>
+            ) : (
+              <span className="cell-sub">
+                {' '}
+                {logo.isLoading ? '(carregando a logo…)' : '(logo não encontrada no Drive)'}
+              </span>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>Lance</dt>
+          <dd>
+            Maximizar conversões, só “{youtube.conversionAction.name}”
+            {youtube.targetCpaCents ? ` · CPA alvo ${formatBrl(youtube.targetCpaCents)}` : ''}
+          </dd>
+        </div>
+        <div>
+          <dt>Idade</dt>
+          <dd>
+            {youtube.ageMin} a {demandGenAgeLabel(youtube.ageMax ?? DEMAND_GEN_AGE_OPEN_END, true)}{' '}
+            anos{youtube.includeUnknownAge ? ', com idade desconhecida' : ''}
+          </dd>
+        </div>
+        <div>
+          <dt>Canais</dt>
+          <dd>
+            {youtube.channels.map((channel) => DEMAND_GEN_CHANNEL_LABEL[channel]).join(' · ')} (sem
+            Discover, Gmail e Display)
+          </dd>
+        </div>
+        <div>
+          <dt>Sinais de público</dt>
+          <dd>
+            {youtube.audienceSegments.length === 0
+              ? 'Nenhum'
+              : youtube.audienceSegments
+                  .map((item) => `${item.name} (${DEMAND_GEN_SEGMENT_KIND_LABEL[item.kind]})`)
+                  .join(' · ')}
+          </dd>
+        </div>
+        <div>
+          <dt>Sufixo do URL final da campanha</dt>
+          <dd className="mono builder-url">{YOUTUBE_CAMPAIGN_URL_SUFFIX}</dd>
+        </div>
+      </dl>
+    </div>
+  );
+}
+
+function DraftCampaign({ draft, approvalId }: { draft: CampaignDraft; approvalId?: string }) {
   const days = campaignDays(draft.startDate, draft.endDate) ?? 0;
   const format = CREATIVE_FORMATS[draft.platform].find((item) => item.key === draft.formatKey);
   const google = isGooglePlatform(draft.platform);
@@ -417,12 +535,12 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
             </div>
           </>
         )}
-        {draft.platform === 'youtube' && (
-          <div>
-            <span className="field-label">Tipo no Google</span>
-            <p>Demand Gen, restrita ao YouTube</p>
-            <span className="cell-sub mono builder-url">{draft.youtube?.videoUrl}</span>
-          </div>
+        {draft.platform === 'youtube' && draft.youtube && (
+          <YoutubeApprovalDetails
+            youtube={draft.youtube}
+            name={draft.name}
+            approvalId={approvalId}
+          />
         )}
         {draft.platform === 'google_search' && (
           <div>
@@ -462,9 +580,11 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
           </p>
           {utmsFromPlatform(draft.platform) && (
             <span className="cell-sub mono builder-url">
-              {isGooglePlatform(draft.platform)
-                ? `Sufixo do URL final, da conta: ${GOOGLE_ACCOUNT_URL_SUFFIX}`
-                : `Parâmetros de URL: ${META_URL_TAGS}`}
+              {draft.platform === 'youtube'
+                ? `Sufixo do URL final, da campanha: ${YOUTUBE_CAMPAIGN_URL_SUFFIX}`
+                : isGooglePlatform(draft.platform)
+                  ? `Sufixo do URL final, da conta: ${GOOGLE_ACCOUNT_URL_SUFFIX}`
+                  : `Parâmetros de URL: ${META_URL_TAGS}`}
             </span>
           )}
         </div>
@@ -504,16 +624,17 @@ function DraftCampaign({ draft }: { draft: CampaignDraft }) {
           {draft.platform === 'google_search'
             ? 'Vai tudo para o Google na mesma escrita: estados, cidades e raio na campanha (presença), idioma português, negativas na campanha, palavras-chave e anúncio responsivo no grupo. Antes de escrever, o executor valida a solicitação inteira com validateOnly.'
             : draft.platform === 'youtube'
-              ? 'Registrado no pedido. Em Demand Gen, localização, idioma e a restrição ao YouTube moram no grupo de anúncios: só chegam ao Google quando existir a criação dele.'
+              ? 'Vai tudo para o Google na mesma escrita, pausado: estados e cidades, idioma português, idades e sinais no grupo de anúncios (só YouTube), a meta só com a conversão escolhida e o anúncio de vídeo com a logo. Antes de escrever, o executor valida a solicitação inteira com validateOnly.'
               : metaTree
                 ? 'Área de alcance, faixa etária e idioma português vão para a Meta no conjunto de anúncios, criado junto com a campanha.'
                 : 'Registrado no pedido. Público e localização só chegam à Meta quando existir a criação do conjunto de anúncios.'}
         </span>
       </div>
-      {draft.youtube && (
+      {draft.youtube && Array.isArray(draft.youtube.videos) && (
         <YoutubePreview
-          videoUrl={draft.youtube.videoUrl}
-          headline={draft.youtube.headline}
+          videoUrl={draft.youtube.videos[0] ?? ''}
+          headline={draft.youtube.headlines[0] ?? ''}
+          businessName={draft.youtube.businessName}
           destinationUrl={draft.destinationUrl}
         />
       )}
@@ -839,7 +960,7 @@ export function ApprovalDetailPage() {
           {approval.savedDraftDrift.savedDraftName}”.
         </Alert>
       )}
-      {approval.draft && <DraftCampaign draft={approval.draft} />}
+      {approval.draft && <DraftCampaign draft={approval.draft} approvalId={approval.id} />}
       {approval.addAds && <AddAdsSection addAds={approval.addAds} />}
       {approval.changeKind === 'resume_campaign' && approval.changeStatus !== 'executed' && (
         <Alert kind="info">

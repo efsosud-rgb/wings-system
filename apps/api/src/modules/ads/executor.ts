@@ -1,12 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   AD_ACCOUNT_PLATFORM,
+  DEMAND_GEN_AGE_OPEN_END,
   GOOGLE_CHANNEL_TYPE,
+  YOUTUBE_CAMPAIGN_URL_SUFFIX,
   addAdsPayloadSchema,
   META_OBJECTIVE,
   adDestination,
   isGooglePlatform,
   parseSearchKeyword,
+  parseYoutubeVideoRef,
+  stripUtms,
   type CampaignDraft,
 } from '@wings/shared';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -49,9 +53,12 @@ import {
   type PlannedWrite,
   type PlatformObjective,
   type PreflightOutcome,
+  type GoogleDemandGenSpec,
   type ResumeCompanions,
 } from './platform/types.js';
 import { reconciliationFreshness } from './reconcile.js';
+import { withDemandGenLogo } from './demand-gen.js';
+import type { ObjectStorage } from '../../lib/storage/index.js';
 
 /**
  * Execution: the first and only place a change reaches a real ad platform.
@@ -109,6 +116,8 @@ export interface ExecuteOptions {
   metaPixelId?: string;
   /** Where uploaded ad videos live (`CREATIVE_VIDEO_DIR`). */
   videoDir?: string;
+  /** The Drive's storage: a YouTube campaign's logo is read from it right before the write. */
+  storage?: ObjectStorage | null;
 }
 
 function requestHashOf(input: Record<string, unknown>): string {
@@ -332,7 +341,7 @@ export async function executeApprovedChange(
 
   // What is about to go out, built once: the same request is validated where
   // the platform can validate without writing, and then sent.
-  const write: PlannedWrite = draft
+  const planned: PlannedWrite = draft
     ? { kind: 'create_campaign', spec: createSpecOf(draft) }
     : change.kind === 'set_daily_budget'
       ? {
@@ -349,6 +358,11 @@ export async function executeApprovedChange(
             // system itself created under the campaign — and nothing else.
             enableWith: await companionsOf(db, campaign!.id),
           };
+  // A YouTube campaign's logo goes inline in the write: read from the Drive
+  // now, checked again as when it was asked for, or nothing is sent.
+  const loaded = await withDemandGenLogo(db, options.storage ?? null, planned);
+  if (!loaded.ok) return refuse('media_missing', loaded.message);
+  const write = loaded.write;
 
   // 8. Preflight. A refusal here is Google saying no to the exact request,
   // so it is recorded and the reservation given back like any rejection;
@@ -645,7 +659,7 @@ export function createSpecOf(
             // Traffic buys clicks; leads and conversions buy conversions.
             // Search bids as the draft says (below); Demand Gen by objective.
             bidding:
-              search?.bidding === 'maximize_conversions'
+              payload.platform === 'youtube' || search?.bidding === 'maximize_conversions'
                 ? 'MAXIMIZE_CONVERSIONS'
                 : search?.bidding === 'maximize_clicks' || payload.objective === 'traffic'
                   ? 'MAXIMIZE_CLICKS'
@@ -658,6 +672,9 @@ export function createSpecOf(
               // A draft approved before the map existed has none.
               customLocations: payload.reach.customLocations ?? [],
             },
+            ...(payload.platform === 'youtube'
+              ? { demandGen: demandGenSpecOf(draft.name, payload) }
+              : {}),
             ...(payload.platform === 'google_search' && search
               ? {
                   search: {
@@ -704,6 +721,43 @@ export function createSpecOf(
 }
 
 /**
+ * A YouTube draft as Google's Demand Gen spec. A draft from before the video
+ * ad existed (link and headline only) has none, and the client refuses it
+ * with nothing sent. The logo's bytes are read later, right before the write.
+ */
+function demandGenSpecOf(name: string, payload: CampaignDraft): GoogleDemandGenSpec | undefined {
+  const youtube = payload.youtube;
+  if (!youtube || !Array.isArray(youtube.videos)) return undefined;
+  return {
+    adGroupName: youtube.adGroupName?.trim() || name,
+    channels: {
+      youtubeInStream: youtube.channels.includes('youtube_in_stream'),
+      youtubeInFeed: youtube.channels.includes('youtube_in_feed'),
+      youtubeShorts: youtube.channels.includes('youtube_shorts'),
+    },
+    ageMin: youtube.ageMin,
+    ageMax: youtube.ageMax === DEMAND_GEN_AGE_OPEN_END ? null : youtube.ageMax,
+    includeUnknownAge: youtube.includeUnknownAge,
+    audienceSegments: youtube.audienceSegments.map(({ kind, id, name }) => ({ kind, id, name })),
+    conversionActionId: youtube.conversionAction.id,
+    conversionActionName: youtube.conversionAction.name,
+    targetCpaCents: youtube.targetCpaCents,
+    videoIds: youtube.videos.flatMap((ref) => {
+      const id = parseYoutubeVideoRef(ref);
+      return id ? [id] : [];
+    }),
+    headlines: youtube.headlines,
+    longHeadlines: youtube.longHeadlines,
+    descriptions: youtube.descriptions,
+    businessName: youtube.businessName,
+    logo: { driveFileId: youtube.logoFileId, sha256: youtube.logoSha256 },
+    // The UTMs ride on the campaign's own suffix, never on the link.
+    finalUrl: stripUtms(payload.destinationUrl) ?? payload.destinationUrl,
+    finalUrlSuffix: YOUTUBE_CAMPAIGN_URL_SUFFIX,
+  };
+}
+
+/**
  * The ad groups and ads this system created (paused) under a campaign, from
  * the steps of its executions. Nothing made by hand on the platform is ever
  * here, so a resume switches on only what the system itself switched off.
@@ -746,6 +800,7 @@ export async function preflightChange(
   db: Database,
   client: AdsPlatformClient,
   changeRequestId: string,
+  options: { storage?: ObjectStorage | null } = {},
 ): Promise<PreflightResult> {
   const refuse = (reason: ExecutionRefusal, message: string): PreflightResult => ({
     ok: false,
@@ -811,7 +866,9 @@ export async function preflightChange(
             };
   }
 
-  const outcome = await client.validateWrite(write);
+  const loaded = await withDemandGenLogo(db, options.storage ?? null, write);
+  if (!loaded.ok) return refuse('media_missing', loaded.message);
+  const outcome = await client.validateWrite(loaded.write);
   if (outcome.status === 'ok') return { ok: true, status: 'ok', operations: outcome.operations };
   if (outcome.status === 'rejected') return { ok: false, ...outcome };
   return { ok: false, status: 'unavailable', reason: outcome.reason };

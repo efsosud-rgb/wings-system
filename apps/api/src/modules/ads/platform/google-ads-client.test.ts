@@ -47,11 +47,52 @@ const searchSpec: CreateCampaignSpec = {
   },
 };
 
+const LOGO = Buffer.from('a square png, as far as this test cares').toString('base64');
+
 const youtubeSpec: CreateCampaignSpec = {
-  ...searchSpec,
-  name: 'YouTube — institucional',
-  google: { ...searchSpec.google!, channel: 'DEMAND_GEN', bidding: 'MAXIMIZE_CLICKS' },
+  name: 'YouTube · Formatação · Out26',
+  objective: 'OUTCOME_LEADS',
+  status: 'PAUSED',
+  dailyBudgetCents: 5000,
+  google: {
+    channel: 'DEMAND_GEN',
+    bidding: 'MAXIMIZE_CONVERSIONS',
+    startDate: '2026-10-09',
+    endDate: '2026-10-15',
+    reach: { states: ['SP'], cities: [{ name: 'Curitiba', state: 'PR' }], customLocations: [] },
+    demandGen: {
+      adGroupName: 'YouTube · Formatação · Out26',
+      channels: { youtubeInStream: true, youtubeInFeed: true, youtubeShorts: true },
+      ageMin: 25,
+      ageMax: null,
+      includeUnknownAge: false,
+      audienceSegments: [],
+      conversionActionId: '77',
+      conversionActionName: 'RD form conversion',
+      videoIds: ['34zzJBPHlYg', 'M0v5U4AaTvo'],
+      headlines: ['Sua empresa pode virar franquia?'],
+      longHeadlines: ['Sua empresa tem potencial para virar uma rede de franquias'],
+      descriptions: ['O sucesso começa com um diagnóstico.'],
+      businessName: 'Wings Company',
+      logo: { driveFileId: '7c1f4a52-2b8e-4d0a-9f3e-1a2b3c4d5e6f', data: LOGO },
+      finalUrl: 'https://wingssystem.online/lp/formatacao',
+      finalUrlSuffix:
+        'utm_source=youtube&utm_medium=cpc&utm_campaign={campaignid}&utm_content={creative}',
+    },
+  },
 };
+
+const withDemandGen = (
+  patch: Partial<NonNullable<NonNullable<CreateCampaignSpec['google']>['demandGen']>>,
+  google: Partial<NonNullable<CreateCampaignSpec['google']>> = {},
+): CreateCampaignSpec => ({
+  ...youtubeSpec,
+  google: {
+    ...youtubeSpec.google!,
+    ...google,
+    demandGen: { ...youtubeSpec.google!.demandGen!, ...patch },
+  },
+});
 
 function writer(api = fakeGoogleApi()) {
   return { api, client: new GoogleAdsWriteClient(api.reader, { confirmWrites: true }) };
@@ -383,42 +424,363 @@ describe('the reach translator: a radius on Google', () => {
     expect(criteria.filter((criterion) => criterion?.location)).toHaveLength(0);
   });
 
-  it('on YouTube the radius stays in the approved draft, like every other place', async () => {
+  it('on YouTube a radius is refused before anything is read or sent', async () => {
     const { api, client } = writer();
-    const outcome = await client.createCampaign({
-      ...youtubeSpec,
-      google: {
-        ...youtubeSpec.google!,
-        reach: { states: ['SP'], cities: [], customLocations: [campinas] },
-      },
-    });
+    const outcome = await client.createCampaign(
+      withDemandGen({}, { reach: { states: ['SP'], cities: [], customLocations: [campinas] } }),
+    );
 
-    expect(outcome.status).toBe('applied');
-    // Demand Gen takes places on the ad group, which is not created yet.
-    expect(operationsOf(api)).toHaveLength(2);
-    if (outcome.status !== 'applied') return;
-    expect(outcome.detail).toMatchObject({ radii: [] });
+    expect(outcome).toMatchObject({ status: 'rejected', code: 'google_radius_not_supported' });
+    expect(api.calls).toHaveLength(0);
   });
 });
 
-describe('creating a YouTube campaign', () => {
-  it('is a Demand Gen shell: budget and campaign only, nothing about places', async () => {
-    const { api, client } = writer();
+/** The account's conversion, as Google names it. */
+const RD_FORM = { id: '77', name: 'RD form conversion', status: 'ENABLED' };
+
+describe('creating a YouTube (Demand Gen) campaign', () => {
+  it('sends the whole tree in one atomic write, everything paused and on YouTube only', async () => {
+    const { api, client } = writer(fakeGoogleApi({ conversionActions: [RD_FORM] }));
     const outcome = await client.createCampaign(youtubeSpec);
 
     expect(outcome.status).toBe('applied');
+    expect(api.writeCalls()).toHaveLength(1);
     const operations = operationsOf(api);
-    expect(operations).toHaveLength(2);
-    const campaign = operations[1]?.campaignOperation?.create;
-    expect(campaign).toMatchObject({
+    const kinds = operations.map((op) => Object.keys(op)[0]);
+    expect(kinds).toEqual([
+      'campaignBudgetOperation',
+      'campaignOperation',
+      'customConversionGoalOperation',
+      'conversionGoalCampaignConfigOperation',
+      'assetOperation',
+      'assetOperation',
+      'assetOperation',
+      'audienceOperation',
+      'adGroupOperation',
+      'adGroupCriterionOperation',
+      'adGroupCriterionOperation',
+      'adGroupCriterionOperation',
+      'adGroupCriterionOperation',
+      'adGroupAdOperation',
+    ]);
+
+    expect(operations[1]?.campaignOperation?.create).toMatchObject({
       advertisingChannelType: 'DEMAND_GEN',
       status: 'PAUSED',
-      targetSpend: {},
+      maximizeConversions: {},
+      demandGenCampaignSettings: { upgradedTargeting: true },
+      finalUrlSuffix:
+        'utm_source=youtube&utm_medium=cpc&utm_campaign={campaignid}&utm_content={creative}',
+      containsEuPoliticalAdvertising: 'DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING',
     });
-    // Demand Gen takes locations, language and channels on the ad group.
-    expect(campaign).not.toHaveProperty('networkSettings');
-    expect(campaign).not.toHaveProperty('advertisingChannelSubType');
-    expect(api.searchCalls('geo_target_constant')).toHaveLength(0);
+    // Places and language are on the ad group, never on the campaign.
+    expect(operations.some((op) => op.campaignCriterionOperation)).toBe(false);
+
+    // It bids for the chosen conversion only, through a custom goal made for it.
+    expect(operations[2]?.customConversionGoalOperation?.create).toMatchObject({
+      name: 'Wings System · RD form conversion (77)',
+      conversionActions: ['customers/4268586278/conversionActions/77'],
+      status: 'ENABLED',
+    });
+    expect(operations[3]).toMatchObject({
+      conversionGoalCampaignConfigOperation: {
+        update: {
+          resourceName: 'customers/4268586278/conversionGoalCampaignConfigs/-2',
+          goalConfigLevel: 'CAMPAIGN',
+          customConversionGoal: 'customers/4268586278/customConversionGoals/-5',
+        },
+        updateMask: 'goal_config_level,custom_conversion_goal',
+      },
+    });
+
+    expect(operations[4]?.assetOperation?.create).toMatchObject({ imageAsset: { data: LOGO } });
+    expect(
+      operations.slice(5, 7).map((op) => op.assetOperation?.create?.youtubeVideoAsset),
+    ).toEqual([{ youtubeVideoId: '34zzJBPHlYg' }, { youtubeVideoId: 'M0v5U4AaTvo' }]);
+    // 25 to 65+, people of unknown age left out.
+    expect(operations[7]?.audienceOperation?.create).toMatchObject({
+      dimensions: [{ age: { ageRanges: [{ minAge: 25 }], includeUndetermined: false } }],
+    });
+
+    expect(operations[8]?.adGroupOperation?.create).toMatchObject({
+      status: 'PAUSED',
+      campaign: 'customers/4268586278/campaigns/-2',
+      demandGenAdGroupSettings: {
+        channelControls: {
+          selectedChannels: {
+            youtubeInStream: true,
+            youtubeInFeed: true,
+            youtubeShorts: true,
+            discover: false,
+            gmail: false,
+            display: false,
+          },
+        },
+      },
+      audienceSetting: { useAudienceGrouped: true },
+      optimizedTargetingEnabled: false,
+    });
+    const criteria = operations.slice(9, 13).map((op) => op.adGroupCriterionOperation?.create);
+    expect(criteria.filter((criterion) => criterion?.location)).toHaveLength(2);
+    expect(criteria).toContainEqual({
+      adGroup: 'customers/4268586278/adGroups/-3',
+      language: { languageConstant: PORTUGUESE_LANGUAGE_CONSTANT },
+    });
+    expect(criteria).toContainEqual({
+      adGroup: 'customers/4268586278/adGroups/-3',
+      audience: { audience: 'customers/4268586278/audiences/-4' },
+    });
+
+    expect(operations[13]?.adGroupAdOperation?.create).toMatchObject({
+      status: 'PAUSED',
+      ad: {
+        finalUrls: ['https://wingssystem.online/lp/formatacao'],
+        demandGenVideoResponsiveAd: {
+          videos: [
+            { asset: 'customers/4268586278/assets/-11' },
+            { asset: 'customers/4268586278/assets/-12' },
+          ],
+          logoImages: [{ asset: 'customers/4268586278/assets/-10' }],
+          businessName: { text: 'Wings Company' },
+          headlines: [{ text: 'Sua empresa pode virar franquia?' }],
+        },
+      },
+    });
+
+    if (outcome.status !== 'applied') return;
+    // The ad group and the ad become steps, so a resume switches them on.
+    expect(outcome.created?.map((item) => item.kind)).toEqual(['ad_group', 'ad']);
+    expect(outcome.detail).toMatchObject({
+      channel: 'DEMAND_GEN',
+      language: PORTUGUESE_LANGUAGE_CONSTANT,
+      demandGen: {
+        conversionAction: { id: '77', name: 'RD form conversion' },
+        conversionGoal: 'criada nesta escrita',
+        videos: ['34zzJBPHlYg', 'M0v5U4AaTvo'],
+        ages: { min: 25, max: null, unknown: false },
+      },
+    });
+    expect(api.goalConfigs).toHaveLength(1);
+    expect(api.assets.find((asset) => asset.imageBytes)).toBeTruthy();
+  });
+
+  it("reuses the account's goal, bids at the target CPA and sends the signals", async () => {
+    const api = fakeGoogleApi({
+      conversionActions: [RD_FORM],
+      customAudiences: [{ id: '1019547251', name: 'Concorrentes' }],
+      userLists: [{ id: '9291286078', name: 'All visitors' }],
+      customConversionGoals: [
+        {
+          resourceName: 'customers/4268586278/customConversionGoals/555',
+          conversionActions: ['customers/4268586278/conversionActions/77'],
+          status: 'ENABLED',
+        },
+      ],
+    });
+    const { client } = writer(api);
+    const outcome = await client.createCampaign(
+      withDemandGen({
+        targetCpaCents: 9000,
+        ageMin: 35,
+        ageMax: 54,
+        includeUnknownAge: true,
+        channels: { youtubeInStream: true, youtubeInFeed: false, youtubeShorts: false },
+        audienceSegments: [
+          { kind: 'custom_audience', id: '1019547251', name: 'Concorrentes' },
+          { kind: 'user_list', id: '9291286078', name: 'All visitors' },
+        ],
+      }),
+    );
+
+    expect(outcome.status).toBe('applied');
+    const operations = operationsOf(api);
+    expect(operations.some((op) => op.customConversionGoalOperation)).toBe(false);
+    expect(operations[1]?.campaignOperation?.create).toMatchObject({
+      maximizeConversions: { targetCpaMicros: microsFromCents(9000) },
+    });
+    const goal = operations.find((op) => op.conversionGoalCampaignConfigOperation);
+    expect(goal).toMatchObject({
+      conversionGoalCampaignConfigOperation: {
+        update: { customConversionGoal: 'customers/4268586278/customConversionGoals/555' },
+      },
+    });
+    expect(operations.find((op) => op.audienceOperation)).toMatchObject({
+      audienceOperation: {
+        create: {
+          dimensions: [
+            { age: { ageRanges: [{ minAge: 35, maxAge: 54 }], includeUndetermined: true } },
+            {
+              audienceSegments: {
+                segments: [
+                  {
+                    customAudience: {
+                      customAudience: 'customers/4268586278/customAudiences/1019547251',
+                    },
+                  },
+                  { userList: { userList: 'customers/4268586278/userLists/9291286078' } },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    });
+    expect(operations.find((op) => op.adGroupOperation)).toMatchObject({
+      adGroupOperation: {
+        create: {
+          demandGenAdGroupSettings: {
+            channelControls: {
+              selectedChannels: {
+                youtubeInStream: true,
+                youtubeInFeed: false,
+                youtubeShorts: false,
+              },
+            },
+          },
+          // Signals: Google may look beyond them, never beyond the ages.
+          optimizedTargetingEnabled: true,
+          excludeDemographicExpansion: true,
+        },
+      },
+    });
+    if (outcome.status !== 'applied') return;
+    expect(outcome.detail).toMatchObject({
+      demandGen: { conversionGoal: 'customers/4268586278/customConversionGoals/555' },
+    });
+  });
+
+  it('sends no audience when it would restrict nothing', async () => {
+    const { api, client } = writer(fakeGoogleApi({ conversionActions: [RD_FORM] }));
+    const outcome = await client.createCampaign(
+      withDemandGen({ ageMin: 18, ageMax: null, includeUnknownAge: true }),
+    );
+    expect(outcome.status).toBe('applied');
+    const operations = operationsOf(api);
+    expect(operations.some((op) => op.audienceOperation)).toBe(false);
+    expect(
+      operations.some((op) => op.adGroupCriterionOperation?.create?.audience !== undefined),
+    ).toBe(false);
+  });
+
+  it('refuses a conversion action that is not live in the account, with nothing written', async () => {
+    const api = fakeGoogleApi({
+      conversionActions: [{ id: '77', name: 'RD form conversion', status: 'REMOVED' }],
+    });
+    const { client } = writer(api);
+    const outcome = await client.createCampaign(youtubeSpec);
+
+    expect(outcome).toMatchObject({ status: 'rejected', code: 'google_conversion_unavailable' });
+    expect(api.mutateCalls()).toHaveLength(0);
+  });
+
+  it('sends 65+ as an open end: no maximum age', async () => {
+    const { api, client } = writer(fakeGoogleApi({ conversionActions: [RD_FORM] }));
+    await client.createCampaign(withDemandGen({ ageMin: 65, ageMax: null }));
+    expect(operationsOf(api).find((op) => op.audienceOperation)).toMatchObject({
+      audienceOperation: {
+        create: { dimensions: [{ age: { ageRanges: [{ minAge: 65 }] } }] },
+      },
+    });
+    const range = (
+      operationsOf(api).find((op) => op.audienceOperation)?.audienceOperation?.create
+        ?.dimensions as { age: { ageRanges: Record<string, number>[] } }[]
+    )[0]?.age.ageRanges[0];
+    expect(range).not.toHaveProperty('maxAge');
+  });
+
+  it('refuses when what the approver read no longer matches the account, with nothing written', async () => {
+    // The conversion was renamed in Google Ads after approval.
+    const renamed = fakeGoogleApi({
+      conversionActions: [{ id: '77', name: 'Formulário antigo', status: 'ENABLED' }],
+    });
+    expect(await writer(renamed).client.createCampaign(youtubeSpec)).toMatchObject({
+      status: 'rejected',
+      code: 'google_conversion_changed',
+    });
+    expect(renamed.mutateCalls()).toHaveLength(0);
+
+    // A signal that left the account.
+    const gone = fakeGoogleApi({ conversionActions: [RD_FORM], customAudiences: [] });
+    const withSignal = withDemandGen({
+      audienceSegments: [{ kind: 'custom_audience', id: '1019547251', name: 'Concorrentes' }],
+    });
+    expect(await writer(gone).client.createCampaign(withSignal)).toMatchObject({
+      status: 'rejected',
+      code: 'google_audience_changed',
+    });
+    expect(gone.mutateCalls()).toHaveLength(0);
+
+    // The goal this system would make exists, edited to hold other conversions.
+    const conflict = fakeGoogleApi({
+      conversionActions: [RD_FORM],
+      customConversionGoals: [
+        {
+          resourceName: 'customers/4268586278/customConversionGoals/9',
+          name: 'Wings System · RD form conversion (77)',
+          conversionActions: [
+            'customers/4268586278/conversionActions/77',
+            'customers/4268586278/conversionActions/12',
+          ],
+          status: 'ENABLED',
+        },
+      ],
+    });
+    expect(await writer(conflict).client.createCampaign(youtubeSpec)).toMatchObject({
+      status: 'rejected',
+      code: 'google_conversion_goal_conflict',
+    });
+    expect(conflict.mutateCalls()).toHaveLength(0);
+  });
+
+  it('refuses a spec without its video ad or its logo, with nothing sent', async () => {
+    const { api, client } = writer();
+    const shell = await client.createCampaign({
+      ...youtubeSpec,
+      google: { ...youtubeSpec.google!, demandGen: undefined },
+    });
+    expect(shell).toMatchObject({ status: 'rejected', code: 'google_demand_gen_spec_missing' });
+    const noLogo = await client.createCampaign(
+      withDemandGen({ logo: { driveFileId: '7c1f4a52-2b8e-4d0a-9f3e-1a2b3c4d5e6f' } }),
+    );
+    expect(noLogo).toMatchObject({ status: 'rejected', code: 'google_logo_missing' });
+    expect(api.calls).toHaveLength(0);
+  });
+
+  it('is rehearsed with the same request, validate-only', async () => {
+    const api = fakeGoogleApi({ conversionActions: [RD_FORM] });
+    const reader = new GoogleAdsPlatformClient(api.reader);
+    const outcome = await reader.validateWrite({ kind: 'create_campaign', spec: youtubeSpec });
+
+    expect(outcome).toMatchObject({ status: 'ok' });
+    if (outcome.status !== 'ok') return;
+    expect(outcome.operations).toContain('Logo');
+    expect(outcome.operations).toContain('Anúncio de vídeo (Demand Gen)');
+    expect(outcome.operations).toContain('Lance para "RD form conversion"');
+    expect(api.mutateCalls()[0]?.body.validateOnly).toBe(true);
+    expect(api.writeCalls()).toHaveLength(0);
+  });
+
+  it("reads what the builder offers: the account's conversions and segments", async () => {
+    const api = fakeGoogleApi({
+      conversionActions: [
+        { id: '7804997444', name: 'RD form conversion', status: 'ENABLED', primaryForGoal: true },
+        { id: '12', name: 'form_submit', status: 'ENABLED', category: 'SUBMIT_LEAD_FORM' },
+        { id: '13', name: 'Antiga', status: 'REMOVED' },
+      ],
+      userLists: [{ id: '9291286078', name: 'All visitors' }],
+      customAudiences: [{ id: '1019547251', name: 'Concorrentes' }],
+    });
+    const options = await new GoogleAdsPlatformClient(api.reader).demandGenOptions();
+
+    expect(options.conversionActions).toEqual([
+      { id: '12', name: 'form_submit', category: 'SUBMIT_LEAD_FORM', primary: false },
+      { id: '7804997444', name: 'RD form conversion', category: null, primary: true },
+    ]);
+    expect(options.audienceSegments).toEqual([
+      { kind: 'user_list', id: '9291286078', name: 'All visitors' },
+      { kind: 'custom_audience', id: '1019547251', name: 'Concorrentes' },
+    ]);
+    expect(api.writeCalls()).toHaveLength(0);
   });
 });
 
