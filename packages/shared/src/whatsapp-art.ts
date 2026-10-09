@@ -176,6 +176,12 @@ export const waTemplateSendSchema = z.object({
   params: z.array(z.string().trim().max(1024)).max(20).default([]),
   /** The lead's company: "a Padaria" (default) or "o Bar". */
   companyArticle: z.enum(BRAND_ARTICLES).default('a'),
+  /**
+   * What the screen showed before the click. When the send would now go
+   * otherwise (the window closed: a paid template instead of a free message),
+   * the server refuses with `send_mode_changed` and the seller looks again.
+   */
+  expect: z.object({ sendAs: z.enum(['free', 'template']), charged: z.boolean() }).optional(),
 });
 export type WaTemplateSend = z.input<typeof waTemplateSendSchema>;
 

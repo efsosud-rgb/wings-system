@@ -1,6 +1,7 @@
 import {
   WA_KIND_LABELS,
   WA_STATUS_LABELS,
+  waTemplateFamily,
   type BrandArticle,
   type DealWhatsApp,
   type WaMessage,
@@ -267,20 +268,19 @@ function TemplateCompose({
   const list = templates.data?.templates ?? [];
   const [chosen, setChosen] = useState('');
   const template: WaTemplate | undefined = list.find((t) => `${t.name}|${t.language}` === chosen);
-  // Null until the server filled the fields it knows (lead, seller, brand, company).
-  const [params, setParams] = useState<string[] | null>(null);
+  // What the seller typed, for this template only: switching templates starts from the server's values.
+  const [draft, setDraft] = useState<{ key: string; params: string[] } | null>(null);
   const [companyArticle, setCompanyArticle] = useState<BrandArticle>('a');
-  useEffect(() => {
-    setParams(null);
-    setCompanyArticle('a');
-  }, [chosen]);
-  const settledParams = useSettled(params);
+  useEffect(() => setCompanyArticle('a'), [chosen]);
+  const typed = draft?.key === chosen ? draft.params : null;
+  const settledParams = useSettled(typed);
   const input = useMemo(
     () =>
       template
         ? {
             name: template.name,
             language: template.language,
+            // Empty: the server fills what it knows (lead, seller, brand, company).
             params: settledParams ?? [],
             companyArticle,
           }
@@ -288,15 +288,31 @@ function TemplateCompose({
     [template, settledParams, companyArticle],
   );
   const previewQuery = useTemplatePreview(thread, input);
-  const preview = template ? previewQuery.data?.preview : undefined;
+  const data = previewQuery.data?.preview;
+  // Only a preview of the chosen template counts, never the previous one shown while this one loads.
+  const preview =
+    template &&
+    data &&
+    !previewQuery.isPlaceholderData &&
+    data.family === waTemplateFamily(template.name) &&
+    data.language === template.language
+      ? data
+      : undefined;
+  const { refetch } = previewQuery;
+  // When the window closes, what goes changes (a common message becomes a paid template): ask again.
+  const closesAt = preview?.windowExpiresAt ? new Date(preview.windowExpiresAt).getTime() : null;
   useEffect(() => {
-    if (preview && params === null) setParams(preview.fields.map((field) => field.value));
-  }, [preview, params]);
+    if (closesAt === null) return;
+    const timer = setTimeout(() => void refetch(), Math.max(0, closesAt - Date.now()) + 1_000);
+    return () => clearTimeout(timer);
+  }, [closesAt, refetch]);
   const art = useWhatsAppArt(thread, Boolean(preview?.withArt));
-  const values = params ?? preview?.fields.map((field) => field.value) ?? [];
+  const values = preview
+    ? preview.fields.map((field, i) => (field.locked ? field.value : (typed?.[i] ?? field.value)))
+    : [];
   const ready =
-    Boolean(template && preview) &&
-    preview!.fields.every((field, i) => (field.locked ? true : (values[i] ?? '').trim() !== ''));
+    preview !== undefined &&
+    preview.fields.every((field, i) => (field.locked ? true : (values[i] ?? '').trim() !== ''));
   const syncError = refresh.data?.syncError ?? templates.data?.syncError;
 
   if (optedOut)
@@ -321,15 +337,25 @@ function TemplateCompose({
       aria-label="Enviar modelo"
       onSubmit={(event) => {
         event.preventDefault();
-        if (!template || !ready || send.isPending) return;
+        if (!template || !preview || !ready || send.isPending) return;
         send.mutate(
           {
             name: template.name,
             language: template.language,
             params: values.map((value) => value.trim()),
             companyArticle,
+            // What the screen showed: if it changed (the window closed), the server asks again.
+            expect: { sendAs: preview.sendAs, charged: preview.charged },
           },
-          { onSuccess: () => setChosen('') },
+          {
+            onSuccess: () => {
+              setChosen('');
+              setDraft(null);
+            },
+            onError: (error) => {
+              if (error instanceof ApiError && error.code === 'send_mode_changed') void refetch();
+            },
+          },
         );
       }}
     >
@@ -369,6 +395,9 @@ function TemplateCompose({
           {errorText(previewQuery.error, 'Não deu para montar a prévia deste modelo.')}
         </p>
       )}
+      {template && !preview && !previewQuery.isError && (
+        <p className="crm-sub">Montando a prévia…</p>
+      )}
       {preview && (
         <>
           {preview.fields.length > 0 && (
@@ -384,9 +413,12 @@ function TemplateCompose({
                     disabled={field.locked}
                     title={field.locked ? 'A marca desta conversa' : undefined}
                     onChange={(event) =>
-                      setParams(
-                        values.map((value, i) => (i === index ? event.target.value : value)),
-                      )
+                      setDraft({
+                        key: chosen,
+                        params: values.map((value, i) =>
+                          i === index ? event.target.value : value,
+                        ),
+                      })
                     }
                   />
                 </label>

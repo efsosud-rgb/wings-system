@@ -21,6 +21,11 @@ Expansão sai com a própria logo no cabeçalho dos modelos; a Formatação sai 
 - **Auditoria (por id):** `client.whatsapp_art_upload_requested`, `client.whatsapp_art_set` (`fileId`,
   `previousFileId`), `client.whatsapp_art_refused` (motivo), `client.whatsapp_art_removed`,
   `client.whatsapp_article_set`, e `drive.file_uploaded`/`drive.file_previewed` com `purpose`.
+- **Exceção à regra de departamentos do Drive (decisão do plano):** a arte é um campo da marca, então quem
+  preenche a ficha envia e troca a arte mesmo sem o Drive do Marketing, e o vendedor que vê a negociação recebe o
+  link de 5 minutos da arte para a prévia. Isso vale só para o arquivo da arte (as rotas acima), nunca para o
+  resto da pasta Mídia. A confirmação aceita só um envio pedido como arte (nome "Arte do WhatsApp …", PNG/JPEG,
+  até 2 MB): um envio comum do Drive é 404 e não é lido, apagado nem concluído.
 - **Aviso:** a ficha mostra "Cadastre a arte do WhatsApp desta marca"; a lista de clientes marca
   "WhatsApp: falta a arte / o artigo"; o vendedor vê o mesmo aviso na prévia do modelo.
 
@@ -60,6 +65,10 @@ Uma função só (`planTemplate`), usada pela prévia e pelo envio, e pronta par
 - **A arte segue a voz:** conversa de marca → a arte da marca; conversa da Wings → a arte da Wings. Numa marca
   nunca vai a arte da Wings, e a voz da marca (nada com "Wings") vale também para a mensagem comum feita do
   modelo (texto, botões, rodapé e cabeçalho: 422 `brand_voice`).
+- **O que a tela mostrou vale:** o envio leva o modo que a prévia mostrou (`expect`); se a janela fechou (ou
+  abriu) entre a prévia e o clique, a resposta é 409 `send_mode_changed` com a prévia nova, e nada sai. A prévia
+  também se atualiza sozinha na hora em que a janela fecha. Os campos vão um por um, como a prévia deu: uma
+  lista mais curta ou mais longa é recusada (422 `template_params`), nunca completada.
 - **Pedido para parar:** quem pediu para não receber mensagens não recebe modelo, nem como mensagem comum.
 - **Custo na tela:** "Mensagem comum, sem custo (janela aberta até HH:MM)" ou "Modelo aprovado (marketing:
   cobrado pela Meta)". Modelo de utilidade dentro da janela aparece como sem custo (regra da Meta desde 07/2025).

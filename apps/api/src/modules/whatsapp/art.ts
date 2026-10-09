@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  WA_ART_MAX_BYTES,
   WA_ART_REFUSALS,
+  WA_ART_TYPES,
   waArtRefusal,
   type DriveUploadTicket,
   type WaArtRefusal,
@@ -134,8 +136,9 @@ export async function requestArtUpload(
   };
 }
 
+const ART_UPLOAD_PREFIX = 'Arte do WhatsApp ';
 const artFileName = (mimeType: string, now: Date) =>
-  `Arte do WhatsApp ${now.toISOString().slice(0, 10)}.${mimeType === 'image/png' ? 'png' : 'jpg'}`;
+  `${ART_UPLOAD_PREFIX}${now.toISOString().slice(0, 10)}.${mimeType === 'image/png' ? 'png' : 'jpg'}`;
 
 /**
  * Step two: the server reads what arrived. A file that is not the art is
@@ -157,8 +160,17 @@ export async function completeArtUpload(
     ),
   });
   const folder = await mediaFolderFor(deps.db, clientId);
-  // Only an upload asked for this client's art: never a Drive upload of another folder.
-  if (!upload || !folder || upload.folderId !== folder.id || upload.replaceFileId)
+  // Only an upload asked as this client's art: never a Drive upload, of this folder or another.
+  // Checked before reading anything, so a big Drive file is never loaded, deleted or claimed here.
+  if (
+    !upload ||
+    !folder ||
+    upload.folderId !== folder.id ||
+    upload.replaceFileId ||
+    !upload.name.startsWith(ART_UPLOAD_PREFIX) ||
+    upload.byteSize > WA_ART_MAX_BYTES ||
+    !(WA_ART_TYPES as readonly string[]).includes(upload.mimeType)
+  )
     throw new ArtError('not_found');
   const now = deps.now();
   const claim = async (tx: Pick<Database, 'update'>) => {

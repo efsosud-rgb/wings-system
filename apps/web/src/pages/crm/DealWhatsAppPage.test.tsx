@@ -12,23 +12,33 @@ import { DealWhatsAppPage } from './DealWhatsAppPage.js';
  * carries Visão geral, Anotações and Arquivos.
  */
 
-const { noteMutate, textMutate, templateMutate, previewCalls, queryState, mutation } = vi.hoisted(
-  () => ({
-    noteMutate: vi.fn(),
-    textMutate: vi.fn(),
-    templateMutate: vi.fn(),
-    previewCalls: [] as unknown[],
-    queryState: {
-      lead: null as Lead | null,
-      notes: [] as LeadNote[],
-      thread: null as DealWhatsApp | null,
-      templates: [] as WaTemplate[],
-      preview: null as WaTemplatePreview | null,
-      permissions: {} as Record<string, string>,
-    },
-    mutation: (mutate = vi.fn()) => ({ mutate, isPending: false, error: null }),
-  }),
-);
+const {
+  noteMutate,
+  textMutate,
+  templateMutate,
+  previewCalls,
+  refetchPreview,
+  queryState,
+  mutation,
+} = vi.hoisted(() => ({
+  noteMutate: vi.fn(),
+  textMutate: vi.fn(),
+  templateMutate: vi.fn(),
+  previewCalls: [] as unknown[],
+  refetchPreview: vi.fn(),
+  queryState: {
+    lead: null as Lead | null,
+    notes: [] as LeadNote[],
+    thread: null as DealWhatsApp | null,
+    templates: [] as WaTemplate[],
+    preview: null as WaTemplatePreview | null,
+    previews: {} as Record<string, WaTemplatePreview>,
+    shown: null as WaTemplatePreview | null,
+    loading: new Set<string>(),
+    permissions: {} as Record<string, string>,
+  },
+  mutation: (mutate = vi.fn()) => ({ mutate, isPending: false, error: null }),
+}));
 
 const thread = (over: Partial<DealWhatsApp> = {}): DealWhatsApp => ({
   conversationId: null,
@@ -156,13 +166,28 @@ vi.mock('../../api/whatsapp.js', () => ({
   useRefreshWhatsAppTemplates: () => mutation(),
   useSendWhatsAppText: () => mutation(textMutate),
   useSendWhatsAppTemplate: () => mutation(templateMutate),
-  useTemplatePreview: (_thread: unknown, input: unknown) => {
+  useTemplatePreview: (_thread: unknown, input: { name: string } | null) => {
     if (input) previewCalls.push(input);
+    // Like react-query's placeholderData: while a template's preview loads, the previous one is returned.
+    if (input && queryState.loading.has(input.name) && queryState.shown)
+      return {
+        isError: false,
+        isPlaceholderData: true,
+        refetch: refetchPreview,
+        data: { preview: queryState.shown },
+      };
+    const preview = input
+      ? (queryState.previews[input.name] ?? queryState.preview ?? undefined)
+      : undefined;
+    if (preview) queryState.shown = preview;
     return {
       isError: false,
-      data: input && queryState.preview ? { preview: queryState.preview } : undefined,
+      isPlaceholderData: false,
+      refetch: refetchPreview,
+      data: preview ? { preview } : undefined,
     };
   },
+
   useWhatsAppArt: (_thread: unknown, enabled: boolean) => ({
     data: enabled
       ? { fileId: 'f1', url: 'https://r2.example/arte?sig=1', expiresAt: '' }
@@ -190,6 +215,9 @@ beforeEach(() => {
   queryState.thread = thread();
   queryState.templates = [];
   queryState.preview = null;
+  queryState.previews = {};
+  queryState.shown = null;
+  queryState.loading = new Set();
   queryState.permissions = { 'leads.read': 'own', 'leads.write': 'own', 'leads.whatsapp': 'own' };
   queryState.lead = lead();
   queryState.notes = [
@@ -373,6 +401,7 @@ describe('the WhatsApp conversation screen', () => {
         language: 'pt_BR',
         params: ['Elena', 'Eric'],
         companyArticle: 'a',
+        expect: { sendAs: 'template', charged: true },
       },
       expect.anything(),
     );
@@ -443,7 +472,92 @@ describe('the WhatsApp conversation screen', () => {
         language: 'pt_BR',
         params: ['Elena', 'Eric', 'Padaria Sol'],
         companyArticle: 'o',
+        expect: { sendAs: 'free', charged: false },
       },
+      expect.anything(),
+    );
+  });
+
+  it("switching templates starts from the new template's values, never the previous ones", () => {
+    const base = (name: string, fields: WaTemplatePreview['fields']): WaTemplatePreview => ({
+      family: name,
+      version: name,
+      language: 'pt_BR',
+      category: 'UTILITY',
+      sendAs: 'free',
+      charged: false,
+      reason: null,
+      windowExpiresAt: '2026-10-07T18:00:00.000Z',
+      text: name,
+      footer: null,
+      buttons: [],
+      withArt: false,
+      notices: [],
+      fields,
+      usesCompanyArticle: false,
+      ready: true,
+    });
+    queryState.templates = [
+      {
+        name: 'boas_vindas',
+        language: 'pt_BR',
+        category: 'UTILITY',
+        body: 'x',
+        paramCount: 2,
+        artVersion: false,
+      },
+      {
+        name: 'lembrete',
+        language: 'pt_BR',
+        category: 'UTILITY',
+        body: 'y',
+        paramCount: 3,
+        artVersion: false,
+      },
+    ];
+    queryState.previews = {
+      boas_vindas: base('boas_vindas', [
+        { index: 1, role: 'lead', label: 'Nome do lead', value: 'Elena', locked: false },
+        { index: 2, role: 'seller', label: 'Seu nome', value: 'Eric', locked: false },
+      ]),
+      lembrete: base('lembrete', [
+        { index: 1, role: 'lead', label: 'Nome do lead', value: 'Elena', locked: false },
+        { index: 2, role: 'free', label: 'Dia', value: '', locked: false },
+        { index: 3, role: 'free', label: 'Link da reunião', value: '', locked: false },
+      ]),
+    };
+    const page = show();
+    const chat = within(screen.getByRole('region', { name: 'Conversa' }));
+    fireEvent.click(chat.getByRole('button', { name: 'Usar modelo' }));
+    fireEvent.change(chat.getByLabelText('Modelo'), { target: { value: 'boas_vindas|pt_BR' } });
+    fireEvent.change(chat.getByLabelText('Seu nome ({{2}})'), { target: { value: 'Thais' } });
+    // The new template's preview is still loading: the old one is not shown nor used.
+    queryState.loading.add('lembrete');
+    fireEvent.change(chat.getByLabelText('Modelo'), { target: { value: 'lembrete|pt_BR' } });
+    expect(chat.getByText('Montando a prévia…')).toBeTruthy();
+    expect(chat.queryByLabelText('Seu nome ({{2}})')).toBeNull();
+    expect(
+      (chat.getByRole('button', { name: 'Enviar modelo' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    queryState.loading.delete('lembrete');
+    page.rerender(
+      <MemoryRouter initialEntries={['/crm-vendas/negociacoes/l1/whatsapp']}>
+        <Routes>
+          <Route path="/crm-vendas/negociacoes/:id/whatsapp" element={<DealWhatsAppPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect((chat.getByLabelText('Dia ({{2}})') as HTMLInputElement).value).toBe('');
+    fireEvent.change(chat.getByLabelText('Link da reunião ({{3}})'), {
+      target: { value: 'https://meet.google.com/abc' },
+    });
+    fireEvent.change(chat.getByLabelText('Dia ({{2}})'), { target: { value: 'sexta, 10/10' } });
+    fireEvent.click(chat.getByRole('button', { name: 'Enviar mensagem' }));
+    expect(templateMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'lembrete',
+        params: ['Elena', 'sexta, 10/10', 'https://meet.google.com/abc'],
+      }),
       expect.anything(),
     );
   });

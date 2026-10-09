@@ -19,6 +19,7 @@ import {
 import {
   applyArtLoad,
   formatArtPlan,
+  listArtRuns,
   loadOwner,
   parseArticles,
   planArtLoad,
@@ -114,6 +115,22 @@ describe('carregar-artes', () => {
       article: null,
     });
 
+    // The read-only modes create nothing, not even the batch tables.
+    expect(await listArtRuns(db)).toEqual([]);
+    expect(
+      (
+        await undoArtLoad(db, 'artes-20261009T150000Z', {
+          apply: false,
+          actorId: null,
+          now: new Date(),
+        })
+      ).found,
+    ).toBe(false);
+    const tables = await db.execute<{ t: string | null }>(
+      sql`select to_regclass('ops.brand_art_runs')::text as t`,
+    );
+    expect(tables.rows[0]?.t).toBeNull();
+
     const owner = await loadOwner(db);
     expect(owner).not.toBeNull();
     // The refused one stays out (the command refuses the whole load while one is refused).
@@ -203,6 +220,9 @@ describe('carregar-artes', () => {
       sql`select undone_at from ops.brand_art_runs where batch_id = 'artes-20261009T150000Z'`,
     );
     expect(run.rows[0]?.undone_at).not.toBeNull();
+    expect((await listArtRuns(db))[0]).toMatch(
+      /^artes-20261009T150000Z · DESFEITO · artes 4, artigos 1$/,
+    );
     expect(
       (
         await undoArtLoad(db, 'artes-20991231T000000Z', {

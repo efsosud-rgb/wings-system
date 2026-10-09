@@ -181,14 +181,14 @@ inativo não tem árvore nova) ou envio não confirmado, o `--apply` para sem
 gravar nada, sai com código 2 e lista as pastas: reative o cliente ou mova
 o arquivo e rode de novo. Rodar de novo depois de aplicado não faz nada.
 
-| De (pasta de cliente antiga)                        | Para                        |
-| --------------------------------------------------- | --------------------------- |
-| Formatação/Marketing/Clientes/X (e `Mídia`)         | 08 Marketing (e `Mídia`)    |
-| Formatação/Jurídico/Clientes/X                      | 06 Jurídico                 |
-| Formatação/Financeiro/Clientes/X                    | 04 Financeiro               |
-| Formatação/Processos ou Projetos/Clientes/X         | 05 Operacional              |
-| Formatação/Produção, Logística, TI, RH-DP e RH-DP/Clientes/X | 05 Operacional/<Área> |
-| Comercial/Clientes/X                                | 07 Comercial                |
+| De (pasta de cliente antiga)                                 | Para                                                |
+| ------------------------------------------------------------ | --------------------------------------------------- |
+| Formatação/Marketing/Clientes/X (e `Mídia`)                  | 08 Marketing (e `Mídia`)                            |
+| Formatação/Jurídico/Clientes/X                               | 06 Jurídico                                         |
+| Formatação/Financeiro/Clientes/X                             | 04 Financeiro                                       |
+| Formatação/Processos ou Projetos/Clientes/X                  | 05 Operacional                                      |
+| Formatação/Produção, Logística, TI, RH-DP e RH-DP/Clientes/X | 05 Operacional/<Área>                               |
+| Comercial/Clientes/X                                         | 07 Comercial                                        |
 | Dossiê: Reuniões · Documentos · Contrato · Propostas · Mídia | Reuniões · Documentos Enviados · 06 · 07 · 08/Mídia |
 
 ## Permissões
@@ -206,14 +206,14 @@ perfil". Desde 2026-09-24 leitura e escrita são separadas (`access.ts`):
 - `DRIVE_CLIENT_VIEW_ROLES`: quem lê o cliente inteiro, qualquer que seja o
   departamento de cada pasta; escreve só nos próprios departamentos.
 
-| Perfil                                        | Lê e escreve                                        | Só lê                                |
-| --------------------------------------------- | --------------------------------------------------- | ------------------------------------ |
-| Marketing                                     | Formatação/Marketing; 08 e Entrega/08 do cliente    | 01–03 do cliente                     |
-| Formatação — Jurídico                         | Formatação/Jurídico; 06 e Entrega/06                | 01–03                                |
-| Formatação — Financeiro e Contábil/Tributário | Formatação/Financeiro; 04 e Entrega/04              | 01–03                                |
+| Perfil                                        | Lê e escreve                                                                                                        | Só lê             |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| Marketing                                     | Formatação/Marketing; 08 e Entrega/08 do cliente                                                                    | 01–03 do cliente  |
+| Formatação — Jurídico                         | Formatação/Jurídico; 06 e Entrega/06                                                                                | 01–03             |
+| Formatação — Financeiro e Contábil/Tributário | Formatação/Financeiro; 04 e Entrega/04                                                                              | 01–03             |
 | Formatação — Processos e Projetos             | Formatação/Processos e Projetos; 01–03, 05, a pasta do cliente, Documentos Enviados, Reuniões, Entrega (01–03 e 05) | o cliente inteiro |
-| Formatação — Logística, TI; RH / DP           | Formatação/Logística, TI; RH-DP e Formatação/RH-DP  | 01–03                                |
-| Gerente Comercial e vendedores                | Comercial; 07 e Entrega/07                          | —                                    |
+| Formatação — Logística, TI; RH / DP           | Formatação/Logística, TI; RH-DP e Formatação/RH-DP                                                                  | 01–03             |
+| Gerente Comercial e vendedores                | Comercial; 07 e Entrega/07                                                                                          | —                 |
 
 01–03 são de um departamento próprio, `imersao`, que Processos e Projetos
 escreve e toda a Formatação lê: é o contexto base da Imersão para os
@@ -290,3 +290,9 @@ their files answer 404 on every Drive route (tree, folder, files, search, trash,
 trash) and the Studio's file link. A seller opens a deal's file through `GET /leads/:id/files/:fileId/link`, which checks
 the lead first. See `docs/crm/permissoes-por-dono.md`.
 
+## A arte do WhatsApp das marcas (2026-10-09)
+
+Exceção à regra de departamentos, decidida no plano da arte nos modelos: o arquivo da arte de uma marca (pasta
+Mídia da marca) é enviado e trocado por quem preenche a ficha da marca (`clients.edit`; a arte da Wings, por
+`clients.manage`), e o vendedor que vê a negociação recebe um link de 5 minutos só desse arquivo, para a prévia
+do modelo. Nenhuma outra rota do Drive muda. Detalhes em `docs/whatsapp/arte-modelos.md`.

@@ -190,6 +190,14 @@ export async function ensureOpsTables(db: Database) {
     )`);
 }
 
+/** Whether a batch was ever applied here; the read-only modes never create the tables. */
+async function opsTablesExist(db: Database): Promise<boolean> {
+  const found = await db.execute<{ runs: string | null }>(
+    sql`select to_regclass('ops.brand_art_changes')::text as runs`,
+  );
+  return Boolean(found.rows[0]?.runs);
+}
+
 /** The oldest active Admin Master: the owner of the files and the author in the audit. */
 export async function loadOwner(db: Database): Promise<string | null> {
   const [row] = await db
@@ -322,7 +330,7 @@ export async function undoArtLoad(
   batchId: string,
   options: { apply: boolean; actorId: string | null; now: Date },
 ): Promise<{ found: boolean; lines: ArtUndoLine[] }> {
-  await ensureOpsTables(db);
+  if (!(await opsTablesExist(db))) return { found: false, lines: [] };
   const run = await db.execute<{ undone_at: Date | null }>(
     sql`select undone_at from ops.brand_art_runs where batch_id = ${batchId}`,
   );
@@ -403,7 +411,7 @@ export async function undoArtLoad(
 
 /** The batches applied in this database, oldest first. */
 export async function listArtRuns(db: Database): Promise<string[]> {
-  await ensureOpsTables(db);
+  if (!(await opsTablesExist(db))) return [];
   const runs = await db.execute<{
     batch_id: string;
     applied_at: Date | null;

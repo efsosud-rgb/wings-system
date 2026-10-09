@@ -299,6 +299,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         language: string;
         params: string[];
         companyArticle: 'a' | 'o';
+        expect?: { sendAs: 'free' | 'template'; charged: boolean };
       };
 
   async function send(
@@ -377,10 +378,29 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       if (!plan.ok)
         return reply.status(plan.status).send({ error: plan.error, message: plan.message });
       const { preview } = plan;
-      if (!preview.ready)
+      // One value per field, as the preview gave them: a short or long list is refused, never completed.
+      if (outgoing.params.length !== preview.fields.length || !preview.ready)
         return reply.status(422).send({
           error: 'template_params',
-          message: 'Preencha cada campo do modelo.',
+          message:
+            outgoing.params.length !== preview.fields.length
+              ? `Este modelo pede ${preview.fields.length} campo(s).`
+              : 'Preencha cada campo do modelo.',
+        });
+      // The window may have closed since the preview: the seller sees the new cost before it goes.
+      if (
+        outgoing.expect &&
+        (outgoing.expect.sendAs !== preview.sendAs || outgoing.expect.charged !== preview.charged)
+      )
+        return reply.status(409).send({
+          error: 'send_mode_changed',
+          message:
+            preview.sendAs === 'template'
+              ? `A janela de 24 h fechou: agora vai como modelo aprovado${
+                  preview.charged ? ', cobrado pela Meta' : ''
+                }. Confira e envie de novo.`
+              : 'A janela de 24 h abriu: agora vai como mensagem comum, sem custo. Confira e envie de novo.',
+          preview,
         });
       // The voice covers every word that leaves: the text, the buttons, the footer, the header.
       const refused = offBrand(`${preview.text} ${JSON.stringify(plan.version.components ?? [])}`);

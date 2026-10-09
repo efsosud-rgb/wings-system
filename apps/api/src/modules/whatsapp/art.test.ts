@@ -413,6 +413,62 @@ describe('registering the art', () => {
     });
   });
 
+  it('confirms only an upload asked as the art: a Drive upload of the same folder is not read nor deleted', async () => {
+    const storage = storageOf({
+      env: {
+        MEDIA_DIR: dir,
+        APP_BASE_URL: 'http://localhost:5173',
+        SESSION_SECRET: 'x'.repeat(48),
+      } as never,
+    })!;
+    const tree = await app.inject({ url: '/drive/tree', cookies: marketing.cookies });
+    const media = tree
+      .json<{ folders: { id: string; clientId: string | null; slot: string | null }[] }>()
+      .folders.find((f) => f.clientId === malkuth && f.slot === 'midia');
+    expect(media).toBeDefined();
+    const video = Buffer.alloc(4000, 1);
+    const asked = await app.inject({
+      method: 'POST',
+      url: '/drive/uploads',
+      cookies: marketing.cookies,
+      payload: {
+        folderId: media!.id,
+        name: 'video.mp4',
+        mimeType: 'video/mp4',
+        byteSize: video.length,
+      },
+    });
+    expect(asked.statusCode).toBe(201);
+    const ticket = asked.json<{ ticket: DriveUploadTicket }>().ticket;
+    await app.inject({
+      method: 'PUT',
+      url: ticket.url.replace('http://localhost:5173/api', ''),
+      headers: { 'content-type': 'video/mp4', 'content-length': String(video.length) },
+      payload: video,
+    });
+    const hijack = await app.inject({
+      method: 'POST',
+      url: `/clients/${malkuth}/whatsapp/art/uploads/${ticket.uploadId}/complete`,
+      cookies: marketing.cookies,
+    });
+    expect(hijack.statusCode).toBe(404);
+    const [upload] = await db
+      .select()
+      .from(driveUploads)
+      .where(eq(driveUploads.id, ticket.uploadId));
+    expect(upload!.completedAt).toBeNull();
+    expect(await storage.head(upload!.storageKey)).toEqual(
+      expect.objectContaining({ size: video.length }),
+    );
+    // The Drive still completes it as the file it is.
+    const done = await app.inject({
+      method: 'POST',
+      url: `/drive/uploads/${ticket.uploadId}/complete`,
+      cookies: marketing.cookies,
+    });
+    expect(done.statusCode).toBe(201);
+  });
+
   it("a brand's by who fills its record, the Wings art by who manages the register", async () => {
     const juridico = await sessionFor('formatacao_juridico');
     // A seller does neither.
@@ -634,6 +690,54 @@ describe('what goes to the lead', () => {
       .from(waMediaUploads)
       .where(eq(waMediaUploads.mediaId, 'MEDIA3'));
     expect(again?.invalidAt).not.toBeNull();
+  });
+
+  it('refuses a wrong number of fields, and a mode that changed since the preview, sending nothing', async () => {
+    clock = START;
+    const leadId = await deal('5521977770007', seller.id, {
+      pipeline: 'expansao',
+      clientId: malkuth,
+    });
+    await personWrites('5521977770007');
+    const before = sends.length;
+    const short = await sendTemplate(seller, leadId, {
+      name: 'expansao_boas_vindas',
+      params: ['Ricardo', 'Fernando'],
+    });
+    expect(short.statusCode).toBe(422);
+    expect(short.json()).toMatchObject({
+      error: 'template_params',
+      message: 'Este modelo pede 3 campo(s).',
+    });
+    // The screen showed a free message; the window closed before the click.
+    const shown = (await preview(seller, leadId, { name: 'expansao_boas_vindas' })).json<{
+      preview: WaTemplatePreview;
+    }>().preview;
+    expect(shown.sendAs).toBe('free');
+    clock = new Date(START.getTime() + 2 * DAY);
+    const changed = await sendTemplate(seller, leadId, {
+      name: 'expansao_boas_vindas',
+      params: shown.fields.map((f) => f.value),
+      expect: { sendAs: shown.sendAs, charged: shown.charged },
+    });
+    expect(changed.statusCode).toBe(409);
+    expect(changed.json()).toMatchObject({
+      error: 'send_mode_changed',
+      preview: { sendAs: 'template', charged: true },
+    });
+    expect(sends.length).toBe(before);
+    const outgoing = await db
+      .select()
+      .from(waMessages)
+      .where(and(eq(waMessages.leadId, leadId), eq(waMessages.direction, 'out')));
+    expect(outgoing).toHaveLength(0);
+    // Sent again with what the screen now shows, it goes.
+    const ok = await sendTemplate(seller, leadId, {
+      name: 'expansao_boas_vindas',
+      params: shown.fields.map((f) => f.value),
+      expect: { sendAs: 'template', charged: true },
+    });
+    expect(ok.statusCode).toBe(201);
   });
 
   it('refuses before sending when the art does not go up to Meta, writing nothing', async () => {
