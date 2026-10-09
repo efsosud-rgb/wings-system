@@ -1,19 +1,23 @@
 import {
   adPlatformOfUtmSource,
+  brazilianPhoneVariants,
   CAMPAIGN_LEADS_SINCE,
   campaignDelivering,
   effectiveCampaignEnd,
+  hasTestWord,
   isFormatacaoPipeline,
   isPaidUtmMedium,
   isTestDeal,
   maskEmail,
   maskPhone,
+  normalizeBrazilianPhone,
+  normalizeEmail,
   type AdPlatform,
   type AttributionMethod,
   utmSourceName,
   type UnattributedReason,
 } from '@wings/shared';
-import { and, eq, gt, gte, inArray, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, gte, inArray, isNotNull, isNull, notInArray, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   adAccounts,
@@ -34,7 +38,12 @@ import { platformOfRdLabels, rdCrmGetter, type RdPipeline } from './funnel-sync.
  * Leads das Campanhas: every 15 minutes (with `ingest-cli --reconcile-only`),
  * the Formatação deals RD CRM created since 28/09 are copied with their
  * contact (name in text, e-mail and phone sealed), their owner, their stage
- * and the campaign and ad they came from.
+ * and the campaign and ad they came from. The Wings leads of the funnel are
+ * read too (`syncWingsLeads`): a lead RD holds no deal for gets a row of its
+ * own, and a deal that belongs to a lead we can tell only by the contact (the
+ * RD copy of this environment is off, another environment made the deal) is
+ * joined to that lead, so a person is listed once and the lead's campaign,
+ * ad, owner and stage win.
  *
  * Attribution, in this order (see `attribute`):
  *  0. a person who arrived before 28/09 (an old lead copied to RD later) is
@@ -555,22 +564,232 @@ export interface CampaignLeadsSyncResult {
   beforeCutoff: number;
   utmLookups: number;
   utmFailures: number;
+  /** Wings leads listed on their own: RD holds no deal for them. */
+  wingsLeads: number;
+  /** RD deals joined to a Wings lead by the contact (the lead does not name the deal). */
+  paired: number;
+}
+
+/** A Wings lead of the funnel that campaigns may have brought, whose `rd_deal_id` is empty. */
+const wingsLeadColumns = {
+  id: leads.id,
+  name: leads.name,
+  email: leads.email,
+  phone: leads.phone,
+  source: leads.source,
+  city: leads.city,
+  companyName: leads.companyName,
+  stage: leads.stage,
+  stageOrder: leads.stageOrder,
+  won: leads.won,
+  closedAt: leads.closedAt,
+  lostReason: leads.lostReason,
+  valueCents: leads.valueCents,
+  ownerEmployeeId: leads.ownerEmployeeId,
+  stageChangedAt: leads.stageChangedAt,
+  firstContactAt: leads.firstContactAt,
+  enteredAt: leads.enteredAt,
+  adPlatform: leads.adPlatform,
+  adCampaignExternalId: leads.adCampaignExternalId,
+  adExternalId: leads.adExternalId,
+  utmSource: leads.utmSource,
+  utmMedium: leads.utmMedium,
+  utmCampaign: leads.utmCampaign,
+  utmContent: leads.utmContent,
+};
+export type WingsLead = Pick<typeof leads.$inferSelect, keyof typeof wingsLeadColumns>;
+
+/**
+ * The leads a campaign may have brought: Formatação funnel, entered since the
+ * first day counted, no deal named on the lead, and some trace of paid media
+ * (an instant form, the ad ids, a UTM or a click id).
+ */
+async function wingsCandidates(db: Database, since: Date): Promise<WingsLead[]> {
+  return db
+    .select(wingsLeadColumns)
+    .from(leads)
+    .where(
+      and(
+        eq(leads.pipeline, 'formatacao'),
+        isNull(leads.rdDealId),
+        gte(leads.enteredAt, since),
+        or(
+          eq(leads.source, 'meta_lead_ads'),
+          eq(leads.source, 'google_lead_form'),
+          isNotNull(leads.adPlatform),
+          isNotNull(leads.adCampaignExternalId),
+          isNotNull(leads.utmSource),
+          isNotNull(leads.utmMedium),
+          isNotNull(leads.utmCampaign),
+          isNotNull(leads.utmContent),
+          isNotNull(leads.gclid),
+          isNotNull(leads.fbclid),
+          isNotNull(leads.gbraid),
+          isNotNull(leads.wbraid),
+        ),
+      ),
+    );
+}
+
+/** What identifies a person across systems: the e-mail, and the phone in both forms of a Brazilian mobile. */
+export function contactKeys(
+  email: string | null | undefined,
+  phone: string | null | undefined,
+): string[] {
+  const keys: string[] = [];
+  const mail = normalizeEmail(email);
+  if (mail) keys.push(`e:${mail}`);
+  const digits = normalizeBrazilianPhone(phone);
+  if (digits) for (const form of brazilianPhoneVariants(digits)) keys.push(`p:${form}`);
+  return keys;
+}
+
+/** How far apart a deal and the Wings lead of the same person may have entered. */
+export const LEAD_DEAL_WINDOW_MS = 24 * 3_600_000;
+
+/**
+ * Which Wings lead each RD deal belongs to when the lead does not name it: the
+ * same e-mail or phone, entered within a day of each other, the closest first,
+ * a lead for one deal only. Deterministic for the same rows, so every sync
+ * answers the same.
+ */
+export function pairDealsWithLeads(
+  deals: { id: string; at: Date; keys: string[] }[],
+  candidates: { id: string; at: Date; keys: string[] }[],
+  windowMs = LEAD_DEAL_WINDOW_MS,
+): Map<string, string> {
+  const byKey = new Map<string, typeof candidates>();
+  for (const candidate of candidates) {
+    for (const key of candidate.keys) byKey.set(key, [...(byKey.get(key) ?? []), candidate]);
+  }
+  const taken = new Set<string>();
+  const pairs = new Map<string, string>();
+  for (const deal of [...deals].sort((a, b) => a.at.getTime() - b.at.getTime())) {
+    let best: (typeof candidates)[number] | undefined;
+    let bestGap = Number.POSITIVE_INFINITY;
+    for (const key of deal.keys) {
+      for (const candidate of byKey.get(key) ?? []) {
+        if (taken.has(candidate.id)) continue;
+        const gap = Math.abs(candidate.at.getTime() - deal.at.getTime());
+        if (gap <= windowMs && gap < bestGap) {
+          best = candidate;
+          bestGap = gap;
+        }
+      }
+    }
+    if (best) {
+      taken.add(best.id);
+      pairs.set(deal.id, best.id);
+    }
+  }
+  return pairs;
+}
+
+/** Where a Wings lead stands in the funnel: the columns of the row that the lead decides. */
+function wingsWork(lead: WingsLead, ownerName: string | null) {
+  return {
+    stage: lead.stage ?? 'Sem etapa',
+    stageOrder: lead.stageOrder ?? 0,
+    win: lead.won,
+    closedAt: lead.closedAt,
+    lostReason: lead.lostReason,
+    amountCents: lead.valueCents ?? 0,
+    ownerEmployeeId: lead.ownerEmployeeId,
+    ownerName,
+    lastActivityAt: lead.stageChangedAt,
+    firstContactAt: lead.firstContactAt,
+    firstContactSource: lead.firstContactAt ? ('activity' as const) : null,
+  };
+}
+
+const utmsOfLead = (lead: WingsLead): Utms => ({
+  source: lead.utmSource ? utmSourceName(lead.utmSource) : null,
+  medium: lead.utmMedium,
+  campaign: lead.utmCampaign,
+  content: lead.utmContent,
+});
+
+interface SyncContext {
+  campaigns: AttributionCampaign[];
+  employeeByEmail: Map<string, string>;
+  /** Active employees' names by id: the owner a Wings lead shows. */
+  employeeName: Map<string, string>;
+  candidates: WingsLead[];
+  since: Date;
+  now: Date;
+  box: SecretBox;
+  result: CampaignLeadsSyncResult;
 }
 
 export async function syncCampaignLeads(
   db: Database,
   input: {
-    rdCrmToken: string;
+    /** Null: RD is not reachable from here (no token); only the Wings leads are read. */
+    rdCrmToken: string | null;
     rdMarketing: RdMarketingCredentials | null;
     box: SecretBox;
     fetchImpl?: typeof fetch;
     now?: Date;
   },
 ): Promise<CampaignLeadsSyncResult> {
-  const fetchImpl = input.fetchImpl ?? fetch;
   const now = input.now ?? new Date();
+  const since = new Date(CAMPAIGN_LEADS_SINCE);
+  const result: CampaignLeadsSyncResult = {
+    deals: 0,
+    tests: 0,
+    attributed: 0,
+    unattributed: 0,
+    beforeCutoff: 0,
+    utmLookups: 0,
+    utmFailures: 0,
+    wingsLeads: 0,
+    paired: 0,
+  };
+  const [campaigns, staff, candidates] = await Promise.all([
+    attributionCampaigns(db, now, since),
+    db
+      .select({
+        id: employees.id,
+        email: sql<string>`lower(${employees.email})`,
+        name: employees.fullName,
+      })
+      .from(employees)
+      .where(eq(employees.status, 'active')),
+    wingsCandidates(db, since),
+  ]);
+  const context: SyncContext = {
+    campaigns,
+    employeeByEmail: new Map(staff.map((row) => [row.email, row.id])),
+    employeeName: new Map(staff.map((row) => [row.id, row.name])),
+    candidates,
+    since,
+    now,
+    box: input.box,
+    result,
+  };
+  const paired = input.rdCrmToken
+    ? await syncRdDeals(db, { ...input, rdCrmToken: input.rdCrmToken }, context)
+    : new Set<string>();
+  await syncWingsLeads(db, context, paired);
+  return result;
+}
+
+/** The RD side: every Formatação deal since the first day counted. Returns the Wings leads it joined to a deal. */
+async function syncRdDeals(
+  db: Database,
+  input: {
+    rdCrmToken: string;
+    rdMarketing: RdMarketingCredentials | null;
+    box: SecretBox;
+    fetchImpl?: typeof fetch;
+  },
+  context: SyncContext,
+): Promise<Set<string>> {
+  const { campaigns, employeeByEmail, employeeName, candidates, since, now, result } = context;
+  const fetchImpl = input.fetchImpl ?? fetch;
   const get = rdCrmGetter(input.rdCrmToken, fetchImpl);
   const marketing = input.rdMarketing ? rdMarketingReader(input.rdMarketing, fetchImpl) : null;
+  const claimedLeads = new Set<string>();
 
   const pipelines = await get<RdPipeline[]>('/deal_pipelines', {});
   const stageOf = new Map<string, { pipeline: string; stage: string; order: number }>();
@@ -580,7 +799,6 @@ export async function syncCampaignLeads(
     );
   }
 
-  const since = new Date(CAMPAIGN_LEADS_SINCE);
   const saoPaulo = (at: Date) =>
     new Intl.DateTimeFormat('sv-SE', {
       timeZone: 'America/Sao_Paulo',
@@ -608,19 +826,40 @@ export async function syncCampaignLeads(
       Date.parse(deal.created_at) >= since.getTime() &&
       isFormatacaoPipeline(stageOf.get(deal.deal_stage?.id ?? '')?.pipeline ?? ''),
   );
-  const result: CampaignLeadsSyncResult = {
-    deals: formatacao.length,
-    tests: 0,
-    attributed: 0,
-    unattributed: 0,
-    beforeCutoff: 0,
-    utmLookups: 0,
-    utmFailures: 0,
-  };
-  if (formatacao.length === 0) return result;
+  result.deals = formatacao.length;
+  if (formatacao.length === 0) return claimedLeads;
 
-  const [campaigns, existingRows, wingsLeads, staff] = await Promise.all([
-    attributionCampaigns(db, now, since),
+  // The Wings lead behind a deal the lead does not name: same contact, entered about the same time.
+  const dealContact = (deal: RdDeal) => {
+    const contact = deal.contacts?.[0];
+    const email = contact?.emails?.find((entry) => entry.email)?.email;
+    const phone = contact?.phones?.find((entry) => entry.phone)?.phone;
+    return contactKeys(email, phone);
+  };
+  const pairs = pairDealsWithLeads(
+    formatacao.map((deal) => ({
+      id: deal.id,
+      at: new Date(deal.created_at),
+      keys: dealContact(deal),
+    })),
+    candidates.map((lead) => ({
+      id: lead.id,
+      at: lead.enteredAt,
+      keys: contactKeys(lead.email, lead.phone),
+    })),
+  );
+  const candidateOf = new Map(candidates.map((lead) => [lead.id, lead]));
+  const pairedLeadOf = new Map(
+    [...pairs].flatMap(([dealId, leadId]) => {
+      const lead = candidateOf.get(leadId);
+      return lead ? [[dealId, lead] as const] : [];
+    }),
+  );
+  result.paired = pairedLeadOf.size;
+  for (const lead of pairedLeadOf.values()) claimedLeads.add(lead.id);
+  await adoptPairedRows(db, pairedLeadOf);
+
+  const [existingRows, wingsLeads] = await Promise.all([
     db.query.campaignLeads.findMany({
       where: inArray(
         campaignLeads.rdDealId,
@@ -642,19 +881,16 @@ export async function syncCampaignLeads(
           formatacao.map((deal) => deal.id),
         ),
       ),
-    db
-      .select({ id: employees.id, email: sql<string>`lower(${employees.email})` })
-      .from(employees)
-      .where(eq(employees.status, 'active')),
   ]);
   const existing = new Map(existingRows.map((row) => [row.rdDealId, row]));
   const wingsLeadOf = new Map(
     wingsLeads.flatMap((row) => (row.rdDealId ? [[row.rdDealId, row] as const] : [])),
   );
-  const employeeByEmail = new Map(staff.map((row) => [row.email, row.id]));
 
   for (const deal of formatacao) {
     const before = existing.get(deal.id);
+    const pairedLead = pairedLeadOf.get(deal.id) ?? null;
+    const wingsLead = wingsLeadOf.get(deal.id) ?? pairedLead;
     const stage = stageOf.get(deal.deal_stage?.id ?? '') ?? {
       pipeline: '(desconhecido)',
       stage: '(desconhecida)',
@@ -692,7 +928,7 @@ export async function syncCampaignLeads(
     const filed = Boolean(before?.campaignId && before.attribution);
     const guessed = filed && isGuessedAttribution(before!);
     const firmlyFiled = filed && !(guessed && young);
-    const claimed = firmlyFiled || Boolean(wingsLeadOf.get(deal.id)?.adCampaignExternalId);
+    const claimed = firmlyFiled || Boolean(wingsLead?.adCampaignExternalId);
     const stillSettling = !claimed && young;
     if (!isTest && marketing && email && utmLookupDue(utmCheckedAt, utms, stillSettling)) {
       result.utmLookups += 1;
@@ -727,7 +963,7 @@ export async function syncCampaignLeads(
             sourceLabel,
             campaignLabel,
             enteredDay: saoPauloDayOf(enteredAt),
-            lead: wingsLeadOf.get(deal.id) ?? null,
+            lead: wingsLead,
             since,
           },
           campaigns,
@@ -743,7 +979,8 @@ export async function syncCampaignLeads(
     // the stage leaving "Sem contato" as this sync saw it.
     let firstContactAt = before?.firstContactAt ?? null;
     let firstContactSource = before?.firstContactSource ?? null;
-    if (!firstContactAt && !isTest) {
+    // A deal joined to a Wings lead takes the lead's own first contact (below): nobody works it in RD.
+    if (!firstContactAt && !isTest && !pairedLead) {
       const [activities, tasks] = await Promise.all([
         get<{ activities?: { created_at?: string }[] }>('/activities', { deal_id: deal.id }),
         get<{ tasks?: { done?: boolean; done_date?: string | null }[] }>('/tasks', {
@@ -812,10 +1049,169 @@ export async function syncCampaignLeads(
       firstContactSource,
       fetchedAt: now,
     };
+    // The Wings lead is worked here, not in RD: its owner, stage and first contact win, the RD
+    // owner stays when the lead has none yet.
+    const row = pairedLead
+      ? (() => {
+          const work = wingsWork(
+            pairedLead,
+            pairedLead.ownerEmployeeId
+              ? (employeeName.get(pairedLead.ownerEmployeeId) ?? null)
+              : null,
+          );
+          return {
+            ...values,
+            ...work,
+            ownerEmployeeId: work.ownerEmployeeId ?? values.ownerEmployeeId,
+            ownerName: work.ownerEmployeeId ? work.ownerName : values.ownerName,
+            leadId: pairedLead.id,
+          };
+        })()
+      : { ...values, leadId: null };
     await db
       .insert(campaignLeads)
-      .values({ rdDealId: deal.id, ...values })
-      .onConflictDoUpdate({ target: campaignLeads.rdDealId, set: values });
+      .values({ rdDealId: deal.id, ...row })
+      .onConflictDoUpdate({ target: campaignLeads.rdDealId, set: row });
   }
-  return result;
+  return claimedLeads;
+}
+
+/**
+ * A Wings lead that already has a row of its own (RD held no deal for it when it
+ * was read) and whose deal has turned up: the deal takes over that row, so the
+ * person stays one and the row keeps its first-seen time. Where the deal already
+ * has a row, the lead's own row goes.
+ */
+async function adoptPairedRows(
+  db: Database,
+  pairedLeadOf: Map<string, { id: string }>,
+): Promise<void> {
+  if (pairedLeadOf.size === 0) return;
+  const ownRows = await db.query.campaignLeads.findMany({
+    where: and(
+      isNull(campaignLeads.rdDealId),
+      inArray(
+        campaignLeads.leadId,
+        [...pairedLeadOf.values()].map((lead) => lead.id),
+      ),
+    ),
+    columns: { id: true, leadId: true },
+  });
+  if (ownRows.length === 0) return;
+  const dealRows = await db.query.campaignLeads.findMany({
+    where: inArray(campaignLeads.rdDealId, [...pairedLeadOf.keys()]),
+    columns: { rdDealId: true },
+  });
+  const withDealRow = new Set(dealRows.map((row) => row.rdDealId));
+  for (const [dealId, lead] of pairedLeadOf) {
+    const own = ownRows.find((row) => row.leadId === lead.id);
+    if (!own) continue;
+    if (withDealRow.has(dealId)) {
+      await db.delete(campaignLeads).where(eq(campaignLeads.id, own.id));
+    } else {
+      await db.update(campaignLeads).set({ rdDealId: dealId }).where(eq(campaignLeads.id, own.id));
+    }
+  }
+}
+
+/**
+ * The Wings side: a lead that campaigns may have brought and that no RD deal
+ * claims gets a row of its own, attributed like a deal (the campaign and ad
+ * the lead carries, else its UTMs), judged on the day the lead entered.
+ * Rows of leads that RD has since claimed, or that stopped qualifying, go.
+ */
+async function syncWingsLeads(
+  db: Database,
+  context: SyncContext,
+  claimed: Set<string>,
+): Promise<void> {
+  const { campaigns, employeeName, since, now, box, result } = context;
+  const own = context.candidates.filter((lead) => !claimed.has(lead.id));
+  const ownIds = own.map((lead) => lead.id);
+  await db
+    .delete(campaignLeads)
+    .where(
+      and(
+        isNull(campaignLeads.rdDealId),
+        ownIds.length ? notInArray(campaignLeads.leadId, ownIds) : sql`true`,
+      ),
+    );
+  if (own.length === 0) return;
+  const rows = await db.query.campaignLeads.findMany({
+    where: inArray(campaignLeads.leadId, ownIds),
+  });
+  const before = new Map(rows.map((row) => [row.leadId, row]));
+
+  for (const lead of own) {
+    const previous = before.get(lead.id);
+    const isTest = isTestDeal(lead.name, lead.lostReason) || hasTestWord(lead.email);
+    const filed = Boolean(previous?.campaignId && previous.attribution);
+    const keep = filed && !isGuessedAttribution(previous!);
+    const decided: Attributed = keep
+      ? {
+          platform: previous!.platform as AdPlatform | null,
+          campaignId: previous!.campaignId,
+          adId: previous!.adId,
+          attribution: previous!.attribution as AttributionMethod,
+          reason: null,
+        }
+      : attribute(
+          {
+            utms: utmsOfLead(lead),
+            sourceLabel: null,
+            campaignLabel: null,
+            enteredDay: saoPauloDayOf(lead.enteredAt),
+            lead,
+            since,
+          },
+          campaigns,
+        );
+    result.wingsLeads += 1;
+    if (!isTest) {
+      if (decided.campaignId) result.attributed += 1;
+      else if (decided.reason === 'arrived_before_cutoff') result.beforeCutoff += 1;
+      else result.unattributed += 1;
+    } else {
+      result.tests += 1;
+    }
+    const email = normalizeEmail(lead.email);
+    const phone = normalizeBrazilianPhone(lead.phone);
+    const work = wingsWork(
+      lead,
+      lead.ownerEmployeeId ? (employeeName.get(lead.ownerEmployeeId) ?? null) : null,
+    );
+    const values = {
+      ...work,
+      enteredAt: lead.enteredAt,
+      pipeline: 'Formatação',
+      isTest,
+      name: lead.name?.trim() || null,
+      company: lead.companyName?.trim() || null,
+      segment: null,
+      city: lead.city?.trim() || null,
+      emailEncrypted: email ? box.seal(email) : null,
+      phoneEncrypted: phone ? box.seal(phone) : null,
+      emailMasked: email ? maskEmail(email) : null,
+      phoneMasked: phone ? maskPhone(phone) : null,
+      ownerRdId: null,
+      rating: null,
+      rdSourceLabel: null,
+      rdCampaignLabel: null,
+      utmSource: lead.utmSource,
+      utmMedium: lead.utmMedium,
+      utmCampaign: lead.utmCampaign,
+      utmContent: lead.utmContent,
+      utmCheckedAt: null,
+      platform: decided.platform,
+      campaignId: decided.campaignId,
+      adId: decided.adId,
+      attribution: decided.attribution,
+      unattributedReason: decided.reason,
+      fetchedAt: now,
+    };
+    await db
+      .insert(campaignLeads)
+      .values({ leadId: lead.id, rdDealId: null, ...values })
+      .onConflictDoUpdate({ target: campaignLeads.leadId, set: values });
+  }
 }

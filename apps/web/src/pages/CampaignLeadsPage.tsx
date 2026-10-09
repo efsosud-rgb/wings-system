@@ -16,9 +16,10 @@ import { Alert } from '../components/ui.js';
 import { PageHeader } from '../components/PageHeader.js';
 
 /**
- * Dashboard → Leads das Campanhas. The RD CRM deals of the Formatação funnel
- * that came from the campaigns running now, since 28/09. Phone and e-mail
- * arrive masked; "revelar" asks the server, which writes it to the audit log.
+ * Dashboard → Leads das Campanhas. The leads of the Formatação funnel that came
+ * from the campaigns, since 28/09: the Wings CRM leads and the RD CRM deals, one
+ * line per person. Phone and e-mail arrive masked; "revelar" asks the server,
+ * which writes it to the audit log.
  */
 
 function minutesLabel(minutes: number): string {
@@ -40,7 +41,7 @@ function FirstContact({ lead }: { lead: CampaignLeadRow }) {
     return (
       <span
         className={`status ${BAND_CLASS[firstContactBand(waiting)]}`}
-        title="Ainda sem contato registrado no RD"
+        title="Ainda sem contato registrado"
       >
         esperando há {minutesLabel(waiting)}
       </span>
@@ -52,7 +53,7 @@ function FirstContact({ lead }: { lead: CampaignLeadRow }) {
       title={
         lead.firstContactSource === 'stage'
           ? 'Pela mudança de etapa vista pela conferência (precisão de 15 min)'
-          : 'Pela primeira anotação ou tarefa feita no RD'
+          : 'Pela primeira anotação ou tarefa feita (no CRM do Wings ou no RD)'
       }
     >
       {minutesLabel(lead.firstContactMinutes)}
@@ -205,10 +206,10 @@ export function CampaignLeadsPage() {
         title="Leads das Campanhas"
         subtitle={
           <>
-            Negócios do Funil Formatação no RD CRM que vieram das campanhas ativas, desde
-            28/09/2026. A conferência com o RD roda a cada 15 minutos e só lê: nada é alterado no
-            RD.
-            {data?.summary.fetchedAt && <> Dados do RD {formatWhen(data.summary.fetchedAt)}.</>}
+            Leads do Funil Formatação que vieram das campanhas, desde 28/09/2026: os do CRM do Wings
+            e os negócios do RD CRM, uma linha por pessoa. A conferência roda a cada 15 minutos e só
+            lê: nada é alterado no RD.
+            {data?.summary.fetchedAt && <> Dados lidos {formatWhen(data.summary.fetchedAt)}.</>}
             {data && !data.summary.fetchedAt && <> A primeira conferência ainda não rodou.</>}
           </>
         }
@@ -220,7 +221,7 @@ export function CampaignLeadsPage() {
       {data && (
         <>
           {data.scope === 'own' && (
-            <Alert kind="info">Você vê só os leads que o RD atribui a você.</Alert>
+            <Alert kind="info">Você vê só os leads que estão com você.</Alert>
           )}
           {data.summary.smallSample && data.summary.total > 0 && (
             <p>
@@ -239,7 +240,7 @@ export function CampaignLeadsPage() {
               <b>Sem atribuição:</b>{' '}
               {data.summary.unattributedPercent === null
                 ? '—'
-                : `${data.summary.unattributedPercent}% dos negócios do Funil Formatação no período`}
+                : `${data.summary.unattributedPercent}% dos leads do Funil Formatação no período`}
               {data.summary.outOfAccount > 0 && (
                 <span className="cell-sub">
                   {' '}
@@ -276,8 +277,8 @@ export function CampaignLeadsPage() {
                 {data.leads.length === 0 && (
                   <tr>
                     <td colSpan={10} className="muted">
-                      Nenhum lead das campanhas ativas desde 28/09. Quando o RD criar um negócio no
-                      Funil Formatação vindo delas, ele aparece aqui na conferência seguinte.
+                      Nenhum lead das campanhas desde 28/09. Quando entrar um lead do Funil
+                      Formatação vindo delas, ele aparece aqui na conferência seguinte.
                     </td>
                   </tr>
                 )}
@@ -295,6 +296,7 @@ export function CampaignLeadsPage() {
                       {lead.campaignName ?? '—'}
                       <span className="cell-sub">
                         {lead.platform ? AD_PLATFORM_LABEL[lead.platform] : ''}
+                        {lead.adSetName ? ` · conjunto ${lead.adSetName}` : ''}
                         {lead.adName ? ` · ${lead.adName}` : ' · anúncio não identificado'}
                         {lead.attribution ? ` · ${ATTRIBUTION_METHOD_LABEL[lead.attribution]}` : ''}
                       </span>

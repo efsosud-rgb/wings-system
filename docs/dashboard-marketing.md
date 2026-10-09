@@ -454,11 +454,28 @@ roteirizado para o WordPress e banco descartável
 ### Leads das Campanhas (`/dashboard/leads-campanhas`)
 
 - **Quem vê**: `campaign_leads.read`/`campaign_leads.reveal`. Diretoria,
-  Gerente Comercial e Admin Master veem todos; Vendedor Formatação só os que o
-  RD atribui a ele (dono do negócio no RD com o mesmo e-mail do cadastro);
-  Vendedor Expansão e Marketing não veem.
+  Gerente Comercial e Admin Master veem todos; Vendedor Formatação só os que
+  estão com ele (dono do lead no CRM do Wings, ou dono do negócio no RD com o
+  mesmo e-mail do cadastro); Vendedor Expansão e Marketing não veem.
 - **Escopo**: negócios do Funil Formatação (e dos pipelines "perdidos" /
-  "vendidos" de Formatação) criados desde 28/09/2026 00:00 (Brasília).
+  "vendidos" de Formatação) criados desde 28/09/2026 00:00 (Brasília), **e os
+  leads do Wings** do funil `formatacao` que entraram desde então e têm rastro
+  de mídia paga (formulário da Meta/Google, ids do anúncio, UTM ou click id).
+  Uma linha por pessoa (0084: `campaign_leads.rd_deal_id` opcional,
+  `lead_id` único):
+  - lead que o RD não recebeu (cópia para o RD desligada, como no staging): linha
+    própria (`lead_id`), atribuída pela campanha e anúncio que o lead carrega
+    (`lead_ads`), senão pelas UTMs dele, julgada no dia de entrada;
+  - negócio do RD que o lead não nomeia (`leads.rd_deal_id` vazio), mas tem o
+    mesmo e-mail ou telefone e entrou com menos de 24 h de diferença
+    (`pairDealsWithLeads`): a linha é a do negócio, com `lead_id` preenchido, e
+    a campanha, o anúncio, o dono, a etapa e o 1º contato vêm do lead do Wings
+    (é ele que o time trabalha); se o lead já tinha linha própria, o negócio
+    assume essa linha;
+  - lead que nomeia o negócio (`rd_deal_id`): como sempre, só a linha do negócio;
+  - a linha própria some quando o RD passa a ter o negócio do lead; lead sem
+    rastro de mídia paga, antigo (antes de 28/09) ou de outro funil não entra.
+  O token do RD é opcional: sem ele só os leads do Wings são lidos.
 - **Conferência a cada 15 min**: roda junto de `ingest-cli --reconcile-only`,
   depois da reconciliação. Só lê o RD CRM e o RD Marketing. O log mostra só
   contagens.

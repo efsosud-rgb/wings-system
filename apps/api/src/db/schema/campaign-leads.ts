@@ -1,6 +1,8 @@
+import { sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
+  check,
   index,
   integer,
   pgTable,
@@ -10,15 +12,18 @@ import {
 } from 'drizzle-orm/pg-core';
 import { adAds, adCampaigns, tenants, WINGS_TENANT_ID } from './ads.js';
 import { employees } from './employees.js';
+import { leads } from './leads.js';
 
 /**
- * Leads das Campanhas (docs/dashboard-marketing.md): the RD CRM deals of the
- * Formatação funnel created since 28/09/2026, with the campaign and ad they
- * came from. Unlike `rd_crm_deals` this table holds personal data, on
+ * Leads das Campanhas (docs/dashboard-marketing.md): the leads of the
+ * Formatação funnel since 28/09/2026, with the campaign and ad they came
+ * from. A row is an RD CRM deal (`rd_deal_id`), a Wings lead (`lead_id`) or
+ * both: the deal that RD holds for a Wings lead, and a lead that RD never
+ * received, share one row, so a person is listed once. Unlike `rd_crm_deals` this table holds personal data, on
  * purpose and approved: the contact's name in text (the list shows it), the
  * e-mail and phone only encrypted (AES-256-GCM under CPF_ENCRYPTION_KEY) plus
  * a mask; a reveal is audited. Nothing here is ever logged. Read only from
- * RD: the sync never writes back.
+ * RD and from the Wings leads: the sync never writes back.
  */
 
 const tenantId = () =>
@@ -32,7 +37,15 @@ export const campaignLeads = pgTable(
   {
     tenantId: tenantId(),
     id: uuid('id').primaryKey().defaultRandom(),
-    rdDealId: text('rd_deal_id').notNull().unique(),
+    /** The RD CRM deal; null for a Wings lead RD does not hold (the RD copy is off or failed). */
+    rdDealId: text('rd_deal_id').unique(),
+    /**
+     * The Wings lead behind the row, when it was found by the contact and not by `leads.rd_deal_id`, or
+     * when RD holds no deal for it. The row is derived: it goes with the lead and the next sync rebuilds it.
+     */
+    leadId: uuid('lead_id')
+      .unique()
+      .references(() => leads.id, { onDelete: 'cascade' }),
     enteredAt: timestamp('entered_at', { withTimezone: true }).notNull(),
     pipeline: text('pipeline').notNull(),
     stage: text('stage').notNull(),
@@ -72,7 +85,7 @@ export const campaignLeads = pgTable(
     platform: text('platform'),
     campaignId: uuid('campaign_id').references(() => adCampaigns.id),
     adId: uuid('ad_id').references(() => adAds.id),
-    /** utm | rd_origin; null with `unattributedReason` set. */
+    /** utm | rd_origin | lead_ads; null with `unattributedReason` set. */
     attribution: text('attribution'),
     unattributedReason: text('unattributed_reason'),
 
@@ -86,5 +99,9 @@ export const campaignLeads = pgTable(
   (table) => [
     index('campaign_leads_entered_idx').on(table.enteredAt),
     index('campaign_leads_owner_idx').on(table.ownerEmployeeId),
+    check(
+      'campaign_leads_origin_check',
+      sql`${table.rdDealId} is not null or ${table.leadId} is not null`,
+    ),
   ],
 );
