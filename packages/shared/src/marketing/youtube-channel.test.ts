@@ -38,9 +38,23 @@ describe('parseYoutubeChannelRef', () => {
       `https://evil.example/channel/${ID}`,
       'https://www.youtube.com/channel/UCshort',
       'not a link at all',
+      'https://youtube.com.evil.example/@wingscompany',
+      'https://evil.example/https://www.youtube.com/@wingscompany',
+      'https://www.youtube.com/%E0%A4%A',
     ]) {
       expect(parseYoutubeChannelRef(value)).toBeNull();
     }
+  });
+
+  it('ignores the case of the address and what comes after the path', () => {
+    expect(parseYoutubeChannelRef('HTTPS://WWW.YOUTUBE.COM/@wingscompany?si=abc#top')).toEqual({
+      kind: 'handle',
+      handle: '@wingscompany',
+    });
+    expect(parseYoutubeChannelRef(`http://youtube.com/channel/${ID}?view_as=subscriber`)).toEqual({
+      kind: 'id',
+      id: ID,
+    });
   });
 });
 

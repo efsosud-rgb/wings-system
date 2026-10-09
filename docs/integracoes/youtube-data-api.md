@@ -92,7 +92,7 @@ href="https://www.youtube.com/shorts/<id>">`) = **é**; qualquer outra
    dia seguinte. Não usa a chave nem a quota. Até 50 perguntas por leitura,
    8 s cada, e para no prazo da leitura.
 
-## Tabelas (migração 0082)
+## Tabelas (migração 0083)
 
 - `youtube_videos` — dimensão: um vídeo (`video_id` do YouTube, canal, título,
   publicação, duração em segundos, miniatura, `is_short`, `first_seen_at`,

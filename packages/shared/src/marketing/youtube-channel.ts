@@ -32,19 +32,21 @@ export function parseYoutubeChannelRef(value: string | null | undefined): Youtub
   if (!text) return null;
   if (CHANNEL_ID.test(text)) return { kind: 'id', id: text };
   if (HANDLE.test(text)) return { kind: 'handle', handle: text };
-  let url: URL;
+  // Read by hand: this package runs in the browser and in Node and has no `URL` type of its own.
+  const link = /^(?:https?:\/\/)?(?:www\.|m\.)?youtube\.com(\/[^?#]*)?(?:[?#].*)?$/i.exec(text);
+  if (!link) return null;
+  const [first, second] = (link[1] ?? '').split('/').filter(Boolean);
+  if (first === 'channel' && second && CHANNEL_ID.test(second)) return { kind: 'id', id: second };
+  const handle = first ? decoded(first) : null;
+  return handle && HANDLE.test(handle) ? { kind: 'handle', handle } : null;
+}
+
+function decoded(part: string): string | null {
   try {
-    url = new URL(/^https?:\/\//i.test(text) ? text : `https://${text}`);
+    return decodeURIComponent(part);
   } catch {
     return null;
   }
-  if (!/^(www\.|m\.)?youtube\.com$/i.test(url.hostname)) return null;
-  const [first, second] = url.pathname.split('/').filter(Boolean);
-  if (first === 'channel' && second && CHANNEL_ID.test(second)) return { kind: 'id', id: second };
-  if (first && HANDLE.test(decodeURIComponent(first))) {
-    return { kind: 'handle', handle: decodeURIComponent(first) };
-  }
-  return null;
 }
 
 /**
