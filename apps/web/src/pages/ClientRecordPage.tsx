@@ -47,6 +47,7 @@ import {
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ApiError } from '../api/client.js';
+import { WhatsAppArtPanel } from '../components/WhatsAppArtPanel.js';
 import {
   useClientRecord,
   useCnpjLookup,
@@ -1410,6 +1411,14 @@ export function ClientRecordPage() {
 
       {!record.access.canEdit && (
         <Alert kind="info">Você pode consultar esta ficha, mas não editá-la.</Alert>
+      )}
+
+      {(record.client.relationship === 'expansao' || record.client.relationship === 'ambos') && (
+        <WhatsAppArtPanel
+          clientId={record.client.id}
+          name={record.client.name}
+          canEdit={record.access.canEdit}
+        />
       )}
 
       <div className="tab-row record-tabs" role="tablist">

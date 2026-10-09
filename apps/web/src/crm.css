@@ -2135,6 +2135,80 @@
   background: var(--surface-2);
   white-space: pre-wrap;
 }
+.crm-wa-mode {
+  margin: 0;
+  font-size: var(--text-sm, 13px);
+  font-weight: 600;
+}
+.crm-wa-mode.is-free {
+  color: var(--success);
+}
+.crm-wa-mode.is-charged {
+  color: var(--accent);
+}
+.crm-wa-reason,
+.crm-wa-notice {
+  margin: 0;
+  font-size: var(--text-xs, 12px);
+  color: var(--text-2);
+}
+.crm-wa-notice {
+  color: var(--accent);
+}
+.crm-wa-card {
+  display: grid;
+  gap: var(--space-1, 4px);
+  max-width: 360px;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.crm-wa-card img {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1125 / 600;
+  object-fit: cover;
+  border-radius: calc(var(--radius-md) - 2px);
+}
+.crm-wa-card .crm-wa-preview {
+  padding: 0;
+  background: none;
+}
+.crm-wa-card-footer {
+  font-size: var(--text-xs, 12px);
+  color: var(--text-2);
+}
+.crm-wa-card-buttons {
+  display: grid;
+  gap: 2px;
+}
+.crm-wa-card-buttons span {
+  text-align: center;
+  padding: 4px;
+  border-top: 1px solid var(--line);
+  color: var(--accent);
+  font-size: var(--text-sm, 13px);
+}
+.crm-wa-fields {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+.crm-wa-fields label {
+  display: grid;
+  gap: 2px;
+  font-size: var(--text-xs, 12px);
+  color: var(--text-2);
+}
+.crm-wa-article {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  font-size: var(--text-sm, 13px);
+}
+
 .crm-wa-inbox-body {
   padding: 0 var(--space-5) var(--space-5);
 }

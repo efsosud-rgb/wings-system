@@ -1,4 +1,4 @@
-import type { DealWhatsApp, Lead, LeadNote, WaTemplate } from '@wings/shared';
+import type { DealWhatsApp, Lead, LeadNote, WaTemplate, WaTemplatePreview } from '@wings/shared';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,19 +12,23 @@ import { DealWhatsAppPage } from './DealWhatsAppPage.js';
  * carries Visão geral, Anotações and Arquivos.
  */
 
-const { noteMutate, textMutate, templateMutate, queryState, mutation } = vi.hoisted(() => ({
-  noteMutate: vi.fn(),
-  textMutate: vi.fn(),
-  templateMutate: vi.fn(),
-  queryState: {
-    lead: null as Lead | null,
-    notes: [] as LeadNote[],
-    thread: null as DealWhatsApp | null,
-    templates: [] as WaTemplate[],
-    permissions: {} as Record<string, string>,
-  },
-  mutation: (mutate = vi.fn()) => ({ mutate, isPending: false, error: null }),
-}));
+const { noteMutate, textMutate, templateMutate, previewCalls, queryState, mutation } = vi.hoisted(
+  () => ({
+    noteMutate: vi.fn(),
+    textMutate: vi.fn(),
+    templateMutate: vi.fn(),
+    previewCalls: [] as unknown[],
+    queryState: {
+      lead: null as Lead | null,
+      notes: [] as LeadNote[],
+      thread: null as DealWhatsApp | null,
+      templates: [] as WaTemplate[],
+      preview: null as WaTemplatePreview | null,
+      permissions: {} as Record<string, string>,
+    },
+    mutation: (mutate = vi.fn()) => ({ mutate, isPending: false, error: null }),
+  }),
+);
 
 const thread = (over: Partial<DealWhatsApp> = {}): DealWhatsApp => ({
   conversationId: null,
@@ -152,6 +156,18 @@ vi.mock('../../api/whatsapp.js', () => ({
   useRefreshWhatsAppTemplates: () => mutation(),
   useSendWhatsAppText: () => mutation(textMutate),
   useSendWhatsAppTemplate: () => mutation(templateMutate),
+  useTemplatePreview: (_thread: unknown, input: unknown) => {
+    if (input) previewCalls.push(input);
+    return {
+      isError: false,
+      data: input && queryState.preview ? { preview: queryState.preview } : undefined,
+    };
+  },
+  useWhatsAppArt: (_thread: unknown, enabled: boolean) => ({
+    data: enabled
+      ? { fileId: 'f1', url: 'https://r2.example/arte?sig=1', expiresAt: '' }
+      : undefined,
+  }),
   whatsappMediaUrl: (id: string) => `/api/whatsapp/messages/${id}/media`,
 }));
 
@@ -170,8 +186,10 @@ beforeEach(() => {
   noteMutate.mockClear();
   textMutate.mockClear();
   templateMutate.mockClear();
+  previewCalls.length = 0;
   queryState.thread = thread();
   queryState.templates = [];
+  queryState.preview = null;
   queryState.permissions = { 'leads.read': 'own', 'leads.write': 'own', 'leads.whatsapp': 'own' };
   queryState.lead = lead();
   queryState.notes = [
@@ -215,6 +233,8 @@ describe('the WhatsApp conversation screen', () => {
           error: null,
           authorName: null,
           bySofia: false,
+          fromTemplate: null,
+          withArt: false,
           at: '2026-10-07T14:00:00.000Z',
         },
         {
@@ -228,6 +248,8 @@ describe('the WhatsApp conversation screen', () => {
           error: null,
           authorName: 'Eric Souza',
           bySofia: false,
+          fromTemplate: null,
+          withArt: false,
           at: '2026-10-07T14:01:00.000Z',
         },
         {
@@ -241,6 +263,8 @@ describe('the WhatsApp conversation screen', () => {
           error: 'Não entregue: o número pode não ter WhatsApp.',
           authorName: 'Eric Souza',
           bySofia: false,
+          fromTemplate: null,
+          withArt: false,
           at: '2026-10-07T14:02:00.000Z',
         },
         {
@@ -254,6 +278,8 @@ describe('the WhatsApp conversation screen', () => {
           error: null,
           authorName: null,
           bySofia: false,
+          fromTemplate: null,
+          withArt: false,
           at: '2026-10-07T14:03:00.000Z',
         },
       ],
@@ -293,8 +319,32 @@ describe('the WhatsApp conversation screen', () => {
         category: 'UTILITY',
         body: 'Olá {{1}}, aqui é {{2}} da Wings.',
         paramCount: 2,
+        artVersion: false,
       },
     ];
+    queryState.preview = {
+      family: 'retomar_conversa',
+      version: 'retomar_conversa',
+      language: 'pt_BR',
+      category: 'UTILITY',
+      sendAs: 'template',
+      charged: true,
+      reason: null,
+      windowExpiresAt: null,
+      text: 'Olá Elena, aqui é  da Wings.',
+      footer: null,
+      buttons: [],
+      withArt: false,
+      notices: [
+        'Cadastre a arte do WhatsApp da Wings (Administração → Clientes, em Wings Company).',
+      ],
+      fields: [
+        { index: 1, role: 'free', label: 'Campo {{1}}', value: 'Elena', locked: false },
+        { index: 2, role: 'free', label: 'Campo {{2}}', value: '', locked: false },
+      ],
+      usesCompanyArticle: false,
+      ready: false,
+    };
     show();
     const chat = within(screen.getByRole('region', { name: 'Conversa' }));
     expect(chat.getByText(/Fora das 24 h/)).toBeTruthy();
@@ -302,14 +352,98 @@ describe('the WhatsApp conversation screen', () => {
     fireEvent.change(chat.getByLabelText('Modelo'), {
       target: { value: 'retomar_conversa|pt_BR' },
     });
+    // The server fills what it knows; the seller fills the rest.
+    expect(previewCalls[0]).toEqual({
+      name: 'retomar_conversa',
+      language: 'pt_BR',
+      params: [],
+      companyArticle: 'a',
+    });
+    expect(chat.getByText('Modelo aprovado (utilidade: cobrado pela Meta)')).toBeTruthy();
+    expect(chat.getByText(/Cadastre a arte do WhatsApp da Wings/)).toBeTruthy();
     const send = chat.getByRole('button', { name: 'Enviar modelo' }) as HTMLButtonElement;
     expect(send.disabled).toBe(true);
-    fireEvent.change(chat.getByLabelText('Campo 1 do modelo'), { target: { value: 'Elena' } });
-    fireEvent.change(chat.getByLabelText('Campo 2 do modelo'), { target: { value: 'Eric' } });
-    expect(chat.getByText('Olá Elena, aqui é Eric da Wings.')).toBeTruthy();
+    expect((chat.getByLabelText('Campo {{1}} ({{1}})') as HTMLInputElement).value).toBe('Elena');
+    fireEvent.change(chat.getByLabelText('Campo {{2}} ({{2}})'), { target: { value: 'Eric' } });
+    expect(send.disabled).toBe(false);
     fireEvent.click(send);
     expect(templateMutate).toHaveBeenCalledWith(
-      { name: 'retomar_conversa', language: 'pt_BR', params: ['Elena', 'Eric'] },
+      {
+        name: 'retomar_conversa',
+        language: 'pt_BR',
+        params: ['Elena', 'Eric'],
+        companyArticle: 'a',
+      },
+      expect.anything(),
+    );
+  });
+
+  it('inside the window shows the common message with the art, the buttons and the company article', () => {
+    queryState.templates = [
+      {
+        name: 'wings_formatacao_boas_vindas',
+        language: 'pt_BR',
+        category: 'UTILITY',
+        body: 'Olá, {{1}}! Aqui é {{2}}, da Wings Company. … transformar a {{3}} em franquia.',
+        paramCount: 3,
+        artVersion: true,
+      },
+    ];
+    queryState.preview = {
+      family: 'wings_formatacao_boas_vindas',
+      version: 'wings_formatacao_boas_vindas_arte',
+      language: 'pt_BR',
+      category: 'UTILITY',
+      sendAs: 'free',
+      charged: false,
+      reason: null,
+      windowExpiresAt: '2026-10-07T18:00:00.000Z',
+      text: 'Olá, Elena! Aqui é Eric, da Wings Company. … transformar a Padaria Sol em franquia.',
+      footer: null,
+      buttons: ['Sim, pode perguntar', 'Prefiro uma ligação'],
+      withArt: true,
+      notices: [],
+      fields: [
+        { index: 1, role: 'lead', label: 'Nome do lead', value: 'Elena', locked: false },
+        { index: 2, role: 'seller', label: 'Seu nome', value: 'Eric', locked: false },
+        {
+          index: 3,
+          role: 'company',
+          label: 'Empresa do lead',
+          value: 'Padaria Sol',
+          locked: false,
+        },
+      ],
+      usesCompanyArticle: true,
+      ready: true,
+    };
+    show();
+    const chat = within(screen.getByRole('region', { name: 'Conversa' }));
+    fireEvent.click(chat.getByRole('button', { name: 'Usar modelo' }));
+    expect(
+      chat.getByRole('option', { name: /wings_formatacao_boas_vindas \(pt_BR\) · com arte/ }),
+    ).toBeTruthy();
+    fireEvent.change(chat.getByLabelText('Modelo'), {
+      target: { value: 'wings_formatacao_boas_vindas|pt_BR' },
+    });
+    expect(
+      chat.getByText(/^Mensagem comum, sem custo \(janela aberta até \d{2}:\d{2}\)$/),
+    ).toBeTruthy();
+    const card = within(chat.getByLabelText('Prévia da mensagem'));
+    expect(card.getByRole('img', { name: 'Arte do cabeçalho' }).getAttribute('src')).toBe(
+      'https://r2.example/arte?sig=1',
+    );
+    expect(card.getByText('Sim, pode perguntar')).toBeTruthy();
+    fireEvent.click(chat.getByLabelText(/o \(do Bar\)/));
+    expect(previewCalls.at(-1)).toMatchObject({ companyArticle: 'o' });
+    fireEvent.click(chat.getByRole('button', { name: 'Enviar mensagem' }));
+    expect(templateMutate).toHaveBeenCalledWith(
+      {
+        name: 'wings_formatacao_boas_vindas',
+        language: 'pt_BR',
+        params: ['Elena', 'Eric', 'Padaria Sol'],
+        companyArticle: 'o',
+      },
       expect.anything(),
     );
   });

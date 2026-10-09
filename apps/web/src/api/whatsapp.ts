@@ -5,9 +5,11 @@ import type {
   WaConversationItem,
   WaMessage,
   WaTargets,
-  WaSendTemplate,
+  WaArtLink,
   WaSendText,
   WaTemplate,
+  WaTemplatePreview,
+  WaTemplateSend,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
@@ -134,7 +136,35 @@ function useSend<T>(thread: WhatsAppThread, kind: 'text' | 'template') {
 
 export const useSendWhatsAppText = (thread: WhatsAppThread) => useSend<WaSendText>(thread, 'text');
 export const useSendWhatsAppTemplate = (thread: WhatsAppThread) =>
-  useSend<WaSendTemplate>(thread, 'template');
+  useSend<WaTemplateSend>(thread, 'template');
+
+/**
+ * What the chosen template becomes now (a common message inside the window,
+ * or the approved template), with its fields filled. Read-only: the send
+ * decides again on the server.
+ */
+export function useTemplatePreview(thread: WhatsAppThread, input: WaTemplateSend | null) {
+  return useQuery({
+    queryKey: ['whatsapp', 'template-preview', threadPath(thread), input],
+    queryFn: () =>
+      api.post<{ preview: WaTemplatePreview }>(`${threadPath(thread)}/template-preview`, input),
+    enabled: input !== null,
+    placeholderData: (previous) => previous,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+/** The art this conversation's templates carry, for the preview (an address of 5 minutes). */
+export function useWhatsAppArt(thread: WhatsAppThread, enabled: boolean) {
+  return useQuery({
+    queryKey: ['whatsapp', 'art', threadPath(thread)],
+    queryFn: () => api.get<WaArtLink>(`${threadPath(thread)}/art`),
+    enabled,
+    staleTime: 4 * 60_000,
+    retry: false,
+  });
+}
 
 /** Where the browser opens a received file (the API checks access and fetches it from Meta). */
 export const whatsappMediaUrl = (messageId: string) => `/api/whatsapp/messages/${messageId}/media`;
