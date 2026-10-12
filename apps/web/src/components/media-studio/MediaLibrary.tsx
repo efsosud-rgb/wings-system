@@ -26,6 +26,8 @@ import {
   useUploadMedia,
   type MediaAssetFilters,
 } from '../../api/media.js';
+import { failureReason } from '../../lib/failure.js';
+import { LoadFailure } from '../LoadFailure.js';
 import { Button } from '../ui.js';
 
 /**
@@ -81,6 +83,12 @@ export function ClientSelect({
       {allLabel !== undefined && <option value="">{allLabel}</option>}
       {allLabel === undefined && list.length === 0 && (
         <option value={WINGS_CLIENT_ID}>{WINGS_CLIENT_NAME}</option>
+      )}
+      {/* The clients did not load: say so in the list, rather than offer only Wings as if it were all. */}
+      {clients.isError && !clients.data && (
+        <option value="__unavailable" disabled>
+          — {failureReason(clients.error)}
+        </option>
       )}
       {list.map((client) => (
         <option key={client.id} value={client.id}>
@@ -497,12 +505,22 @@ export function MediaLibrary({
 
       <MediaFilters value={filters} onChange={setFilters} />
 
+      {assets.isError && (
+        <LoadFailure
+          what="a biblioteca"
+          error={assets.error}
+          onRetry={() => void assets.refetch()}
+        />
+      )}
       {assets.isLoading ? (
         <p className="muted" role="status">
           Carregando a biblioteca…
         </p>
       ) : list.length === 0 ? (
-        <p className="muted">Nenhuma mídia com esses filtros.</p>
+        // Empty only when the request answered; a failed one has its own line above.
+        assets.isError ? null : (
+          <p className="muted">Nenhuma mídia com esses filtros.</p>
+        )
       ) : (
         <ul className="media-grid">
           {list.map((asset) => (
@@ -595,15 +613,24 @@ export function MediaPicker({
           </button>
         </div>
         <MediaFilters value={filters} onChange={setFilters} lockKind />
+        {assets.isError && (
+          <LoadFailure
+            what="a biblioteca"
+            error={assets.error}
+            onRetry={() => void assets.refetch()}
+          />
+        )}
         {assets.isLoading ? (
           <p className="muted" role="status">
             Carregando a biblioteca…
           </p>
         ) : list.length === 0 ? (
-          <p className="muted">
-            Nenhuma {kind === 'video' ? 'mídia de vídeo' : 'imagem'} na biblioteca com esses
-            filtros.
-          </p>
+          assets.isError ? null : (
+            <p className="muted">
+              Nenhuma {kind === 'video' ? 'mídia de vídeo' : 'imagem'} na biblioteca com esses
+              filtros.
+            </p>
+          )
         ) : (
           <ul className="media-grid">
             {list.map((asset) => {

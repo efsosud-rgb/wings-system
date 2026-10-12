@@ -225,3 +225,32 @@ describe('Gestão → Projetos', () => {
     );
   });
 });
+
+describe('Gestão → Projetos — when the board cannot load', () => {
+  it('says "—" and why instead of "Nenhum projeto com estes filtros."', async () => {
+    get.mockReset().mockRejectedValue(new ApiError(500, {}));
+    renderPage();
+    expect((await screen.findByRole('alert')).textContent).toMatch(
+      /Não foi possível carregar os projetos: o servidor teve um problema \(erro 500\)/,
+    );
+    expect(screen.queryByText('Nenhum projeto com estes filtros.')).toBeNull();
+
+    get.mockReset().mockResolvedValue({ projects: board.current });
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar de novo' }));
+    expect(await screen.findByRole('cell', { name: /Padaria Aurora/ })).toBeTruthy();
+  });
+
+  it('does not say "Carregando…" or "Nenhum projeto" before the first answer', () => {
+    get.mockReset().mockReturnValue(new Promise(() => undefined));
+    renderPage();
+    expect(screen.getByText('Carregando…')).toBeTruthy();
+    expect(screen.queryByText('Nenhum projeto com estes filtros.')).toBeNull();
+  });
+
+  it('still says "Nenhum projeto com estes filtros." for an answer with none', async () => {
+    get.mockReset().mockResolvedValue({ projects: [] });
+    renderPage();
+    expect(await screen.findByText('Nenhum projeto com estes filtros.')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+});

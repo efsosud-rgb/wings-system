@@ -17,7 +17,8 @@ import {
   StatusDialog,
   stageLabel,
 } from '../components/projects/ProjectParts.js';
-import { Alert, Button, Select } from '../components/ui.js';
+import { LoadFailure } from '../components/LoadFailure.js';
+import { Button, Select } from '../components/ui.js';
 import { PageHeader } from '../components/PageHeader.js';
 
 /**
@@ -133,11 +134,11 @@ export function ProjectsPage() {
       </div>
 
       {projects.isError && (
-        <Alert kind="error">
-          {projects.error instanceof ApiError
-            ? projects.error.message
-            : 'Não foi possível carregar os projetos.'}
-        </Alert>
+        <LoadFailure
+          what="os projetos"
+          error={projects.error}
+          onRetry={() => void projects.refetch()}
+        />
       )}
 
       <div className="table-wrap projects-board-wrap">
@@ -164,7 +165,7 @@ export function ProjectsPage() {
                 </td>
               </tr>
             )}
-            {!projects.isLoading && rows.length === 0 && (
+            {projects.isSuccess && rows.length === 0 && (
               <tr>
                 <td colSpan={4 + PROJECT_STAGES.length} className="muted">
                   Nenhum projeto com estes filtros.

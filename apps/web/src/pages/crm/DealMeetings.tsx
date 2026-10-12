@@ -32,6 +32,7 @@ import {
 } from '../../api/crm.js';
 import type { LoadedLead } from '../../api/leads.js';
 import { Icon } from '../../components/Icon.js';
+import { failureReason } from '../../lib/failure.js';
 import { formatDateTime, formatDay, toLocalInput } from './format.js';
 
 /**
@@ -260,6 +261,13 @@ function ScheduleForm({
         Criar o evento e o Meet no Google Agenda{' '}
         {connected ? (
           <small>(convida o lead e o dono da negociação)</small>
+        ) : google.isError ? (
+          // Not knowing is not "not connected": asking to connect would be a made-up answer.
+          <small>
+            — não foi possível conferir a conexão com o Google: {failureReason(google.error)}
+          </small>
+        ) : google.isLoading ? (
+          <small>(conferindo a conexão com o Google…)</small>
         ) : (
           <small>
             (<a href="/minha-conta">conecte a sua conta Google</a> para ligar)

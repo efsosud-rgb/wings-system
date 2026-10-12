@@ -13,7 +13,9 @@ import { Link, useNavigate } from 'react-router-dom';
 import { hasPermission, useLogout, useSession } from '../api/auth.js';
 import { useTaskList } from '../api/crm.js';
 import { dueLabel, isPast } from '../pages/crm/format.js';
+import { failureReason } from '../lib/failure.js';
 import { Icon } from './Icon.js';
+import { LoadFailure } from './LoadFailure.js';
 
 /**
  * The white bar over every screen: the search (Ctrl K) that opens any screen
@@ -265,30 +267,46 @@ function Bell() {
     .filter((task) => new Date(task.dueAt).getTime() < endOfDay)
     .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
   const late = rows.filter((task) => isPast(task.dueAt)).length;
+  // A failed request is not "nothing for today": with no earlier answer the bell says
+  // "—" and why. After a failed refresh the earlier answer stays, with the failure line.
+  const unavailable = tasks.isError && !tasks.data;
+  const nothingToday = tasks.isSuccess && rows.length === 0;
+  const label = unavailable
+    ? `Avisos: não foi possível carregar (${failureReason(tasks.error)})`
+    : !tasks.data
+      ? 'Avisos'
+      : rows.length === 0
+        ? 'Avisos: nada para hoje'
+        : `Avisos: ${rows.length} tarefa${rows.length === 1 ? '' : 's'} para hoje`;
   return (
     <div className="topbar-item" ref={ref}>
       <button
         type="button"
         className="topbar-icon-btn"
-        aria-label={
-          rows.length === 0
-            ? 'Avisos: nada para hoje'
-            : `Avisos: ${rows.length} tarefa${rows.length === 1 ? '' : 's'} para hoje`
-        }
+        aria-label={label}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((current) => !current)}
       >
         <Icon name="bell" size={18} />
+        {unavailable && (
+          <span className="topbar-badge" title={failureReason(tasks.error)}>
+            —
+          </span>
+        )}
         {rows.length > 0 && (
           <span className={`topbar-badge${late > 0 ? ' is-late' : ''}`}>{rows.length}</span>
         )}
       </button>
       <Menu open={open} onClose={() => setOpen(false)}>
         <div className="topbar-menu-title">
-          {rows.length === 0 ? 'Nada para hoje' : 'Para hoje'}
+          {nothingToday ? 'Nada para hoje' : 'Para hoje'}
           <Link to="/crm-vendas/tarefas">Ver tarefas</Link>
         </div>
+        {tasks.isLoading && <p className="muted">Carregando…</p>}
+        {tasks.isError && (
+          <LoadFailure what="as tarefas" error={tasks.error} onRetry={() => void tasks.refetch()} />
+        )}
         {rows.slice(0, 6).map((task) => (
           <Link
             key={task.id}

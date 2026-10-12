@@ -22,6 +22,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const status = { current: null as AgentStatusResponse | null };
+/** When set, that read fails with this error and holds no data. */
+const failure: { status?: unknown; conversations?: unknown; conversation?: unknown } = {};
+/** Earlier conversations the picker lists. */
+const earlier: { current: { id: string; title: string }[] } = { current: [] };
+const failed = (error: unknown) => ({
+  data: undefined,
+  isLoading: false,
+  isError: true,
+  error,
+  refetch: vi.fn(),
+});
 const markApplied = vi.fn();
 const requestFromProposal = vi.fn();
 const requestState = { error: null as Error | null };
@@ -50,9 +61,14 @@ const streamAgentMessage = vi.fn(
 
 vi.mock('../../api/agent.js', async (original) => ({
   ...(await original<typeof import('../../api/agent.js')>()),
-  useAgentStatus: () => ({ data: status.current, isLoading: false }),
-  useAgentConversations: () => ({ data: { conversations: [] } }),
-  useAgentConversation: () => ({ data: undefined, isLoading: false }),
+  useAgentStatus: () =>
+    failure.status ? failed(failure.status) : { data: status.current, isLoading: false },
+  useAgentConversations: () =>
+    failure.conversations
+      ? failed(failure.conversations)
+      : { data: { conversations: earlier.current } },
+  useAgentConversation: () =>
+    failure.conversation ? failed(failure.conversation) : { data: undefined, isLoading: false },
   useMarkProposalApplied: () => ({ mutate: markApplied, isError: false }),
   useRequestFromProposal: () => ({
     mutate: requestFromProposal,
@@ -85,10 +101,14 @@ vi.mock('../../api/client.js', async (original) => {
 const generationPosts = () => posted.filter((item) => item.path === '/media/generations');
 
 const followed = { current: null as MediaGeneration | null };
+const followError = { current: null as unknown };
 vi.mock('../../api/media.js', async (original) => ({
   ...(await original<typeof import('../../api/media.js')>()),
   useGeneration: (id: string | undefined) => ({
     data: id && followed.current ? { generation: followed.current } : undefined,
+    isError: Boolean(followError.current),
+    error: followError.current,
+    refetch: vi.fn(),
   }),
 }));
 
@@ -235,6 +255,8 @@ async function close() {
 
 beforeEach(() => {
   status.current = { configured: true, usage };
+  for (const key of Object.keys(failure)) delete failure[key as keyof typeof failure];
+  earlier.current = [];
   requestState.error = null;
   sent.length = 0;
   streamAgentMessage.mockClear();
@@ -242,6 +264,7 @@ beforeEach(() => {
   apiPost.mockClear();
   posted.length = 0;
   followed.current = null;
+  followError.current = null;
   requestFromProposal.mockClear();
 });
 
@@ -1061,5 +1084,64 @@ describe('timeline edits', () => {
     stream({ type: 'proposal', proposal: card });
     expect(screen.getByText(/Abra o Studio/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Pré-visualizar' })).toBeNull();
+  });
+});
+
+describe('when what the panel reads fails to load', () => {
+  it('says "—" and why for the agent state, not that it is unconfigured', () => {
+    failure.status = new ApiError(500, {});
+    renderChat(<AgentChat canRequest tab="paid" />);
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar o estado do agente: o servidor teve um problema (erro 500)',
+    );
+    expect(screen.queryByText('O agente ainda não está configurado neste ambiente.')).toBeNull();
+    expect(screen.queryByLabelText('Mensagem')).toBeNull();
+  });
+
+  it('says why the earlier conversations are missing, and still takes a new message', () => {
+    failure.conversations = new TypeError('Failed to fetch');
+    renderChat(<AgentChat canRequest tab="paid" />);
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar as conversas anteriores: sem conexão com o servidor',
+    );
+    expect(screen.getByLabelText('Mensagem')).toBeTruthy();
+  });
+
+  it('says why a chosen conversation did not open, instead of showing it empty', () => {
+    earlier.current = [{ id: 'conv-1', title: 'Ajuste de verba' }];
+    failure.conversation = new ApiError(500, {});
+    renderChat(<AgentChat canRequest tab="paid" />);
+    fireEvent.change(screen.getByLabelText('Conversas anteriores'), {
+      target: { value: 'conv-1' },
+    });
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar a conversa: o servidor teve um problema (erro 500)',
+    );
+  });
+
+  it('says why a generation cannot be followed, instead of "Acompanhando" for good', async () => {
+    followError.current = new ApiError(500, {});
+    renderChat(
+      <AgentChat
+        scope="media"
+        tab="media"
+        title="Agente de Edição Wings"
+        canRequest={false}
+        canGenerate
+      />,
+    );
+    await say('Uma imagem');
+    stream({
+      type: 'proposal',
+      proposal: { ...generationCard, status: 'requested', estimate: null, generationId: 'gen-2' },
+    });
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar o andamento da geração: o servidor teve um problema (erro 500)',
+    );
+    expect(screen.queryByText('Acompanhando a geração…')).toBeNull();
   });
 });

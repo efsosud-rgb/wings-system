@@ -1,7 +1,8 @@
 import type { DashboardWindow } from '@wings/shared';
 import { useOwnedChannels } from '../../api/dashboard.js';
 import { downloadCsv, toCsv } from '../../lib/csv.js';
-import { Alert, Button } from '../ui.js';
+import { LoadFailure } from '../LoadFailure.js';
+import { Button } from '../ui.js';
 import { formatDateFull, since } from './format.js';
 import { YoutubeChannelSection } from './YoutubeChannelSection.js';
 
@@ -16,11 +17,13 @@ import { YoutubeChannelSection } from './YoutubeChannelSection.js';
 export function OwnedChannelsTab({ days }: { days: DashboardWindow }) {
   const query = useOwnedChannels(days);
 
-  if (query.isError) {
+  if (query.isError && !query.data) {
     return (
-      <Alert kind="error">
-        Não foi possível carregar os canais próprios. Tente de novo em instantes.
-      </Alert>
+      <LoadFailure
+        what="os canais próprios"
+        error={query.error}
+        onRetry={() => void query.refetch()}
+      />
     );
   }
   if (!query.data) return <p className="muted">Carregando…</p>;
@@ -44,6 +47,13 @@ export function OwnedChannelsTab({ days }: { days: DashboardWindow }) {
 
   return (
     <>
+      {query.isError && (
+        <LoadFailure
+          what="os canais próprios"
+          error={query.error}
+          onRetry={() => void query.refetch()}
+        />
+      )}
       <section className="dash-section" aria-labelledby="blog-title">
         <div className="dash-toolbar">
           <div>

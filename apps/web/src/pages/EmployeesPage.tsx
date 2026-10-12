@@ -10,8 +10,9 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { hasPermission, useSession } from '../api/auth.js';
 import { useEmployees } from '../api/employees.js';
+import { LoadFailure, Unavailable } from '../components/LoadFailure.js';
 import { SectorSelect } from '../components/SectorSelect.js';
-import { Alert, Button, Input, Select } from '../components/ui.js';
+import { Button, Input, Select } from '../components/ui.js';
 import { PageHeader } from '../components/PageHeader.js';
 
 const STATUS_LABEL: Record<EmployeeStatus, string> = {
@@ -49,6 +50,7 @@ export function EmployeesPage() {
   });
 
   const canCreate = hasPermission(user, 'employees.create');
+  // Only a type default feeding the pager: the headline below never shows it as the truth.
   const total = list.data?.total ?? 0;
   const pageSize = list.data?.pageSize ?? 20;
   const lastPage = Math.max(1, Math.ceil(total / pageSize));
@@ -57,7 +59,17 @@ export function EmployeesPage() {
     <>
       <PageHeader
         title="Usuários e acessos"
-        subtitle={`${total} ${total === 1 ? 'funcionário' : 'funcionários'} no seu escopo de acesso`}
+        subtitle={
+          list.data ? (
+            `${total} ${total === 1 ? 'funcionário' : 'funcionários'} no seu escopo de acesso`
+          ) : list.isError ? (
+            <>
+              Funcionários no seu escopo de acesso: <Unavailable error={list.error} />
+            </>
+          ) : (
+            'Funcionários no seu escopo de acesso'
+          )
+        }
         actions={
           canCreate && (
             <Link to="/administracao/usuarios/novo" className="btn btn-primary btn-inline">
@@ -102,7 +114,13 @@ export function EmployeesPage() {
         </Select>
       </section>
 
-      {list.isError && <Alert kind="error">Não foi possível carregar a lista.</Alert>}
+      {list.isError && (
+        <LoadFailure
+          what="os funcionários"
+          error={list.error}
+          onRetry={() => void list.refetch()}
+        />
+      )}
 
       <div className="table-wrap">
         <table className="table">
@@ -125,7 +143,7 @@ export function EmployeesPage() {
                 </td>
               </tr>
             )}
-            {list.data?.employees.length === 0 && (
+            {list.isSuccess && list.data.employees.length === 0 && (
               <tr>
                 <td colSpan={7} className="muted">
                   Nenhum funcionário encontrado.

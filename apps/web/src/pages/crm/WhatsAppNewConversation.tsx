@@ -5,6 +5,7 @@ import { hasPermission, useSession } from '../../api/auth.js';
 import { ApiError } from '../../api/client.js';
 import { useCreateLead } from '../../api/leads.js';
 import { useWhatsAppTargets } from '../../api/whatsapp.js';
+import { LoadFailure } from '../../components/LoadFailure.js';
 import { Modal } from './CreateDealModal.js';
 import { formatPhone } from './format.js';
 
@@ -58,6 +59,9 @@ export function WhatsAppNewConversation({ onClose }: { onClose: () => void }) {
         />
       </label>
       {targets.isFetching && <p className="crm-muted">Buscando…</p>}
+      {targets.isError && (
+        <LoadFailure what="a busca" error={targets.error} onRetry={() => void targets.refetch()} />
+      )}
       {found.length > 0 && (
         <ul className="crm-wa-targets">
           {found.map((target) => (
@@ -78,22 +82,29 @@ export function WhatsAppNewConversation({ onClose }: { onClose: () => void }) {
           ))}
         </ul>
       )}
-      {q.trim().length >= 2 && !targets.isFetching && found.length === 0 && !isNumber && (
-        <p className="crm-muted">Nada encontrado nas suas negociações.</p>
-      )}
-      {isNumber && !sameNumber && !targets.isFetching && targets.data?.busy && (
+      {/* "Nothing found" and "no deal with this number" only after a search that answered. */}
+      {q.trim().length >= 2 &&
+        targets.isSuccess &&
+        !targets.isFetching &&
+        found.length === 0 &&
+        !isNumber && <p className="crm-muted">Nada encontrado nas suas negociações.</p>}
+      {isNumber && targets.isSuccess && !sameNumber && !targets.isFetching && targets.data.busy && (
         <p className="crm-muted">
           Esta pessoa já está em atendimento (com a Sofia ou com a equipe) e ainda não tem
           negociação. Peça à Diretoria para passar a conversa a você.
         </p>
       )}
-      {isNumber && !sameNumber && !targets.isFetching && !targets.data?.busy && (
-        <NewNumber
-          phone={digits}
-          canCreate={canCreate}
-          onCreated={(leadId) => go({ leadId, conversationId: null })}
-        />
-      )}
+      {isNumber &&
+        targets.isSuccess &&
+        !sameNumber &&
+        !targets.isFetching &&
+        !targets.data.busy && (
+          <NewNumber
+            phone={digits}
+            canCreate={canCreate}
+            onCreated={(leadId) => go({ leadId, conversationId: null })}
+          />
+        )}
     </Modal>
   );
 }

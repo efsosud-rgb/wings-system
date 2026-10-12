@@ -9,7 +9,7 @@ import type {
   AgentStreamEvent,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ApiError, api, type ApiErrorBody } from './client.js';
+import { ApiError, api, noteUnauthorized, type ApiErrorBody } from './client.js';
 
 /**
  * The conversation with the traffic agent. Reading and proposing only: the two
@@ -124,6 +124,7 @@ export async function streamAgentMessage(
   });
 
   if (!response.ok) {
+    noteUnauthorized(response.status, '/agent/messages');
     let body: ApiErrorBody = {};
     try {
       body = (await response.json()) as ApiErrorBody;

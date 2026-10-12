@@ -1,7 +1,8 @@
 import type { DealWhatsApp, WaConversationItem, WaNewTarget } from '@wings/shared';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client.js';
 import { WhatsAppInboxPage, WhatsAppWaitingPage } from './WhatsAppInboxPage.js';
 
 /**
@@ -17,6 +18,10 @@ const { state } = vi.hoisted(() => ({
     created: [] as unknown[],
     targets: [] as WaNewTarget[],
     permissions: { 'leads.whatsapp': 'all', 'leads.write': 'all' } as Record<string, string>,
+    // Overrides for what the two queries answer (a failed request, an empty list); reset per test.
+    listQuery: {} as Record<string, unknown>,
+    threadQuery: {} as Record<string, unknown>,
+    targetsQuery: {} as Record<string, unknown>,
   },
 }));
 
@@ -95,17 +100,27 @@ vi.mock('../../api/auth.js', () => ({
 vi.mock('../../api/whatsapp.js', () => ({
   useWhatsAppInbox: (filter: string, q: string) => {
     state.asked.push({ filter, q });
-    return { isLoading: false, isError: false, data: { conversations: rows } };
+    return {
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      data: { conversations: rows },
+      ...state.listQuery,
+    };
   },
   useWhatsAppConversation: (id: string | undefined) => ({
     isLoading: false,
     isError: false,
     data: id === 'c1' ? thread : undefined,
+    ...state.threadQuery,
   }),
   useMarkWhatsAppRead: () => ({ mutate: (id: string) => state.read.push(id) }),
   useWhatsAppTargets: (q: string) => ({
     isFetching: false,
+    isError: false,
+    isSuccess: q.trim().length >= 2,
     data: { targets: q.length >= 2 ? state.targets : [] },
+    ...state.targetsQuery,
   }),
 }));
 
@@ -134,6 +149,9 @@ beforeEach(() => {
   state.created.length = 0;
   state.targets = [];
   state.permissions = { 'leads.whatsapp': 'all', 'leads.write': 'all' };
+  state.listQuery = {};
+  state.threadQuery = {};
+  state.targetsQuery = {};
 });
 afterEach(cleanup);
 
@@ -218,5 +236,96 @@ describe('the WhatsApp screen', () => {
     });
     expect(screen.queryByRole('button', { name: /Criar negociação/ })).toBeNull();
     expect(screen.getByText(/precisa cadastrá-lo antes/)).toBeTruthy();
+  });
+});
+
+describe('when a request fails', () => {
+  const failed = (error: unknown) => ({
+    data: undefined,
+    isLoading: false,
+    isError: true,
+    isSuccess: false,
+    error,
+    refetch: vi.fn(),
+  });
+
+  it('the list says why, not "Nenhuma conversa ainda."', () => {
+    state.listQuery = failed(new ApiError(500, {}));
+    renderAt('/crm-vendas/whatsapp');
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('Não foi possível carregar as conversas');
+    expect(alert.textContent).toContain('erro 500');
+    expect(screen.queryByText(/Nenhuma conversa/)).toBeNull();
+  });
+
+  it('the "Não lidas" and "Sem resposta" tabs do not say "nothing waiting" when the request failed', () => {
+    state.listQuery = failed(new ApiError(401, {}));
+    renderAt('/crm-vendas/whatsapp');
+    fireEvent.click(screen.getByRole('tab', { name: 'Não lidas' }));
+    expect(screen.queryByText('Nenhuma conversa com mensagem não lida.')).toBeNull();
+    fireEvent.click(screen.getByRole('tab', { name: 'Sem resposta' }));
+    expect(screen.queryByText('Nenhuma conversa esperando resposta.')).toBeNull();
+    expect(screen.getByRole('alert').textContent).toContain('sua sessão expirou');
+  });
+
+  it('the list still says "Nenhuma conversa esperando resposta." when it succeeded empty', () => {
+    state.listQuery = { data: { conversations: [] } };
+    renderAt('/crm-vendas/whatsapp');
+    fireEvent.click(screen.getByRole('tab', { name: 'Sem resposta' }));
+    expect(screen.getByText('Nenhuma conversa esperando resposta.')).toBeTruthy();
+  });
+
+  it('keeps the rows it had and adds the reason when only a refresh failed', () => {
+    state.listQuery = { isError: true, isSuccess: false, error: new TypeError('x') };
+    renderAt('/crm-vendas/whatsapp');
+    expect(screen.getByRole('alert').textContent).toContain('sem conexão com o servidor');
+    expect(screen.getByRole('link', { name: /Elena Prado/ })).toBeTruthy();
+  });
+
+  it('an open conversation that did not load says why, not "não encontrada"', () => {
+    state.threadQuery = failed(new ApiError(500, {}));
+    renderAt('/crm-vendas/whatsapp/c1');
+    expect(screen.getByRole('alert').textContent).toContain('Não foi possível carregar a conversa');
+    expect(screen.queryByText(/não encontrada/)).toBeNull();
+    expect(screen.getByRole('link', { name: 'Voltar às conversas' })).toBeTruthy();
+  });
+
+  it('an unknown conversation (no error, no data) still reads "não encontrada"', () => {
+    renderAt('/crm-vendas/whatsapp/zzz');
+    expect(screen.getByText(/Conversa não encontrada/)).toBeTruthy();
+  });
+
+  it('a failed search for a typed number says why, and offers no "create a deal"', () => {
+    state.targetsQuery = failed(new ApiError(500, {}));
+    renderAt('/crm-vendas/whatsapp');
+    fireEvent.click(screen.getByRole('button', { name: 'Nova conversa' }));
+    fireEvent.change(screen.getByPlaceholderText('Nome, telefone ou contato'), {
+      target: { value: '21 98765-4321' },
+    });
+    const dialog = within(screen.getByRole('dialog'));
+    expect(dialog.getByRole('alert').textContent).toContain('Não foi possível carregar a busca');
+    expect(dialog.queryByText(/Nenhuma negociação com/)).toBeNull();
+    expect(dialog.queryByRole('button', { name: /Criar negociação/ })).toBeNull();
+  });
+
+  it('a failed search by name says why, not "Nada encontrado nas suas negociações."', () => {
+    state.targetsQuery = failed(new TypeError('x'));
+    renderAt('/crm-vendas/whatsapp');
+    fireEvent.click(screen.getByRole('button', { name: 'Nova conversa' }));
+    fireEvent.change(screen.getByPlaceholderText('Nome, telefone ou contato'), {
+      target: { value: 'Patr' },
+    });
+    const dialog = within(screen.getByRole('dialog'));
+    expect(dialog.getByRole('alert').textContent).toContain('sem conexão com o servidor');
+    expect(dialog.queryByText(/Nada encontrado/)).toBeNull();
+  });
+
+  it('a search that answered with nobody still says "Nada encontrado nas suas negociações."', () => {
+    renderAt('/crm-vendas/whatsapp');
+    fireEvent.click(screen.getByRole('button', { name: 'Nova conversa' }));
+    fireEvent.change(screen.getByPlaceholderText('Nome, telefone ou contato'), {
+      target: { value: 'Patr' },
+    });
+    expect(screen.getByText('Nada encontrado nas suas negociações.')).toBeTruthy();
   });
 });

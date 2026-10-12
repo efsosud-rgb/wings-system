@@ -54,6 +54,7 @@ import { LeadFormPreviewGallery } from '../components/campaign-builder/LeadFormP
 import { agoLabel } from '../components/campaign-builder/format.js';
 import { SearchAdPreview, YoutubePreview } from '../components/campaign-builder/GooglePreview.js';
 import { ReconcileNowButton } from '../components/campaign-builder/ReconcileNowButton.js';
+import { LoadFailure } from '../components/LoadFailure.js';
 import { Alert, Button, Field, Input } from '../components/ui.js';
 import { PageHeader } from '../components/PageHeader.js';
 
@@ -390,6 +391,8 @@ function YoutubeApprovalDetails({
                   </Alert>
                 )}
               </>
+            ) : logo.isError && !(logo.error instanceof ApiError && logo.error.status === 404) ? (
+              <LoadFailure what="a logo" error={logo.error} onRetry={() => void logo.refetch()} />
             ) : (
               <span className="cell-sub">
                 {' '}
@@ -890,11 +893,23 @@ export function ApprovalDetailPage() {
   const open = approval?.status === 'pending' || approval?.status === 'escalated';
 
   if (query.isLoading) return <div className="page-loading">Carregando…</div>;
-  if (query.isError || !approval) {
+  if (!approval) {
+    // Only the server's own "not found" may say so: a 500 or a dropped connection says nothing
+    // about whether the request exists.
+    const notFound =
+      !query.isError || (query.error instanceof ApiError && query.error.status === 404);
     return (
       <>
         <PageHeader title="Aprovação" />
-        <Alert kind="error">Solicitação não encontrada.</Alert>
+        {notFound ? (
+          <Alert kind="error">Solicitação não encontrada.</Alert>
+        ) : (
+          <LoadFailure
+            what="a solicitação"
+            error={query.error}
+            onRetry={() => void query.refetch()}
+          />
+        )}
         <p>
           <Link to="/marketing/trafego-pago-wings/aprovacoes">Voltar às aprovações</Link>
         </p>
@@ -930,6 +945,14 @@ export function ApprovalDetailPage() {
           </Link>
         }
       />
+
+      {query.isError && (
+        <LoadFailure
+          what="a solicitação"
+          error={query.error}
+          onRetry={() => void query.refetch()}
+        />
+      )}
 
       {approval.notificationError && (
         <Alert kind="error">

@@ -2,6 +2,7 @@ import { drivePreviewKind, type DriveFile, type DriveFolder, type DriveLink } fr
 import { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { ApiError } from '../../api/client.js';
 import { driveLink, useDriveVersions, useUpdateFile } from '../../api/drive.js';
+import { LoadFailure } from '../LoadFailure.js';
 import { Button } from '../ui.js';
 
 /** What a dragged file of the Drive carries, so a drop can tell it from a file of the computer. */
@@ -355,6 +356,13 @@ export function PreviewDialog({
         </form>
       )}
 
+      {versions.isError && !versions.data && (
+        <LoadFailure
+          what="as versões anteriores"
+          error={versions.error}
+          onRetry={() => void versions.refetch()}
+        />
+      )}
       {(versions.data?.versions.length ?? 0) > 0 && (
         <details className="agent-details">
           <summary>Versões anteriores</summary>

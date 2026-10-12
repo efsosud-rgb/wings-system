@@ -10,6 +10,7 @@ import {
   useMergeContacts,
   useUpdateContact,
 } from '../../api/crm.js';
+import { LoadFailure, Unavailable } from '../../components/LoadFailure.js';
 import { formatDate, formatPhone, money } from './format.js';
 import { useCreateFromQuery } from '../../components/useCreateFromQuery.js';
 
@@ -205,8 +206,18 @@ function ContactList() {
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
               />
-              <span className="crm-muted">{rows.length} contato(s)</span>
+              <span className="crm-muted">
+                {contacts.data ? `${rows.length} contato(s)` : null}
+                {!contacts.data && contacts.isError ? <Unavailable error={contacts.error} /> : null}
+              </span>
             </div>
+            {contacts.isError && (
+              <LoadFailure
+                what="os contatos"
+                error={contacts.error}
+                onRetry={() => void contacts.refetch()}
+              />
+            )}
             <table className="crm-table">
               <thead>
                 <tr>
@@ -218,7 +229,14 @@ function ContactList() {
                 </tr>
               </thead>
               <tbody>
-                {rows.length === 0 && (
+                {contacts.isLoading && (
+                  <tr>
+                    <td colSpan={5} className="crm-muted">
+                      Carregando…
+                    </td>
+                  </tr>
+                )}
+                {contacts.isSuccess && rows.length === 0 && (
                   <tr>
                     <td colSpan={5} className="crm-muted">
                       Nenhum contato encontrado.
@@ -262,7 +280,15 @@ function ContactList() {
             {merge.error && (
               <p className="crm-error">{errorText(merge.error, 'Não foi possível mesclar.')}</p>
             )}
-            {(contacts.data?.duplicates ?? []).length === 0 && (
+            {contacts.isLoading && <p className="crm-muted">Carregando…</p>}
+            {contacts.isError && (
+              <LoadFailure
+                what="os contatos"
+                error={contacts.error}
+                onRetry={() => void contacts.refetch()}
+              />
+            )}
+            {contacts.isSuccess && (contacts.data?.duplicates ?? []).length === 0 && (
               <p className="crm-muted">Nenhum duplicado encontrado.</p>
             )}
             {(contacts.data?.duplicates ?? []).map((pair) => (
@@ -333,11 +359,20 @@ function ContactRecord({ id }: { id: string }) {
         </p>
       </div>
     );
-  if (loaded.isError || !loaded.data)
+  // A failed request is not "not found": say why (a 404 reads "não foi encontrado").
+  if (!loaded.data)
     return (
       <div className="crm-page">
         <div className="crm-empty">
-          <span>Contato não encontrado.</span>
+          {loaded.isError ? (
+            <LoadFailure
+              what="o contato"
+              error={loaded.error}
+              onRetry={() => void loaded.refetch()}
+            />
+          ) : (
+            <span>Contato não encontrado.</span>
+          )}
           <Link className="crm-btn" to="/crm-vendas/contatos">
             Voltar
           </Link>
@@ -372,6 +407,16 @@ function ContactRecord({ id }: { id: string }) {
           </button>
         )}
       </header>
+      {/* A refresh failed: what was loaded stays on screen, with the reason above it. */}
+      {loaded.isError && (
+        <div style={{ padding: 'var(--space-2) var(--space-5)' }}>
+          <LoadFailure
+            what="o contato"
+            error={loaded.error}
+            onRetry={() => void loaded.refetch()}
+          />
+        </div>
+      )}
       <div className="crm-page-scroll crm-two">
         <section className="crm-panel">
           <h2>Dados</h2>

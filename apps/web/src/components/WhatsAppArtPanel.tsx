@@ -13,6 +13,7 @@ import {
   useSetClientArticle,
   useUploadClientArt,
 } from '../api/clients.js';
+import { LoadFailure } from './LoadFailure.js';
 import { Alert, Button, Field, Select } from './ui.js';
 
 /**
@@ -61,6 +62,17 @@ export function WhatsAppArtPanel({
         </p>
       </div>
 
+      {/*
+        A failed read says nothing about the art: "Cadastre a arte" would be a made-up fact,
+        and replacing a picture nobody could see would be a blind overwrite.
+      */}
+      {state.isError && (
+        <LoadFailure
+          what="a arte do WhatsApp"
+          error={state.error}
+          onRetry={() => void state.refetch()}
+        />
+      )}
       {state.isLoading ? (
         <p className="muted">Carregando…</p>
       ) : art ? (
@@ -71,13 +83,13 @@ export function WhatsAppArtPanel({
           width={WA_ART_WIDTH}
           height={WA_ART_HEIGHT}
         />
-      ) : (
+      ) : state.data ? (
         <Alert kind="warning">
           {wings
             ? 'Cadastre a arte do WhatsApp da Wings: sem ela, os modelos da Formatação saem sem imagem.'
             : 'Cadastre a arte do WhatsApp desta marca: sem ela, os modelos saem sem a logo.'}
         </Alert>
-      )}
+      ) : null}
 
       {canEdit && (
         <div className="wa-art-actions">
@@ -93,7 +105,11 @@ export function WhatsAppArtPanel({
               if (file) upload.mutate(file);
             }}
           />
-          <Button type="button" onClick={() => input.current?.click()} disabled={busy}>
+          <Button
+            type="button"
+            onClick={() => input.current?.click()}
+            disabled={busy || !state.data}
+          >
             {upload.isPending ? 'Enviando…' : art ? 'Trocar a arte' : 'Enviar a arte'}
           </Button>
           {art && (
@@ -139,9 +155,6 @@ export function WhatsAppArtPanel({
             <Alert kind="error">{errorText(article.error, 'Não deu para salvar o artigo.')}</Alert>
           )}
         </div>
-      )}
-      {state.isError && (
-        <Alert kind="error">{errorText(state.error, 'Não deu para abrir a arte.')}</Alert>
       )}
     </section>
   );

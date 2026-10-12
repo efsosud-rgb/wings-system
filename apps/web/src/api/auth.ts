@@ -1,6 +1,7 @@
 import type { PermissionKey, Scope, SessionUser } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from './client.js';
+import { clearSessionExpired, forgetSignedIn, rememberSignedIn } from './session-expiry.js';
 
 export const sessionKey = ['session'] as const;
 
@@ -16,6 +17,7 @@ export function useSession() {
     queryFn: async (): Promise<SessionUser | null> => {
       try {
         const body = await api.get<{ user: SessionUser }>('/auth/me');
+        rememberSignedIn();
         return body.user;
       } catch (error) {
         if (error instanceof ApiError && error.status === 401) return null;
@@ -31,6 +33,11 @@ export function useLogin() {
     mutationFn: (input: { email: string; password: string }) =>
       api.post<{ user: SessionUser }>('/auth/login', input),
     onSuccess: (data) => {
+      // A new session starts from nothing: whatever the tab still held belongs to the
+      // previous one (possibly another person's) and is never shown again.
+      queryClient.clear();
+      clearSessionExpired();
+      rememberSignedIn();
       queryClient.setQueryData(sessionKey, data.user);
     },
   });
@@ -41,6 +48,8 @@ export function useLogout() {
   return useMutation({
     mutationFn: () => api.post<{ ok: true }>('/auth/logout'),
     onSuccess: () => {
+      // Before the cache changes: the route gate reads this flag the moment the session is gone.
+      forgetSignedIn();
       queryClient.setQueryData(sessionKey, null);
       queryClient.clear();
     },

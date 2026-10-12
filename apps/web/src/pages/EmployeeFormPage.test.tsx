@@ -41,12 +41,16 @@ const employee = {
 /** The record the edit form loads; tests override fields of it. */
 const record: { current: typeof employee } = { current: employee };
 const updateEmployee = vi.fn();
+/** Set to make the record fail to load. */
+const loadFailure: { current: unknown } = { current: null };
 
 vi.mock('../api/employees.js', () => ({
   useEmployee: (id?: string) => ({
-    data: id ? { employee: record.current } : undefined,
+    data: id && !loadFailure.current ? { employee: record.current } : undefined,
     isLoading: false,
-    isError: false,
+    isError: Boolean(loadFailure.current),
+    error: loadFailure.current,
+    refetch: vi.fn(),
   }),
   useCreateEmployee: () => ({ mutateAsync: vi.fn(), error: null }),
   useUpdateEmployee: () => ({ mutateAsync: updateEmployee, error: null }),
@@ -55,6 +59,7 @@ vi.mock('../api/employees.js', () => ({
 }));
 
 const { EmployeeFormPage } = await import('./EmployeeFormPage.js');
+const { ApiError } = await import('../api/client.js');
 
 function makeUser(overrides: Partial<SessionUser>): SessionUser {
   return {
@@ -90,6 +95,7 @@ function renderForm(path: string) {
 beforeEach(() => {
   session.current = makeUser({});
   record.current = employee;
+  loadFailure.current = null;
   updateEmployee.mockReset().mockResolvedValue({ employee });
 });
 
@@ -348,5 +354,25 @@ describe('access level on an existing record', () => {
     await waitFor(() => expect(updateEmployee).toHaveBeenCalledTimes(1));
     expect(confirm).not.toHaveBeenCalled();
     expect((updateEmployee.mock.calls[0]?.[0] as Record<string, unknown>).role).toBe('diretoria');
+  });
+});
+
+describe('when the record cannot be loaded', () => {
+  it('names the real reason for a server error instead of "not found", with no form to save', () => {
+    loadFailure.current = new ApiError(500, {});
+    renderForm('/funcionarios/emp-1');
+
+    expect(screen.getByRole('alert').textContent).toMatch(
+      /Não foi possível carregar o funcionário: o servidor teve um problema \(erro 500\)/,
+    );
+    expect(screen.queryByText(/Registro não encontrado/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Salvar/ })).toBeNull();
+    expect(screen.queryByLabelText(/Nível de acesso/i)).toBeNull();
+  });
+
+  it('keeps "not found or outside your scope" for a record the API says is not there', () => {
+    loadFailure.current = new ApiError(404, {});
+    renderForm('/funcionarios/emp-1');
+    expect(screen.getByText(/Registro não encontrado ou fora do seu escopo/)).toBeTruthy();
   });
 });

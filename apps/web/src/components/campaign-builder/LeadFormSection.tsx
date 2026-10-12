@@ -25,6 +25,7 @@ import {
   useSiteFormPages,
   type SiteFormPage,
 } from '../../api/lead-forms.js';
+import { LoadFailure } from '../LoadFailure.js';
 import { Alert, Button, Field, Input, Select } from '../ui.js';
 import { SiteFormPreview } from './LeadFormPreview.js';
 
@@ -225,29 +226,39 @@ export function LeadFormSection({
       )}
 
       {(!meta || leadCapture === 'page') && (
-        <Field
-          label={meta ? 'Página do site com o formulário padrão (opcional)' : 'Página do site'}
-          hint={
-            platform === 'youtube'
-              ? 'O Google não aceita formulário de lead em campanhas Demand Gen (YouTube); o anúncio leva a uma página do Wings System com o formulário padrão.'
-              : 'Escolher uma página troca o destino por ela; o funil é o da página.'
-          }
-        >
-          <Select
-            value={sitePage?.id ?? ''}
-            onChange={(event) =>
-              choosePage(pages.data?.pages.find((page) => page.id === event.target.value) ?? null)
+        <>
+          <Field
+            label={meta ? 'Página do site com o formulário padrão (opcional)' : 'Página do site'}
+            hint={
+              platform === 'youtube'
+                ? 'O Google não aceita formulário de lead em campanhas Demand Gen (YouTube); o anúncio leva a uma página do Wings System com o formulário padrão.'
+                : 'Escolher uma página troca o destino por ela; o funil é o da página.'
             }
           >
-            <option value="">{meta ? 'Manter a página de destino' : 'Escolha a página'}</option>
-            {(pages.data?.pages ?? []).map((page) => (
-              <option key={page.id} value={page.id}>
-                {page.brand} — {page.path}
-                {page.pending ? ' (alteração aguardando)' : ''}
-              </option>
-            ))}
-          </Select>
-        </Field>
+            <Select
+              value={sitePage?.id ?? ''}
+              onChange={(event) =>
+                choosePage(pages.data?.pages.find((page) => page.id === event.target.value) ?? null)
+              }
+            >
+              <option value="">{meta ? 'Manter a página de destino' : 'Escolha a página'}</option>
+              {(pages.data?.pages ?? []).map((page) => (
+                <option key={page.id} value={page.id}>
+                  {page.brand} — {page.path}
+                  {page.pending ? ' (alteração aguardando)' : ''}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          {/* Without the list the form below cannot tell whether the destination is one of our pages. */}
+          {pages.isError && !pages.data && (
+            <LoadFailure
+              what="as páginas do site"
+              error={pages.error}
+              onRetry={() => void pages.refetch()}
+            />
+          )}
+        </>
       )}
 
       {(instant || sitePage) && (
@@ -385,31 +396,40 @@ export function LeadFormSection({
               </Select>
             </Field>
             {pipeline === 'expansao' && (
-              <Field label="Marca (cliente)" error={formErrors?.funnel?.brand?.message}>
-                <Select
-                  disabled={!instant}
-                  value={leadForm?.funnel?.clientId ?? ''}
-                  onChange={(event) => {
-                    const client = activeClients.find((item) => item.id === event.target.value);
-                    setValue(
-                      'leadForm.funnel',
-                      {
-                        pipeline: 'expansao',
-                        brand: client?.name ?? null,
-                        clientId: client?.id ?? null,
-                      },
-                      filled,
-                    );
-                  }}
-                >
-                  <option value="">{leadForm?.funnel?.brand ?? 'Escolha a marca'}</option>
-                  {activeClients.map((client) => (
-                    <option key={client.id} value={client.id}>
-                      {client.name}
-                    </option>
-                  ))}
-                </Select>
-              </Field>
+              <>
+                <Field label="Marca (cliente)" error={formErrors?.funnel?.brand?.message}>
+                  <Select
+                    disabled={!instant}
+                    value={leadForm?.funnel?.clientId ?? ''}
+                    onChange={(event) => {
+                      const client = activeClients.find((item) => item.id === event.target.value);
+                      setValue(
+                        'leadForm.funnel',
+                        {
+                          pipeline: 'expansao',
+                          brand: client?.name ?? null,
+                          clientId: client?.id ?? null,
+                        },
+                        filled,
+                      );
+                    }}
+                  >
+                    <option value="">{leadForm?.funnel?.brand ?? 'Escolha a marca'}</option>
+                    {activeClients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {client.name}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+                {clients.isError && !clients.data && (
+                  <LoadFailure
+                    what="as marcas"
+                    error={clients.error}
+                    onRetry={() => void clients.refetch()}
+                  />
+                )}
+              </>
             )}
           </div>
         </>

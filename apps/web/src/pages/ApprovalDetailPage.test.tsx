@@ -40,13 +40,35 @@ vi.mock('../api/auth.js', () => ({
 }));
 
 /** The approval's YouTube logo, as the server links it. */
+/** When set, GET /ads/approvals/:id fails with it (and still holds the old answer if `stale`). */
+const approvalError: { current: unknown } = { current: null };
+const approvalStale: { current: boolean } = { current: false };
+const logoError: { current: unknown } = { current: null };
 const approvalLogo: { current: { fileId: string; url: string; unchanged: boolean } | undefined } = {
   current: undefined,
 };
 
 vi.mock('../api/ads.js', () => ({
-  useApprovalYoutubeLogo: () => ({ data: approvalLogo.current, isLoading: false }),
-  useApproval: () => ({ data: { approval: approval.current }, isLoading: false, isError: false }),
+  useApprovalYoutubeLogo: () =>
+    logoError.current
+      ? {
+          data: undefined,
+          isLoading: false,
+          isError: true,
+          error: logoError.current,
+          refetch: vi.fn(),
+        }
+      : { data: approvalLogo.current, isLoading: false },
+  useApproval: () =>
+    approvalError.current
+      ? {
+          data: approvalStale.current ? { approval: approval.current } : undefined,
+          isLoading: false,
+          isError: true,
+          error: approvalError.current,
+          refetch: vi.fn(),
+        }
+      : { data: { approval: approval.current }, isLoading: false, isError: false },
   useDecideApproval: () => ({ mutateAsync: decide, isPending: false, error: null }),
   useExecuteApproval: () => ({
     mutateAsync: execute,
@@ -220,6 +242,9 @@ function renderDetail() {
 beforeEach(() => {
   session.current = makeUser({});
   approval.current = buildApproval();
+  approvalError.current = null;
+  approvalStale.current = false;
+  logoError.current = null;
   simulation.current = { simulation: buildSimulation(), nextPending: null };
   decide.mockClear();
   execute.mockClear();
@@ -629,6 +654,41 @@ describe('a request to create a campaign', () => {
     approvalLogo.current = undefined;
   });
 
+  it('says "—" and why when the logo could not be loaded, instead of "não encontrada"', () => {
+    logoError.current = new ApiError(500, {});
+    approval.current = buildApproval({
+      platform: 'google',
+      changeKind: 'create_campaign',
+      draft: {
+        ...draft,
+        formatKey: undefined,
+        platform: 'youtube',
+        reach: { ...draft.reach, customLocations: [] },
+        variations: [],
+        youtube: {
+          videos: ['dQw4w9WgXcQ'],
+          headlines: ['Conheça a Wings'],
+          longHeadlines: ['Sua empresa pode virar uma rede de franquias'],
+          descriptions: ['Diagnóstico com quem já formatou centenas de marcas.'],
+          businessName: 'Wings Company',
+          logoFileId: '7c1f4a52-2b8e-4d0a-9f3e-1a2b3c4d5e6f',
+          conversionAction: { id: '7804997444', name: 'RD form conversion' },
+          ageMin: 25,
+          ageMax: 65,
+          includeUnknownAge: false,
+          channels: ['youtube_in_stream'],
+          audienceSegments: [],
+        },
+      },
+    });
+    renderDetail();
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar a logo: o servidor teve um problema (erro 500)',
+    );
+    expect(screen.queryByText(/logo não encontrada no Drive/)).toBeNull();
+  });
+
   it('says so in red when the campaign would be born active', () => {
     approval.current = buildApproval({
       changeKind: 'create_campaign',
@@ -902,5 +962,36 @@ describe('an add_ads request', () => {
     expect(screen.getByText(`Parâmetros de URL: ${META_URL_TAGS}`)).toBeTruthy();
     // No budget simulator for a change that moves no money.
     expect(screen.queryByText(/Simular/)).toBeNull();
+  });
+});
+
+describe('when the request itself cannot be loaded', () => {
+  it('says "—" and why on a server failure, never "não encontrada"', () => {
+    approvalError.current = new ApiError(500, {});
+    renderDetail();
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar a solicitação: o servidor teve um problema (erro 500)',
+    );
+    expect(screen.queryByText('Solicitação não encontrada.')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Aprovar/ })).toBeNull();
+  });
+
+  it('still says "não encontrada" when the server itself answered 404', () => {
+    approvalError.current = new ApiError(404, { error: 'not_found' });
+    renderDetail();
+
+    expect(screen.getByText('Solicitação não encontrada.')).toBeTruthy();
+  });
+
+  it('keeps the request on screen, with the failure above it, when only a refresh failed', () => {
+    approvalError.current = new TypeError('Failed to fetch');
+    approvalStale.current = true;
+    renderDetail();
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar a solicitação: sem conexão com o servidor',
+    );
+    expect(screen.getByText('Aprovação de orçamento')).toBeTruthy();
   });
 });

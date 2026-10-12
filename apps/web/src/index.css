@@ -1154,6 +1154,31 @@ a {
   padding: 0;
 }
 
+/* A list or card that could not load: "—", the reason, a way to try again. */
+.load-failure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  color: var(--wings-muted);
+  font-size: var(--text-md);
+}
+
+.load-failure-dash {
+  font-weight: 600;
+  color: var(--wings-text);
+}
+
+/* A value that could not load, in place of a made-up zero. */
+.unavailable {
+  color: var(--wings-muted);
+}
+
+.unavailable-why {
+  font-size: var(--text-md);
+  font-weight: 400;
+}
+
 /* ---------- approvals ---------- */
 .approvals-section {
   margin-bottom: 28px;

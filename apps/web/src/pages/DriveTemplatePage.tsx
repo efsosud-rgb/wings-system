@@ -14,6 +14,7 @@ import {
   useUpdateTemplateNode,
 } from '../api/drive.js';
 import { errorText } from '../components/drive/DriveParts.js';
+import { LoadFailure } from '../components/LoadFailure.js';
 import { Alert, Button } from '../components/ui.js';
 import { PageHeader } from '../components/PageHeader.js';
 
@@ -194,7 +195,13 @@ export function DriveTemplatePage() {
         </Alert>
       )}
       {sync.error && <Alert kind="error">{errorText(sync.error, 'A sincronização falhou.')}</Alert>}
-      {template.isError && <Alert kind="error">Não foi possível carregar o modelo.</Alert>}
+      {template.isError && (
+        <LoadFailure
+          what="o modelo de pastas"
+          error={template.error}
+          onRetry={() => void template.refetch()}
+        />
+      )}
       <p className="field-hint">
         Mudar o modelo não mexe no Drive até você sincronizar. A sincronização só cria e renomeia:
         tirar uma pasta do modelo deixa a pasta e os arquivos dela onde estão.

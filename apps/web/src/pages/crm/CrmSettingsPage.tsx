@@ -17,6 +17,7 @@ import {
   useStages,
   useUpdateStage,
 } from '../../api/leads.js';
+import { LoadFailure } from '../../components/LoadFailure.js';
 import { ago, stageTone } from './format.js';
 
 /**
@@ -51,6 +52,10 @@ function Stages({ pipeline }: { pipeline: LeadPipeline }) {
       {error ? (
         <p className="crm-error">{errorText(error, 'Não foi possível alterar as etapas.')}</p>
       ) : null}
+      {stages.isLoading && <p className="crm-muted">Carregando…</p>}
+      {stages.isError && (
+        <LoadFailure what="as etapas" error={stages.error} onRetry={() => void stages.refetch()} />
+      )}
       <div className="crm-stage-list">
         {list.map((stage) => (
           <div key={stage.id} className="crm-stage-row" style={{ opacity: stage.active ? 1 : 0.6 }}>
@@ -216,6 +221,13 @@ function Rotation({ distribution }: { distribution: Distribution }) {
       {set.error && (
         <p className="crm-error">{errorText(set.error, 'Não foi possível salvar o rodízio.')}</p>
       )}
+      {sellers.isError && (
+        <LoadFailure
+          what="os vendedores"
+          error={sellers.error}
+          onRetry={() => void sellers.refetch()}
+        />
+      )}
       {members.length === 0 && (
         <p className="crm-muted">
           Ninguém no rodízio: a negociação fica sem dono até alguém assumir.
@@ -314,6 +326,10 @@ function Brands() {
       {error ? (
         <p className="crm-error">{errorText(error, 'Não foi possível alterar as marcas.')}</p>
       ) : null}
+      {brands.isLoading && <p className="crm-muted">Carregando…</p>}
+      {brands.isError && (
+        <LoadFailure what="as marcas" error={brands.error} onRetry={() => void brands.refetch()} />
+      )}
       {list.map((brand) => (
         <label
           key={brand.clientId}
@@ -395,6 +411,14 @@ export function CrmSettingsPage() {
       <div className="crm-page-scroll crm-stack">
         {tab === 'stages' &&
           LEAD_PIPELINES.map((pipeline) => <Stages key={pipeline} pipeline={pipeline} />)}
+        {tab === 'rotation' && distribution.isLoading && <p className="crm-muted">Carregando…</p>}
+        {tab === 'rotation' && distribution.isError && (
+          <LoadFailure
+            what="a distribuição"
+            error={distribution.error}
+            onRetry={() => void distribution.refetch()}
+          />
+        )}
         {tab === 'rotation' &&
           (distribution.data?.distributions ?? []).map((item) => (
             <Rotation key={item.pipeline} distribution={item} />

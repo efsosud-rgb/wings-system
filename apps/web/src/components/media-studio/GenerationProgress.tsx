@@ -6,6 +6,7 @@ import {
 } from '@wings/shared';
 import { useEffect, useState } from 'react';
 import { useGeneration } from '../../api/media.js';
+import { LoadFailure } from '../LoadFailure.js';
 
 /**
  * One generation being followed. The server polls Kairogen; this card asks our
@@ -31,6 +32,21 @@ export function GenerationProgress({ id, onDismiss }: { id: string; onDismiss: (
   }, [over]);
 
   if (!generation) {
+    // The poll keeps trying; until it answers, the state of this generation is unknown.
+    if (query.isError) {
+      return (
+        <div className="media-progress media-progress-bad">
+          <LoadFailure
+            what="o andamento da geração"
+            error={query.error}
+            onRetry={() => void query.refetch()}
+          />
+          <button type="button" className="link-button" onClick={onDismiss}>
+            Dispensar
+          </button>
+        </div>
+      );
+    }
     return (
       <div className="media-progress" role="status">
         Acompanhando a geração…
@@ -59,6 +75,13 @@ export function GenerationProgress({ id, onDismiss }: { id: string; onDismiss: (
             : elapsed(generation.createdAt, now)}
         </span>
       </div>
+      {query.isError && (
+        <LoadFailure
+          what="o andamento da geração"
+          error={query.error}
+          onRetry={() => void query.refetch()}
+        />
+      )}
       {!over && <progress className="media-progress-bar" aria-label="Geração em andamento" />}
       {generation.detail && <p>{generation.detail}</p>}
       {generation.status === 'succeeded' && (

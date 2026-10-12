@@ -250,6 +250,11 @@ function script() {
     if (path.startsWith('/media/models?kind=video'))
       return Promise.resolve({ models: [videoModel], cachedAt: '' });
     if (path === '/clients') return Promise.resolve({ clients });
+    if (path === '/media/providers')
+      return Promise.resolve({
+        providers: [],
+        spend: { usedThisMonthBrlCents: 0, monthlyLimitBrlCents: 30_000 },
+      });
     if (path === '/media/generations') return Promise.resolve({ generations: [] });
     if (path.startsWith('/media/generations/')) return Promise.resolve({ generation });
     if (path.startsWith('/media/assets'))
@@ -334,6 +339,8 @@ describe('the header', () => {
     renderPage();
     expect(await screen.findByText(/O Kairogen não está conectado/)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Estimar custo' })).toHaveProperty('disabled', true);
+    // The catalog was never asked for: the selector says "—", not that the catalog is empty.
+    expect((within(form()).getByLabelText('Modelo') as HTMLSelectElement).textContent).toBe('—');
   });
 });
 
@@ -945,5 +952,83 @@ describe('the library', () => {
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: /^Imagem, 1080 × 1350/ }));
     expect(screen.queryByRole('button', { name: 'Usar no construtor' })).toBeNull();
+  });
+});
+
+describe('when a request fails', () => {
+  /** The scripted API, except for the paths that match: those fail. */
+  function failOn(match: (path: string) => boolean, error: unknown) {
+    const answer = get.getMockImplementation()!;
+    get.mockImplementation((path: string) => (match(path) ? Promise.reject(error) : answer(path)));
+  }
+
+  it('shows "—" and why for the credits, never "não informado" or "Kairogen não conectado"', async () => {
+    failOn((path) => path === '/media/studio', new ApiError(500, {}));
+    renderPage();
+    expect(
+      await screen.findByText(
+        /Não foi possível carregar os créditos e os provedores de mídia: o servidor teve um problema \(erro 500\)/,
+      ),
+    ).toBeTruthy();
+    const header = screen.getByLabelText('Créditos');
+    expect(within(header).queryByText('não informado')).toBeNull();
+    expect(within(header).getAllByText('—')).toHaveLength(5);
+    expect(screen.queryByText(/O Kairogen não está conectado/)).toBeNull();
+    expect(screen.queryByText(/Nenhum provedor de mídia está disponível/)).toBeNull();
+  });
+
+  it('says "—" and why for a library that failed, not "Nenhuma mídia com esses filtros."', async () => {
+    failOn((path) => path.startsWith('/media/assets'), new ApiError(500, {}));
+    renderPage();
+    expect(
+      await screen.findByText(
+        /Não foi possível carregar a biblioteca: o servidor teve um problema/,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText('Nenhuma mídia com esses filtros.')).toBeNull();
+  });
+
+  it('still says "Nenhuma mídia com esses filtros." when the library answered with nothing', async () => {
+    renderPage();
+    expect(await screen.findByText('Nenhuma mídia com esses filtros.')).toBeTruthy();
+  });
+
+  it('says why the model list is "—" instead of "Nenhum modelo"', async () => {
+    failOn((path) => path.startsWith('/media/models'), new TypeError('Failed to fetch'));
+    renderPage();
+    expect(
+      await screen.findByText(/Não foi possível carregar os modelos: sem conexão com o servidor/),
+    ).toBeTruthy();
+    const select = within(form()).getByLabelText('Modelo') as HTMLSelectElement;
+    expect(select.textContent).toBe('—');
+    expect(screen.queryByText('Nenhum modelo')).toBeNull();
+  });
+
+  it('does not offer only Wings Company as if the client list had answered', async () => {
+    failOn((path) => path === '/clients', new ApiError(403, {}));
+    renderPage();
+    const filters = await screen.findByRole('search', { name: 'Filtros da biblioteca' });
+    const option = await within(filters).findByRole('option', {
+      name: /você não tem permissão para ver isto/,
+    });
+    expect(option).toHaveProperty('disabled', true);
+  });
+
+  it('says the progress of a generation is unknown, rather than "acompanhando", when it cannot be read', async () => {
+    failOn((path) => path === '/media/generations/g-1', new ApiError(500, {}));
+    const answer = get.getMockImplementation()!;
+    get.mockImplementation((path: string) =>
+      path === '/media/generations'
+        ? Promise.resolve({ generations: [generationOf({ id: 'g-1', status: 'running' })] })
+        : answer(path),
+    );
+    renderPage();
+    const list = await screen.findByLabelText('Gerações em andamento');
+    expect(
+      await within(list).findByText(/Não foi possível carregar o andamento da geração/),
+    ).toBeTruthy();
+    expect(within(list).queryByText('Acompanhando a geração…')).toBeNull();
+    fireEvent.click(within(list).getByRole('button', { name: 'Dispensar' }));
+    await waitFor(() => expect(screen.queryByLabelText('Gerações em andamento')).toBeNull());
   });
 });

@@ -35,6 +35,7 @@ import {
   useSiteStatus,
   useSiteTerms,
 } from '../../api/ads.js';
+import { LoadFailure } from '../LoadFailure.js';
 import { Alert, Button, Field, Input } from '../ui.js';
 import { SeoChecklist } from './SeoChecklist.js';
 
@@ -410,6 +411,14 @@ function WordPressChannel({ canPublish }: { canPublish: boolean }) {
         revisar e publicar dentro do WordPress. O studio não altera nem apaga o que já está no site.
       </p>
 
+      {/* Not "falta configurar": a failed read says nothing about the server's settings. */}
+      {status.isError && !status.data && (
+        <LoadFailure
+          what="o estado da ligação com o site"
+          error={status.error}
+          onRetry={() => void status.refetch()}
+        />
+      )}
       {status.isSuccess && !configured && (
         <Alert kind="error">
           Falta configurar no servidor o endereço do site, o usuário e a senha de aplicativo do
@@ -941,6 +950,13 @@ function WordPressChannel({ canPublish }: { canPublish: boolean }) {
         />
       </div>
 
+      {posts.isError && !posts.data && (
+        <LoadFailure
+          what="os últimos envios"
+          error={posts.error}
+          onRetry={() => void posts.refetch()}
+        />
+      )}
       {(posts.data?.posts.length ?? 0) > 0 && (
         <div>
           <span className="field-label">Últimos envios</span>

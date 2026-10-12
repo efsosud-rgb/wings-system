@@ -1,11 +1,17 @@
 import type { OwnedChannelsResponse } from '@wings/shared';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client.js';
 
-const state = { data: {} as OwnedChannelsResponse };
+const state = { data: {} as OwnedChannelsResponse | undefined, error: null as unknown };
 
 vi.mock('../../api/dashboard.js', () => ({
-  useOwnedChannels: () => ({ data: state.data, isError: false }),
+  useOwnedChannels: () => ({
+    data: state.data,
+    isError: state.error !== null,
+    error: state.error,
+    refetch: vi.fn(),
+  }),
 }));
 vi.mock('../../api/youtube.js', () => ({
   useYoutubeChannel: () => ({
@@ -81,5 +87,18 @@ describe('Canais próprios', () => {
     render(<OwnedChannelsTab days={30} />);
     expect(screen.getByText(/A integração com o WordPress não está configurada/)).toBeTruthy();
     expect(screen.queryByRole('table')).toBeNull();
+  });
+});
+
+describe('when the request fails', () => {
+  it('says "—" and why, never an empty blog', () => {
+    state.data = undefined;
+    state.error = new ApiError(500, {});
+    render(<OwnedChannelsTab days={30} />);
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar os canais próprios: o servidor teve um problema (erro 500)',
+    );
+    expect(screen.queryByText(/Nenhum post/)).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Blog' })).toBeNull();
   });
 });

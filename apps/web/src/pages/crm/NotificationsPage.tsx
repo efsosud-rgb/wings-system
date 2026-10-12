@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { useMarkNotificationsRead, useNotifications } from '../../api/automations.js';
+import { LoadFailure, Unavailable } from '../../components/LoadFailure.js';
 import { ago } from './format.js';
 
 /**
@@ -27,7 +28,10 @@ export function NotificationsPage() {
     <div className="crm-page">
       <header className="crm-head">
         <h1>Avisos</h1>
-        <span className="crm-sub">{list.data?.unread ?? 0} não lidos</span>
+        <span className="crm-sub">
+          {list.data ? `${list.data.unread} não lidos` : null}
+          {!list.data && list.isError ? <Unavailable error={list.error} /> : null}
+        </span>
         <span className="crm-head-spacer" />
         <button
           type="button"
@@ -40,7 +44,10 @@ export function NotificationsPage() {
       </header>
       <div className="crm-page-scroll crm-stack">
         {list.isLoading ? <p className="crm-sub">Carregando…</p> : null}
-        {!list.isLoading && items.length === 0 ? (
+        {list.isError ? (
+          <LoadFailure what="os avisos" error={list.error} onRetry={() => void list.refetch()} />
+        ) : null}
+        {list.isSuccess && items.length === 0 ? (
           <p className="crm-sub">
             Nenhum aviso. Prazos vencidos e negociações paradas aparecem aqui.
           </p>

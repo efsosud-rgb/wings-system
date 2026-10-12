@@ -24,6 +24,7 @@ import {
   useRevealCpf,
   useUpdateEmployee,
 } from '../api/employees.js';
+import { LoadFailure } from '../components/LoadFailure.js';
 import { SectorSelect } from '../components/SectorSelect.js';
 import { Alert, Button, Field, Input, Select } from '../components/ui.js';
 import { PageHeader } from '../components/PageHeader.js';
@@ -198,7 +199,16 @@ export function EmployeeFormPage() {
     return (
       <>
         <PageHeader title="Funcionário" />
-        <Alert kind="error">Registro não encontrado ou fora do seu escopo de acesso.</Alert>
+        {existing.error instanceof ApiError &&
+        (existing.error.status === 404 || existing.error.status === 403) ? (
+          <Alert kind="error">Registro não encontrado ou fora do seu escopo de acesso.</Alert>
+        ) : (
+          <LoadFailure
+            what="o funcionário"
+            error={existing.error}
+            onRetry={() => void existing.refetch()}
+          />
+        )}
         <p>
           <Link to="/administracao/usuarios">Voltar à lista</Link>
         </p>

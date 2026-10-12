@@ -37,7 +37,7 @@ import type {
   DriveUploadTicket,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from './client.js';
+import { api, noteUnauthorized } from './client.js';
 import type { LoadedLead } from './leads.js';
 
 /** CRM Vendas since the redesign of 05/10/2026: Negociações, Contatos, Empresas, Tarefas. */
@@ -385,7 +385,10 @@ export async function downloadExport(filter: DealFilter): Promise<void> {
   const response = await fetch(`/api/leads/export.csv?${params.toString()}`, {
     credentials: 'include',
   });
-  if (!response.ok) throw new Error('export_failed');
+  if (!response.ok) {
+    noteUnauthorized(response.status, '/leads/export.csv');
+    throw new Error('export_failed');
+  }
   const blob = await response.blob();
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');

@@ -2,6 +2,7 @@ import type { DealWhatsApp, Lead, LeadNote, WaTemplate, WaTemplatePreview } from
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client.js';
 import { DealWhatsAppPage } from './DealWhatsAppPage.js';
 
 /**
@@ -36,6 +37,12 @@ const {
     shown: null as WaTemplatePreview | null,
     loading: new Set<string>(),
     permissions: {} as Record<string, string>,
+    // Overrides for what a query answers (a failed request); reset before every test.
+    leadQuery: {} as Record<string, unknown>,
+    threadQuery: {} as Record<string, unknown>,
+    filesQuery: {} as Record<string, unknown>,
+    templatesQuery: {} as Record<string, unknown>,
+    artQuery: {} as Record<string, unknown>,
   },
   mutation: (mutate = vi.fn()) => ({ mutate, isPending: false, error: null }),
 }));
@@ -145,6 +152,7 @@ vi.mock('../../api/leads.js', () => ({
       history: [],
       activities: [],
     },
+    ...queryState.leadQuery,
   }),
   useAddNote: () => mutation(noteMutate),
   useUpdateTask: () => mutation(),
@@ -152,16 +160,30 @@ vi.mock('../../api/leads.js', () => ({
 
 vi.mock('../../api/crm.js', () => ({
   useAddActivity: () => mutation(),
-  useLeadFiles: () => ({ data: [], isLoading: false, isError: false }),
+  useLeadFiles: () => ({
+    data: [],
+    isLoading: false,
+    isError: false,
+    isSuccess: true,
+    ...queryState.filesQuery,
+  }),
   useRemoveLeadFile: () => mutation(),
   useSendLeadFile: () => ({ ...mutation(), mutateAsync: vi.fn() }),
 }));
 
 vi.mock('../../api/whatsapp.js', () => ({
-  useWhatsAppThread: () => ({ isLoading: false, isError: false, data: queryState.thread }),
+  useWhatsAppThread: () => ({
+    isLoading: false,
+    isError: false,
+    data: queryState.thread,
+    ...queryState.threadQuery,
+  }),
   useWhatsAppTemplates: () => ({
     isLoading: false,
+    isError: false,
+    isSuccess: true,
     data: { templates: queryState.templates, configured: true, syncError: null },
+    ...queryState.templatesQuery,
   }),
   useRefreshWhatsAppTemplates: () => mutation(),
   useSendWhatsAppText: () => mutation(textMutate),
@@ -189,9 +211,11 @@ vi.mock('../../api/whatsapp.js', () => ({
   },
 
   useWhatsAppArt: (_thread: unknown, enabled: boolean) => ({
+    isError: false,
     data: enabled
       ? { fileId: 'f1', url: 'https://r2.example/arte?sig=1', expiresAt: '' }
       : undefined,
+    ...queryState.artQuery,
   }),
   whatsappMediaUrl: (id: string) => `/api/whatsapp/messages/${id}/media`,
 }));
@@ -219,6 +243,11 @@ beforeEach(() => {
   queryState.shown = null;
   queryState.loading = new Set();
   queryState.permissions = { 'leads.read': 'own', 'leads.write': 'own', 'leads.whatsapp': 'own' };
+  queryState.leadQuery = {};
+  queryState.threadQuery = {};
+  queryState.filesQuery = {};
+  queryState.templatesQuery = {};
+  queryState.artQuery = {};
   queryState.lead = lead();
   queryState.notes = [
     { id: 'n1', at: '2026-10-04T10:00:00.000Z', authorName: 'Eric', body: 'Pediu o catálogo' },
@@ -602,5 +631,121 @@ describe('the WhatsApp conversation screen', () => {
     const files = within(screen.getByRole('region', { name: 'Arquivos' }));
     expect(files.getByText('Nenhum arquivo nesta negociação.')).toBeTruthy();
     expect(files.getByRole('button', { name: 'Enviar arquivo' })).toBeTruthy();
+  });
+
+  describe('when a request fails', () => {
+    const failed = (error: unknown) => ({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      isSuccess: false,
+      error,
+      refetch: vi.fn(),
+    });
+    const alerts = () => screen.getAllByRole('alert').map((node) => node.textContent ?? '');
+
+    it('the deal that did not load says why, not "não encontrada"', () => {
+      queryState.leadQuery = failed(new ApiError(401, {}));
+      show();
+      expect(alerts().join(' ')).toContain('Não foi possível carregar a negociação');
+      expect(alerts().join(' ')).toContain('sua sessão expirou');
+      expect(screen.queryByText(/não encontrada/)).toBeNull();
+    });
+
+    it('the conversation that did not load says why, not only "abrir a conversa"', () => {
+      queryState.threadQuery = failed(new ApiError(500, {}));
+      show();
+      const chat = within(screen.getByRole('region', { name: 'Conversa' }));
+      expect(chat.getByRole('alert').textContent).toContain('Não foi possível carregar a conversa');
+      expect(chat.getByRole('alert').textContent).toContain('erro 500');
+      expect(chat.queryByText(/Nenhuma mensagem ainda/)).toBeNull();
+    });
+
+    it('a refresh that failed keeps the messages and adds the reason', () => {
+      queryState.thread = thread({
+        messages: [
+          {
+            id: 'm1',
+            direction: 'in',
+            kind: 'text',
+            text: 'Oi, quero saber mais',
+            at: '2026-10-07T12:00:00.000Z',
+            status: null,
+            media: null,
+            error: null,
+          } as unknown as DealWhatsApp['messages'][number],
+        ],
+      });
+      queryState.threadQuery = { isError: true, isSuccess: false, error: new TypeError('x') };
+      show();
+      const chat = within(screen.getByRole('region', { name: 'Conversa' }));
+      expect(chat.getByRole('alert').textContent).toContain('sem conexão com o servidor');
+      expect(chat.getByText('Oi, quero saber mais')).toBeTruthy();
+    });
+
+    it('the files that did not load say "—" and why, not "Nenhum arquivo nesta negociação."', () => {
+      queryState.filesQuery = failed(new ApiError(403, {}));
+      show();
+      const files = within(screen.getByRole('region', { name: 'Arquivos' }));
+      expect(files.getByRole('alert').textContent).toContain(
+        'Não foi possível carregar os arquivos',
+      );
+      expect(files.queryByText('Nenhum arquivo nesta negociação.')).toBeNull();
+    });
+
+    it('the templates that did not load say why, not "Nenhum modelo aprovado ainda."', () => {
+      queryState.thread = thread({ window: { open: false, expiresAt: null } });
+      queryState.templatesQuery = failed(new ApiError(500, {}));
+      show();
+      const form = within(screen.getByRole('form', { name: 'Enviar modelo' }));
+      expect(form.getByRole('alert').textContent).toContain('Não foi possível carregar os modelos');
+      expect(form.queryByText(/Nenhum modelo aprovado/)).toBeNull();
+    });
+
+    it('a template art that did not load is said, not left as a card with no picture', () => {
+      queryState.templates = [
+        {
+          name: 'boas_vindas',
+          language: 'pt_BR',
+          category: 'UTILITY',
+          body: 'Olá, {{1}}!',
+          paramCount: 1,
+          artVersion: true,
+        },
+      ];
+      queryState.preview = {
+        family: 'boas_vindas',
+        version: 'boas_vindas_arte',
+        language: 'pt_BR',
+        category: 'UTILITY',
+        sendAs: 'free',
+        charged: false,
+        reason: null,
+        windowExpiresAt: '2026-10-07T18:00:00.000Z',
+        text: 'Olá, Elena!',
+        footer: null,
+        buttons: [],
+        withArt: true,
+        notices: [],
+        fields: [],
+        usesCompanyArticle: false,
+        ready: true,
+      };
+      queryState.artQuery = failed(new ApiError(500, {}));
+      show();
+      const chat = within(screen.getByRole('region', { name: 'Conversa' }));
+      fireEvent.click(chat.getByRole('button', { name: 'Usar modelo' }));
+      fireEvent.change(chat.getByLabelText('Modelo'), { target: { value: 'boas_vindas|pt_BR' } });
+      expect(chat.getByRole('alert').textContent).toContain(
+        'Não foi possível carregar a arte do cabeçalho',
+      );
+      expect(chat.queryByRole('img', { name: 'Arte do cabeçalho' })).toBeNull();
+    });
+
+    it('still says "Nenhum modelo aprovado ainda." when the request succeeded with none', () => {
+      queryState.thread = thread({ window: { open: false, expiresAt: null } });
+      show();
+      expect(screen.getByText(/Nenhum modelo aprovado ainda/)).toBeTruthy();
+    });
   });
 });

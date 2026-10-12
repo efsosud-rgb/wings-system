@@ -33,6 +33,7 @@ import {
   formatBytes,
   formatDate,
 } from '../components/drive/DriveParts.js';
+import { LoadFailure } from '../components/LoadFailure.js';
 import { ClientSelect } from '../components/media-studio/MediaLibrary.js';
 import { Alert, Button } from '../components/ui.js';
 import { ProjectSummary } from '../components/projects/ProjectParts.js';
@@ -106,6 +107,15 @@ export function DrivePage() {
     [folders, current, inTrash, searching],
   );
   const loading = tree.isLoading || listing.isLoading || found.isLoading || trash.isLoading;
+  // A failed request is not an empty folder. The query behind the files on screen, and the
+  // tree behind the folders: with no earlier answer the files are unknown ("—"); after a
+  // failed refresh what was there stays, with the failure line above it.
+  const filesQuery = inTrash ? trash : searching ? found : listing;
+  const failed = tree.isError ? tree : filesQuery.isError ? filesQuery : null;
+  // Without the tree there is no folder to list; the trash and the search do not need it.
+  const filesUnknown =
+    (!inTrash && !searching && tree.isError && !tree.data) ||
+    (filesQuery.isError && !filesQuery.data);
 
   const [view, setView] = useState<'list' | 'grid'>(() => {
     try {
@@ -233,7 +243,13 @@ export function DrivePage() {
     return list;
   }, [folders, current]);
 
-  const problem = tree.error ?? listing.error ?? found.error ?? trash.error;
+  const failedWhat = tree.isError
+    ? 'as pastas do Drive'
+    : inTrash
+      ? 'a lixeira'
+      : searching
+        ? 'a busca'
+        : 'os arquivos desta pasta';
 
   return (
     <>
@@ -257,10 +273,10 @@ export function DrivePage() {
       {tree.data && !tree.data.storageAvailable && (
         <Alert kind="error">O armazenamento de arquivos não está configurado neste ambiente.</Alert>
       )}
-      {problem && (
-        <Alert kind="error">{errorText(problem, 'Não foi possível carregar o Drive.')}</Alert>
+      {failed && (
+        <LoadFailure what={failedWhat} error={failed.error} onRetry={() => void failed.refetch()} />
       )}
-      {!tree.isLoading && folders.length === 0 && !problem && (
+      {!tree.isLoading && folders.length === 0 && !tree.isError && (
         <Alert kind="info">Nenhuma pasta do Drive está liberada para o seu perfil.</Alert>
       )}
 
@@ -418,7 +434,9 @@ export function DrivePage() {
             <p className="field-hint" role="status">
               {found.isLoading
                 ? 'Buscando…'
-                : `${files.length} ${files.length === 1 ? 'arquivo encontrado' : 'arquivos encontrados'} nas pastas que você acessa.`}
+                : found.isError && !found.data
+                  ? '—'
+                  : `${files.length} ${files.length === 1 ? 'arquivo encontrado' : 'arquivos encontrados'} nas pastas que você acessa.`}
             </p>
           )}
 
@@ -451,6 +469,11 @@ export function DrivePage() {
                   </button>
                 </li>
               ))}
+              {filesUnknown && (
+                <li className="muted" aria-label="Arquivos indisponíveis">
+                  —
+                </li>
+              )}
             </ul>
           ) : (
             <div className="table-wrap">
@@ -560,7 +583,14 @@ export function DrivePage() {
                       </td>
                     </tr>
                   ))}
-                  {!loading && files.length === 0 && subfolders.length === 0 && (
+                  {filesUnknown && (
+                    <tr>
+                      <td colSpan={4} className="muted" aria-label="Arquivos indisponíveis">
+                        —
+                      </td>
+                    </tr>
+                  )}
+                  {!loading && !filesUnknown && files.length === 0 && subfolders.length === 0 && (
                     <tr>
                       <td colSpan={4} className="muted">
                         {inTrash

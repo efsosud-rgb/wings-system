@@ -9,6 +9,7 @@ import {
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client.js';
 import type { SofiaFilter } from '../../api/sofia.js';
 import { SofiaPage } from './SofiaPage.js';
 import { keyFromLabel } from './SofiaSettingsForm.js';
@@ -26,6 +27,11 @@ const { state, attend, save, filters } = vi.hoisted(() => ({
     rows: [] as SofiaConversationItem[],
     detail: null as SofiaConversationDetail | null,
     settings: null as SofiaSettings | null,
+    // Overrides for what a query answers (a failed request); reset before every test.
+    overviewQuery: {} as Record<string, unknown>,
+    listQuery: {} as Record<string, unknown>,
+    detailQuery: {} as Record<string, unknown>,
+    settingsQuery: {} as Record<string, unknown>,
   },
   attend: vi.fn(),
   save: vi.fn(),
@@ -33,17 +39,34 @@ const { state, attend, save, filters } = vi.hoisted(() => ({
 }));
 
 vi.mock('../../api/sofia.js', () => ({
-  useSofiaOverview: () => ({ isLoading: false, data: state.overview }),
+  useSofiaOverview: () => ({
+    isLoading: false,
+    isError: false,
+    data: state.overview,
+    ...state.overviewQuery,
+  }),
   useSofiaConversations: (filter: SofiaFilter) => {
     filters.push(filter);
-    return { isLoading: false, isError: false, data: { conversations: state.rows } };
+    return {
+      isLoading: false,
+      isError: false,
+      isSuccess: true,
+      data: { conversations: state.rows },
+      ...state.listQuery,
+    };
   },
-  useSofiaConversation: () => ({ isLoading: false, isError: false, data: state.detail }),
+  useSofiaConversation: () => ({
+    isLoading: false,
+    isError: false,
+    data: state.detail,
+    ...state.detailQuery,
+  }),
   useSofiaAttendance: () => ({ mutate: attend, isPending: false, error: null }),
   useSofiaSettings: () => ({
     isLoading: false,
     isError: false,
     data: { settings: state.settings, updatedAt: '2026-10-07T12:00:00.000Z', updatedBy: 'Eric' },
+    ...state.settingsQuery,
   }),
   useSaveSofiaSettings: () => ({ mutate: save, reset: vi.fn(), isPending: false, error: null }),
 }));
@@ -139,6 +162,10 @@ beforeEach(() => {
   attend.mockReset();
   save.mockReset();
   filters.length = 0;
+  state.overviewQuery = {};
+  state.listQuery = {};
+  state.detailQuery = {};
+  state.settingsQuery = {};
   state.overview = overview();
   state.rows = [
     item(),
@@ -353,5 +380,70 @@ describe('question keys', () => {
     const long = keyFromLabel('x'.repeat(50), ['x'.repeat(31)]);
     expect(long).toMatch(/^[a-z][a-z0-9_]{1,30}$/);
     expect(long.endsWith('_2')).toBe(true);
+  });
+});
+
+describe('when a request fails', () => {
+  const failed = (error: unknown) => ({
+    data: undefined,
+    isLoading: false,
+    isError: true,
+    isSuccess: false,
+    error,
+    refetch: vi.fn(),
+  });
+
+  it('the list says why, not "Nenhuma conversa com esses filtros."', () => {
+    state.listQuery = failed(new ApiError(500, {}));
+    renderAt('/crm-vendas/sofia');
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toContain('Não foi possível carregar as conversas');
+    expect(alert.textContent).toContain('erro 500');
+    expect(screen.queryByText(/Nenhuma conversa com esses filtros/)).toBeNull();
+  });
+
+  it('the list still says "Nenhuma conversa com esses filtros." when it succeeded empty', () => {
+    state.rows = [];
+    renderAt('/crm-vendas/sofia');
+    expect(screen.getByText('Nenhuma conversa com esses filtros.')).toBeTruthy();
+  });
+
+  it('the status and the chip counts show "—" and why when the overview failed, not zeros', () => {
+    state.overview = null;
+    state.overviewQuery = failed(new ApiError(401, {}));
+    renderAt('/crm-vendas/sofia');
+    expect(screen.queryByText('Desligada')).toBeNull();
+    expect(screen.getByText(/Estado da Sofia/).textContent).toContain('sua sessão expirou');
+    const chips = within(screen.getByRole('group', { name: 'Quem atende' }));
+    expect(chips.getByRole('button', { name: /^Todas\s*—$/ })).toBeTruthy();
+    expect(chips.queryByText('0')).toBeNull();
+  });
+
+  it('an open conversation that did not load says why, not "não encontrada"', () => {
+    state.detail = null;
+    state.detailQuery = failed(new TypeError('x'));
+    renderAt('/crm-vendas/sofia/c1');
+    const pane = within(screen.getByRole('region', { name: 'Conversa selecionada' }));
+    expect(pane.getByRole('alert').textContent).toContain('sem conexão com o servidor');
+    expect(pane.queryByText(/não encontrada/)).toBeNull();
+  });
+
+  it('a refresh that failed keeps the open conversation and adds the reason', () => {
+    state.detailQuery = { isError: true, isSuccess: false, error: new ApiError(500, {}) };
+    renderAt('/crm-vendas/sofia/c1');
+    const pane = within(screen.getByRole('region', { name: 'Conversa selecionada' }));
+    expect(pane.getByRole('alert').textContent).toContain('erro 500');
+    expect(pane.getByText('Niterói, RJ')).toBeTruthy();
+  });
+
+  it('the settings that did not load show the reason and no form to save over them', () => {
+    state.settingsQuery = failed(new ApiError(500, {}));
+    renderAt('/crm-vendas/sofia');
+    fireEvent.click(screen.getByRole('tab', { name: 'Configuração' }));
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar a configuração da Sofia',
+    );
+    expect(screen.getByRole('alert').textContent).toContain('erro 500');
+    expect(screen.queryByRole('button', { name: 'Salvar' })).toBeNull();
   });
 });

@@ -24,6 +24,7 @@ vi.mock('../api/client.js', async (original) => ({
 }));
 
 const { ClientRecordPage } = await import('./ClientRecordPage.js');
+const { ApiError } = await import('../api/client.js');
 
 const CLIENT_ID = '11111111-1111-4111-8111-1111111111c2';
 
@@ -291,5 +292,28 @@ describe('Formatação → Clientes → ficha: WhatsApp da marca', () => {
     renderPage();
     expect(await screen.findByText(/% preenchido/)).toBeTruthy();
     expect(screen.queryByText('WhatsApp da marca')).toBeNull();
+  });
+});
+
+describe('when the record cannot be opened', () => {
+  it('says "—" and why, with no form that could be saved over the real record', async () => {
+    get.mockRejectedValue(new ApiError(500, {}));
+    renderPage();
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(
+      /Não foi possível carregar a ficha: o servidor teve um problema \(erro 500\)/,
+    );
+    expect(screen.queryByRole('tab')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Salvar/ })).toBeNull();
+
+    get.mockReset().mockImplementation(async () => current);
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar de novo' }));
+    expect(await screen.findByText(/% preenchido/)).toBeTruthy();
+  });
+
+  it('tells a record that is not there from a network that is down', async () => {
+    get.mockRejectedValue(new TypeError('Failed to fetch'));
+    renderPage();
+    expect((await screen.findByRole('alert')).textContent).toMatch(/sem conexão com o servidor/);
   });
 });

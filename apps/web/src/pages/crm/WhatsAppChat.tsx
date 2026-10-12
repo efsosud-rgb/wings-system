@@ -8,7 +8,7 @@ import {
   type WaTemplate,
   type WaTemplatePreview,
 } from '@wings/shared';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ApiError } from '../../api/client.js';
 import {
   useRefreshWhatsAppTemplates,
@@ -20,6 +20,7 @@ import {
   whatsappMediaUrl,
   type WhatsAppThread,
 } from '../../api/whatsapp.js';
+import { LoadFailure } from '../../components/LoadFailure.js';
 import { formatDateTime } from './format.js';
 
 /**
@@ -39,10 +40,13 @@ export function WhatsAppChat({
   thread,
   data,
   canSend,
+  notice,
 }: {
   thread: WhatsAppThread;
   data: DealWhatsApp;
   canSend: boolean;
+  /** Shown above the conversation: why what is on screen may be out of date. */
+  notice?: ReactNode;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
   const last = data.messages.at(-1)?.id;
@@ -54,6 +58,7 @@ export function WhatsAppChat({
 
   return (
     <section className="crm-wa-chat" aria-label="Conversa">
+      {notice}
       {data.speaksFor && (
         <p className="crm-wa-window is-brand">
           Lead de franquia: você fala pelo time de expansão da {data.speaksFor}. Não cite a Wings
@@ -384,7 +389,14 @@ function TemplateCompose({
           Atualizar lista
         </button>
       </div>
-      {!templates.isLoading && list.length === 0 && (
+      {templates.isError && (
+        <LoadFailure
+          what="os modelos"
+          error={templates.error}
+          onRetry={() => void templates.refetch()}
+        />
+      )}
+      {templates.isSuccess && list.length === 0 && (
         <p className="crm-sub">
           Nenhum modelo aprovado ainda. Os modelos são criados no WhatsApp Manager.
         </p>
@@ -460,6 +472,13 @@ function TemplateCompose({
               {notice}
             </p>
           ))}
+          {preview.withArt && art.isError && (
+            <LoadFailure
+              what="a arte do cabeçalho"
+              error={art.error}
+              onRetry={() => void art.refetch()}
+            />
+          )}
           <div className="crm-wa-card" aria-label="Prévia da mensagem">
             {preview.withArt && art.data && <img src={art.data.url} alt="Arte do cabeçalho" />}
             <p className="crm-wa-preview">{preview.text}</p>

@@ -14,6 +14,7 @@ vi.mock('../api/client.js', async (original) => ({
 }));
 
 const { RdUsersSection } = await import('./IntegrationsPage.js');
+const { ApiError } = await import('../api/client.js');
 
 const admin: SessionUser = {
   employeeId: 'e1',
@@ -76,5 +77,28 @@ describe('Integrações → Usuários do RD CRM', () => {
     await waitFor(() =>
       expect(put).toHaveBeenCalledWith('/leads/rd-users/u1', { employeeId: 'e1' }),
     );
+  });
+});
+
+describe('Integrações → Usuários do RD CRM when the list fails', () => {
+  it('says "—" and why, not that no user was imported yet', async () => {
+    get.mockReset().mockImplementation(async (path: string) => {
+      if (path === '/auth/me') return { user: admin };
+      throw new ApiError(500, {});
+    });
+    render(
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
+        <RdUsersSection />
+      </QueryClientProvider>,
+    );
+
+    expect(
+      await screen.findByText(
+        /Não foi possível carregar os usuários do RD CRM: o servidor teve um/,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Nenhum usuário ainda/)).toBeNull();
   });
 });

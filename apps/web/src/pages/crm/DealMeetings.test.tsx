@@ -30,6 +30,8 @@ const { state, calls, mutation } = vi.hoisted(() => {
       meetings: [] as MeetingSummary[],
       meeting: null as Meeting | null,
       createError: null as unknown,
+      // What the Google status query answers instead of its default (a failed request).
+      googleQuery: {} as Record<string, unknown>,
       openSpy: vi.fn(),
       google: {
         configured: true,
@@ -51,7 +53,13 @@ vi.mock('../../api/auth.js', () => ({
 }));
 
 vi.mock('../../api/google.js', () => ({
-  useGoogleStatus: () => ({ data: { status: state.google }, isPending: false }),
+  useGoogleStatus: () => ({
+    data: { status: state.google },
+    isPending: false,
+    isLoading: false,
+    isError: false,
+    ...state.googleQuery,
+  }),
 }));
 
 vi.mock('../../api/crm.js', () => ({
@@ -164,6 +172,7 @@ afterEach(() => {
   state.meetings = [];
   state.meeting = null;
   state.createError = null;
+  state.googleQuery = {};
   state.google = {
     ...state.google,
     state: 'disconnected',
@@ -172,6 +181,18 @@ afterEach(() => {
   };
   for (const fn of Object.values(calls)) fn.mockReset();
   vi.restoreAllMocks();
+});
+
+describe('the Google status in the scheduling form', () => {
+  it('says why it could not check, instead of asking to connect an account that may be connected', () => {
+    state.googleQuery = { data: undefined, isError: true, error: new ApiError(500, {}) };
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Agendar reunião' }));
+    expect(
+      screen.getByText(/não foi possível conferir a conexão com o Google/).textContent,
+    ).toContain('erro 500');
+    expect(screen.queryByText('conecte a sua conta Google')).toBeNull();
+  });
 });
 
 describe('meetingToStart', () => {

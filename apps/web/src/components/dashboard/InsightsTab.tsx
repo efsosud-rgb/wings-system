@@ -21,7 +21,8 @@ import {
   useMarkInsightSeen,
   useRequestFromInsight,
 } from '../../api/dashboard.js';
-import { Alert, Button } from '../ui.js';
+import { LoadFailure, Unavailable } from '../LoadFailure.js';
+import { Button } from '../ui.js';
 import { formatDateTime, formatMoney, formatUsdMicro } from './format.js';
 import { StatePill, stateOfVerdict } from './icons.js';
 import { SuggestionsPanel } from './SuggestionsPanel.js';
@@ -287,6 +288,15 @@ function VerdictStrip() {
   for (const campaign of campaigns.data?.campaigns.campaigns ?? []) {
     counts.set(campaign.verdict.verdict, (counts.get(campaign.verdict.verdict) ?? 0) + 1);
   }
+  // Failed and nothing earlier to show: "0" per verdict would read as "no campaign at all".
+  if (campaigns.isError && !campaigns.data) {
+    return (
+      <section className="verdict-strip" aria-label="Vereditos das campanhas em 30 dias">
+        <span className="muted">Vereditos em 30 dias:</span>
+        <Unavailable error={campaigns.error} />
+      </section>
+    );
+  }
   if (!campaigns.data) return null;
   return (
     <section className="verdict-strip" aria-label="Vereditos das campanhas em 30 dias">
@@ -324,9 +334,13 @@ export function InsightsTab() {
     }
   }, [follow.data?.run.status, insights]);
 
-  if (insights.isError) {
+  if (insights.isError && !insights.data) {
     return (
-      <Alert kind="error">Não foi possível carregar os insights. Tente de novo em instantes.</Alert>
+      <LoadFailure
+        what="os insights"
+        error={insights.error}
+        onRetry={() => void insights.refetch()}
+      />
     );
   }
   if (!insights.data) return <p className="muted">Carregando…</p>;
@@ -335,6 +349,13 @@ export function InsightsTab() {
 
   return (
     <>
+      {insights.isError && (
+        <LoadFailure
+          what="os insights"
+          error={insights.error}
+          onRetry={() => void insights.refetch()}
+        />
+      )}
       <RunBar
         title="Insights"
         latestRun={data.latestRun}

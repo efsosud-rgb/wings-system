@@ -16,6 +16,7 @@ import {
 import { useEffect, useState, type ReactNode } from 'react';
 import { ApiError } from '../../api/client.js';
 import { useChangeProjectStatus, useProject, useUpdateProjectStage } from '../../api/projects.js';
+import { LoadFailure } from '../LoadFailure.js';
 import { Alert, Button, Field, Select } from '../ui.js';
 
 /**
@@ -289,6 +290,21 @@ export function StageDialog({
 export function ProjectSummary({ clientId, slot }: { clientId: string; slot: string | null }) {
   const project = useProject(clientId);
   const data = project.data?.project;
+  // 404 is the API saying this client has no project (or none the viewer may see): no strip.
+  // Any other failure is not that answer, and the strip must not simply vanish.
+  if (
+    project.isError &&
+    !data &&
+    !(project.error instanceof ApiError && project.error.status === 404)
+  ) {
+    return (
+      <LoadFailure
+        what="o projeto do cliente"
+        error={project.error}
+        onRetry={() => void project.refetch()}
+      />
+    );
+  }
   if (!data) return null;
   const stage = slot ? data.stages.find((item) => item.slot === slot) : undefined;
   return (

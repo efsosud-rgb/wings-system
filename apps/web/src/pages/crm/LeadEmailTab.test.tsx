@@ -1,8 +1,11 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client.js';
 import type { LeadEmails } from '../../api/lead-email.js';
 
 const state = {
+  // What the query answers instead of its default (a failed request).
+  query: {} as Record<string, unknown>,
   emails: {
     to: 'paula@exemplo.com.br',
     hidden: false,
@@ -14,14 +17,17 @@ const state = {
 };
 
 vi.mock('../../api/lead-email.js', () => ({
-  useLeadEmails: () => ({ data: state.emails, isPending: false, isError: false }),
+  useLeadEmails: () => ({ data: state.emails, isPending: false, isError: false, ...state.query }),
   useEmailPreview: () => ({ mutate: vi.fn(), data: null, isPending: false, reset: vi.fn() }),
   useSendEmail: () => ({ mutate: vi.fn(), isPending: false, isSuccess: false, isError: false }),
 }));
 
 const { LeadEmailTab } = await import('./LeadEmailTab.js');
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  state.query = {};
+});
 
 /** The E-mail tab tells where a message leaves from, and sends nothing on a brand-hidden deal. */
 describe('LeadEmailTab', () => {
@@ -41,5 +47,27 @@ describe('LeadEmailTab', () => {
       '/crm-vendas/negociacoes/l1/whatsapp',
     );
     expect(screen.queryByRole('button', { name: /Enviar e-mail|Registrar e-mail/ })).toBeNull();
+  });
+
+  it('says why the e-mails did not load, with no form and no "sem e-mail" claim', () => {
+    state.query = {
+      data: undefined,
+      isError: true,
+      error: new ApiError(500, {}),
+      refetch: vi.fn(),
+    };
+    render(<LeadEmailTab leadId="l1" />);
+    expect(screen.getByRole('alert').textContent).toContain('Não foi possível carregar os e-mails');
+    expect(screen.getByRole('alert').textContent).toContain('erro 500');
+    expect(screen.queryByRole('button', { name: /Enviar e-mail|Registrar e-mail/ })).toBeNull();
+    expect(screen.queryByText(/não tem e-mail/)).toBeNull();
+  });
+
+  it('keeps the form and adds the reason when only a refresh failed', () => {
+    state.emails = { ...state.emails, hidden: false };
+    state.query = { isError: true, error: new TypeError('x'), refetch: vi.fn() };
+    render(<LeadEmailTab leadId="l1" />);
+    expect(screen.getByRole('alert').textContent).toContain('sem conexão com o servidor');
+    expect(screen.getByRole('button', { name: 'Enviar e-mail' })).toBeTruthy();
   });
 });

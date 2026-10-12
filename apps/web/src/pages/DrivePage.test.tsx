@@ -569,3 +569,86 @@ describe('the folder model', () => {
     ).toBeTruthy();
   });
 });
+
+describe('when a request fails', () => {
+  /** The scripted API, except for the paths that match: those fail. */
+  function failOn(match: (path: string) => boolean, error: unknown) {
+    const answer = get.getMockImplementation()!;
+    get.mockImplementation((path: string) => (match(path) ? Promise.reject(error) : answer(path)));
+  }
+
+  it('does not call a folder empty because its listing failed', async () => {
+    failOn((path) => path === '/drive/folders/f-mkt', new ApiError(500, {}));
+    renderAt();
+    expect((await screen.findByRole('alert')).textContent).toMatch(
+      /Não foi possível carregar os arquivos desta pasta: o servidor teve um problema \(erro 500\)/,
+    );
+    // The subfolders come from the tree, which answered; the files are "—", not "Pasta vazia".
+    const list = screen.getByRole('table');
+    expect(within(list).getByRole('button', { name: 'Mídia' })).toBeTruthy();
+    expect(within(list).getByLabelText('Arquivos indisponíveis').textContent).toBe('—');
+    expect(screen.queryByText(/Pasta vazia/)).toBeNull();
+
+    // And in the grid, which has no empty text of its own.
+    cleanup();
+    localStorage.setItem('wings.drive.view', 'grid');
+    renderAt();
+    expect(await screen.findByLabelText('Arquivos indisponíveis')).toBeTruthy();
+  });
+
+  it('says the folders could not be loaded instead of "Nenhuma pasta liberada" or an empty folder', async () => {
+    failOn((path) => path === '/drive/tree', new TypeError('Failed to fetch'));
+    renderAt();
+    expect((await screen.findByRole('alert')).textContent).toMatch(
+      /Não foi possível carregar as pastas do Drive: sem conexão com o servidor/,
+    );
+    expect(screen.queryByText(/Nenhuma pasta do Drive está liberada/)).toBeNull();
+    expect(screen.queryByText(/Pasta vazia/)).toBeNull();
+    expect(screen.getByLabelText('Arquivos indisponíveis')).toBeTruthy();
+  });
+
+  it('shows "—" for a search that failed, not "0 arquivos" or "Nada encontrado"', async () => {
+    failOn((path) => path.startsWith('/drive/search'), new ApiError(500, {}));
+    renderAt();
+    const search = await screen.findByRole('search', { name: 'Busca no Drive' });
+    fireEvent.change(within(search).getByLabelText('Busca'), { target: { value: 'roteiro' } });
+    expect((await screen.findByRole('alert')).textContent).toMatch(
+      /Não foi possível carregar a busca/,
+    );
+    expect(screen.queryByText(/arquivos? encontrados?/)).toBeNull();
+    expect(screen.queryByText('Nada encontrado.')).toBeNull();
+    expect(screen.getByRole('status').textContent).toBe('—');
+  });
+
+  it('does not call the trash empty when it could not be read', async () => {
+    failOn((path) => path === '/drive/trash', new ApiError(403, {}));
+    renderAt('/drive/arquivos?ver=lixeira');
+    expect((await screen.findByRole('alert')).textContent).toMatch(
+      /Não foi possível carregar a lixeira: você não tem permissão/,
+    );
+    expect(screen.queryByText('A lixeira está vazia.')).toBeNull();
+  });
+
+  it('keeps saying "A lixeira está vazia." when it answered with nothing', async () => {
+    renderAt('/drive/arquivos?ver=lixeira');
+    expect(await screen.findByText('A lixeira está vazia.')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('says why the folder model could not load', async () => {
+    failOn((path) => path === '/drive/template', new ApiError(500, {}));
+    renderAt('/administracao/drive');
+    expect((await screen.findByRole('alert')).textContent).toMatch(
+      /Não foi possível carregar o modelo de pastas: o servidor teve um problema/,
+    );
+  });
+
+  it('says the earlier versions could not be listed, instead of showing none', async () => {
+    files = [fileOf({ version: 2 })];
+    failOn((path) => path.endsWith('/versions'), new ApiError(500, {}));
+    renderAt();
+    fireEvent.click(await screen.findByRole('button', { name: 'Roteiro.pdf' }));
+    expect(await screen.findByText(/Não foi possível carregar as versões anteriores/)).toBeTruthy();
+    expect(screen.queryByText('Versões anteriores')).toBeNull();
+  });
+});

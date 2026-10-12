@@ -9,6 +9,7 @@ import { Link } from 'react-router-dom';
 import { hasPermission, useSession } from '../../api/auth.js';
 import { useCompleteTask, useTaskList } from '../../api/crm.js';
 import { useSellers } from '../../api/leads.js';
+import { LoadFailure } from '../../components/LoadFailure.js';
 import { dueLabel, isPast } from './format.js';
 
 /** CRM Vendas → Tarefas: late, today and next, done on the line itself. */
@@ -76,7 +77,7 @@ export function TasksPage() {
       <h2>
         {title} <span>{items.length}</span>
       </h2>
-      {items.length === 0 && <p className="crm-muted">Nada aqui.</p>}
+      {tasks.isSuccess && items.length === 0 && <p className="crm-muted">Nada aqui.</p>}
       {items.map((task) => (
         <Row key={task.id} task={task} />
       ))}
@@ -136,16 +137,21 @@ export function TasksPage() {
         </div>
       </header>
       <div className="crm-page-scroll">
-        {tasks.isError && <p className="crm-error">Não foi possível carregar as tarefas.</p>}
-        {showDone ? (
-          <Group title="Concluídas" items={rows} />
-        ) : (
-          <>
-            <Group title="Atrasadas" items={late} />
-            <Group title="Hoje" items={today} />
-            <Group title="Próximas" items={next} />
-          </>
+        {tasks.isLoading && <p className="crm-muted">Carregando…</p>}
+        {tasks.isError && (
+          <LoadFailure what="as tarefas" error={tasks.error} onRetry={() => void tasks.refetch()} />
         )}
+        {/* No groups (and no "0" counts) until a list has arrived; a failed refresh keeps the old one. */}
+        {tasks.data &&
+          (showDone ? (
+            <Group title="Concluídas" items={rows} />
+          ) : (
+            <>
+              <Group title="Atrasadas" items={late} />
+              <Group title="Hoje" items={today} />
+              <Group title="Próximas" items={next} />
+            </>
+          ))}
       </div>
     </div>
   );

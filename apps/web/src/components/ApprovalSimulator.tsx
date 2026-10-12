@@ -2,6 +2,7 @@ import { CHANGE_KIND_LABEL, type ChangeSimulation, type ExposureScenario } from 
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useSimulation } from '../api/ads.js';
+import { LoadFailure } from './LoadFailure.js';
 import { Alert, Button, Field, Input } from './ui.js';
 
 /**
@@ -152,7 +153,9 @@ export function ApprovalSimulator({ approvalId }: { approvalId: string }) {
 
   if (query.isLoading) return <p className="muted">Calculando cenário…</p>;
   if (query.isError || !query.data) {
-    return <Alert kind="error">Não foi possível calcular o cenário.</Alert>;
+    return (
+      <LoadFailure what="o cenário" error={query.error} onRetry={() => void query.refetch()} />
+    );
   }
 
   const { simulation, nextPending } = query.data;

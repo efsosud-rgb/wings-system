@@ -1,6 +1,7 @@
 import type { DealWhatsApp, WaCall, WaCallPermissionLive } from '@wings/shared';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client.js';
 import {
   WhatsAppCallProvider,
   WhatsAppCallSection,
@@ -18,6 +19,7 @@ const { state, calls, media } = vi.hoisted(() => ({
   state: {
     ringing: { calling: true, calls: [] as WaCall[] },
     thread: null as DealWhatsApp | null,
+    threadQuery: {} as Record<string, unknown>,
     permission: null as WaCallPermissionLive | null,
     askMutate: (() => undefined) as () => void,
   },
@@ -50,7 +52,7 @@ vi.mock('../../api/auth.js', async () => {
 
 vi.mock('../../api/whatsapp.js', () => ({
   useRingingCalls: () => ({ data: state.ringing }),
-  useWhatsAppThread: () => ({ data: state.thread }),
+  useWhatsAppThread: () => ({ data: state.thread, ...state.threadQuery }),
   useCallPermission: () => ({ data: state.permission, error: null }),
   useRequestCallPermission: () => ({
     mutate: state.askMutate,
@@ -123,6 +125,7 @@ beforeEach(() => {
   calls.reject.mockResolvedValue({ call: ringingCall });
   state.ringing = { calling: true, calls: [] };
   state.thread = thread();
+  state.threadQuery = {};
   state.permission = null;
 });
 afterEach(cleanup);
@@ -251,5 +254,27 @@ describe('the WhatsApp part of the call panel', () => {
     );
     expect(screen.queryByRole('button', { name: 'Pedir permissão para ligar' })).toBeNull();
     expect(screen.getByText(/Fora das 24 h: o pedido de ligação vai por um modelo/)).toBeTruthy();
+  });
+
+  it('says why, and does not stay on "Carregando…", when the conversation did not load', () => {
+    state.thread = null;
+    state.threadQuery = {
+      isError: true,
+      error: new ApiError(500, {}),
+      refetch: vi.fn(),
+    };
+    render(
+      <WhatsAppCallProvider>
+        <Section />
+      </WhatsAppCallProvider>,
+    );
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar as ligações pelo WhatsApp',
+    );
+    expect(screen.getByRole('alert').textContent).toContain('erro 500');
+    expect(screen.queryByText('Carregando…')).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: /Ligar pelo WhatsApp/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 });

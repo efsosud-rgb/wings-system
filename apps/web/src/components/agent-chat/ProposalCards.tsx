@@ -31,6 +31,7 @@ import { Link } from 'react-router-dom';
 import { useMarkProposalApplied, useRequestFromProposal } from '../../api/agent.js';
 import { ApiError } from '../../api/client.js';
 import { useGeneration, useReestimateProposal, useStartGeneration } from '../../api/media.js';
+import { LoadFailure } from '../LoadFailure.js';
 import { MediaThumb } from '../media-studio/MediaLibrary.js';
 import { Button } from '../ui.js';
 import { formatBrl, formatDate } from '../campaign-builder/format.js';
@@ -551,9 +552,21 @@ function GenerationCard({
           ))}
         </div>
       )}
+      {/* Not "Acompanhando…" forever: the follow-up read failed, and the person should know. */}
+      {proposal.generationId && following.isError && !following.data && (
+        <LoadFailure
+          what="o andamento da geração"
+          error={following.error}
+          onRetry={() => void following.refetch()}
+        />
+      )}
       {proposal.generationId ? (
         <p className="agent-card-state" role="status">
-          {generation ? GENERATION_STATUS_LABEL[generation.status] : 'Acompanhando a geração…'}
+          {generation
+            ? GENERATION_STATUS_LABEL[generation.status]
+            : following.isError
+              ? null
+              : 'Acompanhando a geração…'}
           {generation?.detail && ` ${generation.detail}`}
           {generation?.status === 'unknown' &&
             ` Confira no ${MEDIA_PROVIDER_LABEL[generation.providerId]} antes de gerar de novo.`}{' '}

@@ -2,6 +2,7 @@ import { STUDIO_PROJECT_SUFFIX, type DriveFile, type DriveFolder } from '@wings/
 import { useMemo, useState } from 'react';
 import { useDriveFolder, useDriveTree } from '../../api/drive.js';
 import { Dialog, FileIcon, FolderTree, formatBytes } from '../drive/DriveParts.js';
+import { LoadFailure } from '../LoadFailure.js';
 
 /** What the editor can put on the timeline. Anything else is listed greyed out. */
 export type StudioFileKind = 'video' | 'image' | 'audio' | 'subtitle' | 'project';
@@ -61,8 +62,22 @@ export function DriveFilePicker({
           />
         </div>
         <div className="studio-picker-files">
-          {listing.isLoading && <p className="muted">Carregando…</p>}
-          {listing.data && files.length === 0 && <p className="muted">Pasta vazia.</p>}
+          {tree.isError && (
+            <LoadFailure
+              what="as pastas do Drive"
+              error={tree.error}
+              onRetry={() => void tree.refetch()}
+            />
+          )}
+          {listing.isError && (
+            <LoadFailure
+              what="os arquivos desta pasta"
+              error={listing.error}
+              onRetry={() => void listing.refetch()}
+            />
+          )}
+          {(tree.isLoading || listing.isLoading) && <p className="muted">Carregando…</p>}
+          {listing.isSuccess && files.length === 0 && <p className="muted">Pasta vazia.</p>}
           <ul className="studio-picker-list">
             {files.map((file) => {
               const kind = studioKindOf(file);

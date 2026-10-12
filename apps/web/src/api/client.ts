@@ -5,6 +5,8 @@
  * session cookie travels automatically and no CORS or token juggling is needed.
  */
 
+import { reportUnauthorized } from './session-expiry.js';
+
 export interface ApiErrorBody {
   error?: string;
   message?: string;
@@ -28,6 +30,28 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * A proxy error page (502 from the edge, an HTML body) is not JSON; reading it
+ * as such used to throw a `SyntaxError` whose text ("Unexpected token '<'") was
+ * all a screen could say about why it had nothing to show.
+ */
+function parseBody(text: string): unknown {
+  if (!text) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * A request answered 401 means the session behind this tab is gone (or never
+ * was). Only the login itself is exempt: there a 401 is a wrong password.
+ */
+export function noteUnauthorized(status: number, path: string): void {
+  if (status === 401 && path !== '/auth/login') reportUnauthorized();
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`/api${path}`, {
     ...init,
@@ -38,11 +62,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     },
   });
 
-  const text = await response.text();
-  const body: unknown = text ? JSON.parse(text) : {};
+  const body = parseBody(await response.text());
 
   if (!response.ok) {
-    throw new ApiError(response.status, body as ApiErrorBody);
+    noteUnauthorized(response.status, path);
+    throw new ApiError(response.status, (body ?? {}) as ApiErrorBody);
+  }
+  if (body === undefined) {
+    throw new ApiError(response.status, {
+      error: 'bad_response',
+      message: 'O servidor respondeu algo que o sistema não entendeu.',
+    });
   }
   return body as T;
 }

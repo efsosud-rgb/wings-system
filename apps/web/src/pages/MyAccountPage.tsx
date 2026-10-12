@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useSession } from '../api/auth.js';
 import { ApiError } from '../api/client.js';
 import { useConnectGoogle, useDisconnectGoogle, useGoogleStatus } from '../api/google.js';
+import { LoadFailure } from '../components/LoadFailure.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { Alert, Button } from '../components/ui.js';
 
@@ -50,7 +51,15 @@ export function GoogleAccountCard() {
       </p>
     );
   }
-  if (!current) return <Alert kind="error">Não foi possível ler a conexão com o Google.</Alert>;
+  if (!current) {
+    return (
+      <LoadFailure
+        what="a conexão com o Google"
+        error={status.error}
+        onRetry={() => void status.refetch()}
+      />
+    );
+  }
 
   const goToGoogle = () =>
     connect.mutate(undefined, {

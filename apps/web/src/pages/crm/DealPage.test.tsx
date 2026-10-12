@@ -2,6 +2,7 @@ import type { Lead } from '@wings/shared';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client.js';
 import { DealPage } from './DealPage.js';
 
 /**
@@ -10,15 +11,29 @@ import { DealPage } from './DealPage.js';
  * behind us and the deal is still open.
  */
 
-const { dealMutate, summaryMutate, askMutate, askState, queryState, idle, mutation } = vi.hoisted(() => ({
-  dealMutate: vi.fn(),
-  summaryMutate: vi.fn(),
-  askMutate: vi.fn(),
-  askState: { data: undefined as { answer: string; model: string } | undefined, error: null as unknown },
-  queryState: { lead: null as Lead | null, files: [] as unknown[] },
-  idle: () => ({ data: undefined, isLoading: false, isError: false }),
-  mutation: (mutate = vi.fn()) => ({ mutate, isPending: false, error: null }),
-}));
+const { dealMutate, summaryMutate, askMutate, askState, queryState, idle, mutation } = vi.hoisted(
+  () => ({
+    dealMutate: vi.fn(),
+    summaryMutate: vi.fn(),
+    askMutate: vi.fn(),
+    askState: {
+      data: undefined as { answer: string; model: string } | undefined,
+      error: null as unknown,
+    },
+    queryState: {
+      lead: null as Lead | null,
+      files: [] as unknown[],
+      // Overrides for what the queries answer (a failed request, a loading one); reset per test.
+      leadQuery: {} as Record<string, unknown>,
+      filesQuery: {} as Record<string, unknown>,
+      stagesQuery: {} as Record<string, unknown>,
+      sellersQuery: {} as Record<string, unknown>,
+      brandsQuery: {} as Record<string, unknown>,
+    },
+    idle: () => ({ data: undefined, isLoading: false, isError: false }),
+    mutation: (mutate = vi.fn()) => ({ mutate, isPending: false, error: null }),
+  }),
+);
 
 const lead = (over: Omit<Partial<Lead>, 'work'> & { work?: Partial<Lead['work']> }): Lead => ({
   id: 'l1',
@@ -111,9 +126,10 @@ vi.mock('../../api/leads.js', () => ({
       history: [],
       activities: [],
     },
+    ...queryState.leadQuery,
   }),
-  useSellers: idle,
-  useStages: idle,
+  useSellers: () => ({ ...idle(), ...queryState.sellersQuery }),
+  useStages: () => ({ ...idle(), ...queryState.stagesQuery }),
   useCheckLead: idle,
   useUpdateLead: () => mutation(),
   useUpdateTask: () => mutation(),
@@ -124,12 +140,18 @@ vi.mock('../../api/leads.js', () => ({
 vi.mock('../../api/crm.js', () => ({
   useUpdateDeal: () => mutation(dealMutate),
   useAddActivity: () => mutation(),
-  useBrands: idle,
+  useBrands: () => ({ ...idle(), ...queryState.brandsQuery }),
   useLinkContact: () => mutation(),
   useUnlinkContact: () => mutation(),
   useContacts: idle,
   useCompanies: idle,
-  useLeadFiles: () => ({ data: queryState.files ?? [], isLoading: false, isError: false }),
+  useLeadFiles: () => ({
+    data: queryState.files ?? [],
+    isLoading: false,
+    isError: false,
+    isSuccess: true,
+    ...queryState.filesQuery,
+  }),
   useRemoveLeadFile: () => mutation(),
   useSendLeadFile: () => ({ ...mutation(), mutateAsync: vi.fn() }),
   useGenerateSummary: () => mutation(summaryMutate),
@@ -152,7 +174,14 @@ const show = () =>
 const head = () => within(screen.getByRole('banner'));
 const field = () => head().getByLabelText('Previsão de fechamento') as HTMLInputElement;
 
-beforeEach(() => dealMutate.mockClear());
+beforeEach(() => {
+  dealMutate.mockClear();
+  queryState.leadQuery = {};
+  queryState.filesQuery = {};
+  queryState.stagesQuery = {};
+  queryState.sellersQuery = {};
+  queryState.brandsQuery = {};
+});
 afterEach(cleanup);
 
 describe('Previsão de fechamento', () => {
@@ -215,5 +244,96 @@ describe('Previsão de fechamento', () => {
     show();
     expect(head().queryByLabelText('Previsão de fechamento')).toBeNull();
     expect(head().getByText('20/11/2026')).toBeTruthy();
+  });
+});
+
+/** A request that fails must say so: never "not found", "0 files" or "no owner" in its place. */
+describe('when a request fails', () => {
+  const failed = (error: unknown) => ({
+    data: undefined,
+    isLoading: false,
+    isError: true,
+    isSuccess: false,
+    error,
+    refetch: vi.fn(),
+  });
+  const alerts = () => screen.getAllByRole('alert').map((node) => node.textContent ?? '');
+  // The previous test left its session spy in place.
+  beforeEach(() => vi.restoreAllMocks());
+
+  it('the deal that did not load says why, not "não encontrada"', () => {
+    queryState.leadQuery = failed(new ApiError(500, {}));
+    show();
+    expect(alerts().join(' ')).toContain('Não foi possível carregar a negociação');
+    expect(alerts().join(' ')).toContain('o servidor teve um problema (erro 500)');
+    expect(screen.queryByText(/não encontrada/)).toBeNull();
+    expect(screen.getByRole('link', { name: 'Voltar às negociações' })).toBeTruthy();
+  });
+
+  it('a refresh that failed keeps the deal on screen and adds the reason', () => {
+    queryState.lead = lead({});
+    queryState.leadQuery = { isError: true, isSuccess: false, error: new TypeError('x') };
+    show();
+    expect(alerts().join(' ')).toContain('sem conexão com o servidor');
+    expect(screen.getByRole('heading', { level: 1 })).toBeTruthy();
+  });
+
+  it('the files card shows "—" and why, not "0" or "Nenhum arquivo."', () => {
+    queryState.lead = lead({});
+    queryState.filesQuery = failed(new ApiError(403, {}));
+    show();
+    expect(screen.getByLabelText('Arquivos: —')).toBeTruthy();
+    expect(alerts().join(' ')).toContain('Não foi possível carregar os arquivos');
+    expect(screen.queryByText('Nenhum arquivo.')).toBeNull();
+    expect(screen.queryByLabelText('Arquivos: 0')).toBeNull();
+  });
+
+  it('the files card still says "Nenhum arquivo." and 0 when the request succeeded empty', () => {
+    queryState.lead = lead({});
+    show();
+    expect(screen.getByLabelText('Arquivos: 0')).toBeTruthy();
+    expect(screen.getByText('Nenhum arquivo.')).toBeTruthy();
+  });
+
+  it('the stages that did not load are said, not left as a missing bar', () => {
+    queryState.lead = lead({});
+    queryState.stagesQuery = failed(new ApiError(500, {}));
+    show();
+    expect(alerts().join(' ')).toContain('Não foi possível carregar as etapas');
+  });
+
+  it('the brand select keeps showing the brand, and is locked, when the brands did not load', () => {
+    queryState.lead = lead({
+      brand: 'Casa do Churros',
+      origin: { ...lead({}).origin, clientMapped: true, clientId: 'c9' },
+    });
+    queryState.brandsQuery = failed(new ApiError(500, {}));
+    show();
+    // Wherever the page edits the brand, it keeps showing the real one.
+    const selects = screen.getAllByLabelText('Marca') as HTMLSelectElement[];
+    expect(selects.length).toBeGreaterThan(0);
+    for (const select of selects) {
+      expect(select.selectedOptions[0]?.textContent).toBe('Casa do Churros');
+      expect(select.disabled).toBe(true);
+    }
+  });
+
+  it('the owner select keeps showing the owner, and is locked, when the sellers did not load', async () => {
+    const auth = await import('../../api/auth.js');
+    vi.spyOn(auth, 'useSession').mockReturnValue({
+      data: {
+        id: 'e1',
+        fullName: 'Eric Souza',
+        role: 'admin',
+        permissions: { 'leads.read': 'all', 'leads.write': 'all', 'leads.assign': 'all' },
+      },
+    } as unknown as ReturnType<typeof auth.useSession>);
+    queryState.lead = lead({ ownerEmployeeId: 'e9' });
+    queryState.sellersQuery = failed(new ApiError(500, {}));
+    show();
+    const select = head().getByLabelText('Dono') as HTMLSelectElement;
+    expect(select.selectedOptions[0]?.textContent).toBe('Eric');
+    expect(select.disabled).toBe(true);
+    vi.restoreAllMocks();
   });
 });

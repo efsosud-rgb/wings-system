@@ -183,3 +183,17 @@ describe('Configurações → Integrações → Kairogen', () => {
     expect(await screen.findByText(/Conta do Kairogen conectada/)).toBeTruthy();
   });
 });
+
+describe('Configurações → Integrações when the reads fail', () => {
+  it('says "—" and why for the Kairogen state instead of a bare error', async () => {
+    get.mockRejectedValue(new ApiError(500, {}));
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        /Não foi possível carregar o estado da integração com o Kairogen: o servidor teve um problema \(erro 500\)/,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Conectar' })).toBeNull();
+  });
+});

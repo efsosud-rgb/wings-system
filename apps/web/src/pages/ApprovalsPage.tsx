@@ -8,7 +8,7 @@ import {
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApprovalGroups, useApprovals } from '../api/ads.js';
-import { Alert } from '../components/ui.js';
+import { LoadFailure } from '../components/LoadFailure.js';
 import { PageHeader } from '../components/PageHeader.js';
 
 function formatBrl(cents: number): string {
@@ -188,6 +188,7 @@ export function ApprovalsPage() {
   const list = useApprovals();
   const groups = useApprovalGroups();
   const [byCampaign, setByCampaign] = useState(false);
+  // Only used once `list.data` exists; the empty fallback never reaches the screen.
   const approvals = list.data?.approvals ?? [];
 
   const pending = approvals.filter((a) => a.status === 'pending');
@@ -210,12 +211,30 @@ export function ApprovalsPage() {
         }
       />
 
-      {list.isError && <Alert kind="error">Não foi possível carregar as solicitações.</Alert>}
       {list.isLoading && <p className="muted">Carregando…</p>}
 
-      {byCampaign && !groups.isLoading && <GroupedPending groups={groups.data?.groups ?? []} />}
+      {/*
+        A failed request is never "Nada aguardando no momento": on an approval queue that
+        would read as "nothing to decide". The sections only render once the list answered.
+      */}
+      {!byCampaign && list.isError && (
+        <LoadFailure
+          what="as solicitações"
+          error={list.error}
+          onRetry={() => void list.refetch()}
+        />
+      )}
+      {byCampaign && groups.isError && (
+        <LoadFailure
+          what="as solicitações por campanha"
+          error={groups.error}
+          onRetry={() => void groups.refetch()}
+        />
+      )}
 
-      {!byCampaign && !list.isLoading && (
+      {byCampaign && groups.data && <GroupedPending groups={groups.data.groups} />}
+
+      {!byCampaign && list.data && (
         <>
           <Section title="Aguardando decisão" items={pending} empty="Nada aguardando no momento." />
           <Section

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { hasPermission, useSession } from '../api/auth.js';
 import { useTaskList } from '../api/crm.js';
 import { Icon } from '../components/Icon.js';
+import { LoadFailure } from '../components/LoadFailure.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { dueLabel, isPast } from './crm/format.js';
 
@@ -98,7 +99,9 @@ function TodayCard() {
         </Link>
       </h2>
       {tasks.isLoading && <p className="muted">Carregando…</p>}
-      {tasks.isError && <p className="muted">Não foi possível carregar as tarefas.</p>}
+      {tasks.isError && (
+        <LoadFailure what="as tarefas" error={tasks.error} onRetry={() => void tasks.refetch()} />
+      )}
       {tasks.isSuccess && rows.length === 0 && (
         <p className="muted">Nenhuma tarefa atrasada ou para hoje.</p>
       )}

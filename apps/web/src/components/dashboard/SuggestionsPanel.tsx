@@ -18,7 +18,8 @@ import {
 } from '../../api/dashboard.js';
 import { writeBuilderHandoff } from '../../lib/builder-handoff.js';
 import { formatBrl, formatDate } from '../campaign-builder/format.js';
-import { Alert, Button } from '../ui.js';
+import { LoadFailure } from '../LoadFailure.js';
+import { Button } from '../ui.js';
 import { RunBar } from './InsightsTab.js';
 
 /**
@@ -220,11 +221,13 @@ export function SuggestionsPanel({ canRequest }: { canRequest: boolean }) {
     }
   }, [follow.data?.run.status, suggestions]);
 
-  if (suggestions.isError) {
+  if (suggestions.isError && !suggestions.data) {
     return (
-      <Alert kind="error">
-        Não foi possível carregar as sugestões de campanha. Tente de novo em instantes.
-      </Alert>
+      <LoadFailure
+        what="as sugestões de campanha"
+        error={suggestions.error}
+        onRetry={() => void suggestions.refetch()}
+      />
     );
   }
   if (!suggestions.data) return null;
@@ -234,6 +237,13 @@ export function SuggestionsPanel({ canRequest }: { canRequest: boolean }) {
 
   return (
     <section className="dash-section suggestions" aria-labelledby="suggestions-title">
+      {suggestions.isError && (
+        <LoadFailure
+          what="as sugestões de campanha"
+          error={suggestions.error}
+          onRetry={() => void suggestions.refetch()}
+        />
+      )}
       <RunBar
         title="Sugestões de novas campanhas"
         latestRun={data.latestRun}

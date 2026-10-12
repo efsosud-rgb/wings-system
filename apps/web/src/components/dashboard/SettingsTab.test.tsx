@@ -1,8 +1,13 @@
 import type { DashboardSettings } from '@wings/shared';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client.js';
 
-const state = { settings: {} as DashboardSettings, canConfirm: true };
+const state = {
+  settings: {} as DashboardSettings | undefined,
+  canConfirm: true,
+  error: null as unknown,
+};
 const setTarget = vi.fn();
 const setAccountTarget = vi.fn();
 
@@ -13,7 +18,12 @@ vi.mock('../../api/auth.js', () => ({
 }));
 
 vi.mock('../../api/dashboard.js', () => ({
-  useDashboardSettings: () => ({ data: state.settings, isError: false }),
+  useDashboardSettings: () => ({
+    data: state.settings,
+    isError: state.error !== null,
+    error: state.error,
+    refetch: vi.fn(),
+  }),
   useSetCplTarget: () => ({ mutate: setTarget, isPending: false, isError: false, error: null }),
   useSetAccountCplTarget: () => ({
     mutate: setAccountTarget,
@@ -27,6 +37,7 @@ const { SettingsTab } = await import('./SettingsTab.js');
 
 beforeEach(() => {
   state.canConfirm = true;
+  state.error = null;
   state.settings = {
     targets: [
       {
@@ -145,5 +156,18 @@ describe('Configurações do Dashboard', () => {
       adAccountId: '11111111-1111-4111-8111-111111111111',
       targetCents: 8590,
     });
+  });
+});
+
+describe('when the settings fail to load', () => {
+  it('shows "—" and why, with no target form that could be saved over a real target', () => {
+    state.settings = undefined;
+    state.error = new ApiError(403, {});
+    render(<SettingsTab />);
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar as configurações: você não tem permissão para ver isto',
+    );
+    expect(screen.queryByRole('button', { name: 'Confirmar meta' })).toBeNull();
+    expect(screen.queryByText('Nenhuma conta de anúncios ativa.')).toBeNull();
   });
 });

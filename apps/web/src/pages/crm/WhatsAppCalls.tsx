@@ -16,6 +16,7 @@ import {
   whatsappCalls,
 } from '../../api/whatsapp.js';
 import { Icon } from '../../components/Icon.js';
+import { LoadFailure } from '../../components/LoadFailure.js';
 import {
   answerOffer,
   applyAnswer,
@@ -346,7 +347,15 @@ export function WhatsAppCallSection({
         <Icon name="message" size={15} /> Ligar pelo WhatsApp
       </button>
       {!thread.data ? (
-        <p className="crm-sub">Carregando…</p>
+        thread.isError ? (
+          <LoadFailure
+            what="as ligações pelo WhatsApp"
+            error={thread.error}
+            onRetry={() => void thread.refetch()}
+          />
+        ) : (
+          <p className="crm-sub">Carregando…</p>
+        )
       ) : !thread.data.configured ? (
         <p className="crm-sub">O WhatsApp oficial ainda não está ligado no sistema.</p>
       ) : !thread.data.calling ? (

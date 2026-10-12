@@ -15,7 +15,8 @@ import {
   useSetCplTarget,
 } from '../../api/dashboard.js';
 import { formatBrl, parseBrlToCents } from '../campaign-builder/format.js';
-import { Alert, Button, Field, Input } from '../ui.js';
+import { LoadFailure } from '../LoadFailure.js';
+import { Button, Field, Input } from '../ui.js';
 import { formatDateTime, formatInt, formatMoney } from './format.js';
 
 /**
@@ -237,17 +238,28 @@ export function SettingsTab() {
   const canConfirm = hasPermission(user, 'ads.request');
   const settings = useDashboardSettings();
 
-  if (settings.isError) {
+  // The target forms stay out of reach until the settings loaded: a blank form must never
+  // look like "no target set" and invite a save over a real one.
+  if (settings.isError && !settings.data) {
     return (
-      <Alert kind="error">
-        Não foi possível carregar as configurações. Tente de novo em instantes.
-      </Alert>
+      <LoadFailure
+        what="as configurações"
+        error={settings.error}
+        onRetry={() => void settings.refetch()}
+      />
     );
   }
   if (!settings.data) return <p className="muted">Carregando…</p>;
 
   return (
     <>
+      {settings.isError && (
+        <LoadFailure
+          what="as configurações"
+          error={settings.error}
+          onRetry={() => void settings.refetch()}
+        />
+      )}
       <section className="dash-section" aria-labelledby="targets-title">
         <h2 id="targets-title">Metas por objetivo</h2>
         <div className="targets">

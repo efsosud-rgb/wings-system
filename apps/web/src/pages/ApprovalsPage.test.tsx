@@ -2,6 +2,7 @@ import type { ApprovalListItem, PendingGroup } from '@wings/shared';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../api/client.js';
 
 /**
  * The grouped view exists so nobody approves the fourth budget increase on a
@@ -11,14 +12,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const approvals: { current: ApprovalListItem[] } = { current: [] };
 const groups: { current: PendingGroup[] } = { current: [] };
+// When set, the matching query answers with this failure and no data.
+const listError: { current: unknown } = { current: null };
+const groupsError: { current: unknown } = { current: null };
+
+const failed = (error: unknown) => ({
+  data: undefined,
+  isLoading: false,
+  isError: true,
+  error,
+  refetch: vi.fn(),
+});
 
 vi.mock('../api/ads.js', () => ({
-  useApprovals: () => ({
-    data: { approvals: approvals.current },
-    isLoading: false,
-    isError: false,
-  }),
-  useApprovalGroups: () => ({ data: { groups: groups.current }, isLoading: false, isError: false }),
+  useApprovals: () =>
+    listError.current
+      ? failed(listError.current)
+      : { data: { approvals: approvals.current }, isLoading: false, isError: false },
+  useApprovalGroups: () =>
+    groupsError.current
+      ? failed(groupsError.current)
+      : { data: { groups: groups.current }, isLoading: false, isError: false },
 }));
 
 const { ApprovalsPage } = await import('./ApprovalsPage.js');
@@ -80,6 +94,8 @@ function switchToGroups() {
 beforeEach(() => {
   approvals.current = [];
   groups.current = [buildGroup()];
+  listError.current = null;
+  groupsError.current = null;
 });
 
 afterEach(() => {
@@ -198,5 +214,39 @@ describe('the flat list', () => {
     // The request is the person's; the agent only suggested it.
     expect(screen.getByText(/Marina · sugerido pelo agente/)).toBeTruthy();
     expect(screen.queryByText(/solicitado pelo agente/)).toBeNull();
+  });
+});
+
+describe('when the requests fail', () => {
+  it('shows the failure, not "nothing waiting", on the flat list', () => {
+    listError.current = new ApiError(500, {});
+    renderPage();
+
+    expect(screen.getByRole('alert').textContent).toMatch(
+      /Não foi possível carregar as solicitações: o servidor teve um problema \(erro 500\)/,
+    );
+    // An empty approval queue would read as "nothing to decide".
+    expect(screen.queryByText('Nada aguardando no momento.')).toBeNull();
+    expect(screen.queryByText('Nenhuma solicitação escalada.')).toBeNull();
+    expect(screen.queryByText('Ainda sem decisões registradas.')).toBeNull();
+    expect(screen.queryByText('Aguardando decisão')).toBeNull();
+  });
+
+  it('shows the failure, not "nothing waiting", on the grouped view', () => {
+    groupsError.current = new ApiError(403, {});
+    renderPage();
+    switchToGroups();
+
+    expect(screen.getByRole('alert').textContent).toMatch(
+      /Não foi possível carregar as solicitações por campanha: você não tem permissão/,
+    );
+    expect(screen.queryByText('Nada aguardando no momento.')).toBeNull();
+  });
+
+  it('still says nothing is waiting when the list answered empty', () => {
+    renderPage();
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByText('Nenhuma solicitação escalada.')).toBeTruthy();
   });
 });
