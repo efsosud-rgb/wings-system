@@ -16,10 +16,19 @@ describe('failureReason', () => {
     expect(failureReason(new ApiError(status, {}))).toBe(reason);
   });
 
-  it('uses the API message for a refusal it explains itself', () => {
+  it('uses the API message for a refusal it explains itself, as the tail of a sentence', () => {
     expect(failureReason(new ApiError(422, { message: 'Período inválido.' }))).toBe(
-      'Período inválido.',
+      'período inválido',
     );
+    expect(failureReason(new ApiError(409, { message: 'CPF já cadastrado.' }))).toBe(
+      'CPF já cadastrado',
+    );
+  });
+
+  it('says what a 404 says is missing, when the API says it', () => {
+    expect(
+      failureReason(new ApiError(404, { message: 'Nenhuma conta de anúncios configurada.' })),
+    ).toBe('nenhuma conta de anúncios configurada');
   });
 
   it('names an answer the system could not read', () => {
