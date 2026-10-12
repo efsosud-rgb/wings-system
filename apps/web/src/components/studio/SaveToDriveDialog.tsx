@@ -2,6 +2,7 @@ import type { DriveFolder } from '@wings/shared';
 import { useMemo, useState, type ReactNode } from 'react';
 import { useDriveTree } from '../../api/drive.js';
 import { Dialog, FolderTree } from '../drive/DriveParts.js';
+import { LoadFailure } from '../LoadFailure.js';
 import { Button, Field, Input } from '../ui.js';
 
 /**
@@ -56,6 +57,13 @@ export function SaveToDriveDialog({
           />
         </div>
         <div className="studio-save-form">
+          {tree.isError && (
+            <LoadFailure
+              what="as pastas do Drive"
+              error={tree.error}
+              onRetry={() => void tree.refetch()}
+            />
+          )}
           <p className="muted">
             Pasta: <strong>{folder ? folder.path : 'escolha uma pasta'}</strong>
             {folder && !folder.canWrite && ' (sem permissão de escrita)'}

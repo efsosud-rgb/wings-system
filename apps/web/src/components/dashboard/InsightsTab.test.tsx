@@ -8,6 +8,7 @@ import type {
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client.js';
 import { BUILDER_HANDOFF_KEY } from '../../lib/builder-handoff.js';
 
 /**
@@ -85,7 +86,18 @@ const state = {
   insights: {} as InsightsResponse,
   suggestions: {} as SuggestionsResponse,
   canRequest: true,
+  // When set, that query fails with this error and holds no data.
+  insightsError: null as unknown,
+  suggestionsError: null as unknown,
+  campaignsError: null as unknown,
 };
+
+const failure = (error: unknown) => ({
+  data: undefined,
+  isError: true,
+  error,
+  refetch: vi.fn(),
+});
 
 const generateInsights = vi.fn();
 const generateSuggestions = vi.fn();
@@ -108,26 +120,35 @@ vi.mock('../../api/auth.js', () => ({
 }));
 
 vi.mock('../../api/dashboard.js', () => ({
-  useInsights: () => ({ data: state.insights, isError: false, refetch: vi.fn() }),
+  useInsights: () =>
+    state.insightsError
+      ? failure(state.insightsError)
+      : { data: state.insights, isError: false, refetch: vi.fn() },
   useInsightRun: () => ({ data: undefined }),
   useGenerateInsights: () => mutation(generateInsights),
   useMarkInsightSeen: () => mutation(markSeen),
   useRequestFromInsight: () => mutation(requestFromInsight),
-  useSuggestions: () => ({ data: state.suggestions, isError: false, refetch: vi.fn() }),
+  useSuggestions: () =>
+    state.suggestionsError
+      ? failure(state.suggestionsError)
+      : { data: state.suggestions, isError: false, refetch: vi.fn() },
   useGenerateSuggestions: () => mutation(generateSuggestions),
   useSuggestionApplied: () => mutation(applied),
   useDismissSuggestion: () => mutation(dismiss),
-  useDashboardCampaigns: () => ({
-    data: {
-      campaigns: {
-        campaigns: [
-          { verdict: { verdict: 'positive' } },
-          { verdict: { verdict: 'negative' } },
-          { verdict: { verdict: 'no_target' } },
-        ],
-      },
-    },
-  }),
+  useDashboardCampaigns: () =>
+    state.campaignsError
+      ? failure(state.campaignsError)
+      : {
+          data: {
+            campaigns: {
+              campaigns: [
+                { verdict: { verdict: 'positive' } },
+                { verdict: { verdict: 'negative' } },
+                { verdict: { verdict: 'no_target' } },
+              ],
+            },
+          },
+        },
 }));
 
 vi.mock('react-router-dom', async (original) => ({
@@ -193,6 +214,9 @@ function renderTab() {
 
 beforeEach(() => {
   state.canRequest = true;
+  state.insightsError = null;
+  state.suggestionsError = null;
+  state.campaignsError = null;
   state.insights = {
     configured: true,
     usage: {
@@ -407,5 +431,38 @@ describe('campaign suggestions', () => {
     renderTab();
     fireEvent.click(screen.getByRole('button', { name: 'Dispensar' }));
     expect(dismiss).toHaveBeenCalledWith('sug-1');
+  });
+});
+
+describe('when a request fails', () => {
+  it('shows "—" and why for the insights, not "Nenhum insight"', () => {
+    state.insightsError = new ApiError(500, {});
+    renderTab();
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar os insights: o servidor teve um problema (erro 500)',
+    );
+    expect(screen.queryByText(/Nenhum insight/)).toBeNull();
+    expect(screen.queryByText(/Vereditos em 30 dias/)).toBeNull();
+  });
+
+  it('shows "—" and why for the suggestions, and keeps the insights', () => {
+    state.suggestionsError = new TypeError('Failed to fetch');
+    renderTab();
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar as sugestões de campanha: sem conexão com o servidor',
+    );
+    expect(screen.queryByText(/Nenhuma sugestão aberta/)).toBeNull();
+    expect(screen.getByText('Verba ideal por campanha')).toBeTruthy();
+  });
+
+  it('shows a dash for the verdict counts instead of zeros', () => {
+    state.campaignsError = new ApiError(403, {});
+    renderTab();
+
+    const strip = screen.getByLabelText('Vereditos das campanhas em 30 dias');
+    expect(strip.textContent).toContain('— você não tem permissão para ver isto');
+    expect(within(strip).queryByRole('link')).toBeNull();
   });
 });

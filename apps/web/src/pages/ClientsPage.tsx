@@ -28,6 +28,7 @@ import { useClients, useCnpjLookup, useCreateClient, useUpdateClient } from '../
 import { useProjects } from '../api/projects.js';
 import { useCreateTrackingLink, useTrackingLinks, useUpdateExpansionArea } from '../api/leads.js';
 import { ProjectStatusTag, StatusDialog, stageLabel } from '../components/projects/ProjectParts.js';
+import { LoadFailure } from '../components/LoadFailure.js';
 import { Alert, Button, Field, Input, Select } from '../components/ui.js';
 import type { ClientProject } from '@wings/shared';
 import { PageHeader } from '../components/PageHeader.js';
@@ -143,6 +144,9 @@ function TrackingLinks({ client }: { client: Client }) {
             : 'Não foi possível gerar o link.'}
         </div>
       )}
+      {links.isError && (
+        <LoadFailure what="os links" error={links.error} onRetry={() => void links.refetch()} />
+      )}
       {list.length > 0 && (
         <table className="table lead-links-table">
           <thead>
@@ -199,10 +203,13 @@ function ClientRow({
   onToggle,
   onStatus,
   canManage,
+  projectUnavailable,
 }: {
   canManage: boolean;
   client: Client;
   project: ClientProject | undefined;
+  /** The projects could not be loaded: a blank cell would read as "no project". */
+  projectUnavailable: boolean;
   open: boolean;
   onToggle: () => void;
   onStatus: (project: ClientProject) => void;
@@ -324,6 +331,11 @@ function ClientRow({
           </span>
         </td>
         <td>
+          {!project && projectUnavailable && (
+            <span className="unavailable" title="Não foi possível carregar os projetos">
+              —
+            </span>
+          )}
           {project && (
             <div className="clients-project">
               {project.canManage ? (
@@ -685,7 +697,20 @@ export function ClientsPage() {
       {canManage && (
         <WhatsAppArtPanel clientId={WINGS_CLIENT_ID} name="Wings Company" canEdit wings />
       )}
-      {clients.isError && <Alert kind="error">Não foi possível carregar os clientes.</Alert>}
+      {clients.isError && (
+        <LoadFailure
+          what="os clientes"
+          error={clients.error}
+          onRetry={() => void clients.refetch()}
+        />
+      )}
+      {projects.isError && (
+        <LoadFailure
+          what="os projetos dos clientes"
+          error={projects.error}
+          onRetry={() => void projects.refetch()}
+        />
+      )}
 
       <div className="table-wrap">
         <table className="table">
@@ -715,6 +740,7 @@ export function ClientsPage() {
                 key={client.id}
                 client={client}
                 project={projectByClient.get(client.id)}
+                projectUnavailable={projects.isError && !projects.data}
                 open={openId === client.id}
                 onToggle={() => setOpenId((current) => (current === client.id ? null : client.id))}
                 onStatus={setStatusOf}

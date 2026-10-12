@@ -1,6 +1,7 @@
 import type { SiteImageUpload, SitePostRecord, SiteTerms } from '@wings/shared';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client.js';
 
 /**
  * The owned-channels tab promises one thing on screen — a draft, never a live
@@ -9,6 +10,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
  */
 
 const site = { configured: true };
+/** When set, that read fails with this error and holds no data. */
+const failure: { status?: unknown; posts?: unknown } = {};
+const failed = (error: unknown) => ({
+  data: undefined,
+  isError: true,
+  isSuccess: false,
+  error,
+  refetch: vi.fn(),
+});
 const posts: { current: SitePostRecord[] } = { current: [] };
 const createDraft = vi.fn();
 const refreshTerms = vi.fn();
@@ -29,18 +39,21 @@ const terms: SiteTerms = {
 };
 
 vi.mock('../../api/ads.js', () => ({
-  useSiteStatus: () => ({
-    isSuccess: true,
-    data: {
-      status: {
-        configured: site.configured,
-        siteHost: site.configured ? 'wingscompany.com.br' : null,
-      },
-    },
-  }),
+  useSiteStatus: () =>
+    failure.status
+      ? failed(failure.status)
+      : {
+          isSuccess: true,
+          data: {
+            status: {
+              configured: site.configured,
+              siteHost: site.configured ? 'wingscompany.com.br' : null,
+            },
+          },
+        },
   useSiteTerms: (enabled: boolean) => ({ data: enabled ? { terms } : undefined, isError: false }),
   useRefreshSiteTerms: () => ({ mutate: refreshTerms, isPending: false }),
-  useSitePosts: () => ({ data: { posts: posts.current } }),
+  useSitePosts: () => (failure.posts ? failed(failure.posts) : { data: { posts: posts.current } }),
   useHoldSiteImage: () => ({
     isPending: false,
     mutateAsync: async () => {
@@ -72,6 +85,8 @@ const { OwnedChannelsPanel } = await import('./OwnedChannelsPanel.js');
 
 afterEach(() => {
   cleanup();
+  failure.status = undefined;
+  failure.posts = undefined;
   window.localStorage.clear();
   site.configured = true;
   posts.current = [];
@@ -418,5 +433,33 @@ describe('the owned-channels tab', () => {
     // What was typed for SEO is kept here, to be pasted into Rank Math.
     expect(screen.getByText('SEO para colar no Rank Math')).toBeTruthy();
     expect(screen.getByText('Formatação de franquia: por onde começar')).toBeTruthy();
+  });
+});
+
+describe('when what the panel reads fails to load', () => {
+  it('says "—" and why for the site status, not that the server is unconfigured', () => {
+    failure.status = new ApiError(500, {});
+    render(<OwnedChannelsPanel canPublish />);
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar o estado da ligação com o site: o servidor teve um problema (erro 500)',
+    );
+    expect(screen.queryByText(/Falta configurar no servidor/)).toBeNull();
+  });
+
+  it('says why the latest sends are missing instead of hiding the list', () => {
+    failure.posts = new TypeError('Failed to fetch');
+    render(<OwnedChannelsPanel canPublish />);
+
+    expect(
+      screen
+        .getAllByRole('alert')
+        .some((alert) =>
+          /Não foi possível carregar os últimos envios: sem conexão com o servidor/.test(
+            alert.textContent ?? '',
+          ),
+        ),
+    ).toBe(true);
+    expect(screen.queryByText('Últimos envios')).toBeNull();
   });
 });

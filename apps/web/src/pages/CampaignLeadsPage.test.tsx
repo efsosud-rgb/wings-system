@@ -15,6 +15,7 @@ vi.mock('../api/client.js', async (original) => ({
 }));
 
 const { CampaignLeadsPage } = await import('./CampaignLeadsPage.js');
+const { ApiError } = await import('../api/client.js');
 
 const response = (overrides: Partial<CampaignLeadsResponse> = {}): CampaignLeadsResponse => ({
   scope: 'all',
@@ -149,5 +150,22 @@ describe('Leads das Campanhas', () => {
     get.mockResolvedValue(response({ scope: 'own' }));
     renderPage();
     expect(await screen.findByText('Você vê só os leads que estão com você.')).toBeTruthy();
+  });
+
+  it('says why the leads did not load, with no summary and no "Nenhum lead" line', async () => {
+    get.mockRejectedValue(new ApiError(500, {}));
+    renderPage();
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('Não foi possível carregar os leads');
+    expect(alert.textContent).toContain('erro 500');
+    expect(screen.queryByText(/Nenhum lead das campanhas/)).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Resumo' })).toBeNull();
+  });
+
+  it('still says "Nenhum lead das campanhas" when the answer came back with none', async () => {
+    get.mockResolvedValue(response({ leads: [] }));
+    renderPage();
+    expect(await screen.findByText(/Nenhum lead das campanhas desde 28\/09/)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });

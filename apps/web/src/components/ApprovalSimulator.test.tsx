@@ -2,6 +2,7 @@ import type { ChangeSimulation, ExposureScenario, NextPendingLink } from '@wings
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../api/client.js';
 
 /**
  * The simulator sits directly above an "Aprovar" button, so the things worth
@@ -14,11 +15,21 @@ const state: {
   simulation: ChangeSimulation;
   nextPending: NextPendingLink | null;
   lastArgs: [string | undefined, number | undefined] | null;
-} = { simulation: buildSimulation(), nextPending: null, lastArgs: null };
+  error: unknown;
+} = { simulation: buildSimulation(), nextPending: null, lastArgs: null, error: null };
 
 vi.mock('../api/ads.js', () => ({
   useSimulation: (id: string | undefined, alternative?: number) => {
     state.lastArgs = [id, alternative];
+    if (state.error) {
+      return {
+        data: undefined,
+        isLoading: false,
+        isError: true,
+        error: state.error,
+        refetch: vi.fn(),
+      };
+    }
     return {
       data: {
         simulation:
@@ -93,6 +104,7 @@ beforeEach(() => {
   state.simulation = buildSimulation();
   state.nextPending = null;
   state.lastArgs = null;
+  state.error = null;
 });
 
 afterEach(() => {
@@ -191,5 +203,18 @@ describe('moving to the next decision', () => {
   it('says nothing when this is the only request on the campaign', () => {
     renderSimulator();
     expect(screen.queryByRole('link', { name: 'Ir para a próxima decisão' })).toBeNull();
+  });
+});
+
+describe('when the scenario cannot be calculated', () => {
+  it('says "—" and why, with no figure that could pass for the month\'s balance', () => {
+    state.error = new ApiError(500, {});
+    renderSimulator();
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar o cenário: o servidor teve um problema (erro 500)',
+    );
+    expect(screen.queryByText('Antes e depois')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Simular' })).toBeNull();
   });
 });

@@ -17,6 +17,7 @@ import {
   useAgentConversations,
   useAgentStatus,
 } from '../../api/agent.js';
+import { LoadFailure } from '../LoadFailure.js';
 import { Button } from '../ui.js';
 import { CanGenerateContext, ProposalCard, type ApplyCampaign } from './ProposalCards.js';
 
@@ -370,6 +371,20 @@ export function AgentChat({
     );
   }
 
+  // A failed read says nothing about the setup: "não está configurado" would be a made-up fact.
+  if (status.isError && !status.data) {
+    return (
+      <div className="agent-chat">
+        <h2 className="agent-chat-title">{title}</h2>
+        <LoadFailure
+          what="o estado do agente"
+          error={status.error}
+          onRetry={() => void status.refetch()}
+        />
+      </div>
+    );
+  }
+
   if (!configured) {
     return (
       <div className="agent-chat">
@@ -393,6 +408,13 @@ export function AgentChat({
           </button>
         </div>
 
+        {conversations.isError && !conversations.data && (
+          <LoadFailure
+            what="as conversas anteriores"
+            error={conversations.error}
+            onRetry={() => void conversations.refetch()}
+          />
+        )}
         {earlier.length > 0 && (
           <label className="agent-chat-picker">
             <span className="field-label">Conversas anteriores</span>
@@ -421,11 +443,20 @@ export function AgentChat({
           aria-label="Mensagens"
           aria-live="off"
         >
-          {messages.length === 0 && !streaming && (
-            <p className="muted agent-empty">
-              {loadId && loaded.isLoading ? 'Carregando a conversa…' : emptyHint}
-            </p>
-          )}
+          {messages.length === 0 &&
+            !streaming &&
+            (loadId && loaded.isError && !loaded.data ? (
+              // The chosen conversation did not open: the new-conversation hint would say it is empty.
+              <LoadFailure
+                what="a conversa"
+                error={loaded.error}
+                onRetry={() => void loaded.refetch()}
+              />
+            ) : (
+              <p className="muted agent-empty">
+                {loadId && loaded.isLoading ? 'Carregando a conversa…' : emptyHint}
+              </p>
+            ))}
           {messages.map((message) => (
             <div key={message.id} className={`agent-message agent-message-${message.role}`}>
               <span className="agent-author">{message.role === 'user' ? 'Você' : 'Agente'}</span>

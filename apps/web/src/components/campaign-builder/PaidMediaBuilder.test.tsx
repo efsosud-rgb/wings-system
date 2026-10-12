@@ -33,6 +33,23 @@ import { ApiError } from '../../api/client.js';
  */
 
 const pacing: { current: PacingSummary | null } = { current: buildPacing() };
+/** Queries (by name) that currently fail with this error and hold no data. */
+const queryFailure: {
+  cockpit?: unknown;
+  savedDrafts?: unknown;
+  audience?: unknown;
+  campaigns?: unknown;
+  sitePages?: unknown;
+  clients?: unknown;
+  demandGen?: unknown;
+} = {};
+const failedQuery = (error: unknown) => ({
+  data: undefined,
+  isLoading: false,
+  isError: true,
+  error,
+  refetch: vi.fn(),
+});
 /** Every call the builder made to `useCockpit`, in order — what days/platform it asked for. */
 const cockpitCalls: { days: number; platform?: string }[] = [];
 /** The active budgets the cockpit reports, for the spending-limit projection. */
@@ -124,39 +141,45 @@ vi.mock('../../api/youtube.js', () => ({
 }));
 
 vi.mock('../../api/dashboard.js', () => ({
-  useDashboardCampaigns: () => ({
-    data: {
-      campaigns: {
-        campaigns: [
-          {
-            platform: 'meta',
-            externalId: '120252260012720076',
-            name: 'META | 28Set',
-            status: 'ACTIVE',
-            launchDefaults: {
-              utms: {
-                utm_source: 'facebook',
-                utm_medium: 'paid_social',
-                utm_campaign: 'formatacao_jimmyogro_set26',
-              },
-              destinationUrl: 'https://wingscompany.com.br/contato/',
-              identity: { pageId: '111543418672527', instagramActorId: '17841460839979368' },
+  useDashboardCampaigns: () =>
+    queryFailure.campaigns
+      ? failedQuery(queryFailure.campaigns)
+      : {
+          data: {
+            campaigns: {
+              campaigns: [
+                {
+                  platform: 'meta',
+                  externalId: '120252260012720076',
+                  name: 'META | 28Set',
+                  status: 'ACTIVE',
+                  launchDefaults: {
+                    utms: {
+                      utm_source: 'facebook',
+                      utm_medium: 'paid_social',
+                      utm_campaign: 'formatacao_jimmyogro_set26',
+                    },
+                    destinationUrl: 'https://wingscompany.com.br/contato/',
+                    identity: { pageId: '111543418672527', instagramActorId: '17841460839979368' },
+                  },
+                },
+                {
+                  platform: 'google',
+                  externalId: '24289782134',
+                  name: 'SEARCH | Formatação',
+                  status: 'ACTIVE',
+                },
+              ],
             },
           },
-          {
-            platform: 'google',
-            externalId: '24289782134',
-            name: 'SEARCH | Formatação',
-            status: 'ACTIVE',
-          },
-        ],
-      },
-    },
-  }),
+        },
 }));
 
 vi.mock('../../api/ads.js', () => ({
-  useDemandGenOptions: () => ({ data: demandGenOptions.current, isLoading: false, error: null }),
+  useDemandGenOptions: () =>
+    queryFailure.demandGen
+      ? { data: undefined, isLoading: false, error: queryFailure.demandGen }
+      : { data: demandGenOptions.current, isLoading: false, error: null },
   useCheckYoutubeVideos: () => ({
     isPending: false,
     error: null,
@@ -181,7 +204,10 @@ vi.mock('../../api/ads.js', () => ({
     isSuccess: false,
     data: undefined,
   }),
-  useSavedDrafts: () => ({ data: { drafts: savedDrafts.current } }),
+  useSavedDrafts: () =>
+    queryFailure.savedDrafts
+      ? failedQuery(queryFailure.savedDrafts)
+      : { data: { drafts: savedDrafts.current } },
   loadSavedDraft: (id: string) =>
     Promise.resolve({ id, name: 'Rascunho real', draft: savedDraftPayload.current }),
   useSaveDraft: () => ({
@@ -193,7 +219,10 @@ vi.mock('../../api/ads.js', () => ({
     error: null,
   }),
   useDeleteSavedDraft: () => ({ mutate: deleteSavedDraft }),
-  useAudienceProfile: () => ({ data: { profile: savedAudience.current } }),
+  useAudienceProfile: () =>
+    queryFailure.audience
+      ? failedQuery(queryFailure.audience)
+      : { data: { profile: savedAudience.current } },
   useSaveAudienceProfile: () => ({
     mutate: saveAudience,
     isPending: false,
@@ -256,6 +285,7 @@ vi.mock('../../api/ads.js', () => ({
   }),
   useCockpit: (args: { days: number; platform?: string }) => {
     cockpitCalls.push(args);
+    if (queryFailure.cockpit) return failedQuery(queryFailure.cockpit);
     return {
       data: {
         cockpit: {
@@ -343,14 +373,17 @@ const useInBuilder = vi.fn();
 const bridgeAnswer: { current: MediaBridgeResponse | null } = { current: null };
 // The library picker's "Cliente" filter reads the register; the builder tests need no clients.
 vi.mock('../../api/clients.js', () => ({
-  useClients: () => ({
-    data: {
-      clients: [
-        { id: '00000000-0000-4000-8000-0000000000c1', name: 'Wings Company', active: true },
-        { id: '00000000-0000-4000-8000-0000000000c2', name: 'Cenoritas', active: true },
-      ],
-    },
-  }),
+  useClients: () =>
+    queryFailure.clients
+      ? failedQuery(queryFailure.clients)
+      : {
+          data: {
+            clients: [
+              { id: '00000000-0000-4000-8000-0000000000c1', name: 'Wings Company', active: true },
+              { id: '00000000-0000-4000-8000-0000000000c2', name: 'Cenoritas', active: true },
+            ],
+          },
+        },
 }));
 
 // The standard lead form's reads: the Page's readiness and the site pages.
@@ -367,7 +400,10 @@ vi.mock('../../api/lead-forms.js', () => ({
     data: leadFormReadiness.current ?? undefined,
     isError: false,
   }),
-  useSiteFormPages: () => ({ data: { pages: siteFormPages.current } }),
+  useSiteFormPages: () =>
+    queryFailure.sitePages
+      ? failedQuery(queryFailure.sitePages)
+      : { data: { pages: siteFormPages.current } },
   useProposeSiteForm: () => ({ mutate: proposeSiteForm, isPending: false, isSuccess: false }),
   useApproveSiteForm: () => ({ mutate: approveSiteForm, isPending: false, isError: false }),
   useRejectSiteForm: () => ({ mutate: vi.fn(), isPending: false }),
@@ -439,6 +475,8 @@ function buildReading(overrides: Partial<PlatformAccountReading> = {}): Platform
 
 afterEach(() => {
   cleanup();
+  for (const key of Object.keys(queryFailure))
+    delete queryFailure[key as keyof typeof queryFailure];
   pacing.current = buildPacing();
   cockpitCalls.length = 0;
   activeBudgets.current = [];
@@ -2407,5 +2445,133 @@ describe('the standard lead form in the ad', () => {
     ).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: /Aprovar e publicar na página/ }));
     expect(approveSiteForm).toHaveBeenCalledWith({ id: '6f1b2c3d-0000-4000-8000-000000000001' });
+  });
+});
+
+describe('when what the builder reads fails to load', () => {
+  it('says "—" and why for the account ceiling, not that no budget period is open', () => {
+    queryFailure.cockpit = new ApiError(500, {});
+    render(<PaidMediaBuilder canRequest />);
+
+    expect(
+      screen
+        .getAllByRole('alert')
+        .some((alert) =>
+          /Não foi possível carregar o teto da conta: o servidor teve um problema \(erro 500\)/.test(
+            alert.textContent ?? '',
+          ),
+        ),
+    ).toBe(true);
+    expect(screen.queryByText(/Não há período de orçamento aberto/)).toBeNull();
+    expect(screen.queryByText('Teto real da conta neste mês')).toBeNull();
+  });
+
+  it('still says no period is open when the server answered that', () => {
+    pacing.current = null;
+    render(<PaidMediaBuilder canRequest />);
+
+    expect(screen.getByText(/Não há período de orçamento aberto/)).toBeTruthy();
+  });
+
+  it('says why the saved drafts are missing instead of hiding the list', () => {
+    queryFailure.savedDrafts = new TypeError('Failed to fetch');
+    render(<PaidMediaBuilder canRequest />);
+
+    expect(
+      screen
+        .getAllByRole('alert')
+        .some((alert) =>
+          /Não foi possível carregar os rascunhos salvos: sem conexão com o servidor/.test(
+            alert.textContent ?? '',
+          ),
+        ),
+    ).toBe(true);
+    expect(screen.queryByLabelText('Rascunhos salvos')).toBeNull();
+  });
+
+  it('does not claim there is no standing audience, and will not overwrite it blind', () => {
+    queryFailure.audience = new ApiError(500, {});
+    render(<PaidMediaBuilder canRequest />);
+
+    expect(screen.queryByText(/Ainda não há um padrão salvo para a Wings/)).toBeNull();
+    expect(
+      screen
+        .getAllByRole('alert')
+        .some((alert) =>
+          /Não foi possível carregar o padrão de público da Wings/.test(alert.textContent ?? ''),
+        ),
+    ).toBe(true);
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'Salvar perfil e alcance como padrão da Wings',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  });
+
+  it('says why the campaign list is empty when adding creatives to a campaign that exists', () => {
+    queryFailure.campaigns = new ApiError(403, {});
+    render(<PaidMediaBuilder canRequest />);
+    fireEvent.click(screen.getByLabelText(/Adicionar criativos a uma campanha existente/));
+
+    expect(
+      screen
+        .getAllByRole('alert')
+        .some((alert) =>
+          /Não foi possível carregar as campanhas existentes: você não tem permissão/.test(
+            alert.textContent ?? '',
+          ),
+        ),
+    ).toBe(true);
+  });
+
+  it('says why the site pages cannot be chosen instead of an empty list', () => {
+    queryFailure.sitePages = new ApiError(500, {});
+    render(<PaidMediaBuilder canRequest />);
+
+    expect(
+      screen
+        .getAllByRole('alert')
+        .some((alert) =>
+          /Não foi possível carregar as páginas do site: o servidor teve um problema/.test(
+            alert.textContent ?? '',
+          ),
+        ),
+    ).toBe(true);
+  });
+
+  it('says why the brands cannot be chosen for an Expansão instant form', () => {
+    queryFailure.clients = new ApiError(500, {});
+    render(<PaidMediaBuilder canRequest />);
+    fireEvent.click(screen.getByRole('radio', { name: /No anúncio \(formulário instantâneo\)/ }));
+    fireEvent.change(byField('Funil dos leads'), { target: { value: 'expansao' } });
+
+    expect(
+      screen
+        .getAllByRole('alert')
+        .some((alert) =>
+          /Não foi possível carregar as marcas: o servidor teve um problema/.test(
+            alert.textContent ?? '',
+          ),
+        ),
+    ).toBe(true);
+  });
+
+  it('does not claim the Google account has no audiences when they could not be read', () => {
+    queryFailure.demandGen = new ApiError(502, {});
+    render(<PaidMediaBuilder canRequest />);
+    fireEvent.click(screen.getByRole('radio', { name: /YouTube/ }));
+
+    expect(screen.queryByText('A conta não tem listas nem segmentos.')).toBeNull();
+    expect(
+      screen
+        .getAllByRole('alert')
+        .some((alert) =>
+          /Não foi possível carregar os públicos da conta: o servidor teve um problema \(erro 502\)/.test(
+            alert.textContent ?? '',
+          ),
+        ),
+    ).toBe(true);
   });
 });

@@ -32,6 +32,7 @@ import {
   useUpdateRule,
 } from '../../api/automations.js';
 import { useSellers, useStages } from '../../api/leads.js';
+import { LoadFailure, Unavailable } from '../../components/LoadFailure.js';
 import { stageTone } from './format.js';
 
 /**
@@ -59,6 +60,15 @@ export function delayText(minutes: number): string {
   if (minutes % 1440 === 0) return `${minutes / 1440} ${minutes === 1440 ? 'dia' : 'dias'} depois`;
   if (minutes % 60 === 0) return `${minutes / 60} h depois`;
   return `${minutes} min depois`;
+}
+
+/** What a screen needs of a query to tell "nothing there" from "could not load". */
+interface ListQuery {
+  isLoading: boolean;
+  isError: boolean;
+  isSuccess: boolean;
+  error: unknown;
+  refetch: () => unknown;
 }
 
 interface Refs {
@@ -456,26 +466,34 @@ function StageRules({
           ))}
         </div>
       )}
-      <label className="crm-sub" title="Dias parada na etapa antes de o painel avisar; 0 desliga">
-        Avisar negociação parada após{' '}
-        <input
-          className="crm-input"
-          type="number"
-          min={0}
-          max={365}
-          placeholder="7"
-          defaultValue={limit}
-          key={limit ?? 'padrao'}
-          style={{ width: 64, padding: '2px 6px' }}
-          onBlur={(e) => {
-            if (e.target.value === '') return;
-            const value = Number(e.target.value);
-            if (Number.isInteger(value) && value >= 0 && value <= 365 && value !== limit)
-              setLimit.mutate({ stageId: stage.id, maxDays: value });
-          }}
-        />{' '}
-        dias (em branco: padrão do sistema)
-      </label>
+      {limits.isError && !limits.data ? (
+        // A blank field means "the system default": it must not stand for a limit nobody could read.
+        <p className="crm-sub">
+          Avisar negociação parada após quantos dias: <Unavailable error={limits.error} />
+        </p>
+      ) : (
+        <label className="crm-sub" title="Dias parada na etapa antes de o painel avisar; 0 desliga">
+          Avisar negociação parada após{' '}
+          <input
+            className="crm-input"
+            type="number"
+            min={0}
+            max={365}
+            placeholder="7"
+            defaultValue={limit}
+            key={limit ?? 'padrao'}
+            disabled={!limits.data}
+            style={{ width: 64, padding: '2px 6px' }}
+            onBlur={(e) => {
+              if (e.target.value === '') return;
+              const value = Number(e.target.value);
+              if (Number.isInteger(value) && value >= 0 && value <= 365 && value !== limit)
+                setLimit.mutate({ stageId: stage.id, maxDays: value });
+            }}
+          />{' '}
+          dias (em branco: padrão do sistema)
+        </label>
+      )}
       {adding ? (
         <AddRule stage={stage} pipeline={pipeline} refs={refs} onDone={() => setAdding(false)} />
       ) : (
@@ -489,7 +507,7 @@ function StageRules({
 
 // --- e-mail templates ---------------------------------------------------------------------------
 
-function Templates({ templates }: { templates: EmailTemplate[] }) {
+function Templates({ templates, query }: { templates: EmailTemplate[]; query: ListQuery }) {
   const save = useSaveTemplate();
   const empty = {
     id: undefined as string | undefined,
@@ -523,7 +541,17 @@ function Templates({ templates }: { templates: EmailTemplate[] }) {
               </button>
             </div>
           ))}
-          {templates.length === 0 ? <p className="crm-sub">Nenhum modelo ainda.</p> : null}
+          {query.isLoading ? <p className="crm-sub">Carregando…</p> : null}
+          {query.isError ? (
+            <LoadFailure
+              what="os modelos de e-mail"
+              error={query.error}
+              onRetry={() => void query.refetch()}
+            />
+          ) : null}
+          {query.isSuccess && templates.length === 0 ? (
+            <p className="crm-sub">Nenhum modelo ainda.</p>
+          ) : null}
         </div>
       </section>
       <form
@@ -600,7 +628,15 @@ interface StepDraft {
   config: Config;
 }
 
-function Sequences({ sequences, refs }: { sequences: AutomationSequence[]; refs: Refs }) {
+function Sequences({
+  sequences,
+  query,
+  refs,
+}: {
+  sequences: AutomationSequence[];
+  query: ListQuery;
+  refs: Refs;
+}) {
   const save = useSaveSequence();
   const empty = {
     id: undefined as string | undefined,
@@ -651,7 +687,17 @@ function Sequences({ sequences, refs }: { sequences: AutomationSequence[]; refs:
               </button>
             </div>
           ))}
-          {sequences.length === 0 ? <p className="crm-sub">Nenhuma sequência ainda.</p> : null}
+          {query.isLoading ? <p className="crm-sub">Carregando…</p> : null}
+          {query.isError ? (
+            <LoadFailure
+              what="as sequências"
+              error={query.error}
+              onRetry={() => void query.refetch()}
+            />
+          ) : null}
+          {query.isSuccess && sequences.length === 0 ? (
+            <p className="crm-sub">Nenhuma sequência ainda.</p>
+          ) : null}
         </div>
       </section>
       <form
@@ -833,22 +879,66 @@ function AutomationsScreen({ pipeline }: { pipeline: LeadPipeline }) {
         <Link className="crm-sub" to="/crm-vendas/configuracoes">
           ← Configurações do CRM
         </Link>
-        {tab === 'rules' &&
-          (stages.isLoading || rules.isLoading ? (
-            <p className="crm-sub">Carregando…</p>
-          ) : (
-            active.map((stage) => (
-              <StageRules
-                key={stage.id}
-                stage={stage}
-                pipeline={pipeline}
-                refs={refs}
-                rules={(rules.data?.rules ?? []).filter((r) => r.stageId === stage.id)}
+        {tab === 'rules' && (
+          <>
+            {stages.isError && (
+              <LoadFailure
+                what="as etapas"
+                error={stages.error}
+                onRetry={() => void stages.refetch()}
               />
-            ))
-          ))}
-        {tab === 'templates' && <Templates templates={refs.templates} />}
-        {tab === 'sequences' && <Sequences sequences={refs.sequences} refs={refs} />}
+            )}
+            {rules.isError && (
+              <LoadFailure
+                what="as regras"
+                error={rules.error}
+                onRetry={() => void rules.refetch()}
+              />
+            )}
+            {/* The rules read their names from these; without them a rule shows "alguém" or "—". */}
+            {templates.isError && (
+              <LoadFailure
+                what="os modelos de e-mail"
+                error={templates.error}
+                onRetry={() => void templates.refetch()}
+              />
+            )}
+            {sequences.isError && (
+              <LoadFailure
+                what="as sequências"
+                error={sequences.error}
+                onRetry={() => void sequences.refetch()}
+              />
+            )}
+            {sellers.isError && (
+              <LoadFailure
+                what="os vendedores"
+                error={sellers.error}
+                onRetry={() => void sellers.refetch()}
+              />
+            )}
+            {stages.isLoading || rules.isLoading ? (
+              <p className="crm-sub">Carregando…</p>
+            ) : (
+              // Without the rules, "Nenhuma regra" under every stage would be a made-up answer.
+              stages.data &&
+              rules.data &&
+              active.map((stage) => (
+                <StageRules
+                  key={stage.id}
+                  stage={stage}
+                  pipeline={pipeline}
+                  refs={refs}
+                  rules={rules.data.rules.filter((r) => r.stageId === stage.id)}
+                />
+              ))
+            )}
+          </>
+        )}
+        {tab === 'templates' && <Templates templates={refs.templates} query={templates} />}
+        {tab === 'sequences' && (
+          <Sequences sequences={refs.sequences} query={sequences} refs={refs} />
+        )}
       </div>
     </div>
   );

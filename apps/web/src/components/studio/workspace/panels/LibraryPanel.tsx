@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react';
 import { useDriveFolder, useDriveSearch, useDriveTree } from '../../../../api/drive.js';
 import { useMediaAssets, type MediaAssetFilters } from '../../../../api/media.js';
 import { FileIcon, FolderTree, formatBytes } from '../../../drive/DriveParts.js';
+import { LoadFailure } from '../../../LoadFailure.js';
 import { ClientSelect, MediaThumb, describeAsset } from '../../../media-studio/MediaLibrary.js';
 import { Input } from '../../../ui.js';
 import { studioKindOf } from '../../DriveFilePicker.js';
@@ -60,15 +61,25 @@ function LibraryTab({ session }: { session: StudioSession }) {
           onChange={(clientId) => setFilters({ ...filters, clientId: clientId || undefined })}
         />
       </div>
+      {assets.isError && (
+        <LoadFailure
+          what="a biblioteca"
+          error={assets.error}
+          onRetry={() => void assets.refetch()}
+        />
+      )}
       {assets.isLoading ? (
         <p className="muted" role="status">
           Carregando a biblioteca…
         </p>
       ) : list.length === 0 ? (
-        <p className="ws-empty">
-          Nada na biblioteca com esses filtros. Gere uma imagem no painel ao lado ou envie um
-          arquivo pelo Drive.
-        </p>
+        // Empty only when the request answered; a failed one has its own line above.
+        assets.isError ? null : (
+          <p className="ws-empty">
+            Nada na biblioteca com esses filtros. Gere uma imagem no painel ao lado ou envie um
+            arquivo pelo Drive.
+          </p>
+        )
       ) : (
         <ul className="ws-tiles">
           {list.map((asset) => {
@@ -131,6 +142,9 @@ export function DriveBrowser({
   const listing = useDriveFolder(currentId);
   const search = useDriveSearch({ q: query });
   const searching = query.trim() !== '';
+  const active = searching ? search : listing;
+  // The tree is what the folder view stands on; the search does not need it.
+  const failed = !searching && tree.isError ? tree : active.isError ? active : null;
   const files = searching ? (search.data?.files ?? []) : (listing.data?.files ?? []);
   const folder = searching ? null : (listing.data?.folder ?? null);
   const ready = session.status === 'ready' && session.busy === null;
@@ -156,18 +170,33 @@ export function DriveBrowser({
           />
         </div>
       )}
-      {(searching ? search.isLoading : listing.isLoading) && (
+      {failed && (
+        <LoadFailure
+          what={
+            !searching && tree.isError
+              ? 'as pastas do Drive'
+              : searching
+                ? 'a busca'
+                : 'os arquivos desta pasta'
+          }
+          error={failed.error}
+          onRetry={() => void failed.refetch()}
+        />
+      )}
+      {(searching ? search.isLoading : listing.isLoading || tree.isLoading) && (
         <p className="muted" role="status">
           Carregando…
         </p>
       )}
-      {files.length === 0 && !(searching ? search.isLoading : listing.isLoading) && (
-        <p className="ws-empty">
-          {searching
-            ? 'Nenhum arquivo com esse nome.'
-            : 'Pasta vazia. Envie arquivos pelo Drive para vê-los aqui.'}
-        </p>
-      )}
+      {files.length === 0 &&
+        !failed &&
+        !(searching ? search.isLoading : listing.isLoading || tree.isLoading) && (
+          <p className="ws-empty">
+            {searching
+              ? 'Nenhum arquivo com esse nome.'
+              : 'Pasta vazia. Envie arquivos pelo Drive para vê-los aqui.'}
+          </p>
+        )}
       <ul className="ws-files">
         {files.map((file) => {
           const kind = studioKindOf(file);

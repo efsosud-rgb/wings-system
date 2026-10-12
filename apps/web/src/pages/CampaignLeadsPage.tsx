@@ -12,6 +12,7 @@ import { useCampaignLeads, useRevealCampaignLead } from '../api/campaign-leads.j
 import { formatDateTime, formatInt, formatWhen } from '../components/dashboard/format.js';
 import { Chart3D } from '../components/charts3d/Chart3D.js';
 import { ChartTable } from '../components/dashboard/charts3d.js';
+import { LoadFailure } from '../components/LoadFailure.js';
 import { Alert } from '../components/ui.js';
 import { PageHeader } from '../components/PageHeader.js';
 
@@ -215,7 +216,9 @@ export function CampaignLeadsPage() {
         }
       />
 
-      {leads.isError && <Alert kind="error">Não foi possível carregar os leads.</Alert>}
+      {leads.isError && (
+        <LoadFailure what="os leads" error={leads.error} onRetry={() => void leads.refetch()} />
+      )}
       {leads.isLoading && <p className="muted">Carregando…</p>}
 
       {data && (

@@ -22,6 +22,7 @@ import {
 } from '../../api/sofia.js';
 import { useMarkWhatsAppRead } from '../../api/whatsapp.js';
 import { Icon } from '../../components/Icon.js';
+import { LoadFailure, Unavailable } from '../../components/LoadFailure.js';
 import { ago, formatPhone } from './format.js';
 import { SofiaSettingsForm } from './SofiaSettingsForm.js';
 import { WhatsAppChat } from './WhatsAppChat.js';
@@ -89,6 +90,11 @@ export function SofiaPage() {
             </span>
           </>
         )}
+        {!info && overview.isError && (
+          <span className="crm-sub">
+            Estado da Sofia: <Unavailable error={overview.error} />
+          </span>
+        )}
       </header>
       {info && (!info.whatsappConfigured || !info.aiConfigured) && (
         <div className="sofia-warnings">
@@ -125,7 +131,9 @@ export function SofiaPage() {
           Configuração
         </button>
       </div>
-      {tab === 'conversas' && <Conversations id={id} overview={info} />}
+      {tab === 'conversas' && (
+        <Conversations id={id} overview={info} overviewFailed={!info && overview.isError} />
+      )}
       {settingsOpened && (
         <div className="crm-page-scroll" hidden={tab !== 'configuracao'}>
           {overview.isLoading ? (
@@ -139,7 +147,16 @@ export function SofiaPage() {
   );
 }
 
-function Conversations({ id, overview }: { id?: string; overview?: SofiaOverview }) {
+function Conversations({
+  id,
+  overview,
+  overviewFailed = false,
+}: {
+  id?: string;
+  overview?: SofiaOverview;
+  /** The counts could not be loaded: the chips show "—" instead of leaving them out. */
+  overviewFailed?: boolean;
+}) {
   const [filter, setFilter] = useState<SofiaFilter>({});
   const [q, setQ] = useState('');
   const timer = useRef<number | null>(null);
@@ -157,6 +174,7 @@ function Conversations({ id, overview }: { id?: string; overview?: SofiaOverview
     >
       {label}
       {count !== null && <span className="sofia-count">{count}</span>}
+      {count === null && overviewFailed && <span className="sofia-count">—</span>}
     </button>
   );
   return (
@@ -212,10 +230,16 @@ function Conversations({ id, overview }: { id?: string; overview?: SofiaOverview
           </div>
         </div>
         {list.isLoading && <p className="crm-muted sofia-pad">Carregando…</p>}
-        {list.isError && !list.data && (
-          <p className="crm-error sofia-pad">Não foi possível carregar as conversas.</p>
+        {list.isError && (
+          <div className="sofia-pad">
+            <LoadFailure
+              what="as conversas"
+              error={list.error}
+              onRetry={() => void list.refetch()}
+            />
+          </div>
         )}
-        {!list.isLoading && !list.isError && rows.length === 0 && (
+        {list.isSuccess && rows.length === 0 && (
           <div className="crm-empty">
             <span>Nenhuma conversa com esses filtros.</span>
           </div>
@@ -298,12 +322,21 @@ function ConversationDetail({ id }: { id: string }) {
         <p className="crm-muted">Carregando a conversa…</p>
       </div>
     );
+  // A failed request is not "not found": say why (a 404 reads "não foi encontrado").
   if (!detail.data)
     return (
       <div className="sofia-detail">
         {back}
         <div className="crm-empty">
-          <span>Conversa não encontrada ou fora do seu alcance.</span>
+          {detail.isError ? (
+            <LoadFailure
+              what="a conversa"
+              error={detail.error}
+              onRetry={() => void detail.refetch()}
+            />
+          ) : (
+            <span>Conversa não encontrada ou fora do seu alcance.</span>
+          )}
         </div>
       </div>
     );
@@ -321,6 +354,10 @@ function ConversationDetail({ id }: { id: string }) {
   return (
     <div className="sofia-detail">
       {back}
+      {/* A refresh failed: what was loaded stays on screen, with the reason above it. */}
+      {detail.isError && (
+        <LoadFailure what="a conversa" error={detail.error} onRetry={() => void detail.refetch()} />
+      )}
       <header className="sofia-detail-head">
         <div className="crm-wa-who">
           <span className="crm-wa-avatar" aria-hidden="true">

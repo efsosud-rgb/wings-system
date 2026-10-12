@@ -1,7 +1,9 @@
 import type { DriveFile, DriveFolder } from '@wings/shared';
 import { useMemo, useState } from 'react';
 import { sendFile, useDriveSearch, useDriveTree } from '../../../../api/drive.js';
+import { failureReason } from '../../../../lib/failure.js';
 import { errorText } from '../../../drive/DriveParts.js';
+import { LoadFailure } from '../../../LoadFailure.js';
 import { Button } from '../../../ui.js';
 import type { ShapeKind, StudioSession } from '../../session.js';
 
@@ -109,6 +111,13 @@ export function ElementsPanel({ session }: { session: StudioSession }) {
         </p>
       ) : wingsFiles.length > 0 ? (
         <LogoList files={wingsFiles} session={session} emptyText="" />
+      ) : wings.isError ? (
+        // Not "the logo is not in the Drive": the search failed, and sending it again could duplicate it.
+        <LoadFailure
+          what="o logo da Wings"
+          error={wings.error}
+          onRetry={() => void wings.refetch()}
+        />
       ) : (
         <div className="ws-empty">
           <p>
@@ -121,7 +130,9 @@ export function ElementsPanel({ session }: { session: StudioSession }) {
             title={
               marketingFolder
                 ? `Vai para ${marketingFolder.path}`
-                : 'Você não tem pasta com permissão de escrita no Drive'
+                : tree.isError
+                  ? `Não foi possível ler as suas pastas do Drive: ${failureReason(tree.error)}`
+                  : 'Você não tem pasta com permissão de escrita no Drive'
             }
             onClick={() => void sendMarks()}
           >
@@ -142,6 +153,12 @@ export function ElementsPanel({ session }: { session: StudioSession }) {
         <p className="muted" role="status">
           Procurando no Drive…
         </p>
+      ) : client.isError && clientFiles.length === 0 ? (
+        <LoadFailure
+          what="os logos do cliente"
+          error={client.error}
+          onRetry={() => void client.refetch()}
+        />
       ) : (
         <LogoList
           files={clientFiles}

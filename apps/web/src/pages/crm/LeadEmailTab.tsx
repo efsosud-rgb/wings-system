@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { ApiError } from '../../api/client.js';
 import { useEmailPreview, useLeadEmails, useSendEmail } from '../../api/lead-email.js';
+import { LoadFailure } from '../../components/LoadFailure.js';
 import { formatDateTime } from './format.js';
 
 const STATUS_LABELS = {
@@ -23,12 +24,21 @@ export function LeadEmailTab({ leadId }: { leadId: string }) {
   const [templateId, setTemplateId] = useState('');
 
   if (emails.isPending) return <p className="crm-muted">Carregando…</p>;
-  if (emails.isError || !emails.data)
-    return <p className="crm-error">Não foi possível carregar os e-mails.</p>;
+  if (!emails.data)
+    return emails.isError ? (
+      <LoadFailure what="os e-mails" error={emails.error} onRetry={() => void emails.refetch()} />
+    ) : (
+      <p className="crm-muted">Carregando…</p>
+    );
   const { to, hidden, mode, from, templates, sent } = emails.data;
+  // A refresh failed: what was loaded stays on screen, with the reason above it.
+  const stale = emails.isError ? (
+    <LoadFailure what="os e-mails" error={emails.error} onRetry={() => void emails.refetch()} />
+  ) : null;
   if (hidden)
     return (
       <div className="crm-record-form">
+        {stale}
         <p className="crm-sub" data-testid="brand-rule">
           Expansão com marca: o lead não recebe e-mail da Wings (não pode ver a Wings). Fale pelo{' '}
           <a href={`/crm-vendas/negociacoes/${leadId}/whatsapp`}>WhatsApp</a> em nome da marca.
@@ -46,6 +56,7 @@ export function LeadEmailTab({ leadId }: { leadId: string }) {
   if (!to)
     return (
       <div className="crm-record-form">
+        {stale}
         <p className="crm-sub">
           Esta negociação não tem e-mail. Cadastre um no contato para enviar.
         </p>
@@ -54,6 +65,7 @@ export function LeadEmailTab({ leadId }: { leadId: string }) {
 
   return (
     <div className="crm-record-form">
+      {stale}
       {mode === 'test' ? (
         <p className="crm-sub">
           Modo de teste: a mensagem fica registrada na negociação, mas nenhum e-mail sai de verdade.

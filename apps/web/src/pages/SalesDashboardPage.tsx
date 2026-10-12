@@ -29,6 +29,7 @@ import {
   type RankedSpec,
 } from '../components/charts3d/spec.js';
 import { DASH, formatInt, formatMoney } from '../components/dashboard/format.js';
+import { LoadFailure } from '../components/LoadFailure.js';
 
 /**
  * Dashboard › Vendas v1: filters in one line, the executive row, the
@@ -140,134 +141,154 @@ function FilterBar({
     !!(filters.owner || filters.brand || filters.source || filters.campaign);
 
   return (
-    <div className="filters-row sales-filters" role="group" aria-label="Filtros do painel">
-      <label>
-        <span className="sr-only">Período</span>
-        <select
-          value={filters.period}
-          onChange={(event) =>
-            set({ periodo: event.target.value === 'month' ? '' : event.target.value })
-          }
-        >
-          {SALES_PERIODS.map((key) => (
-            <option key={key} value={key}>
-              {SALES_PERIOD_LABELS[key]}
-            </option>
-          ))}
-        </select>
-      </label>
-      {filters.period === 'custom' && (
-        <>
-          <label>
-            <span className="sr-only">De</span>
-            <input
-              type="date"
-              value={filters.from}
-              max={filters.to || undefined}
-              onChange={(event) => set({ de: event.target.value })}
-            />
-          </label>
-          <label>
-            <span className="sr-only">Até</span>
-            <input
-              type="date"
-              value={filters.to}
-              min={filters.from || undefined}
-              onChange={(event) => set({ ate: event.target.value })}
-            />
-          </label>
-        </>
-      )}
-      <label>
-        <span className="sr-only">Comparar com</span>
-        <select
-          value={filters.compare}
-          onChange={(event) =>
-            set({ comparar: event.target.value === 'previous' ? '' : event.target.value })
-          }
-        >
-          {SALES_COMPARISONS.map((key) => (
-            <option key={key} value={key}>
-              {key === 'none'
-                ? SALES_COMPARISON_LABELS[key]
-                : `vs. ${SALES_COMPARISON_LABELS[key].toLowerCase()}`}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        <span className="sr-only">Funil</span>
-        <select
-          value={filters.pipeline}
-          onChange={(event) =>
-            set({ funil: event.target.value === ALL_PIPELINES ? '' : event.target.value })
-          }
-        >
-          <option value={ALL_PIPELINES}>Todos os funis</option>
-          {LEAD_PIPELINES.map((key) => (
-            <option key={key} value={key}>
-              {LEAD_PIPELINE_LABELS[key]}
-            </option>
-          ))}
-        </select>
-      </label>
-      {!own && (
+    <>
+      <div className="filters-row sales-filters" role="group" aria-label="Filtros do painel">
         <label>
-          <span className="sr-only">Vendedor</span>
-          <select value={filters.owner} onChange={(event) => set({ vendedor: event.target.value })}>
-            <option value="">Todos os vendedores</option>
-            <option value={NO_OWNER}>Sem dono</option>
-            {(sellers.data?.sellers ?? []).map((seller) => (
-              <option key={seller.id} value={seller.id}>
-                {seller.name}
+          <span className="sr-only">Período</span>
+          <select
+            value={filters.period}
+            onChange={(event) =>
+              set({ periodo: event.target.value === 'month' ? '' : event.target.value })
+            }
+          >
+            {SALES_PERIODS.map((key) => (
+              <option key={key} value={key}>
+                {SALES_PERIOD_LABELS[key]}
               </option>
             ))}
           </select>
         </label>
+        {filters.period === 'custom' && (
+          <>
+            <label>
+              <span className="sr-only">De</span>
+              <input
+                type="date"
+                value={filters.from}
+                max={filters.to || undefined}
+                onChange={(event) => set({ de: event.target.value })}
+              />
+            </label>
+            <label>
+              <span className="sr-only">Até</span>
+              <input
+                type="date"
+                value={filters.to}
+                min={filters.from || undefined}
+                onChange={(event) => set({ ate: event.target.value })}
+              />
+            </label>
+          </>
+        )}
+        <label>
+          <span className="sr-only">Comparar com</span>
+          <select
+            value={filters.compare}
+            onChange={(event) =>
+              set({ comparar: event.target.value === 'previous' ? '' : event.target.value })
+            }
+          >
+            {SALES_COMPARISONS.map((key) => (
+              <option key={key} value={key}>
+                {key === 'none'
+                  ? SALES_COMPARISON_LABELS[key]
+                  : `vs. ${SALES_COMPARISON_LABELS[key].toLowerCase()}`}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span className="sr-only">Funil</span>
+          <select
+            value={filters.pipeline}
+            onChange={(event) =>
+              set({ funil: event.target.value === ALL_PIPELINES ? '' : event.target.value })
+            }
+          >
+            <option value={ALL_PIPELINES}>Todos os funis</option>
+            {LEAD_PIPELINES.map((key) => (
+              <option key={key} value={key}>
+                {LEAD_PIPELINE_LABELS[key]}
+              </option>
+            ))}
+          </select>
+        </label>
+        {!own && (
+          <label>
+            <span className="sr-only">Vendedor</span>
+            <select
+              value={filters.owner}
+              onChange={(event) => set({ vendedor: event.target.value })}
+            >
+              <option value="">Todos os vendedores</option>
+              <option value={NO_OWNER}>Sem dono</option>
+              {(sellers.data?.sellers ?? []).map((seller) => (
+                <option key={seller.id} value={seller.id}>
+                  {seller.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <label>
+          <span className="sr-only">Marca</span>
+          <select value={filters.brand} onChange={(event) => set({ marca: event.target.value })}>
+            <option value="">Todas as marcas</option>
+            <option value={NO_BRAND}>Sem marca</option>
+            {brandNames.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span className="sr-only">Origem</span>
+          <select value={filters.source} onChange={(event) => set({ origem: event.target.value })}>
+            <option value="">Todas as origens</option>
+            {LEAD_SOURCES.map((key) => (
+              <option key={key} value={key}>
+                {LEAD_SOURCE_LABELS[key]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span className="sr-only">Campanha</span>
+          <select
+            value={filters.campaign}
+            onChange={(event) => set({ campanha: event.target.value })}
+          >
+            <option value="">Todas as campanhas</option>
+            {campaigns.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>
+        {active && (
+          <button type="button" className="btn btn-sm btn-ghost" onClick={clear}>
+            Limpar filtros
+          </button>
+        )}
+      </div>
+      {/* A short dropdown is not "there are no sellers": say the list did not load. */}
+      {!own && sellers.isError && !sellers.data && (
+        <LoadFailure
+          what="os vendedores do filtro"
+          error={sellers.error}
+          onRetry={() => void sellers.refetch()}
+        />
       )}
-      <label>
-        <span className="sr-only">Marca</span>
-        <select value={filters.brand} onChange={(event) => set({ marca: event.target.value })}>
-          <option value="">Todas as marcas</option>
-          <option value={NO_BRAND}>Sem marca</option>
-          {brandNames.map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        <span className="sr-only">Origem</span>
-        <select value={filters.source} onChange={(event) => set({ origem: event.target.value })}>
-          <option value="">Todas as origens</option>
-          {LEAD_SOURCES.map((key) => (
-            <option key={key} value={key}>
-              {LEAD_SOURCE_LABELS[key]}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        <span className="sr-only">Campanha</span>
-        <select
-          value={filters.campaign}
-          onChange={(event) => set({ campanha: event.target.value })}
-        >
-          <option value="">Todas as campanhas</option>
-          {campaigns.map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-        </select>
-      </label>
-      {active && (
-        <button type="button" className="btn btn-sm btn-ghost" onClick={clear}>
-          Limpar filtros
-        </button>
+      {brands.isError && !brands.data && (
+        <LoadFailure
+          what="as marcas do filtro"
+          error={brands.error}
+          onRetry={() => void brands.refetch()}
+        />
       )}
-    </div>
+    </>
   );
 }
 
@@ -1115,10 +1136,8 @@ export function SalesDashboardPage() {
       </header>
       <FilterBar {...controls} data={data} />
 
-      {query.isError && !data && (
-        <p className="muted">
-          {DASH} Não foi possível carregar o painel agora. Tente de novo em instantes.
-        </p>
+      {query.isError && (
+        <LoadFailure what="o painel" error={query.error} onRetry={() => void query.refetch()} />
       )}
       {!data && query.isLoading && <p className="muted">Carregando…</p>}
       {data && (

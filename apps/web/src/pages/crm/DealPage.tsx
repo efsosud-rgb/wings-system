@@ -42,6 +42,8 @@ import {
   type LoadedLead,
 } from '../../api/leads.js';
 import { Icon, type IconName } from '../../components/Icon.js';
+import { LoadFailure } from '../../components/LoadFailure.js';
+import { failureReason } from '../../lib/failure.js';
 import { CallPanel } from './CallPanel.js';
 import { CompanyResearchPanel } from './CompanyResearchPanel.js';
 import { DealSummary } from './DealSummary.js';
@@ -91,11 +93,20 @@ export function DealPage() {
         </p>
       </div>
     );
-  if (loaded.isError || !loaded.data)
+  // A failed request is not "not found": say why (a 404 reads "não foi encontrado").
+  if (!loaded.data)
     return (
       <div className="crm-page">
         <div className="crm-empty">
-          <span>Negociação não encontrada ou fora do seu alcance.</span>
+          {loaded.isError ? (
+            <LoadFailure
+              what="a negociação"
+              error={loaded.error}
+              onRetry={() => void loaded.refetch()}
+            />
+          ) : (
+            <span>Negociação não encontrada ou fora do seu alcance.</span>
+          )}
           <Link className="crm-btn" to="/crm-vendas/negociacoes">
             Voltar às negociações
           </Link>
@@ -132,6 +143,16 @@ export function DealPage() {
   return (
     <div className="crm-page">
       <div className="crm-page-scroll" style={{ padding: 0 }}>
+        {/* A refresh failed: what was loaded stays on screen, with the reason above it. */}
+        {loaded.isError && (
+          <div style={{ padding: 'var(--space-2) var(--space-5)' }}>
+            <LoadFailure
+              what="a negociação"
+              error={loaded.error}
+              onRetry={() => void loaded.refetch()}
+            />
+          </div>
+        )}
         <Head data={data} canWrite={canWrite} canAssign={canAssign} />
         {canWrite && <ActionBar lead={data.lead} active={tab} onAct={act} />}
         {calling && (
@@ -364,6 +385,9 @@ function Head({
           ))}
         </div>
       )}
+      {stages.isError && (
+        <LoadFailure what="as etapas" error={stages.error} onRetry={() => void stages.refetch()} />
+      )}
       {update.error && (
         <p className="crm-error">
           {errorText(update.error, 'Não foi possível alterar a negociação.')}
@@ -457,10 +481,19 @@ function OwnerEdit({ lead, canAssign }: { lead: Lead; canAssign: boolean }) {
       className="crm-inline-edit"
       aria-label="Dono"
       value={lead.ownerEmployeeId ?? ''}
-      disabled={update.isPending}
+      // Without the list of sellers the select would show "sem dono" for a deal that has one.
+      disabled={update.isPending || !sellers.data}
+      title={
+        sellers.isError
+          ? `Não foi possível carregar os donos: ${failureReason(sellers.error)}`
+          : undefined
+      }
       onChange={(e) => update.mutate({ ownerEmployeeId: e.target.value || null })}
     >
       <option value="">— sem dono —</option>
+      {!sellers.data && lead.ownerEmployeeId && (
+        <option value={lead.ownerEmployeeId}>{lead.work.ownerName ?? '—'}</option>
+      )}
       {(sellers.data?.sellers ?? [])
         .filter((s) => s.active || s.id === lead.ownerEmployeeId)
         .map((s) => (
@@ -982,10 +1015,19 @@ function BrandEdit({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
         className="crm-select"
         aria-label="Marca"
         value={lead.origin.clientMapped ? lead.origin.clientId : ''}
-        disabled={deal.isPending}
+        // Without the brand list the select would show "Sem marca" for a deal that has one.
+        disabled={deal.isPending || !brands.data}
+        title={
+          brands.isError
+            ? `Não foi possível carregar as marcas: ${failureReason(brands.error)}`
+            : undefined
+        }
         onChange={(e) => deal.mutate({ brandClientId: e.target.value || null })}
       >
         <option value="">{lead.brand ? `${lead.brand} (não cadastrada)` : 'Sem marca'}</option>
+        {!brands.data && lead.origin.clientMapped && (
+          <option value={lead.origin.clientId}>{lead.brand ?? lead.origin.clientName}</option>
+        )}
         {(brands.data?.brands ?? []).map((brand) => (
           <option key={brand.clientId} value={brand.clientId}>
             {brand.name}
@@ -1614,16 +1656,17 @@ function AssocCard({
   children,
 }: {
   title: string;
-  count: number;
+  /** `null` when the count could not be loaded: it shows "—", never a made-up 0. */
+  count: number | null;
   onAdd?: () => void;
   soon?: string;
   children?: ReactNode;
 }) {
   return (
-    <section className="crm-panel crm-assoc" aria-label={`${title}: ${count}`}>
+    <section className="crm-panel crm-assoc" aria-label={`${title}: ${count ?? '—'}`}>
       <h2>
         <span>
-          {title} <span className="crm-count">{count}</span>
+          {title} <span className="crm-count">{count ?? '—'}</span>
         </span>
         {soon ? (
           <button type="button" className="crm-btn is-small is-quiet" disabled title={soon}>
@@ -1733,12 +1776,19 @@ function AssociationCards({
       </AssocCard>
       <AssocCard
         title="Arquivos"
-        count={files.data?.length ?? 0}
+        count={files.data ? files.data.length : null}
         onAdd={canWrite ? onAddFile : undefined}
       >
-        {!files.data || files.data.length === 0 ? (
-          <p className="crm-muted">Nenhum arquivo.</p>
-        ) : (
+        {files.isLoading && <p className="crm-muted">Carregando…</p>}
+        {files.isError && (
+          <LoadFailure
+            what="os arquivos"
+            error={files.error}
+            onRetry={() => void files.refetch()}
+          />
+        )}
+        {files.isSuccess && files.data.length === 0 && <p className="crm-muted">Nenhum arquivo.</p>}
+        {files.data && files.data.length > 0 && (
           <>
             {files.data.slice(0, 3).map((file) => (
               <div key={file.id} className="crm-assoc-row">

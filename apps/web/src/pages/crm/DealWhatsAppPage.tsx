@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../../api/auth.js';
 import { useAddNote, useLead, type LoadedLead } from '../../api/leads.js';
 import { Icon } from '../../components/Icon.js';
+import { LoadFailure } from '../../components/LoadFailure.js';
 import { useWhatsAppThread } from '../../api/whatsapp.js';
 import { CallPanel } from './CallPanel.js';
 import { FilesTab } from './DealTabs.js';
@@ -39,11 +40,20 @@ export function DealWhatsAppPage() {
         </p>
       </div>
     );
-  if (loaded.isError || !loaded.data)
+  // A failed request is not "not found": say why (a 404 reads "não foi encontrado").
+  if (!loaded.data)
     return (
       <div className="crm-page">
         <div className="crm-empty">
-          <span>Negociação não encontrada ou fora do seu alcance.</span>
+          {loaded.isError ? (
+            <LoadFailure
+              what="a negociação"
+              error={loaded.error}
+              onRetry={() => void loaded.refetch()}
+            />
+          ) : (
+            <span>Negociação não encontrada ou fora do seu alcance.</span>
+          )}
           <Link className="crm-btn" to="/crm-vendas/negociacoes">
             Voltar às negociações
           </Link>
@@ -54,6 +64,16 @@ export function DealWhatsAppPage() {
   const { lead } = data;
   return (
     <div className="crm-page crm-wa">
+      {/* A refresh failed: what was loaded stays on screen, with the reason above it. */}
+      {loaded.isError && (
+        <div style={{ padding: 'var(--space-2) var(--space-5)' }}>
+          <LoadFailure
+            what="a negociação"
+            error={loaded.error}
+            onRetry={() => void loaded.refetch()}
+          />
+        </div>
+      )}
       <header className="crm-wa-head">
         <Link className="crm-btn is-quiet is-small" to={`/crm-vendas/negociacoes/${lead.id}`}>
           ‹ Negociação
@@ -220,11 +240,36 @@ function DealChat({ leadId, canSend }: { leadId: string; canSend: boolean }) {
         <p className="crm-muted crm-wa-off">Carregando a conversa…</p>
       </section>
     );
-  if (thread.isError || !thread.data)
+  if (!thread.data)
     return (
       <section className="crm-wa-chat" aria-label="Conversa">
-        <p className="crm-error crm-wa-off">Não foi possível abrir a conversa.</p>
+        {thread.isError ? (
+          <div className="crm-wa-off">
+            <LoadFailure
+              what="a conversa"
+              error={thread.error}
+              onRetry={() => void thread.refetch()}
+            />
+          </div>
+        ) : (
+          <p className="crm-muted crm-wa-off">Carregando a conversa…</p>
+        )}
       </section>
     );
-  return <WhatsAppChat thread={{ leadId }} data={thread.data} canSend={canSend} />;
+  return (
+    <WhatsAppChat
+      thread={{ leadId }}
+      data={thread.data}
+      canSend={canSend}
+      notice={
+        thread.isError ? (
+          <LoadFailure
+            what="a conversa"
+            error={thread.error}
+            onRetry={() => void thread.refetch()}
+          />
+        ) : undefined
+      }
+    />
+  );
 }

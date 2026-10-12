@@ -17,6 +17,7 @@ import { useState } from 'react';
 import type { z } from 'zod';
 import { ApiError } from '../../api/client.js';
 import { useSaveSofiaSettings, useSofiaSettings } from '../../api/sofia.js';
+import { LoadFailure } from '../../components/LoadFailure.js';
 import { formatDateTime } from './format.js';
 
 /**
@@ -191,16 +192,34 @@ const pathOf = (error: ApiError): unknown[] => {
 
 export function SofiaSettingsForm({ canManage }: { canManage: boolean }) {
   const loaded = useSofiaSettings();
-  if (loaded.isLoading) return <p className="crm-muted">Carregando a configuração…</p>;
-  if (loaded.isError || !loaded.data)
-    return <p className="crm-error">Não foi possível carregar a configuração da Sofia.</p>;
+  // No form at all without the settings: saving defaults over the real ones would be the worst outcome.
+  if (!loaded.data)
+    return loaded.isError ? (
+      <LoadFailure
+        what="a configuração da Sofia"
+        error={loaded.error}
+        onRetry={() => void loaded.refetch()}
+      />
+    ) : (
+      <p className="crm-muted">Carregando a configuração…</p>
+    );
   return (
-    <SettingsEditor
-      initial={loaded.data.settings}
-      updatedAt={loaded.data.updatedAt}
-      updatedBy={loaded.data.updatedBy}
-      canManage={canManage}
-    />
+    <>
+      {/* A refresh failed: the form (and anything half-edited in it) stays, with the reason above. */}
+      {loaded.isError && (
+        <LoadFailure
+          what="a configuração da Sofia"
+          error={loaded.error}
+          onRetry={() => void loaded.refetch()}
+        />
+      )}
+      <SettingsEditor
+        initial={loaded.data.settings}
+        updatedAt={loaded.data.updatedAt}
+        updatedBy={loaded.data.updatedBy}
+        canManage={canManage}
+      />
+    </>
   );
 }
 

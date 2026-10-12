@@ -40,6 +40,7 @@ import {
   useStartGeneration,
   useUploadMedia,
 } from '../../api/media.js';
+import { LoadFailure } from '../LoadFailure.js';
 import { Button } from '../ui.js';
 import { CameraMovePicker } from './CameraMovePicker.js';
 import { ClientSelect, MediaPicker, MediaThumb } from './MediaLibrary.js';
@@ -402,7 +403,14 @@ export function GenerationForm({
               }}
             >
               {list.length === 0 && (
-                <option value="">{models.isLoading ? 'Carregando…' : 'Nenhum modelo'}</option>
+                <option value="">
+                  {models.isLoading
+                    ? 'Carregando…'
+                    : // Not asked at all (no provider, or the studio state failed to load): not an empty catalog.
+                      models.isError || !connected
+                      ? '—'
+                      : 'Nenhum modelo'}
+                </option>
               )}
               {groups.map((group) => (
                 <optgroup key={group.id} label={groupLabel(group.id, group.status)}>
@@ -419,6 +427,13 @@ export function GenerationForm({
             </select>
           </label>
         </div>
+        {models.isError && (
+          <LoadFailure
+            what="os modelos"
+            error={models.error}
+            onRetry={() => void models.refetch()}
+          />
+        )}
         {freeOption && (
           <div className="alert alert-warning" role="status">
             {model?.name} é {MEDIA_TIER_LABEL[billingOf(model!.providerId)].toLowerCase()}, e há

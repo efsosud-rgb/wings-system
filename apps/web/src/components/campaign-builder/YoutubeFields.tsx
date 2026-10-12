@@ -28,6 +28,7 @@ import type { FieldErrors, UseFormRegister, UseFormSetValue } from 'react-hook-f
 import { ApiError } from '../../api/client.js';
 import { useCheckYoutubeVideos } from '../../api/ads.js';
 import { mediaFileUrl } from '../../api/media.js';
+import { LoadFailure } from '../LoadFailure.js';
 import { MediaPicker } from '../media-studio/MediaLibrary.js';
 import { Alert, Button, Field, Input, Select } from '../ui.js';
 import { ComplianceWarning } from './CreativeBlock.js';
@@ -426,14 +427,21 @@ export function YoutubeBiddingFields({
           Listas e segmentos personalizados da conta. Com sinais, o Google pode procurar pessoas
           parecidas além deles, sempre dentro das idades acima.
         </p>
-        {(options.data?.audienceSegments ?? []).length === 0 ? (
-          <p className="field-hint">
-            {options.isLoading
-              ? 'Lendo os públicos da conta…'
-              : 'A conta não tem listas nem segmentos.'}
-          </p>
+        {!options.data ? (
+          // Not read (yet): "a conta não tem listas" would be a fact nobody checked.
+          options.error ? (
+            <LoadFailure what="os públicos da conta" error={options.error} />
+          ) : (
+            <p className="field-hint">
+              {options.isLoading
+                ? 'Lendo os públicos da conta…'
+                : '— Os públicos da conta não foram lidos.'}
+            </p>
+          )
+        ) : options.data.audienceSegments.length === 0 ? (
+          <p className="field-hint">A conta não tem listas nem segmentos.</p>
         ) : (
-          options.data?.audienceSegments.map((segment) => {
+          options.data.audienceSegments.map((segment) => {
             const on = segments.some(
               (item) => item?.kind === segment.kind && item.id === segment.id,
             );

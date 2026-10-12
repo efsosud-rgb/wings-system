@@ -47,6 +47,7 @@ import {
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ApiError } from '../api/client.js';
+import { LoadFailure } from '../components/LoadFailure.js';
 import { WhatsAppArtPanel } from '../components/WhatsAppArtPanel.js';
 import {
   useClientRecord,
@@ -1350,7 +1351,7 @@ export function ClientRecordPage() {
     return (
       <>
         <PageHeader title="Ficha do cliente" />
-        <Alert kind="error">{errorText(query.error, 'Não foi possível abrir a ficha.')}</Alert>
+        <LoadFailure what="a ficha" error={query.error} onRetry={() => void query.refetch()} />
         <p>
           <Link to="/formatacao/clientes">Voltar à lista</Link>
         </p>

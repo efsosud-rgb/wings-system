@@ -1,14 +1,20 @@
 import type { YoutubeChannelResponse, YoutubeVideoSummary } from '@wings/shared';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client.js';
 
-const state: { data: YoutubeChannelResponse | undefined; isError: boolean } = {
+const state: { data: YoutubeChannelResponse | undefined; isError: boolean; error?: unknown } = {
   data: undefined,
   isError: false,
 };
 
 vi.mock('../../api/youtube.js', () => ({
-  useYoutubeChannel: () => ({ data: state.data, isError: state.isError }),
+  useYoutubeChannel: () => ({
+    data: state.data,
+    isError: state.isError,
+    error: state.error,
+    refetch: vi.fn(),
+  }),
 }));
 
 const { YoutubeChannelSection, formatDuration } = await import('./YoutubeChannelSection.js');
@@ -156,8 +162,12 @@ describe('Canais próprios → YouTube', () => {
     expect(screen.getByText('Carregando…')).toBeTruthy();
     cleanup();
     state.isError = true;
+    state.error = new ApiError(500, {});
     render(<YoutubeChannelSection />);
-    expect(screen.getByRole('alert').textContent).toMatch(/Não foi possível carregar o canal/);
+    expect(screen.getByRole('alert').textContent).toMatch(
+      /Não foi possível carregar o canal do YouTube: o servidor teve um problema \(erro 500\)/,
+    );
+    expect(screen.queryByText(/Nenhum vídeo público/)).toBeNull();
   });
 });
 

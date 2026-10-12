@@ -15,6 +15,7 @@ vi.mock('../api/client.js', async (original) => ({
 }));
 
 const { IntegrationsPage } = await import('./IntegrationsPage.js');
+const { ApiError } = await import('../api/client.js');
 
 const META_STATUS = {
   pending: 0,
@@ -135,5 +136,39 @@ describe('Integrações → Fontes de negócios → Meta Lead Ads', () => {
     renderPage();
     expect(await screen.findByText(/ligada, a cada 5 min/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Buscar agora' })).toBeNull();
+  });
+});
+
+describe('Integrações → Fontes de negócios when a read fails', () => {
+  it('says "—" and why for the sources, not an empty section', async () => {
+    get.mockImplementation((path: string) =>
+      path === '/crm/sources'
+        ? Promise.reject(new ApiError(500, {}))
+        : Promise.resolve(answer(path)),
+    );
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        /Não foi possível carregar as fontes de negócios: o servidor teve um problema \(erro 500\)/,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/ligada, a cada 5 min/)).toBeNull();
+  });
+
+  it('does not claim the Meta key is missing when the status never arrived', async () => {
+    get.mockImplementation((path: string) =>
+      path === '/crm/meta-leads/status'
+        ? Promise.reject(new ApiError(403, {}))
+        : Promise.resolve(answer(path)),
+    );
+    renderPage();
+
+    expect(
+      await screen.findByText(
+        /Não foi possível carregar o estado da Meta Lead Ads: você não tem permissão/,
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText(/desligada: falta a chave da Meta/)).toBeNull();
   });
 });

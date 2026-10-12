@@ -1,7 +1,7 @@
 import { useOffice } from '../api/office.js';
 import { PageHeader } from '../components/PageHeader.js';
 import { OfficeFloor } from '../components/office3d/OfficeFloor.js';
-import { Alert } from '../components/ui.js';
+import { LoadFailure } from '../components/LoadFailure.js';
 
 /**
  * Laboratório → Escritório virtual (Admin Master). The company as a 3D office
@@ -20,9 +20,11 @@ export function OfficePage() {
       />
       {office.isPending ? <p className="o3d-muted">Carregando o escritório…</p> : null}
       {office.isError ? (
-        <Alert kind="error">
-          Não foi possível ler o escritório agora. Tente de novo em instantes.
-        </Alert>
+        <LoadFailure
+          what="o escritório"
+          error={office.error}
+          onRetry={() => void office.refetch()}
+        />
       ) : null}
       {office.data ? <OfficeFloor snapshot={office.data} /> : null}
     </>

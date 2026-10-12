@@ -49,6 +49,7 @@ import { useCreateLead, useCreateStage, useSellers, useUpdateStage } from '../..
 import { CreateDealModal, CreateTaskModal } from './CreateDealModal.js';
 import { DealCard } from './DealCard.js';
 import { ImportModal } from './ImportModal.js';
+import { LoadFailure } from '../../components/LoadFailure.js';
 import { useCreateFromQuery } from '../../components/useCreateFromQuery.js';
 import {
   ago,
@@ -139,6 +140,8 @@ export function DealsPage() {
   const sinceDay = counters.data?.since
     ? new Date(counters.data.since).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })
     : null;
+  // "–" while the counters load; "—" when they could not (the reason follows the counters).
+  const noCount = counters.isError ? '—' : '–';
   const [creating, setCreating] = useState(false);
   useCreateFromQuery(() => setCreating(true));
   const [importing, setImporting] = useState(false);
@@ -189,14 +192,14 @@ export function DealsPage() {
             onClick={() => update({ activityDays: undefined, visao: 'board', sort: 'oldest' })}
             title={`Negociações em andamento em que ninguém ainda registrou contato${sinceDay ? `. Conta só as que entraram a partir de ${sinceDay}` : ''}`}
           >
-            <strong>{counters.data?.untouched ?? '–'}</strong> novas sem contato
+            <strong>{counters.data?.untouched ?? noCount}</strong> novas sem contato
           </button>
           <button
             type="button"
             className="crm-counter"
             onClick={() => update({ visao: 'activities' })}
           >
-            <strong>{counters.data?.today ?? '–'}</strong> atividades hoje
+            <strong>{counters.data?.today ?? noCount}</strong> atividades hoje
           </button>
           <button
             type="button"
@@ -204,8 +207,15 @@ export function DealsPage() {
             onClick={() => update({ visao: 'activities' })}
             title={`Tarefas vencidas${sinceDay ? ` (o primeiro contato conta só para negociações que entraram a partir de ${sinceDay})` : ''}`}
           >
-            <strong>{counters.data?.overdue ?? '–'}</strong> atrasadas
+            <strong>{counters.data?.overdue ?? noCount}</strong> atrasadas
           </button>
+          {counters.isError && (
+            <LoadFailure
+              what="o resumo do funil"
+              error={counters.error}
+              onRetry={() => void counters.refetch()}
+            />
+          )}
         </div>
         <span className="crm-head-spacer" />
         {canManage && (
@@ -667,21 +677,26 @@ function BoardView({
   const [over, setOver] = useState<string | null>(null);
   const { boardRef, panning, startPan } = useBoardPan();
   const data = board.data;
-  if (board.isLoading && !data)
+  if (!data && board.isError)
+    return (
+      <div style={{ margin: 'var(--space-5)' }}>
+        <LoadFailure what="o quadro" error={board.error} onRetry={() => void board.refetch()} />
+      </div>
+    );
+  if (!data)
     return (
       <p className="crm-muted" style={{ padding: 'var(--space-5)' }}>
         Carregando o quadro…
       </p>
     );
-  if (board.isError || !data)
-    return (
-      <p className="crm-error" style={{ margin: 'var(--space-5)' }}>
-        Não foi possível carregar o quadro. Recarregue a página.
-      </p>
-    );
   const columns = data.columns;
   return (
     <>
+      {board.isError && (
+        <div style={{ margin: '0 var(--space-5) var(--space-2)' }}>
+          <LoadFailure what="o quadro" error={board.error} onRetry={() => void board.refetch()} />
+        </div>
+      )}
       <div
         className="crm-filters-total"
         style={{ padding: '0 var(--space-5) var(--space-1)', marginLeft: 0 }}
@@ -1075,11 +1090,20 @@ function ListView({ pipeline, filter }: { pipeline: LeadPipeline; filter: DealFi
         className="crm-filters-total"
         style={{ marginLeft: 0, paddingLeft: 0, marginBottom: 'var(--space-2)' }}
       >
-        <strong>{total}</strong> negociações
-        {rows.length < total ? ` (mostrando ${rows.length})` : ''} · <strong>{money(sum)}</strong>{' '}
-        em valor
+        {list.data ? (
+          <>
+            <strong>{total}</strong> negociações
+            {rows.length < total ? ` (mostrando ${rows.length})` : ''} ·{' '}
+            <strong>{money(sum)}</strong> em valor
+          </>
+        ) : (
+          // The reason is in the failure line below; while loading there is nothing to total yet.
+          <span className="crm-muted">{list.isError ? '—' : 'Carregando…'}</span>
+        )}
       </div>
-      {list.isError && <p className="crm-error">Não foi possível carregar a lista.</p>}
+      {list.isError && (
+        <LoadFailure what="a lista" error={list.error} onRetry={() => void list.refetch()} />
+      )}
       <table className="crm-table">
         <thead>
           <tr>
@@ -1096,7 +1120,14 @@ function ListView({ pipeline, filter }: { pipeline: LeadPipeline; filter: DealFi
           </tr>
         </thead>
         <tbody>
-          {rows.length === 0 && !list.isLoading && (
+          {list.isLoading && (
+            <tr>
+              <td colSpan={10} className="crm-muted">
+                Carregando…
+              </td>
+            </tr>
+          )}
+          {list.isSuccess && rows.length === 0 && (
             <tr>
               <td colSpan={10} className="crm-muted">
                 Nenhuma negociação com estes filtros.
@@ -1212,7 +1243,15 @@ function ActivitiesView({ pipeline, canWrite }: { pipeline: LeadPipeline; canWri
           {LEAD_PIPELINE_LABELS[pipeline]}.
         </span>
       </div>
-      {rows.length === 0 && (
+      {tasks.isLoading && <p className="crm-muted">Carregando…</p>}
+      {tasks.isError && (
+        <LoadFailure
+          what="as atividades"
+          error={tasks.error}
+          onRetry={() => void tasks.refetch()}
+        />
+      )}
+      {tasks.isSuccess && rows.length === 0 && (
         <div className="crm-empty">
           Nenhuma atividade {status === 'open' ? 'aberta' : 'concluída'}.
         </div>
@@ -1316,6 +1355,10 @@ function CalendarView() {
         </button>
         <span className="crm-muted">Tarefas e reuniões por data.</span>
       </div>
+      {tasks.isLoading && <p className="crm-muted">Carregando…</p>}
+      {tasks.isError && (
+        <LoadFailure what="o calendário" error={tasks.error} onRetry={() => void tasks.refetch()} />
+      )}
       <div className="crm-calendar">
         {['seg', 'ter', 'qua', 'qui', 'sex', 'sáb', 'dom'].map((label) => (
           <div key={label} className="crm-cal-head">

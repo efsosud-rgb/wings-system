@@ -6,6 +6,7 @@ import {
   type YoutubeVideoSummary,
 } from '@wings/shared';
 import { useYoutubeChannel } from '../../api/youtube.js';
+import { LoadFailure } from '../LoadFailure.js';
 import { Alert } from '../ui.js';
 import { DASH, formatDateFull, formatDateTime, formatDayShort, formatInt } from './format.js';
 
@@ -59,13 +60,15 @@ const shortLabel = (video: YoutubeVideoSummary) =>
 export function YoutubeChannelSection() {
   const query = useYoutubeChannel();
 
-  if (query.isError) {
+  if (query.isError && !query.data) {
     return (
       <section className="dash-section" aria-labelledby="youtube-title">
         <h2 id="youtube-title">YouTube</h2>
-        <Alert kind="error">
-          Não foi possível carregar o canal do YouTube. Tente de novo em instantes.
-        </Alert>
+        <LoadFailure
+          what="o canal do YouTube"
+          error={query.error}
+          onRetry={() => void query.refetch()}
+        />
       </section>
     );
   }
@@ -94,6 +97,13 @@ export function YoutubeChannelSection() {
         </div>
       </div>
 
+      {query.isError && (
+        <LoadFailure
+          what="o canal do YouTube"
+          error={query.error}
+          onRetry={() => void query.refetch()}
+        />
+      )}
       {data.gap && (
         <p className="muted" role="status">
           {DASH} {GAP_TEXT[data.gap]}

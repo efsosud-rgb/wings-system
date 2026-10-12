@@ -2,6 +2,7 @@ import type { Board, BoardCard, CrmStage } from '@wings/shared';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client.js';
 import { DealsPage } from './DealsPage.js';
 
 /**
@@ -16,6 +17,11 @@ const { state, stageMutate, createMutate, quickMutate, activityMutate, idle, mut
     state: {
       permissions: {} as Record<string, string>,
       board: null as Board | null,
+      // What the next render of each query answers; reset to "idle" before every test.
+      boardQuery: {} as Record<string, unknown>,
+      counters: {} as Record<string, unknown>,
+      list: {} as Record<string, unknown>,
+      tasks: {} as Record<string, unknown>,
     },
     stageMutate: vi.fn(),
     createMutate: vi.fn(),
@@ -51,15 +57,20 @@ vi.mock('../../api/crm.js', () => ({
   useAddActivity: () => mutation(activityMutate),
   useBrands: idle,
   useCompleteTask: () => mutation(),
-  useDealBoard: () => ({ data: state.board, isLoading: false, isError: false }),
-  useDealCounters: idle,
-  useDealList: idle,
+  useDealBoard: () => ({
+    data: state.board,
+    isLoading: false,
+    isError: false,
+    ...state.boardQuery,
+  }),
+  useDealCounters: () => state.counters,
+  useDealList: () => state.list,
   useDealQuickChange: () => mutation(quickMutate),
   useDeleteView: () => mutation(),
   useLoadColumn: () => mutation(),
   useSaveView: () => mutation(),
   useSavedViews: idle,
-  useTaskList: idle,
+  useTaskList: () => state.tasks,
 }));
 
 const stage = (over: Partial<CrmStage>): CrmStage => ({
@@ -112,9 +123,9 @@ const board = (): Board => {
   };
 };
 
-const show = () =>
+const show = (search = '') =>
   render(
-    <MemoryRouter initialEntries={['/crm-vendas/negociacoes']}>
+    <MemoryRouter initialEntries={[`/crm-vendas/negociacoes${search}`]}>
       <Routes>
         <Route path="/crm-vendas/negociacoes" element={<DealsPage />} />
         <Route path="/crm-vendas/negociacoes/:id" element={<h1>Ficha da negociação</h1>} />
@@ -127,6 +138,10 @@ const theCard = () => screen.getByRole('article', { name: 'Elena' });
 beforeEach(() => {
   state.permissions = { 'leads.read': 'all', 'leads.write': 'all' };
   state.board = board();
+  state.boardQuery = {};
+  state.counters = idle();
+  state.list = idle();
+  state.tasks = idle();
   stageMutate.mockReset();
   createMutate.mockReset();
   quickMutate.mockReset();
@@ -283,5 +298,92 @@ describe('the columns, for who only works the deals', () => {
     expect(screen.getByText('Proposta')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Renomear Proposta' })).toBeNull();
     expect(screen.queryByRole('button', { name: '+ Coluna' })).toBeNull();
+  });
+});
+
+/** The request failed: "—" and the reason, never "0 negociações" or the empty-state text. */
+describe('when a request fails', () => {
+  const failed = (error: unknown) => ({
+    data: undefined,
+    isLoading: false,
+    isPending: false,
+    isError: true,
+    isSuccess: false,
+    error,
+    refetch: vi.fn(),
+  });
+  const succeeded = (data: unknown) => ({
+    data,
+    isLoading: false,
+    isPending: false,
+    isError: false,
+    isSuccess: true,
+    refetch: vi.fn(),
+  });
+
+  it('the funnel counters show "—" and why, not a zero', () => {
+    state.counters = failed(new ApiError(500, {}));
+    show();
+    const bar = screen.getByLabelText('Resumo do funil');
+    expect(within(bar).getAllByText('—').length).toBeGreaterThanOrEqual(3);
+    expect(within(bar).getByRole('alert').textContent).toContain('o servidor teve um problema');
+    expect(bar.textContent).not.toMatch(/\b0\b/);
+  });
+
+  it('the board says why instead of showing columns', () => {
+    state.board = null;
+    state.boardQuery = failed(new ApiError(401, {}));
+    show();
+    expect(screen.getByRole('alert').textContent).toContain('Não foi possível carregar o quadro');
+    expect(screen.getByRole('alert').textContent).toContain('sua sessão expirou');
+    expect(screen.queryByText('Nenhuma negociação')).toBeNull();
+  });
+
+  it('the board keeps the cards it had when only a refresh failed', () => {
+    state.boardQuery = failed(new TypeError('x'));
+    state.boardQuery.data = state.board;
+    show();
+    expect(screen.getByRole('alert').textContent).toContain('sem conexão com o servidor');
+    expect(theCard()).toBeTruthy();
+  });
+
+  it('the list shows "—" and the reason, not "0 negociações" or "Nenhuma negociação"', () => {
+    state.list = failed(new ApiError(403, {}));
+    show('?visao=list');
+    expect(screen.getByRole('alert').textContent).toContain('Não foi possível carregar a lista');
+    expect(screen.getByRole('alert').textContent).toContain('você não tem permissão');
+    expect(screen.queryByText(/Nenhuma negociação com estes filtros/)).toBeNull();
+    expect(screen.queryByText(/0\s*negociações/)).toBeNull();
+  });
+
+  it('the list still says "Nenhuma negociação com estes filtros." when it succeeded empty', () => {
+    state.list = succeeded({ leads: [], total: 0 });
+    show('?visao=list');
+    expect(screen.getByText(/Nenhuma negociação com estes filtros/)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('the activities say why, not "Nenhuma atividade aberta."', () => {
+    state.tasks = failed(new ApiError(500, {}));
+    show('?visao=activities');
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar as atividades',
+    );
+    expect(screen.queryByText(/Nenhuma atividade/)).toBeNull();
+  });
+
+  it('the activities still say "Nenhuma atividade aberta." when it succeeded empty', () => {
+    state.tasks = succeeded({ tasks: [] });
+    show('?visao=activities');
+    expect(screen.getByText('Nenhuma atividade aberta.')).toBeTruthy();
+  });
+
+  it('the calendar says why instead of an empty month', () => {
+    state.tasks = failed(new TypeError('x'));
+    show('?visao=calendar');
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar o calendário',
+    );
+    expect(screen.getByRole('alert').textContent).toContain('sem conexão com o servidor');
   });
 });

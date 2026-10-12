@@ -22,7 +22,9 @@ import {
   useSourceRules,
   useUpdateLandingPage,
 } from '../api/leads.js';
+import { LoadFailure } from '../components/LoadFailure.js';
 import { Alert, Button } from '../components/ui.js';
+import { failureReason } from '../lib/failure.js';
 import { formatDateTime } from './crm/format.js';
 import { PageHeader } from '../components/PageHeader.js';
 
@@ -141,6 +143,13 @@ function NewPage({ onCreated }: { onCreated: (page: LandingPageItem) => void }) 
                 </option>
               ))}
           </select>
+          {clients.isError && (
+            <LoadFailure
+              what="os clientes"
+              error={clients.error}
+              onRetry={() => void clients.refetch()}
+            />
+          )}
         </label>
         <label className="field">
           <span className="field-label">Funil da página</span>
@@ -260,6 +269,12 @@ function PageSettings({ page, onDone }: { page: LandingPageItem; onDone: () => v
             <option key={name} value={name} />
           ))}
         </datalist>
+        {sources.isError && (
+          <span className="field-hint">
+            Não foi possível carregar as origens do RD: {failureReason(sources.error)}. Digite o
+            nome exato da origem.
+          </span>
+        )}
         {sources.data?.sources === null && (
           <span className="field-hint">{sources.data.reason} Digite o nome exato da origem.</span>
         )}
@@ -441,8 +456,8 @@ function MetaRules() {
     <section className="block">
       <h2>Outras origens (Meta e TikTok Lead Ads)</h2>
       <p className="muted">
-        Formulário ou campanha do Meta ou da TikTok → cliente e funil. Um lead sem regra fica na Wings, marcado
-        "sem regra".
+        Formulário ou campanha do Meta ou da TikTok → cliente e funil. Um lead sem regra fica na
+        Wings, marcado "sem regra".
       </p>
       <form
         className="filters"
@@ -493,6 +508,13 @@ function MetaRules() {
                 </option>
               ))}
           </select>
+          {clients.isError && (
+            <LoadFailure
+              what="os clientes"
+              error={clients.error}
+              onRetry={() => void clients.refetch()}
+            />
+          )}
         </label>
         <label className="field">
           <span className="field-label">Funil da regra</span>
@@ -529,7 +551,25 @@ function MetaRules() {
           </tr>
         </thead>
         <tbody>
-          {list.length === 0 && (
+          {rules.isLoading && (
+            <tr>
+              <td colSpan={5} className="muted">
+                Carregando…
+              </td>
+            </tr>
+          )}
+          {rules.isError && (
+            <tr>
+              <td colSpan={5}>
+                <LoadFailure
+                  what="as regras"
+                  error={rules.error}
+                  onRetry={() => void rules.refetch()}
+                />
+              </td>
+            </tr>
+          )}
+          {rules.isSuccess && list.length === 0 && (
             <tr>
               <td colSpan={5} className="muted">
                 Nenhuma regra do Meta ainda.
@@ -635,7 +675,9 @@ export function LandingPagesPage() {
         </label>
       </form>
 
-      {pages.isError && <Alert kind="error">Não foi possível carregar as páginas.</Alert>}
+      {pages.isError && (
+        <LoadFailure what="as páginas" error={pages.error} onRetry={() => void pages.refetch()} />
+      )}
       <div className="table-wrap">
         <table className="table">
           <thead>
@@ -661,7 +703,7 @@ export function LandingPagesPage() {
                 </td>
               </tr>
             )}
-            {!pages.isLoading && list.length === 0 && (
+            {pages.isSuccess && list.length === 0 && (
               <tr>
                 <td colSpan={9} className="muted">
                   Nenhuma página com esses filtros.

@@ -36,6 +36,7 @@ import {
 } from '../api/expansion.js';
 import { useMediaProviders, useSaveKairogenPlan } from '../api/media.js';
 import { providerHolding } from '../components/media-studio/ProviderStrip.js';
+import { LoadFailure } from '../components/LoadFailure.js';
 import { Alert, Button, Field, Input } from '../components/ui.js';
 import { PageHeader } from '../components/PageHeader.js';
 
@@ -131,7 +132,15 @@ function KairogenCard() {
       </p>
     );
   }
-  if (!current) return <Alert kind="error">Não foi possível ler o estado da integração.</Alert>;
+  if (!current) {
+    return (
+      <LoadFailure
+        what="o estado da integração com o Kairogen"
+        error={status.error}
+        onRetry={() => void status.refetch()}
+      />
+    );
+  }
 
   const problem = [connect.error, poll.error, disconnect.error].find(
     (error): error is ApiError => error instanceof ApiError,
@@ -383,7 +392,13 @@ function MediaProviderCards() {
   const providers = useMediaProviders();
   if (providers.isLoading) return null;
   if (!providers.data || !Array.isArray(providers.data.providers)) {
-    return <Alert kind="error">Não foi possível ler os provedores de mídia.</Alert>;
+    return (
+      <LoadFailure
+        what="os provedores de mídia"
+        error={providers.error}
+        onRetry={() => void providers.refetch()}
+      />
+    );
   }
   const others = providers.data.providers.filter((status) => status.id !== 'kairogen');
   return (
@@ -523,7 +538,13 @@ function BudgetCapsSection() {
   if (!canManage) return null;
   if (accounts.isLoading) return null;
   if (!accounts.data || !Array.isArray(accounts.data.accounts)) {
-    return <Alert kind="error">Não foi possível ler os tetos de orçamento.</Alert>;
+    return (
+      <LoadFailure
+        what="os tetos de orçamento"
+        error={accounts.error}
+        onRetry={() => void accounts.refetch()}
+      />
+    );
   }
 
   return (
@@ -557,7 +578,15 @@ function ExpansionIntakeSection() {
   const [brand, setBrand] = useState('');
 
   if (!canManage || pages.isLoading) return null;
-  if (!pages.data) return <Alert kind="error">Não foi possível ler as páginas de Expansão.</Alert>;
+  if (!pages.data) {
+    return (
+      <LoadFailure
+        what="as páginas de Expansão"
+        error={pages.error}
+        onRetry={() => void pages.refetch()}
+      />
+    );
+  }
 
   return (
     <section aria-labelledby="expansion-intake-title">
@@ -668,6 +697,13 @@ function RecoverySection() {
       >
         Simular (não cria nada)
       </Button>
+      {recovery.isError && !recovery.data && (
+        <LoadFailure
+          what="o andamento da varredura"
+          error={recovery.error}
+          onRetry={() => void recovery.refetch()}
+        />
+      )}
       {start.error && (
         <Alert kind="error">
           {start.error instanceof ApiError && start.error.code === 'already_running'
@@ -748,7 +784,15 @@ export function RdUsersSection() {
   const link = useLinkRdUser();
   const departed = useMarkRdUserDeparted();
   if (!canManage || users.isLoading) return null;
-  if (!users.data) return <Alert kind="error">Não foi possível ler os usuários do RD CRM.</Alert>;
+  if (!users.data) {
+    return (
+      <LoadFailure
+        what="os usuários do RD CRM"
+        error={users.error}
+        onRetry={() => void users.refetch()}
+      />
+    );
+  }
   const list = users.data.users;
 
   return (
@@ -839,18 +883,27 @@ function MetaLeadAdsActions() {
     Object.keys(failed ?? {}).length;
   return (
     <div className="crm-stack" style={{ marginTop: 'var(--space-3)' }}>
-      <p className="crm-sub">
-        Meta Lead Ads:{' '}
-        {polling?.enabled
-          ? `ligada, a cada ${polling.everyMinutes} min${status.data?.webhookConfigured ? ', e na hora pelo webhook' : ''}.`
-          : status.data?.webhookConfigured
-            ? 'só pelo webhook; falta a chave de leitura para buscar a cada 5 min.'
-            : 'desligada: falta a chave da Meta (META_LEADS_ACCESS_TOKEN).'}
-        {polling?.lastOkAt ? ` Última busca completa há ${ago(polling.lastOkAt)}.` : ''}
-        {polling && polling.forms > 0
-          ? ` ${polling.forms} formulários${polling.formsWithError > 0 ? `, ${polling.formsWithError} com erro` : ''}.`
-          : ''}
-      </p>
+      {status.isError && !status.data ? (
+        // "Desligada: falta a chave" would be a made-up fact when the status never arrived.
+        <LoadFailure
+          what="o estado da Meta Lead Ads"
+          error={status.error}
+          onRetry={() => void status.refetch()}
+        />
+      ) : (
+        <p className="crm-sub">
+          Meta Lead Ads:{' '}
+          {polling?.enabled
+            ? `ligada, a cada ${polling.everyMinutes} min${status.data?.webhookConfigured ? ', e na hora pelo webhook' : ''}.`
+            : status.data?.webhookConfigured
+              ? 'só pelo webhook; falta a chave de leitura para buscar a cada 5 min.'
+              : 'desligada: falta a chave da Meta (META_LEADS_ACCESS_TOKEN).'}
+          {polling?.lastOkAt ? ` Última busca completa há ${ago(polling.lastOkAt)}.` : ''}
+          {polling && polling.forms > 0
+            ? ` ${polling.forms} formulários${polling.formsWithError > 0 ? `, ${polling.formsWithError} com erro` : ''}.`
+            : ''}
+        </p>
+      )}
       {canManage ? (
         <div className="crm-quick-row" style={{ justifyContent: 'flex-start' }}>
           <Button
@@ -905,6 +958,22 @@ function MetaLeadAdsActions() {
 /** "Fontes de negócios": where deals arrive from and whether each door is open, in plain words. */
 function DealSourcesSection() {
   const sources = useDealSources();
+  if (sources.isError && !sources.data) {
+    return (
+      <section
+        aria-labelledby="deal-sources-title"
+        className="crm-panel"
+        style={{ marginBottom: 'var(--space-5)' }}
+      >
+        <h2 id="deal-sources-title">Fontes de negócios</h2>
+        <LoadFailure
+          what="as fontes de negócios"
+          error={sources.error}
+          onRetry={() => void sources.refetch()}
+        />
+      </section>
+    );
+  }
   if (!Array.isArray(sources.data?.sources)) return null;
   return (
     <section

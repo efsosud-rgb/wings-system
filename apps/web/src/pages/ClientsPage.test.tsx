@@ -367,3 +367,56 @@ describe('Formatação → Clientes', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 });
+
+describe('when a request fails', () => {
+  /** The default script, with some paths failing instead of answering. */
+  function failing(failures: Record<string, unknown>) {
+    const answer = get.getMockImplementation()!;
+    get.mockImplementation(async (path: string) => {
+      if (path in failures) throw failures[path];
+      return answer(path);
+    });
+  }
+
+  it('says "—" and why instead of an empty client list', async () => {
+    failing({ '/clients': new ApiError(500, {}) });
+    renderPage();
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(
+      /Não foi possível carregar os clientes: o servidor teve um problema \(erro 500\)/,
+    );
+    expect(screen.queryByRole('cell', { name: /Padaria Aurora/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar de novo' }));
+    await waitFor(() =>
+      expect(get.mock.calls.filter(([path]) => path === '/clients')).toHaveLength(2),
+    );
+  });
+
+  it('does not leave the project column blank as if no client had a project', async () => {
+    failing({ '/projects?inactive=true': new ApiError(403, {}) });
+    renderPage();
+    const aurora = (await screen.findByRole('cell', { name: 'Padaria Aurora' })).closest(
+      'tr',
+    ) as HTMLElement;
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          /Não foi possível carregar os projetos dos clientes: você não tem permissão/,
+        ),
+      ).toBeTruthy(),
+    );
+    expect(within(aurora).getByTitle('Não foi possível carregar os projetos').textContent).toBe(
+      '—',
+    );
+  });
+
+  it('says so when the tracked links of a client could not be read', async () => {
+    failing({ [`/clients/${AURORA.id}/tracking-links`]: new TypeError('Failed to fetch') });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Links e expansão' }));
+    expect(
+      await screen.findByText(/Não foi possível carregar os links: sem conexão com o servidor/),
+    ).toBeTruthy();
+  });
+});

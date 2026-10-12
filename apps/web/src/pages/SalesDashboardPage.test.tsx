@@ -2,6 +2,7 @@ import type { SalesDashboard, SalesResults } from '@wings/shared';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../api/client.js';
 import { SalesDashboardPage } from './SalesDashboardPage.js';
 
 const results = (overrides: Partial<SalesResults> = {}): SalesResults => ({
@@ -136,23 +137,38 @@ const board = (overrides: Partial<SalesDashboard> = {}): SalesDashboard => ({
 const calls: Record<string, string>[] = [];
 let answer: SalesDashboard = board();
 
+/** When set, that read fails with this error (and `stale` keeps the earlier board). */
+const failure: { board?: unknown; stale?: boolean; sellers?: unknown; brands?: unknown } = {};
+const failed = (error: unknown, data?: unknown) => ({
+  data,
+  isLoading: false,
+  isError: true,
+  error,
+  refetch: vi.fn(),
+});
+
 vi.mock('../api/crm.js', () => ({
   useSalesDashboard: (query: Record<string, string>) => {
     calls.push(query);
+    if (failure.board) return failed(failure.board, failure.stale ? answer : undefined);
     return { data: answer, isLoading: false, isError: false };
   },
-  useBrands: () => ({ data: { brands: [] } }),
+  useBrands: () => (failure.brands ? failed(failure.brands) : { data: { brands: [] } }),
 }));
 vi.mock('../api/leads.js', () => ({
-  useSellers: () => ({
-    data: { sellers: [{ id: 'e1', name: 'Fernando Exemplo', role: 'x', active: true }] },
-  }),
+  useSellers: () =>
+    failure.sellers
+      ? failed(failure.sellers)
+      : {
+          data: { sellers: [{ id: 'e1', name: 'Fernando Exemplo', role: 'x', active: true }] },
+        },
 }));
 
 afterEach(() => {
   cleanup();
   calls.length = 0;
   answer = board();
+  for (const key of Object.keys(failure)) delete failure[key as keyof typeof failure];
 });
 
 const show = (path = '/dashboard/vendas') =>
@@ -323,5 +339,47 @@ describe('Dashboard › Vendas v1', () => {
     expect(within(trend).getByText(/nenhuma venda ganha com valor no período\./)).toBeTruthy();
     expect(within(trend).getByText(/Por semana porque o período passa de 92 dias/)).toBeTruthy();
     expect(within(trend).queryByText(/Diferença/)).toBeNull();
+  });
+});
+
+describe('Dashboard › Vendas when a read fails', () => {
+  it('says "—" and why, with no KPI, instead of a panel of zeros', () => {
+    failure.board = new ApiError(500, {});
+    show();
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar o painel: o servidor teve um problema (erro 500)',
+    );
+    expect(screen.queryByRole('region', { name: 'Indicadores' })).toBeNull();
+    expect(screen.queryByText(/Nenhum/)).toBeNull();
+  });
+
+  it('keeps the earlier board, with the failure above it, when only a refresh failed', () => {
+    failure.board = new TypeError('Failed to fetch');
+    failure.stale = true;
+    show();
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar o painel: sem conexão com o servidor',
+    );
+    expect(screen.getByRole('region', { name: 'Indicadores' })).toBeTruthy();
+  });
+
+  it('says why the seller filter is short instead of leaving it looking empty', () => {
+    failure.sellers = new ApiError(403, {});
+    show();
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar os vendedores do filtro: você não tem permissão',
+    );
+  });
+
+  it('says why the brand filter is short', () => {
+    failure.brands = new ApiError(500, {});
+    show();
+
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar as marcas do filtro',
+    );
   });
 });

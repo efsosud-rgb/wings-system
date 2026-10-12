@@ -1,5 +1,5 @@
 import { KAIROGEN_PLAN_LABEL, formatBrl, isGenerationOver } from '@wings/shared';
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { hasPermission, useSession } from '../api/auth.js';
 import {
@@ -13,6 +13,7 @@ import { GenerationForm } from '../components/media-studio/GenerationForm.js';
 import { GenerationProgress } from '../components/media-studio/GenerationProgress.js';
 import { MediaLibrary } from '../components/media-studio/MediaLibrary.js';
 import { ProviderStrip } from '../components/media-studio/ProviderStrip.js';
+import { LoadFailure } from '../components/LoadFailure.js';
 import { StudioLayout, StudioToolGroup } from '../components/StudioLayout.js';
 import { Alert } from '../components/ui.js';
 import { PageHeader } from '../components/PageHeader.js';
@@ -49,17 +50,21 @@ const count = (value: number) => value.toLocaleString('pt-BR');
 
 function Notices({
   state,
+  failure,
   connected,
   anyAvailable,
   canConnect,
 }: {
   state: ReturnType<typeof useMediaStudio>['data'];
+  /** The studio state could not be read: no "not connected" claim can be made from it. */
+  failure: ReactNode;
   connected: boolean;
   anyAvailable: boolean;
   canConnect: boolean;
 }) {
   return (
     <>
+      {failure}
       {state && !anyAvailable && (
         <Alert kind="info">
           Nenhum provedor de mídia está disponível. O Kairogen não está conectado e os outros
@@ -111,6 +116,13 @@ export function MediaStudioPage() {
   // Older answers say only whether Kairogen is connected; with providers, any one of them will do.
   const anyAvailable = state?.anyAvailable ?? connected;
   const providers = useMediaProviders(Boolean(state));
+  const failure = studio.isError ? (
+    <LoadFailure
+      what="os créditos e os provedores de mídia"
+      error={studio.error}
+      onRetry={() => void studio.refetch()}
+    />
+  ) : null;
 
   if (canEdit) {
     const usageLine = usage
@@ -121,6 +133,7 @@ export function MediaStudioPage() {
         <PageHeader title="Edição de Fotos e Vídeos" />
         <Notices
           state={state}
+          failure={failure}
           connected={connected}
           anyAvailable={anyAvailable}
           canConnect={canConnect}
@@ -145,6 +158,7 @@ export function MediaStudioPage() {
         <>
           <Notices
             state={state}
+            failure={failure}
             connected={connected}
             anyAvailable={anyAvailable}
             canConnect={canConnect}
@@ -162,7 +176,11 @@ export function MediaStudioPage() {
             <div>
               <dt>Saldo no Kairogen</dt>
               <dd className="mono">
-                {usage?.balance != null ? `${count(usage.balance)} créditos` : 'não informado'}
+                {!usage
+                  ? '—'
+                  : usage.balance != null
+                    ? `${count(usage.balance)} créditos`
+                    : 'não informado'}
               </dd>
             </div>
             <div>
@@ -195,6 +213,13 @@ export function MediaStudioPage() {
             </div>
           </dl>
           {providers.data && <ProviderStrip providers={providers.data.providers} />}
+          {providers.isError && (
+            <LoadFailure
+              what="os provedores de mídia"
+              error={providers.error}
+              onRetry={() => void providers.refetch()}
+            />
+          )}
 
           <GenerationForm canGenerate={canGenerate} connected={anyAvailable} onStarted={follow} />
 

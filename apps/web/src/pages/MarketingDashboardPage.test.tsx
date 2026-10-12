@@ -15,6 +15,7 @@ import {
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../api/client.js';
 
 /**
  * The dashboard is read before somebody decides where money goes, so these
@@ -42,18 +43,31 @@ const data = {} as {
 
 const ok = <T,>(value: T) => ({ data: value, isLoading: false, isError: false });
 
+/** Queries (by hook name) that currently fail with this error and hold no data. */
+const failures: Record<string, unknown> = {};
+const failed = (error: unknown) => ({
+  data: undefined,
+  isLoading: false,
+  isError: true,
+  error,
+  refetch: vi.fn(),
+});
+const answer = <T,>(name: string, value: T) =>
+  name in failures ? failed(failures[name]) : ok(value);
+
 vi.mock('../api/dashboard.js', () => ({
-  useDashboardOverview: () => ok({ overview: data.overview }),
-  useDashboardPlatforms: (days: number) => ok({ platforms: { ...data.platforms, days } }),
-  useDashboardCampaigns: () => ok({ campaigns: data.campaigns }),
-  useDashboardCreatives: () => ok({ creatives: data.creatives }),
-  useDashboardAudience: () => ok({ audience: data.audience }),
-  useDashboardSite: () => ok({ site: data.site }),
-  useDashboardFunnel: () => ok({ funnel: data.funnel }),
+  useDashboardOverview: () => answer('overview', { overview: data.overview }),
+  useDashboardPlatforms: (days: number) =>
+    answer('platforms', { platforms: { ...data.platforms, days } }),
+  useDashboardCampaigns: () => answer('campaigns', { campaigns: data.campaigns }),
+  useDashboardCreatives: () => answer('creatives', { creatives: data.creatives }),
+  useDashboardAudience: () => answer('audience', { audience: data.audience }),
+  useDashboardSite: () => answer('site', { site: data.site }),
+  useDashboardFunnel: () => answer('funnel', { funnel: data.funnel }),
   useDashboardCockpit: (_days: number, scope: string, picked: string[] = []) => {
     cockpitScopes.push(scope);
     cockpitPicks.push(picked.join(','));
-    return ok({ cockpit: data.cockpit });
+    return answer('cockpit', { cockpit: data.cockpit });
   },
 }));
 const requests = { canRequest: true, filed: vi.fn() };
@@ -455,6 +469,7 @@ const text = (element: Element | null | undefined) =>
 
 beforeEach(() => {
   data.overview = buildOverview();
+  for (const key of Object.keys(failures)) delete failures[key];
 });
 
 afterEach(() => {
@@ -1136,5 +1151,45 @@ describe('the cockpit campaign filter', () => {
     };
     renderAt('/dashboard/marketing?aba=cockpit');
     expect(text(document.querySelector('.cockpit-balloon'))).toBe('RJ R$ 75,82 · 0 lead(s)');
+  });
+});
+
+describe('when a tab fails to load', () => {
+  it.each([
+    ['visao-geral', 'overview', 'a visão geral'],
+    ['plataformas', 'platforms', 'os dados por plataforma'],
+    ['campanhas', 'campaigns', 'as campanhas'],
+    ['criativos', 'creatives', 'os criativos'],
+    ['publico', 'audience', 'o público e as regiões'],
+    ['site', 'site', 'os dados do site'],
+    ['funil', 'funnel', 'o funil'],
+    ['cockpit', 'cockpit', 'o cockpit'],
+  ])('says "—" and why on %s, with no figures', (tab, query, what) => {
+    failures[query] = new ApiError(500, {});
+    renderAt(`/dashboard/marketing?aba=${tab}`);
+
+    const alert = screen.getAllByRole('alert')[0]!;
+    expect(alert.textContent).toContain(`Não foi possível carregar ${what}: o servidor teve um`);
+    // No figure, no "sem dados" state and no zero stands in for the numbers.
+    expect(screen.queryByText('Carregando…')).toBeNull();
+    expect(screen.queryByText(/R\$ 0,00/)).toBeNull();
+    expect(screen.queryByText('sem dados ainda')).toBeNull();
+  });
+
+  it('does not offer the campaign picker on the Cockpit without its options', () => {
+    failures.cockpit = new ApiError(500, {});
+    renderAt('/dashboard/marketing?aba=cockpit&campanha=c-meta');
+
+    expect(screen.queryByText('Campanha:')).toBeNull();
+  });
+
+  it('flags the missing ingestion state on another tab, where its warnings would be', () => {
+    failures.overview = new ApiError(403, {});
+    renderAt('/dashboard/marketing?aba=campanhas');
+
+    expect(
+      screen.getByText(/Não foi possível carregar o estado da ingestão: você não tem permissão/),
+    ).toBeTruthy();
+    expect(screen.getByText('LEAD | FORMS')).toBeTruthy();
   });
 });

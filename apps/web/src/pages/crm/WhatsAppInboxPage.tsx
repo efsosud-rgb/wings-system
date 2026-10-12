@@ -14,6 +14,7 @@ import {
   type WhatsAppInboxFilter,
 } from '../../api/whatsapp.js';
 import { Icon } from '../../components/Icon.js';
+import { LoadFailure } from '../../components/LoadFailure.js';
 import { ago, formatPhone } from './format.js';
 import { WhatsAppChat } from './WhatsAppChat.js';
 import { WhatsAppNewConversation } from './WhatsAppNewConversation.js';
@@ -104,8 +105,10 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
           ))}
         </div>
         {list.isLoading && <p className="crm-muted">Carregando…</p>}
-        {list.isError && <p className="crm-error">Não foi possível carregar as conversas.</p>}
-        {!list.isLoading && !list.isError && rows.length === 0 && (
+        {list.isError && (
+          <LoadFailure what="as conversas" error={list.error} onRetry={() => void list.refetch()} />
+        )}
+        {list.isSuccess && rows.length === 0 && (
           <div className="crm-empty">
             <span>
               {q
@@ -196,10 +199,19 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
   }, [id, last, markRead]);
 
   if (thread.isLoading) return <p className="crm-muted crm-wa-web-none">Carregando…</p>;
-  if (thread.isError || !thread.data)
+  // A failed request is not "not found": say why (a 404 reads "não foi encontrado").
+  if (!thread.data)
     return (
       <div className="crm-empty crm-wa-web-none">
-        <span>Conversa não encontrada ou fora do seu alcance.</span>
+        {thread.isError ? (
+          <LoadFailure
+            what="a conversa"
+            error={thread.error}
+            onRetry={() => void thread.refetch()}
+          />
+        ) : (
+          <span>Conversa não encontrada ou fora do seu alcance.</span>
+        )}
         <Link className="crm-btn" to="/crm-vendas/whatsapp">
           Voltar às conversas
         </Link>
@@ -250,6 +262,15 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
         thread={{ conversationId: id }}
         data={data}
         canSend={canSend}
+        notice={
+          thread.isError ? (
+            <LoadFailure
+              what="a conversa"
+              error={thread.error}
+              onRetry={() => void thread.refetch()}
+            />
+          ) : undefined
+        }
       />
     </div>
   );

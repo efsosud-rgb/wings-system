@@ -11,6 +11,7 @@ import {
   useMergeCompanies,
   useUpdateCompany,
 } from '../../api/crm.js';
+import { LoadFailure, Unavailable } from '../../components/LoadFailure.js';
 import { RelatedDeals } from './ContactsPage.js';
 import { formatDate, formatPhone } from './format.js';
 import { useCreateFromQuery } from '../../components/useCreateFromQuery.js';
@@ -170,8 +171,20 @@ function CompanyList() {
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
               />
-              <span className="crm-muted">{rows.length} empresa(s)</span>
+              <span className="crm-muted">
+                {companies.data ? `${rows.length} empresa(s)` : null}
+                {!companies.data && companies.isError ? (
+                  <Unavailable error={companies.error} />
+                ) : null}
+              </span>
             </div>
+            {companies.isError && (
+              <LoadFailure
+                what="as empresas"
+                error={companies.error}
+                onRetry={() => void companies.refetch()}
+              />
+            )}
             <table className="crm-table">
               <thead>
                 <tr>
@@ -184,7 +197,14 @@ function CompanyList() {
                 </tr>
               </thead>
               <tbody>
-                {rows.length === 0 && (
+                {companies.isLoading && (
+                  <tr>
+                    <td colSpan={6} className="crm-muted">
+                      Carregando…
+                    </td>
+                  </tr>
+                )}
+                {companies.isSuccess && rows.length === 0 && (
                   <tr>
                     <td colSpan={6} className="crm-muted">
                       Nenhuma empresa encontrada.
@@ -225,7 +245,15 @@ function CompanyList() {
             {merge.error && (
               <p className="crm-error">{errorText(merge.error, 'Não foi possível mesclar.')}</p>
             )}
-            {(companies.data?.duplicates ?? []).length === 0 && (
+            {companies.isLoading && <p className="crm-muted">Carregando…</p>}
+            {companies.isError && (
+              <LoadFailure
+                what="as empresas"
+                error={companies.error}
+                onRetry={() => void companies.refetch()}
+              />
+            )}
+            {companies.isSuccess && (companies.data?.duplicates ?? []).length === 0 && (
               <p className="crm-muted">Nenhuma duplicada encontrada.</p>
             )}
             {(companies.data?.duplicates ?? []).map((pair) => (
@@ -291,11 +319,20 @@ function CompanyRecord({ id }: { id: string }) {
         </p>
       </div>
     );
-  if (loaded.isError || !loaded.data)
+  // A failed request is not "not found": say why (a 404 reads "não foi encontrado").
+  if (!loaded.data)
     return (
       <div className="crm-page">
         <div className="crm-empty">
-          <span>Empresa não encontrada.</span>
+          {loaded.isError ? (
+            <LoadFailure
+              what="a empresa"
+              error={loaded.error}
+              onRetry={() => void loaded.refetch()}
+            />
+          ) : (
+            <span>Empresa não encontrada.</span>
+          )}
           <Link className="crm-btn" to="/crm-vendas/empresas">
             Voltar
           </Link>
@@ -340,6 +377,14 @@ function CompanyRecord({ id }: { id: string }) {
         )}
       </header>
       <div className="crm-page-scroll crm-stack">
+        {/* A refresh failed: what was loaded stays on screen, with the reason above it. */}
+        {loaded.isError && (
+          <LoadFailure
+            what="a empresa"
+            error={loaded.error}
+            onRetry={() => void loaded.refetch()}
+          />
+        )}
         {toClient.error && (
           <p className="crm-error">
             {errorText(toClient.error, 'Não foi possível cadastrar o cliente.')}

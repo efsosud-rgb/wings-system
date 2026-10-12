@@ -23,6 +23,7 @@ vi.mock('../api/auth.js', () => ({
 }));
 
 const { MyAccountPage } = await import('./MyAccountPage.js');
+const { ApiError } = await import('../api/client.js');
 
 const status = (over: Partial<GoogleWorkspaceStatus> = {}): { status: GoogleWorkspaceStatus } => ({
   status: {
@@ -115,5 +116,21 @@ describe('Minha conta — Google', () => {
     renderPage();
     expect(await screen.findByText(/GOOGLE_WORKSPACE_CLIENT_ID/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Conectar/ })).toBeNull();
+  });
+});
+
+describe('Minha conta — when the connection cannot be read', () => {
+  it('says "—" and why, offering no connect button that would hide a connection already made', async () => {
+    get.mockRejectedValue(new ApiError(500, {}));
+    renderPage();
+    expect((await screen.findByRole('alert')).textContent).toMatch(
+      /Não foi possível carregar a conexão com o Google: o servidor teve um problema \(erro 500\)/,
+    );
+    expect(screen.queryByText('Não conectado')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Conectar minha conta Google' })).toBeNull();
+
+    get.mockResolvedValue(status());
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar de novo' }));
+    expect(await screen.findByText('Não conectado')).toBeTruthy();
   });
 });

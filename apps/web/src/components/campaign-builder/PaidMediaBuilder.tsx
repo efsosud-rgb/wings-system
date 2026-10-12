@@ -100,6 +100,7 @@ import { ApiError } from '../../api/client.js';
 import { useDashboardCampaigns } from '../../api/dashboard.js';
 import { Alert, Button, Field, Input, Select } from '../ui.js';
 import { BUILDER_DRAFT_KEY, PICKED_MEDIA_KEY } from '../../api/media.js';
+import { LoadFailure } from '../LoadFailure.js';
 import { AccountCeiling } from './AccountCeiling.js';
 import { AdPreviewGallery } from './AdPreview.js';
 import { ComplianceWarning, CreativeCard } from './CreativeBlock.js';
@@ -553,7 +554,15 @@ export function PaidMediaBuilder({
   const addAds = useRequestAddAds();
   const existingCampaigns = useDashboardCampaigns(30);
   const cockpit = useCockpit({ days: 7, platform });
-  const pacing = cockpit.isLoading ? undefined : (cockpit.data?.cockpit.pacing ?? null);
+  // `null` is the server's answer "no open budget period"; a failed read is not that answer,
+  // so without data it stays `undefined` and AccountCeiling shows the failure instead.
+  const pacing = cockpit.isLoading
+    ? undefined
+    : cockpit.data
+      ? cockpit.data.cockpit.pacing
+      : cockpit.isError
+        ? undefined
+        : null;
   const wingsTotal = cockpit.data?.cockpit.wingsTotal ?? null;
   // The platform's balance and limits, re-read on opening and every 5 minutes
   // while the builder stays open (the scheduled task reads every 15). The
@@ -1115,6 +1124,13 @@ export function PaidMediaBuilder({
         })(event);
       }}
     >
+      {canRequest && savedDrafts.isError && !savedDrafts.data && (
+        <LoadFailure
+          what="os rascunhos salvos"
+          error={savedDrafts.error}
+          onRetry={() => void savedDrafts.refetch()}
+        />
+      )}
       {canRequest && (savedDrafts.data?.drafts.length ?? 0) > 0 && (
         <section className="builder-applied" aria-label="Rascunhos salvos">
           <div className="builder-applied-head">
@@ -1308,44 +1324,53 @@ export function PaidMediaBuilder({
           </div>
         )}
         {addingToExisting ? (
-          <Field label="Campanha">
-            <Select
-              value={targetCampaign}
-              onChange={(event) => {
-                setTargetCampaign(event.target.value);
-                // The new ads start from what the campaign was created with:
-                // its UTMs (so leads keep attributing to it), destination and page.
-                const chosen = (existingCampaigns.data?.campaigns.campaigns ?? []).find(
-                  (campaign) => campaign.externalId === event.target.value,
-                );
-                const defaults = chosen?.launchDefaults;
-                if (!defaults) return;
-                const options = { shouldDirty: true, shouldValidate: submitCount > 0 };
-                // utm_campaign is the campaign's; source and medium stay the
-                // builder's current standard (facebook / cpc), which is what the
-                // live ads were corrected to on 28/09 — the draft may say paid_social.
-                setValue('utms.utm_campaign', defaults.utms.utm_campaign, options);
-                setValue('destinationUrl', defaults.destinationUrl, options);
-                if (defaults.identity) {
-                  setValue('identity.pageId', defaults.identity.pageId, options);
-                  setValue(
-                    'identity.instagramActorId',
-                    defaults.identity.instagramActorId,
-                    options,
+          <>
+            <Field label="Campanha">
+              <Select
+                value={targetCampaign}
+                onChange={(event) => {
+                  setTargetCampaign(event.target.value);
+                  // The new ads start from what the campaign was created with:
+                  // its UTMs (so leads keep attributing to it), destination and page.
+                  const chosen = (existingCampaigns.data?.campaigns.campaigns ?? []).find(
+                    (campaign) => campaign.externalId === event.target.value,
                   );
-                }
-              }}
-            >
-              <option value="">Escolha a campanha</option>
-              {(existingCampaigns.data?.campaigns.campaigns ?? [])
-                .filter((campaign) => campaign.platform === 'meta')
-                .map((campaign) => (
-                  <option key={campaign.externalId} value={campaign.externalId}>
-                    {campaign.name} ({campaign.status === 'ACTIVE' ? 'ativa' : 'pausada'})
-                  </option>
-                ))}
-            </Select>
-          </Field>
+                  const defaults = chosen?.launchDefaults;
+                  if (!defaults) return;
+                  const options = { shouldDirty: true, shouldValidate: submitCount > 0 };
+                  // utm_campaign is the campaign's; source and medium stay the
+                  // builder's current standard (facebook / cpc), which is what the
+                  // live ads were corrected to on 28/09 — the draft may say paid_social.
+                  setValue('utms.utm_campaign', defaults.utms.utm_campaign, options);
+                  setValue('destinationUrl', defaults.destinationUrl, options);
+                  if (defaults.identity) {
+                    setValue('identity.pageId', defaults.identity.pageId, options);
+                    setValue(
+                      'identity.instagramActorId',
+                      defaults.identity.instagramActorId,
+                      options,
+                    );
+                  }
+                }}
+              >
+                <option value="">Escolha a campanha</option>
+                {(existingCampaigns.data?.campaigns.campaigns ?? [])
+                  .filter((campaign) => campaign.platform === 'meta')
+                  .map((campaign) => (
+                    <option key={campaign.externalId} value={campaign.externalId}>
+                      {campaign.name} ({campaign.status === 'ACTIVE' ? 'ativa' : 'pausada'})
+                    </option>
+                  ))}
+              </Select>
+            </Field>
+            {existingCampaigns.isError && !existingCampaigns.data && (
+              <LoadFailure
+                what="as campanhas existentes"
+                error={existingCampaigns.error}
+                onRetry={() => void existingCampaigns.refetch()}
+              />
+            )}
+          </>
         ) : (
           <Field label="Nome da campanha" error={errors.name?.message}>
             <Input placeholder="Ex.: Expansão SP — outubro" {...register('name')} />
@@ -1510,7 +1535,8 @@ export function PaidMediaBuilder({
           <Button
             type="button"
             variant="ghost"
-            disabled={!canRequest || saveAudience.isPending}
+            // Saving over a default nobody could read would replace it blind.
+            disabled={!canRequest || saveAudience.isPending || !audience.data}
             onClick={() => {
               setAudienceProblem(null);
               const parsed = audienceProfileSchema.safeParse({
@@ -1526,12 +1552,21 @@ export function PaidMediaBuilder({
           >
             Salvar perfil e alcance como padrão da Wings
           </Button>
+          {audience.isError && !audience.data && (
+            <LoadFailure
+              what="o padrão de público da Wings"
+              error={audience.error}
+              onRetry={() => void audience.refetch()}
+            />
+          )}
           <p className="field-hint">
             {savedAudience
               ? `Padrão atual salvo por ${savedAudience.updatedByName ?? '—'} em ${new Date(
                   savedAudience.updatedAt,
                 ).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })}.`
-              : 'Ainda não há um padrão salvo para a Wings.'}{' '}
+              : audience.data
+                ? 'Ainda não há um padrão salvo para a Wings.'
+                : ''}{' '}
             As próximas campanhas começam dele.
           </p>
           {audienceProblem && <Alert kind="error">{audienceProblem}</Alert>}
@@ -2171,6 +2206,11 @@ export function PaidMediaBuilder({
           <AccountCeiling
             accountId={cockpit.data?.cockpit.account.id}
             pacing={pacing}
+            failure={
+              cockpit.isError
+                ? { error: cockpit.error, onRetry: () => void cockpit.refetch() }
+                : null
+            }
             wingsTotal={wingsTotal}
             platform={platform}
             pause={spendCapPause}

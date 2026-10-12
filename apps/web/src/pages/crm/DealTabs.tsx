@@ -14,6 +14,7 @@ import { leadFileLink, useLeadFiles, useRemoveLeadFile, useSendLeadFile } from '
 import { useUpdateTask, type LoadedLead } from '../../api/leads.js';
 import { formatBytes } from '../../components/drive/DriveParts.js';
 import { Icon, type IconName } from '../../components/Icon.js';
+import { LoadFailure } from '../../components/LoadFailure.js';
 import { MeetingsTab } from './DealMeetings.js';
 import { dueLabel, formatDateTime, isPast } from './format.js';
 import { LeadEmailTab } from './LeadEmailTab.js';
@@ -283,7 +284,9 @@ function TasksTab({
           {open.length === 0
             ? 'Nenhuma tarefa aberta.'
             : `${open.length} ${open.length === 1 ? 'aberta' : 'abertas'}`}
-          {done.length > 0 ? ` · ${done.length} ${done.length === 1 ? 'concluída' : 'concluídas'}` : ''}
+          {done.length > 0
+            ? ` · ${done.length} ${done.length === 1 ? 'concluída' : 'concluídas'}`
+            : ''}
         </span>
         {canWrite && (
           <button type="button" className="crm-btn is-small" onClick={onCreate}>
@@ -409,18 +412,23 @@ export function FilesTab({
     }
   };
 
+  // "Nenhum arquivo" only for an answer that said so; a failed request is "—" (the reason is below).
+  const count = files.data?.length;
+  const summary =
+    count === undefined
+      ? files.isError
+        ? '—'
+        : 'Carregando…'
+      : count > 0
+        ? `${count} ${count === 1 ? 'arquivo' : 'arquivos'} · na pasta Comercial › Negociações do Drive`
+        : files.isSuccess
+          ? 'Nenhum arquivo nesta negociação.'
+          : '—';
+
   return (
     <div className="crm-files">
       <div className="crm-quick-row">
-        <span className="crm-muted">
-          {files.data
-            ? files.data.length === 0
-              ? 'Nenhum arquivo nesta negociação.'
-              : `${files.data.length} ${files.data.length === 1 ? 'arquivo' : 'arquivos'} · na pasta Comercial › Negociações do Drive`
-            : files.isError
-              ? 'Não foi possível ler os arquivos.'
-              : 'Carregando…'}
-        </span>
+        <span className="crm-muted">{summary}</span>
         {canWrite && (
           <>
             <input
@@ -451,6 +459,9 @@ export function FilesTab({
         </p>
       )}
       {error && <p className="crm-error">{error}</p>}
+      {files.isError && (
+        <LoadFailure what="os arquivos" error={files.error} onRetry={() => void files.refetch()} />
+      )}
       <ul className="crm-file-list">
         {(files.data ?? []).map((file) => (
           <li key={file.id} className="crm-file-row">

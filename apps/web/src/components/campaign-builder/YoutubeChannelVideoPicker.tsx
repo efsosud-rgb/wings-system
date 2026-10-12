@@ -2,6 +2,7 @@ import type { YoutubeChannelResponse } from '@wings/shared';
 import { useYoutubeChannel } from '../../api/youtube.js';
 import { DASH, formatDateFull, formatInt } from '../dashboard/format.js';
 import { formatDuration } from '../dashboard/YoutubeChannelSection.js';
+import { LoadFailure } from '../LoadFailure.js';
 import { Button } from '../ui.js';
 
 /**
@@ -45,8 +46,15 @@ export function YoutubeChannelVideoPicker({
   return (
     <div className="builder-fieldset" role="group" aria-labelledby="youtube-picker-title">
       <h4 id="youtube-picker-title">Vídeos do canal</h4>
-      {query.isError ? (
-        <p className="muted">Não foi possível carregar os vídeos do canal; cole o link do vídeo.</p>
+      {query.isError && (
+        <LoadFailure
+          what="os vídeos do canal"
+          error={query.error}
+          onRetry={() => void query.refetch()}
+        />
+      )}
+      {query.isError && !query.data ? (
+        <p className="muted">Cole o link do vídeo.</p>
       ) : !query.data ? (
         <p className="muted">Carregando…</p>
       ) : query.data.videos.length === 0 ? (

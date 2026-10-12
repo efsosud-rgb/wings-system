@@ -27,6 +27,7 @@ import {
   useUpdateRecipient,
 } from '../api/roadmap.js';
 import { ApiError } from '../api/client.js';
+import { LoadFailure } from '../components/LoadFailure.js';
 import { Alert, Button, Field, Input, Select } from '../components/ui.js';
 import { PageHeader } from '../components/PageHeader.js';
 
@@ -197,19 +198,22 @@ function ModulesTab() {
   const modules = useRoadmapModules();
 
   if (modules.isLoading) return <p className="muted">Carregando…</p>;
-  if (modules.isError) {
+  if (modules.isError && !modules.data) {
     return (
-      <Alert kind="error">
-        {modules.error instanceof ApiError
-          ? modules.error.message
-          : 'Não foi possível carregar o roadmap.'}
-      </Alert>
+      <LoadFailure what="o roadmap" error={modules.error} onRetry={() => void modules.refetch()} />
     );
   }
   if (!modules.data) return null;
 
   return (
     <>
+      {modules.isError && (
+        <LoadFailure
+          what="o roadmap"
+          error={modules.error}
+          onRetry={() => void modules.refetch()}
+        />
+      )}
       <ComputedSummary computed={modules.data.computed} />
       {modules.data.modules.map((module) => (
         <ModuleBlock key={module.id} module={module} />
@@ -272,43 +276,52 @@ function ReportsTab({ focusId }: { focusId?: string }) {
   const reports = useRoadmapReports();
 
   if (reports.isLoading) return <p className="muted">Carregando…</p>;
-  if (reports.isError) {
+  if (reports.isError && !reports.data) {
     return (
-      <Alert kind="error">
-        {reports.error instanceof ApiError
-          ? reports.error.message
-          : 'Não foi possível carregar os relatórios.'}
-      </Alert>
+      <LoadFailure
+        what="os relatórios"
+        error={reports.error}
+        onRetry={() => void reports.refetch()}
+      />
     );
   }
   const runs = reports.data?.runs ?? [];
 
   return (
-    <div className="table-wrap">
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Data</th>
-            <th>Status</th>
-            <th>Aprovado por</th>
-            <th>Enviado em</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody>
-          {runs.length === 0 && (
+    <>
+      {reports.isError && (
+        <LoadFailure
+          what="os relatórios"
+          error={reports.error}
+          onRetry={() => void reports.refetch()}
+        />
+      )}
+      <div className="table-wrap">
+        <table className="table">
+          <thead>
             <tr>
-              <td colSpan={5} className="muted">
-                Nenhum relatório gerado ainda. O rascunho de hoje aparece aqui às 17:30.
-              </td>
+              <th>Data</th>
+              <th>Status</th>
+              <th>Aprovado por</th>
+              <th>Enviado em</th>
+              <th></th>
             </tr>
-          )}
-          {runs.map((run) => (
-            <ReportRow key={run.id} run={run} focused={run.id === focusId} />
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {reports.isSuccess && runs.length === 0 && (
+              <tr>
+                <td colSpan={5} className="muted">
+                  Nenhum relatório gerado ainda. O rascunho de hoje aparece aqui às 17:30.
+                </td>
+              </tr>
+            )}
+            {runs.map((run) => (
+              <ReportRow key={run.id} run={run} focused={run.id === focusId} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
@@ -372,11 +385,11 @@ function RecipientsTab() {
         </Alert>
       )}
       {recipients.isError && (
-        <Alert kind="error">
-          {recipients.error instanceof ApiError
-            ? recipients.error.message
-            : 'Não foi possível carregar os destinatários.'}
-        </Alert>
+        <LoadFailure
+          what="os destinatários"
+          error={recipients.error}
+          onRetry={() => void recipients.refetch()}
+        />
       )}
 
       <div className="table-wrap">
@@ -398,7 +411,7 @@ function RecipientsTab() {
                 </td>
               </tr>
             )}
-            {recipients.data?.recipients.length === 0 && (
+            {recipients.isSuccess && recipients.data.recipients.length === 0 && (
               <tr>
                 <td colSpan={5} className="muted">
                   Nenhum destinatário cadastrado.

@@ -1,14 +1,20 @@
 import type { YoutubeChannelResponse, YoutubeVideoSummary } from '@wings/shared';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../api/client.js';
 
-const state: { data: YoutubeChannelResponse | undefined; isError: boolean } = {
+const state: { data: YoutubeChannelResponse | undefined; isError: boolean; error?: unknown } = {
   data: undefined,
   isError: false,
 };
 
 vi.mock('../../api/youtube.js', () => ({
-  useYoutubeChannel: () => ({ data: state.data, isError: state.isError }),
+  useYoutubeChannel: () => ({
+    data: state.data,
+    isError: state.isError,
+    error: state.error,
+    refetch: vi.fn(),
+  }),
 }));
 
 const { YoutubeChannelVideoPicker } = await import('./YoutubeChannelVideoPicker.js');
@@ -97,8 +103,14 @@ describe('YoutubeChannelVideoPicker', () => {
     expect(screen.queryByRole('button')).toBeNull();
     cleanup();
 
+    state.data = undefined;
     state.isError = true;
+    state.error = new ApiError(500, {});
     render(<YoutubeChannelVideoPicker selected={[]} max={5} onPick={vi.fn()} />);
-    expect(screen.getByText(/cole o link do vídeo/)).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toContain(
+      'Não foi possível carregar os vídeos do canal: o servidor teve um problema (erro 500)',
+    );
+    expect(screen.getByText('Cole o link do vídeo.')).toBeTruthy();
+    expect(screen.queryByText(/Nenhum vídeo público/)).toBeNull();
   });
 });

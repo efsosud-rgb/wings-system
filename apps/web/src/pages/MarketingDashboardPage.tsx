@@ -30,6 +30,7 @@ import { OwnedChannelsTab } from '../components/dashboard/OwnedChannelsTab.js';
 import { PlatformsTab } from '../components/dashboard/PlatformsTab.js';
 import { SettingsTab } from '../components/dashboard/SettingsTab.js';
 import { Alert, Button } from '../components/ui.js';
+import { LoadFailure } from '../components/LoadFailure.js';
 import { PageHeader } from '../components/PageHeader.js';
 
 /**
@@ -68,19 +69,32 @@ function isWindow(value: number): value is DashboardWindow {
   return DASHBOARD_WINDOWS.includes(value as DashboardWindow);
 }
 
+/**
+ * One tab's request. A failed one says "—" and why, never an empty tab; when a refresh
+ * failed but an earlier answer exists, that answer stays and the failure sits above it.
+ */
 function Loading({
   query,
+  what,
   children,
 }: {
-  query: { isLoading: boolean; isError: boolean };
+  query: {
+    isLoading: boolean;
+    isError: boolean;
+    error: unknown;
+    refetch: () => unknown;
+  };
+  what: string;
   children: React.ReactNode;
 }) {
-  if (query.isError)
-    return (
-      <Alert kind="error">Não foi possível carregar esta aba. Tente de novo em instantes.</Alert>
-    );
-  if (query.isLoading) return <p className="muted">Carregando…</p>;
-  return <>{children}</>;
+  return (
+    <>
+      {query.isError && (
+        <LoadFailure what={what} error={query.error} onRetry={() => void query.refetch()} />
+      )}
+      {query.isLoading ? <p className="muted">Carregando…</p> : children}
+    </>
+  );
 }
 
 /** One line: when a job last ran, how it went, and when the next one is due. */
@@ -164,9 +178,9 @@ export function MarketingDashboardPage() {
                   ))}
                 </div>
               )}
-              {tab === 'cockpit' && (
+              {tab === 'cockpit' && cockpitData.data && (
                 <CampaignPicker
-                  options={cockpitData.data?.cockpit.campaignOptions ?? []}
+                  options={cockpitData.data.cockpit.campaignOptions}
                   selected={pickedCampaigns}
                   scope={campaignScope}
                   onChange={setCampaigns}
@@ -199,6 +213,15 @@ export function MarketingDashboardPage() {
 
       {overview.data && <DashboardRefresh overview={overview.data.overview} />}
 
+      {/* Without it the ingestion warnings below cannot show, so say so on the other tabs. */}
+      {overview.isError && tab !== 'visao-geral' && (
+        <LoadFailure
+          what="o estado da ingestão"
+          error={overview.error}
+          onRetry={() => void overview.refetch()}
+        />
+      )}
+
       {ingestion?.overdue && (
         <Alert kind="warning">
           A ingestão agendada não rodou desde {formatDateTime(ingestion.lastRunAt)}. Os números
@@ -228,42 +251,44 @@ export function MarketingDashboardPage() {
       </nav>
 
       {tab === 'cockpit' && (
-        <Loading query={cockpitData}>
+        <Loading query={cockpitData} what="o cockpit">
           {cockpitData.data && <CockpitTab data={cockpitData.data.cockpit} />}
         </Loading>
       )}
       {tab === 'visao-geral' && (
-        <Loading query={overview}>
+        <Loading query={overview} what="a visão geral">
           {overview.data && <OverviewTab overview={overview.data.overview} />}
         </Loading>
       )}
       {tab === 'plataformas' && (
-        <Loading query={platforms}>
+        <Loading query={platforms} what="os dados por plataforma">
           {platforms.data && <PlatformsTab data={platforms.data.platforms} />}
         </Loading>
       )}
       {tab === 'campanhas' && (
-        <Loading query={campaigns}>
+        <Loading query={campaigns} what="as campanhas">
           {campaigns.data && <CampaignsTab data={campaigns.data.campaigns} />}
         </Loading>
       )}
       {tab === 'criativos' && (
-        <Loading query={creatives}>
+        <Loading query={creatives} what="os criativos">
           {creatives.data && <CreativesTab data={creatives.data.creatives} />}
         </Loading>
       )}
       {tab === 'publico' && (
-        <Loading query={audience}>
+        <Loading query={audience} what="o público e as regiões">
           {audience.data && <AudienceTab data={audience.data.audience} />}
         </Loading>
       )}
       {tab === 'site' && (
-        <Loading query={siteTraffic}>
+        <Loading query={siteTraffic} what="os dados do site">
           {siteTraffic.data && <SiteTab data={siteTraffic.data.site} />}
         </Loading>
       )}
       {tab === 'funil' && (
-        <Loading query={funnel}>{funnel.data && <FunnelTab data={funnel.data.funnel} />}</Loading>
+        <Loading query={funnel} what="o funil">
+          {funnel.data && <FunnelTab data={funnel.data.funnel} />}
+        </Loading>
       )}
       {tab === 'insights' && <InsightsTab />}
       {tab === 'canais-proprios' && <OwnedChannelsTab days={days} />}

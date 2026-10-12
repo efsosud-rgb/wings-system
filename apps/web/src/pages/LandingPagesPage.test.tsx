@@ -118,6 +118,15 @@ function renderPage() {
   );
 }
 
+/** A path whose request fails instead of answering (the rest of the screen answers as usual). */
+const failOn = (failing: string, error: unknown) => {
+  const answer = get.getMockImplementation()!;
+  get.mockImplementation(async (path: string) => {
+    if (path === failing) throw error;
+    return answer(path);
+  });
+};
+
 describe('CRM Vendas → Landing pages', () => {
   it('lists active pages with client, funnel, leads, conversions with their date and "—" for visits and rate', async () => {
     renderPage();
@@ -222,5 +231,28 @@ describe('CRM Vendas → Landing pages', () => {
     renderPage();
     expect(await screen.findByText('Formulário próprio: /lp/casal-do-churros')).toBeTruthy();
     expect(screen.getByText('Origem no RD: Site próprio')).toBeTruthy();
+  });
+
+  it('says why the pages did not load, not "Nenhuma página com esses filtros."', async () => {
+    const { ApiError } = await import('../api/client.js');
+    failOn('/crm/landing-pages', new ApiError(500, {}));
+    renderPage();
+    const alert = await screen.findByText(/Não foi possível carregar as páginas/);
+    expect(alert.textContent).toContain('erro 500');
+    expect(screen.queryByText('Nenhuma página com esses filtros.')).toBeNull();
+  });
+
+  it('says why the Meta rules did not load, not "Nenhuma regra do Meta ainda."', async () => {
+    const { ApiError } = await import('../api/client.js');
+    failOn('/leads/source-rules', new ApiError(403, {}));
+    renderPage();
+    const alert = await screen.findByText(/Não foi possível carregar as regras/);
+    expect(alert.textContent).toContain('você não tem permissão');
+    expect(screen.queryByText('Nenhuma regra do Meta ainda.')).toBeNull();
+  });
+
+  it('still says "Nenhuma regra do Meta ainda." when the request succeeded with none', async () => {
+    renderPage();
+    expect(await screen.findByText('Nenhuma regra do Meta ainda.')).toBeTruthy();
   });
 });

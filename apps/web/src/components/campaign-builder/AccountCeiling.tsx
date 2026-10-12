@@ -8,6 +8,7 @@ import type {
 import type { ReactNode } from 'react';
 import { hasPermission, useSession } from '../../api/auth.js';
 import { useSetSpendCapReset } from '../../api/ads.js';
+import { LoadFailure } from '../LoadFailure.js';
 import { Alert } from '../ui.js';
 import { formatBrl, formatDateTime, formatDayMonth } from './format.js';
 import { ReconcileNowButton } from './ReconcileNowButton.js';
@@ -173,9 +174,13 @@ export function AccountCeiling({
   platform,
   pause,
   pauseIncludesThis,
+  failure = null,
 }: {
   accountId: string | undefined;
+  /** `undefined` while reading or when the read failed; `null` only when the server says no period is open. */
   pacing: PacingSummary | null | undefined;
+  /** The ceiling's read failed: shown as "—" and why, never as "no budget period". */
+  failure?: { error: unknown; onRetry: () => void } | null;
   wingsTotal: WingsTotal | null;
   platform: CampaignDraftInput['platform'];
   /** When the Meta account's spending limit runs out under the plan; null when it cannot be judged. */
@@ -183,6 +188,11 @@ export function AccountCeiling({
   /** Whether the campaign being built is part of that plan. */
   pauseIncludesThis: boolean;
 }) {
+  const failureLine = failure && (
+    <LoadFailure what="o teto da conta" error={failure.error} onRetry={failure.onRetry} />
+  );
+  // Nothing earlier to show: "Sem teto" or a made-up figure would be a statement nobody checked.
+  if (failure && !pacing) return <div className="builder-ceiling">{failureLine}</div>;
   if (pacing === undefined) return <p className="muted">Lendo o teto da conta…</p>;
 
   // Search and YouTube spend from the same Google account: worth saying out
@@ -213,6 +223,7 @@ export function AccountCeiling({
   const ceilingKnown = reading.status === 'ok';
   return (
     <div className="builder-ceiling">
+      {failureLine}
       <span className="field-label">Teto real da conta neste mês</span>
       <p className="mono builder-ceiling-figure">
         {ceilingKnown ? formatBrl(pacing.availableCents) : '—'}
