@@ -5,7 +5,7 @@ import {
   type VideoUploadSession,
 } from '@wings/shared';
 import { useCallback, useRef, useState } from 'react';
-import { ApiError, api, type ApiErrorBody } from './client.js';
+import { ApiError, api, noteUnauthorized, type ApiErrorBody } from './client.js';
 
 /**
  * Files for the campaign builder: an image in one request, a video in parts.
@@ -41,7 +41,10 @@ function sendBytes<T>(input: {
         body = {};
       }
       if (request.status >= 200 && request.status < 300) resolve(body as T);
-      else reject(new ApiError(request.status, body as ApiErrorBody));
+      else {
+        noteUnauthorized(request.status, input.path);
+        reject(new ApiError(request.status, body as ApiErrorBody));
+      }
     };
     request.onerror = () =>
       reject(new UploadInterrupted('A conexão caiu durante o envio. Tente de novo.'));
