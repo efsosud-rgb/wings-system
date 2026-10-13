@@ -301,6 +301,39 @@ describe('the columns, for who only works the deals', () => {
   });
 });
 
+describe('the 1º contato atrasado counter', () => {
+  const answered = (data: unknown) => ({
+    data,
+    isLoading: false,
+    isPending: false,
+    isError: false,
+    isSuccess: true,
+    refetch: vi.fn(),
+  });
+
+  it('shows the number and, clicked, opens the list of those deals with a chip that clears it', () => {
+    state.counters = answered({
+      untouched: 1,
+      today: 2,
+      overdue: 3,
+      firstContactOverdue: 5,
+      since: '2026-10-09T03:00:00.000Z',
+    });
+    state.list = answered({ leads: [], total: 0 });
+    show();
+    const bar = screen.getByLabelText('Resumo do funil');
+    const counter = within(bar).getByRole('button', { name: /1º contato atrasado/ });
+    expect(within(counter).getByText('5')).toBeTruthy();
+    expect(counter.getAttribute('title')).toContain('09/10/2026');
+    expect(screen.queryByRole('button', { name: 'Tirar o filtro 1º contato atrasado' })).toBeNull();
+
+    fireEvent.click(counter);
+    const chip = screen.getByRole('button', { name: 'Tirar o filtro 1º contato atrasado' });
+    fireEvent.click(chip);
+    expect(screen.queryByRole('button', { name: 'Tirar o filtro 1º contato atrasado' })).toBeNull();
+  });
+});
+
 /** The request failed: "—" and the reason, never "0 negociações" or the empty-state text. */
 describe('when a request fails', () => {
   const failed = (error: unknown) => ({

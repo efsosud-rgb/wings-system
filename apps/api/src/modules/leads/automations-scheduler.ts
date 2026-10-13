@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { processDueRuns } from './automations.js';
-import { runCrmAlerts } from './crm-alerts.js';
+import { runCrmAlerts, type AlertsResult } from './crm-alerts.js';
 import type { CrmMailTransport } from './crm-mail.js';
 import { sendPendingNoticeMails, type NoticeMailDeps, type NoticeMailResult } from './crm-notice-mail.js';
 
@@ -36,7 +36,7 @@ export interface CycleDeps {
 export interface CycleResult {
   ran: boolean;
   automations?: { done: number; skipped: number; failed: number };
-  alerts?: { written: number };
+  alerts?: AlertsResult;
   noticeMails?: NoticeMailResult;
 }
 
@@ -67,6 +67,7 @@ export function startCrmAutomationsScheduler(deps: CycleDeps & { cron?: string; 
           job: 'crm-automations',
           ...result.automations,
           alerts: result.alerts?.written,
+          firstContact: result.alerts?.firstContact,
           mails: result.noticeMails,
         });
     } catch (error) {

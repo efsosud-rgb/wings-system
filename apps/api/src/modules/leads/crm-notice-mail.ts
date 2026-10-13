@@ -3,21 +3,27 @@ import { and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { crmNotifications, employees, leadTasks, leads } from '../../db/schema/index.js';
 import type { Mailer } from '../../lib/mailer.js';
+import { isEntryStageName } from './crm.js';
 
 /**
- * The e-mail copy of two panel notices, to the deal's owner only (Eric,
- * 09/10/2026): a new lead that is theirs, and a first contact past its
- * 1-business-hour SLA with no contact registered. The notice row is the queue:
+ * The e-mail copy of three panel notices (Eric, 09/10/2026 and 13/10/2026): to
+ * the deal's owner, a new lead that is theirs and a first contact past its
+ * 1-business-hour SLA with no contact registered; to the managers who hear of
+ * it at the end of the business day (`first_contact_escalated`), the same
+ * first contact still unattended. The notice row is the queue:
  * `announceLeadArrival` and `runCrmAlerts` write it as `pending`, this pass
  * sends it and records `sent`, `skipped` (with the reason) or `failed` (with a
  * code). The message carries the lead's name, where it came from and the link
  * to the deal — nothing else about the person; the address goes only to the
  * SMTP call, never to a log or to the row.
  *
- * The arrival e-mail goes out at once, any hour. The overdue one waits for
+ * The arrival e-mail goes out at once, any hour. The overdue ones wait for
  * working hours (an overdue notice written Friday night is e-mailed Monday
- * 9h), and is dropped when the contact was registered meanwhile, the deal was
- * closed, or the lead changed hands. A notice older than `MAX_AGE_MS` is never
+ * 9h), and are dropped when the contact was registered meanwhile (the task
+ * closed or the deal left the entry stage), the deal was closed, or (the
+ * owner's) the lead changed hands. The managers' e-mail has a switch of its
+ * own, `CRM_ESCALATION_EMAIL_ENABLED`, because it reaches people the owner's
+ * does not. A notice older than `MAX_AGE_MS` is never
  * e-mailed (a long outage must not end in a burst of stale messages).
  *
  * Rows are claimed `sending` under `for update skip locked`, so the cycle in
@@ -26,7 +32,11 @@ import type { Mailer } from '../../lib/mailer.js';
  * `STUCK_CLAIM_MS`.
  */
 
-export const NOTICE_MAIL_KINDS = ['new_lead', 'first_contact_overdue'] as const;
+export const NOTICE_MAIL_KINDS = [
+  'new_lead',
+  'first_contact_overdue',
+  'first_contact_escalated',
+] as const;
 const MAX_AGE_MS = 3 * 86_400_000;
 const STUCK_CLAIM_MS = 15 * 60_000;
 const BATCH = 50;
@@ -35,6 +45,8 @@ export interface NoticeMailDeps {
   mailer: Mailer;
   /** CRM_NOTICE_EMAIL_ENABLED: off, the pending notices are marked skipped, not kept for later. */
   enabled: boolean;
+  /** CRM_ESCALATION_EMAIL_ENABLED: the same for the managers' notice; absent means off. */
+  escalationEnabled?: boolean;
   /** APP_BASE_URL, for the link to the deal. */
   baseUrl: string;
   log?: (facts: Record<string, unknown>) => void;
@@ -75,7 +87,10 @@ const whenOf = (date: Date) =>
 
 export interface NoticeMailInput {
   kind: (typeof NOTICE_MAIL_KINDS)[number];
+  /** Who the e-mail is for (the owner, or the manager of `first_contact_escalated`). */
   ownerName: string | null;
+  /** The seller, for the manager's e-mail. */
+  sellerName?: string | null;
   leadName: string | null;
   origin: string;
   /** The first-contact deadline, when the task exists and is still open. */
@@ -95,6 +110,13 @@ export function noticeMailOf(input: NoticeMailInput): { subject: string; text: s
     return {
       subject: `Novo lead para você: ${leadName}`,
       text: `${greeting}\nEntrou um lead novo para você no Wings System.\n\nNome: ${leadName}\nOrigem: ${input.origin}${deadline}\n\nAbra a negociação: ${input.url}`,
+    };
+  }
+  if (input.kind === 'first_contact_escalated') {
+    const seller = firstNameOf(input.sellerName ?? null);
+    return {
+      subject: `Primeiro contato sem registro: ${leadName}`,
+      text: `${greeting}\nO primeiro contato com o lead ${leadName} (${input.origin}) ainda não foi registrado no fim do dia útil${seller ? `. Vendedor: ${seller}` : ''}.\n\nAbra a negociação: ${input.url}`,
     };
   }
   return {
@@ -145,7 +167,7 @@ async function claim(db: Database, now: Date): Promise<Claimed[]> {
     const rows = await tx.execute<Claimed & Record<string, unknown>>(sql`
       select id, kind, recipient_employee_id as "recipientEmployeeId", lead_id as "leadId", created_at as "createdAt"
         from crm_notifications
-       where email_state = 'pending' and kind in ('new_lead', 'first_contact_overdue')
+       where email_state = 'pending' and kind in ('new_lead', 'first_contact_overdue', 'first_contact_escalated')
        order by created_at
        limit ${BATCH}
          for update skip locked`);
@@ -191,7 +213,8 @@ export async function sendPendingNoticeMails(
     result.skipped += 1;
   };
   for (const notice of claimed) {
-    if (!deps.enabled) {
+    const escalated = notice.kind === 'first_contact_escalated';
+    if (!(escalated ? deps.escalationEnabled === true : deps.enabled)) {
       await skip(notice.id, 'disabled');
       continue;
     }
@@ -215,6 +238,8 @@ export async function sendPendingNoticeMails(
         campaignName: leads.campaignName,
         utmCampaign: leads.utmCampaign,
         ownerEmployeeId: leads.ownerEmployeeId,
+        pipeline: leads.pipeline,
+        stage: leads.stage,
         won: leads.won,
       })
       .from(leads)
@@ -224,7 +249,8 @@ export async function sendPendingNoticeMails(
       continue;
     }
     // Only the owner of the deal today: a lead reassigned since the notice is the new owner's, and their own notice says so.
-    if (lead.ownerEmployeeId !== notice.recipientEmployeeId) {
+    // (The managers' notice is not the owner's: it is for whoever the sector has, whoever holds the deal.)
+    if (!escalated && lead.ownerEmployeeId !== notice.recipientEmployeeId) {
       await skip(notice.id, 'not_owner');
       continue;
     }
@@ -240,8 +266,9 @@ export async function sendPendingNoticeMails(
       ),
       columns: { dueAt: true },
     });
-    if (notice.kind === 'first_contact_overdue') {
-      if (!task) {
+    if (notice.kind !== 'new_lead') {
+      // Contact counts as made when its task is closed or the deal has left the entry stage.
+      if (!task || !isEntryStageName(lead.pipeline, lead.stage)) {
         await skip(notice.id, 'contact_made');
         continue;
       }
@@ -259,9 +286,17 @@ export async function sendPendingNoticeMails(
       await skip(notice.id, 'no_recipient');
       continue;
     }
+    const seller =
+      escalated && lead.ownerEmployeeId
+        ? await db.query.employees.findFirst({
+            where: eq(employees.id, lead.ownerEmployeeId),
+            columns: { fullName: true },
+          })
+        : undefined;
     const mail = noticeMailOf({
       kind: notice.kind as NoticeMailInput['kind'],
       ownerName: owner.fullName,
+      sellerName: seller?.fullName ?? null,
       leadName: lead.name,
       origin: originOf(lead),
       firstContactDueAt: task?.dueAt ?? null,

@@ -1194,6 +1194,11 @@ export const leadListQuerySchema = z.object({
     .or(z.literal('').transform(() => undefined)),
   /** `mine` keeps only the caller's deals (the "Minhas" tab). */
   mine: z.coerce.boolean().optional(),
+  /**
+   * Open deals whose first contact is past its deadline while they still sit in the funnel's entry stage
+   * ("Sem contato"): the list the "1º contato atrasado" counter of Negociações opens.
+   */
+  firstContactOverdue: z.coerce.boolean().optional(),
   sort: z
     .enum(['recent', 'oldest', 'value_desc', 'value_asc', 'stage_time', 'next_task', 'name'])
     .optional()

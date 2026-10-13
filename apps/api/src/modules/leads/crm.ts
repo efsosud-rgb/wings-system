@@ -156,6 +156,41 @@ export const CRM_ENTRY_STAGES: Record<LeadPipeline, string> = {
   consultoria: 'Novo contato',
 };
 
+/** Whether a stage name is the funnel's entry stage (compared like the RD names: case-blind). */
+export const isEntryStageName = (pipeline: string | null, stage: string | null): boolean => {
+  const entry = pipeline ? CRM_ENTRY_STAGES[pipeline as LeadPipeline] : undefined;
+  return !!entry && !!stage && stage.trim().toLowerCase() === entry.toLowerCase();
+};
+
+/** SQL: the deal sits in its funnel's entry stage ("Sem contato"), where the first contact is still owed. Needs `leads`. */
+export const inEntryStageSql = () =>
+  or(
+    ...LEAD_PIPELINES.map((pipeline) =>
+      and(
+        eq(leads.pipeline, pipeline),
+        sql`lower(${leads.stage}) = ${CRM_ENTRY_STAGES[pipeline].toLowerCase()}`,
+      ),
+    ),
+  )!;
+
+/** `"leads"."id"` spelled out: Drizzle drops the table name in a one-table query, and inside a subquery a bare `id` is the inner table's. */
+export const LEADS_ID = sql.raw('"leads"."id"');
+
+/**
+ * The one rule of "1º contato atrasado", for the counter, its list and the notices: an open deal still in the
+ * entry stage whose first-contact task is open and past its deadline (1 business hour), on a deal that counts
+ * since the start of use (`trackedTaskSql`). Moving the deal out of the entry stage, closing the task or winning
+ * or losing the deal ends it. Needs `leads`; the task is looked up inside, so no join is required.
+ */
+export const firstContactOverdueSql = (now: Date) =>
+  sql`(${leads.won} is null and ${inEntryStageSql()} and exists (
+    select 1 from lead_tasks
+     where lead_tasks.lead_id = ${LEADS_ID}
+       and lead_tasks.kind = 'first_contact'
+       and lead_tasks.done_at is null
+       and lead_tasks.due_at < ${now}
+       and ${trackedTaskSql()}))`;
+
 /**
  * The stage a lead born here starts in: the funnel's entry stage by name; if a
  * manager renamed or switched it off, the first active stage; and on an empty
@@ -1051,13 +1086,20 @@ export async function boardColumn(
 }
 
 /**
- * The three numbers at the top of Negociações: new deals nobody touched, today's and overdue tasks. Only deals
- * that entered since `trackingStart` (the start of use) count; `since` tells the screen which day that is.
+ * The numbers at the top of Negociações: new deals nobody touched, today's and overdue tasks, and the deals whose
+ * first contact is overdue (`firstContactOverdueSql`, the list the counter opens). Only deals that entered since
+ * `trackingStart` (the start of use) count; `since` tells the screen which day that is.
  */
 export async function boardCounters(
   db: Executor,
   input: { pipeline: LeadPipeline; ownerEmployeeId?: string; now?: Date },
-): Promise<{ untouched: number; today: number; overdue: number; since: string }> {
+): Promise<{
+  untouched: number;
+  today: number;
+  overdue: number;
+  firstContactOverdue: number;
+  since: string;
+}> {
   const now = input.now ?? new Date();
   const dayStart = new Date(now);
   dayStart.setUTCHours(dayStart.getUTCHours() - 3);
@@ -1092,10 +1134,15 @@ export async function boardCounters(
     .where(
       and(eq(leads.pipeline, input.pipeline), isNull(leadTasks.doneAt), trackedTaskSql(), scope),
     );
+  const [late] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(leads)
+    .where(and(eq(leads.pipeline, input.pipeline), scope, firstContactOverdueSql(now)));
   return {
     untouched: untouched?.count ?? 0,
     today: tasks?.today ?? 0,
     overdue: tasks?.overdue ?? 0,
+    firstContactOverdue: late?.count ?? 0,
     since: config.trackingStart.toISOString(),
   };
 }

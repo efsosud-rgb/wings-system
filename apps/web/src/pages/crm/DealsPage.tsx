@@ -83,6 +83,7 @@ const FILTER_KEYS: (keyof DealFilter)[] = [
   'campaign',
   'clientId',
   'staleDays',
+  'firstContactOverdue',
   'sort',
   'stage',
   'mine',
@@ -200,6 +201,25 @@ export function DealsPage() {
             onClick={() => update({ visao: 'activities' })}
           >
             <strong>{counters.data?.today ?? noCount}</strong> atividades hoje
+          </button>
+          <button
+            type="button"
+            className={`crm-counter${(counters.data?.firstContactOverdue ?? 0) > 0 ? ' is-alert' : ''}`}
+            onClick={() =>
+              update({
+                visao: 'list',
+                firstContactOverdue: '1',
+                sort: 'oldest',
+                aba: 'all',
+                mine: undefined,
+                owner: undefined,
+                stage: undefined,
+                outcome: undefined,
+              })
+            }
+            title={`Negociações ainda na etapa de entrada ("Sem contato") que passaram da 1 hora útil para o primeiro contato. Abre a lista delas${sinceDay ? `. Conta só as que entraram a partir de ${sinceDay}` : ''}`}
+          >
+            <strong>{counters.data?.firstContactOverdue ?? noCount}</strong> 1º contato atrasado
           </button>
           <button
             type="button"
@@ -534,6 +554,16 @@ function Filters({
               </option>
             ))}
         </select>
+        {filter.firstContactOverdue && (
+          <button
+            type="button"
+            className="crm-btn is-small is-active"
+            aria-label="Tirar o filtro 1º contato atrasado"
+            onClick={() => set('firstContactOverdue', '')}
+          >
+            1º contato atrasado ✕
+          </button>
+        )}
         <button
           type="button"
           className={`crm-btn is-quiet${advanced ? ' is-active' : ''}`}

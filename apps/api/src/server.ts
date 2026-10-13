@@ -150,6 +150,7 @@ async function main() {
     const noticeMail = {
       mailer: app.wings.mailer,
       enabled: env.CRM_NOTICE_EMAIL_ENABLED === 'true',
+      escalationEnabled: env.CRM_ESCALATION_EMAIL_ENABLED === 'true',
       baseUrl: env.APP_BASE_URL,
       log,
     };
