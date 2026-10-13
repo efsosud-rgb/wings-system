@@ -47,6 +47,8 @@ export const whatsappRingingStreamRoutes: FastifyPluginAsync = async (app) => {
   const fetchImpl = () => app.wings.whatsappFetch ?? fetch;
 
   const open = new Set<(reason: EndReason) => void>();
+  /** Requests whose connection closed before the handler got to listen for it. */
+  const hungUp = new WeakSet<object>();
   const perPerson = new Map<string, number>();
 
   // A restart must not wait for tabs to hang up: close them, they reconnect to the new process.
@@ -58,16 +60,21 @@ export const whatsappRingingStreamRoutes: FastifyPluginAsync = async (app) => {
     '/whatsapp/calls/stream',
     {
       // Whatever the client sends, a stream is never counted as activity.
-      onRequest: async (request) => {
+      onRequest: async (request, reply) => {
         request.headers[PASSIVE_HEADER] = '1';
+        // The session is checked before the handler runs, and a tab that reloads meanwhile
+        // closes the connection in that gap: 'close' is heard here, where it cannot be missed.
+        reply.raw.once('close', () => hungUp.add(request));
       },
       preHandler: app.requirePermission('leads.whatsapp'),
     },
     async (request, reply) => {
-      const actor = request.session.actor;
+      // Re-read at every beat, so a change of the person's reach is never older than one.
+      let actor = request.session.actor;
+      const employeeId = actor.employeeId;
       const token = request.cookies[SESSION_COOKIE];
       if (!token) return reply.status(401).send({ error: 'unauthenticated' });
-      if ((perPerson.get(actor.employeeId) ?? 0) >= MAX_STREAMS_PER_PERSON) {
+      if ((perPerson.get(employeeId) ?? 0) >= MAX_STREAMS_PER_PERSON) {
         return reply.status(429).send({
           error: 'too_many_streams',
           message: 'Há abas demais com o aviso de ligação aberto.',
@@ -83,6 +90,10 @@ export const whatsappRingingStreamRoutes: FastifyPluginAsync = async (app) => {
 
       reply.hijack();
       const raw = reply.raw;
+      // Optional calls: the socket of an injected test request has none of them.
+      const socket = request.raw.socket as Partial<typeof request.raw.socket> | undefined;
+      // The person hung up while the session was being checked: nothing would ever free what follows.
+      if (hungUp.has(request) || socket?.destroyed) return;
       raw.writeHead(200, {
         'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache, no-transform',
@@ -91,8 +102,6 @@ export const whatsappRingingStreamRoutes: FastifyPluginAsync = async (app) => {
         'X-Accel-Buffering': 'no',
       });
       raw.flushHeaders();
-      // Optional calls: the socket of an injected test request has none of them.
-      const socket = request.raw.socket as Partial<typeof request.raw.socket> | undefined;
       socket?.setNoDelay?.(true);
       socket?.setTimeout?.(0);
       socket?.setKeepAlive?.(true, 30_000);
@@ -103,10 +112,12 @@ export const whatsappRingingStreamRoutes: FastifyPluginAsync = async (app) => {
       let again = false;
       let beat: NodeJS.Timeout | undefined;
       let expiry: NodeJS.Timeout | undefined;
-      perPerson.set(actor.employeeId, (perPerson.get(actor.employeeId) ?? 0) + 1);
+      perPerson.set(employeeId, (perPerson.get(employeeId) ?? 0) + 1);
 
       const write = (text: string) => {
         if (closed || raw.writableEnded) return;
+        // A connection that died without 'close' (nobody told us) is found out at the next write.
+        if (socket?.destroyed) return end('closed');
         raw.write(text);
         if (raw.writableLength > MAX_BUFFERED_BYTES) end('closed');
       };
@@ -119,9 +130,9 @@ export const whatsappRingingStreamRoutes: FastifyPluginAsync = async (app) => {
         offCalls();
         offEnded();
         open.delete(end);
-        const left = (perPerson.get(actor.employeeId) ?? 1) - 1;
-        if (left > 0) perPerson.set(actor.employeeId, left);
-        else perPerson.delete(actor.employeeId);
+        const left = (perPerson.get(employeeId) ?? 1) - 1;
+        if (left > 0) perPerson.set(employeeId, left);
+        else perPerson.delete(employeeId);
         if (raw.writableEnded) return;
         if (reason === 'session_ended') raw.write('event: session_ended\ndata: {}\n\n');
         if (reason === 'closed') raw.destroy();
@@ -147,6 +158,7 @@ export const whatsappRingingStreamRoutes: FastifyPluginAsync = async (app) => {
               last = text;
               write(`event: ringing\ndata: ${text}\n\n`);
             }
+            if (closed) return;
             watchRingEnd(snapshot);
           } while (again && !closed);
         } catch (error) {
@@ -174,6 +186,7 @@ export const whatsappRingingStreamRoutes: FastifyPluginAsync = async (app) => {
         try {
           const session = await resolveSession(db, token, sessionContext);
           if (!session) return end('session_ended');
+          actor = session.actor;
         } catch (error) {
           request.log.error(
             { err: error instanceof Error ? error.name : 'unknown' },
@@ -181,15 +194,17 @@ export const whatsappRingingStreamRoutes: FastifyPluginAsync = async (app) => {
           );
         }
         write(': ping\n\n');
-        await look();
+        // Armed before the look: a slow look (Meta's settings, a stalled query) must not
+        // delay the next ping, or the screen cuts a stream that is only slow.
         if (!closed) beat = setTimeout(() => void heartbeat(), tickMs);
+        await look();
       };
 
       const offCalls = onCallsChanged(() => void look());
       const offEnded = onSessionsEnded((ended) => {
         if (
           ('sessionId' in ended && ended.sessionId === sessionId) ||
-          ('employeeId' in ended && ended.employeeId === actor.employeeId)
+          ('employeeId' in ended && ended.employeeId === employeeId)
         )
           end('session_ended');
       });

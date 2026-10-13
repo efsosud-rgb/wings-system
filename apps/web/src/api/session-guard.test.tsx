@@ -1,13 +1,14 @@
 import type { SessionUser } from '@wings/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProtectedRoute } from '../components/ProtectedRoute.js';
+import { useLogout } from './auth.js';
 import { api } from './client.js';
 import { fakeEventStream, ringingEvent } from './fake-event-stream.js';
-import { clearSessionExpired, onUnauthorized } from './session-expiry.js';
+import { clearSessionExpired, onUnauthorized, sessionExpiredInThisTab } from './session-expiry.js';
 import { installSessionGuard } from './session-guard.js';
 import { useRingingCalls } from './whatsapp.js';
 
@@ -65,6 +66,13 @@ function stubServer() {
         return json(401, { error: 'session_expired', message: 'Sessão expirada' });
       }
       if (path === '/auth/me') return json(200, { user });
+      if (path === '/auth/logout') {
+        // The server ends the session, tells the open stream, and only then answers.
+        server.alive = false;
+        server.stream?.push('event: session_ended\ndata: {}\n\n');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return json(200, { ok: true });
+      }
       if (path === '/whatsapp/calls/stream') {
         server.stream = fakeEventStream(init?.signal);
         server.stream.push(ringingEvent({ calling: true, calls: [] }));
@@ -82,6 +90,13 @@ const callsTo = (path: string) => server.calls.filter((call) => call.path === pa
 function RingingShell() {
   const ringing = useRingingCalls(true);
   return <p>{ringing.data?.calling ? 'linha de ligação ativa' : 'sem dados'}</p>;
+}
+
+/** A shell with the ringing line and the "Sair" button. */
+function LogoutShell() {
+  useRingingCalls(true);
+  const logout = useLogout();
+  return <button onClick={() => logout.mutate()}>Sair</button>;
 }
 
 /** A shell with no periodic query at all. */
@@ -224,6 +239,26 @@ describe('an open tab whose session died', () => {
     });
 
     expect(loginState().expired).toBe(true);
+  });
+});
+
+describe('a person who signs out with the stream open', () => {
+  it('is not told the session expired, though the stream hears of the end first', async () => {
+    server.streamOpen = true;
+    renderTab(<LogoutShell />, queryClient);
+    await settle(10);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Sair'));
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    await settle(100); // reading the answer takes a few more turns of the fake clock
+
+    expect(loginState().expired).toBeUndefined();
+    expect(sessionExpiredInThisTab()).toBe(false);
+    const total = server.calls.length;
+    await settle(8 * 60 * 60 * 1000);
+    expect(server.calls).toHaveLength(total);
   });
 });
 

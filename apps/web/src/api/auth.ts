@@ -1,7 +1,13 @@
 import type { PermissionKey, Scope, SessionUser } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from './client.js';
-import { clearSessionExpired, forgetSignedIn, rememberSignedIn } from './session-expiry.js';
+import {
+  beginSignOut,
+  clearSessionExpired,
+  endSignOut,
+  forgetSignedIn,
+  rememberSignedIn,
+} from './session-expiry.js';
 
 export const sessionKey = ['session'] as const;
 
@@ -46,7 +52,18 @@ export function useLogin() {
 export function useLogout() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => api.post<{ ok: true }>('/auth/logout'),
+    mutationFn: async () => {
+      beginSignOut();
+      try {
+        return await api.post<{ ok: true }>('/auth/logout');
+      } catch (error) {
+        // Already signed out (the session ended first): that is what "Sair" asked for.
+        if (error instanceof ApiError && error.status === 401) return { ok: true as const };
+        throw error;
+      } finally {
+        endSignOut();
+      }
+    },
     onSuccess: () => {
       // Before the cache changes: the route gate reads this flag the moment the session is gone.
       forgetSignedIn();

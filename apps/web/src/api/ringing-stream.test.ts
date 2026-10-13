@@ -2,7 +2,7 @@ import type { WaCall, WaRingingSnapshot } from '@wings/shared';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { fakeEventStream, ringingEvent } from './fake-event-stream.js';
 import { createEventParser, openRingingStream } from './ringing-stream.js';
-import { onUnauthorized } from './session-expiry.js';
+import { beginSignOut, endSignOut, onUnauthorized } from './session-expiry.js';
 
 /**
  * The browser end of `GET /whatsapp/calls/stream`: what it asks, what it does with
@@ -150,6 +150,23 @@ describe('when the session is gone', () => {
     stream.push('event: session_ended\ndata: {}\n\n');
     await settle(10);
     expect(guard).toHaveBeenCalledTimes(1);
+    await settle(10 * 60_000);
+    expect(connections).toHaveLength(1);
+  });
+});
+
+describe('when the person is signing out', () => {
+  it('does not take the session ending for an expiry, and still closes', async () => {
+    const guard = vi.fn();
+    onUnauthorized(guard);
+    open();
+    await settle(10);
+    beginSignOut();
+    connections[0]!.stream!.push(ringingEvent(none));
+    connections[0]!.stream!.push('event: session_ended\ndata: {}\n\n');
+    await settle(10);
+    endSignOut();
+    expect(guard).not.toHaveBeenCalled();
     await settle(10 * 60_000);
     expect(connections).toHaveLength(1);
   });

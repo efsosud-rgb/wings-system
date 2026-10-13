@@ -23,6 +23,8 @@ export function onUnauthorized(next: Listener | null): void {
 
 /** Called by the HTTP client for every 401 of a signed-in request. */
 export function reportUnauthorized(): void {
+  // The person asked to leave: every 401 until the answer comes is part of that.
+  if (signingOut) return;
   listener?.();
 }
 
@@ -33,6 +35,24 @@ export function markSessionExpired(): void {
 
 export function clearSessionExpired(): void {
   expiredByRequest = false;
+}
+
+// --- a sign-out the person asked for -------------------------------------------------------
+//
+// The server ends the session before it answers the logout, and the ringing stream is told
+// at that moment: its `session_ended` can reach the tab before the answer to "Sair" does, and
+// the stream closing makes the slow ask run at once and meet a 401. That is the person
+// leaving, not a session that expired, and must not leave the notice.
+
+let signingOut = false;
+
+/** The person asked to sign out: the request is on its way. */
+export function beginSignOut(): void {
+  signingOut = true;
+}
+
+export function endSignOut(): void {
+  signingOut = false;
 }
 
 /** A page-level read, safe to call while rendering. */

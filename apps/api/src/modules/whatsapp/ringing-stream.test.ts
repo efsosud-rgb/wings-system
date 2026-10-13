@@ -47,10 +47,8 @@ const whatsappFetch = (async (input: string | URL | Request) => {
   return json({ error: { code: 100 } }, 400);
 }) as typeof fetch;
 
-beforeAll(async () => {
-  harness = await createTestDatabase();
-  db = harness.db;
-  app = await buildApp({
+const makeApp = () =>
+  buildApp({
     env: loadEnv({
       NODE_ENV: 'test',
       DATABASE_URL: harness.url,
@@ -67,6 +65,11 @@ beforeAll(async () => {
     db,
     whatsappFetch,
   });
+
+beforeAll(async () => {
+  harness = await createTestDatabase();
+  db = harness.db;
+  app = await makeApp();
 }, 60_000);
 
 afterAll(async () => {
@@ -183,9 +186,13 @@ function parseSse(text: string): Sse[] {
 }
 
 /** Opens the stream and reads it as it is written. */
-async function openStream(cookies: Record<string, string>, headers: Record<string, string> = {}) {
+async function openStream(
+  cookies: Record<string, string>,
+  headers: Record<string, string> = {},
+  server: FastifyInstance = app,
+) {
   const controller = new AbortController();
-  const response = await app.inject({
+  const response = await server.inject({
     method: 'GET',
     url: '/whatsapp/calls/stream',
     cookies,
@@ -422,5 +429,42 @@ describe('the session', () => {
     await quiet(50);
     const again = await openStream(owner.cookies);
     await again.until(() => again.ringing().length === 1);
+  });
+});
+
+describe('the connection', () => {
+  it('keeps no place for a client that hung up while its session was being checked', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    for (let i = 0; i < 10; i++) {
+      const hangUp = new AbortController();
+      const pending = app
+        .inject({
+          method: 'GET',
+          url: '/whatsapp/calls/stream',
+          cookies: owner.cookies,
+          payloadAsStream: true,
+          signal: hangUp.signal,
+        })
+        .catch(() => undefined);
+      hangUp.abort();
+      await pending;
+    }
+    await quiet(100);
+    // Ten hang-ups left nothing behind: eight streams still fit.
+    for (let i = 0; i < 8; i++) {
+      const stream = await openStream(owner.cookies);
+      await stream.until(() => stream.ringing().length === 1);
+    }
+  });
+
+  it('is ended when the server closes, instead of holding the shutdown', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const other = await makeApp();
+    const stream = await openStream(owner.cookies, {}, other);
+    await stream.until(() => stream.ringing().length === 1);
+    await other.close();
+    await stream.until(() => stream.ended());
+    // A shutdown is not a session ending: the screen is told nothing, and comes back.
+    expect(stream.events().some((e) => 'event' in e && e.event === 'session_ended')).toBe(false);
   });
 });
