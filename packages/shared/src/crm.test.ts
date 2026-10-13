@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   addBusinessHours,
+  endOfBusinessDay,
   isBusinessInstant,
   isCloseForecastOverdue,
   isoDateSchema,
@@ -40,6 +41,32 @@ describe('business hours (Mon–Fri, 9h–18h São Paulo)', () => {
     expect(isBusinessInstant(sp('2026-10-06T08:59:59'))).toBe(false);
     expect(isBusinessInstant(sp('2026-10-10T12:00:00'))).toBe(false); // Saturday
     expect(isBusinessInstant(sp('2026-10-11T12:00:00'))).toBe(false); // Sunday
+  });
+});
+
+describe('end of the business day (when an overdue first contact reaches the manager)', () => {
+  it('a deadline during the day closes that same day at 18h', () => {
+    expect(endOfBusinessDay(sp('2026-10-06T11:00:00'))).toEqual(sp('2026-10-06T18:00:00'));
+    expect(endOfBusinessDay(sp('2026-10-06T09:00:00'))).toEqual(sp('2026-10-06T18:00:00'));
+    expect(endOfBusinessDay(sp('2026-10-06T17:59:30'))).toEqual(sp('2026-10-06T18:00:00'));
+  });
+  it('a deadline on the 18h close itself, or after it, closes the next workday', () => {
+    expect(endOfBusinessDay(sp('2026-10-06T18:00:00'))).toEqual(sp('2026-10-07T18:00:00'));
+    expect(endOfBusinessDay(sp('2026-10-06T22:00:00'))).toEqual(sp('2026-10-07T18:00:00'));
+  });
+  it('a deadline before 9h counts the day it falls on', () => {
+    expect(endOfBusinessDay(sp('2026-10-07T07:15:00'))).toEqual(sp('2026-10-07T18:00:00'));
+  });
+  it('skips the weekend: Friday evening and Saturday close on Monday', () => {
+    expect(endOfBusinessDay(sp('2026-10-09T18:00:00'))).toEqual(sp('2026-10-12T18:00:00'));
+    expect(endOfBusinessDay(sp('2026-10-10T12:00:00'))).toEqual(sp('2026-10-12T18:00:00'));
+    expect(endOfBusinessDay(sp('2026-10-11T23:59:00'))).toEqual(sp('2026-10-12T18:00:00'));
+  });
+  it('is always a workday close, strictly after its input', () => {
+    // A lead at Friday 17h30 is due Monday 9h30; the manager hears at Monday 18h.
+    const due = addBusinessHours(sp('2026-10-09T17:30:00'), 1);
+    expect(endOfBusinessDay(due)).toEqual(sp('2026-10-12T18:00:00'));
+    expect(endOfBusinessDay(due).getTime()).toBeGreaterThan(due.getTime());
   });
 });
 

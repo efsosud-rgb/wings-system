@@ -228,6 +228,15 @@ const schema = z.object({
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',
   ),
+  /**
+   * E-mail copy of the manager's notice (`first_contact_escalated`): the first contact still unattended at the end
+   * of the business day, to the sector's managers and Diretoria. A switch of its own, off when unset, because it
+   * reaches people the owner's e-mail does not; turn it on only with Eric's OK (docs/crm/avisos-por-email.md).
+   */
+  CRM_ESCALATION_EMAIL_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
   CRM_RD_FOLLOW_ENABLED: optionalString.refine(
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',

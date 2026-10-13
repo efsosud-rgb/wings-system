@@ -32,20 +32,45 @@ Cada regra pode ter atraso (minutos, horas ou dias após a entrada).
 - Um passo que falha fica `failed` e nunca é repetido sozinho; um processador interrompido
   deixa `running` que vira `failed (interrupted)` depois de 15 minutos.
 
-## Alertas de prazo e desvio (só no painel)
+## Alertas de prazo e desvio (no painel e no sino)
 
 Mesmo ciclo, depois das regras (`crm-alerts.ts`). Avisos em `crm_notifications`, tela
-`/crm-vendas/avisos`, para o **vendedor, o gerente do setor dele e a Diretoria**:
+`/crm-vendas/avisos` e sino da barra de cima (avisos não lidos, antes das tarefas do dia). A
+**tarefa atrasada** e a **negociação parada** vão para o **vendedor, o gerente do setor dele e a
+Diretoria**; o primeiro contato sobe em dois passos (abaixo).
 
-- **primeiro contato atrasado**: a tarefa `first_contact` passou do prazo (1 hora útil);
+- **primeiro contato atrasado**: ver "Primeiro contato em dois passos";
 - **tarefa atrasada**: qualquer outra tarefa aberta vencida;
 - **negociação parada**: mais de N dias na etapa (N por etapa na tela de regras; padrão
   `CRM_STAGE_STUCK_DAYS` = 7; 0 desliga).
 
-Um aviso por condição e pessoa (`dedupe_key`: não repete a cada ciclo; novo prazo = novo aviso).
-O texto diz o problema, nunca o nome do lead. Negociação ganha ou perdida não gera aviso.
-Sem WhatsApp. Por e-mail, só o dono e só dois avisos (lead novo e 1º contato atrasado):
-`docs/crm/avisos-por-email.md`.
+Um aviso por condição e pessoa (`dedupe_key`: não repete a cada ciclo; novo prazo = novo aviso,
+exceto no primeiro contato). O texto diz o problema, nunca o nome do lead. Negociação ganha ou
+perdida não gera aviso. Sem WhatsApp. Por e-mail, só o que está em `docs/crm/avisos-por-email.md`
+(desligado até o Eric ligar).
+
+### Primeiro contato em dois passos (Eric, 13/10/2026)
+
+A regra é uma só (`firstContactOverdueSql`, em `crm.ts`) e vale para o aviso, para o número e para a
+lista: negociação **aberta**, ainda na **etapa de entrada** do funil ("Sem contato" na Formatação,
+"Novo Contato" na Expansão, "Novo contato" na Consultoria), com a tarefa `first_contact` **aberta e
+vencida** (1 hora útil: seg–sex 9h–18h de São Paulo; não há calendário de feriados, só fins de
+semana), entre as que contam desde `CRM_TRACKING_START`. Tirar a negociação da etapa de entrada,
+concluir a tarefa, ganhar ou perder encerra a condição.
+
+1. **Passou da 1 hora útil**: aviso `first_contact_overdue` ao **vendedor dono**.
+2. **Continua sem contato no fim do dia útil** (18h do dia do prazo; prazo às 18h em ponto ou fora
+   do expediente fecha no dia útil seguinte, `endOfBusinessDay` em `packages/shared`): aviso
+   `first_contact_escalated` ao **gerente do setor** do vendedor (papel que vê todos os leads com a
+   marca de gerente de setor) **e à Diretoria**, como já recebiam; o texto cita a etapa e o primeiro
+   nome do vendedor.
+
+Um aviso por **negociação, etapa e pessoa** (`first_contact:<passo>:<lead>:<etapa>:<pessoa>`): mudar o
+prazo da tarefa não avisa de novo. Quem já recebeu o aviso antigo por tarefa (chave
+`first_contact_overdue:…`) não recebe outro. Em **Negociações**, o contador "N 1º contato atrasado"
+abre a lista dessas negociações (`GET /leads?firstContactOverdue=1`, mesmo conjunto do número);
+`GET /leads/board/counters` traz `firstContactOverdue`. O log do ciclo traz só contagens
+(`firstContact: { overdue, escalated }`).
 
 ## E-mail
 

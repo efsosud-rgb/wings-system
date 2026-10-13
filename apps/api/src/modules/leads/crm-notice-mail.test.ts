@@ -297,14 +297,22 @@ describe('sendPendingNoticeMails: the overdue first contact', () => {
     const { saturday, monday } = weekendAndMonday();
     const written = await runCrmAlerts(db, { stageStuckDays: 0 }, saturday);
     expect(written.written).toBeGreaterThanOrEqual(2);
+    // The seller is the only one told of the first step; the manager hears at the end of the day (own notice kind).
     const overdue = await noticesOf(born.lead.id, 'first_contact_overdue');
-    expect(overdue.find((n) => n.recipientEmployeeId === owner.id)?.emailState).toBe('pending');
-    expect(overdue.find((n) => n.recipientEmployeeId === manager.id)?.emailState).toBe('none');
-    // The arrival e-mail is not the subject here.
+    expect(overdue.map((n) => n.recipientEmployeeId)).toEqual([owner.id]);
+    expect(overdue[0]?.emailState).toBe('pending');
+    const escalated = await noticesOf(born.lead.id, 'first_contact_escalated');
+    expect(escalated.find((n) => n.recipientEmployeeId === manager.id)?.emailState).toBe('pending');
+    // The arrival and the managers' e-mails are not the subject here.
     await db
       .update(crmNotifications)
       .set({ emailState: 'none' })
-      .where(and(eq(crmNotifications.leadId, born.lead.id), eq(crmNotifications.kind, 'new_lead')));
+      .where(
+        and(
+          eq(crmNotifications.leadId, born.lead.id),
+          ne(crmNotifications.kind, 'first_contact_overdue'),
+        ),
+      );
     await db
       .update(crmNotifications)
       .set({ createdAt: saturday })
@@ -356,6 +364,106 @@ describe('sendPendingNoticeMails: the overdue first contact', () => {
       )?.emailError,
     ).toBe('contact_made');
     expect(sent).toHaveLength(1);
+  });
+});
+
+describe('sendPendingNoticeMails: the manager at the end of the day', () => {
+  it('has a switch of its own, goes to the manager with the seller named, and drops once the deal leaves the entry stage', async () => {
+    const owner = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
+    await db
+      .update(employees)
+      .set({ fullName: 'Vendedora Primeira Silva' })
+      .where(eq(employees.id, owner.id));
+    const manager = await createEmployee(db, {
+      role: 'gerente_comercial',
+      sector: 'comercial',
+      isSectorManager: true,
+    });
+    const born = await arrive(owner.id);
+    await db
+      .update(leadTasks)
+      .set({ doneAt: new Date() })
+      .where(ne(leadTasks.leadId, born.lead.id));
+    const { saturday, monday } = weekendAndMonday();
+    await runCrmAlerts(db, { stageStuckDays: 0 }, saturday);
+    const mine = () =>
+      db
+        .select()
+        .from(crmNotifications)
+        .where(
+          and(
+            eq(crmNotifications.leadId, born.lead.id),
+            eq(crmNotifications.kind, 'first_contact_escalated'),
+            eq(crmNotifications.recipientEmployeeId, manager.id),
+          ),
+        );
+    expect((await mine())[0]?.emailState).toBe('pending');
+    // Only the manager's row is under test: the others of this deal are set aside.
+    await db
+      .update(crmNotifications)
+      .set({ emailState: 'none' })
+      .where(
+        and(
+          eq(crmNotifications.leadId, born.lead.id),
+          ne(crmNotifications.recipientEmployeeId, manager.id),
+        ),
+      );
+    await db
+      .update(crmNotifications)
+      .set({ createdAt: saturday })
+      .where(eq(crmNotifications.leadId, born.lead.id));
+
+    // The owner's switch does not open the manager's mail: his own is off, so it is marked skipped, not kept.
+    const { mailer, sent } = fakeMailer();
+    expect(await sendPendingNoticeMails(db, depsOf(mailer, true), monday)).toMatchObject({
+      sent: 0,
+      skipped: 1,
+    });
+    expect((await mine())[0]).toMatchObject({ emailState: 'skipped', emailError: 'disabled' });
+
+    // With its own switch on: to the manager, naming the seller by first name, with the link.
+    await db
+      .update(crmNotifications)
+      .set({ emailState: 'pending', emailError: null })
+      .where(eq(crmNotifications.id, (await mine())[0]!.id));
+    expect(
+      await sendPendingNoticeMails(db, { ...depsOf(mailer), escalationEnabled: true }, monday),
+    ).toMatchObject({ sent: 1, skipped: 0 });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.to).toBe(manager.email);
+    expect(sent[0]?.subject).toBe('Primeiro contato sem registro: Fulana Teste da Silva');
+    expect(sent[0]?.text).toContain('Vendedor: Vendedora');
+    expect(sent[0]?.text).not.toContain('Primeira Silva');
+    expect(sent[0]?.text).toContain(dealUrlOf(BASE_URL, born.lead.id));
+
+    // The deal left the entry stage meanwhile (someone made contact): nothing to say.
+    await db.update(leads).set({ stage: 'Tentando contato' }).where(eq(leads.id, born.lead.id));
+    await db
+      .update(crmNotifications)
+      .set({ emailState: 'pending' })
+      .where(eq(crmNotifications.id, (await mine())[0]!.id));
+    expect(
+      await sendPendingNoticeMails(db, { ...depsOf(mailer), escalationEnabled: true }, monday),
+    ).toMatchObject({ sent: 0, skipped: 1 });
+    expect((await mine())[0]?.emailError).toBe('contact_made');
+    expect(sent).toHaveLength(1);
+  });
+
+  it('writes the manager e-mail with the lead and origin, never a phone or an address', () => {
+    const mail = noticeMailOf({
+      kind: 'first_contact_escalated',
+      ownerName: 'Gerente Geral',
+      sellerName: 'Fernando Silva',
+      leadName: 'Fulana Teste da Silva',
+      origin: 'Meta Lead Ads — Form 5 perguntas',
+      firstContactDueAt: null,
+      url: dealUrlOf(BASE_URL, 'abc'),
+    });
+    expect(mail.subject).toBe('Primeiro contato sem registro: Fulana Teste da Silva');
+    expect(mail.text).toContain('Olá, Gerente.');
+    expect(mail.text).toContain('fim do dia útil. Vendedor: Fernando.');
+    expect(mail.text).toContain('https://staging.example.test/crm-vendas/negociacoes/abc');
+    expect(mail.text).not.toMatch(/\d{4}-\d{4}|@|Silva\.|Geral/);
   });
 });
 

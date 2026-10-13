@@ -1,12 +1,14 @@
 # Aviso por e-mail ao dono da negociação
 
 Ordem do Eric, 09/10/2026 17:04. Dois avisos do painel (`crm_notifications`,
-`docs/crm/automacoes.md`) também saem por e-mail, **só para o dono da negociação**:
+`docs/crm/automacoes.md`) também saem por e-mail, **só para o dono da negociação** (e, desde
+13/10/2026, um terceiro para o gerente, com chave própria — ver "Ligar"):
 
 | aviso | assunto | quando sai |
 | --- | --- | --- |
 | `new_lead` (lead novo com dono pelo rodízio) | `Novo lead para você: <nome>` | na hora, qualquer horário: a chegada dispara uma passada do envio (`onLeadArrivedKick`), sem esperar o ciclo |
 | `first_contact_overdue` (1ª hora útil vencida sem contato) | `Primeiro contato atrasado: <nome>` | no ciclo do CRM, **só em horário útil** (seg–sex 9h–18h, Brasília): escrito sexta à noite, vai segunda às 9h |
+| `first_contact_escalated` (1º contato ainda sem registro no fim do dia útil, para o **gerente do setor e a Diretoria**) | `Primeiro contato sem registro: <nome>` | no ciclo, só em horário útil; **desligado** até `CRM_ESCALATION_EMAIL_ENABLED=true` |
 
 O texto é curto, em português, e traz **só o nome do lead, a origem (plataforma — campanha,
 quando houver), o prazo do 1º contato e o link da ficha** (`APP_BASE_URL/crm-vendas/negociacoes/<id>`).
@@ -15,9 +17,10 @@ aviso e o log guardam estado e código, nunca o endereço nem o texto do erro.
 
 ## Como funciona (`crm-notice-mail.ts`)
 
-- A linha do aviso é a fila: `email_state` = `none` (sem e-mail: gerente, Diretoria, outros tipos),
+- A linha do aviso é a fila: `email_state` = `none` (sem e-mail: os outros tipos de aviso),
   `pending`, `sending`, `sent`, `skipped` (motivo em `email_error`) ou `failed` (código, ex.
-  `Error:550`). `announceLeadArrival` e `runCrmAlerts` gravam `pending` só na linha do dono.
+  `Error:550`). `announceLeadArrival` e `runCrmAlerts` gravam `pending` na linha do dono e, no passo do gerente
+  (`first_contact_escalated`), nas linhas dos gerentes e da Diretoria.
 - `sendPendingNoticeMails` roda no fim de cada ciclo (`runCrmCycle`, a cada `CRM_AUTOMATIONS_CRON`
   minutos) e logo após uma chegada. Reivindica até 50 linhas com `for update skip locked`
   (`sending`); uma reivindicação esquecida por queda volta a `pending` depois de 15 min.
@@ -31,7 +34,11 @@ aviso e o log guardam estado e código, nunca o endereço nem o texto do erro.
 
 ## Ligar
 
-`CRM_NOTICE_EMAIL_ENABLED=true` no ambiente da API (desligado quando ausente). Com a variável
+`CRM_NOTICE_EMAIL_ENABLED=true` no ambiente da API (desligado quando ausente). O e-mail do gerente
+(`first_contact_escalated`) tem **variável própria**, `CRM_ESCALATION_EMAIL_ENABLED=true`, também
+desligada quando ausente: ligar a primeira não liga a segunda, porque ela alcança gente que o
+e-mail do dono não alcança. Os dois e-mails de atraso só saem em horário útil, e são pulados
+(`contact_made`) quando a tarefa foi concluída ou a negociação saiu da etapa de entrada. Com a variável
 desligada os avisos continuam no painel e a cópia por e-mail é marcada `skipped: disabled` — não
 fica guardada para sair depois. Antes de ligar num ambiente com gente de verdade: confirmar com o
 Eric (ordem de 09/10: nenhum e-mail real à equipe sem ele saber).

@@ -1,7 +1,8 @@
-import { and, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { endOfBusinessDay } from '@wings/shared';
+import { and, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { LEAD_ADMIN_ROLE_KEYS } from './access.js';
-import { trackedTaskSql } from './crm.js';
+import { firstContactOverdueSql, LEADS_ID, trackedTaskSql } from './crm.js';
 import {
   crmNotifications,
   crmStageLimits,
@@ -12,14 +13,21 @@ import {
 } from '../../db/schema/index.js';
 
 /**
- * Deadline and deviation alerts of the CRM, to the panel only (no WhatsApp, no
- * e-mail yet): a first contact past its 1-business-hour SLA, any other open
- * task past its due time, a deal sitting in a stage beyond its limit. They go to
- * the deal's seller, the manager of the seller's sector and Diretoria. A
- * notice states the kind of problem and nothing about the person: the panel
- * links to the deal. One notice per condition and person (`dedupe_key`), so a
- * pass every five minutes never repeats it; a new due date is a new condition.
- * Detection only reads; the one write is the notice.
+ * Deadline and deviation alerts of the CRM, to the panel (no WhatsApp; the
+ * e-mail copy is crm-notice-mail.ts): a first contact past its 1-business-hour
+ * SLA, any other open task past its due time, a deal sitting in a stage beyond
+ * its limit. The last two go to the deal's seller, the manager of the seller's
+ * sector and Diretoria. A notice states the kind of problem and nothing about
+ * the person: the panel links to the deal. One notice per condition and person
+ * (`dedupe_key`), so a pass every five minutes never repeats it; a new due date
+ * is a new condition. Detection only reads; the one write is the notice.
+ *
+ * The first contact climbs in two steps (Eric, 13/10/2026), one notice per deal,
+ * stage and person, whatever happens to the due date afterwards:
+ *   1. the 1 business hour passes with the deal still in the entry stage
+ *      ("Sem contato", `firstContactOverdueSql`): the seller hears of it;
+ *   2. it is still there at the end of that business day (18h): the managers of
+ *      the seller's sector and Diretoria hear of it too (`first_contact_escalated`).
  */
 
 export const DEFAULT_STAGE_STUCK_DAYS = 7;
@@ -28,7 +36,7 @@ export interface AlertConfig {
   stageStuckDays: number;
 }
 
-type Kind = 'first_contact_overdue' | 'task_overdue' | 'stage_stuck';
+type Kind = 'task_overdue' | 'stage_stuck';
 interface Finding {
   kind: Kind;
   leadId: string;
@@ -46,32 +54,33 @@ async function findings(db: Database, now: Date, config: AlertConfig): Promise<F
   const overdue = await db
     .select({
       id: leadTasks.id,
-      kind: leadTasks.kind,
       title: leadTasks.title,
       dueAt: leadTasks.dueAt,
       leadId: leadTasks.leadId,
-      assignee: leadTasks.assigneeEmployeeId,
       owner: leads.ownerEmployeeId,
     })
     .from(leadTasks)
     .innerJoin(leads, eq(leads.id, leadTasks.leadId))
-    // A first-contact task of RD history (entered before the start of use) raises no alert.
+    // The first contact climbs in steps of its own (`firstContactCases`).
     .where(
-      and(isNull(leadTasks.doneAt), lt(leadTasks.dueAt, now), isNull(leads.won), trackedTaskSql()),
+      and(
+        isNull(leadTasks.doneAt),
+        lt(leadTasks.dueAt, now),
+        isNull(leads.won),
+        ne(leadTasks.kind, 'first_contact'),
+        trackedTaskSql(),
+      ),
     )
     .limit(MAX_FINDINGS);
   for (const task of overdue) {
-    const first = task.kind === 'first_contact';
     found.push({
-      kind: first ? 'first_contact_overdue' : 'task_overdue',
+      kind: 'task_overdue',
       leadId: task.leadId,
       // The lead's owner hears of it, never an assignee who is not the owner (the title may name people).
       ownerEmployeeId: task.owner,
       occurrence: task.dueAt.toISOString(),
       entityId: task.id,
-      message: first
-        ? 'Primeiro contato atrasado: passou da 1 hora útil.'
-        : `Tarefa atrasada: ${task.title}`,
+      message: `Tarefa atrasada: ${task.title}`,
     });
   }
   const limits = new Map(
@@ -147,14 +156,126 @@ async function recipientsOf(db: Database, ownerEmployeeId: string | null): Promi
   return [...people];
 }
 
+const firstNameOf = (fullName: string | null) => (fullName ?? '').trim().split(/\s+/)[0] ?? '';
+
+/** A deal past its first-contact deadline in the entry stage, with the earliest open deadline. */
+interface FirstContactCase {
+  leadId: string;
+  ownerEmployeeId: string | null;
+  stageId: string | null;
+  stage: string | null;
+  dueAt: Date;
+}
+
+async function firstContactCases(db: Database, now: Date): Promise<FirstContactCase[]> {
+  const rows = await db
+    .select({
+      leadId: leads.id,
+      ownerEmployeeId: leads.ownerEmployeeId,
+      stageId: leads.stageId,
+      stage: leads.stage,
+      dueAt: sql<string>`(select to_char(min(lead_tasks.due_at) at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+        from lead_tasks
+       where lead_tasks.lead_id = ${LEADS_ID} and lead_tasks.kind = 'first_contact' and lead_tasks.done_at is null)`,
+    })
+    .from(leads)
+    .where(firstContactOverdueSql(now))
+    .limit(MAX_FINDINGS);
+  return rows.map((row) => ({ ...row, dueAt: new Date(row.dueAt) }));
+}
+
+/**
+ * The notices of the first contact, in two steps. The seller is told as soon as the deadline passes; the
+ * managers of the seller's sector and Diretoria only when the deal is still unattended at the end of that
+ * business day. The key holds the deal and its stage, not the deadline: moving the deadline never tells
+ * anyone twice. A person who already got the earlier per-task notice (keys `first_contact_overdue:…`) is not told again.
+ */
+async function firstContactRows(
+  db: Database,
+  now: Date,
+): Promise<(typeof crmNotifications.$inferInsert)[]> {
+  const cases = await firstContactCases(db, now);
+  if (cases.length === 0) return [];
+  const ownerIds = [
+    ...new Set(cases.flatMap((c) => (c.ownerEmployeeId ? [c.ownerEmployeeId] : []))),
+  ];
+  const sellers = new Map(
+    (ownerIds.length === 0
+      ? []
+      : await db
+          .select({ id: employees.id, fullName: employees.fullName })
+          .from(employees)
+          .where(inArray(employees.id, ownerIds))
+    ).map((row) => [row.id, firstNameOf(row.fullName)] as const),
+  );
+  const told = new Set(
+    (
+      await db
+        .select({ leadId: crmNotifications.leadId, person: crmNotifications.recipientEmployeeId })
+        .from(crmNotifications)
+        .where(
+          and(
+            eq(crmNotifications.kind, 'first_contact_overdue'),
+            sql`${crmNotifications.dedupeKey} like 'first_contact_overdue:%'`,
+            inArray(
+              crmNotifications.leadId,
+              cases.map((c) => c.leadId),
+            ),
+          ),
+        )
+    ).map((row) => `${row.leadId}:${row.person}`),
+  );
+  const cache = new Map<string, string[]>();
+  const rows: (typeof crmNotifications.$inferInsert)[] = [];
+  for (const item of cases) {
+    const cacheKey = item.ownerEmployeeId ?? '-';
+    let who = cache.get(cacheKey);
+    if (!who) {
+      who = await recipientsOf(db, item.ownerEmployeeId);
+      cache.set(cacheKey, who);
+    }
+    const add = (kind: string, tier: string, person: string, message: string) => {
+      if (told.has(`${item.leadId}:${person}`)) return;
+      rows.push({
+        recipientEmployeeId: person,
+        leadId: item.leadId,
+        kind,
+        message,
+        dedupeKey: `first_contact:${tier}:${item.leadId}:${item.stageId ?? 'none'}:${person}`,
+        // Both are also e-mailed when their own switch is on (crm-notice-mail.ts); off, the copy is marked skipped.
+        emailState: 'pending',
+      });
+    };
+    if (item.ownerEmployeeId && who.includes(item.ownerEmployeeId))
+      add(
+        'first_contact_overdue',
+        'owner',
+        item.ownerEmployeeId,
+        'Primeiro contato atrasado: passou da 1 hora útil.',
+      );
+    if (now.getTime() < endOfBusinessDay(item.dueAt).getTime()) continue;
+    const seller = sellers.get(item.ownerEmployeeId ?? '') || '';
+    const message = `Primeiro contato sem registro até o fim do dia útil: a negociação segue em "${item.stage ?? 'Sem contato'}"${seller ? ` (vendedor: ${seller})` : ''}.`;
+    for (const person of who)
+      if (person !== item.ownerEmployeeId)
+        add('first_contact_escalated', 'manager', person, message);
+  }
+  return rows;
+}
+
+export interface AlertsResult {
+  written: number;
+  /** How many of the written notices are the two steps of the first contact (counts only, for the log). */
+  firstContact: { overdue: number; escalated: number };
+}
+
 /** One pass: writes a notice for every condition not yet noticed. Returns how many it wrote. */
 export async function runCrmAlerts(
   db: Database,
   config: AlertConfig = { stageStuckDays: DEFAULT_STAGE_STUCK_DAYS },
   now = new Date(),
-): Promise<{ written: number }> {
+): Promise<AlertsResult> {
   const items = await findings(db, now, config);
-  if (items.length === 0) return { written: 0 };
   const cache = new Map<string, string[]>();
   const rows: (typeof crmNotifications.$inferInsert)[] = [];
   for (const item of items) {
@@ -171,23 +292,24 @@ export async function runCrmAlerts(
         kind: item.kind,
         message: item.message,
         dedupeKey: `${item.kind}:${item.entityId}:${item.occurrence}:${person}`,
-        // The overdue first contact is also e-mailed, to the owner alone (crm-notice-mail.ts).
-        emailState:
-          item.kind === 'first_contact_overdue' && person === item.ownerEmployeeId
-            ? 'pending'
-            : 'none',
+        emailState: 'none',
       });
   }
-  let written = 0;
+  rows.push(...(await firstContactRows(db, now)));
+  const result: AlertsResult = { written: 0, firstContact: { overdue: 0, escalated: 0 } };
   for (let i = 0; i < rows.length; i += 200) {
     const done = await db
       .insert(crmNotifications)
       .values(rows.slice(i, i + 200))
       .onConflictDoNothing()
-      .returning({ id: crmNotifications.id });
-    written += done.length;
+      .returning({ kind: crmNotifications.kind });
+    result.written += done.length;
+    for (const row of done) {
+      if (row.kind === 'first_contact_overdue') result.firstContact.overdue += 1;
+      if (row.kind === 'first_contact_escalated') result.firstContact.escalated += 1;
+    }
   }
-  return { written };
+  return result;
 }
 
 /**

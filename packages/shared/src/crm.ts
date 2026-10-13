@@ -400,6 +400,27 @@ export function addBusinessHours(from: Date, hours: number): Date {
   return cursor;
 }
 
+/**
+ * The close of working hours (18h São Paulo, on a workday) that comes strictly
+ * after `from`: the end of the business day an overdue first contact is judged
+ * by. A deadline at 11h closes that same day at 18h; one that falls on the 18h
+ * close itself, or on a weekend, closes the next workday at 18h.
+ */
+export function endOfBusinessDay(from: Date): Date {
+  let cursor = new Date(from.getTime());
+  cursor.setUTCSeconds(0, 0);
+  for (let guard = 0; guard < 14; guard++) {
+    const local = localParts(cursor);
+    const minutesOfDay = local.hour * 60 + local.minute;
+    if (isWorkday(local.weekday) && minutesOfDay < BUSINESS_HOURS.end * 60) {
+      return new Date(cursor.getTime() + (BUSINESS_HOURS.end * 60 - minutesOfDay) * 60_000);
+    }
+    // Past today's close, or not a workday: look again from the next local midnight.
+    cursor = new Date(cursor.getTime() + (24 * 60 - minutesOfDay) * 60_000);
+  }
+  return cursor;
+}
+
 // --- contacts and companies (CRM núcleo) ----------------------------------------------
 
 /**
