@@ -11,7 +11,7 @@ import {
   type RoleKey,
   type SectorSlug,
 } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq, notInArray } from 'drizzle-orm';
 import { createDb, type Database } from './client.js';
 import { seedDriveTemplate, syncDriveFolders } from '../modules/drive/folders.js';
 import { brandKey } from '../modules/leads/brands.js';
@@ -265,6 +265,18 @@ export async function seed(db: Database): Promise<void> {
           set: { scope },
         });
     }
+    // A grant taken out of the matrix leaves the mirror too.
+    const granted = Object.keys(grants);
+    await db
+      .delete(rolePermissions)
+      .where(
+        granted.length > 0
+          ? and(
+              eq(rolePermissions.roleId, role.id),
+              notInArray(rolePermissions.permissionKey, granted),
+            )
+          : eq(rolePermissions.roleId, role.id),
+      );
   }
 
   // Standard company schedule: 09:00–18:00, Monday–Friday, 30 minutes tolerance.

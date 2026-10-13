@@ -81,6 +81,17 @@ describe('Diretoria has no settings or API credential access', () => {
   });
 });
 
+describe('sellers and the employee register', () => {
+  it.each(['vendedor_expansao', 'vendedor_formatacao'] as const)(
+    'gives %s no access to the register, not even their own sector',
+    (role) => {
+      const seller = actor(role, 'comercial', { id: 'emp-vend-9' });
+      expect(can(seller, 'employees.read', { sector: 'comercial' }).allowed).toBe(false);
+      expect(can(seller, 'employees.read').allowed).toBe(false);
+    },
+  );
+});
+
 describe('lead scoping', () => {
   it('lets a vendedor read only their own leads', () => {
     expect(can(vendedor, 'leads.read', { ownerEmployeeId: 'emp-vend-1' }).allowed).toBe(true);

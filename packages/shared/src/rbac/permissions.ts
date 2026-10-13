@@ -102,6 +102,12 @@ const SECTOR_STAFF: RolePermissions = {
 };
 
 /**
+ * Sellers: no employee register at all (Eric, 13/10: the register opened to the
+ * sellers on staging). They keep their own time clock and their Drive.
+ */
+const SELLER_STAFF: RolePermissions = { 'timeclock.read': 'own', ...DRIVE_STAFF };
+
+/**
  * The permission matrix. Anything not listed here is denied by default.
  *
  * Diretoria intentionally has no `settings.manage` and no
@@ -245,7 +251,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'api_credentials.manage': 'all',
   },
   vendedor_expansao: {
-    ...SECTOR_STAFF,
+    ...SELLER_STAFF,
     ...PROJECT_STAFF,
     'leads.read': 'own',
     'leads.write': 'own',
@@ -253,7 +259,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   },
   // Leads das Campanhas: only the leads RD assigns to them.
   vendedor_formatacao: {
-    ...SECTOR_STAFF,
+    ...SELLER_STAFF,
     ...PROJECT_STAFF,
     'leads.read': 'own',
     'leads.write': 'own',
