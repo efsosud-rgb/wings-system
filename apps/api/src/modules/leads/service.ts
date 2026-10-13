@@ -61,6 +61,7 @@ import {
   announceStageEntered,
   ensureFirstContactTask,
   entryStageOf,
+  firstContactOverdueSql,
   nextInRotation,
   notesOf,
   stageHistoryOf,
@@ -990,6 +991,8 @@ export interface LeadListFilter {
   owner?: string;
   outcome?: LeadOutcome;
   staleDays?: number;
+  /** Only deals past their first-contact deadline while still in the entry stage (`firstContactOverdueSql`). */
+  firstContactOverdue?: boolean;
   createdFrom?: string;
   createdTo?: string;
   activityDays?: number;
@@ -1074,6 +1077,7 @@ export function listConditions(filter: LeadListFilter) {
     conditions.push(isNull(leads.won));
     conditions.push(lt(leads.stageChangedAt, new Date(Date.now() - filter.staleDays * 86_400_000)));
   }
+  if (filter.firstContactOverdue) conditions.push(firstContactOverdueSql(new Date()));
   if (filter.q) {
     const needle = `%${filter.q.toLowerCase()}%`;
     const digits = filter.q.replace(/\D/g, '');

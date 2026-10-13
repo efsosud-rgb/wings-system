@@ -18,13 +18,28 @@ const tasks = {
     error?: unknown;
   },
 };
+const noNotices = { isSuccess: true, data: { unread: 0, notifications: [] as unknown[] } };
+const notices = {
+  current: noNotices as {
+    data?: { unread: number; notifications: unknown[] };
+    isLoading?: boolean;
+    isError?: boolean;
+    isSuccess?: boolean;
+    error?: unknown;
+  },
+};
 const refetch = vi.fn();
+const markRead = vi.fn();
 
 vi.mock('../api/auth.js', () => ({
   useSession: () => ({ data: user, isLoading: false }),
   useLogout: () => ({ mutateAsync: vi.fn(), isPending: false }),
   hasPermission: (who: SessionUser | null, permission: string) =>
     Boolean(who?.permissions[permission as keyof SessionUser['permissions']]),
+}));
+vi.mock('../api/automations.js', () => ({
+  useNotifications: () => ({ refetch, ...notices.current }),
+  useMarkNotificationsRead: () => ({ mutate: markRead }),
 }));
 vi.mock('../api/crm.js', () => ({
   useTaskList: () => ({ refetch, ...tasks.current }),
@@ -58,7 +73,9 @@ function renderBar() {
 afterEach(() => {
   cleanup();
   tasks.current = {};
+  notices.current = noNotices;
   refetch.mockReset();
+  markRead.mockReset();
 });
 
 describe('the bell in the top bar', () => {
@@ -79,6 +96,65 @@ describe('the bell in the top bar', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Tentar de novo' }));
     expect(refetch).toHaveBeenCalled();
+  });
+
+  it('shows the unread notices first, counts them with the tasks, and marks one read when opened', () => {
+    tasks.current = { isSuccess: true, data: { tasks: [] } };
+    notices.current = {
+      isSuccess: true,
+      data: {
+        unread: 2,
+        notifications: [
+          {
+            id: 'n-1',
+            kind: 'first_contact_escalated',
+            message: 'Primeiro contato sem registro até o fim do dia útil.',
+            leadId: 'l-9',
+            createdAt: new Date().toISOString(),
+            readAt: null,
+          },
+          {
+            id: 'n-2',
+            kind: 'new_lead',
+            message: 'Novo lead para você.',
+            leadId: 'l-10',
+            createdAt: new Date().toISOString(),
+            readAt: null,
+          },
+          {
+            id: 'n-3',
+            kind: 'automation',
+            message: 'Já lido.',
+            leadId: null,
+            createdAt: new Date().toISOString(),
+            readAt: new Date().toISOString(),
+          },
+        ],
+      },
+    };
+    renderBar();
+
+    const bell = screen.getByRole('button', { name: 'Avisos: 2 avisos não lidos' });
+    expect(bell.textContent).toContain('2');
+    fireEvent.click(bell);
+    const link = screen.getByRole('menuitem', { name: /Primeiro contato sem registro/ });
+    expect(link.getAttribute('href')).toBe('/crm-vendas/negociacoes/l-9');
+    expect(screen.queryByText('Já lido.')).toBeNull();
+    fireEvent.click(link);
+    expect(markRead).toHaveBeenCalledWith(['n-1']);
+  });
+
+  it('shows "—" and why when the notices could not load, even if the tasks did', () => {
+    tasks.current = { isSuccess: true, data: { tasks: [] } };
+    notices.current = { isError: true, error: new ApiError(500, {}), data: undefined };
+    renderBar();
+
+    const bell = screen.getByRole('button', { name: /^Avisos/ });
+    expect(bell.getAttribute('aria-label')).toMatch(/não foi possível carregar/);
+    expect(bell.getAttribute('aria-label')).not.toMatch(/nada para hoje/);
+    expect(bell.textContent).toContain('—');
+    fireEvent.click(bell);
+    expect(screen.getByRole('alert').textContent).toMatch(/Não foi possível carregar os avisos/);
   });
 
   it('says why when the session ended, not that nothing is due', () => {

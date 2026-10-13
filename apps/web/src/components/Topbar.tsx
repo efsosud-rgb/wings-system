@@ -11,8 +11,9 @@ import {
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { hasPermission, useLogout, useSession } from '../api/auth.js';
+import { useMarkNotificationsRead, useNotifications } from '../api/automations.js';
 import { useTaskList } from '../api/crm.js';
-import { dueLabel, isPast } from '../pages/crm/format.js';
+import { ago, dueLabel, isPast } from '../pages/crm/format.js';
 import { failureReason } from '../lib/failure.js';
 import { Icon } from './Icon.js';
 import { LoadFailure } from './LoadFailure.js';
@@ -257,27 +258,44 @@ function CreateMenu({ user }: { user: SessionUser }) {
 
 // --- bell -------------------------------------------------------------------------------
 
+/** The notices that warn of a problem (late, unattended, stuck); a new lead is news, not an alarm. */
+const ALARM_NOTICE = /overdue|escalated|stuck/;
+
 function Bell() {
   const [open, setOpen] = useState(false);
   const ref = useDismiss(open, () => setOpen(false));
   const tasks = useTaskList({ status: 'open', everyone: false });
+  const notices = useNotifications();
+  const markRead = useMarkNotificationsRead();
   const now = new Date();
   const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
   const rows = (tasks.data?.tasks ?? [])
     .filter((task) => new Date(task.dueAt).getTime() < endOfDay)
     .sort((a, b) => a.dueAt.localeCompare(b.dueAt));
   const late = rows.filter((task) => isPast(task.dueAt)).length;
+  const unreadNotices = (notices.data?.notifications ?? []).filter((item) => !item.readAt);
+  const unread = notices.data?.unread ?? 0;
+  const alarms = unreadNotices.filter((item) => ALARM_NOTICE.test(item.kind)).length;
   // A failed request is not "nothing for today": with no earlier answer the bell says
   // "—" and why. After a failed refresh the earlier answer stays, with the failure line.
-  const unavailable = tasks.isError && !tasks.data;
+  const failed =
+    tasks.isError && !tasks.data ? tasks : notices.isError && !notices.data ? notices : null;
+  const unavailable = failed !== null;
   const nothingToday = tasks.isSuccess && rows.length === 0;
-  const label = unavailable
-    ? `Avisos: não foi possível carregar (${failureReason(tasks.error)})`
-    : !tasks.data
+  const parts = [
+    unread > 0
+      ? `${unread} aviso${unread === 1 ? '' : 's'} não lido${unread === 1 ? '' : 's'}`
+      : null,
+    rows.length > 0 ? `${rows.length} tarefa${rows.length === 1 ? '' : 's'} para hoje` : null,
+  ].filter(Boolean);
+  const label = failed
+    ? `Avisos: não foi possível carregar (${failureReason(failed.error)})`
+    : !tasks.data || !notices.data
       ? 'Avisos'
-      : rows.length === 0
+      : parts.length === 0
         ? 'Avisos: nada para hoje'
-        : `Avisos: ${rows.length} tarefa${rows.length === 1 ? '' : 's'} para hoje`;
+        : `Avisos: ${parts.join(', ')}`;
+  const badge = rows.length + unread;
   return (
     <div className="topbar-item" ref={ref}>
       <button
@@ -290,15 +308,44 @@ function Bell() {
       >
         <Icon name="bell" size={18} />
         {unavailable && (
-          <span className="topbar-badge" title={failureReason(tasks.error)}>
+          <span className="topbar-badge" title={failureReason(failed.error)}>
             —
           </span>
         )}
-        {rows.length > 0 && (
-          <span className={`topbar-badge${late > 0 ? ' is-late' : ''}`}>{rows.length}</span>
+        {badge > 0 && (
+          <span className={`topbar-badge${late + alarms > 0 ? ' is-late' : ''}`}>{badge}</span>
         )}
       </button>
       <Menu open={open} onClose={() => setOpen(false)}>
+        {unreadNotices.length > 0 && (
+          <>
+            <div className="topbar-menu-title">
+              Avisos não lidos
+              <Link to="/crm-vendas/avisos">Ver avisos</Link>
+            </div>
+            {unreadNotices.slice(0, 4).map((item) => (
+              <Link
+                key={item.id}
+                to={item.leadId ? `/crm-vendas/negociacoes/${item.leadId}` : '/crm-vendas/avisos'}
+                role="menuitem"
+                className={`topbar-menu-item is-task${ALARM_NOTICE.test(item.kind) ? ' is-late' : ''}`}
+                onClick={() => markRead.mutate([item.id])}
+              >
+                <Icon name={ALARM_NOTICE.test(item.kind) ? 'alert' : 'bell'} size={16} />
+                <span>
+                  {item.message}
+                  <small>há {ago(item.createdAt)}</small>
+                </span>
+              </Link>
+            ))}
+            {unreadNotices.length > 4 && (
+              <Link to="/crm-vendas/avisos" role="menuitem" className="topbar-menu-item">
+                <Icon name="arrow-right" size={16} />
+                Mais {unread - 4} aviso{unread - 4 === 1 ? '' : 's'}
+              </Link>
+            )}
+          </>
+        )}
         <div className="topbar-menu-title">
           {nothingToday ? 'Nada para hoje' : 'Para hoje'}
           <Link to="/crm-vendas/tarefas">Ver tarefas</Link>
@@ -306,6 +353,13 @@ function Bell() {
         {tasks.isLoading && <p className="muted">Carregando…</p>}
         {tasks.isError && (
           <LoadFailure what="as tarefas" error={tasks.error} onRetry={() => void tasks.refetch()} />
+        )}
+        {notices.isError && (
+          <LoadFailure
+            what="os avisos"
+            error={notices.error}
+            onRetry={() => void notices.refetch()}
+          />
         )}
         {rows.slice(0, 6).map((task) => (
           <Link

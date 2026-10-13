@@ -5,12 +5,14 @@ import { ago } from './format.js';
 
 /**
  * CRM Vendas → Avisos: the notices the automations and the deadline alerts
- * leave for the person (first contact overdue, task overdue, deal stuck in a
+ * leave for the person (first contact overdue, and unattended at the end of the
+ * business day for the managers, task overdue, deal stuck in a
  * stage, a rule's own warning). The panel is the only place they show for now.
  * Each notice names the problem, never the person; the link opens the deal.
  */
 const KIND_LABEL: Record<string, string> = {
   first_contact_overdue: 'Primeiro contato atrasado',
+  first_contact_escalated: 'Primeiro contato sem registro',
   task_overdue: 'Tarefa atrasada',
   stage_stuck: 'Negociação parada',
   new_lead: 'Novo lead',
