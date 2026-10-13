@@ -9,7 +9,7 @@ The rules every AI agent follows — folder structure, code standard, what never
 - **Skills** live in `.claude/skills/`; `INSTALLED.md` there says what is installed and what was left out. `/handoff` and `/grill-me` run only when typed.
 - **Handoff:** `/handoff` writes a document for the next session into the OS temporary directory, not the repository, with secrets and personal data redacted. It points to commits and docs instead of copying them.
 - **Agents** in `.claude/agents/`: `repo-researcher`, `docs-checker` and `code-reviewer` are the read-only ones (see "Contexto e custo"); the `impeccable-*` agents belong to the design skill.
-- **Hooks and settings:** `.claude/settings.json` is versioned. It wires the status line and `context-warn.sh` (every prompt), `guard-production.sh` and `guard-secrets.sh` (before Bash and Read), all in `.claude/hooks/`, and allows `wings-staging-sql`, `wings-deploy`, `wings-env` and `wings-openrouter`. `.claude/settings.local.json` is personal and not versioned.
+- **Hooks and settings:** `.claude/settings.json` is versioned. It wires the status line, `context-warn.sh` (every prompt), `guard-production.sh` (before Bash) and `guard-secrets.sh` (before Bash and Read), all in `.claude/hooks/`, and allows `wings-staging-sql`, `wings-deploy`, `wings-env` and `wings-openrouter`. `.claude/settings.local.json` is personal and not tracked; the repository `.gitignore` has no entry for it, only a user-level git ignore on this machine hides it.
 
 ## Contexto e custo
 
