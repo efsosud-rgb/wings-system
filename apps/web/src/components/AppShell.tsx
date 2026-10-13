@@ -11,6 +11,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useSession } from '../api/auth.js';
 import { SidebarLogo } from '../brand/SidebarLogo.js';
 import { Icon } from './Icon.js';
+import { NewLeadAlerts } from './NewLeadAlerts.js';
 import { Topbar } from './Topbar.js';
 import { WhatsAppCallProvider } from '../pages/crm/WhatsAppCalls.js';
 
@@ -225,6 +226,8 @@ export function AppShell() {
       {menuOpen && (
         <div className="sidebar-backdrop" aria-hidden="true" onClick={() => closeMenu()} />
       )}
+      {/* Outside the inert frame: a new lead is answerable with the menu open too. */}
+      <NewLeadAlerts />
 
       {/* inert while the drawer is open: Tab stays in the menu, as in a dialog. */}
       <div className="shell-main" inert={menuOpen || undefined}>

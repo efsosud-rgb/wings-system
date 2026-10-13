@@ -17,6 +17,9 @@ vi.mock('../pages/crm/WhatsAppCalls.js', () => ({
   WhatsAppCallProvider: ({ children }: { children: ReactNode }) => children,
 }));
 
+// The new-lead pop-up has its own tests (NewLeadAlerts.test.tsx) and needs the query client.
+vi.mock('./NewLeadAlerts.js', () => ({ NewLeadAlerts: () => null }));
+
 vi.mock('../api/auth.js', () => ({
   useSession: () => ({ data: session.current, isLoading: false }),
   useLogout: () => ({ mutateAsync: vi.fn(), isPending: false }),

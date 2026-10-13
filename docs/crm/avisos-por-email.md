@@ -1,14 +1,16 @@
 # Aviso por e-mail ao dono da negociação
 
+O pop-up e o sino do mesmo aviso: `docs/crm/aviso-lead-novo.md`.
+
 Ordem do Eric, 09/10/2026 17:04. Dois avisos do painel (`crm_notifications`,
 `docs/crm/automacoes.md`) também saem por e-mail, **só para o dono da negociação** (e, desde
 13/10/2026, um terceiro para o gerente, com chave própria — ver "Ligar"):
 
-| aviso | assunto | quando sai |
-| --- | --- | --- |
-| `new_lead` (lead novo com dono pelo rodízio) | `Novo lead para você: <nome>` | na hora, qualquer horário: a chegada dispara uma passada do envio (`onLeadArrivedKick`), sem esperar o ciclo |
-| `first_contact_overdue` (1ª hora útil vencida sem contato) | `Primeiro contato atrasado: <nome>` | no ciclo do CRM, **só em horário útil** (seg–sex 9h–18h, Brasília): escrito sexta à noite, vai segunda às 9h |
-| `first_contact_escalated` (1º contato ainda sem registro no fim do dia útil, para o **gerente do setor e a Diretoria**) | `Primeiro contato sem registro: <nome>` | no ciclo, só em horário útil; **desligado** até `CRM_ESCALATION_EMAIL_ENABLED=true` |
+| aviso                                                                                                                   | assunto                                 | quando sai                                                                                                   |
+| ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `new_lead` (lead novo com dono pelo rodízio)                                                                            | `Novo lead para você: <nome>`           | na hora, qualquer horário: a chegada dispara uma passada do envio (`onLeadArrivedKick`), sem esperar o ciclo |
+| `first_contact_overdue` (1ª hora útil vencida sem contato)                                                              | `Primeiro contato atrasado: <nome>`     | no ciclo do CRM, **só em horário útil** (seg–sex 9h–18h, Brasília): escrito sexta à noite, vai segunda às 9h |
+| `first_contact_escalated` (1º contato ainda sem registro no fim do dia útil, para o **gerente do setor e a Diretoria**) | `Primeiro contato sem registro: <nome>` | no ciclo, só em horário útil; **desligado** até `CRM_ESCALATION_EMAIL_ENABLED=true`                          |
 
 O texto é curto, em português, e traz **só o nome do lead, a origem (plataforma — campanha,
 quando houver), o prazo do 1º contato e o link da ficha** (`APP_BASE_URL/crm-vendas/negociacoes/<id>`).
@@ -25,7 +27,7 @@ aviso e o log guardam estado e código, nunca o endereço nem o texto do erro.
   minutos) e logo após uma chegada. Reivindica até 50 linhas com `for update skip locked`
   (`sending`); uma reivindicação esquecida por queda volta a `pending` depois de 15 min.
 - Antes de enviar confere, e pula com o motivo: `disabled` (variável desligada),
-  `smtp_not_configured`, `too_old` (aviso com mais de 3 dias — uma parada longa não vira rajada),
+  `smtp_not_configured`, `too_old` (aviso com mais de 3 dias — uma parada longa não vira rajada — ou, no `new_lead`, com mais de 6 horas),
   `no_lead`, `not_owner` (o lead mudou de dono: o aviso do novo dono é o que vale),
   `deal_closed` (ganho/perdido), `contact_made` (atraso cujo contato já foi registrado),
   `no_recipient` (dono inativo ou sem e-mail). Atraso fora do horário útil fica `pending`.

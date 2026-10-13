@@ -5,6 +5,7 @@ import type {
   EmailTemplate,
   EmailTemplateSaveInput,
   LeadPipeline,
+  NewLeadPopup,
   SequenceSaveInput,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -96,8 +97,23 @@ export interface CrmNotice {
 export function useNotifications() {
   return useQuery({
     queryKey: ['crm', 'notifications'],
-    queryFn: () => api.get<{ unread: number; notifications: CrmNotice[] }>('/crm/notifications'),
+    // Passive: a bell left open on a screen nobody touches must not keep the session alive.
+    queryFn: () => api.poll<{ unread: number; notifications: CrmNotice[] }>('/crm/notifications'),
     refetchInterval: 60_000,
+  });
+}
+
+/**
+ * The caller's new leads for the pop-up, asked every 15 s, also in a background tab (the browser
+ * notification needs it) and always passive: it never counts as the person's activity.
+ */
+export function useNewLeadPopups(enabled: boolean) {
+  return useQuery({
+    queryKey: ['crm', 'new-lead-popups'],
+    queryFn: () => api.poll<{ leads: NewLeadPopup[] }>('/crm/notifications/new-leads'),
+    enabled,
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: true,
   });
 }
 
@@ -106,7 +122,10 @@ export function useMarkNotificationsRead() {
   return useMutation({
     mutationFn: (ids: string[] | 'all') =>
       api.post<{ marked: number }>('/crm/notifications/read', { ids }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['crm', 'notifications'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['crm', 'new-lead-popups'] });
+      return queryClient.invalidateQueries({ queryKey: ['crm', 'notifications'] });
+    },
   });
 }
 
