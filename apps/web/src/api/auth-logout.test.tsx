@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, cleanup, renderHook } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { sessionKey, useLogout } from './auth.js';
@@ -54,7 +54,7 @@ describe('signing out', () => {
     await act(async () => {
       await result.current.mutateAsync();
     });
-    expect(result.current.isSuccess).toBe(true);
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(guard).not.toHaveBeenCalled();
     expect(queryClient.getQueryData(sessionKey)).toBeUndefined();
   });
@@ -70,7 +70,7 @@ describe('signing out', () => {
     await act(async () => {
       await result.current.mutateAsync().catch(() => undefined);
     });
-    expect(result.current.isError).toBe(true);
+    await waitFor(() => expect(result.current.isError).toBe(true));
     reportUnauthorized();
     expect(guard).toHaveBeenCalledTimes(1);
   });
