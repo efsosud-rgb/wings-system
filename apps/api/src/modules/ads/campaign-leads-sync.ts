@@ -28,6 +28,7 @@ import {
   adSets,
   campaignLeads,
   employees,
+  leadEvents,
   leads,
 } from '../../db/schema/index.js';
 import { paramsOfAddress } from '../../lib/query-params.js';
@@ -564,6 +565,8 @@ export interface CampaignLeadsSyncResult {
   beforeCutoff: number;
   utmLookups: number;
   utmFailures: number;
+  /** Wings leads that got their campaign and ad from their conversion's UTMs (`fillLeadAttribution`). */
+  leadsFilled: number;
   /** Wings leads listed on their own: RD holds no deal for them. */
   wingsLeads: number;
   /** RD deals joined to a Wings lead by the contact (the lead does not name the deal). */
@@ -742,6 +745,7 @@ export async function syncCampaignLeads(
     beforeCutoff: 0,
     utmLookups: 0,
     utmFailures: 0,
+    leadsFilled: 0,
     wingsLeads: 0,
     paired: 0,
   };
@@ -867,13 +871,7 @@ async function syncRdDeals(
       ),
     }),
     db
-      .select({
-        rdDealId: leads.rdDealId,
-        enteredAt: leads.enteredAt,
-        adPlatform: leads.adPlatform,
-        adCampaignExternalId: leads.adCampaignExternalId,
-        adExternalId: leads.adExternalId,
-      })
+      .select({ rdDealId: leads.rdDealId, ...wingsLeadColumns })
       .from(leads)
       .where(
         inArray(
@@ -974,6 +972,12 @@ async function syncRdDeals(
       else if (decided.reason === 'arrived_before_cutoff') result.beforeCutoff += 1;
       else result.unattributed += 1;
     }
+    if (
+      wingsLead &&
+      !isTest &&
+      (await fillLeadAttribution(db, wingsLead, decided, utms, campaigns))
+    )
+      result.leadsFilled += 1;
 
     // First contact: the earliest note or finished task in RD; failing that,
     // the stage leaving "Sem contato" as this sync saw it.
@@ -1074,6 +1078,67 @@ async function syncRdDeals(
       .onConflictDoUpdate({ target: campaignLeads.rdDealId, set: row });
   }
   return claimedLeads;
+}
+
+/**
+ * The Wings lead behind a deal gets the campaign and ad its conversion's UTMs
+ * named (orchestrator, 13/10): a site lead copied from the RD deal comes with
+ * no UTM, so its page and the dashboard could not say which campaign brought
+ * it. Only a finding (a UTM that names the campaign or the ad), never a guess,
+ * and only on a lead that names no campaign or UTM campaign of its own: what
+ * the lead already says is never overwritten. Answers whether it wrote.
+ */
+export async function fillLeadAttribution(
+  db: Database,
+  lead: WingsLead,
+  decided: Attributed,
+  utms: Utms | null,
+  campaigns: readonly AttributionCampaign[],
+): Promise<boolean> {
+  if (!decided.campaignId || !utms) return false;
+  if (decided.attribution !== 'utm') return false;
+  if (
+    isGuessedAttribution({
+      attribution: decided.attribution,
+      utmCampaign: utms.campaign,
+      utmContent: utms.content,
+    })
+  )
+    return false;
+  if (lead.adCampaignExternalId || lead.utmCampaign) return false;
+  const campaign = campaigns.find((entry) => entry.id === decided.campaignId);
+  const ad = decided.adId ? campaign?.ads.find((entry) => entry.id === decided.adId) : undefined;
+  const values = {
+    utmSource: lead.utmSource ?? (utms.source ? utmSourceName(utms.source) : null),
+    utmMedium: lead.utmMedium ?? utms.medium,
+    utmCampaign: utms.campaign,
+    utmContent: lead.utmContent ?? utms.content,
+    adPlatform: lead.adPlatform ?? decided.platform,
+    adCampaignExternalId: campaign?.externalId ?? null,
+    adExternalId: lead.adExternalId ?? ad?.externalId ?? null,
+    updatedAt: new Date(),
+  };
+  const written = await db
+    .update(leads)
+    .set(values)
+    .where(
+      and(eq(leads.id, lead.id), isNull(leads.adCampaignExternalId), isNull(leads.utmCampaign)),
+    )
+    .returning({ id: leads.id });
+  if (written.length === 0) return false;
+  await db.insert(leadEvents).values({
+    leadId: lead.id,
+    kind: 'lead.attribution_filled',
+    detail: {
+      via: 'rd_marketing_utm',
+      campaignId: values.adCampaignExternalId,
+      adId: values.adExternalId,
+      utmCampaign: values.utmCampaign,
+    },
+  });
+  // The in-memory row follows, so the rest of this sync reads what was written.
+  Object.assign(lead, values);
+  return true;
 }
 
 /**

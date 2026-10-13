@@ -23,6 +23,7 @@ import {
   employees,
   leadSourceRules,
   leadTrackingLinks,
+  leads,
 } from '../../db/schema/index.js';
 import { leadCheckDepsOf, runLeadChecks } from './field-checks.js';
 import { writeAudit } from '../../lib/audit.js';
@@ -204,6 +205,33 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
       const loaded = await loadLead(db, params.data.id);
       if (!loaded) return reply.status(404).send(notFound);
       return reply.send(loaded);
+    },
+  );
+
+  // "Não é robô": the seller clears the suspect mark; the reasons stay for history.
+  app.post(
+    '/leads/:id/suspect/clear',
+    { preHandler: app.requirePermission('leads.write') },
+    async (request, reply) => {
+      const params = idParam.safeParse(request.params);
+      if (!params.success) return reply.status(400).send(invalid());
+      const row = await leadInScope(db, request.session.actor, params.data.id, 'leads.write');
+      if (!row) return reply.status(404).send(notFound);
+      if (row.suspectAt && !row.suspectClearedAt) {
+        await db
+          .update(leads)
+          .set({ suspectClearedAt: new Date(), suspectClearedBy: request.session.actor.employeeId })
+          .where(eq(leads.id, row.id));
+        await writeAudit(db, {
+          actorEmployeeId: request.session.actor.employeeId,
+          action: 'lead.suspect_cleared',
+          entity: 'lead',
+          entityId: row.id,
+          ip: request.ip,
+          metadata: { reasons: row.suspectReasons ?? [] },
+        });
+      }
+      return reply.send(await loadLead(db, row.id));
     },
   );
 

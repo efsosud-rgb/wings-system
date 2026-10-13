@@ -88,6 +88,7 @@ const lead = (over: Omit<Partial<Lead>, 'work'> & { work?: Partial<Lead['work']>
   fields: { instagram: null, website: null, companyName: null, cnpj: null },
   checks: {},
   aiSummary: null,
+  suspect: null,
   research: {
     state: 'none',
     summary: null,
@@ -179,6 +180,7 @@ vi.mock('../../api/leads.js', () => ({
   useUpdateLead: () => mutation(leadMutate),
   useUpdateTask: () => mutation(taskMutate),
   useCheckLead: () => mutation(),
+  useClearSuspect: () => mutation(),
   useAddNote: () => mutation(),
   useCreateTask: () => mutation(),
 }));
