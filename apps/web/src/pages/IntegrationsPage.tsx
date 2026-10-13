@@ -16,7 +16,12 @@ import { useAdAccountBudgetCaps, useSetBudgetCap } from '../api/ads.js';
 import { hasPermission, useSession } from '../api/auth.js';
 import { ApiError } from '../api/client.js';
 import { useDealSources } from '../api/crm.js';
-import { useMetaLeadsStatus, usePollMetaLeads, useTestMetaConnection } from '../api/leads.js';
+import {
+  useMetaFailedEvents,
+  useMetaLeadsStatus,
+  usePollMetaLeads,
+  useTestMetaConnection,
+} from '../api/leads.js';
 import { ago } from './crm/format.js';
 import {
   useConnectKairogen,
@@ -871,6 +876,79 @@ export function RdUsersSection() {
   );
 }
 
+/**
+ * The Meta events that gave up: lead date, form, campaign and the reason in
+ * words. A lead with nothing to call is a warning, not an error. Ids and names
+ * of our own forms and campaigns only: never the person.
+ */
+function MetaFailedEvents() {
+  const failed = useMetaFailedEvents(true);
+  if (failed.isError && !failed.data) {
+    return (
+      <LoadFailure
+        what="os eventos da Meta que falharam"
+        error={failed.error}
+        onRetry={() => void failed.refetch()}
+      />
+    );
+  }
+  if (!failed.data) return <p className="muted">Carregando os eventos que falharam…</p>;
+  const { total, items } = failed.data;
+  return (
+    <section aria-labelledby="meta-failed-title">
+      <h3 id="meta-failed-title">Eventos da Meta que falharam</h3>
+      {total === 0 ? (
+        <p className="muted">Nenhum evento da Meta falhou.</p>
+      ) : (
+        <>
+          <p className="muted">
+            {total === items.length
+              ? `${total} ${total === 1 ? 'evento' : 'eventos'}.`
+              : `Os ${items.length} mais recentes, de ${total} eventos.`}{' '}
+            Aviso é lead que chegou sem como falar com a pessoa; erro é falha do sistema ou da Meta.
+          </p>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Lead de</th>
+                  <th>Formulário</th>
+                  <th>Campanha</th>
+                  <th>Motivo</th>
+                  <th>Identificador</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((event) => (
+                  <tr key={event.leadgenId}>
+                    <td>{formatDateTime(event.leadAt)}</td>
+                    <td>
+                      {event.formName ?? event.formId ?? '— a Meta não informou o formulário'}
+                    </td>
+                    <td>
+                      {event.campaignName ??
+                        (event.adId
+                          ? '— anúncio não encontrado no sistema'
+                          : '— a Meta não informou o anúncio')}
+                    </td>
+                    <td>
+                      <span className={`status status-${event.reason.severity}`}>
+                        {event.reason.severity === 'warning' ? 'Aviso' : 'Erro'}
+                      </span>{' '}
+                      {event.reason.label}
+                    </td>
+                    <td className="mono">{event.leadgenId}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 /** Meta Lead Ads, under the sources: how it runs, and the two buttons (totals only, never a person). */
 function MetaLeadAdsActions() {
   const session = useSession();
@@ -951,6 +1029,7 @@ function MetaLeadAdsActions() {
           })()}
         </Alert>
       ) : null}
+      {canManage ? <MetaFailedEvents /> : null}
     </div>
   );
 }

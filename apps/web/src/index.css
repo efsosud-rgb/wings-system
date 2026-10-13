@@ -1057,6 +1057,16 @@ a {
   background: var(--accent-soft);
 }
 
+.status-warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.status-error {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
 .pagination {
   display: flex;
   align-items: center;

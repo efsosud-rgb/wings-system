@@ -65,3 +65,19 @@ projeto para integrações):
 - É uma porta nova de entrada de lead: ver `docs/leads/intake.md` (origem, base legal, pesquisa) e `docs/leads/formularios.md`.
 - Dado pessoal fica só na tabela de leads; log e auditoria citam o lead pelo id.
 - Nenhuma DM sai sem pedido: ligar o envio é decisão do Eric, como em todo canal (`AGENTS.md`, seção 3).
+
+## `leads-meta-reopen aplicar` pede PRODUCAO mesmo no staging
+
+Registrado em 13/10/2026 por ordem do orquestrador, a pedido do Eric. Nada
+construído.
+
+O script `apps/api/src/scripts/leads-meta-reopen.ts` (`estado`, `simular`,
+`aplicar`) pede, no modo `aplicar`, que se digite `PRODUCAO` num terminal
+(linhas 65 a 71), e não olha em que ambiente roda. No staging, portanto, o
+`aplicar` pede a palavra que `AGENTS.md` (seção 3) reserva ao Eric para a
+produção. `estado` e `simular` não pedem nada e não gravam.
+
+Decidir antes de mexer: o script passa a conhecer o ambiente e a pedir a palavra
+certa em cada um (como o aplicar das cargas de `/root/relatorios` pede `STAGING`
+no staging), ou fica assim e o Eric digita nos dois. Registrar não é autorizar:
+mudar o script pede a ordem do Eric.
