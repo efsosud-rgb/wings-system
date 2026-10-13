@@ -55,6 +55,11 @@ const EXPANSION_LANDING_PAGES = [
   { identifier: 'lion-hair', brand: 'Lion Hair', rdDealIntake: false },
   { identifier: 'lionhairoficial', brand: 'Lion Hair', rdDealIntake: false },
   { identifier: 'super-dogao-da-nana', brand: 'Super Dogão da Nana', rdDealIntake: false },
+  // Live and taking leads with no rule (orchestrator, 13/10): Lion Hair's third
+  // address and Super Dogão da Nana's waiting list. Held from RD deals like their
+  // siblings: RD's own automation makes the deal.
+  { identifier: 'lionhair', brand: 'Lion Hair', rdDealIntake: false },
+  { identifier: 'sddnle', brand: 'Super Dogão da Nana', rdDealIntake: false },
   { identifier: 'sarantopoulos', brand: 'Sarantopoulos', rdDealIntake: false },
   // Every other page published in RD on 2026-10-02 (Eric's list of 100, each
   // read live): the brand from the page's name and text, a `le-` or
