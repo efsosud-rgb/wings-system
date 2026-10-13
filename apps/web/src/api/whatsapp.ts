@@ -9,10 +9,13 @@ import type {
   WaSendText,
   WaTemplate,
   WaTemplatePreview,
+  WaRingingSnapshot,
   WaTemplateSend,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
 import { api } from './client.js';
+import { openRingingStream } from './ringing-stream.js';
 
 /**
  * The official WhatsApp of the CRM (docs/whatsapp/cloud-api.md). The open
@@ -193,13 +196,44 @@ export function useRequestCallPermission(leadId: string) {
   });
 }
 
-/** Calls ringing for the viewer: asked every few seconds while calling is on, slower when off. */
+const RINGING_KEY = ['whatsapp', 'ringing'] as const;
+/** While the stream is down: how often to ask when calling is on, and when it is off. */
+const RINGING_FALLBACK_MS = 10_000;
+const RINGING_FALLBACK_OFF_MS = 60_000;
+
+/**
+ * Calls ringing for the viewer. They arrive by the stream (`ringing-stream.ts`): the
+ * whole answer on connect and each time it changes, no request per tab every few
+ * seconds. Only while the stream is down does the screen ask for it, slowly (10 s,
+ * 60 s when calling is off); the moment an answer comes by the stream the asking stops.
+ */
 export function useRingingCalls(enabled: boolean) {
+  const queryClient = useQueryClient();
+  const [live, setLive] = useState(false);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const close = openRingingStream({
+      onSnapshot: (snapshot) => {
+        // An ask still on its way would answer older than this: let it go first.
+        void queryClient
+          .cancelQueries({ queryKey: RINGING_KEY })
+          .then(() => queryClient.setQueryData(RINGING_KEY, snapshot));
+      },
+      onLive: setLive,
+    });
+    return () => {
+      close();
+      setLive(false);
+    };
+  }, [enabled, queryClient]);
+
   return useQuery({
-    queryKey: ['whatsapp', 'ringing'],
-    queryFn: () => api.poll<{ calling: boolean; calls: WaCall[] }>('/whatsapp/calls/ringing'),
-    enabled,
-    refetchInterval: (query) => (query.state.data?.calling ? 3_000 : 60_000),
+    queryKey: RINGING_KEY,
+    queryFn: () => api.poll<WaRingingSnapshot>('/whatsapp/calls/ringing'),
+    enabled: enabled && !live,
+    refetchInterval: (query) =>
+      query.state.data?.calling ? RINGING_FALLBACK_MS : RINGING_FALLBACK_OFF_MS,
     refetchIntervalInBackground: true,
   });
 }

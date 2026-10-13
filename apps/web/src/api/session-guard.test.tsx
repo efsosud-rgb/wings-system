@@ -6,6 +6,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProtectedRoute } from '../components/ProtectedRoute.js';
 import { api } from './client.js';
+import { fakeEventStream, ringingEvent } from './fake-event-stream.js';
 import { clearSessionExpired, onUnauthorized } from './session-expiry.js';
 import { installSessionGuard } from './session-guard.js';
 import { useRingingCalls } from './whatsapp.js';
@@ -16,6 +17,8 @@ import { useRingingCalls } from './whatsapp.js';
  * calls every three seconds (5 000+ answers of 401 in a night) while showing
  * what it had loaded the day before. Now the first 401 signs the tab out, the
  * route gate sends it to the login with the address it was on, and nothing asks again.
+ * The ringing line now comes by a stream and is asked for only while that is down;
+ * both ways end the same.
  */
 
 const user: SessionUser = {
@@ -37,7 +40,13 @@ interface Call {
   passive: boolean;
 }
 
-const server = { alive: true, calls: [] as Call[] };
+const server = {
+  alive: true,
+  /** Whether the ringing stream can be opened (otherwise the line is asked for, slowly). */
+  streamOpen: false,
+  stream: null as ReturnType<typeof fakeEventStream> | null,
+  calls: [] as Call[],
+};
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
 
@@ -48,10 +57,19 @@ function stubServer() {
       const path = String(input).replace(/^\/api/, '');
       const headers = (init?.headers ?? {}) as Record<string, string>;
       server.calls.push({ path, passive: headers['x-wings-passive'] === '1' });
+      // A proxy that does not carry streams answers 503 whatever the session is.
+      if (path === '/whatsapp/calls/stream' && !server.streamOpen) {
+        return json(503, { error: 'down' });
+      }
       if (!server.alive) {
         return json(401, { error: 'session_expired', message: 'Sessão expirada' });
       }
       if (path === '/auth/me') return json(200, { user });
+      if (path === '/whatsapp/calls/stream') {
+        server.stream = fakeEventStream(init?.signal);
+        server.stream.push(ringingEvent({ calling: true, calls: [] }));
+        return server.stream.response;
+      }
       if (path === '/whatsapp/calls/ringing') return json(200, { calling: true, calls: [] });
       return json(404, { error: 'not_found' });
     }),
@@ -102,6 +120,8 @@ let removeGuard: () => void;
 beforeEach(() => {
   vi.useFakeTimers();
   server.alive = true;
+  server.streamOpen = false;
+  server.stream = null;
   server.calls = [];
   localStorage.clear();
   clearSessionExpired();
@@ -127,9 +147,10 @@ describe('an open tab whose session died', () => {
     expect(screen.getByText('linha de ligação ativa')).toBeTruthy();
     expect(callsTo('/whatsapp/calls/ringing')).toHaveLength(1);
 
-    // The server ends the session (idle timeout); the tab does not know yet.
+    // The server ends the session (idle timeout); the tab does not know yet. With the
+    // stream down the line is asked for every ten seconds, and that finds out.
     server.alive = false;
-    await settle(3_100);
+    await settle(10_000);
 
     expect(callsTo('/whatsapp/calls/ringing')).toHaveLength(2); // the one that found out
     expect(loginState()).toEqual({
@@ -147,8 +168,48 @@ describe('an open tab whose session died', () => {
     renderTab(<RingingShell />, queryClient);
     await settle(10);
     server.alive = false;
-    await settle(3_100);
+    await settle(10_000);
     expect(screen.queryByText('linha de ligação ativa')).toBeNull();
+  });
+
+  it('is told by the stream itself, at once, with no request of its own to find out', async () => {
+    server.streamOpen = true;
+    renderTab(<RingingShell />, queryClient);
+    await settle(10);
+    expect(screen.getByText('linha de ligação ativa')).toBeTruthy();
+    // Quiet for five minutes: nothing asked for the line (only the one at the start).
+    await settle(5 * 60_000);
+    expect(callsTo('/whatsapp/calls/ringing').length).toBeLessThanOrEqual(1);
+
+    server.alive = false;
+    await act(async () => {
+      server.stream!.push('event: session_ended\ndata: {}\n\n');
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    expect(loginState()).toEqual({
+      from: '/crm-vendas/tarefas?filtro=abertas#topo',
+      expired: true,
+    });
+    const total = server.calls.length;
+    await settle(8 * 60 * 60 * 1000);
+    expect(server.calls).toHaveLength(total);
+  });
+
+  it('finds out when the stream drops and the session died meanwhile, and does not loop', async () => {
+    server.streamOpen = true;
+    renderTab(<RingingShell />, queryClient);
+    await settle(10);
+
+    // A restart of the server: the stream ends, the session is not there when it comes back.
+    server.alive = false;
+    await act(async () => {
+      server.stream!.end();
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(loginState().expired).toBe(true);
+    const total = server.calls.length;
+    await settle(8 * 60 * 60 * 1000);
+    expect(server.calls).toHaveLength(total);
   });
 
   it('is told the same by any other request, not only the ringing line', async () => {
