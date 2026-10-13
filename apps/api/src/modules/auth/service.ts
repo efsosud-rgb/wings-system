@@ -16,6 +16,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { employeeCredentials, employees, sessions } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
+import { emitSessionsEnded } from '../../lib/session-events.js';
 import { fakeVerify, verifyPassword } from '../../lib/password.js';
 import { generateToken, hashToken } from '../../lib/tokens.js';
 import { recordLogin, recordLogout, recordSessionTimeout } from '../timeclock/service.js';
@@ -410,6 +411,7 @@ async function closeSession(
   // Another request may have closed it first; only the winner writes the
   // clock-out, so a session can never produce two closing entries.
   if (updated.length === 0) return false;
+  emitSessionsEnded({ sessionId: args.sessionId });
 
   const employee = await findEmployeeById(db, args.employeeId);
   if (!employee) return true;
@@ -473,6 +475,7 @@ export async function revokeAllSessions(
     .returning({ id: sessions.id });
 
   if (revoked.length > 0) {
+    emitSessionsEnded({ employeeId });
     await writeAudit(db, {
       actorEmployeeId: null,
       action: 'session.revoked_all',

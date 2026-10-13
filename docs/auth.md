@@ -23,6 +23,18 @@ na hora, ao desativar a pessoa, trocar o nível de acesso ou trocar o e-mail de 
 repete sozinha (cabeçalho `x-wings-passive: 1`: ligações tocando, conversas,
 painéis) **não contam como atividade**; só o que a pessoa faz conta.
 
+O aviso de ligação tocando é uma resposta que fica aberta
+(`GET /whatsapp/calls/stream`, `docs/whatsapp/cloud-api.md`) e segue a mesma
+regra, por conta própria: a rota é **passiva à força** (o servidor põe o
+cabeçalho, venha ou não do navegador), então um stream aberto nunca mantém
+viva uma sessão ociosa. A cada batimento (15 s) a API olha a sessão sem
+renová-la: ociosa por 30 minutos ou passada de 12 horas, ela é fechada ali
+como numa consulta passiva (a saída do ponto fica no último movimento real) e
+o stream manda `session_ended` e fecha. Sair (logout), desativar a pessoa ou
+trocar o nível fecham os streams dela na hora, sem esperar o batimento. Na
+aba, `session_ended` e um `401` ao abrir o stream chegam ao mesmo guarda de
+sessão e não reabrem nada.
+
 Depois disso toda chamada responde `401` (`session_expired` na primeira,
 `unauthenticated` nas seguintes, porque o cookie é apagado). Uma aba esquecida
 aberta não sabe disso sozinha, então o navegador tem **um só lugar** que reage:

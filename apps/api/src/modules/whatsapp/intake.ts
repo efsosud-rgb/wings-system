@@ -27,6 +27,7 @@ import { leadFromTrackedMessage } from '../leads/tracked-link.js';
 import { loadSofiaSettings } from '../sofia/settings.js';
 import { routeInbound } from '../sofia/state.js';
 import { ART_MEDIA_GONE_CODES, invalidateArtMedia } from './art.js';
+import { notifyCallsChanged } from './call-signal.js';
 import {
   isOptOut,
   whatsappChangesOf,
@@ -151,6 +152,8 @@ export async function applyWhatsAppPayload(deps: WhatsAppIntakeDeps, body: unkno
     for (const template of change.templates) await applyTemplateReview(deps.db, template);
     for (const call of change.calls) await applyCallEvent(deps.db, call);
     for (const status of change.callStatuses) await applyCallStatus(deps.db, status);
+    // A call rang, was answered elsewhere or ended: the open ringing streams look again.
+    if (change.calls.length > 0 || change.callStatuses.length > 0) notifyCallsChanged();
   }
 }
 

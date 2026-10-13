@@ -309,6 +309,16 @@ export interface WaCall {
   durationSeconds: number | null;
 }
 
+/**
+ * What a screen shows of the calls ringing for the person: `calling` is whether
+ * the number takes calls at all. The same shape comes from `GET /whatsapp/calls/ringing`
+ * and, on every change, from the `ringing` event of `GET /whatsapp/calls/stream`.
+ */
+export interface WaRingingSnapshot {
+  calling: boolean;
+  calls: WaCall[];
+}
+
 /** An SDP as the browser made it: the offer (to call) or the answer (to pick up). */
 export const waCallSdpSchema = z.object({
   sdp: z

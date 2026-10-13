@@ -1,18 +1,15 @@
-import {
-  canonicalWhatsAppPhone,
-  waCallSdpSchema,
-  type WaCall,
-  type WaCallStatus,
-} from '@wings/shared';
-import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
+import { canonicalWhatsAppPhone, waCallSdpSchema, type WaCall } from '@wings/shared';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { waCalls, waContacts, leads } from '../../db/schema/index.js';
+import { waCalls, waContacts } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { leadInScope, leadOwnerFilter } from '../leads/access.js';
+import { notifyCallsChanged } from './call-signal.js';
 import { callingOn } from './calling.js';
-import { errorText, startWhatsAppCall, whatsappCallAction, whatsappConfigOf } from './graph.js';
+import { startWhatsAppCall, whatsappCallAction, whatsappConfigOf } from './graph.js';
 import { conversationFor } from './intake.js';
+import { callView, ringingFor } from './ringing.js';
 
 /**
  * WhatsApp voice calls (Calling API; docs/whatsapp/cloud-api.md). The browser
@@ -25,11 +22,9 @@ import { conversationFor } from './intake.js';
  * by webhook and the browser fetches it here. Incoming: the person's offer
  * comes by webhook; the first person in reach to pick up gets it, answers,
  * and that answer goes to Meta (`accept`). The screens learn of a ringing call
- * by asking every few seconds.
+ * by the stream (`ringing-stream.ts`), and ask for it here, slowly, while the
+ * stream is down.
  */
-
-/** Meta gives 30–60 s to answer; a ringing row older than this is not offered. */
-const RING_MS = 60_000;
 
 const idParams = z.object({ id: z.uuid() });
 type Row = typeof waCalls.$inferSelect;
@@ -52,31 +47,7 @@ export const whatsappCallRoutes: FastifyPluginAsync = async (app) => {
     return leadOwnerFilter(actor, 'leads.whatsapp') === undefined;
   }
 
-  async function toCall(row: Row, viewer: string): Promise<WaCall> {
-    const contact = await db.query.waContacts.findFirst({
-      where: eq(waContacts.id, row.contactId),
-    });
-    const lead = row.leadId
-      ? await db.query.leads.findFirst({ where: eq(leads.id, row.leadId), columns: { name: true } })
-      : null;
-    return {
-      id: row.id,
-      direction: row.direction === 'out' ? 'out' : 'in',
-      status: row.status as WaCallStatus,
-      leadId: row.leadId,
-      name: lead?.name ?? contact?.profileName ?? null,
-      phone: contact?.phone ?? '',
-      answerSdp:
-        row.direction === 'out' && row.employeeId === viewer && row.status !== 'completed'
-          ? row.remoteSdp
-          : null,
-      error: errorText(row.errorCode, row.errorTitle),
-      startedAt: row.startedAt.toISOString(),
-      connectedAt: row.connectedAt?.toISOString() ?? null,
-      endedAt: row.endedAt?.toISOString() ?? null,
-      durationSeconds: row.durationSeconds,
-    };
-  }
+  const toCall = (row: Row, viewer: string): Promise<WaCall> => callView(db, row, viewer);
 
   // --- placing a call -----------------------------------------------------------------
 
@@ -200,32 +171,10 @@ export const whatsappCallRoutes: FastifyPluginAsync = async (app) => {
 
   // --- a call coming in ---------------------------------------------------------------
 
-  app.get('/whatsapp/calls/ringing', use, async (request, reply) => {
-    const config = whatsappConfigOf(env);
-    const on = await callingOn(fetchImpl(), config);
-    if (!on) return reply.send({ calling: false, calls: [] });
-    const owner = leadOwnerFilter(request.session.actor, 'leads.whatsapp');
-    const rows = await db
-      .select({ call: waCalls })
-      .from(waCalls)
-      .leftJoin(leads, eq(leads.id, waCalls.leadId))
-      .where(
-        and(
-          eq(waCalls.direction, 'in'),
-          eq(waCalls.status, 'ringing'),
-          isNull(waCalls.employeeId),
-          gt(waCalls.startedAt, new Date(now().getTime() - RING_MS)),
-          owner === undefined ? sql`true` : eq(leads.ownerEmployeeId, owner),
-        ),
-      )
-      .orderBy(desc(waCalls.startedAt))
-      .limit(5);
-    const viewer = request.session.actor.employeeId;
-    return reply.send({
-      calling: true,
-      calls: await Promise.all(rows.map((r) => toCall(r.call, viewer))),
-    });
-  });
+  /** The same answer the stream gives, for a screen whose stream is down. */
+  app.get('/whatsapp/calls/ringing', use, async (request, reply) =>
+    reply.send(await ringingFor(db, env, fetchImpl(), request.session.actor, now())),
+  );
 
   /** The first one in reach to pick up gets the person's offer; anyone else hears it was taken. */
   app.post('/whatsapp/calls/:id/pickup', use, async (request, reply) => {
@@ -239,6 +188,8 @@ export const whatsappCallRoutes: FastifyPluginAsync = async (app) => {
       .set({ employeeId: actor.employeeId })
       .where(and(eq(waCalls.id, row.id), eq(waCalls.status, 'ringing'), isNull(waCalls.employeeId)))
       .returning();
+    // Taken: the others' cards go away now, not at their next look.
+    if (claimed) notifyCallsChanged();
     if (!claimed?.remoteSdp)
       return refuse(reply, 409, 'taken', 'A ligação já foi atendida por outra pessoa ou terminou.');
     return reply.send({
@@ -325,6 +276,7 @@ export const whatsappCallRoutes: FastifyPluginAsync = async (app) => {
         })
         .where(and(eq(waCalls.id, row.id), isNull(waCalls.endedAt)))
         .returning();
+      if (saved) notifyCallsChanged();
       return reply.send({ call: await toCall(saved ?? row, actor.employeeId) });
     });
   }
