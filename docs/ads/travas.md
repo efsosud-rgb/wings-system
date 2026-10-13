@@ -116,7 +116,7 @@ saudável.
 > agente pedindo alteração, nenhuma aprovação automática, nenhum worker
 > executando. Decisão de 18/09/2026. Com uma pessoa aprovando e executando uma
 > alteração por vez, o risco é aceitável; no dia em que não for uma pessoa, é
-> um bug de dinheiro. A regra também está nos não-negociáveis do `CLAUDE.md`.
+> um bug de dinheiro. A regra também está no `AGENTS.md` (seção "What never to do").
 
 > O chat do agente (Onda 7, `agente-conversa.md`) **não** mexe nesta regra: o
 > agente só propõe. Quem pede é a pessoa que clica em "Criar pedido", uma

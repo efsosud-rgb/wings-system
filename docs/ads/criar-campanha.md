@@ -34,7 +34,7 @@ pausada, com verba mínima, nunca entrega e é apagada depois.
    botão até a Meta.
 
 Executar continua sendo o botão da tela de aprovação, por uma pessoa, com
-`ADS_WRITES_ENABLED` ligada. O bloqueador de automação do `CLAUDE.md` segue
+`ADS_WRITES_ENABLED` ligada. O bloqueador de automação do `AGENTS.md` segue
 valendo: o pedido é sempre de uma pessoa (`requested_by_agent = false`), sem
 aprovação automática e sem worker.
 
