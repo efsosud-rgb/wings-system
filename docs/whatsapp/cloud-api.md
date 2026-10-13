@@ -49,11 +49,32 @@ permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em `/
   `calls` e o navegador que ligou a busca em `GET /whatsapp/calls/:id`. Só com as ligações ligadas no número
   (`GET /{phone}/settings`, lido a cada 5 min) e, na prática, com a permissão da pessoa (sem ela a Meta recusa,
   erro 138006).
-- **Receber:** o webhook traz a oferta do celular da pessoa; a ligação toca (consulta a cada 3 s,
-  `GET /whatsapp/calls/ringing`) para quem vê a negociação daquele telefone (sem negociação: só escopo total).
+- **Receber:** o webhook traz a oferta do celular da pessoa; a ligação toca (aviso por stream, abaixo) para
+  quem vê a negociação daquele telefone (sem negociação: só escopo total).
   O primeiro a clicar em Atender leva (`pickup`, os outros recebem "já atendida"); o navegador responde e a API
   manda `accept` direto, sem `pre_accept` (o navegador não segura o áudio; regra do FAQ da Meta). A Meta dá 30 a
   60 s.
+- **Aviso por stream (`GET /whatsapp/calls/stream`):** a tela não pergunta mais a cada 3 s. Ela abre uma
+  resposta `text/event-stream` (por `fetch`, não `EventSource`: o pedido leva `x-wings-passive` e o status
+  fica visível) e a API manda a **resposta inteira** (`{ calling, calls }`, a mesma de
+  `GET /whatsapp/calls/ringing`) ao conectar e a cada mudança, nunca um pedaço. Quem decide quem vê qual
+  ligação é uma função só, `ringingFor` (`modules/whatsapp/ringing.ts`), usada pela consulta e pelo stream.
+  - **Quando manda:** o webhook de ligação, o `pickup`, o `reject` e o `hangup` avisam os streams abertos
+    (`call-signal.ts`, dentro do processo da API; todo escritor de `wa_calls` está na API). Além disso, um
+    batimento a cada 15 s olha de novo (cobre o toque que acabou sem ninguém escrever nada, e outro
+    processo) e escreve `: ping`, que impede o Traefik e qualquer proxy no caminho de fechar uma
+    resposta quieta; a tela dá a conexão por morta se ficar 45 s sem receber nada.
+  - **Eventos:** `ringing` (a resposta), `session_ended` (a sessão acabou; a tela trata como um 401 e a
+    resposta fecha). Comentários (`: ping`) não são evento.
+  - **Reserva:** com o stream fora do ar (ou antes da primeira resposta) a tela pergunta
+    `GET /whatsapp/calls/ringing` a cada **10 s** (60 s com as ligações desligadas, como antes) e para de
+    perguntar assim que chega uma resposta pelo stream. O stream volta sozinho: espera 1 s, 2 s, 4 s… até
+    30 s (com variação, para abas não voltarem juntas), 60 s se a API disser que há abas demais, e na hora
+    em que o navegador volta a ficar online.
+  - **Várias abas:** cada aba abre o seu stream (HTTP/2 no staging, sem o limite de 6 conexões do HTTP/1.1).
+    A API aceita até 8 por pessoa e responde 429 `too_many_streams` ao nono.
+  - **Permissão e escopo** são os de `leads.whatsapp`, vistos na conexão; mudar o nível da pessoa encerra
+    as sessões e, com elas, os streams.
 - **Recusar e desligar:** `reject` (tocando) e `terminate`; a ligação fecha na hora aqui e o aviso final da Meta
   traz a duração real.
 - **Permissão:** `GET /leads/:id/whatsapp/call-permission` pergunta à Meta (sem permissão, temporária de 7
