@@ -799,6 +799,36 @@ export interface LeadOrigin {
   formId: string | null;
   trackingCode: string | null;
   externalId: string | null;
+  /** The ad behind the lead, by the ids the lead keeps, with the names the ad tables know. */
+  ad: LeadOriginAd | null;
+  /** The UTMs the visit carried; null when none. */
+  utm: LeadOriginUtm | null;
+  /** RD's origin label for the visit or the deal ("Tráfego Direto", "Busca Paga | Google"…). */
+  trafficSource: string | null;
+  /** The form that converted: RD's `conversion_identifier`, or the site form's page. */
+  conversionIdentifier: string | null;
+}
+
+/** An ad object by its platform id; `name` is null when our copy of the account does not have it. */
+export interface LeadOriginRef {
+  externalId: string;
+  name: string | null;
+}
+
+export interface LeadOriginAd {
+  /** 'meta', 'google', 'tiktok'… as the lead says. */
+  platform: string | null;
+  campaign: LeadOriginRef | null;
+  adSet: LeadOriginRef | null;
+  ad: LeadOriginRef | null;
+}
+
+export interface LeadOriginUtm {
+  source: string | null;
+  medium: string | null;
+  campaign: string | null;
+  content: string | null;
+  term: string | null;
 }
 
 export interface LeadConsent {

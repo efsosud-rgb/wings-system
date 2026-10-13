@@ -17,6 +17,7 @@ import {
 } from '../../../db/schema/index.js';
 import type { Env } from '../../../env.js';
 import { ga4CredentialsOf } from '../../../lib/ga4.js';
+import { crmFunnel, noCrm } from './funnel-crm.js';
 import { activeAccounts, sumsByEntity } from './queries.js';
 import { windowOf } from './window.js';
 
@@ -25,9 +26,9 @@ import { windowOf } from './window.js';
  * `funnel()` follows each ad campaign from impression to the site session and
  * the lead, and each platform down to the RD CRM's meetings and sales.
  *
- * Why the CRM stops at the platform: RD's deals carry RD's own labels ("Busca
- * Paga | Facebook Ads", "META ADS"), not the ad campaign. A per-campaign sale
- * needs the lead's UTM kept with the deal (CRM próprio, fase 1, §1.4).
+ * Why the platform rows stop at the platform: RD's deals carry RD's own labels
+ * ("Busca Paga | Facebook Ads", "META ADS"), not the ad campaign. The campaign
+ * and ad rows count the Wings System's own leads instead (`funnel-crm.ts`).
  */
 
 const siteConfigured = (env: Env) => Boolean(env.GA4_PROPERTY_ID && ga4CredentialsOf(env));
@@ -119,11 +120,12 @@ export async function funnel(
   );
   const configured = siteConfigured(env);
 
-  const [campaignRows, sums, drafts, sessions, deals] = await Promise.all([
+  const [campaignRows, sums, adSums, drafts, sessions, deals] = await Promise.all([
     ids.length
       ? db.query.adCampaigns.findMany({ where: inArray(adCampaigns.adAccountId, ids) })
       : [],
     ids.length ? sumsByEntity(db, ids, 'campaign', window.since, window.until) : new Map(),
+    ids.length ? sumsByEntity(db, ids, 'ad', window.since, window.until) : new Map(),
     ids.length
       ? db
           .select({ campaignId: adCampaignDrafts.campaignId, payload: adCampaignDrafts.payload })
@@ -175,6 +177,17 @@ export async function funnel(
     if (draft.campaignId && utm) utmOf.set(draft.campaignId, utm);
   }
 
+  const crm = await crmFunnel(db, {
+    campaigns: campaignRows.map((campaign) => ({
+      id: campaign.id,
+      externalId: campaign.externalId,
+      name: campaign.name,
+      draftUtm: utmOf.get(campaign.id) ?? null,
+    })),
+    start: new Date(`${window.since}T00:00:00-03:00`),
+    end: new Date(`${window.until}T23:59:59.999-03:00`),
+  });
+
   const campaignsOut: FunnelCampaignRow[] = [];
   for (const campaign of campaignRows) {
     const totals = sums.get(campaign.externalId);
@@ -186,7 +199,19 @@ export async function funnel(
       (total, key) => total + (sessionsByCampaign.get(key) ?? 0),
       0,
     );
-    if (!totals?.impressions && siteSessions === 0) continue;
+    const crmCounts = crm.byCampaign.get(campaign.id) ?? noCrm();
+    if (!totals?.impressions && siteSessions === 0 && crmCounts.leads === 0) continue;
+    const ads = crm.ads
+      .filter((ad) => ad.campaignId === campaign.id)
+      .map((ad) => ({
+        externalId: ad.externalId,
+        name: ad.name,
+        spendCents: adSums.get(ad.externalId)?.spendCents ?? 0,
+        leads: adSums.get(ad.externalId)?.conversions ?? 0,
+        crm: crm.byAd.get(ad.id) ?? noCrm(),
+      }))
+      .filter((ad) => ad.spendCents > 0 || ad.crm.leads > 0)
+      .sort((a, b) => b.spendCents - a.spendCents || b.crm.leads - a.crm.leads);
     campaignsOut.push({
       platform: platformOf.get(campaign.adAccountId) ?? 'meta',
       externalId: campaign.externalId,
@@ -197,6 +222,8 @@ export async function funnel(
       sessions: configured ? siteSessions : null,
       leads: totals?.conversions ?? 0,
       matchedSiteCampaigns: matched,
+      crm: crmCounts,
+      ads,
     });
   }
   campaignsOut.sort((a, b) => b.spendCents - a.spendCents);
@@ -233,5 +260,6 @@ export async function funnel(
     campaigns: campaignsOut,
     platforms: platformsOut,
     crmUnattributed: deals.filter((deal) => deal.platform === null).length,
+    leadsWithoutCampaign: crm.leadsWithoutCampaign,
   };
 }

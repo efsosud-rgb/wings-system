@@ -268,6 +268,34 @@ export function brandOfDeal(deal: RdDealRow): string | null {
   return campaign ? campaign.slice(0, 120) : null;
 }
 
+/**
+ * The questions RD CRM keeps on a deal (orchestrator, 13/10), by the custom
+ * field's label: investment, notes and the brand's name. Read as the deal
+ * list returns them (`deal_custom_fields[].custom_field.label`).
+ */
+const RD_DEAL_ANSWER_LABELS: { label: string; test: RegExp }[] = [
+  { label: 'Investimento disponível', test: /^investimento dispon[ií]vel/i },
+  { label: 'Observações', test: /^observa[cç][oõ]es$/i },
+  { label: 'Nome da marca', test: /^nome da marca$/i },
+  { label: 'OBS', test: /^obs$/i },
+];
+
+export function answersOfDeal(deal: RdDealRow): Record<string, string> | null {
+  const answers: Record<string, string> = {};
+  for (const field of deal.deal_custom_fields ?? []) {
+    const label = field.custom_field?.label?.trim() ?? '';
+    const wanted = RD_DEAL_ANSWER_LABELS.find((entry) => entry.test.test(label));
+    if (!wanted || answers[wanted.label]) continue;
+    const value = Array.isArray(field.value)
+      ? field.value.filter((item) => typeof item === 'string').join(', ')
+      : typeof field.value === 'string' || typeof field.value === 'number'
+        ? String(field.value)
+        : '';
+    if (value.trim()) answers[wanted.label] = value.trim().slice(0, 1000);
+  }
+  return Object.keys(answers).length > 0 ? answers : null;
+}
+
 export interface StageTimes {
   /** When the deal first entered a stage after the pipeline's first one. */
   firstContactAt: Date | null;
@@ -670,6 +698,8 @@ export async function importRdDeals(
         enteredAt: dateOf(deal.created_at),
         enteredAtSource: 'rd_deal_created',
         consentSource: 'rd_crm',
+        formAnswers: answersOfDeal(deal),
+        trafficSource: deal.deal_source?.name ?? null,
         skipResearch: true,
         importBatchId: options.batchId ?? null,
         distribute,

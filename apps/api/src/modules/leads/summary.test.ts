@@ -1,9 +1,4 @@
-import {
-  SESSION_COOKIE,
-  WINGS_CLIENT_ID,
-  type LeadAiSummary,
-  type RoleKey,
-} from '@wings/shared';
+import { SESSION_COOKIE, WINGS_CLIENT_ID, type LeadAiSummary, type RoleKey } from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';

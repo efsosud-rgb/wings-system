@@ -28,6 +28,8 @@ import {
   type FunnelSummary,
   type LeadListItem,
   type LeadNote,
+  type LeadOriginAd,
+  type LeadOriginUtm,
   type LeadOutcome,
   type LeadStageHistoryEntry,
   type LeadSuspectReason,
@@ -40,6 +42,9 @@ import {
 import { and, asc, desc, eq, gte, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
+  adAds,
+  adCampaigns,
+  adSets,
   clients,
   crmCompanies,
   employees,
@@ -226,6 +231,10 @@ export interface IncomingLead {
   city?: string | null;
   /** A form's other answers (question -> answer), without the contact fields. */
   formAnswers?: Record<string, string> | null;
+  /** RD's origin label for the visit or the deal (`leads.traffic_source`). */
+  trafficSource?: string | null;
+  /** RD's `conversion_identifier`, or the site form's page (`leads.conversion_identifier`). */
+  conversionIdentifier?: string | null;
   /**
    * Form fields given by name (the site's form, Google's columns). Whatever is
    * missing is looked for in `formAnswers` by the text of the question.
@@ -408,6 +417,10 @@ function fillGaps(existing: LeadRow, incoming: IncomingLead): Partial<typeof lea
   if (!existing.firstMessage && incoming.firstMessage) patch.firstMessage = incoming.firstMessage;
   if (!existing.city && incoming.city) patch.city = incoming.city.trim().slice(0, 120);
   if (!existing.formAnswers && incoming.formAnswers) patch.formAnswers = incoming.formAnswers;
+  if (!existing.trafficSource && incoming.trafficSource?.trim())
+    patch.trafficSource = incoming.trafficSource.trim().slice(0, 200);
+  if (!existing.conversionIdentifier && incoming.conversionIdentifier?.trim())
+    patch.conversionIdentifier = incoming.conversionIdentifier.trim().slice(0, 200);
   const fields = storedFields(incoming.fields);
   if (!existing.instagram && fields.instagram) patch.instagram = fields.instagram;
   if (!existing.website && fields.website) patch.website = fields.website;
@@ -674,6 +687,8 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
         whatsappPhotoUrl: incoming.whatsappPhotoUrl ?? null,
         city: incoming.city?.trim().slice(0, 120) || null,
         formAnswers: incoming.formAnswers ?? null,
+        trafficSource: incoming.trafficSource?.trim().slice(0, 200) || null,
+        conversionIdentifier: incoming.conversionIdentifier?.trim().slice(0, 200) || null,
         ...storedFields(incoming.fields),
         legalBasis: incoming.legalBasis ?? null,
         consentedAt: incoming.consentedAt ?? null,
@@ -803,6 +818,8 @@ export function toLead(
     ownerName?: string | null;
     company?: Lead['company'];
     contacts?: Lead['contacts'];
+    /** Names of the ad objects the lead names, by external id (`adNamesOf`). */
+    adNames?: AdNames;
   },
 ): Lead {
   return {
@@ -842,6 +859,10 @@ export function toLead(
       formId: row.formId,
       trackingCode: extra.trackingCode,
       externalId: row.externalId,
+      ad: originAdOf(row, extra.adNames),
+      utm: originUtmOf(row),
+      trafficSource: row.trafficSource,
+      conversionIdentifier: row.conversionIdentifier,
     },
     pipeline: (row.pipeline as LeadPipeline | null) ?? null,
     brand: row.brand,
@@ -910,6 +931,68 @@ export function toLead(
   };
 }
 
+export interface AdNames {
+  campaign: string | null;
+  adSet: string | null;
+  ad: string | null;
+}
+
+function originAdOf(row: LeadRow, names: AdNames | undefined): LeadOriginAd | null {
+  const ref = (externalId: string | null, name: string | null | undefined) =>
+    externalId ? { externalId, name: name ?? null } : null;
+  const campaign = ref(row.adCampaignExternalId, names?.campaign ?? row.campaignName);
+  const adSet = ref(row.adSetExternalId, names?.adSet);
+  const ad = ref(row.adExternalId, names?.ad);
+  if (!campaign && !adSet && !ad && !row.adPlatform) return null;
+  return { platform: row.adPlatform, campaign, adSet, ad };
+}
+
+function originUtmOf(row: LeadRow): LeadOriginUtm | null {
+  const utm = {
+    source: row.utmSource,
+    medium: row.utmMedium,
+    campaign: row.utmCampaign,
+    content: row.utmContent,
+    term: row.utmTerm,
+  };
+  return Object.values(utm).some(Boolean) ? utm : null;
+}
+
+/**
+ * The names of the campaign, ad set and ad a lead names by platform id, from
+ * our copy of the ad accounts (Meta's adId → ad_ads → its set and campaign).
+ */
+export async function adNamesOf(db: Database, row: LeadRow): Promise<AdNames | undefined> {
+  if (!row.adExternalId && !row.adSetExternalId && !row.adCampaignExternalId) return undefined;
+  const [ad, adSet, campaign] = await Promise.all([
+    row.adExternalId
+      ? db
+          .select({ name: adAds.name, setId: adAds.adSetId, campaignId: adAds.campaignId })
+          .from(adAds)
+          .where(eq(adAds.externalId, row.adExternalId))
+          .limit(1)
+          .then((rows) => rows[0])
+      : Promise.resolve(undefined),
+    row.adSetExternalId
+      ? db
+          .select({ name: adSets.name })
+          .from(adSets)
+          .where(eq(adSets.externalId, row.adSetExternalId))
+          .limit(1)
+          .then((rows) => rows[0])
+      : Promise.resolve(undefined),
+    row.adCampaignExternalId
+      ? db
+          .select({ name: adCampaigns.name })
+          .from(adCampaigns)
+          .where(eq(adCampaigns.externalId, row.adCampaignExternalId))
+          .limit(1)
+          .then((rows) => rows[0])
+      : Promise.resolve(undefined),
+  ]);
+  return { campaign: campaign?.name ?? null, adSet: adSet?.name ?? null, ad: ad?.name ?? null };
+}
+
 export interface LoadedLead {
   lead: Lead;
   events: LeadEvent[];
@@ -935,7 +1018,7 @@ export async function loadLead(db: Database, id: string): Promise<LoadedLead | n
         })
       : Promise.resolve(undefined),
   ]);
-  const [client, link, cost, events, owner] = await Promise.all([
+  const [client, link, cost, events, owner, adNames] = await Promise.all([
     db.query.clients.findFirst({ where: eq(clients.id, row.clientId) }),
     row.trackingLinkId
       ? db.query.leadTrackingLinks.findFirst({
@@ -958,9 +1041,11 @@ export async function loadLead(db: Database, id: string): Promise<LoadedLead | n
           columns: { fullName: true },
         })
       : Promise.resolve(undefined),
+    adNamesOf(db, row),
   ]);
   return {
     lead: toLead(row, {
+      adNames,
       clientName: client?.name ?? 'Cliente',
       trackingCode: link?.code ?? null,
       costUsdMicro: cost[0]?.total ?? 0,

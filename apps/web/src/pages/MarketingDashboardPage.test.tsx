@@ -876,8 +876,19 @@ describe('site and funnel', () => {
           sessions: 200,
           leads: 10,
           matchedSiteCampaigns: ['lead | forms'],
+          crm: { leads: 4, meetings: 2, proposals: 1 },
+          ads: [
+            {
+              externalId: 'a1',
+              name: 'Vídeo 1',
+              spendCents: 30_000,
+              leads: 6,
+              crm: { leads: 3, meetings: 2, proposals: 1 },
+            },
+          ],
         },
       ],
+      leadsWithoutCampaign: 5,
     };
     renderAt('/dashboard/marketing?aba=funil');
     // Without WebGL the funnel is its table: count, cost per step and the share that passed.
@@ -891,6 +902,16 @@ describe('site and funnel', () => {
     const row = screen.getByText('LEAD | FORMS').closest('tr');
     expect(text(row)).toContain('R$ 3,00');
     expect(text(row)).toContain('R$ 60,00');
+    // The Wings System's own leads of the campaign, how many reached a meeting and a proposal.
+    const cells = [...row!.querySelectorAll('td')].map((cell) => cell.textContent);
+    expect(cells.slice(-3)).toEqual(['4', '2', '1']);
+    const ad = screen.getByText('Vídeo 1').closest('tr');
+    expect([...ad!.querySelectorAll('td')].map((cell) => cell.textContent).slice(-3)).toEqual([
+      '3',
+      '2',
+      '1',
+    ]);
+    expect(screen.getByText(/5 lead\(s\) do período não têm anúncio nem UTM/)).toBeTruthy();
   });
 });
 

@@ -1226,12 +1226,22 @@ describe('Meta Lead Ads webhook', () => {
     );
     await runQueue({ rd: true });
     const attached = await eventOf('900041');
-    expect(attached).toMatchObject({ leadCreated: false, leadId: fresh!.id, rdOutcome: 'existing_deal' });
+    expect(attached).toMatchObject({
+      leadCreated: false,
+      leadId: fresh!.id,
+      rdOutcome: 'existing_deal',
+    });
 
     // The reprocess command: that attached event, once its lead is lost and dropped by its owner.
     await db
       .update(leads)
-      .set({ won: false, closedAt: new Date('2026-10-09T12:00:00Z'), ownerEmployeeId: null, stageId: null, stage: null })
+      .set({
+        won: false,
+        closedAt: new Date('2026-10-09T12:00:00Z'),
+        ownerEmployeeId: null,
+        stageId: null,
+        stage: null,
+      })
       .where(eq(leads.id, fresh!.id));
     const deps = {
       db,
@@ -1279,16 +1289,30 @@ describe('Meta Lead Ads webhook', () => {
     const reopened = await eventOf('900041');
     expect(reopened).toMatchObject({ status: 'done', leadCreated: true, rdDealId: 'deal-new-3' });
     expect(reopened?.leadId).not.toBe(fresh!.id);
-    const third = await db.query.leads.findFirst({ where: eq(leads.id, reopened?.leadId as string) });
-    expect(third).toMatchObject({ pipeline: 'formatacao', stage: 'Sem contato', ownerEmployeeId: seller.id });
+    const third = await db.query.leads.findFirst({
+      where: eq(leads.id, reopened?.leadId as string),
+    });
+    expect(third).toMatchObject({
+      pipeline: 'formatacao',
+      stage: 'Sem contato',
+      ownerEmployeeId: seller.id,
+    });
     // Old form, but asked for by hand: the seller gets the task anyway.
     expect(
       await db.query.leadTasks.findFirst({ where: eq(leadTasks.leadId, third!.id) }),
     ).toMatchObject({ kind: 'first_contact' });
-    const audit = await db.select().from(auditLog).where(eq(auditLog.action, 'lead.meta_reprocessed'));
-    expect(audit.at(-1)?.metadata).toMatchObject({ previousLeadId: fresh!.id, newLeadId: third!.id });
+    const audit = await db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, 'lead.meta_reprocessed'));
+    expect(audit.at(-1)?.metadata).toMatchObject({
+      previousLeadId: fresh!.id,
+      newLeadId: third!.id,
+    });
     // Run again: nothing to reopen.
-    expect((await reprocessMetaLeadgenEvent(deps, '900041', 'estado')).refusal).toContain('criou o próprio lead');
+    expect((await reprocessMetaLeadgenEvent(deps, '900041', 'estado')).refusal).toContain(
+      'criou o próprio lead',
+    );
   });
 
   it('puts the lead in the Wings System even when RD CRM is down, and copies it on a later try', async () => {

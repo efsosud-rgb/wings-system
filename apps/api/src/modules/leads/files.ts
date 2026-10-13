@@ -189,9 +189,7 @@ export async function detachFile(
   return db.transaction(async (tx) => {
     const removed = await tx
       .delete(leadFiles)
-      .where(
-        and(eq(leadFiles.leadId, input.leadId), eq(leadFiles.driveFileId, input.driveFileId)),
-      )
+      .where(and(eq(leadFiles.leadId, input.leadId), eq(leadFiles.driveFileId, input.driveFileId)))
       .returning({ id: leadFiles.id });
     if (removed.length === 0) return false;
     await tx.insert(leadEvents).values({

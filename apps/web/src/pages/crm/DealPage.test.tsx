@@ -60,6 +60,10 @@ const lead = (over: Omit<Partial<Lead>, 'work'> & { work?: Partial<Lead['work']>
     formId: null,
     trackingCode: null,
     externalId: null,
+    ad: null,
+    utm: null,
+    trafficSource: null,
+    conversionIdentifier: null,
   },
   pipeline: 'expansao',
   brand: null,
@@ -356,5 +360,50 @@ describe('Lead suspeito', () => {
     queryState.lead = lead({});
     show();
     expect(screen.queryByRole('region', { name: 'Lead suspeito' })).toBeNull();
+  });
+});
+
+describe('Origem', () => {
+  it('shows the ad, its set and campaign, the UTMs, RD origin, the form and the answers', () => {
+    const base = lead({});
+    queryState.lead = lead({
+      origin: {
+        ...base.origin,
+        source: 'meta_lead_ads',
+        ad: {
+          platform: 'meta',
+          campaign: { externalId: '700', name: 'Campanha Exemplo' },
+          adSet: { externalId: '701', name: null },
+          ad: { externalId: '702', name: 'Anúncio Exemplo' },
+        },
+        utm: {
+          source: 'instagram',
+          medium: 'cpc',
+          campaign: 'formatacao_out26',
+          content: null,
+          term: null,
+        },
+        trafficSource: 'Busca Paga | Facebook',
+        conversionIdentifier: 'formatar-franquia',
+      },
+      formAnswers: { 'Investimento disponível': 'Sim' },
+    });
+    show();
+    const card = within(screen.getByRole('region', { name: 'Origem' }));
+    expect(card.getByText('Campanha Exemplo · id 700')).toBeTruthy();
+    expect(card.getByText('nome ainda não lido da conta · id 701')).toBeTruthy();
+    expect(card.getByText('Anúncio Exemplo · id 702')).toBeTruthy();
+    expect(card.getByText('formatacao_out26')).toBeTruthy();
+    expect(card.getByText('Busca Paga | Facebook')).toBeTruthy();
+    expect(card.getByText('formatar-franquia')).toBeTruthy();
+    expect(card.getByText('Sim')).toBeTruthy();
+    expect(card.queryByText('utm_content')).toBeNull();
+  });
+
+  it('says so, with "—", when the arrival brought nothing', () => {
+    queryState.lead = lead({});
+    show();
+    const card = within(screen.getByRole('region', { name: 'Origem' }));
+    expect(card.getByText(/— A entrada não trouxe anúncio, UTM nem respostas/)).toBeTruthy();
   });
 });
