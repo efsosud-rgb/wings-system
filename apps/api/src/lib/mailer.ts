@@ -1,3 +1,4 @@
+import { escapeHtml } from '@wings/shared';
 import nodemailer, { type Transporter } from 'nodemailer';
 import type { Env } from '../env.js';
 
@@ -65,7 +66,12 @@ export function createMailer(env: Env, log?: { info: (msg: string) => void }): M
 // web app from apps/web/public/brand/.
 const LOGO_URL = 'https://wingssystem.online/brand/wings-logo.png';
 
-function layout(title: string, greeting: string, body: string, link: string, cta: string): string {
+function layout(
+  title: string,
+  greeting: string,
+  body: string,
+  action?: { link: string; cta: string },
+): string {
   return `<!doctype html>
 <html lang="pt-BR"><body style="margin:0;background:#0a0a0a;color:#e5e5e5;font-family:system-ui,-apple-system,sans-serif">
   <div style="max-width:560px;margin:0 auto;padding:32px 24px">
@@ -75,10 +81,14 @@ function layout(title: string, greeting: string, body: string, link: string, cta
     <h2 style="font-size:16px;margin:0 0 12px">${title}</h2>
     <p style="color:#a3a3a3;font-size:14px;line-height:1.5">${greeting}</p>
     <p style="color:#a3a3a3;font-size:14px;line-height:1.5">${body}</p>
-    <p style="margin:24px 0">
-      <a href="${link}" style="background:#e95228;color:#fff;text-decoration:none;padding:12px 20px;border-radius:6px;font-weight:600;font-size:14px;display:inline-block">${cta}</a>
+    ${
+      action
+        ? `<p style="margin:24px 0">
+      <a href="${action.link}" style="background:#e95228;color:#fff;text-decoration:none;padding:12px 20px;border-radius:6px;font-weight:600;font-size:14px;display:inline-block">${action.cta}</a>
     </p>
-    <p style="color:#737373;font-size:12px;line-height:1.5">Se o botão não funcionar, copie e cole este endereço no navegador:<br>${link}</p>
+    <p style="color:#737373;font-size:12px;line-height:1.5">Se o botão não funcionar, copie e cole este endereço no navegador:<br>${action.link}</p>`
+        : ''
+    }
   </div>
 </body></html>`;
 }
@@ -101,8 +111,7 @@ Se você não esperava este e-mail, avise o RH.`;
       'Defina sua senha de acesso',
       `Olá, ${args.name}.`,
       `Sua conta no Wings System foi criada. O link abaixo expira em ${args.days} dias e só pode ser usado uma vez.`,
-      args.link,
-      'Definir senha',
+      { link: args.link, cta: 'Definir senha' },
     ),
   };
 }
@@ -125,8 +134,39 @@ Se não foi você, ignore este e-mail — sua senha atual continua valendo.`;
       'Redefinição de senha',
       `Olá, ${args.name}.`,
       `Recebemos um pedido para redefinir sua senha. O link expira em ${args.minutes} minutos e só pode ser usado uma vez. Se não foi você, ignore este e-mail.`,
-      args.link,
-      'Redefinir senha',
+      { link: args.link, cta: 'Redefinir senha' },
+    ),
+  };
+}
+
+/**
+ * Warns the previous address that the account's login e-mail changed. The new
+ * address is left out on purpose: the old mailbox may not be the person's any
+ * more (a typo fixed), and naming the new one would hand it to a stranger. The
+ * name is escaped: this warning is the person's one signal of a takeover, and
+ * markup in the name must not be able to hide it.
+ */
+export function loginEmailChangedMail(args: { to: string; name: string; at: Date }): Mail {
+  const when = args.at.toLocaleString('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    dateStyle: 'short',
+    timeStyle: 'short',
+  });
+  const text = `Olá, ${args.name}.
+
+O e-mail de login da sua conta no Wings System foi trocado em ${when} (horário de Brasília). Este endereço não serve mais para entrar no sistema, e todas as sessões abertas da conta foram encerradas.
+
+Se você pediu essa troca, não precisa fazer nada.
+Se não pediu, avise agora o Admin Master ou a Diretoria. A troca fica registrada na auditoria do sistema.`;
+
+  return {
+    to: args.to,
+    subject: 'Wings System — o e-mail de login da sua conta foi trocado',
+    text,
+    html: layout(
+      'O e-mail de login da sua conta foi trocado',
+      `Olá, ${escapeHtml(args.name)}.`,
+      `O e-mail de login da sua conta no Wings System foi trocado em ${when} (horário de Brasília). Este endereço não serve mais para entrar no sistema, e todas as sessões abertas da conta foram encerradas. Se você não pediu essa troca, avise agora o Admin Master ou a Diretoria. A troca fica registrada na auditoria do sistema.`,
     ),
   };
 }

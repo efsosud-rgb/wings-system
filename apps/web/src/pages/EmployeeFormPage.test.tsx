@@ -357,6 +357,166 @@ describe('access level on an existing record', () => {
   });
 });
 
+describe('login e-mail and status (security audit, 2026-10-13)', () => {
+  const emailInput = () => screen.getByLabelText(/E-mail \(login\)/i) as HTMLInputElement;
+  const statusSelect = () => screen.getByLabelText(/^Status/i) as HTMLSelectElement;
+  const save = () => fireEvent.click(screen.getByRole('button', { name: /Salvar alterações/i }));
+  const rhDp = () =>
+    makeUser({
+      role: 'rh_dp',
+      permissions: { 'employees.read': 'all', 'employees.update': 'all' },
+    });
+  const gerente = (overrides: Partial<SessionUser> = {}) =>
+    makeUser({
+      role: 'gerente_comercial',
+      sector: 'comercial',
+      permissions: { 'employees.read': 'sector', 'employees.update': 'sector' },
+      ...overrides,
+    });
+  const seller = { ...employee, role: 'vendedor_expansao', sector: 'comercial' };
+
+  it("locks a director's login e-mail for RH/DP, with the reason, and leaves it out of the save", async () => {
+    session.current = rhDp();
+    record.current = { ...employee, role: 'diretoria', sector: 'diretoria' };
+    renderForm('/funcionarios/emp-1');
+
+    await waitFor(() => expect(emailInput().value).toBe('ana@wingscompany.com.br'));
+    expect(emailInput().disabled).toBe(true);
+    expect(
+      screen.getByText('Só um Admin Master troca o e-mail de login de alguém da Diretoria.'),
+    ).toBeTruthy();
+    expect((screen.getByLabelText('Cargo') as HTMLInputElement).disabled).toBe(false);
+
+    fireEvent.change(screen.getByLabelText('Cargo'), { target: { value: 'Diretora' } });
+    save();
+    await waitFor(() => expect(updateEmployee).toHaveBeenCalledTimes(1));
+    const payload = updateEmployee.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(payload.cargo).toBe('Diretora');
+    expect(payload).not.toHaveProperty('email');
+  });
+
+  it('locks your own login e-mail, and a colleague of your level for a manager', async () => {
+    session.current = gerente({ employeeId: 'emp-1' });
+    record.current = { ...employee, role: 'gerente_comercial', sector: 'comercial' };
+    renderForm('/funcionarios/emp-1');
+    await waitFor(() => expect(emailInput().value).toBe('ana@wingscompany.com.br'));
+    expect(emailInput().disabled).toBe(true);
+    expect(
+      screen.getByText(
+        'Você não pode trocar o próprio e-mail de login. Peça ao RH/DP ou a um Admin Master.',
+      ),
+    ).toBeTruthy();
+    cleanup();
+
+    session.current = gerente();
+    renderForm('/funcionarios/emp-1');
+    await waitFor(() => expect(emailInput().value).toBe('ana@wingscompany.com.br'));
+    expect(emailInput().disabled).toBe(true);
+    expect(
+      screen.getByText(
+        'Você não pode trocar o e-mail de login de alguém com nível igual ou maior que o seu.',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('keeps it open where the level could be changed, and says what a change does', async () => {
+    session.current = gerente();
+    record.current = seller;
+    renderForm('/funcionarios/emp-1');
+    await waitFor(() => expect(emailInput().value).toBe('ana@wingscompany.com.br'));
+    expect(emailInput().disabled).toBe(false);
+    expect(
+      screen.getByText(
+        'Trocar o e-mail encerra as sessões desta pessoa e avisa o endereço antigo.',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('stays on the page after an e-mail change and says what happened', async () => {
+    session.current = makeUser({
+      permissions: { 'employees.read': 'all', 'employees.update': 'all' },
+    });
+    updateEmployee.mockResolvedValue({
+      employee: { ...employee, email: 'ana.lima@wingscompany.com.br' },
+      emailChange: { linksCancelled: 1, notice: { sent: true } },
+    });
+    renderForm('/funcionarios/emp-1');
+    await waitFor(() => expect(emailInput().value).toBe('ana@wingscompany.com.br'));
+
+    fireEvent.change(emailInput(), { target: { value: 'ana.lima@wingscompany.com.br' } });
+    save();
+
+    await waitFor(() => expect(screen.getByText(/E-mail de login trocado/)).toBeTruthy());
+    expect(screen.getByText(/O aviso da troca foi enviado ao endereço antigo/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'reenvie o convite' })).toBeTruthy();
+    expect(screen.getByText('Editar funcionário')).toBeTruthy();
+  });
+
+  it('says plainly when the warning to the old address did not go out', async () => {
+    session.current = makeUser({
+      permissions: { 'employees.read': 'all', 'employees.update': 'all' },
+    });
+    updateEmployee.mockResolvedValue({
+      employee,
+      emailChange: {
+        linksCancelled: 0,
+        notice: {
+          sent: false,
+          error: {
+            code: 'send_failed',
+            message: 'O aviso ao endereço antigo NÃO foi enviado: falha no servidor de e-mail.',
+          },
+        },
+      },
+    });
+    renderForm('/funcionarios/emp-1');
+    await waitFor(() => expect(emailInput().value).toBe('ana@wingscompany.com.br'));
+
+    fireEvent.change(emailInput(), { target: { value: 'ana.lima@wingscompany.com.br' } });
+    save();
+
+    await waitFor(() => expect(screen.getByText(/NÃO foi enviado/)).toBeTruthy());
+    expect(screen.queryByRole('button', { name: 'reenvie o convite' })).toBeNull();
+  });
+
+  it('does not offer Inativo to someone without the permission to deactivate', async () => {
+    session.current = gerente();
+    record.current = seller;
+    renderForm('/funcionarios/emp-1');
+    await waitFor(() => expect(statusSelect().value).toBe('active'));
+
+    const values = Array.from(statusSelect().options).map((option) => option.value);
+    expect(values).toEqual(['active', 'on_leave']);
+    expect(statusSelect().disabled).toBe(false);
+    expect(screen.getByText('Inativar exige a permissão de inativar funcionários.')).toBeTruthy();
+  });
+
+  it('locks an inactive record for them, so it cannot be switched back on', async () => {
+    session.current = gerente();
+    record.current = { ...seller, status: 'inactive' };
+    renderForm('/funcionarios/emp-1');
+    await waitFor(() => expect(statusSelect().value).toBe('inactive'));
+
+    expect(statusSelect().disabled).toBe(true);
+    expect(
+      screen.getByText('Só quem pode inativar funcionários reativa este cadastro.'),
+    ).toBeTruthy();
+  });
+
+  it('offers every status to RH/DP', async () => {
+    session.current = rhDp();
+    record.current = seller;
+    renderForm('/funcionarios/emp-1');
+    await waitFor(() => expect(statusSelect().value).toBe('active'));
+    expect(Array.from(statusSelect().options).map((option) => option.value)).toEqual([
+      'active',
+      'inactive',
+      'on_leave',
+    ]);
+    expect(statusSelect().disabled).toBe(false);
+  });
+});
+
 describe('when the record cannot be loaded', () => {
   it('names the real reason for a server error instead of "not found", with no form to save', () => {
     loadFailure.current = new ApiError(500, {});

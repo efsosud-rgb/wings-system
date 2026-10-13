@@ -1,3 +1,4 @@
+import type { EmployeeStatus } from '../employees/schema.js';
 import { PROTECTED_ROLES, ROLE_KEYS, ROLES, type RoleKey } from './roles.js';
 import {
   ROLE_PERMISSIONS,
@@ -141,7 +142,10 @@ export interface RoleChangeTarget {
  *  - Holders of `employees.assign_roles` (Diretoria, RH/DP) may otherwise set
  *    any level for anyone but themselves.
  *  - Everyone else falls back to the sector-manager guards above, inside the
- *    scope `roles.assign` gives them.
+ *    scope `roles.assign` gives them, and only over people ranked below them
+ *    (2026-10-13): a manager never demotes a colleague of equal or higher level.
+ *    Without this, demoting that colleague first would open their login e-mail
+ *    to the manager (`loginEmailChangeDenial`).
  */
 export function roleChangeDenial(
   actor: Actor,
@@ -172,7 +176,57 @@ export function roleChangeDenial(
   const narrow = grantedScope(actor, 'roles.assign');
   if (!narrow) return 'no_permission';
   if (!scopeSatisfied(actor, narrow, { sector: target.sector })) return 'out_of_scope';
-  return roleAssignmentDenial(actor, nextRole, target.employeeId);
+  const assignment = roleAssignmentDenial(actor, nextRole, target.employeeId);
+  if (assignment) return assignment;
+  const outranksActor =
+    target.currentRole !== undefined && ROLES[target.currentRole].rank >= ROLES[actor.role].rank;
+  return outranksActor ? 'role_rank_too_high' : null;
+}
+
+/** An existing employee whose login e-mail would change. */
+export interface LoginEmailTarget extends RoleChangeTarget {
+  employeeId: string;
+  sector: SectorSlug;
+  currentRole: RoleKey;
+}
+
+/**
+ * Whether `actor` may change `target`'s login e-mail. One rule for the form and
+ * the API, decided 2026-10-13 after the security audit: whoever holds the login
+ * address can reset the password, so changing it is taking the account over.
+ * The bar is therefore the access level's:
+ *
+ *  - The actor must be able to edit the record at all (`employees.update`).
+ *  - Admin Master may change anyone's, themselves included.
+ *  - Everyone else needs to be able to set this person to another level
+ *    (`roleChangeDenial`): RH/DP never on Diretoria, nobody on their own
+ *    address, nobody but an Admin Master on an Admin Master, and a sector
+ *    manager or the Gerente Comercial only on someone ranked below them.
+ */
+export function loginEmailChangeDenial(actor: Actor, target: LoginEmailTarget): DenyReason | null {
+  const edit = can(actor, 'employees.update', { sector: target.sector });
+  if (!edit.allowed) return edit.reason;
+  if (actor.role === 'admin_master') return null;
+
+  return roleFieldState(actor, target).locked;
+}
+
+/**
+ * Whether `actor` may move an employee from `current` to `next` status.
+ * Switching someone off, or back on, needs `employees.deactivate` over their
+ * sector: editing the record is not enough. Active ↔ on leave is an ordinary
+ * edit.
+ */
+export function statusChangeDenial(
+  actor: Actor,
+  target: { sector: SectorSlug },
+  current: EmployeeStatus,
+  next: EmployeeStatus,
+): DenyReason | null {
+  if (current === next) return null;
+  if (current !== 'inactive' && next !== 'inactive') return null;
+  const decision = can(actor, 'employees.deactivate', { sector: target.sector });
+  return decision.allowed ? null : decision.reason;
 }
 
 /** What the access-level select should offer, and why it is locked if it is. */
