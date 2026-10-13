@@ -24,6 +24,7 @@ export const PERMISSIONS = {
   'leads.whatsapp': 'Conversar e ligar pelo WhatsApp do sistema (ver, enviar e ligar)',
   'crm.manage': 'Configurar as etapas do funil e a distribuição de leads',
   'sofia.manage': 'Ligar e desligar a Sofia e editar as perguntas e mensagens dela',
+  'sofia.read': 'Ver a tela da Sofia com todas as conversas do WhatsApp',
   'campaign_leads.read': 'Ver os leads das campanhas de tráfego pago (RD CRM)',
   'campaign_leads.reveal':
     'Revelar telefone e e-mail dos leads das campanhas (registrado em auditoria)',
@@ -55,6 +56,7 @@ export const PERMISSIONS = {
   'meetings.approve_send':
     'Aprovar e mandar o resumo de uma reunião de Expansão ao dono da franqueadora',
   'office.read': 'Ver o escritório virtual (laboratório): equipe, tarefas e eventos do CRM',
+  'modules.preview': 'Ver no menu os módulos ainda em construção ("em breve")',
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;
@@ -95,24 +97,24 @@ const PROJECT_ALL: RolePermissions = { 'projects.read': 'all', 'projects.manage'
 const CLIENT_RECORD: RolePermissions = { 'clients.read': 'all', 'clients.edit': 'all' };
 const CLIENT_RECORD_LEGAL: RolePermissions = { ...CLIENT_RECORD, 'clients.sensitive': 'all' };
 
-const SECTOR_STAFF: RolePermissions = {
-  'employees.read': 'sector',
-  'timeclock.read': 'own',
-  ...DRIVE_STAFF,
-};
-
 /**
- * Sellers: no employee register at all (Eric, 13/10: the register opened to the
- * sellers on staging). They keep their own time clock and their Drive.
+ * Everyone who is not a manager: their own time clock and their department's
+ * Drive. No employee register (Eric, 13/10): Usuários e acessos is for Admin
+ * Master, Diretoria, RH/DP, the Gerente Comercial and whoever carries the
+ * sector-manager flag (`SECTOR_MANAGER_GRANTS`).
  */
-const SELLER_STAFF: RolePermissions = { 'timeclock.read': 'own', ...DRIVE_STAFF };
+const SECTOR_STAFF: RolePermissions = { 'timeclock.read': 'own', ...DRIVE_STAFF };
 
 /**
  * The permission matrix. Anything not listed here is denied by default.
  *
- * Diretoria intentionally has no `settings.manage` and no
- * `api_credentials.manage`, and is additionally blocked from the TI sector by
- * an explicit deny rule in policy.ts.
+ * Only the Admin Master holds `settings.manage` and `api_credentials.manage`
+ * (Eric, 13/10: not Diretoria, not Formatação — TI). Diretoria is additionally
+ * blocked from the TI sector by an explicit deny rule in policy.ts.
+ *
+ * The API refuses a route that does not name its permission, and the menu
+ * hides a screen the person's permissions do not reach: this table is the one
+ * place that decides who sees what (docs/niveis-de-acesso.md).
  */
 export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   admin_master: {
@@ -140,6 +142,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'leads.assign': 'all',
     'leads.whatsapp': 'all',
     'sofia.manage': 'all',
+    'sofia.read': 'all',
     'crm.manage': 'all',
     'campaign_leads.read': 'all',
     'campaign_leads.reveal': 'all',
@@ -160,6 +163,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'roadmap.manage': 'all',
     // Laboratório: only the Admin Master sees the virtual office while it is a prototype.
     'office.read': 'all',
+    // Modules still "em breve" show in the menu to Admin Master and Diretoria only.
+    'modules.preview': 'all',
   },
   diretoria: {
     'meetings.approve_send': 'all',
@@ -180,6 +185,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     // Eric, 07/10: Diretoria reads, sends and calls on any lead's WhatsApp, though it does not edit the deal.
     'leads.whatsapp': 'all',
     'sofia.manage': 'all',
+    'sofia.read': 'all',
     'campaign_leads.read': 'all',
     'campaign_leads.reveal': 'all',
     'audit.read': 'all',
@@ -189,6 +195,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'ads.approve': 'all',
     'ads.reconcile.manual': 'all',
     'site.publish': 'all',
+    'modules.preview': 'all',
   },
   // The employee register and the RH/DP module. No CPF reveal and no time-clock
   // approvals: neither was asked for, and both are easy to add later.
@@ -217,6 +224,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'leads.assign': 'all',
     'leads.whatsapp': 'all',
     'sofia.manage': 'all',
+    'sofia.read': 'all',
     'crm.manage': 'all',
     'campaign_leads.read': 'all',
     'campaign_leads.reveal': 'all',
@@ -244,14 +252,9 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   formatacao_contabil_tributario: { ...SECTOR_STAFF, ...PROJECT_STAFF },
   // No stage of the client belongs to Logística or TI: they read the board only.
   formatacao_logistica: { ...SECTOR_STAFF, ...PROJECT_READ },
-  formatacao_ti: {
-    ...SECTOR_STAFF,
-    ...PROJECT_READ,
-    'settings.manage': 'all',
-    'api_credentials.manage': 'all',
-  },
+  formatacao_ti: { ...SECTOR_STAFF, ...PROJECT_READ },
   vendedor_expansao: {
-    ...SELLER_STAFF,
+    ...SECTOR_STAFF,
     ...PROJECT_STAFF,
     'leads.read': 'own',
     'leads.write': 'own',
@@ -259,7 +262,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   },
   // Leads das Campanhas: only the leads RD assigns to them.
   vendedor_formatacao: {
-    ...SELLER_STAFF,
+    ...SECTOR_STAFF,
     ...PROJECT_STAFF,
     'leads.read': 'own',
     'leads.write': 'own',

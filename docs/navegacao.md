@@ -41,13 +41,16 @@ Projetos com `projects.read` e `projects.manage`; ver `docs/projetos.md`. Em
 Administração, Roadmap ganhou `roadmap.manage`, só para Admin Master; ver
 `docs/roadmap.md`.)
 
-Regra aplicada:
+Regra aplicada (negar por padrão desde 13/10/2026; ver `docs/niveis-de-acesso.md`):
 
-- sub-módulo **construído** → sempre atrás da sua permissão real;
-- sub-módulo **em breve** → visível, exceto onde o módulo é sensível;
-- **Administração**: todo sub-módulo exige permissão, senão o módulo inteiro
-  apareceria para qualquer um (foi o que um teste pegou);
-- **SaaS**: restrito a Admin Master por papel, não por permissão.
+- sub-módulo **construído** → sempre atrás da sua permissão real; sem permissão,
+  ninguém o vê (só o Início diz `everyone`);
+- sub-módulo **em breve** → só para quem tem `modules.preview` (Admin Master e
+  Diretoria), além da permissão que ele nomear;
+- **Administração**: todo sub-módulo exige permissão;
+- **SaaS** e **Laboratório**: restritos a Admin Master por papel, não por permissão;
+- endereço digitado à mão → a mesma regra do menu (`RequireSubmodule`), e "Sem
+  acesso" quando o menu não o ofereceria.
 
 ## Telas que mudaram de endereço
 

@@ -65,12 +65,14 @@ export interface NavSubmodule {
   /** Shown beside the label when the sub-module is listed flat (the CRM group). */
   icon?: NavIcon;
   /**
-   * Permission required to see and open it. When absent, the sub-module is a
-   * placeholder visible to anyone who can see its module — there is no backend
-   * to protect yet, and inventing a permission matrix for unbuilt modules
-   * would be a business decision, not navigation.
+   * Permission required to see and open it. Deny by default (Eric, 13/10): a
+   * built sub-module with no permission is shown to nobody unless it says
+   * `everyone`, and an "em breve" placeholder also needs `modules.preview`
+   * (Admin Master and Diretoria), whatever permission it names.
    */
   permission?: PermissionKey;
+  /** Open to every login (the home page). The only way to skip `permission`. */
+  everyone?: true;
   status: SubmoduleStatus;
   kind: SubmoduleKind;
   /** Shown on the placeholder so it is obvious what will live there. */
@@ -114,6 +116,7 @@ export const NAVIGATION: readonly NavModule[] = [
         label: 'Início',
         icon: 'home',
         description: 'Atalhos para o que a pessoa pode abrir e o que precisa de atenção hoje',
+        everyone: true,
         status: 'ready',
         kind: 'report',
       },
@@ -207,7 +210,7 @@ export const NAVIGATION: readonly NavModule[] = [
         icon: 'sparkles',
         description:
           'A atendente virtual: recebe toda conversa nova, qualifica e passa ao vendedor',
-        permission: 'leads.whatsapp',
+        permission: 'sofia.read',
         status: 'ready',
         kind: 'crud',
       },
@@ -474,8 +477,9 @@ export interface NavViewer {
 
 export function canSeeSubmodule(viewer: NavViewer | null, submodule: NavSubmodule): boolean {
   if (!viewer) return false;
-  if (!submodule.permission) return true;
-  return Boolean(viewer.permissions[submodule.permission]);
+  if (submodule.status === 'coming_soon' && !viewer.permissions['modules.preview']) return false;
+  if (submodule.permission) return Boolean(viewer.permissions[submodule.permission]);
+  return submodule.status === 'coming_soon' || submodule.everyone === true;
 }
 
 export function canSeeModule(viewer: NavViewer | null, module: NavModule): boolean {

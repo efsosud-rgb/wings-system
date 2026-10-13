@@ -306,6 +306,8 @@ export function tiktokBodyOf(raw: unknown, contentType: string | undefined): unk
 // --- the plugin --------------------------------------------------------------------
 
 export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
+  // No login: each webhook checks its own secret or signature before reading anything.
+  const webhook = app.publicRoute('platform webhook with its own secret');
   const { db, env } = app.wings;
 
   // Raw bodies, scoped to this plugin: Meta's signature is over the exact bytes.
@@ -332,7 +334,7 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
 
   app.post(
     '/integrations/rd-station/webhook',
-    { config: { rateLimit } },
+    { preHandler: webhook, config: { rateLimit } },
     async (request, reply) => {
       if (!env.RD_STATION_WEBHOOK_SECRET) return unavailable(reply, 'O webhook do RD Station');
       if (!sharedSecretOk(request, env.RD_STATION_WEBHOOK_SECRET)) {
@@ -425,39 +427,47 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
 
   // --- Z-API (WhatsApp) -------------------------------------------------------------
 
-  app.post('/integrations/zapi/webhook', { config: { rateLimit } }, async (request, reply) => {
-    if (!env.ZAPI_WEBHOOK_SECRET) return unavailable(reply, 'O webhook do Z-API');
-    if (!sharedSecretOk(request, env.ZAPI_WEBHOOK_SECRET)) {
-      return reply.status(401).send({ error: 'bad_secret', message: 'Segredo inválido.' });
-    }
-    const body = parseJson(request.body);
-    if (body === null)
-      return reply.status(400).send({ error: 'invalid_json', message: 'Corpo inválido.' });
-    const inbound = zapiInboundOf(body);
-    const code = trackingCodeOf(inbound.text);
-    logShape('zapi', body, {
-      hasCode: code !== null,
-      fromMe: inbound.fromMe,
-      isGroup: inbound.isGroup,
-    });
+  app.post(
+    '/integrations/zapi/webhook',
+    { preHandler: webhook, config: { rateLimit } },
+    async (request, reply) => {
+      if (!env.ZAPI_WEBHOOK_SECRET) return unavailable(reply, 'O webhook do Z-API');
+      if (!sharedSecretOk(request, env.ZAPI_WEBHOOK_SECRET)) {
+        return reply.status(401).send({ error: 'bad_secret', message: 'Segredo inválido.' });
+      }
+      const body = parseJson(request.body);
+      if (body === null)
+        return reply.status(400).send({ error: 'invalid_json', message: 'Corpo inválido.' });
+      const inbound = zapiInboundOf(body);
+      const code = trackingCodeOf(inbound.text);
+      logShape('zapi', body, {
+        hasCode: code !== null,
+        fromMe: inbound.fromMe,
+        isGroup: inbound.isGroup,
+      });
 
-    if (inbound.fromMe || inbound.isGroup) return reply.send({ ignored: 'not_inbound' });
-    const phone = normalizeBrazilianPhone(inbound.phone);
-    if (!phone) return reply.send({ ignored: 'no_phone' });
-    if (!code) return reply.send({ ignored: 'no_code' });
-    const result = await leadFromTrackedMessage(db, {
-      code,
-      phone,
-      text: inbound.text,
-      senderName: inbound.senderName,
-      senderPhoto: inbound.senderPhoto,
-      at: inbound.at,
-      ip: request.ip,
-      via: 'zapi',
-    });
-    if (!result) return reply.send({ ignored: 'unknown_code' });
-    return reply.send({ leadId: result.lead.id, created: result.created, channel: result.channel });
-  });
+      if (inbound.fromMe || inbound.isGroup) return reply.send({ ignored: 'not_inbound' });
+      const phone = normalizeBrazilianPhone(inbound.phone);
+      if (!phone) return reply.send({ ignored: 'no_phone' });
+      if (!code) return reply.send({ ignored: 'no_code' });
+      const result = await leadFromTrackedMessage(db, {
+        code,
+        phone,
+        text: inbound.text,
+        senderName: inbound.senderName,
+        senderPhoto: inbound.senderPhoto,
+        at: inbound.at,
+        ip: request.ip,
+        via: 'zapi',
+      });
+      if (!result) return reply.send({ ignored: 'unknown_code' });
+      return reply.send({
+        leadId: result.lead.id,
+        created: result.created,
+        channel: result.channel,
+      });
+    },
+  );
 
   // --- Meta Lead Ads --------------------------------------------------------------------
 
@@ -470,7 +480,7 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
   /** Meta's subscription handshake: echo the challenge only for our verify token. */
   app.get(
     '/integrations/meta/leadgen/webhook',
-    { config: { rateLimit } },
+    { preHandler: webhook, config: { rateLimit } },
     async (request, reply) => {
       if (!env.META_LEADGEN_VERIFY_TOKEN) return unavailable(reply, 'O webhook do Meta Lead Ads');
       const query = verifyQuery.safeParse(request.query);
@@ -489,7 +499,7 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
 
   app.post(
     '/integrations/meta/leadgen/webhook',
-    { config: { rateLimit } },
+    { preHandler: webhook, config: { rateLimit } },
     async (request, reply) => {
       if (!env.META_APP_SECRET) return unavailable(reply, 'O webhook do Meta Lead Ads');
       const raw = Buffer.isBuffer(request.body)
@@ -523,7 +533,7 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
 
   app.post(
     '/integrations/tiktok/leads/webhook',
-    { config: { rateLimit } },
+    { preHandler: webhook, config: { rateLimit } },
     async (request, reply) => {
       if (!env.TIKTOK_LEADS_WEBHOOK_SECRET) return unavailable(reply, 'O webhook do TikTok');
       if (!secretMatches(tiktokSecretOf(request), env.TIKTOK_LEADS_WEBHOOK_SECRET)) {
@@ -556,7 +566,7 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
   // sends the key in the body (`google_key`); a header or ?secret= also works.
   app.post(
     '/integrations/google-ads/leads/webhook',
-    { config: { rateLimit } },
+    { preHandler: webhook, config: { rateLimit } },
     async (request, reply) => {
       if (!env.GOOGLE_ADS_LEADS_WEBHOOK_KEY) return unavailable(reply, 'O webhook do Google Ads');
       const body = tiktokBodyOf(request.body, request.headers['content-type']);

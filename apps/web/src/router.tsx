@@ -3,7 +3,7 @@ import { createBrowserRouter, Navigate, Outlet, type RouteObject } from 'react-r
 import { AppShell } from './components/AppShell.js';
 import { LegacyRedirect } from './components/LegacyRedirect.js';
 import { ProtectedRoute } from './components/ProtectedRoute.js';
-import { NoAccess, RequirePermission } from './components/RequirePermission.js';
+import { NoAccess, RequireSubmodule } from './components/RequirePermission.js';
 import { RouteError } from './components/RouteError.js';
 import { ApprovalDetailPage } from './pages/ApprovalDetailPage.js';
 import { ApprovalsPage } from './pages/ApprovalsPage.js';
@@ -130,12 +130,10 @@ function submoduleRoutes(): RouteObject[] {
     return {
       path,
       errorElement: <RouteError />,
-      element: submodule.permission ? (
-        <RequirePermission permission={submodule.permission}>
+      element: (
+        <RequireSubmodule submodule={submodule}>
           <ModuleOutlet />
-        </RequirePermission>
-      ) : (
-        <ModuleOutlet />
+        </RequireSubmodule>
       ),
       children,
     };

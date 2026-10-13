@@ -63,6 +63,8 @@ export const clientArtRoutes: FastifyPluginAsync = async (app) => {
     clientId === WINGS_CLIENT_ID
       ? app.can(request, 'clients.manage')
       : app.can(request, 'clients.edit');
+  const readGate = app.requireAnyPermission(['clients.read', 'clients.edit', 'clients.manage']);
+  const writeGate = app.requireAnyPermission(['clients.edit', 'clients.manage']);
 
   const forbidden = (reply: FastifyReply) =>
     reply.status(403).send({ error: 'forbidden', message: 'Acesso negado' });
@@ -119,7 +121,7 @@ export const clientArtRoutes: FastifyPluginAsync = async (app) => {
       metadata,
     });
 
-  app.get('/clients/:id/whatsapp', { preHandler: app.requireAuth }, async (request, reply) => {
+  app.get('/clients/:id/whatsapp', { preHandler: readGate }, async (request, reply) => {
     if (!mayRead(request)) return forbidden(reply);
     const params = idParam.safeParse(request.params);
     const client = params.success ? await clientOf(params.data.id) : null;
@@ -137,38 +139,34 @@ export const clientArtRoutes: FastifyPluginAsync = async (app) => {
     return reply.header('Cache-Control', 'no-store').send(state);
   });
 
-  app.put(
-    '/clients/:id/whatsapp/article',
-    { preHandler: app.requireAuth },
-    async (request, reply) => {
-      const params = idParam.safeParse(request.params);
-      const body = waArticleSchema.safeParse(request.body);
-      if (!params.success || !body.success)
-        return reply.status(400).send({ error: 'invalid_request', message: 'Artigo inválido.' });
-      if (!mayWrite(request, params.data.id)) return forbidden(reply);
-      if (params.data.id === WINGS_CLIENT_ID)
-        return reply.status(409).send({
-          error: 'client_fixed',
-          message: 'Os modelos da Formatação já trazem "Wings Company" no texto.',
-        });
-      const [row] = await db
-        .update(clients)
-        .set({ article: body.data.article })
-        .where(eq(clients.id, params.data.id))
-        .returning({
-          id: clients.id,
-          article: clients.article,
-          whatsappArtSetAt: clients.whatsappArtSetAt,
-        });
-      if (!row) return notFound(reply);
-      await audit(request, 'client.whatsapp_article_set', row.id, { article: row.article });
-      return reply.send(await stateOf(row));
-    },
-  );
+  app.put('/clients/:id/whatsapp/article', { preHandler: writeGate }, async (request, reply) => {
+    const params = idParam.safeParse(request.params);
+    const body = waArticleSchema.safeParse(request.body);
+    if (!params.success || !body.success)
+      return reply.status(400).send({ error: 'invalid_request', message: 'Artigo inválido.' });
+    if (!mayWrite(request, params.data.id)) return forbidden(reply);
+    if (params.data.id === WINGS_CLIENT_ID)
+      return reply.status(409).send({
+        error: 'client_fixed',
+        message: 'Os modelos da Formatação já trazem "Wings Company" no texto.',
+      });
+    const [row] = await db
+      .update(clients)
+      .set({ article: body.data.article })
+      .where(eq(clients.id, params.data.id))
+      .returning({
+        id: clients.id,
+        article: clients.article,
+        whatsappArtSetAt: clients.whatsappArtSetAt,
+      });
+    if (!row) return notFound(reply);
+    await audit(request, 'client.whatsapp_article_set', row.id, { article: row.article });
+    return reply.send(await stateOf(row));
+  });
 
   app.post(
     '/clients/:id/whatsapp/art/uploads',
-    { preHandler: app.requireAuth },
+    { preHandler: writeGate },
     async (request, reply) => {
       const params = idParam.safeParse(request.params);
       if (!params.success) return notFound(reply);
@@ -203,7 +201,7 @@ export const clientArtRoutes: FastifyPluginAsync = async (app) => {
 
   app.post(
     '/clients/:id/whatsapp/art/uploads/:uploadId/complete',
-    { preHandler: app.requireAuth },
+    { preHandler: writeGate },
     async (request, reply) => {
       const params = uploadParams.safeParse(request.params);
       if (!params.success) return notFound(reply);
@@ -241,18 +239,14 @@ export const clientArtRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  app.delete(
-    '/clients/:id/whatsapp/art',
-    { preHandler: app.requireAuth },
-    async (request, reply) => {
-      const params = idParam.safeParse(request.params);
-      if (!params.success) return notFound(reply);
-      if (!mayWrite(request, params.data.id)) return forbidden(reply);
-      const client = await clientOf(params.data.id);
-      if (!client) return notFound(reply);
-      const previousFileId = await clearArt(db, client.id);
-      await audit(request, 'client.whatsapp_art_removed', client.id, { previousFileId });
-      return reply.send(await stateOf({ ...client, whatsappArtSetAt: null }));
-    },
-  );
+  app.delete('/clients/:id/whatsapp/art', { preHandler: writeGate }, async (request, reply) => {
+    const params = idParam.safeParse(request.params);
+    if (!params.success) return notFound(reply);
+    if (!mayWrite(request, params.data.id)) return forbidden(reply);
+    const client = await clientOf(params.data.id);
+    if (!client) return notFound(reply);
+    const previousFileId = await clearArt(db, client.id);
+    await audit(request, 'client.whatsapp_art_removed', client.id, { previousFileId });
+    return reply.send(await stateOf({ ...client, whatsappArtSetAt: null }));
+  });
 };

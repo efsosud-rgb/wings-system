@@ -160,11 +160,12 @@ const notFound = (reply: FastifyReply) =>
   reply.status(404).send({ error: 'not_found', message: 'Formulário não encontrado.' });
 
 export const siteFormRoutes: FastifyPluginAsync = async (app) => {
+  const publicForm = app.publicRoute('landing page form, Turnstile and rate limit');
   const { db, env } = app.wings;
 
   app.get(
     '/public/site-forms/:slug',
-    { config: { rateLimit: { max: 120, timeWindow: '1 minute' } } },
+    { preHandler: publicForm, config: { rateLimit: { max: 120, timeWindow: '1 minute' } } },
     async (request, reply) => {
       const params = slugParam.safeParse(request.params);
       if (!params.success) return notFound(reply);
@@ -190,7 +191,7 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
 
   app.post(
     '/public/site-forms/:slug',
-    { config: { rateLimit: { max: 10, timeWindow: '10 minutes' } } },
+    { preHandler: publicForm, config: { rateLimit: { max: 10, timeWindow: '10 minutes' } } },
     async (request, reply) => {
       const params = slugParam.safeParse(request.params);
       if (!params.success) return notFound(reply);

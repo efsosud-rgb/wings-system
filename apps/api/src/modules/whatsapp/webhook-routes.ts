@@ -26,6 +26,8 @@ const verifyQuery = z.object({
 });
 
 export const whatsappWebhookRoutes: FastifyPluginAsync = async (app) => {
+  // No login: Meta's verify token and signature are checked in the handlers.
+  const webhook = app.publicRoute('WhatsApp Cloud API webhook, signed by Meta');
   const { db, env } = app.wings;
 
   // Raw bodies, scoped to this plugin: the signature is over the exact bytes.
@@ -41,24 +43,28 @@ export const whatsappWebhookRoutes: FastifyPluginAsync = async (app) => {
     message: 'O webhook do WhatsApp não está configurado.',
   };
 
-  app.get('/integrations/whatsapp/webhook', { config: { rateLimit } }, async (request, reply) => {
-    if (!env.WHATSAPP_WEBHOOK_VERIFY_TOKEN) return reply.status(503).send(unavailable);
-    const query = verifyQuery.safeParse(request.query);
-    if (
-      !query.success ||
-      query.data['hub.mode'] !== 'subscribe' ||
-      !tokensMatch(query.data['hub.verify_token'], env.WHATSAPP_WEBHOOK_VERIFY_TOKEN)
-    ) {
-      return reply
-        .status(403)
-        .send({ error: 'bad_verify_token', message: 'Token de verificação inválido.' });
-    }
-    return reply.type('text/plain').send(query.data['hub.challenge']);
-  });
+  app.get(
+    '/integrations/whatsapp/webhook',
+    { preHandler: webhook, config: { rateLimit } },
+    async (request, reply) => {
+      if (!env.WHATSAPP_WEBHOOK_VERIFY_TOKEN) return reply.status(503).send(unavailable);
+      const query = verifyQuery.safeParse(request.query);
+      if (
+        !query.success ||
+        query.data['hub.mode'] !== 'subscribe' ||
+        !tokensMatch(query.data['hub.verify_token'], env.WHATSAPP_WEBHOOK_VERIFY_TOKEN)
+      ) {
+        return reply
+          .status(403)
+          .send({ error: 'bad_verify_token', message: 'Token de verificação inválido.' });
+      }
+      return reply.type('text/plain').send(query.data['hub.challenge']);
+    },
+  );
 
   app.post(
     '/integrations/whatsapp/webhook',
-    { config: { rateLimit }, bodyLimit: BODY_LIMIT },
+    { preHandler: webhook, config: { rateLimit }, bodyLimit: BODY_LIMIT },
     async (request, reply) => {
       if (!env.WHATSAPP_APP_SECRET || !env.WHATSAPP_WEBHOOK_VERIFY_TOKEN)
         return reply.status(503).send(unavailable);

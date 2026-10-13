@@ -91,16 +91,26 @@ export async function activeClient(db: Database, id: string): Promise<Client | n
 export const clientRoutes: FastifyPluginAsync = async (app) => {
   const { db } = app.wings;
 
-  app.get('/clients', { preHandler: app.requireAuth }, async (request, reply) => {
-    if (
-      !app.can(request, 'clients.manage') &&
-      !app.can(request, 'clients.read') &&
-      !app.can(request, 'marketing.media.read')
-    ) {
-      return reply.status(403).send({ error: 'forbidden', message: 'Acesso negado' });
-    }
-    return reply.send({ clients: await listClients(db) });
-  });
+  app.get(
+    '/clients',
+    {
+      preHandler: app.requireAnyPermission([
+        'clients.manage',
+        'clients.read',
+        'marketing.media.read',
+      ]),
+    },
+    async (request, reply) => {
+      if (
+        !app.can(request, 'clients.manage') &&
+        !app.can(request, 'clients.read') &&
+        !app.can(request, 'marketing.media.read')
+      ) {
+        return reply.status(403).send({ error: 'forbidden', message: 'Acesso negado' });
+      }
+      return reply.send({ clients: await listClients(db) });
+    },
+  );
 
   app.post(
     '/clients',

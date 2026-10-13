@@ -606,7 +606,7 @@ describe('the screen and the settings', () => {
     expect(entry).toBeTruthy();
   });
 
-  it('shows what Sofia found out; a seller sees only the conversations of their own deals', async () => {
+  it('shows what Sofia found out; the screen is closed to a seller (Eric, 13/10)', async () => {
     const admin = await sessionFor('admin_master');
     const seller = await sessionFor('vendedor_formatacao');
     const phone = newPhone();
@@ -626,25 +626,16 @@ describe('the screen and the settings', () => {
     expect(data.thread.messages.some((m) => m.bySofia)).toBe(true);
     expect(data.can).toMatchObject({ take: true, close: true });
 
-    // Not the seller's: no deal yet, so only a full-scope reader sees it.
-    const hidden = await app.inject({
-      method: 'GET',
-      url: `/sofia/conversations/${conversation.id}`,
-      cookies: seller.cookies,
-    });
-    expect(hidden.statusCode).toBe(404);
-    const list = await app.inject({
-      method: 'GET',
-      url: '/sofia/conversations',
-      cookies: seller.cookies,
-    });
-    expect(
-      list
-        .json()
-        .conversations.some(
-          (c: { conversationId: string }) => c.conversationId === conversation.id,
-        ),
-    ).toBe(false);
+    // The screen with every conversation is for Gerente Comercial, Diretoria and
+    // Admin Master; a seller talks to their own leads from the deal and the inbox.
+    for (const url of [
+      `/sofia/conversations/${conversation.id}`,
+      '/sofia/conversations',
+      '/sofia/overview',
+    ]) {
+      const refused = await app.inject({ method: 'GET', url, cookies: seller.cookies });
+      expect(refused.statusCode, url).toBe(403);
+    }
   });
 });
 

@@ -39,7 +39,8 @@ function makeUser(overrides: Partial<SessionUser> = {}): SessionUser {
     sector: 'marketing',
     isSectorManager: false,
     tracksTime: true,
-    permissions: { 'ads.read': 'all' },
+    // modules.preview shows the "em breve" placeholders these shell tests look at.
+    permissions: { 'ads.read': 'all', 'modules.preview': 'all' },
     lastLoginAt: null,
     sessionExpiresAt: new Date(Date.now() + 3600_000).toISOString(),
     ...overrides,
@@ -85,7 +86,7 @@ describe('which modules appear', () => {
   it('shows SaaS to Admin Master only', () => {
     session.current = makeUser({
       role: 'admin_master',
-      permissions: { 'ads.read': 'all', 'employees.read': 'all' },
+      permissions: { 'ads.read': 'all', 'employees.read': 'all', 'modules.preview': 'all' },
     });
     renderShell();
     expect(screen.getByRole('button', { name: /SaaS/ })).toBeTruthy();
@@ -127,7 +128,12 @@ describe('the old flat menu is gone', () => {
   it('no longer offers "Tráfego pago" at the first level', () => {
     session.current = makeUser({
       role: 'admin_master',
-      permissions: { 'ads.read': 'all', 'employees.read': 'all', 'timeclock.read': 'all' },
+      permissions: {
+        'ads.read': 'all',
+        'employees.read': 'all',
+        'timeclock.read': 'all',
+        'modules.preview': 'all',
+      },
     });
     renderShell();
 

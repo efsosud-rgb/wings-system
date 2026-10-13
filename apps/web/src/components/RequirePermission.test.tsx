@@ -1,4 +1,9 @@
-import type { SessionUser } from '@wings/shared';
+import {
+  ALL_SUBMODULES,
+  ROLE_PERMISSIONS,
+  type NavSubmodule,
+  type SessionUser,
+} from '@wings/shared';
 import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -21,7 +26,7 @@ vi.mock('../api/auth.js', () => ({
     Boolean(user?.permissions[permission as keyof SessionUser['permissions']]),
 }));
 
-const { RequirePermission } = await import('./RequirePermission.js');
+const { RequirePermission, RequireSubmodule } = await import('./RequirePermission.js');
 
 function user(permissions: Record<string, string>): SessionUser {
   return {
@@ -82,5 +87,44 @@ describe('the permission gate', () => {
   it('refuses an anonymous viewer', () => {
     renderGate('ads.read');
     expect(screen.getByText('Sem acesso')).toBeTruthy();
+  });
+});
+
+/**
+ * Every sub-module route sits behind RequireSubmodule (router.tsx): an address
+ * typed by hand opens only what the menu would have offered (Eric, 13/10).
+ */
+describe('the sub-module gate', () => {
+  const sofia = ALL_SUBMODULES.find((s) => s.path === '/crm-vendas/sofia');
+  const placeholder = ALL_SUBMODULES.find((s) => s.path === '/contratos/cof');
+  if (!sofia || !placeholder) throw new Error('navigation changed');
+
+  function renderSubmodule(submodule: NavSubmodule) {
+    render(
+      <MemoryRouter>
+        <RequireSubmodule submodule={submodule}>
+          <div>conteúdo protegido</div>
+        </RequireSubmodule>
+      </MemoryRouter>,
+    );
+  }
+
+  it('shows "Sem acesso" to a seller who types the Sofia address', () => {
+    session.current = user(ROLE_PERMISSIONS.vendedor_expansao as Record<string, string>);
+    renderSubmodule(sofia);
+    expect(screen.getByRole('heading', { name: 'Sem acesso' })).toBeTruthy();
+    expect(screen.queryByText('conteúdo protegido')).toBeNull();
+  });
+
+  it('shows "Sem acesso" on an "em breve" placeholder to a seller', () => {
+    session.current = user(ROLE_PERMISSIONS.vendedor_formatacao as Record<string, string>);
+    renderSubmodule(placeholder);
+    expect(screen.getByRole('heading', { name: 'Sem acesso' })).toBeTruthy();
+  });
+
+  it('opens both to the Admin Master', () => {
+    session.current = user(ROLE_PERMISSIONS.admin_master as Record<string, string>);
+    renderSubmodule(placeholder);
+    expect(screen.getByText('conteúdo protegido')).toBeTruthy();
   });
 });
