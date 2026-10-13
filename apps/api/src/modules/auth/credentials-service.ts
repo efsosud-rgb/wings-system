@@ -1,14 +1,17 @@
 import {
+  EMAIL_CHANGE_NOTICE_FAILURE_MESSAGE,
   INVITE_EXPIRY_DAYS,
   RESET_EXPIRY_MINUTES,
   passwordLooksPersonal,
   type CredentialTokenPurpose,
+  type EmailChangeNoticeFailureCode,
+  type EmailChangeOutcome,
 } from '@wings/shared';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { credentialTokens, employeeCredentials } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
-import { inviteMail, resetMail, type Mailer } from '../../lib/mailer.js';
+import { inviteMail, loginEmailChangedMail, resetMail, type Mailer } from '../../lib/mailer.js';
 import { hashPassword } from '../../lib/password.js';
 import { generateToken, hashToken } from '../../lib/tokens.js';
 import { revokeAllSessions, type RequestContext } from './service.js';
@@ -121,6 +124,81 @@ export async function sendInvite(
   });
 
   return { sent: true };
+}
+
+/**
+ * Burns every invite or reset link of this employee that still works. Called
+ * when the login e-mail changes: a link mailed to the old address must not set
+ * the password of an account that now answers to another one.
+ */
+export async function cancelPendingLinks(db: Database, employeeId: string): Promise<number> {
+  const now = new Date();
+  const burned = await db
+    .update(credentialTokens)
+    .set({ usedAt: now })
+    .where(
+      and(
+        eq(credentialTokens.employeeId, employeeId),
+        isNull(credentialTokens.usedAt),
+        gt(credentialTokens.expiresAt, now),
+      ),
+    )
+    .returning({ id: credentialTokens.id });
+  return burned.length;
+}
+
+/**
+ * Warns the previous login address that it changed. Never throws: the change is
+ * already saved, and the operator is told plainly whether the warning went out.
+ * The audit entry carries the outcome, never an address.
+ */
+export async function notifyLoginEmailChanged(
+  db: Database,
+  mailer: Mailer,
+  args: {
+    employeeId: string;
+    name: string;
+    previousEmail: string;
+    actorId: string;
+    ctx?: RequestContext;
+    onSendError?: (error: unknown) => void;
+  },
+): Promise<EmailChangeOutcome['notice']> {
+  let failure: EmailChangeNoticeFailureCode | null = null;
+  if (!mailer.enabled) {
+    failure = 'email_not_configured';
+  } else {
+    try {
+      await mailer.send(
+        loginEmailChangedMail({
+          to: args.previousEmail,
+          name: args.name,
+          at: new Date(),
+        }),
+      );
+    } catch (error) {
+      args.onSendError?.(error);
+      failure = 'send_failed';
+    }
+  }
+
+  await writeAudit(db, {
+    actorEmployeeId: args.actorId,
+    action: 'credentials.email_change_notified',
+    entity: 'employee',
+    entityId: args.employeeId,
+    targetEmployeeId: args.employeeId,
+    ip: args.ctx?.ip,
+    userAgent: args.ctx?.userAgent,
+    metadata: failure ? { delivered: false, reason: failure } : { delivered: true },
+  });
+
+  return failure
+    ? {
+        sent: false,
+        error: { code: failure, message: EMAIL_CHANGE_NOTICE_FAILURE_MESSAGE[failure] },
+      }
+    : { sent: true };
 }
 
 /**

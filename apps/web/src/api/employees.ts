@@ -1,4 +1,5 @@
 import type {
+  EmailChangeOutcome,
   EmployeeCreateInput,
   EmployeeListQuery,
   EmployeeListResult,
@@ -11,6 +12,12 @@ import { api } from './client.js';
 export interface CreateEmployeeResponse {
   employee: EmployeeView;
   invite: InviteOutcome;
+}
+
+export interface UpdateEmployeeResponse {
+  employee: EmployeeView;
+  /** Present only when the login e-mail changed. */
+  emailChange?: EmailChangeOutcome;
 }
 
 function listPath(query: EmployeeListQuery): string {
@@ -52,7 +59,7 @@ export function useUpdateEmployee(id: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: Partial<EmployeeCreateInput>) =>
-      api.patch<{ employee: EmployeeView }>(`/employees/${id}`, input),
+      api.patch<UpdateEmployeeResponse>(`/employees/${id}`, input),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['employees'] });
       void queryClient.invalidateQueries({ queryKey: ['employee', id] });
