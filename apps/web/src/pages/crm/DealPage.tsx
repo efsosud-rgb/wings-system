@@ -19,7 +19,14 @@ import {
   normalizeWebsite,
   type LeadCheck,
 } from '@wings/shared';
-import { useImperativeHandle, useRef, useState, type ReactNode, type RefObject } from 'react';
+import {
+  Fragment,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../../api/auth.js';
 import { ApiError } from '../../api/client.js';
@@ -169,6 +176,7 @@ export function DealPage() {
         <div className="crm-deal-body">
           <div className="crm-stack">
             <AboutPanel lead={data.lead} canWrite={canWrite} canAssign={canAssign} />
+            <OriginPanel lead={data.lead} />
             <FormFieldsPanel lead={data.lead} canWrite={canWrite} />
             <CompanyResearchPanel research={data.lead.research} />
             <ContactPanel data={data} canWrite={canWrite} ref={contacts} />
@@ -1345,6 +1353,67 @@ function FieldCheckRow({
  * Instagram, site, company and CNPJ), each with what the arrival check said,
  * and "Conferir de novo".
  */
+const UTM_LABELS = {
+  source: 'utm_source',
+  medium: 'utm_medium',
+  campaign: 'utm_campaign',
+  content: 'utm_content',
+  term: 'utm_term',
+} as const;
+
+/**
+ * Where the lead came from, in full: the ad (campaign, set and ad, by the ids
+ * the lead keeps), the visit (UTMs, RD's origin label, the form) and the
+ * form's answers. Only what is known shows; nothing is filled in.
+ */
+function OriginPanel({ lead }: { lead: Lead }) {
+  const { origin } = lead;
+  const ref = (item: { externalId: string; name: string | null } | null) =>
+    item ? `${item.name ?? 'nome ainda não lido da conta'} · id ${item.externalId}` : null;
+  const rows: { key: string; label: string; value: ReactNode }[] = [];
+  const push = (key: string, label: string, value: ReactNode | null | undefined) => {
+    if (value !== null && value !== undefined && value !== '') rows.push({ key, label, value });
+  };
+  if (origin.ad) {
+    push('adPlatform', 'Plataforma', origin.ad.platform);
+    push('adCampaign', 'Campanha', ref(origin.ad.campaign));
+    push('adSet', 'Conjunto', ref(origin.ad.adSet));
+    push('ad', 'Anúncio', ref(origin.ad.ad));
+  } else if (origin.campaignName || origin.campaignId) {
+    push('campaign', 'Campanha', origin.campaignName ?? origin.campaignId);
+  }
+  for (const [key, label] of Object.entries(UTM_LABELS) as [keyof typeof UTM_LABELS, string][])
+    push(`utm:${key}`, label, origin.utm?.[key]);
+  push('traffic', 'Origem no RD', origin.trafficSource);
+  push('form', 'Formulário', origin.conversionIdentifier ?? origin.formId);
+  push('page', 'Página', origin.landingPage);
+  for (const [question, answer] of Object.entries(lead.formAnswers ?? {}))
+    push(`answer:${question}`, question.replace(/_/g, ' '), answer);
+  push('companyName', 'Nome da empresa', lead.fields.companyName);
+  push('instagram', 'Instagram', lead.fields.instagram);
+  push('website', 'Site', lead.fields.website);
+  push('city', 'Cidade', lead.city);
+  return (
+    <section className="crm-panel" aria-label="Origem">
+      <h2>Origem</h2>
+      {rows.length === 0 ? (
+        <p className="crm-sub">
+          — A entrada não trouxe anúncio, UTM nem respostas de formulário para este lead.
+        </p>
+      ) : (
+        <dl className="crm-kv">
+          {rows.map((row) => (
+            <Fragment key={row.key}>
+              <dt>{row.label}</dt>
+              <dd>{row.value}</dd>
+            </Fragment>
+          ))}
+        </dl>
+      )}
+    </section>
+  );
+}
+
 function FormFieldsPanel({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
   const recheck = useCheckLead();
   const { fields, checks } = lead;

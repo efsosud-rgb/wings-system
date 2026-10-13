@@ -560,11 +560,11 @@ describe('GET /crm/sources', () => {
     const cookie = login.cookies.find((c) => c.name === SESSION_COOKIE);
     const cookies = { [SESSION_COOKIE]: cookie!.value };
     const read = async (target: FastifyInstance, jar: Record<string, string>) =>
-      (
-        await target.inject({ method: 'GET', url: '/crm/sources', cookies: jar })
-      ).json<{
-        sources: { key: string; state: string; last30: number; lastAt: string | null }[];
-      }>().sources.find((s) => s.key === 'tiktok');
+      (await target.inject({ method: 'GET', url: '/crm/sources', cookies: jar }))
+        .json<{
+          sources: { key: string; state: string; last30: number; lastAt: string | null }[];
+        }>()
+        .sources.find((s) => s.key === 'tiktok');
     const card = await read(app, cookies);
     expect(card?.state).toBe('on');
     expect(card?.last30).toBeGreaterThan(0);

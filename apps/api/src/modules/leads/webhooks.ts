@@ -1,8 +1,4 @@
-import {
-  normalizeBrazilianPhone,
-  trackingCodeOf,
-  type LeadLegalBasis,
-} from '@wings/shared';
+import { normalizeBrazilianPhone, trackingCodeOf, type LeadLegalBasis } from '@wings/shared';
 import { googleLeadOf, ingestGoogleLead } from './google-leads.js';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -15,11 +11,7 @@ import { leadgenEventsOf, metaSignatureValid } from './meta-leads.js';
 import { ingestTikTokLeads, secretMatches, tiktokLeadsIn } from './tiktok-leads.js';
 import { rdAttributionOf } from './rd-attribution.js';
 import { leadFromTrackedMessage } from './tracked-link.js';
-import {
-  resolveLandingPage,
-  upsertLead,
-  type LeadAttribution,
-} from './service.js';
+import { resolveLandingPage, upsertLead, type LeadAttribution } from './service.js';
 
 /**
  * Where leads come in from outside, with no session: RD Station conversions,
@@ -91,6 +83,73 @@ interface RdConversion {
   at: Date | null;
   legalBasis: LeadLegalBasis;
   legalBasisText: string;
+  /** RD's origin label for the visit ("Tráfego Direto", "Busca Paga | Google"…). */
+  trafficSource: string | null;
+  /** The questions of the form that are not contact fields, by a label a person reads. */
+  answers: Record<string, string> | null;
+  fields: { companyName?: string; instagram?: string; website?: string };
+  city: string | null;
+}
+
+/**
+ * The form questions Wings' RD pages ask (orchestrator, 13/10), by field key:
+ * the conversion's content first, then the contact's own fields. Keys seen in
+ * RD's screens; the delivered shape is not verified live yet.
+ */
+const RD_ANSWER_FIELDS: { label: string; keys: RegExp }[] = [
+  { label: 'Investimento disponível', keys: /^cf_investimento_disponivel/ },
+  { label: 'Observações', keys: /^cf_observacoes$/ },
+];
+
+const textOf = (value: unknown): string | null =>
+  Array.isArray(value)
+    ? asString(
+        value
+          .map((item) => asString(item))
+          .filter(Boolean)
+          .join(', '),
+      )
+    : asString(value);
+
+/** The answers, fields and city a conversion carries, read from every place RD may put them. */
+export function rdAnswersOf(
+  content: Record<string, unknown>,
+  lead: Record<string, unknown>,
+): Pick<RdConversion, 'answers' | 'fields' | 'city'> {
+  const custom =
+    lead.custom_fields &&
+    typeof lead.custom_fields === 'object' &&
+    !Array.isArray(lead.custom_fields)
+      ? (lead.custom_fields as Record<string, unknown>)
+      : {};
+  const places = [content, lead, custom];
+  const byKey = (test: (key: string) => boolean): string | null => {
+    for (const place of places) {
+      for (const [key, value] of Object.entries(place)) {
+        if (!test(key.toLowerCase())) continue;
+        const text = textOf(value);
+        if (text) return text.slice(0, 1000);
+      }
+    }
+    return null;
+  };
+  const answers: Record<string, string> = {};
+  for (const field of RD_ANSWER_FIELDS) {
+    const value = byKey((key) => field.keys.test(key));
+    if (value) answers[field.label] = value;
+  }
+  const companyName = byKey((key) => key === 'company' || key === 'company_name');
+  const instagram = byKey((key) => key === 'cf_instagram' || key === 'instagram');
+  const website = byKey((key) => key === 'website');
+  return {
+    answers: Object.keys(answers).length > 0 ? answers : null,
+    fields: {
+      ...(companyName ? { companyName } : {}),
+      ...(instagram ? { instagram } : {}),
+      ...(website ? { website } : {}),
+    },
+    city: byKey((key) => key === 'city' || key === 'cidade'),
+  };
 }
 
 /** The only event of the `contact` shape that is a landing-page conversion (RD spells it either way). */
@@ -134,6 +193,13 @@ export function rdConversionsOf(body: unknown): RdConversion[] {
       );
       const legalBasis: LeadLegalBasis =
         granted?.type === 'legitimate_interest' ? 'legitimate_interest' : 'consent';
+      const originOf = (conversion: unknown) =>
+        asString(
+          (
+            (conversion as Record<string, unknown> | undefined)?.conversion_origin as
+              Record<string, unknown> | undefined
+          )?.source,
+        );
       const url =
         asString(content.url) ??
         asString(content.conversion_url) ??
@@ -174,6 +240,8 @@ export function rdConversionsOf(body: unknown): RdConversion[] {
           legalBasis === 'consent'
             ? 'Formulário da landing page (RD Station), com aceite dos termos na conversão.'
             : 'Base legal informada pelo RD Station: legítimo interesse.',
+        trafficSource: originOf(last) ?? originOf(lead.first_conversion),
+        ...rdAnswersOf(content, lead),
       };
     });
 }
@@ -296,6 +364,11 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
           landingPage: conversion.url ?? conversion.identifier,
           externalId: conversion.externalId,
           attribution: conversion.attribution,
+          trafficSource: conversion.trafficSource,
+          conversionIdentifier: conversion.identifier,
+          formAnswers: conversion.answers,
+          fields: conversion.fields,
+          city: conversion.city,
           legalBasis: conversion.legalBasis,
           consentedAt: conversion.at ?? new Date(),
           enteredAt: conversion.at,

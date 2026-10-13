@@ -657,6 +657,31 @@ export interface FunnelCampaignRow {
   leads: number;
   /** The GA4 campaign names matched to this campaign (utm_campaign of its draft, or its own name). */
   matchedSiteCampaigns: string[];
+  /** The Wings System's own leads this campaign brought in the window, and how far they went. */
+  crm: FunnelCrmCounts;
+  /** The same, ad by ad (spend and platform leads from the ad's own metrics). */
+  ads: FunnelAdRow[];
+}
+
+/**
+ * Leads of the Wings System (not the platform's count) that entered in the
+ * window, and how many of them reached a meeting stage ("Reunião…") or a
+ * proposal stage ("Proposta…"), by the furthest stage each one reached; a won
+ * lead reached them all.
+ */
+export interface FunnelCrmCounts {
+  leads: number;
+  meetings: number;
+  proposals: number;
+}
+
+export interface FunnelAdRow {
+  externalId: string;
+  name: string;
+  spendCents: number;
+  /** Leads the platform reports for the ad. */
+  leads: number;
+  crm: FunnelCrmCounts;
 }
 
 /** One platform, impression to sale. CRM stages come from RD's own labels (source / campaign). */
@@ -684,6 +709,8 @@ export interface DashboardFunnel {
   platforms: FunnelPlatformRow[];
   /** Deals in the window whose RD labels name no paid platform (organic, referral, "Tráfego pago" without a platform…). */
   crmUnattributed: number;
+  /** Wings System leads of the window that no campaign claims (no ad id, no UTM of a known campaign). */
+  leadsWithoutCampaign: number;
 }
 
 // ---------------------------------------------------------------------------

@@ -153,6 +153,10 @@ export const leads = pgTable(
     adSetExternalId: text('ad_set_external_id'),
     adExternalId: text('ad_external_id'),
     referrer: text('referrer'),
+    /** Where RD says the visit came from ("Tráfego Direto", "Busca Paga | Google"…): the conversion's or the deal's origin. */
+    trafficSource: text('traffic_source'),
+    /** The form that converted: RD's `conversion_identifier`, or the site form's page. */
+    conversionIdentifier: text('conversion_identifier'),
     /** The import run that created this lead (`leads-import-rd`), so one run can be undone alone. */
     importBatchId: text('import_batch_id'),
     /**

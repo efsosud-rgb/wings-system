@@ -31,7 +31,8 @@ const MAX_LINES = 120;
 const MAX_CHARS = 12_000;
 
 /** Questions of a form that would carry a contact or a document: never sent. */
-const CONTACT_QUESTION = /telefone|celular|whats|e-?mail|cpf|cnpj|\brg\b|documento|endere[cç]o|cep\b/i;
+const CONTACT_QUESTION =
+  /telefone|celular|whats|e-?mail|cpf|cnpj|\brg\b|documento|endere[cç]o|cep\b/i;
 
 /** The scrubber plus what it leaves alone on purpose elsewhere: bare digit runs. */
 export const scrubForModel = (text: string) =>
@@ -68,7 +69,11 @@ const EVENT_TEXT: Record<string, string> = {
 };
 
 /** What goes to the model, and how much of the record it came from. */
-export function summaryInputOf(data: LoadedLead): { text: string; events: number; answers: number } {
+export function summaryInputOf(data: LoadedLead): {
+  text: string;
+  events: number;
+  answers: number;
+} {
   const { lead } = data;
   const lines: { at: string; text: string }[] = [];
   for (const item of data.history)
@@ -81,7 +86,8 @@ export function summaryInputOf(data: LoadedLead): { text: string; events: number
             ? `marcada como perda${item.lostReason ? ` (${item.lostReason})` : ''}`
             : `etapa: ${item.fromStage ?? '—'} → ${item.toStage ?? '—'}`,
     });
-  for (const note of data.notes) lines.push({ at: note.at, text: `anotação do vendedor: ${note.body}` });
+  for (const note of data.notes)
+    lines.push({ at: note.at, text: `anotação do vendedor: ${note.body}` });
   for (const activity of data.activities)
     lines.push({
       at: activity.at,
@@ -91,7 +97,10 @@ export function summaryInputOf(data: LoadedLead): { text: string; events: number
           : `reunião${activity.participants ? ` com ${activity.participants}` : ''}${activity.note ? `: ${activity.note}` : ''}`,
     });
   for (const task of data.tasks) {
-    lines.push({ at: task.createdAt, text: `tarefa criada: ${task.title} (para ${when(task.dueAt)})` });
+    lines.push({
+      at: task.createdAt,
+      text: `tarefa criada: ${task.title} (para ${when(task.dueAt)})`,
+    });
     if (task.doneAt) lines.push({ at: task.doneAt, text: `tarefa concluída: ${task.title}` });
   }
   for (const event of data.events) {
@@ -110,7 +119,9 @@ export function summaryInputOf(data: LoadedLead): { text: string; events: number
     `Funil: ${lead.pipeline ? LEAD_PIPELINE_LABELS[lead.pipeline] : 'não definido'}. Etapa atual: ${lead.work.stage ?? 'não definida'}. Situação: ${lead.work.won === true ? 'venda' : lead.work.won === false ? 'perda' : 'em aberto'}.`,
     '',
     'LINHA DO TEMPO (mais antiga primeiro):',
-    ...(kept.length === 0 ? ['(nada registrado)'] : kept.map((line) => `- ${when(line.at)} — ${line.text}`)),
+    ...(kept.length === 0
+      ? ['(nada registrado)']
+      : kept.map((line) => `- ${when(line.at)} — ${line.text}`)),
     '',
     'RESPOSTAS DO FORMULÁRIO:',
     ...(answers.length === 0
@@ -183,7 +194,10 @@ export async function generateSummary(
     basedOn: { events: input.events, answers: input.answers },
   };
   await db.transaction(async (tx) => {
-    await tx.update(leads).set({ aiSummary: summary, updatedAt: now }).where(eq(leads.id, data.lead.id));
+    await tx
+      .update(leads)
+      .set({ aiSummary: summary, updatedAt: now })
+      .where(eq(leads.id, data.lead.id));
     await tx.insert(leadEvents).values({
       leadId: data.lead.id,
       kind: 'lead.summary_generated',

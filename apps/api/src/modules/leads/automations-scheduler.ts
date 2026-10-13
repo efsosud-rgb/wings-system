@@ -3,7 +3,11 @@ import type { Database } from '../../db/client.js';
 import { processDueRuns } from './automations.js';
 import { runCrmAlerts, type AlertsResult } from './crm-alerts.js';
 import type { CrmMailTransport } from './crm-mail.js';
-import { sendPendingNoticeMails, type NoticeMailDeps, type NoticeMailResult } from './crm-notice-mail.js';
+import {
+  sendPendingNoticeMails,
+  type NoticeMailDeps,
+  type NoticeMailResult,
+} from './crm-notice-mail.js';
 
 /**
  * The CRM cycle, run by the API process: what is due in the automations, then

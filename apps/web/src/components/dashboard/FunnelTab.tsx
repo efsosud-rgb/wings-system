@@ -112,9 +112,18 @@ export function FunnelTab({ data }: { data: DashboardFunnel }) {
       {data.platforms.map((row) => (
         <PlatformFunnel key={row.platform} row={row} />
       ))}
+      <p className="muted">
+        Por campanha e por anúncio, "No CRM", reuniões e propostas contam os leads do Wings System
+        que entraram no período: pelo anúncio que o lead guarda ou, sem ele, pela UTM da campanha
+        (utm_campaign) e do anúncio (utm_content). Reunião e proposta são a etapa mais adiantada a
+        que o lead chegou, mesmo se depois foi perdido; a venda conta em todas. Lead marcado como
+        suspeito de robô não conta.
+        {data.leadsWithoutCampaign > 0 &&
+          ` ${data.leadsWithoutCampaign} lead(s) do período não têm anúncio nem UTM de uma campanha conhecida (orgânico, indicação, WhatsApp, cópia do RD sem UTM) e ficam fora das campanhas.`}
+      </p>
 
       <section className="dash-section" aria-labelledby="funnel-campaigns">
-        <h2 id="funnel-campaigns">Por campanha, até o lead</h2>
+        <h2 id="funnel-campaigns">Por campanha e por anúncio, até a proposta</h2>
         {data.campaigns.length === 0 ? (
           <p className="muted">Nenhuma campanha entregou no período.</p>
         ) : (
@@ -147,10 +156,19 @@ export function FunnelTab({ data }: { data: DashboardFunnel }) {
                   <th scope="col" className="num">
                     Custo/lead
                   </th>
+                  <th scope="col" className="num">
+                    No CRM
+                  </th>
+                  <th scope="col" className="num">
+                    Reuniões
+                  </th>
+                  <th scope="col" className="num">
+                    Propostas
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                {data.campaigns.map((row) => (
+                {data.campaigns.map((row) => [
                   <tr key={`${row.platform}:${row.externalId}`}>
                     <td>
                       {row.name}
@@ -172,8 +190,32 @@ export function FunnelTab({ data }: { data: DashboardFunnel }) {
                     <td className="mono num">{costPer(row.spendCents, row.sessions)}</td>
                     <td className="mono num">{formatInt(row.leads)}</td>
                     <td className="mono num">{costPer(row.spendCents, row.leads)}</td>
-                  </tr>
-                ))}
+                    <td className="mono num">{formatInt(row.crm.leads)}</td>
+                    <td className="mono num">{formatInt(row.crm.meetings)}</td>
+                    <td className="mono num">{formatInt(row.crm.proposals)}</td>
+                  </tr>,
+                  ...row.ads.map((ad) => (
+                    <tr
+                      key={`${row.platform}:${row.externalId}:${ad.externalId}`}
+                      className="is-sub"
+                    >
+                      <td>
+                        <span className="cell-sub">Anúncio</span> {ad.name}
+                      </td>
+                      <td className="mono num">{formatMoney(ad.spendCents)}</td>
+                      <td className="mono num">—</td>
+                      <td className="mono num">—</td>
+                      <td className="mono num">—</td>
+                      <td className="mono num">—</td>
+                      <td className="mono num">—</td>
+                      <td className="mono num">{formatInt(ad.leads)}</td>
+                      <td className="mono num">{costPer(ad.spendCents, ad.leads)}</td>
+                      <td className="mono num">{formatInt(ad.crm.leads)}</td>
+                      <td className="mono num">{formatInt(ad.crm.meetings)}</td>
+                      <td className="mono num">{formatInt(ad.crm.proposals)}</td>
+                    </tr>
+                  )),
+                ])}
               </tbody>
             </table>
           </div>
