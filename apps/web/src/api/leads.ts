@@ -110,6 +110,18 @@ export function useCheckLead() {
   });
 }
 
+/** "Não é robô": the seller clears the suspect mark of the lead. */
+export function useClearSuspect() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ lead: Lead; events: LeadEvent[] }>(`/leads/${id}/suspect/clear`),
+    onSuccess: (_data, id) => {
+      void queryClient.invalidateQueries({ queryKey: ['leads', 'one', id] });
+    },
+  });
+}
+
 export function useResearchLead() {
   const queryClient = useQueryClient();
   return useMutation({

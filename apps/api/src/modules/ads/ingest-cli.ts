@@ -260,7 +260,7 @@ async function main() {
             `${leads.paired} ligado(s) a lead do Wings pelo contato, ` +
             `${leads.wingsLeads} lead(s) do Wings sem negócio, ` +
             `${leads.attributed} atribuído(s), ${leads.unattributed} sem atribuição, ` +
-            `${leads.tests} de teste; UTM consultada ${leads.utmLookups}x (${leads.utmFailures} falha(s))`,
+            `${leads.tests} de teste; UTM consultada ${leads.utmLookups}x (${leads.utmFailures} falha(s)); ${leads.leadsFilled} lead(s) ganharam a campanha`,
         );
       } catch (error) {
         console.error(

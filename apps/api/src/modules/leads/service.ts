@@ -30,6 +30,7 @@ import {
   type LeadNote,
   type LeadOutcome,
   type LeadStageHistoryEntry,
+  type LeadSuspectReason,
   type LeadTask,
   type LeadPipeline,
   type LeadSource,
@@ -55,6 +56,7 @@ import { activitiesOf } from './activities.js';
 import { announceNewLead } from './crm-alerts.js';
 import { attachLeadContact, contactsOfLead, findOrCreateCompany } from './contacts.js';
 import { scheduleLeadChecks } from './field-checks.js';
+import { markSuspectsAround } from './suspect.js';
 import {
   announceStageEntered,
   ensureFirstContactTask,
@@ -521,6 +523,7 @@ export async function upsertLead(db: Database, given: IncomingLead): Promise<Ups
     await announceStageEntered(result.lead);
   if (result.created && !incoming.importBatchId && !result.stale)
     await announceNewLead(db, result.lead);
+  if (result.created) await markSuspectsAround(db, result.lead.id);
   return result;
 }
 
@@ -708,7 +711,8 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
         detail: {
           newLeadId: created.id,
           source: incoming.source,
-          reason: reopenedFrom.won !== null || reopenedFrom.closedAt !== null ? 'closed' : 'unworked',
+          reason:
+            reopenedFrom.won !== null || reopenedFrom.closedAt !== null ? 'closed' : 'unworked',
         },
       });
     }
@@ -891,6 +895,13 @@ export function toLead(
     aiSummary:
       row.aiSummary && typeof row.aiSummary === 'object'
         ? (row.aiSummary as Lead['aiSummary'])
+        : null,
+    suspect:
+      row.suspectAt && !row.suspectClearedAt
+        ? {
+            reasons: (row.suspectReasons ?? []) as LeadSuspectReason[],
+            at: row.suspectAt.toISOString(),
+          }
         : null,
     enteredAt: row.enteredAt.toISOString(),
     enteredAtSource: row.enteredAtSource as LeadEnteredSource,

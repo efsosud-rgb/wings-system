@@ -6,6 +6,7 @@ import {
   LEAD_NAME_MAX,
   LEAD_PIPELINE_LABELS,
   LEAD_SOURCE_LABELS,
+  LEAD_SUSPECT_REASONS,
   LEAD_TASK_KIND_LABELS,
   LEAD_TASK_KINDS,
   sourceBadgeOf,
@@ -33,6 +34,7 @@ import {
 import {
   useAddNote,
   useCheckLead,
+  useClearSuspect,
   useCreateTask,
   useLead,
   useSellers,
@@ -172,6 +174,7 @@ export function DealPage() {
             <ContactPanel data={data} canWrite={canWrite} ref={contacts} />
           </div>
           <div className="crm-stack is-center">
+            <SuspectStrip lead={data.lead} canWrite={canWrite} />
             <FirstContactStrip data={data} canWrite={canWrite} onAct={act} />
             <DealSummary lead={data.lead} canWrite={canWrite} />
             <NextPanel data={data} canWrite={canWrite} onAct={act} />
@@ -692,6 +695,45 @@ function FirstContactStrip({
             onClick={() => update.mutate({ taskId: first.id, done: true })}
           >
             Contato feito
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Marked as a likely robot sign-up: the reasons in plain words. Nothing was
+ * closed or lost; the seller confirms (Perdido) or clears the mark.
+ */
+function SuspectStrip({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
+  const clear = useClearSuspect();
+  if (!lead.suspect) return null;
+  return (
+    <section className="crm-strip is-late" aria-label="Lead suspeito">
+      <Icon name="alert" size={16} />
+      <div>
+        <b>Lead suspeito de robô: confirme antes de trabalhar</b>
+        <ul className="crm-sub" style={{ margin: 0, paddingLeft: '1.1em' }}>
+          {lead.suspect.reasons.map((reason) => (
+            <li key={reason}>{LEAD_SUSPECT_REASONS[reason] ?? reason}</li>
+          ))}
+        </ul>
+        <div className="crm-sub">
+          Marcado em {new Date(lead.suspect.at).toLocaleString('pt-BR')}. Nada foi apagado nem
+          marcado como perdido.
+        </div>
+        {clear.isError && <div className="crm-sub">Não deu para tirar a marca. Tente de novo.</div>}
+      </div>
+      {canWrite && (
+        <div className="crm-quick-row">
+          <button
+            type="button"
+            className="crm-btn is-small"
+            disabled={clear.isPending}
+            onClick={() => clear.mutate(lead.id)}
+          >
+            {clear.isPending ? 'Tirando…' : 'Não é robô'}
           </button>
         </div>
       )}

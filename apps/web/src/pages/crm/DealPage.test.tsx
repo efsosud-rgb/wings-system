@@ -70,6 +70,7 @@ const lead = (over: Omit<Partial<Lead>, 'work'> & { work?: Partial<Lead['work']>
   crm: null,
   consent: { legalBasis: null, consentedAt: null, source: null, text: null },
   aiSummary: null,
+  suspect: null,
   research: {
     state: 'none',
     summary: null,
@@ -131,6 +132,7 @@ vi.mock('../../api/leads.js', () => ({
   useSellers: () => ({ ...idle(), ...queryState.sellersQuery }),
   useStages: () => ({ ...idle(), ...queryState.stagesQuery }),
   useCheckLead: idle,
+  useClearSuspect: idle,
   useUpdateLead: () => mutation(),
   useUpdateTask: () => mutation(),
   useAddNote: () => mutation(),
@@ -335,5 +337,24 @@ describe('when a request fails', () => {
     expect(select.selectedOptions[0]?.textContent).toBe('Eric');
     expect(select.disabled).toBe(true);
     vi.restoreAllMocks();
+  });
+});
+
+describe('Lead suspeito', () => {
+  it('shows the reasons and "Não é robô" on a marked lead, and nothing on the others', () => {
+    queryState.lead = lead({
+      suspect: { reasons: ['robot_email', 'capital_ddd', 'burst'], at: '2026-10-13T12:00:00Z' },
+    });
+    show();
+    const strip = within(screen.getByRole('region', { name: 'Lead suspeito' }));
+    expect(strip.getByText(/E-mail nome\.sobrenome/)).toBeTruthy();
+    expect(strip.getByText('Telefone com DDD de capital')).toBeTruthy();
+    expect(strip.getByText(/4 envios ou mais/)).toBeTruthy();
+    expect(strip.getByText(/Nada foi apagado nem marcado como perdido/)).toBeTruthy();
+    expect(strip.getByRole('button', { name: 'Não é robô' })).toBeTruthy();
+    cleanup();
+    queryState.lead = lead({});
+    show();
+    expect(screen.queryByRole('region', { name: 'Lead suspeito' })).toBeNull();
   });
 });

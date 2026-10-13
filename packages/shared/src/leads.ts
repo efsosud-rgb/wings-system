@@ -921,11 +921,36 @@ export interface Lead {
   research: LeadResearch;
   /** The AI summary of the deal (ficha do cliente, Etapa 4); null until asked for. */
   aiSummary: LeadAiSummary | null;
+  /** Marked as a likely robot sign-up, with the reasons; null when not (or cleared by a person). */
+  suspect: LeadSuspect | null;
   /** When the person entered, by the source's own clock (see `LEAD_ENTERED_SOURCES`). */
   enteredAt: string;
   enteredAtSource: LeadEnteredSource;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * The signs of the robot that fills the brands' pages with made-up people
+ * (Grupo Forte Fênix, October 2026). A lead is marked when it has the robot's
+ * e-mail and a capital's DDD, and also comes in a burst or by direct traffic.
+ * Marking never closes, loses or deletes the lead: the seller confirms.
+ */
+export const LEAD_SUSPECT_REASONS = {
+  robot_email: 'E-mail nome.sobrenome + 10 dígitos @gmail.com, e os dígitos não são o telefone',
+  capital_ddd: 'Telefone com DDD de capital',
+  burst: '4 envios ou mais em até 3 minutos na mesma página',
+  direct_traffic: 'Origem Tráfego Direto: sem UTM, clique de anúncio nem página de origem',
+} as const;
+export type LeadSuspectReason = keyof typeof LEAD_SUSPECT_REASONS;
+
+/** The DDDs of the capitals the robot uses. */
+export const SUSPECT_CAPITAL_DDDS = ['11', '21', '31', '41', '51', '61', '81', '85', '91'] as const;
+
+export interface LeadSuspect {
+  reasons: LeadSuspectReason[];
+  /** When the system marked it. */
+  at: string;
 }
 
 export interface LeadListItem {

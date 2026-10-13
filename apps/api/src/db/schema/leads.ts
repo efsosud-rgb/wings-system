@@ -167,6 +167,14 @@ export const leads = pgTable(
      * deal's creation, the RD Marketing conversion, the moment a site form was sent). The CRM
      * shows, sorts and filters by this. `created_at` stays the row's own time and is not changed.
      */
+    /**
+     * A likely robot sign-up (`LEAD_SUSPECT_REASONS`): the reasons and when the
+     * system marked it. A person who clears it leaves the reasons for history.
+     */
+    suspectReasons: text('suspect_reasons').array(),
+    suspectAt: timestamp('suspect_at', { withTimezone: true }),
+    suspectClearedAt: timestamp('suspect_cleared_at', { withTimezone: true }),
+    suspectClearedBy: uuid('suspect_cleared_by').references(() => employees.id),
     enteredAt: timestamp('entered_at', { withTimezone: true }).notNull().defaultNow(),
     /**
      * Whose clock `entered_at` is (`LEAD_ENTERED_SOURCES` in packages/shared). 'received' means

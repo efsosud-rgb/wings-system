@@ -98,6 +98,7 @@ const lead = (): Lead => ({
   fields: { instagram: null, website: null, companyName: null, cnpj: null },
   checks: {},
   aiSummary: null,
+  suspect: null,
   research: {
     state: 'none',
     summary: null,
