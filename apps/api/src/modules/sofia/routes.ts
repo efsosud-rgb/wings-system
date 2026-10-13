@@ -89,7 +89,9 @@ export function itemOf(row: ConversationListRow, now: Date): SofiaConversationIt
 export const sofiaRoutes: FastifyPluginAsync = async (app) => {
   const { db, env } = app.wings;
   const now = () => app.wings.now?.() ?? new Date();
-  const use = { preHandler: app.requirePermission('leads.whatsapp') };
+  // The screen with every conversation: Admin Master, Diretoria and Gerente Comercial (13/10).
+  // Inside it, rows still follow the lead's owner scope of `leads.whatsapp`.
+  const use = { preHandler: app.requirePermission('sofia.read') };
   const manage = { preHandler: app.requirePermission('sofia.manage') };
 
   const ownerOf = (request: FastifyRequest) =>

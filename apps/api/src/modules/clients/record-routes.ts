@@ -226,12 +226,13 @@ export const clientRecordRoutes: FastifyPluginAsync = async (app) => {
 
   const canLookUp = (request: FastifyRequest) =>
     app.can(request, 'clients.edit') || app.can(request, 'clients.manage');
+  const lookupGate = app.requireAnyPermission(['clients.edit', 'clients.manage']);
   // The public registries throttle us per IP; keep each person to a human pace.
   const lookupLimit = { rateLimit: { max: 20, timeWindow: '1 minute' } };
 
   app.post(
     '/clients/lookup/cnpj',
-    { preHandler: app.requireAuth, config: lookupLimit },
+    { preHandler: lookupGate, config: lookupLimit },
     async (request, reply) => {
       if (!canLookUp(request))
         return reply.status(403).send({ error: 'forbidden', message: 'Acesso negado' });
@@ -254,7 +255,7 @@ export const clientRecordRoutes: FastifyPluginAsync = async (app) => {
 
   app.post(
     '/clients/lookup/cep',
-    { preHandler: app.requireAuth, config: lookupLimit },
+    { preHandler: lookupGate, config: lookupLimit },
     async (request, reply) => {
       if (!canLookUp(request))
         return reply.status(403).send({ error: 'forbidden', message: 'Acesso negado' });

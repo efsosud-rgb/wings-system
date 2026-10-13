@@ -54,8 +54,10 @@ export const agentRoutes: FastifyPluginAsync = async (app) => {
   const scopeOf = (value: unknown): AgentScope =>
     (AGENT_SCOPES as readonly unknown[]).includes(value) ? (value as AgentScope) : 'traffic';
   const forbidden = { error: 'forbidden', message: 'Acesso negado' };
+  // The module gate: either agent's door; mayTalkTo then picks the one the request names.
+  const agentGate = app.requireAnyPermission(['ads.read', 'marketing.media.read']);
 
-  app.get('/agent/status', { preHandler: app.requireAuth }, async (request, reply) => {
+  app.get('/agent/status', { preHandler: agentGate }, async (request, reply) => {
     if (!mayTalkTo(request, 'traffic') && !mayTalkTo(request, 'media')) {
       return reply.status(403).send(forbidden);
     }
@@ -66,7 +68,7 @@ export const agentRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(body);
   });
 
-  app.get('/agent/conversations', { preHandler: app.requireAuth }, async (request, reply) => {
+  app.get('/agent/conversations', { preHandler: agentGate }, async (request, reply) => {
     const scope = scopeOf((request.query as { scope?: unknown } | undefined)?.scope);
     if (!mayTalkTo(request, scope)) return reply.status(403).send(forbidden);
     const rows = await db
@@ -89,7 +91,7 @@ export const agentRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
-  app.get('/agent/conversations/:id', { preHandler: app.requireAuth }, async (request, reply) => {
+  app.get('/agent/conversations/:id', { preHandler: agentGate }, async (request, reply) => {
     const params = idParam.safeParse(request.params);
     const found = params.success
       ? await db.query.agentConversations.findFirst({
@@ -115,7 +117,7 @@ export const agentRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(body);
   });
 
-  app.post('/agent/messages', { preHandler: app.requireAuth }, async (request, reply) => {
+  app.post('/agent/messages', { preHandler: agentGate }, async (request, reply) => {
     const parsed = agentSendMessageSchema.safeParse(request.body);
     if (!mayTalkTo(request, parsed.success ? parsed.data.scope : 'traffic')) {
       return reply.status(403).send(forbidden);
@@ -259,39 +261,35 @@ export const agentRoutes: FastifyPluginAsync = async (app) => {
    * The form and the timeline live in the browser; this is the record. Each
    * kind has the door of the screen it is applied on.
    */
-  app.post(
-    '/agent/proposals/:id/applied',
-    { preHandler: app.requireAuth },
-    async (request, reply) => {
-      const params = idParam.safeParse(request.params);
-      const employeeId = request.session.actor.employeeId;
-      const row = params.success ? await ownProposal(params.data.id, employeeId) : null;
-      const allowed =
-        row?.kind === 'campaign'
-          ? app.can(request, 'ads.read')
-          : row?.kind === 'timeline_edit'
-            ? app.can(request, 'marketing.media.edit')
-            : false;
-      if (!row || !allowed) {
-        return reply.status(404).send({ error: 'not_found', message: 'Proposta não encontrada.' });
-      }
-      const now = new Date();
-      await db
-        .update(agentProposals)
-        .set({ status: 'applied', actedBy: employeeId, actedAt: now })
-        .where(eq(agentProposals.id, row.id));
-      await writeAudit(db, {
-        actorEmployeeId: employeeId,
-        action: 'agent.proposal_applied',
-        entity: 'agent_proposal',
-        entityId: row.id,
-        ip: request.ip,
-        metadata: { kind: row.kind, conversationId: row.conversationId },
-      });
-      const proposal = await cardOf(db, { ...row, status: 'applied' });
-      return reply.send({ proposal });
-    },
-  );
+  app.post('/agent/proposals/:id/applied', { preHandler: agentGate }, async (request, reply) => {
+    const params = idParam.safeParse(request.params);
+    const employeeId = request.session.actor.employeeId;
+    const row = params.success ? await ownProposal(params.data.id, employeeId) : null;
+    const allowed =
+      row?.kind === 'campaign'
+        ? app.can(request, 'ads.read')
+        : row?.kind === 'timeline_edit'
+          ? app.can(request, 'marketing.media.edit')
+          : false;
+    if (!row || !allowed) {
+      return reply.status(404).send({ error: 'not_found', message: 'Proposta não encontrada.' });
+    }
+    const now = new Date();
+    await db
+      .update(agentProposals)
+      .set({ status: 'applied', actedBy: employeeId, actedAt: now })
+      .where(eq(agentProposals.id, row.id));
+    await writeAudit(db, {
+      actorEmployeeId: employeeId,
+      action: 'agent.proposal_applied',
+      entity: 'agent_proposal',
+      entityId: row.id,
+      ip: request.ip,
+      metadata: { kind: row.kind, conversationId: row.conversationId },
+    });
+    const proposal = await cardOf(db, { ...row, status: 'applied' });
+    return reply.send({ proposal });
+  });
 
   /**
    * "Criar pedido" was clicked. The request is the person's: the same budget

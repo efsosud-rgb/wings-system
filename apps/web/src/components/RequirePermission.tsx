@@ -1,4 +1,4 @@
-import type { PermissionKey } from '@wings/shared';
+import { canSeeSubmodule, type NavSubmodule, type PermissionKey } from '@wings/shared';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { hasPermission, useSession } from '../api/auth.js';
@@ -29,6 +29,34 @@ export function RequirePermission({
   }
 
   if (!hasPermission(session.data, permission)) {
+    return <NoAccess />;
+  }
+
+  return <>{children}</>;
+}
+
+/**
+ * The gate every sub-module route sits behind: the same rule that builds the
+ * menu (`canSeeSubmodule`), so an address typed by hand opens exactly what the
+ * menu would have offered — "em breve" placeholders included — and shows
+ * "Sem acesso" otherwise.
+ */
+export function RequireSubmodule({
+  submodule,
+  children,
+}: {
+  submodule: NavSubmodule;
+  children: ReactNode;
+}) {
+  const session = useSession();
+
+  if (session.isLoading) {
+    return <div className="page-loading">Carregando…</div>;
+  }
+
+  const user = session.data;
+  const viewer = user ? { role: user.role, permissions: user.permissions } : null;
+  if (!canSeeSubmodule(viewer, submodule)) {
     return <NoAccess />;
   }
 

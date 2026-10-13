@@ -262,7 +262,7 @@ export async function buildApp(deps: {
 
   // Routes are registered WITHOUT the /api prefix: Traefik strips it before
   // forwarding and the Vite dev proxy rewrites the same way.
-  app.get('/health', async () => ({
+  app.get('/health', { preHandler: app.publicRoute('container health check') }, async () => ({
     status: 'ok',
     service: 'wings-system-api',
     time: new Date().toISOString(),

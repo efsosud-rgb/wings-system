@@ -190,6 +190,7 @@ function ConversationRow({ row, active }: { row: WaConversationItem; active: boo
 function OpenConversation({ id, item }: { id: string; item: WaConversationItem | null }) {
   const session = useSession();
   const canSend = hasPermission(session.data, 'leads.whatsapp');
+  const mayOpenSofia = hasPermission(session.data, 'sofia.read');
   const thread = useWhatsAppConversation(id);
   const { mutate: markRead } = useMarkWhatsAppRead();
   const last = thread.data?.messages.at(-1)?.id;
@@ -244,11 +245,11 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
           <Link className="crm-btn is-small" to={`/crm-vendas/negociacoes/${leadId}`}>
             Abrir negociação
           </Link>
-        ) : (
+        ) : mayOpenSofia ? (
           <Link className="crm-btn is-small" to={`/crm-vendas/sofia/${id}`}>
             Ver na Sofia
           </Link>
-        )}
+        ) : null}
       </header>
       {(data.attendance === 'sofia' || data.attendance === 'waiting_human') && (
         <p className="crm-wa-window">

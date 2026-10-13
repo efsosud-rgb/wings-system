@@ -81,6 +81,7 @@ A push does not deploy: the repository has no webhook. Deploys are started throu
 
 - In a route file (`routes.ts`, `*-routes.ts`) a handler parses the input with the Zod schema from `@wings/shared`, authorizes with `app.requirePermission(...)`, calls a function, writes the audit entry when the action needs one, and sends the reply. Example: `apps/api/src/modules/roadmap/routes.ts` calls `service.ts`.
 - Business rules and queries live in `service.ts` or a topic file beside the routes (`access.ts`, `crm.ts`, `deal.ts`), never inside a handler, so a test and a script can call them without HTTP. Some older route files still run queries inline: do not copy that, and do not move it unless asked.
+- Every route declares its access in its `preHandler`: `app.requirePermission(...)` (or `requireAnyPermission`) with the module permission from the matrix, `app.requireSession` for the few any-login routes, or `app.publicRoute(reason)`. `requireAuth` alone declares nothing: an undeclared route answers 403 to everyone and `route-access.test.ts` fails. See `docs/niveis-de-acesso.md`.
 - Authorization, and the scoping of data by own / sector / all, are decided in the API only. A rule the web needs too (a permission name, `roleChangeDenial`, a schema) comes from `packages/shared`; the web never rewrites it.
 - A screen that cannot load data shows "—" and the reason, never an empty list or a zero that looks real. Use `components/LoadFailure.tsx` and `lib/failure.ts`; show the empty text only after a successful read.
 

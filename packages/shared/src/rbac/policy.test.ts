@@ -75,9 +75,11 @@ describe('Diretoria has no settings or API credential access', () => {
     expect(can(diretor, p)).toEqual({ allowed: false, reason: 'no_permission' });
   });
 
-  it('grants both to Admin Master and TI', () => {
+  it('grants both to the Admin Master alone, not to TI (Eric, 13/10)', () => {
     expect(can(adminMaster, 'settings.manage').allowed).toBe(true);
-    expect(can(ti, 'api_credentials.manage').allowed).toBe(true);
+    expect(can(adminMaster, 'api_credentials.manage').allowed).toBe(true);
+    expect(can(ti, 'settings.manage').allowed).toBe(false);
+    expect(can(ti, 'api_credentials.manage').allowed).toBe(false);
   });
 });
 

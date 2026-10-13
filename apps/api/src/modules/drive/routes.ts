@@ -521,9 +521,11 @@ export const driveBlobRoutes: FastifyPluginAsync = async (app) => {
   const tokenOf = (request: FastifyRequest) =>
     z.object({ t: z.string().min(20).max(2000) }).safeParse(request.query).data?.t;
 
+  // No login, as with R2: the signed, short-lived address is the credential.
+  const signedLink = app.publicRoute('local stand-in for R2, signed address');
   app.put(
     '/drive/blob',
-    { bodyLimit: app.wings.env.DRIVE_MAX_FILE_BYTES },
+    { preHandler: signedLink, bodyLimit: app.wings.env.DRIVE_MAX_FILE_BYTES },
     async (request, reply) => {
       const grant = local.open(tokenOf(request) ?? '');
       const length = Number(request.headers['content-length'] ?? -1);
@@ -548,7 +550,7 @@ export const driveBlobRoutes: FastifyPluginAsync = async (app) => {
    * for ranges (a seek is a range request), as they would from R2; without
    * 206 answers the browser never gets a frame after the first.
    */
-  app.get('/drive/blob', async (request, reply) => {
+  app.get('/drive/blob', { preHandler: signedLink }, async (request, reply) => {
     const grant = local.open(tokenOf(request) ?? '');
     const size = grant?.verb === 'GET' ? await local.size(grant.key) : null;
     if (!grant || size === null) return reply.status(404).send({ error: 'not_found' });

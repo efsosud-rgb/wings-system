@@ -45,6 +45,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   app.post(
     '/auth/login',
     {
+      preHandler: app.publicRoute('login'),
       config: {
         // Brute-force guard per IP; the per-account lockout lives in the service.
         // Tests share one IP across many cases, so the IP guard is relaxed there
@@ -87,14 +88,18 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  app.post('/auth/logout', async (request, reply) => {
-    const token = request.cookies[SESSION_COOKIE];
-    if (token) await logout(app.wings.db, token, requestContext(request));
-    reply.clearCookie(SESSION_COOKIE, { path: '/' });
-    return reply.send({ ok: true });
-  });
+  app.post(
+    '/auth/logout',
+    { preHandler: app.publicRoute('ends the session the cookie names, if any') },
+    async (request, reply) => {
+      const token = request.cookies[SESSION_COOKIE];
+      if (token) await logout(app.wings.db, token, requestContext(request));
+      reply.clearCookie(SESSION_COOKIE, { path: '/' });
+      return reply.send({ ok: true });
+    },
+  );
 
-  app.get('/auth/me', { preHandler: app.requireAuth }, async (request, reply) => {
+  app.get('/auth/me', { preHandler: app.requireSession }, async (request, reply) => {
     return reply.send({ user: request.session.user });
   });
 
@@ -105,6 +110,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   app.post(
     '/auth/forgot-password',
     {
+      preHandler: app.publicRoute('password reset request; always 202'),
       config: {
         rateLimit: {
           max: app.wings.env.NODE_ENV === 'test' ? 10_000 : 5,
@@ -132,6 +138,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
   app.post(
     '/auth/set-password',
     {
+      preHandler: app.publicRoute('invite or reset link; the token is the credential'),
       config: {
         rateLimit: {
           max: app.wings.env.NODE_ENV === 'test' ? 10_000 : 20,

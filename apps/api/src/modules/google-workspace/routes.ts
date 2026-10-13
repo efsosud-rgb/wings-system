@@ -37,12 +37,12 @@ export const googleWorkspaceRoutes: FastifyPluginAsync = async (app) => {
       'O Google Workspace ainda não foi configurado no sistema (cliente OAuth e chave de integrações).',
   };
 
-  app.get('/me/google', { preHandler: app.requireAuth }, async (request, reply) =>
+  app.get('/me/google', { preHandler: app.requireSession }, async (request, reply) =>
     reply.send({ status: await statusFor(deps(), request.session.actor.employeeId) }),
   );
 
   /** Answers the address of Google's consent screen; the browser goes there on its own. */
-  app.post('/me/google/connect', { preHandler: app.requireAuth }, async (request, reply) => {
+  app.post('/me/google/connect', { preHandler: app.requireSession }, async (request, reply) => {
     const d = deps();
     if (!d) return reply.status(503).send(notConfigured);
     const employeeId = request.session.actor.employeeId;
@@ -54,7 +54,7 @@ export const googleWorkspaceRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ url });
   });
 
-  app.get('/me/google/callback', { preHandler: app.requireAuth }, async (request, reply) => {
+  app.get('/me/google/callback', { preHandler: app.requireSession }, async (request, reply) => {
     const d = deps();
     const employeeId = request.session.actor.employeeId;
     const query = callbackQuery.safeParse(request.query);
@@ -90,7 +90,7 @@ export const googleWorkspaceRoutes: FastifyPluginAsync = async (app) => {
     return reply.redirect(`${ACCOUNT_PAGE}?google=ok`);
   });
 
-  app.delete('/me/google', { preHandler: app.requireAuth }, async (request, reply) => {
+  app.delete('/me/google', { preHandler: app.requireSession }, async (request, reply) => {
     const d = deps();
     if (!d) return reply.status(503).send(notConfigured);
     const employeeId = request.session.actor.employeeId;

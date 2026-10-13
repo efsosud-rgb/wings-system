@@ -70,6 +70,13 @@ const listQuerySchema = z.object({
 const idParamSchema = z.object({ id: z.string().uuid() });
 
 export const employeeRoutes: FastifyPluginAsync = async (app) => {
+  // Editing a record touches several powers (data, level, status); the service decides each one.
+  const editEmployee = app.requireAnyPermission([
+    'employees.update',
+    'employees.assign_roles',
+    'roles.assign',
+    'employees.deactivate',
+  ]);
   const { db, cpfCrypto, mailer, env } = app.wings;
 
   function inviteFailure(code: InviteFailureCode): InviteOutcome {
@@ -110,45 +117,53 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  app.get('/employees/:id', { preHandler: app.requireAuth }, async (request, reply) => {
-    const params = idParamSchema.safeParse(request.params);
-    if (!params.success) return fail(reply, 'not_found');
+  app.get(
+    '/employees/:id',
+    { preHandler: app.requirePermission('employees.read') },
+    async (request, reply) => {
+      const params = idParamSchema.safeParse(request.params);
+      if (!params.success) return fail(reply, 'not_found');
 
-    const result = await getEmployee(db, request.session.actor, cpfCrypto, params.data.id);
-    return result.ok ? reply.send({ employee: result.value }) : fail(reply, result.reason);
-  });
+      const result = await getEmployee(db, request.session.actor, cpfCrypto, params.data.id);
+      return result.ok ? reply.send({ employee: result.value }) : fail(reply, result.reason);
+    },
+  );
 
   /**
    * Creating an employee also sends the invite so they can set their own
    * password. A mail failure does not roll back the employee: the record is
    * created and `inviteSent: false` tells the UI to offer a re-send.
    */
-  app.post('/employees', { preHandler: app.requireAuth }, async (request, reply) => {
-    const parsed = employeeCreateSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.status(400).send({
-        error: 'invalid_request',
-        message: parsed.error.issues[0]?.message ?? 'Dados inválidos',
-        field: parsed.error.issues[0]?.path.join('.'),
-      });
-    }
+  app.post(
+    '/employees',
+    { preHandler: app.requirePermission('employees.create') },
+    async (request, reply) => {
+      const parsed = employeeCreateSchema.safeParse(request.body);
+      if (!parsed.success) {
+        return reply.status(400).send({
+          error: 'invalid_request',
+          message: parsed.error.issues[0]?.message ?? 'Dados inválidos',
+          field: parsed.error.issues[0]?.path.join('.'),
+        });
+      }
 
-    const created = await createEmployee(
-      db,
-      request.session.actor,
-      cpfCrypto,
-      parsed.data,
-      requestContext(request),
-    );
-    if (!created.ok) return fail(reply, created.reason);
+      const created = await createEmployee(
+        db,
+        request.session.actor,
+        cpfCrypto,
+        parsed.data,
+        requestContext(request),
+      );
+      if (!created.ok) return fail(reply, created.reason);
 
-    // The registration is complete either way; the operator must be told
-    // plainly whether the invite actually went out.
-    const invite = await attemptInvite(created.value.id, request);
-    return reply.status(201).send({ employee: created.value, invite, inviteSent: invite.sent });
-  });
+      // The registration is complete either way; the operator must be told
+      // plainly whether the invite actually went out.
+      const invite = await attemptInvite(created.value.id, request);
+      return reply.status(201).send({ employee: created.value, invite, inviteSent: invite.sent });
+    },
+  );
 
-  app.patch('/employees/:id', { preHandler: app.requireAuth }, async (request, reply) => {
+  app.patch('/employees/:id', { preHandler: editEmployee }, async (request, reply) => {
     const params = idParamSchema.safeParse(request.params);
     if (!params.success) return fail(reply, 'not_found');
 
@@ -198,42 +213,50 @@ export const employeeRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /** POST, not GET: a CPF must never sit in a URL, a log or browser history. */
-  app.post('/employees/:id/reveal-cpf', { preHandler: app.requireAuth }, async (request, reply) => {
-    const params = idParamSchema.safeParse(request.params);
-    if (!params.success) return fail(reply, 'not_found');
+  app.post(
+    '/employees/:id/reveal-cpf',
+    { preHandler: app.requirePermission('employees.pii.view') },
+    async (request, reply) => {
+      const params = idParamSchema.safeParse(request.params);
+      if (!params.success) return fail(reply, 'not_found');
 
-    const result = await revealCpf(
-      db,
-      request.session.actor,
-      cpfCrypto,
-      params.data.id,
-      requestContext(request),
-    );
-    return result.ok ? reply.send(result.value) : fail(reply, result.reason);
-  });
+      const result = await revealCpf(
+        db,
+        request.session.actor,
+        cpfCrypto,
+        params.data.id,
+        requestContext(request),
+      );
+      return result.ok ? reply.send(result.value) : fail(reply, result.reason);
+    },
+  );
 
   /** Re-sends the invite for an employee who has not set a password yet. */
-  app.post('/employees/:id/invite', { preHandler: app.requireAuth }, async (request, reply) => {
-    const params = idParamSchema.safeParse(request.params);
-    if (!params.success) return fail(reply, 'not_found');
+  app.post(
+    '/employees/:id/invite',
+    { preHandler: app.requirePermission('employees.create') },
+    async (request, reply) => {
+      const params = idParamSchema.safeParse(request.params);
+      if (!params.success) return fail(reply, 'not_found');
 
-    const target = await getEmployee(db, request.session.actor, cpfCrypto, params.data.id);
-    if (!target.ok) return fail(reply, target.reason);
+      const target = await getEmployee(db, request.session.actor, cpfCrypto, params.data.id);
+      if (!target.ok) return fail(reply, target.reason);
 
-    const decision = app.can(request, 'employees.create', { sector: target.value.sector });
-    if (!decision) return fail(reply, 'forbidden');
-    if (!mailer.enabled) {
-      return reply
-        .status(503)
-        .send({ error: 'email_not_configured', message: 'Envio de e-mail indisponível.' });
-    }
+      const decision = app.can(request, 'employees.create', { sector: target.value.sector });
+      if (!decision) return fail(reply, 'forbidden');
+      if (!mailer.enabled) {
+        return reply
+          .status(503)
+          .send({ error: 'email_not_configured', message: 'Envio de e-mail indisponível.' });
+      }
 
-    const invite = await sendInvite(db, mailer, {
-      employeeId: params.data.id,
-      baseUrl: env.APP_BASE_URL,
-      actorId: request.session.actor.employeeId,
-      ctx: requestContext(request),
-    });
-    return invite.sent ? reply.send({ ok: true }) : fail(reply, 'not_found');
-  });
+      const invite = await sendInvite(db, mailer, {
+        employeeId: params.data.id,
+        baseUrl: env.APP_BASE_URL,
+        actorId: request.session.actor.employeeId,
+        ctx: requestContext(request),
+      });
+      return invite.sent ? reply.send({ ok: true }) : fail(reply, 'not_found');
+    },
+  );
 };

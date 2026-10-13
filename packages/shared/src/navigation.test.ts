@@ -8,8 +8,11 @@ import {
   moduleKeyForPath,
   NAVIGATION,
   visibleNavigation,
+  type NavSubmodule,
   type NavViewer,
 } from './navigation.js';
+import { ROLE_PERMISSIONS } from './rbac/permissions.js';
+import { ROLE_KEYS, type RoleKey } from './rbac/roles.js';
 
 /**
  * The navigation tree is the single declaration behind the sidebar, the routes
@@ -54,8 +57,11 @@ describe('the tree itself', () => {
     // nothing to protect yet.
     for (const submodule of ALL_SUBMODULES) {
       // Início has nothing of its own to protect: it only lists what the
-      // viewer may already open, so any login may see it.
-      if (submodule.path === '/inicio') continue;
+      // viewer may already open, so it says `everyone` instead.
+      if (submodule.everyone) {
+        expect(submodule.path).toBe('/inicio');
+        continue;
+      }
       if (submodule.status === 'ready') expect(submodule.permission).toBeTruthy();
     }
   });
@@ -97,10 +103,13 @@ describe('who sees what', () => {
   it('shows SaaS only to Admin Master, whatever their permissions', () => {
     const saas = NAVIGATION.find((module) => module.key === 'saas');
     if (!saas) throw new Error('missing');
-    expect(canSeeModule(adminMaster, saas)).toBe(true);
+    // SaaS has only placeholders, which also need `modules.preview`.
+    expect(canSeeModule(viewer('admin_master', { 'modules.preview': 'all' }), saas)).toBe(true);
     expect(canSeeModule(marketing, saas)).toBe(false);
     // Even a role holding every permission is not the platform operator.
-    expect(canSeeModule(viewer('diretoria', { 'ads.read': 'all' }), saas)).toBe(false);
+    expect(
+      canSeeModule(viewer('diretoria', { 'ads.read': 'all', 'modules.preview': 'all' }), saas),
+    ).toBe(false);
   });
 
   it('drops a module entirely when none of its sub-modules are reachable', () => {
@@ -163,5 +172,88 @@ describe('screens that moved', () => {
     // Messages already sent cannot be edited, and a 404 here cost us a stage.
     const approvals = LEGACY_REDIRECTS.find((r) => r.from === '/trafego-pago/aprovacoes');
     expect(approvals?.to).toBe('/marketing/trafego-pago-wings/aprovacoes');
+  });
+});
+
+/**
+ * The menu each level gets from the real matrix (Eric, 13/10). A seller who saw
+ * the whole system on staging is what this pins down.
+ */
+describe('menu by access level', () => {
+  const asRole = (role: RoleKey): NavViewer => ({ role, permissions: ROLE_PERMISSIONS[role] });
+  const menuOf = (role: RoleKey) =>
+    Object.fromEntries(
+      visibleNavigation(asRole(role)).map((module) => [
+        module.key,
+        module.submodules.map((submodule) => submodule.path),
+      ]),
+    );
+
+  it('gives a Vendedor Expansão the CRM of their own leads and little else', () => {
+    expect(menuOf('vendedor_expansao')).toEqual({
+      inicio: ['/inicio'],
+      'crm-vendas': [
+        '/crm-vendas/negociacoes',
+        '/crm-vendas/whatsapp',
+        '/crm-vendas/contatos',
+        '/crm-vendas/empresas',
+        '/crm-vendas/tarefas',
+        '/crm-vendas/avisos',
+        '/crm-vendas/landing-pages',
+      ],
+      dashboard: ['/dashboard/vendas'],
+      gestao: ['/gestao/projetos'],
+      drive: ['/drive/arquivos'],
+    });
+  });
+
+  it('adds Leads das Campanhas for a Vendedor Formatação, and nothing more', () => {
+    const menu = menuOf('vendedor_formatacao');
+    expect(menu.dashboard).toEqual(['/dashboard/vendas', '/dashboard/leads-campanhas']);
+    expect(Object.keys(menu)).toEqual(['inicio', 'crm-vendas', 'dashboard', 'gestao', 'drive']);
+  });
+
+  it('keeps the Sofia screen to Gerente Comercial, Diretoria and Admin Master', () => {
+    const withSofia = ROLE_KEYS.filter((role) =>
+      Object.values(menuOf(role)).some((paths) => paths.includes('/crm-vendas/sofia')),
+    );
+    expect(withSofia.sort()).toEqual(['admin_master', 'diretoria', 'gerente_comercial']);
+  });
+
+  it('shows "em breve" placeholders only to Admin Master and Diretoria', () => {
+    const placeholders = new Set(
+      ALL_SUBMODULES.filter((s) => s.status === 'coming_soon').map((s) => s.path),
+    );
+    for (const role of ROLE_KEYS) {
+      const seen = Object.values(menuOf(role)).flat();
+      const anySoon = seen.some((path) => placeholders.has(path));
+      expect(anySoon, role).toBe(role === 'admin_master' || role === 'diretoria');
+    }
+  });
+
+  it('keeps Configurações and APIs to the Admin Master alone', () => {
+    for (const role of ROLE_KEYS) {
+      const seen = Object.values(menuOf(role)).flat();
+      const sees =
+        seen.includes('/administracao/configuracoes') || seen.includes('/administracao/apis');
+      expect(sees, role).toBe(role === 'admin_master');
+    }
+  });
+
+  it('opens Usuários e acessos only to who runs people', () => {
+    const withRegister = ROLE_KEYS.filter((role) =>
+      Object.values(menuOf(role)).some((paths) => paths.includes('/administracao/usuarios')),
+    );
+    expect(withRegister.sort()).toEqual([
+      'admin_master',
+      'diretoria',
+      'gerente_comercial',
+      'rh_dp',
+    ]);
+  });
+
+  it('never shows a built screen without a permission behind it', () => {
+    const bare: NavSubmodule = { path: '/x', label: 'X', status: 'ready', kind: 'crud' };
+    expect(canSeeSubmodule(asRole('admin_master'), bare)).toBe(false);
   });
 });

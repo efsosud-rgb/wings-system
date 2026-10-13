@@ -348,26 +348,30 @@ export const mediaStudioRoutes: FastifyPluginAsync = async (app) => {
    * opens one asset, for fifteen minutes, to whoever holds the signature — and
    * says nothing about why when it does not open.
    */
-  app.get('/media/public/:id', async (request, reply) => {
-    const params = idParam.safeParse(request.params);
-    const query = z.object({ sig: z.string().min(20).max(100) }).safeParse(request.query);
-    const asset =
-      params.success && query.success
-        ? await resolvePublicLink(deps, params.data.id, query.data.sig)
-        : null;
-    // Only reached for an asset on the volume: one in the bucket is handed to Kairogen as a
-    // pre-signed address of the bucket, never as this route.
-    const served = asset ? await serveMedia(source, asset, { expiresSeconds: 900 }) : null;
-    if (!asset || !served || 'redirect' in served) {
-      return reply.status(404).send({ error: 'not_found' });
-    }
-    const { stream } = served;
-    return reply
-      .header('Content-Type', asset.mimeType)
-      .header('Content-Length', asset.byteSize)
-      .header('Cache-Control', 'no-store')
-      .header('X-Content-Type-Options', 'nosniff')
-      .header('X-Robots-Tag', 'noindex')
-      .send(stream);
-  });
+  app.get(
+    '/media/public/:id',
+    { preHandler: app.publicRoute('signed 15-minute link Kairogen reads') },
+    async (request, reply) => {
+      const params = idParam.safeParse(request.params);
+      const query = z.object({ sig: z.string().min(20).max(100) }).safeParse(request.query);
+      const asset =
+        params.success && query.success
+          ? await resolvePublicLink(deps, params.data.id, query.data.sig)
+          : null;
+      // Only reached for an asset on the volume: one in the bucket is handed to Kairogen as a
+      // pre-signed address of the bucket, never as this route.
+      const served = asset ? await serveMedia(source, asset, { expiresSeconds: 900 }) : null;
+      if (!asset || !served || 'redirect' in served) {
+        return reply.status(404).send({ error: 'not_found' });
+      }
+      const { stream } = served;
+      return reply
+        .header('Content-Type', asset.mimeType)
+        .header('Content-Length', asset.byteSize)
+        .header('Cache-Control', 'no-store')
+        .header('X-Content-Type-Options', 'nosniff')
+        .header('X-Robots-Tag', 'noindex')
+        .send(stream);
+    },
+  );
 };
