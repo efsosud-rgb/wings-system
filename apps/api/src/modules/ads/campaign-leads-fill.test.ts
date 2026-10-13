@@ -29,7 +29,8 @@ const CAMPAIGNS: AttributionCampaign[] = [
     id: '00000000-0000-4000-8000-0000000000c1',
     platform: 'meta',
     externalId: '120252260012720076',
-    keys: ['formatacao_jimmyogro_set26'],
+    // Normalized as the sync builds them (no accents, case or separators).
+    keys: ['formatacaojimmyogroset26'],
     ads: [
       { id: '00000000-0000-4000-8000-0000000000a1', externalId: '120252260025750076', keys: [] },
     ],
@@ -89,12 +90,25 @@ describe('fillLeadAttribution', () => {
     );
     const plain = await siteLead();
     const guess = { ...DECIDED, attribution: 'rd_origin' as const };
-    expect(await fillLeadAttribution(db, plain, guess, UTMS, CAMPAIGNS)).toBe(false);
+    const otherUtm = { ...UTMS, campaign: 'outra_campanha' };
+    expect(await fillLeadAttribution(db, plain, guess, otherUtm, CAMPAIGNS)).toBe(false);
     const platformOnly = { ...UTMS, campaign: null };
     expect(await fillLeadAttribution(db, plain, DECIDED, platformOnly, CAMPAIGNS)).toBe(false);
     expect(await fillLeadAttribution(db, plain, DECIDED, null, CAMPAIGNS)).toBe(false);
     expect((await db.query.leads.findFirst({ where: eq(leads.id, plain.id) }))?.utmCampaign).toBe(
       null,
     );
+  });
+
+  it("takes RD's origin label when the UTM itself names the campaign", async () => {
+    const lead = await siteLead();
+    const labelled = { ...DECIDED, attribution: 'rd_origin' as const, adId: null };
+    expect(await fillLeadAttribution(db, lead, labelled, UTMS, CAMPAIGNS)).toBe(true);
+    const row = await db.query.leads.findFirst({ where: eq(leads.id, lead.id) });
+    expect(row).toMatchObject({
+      adCampaignExternalId: '120252260012720076',
+      adExternalId: null,
+      utmCampaign: 'formatacao_jimmyogro_set26',
+    });
   });
 });

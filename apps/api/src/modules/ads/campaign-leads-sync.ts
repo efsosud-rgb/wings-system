@@ -1096,17 +1096,19 @@ export async function fillLeadAttribution(
   campaigns: readonly AttributionCampaign[],
 ): Promise<boolean> {
   if (!decided.campaignId || !utms) return false;
-  if (decided.attribution !== 'utm') return false;
-  if (
-    isGuessedAttribution({
+  if (lead.adCampaignExternalId || lead.utmCampaign) return false;
+  const campaign = campaigns.find((entry) => entry.id === decided.campaignId);
+  // A finding: the UTM attribution itself, or a UTM campaign that is one of this campaign's
+  // own keys (an older row may still be labelled with RD's origin while its UTM names it).
+  const named = Boolean(utms.campaign && campaign?.keys.includes(norm(utms.campaign)));
+  const byUtm =
+    decided.attribution === 'utm' &&
+    !isGuessedAttribution({
       attribution: decided.attribution,
       utmCampaign: utms.campaign,
       utmContent: utms.content,
-    })
-  )
-    return false;
-  if (lead.adCampaignExternalId || lead.utmCampaign) return false;
-  const campaign = campaigns.find((entry) => entry.id === decided.campaignId);
+    });
+  if (!byUtm && !named) return false;
   const ad = decided.adId ? campaign?.ads.find((entry) => entry.id === decided.adId) : undefined;
   const values = {
     utmSource: lead.utmSource ?? (utms.source ? utmSourceName(utms.source) : null),
