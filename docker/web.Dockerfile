@@ -18,5 +18,6 @@ RUN pnpm --filter @wings/shared build && pnpm --filter @wings/studio build && pn
 # Runtime image contains ONLY the built static files — no source, no node_modules.
 FROM nginx:alpine AS runner
 COPY docker/web-nginx.conf /etc/nginx/conf.d/default.conf
+COPY docker/web-security-headers.conf /etc/nginx/snippets/security-headers.conf
 COPY --from=builder /app/apps/web/dist /usr/share/nginx/html
 EXPOSE 80

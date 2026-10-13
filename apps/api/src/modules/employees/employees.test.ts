@@ -797,6 +797,29 @@ describe('PATCH /employees/:id — login e-mail (security audit, 2026-10-13)', (
     expect(await storedEmail(otherGerente.id)).toBe(otherGerente.email);
   });
 
+  it("stops a manager re-pointing a subordinate manager's login, which would hand over deactivation", async () => {
+    // The Gerente Comercial cannot switch anyone off; a sector manager below
+    // them can. Their login goes only to someone who holds those powers too.
+    const gerente = await sessionFor({ role: 'gerente_comercial', sector: 'comercial' });
+    const rh = await sessionFor({ role: 'rh_dp', sector: 'diretoria' });
+    const managerSeller = await createEmployee(db, {
+      role: 'vendedor_expansao',
+      sector: 'comercial',
+      isSectorManager: true,
+    });
+
+    const denied = await patch(managerSeller.id, gerente.cookies, { email: someAddress() });
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json().error).toBe('email_change_forbidden');
+    expect(await storedEmail(managerSeller.id)).toBe(managerSeller.email);
+    // The rest of the record is still the manager's to edit.
+    const cargo = await patch(managerSeller.id, gerente.cookies, { cargo: 'Líder' });
+    expect(cargo.statusCode).toBe(200);
+
+    const allowed = await patch(managerSeller.id, rh.cookies, { email: someAddress() });
+    expect(allowed.statusCode).toBe(200);
+  });
+
   it('escapes the name in the warning, and uses the name from before the change', async () => {
     const rh = await sessionFor({ role: 'rh_dp', sector: 'diretoria' });
     const seller = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });

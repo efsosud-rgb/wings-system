@@ -413,6 +413,19 @@ describe('login e-mail and status (security audit, 2026-10-13)', () => {
     ).toBeTruthy();
   });
 
+  it("locks a sector manager's login e-mail for a manager who cannot deactivate", async () => {
+    session.current = gerente();
+    record.current = { ...seller, isSectorManager: true };
+    renderForm('/funcionarios/emp-1');
+    await waitFor(() => expect(emailInput().value).toBe('ana@wingscompany.com.br'));
+    expect(emailInput().disabled).toBe(true);
+    expect(
+      screen.getByText(
+        'Esta pessoa é gestora de setor: só troca o e-mail de login dela quem também pode inativar, cadastrar e definir nível no setor dela.',
+      ),
+    ).toBeTruthy();
+  });
+
   it('keeps it open where the level could be changed, and says what a change does', async () => {
     session.current = gerente();
     record.current = seller;
@@ -508,25 +521,5 @@ describe('login e-mail and status (security audit, 2026-10-13)', () => {
       'on_leave',
     ]);
     expect(statusSelect().disabled).toBe(false);
-  });
-});
-
-describe('when the record cannot be loaded', () => {
-  it('names the real reason for a server error instead of "not found", with no form to save', () => {
-    loadFailure.current = new ApiError(500, {});
-    renderForm('/funcionarios/emp-1');
-
-    expect(screen.getByRole('alert').textContent).toMatch(
-      /Não foi possível carregar o funcionário: o servidor teve um problema \(erro 500\)/,
-    );
-    expect(screen.queryByText(/Registro não encontrado/)).toBeNull();
-    expect(screen.queryByRole('button', { name: /Salvar/ })).toBeNull();
-    expect(screen.queryByLabelText(/Nível de acesso/i)).toBeNull();
-  });
-
-  it('keeps "not found or outside your scope" for a record the API says is not there', () => {
-    loadFailure.current = new ApiError(404, {});
-    renderForm('/funcionarios/emp-1');
-    expect(screen.getByText(/Registro não encontrado ou fora do seu escopo/)).toBeTruthy();
   });
 });

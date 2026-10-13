@@ -372,8 +372,8 @@ export async function updateEmployee(
   }
 
   // The login e-mail is where a password reset goes: re-pointing it takes the
-  // account over. Only someone who could also change this person's level may
-  // do it. The form sends the address back unchanged on every save, and that
+  // account over. Only someone who could also change this person's level, and
+  // who already holds what a manager flag gives, may do it. The form sends the address back unchanged on every save, and that
   // is not a change.
   const emailChanges =
     input.email !== undefined && input.email.toLowerCase() !== current.email.toLowerCase();
@@ -383,6 +383,7 @@ export async function updateEmployee(
       sector: currentSector,
       currentRole,
       isLastActiveAdminMaster: current.is_last_active_admin_master,
+      isSectorManager: current.is_sector_manager,
     });
     if (denial) return { ok: false, reason: 'email_change_forbidden' };
   }
