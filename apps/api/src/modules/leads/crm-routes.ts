@@ -40,7 +40,7 @@ import {
   updateTask,
 } from './crm.js';
 import { salesDashboardOf } from './sales-dashboard.js';
-import { metaQueueStatus, syncMetaFormLeads } from './meta-intake.js';
+import { listFailedMetaEvents, metaQueueStatus, syncMetaFormLeads } from './meta-intake.js';
 import { pollMetaLeadsLocked, pollStatus, testMetaConnection } from './meta-poll.js';
 import { loadLead } from './service.js';
 
@@ -518,6 +518,13 @@ export const crmRoutes: FastifyPluginAsync = async (app) => {
         tokenConfigured: Boolean(env.META_LEADS_ACCESS_TOKEN ?? env.META_WRITE_TOKEN),
         polling: { enabled: pollingOn, everyMinutes: 5, ...(await pollStatus(db)) },
       }),
+  );
+
+  /** The events that gave up: when, form, campaign and why. Ids and codes only, never a person. */
+  app.get(
+    '/crm/meta-leads/failed',
+    { preHandler: app.requirePermission('integrations.manage') },
+    async (_request, reply) => reply.send(await listFailedMetaEvents(db)),
   );
 
   const metaDeps = () => ({

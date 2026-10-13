@@ -1,12 +1,15 @@
 import { normalizeBrazilianPhone, normalizeEmail, type LeadPipeline } from '@wings/shared';
-import { and, asc, eq, isNotNull, lt, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, lt, lte, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
+  adAds,
+  adCampaigns,
   crmDistributionMembers,
   employees,
   leadEvents,
   leadSourceRules,
   leads,
+  metaLeadForms,
   metaLeadgenEvents,
 } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
@@ -308,6 +311,114 @@ export async function metaQueueStatus(db: Database): Promise<MetaQueueStatus> {
     rdMissing: row?.rdMissing ?? 0,
     lastReceivedAt: row?.lastReceivedAt ? new Date(row.lastReceivedAt).toISOString() : null,
     lastProcessedAt: row?.lastProcessedAt ? new Date(row.lastProcessedAt).toISOString() : null,
+  };
+}
+
+/** How a failed event reads on the screen: a warning needs a person to look, an error is the system's. */
+export type MetaFailureSeverity = 'warning' | 'error';
+
+export interface MetaFailureReason {
+  code: string;
+  label: string;
+  severity: MetaFailureSeverity;
+}
+
+/**
+ * The plain-Portuguese reason for a `last_error` code. A lead that arrived with
+ * no phone and no e-mail is a warning (nothing broke: the form had nothing to
+ * call); every other code is an error. Codes only: no text about the person.
+ */
+export function metaFailureReason(code: string | null): MetaFailureReason {
+  const error = (label: string): MetaFailureReason => ({
+    code: code ?? 'unknown',
+    label,
+    severity: 'error',
+  });
+  if (code === 'no_contact_data')
+    return { code, label: 'Sem telefone nem e-mail', severity: 'warning' };
+  if (code === null) return error('Sem motivo registrado');
+  if (code === 'no_token') return error('Falta a chave de leitura da Meta');
+  if (code === 'graph_unreachable') return error('Não foi possível falar com a Meta');
+  if (code === 'lead_missing') return error('O lead criado não foi encontrado');
+  if (code === 'error') return error('Erro inesperado ao processar');
+  const graph = /^graph_(\d{3})$/.exec(code);
+  if (graph) {
+    const status = Number(graph[1]);
+    if (status === 401 || status === 403)
+      return error(`A Meta recusou a chave de leitura (erro ${status})`);
+    if (status === 404) return error('A Meta não encontrou esse lead (erro 404)');
+    return error(`Erro da Meta (erro ${status})`);
+  }
+  return error(`Motivo desconhecido (${code})`);
+}
+
+export interface MetaFailedEvent {
+  leadgenId: string;
+  /** When Meta says the form was sent; when it did not say, when the event reached us. */
+  leadAt: string;
+  formId: string | null;
+  formName: string | null;
+  adId: string | null;
+  /** From the ad mirror; null when the Meta sent no ad or the ad is not mirrored. */
+  campaignName: string | null;
+  attempts: number;
+  reason: MetaFailureReason;
+}
+
+export interface MetaFailedEvents {
+  /** Every event with status `failed`, whatever the list below shows. */
+  total: number;
+  items: MetaFailedEvent[];
+}
+
+export const META_FAILED_EVENTS_LIMIT = 50;
+
+/**
+ * The events that gave up, newest lead first (Eric, 13/10): when, form,
+ * campaign and why. Ids, names of our own forms and campaigns and a code: never
+ * the person, who was never stored for these.
+ */
+export async function listFailedMetaEvents(
+  db: Database,
+  limit = META_FAILED_EVENTS_LIMIT,
+): Promise<MetaFailedEvents> {
+  const leadAt = sql<Date>`coalesce(${metaLeadgenEvents.createdTime}, ${metaLeadgenEvents.receivedAt})`;
+  const [rows, [count]] = await Promise.all([
+    db
+      .select({
+        leadgenId: metaLeadgenEvents.leadgenId,
+        leadAt,
+        formId: metaLeadgenEvents.formId,
+        formName: metaLeadForms.name,
+        adId: metaLeadgenEvents.adId,
+        campaignName: sql<
+          string | null
+        >`(select ${adCampaigns.name} from ${adAds} join ${adCampaigns} on ${adCampaigns.id} = ${adAds.campaignId} where ${adAds.externalId} = ${metaLeadgenEvents.adId} limit 1)`,
+        attempts: metaLeadgenEvents.attempts,
+        lastError: metaLeadgenEvents.lastError,
+      })
+      .from(metaLeadgenEvents)
+      .leftJoin(metaLeadForms, eq(metaLeadForms.formId, metaLeadgenEvents.formId))
+      .where(eq(metaLeadgenEvents.status, 'failed'))
+      .orderBy(desc(leadAt), asc(metaLeadgenEvents.leadgenId))
+      .limit(limit),
+    db
+      .select({ total: sql<number>`count(*)::int` })
+      .from(metaLeadgenEvents)
+      .where(eq(metaLeadgenEvents.status, 'failed')),
+  ]);
+  return {
+    total: count?.total ?? 0,
+    items: rows.map((row) => ({
+      leadgenId: row.leadgenId,
+      leadAt: new Date(row.leadAt).toISOString(),
+      formId: row.formId,
+      formName: row.formName,
+      adId: row.adId,
+      campaignName: row.campaignName,
+      attempts: row.attempts,
+      reason: metaFailureReason(row.lastError),
+    })),
   };
 }
 

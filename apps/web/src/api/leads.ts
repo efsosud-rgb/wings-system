@@ -145,6 +145,30 @@ export interface MetaLeadsStatus {
   };
 }
 
+/** Why a Meta event gave up, in words; a warning is a lead with nothing to call, an error is ours or Meta's. */
+export interface MetaFailureReason {
+  code: string;
+  label: string;
+  severity: 'warning' | 'error';
+}
+
+/** One event that failed: ids, form and campaign names and a reason; never the person. */
+export interface MetaFailedEvent {
+  leadgenId: string;
+  leadAt: string;
+  formId: string | null;
+  formName: string | null;
+  adId: string | null;
+  campaignName: string | null;
+  attempts: number;
+  reason: MetaFailureReason;
+}
+
+export interface MetaFailedEvents {
+  total: number;
+  items: MetaFailedEvent[];
+}
+
 export interface MetaConnectionTest {
   pages: number;
   forms: number;
@@ -193,6 +217,15 @@ export function useMetaLeadsStatus(enabled = true) {
     queryFn: () => api.get<MetaLeadsStatus>('/crm/meta-leads/status'),
     enabled,
     refetchInterval: (state) => ((state.state.data?.pending ?? 0) > 0 ? 5_000 : false),
+  });
+}
+
+/** The Meta events that failed (integrations.manage only): when, form, campaign and why. */
+export function useMetaFailedEvents(enabled = true) {
+  return useQuery({
+    queryKey: ['leads', 'meta-failed'],
+    queryFn: () => api.get<MetaFailedEvents>('/crm/meta-leads/failed'),
+    enabled,
   });
 }
 
