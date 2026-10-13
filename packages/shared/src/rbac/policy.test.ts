@@ -165,6 +165,7 @@ const seller = {
   employeeId: 'emp-vend-9',
   sector: 'comercial',
   currentRole: 'vendedor_expansao',
+  isSectorManager: false,
 } as const;
 
 describe('RH / DP', () => {
@@ -307,21 +308,25 @@ describe('loginEmailChangeDenial — who may re-point a login', () => {
     employeeId: 'emp-dir-2',
     sector: 'diretoria',
     currentRole: 'diretoria',
+    isSectorManager: false,
   } as const;
   const tiPeer = {
     employeeId: 'emp-ti-9',
     sector: 'formatacao-ti',
     currentRole: 'formatacao_ti',
+    isSectorManager: false,
   } as const;
   const otherGerente = {
     employeeId: 'emp-ger-2',
     sector: 'comercial',
     currentRole: 'gerente_comercial',
+    isSectorManager: false,
   } as const;
   const anAdmin = {
     employeeId: 'emp-adm-2',
     sector: 'diretoria',
     currentRole: 'admin_master',
+    isSectorManager: false,
   } as const;
   const formatacaoManager = actor('formatacao_financeiro', 'formatacao', {
     id: 'emp-fmt-mgr',
@@ -343,20 +348,46 @@ describe('loginEmailChangeDenial — who may re-point a login', () => {
       employeeId: 'emp-mkt-2',
       sector: 'marketing',
       currentRole: 'marketing',
+      isSectorManager: false,
     } as const;
     expect(loginEmailChangeDenial(marketingManager, mktPeer)).toBe('role_rank_too_high');
   });
 
   it('stops anyone but an Admin Master on their own login, and on an Admin Master', () => {
-    const own = { employeeId: rhDp.employeeId, sector: 'diretoria', currentRole: 'rh_dp' } as const;
+    const own = {
+      employeeId: rhDp.employeeId,
+      sector: 'diretoria',
+      currentRole: 'rh_dp',
+      isSectorManager: false,
+    } as const;
     expect(loginEmailChangeDenial(rhDp, own)).toBe('self_role_change');
     const gerenteSelf = {
       employeeId: gerente.employeeId,
       sector: 'comercial',
       currentRole: 'gerente_comercial',
+      isSectorManager: false,
     } as const;
     expect(loginEmailChangeDenial(gerente, gerenteSelf)).toBe('self_role_change');
     expect(loginEmailChangeDenial(rhDp, anAdmin)).toBe('admin_master_record');
+  });
+
+  it('stops whoever lacks the powers of a sector manager on that manager', () => {
+    // The Gerente Comercial cannot switch anyone off; taking a subordinate
+    // manager's login would let them do it from that account.
+    const managerSeller = { ...seller, isSectorManager: true };
+    expect(loginEmailChangeDenial(gerente, seller)).toBeNull();
+    expect(loginEmailChangeDenial(gerente, managerSeller)).toBe('sector_manager_powers');
+    // A manager of a parent sector holds every flag power over the sub-sector.
+    const subManager = {
+      employeeId: 'emp-fmt-9',
+      sector: 'formatacao-juridico',
+      currentRole: 'vendedor_formatacao',
+      isSectorManager: true,
+    } as const;
+    expect(loginEmailChangeDenial(formatacaoManager, subManager)).toBeNull();
+    // RH/DP: every flag power company-wide, roles.assign through assign_roles.
+    expect(loginEmailChangeDenial(rhDp, managerSeller)).toBeNull();
+    expect(loginEmailChangeDenial(adminMaster, managerSeller)).toBeNull();
   });
 
   it('needs the right to edit the record at all', () => {
@@ -382,6 +413,7 @@ describe('loginEmailChangeDenial — who may re-point a login', () => {
       employeeId: adminMaster.employeeId,
       sector: 'diretoria',
       currentRole: 'admin_master',
+      isSectorManager: false,
       isLastActiveAdminMaster: true,
     } as const;
     expect(loginEmailChangeDenial(adminMaster, lastAdminSelf)).toBeNull();

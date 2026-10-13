@@ -61,6 +61,9 @@ function emailLockHint(reason: DenyReason): string {
   if (reason === 'role_rank_too_high') {
     return 'Você não pode trocar o e-mail de login de alguém com nível igual ou maior que o seu.';
   }
+  if (reason === 'sector_manager_powers') {
+    return 'Esta pessoa é gestora de setor: só troca o e-mail de login dela quem também pode inativar, cadastrar e definir nível no setor dela.';
+  }
   return 'Só quem pode mudar o nível de acesso desta pessoa troca o e-mail de login dela.';
 }
 
@@ -176,6 +179,7 @@ export function EmployeeFormPage() {
           sector: employee.sector,
           currentRole: employee.role,
           isLastActiveAdminMaster: employee.isLastActiveAdminMaster,
+          isSectorManager: employee.isSectorManager,
         })
       : null;
   // Switching someone off or back on needs its own permission; the statuses

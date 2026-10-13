@@ -72,6 +72,12 @@ e-mail de login controla a conta (o "esqueci minha senha" vai para ele), então:
   Admin Master; e um gestor de setor ou o Gerente Comercial não troca o de um
   colega de nível igual ou maior (nem muda o nível desse colega, para não abrir
   o e-mail em dois passos). Recusa: `403 email_change_forbidden`.
+- **Se a pessoa é gestora de setor, quem troca o e-mail dela precisa ter todos
+  os poderes que essa marca dá** (ver, cadastrar, editar, inativar, definir
+  nível e ver o ponto no setor dela, com alcance igual ou maior). Assim o
+  Gerente Comercial, que não inativa ninguém, não ganha esse poder tomando a
+  conta de um subordinado gestor. O RH/DP e o Admin Master têm todos esses
+  poderes; só o Admin Master liga ou desliga a marca.
 - Ao trocar: **todas as sessões da pessoa são encerradas**, os **links de
   convite e de redefinição ainda válidos deixam de funcionar**, e o **endereço
   antigo recebe um aviso** (sem o endereço novo). A tela diz se o aviso saiu; se

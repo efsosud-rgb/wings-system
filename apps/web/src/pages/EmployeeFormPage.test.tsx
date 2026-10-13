@@ -419,6 +419,19 @@ describe('login e-mail and status (security audit, 2026-10-13)', () => {
     ).toBeTruthy();
   });
 
+  it("locks a sector manager's login e-mail for a manager who cannot deactivate", async () => {
+    session.current = gerente();
+    record.current = { ...seller, isSectorManager: true };
+    renderForm('/funcionarios/emp-1');
+    await waitFor(() => expect(emailInput().value).toBe('ana@wingscompany.com.br'));
+    expect(emailInput().disabled).toBe(true);
+    expect(
+      screen.getByText(
+        'Esta pessoa é gestora de setor: só troca o e-mail de login dela quem também pode inativar, cadastrar e definir nível no setor dela.',
+      ),
+    ).toBeTruthy();
+  });
+
   it('keeps it open where the level could be changed, and says what a change does', async () => {
     session.current = gerente();
     record.current = seller;
