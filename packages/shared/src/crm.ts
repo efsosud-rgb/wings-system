@@ -918,3 +918,19 @@ export const sourceBadgeOf = (
   adPlatform?: string | null,
 ): { label: string; tone: string } =>
   adPlatform === 'google' ? { label: 'Google', tone: 'google' } : LEAD_SOURCE_BADGES[source];
+
+/**
+ * A new lead as its owner's pop-up shows it (`GET /crm/notifications/new-leads`): the first name, the
+ * funnel, the origin and the first-contact deadline, and nothing else about the person. Only the lead's
+ * owner is ever sent one.
+ */
+export interface NewLeadPopup {
+  /** The `new_lead` notice behind it; marking it read takes it off the list. */
+  noticeId: string;
+  leadId: string;
+  firstName: string;
+  funnel: string;
+  origin: string;
+  firstContactDueAt: string | null;
+  createdAt: string;
+}

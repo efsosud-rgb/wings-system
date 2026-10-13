@@ -38,6 +38,11 @@ export const NOTICE_MAIL_KINDS = [
   'first_contact_escalated',
 ] as const;
 const MAX_AGE_MS = 3 * 86_400_000;
+/**
+ * A new-lead e-mail leaves within minutes of the arrival, so a pending one hours old is not news. This
+ * keeps switching the e-mail on from sending the lead that arrived before the switch.
+ */
+const NEW_LEAD_MAX_AGE_MS = 6 * 3_600_000;
 const STUCK_CLAIM_MS = 15 * 60_000;
 const BATCH = 50;
 
@@ -222,7 +227,10 @@ export async function sendPendingNoticeMails(
       await skip(notice.id, 'smtp_not_configured');
       continue;
     }
-    if (now.getTime() - notice.createdAt.getTime() > MAX_AGE_MS) {
+    if (
+      now.getTime() - notice.createdAt.getTime() >
+      (notice.kind === 'new_lead' ? NEW_LEAD_MAX_AGE_MS : MAX_AGE_MS)
+    ) {
       await skip(notice.id, 'too_old');
       continue;
     }
