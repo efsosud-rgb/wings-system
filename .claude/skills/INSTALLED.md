@@ -22,7 +22,7 @@ Notes on the mattpocock/skills entries:
   the model when the user uses "grill" phrasing.
 - `handoff` writes its document to the OS temporary directory, outside the
   repository, and tells the agent to redact secrets and personal data — keep
-  that in mind given the no-personal-data rule in `CLAUDE.md`.
+  that in mind given the no-personal-data rule in `AGENTS.md`.
 - All three are plain text: no scripts, no URLs, no hooks. Copied verbatim; the
   repository's `LICENSE` was added to each folder.
 
@@ -32,7 +32,7 @@ Deliberately left out of claude-seo:
   `google_report.py`, GA4/GSC/Indexing/IndexNow). It talks to the Google Ads
   API — read-only, but its reference recommends running a small paid campaign
   to get exact volumes, and this server holds real Google Ads credentials. That
-  sits too close to the ad-spend non-negotiable in `CLAUDE.md` to install
+  sits too close to the ad-spend non-negotiable in `AGENTS.md` to install
   without a decision.
 - `seo-dataforseo`, `seo-image-gen` and everything under `extensions/`: they
   send data to third-party vendors.
