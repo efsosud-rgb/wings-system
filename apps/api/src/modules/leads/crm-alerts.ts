@@ -1,8 +1,14 @@
-import { endOfBusinessDay } from '@wings/shared';
-import { and, eq, inArray, isNull, lt, ne, or, sql } from 'drizzle-orm';
+import {
+  endOfBusinessDay,
+  LEAD_PIPELINE_LABELS,
+  type LeadPipeline,
+  type NewLeadPopup,
+} from '@wings/shared';
+import { and, desc, eq, gte, inArray, isNull, lt, min, ne, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { LEAD_ADMIN_ROLE_KEYS } from './access.js';
-import { firstContactOverdueSql, LEADS_ID, trackedTaskSql } from './crm.js';
+import { firstContactOverdueSql, inEntryStageSql, LEADS_ID, trackedTaskSql } from './crm.js';
+import { originOf } from './crm-notice-mail.js';
 import {
   crmNotifications,
   crmStageLimits,
@@ -344,6 +350,77 @@ export async function notificationsOf(
     )
     .orderBy(sql`${crmNotifications.readAt} is not null`, sql`${crmNotifications.createdAt} desc`)
     .limit(limit);
+}
+
+/** A new-lead pop-up older than this is not worth raising (a long absence is the bell's job). */
+const POPUP_MAX_AGE_MS = 3 * 86_400_000;
+const POPUP_LIMIT = 20;
+
+/**
+ * The pop-ups owed to one person: their unread `new_lead` notices whose deal is still theirs today, still
+ * open and still in the entry stage (the first contact is still owed). Never another person's lead: the
+ * notice and the owner must both be the caller, so a manager, Diretoria or a reassigned lead's old owner
+ * gets nothing here. Carries the first name only.
+ */
+export async function newLeadPopupsOf(
+  db: Database,
+  employeeId: string,
+  now = new Date(),
+): Promise<NewLeadPopup[]> {
+  const rows = await db
+    .select({
+      noticeId: crmNotifications.id,
+      createdAt: crmNotifications.createdAt,
+      leadId: leads.id,
+      name: leads.name,
+      pipeline: leads.pipeline,
+      source: leads.source,
+      campaignName: leads.campaignName,
+      utmCampaign: leads.utmCampaign,
+    })
+    .from(crmNotifications)
+    .innerJoin(leads, eq(leads.id, crmNotifications.leadId))
+    .where(
+      and(
+        eq(crmNotifications.recipientEmployeeId, employeeId),
+        eq(crmNotifications.kind, 'new_lead'),
+        isNull(crmNotifications.readAt),
+        gte(crmNotifications.createdAt, new Date(now.getTime() - POPUP_MAX_AGE_MS)),
+        eq(leads.ownerEmployeeId, employeeId),
+        isNull(leads.won),
+        inEntryStageSql(),
+      ),
+    )
+    .orderBy(desc(crmNotifications.createdAt))
+    .limit(POPUP_LIMIT);
+  if (rows.length === 0) return [];
+  const due = new Map(
+    (
+      await db
+        .select({ leadId: leadTasks.leadId, dueAt: min(leadTasks.dueAt) })
+        .from(leadTasks)
+        .where(
+          and(
+            inArray(
+              leadTasks.leadId,
+              rows.map((row) => row.leadId),
+            ),
+            eq(leadTasks.kind, 'first_contact'),
+            isNull(leadTasks.doneAt),
+          ),
+        )
+        .groupBy(leadTasks.leadId)
+    ).map((row) => [row.leadId, row.dueAt] as const),
+  );
+  return rows.map((row) => ({
+    noticeId: row.noticeId,
+    leadId: row.leadId,
+    firstName: firstNameOf(row.name),
+    funnel: LEAD_PIPELINE_LABELS[row.pipeline as LeadPipeline] ?? 'Sem funil',
+    origin: originOf(row),
+    firstContactDueAt: due.get(row.leadId)?.toISOString() ?? null,
+    createdAt: row.createdAt.toISOString(),
+  }));
 }
 
 export async function markRead(db: Database, employeeId: string, ids: string[] | 'all') {

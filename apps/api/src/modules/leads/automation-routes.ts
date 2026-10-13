@@ -30,7 +30,7 @@ import {
 import { writeAudit } from '../../lib/audit.js';
 import { runCrmCycle } from './automations-scheduler.js';
 import { canChangeLeadOwner, leadOwnerFilter } from './access.js';
-import { markRead, notificationsOf } from './crm-alerts.js';
+import { markRead, newLeadPopupsOf, notificationsOf } from './crm-alerts.js';
 import { crmMailOf } from './crm-mail.js';
 
 const idParam = z.object({ id: z.uuid() });
@@ -483,6 +483,14 @@ export const automationRoutes: FastifyPluginAsync = async (app) => {
         })),
       });
     },
+  );
+
+  /** The caller's own new leads for the pop-up: the owner's alone, whatever the role (docs/crm/avisos-por-email.md). */
+  app.get(
+    '/crm/notifications/new-leads',
+    { preHandler: app.requirePermission('leads.read') },
+    async (request, reply) =>
+      reply.send({ leads: await newLeadPopupsOf(db, request.session.actor.employeeId) }),
   );
 
   app.post(
