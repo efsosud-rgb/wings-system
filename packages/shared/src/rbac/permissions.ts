@@ -59,6 +59,8 @@ export const PERMISSIONS = {
     'Aprovar e mandar o resumo de uma reunião de Expansão ao dono da franqueadora',
   'office.read': 'Ver o escritório virtual (laboratório): equipe, tarefas e eventos do CRM',
   'modules.preview': 'Ver no menu os módulos ainda em construção ("em breve")',
+  'calendar.use':
+    'Usar a Agenda: a própria agenda Google e a da Wings Company, com a conta Google de cada um',
 } as const;
 
 export type PermissionKey = keyof typeof PERMISSIONS;
@@ -109,18 +111,25 @@ const CRM_FULL_SCREENS: RolePermissions = {
 };
 
 /**
+ * The Agenda, for every level (Eric, 14/10: "Todos podem ter acesso a esse módulo"). `own`: each
+ * person reads and writes only through their own Google connection; Google's sharing decides the
+ * Wings Company calendar (docs/agenda.md).
+ */
+const AGENDA: RolePermissions = { 'calendar.use': 'own' };
+
+/**
  * Everyone who is not a manager: their own time clock and their department's
  * Drive. No employee register (Eric, 13/10): Usuários e acessos is for Admin
  * Master, Diretoria, RH/DP, the Gerente Comercial and whoever carries the
  * sector-manager flag (`SECTOR_MANAGER_GRANTS`).
  */
-const SECTOR_STAFF: RolePermissions = { 'timeclock.read': 'own', ...DRIVE_STAFF };
+const SECTOR_STAFF: RolePermissions = { 'timeclock.read': 'own', ...DRIVE_STAFF, ...AGENDA };
 
 /**
  * The sellers: their own time clock and no Drive (Eric, 14/10). `DRIVE_ROLE_DEPARTMENTS` still
  * names Comercial for them, because that is what lets them update stage 07 of a project.
  */
-const SELLER_STAFF: RolePermissions = { 'timeclock.read': 'own' };
+const SELLER_STAFF: RolePermissions = { 'timeclock.read': 'own', ...AGENDA };
 
 /**
  * The permission matrix. Anything not listed here is denied by default.
@@ -135,6 +144,7 @@ const SELLER_STAFF: RolePermissions = { 'timeclock.read': 'own' };
  */
 export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   admin_master: {
+    ...AGENDA,
     'meetings.approve_send': 'all',
     ...CRM_FULL_SCREENS,
     ...DRIVE_ALL,
@@ -185,6 +195,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'modules.preview': 'all',
   },
   diretoria: {
+    ...AGENDA,
     'meetings.approve_send': 'all',
     ...CRM_FULL_SCREENS,
     ...DRIVE_ALL,
@@ -219,6 +230,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   // The employee register and the RH/DP module. No CPF reveal and no time-clock
   // approvals: neither was asked for, and both are easy to add later.
   rh_dp: {
+    ...AGENDA,
     ...DRIVE_STAFF,
     ...PROJECT_READ,
     'employees.read': 'all',
@@ -229,6 +241,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'timeclock.read': 'all',
   },
   gerente_comercial: {
+    ...AGENDA,
     'meetings.approve_send': 'all',
     ...CRM_FULL_SCREENS,
     ...DRIVE_STAFF,

@@ -190,7 +190,7 @@ describe('menu by access level', () => {
     );
 
   // Eric, 14/10: a seller's whole menu is CRM Vendas. No Empresas, Landing pages, Drive, Dashboard
-  // or Gestão; Painel de Vendas and Projetos sit inside the CRM for them.
+  // or Gestão; Painel de Vendas, Projetos and the Agenda sit inside the CRM for them.
   it('gives a Vendedor Expansão only the CRM of their own leads', () => {
     expect(menuOf('vendedor_expansao')).toEqual({
       inicio: ['/inicio'],
@@ -202,6 +202,7 @@ describe('menu by access level', () => {
         '/crm-vendas/avisos',
         '/crm-vendas/painel-de-vendas',
         '/crm-vendas/projetos',
+        '/crm-vendas/agenda',
       ],
     });
   });
@@ -217,6 +218,7 @@ describe('menu by access level', () => {
         '/crm-vendas/avisos',
         '/crm-vendas/painel-de-vendas',
         '/crm-vendas/projetos',
+        '/crm-vendas/agenda',
         '/crm-vendas/leads-campanhas',
       ],
     });
@@ -234,6 +236,7 @@ describe('menu by access level', () => {
     const copies = [
       '/crm-vendas/painel-de-vendas',
       '/crm-vendas/projetos',
+      '/crm-vendas/agenda',
       '/crm-vendas/leads-campanhas',
     ];
     for (const role of ROLE_KEYS) {

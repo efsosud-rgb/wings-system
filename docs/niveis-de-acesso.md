@@ -43,6 +43,7 @@ Financeiro, Processos e Projetos, Contábil/Tributário, Logística, TI).
 | Formatação → Clientes                   | yes          | yes               | —     | —                 | yes       | Jurídico only                 | —                 | —                   |
 | Gestão → Projetos                       | all          | all               | read  | dept              | dept      | dept (P&P all; Log., TI read) | dept, in the CRM  | dept, in the CRM    |
 | Drive                                   | all          | all               | dept  | dept              | dept      | dept                          | —                 | —                   |
+| Agenda (own Google + Wings Company)     | yes          | yes               | yes   | yes               | yes       | yes                           | yes, in the CRM   | yes, in the CRM     |
 | Administração → Usuários e acessos      | all          | all (levels only) | all   | sector            | —         | —                             | —                 | —                   |
 | Administração → Drive: modelo de pastas | yes          | yes               | —     | —                 | —         | —                             | —                 | —                   |
 | Administração → Roadmap, Integrações    | yes          | —                 | —     | —                 | —         | —                             | —                 | —                   |
