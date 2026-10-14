@@ -20,7 +20,7 @@ export function TasksPage() {
   const [assignee, setAssignee] = useState('');
   const [kind, setKind] = useState<LeadTaskKind | ''>('');
   const [showDone, setShowDone] = useState(false);
-  const sellers = useSellers();
+  const sellers = useSellers(canSeeAll);
   const tasks = useTaskList({
     status: showDone ? 'done' : 'open',
     everyone: canSeeAll,

@@ -569,11 +569,27 @@ describe('the right column', () => {
     );
     expect(summary).toEqual(['Contatos 2', 'Empresa 1', 'Propostas 0', 'Arquivos 1']);
     expect(within(cards[2]!).getByRole('button', { name: 'em breve' })).toBeTruthy();
-    expect(within(cards[1]!).getByRole('link', { name: 'Padaria Sol' })).toBeTruthy();
+    // Without Empresas (a seller, Eric 14/10) the company is its name, not a link to "Sem acesso".
+    expect(within(cards[1]!).queryByRole('link', { name: 'Padaria Sol' })).toBeNull();
+    expect(within(cards[1]!).getByText('Padaria Sol')).toBeTruthy();
     fireEvent.click(within(cards[3]!).getByRole('button', { name: 'proposta.pdf' }));
     expect(selectedSection()).toBe('Arquivos');
     expect(screen.getByText('1 arquivo · na pasta Comercial › Negociações do Drive')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Remover proposta.pdf da negociação' })).toBeTruthy();
+  });
+});
+
+describe('the company in the right column', () => {
+  it('links to the record in Empresas for who may open that screen', () => {
+    queryState.permissions = { 'leads.read': 'all', 'companies.read': 'all' };
+    queryState.lead = lead({ company: { id: 'c1', name: 'Padaria Sol', clientId: null } });
+    show();
+    const card = screen
+      .getAllByRole('region')
+      .find((r) => r.classList.contains('crm-assoc') && r.textContent?.includes('Empresa'))!;
+    expect(within(card).getByRole('link', { name: 'Padaria Sol' }).getAttribute('href')).toBe(
+      '/crm-vendas/empresas/c1',
+    );
   });
 });
 

@@ -112,6 +112,10 @@ const SCREENS: Record<string, RouteObject[]> = {
   '/dashboard/vendas': [{ index: true, element: <SalesDashboardPage /> }],
   '/dashboard/marketing': [{ index: true, element: <MarketingDashboardPage /> }],
   '/dashboard/leads-campanhas': [{ index: true, element: <CampaignLeadsPage /> }],
+  // The sellers' copies inside CRM Vendas (Eric, 14/10): the same pages, at the CRM's address.
+  '/crm-vendas/painel-de-vendas': [{ index: true, element: <SalesDashboardPage /> }],
+  '/crm-vendas/projetos': [{ index: true, element: <ProjectsPage /> }],
+  '/crm-vendas/leads-campanhas': [{ index: true, element: <CampaignLeadsPage /> }],
   '/marketing/edicao': [{ index: true, element: <MediaStudioPage /> }],
   '/laboratorio/escritorio': [{ index: true, element: <OfficePage /> }],
   '/marketing/trafego-pago-wings': [

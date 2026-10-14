@@ -60,6 +60,32 @@ export const dealFilesAccess = (access: DriveAccess): DriveAccess => ({
   dealFolders: true,
 });
 
+/**
+ * The access a deal's own routes use for that deal's files when the person has no Drive (the
+ * sellers, Eric 14/10): the Comercial tree with the deals' folders open, writing when the person
+ * edits deals. Only for a route that already checked the lead itself (`leadInScope`), like
+ * `dealFilesAccess`.
+ */
+export function leadFilesAccessOf(actor: Actor): DriveAccess {
+  const write = grantedScope(actor, 'leads.write') !== null;
+  return {
+    employeeId: actor.employeeId,
+    all: false,
+    departments: new Set<DriveDepartment>(['comercial']),
+    writeDepartments: new Set<DriveDepartment>(write ? ['comercial'] : []),
+    clientView: false,
+    dealFolders: true,
+    write,
+    manage: false,
+  };
+}
+
+/** The Drive access of a deal's own routes: the person's Drive, or the deal-only access without one. */
+export const dealRouteAccessOf = (actor: Actor): DriveAccess => {
+  const drive = driveAccessOf(actor);
+  return drive ? dealFilesAccess(drive) : leadFilesAccessOf(actor);
+};
+
 export function driveAccessOf(actor: Actor): DriveAccess | null {
   const read = grantedScope(actor, 'drive.read');
   if (!read) return null;

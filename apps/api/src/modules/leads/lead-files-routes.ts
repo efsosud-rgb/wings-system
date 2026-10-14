@@ -5,7 +5,7 @@ import { writeAudit } from '../../lib/audit.js';
 import { leadInScope, type LeadPermission } from './access.js';
 import { storageOf } from '../../lib/storage/index.js';
 import { createOpenRouterLlm, type AgentLlm } from '../agent/llm.js';
-import { dealFilesAccess, driveAccessOf } from '../drive/access.js';
+import { dealRouteAccessOf, driveAccessOf } from '../drive/access.js';
 import { DriveError, fileFor, linkFor, type DriveDeps } from '../drive/service.js';
 import {
   attachFile,
@@ -116,13 +116,13 @@ export const leadFilesRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({ error: 'invalid_request', message: 'Dados inválidos' });
     const row = await visibleLead(request, params.data.id, 'leads.read');
     if (!row) return notFound(reply);
-    const access = driveAccessOf(request.session.actor);
-    if (!access) return refuse(reply, new DriveError('not_found'));
+    // A seller has no Drive (Eric, 14/10) but opens the files of their own deal.
+    const access = dealRouteAccessOf(request.session.actor);
     if (!(await leadHasFile(db, row.id, params.data.fileId))) {
       return refuse(reply, new DriveError('not_found'));
     }
     try {
-      const link = await linkFor(deps, dealFilesAccess(access), params.data.fileId, query.data);
+      const link = await linkFor(deps, access, params.data.fileId, query.data);
       await writeAudit(db, {
         actorEmployeeId: access.employeeId,
         action:
@@ -151,10 +151,10 @@ export const leadFilesRoutes: FastifyPluginAsync = async (app) => {
         .send({ error: 'invalid_request', message: body.error.issues[0]?.message });
     const row = await visibleLead(request, params.data.id, 'leads.write');
     if (!row) return notFound(reply);
-    const access = driveAccessOf(request.session.actor);
-    if (!access?.write) return refuse(reply, new DriveError('forbidden'));
+    const access = dealRouteAccessOf(request.session.actor);
+    if (!access.write) return refuse(reply, new DriveError('forbidden'));
     try {
-      const ticket = await requestLeadUpload(deps, dealFilesAccess(access), row, body.data);
+      const ticket = await requestLeadUpload(deps, access, row, body.data);
       await writeAudit(db, {
         actorEmployeeId: access.employeeId,
         action: 'lead.file_upload_requested',
@@ -175,15 +175,10 @@ export const leadFilesRoutes: FastifyPluginAsync = async (app) => {
     if (!params.success) return notFound(reply);
     const row = await visibleLead(request, params.data.id, 'leads.write');
     if (!row) return notFound(reply);
-    const access = driveAccessOf(request.session.actor);
-    if (!access?.write) return refuse(reply, new DriveError('forbidden'));
+    const access = dealRouteAccessOf(request.session.actor);
+    if (!access.write) return refuse(reply, new DriveError('forbidden'));
     try {
-      const file = await completeLeadUpload(
-        deps,
-        dealFilesAccess(access),
-        row.id,
-        params.data.uploadId,
-      );
+      const file = await completeLeadUpload(deps, access, row.id, params.data.uploadId);
       await audit(request, 'lead.file_added', row.id, file.fileId);
       return reply.status(201).send({ file });
     } catch (error) {

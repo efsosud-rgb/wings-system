@@ -282,16 +282,11 @@ describe('a seller sees only the leads they own', () => {
     expect(contacts).not.toContain('beta@contato.test');
     expect(contacts).not.toContain('gama@contato.test');
 
-    const companies = text(await call(sellerA, 'GET', '/crm/companies'));
-    expect(companies).toContain('Empresa Alfa');
-    expect(companies).not.toContain('Empresa Beta');
-    expect(companies).not.toContain('Empresa Gama');
+    // Empresas is not a seller's screen (Eric, 14/10): the company is a name inside their own deal.
+    expect((await call(sellerA, 'GET', '/crm/companies')).statusCode).toBe(403);
+    expect((await call(sellerA, 'GET', `/crm/companies/${dealA.companyId}`)).statusCode).toBe(403);
+    expect(text(await call(sellerA, 'GET', `/leads/${dealA.id}`))).toContain('Empresa Alfa');
     expect(text(await call(admin, 'GET', '/crm/companies'))).toContain('Empresa Gama');
-
-    // A company shows the seller only the people and the numbers of their own leads.
-    const company = await call(sellerA, 'GET', `/crm/companies/${dealA.companyId}`);
-    expect(company.statusCode).toBe(200);
-    expect(company.json<{ company: { leads: number } }>().company.leads).toBe(1);
   });
 
   it("a notice about a lead that moved to another owner leaves the old owner's inbox", async () => {
@@ -359,8 +354,7 @@ const routesOf = (deal: Deal, session: Session) => {
     ['POST', `/meetings/${deal.meetingId}/summary-send`],
     ['GET', `/crm/contacts/${deal.contactId}`],
     ['PATCH', `/crm/contacts/${deal.contactId}`, { jobTitle: 'Dono' }],
-    ['GET', `/crm/companies/${deal.companyId}`],
-    ['PATCH', `/crm/companies/${deal.companyId}`, { city: 'Rio' }],
+    // The company routes are Empresas, which a seller does not have (403 for every company).
     // Last: these take things away.
     ['DELETE', `/leads/${deal.id}/contacts/${deal.contactId}`],
     ['DELETE', `/leads/${deal.id}/files/${deal.fileId}`],
@@ -601,9 +595,18 @@ describe('contacts and companies of other leads stay hidden', () => {
     });
     expect(contact.statusCode).toBe(409);
     expect(text(contact)).not.toContain('Contato Beta');
+    // Empresas is not a seller's screen (Eric, 14/10): not even a 409 that tells the name is taken.
     const company = await call(sellerA, 'POST', '/crm/companies', { name: dealB.companyName });
-    expect(company.statusCode).toBe(409);
+    expect(company.statusCode).toBe(403);
     expect(text(company)).not.toContain(dealB.companyId);
+    // A new deal with the e-mail of a person on another seller's deal does not take that person in.
+    const taken = await call(sellerA, 'POST', '/leads', {
+      pipeline: 'expansao',
+      name: 'Outra negociação',
+      email: dealB.contactEmail,
+    });
+    expect(taken.statusCode).toBe(409);
+    expect(text(taken)).not.toContain('Contato Beta');
     const linked = await call(sellerA, 'POST', `/leads/${dealA.id}/contacts`, {
       contactId: dealB.contactId,
     });
@@ -651,29 +654,19 @@ describe('what a seller needs not to see is not served', () => {
 });
 
 describe("the deal's files follow the deal in the Drive", () => {
-  it("the Drive does not list, search, open or version another deal's files, nor its folder", async () => {
-    const tree = text(await call(sellerA, 'GET', '/drive/tree'));
-    expect(tree).not.toContain('Beta Negocio');
-    expect(tree).not.toContain('Gama Negocio');
-    expect(tree).not.toContain('Alfa Negocio');
-    expect(tree).not.toContain('Negociações');
-    for (const url of [
-      `/drive/files/${dealB.fileId}/link`,
-      `/drive/files/${dealB.fileId}/versions`,
-      `/drive/files/${dealN.fileId}/link`,
-      `/drive/files/${dealA.fileId}/link`,
-    ]) {
-      expect((await call(sellerA, 'GET', url)).statusCode, url).toBe(404);
-    }
-    const search = text(await call(sellerA, 'GET', '/drive/search?q=contrato'));
-    expect(search).not.toContain('contrato-');
-    const trash = await call(sellerA, 'GET', '/drive/trash');
-    expect(text(trash)).not.toContain('contrato-');
+  // Eric, 14/10: a seller has no Drive at all; the files of their own deal open through the deal.
+  it('a seller reaches no Drive route, not even the tree', async () => {
     for (const [method, url, payload] of [
+      ['GET', '/drive/tree', undefined],
+      ['GET', '/drive/search?q=contrato', undefined],
+      ['GET', '/drive/trash', undefined],
+      ['GET', `/drive/files/${dealA.fileId}/link`, undefined],
+      ['GET', `/drive/files/${dealB.fileId}/link`, undefined],
+      ['GET', `/drive/files/${dealB.fileId}/versions`, undefined],
       ['PATCH', `/drive/files/${dealB.fileId}`, { name: 'roubado.pdf' }],
       ['POST', `/drive/files/${dealB.fileId}/trash`, undefined],
     ] as const) {
-      expect((await call(sellerA, method, url, payload)).statusCode, url).toBe(404);
+      expect((await call(sellerA, method, url, payload)).statusCode, url).toBe(403);
     }
     // The Admin still sees the whole tree and every file.
     const adminTree = text(await call(admin, 'GET', '/drive/tree'));

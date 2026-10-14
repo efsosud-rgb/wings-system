@@ -1,5 +1,5 @@
 import type { PermissionKey } from './rbac/permissions.js';
-import type { RoleKey } from './rbac/roles.js';
+import { CRM_ONLY_ROLES, type RoleKey } from './rbac/roles.js';
 
 /**
  * The navigation tree: Module → Sub-module → Studio.
@@ -73,6 +73,11 @@ export interface NavSubmodule {
   permission?: PermissionKey;
   /** Open to every login (the home page). The only way to skip `permission`. */
   everyone?: true;
+  /**
+   * Only these levels see it, on top of `permission`: the sellers' copies, inside the CRM, of
+   * screens everyone else opens in Dashboard and Gestão.
+   */
+  levels?: readonly RoleKey[];
   status: SubmoduleStatus;
   kind: SubmoduleKind;
   /** Shown on the placeholder so it is obvious what will live there. */
@@ -160,7 +165,7 @@ export const NAVIGATION: readonly NavModule[] = [
         label: 'Empresas',
         icon: 'building',
         description: 'As empresas das negociações e as que viraram clientes',
-        permission: 'leads.read',
+        permission: 'companies.read',
         status: 'ready',
         kind: 'crud',
       },
@@ -186,6 +191,38 @@ export const NAVIGATION: readonly NavModule[] = [
         ...soon('/crm-vendas/painel', 'Painel', 'Vendas por funil, marca e vendedor', 'leads.read'),
         icon: 'pie-chart',
       },
+      // The sellers' menu is CRM Vendas alone (Eric, 14/10): the screens they still use from
+      // Dashboard and Gestão sit here for them, the same pages at their own address.
+      {
+        path: '/crm-vendas/painel-de-vendas',
+        label: 'Painel de Vendas',
+        icon: 'pie-chart',
+        description: 'Os números das suas negociações: funil, marcas e resultado',
+        permission: 'leads.read',
+        levels: CRM_ONLY_ROLES,
+        status: 'ready',
+        kind: 'report',
+      },
+      {
+        path: '/crm-vendas/projetos',
+        label: 'Projetos',
+        icon: 'briefcase',
+        description: 'O projeto de cada cliente: status e as oito etapas',
+        permission: 'projects.read',
+        levels: CRM_ONLY_ROLES,
+        status: 'ready',
+        kind: 'crud',
+      },
+      {
+        path: '/crm-vendas/leads-campanhas',
+        label: 'Leads das Campanhas',
+        icon: 'megaphone',
+        description: 'Leads do RD vindos das campanhas ativas',
+        permission: 'campaign_leads.read',
+        levels: CRM_ONLY_ROLES,
+        status: 'ready',
+        kind: 'report',
+      },
       {
         path: '/crm-vendas/configuracoes',
         label: 'Configurações',
@@ -200,7 +237,7 @@ export const NAVIGATION: readonly NavModule[] = [
         label: 'Landing pages',
         icon: 'layout',
         description: 'Páginas por cliente e funil, desempenho e links com UTM',
-        permission: 'leads.read',
+        permission: 'landing_pages.read',
         status: 'ready',
         kind: 'crud',
       },
@@ -475,8 +512,23 @@ export interface NavViewer {
   permissions: Partial<Record<PermissionKey, unknown>>;
 }
 
+/** The menu group of every sub-module, by path. */
+const GROUP_OF_PATH: ReadonlyMap<string, NavGroup> = new Map(
+  NAVIGATION.flatMap((module) =>
+    module.submodules.map((submodule) => [submodule.path, module.group] as const),
+  ),
+);
+
 export function canSeeSubmodule(viewer: NavViewer | null, submodule: NavSubmodule): boolean {
   if (!viewer) return false;
+  if (submodule.levels && !submodule.levels.includes(viewer.role)) return false;
+  // A seller sees Início and CRM Vendas, nothing else, whatever else the level holds.
+  if (
+    CRM_ONLY_ROLES.includes(viewer.role) &&
+    (GROUP_OF_PATH.get(submodule.path) ?? 'modulos') === 'modulos'
+  ) {
+    return false;
+  }
   if (submodule.status === 'coming_soon' && !viewer.permissions['modules.preview']) return false;
   if (submodule.permission) return Boolean(viewer.permissions[submodule.permission]);
   return submodule.status === 'coming_soon' || submodule.everyone === true;

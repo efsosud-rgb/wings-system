@@ -217,9 +217,9 @@ describe('CRM Vendas → Landing pages', () => {
     const countOf = (body: { pages: { pattern: string; leads: number }[] }) =>
       body.pages.find((item) => item.pattern === 'cenoritas')?.leads;
     expect(countOf(list.json())).toBe(1);
-    // A seller counts only their own leads, and this one has no owner.
+    // Landing pages is not a seller's screen (Eric, 14/10): every client's page would show.
     const seller = await cookiesFor('vendedor_expansao');
     const mine = await app.inject({ method: 'GET', url: '/crm/landing-pages', cookies: seller });
-    expect(countOf(mine.json())).toBe(0);
+    expect(mine.statusCode).toBe(403);
   });
 });

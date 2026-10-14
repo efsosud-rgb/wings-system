@@ -494,10 +494,12 @@ export function useMoveLead() {
   });
 }
 
-export function useSellers() {
+/** The team list. Only for who hands deals over (`leads.assign`): a seller is refused it. */
+export function useSellers(enabled = true) {
   return useQuery({
     queryKey: ['crm', 'sellers'],
     queryFn: () => api.get<{ sellers: Seller[] }>('/crm/sellers'),
+    enabled,
   });
 }
 
