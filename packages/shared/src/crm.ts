@@ -934,3 +934,12 @@ export interface NewLeadPopup {
   firstContactDueAt: string | null;
   createdAt: string;
 }
+
+/**
+ * What GET /crm/notifications/new-leads answers: the pop-ups for the leads that just arrived, and how
+ * many older ones are still waiting for a first contact (one quiet line, never a pop-up each).
+ */
+export interface NewLeadPopups {
+  leads: NewLeadPopup[];
+  earlierCount: number;
+}

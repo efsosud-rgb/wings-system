@@ -13,8 +13,12 @@ a troca do número para a API oficial do WhatsApp (o aviso por WhatsApp só entr
 
 - `GET /crm/notifications/new-leads` (`leads.read`, `newLeadPopupsOf` em `crm-alerts.ts`): os avisos
   `new_lead` **não lidos** de quem pergunta, cujo lead ainda é dele, está aberto e na etapa de entrada
-  ("Sem contato" / "Novo Contato"), com até 3 dias. Devolve `NewLeadPopup` (`packages/shared/src/crm.ts`):
-  **primeiro nome**, funil, origem (`originOf`, a mesma do e-mail) e o prazo do 1º contato. Nada mais da pessoa.
+  ("Sem contato" / "Novo Contato"). Devolve `NewLeadPopups` (`packages/shared/src/crm.ts`): `leads`, só os
+  que chegaram nas **últimas 2 horas** (`POPUP_RECENT_MS`), cada um um `NewLeadPopup` com **primeiro nome**,
+  funil, origem (`originOf`, a mesma do e-mail) e o prazo do 1º contato; e `earlierCount`, quantos mais antigos
+  ainda esperam o primeiro contato. Nada mais da pessoa. Entrar no sistema depois de uma noite ou de um fim de
+  semana não empilha pop-up de ontem: os de antes viram **uma linha**, "N leads chegaram antes e ainda esperam o
+  primeiro contato" (Depois: some pelo resto do dia e volta só se juntar mais; Ver avisos: abre o sino).
   Gerente, Diretoria e o dono antigo de um lead repassado recebem lista vazia; lead sem dono só gera o aviso
   `lead_unassigned` no sino.
 - A tela (`NewLeadAlerts.tsx`, montada no `AppShell`) pergunta a cada 15 s, também com a aba em segundo plano,
@@ -48,3 +52,10 @@ node dist/scripts/notice-test-lead.js marcar --lead=<id>                      # 
 ```
 
 Testes: `apps/api/src/modules/leads/new-lead-popup.test.ts`, `apps/web/src/components/NewLeadAlerts.test.tsx`.
+
+## Funil que a Negociações abre
+
+Sem `?funil=` no endereço, a tela abre no funil que o nível da pessoa vende (`defaultPipelineOfRole`,
+`packages/shared/src/leads.ts`): Vendedor Formatação em **Formatação**; os demais níveis seguem em **Expansão**,
+como sempre. Antes todo mundo abria em Expansão, e uma vendedora de Formatação via "0 negócios" mesmo com
+leads dela no outro funil. O seletor de funil continua valendo, e o endereço com `?funil=` manda.

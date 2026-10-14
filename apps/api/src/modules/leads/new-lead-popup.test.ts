@@ -112,7 +112,7 @@ describe('the new-lead pop-up', () => {
       url: '/crm/notifications/new-leads',
       cookies: await cookiesOf(other),
     });
-    expect(asOther.json()).toEqual({ leads: [] });
+    expect(asOther.json()).toEqual({ leads: [], earlierCount: 0 });
     expect(
       (await app.inject({ method: 'GET', url: '/crm/notifications/new-leads' })).statusCode,
     ).toBe(401);
@@ -122,7 +122,7 @@ describe('the new-lead pop-up', () => {
     const boss = await createEmployee(db, { role: 'diretoria', sector: 'diretoria' });
     const born = await arrive(null);
     expect(born.lead.ownerEmployeeId).toBeNull();
-    expect(await newLeadPopupsOf(db, boss.id)).toEqual([]);
+    expect(await newLeadPopupsOf(db, boss.id)).toEqual({ leads: [], earlierCount: 0 });
   });
 
   it('goes away once read, once the deal moves on or is closed, once it changes hands, or when stale', async () => {
@@ -135,7 +135,7 @@ describe('the new-lead pop-up', () => {
       await arrive(owner.id),
       await arrive(owner.id),
     ];
-    expect(await newLeadPopupsOf(db, owner.id)).toHaveLength(5);
+    expect((await newLeadPopupsOf(db, owner.id)).leads).toHaveLength(5);
 
     await db
       .update(crmNotifications)
@@ -144,13 +144,49 @@ describe('the new-lead pop-up', () => {
     await db.update(leads).set({ stage: 'Em contato' }).where(eq(leads.id, moved.lead.id));
     await db.update(leads).set({ won: false }).where(eq(leads.id, lost.lead.id));
     await db.update(leads).set({ ownerEmployeeId: heir.id }).where(eq(leads.id, given.lead.id));
-    expect((await newLeadPopupsOf(db, owner.id)).map((p) => p.leadId)).toEqual([stale.lead.id]);
+    expect((await newLeadPopupsOf(db, owner.id)).leads.map((p) => p.leadId)).toEqual([
+      stale.lead.id,
+    ]);
     // The new owner has no notice of their own: nothing is raised for a hand-over.
-    expect(await newLeadPopupsOf(db, heir.id)).toEqual([]);
-    // Three days later it is the bell's business, not a pop-up.
+    expect(await newLeadPopupsOf(db, heir.id)).toEqual({ leads: [], earlierCount: 0 });
+    // Hours later it is no longer "just arrived": no pop-up, one line in the summary.
+    expect(await newLeadPopupsOf(db, owner.id, new Date(Date.now() + 3 * 3_600_000))).toEqual({
+      leads: [],
+      earlierCount: 1,
+    });
+  });
+
+  it("does not stack yesterday's leads as pop-ups: only the last two hours pop up, the rest is one count", async () => {
+    const owner = await createEmployee(db, { role: 'vendedor_formatacao', sector: 'comercial' });
+    const [fresh, late, overnight] = [
+      await arrive(owner.id),
+      await arrive(owner.id),
+      await arrive(owner.id),
+    ];
+    const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000);
+    const backdate = (leadId: string, at: Date) =>
+      db
+        .update(crmNotifications)
+        .set({ createdAt: at })
+        .where(and(eq(crmNotifications.leadId, leadId), eq(crmNotifications.kind, 'new_lead')));
+    await backdate(late.lead.id, ago(1.9));
+    await backdate(overnight.lead.id, ago(20));
+
+    const asked = await app.inject({
+      method: 'GET',
+      url: '/crm/notifications/new-leads',
+      cookies: await cookiesOf(owner),
+    });
+    const body = asked.json<{ leads: NewLeadPopup[]; earlierCount: number }>();
+    expect(body.leads.map((p) => p.leadId)).toEqual([fresh.lead.id, late.lead.id]);
+    expect(body.earlierCount).toBe(1);
+
+    // Two hours on, the 1.9 h one has aged out too; closing the overnight deal takes it off the count.
+    await db.update(leads).set({ won: false }).where(eq(leads.id, overnight.lead.id));
     expect(
-      await newLeadPopupsOf(db, owner.id, new Date(Date.now() + 3 * 86_400_000 + 60_000)),
-    ).toEqual([]);
+      await newLeadPopupsOf(db, owner.id, new Date(Date.now() + 0.2 * 3_600_000)),
+    ).toMatchObject({ earlierCount: 1 });
+    expect((await newLeadPopupsOf(db, owner.id)).earlierCount).toBe(0);
   });
 });
 

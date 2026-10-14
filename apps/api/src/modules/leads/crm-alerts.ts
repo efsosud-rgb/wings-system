@@ -2,9 +2,9 @@ import {
   endOfBusinessDay,
   LEAD_PIPELINE_LABELS,
   type LeadPipeline,
-  type NewLeadPopup,
+  type NewLeadPopups,
 } from '@wings/shared';
-import { and, desc, eq, gte, inArray, isNull, lt, min, ne, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, isNull, lt, min, ne, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { LEAD_ADMIN_ROLE_KEYS } from './access.js';
 import { firstContactOverdueSql, inEntryStageSql, LEADS_ID, trackedTaskSql } from './crm.js';
@@ -353,7 +353,8 @@ export async function notificationsOf(
 }
 
 /** A new-lead pop-up older than this is not worth raising (a long absence is the bell's job). */
-const POPUP_MAX_AGE_MS = 3 * 86_400_000;
+/** A lead is "just arrived" for a pop-up for this long: twice the first-contact deadline. */
+const POPUP_RECENT_MS = 2 * 3_600_000;
 const POPUP_LIMIT = 20;
 
 /**
@@ -361,12 +362,30 @@ const POPUP_LIMIT = 20;
  * open and still in the entry stage (the first contact is still owed). Never another person's lead: the
  * notice and the owner must both be the caller, so a manager, Diretoria or a reassigned lead's old owner
  * gets nothing here. Carries the first name only.
+ *
+ * Only a lead that arrived in the last `POPUP_RECENT_MS` pops up: opening the system after a night or a
+ * weekend must not stack yesterday's leads as "Lead novo". The older ones still waiting come back as
+ * `earlierCount`, a single line the screen shows once; the bell keeps every one of them.
  */
 export async function newLeadPopupsOf(
   db: Database,
   employeeId: string,
   now = new Date(),
-): Promise<NewLeadPopup[]> {
+): Promise<NewLeadPopups> {
+  const recentSince = new Date(now.getTime() - POPUP_RECENT_MS);
+  const owed = and(
+    eq(crmNotifications.recipientEmployeeId, employeeId),
+    eq(crmNotifications.kind, 'new_lead'),
+    isNull(crmNotifications.readAt),
+    eq(leads.ownerEmployeeId, employeeId),
+    isNull(leads.won),
+    inEntryStageSql(),
+  );
+  const [earlier] = await db
+    .select({ total: count() })
+    .from(crmNotifications)
+    .innerJoin(leads, eq(leads.id, crmNotifications.leadId))
+    .where(and(owed, lt(crmNotifications.createdAt, recentSince)));
   const rows = await db
     .select({
       noticeId: crmNotifications.id,
@@ -380,20 +399,11 @@ export async function newLeadPopupsOf(
     })
     .from(crmNotifications)
     .innerJoin(leads, eq(leads.id, crmNotifications.leadId))
-    .where(
-      and(
-        eq(crmNotifications.recipientEmployeeId, employeeId),
-        eq(crmNotifications.kind, 'new_lead'),
-        isNull(crmNotifications.readAt),
-        gte(crmNotifications.createdAt, new Date(now.getTime() - POPUP_MAX_AGE_MS)),
-        eq(leads.ownerEmployeeId, employeeId),
-        isNull(leads.won),
-        inEntryStageSql(),
-      ),
-    )
+    .where(and(owed, gte(crmNotifications.createdAt, recentSince)))
     .orderBy(desc(crmNotifications.createdAt))
     .limit(POPUP_LIMIT);
-  if (rows.length === 0) return [];
+  const earlierCount = earlier?.total ?? 0;
+  if (rows.length === 0) return { leads: [], earlierCount };
   const due = new Map(
     (
       await db
@@ -412,7 +422,7 @@ export async function newLeadPopupsOf(
         .groupBy(leadTasks.leadId)
     ).map((row) => [row.leadId, row.dueAt] as const),
   );
-  return rows.map((row) => ({
+  const popups = rows.map((row) => ({
     noticeId: row.noticeId,
     leadId: row.leadId,
     firstName: firstNameOf(row.name),
@@ -421,6 +431,7 @@ export async function newLeadPopupsOf(
     firstContactDueAt: due.get(row.leadId)?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
   }));
+  return { leads: popups, earlierCount };
 }
 
 export async function markRead(db: Database, employeeId: string, ids: string[] | 'all') {
