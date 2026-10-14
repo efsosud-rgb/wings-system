@@ -67,6 +67,7 @@ import {
 } from './contacts.js';
 import { scheduleLeadChecks } from './field-checks.js';
 import { markSuspectsAround } from './suspect.js';
+import { TRIAGE_SOURCES, leadTriageEnabled, scheduleLeadTriage } from './triage-schedule.js';
 import {
   announceStageEntered,
   ensureFirstContactTask,
@@ -539,8 +540,18 @@ export async function upsertLead(db: Database, given: IncomingLead): Promise<Ups
     incoming.source !== 'rd_crm'
   )
     await announceStageEntered(result.lead);
-  if (result.created && !incoming.importBatchId && !result.stale)
+  // A lead whose origin named no funnel goes to the Jev triage when it is on
+  // (docs/leads/triagem-jev.md); the triage announces the arrival after placing
+  // it, so the door's own notice would only double it.
+  const triaged =
+    result.created &&
+    !result.stale &&
+    !result.lead.pipeline &&
+    TRIAGE_SOURCES.has(incoming.source) &&
+    leadTriageEnabled();
+  if (result.created && !incoming.importBatchId && !result.stale && !triaged)
     await announceNewLead(db, result.lead);
+  if (triaged) scheduleLeadTriage({ leadId: result.lead.id });
   if (result.created) await markSuspectsAround(db, result.lead.id);
   return result;
 }

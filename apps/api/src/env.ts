@@ -581,6 +581,18 @@ const schema = z.object({
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',
   ),
+  /**
+   * Triage by the Jev (TypeSafe AI) of what arrives without a funnel
+   * (docs/leads/triagem-jev.md): off unless "true" AND JEV_API_KEY is set. The
+   * Jev reads only the masked message or form answers and answers the sector;
+   * the funnel's rotation still picks the seller.
+   */
+  LEAD_TRIAGE_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  /** The TypeSafe AI key of the Jev triage (secret). */
+  JEV_API_KEY: optionalString,
   /** The WhatsApp number the tracked links point at, digits only. Not a secret. */
   WINGS_WHATSAPP_NUMBER: optionalString.refine(
     (value) => value === undefined || /^55\d{10,11}$/.test(value),
