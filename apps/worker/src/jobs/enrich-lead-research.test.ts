@@ -120,7 +120,12 @@ describe('the company research step of enrich_lead', () => {
       ...extra,
     });
 
-  function run(leadId: string, research: LeadResearchProvider | null, researchDailyUsd = 1) {
+  function run(
+    leadId: string,
+    research: LeadResearchProvider | null,
+    researchDailyUsd = 1,
+    researchSince: Date | null = null,
+  ) {
     return insertJob(leadId).then(
       (job) =>
         runEnrichLeadJob(
@@ -133,6 +138,7 @@ describe('the company research step of enrich_lead', () => {
               cnpj: { lookup: async () => null },
               budget: { dailyUsd: 2, searchUsdPerQuery: 0.005, researchDailyUsd },
               research,
+              researchSince,
             },
           }),
         ) as Promise<EnrichLeadOutput>,
@@ -151,10 +157,13 @@ describe('the company research step of enrich_lead', () => {
         companyName: 'Açaí da Fila',
         website: 'https://acai.example.com.br/',
         instagram: 'acai.da.fila',
-        cnpj: CNPJ,
+        // A gmail address says nothing about the company: no domain either.
+        emailDomain: null,
       },
     ]);
     expect(JSON.stringify(inputs)).not.toMatch(/Ana|ana@|5519/);
+    // The lead has a CNPJ on file; it is never part of what is sent.
+    expect(JSON.stringify(inputs)).not.toMatch(/11\.?222\.?333|cnpj/i);
 
     const research = await researchOf(leadId);
     expect(research).toMatchObject({
@@ -282,7 +291,7 @@ describe('the company research step of enrich_lead', () => {
     expect(output.costUsdMicro).toBe(0);
     expect(await researchOf(leadId)).toMatchObject({
       status: 'skipped',
-      reason: 'O formulário não trouxe dado da empresa (nome, site, Instagram ou CNPJ)',
+      reason: 'O formulário não trouxe dado da empresa (nome, site, Instagram ou e-mail corporativo)',
     });
     expect((await ledger(leadId)).map((row) => [row.status, row.usd_micro])).toEqual([
       ['skipped', 0],
@@ -379,5 +388,57 @@ describe('the company research step of enrich_lead', () => {
     expect(inputs).toHaveLength(0);
     expect(output.steps.web_research).toBe('skipped');
     expect((await leadRow(leadId)).enrichment_state).toBe('done');
+  });
+  it('sends the domain of a corporate e-mail, never the address, and researches with it alone', async () => {
+    const leadId = await companyLead({
+      email: 'ana.souza@acaidafila.com.br',
+      company_name: null,
+      website: null,
+      instagram: null,
+    });
+    const { provider, inputs } = fakeProvider();
+    const output = await run(leadId, provider);
+    expect(inputs).toEqual([
+      { leadId, companyName: null, website: null, instagram: null, emailDomain: 'acaidafila.com.br' },
+    ]);
+    expect(JSON.stringify(inputs)).not.toMatch(/ana\.souza|@|11\.?222/);
+    expect(output.steps.web_research).toBe('done');
+  });
+
+  it('researches only leads that arrived from the cut-off on: an older lead, even one converting again, is not', async () => {
+    const since = new Date('2026-10-14T03:00:00Z'); // 00:00 of 14/10 in São Paulo
+    const old = await companyLead({ created_at: new Date('2026-10-14T02:59:00Z') });
+    const imported = await companyLead({
+      created_at: new Date('2026-10-14T15:00:00Z'),
+      entered_at: new Date('2026-09-20T12:00:00Z'),
+    });
+    const fresh = await companyLead({ created_at: new Date('2026-10-14T03:00:00Z') });
+    const { provider, inputs } = fakeProvider();
+
+    for (const leadId of [old, imported]) {
+      const output = await run(leadId, provider, 1, since);
+      expect(output.steps.web_research).toBe('skipped');
+      expect(output.costUsdMicro).toBe(0);
+      expect(await researchOf(leadId)).toMatchObject({
+        status: 'skipped',
+        reason:
+          'Lead anterior a 14/10/2026: a pesquisa só roda para leads que chegaram a partir dessa data',
+      });
+      expect(await ledger(leadId)).toEqual([
+        expect.objectContaining({
+          step: 'ai_research',
+          status: 'skipped',
+          usd_micro: 0,
+          detail: { reason: 'before_cutoff' },
+        }),
+      ]);
+      // A second arrival (a reconversion queues the same job) still does not research it.
+      await run(leadId, provider, 1, since);
+    }
+    expect(inputs).toHaveLength(0);
+
+    const output = await run(fresh, provider, 1, since);
+    expect(output.steps.web_research).toBe('done');
+    expect(inputs.map((input) => input.leadId)).toEqual([fresh]);
   });
 });

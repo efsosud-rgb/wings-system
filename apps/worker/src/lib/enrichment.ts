@@ -303,16 +303,17 @@ export async function reserveSpend(
 
 /**
  * What the research may be told about a lead: the COMPANY's name, site,
- * Instagram and CNPJ, nothing else. There is no field for a person's name,
- * phone, e-mail or CPF, so none can be sent by mistake (`researchInputOf`
- * also drops a value that looks like one).
+ * Instagram and the domain of a corporate e-mail, nothing else. There is no
+ * field for a person's name, phone, whole e-mail, CPF or CNPJ, so none can be
+ * sent by mistake (`researchInputOf` also drops a value that looks like one).
  */
 export interface LeadResearchInput {
   leadId: string;
   companyName: string | null;
   website: string | null;
   instagram: string | null;
-  cnpj: string | null;
+  /** Only the part after "@", and only when it is not a free webmail (gmail, hotmail, uol...). */
+  emailDomain: string | null;
 }
 
 export interface LeadResearchFinding {

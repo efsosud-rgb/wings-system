@@ -48,7 +48,7 @@ async function main() {
     log,
   });
   console.warn(
-    `wings-worker: enrich_lead with zapi=${zapi ? 'on' : 'off'}, search=${search ? 'brave' : 'off'}, ceiling US$ ${env.ENRICH_DAILY_USD}/day; company research=${research ? `openrouter (${env.LEAD_RESEARCH_MODEL})` : 'off'}, ceiling US$ ${env.LEAD_RESEARCH_DAILY_USD}/day`,
+    `wings-worker: enrich_lead with zapi=${zapi ? 'on' : 'off'}, search=${search ? 'brave' : 'off'}, ceiling US$ ${env.ENRICH_DAILY_USD}/day; company research=${research ? `openrouter (${env.LEAD_RESEARCH_MODEL})` : 'off'}, ceiling US$ ${env.LEAD_RESEARCH_DAILY_USD}/day, leads from ${env.LEAD_RESEARCH_SINCE}`,
   );
 
   const stop = runWorker(
@@ -76,6 +76,8 @@ async function main() {
           researchDailyUsd: env.LEAD_RESEARCH_DAILY_USD,
         },
         research,
+        // 00:00 of that day in São Paulo (UTC-3, no DST since 2019).
+        researchSince: new Date(`${env.LEAD_RESEARCH_SINCE}T03:00:00Z`),
       },
     },
     { jobTypes, concurrency, pollIntervalMs: env.WORKER_POLL_INTERVAL_MS, maxAttempts: env.WORKER_MAX_ATTEMPTS },

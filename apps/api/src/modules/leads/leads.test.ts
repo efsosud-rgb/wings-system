@@ -1627,6 +1627,43 @@ describe('the Funil routes', () => {
     );
   });
 
+  it('queues one research for a double click on "Pesquisar de novo", so it is never paid twice', async () => {
+    const { cookies } = await sessionFor('gerente_comercial');
+    const created = await app.inject({
+      method: 'POST',
+      url: '/leads',
+      cookies,
+      payload: {
+        name: 'Clique Duplo',
+        email: 'duplo@example.com',
+        legalBasis: 'consent',
+        consentText: 'Formulário no evento',
+      },
+    });
+    const lead = created.json<{ lead: Lead }>().lead;
+    await db
+      .update(leads)
+      .set({ enrichmentState: 'done', enrichmentError: null })
+      .where(eq(leads.id, lead.id));
+    const queuedJobs = async () =>
+      (await db.select().from(jobs).where(eq(jobs.type, 'enrich_lead'))).filter(
+        (job) => (job.input as { leadId?: string }).leadId === lead.id,
+      );
+    const before = (await queuedJobs()).length;
+
+    const clicks = await Promise.all(
+      Array.from({ length: 3 }, () =>
+        app.inject({ method: 'POST', url: `/leads/${lead.id}/research`, cookies }),
+      ),
+    );
+    expect(clicks.map((reply) => reply.statusCode).sort()).toEqual([202, 409, 409]);
+    expect((await queuedJobs()).length).toBe(before + 1);
+    const [row] = await db.select().from(leads).where(eq(leads.id, lead.id));
+    expect(row?.enrichmentState).toBe('pending');
+    const audits = await db.select().from(auditLog).where(eq(auditLog.entityId, lead.id));
+    expect(audits.filter((audit) => audit.action === 'lead.research_requested')).toHaveLength(1);
+  });
+
   it('merges a manual entry into the lead that already has that phone and fills its gaps only', async () => {
     const { cookies } = await sessionFor('gerente_comercial');
     const first = await app.inject({

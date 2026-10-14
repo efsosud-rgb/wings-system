@@ -28,6 +28,9 @@ interface LeadRow {
   whatsapp_profile_name: string | null;
   whatsapp_photo_url: string | null;
   enrichment_facts: unknown;
+  created_at: Date;
+  /** When the lead first arrived (0076); older than `created_at` for a lead imported later. */
+  entered_at: Date | null;
 }
 
 export interface EnrichLeadOutput {
@@ -141,7 +144,8 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
   const now = ctx.now?.() ?? new Date();
 
   const found = await db.query<LeadRow>(
-    `select id, client_id, name, email, phone, whatsapp_profile_name, whatsapp_photo_url, enrichment_facts from leads where id = $1`,
+    `select id, client_id, name, email, phone, whatsapp_profile_name, whatsapp_photo_url, enrichment_facts, created_at, entered_at
+       from leads where id = $1`,
     [leadId],
   );
   const lead = found.rows[0];
@@ -270,13 +274,22 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
         await writeLedger(db, { leadId, jobId: job.id, step: 'ai_research', status: 'skipped', usdMicro: 0, detail: { reason: 'already_done' } });
         steps.web_research = 'skipped';
       }
+    } else if (enrichment.research && arrivedBefore(lead, enrichment.researchSince)) {
+      // Only leads that arrived from the cut-off on: an older lead that converts again is not researched.
+      facts.webResearch = noResearch(
+        'skipped',
+        now.toISOString(),
+        `Lead anterior a ${dayOf(enrichment.researchSince as Date)}: a pesquisa só roda para leads que chegaram a partir dessa data`,
+      );
+      await writeLedger(db, { leadId, jobId: job.id, step: 'ai_research', status: 'skipped', usdMicro: 0, detail: { reason: 'before_cutoff' } });
+      steps.web_research = 'skipped';
     } else if (enrichment.research) {
       const research = enrichment.research;
       const at = now.toISOString();
       let input: ReturnType<typeof researchInputOf> = null;
       let prepared = true;
       try {
-        input = researchInputOf(leadId, await companyFieldsOf(db, leadId), lead.name);
+        input = researchInputOf(leadId, await companyFieldsOf(db, leadId), lead.name, lead.email);
       } catch (error) {
         // Not being able to read or clean the company fields is this step's failure, not the job's.
         prepared = false;
@@ -285,7 +298,7 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
         steps.web_research = 'failed';
       }
       if (prepared && !input) {
-        facts.webResearch = noResearch('skipped', at, 'O formulário não trouxe dado da empresa (nome, site, Instagram ou CNPJ)');
+        facts.webResearch = noResearch('skipped', at, 'O formulário não trouxe dado da empresa (nome, site, Instagram ou e-mail corporativo)');
         await writeLedger(db, { leadId, jobId: job.id, step: 'ai_research', status: 'skipped', usdMicro: 0, detail: { reason: 'no_company_data' } });
         steps.web_research = 'skipped';
       } else if (prepared && input) {
@@ -381,14 +394,30 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
 };
 
 /** The company fields a lead form may have filled; none when the columns are not there yet (42703). */
+/**
+ * True when the lead arrived before the research cut-off: the earlier of when it was created
+ * here and when it first arrived (a lead imported today from an old RD deal is old). No
+ * cut-off configured: nothing is before it.
+ */
+export function arrivedBefore(lead: Pick<LeadRow, 'created_at' | 'entered_at'>, since: Date | null | undefined): boolean {
+  if (!since) return false;
+  const created = new Date(lead.created_at).getTime();
+  const entered = lead.entered_at ? new Date(lead.entered_at).getTime() : created;
+  return Math.min(created, entered) < since.getTime();
+}
+
+/** dd/mm/aaaa of a date in São Paulo. */
+const dayOf = (date: Date) =>
+  new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric' }).format(date);
+
+/** The company's own fields; never the CNPJ, which is not sent to the research. */
 async function companyFieldsOf(db: JobContext['db'], leadId: string) {
   try {
     const result = await db.query<{
       company_name: string | null;
       website: string | null;
       instagram: string | null;
-      company_cnpj: string | null;
-    }>(`select company_name, website, instagram, company_cnpj from leads where id = $1`, [leadId]);
+    }>(`select company_name, website, instagram from leads where id = $1`, [leadId]);
     return result.rows[0] ?? {};
   } catch (error) {
     if ((error as { code?: string }).code === '42703') return {};
