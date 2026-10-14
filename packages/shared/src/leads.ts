@@ -271,17 +271,28 @@ const PERSONAL_EMAIL_DOMAINS = new Set([
 ]);
 
 /**
- * Webmail brands that stay a provider under any country ending: "yahoo.com.ar", "outlook.pt",
- * "ibest.com.ar", "qq.com.cn". Only the brand followed by a plain ending counts ("com", "net",
- * "org", "co", optionally with a country, or a country alone): a company's own domain that merely
- * starts like a brand ("mail.empresa.com.br", "r7.ind.br") is not a webmail.
+ * Unmistakable webmail brands: under ANY ending ("yahoo.ne.jp", and a typo like "gmail.con" or
+ * "hotmail.comm") the domain is still the provider, and a typo in the ending is exactly what a
+ * lead form lets through. No company's own domain starts like these.
  */
-const FREE_MAIL_BRANDS =
-  /^(?:gmail|googlemail|hotmail|outlook|live|msn|yahoo|ymail|rocketmail|icloud|me|mac|uol|bol|terra|ig|globo|globomail|aol|proton|protonmail|zipmail|gmx|mail|yandex|zoho|ibest|superig|r7|sapo|fastmail|tutanota|tutamail|qq)\.(?:(?:com|net|org|co)(?:\.[a-z]{2})?|[a-z]{2})$/;
+const FREE_MAIL_ANY_ENDING =
+  /^(?:gmail|googlemail|hotmail|outlook|yahoo|ymail|icloud|aol|msn|protonmail|rocketmail|yandex)\.[a-z]{2,6}(?:\.[a-z]{2,6})?$/;
+
+/**
+ * Shorter or more ordinary names (a company can be "live", "mail" or "r7"): only with a plain
+ * ending ("com", "net", "org", "co", optionally with a country, or a country alone), so
+ * "mail.empresa.com.br" or "r7.ind.br" stay companies.
+ */
+const FREE_MAIL_PLAIN_ENDING =
+  /^(?:live|me|mac|uol|bol|terra|ig|globo|globomail|proton|zipmail|gmx|mail|zoho|ibest|superig|r7|sapo|fastmail|tutanota|tutamail|qq)\.(?:(?:com|net|org|co)(?:\.[a-z]{2})?|[a-z]{2})$/;
 
 /** A free webmail (the lead's address says nothing about a company), by exact domain or by brand. */
 export function isFreeMailDomain(domain: string): boolean {
-  return PERSONAL_EMAIL_DOMAINS.has(domain) || FREE_MAIL_BRANDS.test(domain);
+  return (
+    PERSONAL_EMAIL_DOMAINS.has(domain) ||
+    FREE_MAIL_ANY_ENDING.test(domain) ||
+    FREE_MAIL_PLAIN_ENDING.test(domain)
+  );
 }
 
 export interface LeadEmailDomain {

@@ -340,6 +340,12 @@ describe('the free-mail rule', () => {
       'proton.me',
       'oi.com.br',
       'pop.com.br',
+      // A typo in the ending, or a country not listed, is still the provider.
+      'gmail.con',
+      'hotmail.comm',
+      'gmail.vom',
+      'yahoo.ne.jp',
+      'outlook.com.br',
     ])
       expect(isFreeMailDomain(domain), domain).toBe(true);
     for (const domain of [

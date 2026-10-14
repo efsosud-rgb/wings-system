@@ -142,6 +142,9 @@ describe('what may be sent about a lead', () => {
       'ana@ibest.com.ar',
       'ana@sapo.cv',
       'ana@qq.com.cn',
+      // A typo in the ending is still the provider: no call, no cost.
+      'ana@gmail.con',
+      'ana@hotmail.comm',
     ]) {
       expect(corporateEmailDomainOf(email), email).toBeNull();
       // With no other company data there is nothing to search: no call, no cost.

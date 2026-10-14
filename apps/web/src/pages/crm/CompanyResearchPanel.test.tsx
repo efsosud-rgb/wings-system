@@ -253,6 +253,15 @@ describe('a research stored before each value named its page', () => {
     }
   });
 
+  it('does not stick on the queue after a request that ended without a new result: the button is back with its price', () => {
+    Object.assign(redo, { isSuccess: true });
+    render(<CompanyResearchPanel research={research(OLD)} lead={LEAD} canWrite />);
+    const button = screen.getByRole('button', {
+      name: 'Pesquisar de novo (cerca de US$ 0,01)',
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+  });
+
   it('does not say each value shows its page when it does not', () => {
     render(<CompanyResearchPanel research={research(OLD)} lead={LEAD} canWrite />);
     const panel = screen.getByRole('region', { name: 'Pesquisa da empresa' });

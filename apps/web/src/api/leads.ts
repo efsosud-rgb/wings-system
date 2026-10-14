@@ -127,9 +127,13 @@ export function useResearchLead() {
   return useMutation({
     mutationFn: (id: string) =>
       api.post<{ lead: Lead; events: LeadEvent[] }>(`/leads/${id}/research`),
-    onSuccess: (_data, id) => {
-      void queryClient.invalidateQueries({ queryKey: ['leads', 'one', id] });
-      void queryClient.invalidateQueries({ queryKey: ['leads'] });
+    // Returned, so the request stays pending until the lead is read again and shows the queued state:
+    // no second click can slip between the answer and the refresh.
+    onSuccess: async (_data, id) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['leads', 'one', id] }),
+        queryClient.invalidateQueries({ queryKey: ['leads'] }),
+      ]);
     },
   });
 }
