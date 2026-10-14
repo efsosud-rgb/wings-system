@@ -515,6 +515,58 @@ describe('a WhatsApp conversation with no deal and Sofia off', () => {
     });
   });
 
+  it('a number whose only deal is closed gets a new deal beside it, with owner, task and notice, instead of landing silently on the lost one', async () => {
+    const seller = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
+    await db
+      .insert(crmDistributionMembers)
+      .values({ pipeline: 'expansao', employeeId: seller.id, active: true });
+    const phone = '5541955551111';
+    const lost = await upsertLead(db, {
+      source: 'manual',
+      name: 'Perdido Teste',
+      phone,
+      clientId: WINGS_CLIENT_ID,
+      clientMapped: true,
+      pipeline: 'expansao',
+      event: { kind: 'lead.created' },
+    });
+    await db
+      .update(leads)
+      .set({ won: false, closedAt: new Date('2026-09-01T12:00:00Z'), lostReason: 'Sem capital' })
+      .where(eq(leads.id, lost.lead.id));
+    const { conversation } = await conversationWith(
+      phone,
+      'Oi, voltei a pensar na franquia. Ainda tem vaga em Niterói?',
+    );
+    answers.push(verdict('expansao', 0.97));
+    await triageConversation(db, conversation.id, deps);
+
+    const [adopted] = await db
+      .select()
+      .from(waConversations)
+      .where(eq(waConversations.id, conversation.id));
+    expect(adopted?.leadId).not.toBeNull();
+    expect(adopted?.leadId).not.toBe(lost.lead.id);
+    const [fresh] = await db.select().from(leads).where(eq(leads.id, adopted!.leadId!));
+    expect(fresh).toMatchObject({ pipeline: 'expansao', won: null, closedAt: null });
+    expect(fresh?.ownerEmployeeId).not.toBeNull();
+    expect(fresh?.stageId).not.toBeNull();
+    // The owner is told, and has the first-contact task.
+    expect((await noticesOf(fresh!.id)).map((n) => [n.kind, n.recipientEmployeeId])).toEqual([
+      ['new_lead', fresh!.ownerEmployeeId],
+    ]);
+    const task = await db.query.leadTasks.findFirst({ where: eq(leadTasks.leadId, fresh!.id) });
+    expect(task).toMatchObject({ kind: 'first_contact' });
+    // The lost deal stays lost and unannounced; the two are tied on the timeline.
+    const [still] = await db.select().from(leads).where(eq(leads.id, lost.lead.id));
+    expect(still).toMatchObject({ won: false, lostReason: 'Sem capital' });
+    expect(await noticesOf(lost.lead.id)).toEqual([]);
+    const tie = await db.query.leadEvents.findFirst({
+      where: and(eq(leadEvents.leadId, lost.lead.id), eq(leadEvents.kind, 'lead.reopened_as')),
+    });
+    expect(tie?.detail).toMatchObject({ newLeadId: fresh!.id, reason: 'closed' });
+  });
+
   it('a job seeker makes no deal: the conversation keeps waiting and the managers get the notice', async () => {
     const { conversation } = await conversationWith(
       '5541955553333',
