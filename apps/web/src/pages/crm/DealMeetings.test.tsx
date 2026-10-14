@@ -1,5 +1,5 @@
 import type { GoogleWorkspaceStatus, Lead, Meeting, MeetingSummary } from '@wings/shared';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../api/client.js';
 import type { LoadedLead } from '../../api/leads.js';
@@ -369,6 +369,26 @@ describe('the Reunião section', () => {
       'wings-meet',
       expect.stringContaining('popup'),
     );
+  });
+
+  it('asks inside the page before cancelling a meeting, never with window.confirm', () => {
+    const confirmSpy = vi.spyOn(window, 'confirm');
+    state.meetings = [summary({ googleEventId: 'evt1' })];
+    state.meeting = meeting({ status: 'agendada', googleEventId: 'evt1' });
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Reunião de diagnóstico' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar reunião' }));
+    const ask = screen.getByRole('alertdialog', { name: 'Cancelar esta reunião?' });
+    expect(ask.textContent).toContain('Ela sai do Google Agenda e os convidados são avisados.');
+    fireEvent.click(screen.getByRole('button', { name: 'Voltar' }));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(calls.update).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar reunião' }));
+    const again = screen.getByRole('alertdialog');
+    fireEvent.click(within(again).getByRole('button', { name: 'Cancelar reunião' }));
+    expect(calls.update).toHaveBeenCalledWith({ status: 'cancelada' });
+    expect(confirmSpy).not.toHaveBeenCalled();
   });
 
   it('approves the summary with the exact text on screen, only for who holds the permission', async () => {

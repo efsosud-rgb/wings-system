@@ -143,6 +143,8 @@ const PROBES = {
   crmSettings: '/crm/distribution',
   integrations: '/crm/meta-leads/failed',
   roadmap: '/roadmap/modules',
+  // Every level opens the Agenda (calendar.use, scope own; Eric, 14/10).
+  agenda: '/agenda',
 } as const;
 type Probe = keyof typeof PROBES;
 
@@ -152,12 +154,12 @@ const LEVELS: { role: RoleKey; sector: SectorSlug; opens: Probe[] }[] = [
     role: 'vendedor_expansao',
     sector: 'comercial',
     // Eric, 14/10: the CRM of their own deals; no Empresas, Landing pages, team list or Drive.
-    opens: ['leads', 'projects'],
+    opens: ['leads', 'projects', 'agenda'],
   },
   {
     role: 'vendedor_formatacao',
     sector: 'comercial',
-    opens: ['leads', 'campaignLeads', 'projects'],
+    opens: ['leads', 'campaignLeads', 'projects', 'agenda'],
   },
   {
     role: 'gerente_comercial',
@@ -173,6 +175,7 @@ const LEVELS: { role: RoleKey; sector: SectorSlug; opens: Probe[] }[] = [
       'projects',
       'drive',
       'crmSettings',
+      'agenda',
     ],
   },
   {
@@ -189,11 +192,12 @@ const LEVELS: { role: RoleKey; sector: SectorSlug; opens: Probe[] }[] = [
       'campaignLeads',
       'projects',
       'drive',
+      'agenda',
     ],
   },
-  { role: 'marketing', sector: 'marketing', opens: ['ads', 'projects', 'drive'] },
-  { role: 'formatacao_ti', sector: 'formatacao-ti', opens: ['projects', 'drive'] },
-  { role: 'rh_dp', sector: 'diretoria', opens: ['register', 'projects', 'drive'] },
+  { role: 'marketing', sector: 'marketing', opens: ['ads', 'projects', 'drive', 'agenda'] },
+  { role: 'formatacao_ti', sector: 'formatacao-ti', opens: ['projects', 'drive', 'agenda'] },
+  { role: 'rh_dp', sector: 'diretoria', opens: ['register', 'projects', 'drive', 'agenda'] },
   {
     role: 'admin_master',
     sector: 'diretoria',

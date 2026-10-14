@@ -51,6 +51,7 @@ import { mediaRoutes } from './modules/media/routes.js';
 import { mediaStudioRoutes } from './modules/media/studio-routes.js';
 import { projectRoutes } from './modules/projects/routes.js';
 import { googleWorkspaceRoutes } from './modules/google-workspace/routes.js';
+import { agendaRoutes } from './modules/agenda/routes.js';
 import { meetingRoutes } from './modules/meetings/routes.js';
 import { createRegistryLookup } from './modules/clients/lookup.js';
 import {
@@ -304,6 +305,7 @@ export async function buildApp(deps: {
   await app.register(officeRoutes);
   await app.register(meetingRoutes);
   await app.register(googleWorkspaceRoutes);
+  await app.register(agendaRoutes);
   await app.register(leadRoutes);
   await app.register(crmRoutes);
   await app.register(automationRoutes);

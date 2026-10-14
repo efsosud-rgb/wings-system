@@ -23,6 +23,8 @@ nome, canto superior direito). A partir daí, com a conta dela:
   resposta do lead chega na caixa dela. Quem não conectou cai no SMTP da empresa (`SMTP_FROM`);
   sem SMTP o envio é recusado e fica registrado como falho. Numa automação o remetente é o dono
   do lead. O outbox guarda `from_email`, `Message-ID`, `gmail_message_id` e `gmail_thread_id`.
+- O módulo **Agenda** (a tela tipo Google Agenda, com a agenda da pessoa e a Wings Company) usa
+  esta mesma conexão: ver [docs/agenda.md](../agenda.md).
 - (Etapa seguinte) as respostas do lead na linha do tempo: exige o escopo restrito
   `gmail.readonly` e uma leitura periódica (`history.list`) por pessoa conectada.
 

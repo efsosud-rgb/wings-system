@@ -31,6 +31,7 @@ import {
   useUploadRecording,
 } from '../../api/crm.js';
 import type { LoadedLead } from '../../api/leads.js';
+import { ConfirmDialog } from '../../components/agenda/ConfirmDialog.js';
 import { Icon } from '../../components/Icon.js';
 import { failureReason } from '../../lib/failure.js';
 import { formatDateTime, formatDay, toLocalInput } from './format.js';
@@ -793,6 +794,7 @@ function MeetingDetail({
   const analyze = useRequestAnalysis(id);
   const update = useUpdateMeeting(id);
   const [rescheduling, setRescheduling] = useState(false);
+  const [askingCancel, setAskingCancel] = useState(false);
   if (meeting.isLoading) return <p className="crm-muted">Carregando…</p>;
   if (meeting.isError || !meeting.data) {
     return <Dash reason={messageOf(meeting.error, 'Não foi possível ler a reunião.')} />;
@@ -845,15 +847,25 @@ function MeetingDetail({
             type="button"
             className="crm-btn is-small is-quiet"
             disabled={update.isPending}
-            onClick={() => {
-              const question = data.googleEventId
-                ? 'Cancelar esta reunião? Ela sai do Google Agenda e os convidados são avisados.'
-                : 'Cancelar esta reunião?';
-              if (window.confirm(question)) update.mutate({ status: 'cancelada' });
-            }}
+            onClick={() => setAskingCancel(true)}
           >
             Cancelar reunião
           </button>
+          {askingCancel && (
+            // Asked inside the page: window.confirm is drawn by the browser and some block it.
+            <ConfirmDialog
+              title="Cancelar esta reunião?"
+              confirmLabel="Cancelar reunião"
+              cancelLabel="Voltar"
+              onCancel={() => setAskingCancel(false)}
+              onConfirm={() => {
+                setAskingCancel(false);
+                update.mutate({ status: 'cancelada' });
+              }}
+            >
+              {data.googleEventId && <p>Ela sai do Google Agenda e os convidados são avisados.</p>}
+            </ConfirmDialog>
+          )}
           <Problem error={update.error} fallback="Não foi possível cancelar." />
           {update.error instanceof ApiError && update.error.status === 502 && (
             <button
