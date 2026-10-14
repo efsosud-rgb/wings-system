@@ -234,6 +234,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       won: boolean | null;
     }>(sql`
       select * from (
+        select distinct on (t.lead_id) t.* from (
         select l.id as lead_id, l.name, l.phone, null::text as contact_name, l.pipeline,
                e.full_name as owner_name, l.won, l.created_at
         from leads l left join employees e on e.id = l.owner_employee_id
@@ -249,8 +250,11 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         where ct.phone is not null
           and (ct.name ilike ${like} ${phoneLike ? sql`or ct.phone like ${phoneLike}` : sql``})
           ${owner === undefined ? sql`` : sql`and l.owner_employee_id = ${owner}`}
-      ) t
-      order by (t.won is null) desc, t.created_at desc
+        ) t
+        -- One row per deal: the lead's own phone first, else the contact's that matched.
+        order by t.lead_id, (t.contact_name is null) desc
+      ) d
+      order by (d.won is null) desc, d.created_at desc
       limit 20`);
     const targets: WaNewTarget[] = [];
     for (const row of rows.rows) {

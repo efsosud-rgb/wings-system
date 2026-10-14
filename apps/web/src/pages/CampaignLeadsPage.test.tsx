@@ -10,6 +10,8 @@ vi.mock('../api/client.js', async (original) => ({
   ...(await original<typeof import('../api/client.js')>()),
   api: {
     get: (path: string) => get(path),
+    // The list refreshes itself as a passive read; the test answers it like any read.
+    poll: (path: string) => get(path),
     post: (path: string, body?: unknown) => post(path, body),
   },
 }));

@@ -517,6 +517,23 @@ async function changeLeadTx(db: Database, change: LeadChange): Promise<LeadChang
     if (changed.includes('owner') && updated.ownerEmployeeId && updated.won === null) {
       await ensureFirstContactTask(tx, updated, change.actorEmployeeId, now);
     }
+    // A deal won or lost has nothing left to do: its open tasks close with it, so they leave
+    // the overdue counters, Atividades and the bell. Reopening does not bring them back.
+    if (outcomeMoved && updated.won !== null) {
+      const closedTasks = await tx
+        .update(leadTasks)
+        .set({ doneAt: now, doneBy: change.actorEmployeeId })
+        .where(and(eq(leadTasks.leadId, lead.id), isNull(leadTasks.doneAt)))
+        .returning({ id: leadTasks.id });
+      for (const task of closedTasks) {
+        await tx.insert(leadEvents).values({
+          leadId: lead.id,
+          kind: 'lead.task_done',
+          actorEmployeeId: change.actorEmployeeId,
+          detail: { taskId: task.id, changed: ['doneAt', 'doneBy'], closedWithDeal: true },
+        });
+      }
+    }
     return { ok: true, lead: updated, changed };
   });
 }

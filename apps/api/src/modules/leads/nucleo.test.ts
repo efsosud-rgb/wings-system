@@ -508,6 +508,13 @@ describe('CSV import and export', () => {
     ).toBe('a;"b;c"\r\n;"q""q"');
     expect(parseMoneyCents('R$ 1.234,56')).toBe(123456);
     expect(parseMoneyCents('1234.5')).toBe(123450);
+    expect(parseMoneyCents('1234.56')).toBe(123456);
+    // A dot grouping thousands is not a decimal point: R$ 25.000,00, never R$ 25,00.
+    expect(parseMoneyCents('25.000')).toBe(2_500_000);
+    expect(parseMoneyCents('1.500')).toBe(150_000);
+    expect(parseMoneyCents('R$ 1.500.000')).toBe(150_000_000);
+    expect(parseMoneyCents('25.000,50')).toBe(2_500_050);
+    expect(parseMoneyCents('1,234.56')).toBe(123456);
     expect(parseMoneyCents('abc')).toBeNull();
     expect(
       suggestMapping(['Nome', 'E-mail', 'Celular', 'Empresa', 'Observação', 'Coluna X']),

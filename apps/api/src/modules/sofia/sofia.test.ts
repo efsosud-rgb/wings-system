@@ -958,6 +958,14 @@ describe('the WhatsApp screen (WhatsApp Web of each person)', () => {
       expect.objectContaining({ leadId: lead!.id, conversationId: null, open: true }),
     ]);
     expect(await find(other.cookies, 'Patrícia')).toEqual([]);
+    // The deal's contact carries the same phone (the usual case): still one row, not two.
+    const [contact] = await db
+      .insert(crmContacts)
+      .values({ name: 'Patrícia Nogueira', phone })
+      .returning();
+    await db.insert(leadContacts).values({ leadId: lead!.id, contactId: contact!.id });
+    expect((await find(owner.cookies, 'Patrícia')).map((t) => t.leadId)).toEqual([lead!.id]);
+    expect((await find(owner.cookies, phone.slice(-8))).map((t) => t.leadId)).toEqual([lead!.id]);
     await write(phone, text('oi'));
     const byPhone = await find(owner.cookies, phone.slice(-8));
     expect(byPhone[0]?.conversationId).toBe((await conversationOf(phone)).id);

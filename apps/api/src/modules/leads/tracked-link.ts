@@ -1,9 +1,10 @@
-import { type LeadLinkChannel } from '@wings/shared';
+import { type LeadLinkChannel, type LeadPipeline, WINGS_CLIENT_ID } from '@wings/shared';
 import { eq, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { leadTrackingLinks } from '../../db/schema/index.js';
+import { clients, leadTrackingLinks } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
-import { trackingLinkByCode, upsertLead } from './service.js';
+import { announceLeadArrival } from './crm-alerts.js';
+import { brandOfLink, trackingLinkByCode, upsertLead } from './service.js';
 
 /**
  * A first WhatsApp message that starts with a tracking code (the wa.me link
@@ -11,6 +12,12 @@ import { trackingLinkByCode, upsertLead } from './service.js';
  * the Z-API session of the commercial number today, and the official Cloud
  * API after the number moves (docs/whatsapp/cloud-api.md). Null when the code
  * is not one of ours.
+ *
+ * The deal is born as one from any other door: in the funnel the link's client
+ * sells (a brand's link is Expansão for that brand; Wings' own is Formatação),
+ * in its entry stage, with the owner the rotation gives, the first-contact task
+ * and the arrival notice. With Sofia on, the WhatsApp door does not come here:
+ * she makes the deal at the end of her questions.
  */
 export async function leadFromTrackedMessage(
   db: Database,
@@ -30,12 +37,19 @@ export async function leadFromTrackedMessage(
   const link = await trackingLinkByCode(db, message.code);
   if (!link) return null;
   const at = message.at ?? new Date();
+  const client = await db.query.clients.findFirst({
+    where: eq(clients.id, link.clientId),
+    columns: { id: true, name: true },
+  });
+  const pipeline: LeadPipeline = link.clientId === WINGS_CLIENT_ID ? 'formatacao' : 'expansao';
   const result = await upsertLead(db, {
     source: 'whatsapp_link',
     name: message.senderName,
     phone: message.phone,
     clientId: link.clientId,
     clientMapped: true,
+    pipeline,
+    brand: client ? brandOfLink(client) : null,
     channel: link.channel as LeadLinkChannel,
     trackingLinkId: link.id,
     firstMessage: message.text,
@@ -70,5 +84,8 @@ export async function leadFromTrackedMessage(
       via: message.via,
     },
   });
+  // `whatsapp_link` is not an arrival source of its own (Sofia announces hers
+  // when she hands the deal over), so this door announces the deal it made.
+  if (result.created && !result.stale) await announceLeadArrival(db, result.lead);
   return { lead: result.lead, created: result.created, channel: link.channel };
 }
