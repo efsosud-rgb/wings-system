@@ -3,6 +3,7 @@ import {
   emailDomainOf,
   enrichmentSummaryOf,
   franchiseeScoreOf,
+  isLegacyWebResearch,
   regionOfPhone,
   type EnrichmentFacts,
   type ExpansionEntry,
@@ -161,10 +162,25 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
   let costUsdMicro = 0;
   const facts: EnrichmentFacts = { ...EMPTY_FACTS, links: [] };
 
+  // A research stored in the old format (no page for its values) is asked again, and only that: see
+  // the research block below. The paid searches of the first run are not paid again, and what they
+  // found (links, company) stays as it was.
+  const previous = webResearchOf(lead.enrichment_facts);
+  const finished = previous?.status === 'done' && previous.sources.length > 0 ? previous : null;
+  const legacy = isLegacyWebResearch(finished);
+  const redoing = legacy && Boolean(enrichment.research) && !arrivedBefore(lead, enrichment.researchSince);
+  const search = redoing ? null : enrichment.search;
+
   try {
     // --- free, local -----------------------------------------------------------------
     facts.region = regionOfPhone(lead.phone);
     facts.emailDomain = emailDomainOf(lead.email);
+    if (redoing) {
+      const stored = (lead.enrichment_facts ?? {}) as Partial<EnrichmentFacts>;
+      facts.links = Array.isArray(stored.links) ? stored.links : [];
+      facts.company = stored.company ?? null;
+      facts.searches = typeof stored.searches === 'number' ? stored.searches : 0;
+    }
 
     // --- WhatsApp profile (free) ---------------------------------------------------------
     if (lead.whatsapp_profile_name || lead.whatsapp_photo_url) {
@@ -194,7 +210,7 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
     const searchUsdMicro = Math.round(enrichment.budget.searchUsdPerQuery * 1_000_000);
     const snippets: string[] = [];
     async function paidSearch(query: string, purpose: string): Promise<SearchResult[] | null> {
-      if (!enrichment.search) return null;
+      if (!search) return null;
       const reserved = await reserveSpend(db, {
         leadId,
         jobId: job.id,
@@ -211,7 +227,7 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
       costUsdMicro += searchUsdMicro;
       facts.searches += 1;
       try {
-        const results = await enrichment.search.search(query);
+        const results = await search.search(query);
         await writeLedger(db, { leadId, jobId: job.id, step: 'web_search', status: 'done', usdMicro: 0, detail: { purpose, results: results.length } });
         for (const result of results) snippets.push(`${result.title} ${result.snippet}`);
         return results;
@@ -223,7 +239,7 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
     }
 
     const name = lead.name?.trim() ?? '';
-    if (name.length >= 3 && enrichment.search) {
+    if (name.length >= 3 && search) {
       const city = facts.region ? `${facts.region.city} ${facts.region.uf}` : '';
       const first = await paidSearch(`"${name}" ${city} linkedin`.trim(), 'linkedin');
       if (first) facts.links.push(...profileLinksOf(name, first));
@@ -238,7 +254,7 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
 
     // --- CNPJ (search paid when there is a clue; BrasilAPI free) -------------------------
     let candidates = cnpjCandidatesOf(snippets);
-    if (candidates.length === 0 && facts.emailDomain?.kind === 'corporate' && enrichment.search && steps.web_search !== 'refused') {
+    if (candidates.length === 0 && facts.emailDomain?.kind === 'corporate' && search && steps.web_search !== 'refused') {
       const byDomain = await paidSearch(`"${facts.emailDomain.domain}" cnpj`, 'cnpj');
       if (byDomain) candidates = cnpjCandidatesOf(byDomain.map((r) => `${r.title} ${r.snippet}`));
     }
@@ -266,12 +282,14 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
     // Reserved under its own ceiling first, called once, never retried; what the search did not
     // bring stays empty with the reason (docs/leads/pesquisa-da-empresa.md). A result that
     // came back with pages is kept: a re-run (or a switched-off provider) never pays for it again
-    // and never overwrites it with a refusal.
-    const previous = webResearchOf(lead.enrichment_facts);
-    if (previous?.status === 'done' && previous.sources.length > 0) {
-      facts.webResearch = previous;
+    // and never overwrites it with a refusal. The one exception is a result in the old format (no
+    // page for its values, so the page shows "—" for every one and nothing can tell which page
+    // backs which): it is asked again, once the provider is on and the lead is inside the cut-off,
+    // and it stays on the lead if that asking is refused, fails or finds no company data.
+    if (finished && !redoing) {
+      facts.webResearch = finished;
       if (enrichment.research) {
-        await writeLedger(db, { leadId, jobId: job.id, step: 'ai_research', status: 'skipped', usdMicro: 0, detail: { reason: 'already_done' } });
+        await writeLedger(db, { leadId, jobId: job.id, step: 'ai_research', status: 'skipped', usdMicro: 0, detail: { reason: legacy ? 'legacy_before_cutoff' : 'already_done' } });
         steps.web_research = 'skipped';
       }
     } else if (enrichment.research && arrivedBefore(lead, enrichment.researchSince)) {
@@ -309,7 +327,7 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
           usdMicro: research.reserveUsdMicro,
           dailyUsd: enrichment.budget.researchDailyUsd,
           now,
-          detail: { provider: research.name },
+          detail: { provider: research.name, ...(redoing ? { redo: 'legacy_format' } : {}) },
         });
         if (!reserved) {
           facts.webResearch = noResearch('refused', at, 'O teto diário da pesquisa foi atingido; nenhuma chamada foi feita');
@@ -335,7 +353,8 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
               },
             });
             facts.webResearch = { status: 'done', at, reason: null, fields: finding.fields, sources: finding.sources, model: finding.model };
-            steps.web_research = 'done';
+            // A redo that brought no page would replace values that have pages with "nada foi guardado": the old one stays.
+            steps.web_research = redoing && finding.sources.length === 0 ? 'skipped' : 'done';
           } catch (error) {
             // The call was made, whatever it answered: the reserving row stays.
             const reason = messageOf(error);
@@ -351,6 +370,8 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
       // Switched off now: what an earlier run found stays on the lead.
       facts.webResearch = previous;
     }
+    // A redo that did not produce a new result leaves the old one, never a refusal or a failure in its place.
+    if (redoing && finished && steps.web_research !== 'done') facts.webResearch = finished;
 
     // --- score and summary -------------------------------------------------------------
     const area = await db.query<{ expansion_area: unknown }>(`select expansion_area from clients where id = $1`, [lead.client_id]);

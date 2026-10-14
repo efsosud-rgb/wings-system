@@ -179,7 +179,11 @@ export function DealPage() {
             <AboutPanel lead={data.lead} canWrite={canWrite} canAssign={canAssign} />
             <OriginPanel lead={data.lead} />
             <FormFieldsPanel lead={data.lead} canWrite={canWrite} />
-            <CompanyResearchPanel research={data.lead.research} />
+            <CompanyResearchPanel
+              research={data.lead.research}
+              lead={data.lead}
+              canWrite={canWrite}
+            />
             <ContactPanel data={data} canWrite={canWrite} ref={contacts} />
           </div>
           <div className="crm-stack is-center">

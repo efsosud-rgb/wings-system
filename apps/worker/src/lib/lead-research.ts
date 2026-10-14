@@ -68,19 +68,13 @@ const plain = (text: string) =>
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
 
-/**
- * Free webmail providers, under any country ending ("yahoo.com.ar", "outlook.pt"): their
- * domain says nothing about a company. `emailDomainOf` already lists the usual exact ones.
- */
-const FREE_MAIL =
-  /^(?:gmail|googlemail|hotmail|outlook|live|msn|yahoo|ymail|rocketmail|icloud|me|mac|uol|bol|terra|ig|globo|globomail|aol|proton|protonmail|zipmail|gmx|mail|yandex|zoho)\./;
-
 /** The part after "@" of a corporate e-mail; null for a free webmail or anything odd. */
 export function corporateEmailDomainOf(email: string | null | undefined): string | null {
+  // `kind` already knows the free webmails: the exact ones and the brands under any country ending.
   const found = emailDomainOf(email);
   if (!found || found.kind !== 'corporate') return null;
   const domain = found.domain;
-  if (FREE_MAIL.test(domain) || looksLikeContact(domain)) return null;
+  if (looksLikeContact(domain)) return null;
   return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(domain) &&
     domain.length <= 100
     ? domain

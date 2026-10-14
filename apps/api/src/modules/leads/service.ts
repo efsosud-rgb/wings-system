@@ -67,6 +67,7 @@ import {
 } from './contacts.js';
 import { scheduleLeadChecks } from './field-checks.js';
 import { markSuspectsAround } from './suspect.js';
+import { enqueueTriage } from './triage-queue.js';
 import { TRIAGE_SOURCES, leadTriageEnabled, scheduleLeadTriage } from './triage-schedule.js';
 import {
   announceStageEntered,
@@ -372,6 +373,11 @@ export interface UpsertResult {
   stale?: boolean;
   /** The closed or unworked lead of the same person this new deal was opened beside (`reopenClosed`). */
   reopenedFromLeadId?: string;
+  /**
+   * The lead was born without a funnel and waits in the Jev triage's list (written in the same
+   * transaction): the door then leaves the arrival notice to the triage.
+   */
+  triageQueued?: boolean;
 }
 
 /**
@@ -542,13 +548,9 @@ export async function upsertLead(db: Database, given: IncomingLead): Promise<Ups
     await announceStageEntered(result.lead);
   // A lead whose origin named no funnel goes to the Jev triage when it is on
   // (docs/leads/triagem-jev.md); the triage announces the arrival after placing
-  // it, so the door's own notice would only double it.
-  const triaged =
-    result.created &&
-    !result.stale &&
-    !result.lead.pipeline &&
-    TRIAGE_SOURCES.has(incoming.source) &&
-    leadTriageEnabled();
+  // it, so the door's own notice would only double it. It was put in the triage's
+  // list inside the transaction that made it, so nothing here can lose it.
+  const triaged = result.triageQueued === true;
   if (result.created && !incoming.importBatchId && !result.stale && !triaged)
     await announceNewLead(db, result.lead);
   if (triaged) scheduleLeadTriage({ leadId: result.lead.id });
@@ -765,6 +767,16 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
       await ensureFirstContactTask(tx, created, incoming.event.actorEmployeeId ?? null);
     }
     const reopened = reopenedFrom ? { reopenedFromLeadId: reopenedFrom.id } : {};
+    // Born without a funnel at a door the Jev triage reads: it goes on the triage's list now,
+    // with the lead, so a restart or an error before the triage runs cannot leave it
+    // without a funnel and without a notice.
+    const triageQueued =
+      !created.pipeline &&
+      !incoming.importBatchId &&
+      !stale &&
+      TRIAGE_SOURCES.has(incoming.source) &&
+      leadTriageEnabled();
+    if (triageQueued) await enqueueTriage(tx, { leadId: created.id });
     if (incoming.skipResearch)
       return {
         lead: created,
@@ -773,6 +785,7 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
         filled: [],
         assignedTo,
         stale,
+        triageQueued,
         ...reopened,
       };
     const researched = await enqueueResearch(tx, created.id, null);
@@ -783,6 +796,7 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
       filled: [],
       assignedTo,
       stale,
+      triageQueued,
       ...reopened,
     };
   });

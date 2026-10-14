@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   boolean,
+  check,
   index,
   integer,
   jsonb,
@@ -14,6 +15,7 @@ import { tenants, WINGS_TENANT_ID } from './ads.js';
 import { crmStages } from './crm.js';
 import { employees } from './employees.js';
 import { leads } from './leads.js';
+import { waConversations } from './whatsapp.js';
 
 const tenantId = () =>
   uuid('tenant_id')
@@ -222,3 +224,48 @@ export const crmStageLimits = pgTable('crm_stage_limits', {
   updatedBy: uuid('updated_by').references(() => employees.id),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * What waits for the Jev triage (docs/leads/triagem-jev.md): a lead born without a funnel, or a
+ * WhatsApp conversation with no deal. The door writes the row in the same transaction that makes
+ * the lead (or stores the first message), BEFORE the triage runs, so a restart or an error in the
+ * middle never leaves it without a funnel and without a notice: the row stays open, and the
+ * API picks it up again (`resumeLeadTriage`) or, after a few tries, sends the usual notice.
+ * Ids and times only; nothing about the person.
+ */
+export const leadTriageQueue = pgTable(
+  'lead_triage_queue',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** The lead to triage; or `conversation_id`, never both. */
+    leadId: uuid('lead_id').references(() => leads.id, { onDelete: 'cascade' }),
+    /** A conversation merged into a deal's own (`adoptUnmatched`) is deleted: its row goes with it. */
+    conversationId: uuid('conversation_id').references(() => waConversations.id, {
+      onDelete: 'cascade',
+    }),
+    queuedAt: timestamp('queued_at', { withTimezone: true }).notNull().defaultNow(),
+    /** A server took it; one taken long ago and never finished was cut short by a restart. */
+    claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    /** Times a server took it; after 3 the usual notice goes out and the Jev is not asked again. */
+    attempts: integer('attempts').notNull().default(0),
+    doneAt: timestamp('done_at', { withTimezone: true }),
+    /** How it ended: done | fallback (the usual notice, after an error or too many tries). */
+    outcome: text('outcome'),
+  },
+  (table) => [
+    uniqueIndex('lead_triage_queue_lead_uq')
+      .on(table.leadId)
+      .where(sql`${table.leadId} is not null`),
+    uniqueIndex('lead_triage_queue_conversation_uq')
+      .on(table.conversationId)
+      .where(sql`${table.conversationId} is not null`),
+    index('lead_triage_queue_open_idx')
+      .on(table.queuedAt)
+      .where(sql`${table.doneAt} is null`),
+    check(
+      'lead_triage_queue_one_target',
+      sql`num_nonnulls(${table.leadId}, ${table.conversationId}) = 1`,
+    ),
+  ],
+);

@@ -6,7 +6,7 @@ import {
   waStatusAdvances,
   type WaMessageStatus,
 } from '@wings/shared';
-import { and, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   crmContacts,
@@ -24,6 +24,7 @@ import {
 import { addActivity } from '../leads/activities.js';
 import { trackingLinkByCode } from '../leads/service.js';
 import { leadFromTrackedMessage } from '../leads/tracked-link.js';
+import { enqueueTriage } from '../leads/triage-queue.js';
 import { leadTriageEnabled, scheduleLeadTriage } from '../leads/triage-schedule.js';
 import { loadSofiaSettings } from '../sofia/settings.js';
 import { routeInbound } from '../sofia/state.js';
@@ -368,6 +369,11 @@ async function applyInbound(db: Database, message: WaInboundMessage, now: Date) 
     originCode: link ? code : null,
   });
 
+  // Sofia off and no deal: the first text of a new conversation waits for the Jev triage when
+  // it is on (docs/leads/triagem-jev.md), which makes the deal or tells the team a person is
+  // needed. It goes on the triage's list inside the transaction that stores the message, so a
+  // restart or an error before the triage runs cannot leave the conversation unnoticed.
+  let triageQueued = false;
   // The message and who answers it are one step: a failure in between is
   // retried whole (a stored message is never left without its routing).
   await db.transaction(async (tx) => {
@@ -418,19 +424,35 @@ async function applyInbound(db: Database, message: WaInboundMessage, now: Date) 
       sofiaOn,
       now,
     });
+    if (
+      !sofiaOn &&
+      !leadId &&
+      message.kind === 'text' &&
+      message.text?.trim() &&
+      leadTriageEnabled()
+    ) {
+      // The first text of the conversation, decided here and not from `created`: a retry after a
+      // first attempt that was cut short sees the conversation as already there, but it is still
+      // this message that opens it.
+      const [earlier] = await tx
+        .select({ id: waMessages.id })
+        .from(waMessages)
+        .where(
+          and(
+            eq(waMessages.conversationId, conversation.id),
+            eq(waMessages.direction, 'in'),
+            ne(waMessages.id, stored.id),
+          ),
+        )
+        .limit(1);
+      if (!earlier) {
+        await enqueueTriage(tx, { conversationId: conversation.id });
+        triageQueued = true;
+      }
+    }
   });
-  // Sofia off and no deal: the first text of a new conversation goes to the Jev
-  // triage when it is on (docs/leads/triagem-jev.md), which makes the deal or
-  // tells the team a person is needed; otherwise the conversation just waits.
-  if (
-    !sofiaOn &&
-    !leadId &&
-    created &&
-    message.kind === 'text' &&
-    message.text?.trim() &&
-    leadTriageEnabled()
-  )
-    scheduleLeadTriage({ conversationId: conversation.id });
+  // Otherwise the conversation just waits for an attendant.
+  if (triageQueued) scheduleLeadTriage({ conversationId: conversation.id });
 }
 
 /** How long a seller's message from a closed deal keeps the person's answers with that seller. */

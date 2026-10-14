@@ -14,6 +14,7 @@ import type { Database } from '../../db/client.js';
 import {
   auditLog,
   leadTrackingLinks,
+  leadTriageQueue,
   leads,
   sessions,
   waContacts,
@@ -25,6 +26,7 @@ import {
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
+import { configureLeadTriage, type TriageTarget } from '../leads/triage-schedule.js';
 import { processWhatsAppEvents, purgeWhatsAppPayloads } from './intake.js';
 
 /**
@@ -871,5 +873,108 @@ describe('the official number switch (Eric, 14/10)', () => {
       where: eq(auditLog.action, 'whatsapp.official_number_switched'),
     });
     expect(entry?.actorEmployeeId).toBe(admin.id);
+  });
+});
+
+describe('the Jev triage list (docs/leads/triagem-jev.md)', () => {
+  const handed: TriageTarget[] = [];
+  const queueOf = async (conversationId: string) =>
+    (
+      await db
+        .select()
+        .from(leadTriageQueue)
+        .where(eq(leadTriageQueue.conversationId, conversationId))
+    )[0];
+  const conversationOf = async (phone: string) => {
+    const [contact] = await db.select().from(waContacts).where(eq(waContacts.phone, phone));
+    const [conversation] = await db
+      .select()
+      .from(waConversations)
+      .where(eq(waConversations.contactId, contact!.id));
+    return conversation!;
+  };
+
+  it('the first text of a new conversation with no deal goes on the list in the transaction that stores it, and the triage is started', async () => {
+    handed.length = 0;
+    configureLeadTriage((target) => handed.push(target));
+    try {
+      const { body } = inbound('5521988880001', 'Quero abrir uma franquia de açaí');
+      expect((await deliver(body)).statusCode).toBe(200);
+      await run();
+      const conversation = await conversationOf('5521988880001');
+      expect(conversation.leadId).toBeNull();
+      expect(handed).toEqual([{ conversationId: conversation.id }]);
+      expect(await queueOf(conversation.id)).toMatchObject({
+        doneAt: null,
+        attempts: 0,
+        leadId: null,
+      });
+
+      // The same delivery again, and a second message in the conversation, add nothing.
+      handed.length = 0;
+      await run();
+      const second = inbound('5521988880001', 'Alguém aí?');
+      await deliver(second.body);
+      await run();
+      expect(handed).toEqual([]);
+      expect(
+        await db
+          .select()
+          .from(leadTriageQueue)
+          .where(eq(leadTriageQueue.conversationId, conversation.id)),
+      ).toHaveLength(1);
+    } finally {
+      configureLeadTriage(null);
+    }
+  });
+
+  it('a retry after a first attempt cut short (the conversation already there, no message yet) still opens the list row', async () => {
+    handed.length = 0;
+    configureLeadTriage((target) => handed.push(target));
+    try {
+      const phone = '5521988880004';
+      const [contact] = await db
+        .insert(waContacts)
+        .values({ phone, waId: phone, profileName: 'Elena' })
+        .returning();
+      const [half] = await db
+        .insert(waConversations)
+        .values({ contactId: contact!.id, leadId: null })
+        .returning();
+      const { body } = inbound(phone, 'Quero uma franquia de pizza');
+      await deliver(body);
+      await run();
+      expect(handed).toEqual([{ conversationId: half!.id }]);
+      expect(await queueOf(half!.id)).toMatchObject({ doneAt: null, leadId: null });
+    } finally {
+      configureLeadTriage(null);
+    }
+  });
+
+  it('writes nothing with the triage off: the conversation just waits for an attendant, as before', async () => {
+    configureLeadTriage(null);
+    const { body } = inbound('5521988880002', 'Boa tarde');
+    await deliver(body);
+    await run();
+    const conversation = await conversationOf('5521988880002');
+    expect(conversation.attendance).toBe('waiting_human');
+    expect(await queueOf(conversation.id)).toBeUndefined();
+  });
+
+  it('writes nothing for a number that already has a deal', async () => {
+    handed.length = 0;
+    configureLeadTriage((target) => handed.push(target));
+    try {
+      await deal('5521988880003', null);
+      const { body } = inbound('5521988880003', 'Oi, sou eu de novo');
+      await deliver(body);
+      await run();
+      const conversation = await conversationOf('5521988880003');
+      expect(conversation.leadId).not.toBeNull();
+      expect(handed).toEqual([]);
+      expect(await queueOf(conversation.id)).toBeUndefined();
+    } finally {
+      configureLeadTriage(null);
+    }
   });
 });

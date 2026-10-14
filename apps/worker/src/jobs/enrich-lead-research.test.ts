@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { LeadWebResearch } from '@wings/shared';
+import { isLegacyWebResearch, type LeadWebResearch } from '@wings/shared';
 import {
   reserveSpend,
   type LeadResearchFinding,
   type LeadResearchInput,
   type LeadResearchProvider,
+  type WebSearch,
 } from '../lib/enrichment.js';
 import { baseContext } from '../test/context.js';
 import { createTestDatabase, type TestDatabase } from '../test/db.js';
@@ -30,15 +31,23 @@ const WINGS_CLIENT_ID = '00000000-0000-4000-8000-0000000000c1';
 // A valid CNPJ (check digits computed): 11.222.333/0001-81.
 const CNPJ = '11.222.333/0001-81';
 
+const SOURCE_URL = 'https://acai.example.com.br/sobre';
+
 const FINDING: LeadResearchFinding = {
+  // As the provider writes them since the per-field sources: every field names its page, or null.
   fields: [
-    { key: 'activity', value: 'Rede de açaí', reason: null },
-    { key: 'location', value: 'Campinas/SP', reason: null },
-    { key: 'size', value: null, reason: 'Nenhuma página fala do porte' },
-    { key: 'time_in_market', value: 'Desde 2015', reason: null },
-    { key: 'online_presence', value: null, reason: 'As páginas encontradas não dizem isso' },
+    { key: 'activity', value: 'Rede de açaí', reason: null, sourceUrl: SOURCE_URL },
+    { key: 'location', value: 'Campinas/SP', reason: null, sourceUrl: SOURCE_URL },
+    { key: 'size', value: null, reason: 'Nenhuma página fala do porte', sourceUrl: null },
+    { key: 'time_in_market', value: 'Desde 2015', reason: null, sourceUrl: SOURCE_URL },
+    {
+      key: 'online_presence',
+      value: null,
+      reason: 'As páginas encontradas não dizem isso',
+      sourceUrl: null,
+    },
   ],
-  sources: [{ url: 'https://acai.example.com.br/sobre', title: 'Sobre' }],
+  sources: [{ url: SOURCE_URL, title: 'Sobre' }],
   model: 'anthropic/claude-haiku-4.5',
   costUsdMicro: 31_000,
 };
@@ -176,6 +185,7 @@ describe('the company research step of enrich_lead', () => {
       key: 'size',
       value: null,
       reason: 'Nenhuma página fala do porte',
+      sourceUrl: null,
     });
     expect(new Date(research?.at ?? '').getTime()).toBeGreaterThan(Date.now() - 60_000);
     expect((await leadRow(leadId)).enrichment_state).toBe('done');
@@ -403,6 +413,211 @@ describe('the company research step of enrich_lead', () => {
     ]);
     expect(JSON.stringify(inputs)).not.toMatch(/ana\.souza|@|11\.?222/);
     expect(output.steps.web_research).toBe('done');
+  });
+
+  describe('a result stored before each value named its page (old format)', () => {
+    const SINCE = new Date('2026-10-14T03:00:00Z');
+    // As the first 14/10 researches were written: no `sourceUrl` on any field, so the deal page shows "—" for all.
+    const LEGACY: LeadWebResearch = {
+      status: 'done',
+      at: '2026-10-14T16:30:00.000Z',
+      reason: null,
+      model: 'anthropic/claude-haiku-4.5',
+      fields: [
+        { key: 'activity', value: 'Rede de açaí', reason: null },
+        { key: 'location', value: 'Campinas/SP', reason: null },
+        { key: 'size', value: null, reason: 'Nenhuma página fala do porte' },
+        { key: 'time_in_market', value: 'Desde 2015', reason: null },
+        { key: 'online_presence', value: null, reason: 'As páginas encontradas não dizem isso' },
+      ],
+      sources: [{ url: SOURCE_URL, title: 'Sobre' }],
+    };
+    const oldFormatLead = (extra: Record<string, unknown> = {}) =>
+      companyLead({
+        created_at: new Date('2026-10-14T12:00:00Z'),
+        enrichment_state: 'done',
+        enrichment_facts: JSON.stringify({ webResearch: LEGACY }),
+        ...extra,
+      });
+
+    it('is asked again once, inside the cut-off: one call, the new result with its pages replaces it, and a second run pays nothing', async () => {
+      const leadId = await oldFormatLead();
+      const { provider, inputs } = fakeProvider();
+      const output = await run(leadId, provider, 1, SINCE);
+
+      expect(inputs).toHaveLength(1);
+      expect(output.steps.web_research).toBe('done');
+      const redone = await researchOf(leadId);
+      expect(redone?.status).toBe('done');
+      expect(redone?.at).not.toBe(LEGACY.at);
+      expect(isLegacyWebResearch(redone)).toBe(false);
+      expect(redone?.fields.every((field) => field.sourceUrl !== undefined)).toBe(true);
+      expect(redone?.fields.find((f) => f.key === 'activity')?.sourceUrl).toBe(SOURCE_URL);
+      // One paid call, settled to its real cost, and marked as the redo of the old format.
+      expect(await ledger(leadId)).toEqual([
+        expect.objectContaining({
+          step: 'ai_research',
+          status: 'started',
+          usd_micro: 60_000,
+          detail: expect.objectContaining({ provider: 'fake', redo: 'legacy_format' }),
+        }),
+        expect.objectContaining({ step: 'ai_research', status: 'done', usd_micro: -29_000 }),
+      ]);
+
+      // Now it names its pages: asking again neither calls nor pays.
+      const second = await run(leadId, provider, 1, SINCE);
+      expect(inputs).toHaveLength(1);
+      expect(second.costUsdMicro).toBe(0);
+      expect(await researchOf(leadId)).toEqual(redone);
+      expect((await ledger(leadId)).at(-1)).toMatchObject({
+        status: 'skipped',
+        detail: { reason: 'already_done' },
+      });
+    });
+
+    it('asks again for the research only: the paid searches are not repeated and what the first run found stays', async () => {
+      const links = [
+        { kind: 'linkedin', url: 'https://www.linkedin.com/in/ana-souza', title: 'Ana Souza', snippet: 'x' },
+      ];
+      const company = { cnpj: '11222333000181', name: 'Açaí da Fila' };
+      const leadId = await oldFormatLead({
+        enrichment_facts: JSON.stringify({
+          links,
+          company,
+          searches: 2,
+          webResearch: LEGACY,
+        }),
+      });
+      const queries: string[] = [];
+      const search: WebSearch = {
+        search: async (query) => {
+          queries.push(query);
+          return [];
+        },
+      };
+      const { provider, inputs } = fakeProvider();
+      const job = await insertJob(leadId);
+      const output = (await runEnrichLeadJob(
+        job,
+        baseContext({
+          db: database.pool,
+          enrichment: {
+            zapi: null,
+            search,
+            cnpj: { lookup: async () => null },
+            budget: { dailyUsd: 2, searchUsdPerQuery: 0.005, researchDailyUsd: 1 },
+            research: provider,
+            researchSince: SINCE,
+          },
+        }),
+      )) as EnrichLeadOutput;
+
+      expect(inputs).toHaveLength(1);
+      expect(queries).toEqual([]);
+      expect(output.steps).toMatchObject({
+        web_search: 'skipped',
+        brasilapi_cnpj: 'skipped',
+        web_research: 'done',
+      });
+      const facts = (await leadRow(leadId)).enrichment_facts as {
+        links: unknown;
+        company: unknown;
+        searches: number;
+      };
+      expect(facts.links).toEqual(links);
+      expect(facts.company).toEqual(company);
+      expect(facts.searches).toBe(2);
+      expect((await ledger(leadId)).map((row) => row.step)).toEqual(['ai_research', 'ai_research']);
+
+      // The same search client on a lead that is not a redo still searches: only the redo is spared.
+      const fresh = await companyLead({ created_at: new Date('2026-10-14T12:00:00Z') });
+      await runEnrichLeadJob(
+        await insertJob(fresh),
+        baseContext({
+          db: database.pool,
+          enrichment: {
+            zapi: null,
+            search,
+            cnpj: { lookup: async () => null },
+            budget: { dailyUsd: 2, searchUsdPerQuery: 0.005, researchDailyUsd: 1 },
+            research: provider,
+            researchSince: SINCE,
+          },
+        }),
+      );
+      expect(queries.length).toBeGreaterThan(0);
+    });
+
+    it('is not replaced by a redo whose search brought no page: the old values and pages stay, the call is still settled', async () => {
+      const leadId = await oldFormatLead();
+      const noPages: LeadResearchFinding = {
+        ...FINDING,
+        sources: [],
+        fields: FINDING.fields.map((field) => ({
+          ...field,
+          value: null,
+          reason: 'A busca não trouxe páginas para confirmar',
+          sourceUrl: null,
+        })),
+      };
+      const { provider, inputs } = fakeProvider({ finding: noPages });
+      const output = await run(leadId, provider, 1, SINCE);
+      expect(inputs).toHaveLength(1);
+      expect(output.steps.web_research).toBe('skipped');
+      expect(await researchOf(leadId)).toEqual(LEGACY);
+      // The call was made and paid: reservation and settlement are both in the ledger.
+      expect((await ledger(leadId)).map((row) => row.status)).toEqual(['started', 'done']);
+    });
+
+    it('stays as it is for a lead from before the cut-off: no call, no overwrite, and the ledger says why', async () => {
+      const leadId = await oldFormatLead({ created_at: new Date('2026-10-12T12:00:00Z') });
+      const { provider, inputs } = fakeProvider();
+      const output = await run(leadId, provider, 1, SINCE);
+      expect(inputs).toHaveLength(0);
+      expect(output.costUsdMicro).toBe(0);
+      expect(await researchOf(leadId)).toEqual(LEGACY);
+      expect(await ledger(leadId)).toEqual([
+        expect.objectContaining({
+          status: 'skipped',
+          usd_micro: 0,
+          detail: { reason: 'legacy_before_cutoff' },
+        }),
+      ]);
+    });
+
+    it('stays as it is when the provider is off', async () => {
+      const leadId = await oldFormatLead();
+      await run(leadId, null, 1, SINCE);
+      expect(await researchOf(leadId)).toEqual(LEGACY);
+      expect(await ledger(leadId)).toEqual([]);
+    });
+
+    it('is not replaced by a refusal, a failure or "no company data": the old result stays and the step says what happened', async () => {
+      const refusedLead = await oldFormatLead();
+      const refused = await run(refusedLead, fakeProvider().provider, 0.01, SINCE);
+      expect(refused.steps.web_research).toBe('refused');
+      expect(await researchOf(refusedLead)).toEqual(LEGACY);
+
+      const failedLead = await oldFormatLead();
+      const failed = await run(failedLead, fakeProvider({ fail: true }).provider, 1, SINCE);
+      expect(failed.steps.web_research).toBe('failed');
+      expect(await researchOf(failedLead)).toEqual(LEGACY);
+      // The call was made: its reservation stays, as for any failed research.
+      expect((await ledger(failedLead)).map((row) => [row.status, row.usd_micro])).toEqual([
+        ['started', 60_000],
+        ['failed', 0],
+      ]);
+
+      const bareLead = await oldFormatLead({
+        company_name: null,
+        website: null,
+        instagram: null,
+        company_cnpj: null,
+      });
+      const bare = await run(bareLead, fakeProvider().provider, 1, SINCE);
+      expect(bare.steps.web_research).toBe('skipped');
+      expect(await researchOf(bareLead)).toEqual(LEGACY);
+    });
   });
 
   it('researches only leads that arrived from the cut-off on: an older lead, even one converting again, is not', async () => {

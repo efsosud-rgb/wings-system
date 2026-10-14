@@ -60,7 +60,12 @@ import {
   type LeadCheckDeps,
 } from './modules/leads/field-checks.js';
 import { probePublicUrl } from './lib/public-probe.js';
-import { createJevClient, installLeadTriage, type JevClient } from './modules/leads/triage.js';
+import {
+  createJevClient,
+  installLeadTriage,
+  startLeadTriageResume,
+  type JevClient,
+} from './modules/leads/triage.js';
 import { officeRoutes } from './modules/office/routes.js';
 import { roadmapRoutes } from './modules/roadmap/routes.js';
 import { siteRoutes } from './modules/site/routes.js';
@@ -209,9 +214,17 @@ export async function buildApp(deps: {
       (env.NODE_ENV !== 'test' && env.LEAD_TRIAGE_ENABLED === 'true' && env.JEV_API_KEY
         ? createJevClient({ apiKey: env.JEV_API_KEY, log })
         : null);
-    installLeadTriage(deps.db, jev ? { jev, log, now } : null);
+    const triage = jev ? { jev, log, now } : null;
+    installLeadTriage(deps.db, triage);
     if (env.LEAD_TRIAGE_ENABLED === 'true' && !env.JEV_API_KEY)
       log.warn('LEAD_TRIAGE_ENABLED is true but JEV_API_KEY is unset: triage off');
+    // What a restart or an error left on the triage's list is taken up again, and, with the
+    // triage off, closed with the usual notice instead of waiting for a switch that may not
+    // come back. Only in the real server: tests (which inject a Jev or none) run it by hand.
+    if (env.NODE_ENV !== 'test' && !deps.jev) {
+      const stop = startLeadTriageResume({ db: deps.db, deps: triage, log });
+      app.addHook('onClose', async () => stop());
+    }
   }
   // Regras de automação: a deal entering a stage starts that stage's rules.
   // (built per call: in `gmail` mode the sender is the lead's owner, read at send time)

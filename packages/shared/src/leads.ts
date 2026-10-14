@@ -251,7 +251,49 @@ const PERSONAL_EMAIL_DOMAINS = new Set([
   'proton.me',
   'aol.com',
   'zipmail.com.br',
+  // More Brazilian providers, and foreign webmails Brazilians also use.
+  'oi.com.br',
+  'ibest.com.br',
+  'pop.com.br',
+  'r7.com',
+  'superig.com.br',
+  'sapo.pt',
+  'pm.me',
+  'fastmail.com',
+  'fastmail.fm',
+  'tutanota.com',
+  'tutanota.de',
+  'tutamail.com',
+  'tuta.io',
+  'hey.com',
+  'qq.com',
+  'web.de',
 ]);
+
+/**
+ * Unmistakable webmail brands: under ANY ending ("yahoo.ne.jp", and a typo like "gmail.con" or
+ * "hotmail.comm") the domain is still the provider, and a typo in the ending is exactly what a
+ * lead form lets through. No company's own domain starts like these.
+ */
+const FREE_MAIL_ANY_ENDING =
+  /^(?:gmail|googlemail|hotmail|outlook|yahoo|ymail|icloud|aol|msn|protonmail|rocketmail|yandex)\.[a-z]{2,6}(?:\.[a-z]{2,6})?$/;
+
+/**
+ * Shorter or more ordinary names (a company can be "live", "mail" or "r7"): only with a plain
+ * ending ("com", "net", "org", "co", optionally with a country, or a country alone), so
+ * "mail.empresa.com.br" or "r7.ind.br" stay companies.
+ */
+const FREE_MAIL_PLAIN_ENDING =
+  /^(?:live|me|mac|uol|bol|terra|ig|globo|globomail|proton|zipmail|gmx|mail|zoho|ibest|superig|r7|sapo|fastmail|tutanota|tutamail|qq)\.(?:(?:com|net|org|co)(?:\.[a-z]{2})?|[a-z]{2})$/;
+
+/** A free webmail (the lead's address says nothing about a company), by exact domain or by brand. */
+export function isFreeMailDomain(domain: string): boolean {
+  return (
+    PERSONAL_EMAIL_DOMAINS.has(domain) ||
+    FREE_MAIL_ANY_ENDING.test(domain) ||
+    FREE_MAIL_PLAIN_ENDING.test(domain)
+  );
+}
 
 export interface LeadEmailDomain {
   domain: string;
@@ -268,7 +310,7 @@ export function emailDomainOf(email: string | null | undefined): LeadEmailDomain
   const normalized = normalizeEmail(email);
   if (!normalized) return null;
   const domain = normalized.slice(normalized.indexOf('@') + 1);
-  return { domain, kind: PERSONAL_EMAIL_DOMAINS.has(domain) ? 'personal' : 'corporate' };
+  return { domain, kind: isFreeMailDomain(domain) ? 'personal' : 'corporate' };
 }
 
 // --- tracking codes -----------------------------------------------------------
@@ -570,6 +612,42 @@ export interface LeadWebResearch {
   fields: WebResearchField[];
   sources: WebResearchSource[];
   model: string | null;
+}
+
+/**
+ * A finished research stored before each value named its page (until 14/10/2026 20:53Z on staging):
+ * its fields have no `sourceUrl` at all, so the deal page shows "—" for every one. It cannot be
+ * upgraded without asking again (nothing says which page backs which value), so it is the one kind
+ * of finished research that may be redone. A research that already names a page for its values,
+ * or has none to show, is not.
+ */
+export function isLegacyWebResearch(research: LeadWebResearch | null | undefined): boolean {
+  return (
+    research?.status === 'done' &&
+    research.sources.length > 0 &&
+    // Something is hidden: a research whose values are all "sem dado" has nothing to recover.
+    research.fields.some((field) => field.value !== null) &&
+    research.fields.every((field) => field.sourceUrl === undefined)
+  );
+}
+
+/** The day (São Paulo, YYYY-MM-DD) from which a lead is researched, unless the worker's LEAD_RESEARCH_SINCE says otherwise. */
+export const LEAD_RESEARCH_DEFAULT_SINCE = '2026-10-14';
+
+/**
+ * Whether a lead is inside the research cut-off: it arrived, by the earlier of its creation and its
+ * entry (a lead imported today from an old deal is old), from 00:00 of `since` in São Paulo
+ * (UTC-3 all year) on. The worker decides with the same rule; the page uses it to offer a new
+ * research only where the worker will accept it.
+ */
+export function arrivedFromResearchCutoff(
+  lead: { createdAt: string; enteredAt?: string | null },
+  since: string = LEAD_RESEARCH_DEFAULT_SINCE,
+): boolean {
+  const start = new Date(`${since}T03:00:00Z`).getTime();
+  const created = new Date(lead.createdAt).getTime();
+  const entered = lead.enteredAt ? new Date(lead.enteredAt).getTime() : created;
+  return Math.min(created, entered) >= start;
 }
 
 /** Everything the worker found. Every field may be null: a step that failed leaves its fact empty. */

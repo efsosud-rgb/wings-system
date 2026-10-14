@@ -10,21 +10,23 @@
  * JEV_API_KEY is set.
  */
 import { type LeadPipeline, WINGS_CLIENT_ID } from '@wings/shared';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Database } from '../../db/client.js';
 import {
   crmNotifications,
   leadEvents,
+  leadStageHistory,
   leads,
   waContacts,
   waConversations,
   waMessages,
 } from '../../db/schema/index.js';
-import { adoptUnmatched } from '../whatsapp/intake.js';
-import { announceLeadArrival, managersAndBoard } from './crm-alerts.js';
+import { adoptUnmatched, openLeadByPhone } from '../whatsapp/intake.js';
+import { managersAndBoard, writeLeadArrivalNotice } from './crm-alerts.js';
 import { changeLead, entryStageOf, nextInRotation } from './crm.js';
 import { upsertLead } from './service.js';
+import { claimTriage, finishTriage, openTriage, TRIAGE_MAX_ATTEMPTS } from './triage-queue.js';
 import { configureLeadTriage, type TriageTarget } from './triage-schedule.js';
 
 export const JEV_URL = 'https://api.typesafe.ai/v1/systemone';
@@ -379,11 +381,21 @@ async function noticeTeam(
     .onConflictDoNothing();
 }
 
-/** A lead from the site form or RD Station that its origin left without a funnel. */
+/**
+ * A lead from the site form or RD Station that its origin left without a funnel. Every way out
+ * leaves the lead placed or told to somebody (a funnel, the managers, or the arrival notice of
+ * always). The record of what was done (`lead.triaged`) is written LAST: a run cut short has none,
+ * and the queue (`triage-queue.ts`) gives it another pass.
+ */
 export async function triageLead(db: Database, leadId: string, deps: TriageDeps): Promise<void> {
   const now = deps.now?.() ?? new Date();
   const lead = await db.query.leads.findFirst({ where: eq(leads.id, leadId) });
-  if (!lead || lead.pipeline || lead.won !== null) return;
+  if (!lead || lead.won !== null) return;
+  if (lead.pipeline) {
+    // Already in a funnel: a person's doing, or a pass of this triage cut short before telling the owner.
+    await finishRouted(db, lead);
+    return;
+  }
   const text = textOfLead(lead);
   const channel =
     lead.source === 'site_form'
@@ -391,19 +403,28 @@ export async function triageLead(db: Database, leadId: string, deps: TriageDeps)
       : 'Formulário (RD Station) da Wings Company';
   const verdict = text ? await deps.jev.classify(text, channel) : null;
   const decision = verdict ? decideTriage(verdict) : null;
-  await db.insert(leadEvents).values({
-    leadId,
-    kind: 'lead.triaged',
-    detail: { ...verdictDetail(verdict, decision), source: lead.source, hadText: text !== null },
-  });
+  const record = (extra: Record<string, unknown> = {}) =>
+    db.insert(leadEvents).values({
+      leadId,
+      kind: 'lead.triaged',
+      detail: {
+        ...verdictDetail(verdict, decision),
+        source: lead.source,
+        hadText: text !== null,
+        ...extra,
+      },
+    });
 
+  let routeFailure: Record<string, unknown> = {};
   if (decision?.kind === 'pipeline') {
     const routed = await routeLead(db, leadId, decision.pipeline, now);
     if (routed.ok) {
-      await announceLeadArrival(db, routed.lead);
+      await writeLeadArrivalNotice(db, routed.lead);
+      await record();
       return;
     }
     deps.log.warn({ leadId, reason: routed.reason }, 'triage could not route the lead');
+    routeFailure = { outcome: 'failed', routeFailure: routed.reason };
   }
   if (decision?.kind === 'person') {
     const reason = PERSON_REASON_LABEL[decision.reason];
@@ -415,10 +436,59 @@ export async function triageLead(db: Database, leadId: string, deps: TriageDeps)
       message: `Lead novo sem funil precisa de uma pessoa: ${reason}${sure}. Veja em Negociações → Sem dono.`,
       dedupe: `lead:${leadId}`,
     });
+    await record();
     return;
   }
   // No verdict (no text, or the Jev did not answer): the arrival notice the door would have sent.
-  await announceLeadArrival(db, lead);
+  await writeLeadArrivalNotice(db, lead);
+  await record(routeFailure);
+}
+
+/**
+ * A lead that already has a funnel when the triage looks at it. If this triage placed it (its stage
+ * history says `triage`) and never wrote its record, a pass was cut short between placing it and
+ * telling its owner: the owner is told now (the notice has its dedupe key, so once) and the record
+ * is written. A lead a person placed is left alone.
+ */
+async function finishRouted(db: Database, lead: typeof leads.$inferSelect): Promise<void> {
+  const placed = await db.query.leadStageHistory.findFirst({
+    where: and(eq(leadStageHistory.leadId, lead.id), eq(leadStageHistory.source, 'triage')),
+    columns: { source: true },
+  });
+  if (!placed) return;
+  const recorded = await db.query.leadEvents.findFirst({
+    where: and(eq(leadEvents.leadId, lead.id), eq(leadEvents.kind, 'lead.triaged')),
+    columns: { kind: true },
+  });
+  if (recorded) return;
+  await writeLeadArrivalNotice(db, lead);
+  await db.insert(leadEvents).values({
+    leadId: lead.id,
+    kind: 'lead.triaged',
+    detail: { outcome: `routed:${lead.pipeline}`, source: lead.source, resumed: true },
+  });
+}
+
+/**
+ * Whether the triage made or placed this deal, and so owes its owner the arrival notice: its stage
+ * history says `triage`, or it was made from a conversation by `triageConversation` (its first
+ * event carries `triage: true`). A deal a person made or took is none of the triage's business.
+ */
+async function madeByTriage(db: Database, leadId: string): Promise<boolean> {
+  const placed = await db.query.leadStageHistory.findFirst({
+    where: and(eq(leadStageHistory.leadId, leadId), eq(leadStageHistory.source, 'triage')),
+    columns: { source: true },
+  });
+  if (placed) return true;
+  const made = await db.query.leadEvents.findFirst({
+    where: and(
+      eq(leadEvents.leadId, leadId),
+      eq(leadEvents.kind, 'lead.received.whatsapp'),
+      sql`${leadEvents.detail}->>'triage' = 'true'`,
+    ),
+    columns: { kind: true },
+  });
+  return made !== undefined;
 }
 
 /** A WhatsApp conversation opened by a message with no deal while Sofia is off. */
@@ -436,6 +506,25 @@ export async function triageConversation(
     where: eq(waContacts.id, conversation.contactId),
   });
   if (!contact) return;
+  // A deal somebody can work already has this number (a pass cut short that made it, or one
+  // opened meanwhile): the conversation is its, with no need to ask the Jev. If the triage made
+  // that deal its owner (or, with none, the managers) is told, once; a deal a person made is not
+  // announced. The notice comes BEFORE the adoption: a notice that fails leaves the conversation
+  // unadopted, so the next pass finds the deal again and finishes.
+  const openDealId = await openLeadByPhone(db, contact.phone);
+  if (openDealId) {
+    const deal = await db.query.leads.findFirst({ where: eq(leads.id, openDealId) });
+    if (deal) {
+      if (await madeByTriage(db, deal.id)) await writeLeadArrivalNotice(db, deal);
+      await adoptUnmatched(db, contact.id, deal.id);
+      await db.insert(leadEvents).values({
+        leadId: deal.id,
+        kind: 'lead.triaged',
+        detail: { outcome: 'adopted', conversationId },
+      });
+      return;
+    }
+  }
   const first = await db.query.waMessages.findFirst({
     where: and(
       eq(waMessages.conversationId, conversationId),
@@ -455,6 +544,11 @@ export async function triageConversation(
     const at = first?.waTimestamp ?? conversation.createdAt;
     const result = await upsertLead(db, {
       source: 'whatsapp',
+      // No open deal reached here, but the number may have a closed one (lost, or won and now
+      // back): the message is a new deal beside it, found by the same rule as a Meta form
+      // lead (Eric, 09/10), so it gets a funnel, a rotation owner, a task and a notice
+      // instead of landing silently on the closed deal.
+      reopenClosed: true,
       name: contact.profileName,
       phone: contact.phone,
       clientId: WINGS_CLIENT_ID,
@@ -472,14 +566,19 @@ export async function triageConversation(
       consentText: 'A pessoa iniciou a conversa no WhatsApp da Wings, pedindo informações.',
       event: { kind: 'lead.received.whatsapp', detail: { triage: true } },
     });
-    await adoptUnmatched(db, contact.id, result.lead.id);
-    await db.insert(leadEvents).values({ leadId: result.lead.id, kind: 'lead.triaged', detail });
-    if (result.created && !result.stale) await announceLeadArrival(db, result.lead);
+    // The owner's notice comes BEFORE the adoption (as above): a notice that fails leaves the
+    // conversation unadopted, and the next pass finds the deal this one made and finishes.
+    if (result.created && !result.stale) await writeLeadArrivalNotice(db, result.lead);
     else if (!result.created && !result.lead.pipeline) {
       // An open deal of this phone with no funnel yet: the verdict places it.
       const routed = await routeLead(db, result.lead.id, decision.pipeline, now);
-      if (routed.ok) await announceLeadArrival(db, routed.lead);
+      await writeLeadArrivalNotice(db, routed.ok ? routed.lead : result.lead);
+    } else if (!result.created && (await madeByTriage(db, result.lead.id))) {
+      // A deal this triage made took the number between the look above and now.
+      await writeLeadArrivalNotice(db, result.lead);
     }
+    await adoptUnmatched(db, contact.id, result.lead.id);
+    await db.insert(leadEvents).values({ leadId: result.lead.id, kind: 'lead.triaged', detail });
     return;
   }
   const reason =
@@ -495,19 +594,180 @@ export async function triageConversation(
   });
 }
 
+// --- the queue: no lead waits only in the memory of a process ---------------------------------------
+
+/**
+ * What the usual door would have done when it does not hand the lead to the triage: the "lead sem
+ * dono" notice for a lead that still has no funnel, the "conversa espera um atendente" notice for a
+ * conversation that still has no deal. Nothing for a target a person already placed. A notice that
+ * cannot be written is thrown, so the row stays open. The conversation notice shares its dedupe key
+ * with the triage's own; the lead one does not (the triage's is `triage_handoff`), so a lead the
+ * triage already handed to a person is checked first and not told "sem dono" on top.
+ */
+async function fallbackNotice(db: Database, target: TriageTarget, reason: string): Promise<void> {
+  if ('leadId' in target) {
+    const lead = await db.query.leads.findFirst({ where: eq(leads.id, target.leadId) });
+    if (!lead || lead.won !== null) return;
+    if (lead.pipeline) {
+      await finishRouted(db, lead);
+      return;
+    }
+    const handedToAPerson = await db.query.crmNotifications.findFirst({
+      where: and(eq(crmNotifications.leadId, lead.id), eq(crmNotifications.kind, 'triage_handoff')),
+      columns: { kind: true },
+    });
+    if (!handedToAPerson) await writeLeadArrivalNotice(db, lead);
+    await db
+      .insert(leadEvents)
+      .values({
+        leadId: lead.id,
+        kind: 'lead.triaged',
+        detail: { outcome: 'fallback', reason, source: lead.source },
+      })
+      .catch(() => undefined);
+    return;
+  }
+  const conversation = await db.query.waConversations.findFirst({
+    where: eq(waConversations.id, target.conversationId),
+  });
+  if (!conversation) return;
+  if (conversation.leadId) {
+    // The conversation was adopted by a deal; if the triage made it, its owner is told (once).
+    const deal = await db.query.leads.findFirst({ where: eq(leads.id, conversation.leadId) });
+    if (deal && deal.won === null && (await madeByTriage(db, deal.id)))
+      await writeLeadArrivalNotice(db, deal);
+    return;
+  }
+  await noticeTeam(db, {
+    leadId: null,
+    message:
+      'Uma conversa do WhatsApp espera um atendente: a triagem do Jev não terminou. Veja em WhatsApp.',
+    dedupe: `conversation:${target.conversationId}`,
+  });
+}
+
+/** Ids only, for a log line. */
+const targetIdsOf = (target: TriageTarget) =>
+  'leadId' in target ? { leadId: target.leadId } : { conversationId: target.conversationId };
+
+/**
+ * Runs the triage of a queued target once, as the run that holds its row. Any error, and a row
+ * taken too many times, ends in the usual notice instead of in silence; only a failure of that
+ * notice itself leaves the row open for a later pass. With `deps` null (the triage is off) it
+ * only sends the usual notice.
+ */
+export async function runTriage(
+  db: Database,
+  target: TriageTarget,
+  deps: TriageDeps | null,
+  now: Date = new Date(),
+  log?: FastifyBaseLogger,
+): Promise<'ran' | 'fallback' | 'skipped'> {
+  const claim = await claimTriage(db, target, now);
+  if (!claim) return 'skipped';
+  if (!deps || claim.attempts > TRIAGE_MAX_ATTEMPTS) {
+    await fallbackNotice(db, target, deps ? 'too_many_attempts' : 'triage_off');
+    await finishTriage(db, claim.id, 'fallback', now);
+    return 'fallback';
+  }
+  try {
+    await ('leadId' in target
+      ? triageLead(db, target.leadId, deps)
+      : triageConversation(db, target.conversationId, deps));
+    await finishTriage(db, claim.id, 'done', now);
+    return 'ran';
+  } catch (error) {
+    // The error's own text is not logged (it can quote a query); its name and the ids are.
+    (log ?? deps.log).warn(
+      { ...targetIdsOf(target), reason: error instanceof Error ? error.name : 'unknown' },
+      'lead triage failed: the usual notice goes out',
+    );
+    await fallbackNotice(db, target, 'error');
+    await finishTriage(db, claim.id, 'fallback', now);
+    return 'fallback';
+  }
+}
+
+/**
+ * Takes up again what the queue still holds open: a lead or conversation whose run a restart cut
+ * short (or whose door never got to start it). Returns how many it ran.
+ */
+export async function resumeLeadTriage(
+  db: Database,
+  deps: TriageDeps | null,
+  now: Date = new Date(),
+  log?: FastifyBaseLogger,
+): Promise<number> {
+  const open = await openTriage(db, now);
+  let ran = 0;
+  for (const target of open) {
+    try {
+      if ((await runTriage(db, target, deps, now, log)) !== 'skipped') ran += 1;
+    } catch (error) {
+      (log ?? deps?.log)?.warn(
+        { ...targetIdsOf(target), reason: error instanceof Error ? error.name : 'unknown' },
+        'lead triage resume failed: the row stays open',
+      );
+    }
+  }
+  return ran;
+}
+
+const RESUME_FIRST_MS = 15_000;
+const RESUME_EVERY_MS = 2 * 60_000;
+
+/**
+ * The loop that finds what a restart or an error left open: once shortly after the start, then
+ * every two minutes. One pass at a time in this process; across servers the claim on each row
+ * decides. Returns the function that stops it.
+ */
+export function startLeadTriageResume(options: {
+  db: Database;
+  deps: TriageDeps | null;
+  log: FastifyBaseLogger;
+  firstMs?: number;
+  everyMs?: number;
+}): () => void {
+  let busy = false;
+  const tick = async () => {
+    if (busy) return;
+    busy = true;
+    try {
+      const ran = await resumeLeadTriage(
+        options.db,
+        options.deps,
+        options.deps?.now?.() ?? new Date(),
+        options.log,
+      );
+      if (ran > 0) options.log.info({ resumed: ran }, 'lead triage resumed what was left open');
+    } catch (error) {
+      options.log.warn(
+        { reason: error instanceof Error ? error.name : 'unknown' },
+        'lead triage resume pass failed',
+      );
+    } finally {
+      busy = false;
+    }
+  };
+  const first = setTimeout(() => void tick(), options.firstMs ?? RESUME_FIRST_MS);
+  first.unref();
+  const timer = setInterval(() => void tick(), options.everyMs ?? RESUME_EVERY_MS);
+  timer.unref();
+  return () => {
+    clearTimeout(first);
+    clearInterval(timer);
+  };
+}
+
 /** Wires the triage into the doors: null switches it off (the default). */
 export function installLeadTriage(db: Database, deps: TriageDeps | null): void {
   configureLeadTriage(
     deps
       ? (target: TriageTarget) => {
-          const run =
-            'leadId' in target
-              ? triageLead(db, target.leadId, deps)
-              : triageConversation(db, target.conversationId, deps);
-          void run.catch((error: unknown) =>
+          void runTriage(db, target, deps, deps.now?.() ?? new Date()).catch((error: unknown) =>
             deps.log.warn(
-              { target, reason: error instanceof Error ? error.name : 'unknown' },
-              'lead triage failed',
+              { ...targetIdsOf(target), reason: error instanceof Error ? error.name : 'unknown' },
+              'lead triage failed: the row stays open for the next pass',
             ),
           );
         }

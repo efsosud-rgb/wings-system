@@ -1,10 +1,24 @@
-import { AGENT_MODELS, JOB_TYPES, JOB_TYPES_IMPLEMENTED, type JobType } from '@wings/shared';
+import {
+  AGENT_MODELS,
+  JOB_TYPES,
+  JOB_TYPES_IMPLEMENTED,
+  LEAD_RESEARCH_DEFAULT_SINCE,
+  type JobType,
+} from '@wings/shared';
 import { z } from 'zod';
 
 const requiredString = z.string().trim().min(1);
 const optionalString = requiredString.optional().or(z.literal('').transform(() => undefined));
 /** An empty variable counts as unset, so its default applies (a blank line copied from .env.example must not stop the worker). */
 const emptyAsUnset = (value: unknown) => (value === '' ? undefined : value);
+/**
+ * A YYYY-MM-DD that exists on the calendar. `Date` alone accepts "2026-02-30" and rolls it to
+ * 02/03, which would move a cut-off by days without a word: the day must survive a round trip.
+ */
+const isRealDay = (value: string) => {
+  const date = new Date(`${value}T03:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+};
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -94,8 +108,8 @@ const schema = z.object({
     z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, 'must be YYYY-MM-DD')
-      .refine((value) => !Number.isNaN(new Date(`${value}T03:00:00Z`).getTime()), 'not a date')
-      .default('2026-10-14'),
+      .refine(isRealDay, 'not a real calendar day')
+      .default(LEAD_RESEARCH_DEFAULT_SINCE),
   ),
 });
 
