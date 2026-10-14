@@ -70,7 +70,11 @@ export interface ParsedRow {
   repeatOf: number | null;
 }
 
-/** Brazilian money as typed: "R$ 1.234,56", "1234.56", "1234" -> cents. */
+/**
+ * Brazilian money as typed: "R$ 1.234,56", "1234.56", "1234" -> cents. A dot that only groups
+ * thousands ("25.000", "1.500.000") is not a decimal point: 25.000 is R$ 25.000,00, never
+ * R$ 25,00. Same rule as `parseMoney` in the web's deal form.
+ */
 export function parseMoneyCents(text: string): number | null {
   const raw = text.replace(/[R$\s]/g, '');
   if (!raw) return null;
@@ -78,7 +82,9 @@ export function parseMoneyCents(text: string): number | null {
     raw.includes(',') && raw.lastIndexOf(',') > raw.lastIndexOf('.')
       ? raw.replace(/\./g, '').replace(',', '.')
       : raw.replace(/,/g, '');
-  const value = Number(normalized);
+  const value = Number(
+    /^\d{1,3}(\.\d{3})+$/.test(normalized) ? normalized.replace(/\./g, '') : normalized,
+  );
   if (!Number.isFinite(value) || value < 0) return null;
   return Math.round(value * 100);
 }

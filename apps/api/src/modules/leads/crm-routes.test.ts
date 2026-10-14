@@ -7,12 +7,12 @@ import {
   type Lead,
   type LeadTask,
 } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { leadStageHistory, leadTasks, leads } from '../../db/schema/index.js';
+import { leadEvents, leadStageHistory, leadTasks, leads } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
@@ -355,7 +355,7 @@ describe('PATCH /leads/:id — stage, outcome and owner', () => {
     expect(retiredStage.json<{ error: string }>().error).toBe('stage_inactive');
   });
 
-  it('closes as lost with a reason, reopens, and wins', async () => {
+  it('closes as lost with a reason, reopens, and wins; closing finishes the open tasks', async () => {
     const noReason = await app.inject({
       method: 'PATCH',
       url: `/leads/${ownLead}`,
@@ -363,6 +363,25 @@ describe('PATCH /leads/:id — stage, outcome and owner', () => {
       payload: { won: false },
     });
     expect(noReason.statusCode).toBe(400);
+    // An open task and a done one: closing the deal finishes the open one and leaves the other alone.
+    const pending = await app.inject({
+      method: 'POST',
+      url: `/leads/${ownLead}/tasks`,
+      cookies: sellerA.cookies,
+      payload: { title: 'Ligar de novo', dueAt: new Date(Date.now() + 86_400_000).toISOString() },
+    });
+    expect(pending.statusCode).toBe(201);
+    const pendingId = pending.json<{ task: { id: string } }>().task.id;
+    const [done] = await db
+      .insert(leadTasks)
+      .values({
+        leadId: ownLead,
+        title: 'Já feita',
+        dueAt: new Date('2026-10-01T12:00:00Z'),
+        doneAt: new Date('2026-10-01T13:00:00Z'),
+        assigneeEmployeeId: sellerA.employeeId,
+      })
+      .returning({ id: leadTasks.id });
     const lost = await app.inject({
       method: 'PATCH',
       url: `/leads/${ownLead}`,
@@ -373,6 +392,26 @@ describe('PATCH /leads/:id — stage, outcome and owner', () => {
       won: false,
       lostReason: 'Sem capital',
     });
+    const tasks = await db.select().from(leadTasks).where(eq(leadTasks.leadId, ownLead));
+    const closed = tasks.find((t) => t.id === pendingId);
+    expect(closed?.doneAt).not.toBeNull();
+    expect(closed?.doneBy).toBe(sellerA.employeeId);
+    expect(tasks.find((t) => t.id === done!.id)?.doneAt?.toISOString()).toBe(
+      '2026-10-01T13:00:00.000Z',
+    );
+    expect(tasks.every((t) => t.doneAt !== null)).toBe(true);
+    // One "task done" event per task the closing finished (the first-contact task among them), none
+    // for the one already done.
+    const closedEvents = await db
+      .select()
+      .from(leadEvents)
+      .where(and(eq(leadEvents.leadId, ownLead), eq(leadEvents.kind, 'lead.task_done')));
+    expect(closedEvents).toHaveLength(tasks.length - 1);
+    expect(closedEvents.map((e) => e.detail)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ taskId: pendingId, closedWithDeal: true }),
+      ]),
+    );
     const reopened = await app.inject({
       method: 'PATCH',
       url: `/leads/${ownLead}`,

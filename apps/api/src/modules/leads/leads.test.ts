@@ -15,6 +15,7 @@ import {
   auditLog,
   clients,
   crmDistributionMembers,
+  crmNotifications,
   expansionIntakeLedger,
   jobs,
   leadContacts,
@@ -673,6 +674,76 @@ describe('POST /integrations/zapi/webhook', () => {
       cookies,
     });
     expect(links.json<{ links: LeadTrackingLink[] }>().links[0]).toMatchObject({ hits: 1 });
+  });
+
+  it('makes the deal as any other door does: funnel and brand of the link, entry stage, rotation, first-contact task, notice', async () => {
+    const seller = await createEmployee(db, { role: 'vendedor_expansao', sector: 'comercial' });
+    await db
+      .insert(crmDistributionMembers)
+      .values({ pipeline: 'expansao', employeeId: seller.id, active: true });
+    const { client, link } = await linkFor('Sushi Norte', 'instagram');
+    const sent = await app.inject({
+      method: 'POST',
+      url: '/integrations/zapi/webhook',
+      headers: { 'x-wings-webhook-secret': ZAPI_SECRET },
+      payload: {
+        type: 'ReceivedCallback',
+        phone: '5541988886666',
+        fromMe: false,
+        isGroup: false,
+        momment: Date.now(),
+        senderName: 'Bruno Teste',
+        text: { message: `${link.code} quero abrir uma unidade` },
+      },
+    });
+    expect(sent.json<{ created: boolean }>().created).toBe(true);
+    const { leadId } = sent.json<{ leadId: string }>();
+    const [row] = await db.select().from(leads).where(eq(leads.id, leadId));
+    expect(row).toMatchObject({
+      pipeline: 'expansao',
+      brand: client.name,
+      ownerEmployeeId: seller.id,
+    });
+    expect(row?.stageId).not.toBeNull();
+    const task = await db.query.leadTasks.findFirst({ where: eq(leadTasks.leadId, leadId) });
+    expect(task).toMatchObject({ kind: 'first_contact', assigneeEmployeeId: seller.id });
+    expect(task?.doneAt).toBeNull();
+    const notices = await db
+      .select()
+      .from(crmNotifications)
+      .where(eq(crmNotifications.leadId, leadId));
+    expect(notices.map((n) => [n.kind, n.recipientEmployeeId])).toEqual([['new_lead', seller.id]]);
+
+    // Wings' own link (no brand) is a Formatação lead.
+    const own = await db
+      .insert(leadTrackingLinks)
+      .values({
+        clientId: WINGS_CLIENT_ID,
+        channel: 'linktree',
+        code: 'WNGS23',
+        phone: '5521999470288',
+      })
+      .returning();
+    const wings = await app.inject({
+      method: 'POST',
+      url: '/integrations/zapi/webhook',
+      headers: { 'x-wings-webhook-secret': ZAPI_SECRET },
+      payload: {
+        type: 'ReceivedCallback',
+        phone: '5541988885555',
+        fromMe: false,
+        isGroup: false,
+        momment: Date.now(),
+        senderName: 'Bia Teste',
+        text: { message: `${own[0]!.code} quero formatar minha empresa` },
+      },
+    });
+    const [wingsLead] = await db
+      .select()
+      .from(leads)
+      .where(eq(leads.id, wings.json<{ leadId: string }>().leadId));
+    expect(wingsLead).toMatchObject({ pipeline: 'formatacao', brand: null });
+    expect(wingsLead?.stageId).not.toBeNull();
   });
 
   it('ignores our own messages, groups, messages without a code and unknown codes', async () => {

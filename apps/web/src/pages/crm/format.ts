@@ -101,14 +101,21 @@ export const toLocalInput = (date: Date) => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
-/** "1.234,56" typed -> cents; empty -> null; nonsense -> undefined. */
+/**
+ * "1.234,56" typed -> cents; empty -> null; nonsense -> undefined. A dot that only groups
+ * thousands ("25.000", "1.500.000") is Brazilian typing, not a decimal point: 25.000 is
+ * R$ 25.000,00, never R$ 25,00. Same rule as `parseMoneyCents` in the API's CSV import.
+ */
 export function parseMoney(text: string): number | null | undefined {
   const raw = text.replace(/[R$\s]/g, '');
   if (!raw) return null;
-  const normalized =
-    raw.includes(',') && raw.lastIndexOf(',') > raw.lastIndexOf('.')
-      ? raw.replace(/\./g, '').replace(',', '.')
-      : raw.replace(/,/g, '');
-  const value = Number(normalized);
+  const value = Number(normalizeMoney(raw));
   return Number.isFinite(value) && value >= 0 ? Math.round(value * 100) : undefined;
+}
+
+function normalizeMoney(raw: string): string {
+  if (raw.includes(',') && raw.lastIndexOf(',') > raw.lastIndexOf('.'))
+    return raw.replace(/\./g, '').replace(',', '.');
+  const plain = raw.replace(/,/g, '');
+  return /^\d{1,3}(\.\d{3})+$/.test(plain) ? plain.replace(/\./g, '') : plain;
 }
