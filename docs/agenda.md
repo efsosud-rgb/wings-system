@@ -58,8 +58,14 @@ characters.
   case-insensitive: Thais; only `mine` is listed), `writer` (owner/writer), `reader` (listed,
   `canWrite: false`) or `not_shared` (not listed). A 401 on the list → `needs_reconnect`; any other
   failure → `google_unreachable`.
-- Event colours: `colors.get`'s `event` map (`eventColorsSource: 'google'`); when that call fails,
-  `GOOGLE_EVENT_COLORS` stands in (`'default'`).
+- Colours as the Google Agenda shows them today (Eric, 14/10). `colors.get` and `calendarList`
+  still answer Google's older, paler tones, so the API swaps them: an event's colorId 1–11 becomes
+  its current tone (`GOOGLE_EVENT_COLORS`: Lavanda #7986cb … Tomate #d50000), and a calendar's
+  older background becomes its current one (`GOOGLE_CALENDAR_COLORS`, the 24 calendar colours,
+  through `currentCalendarColor`). A colour the person picked by hand, or an event id Google adds
+  later, stays as Google sent it. The text on each tone is white or near-black, whichever has the
+  higher contrast (`readableTextOn`). `eventColorsSource` is `google` when `colors.get` answered,
+  `default` when the fixed table stood in alone.
 - While `state` is not `ready`, `wings` is `not_configured` when the env id is unset and
   `not_shared` otherwise: unknown, so the screen reads `state` first.
 

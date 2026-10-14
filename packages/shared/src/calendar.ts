@@ -46,7 +46,7 @@ export interface AgendaCalendar {
    * Thais' account).
    */
   name: string;
-  /** From calendarList, '#rrggbb'. */
+  /** From calendarList, '#rrggbb', in the current Google tone (`currentCalendarColor`). */
   backgroundColor: string;
   foregroundColor: string;
   /** owner or writer on Google: events may be created there. */
@@ -67,30 +67,93 @@ export interface AgendaOverview {
   wings: AgendaWingsAccess;
   /** Event colours by Google colorId. */
   eventColors: Record<string, AgendaEventColor>;
-  /** `google` when colors.get answered, `default` when the fixed palette below stood in. */
+  /**
+   * `google` when colors.get answered (its ids, shown in the current tones),
+   * `default` when it did not and GOOGLE_EVENT_COLORS stood in alone.
+   */
   eventColorsSource: 'google' | 'default';
 }
 
 /**
- * Google's event palette, as colors.get answers it (colorId → colours), with
- * the names the Google Agenda shows in Portuguese. colors.get accepts the
- * `calendar.calendarlist.readonly` scope the connection already has, so this
- * table only stands in when that call fails.
+ * Google's event palette in the tones the Google Agenda shows today (Eric, 14/10),
+ * by colorId, with the names it gives them in Portuguese. colors.get (allowed by
+ * the `calendar.calendarlist.readonly` scope the connection has) still answers
+ * the older, paler tones under the same ids, so the API shows these instead.
+ * Text is white or near-black, whichever reads better on the tone.
  */
 export const GOOGLE_EVENT_COLORS: Record<string, AgendaEventColor & { name: string }> = {
-  '1': { name: 'Lavanda', background: '#a4bdfc', foreground: '#1d1d1d' },
-  '2': { name: 'Sálvia', background: '#7ae7bf', foreground: '#1d1d1d' },
-  '3': { name: 'Uva', background: '#dbadff', foreground: '#1d1d1d' },
-  '4': { name: 'Flamingo', background: '#ff887c', foreground: '#1d1d1d' },
-  '5': { name: 'Banana', background: '#fbd75b', foreground: '#1d1d1d' },
-  '6': { name: 'Tangerina', background: '#ffb878', foreground: '#1d1d1d' },
-  '7': { name: 'Pavão', background: '#46d6db', foreground: '#1d1d1d' },
-  '8': { name: 'Grafite', background: '#e1e1e1', foreground: '#1d1d1d' },
-  '9': { name: 'Mirtilo', background: '#5484ed', foreground: '#1d1d1d' },
-  '10': { name: 'Manjericão', background: '#51b749', foreground: '#1d1d1d' },
-  '11': { name: 'Tomate', background: '#dc2127', foreground: '#1d1d1d' },
+  '1': { name: 'Lavanda', background: '#7986cb', foreground: '#1d1d1d' },
+  '2': { name: 'Sálvia', background: '#33b679', foreground: '#1d1d1d' },
+  '3': { name: 'Uva', background: '#8e24aa', foreground: '#ffffff' },
+  '4': { name: 'Flamingo', background: '#e67c73', foreground: '#1d1d1d' },
+  '5': { name: 'Banana', background: '#f6bf26', foreground: '#1d1d1d' },
+  '6': { name: 'Tangerina', background: '#f4511e', foreground: '#1d1d1d' },
+  '7': { name: 'Pavão', background: '#039be5', foreground: '#1d1d1d' },
+  '8': { name: 'Grafite', background: '#616161', foreground: '#ffffff' },
+  '9': { name: 'Mirtilo', background: '#3f51b5', foreground: '#ffffff' },
+  '10': { name: 'Manjericão', background: '#0b8043', foreground: '#ffffff' },
+  '11': { name: 'Tomate', background: '#d50000', foreground: '#ffffff' },
 };
 export const GOOGLE_EVENT_COLOR_IDS = Object.keys(GOOGLE_EVENT_COLORS);
+
+/**
+ * The calendars' palette: calendarList answers a calendar's colour in the older
+ * tones (its 24 colorIds); the Google Agenda shows each as a current tone. Keyed
+ * by the older background, lower case. A colour the person picked by hand is
+ * not in the table and stays as it is.
+ */
+export const GOOGLE_CALENDAR_COLORS: Record<string, { name: string; background: string }> = {
+  '#ac725e': { name: 'Cacau', background: '#795548' },
+  '#d06b64': { name: 'Flamingo', background: '#e67c73' },
+  '#f83a22': { name: 'Tomate', background: '#d50000' },
+  '#fa573c': { name: 'Tangerina', background: '#f4511e' },
+  '#ff7537': { name: 'Abóbora', background: '#ef6c00' },
+  '#ffad46': { name: 'Manga', background: '#f09300' },
+  '#42d692': { name: 'Eucalipto', background: '#009688' },
+  '#16a765': { name: 'Manjericão', background: '#0b8043' },
+  '#7bd148': { name: 'Pistache', background: '#7cb342' },
+  '#b3dc6c': { name: 'Abacate', background: '#c0ca33' },
+  '#fbe983': { name: 'Cidra', background: '#e4c441' },
+  '#fad165': { name: 'Banana', background: '#f6bf26' },
+  '#92e1c0': { name: 'Sálvia', background: '#33b679' },
+  '#9fe1e7': { name: 'Pavão', background: '#039be5' },
+  '#9fc6e7': { name: 'Cobalto', background: '#4285f4' },
+  '#4986e7': { name: 'Mirtilo', background: '#3f51b5' },
+  '#9a9cff': { name: 'Lavanda', background: '#7986cb' },
+  '#b99aff': { name: 'Glicínia', background: '#b39ddb' },
+  '#c2c2c2': { name: 'Grafite', background: '#616161' },
+  '#cabdbf': { name: 'Bétula', background: '#a79b8e' },
+  '#cca6ac': { name: 'Radicchio', background: '#ad1457' },
+  '#f691b2': { name: 'Flor de cerejeira', background: '#d81b60' },
+  '#cd74e6': { name: 'Ametista', background: '#9e69af' },
+  '#a47ae2': { name: 'Uva', background: '#8e24aa' },
+};
+
+function luminance(hex: string): number {
+  const [r, g, b] = [1, 3, 5].map((i) => {
+    const v = Number.parseInt(hex.slice(i, i + 2), 16) / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+const DARK_TEXT = '#1d1d1d';
+const LIGHT_TEXT = '#ffffff';
+
+/** White or near-black, whichever has the higher contrast on this '#rrggbb' background. */
+export function readableTextOn(background: string): string {
+  if (!/^#[0-9a-f]{6}$/i.test(background)) return DARK_TEXT;
+  const tone = luminance(background);
+  const onWhite = 1.05 / (tone + 0.05);
+  const onDark = (tone + 0.05) / (luminance(DARK_TEXT) + 0.05);
+  return onWhite >= onDark ? LIGHT_TEXT : DARK_TEXT;
+}
+
+/** A calendar's colour as the Google Agenda shows it today, with readable text on it. */
+export function currentCalendarColor(background: string): AgendaEventColor {
+  const current = GOOGLE_CALENDAR_COLORS[background.toLowerCase()]?.background ?? background;
+  return { background: current, foreground: readableTextOn(current) };
+}
 
 export const AGENDA_RESPONSES = ['aceitou', 'recusou', 'talvez', 'sem_resposta'] as const;
 export type AgendaResponse = (typeof AGENDA_RESPONSES)[number];

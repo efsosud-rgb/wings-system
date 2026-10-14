@@ -1,5 +1,6 @@
 import {
   AGENDA_NOTICES,
+  currentCalendarColor,
   GOOGLE_EVENT_COLORS,
   type Actor,
   type AgendaCalendar,
@@ -98,7 +99,8 @@ const DEFAULT_COLORS: Record<string, AgendaEventColor> = Object.fromEntries(
     { background, foreground },
   ]),
 );
-const FALLBACK_CALENDAR_COLORS = { backgroundColor: '#039be5', foregroundColor: '#ffffff' };
+/** Pavão, the Google Agenda's default, when calendarList sends no colour. */
+const FALLBACK_CALENDAR_COLOR = '#039be5';
 
 // --- token and calendars -----------------------------------------------------------------------
 
@@ -149,6 +151,8 @@ function viewOf(
   entry: CalendarListEntry | null,
   fallbackName: string,
 ): AgendaCalendar {
+  // calendarList answers the older tones; the screen shows the one the Google Agenda shows today.
+  const colors = currentCalendarColor(entry?.backgroundColor ?? FALLBACK_CALENDAR_COLOR);
   return {
     key,
     // The Wings Company calendar is Thais' primary: Google names it after her account.
@@ -156,8 +160,8 @@ function viewOf(
       key === 'wings'
         ? entry?.summaryOverride || fallbackName
         : entry?.summaryOverride || entry?.summary || fallbackName,
-    backgroundColor: entry?.backgroundColor ?? FALLBACK_CALENDAR_COLORS.backgroundColor,
-    foregroundColor: entry?.foregroundColor ?? FALLBACK_CALENDAR_COLORS.foregroundColor,
+    backgroundColor: colors.background,
+    foregroundColor: colors.foreground,
     canWrite: entry ? isWriterRole(entry.accessRole) : true,
   };
 }

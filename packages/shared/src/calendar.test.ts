@@ -2,12 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   addDays,
   agendaEventInputSchema,
+  currentCalendarColor,
+  GOOGLE_CALENDAR_COLORS,
+  GOOGLE_EVENT_COLORS,
   agendaEventPatchSchema,
   agendaEventsQuerySchema,
   dateOnlyOf,
   GOOGLE_EVENT_COLOR_IDS,
   instantOf,
   isDateOnly,
+  readableTextOn,
   wallClockOf,
   weekdayOf,
 } from './calendar.js';
@@ -138,6 +142,33 @@ describe('event input', () => {
       '10',
       '11',
     ]);
+  });
+});
+
+describe('colours as the Google Agenda shows them today', () => {
+  it('maps every older calendar tone to a current one, and keeps a hand-picked colour', () => {
+    expect(Object.keys(GOOGLE_CALENDAR_COLORS)).toHaveLength(24);
+    expect(currentCalendarColor('#9FE1E7')).toEqual({
+      background: '#039be5',
+      foreground: '#1d1d1d',
+    });
+    expect(currentCalendarColor('#16a765')).toEqual({
+      background: '#0b8043',
+      foreground: '#ffffff',
+    });
+    expect(currentCalendarColor('#123456')).toEqual({
+      background: '#123456',
+      foreground: '#ffffff',
+    });
+  });
+
+  it('writes on each tone in the colour that reads better', () => {
+    for (const color of Object.values(GOOGLE_EVENT_COLORS)) {
+      expect(readableTextOn(color.background), color.name).toBe(color.foreground);
+    }
+    expect(readableTextOn('#ffffff')).toBe('#1d1d1d');
+    expect(readableTextOn('#000000')).toBe('#ffffff');
+    expect(readableTextOn('não é cor')).toBe('#1d1d1d');
   });
 });
 

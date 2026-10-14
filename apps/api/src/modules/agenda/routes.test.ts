@@ -36,9 +36,11 @@ const WINGS_WRITER = {
   foregroundColor: '#000000',
 };
 const WINGS_READER = { ...WINGS_WRITER, accessRole: 'reader' };
+/** What colors.get answers: the older tones, under the same ids. */
 const GOOGLE_COLORS = {
   '1': { background: '#a4bdfc', foreground: '#1d1d1d' },
   '11': { background: '#dc2127', foreground: '#1d1d1d' },
+  '12': { background: '#123456', foreground: '#ffffff' },
 };
 
 const envOf = (extra: Record<string, string>) =>
@@ -221,7 +223,7 @@ describe('Agenda: the overview', () => {
     });
   });
 
-  it('lists both calendars for a writer of the Wings Company one, with Google’s colours', async () => {
+  it('lists both calendars for a writer of the Wings Company one, in today’s Google tones', async () => {
     const seller = await connected('vendedor_formatacao', {
       calendars: [
         {
@@ -239,23 +241,31 @@ describe('Agenda: the overview', () => {
       state: 'ready',
       googleEmail: PERSON,
       calendars: [
+        // calendarList's older tones, shown as the Google Agenda shows them today:
+        // #9fe1e7 → Pavão, #16a765 → Manjericão.
         {
           key: 'mine',
           name: 'Minha agenda',
-          backgroundColor: '#9fe1e7',
-          foregroundColor: '#000000',
+          backgroundColor: '#039be5',
+          foregroundColor: '#1d1d1d',
           canWrite: true,
         },
         {
           key: 'wings',
           name: 'Wings Company',
-          backgroundColor: '#16a765',
-          foregroundColor: '#000000',
+          backgroundColor: '#0b8043',
+          foregroundColor: '#ffffff',
           canWrite: true,
         },
       ],
       wings: 'writer',
-      eventColors: GOOGLE_COLORS,
+      // colors.get's ids, in today's tones (Lavanda, Tomate), plus an id Google added that we
+      // do not know, kept as Google sent it.
+      eventColors: {
+        '1': { background: '#7986cb', foreground: '#1d1d1d' },
+        '11': { background: '#d50000', foreground: '#ffffff' },
+        '12': { background: '#123456', foreground: '#ffffff' },
+      },
       eventColorsSource: 'google',
     });
     // The browser never gets the Wings Company calendar's id.
@@ -273,7 +283,9 @@ describe('Agenda: the overview', () => {
     ]);
     expect(overview.eventColorsSource).toBe('default');
     expect(Object.keys(overview.eventColors)).toEqual(Object.keys(GOOGLE_EVENT_COLORS));
-    expect(overview.eventColors['5']).toEqual({ background: '#fbd75b', foreground: '#1d1d1d' });
+    expect(overview.eventColors['5']).toEqual({ background: '#f6bf26', foreground: '#1d1d1d' });
+    // The calendar tone too: #16a765 → Manjericão.
+    expect(overview.calendars[1]!.backgroundColor).toBe('#0b8043');
   });
 
   it('leaves the Wings Company calendar out when it is not shared', async () => {

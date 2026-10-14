@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   AGENDA_TIME_ZONE,
+  GOOGLE_EVENT_COLORS,
   instantOf,
   type AgendaAttendee,
   type AgendaCalendarKey,
@@ -441,6 +442,12 @@ export async function eventColorsOf(
   } | null;
   const colors: Record<string, AgendaEventColor> = {};
   for (const [id, color] of Object.entries(answer?.event ?? {})) {
+    // A known id is shown in today's Google tone; Google still answers the older one.
+    const current = GOOGLE_EVENT_COLORS[id];
+    if (current) {
+      colors[id] = { background: current.background, foreground: current.foreground };
+      continue;
+    }
     const background = str(color.background);
     const foreground = str(color.foreground);
     if (background && foreground && HEX.test(background) && HEX.test(foreground)) {
