@@ -87,3 +87,24 @@ export function saveDismissed(ids: Set<string>): void {
     // Storage blocked: a put-off pop-up comes back after a reload, nothing worse.
   }
 }
+
+const EARLIER_KEY = 'wings:new-lead-popups:earlier-hidden';
+const dayOf = (date: Date) => date.toLocaleDateString('sv-SE');
+
+/** How many "leads from before" the person already put off today (0 when none, or from another day). */
+export function readEarlierHidden(now = new Date()): number {
+  try {
+    const [day, count] = (localStorage.getItem(EARLIER_KEY) ?? '').split(':');
+    return day === dayOf(now) ? Number(count) || 0 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function saveEarlierHidden(count: number, now = new Date()): void {
+  try {
+    localStorage.setItem(EARLIER_KEY, `${dayOf(now)}:${count}`);
+  } catch {
+    // Storage blocked: the line comes back after a reload, nothing worse.
+  }
+}

@@ -490,7 +490,7 @@ export const automationRoutes: FastifyPluginAsync = async (app) => {
     '/crm/notifications/new-leads',
     { preHandler: app.requirePermission('leads.read') },
     async (request, reply) =>
-      reply.send({ leads: await newLeadPopupsOf(db, request.session.actor.employeeId) }),
+      reply.send(await newLeadPopupsOf(db, request.session.actor.employeeId)),
   );
 
   app.post(

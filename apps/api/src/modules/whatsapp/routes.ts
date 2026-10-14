@@ -19,6 +19,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { waContacts, waConversations, waMessages, waTemplates } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
+import { officialNumberLive, setOfficialNumberLive } from './official-number.js';
 import { leadInScope, leadOwnerFilter } from '../leads/access.js';
 import { storageOf } from '../../lib/storage/index.js';
 import {
@@ -141,6 +142,32 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
    * (every conversation for Admin and Diretoria), newest first, with search,
    * unread (per reader) and the last message's status.
    */
+  // The official number's switch (Eric, 14/10): read by everyone with the inbox, flipped by an
+  // Admin Master on the day the number is swapped.
+  app.get('/whatsapp/official-number', use, async (_request, reply) =>
+    reply.send({ live: await officialNumberLive(db) }),
+  );
+
+  app.put(
+    '/whatsapp/official-number',
+    { preHandler: app.requirePermission('integrations.manage') },
+    async (request, reply) => {
+      const body = z.object({ live: z.boolean() }).safeParse(request.body);
+      if (!body.success)
+        return reply.status(400).send({ error: 'invalid_request', message: 'Dados inválidos' });
+      await setOfficialNumberLive(db, body.data.live, request.session.actor.employeeId);
+      await writeAudit(db, {
+        actorEmployeeId: request.session.actor.employeeId,
+        action: 'whatsapp.official_number_switched',
+        entity: 'whatsapp_settings',
+        entityId: null,
+        ip: request.ip,
+        metadata: { live: body.data.live },
+      });
+      return reply.send({ live: body.data.live });
+    },
+  );
+
   app.get('/whatsapp/conversations', use, async (request, reply) => {
     const query = z
       .object({

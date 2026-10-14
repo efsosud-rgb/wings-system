@@ -508,9 +508,10 @@ export const crmRoutes: FastifyPluginAsync = async (app) => {
 
   const pollingOn = Boolean(env.META_LEADS_ACCESS_TOKEN) && env.META_LEADS_POLL !== 'false';
 
+  // The team's queue and the switches: the Integrações screen only, not the sellers.
   app.get(
     '/crm/meta-leads/status',
-    { preHandler: app.requirePermission('leads.read') },
+    { preHandler: app.requirePermission('integrations.manage') },
     async (_request, reply) =>
       reply.send({
         ...(await metaQueueStatus(db)),
@@ -648,9 +649,10 @@ export const crmRoutes: FastifyPluginAsync = async (app) => {
 
   // --- distribution and sellers ----------------------------------------------------------
 
+  // The team list is for who hands deals over; a seller sees only their own deals (Eric, 14/10).
   app.get(
     '/crm/sellers',
-    { preHandler: app.requirePermission('leads.read') },
+    { preHandler: app.requirePermission('leads.assign') },
     async (_request, reply) => reply.send({ sellers: await listSellers(db) }),
   );
 

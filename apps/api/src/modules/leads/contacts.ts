@@ -601,6 +601,26 @@ export async function unlinkContact(
 }
 
 /**
+ * Whether the person an e-mail or phone names is on deals a seller does not see, none of them
+ * theirs. A seller's deal does not take that person in (Eric, 14/10): the contact would show them
+ * another seller's person. A contact no deal has yet is not anybody's, and may be taken.
+ */
+export async function contactOnForeignDeal(
+  db: Executor,
+  input: { email?: string | null; phone?: string | null },
+  ownerEmployeeId: string,
+): Promise<boolean> {
+  const known = await findContact(db, input);
+  if (!known || (await contactVisibleTo(db, known.id, ownerEmployeeId))) return false;
+  const [tied] = await db
+    .select({ one: sql<number>`1` })
+    .from(leadContacts)
+    .where(eq(leadContacts.contactId, known.id))
+    .limit(1);
+  return Boolean(tied);
+}
+
+/**
  * The person of an arriving lead, as a contact: found or made from the lead's
  * own name, e-mail and phone, tied as the lead's main contact when it has
  * none, and the lead's company tied to the contact when the contact has none.

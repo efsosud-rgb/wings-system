@@ -16,6 +16,7 @@ const { state, stageMutate, createMutate, quickMutate, activityMutate, idle, mut
   vi.hoisted(() => ({
     state: {
       permissions: {} as Record<string, string>,
+      role: 'admin',
       board: null as Board | null,
       // What the next render of each query answers; reset to "idle" before every test.
       boardQuery: {} as Record<string, unknown>,
@@ -41,7 +42,7 @@ vi.mock('../../api/auth.js', async () => {
   return {
     ...actual,
     useSession: () => ({
-      data: { id: 'e1', fullName: 'Eric Souza', role: 'admin', permissions: state.permissions },
+      data: { id: 'e1', fullName: 'Eric Souza', role: state.role, permissions: state.permissions },
     }),
   };
 });
@@ -137,6 +138,7 @@ const theCard = () => screen.getByRole('article', { name: 'Elena' });
 
 beforeEach(() => {
   state.permissions = { 'leads.read': 'all', 'leads.write': 'all' };
+  state.role = 'admin';
   state.board = board();
   state.boardQuery = {};
   state.counters = idle();
@@ -418,5 +420,31 @@ describe('when a request fails', () => {
       'Não foi possível carregar o calendário',
     );
     expect(screen.getByRole('alert').textContent).toContain('sem conexão com o servidor');
+  });
+});
+
+describe('the funnel it opens on', () => {
+  const funnel = () => (screen.getByRole('combobox', { name: 'Funil' }) as HTMLSelectElement).value;
+
+  it('opens a Formatação seller on Formatação, not on an empty Expansão board', () => {
+    state.role = 'vendedor_formatacao';
+    show();
+    expect(funnel()).toBe('formatacao');
+  });
+
+  it('keeps Expansão for an Expansão seller and for the board', () => {
+    state.role = 'vendedor_expansao';
+    show();
+    expect(funnel()).toBe('expansao');
+    cleanup();
+    state.role = 'diretoria';
+    show();
+    expect(funnel()).toBe('expansao');
+  });
+
+  it('obeys the funnel named in the address, whatever the level', () => {
+    state.role = 'vendedor_formatacao';
+    show('?funil=expansao');
+    expect(funnel()).toBe('expansao');
   });
 });

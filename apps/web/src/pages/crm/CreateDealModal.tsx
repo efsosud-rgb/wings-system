@@ -63,7 +63,7 @@ export function CreateDealModal({
   const session = useSession();
   const canAssign = hasPermission(session.data, 'leads.assign');
   const create = useCreateLead();
-  const sellers = useSellers();
+  const sellers = useSellers(canAssign);
   const brands = useBrands();
   const [form, setForm] = useState({
     name: '',

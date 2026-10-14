@@ -41,6 +41,13 @@ export const ROLE_KEYS = Object.keys(ROLES) as RoleKey[];
  */
 export const PROTECTED_ROLES: readonly RoleKey[] = ['admin_master', 'diretoria'];
 
+/**
+ * Levels whose whole menu is CRM Vendas (Eric, 14/10): the sellers. They see Início and the CRM
+ * group only; the screens of other modules they still use sit inside the CRM for them, at their
+ * own address (`NavSubmodule.levels` in navigation.ts).
+ */
+export const CRM_ONLY_ROLES: readonly RoleKey[] = ['vendedor_expansao', 'vendedor_formatacao'];
+
 export function isRoleKey(value: string): value is RoleKey {
   return value in ROLES;
 }

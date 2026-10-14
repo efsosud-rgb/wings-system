@@ -18,6 +18,7 @@ const { state } = vi.hoisted(() => ({
     created: [] as unknown[],
     targets: [] as WaNewTarget[],
     permissions: { 'leads.whatsapp': 'all', 'leads.write': 'all' } as Record<string, string>,
+    officialLive: false,
     // Overrides for what the two queries answer (a failed request, an empty list); reset per test.
     listQuery: {} as Record<string, unknown>,
     threadQuery: {} as Record<string, unknown>,
@@ -95,9 +96,13 @@ vi.mock('../../api/auth.js', () => ({
   useSession: () => ({ data: { id: 'e1', role: 'admin_master', permissions: state.permissions } }),
   hasPermission: (session: { permissions: Record<string, string> } | undefined, key: string) =>
     Boolean(session?.permissions[key]),
+  permissionScope: (session: { permissions: Record<string, string> } | undefined, key: string) =>
+    session?.permissions[key],
 }));
 
 vi.mock('../../api/whatsapp.js', () => ({
+  useOfficialNumber: () => ({ data: { live: state.officialLive } }),
+  useSetOfficialNumber: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
   useWhatsAppInbox: (filter: string, q: string) => {
     state.asked.push({ filter, q });
     return {
@@ -149,6 +154,7 @@ beforeEach(() => {
   state.created.length = 0;
   state.targets = [];
   state.permissions = { 'leads.whatsapp': 'all', 'leads.write': 'all' };
+  state.officialLive = false;
   state.listQuery = {};
   state.threadQuery = {};
   state.targetsQuery = {};
@@ -327,5 +333,37 @@ describe('when a request fails', () => {
       target: { value: 'Patr' },
     });
     expect(screen.getByText('Nada encontrado nas suas negociações.')).toBeTruthy();
+  });
+});
+
+describe('before the swap of the number (Eric, 14/10)', () => {
+  const notice = /O WhatsApp do sistema começa a funcionar depois da troca do número/;
+
+  it('tells a seller to use the phone and switches "Nova conversa" off', () => {
+    state.permissions = { 'leads.whatsapp': 'own', 'leads.write': 'own' };
+    renderAt('/crm-vendas/whatsapp');
+    expect(screen.getByRole('status').textContent).toMatch(notice);
+    expect(screen.getByRole('button', { name: 'Nova conversa' }).hasAttribute('disabled')).toBe(
+      true,
+    );
+  });
+
+  it('opens it for the seller once the official number is live, with no deploy', () => {
+    state.permissions = { 'leads.whatsapp': 'own', 'leads.write': 'own' };
+    state.officialLive = true;
+    renderAt('/crm-vendas/whatsapp');
+    expect(screen.queryByText(notice)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Nova conversa' }).hasAttribute('disabled')).toBe(
+      false,
+    );
+  });
+
+  it('changes nothing for the other levels', () => {
+    state.permissions = { 'leads.whatsapp': 'all', 'leads.write': 'all' };
+    renderAt('/crm-vendas/whatsapp');
+    expect(screen.queryByText(notice)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Nova conversa' }).hasAttribute('disabled')).toBe(
+      false,
+    );
   });
 });

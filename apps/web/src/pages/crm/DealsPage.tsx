@@ -13,6 +13,7 @@ import {
   LEAD_SOURCE_LABELS,
   LEAD_SOURCES,
   LEAD_TASK_KIND_LABELS,
+  defaultPipelineOfRole,
   sourceBadgeOf,
   type BoardCard,
   type BoardColumn,
@@ -28,7 +29,7 @@ import {
   useState,
 } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { hasPermission, useSession } from '../../api/auth.js';
+import { hasPermission, permissionScope, useSession } from '../../api/auth.js';
 import { ApiError } from '../../api/client.js';
 import {
   downloadExport,
@@ -98,20 +99,23 @@ export function DealsPage() {
   const [params, setParams] = useSearchParams();
   const canWrite = hasPermission(session.data, 'leads.write');
   const canManage = hasPermission(session.data, 'crm.manage');
+  // A seller sees only their own deals (Eric, 14/10): no "Todas", no "Sem dono", no owner filter.
+  const ownOnly = permissionScope(session.data, 'leads.read') !== 'all';
   const pipeline = (LEAD_PIPELINES as readonly string[]).includes(params.get('funil') ?? '')
     ? (params.get('funil') as LeadPipeline)
-    : 'expansao';
+    : defaultPipelineOfRole(session.data?.role);
   const view = (params.get('visao') as View) || 'board';
   const filter = useMemo(() => {
     const next: DealFilter = {};
     for (const key of FILTER_KEYS) {
       const value = params.get(key);
-      if (value) next[key] = value;
+      if (value && !(ownOnly && key === 'owner')) next[key] = value;
     }
     return next;
-  }, [params]);
-  const tab =
+  }, [params, ownOnly]);
+  const asked =
     params.get('aba') ?? (filter.mine ? 'mine' : filter.owner === NO_OWNER ? 'unowned' : 'all');
+  const tab = ownOnly && (asked === 'all' || asked === 'unowned') ? 'mine' : asked;
 
   const update = (patch: Record<string, string | undefined>) => {
     const next = new URLSearchParams(params);
@@ -134,7 +138,7 @@ export function DealsPage() {
   const saveView = useSaveView();
   const deleteView = useDeleteView();
   const myViews = (views.data?.views ?? []).filter((item) => item.pipeline === pipeline);
-  const sellers = useSellers();
+  const sellers = useSellers(!ownOnly);
   const brands = useBrands();
   const counters = useDealCounters(pipeline);
   // The counters only count what entered since the start of use; the tooltip says which day.
@@ -294,13 +298,15 @@ export function DealsPage() {
       </header>
 
       <nav className="crm-tabs" aria-label="Visões">
-        <button
-          type="button"
-          className={`crm-tab${tab === 'all' ? ' is-active' : ''}`}
-          onClick={() => applyTab('all')}
-        >
-          Todas
-        </button>
+        {!ownOnly && (
+          <button
+            type="button"
+            className={`crm-tab${tab === 'all' ? ' is-active' : ''}`}
+            onClick={() => applyTab('all')}
+          >
+            Todas
+          </button>
+        )}
         <button
           type="button"
           className={`crm-tab${tab === 'mine' ? ' is-active' : ''}`}
@@ -308,14 +314,16 @@ export function DealsPage() {
         >
           Minhas
         </button>
-        <button
-          type="button"
-          className={`crm-tab${tab === 'unowned' ? ' is-active' : ''}`}
-          onClick={() => applyTab('unowned')}
-          title="Negociações sem vendedor, como as que vieram do RD sem dono"
-        >
-          {NO_OWNER_LABEL}
-        </button>
+        {!ownOnly && (
+          <button
+            type="button"
+            className={`crm-tab${tab === 'unowned' ? ' is-active' : ''}`}
+            onClick={() => applyTab('unowned')}
+            title="Negociações sem vendedor, como as que vieram do RD sem dono"
+          >
+            {NO_OWNER_LABEL}
+          </button>
+        )}
 
         {myViews.map((saved) => (
           <button
@@ -391,6 +399,7 @@ export function DealsPage() {
         advanced={advanced}
         onAdvanced={() => setAdvanced((open) => !open)}
         sellers={(sellers.data?.sellers ?? []).filter((seller) => seller.active)}
+        ownOnly={ownOnly}
         brands={brands.data?.brands ?? []}
         activeFilters={activeFilters}
       />
@@ -440,6 +449,7 @@ function Filters({
   advanced,
   onAdvanced,
   sellers,
+  ownOnly,
   brands,
   activeFilters,
 }: {
@@ -450,6 +460,7 @@ function Filters({
   advanced: boolean;
   onAdvanced: () => void;
   sellers: { id: string; name: string }[];
+  ownOnly: boolean;
   brands: { clientId: string; name: string }[];
   activeFilters: number;
 }) {
@@ -470,21 +481,23 @@ function Filters({
             timer.current = window.setTimeout(() => set('q', event.target.value), 300);
           }}
         />
-        <select
-          className={cls('owner', 'crm-select')}
-          aria-label="Dono"
-          value={filter.owner ?? ''}
-          onChange={(e) => set('owner', e.target.value)}
-        >
-          <option value="">Dono: todos</option>
-          <option value={NO_OWNER}>{NO_OWNER_LABEL}</option>
-          <option value={INACTIVE_OWNER}>{INACTIVE_OWNER_LABEL}</option>
-          {sellers.map((seller) => (
-            <option key={seller.id} value={seller.id}>
-              {seller.name}
-            </option>
-          ))}
-        </select>
+        {!ownOnly && (
+          <select
+            className={cls('owner', 'crm-select')}
+            aria-label="Dono"
+            value={filter.owner ?? ''}
+            onChange={(e) => set('owner', e.target.value)}
+          >
+            <option value="">Dono: todos</option>
+            <option value={NO_OWNER}>{NO_OWNER_LABEL}</option>
+            <option value={INACTIVE_OWNER}>{INACTIVE_OWNER_LABEL}</option>
+            {sellers.map((seller) => (
+              <option key={seller.id} value={seller.id}>
+                {seller.name}
+              </option>
+            ))}
+          </select>
+        )}
         <select
           className={cls('outcome', 'crm-select')}
           aria-label="Situação"

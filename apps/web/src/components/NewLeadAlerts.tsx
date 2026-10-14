@@ -10,7 +10,9 @@ import {
   pageIsAway,
   playNewLeadSound,
   readDismissed,
+  readEarlierHidden,
   saveDismissed,
+  saveEarlierHidden,
   showNewLeadNotification,
 } from '../lib/new-lead-alert.js';
 import { Icon } from './Icon.js';
@@ -21,7 +23,9 @@ import { Icon } from './Icon.js';
  * top. Only the lead's owner is ever sent one — the API decides, this just shows what it sent. A lead
  * that arrives while the tab is open also plays a short sound, and a system notification when the page
  * is away and the person allowed it. "Depois" puts it off in this browser; the notice stays unread in the
- * bell until the person opens the deal.
+ * bell until the person opens the deal. Only a lead of the last two hours pops up (the API decides);
+ * the ones from before — a night, a weekend — are a single line, "N leads chegaram antes", put off for
+ * the day unless more pile up.
  */
 
 const MAX_VISIBLE = 4;
@@ -41,6 +45,7 @@ export function NewLeadAlerts() {
   const navigate = useNavigate();
   const [dismissed, setDismissed] = useState(readDismissed);
   const [permission, setPermission] = useState(notificationPermission);
+  const [earlierHidden, setEarlierHidden] = useState(readEarlierHidden);
   /** The notices already seen by this tab; null until the first answer, which is never announced. */
   const seen = useRef<Set<string> | null>(null);
   const dismissedNow = useRef(dismissed);
@@ -76,7 +81,13 @@ export function NewLeadAlerts() {
   };
 
   const pending = (popups.data?.leads ?? []).filter((lead) => !dismissed.has(lead.noticeId));
-  if (!allowed || pending.length === 0) return null;
+  const earlierCount = popups.data?.earlierCount ?? 0;
+  const showEarlier = earlierCount > 0 && earlierCount > earlierHidden;
+  const hideEarlier = () => {
+    setEarlierHidden(earlierCount);
+    saveEarlierHidden(earlierCount);
+  };
+  if (!allowed || (pending.length === 0 && !showEarlier)) return null;
   const visible = pending.slice(0, MAX_VISIBLE);
 
   return createPortal(
@@ -121,6 +132,27 @@ export function NewLeadAlerts() {
           + {pending.length - MAX_VISIBLE} lead{pending.length - MAX_VISIBLE === 1 ? '' : 's'} novo
           {pending.length - MAX_VISIBLE === 1 ? '' : 's'} — ver avisos
         </Link>
+      )}
+      {showEarlier && (
+        <article className="crm-lead-pop" aria-label="Leads de antes">
+          <div className="crm-lead-pop-head">
+            <Icon name="bell" size={16} />
+            <span>Leads de antes</span>
+          </div>
+          <p className="crm-lead-pop-earlier">
+            {earlierCount === 1
+              ? '1 lead chegou antes e ainda espera o primeiro contato.'
+              : `${earlierCount} leads chegaram antes e ainda esperam o primeiro contato.`}
+          </p>
+          <div className="crm-lead-pop-actions">
+            <button type="button" className="crm-btn" onClick={hideEarlier}>
+              Depois
+            </button>
+            <Link to="/crm-vendas/avisos" className="crm-btn is-primary" onClick={hideEarlier}>
+              Ver avisos
+            </Link>
+          </div>
+        </article>
       )}
       {permission === 'default' && (
         <button

@@ -5,7 +5,7 @@ import type {
   EmailTemplate,
   EmailTemplateSaveInput,
   LeadPipeline,
-  NewLeadPopup,
+  NewLeadPopups,
   SequenceSaveInput,
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -110,7 +110,7 @@ export function useNotifications() {
 export function useNewLeadPopups(enabled: boolean) {
   return useQuery({
     queryKey: ['crm', 'new-lead-popups'],
-    queryFn: () => api.poll<{ leads: NewLeadPopup[] }>('/crm/notifications/new-leads'),
+    queryFn: () => api.poll<NewLeadPopups>('/crm/notifications/new-leads'),
     enabled,
     refetchInterval: 15_000,
     refetchIntervalInBackground: true,
