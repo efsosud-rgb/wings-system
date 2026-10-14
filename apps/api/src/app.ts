@@ -59,6 +59,7 @@ import {
   type LeadCheckDeps,
 } from './modules/leads/field-checks.js';
 import { probePublicUrl } from './lib/public-probe.js';
+import { createJevClient, installLeadTriage, type JevClient } from './modules/leads/triage.js';
 import { officeRoutes } from './modules/office/routes.js';
 import { roadmapRoutes } from './modules/roadmap/routes.js';
 import { siteRoutes } from './modules/site/routes.js';
@@ -131,6 +132,8 @@ export async function buildApp(deps: {
   registryFetch?: typeof fetch;
   /** Arrival checks of a lead's form fields; tests pass stubs, or get none at all. */
   leadChecks?: Partial<LeadCheckDeps>;
+  /** The Jev of the triage (docs/leads/triagem-jev.md); tests pass a simulated one, or get none. */
+  jev?: JevClient;
   /** Overridable so tests answer Turnstile themselves. */
   captchaFetch?: typeof fetch;
   /** Overridable so tests talk to a simulated WhatsApp Cloud API. */
@@ -194,6 +197,20 @@ export async function buildApp(deps: {
             log,
           },
     );
+  }
+  // Jev triage of what arrives without a funnel (docs/leads/triagem-jev.md): off by default.
+  {
+    const env = deps.env;
+    const log = app.log.child({ module: 'lead-triage' });
+    const now = () => deps.now?.() ?? new Date();
+    const jev =
+      deps.jev ??
+      (env.NODE_ENV !== 'test' && env.LEAD_TRIAGE_ENABLED === 'true' && env.JEV_API_KEY
+        ? createJevClient({ apiKey: env.JEV_API_KEY, log })
+        : null);
+    installLeadTriage(deps.db, jev ? { jev, log, now } : null);
+    if (env.LEAD_TRIAGE_ENABLED === 'true' && !env.JEV_API_KEY)
+      log.warn('LEAD_TRIAGE_ENABLED is true but JEV_API_KEY is unset: triage off');
   }
   // Regras de automação: a deal entering a stage starts that stage's rules.
   // (built per call: in `gmail` mode the sender is the lead's owner, read at send time)

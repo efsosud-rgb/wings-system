@@ -72,8 +72,8 @@ export type CrmStageOrderInput = z.infer<typeof crmStageOrderSchema>;
 
 // --- the lead's work ----------------------------------------------------------------
 
-/** Who or what moved the lead: a person in the Wings System, RD CRM (mirror), the importer or Sofia. */
-export const LEAD_CHANGE_SOURCES = ['wings', 'rd', 'import', 'sofia'] as const;
+/** Who or what moved the lead: a person in the Wings System, RD CRM (mirror), the importer, Sofia or the Jev triage. */
+export const LEAD_CHANGE_SOURCES = ['wings', 'rd', 'import', 'sofia', 'triage'] as const;
 export type LeadChangeSource = (typeof LEAD_CHANGE_SOURCES)[number];
 
 export interface LeadStageHistoryEntry {

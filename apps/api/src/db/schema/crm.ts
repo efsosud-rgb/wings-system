@@ -85,7 +85,7 @@ export const leadStageHistory = pgTable(
     /** Outcome after the change: true won, false lost, null open. */
     won: boolean('won'),
     lostReason: text('lost_reason'),
-    /** A LeadChangeSource: wings | rd | import | sofia. */
+    /** A LeadChangeSource: wings | rd | import | sofia | triage. */
     source: text('source').notNull(),
     actorEmployeeId: uuid('actor_employee_id').references(() => employees.id),
   },

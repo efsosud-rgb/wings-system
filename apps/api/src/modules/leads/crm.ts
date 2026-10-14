@@ -402,7 +402,7 @@ export async function changeLead(db: Database, change: LeadChange): Promise<Lead
     result.ok &&
     result.changed.includes('stage') &&
     stageEntered &&
-    (change.source === 'wings' || change.source === 'sofia')
+    (change.source === 'wings' || change.source === 'sofia' || change.source === 'triage')
   ) {
     await announceStageEntered(result.lead);
   }
@@ -476,7 +476,8 @@ async function changeLeadTx(db: Database, change: LeadChange): Promise<LeadChang
     }
 
     if (changed.length === 0) return { ok: true, lead, changed };
-    if (change.source === 'wings' || change.source === 'sofia') patch.managedBy = 'wings';
+    if (change.source === 'wings' || change.source === 'sofia' || change.source === 'triage')
+      patch.managedBy = 'wings';
 
     const [updated] = await tx.update(leads).set(patch).where(eq(leads.id, lead.id)).returning();
     if (!updated) throw new Error('lead update returned no row');

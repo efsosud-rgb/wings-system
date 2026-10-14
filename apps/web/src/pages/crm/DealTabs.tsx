@@ -166,7 +166,9 @@ export function entriesOf(data: LoadedLead): Entry[] {
             ? 'Importação'
             : item.source === 'sofia'
               ? 'Sofia'
-              : null),
+              : item.source === 'triage'
+                ? 'Triagem (Jev)'
+                : null),
     });
   const skip = new Set([
     'lead.note_added',
