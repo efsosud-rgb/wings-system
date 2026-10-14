@@ -148,7 +148,13 @@ describe('what may be sent about a lead', () => {
       expect(researchInputOf(LEAD_ID, {}, null, email), email).toBeNull();
     }
     // A company whose name only starts like one of them keeps its domain.
-    for (const company of ['oiferragens.com.br', 'webdesign.com.br', 'popular.com.br']) {
+    for (const company of [
+      'oiferragens.com.br',
+      'webdesign.com.br',
+      'popular.com.br',
+      'mail.empresa.com.br',
+      'r7.ind.br',
+    ]) {
       expect(corporateEmailDomainOf(`contato@${company}`)).toBe(company);
     }
   });

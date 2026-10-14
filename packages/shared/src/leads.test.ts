@@ -6,7 +6,9 @@ import {
   enrichmentSummaryOf,
   expansionAreaSchema,
   franchiseeScoreOf,
+  arrivedFromResearchCutoff,
   generateTrackingCode,
+  isFreeMailDomain,
   isLegacyWebResearch,
   landingPageKeysOf,
   matchSourceRule,
@@ -303,10 +305,75 @@ describe('research stored before each value named its page', () => {
       ),
     ).toBe(false);
     expect(isLegacyWebResearch(research({ sources: [] }))).toBe(false);
+    // Every value was "sem dado" already: the dashes are the model's own, nothing to recover.
+    expect(
+      isLegacyWebResearch(
+        research({
+          fields: [
+            { key: 'activity', value: null, reason: 'Nenhuma página fala disso' },
+            { key: 'size', value: null, reason: 'As páginas encontradas não dizem isso' },
+          ],
+        }),
+      ),
+    ).toBe(false);
     expect(isLegacyWebResearch(research({ fields: [] }))).toBe(false);
     for (const status of ['skipped', 'refused', 'failed'] as const)
       expect(isLegacyWebResearch(research({ status })), status).toBe(false);
     expect(isLegacyWebResearch(null)).toBe(false);
     expect(isLegacyWebResearch(undefined)).toBe(false);
+  });
+});
+
+describe('the free-mail rule', () => {
+  it('knows the exact domains and the brands under any plain ending, never a company domain that only starts like one', () => {
+    for (const domain of [
+      'gmail.com',
+      'yahoo.com.ar',
+      'yahoo.co.uk',
+      'outlook.pt',
+      'hotmail.es',
+      'live.com.mx',
+      'ibest.com.ar',
+      'sapo.cv',
+      'qq.com.cn',
+      'fastmail.fm',
+      'proton.me',
+      'oi.com.br',
+      'pop.com.br',
+    ])
+      expect(isFreeMailDomain(domain), domain).toBe(true);
+    for (const domain of [
+      'mail.empresa.com.br',
+      'r7.ind.br',
+      'sapo-tintas.com.br',
+      'live.empresa.com',
+      'oiferragens.com.br',
+      'webdesign.com.br',
+      'acai.com.br',
+    ])
+      expect(isFreeMailDomain(domain), domain).toBe(false);
+  });
+
+  it('is what tells a personal e-mail from a corporate one, so the score and the domain search agree with the research', () => {
+    expect(emailDomainOf('ana@ibest.com.ar')?.kind).toBe('personal');
+    expect(emailDomainOf('ana@yahoo.com.ar')?.kind).toBe('personal');
+    expect(emailDomainOf('ana@mail.empresa.com.br')?.kind).toBe('corporate');
+  });
+});
+
+describe('the research cut-off', () => {
+  it('takes a lead from 00:00 of the day in São Paulo, by the earlier of its creation and its entry', () => {
+    const at = (iso: string, entered: string | null = iso) => ({
+      createdAt: iso,
+      enteredAt: entered,
+    });
+    expect(arrivedFromResearchCutoff(at('2026-10-14T03:00:00.000Z'))).toBe(true);
+    expect(arrivedFromResearchCutoff(at('2026-10-14T02:59:00.000Z'))).toBe(false);
+    // Created today, but the deal first arrived in September: old.
+    expect(
+      arrivedFromResearchCutoff(at('2026-10-14T15:00:00.000Z', '2026-09-20T12:00:00.000Z')),
+    ).toBe(false);
+    expect(arrivedFromResearchCutoff({ createdAt: '2026-10-14T15:00:00.000Z' })).toBe(true);
+    expect(arrivedFromResearchCutoff(at('2026-10-14T15:00:00.000Z'), '2026-10-15')).toBe(false);
   });
 });

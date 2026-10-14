@@ -1,4 +1,10 @@
-import { AGENT_MODELS, JOB_TYPES, JOB_TYPES_IMPLEMENTED, type JobType } from '@wings/shared';
+import {
+  AGENT_MODELS,
+  JOB_TYPES,
+  JOB_TYPES_IMPLEMENTED,
+  LEAD_RESEARCH_DEFAULT_SINCE,
+  type JobType,
+} from '@wings/shared';
 import { z } from 'zod';
 
 const requiredString = z.string().trim().min(1);
@@ -103,7 +109,7 @@ const schema = z.object({
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/, 'must be YYYY-MM-DD')
       .refine(isRealDay, 'not a real calendar day')
-      .default('2026-10-14'),
+      .default(LEAD_RESEARCH_DEFAULT_SINCE),
   ),
 });
 

@@ -1,5 +1,7 @@
 import {
+  LEAD_RESEARCH_DEFAULT_SINCE,
   WEB_RESEARCH_FIELD_LABELS,
+  arrivedFromResearchCutoff,
   isLegacyWebResearch,
   type Lead,
   type WebResearchField,
@@ -58,12 +60,12 @@ function backingSource(
  */
 export function CompanyResearchPanel({
   research,
-  leadId,
+  lead,
   canWrite = false,
 }: {
   research: Lead['research'];
   /** With `canWrite`, lets the person ask for the research again when it is in the old format. */
-  leadId?: string;
+  lead?: Pick<Lead, 'id' | 'createdAt' | 'enteredAt'>;
   canWrite?: boolean;
 }) {
   const web = research.facts?.webResearch ?? null;
@@ -128,13 +130,16 @@ export function CompanyResearchPanel({
           ) : null}
           <p className="crm-sub">
             Pesquisado em {formatDateTime(web.at)}.{' '}
-            {web.sources.length > 0
-              ? 'Resumo automático por IA, só do que as páginas dizem; cada dado mostra a página de onde veio. Confira antes de usar.'
-              : 'A busca não trouxe páginas para confirmar; nada foi guardado.'}
+            {web.sources.length === 0
+              ? 'A busca não trouxe páginas para confirmar; nada foi guardado.'
+              : legacy
+                ? 'Resumo automático por IA, só do que as páginas dizem. Confira antes de usar.'
+                : 'Resumo automático por IA, só do que as páginas dizem; cada dado mostra a página de onde veio. Confira antes de usar.'}
           </p>
           {legacy ? (
             <RedoResearch
-              leadId={canWrite ? leadId : undefined}
+              lead={lead}
+              canWrite={canWrite}
               waiting={research.state === 'pending' || research.state === 'running'}
             />
           ) : null}
@@ -148,28 +153,48 @@ export function CompanyResearchPanel({
   );
 }
 
+/** dd/mm/aaaa of a YYYY-MM-DD day. */
+const dayText = (day: string) => day.split('-').reverse().join('/');
+
 /**
  * A research stored before each value named its page shows "—" for every value, and the pages it
  * kept do not say which one backs which. Asking again is the only way to get the pages; it is a
- * new paid search (about US$ 0,01) that replaces this one, so it is a click, not automatic.
+ * new paid search (about US$ 0,01) that replaces this one, so it is a click, not automatic. It is
+ * offered only where the worker will take it: a lead that arrived before the research cut-off is
+ * not researched again, so the page says so instead of offering a click that changes nothing.
  */
-function RedoResearch({ leadId, waiting }: { leadId: string | undefined; waiting: boolean }) {
+function RedoResearch({
+  lead,
+  canWrite,
+  waiting,
+}: {
+  lead: Pick<Lead, 'id' | 'createdAt' | 'enteredAt'> | undefined;
+  canWrite: boolean;
+  waiting: boolean;
+}) {
   const redo = useResearchLead();
+  const inside = lead ? arrivedFromResearchCutoff(lead) : false;
   return (
     <div className="crm-sub" role="group" aria-label="Refazer a pesquisa">
       <p>
         Esta pesquisa é anterior à fonte por dado: as páginas foram guardadas, mas não se sabe qual
         delas sustenta cada valor. Por isso eles aparecem como “—”.
       </p>
-      {leadId ? (
+      {lead && !inside ? (
+        <p>
+          Este lead chegou antes de {dayText(LEAD_RESEARCH_DEFAULT_SINCE)}: a pesquisa só roda para
+          leads que chegaram a partir dessa data, então ela não pode ser refeita.
+        </p>
+      ) : null}
+      {lead && inside && canWrite ? (
         <>
           <button
             type="button"
             className="crm-btn"
-            disabled={waiting || redo.isPending || redo.isSuccess}
-            onClick={() => redo.mutate(leadId)}
+            disabled={waiting || redo.isPending}
+            onClick={() => redo.mutate(lead.id)}
           >
-            {waiting || redo.isSuccess
+            {waiting || redo.isPending
               ? 'Pesquisa na fila…'
               : 'Pesquisar de novo (cerca de US$ 0,01)'}
           </button>{' '}

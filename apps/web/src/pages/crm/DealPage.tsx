@@ -181,7 +181,7 @@ export function DealPage() {
             <FormFieldsPanel lead={data.lead} canWrite={canWrite} />
             <CompanyResearchPanel
               research={data.lead.research}
-              leadId={data.lead.id}
+              lead={data.lead}
               canWrite={canWrite}
             />
             <ContactPanel data={data} canWrite={canWrite} ref={contacts} />

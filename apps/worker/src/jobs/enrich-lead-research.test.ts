@@ -5,6 +5,7 @@ import {
   type LeadResearchFinding,
   type LeadResearchInput,
   type LeadResearchProvider,
+  type WebSearch,
 } from '../lib/enrichment.js';
 import { baseContext } from '../test/context.js';
 import { createTestDatabase, type TestDatabase } from '../test/db.js';
@@ -33,7 +34,7 @@ const CNPJ = '11.222.333/0001-81';
 const SOURCE_URL = 'https://acai.example.com.br/sobre';
 
 const FINDING: LeadResearchFinding = {
-  // As the provider writes them since 14/10 17:26 UTC: every field names its page, or null.
+  // As the provider writes them since the per-field sources: every field names its page, or null.
   fields: [
     { key: 'activity', value: 'Rede de açaí', reason: null, sourceUrl: SOURCE_URL },
     { key: 'location', value: 'Campinas/SP', reason: null, sourceUrl: SOURCE_URL },
@@ -472,6 +473,100 @@ describe('the company research step of enrich_lead', () => {
         status: 'skipped',
         detail: { reason: 'already_done' },
       });
+    });
+
+    it('asks again for the research only: the paid searches are not repeated and what the first run found stays', async () => {
+      const links = [
+        { kind: 'linkedin', url: 'https://www.linkedin.com/in/ana-souza', title: 'Ana Souza', snippet: 'x' },
+      ];
+      const company = { cnpj: '11222333000181', name: 'Açaí da Fila' };
+      const leadId = await oldFormatLead({
+        enrichment_facts: JSON.stringify({
+          links,
+          company,
+          searches: 2,
+          webResearch: LEGACY,
+        }),
+      });
+      const queries: string[] = [];
+      const search: WebSearch = {
+        search: async (query) => {
+          queries.push(query);
+          return [];
+        },
+      };
+      const { provider, inputs } = fakeProvider();
+      const job = await insertJob(leadId);
+      const output = (await runEnrichLeadJob(
+        job,
+        baseContext({
+          db: database.pool,
+          enrichment: {
+            zapi: null,
+            search,
+            cnpj: { lookup: async () => null },
+            budget: { dailyUsd: 2, searchUsdPerQuery: 0.005, researchDailyUsd: 1 },
+            research: provider,
+            researchSince: SINCE,
+          },
+        }),
+      )) as EnrichLeadOutput;
+
+      expect(inputs).toHaveLength(1);
+      expect(queries).toEqual([]);
+      expect(output.steps).toMatchObject({
+        web_search: 'skipped',
+        brasilapi_cnpj: 'skipped',
+        web_research: 'done',
+      });
+      const facts = (await leadRow(leadId)).enrichment_facts as {
+        links: unknown;
+        company: unknown;
+        searches: number;
+      };
+      expect(facts.links).toEqual(links);
+      expect(facts.company).toEqual(company);
+      expect(facts.searches).toBe(2);
+      expect((await ledger(leadId)).map((row) => row.step)).toEqual(['ai_research', 'ai_research']);
+
+      // The same search client on a lead that is not a redo still searches: only the redo is spared.
+      const fresh = await companyLead({ created_at: new Date('2026-10-14T12:00:00Z') });
+      await runEnrichLeadJob(
+        await insertJob(fresh),
+        baseContext({
+          db: database.pool,
+          enrichment: {
+            zapi: null,
+            search,
+            cnpj: { lookup: async () => null },
+            budget: { dailyUsd: 2, searchUsdPerQuery: 0.005, researchDailyUsd: 1 },
+            research: provider,
+            researchSince: SINCE,
+          },
+        }),
+      );
+      expect(queries.length).toBeGreaterThan(0);
+    });
+
+    it('is not replaced by a redo whose search brought no page: the old values and pages stay, the call is still settled', async () => {
+      const leadId = await oldFormatLead();
+      const noPages: LeadResearchFinding = {
+        ...FINDING,
+        sources: [],
+        fields: FINDING.fields.map((field) => ({
+          ...field,
+          value: null,
+          reason: 'A busca não trouxe páginas para confirmar',
+          sourceUrl: null,
+        })),
+      };
+      const { provider, inputs } = fakeProvider({ finding: noPages });
+      const output = await run(leadId, provider, 1, SINCE);
+      expect(inputs).toHaveLength(1);
+      expect(output.steps.web_research).toBe('skipped');
+      expect(await researchOf(leadId)).toEqual(LEGACY);
+      // The call was made and paid: reservation and settlement are both in the ledger.
+      expect((await ledger(leadId)).map((row) => row.status)).toEqual(['started', 'done']);
     });
 
     it('stays as it is for a lead from before the cut-off: no call, no overwrite, and the ledger says why', async () => {
