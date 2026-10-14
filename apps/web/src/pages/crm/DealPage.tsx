@@ -29,6 +29,7 @@ import {
 } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../../api/auth.js';
+import { CompanyLink } from '../../components/CompanyLink.js';
 import { ApiError } from '../../api/client.js';
 import {
   useAddActivity,
@@ -484,7 +485,7 @@ function ForecastEdit({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
 
 /** The owner: a select for who assigns, a name for everyone else. */
 function OwnerEdit({ lead, canAssign }: { lead: Lead; canAssign: boolean }) {
-  const sellers = useSellers();
+  const sellers = useSellers(canAssign);
   const update = useUpdateLead(lead.id);
   if (!canAssign) return <b>{lead.work.ownerName ?? '—'}</b>;
   return (
@@ -1033,7 +1034,7 @@ function CompanyEdit({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
   return (
     <span className="crm-about-company">
       {lead.company ? (
-        <Link to={`/crm-vendas/empresas/${lead.company.id}`}>{lead.company.name}</Link>
+        <CompanyLink id={lead.company.id}>{lead.company.name}</CompanyLink>
       ) : (
         <span className="crm-muted">Nenhuma</span>
       )}
@@ -1842,7 +1843,7 @@ function AssociationCards({
       >
         {lead.company && (
           <div className="crm-assoc-row">
-            <Link to={`/crm-vendas/empresas/${lead.company.id}`}>{lead.company.name}</Link>
+            <CompanyLink id={lead.company.id}>{lead.company.name}</CompanyLink>
             {lead.company.clientId && <span className="crm-sub">já é cliente</span>}
           </div>
         )}

@@ -189,28 +189,76 @@ describe('menu by access level', () => {
       ]),
     );
 
-  it('gives a Vendedor Expansão the CRM of their own leads and little else', () => {
+  // Eric, 14/10: a seller's whole menu is CRM Vendas. No Empresas, Landing pages, Drive, Dashboard
+  // or Gestão; Painel de Vendas and Projetos sit inside the CRM for them.
+  it('gives a Vendedor Expansão only the CRM of their own leads', () => {
     expect(menuOf('vendedor_expansao')).toEqual({
       inicio: ['/inicio'],
       'crm-vendas': [
         '/crm-vendas/negociacoes',
         '/crm-vendas/whatsapp',
         '/crm-vendas/contatos',
-        '/crm-vendas/empresas',
         '/crm-vendas/tarefas',
         '/crm-vendas/avisos',
-        '/crm-vendas/landing-pages',
+        '/crm-vendas/painel-de-vendas',
+        '/crm-vendas/projetos',
       ],
-      dashboard: ['/dashboard/vendas'],
-      gestao: ['/gestao/projetos'],
-      drive: ['/drive/arquivos'],
     });
   });
 
-  it('adds Leads das Campanhas for a Vendedor Formatação, and nothing more', () => {
-    const menu = menuOf('vendedor_formatacao');
-    expect(menu.dashboard).toEqual(['/dashboard/vendas', '/dashboard/leads-campanhas']);
-    expect(Object.keys(menu)).toEqual(['inicio', 'crm-vendas', 'dashboard', 'gestao', 'drive']);
+  it('adds Leads das Campanhas inside the CRM for a Vendedor Formatação, and nothing more', () => {
+    expect(menuOf('vendedor_formatacao')).toEqual({
+      inicio: ['/inicio'],
+      'crm-vendas': [
+        '/crm-vendas/negociacoes',
+        '/crm-vendas/whatsapp',
+        '/crm-vendas/contatos',
+        '/crm-vendas/tarefas',
+        '/crm-vendas/avisos',
+        '/crm-vendas/painel-de-vendas',
+        '/crm-vendas/projetos',
+        '/crm-vendas/leads-campanhas',
+      ],
+    });
+  });
+
+  it("closes a seller's typed address outside the CRM, though the level holds its permission", () => {
+    const seller = asRole('vendedor_formatacao');
+    for (const path of ['/dashboard/vendas', '/dashboard/leads-campanhas', '/gestao/projetos']) {
+      const screen = ALL_SUBMODULES.find((s) => s.path === path)!;
+      expect(canSeeSubmodule(seller, screen), path).toBe(false);
+    }
+  });
+
+  it('keeps the CRM copies to the sellers: every other level sees the screens where they were', () => {
+    const copies = [
+      '/crm-vendas/painel-de-vendas',
+      '/crm-vendas/projetos',
+      '/crm-vendas/leads-campanhas',
+    ];
+    for (const role of ROLE_KEYS) {
+      const seen = Object.values(menuOf(role)).flat();
+      const seller = role === 'vendedor_expansao' || role === 'vendedor_formatacao';
+      expect(
+        seen.some((path) => copies.includes(path)),
+        role,
+      ).toBe(seller);
+    }
+    expect(menuOf('gerente_comercial').dashboard).toEqual([
+      '/dashboard/vendas',
+      '/dashboard/leads-campanhas',
+    ]);
+    expect(menuOf('gerente_comercial')['crm-vendas']).toEqual([
+      '/crm-vendas/negociacoes',
+      '/crm-vendas/whatsapp',
+      '/crm-vendas/contatos',
+      '/crm-vendas/empresas',
+      '/crm-vendas/tarefas',
+      '/crm-vendas/avisos',
+      '/crm-vendas/configuracoes',
+      '/crm-vendas/landing-pages',
+      '/crm-vendas/sofia',
+    ]);
   });
 
   it('keeps the Sofia screen to Gerente Comercial, Diretoria and Admin Master', () => {

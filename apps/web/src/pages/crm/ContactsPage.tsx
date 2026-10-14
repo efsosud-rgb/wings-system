@@ -2,6 +2,7 @@ import { LEAD_PIPELINE_LABELS, type CrmContact, type CrmRelatedLead } from '@win
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../../api/auth.js';
+import { CompanyLink } from '../../components/CompanyLink.js';
 import { ApiError } from '../../api/client.js';
 import {
   useContact,
@@ -255,9 +256,7 @@ function ContactList() {
                     <td>{contact.email ?? '—'}</td>
                     <td>
                       {contact.companyId ? (
-                        <Link to={`/crm-vendas/empresas/${contact.companyId}`}>
-                          {contact.companyName}
-                        </Link>
+                        <CompanyLink id={contact.companyId}>{contact.companyName}</CompanyLink>
                       ) : (
                         '—'
                       )}
@@ -439,9 +438,7 @@ function ContactRecord({ id }: { id: string }) {
               <dt>Empresa</dt>
               <dd>
                 {contact.companyId ? (
-                  <Link to={`/crm-vendas/empresas/${contact.companyId}`}>
-                    {contact.companyName}
-                  </Link>
+                  <CompanyLink id={contact.companyId}>{contact.companyName}</CompanyLink>
                 ) : (
                   '—'
                 )}

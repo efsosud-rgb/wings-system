@@ -303,6 +303,19 @@ describe('the sync with only the Wings leads (no RD token)', () => {
     const other = (await createEmployee(db, { role: 'vendedor_formatacao' })).id;
     expect(await visibleCampaignLeads(db, other)).toEqual([]);
   });
+
+  // Eric, 14/10: the owner column is the last sync's copy; the deal decides now.
+  it("drops a row from the seller's list once the deal is someone else's, or nobody's", async () => {
+    const listsL1 = async () =>
+      (await visibleCampaignLeads(db, ownerId)).some((row) => row.leadId === ids.l1);
+    const other = (await createEmployee(db, { role: 'vendedor_formatacao' })).id;
+    await db.update(leads).set({ ownerEmployeeId: other }).where(eq(leads.id, ids.l1!));
+    expect(await listsL1()).toBe(false);
+    await db.update(leads).set({ ownerEmployeeId: null }).where(eq(leads.id, ids.l1!));
+    expect(await listsL1()).toBe(false);
+    await db.update(leads).set({ ownerEmployeeId: ownerId }).where(eq(leads.id, ids.l1!));
+    expect(await listsL1()).toBe(true);
+  });
 });
 
 describe('the sync with RD', () => {

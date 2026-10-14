@@ -22,6 +22,8 @@ export const PERMISSIONS = {
   'leads.write': 'Criar e editar leads',
   'leads.assign': 'Atribuir e redistribuir leads entre vendedores',
   'leads.whatsapp': 'Conversar e ligar pelo WhatsApp do sistema (ver, enviar e ligar)',
+  'companies.read': 'Ver a tela de Empresas do CRM, com o cadastro de cada empresa',
+  'landing_pages.read': 'Ver as landing pages de cada cliente e funil no CRM',
   'crm.manage': 'Configurar as etapas do funil e a distribuição de leads',
   'sofia.manage': 'Ligar e desligar a Sofia e editar as perguntas e mensagens dela',
   'sofia.read': 'Ver a tela da Sofia com todas as conversas do WhatsApp',
@@ -98,12 +100,27 @@ const CLIENT_RECORD: RolePermissions = { 'clients.read': 'all', 'clients.edit': 
 const CLIENT_RECORD_LEGAL: RolePermissions = { ...CLIENT_RECORD, 'clients.sensitive': 'all' };
 
 /**
+ * The CRM screens that list the whole base: Empresas and Landing pages. For the levels that see
+ * every lead; the sellers' CRM is their own deals, contacts and conversations (Eric, 14/10).
+ */
+const CRM_FULL_SCREENS: RolePermissions = {
+  'companies.read': 'all',
+  'landing_pages.read': 'all',
+};
+
+/**
  * Everyone who is not a manager: their own time clock and their department's
  * Drive. No employee register (Eric, 13/10): Usuários e acessos is for Admin
  * Master, Diretoria, RH/DP, the Gerente Comercial and whoever carries the
  * sector-manager flag (`SECTOR_MANAGER_GRANTS`).
  */
 const SECTOR_STAFF: RolePermissions = { 'timeclock.read': 'own', ...DRIVE_STAFF };
+
+/**
+ * The sellers: their own time clock and no Drive (Eric, 14/10). `DRIVE_ROLE_DEPARTMENTS` still
+ * names Comercial for them, because that is what lets them update stage 07 of a project.
+ */
+const SELLER_STAFF: RolePermissions = { 'timeclock.read': 'own' };
 
 /**
  * The permission matrix. Anything not listed here is denied by default.
@@ -119,6 +136,7 @@ const SECTOR_STAFF: RolePermissions = { 'timeclock.read': 'own', ...DRIVE_STAFF 
 export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   admin_master: {
     'meetings.approve_send': 'all',
+    ...CRM_FULL_SCREENS,
     ...DRIVE_ALL,
     ...PROJECT_ALL,
     // The one connection to Kairogen belongs to the system: only an Admin Master makes it.
@@ -168,6 +186,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   },
   diretoria: {
     'meetings.approve_send': 'all',
+    ...CRM_FULL_SCREENS,
     ...DRIVE_ALL,
     ...PROJECT_ALL,
     ...CLIENT_RECORD_LEGAL,
@@ -211,6 +230,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   },
   gerente_comercial: {
     'meetings.approve_send': 'all',
+    ...CRM_FULL_SCREENS,
     ...DRIVE_STAFF,
     ...PROJECT_STAFF,
     'employees.read': 'sector',
@@ -253,8 +273,10 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   // No stage of the client belongs to Logística or TI: they read the board only.
   formatacao_logistica: { ...SECTOR_STAFF, ...PROJECT_READ },
   formatacao_ti: { ...SECTOR_STAFF, ...PROJECT_READ },
+  // The sellers' menu is CRM Vendas alone (Eric, 14/10): no Drive, no Empresas, no Landing pages.
+  // They still open, send and remove the files of their own deals, through the deal's own routes.
   vendedor_expansao: {
-    ...SECTOR_STAFF,
+    ...SELLER_STAFF,
     ...PROJECT_STAFF,
     'leads.read': 'own',
     'leads.write': 'own',
@@ -262,7 +284,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
   },
   // Leads das Campanhas: only the leads RD assigns to them.
   vendedor_formatacao: {
-    ...SECTOR_STAFF,
+    ...SELLER_STAFF,
     ...PROJECT_STAFF,
     'leads.read': 'own',
     'leads.write': 'own',

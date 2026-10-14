@@ -181,11 +181,12 @@ async function freeSlug(db: Database, wanted: string): Promise<string> {
 
 export const landingPageRoutes: FastifyPluginAsync = async (app) => {
   const { db } = app.wings;
-  const read = { preHandler: app.requirePermission('leads.read') };
+  const pagesRead = { preHandler: app.requirePermission('landing_pages.read') };
   const manage = { preHandler: app.requirePermission('clients.manage') };
   const idParam = z.object({ id: z.uuid() });
 
-  app.get('/crm/landing-pages', read, async (request, reply) =>
+  // A screen for the levels that see every lead, not for the sellers (Eric, 14/10).
+  app.get('/crm/landing-pages', pagesRead, async (request, reply) =>
     reply.send({
       pages: await listLandingPages(db, leadOwnerFilter(request.session.actor, 'leads.read')),
       baseUrl: LANDING_PAGE_BASE_URL,

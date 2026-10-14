@@ -9,6 +9,7 @@ import {
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useSession } from '../api/auth.js';
+import { useOfficialNumber } from '../api/whatsapp.js';
 import { SidebarLogo } from '../brand/SidebarLogo.js';
 import { Icon } from './Icon.js';
 import { NewLeadAlerts } from './NewLeadAlerts.js';
@@ -103,6 +104,8 @@ export function AppShell() {
   if (!user) return null;
 
   const modules = visibleNavigation({ role: user.role, permissions: user.permissions });
+  const whatsappSeller =
+    Boolean(user.permissions['leads.whatsapp']) && user.permissions['leads.whatsapp'] !== 'all';
   const activeModule = moduleKeyForPath(pathname);
   const isOpen = (key: string) => openModules[key] ?? key === activeModule;
   const toggle = (key: string) =>
@@ -123,6 +126,7 @@ export function AppShell() {
       {/* Marked, not hidden: the structure stays visible and nobody mistakes
           it for a screen that failed to load. */}
       {submodule.status === 'coming_soon' && <span className="soon-badge">em breve</span>}
+      {submodule.path === '/crm-vendas/whatsapp' && whatsappSeller && <WhatsAppSoonBadge />}
     </NavLink>
   );
 
@@ -240,4 +244,10 @@ export function AppShell() {
       </div>
     </div>
   );
+}
+
+/** Eric, 14/10: a seller's WhatsApp says "em breve" until the official number is live. */
+function WhatsAppSoonBadge() {
+  const official = useOfficialNumber();
+  return official.data?.live === true ? null : <span className="soon-badge">em breve</span>;
 }

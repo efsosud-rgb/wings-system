@@ -121,7 +121,8 @@ function FilterBar({
   clear,
   data,
 }: ReturnType<typeof useFilters> & { data: SalesDashboard | undefined }) {
-  const sellers = useSellers();
+  // The team list only where the panel is the team's: a seller is refused it (Eric, 14/10).
+  const sellers = useSellers(data?.scope === 'all');
   const brands = useBrands();
   const own = data?.scope === 'own';
   const brandNames = [

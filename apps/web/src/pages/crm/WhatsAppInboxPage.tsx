@@ -6,9 +6,11 @@ import {
 } from '@wings/shared';
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { hasPermission, useSession } from '../../api/auth.js';
+import { hasPermission, permissionScope, useSession } from '../../api/auth.js';
 import {
   useMarkWhatsAppRead,
+  useOfficialNumber,
+  useSetOfficialNumber,
   useWhatsAppConversation,
   useWhatsAppInbox,
   type WhatsAppInboxFilter,
@@ -69,6 +71,12 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
   const [filter, setFilter] = useState<WhatsAppInboxFilter>('all');
   const [search, setSearch] = useState('');
   const [starting, setStarting] = useState(false);
+  const session = useSession();
+  // Eric, 14/10: until the official number is live, a seller uses the phone's WhatsApp. The
+  // other levels are not affected. Not known yet (loading, failed) is "not live" for a seller.
+  const seller = permissionScope(session.data, 'leads.whatsapp') !== 'all';
+  const official = useOfficialNumber();
+  const soon = seller && official.data?.live !== true;
   const q = useDebounced(search);
   const list = useWhatsAppInbox(filter, q);
   const rows = list.data?.conversations ?? [];
@@ -78,10 +86,25 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
       <aside className="crm-wa-web-list" aria-label="Conversas">
         <header className="crm-wa-web-head">
           <h1>WhatsApp</h1>
-          <button type="button" className="crm-btn is-primary" onClick={() => setStarting(true)}>
+          <button
+            type="button"
+            className="crm-btn is-primary"
+            onClick={() => setStarting(true)}
+            disabled={soon}
+            title={soon ? 'Em breve: depois da troca do número' : undefined}
+          >
             Nova conversa
           </button>
         </header>
+        {soon && (
+          <p className="crm-wa-soon" role="status">
+            <span className="crm-chip">em breve</span> O WhatsApp do sistema começa a funcionar
+            depois da troca do número. Até lá, use o WhatsApp do celular.
+          </p>
+        )}
+        {hasPermission(session.data, 'integrations.manage') && (
+          <OfficialNumberSwitch live={official.data?.live} />
+        )}
         <input
           className="crm-input"
           type="search"
@@ -274,5 +297,31 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
         }
       />
     </div>
+  );
+}
+
+/** The Admin Master's switch: on the day the number is swapped, the sellers' WhatsApp opens. */
+function OfficialNumberSwitch({ live }: { live: boolean | undefined }) {
+  const set = useSetOfficialNumber();
+  if (live === undefined) return null;
+  const next = !live;
+  return (
+    <p className="crm-muted crm-wa-official">
+      Número oficial para os vendedores: <b>{live ? 'ligado' : 'desligado (em breve)'}</b>{' '}
+      <button
+        type="button"
+        className="crm-btn"
+        disabled={set.isPending}
+        onClick={() => {
+          const ask = next
+            ? 'Ligar o WhatsApp do sistema para os vendedores? Faça isso só depois da troca do número.'
+            : 'Voltar o WhatsApp dos vendedores para "em breve"?';
+          if (window.confirm(ask)) set.mutate(next);
+        }}
+      >
+        {next ? 'Ligar' : 'Desligar'}
+      </button>
+      {set.isError && <span className="crm-error"> Não foi possível mudar agora.</span>}
+    </p>
   );
 }

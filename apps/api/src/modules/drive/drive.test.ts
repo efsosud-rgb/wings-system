@@ -351,7 +351,6 @@ describe('who sees what, decided by the server', () => {
     ['formatacao_ti', ['/Formatação/TI']],
     ['rh_dp', ['/Formatação/RH-DP', '/RH-DP', '/RH-DP/Contratos', '/RH-DP/Documentos']],
     ['gerente_comercial', ['/Comercial', '/Comercial/Propostas Comerciais']],
-    ['vendedor_expansao', ['/Comercial', '/Comercial/Propostas Comerciais']],
   ] as [RoleKey, string[]][])('%s works only in its own tree', async (role, expected) => {
     const session = await sessionFor(role);
     const folders = await tree(session);
@@ -384,7 +383,6 @@ describe('who sees what, decided by the server', () => {
     ['formatacao_ti', IMERSAO, []],
     ['rh_dp', IMERSAO, []],
     ['gerente_comercial', ['07', 'entrega_07'], ['07', 'entrega_07']],
-    ['vendedor_expansao', ['07', 'entrega_07'], ['07', 'entrega_07']],
     // Processos e Projetos sees the whole client and runs 01–03, 05 and the client's own folders.
     [
       'formatacao_processos_projetos',
@@ -509,6 +507,10 @@ describe('who sees what, decided by the server', () => {
       (await app.inject({ method: 'POST', url: '/drive/sync', cookies: seller.cookies }))
         .statusCode,
     ).toBe(403);
+    // Eric, 14/10: a seller has no Drive at all; their deals' files open through the deal.
+    expect((await app.inject({ url: '/drive/tree', cookies: seller.cookies })).statusCode).toBe(
+      403,
+    );
   });
 });
 
