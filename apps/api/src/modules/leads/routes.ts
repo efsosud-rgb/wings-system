@@ -272,7 +272,15 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
         });
       }
       const actor = request.session.actor.employeeId;
-      await enqueueResearch(db, row.id, actor);
+      // The check above is only the fast answer; the claim inside enqueueResearch is the one
+      // that holds when two clicks arrive together.
+      const queued = await enqueueResearch(db, row.id, actor);
+      if (!queued) {
+        return reply.status(409).send({
+          error: 'research_in_progress',
+          message: 'A pesquisa deste lead já está na fila. Aguarde ela terminar.',
+        });
+      }
       await writeAudit(db, {
         actorEmployeeId: actor,
         action: 'lead.research_requested',

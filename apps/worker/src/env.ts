@@ -71,7 +71,7 @@ const schema = z.object({
   /**
    * Company research on arrival (docs/leads/pesquisa-da-empresa.md): OpenRouter
    * with a web search of at most 5 results, told only the company's name, site,
-   * Instagram and CNPJ. Off unless LEAD_RESEARCH_ENABLED is "true" AND the key
+   * Instagram and the domain of a corporate e-mail. Off unless LEAD_RESEARCH_ENABLED is "true" AND the key
    * is set (the same OpenRouter account the API uses). It has its own ceiling,
    * apart from ENRICH_DAILY_USD, summed over the ledger per day in São Paulo.
    */
@@ -85,6 +85,18 @@ const schema = z.object({
   LEAD_RESEARCH_DAILY_USD: z.preprocess(emptyAsUnset, z.coerce.number().positive().max(100).default(1)),
   /** What one research is expected to cost (5 web results plus the model); reserved before the call. */
   LEAD_RESEARCH_USD_PER_CALL: z.preprocess(emptyAsUnset, z.coerce.number().positive().max(1).default(0.06)),
+  /**
+   * The research cut-off, a São Paulo day (YYYY-MM-DD): only leads that arrived from 00:00 of
+   * that day on are researched; an older lead that converts again is not.
+   */
+  LEAD_RESEARCH_SINCE: z.preprocess(
+    emptyAsUnset,
+    z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, 'must be YYYY-MM-DD')
+      .refine((value) => !Number.isNaN(new Date(`${value}T03:00:00Z`).getTime()), 'not a date')
+      .default('2026-10-14'),
+  ),
 });
 
 export type Env = z.infer<typeof schema>;
