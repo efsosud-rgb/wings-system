@@ -3,6 +3,7 @@ import {
   emailDomainOf,
   enrichmentSummaryOf,
   franchiseeScoreOf,
+  isLegacyWebResearch,
   regionOfPhone,
   type EnrichmentFacts,
   type ExpansionEntry,
@@ -266,12 +267,18 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
     // Reserved under its own ceiling first, called once, never retried; what the search did not
     // bring stays empty with the reason (docs/leads/pesquisa-da-empresa.md). A result that
     // came back with pages is kept: a re-run (or a switched-off provider) never pays for it again
-    // and never overwrites it with a refusal.
+    // and never overwrites it with a refusal. The one exception is a result in the old format (no
+    // page for its values, so the page shows "—" for every one and nothing can tell which page
+    // backs which): it is asked again, once the provider is on and the lead is inside the cut-off,
+    // and it stays on the lead if that asking is refused, fails or finds no company data.
     const previous = webResearchOf(lead.enrichment_facts);
-    if (previous?.status === 'done' && previous.sources.length > 0) {
-      facts.webResearch = previous;
+    const finished = previous?.status === 'done' && previous.sources.length > 0 ? previous : null;
+    const legacy = isLegacyWebResearch(finished);
+    const redoing = legacy && Boolean(enrichment.research) && !arrivedBefore(lead, enrichment.researchSince);
+    if (finished && !redoing) {
+      facts.webResearch = finished;
       if (enrichment.research) {
-        await writeLedger(db, { leadId, jobId: job.id, step: 'ai_research', status: 'skipped', usdMicro: 0, detail: { reason: 'already_done' } });
+        await writeLedger(db, { leadId, jobId: job.id, step: 'ai_research', status: 'skipped', usdMicro: 0, detail: { reason: legacy ? 'legacy_before_cutoff' : 'already_done' } });
         steps.web_research = 'skipped';
       }
     } else if (enrichment.research && arrivedBefore(lead, enrichment.researchSince)) {
@@ -309,7 +316,7 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
           usdMicro: research.reserveUsdMicro,
           dailyUsd: enrichment.budget.researchDailyUsd,
           now,
-          detail: { provider: research.name },
+          detail: { provider: research.name, ...(redoing ? { redo: 'legacy_format' } : {}) },
         });
         if (!reserved) {
           facts.webResearch = noResearch('refused', at, 'O teto diário da pesquisa foi atingido; nenhuma chamada foi feita');
@@ -351,6 +358,8 @@ export const runEnrichLeadJob: JobHandler = async (job: Job, ctx: JobContext) =>
       // Switched off now: what an earlier run found stays on the lead.
       facts.webResearch = previous;
     }
+    // A redo that did not produce a new result leaves the old one, never a refusal or a failure in its place.
+    if (redoing && finished && steps.web_research !== 'done') facts.webResearch = finished;
 
     // --- score and summary -------------------------------------------------------------
     const area = await db.query<{ expansion_area: unknown }>(`select expansion_area from clients where id = $1`, [lead.client_id]);

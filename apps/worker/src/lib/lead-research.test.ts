@@ -123,6 +123,36 @@ describe('what may be sent about a lead', () => {
     expect(text).not.toContain('@');
   });
 
+  it('knows the free webmails the 14/10 review found missing: a lead with only such an e-mail is not researched as that provider', () => {
+    for (const email of [
+      'ana@oi.com.br',
+      'ana@ibest.com.br',
+      'ana@pop.com.br',
+      'ana@r7.com',
+      'ana@superig.com.br',
+      'ana@pm.me',
+      'ana@fastmail.com',
+      'ana@tutanota.com',
+      'ana@hey.com',
+      'ana@qq.com',
+      'ana@web.de',
+      'ana@sapo.pt',
+      // The names that stay a provider under any country ending.
+      'ana@fastmail.fm',
+      'ana@ibest.com.ar',
+      'ana@sapo.cv',
+      'ana@qq.com.cn',
+    ]) {
+      expect(corporateEmailDomainOf(email), email).toBeNull();
+      // With no other company data there is nothing to search: no call, no cost.
+      expect(researchInputOf(LEAD_ID, {}, null, email), email).toBeNull();
+    }
+    // A company whose name only starts like one of them keeps its domain.
+    for (const company of ['oiferragens.com.br', 'webdesign.com.br', 'popular.com.br']) {
+      expect(corporateEmailDomainOf(`contato@${company}`)).toBe(company);
+    }
+  });
+
   it('drops a value that looks like a person contact and an address that is not public', () => {
     expect(
       researchInputOf(LEAD_ID, {

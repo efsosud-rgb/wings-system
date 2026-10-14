@@ -7,6 +7,7 @@ import {
   expansionAreaSchema,
   franchiseeScoreOf,
   generateTrackingCode,
+  isLegacyWebResearch,
   landingPageKeysOf,
   matchSourceRule,
   normalizeBrazilianPhone,
@@ -16,6 +17,7 @@ import {
   whatsappLinkOf,
   trackedLinkText,
   type EnrichmentFacts,
+  type LeadWebResearch,
 } from './leads.js';
 
 describe('phones and regions', () => {
@@ -35,6 +37,28 @@ describe('phones and regions', () => {
       kind: 'corporate',
     });
     expect(emailDomainOf('not-an-email')).toBeNull();
+  });
+
+  it('knows the free webmails the 14/10 review found missing, so none passes as a company', () => {
+    for (const domain of [
+      'oi.com.br',
+      'ibest.com.br',
+      'pop.com.br',
+      'r7.com',
+      'superig.com.br',
+      'pm.me',
+      'fastmail.com',
+      'tutanota.com',
+      'hey.com',
+      'qq.com',
+      'web.de',
+      'sapo.pt',
+    ]) {
+      expect(emailDomainOf(`ana@${domain}`), domain).toEqual({ domain, kind: 'personal' });
+    }
+    // A company whose name only starts like one of them is still a company.
+    expect(emailDomainOf('ana@oiferragens.com.br')?.kind).toBe('corporate');
+    expect(emailDomainOf('ana@webdesign.com.br')?.kind).toBe('corporate');
   });
 });
 
@@ -234,5 +258,55 @@ describe('the funnel a level opens on', () => {
     for (const role of ['gerente_comercial', 'diretoria', 'admin_master', 'marketing', '', null]) {
       expect(defaultPipelineOfRole(role)).toBe('expansao');
     }
+  });
+});
+
+describe('research stored before each value named its page', () => {
+  const page = { url: 'https://acai.example.com.br/sobre', title: 'Sobre' };
+  const research = (over: Partial<LeadWebResearch>): LeadWebResearch => ({
+    status: 'done',
+    at: '2026-10-14T16:30:00.000Z',
+    reason: null,
+    model: 'anthropic/claude-haiku-4.5',
+    sources: [page],
+    fields: [
+      { key: 'activity', value: 'Rede de açaí', reason: null },
+      { key: 'size', value: null, reason: 'As páginas encontradas não dizem isso' },
+    ],
+    ...over,
+  });
+
+  it('is the finished research whose fields carry no sourceUrl at all', () => {
+    expect(isLegacyWebResearch(research({}))).toBe(true);
+  });
+
+  it('is not one that names a page for its values (or null), nor one with nothing to show', () => {
+    expect(
+      isLegacyWebResearch(
+        research({
+          fields: [
+            { key: 'activity', value: 'Rede de açaí', reason: null, sourceUrl: page.url },
+            { key: 'size', value: null, reason: 'x', sourceUrl: null },
+          ],
+        }),
+      ),
+    ).toBe(false);
+    // One field with the key is enough to say the writer knew about it.
+    expect(
+      isLegacyWebResearch(
+        research({
+          fields: [
+            { key: 'activity', value: 'Rede de açaí', reason: null },
+            { key: 'size', value: null, reason: 'x', sourceUrl: null },
+          ],
+        }),
+      ),
+    ).toBe(false);
+    expect(isLegacyWebResearch(research({ sources: [] }))).toBe(false);
+    expect(isLegacyWebResearch(research({ fields: [] }))).toBe(false);
+    for (const status of ['skipped', 'refused', 'failed'] as const)
+      expect(isLegacyWebResearch(research({ status })), status).toBe(false);
+    expect(isLegacyWebResearch(null)).toBe(false);
+    expect(isLegacyWebResearch(undefined)).toBe(false);
   });
 });

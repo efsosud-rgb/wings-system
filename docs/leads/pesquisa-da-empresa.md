@@ -26,8 +26,12 @@ Domínio do e-mail: <só o que vem depois do @, e só se for corporativo>
   Instagram: o usuário vai como texto para a busca, que pode devolver a página pública do perfil
   como uma das páginas encontradas. Antes de enviar (`researchInputOf`):
   - do e-mail, só o domínio, e só quando é corporativo (`corporateEmailDomainOf`): gmail,
-    hotmail, outlook, live, yahoo, icloud, uol, bol, terra e os outros webmails gratuitos, com
-    qualquer final de país ("yahoo.com.ar"), ficam de fora;
+    hotmail, outlook, live, yahoo, icloud, uol, bol, terra, oi, ibest, pop, r7, superig, sapo,
+    proton/pm.me, fastmail, tutanota, hey, qq, web.de e os outros webmails gratuitos, com
+    qualquer final de país ("yahoo.com.ar"), ficam de fora. A lista exata está em
+    `PERSONAL_EMAIL_DOMAINS` (`packages/shared/src/leads.ts`) e as marcas que seguem webmail em
+    qualquer final, em `FREE_MAIL` (`apps/worker/src/lib/lead-research.ts`). Um lead só com
+    e-mail desses não tem o que pesquisar: nenhuma chamada, nenhum gasto;
   - o nome da empresa e o Instagram são descartados se parecem contato de pessoa: um e-mail
     (também "(at)") ou 8 ou mais dígitos com só separadores entre eles ("(11) 9 1234-5678",
     "123.456.789-09", "11912345678"). O teste roda no texto inteiro, antes de cortar em 120
@@ -56,9 +60,10 @@ presença online. Em `leads.enrichment_facts.webResearch` (sem migração):
   (`sourceOfField`, aceitando outra grafia do mesmo endereço: maiúsculas, "www.", barra no fim) e
   grava o endereço da própria busca. Dado sem página vira `null` com o motivo "Nenhuma das páginas
   encontradas foi indicada como fonte deste dado". A tela mostra cada dado com "Fonte: <site>"
-  (link para a página) e "—" com o motivo para o resto. Pesquisas gravadas antes de 14/10/2026 não
-  têm `sourceUrl`: os valores delas aparecem como "—" ("Sem a página que sustenta este dado").
-  Nada é completado por suposição.
+  (link para a página) e "—" com o motivo para o resto. Pesquisas gravadas antes de 14/10/2026
+  17:26 UTC não têm `sourceUrl`: os valores delas aparecem como "—" ("Sem a página que sustenta
+  este dado"). Nada é completado por suposição. **Essas podem ser refeitas** (ver "Rodar de novo
+  não paga de novo").
 - **`sources`**: as páginas que **a própria busca** devolveu (anotações `url_citation` da
   resposta), no máximo 5, só http/https, sem usuário/senha, sem repetição. O modelo não escreve
   links. **Sem nenhuma página, todos os valores são descartados** ("A busca não trouxe páginas
@@ -104,16 +109,30 @@ mesma transação: dois pedidos ao mesmo tempo criam **um** trabalho; o outro re
 troca o resultado por uma recusa ou falha. O mesmo vale com o provedor desligado. Só um resultado
 sem páginas, `refused`, `failed` ou `skipped` é tentado de novo.
 
+**A exceção: o formato antigo.** Um `done` com páginas mas **sem `sourceUrl` em nenhum campo**
+(`isLegacyWebResearch`, em `packages/shared`; as pesquisas feitas até 14/10/2026 17:26 UTC) mostra "—"
+em tudo, e nada diz qual página sustenta qual valor: só perguntar de novo resolve. A ficha
+mostra, nele, uma explicação e o botão **"Pesquisar de novo (cerca de US$ 0,01)"** (quem tem
+`leads.write`; o preço está no botão porque é uma nova pesquisa paga, não automática). O worker
+refaz **uma vez**, e só com o provedor ligado e o lead **de 14/10 em diante** (o corte vale):
+reserva sob o teto do dia (o `detail` da reserva leva `redo: legacy_format`), chama uma vez e
+troca o resultado pelo novo, que já traz as páginas e portanto não é refeito. Se a nova pesquisa
+for recusada pelo teto, falhar ou não achar dado da empresa, **o resultado antigo fica** (nada de
+recusa ou falha no lugar dele) e o passo diz o que houve no trabalho. Lead anterior ao corte
+mantém o resultado antigo (ledger `skipped`, `legacy_before_cutoff`). Custo: uma pesquisa por
+lead de formato antigo, porque o resultado antigo não guardou a ligação valor→página; o que foi
+pago na primeira vez não volta.
+
 ## Variáveis (worker; só nomes, valores no Coolify)
 
-| Variável                     | Padrão                       | Para quê                                                                     |
-| ---------------------------- | ---------------------------- | ---------------------------------------------------------------------------- |
-| `OPENROUTER_API_KEY`         | vazio                        | a chave do OpenRouter (a mesma da API). Sem ela, o passo é pulado.           |
-| `LEAD_RESEARCH_ENABLED`      | desligado                    | só `true` liga. Sem isso nenhum gasto, mesmo com a chave.                    |
-| `LEAD_RESEARCH_DAILY_USD`    | 1                            | **teto do dia** só desta pesquisa (dia de São Paulo), maior que 0 e até 100. |
-| `LEAD_RESEARCH_USD_PER_CALL` | 0,06                         | quanto uma pesquisa deve custar; reservado antes da chamada.                 |
-| `LEAD_RESEARCH_MODEL`        | `anthropic/claude-haiku-4.5` | `anthropic/claude-haiku-4.5` ou `anthropic/claude-sonnet-5`.                 |
-| `LEAD_RESEARCH_SINCE`        | `2026-10-14`                 | data de corte (AAAA-MM-DD, São Paulo): só lead que chegou a partir dela.     |
+| Variável                     | Padrão                       | Para quê                                                                                                                                                           |
+| ---------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `OPENROUTER_API_KEY`         | vazio                        | a chave do OpenRouter (a mesma da API). Sem ela, o passo é pulado.                                                                                                 |
+| `LEAD_RESEARCH_ENABLED`      | desligado                    | só `true` liga. Sem isso nenhum gasto, mesmo com a chave.                                                                                                          |
+| `LEAD_RESEARCH_DAILY_USD`    | 1                            | **teto do dia** só desta pesquisa (dia de São Paulo), maior que 0 e até 100.                                                                                       |
+| `LEAD_RESEARCH_USD_PER_CALL` | 0,06                         | quanto uma pesquisa deve custar; reservado antes da chamada.                                                                                                       |
+| `LEAD_RESEARCH_MODEL`        | `anthropic/claude-haiku-4.5` | `anthropic/claude-haiku-4.5` ou `anthropic/claude-sonnet-5`.                                                                                                       |
+| `LEAD_RESEARCH_SINCE`        | `2026-10-14`                 | data de corte (AAAA-MM-DD, São Paulo): só lead que chegou a partir dela. Um dia que não existe ("2026-02-30") **impede o worker de subir**, em vez de virar 02/03. |
 
 Uma variável em branco vale como não definida (vale o padrão). O worker precisa ter
 `enrich_lead` em `WORKER_JOB_TYPES` (o padrão já tem).

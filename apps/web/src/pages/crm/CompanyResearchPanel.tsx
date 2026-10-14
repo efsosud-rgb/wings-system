@@ -1,9 +1,12 @@
 import {
   WEB_RESEARCH_FIELD_LABELS,
+  isLegacyWebResearch,
   type Lead,
   type WebResearchField,
   type WebResearchSource,
 } from '@wings/shared';
+import { useResearchLead } from '../../api/leads.js';
+import { failureReason } from '../../lib/failure.js';
 import { formatDateTime } from './format.js';
 
 /** Only a public web page gets a link; anything else is shown as text. */
@@ -53,10 +56,20 @@ function backingSource(
  * plainly that it is an automatic summary, so a person checks the sources
  * before relying on it.
  */
-export function CompanyResearchPanel({ research }: { research: Lead['research'] }) {
+export function CompanyResearchPanel({
+  research,
+  leadId,
+  canWrite = false,
+}: {
+  research: Lead['research'];
+  /** With `canWrite`, lets the person ask for the research again when it is in the old format. */
+  leadId?: string;
+  canWrite?: boolean;
+}) {
   const web = research.facts?.webResearch ?? null;
   if (!web) return null;
   const done = web.status === 'done';
+  const legacy = isLegacyWebResearch(web);
   return (
     <section className="crm-panel" aria-label="Pesquisa da empresa">
       <h2>Pesquisa da empresa</h2>
@@ -119,6 +132,12 @@ export function CompanyResearchPanel({ research }: { research: Lead['research'] 
               ? 'Resumo automático por IA, só do que as páginas dizem; cada dado mostra a página de onde veio. Confira antes de usar.'
               : 'A busca não trouxe páginas para confirmar; nada foi guardado.'}
           </p>
+          {legacy ? (
+            <RedoResearch
+              leadId={canWrite ? leadId : undefined}
+              waiting={research.state === 'pending' || research.state === 'running'}
+            />
+          ) : null}
         </>
       ) : (
         <p className="crm-sub">
@@ -126,5 +145,40 @@ export function CompanyResearchPanel({ research }: { research: Lead['research'] 
         </p>
       )}
     </section>
+  );
+}
+
+/**
+ * A research stored before each value named its page shows "—" for every value, and the pages it
+ * kept do not say which one backs which. Asking again is the only way to get the pages; it is a
+ * new paid search (about US$ 0,01) that replaces this one, so it is a click, not automatic.
+ */
+function RedoResearch({ leadId, waiting }: { leadId: string | undefined; waiting: boolean }) {
+  const redo = useResearchLead();
+  return (
+    <div className="crm-sub" role="group" aria-label="Refazer a pesquisa">
+      <p>
+        Esta pesquisa é anterior à fonte por dado: as páginas foram guardadas, mas não se sabe qual
+        delas sustenta cada valor. Por isso eles aparecem como “—”.
+      </p>
+      {leadId ? (
+        <>
+          <button
+            type="button"
+            className="crm-btn"
+            disabled={waiting || redo.isPending || redo.isSuccess}
+            onClick={() => redo.mutate(leadId)}
+          >
+            {waiting || redo.isSuccess
+              ? 'Pesquisa na fila…'
+              : 'Pesquisar de novo (cerca de US$ 0,01)'}
+          </button>{' '}
+          <span>Faz uma nova pesquisa paga e troca esta pelo resultado com as fontes.</span>
+          {redo.isError ? (
+            <p role="alert">Não foi possível pedir a pesquisa: {failureReason(redo.error)}.</p>
+          ) : null}
+        </>
+      ) : null}
+    </div>
   );
 }

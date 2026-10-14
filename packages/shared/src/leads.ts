@@ -251,6 +251,23 @@ const PERSONAL_EMAIL_DOMAINS = new Set([
   'proton.me',
   'aol.com',
   'zipmail.com.br',
+  // More Brazilian providers, and foreign webmails Brazilians also use.
+  'oi.com.br',
+  'ibest.com.br',
+  'pop.com.br',
+  'r7.com',
+  'superig.com.br',
+  'sapo.pt',
+  'pm.me',
+  'fastmail.com',
+  'fastmail.fm',
+  'tutanota.com',
+  'tutanota.de',
+  'tutamail.com',
+  'tuta.io',
+  'hey.com',
+  'qq.com',
+  'web.de',
 ]);
 
 export interface LeadEmailDomain {
@@ -570,6 +587,22 @@ export interface LeadWebResearch {
   fields: WebResearchField[];
   sources: WebResearchSource[];
   model: string | null;
+}
+
+/**
+ * A finished research stored before each value named its page (until 14/10/2026 17:26 UTC):
+ * its fields have no `sourceUrl` at all, so the deal page shows "—" for every one. It cannot be
+ * upgraded without asking again (nothing says which page backs which value), so it is the one kind
+ * of finished research that may be redone. A research that already names a page for its values,
+ * or has none to show, is not.
+ */
+export function isLegacyWebResearch(research: LeadWebResearch | null | undefined): boolean {
+  return (
+    research?.status === 'done' &&
+    research.sources.length > 0 &&
+    research.fields.length > 0 &&
+    research.fields.every((field) => field.sourceUrl === undefined)
+  );
 }
 
 /** Everything the worker found. Every field may be null: a step that failed leaves its fact empty. */

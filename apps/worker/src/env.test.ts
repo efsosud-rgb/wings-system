@@ -70,6 +70,33 @@ describe('the company research variables', () => {
   });
 });
 
+describe('the research cut-off', () => {
+  it('defaults to the day of the 14/10 rules and reads a real day as written', () => {
+    expect(loadEnv(validSource).LEAD_RESEARCH_SINCE).toBe('2026-10-14');
+    expect(loadEnv({ ...validSource, LEAD_RESEARCH_SINCE: '2026-11-01' }).LEAD_RESEARCH_SINCE).toBe(
+      '2026-11-01',
+    );
+    // A leap day that exists, and a blank line that means "unset".
+    expect(loadEnv({ ...validSource, LEAD_RESEARCH_SINCE: '2028-02-29' }).LEAD_RESEARCH_SINCE).toBe(
+      '2028-02-29',
+    );
+    expect(loadEnv({ ...validSource, LEAD_RESEARCH_SINCE: '' }).LEAD_RESEARCH_SINCE).toBe(
+      '2026-10-14',
+    );
+  });
+
+  it('refuses at start a day the calendar does not have, instead of rolling it to the next month', () => {
+    for (const day of ['2026-02-30', '2026-02-29', '2026-04-31', '2026-13-01', '2026-00-10']) {
+      expect(() => loadEnv({ ...validSource, LEAD_RESEARCH_SINCE: day }), day).toThrow(
+        /LEAD_RESEARCH_SINCE/,
+      );
+    }
+    expect(() => loadEnv({ ...validSource, LEAD_RESEARCH_SINCE: '14/10/2026' })).toThrow(
+      /LEAD_RESEARCH_SINCE/,
+    );
+  });
+});
+
 describe('jobTypesOf', () => {
   it('refuses an unknown job type rather than silently ignore it', () => {
     const env = loadEnv({ ...validSource, WORKER_JOB_TYPES: 'ffprobe,made_up' });
