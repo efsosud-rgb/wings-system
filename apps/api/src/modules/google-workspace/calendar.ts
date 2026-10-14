@@ -34,6 +34,11 @@ export interface CalendarListEntry {
   primary: boolean;
   /** owner | writer | reader | freeBusyReader */
   accessRole: string;
+  /** The name the person gave it on their own list, when they renamed it. */
+  summaryOverride: string | null;
+  /** The calendar's colours on this person's list ('#rrggbb'), when Google sends them. */
+  backgroundColor: string | null;
+  foregroundColor: string | null;
 }
 
 export interface CalendarEventInput {
@@ -110,7 +115,11 @@ function toEvent(raw: RawEvent): CalendarEvent {
   };
 }
 
-async function call(
+/**
+ * One Calendar v3 request with the person's token; Google's refusals become a
+ * `GoogleCalendarError` (never Google's message, which may quote event content).
+ */
+export async function calendarRequest(
   transport: typeof fetch,
   accessToken: string,
   method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
@@ -142,6 +151,7 @@ async function call(
   return response.json().catch(() => null);
 }
 
+const call = calendarRequest;
 const encode = encodeURIComponent;
 
 export async function listCalendars(
@@ -159,6 +169,9 @@ export async function listCalendars(
       summary: typeof item.summary === 'string' ? item.summary : '',
       primary: item.primary === true,
       accessRole: typeof item.accessRole === 'string' ? item.accessRole : 'reader',
+      summaryOverride: typeof item.summaryOverride === 'string' ? item.summaryOverride : null,
+      backgroundColor: typeof item.backgroundColor === 'string' ? item.backgroundColor : null,
+      foregroundColor: typeof item.foregroundColor === 'string' ? item.foregroundColor : null,
     }));
 }
 
