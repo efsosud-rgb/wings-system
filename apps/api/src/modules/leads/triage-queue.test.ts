@@ -17,6 +17,7 @@ import {
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
+import { adoptUnmatched } from '../whatsapp/intake.js';
 import { upsertLead } from './service.js';
 import {
   TRIAGE_CLAIM_TIMEOUT_MS,
@@ -28,6 +29,7 @@ import {
 import { configureLeadTriage, type TriageTarget } from './triage-schedule.js';
 import {
   resumeLeadTriage,
+  routeLead,
   runTriage,
   startLeadTriageResume,
   type JevClient,
@@ -176,6 +178,18 @@ describe('the door writes the waiting row with the lead', () => {
   });
 
   it('a lead with a funnel, a stale one, an import and a repeat arrival are not on the list', async () => {
+    const imported = await upsertLead(db, {
+      source: 'site_form',
+      name: 'Importado',
+      email: 'importado@teste.invalid',
+      clientId: WINGS_CLIENT_ID,
+      clientMapped: false,
+      importBatchId: 'lote-teste-fila',
+      event: { kind: 'lead.imported' },
+    });
+    expect(imported.triageQueued).toBe(false);
+    expect(await queueRowOf({ leadId: imported.lead.id })).toBeUndefined();
+
     const withFunnel = await upsertLead(db, {
       source: 'site_form',
       name: 'Com Funil',
@@ -403,6 +417,166 @@ describe('a restart in the middle is picked up again', () => {
     expect(
       (await noticesOf(made.lead.id)).filter((n) => n.recipientEmployeeId === seller.id),
     ).toHaveLength(1);
+  });
+});
+
+describe('what the review of 14/10 found around the list', () => {
+  /**
+   * A db whose inserts into one table fail while `failing.on` is true: the write is refused when
+   * awaited, as the real driver does, so a `.catch` on it works.
+   */
+  function dbFailingOn(table: unknown, failing: { on: boolean }): Database {
+    const refused = () => {
+      const builder: Record<string, unknown> = {};
+      const fail = () => Promise.reject(new Error('write down'));
+      builder.values = () => builder;
+      builder.onConflictDoNothing = () => builder;
+      builder.returning = () => builder;
+      builder.then = (ok: never, bad: never) => fail().then(ok, bad);
+      builder.catch = (bad: never) => fail().catch(bad);
+      return builder;
+    };
+    return new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === 'insert')
+          return (into: unknown) =>
+            failing.on && into === table ? refused() : target.insert(into as never);
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as Database;
+  }
+
+  it('a conversation merged into its deal’s own conversation takes its list row with it (no foreign-key error)', async () => {
+    const { contact, conversation } = await conversationWith(
+      '5541944440010',
+      'Oi, quero saber da franquia',
+    );
+    await enqueueTriage(db, { conversationId: conversation.id });
+    const deal = await upsertLead(db, {
+      source: 'manual',
+      name: 'Dona Teste',
+      phone: contact.phone,
+      clientId: WINGS_CLIENT_ID,
+      clientMapped: true,
+      pipeline: 'expansao',
+      event: { kind: 'lead.created' },
+    });
+    const [own] = await db
+      .insert(waConversations)
+      .values({ contactId: contact.id, leadId: deal.lead.id, attendance: 'with_person' })
+      .returning();
+
+    await adoptUnmatched(db, contact.id, deal.lead.id);
+
+    expect(
+      await db.select().from(waConversations).where(eq(waConversations.id, conversation.id)),
+    ).toEqual([]);
+    expect(await queueRowOf({ conversationId: conversation.id })).toBeUndefined();
+    const moved = await db.select().from(waMessages).where(eq(waMessages.conversationId, own!.id));
+    expect(moved).toHaveLength(1);
+  });
+
+  it('a lead the triage placed in a funnel before a restart cut it short: the resume tells the owner once and records it, without asking the Jev', async () => {
+    const seller = await sellerInRotation('formatacao');
+    const born = await bornWithoutFunnel('metade');
+    // The first pass got as far as placing the lead (owner, stage, task) and died before the notice.
+    const routed = await routeLead(db, born.lead.id, 'formatacao');
+    expect(routed.ok).toBe(true);
+    expect(await noticesOf(born.lead.id)).toEqual([]);
+    answers.push(verdict('expansao'));
+
+    expect(
+      await resumeLeadTriage(db, deps, new Date(Date.now() + minutes(5))),
+    ).toBeGreaterThanOrEqual(1);
+    expect(jevCalls).toBe(0);
+    expect((await noticesOf(born.lead.id)).map((n) => [n.kind, n.recipientEmployeeId])).toEqual([
+      ['new_lead', seller.id],
+    ]);
+    const event = await db.query.leadEvents.findFirst({
+      where: and(eq(leadEvents.leadId, born.lead.id), eq(leadEvents.kind, 'lead.triaged')),
+    });
+    expect(event?.detail).toMatchObject({ outcome: 'routed:formatacao', resumed: true });
+    expect((await queueRowOf({ leadId: born.lead.id }))?.outcome).toBe('done');
+    // A lead a person placed (no triage history) gets nothing of this.
+    const byHand = await bornWithoutFunnel('amao');
+    await db.update(leads).set({ pipeline: 'expansao' }).where(eq(leads.id, byHand.lead.id));
+    await runTriage(db, { leadId: byHand.lead.id }, deps, new Date(Date.now() + minutes(5)));
+    expect(await noticesOf(byHand.lead.id)).toEqual([]);
+  });
+
+  it('a notice that cannot be written leaves the row open for a later pass, not closed as done', async () => {
+    const manager = await createEmployee(db, { role: 'gerente_comercial', sector: 'comercial' });
+    const born = await bornWithoutFunnel('avisofalha');
+    const noticesDown = { on: true };
+    const flaky = dbFailingOn(crmNotifications, noticesDown);
+
+    // The Jev did not answer: the usual notice is due, and the database refuses it, twice (the run, then its fallback).
+    await expect(runTriage(flaky, { leadId: born.lead.id }, deps)).rejects.toThrow('write down');
+    const stuck = (await queueRowOf({ leadId: born.lead.id }))!;
+    expect(stuck.doneAt).toBeNull();
+    expect(await noticesOf(born.lead.id)).toEqual([]);
+
+    // The database is back: the claim timed out, the resume writes the notice and closes the row.
+    noticesDown.on = false;
+    const after = new Date(stuck.claimedAt!.getTime() + TRIAGE_CLAIM_TIMEOUT_MS + 5_000);
+    expect(await resumeLeadTriage(db, deps, after)).toBeGreaterThanOrEqual(1);
+    expect(
+      (await noticesOf(born.lead.id))
+        .filter((n) => n.recipientEmployeeId === manager.id)
+        .map((n) => n.kind),
+    ).toContain('lead_unassigned');
+    expect((await queueRowOf({ leadId: born.lead.id }))?.doneAt).not.toBeNull();
+  });
+
+  it('a lead already handed to a person is not told "sem dono" on top when the run fails right after', async () => {
+    const manager = await createEmployee(db, { role: 'gerente_comercial', sector: 'comercial' });
+    const born = await bornWithoutFunnel('pessoafalha');
+    answers.push(verdict('fornecedor'));
+    const recordDown = { on: true };
+    const flaky = dbFailingOn(leadEvents, recordDown);
+
+    // The notice to the managers is written, then the record of the triage fails: the fallback runs.
+    expect(await runTriage(flaky, { leadId: born.lead.id }, deps)).toBe('fallback');
+    const kinds = (await noticesOf(born.lead.id))
+      .filter((n) => n.recipientEmployeeId === manager.id)
+      .map((n) => n.kind);
+    expect(kinds).toContain('triage_handoff');
+    expect(kinds).not.toContain('lead_unassigned');
+    expect((await queueRowOf({ leadId: born.lead.id }))?.outcome).toBe('fallback');
+  });
+
+  it('a conversation whose number already has an open deal belongs to it: no Jev call, the owner is told', async () => {
+    const seller = await sellerInRotation('expansao');
+    const { contact, conversation } = await conversationWith('5541944440011', 'Voltei, e agora?');
+    await enqueueTriage(db, { conversationId: conversation.id });
+    // A pass cut short had made the deal (owner from the rotation) and not linked the conversation.
+    const deal = await upsertLead(db, {
+      source: 'whatsapp',
+      name: contact.profileName,
+      phone: contact.phone,
+      clientId: WINGS_CLIENT_ID,
+      clientMapped: true,
+      pipeline: 'expansao',
+      event: { kind: 'lead.received.whatsapp' },
+    });
+    expect(deal.lead.ownerEmployeeId).toBe(seller.id);
+    answers.push(verdict('fornecedor'));
+
+    expect(
+      await resumeLeadTriage(db, deps, new Date(Date.now() + minutes(5))),
+    ).toBeGreaterThanOrEqual(1);
+    expect(jevCalls).toBe(0);
+    const [adopted] = await db
+      .select()
+      .from(waConversations)
+      .where(eq(waConversations.id, conversation.id));
+    expect(adopted?.leadId).toBe(deal.lead.id);
+    expect(
+      (await noticesOf(deal.lead.id))
+        .filter((n) => n.recipientEmployeeId === seller.id)
+        .map((n) => n.kind),
+    ).toEqual(['new_lead']);
   });
 });
 

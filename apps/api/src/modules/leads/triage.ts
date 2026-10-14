@@ -16,13 +16,14 @@ import type { Database } from '../../db/client.js';
 import {
   crmNotifications,
   leadEvents,
+  leadStageHistory,
   leads,
   waContacts,
   waConversations,
   waMessages,
 } from '../../db/schema/index.js';
-import { adoptUnmatched } from '../whatsapp/intake.js';
-import { announceLeadArrival, managersAndBoard } from './crm-alerts.js';
+import { adoptUnmatched, openLeadByPhone } from '../whatsapp/intake.js';
+import { managersAndBoard, writeLeadArrivalNotice } from './crm-alerts.js';
 import { changeLead, entryStageOf, nextInRotation } from './crm.js';
 import { upsertLead } from './service.js';
 import { claimTriage, finishTriage, openTriage, TRIAGE_MAX_ATTEMPTS } from './triage-queue.js';
@@ -389,7 +390,12 @@ async function noticeTeam(
 export async function triageLead(db: Database, leadId: string, deps: TriageDeps): Promise<void> {
   const now = deps.now?.() ?? new Date();
   const lead = await db.query.leads.findFirst({ where: eq(leads.id, leadId) });
-  if (!lead || lead.pipeline || lead.won !== null) return;
+  if (!lead || lead.won !== null) return;
+  if (lead.pipeline) {
+    // Already in a funnel: a person's doing, or a pass of this triage cut short before telling the owner.
+    await finishRouted(db, lead);
+    return;
+  }
   const text = textOfLead(lead);
   const channel =
     lead.source === 'site_form'
@@ -413,7 +419,7 @@ export async function triageLead(db: Database, leadId: string, deps: TriageDeps)
   if (decision?.kind === 'pipeline') {
     const routed = await routeLead(db, leadId, decision.pipeline, now);
     if (routed.ok) {
-      await announceLeadArrival(db, routed.lead);
+      await writeLeadArrivalNotice(db, routed.lead);
       await record();
       return;
     }
@@ -434,8 +440,33 @@ export async function triageLead(db: Database, leadId: string, deps: TriageDeps)
     return;
   }
   // No verdict (no text, or the Jev did not answer): the arrival notice the door would have sent.
-  await announceLeadArrival(db, lead);
+  await writeLeadArrivalNotice(db, lead);
   await record(routeFailure);
+}
+
+/**
+ * A lead that already has a funnel when the triage looks at it. If this triage placed it (its stage
+ * history says `triage`) and never wrote its record, a pass was cut short between placing it and
+ * telling its owner: the owner is told now (the notice has its dedupe key, so once) and the record
+ * is written. A lead a person placed is left alone.
+ */
+async function finishRouted(db: Database, lead: typeof leads.$inferSelect): Promise<void> {
+  const placed = await db.query.leadStageHistory.findFirst({
+    where: and(eq(leadStageHistory.leadId, lead.id), eq(leadStageHistory.source, 'triage')),
+    columns: { source: true },
+  });
+  if (!placed) return;
+  const recorded = await db.query.leadEvents.findFirst({
+    where: and(eq(leadEvents.leadId, lead.id), eq(leadEvents.kind, 'lead.triaged')),
+    columns: { kind: true },
+  });
+  if (recorded) return;
+  await writeLeadArrivalNotice(db, lead);
+  await db.insert(leadEvents).values({
+    leadId: lead.id,
+    kind: 'lead.triaged',
+    detail: { outcome: `routed:${lead.pipeline}`, source: lead.source, resumed: true },
+  });
 }
 
 /** A WhatsApp conversation opened by a message with no deal while Sofia is off. */
@@ -453,6 +484,23 @@ export async function triageConversation(
     where: eq(waContacts.id, conversation.contactId),
   });
   if (!contact) return;
+  // A deal somebody can work already has this number (a pass cut short that made it, or one
+  // opened meanwhile): the conversation is its, with no need to ask the Jev. Its owner (or, with
+  // none, the managers) hears of it; a notice already written is not repeated.
+  const openDealId = await openLeadByPhone(db, contact.phone);
+  if (openDealId) {
+    const deal = await db.query.leads.findFirst({ where: eq(leads.id, openDealId) });
+    if (deal) {
+      await adoptUnmatched(db, contact.id, deal.id);
+      await writeLeadArrivalNotice(db, deal);
+      await db.insert(leadEvents).values({
+        leadId: deal.id,
+        kind: 'lead.triaged',
+        detail: { outcome: 'adopted', conversationId },
+      });
+      return;
+    }
+  }
   const first = await db.query.waMessages.findFirst({
     where: and(
       eq(waMessages.conversationId, conversationId),
@@ -495,16 +543,14 @@ export async function triageConversation(
       event: { kind: 'lead.received.whatsapp', detail: { triage: true } },
     });
     await adoptUnmatched(db, contact.id, result.lead.id);
-    if (result.created && !result.stale) await announceLeadArrival(db, result.lead);
+    if (result.created && !result.stale) await writeLeadArrivalNotice(db, result.lead);
     else if (!result.created && !result.lead.pipeline) {
       // An open deal of this phone with no funnel yet: the verdict places it.
       const routed = await routeLead(db, result.lead.id, decision.pipeline, now);
-      await announceLeadArrival(db, routed.ok ? routed.lead : result.lead);
+      await writeLeadArrivalNotice(db, routed.ok ? routed.lead : result.lead);
     } else if (!result.created) {
-      // A deal somebody can work already has this number (a pass cut short that made it, or one
-      // opened meanwhile): its owner, or with none the managers, hears of it. A notice already
-      // written is not repeated.
-      await announceLeadArrival(db, result.lead);
+      // A deal somebody can work took the number between the look above and now.
+      await writeLeadArrivalNotice(db, result.lead);
     }
     await db.insert(leadEvents).values({ leadId: result.lead.id, kind: 'lead.triaged', detail });
     return;
@@ -527,14 +573,24 @@ export async function triageConversation(
 /**
  * What the usual door would have done when it does not hand the lead to the triage: the "lead sem
  * dono" notice for a lead that still has no funnel, the "conversa espera um atendente" notice for a
- * conversation that still has no deal. Nothing for a target a person already placed. The notices
- * share their dedupe keys with the triage's own, so one already written is not repeated.
+ * conversation that still has no deal. Nothing for a target a person already placed. A notice that
+ * cannot be written is thrown, so the row stays open. The conversation notice shares its dedupe key
+ * with the triage's own; the lead one does not (the triage's is `triage_handoff`), so a lead the
+ * triage already handed to a person is checked first and not told "sem dono" on top.
  */
 async function fallbackNotice(db: Database, target: TriageTarget, reason: string): Promise<void> {
   if ('leadId' in target) {
     const lead = await db.query.leads.findFirst({ where: eq(leads.id, target.leadId) });
-    if (!lead || lead.pipeline || lead.won !== null) return;
-    await announceLeadArrival(db, lead);
+    if (!lead || lead.won !== null) return;
+    if (lead.pipeline) {
+      await finishRouted(db, lead);
+      return;
+    }
+    const handedToAPerson = await db.query.crmNotifications.findFirst({
+      where: and(eq(crmNotifications.leadId, lead.id), eq(crmNotifications.kind, 'triage_handoff')),
+      columns: { kind: true },
+    });
+    if (!handedToAPerson) await writeLeadArrivalNotice(db, lead);
     await db
       .insert(leadEvents)
       .values({
@@ -548,7 +604,13 @@ async function fallbackNotice(db: Database, target: TriageTarget, reason: string
   const conversation = await db.query.waConversations.findFirst({
     where: eq(waConversations.id, target.conversationId),
   });
-  if (!conversation || conversation.leadId) return;
+  if (!conversation) return;
+  if (conversation.leadId) {
+    // The deal was made and the conversation adopted, but the owner's notice failed.
+    const deal = await db.query.leads.findFirst({ where: eq(leads.id, conversation.leadId) });
+    if (deal && deal.won === null) await writeLeadArrivalNotice(db, deal);
+    return;
+  }
   await noticeTeam(db, {
     leadId: null,
     message:

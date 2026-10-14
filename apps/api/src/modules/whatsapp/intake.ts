@@ -6,7 +6,7 @@ import {
   waStatusAdvances,
   type WaMessageStatus,
 } from '@wings/shared';
-import { and, desc, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, ne, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   crmContacts,
@@ -427,13 +427,28 @@ async function applyInbound(db: Database, message: WaInboundMessage, now: Date) 
     if (
       !sofiaOn &&
       !leadId &&
-      created &&
       message.kind === 'text' &&
       message.text?.trim() &&
       leadTriageEnabled()
     ) {
-      await enqueueTriage(tx, { conversationId: conversation.id });
-      triageQueued = true;
+      // The first text of the conversation, decided here and not from `created`: a retry after a
+      // first attempt that was cut short sees the conversation as already there, but it is still
+      // this message that opens it.
+      const [earlier] = await tx
+        .select({ id: waMessages.id })
+        .from(waMessages)
+        .where(
+          and(
+            eq(waMessages.conversationId, conversation.id),
+            eq(waMessages.direction, 'in'),
+            ne(waMessages.id, stored.id),
+          ),
+        )
+        .limit(1);
+      if (!earlier) {
+        await enqueueTriage(tx, { conversationId: conversation.id });
+        triageQueued = true;
+      }
     }
   });
   // Otherwise the conversation just waits for an attendant.

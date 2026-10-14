@@ -928,6 +928,29 @@ describe('the Jev triage list (docs/leads/triagem-jev.md)', () => {
     }
   });
 
+  it('a retry after a first attempt cut short (the conversation already there, no message yet) still opens the list row', async () => {
+    handed.length = 0;
+    configureLeadTriage((target) => handed.push(target));
+    try {
+      const phone = '5521988880004';
+      const [contact] = await db
+        .insert(waContacts)
+        .values({ phone, waId: phone, profileName: 'Elena' })
+        .returning();
+      const [half] = await db
+        .insert(waConversations)
+        .values({ contactId: contact!.id, leadId: null })
+        .returning();
+      const { body } = inbound(phone, 'Quero uma franquia de pizza');
+      await deliver(body);
+      await run();
+      expect(handed).toEqual([{ conversationId: half!.id }]);
+      expect(await queueOf(half!.id)).toMatchObject({ doneAt: null, leadId: null });
+    } finally {
+      configureLeadTriage(null);
+    }
+  });
+
   it('writes nothing with the triage off: the conversation just waits for an attendant, as before', async () => {
     configureLeadTriage(null);
     const { body } = inbound('5521988880002', 'Boa tarde');

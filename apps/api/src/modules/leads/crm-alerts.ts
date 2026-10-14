@@ -513,56 +513,68 @@ export async function announceLeadArrival(
   lead: { id: string; ownerEmployeeId: string | null },
 ): Promise<void> {
   try {
-    if (lead.ownerEmployeeId) {
-      const task = await db.query.leadTasks.findFirst({
-        where: and(
-          eq(leadTasks.leadId, lead.id),
-          eq(leadTasks.kind, 'first_contact'),
-          isNull(leadTasks.doneAt),
-        ),
-        columns: { dueAt: true },
-      });
-      const due = task
-        ? ` Primeiro contato até ${task.dueAt.toLocaleString('pt-BR', {
-            timeZone: 'America/Sao_Paulo',
-            day: '2-digit',
-            month: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-          })} (1 hora útil).`
-        : '';
-      await db
-        .insert(crmNotifications)
-        .values({
-          recipientEmployeeId: lead.ownerEmployeeId,
-          leadId: lead.id,
-          kind: 'new_lead',
-          message: `Novo lead para você.${due}`,
-          dedupeKey: `new_lead:${lead.id}:${lead.ownerEmployeeId}`,
-          // The owner also gets it by e-mail (crm-notice-mail.ts): sent by the kick below or the next cycle.
-          emailState: 'pending',
-        })
-        .onConflictDoNothing();
-      leadArrivedKick?.();
-      return;
-    }
-    const people = await managersAndBoard(db);
-    if (people.length === 0) return;
-    await db
-      .insert(crmNotifications)
-      .values(
-        people.map((person) => ({
-          recipientEmployeeId: person,
-          leadId: lead.id,
-          kind: 'lead_unassigned',
-          message: 'Há um lead novo sem dono: o rodízio do funil está vazio. Atribua alguém.',
-          dedupeKey: `lead_unassigned:${lead.id}:${person}`,
-        })),
-      )
-      .onConflictDoNothing();
+    await writeLeadArrivalNotice(db, lead);
   } catch {
     // The lead is already saved; the overdue alert still catches a missed first contact.
   }
+}
+
+/**
+ * The same notice, but a failure to write it is thrown instead of swallowed. For the Jev triage
+ * (docs/leads/triagem-jev.md), which must not close a lead's waiting row as done when its notice
+ * was not written: the row stays open and a later pass writes it.
+ */
+export async function writeLeadArrivalNotice(
+  db: Database,
+  lead: { id: string; ownerEmployeeId: string | null },
+): Promise<void> {
+  if (lead.ownerEmployeeId) {
+    const task = await db.query.leadTasks.findFirst({
+      where: and(
+        eq(leadTasks.leadId, lead.id),
+        eq(leadTasks.kind, 'first_contact'),
+        isNull(leadTasks.doneAt),
+      ),
+      columns: { dueAt: true },
+    });
+    const due = task
+      ? ` Primeiro contato até ${task.dueAt.toLocaleString('pt-BR', {
+          timeZone: 'America/Sao_Paulo',
+          day: '2-digit',
+          month: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+        })} (1 hora útil).`
+      : '';
+    await db
+      .insert(crmNotifications)
+      .values({
+        recipientEmployeeId: lead.ownerEmployeeId,
+        leadId: lead.id,
+        kind: 'new_lead',
+        message: `Novo lead para você.${due}`,
+        dedupeKey: `new_lead:${lead.id}:${lead.ownerEmployeeId}`,
+        // The owner also gets it by e-mail (crm-notice-mail.ts): sent by the kick below or the next cycle.
+        emailState: 'pending',
+      })
+      .onConflictDoNothing();
+    leadArrivedKick?.();
+    return;
+  }
+  const people = await managersAndBoard(db);
+  if (people.length === 0) return;
+  await db
+    .insert(crmNotifications)
+    .values(
+      people.map((person) => ({
+        recipientEmployeeId: person,
+        leadId: lead.id,
+        kind: 'lead_unassigned',
+        message: 'Há um lead novo sem dono: o rodízio do funil está vazio. Atribua alguém.',
+        dedupeKey: `lead_unassigned:${lead.id}:${person}`,
+      })),
+    )
+    .onConflictDoNothing();
 }
 
 /** Old leads (see `STALE_ARRIVAL_HOURS`) a read of the platform brought, counted per owner (`null` = no owner). */

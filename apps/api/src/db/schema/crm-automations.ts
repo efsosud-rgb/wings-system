@@ -239,15 +239,18 @@ export const leadTriageQueue = pgTable(
     tenantId: tenantId(),
     id: uuid('id').primaryKey().defaultRandom(),
     /** The lead to triage; or `conversation_id`, never both. */
-    leadId: uuid('lead_id').references(() => leads.id),
-    conversationId: uuid('conversation_id').references(() => waConversations.id),
+    leadId: uuid('lead_id').references(() => leads.id, { onDelete: 'cascade' }),
+    /** A conversation merged into a deal's own (`adoptUnmatched`) is deleted: its row goes with it. */
+    conversationId: uuid('conversation_id').references(() => waConversations.id, {
+      onDelete: 'cascade',
+    }),
     queuedAt: timestamp('queued_at', { withTimezone: true }).notNull().defaultNow(),
-    /** A server took it (cleared by finishing; an old one was cut short by a restart). */
+    /** A server took it; one taken long ago and never finished was cut short by a restart. */
     claimedAt: timestamp('claimed_at', { withTimezone: true }),
     /** Times a server took it; after 3 the usual notice goes out and the Jev is not asked again. */
     attempts: integer('attempts').notNull().default(0),
     doneAt: timestamp('done_at', { withTimezone: true }),
-    /** How it ended: done | fallback (the usual notice, after an error or too many tries) | gone (the target no longer needs it). */
+    /** How it ended: done | fallback (the usual notice, after an error or too many tries). */
     outcome: text('outcome'),
   },
   (table) => [

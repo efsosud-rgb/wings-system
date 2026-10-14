@@ -12,8 +12,8 @@ CREATE TABLE "lead_triage_queue" (
 );
 --> statement-breakpoint
 ALTER TABLE "lead_triage_queue" ADD CONSTRAINT "lead_triage_queue_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "lead_triage_queue" ADD CONSTRAINT "lead_triage_queue_lead_id_leads_id_fk" FOREIGN KEY ("lead_id") REFERENCES "public"."leads"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "lead_triage_queue" ADD CONSTRAINT "lead_triage_queue_conversation_id_wa_conversations_id_fk" FOREIGN KEY ("conversation_id") REFERENCES "public"."wa_conversations"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "lead_triage_queue" ADD CONSTRAINT "lead_triage_queue_lead_id_leads_id_fk" FOREIGN KEY ("lead_id") REFERENCES "public"."leads"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "lead_triage_queue" ADD CONSTRAINT "lead_triage_queue_conversation_id_wa_conversations_id_fk" FOREIGN KEY ("conversation_id") REFERENCES "public"."wa_conversations"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "lead_triage_queue_lead_uq" ON "lead_triage_queue" USING btree ("lead_id") WHERE "lead_triage_queue"."lead_id" is not null;--> statement-breakpoint
 CREATE UNIQUE INDEX "lead_triage_queue_conversation_uq" ON "lead_triage_queue" USING btree ("conversation_id") WHERE "lead_triage_queue"."conversation_id" is not null;--> statement-breakpoint
 CREATE INDEX "lead_triage_queue_open_idx" ON "lead_triage_queue" USING btree ("queued_at") WHERE "lead_triage_queue"."done_at" is null;--> statement-breakpoint

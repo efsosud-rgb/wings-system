@@ -1,5 +1,5 @@
 {
-  "id": "342d3156-f935-44a2-8db0-f3961ac45411",
+  "id": "93872c96-37b8-4b84-a785-0f1f05c25299",
   "prevId": "1748bbd0-a65c-4998-9da8-5213268bc9fc",
   "version": "7",
   "dialect": "postgresql",
@@ -9735,7 +9735,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         },
         "lead_triage_queue_conversation_id_wa_conversations_id_fk": {
@@ -9748,7 +9748,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "no action",
+          "onDelete": "cascade",
           "onUpdate": "no action"
         }
       },
