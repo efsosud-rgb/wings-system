@@ -57,6 +57,15 @@ export const LEAD_PIPELINE_LABELS: Record<LeadPipeline, string> = {
   consultoria: 'Consultoria',
 };
 
+/**
+ * The funnel a person opens Negociações on when the address names none: the one their level sells
+ * (a Formatação seller lands on Formatação, not on an empty Expansão board). Every other level,
+ * managers and the board included, keeps Expansão, the funnel that always opened first.
+ */
+export function defaultPipelineOfRole(role: string | null | undefined): LeadPipeline {
+  return role === 'vendedor_formatacao' ? 'formatacao' : 'expansao';
+}
+
 /** RD CRM's funnel name -> ours; the "Vendidos"/"Negócios perdidos" archives count as their origin. */
 export function pipelineOfRdFunnel(name: string | null | undefined): LeadPipeline | null {
   const text = (name ?? '')

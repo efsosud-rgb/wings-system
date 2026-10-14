@@ -13,6 +13,7 @@ import {
   LEAD_SOURCE_LABELS,
   LEAD_SOURCES,
   LEAD_TASK_KIND_LABELS,
+  defaultPipelineOfRole,
   sourceBadgeOf,
   type BoardCard,
   type BoardColumn,
@@ -100,7 +101,7 @@ export function DealsPage() {
   const canManage = hasPermission(session.data, 'crm.manage');
   const pipeline = (LEAD_PIPELINES as readonly string[]).includes(params.get('funil') ?? '')
     ? (params.get('funil') as LeadPipeline)
-    : 'expansao';
+    : defaultPipelineOfRole(session.data?.role);
   const view = (params.get('visao') as View) || 'board';
   const filter = useMemo(() => {
     const next: DealFilter = {};

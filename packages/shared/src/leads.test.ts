@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   EMPTY_FACTS,
+  defaultPipelineOfRole,
   emailDomainOf,
   enrichmentSummaryOf,
   expansionAreaSchema,
@@ -223,5 +224,15 @@ describe('utmLinksFor', () => {
       'https://franquia.wingscompany.com.br/cenoritas?ref=x&utm_source=instagram&utm_medium=cpc&utm_campaign=expansao_out26&utm_content=video_1',
     );
     expect(links.map((link) => link.key)).toContain('google_ads');
+  });
+});
+
+describe('the funnel a level opens on', () => {
+  it('sends a Formatação seller to Formatação and keeps Expansão for everyone else', () => {
+    expect(defaultPipelineOfRole('vendedor_formatacao')).toBe('formatacao');
+    expect(defaultPipelineOfRole('vendedor_expansao')).toBe('expansao');
+    for (const role of ['gerente_comercial', 'diretoria', 'admin_master', 'marketing', '', null]) {
+      expect(defaultPipelineOfRole(role)).toBe('expansao');
+    }
   });
 });
