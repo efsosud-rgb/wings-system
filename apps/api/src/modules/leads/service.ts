@@ -39,7 +39,7 @@ import {
   type LeadSourceRuleKind,
   type ScoreCriterion,
 } from '@wings/shared';
-import { and, asc, desc, eq, gte, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, isNotNull, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   adAds,
@@ -777,34 +777,42 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
   });
 }
 
-/** Queues the worker's `enrich_lead` job and marks the lead as waiting for it. */
+/**
+ * Queues the worker's `enrich_lead` job and marks the lead as waiting for it. The mark is
+ * taken first, by a conditional update, so two requests at once (a double click on
+ * "Pesquisar de novo", two arrivals together) queue ONE job: the second finds the lead
+ * already pending or running and gets null, and no job is created for it.
+ */
 export async function enqueueResearch(
   db: Executor,
   leadId: string,
   actorEmployeeId: string | null,
 ): Promise<LeadRow | null> {
-  const [job] = await db
-    .insert(jobs)
-    .values({ type: 'enrich_lead', input: { leadId } })
-    .returning({ id: jobs.id });
-  if (!job) return null;
-  const [lead] = await db
-    .update(leads)
-    .set({
-      enrichmentState: 'pending',
-      enrichmentJobId: job.id,
-      enrichmentError: null,
-      updatedAt: new Date(),
-    })
-    .where(eq(leads.id, leadId))
-    .returning();
-  await db.insert(leadEvents).values({
-    leadId,
-    kind: 'research.queued',
-    actorEmployeeId,
-    detail: { jobId: job.id },
+  return db.transaction(async (tx) => {
+    const [claimed] = await tx
+      .update(leads)
+      .set({ enrichmentState: 'pending', enrichmentError: null, updatedAt: new Date() })
+      .where(and(eq(leads.id, leadId), notInArray(leads.enrichmentState, ['pending', 'running'])))
+      .returning({ id: leads.id });
+    if (!claimed) return null;
+    const [job] = await tx
+      .insert(jobs)
+      .values({ type: 'enrich_lead', input: { leadId } })
+      .returning({ id: jobs.id });
+    if (!job) throw new Error('enrich_lead job was not created');
+    const [lead] = await tx
+      .update(leads)
+      .set({ enrichmentJobId: job.id })
+      .where(eq(leads.id, leadId))
+      .returning();
+    await tx.insert(leadEvents).values({
+      leadId,
+      kind: 'research.queued',
+      actorEmployeeId,
+      detail: { jobId: job.id },
+    });
+    return lead ?? null;
   });
-  return lead ?? null;
 }
 
 // --- reading --------------------------------------------------------------------

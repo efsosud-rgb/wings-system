@@ -41,6 +41,8 @@ export interface JobContext {
     budget: EnrichmentBudget;
     /** The company research (OpenRouter); null when switched off or without the key (the step is skipped). */
     research?: LeadResearchProvider | null;
+    /** Only leads that arrived from this instant on are researched (LEAD_RESEARCH_SINCE); null: no cut-off. */
+    researchSince?: Date | null;
   };
   /** Set only by tests, to pin "today" for the daily ceiling. */
   now?: () => Date;

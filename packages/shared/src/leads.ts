@@ -543,6 +543,11 @@ export interface WebResearchField {
   /** Null when the sources did not say; then `reason` says why. Never a guess. */
   value: string | null;
   reason: string | null;
+  /**
+   * The page that backs `value`: always one of the result's `sources`, never a link the model
+   * made up. A value without it is not shown ("—"). Absent on research stored before 14/10/2026.
+   */
+  sourceUrl?: string | null;
 }
 
 export interface WebResearchSource {
@@ -552,8 +557,9 @@ export interface WebResearchSource {
 
 /**
  * What the web research of the lead's COMPANY found (company name, site,
- * Instagram and CNPJ were the only things sent). `sources` are the pages the
- * search itself returned, never links the model wrote.
+ * Instagram and a corporate e-mail domain were the only things sent; research
+ * stored before 14/10/2026 may also have sent a CNPJ). `sources` are the pages
+ * the search itself returned, never links the model wrote.
  */
 export interface LeadWebResearch {
   status: WebResearchStatus;

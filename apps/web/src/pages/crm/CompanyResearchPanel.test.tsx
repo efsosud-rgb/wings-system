@@ -34,11 +34,31 @@ const DONE: LeadWebResearch = {
   reason: null,
   model: 'anthropic/claude-haiku-4.5',
   fields: [
-    { key: 'activity', value: 'Rede de açaí', reason: null },
-    { key: 'location', value: 'Campinas/SP', reason: null },
-    { key: 'size', value: null, reason: 'Nenhuma página fala do porte' },
-    { key: 'time_in_market', value: null, reason: 'As páginas encontradas não dizem isso' },
-    { key: 'online_presence', value: 'Site e Instagram ativos', reason: null },
+    {
+      key: 'activity',
+      value: 'Rede de açaí',
+      reason: null,
+      sourceUrl: 'https://acai.example.com.br/sobre',
+    },
+    {
+      key: 'location',
+      value: 'Campinas/SP',
+      reason: null,
+      sourceUrl: 'https://acai.example.com.br/sobre',
+    },
+    { key: 'size', value: null, reason: 'Nenhuma página fala do porte', sourceUrl: null },
+    {
+      key: 'time_in_market',
+      value: null,
+      reason: 'As páginas encontradas não dizem isso',
+      sourceUrl: null,
+    },
+    {
+      key: 'online_presence',
+      value: 'Site e Instagram ativos',
+      reason: null,
+      sourceUrl: 'https://www.instagram.com/acai/',
+    },
   ],
   sources: [
     { url: 'https://acai.example.com.br/sobre', title: 'Sobre a Açaí da Fila' },
@@ -115,10 +135,51 @@ describe('CompanyResearchPanel', () => {
       />,
     );
     const panel = screen.getByRole('region', { name: 'Pesquisa da empresa' });
-    expect(within(panel).queryByText('Fontes')).toBeNull();
+    expect(within(panel).queryByText('Páginas que a busca trouxe')).toBeNull();
     expect(panel.textContent).toContain(
       'A busca não trouxe páginas para confirmar; nada foi guardado.',
     );
-    expect(panel.textContent).not.toContain('só do que as páginas acima dizem');
+    expect(panel.textContent).not.toContain('cada dado mostra a página de onde veio');
+  });
+
+  it('shows each value with the page that backs it, and a dash for a value without one', () => {
+    render(
+      <CompanyResearchPanel
+        research={research({
+          ...DONE,
+          fields: [
+            DONE.fields[0]!,
+            // Stored before each value named its page.
+            { key: 'location', value: 'Campinas/SP', reason: null },
+            // A link that is not one of the pages the search returned is never shown.
+            {
+              key: 'size',
+              value: '12 lojas',
+              reason: null,
+              sourceUrl: 'https://outra.example.com/',
+            },
+            DONE.fields[3]!,
+            DONE.fields[4]!,
+          ],
+        })}
+      />,
+    );
+    const panel = screen.getByRole('region', { name: 'Pesquisa da empresa' });
+    const activity = within(panel).getByText('Rede de açaí').closest('dd') as HTMLElement;
+    const activitySource = within(activity).getByRole('link', {
+      name: 'Fonte: acai.example.com.br',
+    });
+    expect(activitySource.getAttribute('href')).toBe('https://acai.example.com.br/sobre');
+    expect(activitySource.getAttribute('rel')).toBe('noopener noreferrer nofollow');
+    const presence = within(panel)
+      .getByText('Site e Instagram ativos')
+      .closest('dd') as HTMLElement;
+    expect(
+      within(presence).getByRole('link', { name: 'Fonte: instagram.com' }).getAttribute('href'),
+    ).toBe('https://www.instagram.com/acai/');
+    expect(within(panel).queryByText('Campinas/SP')).toBeNull();
+    expect(within(panel).queryByText('12 lojas')).toBeNull();
+    expect(within(panel).getAllByText('Sem a página que sustenta este dado')).toHaveLength(2);
+    expect(within(panel).getAllByLabelText('sem dado')).toHaveLength(3);
   });
 });

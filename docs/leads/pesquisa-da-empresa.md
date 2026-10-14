@@ -1,8 +1,12 @@
 # Pesquisa da empresa na chegada (OpenRouter)
 
-Quando um lead chega com dados da **empresa** (nome da empresa, site, Instagram ou CNPJ), o
-worker pesquisa a empresa na web e grava o resultado na negociação. Aparece na ficha, no painel
-**Pesquisa da empresa**, logo abaixo de "Dados do formulário", com as fontes e a data.
+Quando um lead chega com dados da **empresa** (nome da empresa, site, Instagram ou e-mail
+corporativo), o worker pesquisa a empresa na web e grava o resultado na negociação. Aparece na
+ficha, no painel **Pesquisa da empresa**, logo abaixo de "Dados do formulário": cada dado com a
+página de onde veio, e a data.
+
+Regras do Eric de 14/10/2026: só lead novo (a partir da data de corte), só dados da empresa
+(nunca CNPJ), uma pesquisa por lead, teto diário, e a fonte de cada dado.
 
 ## O que sai do servidor
 
@@ -13,19 +17,25 @@ Pesquise esta empresa.
 Empresa: <nome da empresa>
 Site: <endereço, sem caminho nem parâmetros>
 Instagram: @<usuário>
-CNPJ: <CNPJ válido>
+Domínio do e-mail: <só o que vem depois do @, e só se for corporativo>
 ```
 
-- **Nunca** o nome da pessoa, o telefone, o e-mail nem o CPF: o pedido (`LeadResearchInput`) não
-  tem lugar para eles. Antes de enviar (`researchInputOf`):
+- **Nunca** o nome da pessoa, o telefone, o e-mail inteiro, o CPF nem o **CNPJ**: o pedido
+  (`LeadResearchInput`) não tem lugar para eles, e o worker nem lê o CNPJ do lead. O prompt
+  pede ao modelo que pesquise só a empresa e não procure pessoas pelo nome. O sistema não abre o
+  Instagram: o usuário vai como texto para a busca, que pode devolver a página pública do perfil
+  como uma das páginas encontradas. Antes de enviar (`researchInputOf`):
+  - do e-mail, só o domínio, e só quando é corporativo (`corporateEmailDomainOf`): gmail,
+    hotmail, outlook, live, yahoo, icloud, uol, bol, terra e os outros webmails gratuitos, com
+    qualquer final de país ("yahoo.com.ar"), ficam de fora;
   - o nome da empresa e o Instagram são descartados se parecem contato de pessoa: um e-mail
     (também "(at)") ou 8 ou mais dígitos com só separadores entre eles ("(11) 9 1234-5678",
     "123.456.789-09", "11912345678"). O teste roda no texto inteiro, antes de cortar em 120
     caracteres;
   - um "nome da empresa" igual ao nome da pessoa é descartado (comparado, nunca enviado); um nome
     que só contém o da pessoa ("Ana Souza Alimentos") segue;
-  - o CNPJ só vai se os dígitos verificadores conferem; o site só se é endereço público (nunca IP,
-    nunca porta que o navegador recusa) e é cortado no endereço, sem caminho nem parâmetros.
+  - o site só vai se é endereço público (nunca IP, nunca porta que o navegador recusa) e é
+    cortado no endereço, sem caminho nem parâmetros.
 - O OpenRouter é chamado com `data_collection: deny` (só provedores que não guardam nem treinam
   com o texto), `plugins: [{ id: "web", engine: "exa", max_results: 5 }]` e
   `usage: { include: true }`. A mesma conta e a mesma chave do agente de tráfego
@@ -40,8 +50,15 @@ CNPJ: <CNPJ válido>
 O modelo preenche cinco campos: o que a empresa faz, cidade e estado, porte, tempo de mercado e
 presença online. Em `leads.enrichment_facts.webResearch` (sem migração):
 
-- **`fields`**: cada campo com `value` ou, se a busca não trouxe, `value: null` e o `reason`.
-  A tela mostra "—" e o motivo. Nada é completado por suposição.
+- **`fields`**: cada campo com `value` e **`sourceUrl`**, a página que diz aquilo, ou, se a busca
+  não trouxe, `value: null` e o `reason`. O modelo tem de indicar, para cada dado, uma das páginas
+  que a busca devolveu (`source`); o worker só guarda o dado se esse endereço é mesmo uma delas
+  (`sourceOfField`, aceitando outra grafia do mesmo endereço: maiúsculas, "www.", barra no fim) e
+  grava o endereço da própria busca. Dado sem página vira `null` com o motivo "Nenhuma das páginas
+  encontradas foi indicada como fonte deste dado". A tela mostra cada dado com "Fonte: <site>"
+  (link para a página) e "—" com o motivo para o resto. Pesquisas gravadas antes de 14/10/2026 não
+  têm `sourceUrl`: os valores delas aparecem como "—" ("Sem a página que sustenta este dado").
+  Nada é completado por suposição.
 - **`sources`**: as páginas que **a própria busca** devolveu (anotações `url_citation` da
   resposta), no máximo 5, só http/https, sem usuário/senha, sem repetição. O modelo não escreve
   links. **Sem nenhuma página, todos os valores são descartados** ("A busca não trouxe páginas
@@ -69,6 +86,19 @@ pesquisa com `SITE_FORM_RESEARCH_ENABLED=true` (API). Um lead já pesquisado nã
 novo por chegar outra vez. Sem um worker que reivindique `enrich_lead`
 (`WORKER_JOB_TYPES`), os trabalhos ficam na fila sem rodar.
 
+**Só lead novo.** O worker só pesquisa lead que chegou a partir da data de corte
+(`LEAD_RESEARCH_SINCE`, padrão `2026-10-14`, 00:00 de São Paulo). Vale a mais antiga entre a
+criação no Wings e a data de entrada (`entered_at`): um negócio antigo do RD importado hoje é
+antigo. Um lead anterior ao corte que converte de novo (Meta, Google, TikTok, webhook do RD, link
+rastreado) passa pelo `enrich_lead`, mas a pesquisa fica `skipped` com o motivo "Lead anterior a
+14/10/2026…", sem chamada e sem gasto (ledger `skipped`, `before_cutoff`). O mesmo vale para
+"Pesquisar de novo" num lead antigo.
+
+**Clique duplo não paga duas vezes.** `enqueueResearch` marca o lead como `pending` com uma
+atualização condicional (só se não está `pending` nem `running`) antes de criar o trabalho, na
+mesma transação: dois pedidos ao mesmo tempo criam **um** trabalho; o outro recebe 409
+`research_in_progress`.
+
 **Rodar de novo não paga de novo.** Um resultado `done` com páginas fica: "Pesquisar de novo"
 (que refaz os outros passos do `enrich_lead`) não chama o OpenRouter outra vez, não gasta e não
 troca o resultado por uma recusa ou falha. O mesmo vale com o provedor desligado. Só um resultado
@@ -83,6 +113,7 @@ sem páginas, `refused`, `failed` ou `skipped` é tentado de novo.
 | `LEAD_RESEARCH_DAILY_USD`    | 1                            | **teto do dia** só desta pesquisa (dia de São Paulo), maior que 0 e até 100. |
 | `LEAD_RESEARCH_USD_PER_CALL` | 0,06                         | quanto uma pesquisa deve custar; reservado antes da chamada.                 |
 | `LEAD_RESEARCH_MODEL`        | `anthropic/claude-haiku-4.5` | `anthropic/claude-haiku-4.5` ou `anthropic/claude-sonnet-5`.                 |
+| `LEAD_RESEARCH_SINCE`        | `2026-10-14`                 | data de corte (AAAA-MM-DD, São Paulo): só lead que chegou a partir dela.     |
 
 Uma variável em branco vale como não definida (vale o padrão). O worker precisa ter
 `enrich_lead` em `WORKER_JOB_TYPES` (o padrão já tem).
@@ -101,10 +132,11 @@ Uma variável em branco vale como não definida (vale o padrão). O worker preci
   modelo) mais US$ 0,004 por página; sem nada, fica a reserva. Quando a chamada falha, a reserva
   fica inteira.
 - Dois pedidos de pesquisa do mesmo lead ao mesmo tempo (clique duplo em "Pesquisar de novo")
-  podem enfileirar dois trabalhos e pagar duas vezes: a checagem de estado da rota não é atômica
-  (já era assim). O teto limita o total.
-- Uma pesquisa custa na ordem de US$ 0,03 a 0,06 (5 páginas da busca mais o modelo): com o teto
-  de US$ 1, cerca de 16 a 30 pesquisas por dia. **Estimativa, não medida.**
+  enfileiram um trabalho só (ver "Quando roda").
+- **Custo medido** no staging (8 pesquisas reais, 09 a 12/10/2026): US$ 0,0113 a 0,0134 cada,
+  cerca de US$ 0,012. O teto é em dólar, não em número de pesquisas: para cerca de 50 por dia,
+  `LEAD_RESEARCH_DAILY_USD=0.65` (a reserva de US$ 0,06 da última pesquisa do dia precisa caber
+  no teto).
 
 ## Logs
 
