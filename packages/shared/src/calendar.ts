@@ -40,7 +40,11 @@ export type AgendaWingsAccess = 'writer' | 'reader' | 'not_shared' | 'not_config
 
 export interface AgendaCalendar {
   key: AgendaCalendarKey;
-  /** The calendar's name on Google (calendarList `summaryOverride` or `summary`). */
+  /**
+   * `mine`: the calendar's name on the person's Google list. `wings`: the name
+   * the person gave it on their list, else "Wings Company" (its Google name is
+   * Thais' account).
+   */
   name: string;
   /** From calendarList, '#rrggbb'. */
   backgroundColor: string;
@@ -140,6 +144,12 @@ export interface AgendaEvent {
    * guests modify it), and not a CRM meeting.
    */
   canEdit: boolean;
+  /**
+   * Whether a change or a deletion here reaches the guests: this is the
+   * organizer's copy (the person's, or the calendar's own) and it has guests.
+   * Deleting a guest's copy only takes it off that person's calendar.
+   */
+  guestsNotified: boolean;
   /**
    * Set when the event is a meeting of a deal (crm_meetings): it is moved and
    * cancelled only from the deal. `leadId` only when this person may open that

@@ -21,6 +21,7 @@ export class GoogleCalendarError extends Error {
       | 'gone'
       | 'rejected'
       | 'unreachable'
+      | 'rate_limited'
       | 'meet_failed',
     readonly status: number | null = null,
   ) {
@@ -115,6 +116,23 @@ function toEvent(raw: RawEvent): CalendarEvent {
   };
 }
 
+const USAGE_LIMIT_REASONS = new Set([
+  'rateLimitExceeded',
+  'userRateLimitExceeded',
+  'quotaExceeded',
+  'dailyLimitExceeded',
+]);
+
+/** The machine reason of a refusal (`error.errors[0].reason`); only that, never Google's message. */
+async function rejectionReasonOf(response: Response): Promise<string | null> {
+  const body = (await response.json().catch(() => null)) as {
+    error?: { errors?: Array<{ reason?: unknown }>; status?: unknown };
+  } | null;
+  const reason = body?.error?.errors?.[0]?.reason;
+  if (typeof reason === 'string') return reason;
+  return body?.error?.status === 'RESOURCE_EXHAUSTED' ? 'rateLimitExceeded' : null;
+}
+
 /**
  * One Calendar v3 request with the person's token; Google's refusals become a
  * `GoogleCalendarError` (never Google's message, which may quote event content).
@@ -144,7 +162,15 @@ export async function calendarRequest(
   }
   if (response.status === 204) return null;
   if (response.status === 401) throw new GoogleCalendarError('unauthorized', 401);
-  if (response.status === 403) throw new GoogleCalendarError('forbidden', 403);
+  if (response.status === 429) throw new GoogleCalendarError('rate_limited', 429);
+  if (response.status === 403) {
+    // Google also answers 403 when a usage limit is hit: that is a pause, not a missing permission.
+    const reason = await rejectionReasonOf(response);
+    throw new GoogleCalendarError(
+      reason && USAGE_LIMIT_REASONS.has(reason) ? 'rate_limited' : 'forbidden',
+      403,
+    );
+  }
   if (response.status === 404) throw new GoogleCalendarError('not_found', 404);
   if (response.status === 410) throw new GoogleCalendarError('gone', 410);
   if (!response.ok) throw new GoogleCalendarError('rejected', response.status);
@@ -161,6 +187,8 @@ export async function listCalendars(
   const body = (await call(transport, accessToken, 'GET', '/users/me/calendarList', {
     minAccessRole: 'reader',
     maxResults: '250',
+    // A shared calendar the person hid from their Google list is still shared with them.
+    showHidden: 'true',
   })) as { items?: Array<Record<string, unknown>> } | null;
   return (body?.items ?? [])
     .filter((item) => typeof item.id === 'string')

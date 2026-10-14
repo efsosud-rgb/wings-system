@@ -31,6 +31,7 @@ const event = (over: Partial<AgendaEvent> = {}): AgendaEvent => ({
   attendees: [],
   recurring: false,
   canEdit: true,
+  guestsNotified: false,
   crm: null,
   ...over,
 });

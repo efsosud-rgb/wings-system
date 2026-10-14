@@ -8,6 +8,9 @@ import { dayLabel, minutesOf, partsOf, timeLabel, WEEKDAY_SHORT } from './time.j
 export const HOUR_PX = 48;
 /** The shortest block drawn, in minutes; a shorter event still gets this much room. */
 const MIN_BLOCK_MINUTES = 20;
+/** Where the grid opens: the working morning. */
+const FIRST_HOUR = 7;
+const LABEL_ROOM_PX = 10;
 /** Below this length an event is one line: "Título, 09:00". */
 const ONE_LINE_MINUTES = 40;
 
@@ -43,12 +46,20 @@ export function TimeGrid({
   const showsToday = days.includes(today);
   const firstDay = days[0];
 
-  // On open (and on another period): about an hour before now, or 07:00 on another week.
+  // On open (and on another period): from 07:00, the working morning in view; when the current
+  // time would fall below the fold, low enough that it shows with an hour or two after it.
   useEffect(() => {
     const node = scrollRef.current;
     if (!node) return;
-    const hour = showsToday ? Math.max(0, Math.floor(minutesOf(Date.now()) / 60) - 1) : 7;
-    node.scrollTop = hour * HOUR_PX;
+    const sticky = node.querySelector<HTMLElement>('.agenda-tg-sticky')?.offsetHeight ?? 0;
+    const visibleHours = Math.max(1, (node.clientHeight - sticky) / HOUR_PX);
+    let hour = FIRST_HOUR;
+    if (showsToday) {
+      const nowHours = minutesOf(Date.now()) / 60;
+      if (nowHours > FIRST_HOUR + visibleHours - 1) hour = nowHours - visibleHours + 2;
+    }
+    // A few pixels above the hour, so its label is not cut by the sticky header.
+    node.scrollTop = Math.max(0, Math.max(0, hour) * HOUR_PX - LABEL_ROOM_PX);
     // Only when the period changes, not every minute.
   }, [firstDay, days.length, showsToday]);
 

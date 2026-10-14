@@ -144,9 +144,26 @@ function whenOf(when: RawWhen | undefined): { allDay: boolean; value: string } {
   return { allDay: true, value: str(when?.date) ?? '' };
 }
 
+/** An https address on meet.google.com: what the screen may label "Google Meet". */
+function meetAddress(value: unknown): string | null {
+  const text = str(value);
+  if (!text) return null;
+  try {
+    const url = new URL(text);
+    return url.protocol === 'https:' && url.hostname === 'meet.google.com' ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The event's Meet. Whoever organizes an event writes its conference data, an
+ * outside sender included, so only a real Meet address passes; any other
+ * conference link is left out rather than shown as a Meet.
+ */
 function meetUrlOf(raw: RawEvent): string | null {
   const video = raw.conferenceData?.entryPoints?.find((p) => p.entryPointType === 'video');
-  return str(video?.uri) ?? str(raw.hangoutLink);
+  return meetAddress(video?.uri) ?? meetAddress(raw.hangoutLink);
 }
 
 function attendeesOf(raw: RawEvent): AgendaAttendee[] {
@@ -170,6 +187,8 @@ export function toAgendaEvent(
   const id = String(raw.id);
   const start = whenOf(raw.start);
   const end = whenOf(raw.end);
+  const attendees = attendeesOf(raw);
+  const ownCopy = raw.organizer?.self === true || sameId(str(raw.organizer?.email), ctx.calendarId);
   const organizer = raw.organizer
     ? {
         email: str(raw.organizer.email)?.toLowerCase() ?? null,
@@ -192,9 +211,10 @@ export function toAgendaEvent(
     colorId: str(raw.colorId),
     tentative: raw.status === 'tentative',
     organizer,
-    attendees: attendeesOf(raw),
+    attendees,
     recurring: Boolean(raw.recurringEventId),
     canEdit: canEditEvent(raw, ctx),
+    guestsNotified: ownCopy && attendees.some((a) => !a.self && !a.organizer),
     crm: null,
   };
 }

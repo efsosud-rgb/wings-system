@@ -884,6 +884,179 @@ describe('Agenda: editing and deleting', () => {
   });
 });
 
+describe('Agenda: review fixes', () => {
+  const base = {
+    calendar: 'mine',
+    title: 'Planejamento',
+    allDay: false,
+    start: '2026-10-15T09:00:00-03:00',
+    end: '2026-10-15T10:00:00-03:00',
+    location: null,
+    description: null,
+    attendees: [],
+    createMeet: true,
+    colorId: null,
+  };
+
+  /** The fake, with some calls made to fail as the network or Google would. */
+  function failing(
+    google: ReturnType<typeof fakeGoogle>,
+    fails: (method: string, url: string) => Response | 'network' | null,
+  ) {
+    app.wings.googleFetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const outcome = fails(init?.method ?? 'GET', url);
+      if (outcome === 'network') throw new TypeError('fetch failed');
+      if (outcome) return outcome;
+      return google.transport(input, init);
+    };
+  }
+
+  it('names the Wings Company calendar so, though Google names it after Thais', async () => {
+    const plain = await connected('vendedor_formatacao', {
+      calendars: [ME, { ...WINGS_WRITER, summary: WINGS }],
+    });
+    expect((await overviewOf(plain.cookies)).calendars[1]!.name).toBe('Wings Company');
+    const renamed = await connected('vendedor_formatacao', {
+      calendars: [ME, { ...WINGS_WRITER, summary: WINGS, summaryOverride: 'Agenda da empresa' }],
+    });
+    expect((await overviewOf(renamed.cookies)).calendars[1]!.name).toBe('Agenda da empresa');
+  });
+
+  it('finds a Wings Company calendar the person hid on their Google list', async () => {
+    const seller = await connected('vendedor_formatacao', {
+      calendars: [ME, { ...WINGS_WRITER, hidden: true }],
+    });
+    expect((await overviewOf(seller.cookies)).wings).toBe('writer');
+    const list = seller.google.calls.find((c) => c.url.includes('/users/me/calendarList'));
+    expect(new URL(list!.url).searchParams.get('showHidden')).toBe('true');
+  });
+
+  it('reads a usage limit as a pause, not as a missing permission', async () => {
+    const seller = await connected('vendedor_formatacao', {
+      eventsStatusFor: { [WINGS]: 403 },
+      refusalReason: 'rateLimitExceeded',
+    });
+    const answer = await eventsOf(seller.cookies);
+    expect(answer.failures).toEqual([
+      { calendar: 'wings', code: 'google_rate_limited', message: expect.any(String) },
+    ]);
+    const write = await app.inject({
+      method: 'POST',
+      url: '/agenda/events',
+      cookies: seller.cookies,
+      payload: { ...base, calendar: 'wings', createMeet: false },
+    });
+    expect(write.statusCode).toBe(502);
+    expect(write.json()).toMatchObject({ error: 'google_rate_limited' });
+    // A real refusal is still one.
+    const refused = await connected('vendedor_formatacao', {
+      eventsStatusFor: { [WINGS]: 403 },
+      refusalReason: 'forbidden',
+    });
+    expect((await eventsOf(refused.cookies)).failures[0]!.code).toBe('wings_calendar_forbidden');
+  });
+
+  it('removes the event when the Meet re-read fails, and says meet_failed only once it is gone', async () => {
+    const seller = await connected('vendedor_formatacao', { meetPendingReads: 1 });
+    failing(seller.google, (method, url) =>
+      method === 'GET' && url.includes('/events/evt1') ? 'network' : null,
+    );
+    const res = await app.inject({
+      method: 'POST',
+      url: '/agenda/events',
+      cookies: seller.cookies,
+      payload: base,
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ error: 'meet_failed' });
+    expect(seller.google.events.get('evt1')!.deleted).toBe(true);
+  });
+
+  it('never says "not created" when the cleanup failed too: it points to the event on Google', async () => {
+    const seller = await connected('vendedor_formatacao', { meetPendingReads: 1 });
+    failing(seller.google, (method, url) =>
+      url.includes('/events/evt1') && (method === 'GET' || method === 'DELETE')
+        ? new Response('{}', { status: 500 })
+        : null,
+    );
+    const res = await app.inject({
+      method: 'POST',
+      url: '/agenda/events',
+      cookies: seller.cookies,
+      payload: base,
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({
+      error: 'meet_failed_event_kept',
+      htmlLink: 'https://calendar.google.com/event?eid=evt1',
+    });
+    expect(seller.google.events.get('evt1')!.deleted).toBe(false);
+  });
+
+  it('asks to check Google before a retry when the create answer was lost', async () => {
+    const seller = await connected('vendedor_formatacao');
+    failing(seller.google, (method, url) =>
+      method === 'POST' && url.includes('/events') ? 'network' : null,
+    );
+    const res = await app.inject({
+      method: 'POST',
+      url: '/agenda/events',
+      cookies: seller.cookies,
+      payload: { ...base, createMeet: false },
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json<{ error: string; message: string }>().message).toContain('confira no Google');
+  });
+
+  it('shows only a real Meet address as the Meet', async () => {
+    const seller = await connected('vendedor_formatacao');
+    const video = (uri: string) => ({
+      conferenceData: { entryPoints: [{ entryPointType: 'video', uri }] },
+    });
+    seller.google.seed('primary', own('zoom', video('https://zoom.us/j/123')));
+    seller.google.seed('primary', own('plain-http', video('http://meet.google.com/abc-defg-hij')));
+    seller.google.seed('primary', own('scheme', video('ms-settings:privacy')));
+    seller.google.seed('primary', own('meet', video('https://meet.google.com/abc-defg-hij')));
+    seller.google.seed(
+      'primary',
+      own('hangout', { hangoutLink: 'https://meet.google.com/xyz-abcd-efg' }),
+    );
+    const answer = await eventsOf(seller.cookies);
+    expect(byId(answer, 'zoom')!.meetUrl).toBeNull();
+    expect(byId(answer, 'plain-http')!.meetUrl).toBeNull();
+    expect(byId(answer, 'scheme')!.meetUrl).toBeNull();
+    expect(byId(answer, 'meet')!.meetUrl).toBe('https://meet.google.com/abc-defg-hij');
+    expect(byId(answer, 'hangout')!.meetUrl).toBe('https://meet.google.com/xyz-abcd-efg');
+  });
+
+  it('says whether a change reaches the guests: only on the organizer’s copy with guests', async () => {
+    const seller = await connected('vendedor_formatacao');
+    const guest = { email: 'convidado@exemplo.com', responseStatus: 'accepted' };
+    const me = { email: PERSON, self: true, responseStatus: 'accepted' };
+    seller.google.seed('primary', own('with-guests', { attendees: [guest] }));
+    seller.google.seed('primary', own('alone', { attendees: [{ ...me, organizer: true }] }));
+    seller.google.seed(
+      'primary',
+      own('guest-copy', {
+        organizer: { email: 'organiza@exemplo.com' },
+        guestsCanModify: true,
+        attendees: [guest, me],
+      }),
+    );
+    seller.google.seed(WINGS, {
+      ...own('wings-own', { attendees: [guest] }),
+      organizer: { email: WINGS },
+    });
+    const answer = await eventsOf(seller.cookies);
+    expect(byId(answer, 'with-guests')!.guestsNotified).toBe(true);
+    expect(byId(answer, 'alone')!.guestsNotified).toBe(false);
+    expect(byId(answer, 'guest-copy')!.guestsNotified).toBe(false);
+    expect(byId(answer, 'guest-copy')!.canEdit).toBe(true);
+    expect(byId(answer, 'wings-own')!.guestsNotified).toBe(true);
+  });
+});
+
 describe('Agenda: who opens it', () => {
   it('opens to a seller and to the Admin alike', async () => {
     for (const role of ['vendedor_expansao', 'admin_master'] as const) {

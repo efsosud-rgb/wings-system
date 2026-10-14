@@ -66,3 +66,13 @@ export function linkify(text: string): Array<{ text: string; href?: string }> {
   });
   return parts;
 }
+
+/** The address when it is plain https, else null: a link from Google opens only then. */
+export function httpsOnly(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    return new URL(value).protocol === 'https:' ? value : null;
+  } catch {
+    return null;
+  }
+}

@@ -27,11 +27,11 @@ const { ApiError } = await import('../api/client.js');
 
 const overview = (over: Partial<AgendaOverview> = {}): AgendaOverview => ({
   state: 'ready',
-  googleEmail: 'daniele@wingscompany.com.br',
+  googleEmail: 'pessoa@exemplo.com',
   calendars: [
     {
       key: 'mine',
-      name: 'Daniele Teste',
+      name: 'Pessoa Teste',
       backgroundColor: '#039be5',
       foregroundColor: '#ffffff',
       canWrite: true,
@@ -64,10 +64,11 @@ const event = (over: Partial<AgendaEvent> = {}): AgendaEvent => ({
   htmlLink: null,
   colorId: null,
   tentative: false,
-  organizer: { email: 'daniele@wingscompany.com.br', name: null, self: true },
+  organizer: { email: 'pessoa@exemplo.com', name: null, self: true },
   attendees: [],
   recurring: false,
   canEdit: true,
+  guestsNotified: false,
   crm: null,
   ...over,
 });
@@ -103,8 +104,7 @@ function renderPage(path = '/produtividade/agenda?visao=semana&data=2026-10-14')
   );
 }
 
-const MEETING =
-  'Reunião de teste, quarta-feira, 14 de outubro, 09:00 a 10:00, agenda Daniele Teste';
+const MEETING = 'Reunião de teste, quarta-feira, 14 de outubro, 09:00 a 10:00, agenda Pessoa Teste';
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -226,7 +226,7 @@ describe('Agenda — states', () => {
     expect(await screen.findByRole('button', { name: MEETING })).toBeTruthy();
     expect(screen.getAllByText(AGENDA_NOTICES.wingsNotShared).length).toBeGreaterThan(0);
     expect(screen.queryByRole('checkbox', { name: 'Wings Company' })).toBeNull();
-    expect(screen.getByRole('checkbox', { name: 'Daniele Teste' })).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: 'Pessoa Teste' })).toBeTruthy();
   });
 
   it('shows "—" and the reason when the events cannot be read, never an empty week', async () => {
@@ -275,8 +275,8 @@ describe('Agenda — details', () => {
           description: 'Pauta em https://exemplo.com/pauta\nSegunda linha',
           attendees: [
             {
-              email: 'daniele@wingscompany.com.br',
-              name: 'Daniele Teste',
+              email: 'pessoa@exemplo.com',
+              name: 'Pessoa Teste',
               response: 'aceitou',
               organizer: true,
               self: true,
@@ -306,7 +306,7 @@ describe('Agenda — details', () => {
     expect(within(card).getByText('2 convidados')).toBeTruthy();
     expect(within(card).getByText('Organizador')).toBeTruthy();
     expect(within(card).getByText('Aguardando resposta')).toBeTruthy();
-    expect(within(card).getByText('Daniele Teste', { selector: 'p' })).toBeTruthy();
+    expect(within(card).getByText('Pessoa Teste', { selector: 'p' })).toBeTruthy();
     expect(within(card).getByRole('link', { name: /Abrir no Google Agenda/ })).toBeTruthy();
     expect(within(card).getByRole('button', { name: 'Editar evento' })).toBeTruthy();
 
@@ -411,6 +411,7 @@ describe('Agenda — create and delete', () => {
       answerWith(
         event({
           recurring: true,
+          guestsNotified: true,
           attendees: [
             {
               email: 'convidado@exemplo.com',
@@ -436,6 +437,116 @@ describe('Agenda — create and delete', () => {
     await waitFor(() => expect(del).toHaveBeenCalledWith('/agenda/events/mine/e1'));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(confirmSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('Agenda — review fixes', () => {
+  const guest = {
+    email: 'convidado@exemplo.com',
+    name: null,
+    response: 'aceitou' as const,
+    organizer: false,
+    self: false,
+  };
+
+  it('deleting a guest’s own copy says it leaves only their agenda', async () => {
+    serve(
+      overview(),
+      answerWith(
+        event({
+          organizer: { email: 'organiza@exemplo.com', name: null, self: false },
+          attendees: [guest, { ...guest, email: 'pessoa@exemplo.com', self: true }],
+        }),
+      ),
+    );
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: MEETING }));
+    fireEvent.click(screen.getByRole('button', { name: 'Excluir evento' }));
+    const ask = screen.getByRole('alertdialog');
+    expect(
+      within(ask).getByText('O evento sai só da sua agenda; quem organiza continua com ele.'),
+    ).toBeTruthy();
+    expect(within(ask).queryByText('Os convidados recebem o cancelamento por e-mail.')).toBeNull();
+  });
+
+  it('a search says “nenhum evento” only after Google answered', async () => {
+    let answerSearch: (value: AgendaEventsAnswer) => void = () => {};
+    get.mockImplementation((path: string) => {
+      if (path === '/agenda') return Promise.resolve({ overview: overview() });
+      if (path.includes('q=')) {
+        return new Promise<AgendaEventsAnswer>((done) => {
+          answerSearch = done;
+        });
+      }
+      return Promise.resolve(answerWith(event()));
+    });
+    renderPage();
+    await screen.findByRole('button', { name: MEETING });
+    fireEvent.click(screen.getByRole('button', { name: 'Pesquisar' }));
+    const box = screen.getByRole('searchbox', { name: 'Pesquisar eventos' });
+    fireEvent.change(box, { target: { value: 'contrato' } });
+    fireEvent.submit(box);
+    expect(await screen.findByText('Resultados para “contrato”')).toBeTruthy();
+    expect(screen.getByText('Carregando eventos…')).toBeTruthy();
+    expect(screen.queryByText(/Nenhum evento encontrado/)).toBeNull();
+    answerSearch(answerWith());
+    expect(await screen.findByText('Nenhum evento encontrado para “contrato”')).toBeTruthy();
+  });
+
+  it('qualifies an empty list when a calendar could not be read', async () => {
+    serve(overview(), {
+      events: [],
+      failures: [
+        { calendar: 'wings', code: 'google_unreachable', message: 'O Google não respondeu.' },
+      ],
+      truncated: false,
+    });
+    renderPage('/produtividade/agenda?visao=agenda&data=2026-10-14');
+    expect(
+      await screen.findByText(
+        'Nenhum evento nos próximos 30 dias nas agendas que puderam ser lidas',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('keeps the form open while saving, so a refusal is seen', async () => {
+    serve(overview(), answerWith());
+    post.mockReturnValue(new Promise(() => {}));
+    renderPage();
+    await screen.findByRole('heading', { name: 'outubro de 2026' });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Criar evento' })[0]!);
+    const form = screen.getByRole('dialog', { name: 'Novo evento' });
+    fireEvent.change(within(form).getByPlaceholderText('Adicionar título'), {
+      target: { value: 'Teste' },
+    });
+    fireEvent.click(within(form).getByRole('button', { name: 'Salvar' }));
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    fireEvent.keyDown(form, { key: 'Escape' });
+    expect(screen.getByRole('dialog', { name: 'Novo evento' })).toBeTruthy();
+  });
+
+  it('a reader of Wings Company is told to ask Thais, not the organizer', async () => {
+    serve(
+      overview({
+        wings: 'reader',
+        calendars: [overview().calendars[0]!, { ...overview().calendars[1]!, canWrite: false }],
+      }),
+      answerWith(
+        event({
+          calendar: 'wings',
+          canEdit: false,
+          organizer: { email: 'organiza@exemplo.com', name: null, self: false },
+        }),
+      ),
+    );
+    renderPage();
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Reunião de teste, quarta-feira, 14 de outubro, 09:00 a 10:00, agenda Wings Company',
+      }),
+    );
+    expect(screen.getByText(AGENDA_NOTICES.wingsReadOnly)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Editar evento' })).toBeNull();
   });
 });
 

@@ -587,8 +587,16 @@
   line-height: 1.3;
   overflow: hidden;
 }
+/* The title never gives its line up: in a narrow block the time is what gets cut. */
 .agenda-ev-block .agenda-ev-title {
+  flex: none;
   white-space: nowrap;
+}
+.agenda-ev-block .agenda-ev-time {
+  min-height: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .agenda-ev-block.is-short {
   justify-content: center;

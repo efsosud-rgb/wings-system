@@ -17,6 +17,8 @@ export interface FakeGoogleOptions {
     summaryOverride?: string;
     backgroundColor?: string;
     foregroundColor?: string;
+    /** Hidden from the person's Google list: calendarList leaves it out unless showHidden=true. */
+    hidden?: boolean;
   }>;
   /** How many reads an event's Meet stays "pending" before it exists. */
   meetPendingReads?: number;
@@ -28,6 +30,8 @@ export interface FakeGoogleOptions {
   eventsStatusFor?: Record<string, number>;
   /** Answers this status to calendarList. */
   calendarListStatus?: number;
+  /** The `error.errors[0].reason` sent with every refusal above (403 rateLimitExceeded is a usage limit). */
+  refusalReason?: string;
   /** colors.get's `event` map; without it colors.get answers 404. */
   colors?: Record<string, { background: string; foreground: string }>;
   /** events.list answers at most this many items per page (default 250). */
@@ -54,6 +58,13 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
   const events = new Map<string, FakeEvent>();
   let tokenCounter = 0;
   let sentMail: Array<{ raw: string; threadId: string | null }> = [];
+
+  const refusal = (code: number) => ({
+    error: {
+      code,
+      ...(options.refusalReason ? { errors: [{ reason: options.refusalReason }] } : {}),
+    },
+  });
 
   const idToken = `h.${Buffer.from(JSON.stringify({ email })).toString('base64url')}.s`;
   const json = (status: number, body: unknown) =>
@@ -184,8 +195,9 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
 
     if (u.pathname === '/calendar/v3/users/me/calendarList') {
       if (options.calendarListStatus)
-        return json(options.calendarListStatus, { error: { code: options.calendarListStatus } });
-      return json(200, { items: calendars });
+        return json(options.calendarListStatus, refusal(options.calendarListStatus));
+      const showHidden = u.searchParams.get('showHidden') === 'true';
+      return json(200, { items: calendars.filter((c) => showHidden || !c.hidden) });
     }
     if (u.pathname === '/calendar/v3/colors') {
       if (!options.colors) return json(404, { error: { code: 404 } });
@@ -195,14 +207,13 @@ export function fakeGoogle(options: FakeGoogleOptions = {}) {
       /^\/calendar\/v3\/calendars\/([^/]+)\/events(?:\/([^/]+))?$/,
     );
     if (eventsMatch) {
-      if (options.eventsStatus)
-        return json(options.eventsStatus, { error: { code: options.eventsStatus } });
+      if (options.eventsStatus) return json(options.eventsStatus, refusal(options.eventsStatus));
       const calendarId = decodeURIComponent(eventsMatch[1]!);
       const eventId = eventsMatch[2] ? decodeURIComponent(eventsMatch[2]) : null;
       const calendarStatus = Object.entries(options.eventsStatusFor ?? {}).find(
         ([id]) => calendarKey(id) === calendarKey(calendarId),
       )?.[1];
-      if (calendarStatus) return json(calendarStatus, { error: { code: calendarStatus } });
+      if (calendarStatus) return json(calendarStatus, refusal(calendarStatus));
       if (method === 'GET' && !eventId) return json(200, listAnswer(calendarId, u));
       if (method === 'POST') {
         const id = `evt${events.size + 1}`;

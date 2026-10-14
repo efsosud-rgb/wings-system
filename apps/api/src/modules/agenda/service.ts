@@ -78,6 +78,11 @@ const MESSAGES = {
   notFound: 'Evento não encontrado no Google Agenda.',
   meetFailed:
     'O Google criou o evento mas não gerou o Meet; o evento não foi criado. Tente de novo.',
+  meetFailedKept:
+    'O Google criou o evento mas não gerou o Meet, e não foi possível apagá-lo: confira no Google Agenda antes de tentar de novo.',
+  createUnreachable:
+    'O Google não respondeu: confira no Google Agenda se o evento foi criado antes de tentar de novo.',
+  rateLimited: 'O Google pediu uma pausa nas consultas; tente de novo em um minuto.',
 };
 
 const notConfigured = () =>
@@ -146,7 +151,11 @@ function viewOf(
 ): AgendaCalendar {
   return {
     key,
-    name: entry ? entry.summaryOverride || entry.summary || fallbackName : fallbackName,
+    // The Wings Company calendar is Thais' primary: Google names it after her account.
+    name:
+      key === 'wings'
+        ? entry?.summaryOverride || fallbackName
+        : entry?.summaryOverride || entry?.summary || fallbackName,
     backgroundColor: entry?.backgroundColor ?? FALLBACK_CALENDAR_COLORS.backgroundColor,
     foregroundColor: entry?.foregroundColor ?? FALLBACK_CALENDAR_COLORS.foregroundColor,
     canWrite: entry ? isWriterRole(entry.accessRole) : true,
@@ -224,6 +233,8 @@ export function agendaErrorOf(error: unknown, calendar: AgendaCalendarKey): Agen
       return notFound();
     case 'unreachable':
       return unreachable();
+    case 'rate_limited':
+      return new AgendaError('google_rate_limited', 502, MESSAGES.rateLimited);
     default:
       return new AgendaError('google_rejected', 502, MESSAGES.rejected);
   }
@@ -339,6 +350,7 @@ const FAILURE_MESSAGES: Record<string, string> = {
   wings_calendar_forbidden: 'Sem acesso à agenda Wings Company no Google.',
   google_unreachable: 'O Google não respondeu; esta agenda não foi lida.',
   google_rejected: 'O Google recusou a leitura desta agenda.',
+  google_rate_limited: 'O Google pediu uma pausa; esta agenda não foi lida. Tente em um minuto.',
   event_not_found: 'A agenda não foi encontrada no Google.',
 };
 
@@ -409,7 +421,10 @@ export async function eventsFor(
 
 const MEET_READS = [400, 800, 1600];
 
-/** A Meet Google is still making is re-read a few times; null when it never came. */
+/**
+ * A Meet Google is still making is re-read a few times; null when it never
+ * came, or when a re-read failed (the event itself already exists either way).
+ */
 async function waitForMeet(
   deps: AgendaDeps,
   access: Access,
@@ -420,12 +435,16 @@ async function waitForMeet(
   for (const wait of MEET_READS) {
     if (hasMeet(event) || meetStatusOf(event) !== 'pending') break;
     await deps.sleep(wait);
-    event = await getRawEvent(
-      access.google.transport,
-      access.token,
-      calendarId,
-      String(created.id),
-    );
+    try {
+      event = await getRawEvent(
+        access.google.transport,
+        access.token,
+        calendarId,
+        String(created.id),
+      );
+    } catch {
+      return null;
+    }
   }
   return hasMeet(event) ? event : null;
 }
@@ -455,21 +474,6 @@ export async function createAgendaEvent(
   let raw: RawEvent;
   try {
     raw = await insertRawEvent(transport, access.token, calendar.requestId, insertRequestOf(input));
-    if (input.createMeet && !hasMeet(raw)) {
-      const withMeet = await waitForMeet(deps, access, calendar.requestId, raw);
-      if (!withMeet) {
-        // An event without the Meet it promised is worse than none: guests would get a link-less invitation.
-        await deleteRawEvent(
-          transport,
-          access.token,
-          calendar.requestId,
-          String(raw.id),
-          input.attendees.length ? 'all' : 'none',
-        ).catch(() => {});
-        throw new AgendaError('meet_failed', 502, MESSAGES.meetFailed);
-      }
-      raw = withMeet;
-    }
   } catch (error) {
     if (
       calendar.key === 'wings' &&
@@ -478,7 +482,33 @@ export async function createAgendaEvent(
     ) {
       throw new AgendaError('wings_calendar_forbidden', 409, AGENDA_NOTICES.wingsNotShared);
     }
+    // Google may have made it before the answer was lost: a blind retry would make a twin.
+    if (error instanceof GoogleCalendarError && error.code === 'unreachable') {
+      throw new AgendaError('google_unreachable', 502, MESSAGES.createUnreachable);
+    }
     throw agendaErrorOf(error, calendar.key);
+  }
+  if (input.createMeet && !hasMeet(raw)) {
+    const withMeet = await waitForMeet(deps, access, calendar.requestId, raw);
+    if (!withMeet) {
+      // An event without the Meet it promised is worse than none: guests would get a link-less
+      // invitation. Only a delete that went through lets the answer say it was not created.
+      const removed = await deleteRawEvent(
+        transport,
+        access.token,
+        calendar.requestId,
+        String(raw.id),
+        input.attendees.length ? 'all' : 'none',
+      ).then(
+        () => true,
+        () => false,
+      );
+      if (removed) throw new AgendaError('meet_failed', 502, MESSAGES.meetFailed);
+      throw new AgendaError('meet_failed_event_kept', 502, MESSAGES.meetFailedKept, {
+        htmlLink: typeof raw.htmlLink === 'string' ? raw.htmlLink : null,
+      });
+    }
+    raw = withMeet;
   }
   return {
     calendar: calendar.key,

@@ -8,7 +8,7 @@ import {
 import { useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import { Icon } from '../Icon.js';
-import { colorStyle, linkify, titleOf, whenOf } from './format.js';
+import { colorStyle, httpsOnly, linkify, titleOf, whenOf } from './format.js';
 import { calendarOf, colorsOf } from './layout.js';
 import { useDialog } from './useDialog.js';
 
@@ -64,6 +64,8 @@ export function EventDetails({
 
   const calendar = calendarOf(overview.calendars, event.calendar);
   const colors = colorsOf(event, overview);
+  const meetUrl = httpsOnly(event.meetUrl);
+  const googleUrl = httpsOnly(event.htmlLink);
   const calendarColors = calendar
     ? { background: calendar.backgroundColor, foreground: calendar.foregroundColor }
     : null;
@@ -79,6 +81,7 @@ export function EventDetails({
         ref={ref}
         className="agenda-details agenda-dialog"
         role="dialog"
+        aria-modal="true"
         aria-labelledby={titleId}
         style={place ?? undefined}
       >
@@ -138,12 +141,12 @@ export function EventDetails({
           </div>
         )}
 
-        {event.meetUrl && (
+        {meetUrl && (
           <div className="agenda-details-row">
             <Icon name="video" size={18} className="agenda-details-icon" />
             <a
               className="crm-btn is-primary"
-              href={event.meetUrl}
+              href={meetUrl}
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -209,13 +212,17 @@ export function EventDetails({
         </div>
 
         {!event.canEdit && !event.crm && (
-          <p className="agenda-details-note">{AGENDA_NOTICES.notEditable}</p>
+          <p className="agenda-details-note">
+            {event.calendar === 'wings' && overview.wings === 'reader'
+              ? AGENDA_NOTICES.wingsReadOnly
+              : AGENDA_NOTICES.notEditable}
+          </p>
         )}
 
-        {event.htmlLink && (
+        {googleUrl && (
           <a
             className="agenda-details-google"
-            href={event.htmlLink}
+            href={googleUrl}
             target="_blank"
             rel="noopener noreferrer"
           >

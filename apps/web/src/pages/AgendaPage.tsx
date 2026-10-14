@@ -79,7 +79,9 @@ function storedHidden(): Set<AgendaCalendarKey> {
 const GOOGLE_CODES = new Set([
   'google_rejected',
   'google_unreachable',
+  'google_rate_limited',
   'meet_failed',
+  'meet_failed_event_kept',
   'google_needs_reconnect',
   'google_not_connected',
   'google_not_configured',
@@ -349,6 +351,18 @@ function AgendaWorkspace({ overview }: { overview: AgendaOverview }) {
     calendarOf(overview.calendars, key)?.name ?? 'Wings Company';
   const failures = events.data?.failures ?? [];
   const loading = events.isPending || events.isPlaceholderData;
+  const answered = Boolean(events.data) && !events.isPlaceholderData;
+
+  /**
+   * "Nothing here" is said only for what was read and is shown: a calendar that
+   * failed or is switched off leaves the text qualified, never a bare "nenhum".
+   */
+  const emptyText = (plain: string) => {
+    if (visible.size === 0) return 'Nenhuma agenda selecionada: marque uma agenda à esquerda';
+    if (failures.length > 0) return `${plain} nas agendas que puderam ser lidas`;
+    if (visible.size < overview.calendars.length) return `${plain} nas agendas exibidas`;
+    return plain;
+  };
 
   let content: ReactNode;
   if (events.isError) {
@@ -362,30 +376,31 @@ function AgendaWorkspace({ overview }: { overview: AgendaOverview }) {
       </div>
     );
   } else if (searching) {
-    content = events.data ? (
+    content = answered ? (
       <ListView
         days={period.days}
-        events={events.isPlaceholderData ? [] : shown}
+        events={shown}
         overview={overview}
         today={today}
-        empty={`Nenhum evento encontrado para “${query}”`}
+        empty={emptyText(`Nenhum evento encontrado para “${query}”`)}
         onOpen={openEvent}
         onDay={(day) => go('dia', day)}
       />
     ) : null;
   } else if (view === 'agenda') {
-    content =
-      events.data && !events.isPlaceholderData ? (
-        <ListView
-          days={period.days}
-          events={shown}
-          overview={overview}
-          today={today}
-          empty="Nenhum evento nos próximos 30 dias"
-          onOpen={openEvent}
-          onDay={(day) => go('dia', day)}
-        />
-      ) : null;
+    content = answered ? (
+      <ListView
+        days={period.days}
+        events={shown}
+        overview={overview}
+        today={today}
+        empty={emptyText(
+          anchor === today ? 'Nenhum evento nos próximos 30 dias' : 'Nenhum evento neste período',
+        )}
+        onOpen={openEvent}
+        onDay={(day) => go('dia', day)}
+      />
+    ) : null;
   } else if (view === 'mes') {
     content = (
       <MonthView
@@ -642,8 +657,13 @@ function AgendaWorkspace({ overview }: { overview: AgendaOverview }) {
             )
           }
         >
-          {confirm.event.attendees.length > 0 && (
+          {confirm.event.guestsNotified ? (
             <p>Os convidados recebem o cancelamento por e-mail.</p>
+          ) : (
+            !confirm.event.organizer?.self &&
+            confirm.event.attendees.some((guest) => !guest.self) && (
+              <p>O evento sai só da sua agenda; quem organiza continua com ele.</p>
+            )
           )}
           {confirm.event.recurring && <p>Só esta ocorrência é excluída.</p>}
         </ConfirmDialog>

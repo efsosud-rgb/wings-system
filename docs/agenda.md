@@ -49,8 +49,11 @@ characters.
 - No OAuth client or integrations key → `state: 'not_configured'`.
 - `accessTokenFor` → `not_connected`, `needs_reconnect`, or `google_unreachable` (Google did not
   answer the refresh).
-- `calendarList` (`minAccessRole=reader`): `mine` is the primary entry (name =
+- `calendarList` (`minAccessRole=reader`, `showHidden=true`, so a shared calendar the person hid
+  on their Google list still counts): `mine` is the primary entry (name =
   `summaryOverride ?? summary`, colours from the entry, `canWrite` = owner/writer). The Wings
+  Company entry is named by the person's own `summaryOverride`, else "Wings Company": its Google
+  name is Thais' account. The Wings
   Company calendar is `not_configured` (env unset), `is_mine` (the primary id equals the Wings id,
   case-insensitive: Thais; only `mine` is listed), `writer` (owner/writer), `reader` (listed,
   `canWrite: false`) or `not_shared` (not listed). A 401 on the list → `needs_reconnect`; any other
@@ -74,8 +77,12 @@ pages per calendar; `truncated: true` when Google had more.
 - Mapping: a timed start/end becomes an ISO instant, an all-day one the `YYYY-MM-DD` date (end
   exclusive, as Google). The description is reduced from Google's HTML to plain text (line breaks
   kept, tags stripped, entities decoded); the screen never renders HTML. `meetUrl` is the video
-  entry point, or `hangoutLink`. Resource rooms are left out of the guests. `uid` is `iCalUID`
-  (the same event on both calendars shares it, so the screen shows it once).
+  entry point, or `hangoutLink`, and only when it is an `https://meet.google.com/` address: an
+  outside organizer writes the conference data, so any other link is left out rather than labelled
+  a Meet. Resource rooms are left out of the guests. `uid` is `iCalUID`
+  (the same event on both calendars shares it, so the screen shows it once). `guestsNotified` is
+  true when this is the organizer's copy (the person's, or the calendar's own) and it has guests:
+  deleting a guest's copy only takes it off that person's calendar, and the confirmation says so.
 
 ## The edit rule
 
@@ -109,7 +116,10 @@ have guests other than the person, else `none`.
 A create sends the title, place, description (plain text), start/end (`dateTime` in São Paulo, or
 `date`), guests and colour; a Meet when asked (`conferenceData.createRequest`,
 `conferenceDataVersion=1`); `sendUpdates=all` only with guests. A Meet still `pending` is re-read
-up to three times; if it never appears the event is deleted and the answer is 502 `meet_failed`.
+up to three times (a failed re-read counts as "never came"); if it never appears the event is
+deleted and the answer is 502 `meet_failed`. When that delete fails too, the answer is 502
+`meet_failed_event_kept` with the event's `htmlLink`, never "not created". A create whose answer
+was lost (network) asks to check Google Agenda before trying again, since Google may have made it.
 `wings` needs `writer` (409 `wings_calendar_forbidden` otherwise); on Thais' account `wings` writes
 to her primary and the event comes back as `mine`.
 
@@ -138,8 +148,12 @@ what Google itself shows the person.
 | 409    | `event_not_editable`                                   | the edit rule, or Google answered 403 on the person's own calendar    |
 | 404    | `event_not_found`                                      | unknown, cancelled or gone event; unknown calendar key                |
 | 502    | `google_rejected`, `google_unreachable`, `meet_failed` | Google refused, did not answer, or never made the Meet                |
+| 502    | `google_rate_limited`                                  | Google answered 429, or 403 with a usage-limit reason                 |
+| 502    | `meet_failed_event_kept`                               | no Meet and the cleanup failed: the event may be on Google (+ link)   |
 
-A Google refusal is never answered as 403: that status belongs to the permission gate, and
+A 403 from Google is read by its reason (`error.errors[0].reason`, never the message): a usage
+limit (`rateLimitExceeded`, `userRateLimitExceeded`, `quotaExceeded`, `dailyLimitExceeded`) is a
+pause, anything else a refusal. A Google refusal is never answered as 403: that status belongs to the permission gate, and
 `route-access.test.ts` reads 403 as "module closed".
 
 ## Google calls and scopes

@@ -143,7 +143,11 @@ export function EventForm({
   const titleRef = useRef<HTMLInputElement>(null);
   const headingId = useId();
   const guestErrorId = useId();
-  useDialog(ref, onClose, { initialFocus: titleRef, returnFocus });
+  // While a save runs the dialog stays: closing it would hide the answer, a refusal included.
+  const close = () => {
+    if (!saving) onClose();
+  };
+  useDialog(ref, close, { initialFocus: titleRef, returnFocus });
 
   const editing = target.kind === 'edit' ? target.event : null;
   const wingsCalendar = calendarOf(overview.calendars, 'wings');
@@ -276,7 +280,13 @@ export function EventForm({
       >
         <div className="agenda-form-head">
           <h2 id={headingId}>{editing ? 'Editar evento' : 'Novo evento'}</h2>
-          <button type="button" className="agenda-icon-btn" aria-label="Fechar" onClick={onClose}>
+          <button
+            type="button"
+            className="agenda-icon-btn"
+            aria-label="Fechar"
+            onClick={close}
+            disabled={saving}
+          >
             <Icon name="x" size={18} />
           </button>
         </div>
@@ -502,7 +512,7 @@ export function EventForm({
           {failure && <Alert kind="error">{errorText(failure)}</Alert>}
 
           <div className="agenda-dialog-actions">
-            <button type="button" className="crm-btn" onClick={onClose}>
+            <button type="button" className="crm-btn" onClick={close} disabled={saving}>
               Cancelar
             </button>
             <button type="submit" className="crm-btn is-primary" disabled={saving}>
