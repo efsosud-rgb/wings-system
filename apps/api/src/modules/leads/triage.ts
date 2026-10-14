@@ -10,7 +10,7 @@
  * JEV_API_KEY is set.
  */
 import { type LeadPipeline, WINGS_CLIENT_ID } from '@wings/shared';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Database } from '../../db/client.js';
 import {
@@ -469,6 +469,28 @@ async function finishRouted(db: Database, lead: typeof leads.$inferSelect): Prom
   });
 }
 
+/**
+ * Whether the triage made or placed this deal, and so owes its owner the arrival notice: its stage
+ * history says `triage`, or it was made from a conversation by `triageConversation` (its first
+ * event carries `triage: true`). A deal a person made or took is none of the triage's business.
+ */
+async function madeByTriage(db: Database, leadId: string): Promise<boolean> {
+  const placed = await db.query.leadStageHistory.findFirst({
+    where: and(eq(leadStageHistory.leadId, leadId), eq(leadStageHistory.source, 'triage')),
+    columns: { source: true },
+  });
+  if (placed) return true;
+  const made = await db.query.leadEvents.findFirst({
+    where: and(
+      eq(leadEvents.leadId, leadId),
+      eq(leadEvents.kind, 'lead.received.whatsapp'),
+      sql`${leadEvents.detail}->>'triage' = 'true'`,
+    ),
+    columns: { kind: true },
+  });
+  return made !== undefined;
+}
+
 /** A WhatsApp conversation opened by a message with no deal while Sofia is off. */
 export async function triageConversation(
   db: Database,
@@ -485,14 +507,16 @@ export async function triageConversation(
   });
   if (!contact) return;
   // A deal somebody can work already has this number (a pass cut short that made it, or one
-  // opened meanwhile): the conversation is its, with no need to ask the Jev. Its owner (or, with
-  // none, the managers) hears of it; a notice already written is not repeated.
+  // opened meanwhile): the conversation is its, with no need to ask the Jev. If the triage made
+  // that deal its owner (or, with none, the managers) is told, once; a deal a person made is not
+  // announced. The notice comes BEFORE the adoption: a notice that fails leaves the conversation
+  // unadopted, so the next pass finds the deal again and finishes.
   const openDealId = await openLeadByPhone(db, contact.phone);
   if (openDealId) {
     const deal = await db.query.leads.findFirst({ where: eq(leads.id, openDealId) });
     if (deal) {
+      if (await madeByTriage(db, deal.id)) await writeLeadArrivalNotice(db, deal);
       await adoptUnmatched(db, contact.id, deal.id);
-      await writeLeadArrivalNotice(db, deal);
       await db.insert(leadEvents).values({
         leadId: deal.id,
         kind: 'lead.triaged',
@@ -542,16 +566,18 @@ export async function triageConversation(
       consentText: 'A pessoa iniciou a conversa no WhatsApp da Wings, pedindo informações.',
       event: { kind: 'lead.received.whatsapp', detail: { triage: true } },
     });
-    await adoptUnmatched(db, contact.id, result.lead.id);
+    // The owner's notice comes BEFORE the adoption (as above): a notice that fails leaves the
+    // conversation unadopted, and the next pass finds the deal this one made and finishes.
     if (result.created && !result.stale) await writeLeadArrivalNotice(db, result.lead);
     else if (!result.created && !result.lead.pipeline) {
       // An open deal of this phone with no funnel yet: the verdict places it.
       const routed = await routeLead(db, result.lead.id, decision.pipeline, now);
       await writeLeadArrivalNotice(db, routed.ok ? routed.lead : result.lead);
-    } else if (!result.created) {
-      // A deal somebody can work took the number between the look above and now.
+    } else if (!result.created && (await madeByTriage(db, result.lead.id))) {
+      // A deal this triage made took the number between the look above and now.
       await writeLeadArrivalNotice(db, result.lead);
     }
+    await adoptUnmatched(db, contact.id, result.lead.id);
     await db.insert(leadEvents).values({ leadId: result.lead.id, kind: 'lead.triaged', detail });
     return;
   }
@@ -606,9 +632,10 @@ async function fallbackNotice(db: Database, target: TriageTarget, reason: string
   });
   if (!conversation) return;
   if (conversation.leadId) {
-    // The deal was made and the conversation adopted, but the owner's notice failed.
+    // The conversation was adopted by a deal; if the triage made it, its owner is told (once).
     const deal = await db.query.leads.findFirst({ where: eq(leads.id, conversation.leadId) });
-    if (deal && deal.won === null) await writeLeadArrivalNotice(db, deal);
+    if (deal && deal.won === null && (await madeByTriage(db, deal.id)))
+      await writeLeadArrivalNotice(db, deal);
     return;
   }
   await noticeTeam(db, {

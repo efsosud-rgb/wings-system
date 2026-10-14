@@ -401,7 +401,7 @@ describe('a restart in the middle is picked up again', () => {
       clientId: WINGS_CLIENT_ID,
       clientMapped: true,
       pipeline: 'expansao',
-      event: { kind: 'lead.received.whatsapp' },
+      event: { kind: 'lead.received.whatsapp', detail: { triage: true } },
     });
     expect(made.created).toBe(true);
     answers.push(verdict('expansao'));
@@ -546,6 +546,72 @@ describe('what the review of 14/10 found around the list', () => {
     expect((await queueRowOf({ leadId: born.lead.id }))?.outcome).toBe('fallback');
   });
 
+  it('a deal a person made for the number is adopted without a "new lead" notice from the triage', async () => {
+    const seller = await sellerInRotation('expansao');
+    const { contact, conversation } = await conversationWith('5541944440012', 'Oi de novo');
+    await enqueueTriage(db, { conversationId: conversation.id });
+    const byHand = await upsertLead(db, {
+      source: 'manual',
+      name: contact.profileName,
+      phone: contact.phone,
+      clientId: WINGS_CLIENT_ID,
+      clientMapped: true,
+      pipeline: 'expansao',
+      event: { kind: 'lead.created' },
+    });
+    expect(byHand.lead.ownerEmployeeId).toBe(seller.id);
+
+    expect(
+      await resumeLeadTriage(db, deps, new Date(Date.now() + minutes(5))),
+    ).toBeGreaterThanOrEqual(1);
+    expect(jevCalls).toBe(0);
+    const [adopted] = await db
+      .select()
+      .from(waConversations)
+      .where(eq(waConversations.id, conversation.id));
+    expect(adopted?.leadId).toBe(byHand.lead.id);
+    expect(await noticesOf(byHand.lead.id)).toEqual([]);
+  });
+
+  it('a notice that cannot be written on the conversation door leaves the conversation unadopted and the row open; the next pass finishes both', async () => {
+    const seller = await sellerInRotation('expansao');
+    const { conversation } = await conversationWith(
+      '5541944440013',
+      'Quero abrir uma franquia em Niterói',
+    );
+    await enqueueTriage(db, { conversationId: conversation.id });
+    answers.push(verdict('expansao'));
+    const noticesDown = { on: true };
+    const flaky = dbFailingOn(crmNotifications, noticesDown);
+
+    // The deal is made (owner, task), then the owner's notice is refused, and so is the team's fallback.
+    await expect(runTriage(flaky, { conversationId: conversation.id }, deps)).rejects.toThrow(
+      'write down',
+    );
+    const stuck = (await queueRowOf({ conversationId: conversation.id }))!;
+    expect(stuck.doneAt).toBeNull();
+    const [still] = await db
+      .select()
+      .from(waConversations)
+      .where(eq(waConversations.id, conversation.id));
+    expect(still?.leadId).toBeNull();
+
+    // The database is back: the next pass finds the deal the first one made, tells its owner and adopts.
+    noticesDown.on = false;
+    const after = new Date(stuck.claimedAt!.getTime() + TRIAGE_CLAIM_TIMEOUT_MS + 5_000);
+    expect(await resumeLeadTriage(db, deps, after)).toBeGreaterThanOrEqual(1);
+    expect(jevCalls).toBe(1); // only the first pass asked the Jev
+    const [adopted] = await db
+      .select()
+      .from(waConversations)
+      .where(eq(waConversations.id, conversation.id));
+    expect(adopted?.leadId).not.toBeNull();
+    expect(
+      (await noticesOf(adopted!.leadId!)).filter((n) => n.recipientEmployeeId === seller.id),
+    ).toHaveLength(1);
+    expect((await queueRowOf({ conversationId: conversation.id }))?.outcome).toBe('done');
+  });
+
   it('a conversation whose number already has an open deal belongs to it: no Jev call, the owner is told', async () => {
     const seller = await sellerInRotation('expansao');
     const { contact, conversation } = await conversationWith('5541944440011', 'Voltei, e agora?');
@@ -558,7 +624,7 @@ describe('what the review of 14/10 found around the list', () => {
       clientId: WINGS_CLIENT_ID,
       clientMapped: true,
       pipeline: 'expansao',
-      event: { kind: 'lead.received.whatsapp' },
+      event: { kind: 'lead.received.whatsapp', detail: { triage: true } },
     });
     expect(deal.lead.ownerEmployeeId).toBe(seller.id);
     answers.push(verdict('fornecedor'));
