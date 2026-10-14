@@ -214,6 +214,16 @@ export const NAVIGATION: readonly NavModule[] = [
         kind: 'crud',
       },
       {
+        path: '/crm-vendas/agenda',
+        label: 'Agenda',
+        icon: 'calendar',
+        description: 'A sua agenda Google e a da Wings Company, como no Google Agenda',
+        permission: 'calendar.use',
+        levels: CRM_ONLY_ROLES,
+        status: 'ready',
+        kind: 'crud',
+      },
+      {
         path: '/crm-vendas/leads-campanhas',
         label: 'Leads das Campanhas',
         icon: 'megaphone',
@@ -378,7 +388,16 @@ export const NAVIGATION: readonly NavModule[] = [
     icon: 'calendar',
     group: 'modulos',
     submodules: [
-      soon('/produtividade/agenda', 'Agenda'),
+      // Everyone opens the Agenda (Eric, 14/10); the sellers, whose menu is CRM Vendas alone, at
+      // /crm-vendas/agenda: the same page.
+      {
+        path: '/produtividade/agenda',
+        label: 'Agenda',
+        description: 'A sua agenda Google e a da Wings Company, como no Google Agenda',
+        permission: 'calendar.use',
+        status: 'ready',
+        kind: 'crud',
+      },
       soon('/produtividade/reunioes', 'Reuniões'),
       soon('/produtividade/drive', 'Drive'),
     ],

@@ -31,6 +31,7 @@ export * from './lead-fields.js';
 export * from './sales-panel.js';
 export * from './crm-automations.js';
 export * from './csv.js';
+export * from './calendar.js';
 export * from './campaign-leads.js';
 export * from './marketing/camera-moves.js';
 export * from './marketing/media-providers.js';
