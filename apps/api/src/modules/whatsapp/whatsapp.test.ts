@@ -849,3 +849,27 @@ describe('housekeeping', () => {
     expect(row?.status).toBe('APPROVED');
   });
 });
+
+describe('the official number switch (Eric, 14/10)', () => {
+  it('starts off, is read by a seller and flipped only by an Admin Master, audited', async () => {
+    const seller = await sessionFor('vendedor_expansao');
+    const admin = await sessionFor('admin_master');
+    const read = (cookies: Record<string, string>) =>
+      app.inject({ method: 'GET', url: '/whatsapp/official-number', cookies });
+    expect((await read(seller.cookies)).json()).toEqual({ live: false });
+    const put = (cookies: Record<string, string>) =>
+      app.inject({
+        method: 'PUT',
+        url: '/whatsapp/official-number',
+        cookies,
+        payload: { live: true },
+      });
+    expect((await put(seller.cookies)).statusCode).toBe(403);
+    expect((await put(admin.cookies)).json()).toEqual({ live: true });
+    expect((await read(seller.cookies)).json()).toEqual({ live: true });
+    const entry = await db.query.auditLog.findFirst({
+      where: eq(auditLog.action, 'whatsapp.official_number_switched'),
+    });
+    expect(entry?.actorEmployeeId).toBe(admin.id);
+  });
+});

@@ -223,7 +223,10 @@ function CreateMenu({ user }: { user: SessionUser }) {
   if (hasPermission(user, 'leads.write')) {
     entries.push({ label: 'Negociação', to: '/crm-vendas/negociacoes?criar=1', icon: 'columns' });
     entries.push({ label: 'Contato', to: '/crm-vendas/contatos?criar=1', icon: 'users' });
-    entries.push({ label: 'Empresa', to: '/crm-vendas/empresas?criar=1', icon: 'building' });
+    // Empresas is not a seller's screen (Eric, 14/10).
+    if (hasPermission(user, 'companies.read')) {
+      entries.push({ label: 'Empresa', to: '/crm-vendas/empresas?criar=1', icon: 'building' });
+    }
   }
   if (hasPermission(user, 'clients.manage')) {
     entries.push({ label: 'Cliente', to: '/formatacao/clientes#novo', icon: 'briefcase' });

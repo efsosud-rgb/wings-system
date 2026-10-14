@@ -342,7 +342,14 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
 
   // --- companies ----------------------------------------------------------------------------
 
-  app.get('/crm/companies', read, async (request, reply) => {
+  // Empresas is a screen for the levels that see every lead, not for the sellers (Eric, 14/10): a
+  // seller names the company inside their own deal or contact, through those routes.
+  const companiesRead = { preHandler: app.requirePermission('companies.read') };
+  const companiesWrite = {
+    preHandler: [app.requirePermission('companies.read'), app.requirePermission('leads.write')],
+  };
+
+  app.get('/crm/companies', companiesRead, async (request, reply) => {
     const query = crmSearchQuerySchema.safeParse(request.query);
     if (!query.success) return reply.status(400).send(invalid());
     if (query.data.duplicates) {
@@ -359,7 +366,7 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
-  app.post('/crm/companies', write, async (request, reply) => {
+  app.post('/crm/companies', companiesWrite, async (request, reply) => {
     const body = crmCompanyInputSchema.safeParse(request.body);
     if (!body.success) return reply.status(400).send(invalid(body.error.issues[0]?.message));
     if (body.data.cnpj && !isValidCnpj(body.data.cnpj))
@@ -385,7 +392,7 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
       .send({ company: await companyOf(db, found.company.id, own), created: found.created });
   });
 
-  app.get('/crm/companies/:id', read, async (request, reply) => {
+  app.get('/crm/companies/:id', companiesRead, async (request, reply) => {
     const params = idParam.safeParse(request.params);
     if (!params.success) return reply.status(400).send(invalid());
     const own = ownScope(request, 'leads.read');
@@ -401,7 +408,7 @@ export const nucleoRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ company, leads: related, contacts });
   });
 
-  app.patch('/crm/companies/:id', write, async (request, reply) => {
+  app.patch('/crm/companies/:id', companiesWrite, async (request, reply) => {
     const params = idParam.safeParse(request.params);
     const body = crmCompanyUpdateSchema.safeParse(request.body);
     if (!params.success || !body.success)

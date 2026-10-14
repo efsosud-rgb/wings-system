@@ -58,6 +58,25 @@ export function useWhatsAppConversations(unanswered: boolean) {
 export type WhatsAppInboxFilter = 'all' | 'unread' | 'unanswered';
 
 /** The reader's WhatsApp list (WhatsApp Web): search, unread per reader, last status. */
+/** Whether the official number is live (Eric, 14/10): until then a seller sees WhatsApp as "em breve". */
+export function useOfficialNumber(enabled = true) {
+  return useQuery({
+    queryKey: ['whatsapp', 'official-number'],
+    queryFn: () => api.get<{ live: boolean }>('/whatsapp/official-number'),
+    enabled,
+  });
+}
+
+/** The Admin Master's switch, flipped on the day the number is swapped. */
+export function useSetOfficialNumber() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (live: boolean) =>
+      api.put<{ live: boolean }>('/whatsapp/official-number', { live }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['whatsapp', 'official-number'] }),
+  });
+}
+
 export function useWhatsAppInbox(filter: WhatsAppInboxFilter, q: string) {
   const params = new URLSearchParams({ filter });
   if (q.trim()) params.set('q', q.trim());

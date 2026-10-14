@@ -10,11 +10,17 @@ import {
   type CampaignLeadsSummary,
   type UnattributedReason,
 } from '@wings/shared';
-import { and, desc, eq, gte, inArray, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, or, type SQL } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { Database } from '../../db/client.js';
-import { adAds, adCampaigns, adSets, campaignLeads } from '../../db/schema/index.js';
+import {
+  adAds,
+  adCampaigns,
+  adSets,
+  campaignLeads,
+  leads as deals,
+} from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { createSecretBox } from '../../lib/secret-box.js';
 
@@ -89,13 +95,30 @@ export function summaryOf(rows: Row[], now: Date): CampaignLeadsSummary {
   };
 }
 
-/** Every row this person may see: all, or only the ones RD assigns to them. */
+/**
+ * The rows that are one person's own: RD assigned them to that person and, when the row is paired
+ * with a deal here, the deal is theirs now. The owner column is the copy the last sync wrote, so a
+ * deal handed to someone else, or one nobody owns (the Admin's), is not theirs (Eric, 14/10).
+ */
+const ownedBy = (db: Database, employeeId: string): SQL =>
+  and(
+    eq(campaignLeads.ownerEmployeeId, employeeId),
+    or(
+      isNull(campaignLeads.leadId),
+      inArray(
+        campaignLeads.leadId,
+        db.select({ id: deals.id }).from(deals).where(eq(deals.ownerEmployeeId, employeeId)),
+      ),
+    ),
+  )!;
+
+/** Every row this person may see: all, or only their own (`ownedBy`). */
 export async function visibleCampaignLeads(
   db: Database,
   owner: string | undefined,
 ): Promise<Row[]> {
   const filters: SQL[] = [gte(campaignLeads.enteredAt, new Date(CAMPAIGN_LEADS_SINCE))];
-  if (owner) filters.push(eq(campaignLeads.ownerEmployeeId, owner));
+  if (owner) filters.push(ownedBy(db, owner));
   return db.query.campaignLeads.findMany({
     where: and(...filters),
     orderBy: desc(campaignLeads.enteredAt),
@@ -187,16 +210,16 @@ export const campaignLeadsRoutes: FastifyPluginAsync = async (app) => {
       if (!params.success || !body.success) {
         return reply.status(400).send({ error: 'invalid_request', message: 'Pedido inválido.' });
       }
+      const scope = grantedScope(request.session.actor, 'campaign_leads.reveal');
+      // Outside their scope a lead does not exist for them.
       const row = await db.query.campaignLeads.findFirst({
-        where: eq(campaignLeads.id, params.data.id),
+        where: and(
+          eq(campaignLeads.id, params.data.id),
+          scope === 'all' ? undefined : ownedBy(db, request.session.actor.employeeId),
+        ),
       });
       const notFound = { error: 'not_found', message: 'Lead não encontrado.' };
       if (!row || row.isTest) return reply.status(404).send(notFound);
-      const scope = grantedScope(request.session.actor, 'campaign_leads.reveal');
-      // Outside their scope a lead does not exist for them.
-      if (scope !== 'all' && row.ownerEmployeeId !== request.session.actor.employeeId) {
-        return reply.status(404).send(notFound);
-      }
       const sealed = body.data.field === 'phone' ? row.phoneEncrypted : row.emailEncrypted;
       if (!sealed)
         return reply.status(404).send({ error: 'not_found', message: 'Sem esse dado no RD.' });

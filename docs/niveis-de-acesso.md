@@ -33,15 +33,16 @@ Financeiro, Processos e Projetos, Contábil/Tributário, Logística, TI).
 | --------------------------------------- | ------------ | ----------------- | ----- | ----------------- | --------- | ----------------------------- | ----------------- | ------------------- |
 | Início                                  | yes          | yes               | yes   | yes               | yes       | yes                           | yes               | yes                 |
 | CRM Vendas (deals, WhatsApp, contacts…) | all          | all, no editing   | —     | all               | —         | —                             | own               | own                 |
+| CRM → Empresas, Landing pages           | yes          | yes               | —     | yes               | —         | —                             | —                 | —                   |
 | CRM → Configurações                     | yes          | —                 | —     | yes               | —         | —                             | —                 | —                   |
 | CRM → Sofia (every conversation)        | yes          | yes               | —     | yes               | —         | —                             | —                 | —                   |
-| Dashboard → Vendas                      | all          | all               | —     | all               | —         | —                             | own               | own                 |
+| Dashboard → Vendas                      | all          | all               | —     | all               | —         | —                             | own, in the CRM   | own, in the CRM     |
 | Dashboard → Marketing                   | yes          | yes               | —     | —                 | yes       | —                             | —                 | —                   |
-| Dashboard → Leads das Campanhas         | all          | all               | —     | all               | —         | —                             | —                 | own                 |
+| Dashboard → Leads das Campanhas         | all          | all               | —     | all               | —         | —                             | —                 | own, in the CRM     |
 | Marketing (traffic agent, media studio) | yes          | yes               | —     | —                 | yes       | —                             | —                 | —                   |
 | Formatação → Clientes                   | yes          | yes               | —     | —                 | yes       | Jurídico only                 | —                 | —                   |
-| Gestão → Projetos                       | all          | all               | read  | dept              | dept      | dept (P&P all; Log., TI read) | dept              | dept                |
-| Drive                                   | all          | all               | dept  | dept              | dept      | dept                          | dept              | dept                |
+| Gestão → Projetos                       | all          | all               | read  | dept              | dept      | dept (P&P all; Log., TI read) | dept, in the CRM  | dept, in the CRM    |
+| Drive                                   | all          | all               | dept  | dept              | dept      | dept                          | —                 | —                   |
 | Administração → Usuários e acessos      | all          | all (levels only) | all   | sector            | —         | —                             | —                 | —                   |
 | Administração → Drive: modelo de pastas | yes          | yes               | —     | —                 | —         | —                             | —                 | —                   |
 | Administração → Roadmap, Integrações    | yes          | —                 | —     | —                 | —         | —                             | —                 | —                   |
@@ -58,6 +59,32 @@ Formatação) Leads das Campanhas, and lose the Sofia screen and the employee re
 what the repository gave it and gains the Sofia screen; Diretoria stays as it was; Configurações and APIs belong to
 the Admin Master alone (Formatação — TI lost them); Marketing and Formatação lost the register of their sector.
 
+### The sellers' menu (Eric, 14/10)
+
+"Ainda aparecem acessos demais": a seller's whole menu is **Início and CRM Vendas**. `CRM_ONLY_ROLES` in
+`packages/shared/src/rbac/roles.ts` names the two levels, and `canSeeSubmodule` hides from them every entry
+outside those two groups, whatever the level holds; a typed address shows "Sem acesso". Inside the CRM they see
+Negociações, WhatsApp, Contatos, Tarefas, Avisos, **Painel de Vendas** (`/crm-vendas/painel-de-vendas`),
+**Projetos** (`/crm-vendas/projetos`) and, Vendedor Formatação only, **Leads das Campanhas**
+(`/crm-vendas/leads-campanhas`): the same pages as Dashboard and Gestão, at a CRM address that only these two levels
+see (`NavSubmodule.levels`). Every other level keeps them where they were.
+
+- **Empresas** and **Landing pages** need `companies.read` and `landing_pages.read` (Admin Master, Diretoria,
+  Gerente Comercial). In the deal and the contact the company is a name, linked to its record only for who has
+  Empresas; a seller still types it in their own deal or contact (`PATCH /leads/:id/deal`, `/crm/contacts`).
+- **Drive:** no `drive.*` for the sellers. The files of their own deals still open, upload and go away through the
+  deal's routes (`dealRouteAccessOf` in `apps/api/src/modules/drive/access.ts`, after `leadInScope`).
+  `DRIVE_ROLE_DEPARTMENTS` still names Comercial for them: that is what lets them update stage 07 of a project.
+- **Own only, on screen too:** Negociações hides "Todas", "Sem dono" and the owner filter from whoever does not
+  read every lead; the team list (`GET /crm/sellers`) needs `leads.assign`; Leads das Campanhas follows the deal's
+  owner now, not the copy the last sync wrote; a seller's new deal does not take in a person who is on another
+  seller's deal (409, as for a phone already in one).
+- **WhatsApp "em breve":** until the official number is live, a seller sees "O WhatsApp do sistema começa a
+  funcionar depois da troca do número. Até lá, use o WhatsApp do celular.", "Nova conversa" is off and the menu
+  entry says "em breve". The key is one row, `whatsapp_settings.official_number_live` (migration 0090), switched by
+  an Admin Master on the WhatsApp screen (`PUT /whatsapp/official-number`, audited): no deploy on the day. The
+  other levels do not change.
+
 Not in the system: **Notion** (no module or link exists). **Agenda and Meet** for a seller are the Google
 connection in "Minha conta" and the meetings and tasks inside the deal; the Produtividade → Agenda and Reuniões
 menu entries are still "em breve", so they show only to Admin Master and Diretoria.
@@ -72,8 +99,13 @@ which goes straight into a mode-600 file outside the repository. It refuses to r
 ```bash
 docker exec <api-staging> node dist/scripts/test-accounts.js estado
 docker exec <api-staging> node dist/scripts/test-accounts.js criar > /root/.segredos/contas-teste-staging.tsv  # umask 077
+docker exec <api-staging> node dist/scripts/test-accounts.js reativar vendedor_expansao vendedor_formatacao > /root/.segredos/contas-teste-vendedores.tsv  # umask 077
 docker exec <api-staging> node dist/scripts/test-accounts.js desativar   # when the check is over
 ```
+
+`reativar` brings back only the levels named, with a new password, and refuses (counts only, nothing changed) while
+one of them is an active rotation member, is mapped to an RD user, is named in an automation, or owns a deal or a
+task: an active test seller must not receive leads.
 
 The test sellers are not in any rotation (rotation members are chosen on the CRM settings screen), but they appear
 in the owner list until deactivated, and a test Gerente Comercial or Diretoria receives the in-app escalation notices

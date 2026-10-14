@@ -59,7 +59,12 @@ import {
 } from '../../db/schema/index.js';
 import { activitiesOf } from './activities.js';
 import { announceNewLead } from './crm-alerts.js';
-import { attachLeadContact, contactsOfLead, findOrCreateCompany } from './contacts.js';
+import {
+  attachLeadContact,
+  contactOnForeignDeal,
+  contactsOfLead,
+  findOrCreateCompany,
+} from './contacts.js';
 import { scheduleLeadChecks } from './field-checks.js';
 import { markSuspectsAround } from './suspect.js';
 import {
@@ -582,6 +587,12 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
       existing &&
       incoming.mergeOnlyIfOwnedBy !== undefined &&
       existing.ownerEmployeeId !== incoming.mergeOnlyIfOwnedBy
+    )
+      throw new ForeignLeadError();
+    // Nor through the contact: a person on another seller's deal is not tied to this one.
+    if (
+      incoming.mergeOnlyIfOwnedBy !== undefined &&
+      (await contactOnForeignDeal(tx, { phone, email }, incoming.mergeOnlyIfOwnedBy))
     )
       throw new ForeignLeadError();
 

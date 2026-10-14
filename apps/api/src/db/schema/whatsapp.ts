@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  boolean,
   index,
   integer,
   jsonb,
@@ -329,3 +330,15 @@ export const waMediaUploads = pgTable(
     index('wa_media_uploads_media_idx').on(table.mediaId),
   ],
 );
+
+/**
+ * One row per tenant: whether the official number is live (Eric, 14/10). Until the swap of the
+ * number the sellers see WhatsApp as "em breve" and cannot start a conversation; an Admin Master
+ * switches it on the day, on the WhatsApp screen, with no deploy. Missing row = not live.
+ */
+export const whatsappSettings = pgTable('whatsapp_settings', {
+  tenantId: tenantId().primaryKey(),
+  officialNumberLive: boolean('official_number_live').notNull().default(false),
+  updatedBy: uuid('updated_by').references(() => employees.id),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
