@@ -17,6 +17,7 @@ const KIND_LABEL: Record<string, string> = {
   stage_stuck: 'Negociação parada',
   new_lead: 'Novo lead',
   lead_unassigned: 'Lead sem dono',
+  lead_whatsapp: 'Lead chamou no WhatsApp',
   backfill_assigned: 'Leads antigos atribuídos',
   backfill_unassigned: 'Leads antigos sem dono',
   automation: 'Aviso da automação',

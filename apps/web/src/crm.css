@@ -1733,6 +1733,13 @@
   background: var(--surface-hover);
   color: var(--text-3);
 }
+.crm-check-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
 .crm-check-reason {
   flex-basis: 100%;
 }

@@ -233,7 +233,28 @@ export interface SalesSourceRow {
   wonCents: number;
 }
 
+/**
+ * The Instagram check counted over the leads created in the period (docs/leads/instagram.md).
+ * `checked` is how many of them have a decided check (or a person's correction): with none, the
+ * screen shows "—", never a zero that reads as "no suspects".
+ */
+export interface SalesInstagramCounts {
+  checked: number;
+  /** Not found (suspect), a person's correction counted. */
+  suspect: number;
+  /** Found nowhere, or marked fake by a person. */
+  fake: number;
+}
+
+/** A landing page (its slug) with the leads it brought and what the Instagram check made of them. */
+export interface SalesPageRow {
+  page: string;
+  leads: number;
+  instagram: SalesInstagramCounts;
+}
+
 export interface SalesCampaignRow {
+  instagram: SalesInstagramCounts;
   /** The campaign's name as the deals carry it (or its UTM); null for "sem campanha". */
   campaign: string | null;
   leads: number;
@@ -317,6 +338,8 @@ export interface SalesDashboard {
   services: SalesServiceRow[];
   sources: SalesSourceRow[];
   campaigns: SalesCampaignRow[];
+  /** Per landing page, only pages with a decided Instagram check. */
+  pages: SalesPageRow[];
   /** Whether the caller may see ad spend (`ads.read`); without it CPL, CAC and ROAS are null. */
   spendVisible: boolean;
   regions: SalesRegionRow[];

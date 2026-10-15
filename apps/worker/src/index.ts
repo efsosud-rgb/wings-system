@@ -1,6 +1,7 @@
 import { tmpdir } from 'node:os';
 import { runFfmpeg, runFfprobe, runWhisper } from './lib/commands.js';
 import { createBraveSearch, createBrasilApi, createZapiProfileClient } from './lib/enrichment.js';
+import { createInstagramDiscovery, createInstagramJudge } from './lib/instagram-check.js';
 import { createLeadResearchProvider } from './lib/lead-research.js';
 import { createS3Storage } from './lib/storage.js';
 import { concurrencyOf, threadsPerJob } from './concurrency.js';
@@ -47,6 +48,26 @@ async function main() {
     reserveUsd: env.LEAD_RESEARCH_USD_PER_CALL,
     log,
   });
+  const instagramCheck = {
+    enabled: env.INSTAGRAM_CHECK_ENABLED === 'true',
+    discovery:
+      env.INSTAGRAM_DISCOVERY_ACCOUNT_ID && env.INSTAGRAM_DISCOVERY_TOKEN
+        ? createInstagramDiscovery({
+            accountId: env.INSTAGRAM_DISCOVERY_ACCOUNT_ID,
+            token: env.INSTAGRAM_DISCOVERY_TOKEN,
+            log,
+          })
+        : null,
+    judge: env.OPENROUTER_API_KEY
+      ? createInstagramJudge({
+          apiKey: env.OPENROUTER_API_KEY,
+          model: env.LEAD_RESEARCH_MODEL,
+          reserveUsd: env.INSTAGRAM_CHECK_AI_USD_PER_CALL,
+          log,
+        })
+      : null,
+    dailyUsd: env.INSTAGRAM_CHECK_DAILY_USD,
+  };
   console.warn(
     `wings-worker: enrich_lead with zapi=${zapi ? 'on' : 'off'}, search=${search ? 'brave' : 'off'}, ceiling US$ ${env.ENRICH_DAILY_USD}/day; company research=${research ? `openrouter (${env.LEAD_RESEARCH_MODEL})` : 'off'}, ceiling US$ ${env.LEAD_RESEARCH_DAILY_USD}/day, leads from ${env.LEAD_RESEARCH_SINCE}`,
   );
@@ -66,6 +87,7 @@ async function main() {
         tmpDir: env.RENDER_TMP_DIR ?? tmpdir(),
       },
       db: pool,
+      instagramCheck,
       enrichment: {
         zapi,
         search,

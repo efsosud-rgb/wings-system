@@ -12,13 +12,14 @@ const validSource = {
 describe('loadEnv', () => {
   it('defaults job types to everything the worker implements', () => {
     const env = loadEnv(validSource);
-    expect(env.WORKER_JOB_TYPES).toBe('ffprobe,transcribe,render,enrich_lead,transcribe_meeting');
+    expect(env.WORKER_JOB_TYPES).toBe('ffprobe,transcribe,render,enrich_lead,transcribe_meeting,check_instagram');
     expect(jobTypesOf(env)).toEqual([
       'ffprobe',
       'transcribe',
       'render',
       'enrich_lead',
       'transcribe_meeting',
+      'check_instagram',
     ]);
   });
 
@@ -106,5 +107,20 @@ describe('jobTypesOf', () => {
   it('refuses an empty list', () => {
     const env = loadEnv({ ...validSource, WORKER_JOB_TYPES: ' , ' });
     expect(() => jobTypesOf(env)).toThrow(/at least one/);
+  });
+});
+
+describe('the Instagram check variables', () => {
+  it('is off, with a small ceiling of its own, unless it is switched on', () => {
+    const env = loadEnv(validSource);
+    expect(env.INSTAGRAM_CHECK_ENABLED).toBeUndefined();
+    expect(env.INSTAGRAM_CHECK_DAILY_USD).toBe(0.5);
+    expect(env.INSTAGRAM_CHECK_AI_USD_PER_CALL).toBe(0.004);
+    expect(loadEnv({ ...validSource, INSTAGRAM_CHECK_DAILY_USD: '' }).INSTAGRAM_CHECK_DAILY_USD).toBe(0.5);
+  });
+
+  it('refuses a switch that is not true or false and an account id that is not a number', () => {
+    expect(() => loadEnv({ ...validSource, INSTAGRAM_CHECK_ENABLED: 'yes' })).toThrow(/true/);
+    expect(() => loadEnv({ ...validSource, INSTAGRAM_DISCOVERY_ACCOUNT_ID: 'abc' })).toThrow(/numeric/);
   });
 });

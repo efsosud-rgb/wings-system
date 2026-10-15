@@ -529,4 +529,4 @@ export type SofiaAttendanceAction = z.infer<typeof sofiaAttendanceSchema>['actio
 export const SOFIA_MODEL = 'deepseek/deepseek-v4-flash';
 export type SofiaModel = typeof SOFIA_MODEL;
 /** Bumped whenever the prompt changes; stored with every AI call. */
-export const SOFIA_PROMPT_VERSION = 'sofia-2026-10-07.2';
+export const SOFIA_PROMPT_VERSION = 'sofia-2026-10-15.1';

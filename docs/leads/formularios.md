@@ -102,3 +102,13 @@ de até 5 resultados. Funcionamento, variáveis e limites em
 `0072_lead_form_fields`: cinco colunas novas em `leads` (`instagram`, `website`, `company_name`,
 `company_cnpj`, `field_checks`). **Número provisório**, à espera da confirmação do orquestrador (a
 0071 é do Fable); o `when` dela precisa ficar depois do da 0071.
+
+## Do formulário ao WhatsApp (ref do lead e contexto da Sofia)
+
+Desde 15/10/2026. A página do formulário abre o `wa.me` com o texto `<código do link rastreável> <ref>`: o código do link `site` do cliente e a **ref** do envio (6 caracteres do alfabeto do código, sem 0/O/1/I, sorteados no servidor com gerador criptográfico e gravados em `leads.form_ref`, com `form_ref_at`). Com uma marca, a frase da marca segue depois.
+
+- A ref vale **7 dias** e só a do último envio do mesmo lead. É uma pista que liga a conversa ao lead, nunca uma chave para os dados dele: nada do lead é mostrado a quem mandou a mensagem por causa dela.
+- **Cloud API** (`whatsapp/intake.ts`): a primeira mensagem com código e ref liga a conversa ao lead do formulário, mesmo de outro número, e não cria outro lead (com a Sofia ligada ou não). Evento `lead.whatsapp_linked` na linha do tempo.
+- **Z-API (0288)** (`/integrations/zapi/webhook`): só a ligação ao lead (evento e contador do link) e o aviso ao dono (`lead_whatsapp`, sem nome); sem conversa própria.
+- **Sofia**: ao ligar, as respostas do formulário (nome, empresa, Instagram, site, cidade; "não tenho" vira "Não tem") entram em `sofia_facts.answers`, o funil vem da página e a marca já conta como confirmada; ela só pergunta o que falta. A saudação usa o primeiro nome **só quando o número é o que o formulário deu**; de outro número ela cumprimenta sem nome. A página de origem e as respostas não pessoais do formulário vão ao modelo como `contexto_do_formulario`. A regra de hoje não muda: se o negócio já tem dono, a mensagem é do dono, e a Sofia só entra se ele não tem dono ou o devolveu.
+- Sem ref (clique antes do formulário, ref vencida ou desconhecida): fica a triagem e a pré-qualificação de hoje.

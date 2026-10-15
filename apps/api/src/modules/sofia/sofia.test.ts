@@ -20,6 +20,7 @@ import {
   crmDistributionMembers,
   crmNotifications,
   leadContacts,
+  leadEvents,
   leadTasks,
   leadTrackingLinks,
   leads,
@@ -1196,5 +1197,106 @@ describe('the guards', () => {
     expect(nameFrom('sou o João.')).toBe('João');
     expect(nameFrom('quanto custa?')).toBeNull();
     expect(nameFrom('tenho 3 lojas')).toBeNull();
+  });
+});
+
+describe('a lead the site form made, tied by the ref in the first message (15/10)', () => {
+  const REF = 'K7M2QX';
+  const sentTexts = () => JSON.stringify(sends);
+  async function formLead(over: Record<string, unknown> = {}) {
+    const [lead] = await db
+      .insert(leads)
+      .values({
+        clientId: brandId,
+        name: 'Marina Souza',
+        phone: '5521999991111',
+        source: 'site_form',
+        pipeline: 'expansao',
+        clientMapped: true,
+        companyName: 'Padaria Aurora',
+        instagram: 'padaria.aurora',
+        website: 'https://aurora.com.br',
+        formRef: REF,
+        formRefAt: new Date(clock - 60_000),
+        ...over,
+      })
+      .returning();
+    return lead!;
+  }
+  // The ref is unique among leads: the earlier test's lead gives it up (leads with conversations are never deleted).
+  const clean = () => db.update(leads).set({ formRef: null }).where(eq(leads.formRef, REF));
+
+  it('ties the conversation to the form lead from another number, knows its answers and does not greet by name', async () => {
+    await clean();
+    const lead = await formLead();
+    const before = (await db.select().from(leads)).length;
+    const sender = newPhone();
+    llmAnswers = [said({ intent: 'indefinido' })];
+    await write(sender, text(`WCHUR2 ${REF} Olá! Quero saber sobre a franquia Casa do Churros.`));
+    const conversation = await conversationOf(sender);
+    expect(conversation.leadId).toBe(lead.id);
+    expect(conversation.attendance).toBe('sofia');
+    expect(conversation.sofiaFacts).toMatchObject({
+      formKnown: true,
+      formName: null,
+      brandConfirmed: true,
+    });
+    // No second lead was made for the message.
+    expect((await db.select().from(leads)).length).toBe(before);
+
+    await sofiaAnswers();
+    const facts = (await conversationOf(sender)).sofiaFacts as {
+      step: string;
+      answers: Record<string, string>;
+    };
+    expect(Object.values(facts.answers)).toEqual(expect.arrayContaining(['Marina Souza']));
+    // The name the form brought is hers, so the first question is the next one that is missing (the city).
+    expect(facts.step).toBe('cidade');
+    // The ref alone does not reveal the lead: the person's name is not in what she sent.
+    expect(sentTexts()).not.toContain('Marina');
+    expect(sentTexts()).not.toContain('Aurora');
+    const events = await db.select().from(leadEvents).where(eq(leadEvents.leadId, lead.id));
+    expect(events.map((e) => e.kind)).toContain('lead.whatsapp_linked');
+  });
+
+  it('greets by the first name when the number is the one the form gave', async () => {
+    await clean();
+    const lead = await formLead({ phone: '5521999992222' });
+    llmAnswers = [said({ intent: 'indefinido' })];
+    await write('5521999992222', text(`WCHUR2 ${REF} Olá!`));
+    expect((await conversationOf('5521999992222')).leadId).toBe(lead.id);
+    await sofiaAnswers();
+    expect(sentTexts()).toContain('Marina');
+    expect(sentTexts()).toContain('formulário');
+  });
+
+  it('ignores a ref that expired, is unknown, or comes without the link code', async () => {
+    await clean();
+    await formLead({ formRefAt: new Date(clock - 8 * 86_400_000) });
+    const expired = newPhone();
+    await write(expired, text(`WCHUR2 ${REF} Olá!`));
+    expect((await conversationOf(expired)).leadId).toBeNull();
+
+    await db
+      .update(leads)
+      .set({ formRefAt: new Date(clock) })
+      .where(eq(leads.formRef, REF));
+    const unknown = newPhone();
+    await write(unknown, text('WCHUR2 ZZZZZZ Olá!'));
+    expect((await conversationOf(unknown)).leadId).toBeNull();
+    const noCode = newPhone();
+    await write(noCode, text(`${REF} ${REF}`));
+    expect((await conversationOf(noCode)).leadId).toBeNull();
+  });
+
+  it('with Sofia off, the ref still ties the message to the form lead and makes no second lead', async () => {
+    await clean();
+    const lead = await formLead();
+    await saveSofiaSettings(db, SOFIA_DEFAULT_SETTINGS, null, NOW);
+    const before = (await db.select().from(leads)).length;
+    const sender = newPhone();
+    await write(sender, text(`WCHUR2 ${REF} Olá!`));
+    expect((await conversationOf(sender)).leadId).toBe(lead.id);
+    expect((await db.select().from(leads)).length).toBe(before);
   });
 });

@@ -100,6 +100,26 @@ const schema = z.object({
   /** What one research is expected to cost (5 web results plus the model); reserved before the call. */
   LEAD_RESEARCH_USD_PER_CALL: z.preprocess(emptyAsUnset, z.coerce.number().positive().max(1).default(0.06)),
   /**
+   * The Instagram check of a site-form lead (docs/leads/instagram.md, job `check_instagram`): Meta's
+   * Business Discovery through Wings' own Instagram business account (the same two variables the
+   * API reads for "Conferir de novo"), then a Brave search, then a model (`LEAD_RESEARCH_MODEL`,
+   * `OPENROUTER_API_KEY`) comparing the profile with the company. Off unless
+   * INSTAGRAM_CHECK_ENABLED is "true". The paid steps have a ceiling of their own per day
+   * (America/Sao_Paulo), summed over the same ledger as LEAD_RESEARCH_DAILY_USD.
+   */
+  INSTAGRAM_CHECK_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  INSTAGRAM_DISCOVERY_ACCOUNT_ID: optionalString.refine(
+    (value) => value === undefined || /^\d+$/.test(value),
+    'must be the numeric Instagram business account id',
+  ),
+  INSTAGRAM_DISCOVERY_TOKEN: optionalString,
+  INSTAGRAM_CHECK_DAILY_USD: z.preprocess(emptyAsUnset, z.coerce.number().positive().max(100).default(0.5)),
+  /** What one comparison is expected to cost; reserved before the call (a few thousandths of a dollar). */
+  INSTAGRAM_CHECK_AI_USD_PER_CALL: z.preprocess(emptyAsUnset, z.coerce.number().positive().max(1).default(0.004)),
+  /**
    * The research cut-off, a São Paulo day (YYYY-MM-DD): only leads that arrived from 00:00 of
    * that day on are researched; an older lead that converts again is not.
    */

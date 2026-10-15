@@ -8,6 +8,8 @@ import {
   type LeadPipeline,
   type SiteFormInfo,
 } from '@wings/shared';
+import { attachFormRef } from './form-ref.js';
+import { enqueueInstagramCheck, hasInstagramToCheck } from './instagram-check.js';
 import { and, desc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
@@ -47,6 +49,7 @@ export async function siteWhatsappUrl(
   clientId: string,
   mapped: boolean,
   wingsNumber: string | undefined,
+  ref: string | null = null,
 ): Promise<string | null> {
   if (!mapped || !wingsNumber) return null;
   const client = await db.query.clients.findFirst({ where: eq(clients.id, clientId) });
@@ -63,7 +66,7 @@ export async function siteWhatsappUrl(
     )
     .orderBy(desc(leadTrackingLinks.createdAt))
     .limit(1);
-  return link ? whatsappLinkOf(wingsNumber, link.code, brandOfLink(client)) : null;
+  return link ? whatsappLinkOf(wingsNumber, link.code, brandOfLink(client), ref) : null;
 }
 
 /** `@perfil` from what the record keeps (`@perfil`, `perfil` or an instagram.com address), or null. */
@@ -363,11 +366,20 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
           rdForward,
         },
       });
+      // The form's reference in the WhatsApp text, and the Instagram check; neither may fail the
+      // form: the lead already exists, and the person is not told about either.
+      const formRef = await attachFormRef(db, result.lead.id).catch(() => null);
+      if (env.INSTAGRAM_CHECK_ENABLED === 'true' && hasInstagramToCheck(body.data.instagram)) {
+        await enqueueInstagramCheck(db, result.lead.id, null).catch(() =>
+          app.log.warn({ msg: 'instagram check not queued', leadId: result.lead.id }),
+        );
+      }
       const whatsappUrl = await siteWhatsappUrl(
         db,
         client.clientId,
         client.mapped,
         env.WINGS_WHATSAPP_NUMBER,
+        formRef,
       );
       return reply.send({ ok: true, whatsappUrl });
     },

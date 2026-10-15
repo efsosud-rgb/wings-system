@@ -1,3 +1,5 @@
+import { INSTAGRAM_LIST_FILTERS } from './instagram-list-filters.js';
+import type { LeadInstagramCheck } from './instagram-check.js';
 import type { LeadChecks } from './lead-fields.js';
 import { z } from 'zod';
 import type { LeadAiSummary, LeadContactRef } from './crm.js';
@@ -352,8 +354,38 @@ export function trackingCodeOf(message: string | null | undefined): string | nul
  * the first word), then the brand, so the person and whoever answers see
  * which franchise it is about.
  */
-export function trackedLinkText(code: string, brand?: string | null): string {
-  return brand ? `${code} Olá! Quero saber sobre a franquia ${brand}.` : code;
+export function trackedLinkText(code: string, brand?: string | null, ref?: string | null): string {
+  const start = ref ? `${code} ${ref}` : code;
+  return brand ? `${start} Olá! Quero saber sobre a franquia ${brand}.` : start;
+}
+
+/**
+ * The short reference of one site-form submission: six characters of the tracking-code alphabet,
+ * stored on the lead (`leads.form_ref`) and sent in the wa.me text right after the link's code
+ * (`<code> <ref>`), so the first WhatsApp message can be tied to the lead the form made.
+ */
+export const FORM_REF_LENGTH = 6;
+export function generateFormRef(random: () => number = Math.random): string {
+  let ref = '';
+  for (let i = 0; i < FORM_REF_LENGTH; i++) {
+    const index = Math.min(
+      TRACKING_CODE_ALPHABET.length - 1,
+      Math.floor(random() * TRACKING_CODE_ALPHABET.length),
+    );
+    ref += TRACKING_CODE_ALPHABET[index];
+  }
+  return ref;
+}
+
+/**
+ * The form reference an inbound message carries: the word right after the tracking code, when the
+ * message starts with one. The shape is only a hint; a ref counts when a recent lead holds it.
+ */
+export function trackingRefOf(message: string | null | undefined): string | null {
+  const words = (message ?? '').trim().replace(/^#/, '').split(/\s+/);
+  if (!isTrackingCode(words[0]?.toUpperCase() ?? '')) return null;
+  const second = words[1]?.toUpperCase() ?? '';
+  return isTrackingCode(second) ? second : null;
 }
 
 /**
@@ -362,8 +394,13 @@ export function trackedLinkText(code: string, brand?: string | null): string {
  * is told by the code and the text, never by sending the lead to the brand's
  * own number, which stays on the client record as a contact only.
  */
-export function whatsappLinkOf(phone: string, code: string, brand?: string | null): string {
-  return `https://wa.me/${phone}?text=${encodeURIComponent(trackedLinkText(code, brand))}`;
+export function whatsappLinkOf(
+  phone: string,
+  code: string,
+  brand?: string | null,
+  ref?: string | null,
+): string {
+  return `https://wa.me/${phone}?text=${encodeURIComponent(trackedLinkText(code, brand, ref))}`;
 }
 
 // --- source rules: landing page / Meta form -> client -------------------------
@@ -1046,6 +1083,8 @@ export interface Lead {
   aiSummary: LeadAiSummary | null;
   /** Marked as a likely robot sign-up, with the reasons; null when not (or cleared by a person). */
   suspect: LeadSuspect | null;
+  /** The Instagram check of a site-form lead (docs/leads/instagram.md); null when none was made. */
+  instagramCheck: LeadInstagramCheck | null;
   /** When the person entered, by the source's own clock (see `LEAD_ENTERED_SOURCES`). */
   enteredAt: string;
   enteredAtSource: LeadEnteredSource;
@@ -1342,6 +1381,11 @@ export const leadListQuerySchema = z.object({
     .or(z.literal('').transform(() => undefined)),
   /** `mine` keeps only the caller's deals (the "Minhas" tab). */
   mine: z.coerce.boolean().optional(),
+  /** Only deals whose Instagram check says suspect and/or fake (the seller's correction counts). */
+  instagram: z
+    .enum(INSTAGRAM_LIST_FILTERS)
+    .optional()
+    .or(z.literal('').transform(() => undefined)),
   /**
    * Open deals whose first contact is past its deadline while they still sit in the funnel's entry stage
    * ("Sem contato"): the list the "1º contato atrasado" counter of Negociações opens.

@@ -782,6 +782,10 @@ function Brands({ data }: { data: SalesDashboard }) {
   );
 }
 
+/** "—" while no lead of the row has a decided Instagram check: never a zero that reads as "no suspects". */
+const instagramCount = (counts: { checked: number }, value: number) =>
+  counts.checked === 0 ? DASH : formatInt(value);
+
 function Origins({ data, ownerFiltered }: { data: SalesDashboard; ownerFiltered: boolean }) {
   if (data.sources.length === 0 && data.campaigns.length === 0)
     return <Empty reason="nenhuma negociação criada ou ganha no período." />;
@@ -845,6 +849,8 @@ function Origins({ data, ownerFiltered }: { data: SalesDashboard; ownerFiltered:
               <th className="num">CPL</th>
               <th className="num">CAC</th>
               <th className="num">ROAS</th>
+              <th className="num">Suspeitos</th>
+              <th className="num">Falsos</th>
             </tr>
           </thead>
           <tbody>
@@ -858,11 +864,44 @@ function Origins({ data, ownerFiltered }: { data: SalesDashboard; ownerFiltered:
                 <td className="num">{money(row.cplCents)}</td>
                 <td className="num">{money(row.cacCents)}</td>
                 <td className="num">{row.roas === null ? DASH : `${decimal(row.roas)}x`}</td>
+                <td className="num">{instagramCount(row.instagram, row.instagram.suspect)}</td>
+                <td className="num">{instagramCount(row.instagram, row.instagram.fake)}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      {data.pages.length > 0 ? (
+        <div className="c3d-flat-table sales-subtable">
+          <table aria-label="Instagram por página">
+            <thead>
+              <tr>
+                <th>Página</th>
+                <th className="num">Criadas</th>
+                <th className="num">Instagram conferido</th>
+                <th className="num">Suspeitos</th>
+                <th className="num">Falsos</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.pages.map((row) => (
+                <tr key={row.page}>
+                  <td>{row.page}</td>
+                  <td className="num">{formatInt(row.leads)}</td>
+                  <td className="num">{formatInt(row.instagram.checked)}</td>
+                  <td className="num">{instagramCount(row.instagram, row.instagram.suspect)}</td>
+                  <td className="num">{instagramCount(row.instagram, row.instagram.fake)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      <p className="sales-note">
+        Suspeitos e falsos são leads do formulário do site cujo Instagram não foi encontrado (falso:
+        nem na Meta nem na busca, ou marcado por uma pessoa). {DASH} na linha: nenhum lead dela teve
+        o Instagram conferido.
+      </p>
       <p className="sales-note">
         {spendReason
           ? `${DASH} ${spendReason}.`

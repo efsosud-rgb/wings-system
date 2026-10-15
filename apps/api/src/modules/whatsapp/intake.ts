@@ -11,6 +11,7 @@ import type { Database } from '../../db/client.js';
 import {
   crmContacts,
   leadContacts,
+  leadEvents,
   leadTrackingLinks,
   leads,
   sofiaAiRuns,
@@ -22,12 +23,14 @@ import {
   waWebhookEvents,
 } from '../../db/schema/index.js';
 import { addActivity } from '../leads/activities.js';
+import { leadByFormRef } from '../leads/form-ref.js';
 import { trackingLinkByCode } from '../leads/service.js';
 import { leadFromTrackedMessage } from '../leads/tracked-link.js';
 import { enqueueTriage } from '../leads/triage-queue.js';
 import { leadTriageEnabled, scheduleLeadTriage } from '../leads/triage-schedule.js';
+import { formContextOf } from '../sofia/form-context.js';
 import { loadSofiaSettings } from '../sofia/settings.js';
-import { routeInbound } from '../sofia/state.js';
+import { factsOf, routeInbound } from '../sofia/state.js';
 import { ART_MEDIA_GONE_CODES, invalidateArtMedia } from './art.js';
 import { notifyCallsChanged } from './call-signal.js';
 import {
@@ -339,12 +342,18 @@ async function applyInbound(db: Database, message: WaInboundMessage, now: Date) 
   // A tracking code tells the brand and the channel. With Sofia on, she makes
   // the deal at the end of her questions; off, the link makes it at once, as
   // before her (and as the Z-API door still does).
-  const sofiaOn = (await loadSofiaSettings(db)).enabled;
+  const sofiaSettings = await loadSofiaSettings(db);
+  const sofiaOn = sofiaSettings.enabled;
   const code = trackingCodeOf(message.text);
   const link = code ? await trackingLinkByCode(db, code) : null;
   let leadId = await openLeadByPhone(db, phone);
+  // `<code> <ref>`: the ref is the lead a site form just made, even when the person writes from
+  // another number. It wins over the phone match, and no second lead is made for the message.
+  const formLead = link ? await leadByFormRef(db, message.text, now) : null;
+  const formLeadId = formLead?.id ?? null;
+  if (formLeadId) leadId = formLeadId;
   if (link && code && normalizeBrazilianPhone(message.from)) {
-    if (!sofiaOn) {
+    if (!sofiaOn && !formLeadId) {
       const tracked = await leadFromTrackedMessage(db, {
         code,
         phone,
@@ -364,10 +373,37 @@ async function applyInbound(db: Database, message: WaInboundMessage, now: Date) 
   // (a reactivation template): the answer is that seller's, in that conversation.
   if (!leadId) leadId = await heldDealOf(db, contact!.id, now);
   if (leadId) await adoptUnmatched(db, contact!.id, leadId);
-  const { conversation, created } = await openConversation(db, contact!.id, leadId, {
+  const opened = await openConversation(db, contact!.id, leadId, {
     referral: message.referral,
     originCode: link ? code : null,
   });
+  let conversation = opened.conversation;
+  const created = opened.created;
+  if (formLeadId) {
+    // Sofia starts knowing what the form told: the answers are hers, the greeting uses the name.
+    const known = factsOf(conversation);
+    if (!known.formKnown) {
+      const context = await formContextOf(db, formLeadId, sofiaSettings);
+      if (context) {
+        // The greeting says the form's name only to the number the form gave: the ref alone is a hint.
+        if (!formLead?.phone || !brazilianPhoneVariants(phone).includes(formLead.phone))
+          context.formName = null;
+        const facts = { ...known, ...context, answers: { ...context.answers, ...known.answers } };
+        await db
+          .update(waConversations)
+          .set({ sofiaFacts: facts })
+          .where(eq(waConversations.id, conversation.id));
+        conversation = { ...conversation, sofiaFacts: facts };
+      }
+    }
+    if (created) {
+      await db.insert(leadEvents).values({
+        leadId: formLeadId,
+        kind: 'lead.whatsapp_linked',
+        detail: { via: 'cloud_api', trackingLinkId: link?.id ?? null },
+      });
+    }
+  }
 
   // Sofia off and no deal: the first text of a new conversation waits for the Jev triage when
   // it is on (docs/leads/triagem-jev.md), which makes the deal or tells the team a person is

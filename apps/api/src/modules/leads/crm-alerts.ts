@@ -577,6 +577,35 @@ export async function writeLeadArrivalNotice(
     .onConflictDoNothing();
 }
 
+/**
+ * The owner hears that the person who filled the site form wrote on WhatsApp (the message itself is
+ * not in the CRM on the Z-API door). With no owner, Diretoria and the managers hear it. Names nothing
+ * about the person; one notice per lead and person. Best effort, like the arrival notice.
+ */
+export async function announceWhatsAppContact(
+  db: Database,
+  lead: { id: string; ownerEmployeeId: string | null },
+): Promise<void> {
+  try {
+    const people = lead.ownerEmployeeId ? [lead.ownerEmployeeId] : await managersAndBoard(db);
+    if (people.length === 0) return;
+    await db
+      .insert(crmNotifications)
+      .values(
+        people.map((person) => ({
+          recipientEmployeeId: person,
+          leadId: lead.id,
+          kind: 'lead_whatsapp',
+          message: 'O lead que preencheu o formulário chamou no WhatsApp.',
+          dedupeKey: `lead_whatsapp:${lead.id}:${person}`,
+        })),
+      )
+      .onConflictDoNothing();
+  } catch {
+    // The lead and the link are already saved; the first-contact alert still runs.
+  }
+}
+
 /** Old leads (see `STALE_ARRIVAL_HOURS`) a read of the platform brought, counted per owner (`null` = no owner). */
 export type BackfillTally = Map<string | null, number>;
 

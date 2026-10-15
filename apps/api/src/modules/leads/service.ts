@@ -27,6 +27,7 @@ import {
   type LeadLegalBasis,
   type FunnelSummary,
   type LeadListItem,
+  type InstagramListFilter,
   type LeadNote,
   type LeadOriginAd,
   type LeadOriginUtm,
@@ -66,6 +67,7 @@ import {
   findOrCreateCompany,
 } from './contacts.js';
 import { scheduleLeadChecks } from './field-checks.js';
+import { instagramCheckOf } from './instagram-check.js';
 import { markSuspectsAround } from './suspect.js';
 import { enqueueTriage } from './triage-queue.js';
 import { TRIAGE_SOURCES, leadTriageEnabled, scheduleLeadTriage } from './triage-schedule.js';
@@ -968,6 +970,7 @@ export function toLead(
             at: row.suspectAt.toISOString(),
           }
         : null,
+    instagramCheck: instagramCheckOf(row),
     enteredAt: row.enteredAt.toISOString(),
     enteredAtSource: row.enteredAtSource as LeadEnteredSource,
     createdAt: row.createdAt.toISOString(),
@@ -1127,6 +1130,8 @@ export interface LeadListFilter {
   activityDays?: number;
   campaign?: string;
   sort?: 'recent' | 'oldest' | 'value_desc' | 'value_asc' | 'stage_time' | 'next_task' | 'name';
+  /** Only deals whose Instagram check says suspect and/or fake (a person's correction counts). */
+  instagram?: InstagramListFilter;
   /** Set when the caller's scope is `own`, or when the caller asked for "Minhas". */
   ownerEmployeeId?: string;
 }
@@ -1194,6 +1199,13 @@ export function listConditions(filter: LeadListFilter) {
   if (filter.owner === INACTIVE_OWNER) conditions.push(ownerInactive);
   else if (filter.owner === NO_OWNER) conditions.push(isNull(leads.ownerEmployeeId));
   else if (filter.owner) conditions.push(eq(leads.ownerEmployeeId, filter.owner));
+  if (filter.instagram) {
+    conditions.push(
+      filter.instagram === 'suspeito_ou_falso'
+        ? sql`${leads.instagramVerdictEffective} is not null`
+        : eq(leads.instagramVerdictEffective, filter.instagram),
+    );
+  }
   if (filter.clientId) conditions.push(eq(leads.clientId, filter.clientId));
   if (filter.source) conditions.push(eq(leads.source, filter.source));
   if (filter.pipeline) conditions.push(eq(leads.pipeline, filter.pipeline));

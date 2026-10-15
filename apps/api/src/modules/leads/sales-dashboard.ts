@@ -47,6 +47,8 @@ const bounds = (range: SalesRange) => {
   return { start, end };
 };
 
+/** A lead whose Instagram check decided (or a person corrected): the ones the counts can speak of. */
+const igChecked = sql`(l.instagram_check_status in ('confere', 'nao_encontrado', 'nao_bate') or l.instagram_manual is not null)`;
 const campaignKey = sql`coalesce(nullif(trim(l.campaign_name), ''), nullif(trim(l.utm_campaign), ''))`;
 const num = (value: unknown) => Number(value ?? 0);
 const numOrNull = (value: unknown) =>
@@ -302,6 +304,7 @@ export async function salesDashboardOf(
     services: views?.services ?? [],
     sources: views?.sources ?? [],
     campaigns: views?.campaigns ?? [],
+    pages: views?.pages ?? [],
     spendVisible,
     regions: views?.regions ?? [],
     cities: views?.cities ?? [],
@@ -422,26 +425,36 @@ async function teamViewsOf(
                    (count(*) filter (where ${wonIn}))::int as won,
                    coalesce(sum(l.value_cents) filter (where ${wonIn}), 0)::bigint as won_cents`;
   const openOrWon = sql`(l.won is null or ${wonIn})`;
-  const [owners, activities, firstContact, brands, services, sources, campaigns, regions, cities] =
-    await Promise.all([
-      rows<Slice & { owner: string | null; name: string | null }>(
-        db,
-        sql`select l.owner_employee_id as owner, e.full_name as name, ${slice}
+  const [
+    owners,
+    activities,
+    firstContact,
+    brands,
+    services,
+    sources,
+    campaigns,
+    regions,
+    cities,
+    pages,
+  ] = await Promise.all([
+    rows<Slice & { owner: string | null; name: string | null }>(
+      db,
+      sql`select l.owner_employee_id as owner, e.full_name as name, ${slice}
               from leads l left join employees e on e.id = l.owner_employee_id
              where ${where} and ${openOrWon}
              group by 1, 2`,
-      ),
-      rows<{ actor: string; name: string | null; total: number }>(
-        db,
-        sql`select a.actor_employee_id as actor, e.full_name as name, count(*)::int as total
+    ),
+    rows<{ actor: string; name: string | null; total: number }>(
+      db,
+      sql`select a.actor_employee_id as actor, e.full_name as name, count(*)::int as total
               from lead_activities a join leads l on l.id = a.lead_id
               join employees e on e.id = a.actor_employee_id
              where ${where} and a.at >= ${start} and a.at < ${end}
              group by 1, 2`,
-      ),
-      rows<{ owner: string; count: number; avg_hours: number | null }>(
-        db,
-        sql`select owner, count(*)::int as count,
+    ),
+    rows<{ owner: string; count: number; avg_hours: number | null }>(
+      db,
+      sql`select owner, count(*)::int as count,
                    avg(extract(epoch from first_at - created_at)) / 3600 as avg_hours
               from (select l.owner_employee_id as owner, l.created_at,
                            least(l.first_contact_at,
@@ -450,60 +463,80 @@ async function teamViewsOf(
                      where ${where} and ${createdIn} and l.owner_employee_id is not null) d
              where first_at is not null and first_at >= created_at
              group by 1`,
-      ),
-      rows<Slice & { brand: string | null }>(
-        db,
-        sql`select l.brand, ${slice} from leads l where ${where} and ${openOrWon} group by 1`,
-      ),
-      args.pipeline
-        ? []
-        : rows<Slice & { pipeline: LeadPipeline }>(
-            db,
-            sql`select l.pipeline, ${slice} from leads l where ${where} and ${openOrWon} group by 1`,
-          ),
-      rows<{ source: LeadSource; leads: number; won: number; won_cents: string }>(
-        db,
-        sql`select l.source, (count(*) filter (where ${createdIn}))::int as leads,
+    ),
+    rows<Slice & { brand: string | null }>(
+      db,
+      sql`select l.brand, ${slice} from leads l where ${where} and ${openOrWon} group by 1`,
+    ),
+    args.pipeline
+      ? []
+      : rows<Slice & { pipeline: LeadPipeline }>(
+          db,
+          sql`select l.pipeline, ${slice} from leads l where ${where} and ${openOrWon} group by 1`,
+        ),
+    rows<{ source: LeadSource; leads: number; won: number; won_cents: string }>(
+      db,
+      sql`select l.source, (count(*) filter (where ${createdIn}))::int as leads,
                    (count(*) filter (where ${wonIn}))::int as won,
                    coalesce(sum(l.value_cents) filter (where ${wonIn}), 0)::bigint as won_cents
               from leads l where ${where} and ${inPeriod}
              group by 1`,
-      ),
-      // Every campaign in scope, so its platform ids are known even when the period brought no deal.
-      rows<{
-        campaign: string | null;
-        leads: number;
-        won: number;
-        won_cents: string;
-        ids: string[] | null;
-        all_leads: number;
-      }>(
-        db,
-        sql`select ${campaignKey} as campaign,
+    ),
+    // Every campaign in scope, so its platform ids are known even when the period brought no deal.
+    rows<{
+      campaign: string | null;
+      leads: number;
+      won: number;
+      won_cents: string;
+      ids: string[] | null;
+      all_leads: number;
+      ig_checked: number;
+      ig_suspect: number;
+      ig_fake: number;
+    }>(
+      db,
+      sql`select ${campaignKey} as campaign,
                    (count(*) filter (where ${createdIn}))::int as leads,
                    (count(*) filter (where ${wonIn}))::int as won,
                    coalesce(sum(l.value_cents) filter (where ${wonIn}), 0)::bigint as won_cents,
                    array_agg(distinct l.ad_campaign_external_id)
                      filter (where l.ad_campaign_external_id is not null) as ids,
-                   count(*)::int as all_leads
+                   count(*)::int as all_leads,
+                   (count(*) filter (where ${createdIn} and ${igChecked}))::int as ig_checked,
+                   (count(*) filter (where ${createdIn} and l.instagram_verdict_effective = 'suspeito'))::int as ig_suspect,
+                   (count(*) filter (where ${createdIn} and l.instagram_verdict_effective = 'falso'))::int as ig_fake
               from leads l where ${where}
              group by 1`,
-      ),
-      rows<{ class: string | null; leads: number; won: number }>(
-        db,
-        sql`select ${phoneClass} as class, (count(*) filter (where ${createdIn}))::int as leads,
+    ),
+    rows<{ class: string | null; leads: number; won: number }>(
+      db,
+      sql`select ${phoneClass} as class, (count(*) filter (where ${createdIn}))::int as leads,
                    (count(*) filter (where ${wonIn}))::int as won
               from leads l where ${where} and ${inPeriod}
              group by 1`,
-      ),
-      rows<{ city: string | null; leads: number; won: number }>(
-        db,
-        sql`select nullif(trim(l.city), '') as city, (count(*) filter (where ${createdIn}))::int as leads,
+    ),
+    rows<{ city: string | null; leads: number; won: number }>(
+      db,
+      sql`select nullif(trim(l.city), '') as city, (count(*) filter (where ${createdIn}))::int as leads,
                    (count(*) filter (where ${wonIn}))::int as won
               from leads l where ${where} and ${inPeriod}
              group by 1`,
-      ),
-    ]);
+    ),
+    // Per landing page (its slug, no query string): only pages whose leads have a decided check.
+    rows<{ page: string; leads: number; ig_checked: number; ig_suspect: number; ig_fake: number }>(
+      db,
+      sql`select regexp_replace(l.landing_page, '[?#].*$', '') as page,
+                   count(*)::int as leads,
+                   (count(*) filter (where ${igChecked}))::int as ig_checked,
+                   (count(*) filter (where l.instagram_verdict_effective = 'suspeito'))::int as ig_suspect,
+                   (count(*) filter (where l.instagram_verdict_effective = 'falso'))::int as ig_fake
+              from leads l where ${where} and ${createdIn} and l.landing_page is not null
+             group by 1
+            having count(*) filter (where ${igChecked}) > 0
+             order by 5 desc, 4 desc, 2 desc
+             limit 30`,
+    ),
+  ]);
 
   // --- sellers
   const sellers = new Map<string | null, SalesSellerRow>();
@@ -586,6 +619,7 @@ async function teamViewsOf(
         cplCents: paid !== null && row.leads > 0 ? Math.round(paid / row.leads) : null,
         cacCents: paid !== null && row.won > 0 ? Math.round(paid / row.won) : null,
         roas: paid !== null ? wonCents / paid : null,
+        instagram: { checked: row.ig_checked, suspect: row.ig_suspect, fake: row.ig_fake },
       };
     })
     .filter((row) => row.leads > 0 || row.won > 0 || (row.spendCents ?? 0) > 0)
@@ -642,6 +676,11 @@ async function teamViewsOf(
       .filter((row) => row.leads > 0 || row.won > 0)
       .sort((a, b) => b.leads - a.leads || b.won - a.won),
     campaigns: campaignRows,
+    pages: pages.map((row) => ({
+      page: row.page,
+      leads: row.leads,
+      instagram: { checked: row.ig_checked, suspect: row.ig_suspect, fake: row.ig_fake },
+    })),
     regions: [...byUf.values()]
       .filter((row) => row.leads > 0 || row.won > 0)
       .sort(

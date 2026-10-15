@@ -1,6 +1,8 @@
 import {
   CRM_STAGE_NAME_MAX,
   INACTIVE_OWNER,
+  INSTAGRAM_LIST_FILTER_LABELS,
+  INSTAGRAM_LIST_FILTERS,
   INACTIVE_OWNER_LABEL,
   NO_OWNER,
   NO_OWNER_LABEL,
@@ -85,6 +87,7 @@ const FILTER_KEYS: (keyof DealFilter)[] = [
   'clientId',
   'staleDays',
   'firstContactOverdue',
+  'instagram',
   'sort',
   'stage',
   'mine',
@@ -549,6 +552,19 @@ function Filters({
           {['3', '7', '15', '30', '60'].map((days) => (
             <option key={days} value={days}>
               Parados há mais de {days} dias
+            </option>
+          ))}
+        </select>
+        <select
+          className={cls('instagram', 'crm-select')}
+          aria-label="Instagram"
+          value={filter.instagram ?? ''}
+          onChange={(e) => set('instagram', e.target.value)}
+        >
+          <option value="">Instagram: todos</option>
+          {INSTAGRAM_LIST_FILTERS.map((item) => (
+            <option key={item} value={item}>
+              {INSTAGRAM_LIST_FILTER_LABELS[item]}
             </option>
           ))}
         </select>

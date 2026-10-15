@@ -1,4 +1,6 @@
 import {
+  INSTAGRAM_SOURCE_LABELS,
+  instagramCheckLabelOf,
   isCloseForecastOverdue,
   LEAD_CALL_OUTCOME_LABELS,
   LEAD_CALL_OUTCOMES,
@@ -42,6 +44,7 @@ import {
 import {
   useAddNote,
   useCheckLead,
+  useCorrectInstagram,
   useClearSuspect,
   useCreateTask,
   useLead,
@@ -1353,6 +1356,111 @@ function FieldCheckRow({
   );
 }
 
+/** The tone of the badge, in the colours the other checks already use. */
+const instagramToneOf = (check: NonNullable<Lead['instagramCheck']>) => {
+  if (check.manual) return check.manual.verdict === 'confere' ? 'confere' : 'nao_confere';
+  if (check.status === 'pendente') return 'pendente';
+  if (check.status === 'confere') return 'confere';
+  if (check.status === 'erro') return 'nao_verificado';
+  return check.status === 'nao_encontrado' && check.verdict !== 'falso'
+    ? 'nao_verificado'
+    : 'nao_confere';
+};
+
+/**
+ * The Instagram line of "Dados do formulário" when the worker checked the profile (docs/leads/
+ * instagram.md): the status with its source and time, and a person's correction. Only people on
+ * the team see it; the person who filled the form never does.
+ */
+function InstagramCheckRow({
+  lead,
+  check,
+  canWrite,
+}: {
+  lead: Lead;
+  check: NonNullable<Lead['instagramCheck']>;
+  canWrite: boolean;
+}) {
+  const correct = useCorrectInstagram();
+  const handle = lead.fields.instagram;
+  const shown = check.profileUrl ? (
+    <a href={check.profileUrl} target="_blank" rel="noopener noreferrer nofollow">
+      @{normalizeInstagram(handle ?? '')}
+    </a>
+  ) : (
+    handle
+  );
+  const when = check.checkedAt ? new Date(check.checkedAt).toLocaleString('pt-BR') : null;
+  const facts = [
+    check.status !== 'pendente' && check.status !== 'erro'
+      ? `Fonte: ${INSTAGRAM_SOURCE_LABELS[check.source]}`
+      : null,
+    when ? `conferido em ${when}` : null,
+    check.followers !== null ? `${check.followers.toLocaleString('pt-BR')} seguidores` : null,
+    check.posts !== null ? `${check.posts.toLocaleString('pt-BR')} posts` : null,
+  ].filter(Boolean);
+  return (
+    <>
+      <dt>Instagram</dt>
+      <dd>
+        <span className="crm-field-value">{shown ?? '—'}</span>
+        <span className={`crm-check is-${instagramToneOf(check)}`}>
+          {instagramCheckLabelOf(check)}
+        </span>
+        {check.reason && !check.manual ? (
+          <span className="crm-sub crm-check-reason">{check.reason}</span>
+        ) : null}
+        {facts.length > 0 ? (
+          <span className="crm-sub crm-check-reason">{facts.join(' · ')}</span>
+        ) : null}
+        {check.manual ? (
+          <span className="crm-sub crm-check-reason">
+            Corrigido em {new Date(check.manual.at).toLocaleString('pt-BR')}; o resultado da
+            conferência automática continua guardado.
+          </span>
+        ) : null}
+        {canWrite && check.status !== 'pendente' ? (
+          <span className="crm-check-actions">
+            {check.manual?.verdict !== 'confere' ? (
+              <button
+                type="button"
+                className="crm-btn is-small"
+                disabled={correct.isPending}
+                onClick={() => correct.mutate({ id: lead.id, verdict: 'confere' })}
+              >
+                Marcar como confere
+              </button>
+            ) : null}
+            {check.manual?.verdict !== 'falso' ? (
+              <button
+                type="button"
+                className="crm-btn is-small"
+                disabled={correct.isPending}
+                onClick={() => correct.mutate({ id: lead.id, verdict: 'falso' })}
+              >
+                Marcar como falso
+              </button>
+            ) : null}
+            {check.manual ? (
+              <button
+                type="button"
+                className="crm-btn is-small"
+                disabled={correct.isPending}
+                onClick={() => correct.mutate({ id: lead.id, verdict: null })}
+              >
+                Desfazer correção
+              </button>
+            ) : null}
+            {correct.isError ? (
+              <span className="crm-sub"> Não foi possível salvar agora.</span>
+            ) : null}
+          </span>
+        ) : null}
+      </dd>
+    </>
+  );
+}
+
 /**
  * "Dados do formulário": the five fields a lead form asks (name, WhatsApp,
  * Instagram, site, company and CNPJ), each with what the arrival check said,
@@ -1432,6 +1540,18 @@ function FormFieldsPanel({ lead, canWrite }: { lead: Lead; canWrite: boolean }) 
     ) : (
       site
     );
+  const instagramValue =
+    fields.instagram && normalizeInstagram(fields.instagram) === fields.instagram ? (
+      <a
+        href={`https://www.instagram.com/${fields.instagram}/`}
+        target="_blank"
+        rel="noopener noreferrer nofollow"
+      >
+        @{fields.instagram}
+      </a>
+    ) : (
+      fields.instagram
+    );
   return (
     <section className="crm-panel" aria-label="Dados do formulário">
       <h2>Dados do formulário</h2>
@@ -1442,23 +1562,11 @@ function FormFieldsPanel({ lead, canWrite }: { lead: Lead; canWrite: boolean }) 
           value={lead.phone ? 'ver em Contato' : null}
           check={checks.whatsapp}
         />
-        <FieldCheckRow
-          label="Instagram"
-          value={
-            fields.instagram && normalizeInstagram(fields.instagram) === fields.instagram ? (
-              <a
-                href={`https://www.instagram.com/${fields.instagram}/`}
-                target="_blank"
-                rel="noopener noreferrer nofollow"
-              >
-                @{fields.instagram}
-              </a>
-            ) : (
-              fields.instagram
-            )
-          }
-          check={checks.instagram}
-        />
+        {lead.instagramCheck ? (
+          <InstagramCheckRow lead={lead} check={lead.instagramCheck} canWrite={canWrite} />
+        ) : (
+          <FieldCheckRow label="Instagram" value={instagramValue} check={checks.instagram} />
+        )}
         <FieldCheckRow label="Site" value={siteLink} check={checks.website} />
         <FieldCheckRow label="Nome da empresa" value={fields.companyName} check={null} />
         <FieldCheckRow label="CNPJ" value={fields.cnpj} check={checks.cnpj} />
