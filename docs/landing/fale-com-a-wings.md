@@ -57,10 +57,11 @@ confere que é igual à do `@wings/shared`.
 
 **WhatsApp.** Os botões "Falar no WhatsApp" e "Chamar no WhatsApp" viram links de verdade (`target=_blank`,
 `rel=noopener`) assim que o GET responde com o link rastreado "Site" da Wings Company. A página não tem número nenhum:
-sem link, o clique leva ao formulário e põe o cursor no nome, e o botão do obrigado não aparece. O link rastreado
-começa com o código do link; com a branch `feat/instagram-check-sofia-contexto` (Sonnet), o link do POST passa a levar
-também a referência do lead, no formato `<código> <ref>` (6 caracteres, gerada e guardada pela API), para a Sofia
-saber de qual formulário a conversa veio.
+sem link, o clique leva ao formulário e põe o cursor no nome, e o botão do obrigado não aparece. O link do GET leva só o
+código do link (ainda não há lead); o do POST leva também a referência do lead, no formato `<código> <ref>` (6
+caracteres cada, gerada e guardada pela API em `leads.form_ref`), para a Sofia saber de qual formulário a conversa
+veio. A página nunca gera uma referência: usa o link que a API devolve. O e2e confere os dois formatos e, contra a API
+de teste, que a referência do link é a que o lead guardou.
 
 ## Endereços (hosts e slugs)
 

@@ -15,7 +15,8 @@
 // way to it is intercepted, so the browser's own CORS preflight reaches the API.
 // Each run then sends its own made-up person and answer, and E2E_REPORT, when
 // set, receives what was sent so the caller can check what the API kept.
-// E2E_EXPECT_WHATSAPP is the tracked link the API is expected to hand out.
+// E2E_EXPECT_WHATSAPP is the tracked link the API's GET is expected to hand out
+// (the code alone); the POST's is the same with the lead's form ref after it.
 // Screenshots go to E2E_SHOTS (default: a temporary folder).
 import { createServer, request as httpRequest } from 'node:http';
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
@@ -84,8 +85,22 @@ const TRACKING_KEYS = new Set([
 const CONSENT_TEXT =
   'Li a Política de Privacidade e autorizo a Wings a falar comigo por WhatsApp e e-mail sobre este pedido.';
 
+/** The GET's link has the tracking code alone; the POST's adds the lead's form ref (`<code> <ref>`). */
 const GET_WHATSAPP = 'https://wa.me/550000000000?text=E2EGET';
-const POST_WHATSAPP = 'https://wa.me/550000000000?text=E2EPOS%20REF234';
+const POST_WHATSAPP = 'https://wa.me/550000000000?text=E2EGET%20REF234';
+/** A tracking code and a form ref share the alphabet (no I, O, 0, 1) and the length. */
+const CODE_RE = /^[A-HJ-NP-Z2-9]{6}$/;
+
+/** The wa.me link's number path and its text's words, or null when it is not one. */
+function waParts(href) {
+  try {
+    const url = new URL(href);
+    if (url.protocol !== 'https:' || url.hostname !== 'wa.me') return null;
+    return { path: url.pathname, words: (url.searchParams.get('text') ?? '').split(' ') };
+  } catch {
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------- results
 
@@ -668,6 +683,13 @@ async function runViewport(
       ),
     JSON.stringify(wa),
   );
+  // before the form there is no lead yet: the text is the code alone, no ref
+  const getParts = waParts(wa[0]?.[0] ?? '');
+  check(
+    `${label}: the GET's link text is the tracking code only`,
+    getParts !== null && getParts.words.length === 1 && CODE_RE.test(getParts.words[0]),
+    JSON.stringify(getParts?.words),
+  );
   consentShown = await page.$eval('label.consent', (el) =>
     el.textContent.replace(/\s+/g, ' ').trim(),
   );
@@ -749,6 +771,21 @@ async function runViewport(
     `${label}: thank-you shown, form hidden`,
     done.thanksShown && done.formHidden && !done.previewNote,
   );
+  // the POST's link: the same number and code as the GET's, then the ref the lead got (`<code> <ref>`)
+  const postParts = waParts(done.href ?? '');
+  const [postCode, postRef] = postParts?.words ?? [];
+  check(
+    `${label}: thank-you link text is "<code> <ref>", the GET's code and a 6-character ref`,
+    !done.buttonHidden &&
+      postParts !== null &&
+      getParts !== null &&
+      postParts.path === getParts.path &&
+      postParts.words.length === 2 &&
+      CODE_RE.test(postCode ?? '') &&
+      CODE_RE.test(postRef ?? '') &&
+      postCode === getParts.words[0],
+    JSON.stringify(postParts?.words),
+  );
   if (LIVE_API) {
     submissions.push({
       label,
@@ -758,11 +795,12 @@ async function runViewport(
       email: person.email,
       phone: person.phone,
       sent: done.thanksShown,
+      ref: postRef ?? null,
     });
     check(
-      `${label}: thank-you button opens the POST's link`,
+      `${label}: thank-you button opens the POST's link (the GET's plus the ref)`,
       EXPECT_WHATSAPP
-        ? done.href === EXPECT_WHATSAPP && !done.buttonHidden
+        ? done.href === `${EXPECT_WHATSAPP}%20${postRef}` && !done.buttonHidden
         : done.buttonHidden || /^https:\/\/wa\.me\//.test(done.href ?? ''),
       done.href ?? 'hidden',
     );

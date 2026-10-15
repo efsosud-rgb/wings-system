@@ -59,6 +59,8 @@ interface Submission {
   email: string;
   phone: string;
   sent: boolean;
+  /** The form ref the thank-you link carried after the code, or null. */
+  ref: string | null;
 }
 
 interface Report {
@@ -277,6 +279,11 @@ async function checkDatabase(db: TestDatabase['db'], report: Report): Promise<vo
         detail.qualifier === submission.answer &&
         (detail.pipeline ?? null) === expected,
       JSON.stringify({ qualifier: detail.qualifier, pipeline: detail.pipeline }),
+    );
+    check(
+      `${label}: the thank-you link's ref is the one the lead keeps (form_ref)`,
+      submission.ref !== null && lead.formRef === submission.ref && lead.formRefAt !== null,
+      lead.formRef === submission.ref ? 'same ref' : 'different',
     );
     check(
       `${label}: the lead keeps the consent line the page shows`,
