@@ -12,11 +12,12 @@ Three sections: [1. Folder structure](#1-folder-structure) · [2. Code standard]
 
 - `apps/api` — Fastify API. `src/modules/<name>/` is one folder per domain; `src/plugins/auth.ts` holds sessions and `requirePermission`; `src/db/schema/` the Drizzle tables; `src/lib/` shared helpers (audit, CPF crypto, mailer, storage); `src/scripts/` CLIs run by hand; `src/test/` test helpers; `migrations/` numbered SQL.
 - `apps/web` — Vite + React. `src/pages/` one `XxxPage.tsx` per screen, `src/components/`, `src/api/` the API client, `src/lib/`, `src/router.tsx`.
+- `apps/landing` — static landing pages on their own hosts (Vite, no React): `<slug>/index.html` per page, `src/pages/<slug>/` its code, `src/lib/` what pages share (form, tracking, Turnstile, GTM). Calls the API's `/public/site-forms/:slug` across origins. See `docs/landing/`.
 - `apps/worker` — background worker. Takes jobs from the database (`WORKER_JOB_TYPES` picks which); one handler per job type in `src/jobs/`.
 - `packages/shared` — the contract between frontend and backend: Zod schemas, `src/rbac/` (roles, permissions, `policy.ts`), `src/navigation.ts`, enums.
 - `packages/studio` — fork of the Shotstack Studio SDK, the video editor (licence rule in section 3).
 - `docs/` — one file or folder per module or topic (`auth.md`, `ads/`, `crm/`, `leads/`, `drive.md`, `integracoes/`...). The rules below point to them.
-- `docker/` — Dockerfiles for the API, the web (nginx) and the worker. `scripts/gtm/` — one-off Google Tag Manager scripts.
+- `docker/` — Dockerfiles for the API, the web (nginx), the landing pages (nginx template, `landing-nginx.conf`) and the worker. `scripts/gtm/` — one-off Google Tag Manager scripts.
 - `.github/` — `workflows/ci.yml` is the CI; `agents/`, `hooks/` and `skills/` there are vendored agent tooling. `.claude/`, `.agents/` and `.codex/` hold skills, hooks and agents for the AI tools: not product code, and ESLint ignores them.
 - Root — `README.md`, `PRODUCT.md`, `docker-compose.dev.yml`, `.env.example` (variable names only, never values).
 

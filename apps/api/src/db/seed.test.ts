@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { isTrackingCode, siteFormSpecSchema, WINGS_CLIENT_ID } from '@wings/shared';
 import { and, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -55,6 +57,24 @@ describe('seed: "Fale com a Wings"', () => {
       ['consultoria', undefined],
       ['nao-sei', null],
     ]);
+  });
+
+  it('keeps, word for word, the consent line the approved page shows (apps/landing)', async () => {
+    const html = readFileSync(
+      resolve(import.meta.dirname, '../../../landing/fale-com-a-wings/index.html'),
+      'utf8',
+    );
+    const label = /<label class="consent"[^>]*>([\s\S]*?)<\/label\s*>/.exec(html)?.[1] ?? '';
+    const shown = label
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    expect(shown).toBe(
+      'Li a Política de Privacidade e autorizo a Wings a falar comigo por WhatsApp e e-mail sobre este pedido.',
+    );
+    expect(FALE_COM_A_WINGS.spec.consentText).toBe(shown);
+    const [rule] = await faleRules();
+    expect(siteFormSpecSchema.parse(rule?.siteFormSpec).consentText).toBe(shown);
   });
 
   it('never overwrites the rule a person changed', async () => {
