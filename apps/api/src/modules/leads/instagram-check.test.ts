@@ -65,14 +65,12 @@ beforeAll(async () => {
     pipeline: 'expansao',
     siteFormEnabled: true,
   });
-  await db
-    .insert(leadTrackingLinks)
-    .values({
-      clientId: brandId,
-      channel: 'site',
-      code: 'AUR0RA'.replace('0', '2'),
-      phone: '5521999470288',
-    });
+  await db.insert(leadTrackingLinks).values({
+    clientId: brandId,
+    channel: 'site',
+    code: 'AUR0RA'.replace('0', '2'),
+    phone: '5521999470288',
+  });
 }, 60_000);
 
 afterAll(async () => {

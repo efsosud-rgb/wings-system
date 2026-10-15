@@ -64,7 +64,8 @@ export const runCheckInstagramJob: JobHandler = async (job: Job, ctx: JobContext
   const lead = found.rows[0];
   if (!lead) throw new Error('lead not found');
 
-  const handle = lead.instagram && !declaresNone(lead.instagram) ? normalizeInstagram(lead.instagram) : null;
+  const handle =
+    lead.instagram && !declaresNone(lead.instagram) ? normalizeInstagram(lead.instagram) : null;
   if (!lead.instagram || declaresNone(lead.instagram)) {
     // "Não tenho": nothing to check. A mark the API left while waiting is taken off.
     await db.query(
@@ -216,7 +217,12 @@ export const runCheckInstagramJob: JobHandler = async (job: Job, ctx: JobContext
     } satisfies CheckInstagramOutput;
   } catch (error) {
     // The lead must not stay "Conferindo…": the person can ask again.
-    const failed = outcomeOf({ steps: { ...steps, meta: 'error' }, found: 'nenhuma', followers: null, posts: null });
+    const failed = outcomeOf({
+      steps: { ...steps, meta: 'error' },
+      found: 'nenhuma',
+      followers: null,
+      posts: null,
+    });
     await saveOutcome(db, leadId, job.id, failed, costUsdMicro, now).catch(() => undefined);
     throw error;
   }
@@ -264,16 +270,19 @@ async function saveOutcome(
       JSON.stringify(fieldCheck),
     ],
   );
-  await db.query(`insert into lead_events (lead_id, kind, detail) values ($1, 'instagram.checked', $2)`, [
-    leadId,
-    JSON.stringify({
-      jobId,
-      status: outcome.status,
-      source: outcome.source,
-      verdict: outcome.verdict,
-      steps: outcome.steps,
-    }),
-  ]);
+  await db.query(
+    `insert into lead_events (lead_id, kind, detail) values ($1, 'instagram.checked', $2)`,
+    [
+      leadId,
+      JSON.stringify({
+        jobId,
+        status: outcome.status,
+        source: outcome.source,
+        verdict: outcome.verdict,
+        steps: outcome.steps,
+      }),
+    ],
+  );
 }
 
 /** A message, never a stack, a query or a name. */
