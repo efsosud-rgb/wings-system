@@ -47,6 +47,7 @@ import { deliverWhatsApp, type Contact } from '../whatsapp/outbox.js';
 import { isOptOut } from '../whatsapp/webhook-parse.js';
 import { readTurn, type SofiaIntent, type SofiaReading, type SofiaTurnLine } from './brain.js';
 import { sofiaHandOver } from './deal.js';
+import { formGreetingOf } from './form-context.js';
 import { loadSofiaSettings } from './settings.js';
 import { factsOf, type ConversationRow, type SofiaFacts } from './state.js';
 
@@ -343,7 +344,12 @@ class Turn {
 
     // --- what comes next -------------------------------------------------------------
     await this.decideVoice();
-    if (!this.facts.greeted) this.parts.unshift(this.settings.texts.greeting);
+    if (!this.facts.greeted)
+      this.parts.unshift(
+        this.facts.formKnown
+          ? formGreetingOf(this.facts.formName ?? null)
+          : this.settings.texts.greeting,
+      );
     this.facts.greeted = true;
     // A brand's lead never hears of Wings, not even from the model.
     if (reading?.reply && !missed && !(this.voice && mentionsWings(reading.reply)))
@@ -447,6 +453,9 @@ class Turn {
       current: questions.find((q) => q.key === this.facts.step) ?? null,
       questions,
       known,
+      form: this.facts.formKnown
+        ? { page: this.facts.formPage ?? null, answers: this.facts.formAnswers ?? {} }
+        : null,
       lines: await this.context(name ? this.facts.answers[name.key] : undefined),
     });
     await this.settle(runId, result.usage, result.ok ? 'ok' : result.outcome);

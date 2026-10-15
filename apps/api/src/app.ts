@@ -187,6 +187,7 @@ export async function buildApp(deps: {
       env.NODE_ENV === 'test' && !deps.leadChecks
         ? null
         : {
+            instagramViaWorker: env.INSTAGRAM_CHECK_ENABLED === 'true',
             probe: deps.leadChecks?.probe ?? (online ? probePublicUrl : null),
             instagram:
               deps.leadChecks?.instagram ??

@@ -10,7 +10,8 @@ import { enqueueMetaLeadgenEvents } from './meta-intake.js';
 import { leadgenEventsOf, metaSignatureValid } from './meta-leads.js';
 import { ingestTikTokLeads, secretMatches, tiktokLeadsIn } from './tiktok-leads.js';
 import { rdAttributionOf } from './rd-attribution.js';
-import { leadFromTrackedMessage } from './tracked-link.js';
+import { leadByFormRef } from './form-ref.js';
+import { leadFromTrackedMessage, linkMessageToFormLead } from './tracked-link.js';
 import { resolveLandingPage, upsertLead, type LeadAttribution } from './service.js';
 
 /**
@@ -450,6 +451,20 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
       const phone = normalizeBrazilianPhone(inbound.phone);
       if (!phone) return reply.send({ ignored: 'no_phone' });
       if (!code) return reply.send({ ignored: 'no_code' });
+      // `<code> <ref>`: the form's own lead, even from another number; no second lead is made.
+      const formLead = await leadByFormRef(db, inbound.text);
+      if (formLead) {
+        const linked = await linkMessageToFormLead(db, {
+          code,
+          leadId: formLead.id,
+          at: inbound.at,
+          ip: request.ip,
+          via: 'zapi',
+        });
+        if (linked) {
+          return reply.send({ leadId: linked.lead.id, created: false, channel: linked.channel });
+        }
+      }
       const result = await leadFromTrackedMessage(db, {
         code,
         phone,

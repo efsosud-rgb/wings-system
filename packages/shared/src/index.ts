@@ -27,6 +27,7 @@ export * from './integrations/kairogen.js';
 export * from './jobs.js';
 export * from './leads.js';
 export * from './crm.js';
+export * from './instagram-check.js';
 export * from './lead-fields.js';
 export * from './sales-panel.js';
 export * from './crm-automations.js';

@@ -1,9 +1,9 @@
 import { type LeadLinkChannel, type LeadPipeline, WINGS_CLIENT_ID } from '@wings/shared';
 import { eq, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { clients, leadTrackingLinks } from '../../db/schema/index.js';
+import { clients, leadEvents, leadTrackingLinks, leads } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
-import { announceLeadArrival } from './crm-alerts.js';
+import { announceLeadArrival, announceWhatsAppContact } from './crm-alerts.js';
 import { brandOfLink, trackingLinkByCode, upsertLead } from './service.js';
 
 /**
@@ -88,4 +88,48 @@ export async function leadFromTrackedMessage(
   // when she hands the deal over), so this door announces the deal it made.
   if (result.created && !result.stale) await announceLeadArrival(db, result.lead);
   return { lead: result.lead, created: result.created, channel: link.channel };
+}
+
+/**
+ * A first message with `<code> <ref>` whose ref is the lead a site form made: the message belongs to
+ * that lead, so no second lead is made. The Z-API door keeps no conversation of its own, so the
+ * link is the timeline event and the owner's notice (the Cloud API door ties the conversation
+ * itself, `whatsapp/intake.ts`). Null when the code is not one of ours or the lead is gone.
+ */
+export async function linkMessageToFormLead(
+  db: Database,
+  message: {
+    code: string;
+    leadId: string;
+    at: Date | null;
+    ip?: string | null;
+    via: 'zapi' | 'cloud_api';
+  },
+) {
+  const link = await trackingLinkByCode(db, message.code);
+  if (!link) return null;
+  const lead = await db.query.leads.findFirst({
+    where: eq(leads.id, message.leadId),
+    columns: { id: true, ownerEmployeeId: true },
+  });
+  if (!lead) return null;
+  const at = message.at ?? new Date();
+  await db
+    .update(leadTrackingLinks)
+    .set({ hits: sql`${leadTrackingLinks.hits} + 1`, lastHitAt: at })
+    .where(eq(leadTrackingLinks.id, link.id));
+  await db.insert(leadEvents).values({
+    leadId: lead.id,
+    kind: 'lead.whatsapp_linked',
+    detail: { via: message.via, trackingLinkId: link.id },
+  });
+  await writeAudit(db, {
+    action: 'lead.merged',
+    entity: 'lead',
+    entityId: lead.id,
+    ip: message.ip ?? null,
+    metadata: { source: 'whatsapp_link', channel: link.channel, via: message.via, byFormRef: true },
+  });
+  await announceWhatsAppContact(db, lead);
+  return { lead, channel: link.channel };
 }

@@ -1,5 +1,6 @@
 import {
   expansionAreaSchema,
+  INSTAGRAM_MANUAL_VERDICTS,
   generateTrackingCode,
   leadCreateSchema,
   funnelSummaryQuerySchema,
@@ -26,6 +27,7 @@ import {
   leads,
 } from '../../db/schema/index.js';
 import { leadCheckDepsOf, runLeadChecks } from './field-checks.js';
+import { setInstagramManual } from './instagram-check.js';
 import { writeAudit } from '../../lib/audit.js';
 import { canChangeLeadOwner, leadInScope, leadOwnerFilter } from './access.js';
 import { activeClient, toClient } from '../clients/routes.js';
@@ -245,13 +247,38 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
       const row = await leadInScope(db, request.session.actor, params.data.id, 'leads.write');
       if (!row) return reply.status(404).send(notFound);
       const deps = leadCheckDepsOf(app);
-      await runLeadChecks(db, row.id, deps);
+      await runLeadChecks(db, row.id, deps, { manual: true });
       await writeAudit(db, {
         actorEmployeeId: request.session.actor.employeeId,
         action: 'lead.checks_requested',
         entity: 'lead',
         entityId: row.id,
         ip: request.ip,
+      });
+      return reply.send(await loadLead(db, row.id));
+    },
+  );
+
+  // A seller's correction of the Instagram check: "confere", "falso", or null to take it back.
+  app.post(
+    '/leads/:id/instagram',
+    { preHandler: app.requirePermission('leads.write') },
+    async (request, reply) => {
+      const params = idParam.safeParse(request.params);
+      const body = z
+        .object({ verdict: z.enum(INSTAGRAM_MANUAL_VERDICTS).nullable() })
+        .safeParse(request.body);
+      if (!params.success || !body.success) return reply.status(400).send(invalid());
+      const row = await leadInScope(db, request.session.actor, params.data.id, 'leads.write');
+      if (!row) return reply.status(404).send(notFound);
+      await setInstagramManual(db, row.id, request.session.actor.employeeId, body.data.verdict);
+      await writeAudit(db, {
+        actorEmployeeId: request.session.actor.employeeId,
+        action: 'lead.instagram_corrected',
+        entity: 'lead',
+        entityId: row.id,
+        ip: request.ip,
+        metadata: { verdict: body.data.verdict },
       });
       return reply.send(await loadLead(db, row.id));
     },

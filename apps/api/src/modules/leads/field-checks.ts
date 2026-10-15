@@ -10,10 +10,11 @@ import {
   type LeadCheckKey,
   type LeadChecks,
 } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Database } from '../../db/client.js';
 import { leads } from '../../db/schema/index.js';
+import { enqueueInstagramCheck, hasInstagramToCheck } from './instagram-check.js';
 import type { Probe } from '../../lib/public-probe.js';
 import type { CnpjLookup, LookupResult } from '../clients/lookup.js';
 import { shapeOf } from '../media/kairogen-adapter.js';
@@ -32,6 +33,12 @@ import { shapeOf } from '../media/kairogen-adapter.js';
 export type InstagramLookup = (handle: string) => Promise<LeadCheck>;
 
 export interface LeadCheckDeps {
+  /**
+   * The Instagram check belongs to the worker (`check_instagram`): a site-form lead on arrival and
+   * every "Conferir de novo" queue the job instead of calling Meta from here. Other sources keep
+   * `instagram` below on arrival.
+   */
+  instagramViaWorker?: boolean;
   probe: Probe | null;
   instagram: InstagramLookup | null;
   cnpj: ((cnpj: string) => Promise<LookupResult<CnpjLookup>>) | null;
@@ -155,6 +162,7 @@ export async function runLeadChecks(
   db: Database,
   leadId: string,
   deps: LeadCheckDeps,
+  options: { manual?: boolean } = {},
 ): Promise<LeadChecks | null> {
   const [lead] = await db
     .select({
@@ -162,17 +170,33 @@ export async function runLeadChecks(
       website: leads.website,
       instagram: leads.instagram,
       companyCnpj: leads.companyCnpj,
+      source: leads.source,
     })
     .from(leads)
     .where(eq(leads.id, leadId))
     .limit(1);
   if (!lead) return null;
+  const viaWorker =
+    deps.instagramViaWorker === true &&
+    (options.manual === true || lead.source === 'site_form') &&
+    hasInstagramToCheck(lead.instagram);
   const pending: LeadChecks = Object.fromEntries(
-    LEAD_CHECK_KEYS.map((key) => [key, { status: 'pendente', reason: null, checkedAt: null }]),
+    LEAD_CHECK_KEYS.filter((key) => !(viaWorker && key === 'instagram')).map((key) => [
+      key,
+      { status: 'pendente', reason: null, checkedAt: null },
+    ]),
   );
-  await db.update(leads).set({ fieldChecks: pending }).where(eq(leads.id, leadId));
-  const checks = await checkLeadFields(lead, deps);
-  await db.update(leads).set({ fieldChecks: checks }).where(eq(leads.id, leadId));
+  // The worker owns the `instagram` key: the others are merged in, never written over it.
+  const merge = (value: LeadChecks) =>
+    db
+      .update(leads)
+      .set({ fieldChecks: sql`coalesce(${leads.fieldChecks}, '{}'::jsonb) || ${JSON.stringify(value)}::jsonb` })
+      .where(eq(leads.id, leadId));
+  await merge(pending);
+  if (viaWorker) await enqueueInstagramCheck(db, leadId, null);
+  const checks = await checkLeadFields(lead, viaWorker ? { ...deps, instagram: null } : deps);
+  const { instagram: _owned, ...others } = checks;
+  await merge(viaWorker ? others : checks);
   deps.log.info(
     { leadId, checks: Object.fromEntries(Object.entries(checks).map(([k, v]) => [k, v?.status])) },
     'lead checks',

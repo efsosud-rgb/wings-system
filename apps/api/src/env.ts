@@ -472,6 +472,15 @@ const schema = z.object({
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',
   ),
+  /**
+   * The Instagram check of a site-form lead by the worker (`check_instagram`, docs/leads/instagram.md):
+   * when "true" the API queues the job on arrival and on "Conferir de novo" instead of calling Meta
+   * itself. The worker has its own switch of the same name (it is the one that spends).
+   */
+  INSTAGRAM_CHECK_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
   SITE_FORM_RD_FORWARD_ENABLED: optionalString.refine(
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',

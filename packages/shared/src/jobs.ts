@@ -11,6 +11,7 @@ export const JOB_TYPES = [
   'render',
   'enrich_lead',
   'transcribe_meeting',
+  'check_instagram',
 ] as const;
 export type JobType = (typeof JOB_TYPES)[number];
 
@@ -23,6 +24,7 @@ export const JOB_TYPES_IMPLEMENTED = [
   'render',
   'enrich_lead',
   'transcribe_meeting',
+  'check_instagram',
 ] as const satisfies readonly JobType[];
 
 export type JobState = 'pending' | 'running' | 'done' | 'failed';

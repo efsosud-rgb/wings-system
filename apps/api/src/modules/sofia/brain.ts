@@ -53,6 +53,8 @@ export interface SofiaBrainInput {
   questions: SofiaQuestion[];
   /** Answers already given (the name never: it is masked before this). */
   known: Record<string, string>;
+  /** What the site form already told, when the conversation is tied to its lead; null otherwise. */
+  form?: { page: string | null; answers: Record<string, string> } | null;
   /** The conversation so far, oldest first, the person's new messages last. */
   lines: SofiaTurnLine[];
 }
@@ -98,6 +100,7 @@ Regras que nunca mudam:
 Neste turno você só INTERPRETA as últimas mensagens do lead e chama a ferramenta ${TOOL}. Quem escolhe e envia a próxima pergunta é o sistema.
 - intent: o que o lead quer. formatacao = franquear o próprio negócio; consultoria = crescer sem franquear; expansao = abrir uma franquia de uma marca; cliente_atual = já é cliente ou franqueado; fornecedor = vender algo ou propor parceria; emprego = procura emprego ou estágio; reclamacao = reclamação; quer_pessoa = pediu para falar com uma pessoa ou atendente humano; spam; numero_errado = disse que é engano; nao_contatar = pediu para não receber mensagens; indefinido = ainda não dá para saber (cumprimento, resposta solta).
 - answers: só respostas que o lead deu de fato às perguntas da lista, pela chave. Em pergunta de opções, use exatamente o texto de uma das opções. Se o lead disse que não tem (Instagram, site), responda "Não tem". Não invente.
+- contexto_do_formulario, quando existe: o que a pessoa já preencheu no site (página e respostas). Já é conhecido: não peça de novo e não repita em reply.
 - understood: false se a mensagem não responde à pergunta atual e não traz nada que sirva.
 - asked_values: true se o lead perguntou preço, valor, investimento, taxa ou quanto vai ganhar.
 - brand: em Expansão, o nome da marca de franquia que o lead citou, se citou.
@@ -174,6 +177,9 @@ function userContent(input: SofiaBrainInput) {
       .filter((q) => q.kind !== 'name')
       .map((q) => ({ chave: q.key, texto: q.text, opcoes: q.options })),
     respostas_ja_dadas: input.known,
+    ...(input.form
+      ? { contexto_do_formulario: { pagina: input.form.page, respostas: input.form.answers } }
+      : {}),
     conversa: input.lines.map((line) => ({ de: line.from, texto: scrubForAi(line.text) })),
   });
 }

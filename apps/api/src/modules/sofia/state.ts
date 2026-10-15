@@ -33,6 +33,14 @@ export interface SofiaFacts {
   /** The tracking link of the first message (channel and id), for the deal's origin. */
   trackingLinkId?: string | null;
   channel?: string | null;
+  /** The conversation is tied to the lead a site form made: its answers are already in `answers`. */
+  formKnown?: boolean;
+  /** The person's first name from the form, for the greeting (never sent to the AI). */
+  formName?: string | null;
+  /** The page the form was sent from, without query. */
+  formPage?: string | null;
+  /** The form's non-contact answers (question -> answer), at most five. */
+  formAnswers?: Record<string, string>;
 }
 
 export function factsOf(row: { sofiaFacts: unknown }): SofiaFacts {
@@ -144,6 +152,16 @@ export async function routeInbound(db: Executor, input: InboundRoute): Promise<S
       step: null,
       trackingLinkId: input.link?.id ?? old.trackingLinkId ?? null,
       channel: input.link?.channel ?? old.channel ?? null,
+      // What the form told her stays: the place in the script starts over, the knowledge does not.
+      ...(old.formKnown
+        ? {
+            formKnown: true,
+            formName: old.formName ?? null,
+            formPage: old.formPage ?? null,
+            formAnswers: old.formAnswers ?? {},
+            ...(old.brandConfirmed ? { brandConfirmed: true } : {}),
+          }
+        : {}),
     } satisfies SofiaFacts;
     patch.sofiaMisses = 0;
     if (next === 'sofia') readFromHere();

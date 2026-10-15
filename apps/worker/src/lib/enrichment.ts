@@ -218,7 +218,14 @@ export interface EnrichmentBudget {
   researchDailyUsd: number;
 }
 
-export type LedgerStep = 'zapi_profile' | 'web_search' | 'brasilapi_cnpj' | 'ai_research';
+export type LedgerStep =
+  | 'zapi_profile'
+  | 'web_search'
+  | 'brasilapi_cnpj'
+  | 'ai_research'
+  | 'ig_meta'
+  | 'ig_search'
+  | 'ig_ai';
 export type LedgerStatus = 'started' | 'done' | 'failed' | 'skipped' | 'refused';
 
 /** 00:00 of today in São Paulo (UTC-3, no DST since 2019). */
@@ -245,6 +252,13 @@ export async function writeLedger(
   );
 }
 
+/** Which daily ceiling a ledger step counts against. */
+export function ceilingGroupOf(step: LedgerStep): 'research' | 'instagram' | 'enrich' {
+  if (step === 'ai_research') return 'research';
+  if (step.startsWith('ig_')) return 'instagram';
+  return 'enrich';
+}
+
 /**
  * Reserves the cost of one paid call under a lock: today's spend plus this
  * call must fit in the ceiling, and the ledger row is written BEFORE the
@@ -263,17 +277,19 @@ export async function reserveSpend(
     detail?: Record<string, unknown>;
   },
 ): Promise<boolean> {
-  // Two ceilings, two sums: the company research (`ai_research`) counts only against its own,
-  // and the searches and lookups count only against ENRICH_DAILY_USD.
-  const research = input.step === 'ai_research';
+  // Three ceilings, three sums: the company research (`ai_research`) counts only against its own,
+  // the Instagram check (`ig_*`) against its own, and the searches and lookups only against
+  // ENRICH_DAILY_USD.
+  const group = ceilingGroupOf(input.step);
   const client = await pool.connect();
   try {
     await client.query('begin');
     await client.query(`select pg_advisory_xact_lock(hashtext('lead_enrichment_budget'))`);
     const spent = await client.query<{ total: string }>(
       `select coalesce(sum(usd_micro), 0)::bigint as total from lead_enrichment_ledger
-        where created_at >= $1 and (step = 'ai_research') = $2`,
-      [saoPauloDayStart(input.now), research],
+        where created_at >= $1
+          and (case when step = 'ai_research' then 'research' when step like 'ig\\_%' then 'instagram' else 'enrich' end) = $2`,
+      [saoPauloDayStart(input.now), group],
     );
     const total = Number(spent.rows[0]?.total ?? 0);
     const ceiling = Math.round(input.dailyUsd * 1_000_000);

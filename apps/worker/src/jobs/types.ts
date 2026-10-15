@@ -6,6 +6,7 @@ import type {
   WebSearch,
   ZapiProfileClient,
 } from '../lib/enrichment.js';
+import type { InstagramDiscovery, InstagramJudge } from '../lib/instagram-check.js';
 import type { ObjectStorage } from '../lib/storage.js';
 import type { Job } from '../queue.js';
 
@@ -43,6 +44,17 @@ export interface JobContext {
     research?: LeadResearchProvider | null;
     /** Only leads that arrived from this instant on are researched (LEAD_RESEARCH_SINCE); null: no cut-off. */
     researchSince?: Date | null;
+  };
+  /**
+   * The Instagram check of a site-form lead (`check_instagram`): off unless INSTAGRAM_CHECK_ENABLED is
+   * "true"; a null provider means "not configured" and its step is skipped. The paid steps count
+   * against `dailyUsd`, apart from the other ceilings.
+   */
+  instagramCheck?: {
+    enabled: boolean;
+    discovery: InstagramDiscovery | null;
+    judge: InstagramJudge | null;
+    dailyUsd: number;
   };
   /** Set only by tests, to pin "today" for the daily ceiling. */
   now?: () => Date;

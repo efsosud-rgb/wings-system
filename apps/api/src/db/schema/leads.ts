@@ -179,6 +179,31 @@ export const leads = pgTable(
     suspectAt: timestamp('suspect_at', { withTimezone: true }),
     suspectClearedAt: timestamp('suspect_cleared_at', { withTimezone: true }),
     suspectClearedBy: uuid('suspect_cleared_by').references(() => employees.id),
+    /**
+     * The Instagram check of a site-form lead (`check_instagram` job, docs/leads/instagram.md).
+     * `status`: confere | nao_encontrado | nao_bate | pendente | erro; `source`: meta | busca |
+     * nenhuma. `detail` has the reason, how each step went, followers and posts (Meta) and the
+     * cost; never the profile's text. `verdict` is the machine's (suspeito | falso); the seller's
+     * correction sits apart in `instagramManual*`, and the lists read both through
+     * `effectiveInstagramVerdict`. Never shown to the person who filled the form.
+     */
+    instagramCheckStatus: text('instagram_check_status'),
+    instagramCheckSource: text('instagram_check_source'),
+    instagramCheckedAt: timestamp('instagram_checked_at', { withTimezone: true }),
+    instagramCheckDetail: jsonb('instagram_check_detail'),
+    instagramVerdict: text('instagram_verdict'),
+    instagramManual: text('instagram_manual'),
+    instagramManualAt: timestamp('instagram_manual_at', { withTimezone: true }),
+    instagramManualBy: uuid('instagram_manual_by').references(() => employees.id),
+    /** `instagramVerdict` with the seller's correction applied: what the filter and the stats read. */
+    instagramVerdictEffective: text('instagram_verdict_effective'),
+    /**
+     * Six characters that tie the first WhatsApp message (`<code> <ref>`) to the lead a site form
+     * made. Overwritten by a new submission of the same lead; unique among the leads that hold one.
+     */
+    formRef: text('form_ref'),
+    /** When `formRef` was issued: a message may use it for 7 days. */
+    formRefAt: timestamp('form_ref_at', { withTimezone: true }),
     enteredAt: timestamp('entered_at', { withTimezone: true }).notNull().defaultNow(),
     /**
      * Whose clock `entered_at` is (`LEAD_ENTERED_SOURCES` in packages/shared). 'received' means
@@ -191,6 +216,10 @@ export const leads = pgTable(
   (table) => [
     uniqueIndex('leads_source_external_uq').on(table.source, table.externalId),
     uniqueIndex('leads_rd_deal_uq').on(table.rdDealId),
+    uniqueIndex('leads_form_ref_uq').on(table.formRef).where(sql`${table.formRef} is not null`),
+    index('leads_instagram_verdict_idx')
+      .on(table.instagramVerdictEffective)
+      .where(sql`${table.instagramVerdictEffective} is not null`),
     index('leads_pipeline_stage_idx').on(table.pipeline, table.stage),
     index('leads_stage_id_idx').on(table.stageId),
     index('leads_import_batch_idx').on(table.importBatchId),

@@ -73,6 +73,8 @@ export const STALE_AFTER_MS: Record<JobType, number> = {
   transcribe: 5 * 60_000,
   render: 5 * 60_000,
   enrich_lead: 5 * 60_000,
+  // One cheap search and one short model call, both with their own timeouts.
+  check_instagram: 5 * 60_000,
   // Same child-process shape as the Studio's transcription.
   transcribe_meeting: 5 * 60_000,
 };
