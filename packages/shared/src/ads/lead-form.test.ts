@@ -9,7 +9,9 @@ import {
   leadFormFingerprint,
   leadFormQuestionsInOrder,
   leadFormSchema,
+  siteFormSpecSchema,
   type LeadFormInput,
+  type SiteFormSpecInput,
 } from './lead-form.js';
 
 const valid: LeadFormInput = {
@@ -116,5 +118,102 @@ describe('leadFormSchema', () => {
     expect(leadFormFingerprint(a)).toBe(leadFormFingerprint(b));
     const c = leadFormSchema.parse({ ...valid, thankYou: { ...valid.thankYou, title: 'Outro' } });
     expect(leadFormFingerprint(c)).not.toBe(leadFormFingerprint(a));
+  });
+});
+
+describe('siteFormSpecSchema (the site page only)', () => {
+  const spec: SiteFormSpecInput = {
+    qualifier: {
+      question: 'O que você procura?',
+      options: ['Formatar a empresa', 'Expandir a rede', 'Ainda não sei'],
+    },
+    qualifierValues: [
+      { value: 'formatacao', option: 'Formatar a empresa' },
+      { value: 'expansao', option: 'Expandir a rede', pipeline: 'expansao' },
+      { value: 'nao-sei', option: 'Ainda não sei', pipeline: null },
+    ],
+    requiredFields: ['email', 'instagram', 'qualifierAnswer'],
+    privacyPolicyUrl: 'https://wingscompany.com.br/politica-de-privacidade/',
+    thankYou: { ...LEAD_FORM_THANK_YOU_DEFAULT, buttonUrl: 'https://wingscompany.com.br/' },
+  };
+  const issuesOf = (input: unknown) => {
+    const result = siteFormSpecSchema.safeParse(input);
+    return result.success ? [] : result.error.issues.map((issue) => issue.path.join('.'));
+  };
+
+  it('keeps the codes, the funnels they name and the required fields', () => {
+    const parsed = siteFormSpecSchema.parse(spec);
+    expect(parsed.requiredFields).toEqual(['email', 'instagram', 'qualifierAnswer']);
+    expect(parsed.qualifierValues?.[0]).toEqual({
+      value: 'formatacao',
+      option: 'Formatar a empresa',
+    });
+    expect(parsed.qualifierValues?.[0]).not.toHaveProperty('pipeline');
+    expect(parsed.qualifierValues?.[2]?.pipeline).toBeNull();
+  });
+
+  it('an older spec (no codes, nothing required) still parses as it was', () => {
+    const parsed = siteFormSpecSchema.parse({
+      privacyPolicyUrl: spec.privacyPolicyUrl,
+      thankYou: spec.thankYou,
+    });
+    expect(parsed.qualifier).toBeNull();
+    expect(parsed.requiredFields).toBeUndefined();
+    expect(parsed.qualifierValues).toBeUndefined();
+  });
+
+  it('refuses codes or a required answer without the question', () => {
+    expect(issuesOf({ ...spec, qualifier: null })).toEqual(
+      expect.arrayContaining(['requiredFields', 'qualifierValues']),
+    );
+  });
+
+  it('refuses a repeated code, an option the question does not have and a missing option', () => {
+    const [first, second, third] = spec.qualifierValues!;
+    expect(
+      issuesOf({ ...spec, qualifierValues: [first, { ...second!, value: 'formatacao' }, third] }),
+    ).toEqual(['qualifierValues.1.value']);
+    expect(
+      issuesOf({ ...spec, qualifierValues: [first, { ...second!, option: 'Outra' }, third] }),
+    ).toEqual(['qualifierValues.1.option']);
+    expect(
+      issuesOf({ ...spec, qualifierValues: [first, { ...second!, option: first!.option }, third] }),
+    ).toEqual(['qualifierValues.1.option']);
+    expect(issuesOf({ ...spec, qualifierValues: [first, second] })).toEqual(['qualifierValues']);
+    expect(
+      issuesOf({ ...spec, qualifierValues: [{ ...first!, value: 'Com Espaço' }, second, third] }),
+    ).toEqual(['qualifierValues.0.value']);
+    expect(
+      issuesOf({ ...spec, qualifierValues: [{ ...first!, pipeline: 'outro' }, second, third] }),
+    ).toEqual(['qualifierValues.0.pipeline']);
+  });
+
+  it('refuses an unknown or repeated required field', () => {
+    expect(issuesOf({ ...spec, requiredFields: ['cpf'] })).toEqual(['requiredFields.0']);
+    expect(issuesOf({ ...spec, requiredFields: ['email', 'email'] })).toEqual(['requiredFields']);
+  });
+
+  it('keeps the consent line the page shows, trimmed, from 10 to 300 characters', () => {
+    const line = 'Li a Política de Privacidade e autorizo o contato.';
+    expect(siteFormSpecSchema.parse({ ...spec, consentText: `  ${line}  ` }).consentText).toBe(
+      line,
+    );
+    expect(siteFormSpecSchema.parse(spec)).not.toHaveProperty('consentText');
+    expect(issuesOf({ ...spec, consentText: 'Aceito.' })).toEqual(['consentText']);
+    expect(issuesOf({ ...spec, consentText: `   ${'a'.repeat(9)}   ` })).toEqual(['consentText']);
+    expect(issuesOf({ ...spec, consentText: 'a'.repeat(300) })).toEqual([]);
+    expect(issuesOf({ ...spec, consentText: 'a'.repeat(301) })).toEqual(['consentText']);
+  });
+
+  it("the Meta form never takes the site page's options", () => {
+    const parsed = leadFormSchema.parse({
+      ...valid,
+      requiredFields: ['email'],
+      qualifierValues: spec.qualifierValues,
+      consentText: 'Li a Política de Privacidade e autorizo o contato.',
+    });
+    expect(parsed).not.toHaveProperty('requiredFields');
+    expect(parsed).not.toHaveProperty('qualifierValues');
+    expect(parsed).not.toHaveProperty('consentText');
   });
 });

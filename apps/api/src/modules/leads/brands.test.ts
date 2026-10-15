@@ -18,6 +18,7 @@ import {
   registerBrands,
 } from './brands.js';
 import { listProjects, openProjectForClient } from '../projects/service.js';
+import { configureLandingBase } from './landing-base.js';
 import { resolveLandingPage } from './service.js';
 
 let harness: TestDatabase;
@@ -380,5 +381,30 @@ describe('on sale and pages switched off in RD (Eric, 02/10)', () => {
 
     const again = await applyOnSale20261002(db, { apply: true });
     expect([again.brands.created, again.marks, again.unpublished]).toEqual([[], [], []]);
+  });
+});
+
+describe('the rule of a new page takes LANDING_PAGE_BASE_URL', () => {
+  it('a new rule gets the configured base; an existing one keeps its address', async () => {
+    configureLandingBase('https://lpfranquias.wingscompany.com.br');
+    try {
+      await registerBrands(db, {
+        names: ['Marca Base Nova', 'Iguari'],
+        pages: [
+          { name: 'Marca Base Nova', identifiers: ['marca-base-nova'] },
+          { name: 'Iguari', identifiers: ['iguari'] },
+        ],
+        apply: true,
+      });
+    } finally {
+      configureLandingBase(undefined);
+    }
+    const urlOf = async (pattern: string) =>
+      (await db.query.leadSourceRules.findFirst({ where: eq(leadSourceRules.pattern, pattern) }))
+        ?.url;
+    expect(await urlOf('marca-base-nova')).toBe(
+      'https://lpfranquias.wingscompany.com.br/marca-base-nova',
+    );
+    expect(await urlOf('iguari')).toBe('https://franquia.wingscompany.com.br/iguari');
   });
 });

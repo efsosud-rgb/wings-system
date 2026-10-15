@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./instagram": {
+      "types": "./dist/instagram.d.ts",
+      "default": "./dist/instagram.js"
     }
   },
   "files": [

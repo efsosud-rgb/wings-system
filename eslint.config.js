@@ -30,6 +30,27 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   prettier,
   {
+    // The landing pages' Node scripts and e2e runner; their page.evaluate callbacks run in the browser.
+    files: ['apps/landing/scripts/**/*.mjs', 'apps/landing/e2e/**/*.mjs'],
+    languageOptions: {
+      globals: Object.fromEntries(
+        [
+          'Buffer',
+          'console',
+          'process',
+          'setTimeout',
+          'URL',
+          'document',
+          'Image',
+          'performance',
+          'PerformanceObserver',
+          'requestAnimationFrame',
+          'window',
+        ].map((name) => [name, 'readonly']),
+      ),
+    },
+  },
+  {
     rules: {
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       // Personal data must never reach logs or the console (LGPD).

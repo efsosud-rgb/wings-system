@@ -1,3 +1,4 @@
+import type { SiteFormRequiredField } from './ads/lead-form.js';
 import { INSTAGRAM_LIST_FILTERS } from './instagram-list-filters.js';
 import type { LeadInstagramCheck } from './instagram-check.js';
 import type { LeadChecks } from './lead-fields.js';
@@ -456,12 +457,18 @@ export function normalizeSourcePattern(pattern: string): string {
 /**
  * Every key a landing-page rule may match for one conversion: the full
  * address, the host alone, the first path segment (the franchise slug when
- * the host is ours) and the raw identifier RD Station sent.
+ * the host is one of ours, `franchiseHosts`) and the raw identifier RD
+ * Station sent. The API passes FRANCHISE_LP_HOST plus the host of its
+ * configured base (LANDING_PAGE_BASE_URL), so a page keeps mapping while it moves.
  */
-export function landingPageKeysOf(input: {
-  url?: string | null;
-  identifier?: string | null;
-}): string[] {
+export function landingPageKeysOf(
+  input: {
+    url?: string | null;
+    identifier?: string | null;
+  },
+  franchiseHosts: readonly string[] = [FRANCHISE_LP_HOST],
+): string[] {
+  const ours = new Set(franchiseHosts.map(normalizeSourcePattern));
   const keys = new Set<string>();
   if (input.identifier) keys.add(normalizeSourcePattern(input.identifier));
   if (input.url) {
@@ -472,7 +479,7 @@ export function landingPageKeysOf(input: {
     const slug = segments.find((segment) => segment.length > 0);
     if (slug) {
       keys.add(`${host}/${slug}`);
-      if (host === FRANCHISE_LP_HOST) keys.add(slug);
+      if (ours.has(host)) keys.add(slug);
     }
   }
   keys.delete('');
@@ -1479,7 +1486,10 @@ export interface LandingPagePerformance {
   rate: number | null;
 }
 
-/** Where franchise pages live today (RD Station) until our own pages replace them. */
+/**
+ * Where franchise pages live today (RD Station) until our own pages replace
+ * them: the default of the API's LANDING_PAGE_BASE_URL, which new rules use.
+ */
 export const LANDING_PAGE_BASE_URL = `https://${FRANCHISE_LP_HOST}`;
 
 export const landingPageCreateSchema = z.object({
@@ -1525,6 +1535,22 @@ export type LandingPageUpdateInput = z.infer<typeof landingPageUpdateSchema>;
 //   GET  /public/site-forms/:slug  -> SiteFormInfo     no session
 //   POST /public/site-forms/:slug  -> { ok, whatsappUrl }  no session; Turnstile, honeypot, per-IP limit
 
+/**
+ * The page's approved spec as the public page reads it: the codes of the
+ * question's options without the funnel each one leads to.
+ */
+export interface SiteFormPublicSpec {
+  qualifier: { question: string; options: string[] } | null;
+  privacyPolicyUrl: string;
+  thankYou: { title: string; body: string; buttonText: string; buttonUrl: string };
+  /** Asked on top of name, WhatsApp and consent; the API refuses a form without them. */
+  requiredFields: SiteFormRequiredField[];
+  /** When present, `qualifierAnswer` is one of these values (the option's code) or its text. */
+  qualifierValues?: { value: string; option: string }[];
+  /** The consent line the page shows and the lead keeps; absent: the funnel's (`siteFormCopyOf`). */
+  consentText?: string;
+}
+
 /** What the public page needs to draw the form: no id, no client data beyond the brand's name. */
 export interface SiteFormInfo {
   slug: string;
@@ -1538,11 +1564,13 @@ export interface SiteFormInfo {
    * multiple-choice question and the thank-you screen (`SiteFormSpec`); null
    * is the page's plain form.
    */
-  form?: {
-    qualifier: { question: string; options: string[] } | null;
-    privacyPolicyUrl: string;
-    thankYou: { title: string; body: string; buttonText: string; buttonUrl: string };
-  } | null;
+  form?: SiteFormPublicSpec | null;
+  /**
+   * The tracked "Site" link of the page's client on the current Wings
+   * WhatsApp (the same one the POST answers), or null: no client, no number
+   * configured, or no link made for it.
+   */
+  whatsappUrl: string | null;
   /** The page's funnel (its rule's); null when the rule does not say. The copy follows it. */
   pipeline?: LeadPipeline | null;
   /**
@@ -1655,11 +1683,19 @@ export const siteFormSubmitSchema = z.object({
   website: z.string().max(500).optional(),
   /** The page the form was sent from (origin + path + query). */
   page: z.string().max(2000).optional(),
-  tracking: z.partialRecord(z.enum(SITE_FORM_TRACKING_KEYS), z.string().trim().max(500)).optional(),
+  /** Only the keys above: anything else is refused, never kept. */
+  tracking: z
+    .partialRecord(
+      z.enum(SITE_FORM_TRACKING_KEYS),
+      z.string().trim().max(500, 'Dado de rastreamento longo demais'),
+      { error: 'Dados de rastreamento inválidos' },
+    )
+    .optional(),
   /**
    * The answer to the page's optional multiple-choice question (the standard
-   * form's `qualifier`, `site_form_spec`); kept with the form's answers, never
-   * read as a contact field.
+   * form's `qualifier`, `site_form_spec`): the option's text, or its code when
+   * the spec lists `qualifierValues` (the text still counts there). Kept with
+   * the form's answers as the option's text, never read as a contact field.
    */
   qualifierAnswer: z.string().trim().max(80).optional(),
 });

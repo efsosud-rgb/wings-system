@@ -23,14 +23,17 @@ estava vazio.
 **Formulário do site** (`/lp/<slug>`, desde 2026-10-07): a página pede **só as cinco perguntas do
 formulário padrão** — Nome, WhatsApp, Nome da empresa, Instagram e Site ("não tenho" vale como
 resposta) — as mesmas do formulário instantâneo da Meta. Não pede e-mail nem CNPJ (a API ainda
-aceita os dois de uma página antiga; sem e-mail, a cópia ao RD é pulada com `rdForward: no_email`).
-O campo do site se chama `siteUrl`, porque `website` é a armadilha anti-robô.
+aceita os dois de uma página antiga; sem e-mail, a cópia ao RD é pulada com `rdForward: no_email`),
+a não ser que o formulário aprovado torne o e-mail obrigatório (`requiredFields`, abaixo): aí a
+página mostra e exige o campo E-mail. O campo do site se chama `siteUrl`, porque `website` é a
+armadilha anti-robô.
 
 - **Texto pelo funil da página** (`siteFormCopyOf`, `packages/shared/src/leads.ts`): Expansão
   "Seja um franqueado <marca>"; Formatação "Transforme a sua empresa em franquia", botão "Quero
   formatar minha franquia"; Consultoria "Fale com a consultoria da Wings". A linha de consentimento
-  também muda e é a que fica gravada no lead (`consent_text`). O funil vem da regra da página em
-  CRM Vendas → Landing pages; sem funil na regra, o texto é o de Expansão.
+  também muda e é a que fica gravada no lead (`consent_text`), salvo quando o formulário aprovado
+  traz a sua (`consentText`, abaixo): aí a página mostra essa e o lead guarda essa. O funil vem da
+  regra da página em CRM Vendas → Landing pages; sem funil na regra, o texto é o de Expansão.
 - **Conversão nas plataformas** (`apps/web/src/lib/site-conversion.ts`): a página carrega o pixel
   da Meta (`META_PIXEL_ID`, só com `SITE_FORM_META_PIXEL_ENABLED=true`: PageView ao abrir e `Lead`
   no envio) e a tag do Google Ads (`SITE_FORM_GOOGLE_ADS_CONVERSION=AW-<id>/<rótulo>`, da ação de
@@ -41,6 +44,44 @@ O campo do site se chama `siteUrl`, porque `website` é a armadilha anti-robô.
 - **Não verificado ao vivo** (2026-10-07): o disparo real do pixel e da conversão do Google só
   pode ser conferido em produção, com os ids definidos (Meta: Gerenciador de Eventos → Testar
   eventos; Google: Metas → Conversões → "Diagnóstico").
+
+**Página própria "Fale com a Wings"** (`apps/landing`, 2026-10-15): uma página estática noutro
+endereço (`https://fale.wingscompany.com.br`) que usa as mesmas duas rotas
+`/public/site-forms/fale-com-a-wings`. A regra vem do seed (Wings Company, Formatação, formulário
+ligado, só inserida se faltar). O formulário aprovado (`site_form_spec`) ganhou três opções que só
+a página do site tem (o formulário da Meta não):
+
+- `requiredFields`: campos que passam a ser obrigatórios além de nome, WhatsApp e consentimento
+  (`email`, `companyName`, `instagram`, `siteUrl`, `qualifierAnswer`). A API recusa com 400 e a
+  frase do que falta. Com `instagram` obrigatório, fica só o usuário (`instagramUsernameOf`); um @
+  inválido é recusado. Sem a lista, nada muda para as páginas antigas.
+- `qualifierValues`: um código para cada opção da pergunta de múltipla escolha. A página manda o
+  código (o texto da opção também vale, como a página `/lp/<slug>` manda), e o lead guarda o texto
+  da opção em "Respostas do formulário". O código pode mandar o lead a outro funil (`pipeline`);
+  `null` deixa o lead sem funil, e quem decide é a triagem do Jev ([triagem-jev.md](triagem-jev.md)),
+  **só com a triagem ligada**: com ela desligada, o lead fica no funil da página, porque ninguém
+  daria um funil a ele depois. Expansão só vale numa página ligada a uma marca; sem marca, o lead
+  fica no funil da página. No "Fale com a Wings", "Ainda não sei" fica sem funil (com a triagem
+  ligada) e as outras três opções seguem o funil da página. O `GET` mostra os códigos sem os funis.
+- `consentText`: a frase de aceite que a própria página mostra ao lado da caixa (10 a 300
+  caracteres). O lead guarda essa frase, a que a pessoa marcou (LGPD); sem ela, vale a frase do
+  funil (`siteFormCopyOf`), a da página `/lp/<slug>`. O "Fale com a Wings" traz a frase da página
+  aprovada, palavra por palavra, e um teste confere que a página e o seed dizem o mesmo. O seed só
+  insere a regra quando ela falta: o staging e a produção recebem a regra, com a frase, no primeiro
+  deploy depois desta mudança.
+- **Fora do construtor de campanhas**: uma página com `qualifierValues` ou `requiredFields` no
+  formulário em vigor é de `apps/landing`. Ela não aparece na lista de páginas do construtor
+  (`GET /ads/lead-forms/site-pages`), e propor ou aprovar uma alteração nela responde 409
+  `landing_page_spec`.
+- **CORS**: só `/public/*`, e só para as origens exatas de `LANDING_ORIGINS`
+  (`Access-Control-Allow-Origin` com a origem e `Vary: Origin`, nunca com cookie). As origens são
+  `https://`; `http://` só para `localhost`, `127.0.0.1` e `[::1]` (testes e e2e). Qualquer outra
+  origem continua recusada com 403 `bad_origin`, e o resto da API não muda.
+- **Endereço das páginas novas**: `LANDING_PAGE_BASE_URL` (padrão `https://franquia.wingscompany.com.br`)
+  vale para as regras criadas daqui em diante; as que já existem guardam o endereço que têm. O
+  slug de uma conversão é lido nos dois endereços.
+- O botão de WhatsApp é o link "Site" rastreado da Wings Company no número atual. O seed cria esse
+  link quando `WINGS_WHATSAPP_NUMBER` está definida e a Wings ainda não tem nenhum.
 
 ## Google Ads (YouTube, Pesquisa) → Funil
 

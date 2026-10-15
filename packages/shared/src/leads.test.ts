@@ -112,6 +112,21 @@ describe('source rules', () => {
     ).toBeNull();
   });
 
+  it('reads the slug on every franchise host it is given, and only there', () => {
+    const moved = 'https://lpfranquias.wingscompany.com.br/sushi-do-bairro/?utm_source=ig';
+    // Default: only franquia.wingscompany.com.br is ours.
+    expect(landingPageKeysOf({ url: moved })).not.toContain('sushi-do-bairro');
+    const hosts = ['franquia.wingscompany.com.br', 'LPFranquias.wingscompany.com.br'];
+    const keys = landingPageKeysOf({ url: moved }, hosts);
+    expect(matchSourceRule(rules, 'landing_page', keys)?.clientId).toBe('sushi');
+    expect(
+      landingPageKeysOf({ url: 'https://franquia.wingscompany.com.br/sushi-do-bairro' }, hosts),
+    ).toContain('sushi-do-bairro');
+    expect(landingPageKeysOf({ url: 'https://other.com/sushi-do-bairro' }, hosts)).not.toContain(
+      'sushi-do-bairro',
+    );
+  });
+
   it('matches an RD conversion identifier and a Meta form id', () => {
     expect(
       matchSourceRule(rules, 'landing_page', landingPageKeysOf({ identifier: 'Sushi-do-Bairro' }))

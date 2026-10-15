@@ -62,6 +62,35 @@ beforeEach(() => {
           googleAdsConversion: 'AW-123456789/AbCdEfGhIj',
         },
       };
+    if (path === '/public/site-forms/fale-com-a-wings')
+      return {
+        slug: 'fale-com-a-wings',
+        brand: 'Wings Company',
+        turnstileSiteKey: '0x4AAA-site',
+        instagram: null,
+        form: {
+          qualifier: {
+            question: 'O que você procura?',
+            options: ['Transformar meu negócio em franquia', 'Ainda não sei'],
+          },
+          qualifierValues: [
+            { value: 'formatacao', option: 'Transformar meu negócio em franquia' },
+            { value: 'nao-sei', option: 'Ainda não sei' },
+          ],
+          requiredFields: ['email', 'companyName', 'instagram', 'qualifierAnswer'],
+          consentText: 'Li a Política de Privacidade e autorizo a Wings a falar comigo.',
+          privacyPolicyUrl: 'https://wingscompany.com.br/politica-de-privacidade/',
+          thankYou: {
+            title: 'Obrigado!',
+            body: 'A Wings vai falar com você.',
+            buttonText: 'Conhecer a Wings',
+            buttonUrl: 'https://wingscompany.com.br/',
+          },
+        },
+        whatsappUrl: null,
+        pipeline: 'formatacao',
+        tracking: { metaPixelId: null, googleAdsConversion: null },
+      };
     throw new ApiError(404, { error: 'not_found', message: 'Formulário não encontrado.' });
   });
   post.mockReset().mockResolvedValue({ ok: true, whatsappUrl: null });
@@ -236,6 +265,57 @@ describe('site form page (T5)', () => {
     expect(events.at(-1)).toEqual(['event', 'conversion', { send_to: 'AW-123456789/AbCdEfGhIj' }]);
     // Nothing typed reaches the tags.
     expect(JSON.stringify([pixelQueue(), events])).not.toContain('Pessoa Teste');
+  });
+
+  it("asks and requires the e-mail when the page's form requires it, with the page's own consent line", async () => {
+    renderAt('/lp/fale-com-a-wings');
+    expect(await screen.findByText('Transforme a sua empresa em franquia')).toBeTruthy();
+    // The line the lead keeps, not the funnel's.
+    expect(
+      screen.getByText('Li a Política de Privacidade e autorizo a Wings a falar comigo.'),
+    ).toBeTruthy();
+    expect(screen.queryByText(/formatação da minha empresa em franquia/)).toBeNull();
+    const email = screen.getByLabelText(/^E-mail/) as HTMLInputElement;
+    expect(email.type).toBe('email');
+    fireEvent.input(screen.getByLabelText(/^Nome(?! da)/), { target: { value: 'Pessoa Teste' } });
+    fireEvent.input(screen.getByLabelText(/^WhatsApp/), { target: { value: '21999990001' } });
+    fireEvent.input(screen.getByLabelText(/^Nome da empresa/), {
+      target: { value: 'Empresa Teste' },
+    });
+    fireEvent.input(screen.getByLabelText(/^Instagram/), { target: { value: '@empresa.teste' } });
+    fireEvent.input(screen.getByLabelText(/^Site da empresa/), { target: { value: 'não tenho' } });
+    fireEvent.click(screen.getByLabelText('Ainda não sei'));
+    fireEvent.click(screen.getByRole('checkbox'));
+    const send = screen.getByRole('button', {
+      name: 'Quero formatar minha franquia',
+    }) as HTMLButtonElement;
+    await waitFor(() => expect(send.disabled).toBe(false));
+
+    // Nothing typed: asked for, nothing sent.
+    fireEvent.click(send);
+    expect(await screen.findByText('Informe o seu e-mail')).toBeTruthy();
+    // Typed and erased: still missing, not "invalid".
+    fireEvent.input(email, { target: { value: 'x' } });
+    fireEvent.input(email, { target: { value: '  ' } });
+    fireEvent.click(send);
+    await waitFor(() => expect(screen.getByText('Informe o seu e-mail')).toBeTruthy());
+    fireEvent.input(email, { target: { value: 'pessoa' } });
+    fireEvent.click(send);
+    expect(await screen.findByText('E-mail inválido')).toBeTruthy();
+    expect(post).not.toHaveBeenCalled();
+
+    fireEvent.input(email, { target: { value: 'pessoa.teste@example.com' } });
+    fireEvent.click(send);
+    await waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    const [path, body] = post.mock.calls[0] as [string, Record<string, unknown>];
+    expect(path).toBe('/public/site-forms/fale-com-a-wings');
+    // The option's text: the API takes it for the option's code.
+    expect(body).toMatchObject({
+      email: 'pessoa.teste@example.com',
+      qualifierAnswer: 'Ainda não sei',
+      consent: true,
+    });
+    expect(await screen.findByText('Obrigado!')).toBeTruthy();
   });
 
   it('loads no tag when the API hands over no id', async () => {

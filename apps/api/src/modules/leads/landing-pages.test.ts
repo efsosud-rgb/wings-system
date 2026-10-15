@@ -14,6 +14,7 @@ import {
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
+import { configureLandingBase, franchiseLpHosts } from './landing-base.js';
 import { resolveLandingPage } from './service.js';
 
 let harness: TestDatabase;
@@ -221,5 +222,65 @@ describe('CRM Vendas → Landing pages', () => {
     const seller = await cookiesFor('vendedor_expansao');
     const mine = await app.inject({ method: 'GET', url: '/crm/landing-pages', cookies: seller });
     expect(mine.statusCode).toBe(403);
+  });
+});
+
+describe('LANDING_PAGE_BASE_URL', () => {
+  it('new pages take the configured base, old ones keep theirs, and both hosts map the slug', async () => {
+    const moved = await buildApp({
+      env: loadEnv({
+        NODE_ENV: 'test',
+        DATABASE_URL: harness.url,
+        SESSION_SECRET: 'x'.repeat(48),
+        CPF_ENCRYPTION_KEY: TEST_CPF_KEY,
+        CPF_INDEX_KEY: TEST_INDEX_KEY,
+        LANDING_PAGE_BASE_URL: 'https://LPFranquias.wingscompany.com.br/',
+      }),
+      db,
+    });
+    try {
+      expect(franchiseLpHosts()).toEqual([
+        'franquia.wingscompany.com.br',
+        'lpfranquias.wingscompany.com.br',
+      ]);
+      const employee = await createEmployee(db, { role: 'admin_master', sector: 'diretoria' });
+      const login = await moved.inject({
+        method: 'POST',
+        url: '/auth/login',
+        payload: { email: employee.email, password: employee.password },
+      });
+      const admin = {
+        [SESSION_COOKIE]: login.cookies.find((c) => c.name === SESSION_COOKIE)!.value,
+      };
+      const made = await moved.inject({
+        method: 'POST',
+        url: '/crm/landing-pages',
+        cookies: admin,
+        payload: { clientId, pipeline: 'expansao', slug: 'cenoritas-nova' },
+      });
+      expect(made.statusCode).toBe(201);
+      expect(made.json().page.url).toBe('https://lpfranquias.wingscompany.com.br/cenoritas-nova');
+      const list = await moved.inject({ method: 'GET', url: '/crm/landing-pages', cookies: admin });
+      expect(list.json().baseUrl).toBe('https://lpfranquias.wingscompany.com.br');
+      const old = list
+        .json()
+        .pages.find((item: { pattern: string }) => item.pattern === 'cenoritas');
+      expect(old.url).toBe('https://franquia.wingscompany.com.br/cenoritas');
+
+      for (const host of ['lpfranquias.wingscompany.com.br', 'franquia.wingscompany.com.br']) {
+        expect(
+          await resolveLandingPage(db, { url: `https://${host}/cenoritas-nova?utm_source=x` }),
+        ).toMatchObject({ clientId, mapped: true });
+      }
+    } finally {
+      await moved.close();
+      configureLandingBase(undefined);
+    }
+    // Back to the default: the new host is not ours any more.
+    expect(
+      await resolveLandingPage(db, {
+        url: 'https://lpfranquias.wingscompany.com.br/cenoritas-nova',
+      }),
+    ).toMatchObject({ mapped: false });
   });
 });

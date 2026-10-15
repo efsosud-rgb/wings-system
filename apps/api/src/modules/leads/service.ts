@@ -68,6 +68,7 @@ import {
 } from './contacts.js';
 import { scheduleLeadChecks } from './field-checks.js';
 import { instagramCheckOf } from './instagram-check.js';
+import { franchiseLpHosts } from './landing-base.js';
 import { markSuspectsAround } from './suspect.js';
 import { enqueueTriage } from './triage-queue.js';
 import { TRIAGE_SOURCES, leadTriageEnabled, scheduleLeadTriage } from './triage-schedule.js';
@@ -157,7 +158,7 @@ export function resolveLandingPage(
   db: Executor,
   input: { url?: string | null; identifier?: string | null },
 ): Promise<ClientResolution> {
-  return resolveClient(db, 'landing_page', landingPageKeysOf(input));
+  return resolveClient(db, 'landing_page', landingPageKeysOf(input, franchiseLpHosts()));
 }
 
 /** A form rule wins over a campaign rule: it is the more specific of the two. */

@@ -16,7 +16,8 @@ import type { ExistingLeadForm, PageAccess } from './platform/types.js';
  *   not fail on the day), and the privacy policy the Page's current forms
  *   use, offered as the default;
  * - on the site: the pages that take the Wings System form (`/lp/<slug>`),
- *   with the form each one shows now and the change waiting for Diretoria.
+ *   with the form each one shows now and the change waiting for Diretoria;
+ *   never a page apps/landing serves (`isLandingPageSpec`).
  *
  * Nothing here creates a form on Meta: that is the executor's step, behind
  * the approval gate and `ADS_WRITES_ENABLED`. Nothing here changes what the
@@ -47,6 +48,28 @@ export interface SiteFormPage {
 }
 
 const idParam = z.object({ id: z.uuid() });
+
+/**
+ * A page served by apps/landing ("Fale com a Wings"): its live spec has codes
+ * for the options or fields it makes required, which the `/lp/<slug>` page the
+ * builder previews and targets does not have. Read on the stored JSON, so a
+ * spec that no longer parses still counts. Such a page is the landing's, never
+ * the builder's: not listed, not proposed to.
+ */
+export function isLandingPageSpec(spec: unknown): boolean {
+  if (!spec || typeof spec !== 'object') return false;
+  const { qualifierValues, requiredFields } = spec as Record<string, unknown>;
+  return (
+    (Array.isArray(qualifierValues) && qualifierValues.length > 0) ||
+    (Array.isArray(requiredFields) && requiredFields.length > 0)
+  );
+}
+
+const landingPageSpec = (reply: FastifyReply) =>
+  reply.status(409).send({
+    error: 'landing_page_spec',
+    message: 'Esta página tem formulário próprio e não é alterada pelo construtor de campanhas.',
+  });
 
 export const leadFormRoutes: FastifyPluginAsync = async (app) => {
   const { db, env, platformFetch } = app.wings;
@@ -130,7 +153,9 @@ export const leadFormRoutes: FastifyPluginAsync = async (app) => {
         ),
       )
       .orderBy(asc(leadSourceRules.pattern));
-    return rows.map((row) => {
+    // A page apps/landing serves is never the builder's to show or change.
+    const pages = rows.filter((row) => !isLandingPageSpec(row.form));
+    return pages.map((row) => {
       const form = siteFormSpecSchema.safeParse(row.form);
       const pending = siteFormSpecSchema.safeParse(row.pendingForm);
       return {
@@ -171,6 +196,11 @@ export const leadFormRoutes: FastifyPluginAsync = async (app) => {
         });
       }
       const actor = request.session.actor.employeeId;
+      const current = await db.query.leadSourceRules.findFirst({
+        where: eq(leadSourceRules.id, params.data.id),
+        columns: { siteFormSpec: true },
+      });
+      if (current && isLandingPageSpec(current.siteFormSpec)) return landingPageSpec(reply);
       const [updated] = await db
         .update(leadSourceRules)
         .set({
@@ -213,6 +243,7 @@ export const leadFormRoutes: FastifyPluginAsync = async (app) => {
       const rule = await db.query.leadSourceRules.findFirst({
         where: eq(leadSourceRules.id, params.data.id),
       });
+      if (rule && isLandingPageSpec(rule.siteFormSpec)) return landingPageSpec(reply);
       const pending = siteFormSpecSchema.safeParse(rule?.siteFormSpecPending);
       if (!rule || !pending.success) {
         return reply

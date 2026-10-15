@@ -12,7 +12,9 @@ const validSource = {
 describe('loadEnv', () => {
   it('defaults job types to everything the worker implements', () => {
     const env = loadEnv(validSource);
-    expect(env.WORKER_JOB_TYPES).toBe('ffprobe,transcribe,render,enrich_lead,transcribe_meeting,check_instagram');
+    expect(env.WORKER_JOB_TYPES).toBe(
+      'ffprobe,transcribe,render,enrich_lead,transcribe_meeting,check_instagram',
+    );
     expect(jobTypesOf(env)).toEqual([
       'ffprobe',
       'transcribe',
@@ -116,11 +118,15 @@ describe('the Instagram check variables', () => {
     expect(env.INSTAGRAM_CHECK_ENABLED).toBeUndefined();
     expect(env.INSTAGRAM_CHECK_DAILY_USD).toBe(0.5);
     expect(env.INSTAGRAM_CHECK_AI_USD_PER_CALL).toBe(0.004);
-    expect(loadEnv({ ...validSource, INSTAGRAM_CHECK_DAILY_USD: '' }).INSTAGRAM_CHECK_DAILY_USD).toBe(0.5);
+    expect(
+      loadEnv({ ...validSource, INSTAGRAM_CHECK_DAILY_USD: '' }).INSTAGRAM_CHECK_DAILY_USD,
+    ).toBe(0.5);
   });
 
   it('refuses a switch that is not true or false and an account id that is not a number', () => {
     expect(() => loadEnv({ ...validSource, INSTAGRAM_CHECK_ENABLED: 'yes' })).toThrow(/true/);
-    expect(() => loadEnv({ ...validSource, INSTAGRAM_DISCOVERY_ACCOUNT_ID: 'abc' })).toThrow(/numeric/);
+    expect(() => loadEnv({ ...validSource, INSTAGRAM_DISCOVERY_ACCOUNT_ID: 'abc' })).toThrow(
+      /numeric/,
+    );
   });
 });

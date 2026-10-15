@@ -15,6 +15,7 @@ import { captureFirstTouch, type Tracking } from '../lib/site-tracking.js';
  * WhatsApp, Nome da empresa, Instagram, Site — `lead-form.ts`, 2026-10-07):
  * the same the Meta instant form asks, so both land in the same lead fields.
  * The API still accepts an older page's e-mail and CNPJ. "Não tenho" is an answer.
+ * The e-mail is asked too when the page's approved form requires it (`requiredFields`).
  */
 const askedField = (message: string) => z.string().trim().min(1, message).max(300);
 const pageSchema = siteFormSubmitSchema.extend({
@@ -22,7 +23,15 @@ const pageSchema = siteFormSubmitSchema.extend({
   instagram: askedField('Informe o Instagram (ou “não tenho”)'),
   siteUrl: askedField('Informe o site (ou “não tenho”)'),
 });
+const pageSchemaWithEmail = pageSchema.superRefine((values, ctx) => {
+  if (!values.email) {
+    ctx.addIssue({ code: 'custom', path: ['email'], message: 'Informe o seu e-mail' });
+  }
+});
 type PageInput = z.infer<typeof pageSchema>;
+/** An empty e-mail box is no e-mail: "Informe", not "inválido". */
+const emptyAsMissing = (value: unknown) =>
+  typeof value === 'string' && value.trim() !== '' ? value : undefined;
 
 /**
  * The site form (CRM phase 1, T5), public: `/lp/<slug>` for the pages CRM
@@ -117,13 +126,14 @@ export function SiteFormPage() {
   const submit = useSubmitSiteForm(slug);
   const [tracking, setTracking] = useState<Tracking>({});
   const [token, setToken] = useState<string | null>(null);
+  const asksEmail = info.data?.form?.requiredFields?.includes('email') ?? false;
   const {
     register,
     handleSubmit,
     setValue,
     formState: { errors },
   } = useForm<PageInput>({
-    resolver: zodResolver(pageSchema),
+    resolver: zodResolver(asksEmail ? pageSchemaWithEmail : pageSchema),
     defaultValues: { turnstileToken: '', website: '' },
   });
 
@@ -231,6 +241,17 @@ export function SiteFormPage() {
           <Field label="WhatsApp com DDD" error={errors.phone?.message} required>
             <Input type="tel" autoComplete="tel" inputMode="tel" {...register('phone')} />
           </Field>
+          {asksEmail && (
+            <Field label="E-mail" error={errors.email?.message} required>
+              <Input
+                type="email"
+                autoComplete="email"
+                inputMode="email"
+                autoCapitalize="none"
+                {...register('email', { setValueAs: emptyAsMissing })}
+              />
+            </Field>
+          )}
           <Field label="Nome da empresa" error={errors.companyName?.message} required>
             <Input autoComplete="organization" {...register('companyName')} />
           </Field>
@@ -254,7 +275,8 @@ export function SiteFormPage() {
           </div>
           <label className="field field-inline">
             <input type="checkbox" {...register('consent')} />
-            <span>{copy.consentText}</span>
+            {/* The page's own line when its approved form has one: the line the lead keeps. */}
+            <span>{info.data.form?.consentText ?? copy.consentText}</span>
           </label>
           {errors.consent?.message && <p className="field-error">{errors.consent.message}</p>}
           {info.data.form?.privacyPolicyUrl && (

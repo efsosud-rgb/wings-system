@@ -6,6 +6,7 @@ import type { Env } from './env.js';
 import { createCpfCrypto, type CpfCrypto } from './lib/cpf-crypto.js';
 import { createMailer, type Mailer } from './lib/mailer.js';
 import { withFrameAncestors, X_FRAME_OPTIONS } from './lib/frame-guard.js';
+import { installLandingCors, isLandingPost, landingOriginsOf } from './lib/landing-cors.js';
 import { loggedUrl } from './lib/log-url.js';
 import type { ObjectStorage } from './lib/storage/index.js';
 import { authRoutes } from './modules/auth/routes.js';
@@ -29,6 +30,7 @@ import { driveBlobRoutes, driveRoutes } from './modules/drive/routes.js';
 import { expansionRecoveryRoutes } from './modules/expansion/recovery.js';
 import { expansionRoutes } from './modules/expansion/routes.js';
 import { kairogenRoutes } from './modules/integrations/kairogen/routes.js';
+import { configureLandingBase } from './modules/leads/landing-base.js';
 import { landingPageRoutes } from './modules/leads/landing-pages.js';
 import { rdUserRoutes } from './modules/leads/rd-users.js';
 import { configureCrm, onStageEnteredHook, trackingStartOf } from './modules/leads/crm.js';
@@ -175,6 +177,8 @@ export async function buildApp(deps: {
   if (deps.env.CRM_TRACKING_START) {
     configureCrm({ trackingStart: trackingStartOf(deps.env.CRM_TRACKING_START) });
   }
+  // Where new landing pages live, and the hosts a conversion's slug is read from.
+  configureLandingBase(deps.env.LANDING_PAGE_BASE_URL);
   // Lead arrival checks (docs/leads/formularios.md). Off in tests unless a test brings its stubs.
   {
     const env = deps.env;
@@ -257,16 +261,22 @@ export async function buildApp(deps: {
   await app.register(rateLimit, { global: false });
   await app.register(authPlugin);
 
+  // The landing pages on their own hosts (LANDING_ORIGINS) reach /public/* only; before CSRF.
+  const landingOrigins = landingOriginsOf(deps.env.LANDING_ORIGINS);
+  installLandingCors(app, landingOrigins);
+
   /**
    * CSRF defence. SameSite=Lax already blocks cross-site cookie sends for these
    * methods; this rejects anything that still arrives with a foreign Origin.
    * Requests without a session cookie are left alone (login itself needs to work
-   * from the login page, which does send an Origin).
+   * from the login page, which does send an Origin). The one exception is a
+   * landing page's POST to /public/* from an origin LANDING_ORIGINS lists.
    */
   app.addHook('onRequest', async (request, reply) => {
     if (!UNSAFE_METHODS.has(request.method)) return;
     const origin = request.headers.origin;
     if (!origin) return;
+    if (isLandingPost(request, landingOrigins)) return;
 
     const host =
       (request.headers['x-forwarded-host'] as string | undefined) ?? request.headers.host;

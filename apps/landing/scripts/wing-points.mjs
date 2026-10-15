@@ -1,0 +1,142 @@
+// Regenerates src/generated/wing-points.ts: the 3D wing's points, sampled from
+// the official logo's orange (#E95228) in src/assets/logo-wings.svg.
+//
+//   pnpm --filter @wings/landing wing-points
+//
+// The logo is rasterized at 1200 px wide in headless Chromium (no network);
+// 6000 orange pixels are picked with a seeded PRNG (same input, same file),
+// jittered inside the pixel, centred on the orange's bounding box and divided
+// by its larger side (so every value is in [-0.5, 0.5], y up), then stored as
+// int16 x, y little-endian (×32000), base64.
+import { readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { resolve } from 'node:path';
+import { chromium } from 'playwright-core';
+
+const root = resolve(import.meta.dirname, '..');
+const LOGO = resolve(root, 'src/assets/logo-wings.svg');
+const OUT = resolve(root, 'src/generated/wing-points.ts');
+const CHROME =
+  process.env.CHROME_PATH ||
+  resolve(
+    homedir(),
+    '.cache/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-linux64/chrome-headless-shell',
+  );
+
+const WIDTH = 1200;
+const COUNT = 6000;
+const SEED = 20251015;
+const SCALE = 32000;
+const ORANGE = [0xe9, 0x52, 0x28];
+/** RGB distance that still counts as the orange (antialiased edges drift a little). */
+const TOLERANCE = 60;
+const MIN_ALPHA = 128;
+
+/** mulberry32, the same PRNG the scene uses. */
+function rng(seed) {
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+async function orangePixels(svg) {
+  const browser = await chromium.launch({
+    executablePath: CHROME,
+    args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+  });
+  try {
+    const page = await browser.newPage();
+    await page.route('**/*', (route) => route.abort());
+    return await page.evaluate(
+      async ({ svg, width, orange, tolerance, minAlpha }) => {
+        const viewBox = /viewBox="([^"]+)"/.exec(svg)[1].split(/\s+/).map(Number);
+        const height = Math.round((width * viewBox[3]) / viewBox[2]);
+        const img = new Image(width, height);
+        img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+        await img.decode();
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        const { data } = ctx.getImageData(0, 0, width, height);
+        const found = [];
+        for (let i = 0; i < width * height; i++) {
+          const [r, g, b, a] = [data[4 * i], data[4 * i + 1], data[4 * i + 2], data[4 * i + 3]];
+          const d = Math.hypot(r - orange[0], g - orange[1], b - orange[2]);
+          if (a >= minAlpha && d <= tolerance) found.push(i % width, Math.floor(i / width));
+        }
+        return { width, height, found };
+      },
+      { svg, width: WIDTH, orange: ORANGE, tolerance: TOLERANCE, minAlpha: MIN_ALPHA },
+    );
+  } finally {
+    await browser.close();
+  }
+}
+
+export function decode(base64) {
+  const bin = Buffer.from(base64, 'base64');
+  const points = [];
+  for (let i = 0; i + 3 < bin.length; i += 4) {
+    points.push([bin.readInt16LE(i) / SCALE, bin.readInt16LE(i + 2) / SCALE]);
+  }
+  return points;
+}
+
+const svg = readFileSync(LOGO, 'utf8');
+const { found } = await orangePixels(svg);
+const total = found.length / 2;
+if (total < COUNT) throw new Error(`only ${total} orange pixels; expected at least ${COUNT}`);
+
+let minX = Infinity,
+  minY = Infinity,
+  maxX = -Infinity,
+  maxY = -Infinity;
+for (let i = 0; i < total; i++) {
+  minX = Math.min(minX, found[2 * i]);
+  maxX = Math.max(maxX, found[2 * i]);
+  minY = Math.min(minY, found[2 * i + 1]);
+  maxY = Math.max(maxY, found[2 * i + 1]);
+}
+const cx = (minX + maxX + 1) / 2;
+const cy = (minY + maxY + 1) / 2;
+const size = Math.max(maxX + 1 - minX, maxY + 1 - minY);
+
+const random = rng(SEED);
+const order = Array.from({ length: total }, (_, i) => i);
+const out = Buffer.alloc(COUNT * 4);
+const clampQ = (v) => Math.max(-SCALE / 2, Math.min(SCALE / 2, Math.round(v * SCALE)));
+for (let i = 0; i < COUNT; i++) {
+  // partial Fisher–Yates: COUNT distinct pixels, in a random order
+  const j = i + Math.floor(random() * (total - i));
+  [order[i], order[j]] = [order[j], order[i]];
+  const pixel = order[i];
+  const x = found[2 * pixel] + random();
+  const y = found[2 * pixel + 1] + random();
+  out.writeInt16LE(clampQ((x - cx) / size), 4 * i);
+  out.writeInt16LE(clampQ(-(y - cy) / size), 4 * i + 2);
+}
+const base64 = out.toString('base64');
+
+const points = decode(base64);
+const inRange = points.every(([x, y]) => Math.abs(x) <= 0.5 && Math.abs(y) <= 0.5);
+if (points.length !== COUNT || !inRange) throw new Error('decoded points are wrong');
+
+writeFileSync(
+  OUT,
+  `// Generated by scripts/wing-points.mjs from src/assets/logo-wings.svg: ${COUNT} points of the
+// logo's orange, int16 x, y little-endian (×${SCALE}), base64. Do not edit; run
+// \`pnpm --filter @wings/landing wing-points\`.
+export const WING_POINTS_B64 =
+  '${base64}';
+`,
+);
+console.warn(
+  `wing-points: ${total} orange pixels in ${maxX + 1 - minX}×${maxY + 1 - minY} px; ` +
+    `${points.length} points written to src/generated/wing-points.ts`,
+);

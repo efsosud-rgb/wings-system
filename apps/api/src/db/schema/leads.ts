@@ -216,7 +216,9 @@ export const leads = pgTable(
   (table) => [
     uniqueIndex('leads_source_external_uq').on(table.source, table.externalId),
     uniqueIndex('leads_rd_deal_uq').on(table.rdDealId),
-    uniqueIndex('leads_form_ref_uq').on(table.formRef).where(sql`${table.formRef} is not null`),
+    uniqueIndex('leads_form_ref_uq')
+      .on(table.formRef)
+      .where(sql`${table.formRef} is not null`),
     index('leads_instagram_verdict_idx')
       .on(table.instagramVerdictEffective)
       .where(sql`${table.instagramVerdictEffective} is not null`),

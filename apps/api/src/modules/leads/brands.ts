@@ -1,9 +1,10 @@
-import { LANDING_PAGE_BASE_URL, normalizeSourcePattern, WINGS_CLIENT_ID } from '@wings/shared';
+import { normalizeSourcePattern, WINGS_CLIENT_ID } from '@wings/shared';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { clientProjects, clients, leadSourceRules } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { createClientRecord } from '../clients/create.js';
+import { landingPageBaseUrl } from './landing-base.js';
 
 /**
  * The brands Wings sells franchises for, registered as clients and tied to
@@ -151,7 +152,7 @@ export async function registerBrands(
           pipeline: 'expansao',
           brand: brand.name,
           clientId: client?.id || null,
-          url: `${LANDING_PAGE_BASE_URL}/${pattern}`,
+          url: `${landingPageBaseUrl()}/${pattern}`,
           createdBy: input.actorEmployeeId ?? null,
         })
         .returning({ id: leadSourceRules.id });

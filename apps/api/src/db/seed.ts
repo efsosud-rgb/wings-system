@@ -7,18 +7,24 @@ import {
   WINGS_CLIENT_NAME,
   WINGS_CLIENT_SLUG,
   normalizeSourcePattern,
+  siteFormSpecSchema,
   type PermissionKey,
+  type SiteFormSpecInput,
   type RoleKey,
   type SectorSlug,
 } from '@wings/shared';
 import { and, eq, notInArray } from 'drizzle-orm';
 import { createDb, type Database } from './client.js';
 import { seedDriveTemplate, syncDriveFolders } from '../modules/drive/folders.js';
+import { WINGS_WHATSAPP_NUMBER_PATTERN } from '../env.js';
+import { writeAudit } from '../lib/audit.js';
 import { brandKey } from '../modules/leads/brands.js';
+import { createTrackingLink } from '../modules/leads/tracking-links.js';
 import { loadDotEnv } from './load-env.js';
 import {
   clients,
   leadSourceRules,
+  leadTrackingLinks,
   permissions,
   rolePermissions,
   roles,
@@ -193,12 +199,61 @@ const FORMATACAO_LANDING_PAGES = [
   { identifier: 'plano-de-negocios', rdDealIntake: false },
 ];
 
+/**
+ * "Fale com a Wings" (apps/landing): Wings Company's own page on its own host,
+ * with the site form on. Formatação by default; the visitor's answer to "O que
+ * você procura?" may send the lead to another funnel, and "Ainda não sei" to
+ * none while the Jev triage is on, so the triage decides (docs/leads/formularios.md).
+ * Insert-only: an environment gets the rule, consent line included, the first
+ * time the seed runs there.
+ */
+export const FALE_COM_A_WINGS = {
+  pattern: 'fale-com-a-wings',
+  url: 'https://fale.wingscompany.com.br',
+  spec: {
+    qualifier: {
+      question: 'O que você procura?',
+      options: [
+        'Transformar meu negócio em franquia',
+        'Expandir minha rede de franquias',
+        'Consultoria para o meu negócio',
+        'Ainda não sei',
+      ],
+    },
+    qualifierValues: [
+      { value: 'formatacao', option: 'Transformar meu negócio em franquia' },
+      { value: 'expansao', option: 'Expandir minha rede de franquias' },
+      { value: 'consultoria', option: 'Consultoria para o meu negócio' },
+      { value: 'nao-sei', option: 'Ainda não sei', pipeline: null },
+    ],
+    requiredFields: ['email', 'companyName', 'instagram', 'qualifierAnswer'],
+    // The approved page's own line, word for word (apps/landing): what the lead agreed to.
+    consentText:
+      'Li a Política de Privacidade e autorizo a Wings a falar comigo por WhatsApp e e-mail sobre este pedido.',
+    privacyPolicyUrl: 'https://wingscompany.com.br/politica-de-privacidade/',
+    thankYou: {
+      title: 'Obrigado! A Wings vai falar com você.',
+      body: 'Um consultor entra em contato pelo WhatsApp ou e-mail que você informou. Se preferir, chame a Wings agora.',
+      buttonText: 'Chamar no WhatsApp',
+      buttonUrl: 'https://wingscompany.com.br/',
+    },
+  } satisfies SiteFormSpecInput,
+};
+
 /** Meta Lead Ads instant forms → funnel. Ids given by Eric (05/10/2026); none invented. */
 const META_LEAD_FORMS: { formId: string; pipeline: 'formatacao' | 'expansao' }[] = [
   { formId: '1538007113903398', pipeline: 'formatacao' },
 ];
 
-export async function seed(db: Database): Promise<void> {
+export interface SeedOptions {
+  /**
+   * WINGS_WHATSAPP_NUMBER at seed time: Wings Company gets a "Site" tracked
+   * link on it when it has none (the button of "Fale com a Wings"). Unset: no link.
+   */
+  wingsWhatsappNumber?: string;
+}
+
+export async function seed(db: Database, options: SeedOptions = {}): Promise<void> {
   // Sectors: parents first, then children, so parent_id can be resolved.
   const slugs = Object.keys(SECTORS) as SectorSlug[];
   const ordered = [
@@ -348,6 +403,21 @@ export async function seed(db: Database): Promise<void> {
       .onConflictDoNothing();
   }
 
+  // "Fale com a Wings": insert-only too; whoever edits the page's form later keeps it.
+  await db
+    .insert(leadSourceRules)
+    .values({
+      kind: 'landing_page',
+      pattern: FALE_COM_A_WINGS.pattern,
+      clientId: WINGS_CLIENT_ID,
+      pipeline: 'formatacao',
+      url: FALE_COM_A_WINGS.url,
+      siteFormEnabled: true,
+      siteFormSpec: siteFormSpecSchema.parse(FALE_COM_A_WINGS.spec),
+    })
+    .onConflictDoNothing();
+  await ensureWingsSiteLink(db, options.wingsWhatsappNumber);
+
   // Meta Lead Ads forms (Eric, 05/10/2026): the Formatação instant form of the
   // Wings page. Insert-only, like the pages above; the Expansão forms are
   // added in CRM Vendas → Landing pages as each brand gets one.
@@ -370,13 +440,49 @@ export async function seed(db: Database): Promise<void> {
   await syncDriveFolders(db);
 }
 
+/**
+ * Wings Company's "Site" tracked link on the current number, made once: when
+ * one exists for that number nothing is written. A number that is not 55 + DDD
+ * + number is skipped (the API itself refuses to start with it).
+ */
+async function ensureWingsSiteLink(db: Database, number: string | undefined): Promise<void> {
+  const phone = number?.trim();
+  if (!phone) return;
+  if (!WINGS_WHATSAPP_NUMBER_PATTERN.test(phone)) {
+    console.warn('seed: WINGS_WHATSAPP_NUMBER is not 55 + DDD + number; no Site link made');
+    return;
+  }
+  const existing = await db.query.leadTrackingLinks.findFirst({
+    where: and(
+      eq(leadTrackingLinks.clientId, WINGS_CLIENT_ID),
+      eq(leadTrackingLinks.channel, 'site'),
+      eq(leadTrackingLinks.phone, phone),
+    ),
+    columns: { id: true },
+  });
+  if (existing) return;
+  const row = await createTrackingLink(db, {
+    clientId: WINGS_CLIENT_ID,
+    channel: 'site',
+    phone,
+    createdBy: null,
+  });
+  if (!row) throw new Error('seed: no free tracking code for the Wings Site link');
+  await writeAudit(db, {
+    action: 'lead_tracking_link.created',
+    entity: 'lead_tracking_link',
+    entityId: row.id,
+    metadata: { clientId: row.clientId, channel: row.channel, via: 'seed' },
+  });
+}
+
 async function main() {
   loadDotEnv();
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) throw new Error('DATABASE_URL is not set');
 
   const { db, pool } = createDb(databaseUrl);
-  await seed(db);
+  await seed(db, { wingsWhatsappNumber: process.env.WINGS_WHATSAPP_NUMBER });
   await pool.end();
   console.warn('seed complete');
 }
