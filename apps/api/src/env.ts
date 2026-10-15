@@ -12,6 +12,11 @@ import {
 } from '@wings/shared';
 import { z } from 'zod';
 import { parseCron } from './lib/cron.js';
+import { isLandingOriginList, LANDING_ORIGINS_RULE } from './lib/landing-cors.js';
+import { isLandingBaseUrl } from './modules/leads/landing-base.js';
+
+/** 55 + DDD + number, digits only: the Wings WhatsApp (WINGS_WHATSAPP_NUMBER). */
+export const WINGS_WHATSAPP_NUMBER_PATTERN = /^55\d{10,11}$/;
 
 /** A positive number with a default, where an empty variable means the default too. */
 const numberOr = (fallback: number, options: { integer?: boolean } = {}) => {
@@ -604,8 +609,28 @@ const schema = z.object({
   JEV_API_KEY: optionalString,
   /** The WhatsApp number the tracked links point at, digits only. Not a secret. */
   WINGS_WHATSAPP_NUMBER: optionalString.refine(
-    (value) => value === undefined || /^55\d{10,11}$/.test(value),
+    (value) => value === undefined || WINGS_WHATSAPP_NUMBER_PATTERN.test(value),
     'must be 55 + DDD + number, digits only',
+  ),
+  /**
+   * The landing pages served from their own hosts (apps/landing, "Fale com a
+   * Wings"): the exact origins (`https://fale.wingscompany.com.br`), separated
+   * by commas or spaces, that may call /public/* from the browser (CORS, never
+   * with cookies). http only for localhost, 127.0.0.1 or [::1] (tests, e2e).
+   * Unset: no cross-origin call is allowed.
+   */
+  LANDING_ORIGINS: optionalString.refine(
+    (value) => value === undefined || isLandingOriginList(value),
+    LANDING_ORIGINS_RULE,
+  ),
+  /**
+   * Where new landing pages live, `https://host` with no path; unset is
+   * https://franquia.wingscompany.com.br (RD Station's). Existing rules keep
+   * their address; a conversion's slug is read on both hosts.
+   */
+  LANDING_PAGE_BASE_URL: optionalString.refine(
+    (value) => value === undefined || isLandingBaseUrl(value),
+    'must be an https:// origin with no path',
   ),
 
   /**

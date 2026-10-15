@@ -189,19 +189,135 @@ export type LeadFormFunnel = z.output<typeof leadFormFunnelSchema>;
 // --- the whole form -------------------------------------------------------------------------
 
 /**
- * The form without its funnel: what the site page (`/lp/<slug>`) keeps as its
- * `site_form_spec`, since the page's funnel is the page's own rule.
+ * What the Meta form and the site page share: the optional question, the
+ * privacy policy and the thank-you screen. Each one extends it with its own
+ * part (the funnel for Meta, the page's options for the site), so neither
+ * gains the other's fields.
  */
-export const siteFormSpecSchema = z.object({
+const leadFormBaseSchema = z.object({
   /** Off by default: it exists for campaigns that want one qualifying answer first. */
   qualifier: leadFormQualifierSchema.nullable().default(null),
   /** The same link the current Meta forms use, read from the Page when available. */
   privacyPolicyUrl: httpsUrl,
   thankYou: leadFormThankYouSchema,
 });
-export type SiteFormSpec = z.output<typeof siteFormSpecSchema>;
 
-export const leadFormSchema = siteFormSpecSchema
+// --- what only the site page asks -----------------------------------------------------------
+
+/**
+ * Fields a site page may make required on top of name, WhatsApp and consent
+ * (always required). Off by default, so an older page keeps working.
+ */
+export const SITE_FORM_REQUIRED_FIELDS = [
+  'email',
+  'companyName',
+  'instagram',
+  'siteUrl',
+  'qualifierAnswer',
+] as const;
+export type SiteFormRequiredField = (typeof SITE_FORM_REQUIRED_FIELDS)[number];
+
+export const SITE_FORM_QUALIFIER_VALUE_PATTERN = /^[a-z0-9-]{1,40}$/;
+
+export const SITE_FORM_CONSENT_TEXT_MIN = 10;
+export const SITE_FORM_CONSENT_TEXT_MAX = 300;
+
+/**
+ * One option of the question with the code the page sends for it. The lead
+ * keeps the option's text; `pipeline` sends it to another funnel: absent is
+ * the page's own funnel, a funnel is that one, null is none (the Jev triage
+ * decides, docs/leads/triagem-jev.md).
+ */
+export const siteFormQualifierValueSchema = z.object({
+  value: z
+    .string()
+    .regex(SITE_FORM_QUALIFIER_VALUE_PATTERN, 'Use letras minúsculas, números e hífen'),
+  option: z
+    .string()
+    .trim()
+    .min(1, 'Escreva a opção')
+    .max(LEAD_FORM_QUALIFIER_OPTION_MAX, `Máximo de ${LEAD_FORM_QUALIFIER_OPTION_MAX} caracteres`),
+  pipeline: z.enum(LEAD_PIPELINES).nullable().optional(),
+});
+export type SiteFormQualifierValue = z.output<typeof siteFormQualifierValueSchema>;
+
+/**
+ * The form without its funnel: what the site page (`/lp/<slug>`, or a page of
+ * its own such as "Fale com a Wings") keeps as its `site_form_spec`, since the
+ * page's funnel is the page's own rule.
+ */
+export const siteFormSpecSchema = leadFormBaseSchema
+  .extend({
+    /**
+     * Absent is none (an older spec, or one the builder proposed): optional
+     * rather than defaulted, so the Meta form still fits where a site spec is read.
+     */
+    requiredFields: z
+      .array(z.enum(SITE_FORM_REQUIRED_FIELDS))
+      .refine((fields) => new Set(fields).size === fields.length, 'Campo repetido')
+      .optional(),
+    /** One per option of the question, when the page sends codes instead of the option's text. */
+    qualifierValues: z
+      .array(siteFormQualifierValueSchema)
+      .max(LEAD_FORM_QUALIFIER_MAX_OPTIONS, `No máximo ${LEAD_FORM_QUALIFIER_MAX_OPTIONS} opções`)
+      .optional(),
+    /**
+     * The consent line the page itself shows next to its checkbox, kept on the
+     * lead as what the person agreed to (LGPD). Absent: the funnel's line
+     * (`siteFormCopyOf`), the one the `/lp/<slug>` page shows.
+     */
+    consentText: z
+      .string()
+      .trim()
+      .min(SITE_FORM_CONSENT_TEXT_MIN, `Mínimo de ${SITE_FORM_CONSENT_TEXT_MIN} caracteres`)
+      .max(SITE_FORM_CONSENT_TEXT_MAX, `Máximo de ${SITE_FORM_CONSENT_TEXT_MAX} caracteres`)
+      .optional(),
+  })
+  .superRefine((spec, ctx) => {
+    if (spec.requiredFields?.includes('qualifierAnswer') && !spec.qualifier) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['requiredFields'],
+        message: 'A pergunta de múltipla escolha está desligada',
+      });
+    }
+    const values = spec.qualifierValues ?? [];
+    if (values.length === 0) return;
+    if (!spec.qualifier) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['qualifierValues'],
+        message: 'Os códigos precisam da pergunta de múltipla escolha',
+      });
+      return;
+    }
+    const options = spec.qualifier.options;
+    const seenValues = new Set<string>();
+    const seenOptions = new Set<string>();
+    let broken = false;
+    values.forEach((entry, index) => {
+      const issue = (field: 'value' | 'option', message: string) => {
+        broken = true;
+        ctx.addIssue({ code: 'custom', path: ['qualifierValues', index, field], message });
+      };
+      if (seenValues.has(entry.value)) issue('value', 'Código repetido');
+      seenValues.add(entry.value);
+      if (!options.includes(entry.option)) issue('option', 'Não é uma das opções da pergunta');
+      else if (seenOptions.has(entry.option)) issue('option', 'Opção repetida');
+      seenOptions.add(entry.option);
+    });
+    if (!broken && seenOptions.size !== options.length) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['qualifierValues'],
+        message: 'Cada opção da pergunta precisa do seu código',
+      });
+    }
+  });
+export type SiteFormSpec = z.output<typeof siteFormSpecSchema>;
+export type SiteFormSpecInput = z.input<typeof siteFormSpecSchema>;
+
+export const leadFormSchema = leadFormBaseSchema
   .extend({
     funnel: leadFormFunnelSchema,
   })

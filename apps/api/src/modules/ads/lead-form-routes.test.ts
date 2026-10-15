@@ -292,6 +292,77 @@ describe('a site page’s form', () => {
     expect(pages.some((item) => item.id === plain?.id)).toBe(false);
   });
 
+  it('leaves out a page apps/landing serves, and refuses to change its form', async () => {
+    const marketing = await cookiesFor('marketing');
+    const board = await cookiesFor('diretoria');
+    const landing = await sitePage();
+    const required = await sitePage();
+    await db
+      .update(leadSourceRules)
+      .set({
+        siteFormSpec: spec({
+          qualifierValues: [
+            { value: 'um', option: '1' },
+            { value: 'poucas', option: '2 a 5' },
+            { value: 'muitas', option: 'Mais de 5' },
+          ],
+        }),
+        // A change waiting from before: not approved either.
+        siteFormSpecPending: spec(),
+        siteFormPendingAt: new Date(),
+      })
+      .where(eq(leadSourceRules.id, landing.id));
+    await db
+      .update(leadSourceRules)
+      .set({ siteFormSpec: spec({ requiredFields: ['email'] }) })
+      .where(eq(leadSourceRules.id, required.id));
+
+    const list = await app.inject({
+      url: '/ads/lead-forms/site-pages',
+      cookies: marketing.cookies,
+    });
+    const ids = list.json<{ pages: SiteFormPage[] }>().pages.map((item) => item.id);
+    expect(ids).not.toContain(landing.id);
+    expect(ids).not.toContain(required.id);
+    // The page the seed makes ("Fale com a Wings") is one of them.
+    const fale = await db.query.leadSourceRules.findFirst({
+      where: eq(leadSourceRules.pattern, 'fale-com-a-wings'),
+    });
+    expect(fale).toBeTruthy();
+    expect(ids).not.toContain(fale!.id);
+
+    for (const id of [landing.id, required.id, fale!.id]) {
+      const proposed = await app.inject({
+        method: 'POST',
+        url: `/ads/lead-forms/site-pages/${id}/propose`,
+        cookies: marketing.cookies,
+        payload: spec(),
+      });
+      expect(proposed.statusCode).toBe(409);
+      expect(proposed.json()).toEqual({
+        error: 'landing_page_spec',
+        message:
+          'Esta página tem formulário próprio e não é alterada pelo construtor de campanhas.',
+      });
+    }
+    const approved = await app.inject({
+      method: 'POST',
+      url: `/ads/lead-forms/site-pages/${landing.id}/approve`,
+      cookies: board.cookies,
+    });
+    expect(approved.statusCode).toBe(409);
+    expect(approved.json()).toMatchObject({ error: 'landing_page_spec' });
+    const after = await db.query.leadSourceRules.findFirst({
+      where: eq(leadSourceRules.id, landing.id),
+    });
+    expect(after?.siteFormSpec).toMatchObject({ qualifierValues: [{ value: 'um' }, {}, {}] });
+    expect(after?.siteFormApprovedAt).toBeNull();
+    const untouched = await db.query.leadSourceRules.findFirst({
+      where: eq(leadSourceRules.id, required.id),
+    });
+    expect(untouched?.siteFormSpecPending).toBeNull();
+  });
+
   it('keeps the multiple-choice answer with the form answers, only when it is one of the options', async () => {
     const page = await sitePage();
     await db

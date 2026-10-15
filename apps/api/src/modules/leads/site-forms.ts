@@ -1,4 +1,5 @@
 import {
+  instagramUsernameOf,
   LEAD_PIPELINES,
   normalizeBrazilianPhone,
   siteFormCopyOf,
@@ -7,6 +8,10 @@ import {
   whatsappLinkOf,
   type LeadPipeline,
   type SiteFormInfo,
+  type SiteFormPublicSpec,
+  type SiteFormQualifierValue,
+  type SiteFormSpec,
+  type SiteFormSubmitInput,
 } from '@wings/shared';
 import { attachFormRef } from './form-ref.js';
 import { enqueueInstagramCheck, hasInstagramToCheck } from './instagram-check.js';
@@ -19,7 +24,8 @@ import { writeAudit } from '../../lib/audit.js';
 import { RdMarketing } from '../expansion/rd.js';
 import { shapeOf } from '../media/kairogen-adapter.js';
 import { rdAttributionOf } from './rd-attribution.js';
-import { brandOfLink, resolveLandingPage, upsertLead } from './service.js';
+import { brandOfLink, resolveLandingPage, upsertLead, type ClientResolution } from './service.js';
+import { leadTriageEnabled } from './triage-schedule.js';
 
 /**
  * The site form (CRM phase 1, T5): the Wings System's own form on a landing
@@ -89,6 +95,7 @@ async function formPage(db: Database, slug: string) {
     .select({
       id: leadSourceRules.id,
       pattern: leadSourceRules.pattern,
+      clientId: leadSourceRules.clientId,
       brand: leadSourceRules.brand,
       pipeline: leadSourceRules.pipeline,
       clientName: clients.name,
@@ -136,20 +143,110 @@ async function verifyTurnstile(
 }
 
 /** The page's approved standard form, or null when it shows the plain one. */
-function liveSiteForm(spec: unknown): SiteFormInfo['form'] {
+function liveSiteForm(spec: unknown): SiteFormSpec | null {
   const parsed = siteFormSpecSchema.safeParse(spec);
   return parsed.success ? parsed.data : null;
 }
 
-/** The multiple-choice answer only when the page asks the question and the answer is one of its options. */
-function qualifierAnswerOf(
-  spec: unknown,
+/** The approved form as the public page reads it: the options' codes, never the funnel each one leads to. */
+export function publicSiteForm(spec: SiteFormSpec | null): SiteFormPublicSpec | null {
+  if (!spec) return null;
+  const { qualifierValues, requiredFields = [], ...form } = spec;
+  return qualifierValues?.length
+    ? {
+        ...form,
+        requiredFields,
+        qualifierValues: qualifierValues.map(({ value, option }) => ({ value, option })),
+      }
+    : { ...form, requiredFields };
+}
+
+/**
+ * The multiple-choice answer, only when the page asks the question and the
+ * answer is one of its options: the option's code when the spec lists codes
+ * (the option's text names the same code, as the `/lp/<slug>` page sends it),
+ * else the option's text.
+ */
+function qualifierChoiceOf(
+  form: SiteFormSpec | null,
   answer: string | undefined,
-): Record<string, string> | null {
-  const form = liveSiteForm(spec);
+): { option: string; code: SiteFormQualifierValue | null } | null {
   if (!form?.qualifier || !answer) return null;
-  if (!form.qualifier.options.includes(answer)) return null;
-  return { [form.qualifier.question]: answer };
+  if (form.qualifierValues?.length) {
+    const code =
+      form.qualifierValues.find((entry) => entry.value === answer) ??
+      form.qualifierValues.find((entry) => entry.option === answer);
+    return code ? { option: code.option, code } : null;
+  }
+  return form.qualifier.options.includes(answer) ? { option: answer, code: null } : null;
+}
+
+export const INSTAGRAM_REQUIRED_MESSAGE =
+  'Informe o @ do Instagram da marca (só letras, números, ponto e sublinhado).';
+
+export type SiteFormAnswers =
+  | {
+      ok: true;
+      /** The Instagram to keep: only the username when the page requires it, else as typed. */
+      instagram: string | undefined;
+      /** The multiple-choice answer under the question's text, as the option's text. */
+      formAnswers: Record<string, string> | null;
+      /** The chosen option's code, with the funnel it leads to when it names one. */
+      choice: SiteFormQualifierValue | null;
+    }
+  | { ok: false; message: string };
+
+/**
+ * What the page's approved form asks of a submission (`requiredFields`), checked
+ * after the body's own schema; a page without a form asks nothing more.
+ */
+export function siteFormAnswersOf(
+  form: SiteFormSpec | null,
+  body: SiteFormSubmitInput,
+): SiteFormAnswers {
+  const required = new Set(form?.requiredFields ?? []);
+  const refuse = (message: string) => ({ ok: false as const, message });
+  const missing = (value: string | undefined) => !value?.trim();
+  if (required.has('email') && missing(body.email)) return refuse('Informe o seu e-mail.');
+  if (required.has('companyName') && missing(body.companyName)) {
+    return refuse('Informe o nome da empresa.');
+  }
+  let instagram = body.instagram;
+  if (required.has('instagram')) {
+    const username = instagramUsernameOf(body.instagram);
+    if (!username) return refuse(INSTAGRAM_REQUIRED_MESSAGE);
+    instagram = username;
+  }
+  if (required.has('siteUrl') && missing(body.siteUrl)) return refuse('Informe o site da empresa.');
+  const choice = qualifierChoiceOf(form, body.qualifierAnswer);
+  if (required.has('qualifierAnswer') && form?.qualifier && !choice) {
+    return refuse(`Escolha uma opção em "${form.qualifier.question}".`);
+  }
+  return {
+    ok: true,
+    instagram,
+    formAnswers: choice && form?.qualifier ? { [form.qualifier.question]: choice.option } : null,
+    choice: choice?.code ?? null,
+  };
+}
+
+/**
+ * The funnel the lead goes to: the page's own, unless the chosen option names
+ * another. "None" (null, the Jev triage decides) only while the triage is on:
+ * off, nobody would ever give the lead a funnel, so it keeps the page's.
+ * Expansão only for a page tied to a brand: without one, nobody would know
+ * which franchise the lead wants, so it keeps the page's too.
+ */
+export function answerPipelineOf(
+  choice: SiteFormQualifierValue | null,
+  page: Pick<ClientResolution, 'pipeline' | 'brand'>,
+  triageOn: boolean,
+): LeadPipeline | null {
+  const override = choice?.pipeline;
+  if (override === undefined) return page.pipeline;
+  if (override === null) return triageOn ? null : page.pipeline;
+  if (override === 'expansao' && !page.brand) return page.pipeline;
+  return override;
 }
 
 /** The rule's funnel, when it names one. */
@@ -181,8 +278,12 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
         // The brand's own Instagram (T6); its WhatsApp is never shown here.
         instagram: instagramHandleOf(page.social?.instagram),
         // The standard form Diretoria approved for this page, if any.
-        form: liveSiteForm(page.siteFormSpec),
+        form: publicSiteForm(liveSiteForm(page.siteFormSpec)),
         pipeline: pipelineOf(page.pipeline),
+        // The same tracked link the POST answers, for a page that offers it before the form.
+        whatsappUrl: page.clientId
+          ? await siteWhatsappUrl(db, page.clientId, true, env.WINGS_WHATSAPP_NUMBER)
+          : null,
         // Public ids only; the page loads a tag only when its id is here.
         tracking: {
           metaPixelId: env.SITE_FORM_META_PIXEL_ENABLED === 'true' ? env.META_PIXEL_ID : null,
@@ -229,7 +330,13 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
           ip: request.ip,
           metadata: { slug: page.pattern },
         });
-        return reply.send({ ok: true });
+        return reply.send({ ok: true, whatsappUrl: null });
+      }
+      // What the page's approved form makes required, checked before the captcha spends its token.
+      const liveForm = liveSiteForm(page.siteFormSpec);
+      const answers = siteFormAnswersOf(liveForm, body.data);
+      if (!answers.ok) {
+        return reply.status(400).send({ error: 'invalid_request', message: answers.message });
       }
 
       const captcha = await verifyTurnstile(
@@ -271,12 +378,15 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
         trafficSource: null,
       });
       const client = await resolveLandingPage(db, { identifier: page.pattern });
+      // The chosen option may send the lead to another funnel, or to none (the Jev triage decides).
+      const pipeline = answerPipelineOf(answers.choice, client, leadTriageEnabled());
       const now = new Date();
-      // The consent line the page showed is the funnel's (the rule is the same one the page read).
-      const consentText = siteFormCopyOf(
-        pipelineOf(page.pipeline),
-        page.clientName ?? page.brand ?? 'Wings Company',
-      ).consentText;
+      // The consent line the page showed: its own when the spec names one, else the funnel's
+      // (the rule is the same one the page read).
+      const consentText =
+        liveForm?.consentText ??
+        siteFormCopyOf(pipelineOf(page.pipeline), page.clientName ?? page.brand ?? 'Wings Company')
+          .consentText;
       const result = await upsertLead(db, {
         source: 'site_form',
         enteredAt: new Date(),
@@ -286,12 +396,12 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
         phone,
         clientId: client.clientId,
         clientMapped: client.mapped,
-        pipeline: client.pipeline,
+        pipeline,
         brand: client.brand,
         channel: 'landing_page',
         landingPage: page.pattern,
         fields: {
-          instagram: body.data.instagram,
+          instagram: answers.instagram,
           website: body.data.siteUrl,
           companyName: body.data.companyName,
           cnpj: body.data.cnpj,
@@ -303,14 +413,15 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
         consentText,
         // The page's optional multiple-choice answer, kept as a form answer
         // under the question's text; never read as a contact field.
-        formAnswers: qualifierAnswerOf(page.siteFormSpec, body.data.qualifierAnswer),
+        formAnswers: answers.formAnswers,
         // Paid research only when Eric turns it on for the site form (off by default).
         skipResearch: env.SITE_FORM_RESEARCH_ENABLED !== 'true',
         event: {
           kind: 'lead.received.site_form',
           detail: {
             ruleId: client.ruleId,
-            pipeline: client.pipeline,
+            pipeline,
+            qualifier: answers.choice?.value ?? null,
             adPlatform: attribution?.adPlatform ?? null,
             hasUtm: Boolean(attribution?.utmSource || attribution?.utmCampaign),
           },
@@ -361,7 +472,7 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
           source: 'site_form',
           slug: page.pattern,
           clientMapped: client.mapped,
-          pipeline: client.pipeline,
+          pipeline,
           hasAttribution: attribution !== null,
           rdForward,
         },

@@ -1,6 +1,5 @@
 import {
   clientSlugOf,
-  LANDING_PAGE_BASE_URL,
   landingPageCreateSchema,
   landingPageKeysOf,
   landingPageUpdateSchema,
@@ -16,6 +15,7 @@ import { clients, expansionIntakeLedger, leadSourceRules, leads } from '../../db
 import { writeAudit } from '../../lib/audit.js';
 import { RdCrm } from '../expansion/rd.js';
 import { leadOwnerFilter } from './access.js';
+import { franchiseLpHosts, landingPageBaseUrl } from './landing-base.js';
 
 /**
  * CRM Vendas → Landing pages (Eric's list of 30/09, items 2–4). A landing
@@ -69,8 +69,8 @@ async function leadsByPattern(db: Database, patterns: readonly string[], ownerEm
   const counts = new Map<string, number>();
   for (const row of rows) {
     const keys = new Set([
-      ...landingPageKeysOf({ url: row.page }),
-      ...landingPageKeysOf({ identifier: row.page }),
+      ...landingPageKeysOf({ url: row.page }, franchiseLpHosts()),
+      ...landingPageKeysOf({ identifier: row.page }, franchiseLpHosts()),
     ]);
     for (const key of keys) {
       if (wanted.has(key)) counts.set(key, (counts.get(key) ?? 0) + row.count);
@@ -189,7 +189,7 @@ export const landingPageRoutes: FastifyPluginAsync = async (app) => {
   app.get('/crm/landing-pages', pagesRead, async (request, reply) =>
     reply.send({
       pages: await listLandingPages(db, leadOwnerFilter(request.session.actor, 'leads.read')),
-      baseUrl: LANDING_PAGE_BASE_URL,
+      baseUrl: landingPageBaseUrl(),
     }),
   );
 
@@ -217,7 +217,7 @@ export const landingPageRoutes: FastifyPluginAsync = async (app) => {
         pattern: slug,
         clientId: client.id,
         pipeline: body.data.pipeline,
-        url: `${LANDING_PAGE_BASE_URL}/${slug}`,
+        url: `${landingPageBaseUrl()}/${slug}`,
         createdBy: actor,
       })
       .returning();

@@ -1,5 +1,5 @@
-import { SESSION_COOKIE, WINGS_CLIENT_ID } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { SESSION_COOKIE, WINGS_CLIENT_ID, type SiteFormInfo } from '@wings/shared';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
@@ -8,6 +8,7 @@ import {
   auditLog,
   clients,
   jobs,
+  leadEvents,
   leads,
   leadSourceRules,
   leadTrackingLinks,
@@ -15,7 +16,9 @@ import {
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
-import { instagramHandleOf } from './site-forms.js';
+import { FALE_COM_A_WINGS } from '../../db/seed.js';
+import { answerPipelineOf, INSTAGRAM_REQUIRED_MESSAGE, instagramHandleOf } from './site-forms.js';
+import { configureLeadTriage, type TriageTarget } from './triage-schedule.js';
 
 let harness: TestDatabase;
 let db: Database;
@@ -178,6 +181,8 @@ describe('site form (T5)', () => {
       pipeline: 'expansao',
       // No tag until its id is set: the pixel is explicit, Google Ads is the conversion id.
       tracking: { metaPixelId: null, googleAdsConversion: null },
+      // No Wings number in this environment: no link.
+      whatsappUrl: null,
     });
     expect(JSON.stringify(info.json())).not.toContain('secret');
   });
@@ -498,6 +503,23 @@ describe('site form (T5)', () => {
     );
   });
 
+  it("picks the answer's funnel: none only with the triage on, Expansão only with a brand", () => {
+    const page = { pipeline: 'formatacao' as const, brand: null };
+    const brand = { pipeline: 'formatacao' as const, brand: 'Cenoritas' };
+    const code = (pipeline?: 'expansao' | 'consultoria' | null) => ({
+      value: 'x',
+      option: 'X',
+      ...(pipeline === undefined ? {} : { pipeline }),
+    });
+    expect(answerPipelineOf(null, page, true)).toBe('formatacao');
+    expect(answerPipelineOf(code(), page, true)).toBe('formatacao');
+    expect(answerPipelineOf(code(null), page, true)).toBeNull();
+    expect(answerPipelineOf(code(null), page, false)).toBe('formatacao');
+    expect(answerPipelineOf(code('consultoria'), page, false)).toBe('consultoria');
+    expect(answerPipelineOf(code('expansao'), page, true)).toBe('formatacao');
+    expect(answerPipelineOf(code('expansao'), brand, true)).toBe('expansao');
+  });
+
   it('reads the Instagram handle however the record keeps it', () => {
     expect(instagramHandleOf('@amarjonbiojoias')).toBe('@amarjonbiojoias');
     expect(instagramHandleOf('https://www.instagram.com/iguaripasseioshopping/?hl=pt')).toBe(
@@ -506,5 +528,351 @@ describe('site form (T5)', () => {
     expect(instagramHandleOf('cenoritas.gourmet')).toBe('@cenoritas.gourmet');
     expect(instagramHandleOf('<script>')).toBeNull();
     expect(instagramHandleOf(null)).toBeNull();
+  });
+});
+
+describe('"Fale com a Wings" (the page the seed makes)', () => {
+  const SLUG = 'fale-com-a-wings';
+  const QUESTION = 'O que você procura?';
+  const keys = { TURNSTILE_SITE_KEY: '0x4AAAAAAA-site', TURNSTILE_SECRET_KEY: '0x4AAAAAAA-secret' };
+  /** Everything the page makes required, filled; each test changes one thing. */
+  const fale = (overrides: Record<string, unknown> = {}) =>
+    form({
+      email: 'fale.teste@example.com',
+      phone: '(21) 98888-0001',
+      companyName: 'Empresa Exemplo',
+      instagram: '@Empresa.Exemplo',
+      qualifierAnswer: 'formatacao',
+      page: 'https://fale.wingscompany.com.br/?utm_source=google',
+      tracking: { utm_campaign: 'fale_out26' },
+      ...overrides,
+    });
+  const post = (app: FastifyInstance, payload: Record<string, unknown>) =>
+    app.inject({ method: 'POST', url: `/public/site-forms/${SLUG}`, payload });
+  const receivedEvent = async (leadId: string) =>
+    (
+      await db
+        .select()
+        .from(leadEvents)
+        .where(and(eq(leadEvents.leadId, leadId), eq(leadEvents.kind, 'lead.received.site_form')))
+    )[0];
+
+  it('shows the required fields and the option codes, never the funnel each one leads to', async () => {
+    const app = await makeApp(keys);
+    const info = await app.inject({ method: 'GET', url: `/public/site-forms/${SLUG}` });
+    expect(info.statusCode).toBe(200);
+    const body = info.json<SiteFormInfo>();
+    expect(body).toMatchObject({
+      slug: SLUG,
+      brand: 'Wings Company',
+      pipeline: 'formatacao',
+      whatsappUrl: null,
+      form: {
+        qualifier: { question: QUESTION },
+        requiredFields: ['email', 'companyName', 'instagram', 'qualifierAnswer'],
+        privacyPolicyUrl: 'https://wingscompany.com.br/politica-de-privacidade/',
+        thankYou: { buttonText: 'Chamar no WhatsApp' },
+      },
+    });
+    expect(body.form?.qualifierValues).toEqual([
+      { value: 'formatacao', option: 'Transformar meu negócio em franquia' },
+      { value: 'expansao', option: 'Expandir minha rede de franquias' },
+      { value: 'consultoria', option: 'Consultoria para o meu negócio' },
+      { value: 'nao-sei', option: 'Ainda não sei' },
+    ]);
+  });
+
+  it("answers Wings' own Site link on the current number before the form, too", async () => {
+    const app = await makeApp({ ...keys, WINGS_WHATSAPP_NUMBER: '5521999470288' });
+    await db.insert(leadTrackingLinks).values([
+      { clientId: WINGS_CLIENT_ID, channel: 'site', code: 'FALE22', phone: '5521999470288' },
+      { clientId: WINGS_CLIENT_ID, channel: 'instagram', code: 'FALE33', phone: '5521999470288' },
+    ]);
+    const info = await app.inject({ method: 'GET', url: `/public/site-forms/${SLUG}` });
+    // Wings itself: the code alone in the text, no brand sentence.
+    expect(info.json<SiteFormInfo>().whatsappUrl).toBe('https://wa.me/5521999470288?text=FALE22');
+  });
+
+  it('refuses what the page requires and the form left out, before the captcha', async () => {
+    const turnstile = captcha();
+    const app = await makeApp(keys, { captchaFetch: turnstile.fetchImpl });
+    const cases: [Record<string, unknown>, string][] = [
+      [{ email: undefined }, 'Informe o seu e-mail.'],
+      [{ companyName: '  ' }, 'Informe o nome da empresa.'],
+      [{ instagram: undefined }, INSTAGRAM_REQUIRED_MESSAGE],
+      [{ instagram: '@marca..errada' }, INSTAGRAM_REQUIRED_MESSAGE],
+      [{ instagram: 'https://instagram.com/' }, INSTAGRAM_REQUIRED_MESSAGE],
+      [{ qualifierAnswer: undefined }, `Escolha uma opção em "${QUESTION}".`],
+      // Neither a code nor an option's text.
+      [{ qualifierAnswer: 'nao_sei' }, `Escolha uma opção em "${QUESTION}".`],
+      [{ qualifierAnswer: 'Ainda nao sei' }, `Escolha uma opção em "${QUESTION}".`],
+    ];
+    for (const [overrides, message] of cases) {
+      const response = await post(app, fale(overrides));
+      expect(response.statusCode, JSON.stringify(overrides)).toBe(400);
+      expect(response.json()).toEqual({ error: 'invalid_request', message });
+    }
+    expect(turnstile.calls).toHaveLength(0);
+    expect(await db.select().from(leads).where(eq(leads.landingPage, SLUG))).toEqual([]);
+  });
+
+  it('keeps the username, the option text and the code; Formatação for the page', async () => {
+    const turnstile = captcha();
+    const app = await makeApp(keys, { captchaFetch: turnstile.fetchImpl });
+    const response = await post(
+      app,
+      fale({ instagram: 'https://www.instagram.com/Empresa.Exemplo/?hl=pt' }),
+    );
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ ok: true, whatsappUrl: null });
+    const [lead] = await db.select().from(leads).where(eq(leads.email, 'fale.teste@example.com'));
+    expect(lead).toMatchObject({
+      source: 'site_form',
+      landingPage: SLUG,
+      clientId: WINGS_CLIENT_ID,
+      pipeline: 'formatacao',
+      instagram: 'empresa.exemplo',
+      companyName: 'Empresa Exemplo',
+      formAnswers: { [QUESTION]: 'Transformar meu negócio em franquia' },
+      // The line the page itself shows, word for word; not the funnel's.
+      consentText: FALE_COM_A_WINGS.spec.consentText,
+      legalBasis: 'consent',
+      consentSource: `site_form:${SLUG}`,
+    });
+    const event = await receivedEvent(lead!.id);
+    expect(event?.detail).toMatchObject({ qualifier: 'formatacao', pipeline: 'formatacao' });
+  });
+
+  it("shows the page's own consent line, the one the lead keeps", async () => {
+    const app = await makeApp(keys);
+    const info = await app.inject({ method: 'GET', url: `/public/site-forms/${SLUG}` });
+    expect(info.json<SiteFormInfo>().form?.consentText).toBe(
+      'Li a Política de Privacidade e autorizo a Wings a falar comigo por WhatsApp e e-mail sobre este pedido.',
+    );
+  });
+
+  it("the option's text names the same code (what the /lp page sends)", async () => {
+    const turnstile = captcha();
+    const app = await makeApp(keys, { captchaFetch: turnstile.fetchImpl });
+    const response = await post(
+      app,
+      fale({
+        email: 'texto.opcao@example.com',
+        phone: '(21) 98888-0010',
+        qualifierAnswer: 'Consultoria para o meu negócio',
+      }),
+    );
+    expect(response.statusCode).toBe(200);
+    const [lead] = await db.select().from(leads).where(eq(leads.email, 'texto.opcao@example.com'));
+    expect(lead?.formAnswers).toEqual({ [QUESTION]: 'Consultoria para o meu negócio' });
+    const event = await receivedEvent(lead!.id);
+    expect(event?.detail).toMatchObject({ qualifier: 'consultoria', pipeline: 'formatacao' });
+  });
+
+  it('"Expandir minha rede" names no funnel of its own: the page\'s Formatação', async () => {
+    const turnstile = captcha();
+    const app = await makeApp(keys, { captchaFetch: turnstile.fetchImpl });
+    const response = await post(
+      app,
+      fale({
+        email: 'rede.teste@example.com',
+        phone: '(21) 98888-0002',
+        qualifierAnswer: 'expansao',
+      }),
+    );
+    expect(response.statusCode).toBe(200);
+    const [lead] = await db.select().from(leads).where(eq(leads.email, 'rede.teste@example.com'));
+    expect(lead).toMatchObject({
+      pipeline: 'formatacao',
+      formAnswers: { [QUESTION]: 'Expandir minha rede de franquias' },
+    });
+  });
+
+  it('"Ainda não sei" leaves the lead without a funnel while the Jev triage is on', async () => {
+    const turnstile = captcha();
+    const app = await makeApp(keys, { captchaFetch: turnstile.fetchImpl });
+    const scheduled: TriageTarget[] = [];
+    configureLeadTriage((target) => scheduled.push(target));
+    try {
+      const response = await post(
+        app,
+        fale({
+          email: 'nao.sei@example.com',
+          phone: '(21) 98888-0003',
+          qualifierAnswer: 'nao-sei',
+        }),
+      );
+      expect(response.statusCode).toBe(200);
+    } finally {
+      configureLeadTriage(null);
+    }
+    const [lead] = await db.select().from(leads).where(eq(leads.email, 'nao.sei@example.com'));
+    expect(lead).toMatchObject({
+      pipeline: null,
+      stageId: null,
+      ownerEmployeeId: null,
+      formAnswers: { [QUESTION]: 'Ainda não sei' },
+    });
+    const event = await receivedEvent(lead!.id);
+    expect(event?.detail).toMatchObject({ qualifier: 'nao-sei', pipeline: null });
+    const [audit] = await db.select().from(auditLog).where(eq(auditLog.entityId, lead!.id));
+    expect(audit?.metadata).toMatchObject({ pipeline: null });
+    // The triage got it: a lead without a funnel is never left without someone to decide.
+    expect(scheduled).toContainEqual({ leadId: lead!.id });
+  });
+
+  it('"Ainda não sei" keeps the page\'s Formatação while the Jev triage is off', async () => {
+    const turnstile = captcha();
+    const app = await makeApp(keys, { captchaFetch: turnstile.fetchImpl });
+    const response = await post(
+      app,
+      fale({
+        email: 'nao.sei.sem.triagem@example.com',
+        phone: '(21) 98888-0011',
+        qualifierAnswer: 'nao-sei',
+      }),
+    );
+    expect(response.statusCode).toBe(200);
+    const [lead] = await db
+      .select()
+      .from(leads)
+      .where(eq(leads.email, 'nao.sei.sem.triagem@example.com'));
+    expect(lead).toMatchObject({
+      pipeline: 'formatacao',
+      formAnswers: { [QUESTION]: 'Ainda não sei' },
+    });
+    expect(lead?.stageId).not.toBeNull();
+    const event = await receivedEvent(lead!.id);
+    expect(event?.detail).toMatchObject({ qualifier: 'nao-sei', pipeline: 'formatacao' });
+  });
+
+  it('a code naming Expansão sends the lead there only from a page tied to a brand', async () => {
+    const turnstile = captcha();
+    const app = await makeApp(keys, { captchaFetch: turnstile.fetchImpl });
+    const [cenoritas] = await db.select().from(clients).where(eq(clients.slug, 'cenoritas'));
+    const expansionSpec = {
+      qualifier: { question: QUESTION, options: ['Formatar', 'Expandir'] },
+      qualifierValues: [
+        { value: 'formatar', option: 'Formatar' },
+        { value: 'expandir', option: 'Expandir', pipeline: 'expansao' },
+      ],
+      privacyPolicyUrl: 'https://wingscompany.com.br/politica-de-privacidade/',
+      thankYou: {
+        title: 'Obrigado',
+        body: 'Falamos em breve.',
+        buttonText: 'Site',
+        buttonUrl: 'https://wingscompany.com.br/',
+      },
+    };
+    await db.insert(leadSourceRules).values([
+      {
+        kind: 'landing_page',
+        pattern: 'fale-teste-sem-marca',
+        clientId: WINGS_CLIENT_ID,
+        pipeline: 'formatacao',
+        siteFormEnabled: true,
+        siteFormSpec: expansionSpec,
+      },
+      {
+        kind: 'landing_page',
+        pattern: 'fale-teste-com-marca',
+        clientId: cenoritas!.id,
+        pipeline: 'formatacao',
+        siteFormEnabled: true,
+        siteFormSpec: expansionSpec,
+      },
+    ]);
+    const send = (slug: string, phone: string) =>
+      app.inject({
+        method: 'POST',
+        url: `/public/site-forms/${slug}`,
+        payload: form({ email: undefined, phone, qualifierAnswer: 'expandir' }),
+      });
+    expect((await send('fale-teste-sem-marca', '(21) 98888-0012')).statusCode).toBe(200);
+    expect((await send('fale-teste-com-marca', '(21) 98888-0013')).statusCode).toBe(200);
+    const [noBrand] = await db.select().from(leads).where(eq(leads.phone, '5521988880012'));
+    const [withBrand] = await db.select().from(leads).where(eq(leads.phone, '5521988880013'));
+    // Wings Company names no franchise: Expansão would not know which one.
+    expect(noBrand).toMatchObject({ pipeline: 'formatacao', clientId: WINGS_CLIENT_ID });
+    expect(withBrand).toMatchObject({ pipeline: 'expansao', clientId: cenoritas!.id });
+  });
+
+  it('a code that names a funnel sends the lead there', async () => {
+    const turnstile = captcha();
+    const app = await makeApp(keys, { captchaFetch: turnstile.fetchImpl });
+    await db.insert(leadSourceRules).values({
+      kind: 'landing_page',
+      pattern: 'fale-teste-funil',
+      clientId: WINGS_CLIENT_ID,
+      pipeline: 'formatacao',
+      siteFormEnabled: true,
+      siteFormSpec: {
+        qualifier: { question: QUESTION, options: ['Formatar', 'Consultoria'] },
+        qualifierValues: [
+          { value: 'formatar', option: 'Formatar' },
+          { value: 'consultoria', option: 'Consultoria', pipeline: 'consultoria' },
+        ],
+        privacyPolicyUrl: 'https://wingscompany.com.br/politica-de-privacidade/',
+        thankYou: {
+          title: 'Obrigado',
+          body: 'Falamos em breve.',
+          buttonText: 'Site',
+          buttonUrl: 'https://wingscompany.com.br/',
+        },
+      },
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/public/site-forms/fale-teste-funil',
+      // Nothing required on this page: no e-mail is fine.
+      payload: form({
+        email: undefined,
+        phone: '(21) 98888-0004',
+        qualifierAnswer: 'consultoria',
+      }),
+    });
+    expect(response.statusCode).toBe(200);
+    const [lead] = await db.select().from(leads).where(eq(leads.phone, '5521988880004'));
+    expect(lead).toMatchObject({
+      pipeline: 'consultoria',
+      formAnswers: { [QUESTION]: 'Consultoria' },
+    });
+  });
+
+  it('the honeypot and the captcha work as on every page', async () => {
+    const turnstile = captcha();
+    const app = await makeApp(keys, { captchaFetch: turnstile.fetchImpl });
+    // A robot gets the success answer even with the required fields missing; nothing kept.
+    const honeypot = await post(app, fale({ email: undefined, website: 'http://spam.example' }));
+    expect(honeypot.statusCode).toBe(200);
+    expect(honeypot.json()).toEqual({ ok: true, whatsappUrl: null });
+    expect(turnstile.calls).toHaveLength(0);
+    const refused = await post(
+      app,
+      fale({ email: 'robo.teste@example.com', phone: '(21) 98888-0005', turnstileToken: 'bad' }),
+    );
+    expect(refused.statusCode).toBe(403);
+    expect(refused.json().error).toBe('captcha_refused');
+    expect(turnstile.calls).toHaveLength(1);
+    expect(await db.select().from(leads).where(eq(leads.email, 'robo.teste@example.com'))).toEqual(
+      [],
+    );
+  });
+
+  it('a page that does not require the Instagram keeps it as before', async () => {
+    const turnstile = captcha();
+    const app = await makeApp(keys, { captchaFetch: turnstile.fetchImpl });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/public/site-forms/cenoritas',
+      payload: form({
+        email: 'insta.livre@example.com',
+        phone: '(21) 98888-0006',
+        instagram: 'não tenho',
+      }),
+    });
+    expect(response.statusCode).toBe(200);
+    const [lead] = await db.select().from(leads).where(eq(leads.email, 'insta.livre@example.com'));
+    expect(lead?.instagram).toBe('não tenho');
   });
 });

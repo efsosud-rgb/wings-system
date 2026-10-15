@@ -1,7 +1,6 @@
 import {
   expansionAreaSchema,
   INSTAGRAM_MANUAL_VERDICTS,
-  generateTrackingCode,
   leadCreateSchema,
   funnelSummaryQuerySchema,
   leadListQuerySchema,
@@ -41,6 +40,7 @@ import {
   loadLead,
   upsertLead,
 } from './service.js';
+import { createTrackingLink } from './tracking-links.js';
 
 const idParam = z.object({ id: z.uuid() });
 
@@ -448,36 +448,29 @@ export const leadRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(404).send({ error: 'not_found', message: 'Cliente não encontrado.' });
     }
     const actor = request.session.actor.employeeId;
-    // The code is unique by index; a collision (1 in a billion) just draws again.
-    for (let attempt = 0; attempt < 5; attempt++) {
-      const [row] = await db
-        .insert(leadTrackingLinks)
-        .values({
-          clientId: params.data.id,
-          channel: body.data.channel,
-          code: generateTrackingCode(),
-          phone: env.WINGS_WHATSAPP_NUMBER,
-          createdBy: actor,
-        })
-        .onConflictDoNothing()
-        .returning();
-      if (!row) continue;
-      await writeAudit(db, {
-        actorEmployeeId: actor,
-        action: 'lead_tracking_link.created',
-        entity: 'lead_tracking_link',
-        entityId: row.id,
-        ip: request.ip,
-        metadata: { clientId: row.clientId, channel: row.channel },
-      });
-      return reply
-        .status(201)
-        .send({ link: toLink(row, brandOfLink(client), env.WINGS_WHATSAPP_NUMBER) });
-    }
-    return reply.status(500).send({
-      error: 'code_collision',
-      message: 'Não foi possível gerar um código. Tente de novo.',
+    const row = await createTrackingLink(db, {
+      clientId: params.data.id,
+      channel: body.data.channel,
+      phone: env.WINGS_WHATSAPP_NUMBER,
+      createdBy: actor,
     });
+    if (!row) {
+      return reply.status(500).send({
+        error: 'code_collision',
+        message: 'Não foi possível gerar um código. Tente de novo.',
+      });
+    }
+    await writeAudit(db, {
+      actorEmployeeId: actor,
+      action: 'lead_tracking_link.created',
+      entity: 'lead_tracking_link',
+      entityId: row.id,
+      ip: request.ip,
+      metadata: { clientId: row.clientId, channel: row.channel },
+    });
+    return reply
+      .status(201)
+      .send({ link: toLink(row, brandOfLink(client), env.WINGS_WHATSAPP_NUMBER) });
   });
 
   app.patch('/clients/:id/expansion-area', manage, async (request, reply) => {

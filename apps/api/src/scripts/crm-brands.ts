@@ -13,6 +13,7 @@ import {
   moveLegacyBrandsToExpansion,
   registerBrands,
 } from '../modules/leads/brands.js';
+import { configureLandingBase } from '../modules/leads/landing-base.js';
 
 /**
  * Registers the Expansão brands as clients and ties their landing-page rules
@@ -41,6 +42,8 @@ import {
 async function main() {
   loadDotEnv();
   const env = loadEnv(process.env);
+  // New rules take the configured base, as the API's screen does.
+  configureLandingBase(env.LANDING_PAGE_BASE_URL);
   const { db, pool } = createDb(env.DATABASE_URL);
   try {
     if (process.argv.includes('--on-sale')) {
