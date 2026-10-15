@@ -43,15 +43,7 @@ export const INSTAGRAM_VERDICT_LABELS: Record<InstagramVerdict, string> = {
 export const INSTAGRAM_MANUAL_VERDICTS = ['confere', 'falso'] as const;
 export type InstagramManualVerdict = (typeof INSTAGRAM_MANUAL_VERDICTS)[number];
 
-/** The list filter of Negociações. */
-export const INSTAGRAM_LIST_FILTERS = ['suspeito', 'falso', 'suspeito_ou_falso'] as const;
-export type InstagramListFilter = (typeof INSTAGRAM_LIST_FILTERS)[number];
-
-export const INSTAGRAM_LIST_FILTER_LABELS: Record<InstagramListFilter, string> = {
-  suspeito: 'Instagram suspeito',
-  falso: 'Instagram falso',
-  suspeito_ou_falso: 'Instagram suspeito ou falso',
-};
+export * from './instagram-list-filters.js';
 
 /** How each step went: what decides the verdict. */
 export interface InstagramCheckSteps {
@@ -139,7 +131,8 @@ export function instagramCheckLabelOf(check: LeadInstagramCheck): string {
 
 /** The reasons are fixed texts, so the same words show on the page and in the log. */
 export const INSTAGRAM_REASONS = {
-  invalidFormat: 'O texto não é um usuário de Instagram (1 a 30 letras, números, ponto ou sublinhado)',
+  invalidFormat:
+    'O texto não é um usuário de Instagram (1 a 30 letras, números, ponto ou sublinhado)',
   notFoundMeta: 'Não achado pela API da Meta (conta pessoal ou inexistente)',
   notFoundBoth: 'O perfil não apareceu na API da Meta nem na busca na web',
   notFoundSearchOnly: 'O perfil não apareceu na busca na web; a API da Meta não conferiu',

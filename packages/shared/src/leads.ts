@@ -1,4 +1,5 @@
-import { INSTAGRAM_LIST_FILTERS, type LeadInstagramCheck } from './instagram-check.js';
+import { INSTAGRAM_LIST_FILTERS } from './instagram-list-filters.js';
+import type { LeadInstagramCheck } from './instagram-check.js';
 import type { LeadChecks } from './lead-fields.js';
 import { z } from 'zod';
 import type { LeadAiSummary, LeadContactRef } from './crm.js';

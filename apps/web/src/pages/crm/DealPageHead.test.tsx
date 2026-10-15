@@ -93,6 +93,7 @@ const lead = (over: Omit<Partial<Lead>, 'work'> & { work?: Partial<Lead['work']>
   checks: {},
   aiSummary: null,
   suspect: null,
+  instagramCheck: null,
   research: {
     state: 'none',
     summary: null,

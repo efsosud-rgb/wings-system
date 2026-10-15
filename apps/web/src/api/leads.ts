@@ -1,5 +1,6 @@
 import type {
   Board,
+  InstagramManualVerdict,
   LeadActivity,
   Client,
   CrmStage,
@@ -106,6 +107,21 @@ export function useCheckLead() {
       api.post<{ lead: Lead; events: LeadEvent[] }>(`/leads/${id}/checks`),
     onSuccess: (_data, id) => {
       void queryClient.invalidateQueries({ queryKey: ['leads', 'one', id] });
+    },
+  });
+}
+
+/** A seller's correction of the Instagram check: "confere", "falso", or null to take it back. */
+export function useCorrectInstagram() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: { id: string; verdict: InstagramManualVerdict | null }) =>
+      api.post<{ lead: Lead; events: LeadEvent[] }>(`/leads/${input.id}/instagram`, {
+        verdict: input.verdict,
+      }),
+    onSuccess: (_data, input) => {
+      void queryClient.invalidateQueries({ queryKey: ['leads', 'one', input.id] });
+      void queryClient.invalidateQueries({ queryKey: ['leads'] });
     },
   });
 }

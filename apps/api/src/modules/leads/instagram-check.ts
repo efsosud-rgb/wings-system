@@ -49,11 +49,15 @@ export function instagramCheckOf(row: CheckRow): LeadInstagramCheck | null {
     followers?: unknown;
     posts?: unknown;
   };
-  const manualVerdict = oneOf<InstagramManualVerdict>(INSTAGRAM_MANUAL_VERDICTS, row.instagramManual);
+  const manualVerdict = oneOf<InstagramManualVerdict>(
+    INSTAGRAM_MANUAL_VERDICTS,
+    row.instagramManual,
+  );
   const verdict = oneOf<InstagramVerdict>(INSTAGRAM_VERDICTS, row.instagramVerdict);
   return {
     status,
-    source: oneOf<InstagramCheckSource>(INSTAGRAM_CHECK_SOURCES, row.instagramCheckSource) ?? 'nenhuma',
+    source:
+      oneOf<InstagramCheckSource>(INSTAGRAM_CHECK_SOURCES, row.instagramCheckSource) ?? 'nenhuma',
     checkedAt: row.instagramCheckedAt?.toISOString() ?? null,
     reason: typeof detail.reason === 'string' ? detail.reason : null,
     steps: detail.steps ?? null,

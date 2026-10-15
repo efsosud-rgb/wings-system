@@ -490,8 +490,11 @@ describe('site form (T5)', () => {
       },
     ]);
     const answer = (await send(11)).json<{ ok: true; whatsappUrl: string }>();
-    expect(answer.whatsappUrl).toBe(
-      `https://wa.me/5521999470288?text=${encodeURIComponent('SITE22 Olá! Quero saber sobre a franquia Cenoritas.')}`,
+    // The link's code, then the form's own ref (6 characters), then the brand's line.
+    const url = new URL(answer.whatsappUrl);
+    expect(url.origin + url.pathname).toBe('https://wa.me/5521999470288');
+    expect(url.searchParams.get('text')).toMatch(
+      /^SITE22 [A-HJ-NP-Z2-9]{6} Olá! Quero saber sobre a franquia Cenoritas\.$/,
     );
   });
 

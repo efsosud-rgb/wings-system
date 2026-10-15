@@ -101,6 +101,7 @@ const board = (overrides: Partial<SalesDashboard> = {}): SalesDashboard => ({
   brands: [{ brand: 'Marca A', open: 5, openCents: 400_000, won: 2, wonCents: 120_000 }],
   services: [],
   sources: [{ source: 'rd_station', leads: 10, won: 2, wonCents: 120_000 }],
+  pages: [{ page: 'marca-a', leads: 10, instagram: { checked: 8, suspect: 2, fake: 1 } }],
   campaigns: [
     {
       campaign: 'LP Marca A',
@@ -111,6 +112,7 @@ const board = (overrides: Partial<SalesDashboard> = {}): SalesDashboard => ({
       cplCents: null,
       cacCents: null,
       roas: null,
+      instagram: { checked: 8, suspect: 2, fake: 1 },
     },
   ],
   spendVisible: false,

@@ -21,7 +21,9 @@ export const SOFIA_FORM_GREETING =
   'Olá, {nome}! Eu sou a Sofia, atendente virtual {quem}. Recebi o seu contato pelo formulário e só vou confirmar o que faltou.';
 
 export const formGreetingOf = (name: string | null): string =>
-  name ? SOFIA_FORM_GREETING.replace('{nome}', name) : SOFIA_FORM_GREETING.replace('Olá, {nome}!', 'Olá!');
+  name
+    ? SOFIA_FORM_GREETING.replace('{nome}', name)
+    : SOFIA_FORM_GREETING.replace('Olá, {nome}!', 'Olá!');
 
 const firstNameOf = (name: string | null | undefined): string | null => {
   const first = name?.trim().split(/\s+/)[0] ?? '';

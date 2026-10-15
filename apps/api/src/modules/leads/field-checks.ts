@@ -190,12 +190,16 @@ export async function runLeadChecks(
   const merge = (value: LeadChecks) =>
     db
       .update(leads)
-      .set({ fieldChecks: sql`coalesce(${leads.fieldChecks}, '{}'::jsonb) || ${JSON.stringify(value)}::jsonb` })
+      .set({
+        fieldChecks: sql`coalesce(${leads.fieldChecks}, '{}'::jsonb) || ${JSON.stringify(value)}::jsonb`,
+      })
       .where(eq(leads.id, leadId));
   await merge(pending);
   if (viaWorker) await enqueueInstagramCheck(db, leadId, null);
   const checks = await checkLeadFields(lead, viaWorker ? { ...deps, instagram: null } : deps);
-  const { instagram: _owned, ...others } = checks;
+  // The worker owns the `instagram` key while the check is its: only the others are written.
+  const others: LeadChecks = { ...checks };
+  delete others.instagram;
   await merge(viaWorker ? others : checks);
   deps.log.info(
     { leadId, checks: Object.fromEntries(Object.entries(checks).map(([k, v]) => [k, v?.status])) },

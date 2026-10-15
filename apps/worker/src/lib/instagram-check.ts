@@ -118,6 +118,8 @@ export interface SearchedProfile {
   snippet: string;
 }
 
+const NOT_PROFILE_PATHS = new Set(['p', 'reel', 'reels', 'tv', 'explore', 'stories', 'accounts', 'directory']);
+
 /**
  * The result that is the public page of this profile: `instagram.com/<user>` (also its posts and
  * tabs), never somebody else's page that merely mentions the user.
@@ -133,7 +135,8 @@ export function profilePageOf(handle: string, results: SearchResult[]): Searched
     const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
     if (host !== 'instagram.com') continue;
     const first = parsed.pathname.split('/').filter(Boolean)[0]?.toLowerCase();
-    if (first === handle) return { title: result.title, snippet: result.snippet };
+    // Posts, reels and the like live under reserved first segments: not a profile of that name.
+    if (first && !NOT_PROFILE_PATHS.has(first) && first === handle) return { title: result.title, snippet: result.snippet };
   }
   return null;
 }
@@ -222,7 +225,10 @@ export function createInstagramJudge(config: {
           signal: AbortSignal.timeout(config.timeoutMs ?? 20_000),
         });
       } catch (error) {
-        throw new Error(`OpenRouter did not answer (${error instanceof Error ? error.name : 'error'})`);
+        // The message carries only the error's name: its text can quote the request, headers included.
+        throw new Error(`OpenRouter did not answer (${error instanceof Error ? error.name : 'error'})`, {
+          cause: error,
+        });
       }
       // Never the error's own text: it can quote the request, headers included.
       if (!response.ok) throw new Error(`OpenRouter answered ${response.status}`);

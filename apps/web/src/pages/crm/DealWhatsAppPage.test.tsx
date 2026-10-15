@@ -103,6 +103,7 @@ const lead = (): Lead => ({
   checks: {},
   aiSummary: null,
   suspect: null,
+  instagramCheck: null,
   research: {
     state: 'none',
     summary: null,

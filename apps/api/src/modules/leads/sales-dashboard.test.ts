@@ -353,6 +353,8 @@ describe('Dashboard › Vendas v1', () => {
       cplCents: 10_000,
       cacCents: 30_000,
       roas: 50_000 / 30_000,
+      // No Instagram check ran for these deals: nothing is counted, and the screen shows "—".
+      instagram: { checked: 0, suspect: 0, fake: 0 },
     });
     expect(board.campaigns.at(-1)).toMatchObject({ campaign: null, leads: 2, spendCents: null });
     const hidden = await salesDashboardOf(db, { ...month, spendVisible: false });

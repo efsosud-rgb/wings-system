@@ -11,29 +11,37 @@ import { DealPage } from './DealPage.js';
  * behind us and the deal is still open.
  */
 
-const { dealMutate, summaryMutate, askMutate, askState, queryState, idle, mutation } = vi.hoisted(
-  () => ({
-    dealMutate: vi.fn(),
-    summaryMutate: vi.fn(),
-    askMutate: vi.fn(),
-    askState: {
-      data: undefined as { answer: string; model: string } | undefined,
-      error: null as unknown,
-    },
-    queryState: {
-      lead: null as Lead | null,
-      files: [] as unknown[],
-      // Overrides for what the queries answer (a failed request, a loading one); reset per test.
-      leadQuery: {} as Record<string, unknown>,
-      filesQuery: {} as Record<string, unknown>,
-      stagesQuery: {} as Record<string, unknown>,
-      sellersQuery: {} as Record<string, unknown>,
-      brandsQuery: {} as Record<string, unknown>,
-    },
-    idle: () => ({ data: undefined, isLoading: false, isError: false }),
-    mutation: (mutate = vi.fn()) => ({ mutate, isPending: false, error: null }),
-  }),
-);
+const {
+  dealMutate,
+  correctMutate,
+  summaryMutate,
+  askMutate,
+  askState,
+  queryState,
+  idle,
+  mutation,
+} = vi.hoisted(() => ({
+  dealMutate: vi.fn(),
+  correctMutate: vi.fn(),
+  summaryMutate: vi.fn(),
+  askMutate: vi.fn(),
+  askState: {
+    data: undefined as { answer: string; model: string } | undefined,
+    error: null as unknown,
+  },
+  queryState: {
+    lead: null as Lead | null,
+    files: [] as unknown[],
+    // Overrides for what the queries answer (a failed request, a loading one); reset per test.
+    leadQuery: {} as Record<string, unknown>,
+    filesQuery: {} as Record<string, unknown>,
+    stagesQuery: {} as Record<string, unknown>,
+    sellersQuery: {} as Record<string, unknown>,
+    brandsQuery: {} as Record<string, unknown>,
+  },
+  idle: () => ({ data: undefined, isLoading: false, isError: false }),
+  mutation: (mutate = vi.fn()) => ({ mutate, isPending: false, error: null }),
+}));
 
 const lead = (over: Omit<Partial<Lead>, 'work'> & { work?: Partial<Lead['work']> }): Lead => ({
   id: 'l1',
@@ -75,6 +83,7 @@ const lead = (over: Omit<Partial<Lead>, 'work'> & { work?: Partial<Lead['work']>
   consent: { legalBasis: null, consentedAt: null, source: null, text: null },
   aiSummary: null,
   suspect: null,
+  instagramCheck: null,
   research: {
     state: 'none',
     summary: null,
@@ -136,6 +145,7 @@ vi.mock('../../api/leads.js', () => ({
   useSellers: () => ({ ...idle(), ...queryState.sellersQuery }),
   useStages: () => ({ ...idle(), ...queryState.stagesQuery }),
   useCheckLead: idle,
+  useCorrectInstagram: () => mutation(correctMutate),
   useClearSuspect: idle,
   useUpdateLead: () => mutation(),
   useUpdateTask: () => mutation(),
@@ -405,5 +415,106 @@ describe('Origem', () => {
     show();
     const card = within(screen.getByRole('region', { name: 'Origem' }));
     expect(card.getByText(/— A entrada não trouxe anúncio, UTM nem respostas/)).toBeTruthy();
+  });
+});
+
+describe('Instagram do formulário', () => {
+  const checked = (over: Record<string, unknown>) => ({
+    status: 'nao_encontrado',
+    source: 'nenhuma',
+    checkedAt: '2026-10-15T14:00:00Z',
+    reason: 'O perfil não apareceu na API da Meta; a busca na web não conferiu',
+    steps: null,
+    followers: null,
+    posts: null,
+    verdict: 'suspeito',
+    manual: null,
+    effectiveVerdict: 'suspeito',
+    profileUrl: 'https://www.instagram.com/padaria.aurora/',
+    ...over,
+  });
+  const panel = () => within(screen.getByRole('region', { name: 'Dados do formulário' }));
+  const withInstagram = (instagramCheck: unknown) => {
+    const base = lead({});
+    queryState.lead = lead({
+      fields: { ...base.fields, instagram: 'padaria.aurora' },
+      instagramCheck,
+    } as Partial<Lead>);
+  };
+
+  it('says suspect, the reason and the link, and lets a seller mark it confere or falso', () => {
+    correctMutate.mockClear();
+    withInstagram(checked({}));
+    show();
+    expect(panel().getByText('Não encontrado · suspeito')).toBeTruthy();
+    expect(panel().getByText(/a busca na web não conferiu/)).toBeTruthy();
+    expect(panel().getByRole('link', { name: '@padaria.aurora' }).getAttribute('href')).toBe(
+      'https://www.instagram.com/padaria.aurora/',
+    );
+    fireEvent.click(panel().getByRole('button', { name: 'Marcar como falso' }));
+    expect(correctMutate).toHaveBeenCalledWith({ id: expect.any(String), verdict: 'falso' });
+    fireEvent.click(panel().getByRole('button', { name: 'Marcar como confere' }));
+    expect(correctMutate).toHaveBeenLastCalledWith({ id: expect.any(String), verdict: 'confere' });
+    expect(panel().queryByRole('button', { name: 'Desfazer correção' })).toBeNull();
+  });
+
+  it("shows source, time and Meta's numbers when it was found, and Falso when found nowhere", () => {
+    withInstagram(
+      checked({
+        status: 'confere',
+        source: 'meta',
+        reason: null,
+        verdict: null,
+        effectiveVerdict: null,
+        followers: 1200,
+        posts: 80,
+      }),
+    );
+    show();
+    expect(panel().getByText('Confere')).toBeTruthy();
+    expect(panel().getByText(/Fonte: API oficial da Meta/)).toBeTruthy();
+    expect(panel().getByText(/1\.200 seguidores/)).toBeTruthy();
+    cleanup();
+    withInstagram(checked({ verdict: 'falso', effectiveVerdict: 'falso' }));
+    show();
+    expect(panel().getByText('Falso')).toBeTruthy();
+  });
+
+  it('keeps the old check while the worker has not looked, shows a correction and offers to undo it', () => {
+    const base = lead({});
+    queryState.lead = lead({
+      fields: { ...base.fields, instagram: 'padaria.aurora' },
+      instagramCheck: null,
+    } as Partial<Lead>);
+    show();
+    // The old per-field line is shown (every unchecked field says so); the new row and its buttons are not.
+    expect(panel().getAllByText('Não conferido ainda').length).toBeGreaterThan(0);
+    expect(panel().queryByRole('button', { name: 'Marcar como falso' })).toBeNull();
+    cleanup();
+    correctMutate.mockClear();
+    withInstagram(
+      checked({
+        manual: { verdict: 'falso', at: '2026-10-15T15:00:00Z' },
+        effectiveVerdict: 'falso',
+      }),
+    );
+    show();
+    expect(panel().getByText('Falso (marcado por uma pessoa)')).toBeTruthy();
+    expect(panel().getByText(/continua guardado/)).toBeTruthy();
+    fireEvent.click(panel().getByRole('button', { name: 'Desfazer correção' }));
+    expect(correctMutate).toHaveBeenCalledWith({ id: expect.any(String), verdict: null });
+    cleanup();
+    withInstagram(
+      checked({
+        status: 'pendente',
+        verdict: null,
+        effectiveVerdict: null,
+        reason: null,
+        checkedAt: null,
+      }),
+    );
+    show();
+    expect(panel().getByText('Conferindo…')).toBeTruthy();
+    expect(panel().queryByRole('button', { name: 'Marcar como falso' })).toBeNull();
   });
 });
