@@ -112,13 +112,9 @@ describe('the form ref in the WhatsApp text', () => {
     expect(trackedLinkText('K7M2QX', 'Aurora')).toBe(
       'K7M2QX Olá! Quero saber sobre a franquia Aurora.',
     );
-    expect(
-      decodeURIComponent(
-        new URL(whatsappLinkOf('5521999470288', 'K7M2QX', null, 'ABC234')).searchParams.get(
-          'text',
-        )!,
-      ),
-    ).toBe('K7M2QX ABC234');
+    expect(whatsappLinkOf('5521999470288', 'K7M2QX', null, 'ABC234')).toBe(
+      `https://wa.me/5521999470288?text=${encodeURIComponent('K7M2QX ABC234')}`,
+    );
     expect(trackingRefOf('K7M2QX abc234 Olá!')).toBe('ABC234');
     expect(trackingRefOf('#K7M2QX ABC234')).toBe('ABC234');
     expect(trackingRefOf('K7M2QX Olá! Quero saber')).toBeNull();
