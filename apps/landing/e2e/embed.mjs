@@ -40,9 +40,12 @@ function check(name, ok, detail = '') {
 }
 
 const snippet = readFileSync(resolve(root, 'e2e/site-snippet.html'), 'utf8');
-const sitePage = `<!doctype html><meta charset="utf-8"><body style="margin:0;background:${BG}"><div id="pad" style="height:40px"></div>${snippet}<script>
+/** The Wings site's page: the snippet, in a column of `width` px when given (the site pads its container). */
+const sitePage = (
+  width,
+) => `<!doctype html><meta charset="utf-8"><body style="margin:0;background:${BG}"><div id="pad" style="height:40px"></div><div style="${width ? `width:${width}px` : ''}">${snippet}</div><script>
   window.__messages = [];
-  addEventListener('message', (e) => __messages.push({ origin: e.origin, data: e.data }));
+  addEventListener('message', (e) => __messages.push({ origin: e.origin, data: e.data, at: performance.now() }));
 </script>`;
 const framerPage = (src) =>
   `<!doctype html><meta charset="utf-8"><body style="background:${BG}"><iframe id="f" src="${src}" style="width:600px;height:300px;border:0"></iframe>`;
@@ -54,7 +57,7 @@ const FAKE_TURNSTILE = `(() => {
     render(el, opts) {
       window.__ts.theme = opts.theme;
       const box = document.createElement('div');
-      box.style.cssText = 'height:65px;border:1px solid #888';
+      box.style.cssText = 'width:100%;min-width:300px;height:65px;box-sizing:border-box;border:1px solid #888';
       el.appendChild(box);
       setTimeout(() => opts.callback('XXXX.DUMMY.TOKEN.XXXX'), 150);
       return 'fake-1';
@@ -113,7 +116,7 @@ async function wire(context, { posts, outside }) {
         headers: { 'content-security-policy': csp, ...extra },
         body,
       });
-    if (url.origin === SITE) return html(sitePage, STRICT_CSP);
+    if (url.origin === SITE) return html(sitePage(url.searchParams.get('w')), STRICT_CSP);
     if (url.origin === 'https://evil.example') {
       return html(framerPage(url.searchParams.get('src') ?? ''), STRICT_CSP);
     }
@@ -340,6 +343,108 @@ async function runSite(browser, { label, viewport, mobile, query, utm }) {
   await context.close();
 }
 
+/** The first height message is not lost for good: the form repeats it for 10 s and answers the site's ping. */
+async function runHeight(browser) {
+  const context = await browser.newContext({
+    viewport: { width: 400, height: 800 },
+    locale: 'pt-BR',
+  });
+  await wire(context, { posts: [], outside: { gtm: [], other: [] } });
+  const page = await context.newPage();
+  await page.goto(`${SITE}/`);
+  const handle = await page.waitForSelector('#wings-form');
+  await page.waitForFunction(() =>
+    window.__messages.some((m) => m.data?.tipo === 'wings-form-altura'),
+  );
+  const heights = () =>
+    page.evaluate(() =>
+      window.__messages.filter((m) => m.data?.tipo === 'wings-form-altura').map((m) => m.at),
+    );
+  await page.waitForTimeout(3200);
+  const early = await heights();
+  check(
+    'height: repeated every second while the page is new (a listener that came late still hears it)',
+    early.length >= 3,
+    `${early.length} messages in ~3 s`,
+  );
+  // the site missed it: iframe at a wrong height, nothing but the repeat brings the right one back
+  await handle.evaluate((el) => (el.style.height = '100px'));
+  await page.waitForFunction(() => document.getElementById('wings-form').offsetHeight > 300, null, {
+    timeout: 3000,
+  });
+  check('height: a wrong iframe height is corrected by the repeat, without a resize', true);
+  await page.waitForTimeout(8500); // past the 10 s
+  const settled = (await heights()).length;
+  await page.waitForTimeout(2200);
+  check(
+    'height: the repeat stops after 10 s',
+    (await heights()).length === settled,
+    `${settled} then ${(await heights()).length}`,
+  );
+  await handle.evaluate((el) => (el.style.height = '100px'));
+  const bad = await handle.evaluate((el) => el.offsetHeight);
+  await page.evaluate(() =>
+    document
+      .getElementById('wings-form')
+      .contentWindow.postMessage({ tipo: 'wings-form-ping' }, 'https://fale.wingscompany.com.br'),
+  );
+  await page
+    .waitForFunction(() => document.getElementById('wings-form').offsetHeight > 300, null, {
+      timeout: 2000,
+    })
+    .catch(() => {});
+  check(
+    "height: the site's wings-form-ping brings the height back at once, after the repeat has stopped",
+    bad === 100 && (await handle.evaluate((el) => el.offsetHeight)) > 300,
+  );
+  await context.close();
+}
+
+/** From 280 px up nothing leaves the iframe's width: fields, select, consent text, robot check and button. */
+async function runWidths(browser) {
+  for (const width of [280, 302, 320, 360, 390]) {
+    const context = await browser.newContext({
+      viewport: { width: 400, height: 800 },
+      isMobile: true,
+      hasTouch: true,
+      locale: 'pt-BR',
+    });
+    await wire(context, { posts: [], outside: { gtm: [], other: [] } });
+    const page = await context.newPage();
+    await page.goto(`${SITE}/?w=${width}`);
+    const handle = await page.waitForSelector('#wings-form');
+    const frame = await handle.contentFrame();
+    await frame.waitForSelector('#f-bot-widget > *');
+    await page.waitForTimeout(500);
+    const found = await frame.evaluate(() => {
+      const room = document.documentElement.clientWidth;
+      const outside = [];
+      const probe = (name, rect) => {
+        if (rect.width > 0 && (rect.left < -0.5 || rect.right > room + 0.5)) {
+          outside.push(`${name} ${Math.round(rect.left)}..${Math.round(rect.right)}`);
+        }
+      };
+      const selector =
+        '#lead-form input, #lead-form select, .consent, #f-send, #f-bot-widget, #f-bot-widget > *, .bot-slot';
+      for (const el of document.querySelectorAll(selector)) {
+        if (!el.closest('.hp'))
+          probe(el.id || el.className || el.tagName, el.getBoundingClientRect());
+      }
+      const text = document.createRange();
+      text.selectNodeContents(document.querySelector('.consent'));
+      for (const rect of text.getClientRects()) probe('consent text', rect);
+      return { room, scroll: document.documentElement.scrollWidth, outside };
+    });
+    check(
+      `width ${width}: nothing leaves the iframe (no sideways scroll, fields, select, consent, robot check, button)`,
+      found.room === width && found.scroll <= found.room && found.outside.length === 0,
+      JSON.stringify(found),
+    );
+    if (SHOTS) await page.screenshot({ path: join(SHOTS, `largura-${width}.png`) });
+    await context.close();
+  }
+}
+
 /** Opened on its own: black page, the title and subtitle with titulo=1, and no message to anyone. */
 async function runDirect(browser) {
   const context = await browser.newContext({ viewport: { width: 1000, height: 800 } });
@@ -413,6 +518,8 @@ try {
     query: '',
     utm: false,
   });
+  await runWidths(browser);
+  await runHeight(browser);
   await runDirect(browser);
   await runFraming(browser);
 } catch (error) {

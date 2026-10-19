@@ -82,3 +82,16 @@ html.embed.standalone {
   border-width: 0 2.5px 2.5px 0;
   transform: translateY(-1px) rotate(45deg);
 }
+/* below 300 px of room the robot check (300 px at least) is scaled down from the left, and its box shrinks
+   with it (main.ts sets --ts-scale), so it never widens the form */
+.embed.ts-narrow .bot-widget {
+  display: block;
+  width: calc(300px * var(--ts-scale));
+  height: calc(65px * var(--ts-scale));
+}
+.embed.ts-narrow .bot-widget > * {
+  width: 300px;
+  min-width: 0;
+  transform: scale(var(--ts-scale));
+  transform-origin: 0 0;
+}
