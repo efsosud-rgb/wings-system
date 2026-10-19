@@ -228,6 +228,18 @@ vi.mock('../../api/whatsapp.js', () => ({
 
 vi.mock('./LeadEmailTab.js', () => ({ LeadEmailTab: () => <div>Aba de e-mail</div> }));
 
+// The import panel has its own test (ImportChatPanel.test.tsx); here only the button that opens it.
+vi.mock('./ImportChatPanel.js', () => ({
+  ImportChatPanel: ({ leadId, onClose }: { leadId: string; onClose: () => void }) => (
+    <div role="dialog" aria-label="Importar conversa">
+      Painel de importação de {leadId}
+      <button type="button" onClick={onClose}>
+        Fechar painel
+      </button>
+    </div>
+  ),
+}));
+
 const show = () =>
   render(
     <MemoryRouter initialEntries={['/crm-vendas/negociacoes/l1/whatsapp']}>
@@ -622,6 +634,23 @@ describe('the WhatsApp conversation screen', () => {
     expect(panel.getByRole('button', { name: 'Registrar ligação' })).toBeTruthy();
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'Ligação' })).toBeNull();
+  });
+
+  it('"Importar do celular" opens the import panel for this deal and closes it again', () => {
+    show();
+    expect(screen.queryByRole('dialog', { name: 'Importar conversa' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Importar do celular/ }));
+    const panel = within(screen.getByRole('dialog', { name: 'Importar conversa' }));
+    expect(panel.getByText('Painel de importação de l1')).toBeTruthy();
+    fireEvent.click(panel.getByRole('button', { name: 'Fechar painel' }));
+    expect(screen.queryByRole('dialog', { name: 'Importar conversa' })).toBeNull();
+  });
+
+  it('hides "Importar do celular" from who can read the WhatsApp but cannot write to the deal', () => {
+    queryState.permissions = { 'leads.read': 'own', 'leads.whatsapp': 'own' };
+    show();
+    expect(screen.getByRole('button', { name: 'Ligação de voz' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Importar do celular/ })).toBeNull();
   });
 
   it('keeps Visão geral, Anotações (working) and Arquivos on the right', () => {

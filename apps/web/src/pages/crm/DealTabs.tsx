@@ -99,7 +99,8 @@ function importBody(event: LeadEvent): string | null {
   const { messages, from, to } = event.detail as { messages?: number; from?: string; to?: string };
   if (typeof messages !== 'number') return null;
   const count = `${messages} ${messages === 1 ? 'mensagem' : 'mensagens'}`;
-  if (event.kind === 'whatsapp.import_undone') return `${count} saíram da conversa`;
+  if (event.kind === 'whatsapp.import_undone')
+    return `${count} ${messages === 1 ? 'saiu' : 'saíram'} da conversa`;
   return from && to
     ? `${count}, de ${formatDate(from)} a ${formatDate(to)}. Estão na tela WhatsApp da negociação.`
     : count;
