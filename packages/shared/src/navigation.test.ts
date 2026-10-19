@@ -189,9 +189,10 @@ describe('menu by access level', () => {
       ]),
     );
 
-  // Eric, 14/10: a seller's whole menu is CRM Vendas. No Empresas, Landing pages, Drive, Dashboard
-  // or Gestão; Painel de Vendas, Projetos and the Agenda sit inside the CRM for them.
-  it('gives a Vendedor Expansão only the CRM of their own leads', () => {
+  // Eric, 14/10: a seller's menu is CRM Vendas. No Empresas, Landing pages, Drive, Dashboard or
+  // Gestão; Painel de Vendas and Projetos sit inside the CRM for them. Eric, 19/10: plus Agenda and
+  // Reuniões in Produtividade, read-only.
+  it('gives a Vendedor Expansão the CRM of their own leads and Agenda and Reuniões', () => {
     expect(menuOf('vendedor_expansao')).toEqual({
       inicio: ['/inicio'],
       'crm-vendas': [
@@ -202,8 +203,8 @@ describe('menu by access level', () => {
         '/crm-vendas/avisos',
         '/crm-vendas/painel-de-vendas',
         '/crm-vendas/projetos',
-        '/crm-vendas/agenda',
       ],
+      produtividade: ['/produtividade/agenda', '/produtividade/reunioes'],
     });
   });
 
@@ -218,10 +219,66 @@ describe('menu by access level', () => {
         '/crm-vendas/avisos',
         '/crm-vendas/painel-de-vendas',
         '/crm-vendas/projetos',
-        '/crm-vendas/agenda',
         '/crm-vendas/leads-campanhas',
       ],
+      produtividade: ['/produtividade/agenda', '/produtividade/reunioes'],
     });
+  });
+
+  // Eric, 19/10: the exception is the two screens that say `sellers`; the rest of Produtividade and
+  // every other module stays closed to them, whatever the level holds.
+  it('opens only Agenda and Reuniões of Produtividade to a seller, never the Drive or another module', () => {
+    for (const role of ['vendedor_expansao', 'vendedor_formatacao'] as const) {
+      const menu = menuOf(role);
+      expect(Object.keys(menu).sort(), role).toEqual(['crm-vendas', 'inicio', 'produtividade']);
+      expect(menu.produtividade, role).toEqual([
+        '/produtividade/agenda',
+        '/produtividade/reunioes',
+      ]);
+      const outsideCrm = ALL_SUBMODULES.filter((s) => canSeeSubmodule(asRole(role), s))
+        .map((s) => s.path)
+        .filter((path) => !path.startsWith('/crm-vendas') && path !== '/inicio');
+      expect(outsideCrm.sort(), role).toEqual(['/produtividade/agenda', '/produtividade/reunioes']);
+      const drive = ALL_SUBMODULES.find((s) => s.path === '/produtividade/drive')!;
+      expect(drive.status).toBe('coming_soon');
+      expect(canSeeSubmodule(asRole(role), drive), role).toBe(false);
+      // The exemption is per screen: even a seller who holds `modules.preview` stays out of the Drive.
+      const previewing = {
+        role,
+        permissions: { ...ROLE_PERMISSIONS[role], 'modules.preview': 'all' },
+      };
+      expect(canSeeSubmodule(previewing as NavViewer, drive), role).toBe(false);
+    }
+  });
+
+  it('marks as `sellers` exactly Agenda and Reuniões, and nothing else', () => {
+    expect(ALL_SUBMODULES.filter((s) => s.sellers).map((s) => s.path)).toEqual([
+      '/produtividade/agenda',
+      '/produtividade/reunioes',
+    ]);
+  });
+
+  it('keeps Reuniões to the levels that read leads, and the Agenda to everyone', () => {
+    for (const role of ROLE_KEYS) {
+      const seen = menuOf(role).produtividade ?? [];
+      expect(seen.includes('/produtividade/agenda'), role).toBe(true);
+      expect(seen.includes('/produtividade/reunioes'), role).toBe(
+        ROLE_PERMISSIONS[role]['leads.read'] !== undefined,
+      );
+    }
+  });
+
+  it('has no Agenda inside CRM Vendas any more: the old address redirects to Produtividade', () => {
+    expect(ALL_SUBMODULES.some((s) => s.path === '/crm-vendas/agenda')).toBe(false);
+    for (const role of ROLE_KEYS) {
+      expect(Object.values(menuOf(role)).flat(), role).not.toContain('/crm-vendas/agenda');
+    }
+    expect(LEGACY_REDIRECTS).toContainEqual({
+      from: '/crm-vendas/agenda',
+      to: '/produtividade/agenda',
+    });
+    const reunioes = ALL_SUBMODULES.find((s) => s.path === '/produtividade/reunioes')!;
+    expect(reunioes).toMatchObject({ status: 'ready', permission: 'leads.read', kind: 'report' });
   });
 
   it("closes a seller's typed address outside the CRM, though the level holds its permission", () => {
@@ -236,7 +293,6 @@ describe('menu by access level', () => {
     const copies = [
       '/crm-vendas/painel-de-vendas',
       '/crm-vendas/projetos',
-      '/crm-vendas/agenda',
       '/crm-vendas/leads-campanhas',
     ];
     for (const role of ROLE_KEYS) {
