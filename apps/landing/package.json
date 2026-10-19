@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "node e2e/run.mjs",
+    "test:embed": "node e2e/embed.mjs",
+    "test:nginx": "node e2e/nginx-headers.mjs",
     "test:e2e:api": "pnpm --filter @wings/api exec tsx ../landing/e2e/api-server.ts",
     "wing-points": "node scripts/wing-points.mjs",
     "og-image": "node scripts/og-image.mjs"

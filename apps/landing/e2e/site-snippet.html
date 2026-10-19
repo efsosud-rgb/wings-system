@@ -1,0 +1,65 @@
+<!-- Formulário da Wings no site (HTML do Elementor): cole este trecho no lugar do formulário do RD Station. -->
+<iframe
+  id="wings-form"
+  title="Formulário de contato da Wings"
+  loading="lazy"
+  scrolling="no"
+  allowtransparency="true"
+  style="
+    display: block;
+    width: 100%;
+    height: 640px;
+    border: 0;
+    background: transparent;
+    color-scheme: light;
+  "
+></iframe>
+<script>
+  (function () {
+    var FORM = 'https://fale.wingscompany.com.br';
+    var frame = document.getElementById('wings-form');
+    // A origem da visita segue para o formulário: UTMs, cliques de anúncio, de onde a pessoa veio e esta página.
+    var keys = [
+      'utm_source',
+      'utm_medium',
+      'utm_campaign',
+      'utm_content',
+      'utm_term',
+      'gclid',
+      'fbclid',
+      'gbraid',
+      'wbraid',
+      'campaign_id',
+      'campaignid',
+      'gad_campaignid',
+      'adset_id',
+      'adgroupid',
+      'ad_id',
+      'creative',
+      'hsa_cam',
+      'hsa_grp',
+      'hsa_ad',
+    ];
+    var here = new URLSearchParams(location.search);
+    var query = new URLSearchParams();
+    keys.forEach(function (key) {
+      if (here.get(key)) query.set(key, here.get(key));
+    });
+    if (document.referrer) query.set('ref', document.referrer);
+    query.set('pagina', location.href.split('#')[0]);
+    // query.set('titulo', '1'); // descomente para mostrar o título e o subtítulo do formulário
+    frame.src = FORM + '/embed/formulario?' + query.toString();
+
+    window.addEventListener('message', function (event) {
+      if (event.origin !== FORM || event.source !== frame.contentWindow) return;
+      var message = event.data;
+      if (!message || typeof message !== 'object') return;
+      if (message.tipo === 'wings-form-altura' && isFinite(message.altura)) {
+        frame.style.height = Math.ceil(message.altura) + 'px';
+      }
+      // message.tipo === 'wings-lead' (message.origem === 'site-home'): um lead foi enviado.
+      // NÃO dispare conversão aqui: o formulário já carrega o GTM da Wings (GA4, Google Ads, Meta e RD)
+      // e conta o lead; contar de novo no site dobraria a conversão.
+    });
+  })();
+</script>

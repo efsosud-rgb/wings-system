@@ -43,6 +43,12 @@ export interface FormSetup {
   whatsappUrl: () => string | null;
   /** After a sent form: the chosen option's value, for the dataLayer. */
   onSent: (answer: string) => void;
+  /** The address sent as the lead's page; the page's own when absent. */
+  href?: string;
+  /** In an iframe (the Wings site's form): the thank-you does not scroll the page that frames it. */
+  embedded?: boolean;
+  /** The robot check's colours; light when absent. */
+  turnstileTheme?: 'light' | 'dark';
 }
 
 export interface FormController {
@@ -172,7 +178,9 @@ export function setupForm(setup: FormSetup): FormController {
     }
     f.hidden = true;
     thanks.hidden = false;
-    thanks.scrollIntoView({ behavior: setup.reduce ? 'auto' : 'smooth', block: 'center' });
+    if (!setup.embedded) {
+      thanks.scrollIntoView({ behavior: setup.reduce ? 'auto' : 'smooth', block: 'center' });
+    }
   }
 
   f.addEventListener('submit', (e) => {
@@ -203,7 +211,7 @@ export function setupForm(setup: FormSetup): FormController {
       values,
       tracking: setup.tracking(),
       turnstileToken: currentToken,
-      href: location.href,
+      href: setup.href ?? location.href,
       form: spec,
     });
     setSending(true);
@@ -242,7 +250,13 @@ export function setupForm(setup: FormSetup): FormController {
         slotMessage(MESSAGES.captchaNotConfigured);
         return;
       }
-      renderTurnstile(widgetBox, siteKey, setToken, (message) => slotMessage(message))
+      renderTurnstile(
+        widgetBox,
+        siteKey,
+        setToken,
+        (message) => slotMessage(message),
+        setup.turnstileTheme,
+      )
         .then((rendered) => {
           widget = rendered;
           slotMessage(null);
