@@ -4,12 +4,12 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { crmNotifications, leadTasks, leads } from '../../db/schema/index.js';
+import { crmMeetings, crmNotifications, leadTasks, leads } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import { cycleMinutesOf, runCrmCycle } from './automations-scheduler.js';
-import { runCrmAlerts } from './crm-alerts.js';
+import { MEETING_REMINDER_MS, runCrmAlerts } from './crm-alerts.js';
 import { testTransport } from './crm-mail.js';
 import { upsertLead } from './service.js';
 
@@ -319,5 +319,144 @@ describe('CRM deadline and deviation alerts', () => {
     expect(cycleMinutesOf(undefined)).toBe(5);
     expect(cycleMinutesOf('*/10 * * * *')).toBe(10);
     expect(cycleMinutesOf('0 * * * *')).toBe(5);
+  });
+});
+
+describe('Meeting reminder on the bell', () => {
+  // 14:00 in São Paulo (UTC-3 all year).
+  const NOW = new Date('2026-10-19T17:00:00Z');
+  const inMinutes = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000);
+
+  async function dealOf(ownerEmployeeId: string | null) {
+    const [row] = await db
+      .insert(leads)
+      .values({
+        source: 'manual',
+        name: 'Candidato Segredo',
+        ownerEmployeeId,
+        pipeline: 'formatacao',
+        stage: 'Diagnóstico',
+      })
+      .returning({ id: leads.id });
+    return row!.id;
+  }
+
+  async function meetingOf(
+    leadId: string,
+    scheduledBy: string,
+    startsAt: Date,
+    status = 'agendada',
+  ) {
+    const [row] = await db
+      .insert(crmMeetings)
+      .values({
+        leadId,
+        ownerEmployeeId: scheduledBy,
+        title: 'Diagnóstico Segredo',
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 3_600_000),
+        status,
+      })
+      .returning({ id: crmMeetings.id });
+    return row!.id;
+  }
+
+  const remindersOf = (leadId: string) =>
+    db
+      .select()
+      .from(crmNotifications)
+      .where(and(eq(crmNotifications.leadId, leadId), eq(crmNotifications.kind, 'meeting_soon')));
+
+  const run = () => runCrmAlerts(db, { stageStuckDays: 0 }, NOW);
+
+  it('reminds the deal owner and who scheduled it, time only, and writes nothing the second time', async () => {
+    const owner = await createEmployee(db, { role: 'vendedor_formatacao', sector: 'comercial' });
+    const scheduler = await createEmployee(db, { role: 'gerente_comercial', sector: 'comercial' });
+    const leadId = await dealOf(owner.id);
+    const startsAt = inMinutes(20);
+    const meetingId = await meetingOf(leadId, scheduler.id, startsAt);
+
+    await run();
+    const rows = await remindersOf(leadId);
+    expect(rows.map((r) => r.recipientEmployeeId).sort()).toEqual([owner.id, scheduler.id].sort());
+    for (const row of rows) {
+      expect(row).toMatchObject({
+        kind: 'meeting_soon',
+        message: 'Reunião às 14:20',
+        emailState: 'none',
+        leadId,
+        dedupeKey: `meeting_soon:${meetingId}:${startsAt.toISOString()}:${row.recipientEmployeeId}`,
+      });
+      expect(row.message).not.toMatch(/Segredo|Candidato|Diagnóstico/);
+    }
+
+    expect((await run()).written).toBe(0);
+    expect(await remindersOf(leadId)).toHaveLength(2);
+  });
+
+  it('sends one reminder when the owner is also who scheduled it, or when the deal has no owner', async () => {
+    const seller = await createEmployee(db, { role: 'vendedor_formatacao', sector: 'comercial' });
+    const same = await dealOf(seller.id);
+    await meetingOf(same, seller.id, inMinutes(10));
+    const unowned = await dealOf(null);
+    await meetingOf(unowned, seller.id, inMinutes(10));
+    await run();
+    expect((await remindersOf(same)).map((r) => r.recipientEmployeeId)).toEqual([seller.id]);
+    expect((await remindersOf(unowned)).map((r) => r.recipientEmployeeId)).toEqual([seller.id]);
+  });
+
+  it('keeps to the half hour: none at 40 minutes, from the start instant, or for a meeting that is not agendada', async () => {
+    const seller = await createEmployee(db, { role: 'vendedor_formatacao', sector: 'comercial' });
+    const leadId = await dealOf(seller.id);
+    await meetingOf(leadId, seller.id, inMinutes(40));
+    await meetingOf(leadId, seller.id, NOW);
+    await meetingOf(leadId, seller.id, inMinutes(-5));
+    await meetingOf(leadId, seller.id, inMinutes(15), 'cancelada');
+    await meetingOf(leadId, seller.id, inMinutes(15), 'em_andamento');
+    await meetingOf(leadId, seller.id, inMinutes(15), 'encerrada');
+    await run();
+    expect(await remindersOf(leadId)).toHaveLength(0);
+
+    // The edge: exactly MEETING_REMINDER_MS ahead is inside.
+    const edge = await meetingOf(leadId, seller.id, new Date(NOW.getTime() + MEETING_REMINDER_MS));
+    await run();
+    const rows = await remindersOf(leadId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.dedupeKey).toContain(edge);
+    expect(rows[0]!.message).toBe('Reunião às 14:30');
+  });
+
+  it('writes a new reminder when the meeting moves to another time inside the window', async () => {
+    const seller = await createEmployee(db, { role: 'vendedor_formatacao', sector: 'comercial' });
+    const leadId = await dealOf(seller.id);
+    const meetingId = await meetingOf(leadId, seller.id, inMinutes(20));
+    await run();
+    await db
+      .update(crmMeetings)
+      .set({ startsAt: inMinutes(25), endsAt: inMinutes(85) })
+      .where(eq(crmMeetings.id, meetingId));
+    await run();
+    const rows = await remindersOf(leadId);
+    expect(rows.map((r) => r.message).sort()).toEqual(['Reunião às 14:20', 'Reunião às 14:25']);
+    await run();
+    expect(await remindersOf(leadId)).toHaveLength(2);
+  });
+
+  it('skips an inactive person', async () => {
+    const gone = await createEmployee(db, {
+      role: 'vendedor_formatacao',
+      sector: 'comercial',
+      status: 'inactive',
+    });
+    const scheduler = await createEmployee(db, { role: 'gerente_comercial', sector: 'comercial' });
+    const leadId = await dealOf(gone.id);
+    await meetingOf(leadId, scheduler.id, inMinutes(20));
+    await run();
+    expect((await remindersOf(leadId)).map((r) => r.recipientEmployeeId)).toEqual([scheduler.id]);
+
+    const onlyGone = await dealOf(gone.id);
+    await meetingOf(onlyGone, gone.id, inMinutes(20));
+    await run();
+    expect(await remindersOf(onlyGone)).toHaveLength(0);
   });
 });

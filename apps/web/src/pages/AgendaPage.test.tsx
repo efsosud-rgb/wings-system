@@ -76,8 +76,12 @@ const event = (over: Partial<AgendaEvent> = {}): AgendaEvent => ({
 function serve(
   view: AgendaOverview | Error,
   answer: AgendaEventsAnswer | Error = { events: [], failures: [], truncated: false },
+  pasted: AgendaEvent[] | Error = [],
 ) {
   get.mockImplementation((path: string) => {
+    if (path.startsWith('/agenda/crm-meetings?')) {
+      return pasted instanceof Error ? Promise.reject(pasted) : Promise.resolve({ events: pasted });
+    }
     if (path === '/agenda') {
       return view instanceof Error ? Promise.reject(view) : Promise.resolve({ overview: view });
     }
@@ -260,6 +264,85 @@ describe('Agenda — states', () => {
     serve(overview());
     renderPage('/produtividade/agenda?visao=agenda&data=2026-10-14');
     expect(await screen.findByText('Nenhum evento nos próximos 30 dias')).toBeTruthy();
+  });
+});
+
+describe('Agenda — meetings pasted from the deal', () => {
+  const pastedEvent = (over: Partial<AgendaEvent> = {}) =>
+    event({
+      id: 'crm-m1',
+      uid: 'crm-m1',
+      title: 'Diagnóstico colado',
+      start: '2026-10-15T12:00:00.000Z',
+      end: '2026-10-15T13:00:00.000Z',
+      canEdit: false,
+      crm: { leadId: 'lead-1' },
+      ...over,
+    });
+  const section = () => screen.findByRole('region', { name: 'Reuniões marcadas pela ficha' });
+
+  it('lists them under the connect notice for the next 30 days when Google is not connected', async () => {
+    serve(overview({ state: 'not_connected', calendars: [] }), undefined, [
+      pastedEvent(),
+      pastedEvent({ id: 'crm-m2', uid: 'crm-m2', title: '', crm: { leadId: null } }),
+    ]);
+    renderPage();
+    expect(await screen.findByText(AGENDA_NOTICES.notConnected)).toBeTruthy();
+    const list = within(await section());
+    expect(await list.findByText(/Diagnóstico colado/)).toBeTruthy();
+    expect(list.getByText(/\(Sem título\)/)).toBeTruthy();
+    // Only the meeting whose deal the person may open links to it.
+    const links = list.getAllByRole('link', { name: 'Abrir negociação' });
+    expect(links).toHaveLength(1);
+    expect(links[0]!.getAttribute('href')).toBe('/crm-vendas/negociacoes/lead-1');
+    // The range starts today (local midnight) and spans 30 days; Google is never asked.
+    const asked = get.mock.calls
+      .map(([path]) => String(path))
+      .find((p) => p.includes('crm-meetings'));
+    const query = new URLSearchParams(asked!.split('?')[1]);
+    const from = Date.parse(query.get('from')!);
+    expect(Date.parse(query.get('to')!) - from).toBe(30 * 86_400_000);
+    expect(new Date(from).getHours()).toBe(0);
+    expect(get).not.toHaveBeenCalledWith(expect.stringMatching(/^\/agenda\/events/));
+  });
+
+  it('lists them under the reconnect notice too', async () => {
+    serve(overview({ state: 'needs_reconnect', calendars: [] }), undefined, [pastedEvent()]);
+    renderPage();
+    expect(await screen.findByText(AGENDA_NOTICES.needsReconnect)).toBeTruthy();
+    expect(await within(await section()).findByText(/Diagnóstico colado/)).toBeTruthy();
+  });
+
+  it('says there is none only after a read that succeeded', async () => {
+    serve(overview({ state: 'not_connected', calendars: [] }));
+    renderPage();
+    expect(
+      await within(await section()).findByText(
+        'Nenhuma reunião com link colado nos próximos 30 dias.',
+      ),
+    ).toBeTruthy();
+  });
+
+  it('shows "—" and the reason when they cannot be read, never an empty list', async () => {
+    serve(
+      overview({ state: 'not_connected', calendars: [] }),
+      undefined,
+      new ApiError(500, { error: 'internal', message: 'Erro interno.' }),
+    );
+    renderPage();
+    const alert = await within(await section()).findByRole('alert');
+    expect(alert.textContent).toMatch(/Não foi possível carregar as reuniões: /);
+    expect(screen.queryByText(/Nenhuma reunião com link colado/)).toBeNull();
+    // The connect notice stays.
+    expect(screen.getByText(AGENDA_NOTICES.notConnected)).toBeTruthy();
+  });
+
+  it('is not asked for once Google is connected: the events answer carries them', async () => {
+    serve(overview(), answerWith(pastedEvent()));
+    renderPage();
+    expect(await screen.findByRole('button', { name: /Diagnóstico colado/ })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Reuniões marcadas pela ficha' })).toBeNull();
+    expect(get).not.toHaveBeenCalledWith(expect.stringMatching(/^\/agenda\/crm-meetings/));
   });
 });
 
