@@ -43,6 +43,8 @@ const {
     filesQuery: {} as Record<string, unknown>,
     templatesQuery: {} as Record<string, unknown>,
     artQuery: {} as Record<string, unknown>,
+    // A seller before the official number is live (useWhatsAppSoon).
+    soon: false,
   },
   mutation: (mutate = vi.fn()) => ({ mutate, isPending: false, error: null }),
 }));
@@ -178,6 +180,8 @@ vi.mock('../../api/crm.js', () => ({
 }));
 
 vi.mock('../../api/whatsapp.js', () => ({
+  useWhatsAppSoon: () => queryState.soon,
+  WHATSAPP_SOON_TEXT: 'Em breve: texto do bloqueio do vendedor.',
   useWhatsAppThread: () => ({
     isLoading: false,
     isError: false,
@@ -266,6 +270,7 @@ beforeEach(() => {
   queryState.filesQuery = {};
   queryState.templatesQuery = {};
   queryState.artQuery = {};
+  queryState.soon = false;
   queryState.lead = lead();
   queryState.notes = [
     { id: 'n1', at: '2026-10-04T10:00:00.000Z', authorName: 'Eric', body: 'Pediu o catálogo' },
@@ -387,6 +392,55 @@ describe('the WhatsApp conversation screen', () => {
     fireEvent.change(field, { target: { value: 'Podemos falar às 15h?' } });
     fireEvent.keyDown(field, { key: 'Enter' });
     expect(textMutate).toHaveBeenCalledWith({ text: 'Podemos falar às 15h?' }, expect.anything());
+  });
+
+  it('before the official number is live a seller reads the conversation but has no composer, only "em breve"', () => {
+    queryState.soon = true;
+    queryState.thread = thread({
+      messages: [
+        {
+          id: 'm1',
+          direction: 'in',
+          kind: 'text',
+          text: 'Oi, quero saber da franquia',
+          media: null,
+          template: null,
+          status: null,
+          error: null,
+          authorName: null,
+          bySofia: false,
+          fromTemplate: null,
+          withArt: false,
+          at: '2026-10-07T14:00:00.000Z',
+        },
+      ],
+    });
+    show();
+    const chat = within(screen.getByRole('region', { name: 'Conversa' }));
+    expect(chat.getByText('Oi, quero saber da franquia')).toBeTruthy();
+    expect(chat.queryByLabelText('Mensagem')).toBeNull();
+    expect(chat.queryByRole('button', { name: /Enviar/ })).toBeNull();
+    expect(chat.getByText('Em breve: texto do bloqueio do vendedor.')).toBeTruthy();
+    expect(textMutate).not.toHaveBeenCalled();
+  });
+
+  it('before the number is live the template composer is gone too, outside the window', () => {
+    queryState.soon = true;
+    queryState.thread = thread({ window: { open: false, expiresAt: '2026-10-05T10:00:00.000Z' } });
+    queryState.templates = [
+      {
+        name: 'retomar_conversa',
+        language: 'pt_BR',
+        category: 'UTILITY',
+        body: 'Olá {{1}}, aqui é {{2}} da Wings.',
+        paramCount: 2,
+        artVersion: false,
+      },
+    ];
+    show();
+    const chat = within(screen.getByRole('region', { name: 'Conversa' }));
+    expect(chat.queryByLabelText('Modelo')).toBeNull();
+    expect(chat.getByText('Em breve: texto do bloqueio do vendedor.')).toBeTruthy();
   });
 
   it('outside the window offers only an approved template, with its fields filled in', () => {
@@ -651,6 +705,20 @@ describe('the WhatsApp conversation screen', () => {
     show();
     expect(screen.getByRole('button', { name: 'Ligação de voz' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: /Importar do celular/ })).toBeNull();
+  });
+
+  it('before the number is live the call panel says "em breve", keeping Copiar número and Registrar ligação', () => {
+    queryState.soon = true;
+    show();
+    const calls = within(screen.getByRole('group', { name: 'Chamadas pelo WhatsApp' }));
+    fireEvent.click(calls.getByRole('button', { name: 'Ligação de voz' }));
+    const panel = within(screen.getByRole('dialog', { name: 'Ligação' }));
+    expect(
+      (panel.getByRole('button', { name: /Ligar pelo WhatsApp/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(panel.getByText('Em breve: texto do bloqueio do vendedor.')).toBeTruthy();
+    expect(panel.getByRole('button', { name: 'Copiar número' })).toBeTruthy();
+    expect(panel.getByRole('button', { name: 'Registrar ligação' })).toBeTruthy();
   });
 
   it('keeps Visão geral, Anotações (working) and Arquivos on the right', () => {

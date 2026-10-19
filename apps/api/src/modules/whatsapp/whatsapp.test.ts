@@ -25,7 +25,12 @@ import {
 } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
-import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
+import {
+  createEmployee,
+  setOfficialLive,
+  TEST_CPF_KEY,
+  TEST_INDEX_KEY,
+} from '../../test/factories.js';
 import { configureLeadTriage, type TriageTarget } from '../leads/triage-schedule.js';
 import { processWhatsAppEvents, purgeWhatsAppPayloads } from './intake.js';
 
@@ -124,10 +129,12 @@ afterAll(async () => {
   await harness?.drop();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   sends.length = 0;
   calls.length = 0;
   nextSend = () => accepted('wamid.OUT1');
+  // Sellers send in most of these tests; the lock before the number is live has its own block.
+  await setOfficialLive(db, true);
 });
 
 async function sessionFor(role: RoleKey) {
@@ -854,6 +861,7 @@ describe('housekeeping', () => {
 
 describe('the official number switch (Eric, 14/10)', () => {
   it('starts off, is read by a seller and flipped only by an Admin Master, audited', async () => {
+    await setOfficialLive(db, false);
     const seller = await sessionFor('vendedor_expansao');
     const admin = await sessionFor('admin_master');
     const read = (cookies: Record<string, string>) =>
@@ -873,6 +881,150 @@ describe('the official number switch (Eric, 14/10)', () => {
       where: eq(auditLog.action, 'whatsapp.official_number_switched'),
     });
     expect(entry?.actorEmployeeId).toBe(admin.id);
+  });
+});
+
+describe('the seller lock until the official number is live (Eric, 19/10)', () => {
+  const post = (cookies: Record<string, string>, url: string, payload: unknown = {}) =>
+    app.inject({ method: 'POST', url, cookies, payload: payload as object });
+  const TEMPLATE = { name: 'retomar_conversa', language: 'pt_BR', params: ['Elena', 'Eric'] };
+  const messageCount = async () => (await db.select({ id: waMessages.id }).from(waMessages)).length;
+  const auditCount = async () =>
+    (
+      await db
+        .select({ id: auditLog.id })
+        .from(auditLog)
+        .where(eq(auditLog.action, 'whatsapp.message_sent'))
+    ).length;
+  // Every send needs its own wamid (unique), unlike the shared `OUT1` of the tests above.
+  let lockWamid = 0;
+  beforeEach(() => {
+    nextSend = () => accepted(`wamid.LOCK${++lockWamid}`);
+  });
+
+  /** A deal of the seller with the person's message already in: the window is open. */
+  async function openDeal(phone: string, ownerId: string | null) {
+    const leadId = await deal(phone, ownerId);
+    await deliver(inbound(phone, 'Oi').body);
+    await run();
+    const [conversation] = await db
+      .select({ id: waConversations.id })
+      .from(waConversations)
+      .where(eq(waConversations.leadId, leadId));
+    return { leadId, conversationId: conversation!.id };
+  }
+
+  it('a seller gets 403 whatsapp_soon on every send, and nothing is written or sent to Meta', async () => {
+    await setOfficialLive(db, false);
+    const seller = await sessionFor('vendedor_formatacao');
+    const { leadId, conversationId } = await openDeal('5521930010000', seller.id);
+    const before = await messageCount();
+    const auditsBefore = await auditCount();
+    sends.length = 0;
+    calls.length = 0;
+    const attempts = [
+      [`/leads/${leadId}/whatsapp/text`, { text: 'Olá, tudo bem?' }],
+      [`/leads/${leadId}/whatsapp/template`, TEMPLATE],
+      [`/leads/${leadId}/whatsapp/call-permission`, {}],
+      [`/whatsapp/conversations/${conversationId}/text`, { text: 'Olá, tudo bem?' }],
+      [`/whatsapp/conversations/${conversationId}/template`, TEMPLATE],
+    ] as const;
+    for (const [url, payload] of attempts) {
+      const response = await post(seller.cookies, url, payload);
+      expect(response.statusCode, url).toBe(403);
+      expect(response.json(), url).toEqual({
+        error: 'whatsapp_soon',
+        message: expect.stringContaining('Em breve'),
+      });
+    }
+    expect(await messageCount()).toBe(before);
+    expect(sends).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+    expect(await auditCount()).toBe(auditsBefore);
+  });
+
+  it('a seller still reads the conversation, the list and the thread with the switch off', async () => {
+    await setOfficialLive(db, false);
+    const seller = await sessionFor('vendedor_expansao');
+    const { leadId, conversationId } = await openDeal('5521930020000', seller.id);
+    const thread = await app.inject({
+      method: 'GET',
+      url: `/leads/${leadId}/whatsapp`,
+      cookies: seller.cookies,
+    });
+    expect(thread.statusCode).toBe(200);
+    expect(thread.json<DealWhatsApp>().messages.map((m) => m.text)).toEqual(['Oi']);
+    const conversation = await app.inject({
+      method: 'GET',
+      url: `/whatsapp/conversations/${conversationId}`,
+      cookies: seller.cookies,
+    });
+    expect(conversation.statusCode).toBe(200);
+    const inbox = await app.inject({
+      method: 'GET',
+      url: '/whatsapp/conversations',
+      cookies: seller.cookies,
+    });
+    expect(
+      inbox
+        .json<{ conversations: WaConversationItem[] }>()
+        .conversations.some((c) => c.leadId === leadId),
+    ).toBe(true);
+  });
+
+  it('turning the switch on frees the seller at once, with no other change', async () => {
+    await setOfficialLive(db, false);
+    const seller = await sessionFor('vendedor_formatacao');
+    const { leadId } = await openDeal('5521930030000', seller.id);
+    const url = `/leads/${leadId}/whatsapp/text`;
+    expect((await post(seller.cookies, url, { text: 'Olá!' })).statusCode).toBe(403);
+    expect(sends).toHaveLength(0);
+    await setOfficialLive(db, true);
+    const sent = await post(seller.cookies, url, { text: 'Olá!' });
+    expect(sent.statusCode).toBe(201);
+    expect(sent.json().message).toMatchObject({ direction: 'out', status: 'sent', text: 'Olá!' });
+    expect(sends).toHaveLength(1);
+  });
+
+  it('Admin Master, Diretoria and the commercial manager send with the switch off', async () => {
+    await setOfficialLive(db, false);
+    const owner = await sessionFor('vendedor_formatacao');
+    const { leadId, conversationId } = await openDeal('5521930040000', owner.id);
+    for (const role of ['admin_master', 'diretoria', 'gerente_comercial'] as const) {
+      const person = await sessionFor(role);
+      sends.length = 0;
+      const byDeal = await post(person.cookies, `/leads/${leadId}/whatsapp/text`, {
+        text: `Aqui é ${role}.`,
+      });
+      expect(byDeal.statusCode, role).toBe(201);
+      const byConversation = await post(
+        person.cookies,
+        `/whatsapp/conversations/${conversationId}/text`,
+        { text: `Pela conversa, ${role}.` },
+      );
+      expect(byConversation.statusCode, role).toBe(201);
+      expect(sends, role).toHaveLength(2);
+    }
+  });
+
+  it('a seller out of scope still gets 404, not 403, with the switch off', async () => {
+    await setOfficialLive(db, false);
+    const owner = await sessionFor('vendedor_formatacao');
+    const other = await sessionFor('vendedor_formatacao');
+    const { leadId, conversationId } = await openDeal('5521930050000', owner.id);
+    const unowned = await deal('5521930051111', null);
+    const before = await messageCount();
+    for (const url of [
+      `/leads/${leadId}/whatsapp/text`,
+      `/leads/${unowned}/whatsapp/text`,
+      `/leads/${leadId}/whatsapp/call-permission`,
+      `/whatsapp/conversations/${conversationId}/text`,
+    ]) {
+      const response = await post(other.cookies, url, { text: 'x' });
+      expect(response.statusCode, url).toBe(404);
+      expect(response.json().error, url).toBe('not_found');
+    }
+    expect(await messageCount()).toBe(before);
   });
 });
 

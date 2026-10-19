@@ -84,7 +84,9 @@ see (`NavSubmodule.levels`). Every other level keeps them where they were.
   funcionar depois da troca do número. Até lá, use o WhatsApp do celular.", "Nova conversa" is off and the menu
   entry says "em breve". The key is one row, `whatsapp_settings.official_number_live` (migration 0090), switched by
   an Admin Master on the WhatsApp screen (`PUT /whatsapp/official-number`, audited): no deploy on the day. The
-  other levels do not change.
+  other levels do not change. Since 19/10 the API holds it too: while the key is off, a seller's send (text,
+  template, call request) and outgoing call answer 403 `whatsapp_soon`, and the deal's chat, the call panel and
+  the deal's WhatsApp action say "em breve". Reading the conversation stays.
 
 Not in the system: **Notion** (no module or link exists). **Agenda and Meet** for a seller are the Google
 connection in "Minha conta" and the meetings and tasks inside the deal; the Produtividade → Agenda and Reuniões

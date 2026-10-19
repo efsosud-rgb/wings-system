@@ -18,8 +18,10 @@ import {
   useSendWhatsAppText,
   useTemplatePreview,
   useWhatsAppArt,
+  useWhatsAppSoon,
   useWhatsAppTemplates,
   whatsappMediaUrl,
+  WHATSAPP_SOON_TEXT,
   type WhatsAppThread,
 } from '../../api/whatsapp.js';
 import { LoadFailure } from '../../components/LoadFailure.js';
@@ -58,6 +60,7 @@ export function WhatsAppChat({
   const [useTemplate, setUseTemplate] = useState(false);
   const templateMode = useTemplate || !data.window.open;
   const older = useOlder(thread, data.messages);
+  const soon = useWhatsAppSoon();
 
   return (
     <section className="crm-wa-chat" aria-label="Conversa">
@@ -101,7 +104,7 @@ export function WhatsAppChat({
         )}
         <div ref={bottom} />
       </div>
-      {canSend && data.configured && data.phone ? (
+      {canSend && !soon && data.configured && data.phone ? (
         templateMode ? (
           <TemplateCompose
             thread={thread}
@@ -116,9 +119,11 @@ export function WhatsAppChat({
         <p className="crm-wa-off">
           {!data.configured
             ? 'O envio liga quando a API oficial do WhatsApp estiver ligada no sistema.'
-            : !data.phone
-              ? 'A negociação não tem telefone.'
-              : 'Você não pode enviar por esta conversa.'}
+            : !canSend
+              ? 'Você não pode enviar por esta conversa.'
+              : soon
+                ? WHATSAPP_SOON_TEXT
+                : 'A negociação não tem telefone.'}
         </p>
       )}
     </section>

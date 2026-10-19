@@ -32,7 +32,12 @@ import {
 } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
-import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
+import {
+  createEmployee,
+  setOfficialLive,
+  TEST_CPF_KEY,
+  TEST_INDEX_KEY,
+} from '../../test/factories.js';
 import type { AgentLlm, LlmRequest } from '../agent/llm.js';
 import { whatsappConfigOf } from '../whatsapp/graph.js';
 import { processWhatsAppEvents } from '../whatsapp/intake.js';
@@ -765,6 +770,7 @@ describe('a franchise lead never hears of Wings (Eric, 07/10)', () => {
   });
 
   it('the seller of a brand deal cannot send a text or a template that names Wings', async () => {
+    await setOfficialLive(db, true); // a seller sends only once the official number is live
     const seller = await sessionFor('vendedor_expansao');
     const phone = newPhone();
     const [lead] = await db

@@ -19,7 +19,12 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { waContacts, waConversations, waMessages, waTemplates } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
-import { officialNumberLive, setOfficialNumberLive } from './official-number.js';
+import {
+  officialNumberLive,
+  sellerWhatsAppLocked,
+  SELLER_SOON_MESSAGE,
+  setOfficialNumberLive,
+} from './official-number.js';
 import { leadInScope, leadOwnerFilter } from '../leads/access.js';
 import { storageOf } from '../../lib/storage/index.js';
 import {
@@ -352,6 +357,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     },
     outgoing: Outgoing,
   ) {
+    if (await sellerWhatsAppLocked(db, request.session.actor))
+      return reply.status(403).send({ error: 'whatsapp_soon', message: SELLER_SOON_MESSAGE });
     const config = whatsappConfigOf(env);
     if (!config) return off(reply);
     const at = now();
