@@ -59,9 +59,9 @@ describe('seed: "Fale com a Wings"', () => {
     ]);
   });
 
-  it('keeps, word for word, the consent line the approved page shows (apps/landing)', async () => {
+  it('keeps, word for word, the consent line the approved page shows (apps/landing, its form include)', async () => {
     const html = readFileSync(
-      resolve(import.meta.dirname, '../../../landing/fale-com-a-wings/index.html'),
+      resolve(import.meta.dirname, '../../../landing/src/pages/fale-com-a-wings/form.html'),
       'utf8',
     );
     const label = /<label class="consent"[^>]*>([\s\S]*?)<\/label\s*>/.exec(html)?.[1] ?? '';
