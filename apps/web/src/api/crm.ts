@@ -567,6 +567,19 @@ export function useCreateMeeting(leadId: string) {
   });
 }
 
+/** "Iniciar" and "Encerrar" (Eric, 19/10): the deal records when the meeting started and ended. */
+export function useMeetingStep() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, step }: { id: string; step: 'start' | 'end' }) =>
+      api.post<{ meeting: Meeting }>(`/meetings/${id}/${step}`).then((r) => r.meeting),
+    onSuccess: (meeting) => {
+      invalidateMeeting(queryClient, meeting);
+      invalidateDeals(queryClient);
+    },
+  });
+}
+
 /** Title, window, link or cancellation of a meeting that has not ended. */
 export function useUpdateMeeting(meetingId: string) {
   const queryClient = useQueryClient();

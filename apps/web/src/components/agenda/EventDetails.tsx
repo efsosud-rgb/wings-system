@@ -7,6 +7,7 @@ import {
 } from '@wings/shared';
 import { useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
+import { openMeetBeside } from '../../lib/meet.js';
 import { Icon } from '../Icon.js';
 import { colorStyle, httpsOnly, linkify, titleOf, whenOf } from './format.js';
 import { calendarOf, colorsOf } from './layout.js';
@@ -144,14 +145,14 @@ export function EventDetails({
         {meetUrl && (
           <div className="agenda-details-row">
             <Icon name="video" size={18} className="agenda-details-icon" />
-            <a
+            <button
+              type="button"
               className="crm-btn is-primary"
-              href={meetUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+              title="Abre o Meet numa janela ao lado da Agenda"
+              onClick={() => openMeetBeside(meetUrl)}
             >
               Participar com o Google Meet
-            </a>
+            </button>
           </div>
         )}
 
