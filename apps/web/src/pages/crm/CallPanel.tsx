@@ -3,6 +3,7 @@ import { useEffect, useState, type SyntheticEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { ApiError } from '../../api/client.js';
 import { useAddActivity } from '../../api/crm.js';
+import { useWhatsAppSoon, WHATSAPP_SOON_TEXT } from '../../api/whatsapp.js';
 import { Icon } from '../../components/Icon.js';
 import { formatPhone } from './format.js';
 import { useWhatsAppCallCenter, WhatsAppCallSection } from './WhatsAppCalls.js';
@@ -39,6 +40,7 @@ export function CallPanel({
   onClose: () => void;
 }) {
   const center = useWhatsAppCallCenter();
+  const soon = useWhatsAppSoon();
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
@@ -65,7 +67,19 @@ export function CallPanel({
             <div className="crm-call-number">{phone ? formatPhone(phone) : 'Sem telefone'}</div>
           </div>
         </div>
-        {center ? (
+        {soon ? (
+          <>
+            <button
+              type="button"
+              className="crm-btn is-primary"
+              disabled
+              title={WHATSAPP_SOON_TEXT}
+            >
+              <Icon name="message" size={15} /> Ligar pelo WhatsApp <small>em breve</small>
+            </button>
+            <p className="crm-sub">{WHATSAPP_SOON_TEXT}</p>
+          </>
+        ) : center ? (
           <WhatsAppCallSection
             center={center}
             leadId={leadId}
