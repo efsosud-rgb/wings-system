@@ -75,7 +75,7 @@ Nos leads de **Expansão** há uma quinta trilha: o **envio do resumo ao dono da
     (a agenda não foi compartilhada com a pessoa como "Fazer alterações nos eventos").
   - **502 `meet_failed`**: o Google criou o evento sem Meet; o evento é apagado e nada é gravado.
 - `startsAt` < `endsAt`, no máximo 8 horas; até 20 participantes. Fuso `America/Sao_Paulo`.
-- Grava `lead_events` `meeting.scheduled` (sem e-mail de ninguém no detalhe; `google: true|false`).
+- Grava `lead_events` `meeting.scheduled` (sem e-mail de ninguém no detalhe; `startsAt`, `google: true|false`).
 
 `GET /meetings/:id` → `{ meeting: Meeting }` (tudo: agenda, gravação, transcrição, análise,
 envio).
@@ -88,6 +88,14 @@ criou o evento; se essa pessoa não está mais conectada, o de quem está mudand
 recusar: **502 `google_sync_failed`** (ou 503/409 acima), a cópia do CRM fica como estava e
 `googleSync` vira `falhou` com o código; a tela oferece "Mudar só no sistema" (`skipGoogle:
 true`, que grava `googleSync.error = skipped`). Uma reunião encerrada não volta a agendada.
+Remarcar (início ou fim novos) grava `lead_events` `meeting.rescheduled` (`{ meetingId, from, to }`);
+cancelar grava `meeting.cancelled` (`{ meetingId }`). Mudar só título, link ou convidados não entra no
+histórico.
+
+No Histórico da ficha, os eventos de reunião ficam no filtro **Reuniões**: "Reunião marcada" (para
+quando), "Reunião remarcada" (de quando para quando), "Reunião cancelada", "Reunião iniciada" e
+"Reunião encerrada" (quanto durou). A reunião com link colado aparece na Agenda do dono da negociação
+e de quem marcou (`docs/agenda.md`), e o sino lembra 30 minutos antes (`docs/crm/automacoes.md`).
 
 ### Iniciar e Encerrar (Eric, 19/10)
 

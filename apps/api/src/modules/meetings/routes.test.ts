@@ -1,5 +1,5 @@
 import { SESSION_COOKIE, type Meeting, type RoleKey } from '@wings/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, like } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
@@ -627,5 +627,85 @@ describe('Iniciar e Encerrar', () => {
     expect((await call(reader.cookies, meeting.id, 'start')).statusCode).toBe(403);
     expect((await call(reader.cookies, meeting.id, 'end')).statusCode).toBe(403);
     expect(await statusOf(meeting.id)).toBe('agendada');
+  });
+});
+
+describe('Histórico da ficha', () => {
+  const meetingEvents = (leadId: string) =>
+    db
+      .select()
+      .from(leadEvents)
+      .where(and(eq(leadEvents.leadId, leadId), like(leadEvents.kind, 'meeting.%')));
+  const patch = (cookies: Record<string, string>, id: string, payload: Record<string, unknown>) =>
+    app.inject({ method: 'PATCH', url: `/meetings/${id}`, cookies, payload });
+
+  it('records when the meeting was set for', async () => {
+    const seller = await sessionFor('vendedor_formatacao');
+    const leadId = await deal(seller.id);
+    await schedule(seller.cookies, leadId);
+    const events = await meetingEvents(leadId);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: 'meeting.scheduled',
+      detail: { startsAt: '2026-10-08T17:00:00.000Z', attendees: 1, google: false },
+    });
+  });
+
+  it('records a new time as meeting.rescheduled with the old and the new start', async () => {
+    const seller = await sessionFor('vendedor_formatacao');
+    const leadId = await deal(seller.id);
+    const meeting = await schedule(seller.cookies, leadId);
+    const response = await patch(seller.cookies, meeting.id, {
+      startsAt: '2026-10-09T10:00:00-03:00',
+      endsAt: '2026-10-09T11:00:00-03:00',
+    });
+    expect(response.statusCode).toBe(200);
+    const moved = (await meetingEvents(leadId)).filter((e) => e.kind === 'meeting.rescheduled');
+    expect(moved).toHaveLength(1);
+    expect(moved[0]).toMatchObject({
+      actorEmployeeId: seller.id,
+      at: NOW,
+      detail: {
+        meetingId: meeting.id,
+        from: '2026-10-08T17:00:00.000Z',
+        to: '2026-10-09T13:00:00.000Z',
+      },
+    });
+  });
+
+  it('records a cancellation as meeting.cancelled, and a cancel wins over a new time', async () => {
+    const seller = await sessionFor('vendedor_formatacao');
+    const leadId = await deal(seller.id);
+    const meeting = await schedule(seller.cookies, leadId);
+    const response = await patch(seller.cookies, meeting.id, {
+      status: 'cancelada',
+      startsAt: '2026-10-09T10:00:00-03:00',
+      endsAt: '2026-10-09T11:00:00-03:00',
+    });
+    expect(response.statusCode).toBe(200);
+    const kinds = (await meetingEvents(leadId)).map((e) => e.kind).sort();
+    expect(kinds).toEqual(['meeting.cancelled', 'meeting.scheduled']);
+    const [cancelled] = (await meetingEvents(leadId)).filter((e) => e.kind === 'meeting.cancelled');
+    expect(cancelled?.detail).toEqual({ meetingId: meeting.id });
+  });
+
+  it('writes nothing for a change of title, link or guests alone', async () => {
+    const seller = await sessionFor('vendedor_formatacao');
+    const leadId = await deal(seller.id);
+    const meeting = await schedule(seller.cookies, leadId);
+    const response = await patch(seller.cookies, meeting.id, {
+      title: 'Diagnóstico remarcado',
+      meetUrl: 'https://meet.google.com/xyz-abcd-efg',
+      attendees: [{ email: 'outra.pessoa@exemplo.com.br' }],
+    });
+    expect(response.statusCode).toBe(200);
+    expect((await meetingEvents(leadId)).map((e) => e.kind)).toEqual(['meeting.scheduled']);
+    // The same time sent again is not a new time either.
+    const same = await patch(seller.cookies, meeting.id, {
+      startsAt: slot.startsAt,
+      endsAt: slot.endsAt,
+    });
+    expect(same.statusCode).toBe(200);
+    expect((await meetingEvents(leadId)).map((e) => e.kind)).toEqual(['meeting.scheduled']);
   });
 });

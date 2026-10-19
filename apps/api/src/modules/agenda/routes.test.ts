@@ -546,6 +546,149 @@ describe('Agenda: CRM meetings', () => {
   });
 });
 
+describe('Agenda: meetings with a pasted link', () => {
+  /** A deal meeting with no Google event: starts 2026-10-15 12:00Z unless told otherwise. */
+  async function pasted(
+    leadId: string,
+    scheduledBy: string,
+    extra: Partial<typeof crmMeetings.$inferInsert> = {},
+  ) {
+    const [row] = await db
+      .insert(crmMeetings)
+      .values({
+        leadId,
+        ownerEmployeeId: scheduledBy,
+        title: 'Diagnóstico colado',
+        startsAt: new Date('2026-10-15T12:00:00Z'),
+        endsAt: new Date('2026-10-15T13:00:00Z'),
+        meetUrl: 'https://meet.google.com/abc-defg-hij',
+        status: 'agendada',
+        ...extra,
+      })
+      .returning({ id: crmMeetings.id });
+    return row!.id;
+  }
+
+  const listOf = async (cookies: Record<string, string>, query = RANGE) => {
+    const res = await app.inject({ method: 'GET', url: `/agenda/crm-meetings?${query}`, cookies });
+    expect(res.statusCode).toBe(200);
+    return res.json<{ events: AgendaEvent[] }>().events;
+  };
+
+  it('lists a seller’s own meetings with no Google connection, and no one else’s', async () => {
+    const seller = await sessionFor(app, 'vendedor_formatacao');
+    const other = await sessionFor(app, 'vendedor_formatacao');
+    expect((await overviewOf(seller.cookies)).state).toBe('not_connected');
+    const mineLead = await deal(seller.id);
+    const mine = await pasted(mineLead, seller.id);
+    const otherLead = await deal(other.id);
+    await pasted(otherLead, other.id);
+    await pasted(mineLead, seller.id, { status: 'cancelada', title: 'Cancelada' });
+    await pasted(mineLead, seller.id, { googleEventId: 'on-google', title: 'No Google' });
+    await pasted(mineLead, seller.id, {
+      title: 'Fora do período',
+      startsAt: new Date('2026-10-25T12:00:00Z'),
+      endsAt: new Date('2026-10-25T13:00:00Z'),
+    });
+
+    const events = await listOf(seller.cookies);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      calendar: 'mine',
+      id: `crm-${mine}`,
+      uid: `crm-${mine}`,
+      title: 'Diagnóstico colado',
+      allDay: false,
+      start: '2026-10-15T12:00:00.000Z',
+      end: '2026-10-15T13:00:00.000Z',
+      meetUrl: 'https://meet.google.com/abc-defg-hij',
+      canEdit: false,
+      crm: { leadId: mineLead },
+    });
+    expect(await listOf(other.cookies)).toHaveLength(1);
+  });
+
+  it('keeps a meeting overlapping the range edge, and leaves out one that ends where it starts', async () => {
+    const seller = await sessionFor(app, 'vendedor_formatacao');
+    const leadId = await deal(seller.id);
+    const crossing = await pasted(leadId, seller.id, {
+      startsAt: new Date('2026-10-11T23:30:00Z'),
+      endsAt: new Date('2026-10-12T03:30:00Z'),
+    });
+    await pasted(leadId, seller.id, {
+      startsAt: new Date('2026-10-11T22:00:00Z'),
+      endsAt: new Date('2026-10-12T03:00:00Z'),
+    });
+    expect((await listOf(seller.cookies)).map((e) => e.id)).toEqual([`crm-${crossing}`]);
+  });
+
+  it('shows who scheduled it a meeting whose deal moved on, without the link to the deal', async () => {
+    const scheduler = await sessionFor(app, 'vendedor_formatacao');
+    const newOwner = await sessionFor(app, 'vendedor_formatacao');
+    const leadId = await deal(scheduler.id);
+    await pasted(leadId, scheduler.id);
+    await db.update(leads).set({ ownerEmployeeId: newOwner.id }).where(eq(leads.id, leadId));
+
+    const before = await listOf(scheduler.cookies);
+    expect(before).toHaveLength(1);
+    expect(before[0]!.crm).toEqual({ leadId: null });
+    expect(JSON.stringify(before)).not.toContain('Candidato');
+    const after = await listOf(newOwner.cookies);
+    expect(after).toHaveLength(1);
+    expect(after[0]!.crm).toEqual({ leadId });
+  });
+
+  it('narrows by the search text on the title', async () => {
+    const seller = await sessionFor(app, 'vendedor_formatacao');
+    const leadId = await deal(seller.id);
+    await pasted(leadId, seller.id, { title: 'Proposta final' });
+    const diagnosis = await pasted(leadId, seller.id, { title: 'Diagnóstico inicial' });
+    const found = await listOf(seller.cookies, `${RANGE}&q=DIAGN`);
+    expect(found.map((e) => e.id)).toEqual([`crm-${diagnosis}`]);
+  });
+
+  it('refuses a range that ends before it starts, or a missing one (400)', async () => {
+    const seller = await sessionFor(app, 'vendedor_formatacao');
+    for (const query of [
+      'from=2026-10-19T00:00:00-03:00&to=2026-10-12T00:00:00-03:00',
+      'from=2026-10-12T00:00:00-03:00',
+      '',
+    ]) {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/agenda/crm-meetings?${query}`,
+        cookies: seller.cookies,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ error: 'invalid_request' });
+    }
+  });
+
+  it('answers 401 without a login', async () => {
+    const res = await app.inject({ method: 'GET', url: `/agenda/crm-meetings?${RANGE}` });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('joins the Google events of a connected person, in time order, never editable', async () => {
+    const seller = await connected('vendedor_formatacao');
+    seller.google.seed('primary', own('early', { start: timed(15, 8), end: timed(15, 9) }));
+    seller.google.seed('primary', own('late', { start: timed(16, 10), end: timed(16, 11) }));
+    const leadId = await deal(seller.id);
+    // 15 Oct 09:00-10:00 in São Paulo: between the two Google events.
+    const middle = await pasted(leadId, seller.id, {
+      startsAt: new Date('2026-10-15T12:00:00Z'),
+      endsAt: new Date('2026-10-15T13:00:00Z'),
+    });
+    const answer = await eventsOf(seller.cookies);
+    expect(answer.events.map((e) => e.id)).toEqual(['early', `crm-${middle}`, 'late']);
+    expect(byId(answer, `crm-${middle}`)).toMatchObject({
+      calendar: 'mine',
+      canEdit: false,
+      crm: { leadId },
+    });
+  });
+});
+
 describe('Agenda: creating', () => {
   const base = {
     calendar: 'mine',

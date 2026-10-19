@@ -139,6 +139,13 @@ that deal (`leadVisibleTo(actor, 'leads.read', …)` in `modules/leads/access.ts
 the Admin, Diretoria); another seller gets `leadId: null`. No lead data goes into the answer beyond
 what Google itself shows the person.
 
+A meeting with a pasted link (no Google event) joins the person's own calendar (`mine`) when they
+are the deal's owner or the one who scheduled it (Eric, 19/10): `pastedMeetingsFor` in
+`agenda/service.ts`, id `crm-<meeting id>`, `crm` set as above, never editable here. It needs no
+Google connection: someone without one sees "Reuniões marcadas pela ficha" under the connect notice,
+the next 30 days from `GET /agenda/crm-meetings?from&to` (`calendar.use`), the same list
+`GET /agenda/events` merges into the calendar for someone connected. Cancelled ones never show.
+
 ## Errors
 
 `{ error: <code>, message: <Portuguese> }`:

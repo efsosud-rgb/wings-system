@@ -30,6 +30,17 @@ export function useAgendaOverview() {
 }
 
 /** The events between two instants (the visible period), optionally matching a search. */
+/** The deal meetings with a pasted link, for the person without Google (Eric, 19/10). */
+export function usePastedMeetings(from: string, to: string) {
+  return useQuery({
+    queryKey: ['agenda', 'crm-meetings', from, to],
+    queryFn: () =>
+      api
+        .get<{ events: AgendaEvent[] }>(`/agenda/crm-meetings?${new URLSearchParams({ from, to })}`)
+        .then((r) => r.events),
+  });
+}
+
 export function useAgendaEvents(from: string, to: string, q?: string, enabled = true) {
   return useQuery({
     queryKey: [...AGENDA_EVENTS_KEY, from, to, q ?? ''],

@@ -4,12 +4,28 @@ import {
   type LeadPipeline,
   type NewLeadPopups,
 } from '@wings/shared';
-import { and, count, desc, eq, gte, inArray, isNull, lt, min, ne, or, sql } from 'drizzle-orm';
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gt,
+  gte,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  min,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { LEAD_ADMIN_ROLE_KEYS } from './access.js';
 import { firstContactOverdueSql, inEntryStageSql, LEADS_ID, trackedTaskSql } from './crm.js';
 import { originOf } from './crm-notice-mail.js';
 import {
+  crmMeetings,
   crmNotifications,
   crmStageLimits,
   employees,
@@ -125,6 +141,68 @@ async function findings(db: Database, now: Date, config: AlertConfig): Promise<F
     if (found.length >= MAX_FINDINGS * 2) break;
   }
   return found;
+}
+
+/** How long before a scheduled meeting its people hear of it (Eric, 19/10); the pass runs every five minutes. */
+export const MEETING_REMINDER_MS = 30 * 60_000;
+
+const clockInBrazil = new Intl.DateTimeFormat('pt-BR', {
+  timeZone: 'America/Sao_Paulo',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
+/**
+ * A reminder on the bell for each meeting starting within the next half hour, to the deal's owner
+ * and to who scheduled it (active people only). The time only, never the title (it names the lead);
+ * a new time is a new reminder, a cancelled or started meeting gets none.
+ */
+async function meetingReminderRows(
+  db: Database,
+  now: Date,
+): Promise<(typeof crmNotifications.$inferInsert)[]> {
+  const soon = await db
+    .select({
+      id: crmMeetings.id,
+      leadId: crmMeetings.leadId,
+      startsAt: crmMeetings.startsAt,
+      scheduledBy: crmMeetings.ownerEmployeeId,
+      owner: leads.ownerEmployeeId,
+    })
+    .from(crmMeetings)
+    .innerJoin(leads, eq(leads.id, crmMeetings.leadId))
+    .where(
+      and(
+        eq(crmMeetings.status, 'agendada'),
+        gt(crmMeetings.startsAt, now),
+        lte(crmMeetings.startsAt, new Date(now.getTime() + MEETING_REMINDER_MS)),
+      ),
+    )
+    .limit(MAX_FINDINGS);
+  const peopleOf = (m: (typeof soon)[number]) =>
+    [...new Set([m.owner, m.scheduledBy])].filter((id): id is string => Boolean(id));
+  const everyone = [...new Set(soon.flatMap(peopleOf))];
+  if (!everyone.length) return [];
+  const active = new Set(
+    (
+      await db
+        .select({ id: employees.id })
+        .from(employees)
+        .where(and(inArray(employees.id, everyone), eq(employees.status, 'active')))
+    ).map((e) => e.id),
+  );
+  return soon.flatMap((m) =>
+    peopleOf(m)
+      .filter((person) => active.has(person))
+      .map((person) => ({
+        recipientEmployeeId: person,
+        leadId: m.leadId,
+        kind: 'meeting_soon',
+        message: `Reunião às ${clockInBrazil.format(m.startsAt)}`,
+        dedupeKey: `meeting_soon:${m.id}:${m.startsAt.toISOString()}:${person}`,
+        emailState: 'none',
+      })),
+  );
 }
 
 /** Seller, the managers of the seller's sector, and everyone in Diretoria; active people only. */
@@ -302,6 +380,7 @@ export async function runCrmAlerts(
       });
   }
   rows.push(...(await firstContactRows(db, now)));
+  rows.push(...(await meetingReminderRows(db, now)));
   const result: AlertsResult = { written: 0, firstContact: { overdue: 0, escalated: 0 } };
   for (let i = 0; i < rows.length; i += 200) {
     const done = await db

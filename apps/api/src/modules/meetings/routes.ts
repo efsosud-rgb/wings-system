@@ -287,6 +287,7 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
         actorEmployeeId: actor,
         detail: {
           meetingId: row!.id,
+          startsAt: startsAt.toISOString(),
           attendees: (google?.attendees ?? body.data.attendees).length,
           google: Boolean(google),
         },
@@ -513,6 +514,19 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
             : {}),
         ...googlePatch,
       });
+      // The deal's history (Eric, 19/10): a new time or a cancellation; a title or guest change is not.
+      const rescheduled =
+        startsAt.getTime() !== row.startsAt.getTime() || endsAt.getTime() !== row.endsAt.getTime();
+      if (cancelling || rescheduled)
+        await db.insert(leadEvents).values({
+          leadId: row.leadId,
+          at: now(),
+          kind: cancelling ? 'meeting.cancelled' : 'meeting.rescheduled',
+          actorEmployeeId: actor,
+          detail: cancelling
+            ? { meetingId: row.id }
+            : { meetingId: row.id, from: row.startsAt.toISOString(), to: startsAt.toISOString() },
+        });
       await writeAudit(db, {
         actorEmployeeId: actor,
         action: cancelling ? 'meeting.cancelled' : 'meeting.updated',

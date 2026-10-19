@@ -14,6 +14,7 @@ import {
   createAgendaEvent,
   eventsFor,
   overviewFor,
+  pastedMeetingsFor,
   removeAgendaEvent,
   updateAgendaEvent,
   type AgendaDeps,
@@ -93,6 +94,17 @@ export const agendaRoutes: FastifyPluginAsync = async (app) => {
       return answer(reply, async () =>
         reply.send(await eventsFor(deps(), request.session.actor, query.data)),
       );
+    },
+  );
+
+  // A deal's meetings with a pasted link, for someone with no Google connection yet (Eric, 19/10).
+  app.get(
+    '/agenda/crm-meetings',
+    { preHandler: app.requirePermission('calendar.use') },
+    async (request, reply) => {
+      const query = agendaEventsQuerySchema.safeParse(request.query);
+      if (!query.success) return invalid(reply, query.error.issues[0]?.message);
+      return reply.send({ events: await pastedMeetingsFor(db, request.session.actor, query.data) });
     },
   );
 

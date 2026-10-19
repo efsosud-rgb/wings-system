@@ -1,5 +1,6 @@
 import {
   AGENDA_NOTICES,
+  agendaDealPath,
   isDateOnly,
   type AgendaCalendarKey,
   type AgendaEvent,
@@ -7,7 +8,12 @@ import {
 } from '@wings/shared';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { useAgendaEvents, useAgendaOverview, useDeleteAgendaEvent } from '../api/agenda.js';
+import {
+  useAgendaEvents,
+  useAgendaOverview,
+  useDeleteAgendaEvent,
+  usePastedMeetings,
+} from '../api/agenda.js';
 import { ApiError } from '../api/client.js';
 import { AgendaSidebar } from '../components/agenda/AgendaSidebar.js';
 import { ConfirmDialog } from '../components/agenda/ConfirmDialog.js';
@@ -35,6 +41,7 @@ import {
 import { Icon } from '../components/Icon.js';
 import { LoadFailure } from '../components/LoadFailure.js';
 import { failureReason } from '../lib/failure.js';
+import { formatDateTime } from './crm/format.js';
 import './agenda.css';
 
 /**
@@ -127,6 +134,52 @@ function ConnectNotice({ text }: { text: string }) {
   );
 }
 
+const PASTED_DAYS = 30;
+
+/** The deal meetings with a pasted link need no Google: listed under the notice until it is connected. */
+function PastedMeetings() {
+  const [range] = useState(() => {
+    const from = new Date();
+    from.setHours(0, 0, 0, 0);
+    return {
+      from: from.toISOString(),
+      to: new Date(from.getTime() + PASTED_DAYS * 86_400_000).toISOString(),
+    };
+  });
+  const list = usePastedMeetings(range.from, range.to);
+  return (
+    <section className="agenda-pasted" aria-label="Reuniões marcadas pela ficha">
+      <h2>Reuniões marcadas pela ficha</h2>
+      {list.isError ? (
+        <LoadFailure what="as reuniões" error={list.error} onRetry={() => void list.refetch()} />
+      ) : !list.data ? (
+        <p className="crm-muted">Carregando…</p>
+      ) : list.data.length === 0 ? (
+        <p className="crm-muted">
+          Nenhuma reunião com link colado nos próximos {PASTED_DAYS} dias.
+        </p>
+      ) : (
+        <ul className="crm-plain-list">
+          {list.data.map((event) => (
+            <li key={event.id}>
+              <Icon name="calendar" size={13} /> {formatDateTime(event.start)} ·{' '}
+              {event.title || '(Sem título)'}
+              {event.crm?.leadId && (
+                <>
+                  {' '}
+                  <Link className="crm-link-btn" to={agendaDealPath(event.crm.leadId)}>
+                    Abrir negociação
+                  </Link>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export function AgendaPage() {
   const overview = useAgendaOverview();
 
@@ -169,6 +222,7 @@ export function AgendaPage() {
     return (
       <AgendaFrame>
         <ConnectNotice text={AGENDA_NOTICES.notConnected} />
+        <PastedMeetings />
       </AgendaFrame>
     );
   }
@@ -176,6 +230,7 @@ export function AgendaPage() {
     return (
       <AgendaFrame>
         <ConnectNotice text={AGENDA_NOTICES.needsReconnect} />
+        <PastedMeetings />
       </AgendaFrame>
     );
   }
