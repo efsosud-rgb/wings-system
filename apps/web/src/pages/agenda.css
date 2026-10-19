@@ -228,6 +228,16 @@
   font-size: var(--text-lg);
   color: var(--text);
 }
+.agenda-pasted {
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 0 var(--space-4) var(--space-6);
+}
+.agenda-pasted h2 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-md, 1rem);
+}
 .agenda-skeleton {
   flex: 1;
   display: flex;
