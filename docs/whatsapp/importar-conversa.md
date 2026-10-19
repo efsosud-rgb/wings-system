@@ -47,8 +47,10 @@ Ninguém recebe nada:
     - iPhone: `[DD/MM/AAAA HH:MM:SS] Nome: texto`.
     - O ano pode vir com 2 dígitos.
   - **Continuação:** uma linha sem data continua a mensagem de cima.
-  - **Avisos do app:** uma linha datada sem "Nome: " é aviso do próprio app (criptografia, alguém entrou) e fica de
-    fora.
+  - **Avisos do app:** no Android, uma linha datada sem "Nome: " é aviso do próprio app (criptografia, alguém
+    entrou). No iPhone o aviso vem com o nome do contato e uma marca invisível (U+200E) logo depois de "Nome: ". As
+    duas formas ficam de fora e entram na contagem de avisos. A exceção são anexo e mídia oculta, que levam a mesma
+    marca e continuam como mensagem.
   - **Mídia:**
     - `IMG-….jpg (arquivo anexado)` e `<anexado: …>` viram balão do tipo do arquivo, com o nome do arquivo.
     - `<Mídia oculta>` e `imagem ocultada` dizem que a mídia não veio.
