@@ -8,6 +8,7 @@ import { LoadFailure } from '../../components/LoadFailure.js';
 import { useWhatsAppThread } from '../../api/whatsapp.js';
 import { CallPanel } from './CallPanel.js';
 import { FilesTab } from './DealTabs.js';
+import { ImportChatPanel } from './ImportChatPanel.js';
 import { WhatsAppChat } from './WhatsAppChat.js';
 import { EnteredAt } from './EnteredAt.js';
 import { formatDateTime, formatDay, formatPhone, money } from './format.js';
@@ -21,6 +22,8 @@ import { formatDateTime, formatDay, formatPhone, money } from './format.js';
  * the API is connected on the server it says so and sending stays off. The
  * voice button opens the call panel; video is "em breve". Reading and sending
  * are `leads.whatsapp` (Admin and Diretoria any lead, a seller their own).
+ * "Importar do celular" brings in a chat exported on the phone, as history
+ * (`ImportChatPanel`); it also keeps the file, so it needs `leads.write` too.
  */
 
 const SOON = 'Em breve: pela API oficial do WhatsApp, quando a conta estiver ligada';
@@ -32,6 +35,7 @@ export function DealWhatsAppPage() {
   const canWrite = hasPermission(session.data, 'leads.write');
   const canWhatsApp = hasPermission(session.data, 'leads.whatsapp');
   const [calling, setCalling] = useState(false);
+  const [importing, setImporting] = useState(false);
   if (loaded.isLoading)
     return (
       <div className="crm-page">
@@ -109,8 +113,19 @@ export function DealWhatsAppPage() {
             <Icon name="video" size={18} />
           </button>
           <small className="crm-sub">vídeo em breve</small>
+          {canWhatsApp && canWrite && (
+            <button
+              type="button"
+              className="crm-btn is-small"
+              title="Importar uma conversa exportada do WhatsApp do celular"
+              onClick={() => setImporting(true)}
+            >
+              <Icon name="upload" size={14} /> Importar do celular
+            </button>
+          )}
         </div>
       </header>
+      {importing && <ImportChatPanel leadId={lead.id} onClose={() => setImporting(false)} />}
       {calling && (
         <CallPanel
           leadId={lead.id}

@@ -3,6 +3,7 @@ import {
   WINGS_CLIENT_ID,
   WA_KIND_LABELS,
   WA_MEDIA_KINDS,
+  WA_MESSAGES_PAGE,
   WA_WINDOW_HOURS,
   type BrandArticle,
   type DealWhatsApp,
@@ -14,7 +15,7 @@ import {
   type WaMessageKind,
   type WaMessageStatus,
 } from '@wings/shared';
-import { desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   clients,
@@ -34,8 +35,6 @@ import type { Contact, MessageRow } from './outbox.js';
  * screen): messages, the 24-hour window, opt-out, call permission and who
  * has the conversation now. The caller checked access.
  */
-
-const MESSAGES_SHOWN = 500;
 
 /** The stored permission, with a temporary one that ran out read as none. */
 export function permissionOf(
@@ -74,6 +73,9 @@ export function toMessage(row: MessageRow, authors: Map<string, string>): WaMess
   const content = (row.content ?? {}) as Record<string, unknown>;
   const media = content.media as { mimeType?: string | null; filename?: string | null } | undefined;
   const template = content.template as { name?: string; language?: string } | undefined;
+  const imported = content.imported as { file?: string | null; omitted?: boolean } | undefined;
+  // An imported outgoing line went from the phone: no status of ours to show.
+  const tracked = row.direction === 'out' && row.importBatchId === null;
   return {
     id: row.id,
     direction: row.direction === 'out' ? 'out' : 'in',
@@ -92,10 +94,13 @@ export function toMessage(row: MessageRow, authors: Map<string, string>): WaMess
         ? (content.fromTemplate as { name: string }).name
         : null,
     withArt: Boolean(content.art),
-    status: row.direction === 'out' ? ((row.status ?? 'pending') as WaMessageStatus) : null,
-    error: row.direction === 'out' ? errorText(row.errorCode, row.errorTitle) : null,
+    status: tracked ? ((row.status ?? 'pending') as WaMessageStatus) : null,
+    error: tracked ? errorText(row.errorCode, row.errorTitle) : null,
     authorName: row.employeeId ? (authors.get(row.employeeId) ?? null) : null,
     bySofia: row.author === 'sofia',
+    imported: row.importBatchId
+      ? { file: imported?.file ?? null, omitted: imported?.omitted === true }
+      : null,
     at: (row.waTimestamp ?? row.createdAt).toISOString(),
   };
 }
@@ -242,7 +247,7 @@ export function conversationListSql(input: {
            c.last_message_at, c.attendance, c.segment, c.state_changed_at, c.reason,
            b.name as brand_name, m.direction, m.kind, m.text, m.status,
            (select count(*)::int from wa_messages u
-             where u.conversation_id = c.id and u.direction = 'in'
+             where u.conversation_id = c.id and u.direction = 'in' and u.import_batch_id is null
                and u.created_at > coalesce(
                  (select r.read_at from wa_conversation_reads r
                    where r.conversation_id = c.id and r.employee_id = ${input.readerId}),
@@ -322,14 +327,14 @@ export async function buildThread(
         .from(waMessages)
         .where(eq(waMessages.conversationId, conversationId))
         .orderBy(desc(waMessages.createdAt))
-        .limit(MESSAGES_SHOWN)
+        .limit(WA_MESSAGES_PAGE)
     : leadId
       ? await db
           .select()
           .from(waMessages)
           .where(eq(waMessages.leadId, leadId))
           .orderBy(desc(waMessages.createdAt))
-          .limit(MESSAGES_SHOWN)
+          .limit(WA_MESSAGES_PAGE)
       : [];
   rows.reverse();
   const authors = await authorsOf(db, rows);
@@ -358,4 +363,29 @@ export async function buildThread(
     speaksFor: await brandVoiceOf(db, leadId, conversation?.id ?? null),
     messages: rows.map((row) => toMessage(row, authors)),
   };
+}
+
+/**
+ * The deal's messages older than the message `beforeId`, a page at a time ("Mostrar anteriores").
+ * Compared in the database: its timestamps have microseconds, a JS Date has not. The caller checked access.
+ */
+export async function olderMessages(
+  db: Database,
+  leadId: string,
+  beforeId: string,
+): Promise<WaMessage[]> {
+  const rows = await db
+    .select()
+    .from(waMessages)
+    .where(
+      and(
+        eq(waMessages.leadId, leadId),
+        sql`(${waMessages.createdAt}, ${waMessages.id}) < (select o.created_at, o.id from wa_messages o where o.id = ${beforeId} and o.lead_id = ${leadId})`,
+      ),
+    )
+    .orderBy(desc(waMessages.createdAt), desc(waMessages.id))
+    .limit(WA_MESSAGES_PAGE);
+  rows.reverse();
+  const authors = await authorsOf(db, rows);
+  return rows.map((row) => toMessage(row, authors));
 }

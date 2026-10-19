@@ -3,6 +3,8 @@ import type {
   WaCall,
   WaCallPermissionLive,
   WaConversationItem,
+  WaImportBatch,
+  WaImportPreview,
   WaMessage,
   WaTargets,
   WaArtLink,
@@ -15,6 +17,7 @@ import type {
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { api } from './client.js';
+import { sendLeadFile } from './crm.js';
 import { openRingingStream } from './ringing-stream.js';
 
 /**
@@ -270,3 +273,101 @@ export const whatsappCalls = {
   reject: (id: string) => api.post<{ call: WaCall }>(`/whatsapp/calls/${id}/reject`),
   hangup: (id: string) => api.post<{ call: WaCall }>(`/whatsapp/calls/${id}/hangup`),
 };
+
+// --- a conversation imported from the phone (docs/whatsapp/importar-conversa.md) ---------
+
+/**
+ * The text of a phone's export: the `.txt` itself, or the chat inside the `.zip` (`_chat.txt` on
+ * the iPhone, "Conversa do WhatsApp com …" on Android). Read here, in the browser, so a `.zip`
+ * full of media never has to pass through the API; the server parses the text again.
+ */
+export async function exportTextOf(file: File): Promise<string> {
+  if (!/\.zip$/i.test(file.name) && file.type !== 'application/zip') return file.text();
+  const { strFromU8, unzipSync } = await import('fflate');
+  const entries = unzipSync(new Uint8Array(await file.arrayBuffer()), {
+    filter: (entry) => /\.txt$/i.test(entry.name),
+  });
+  const names = Object.keys(entries);
+  const name =
+    names.find((n) => /(^|\/)_chat\.txt$/i.test(n)) ??
+    names.find((n) => /(^|\/)(conversa do whatsapp|whatsapp chat)/i.test(n)) ??
+    names[0];
+  if (!name) throw new Error('O .zip não tem a conversa (.txt). Exporte de novo pelo WhatsApp.');
+  return strFromU8(entries[name]!);
+}
+
+/** The exported file keeps its name with the import's day and time, so a second export of the same chat fits beside it. */
+function stampedFile(file: File, at: Date) {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const stamp = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}h${pad(at.getMinutes())}`;
+  const dot = file.name.lastIndexOf('.');
+  const [base, ext] = dot > 0 ? [file.name.slice(0, dot), file.name.slice(dot)] : [file.name, ''];
+  return new File([file], `${base} (importada ${stamp})${ext}`, { type: file.type });
+}
+
+const importsKey = (leadId: string) => ['whatsapp', 'imports', leadId] as const;
+
+export function useWhatsAppImports(leadId: string) {
+  return useQuery({
+    queryKey: importsKey(leadId),
+    queryFn: () =>
+      api
+        .get<{ imports: WaImportBatch[] }>(`/leads/${leadId}/whatsapp/imports`)
+        .then((r) => r.imports),
+  });
+}
+
+/** What the file holds; nothing is written. */
+export const previewWhatsAppImport = (leadId: string, text: string) =>
+  api
+    .post<{ preview: WaImportPreview }>(`/leads/${leadId}/whatsapp/imports/preview`, { text })
+    .then((r) => r.preview);
+
+function invalidateImport(queryClient: ReturnType<typeof useQueryClient>, leadId: string) {
+  void queryClient.invalidateQueries({ queryKey: ['whatsapp'] });
+  void queryClient.invalidateQueries({ queryKey: ['leads', 'one', leadId] });
+}
+
+/** The exported file goes to the deal's files first (its media stays in it), then the messages. */
+export function useImportWhatsAppConversation(leadId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      file: File;
+      text: string;
+      ourName: string;
+      onProgress: (fraction: number) => void;
+    }) => {
+      const kept = await sendLeadFile({
+        leadId,
+        file: stampedFile(input.file, new Date()),
+        onProgress: input.onProgress,
+      });
+      return api
+        .post<{ import: WaImportBatch }>(`/leads/${leadId}/whatsapp/imports`, {
+          text: input.text,
+          ourName: input.ourName,
+          fileId: kept.fileId,
+        })
+        .then((r) => r.import);
+    },
+    onSettled: () => invalidateImport(queryClient, leadId),
+  });
+}
+
+export function useUndoWhatsAppImport(leadId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (batchId: string) =>
+      api.delete<{ import: WaImportBatch; removed: number }>(
+        `/leads/${leadId}/whatsapp/imports/${batchId}`,
+      ),
+    onSettled: () => invalidateImport(queryClient, leadId),
+  });
+}
+
+/** The deal's messages before one on screen, a page at a time. */
+export const olderWhatsAppMessages = (leadId: string, beforeId: string) =>
+  api
+    .get<{ messages: WaMessage[] }>(`/leads/${leadId}/whatsapp/messages?before=${beforeId}`)
+    .then((r) => r.messages);
