@@ -38,7 +38,7 @@ const ANDROID =
 const IOS = /^\[(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4}),? (\d{1,2}):(\d{2})(?::(\d{2}))?\] ([\s\S]*)$/;
 
 // Marks the phones put around names and attachments (left-to-right, isolates) and their odd spaces.
-const INVISIBLE = /[‎‏‪-‮⁦-⁩﻿]/g;
+const INVISIBLE = /[\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
 
 const ANDROID_FILE = /^(.+?\.[A-Za-z0-9]{2,5}) \((?:arquivo anexado|file attached)\)$/;
 const IOS_FILE = /<(?:anexado|attached): ([^>]+)>/;
@@ -176,7 +176,7 @@ function messageOf(draft: Draft): Omit<ExportMessage, 'hash'> {
 export function parseWhatsAppExport(input: string): ParsedExport | null {
   const lines = input
     .replace(INVISIBLE, '')
-    .replace(/[  ]/g, ' ')
+    .replace(/[\u00a0\u202f]/g, ' ')
     .split(/\r\n|\r|\n/);
   let platform: ExportPlatform | null = null;
   const drafts: Draft[] = [];
