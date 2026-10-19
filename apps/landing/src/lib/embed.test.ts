@@ -5,8 +5,11 @@ import {
   LEAD_MESSAGE,
   SITE_ORIGINS,
   embedOptionsOf,
+  PING_TYPE,
   heightMessageOf,
+  isHeightPing,
   parentTargetsOf,
+  robotCheckScaleOf,
   withHomeSource,
 } from './embed.js';
 
@@ -93,5 +96,25 @@ describe('withHomeSource', () => {
       const clicked = { [key]: 'abc' };
       expect(withHomeSource(clicked)).toBe(clicked);
     }
+  });
+});
+
+describe('robotCheckScaleOf', () => {
+  it('is 1 when the robot check fits and shrinks to the room, never below a half', () => {
+    expect(robotCheckScaleOf(300)).toBe(1);
+    expect(robotCheckScaleOf(520)).toBe(1);
+    expect(robotCheckScaleOf(255)).toBeCloseTo(0.85);
+    expect(robotCheckScaleOf(100)).toBe(0.5);
+  });
+});
+
+describe('isHeightPing', () => {
+  it('accepts the ping only from the Wings site', () => {
+    expect(isHeightPing(SITE_ORIGINS[0]!, { tipo: PING_TYPE })).toBe(true);
+    expect(isHeightPing(SITE_ORIGINS[1]!, { tipo: PING_TYPE })).toBe(true);
+    expect(isHeightPing('https://evil.example', { tipo: PING_TYPE })).toBe(false);
+    expect(isHeightPing(SITE_ORIGINS[0]!, { tipo: 'outra-coisa' })).toBe(false);
+    expect(isHeightPing(SITE_ORIGINS[0]!, null)).toBe(false);
+    expect(isHeightPing(SITE_ORIGINS[0]!, 'wings-form-ping')).toBe(false);
   });
 });

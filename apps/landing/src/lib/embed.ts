@@ -16,6 +16,25 @@ export const HOME_MEDIUM = 'formulario-home';
 /** The messages to the site (`window.parent.postMessage`); the site's listener reads `tipo`. */
 export const LEAD_MESSAGE = { tipo: 'wings-lead', origem: 'site-home' } as const;
 export const heightMessageOf = (altura: number) => ({ tipo: 'wings-form-altura', altura });
+/** From the site: "tell me your height again" (its listener may have come after the first message). */
+export const PING_TYPE = 'wings-form-ping';
+
+/** The robot check (Turnstile) is never narrower than this. */
+export const ROBOT_CHECK_WIDTH = 300;
+
+/** The scale that fits the robot check in `room` px: 1 when it fits, never below a half. */
+export const robotCheckScaleOf = (room: number) =>
+  Math.min(1, Math.max(0.5, room / ROBOT_CHECK_WIDTH));
+
+/** Whether a message is the site's ping: from the site's origin and the page that frames the form. */
+export function isHeightPing(origin: string, data: unknown): boolean {
+  return (
+    SITE_ORIGINS.includes(origin) &&
+    typeof data === 'object' &&
+    data !== null &&
+    (data as { tipo?: unknown }).tipo === PING_TYPE
+  );
+}
 
 export interface EmbedOptions {
   /** `titulo=1`: show the form's title and subtitle (the site has its own text by default). */

@@ -50,6 +50,11 @@
     // query.set('titulo', '1'); // descomente para mostrar o título e o subtítulo do formulário
     frame.src = FORM + '/embed/formulario?' + query.toString();
 
+    // se a primeira altura se perdeu, o formulário manda de novo: ele repete por 10 s e responde a este aviso
+    frame.addEventListener('load', function () {
+      frame.contentWindow.postMessage({ tipo: 'wings-form-ping' }, FORM);
+    });
+
     window.addEventListener('message', function (event) {
       if (event.origin !== FORM || event.source !== frame.contentWindow) return;
       var message = event.data;
