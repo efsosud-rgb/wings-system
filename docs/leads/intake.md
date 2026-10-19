@@ -61,6 +61,12 @@ mesmo assim**, arquivada na Wings Company com `client_mapped = false`. A tela
 mostra "sem regra" e diz onde cadastrar. Uma regra criada depois não
 reprocessa leads antigos (parte 2, se precisar).
 
+Uma exceção: o eco do RD Station CRM. Cada vez que o CRM muda um negócio, o RD Marketing registra
+uma conversão no contato ("Negociação atualizada no RD Station CRM", "RD Station CRM"). Isso não é
+página nenhuma: de uma pessoa que a Wings ainda não tem (nem por id do RD, telefone ou e-mail) o
+webhook responde 200, não cria lead e conta em `ignoredEcho` (`RD_CRM_ECHO_IDENTIFIERS` em
+`webhooks.ts`). De uma pessoa que já existe, o eco continua se juntando ao lead dela.
+
 ## Data de entrada (`leads.entered_at`)
 
 A ficha, a lista e o kanban mostram "Entrou em", no horário de Brasília, com a data da própria fonte.

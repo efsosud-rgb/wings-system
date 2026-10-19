@@ -170,11 +170,38 @@ O GTM entra com o trecho padrão, `dataLayer` criado antes, e só quando `LANDIN
 
 ## Cabeçalhos e cache
 
-Todas as respostas: `Content-Security-Policy: frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action
-'self'` (sem restringir `script-src`, para não quebrar as tags do GTM), `X-Frame-Options: DENY`,
+Todas as respostas, menos `/embed/formulario` (seção abaixo): `Content-Security-Policy: frame-ancestors 'none'; base-uri
+'self'; object-src 'none'; form-action 'self'` (sem restringir `script-src`, para não quebrar as tags do GTM),
+`X-Frame-Options: DENY`,
 `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy` com
 acelerômetro e giroscópio só para a própria página (o movimento do celular) e câmera, microfone e localização
 negados. Arquivos de `/assets/` (nome com hash) ficam em cache por um ano (`immutable`); o HTML e o resto, `no-cache`.
+
+## Formulário no site (iframe em `/embed/formulario`)
+
+O formulário desta página aparece também na home do site (wingscompany.com.br) dentro de um iframe de
+`https://fale.wingscompany.com.br/embed/formulario`: o mesmo HTML (`form.html`, incluído pelas duas páginas), as mesmas
+regras, Turnstile (tema escuro), envio e tela de agradecimento; fundo transparente e letras brancas (aberto fora de
+iframe, o fundo é preto). Sem 3D e sem herói. O lead entra no mesmo registro da página, marcado
+`utm_source=site` e `utm_medium=formulario-home` quando a visita não traz origem própria (UTM ou clique de anúncio).
+
+- **Cabeçalhos só nessa rota:** `frame-ancestors https://wingscompany.com.br https://www.wingscompany.com.br` (com
+  `base-uri`, `object-src` e `form-action` iguais) e sem `X-Frame-Options`. Todo o resto, 404 inclusive, segue com
+  `frame-ancestors 'none'` e `DENY`. A troca é um `map` em `docker/landing-nginx.conf` (um `add_header` dentro de um
+  `location` derrubaria os demais cabeçalhos do servidor).
+- **Tags:** o embed carrega o mesmo GTM da página (`LANDING_GTM_ID`), que traz o script do RD (identificador
+  `lead-form`), GA4, Google Ads e Meta. **O site não pode disparar conversão própria** ao ouvir `wings-lead`: contaria
+  em dobro.
+- **Endereço (o site repassa):** `utm_*` e demais chaves de origem, `gclid`, `fbclid`, `ref` (a origem da visita),
+  `pagina` (o endereço da página do site, só aceito se for do site) e `titulo=1` (mostra título e subtítulo).
+- **Mensagens ao site (`postMessage`, só para os domínios do site):** `{tipo:"wings-form-altura", altura}` a cada
+  mudança de altura e `{tipo:"wings-lead", origem:"site-home"}` quando o lead é enviado. O site confere
+  `event.origin === "https://fale.wingscompany.com.br"`. O botão de WhatsApp da tela de agradecimento abre em outra aba.
+- **Esquema de cores:** o embed fica `color-scheme: light` de propósito; o iframe do site leva
+  `style="color-scheme: light"`, senão o navegador pinta um fundo opaco por cima da transparência.
+- **Snippet do site:** `apps/landing/e2e/site-snippet.html` (o mesmo que o e2e executa).
+- **Testes:** `pnpm --filter @wings/landing test:embed` (navegador: o site, o iframe, as mensagens, a transparência, o
+  POST, o GTM e o bloqueio de quem não é o site) e `test:nginx` (a configuração real do nginx num container).
 
 ## Desempenho e primeiro quadro
 

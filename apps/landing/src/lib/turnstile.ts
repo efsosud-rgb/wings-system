@@ -61,13 +61,14 @@ const ERROR_RESETS = 3;
 /**
  * Renders the widget into `box`. `onToken` gets the token, or null when there
  * is none (expired, errored, reset); `onFailure` gets a pt-BR message when the
- * widget cannot recover by itself.
+ * widget cannot recover by itself. `theme` is `dark` on the Wings site's black.
  */
 export async function renderTurnstile(
   box: HTMLElement,
   siteKey: string,
   onToken: (token: string | null) => void,
   onFailure: (message: string) => void,
+  theme: 'light' | 'dark' = 'light',
 ): Promise<TurnstileWidget> {
   const api = await loadTurnstile();
   const widget: { id?: string } = {};
@@ -83,7 +84,7 @@ export async function renderTurnstile(
   widget.id = api.render(box, {
     sitekey: siteKey,
     language: 'pt-BR',
-    theme: 'light',
+    theme,
     size: 'flexible',
     callback: (token) => {
       errors = 0;
