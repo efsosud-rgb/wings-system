@@ -47,6 +47,13 @@ vi.mock('../../api/auth.js', async () => {
   };
 });
 
+// Not a seller before the official number is live (the lock has its own tests).
+vi.mock('../../api/whatsapp.js', async () => {
+  const actual =
+    await vi.importActual<typeof import('../../api/whatsapp.js')>('../../api/whatsapp.js');
+  return { ...actual, useWhatsAppSoon: () => false };
+});
+
 vi.mock('../../api/leads.js', () => ({
   useCreateLead: () => mutation(),
   useSellers: idle,

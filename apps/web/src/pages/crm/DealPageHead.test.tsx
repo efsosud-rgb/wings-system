@@ -43,6 +43,8 @@ const {
     tasks: [] as LeadTask[],
     stages: [] as CrmStage[],
     permissions: {} as Record<string, string>,
+    // A seller before the official number is live (useWhatsAppSoon).
+    soon: false,
     files: [] as LeadFile[],
     events: [] as LeadEvent[],
     notes: [] as LeadNote[],
@@ -167,6 +169,12 @@ vi.mock('../../api/auth.js', async () => {
   };
 });
 
+vi.mock('../../api/whatsapp.js', async () => {
+  const actual =
+    await vi.importActual<typeof import('../../api/whatsapp.js')>('../../api/whatsapp.js');
+  return { ...actual, useWhatsAppSoon: () => queryState.soon };
+});
+
 vi.mock('../../api/leads.js', () => ({
   useLead: () => ({
     isLoading: false,
@@ -248,6 +256,7 @@ beforeEach(() => {
   taskMutate.mockClear();
   leadMutate.mockClear();
   queryState.permissions = { 'leads.read': 'own', 'leads.write': 'own' };
+  queryState.soon = false;
   queryState.lead = lead({});
   queryState.tasks = [firstContact()];
   queryState.stages = [
@@ -357,6 +366,26 @@ describe('win or lose', () => {
 });
 
 describe('the action bar', () => {
+  it('marks the WhatsApp action "em breve" while a seller cannot send, still a link to the conversation', () => {
+    queryState.soon = true;
+    show();
+    const bar = screen.getByRole('toolbar', { name: 'Ações' });
+    const whatsapp = within(bar).getByRole('link', { name: 'WhatsApp (em breve)' });
+    expect(whatsapp.getAttribute('href')).toBe('/crm-vendas/negociacoes/l1/whatsapp');
+    expect(whatsapp.getAttribute('title')).toMatch(/^Em breve: enviar e ligar pelo WhatsApp/);
+    expect(whatsapp.querySelector('small')?.textContent).toBe('em breve');
+    expect(within(bar).queryByRole('link', { name: 'WhatsApp' })).toBeNull();
+  });
+
+  it('the WhatsApp action carries no "em breve" when sending is open', () => {
+    show();
+    const whatsapp = within(screen.getByRole('toolbar', { name: 'Ações' })).getByRole('link', {
+      name: 'WhatsApp',
+    });
+    expect(whatsapp.getAttribute('title')).toBeNull();
+    expect(whatsapp.querySelector('small')).toBeNull();
+  });
+
   it('opens the register tab of each action; Ligação the call panel; WhatsApp the conversation; Reunião its section', () => {
     show();
     const bar = screen.getByRole('toolbar', { name: 'Ações' });
