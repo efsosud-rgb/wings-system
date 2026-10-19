@@ -108,6 +108,12 @@ async function findEmployeeByEmail(db: Database, email: string): Promise<Employe
   };
 }
 
+/** The active employee of a login e-mail, as an actor: what a CLI acts as (`--por=`). */
+export async function activeActorByEmail(db: Database, email: string): Promise<Actor | null> {
+  const employee = await findEmployeeByEmail(db, email);
+  return employee?.status === 'active' ? actorFrom(employee) : null;
+}
+
 export function actorFrom(employee: EmployeeRow): Actor {
   return {
     employeeId: employee.id,

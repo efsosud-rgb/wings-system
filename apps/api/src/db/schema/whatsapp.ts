@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   boolean,
   index,
   integer,
@@ -162,6 +163,66 @@ export const waImportBatches = pgTable(
     undoneBy: uuid('undone_by').references(() => employees.id),
   },
   (table) => [index('wa_import_batches_lead_idx').on(table.leadId, table.importedAt)],
+);
+
+/**
+ * "Importar em lote" (docs/whatsapp/importar-conversa.md): the lote-pai of many conversations. The
+ * name→phone map lives here only until the lote is written or undone, then it is cleared.
+ */
+export const waBulkImports = pgTable('wa_bulk_imports', {
+  tenantId: tenantId(),
+  id: uuid('id').primaryKey().defaultRandom(),
+  /** tela | cli */
+  source: text('source').notNull(),
+  /** previa | gravando | gravado | desfeito */
+  state: text('state').notNull().default('previa'),
+  ourName: text('our_name'),
+  nameMap: jsonb('name_map').$type<Record<string, string>>(),
+  createdBy: uuid('created_by').references(() => employees.id),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  appliedAt: timestamp('applied_at', { withTimezone: true }),
+  undoneAt: timestamp('undone_at', { withTimezone: true }),
+  undoneBy: uuid('undone_by').references(() => employees.id),
+});
+
+/**
+ * One conversation of a lote: its pair, its counts and, once written, its own import
+ * (`wa_import_batches`). `chat_text` waits here between the preview and the write, then is cleared:
+ * the messages live in `wa_messages`.
+ */
+export const waBulkImportItems = pgTable(
+  'wa_bulk_import_items',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    bulkId: uuid('bulk_id')
+      .notNull()
+      .references(() => waBulkImports.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    fileName: text('file_name').notNull(),
+    byteSize: bigint('byte_size', { mode: 'number' }).notNull(),
+    chatText: text('chat_text'),
+    platform: text('platform'),
+    contactName: text('contact_name'),
+    participants: jsonb('participants')
+      .$type<{ name: string; messages: number }[]>()
+      .notNull()
+      .default([]),
+    leadId: uuid('lead_id').references(() => leads.id),
+    /** telefone | mapa | nome | manual */
+    match: text('match'),
+    candidates: integer('candidates').notNull().default(0),
+    messageCount: integer('message_count').notNull().default(0),
+    newCount: integer('new_count').notNull().default(0),
+    firstAt: timestamp('first_at', { withTimezone: true }),
+    lastAt: timestamp('last_at', { withTimezone: true }),
+    /** pendente | pulada | gravada | sem_novas | falhou | desfeita */
+    state: text('state').notNull().default('pendente'),
+    error: text('error'),
+    batchId: uuid('batch_id').references(() => waImportBatches.id),
+    driveFileId: uuid('drive_file_id').references(() => driveFiles.id, { onDelete: 'set null' }),
+  },
+  (table) => [uniqueIndex('wa_bulk_import_items_position_uq').on(table.bulkId, table.position)],
 );
 
 /**
