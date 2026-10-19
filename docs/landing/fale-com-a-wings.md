@@ -184,6 +184,10 @@ negados. Arquivos de `/assets/` (nome com hash) ficam em cache por um ano (`immu
   é um arquivo à parte com `preload`; se não carregar, aparece o nome da rede (`.no-fa`).
 - O three.js chega depois do primeiro quadro (`import()` dinâmico, ~160 kB comprimido); sem WebGL, a página mostra a
   logo parada (`.no-gl`). `window.__wings3d()` informa partículas, pixel ratio, chamadas de desenho e memória.
+- No celular (largura até 640 px, tela mais alta que larga) a asa tem outro lugar e fica com ~57% do tamanho: cada
+  seção da cena traz `data-n="x,y,escala,opacidade"` (x em unidades do mundo vezes a proporção largura/altura da
+  tela, y em unidades do mundo), longe de títulos e rótulos; onde ainda cruza texto a opacidade cai para ~35%. Acima de
+  640 px valem `data-l` e `data-p`, como antes.
 - O espaço do Turnstile já tem a altura do widget desde o primeiro quadro (sem pulo de layout).
 
 ## Regerar os pontos da asa e a imagem OG

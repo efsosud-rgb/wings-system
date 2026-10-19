@@ -47,7 +47,7 @@ export interface SceneInput {
   gyro: GyroState;
   /** The process timeline's current step (-1 outside it). */
   step: () => number;
-  /** The sections that drive the choreography (`data-form`, `data-l`, `data-p`, `data-glo`). */
+  /** The sections that drive the choreography (`data-form`, `data-l`, `data-p`, `data-n`, `data-glo`). */
   sections: HTMLElement[];
   /** Overrides the particle count (the OG image renders the full set without motion). */
   particles?: number;
@@ -370,6 +370,8 @@ export function createScene(input: SceneInput): Scene3d | null {
     form: FORM[el.dataset.form ?? 'wing'] ?? FORM.wing!,
     L: numbers(el.dataset.l),
     Pt: numbers(el.dataset.p),
+    // phones (<= 640 px): x (times the screen aspect, so it keeps its place), y, scale, alpha
+    N: numbers(el.dataset.n),
     glo: parseFloat(el.dataset.glo || '1'),
   }));
   type Section = (typeof secs)[number];
@@ -390,39 +392,24 @@ export function createScene(input: SceneInput): Scene3d | null {
   function aim() {
     if (!meta.length) return;
     const vc = scrollY + innerHeight / 2;
-    let i = meta.length - 1,
-      j = i,
-      t = 0;
-    for (let k = 0; k < meta.length; k++) {
-      const m = meta[k]!;
-      if (vc <= m.b) {
-        if (k === 0 || vc >= m.a) {
-          i = j = k;
-          t = 0;
-        } else {
-          i = k - 1;
-          j = k;
-          t = smooth(clamp((vc - meta[i]!.b) / Math.max(1, m.a - meta[i]!.b)));
-        }
-        break;
-      }
-    }
-    const A = meta[i]!.s,
-      B = meta[j]!.s,
-      ta = portrait ? A.Pt : A.L,
-      tb = portrait ? B.Pt : B.L;
-    const lerp = (a: number[], b: number[], k: number) =>
-      (a[k] ?? 0) + ((b[k] ?? 0) - (a[k] ?? 0)) * t;
-    target.mix.set(
-      lerp(A.form, B.form, 0),
-      lerp(A.form, B.form, 1),
-      lerp(A.form, B.form, 2),
-      lerp(A.form, B.form, 3),
-    );
-    target.x = lerp(ta, tb, 0);
-    target.y = lerp(ta, tb, 1);
-    target.sc = lerp(ta, tb, 2);
-    target.glo = A.glo + (B.glo - A.glo) * t;
+    // j: the section the screen centre is in or heading to; i: the one it leaves while between two
+    let j = meta.findIndex((m) => vc <= m.b);
+    if (j < 0) j = meta.length - 1;
+    const i = j && vc < meta[j]!.a ? j - 1 : j,
+      t = smooth(clamp((vc - meta[i]!.b) / Math.max(1, meta[j]!.a - meta[i]!.b)));
+    // a section's pose: form mix, x, y, scale, alpha; portrait phones (<= 640 px) use N
+    const pose = (s: Section) =>
+      innerWidth <= 640 && camera.aspect < 0.9
+        ? [...s.form, s.N[0]! * camera.aspect, s.N[1]!, s.N[2]!, s.N[3]!]
+        : [...s.form, ...(portrait ? s.Pt : s.L), s.glo];
+    const a = pose(meta[i]!.s),
+      b = pose(meta[j]!.s),
+      v = a.map((x, n) => x + (b[n]! - x) * t);
+    target.mix.fromArray(v);
+    target.x = v[4]!;
+    target.y = v[5]!;
+    target.sc = v[6]!;
+    target.glo = v[7]!;
   }
   function resize() {
     const w = canvas.clientWidth || innerWidth,
