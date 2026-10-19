@@ -5,7 +5,9 @@ import {
   LEAD_MESSAGE,
   embedOptionsOf,
   heightMessageOf,
+  isHeightPing,
   parentTargetsOf,
+  robotCheckScaleOf,
   withHomeSource,
 } from '../../lib/embed.js';
 import { primeInlineFonts } from '../../lib/fonts.js';
@@ -79,10 +81,37 @@ void loadSiteForm(config.apiBase, SLUG).then((result) => {
 });
 
 // the site sizes the iframe to the form, which grows with an error line and shrinks to the thank-you
+const heightNow = () => Math.ceil(document.body.getBoundingClientRect().height);
 let lastHeight = -1;
 new ResizeObserver(() => {
-  const height = Math.ceil(document.body.getBoundingClientRect().height);
+  const height = heightNow();
   if (height === lastHeight) return;
   lastHeight = height;
   tell(heightMessageOf(height));
 }).observe(document.body);
+// a first message can reach the site before its listener is there: again every second for 10 s, and on its ping
+const repeat = setInterval(() => tell(heightMessageOf(heightNow())), 1000);
+setTimeout(() => clearInterval(repeat), 10_000);
+addEventListener('message', (event) => {
+  if (event.source === window.parent && isHeightPing(event.origin, event.data)) {
+    tell(heightMessageOf(heightNow()));
+  }
+});
+
+// the robot check is 300 px at least: where the iframe leaves less room (a phone's padded column) it is scaled down
+function fitRobotCheck() {
+  const slot = document.querySelector<HTMLElement>('.bot-slot');
+  const formBox = document.querySelector<HTMLElement>('#lead-form');
+  if (!slot || !formBox) return;
+  const sides = (el: HTMLElement, props: string[]) =>
+    props.reduce((sum, prop) => sum + (parseFloat(getComputedStyle(el)[prop as 'width']) || 0), 0);
+  const room =
+    doc.clientWidth -
+    sides(formBox, ['paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth']) -
+    sides(slot, ['paddingLeft', 'paddingRight', 'borderLeftWidth', 'borderRightWidth']);
+  const scale = robotCheckScaleOf(room);
+  doc.style.setProperty('--ts-scale', String(scale));
+  doc.classList.toggle('ts-narrow', scale < 1);
+}
+fitRobotCheck();
+addEventListener('resize', fitRobotCheck);
