@@ -22,7 +22,7 @@ import {
   type ExportMessage,
   type ParsedExport,
 } from './import-parse.js';
-import { conversationFor } from './intake.js';
+import { openConversation } from './intake.js';
 import { contactOfPhone } from './thread.js';
 
 /**
@@ -107,7 +107,11 @@ export async function previewImport(
   };
 }
 
-/** The deal's contact (any form of its number) and conversation, opened when missing. */
+/**
+ * The deal's contact (any form of its number) and conversation, opened when missing. One the
+ * import opens starts closed: it holds only history, so the person's next real message is routed
+ * as a new conversation (to the seller, or to Sofia on a deal with no owner), as without it.
+ */
 async function conversationOfLead(db: Database, lead: { id: string; phone: string | null }) {
   if (!lead.phone) throw new ImportError('lead_without_phone');
   const contact =
@@ -122,11 +126,16 @@ async function conversationOfLead(db: Database, lead: { id: string; phone: strin
         })
         .returning()
     )[0]!;
-  const conversation = await conversationFor(db, contact.id, lead.id, {
+  const opened = await openConversation(db, contact.id, lead.id, {
     referral: null,
     originCode: null,
   });
-  return { contact, conversation };
+  if (opened.created)
+    await db
+      .update(waConversations)
+      .set({ attendance: 'closed', stateChangedAt: new Date() })
+      .where(eq(waConversations.id, opened.conversation.id));
+  return { contact, conversation: opened.conversation };
 }
 
 /**

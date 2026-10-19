@@ -113,17 +113,17 @@ export function DealWhatsAppPage() {
             <Icon name="video" size={18} />
           </button>
           <small className="crm-sub">vídeo em breve</small>
-          {canWhatsApp && canWrite && (
-            <button
-              type="button"
-              className="crm-btn is-small"
-              title="Importar uma conversa exportada do WhatsApp do celular"
-              onClick={() => setImporting(true)}
-            >
-              <Icon name="upload" size={14} /> Importar do celular
-            </button>
-          )}
         </div>
+        {canWhatsApp && canWrite && (
+          <button
+            type="button"
+            className="crm-btn is-small"
+            title="Importar uma conversa exportada do WhatsApp do celular"
+            onClick={() => setImporting(true)}
+          >
+            <Icon name="upload" size={14} /> Importar do celular
+          </button>
+        )}
       </header>
       {importing && <ImportChatPanel leadId={lead.id} onClose={() => setImporting(false)} />}
       {calling && (
