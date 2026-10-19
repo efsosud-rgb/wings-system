@@ -107,18 +107,21 @@ function timeOf(match: RegExpMatchArray): Date | null {
   const fullYear = year < 100 ? 2000 + year : year;
   if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59)
     return null;
-  const at = new Date(Date.UTC(fullYear, month - 1, day, hour + 3, minute, second));
   // 31/02 rolls into March: not a real date, so not a message line.
-  return at.getUTCDate() === new Date(Date.UTC(fullYear, month - 1, day)).getUTCDate() ? at : null;
+  if (new Date(Date.UTC(fullYear, month - 1, day)).getUTCDate() !== day) return null;
+  return new Date(Date.UTC(fullYear, month - 1, day, hour + 3, minute, second));
 }
 
 interface Draft {
   at: Date;
   author: string;
   lines: string[];
+  /** iPhone: the text began with an invisible mark, as the app's own notices do. */
+  marked: boolean;
 }
 
-function messageOf(draft: Draft): Omit<ExportMessage, 'hash'> {
+/** Null for an app notice the iPhone files under the contact's name (encryption, a deleted message). */
+function messageOf(draft: Draft): Omit<ExportMessage, 'hash'> | null {
   const raw = draft.lines.join('\n');
   const [first = '', ...rest] = draft.lines;
   const caption = (lines: string[]) => lines.join('\n').trim() || null;
@@ -162,6 +165,7 @@ function messageOf(draft: Draft): Omit<ExportMessage, 'hash'> {
       file: null,
       omitted: true,
     };
+  if (draft.marked) return null;
   return {
     at: draft.at,
     author: draft.author,
@@ -174,15 +178,12 @@ function messageOf(draft: Draft): Omit<ExportMessage, 'hash'> {
 
 /** Null when no line of the text looks like an export (wrong file). */
 export function parseWhatsAppExport(input: string): ParsedExport | null {
-  const lines = input
-    .replace(INVISIBLE, '')
-    .replace(/[\u00a0\u202f]/g, ' ')
-    .split(/\r\n|\r|\n/);
   let platform: ExportPlatform | null = null;
   const drafts: Draft[] = [];
   let skipped = 0;
   let current: Draft | null = null;
-  for (const line of lines) {
+  for (const raw of input.split(/\r\n|\r|\n/)) {
+    const line = raw.replace(INVISIBLE, '').replace(/[\u00a0\u202f]/g, ' ');
     if (platform === null) {
       if (ANDROID.test(line)) platform = 'android';
       else if (IOS.test(line)) platform = 'ios';
@@ -201,14 +202,26 @@ export function parseWhatsAppExport(input: string): ParsedExport | null {
       current = null;
       continue;
     }
-    current = { at, author: rest.slice(0, colon).trim(), lines: [rest.slice(colon + 2)] };
+    const rawRest = raw.replace(/^\u200e?\[[^\]]*\] /, '');
+    const cut = rawRest.indexOf(': ');
+    current = {
+      at,
+      author: rest.slice(0, colon).trim(),
+      lines: [rest.slice(colon + 2)],
+      marked: platform === 'ios' && cut > 0 && rawRest.charAt(cut + 2) === '\u200e',
+    };
     drafts.push(current);
   }
   if (platform === null) return null;
 
   const seen = new Map<string, number>();
-  const messages = drafts.map((draft) => {
+  const kept: Omit<ExportMessage, 'hash'>[] = [];
+  for (const draft of drafts) {
     const message = messageOf(draft);
+    if (message) kept.push(message);
+    else skipped += 1;
+  }
+  const messages = kept.map((message) => {
     const key = [
       message.at.toISOString(),
       message.author,
