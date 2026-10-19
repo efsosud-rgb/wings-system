@@ -411,6 +411,7 @@ describe('the WhatsApp conversation screen', () => {
           bySofia: false,
           fromTemplate: null,
           withArt: false,
+          imported: null,
           at: '2026-10-07T14:00:00.000Z',
         },
       ],
