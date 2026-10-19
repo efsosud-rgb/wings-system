@@ -745,7 +745,7 @@ describe('Agenda — a level without calendar.write (the sellers)', () => {
     const card = screen.getByRole('dialog', { name: 'Reunião de teste' });
     expect(within(card).getByText('Sala 2')).toBeTruthy();
     expect(within(card).getByText('Pauta da semana')).toBeTruthy();
-    expect(within(card).getByRole('link', { name: 'Participar com o Google Meet' })).toBeTruthy();
+    expect(within(card).getByRole('button', { name: 'Participar com o Google Meet' })).toBeTruthy();
     expect(within(card).getByText(AGENDA_NOTICES.readOnly)).toBeTruthy();
     expect(within(card).queryByText(AGENDA_NOTICES.notEditable)).toBeNull();
     expect(within(card).queryByRole('button', { name: /Editar|Excluir/ })).toBeNull();
