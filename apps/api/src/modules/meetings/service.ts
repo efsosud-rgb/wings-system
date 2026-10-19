@@ -3,16 +3,17 @@ import {
   type Meeting,
   type MeetingAnalysis,
   type MeetingAttendee,
+  type MeetingListItem,
   type MeetingSegment,
   type MeetingSpeaker,
   type MeetingSummary,
   type MeetingSummarySend,
   type MeetingTranscript,
 } from '@wings/shared';
-import { and, eq, gte, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lt, not, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import type { Database } from '../../db/client.js';
-import { crmMeetingAnalysisRuns, crmMeetings, leads } from '../../db/schema/index.js';
+import { crmMeetingAnalysisRuns, crmMeetings, employees, leads } from '../../db/schema/index.js';
 import type { AgentLlm } from '../agent/llm.js';
 import { analyzeMeeting } from './analysis.js';
 
@@ -37,6 +38,42 @@ export function toMeetingSummary(row: MeetingRow): MeetingSummary {
     analysisState: row.analysisState as MeetingSummary['analysisState'],
     summarySendState: row.sendState as MeetingSummary['summarySendState'],
   };
+}
+
+const MEETING_LIST_LIMIT = 200;
+
+/**
+ * Produtividade → Reuniões (Eric, 19/10), read-only: the meetings of the deals in reach, by the
+ * deal's owner (`owner` from `leadOwnerFilter`, undefined for whoever reads every lead). Upcoming
+ * is what has neither ended nor closed, soonest first; past is the rest, latest first.
+ */
+export async function meetingListFor(
+  db: Database,
+  owner: string | undefined,
+  when: 'upcoming' | 'past',
+  at: Date,
+): Promise<MeetingListItem[]> {
+  const open = and(
+    gte(crmMeetings.endsAt, at),
+    inArray(crmMeetings.status, ['agendada', 'em_andamento']),
+  )!;
+  const rows = await db
+    .select({ meeting: crmMeetings, dealOwnerName: employees.fullName })
+    .from(crmMeetings)
+    .innerJoin(leads, eq(leads.id, crmMeetings.leadId))
+    .leftJoin(employees, eq(employees.id, leads.ownerEmployeeId))
+    .where(
+      and(
+        when === 'upcoming' ? open : not(open),
+        owner ? eq(leads.ownerEmployeeId, owner) : undefined,
+      ),
+    )
+    .orderBy(when === 'upcoming' ? asc(crmMeetings.startsAt) : desc(crmMeetings.startsAt))
+    .limit(MEETING_LIST_LIMIT);
+  return rows.map(({ meeting, dealOwnerName }) => ({
+    ...toMeetingSummary(meeting),
+    dealOwnerName,
+  }));
 }
 
 type StoredTranscript = {

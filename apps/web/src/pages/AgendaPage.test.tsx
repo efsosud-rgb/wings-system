@@ -1,5 +1,11 @@
-import type { AgendaEvent, AgendaEventsAnswer, AgendaOverview } from '@wings/shared';
-import { AGENDA_NOTICES } from '@wings/shared';
+import type {
+  AgendaEvent,
+  AgendaEventsAnswer,
+  AgendaOverview,
+  RoleKey,
+  SessionUser,
+} from '@wings/shared';
+import { AGENDA_NOTICES, ROLE_PERMISSIONS } from '@wings/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
@@ -24,6 +30,26 @@ vi.mock('../api/client.js', async (original) => ({
 
 const { AgendaPage } = await import('./AgendaPage.js');
 const { ApiError } = await import('../api/client.js');
+const { sessionKey } = await import('../api/auth.js');
+
+/** A signed-in person with the level's real permissions (the matrix is the source of truth). */
+const asRole = (role: RoleKey): SessionUser => ({
+  employeeId: 'emp-1',
+  fullName: 'Pessoa Teste',
+  email: 'pessoa@exemplo.com',
+  cargo: 'Cargo de Teste',
+  role,
+  sector: 'comercial',
+  isSectorManager: false,
+  tracksTime: true,
+  permissions: ROLE_PERMISSIONS[role],
+  lastLoginAt: null,
+  sessionExpiresAt: '2026-10-14T23:00:00Z',
+});
+/** Writes on the Agenda (`calendar.write`) / only reads it (the sellers, Eric 19/10). */
+const WRITER = asRole('gerente_comercial');
+const SELLER = asRole('vendedor_formatacao');
+let me: SessionUser = WRITER;
 
 const overview = (over: Partial<AgendaOverview> = {}): AgendaOverview => ({
   state: 'ready',
@@ -79,6 +105,7 @@ function serve(
   pasted: AgendaEvent[] | Error = [],
 ) {
   get.mockImplementation((path: string) => {
+    if (path === '/auth/me') return Promise.resolve({ user: me });
     if (path.startsWith('/agenda/crm-meetings?')) {
       return pasted instanceof Error ? Promise.reject(pasted) : Promise.resolve({ events: pasted });
     }
@@ -99,6 +126,8 @@ const answerWith = (...events: AgendaEvent[]): AgendaEventsAnswer => ({
 
 function renderPage(path = '/produtividade/agenda?visao=semana&data=2026-10-14') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  // The route gate has read the session before the page opens; the page reads it from the cache.
+  client.setQueryData(sessionKey, me);
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[path]}>
@@ -111,6 +140,7 @@ function renderPage(path = '/produtividade/agenda?visao=semana&data=2026-10-14')
 const MEETING = 'Reunião de teste, quarta-feira, 14 de outubro, 09:00 a 10:00, agenda Pessoa Teste';
 
 beforeEach(() => {
+  me = WRITER;
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2026-10-14T15:00:00Z'));
   get.mockReset();
@@ -636,6 +666,130 @@ describe('Agenda — review fixes', () => {
     );
     expect(screen.getByText(AGENDA_NOTICES.wingsReadOnly)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Editar evento' })).toBeNull();
+  });
+});
+
+// Eric, 19/10: a seller reads the Agenda; they schedule from the deal. The API refuses their writes
+// (calendar.write) all the same and answers every event with canEdit false.
+describe('Agenda — a level without calendar.write (the sellers)', () => {
+  const OPEN_EVENT =
+    'Reunião de teste, quarta-feira, 14 de outubro, 09:00 a 10:00, agenda Pessoa Teste';
+
+  it('shows no way to create: neither the toolbar button nor the sidebar one', async () => {
+    me = SELLER;
+    serve(overview(), answerWith(event({ canEdit: false })));
+    renderPage();
+    await screen.findByRole('button', { name: OPEN_EVENT });
+    expect(screen.queryByRole('button', { name: 'Criar evento' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Criar' })).toBeNull();
+    // The rest of the Agenda is still there.
+    expect(screen.getByRole('button', { name: 'Próxima semana' })).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: 'Agendas' })).toBeTruthy();
+  });
+
+  it('keeps the same buttons for a level that writes', async () => {
+    serve(overview(), answerWith(event()));
+    renderPage();
+    await screen.findByRole('button', { name: OPEN_EVENT });
+    expect(screen.getByRole('button', { name: 'Criar evento' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Criar' })).toBeTruthy();
+  });
+
+  it('opens no form when a time slot or a day is clicked', async () => {
+    me = SELLER;
+    serve(overview());
+    const week = renderPage();
+    await waitFor(() =>
+      expect(week.container.querySelector('[data-day="2026-10-14"]')).toBeTruthy(),
+    );
+    fireEvent.click(week.container.querySelector('[data-day="2026-10-14"]')!, {
+      clientY: 9 * 48 + 5,
+    });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    cleanup();
+
+    const month = renderPage('/produtividade/agenda?visao=mes&data=2026-10-14');
+    await waitFor(() =>
+      expect(month.container.querySelector('[data-day="2026-10-14"]')).toBeTruthy(),
+    );
+    fireEvent.click(month.container.querySelector('[data-day="2026-10-14"]')!);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('opens the same slot for a level that writes (the month cell too)', async () => {
+    serve(overview());
+    const month = renderPage('/produtividade/agenda?visao=mes&data=2026-10-14');
+    await waitFor(() =>
+      expect(month.container.querySelector('[data-day="2026-10-14"]')).toBeTruthy(),
+    );
+    fireEvent.click(month.container.querySelector('[data-day="2026-10-14"]')!);
+    expect(screen.getByRole('dialog', { name: 'Novo evento' })).toBeTruthy();
+  });
+
+  it('shows the details complete, with the read-only note and no edit or delete', async () => {
+    me = SELLER;
+    serve(
+      overview(),
+      answerWith(
+        event({
+          canEdit: false,
+          location: 'Sala 2',
+          description: 'Pauta da semana',
+          meetUrl: 'https://meet.google.com/abc-defg-hij',
+        }),
+      ),
+    );
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: OPEN_EVENT }));
+    const card = screen.getByRole('dialog', { name: 'Reunião de teste' });
+    expect(within(card).getByText('Sala 2')).toBeTruthy();
+    expect(within(card).getByText('Pauta da semana')).toBeTruthy();
+    expect(within(card).getByRole('link', { name: 'Participar com o Google Meet' })).toBeTruthy();
+    expect(within(card).getByText(AGENDA_NOTICES.readOnly)).toBeTruthy();
+    expect(within(card).queryByText(AGENDA_NOTICES.notEditable)).toBeNull();
+    expect(within(card).queryByRole('button', { name: /Editar|Excluir/ })).toBeNull();
+  });
+
+  it('says the same for a Wings Company event, whatever the calendar’s sharing', async () => {
+    me = SELLER;
+    serve(
+      overview({
+        wings: 'reader',
+        calendars: [overview().calendars[0]!, { ...overview().calendars[1]!, canWrite: false }],
+      }),
+      answerWith(event({ calendar: 'wings', canEdit: false, title: 'Reunião geral' })),
+    );
+    renderPage();
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'Reunião geral, quarta-feira, 14 de outubro, 09:00 a 10:00, agenda Wings Company',
+      }),
+    );
+    expect(screen.getByText(AGENDA_NOTICES.readOnly)).toBeTruthy();
+    expect(screen.queryByText(AGENDA_NOTICES.wingsReadOnly)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Editar|Excluir/ })).toBeNull();
+  });
+
+  it('still points a CRM meeting to its deal, with the deal’s note instead of the read-only one', async () => {
+    me = SELLER;
+    serve(overview(), answerWith(event({ canEdit: false, crm: { leadId: 'lead-1' } })));
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: OPEN_EVENT }));
+    const card = screen.getByRole('dialog');
+    expect(within(card).getByText(AGENDA_NOTICES.crmMeeting)).toBeTruthy();
+    expect(within(card).queryByText(AGENDA_NOTICES.readOnly)).toBeNull();
+    expect(within(card).getByRole('link', { name: 'Abrir negociação' }).getAttribute('href')).toBe(
+      '/crm-vendas/negociacoes/lead-1',
+    );
+  });
+
+  it('keeps “only the organizer may change it” for a level that writes', async () => {
+    serve(overview(), answerWith(event({ canEdit: false })));
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: OPEN_EVENT }));
+    expect(screen.getByText(AGENDA_NOTICES.notEditable)).toBeTruthy();
+    expect(screen.queryByText(AGENDA_NOTICES.readOnly)).toBeNull();
   });
 });
 

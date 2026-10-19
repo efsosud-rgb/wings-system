@@ -22,7 +22,9 @@ import {
 
 /**
  * Agenda (docs/agenda.md): every level opens it (`calendar.use`, scope own)
- * and each person reaches only their own Google account; there is no route
+ * and each person reaches only their own Google account; creating, editing and
+ * deleting also need `calendar.write`, which the sellers lack (they schedule
+ * from the lead's page, Eric 19/10). There is no route
  * that takes an employee id. Audit entries carry the event id and the
  * calendar key, never a title, a guest or a time.
  */
@@ -110,7 +112,7 @@ export const agendaRoutes: FastifyPluginAsync = async (app) => {
 
   app.post(
     '/agenda/events',
-    { preHandler: app.requirePermission('calendar.use') },
+    { preHandler: app.requirePermission('calendar.write') },
     async (request, reply) => {
       const body = agendaEventInputSchema.safeParse(request.body);
       if (!body.success) return invalid(reply, body.error.issues[0]?.message);
@@ -124,7 +126,7 @@ export const agendaRoutes: FastifyPluginAsync = async (app) => {
 
   app.patch(
     '/agenda/events/:calendar/:eventId',
-    { preHandler: app.requirePermission('calendar.use') },
+    { preHandler: app.requirePermission('calendar.write') },
     async (request, reply) => {
       const params = eventParams.safeParse(request.params);
       if (!params.success) return notFound(reply);
@@ -147,7 +149,7 @@ export const agendaRoutes: FastifyPluginAsync = async (app) => {
 
   app.delete(
     '/agenda/events/:calendar/:eventId',
-    { preHandler: app.requirePermission('calendar.use') },
+    { preHandler: app.requirePermission('calendar.write') },
     async (request, reply) => {
       const params = eventParams.safeParse(request.params);
       if (!params.success) return notFound(reply);

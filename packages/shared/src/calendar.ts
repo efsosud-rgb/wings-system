@@ -244,6 +244,7 @@ export const AGENDA_NOTICES = {
   notConfigured: 'O Google Workspace ainda não foi configurado no sistema',
   crmMeeting: 'Este evento é uma reunião do CRM: remarque ou cancele pela negociação',
   notEditable: 'Só quem organiza o evento pode alterá-lo',
+  readOnly: 'Na Agenda você só vê os eventos: marque, remarque ou cancele reuniões pela negociação',
 } as const;
 
 /** Where a CRM meeting's deal opens. */

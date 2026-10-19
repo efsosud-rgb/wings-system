@@ -176,6 +176,11 @@ export const meetingUpdateSchema = z
   });
 export type MeetingUpdateInput = z.infer<typeof meetingUpdateSchema>;
 
+/** Produtividade → Reuniões (Eric, 19/10): the ones still ahead, or the rest. */
+export const meetingListQuerySchema = z.object({
+  when: z.enum(['upcoming', 'past']).default('upcoming'),
+});
+
 export const meetingUploadUrlSchema = z.object({
   contentType: z.enum(MEETING_RECORDING_TYPES),
   sizeBytes: z.number().int().positive().max(MEETING_RECORDING_MAX_BYTES),
@@ -232,6 +237,11 @@ export interface MeetingSummary {
   transcriptState: TranscriptState;
   analysisState: AnalysisState;
   summarySendState: SummarySendState;
+}
+
+/** A row of Produtividade → Reuniões: the meeting and who owns its deal. */
+export interface MeetingListItem extends MeetingSummary {
+  dealOwnerName: string | null;
 }
 
 export interface MeetingSpeaker {

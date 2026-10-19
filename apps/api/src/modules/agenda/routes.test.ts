@@ -26,6 +26,8 @@ const NOW = new Date('2026-10-14T15:00:00Z');
 const WINGS = 'agenda-wings@wingscompany.com.br';
 const PERSON = 'pessoa@wingscompany.com.br';
 const RANGE = 'from=2026-10-12T00:00:00-03:00&to=2026-10-19T00:00:00-03:00';
+/** A level that writes on the Agenda: the sellers only read it (`calendar.write`, Eric 19/10). */
+const WRITER: RoleKey = 'gerente_comercial';
 
 const ME = { id: PERSON, summary: PERSON, primary: true, accessRole: 'owner' };
 const WINGS_WRITER = {
@@ -332,7 +334,7 @@ describe('Agenda: the overview', () => {
 
 describe('Agenda: reading events', () => {
   it('reads both calendars in the range, maps them, and leaves cancelled and working-location events out', async () => {
-    const seller = await connected('vendedor_formatacao');
+    const seller = await connected(WRITER);
     const { seed } = seller.google;
     seed('primary', own('timed', { htmlLink: 'https://calendar.google.com/event?eid=timed' }));
     seed('primary', {
@@ -444,7 +446,7 @@ describe('Agenda: reading events', () => {
   });
 
   it('applies the edit rule to each event', async () => {
-    const seller = await connected('vendedor_formatacao');
+    const seller = await connected(WRITER);
     const { seed } = seller.google;
     seed('primary', own('mine-self'));
     seed('primary', own('guest-copy', { organizer: { email: 'outra@exemplo.com' } }));
@@ -461,7 +463,7 @@ describe('Agenda: reading events', () => {
       'wings-own': true,
     });
 
-    const reader = await connected('vendedor_formatacao', { calendars: [ME, WINGS_READER] });
+    const reader = await connected(WRITER, { calendars: [ME, WINGS_READER] });
     reader.google.seed(WINGS, own('wings-read', { organizer: { email: WINGS } }));
     const readOnly = await eventsOf(reader.cookies);
     expect(byId(readOnly, 'wings-read')).toMatchObject({ calendar: 'wings', canEdit: false });
@@ -508,7 +510,8 @@ describe('Agenda: CRM meetings', () => {
       crm: { leadId },
       recurring: true,
     });
-    expect(byId(mine, 'crm-old')).toMatchObject({ crm: null, canEdit: true });
+    // A seller's Agenda only reads: nothing is editable, the cancelled meeting's event included.
+    expect(byId(mine, 'crm-old')).toMatchObject({ crm: null, canEdit: false });
     // Nothing of the lead beyond what Google itself shows.
     expect(JSON.stringify(mine)).not.toContain('Candidato');
 
@@ -520,10 +523,13 @@ describe('Agenda: CRM meetings', () => {
     seedAll(other.google);
     expect(byId(await eventsOf(other.cookies), 'crm-evt')!.crm).toEqual({ leadId: null });
 
+    // The sellers cannot write at all (calendar.write); the meeting guard stands for whoever can.
+    const manager = await connected(WRITER);
+    seedAll(manager.google);
     const patch = await app.inject({
       method: 'PATCH',
       url: '/agenda/events/mine/crm-evt',
-      cookies: owner.cookies,
+      cookies: manager.cookies,
       payload: { title: 'Outro' },
     });
     expect(patch.statusCode).toBe(409);
@@ -532,17 +538,21 @@ describe('Agenda: CRM meetings', () => {
       message: AGENDA_NOTICES.crmMeeting,
       leadId,
     });
+    // Marketing writes on the Agenda but holds no leads.read: the deal stays hidden from them.
+    const outsider = await connected('marketing');
+    seedAll(outsider.google);
     const del = await app.inject({
       method: 'DELETE',
       url: '/agenda/events/mine/crm-evt',
-      cookies: other.cookies,
+      cookies: outsider.cookies,
     });
     expect(del.statusCode).toBe(409);
     expect(del.json()).toMatchObject({ error: 'crm_meeting', leadId: null });
-    expect(owner.google.calls.some((c) => c.method === 'PATCH' || c.method === 'DELETE')).toBe(
-      false,
-    );
-    expect(other.google.calls.some((c) => c.method === 'DELETE')).toBe(false);
+    for (const person of [owner, other, manager, outsider]) {
+      expect(person.google.calls.some((c) => c.method === 'PATCH' || c.method === 'DELETE')).toBe(
+        false,
+      );
+    }
   });
 });
 
@@ -704,7 +714,7 @@ describe('Agenda: creating', () => {
   };
 
   it('creates a timed event with a Meet that was pending once, and audits it without its content', async () => {
-    const seller = await connected('vendedor_formatacao', { meetPendingReads: 1 });
+    const seller = await connected(WRITER, { meetPendingReads: 1 });
     const res = await app.inject({
       method: 'POST',
       url: '/agenda/events',
@@ -750,7 +760,7 @@ describe('Agenda: creating', () => {
   });
 
   it('creates an all-day event by date, inviting the guests', async () => {
-    const seller = await connected('vendedor_formatacao');
+    const seller = await connected(WRITER);
     const res = await app.inject({
       method: 'POST',
       url: '/agenda/events',
@@ -779,7 +789,7 @@ describe('Agenda: creating', () => {
   });
 
   it('writes on the Wings Company calendar for a writer and refuses a reader or someone it is not shared with', async () => {
-    const writer = await connected('vendedor_formatacao');
+    const writer = await connected(WRITER);
     const ok = await app.inject({
       method: 'POST',
       url: '/agenda/events',
@@ -796,7 +806,7 @@ describe('Agenda: creating', () => {
       `/calendar/v3/calendars/${encodeURIComponent(WINGS)}/events`,
     );
 
-    const reader = await connected('vendedor_formatacao', { calendars: [ME, WINGS_READER] });
+    const reader = await connected(WRITER, { calendars: [ME, WINGS_READER] });
     const refused = await app.inject({
       method: 'POST',
       url: '/agenda/events',
@@ -810,7 +820,7 @@ describe('Agenda: creating', () => {
     });
     expect(reader.google.calls.some((c) => c.method === 'POST')).toBe(false);
 
-    const outsider = await connected('vendedor_formatacao', { calendars: [ME] });
+    const outsider = await connected(WRITER, { calendars: [ME] });
     const notShared = await app.inject({
       method: 'POST',
       url: '/agenda/events',
@@ -822,7 +832,7 @@ describe('Agenda: creating', () => {
   });
 
   it('removes the event and answers 502 meet_failed when the Meet never comes', async () => {
-    const seller = await connected('vendedor_formatacao', { meetPendingReads: 10 });
+    const seller = await connected(WRITER, { meetPendingReads: 10 });
     const res = await app.inject({
       method: 'POST',
       url: '/agenda/events',
@@ -835,7 +845,7 @@ describe('Agenda: creating', () => {
   });
 
   it('refuses an invalid body (400)', async () => {
-    const seller = await connected('vendedor_formatacao');
+    const seller = await connected(WRITER);
     const res = await app.inject({
       method: 'POST',
       url: '/agenda/events',
@@ -852,7 +862,7 @@ describe('Agenda: creating', () => {
 
 describe('Agenda: editing and deleting', () => {
   it('reschedules an event of the person', async () => {
-    const seller = await connected('vendedor_formatacao');
+    const seller = await connected(WRITER);
     seller.google.seed('primary', own('mov'));
     const res = await app.inject({
       method: 'PATCH',
@@ -886,7 +896,7 @@ describe('Agenda: editing and deleting', () => {
   });
 
   it('turns a timed event into an all-day one, clearing dateTime', async () => {
-    const seller = await connected('vendedor_formatacao');
+    const seller = await connected(WRITER);
     seller.google.seed('primary', own('dia'));
     const res = await app.inject({
       method: 'PATCH',
@@ -908,7 +918,7 @@ describe('Agenda: editing and deleting', () => {
   });
 
   it('merges the guest list, keeping each remaining guest’s answer', async () => {
-    const seller = await connected('vendedor_formatacao');
+    const seller = await connected(WRITER);
     seller.google.seed(
       'primary',
       own('conv', {
@@ -943,7 +953,7 @@ describe('Agenda: editing and deleting', () => {
   });
 
   it('refuses an edit by a guest who does not organize the event (409)', async () => {
-    const seller = await connected('vendedor_formatacao');
+    const seller = await connected(WRITER);
     seller.google.seed('primary', own('alheio', { organizer: { email: 'outra@exemplo.com' } }));
     const res = await app.inject({
       method: 'PATCH',
@@ -960,7 +970,7 @@ describe('Agenda: editing and deleting', () => {
   });
 
   it('patches one occurrence of a recurring event by its own id', async () => {
-    const seller = await connected('vendedor_formatacao');
+    const seller = await connected(WRITER);
     const occurrence = 'serie_20261015T130000Z';
     seller.google.seed('primary', own(occurrence, { recurringEventId: 'serie' }));
     const res = await app.inject({
@@ -981,7 +991,7 @@ describe('Agenda: editing and deleting', () => {
   });
 
   it('answers 404 for an unknown event, a cancelled one, or a calendar key it does not know', async () => {
-    const seller = await connected('vendedor_formatacao');
+    const seller = await connected(WRITER);
     seller.google.seed('primary', own('foi', { status: 'cancelled' }));
     for (const url of [
       '/agenda/events/mine/nada',
@@ -1000,7 +1010,7 @@ describe('Agenda: editing and deleting', () => {
   });
 
   it('deletes an event, telling its guests', async () => {
-    const seller = await connected('vendedor_formatacao');
+    const seller = await connected(WRITER);
     seller.google.seed(
       'primary',
       own('apagar', {
@@ -1027,7 +1037,7 @@ describe('Agenda: editing and deleting', () => {
   });
 
   it('keeps a reader of the Wings Company calendar from changing its events', async () => {
-    const reader = await connected('vendedor_formatacao', { calendars: [ME, WINGS_READER] });
+    const reader = await connected(WRITER, { calendars: [ME, WINGS_READER] });
     reader.google.seed(WINGS, own('w', { organizer: { email: WINGS } }));
     const res = await app.inject({
       method: 'DELETE',
@@ -1088,7 +1098,7 @@ describe('Agenda: review fixes', () => {
   });
 
   it('reads a usage limit as a pause, not as a missing permission', async () => {
-    const seller = await connected('vendedor_formatacao', {
+    const seller = await connected(WRITER, {
       eventsStatusFor: { [WINGS]: 403 },
       refusalReason: 'rateLimitExceeded',
     });
@@ -1105,7 +1115,7 @@ describe('Agenda: review fixes', () => {
     expect(write.statusCode).toBe(502);
     expect(write.json()).toMatchObject({ error: 'google_rate_limited' });
     // A real refusal is still one.
-    const refused = await connected('vendedor_formatacao', {
+    const refused = await connected(WRITER, {
       eventsStatusFor: { [WINGS]: 403 },
       refusalReason: 'forbidden',
     });
@@ -1113,7 +1123,7 @@ describe('Agenda: review fixes', () => {
   });
 
   it('removes the event when the Meet re-read fails, and says meet_failed only once it is gone', async () => {
-    const seller = await connected('vendedor_formatacao', { meetPendingReads: 1 });
+    const seller = await connected(WRITER, { meetPendingReads: 1 });
     failing(seller.google, (method, url) =>
       method === 'GET' && url.includes('/events/evt1') ? 'network' : null,
     );
@@ -1129,7 +1139,7 @@ describe('Agenda: review fixes', () => {
   });
 
   it('never says "not created" when the cleanup failed too: it points to the event on Google', async () => {
-    const seller = await connected('vendedor_formatacao', { meetPendingReads: 1 });
+    const seller = await connected(WRITER, { meetPendingReads: 1 });
     failing(seller.google, (method, url) =>
       url.includes('/events/evt1') && (method === 'GET' || method === 'DELETE')
         ? new Response('{}', { status: 500 })
@@ -1150,7 +1160,7 @@ describe('Agenda: review fixes', () => {
   });
 
   it('asks to check Google before a retry when the create answer was lost', async () => {
-    const seller = await connected('vendedor_formatacao');
+    const seller = await connected(WRITER);
     failing(seller.google, (method, url) =>
       method === 'POST' && url.includes('/events') ? 'network' : null,
     );
@@ -1186,7 +1196,7 @@ describe('Agenda: review fixes', () => {
   });
 
   it('says whether a change reaches the guests: only on the organizer’s copy with guests', async () => {
-    const seller = await connected('vendedor_formatacao');
+    const seller = await connected(WRITER);
     const guest = { email: 'convidado@exemplo.com', responseStatus: 'accepted' };
     const me = { email: PERSON, self: true, responseStatus: 'accepted' };
     seller.google.seed('primary', own('with-guests', { attendees: [guest] }));
@@ -1219,5 +1229,111 @@ describe('Agenda: who opens it', () => {
       const res = await app.inject({ method: 'GET', url: '/agenda', cookies: session.cookies });
       expect(res.statusCode).toBe(200);
     }
+  });
+});
+
+/** Eric 19/10: the sellers read the Agenda and schedule only from the deal (`calendar.write`). */
+describe('Agenda: the sellers only read', () => {
+  const body = {
+    calendar: 'mine',
+    title: 'Planejamento',
+    allDay: false,
+    start: '2026-10-15T09:00:00-03:00',
+    end: '2026-10-15T10:00:00-03:00',
+    location: null,
+    description: null,
+    attendees: [],
+    createMeet: false,
+    colorId: null,
+  };
+  const SELLERS = ['vendedor_expansao', 'vendedor_formatacao'] as const;
+
+  it('refuses a seller’s create, edit and delete with 403, before the body and without a call to Google', async () => {
+    for (const role of SELLERS) {
+      const seller = await connected(role);
+      seller.google.seed('primary', own('mine'));
+      const writes = [
+        { method: 'POST', url: '/agenda/events', payload: body },
+        // A body that would be a 400 for anyone else: the permission answers first.
+        { method: 'POST', url: '/agenda/events', payload: { title: '' } },
+        { method: 'PATCH', url: '/agenda/events/mine/mine', payload: { title: 'Outro' } },
+        { method: 'DELETE', url: '/agenda/events/mine/mine', payload: undefined },
+      ] as const;
+      for (const write of writes) {
+        const res = await app.inject({ ...write, cookies: seller.cookies });
+        expect(res.statusCode, `${role} ${write.method} ${write.url}`).toBe(403);
+      }
+      expect(seller.google.calls).toEqual([]);
+      expect(seller.google.events.get('mine')!.deleted).toBeFalsy();
+    }
+  });
+
+  it('answers 401 to the writes without a session', async () => {
+    for (const method of ['POST', 'PATCH', 'DELETE'] as const) {
+      const url = method === 'POST' ? '/agenda/events' : '/agenda/events/mine/mine';
+      expect((await app.inject({ method, url })).statusCode, method).toBe(401);
+    }
+  });
+
+  it('lets a level with calendar.write through the same routes', async () => {
+    const writer = await connected(WRITER);
+    writer.google.seed('primary', own('mine'));
+    const create = await app.inject({
+      method: 'POST',
+      url: '/agenda/events',
+      cookies: writer.cookies,
+      payload: body,
+    });
+    expect(create.statusCode).toBe(201);
+    const patch = await app.inject({
+      method: 'PATCH',
+      url: '/agenda/events/mine/mine',
+      cookies: writer.cookies,
+      payload: { title: 'Outro' },
+    });
+    expect(patch.statusCode).toBe(200);
+    const del = await app.inject({
+      method: 'DELETE',
+      url: '/agenda/events/mine/mine',
+      cookies: writer.cookies,
+    });
+    expect(del.statusCode).toBe(204);
+  });
+
+  it('returns a seller every event in full with canEdit false, Wings Company’s included', async () => {
+    const seed = (google: ReturnType<typeof fakeGoogle>) => {
+      google.seed('primary', own('mine-self'));
+      google.seed(
+        WINGS,
+        own('wings-own', { organizer: { email: WINGS }, summary: 'Reunião geral' }),
+      );
+    };
+    const writer = await connected(WRITER);
+    seed(writer.google);
+    const forWriter = await eventsOf(writer.cookies);
+    expect(byId(forWriter, 'mine-self')!.canEdit).toBe(true);
+    expect(byId(forWriter, 'wings-own')!.canEdit).toBe(true);
+
+    for (const role of SELLERS) {
+      const seller = await connected(role);
+      seed(seller.google);
+      const forSeller = await eventsOf(seller.cookies);
+      expect(forSeller.events.map((e) => e.canEdit)).toEqual([false, false]);
+      // Nothing else is hidden or masked: the same events, titles and calendars as the writer's.
+      const strip = (answer: AgendaEventsAnswer) =>
+        answer.events.map(({ canEdit: _canEdit, ...rest }) => rest);
+      expect(strip(forSeller)).toEqual(strip(forWriter));
+      expect(forSeller.events.map((e) => e.title).sort()).toEqual([
+        'Evento mine-self',
+        'Reunião geral',
+      ]);
+    }
+  });
+
+  it('still lets a seller open the overview and read the events', async () => {
+    const seller = await connected('vendedor_formatacao');
+    seller.google.seed('primary', own('x'));
+    expect((await overviewOf(seller.cookies)).state).toBe('ready');
+    expect((await eventsOf(seller.cookies)).events).toHaveLength(1);
   });
 });
