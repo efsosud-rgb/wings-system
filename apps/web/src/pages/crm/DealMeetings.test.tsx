@@ -20,6 +20,7 @@ const { state, calls, mutation } = vi.hoisted(() => {
     summaryCreate: vi.fn(),
     update: vi.fn(),
     upload: vi.fn(),
+    step: vi.fn(),
   };
   const mutation = (mutate = vi.fn()) => ({ mutate, isPending: false, error: null });
   return {
@@ -30,6 +31,9 @@ const { state, calls, mutation } = vi.hoisted(() => {
       meetings: [] as MeetingSummary[],
       meeting: null as Meeting | null,
       createError: null as unknown,
+      // What "Iniciar"/"Encerrar" answers on success, and the error it can show.
+      stepResult: null as Meeting | null,
+      stepError: null as unknown,
       // What the Google status query answers instead of its default (a failed request).
       googleQuery: {} as Record<string, unknown>,
       openSpy: vi.fn(),
@@ -78,6 +82,14 @@ vi.mock('../../api/crm.js', () => ({
     },
   }),
   useUpdateMeeting: () => mutation(calls.update),
+  useMeetingStep: () => ({
+    isPending: false,
+    error: state.stepError,
+    mutate: (input: unknown, options?: { onSuccess?: (meeting: Meeting) => void }) => {
+      calls.step(input);
+      if (state.stepResult) options?.onSuccess?.(state.stepResult);
+    },
+  }),
   useUploadRecording: () => mutation(calls.upload),
   fetchRecordingLink: vi.fn(),
   useMeetingTranscript: () => ({ data: undefined, isLoading: false, isError: false }),
@@ -172,6 +184,8 @@ afterEach(() => {
   state.meetings = [];
   state.meeting = null;
   state.createError = null;
+  state.stepResult = null;
+  state.stepError = null;
   state.googleQuery = {};
   state.google = {
     ...state.google,
@@ -462,5 +476,103 @@ describe('the Reunião section', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reunião de diagnóstico' }));
     expect(screen.queryByText('Resumo para o dono da franqueadora')).toBeNull();
     expect(screen.getByText(/Guardada · 30:00 · 47\.7 MB/)).toBeTruthy();
+  });
+});
+
+describe('Iniciar and Encerrar record on the deal', () => {
+  const NO_RECORDING = { state: 'nenhuma', fileId: null, durationSeconds: null, sizeBytes: null };
+
+  it('"Iniciar reunião" opens the Meet and starts the scheduled meeting for who can write', () => {
+    state.meetings = [summary()];
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Iniciar reunião' }));
+    expect(open).toHaveBeenCalledWith(
+      'https://meet.google.com/abc-defg-hij',
+      'wings-meet',
+      expect.stringContaining('popup'),
+    );
+    expect(calls.step).toHaveBeenCalledTimes(1);
+    expect(calls.step).toHaveBeenCalledWith({ id: 'm1', step: 'start' });
+    // Not yet under way as far as this screen knows: it still reads Iniciar, with no Encerrar.
+    expect(screen.queryByRole('button', { name: 'Encerrar reunião' })).toBeNull();
+  });
+
+  it('opens the Meet but records nothing for who cannot write', () => {
+    state.meetings = [summary()];
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    render(<MeetingsTab data={loaded()} canWrite={false} onRegisterHeld={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Iniciar reunião' }));
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(calls.step).not.toHaveBeenCalled();
+  });
+
+  it('a meeting under way reads "Voltar ao Meet" and offers "Encerrar reunião"', () => {
+    state.meetings = [summary({ status: 'em_andamento' })];
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    expect(screen.queryByRole('button', { name: 'Iniciar reunião' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Encerrar reunião' })).toBeTruthy();
+    // Going back to the Meet opens the window and does not start it again.
+    fireEvent.click(screen.getByRole('button', { name: 'Voltar ao Meet' }));
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(calls.step).not.toHaveBeenCalled();
+  });
+
+  it('shows no "Encerrar reunião" to who cannot write', () => {
+    state.meetings = [summary({ status: 'em_andamento' })];
+    render(<MeetingsTab data={loaded()} canWrite={false} onRegisterHeld={() => {}} />);
+    expect(screen.getByRole('button', { name: 'Voltar ao Meet' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Encerrar reunião' })).toBeNull();
+  });
+
+  it('"Encerrar reunião" ends it, says it was recorded, asks for the recording and opens the meeting', () => {
+    state.meetings = [summary({ status: 'em_andamento' })];
+    // What the API answers to the end, and then what the opened meeting reads.
+    const ended = meeting({
+      status: 'encerrada',
+      recordingState: 'nenhuma',
+      recording: NO_RECORDING,
+      analysisState: 'nenhuma',
+      summarySendState: 'nenhum',
+    } as Partial<Meeting>);
+    state.stepResult = ended;
+    state.meeting = ended;
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    expect(screen.queryByText(/Reunião encerrada e registrada/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Encerrar reunião' }));
+    expect(calls.step).toHaveBeenCalledWith({ id: 'm1', step: 'end' });
+    expect(screen.getByRole('status').textContent).toContain(
+      'Reunião encerrada e registrada na negociação. Envie a gravação abaixo',
+    );
+    // The meeting opens on its detail, which takes the recording.
+    expect(
+      screen.getByRole('button', { name: 'Reunião de diagnóstico' }).getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(screen.getByText('Nenhuma gravação enviada.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Enviar gravação' })).toBeTruthy();
+  });
+
+  it('says why it could not record, and shows no success text', () => {
+    state.meetings = [summary({ status: 'em_andamento' })];
+    state.stepError = new ApiError(409, {
+      error: 'meeting_not_started',
+      message: 'Esta reunião já foi encerrada.',
+    });
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    expect(screen.getByText('Esta reunião já foi encerrada.')).toBeTruthy();
+    expect(screen.queryByText(/Reunião encerrada e registrada/)).toBeNull();
+  });
+
+  it('marks an ended meeting without a recording with "falta a gravação", and only then', () => {
+    state.meetings = [
+      summary({ id: 'm1', title: 'Sem gravação', status: 'encerrada', recordingState: 'nenhuma' }),
+      summary({ id: 'm2', title: 'Gravada', status: 'encerrada', recordingState: 'guardada' }),
+      summary({ id: 'm3', title: 'Marcada', status: 'agendada', recordingState: 'nenhuma' }),
+    ];
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    const chips = screen.getAllByText('falta a gravação');
+    expect(chips).toHaveLength(1);
+    expect(chips[0]!.closest('li')?.textContent).toContain('Sem gravação');
   });
 });

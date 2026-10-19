@@ -22,6 +22,7 @@ import {
   useCreateMeeting,
   useMeeting,
   useMeetings,
+  useMeetingStep,
   useMeetingTranscript,
   useNameSpeakers,
   useNextStepTask,
@@ -34,6 +35,7 @@ import type { LoadedLead } from '../../api/leads.js';
 import { ConfirmDialog } from '../../components/agenda/ConfirmDialog.js';
 import { Icon } from '../../components/Icon.js';
 import { failureReason } from '../../lib/failure.js';
+import { openMeetBeside } from '../../lib/meet.js';
 import { formatDateTime, formatDay, toLocalInput } from './format.js';
 
 /**
@@ -61,17 +63,7 @@ const messageOf = (error: unknown, fallback: string) =>
       ? error.message
       : fallback;
 
-/** Opens the Meet in its own window beside the Wings, which stays on the deal. */
-export function openMeetBeside(url: string) {
-  const width = Math.min(1100, Math.round(window.screen.availWidth * 0.55));
-  const height = Math.round(window.screen.availHeight * 0.9);
-  const left = window.screen.availWidth - width;
-  window.open(
-    url,
-    'wings-meet',
-    `popup,width=${width},height=${height},left=${left},top=0,noopener,noreferrer`,
-  );
-}
+export { openMeetBeside };
 
 function Dash({ reason }: { reason: string }) {
   return (
@@ -1017,6 +1009,9 @@ function MeetingRow({
           {formatDateTime(meeting.startsAt)} · {MEETING_STATUS_LABELS[meeting.status]} · agenda{' '}
           {meeting.calendar === 'wings' ? 'da Wings' : 'do vendedor'}
           {meeting.recordingState === 'guardada' && ' · gravada'}
+          {meeting.status === 'encerrada' && meeting.recordingState === 'nenhuma' && (
+            <span className="crm-chip">falta a gravação</span>
+          )}
           {meeting.analysisState === 'pronta' && ' · analisada'}
           {meeting.summarySendState === 'enviado' && ' · resumo enviado'}
         </span>
@@ -1077,7 +1072,10 @@ export function MeetingsTab({
   const meetings = useMeetings(lead.id);
   const [openId, setOpenId] = useState<string | null>(null);
   const [scheduling, setScheduling] = useState(false);
+  const step = useMeetingStep();
+  const [justEnded, setJustEnded] = useState<string | null>(null);
   const next = meetings.data ? meetingToStart(meetings.data) : null;
+  const running = next?.status === 'em_andamento' ? next : null;
   const expansion = lead.pipeline === 'expansao';
   const held = (data.activities as LeadActivity[])
     .filter((activity) => activity.kind === 'meeting')
@@ -1112,16 +1110,50 @@ export function MeetingsTab({
             title={
               next ? `Abre ${next.title} ao lado do Wings` : 'Nenhuma reunião com link para iniciar'
             }
-            onClick={() => next?.meetUrl && openMeetBeside(next.meetUrl)}
+            onClick={() => {
+              if (!next?.meetUrl) return;
+              // The window first, inside the click, or the browser blocks it.
+              openMeetBeside(next.meetUrl);
+              if (canWrite && next.status === 'agendada')
+                step.mutate({ id: next.id, step: 'start' });
+            }}
           >
-            Iniciar reunião
+            {running ? 'Voltar ao Meet' : 'Iniciar reunião'}
           </button>
+          {canWrite && running && (
+            <button
+              type="button"
+              className="crm-btn is-small"
+              disabled={step.isPending}
+              onClick={() =>
+                step.mutate(
+                  { id: running.id, step: 'end' },
+                  {
+                    onSuccess: (meeting) => {
+                      setJustEnded(meeting.id);
+                      setOpenId(meeting.id);
+                    },
+                  },
+                )
+              }
+            >
+              Encerrar reunião
+            </button>
+          )}
         </span>
       </div>
       <p className="crm-sub">
         Agendar cria o evento e o Meet no Google Agenda com a sua conta (ou marca com um link
-        colado); Iniciar abre o Meet numa janela ao lado do Wings.
+        colado); Iniciar abre o Meet numa janela ao lado do Wings e registra o início na negociação;
+        Encerrar registra o fim.
       </p>
+      <Problem error={step.error} fallback="Não foi possível registrar na negociação." />
+      {justEnded && (
+        <p className="crm-wa-window is-open" role="status">
+          Reunião encerrada e registrada na negociação. Envie a gravação abaixo para transcrever e
+          analisar.
+        </p>
+      )}
       {scheduling && (
         <ScheduleForm
           lead={lead}

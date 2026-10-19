@@ -295,9 +295,15 @@ describe('Agenda — details', () => {
     renderPage();
     fireEvent.click(await screen.findByRole('button', { name: MEETING }));
     const card = screen.getByRole('dialog', { name: 'Reunião de teste' });
-    const meet = within(card).getByRole('link', { name: 'Participar com o Google Meet' });
-    expect(meet.getAttribute('href')).toBe('https://meet.google.com/abc-defg-hij');
-    expect(meet.getAttribute('rel')).toBe('noopener noreferrer');
+    // The Meet opens in its own window beside the Agenda, not in a new tab.
+    expect(within(card).queryByRole('link', { name: 'Participar com o Google Meet' })).toBeNull();
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    fireEvent.click(within(card).getByRole('button', { name: 'Participar com o Google Meet' }));
+    expect(open).toHaveBeenCalledWith(
+      'https://meet.google.com/abc-defg-hij',
+      'wings-meet',
+      expect.stringContaining('popup'),
+    );
     expect(within(card).getByText('quarta-feira, 14 de outubro · 09:00 – 10:00')).toBeTruthy();
     expect(within(card).getByText('Sala 2')).toBeTruthy();
     expect(
