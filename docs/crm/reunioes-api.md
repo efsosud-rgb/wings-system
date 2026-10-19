@@ -43,6 +43,14 @@ Nos leads de **Expansão** há uma quinta trilha: o **envio do resumo ao dono da
 
 `GET /leads/:id/meetings` → `{ meetings: MeetingSummary[] }`, mais recentes primeiro.
 
+`GET /meetings?when=upcoming|past` → `{ meetings: MeetingListItem[] }` (`leads.read`): a tela
+Produtividade → Reuniões (Eric, 19/10), só leitura. Filtra pelo dono da negociação
+(`leadOwnerFilter`): o vendedor vê as reuniões das negociações dele; Admin Master, Diretoria e
+Gerente comercial veem todas. `upcoming` (padrão) é o que não terminou nem foi encerrado ou
+cancelado, da mais próxima para a mais distante; `past` é o resto, da mais recente para trás. No
+máximo 200 linhas. Cada linha é o `MeetingSummary` mais `dealOwnerName`. Marcar, remarcar e iniciar
+continuam só pela ficha.
+
 `POST /leads/:id/meetings` → `201 { meeting: Meeting }`
 
 ```json

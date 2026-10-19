@@ -2,6 +2,7 @@ import {
   AGENDA_NOTICES,
   currentCalendarColor,
   GOOGLE_EVENT_COLORS,
+  grantedScope,
   type Actor,
   type AgendaCalendar,
   type AgendaCalendarKey,
@@ -405,6 +406,9 @@ export async function eventsFor(
       items.flatMap((raw) => [String(raw.id), ...(seriesIdOf(raw) ? [seriesIdOf(raw)!] : [])]),
     ),
   );
+  // Without `calendar.write` (the sellers, Eric 19/10) the Agenda only reads: every event, Wings
+  // Company's included, in full and with nothing editable.
+  const writes = grantedScope(actor, 'calendar.write') !== null;
   answer.events = read
     .flatMap(({ calendar, items }) =>
       items.map((raw) =>
@@ -417,6 +421,7 @@ export async function eventsFor(
         ),
       ),
     )
+    .map((event) => (writes ? event : { ...event, canEdit: false }))
     .sort((a, b) => startTimeOf(a) - startTimeOf(b));
   return answer;
 }

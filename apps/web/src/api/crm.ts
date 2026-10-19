@@ -27,6 +27,7 @@ import type {
   LeadTaskKind,
   Meeting,
   MeetingCreateInput,
+  MeetingListItem,
   MeetingSpeakersInput,
   MeetingSummary,
   MeetingTranscript,
@@ -524,6 +525,15 @@ export const useMeetings = (leadId: string) =>
     queryKey: ['leads', leadId, 'meetings'],
     queryFn: () =>
       api.get<{ meetings: MeetingSummary[] }>(`/leads/${leadId}/meetings`).then((r) => r.meetings),
+    retry: false,
+  });
+
+/** Produtividade → Reuniões: the meetings of the deals in reach, still ahead or past. */
+export const useMeetingList = (when: 'upcoming' | 'past') =>
+  useQuery({
+    queryKey: ['meetings', 'list', when],
+    queryFn: () =>
+      api.get<{ meetings: MeetingListItem[] }>(`/meetings?when=${when}`).then((r) => r.meetings),
     retry: false,
   });
 

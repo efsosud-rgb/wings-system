@@ -78,6 +78,11 @@ export interface NavSubmodule {
    * screens everyone else opens in Dashboard and Gestão.
    */
   levels?: readonly RoleKey[];
+  /**
+   * Open to the sellers too, though it sits outside CRM Vendas: Agenda and Reuniões in
+   * Produtividade (Eric, 19/10). `permission` still decides.
+   */
+  sellers?: true;
   status: SubmoduleStatus;
   kind: SubmoduleKind;
   /** Shown on the placeholder so it is obvious what will live there. */
@@ -209,16 +214,6 @@ export const NAVIGATION: readonly NavModule[] = [
         icon: 'briefcase',
         description: 'O projeto de cada cliente: status e as oito etapas',
         permission: 'projects.read',
-        levels: CRM_ONLY_ROLES,
-        status: 'ready',
-        kind: 'crud',
-      },
-      {
-        path: '/crm-vendas/agenda',
-        label: 'Agenda',
-        icon: 'calendar',
-        description: 'A sua agenda Google e a da Wings Company, como no Google Agenda',
-        permission: 'calendar.use',
         levels: CRM_ONLY_ROLES,
         status: 'ready',
         kind: 'crud',
@@ -388,17 +383,26 @@ export const NAVIGATION: readonly NavModule[] = [
     icon: 'calendar',
     group: 'modulos',
     submodules: [
-      // Everyone opens the Agenda (Eric, 14/10); the sellers, whose menu is CRM Vendas alone, at
-      // /crm-vendas/agenda: the same page.
+      // Everyone opens the Agenda (Eric, 14/10), the sellers included (Eric, 19/10: Agenda and
+      // Reuniões in Produtividade, read-only; they schedule from the lead's page).
       {
         path: '/produtividade/agenda',
         label: 'Agenda',
         description: 'A sua agenda Google e a da Wings Company, como no Google Agenda',
         permission: 'calendar.use',
+        sellers: true,
         status: 'ready',
         kind: 'crud',
       },
-      soon('/produtividade/reunioes', 'Reuniões'),
+      {
+        path: '/produtividade/reunioes',
+        label: 'Reuniões',
+        description: 'As reuniões marcadas pela ficha do lead, só leitura',
+        permission: 'leads.read',
+        sellers: true,
+        status: 'ready',
+        kind: 'report',
+      },
       soon('/produtividade/drive', 'Drive'),
     ],
   },
@@ -541,8 +545,9 @@ const GROUP_OF_PATH: ReadonlyMap<string, NavGroup> = new Map(
 export function canSeeSubmodule(viewer: NavViewer | null, submodule: NavSubmodule): boolean {
   if (!viewer) return false;
   if (submodule.levels && !submodule.levels.includes(viewer.role)) return false;
-  // A seller sees Início and CRM Vendas, nothing else, whatever else the level holds.
+  // A seller sees Início, CRM Vendas and what says `sellers`, whatever else the level holds.
   if (
+    !submodule.sellers &&
     CRM_ONLY_ROLES.includes(viewer.role) &&
     (GROUP_OF_PATH.get(submodule.path) ?? 'modulos') === 'modulos'
   ) {
@@ -593,6 +598,8 @@ export const LEGACY_REDIRECTS: readonly { from: string; to: string }[] = [
   // CRM Vendas redesigned on 2026-10-05 (Eric): Funil became Negociações, settings moved into the module.
   { from: '/crm-vendas/funil', to: '/crm-vendas/negociacoes' },
   { from: '/administracao/crm', to: '/crm-vendas/configuracoes' },
+  // The sellers' Agenda moved to Produtividade on 2026-10-19 (Eric).
+  { from: '/crm-vendas/agenda', to: '/produtividade/agenda' },
 ];
 
 /** Where a signed-in user lands: the first sub-module they can actually open. */

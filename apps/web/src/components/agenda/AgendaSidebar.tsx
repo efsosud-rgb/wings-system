@@ -27,7 +27,8 @@ export function AgendaSidebar({
   overview: AgendaOverview;
   hidden: ReadonlySet<AgendaCalendarKey>;
   onToggle: (key: AgendaCalendarKey) => void;
-  onCreate: () => void;
+  /** Absent without `calendar.write`: the sellers schedule from the deal. */
+  onCreate?: () => void;
   anchor: string;
   today: string;
   period: { start: string; end: string };
@@ -38,10 +39,12 @@ export function AgendaSidebar({
 
   return (
     <aside className="agenda-side" aria-label="Agendas">
-      <button type="button" className="agenda-create" onClick={onCreate}>
-        <Icon name="plus" size={22} />
-        <span>Criar</span>
-      </button>
+      {onCreate && (
+        <button type="button" className="agenda-create" onClick={onCreate}>
+          <Icon name="plus" size={22} />
+          <span>Criar</span>
+        </button>
+      )}
       <MiniCalendar anchor={anchor} today={today} period={period} onPick={onPick} />
 
       <section className="agenda-cals" aria-labelledby="agenda-cals-mine">

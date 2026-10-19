@@ -20,7 +20,8 @@ const NARROW_PX = 700;
 /**
  * An event's details, as the Google Agenda shows them: a card beside the
  * event on a wide screen, a centered dialog on a phone. Edit and delete only
- * when the person may (`canEdit`); a CRM meeting points to its deal instead.
+ * when the person may (`canEdit`); a CRM meeting points to its deal instead. `readOnly`: the
+ * person has no `calendar.write` (the sellers) and schedules from the deal.
  */
 export function EventDetails({
   event,
@@ -29,6 +30,7 @@ export function EventDetails({
   onClose,
   onEdit,
   onDelete,
+  readOnly = false,
 }: {
   event: AgendaEvent;
   overview: AgendaOverview;
@@ -37,6 +39,7 @@ export function EventDetails({
   onClose: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  readOnly?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -213,9 +216,11 @@ export function EventDetails({
 
         {!event.canEdit && !event.crm && (
           <p className="agenda-details-note">
-            {event.calendar === 'wings' && overview.wings === 'reader'
-              ? AGENDA_NOTICES.wingsReadOnly
-              : AGENDA_NOTICES.notEditable}
+            {readOnly
+              ? AGENDA_NOTICES.readOnly
+              : event.calendar === 'wings' && overview.wings === 'reader'
+                ? AGENDA_NOTICES.wingsReadOnly
+                : AGENDA_NOTICES.notEditable}
           </p>
         )}
 

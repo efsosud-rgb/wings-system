@@ -3,6 +3,7 @@ import {
   WINGS_CLIENT_ID,
   leadHidesWings,
   meetingCreateSchema,
+  meetingListQuerySchema,
   meetingRecordingCompleteSchema,
   meetingSpeakersSchema,
   meetingUpdateSchema,
@@ -17,7 +18,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { clientContacts, crmMeetings, jobs, leadEvents, leads } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
-import { leadInScope } from '../leads/access.js';
+import { leadInScope, leadOwnerFilter } from '../leads/access.js';
 import { ZapiClient } from '../../lib/zapi.js';
 import { googleWorkspaceDepsOf } from '../google-workspace/service.js';
 import { createTask } from '../leads/crm.js';
@@ -31,6 +32,7 @@ import {
 } from './google-sync.js';
 import {
   maskContact,
+  meetingListFor,
   runMeetingAnalysis,
   runQueuedAnalyses,
   toMeeting,
@@ -198,6 +200,18 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
         .where(eq(crmMeetings.leadId, params.data.id))
         .orderBy(desc(crmMeetings.startsAt));
       return reply.send({ meetings: rows.map(toMeetingSummary) });
+    },
+  );
+
+  // Produtividade → Reuniões: a seller reads the meetings of their own deals, Admin every one.
+  app.get(
+    '/meetings',
+    { preHandler: app.requirePermission('leads.read') },
+    async (request, reply) => {
+      const query = meetingListQuerySchema.safeParse(request.query);
+      if (!query.success) return bad(reply);
+      const owner = leadOwnerFilter(request.session.actor, 'leads.read');
+      return reply.send({ meetings: await meetingListFor(db, owner, query.data.when, now()) });
     },
   );
 
