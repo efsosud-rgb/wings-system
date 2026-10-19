@@ -1,15 +1,17 @@
 import { SESSION_COOKIE, type Meeting, type RoleKey } from '@wings/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
+  auditLog,
   clientContacts,
   crmMeetingAnalysisRuns,
   clients,
   crmMeetings,
   jobs,
+  leadEvents,
   leadTasks,
   leads,
 } from '../../db/schema/index.js';
@@ -24,6 +26,8 @@ let harness: TestDatabase;
 let db: Database;
 let app: FastifyInstance;
 const NOW = new Date('2026-10-06T15:00:00Z');
+// The app clock: a test moves it to age a meeting, and `afterEach` puts it back.
+let clock = NOW;
 const stored = new Map<string, number>();
 const sent: Mail[] = [];
 const llmCost = 0.01;
@@ -81,12 +85,16 @@ beforeAll(async () => {
       MEETINGS_DAILY_USD: '0.05',
     }),
     db,
-    now: () => NOW,
+    now: () => clock,
     storage,
     agentLlm: llm,
     mailer: { enabled: true, send: async (mail) => void sent.push(mail) },
   });
 }, 60_000);
+
+afterEach(() => {
+  clock = NOW;
+});
 
 afterAll(async () => {
   await app?.close();
@@ -466,5 +474,158 @@ describe('Reuniões', () => {
       payload: {},
     });
     expect(response.json()).toMatchObject({ error: 'not_expansion' });
+  });
+});
+
+describe('Iniciar e Encerrar', () => {
+  const call = (cookies: Record<string, string>, id: string, step: 'start' | 'end') =>
+    app.inject({ method: 'POST', url: `/meetings/${id}/${step}`, cookies });
+  const eventsOf = (leadId: string, kind: string) =>
+    db
+      .select()
+      .from(leadEvents)
+      .where(and(eq(leadEvents.leadId, leadId), eq(leadEvents.kind, kind)));
+  const auditOf = (meetingId: string, action: string) =>
+    db
+      .select()
+      .from(auditLog)
+      .where(and(eq(auditLog.entityId, meetingId), eq(auditLog.action, action)));
+  const statusOf = async (id: string) =>
+    (await db.select().from(crmMeetings).where(eq(crmMeetings.id, id)))[0]?.status;
+
+  it('starts a scheduled meeting once: status, one meeting.started event, one audit row', async () => {
+    const seller = await sessionFor('vendedor_formatacao');
+    const leadId = await deal(seller.id);
+    const meeting = await schedule(seller.cookies, leadId);
+
+    const started = await call(seller.cookies, meeting.id, 'start');
+    expect(started.statusCode).toBe(200);
+    expect(started.json().meeting).toMatchObject({ id: meeting.id, status: 'em_andamento' });
+    const events = await eventsOf(leadId, 'meeting.started');
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      actorEmployeeId: seller.id,
+      detail: { meetingId: meeting.id },
+    });
+    expect(events[0]!.at.toISOString()).toBe(NOW.toISOString());
+    const audit = await auditOf(meeting.id, 'meeting.started');
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ actorEmployeeId: seller.id, entity: 'meeting' });
+
+    // Going back to the Meet (second click, other tab) answers the meeting and records nothing.
+    const again = await call(seller.cookies, meeting.id, 'start');
+    expect(again.statusCode).toBe(200);
+    expect(again.json().meeting.status).toBe('em_andamento');
+    expect(await eventsOf(leadId, 'meeting.started')).toHaveLength(1);
+    expect(await auditOf(meeting.id, 'meeting.started')).toHaveLength(1);
+  });
+
+  it('records once when two clicks arrive together', async () => {
+    const seller = await sessionFor('vendedor_formatacao');
+    const leadId = await deal(seller.id);
+    const meeting = await schedule(seller.cookies, leadId);
+    const starts = await Promise.all([
+      call(seller.cookies, meeting.id, 'start'),
+      call(seller.cookies, meeting.id, 'start'),
+    ]);
+    expect(starts.map((r) => r.statusCode)).toEqual([200, 200]);
+    expect(await eventsOf(leadId, 'meeting.started')).toHaveLength(1);
+
+    const ends = await Promise.all([
+      call(seller.cookies, meeting.id, 'end'),
+      call(seller.cookies, meeting.id, 'end'),
+    ]);
+    expect(ends.map((r) => r.statusCode).sort()).toEqual([200, 409]);
+    expect(await eventsOf(leadId, 'meeting.ended')).toHaveLength(1);
+  });
+
+  it('refuses to start a meeting that is already closed or cancelled', async () => {
+    const seller = await sessionFor('vendedor_formatacao');
+    const leadId = await deal(seller.id);
+    for (const status of ['encerrada', 'cancelada']) {
+      const meeting = await schedule(seller.cookies, leadId);
+      await db.update(crmMeetings).set({ status }).where(eq(crmMeetings.id, meeting.id));
+      const response = await call(seller.cookies, meeting.id, 'start');
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ error: 'meeting_closed' });
+      expect(await statusOf(meeting.id)).toBe(status);
+    }
+    expect(await eventsOf(leadId, 'meeting.started')).toHaveLength(0);
+  });
+
+  it('refuses to end a meeting that was not started', async () => {
+    const seller = await sessionFor('vendedor_formatacao');
+    const leadId = await deal(seller.id);
+    const meeting = await schedule(seller.cookies, leadId);
+    const response = await call(seller.cookies, meeting.id, 'end');
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ error: 'meeting_not_started' });
+    expect(await statusOf(meeting.id)).toBe('agendada');
+    expect(await eventsOf(leadId, 'meeting.ended')).toHaveLength(0);
+  });
+
+  it('ends a started meeting with the minutes it ran, and a second end records nothing', async () => {
+    const seller = await sessionFor('vendedor_formatacao');
+    const leadId = await deal(seller.id);
+    const meeting = await schedule(seller.cookies, leadId);
+    expect((await call(seller.cookies, meeting.id, 'start')).statusCode).toBe(200);
+
+    clock = new Date(NOW.getTime() + 37 * 60_000 + 20_000);
+    const ended = await call(seller.cookies, meeting.id, 'end');
+    expect(ended.statusCode).toBe(200);
+    expect(ended.json().meeting).toMatchObject({ id: meeting.id, status: 'encerrada' });
+    const events = await eventsOf(leadId, 'meeting.ended');
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      actorEmployeeId: seller.id,
+      detail: { meetingId: meeting.id, minutes: 37 },
+    });
+    const audit = await auditOf(meeting.id, 'meeting.ended');
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ actorEmployeeId: seller.id, metadata: { minutes: 37 } });
+
+    const twice = await call(seller.cookies, meeting.id, 'end');
+    expect(twice.statusCode).toBe(409);
+    expect(twice.json()).toMatchObject({ error: 'meeting_not_started' });
+    expect(twice.json().message).toContain('já foi encerrada');
+    expect(await eventsOf(leadId, 'meeting.ended')).toHaveLength(1);
+    expect(await auditOf(meeting.id, 'meeting.ended')).toHaveLength(1);
+
+    // An ended meeting cannot be started again, nor edited.
+    const restart = await call(seller.cookies, meeting.id, 'start');
+    expect(restart.json()).toMatchObject({ error: 'meeting_closed' });
+    const patch = await app.inject({
+      method: 'PATCH',
+      url: `/meetings/${meeting.id}`,
+      cookies: seller.cookies,
+      payload: { title: 'Outro título' },
+    });
+    expect(patch.statusCode).toBe(409);
+    expect(patch.json()).toMatchObject({ error: 'meeting_closed' });
+  });
+
+  it("answers 404 to another seller's deal on both steps, and changes nothing", async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const other = await sessionFor('vendedor_formatacao');
+    const leadId = await deal(owner.id);
+    const meeting = await schedule(owner.cookies, leadId);
+    expect((await call(other.cookies, meeting.id, 'start')).statusCode).toBe(404);
+    expect((await call(other.cookies, meeting.id, 'end')).statusCode).toBe(404);
+    expect(await statusOf(meeting.id)).toBe('agendada');
+
+    // The same for a meeting that is under way: the stranger cannot end it.
+    expect((await call(owner.cookies, meeting.id, 'start')).statusCode).toBe(200);
+    expect((await call(other.cookies, meeting.id, 'end')).statusCode).toBe(404);
+    expect(await statusOf(meeting.id)).toBe('em_andamento');
+    expect(await eventsOf(leadId, 'meeting.ended')).toHaveLength(0);
+  });
+
+  it('needs leads.write on both steps', async () => {
+    const seller = await sessionFor('vendedor_formatacao');
+    const meeting = await schedule(seller.cookies, await deal(seller.id));
+    const reader = await sessionFor('marketing');
+    expect((await call(reader.cookies, meeting.id, 'start')).statusCode).toBe(403);
+    expect((await call(reader.cookies, meeting.id, 'end')).statusCode).toBe(403);
+    expect(await statusOf(meeting.id)).toBe('agendada');
   });
 });

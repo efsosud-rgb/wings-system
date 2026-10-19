@@ -207,6 +207,7 @@ vi.mock('../../api/crm.js', () => ({
   useNextStepTask: () => mutation(nextStepMutate),
   useCreateMeeting: () => mutation(),
   useUpdateMeeting: () => mutation(),
+  useMeetingStep: () => mutation(),
   useUploadRecording: () => mutation(),
   fetchRecordingLink: vi.fn(),
   useMeetingTranscript: () => ({ data: undefined, isLoading: false, isError: false }),
