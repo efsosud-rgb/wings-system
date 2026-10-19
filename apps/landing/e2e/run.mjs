@@ -899,7 +899,11 @@ function staticChecks() {
     zod.length === 0,
     zod.map(([f]) => f).join(' '),
   );
-  const css = text.find(([file]) => file.endsWith('.css'))?.[1] ?? '';
+  // the style sheets are split (the embed's own, the one the page and the embed share): all of them
+  const css = text
+    .filter(([file]) => file.endsWith('.css'))
+    .map(([, body]) => body)
+    .join('\n');
   check(
     'dist: licence comment kept in the CSS',
     /\/\*![^*]*CC BY 4\.0[^*]*SIL OFL 1\.1 \*\//.test(css),
