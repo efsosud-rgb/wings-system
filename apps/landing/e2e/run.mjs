@@ -599,6 +599,9 @@ async function runViewport(
     sections: document.querySelectorAll('section').length,
     robots: document.querySelector('meta[name="robots"]')?.content,
     ogImage: document.querySelector('meta[property="og:image"]')?.content,
+    logos: [document.querySelector('.top-logo'), document.querySelector('.foot a:has(img)')].map(
+      (a) => a && { href: a.getAttribute('href'), target: a.getAttribute('target') },
+    ),
     noGl: document.documentElement.classList.contains('no-gl'),
     noFa: document.documentElement.classList.contains('no-fa'),
     scene: typeof window.__wings3d === 'function' ? window.__wings3d() : null,
@@ -614,6 +617,13 @@ async function runViewport(
     `${label}: one h1 and six sections`,
     layout.h1 === 1 && layout.sections === 6,
     `${layout.h1} h1, ${layout.sections} sections`,
+  );
+  check(
+    `${label}: top and footer logos go to the site, same tab`,
+    layout.logos.every(
+      (logo) => logo?.href === 'https://wingscompany.com.br/' && logo.target === null,
+    ),
+    JSON.stringify(layout.logos),
   );
   check(
     `${label}: robots from the runtime config`,
