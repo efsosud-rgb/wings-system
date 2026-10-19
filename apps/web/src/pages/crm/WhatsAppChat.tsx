@@ -2,6 +2,7 @@ import {
   WA_KIND_LABELS,
   WA_STATUS_LABELS,
   waTemplateFamily,
+  WA_MESSAGES_PAGE,
   type BrandArticle,
   type DealWhatsApp,
   type WaMessage,
@@ -11,6 +12,7 @@ import {
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ApiError } from '../../api/client.js';
 import {
+  olderWhatsAppMessages,
   useRefreshWhatsAppTemplates,
   useSendWhatsAppTemplate,
   useSendWhatsAppText,
@@ -55,6 +57,7 @@ export function WhatsAppChat({
   }, [last]);
   const [useTemplate, setUseTemplate] = useState(false);
   const templateMode = useTemplate || !data.window.open;
+  const older = useOlder(thread, data.messages);
 
   return (
     <section className="crm-wa-chat" aria-label="Conversa">
@@ -75,6 +78,22 @@ export function WhatsAppChat({
           </p>
         ) : (
           <ol className="crm-wa-list">
+            {older.more && (
+              <li className="crm-wa-older">
+                <button
+                  type="button"
+                  className="crm-btn is-small"
+                  disabled={older.loading}
+                  onClick={older.load}
+                >
+                  {older.loading ? 'Carregando…' : 'Mostrar mensagens anteriores'}
+                </button>
+                {older.error && <span className="crm-wa-error">{older.error}</span>}
+              </li>
+            )}
+            {older.messages.map((message) => (
+              <Bubble key={message.id} message={message} />
+            ))}
             {data.messages.map((message) => (
               <Bubble key={message.id} message={message} />
             ))}
@@ -125,6 +144,43 @@ function WindowNotice({ data }: { data: DealWhatsApp }) {
   );
 }
 
+/**
+ * The deal's messages before the ones the refresh keeps on screen (the last
+ * WA_MESSAGES_PAGE), a page per click: a long chat imported from the phone
+ * reads back to its start. Kept apart from the refresh, which never drops them.
+ */
+function useOlder(thread: WhatsAppThread, shown: WaMessage[]) {
+  const [messages, setMessages] = useState<WaMessage[]>([]);
+  const [ended, setEnded] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const leadId = 'leadId' in thread ? thread.leadId : null;
+  useEffect(() => {
+    setMessages([]);
+    setEnded(false);
+    setError(null);
+  }, [leadId]);
+  const oldest = messages[0] ?? shown[0];
+  const more =
+    'leadId' in thread && !ended && oldest !== undefined && shown.length >= WA_MESSAGES_PAGE;
+  const load = () => {
+    if (!('leadId' in thread) || !oldest) return;
+    setLoading(true);
+    setError(null);
+    olderWhatsAppMessages(thread.leadId, oldest.id)
+      .then((page) => {
+        const known = new Set([...messages, ...shown].map((m) => m.id));
+        setMessages([...page.filter((m) => !known.has(m.id)), ...messages]);
+        if (page.length < WA_MESSAGES_PAGE) setEnded(true);
+      })
+      .catch((failure: unknown) =>
+        setError(errorText(failure, 'Não deu para carregar as anteriores.')),
+      )
+      .finally(() => setLoading(false));
+  };
+  return { messages, more, load, loading, error };
+}
+
 function Bubble({ message }: { message: WaMessage }) {
   const out = message.direction === 'out';
   const failed = message.status === 'failed' || (message.status === 'pending' && message.error);
@@ -156,10 +212,22 @@ function Bubble({ message }: { message: WaMessage }) {
           {message.media.filename ? ` · ${message.media.filename}` : ''}
         </a>
       )}
+      {message.imported && (
+        <span className="crm-wa-tag">
+          Do celular
+          {message.imported.file
+            ? ` · ${WA_KIND_LABELS[message.kind]} ${message.imported.file}, dentro do arquivo exportado`
+            : message.imported.omitted
+              ? ' · mídia que não veio na exportação'
+              : ''}
+        </span>
+      )}
       {message.text ? (
         <span className="crm-wa-text">{message.text}</span>
       ) : (
-        !message.media && (
+        !message.media &&
+        !message.imported?.file &&
+        !message.imported?.omitted && (
           <span className="crm-wa-text is-muted">{WA_KIND_LABELS[message.kind]}</span>
         )
       )}

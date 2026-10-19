@@ -16,7 +16,7 @@ import { formatBytes } from '../../components/drive/DriveParts.js';
 import { Icon, type IconName } from '../../components/Icon.js';
 import { LoadFailure } from '../../components/LoadFailure.js';
 import { MeetingsTab } from './DealMeetings.js';
-import { dueLabel, formatDateTime, isPast } from './format.js';
+import { dueLabel, formatDate, formatDateTime, isPast } from './format.js';
 import { LeadEmailTab } from './LeadEmailTab.js';
 
 /**
@@ -70,10 +70,13 @@ export const EVENT_LABELS: Record<string, string> = {
   'lead.file_added': 'Arquivo adicionado',
   'lead.file_removed': 'Arquivo removido',
   'lead.summary_generated': 'Resumo gerado pela IA',
+  'whatsapp.conversation_imported': 'Conversa do celular importada',
+  'whatsapp.import_undone': 'Importação de conversa desfeita',
 };
 
 /** What the timeline can be narrowed to; `event` is everything the system did on its own. */
-export type Tone = 'note' | 'call' | 'meeting' | 'task' | 'stage' | 'email' | 'file' | 'event';
+export type Tone =
+  'note' | 'call' | 'meeting' | 'task' | 'stage' | 'email' | 'whatsapp' | 'file' | 'event';
 
 const TONE_LABELS: Record<Tone, string> = {
   note: 'Anotações',
@@ -82,12 +85,26 @@ const TONE_LABELS: Record<Tone, string> = {
   task: 'Tarefas',
   stage: 'Etapas',
   email: 'E-mails',
+  whatsapp: 'WhatsApp',
   file: 'Arquivos',
   event: 'Sistema',
 };
 
 const EMAIL_EVENTS = new Set(['lead.email_sent']);
 const FILE_EVENTS = new Set(['lead.file_added', 'lead.file_removed']);
+const WHATSAPP_EVENTS = new Set(['whatsapp.conversation_imported', 'whatsapp.import_undone']);
+
+/** What an import line says: how many messages and over which days (the messages are in WhatsApp). */
+function importBody(event: LeadEvent): string | null {
+  const { messages, from, to } = event.detail as { messages?: number; from?: string; to?: string };
+  if (typeof messages !== 'number') return null;
+  const count = `${messages} ${messages === 1 ? 'mensagem' : 'mensagens'}`;
+  if (event.kind === 'whatsapp.import_undone')
+    return `${count} ${messages === 1 ? 'saiu' : 'saíram'} da conversa`;
+  return from && to
+    ? `${count}, de ${formatDate(from)} a ${formatDate(to)}. Estão na tela WhatsApp da negociação.`
+    : count;
+}
 
 export interface Entry {
   id: string;
@@ -183,16 +200,26 @@ export function entriesOf(data: LoadedLead): Entry[] {
     if (skip.has(event.kind)) continue;
     const tone: Tone = EMAIL_EVENTS.has(event.kind)
       ? 'email'
-      : FILE_EVENTS.has(event.kind)
-        ? 'file'
-        : 'event';
+      : WHATSAPP_EVENTS.has(event.kind)
+        ? 'whatsapp'
+        : FILE_EVENTS.has(event.kind)
+          ? 'file'
+          : 'event';
     entries.push({
       id: `e${event.id}`,
       at: event.at,
-      icon: tone === 'email' ? 'mail' : tone === 'file' ? 'download' : 'more',
+      icon:
+        tone === 'email'
+          ? 'mail'
+          : tone === 'whatsapp'
+            ? 'message'
+            : tone === 'file'
+              ? 'download'
+              : 'more',
       tone,
       title: EVENT_LABELS[event.kind] ?? 'Atualização',
       by: null,
+      body: tone === 'whatsapp' ? importBody(event) : undefined,
     });
   }
   return entries.sort((a, b) => b.at.localeCompare(a.at));

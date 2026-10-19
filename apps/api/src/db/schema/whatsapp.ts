@@ -133,6 +133,38 @@ export const waConversations = pgTable(
 );
 
 /**
+ * A conversation brought in from a phone's "Exportar conversa" file
+ * (docs/whatsapp/importar-conversa.md): one row per import, so "Desfazer"
+ * removes exactly the messages it wrote. Ids, counts and times only; the
+ * text lives in `wa_messages`, under the lead's access rule.
+ */
+export const waImportBatches = pgTable(
+  'wa_import_batches',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    leadId: uuid('lead_id')
+      .notNull()
+      .references(() => leads.id),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => waConversations.id),
+    /** The exported file, kept among the deal's files (its media stays inside it). */
+    driveFileId: uuid('drive_file_id').references(() => driveFiles.id, { onDelete: 'set null' }),
+    /** android | ios */
+    platform: text('platform').notNull(),
+    messageCount: integer('message_count').notNull(),
+    firstAt: timestamp('first_at', { withTimezone: true }).notNull(),
+    lastAt: timestamp('last_at', { withTimezone: true }).notNull(),
+    importedBy: uuid('imported_by').references(() => employees.id),
+    importedAt: timestamp('imported_at', { withTimezone: true }).notNull().defaultNow(),
+    undoneAt: timestamp('undone_at', { withTimezone: true }),
+    undoneBy: uuid('undone_by').references(() => employees.id),
+  },
+  (table) => [index('wa_import_batches_lead_idx').on(table.leadId, table.importedAt)],
+);
+
+/**
  * Every message, both ways. An outgoing one is written before Meta is called
  * (status `pending`) and sent once, never retried; `wamid` arrives with
  * Meta's answer. Status only moves forward (`waStatusAdvances`), so a
@@ -155,7 +187,7 @@ export const waMessages = pgTable(
     leadId: uuid('lead_id').references(() => leads.id),
     /** in | out */
     direction: text('direction').notNull(),
-    /** contact | employee | sofia | system */
+    /** contact | employee | sofia | system | app (sent from the phone's app, imported) */
     author: text('author').notNull(),
     employeeId: uuid('employee_id').references(() => employees.id),
     /** A WaMessageKind. */
@@ -179,12 +211,23 @@ export const waMessages = pgTable(
     deliveredAt: timestamp('delivered_at', { withTimezone: true }),
     readAt: timestamp('read_at', { withTimezone: true }),
     failedAt: timestamp('failed_at', { withTimezone: true }),
+    /** An imported message takes its time from the file, so the conversation keeps its order. */
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    /** Set on a message imported from a phone export: never Sofia's, never unread, no window. */
+    importBatchId: uuid('import_batch_id').references(() => waImportBatches.id),
+    /** SHA-256 of time, author, text and repeat: the same line imported again is skipped. */
+    importHash: text('import_hash'),
   },
   (table) => [
     uniqueIndex('wa_messages_wamid_uq')
       .on(table.wamid)
       .where(sql`${table.wamid} is not null`),
+    uniqueIndex('wa_messages_import_hash_uq')
+      .on(table.leadId, table.importHash)
+      .where(sql`${table.importHash} is not null`),
+    index('wa_messages_import_batch_idx')
+      .on(table.importBatchId)
+      .where(sql`${table.importBatchId} is not null`),
     index('wa_messages_conversation_idx').on(table.conversationId, table.createdAt),
     index('wa_messages_lead_idx').on(table.leadId, table.createdAt),
   ],

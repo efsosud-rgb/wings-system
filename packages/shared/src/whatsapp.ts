@@ -114,6 +114,8 @@ export interface WaMessage {
   authorName: string | null;
   /** Sent by Sofia, the virtual SDR. */
   bySofia: boolean;
+  /** Brought in from a phone's export: the media file the line named, or that it was left out. */
+  imported: { file: string | null; omitted: boolean } | null;
   at: string;
 }
 
@@ -328,3 +330,67 @@ export const waCallSdpSchema = z.object({
     .refine((sdp) => sdp.startsWith('v=0'), 'Descrição de mídia inválida.'),
 });
 export type WaCallSdp = z.infer<typeof waCallSdpSchema>;
+
+/**
+ * A conversation brought in from a phone's "Exportar conversa" (docs/whatsapp/importar-conversa.md):
+ * the browser takes the `.txt` out of the `.zip`, the server reads it, shows a preview, and writes
+ * the messages to the deal as one import that "Desfazer" removes. `leads.whatsapp`, owner scope.
+ */
+export const WA_IMPORT_MAX_CHARS = 10_000_000;
+
+/** The messages a conversation screen loads at a time ("Mostrar anteriores" loads the next ones). */
+export const WA_MESSAGES_PAGE = 500;
+
+export const waImportPreviewSchema = z.object({
+  text: z
+    .string()
+    .min(1, 'O arquivo está vazio.')
+    .max(WA_IMPORT_MAX_CHARS, 'Conversa grande demais para importar de uma vez.'),
+});
+export type WaImportPreviewInput = z.infer<typeof waImportPreviewSchema>;
+
+export const waImportApplySchema = waImportPreviewSchema.extend({
+  /** The name in the file that is the Wings side (the business profile). */
+  ourName: z.string().trim().min(1, 'Escolha qual nome é a Wings.').max(200),
+  /** The exported file, already among the deal's files. */
+  fileId: z.uuid(),
+});
+export type WaImportApplyInput = z.infer<typeof waImportApplySchema>;
+
+export interface WaImportLine {
+  at: string;
+  author: string;
+  kind: WaMessageKind;
+  text: string | null;
+  file: string | null;
+}
+
+export interface WaImportPreview {
+  platform: 'android' | 'ios';
+  /** Who wrote, most messages first. */
+  participants: { name: string; messages: number }[];
+  /** The name that looks like the business profile, when exactly one does. */
+  ourName: string | null;
+  messages: number;
+  /** Not in this deal's conversation yet (the rest came in an earlier import). */
+  newMessages: number;
+  /** Lines with a photo, audio, video or document (the files stay inside the exported file). */
+  media: number;
+  /** The app's own notices (encryption, someone joined), left out. */
+  skipped: number;
+  first: WaImportLine;
+  last: WaImportLine;
+}
+
+export interface WaImportBatch {
+  id: string;
+  fileId: string | null;
+  platform: 'android' | 'ios';
+  messages: number;
+  from: string;
+  to: string;
+  importedAt: string;
+  importedByName: string | null;
+  undoneAt: string | null;
+  undoneByName: string | null;
+}
