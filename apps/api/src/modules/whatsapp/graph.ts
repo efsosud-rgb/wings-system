@@ -435,7 +435,8 @@ export const MAX_MEDIA_BYTES = 100 * 1024 * 1024;
 
 /**
  * A received file: GET /{media-id} gives a short-lived signed URL, which is
- * read with the same token. Nothing is stored; the browser gets the bytes.
+ * read with the same token. The caller keeps the bytes (`media-store.ts`) or
+ * passes them on to the browser.
  */
 export async function downloadWhatsAppMedia(
   fetchImpl: Fetch,

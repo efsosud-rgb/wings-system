@@ -385,6 +385,56 @@ describe('the WhatsApp conversation screen', () => {
     expect(chat.getByText(/Janela de 24 h aberta até/)).toBeTruthy();
   });
 
+  it('shows a received photo, sticker, audio and video in the balloon, and "—" when one does not open', () => {
+    const file = (id: string, kind: 'image' | 'sticker' | 'audio' | 'video', mimeType: string) => ({
+      id,
+      direction: 'in' as const,
+      kind,
+      text: null,
+      media: { mimeType, filename: null },
+      template: null,
+      status: null,
+      error: null,
+      authorName: null,
+      bySofia: false,
+      imported: null,
+      fromTemplate: null,
+      withArt: false,
+      at: '2026-10-07T14:00:00.000Z',
+    });
+    queryState.thread = thread({
+      messages: [
+        file('p1', 'image', 'image/jpeg'),
+        file('s1', 'sticker', 'image/webp'),
+        file('a1', 'audio', 'audio/ogg'),
+        file('v1', 'video', 'video/mp4'),
+      ],
+    });
+    const { container } = show();
+    const chat = within(screen.getByRole('region', { name: 'Conversa' }));
+    const photo = chat.getByRole('img', { name: 'Imagem recebida pelo WhatsApp' });
+    expect(photo.getAttribute('src')).toBe('/api/whatsapp/messages/p1/media');
+    expect(photo.closest('a')?.getAttribute('href')).toBe('/api/whatsapp/messages/p1/media');
+    expect(chat.getByRole('img', { name: 'Figurinha recebida pelo WhatsApp' }).className).toBe(
+      'is-sticker',
+    );
+    const audio = container.querySelector('audio')!;
+    expect(audio.getAttribute('src')).toBe('/api/whatsapp/messages/a1/media');
+    expect(audio.getAttribute('preload')).toBe('none');
+    const video = container.querySelector('video')!;
+    expect(video.getAttribute('src')).toBe('/api/whatsapp/messages/v1/media');
+    expect(video.getAttribute('preload')).toBe('none');
+
+    fireEvent.error(photo);
+    fireEvent.error(audio);
+    expect(chat.getByText(/— Imagem: não abriu\. Arquivos com mais de 30 dias/)).toBeTruthy();
+    expect(chat.getByText(/— Áudio: não abriu\./)).toBeTruthy();
+    expect(chat.getByRole('link', { name: 'Abrir imagem' }).getAttribute('href')).toBe(
+      '/api/whatsapp/messages/p1/media',
+    );
+    expect(chat.queryByRole('img', { name: 'Imagem recebida pelo WhatsApp' })).toBeNull();
+  });
+
   it('sends free text inside the window with Enter', () => {
     show();
     const chat = within(screen.getByRole('region', { name: 'Conversa' }));

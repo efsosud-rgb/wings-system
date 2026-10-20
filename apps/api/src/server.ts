@@ -2,6 +2,7 @@ import { buildApp } from './app.js';
 import { createDb } from './db/client.js';
 import { loadDotEnv } from './db/load-env.js';
 import { loadEnv } from './env.js';
+import { storageOf } from './lib/storage/index.js';
 import { createOpenRouterLlm } from './modules/agent/llm.js';
 import { startFormatacaoIntakeScheduler } from './modules/expansion/formatacao.js';
 import { startExpansionIntakeScheduler } from './modules/expansion/scheduler.js';
@@ -14,6 +15,7 @@ import { startMetaLeadgenIntake } from './modules/leads/meta-intake.js';
 import { startSofia } from './modules/sofia/engine.js';
 import { whatsappConfigOf } from './modules/whatsapp/graph.js';
 import { startWhatsAppIntake } from './modules/whatsapp/intake.js';
+import { startWhatsAppMediaStore } from './modules/whatsapp/media-store.js';
 import { startYoutubeScheduler } from './modules/youtube/scheduler.js';
 
 const pageIdsOf = (value: string | undefined) =>
@@ -139,6 +141,20 @@ async function main() {
       log: (facts) => app.log.info(facts),
     });
     app.addHook('onClose', async () => sofia.stop());
+
+    // Received files go to our storage, so they outlive Meta's 30 days (docs/whatsapp/cloud-api.md).
+    const storage = storageOf(app.wings);
+    const config = whatsappConfigOf(env);
+    if (storage && config) {
+      const files = startWhatsAppMediaStore({
+        db,
+        storage,
+        config,
+        fetchImpl: fetch,
+        log: (facts) => app.log.info(facts),
+      });
+      app.addHook('onClose', async () => files.stop());
+    }
   }
 
   // CRM automations: due rules and sequence steps, then the deadline alerts, then

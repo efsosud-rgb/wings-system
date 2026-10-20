@@ -186,6 +186,58 @@ function useOlder(thread: WhatsAppThread, shown: WaMessage[]) {
   return { messages, more, load, loading, error };
 }
 
+/**
+ * A received file inside the balloon: a photo or a sticker shown, an audio or
+ * a video with the browser's player (fetched only on play), anything else a
+ * download. The address answers from our storage once the file is copied,
+ * from Meta before that.
+ */
+function MediaBody({ message }: { message: WaMessage }) {
+  const [broken, setBroken] = useState(false);
+  const url = whatsappMediaUrl(message.id);
+  const label = WA_KIND_LABELS[message.kind];
+  const download = (
+    <a className="crm-wa-media" href={url} target="_blank" rel="noreferrer">
+      {message.kind === 'image' || message.kind === 'sticker' ? 'Abrir ' : 'Baixar '}
+      {label.toLowerCase()}
+      {message.media?.filename ? ` · ${message.media.filename}` : ''}
+    </a>
+  );
+  if (broken)
+    return (
+      <span className="crm-wa-media-failed">
+        — {label}: não abriu. Arquivos com mais de 30 dias que o sistema não guardou já saíram da
+        Meta. {download}
+      </span>
+    );
+  const fail = () => setBroken(true);
+  if (message.kind === 'image' || message.kind === 'sticker')
+    return (
+      <a className="crm-wa-shot" href={url} target="_blank" rel="noreferrer">
+        <img
+          className={message.kind === 'sticker' ? 'is-sticker' : undefined}
+          src={url}
+          alt={`${label} recebida pelo WhatsApp`}
+          loading="lazy"
+          onError={fail}
+        />
+      </a>
+    );
+  if (message.kind === 'audio')
+    return (
+      <audio className="crm-wa-player" src={url} controls preload="none" onError={fail}>
+        {download}
+      </audio>
+    );
+  if (message.kind === 'video')
+    return (
+      <video className="crm-wa-player is-video" src={url} controls preload="none" onError={fail}>
+        {download}
+      </video>
+    );
+  return download;
+}
+
 function Bubble({ message }: { message: WaMessage }) {
   const out = message.direction === 'out';
   const failed = message.status === 'failed' || (message.status === 'pending' && message.error);
@@ -205,18 +257,7 @@ function Bubble({ message }: { message: WaMessage }) {
           {message.withArt ? ' · com arte' : ''}
         </span>
       )}
-      {message.media && (
-        <a
-          className="crm-wa-media"
-          href={whatsappMediaUrl(message.id)}
-          target="_blank"
-          rel="noreferrer"
-        >
-          {message.kind === 'image' || message.kind === 'sticker' ? 'Abrir ' : 'Baixar '}
-          {WA_KIND_LABELS[message.kind].toLowerCase()}
-          {message.media.filename ? ` · ${message.media.filename}` : ''}
-        </a>
-      )}
+      {message.media && <MediaBody message={message} />}
       {message.imported && (
         <span className="crm-wa-tag">
           Do celular
