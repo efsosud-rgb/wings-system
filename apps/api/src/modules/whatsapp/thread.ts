@@ -164,6 +164,11 @@ export function toMessage(
     reactionTo:
       row.kind === 'reaction' ? (quoteOf(content.reactionTo, links) ?? { found: false }) : null,
     reactions: row.wamid ? (links.reactions.get(row.wamid) ?? []) : [],
+    // A card from before the numbers were kept holds only their count.
+    contacts:
+      row.kind === 'contacts' && Array.isArray(content.contacts)
+        ? (content.contacts as { name: string | null; phones: string[] }[])
+        : null,
     media:
       media && WA_MEDIA_KINDS.includes(row.kind as WaMessageKind)
         ? { mimeType: media.mimeType ?? null, filename: media.filename ?? null }

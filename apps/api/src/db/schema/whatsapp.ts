@@ -196,7 +196,8 @@ export const waMessages = pgTable(
     text: text('text'),
     /**
      * The rest, without the text: media id, type and file name; template name,
-     * language and parameters; the message replied to; a reaction's target.
+     * language and parameters; the message replied to; a reaction's target; a
+     * contact card's names and numbers; a location's point, name and address.
      * Never a media URL (they carry Meta's signature and expire).
      */
     content: jsonb('content').notNull().default({}),

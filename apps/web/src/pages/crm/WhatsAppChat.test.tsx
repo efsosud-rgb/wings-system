@@ -289,3 +289,49 @@ describe('reactions', () => {
     );
   });
 });
+
+describe('contact cards', () => {
+  it('shows each name and number, and "—" with the reason for what is missing', () => {
+    show([
+      message({
+        id: 'c1',
+        kind: 'contacts',
+        text: 'Contador Fictício',
+        contacts: [
+          { name: 'Contador Fictício', phones: ['+55 21 98888-0001', '5521988880002'] },
+          { name: null, phones: [] },
+        ],
+      }),
+      message({ id: 'c2', kind: 'contacts', text: 'Cartão antigo', contacts: null }),
+      message({ id: 'c3', kind: 'contacts', text: null, contacts: [] }),
+    ]);
+
+    const [card, old, empty] = screen.getAllByRole('listitem');
+    // The name shows once, in the card, not again as the text.
+    expect(within(card!).getAllByText('Contador Fictício')).toHaveLength(1);
+    expect(within(card!).getByText('+55 21 98888-0001')).toBeTruthy();
+    expect(within(card!).getByText('(21) 98888-0002')).toBeTruthy();
+    expect(within(card!).getByText('— Sem nome no cartão')).toBeTruthy();
+    expect(within(card!).getByText('— Sem número no cartão.')).toBeTruthy();
+    expect(within(old!).getByText('Cartão antigo')).toBeTruthy();
+    expect(
+      within(old!).getByText(/^— Cartão de contato sem o número: chegou antes de o sistema/),
+    ).toBeTruthy();
+    expect(within(empty!).getByText(/^— Cartão de contato vazio/)).toBeTruthy();
+  });
+
+  it('leaves a card from the phone export to its "Do celular" tag', () => {
+    show([
+      message({
+        kind: 'contacts',
+        text: null,
+        imported: { file: 'Contador.vcf', omitted: false },
+      }),
+    ]);
+
+    expect(
+      screen.getByText('Do celular · Contato Contador.vcf, dentro do arquivo exportado'),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Cartão de contato/)).toBeNull();
+  });
+});

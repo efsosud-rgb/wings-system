@@ -765,6 +765,57 @@ describe('what the balloon shows: the reply, the reaction, the contact card, the
       reactionTo: quoted,
     });
   });
+
+  it('a contact card keeps each name and number; a card stored before holds none', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977770005', owner.id);
+    await deliver(
+      inbound('5521977770005', '', {
+        fields: {
+          type: 'contacts',
+          contacts: [
+            {
+              name: { formatted_name: 'Contador Fictício', first_name: 'Contador' },
+              phones: [
+                { phone: '+55 21 98888-0001', wa_id: '5521988880001', type: 'CELL' },
+                { wa_id: '5521988880002' },
+              ],
+            },
+            { name: { first_name: 'Sócio' }, phones: [] },
+          ],
+        },
+      }).body,
+    );
+    await run();
+    // As this branch found it: only the count of cards was kept.
+    const [conversation] = await db
+      .select()
+      .from(waConversations)
+      .where(eq(waConversations.leadId, leadId));
+    await db.insert(waMessages).values({
+      conversationId: conversation!.id,
+      contactId: conversation!.contactId,
+      leadId,
+      direction: 'in',
+      author: 'contact',
+      kind: 'contacts',
+      text: 'Cartão antigo',
+      content: { contacts: 1 },
+    });
+
+    const data = await threadOf(leadId, owner.cookies);
+    expect(data.messages.map((m) => [m.kind, m.text, m.contacts])).toEqual([
+      [
+        'contacts',
+        'Contador Fictício',
+        [
+          { name: 'Contador Fictício', phones: ['+55 21 98888-0001', '5521988880002'] },
+          { name: 'Sócio', phones: [] },
+        ],
+      ],
+      ['contacts', 'Cartão antigo', null],
+    ]);
+  });
 });
 
 describe('who may see, send and open files', () => {

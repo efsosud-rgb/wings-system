@@ -26,7 +26,7 @@ import {
   type WhatsAppThread,
 } from '../../api/whatsapp.js';
 import { LoadFailure } from '../../components/LoadFailure.js';
-import { formatDateTime } from './format.js';
+import { formatDateTime, formatPhone } from './format.js';
 
 /**
  * The conversation itself, for a deal or for one no deal took yet: the
@@ -298,6 +298,40 @@ function placedReactionsOut(list: WaMessage[]) {
   );
 }
 
+/** A contact card: each contact's name and numbers, or "—" and why something is missing. */
+function ContactCards({ message }: { message: WaMessage }) {
+  if (!message.contacts)
+    return (
+      <span className="crm-wa-contacts">
+        {message.text && <strong>{message.text}</strong>}
+        <span className="crm-wa-media-failed">
+          — Cartão de contato sem o número: chegou antes de o sistema guardar os números dos
+          cartões.
+        </span>
+      </span>
+    );
+  if (message.contacts.length === 0)
+    return (
+      <span className="crm-wa-media-failed">
+        — Cartão de contato vazio: o WhatsApp não mandou nome nem número.
+      </span>
+    );
+  return (
+    <span className="crm-wa-contacts">
+      {message.contacts.map((card, index) => (
+        <span key={index} className="crm-wa-contact">
+          <strong>{card.name ?? '— Sem nome no cartão'}</strong>
+          {card.phones.length > 0 ? (
+            card.phones.map((phone, i) => <span key={i}>{formatPhone(phone)}</span>)
+          ) : (
+            <span className="crm-wa-media-failed">— Sem número no cartão.</span>
+          )}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 function Bubble({ message }: { message: WaMessage }) {
   const out = message.direction === 'out';
   const failed = message.status === 'failed' || (message.status === 'pending' && message.error);
@@ -330,7 +364,9 @@ function Bubble({ message }: { message: WaMessage }) {
               : ''}
         </span>
       )}
-      {message.text ? (
+      {message.kind === 'contacts' && !message.imported ? (
+        <ContactCards message={message} />
+      ) : message.text ? (
         <span className="crm-wa-text">{message.text}</span>
       ) : (
         !message.media &&

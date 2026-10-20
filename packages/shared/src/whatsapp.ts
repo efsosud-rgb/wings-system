@@ -110,6 +110,11 @@ export interface WaMessage {
   reactionTo?: WaQuote | null;
   /** The reactions on this message now: the last one of each side, a taken-back one left out. */
   reactions?: { emoji: string; direction: 'in' | 'out' }[];
+  /**
+   * A contact card: each contact's name and numbers as WhatsApp sent them. Null on a card that came
+   * before the numbers were kept (its first name is the `text`).
+   */
+  contacts?: { name: string | null; phones: string[] }[] | null;
   /** Present when the message has a file, opened at `/whatsapp/messages/:id/media`. */
   media: { mimeType: string | null; filename: string | null } | null;
   template: { name: string; language: string } | null;

@@ -107,9 +107,19 @@ function messageOf(raw: Obj, names: Map<string, string>): WaInboundMessage | nul
     };
   } else if (type === 'contacts') {
     kind = 'contacts';
-    const first = obj(arr(raw.contacts)[0]);
-    text = str(obj(first.name).formatted_name);
-    content.contacts = arr(raw.contacts).length;
+    // Each card's name and numbers: the number as the sender saved it, else its WhatsApp id.
+    const cards = arr(raw.contacts).map((card) => {
+      const name = obj(obj(card).name);
+      return {
+        name: str(name.formatted_name) ?? str(name.first_name),
+        phones: arr(obj(card).phones).flatMap((phone) => {
+          const number = str(obj(phone).phone) ?? str(obj(phone).wa_id);
+          return number ? [number] : [];
+        }),
+      };
+    });
+    text = cards[0]?.name ?? null;
+    content.contacts = cards;
   } else if (type === 'interactive') {
     kind = 'interactive';
     const interactive = obj(raw.interactive);
