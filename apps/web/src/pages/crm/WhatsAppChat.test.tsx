@@ -247,3 +247,45 @@ describe('what the balloon shows', () => {
     expect(within(third!).getByText('Isso')).toBeTruthy();
   });
 });
+
+describe('reactions', () => {
+  it('shows on its balloon; one whose message is not on the list stays a line, "—" when not here', () => {
+    show([
+      message({
+        id: 't1',
+        direction: 'out',
+        text: 'Mandei o contrato',
+        reactions: [{ emoji: '❤️', direction: 'in' }],
+      }),
+      message({
+        id: 'x1',
+        kind: 'reaction',
+        text: '❤️',
+        reactionTo: { found: true, id: 't1', direction: 'out', kind: 'text', text: 'Mandei' },
+      }),
+      message({
+        id: 'x2',
+        kind: 'reaction',
+        text: '👍',
+        reactionTo: { found: true, id: 'older', direction: 'out', kind: 'document', text: null },
+      }),
+      message({
+        id: 'x3',
+        kind: 'reaction',
+        text: null,
+        reactionTo: { found: true, id: 'older2', direction: 'out', kind: 'text', text: 'Proposta' },
+      }),
+      message({ id: 'x4', kind: 'reaction', text: '🙏', reactionTo: { found: false } }),
+    ]);
+
+    expect(screen.getByRole('img', { name: 'Reação do cliente: ❤️' })).toBeTruthy();
+    // x1 is on the balloon of t1, both on this list: no line of its own.
+    const items = screen.getAllByRole('listitem');
+    expect(items).toHaveLength(4);
+    expect(items[1]?.textContent).toMatch(/^Cliente reagiu com 👍 a: Documento/);
+    expect(items[2]?.textContent).toMatch(/^Cliente tirou a reação de: Proposta/);
+    expect(items[3]?.textContent).toMatch(
+      /^Cliente reagiu com 🙏\. — A mensagem da reação não está aqui: é de antes/,
+    );
+  });
+});

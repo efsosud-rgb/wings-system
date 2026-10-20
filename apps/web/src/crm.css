@@ -2191,6 +2191,32 @@
   border-left-color: var(--line);
   color: var(--text-2);
 }
+.crm-wa-reactions {
+  justify-self: start;
+  display: flex;
+  gap: 2px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  font-size: var(--text-sm);
+}
+.crm-wa-reaction-line {
+  max-width: min(520px, 85%);
+  font-size: var(--text-xs, 12px);
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.crm-wa-reaction-line.is-in {
+  align-self: flex-start;
+}
+.crm-wa-reaction-line.is-out {
+  align-self: flex-end;
+  text-align: right;
+}
+.crm-wa-reaction-line q {
+  color: var(--text);
+}
 .crm-wa-error {
   font-size: var(--text-xs, 12px);
   color: var(--danger);

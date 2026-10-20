@@ -710,6 +710,61 @@ describe('what the balloon shows: the reply, the reaction, the contact card, the
     expect(byText.get('Resposta 3')?.replyTo).toEqual({ found: false });
     expect(JSON.stringify([...byText.values()])).not.toContain('outra negociação');
   });
+
+  it('a reaction shows on its message, the last one of each side, and a taken-back one goes', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977770003', owner.id);
+    const otherLead = await deal('5521977770004', owner.id);
+    const first = inbound('5521977770003', 'Mandei o contrato');
+    const elsewhere = inbound('5521977770004', 'Outra conversa');
+    await deliver(first.body);
+    await deliver(elsewhere.body);
+    const react = (to: string, emoji: string, minutes: number) =>
+      inbound('5521977770003', '', {
+        at: new Date(NOW.getTime() - 3_600_000 + minutes * 60_000),
+        fields: { type: 'reaction', reaction: { message_id: to, emoji } },
+      }).body;
+    await deliver(react(first.id, '👍', 1));
+    await deliver(react(first.id, '❤️', 2));
+    // From this deal's number to another deal's message, and to one never stored.
+    await deliver(react(elsewhere.id, '😮', 3));
+    await deliver(react('wamid.NEVER-STORED', '🙏', 4));
+    await run();
+
+    const data = await threadOf(leadId, owner.cookies);
+    const quoted = {
+      found: true,
+      id: await idOf(first.id),
+      direction: 'in',
+      kind: 'text',
+      text: 'Mandei o contrato',
+    };
+    expect(data.messages.find((m) => m.text === 'Mandei o contrato')?.reactions).toEqual([
+      { emoji: '❤️', direction: 'in' },
+    ]);
+    expect(
+      data.messages.filter((m) => m.kind === 'reaction').map((m) => [m.text, m.reactionTo]),
+    ).toEqual([
+      ['👍', quoted],
+      ['❤️', quoted],
+      ['😮', { found: false }],
+      ['🙏', { found: false }],
+    ]);
+    // The other deal's message carries nothing from this one.
+    const other = await threadOf(otherLead, owner.cookies);
+    expect(other.messages.find((m) => m.text === 'Outra conversa')?.reactions).toEqual([]);
+
+    // Taken back: Meta sends the reaction with no emoji.
+    await deliver(react(first.id, '', 5));
+    await run();
+    const after = await threadOf(leadId, owner.cookies);
+    expect(after.messages.find((m) => m.text === 'Mandei o contrato')?.reactions).toEqual([]);
+    expect(after.messages.at(-1)).toMatchObject({
+      kind: 'reaction',
+      text: null,
+      reactionTo: quoted,
+    });
+  });
 });
 
 describe('who may see, send and open files', () => {

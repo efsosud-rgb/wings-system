@@ -95,10 +95,10 @@ export function WhatsAppChat({
                 {older.error && <span className="crm-wa-error">{older.error}</span>}
               </li>
             )}
-            {older.messages.map((message) => (
+            {placedReactionsOut(older.messages).map((message) => (
               <Bubble key={message.id} message={message} />
             ))}
-            {data.messages.map((message) => (
+            {placedReactionsOut(data.messages).map((message) => (
               <Bubble key={message.id} message={message} />
             ))}
           </ol>
@@ -260,9 +260,48 @@ function Quote({ quote }: { quote: WaQuote }) {
   );
 }
 
+const sideOf = (direction: 'in' | 'out') => (direction === 'out' ? 'da equipe' : 'do cliente');
+
+/**
+ * A reaction whose message is not on this list: a line saying what it was for. One whose message
+ * is on the list shows on that balloon instead (`placedReactionsOut`).
+ */
+function ReactionLine({ message }: { message: WaMessage }) {
+  const who = message.direction === 'out' ? 'Equipe' : 'Cliente';
+  const what = message.text ? `${who} reagiu com ${message.text}` : `${who} tirou a reação`;
+  const to = message.reactionTo;
+  return (
+    <li className={`crm-wa-reaction-line ${message.direction === 'out' ? 'is-out' : 'is-in'}`}>
+      {to?.found ? (
+        <>
+          {what} {message.text ? 'a' : 'de'}: <q>{to.text ?? WA_KIND_LABELS[to.kind]}</q>
+        </>
+      ) : (
+        `${what}. — A mensagem da reação não está aqui: é de antes de o número entrar no sistema, ou ficou só no celular.`
+      )}{' '}
+      <time dateTime={message.at} title={formatDateTime(message.at)}>
+        {timeOf(message.at)}
+      </time>
+    </li>
+  );
+}
+
+/**
+ * Leaves out each reaction whose message is on the same list: that balloon came in the same
+ * answer (or an older page loaded after it) and already shows it. A reaction to a balloon of
+ * another list stays a line, so a new one to an older page's message is never missed.
+ */
+function placedReactionsOut(list: WaMessage[]) {
+  const ids = new Set(list.map((m) => m.id));
+  return list.filter(
+    (m) => !(m.kind === 'reaction' && m.reactionTo?.found && ids.has(m.reactionTo.id)),
+  );
+}
+
 function Bubble({ message }: { message: WaMessage }) {
   const out = message.direction === 'out';
   const failed = message.status === 'failed' || (message.status === 'pending' && message.error);
+  if (message.kind === 'reaction') return <ReactionLine message={message} />;
   return (
     <li
       className={`crm-wa-bubble ${out ? 'is-out' : 'is-in'}${message.bySofia ? ' is-sofia' : ''}${failed ? ' is-failed' : ''}`}
@@ -299,6 +338,20 @@ function Bubble({ message }: { message: WaMessage }) {
         !message.imported?.omitted && (
           <span className="crm-wa-text is-muted">{WA_KIND_LABELS[message.kind]}</span>
         )
+      )}
+      {message.reactions && message.reactions.length > 0 && (
+        <span className="crm-wa-reactions">
+          {message.reactions.map((reaction) => (
+            <span
+              key={reaction.direction}
+              role="img"
+              aria-label={`Reação ${sideOf(reaction.direction)}: ${reaction.emoji}`}
+              title={`Reação ${sideOf(reaction.direction)}`}
+            >
+              {reaction.emoji}
+            </span>
+          ))}
+        </span>
       )}
       <span className="crm-wa-meta">
         {out && message.bySofia ? 'Sofia (IA) · ' : ''}

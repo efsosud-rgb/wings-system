@@ -70,32 +70,64 @@ export const windowOf = (contact: Contact | null | undefined, now: Date) => {
   return { open: expires !== null && expires > now, expiresAt: expires?.toISOString() ?? null };
 };
 
-/** What a page's replies point at, by wamid; see `linksOf`. */
+type Reactions = { emoji: string; direction: 'in' | 'out' }[];
+
+/** What a page's replies and reactions point at, and the reactions on its messages, by wamid. */
 export interface MessageLinks {
   quoted: Map<string, MessageRow>;
+  reactions: Map<string, Reactions>;
 }
-const NO_LINKS: MessageLinks = { quoted: new Map() };
+const NO_LINKS: MessageLinks = { quoted: new Map(), reactions: new Map() };
 
 /**
- * The messages a page's replies quote, looked up only inside `scope` (the
- * page's own deal or conversation), so a quote never shows another deal's text.
+ * The messages a page's replies quote and reactions are for, and the reactions
+ * on the page's own messages, looked up only inside `scope` (the page's own
+ * deal or conversation), so nothing of another deal shows.
  */
 export async function linksOf(
   db: Database,
   rows: MessageRow[],
   scope: SQL | undefined,
 ): Promise<MessageLinks> {
+  if (!scope) return NO_LINKS;
   const wanted = new Set<string>();
   for (const row of rows) {
-    const replyTo = (row.content as { replyTo?: unknown } | null)?.replyTo;
-    if (typeof replyTo === 'string') wanted.add(replyTo);
+    const content = row.content as { replyTo?: unknown; reactionTo?: unknown } | null;
+    for (const wamid of [content?.replyTo, content?.reactionTo])
+      if (typeof wamid === 'string') wanted.add(wamid);
   }
-  if (!scope || wanted.size === 0) return NO_LINKS;
-  const found = await db
-    .select()
-    .from(waMessages)
-    .where(and(scope, inArray(waMessages.wamid, [...wanted])));
-  return { quoted: new Map(found.map((row) => [row.wamid!, row])) };
+  const own = rows.flatMap((row) => (row.wamid && row.kind !== 'reaction' ? [row.wamid] : []));
+  const quoted = wanted.size
+    ? await db
+        .select()
+        .from(waMessages)
+        .where(and(scope, inArray(waMessages.wamid, [...wanted])))
+    : [];
+  const target = sql<string>`${waMessages.content} ->> 'reactionTo'`;
+  const reacting = own.length
+    ? await db
+        .select({ target, direction: waMessages.direction, emoji: waMessages.text })
+        .from(waMessages)
+        .where(and(scope, eq(waMessages.kind, 'reaction'), inArray(target, own)))
+        .orderBy(
+          sql`coalesce(${waMessages.waTimestamp}, ${waMessages.createdAt})`,
+          waMessages.createdAt,
+        )
+    : [];
+  // Each side's last reaction wins, as on WhatsApp; an empty one took it back.
+  const last = new Map<string, Map<'in' | 'out', string | null>>();
+  for (const reaction of reacting) {
+    const sides = last.get(reaction.target) ?? new Map<'in' | 'out', string | null>();
+    sides.set(reaction.direction === 'out' ? 'out' : 'in', reaction.emoji);
+    last.set(reaction.target, sides);
+  }
+  const reactions = new Map<string, Reactions>();
+  for (const [wamid, sides] of last)
+    reactions.set(
+      wamid,
+      [...sides].flatMap(([direction, emoji]) => (emoji ? [{ emoji, direction }] : [])),
+    );
+  return { quoted: new Map(quoted.map((row) => [row.wamid!, row])), reactions };
 }
 
 function quoteOf(wamid: unknown, links: MessageLinks): WaQuote | null {
@@ -129,6 +161,9 @@ export function toMessage(
     kind: row.kind as WaMessageKind,
     text: row.text,
     replyTo: quoteOf(content.replyTo, links),
+    reactionTo:
+      row.kind === 'reaction' ? (quoteOf(content.reactionTo, links) ?? { found: false }) : null,
+    reactions: row.wamid ? (links.reactions.get(row.wamid) ?? []) : [],
     media:
       media && WA_MEDIA_KINDS.includes(row.kind as WaMessageKind)
         ? { mimeType: media.mimeType ?? null, filename: media.filename ?? null }

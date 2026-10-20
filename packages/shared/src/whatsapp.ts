@@ -92,8 +92,8 @@ export const WA_MEDIA_KINDS: readonly WaMessageKind[] = [
 ];
 
 /**
- * The message a reply quotes, looked up only in the same conversation. Not found: older than the
- * number's connection to the system, or kept only on the phone.
+ * The message a reply quotes or a reaction is for, looked up only in the same conversation. Not
+ * found: older than the number's connection to the system, or kept only on the phone.
  */
 export type WaQuote =
   | { found: true; id: string; direction: 'in' | 'out'; kind: WaMessageKind; text: string | null }
@@ -106,6 +106,10 @@ export interface WaMessage {
   text: string | null;
   /** A reply: the message it quotes. Optional only so fixtures of other branches still type. */
   replyTo?: WaQuote | null;
+  /** A reaction: the message it is for. Its emoji is `text`; no text means it was taken back. */
+  reactionTo?: WaQuote | null;
+  /** The reactions on this message now: the last one of each side, a taken-back one left out. */
+  reactions?: { emoji: string; direction: 'in' | 'out' }[];
   /** Present when the message has a file, opened at `/whatsapp/messages/:id/media`. */
   media: { mimeType: string | null; filename: string | null } | null;
   template: { name: string; language: string } | null;
