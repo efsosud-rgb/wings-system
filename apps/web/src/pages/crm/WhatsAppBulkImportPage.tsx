@@ -49,6 +49,7 @@ export function WhatsAppBulkImportPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [ourName, setOurName] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
   const lote = params.get('lote');
 
   if (!hasPermission(session.data, 'whatsapp.import_bulk'))
@@ -81,6 +82,10 @@ export function WhatsAppBulkImportPage() {
   const read = (picked: File[], map: File | null) =>
     run('Lendo as conversas…', async () => {
       const conversations = (await Promise.all(picked.map(conversationFilesOf))).flat();
+      setNotice(
+        conversations.length === 0 ? 'Nenhuma conversa exportada nos arquivos escolhidos.' : null,
+      );
+      if (conversations.length === 0) return;
       remember(conversations);
       let current = await bulkImports.create(map ? await map.text() : undefined);
       setParams({ lote: current.id }, { replace: true });
@@ -128,6 +133,13 @@ export function WhatsAppBulkImportPage() {
       setBulk(started);
     });
 
+  const discard = (current: WaBulkImport) =>
+    run('Descartando…', async () => {
+      await bulkImports.discard(current.id);
+      setBulk(null);
+      setParams({}, { replace: true });
+    });
+
   const undo = (current: WaBulkImport, itemId?: string) =>
     run('Desfazendo…', async () => setBulk(await bulkImports.undo(current.id, itemId)));
 
@@ -139,6 +151,7 @@ export function WhatsAppBulkImportPage() {
           <span className="crm-head-spacer" />
           <Link to="/crm-vendas/whatsapp">Voltar ao WhatsApp</Link>
         </header>
+        {notice && <p role="status">{notice}</p>}
         {lote ? (
           <p>
             <button type="button" className="crm-btn" disabled={busy !== null} onClick={reopen}>
@@ -190,7 +203,7 @@ export function WhatsAppBulkImportPage() {
           </label>
         </p>
       )}
-      {missing.length > 0 && bulk.state !== 'previa' && (
+      {missing.length > 0 && (
         <p className="crm-wa-window">
           {missing.length} conversa(s) esperam o arquivo: escolha de novo os mesmos arquivos para
           continuar.{' '}
@@ -245,6 +258,19 @@ export function WhatsAppBulkImportPage() {
             onClick={() => write(bulk)}
           >
             Gravar {waiting.length} conversa(s)
+          </button>
+        )}{' '}
+        {bulk.state === 'previa' && (
+          <button
+            type="button"
+            className="crm-btn"
+            disabled={busy !== null}
+            onClick={() => {
+              if (window.confirm('Descartar esta prévia? Nada foi gravado nas negociações.'))
+                discard(bulk);
+            }}
+          >
+            Descartar prévia
           </button>
         )}{' '}
         {written.length > 0 && (

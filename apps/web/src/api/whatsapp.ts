@@ -16,6 +16,7 @@ import type {
   WaRingingSnapshot,
   WaTemplateSend,
 } from '@wings/shared';
+import { waExportChatOf } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { permissionScope, useSession } from './auth.js';
@@ -344,10 +345,7 @@ export async function conversationFilesOf(file: File): Promise<File[]> {
     filter: (entry) => wanted(entry.name),
   });
   const names = Object.keys(entries);
-  const isExport =
-    !names.some((n) => /\.zip$/i.test(n)) &&
-    names.some((n) => /(^|\/)(_chat\.txt|conversa do whatsapp[^/]*|whatsapp chat[^/]*)$/i.test(n));
-  if (isExport) return [file];
+  if (waExportChatOf(names)) return [file];
   return names.map(
     (name) =>
       new File([entries[name]!], name.split('/').pop()!, {
@@ -389,6 +387,7 @@ export const bulkImports = {
         itemId ? `${bulkPath(id)}/items/${itemId}/undo` : `${bulkPath(id)}/undo`,
       )
       .then((r) => r.bulk),
+  discard: (id: string) => api.delete<void>(bulkPath(id)),
   reportUrl: (id: string) => `/api${bulkPath(id)}/report`,
 };
 

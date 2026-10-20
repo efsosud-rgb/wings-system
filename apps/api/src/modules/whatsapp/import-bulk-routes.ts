@@ -15,6 +15,7 @@ import {
   bulkOf,
   bulkReport,
   createBulk,
+  discardBulk,
   startBulk,
   undoBulk,
   updateBulkItem,
@@ -103,12 +104,30 @@ export const whatsappImportBulkRoutes: FastifyPluginAsync = async (app) => {
   app.get('/whatsapp/bulk-imports/:id/report', use, async (request, reply) => {
     const params = bulkParams.safeParse(request.params);
     if (!params.success) return notFound(reply);
-    return answer(reply, async () =>
-      reply
+    return answer(reply, async () => {
+      // Read first: a refusal must not go out under the CSV headers.
+      const report = bulkReport(await bulkOf(db, params.data.id));
+      return reply
         .header('content-type', 'text/csv; charset=utf-8')
         .header('content-disposition', `attachment; filename="lote-${params.data.id}.csv"`)
-        .send(bulkReport(await bulkOf(db, params.data.id))),
-    );
+        .send(report);
+    });
+  });
+
+  app.delete('/whatsapp/bulk-imports/:id', use, async (request, reply) => {
+    const params = bulkParams.safeParse(request.params);
+    if (!params.success) return notFound(reply);
+    return answer(reply, async () => {
+      await discardBulk(db, params.data.id);
+      await writeAudit(db, {
+        actorEmployeeId: request.session.actor.employeeId,
+        action: 'whatsapp.bulk_import_discarded',
+        entity: 'whatsapp_bulk_import',
+        entityId: params.data.id,
+        ip: request.ip,
+      });
+      return reply.status(204).send();
+    });
   });
 
   app.post('/whatsapp/bulk-imports/:id/items', upload, async (request, reply) => {

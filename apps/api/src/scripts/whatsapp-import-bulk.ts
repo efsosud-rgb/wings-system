@@ -17,6 +17,7 @@ import {
   bulkOf,
   bulkReport,
   createBulk,
+  discardBulk,
   startBulk,
   undoBulk,
   updateBulkItem,
@@ -32,6 +33,7 @@ import { conversationsOf, type BundleConversation } from '../modules/whatsapp/im
  *              creates the lote's preview only (nothing goes to a deal) and prints its id.
  *   aplicar:   ... --por=<e-mail> --lote=<id> --pasta=<a mesma pasta> --nome-wings="<nome>" --aplicar
  *   desfazer:  ... --por=<e-mail> --lote=<id> [--item=<id>] --desfazer
+ *   descartar: ... --por=<e-mail> --lote=<id> --descartar   (a preview never confirmed: its texts go)
  *
  * `--por` is an active Admin Master (`whatsapp.import_bulk`): imports, files and audit entries are
  * theirs. The output is ids and counts only, never a file, contact or deal name.
@@ -52,16 +54,25 @@ function conversationsIn(folder: string): BundleConversation[] {
     }
   };
   walk(folder);
-  return files.flatMap((path) =>
-    conversationsOf(path.split('/').pop()!, new Uint8Array(readFileSync(path))),
-  );
+  return files.flatMap((path, index) => {
+    try {
+      return conversationsOf(path.split('/').pop()!, new Uint8Array(readFileSync(path)));
+    } catch {
+      // By position only: a file name names the person.
+      console.warn(`arquivo ${index + 1} ignorado: não abriu como .txt ou .zip`);
+      return [];
+    }
+  });
 }
 
 /** `posicao;<id da negociação>` or `posicao;pular`, one per line. */
-function pairsOf(csv: string): Map<number, string> {
+export function pairsOf(csv: string): Map<number, string> {
   const pairs = new Map<number, string>();
   for (const line of csv.split(/\r?\n/)) {
-    const match = /^\s*(\d+)\s*[;,\t]\s*([0-9a-f-]{36}|pular)\s*$/i.exec(line);
+    const match =
+      /^\s*(\d+)\s*[;,\t]\s*([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|pular)\s*$/i.exec(
+        line,
+      );
     if (match) pairs.set(Number(match[1]), match[2]!.toLowerCase());
   }
   return pairs;
@@ -169,6 +180,10 @@ async function main() {
       const folder = arg('pasta');
       if (!folder) throw new Error('--pasta=<pasta com as conversas> é obrigatório para simular');
       return await simulate(db, actor.employeeId, folder);
+    }
+    if (flag('descartar')) {
+      await discardBulk(db, bulkId);
+      return console.warn(`DESCARTADO: a prévia do lote ${bulkId} saiu do banco`);
     }
     if (flag('desfazer')) {
       const itemId = arg('item');

@@ -28,6 +28,8 @@ export const normalizeName = (name: string) =>
 /** A Brazilian number in the CRM's form (55 + DDD + number), or null when it is not one. */
 export function phoneOf(raw: string): string | null {
   const digits = raw.replace(/\D/g, '');
+  // "+1 415 …" is another country, not a DDD.
+  if (raw.trim().startsWith('+') && !digits.startsWith('55')) return null;
   const full = digits.length === 10 || digits.length === 11 ? `55${digits}` : digits;
   return /^55\d{10,11}$/.test(full) ? canonicalWhatsAppPhone(full) : null;
 }
@@ -79,10 +81,12 @@ export function parseNameMap(csv: string): Record<string, string> {
   const map = new Map<string, string>();
   const clashing = new Set<string>();
   for (const line of csv.split(/\r?\n/)) {
-    const pair = /^(.*?)[;,\t]\s*([^;,\t]+?)\s*$/.exec(line.trim());
-    if (!pair) continue;
-    const name = normalizeName(pair[1]!.replace(/^"|"$/g, ''));
-    const phone = phoneOf(pair[2]!);
+    // The name, then the first column that is a phone; extra columns of a spreadsheet are left out.
+    const columns = line.split(/[;,\t]/).map((column) => column.trim().replace(/^"|"$/g, ''));
+    const at = columns.findIndex((column, index) => index > 0 && phoneOf(column) !== null);
+    if (at < 1) continue;
+    const name = normalizeName(columns.slice(0, at).join(' '));
+    const phone = phoneOf(columns[at]!);
     if (!name || !phone) continue;
     const known = map.get(name);
     if (known && known !== phone) clashing.add(name);

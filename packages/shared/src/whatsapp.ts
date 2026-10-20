@@ -394,6 +394,22 @@ export const WA_BULK_MAX_ITEMS = 300;
 /** The optional `.csv` of name and phone, one pair per line. */
 export const WA_BULK_MAP_MAX_CHARS = 1_000_000;
 
+/**
+ * The chat inside a phone's `.zip` export, or null when the entries are a bundle of exports. An
+ * export holds no `.zip` and one chat: `_chat.txt` (iPhone), "Conversa do WhatsApp com …" (Android),
+ * or its only `.txt`. Two chats, or an inner `.zip`, make a bundle; a `.txt` a person sent stays media.
+ */
+export function waExportChatOf(names: string[]): string | null {
+  const kept = names.filter((name) => !/(^|\/)(__MACOSX\/|\.)/.test(name));
+  if (kept.some((name) => /\.zip$/i.test(name))) return null;
+  const texts = kept.filter((name) => /\.txt$/i.test(name));
+  const chats = texts.filter((name) =>
+    /(^|\/)(_chat\.txt|conversa do whatsapp[^/]*|whatsapp chat[^/]*)$/i.test(name),
+  );
+  if (chats.length === 1) return chats[0]!;
+  return chats.length === 0 && texts.length === 1 ? texts[0]! : null;
+}
+
 /** How an item found its deal: the contact's number in the chat, the map, the name, or the Admin. */
 export const WA_BULK_MATCHES = ['telefone', 'mapa', 'nome', 'manual'] as const;
 export type WaBulkMatch = (typeof WA_BULK_MATCHES)[number];

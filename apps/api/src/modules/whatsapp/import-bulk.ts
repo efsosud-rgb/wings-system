@@ -5,7 +5,7 @@ import {
   type WaBulkItemState,
   type WaBulkMatch,
 } from '@wings/shared';
-import { and, asc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { employees, leads, waBulkImportItems, waBulkImports } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
@@ -431,8 +431,18 @@ export async function undoBulk(
         undoneBy: input.actorEmployeeId,
         nameMap: null,
       })
-      .where(eq(waBulkImports.id, bulkId));
+      // A second undo of a lote already undone keeps the first one's record.
+      .where(and(eq(waBulkImports.id, bulkId), ne(waBulkImports.state, 'desfeito')));
   return { undone: written.length, removed };
+}
+
+/** A lote still in preview thrown away: its conversations' texts and the map leave the database. */
+export async function discardBulk(db: Database, bulkId: string) {
+  const bulk = await bulkRow(db, bulkId);
+  if (bulk.state !== 'previa') throw new BulkError('not_in_preview');
+  await db
+    .delete(waBulkImports)
+    .where(and(eq(waBulkImports.id, bulkId), eq(waBulkImports.state, 'previa')));
 }
 
 async function itemsOf(db: Database, rows: Row[]): Promise<WaBulkItem[]> {
@@ -461,7 +471,8 @@ async function itemsOf(db: Database, rows: Row[]): Promise<WaBulkItem[]> {
     candidates: row.candidates,
     messages: row.messageCount,
     newMessages: row.newCount,
-    existingMessages: Math.max(0, row.messageCount - row.newCount),
+    // Without a deal nothing can already be there.
+    existingMessages: row.leadId ? Math.max(0, row.messageCount - row.newCount) : 0,
     first: row.firstAt?.toISOString() ?? null,
     last: row.lastAt?.toISOString() ?? null,
     state: row.state as WaBulkItemState,
