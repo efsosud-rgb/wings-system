@@ -109,7 +109,7 @@ describe('creating a Search campaign', () => {
     expect(outcome.status).toBe('applied');
     expect(api.mutateCalls()).toHaveLength(1);
     expect(api.mutateCalls()[0]?.url).toBe(
-      'https://googleads.googleapis.com/v22/customers/4268586278/googleAds:mutate',
+      'https://googleads.googleapis.com/v26/customers/4268586278/googleAds:mutate',
     );
     expect(api.mutateCalls()[0]?.body.partialFailure).toBe(false);
 
@@ -130,8 +130,9 @@ describe('creating a Search campaign', () => {
       advertisingChannelType: 'SEARCH',
       campaignBudget: 'customers/4268586278/campaignBudgets/-1',
       containsEuPoliticalAdvertising: 'DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING',
-      startDate: '2026-09-21',
-      endDate: '2026-09-30',
+      // v23+ names, at Google's daily granularity; startDate/endDate are gone.
+      startDateTime: '2026-09-21 00:00:00',
+      endDateTime: '2026-09-30 23:59:59',
       // Maximize clicks with a ceiling of R$ 6,00 per click, from the draft.
       targetSpend: { cpcBidCeilingMicros: '6000000' },
       networkSettings: {
@@ -142,6 +143,8 @@ describe('creating a Search campaign', () => {
       },
       geoTargetTypeSetting: { positiveGeoTargetType: 'PRESENCE' },
     });
+    expect(campaign).not.toHaveProperty('startDate');
+    expect(campaign).not.toHaveProperty('endDate');
 
     // Locations and language; the negatives are checked with the ad group.
     const criteria = operations
@@ -472,6 +475,8 @@ describe('creating a YouTube (Demand Gen) campaign', () => {
       finalUrlSuffix:
         'utm_source=youtube&utm_medium=cpc&utm_campaign={campaignid}&utm_content={creative}',
       containsEuPoliticalAdvertising: 'DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING',
+      startDateTime: '2026-10-09 00:00:00',
+      endDateTime: '2026-10-15 23:59:59',
     });
     // Places and language are on the ad group, never on the campaign.
     expect(operations.some((op) => op.campaignCriterionOperation)).toBe(false);

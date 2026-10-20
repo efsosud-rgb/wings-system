@@ -122,7 +122,7 @@ describe('the login-customer-id header', () => {
 });
 
 describe('the request itself', () => {
-  it('omits pageSize, which v22 rejects outright', async () => {
+  it('omits pageSize, which the API rejects outright', async () => {
     const { impl, calls } = fakeFetch([TOKEN_RESPONSE, accountBudget()]);
     const client = new GoogleAdsReadClient({ credentials: CREDENTIALS, fetchImpl: impl });
 

@@ -59,7 +59,8 @@ resultado desconhecido deixa uma coisa só para procurar, e nunca um orçamento
   **não compartilhado** (1:1 com a campanha, para a exposição não contar duas
   vezes).
 - `campaign`: `status: PAUSED`, `advertisingChannelType` `SEARCH` ou
-  `DEMAND_GEN`, `startDate`/`endDate`, `containsEuPoliticalAdvertising:
+  `DEMAND_GEN`, `startDateTime`/`endDateTime` (desde a v26, ver "Versão da
+  API"), `containsEuPoliticalAdvertising:
 DOES_NOT_CONTAIN_…` (obrigatório desde a v21), lance `maximizeConversions`
   (lead, conversão) ou `targetSpend` (tráfego). O nome é exatamente o digitado;
   o orçamento chama `<nome> · orçamento`.
@@ -158,10 +159,8 @@ Decisões tomadas aqui — revisar se discordar:
 - [ ] Demand Gen aceita campanha sem grupo de anúncios e com `targetSpend`?
       Orçamento mínimo de Demand Gen na conta?
 - [ ] O nível de acesso do developer token (Exploração) permite `mutate`?
-- [ ] **A v22 está perto do fim de vida** (a documentação já está na v25). Na
-      v23 `startDate`/`endDate` viram `startDateTime`/`endDateTime`; está
-      isolado em `campaignDates()`. Subir de versão é uma tarefa própria, com
-      releitura do spike.
+- [x] ~~A v22 está perto do fim de vida~~: a integração subiu para a **v26** em
+      20/10/2026 (seção "Versão da API: v26", no fim).
 
 Sugestão para antes do primeiro clique: o Google aceita `validateOnly: true`
 no mesmo `mutate` — valida tudo na conta real **sem escrever**. Não foi
@@ -176,7 +175,7 @@ construído; seria um `ops-cli preflight-google`.
 3. `resolve-unknown` para o Google procura pelo nome, como na Meta — conferir
    num caso real.
 4. Apagar/remover campanha de teste (não existe em nenhuma plataforma).
-5. Migração da API para v23+.
+5. ~~Migração da API para v23+~~: feita, v26 (20/10/2026).
 6. Espelhar anúncios, reprovações e P-max; alerta de saldo pré-pago baixo.
 
 ## Pesquisa de ponta a ponta (25/09/2026)
@@ -556,9 +555,47 @@ Campanhas" lê; o lead do YouTube é atribuído ao Google pelo `gclid`.
 - [ ] Orçamento mínimo de Demand Gen e a regra "verba ≥ 15 × CPA alvo".
 - [ ] A consulta oEmbed para vídeo não listado e para vídeo com incorporação
       desligada (tratado como privado).
-- [ ] **A v22 sai do ar em outubro de 2026** (tabela do Google, "tentative"; as
-      definições já foram apagadas em 07/10). Quando sair, leitura, Cockpit e
-      criação param juntos: a troca para v23+ é a próxima onda do Google.
+- [x] ~~A v22 sai do ar em outubro de 2026~~: subiu para a v26 em 20/10/2026
+      (seção seguinte). Os nomes de campo acima foram conferidos de novo na
+      referência da v26; continuam nunca enviados.
 - [ ] O período de verba do mês precisa estar aberto (Integrações → teto da
       conta Google); sem ele o pedido volta `period_not_open`.
 
+## Versão da API: v26 (20/10/2026)
+
+Em 20/10/2026 o `ads-reconcile` do staging passou a falhar de vez em quando com
+`Version v22 is deprecated. Requests to this version will be blocked`. A
+integração inteira (leitura, Cockpit, `validateOnly` e escrita) usa uma
+constante só, `GOOGLE_ADS_API_VERSION` em `platform/google-client.ts`, agora
+**v26** (lançada em 14/10/2026; fim previsto em novembro de 2027, tabela
+oficial `docs/sunset-dates`). Conferido só na documentação oficial (notas de
+versão v23 a v26 e referência de campos da v26), **sem nenhuma chamada ao
+Google**.
+
+O que mudou entre a v22 e a v26 e toca este código:
+
+- **Datas da campanha (v23):** `campaign.start_date`/`end_date` deixaram de
+  existir. A leitura pede `campaign.start_date_time`/`end_date_time`
+  ("yyyy-MM-dd HH:mm:ss", fuso da conta) e guarda só o dia; a escrita
+  (`campaignDates()`) manda `startDateTime: "<início> 00:00:00"` e
+  `endDateTime: "<fim> 23:59:59"`, a granularidade diária do Google.
+- **Vídeo:** `metrics.video_views` não existe em `campaign` (já não existia na
+  v22, daí o aviso "não reconhece metrics.video_views"). O campo é
+  `metrics.video_trueview_views`. Os quartis (`metrics.video_quartile_p*_rate`)
+  são, pela referência, **fração das impressões**, então a contagem passou a ser
+  impressões × taxa (antes era visualizações × taxa).
+- **Demand Gen (v24):** `videos` e `logo_images` passaram a ser obrigatórios no
+  `DemandGenVideoResponsiveAdInfo`; o anúncio já manda os dois e o `businessName`.
+- O resto das mudanças incompatíveis (anúncio de chamada, `lead_form_only`,
+  segurança de marca na campanha, planejamento, metas de ciclo de vida,
+  incentivos, Local Services, modificadores de hotel, `enhanced_conversions_for_leads_enabled`)
+  não é usado aqui. `pageSize` continua recusado na v26.
+- O developer token foi aposentado pelo Google em 09/09/2026: o cabeçalho
+  ainda é aceito e ignorado ("um major futuro" vai recusá-lo). O acesso agora é
+  do projeto do Google Cloud dono do cliente OAuth; da v25 em diante, um projeto
+  sem acesso de produção recebe `CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION`.
+
+Não verificado — só a próxima rodada no staging responde (depois da
+publicação): a leitura das datas com os novos campos (e qual data-hora a v26
+devolve para "sem fim"), os números de vídeo na conta real, o Cockpit, e
+qualquer escrita ou `validateOnly` (só com ordem do Eric).

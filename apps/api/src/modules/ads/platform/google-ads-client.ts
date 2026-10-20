@@ -50,6 +50,7 @@ import type {
  *
  * Verified against the live account (stage-google-spike.md): v22, no
  * `login-customer-id`, budgets only at campaign level, money in micros.
+ * Moved to v26 on 2026-10-20 against the reference only (google-client.ts).
  * NOT verified until the first supervised write: the mutate itself.
  */
 
@@ -59,8 +60,9 @@ interface CampaignRow {
     name?: string;
     status?: string;
     servingStatus?: string;
-    startDate?: string;
-    endDate?: string;
+    /** "yyyy-MM-dd HH:mm:ss" in the account's timezone (v23+). */
+    startDateTime?: string;
+    endDateTime?: string;
     finalUrlSuffix?: string;
   };
   customer?: { finalUrlSuffix?: string };
@@ -103,7 +105,7 @@ interface MetricsRow {
     impressions?: string;
     clicks?: string;
     conversions?: number;
-    videoViews?: string;
+    videoTrueviewViews?: string;
     videoQuartileP25Rate?: number;
     videoQuartileP50Rate?: number;
     videoQuartileP75Rate?: number;
@@ -256,7 +258,7 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
   private async campaignRows(where: string): Promise<CampaignRow[]> {
     return this.reader.search<CampaignRow>(`
       SELECT campaign.id, campaign.name, campaign.status, campaign.serving_status,
-             campaign.start_date, campaign.end_date, campaign.final_url_suffix,
+             campaign.start_date_time, campaign.end_date_time, campaign.final_url_suffix,
              customer.final_url_suffix,
              campaign_budget.resource_name, campaign_budget.amount_micros,
              campaign_budget.total_amount_micros, campaign_budget.period,
@@ -300,6 +302,9 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
     }
     const daily = budget?.period === 'DAILY' ? centsFromMicros(budget.amountMicros) : null;
     const lifetime = budget?.totalAmountMicros ? centsFromMicros(budget.totalAmountMicros) : null;
+    // The day only: the rest of the system compares YYYY-MM-DD strings.
+    const startDate = row.campaign?.startDateTime?.slice(0, 10);
+    const endDate = row.campaign?.endDateTime?.slice(0, 10);
 
     return {
       id,
@@ -308,10 +313,10 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
       dailyBudgetCents: counted ? daily : 0,
       lifetimeBudgetCents: counted ? lifetime : null,
       spendCents: spend.get(id) ?? 0,
-      startDate: row.campaign?.startDate ?? null,
-      // Google writes "no end" as its far-future sentinel (2037-12-30).
-      endDate:
-        row.campaign?.endDate && row.campaign.endDate < '2037-01-01' ? row.campaign.endDate : null,
+      startDate: startDate ?? null,
+      // Google writes "no end" as its far-future sentinel (2037-12-30 on v22;
+      // NOT verified live which date-time v26 answers, hence the day compare).
+      endDate: endDate && endDate < '2037-01-01' ? endDate : null,
       deliveryStatus: row.campaign?.servingStatus ?? null,
       // Google leaves an unset suffix out of the answer. NOT verified live:
       // customer.final_url_suffix read through the campaign resource.
@@ -356,7 +361,7 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
    * group is not mirrored as an ad set (Google has none), so the ad sits
    * straight under its campaign on the dashboard. P-max asset groups and
    * other ad types come back with their type and no text. NOT verified live:
-   * the policy_summary field names on v22.
+   * the policy_summary field names (in the v26 reference).
    */
   async listAds(): Promise<PlatformAd[]> {
     const rows = await this.reader.search<GoogleAdRow>(`
@@ -405,9 +410,9 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
   /**
    * Whether this API version answers the video metrics on `campaign`. On the
    * first real run v22 refused `metrics.video_views` ("Unrecognized field in
-   * the query"); a field the API does not know makes video "não disponível"
-   * for the account, with a warning, and never fails the account. NOT verified
-   * live: which of the video fields this version does accept on campaign.
+   * the query"): its name is `metrics.video_trueview_views` (v26 reference).
+   * A field the API does not know still makes video "não disponível" for the
+   * account, with a warning, and never fails the account. NOT verified live.
    */
   private videoFields: 'try' | 'none' = 'try';
   private readonly warnings: string[] = [];
@@ -420,12 +425,12 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
     const { until } = this.dateBounds(sinceDate, untilDate);
     const where = `WHERE segments.date BETWEEN '${sinceDate}' AND '${until}'`;
     if (this.videoFields === 'try') {
-      // The video figures ride on the same query. YouTube reports views and
-      // the quartiles as rates of views.
+      // The video figures ride on the same query. Google reports TrueView
+      // views, and each quartile as a rate of impressions (v26 reference).
       try {
         return await this.reader.search<MetricsRow>(`
           SELECT campaign.id, segments.date, ${METRIC_FIELDS},
-                 metrics.video_views, metrics.video_quartile_p25_rate,
+                 metrics.video_trueview_views, metrics.video_quartile_p25_rate,
                  metrics.video_quartile_p50_rate, metrics.video_quartile_p75_rate,
                  metrics.video_quartile_p100_rate
             FROM campaign
@@ -474,8 +479,10 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
       // (stage-google-spike.md), so Google's conversions are leads.
       const actions: Record<string, number> = conversions > 0 ? { lead: conversions } : {};
       // Once the API said it does not know the video fields, nothing is read from them.
-      const views = this.videoFields === 'none' ? 0 : Number(row.metrics?.videoViews ?? 0);
-      const quartile = (rate: number | undefined) => Math.round(views * (rate ?? 0));
+      const video = this.videoFields !== 'none';
+      const views = video ? Number(row.metrics?.videoTrueviewViews ?? 0) : 0;
+      const quartile = (rate: number | undefined) =>
+        video ? Math.round(impressions * (rate ?? 0)) : 0;
       return [
         {
           level,
@@ -1978,12 +1985,12 @@ export function googleLocationCriteria(
 }
 
 /**
- * The campaign's run dates as v22 wants them. v23 replaces these two fields
- * with `startDateTime`/`endDateTime` ("yyyy-MM-dd HH:mm:ss"); when the API
- * version moves, this is the only place that changes.
+ * The campaign's run dates as v23+ wants them: `startDateTime`/`endDateTime`
+ * ("yyyy-MM-dd HH:mm:ss", account timezone), which replaced `startDate`/
+ * `endDate`. 00:00:00 and 23:59:59 are Google's "daily granularity".
  */
 function campaignDates(startDate: string, endDate: string): Record<string, string> {
-  return { startDate, endDate };
+  return { startDateTime: `${startDate} 00:00:00`, endDateTime: `${endDate} 23:59:59` };
 }
 
 interface MutateOperationResponse {
