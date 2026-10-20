@@ -178,6 +178,7 @@ describe('who may use the routes', () => {
       payload: { fileName: 'a.txt', byteSize: 1, text: chat('Fulano') },
     },
     { method: 'PATCH', url: `${BASE}/${ctx.bulkId}/items/${ctx.itemId}`, payload: { skip: true } },
+    { method: 'POST', url: `${BASE}/${ctx.bulkId}/pair`, payload: { ourName: OURS } },
     { method: 'POST', url: `${BASE}/${ctx.bulkId}/apply`, payload: { ourName: OURS } },
     {
       method: 'POST',
@@ -194,7 +195,7 @@ describe('who may use the routes', () => {
     const before = await db.select().from(waBulkImports);
     for (const session of [seller, rh]) {
       const answers = await Promise.all(routesOf(ctx).map((options) => call(session, options)));
-      expect(answers.map((res) => res.statusCode)).toEqual(Array(10).fill(403));
+      expect(answers.map((res) => res.statusCode)).toEqual(Array(11).fill(403));
     }
     expect(await db.select().from(waBulkImports)).toHaveLength(before.length);
     expect(await bulkIn(ctx.bulkId)).toMatchObject({ state: 'previa', ourName: null });
@@ -208,7 +209,7 @@ describe('who may use the routes', () => {
   it('answers 401 without a login on every route', async () => {
     const ctx = await fresh();
     const answers = await Promise.all(routesOf(ctx).map((options) => call(null, options)));
-    expect(answers.map((res) => res.statusCode)).toEqual(Array(10).fill(401));
+    expect(answers.map((res) => res.statusCode)).toEqual(Array(11).fill(401));
   });
 });
 

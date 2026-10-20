@@ -37,6 +37,7 @@ import {
   bulkOf,
   bulkReport,
   createBulk,
+  pairBulkAgain,
   pairOf,
   startBulk,
   undoBulk,
@@ -218,6 +219,74 @@ async function writtenBulk(size: number) {
   for (const row of rows) await applyItem(bulkId, row.item.id, row.fileId);
   return { bulkId, rows };
 }
+
+describe('pairing again with the Wings name the Admin chose', () => {
+  const TEAM = 'Equipe Comercial';
+  /** A "WhatsApp Unknown" export of a contact saved by name, where the Wings side has no "wings". */
+  const unknownChat = (contact: string) =>
+    [
+      `19/10/2026 14:05 - ${TEAM}: Olá! Vi o seu interesse.`,
+      `19/10/2026 14:06 - ${contact}: Pode sim`,
+    ].join('\n');
+  const UNKNOWN_FILE = 'WhatsApp Unknown 2026-10-19 at 14.05.zip';
+
+  it('pairs by name a contact the guess left without a pair, and keeps the name on the lote', async () => {
+    const lead = await deal();
+    const bulkId = await newBulk();
+    const item = await add(bulkId, lead.name, unknownChat(lead.name), UNKNOWN_FILE);
+    expect(item).toMatchObject({ leadId: null, contactName: null });
+
+    await pairBulkAgain(db, bulkId, TEAM);
+
+    const bulk = await bulkOf(db, bulkId);
+    expect(bulk).toMatchObject({ state: 'previa', ourName: TEAM });
+    expect(bulk.items[0]).toMatchObject({
+      leadId: lead.id,
+      match: 'nome',
+      contactName: lead.name,
+      newMessages: 2,
+    });
+  });
+
+  it('pairs a conversation added afterwards with the same name', async () => {
+    const first = await deal();
+    const later = await deal();
+    const bulkId = await newBulk();
+    await add(bulkId, first.name, unknownChat(first.name), UNKNOWN_FILE);
+    await pairBulkAgain(db, bulkId, TEAM);
+    const item = await add(bulkId, later.name, unknownChat(later.name), UNKNOWN_FILE);
+    expect(item).toMatchObject({ leadId: later.id, match: 'nome' });
+  });
+
+  it('leaves alone a pair set by hand and a skipped conversation', async () => {
+    const lead = await deal();
+    const other = await deal();
+    const bulkId = await newBulk();
+    const manual = await add(bulkId, lead.name, unknownChat(lead.name), UNKNOWN_FILE);
+    const skipped = await add(bulkId, other.name, unknownChat(other.name), UNKNOWN_FILE);
+    await updateBulkItem(db, bulkId, manual.id, { leadId: other.id });
+    await updateBulkItem(db, bulkId, skipped.id, { skip: true });
+
+    await pairBulkAgain(db, bulkId, TEAM);
+
+    const items = (await bulkOf(db, bulkId)).items;
+    expect(items.find((i) => i.id === manual.id)).toMatchObject({
+      leadId: other.id,
+      match: 'manual',
+    });
+    expect(items.find((i) => i.id === skipped.id)).toMatchObject({ state: 'pulada', leadId: null });
+  });
+
+  it('refuses a name that no conversation has, and a lote already confirmed', async () => {
+    const lead = await deal();
+    const bulkId = await newBulk();
+    await add(bulkId, lead.name, unknownChat(lead.name), UNKNOWN_FILE);
+    expect(await refusal(pairBulkAgain(db, bulkId, 'Outra Pessoa'))).toBe('unknown_side');
+    expect((await bulkOf(db, bulkId)).ourName).toBeNull();
+    await startBulk(db, bulkId, TEAM);
+    expect(await refusal(pairBulkAgain(db, bulkId, TEAM))).toBe('not_in_preview');
+  });
+});
 
 describe('pairing a conversation with its deal', () => {
   const clues = (

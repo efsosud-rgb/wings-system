@@ -16,6 +16,7 @@ import {
   bulkReport,
   createBulk,
   discardBulk,
+  pairBulkAgain,
   startBulk,
   undoBulk,
   updateBulkItem,
@@ -150,6 +151,17 @@ export const whatsappImportBulkRoutes: FastifyPluginAsync = async (app) => {
         item: await updateBulkItem(db, params.data.id, params.data.itemId, body.data),
       }),
     );
+  });
+
+  app.post('/whatsapp/bulk-imports/:id/pair', use, async (request, reply) => {
+    const params = bulkParams.safeParse(request.params);
+    if (!params.success) return notFound(reply);
+    const body = waBulkApplySchema.safeParse(request.body);
+    if (!body.success) return invalid(reply, body.error.issues[0]?.message);
+    return answer(reply, async () => {
+      await pairBulkAgain(db, params.data.id, body.data.ourName);
+      return reply.send({ bulk: await bulkOf(db, params.data.id) });
+    });
   });
 
   app.post('/whatsapp/bulk-imports/:id/apply', use, async (request, reply) => {

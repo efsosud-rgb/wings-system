@@ -133,6 +133,9 @@ export function WhatsAppBulkImportPage() {
       setBulk(started);
     });
 
+  const pairAgain = (current: WaBulkImport) =>
+    run('Pareando de novo…', async () => setBulk(await bulkImports.pairAgain(current.id, ourName)));
+
   const discard = (current: WaBulkImport) =>
     run('Descartando…', async () => {
       await bulkImports.discard(current.id);
@@ -170,6 +173,7 @@ export function WhatsAppBulkImportPage() {
   const waiting = bulk.items.filter((item) => item.state === 'pendente' && item.leadId);
   const missing = waiting.filter((item) => !files.has(fileKey(item.fileName, item.byteSize)));
   const written = bulk.items.filter((item) => item.state === 'gravada');
+  const unpaired = bulk.items.filter((item) => item.state === 'pendente' && !item.leadId);
   return (
     <div className="crm-page">
       <header className="crm-head">
@@ -200,7 +204,17 @@ export function WhatsAppBulkImportPage() {
                 </option>
               ))}
             </select>
-          </label>
+          </label>{' '}
+          {unpaired.length > 0 && (
+            <button
+              type="button"
+              className="crm-btn is-small"
+              disabled={busy !== null || !ourName}
+              onClick={() => pairAgain(bulk)}
+            >
+              Parear de novo as {unpaired.length} sem par com este nome
+            </button>
+          )}
         </p>
       )}
       {missing.length > 0 && (

@@ -366,6 +366,8 @@ export const bulkImports = {
     api.post<{ item: WaBulkItem }>(`${bulkPath(id)}/items`, input).then((r) => r.item),
   patchItem: (id: string, itemId: string, patch: { leadId: string } | { skip: boolean }) =>
     api.patch<{ item: WaBulkItem }>(`${bulkPath(id)}/items/${itemId}`, patch).then((r) => r.item),
+  pairAgain: (id: string, ourName: string) =>
+    api.post<{ bulk: WaBulkImport }>(`${bulkPath(id)}/pair`, { ourName }).then((r) => r.bulk),
   start: (id: string, ourName: string) =>
     api.post<{ bulk: WaBulkImport }>(`${bulkPath(id)}/apply`, { ourName }).then((r) => r.bulk),
   /** The conversation's file first, among the paired deal's files; then its messages. */

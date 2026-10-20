@@ -25,6 +25,7 @@ const { state, api } = vi.hoisted(() => ({
     applyItem: vi.fn(),
     undo: vi.fn(),
     discard: vi.fn(),
+    pairAgain: vi.fn(),
   },
 }));
 
@@ -747,6 +748,43 @@ describe('resuming a lote after the tab closed', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Abrir o lote 0a1b2c3d' }));
     await screen.findByRole('table');
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('pairing again with the Wings name', () => {
+  it('is offered while a conversation has no pair, and shows the pair it found', async () => {
+    server.pairing = {
+      'Conversa 1.txt': { leadId: null, leadName: null, match: null, candidates: 0 },
+    };
+    api.pairAgain.mockImplementation(async (_id: string, ourName: string) => {
+      lote = {
+        ...lote,
+        ourName,
+        items: lote.items.map((i) => ({
+          ...i,
+          leadId: LEAD_B,
+          leadName: 'Negociação Achada',
+          match: 'nome',
+        })),
+      };
+      return copy();
+    });
+    show();
+    await readFiles([chat(1)]);
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Parear de novo as 1 sem par com este nome' }),
+    );
+
+    await waitFor(() => expect(api.pairAgain).toHaveBeenCalledWith(BULK_ID, 'Wings Company'));
+    await waitFor(() => expect(cellsOf('Conversa 1.txt')[1]).toContain('Negociação Achada'));
+    expect(screen.queryByRole('button', { name: /Parear de novo/ })).toBeNull();
+  });
+
+  it('is not offered when every conversation has a pair', async () => {
+    show();
+    await readFiles([chat(1)]);
+    expect(screen.queryByRole('button', { name: /Parear de novo/ })).toBeNull();
   });
 });
 

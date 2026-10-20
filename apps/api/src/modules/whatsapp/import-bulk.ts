@@ -158,17 +158,13 @@ export async function addBulkItem(
     return (await itemsOf(db, [row!]))[0]!;
   }
   const participants = participantsOf(parsed);
-  const ourGuess = guessOurSide(participants.map((p) => p.name));
-  const contactName = contactNameOf(
+  const { contactName, pair } = await pairOfChat(
+    db,
     input.fileName,
-    participants.map((p) => p.name),
-    ourGuess,
+    parsed,
+    bulk.ourName,
+    bulk.nameMap ?? {},
   );
-  const pair = await pairOf(db, {
-    phones: chatPhonesOf(parsed, ourGuess),
-    contactName,
-    nameMap: bulk.nameMap ?? {},
-  });
   const counts = await countsFor(db, pair.leadId, input.text);
   const [row] = await db
     .insert(waBulkImportItems)
@@ -188,6 +184,61 @@ export async function addBulkItem(
     })
     .returning();
   return (await itemsOf(db, [row!]))[0]!;
+}
+
+/** The contact and the deal of one conversation, with the Wings' side as named or as guessed. */
+async function pairOfChat(
+  db: Database,
+  fileName: string,
+  parsed: NonNullable<ReturnType<typeof parseWhatsAppExport>>,
+  ourName: string | null,
+  nameMap: Record<string, string>,
+) {
+  const names = participantsOf(parsed).map((p) => p.name);
+  const ours = ourName ?? guessOurSide(names);
+  const contactName = contactNameOf(fileName, names, ours);
+  const pair = await pairOf(db, { phones: chatPhonesOf(parsed, ours), contactName, nameMap });
+  return { contactName, pair };
+}
+
+/**
+ * In the preview the Admin names the Wings' side, and the conversations still without a pair are
+ * paired again with it: a contact saved by name in the phone (a "WhatsApp Unknown …" file) is then
+ * found by that name. Pairs already found, set by hand or skipped stay as they are.
+ */
+export async function pairBulkAgain(db: Database, bulkId: string, ourName: string) {
+  const bulk = await bulkRow(db, bulkId);
+  if (bulk.state !== 'previa') throw new BulkError('not_in_preview');
+  const items = await db
+    .select()
+    .from(waBulkImportItems)
+    .where(eq(waBulkImportItems.bulkId, bulkId));
+  if (!items.some((item) => item.participants.some((p) => p.name === ourName)))
+    throw new BulkError('unknown_side');
+  await db.update(waBulkImports).set({ ourName }).where(eq(waBulkImports.id, bulkId));
+  for (const item of items) {
+    if (item.leadId || item.state !== 'pendente' || !item.chatText) continue;
+    const parsed = parseWhatsAppExport(item.chatText);
+    if (!parsed) continue;
+    const { contactName, pair } = await pairOfChat(
+      db,
+      item.fileName,
+      parsed,
+      ourName,
+      bulk.nameMap ?? {},
+    );
+    const counts = await countsFor(db, pair.leadId, item.chatText);
+    await db
+      .update(waBulkImportItems)
+      .set({
+        contactName,
+        leadId: pair.leadId,
+        match: pair.match,
+        candidates: pair.candidates,
+        newCount: counts?.newCount ?? 0,
+      })
+      .where(eq(waBulkImportItems.id, item.id));
+  }
 }
 
 async function pendingItem(db: Database, bulkId: string, itemId: string) {

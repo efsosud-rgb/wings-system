@@ -136,6 +136,11 @@ Para dezenas de conversas de uma vez (Eric, 19/10): **WhatsApp → Importar em l
 
    Empate em todos os passos é "sem par", com o número de candidatas. O sistema nunca escolhe uma no chute.
 
+   O passo do nome precisa saber qual lado é a Wings. O sistema adivinha pelo nome que tem "wings"; quando o
+   lado da Wings aparece com outro nome (e o arquivo, como "WhatsApp Unknown … .zip", não diz o contato), o
+   Admin escolhe o nome da Wings na prévia e clica **"Parear de novo as N sem par com este nome"**. Só as
+   conversas ainda sem par mudam; as corrigidas à mão e as puladas ficam como estão.
+
 3. **Prévia:** por conversa, arquivo, negociação (ou "sem par"), mensagens novas, já existentes e período. O Admin
    corrige o par, pula, ou confirma. Nada vai para as negociações antes da confirmação.
 4. **Gravação:** ao confirmar, o Admin escolhe o nome que é a Wings nas conversas. Cada conversa pareada é gravada
@@ -156,12 +161,12 @@ Limites: até 300 conversas por lote (`WA_BULK_MAX_ITEMS`); o mapa até 1 milhã
 
 Para exportações que chegaram pelo Drive, numa pasta do servidor, com o mesmo serviço e as mesmas regras:
 
-| Passo     | Comando (em `apps/api`, depois do build)                                                                  |
-| --------- | --------------------------------------------------------------------------------------------------------- |
-| simular   | `node dist/scripts/whatsapp-import-bulk.js --por=<e-mail> --pasta=<pasta> [--mapa=<csv>] [--pares=<csv>]` |
-| aplicar   | `... --por=<e-mail> --lote=<id> --pasta=<a mesma pasta> --nome-wings="<nome>" --aplicar`                  |
-| desfazer  | `... --por=<e-mail> --lote=<id> [--item=<id>] --desfazer`                                                 |
-| descartar | `... --por=<e-mail> --lote=<id> --descartar` (só uma prévia que não foi confirmada)                       |
+| Passo     | Comando (em `apps/api`, depois do build)                                                                                          |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| simular   | `node dist/scripts/whatsapp-import-bulk.js --por=<e-mail> --pasta=<pasta> [--mapa=<csv>] [--nome-wings="<nome>"] [--pares=<csv>]` |
+| aplicar   | `... --por=<e-mail> --lote=<id> --pasta=<a mesma pasta> --nome-wings="<nome>" --aplicar`                                          |
+| desfazer  | `... --por=<e-mail> --lote=<id> [--item=<id>] --desfazer`                                                                         |
+| descartar | `... --por=<e-mail> --lote=<id> --descartar` (só uma prévia que não foi confirmada)                                               |
 
 - `--por` é um Admin Master ativo: as importações, os arquivos e a auditoria ficam em nome dele.
 - `--pares` corrige a prévia com `posicao;<id da negociação>` ou `posicao;pular`.
@@ -171,18 +176,19 @@ Para exportações que chegaram pelo Drive, numa pasta do servidor, com o mesmo 
 
 Todas pedem `whatsapp.import_bulk`.
 
-| Rota                                                  | O quê                                                                |
-| ----------------------------------------------------- | -------------------------------------------------------------------- |
-| `POST /whatsapp/bulk-imports`                         | `{ nameMap? }` → lote em prévia (201)                                |
-| `GET /whatsapp/bulk-imports/:id`                      | O lote com as conversas                                              |
-| `POST /whatsapp/bulk-imports/:id/items`               | `{ text, fileName, byteSize }` → uma conversa pareada                |
-| `PATCH /whatsapp/bulk-imports/:id/items/:itemId`      | Corrige o par ou pula (só na prévia)                                 |
-| `POST /whatsapp/bulk-imports/:id/apply`               | `{ ourName }` → confirma; as "sem par" ficam puladas                 |
-| `POST /whatsapp/bulk-imports/:id/items/:itemId/apply` | `{ fileId }` → grava uma conversa                                    |
-| `POST /whatsapp/bulk-imports/:id/undo`                | Desfaz o lote inteiro                                                |
-| `POST /whatsapp/bulk-imports/:id/items/:itemId/undo`  | Desfaz uma conversa                                                  |
-| `GET /whatsapp/bulk-imports/:id/report`               | O relatório `.csv`                                                   |
-| `DELETE /whatsapp/bulk-imports/:id`                   | Descarta uma prévia (204); 409 `not_in_preview` depois de confirmada |
+| Rota                                                  | O quê                                                                  |
+| ----------------------------------------------------- | ---------------------------------------------------------------------- |
+| `POST /whatsapp/bulk-imports`                         | `{ nameMap? }` → lote em prévia (201)                                  |
+| `GET /whatsapp/bulk-imports/:id`                      | O lote com as conversas                                                |
+| `POST /whatsapp/bulk-imports/:id/items`               | `{ text, fileName, byteSize }` → uma conversa pareada                  |
+| `PATCH /whatsapp/bulk-imports/:id/items/:itemId`      | Corrige o par ou pula (só na prévia)                                   |
+| `POST /whatsapp/bulk-imports/:id/pair`                | `{ ourName }` → pareia de novo as sem par com esse nome (só na prévia) |
+| `POST /whatsapp/bulk-imports/:id/apply`               | `{ ourName }` → confirma; as "sem par" ficam puladas                   |
+| `POST /whatsapp/bulk-imports/:id/items/:itemId/apply` | `{ fileId }` → grava uma conversa                                      |
+| `POST /whatsapp/bulk-imports/:id/undo`                | Desfaz o lote inteiro                                                  |
+| `POST /whatsapp/bulk-imports/:id/items/:itemId/undo`  | Desfaz uma conversa                                                    |
+| `GET /whatsapp/bulk-imports/:id/report`               | O relatório `.csv`                                                     |
+| `DELETE /whatsapp/bulk-imports/:id`                   | Descarta uma prévia (204); 409 `not_in_preview` depois de confirmada   |
 
 Banco (migração 0094):
 

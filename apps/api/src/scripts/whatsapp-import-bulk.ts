@@ -18,6 +18,7 @@ import {
   bulkReport,
   createBulk,
   discardBulk,
+  pairBulkAgain,
   startBulk,
   undoBulk,
   updateBulkItem,
@@ -29,7 +30,7 @@ import { conversationsOf, type BundleConversation } from '../modules/whatsapp/im
  * that came through the Drive. The same steps and rules as the screen:
  *
  *   simular:   node dist/scripts/whatsapp-import-bulk.js --por=<e-mail> --pasta=<pasta>
- *                [--mapa=<nome;telefone.csv>] [--pares=<posicao;negociacao|pular.csv>]
+ *                [--mapa=<nome;telefone.csv>] [--nome-wings="<nome>"] [--pares=<posicao;negociacao|pular.csv>]
  *              creates the lote's preview only (nothing goes to a deal) and prints its id.
  *   aplicar:   ... --por=<e-mail> --lote=<id> --pasta=<a mesma pasta> --nome-wings="<nome>" --aplicar
  *   desfazer:  ... --por=<e-mail> --lote=<id> [--item=<id>] --desfazer
@@ -106,6 +107,9 @@ async function simulate(db: Database, actorId: string, folder: string) {
       byteSize: conversation.bytes.length,
       text: conversation.text,
     });
+  // With the Wings' name, the ones still without a pair are paired again by the contact's name.
+  const ourName = arg('nome-wings');
+  if (ourName) await pairBulkAgain(db, bulkId, ourName);
   const pairsPath = arg('pares');
   if (pairsPath) {
     const items = (await bulkOf(db, bulkId)).items;
