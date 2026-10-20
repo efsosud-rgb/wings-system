@@ -184,6 +184,9 @@ negados. Arquivos de `/assets/` (nome com hash) ficam em cache por um ano (`immu
   é um arquivo à parte com `preload`; se não carregar, aparece o nome da rede (`.no-fa`).
 - O three.js chega depois do primeiro quadro (`import()` dinâmico, ~160 kB comprimido); sem WebGL, a página mostra a
   logo parada (`.no-gl`). `window.__wings3d()` informa partículas, pixel ratio, chamadas de desenho e memória.
+- Resolução da cena (pixel ratio, sempre limitado ao da tela): computador até 2; celular com toque até 2
+  (`PHONE_MAX_PR` em `scene.ts`; era 1,5); celular "fraco" (4 núcleos ou menos, ou 3 GB ou menos) 1. Com movimento
+  reduzido nada mudou: celular com toque continua em 1,5.
 - No celular (largura até 640 px, tela mais alta que larga) a asa tem outro lugar e fica com ~57% do tamanho: cada
   seção da cena traz `data-n="x,y,escala,opacidade"` (x em unidades do mundo vezes a proporção largura/altura da
   tela, y em unidades do mundo), longe de títulos e rótulos; onde ainda cruza texto a opacidade cai para ~35%. Acima de

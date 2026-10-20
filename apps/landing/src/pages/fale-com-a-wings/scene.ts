@@ -73,6 +73,9 @@ declare global {
 const clamp = (x: number, a = 0, b = 1) => Math.min(b, Math.max(a, x));
 const smooth = (t: number) => t * t * (3 - 2 * t);
 
+/** Pixel ratio ceiling of a touch phone with motion that is not "weak" (3 = the screen's own size). */
+const PHONE_MAX_PR = 2;
+
 /** The scene, or null when WebGL cannot start. */
 export function createScene(input: SceneInput): Scene3d | null {
   const { canvas, reduce, coarse, pointer: ptr, gyro } = input;
@@ -90,7 +93,7 @@ export function createScene(input: SceneInput): Scene3d | null {
   }
   const weak = (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 3;
   const N = input.particles ?? (reduce ? 3200 : weak ? 2800 : coarse ? 5200 : 8400);
-  const PR = Math.min(devicePixelRatio || 1, weak ? 1 : coarse ? 1.5 : 2);
+  const PR = Math.min(devicePixelRatio || 1, weak ? 1 : coarse ? (reduce ? 1.5 : PHONE_MAX_PR) : 2);
   renderer.setPixelRatio(PR);
   renderer.setClearColor(0x000000, 0);
 
