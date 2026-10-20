@@ -26,6 +26,13 @@ export const formatPhone = (phone: string | null | undefined): string => {
   return match ? `(${match[1]}) ${match[2]}-${match[3]}` : phone;
 };
 
+/**
+ * The person's chat in whatever WhatsApp is signed in on this device (the seller's own app,
+ * Desktop or Web), optionally with a text already written that the seller still sends.
+ */
+export const waMeUrl = (phone: string, text?: string): string =>
+  `https://wa.me/${phone.replace(/\D/g, '')}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
+
 export const formatDate = (iso: string | null | undefined): string =>
   iso ? new Date(iso).toLocaleDateString('pt-BR') : '—';
 

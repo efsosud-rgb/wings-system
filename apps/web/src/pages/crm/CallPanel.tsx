@@ -5,7 +5,7 @@ import { ApiError } from '../../api/client.js';
 import { useAddActivity } from '../../api/crm.js';
 import { useWhatsAppSoon, WHATSAPP_SOON_TEXT } from '../../api/whatsapp.js';
 import { Icon } from '../../components/Icon.js';
-import { formatPhone } from './format.js';
+import { formatPhone, waMeUrl } from './format.js';
 import { useWhatsAppCallCenter, WhatsAppCallSection } from './WhatsAppCalls.js';
 
 /**
@@ -97,12 +97,16 @@ export function CallPanel({
         )}
         {phone && (
           <div className="crm-call-ways">
+            <a className="crm-btn" href={waMeUrl(phone)} target="_blank" rel="noopener noreferrer">
+              Abrir no WhatsApp do vendedor
+            </a>
             <CopyNumber phone={phone} />
           </div>
         )}
         {phone && (
           <p className="crm-sub">
-            Para ligar do seu telefone, copie o número e registre a ligação aqui.
+            Para ligar pelo seu WhatsApp ou do seu telefone, abra a conversa ou copie o número, e
+            registre a ligação aqui.
           </p>
         )}
         {canWrite && <RegisterCall leadId={leadId} />}
