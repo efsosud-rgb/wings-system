@@ -45,21 +45,23 @@ const SIGNUP_FAILURES: Record<Exclude<SignupOutcome, { ok: true }>['reason'], st
   no_code: 'A Meta não devolveu o código da conexão. Conecte de novo.',
 };
 
-/** Whether a step can still be tried: connected, inside the 24 hours, and one that did not go. */
+/**
+ * Whether "Tentar de novo" has something to do: the subscription at any time, a sync that did not
+ * go only inside the 24 hours.
+ */
 function canRetry(number: WaNumber, now = Date.now()) {
-  if (number.status !== 'connected' || Date.parse(number.syncDeadline) < now) return false;
+  if (number.status !== 'connected') return false;
+  if (!number.webhooksSubscribed) return true;
+  const owed = (state: WaSyncState | null) => state === null || state === 'failed';
   return (
-    !number.webhooksSubscribed ||
-    number.contactsSync === null ||
-    number.contactsSync === 'failed' ||
-    number.historySync === null ||
-    number.historySync === 'failed'
+    Date.parse(number.syncDeadline) >= now &&
+    (owed(number.contactsSync) || owed(number.historySync))
   );
 }
 
 function stepsText({ steps }: ConnectAnswer): string {
   if (steps.webhooks === 'failed')
-    return 'Número salvo, mas a Meta recusou mandar os avisos dele para o sistema. Contatos e histórico não foram pedidos: use "Tentar de novo" dentro de 24 horas.';
+    return 'Número salvo, mas a Meta recusou mandar os avisos dele para o sistema. Contatos e histórico não foram pedidos: use "Tentar de novo" (os avisos a qualquer hora; contatos e histórico só nas 24 horas).';
   if (steps.contacts === 'requested' && steps.history === 'requested')
     return 'Número conectado. Contatos e histórico pedidos à Meta: deixe o WhatsApp Business aberto no celular até o histórico chegar a 100%.';
   return `Número conectado. Contatos: ${stepLabel(steps.contacts)}. Histórico: ${stepLabel(steps.history)}.`;
@@ -287,7 +289,11 @@ function NumberRow({ number }: { number: WaNumber }) {
       </td>
       <td>{syncLabel(number.contactsSync)}</td>
       <td>{history}</td>
-      <td>{canRetry(number) ? formatDateTime(number.syncDeadline) : '—'}</td>
+      <td>
+        {canRetry(number) && Date.parse(number.syncDeadline) >= Date.now()
+          ? formatDateTime(number.syncDeadline)
+          : '—'}
+      </td>
       <td>
         {canRetry(number) && (
           <button

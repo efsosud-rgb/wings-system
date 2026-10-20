@@ -42,10 +42,12 @@ describe('runEmbeddedSignup', () => {
     window.dispatchEvent(new MessageEvent('message', { data, origin }));
 
   it('opens Meta’s window at once and joins the code with the WABA of the session event', async () => {
-    const login = vi.fn((callback: (r: { authResponse?: { code?: string } }) => void) => {
-      post(meta(COEXISTENCE_FINISH, { waba_id: WABA }));
-      callback({ authResponse: { code: 'the-code' } });
-    });
+    const login = vi.fn(
+      (callback: (r: { authResponse?: { code?: string } }) => void, _options?: unknown) => {
+        post(meta(COEXISTENCE_FINISH, { waba_id: WABA }));
+        callback({ authResponse: { code: 'the-code' } });
+      },
+    );
     const outcome = await runEmbeddedSignup({ init: vi.fn(), login }, '987654321');
     expect(login).toHaveBeenCalledTimes(1);
     expect(login.mock.calls[0]![1]).toMatchObject({

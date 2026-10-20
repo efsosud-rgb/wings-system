@@ -91,7 +91,8 @@ export type ConnectErrorCode =
   | 'number_ambiguous'
   | 'not_business_app'
   | 'not_found'
-  | 'sync_expired';
+  | 'sync_expired'
+  | 'busy';
 
 export class ConnectError extends Error {
   constructor(
@@ -218,7 +219,7 @@ export async function connectNumber(
     .values({ phoneNumberId: number.id, ...fresh })
     .onConflictDoUpdate({ target: [waNumbers.tenantId, waNumbers.phoneNumberId], set: fresh })
     .returning();
-  const steps = await finishConnection(deps, row!, token);
+  const steps = await finishConnection(deps, row!.id, token);
   return { number: await numberById(deps.db, row!.id), steps };
 }
 
@@ -228,62 +229,86 @@ export interface FinishSteps {
   history: WaSyncState | 'skipped' | null;
 }
 
+// shortcut: an in-process lock, right while the API runs as one container; with replicas, claim
+// each step in the row instead.
+const running = new Set<string>();
+
 /**
  * Subscribe, then the contacts, then the history — in that order, because a sync sent before the
  * subscription would deliver its webhooks to nobody. Stops at the first failure. A sync already
- * requested, or with no answer from Meta (`unknown`), is never sent again.
+ * requested, or with no answer from Meta (`unknown`), is never sent again; after the 24 hours
+ * only the subscription (which has no deadline) is tried. One run per number at a time, so a
+ * one-time sync is never sent twice.
  */
-async function finishConnection(deps: NumbersDeps, row: Row, token: string): Promise<FinishSteps> {
-  const steps: FinishSteps = {
-    webhooks: 'ok',
-    contacts: row.contactsSync as WaSyncState | null,
-    history: row.historySync as WaSyncState | null,
-  };
-  const set = (values: Partial<typeof waNumbers.$inferInsert>) =>
-    deps.db
-      .update(waNumbers)
-      .set({ ...values, updatedAt: deps.now() })
-      .where(eq(waNumbers.id, row.id));
+async function finishConnection(
+  deps: NumbersDeps,
+  id: string,
+  token: string,
+): Promise<FinishSteps> {
+  if (running.has(id)) throw new ConnectError('busy');
+  running.add(id);
+  try {
+    const row = await deps.db.query.waNumbers.findFirst({ where: eq(waNumbers.id, id) });
+    if (!row) throw new ConnectError('not_found');
+    const syncsOpen = deps.now() <= deadlineOf(row);
+    const steps: FinishSteps = {
+      webhooks: 'ok',
+      contacts: row.contactsSync as WaSyncState | null,
+      history: row.historySync as WaSyncState | null,
+    };
+    const skipRest = (): FinishSteps => ({
+      ...steps,
+      contacts: steps.contacts ?? 'skipped',
+      history: steps.history ?? 'skipped',
+    });
+    const set = (values: Partial<typeof waNumbers.$inferInsert>) =>
+      deps.db
+        .update(waNumbers)
+        .set({ ...values, updatedAt: deps.now() })
+        .where(eq(waNumbers.id, row.id));
 
-  if (!row.webhooksSubscribed) {
-    const subscribed = await subscribeWaba(deps.fetchImpl, token, row.wabaId);
-    if (!subscribed.ok || !subscribed.data) {
-      steps.webhooks = 'failed';
-      return {
-        ...steps,
-        contacts: steps.contacts ?? 'skipped',
-        history: steps.history ?? 'skipped',
-      };
+    if (!row.webhooksSubscribed) {
+      const subscribed = await subscribeWaba(deps.fetchImpl, token, row.wabaId);
+      if (!subscribed.ok || !subscribed.data) {
+        steps.webhooks = 'failed';
+        return skipRest();
+      }
+      await set({ webhooksSubscribed: true });
     }
-    await set({ webhooksSubscribed: true });
-  }
+    if (!syncsOpen) return skipRest();
 
-  const sync = async (type: 'contacts' | 'history'): Promise<WaSyncState> => {
-    const result = await requestSmbSync(
-      deps.fetchImpl,
-      token,
-      row.phoneNumberId,
-      type === 'contacts' ? 'smb_app_state_sync' : 'history',
-    );
-    const state: WaSyncState = result.ok ? 'requested' : result.unknown ? 'unknown' : 'failed';
-    await set(
-      type === 'contacts'
-        ? { contactsSync: state, contactsSyncRequest: result.ok ? result.data : null }
-        : { historySync: state, historySyncRequest: result.ok ? result.data : null },
-    );
-    return state;
-  };
-  if (steps.contacts === null || steps.contacts === 'failed') {
-    steps.contacts = await sync('contacts');
-    if (steps.contacts !== 'requested') return { ...steps, history: steps.history ?? 'skipped' };
+    const sync = async (type: 'contacts' | 'history'): Promise<WaSyncState> => {
+      const result = await requestSmbSync(
+        deps.fetchImpl,
+        token,
+        row.phoneNumberId,
+        type === 'contacts' ? 'smb_app_state_sync' : 'history',
+      );
+      const state: WaSyncState = result.ok ? 'requested' : result.unknown ? 'unknown' : 'failed';
+      await set(
+        type === 'contacts'
+          ? { contactsSync: state, contactsSyncRequest: result.ok ? result.data : null }
+          : { historySync: state, historySyncRequest: result.ok ? result.data : null },
+      );
+      return state;
+    };
+    if (steps.contacts === null || steps.contacts === 'failed') {
+      steps.contacts = await sync('contacts');
+      if (steps.contacts !== 'requested') return skipRest();
+    }
+    if (steps.history === null || steps.history === 'failed') steps.history = await sync('history');
+    return steps;
+  } finally {
+    running.delete(id);
   }
-  if (steps.history === null || steps.history === 'failed') steps.history = await sync('history');
-  return steps;
 }
 
+/** Whether a sync is still owed: not asked for yet, or refused by Meta. */
+const syncOwed = (state: string | null) => state === null || state === 'failed';
+
 /**
- * "Tentar de novo" on the screen: the steps that failed, while the 24 hours last. Never one
- * that went through or that Meta did not answer.
+ * "Tentar de novo" on the screen: the steps that failed. The subscription at any time; the two
+ * syncs only inside the 24 hours. Never a sync that went through or that Meta did not answer.
  */
 export async function retryConnection(
   deps: NumbersDeps,
@@ -291,8 +316,10 @@ export async function retryConnection(
 ): Promise<{ number: WaNumber; steps: FinishSteps }> {
   const row = await deps.db.query.waNumbers.findFirst({ where: eq(waNumbers.id, id) });
   if (!row || row.status !== 'connected') throw new ConnectError('not_found');
-  if (deps.now() > deadlineOf(row)) throw new ConnectError('sync_expired');
-  const steps = await finishConnection(deps, row, deps.box.open(row.tokenEnc));
+  const syncsLeft = syncOwed(row.contactsSync) || syncOwed(row.historySync);
+  if (row.webhooksSubscribed && syncsLeft && deps.now() > deadlineOf(row))
+    throw new ConnectError('sync_expired');
+  const steps = await finishConnection(deps, row.id, deps.box.open(row.tokenEnc));
   return { number: await numberById(deps.db, row.id), steps };
 }
 
@@ -300,6 +327,25 @@ async function numberById(db: Database, id: string): Promise<WaNumber> {
   const found = (await listNumbers(db)).find((n) => n.id === id);
   if (!found) throw new ConnectError('not_found');
   return found;
+}
+
+/**
+ * Whether a webhook change is about a seller's connected number rather than the official one: by
+ * its number when it names one, else by its WABA (unless that is the official number's WABA).
+ */
+export async function isSellerNumberChange(
+  db: Database,
+  change: WaChange,
+  officialWabaId: string | null,
+): Promise<boolean> {
+  const which = change.phoneNumberId
+    ? eq(waNumbers.phoneNumberId, change.phoneNumberId)
+    : change.wabaId && change.wabaId !== officialWabaId
+      ? eq(waNumbers.wabaId, change.wabaId)
+      : null;
+  if (!which) return false;
+  const found = await db.query.waNumbers.findFirst({ where: which, columns: { id: true } });
+  return found !== undefined;
 }
 
 const LEFT = new Set(['ACCOUNT_OFFBOARDED', 'PARTNER_REMOVED']);

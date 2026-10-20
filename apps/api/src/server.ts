@@ -122,6 +122,7 @@ async function main() {
     const intake = startWhatsAppIntake({
       db,
       phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID ?? null,
+      wabaId: env.WHATSAPP_WABA_ID ?? null,
       log: (facts) => app.log.info(facts),
     });
     app.wings.whatsappKick = intake.kick;

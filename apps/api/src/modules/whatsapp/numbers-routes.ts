@@ -31,6 +31,7 @@ const STATUS: Record<ConnectErrorCode, number> = {
   not_business_app: 409,
   not_found: 404,
   sync_expired: 409,
+  busy: 409,
 };
 
 const MESSAGES: Record<ConnectErrorCode, string> = {
@@ -46,6 +47,7 @@ const MESSAGES: Record<ConnectErrorCode, string> = {
   not_found: 'Número não encontrado.',
   sync_expired:
     'Passaram as 24 horas da conexão: a Meta não manda mais contatos e histórico. Para pedir de novo, o número precisa ser desconectado e conectado outra vez.',
+  busy: 'Este número já está sendo conectado agora. Espere terminar e veja a lista.',
 };
 
 const refuse = (reply: FastifyReply, error: ConnectError) =>

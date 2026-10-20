@@ -2,15 +2,15 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { SESSION_COOKIE, type RoleKey, type WaNumbersView } from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { auditLog, waNumbers } from '../../db/schema/index.js';
+import { auditLog, waContacts, waMessages, waNumbers, waTemplates } from '../../db/schema/index.js';
 import { loadEnv, type Env } from '../../env.js';
 import { createSecretBox } from '../../lib/secret-box.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
-import { processWhatsAppEvents } from './intake.js';
+import { applyWhatsAppPayload, processWhatsAppEvents } from './intake.js';
 
 /**
  * Connecting a seller's WhatsApp Business number by coexistence, against a simulated Meta: the
@@ -34,7 +34,7 @@ let db: Database;
 let app: FastifyInstance;
 let clock = START;
 
-type Answer = () => Response;
+type Answer = () => Response | Promise<Response>;
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const cut: Answer = () => {
@@ -317,7 +317,8 @@ describe('the sellers’ numbers', () => {
     });
     const id = first.json<{ number: { id: string } }>().number.id;
 
-    answers.sync = defaults().sync!;
+    // Meta refuses the history this time: it stays owed.
+    answers.sync = () => json({ error: { code: 100, message: 'refused' } }, 400);
     calls.length = 0;
     const retry = await app.inject({
       method: 'POST',
@@ -327,7 +328,7 @@ describe('the sellers’ numbers', () => {
     expect(
       calls.map((c) => [c.step, (c.body as { sync_type?: string } | null)?.sync_type]),
     ).toEqual([['sync', 'history']]);
-    expect(retry.json()).toMatchObject({ steps: { contacts: 'unknown', history: 'requested' } });
+    expect(retry.json()).toMatchObject({ steps: { contacts: 'unknown', history: 'failed' } });
 
     clock = new Date(START.getTime() + 24 * 3_600_000 + 1);
     // A new login: the first one expired with the clock.
@@ -416,6 +417,118 @@ describe('the sellers’ numbers', () => {
       cookies: admin.cookies,
     });
     expect(retry.statusCode).toBe(404);
+  });
+
+  it('keeps the seller’s messages and templates out of the CRM, even with no official number set', async () => {
+    await connect(admin.cookies, payload());
+    await db
+      .insert(waTemplates)
+      .values({ name: 'boas_vindas', language: 'pt_BR', status: 'APPROVED', category: 'MARKETING' })
+      .onConflictDoNothing();
+    const bodies = [
+      {
+        object: 'whatsapp_business_account',
+        entry: [
+          {
+            id: WABA,
+            changes: [
+              {
+                field: 'messages',
+                value: {
+                  messaging_product: 'whatsapp',
+                  metadata: { display_phone_number: '5521999990000', phone_number_id: NUMBER },
+                  contacts: [{ wa_id: '5521988887777', profile: { name: 'Cliente' } }],
+                  messages: [
+                    {
+                      id: 'wamid.SELLER1',
+                      from: '5521988887777',
+                      timestamp: '1792508400',
+                      type: 'text',
+                      text: { body: 'oi' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+      {
+        object: 'whatsapp_business_account',
+        entry: [
+          {
+            id: WABA,
+            changes: [
+              {
+                field: 'message_template_status_update',
+                value: {
+                  event: 'REJECTED',
+                  message_template_name: 'boas_vindas',
+                  message_template_language: 'pt_BR',
+                },
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    for (const body of bodies)
+      await applyWhatsAppPayload(
+        { db, phoneNumberId: null, log: () => {}, now: () => clock },
+        body,
+      );
+    expect(
+      await db.select().from(waMessages).where(eq(waMessages.wamid, 'wamid.SELLER1')),
+    ).toHaveLength(0);
+    expect(
+      await db.select().from(waContacts).where(eq(waContacts.phone, '5521988887777')),
+    ).toHaveLength(0);
+    const [template] = await db
+      .select()
+      .from(waTemplates)
+      .where(eq(waTemplates.name, 'boas_vindas'));
+    expect(template?.status).toBe('APPROVED');
+  });
+
+  it('runs one connection at a time per number', async () => {
+    answers.subscribe = () => json({ error: { code: 200, message: 'no permission' } }, 403);
+    const first = await connect(admin.cookies, payload());
+    const id = first.json<{ number: { id: string } }>().number.id;
+    let release: () => void = () => {};
+    answers.subscribe = () =>
+      new Promise<Response>((resolve) => (release = () => resolve(json({ success: true }))));
+    const retry = () =>
+      app.inject({ method: 'POST', url: `/whatsapp/numbers/${id}/retry`, cookies: admin.cookies });
+    const slow = retry();
+    await vi.waitFor(() => expect(calls.filter((c) => c.step === 'subscribe')).toHaveLength(2));
+    const busy = await retry();
+    expect(busy.statusCode).toBe(409);
+    expect(busy.json()).toMatchObject({ error: 'busy' });
+    release();
+    expect((await slow).json()).toMatchObject({
+      steps: { webhooks: 'ok', contacts: 'requested', history: 'requested' },
+    });
+    expect(calls.filter((c) => c.step === 'sync')).toHaveLength(2);
+  });
+
+  it('after the 24 hours still subscribes, but asks for no sync', async () => {
+    answers.subscribe = () => json({ error: { code: 200, message: 'no permission' } }, 403);
+    const first = await connect(admin.cookies, payload());
+    const id = first.json<{ number: { id: string } }>().number.id;
+    answers.subscribe = defaults().subscribe!;
+    clock = new Date(START.getTime() + 2 * 86_400_000);
+    const later = await sessionFor('admin_master');
+    calls.length = 0;
+    const retry = () =>
+      app.inject({ method: 'POST', url: `/whatsapp/numbers/${id}/retry`, cookies: later.cookies });
+    const subscribed = await retry();
+    expect(subscribed.statusCode).toBe(200);
+    expect(calls.map((c) => c.step)).toEqual(['subscribe']);
+    expect(subscribed.json()).toMatchObject({
+      steps: { webhooks: 'ok', contacts: 'skipped', history: 'skipped' },
+      number: { webhooksSubscribed: true, contactsSync: null },
+    });
+    expect((await retry()).json()).toMatchObject({ error: 'sync_expired' });
   });
 
   it('answers 503 with the missing names while Embedded Signup is not configured', async () => {

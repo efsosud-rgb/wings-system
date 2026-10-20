@@ -36,14 +36,25 @@ whatsapp_business_app_onboarding` (o exemplo da página de coexistência da Meta
      Tudo antes do passo 5 é leitura: uma recusa ali não grava nada. Não chama `/register`: o número já está
      registrado no app.
 - A Meta aceita cada pedido de sincronização **uma vez por conexão**, nas **24 horas** seguintes. Se a assinatura
-  falhar, os pedidos não saem (os webhooks não chegariam); **Tentar de novo** refaz só o que falhou, dentro das 24
-  horas. Um pedido sem resposta da Meta (`unknown`) nunca é mandado de novo. Para pedir de novo depois das 24 horas,
-  o número precisa sair e conectar outra vez.
+  falhar, os pedidos não saem (os webhooks não chegariam); **Tentar de novo** refaz só o que falhou: a assinatura a
+  qualquer hora, os pedidos só dentro das 24 horas. Um pedido sem resposta da Meta (`unknown`) nunca é mandado de
+  novo. Para pedir de novo depois das 24 horas, o número precisa sair e conectar outra vez.
+- Uma conexão por número de cada vez: um segundo clique enquanto a primeira espera a Meta responde 409 (`busy`), e
+  nenhum pedido sai duas vezes. A trava é do processo da API (um contêiner hoje); com réplicas, precisa ir para o
+  banco.
 - Conectar de novo o mesmo número troca o token e recomeça as 24 horas.
-- Webhook (`intake.ts`): `account_update` com `ACCOUNT_OFFBOARDED` ou `PARTNER_REMOVED` (com o motivo de
-  `disconnection_info`) marca o número como desconectado; `history` atualiza o progresso (o maior valor). Os corpos
-  de `history` e `smb_message_echoes` ficam guardados em `wa_webhook_events` (o texto é apagado em 90 dias); as
-  mensagens desses números ainda **não** entram no CRM, isso é o bloco seguinte.
+- Webhook (`intake.ts`): toda mudança de um número conectado aqui (pelo número, ou pela WABA quando não é a do
+  número oficial) fica fora do CRM. Só duas leem algo: `account_update` com `ACCOUNT_OFFBOARDED` ou
+  `PARTNER_REMOVED` (com o motivo de `disconnection_info`) marca o número como desconectado; `history` atualiza o
+  progresso (o maior valor). Mensagens, ecos (`smb_message_echoes`), histórico e modelos desses números ficam
+  guardados em `wa_webhook_events` (o texto é apagado em 90 dias) e ainda **não** entram no CRM, isso é o bloco
+  seguinte (que precisa vir antes dos 90 dias para aproveitar o histórico).
+
+## Ordem de entrada
+
+A 0095 vem depois da 0094 do pacote de 20/10 (`integ/staging-2026-10-20`). **Este PR só entra na develop depois
+daquele pacote**, e nenhum banco roda a migração entre um e outro: o drizzle aplica por data, e uma 0094 que chegue
+depois de uma 0095 já aplicada é pulada sem erro.
 
 ## Regras
 
