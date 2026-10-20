@@ -537,6 +537,14 @@ const schema = z.object({
   WHATSAPP_APP_SECRET: optionalString,
   /** The system user's permanent token (whatsapp_business_messaging + whatsapp_business_management). Secret. */
   WHATSAPP_ACCESS_TOKEN: optionalString,
+  /**
+   * The Embedded Signup configuration of "Wings CRM Vendas" (Facebook Login for Business), for
+   * connecting the sellers' numbers (docs/whatsapp/conectar-numero.md). Not secret.
+   */
+  WHATSAPP_ES_CONFIG_ID: optionalString.refine(
+    (value) => value === undefined || /^\d+$/.test(value),
+    'must be digits',
+  ),
   /** Reads Lead Ads form answers (leads_retrieval). Falls back to META_WRITE_TOKEN, read-only use. */
   META_LEADS_ACCESS_TOKEN: optionalString,
   /** "false" turns off reading the forms every 5 minutes (the webhook, if set, still works). */

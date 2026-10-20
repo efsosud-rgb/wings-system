@@ -40,7 +40,8 @@ export const PERMISSIONS = {
   'ads.budget_caps.manage': 'Editar o teto interno de orçamento de tráfego pago por conta',
   'ads.reconcile.manual':
     'Forçar agora a reconciliação de uma conta de tráfego pago com a plataforma',
-  'integrations.manage': 'Conectar e desconectar integrações do sistema (Kairogen)',
+  'integrations.manage':
+    'Conectar e desconectar integrações do sistema (Kairogen, os números do WhatsApp dos vendedores)',
   'marketing.media.read': 'Ver a biblioteca de mídia do marketing',
   'marketing.media.generate': 'Gerar imagens e vídeos gastando créditos',
   'marketing.media.edit': 'Editar vídeos no Studio, exportar e salvar no Drive',

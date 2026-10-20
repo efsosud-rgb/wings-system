@@ -33,6 +33,7 @@ import { loadSofiaSettings } from '../sofia/settings.js';
 import { factsOf, routeInbound } from '../sofia/state.js';
 import { ART_MEDIA_GONE_CODES, invalidateArtMedia } from './art.js';
 import { notifyCallsChanged } from './call-signal.js';
+import { applyNumberChange } from './numbers.js';
 import {
   isOptOut,
   whatsappChangesOf,
@@ -149,6 +150,9 @@ export async function purgeWhatsAppPayloads(db: Database, now = new Date()) {
 
 export async function applyWhatsAppPayload(deps: WhatsAppIntakeDeps, body: unknown) {
   for (const change of whatsappChangesOf(body)) {
+    // A seller's connected number: whether it left, and how far its history is.
+    if (change.account || change.historyProgress !== null)
+      await applyNumberChange(deps.db, change, deps.now?.() ?? new Date());
     if (deps.phoneNumberId && change.phoneNumberId && change.phoneNumberId !== deps.phoneNumberId)
       continue;
     for (const message of change.messages)

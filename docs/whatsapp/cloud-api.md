@@ -138,6 +138,9 @@ tipo, nome do modelo e resultado, nunca o texto.
 no Coolify). Sem token e número, a conversa diz que está desligada; sem segredo e token de verificação, o
 webhook responde 503. Uma mudança chegada para outro número do mesmo app é ignorada.
 
+Os números dos vendedores em coexistência (`wa_numbers`, migração 0095) têm a própria tela e o próprio token:
+ver `conectar-numero.md` (`WHATSAPP_ES_CONFIG_ID`).
+
 ## Não verificado ao vivo
 
 Os formatos seguem a referência publicada pela Meta; nenhum corpo real chegou ainda. O primeiro teste é o do

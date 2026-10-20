@@ -47,6 +47,7 @@ import { leadWebhookRoutes } from './modules/leads/webhooks.js';
 import { sofiaRoutes } from './modules/sofia/routes.js';
 import { whatsappCallRoutes } from './modules/whatsapp/call-routes.js';
 import { whatsappImportRoutes } from './modules/whatsapp/import-routes.js';
+import { whatsappNumbersRoutes } from './modules/whatsapp/numbers-routes.js';
 import { whatsappRingingStreamRoutes } from './modules/whatsapp/ringing-stream.js';
 import { whatsappRoutes } from './modules/whatsapp/routes.js';
 import { whatsappWebhookRoutes } from './modules/whatsapp/webhook-routes.js';
@@ -344,6 +345,7 @@ export async function buildApp(deps: {
   await app.register(whatsappRoutes);
   await app.register(whatsappCallRoutes);
   await app.register(whatsappImportRoutes);
+  await app.register(whatsappNumbersRoutes);
   await app.register(whatsappRingingStreamRoutes);
   await app.register(sofiaRoutes);
   await app.register(siteFormRoutes);
