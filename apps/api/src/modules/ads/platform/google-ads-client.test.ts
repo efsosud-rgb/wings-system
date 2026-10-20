@@ -102,7 +102,7 @@ const operationsOf = (api: ReturnType<typeof fakeGoogleApi>): Operation[] =>
   (api.mutateCalls()[0]?.body.mutateOperations ?? []) as Operation[];
 
 describe('creating a Search campaign', () => {
-  it('sends budget, campaign, locations and language in one atomic mutate', async () => {
+  it('sends budget, campaign and locations in one atomic mutate', async () => {
     const { api, client } = writer();
     const outcome = await client.createCampaign(searchSpec);
 
@@ -146,7 +146,8 @@ describe('creating a Search campaign', () => {
     expect(campaign).not.toHaveProperty('startDate');
     expect(campaign).not.toHaveProperty('endDate');
 
-    // Locations and language; the negatives are checked with the ad group.
+    // Locations only: Google refuses a language criterion on Search since
+    // 2026-09-30. The negatives are checked with the ad group.
     const criteria = operations
       .map((op) => op.campaignCriterionOperation?.create)
       .filter((create) => create && create.negative !== true);
@@ -159,11 +160,8 @@ describe('creating a Search campaign', () => {
         campaign: 'customers/4268586278/campaigns/-2',
         location: { geoTargetConstant: 'geoTargetConstants/1001634' },
       },
-      {
-        campaign: 'customers/4268586278/campaigns/-2',
-        language: { languageConstant: PORTUGUESE_LANGUAGE_CONSTANT },
-      },
     ]);
+    expect(JSON.stringify(operations)).not.toContain('languageConstant');
   });
 
   it('creates the ad group, its keywords, the negatives and the ad in the same atomic mutate, all paused', async () => {
@@ -397,7 +395,6 @@ describe('the reach translator: a radius on Google', () => {
       ['campaign', 'location'],
       ['campaign', 'location'],
       ['campaign', 'proximity'],
-      ['campaign', 'language'],
     ]);
     expect(criteria.every((criterion) => criterion?.campaign === CAMPAIGN)).toBe(true);
     // The place name is for people; Google gets coordinates only.

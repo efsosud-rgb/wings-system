@@ -1118,15 +1118,9 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
       const geo = googleLocationCriteria(campaignName, locations, google.reach.customLocations);
       operations.push(...geo);
       labels.push(...geo.map((): PlanLabel => ({ kind: 'criterion', label: 'Localização' })));
-      operations.push({
-        campaignCriterionOperation: {
-          create: {
-            campaign: campaignName,
-            language: { languageConstant: PORTUGUESE_LANGUAGE_CONSTANT },
-          },
-        },
-      });
-      labels.push({ kind: 'criterion', label: 'Idioma português' });
+      // No language criterion: since 2026-09-30 Google refuses one on a Search
+      // campaign (OPERATION_NOT_PERMITTED_FOR_CONTEXT, docs/deprecations) and
+      // matches the language of the ads and the page by itself.
 
       const tree = googleSearchOperations(campaignName, adGroupName, google.search);
       operations.push(...tree.operations);
@@ -1163,7 +1157,7 @@ export class GoogleAdsPlatformClient implements AdsPlatformClient, PreflightCapa
                 radiusKm,
               }))
             : [],
-        language: google.channel === 'SEARCH' || demandGen ? PORTUGUESE_LANGUAGE_CONSTANT : null,
+        language: demandGen ? PORTUGUESE_LANGUAGE_CONSTANT : null,
         ...(demandGen && goal
           ? {
               demandGen: {

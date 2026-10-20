@@ -66,8 +66,9 @@ DOES_NOT_CONTAIN_…` (obrigatório desde a v21), lance `maximizeConversions`
   o orçamento chama `<nome> · orçamento`.
 - **Só Pesquisa:** `networkSettings` só com a Pesquisa do Google (sem parceiros
   nem Display), `positiveGeoTargetType: PRESENCE`, um `campaignCriterion` por
-  estado/cidade, **um por raio do mapa** (`proximity`, ver abaixo) e um de
-  idioma (português, `languageConstants/1014`).
+  estado/cidade e **um por raio do mapa** (`proximity`, ver abaixo). O de
+  idioma (português, `languageConstants/1014`) saiu em 20/10/2026: o Google
+  recusa idioma em campanha de Pesquisa desde 30/09/2026 (ver "Versão da API").
 
 Guardado no rascunho e **não enviado**: link do vídeo e título (YouTube);
 palavras-chave, negativas, títulos e descrições (Pesquisa).
@@ -208,7 +209,7 @@ não afeta nenhum hash de aprovação existente.
 `googleAds:mutate` com `partialFailure: false` e ids temporários, na ordem:
 
 1. `campaignBudget` (-1) · 2. `campaign` (-2, `PAUSED`, só rede de pesquisa,
-   presença) · 3. critérios de localização, raio e idioma · 4. **negativas**
+   presença) · 3. critérios de localização e raio (idioma até 20/10/2026) · 4. **negativas**
    (`campaignCriterion` com `negative: true`, `keyword.matchType: PHRASE`) ·
 5. **`adGroup`** (-3, `PAUSED`, `SEARCH_STANDARD`) · 6. **palavras-chave**
    (`adGroupCriterion`, `EXACT`/`PHRASE`, `ENABLED` dentro do grupo pausado) ·
@@ -594,6 +595,17 @@ O que mudou entre a v22 e a v26 e toca este código:
   ainda é aceito e ignorado ("um major futuro" vai recusá-lo). O acesso agora é
   do projeto do Google Cloud dono do cliente OAuth; da v25 em diante, um projeto
   sem acesso de produção recebe `CLOUD_PROJECT_NOT_APPROVED_FOR_PRODUCTION`.
+
+Mudança sem versão que também toca este código (página oficial
+`docs/deprecations`): desde **30/09/2026 o Google recusa critério de idioma
+em campanha de Pesquisa** (`ContextError.OPERATION_NOT_PERMITTED_FOR_CONTEXT`,
+em qualquer versão) e passa a casar o idioma pelo texto dos anúncios e pela
+página. Como a criação é atômica, o critério de idioma derrubava a campanha
+de Pesquisa inteira, inclusive no `validateOnly`. Desde 20/10/2026 a Pesquisa
+sai sem ele; a Demand Gen mantém o idioma no grupo de anúncios (a regra fala
+só de Pesquisa). Outra regra sem versão: Demand Gen exige orçamento mínimo de
+US$ 5 por dia (ou o equivalente em reais) desde 01/04/2026
+(`BUDGET_BELOW_PER_DAY_MINIMUM`); o construtor não confere isso, o Google recusa.
 
 Não verificado — só a próxima rodada no staging responde (depois da
 publicação): a leitura das datas com os novos campos (e qual data-hora a v26
