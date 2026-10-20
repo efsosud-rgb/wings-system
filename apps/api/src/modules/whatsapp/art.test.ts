@@ -35,6 +35,7 @@ import {
   createEmployee,
   fakeJpeg,
   fakePng,
+  setOfficialLive,
   TEST_CPF_KEY,
   TEST_INDEX_KEY,
 } from '../../test/factories.js';
@@ -175,10 +176,12 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   sends.length = 0;
   nextSend = () => accepted();
   nextUpload = () => null;
+  // Sellers send here; the lock before the number is live has its own tests (whatsapp.test.ts).
+  await setOfficialLive(db, true);
 });
 
 const SECTOR_OF: Partial<Record<RoleKey, SectorSlug>> = {

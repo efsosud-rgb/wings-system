@@ -8,7 +8,12 @@ import type { Database } from '../../db/client.js';
 import { leadActivities, leads, waCalls, waContacts } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
-import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
+import {
+  createEmployee,
+  setOfficialLive,
+  TEST_CPF_KEY,
+  TEST_INDEX_KEY,
+} from '../../test/factories.js';
 import { forgetCallingSettings } from './calling.js';
 import { processWhatsAppEvents, sweepCalls } from './intake.js';
 
@@ -35,6 +40,8 @@ let connectAnswer: () => Response = () =>
   json({ messaging_product: 'whatsapp', calls: [{ id: 'wacid.OUT1' }] });
 let permissionAnswer: unknown = { permission: { status: 'no_permission' }, actions: [] };
 const posts: Record<string, unknown>[] = [];
+/** Every request that reached the simulated Meta, whatever it was. */
+const fetched: string[] = [];
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -43,6 +50,7 @@ const whatsappFetch = (async (input: string | URL | Request, init?: RequestInit)
   const url = new URL(
     typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
   );
+  fetched.push(url.pathname);
   expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${TOKEN}`);
   if (url.pathname.endsWith(`/${PHONE_ID}/settings`))
     return json({ calling: { status: callingStatus } });
@@ -92,9 +100,12 @@ afterAll(async () => {
   await harness?.drop();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   posts.length = 0;
+  fetched.length = 0;
   callingStatus = 'ENABLED';
+  // Sellers call here; the lock before the number is live is tested at the end of this file.
+  await setOfficialLive(db, true);
   connectAnswer = () =>
     json({ messaging_product: 'whatsapp', calls: [{ id: `wacid.OUT${Math.random()}` }] });
   forgetCallingSettings();
@@ -553,5 +564,87 @@ describe('call permission', () => {
       .from(waContacts)
       .where(and(eq(waContacts.phone, '5521977008888')));
     expect(contact?.callPermission).toBe('temporary');
+  });
+});
+
+describe('the seller lock until the official number is live (Eric, 19/10)', () => {
+  const place = (
+    cookies: Record<string, string>,
+    leadId: string,
+    payload: unknown = { sdp: OFFER },
+  ) =>
+    app.inject({
+      method: 'POST',
+      url: `/leads/${leadId}/whatsapp/calls`,
+      cookies,
+      payload: payload as object,
+    });
+  const callCount = async () => (await db.select({ id: waCalls.id }).from(waCalls)).length;
+
+  it('a seller gets 403 whatsapp_soon, before the body is read, and no call, contact or request to Meta exists', async () => {
+    await setOfficialLive(db, false);
+    const seller = await sessionFor('vendedor_expansao');
+    const leadId = await deal('5521977100001', seller.id);
+    const before = await callCount();
+    const activities = (await activitiesOf(leadId)).length;
+    for (const payload of [{ sdp: OFFER }, {}]) {
+      const response = await place(seller.cookies, leadId, payload);
+      expect(response.statusCode).toBe(403);
+      expect(response.json()).toEqual({
+        error: 'whatsapp_soon',
+        message: expect.stringContaining('Em breve'),
+      });
+    }
+    expect(await callCount()).toBe(before);
+    expect(
+      await db.select().from(waContacts).where(eq(waContacts.phone, '5521977100001')),
+    ).toHaveLength(0);
+    expect(await activitiesOf(leadId)).toHaveLength(activities);
+    expect(posts).toHaveLength(0);
+    expect(fetched).toHaveLength(0);
+  });
+
+  it('a seller out of scope still gets 404, not 403, with the switch off', async () => {
+    await setOfficialLive(db, false);
+    const owner = await sessionFor('vendedor_formatacao');
+    const other = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977100002', owner.id);
+    const unowned = await deal('5521977100003', null);
+    const before = await callCount();
+    for (const id of [leadId, unowned]) {
+      const response = await place(other.cookies, id);
+      expect(response.statusCode).toBe(404);
+      expect(response.json().error).toBe('not_found');
+    }
+    expect(await callCount()).toBe(before);
+    expect(fetched).toHaveLength(0);
+  });
+
+  it('turning the switch on lets the seller call, with the same request', async () => {
+    await setOfficialLive(db, false);
+    const seller = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977100004', seller.id);
+    expect((await place(seller.cookies, leadId)).statusCode).toBe(403);
+    expect(posts).toHaveLength(0);
+    await setOfficialLive(db, true);
+    const started = await place(seller.cookies, leadId);
+    expect(started.statusCode).toBe(201);
+    expect(started.json<{ call: WaCall }>().call).toMatchObject({ direction: 'out', leadId });
+    expect(posts).toHaveLength(1);
+  });
+
+  it('Admin Master, Diretoria and the commercial manager call with the switch off', async () => {
+    await setOfficialLive(db, false);
+    const owner = await sessionFor('vendedor_formatacao');
+    for (const [index, role] of (
+      ['admin_master', 'diretoria', 'gerente_comercial'] as const
+    ).entries()) {
+      const person = await sessionFor(role);
+      const leadId = await deal(`552197710001${index + 5}`, owner.id);
+      posts.length = 0;
+      const started = await place(person.cookies, leadId);
+      expect(started.statusCode, role).toBe(201);
+      expect(posts, role).toHaveLength(1);
+    }
   });
 });

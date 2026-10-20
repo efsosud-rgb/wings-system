@@ -95,6 +95,13 @@ Uma permissão, `leads.whatsapp` (ver, enviar e ligar), pela regra única `leadI
 (`modules/leads/access.ts`): Admin Master, Diretoria e Gerente comercial em qualquer lead; vendedor só nos
 seus. A Diretoria conversa e liga sem editar a negociação. Fora do alcance responde 404.
 
+Trava do vendedor (Eric, 19/10): enquanto `whatsapp_settings.official_number_live` estiver desligado, quem tem
+`leads.whatsapp` só nos seus leads lê a conversa, mas não envia (texto, modelo, pedido de ligação) nem liga:
+a API responde 403 `whatsapp_soon` (`sellerWhatsAppLocked` em `official-number.ts`, conferido em `send()` e em
+`POST /leads/:id/whatsapp/calls`), e a tela mostra "em breve" no campo de mensagem, no painel de ligação e na
+ação WhatsApp da ficha. Atender uma ligação recebida não é travado: o número de teste só recebe de números
+cadastrados na Meta. Os outros níveis não mudam.
+
 ## Rotas (com sessão)
 
 | Rota                                                                     | O quê                                                   |

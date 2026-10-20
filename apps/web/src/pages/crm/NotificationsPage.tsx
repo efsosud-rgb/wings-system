@@ -22,6 +22,7 @@ const KIND_LABEL: Record<string, string> = {
   backfill_unassigned: 'Leads antigos sem dono',
   automation: 'Aviso da automação',
   triage_handoff: 'Triagem: precisa de uma pessoa',
+  meeting_soon: 'Lembrete de reunião',
 };
 
 export function NotificationsPage() {

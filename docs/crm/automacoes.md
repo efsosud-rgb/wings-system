@@ -72,6 +72,14 @@ abre a lista dessas negociações (`GET /leads?firstContactOverdue=1`, mesmo con
 `GET /leads/board/counters` traz `firstContactOverdue`. O log do ciclo traz só contagens
 (`firstContact: { overdue, escalated }`).
 
+### Lembrete de reunião (Eric, 19/10)
+
+No mesmo ciclo, cada reunião `agendada` que começa nos próximos 30 minutos (`MEETING_REMINDER_MS` em
+`crm-alerts.ts`) deixa um aviso `meeting_soon` no sino do **dono da negociação** e de **quem marcou**
+(só pessoas ativas): "Reunião às 14:30", sem o título (que cita o lead); o aviso abre a negociação.
+Chave `meeting_soon:<reunião>:<início>:<pessoa>`: remarcar dá um lembrete novo; cancelada ou já
+iniciada não avisa. Sem e-mail (`email_state = none`).
+
 ## E-mail
 
 `CRM_EMAIL_MODE`: `test` (padrão, grava e não envia nada), `smtp` (remetente da empresa, o mesmo

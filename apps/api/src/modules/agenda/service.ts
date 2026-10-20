@@ -2,6 +2,7 @@ import {
   AGENDA_NOTICES,
   currentCalendarColor,
   GOOGLE_EVENT_COLORS,
+  grantedScope,
   type Actor,
   type AgendaCalendar,
   type AgendaCalendarKey,
@@ -14,7 +15,7 @@ import {
   type AgendaOverview,
   type AgendaWingsAccess,
 } from '@wings/shared';
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, lt, ne, or } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import { crmMeetings, leads } from '../../db/schema/index.js';
 import {
@@ -338,6 +339,72 @@ async function crmLinksOf(
   return links;
 }
 
+/**
+ * The deals' meetings with a pasted link (no Google event), of the deal's owner or of who scheduled
+ * them (Eric, 19/10): on the person's own calendar, moved and cancelled from the deal. They need no
+ * Google connection, so the Agenda lists them even before one (`GET /agenda/crm-meetings`).
+ */
+export async function pastedMeetingsFor(
+  db: Database,
+  actor: Actor,
+  query: AgendaEventsQuery,
+): Promise<AgendaEvent[]> {
+  const rows = await db
+    .select({
+      id: crmMeetings.id,
+      leadId: crmMeetings.leadId,
+      title: crmMeetings.title,
+      startsAt: crmMeetings.startsAt,
+      endsAt: crmMeetings.endsAt,
+      meetUrl: crmMeetings.meetUrl,
+      ownerEmployeeId: leads.ownerEmployeeId,
+    })
+    .from(crmMeetings)
+    .innerJoin(leads, eq(leads.id, crmMeetings.leadId))
+    .where(
+      and(
+        isNull(crmMeetings.googleEventId),
+        ne(crmMeetings.status, 'cancelada'),
+        or(
+          eq(leads.ownerEmployeeId, actor.employeeId),
+          eq(crmMeetings.ownerEmployeeId, actor.employeeId),
+        ),
+        lt(crmMeetings.startsAt, new Date(query.to)),
+        gt(crmMeetings.endsAt, new Date(query.from)),
+      ),
+    )
+    .orderBy(crmMeetings.startsAt)
+    .limit(500);
+  const q = query.q?.toLowerCase();
+  return rows
+    .filter((row) => !q || row.title.toLowerCase().includes(q))
+    .map((row) => ({
+      calendar: 'mine',
+      id: `crm-${row.id}`,
+      uid: `crm-${row.id}`,
+      title: row.title,
+      allDay: false,
+      start: row.startsAt.toISOString(),
+      end: row.endsAt.toISOString(),
+      location: null,
+      description: null,
+      meetUrl: row.meetUrl,
+      htmlLink: null,
+      colorId: null,
+      tentative: false,
+      organizer: null,
+      attendees: [],
+      recurring: false,
+      canEdit: false,
+      guestsNotified: false,
+      crm: {
+        leadId: leadVisibleTo(actor, 'leads.read', { ownerEmployeeId: row.ownerEmployeeId })
+          ? row.leadId
+          : null,
+      },
+    }));
+}
+
 const seriesIdOf = (raw: RawEvent) =>
   typeof raw.recurringEventId === 'string' ? raw.recurringEventId : null;
 
@@ -405,8 +472,11 @@ export async function eventsFor(
       items.flatMap((raw) => [String(raw.id), ...(seriesIdOf(raw) ? [seriesIdOf(raw)!] : [])]),
     ),
   );
-  answer.events = read
-    .flatMap(({ calendar, items }) =>
+  // Without `calendar.write` (the sellers, Eric 19/10) the Agenda only reads: every event, Wings
+  // Company's included, in full and with nothing editable.
+  const writes = grantedScope(actor, 'calendar.write') !== null;
+  answer.events = [
+    ...read.flatMap(({ calendar, items }) =>
       items.map((raw) =>
         withCrm(
           toAgendaEvent(raw, calendar.key, {
@@ -416,7 +486,10 @@ export async function eventsFor(
           linkOf(links, raw),
         ),
       ),
-    )
+    ),
+    ...(await pastedMeetingsFor(deps.db, actor, query)),
+  ]
+    .map((event) => (writes ? event : { ...event, canEdit: false }))
     .sort((a, b) => startTimeOf(a) - startTimeOf(b));
   return answer;
 }

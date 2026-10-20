@@ -1,7 +1,15 @@
-import { normalizeBrazilianPhone, trackingCodeOf, type LeadLegalBasis } from '@wings/shared';
+import {
+  normalizeBrazilianPhone,
+  normalizeEmail,
+  trackingCodeOf,
+  type LeadLegalBasis,
+} from '@wings/shared';
+import { and, eq, or } from 'drizzle-orm';
 import { googleLeadOf, ingestGoogleLead } from './google-leads.js';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import type { Database } from '../../db/client.js';
+import { leads } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { linkIntakeDealToLead } from '../expansion/service.js';
 import { tokensMatch } from '../../lib/tokens.js';
@@ -9,6 +17,7 @@ import { shapeOf } from '../media/kairogen-adapter.js';
 import { enqueueMetaLeadgenEvents } from './meta-intake.js';
 import { leadgenEventsOf, metaSignatureValid } from './meta-leads.js';
 import { ingestTikTokLeads, secretMatches, tiktokLeadsIn } from './tiktok-leads.js';
+import { brandKey } from './brands.js';
 import { rdAttributionOf } from './rd-attribution.js';
 import { leadByFormRef } from './form-ref.js';
 import { leadFromTrackedMessage, linkMessageToFormLead } from './tracked-link.js';
@@ -155,6 +164,37 @@ export function rdAnswersOf(
 
 /** The only event of the `contact` shape that is a landing-page conversion (RD spells it either way). */
 const RD_CONVERTED_EVENT = 'webhook.converted';
+
+/**
+ * RD Marketing logs a conversion on a contact each time RD Station CRM changes its deal. That is
+ * an echo of the CRM, not a landing page: from a person the Wings does not know it makes no lead
+ * (no funnel, no stage, no owner, on no board). Compared by `brandKey`: case, accents, punctuation.
+ */
+export const RD_CRM_ECHO_IDENTIFIERS: ReadonlySet<string> = new Set([
+  'negociacao atualizada no rd station crm',
+  'rd station crm',
+]);
+
+export const isRdCrmEcho = (identifier: string | null): boolean =>
+  identifier !== null && RD_CRM_ECHO_IDENTIFIERS.has(brandKey(identifier));
+
+/** Whether the Wings already has the person, by the keys `upsertLead` merges on: external id, phone, e-mail. */
+async function knownLead(
+  db: Database,
+  conversion: { externalId: string | null; phone: string | null; email: string | null },
+): Promise<boolean> {
+  const phone = normalizeBrazilianPhone(conversion.phone);
+  const email = normalizeEmail(conversion.email);
+  const keys = [
+    conversion.externalId
+      ? and(eq(leads.source, 'rd_station'), eq(leads.externalId, conversion.externalId))
+      : undefined,
+    phone ? eq(leads.phone, phone) : undefined,
+    email ? eq(leads.email, email) : undefined,
+  ].filter((key) => key !== undefined);
+  if (keys.length === 0) return false;
+  return Boolean(await db.query.leads.findFirst({ where: or(...keys), columns: { id: true } }));
+}
 
 /**
  * RD Station Marketing sends `{ leads: [...] }` (classic), or the webhook the RD screen
@@ -348,8 +388,13 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
       logShape('rd_station', body, { conversions: conversions.length });
 
       const results: { leadId: string; created: boolean; clientMapped: boolean }[] = [];
+      let echoes = 0;
       for (const conversion of conversions) {
         if (!conversion.email && !conversion.phone) continue;
+        if (isRdCrmEcho(conversion.identifier) && !(await knownLead(db, conversion))) {
+          echoes += 1;
+          continue;
+        }
         const client = await resolveLandingPage(db, {
           url: conversion.url,
           identifier: conversion.identifier,
@@ -422,7 +467,13 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
         app.log.warn({ msg: 'rd webhook without a conversion', shape: shapeOf(body) });
         return reply.send({ received: 0, leads: [], ignored: 'no_conversion' });
       }
-      return reply.send({ received: conversions.length, leads: results });
+      if (echoes > 0)
+        app.log.warn({ msg: 'rd webhook ignored the CRM echo of unknown contacts', echoes });
+      return reply.send({
+        received: conversions.length,
+        leads: results,
+        ...(echoes > 0 ? { ignoredEcho: echoes } : {}),
+      });
     },
   );
 

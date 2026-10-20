@@ -24,14 +24,24 @@ Calendar v3 calls and the raw-to-`AgendaEvent` mapping, `service.ts` = the rules
 
 ## Who opens it
 
-Every level (`calendar.use`, held by every role with scope `own`). Sellers open it at
-`/crm-vendas/agenda`, every other level at `/produtividade/agenda`. There is no route that takes an
+Every level (`calendar.use`, held by every role with scope `own`), at `/produtividade/agenda`; the
+sellers too since 19/10 (`/crm-vendas/agenda` redirects there). There is no route that takes an
 employee id: a person reaches only their own Google account. `route-access.test.ts` checks that
 every level opens `GET /agenda`.
 
+**Read-only for the sellers (Eric, 19/10).** Creating, editing and deleting need `calendar.write`,
+which every level holds except Vendedor Expansão and Vendedor Formatação. Without it the API answers
+403 to the three write routes, every event comes back with `canEdit: false`, and the page shows no
+Criar button, no click-to-create on the grid and no Editar or Excluir (the details card says
+"Na Agenda você só vê os eventos…"). The seller schedules from the lead's page. Nothing is hidden or
+masked: the Wings Company calendar shows every event, with the lead's name in the title, to whoever
+Google shares it with — so every seller sees it in full once the calendar is shared with them in
+Google as "Ver todos os detalhes do evento".
+
 ## Routes
 
-All with `preHandler: app.requirePermission('calendar.use')`.
+The reads with `preHandler: app.requirePermission('calendar.use')`; `POST`, `PATCH` and `DELETE`
+with `calendar.write`.
 
 | Route                                                               | Answer                                                                                         |
 | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
@@ -138,6 +148,13 @@ details show "Abrir negociação" (`agendaDealPath`). `leadId` is set only when 
 that deal (`leadVisibleTo(actor, 'leads.read', …)` in `modules/leads/access.ts`: the owner seller,
 the Admin, Diretoria); another seller gets `leadId: null`. No lead data goes into the answer beyond
 what Google itself shows the person.
+
+A meeting with a pasted link (no Google event) joins the person's own calendar (`mine`) when they
+are the deal's owner or the one who scheduled it (Eric, 19/10): `pastedMeetingsFor` in
+`agenda/service.ts`, id `crm-<meeting id>`, `crm` set as above, never editable here. It needs no
+Google connection: someone without one sees "Reuniões marcadas pela ficha" under the connect notice,
+the next 30 days from `GET /agenda/crm-meetings?from&to` (`calendar.use`), the same list
+`GET /agenda/events` merges into the calendar for someone connected. Cancelled ones never show.
 
 ## Errors
 

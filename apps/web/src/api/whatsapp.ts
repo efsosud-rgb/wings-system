@@ -18,6 +18,7 @@ import type {
 } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
+import { permissionScope, useSession } from './auth.js';
 import { api } from './client.js';
 import { sendLeadFile } from './crm.js';
 import { openRingingStream } from './ringing-stream.js';
@@ -70,6 +71,20 @@ export function useOfficialNumber(enabled = true) {
     queryFn: () => api.get<{ live: boolean }>('/whatsapp/official-number'),
     enabled,
   });
+}
+
+/**
+ * A seller's send and call (Eric, 19/10): "em breve" until the official number is live, as the API
+ * refuses them (403 `whatsapp_soon`); reading the conversation stays. Not known yet is "not live".
+ */
+export const WHATSAPP_SOON_TEXT =
+  'Em breve: enviar e ligar pelo WhatsApp do sistema começa depois da troca do número. Até lá, use o WhatsApp do celular.';
+
+export function useWhatsAppSoon() {
+  const session = useSession();
+  const seller = permissionScope(session.data, 'leads.whatsapp') !== 'all';
+  const official = useOfficialNumber(seller);
+  return seller && official.data?.live !== true;
 }
 
 /** The Admin Master's switch, flipped on the day the number is swapped. */

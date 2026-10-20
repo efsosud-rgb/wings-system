@@ -122,6 +122,28 @@ describe('the sub-module gate', () => {
     expect(screen.getByRole('heading', { name: 'Sem acesso' })).toBeTruthy();
   });
 
+  // Eric, 19/10: the two screens marked `sellers` open to a seller who types the address; the
+  // others of Produtividade stay shut, and so does a seller's typed address outside the CRM.
+  it('opens Agenda and Reuniões to a seller by address, and keeps the Drive and the Dashboard shut', () => {
+    for (const role of ['vendedor_expansao', 'vendedor_formatacao'] as const) {
+      session.current = {
+        ...user(ROLE_PERMISSIONS[role] as Record<string, string>),
+        role,
+        sector: 'comercial',
+      };
+      for (const path of ['/produtividade/agenda', '/produtividade/reunioes']) {
+        renderSubmodule(ALL_SUBMODULES.find((s) => s.path === path)!);
+        expect(screen.getByText('conteúdo protegido'), `${role} ${path}`).toBeTruthy();
+        cleanup();
+      }
+      for (const path of ['/produtividade/drive', '/dashboard/vendas']) {
+        renderSubmodule(ALL_SUBMODULES.find((s) => s.path === path)!);
+        expect(screen.getByRole('heading', { name: 'Sem acesso' }), `${role} ${path}`).toBeTruthy();
+        cleanup();
+      }
+    }
+  });
+
   it('opens both to the Admin Master', () => {
     session.current = user(ROLE_PERMISSIONS.admin_master as Record<string, string>);
     renderSubmodule(placeholder);

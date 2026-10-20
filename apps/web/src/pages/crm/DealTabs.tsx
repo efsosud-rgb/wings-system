@@ -72,6 +72,11 @@ export const EVENT_LABELS: Record<string, string> = {
   'lead.summary_generated': 'Resumo gerado pela IA',
   'whatsapp.conversation_imported': 'Conversa do celular importada',
   'whatsapp.import_undone': 'Importação de conversa desfeita',
+  'meeting.scheduled': 'Reunião marcada',
+  'meeting.rescheduled': 'Reunião remarcada',
+  'meeting.cancelled': 'Reunião cancelada',
+  'meeting.started': 'Reunião iniciada',
+  'meeting.ended': 'Reunião encerrada',
 };
 
 /** What the timeline can be narrowed to; `event` is everything the system did on its own. */
@@ -104,6 +109,33 @@ function importBody(event: LeadEvent): string | null {
   return from && to
     ? `${count}, de ${formatDate(from)} a ${formatDate(to)}. Estão na tela WhatsApp da negociação.`
     : count;
+}
+
+const MEETING_EVENTS = new Set([
+  'meeting.scheduled',
+  'meeting.rescheduled',
+  'meeting.cancelled',
+  'meeting.started',
+  'meeting.ended',
+]);
+
+const timeOf = (value: unknown) => (typeof value === 'string' ? formatDateTime(value) : null);
+
+/** What a meeting's line adds: the time it was set for, the new time, or how long it ran. */
+export function meetingBody(event: LeadEvent): string | null {
+  const { detail } = event;
+  if (event.kind === 'meeting.scheduled') {
+    const at = timeOf(detail.startsAt);
+    return at ? `Para ${at}` : null;
+  }
+  if (event.kind === 'meeting.rescheduled') {
+    const from = timeOf(detail.from);
+    const to = timeOf(detail.to);
+    return from && to ? `De ${from} para ${to}` : null;
+  }
+  if (event.kind === 'meeting.ended' && typeof detail.minutes === 'number')
+    return `Durou ${detail.minutes} min`;
+  return null;
 }
 
 export interface Entry {
@@ -204,7 +236,9 @@ export function entriesOf(data: LoadedLead): Entry[] {
         ? 'whatsapp'
         : FILE_EVENTS.has(event.kind)
           ? 'file'
-          : 'event';
+          : MEETING_EVENTS.has(event.kind)
+            ? 'meeting'
+            : 'event';
     entries.push({
       id: `e${event.id}`,
       at: event.at,
@@ -215,11 +249,18 @@ export function entriesOf(data: LoadedLead): Entry[] {
             ? 'message'
             : tone === 'file'
               ? 'download'
-              : 'more',
+              : tone === 'meeting'
+                ? 'calendar'
+                : 'more',
       tone,
       title: EVENT_LABELS[event.kind] ?? 'Atualização',
       by: null,
-      body: tone === 'whatsapp' ? importBody(event) : undefined,
+      body:
+        tone === 'whatsapp'
+          ? importBody(event)
+          : tone === 'meeting'
+            ? meetingBody(event)
+            : undefined,
     });
   }
   return entries.sort((a, b) => b.at.localeCompare(a.at));

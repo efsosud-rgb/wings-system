@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 
@@ -10,7 +10,7 @@ import { defineConfig, type Plugin } from 'vite';
  */
 
 const root = import.meta.dirname;
-const NOT_PAGES = new Set(['dist', 'e2e', 'node_modules', 'public', 'scripts', 'src']);
+const NOT_PAGES = new Set(['dist', 'e2e', 'embed', 'node_modules', 'public', 'scripts', 'src']);
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
 
 export function pageInputs(dir: string): Record<string, string> {
@@ -21,6 +21,24 @@ export function pageInputs(dir: string): Record<string, string> {
     if (existsSync(html)) pages[entry.name] = html;
   }
   return pages;
+}
+
+/**
+ * `<!-- include: path -->` in a page is replaced by that file (path from the app's
+ * root): the form of "Fale com a Wings" is one file used by the page and by the embed.
+ * shortcut: no watch on the included file in dev, restart `pnpm dev` after editing it.
+ */
+function htmlIncludes(): Plugin {
+  return {
+    name: 'wings-html-includes',
+    transformIndexHtml: {
+      order: 'pre',
+      handler: (html) =>
+        html.replace(/^[ \t]*<!--\s*include:\s*(\S+)\s*-->[ \t]*$/gm, (_all, path: string) =>
+          readFileSync(resolve(root, path), 'utf8').trimEnd(),
+        ),
+    },
+  };
 }
 
 /** Fonts inlined as data URIs, so the first frame already has them (the approved page's choice). */
@@ -49,7 +67,7 @@ function renderBlockingEntry(): Plugin {
 export default defineConfig({
   root,
   base: '/',
-  plugins: [renderBlockingEntry()],
+  plugins: [htmlIncludes(), renderBlockingEntry()],
   build: {
     outDir: 'dist',
     emptyOutDir: true,
@@ -63,7 +81,11 @@ export default defineConfig({
           ? false
           : undefined,
     rolldownOptions: {
-      input: pageInputs(root),
+      input: {
+        ...pageInputs(root),
+        // the form embedded in the Wings site, served at /embed/formulario (own nginx location and headers)
+        'embed-formulario': resolve(root, 'embed/formulario/index.html'),
+      },
     },
   },
   server: {

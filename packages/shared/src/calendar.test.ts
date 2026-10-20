@@ -200,16 +200,24 @@ describe('who opens the Agenda', () => {
     for (const role of ROLE_KEYS) expect(ROLE_PERMISSIONS[role]['calendar.use']).toBe('own');
   });
 
-  it('sits in CRM Vendas for the sellers and in Produtividade for everyone else', () => {
+  it('sits in Produtividade for everyone, the sellers included', () => {
     const entries = NAVIGATION.flatMap((m) => m.submodules).filter((s) =>
       s.path.endsWith('/agenda'),
     );
+    expect(entries.map((s) => s.path)).toEqual(['/produtividade/agenda']);
     for (const role of ROLE_KEYS) {
       const viewer = { role, permissions: ROLE_PERMISSIONS[role] };
       const seen = entries.filter((s) => canSeeSubmodule(viewer, s)).map((s) => s.path);
-      expect(seen).toEqual(
-        CRM_ONLY_ROLES.includes(role) ? ['/crm-vendas/agenda'] : ['/produtividade/agenda'],
+      expect(seen, role).toEqual(['/produtividade/agenda']);
+    }
+  });
+
+  it('is written by every level but the sellers (calendar.write)', () => {
+    for (const role of ROLE_KEYS) {
+      expect(ROLE_PERMISSIONS[role]['calendar.write'], role).toBe(
+        CRM_ONLY_ROLES.includes(role) ? undefined : 'own',
       );
     }
+    expect(CRM_ONLY_ROLES).toEqual(['vendedor_expansao', 'vendedor_formatacao']);
   });
 });

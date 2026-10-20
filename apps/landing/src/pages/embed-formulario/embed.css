@@ -1,0 +1,97 @@
+/* "Fale com a Wings" form inside an iframe on the Wings site (black): same form as the page
+   (../fale-com-a-wings/style.css), transparent background and white letters. Opened on its own
+   (not framed) the page paints black, for review. Only the tokens change, then what a token
+   cannot reach (card, checkbox, option list, autofill).
+   The document stays color-scheme: light on purpose: a framed page whose scheme differs from the
+   iframe's gets an opaque background, and the transparency is the point. */
+html.embed {
+  --text: #ffffff;
+  --muted: rgba(255, 255, 255, 0.82);
+  --faint: rgba(255, 255, 255, 0.62);
+  --line: rgba(255, 255, 255, 0.28);
+  --line-2: rgba(255, 255, 255, 0.5);
+  --bg: transparent;
+  --surface: rgba(255, 255, 255, 0.12);
+  --o-text: #ff7a52;
+  --ok: #5fe08a;
+  --err: #ff8a70;
+  background: transparent;
+}
+html.embed.standalone {
+  background: #000000;
+}
+.embed body {
+  margin: 0;
+  background: transparent;
+  transition: none;
+}
+.embed.standalone body {
+  max-width: 640px;
+  margin-inline: auto;
+}
+/* 8 px of room: the iframe cuts what leaves its box, and the focus ring and glow leave the fields */
+.embed .form {
+  padding: 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+/* the site has its own text: title and subtitle only with ?titulo=1 (the form is still named by the title) */
+.embed:not(.with-title) .form .ft,
+.embed:not(.with-title) .form .sub {
+  display: none;
+}
+.embed .field select option {
+  background: #111111;
+  color: #ffffff;
+}
+/* the browser's autofill paints its own light background: keep the field dark */
+.embed .field input:-webkit-autofill {
+  -webkit-text-fill-color: #ffffff;
+  caret-color: #ffffff;
+  transition: background-color 600000s 0s;
+}
+.embed .field[data-error] input,
+.embed .field[data-error] select {
+  border-color: var(--err);
+}
+.embed .err {
+  color: var(--err);
+}
+.embed .consent input {
+  display: grid;
+  place-content: center;
+  border: 1.5px solid var(--line-2);
+  border-radius: 6px;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.embed .consent input:checked {
+  border-color: var(--o);
+  background: var(--o);
+}
+.embed .consent input:checked::after {
+  content: '';
+  width: 6px;
+  height: 11px;
+  border: solid #000000;
+  border-width: 0 2.5px 2.5px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+/* below 300 px of room the robot check (300 px at least) is scaled down from the left, and its box shrinks
+   with it (main.ts sets --ts-scale), so it never widens the form */
+.embed.ts-narrow .bot-widget {
+  display: block;
+  width: calc(300px * var(--ts-scale));
+  height: calc(65px * var(--ts-scale));
+}
+.embed.ts-narrow .bot-widget > * {
+  width: 300px;
+  min-width: 0;
+  transform: scale(var(--ts-scale));
+  transform-origin: 0 0;
+}

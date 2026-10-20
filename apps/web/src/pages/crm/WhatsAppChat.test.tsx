@@ -3,6 +3,12 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WhatsAppChat } from './WhatsAppChat.js';
 
+// The seller's lock (B1) reads the session; these tests are about the bubbles, so it stays open.
+vi.mock('../../api/whatsapp.js', async (original) => ({
+  ...(await original<typeof import('../../api/whatsapp.js')>()),
+  useWhatsAppSoon: () => false,
+}));
+
 /**
  * The bubbles of a conversation brought in from the phone ("Do celular", the media that stayed
  * inside the exported file, no delivery status of ours) and the older pages of a long thread.

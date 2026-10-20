@@ -27,6 +27,7 @@ import type {
   LeadTaskKind,
   Meeting,
   MeetingCreateInput,
+  MeetingListItem,
   MeetingSpeakersInput,
   MeetingSummary,
   MeetingTranscript,
@@ -527,6 +528,15 @@ export const useMeetings = (leadId: string) =>
     retry: false,
   });
 
+/** Produtividade → Reuniões: the meetings of the deals in reach, still ahead or past. */
+export const useMeetingList = (when: 'upcoming' | 'past') =>
+  useQuery({
+    queryKey: ['meetings', 'list', when],
+    queryFn: () =>
+      api.get<{ meetings: MeetingListItem[] }>(`/meetings?when=${when}`).then((r) => r.meetings),
+    retry: false,
+  });
+
 export const useMeeting = (id: string | null) =>
   useQuery({
     queryKey: ['meetings', id],
@@ -560,6 +570,19 @@ export function useCreateMeeting(leadId: string) {
   return useMutation({
     mutationFn: (input: MeetingCreateInput) =>
       api.post<{ meeting: Meeting }>(`/leads/${leadId}/meetings`, input).then((r) => r.meeting),
+    onSuccess: (meeting) => {
+      invalidateMeeting(queryClient, meeting);
+      invalidateDeals(queryClient);
+    },
+  });
+}
+
+/** "Iniciar" and "Encerrar" (Eric, 19/10): the deal records when the meeting started and ended. */
+export function useMeetingStep() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, step }: { id: string; step: 'start' | 'end' }) =>
+      api.post<{ meeting: Meeting }>(`/meetings/${id}/${step}`).then((r) => r.meeting),
     onSuccess: (meeting) => {
       invalidateMeeting(queryClient, meeting);
       invalidateDeals(queryClient);
