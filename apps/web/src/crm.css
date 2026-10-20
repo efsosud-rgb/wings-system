@@ -2167,6 +2167,30 @@
   font-size: var(--text-xs, 12px);
   color: var(--text-2);
 }
+.crm-wa-quote {
+  display: grid;
+  gap: 1px;
+  padding: var(--space-1) var(--space-2);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--line) 45%, transparent);
+  font-size: var(--text-xs, 12px);
+}
+.crm-wa-quote strong {
+  color: var(--accent);
+}
+.crm-wa-quote-text {
+  color: var(--text-2);
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.crm-wa-quote.is-missing {
+  border-left-color: var(--line);
+  color: var(--text-2);
+}
 .crm-wa-error {
   font-size: var(--text-xs, 12px);
   color: var(--danger);

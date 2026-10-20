@@ -6,6 +6,7 @@ import {
   type BrandArticle,
   type DealWhatsApp,
   type WaMessage,
+  type WaQuote,
   type WaTemplate,
   type WaTemplatePreview,
 } from '@wings/shared';
@@ -242,6 +243,23 @@ function MediaBody({ message }: { message: WaMessage }) {
   return download;
 }
 
+/** The message a reply quotes, at the top of the balloon, as WhatsApp shows it. */
+function Quote({ quote }: { quote: WaQuote }) {
+  if (!quote.found)
+    return (
+      <span className="crm-wa-quote is-missing">
+        — A mensagem respondida não está aqui: é de antes de o número entrar no sistema, ou ficou só
+        no celular.
+      </span>
+    );
+  return (
+    <span className="crm-wa-quote">
+      <strong>{quote.direction === 'out' ? 'Equipe' : 'Cliente'}</strong>
+      <span className="crm-wa-quote-text">{quote.text ?? WA_KIND_LABELS[quote.kind]}</span>
+    </span>
+  );
+}
+
 function Bubble({ message }: { message: WaMessage }) {
   const out = message.direction === 'out';
   const failed = message.status === 'failed' || (message.status === 'pending' && message.error);
@@ -249,6 +267,7 @@ function Bubble({ message }: { message: WaMessage }) {
     <li
       className={`crm-wa-bubble ${out ? 'is-out' : 'is-in'}${message.bySofia ? ' is-sofia' : ''}${failed ? ' is-failed' : ''}`}
     >
+      {message.replyTo && <Quote quote={message.replyTo} />}
       {message.template && (
         <span className="crm-wa-tag">
           Modelo · {message.template.name}

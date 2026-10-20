@@ -187,11 +187,17 @@ const run = () =>
   processWhatsAppEvents({ db, phoneNumberId: PHONE_ID, log: () => {}, now: () => NOW });
 
 let seq = 0;
-/** Meta's published shape of an incoming text message. */
+/** Meta's published shape of an incoming text message; `fields` replaces its type and text. */
 function inbound(
   from: string,
   text: string,
-  opts: { id?: string; at?: Date; name?: string; phoneId?: string } = {},
+  opts: {
+    id?: string;
+    at?: Date;
+    name?: string;
+    phoneId?: string;
+    fields?: Record<string, unknown>;
+  } = {},
 ) {
   const id = opts.id ?? `wamid.IN${++seq}`;
   return {
@@ -216,8 +222,7 @@ function inbound(
                     from,
                     id,
                     timestamp: unix(opts.at ?? new Date(NOW.getTime() - 3_600_000)),
-                    type: 'text',
-                    text: { body: text },
+                    ...(opts.fields ?? { type: 'text', text: { body: text } }),
                   },
                 ],
               },
@@ -660,6 +665,50 @@ describe('statuses', () => {
       errorCode: 131047,
       errorTitle: 'Re-engagement message',
     });
+  });
+});
+
+describe('what the balloon shows: the reply, the reaction, the contact card, the place', () => {
+  const threadOf = async (leadId: string, cookies: Record<string, string>) =>
+    (
+      await app.inject({ method: 'GET', url: `/leads/${leadId}/whatsapp`, cookies })
+    ).json<DealWhatsApp>();
+  const idOf = async (wamid: string) =>
+    (await db.select({ id: waMessages.id }).from(waMessages).where(eq(waMessages.wamid, wamid)))[0]!
+      .id;
+
+  it('a reply shows the message it quotes, found only in the same deal', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977770001', owner.id);
+    await deal('5521977770002', owner.id);
+    const first = inbound('5521977770001', 'Qual o valor da franquia?');
+    const elsewhere = inbound('5521977770002', 'Texto de outra negociação');
+    await deliver(first.body);
+    await deliver(elsewhere.body);
+    const reply = (body: string, to: string) =>
+      inbound('5521977770001', '', {
+        fields: { type: 'text', text: { body }, context: { from: '5521977770001', id: to } },
+      }).body;
+    await deliver(reply('Resposta 1', first.id));
+    await deliver(reply('Resposta 2', elsewhere.id));
+    await deliver(reply('Resposta 3', 'wamid.NEVER-STORED'));
+    await run();
+
+    const byText = new Map(
+      (await threadOf(leadId, owner.cookies)).messages.map((m) => [m.text, m]),
+    );
+    expect(byText.get('Qual o valor da franquia?')?.replyTo).toBeNull();
+    expect(byText.get('Resposta 1')?.replyTo).toEqual({
+      found: true,
+      id: await idOf(first.id),
+      direction: 'in',
+      kind: 'text',
+      text: 'Qual o valor da franquia?',
+    });
+    // Another deal's message is never quoted, even by its wamid.
+    expect(byText.get('Resposta 2')?.replyTo).toEqual({ found: false });
+    expect(byText.get('Resposta 3')?.replyTo).toEqual({ found: false });
+    expect(JSON.stringify([...byText.values()])).not.toContain('outra negociação');
   });
 });
 

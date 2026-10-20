@@ -91,11 +91,21 @@ export const WA_MEDIA_KINDS: readonly WaMessageKind[] = [
   'sticker',
 ];
 
+/**
+ * The message a reply quotes, looked up only in the same conversation. Not found: older than the
+ * number's connection to the system, or kept only on the phone.
+ */
+export type WaQuote =
+  | { found: true; id: string; direction: 'in' | 'out'; kind: WaMessageKind; text: string | null }
+  | { found: false };
+
 export interface WaMessage {
   id: string;
   direction: 'in' | 'out';
   kind: WaMessageKind;
   text: string | null;
+  /** A reply: the message it quotes. Optional only so fixtures of other branches still type. */
+  replyTo?: WaQuote | null;
   /** Present when the message has a file, opened at `/whatsapp/messages/:id/media`. */
   media: { mimeType: string | null; filename: string | null } | null;
   template: { name: string; language: string } | null;

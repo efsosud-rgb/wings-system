@@ -211,3 +211,39 @@ describe('older messages of a long thread', () => {
     ).toBe(false);
   });
 });
+
+describe('what the balloon shows', () => {
+  it('a reply shows the quoted message at the top, and "—" with the reason when it is not here', () => {
+    show([
+      message({
+        id: 'r1',
+        text: 'Pode ser na terça',
+        replyTo: {
+          found: true,
+          id: 'q1',
+          direction: 'out',
+          kind: 'text',
+          text: 'Qual dia fica bom?',
+        },
+      }),
+      message({
+        id: 'r2',
+        text: 'Gostei desta',
+        replyTo: { found: true, id: 'q2', direction: 'in', kind: 'image', text: null },
+      }),
+      message({ id: 'r3', text: 'Isso', replyTo: { found: false } }),
+    ]);
+
+    const [first, second, third] = screen.getAllByRole('listitem');
+    expect(within(first!).getByText('Equipe')).toBeTruthy();
+    expect(within(first!).getByText('Qual dia fica bom?')).toBeTruthy();
+    expect(within(first!).getByText('Pode ser na terça')).toBeTruthy();
+    // A quoted file with no caption is named by its kind.
+    expect(within(second!).getByText('Cliente')).toBeTruthy();
+    expect(within(second!).getByText('Imagem')).toBeTruthy();
+    expect(
+      within(third!).getByText(/^— A mensagem respondida não está aqui: é de antes de o número/),
+    ).toBeTruthy();
+    expect(within(third!).getByText('Isso')).toBeTruthy();
+  });
+});
