@@ -190,7 +190,9 @@ negados. Arquivos de `/assets/` (nome com hash) ficam em cache por um ano (`immu
 - No celular (largura até 640 px, tela mais alta que larga) a asa tem outro lugar e fica com ~57% do tamanho: cada
   seção da cena traz `data-n="x,y,escala,opacidade"` (x em unidades do mundo vezes a proporção largura/altura da
   tela, y em unidades do mundo), longe de títulos e rótulos; onde ainda cruza texto a opacidade cai para ~35%. Acima de
-  640 px valem `data-l` e `data-p`, como antes.
+  640 px valem `data-l` e `data-p`, como antes. Nessa vista o ponto encolhe junto com a figura: tamanho cheio com
+  escala 0,5 ou mais (`DOT_REF`), até 60% (`DOT_MIN`) com escala 0,3 ou menos. Sem isso a asa a 57% mantinha o
+  ponto e ficava com ~3 vezes mais cobertura, um borrão; `window.__wings3d().tamanhoPonto` mostra o valor.
 - O espaço do Turnstile já tem a altura do widget desde o primeiro quadro (sem pulo de layout).
 - Freio automático (`brake.ts`), só em celular com toque e com movimento: se a mediana de 60 quadros passar de 24 ms
   (menos de uns 40 quadros por segundo), a cena desce um degrau de resolução (2, 1,5, 1,25, 1) e nunca sobe sozinha.

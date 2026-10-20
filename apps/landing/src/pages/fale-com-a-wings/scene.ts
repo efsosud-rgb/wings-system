@@ -313,12 +313,13 @@ export function createScene(input: SceneInput): Scene3d | null {
     ] as const
   ).forEach(([n, a, s]) => geo.setAttribute(n, new BufferAttribute(a, s)));
 
+  const dotSize = (coarse ? 36 : 44) * Math.min(1.6, Math.max(1, Math.sqrt(8400 / N)));
   const uni = {
     uTime: { value: 0 },
     uMix: { value: new Vector4(reduce ? 1 : 0, reduce ? 0 : 1, 0, 0) },
     uMouse: { value: new Vector3(99, 99, 0) },
     uMouseK: { value: 0 },
-    uSize: { value: (coarse ? 36 : 44) * Math.min(1.6, Math.max(1, Math.sqrt(8400 / N))) },
+    uSize: { value: dotSize },
     uPR: { value: PR },
     uStep: { value: -1 },
     uDrift: { value: reduce ? 0 : 1 },
@@ -401,6 +402,10 @@ export function createScene(input: SceneInput): Scene3d | null {
     });
   }
   const target = { mix: new Vector4(1, 0, 0, 0), x: 0, y: 0, sc: 1, glo: 1 };
+  const phoneView = () => innerWidth <= 640 && camera.aspect < 0.9;
+  // phone point size: full at a figure scale of DOT_REF or more, shrinking with it down to DOT_MIN
+  const DOT_REF = 0.5,
+    DOT_MIN = 0.6;
   function aim() {
     if (!meta.length) return;
     const vc = scrollY + innerHeight / 2;
@@ -411,7 +416,7 @@ export function createScene(input: SceneInput): Scene3d | null {
       t = smooth(clamp((vc - meta[i]!.b) / Math.max(1, meta[j]!.a - meta[i]!.b)));
     // a section's pose: form mix, x, y, scale, alpha; portrait phones (<= 640 px) use N
     const pose = (s: Section) =>
-      innerWidth <= 640 && camera.aspect < 0.9
+      phoneView()
         ? [...s.form, s.N[0]! * camera.aspect, s.N[1]!, s.N[2]!, s.N[3]!]
         : [...s.form, ...(portrait ? s.Pt : s.L), s.glo];
     const a = pose(meta[i]!.s),
@@ -459,6 +464,8 @@ export function createScene(input: SceneInput): Scene3d | null {
     group.position.y += (target.y - group.position.y) * k;
     const sc = group.scale.x + (target.sc - group.scale.x) * k;
     group.scale.setScalar(sc);
+    // on a phone the figure is small (data-n), so its points shrink with it instead of piling up
+    uni.uSize.value = dotSize * (phoneView() ? clamp(sc / DOT_REF, DOT_MIN, 1) : 1);
     uni.uAlpha.value += (target.glo - uni.uAlpha.value) * k;
     const ix = gyro.on ? gyro.x : ptr.x,
       iy = gyro.on ? gyro.y : ptr.y;
@@ -517,6 +524,7 @@ export function createScene(input: SceneInput): Scene3d | null {
     drawCalls: renderer.info.render.calls,
     pontos: renderer.info.render.points,
     memoria: renderer.info.memory,
+    tamanhoPonto: uni.uSize.value,
   });
   return {
     onScroll() {
