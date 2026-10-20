@@ -528,3 +528,68 @@ describe('slicing the insights window', () => {
     expect(ranges).toHaveLength(2); // 31 days at 30 per window
   });
 });
+
+describe('a slow answer from Meta', () => {
+  /** Answers after `delayMs`, unless the request's own timeout fires first — as fetch does. */
+  function slowFetch(delayMs: number): typeof fetch {
+    return ((input: unknown, init?: RequestInit) =>
+      new Promise<Response>((resolve, reject) => {
+        const path = new URL(String(input)).pathname;
+        const body = path.endsWith('/campaigns')
+          ? CAMPAIGNS_RESPONSE
+          : path.endsWith('/insights')
+            ? INSIGHTS_RESPONSE
+            : path.endsWith('/adsets')
+              ? { data: [] }
+              : AD_ACCOUNT_RESPONSE;
+        const timer = setTimeout(
+          () =>
+            resolve(
+              new Response(JSON.stringify(body), {
+                headers: { 'content-type': 'application/json' },
+              }),
+            ),
+          delayMs,
+        );
+        init?.signal?.addEventListener('abort', () => {
+          clearTimeout(timer);
+          reject(init.signal?.reason);
+        });
+      })) as typeof fetch;
+  }
+
+  it('is waited for on every read the reconciliation makes, past the ordinary timeout', async () => {
+    // The ordinary reads give up after 20 ms here; Meta answers after 80.
+    const meta = new MetaReadOnlyClient({
+      accessToken: 'test-token-not-real',
+      adAccountId: 'act_123456789',
+      timeoutMs: 20,
+      fetchImpl: slowFetch(80),
+    });
+
+    await expect(meta.listCampaigns()).resolves.toHaveLength(2);
+    await expect(meta.listAdSets()).resolves.toEqual([]);
+    await expect(meta.getAccount()).resolves.toMatchObject({ spendCapCents: 1_000_000 });
+    await expect(meta.getSpend('2026-09-01')).resolves.toHaveLength(2);
+    // An ordinary read still gives up at its own timeout.
+    await expect(meta.getAdPreview('120', 'MOBILE_FEED_STANDARD')).rejects.toMatchObject({
+      name: 'TimeoutError',
+    });
+  });
+
+  it('names the edge that ran out of time, never the token', async () => {
+    const meta = new MetaReadOnlyClient({
+      accessToken: 'super-secret-token',
+      adAccountId: 'act_123456789',
+      fetchImpl: (() =>
+        Promise.reject(
+          new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+        )) as typeof fetch,
+    });
+
+    const error = await meta.listAdSets().catch((e: unknown) => e);
+    expect(error).toMatchObject({ name: 'TimeoutError' });
+    expect((error as Error).message).toContain('act_123456789/adsets');
+    expect((error as Error).message).not.toContain('super-secret-token');
+  });
+});
