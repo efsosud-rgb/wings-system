@@ -243,13 +243,16 @@ function MediaBody({ message }: { message: WaMessage }) {
   return download;
 }
 
+/** Why a quoted or reacted-to message is not in this conversation (the API looks only here). */
+const NOT_HERE =
+  'é de antes de o número entrar no sistema, está em outra negociação desta pessoa, ou ficou só no celular.';
+
 /** The message a reply quotes, at the top of the balloon, as WhatsApp shows it. */
 function Quote({ quote }: { quote: WaQuote }) {
   if (!quote.found)
     return (
       <span className="crm-wa-quote is-missing">
-        — A mensagem respondida não está aqui: é de antes de o número entrar no sistema, ou ficou só
-        no celular.
+        — A mensagem respondida não está aqui: {NOT_HERE}
       </span>
     );
   return (
@@ -277,7 +280,7 @@ function ReactionLine({ message }: { message: WaMessage }) {
           {what} {message.text ? 'a' : 'de'}: <q>{to.text ?? WA_KIND_LABELS[to.kind]}</q>
         </>
       ) : (
-        `${what}. — A mensagem da reação não está aqui: é de antes de o número entrar no sistema, ou ficou só no celular.`
+        `${what}. — A mensagem da reação não está aqui: ${NOT_HERE}`
       )}{' '}
       <time dateTime={message.at} title={formatDateTime(message.at)}>
         {timeOf(message.at)}

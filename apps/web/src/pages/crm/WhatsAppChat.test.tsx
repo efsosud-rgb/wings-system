@@ -242,7 +242,9 @@ describe('what the balloon shows', () => {
     expect(within(second!).getByText('Cliente')).toBeTruthy();
     expect(within(second!).getByText('Imagem')).toBeTruthy();
     expect(
-      within(third!).getByText(/^— A mensagem respondida não está aqui: é de antes de o número/),
+      within(third!).getByText(
+        '— A mensagem respondida não está aqui: é de antes de o número entrar no sistema, está em outra negociação desta pessoa, ou ficou só no celular.',
+      ),
     ).toBeTruthy();
     expect(within(third!).getByText('Isso')).toBeTruthy();
   });

@@ -1,8 +1,10 @@
 import { createHmac } from 'node:crypto';
 import {
   SESSION_COOKIE,
+  WA_MESSAGES_PAGE,
   WINGS_CLIENT_ID,
   type DealWhatsApp,
+  type WaMessage,
   type RoleKey,
   type WaConversationItem,
 } from '@wings/shared';
@@ -815,6 +817,59 @@ describe('what the balloon shows: the reply, the reaction, the contact card, the
       ],
       ['contacts', 'Cartão antigo', null],
     ]);
+  });
+
+  it('an older page ("Mostrar anteriores") quotes and attaches reactions of the same deal only', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977770007', owner.id);
+    const otherLead = await deal('5521977770008', owner.id);
+    const elsewhere = inbound('5521977770008', 'Texto de outra negociação');
+    await deliver(elsewhere.body);
+    await deliver(inbound('5521977770007', 'Oi').body);
+    await run();
+    const conversationOf = async (lead: string) =>
+      (await db.select().from(waConversations).where(eq(waConversations.leadId, lead)))[0]!;
+    const here = await conversationOf(leadId);
+    const there = await conversationOf(otherLead);
+    const row = (conversation: typeof here, fields: Partial<typeof waMessages.$inferInsert>) => ({
+      conversationId: conversation.id,
+      contactId: conversation.contactId,
+      leadId: conversation.leadId,
+      direction: 'in',
+      author: 'contact',
+      kind: 'text',
+      ...fields,
+    });
+    const start = Date.parse('2026-10-01T10:00:00.000Z');
+    // The oldest message replies to the other deal's one; a full page comes after it.
+    await db.insert(waMessages).values([
+      row(here, {
+        wamid: 'wamid.OLDEST',
+        text: 'Mais antiga',
+        content: { replyTo: elsewhere.id },
+        createdAt: new Date(start),
+      }),
+      ...Array.from({ length: WA_MESSAGES_PAGE }, (_, i) =>
+        row(here, { text: `Depois ${i}`, createdAt: new Date(start + (i + 1) * 60_000) }),
+      ),
+      row(here, { kind: 'reaction', text: '👍', content: { reactionTo: 'wamid.OLDEST' } }),
+      // The other deal's number reacting to this deal's message by its wamid.
+      row(there, { kind: 'reaction', text: '😮', content: { reactionTo: 'wamid.OLDEST' } }),
+    ]);
+
+    const first = await threadOf(leadId, owner.cookies);
+    const older = await app.inject({
+      method: 'GET',
+      url: `/leads/${leadId}/whatsapp/messages?before=${first.messages[0]!.id}`,
+      cookies: owner.cookies,
+    });
+    expect(older.statusCode).toBe(200);
+    const oldest = older.json<{ messages: WaMessage[] }>().messages[0];
+    expect(oldest).toMatchObject({
+      text: 'Mais antiga',
+      replyTo: { found: false },
+      reactions: [{ emoji: '👍', direction: 'in' }],
+    });
   });
 
   it('a location keeps its point, name and address; one with no point says so', async () => {

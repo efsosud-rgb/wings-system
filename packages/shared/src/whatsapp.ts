@@ -93,7 +93,8 @@ export const WA_MEDIA_KINDS: readonly WaMessageKind[] = [
 
 /**
  * The message a reply quotes or a reaction is for, looked up only in the same conversation. Not
- * found: older than the number's connection to the system, or kept only on the phone.
+ * found: older than the number's connection to the system, under another deal of the same
+ * person, or kept only on the phone.
  */
 export type WaQuote =
   | { found: true; id: string; direction: 'in' | 'out'; kind: WaMessageKind; text: string | null }
