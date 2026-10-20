@@ -33,6 +33,7 @@ import { Link, useParams } from 'react-router-dom';
 import { hasPermission, useSession } from '../../api/auth.js';
 import { CompanyLink } from '../../components/CompanyLink.js';
 import { ApiError } from '../../api/client.js';
+import { useWhatsAppSoon, WHATSAPP_SOON_TEXT } from '../../api/whatsapp.js';
 import {
   useAddActivity,
   useBrands,
@@ -579,7 +580,7 @@ const ACTIONS: Action[] = [
   { tab: 'note', icon: 'edit', label: 'Anotação' },
   { tab: 'email', icon: 'mail', label: 'E-mail' },
   { tab: 'call', icon: 'phone', label: 'Ligação' },
-  // Opens the conversation screen; sending waits there for the official API.
+  // Opens the conversation screen; a seller reads there and sends once the official number is live.
   { tab: 'whatsapp', icon: 'message', label: 'WhatsApp', href: 'whatsapp' },
   // Opens the Reunião section; agendar/iniciar wait there for the Google integration.
   { tab: 'meet', icon: 'video', label: 'Reunião' },
@@ -601,6 +602,7 @@ function ActionBar({
   onAct: (tab: Tab) => void;
 }) {
   const [more, setMore] = useState(false);
+  const whatsappSoon = useWhatsAppSoon();
   return (
     <div className="crm-actions" role="toolbar" aria-label="Ações">
       {ACTIONS.map((action) =>
@@ -609,12 +611,14 @@ function ActionBar({
             key={action.tab}
             className="crm-action"
             to={`/crm-vendas/negociacoes/${lead.id}/${action.href}`}
-            aria-label={action.label}
+            aria-label={whatsappSoon ? `${action.label} (em breve)` : action.label}
+            title={whatsappSoon ? WHATSAPP_SOON_TEXT : undefined}
           >
             <span className="crm-action-icon" aria-hidden="true">
               <Icon name={action.icon} size={18} />
             </span>
             <span>{action.label}</span>
+            {whatsappSoon && <small>em breve</small>}
           </Link>
         ) : (
           <button

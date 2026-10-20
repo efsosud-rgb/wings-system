@@ -95,18 +95,27 @@ Uma permissão, `leads.whatsapp` (ver, enviar e ligar), pela regra única `leadI
 (`modules/leads/access.ts`): Admin Master, Diretoria e Gerente comercial em qualquer lead; vendedor só nos
 seus. A Diretoria conversa e liga sem editar a negociação. Fora do alcance responde 404.
 
+Trava do vendedor (Eric, 19/10): enquanto `whatsapp_settings.official_number_live` estiver desligado, quem tem
+`leads.whatsapp` só nos seus leads lê a conversa, mas não envia (texto, modelo, pedido de ligação) nem liga:
+a API responde 403 `whatsapp_soon` (`sellerWhatsAppLocked` em `official-number.ts`, conferido em `send()` e em
+`POST /leads/:id/whatsapp/calls`), e a tela mostra "em breve" no campo de mensagem, no painel de ligação e na
+ação WhatsApp da ficha. Atender uma ligação recebida não é travado: o número de teste só recebe de números
+cadastrados na Meta. Os outros níveis não mudam.
+
 ## Rotas (com sessão)
 
-| Rota                                                            | O quê                                                  |
-| --------------------------------------------------------------- | ------------------------------------------------------ |
-| `GET /leads/:id/whatsapp`                                       | Conversa da negociação, janela, opt-out, `configured`  |
-| `POST /leads/:id/whatsapp/text`                                 | Texto livre (só dentro das 24 h)                       |
-| `POST /leads/:id/whatsapp/template`                             | Modelo aprovado com os campos `{{n}}`                  |
-| `GET /whatsapp/conversations[?unanswered=1]`                    | Lista no escopo de quem lê                             |
-| `GET /whatsapp/conversations/:id` e `POST …/text`, `…/template` | Conversa sem negociação (escopo total)                 |
-| `GET /whatsapp/templates[?refresh=1]`                           | Modelos aprovados                                      |
-| `GET /whatsapp/messages/:id/media`                              | Arquivo recebido                                       |
-| `POST /leads/:id/whatsapp/template-preview`, `GET …/art`        | O que o modelo vira agora e a arte (`arte-modelos.md`) |
+| Rota                                                                     | O quê                                                   |
+| ------------------------------------------------------------------------ | ------------------------------------------------------- |
+| `GET /leads/:id/whatsapp`                                                | Conversa da negociação, janela, opt-out, `configured`   |
+| `POST /leads/:id/whatsapp/text`                                          | Texto livre (só dentro das 24 h)                        |
+| `POST /leads/:id/whatsapp/template`                                      | Modelo aprovado com os campos `{{n}}`                   |
+| `GET /whatsapp/conversations[?unanswered=1]`                             | Lista no escopo de quem lê                              |
+| `GET /whatsapp/conversations/:id` e `POST …/text`, `…/template`          | Conversa sem negociação (escopo total)                  |
+| `GET /whatsapp/templates[?refresh=1]`                                    | Modelos aprovados                                       |
+| `GET /whatsapp/messages/:id/media`                                       | Arquivo recebido                                        |
+| `POST /leads/:id/whatsapp/template-preview`, `GET …/art`                 | O que o modelo vira agora e a arte (`arte-modelos.md`)  |
+| `POST /leads/:id/whatsapp/imports[/preview]`, `GET`, `DELETE …/:batchId` | Conversa exportada do celular (`importar-conversa.md`)  |
+| `GET /leads/:id/whatsapp/messages?before=<id>`                           | Mensagens anteriores às 500 da tela, uma página por vez |
 
 A tela da conversa se atualiza a cada 5 s e a lista a cada 15 s, com o cabeçalho `x-wings-passive: 1`: o
 servidor responde sem contar como atividade da pessoa, para uma tela aberta não segurar uma sessão ociosa nem
@@ -117,7 +126,8 @@ mexer na hora de saída do ponto.
 Migrações 0077, 0079 (`wa_calls`; permissão de ligação no contato) e 0081 (`wa_media_uploads`: o id da arte na
 Meta, só ids e datas, legível pelo `wings_ro`; arte e artigo em `clients`): `wa_contacts` (telefone único, `wa_id`, nome do perfil, última mensagem recebida, opt-out),
 `wa_conversations` (uma por telefone e negociação; a sem negociação é única por telefone), `wa_messages`,
-`wa_webhook_events`, `wa_templates`. Telefone e texto são dados pessoais: sem GRANT ao `wings_ro`, nada disso
+`wa_webhook_events`, `wa_templates`; 0093 (`wa_import_batches`, as importações do celular; visão
+`wa_imports_analysis` para o `wings_ro`, ver `importar-conversa.md`). Telefone e texto são dados pessoais: sem GRANT ao `wings_ro`, nada disso
 em log (o webhook registra só o formato do corpo, `shapeOf`). A auditoria `whatsapp.message_sent` guarda ids,
 tipo, nome do modelo e resultado, nunca o texto.
 

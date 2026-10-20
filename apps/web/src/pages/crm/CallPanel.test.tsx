@@ -9,9 +9,16 @@ import { CallPanel } from './CallPanel.js';
  * under it.
  */
 
-const { activityMutate, centerState } = vi.hoisted(() => ({
+const { activityMutate, centerState, soonState } = vi.hoisted(() => ({
   activityMutate: vi.fn(),
   centerState: { value: null as null | { calling: boolean; active: null; placeCall: () => void } },
+  // A seller before the official number is live (useWhatsAppSoon).
+  soonState: { value: false },
+}));
+
+vi.mock('../../api/whatsapp.js', () => ({
+  useWhatsAppSoon: () => soonState.value,
+  WHATSAPP_SOON_TEXT: 'Em breve: texto do bloqueio do vendedor.',
 }));
 
 vi.mock('../../api/crm.js', () => ({
@@ -46,6 +53,7 @@ const show = (over: Partial<Parameters<typeof CallPanel>[0]> = {}) =>
   );
 
 beforeEach(() => {
+  soonState.value = false;
   activityMutate.mockClear();
   onClose.mockClear();
   parentClick.mockClear();
@@ -74,6 +82,25 @@ describe('the call panel', () => {
     expect(screen.queryByText(/Fica ativo quando/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /Ligar pelo WhatsApp/ }));
     expect(onClose).toHaveBeenCalledTimes(1);
+    centerState.value = null;
+  });
+
+  it('before the official number is live says "em breve" instead of the WhatsApp call, and keeps the rest', () => {
+    soonState.value = true;
+    // Even with a call center ready, the seller's call is not offered.
+    centerState.value = { calling: true, active: null, placeCall: vi.fn() };
+    show();
+    const whatsapp = screen.getByRole('button', {
+      name: /Ligar pelo WhatsApp/,
+    }) as HTMLButtonElement;
+    expect(whatsapp.disabled).toBe(true);
+    expect(whatsapp.textContent).toContain('em breve');
+    expect(screen.getByText('Em breve: texto do bloqueio do vendedor.')).toBeTruthy();
+    fireEvent.click(whatsapp);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Fica ativo quando/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Copiar número' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Registrar ligação' })).toBeTruthy();
     centerState.value = null;
   });
 

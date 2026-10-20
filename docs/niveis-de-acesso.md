@@ -43,7 +43,8 @@ Financeiro, Processos e Projetos, Contábil/Tributário, Logística, TI).
 | Formatação → Clientes                   | yes          | yes               | —     | —                 | yes       | Jurídico only                 | —                 | —                   |
 | Gestão → Projetos                       | all          | all               | read  | dept              | dept      | dept (P&P all; Log., TI read) | dept, in the CRM  | dept, in the CRM    |
 | Drive                                   | all          | all               | dept  | dept              | dept      | dept                          | —                 | —                   |
-| Agenda (own Google + Wings Company)     | yes          | yes               | yes   | yes               | yes       | yes                           | yes, in the CRM   | yes, in the CRM     |
+| Produtividade → Agenda                  | yes          | yes               | yes   | yes               | yes       | yes                           | read only         | read only           |
+| Produtividade → Reuniões                | all          | all               | —     | all               | —         | —                             | own               | own                 |
 | Administração → Usuários e acessos      | all          | all (levels only) | all   | sector            | —         | —                             | —                 | —                   |
 | Administração → Drive: modelo de pastas | yes          | yes               | —     | —                 | —         | —                             | —                 | —                   |
 | Administração → Roadmap, Integrações    | yes          | —                 | —     | —                 | —         | —                             | —                 | —                   |
@@ -70,6 +71,14 @@ Negociações, WhatsApp, Contatos, Tarefas, Avisos, **Painel de Vendas** (`/crm-
 (`/crm-vendas/leads-campanhas`): the same pages as Dashboard and Gestão, at a CRM address that only these two levels
 see (`NavSubmodule.levels`). Every other level keeps them where they were.
 
+**Agenda and Reuniões in Produtividade (Eric, 19/10).** The two entries say `sellers: true`, the one exception to
+the rule above, so a seller's menu also has Produtividade with them. Both are read-only for the seller: the Agenda
+shows their own calendar and Wings Company's in full (every event, with the lead's name, as Google shares it), and
+they lack `calendar.write`, so the API refuses `POST`, `PATCH` and `DELETE /agenda/events` with 403 and the page
+hides Criar, Editar and Excluir. They schedule, reschedule and cancel only from the lead's page (`leads.write`).
+Reuniões (`GET /meetings`) lists the meetings of the deals they own; Admin Master, Diretoria and the Gerente
+comercial see every one. The old `/crm-vendas/agenda` redirects to `/produtividade/agenda`.
+
 - **Empresas** and **Landing pages** need `companies.read` and `landing_pages.read` (Admin Master, Diretoria,
   Gerente Comercial). In the deal and the contact the company is a name, linked to its record only for who has
   Empresas; a seller still types it in their own deal or contact (`PATCH /leads/:id/deal`, `/crm/contacts`).
@@ -84,11 +93,12 @@ see (`NavSubmodule.levels`). Every other level keeps them where they were.
   funcionar depois da troca do número. Até lá, use o WhatsApp do celular.", "Nova conversa" is off and the menu
   entry says "em breve". The key is one row, `whatsapp_settings.official_number_live` (migration 0090), switched by
   an Admin Master on the WhatsApp screen (`PUT /whatsapp/official-number`, audited): no deploy on the day. The
-  other levels do not change.
+  other levels do not change. Since 19/10 the API holds it too: while the key is off, a seller's send (text,
+  template, call request) and outgoing call answer 403 `whatsapp_soon`, and the deal's chat, the call panel and
+  the deal's WhatsApp action say "em breve". Reading the conversation stays.
 
-Not in the system: **Notion** (no module or link exists). **Agenda and Meet** for a seller are the Google
-connection in "Minha conta" and the meetings and tasks inside the deal; the Produtividade → Agenda and Reuniões
-menu entries are still "em breve", so they show only to Admin Master and Diretoria.
+Not in the system: **Notion** (no module or link exists). **Meet** for a seller is the Google connection in
+"Minha conta" and the meetings inside the deal; Produtividade → Agenda and Reuniões only read (above).
 
 ## Test accounts (staging)
 

@@ -3,6 +3,7 @@ import {
   WINGS_CLIENT_ID,
   leadHidesWings,
   meetingCreateSchema,
+  meetingListQuerySchema,
   meetingRecordingCompleteSchema,
   meetingSpeakersSchema,
   meetingUpdateSchema,
@@ -12,12 +13,12 @@ import {
   summarySendUpdateSchema,
   type MeetingSpeaker,
 } from '@wings/shared';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { clientContacts, crmMeetings, jobs, leadEvents, leads } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
-import { leadInScope } from '../leads/access.js';
+import { leadInScope, leadOwnerFilter } from '../leads/access.js';
 import { ZapiClient } from '../../lib/zapi.js';
 import { googleWorkspaceDepsOf } from '../google-workspace/service.js';
 import { createTask } from '../leads/crm.js';
@@ -31,6 +32,7 @@ import {
 } from './google-sync.js';
 import {
   maskContact,
+  meetingListFor,
   runMeetingAnalysis,
   runQueuedAnalyses,
   toMeeting,
@@ -201,6 +203,18 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
+  // Produtividade → Reuniões: a seller reads the meetings of their own deals, Admin every one.
+  app.get(
+    '/meetings',
+    { preHandler: app.requirePermission('leads.read') },
+    async (request, reply) => {
+      const query = meetingListQuerySchema.safeParse(request.query);
+      if (!query.success) return bad(reply);
+      const owner = leadOwnerFilter(request.session.actor, 'leads.read');
+      return reply.send({ meetings: await meetingListFor(db, owner, query.data.when, now()) });
+    },
+  );
+
   app.post(
     '/leads/:id/meetings',
     { preHandler: app.requirePermission('leads.write') },
@@ -287,6 +301,7 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
         actorEmployeeId: actor,
         detail: {
           meetingId: row!.id,
+          startsAt: startsAt.toISOString(),
           attendees: (google?.attendees ?? body.data.attendees).length,
           google: Boolean(google),
         },
@@ -311,6 +326,115 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
       const found = await visibleMeeting(request, params.data.id);
       if (!found) return notFound(reply);
       return reply.send({ meeting: await answer(found.row, found.lead.clientId) });
+    },
+  );
+
+  // --- held through the system: Iniciar and Encerrar (Eric, 19/10) ------------------------
+
+  /** When this meeting was started, from its `meeting.started` event on the deal. */
+  async function startedAtOf(row: MeetingRow): Promise<Date | null> {
+    const [event] = await db
+      .select({ at: leadEvents.at })
+      .from(leadEvents)
+      .where(
+        and(
+          eq(leadEvents.leadId, row.leadId),
+          eq(leadEvents.kind, 'meeting.started'),
+          sql`${leadEvents.detail}->>'meetingId' = ${row.id}`,
+        ),
+      )
+      .orderBy(desc(leadEvents.at))
+      .limit(1);
+    return event?.at ?? null;
+  }
+
+  /** Moves the status only from `from`: a second click (or tab) finds it moved and records nothing. */
+  async function moveStatus(id: string, from: string, to: string) {
+    const [row] = await db
+      .update(crmMeetings)
+      .set({ status: to, updatedAt: now() })
+      .where(and(eq(crmMeetings.id, id), eq(crmMeetings.status, from)))
+      .returning();
+    return row ?? null;
+  }
+
+  /** "Iniciar reunião": the Meet opens beside the deal and the deal records the start. */
+  app.post(
+    '/meetings/:id/start',
+    { preHandler: app.requirePermission('leads.write') },
+    async (request, reply) => {
+      const params = idParam.safeParse(request.params);
+      if (!params.success) return bad(reply);
+      const found = await visibleMeeting(request, params.data.id);
+      if (!found) return notFound(reply);
+      const { row } = found;
+      if (row.status === 'encerrada' || row.status === 'cancelada')
+        return conflict(reply, 'meeting_closed', 'Esta reunião já foi encerrada ou cancelada.');
+      const started = await moveStatus(row.id, 'agendada', 'em_andamento');
+      // Already under way: going back to the Meet records nothing new.
+      if (!started) {
+        const [current] = await db.select().from(crmMeetings).where(eq(crmMeetings.id, row.id));
+        return reply.send({ meeting: await answer(current!, found.lead.clientId) });
+      }
+      const actor = request.session.actor.employeeId;
+      await db.insert(leadEvents).values({
+        leadId: row.leadId,
+        at: now(),
+        kind: 'meeting.started',
+        actorEmployeeId: actor,
+        detail: { meetingId: row.id },
+      });
+      await writeAudit(db, {
+        actorEmployeeId: actor,
+        action: 'meeting.started',
+        entity: 'meeting',
+        entityId: row.id,
+        ip: request.ip,
+      });
+      return reply.send({ meeting: await answer(started, found.lead.clientId) });
+    },
+  );
+
+  /** "Encerrar": the deal records the end and how long it ran; the screen then asks for the recording. */
+  app.post(
+    '/meetings/:id/end',
+    { preHandler: app.requirePermission('leads.write') },
+    async (request, reply) => {
+      const params = idParam.safeParse(request.params);
+      if (!params.success) return bad(reply);
+      const found = await visibleMeeting(request, params.data.id);
+      if (!found) return notFound(reply);
+      const { row } = found;
+      const ended = await moveStatus(row.id, 'em_andamento', 'encerrada');
+      if (!ended)
+        return conflict(
+          reply,
+          'meeting_not_started',
+          row.status === 'encerrada'
+            ? 'Esta reunião já foi encerrada.'
+            : 'Só dá para encerrar uma reunião iniciada.',
+        );
+      const actor = request.session.actor.employeeId;
+      const startedAt = await startedAtOf(row);
+      const minutes = startedAt
+        ? Math.max(0, Math.round((now().getTime() - startedAt.getTime()) / 60_000))
+        : null;
+      await db.insert(leadEvents).values({
+        leadId: row.leadId,
+        at: now(),
+        kind: 'meeting.ended',
+        actorEmployeeId: actor,
+        detail: { meetingId: row.id, minutes },
+      });
+      await writeAudit(db, {
+        actorEmployeeId: actor,
+        action: 'meeting.ended',
+        entity: 'meeting',
+        entityId: row.id,
+        ip: request.ip,
+        metadata: { minutes },
+      });
+      return reply.send({ meeting: await answer(ended, found.lead.clientId) });
     },
   );
 
@@ -404,6 +528,19 @@ export const meetingRoutes: FastifyPluginAsync = async (app) => {
             : {}),
         ...googlePatch,
       });
+      // The deal's history (Eric, 19/10): a new time or a cancellation; a title or guest change is not.
+      const rescheduled =
+        startsAt.getTime() !== row.startsAt.getTime() || endsAt.getTime() !== row.endsAt.getTime();
+      if (cancelling || rescheduled)
+        await db.insert(leadEvents).values({
+          leadId: row.leadId,
+          at: now(),
+          kind: cancelling ? 'meeting.cancelled' : 'meeting.rescheduled',
+          actorEmployeeId: actor,
+          detail: cancelling
+            ? { meetingId: row.id }
+            : { meetingId: row.id, from: row.startsAt.toISOString(), to: startsAt.toISOString() },
+        });
       await writeAudit(db, {
         actorEmployeeId: actor,
         action: cancelling ? 'meeting.cancelled' : 'meeting.updated',

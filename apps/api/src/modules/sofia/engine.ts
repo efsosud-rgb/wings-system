@@ -255,6 +255,8 @@ class Turn {
         and(
           eq(waMessages.conversationId, this.conversation.id),
           eq(waMessages.direction, 'in'),
+          // A conversation imported from the phone is history, never a turn to answer.
+          isNull(waMessages.importBatchId),
           // Compared in the database: its timestamps have microseconds, a JS Date has not.
           sql`${waMessages.createdAt} > coalesce((select c.sofia_read_until from wa_conversations c where c.id = ${this.conversation.id}), '-infinity'::timestamptz)`,
         ),

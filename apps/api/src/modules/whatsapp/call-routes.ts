@@ -10,6 +10,7 @@ import { callingOn } from './calling.js';
 import { startWhatsAppCall, whatsappCallAction, whatsappConfigOf } from './graph.js';
 import { conversationFor } from './intake.js';
 import { callView, ringingFor } from './ringing.js';
+import { sellerWhatsAppLocked, SELLER_SOON_MESSAGE } from './official-number.js';
 
 /**
  * WhatsApp voice calls (Calling API; docs/whatsapp/cloud-api.md). The browser
@@ -57,6 +58,8 @@ export const whatsappCallRoutes: FastifyPluginAsync = async (app) => {
     const actor = request.session.actor;
     const lead = await leadInScope(db, actor, params.data.id, 'leads.whatsapp');
     if (!lead) return notFound(reply);
+    if (await sellerWhatsAppLocked(db, actor))
+      return refuse(reply, 403, 'whatsapp_soon', SELLER_SOON_MESSAGE);
     const body = waCallSdpSchema.safeParse(request.body);
     if (!body.success)
       return refuse(reply, 400, 'invalid', body.error.issues[0]?.message ?? 'Pedido inválido.');

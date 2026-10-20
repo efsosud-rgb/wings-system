@@ -7,6 +7,7 @@ import {
 } from '@wings/shared';
 import { useId, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
+import { openMeetBeside } from '../../lib/meet.js';
 import { Icon } from '../Icon.js';
 import { colorStyle, httpsOnly, linkify, titleOf, whenOf } from './format.js';
 import { calendarOf, colorsOf } from './layout.js';
@@ -20,7 +21,8 @@ const NARROW_PX = 700;
 /**
  * An event's details, as the Google Agenda shows them: a card beside the
  * event on a wide screen, a centered dialog on a phone. Edit and delete only
- * when the person may (`canEdit`); a CRM meeting points to its deal instead.
+ * when the person may (`canEdit`); a CRM meeting points to its deal instead. `readOnly`: the
+ * person has no `calendar.write` (the sellers) and schedules from the deal.
  */
 export function EventDetails({
   event,
@@ -29,6 +31,7 @@ export function EventDetails({
   onClose,
   onEdit,
   onDelete,
+  readOnly = false,
 }: {
   event: AgendaEvent;
   overview: AgendaOverview;
@@ -37,6 +40,7 @@ export function EventDetails({
   onClose: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  readOnly?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -144,14 +148,14 @@ export function EventDetails({
         {meetUrl && (
           <div className="agenda-details-row">
             <Icon name="video" size={18} className="agenda-details-icon" />
-            <a
+            <button
+              type="button"
               className="crm-btn is-primary"
-              href={meetUrl}
-              target="_blank"
-              rel="noopener noreferrer"
+              title="Abre o Meet numa janela ao lado da Agenda"
+              onClick={() => openMeetBeside(meetUrl)}
             >
               Participar com o Google Meet
-            </a>
+            </button>
           </div>
         )}
 
@@ -213,9 +217,11 @@ export function EventDetails({
 
         {!event.canEdit && !event.crm && (
           <p className="agenda-details-note">
-            {event.calendar === 'wings' && overview.wings === 'reader'
-              ? AGENDA_NOTICES.wingsReadOnly
-              : AGENDA_NOTICES.notEditable}
+            {readOnly
+              ? AGENDA_NOTICES.readOnly
+              : event.calendar === 'wings' && overview.wings === 'reader'
+                ? AGENDA_NOTICES.wingsReadOnly
+                : AGENDA_NOTICES.notEditable}
           </p>
         )}
 

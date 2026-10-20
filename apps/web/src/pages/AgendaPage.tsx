@@ -1,5 +1,6 @@
 import {
   AGENDA_NOTICES,
+  agendaDealPath,
   isDateOnly,
   type AgendaCalendarKey,
   type AgendaEvent,
@@ -7,7 +8,13 @@ import {
 } from '@wings/shared';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { useAgendaEvents, useAgendaOverview, useDeleteAgendaEvent } from '../api/agenda.js';
+import {
+  useAgendaEvents,
+  useAgendaOverview,
+  useDeleteAgendaEvent,
+  usePastedMeetings,
+} from '../api/agenda.js';
+import { hasPermission, useSession } from '../api/auth.js';
 import { ApiError } from '../api/client.js';
 import { AgendaSidebar } from '../components/agenda/AgendaSidebar.js';
 import { ConfirmDialog } from '../components/agenda/ConfirmDialog.js';
@@ -35,6 +42,7 @@ import {
 import { Icon } from '../components/Icon.js';
 import { LoadFailure } from '../components/LoadFailure.js';
 import { failureReason } from '../lib/failure.js';
+import { formatDateTime } from './crm/format.js';
 import './agenda.css';
 
 /**
@@ -43,7 +51,8 @@ import './agenda.css';
  * and the calendars on the left, details, create, edit and delete. Everyone has
  * it (`calendar.use`); each person sees their own calendar and Wings Company's
  * as Google shares it with them. Times are São Paulo's whatever the browser's
- * zone. One page at two addresses: /crm-vendas/agenda and /produtividade/agenda.
+ * zone. One address for everyone, /produtividade/agenda; without `calendar.write` (the sellers,
+ * Eric 19/10) it only reads.
  */
 
 const VIEW_STORAGE = 'wings.agenda.view';
@@ -127,6 +136,52 @@ function ConnectNotice({ text }: { text: string }) {
   );
 }
 
+const PASTED_DAYS = 30;
+
+/** The deal meetings with a pasted link need no Google: listed under the notice until it is connected. */
+function PastedMeetings() {
+  const [range] = useState(() => {
+    const from = new Date();
+    from.setHours(0, 0, 0, 0);
+    return {
+      from: from.toISOString(),
+      to: new Date(from.getTime() + PASTED_DAYS * 86_400_000).toISOString(),
+    };
+  });
+  const list = usePastedMeetings(range.from, range.to);
+  return (
+    <section className="agenda-pasted" aria-label="Reuniões marcadas pela ficha">
+      <h2>Reuniões marcadas pela ficha</h2>
+      {list.isError ? (
+        <LoadFailure what="as reuniões" error={list.error} onRetry={() => void list.refetch()} />
+      ) : !list.data ? (
+        <p className="crm-muted">Carregando…</p>
+      ) : list.data.length === 0 ? (
+        <p className="crm-muted">
+          Nenhuma reunião com link colado nos próximos {PASTED_DAYS} dias.
+        </p>
+      ) : (
+        <ul className="crm-plain-list">
+          {list.data.map((event) => (
+            <li key={event.id}>
+              <Icon name="calendar" size={13} /> {formatDateTime(event.start)} ·{' '}
+              {event.title || '(Sem título)'}
+              {event.crm?.leadId && (
+                <>
+                  {' '}
+                  <Link className="crm-link-btn" to={agendaDealPath(event.crm.leadId)}>
+                    Abrir negociação
+                  </Link>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 export function AgendaPage() {
   const overview = useAgendaOverview();
 
@@ -169,6 +224,7 @@ export function AgendaPage() {
     return (
       <AgendaFrame>
         <ConnectNotice text={AGENDA_NOTICES.notConnected} />
+        <PastedMeetings />
       </AgendaFrame>
     );
   }
@@ -176,6 +232,7 @@ export function AgendaPage() {
     return (
       <AgendaFrame>
         <ConnectNotice text={AGENDA_NOTICES.needsReconnect} />
+        <PastedMeetings />
       </AgendaFrame>
     );
   }
@@ -218,6 +275,8 @@ function AgendaWorkspace({ overview }: { overview: AgendaOverview }) {
   } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const remove = useDeleteAgendaEvent();
+  // The sellers only read here (Eric, 19/10); the API refuses their writes all the same.
+  const canWrite = hasPermission(useSession().data, 'calendar.write');
 
   // The red line of the current time moves every minute.
   useEffect(() => {
@@ -321,11 +380,13 @@ function AgendaWorkspace({ overview }: { overview: AgendaOverview }) {
 
   const openEvent = (event: AgendaEvent, element: HTMLElement) =>
     setDetails({ event, anchor: element });
-  const createAt = (start: number, end: number) =>
+  const createAt = (start: number, end: number) => {
+    if (!canWrite) return;
     setForm({
       target: { kind: 'create', start, end },
       returnFocus: document.activeElement as HTMLElement | null,
     });
+  };
   const onCreate = () => {
     setSideOpen(false);
     setForm({
@@ -546,15 +607,17 @@ function AgendaWorkspace({ overview }: { overview: AgendaOverview }) {
             </button>
           ))}
         </div>
-        <button
-          type="button"
-          className="agenda-icon-btn agenda-create-compact"
-          aria-label="Criar evento"
-          title="Criar evento"
-          onClick={onCreate}
-        >
-          <Icon name="plus" size={20} />
-        </button>
+        {canWrite && (
+          <button
+            type="button"
+            className="agenda-icon-btn agenda-create-compact"
+            aria-label="Criar evento"
+            title="Criar evento"
+            onClick={onCreate}
+          >
+            <Icon name="plus" size={20} />
+          </button>
+        )}
       </header>
 
       <div className="agenda-body">
@@ -569,7 +632,7 @@ function AgendaWorkspace({ overview }: { overview: AgendaOverview }) {
           overview={overview}
           hidden={hidden}
           onToggle={toggle}
-          onCreate={onCreate}
+          onCreate={canWrite ? onCreate : undefined}
           anchor={anchor}
           today={today}
           period={searching ? periodOf(view, anchor) : period}
@@ -613,6 +676,7 @@ function AgendaWorkspace({ overview }: { overview: AgendaOverview }) {
           overview={overview}
           anchor={details.anchor}
           onClose={() => setDetails(null)}
+          readOnly={!canWrite}
           onEdit={() => {
             setForm({
               target: { kind: 'edit', event: details.event },

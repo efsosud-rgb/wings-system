@@ -2,7 +2,14 @@ import { randomBytes, randomInt } from 'node:crypto';
 import type { RoleKey, SectorSlug } from '@wings/shared';
 import { eq } from 'drizzle-orm';
 import type { Database } from '../db/client.js';
-import { employeeCredentials, employees, roles, sectors } from '../db/schema/index.js';
+import { WINGS_TENANT_ID } from '../db/schema/ads.js';
+import {
+  employeeCredentials,
+  employees,
+  roles,
+  sectors,
+  whatsappSettings,
+} from '../db/schema/index.js';
 import { createCpfCrypto } from '../lib/cpf-crypto.js';
 import { hashPassword } from '../lib/password.js';
 
@@ -80,6 +87,17 @@ export async function createEmployee(
   }
 
   return { id: created.id, email, password: password ?? '' };
+}
+
+/**
+ * The official WhatsApp number switch (Eric, 14/10) set straight in its row. While it is off a
+ * seller cannot send or call (Eric, 19/10), so a test of sending as a seller turns it on first.
+ */
+export async function setOfficialLive(db: Database, live: boolean) {
+  await db
+    .insert(whatsappSettings)
+    .values({ tenantId: WINGS_TENANT_ID, officialNumberLive: live })
+    .onConflictDoUpdate({ target: whatsappSettings.tenantId, set: { officialNumberLive: live } });
 }
 
 /** A valid CNPJ, different each call (check digits computed). */
