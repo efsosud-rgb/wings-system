@@ -192,6 +192,8 @@ function useOlder(thread: WhatsAppThread, shown: WaMessage[]) {
  * download. The address answers from our storage once the file is copied,
  * from Meta before that.
  */
+const UNPLAYABLE = new Set(['audio/amr', 'video/3gpp']);
+
 function MediaBody({ message }: { message: WaMessage }) {
   const [broken, setBroken] = useState(false);
   const url = whatsappMediaUrl(message.id);
@@ -206,11 +208,13 @@ function MediaBody({ message }: { message: WaMessage }) {
   if (broken)
     return (
       <span className="crm-wa-media-failed">
-        — {label}: não abriu. Arquivos com mais de 30 dias que o sistema não guardou já saíram da
-        Meta. {download}
+        — {label}: não abriu aqui. Tente pelo link; se a mensagem tem mais de 30 dias e o arquivo
+        não foi guardado, ele já saiu da Meta. {download}
       </span>
     );
   const fail = () => setBroken(true);
+  // Browsers do not play these: the file goes as a download (the API serves it so).
+  if (UNPLAYABLE.has(message.media?.mimeType?.split(';')[0]?.trim() ?? '')) return download;
   if (message.kind === 'image' || message.kind === 'sticker')
     return (
       <a className="crm-wa-shot" href={url} target="_blank" rel="noreferrer">

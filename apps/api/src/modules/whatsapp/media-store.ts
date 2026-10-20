@@ -8,20 +8,21 @@ import { downloadWhatsAppMedia, type WhatsAppConfig } from './graph.js';
  * The received files' queue (docs/whatsapp/cloud-api.md, "Arquivos recebidos"):
  * each message's file goes from Meta to our storage once, soon after it
  * arrives, and is deleted when its message is. Reading a file from Meta sends
- * nothing and costs nothing, so a failure is tried again later, a few times,
- * before the row is left `failed` (the screen still asks Meta then). Nothing
- * about the person is logged: ids and counts only.
+ * nothing and costs nothing, so a failure is tried again later, then once a
+ * day, for as long as Meta keeps the file (a revoked token or a storage outage
+ * fixed in a week loses nothing); only then is the row left `failed` (the
+ * screen still asks Meta). Nothing about the person is logged: ids and counts.
  */
 
 export const WHATSAPP_MEDIA_JOB = 'whatsapp_media';
-/** Meta keeps a received file for 30 days: an older message is not queued. */
+/** Meta keeps a received file for 30 days: an older message is not queued nor tried again. */
 const QUEUE_DAYS = 30;
-/** Minutes before each new try (about two days in all); after the last, `failed`. */
+/** Minutes before each new try; the last one repeats until the 30 days end. */
 const RETRY_MINUTES = [1, 5, 30, 120, 360, 720, 1440];
 /** A copy that stopped half-way (a restart) is tried again after this. */
 const LEASE_MINUTES = 10;
 /** Answers that will not change on a new try. */
-const FINAL = new Set(['too_large', 'bad_media_url']);
+const FINAL = new Set(['too_large', 'no_media_id']);
 
 export interface MediaStoreDeps {
   db: Database;
@@ -89,6 +90,7 @@ export async function storeWhatsAppMedia(
       storage_key: string;
       attempts: number;
       media_id: string | null;
+      message_at: string;
     }>(sql`
       with claimed as (
         update wa_message_files
@@ -102,7 +104,8 @@ export async function storeWhatsAppMedia(
         )
         returning id, message_id, storage_key, attempts
       )
-      select c.id, c.storage_key, c.attempts, m.content -> 'media' ->> 'id' as media_id
+      select c.id, c.storage_key, c.attempts, m.content -> 'media' ->> 'id' as media_id,
+             m.created_at as message_at
       from claimed c join wa_messages m on m.id = c.message_id`);
     const file = claimed.rows[0];
     if (!file) break;
@@ -122,13 +125,16 @@ export async function storeWhatsAppMedia(
       result.stored++;
       continue;
     }
-    const giveUp = FINAL.has(outcome.reason) || file.attempts > RETRY_MINUTES.length;
+    const metaForgot =
+      doneAt.getTime() - new Date(file.message_at).getTime() >= QUEUE_DAYS * 86_400_000;
+    const giveUp = FINAL.has(outcome.reason) || metaForgot;
+    const wait = RETRY_MINUTES[Math.min(file.attempts, RETRY_MINUTES.length) - 1]!;
     await db
       .update(waMessageFiles)
       .set({
         status: giveUp ? 'failed' : 'pending',
         lastError: outcome.reason,
-        nextAttemptAt: minutesAfter(doneAt, RETRY_MINUTES[file.attempts - 1] ?? 0),
+        nextAttemptAt: minutesAfter(doneAt, wait),
       })
       .where(eq(waMessageFiles.id, file.id));
     if (giveUp) result.failed++;
@@ -145,7 +151,7 @@ async function copyOne(
   storageKey: string,
   mediaId: string | null,
 ): Promise<CopyOutcome> {
-  if (!mediaId) return { ok: false, reason: 'bad_media_url' };
+  if (!mediaId) return { ok: false, reason: 'no_media_id' };
   const file = await downloadWhatsAppMedia(deps.fetchImpl, deps.config, mediaId);
   if (!file.ok) {
     // Meta's code, or our own word for what went wrong: never Meta's free text.

@@ -408,6 +408,7 @@ describe('the WhatsApp conversation screen', () => {
         file('s1', 'sticker', 'image/webp'),
         file('a1', 'audio', 'audio/ogg'),
         file('v1', 'video', 'video/mp4'),
+        file('a2', 'audio', 'audio/amr'),
       ],
     });
     const { container } = show();
@@ -418,6 +419,11 @@ describe('the WhatsApp conversation screen', () => {
     expect(chat.getByRole('img', { name: 'Figurinha recebida pelo WhatsApp' }).className).toBe(
       'is-sticker',
     );
+    // A browser cannot play AMR: a download, never a player that fails.
+    expect(container.querySelectorAll('audio')).toHaveLength(1);
+    expect(
+      chat.getAllByRole('link', { name: 'Baixar áudio' }).map((link) => link.getAttribute('href')),
+    ).toContain('/api/whatsapp/messages/a2/media');
     const audio = container.querySelector('audio')!;
     expect(audio.getAttribute('src')).toBe('/api/whatsapp/messages/a1/media');
     expect(audio.getAttribute('preload')).toBe('none');
@@ -427,8 +433,12 @@ describe('the WhatsApp conversation screen', () => {
 
     fireEvent.error(photo);
     fireEvent.error(audio);
-    expect(chat.getByText(/— Imagem: não abriu\. Arquivos com mais de 30 dias/)).toBeTruthy();
-    expect(chat.getByText(/— Áudio: não abriu\./)).toBeTruthy();
+    expect(
+      chat.getByText(
+        /— Imagem: não abriu aqui\. Tente pelo link; se a mensagem tem mais de 30 dias/,
+      ),
+    ).toBeTruthy();
+    expect(chat.getByText(/— Áudio: não abriu aqui\./)).toBeTruthy();
     expect(chat.getByRole('link', { name: 'Abrir imagem' }).getAttribute('href')).toBe(
       '/api/whatsapp/messages/p1/media',
     );

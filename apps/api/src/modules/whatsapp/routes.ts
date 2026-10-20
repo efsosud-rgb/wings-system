@@ -857,7 +857,10 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
 
   // --- received files -------------------------------------------------------------------
 
-  /** Types a browser may show in place; anything else is a download, never run on our origin. */
+  /**
+   * Types a browser may show in place; anything else is a download, never run on our origin.
+   * AMR audio and 3GPP video are downloads too: browsers do not play them.
+   */
   const INLINE = new Set([
     'image/jpeg',
     'image/png',
@@ -866,9 +869,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     'audio/mpeg',
     'audio/aac',
     'audio/mp4',
-    'audio/amr',
     'video/mp4',
-    'video/3gpp',
     'application/pdf',
   ]);
 

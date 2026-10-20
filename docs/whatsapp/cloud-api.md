@@ -36,15 +36,25 @@ permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em `/
   modelos para aquele telefone até a pessoa escrever outra coisa.
 - **Arquivos recebidos:** copiados da Meta para o nosso armazenamento (R2) logo depois de chegar
   (`modules/whatsapp/media-store.ts`, a cada minuto, na API; liga sozinho quando o WhatsApp e o armazenamento
-  estão configurados). Cada arquivo vai uma vez; uma falha é tentada de novo depois de 1, 5 e 30 minutos, 2, 6,
-  12 e 24 horas, e então fica `failed`; arquivo grande demais (mais de 100 MB) ou endereço fora da Meta fica
-  `failed` na hora. Só entra na fila mensagem dos últimos 30 dias (a Meta não guarda mais que isso).
+  estão configurados). Cada arquivo vai uma vez; uma falha é tentada de novo depois de 1, 5 e 30 minutos, 2, 6
+  e 12 horas e depois uma vez por dia, enquanto a Meta ainda guarda o arquivo (30 dias desde a mensagem): um
+  token vencido ou o armazenamento fora do ar, consertados dentro desse prazo, não perdem nada. Só arquivo
+  grande demais (mais de 100 MB) fica `failed` na hora. Só entra na fila mensagem dos últimos 30 dias.
   `GET /whatsapp/messages/:id/media`, com a mesma regra de acesso, responde com um endereço assinado de 5
   minutos para o arquivo guardado; antes da cópia (ou se ela falhou), busca na Meta na hora, como antes.
-  Imagem, áudio, vídeo e PDF abrem no navegador; qualquer outro tipo só baixa (`application/octet-stream`, e
-  com `Content-Security-Policy: sandbox` quando vem da Meta), para nada rodar na origem do sistema. O token só
-  vai para os servidores da Meta. Na tela, a foto e a figurinha aparecem no balão, áudio e vídeo têm o player
-  do navegador (só baixam no play) e o documento é um link; o que não abre mostra "—" e o motivo.
+  Imagem, áudio (menos AMR), vídeo MP4 e PDF abrem no navegador; qualquer outro tipo só baixa
+  (`application/octet-stream`, e com `Content-Security-Policy: sandbox` quando vem da Meta), para nada rodar
+  na origem do sistema. O token só vai para os servidores da Meta. Na tela, a foto e a figurinha aparecem no
+  balão, áudio e vídeo têm o player do navegador (só baixam no play), AMR, 3GPP e documento são um link; o
+  que não abre mostra "—" e o motivo. Trocar o armazenamento (do volume local para o R2, ou de bucket) deixa
+  os arquivos já guardados no lugar antigo: copiar antes, como no `drive:migrate-media`.
+- **Ordem de entrada da migração 0096:** depois da 0094 (pacote de 20/10) e da 0095 (PR #8, `wa_numbers`),
+  nesta ordem. O drizzle aplica pela data: a 0096 aplicada antes da 0095 faz a 0095 ser pulada para sempre, e
+  a fila do webhook passa a falhar na tabela `wa_numbers` que não existe. O snapshot da 0096 já contém
+  `wa_numbers`.
+- **Números dos vendedores (próximo bloco):** a fila e a rota usam o token do número oficial. Antes de guardar
+  mensagens dos números dos vendedores, a mensagem precisa dizer de qual número veio, e a cópia usar o token
+  desse número (`wa_numbers`); senão a Meta recusa e o arquivo se perde nos 30 dias.
 - **Quanto tempo o arquivo fica:** o mesmo que a mensagem, e a mensagem o mesmo que a negociação (o banco não
   apaga uma negociação com conversa). Quem apagar mensagens deixa o arquivo sem mensagem, e a fila apaga o
   objeto e depois a linha (`wa_message_files.message_id` fica nulo com `ON DELETE SET NULL`).

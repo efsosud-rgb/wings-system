@@ -18,7 +18,7 @@ import { loadEnv } from '../../env.js';
 import { storageOf, type ObjectStorage } from '../../lib/storage/index.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
-import { storeWhatsAppMedia } from './media-store.js';
+import { storeWhatsAppMedia, type MediaStoreResult } from './media-store.js';
 
 /**
  * Received files copied to our storage, against a simulated Meta and the local
@@ -236,9 +236,9 @@ describe('received files go to our storage', () => {
     const big = await file(media('media-big'), now, 'video');
     const evil = await file(media('media-evil'), now);
 
-    expect(await store(now)).toMatchObject({ queued: 3, stored: 0, retried: 1, failed: 2 });
+    expect(await store(now)).toMatchObject({ queued: 3, stored: 0, retried: 2, failed: 1 });
     expect(await fileOf(big)).toMatchObject({ status: 'failed', lastError: 'too_large' });
-    expect(await fileOf(evil)).toMatchObject({ status: 'failed', lastError: 'bad_media_url' });
+    expect(await fileOf(evil)).toMatchObject({ status: 'pending', lastError: 'bad_media_url' });
     expect(calls.some((url) => url.includes('evil.example'))).toBe(false);
     const retried = await fileOf(down);
     expect(retried).toMatchObject({ status: 'pending', attempts: 1, lastError: 'meta_131052' });
@@ -247,18 +247,32 @@ describe('received files go to our storage', () => {
 
     // Not again before its time; then once more, with a longer wait.
     expect(await store(minutes(now, 0.5))).toMatchObject({ retried: 0 });
-    expect(await store(minutes(now, 1))).toMatchObject({ retried: 1 });
+    expect(await store(minutes(now, 1))).toMatchObject({ retried: 2 });
     expect(await fileOf(down)).toMatchObject({ attempts: 2 });
     expect((await fileOf(down))!.nextAttemptAt).toEqual(minutes(now, 6));
 
-    // The last try leaves it failed; the screen still asks Meta for it.
+    // After the scheduled tries, once a day: a token fixed in a week loses nothing.
     await db
       .update(waMessageFiles)
-      .set({ attempts: 7, nextAttemptAt: now })
+      .set({ attempts: 9, nextAttemptAt: now })
       .where(eq(waMessageFiles.messageId, down));
-    expect(await store(minutes(now, 7))).toMatchObject({ failed: 1 });
-    expect(await fileOf(down)).toMatchObject({ status: 'failed', attempts: 8 });
-    expect(await store(minutes(now, 60 * 48))).toMatchObject({ retried: 0, failed: 0 });
+    await store(minutes(now, 7));
+    expect(await fileOf(down)).toMatchObject({ status: 'pending', attempts: 10 });
+    expect((await fileOf(down))!.nextAttemptAt).toEqual(minutes(now, 7 + 1440));
+
+    // Once Meta's 30 days are over it is left failed, and the screen still asks Meta for it.
+    await db
+      .update(waMessages)
+      .set({ createdAt: minutes(now, -30 * 24 * 60) })
+      .where(eq(waMessages.id, down));
+    await db
+      .update(waMessageFiles)
+      .set({ nextAttemptAt: now })
+      .where(eq(waMessageFiles.messageId, down));
+    await store(minutes(now, 8));
+    expect(await fileOf(down)).toMatchObject({ status: 'failed', attempts: 11 });
+    await store(minutes(now, 60 * 48));
+    expect(await fileOf(down)).toMatchObject({ status: 'failed', attempts: 11 });
     const asked = await app.inject({
       method: 'GET',
       url: `/whatsapp/messages/${down}/media`,
@@ -267,7 +281,7 @@ describe('received files go to our storage', () => {
     expect(asked.statusCode).toBe(502);
   });
 
-  it('a copy that storage refused, or that stopped half-way, is taken again later', async () => {
+  it('a copy that storage refused is taken again later, and one under way is not taken twice', async () => {
     const now = new Date();
     const { file } = await conversation();
     const messageId = await file(media('media-ok'), now);
@@ -277,14 +291,23 @@ describe('received files go to our storage', () => {
     expect(refused).toMatchObject({ retried: 1 });
     expect(await fileOf(messageId)).toMatchObject({ status: 'pending', lastError: 'storage_put' });
 
-    // A restart between the claim and the answer: the claim holds for ten minutes.
-    await db
-      .update(waMessageFiles)
-      .set({ nextAttemptAt: minutes(now, 11) })
-      .where(eq(waMessageFiles.messageId, messageId));
-    expect(await store(minutes(now, 10))).toMatchObject({ stored: 0 });
-    expect(await store(minutes(now, 11))).toMatchObject({ stored: 1 });
-    expect(await fileOf(messageId)).toMatchObject({ status: 'stored', lastError: null });
+    // Another round while this copy is under way (the next tick, a second API during a deploy):
+    // the claim holds the file for ten minutes, so nobody fetches it again meanwhile.
+    let during: MediaStoreResult | null = null;
+    const copied = await store(minutes(now, 1), {
+      put: async (key, bytes, contentType) => {
+        during = await store(minutes(now, 5));
+        return storage.put(key, bytes, contentType);
+      },
+    });
+    expect(during).toMatchObject({ stored: 0, retried: 0, failed: 0 });
+    expect(copied).toMatchObject({ stored: 1 });
+    expect(calls.filter((url) => url.endsWith('/media-ok'))).toHaveLength(2);
+    expect(await fileOf(messageId)).toMatchObject({
+      status: 'stored',
+      attempts: 2,
+      lastError: null,
+    });
   });
 
   it('queues only recent messages that have a file of Meta', async () => {
