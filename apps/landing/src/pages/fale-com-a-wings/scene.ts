@@ -17,6 +17,7 @@ import {
 } from 'three';
 import { WING_POINTS_B64 } from '../../generated/wing-points.js';
 import { decodeWingPoints } from '../../lib/wing-points.js';
+import { frameBrake } from './brake.js';
 
 /**
  * The 3D scene, one choreography: the logo's wing in particles that come apart
@@ -51,6 +52,8 @@ export interface SceneInput {
   sections: HTMLElement[];
   /** Overrides the particle count (the OG image renders the full set without motion). */
   particles?: number;
+  /** The frame-time brake; false only to measure the scene as it is (`?freio=0`, tests). */
+  brake?: boolean;
 }
 
 export interface Scene3d {
@@ -95,6 +98,12 @@ export function createScene(input: SceneInput): Scene3d | null {
   const N = input.particles ?? (reduce ? 3200 : weak ? 2800 : coarse ? 5200 : 8400);
   const PR = Math.min(devicePixelRatio || 1, weak ? 1 : coarse ? (reduce ? 1.5 : PHONE_MAX_PR) : 2);
   renderer.setPixelRatio(PR);
+  // the brake: on a touch phone with motion, a slow scene steps down this ladder (never back up)
+  const ladder = [PR, 2, 1.5, 1.25, 1].filter((s, i) => !i || s < PR);
+  const brake =
+    (input.brake ?? true) && coarse && !reduce && ladder.length > 1 ? frameBrake() : null;
+  let rung = 0,
+    curPR = PR;
   renderer.setClearColor(0x000000, 0);
 
   const scene = new Scene();
@@ -473,6 +482,11 @@ export function createScene(input: SceneInput): Scene3d | null {
   }
   function frame(now: number) {
     raf = 0;
+    if (brake && rung < ladder.length - 1 && brake(now)) {
+      curPR = ladder[++rung]!;
+      renderer.setPixelRatio(curPR); // also resizes the canvas, and resize() keeps this ratio
+      uni.uPR.value = curPR;
+    }
     update(now);
     renderer.render(scene, camera);
     if (!reduce && !document.hidden) raf = requestAnimationFrame(frame);
@@ -496,7 +510,10 @@ export function createScene(input: SceneInput): Scene3d | null {
   kick();
   window.__wings3d = () => ({
     particulas: N,
-    pixelRatio: PR,
+    pixelRatio: curPR,
+    degrau: rung,
+    degraus: ladder,
+    freio: brake !== null,
     drawCalls: renderer.info.render.calls,
     pontos: renderer.info.render.points,
     memoria: renderer.info.memory,

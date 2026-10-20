@@ -192,6 +192,10 @@ negados. Arquivos de `/assets/` (nome com hash) ficam em cache por um ano (`immu
   tela, y em unidades do mundo), longe de títulos e rótulos; onde ainda cruza texto a opacidade cai para ~35%. Acima de
   640 px valem `data-l` e `data-p`, como antes.
 - O espaço do Turnstile já tem a altura do widget desde o primeiro quadro (sem pulo de layout).
+- Freio automático (`brake.ts`), só em celular com toque e com movimento: se a mediana de 60 quadros passar de 24 ms
+  (menos de uns 40 quadros por segundo), a cena desce um degrau de resolução (2, 1,5, 1,25, 1) e nunca sobe sozinha.
+  Ignora os 20 primeiros quadros e intervalos de mais de 250 ms (aba em segundo plano). `window.__wings3d()` mostra
+  `degrau` (0 é o primeiro), `degraus` e `freio`. Para medir a cena sem o freio: `?freio=0` na URL.
 
 ## Regerar os pontos da asa e a imagem OG
 

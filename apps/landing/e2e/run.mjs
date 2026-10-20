@@ -644,6 +644,13 @@ async function runViewport(
     ),
   );
   check(
+    `${label}: resolution brake only on a phone, ladder from at most 2x`,
+    layout.scene &&
+      layout.scene.freio === (mobile && layout.scene.degraus.length > 1) &&
+      layout.scene.degraus[0] <= 2,
+    JSON.stringify(layout.scene && { degraus: layout.scene.degraus, freio: layout.scene.freio }),
+  );
+  check(
     `${label}: every scene section has a phone placement (x, y, scale, alpha)`,
     layout.phonePoses.length === 6 &&
       layout.phonePoses.every((n) => /^(-?\d+(\.\d+)?,){3}-?\d+(\.\d+)?$/.test(n)),
