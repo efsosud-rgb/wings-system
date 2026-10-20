@@ -332,6 +332,35 @@ function ContactCards({ message }: { message: WaMessage }) {
   );
 }
 
+/** A location: the place's name and address, and the point opened in Google Maps. */
+function Place({ message }: { message: WaMessage }) {
+  const place = message.location;
+  const point =
+    place && place.latitude !== null && place.longitude !== null
+      ? `${place.latitude},${place.longitude}`
+      : null;
+  return (
+    <span className="crm-wa-place">
+      <strong>{place?.name ?? WA_KIND_LABELS.location}</strong>
+      {place?.address && <span>{place.address}</span>}
+      {point ? (
+        <a
+          className="crm-wa-media"
+          href={`https://www.google.com/maps/search/?api=1&query=${point}`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Abrir no mapa
+        </a>
+      ) : (
+        <span className="crm-wa-media-failed">
+          — Sem o ponto no mapa: o WhatsApp não mandou as coordenadas.
+        </span>
+      )}
+    </span>
+  );
+}
+
 function Bubble({ message }: { message: WaMessage }) {
   const out = message.direction === 'out';
   const failed = message.status === 'failed' || (message.status === 'pending' && message.error);
@@ -366,6 +395,8 @@ function Bubble({ message }: { message: WaMessage }) {
       )}
       {message.kind === 'contacts' && !message.imported ? (
         <ContactCards message={message} />
+      ) : message.kind === 'location' ? (
+        <Place message={message} />
       ) : message.text ? (
         <span className="crm-wa-text">{message.text}</span>
       ) : (

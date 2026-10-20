@@ -169,6 +169,10 @@ export function toMessage(
       row.kind === 'contacts' && Array.isArray(content.contacts)
         ? (content.contacts as { name: string | null; phones: string[] }[])
         : null,
+    location:
+      row.kind === 'location' && content.location
+        ? (content.location as NonNullable<WaMessage['location']>)
+        : null,
     media:
       media && WA_MEDIA_KINDS.includes(row.kind as WaMessageKind)
         ? { mimeType: media.mimeType ?? null, filename: media.filename ?? null }

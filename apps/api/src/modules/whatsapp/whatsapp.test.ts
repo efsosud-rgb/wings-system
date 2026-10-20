@@ -816,6 +816,37 @@ describe('what the balloon shows: the reply, the reaction, the contact card, the
       ['contacts', 'Cartão antigo', null],
     ]);
   });
+
+  it('a location keeps its point, name and address; one with no point says so', async () => {
+    const owner = await sessionFor('vendedor_formatacao');
+    const leadId = await deal('5521977770006', owner.id);
+    const place = (location: Record<string, unknown>) =>
+      inbound('5521977770006', '', { fields: { type: 'location', location } }).body;
+    await deliver(
+      place({
+        latitude: -22.9068,
+        longitude: -43.1729,
+        name: 'Loja Fictícia',
+        address: 'Rua Exemplo, 100',
+      }),
+    );
+    await deliver(place({ address: 'Sem ponto' }));
+    await run();
+
+    const data = await threadOf(leadId, owner.cookies);
+    expect(data.messages.map((m) => [m.text, m.location])).toEqual([
+      [
+        'Loja Fictícia',
+        {
+          latitude: -22.9068,
+          longitude: -43.1729,
+          name: 'Loja Fictícia',
+          address: 'Rua Exemplo, 100',
+        },
+      ],
+      ['Sem ponto', { latitude: null, longitude: null, name: null, address: 'Sem ponto' }],
+    ]);
+  });
 });
 
 describe('who may see, send and open files', () => {

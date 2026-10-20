@@ -115,6 +115,13 @@ export interface WaMessage {
    * before the numbers were kept (its first name is the `text`).
    */
   contacts?: { name: string | null; phones: string[] }[] | null;
+  /** A location: its point (null when WhatsApp sent none), the place's name and address. */
+  location?: {
+    latitude: number | null;
+    longitude: number | null;
+    name: string | null;
+    address: string | null;
+  } | null;
   /** Present when the message has a file, opened at `/whatsapp/messages/:id/media`. */
   media: { mimeType: string | null; filename: string | null } | null;
   template: { name: string; language: string } | null;

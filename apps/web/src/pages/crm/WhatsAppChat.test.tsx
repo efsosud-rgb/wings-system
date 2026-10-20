@@ -335,3 +335,42 @@ describe('contact cards', () => {
     expect(screen.queryByText(/Cartão de contato/)).toBeNull();
   });
 });
+
+describe('locations', () => {
+  it('shows the place with a map link, and "—" with the reason when there is no point', () => {
+    show([
+      message({
+        id: 'p1',
+        kind: 'location',
+        text: 'Loja Fictícia',
+        location: {
+          latitude: -22.9068,
+          longitude: -43.1729,
+          name: 'Loja Fictícia',
+          address: 'Rua Exemplo, 100',
+        },
+      }),
+      message({
+        id: 'p2',
+        kind: 'location',
+        text: 'Sem ponto',
+        location: { latitude: null, longitude: null, name: null, address: 'Sem ponto' },
+      }),
+    ]);
+
+    const [shop, nowhere] = screen.getAllByRole('listitem');
+    expect(within(shop!).getAllByText('Loja Fictícia')).toHaveLength(1);
+    expect(within(shop!).getByText('Rua Exemplo, 100')).toBeTruthy();
+    const link = within(shop!).getByRole('link', { name: 'Abrir no mapa' });
+    expect(link.getAttribute('href')).toBe(
+      'https://www.google.com/maps/search/?api=1&query=-22.9068,-43.1729',
+    );
+    expect(link.getAttribute('rel')).toBe('noreferrer');
+    expect(within(nowhere!).getByText('Localização')).toBeTruthy();
+    expect(within(nowhere!).getByText('Sem ponto')).toBeTruthy();
+    expect(within(nowhere!).queryByRole('link')).toBeNull();
+    expect(
+      within(nowhere!).getByText('— Sem o ponto no mapa: o WhatsApp não mandou as coordenadas.'),
+    ).toBeTruthy();
+  });
+});

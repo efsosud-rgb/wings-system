@@ -48,6 +48,13 @@ permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em `/
   balão, áudio e vídeo têm o player do navegador (só baixam no play), AMR, 3GPP e documento são um link; o
   que não abre mostra "—" e o motivo. Trocar o armazenamento (do volume local para o R2, ou de bucket) deixa
   os arquivos já guardados no lugar antigo: copiar antes, como no `drive:migrate-media`.
+- **O que mais o balão mostra (b1, mesmo PR):** a resposta citada traz no topo a mensagem respondida
+  (`context.id`); a reação aparece no balão da mensagem a que é (a última de cada lado; a reação sem emoji
+  tira a anterior), e vira uma linha quando essa mensagem não está na lista da tela; o cartão de contato
+  mostra o nome e os números de cada contato (guardados em `content.contacts` desde esta versão; um cartão de
+  antes só tem a quantidade); a localização mostra nome, endereço e um link para o Google Maps. A API acha a
+  mensagem citada ou reagida **só na mesma negociação** (ou na mesma conversa sem negociação), nunca em
+  outra. O que não dá para mostrar aparece com "—" e o motivo, nunca some.
 - **Ordem de entrada da migração 0096:** depois da 0094 (pacote de 20/10) e da 0095 (PR #8, `wa_numbers`),
   nesta ordem. O drizzle aplica pela data: a 0096 aplicada antes da 0095 faz a 0095 ser pulada para sempre, e
   a fila do webhook passa a falhar na tabela `wa_numbers` que não existe. O snapshot da 0096 já contém
@@ -168,6 +175,8 @@ Versão da Graph API: `v23.0`, num só lugar (`modules/whatsapp/graph.ts`).
 A cópia dos arquivos para o R2 só rodou contra a Meta simulada e o armazenamento local: o primeiro arquivo real
 (foto ou áudio mandado ao número de teste) confere o tipo, o tamanho e o player do navegador no endereço do R2;
 a fila aparece no log como `whatsapp_media` (só contagens) e na visão `wa_message_files_analysis`.
+Resposta citada, reação (em especial a tirada, que a Meta manda sem emoji), cartão de contato e localização
+seguem só o formato publicado.
 
 ## Custos (página de preços da Meta, 30/09/2026)
 

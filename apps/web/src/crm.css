@@ -2227,6 +2227,13 @@
   padding-left: var(--space-2);
   border-left: 3px solid var(--line);
 }
+.crm-wa-place {
+  display: grid;
+  gap: 1px;
+}
+.crm-wa-place a {
+  justify-self: start;
+}
 .crm-wa-error {
   font-size: var(--text-xs, 12px);
   color: var(--danger);
