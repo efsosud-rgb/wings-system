@@ -127,6 +127,13 @@ export const INSIGHTS_TIMEOUT_MS = 45_000;
  */
 export const ADS_LIST_TIMEOUT_MS = 45_000;
 export const ADS_PAGE_SIZE = '50';
+/**
+ * The reads reconciliation lives on: campaigns, ad sets and the account. At the
+ * default 15 s a single slow answer from Meta (the same read from the parallel
+ * run answering in seconds) failed the reconcile step on 05/10, 08/10, 16/10 and
+ * 20/10, and a failed reconcile costs the full cycle its whole hour.
+ */
+export const RECONCILE_READ_TIMEOUT_MS = 45_000;
 
 /**
  * ThruPlays, the watched quartiles, every start of the video and the average
@@ -377,13 +384,23 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
     // The token travels in a header, never in the query string, so it cannot
     // end up in a proxy log or an error message containing the URL.
-    const response = await this.fetchImpl(url.toString(), {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-
-    const body: unknown = await response.json();
+    let response: Response;
+    let body: unknown;
+    try {
+      response = await this.fetchImpl(url.toString(), {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      body = await response.json();
+    } catch (error) {
+      if (!(error instanceof Error) || error.name !== 'TimeoutError') throw error;
+      // Which read ran out of time, by its edge (ids only), so a failed run says it.
+      throw Object.assign(
+        new Error(`Meta GET ${path} sem resposta em ${timeoutMs / 1000} s`, { cause: error }),
+        { name: 'TimeoutError' },
+      );
+    }
     if (!response.ok) {
       const error = (body as MetaErrorBody).error ?? {};
       throw new MetaApiError(
@@ -600,9 +617,11 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       amount_spent?: string;
       balance?: string;
       account_status?: number;
-    }>(this.accountId, {
-      fields: 'id,currency,spend_cap,amount_spent,balance,account_status',
-    });
+    }>(
+      this.accountId,
+      { fields: 'id,currency,spend_cap,amount_spent,balance,account_status' },
+      RECONCILE_READ_TIMEOUT_MS,
+    );
 
     const spendCapCents = body.spend_cap === undefined ? null : spendCapFromString(body.spend_cap);
     const amountSpentCents =
@@ -628,10 +647,12 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
     try {
       const funding = await this.get<{
         funding_source_details?: { type?: number; display_string?: string };
-      }>(this.accountId, {
+      }>(
+        this.accountId,
         // The prepaid balance inside it is text, parsed as such. NOT verified live.
-        fields: 'funding_source_details',
-      });
+        { fields: 'funding_source_details' },
+        RECONCILE_READ_TIMEOUT_MS,
+      );
       const details = funding.funding_source_details;
       account.prepaidBalanceCents = prepaidBalanceFromDisplay(details?.display_string);
       account.fundingKind = details ? fundingKindOf(details.type) : null;
@@ -692,11 +713,16 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
       start_time?: string;
       stop_time?: string;
       created_time?: string;
-    }>(`${this.accountId}/campaigns`, {
-      fields:
-        'id,name,status,effective_status,daily_budget,lifetime_budget,objective,start_time,stop_time,created_time',
-      limit: '50',
-    });
+    }>(
+      `${this.accountId}/campaigns`,
+      {
+        fields:
+          'id,name,status,effective_status,daily_budget,lifetime_budget,objective,start_time,stop_time,created_time',
+        limit: '50',
+      },
+      50,
+      RECONCILE_READ_TIMEOUT_MS,
+    );
 
     return data.map((campaign) => {
       const daily =
@@ -736,19 +762,23 @@ export class MetaReadOnlyClient implements AdsPlatformClient {
     const base = 'id,name,status,campaign_id,daily_budget,lifetime_budget,end_time';
     let data: AdSetRow[];
     try {
-      data = await this.getAllPages<AdSetRow>(`${this.accountId}/adsets`, {
-        fields: `${base},targeting`,
-        limit: '25',
-      });
+      data = await this.getAllPages<AdSetRow>(
+        `${this.accountId}/adsets`,
+        { fields: `${base},targeting`, limit: '25' },
+        50,
+        RECONCILE_READ_TIMEOUT_MS,
+      );
     } catch (error) {
       // `targeting` is heavy on an account with many audiences, and Meta may refuse the page ("reduce
       // the amount of data"). The budgets and the ends matter more than the placements: read
       // without them, and the placements stay as they were (undefined = not read).
       if (!(error instanceof MetaApiError) || !isTooMuchData(error)) throw error;
-      data = await this.getAllPages<AdSetRow>(`${this.accountId}/adsets`, {
-        fields: base,
-        limit: '50',
-      });
+      data = await this.getAllPages<AdSetRow>(
+        `${this.accountId}/adsets`,
+        { fields: base, limit: '50' },
+        50,
+        RECONCILE_READ_TIMEOUT_MS,
+      );
     }
 
     return data.map((adSet) => {
