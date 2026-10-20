@@ -41,10 +41,22 @@ describe('the account as a prepaid balance', () => {
 });
 
 describe('video on the daily rows', () => {
-  it('turns quartile rates into counts of views', async () => {
-    const { google } = reader([day({ videoViews: 200, quartiles: [0.5, 0.3, 0.2, 0.1] })]);
+  it('reads TrueView views, and turns quartile rates of impressions into counts', async () => {
+    const { google, api } = reader([day({ videoViews: 200, quartiles: [0.5, 0.3, 0.2, 0.1] })]);
     const [row] = await google.getInsights('campaign', '2026-09-15', '2026-09-15');
-    expect(row?.video).toEqual({ plays: 200, thruplays: 20, p25: 100, p50: 60, p75: 40, p100: 20 });
+    // 500 impressions: Google's quartile rate is a share of impressions (v26 reference).
+    expect(row?.video).toEqual({
+      plays: 200,
+      thruplays: 50,
+      p25: 250,
+      p50: 150,
+      p75: 100,
+      p100: 50,
+    });
+    expect(google.drainWarnings()).toEqual([]);
+    const query = String(api.searchCalls('campaign').at(-1)?.body.query);
+    expect(query).toContain('metrics.video_trueview_views');
+    expect(query).not.toMatch(/metrics\.video_views/);
   });
 
   it('makes video unavailable, with a warning, when the API does not know a field', async () => {
@@ -53,7 +65,7 @@ describe('video on the daily rows', () => {
     const api = fakeGoogleApi({
       campaigns: [{ id: '100', name: 'Pesquisa', status: 'ENABLED', amountMicros: '5000000' }],
       metrics: [day({ videoViews: 200, quartiles: [0.5, 0.3, 0.2, 0.1] })],
-      unrecognizedFields: ['metrics.video_views'],
+      unrecognizedFields: ['metrics.video_trueview_views'],
     });
     const google = new GoogleAdsPlatformClient(api.reader, NOW);
     const rows = await google.getInsights('campaign', '2026-09-15', '2026-09-15');
@@ -62,7 +74,7 @@ describe('video on the daily rows', () => {
     expect(rows[0]?.video).toEqual({ plays: 0, thruplays: 0, p25: 0, p50: 0, p75: 0, p100: 0 });
     const warnings = google.drainWarnings();
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain('metrics.video_views');
+    expect(warnings[0]).toContain('metrics.video_trueview_views');
     expect(google.drainWarnings()).toEqual([]);
 
     // Learned once: the next read does not ask for video again.
