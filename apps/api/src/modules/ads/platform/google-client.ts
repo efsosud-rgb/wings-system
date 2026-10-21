@@ -27,7 +27,11 @@ import type { Cents } from './money.js';
  * mistake.
  */
 
-export const GOOGLE_ADS_API_VERSION = 'v22';
+/**
+ * v26 (released 2026-10-14, sunset November 2027 per Google's table). v22 was
+ * being refused ("Version v22 is deprecated") from October 2026.
+ */
+export const GOOGLE_ADS_API_VERSION = 'v26';
 
 export interface GoogleAdsCredentials {
   clientId: string;
@@ -129,7 +133,7 @@ export class GoogleAdsReadClient {
       {
         method: 'POST',
         headers: await this.requestHeaders(),
-        // No pageSize: v22 rejects it outright ("PAGE_SIZE_NOT_SUPPORTED").
+        // No pageSize: the API rejects it outright ("PAGE_SIZE_NOT_SUPPORTED", still on v26).
         body: JSON.stringify({ query }),
       },
     );
