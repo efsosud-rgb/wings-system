@@ -2268,6 +2268,8 @@
 .crm-wa-compose textarea.crm-input {
   resize: vertical;
   min-height: 44px;
+  /* On a phone the buttons go to the next line instead of squeezing the field. */
+  min-width: min(100%, 200px);
 }
 .crm-wa-compose.is-template {
   flex-direction: column;
@@ -2276,6 +2278,10 @@
   display: flex;
   gap: var(--space-2);
   align-items: center;
+}
+/* Wrapped under the field on a phone, Enviar stays on the right. */
+.crm-wa-compose:not(.is-template) > .crm-wa-compose-actions {
+  margin-left: auto;
 }
 .crm-wa-compose .crm-error {
   flex-basis: 100%;
@@ -2356,7 +2362,8 @@
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   border-left: 3px solid var(--accent);
-  background: var(--surface-2);
+  /* surface-2 is white in the light theme, the same as the composer around it. */
+  background: var(--surface-3);
 }
 .crm-wa-attach-icon {
   display: grid;
