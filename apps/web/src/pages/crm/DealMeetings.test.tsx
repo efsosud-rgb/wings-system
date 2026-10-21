@@ -168,6 +168,7 @@ const loaded = (pipeline: Lead['pipeline'] = 'expansao'): LoadedLead =>
       pipeline,
       name: 'Candidato Exemplo',
       email: 'candidato@exemplo.com.br',
+      phone: '5521999990001',
       brand: pipeline === 'expansao' ? 'Marca Exemplo' : null,
       fields: { instagram: null, website: null, companyName: 'Padaria Exemplo', cnpj: null },
     } as Lead,
@@ -352,6 +353,24 @@ describe('the Reunião section', () => {
     expect(
       (screen.getByRole('button', { name: 'Marcar reunião' }) as HTMLButtonElement).disabled,
     ).toBe(true);
+  });
+
+  it('does not block "Minha agenda" when only the Wings Company calendar is not shared', () => {
+    state.google = {
+      ...state.google,
+      state: 'connected',
+      calendars: {
+        mine: { id: 'primary', name: 'Vendedor' },
+        wings: { id: 'w@group.calendar.google.com', name: 'Wings Company', access: 'reader' },
+      },
+    };
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Agendar reunião' }));
+    expect((screen.getByLabelText('Agenda') as HTMLSelectElement).value).toBe('vendedor');
+    expect(screen.queryByText(/Você só lê a agenda Wings Company/)).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: 'Marcar reunião' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 
   it('falls back to the pasted link, with the hint, when the API answers 503', async () => {
@@ -574,5 +593,46 @@ describe('Iniciar and Encerrar record on the deal', () => {
     const chips = screen.getAllByText('falta a gravação');
     expect(chips).toHaveLength(1);
     expect(chips[0]!.closest('li')?.textContent).toContain('Sem gravação');
+  });
+});
+
+describe('Enviar link do Meet', () => {
+  it("opens the seller's WhatsApp on the lead's chat with the next meeting's link written", () => {
+    state.meetings = [summary()];
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar link do Meet' }));
+    expect(open).toHaveBeenCalledTimes(1);
+    const [url, target] = open.mock.calls[0]!;
+    expect(target).toBe('_blank');
+    const link = new URL(String(url));
+    expect(`${link.origin}${link.pathname}`).toBe('https://wa.me/5521999990001');
+    const text = link.searchParams.get('text') ?? '';
+    expect(text).toContain('https://meet.google.com/abc-defg-hij');
+    expect(text).toContain('10/01/2099 às 10:00');
+    // An Expansão lead with a brand never sees the Wings.
+    expect(text).not.toMatch(/wings/i);
+    // Nothing is recorded: the seller sends it, or not, in the WhatsApp.
+    expect(calls.step).not.toHaveBeenCalled();
+  });
+
+  it('is off without a meeting with a link, or without a phone, and absent for who cannot write', () => {
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    const send = screen.getByRole('button', { name: 'Enviar link do Meet' }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    expect(send.title).toBe('Nenhuma reunião com link para enviar');
+    cleanup();
+
+    state.meetings = [summary()];
+    const noPhone = loaded();
+    noPhone.lead = { ...noPhone.lead, phone: null };
+    render(<MeetingsTab data={noPhone} canWrite onRegisterHeld={() => {}} />);
+    const off = screen.getByRole('button', { name: 'Enviar link do Meet' }) as HTMLButtonElement;
+    expect(off.disabled).toBe(true);
+    expect(off.title).toBe('A negociação não tem telefone');
+    cleanup();
+
+    render(<MeetingsTab data={loaded()} canWrite={false} onRegisterHeld={() => {}} />);
+    expect(screen.queryByRole('button', { name: 'Enviar link do Meet' })).toBeNull();
   });
 });

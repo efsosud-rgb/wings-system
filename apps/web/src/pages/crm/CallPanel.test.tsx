@@ -108,6 +108,15 @@ describe('the call panel', () => {
     show({ phone: null });
     expect(screen.getByText('Sem telefone')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Copiar número' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Abrir no WhatsApp do vendedor' })).toBeNull();
+  });
+
+  it("opens the lead's chat in the seller's own WhatsApp, where calls are made", () => {
+    show();
+    const link = screen.getByRole('link', { name: 'Abrir no WhatsApp do vendedor' });
+    expect(link.getAttribute('href')).toBe('https://wa.me/5521999990001');
+    expect(link.getAttribute('target')).toBe('_blank');
+    expect(link.getAttribute('rel')).toContain('noopener');
   });
 
   it('copies the number with the country code', async () => {

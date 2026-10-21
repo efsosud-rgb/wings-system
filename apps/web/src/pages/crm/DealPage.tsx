@@ -72,6 +72,7 @@ import {
   parseMoney,
   stageTone,
   toLocalInput,
+  waMeUrl,
 } from './format.js';
 import { EnteredAt } from './EnteredAt.js';
 
@@ -1128,8 +1129,9 @@ function CopyButton({ value, label }: { value: string; label: string }) {
 }
 
 /**
- * A phone and an e-mail with their copy buttons, the call panel and the
- * WhatsApp conversation. The number is text, never a tel: link.
+ * A phone and an e-mail with their copy buttons, the call panel, the
+ * WhatsApp conversation and the seller's own WhatsApp (wa.me). The number is
+ * text, never a tel: link.
  */
 function Reach({
   phone,
@@ -1168,6 +1170,16 @@ function Reach({
           >
             <Icon name="message" size={13} />
           </Link>
+          <a
+            className="crm-btn is-small is-quiet"
+            href={waMeUrl(phone)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Abrir no WhatsApp do vendedor"
+            aria-label="Abrir no WhatsApp do vendedor"
+          >
+            <Icon name="external" size={13} />
+          </a>
         </span>
       )}
       {email && (
