@@ -62,11 +62,16 @@ dono, de funil nem de etapa, e:
   comercial (os mesmos do `lead_unassigned`: o rodízio não é gasto e ninguém vira dono, porque um vendedor só vê os
   leads dele e um aviso de lead alheio não abriria nada). **Só o sino:** sem pop-up (ele é do `new_lead`) e **sem
   e-mail** (`email_state = none`; nenhum envio novo foi criado).
-- **Janela:** um aviso por lead, pessoa e **dia** (São Paulo), pela `dedupe_key`
-  `lead_returned:<lead>:<pessoa>:<AAAA-MM-DD>`. Um clique duplo no "Enviar", ou o **eco do RD** (o webhook do RD
+- **Janela:** o mesmo formulário enviado **duas vezes seguidas** (clique duplo no "Enviar", nova tentativa em rede
+  lenta) não é "voltou": um lead com menos de **10 minutos** de vida (`SITE_FORM_RETURN_MIN_AGE_MS`, `service.ts`,
+  decidido dentro da transação do `upsertLead`) que chega de novo pelo formulário só ganha a linha do tempo, sem
+  tarefa nem aviso. Depois disso, um aviso por lead, pessoa e **dia** (São Paulo), pela `dedupe_key`
+  `lead_returned:<lead>:<pessoa>:<AAAA-MM-DD>`, e uma tarefa aberta por lead. O **eco do RD** (o webhook do RD
   Marketing repete cada envio do formulário de 44 s a alguns minutos depois, como `lead.received.rd_station` no mesmo
-  lead), não gera segundo aviso, segunda tarefa nem e-mail: o aviso e a tarefa valem **só** para a fonte `site_form`,
-  e o eco de um lead já conhecido também **não enfileira a pesquisa paga** (`enrich_lead`), veja
+  lead) não gera aviso, tarefa nem e-mail: os dois valem **só** para a fonte `site_form`. O eco também **não enfileira
+  a pesquisa paga** (`enrich_lead`): uma chegada do RD num lead com chegada `site_form` na última hora
+  (`RD_ECHO_WINDOW_MS`, lido dentro da mesma transação) pula a pesquisa; outra conversão do RD, mais tarde, pesquisa
+  como sempre (lead nunca pesquisado ou com pesquisa falhada), veja
   [../leads/pesquisa-da-empresa.md](../leads/pesquisa-da-empresa.md). No dia seguinte, um envio do mesmo lead avisa de
   novo (a tarefa só volta se a anterior foi concluída).
 - **Lead encerrado (venda ou perda):** hoje o envio cai nele mesmo, com a tarefa e o aviso acima, e a etapa não
@@ -76,8 +81,9 @@ dono, de funil nem de etapa, e:
   de **Formatação** (a regra `fale-com-a-wings` não tem marca e o seed não dá funil próprio a essas opções); e
   `CRM_EMAIL_MODE` continua com o padrão `test` (só registra), sem regra `send_email` cadastrada.
 
-Teste: `apps/api/src/modules/leads/site-form-again.test.ts` (dono, eco do RD, clique duplo, dia seguinte, sem dono);
-linha do tempo em `apps/web/src/pages/crm/DealTabs.test.tsx`.
+Teste: `apps/api/src/modules/leads/site-form-again.test.ts` (clique duplo, dono dez minutos depois, eco do RD, dia
+seguinte, dois envios ao mesmo tempo, sem dono, conversão do RD com pesquisa falhada); linha do tempo em
+`apps/web/src/pages/crm/DealTabs.test.tsx`.
 
 ## Teste de ponta a ponta no staging
 

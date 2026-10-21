@@ -70,12 +70,11 @@ describe('arrival notices', () => {
       where: and(eq(leadTasks.leadId, born.lead.id), eq(leadTasks.kind, 'first_contact')),
     });
     expect(task).toBeTruthy();
-    // The same person arriving again is a merge, not a new lead: no second arrival notice. Through
-    // the site form the owner is told of the return instead (site-form-again.test.ts).
+    // The same person arriving again right away is a merge, not a new lead: no second notice (a
+    // return through the site form is told only after SITE_FORM_RETURN_MIN_AGE_MS).
     const again = await arrive({ phone: '5511900009999' });
     expect(again.created).toBe(false);
-    const kinds = (await noticesOf(born.lead.id)).map((notice) => notice.kind).sort();
-    expect(kinds).toEqual(['lead_returned', 'new_lead']);
+    expect(await noticesOf(born.lead.id)).toHaveLength(1);
   });
 
   it('with an empty rotation, Diretoria and the commercial managers are told at once; sellers are not', async () => {

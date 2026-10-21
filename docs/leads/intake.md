@@ -52,15 +52,19 @@ campos preenchidos, e uma em `audit_log` (`lead.received` ou `lead.merged`).
 
 Um lead novo, ou um cujo estado de pesquisa é `none` ou `failed`, ganha um
 job `enrich_lead`. Um lead já pesquisado não é pesquisado de novo por chegar
-de novo. Exceção: o webhook do RD Station **nunca** enfileira a pesquisa para
-uma pessoa que a Wings já tem (`skipResearch`): o RD ecoa cada envio do
-formulário do site minutos depois, e a chave desse formulário é que decide
-se paga (`SITE_FORM_RESEARCH_ENABLED`).
+de novo. Exceção: o webhook do RD Station não enfileira a pesquisa num lead
+que teve uma chegada pelo formulário do site na última hora
+(`RD_ECHO_WINDOW_MS`, decidido dentro da transação do `upsertLead`): é o eco
+que o RD faz de cada envio do formulário minutos depois, e a chave desse
+formulário é que decide se paga (`SITE_FORM_RESEARCH_ENABLED`). Outra
+conversão no RD, mais tarde, pesquisa como sempre.
 
-Pelo **formulário do site**, um lead que já existe ainda ganha a tarefa de
-retorno para o dono e o aviso no sino, e a resposta nova fica na linha do
-tempo (`detail.submitted`): [../crm/aviso-lead-novo.md](../crm/aviso-lead-novo.md),
-"Lead que preenche o formulário de novo". Dono, funil e etapa não mudam.
+Pelo **formulário do site**, um lead que já existe há mais de 10 minutos
+(`SITE_FORM_RETURN_MIN_AGE_MS`) ainda ganha a tarefa de retorno para o dono e
+o aviso no sino, e a resposta nova fica na linha do tempo (`detail.submitted`);
+o mesmo formulário enviado duas vezes seguidas só fica na linha do tempo:
+[../crm/aviso-lead-novo.md](../crm/aviso-lead-novo.md), "Lead que preenche o
+formulário de novo". Dono, funil e etapa não mudam.
 
 ### Conversão sem regra
 

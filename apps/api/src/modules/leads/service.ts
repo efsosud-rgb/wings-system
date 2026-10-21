@@ -382,6 +382,11 @@ export interface UpsertResult {
    * transaction): the door then leaves the arrival notice to the triage.
    */
   triageQueued?: boolean;
+  /**
+   * A lead that already existed, older than `SITE_FORM_RETURN_MIN_AGE_MS`, came back through the
+   * site form: the door tells its owner after the commit (`announceLeadReturned`).
+   */
+  returned?: boolean;
 }
 
 /**
@@ -528,6 +533,35 @@ export class ForeignLeadError extends Error {
   }
 }
 
+/**
+ * A lead younger than this whose person fills the site form again sent the same form twice (a
+ * double click, a retry on a slow network), not a person coming back: the answer stays on the
+ * timeline, nobody is told and no return task is made (review of PR #13, 21/10/2026).
+ */
+export const SITE_FORM_RETURN_MIN_AGE_MS = 10 * 60 * 1000;
+
+/**
+ * RD Marketing logs each site form submission as a conversion of its own, 44 s to a few minutes
+ * later. An RD arrival on a lead with a site form arrival this recent is that echo, and the site
+ * form's own switch (`SITE_FORM_RESEARCH_ENABLED`) already decided whether to pay for the research:
+ * the echo queues none. Later than this it is the person converting again, researched as before
+ * when the lead never was.
+ */
+export const RD_ECHO_WINDOW_MS = 60 * 60 * 1000;
+
+/** Whether the lead had a site form arrival within `RD_ECHO_WINDOW_MS`. */
+async function recentSiteFormArrival(tx: Executor, leadId: string): Promise<boolean> {
+  const event = await tx.query.leadEvents.findFirst({
+    where: and(
+      eq(leadEvents.leadId, leadId),
+      eq(leadEvents.kind, 'lead.received.site_form'),
+      gte(leadEvents.at, new Date(Date.now() - RD_ECHO_WINDOW_MS)),
+    ),
+    columns: { id: true },
+  });
+  return event !== undefined;
+}
+
 export async function upsertLead(db: Database, given: IncomingLead): Promise<UpsertResult> {
   const incoming = withFormFields(given);
   const result = await upsertLeadTx(db, incoming);
@@ -559,9 +593,8 @@ export async function upsertLead(db: Database, given: IncomingLead): Promise<Ups
     await announceNewLead(db, result.lead);
   if (triaged) scheduleLeadTriage({ leadId: result.lead.id });
   if (result.created) await markSuspectsAround(db, result.lead.id);
-  // A lead that already existed and came back through the site form (see `ensureReturnTask` above).
-  if (!result.created && incoming.source === 'site_form')
-    await announceLeadReturned(db, result.lead);
+  // A lead that already existed and came back through the site form (`returned`, in the transaction).
+  if (result.returned) await announceLeadReturned(db, result.lead);
   return result;
 }
 
@@ -658,10 +691,18 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
         },
       });
       // The person of a lead that already exists filled the site form again: their seller gets a
-      // return task (and, after the commit, the notice). Only this door, by Eric's decision of 21/10/2026.
-      if (incoming.source === 'site_form') await ensureReturnTask(tx, lead);
+      // return task (`ensureReturnTask`, crm.ts) and, after the commit, the notice. Only this door,
+      // by Eric's decision of 21/10/2026, and not for the same form sent twice in a row.
+      const returned =
+        incoming.source === 'site_form' &&
+        Date.now() - lead.createdAt.getTime() >= SITE_FORM_RETURN_MIN_AGE_MS;
+      if (returned) await ensureReturnTask(tx, lead);
+      // RD's echo of a site form submission queues no research (`RD_ECHO_WINDOW_MS`): decided here,
+      // on the lead this transaction found, never from a read before it.
+      const echo = incoming.source === 'rd_station' && (await recentSiteFormArrival(tx, lead.id));
       const needsResearch =
         !incoming.skipResearch &&
+        !echo &&
         (lead.enrichmentState === 'none' || lead.enrichmentState === 'failed');
       const researched = needsResearch ? await enqueueResearch(tx, lead.id, null) : null;
       return {
@@ -669,6 +710,7 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
         created: false,
         researchQueued: researched !== null,
         filled: Object.keys(patch),
+        returned,
       };
     }
 
