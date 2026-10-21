@@ -315,7 +315,8 @@ function withDays(messages: WaMessage[]) {
   let last = '';
   for (const message of messages) {
     const key = new Date(message.at).toDateString();
-    if (key !== last) items.push({ day: dayLabel(message.at, now), key: `day-${key}` });
+    // Keyed by the run's first message: a late message can bring a day back further down.
+    if (key !== last) items.push({ day: dayLabel(message.at, now), key: `day-${message.id}` });
     last = key;
     items.push(message);
   }

@@ -5,7 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
-import { leads, waConversations, waMessages } from '../../db/schema/index.js';
+import { leads, waContacts, waConversations, waMessages } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
@@ -217,6 +217,38 @@ describe('the unread count on the menu', () => {
     expect((await summary(seller)).stamp).not.toBe(second.stamp);
   });
 
+  it('"Não lidas" finds what the menu counts, also below the newest 200 conversations', async () => {
+    const admin = await sessionFor('admin_master');
+    const phone = newPhone();
+    const lead = await deal(phone, null);
+    await write(phone, 'ainda sem resposta');
+    const old = await conversationOfLead(lead);
+    await db
+      .update(waConversations)
+      .set({ lastMessageAt: new Date(Date.now() - 30 * 86_400_000) })
+      .where(eq(waConversations.id, old.id));
+    // 200 newer conversations, all read: the old unread one is the 201st.
+    const contacts = await db
+      .insert(waContacts)
+      .values(
+        Array.from({ length: 200 }, (_, i) => ({ phone: `5531955${String(i).padStart(5, '0')}` })),
+      )
+      .returning({ id: waContacts.id });
+    await db
+      .insert(waConversations)
+      .values(contacts.map((c) => ({ contactId: c.id, lastMessageAt: new Date() })));
+
+    const unread = await app.inject({
+      url: '/whatsapp/conversations?filter=unread',
+      cookies: admin.cookies,
+    });
+    expect(
+      unread
+        .json<{ conversations: WaConversationItem[] }>()
+        .conversations.map((c) => c.conversationId),
+    ).toContain(old.id);
+  });
+
   it('is refused without the WhatsApp permission', async () => {
     const outsider = await sessionFor('marketing');
     const response = await app.inject({
@@ -256,6 +288,35 @@ describe('the search inside the messages', () => {
       true,
     ]);
     expect(await search(admin.cookies, 'zebrinhas')).toHaveLength(2);
+  });
+
+  it("keeps to the conversation, not the phone: the same contact's other conversation stays out", async () => {
+    const seller = await sessionFor('vendedor_formatacao');
+    const admin = await sessionFor('admin_master');
+    const phone = newPhone();
+    const lead = await deal(phone, seller.id);
+    await write(phone, 'oi');
+    const mine = await conversationOfLead(lead);
+    const before = await summary(seller);
+    // The same phone, in a conversation no deal took (Sofia still with it): only full scope reaches it.
+    const [waiting] = await db
+      .insert(waConversations)
+      .values({ contactId: mine.contactId, lastMessageAt: new Date(), attendance: 'sofia' })
+      .returning();
+    await db.insert(waMessages).values({
+      conversationId: waiting!.id,
+      contactId: mine.contactId,
+      direction: 'in',
+      author: 'contact',
+      kind: 'text',
+      text: 'a palavra quimeras fica com a Sofia',
+    });
+
+    expect(await search(seller.cookies, 'quimeras')).toEqual([]);
+    expect((await summary(seller)).unread).toBe(before.unread);
+    expect((await search(admin.cookies, 'quimeras')).map((c) => c.conversationId)).toEqual([
+      waiting!.id,
+    ]);
   });
 
   it('looks inside the messages only from three letters, and takes % and _ as typed', async () => {

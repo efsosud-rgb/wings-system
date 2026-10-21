@@ -196,6 +196,8 @@ describe('the WhatsApp screen', () => {
         conversations: [
           { ...rows[0]!, lastAt: new Date(new Date().setHours(9, 7, 0, 0)).toISOString() },
           { ...rows[1]!, lastAt: yesterday.toISOString() },
+          // A profile name in a "fancy" alphabet: two UTF-16 units per letter.
+          { ...rows[1]!, conversationId: 'c3', profileName: '𝓜𝓪𝓻𝓲𝓪 𝓢𝓸𝓾𝔃𝓪' },
         ],
       },
     };
@@ -205,6 +207,8 @@ describe('the WhatsApp screen', () => {
     expect(elena.querySelector('time')?.textContent).toBe('09:07');
     const carlos = screen.getByRole('link', { name: /Carlos/ });
     expect(carlos.querySelector('time')?.textContent).toBe('Ontem');
+    const fancy = screen.getByRole('link', { name: /𝓜𝓪𝓻𝓲𝓪/ });
+    expect(fancy.querySelector('.crm-wa-avatar')?.textContent).toBe('𝓜𝓢');
   });
 
   it('a search that found a message shows that message, with the term marked', () => {

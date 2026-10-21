@@ -173,8 +173,10 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
 /** WhatsApp Desktop's round picture: the initials on one of the theme's tones, fixed per conversation. */
 function Avatar({ name, seed }: { name: string; seed: string }) {
   const words = name.match(/\p{L}+/gu) ?? [];
-  const first = words[0]?.[0];
-  const last = words.length > 1 ? words.at(-1)?.[0] : undefined;
+  // By code point: a profile name in a "fancy" alphabet (𝓜𝓪𝓻𝓲𝓪) is two units per letter.
+  const initialOf = (word: string | undefined) => (word ? [...word][0] : undefined);
+  const first = initialOf(words[0]);
+  const last = words.length > 1 ? initialOf(words.at(-1)) : undefined;
   let hash = 0;
   for (const char of seed) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
   const tone = (hash % 8) + 1;

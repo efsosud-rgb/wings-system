@@ -59,6 +59,7 @@ import {
   conversationItemOf,
   conversationListSql,
   likeOf,
+  unreadMessageOf,
   markConversationRead,
   type ConversationListRow,
   contactOfPhone,
@@ -197,17 +198,24 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     const q = query.data.q || undefined;
     const digits = q?.replace(/\D/g, '') ?? '';
     const like = q ? likeOf(q) : '';
-    // Inside the messages too (Eric, 20/10), from a few letters on; the term is never logged
-    // (the request log drops the query string).
+    // Inside the messages too (Eric, 20/10), from a few letters on. The request log drops the
+    // query string; a database error's message would carry it, as on every route (docs).
     const textLike = q && q.length >= WA_TEXT_SEARCH_MIN ? like : undefined;
+    const readerId = request.session.actor.employeeId;
     const rows = await db.execute<ConversationListRow>(
       conversationListSql({
         owner: leadOwnerFilter(request.session.actor, 'leads.whatsapp'),
-        readerId: request.session.actor.employeeId,
+        readerId,
         limit: 200,
         textLike,
         where: sql`
           ${filter === 'unanswered' ? sql`and m.direction = 'in'` : sql``}
+          ${
+            // In the query, so the 200 are 200 unread ones: the menu counts them all (inbox.ts).
+            filter === 'unread'
+              ? sql`and exists (select 1 from wa_messages u where ${unreadMessageOf(readerId)})`
+              : sql``
+          }
           ${
             q
               ? sql`and (k.profile_name ilike ${like} or l.name ilike ${like}
@@ -218,9 +226,9 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       }),
     );
     const at = now();
-    const items: WaConversationItem[] = rows.rows
-      .map((row) => conversationItemOf(row, at, textLike ? q : undefined))
-      .filter((item) => filter !== 'unread' || item.unreadCount > 0);
+    const items: WaConversationItem[] = rows.rows.map((row) =>
+      conversationItemOf(row, at, textLike ? q : undefined),
+    );
     return reply.send({ conversations: items });
   });
 

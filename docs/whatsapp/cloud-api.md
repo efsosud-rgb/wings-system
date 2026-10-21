@@ -125,9 +125,12 @@ permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em `/
 - **Busca no texto:** `GET /whatsapp/conversations?q=` procura no nome, no telefone (4+ dígitos) e, a partir
   de 3 letras (`WA_TEXT_SEARCH_MIN`), no texto das mensagens, nas mesmas conversas que a pessoa já alcança
   (vendedor: as das suas negociações; sem negociação, só quem vê tudo). A linha traz a última mensagem achada,
-  cortada em volta do termo (`match`). Reação não conta; `%` e `_` valem como digitados. O termo não vai para o
-  log (o log da requisição corta a query string). Sem índice: `ILIKE` em `wa_messages.text` das conversas
-  alcançadas; se ficar lento com muitas conversas importadas, o próximo passo é um índice trigram (migração).
+  cortada em volta do termo (`match`). Reação não conta; `%` e `_` valem como digitados. O log da requisição
+  corta a query string; mas, se o banco falhar no meio da busca, a mensagem de erro do drizzle leva o termo
+  para o log, como acontece em toda rota com consulta (pendência à parte: um tratador de erro que registre só o
+  nome e o código). Sem índice: `ILIKE` em `wa_messages.text` das conversas alcançadas; se ficar lento com
+  muitas conversas importadas, o próximo passo é um índice trigram (migração). O filtro "Não lidas" roda na
+  consulta, antes do limite de 200, para achar o que o menu conta.
 - **Não lidas no menu:** `GET /whatsapp/inbox/summary` (`modules/whatsapp/inbox.ts`) diz quantas conversas
   do alcance de quem lê têm mensagem da pessoa ainda não aberta (a mesma regra da lista, `unreadMessageOf`) e
   um carimbo que muda quando uma delas recebe mensagem, troca de mãos ou é lida. O item WhatsApp do menu mostra

@@ -399,3 +399,23 @@ describe('the day marks', () => {
     ).toHaveLength(WA_MESSAGES_PAGE + 1);
   });
 });
+
+describe('a message stored late', () => {
+  it('brings its day back where it sits, with no key repeated', () => {
+    const day = (d: number, h: number) => new Date(2025, 9, d, h, 0).toISOString();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    show([
+      message({ id: 'a', text: 'segunda', at: day(19, 9) }),
+      // Meta delivered it late (the server was down): stored after, sent the day before.
+      message({ id: 'b', text: 'domingo', at: day(18, 22) }),
+      message({ id: 'c', text: 'segunda de novo', at: day(19, 10) }),
+    ]);
+    expect(screen.getAllByRole('separator').map((li) => li.textContent)).toEqual([
+      '19/10/2025',
+      '18/10/2025',
+      '19/10/2025',
+    ]);
+    expect(errors.mock.calls.some((call) => String(call[0]).includes('same key'))).toBe(false);
+    errors.mockRestore();
+  });
+});
