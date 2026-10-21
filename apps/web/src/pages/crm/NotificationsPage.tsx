@@ -18,6 +18,7 @@ const KIND_LABEL: Record<string, string> = {
   new_lead: 'Novo lead',
   lead_unassigned: 'Lead sem dono',
   lead_whatsapp: 'Lead chamou no WhatsApp',
+  lead_returned: 'Lead preencheu o formulário de novo',
   backfill_assigned: 'Leads antigos atribuídos',
   backfill_unassigned: 'Leads antigos sem dono',
   automation: 'Aviso da automação',

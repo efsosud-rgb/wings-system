@@ -59,7 +59,7 @@ import {
   rdUserMap,
 } from '../../db/schema/index.js';
 import { activitiesOf } from './activities.js';
-import { announceNewLead } from './crm-alerts.js';
+import { announceLeadReturned, announceNewLead } from './crm-alerts.js';
 import {
   attachLeadContact,
   contactOnForeignDeal,
@@ -75,6 +75,7 @@ import { TRIAGE_SOURCES, leadTriageEnabled, scheduleLeadTriage } from './triage-
 import {
   announceStageEntered,
   ensureFirstContactTask,
+  ensureReturnTask,
   entryStageOf,
   firstContactOverdueSql,
   nextInRotation,
@@ -558,6 +559,9 @@ export async function upsertLead(db: Database, given: IncomingLead): Promise<Ups
     await announceNewLead(db, result.lead);
   if (triaged) scheduleLeadTriage({ leadId: result.lead.id });
   if (result.created) await markSuspectsAround(db, result.lead.id);
+  // A lead that already existed and came back through the site form (see `ensureReturnTask` above).
+  if (!result.created && incoming.source === 'site_form')
+    await announceLeadReturned(db, result.lead);
   return result;
 }
 
@@ -653,6 +657,9 @@ async function upsertLeadTx(db: Database, incoming: IncomingLead): Promise<Upser
           filled: Object.keys(patch),
         },
       });
+      // The person of a lead that already exists filled the site form again: their seller gets a
+      // return task (and, after the commit, the notice). Only this door, by Eric's decision of 21/10/2026.
+      if (incoming.source === 'site_form') await ensureReturnTask(tx, lead);
       const needsResearch =
         !incoming.skipResearch &&
         (lead.enrichmentState === 'none' || lead.enrichmentState === 'failed');

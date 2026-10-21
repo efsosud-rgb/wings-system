@@ -52,7 +52,15 @@ campos preenchidos, e uma em `audit_log` (`lead.received` ou `lead.merged`).
 
 Um lead novo, ou um cujo estado de pesquisa é `none` ou `failed`, ganha um
 job `enrich_lead`. Um lead já pesquisado não é pesquisado de novo por chegar
-de novo.
+de novo. Exceção: o webhook do RD Station **nunca** enfileira a pesquisa para
+uma pessoa que a Wings já tem (`skipResearch`): o RD ecoa cada envio do
+formulário do site minutos depois, e a chave desse formulário é que decide
+se paga (`SITE_FORM_RESEARCH_ENABLED`).
+
+Pelo **formulário do site**, um lead que já existe ainda ganha a tarefa de
+retorno para o dono e o aviso no sino, e a resposta nova fica na linha do
+tempo (`detail.submitted`): [../crm/aviso-lead-novo.md](../crm/aviso-lead-novo.md),
+"Lead que preenche o formulário de novo". Dono, funil e etapa não mudam.
 
 ### Conversão sem regra
 

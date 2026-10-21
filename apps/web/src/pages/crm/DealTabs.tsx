@@ -121,6 +121,41 @@ const MEETING_EVENTS = new Set([
 
 const timeOf = (value: unknown) => (typeof value === 'string' ? formatDateTime(value) : null);
 
+const SITE_FORM_EVENT = 'lead.received.site_form';
+/** A site form arrival of a lead that already existed: the same event, matched to the lead instead of making it. */
+const isReturn = (event: LeadEvent) =>
+  event.kind === SITE_FORM_EVENT && event.detail.matched === 'existing';
+
+const text = (value: unknown) => (typeof value === 'string' && value.trim() ? value : null);
+
+/** What a site form submission said (`detail.submitted`): the lead's own fields keep only the first one. */
+export function siteFormBody(event: LeadEvent): string | null {
+  const submitted = event.detail.submitted as
+    | {
+        answers?: Record<string, unknown> | null;
+        companyName?: unknown;
+        instagram?: unknown;
+        website?: unknown;
+        utm?: Record<string, unknown> | null;
+      }
+    | undefined;
+  if (!submitted) return null;
+  const parts = Object.entries(submitted.answers ?? {})
+    .filter(([, answer]) => text(answer))
+    .map(([question, answer]) => `${question}: ${String(answer)}`);
+  const company = text(submitted.companyName);
+  if (company) parts.push(`Empresa: ${company}`);
+  const instagram = text(submitted.instagram);
+  if (instagram) parts.push(`Instagram: ${instagram}`);
+  const website = text(submitted.website);
+  if (website) parts.push(`Site: ${website}`);
+  const utm = Object.entries(submitted.utm ?? {})
+    .filter(([, value]) => text(value))
+    .map(([key, value]) => `${key}=${String(value)}`);
+  if (utm.length > 0) parts.push(`UTM: ${utm.join(' ')}`);
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
 /** What a meeting's line adds: the time it was set for, the new time, or how long it ran. */
 export function meetingBody(event: LeadEvent): string | null {
   const { detail } = event;
@@ -253,14 +288,18 @@ export function entriesOf(data: LoadedLead): Entry[] {
                 ? 'calendar'
                 : 'more',
       tone,
-      title: EVENT_LABELS[event.kind] ?? 'Atualização',
+      title: isReturn(event)
+        ? 'Preencheu o formulário do site de novo'
+        : (EVENT_LABELS[event.kind] ?? 'Atualização'),
       by: null,
       body:
         tone === 'whatsapp'
           ? importBody(event)
           : tone === 'meeting'
             ? meetingBody(event)
-            : undefined,
+            : event.kind === SITE_FORM_EVENT
+              ? siteFormBody(event)
+              : undefined,
     });
   }
   return entries.sort((a, b) => b.at.localeCompare(a.at));

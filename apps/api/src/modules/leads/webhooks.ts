@@ -391,7 +391,8 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
       let echoes = 0;
       for (const conversion of conversions) {
         if (!conversion.email && !conversion.phone) continue;
-        if (isRdCrmEcho(conversion.identifier) && !(await knownLead(db, conversion))) {
+        const known = await knownLead(db, conversion);
+        if (isRdCrmEcho(conversion.identifier) && !known) {
           echoes += 1;
           continue;
         }
@@ -423,6 +424,9 @@ export const leadWebhookRoutes: FastifyPluginAsync = async (app) => {
           enteredAtSource: 'rd_conversion',
           consentSource: `rd_station:${conversion.identifier ?? 'conversao'}`,
           consentText: conversion.legalBasisText,
+          // A person the Wings already has is not researched for converting again on RD: RD echoes a
+          // site form submission minutes later, and that door's own switch decided whether to pay.
+          skipResearch: known,
           event: {
             kind: 'lead.received.rd_station',
             detail: {

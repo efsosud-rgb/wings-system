@@ -424,6 +424,22 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
             qualifier: answers.choice?.value ?? null,
             adPlatform: attribution?.adPlatform ?? null,
             hasUtm: Boolean(attribution?.utmSource || attribution?.utmCampaign),
+            // What this submission said, kept on the timeline: when the lead already exists its
+            // columns keep the first answer, and the seller reads the new one here (never the
+            // person's name, e-mail or phone).
+            submitted: {
+              answers: answers.formAnswers,
+              companyName: body.data.companyName ?? null,
+              instagram: answers.instagram ?? null,
+              website: body.data.siteUrl ?? null,
+              utm: {
+                source: attribution?.utmSource ?? null,
+                medium: attribution?.utmMedium ?? null,
+                campaign: attribution?.utmCampaign ?? null,
+                content: attribution?.utmContent ?? null,
+                term: attribution?.utmTerm ?? null,
+              },
+            },
           },
         },
       });

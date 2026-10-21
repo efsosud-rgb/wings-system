@@ -41,6 +41,44 @@ Ligar `CRM_NOTICE_EMAIL_ENABLED` não manda e-mail de lead que já existe:
   avisado; os que já têm aviso (o antigo `first_contact_overdue:…` ou o novo) não voltam. Um lead atrasado
   que **troca de dono** gera o aviso para o novo dono.
 
+## Lead que preenche o formulário de novo
+
+Decisão do Eric, 21/10/2026. Quando o formulário do site (`POST /public/site-forms/<slug>`, hoje "Fale com a Wings")
+cai num lead que **já existe** (mesmo telefone, depois mesmo e-mail: `lead.merged` na auditoria), o lead não muda de
+dono, de funil nem de etapa, e:
+
+- **Linha do tempo:** a chegada vira a linha "Preencheu o formulário do site de novo" (o mesmo evento
+  `lead.received.site_form`, com `matched: existing`), e o `detail.submitted` guarda o que **este** envio disse: a
+  resposta de "O que você procura?", empresa, Instagram, site e as UTMs da visita. As colunas do lead ficam como
+  estavam (a primeira resposta, o primeiro toque); só uma lacuna vazia é preenchida, como sempre foi (`fillGaps`).
+- **Tarefa de retorno** (`ensureReturnTask`, `crm.ts`): "Retornar: o lead preencheu o formulário do site de novo",
+  tipo follow-up, automática, para o **dono**, prazo de 1 hora útil (o mesmo `CRM_FIRST_CONTACT_SLA_HOURS` do
+  primeiro contato). **Uma aberta por lead:** enquanto ela estiver aberta, um novo envio não cria outra (se o lead
+  trocou de dono, a tarefa passa para ele); quando o vendedor a conclui, o próximo envio cria uma nova. Conta nos
+  contadores e nos atrasos como qualquer follow-up (`task_overdue`), não como primeiro contato.
+- **Aviso no sino** (`announceLeadReturned`, `crm-alerts.ts`), tipo `lead_returned`: ao dono, "O lead preencheu o
+  formulário do site de novo. A resposta nova está no histórico. Retorno até dd/mm hh:mm (1 hora útil)."; sem dono,
+  "Um lead sem dono preencheu o formulário do site de novo. Atribua alguém." para Admin Master, Diretoria e gerente
+  comercial (os mesmos do `lead_unassigned`: o rodízio não é gasto e ninguém vira dono, porque um vendedor só vê os
+  leads dele e um aviso de lead alheio não abriria nada). **Só o sino:** sem pop-up (ele é do `new_lead`) e **sem
+  e-mail** (`email_state = none`; nenhum envio novo foi criado).
+- **Janela:** um aviso por lead, pessoa e **dia** (São Paulo), pela `dedupe_key`
+  `lead_returned:<lead>:<pessoa>:<AAAA-MM-DD>`. Um clique duplo no "Enviar", ou o **eco do RD** (o webhook do RD
+  Marketing repete cada envio do formulário de 44 s a alguns minutos depois, como `lead.received.rd_station` no mesmo
+  lead), não gera segundo aviso, segunda tarefa nem e-mail: o aviso e a tarefa valem **só** para a fonte `site_form`,
+  e o eco de um lead já conhecido também **não enfileira a pesquisa paga** (`enrich_lead`), veja
+  [../leads/pesquisa-da-empresa.md](../leads/pesquisa-da-empresa.md). No dia seguinte, um envio do mesmo lead avisa de
+  novo (a tarefa só volta se a anterior foi concluída).
+- **Lead encerrado (venda ou perda):** hoje o envio cai nele mesmo, com a tarefa e o aviso acima, e a etapa não
+  muda (ordem do Eric: só descrever). Proposta a decidir: abrir uma negociação nova ao lado da encerrada, como o Meta
+  Lead Ads já faz (`reopenClosed`), em vez de reabrir a antiga.
+- Fora desta decisão (o código de hoje): Expansão e Consultoria escolhidas no formulário continuam caindo no rodízio
+  de **Formatação** (a regra `fale-com-a-wings` não tem marca e o seed não dá funil próprio a essas opções); e
+  `CRM_EMAIL_MODE` continua com o padrão `test` (só registra), sem regra `send_email` cadastrada.
+
+Teste: `apps/api/src/modules/leads/site-form-again.test.ts` (dono, eco do RD, clique duplo, dia seguinte, sem dono);
+linha do tempo em `apps/web/src/pages/crm/DealTabs.test.tsx`.
+
 ## Teste de ponta a ponta no staging
 
 `apps/api/src/scripts/notice-test-lead.ts`, dentro do contêiner da API (recusa fora de staging/local):

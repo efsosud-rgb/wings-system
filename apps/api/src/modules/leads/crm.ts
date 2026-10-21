@@ -817,6 +817,66 @@ export async function ensureFirstContactTask(
   }
 }
 
+/** The task a seller gets when the person of one of their deals fills the site form again. */
+export const RETURN_TASK_TITLE = 'Retornar: o lead preencheu o formulário do site de novo';
+
+/**
+ * The return task (docs/crm/aviso-lead-novo.md, "Lead que preenche o formulário de novo"): one open
+ * per lead, for its owner, due in `firstContactSlaHours` like the first contact. A submission while it
+ * is still open adds no task (the assignee follows the owner, as the first-contact task does); once the
+ * seller marks it done, the next submission makes a new one. Without an owner there is nobody to give it to.
+ */
+export async function ensureReturnTask(
+  db: Executor,
+  lead: { id: string; ownerEmployeeId: string | null },
+  now = new Date(),
+): Promise<void> {
+  if (!lead.ownerEmployeeId) return;
+  const open = await db.query.leadTasks.findFirst({
+    where: and(
+      eq(leadTasks.leadId, lead.id),
+      eq(leadTasks.title, RETURN_TASK_TITLE),
+      eq(leadTasks.auto, true),
+      isNull(leadTasks.doneAt),
+    ),
+  });
+  if (open) {
+    if (open.assigneeEmployeeId !== lead.ownerEmployeeId) {
+      await db
+        .update(leadTasks)
+        .set({ assigneeEmployeeId: lead.ownerEmployeeId })
+        .where(eq(leadTasks.id, open.id));
+    }
+    return;
+  }
+  const [row] = await db
+    .insert(leadTasks)
+    .values({
+      leadId: lead.id,
+      kind: 'follow_up',
+      title: RETURN_TASK_TITLE,
+      dueAt: addBusinessHours(now, config.firstContactSlaHours),
+      assigneeEmployeeId: lead.ownerEmployeeId,
+      auto: true,
+      createdBy: null,
+    })
+    .returning();
+  if (row) {
+    await db.insert(leadEvents).values({
+      leadId: lead.id,
+      kind: 'lead.task_created',
+      actorEmployeeId: null,
+      detail: {
+        taskId: row.id,
+        kind: 'follow_up',
+        auto: true,
+        reason: 'site_form_again',
+        dueAt: row.dueAt.toISOString(),
+      },
+    });
+  }
+}
+
 // --- distribution --------------------------------------------------------------------
 
 /**

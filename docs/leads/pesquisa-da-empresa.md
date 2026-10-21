@@ -91,7 +91,9 @@ Resumo automático por IA: a tela diz isso e pede para conferir nas fontes.
 No job `enrich_lead` (o mesmo que já roda na chegada do lead), depois do CNPJ e antes da nota.
 Lead de importação (RD, CSV) não roda (`skipResearch`). O formulário do site só enfileira a
 pesquisa com `SITE_FORM_RESEARCH_ENABLED=true` (API). Um lead já pesquisado não é pesquisado de
-novo por chegar outra vez. Sem um worker que reivindique `enrich_lead`
+novo por chegar outra vez, e o webhook do RD Station não enfileira pesquisa para uma pessoa
+que a Wings já tem (desde 21/10: o RD ecoa cada envio do formulário do site minutos depois e
+passava por cima da chave; quem quiser pesquisa num lead desses usa "Pesquisar de novo"). Sem um worker que reivindique `enrich_lead`
 (`WORKER_JOB_TYPES`), os trabalhos ficam na fila sem rodar.
 
 **Só lead novo.** O worker só pesquisa lead que chegou a partir da data de corte
