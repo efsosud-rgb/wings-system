@@ -70,6 +70,7 @@ import {
 import { takeConversation } from '../sofia/state.js';
 import { adoptUnmatched, conversationFor } from './intake.js';
 import { inboxSummaryOf } from './inbox.js';
+import { notifyInboxChanged } from './inbox-signal.js';
 import {
   payloadOf,
   planTemplateFor,
@@ -234,6 +235,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     const found = params.success ? await visibleConversation(request, params.data.id) : null;
     if (!found) return notFound(reply);
     await markConversationRead(db, found.conversation.id, request.session.actor.employeeId);
+    // The reader's other tabs (and the menu of this one) count it read at once.
+    notifyInboxChanged();
     return reply.status(204).send();
   });
 

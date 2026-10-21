@@ -42,6 +42,7 @@ import {
   type WaStatusUpdate,
   type WaTemplateUpdate,
 } from './webhook-parse.js';
+import { notifyInboxChanged } from './inbox-signal.js';
 
 /**
  * The WhatsApp webhook queue. The route stores Meta's body and answers 200 at
@@ -159,6 +160,8 @@ export async function applyWhatsAppPayload(deps: WhatsAppIntakeDeps, body: unkno
     for (const status of change.callStatuses) await applyCallStatus(deps.db, status);
     // A call rang, was answered elsewhere or ended: the open ringing streams look again.
     if (change.calls.length > 0 || change.callStatuses.length > 0) notifyCallsChanged();
+    // A message came (or a status moved): the open streams look at each reader's inbox again.
+    if (change.messages.length > 0 || change.statuses.length > 0) notifyInboxChanged();
   }
 }
 
