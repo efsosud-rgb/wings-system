@@ -376,3 +376,26 @@ describe('locations', () => {
     ).toBeTruthy();
   });
 });
+
+describe('the day marks', () => {
+  it('puts the day over the first message of each day, across an older page too', async () => {
+    const day = (d: number, h: number) => new Date(2026, 8, d, h, 0).toISOString();
+    const shown = [
+      ...run('new', WA_MESSAGES_PAGE - 1, Date.parse(day(10, 10))),
+      message({ id: 'late', text: 'outro dia', at: day(11, 9) }),
+    ];
+    const older = [message({ id: 'old', text: 'bem antes', at: day(9, 8) })];
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ messages: older }), { status: 200 }));
+    show(shown);
+    const marks = () => screen.getAllByRole('separator').map((li) => li.textContent);
+    expect(marks()).toEqual(['10/09/2026', '11/09/2026']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mostrar mensagens anteriores' }));
+    await screen.findByText('bem antes');
+    expect(marks()).toEqual(['09/09/2026', '10/09/2026', '11/09/2026']);
+    // A mark is not a message: the balloons are counted as before.
+    expect(
+      screen.getAllByRole('listitem').filter((li) => li.className.includes('crm-wa-bubble')),
+    ).toHaveLength(WA_MESSAGES_PAGE + 1);
+  });
+});

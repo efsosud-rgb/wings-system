@@ -27,6 +27,7 @@ import {
 } from '../../api/whatsapp.js';
 import { LoadFailure } from '../../components/LoadFailure.js';
 import { formatDateTime, formatPhone } from './format.js';
+import { dayLabel } from './whatsapp-time.js';
 
 /**
  * The conversation itself, for a deal or for one no deal took yet: the
@@ -95,12 +96,18 @@ export function WhatsAppChat({
                 {older.error && <span className="crm-wa-error">{older.error}</span>}
               </li>
             )}
-            {placedReactionsOut(older.messages).map((message) => (
-              <Bubble key={message.id} message={message} />
-            ))}
-            {placedReactionsOut(data.messages).map((message) => (
-              <Bubble key={message.id} message={message} />
-            ))}
+            {withDays([
+              ...placedReactionsOut(older.messages),
+              ...placedReactionsOut(data.messages),
+            ]).map((item) =>
+              'day' in item ? (
+                <li key={item.key} className="crm-wa-day" role="separator">
+                  <span>{item.day}</span>
+                </li>
+              ) : (
+                <Bubble key={item.id} message={item} />
+              ),
+            )}
           </ol>
         )}
         <div ref={bottom} />
@@ -299,6 +306,20 @@ function placedReactionsOut(list: WaMessage[]) {
   return list.filter(
     (m) => !(m.kind === 'reaction' && m.reactionTo?.found && ids.has(m.reactionTo.id)),
   );
+}
+
+/** The messages with a mark before the first of each day ("Hoje", "Ontem", ...), as WhatsApp shows them. */
+function withDays(messages: WaMessage[]) {
+  const now = new Date();
+  const items: Array<WaMessage | { day: string; key: string }> = [];
+  let last = '';
+  for (const message of messages) {
+    const key = new Date(message.at).toDateString();
+    if (key !== last) items.push({ day: dayLabel(message.at, now), key: `day-${key}` });
+    last = key;
+    items.push(message);
+  }
+  return items;
 }
 
 /** A contact card: each contact's name and numbers, or "—" and why something is missing. */
