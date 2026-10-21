@@ -291,14 +291,27 @@ export type ArtMedia =
   | { ok: true; mediaId: string; uploaded: boolean }
   | { ok: false; why: 'storage' | 'refused' | 'meta'; code: number | null };
 
+type MediaDeps = ArtDeps & { fetchImpl: typeof fetch; config: WhatsAppConfig };
+
+/** The art's Meta media id; its bytes are read again before they leave, and only an art that passes the rule goes. */
+export const artMediaId = (deps: MediaDeps, file: ArtFile): Promise<ArtMedia> =>
+  driveFileMediaId(deps, file, {
+    mimeType: file.mimeType,
+    filename: `arte.${file.mimeType === 'image/png' ? 'png' : 'jpg'}`,
+    refuse: (bytes) => inspectArt(bytes, file.mimeType) !== null,
+  });
+
 /**
- * The Meta media id of the art for this number: the one kept while it is
- * younger than 25 days, of the same file version and not refused by Meta;
- * otherwise the art goes up again now (an upload sends nothing to anybody).
+ * The Meta media id of a Drive file for this number (the art, or a deal's file
+ * sent in its conversation): the one kept while it is younger than 25 days, of
+ * the same file version and not refused by Meta; otherwise the file goes up
+ * again now (an upload sends nothing to anybody). `refuse` reads the bytes
+ * before they leave.
  */
-export async function artMediaId(
-  deps: ArtDeps & { fetchImpl: typeof fetch; config: WhatsAppConfig },
+export async function driveFileMediaId(
+  deps: MediaDeps,
   file: ArtFile,
+  upload: { mimeType: string; filename: string; refuse?: (bytes: Buffer) => boolean },
 ): Promise<ArtMedia> {
   const { db, config } = deps;
   const now = deps.now();
@@ -318,12 +331,11 @@ export async function artMediaId(
 
   const bytes = deps.storage ? await deps.storage.get(file.storageKey).catch(() => null) : null;
   if (!bytes) return { ok: false, why: 'storage', code: null };
-  // The bytes are read again before they leave: only an art that passes the rule goes.
-  if (inspectArt(bytes, file.mimeType)) return { ok: false, why: 'refused', code: null };
+  if (upload.refuse?.(bytes)) return { ok: false, why: 'refused', code: null };
   const sent = await uploadWhatsAppMedia(deps.fetchImpl, config, {
     bytes,
-    mimeType: file.mimeType,
-    filename: `arte.${file.mimeType === 'image/png' ? 'png' : 'jpg'}`,
+    mimeType: upload.mimeType,
+    filename: upload.filename,
   });
   if (!sent.ok) return { ok: false, why: 'meta', code: sent.code };
   await db
@@ -347,7 +359,7 @@ export async function artMediaId(
   return { ok: true, mediaId: sent.data.id, uploaded: true };
 }
 
-/** Meta said the file behind this id is gone: the next send uploads the art again. */
+/** Meta said the file behind this id is gone: the next send uploads the file again. */
 export async function invalidateArtMedia(db: Database, mediaId: string, at: Date) {
   await db
     .update(waMediaUploads)
