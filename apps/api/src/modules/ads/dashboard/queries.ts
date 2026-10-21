@@ -826,6 +826,16 @@ export async function campaigns(
   const bySpend = <T extends { totals: MetricTotals; name: string }>(a: T, b: T) =>
     b.totals.spendCents - a.totals.spendCents || a.name.localeCompare(b.name, 'pt-BR');
 
+  // Meta has answered a campaign or an ad set with spend 0 while its ads carried the spend
+  // (20/10, a new Instagram-only campaign). A line that reads 0 takes the sum of what hangs
+  // under it; a line with spend of its own is kept, so nothing is counted twice.
+  // shortcut: the ads' reach counts a person seen by two ads twice, so frequency reads low; and
+  // only a whole window at 0 is replaced, not single days. Upgrade if Meta zeroes single days.
+  const fromBelow = (own: MetricTotals | undefined, below: { totals: MetricTotals }[]) => {
+    const sum = below.reduce((total, node) => addTotals(total, node.totals), EMPTY_TOTALS);
+    return (own?.spendCents ?? 0) === 0 && sum.spendCents > 0 ? sum : (own ?? EMPTY_TOTALS);
+  };
+
   // An alert on an ad or an ad set is badged on the campaign above it.
   const campaignOfEntity = new Map<string, string>();
   const campaignExternalById = new Map(campaignRows.map((c) => [c.id, c.externalId]));
@@ -849,19 +859,22 @@ export async function campaigns(
     const account = accountById.get(campaign.adAccountId);
     const ownAdSets = adSetRows.filter((adSet) => adSet.campaignId === campaign.id);
     const adSetNodes: AdSetNode[] = ownAdSets
-      .map((adSet) => ({
-        externalId: adSet.externalId,
-        name: adSet.name,
-        status: adSet.status,
-        dailyBudgetCents: adSet.dailyBudgetCents || null,
-        endDate: adSet.endDate,
-        placements: adSet.placements ?? null,
-        totals: adSetSums.get(adSet.externalId) ?? EMPTY_TOTALS,
-        ads: adRows
+      .map((adSet) => {
+        const ads = adRows
           .filter((ad) => ad.adSetId === adSet.id)
           .map(adNode)
-          .sort(bySpend),
-      }))
+          .sort(bySpend);
+        return {
+          externalId: adSet.externalId,
+          name: adSet.name,
+          status: adSet.status,
+          dailyBudgetCents: adSet.dailyBudgetCents || null,
+          endDate: adSet.endDate,
+          placements: adSet.placements ?? null,
+          totals: fromBelow(adSetSums.get(adSet.externalId), ads),
+          ads,
+        };
+      })
       .sort(bySpend);
     const orphanAds = adRows
       .filter((ad) => ad.campaignId === campaign.id && !ad.adSetId)
@@ -887,7 +900,7 @@ export async function campaigns(
       objective: campaign.objective,
       budgetLevel: campaign.budgetLevel,
       dailyBudgetCents: campaign.dailyBudgetCents || null,
-      totals: campaignSums.get(campaign.externalId) ?? EMPTY_TOTALS,
+      totals: fromBelow(campaignSums.get(campaign.externalId), [...adSetNodes, ...orphanAds]),
       adSets: adSetNodes,
       orphanAds,
       alertCount: alertCount.get(campaign.externalId) ?? 0,
