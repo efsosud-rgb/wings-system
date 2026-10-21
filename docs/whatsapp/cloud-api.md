@@ -144,6 +144,59 @@ permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em `/
   próprias atualizações (conversa 5 s, lista 10 s). Status de entrega sozinho não move o carimbo: os vistos
   aparecem pela atualização da própria tela.
 
+## Enviar arquivo (b3, 21/10)
+
+- **Tela:** 📎 e 😊 à esquerda do campo (`pages/crm/WhatsAppAttach.tsx`). O arquivo escolhido aparece acima
+  do campo com nome, tamanho e como vai, e o campo vira a legenda. Um arquivo por vez. O 😊 abre uma grade
+  fixa de 48 emojis que entram onde está o cursor (sem biblioteca; o teclado de emoji do computador continua
+  valendo).
+- **O arquivo fica na negociação:** primeiro ele sobe para os Arquivos da negociação pelo caminho que já
+  existe (`POST /leads/:id/files/uploads` → envio direto ao R2 → `…/complete`, que pede `leads.write`), e
+  depois a conversa o envia pelo id (`POST …/media` com `{ fileId, caption? }`). Se a negociação já tem um
+  arquivo com o mesmo nome, a tela oferece "Enviar o que já está lá" (vai pelo id, sem subir de novo) ou
+  "Enviar com outro nome". Se o envio falha depois da subida, a nova tentativa não sobe o arquivo outra vez.
+  Numa conversa sem negociação, ou para quem não edita a negociação, o 📎 fica desligado e o motivo aparece
+  embaixo do campo.
+- **Como vai:** uma regra só, `waSendKindOf` em `packages/shared`; a tela confere antes de subir e a API
+  confere de novo antes de enviar.
+
+  | Arquivo                                              | Vai como  | Até    |
+  | ---------------------------------------------------- | --------- | ------ |
+  | JPG, PNG                                             | foto      | 5 MB   |
+  | MP4, 3GP                                             | vídeo     | 16 MB  |
+  | AAC, AMR, MP3, M4A (`audio/mp4`, `audio/x-m4a`), OGG | áudio     | 16 MB  |
+  | qualquer outro, ou acima do limite do seu tipo       | documento | 100 MB |
+
+  Acima de 100 MB não vai. Os limites são em megabytes decimais (5 MB = 5.000.000 bytes, `WA_SEND_LIMITS`),
+  para nunca esbarrar no limite da Meta por arredondamento; a tela mostra o tamanho como o Drive (base 1024),
+  então uma foto que aparece com 4,8 MB pode ir como documento. Legenda de até 1024 caracteres em foto, vídeo
+  e documento; áudio vai sem legenda e o texto fica no campo para a próxima mensagem. Documento leva o nome
+  do arquivo.
+
+- **Regras do envio** (as do texto, em `send()` de `routes.ts`): só dentro da janela de 24 h (fora dela, 409
+  `window_closed`: só modelo) e com a trava do vendedor (403 `whatsapp_soon`). O arquivo tem de ser da própria
+  negociação e estar fora da lixeira (`leadHasFile`; senão 404 `file_not_found`). Conversa sem negociação: 422
+  `no_deal`. Acima de 100 MB: 413 `too_large`. Legenda em áudio: 422 `caption_not_allowed`. A voz da marca
+  (`brand_voice`) confere a legenda **e o nome do arquivo**, porque um documento mostra o nome à pessoa: um
+  arquivo cujo nome cite a Wings não vai para um lead de marca; envie com outro nome.
+- **Na Meta:** o arquivo sobe uma vez por número (`driveFileMediaId` em `art.ts`, o mesmo caminho da arte) e
+  o id fica em `wa_media_uploads` por até 25 dias, para aquela versão do arquivo; o segundo envio usa o id
+  guardado. Se um status disser depois que o arquivo sumiu (códigos 100, 131009, 131052 ou 131053), o id é
+  descartado e o próximo envio sobe de novo. Falha na subida responde 502 `media_upload_failed` e nada é
+  enviado (o código 100 na subida vira "a Meta não aceita este tipo de arquivo"). Como todo envio, vai uma vez
+  e nunca é repetido sozinho. A subida espera até 60 s: um documento grande numa conexão lenta pode passar
+  disso, e então responde 502 e nada é enviado.
+- **O que fica gravado:** a mensagem guarda `{ media: { id, mimeType, filename }, file: { fileId, version } }`.
+  A auditoria `whatsapp.message_sent` leva `kind: 'media'`, `fileId` e `sentAs` (foto, vídeo, áudio ou
+  documento), nunca o nome do arquivo nem a legenda. Sem migração.
+- **No balão:** o arquivo enviado abre do Drive, na versão que foi (se o arquivo ganhou versão nova depois, o
+  balão mostra a enviada, lida de `drive_file_versions`), por um endereço que vale 5 minutos. Cada abertura
+  grava `drive.file_previewed` ou `drive.file_downloaded` com `purpose: 'whatsapp_message'`. Com o arquivo na
+  lixeira, o balão busca na Meta, como um arquivo recebido ainda não copiado. A fila que copia os arquivos
+  recebidos (`media-store.ts`) pula as mensagens com `file`: o que a equipe mandou já está no Drive.
+- **Fora desta entrega:** gravar áudio no navegador, figurinha, localização, contato, vários arquivos de uma
+  vez, arrastar ou colar, arquivo fora das 24 h (só modelo) e responder citando uma mensagem.
+
 ## Acesso
 
 Uma permissão, `leads.whatsapp` (ver, enviar e ligar), pela regra única `leadInScope`
@@ -168,7 +221,8 @@ cadastrados na Meta. Os outros níveis não mudam.
 | `GET /whatsapp/inbox/summary`                                            | Conversas não lidas (menu) e o carimbo da caixa         |
 | `GET /whatsapp/conversations/:id` e `POST …/text`, `…/template`          | Conversa sem negociação (escopo total)                  |
 | `GET /whatsapp/templates[?refresh=1]`                                    | Modelos aprovados                                       |
-| `GET /whatsapp/messages/:id/media`                                       | Arquivo recebido                                        |
+| `POST /leads/:id/whatsapp/media`, `…/conversations/:id/media`            | Arquivo da negociação, por id (ver "Enviar arquivo")    |
+| `GET /whatsapp/messages/:id/media`                                       | Arquivo recebido ou enviado                             |
 | `POST /leads/:id/whatsapp/template-preview`, `GET …/art`                 | O que o modelo vira agora e a arte (`arte-modelos.md`)  |
 | `POST /leads/:id/whatsapp/imports[/preview]`, `GET`, `DELETE …/:batchId` | Conversa exportada do celular (`importar-conversa.md`)  |
 | `GET /leads/:id/whatsapp/messages?before=<id>`                           | Mensagens anteriores às 500 da tela, uma página por vez |
@@ -209,6 +263,11 @@ seguem só o formato publicado.
 A caixa como o WhatsApp Desktop foi vista num navegador de verdade só com a API simulada; o aviso de mensagem
 nova pelo stream e a velocidade da busca no texto com as conversas reais (importações do celular incluídas)
 ficam para o staging.
+O envio de arquivo (b3) foi testado com a Meta simulada e visto num navegador só com a API simulada. Sem um
+envio real (que só acontece a pedido), não se sabe ainda: quais tipos de documento a Meta aceita (a lista
+publicada fala em PDF, TXT e Office; um ZIP provavelmente é recusado na subida, e a tela mostra a mensagem);
+se o áudio chega como mensagem de voz ou como arquivo; se a legenda aparece num documento; e o tempo de
+subida de um arquivo grande para o R2 e para a Meta.
 
 ## Custos (página de preços da Meta, 30/09/2026)
 
