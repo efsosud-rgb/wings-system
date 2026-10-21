@@ -17,6 +17,7 @@ import {
 } from 'three';
 import { WING_POINTS_B64 } from '../../generated/wing-points.js';
 import { decodeWingPoints } from '../../lib/wing-points.js';
+import { frameBrake } from './brake.js';
 
 /**
  * The 3D scene, one choreography: the logo's wing in particles that come apart
@@ -47,10 +48,12 @@ export interface SceneInput {
   gyro: GyroState;
   /** The process timeline's current step (-1 outside it). */
   step: () => number;
-  /** The sections that drive the choreography (`data-form`, `data-l`, `data-p`, `data-glo`). */
+  /** The sections that drive the choreography (`data-form`, `data-l`, `data-p`, `data-n`, `data-glo`). */
   sections: HTMLElement[];
   /** Overrides the particle count (the OG image renders the full set without motion). */
   particles?: number;
+  /** The frame-time brake; false only to measure the scene as it is (`?freio=0`, tests). */
+  brake?: boolean;
 }
 
 export interface Scene3d {
@@ -73,6 +76,9 @@ declare global {
 const clamp = (x: number, a = 0, b = 1) => Math.min(b, Math.max(a, x));
 const smooth = (t: number) => t * t * (3 - 2 * t);
 
+/** Pixel ratio ceiling of a touch phone with motion that is not "weak" (3 = the screen's own size). */
+const PHONE_MAX_PR = 2;
+
 /** The scene, or null when WebGL cannot start. */
 export function createScene(input: SceneInput): Scene3d | null {
   const { canvas, reduce, coarse, pointer: ptr, gyro } = input;
@@ -90,8 +96,14 @@ export function createScene(input: SceneInput): Scene3d | null {
   }
   const weak = (navigator.hardwareConcurrency || 8) <= 4 || (navigator.deviceMemory || 8) <= 3;
   const N = input.particles ?? (reduce ? 3200 : weak ? 2800 : coarse ? 5200 : 8400);
-  const PR = Math.min(devicePixelRatio || 1, weak ? 1 : coarse ? 1.5 : 2);
+  const PR = Math.min(devicePixelRatio || 1, weak ? 1 : coarse ? (reduce ? 1.5 : PHONE_MAX_PR) : 2);
   renderer.setPixelRatio(PR);
+  // the brake: on a touch phone with motion, a slow scene steps down this ladder (never back up)
+  const ladder = [PR, 2, 1.5, 1.25, 1].filter((s, i) => !i || s < PR);
+  const brake =
+    (input.brake ?? true) && coarse && !reduce && ladder.length > 1 ? frameBrake() : null;
+  let rung = 0,
+    curPR = PR;
   renderer.setClearColor(0x000000, 0);
 
   const scene = new Scene();
@@ -301,12 +313,13 @@ export function createScene(input: SceneInput): Scene3d | null {
     ] as const
   ).forEach(([n, a, s]) => geo.setAttribute(n, new BufferAttribute(a, s)));
 
+  const dotSize = (coarse ? 36 : 44) * Math.min(1.6, Math.max(1, Math.sqrt(8400 / N)));
   const uni = {
     uTime: { value: 0 },
     uMix: { value: new Vector4(reduce ? 1 : 0, reduce ? 0 : 1, 0, 0) },
     uMouse: { value: new Vector3(99, 99, 0) },
     uMouseK: { value: 0 },
-    uSize: { value: (coarse ? 36 : 44) * Math.min(1.6, Math.max(1, Math.sqrt(8400 / N))) },
+    uSize: { value: dotSize },
     uPR: { value: PR },
     uStep: { value: -1 },
     uDrift: { value: reduce ? 0 : 1 },
@@ -370,6 +383,8 @@ export function createScene(input: SceneInput): Scene3d | null {
     form: FORM[el.dataset.form ?? 'wing'] ?? FORM.wing!,
     L: numbers(el.dataset.l),
     Pt: numbers(el.dataset.p),
+    // phones (<= 640 px): x (times the screen aspect, so it keeps its place), y, scale, alpha
+    N: numbers(el.dataset.n),
     glo: parseFloat(el.dataset.glo || '1'),
   }));
   type Section = (typeof secs)[number];
@@ -387,42 +402,31 @@ export function createScene(input: SceneInput): Scene3d | null {
     });
   }
   const target = { mix: new Vector4(1, 0, 0, 0), x: 0, y: 0, sc: 1, glo: 1 };
+  const phoneView = () => innerWidth <= 640 && camera.aspect < 0.9;
+  // phone point size: full at a figure scale of DOT_REF or more, shrinking with it down to DOT_MIN
+  const DOT_REF = 0.5,
+    DOT_MIN = 0.6;
   function aim() {
     if (!meta.length) return;
     const vc = scrollY + innerHeight / 2;
-    let i = meta.length - 1,
-      j = i,
-      t = 0;
-    for (let k = 0; k < meta.length; k++) {
-      const m = meta[k]!;
-      if (vc <= m.b) {
-        if (k === 0 || vc >= m.a) {
-          i = j = k;
-          t = 0;
-        } else {
-          i = k - 1;
-          j = k;
-          t = smooth(clamp((vc - meta[i]!.b) / Math.max(1, m.a - meta[i]!.b)));
-        }
-        break;
-      }
-    }
-    const A = meta[i]!.s,
-      B = meta[j]!.s,
-      ta = portrait ? A.Pt : A.L,
-      tb = portrait ? B.Pt : B.L;
-    const lerp = (a: number[], b: number[], k: number) =>
-      (a[k] ?? 0) + ((b[k] ?? 0) - (a[k] ?? 0)) * t;
-    target.mix.set(
-      lerp(A.form, B.form, 0),
-      lerp(A.form, B.form, 1),
-      lerp(A.form, B.form, 2),
-      lerp(A.form, B.form, 3),
-    );
-    target.x = lerp(ta, tb, 0);
-    target.y = lerp(ta, tb, 1);
-    target.sc = lerp(ta, tb, 2);
-    target.glo = A.glo + (B.glo - A.glo) * t;
+    // j: the section the screen centre is in or heading to; i: the one it leaves while between two
+    let j = meta.findIndex((m) => vc <= m.b);
+    if (j < 0) j = meta.length - 1;
+    const i = j && vc < meta[j]!.a ? j - 1 : j,
+      t = smooth(clamp((vc - meta[i]!.b) / Math.max(1, meta[j]!.a - meta[i]!.b)));
+    // a section's pose: form mix, x, y, scale, alpha; portrait phones (<= 640 px) use N
+    const pose = (s: Section) =>
+      phoneView()
+        ? [...s.form, s.N[0]! * camera.aspect, s.N[1]!, s.N[2]!, s.N[3]!]
+        : [...s.form, ...(portrait ? s.Pt : s.L), s.glo];
+    const a = pose(meta[i]!.s),
+      b = pose(meta[j]!.s),
+      v = a.map((x, n) => x + (b[n]! - x) * t);
+    target.mix.fromArray(v);
+    target.x = v[4]!;
+    target.y = v[5]!;
+    target.sc = v[6]!;
+    target.glo = v[7]!;
   }
   function resize() {
     const w = canvas.clientWidth || innerWidth,
@@ -460,6 +464,8 @@ export function createScene(input: SceneInput): Scene3d | null {
     group.position.y += (target.y - group.position.y) * k;
     const sc = group.scale.x + (target.sc - group.scale.x) * k;
     group.scale.setScalar(sc);
+    // on a phone the figure is small (data-n), so its points shrink with it instead of piling up
+    uni.uSize.value = dotSize * (phoneView() ? clamp(sc / DOT_REF, DOT_MIN, 1) : 1);
     uni.uAlpha.value += (target.glo - uni.uAlpha.value) * k;
     const ix = gyro.on ? gyro.x : ptr.x,
       iy = gyro.on ? gyro.y : ptr.y;
@@ -483,6 +489,11 @@ export function createScene(input: SceneInput): Scene3d | null {
   }
   function frame(now: number) {
     raf = 0;
+    if (brake && rung < ladder.length - 1 && brake(now)) {
+      curPR = ladder[++rung]!;
+      renderer.setPixelRatio(curPR); // also resizes the canvas, and resize() keeps this ratio
+      uni.uPR.value = curPR;
+    }
     update(now);
     renderer.render(scene, camera);
     if (!reduce && !document.hidden) raf = requestAnimationFrame(frame);
@@ -506,10 +517,14 @@ export function createScene(input: SceneInput): Scene3d | null {
   kick();
   window.__wings3d = () => ({
     particulas: N,
-    pixelRatio: PR,
+    pixelRatio: curPR,
+    degrau: rung,
+    degraus: ladder,
+    freio: brake !== null,
     drawCalls: renderer.info.render.calls,
     pontos: renderer.info.render.points,
     memoria: renderer.info.memory,
+    tamanhoPonto: uni.uSize.value,
   });
   return {
     onScroll() {

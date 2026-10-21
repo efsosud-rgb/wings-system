@@ -605,6 +605,7 @@ async function runViewport(
     noGl: document.documentElement.classList.contains('no-gl'),
     noFa: document.documentElement.classList.contains('no-fa'),
     scene: typeof window.__wings3d === 'function' ? window.__wings3d() : null,
+    phonePoses: [...document.querySelectorAll('[data-form]')].map((el) => el.dataset.n ?? ''),
     disabled: document.getElementById('f-send').disabled,
     missing: document.getElementById('f-missing').textContent,
   }));
@@ -641,6 +642,19 @@ async function runViewport(
     JSON.stringify(
       layout.scene && { particulas: layout.scene.particulas, pontos: layout.scene.pontos },
     ),
+  );
+  check(
+    `${label}: resolution brake only on a phone, ladder from at most 2x`,
+    layout.scene &&
+      layout.scene.freio === (mobile && layout.scene.degraus.length > 1) &&
+      layout.scene.degraus[0] <= 2,
+    JSON.stringify(layout.scene && { degraus: layout.scene.degraus, freio: layout.scene.freio }),
+  );
+  check(
+    `${label}: every scene section has a phone placement (x, y, scale, alpha)`,
+    layout.phonePoses.length === 6 &&
+      layout.phonePoses.every((n) => /^(-?\d+(\.\d+)?,){3}-?\d+(\.\d+)?$/.test(n)),
+    layout.phonePoses.join(' | '),
   );
   check(`${label}: social icon font loaded`, !layout.noFa);
   check(`${label}: send button off at start`, layout.disabled);
