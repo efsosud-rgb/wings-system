@@ -38,6 +38,8 @@ import {
   setOfficialNumberLive,
 } from './official-number.js';
 import { leadInScope, leadOwnerFilter } from '../leads/access.js';
+import { dealRouteAccessOf } from '../drive/access.js';
+import { DriveError, fileFor } from '../drive/service.js';
 import { leadHasFile } from '../leads/files.js';
 import { storageOf } from '../../lib/storage/index.js';
 import {
@@ -457,10 +459,20 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       // The file goes up to the deal's files first: a conversation no deal took yet has none.
       if (!target.leadId)
         return reply.status(422).send({ error: 'no_deal', message: NO_DEAL_FOR_FILES });
+      // One of the deal's files, and one the sender may open: the deal's link route asks the
+      // same, so a file of another department attached to the deal never leaves through here.
       const file = (await leadHasFile(db, target.leadId, outgoing.fileId))
-        ? await db.query.driveFiles.findFirst({
-            where: and(eq(driveFiles.id, outgoing.fileId), isNull(driveFiles.trashedAt)),
-          })
+        ? await fileFor(
+            { ...artDeps(), maxFileBytes: env.DRIVE_MAX_FILE_BYTES },
+            dealRouteAccessOf(request.session.actor),
+            outgoing.fileId,
+          ).then(
+            ({ file: found }) => (found.trashedAt ? undefined : found),
+            (error: unknown) => {
+              if (error instanceof DriveError) return undefined;
+              throw error;
+            },
+          )
         : undefined;
       if (!file)
         return reply.status(404).send({
@@ -498,9 +510,12 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         return reply.status(502).send({
           error: 'media_upload_failed',
           message:
-            media.why === 'meta'
-              ? `O arquivo não subiu para a Meta${why ? ` (${why})` : ''}. Nada foi enviado; tente de novo em instantes.`
-              : 'Não deu para ler o arquivo no Drive. Nada foi enviado; tente de novo em instantes.',
+            media.why !== 'meta'
+              ? 'Não deu para ler o arquivo no Drive. Nada foi enviado; tente de novo em instantes.'
+              : media.code === 100
+                ? // The same file is refused again: another format, not another try.
+                  `O arquivo não subiu para a Meta (${why}). Nada foi enviado; envie em outro formato, como PDF.`
+                : `O arquivo não subiu para a Meta${why ? ` (${why})` : ''}. Nada foi enviado; tente de novo em instantes.`,
         });
       }
       sentFile = { fileId: file.id, kind: goes.kind, mediaId: media.mediaId };
@@ -983,6 +998,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     'audio/mpeg',
     'audio/aac',
     'audio/mp4',
+    // What some browsers call an M4A sent from the deal's files (Meta was told audio/mp4).
+    'audio/x-m4a',
     'video/mp4',
     'application/pdf',
   ]);

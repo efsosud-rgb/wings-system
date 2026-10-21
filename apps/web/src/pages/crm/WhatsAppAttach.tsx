@@ -16,6 +16,8 @@ export interface Picked {
   uploaded: string | null;
   /** The id of the deal's file that already has this name. */
   taken: string | null;
+  /** Why this name cannot go (the deal has it, or it cites the Wings to a brand's lead): the tray asks for another. */
+  renameWhy: string | null;
 }
 
 /** The file as it would go, or why it cannot. */
@@ -25,7 +27,7 @@ export function pickedOf(file: File): Picked | string {
     byteSize: file.size,
   });
   if (!goes) return 'O WhatsApp aceita arquivos de até 100 MB.';
-  return { file, kind: goes.kind, uploaded: null, taken: null };
+  return { file, kind: goes.kind, uploaded: null, taken: null, renameWhy: null };
 }
 
 type Playable = Exclude<WaSendKind, 'document'>;
@@ -79,7 +81,8 @@ export function AttachTray({
   onRename: (name: string) => void;
 }) {
   const [name, setName] = useState<string | null>(null);
-  useEffect(() => setName(null), [picked.taken]);
+  useEffect(() => setName(null), [picked.renameWhy]);
+  const typed = name ?? renamed(picked.file.name);
   return (
     <div className="crm-wa-attach" role="group" aria-label="Arquivo para enviar">
       <span className="crm-wa-attach-icon" aria-hidden="true">
@@ -105,10 +108,10 @@ export function AttachTray({
       >
         <Icon name="x" size={16} />
       </button>
-      {picked.taken && (
+      {picked.renameWhy && (
         <div className="crm-wa-attach-taken">
-          <p>Já existe um arquivo com este nome nos arquivos da negociação.</p>
-          {name === null ? (
+          <p>{picked.renameWhy}</p>
+          {name === null && picked.taken ? (
             <div className="crm-wa-compose-actions">
               <button
                 type="button"
@@ -133,20 +136,20 @@ export function AttachTray({
               <input
                 className="crm-input"
                 aria-label="Novo nome do arquivo"
-                value={name}
+                value={typed}
                 maxLength={200}
                 onChange={(event) => setName(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key !== 'Enter') return;
                   event.preventDefault();
-                  if (name.trim() && !busy) onRename(name.trim());
+                  if (typed.trim() && !busy) onRename(typed.trim());
                 }}
               />
               <button
                 type="button"
                 className="crm-btn is-small is-primary"
-                disabled={busy || !name.trim()}
-                onClick={() => onRename(name.trim())}
+                disabled={busy || !typed.trim()}
+                onClick={() => onRename(typed.trim())}
               >
                 Enviar com este nome
               </button>
@@ -176,11 +179,22 @@ export function EmojiButton({ onPick }: { onPick: (emoji: string) => void }) {
   const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!open) return;
-    const away = (event: MouseEvent) => {
+    // pointerdown: iOS fires no mousedown for a tap on what is not clickable.
+    const away = (event: PointerEvent) => {
       if (!box.current?.contains(event.target as Node)) setOpen(false);
     };
-    document.addEventListener('mousedown', away);
-    return () => document.removeEventListener('mousedown', away);
+    // Esc from anywhere (the 😊 itself, the field after an emoji), not only inside the grid.
+    const esc = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setOpen(false);
+      button.current?.focus();
+    };
+    document.addEventListener('pointerdown', away);
+    document.addEventListener('keydown', esc);
+    return () => {
+      document.removeEventListener('pointerdown', away);
+      document.removeEventListener('keydown', esc);
+    };
   }, [open]);
   return (
     <div className="crm-wa-emoji" ref={box}>

@@ -1,4 +1,5 @@
 import {
+  mentionsWings,
   WA_CAPTION_MAX,
   WA_KIND_LABELS,
   WA_STATUS_LABELS,
@@ -69,6 +70,8 @@ export function WhatsAppChat({
   const templateMode = useTemplate || !data.window.open;
   const older = useOlder(thread, data.messages);
   const soon = useWhatsAppSoon();
+  // One composer per conversation: what was typed or chosen in one never goes to the next opened.
+  const composerKey = 'leadId' in thread ? thread.leadId : thread.conversationId;
 
   return (
     <section className="crm-wa-chat" aria-label="Conversa">
@@ -121,6 +124,7 @@ export function WhatsAppChat({
       {canSend && !soon && data.configured && data.phone ? (
         templateMode ? (
           <TemplateCompose
+            key={composerKey}
             thread={thread}
             optedOut={data.optedOut}
             windowOpen={data.window.open}
@@ -128,6 +132,7 @@ export function WhatsAppChat({
           />
         ) : (
           <TextCompose
+            key={composerKey}
             thread={thread}
             leadId={data.leadId}
             onTemplate={() => setUseTemplate(true)}
@@ -512,13 +517,18 @@ function TextCompose({
 
   const sendPicked = (over: { uploaded: string | null; file?: File }) => {
     if (!picked || sendFile.isPending) return;
+    const caption = captionless ? '' : text.trim();
+    // Checked before the upload: the API would refuse it only after the file went up.
+    if (caption.length > WA_CAPTION_MAX)
+      return setNote(`Legenda de até ${WA_CAPTION_MAX} caracteres: encurte o texto para enviar.`);
+    setNote(null);
     const file = over.file ?? picked.file;
-    if (over.file) setPicked({ ...picked, file, taken: null });
+    if (over.file) setPicked({ ...picked, file, taken: null, renameWhy: null });
     sendFile.mutate(
       {
         file,
         uploaded: over.uploaded,
-        caption: captionless ? '' : text.trim(),
+        caption,
         onProgress: setProgress,
         onUploaded: (fileId) => setPicked((now) => now && { ...now, uploaded: fileId }),
       },
@@ -529,11 +539,33 @@ function TextCompose({
           if (!captionless) setText('');
         },
         onError: (error) => {
+          if (!(error instanceof ApiError)) return;
           const existing =
-            error instanceof ApiError && error.code === 'name_taken'
+            error.code === 'name_taken'
               ? (error.body as { existingFileId?: unknown }).existingFileId
               : undefined;
-          if (typeof existing === 'string') setPicked((now) => now && { ...now, taken: existing });
+          // A name that cannot go is a choice in the tray (another name), not an error line.
+          const renameWhy =
+            typeof existing === 'string'
+              ? 'Já existe um arquivo com este nome nos arquivos da negociação.'
+              : error.code === 'file_not_found' && picked.taken && over.uploaded === picked.taken
+                ? // The file the name belongs to was taken off the deal (it stays in its folder).
+                  'O arquivo com este nome não está mais nos arquivos da negociação: envie este com outro nome.'
+                : error.code === 'brand_voice' &&
+                    !mentionsWings(caption) &&
+                    mentionsWings(file.name)
+                  ? error.message
+                  : null;
+          if (renameWhy)
+            setPicked(
+              (now) =>
+                now && {
+                  ...now,
+                  uploaded: null,
+                  taken: typeof existing === 'string' ? existing : null,
+                  renameWhy,
+                },
+            );
         },
         onSettled: () => setProgress(null),
       },
@@ -542,7 +574,7 @@ function TextCompose({
 
   const submit = () => {
     // A name the deal already has waits for the choice in the tray.
-    if (picked) return picked.taken ? undefined : sendPicked({ uploaded: picked.uploaded });
+    if (picked) return picked.renameWhy ? undefined : sendPicked({ uploaded: picked.uploaded });
     const body = text.trim();
     if (!body || send.isPending) return;
     send.mutate({ text: body }, { onSuccess: () => setText('') });
@@ -567,14 +599,16 @@ function TextCompose({
       : sendFile.isPending
         ? 'Enviando…'
         : null;
-  // A name the deal already has is not a failure: the tray offers the file there, or another name.
-  const failure =
-    sendFile.error instanceof ApiError && sendFile.error.code === 'name_taken'
-      ? null
-      : sendFile.error
-        ? // The upload's own words too (the storage refused, the connection fell).
+  // A name that cannot go is not a failure: the tray says why and offers another name.
+  const failure = picked?.renameWhy
+    ? null
+    : sendFile.error
+      ? sendFile.error instanceof TypeError
+        ? // No answer: the request may have arrived, so nothing is claimed either way.
+          'Sem resposta do servidor. Confira a conexão e, antes de tentar de novo, veja se o arquivo já aparece na conversa.'
+        : // The upload's own words too (the storage refused, the connection fell).
           sendFile.error.message || 'Não foi possível enviar o arquivo.'
-        : send.error && errorText(send.error, 'Não foi possível enviar.');
+      : send.error && errorText(send.error, 'Não foi possível enviar.');
   return (
     <form
       className="crm-wa-compose"
@@ -642,6 +676,8 @@ function TextCompose({
         rows={2}
         maxLength={picked ? WA_CAPTION_MAX : 4096}
         disabled={captionless}
+        // What goes is what was there on the click: no edit while it goes, none lost after.
+        readOnly={busy}
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={(event) => {
@@ -655,7 +691,7 @@ function TextCompose({
         <button
           type="submit"
           className="crm-btn is-primary"
-          disabled={busy || (picked ? picked.taken !== null : text.trim().length === 0)}
+          disabled={busy || (picked ? picked.renameWhy !== null : text.trim().length === 0)}
         >
           {picked ? 'Enviar arquivo' : 'Enviar'}
         </button>

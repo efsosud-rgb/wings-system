@@ -238,6 +238,91 @@ describe('a file in the composer', () => {
     expect(sentBodies()[0]!.url).toBe('/api/whatsapp/conversations/c1/media');
   });
 
+  it('a file chosen in one conversation is not there when the next one opens', () => {
+    const client = new QueryClient();
+    const view = render(
+      <QueryClientProvider client={client}>
+        <WhatsAppChat thread={{ conversationId: 'c1' }} data={thread()} canSend />
+      </QueryClientProvider>,
+    );
+    choose(fileOf('proposta.pdf', 'application/pdf', 1_000));
+    fireEvent.change(screen.getByLabelText('Legenda'), { target: { value: 'Segue' } });
+    view.rerender(
+      <QueryClientProvider client={client}>
+        <WhatsAppChat
+          thread={{ conversationId: 'c2' }}
+          data={thread({ conversationId: 'c2', leadId: 'l2' })}
+          canSend
+        />
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByText('proposta.pdf')).toBeNull();
+    expect((screen.getByLabelText('Mensagem') as HTMLTextAreaElement).value).toBe('');
+  });
+
+  it('a name the deal had but no longer lists: asks for another name, never offers it again', async () => {
+    sendLeadFile
+      .mockRejectedValueOnce(
+        new ApiError(409, { error: 'name_taken', message: 'x', existingFileId: 'f9' } as never),
+      )
+      .mockResolvedValueOnce(leadFile('f3'));
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve(answer(404, { error: 'file_not_found', message: 'Arquivo não encontrado.' })),
+    );
+    show();
+    choose(fileOf('proposta.pdf', 'application/pdf', 1_000));
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar arquivo' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Enviar o que já está lá' }));
+    await screen.findByText(/não está mais nos arquivos da negociação/);
+    expect(screen.queryByRole('button', { name: 'Enviar o que já está lá' })).toBeNull();
+    expect(screen.queryByText('Arquivo não encontrado.')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar com este nome' }));
+
+    await waitFor(() => expect(sentBodies()).toHaveLength(2));
+    expect((sendLeadFile.mock.calls[1]![0] as { file: File }).file.name).toBe('proposta (2).pdf');
+    expect(sentBodies()[1]!.body).toEqual({ fileId: 'f3' });
+  });
+
+  it("a name citing the Wings to a brand's lead: another name, and Enter sends with it", async () => {
+    sendLeadFile.mockResolvedValueOnce(leadFile('f1')).mockResolvedValueOnce(leadFile('f2'));
+    const refusal =
+      'Nesta conversa você fala pelo time de expansão da Marca: o nome do arquivo cita a Wings; envie com outro nome.';
+    fetchMock.mockImplementationOnce(() =>
+      Promise.resolve(answer(422, { error: 'brand_voice', message: refusal })),
+    );
+    show(thread({ speaksFor: 'Marca' }));
+    choose(fileOf('Apresentacao Wings.pdf', 'application/pdf', 1_000));
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar arquivo' }));
+    const name = (await screen.findByLabelText('Novo nome do arquivo')) as HTMLInputElement;
+    expect(screen.getByText(refusal)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Enviar o que já está lá' })).toBeNull();
+    fireEvent.change(name, { target: { value: 'Apresentacao.pdf' } });
+    fireEvent.keyDown(name, { key: 'Enter' });
+
+    await waitFor(() => expect(sentBodies()).toHaveLength(2));
+    expect((sendLeadFile.mock.calls[1]![0] as { file: File }).file.name).toBe('Apresentacao.pdf');
+    expect(sentBodies()[1]!.body).toEqual({ fileId: 'f2' });
+  });
+
+  it('a caption over the limit is refused before the file goes up', () => {
+    show();
+    fireEvent.change(screen.getByLabelText('Mensagem'), { target: { value: 'a'.repeat(1_100) } });
+    choose(fileOf('fachada.jpg', 'image/jpeg', 40_000));
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar arquivo' }));
+    expect(screen.getByText(/Legenda de até 1024 caracteres/)).toBeTruthy();
+    expect(sendLeadFile).not.toHaveBeenCalled();
+  });
+
+  it('no answer from the server says so in Portuguese, without claiming either way', async () => {
+    sendLeadFile.mockResolvedValue(leadFile('f1'));
+    fetchMock.mockImplementationOnce(() => Promise.reject(new TypeError('Failed to fetch')));
+    show();
+    choose(fileOf('proposta.pdf', 'application/pdf', 1_000));
+    fireEvent.click(screen.getByRole('button', { name: 'Enviar arquivo' }));
+    await screen.findByText(/Sem resposta do servidor/);
+    expect(screen.queryByText('Failed to fetch')).toBeNull();
+  });
+
   it('the 📎 is off, with the reason, for a conversation with no deal', () => {
     show(thread({ leadId: null }), { conversationId: 'c1' });
     const attach = screen.getByRole('button', { name: 'Anexar arquivo' });
@@ -269,6 +354,17 @@ describe('emoji in the composer', () => {
     expect(field.value).toBe('Oi👋 tudo bem');
     const grid = screen.getByRole('group', { name: 'Escolha um emoji' });
     fireEvent.keyDown(grid, { key: 'Escape' });
+    expect(screen.queryByRole('group', { name: 'Escolha um emoji' })).toBeNull();
+  });
+
+  it('Esc closes the grid with the focus outside it (on 😊, or on the field)', () => {
+    show();
+    const button = screen.getByRole('button', { name: 'Emojis' });
+    fireEvent.click(button);
+    fireEvent.keyDown(button, { key: 'Escape' });
+    expect(screen.queryByRole('group', { name: 'Escolha um emoji' })).toBeNull();
+    fireEvent.click(button);
+    fireEvent.keyDown(screen.getByLabelText('Mensagem'), { key: 'Escape' });
     expect(screen.queryByRole('group', { name: 'Escolha um emoji' })).toBeNull();
   });
 });

@@ -154,9 +154,13 @@ permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em `/
   existe (`POST /leads/:id/files/uploads` → envio direto ao R2 → `…/complete`, que pede `leads.write`), e
   depois a conversa o envia pelo id (`POST …/media` com `{ fileId, caption? }`). Se a negociação já tem um
   arquivo com o mesmo nome, a tela oferece "Enviar o que já está lá" (vai pelo id, sem subir de novo) ou
-  "Enviar com outro nome". Se o envio falha depois da subida, a nova tentativa não sobe o arquivo outra vez.
-  Numa conversa sem negociação, ou para quem não edita a negociação, o 📎 fica desligado e o motivo aparece
-  embaixo do campo.
+  "Enviar com outro nome". O campo de novo nome também aparece quando o nome cita a Wings num lead de marca
+  e quando o arquivo daquele nome já foi tirado da negociação (ele continua na pasta, então o nome segue
+  ocupado). Se o envio falha depois da subida, a nova tentativa não sobe o arquivo outra vez. Legenda acima
+  de 1024 caracteres é barrada antes de subir. Enquanto envia, o campo fica só leitura: vai o texto do
+  clique. Cada conversa tem o seu campo: trocar de conversa na caixa descarta o arquivo escolhido e o
+  texto. Numa conversa sem negociação, ou para quem não edita a negociação, o 📎 fica desligado e o motivo
+  aparece embaixo do campo.
 - **Como vai:** uma regra só, `waSendKindOf` em `packages/shared`; a tela confere antes de subir e a API
   confere de novo antes de enviar.
 
@@ -175,7 +179,10 @@ permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em `/
 
 - **Regras do envio** (as do texto, em `send()` de `routes.ts`): só dentro da janela de 24 h (fora dela, 409
   `window_closed`: só modelo) e com a trava do vendedor (403 `whatsapp_soon`). O arquivo tem de ser da própria
-  negociação e estar fora da lixeira (`leadHasFile`; senão 404 `file_not_found`). Conversa sem negociação: 422
+  negociação, estar fora da lixeira e ser um que quem envia pode abrir no Drive (`leadHasFile` e `fileFor`
+  com `dealRouteAccessOf`, a mesma conferência do link de arquivo da negociação; senão 404
+  `file_not_found`): um arquivo de outro departamento anexado à negociação não sai por quem não o vê.
+  Conversa sem negociação: 422
   `no_deal`. Acima de 100 MB: 413 `too_large`. Legenda em áudio: 422 `caption_not_allowed`. A voz da marca
   (`brand_voice`) confere a legenda **e o nome do arquivo**, porque um documento mostra o nome à pessoa: um
   arquivo cujo nome cite a Wings não vai para um lead de marca; envie com outro nome.
@@ -183,7 +190,8 @@ permissão. O que o Eric faz na Meta e o roteiro da troca do número ficam em `/
   o id fica em `wa_media_uploads` por até 25 dias, para aquela versão do arquivo; o segundo envio usa o id
   guardado. Se um status disser depois que o arquivo sumiu (códigos 100, 131009, 131052 ou 131053), o id é
   descartado e o próximo envio sobe de novo. Falha na subida responde 502 `media_upload_failed` e nada é
-  enviado (o código 100 na subida vira "a Meta não aceita este tipo de arquivo"). Como todo envio, vai uma vez
+  enviado (o código 100 na subida vira "a Meta não aceita este tipo de arquivo… envie em outro formato, como
+  PDF", porque tentar de novo o mesmo arquivo dá a mesma recusa). Como todo envio, vai uma vez
   e nunca é repetido sozinho. A subida espera até 60 s: um documento grande numa conexão lenta pode passar
   disso, e então responde 502 e nada é enviado.
 - **O que fica gravado:** a mensagem guarda `{ media: { id, mimeType, filename }, file: { fileId, version } }`.

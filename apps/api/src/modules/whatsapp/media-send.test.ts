@@ -17,6 +17,7 @@ import {
   auditLog,
   clients,
   driveFiles,
+  driveFolders,
   driveFileVersions,
   leadFiles,
   leads,
@@ -348,6 +349,81 @@ describe('sending a file of the deal', () => {
     expect((sends.at(-1)!.document as Record<string, unknown>).caption).toBeUndefined();
   });
 
+  it('a new version of the file in the Drive goes up again', async () => {
+    const { leadId, fileId } = await openDealWith('proposta.pdf', 'application/pdf', PDF);
+    expect((await sendFile(seller, `/leads/${leadId}/whatsapp/media`, { fileId })).statusCode).toBe(
+      201,
+    );
+    const file = await db.query.driveFiles.findFirst({ where: eq(driveFiles.id, fileId) });
+    const newer = Buffer.from('%PDF-1.4 proposta revista, mais longa');
+    const newKey = `${file!.storageKey}-v2`;
+    await storageOf(app.wings)!.put(newKey, newer, 'application/pdf');
+    await db
+      .update(driveFiles)
+      .set({ version: 2, storageKey: newKey, byteSize: newer.length })
+      .where(eq(driveFiles.id, fileId));
+    const res = await sendFile(seller, `/leads/${leadId}/whatsapp/media`, { fileId });
+    expect(res.statusCode).toBe(201);
+    expect(uploads.map((u) => u.size)).toEqual([PDF.length, newer.length]);
+    expect(sends.at(-1)).toMatchObject({ document: { id: 'MEDIA2' } });
+    const [row] = await db
+      .select()
+      .from(waMessages)
+      .where(eq(waMessages.id, res.json<{ message: WaMessage }>().message.id));
+    expect(row!.content).toMatchObject({ file: { fileId, version: 2 } });
+  });
+
+  it('an MP4 goes as a video with its caption', async () => {
+    const { leadId, fileId } = await openDealWith(
+      'volta.mp4',
+      'video/mp4',
+      Buffer.from('fake mp4 bytes'),
+    );
+    const res = await sendFile(seller, `/leads/${leadId}/whatsapp/media`, {
+      fileId,
+      caption: 'Tour pela loja',
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json<{ message: WaMessage }>().message.kind).toBe('video');
+    expect(uploads[0]!.type).toBe('video/mp4');
+    expect(sends[0]).toMatchObject({
+      type: 'video',
+      video: { id: 'MEDIA1', caption: 'Tour pela loja' },
+    });
+  });
+
+  it('a file the storage cannot read is not sent', async () => {
+    const { leadId, fileId } = await openDealWith('proposta.pdf', 'application/pdf', PDF);
+    await db
+      .update(driveFiles)
+      .set({ storageKey: 'drive/nao-existe' })
+      .where(eq(driveFiles.id, fileId));
+    const before = await db.$count(waMessages);
+    const res = await sendFile(seller, `/leads/${leadId}/whatsapp/media`, { fileId });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ error: 'media_upload_failed' });
+    expect(res.json().message).toContain('Nada foi enviado');
+    expect(uploads).toHaveLength(0);
+    expect(sends).toHaveLength(0);
+    expect(await db.$count(waMessages)).toBe(before);
+  });
+
+  it("a deal's file kept in another department's folder: the seller cannot send it, the Drive's reader can", async () => {
+    const { leadId, fileId } = await openDealWith('contrato.pdf', 'application/pdf', PDF);
+    // As if someone with that Drive attached a Jurídico file to the deal.
+    const juridico = await db.query.driveFolders.findFirst({
+      where: eq(driveFolders.department, 'juridico'),
+    });
+    await db.update(driveFiles).set({ folderId: juridico!.id }).where(eq(driveFiles.id, fileId));
+    const res = await sendFile(seller, `/leads/${leadId}/whatsapp/media`, { fileId });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe('file_not_found');
+    expect(uploads).toHaveLength(0);
+    expect(sends).toHaveLength(0);
+    const byAdmin = await sendFile(admin, `/leads/${leadId}/whatsapp/media`, { fileId });
+    expect(byAdmin.statusCode).toBe(201);
+  });
+
   it('a send Meta fails because the file is gone drops the id; the next one uploads again', async () => {
     const { leadId, fileId } = await openDealWith('lista.pdf', 'application/pdf', PDF);
     nextSend = () => json({ error: { code: 131053, message: 'media upload error' } }, 400);
@@ -438,7 +514,19 @@ describe('sending a file of the deal', () => {
     expect(res.statusCode).toBe(201);
     expect(uploads[0]!.type).toBe('audio/mp4');
     expect(sends[0]).toEqual(expect.objectContaining({ type: 'audio', audio: { id: 'MEDIA1' } }));
-    expect(res.json<{ message: WaMessage }>().message).toMatchObject({ kind: 'audio', text: null });
+    const message = res.json<{ message: WaMessage }>().message;
+    expect(message).toMatchObject({ kind: 'audio', text: null });
+    // The bubble's player gets it as audio, in place, not as a download.
+    const bubble = await app.inject({
+      url: `/whatsapp/messages/${message.id}/media`,
+      cookies: seller.cookies,
+    });
+    expect(bubble.statusCode).toBe(302);
+    const served = await app.inject({
+      url: (bubble.headers.location as string).replace('http://localhost:5173/api', ''),
+    });
+    expect(served.headers['content-type']).toContain('audio/x-m4a');
+    expect(String(served.headers['content-disposition'])).toMatch(/^inline/);
   });
 
   it('outside the 24-hour window nothing goes up nor out', async () => {
@@ -571,6 +659,9 @@ describe('sending a file of the deal', () => {
       message: expect.stringContaining('a Meta não aceita este tipo de arquivo'),
     });
     expect(res.json().message).toContain('Nada foi enviado');
+    // The same file would be refused again: the way out is another format.
+    expect(res.json().message).toContain('envie em outro formato');
+    expect(res.json().message).not.toContain('tente de novo');
     expect(sends).toHaveLength(0);
     expect(await db.$count(waMessages)).toBe(before);
   });
