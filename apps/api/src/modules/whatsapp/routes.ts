@@ -7,6 +7,7 @@ import {
   waTemplateSendSchema,
   waSendTextSchema,
   WA_ART_SUFFIX,
+  WA_TEXT_SEARCH_MIN,
   type WaArtLink,
   type WaConversationItem,
   type WaNewTarget,
@@ -57,6 +58,7 @@ import {
   buildThread,
   conversationItemOf,
   conversationListSql,
+  likeOf,
   markConversationRead,
   type ConversationListRow,
   contactOfPhone,
@@ -67,6 +69,7 @@ import {
 } from './thread.js';
 import { takeConversation } from '../sofia/state.js';
 import { adoptUnmatched, conversationFor } from './intake.js';
+import { inboxSummaryOf } from './inbox.js';
 import {
   payloadOf,
   planTemplateFor,
@@ -190,29 +193,40 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     if (!query.success)
       return reply.status(400).send({ error: 'invalid', message: 'Filtro inválido.' });
     const filter = query.data.filter ?? (query.data.unanswered === '1' ? 'unanswered' : 'all');
-    const q = query.data.q;
+    const q = query.data.q || undefined;
     const digits = q?.replace(/\D/g, '') ?? '';
+    const like = q ? likeOf(q) : '';
+    // Inside the messages too (Eric, 20/10), from a few letters on; the term is never logged
+    // (the request log drops the query string).
+    const textLike = q && q.length >= WA_TEXT_SEARCH_MIN ? like : undefined;
     const rows = await db.execute<ConversationListRow>(
       conversationListSql({
         owner: leadOwnerFilter(request.session.actor, 'leads.whatsapp'),
         readerId: request.session.actor.employeeId,
         limit: 200,
+        textLike,
         where: sql`
           ${filter === 'unanswered' ? sql`and m.direction = 'in'` : sql``}
           ${
             q
-              ? sql`and (k.profile_name ilike ${`%${q}%`} or l.name ilike ${`%${q}%`}
-                    ${digits.length >= 4 ? sql`or k.phone like ${`%${digits}%`}` : sql``})`
+              ? sql`and (k.profile_name ilike ${like} or l.name ilike ${like}
+                    ${digits.length >= 4 ? sql`or k.phone like ${`%${digits}%`}` : sql``}
+                    ${textLike ? sql`or f.text is not null` : sql``})`
               : sql``
           }`,
       }),
     );
     const at = now();
     const items: WaConversationItem[] = rows.rows
-      .map((row) => conversationItemOf(row, at))
+      .map((row) => conversationItemOf(row, at, textLike ? q : undefined))
       .filter((item) => filter !== 'unread' || item.unreadCount > 0);
     return reply.send({ conversations: items });
   });
+
+  /** The menu's count of unread conversations and the stamp the screens watch (`inbox.ts`). */
+  app.get('/whatsapp/inbox/summary', use, async (request, reply) =>
+    reply.send(await inboxSummaryOf(db, request.session.actor)),
+  );
 
   /** The reader opened the conversation: its messages so far are read, for them only. */
   app.post('/whatsapp/conversations/:id/read', use, async (request, reply) => {

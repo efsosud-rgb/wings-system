@@ -57,3 +57,4 @@ export * from './meetings.js';
 export * from './whatsapp.js';
 export * from './whatsapp-art.js';
 export * from './sofia.js';
+export * from './whatsapp-inbox.js';

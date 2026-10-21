@@ -237,6 +237,8 @@ export interface WaConversationItem {
   attendance: SofiaState;
   /** The deal's owner, when there is a deal. */
   ownerName: string | null;
+  /** With a search: the latest message whose text has it, cut around the term. */
+  match?: { text: string; at: string } | null;
 }
 
 /** "Nova conversa": a deal (or a contact's deal) in the reader's scope to write to. */
