@@ -20,6 +20,7 @@ import { permissionScope, useSession } from './auth.js';
 import { api } from './client.js';
 import { sendLeadFile } from './crm.js';
 import { openRingingStream } from './ringing-stream.js';
+import { INBOX_SUMMARY_KEY, inboxStreamDown, receiveInboxSummary } from './whatsapp-inbox.js';
 
 /**
  * The official WhatsApp of the CRM (docs/whatsapp/cloud-api.md). The open
@@ -121,8 +122,11 @@ export function useMarkWhatsAppRead() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.passivePost<void>(`/whatsapp/conversations/${id}/read`),
-    onSuccess: () =>
-      void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations', 'list'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations', 'list'] });
+      // Asked again only while the stream is down; when live, the stream brings it.
+      void queryClient.invalidateQueries({ queryKey: INBOX_SUMMARY_KEY });
+    },
   });
 }
 
@@ -257,11 +261,17 @@ export function useRingingCalls(enabled: boolean) {
           .cancelQueries({ queryKey: RINGING_KEY })
           .then(() => queryClient.setQueryData(RINGING_KEY, snapshot));
       },
-      onLive: setLive,
+      // The same stream brings the inbox: the menu's count, and new messages at once.
+      onInbox: (summary) => receiveInboxSummary(queryClient, summary),
+      onLive: (live) => {
+        setLive(live);
+        if (!live) inboxStreamDown(queryClient);
+      },
     });
     return () => {
       close();
       setLive(false);
+      inboxStreamDown(queryClient);
     };
   }, [enabled, queryClient]);
 
