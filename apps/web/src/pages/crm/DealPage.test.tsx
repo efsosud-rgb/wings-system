@@ -525,3 +525,22 @@ describe('Instagram do formulário', () => {
     expect(panel().queryByRole('button', { name: 'Marcar como falso' })).toBeNull();
   });
 });
+
+describe('Contato', () => {
+  it("links the phone to the seller's own WhatsApp (wa.me), next to the Wings conversation", () => {
+    queryState.lead = lead({ phone: '5521999990001' });
+    show();
+    const links = screen.getAllByRole('link', { name: 'Abrir no WhatsApp do vendedor' });
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link.getAttribute('href')).toBe('https://wa.me/5521999990001');
+      expect(link.getAttribute('target')).toBe('_blank');
+    }
+  });
+
+  it('offers no WhatsApp link without a phone', () => {
+    queryState.lead = lead({ phone: null });
+    show();
+    expect(screen.queryByRole('link', { name: 'Abrir no WhatsApp do vendedor' })).toBeNull();
+  });
+});

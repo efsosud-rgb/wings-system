@@ -36,7 +36,7 @@ import { ConfirmDialog } from '../../components/agenda/ConfirmDialog.js';
 import { Icon } from '../../components/Icon.js';
 import { failureReason } from '../../lib/failure.js';
 import { openMeetBeside } from '../../lib/meet.js';
-import { formatDateTime, formatDay, toLocalInput } from './format.js';
+import { formatDateTime, formatDay, formatEntered, toLocalInput, waMeUrl } from './format.js';
 
 /**
  * The Reunião section of the deal, on the Opus's meetings API
@@ -176,7 +176,8 @@ function ScheduleForm({
   const [problem, setProblem] = useState<string | null>(null);
   // Google-made by default for whoever is connected; the pasted link for everyone else.
   const onGoogle = createMeet ?? connected;
-  const wingsBlocked = onGoogle && wings !== null && wings.access !== 'writer';
+  const wingsBlocked =
+    onGoogle && calendar === 'wings' && wings !== null && wings.access !== 'writer';
 
   const submit = () => {
     const parsed = meetingCreateSchema.safeParse({
@@ -1037,6 +1038,13 @@ function MeetingRow({
   );
 }
 
+/**
+ * What "Enviar link do Meet" writes in the seller's WhatsApp. No brand and no Wings in it, so it
+ * fits an Expansão lead with a brand too; the seller reads it there before sending.
+ */
+export const meetLinkText = (meeting: Pick<MeetingSummary, 'startsAt' | 'meetUrl'>): string =>
+  `Olá! Segue o link da nossa reunião de ${formatEntered(meeting.startsAt)}: ${meeting.meetUrl ?? ''}`;
+
 /** The meeting "Iniciar" opens: the one in progress, else the next one scheduled, with a link. */
 export function meetingToStart(
   meetings: MeetingSummary[],
@@ -1120,6 +1128,30 @@ export function MeetingsTab({
           >
             {running ? 'Voltar ao Meet' : 'Iniciar reunião'}
           </button>
+          {canWrite && (
+            <button
+              type="button"
+              className="crm-btn is-small"
+              disabled={!next || !lead.phone}
+              title={
+                !lead.phone
+                  ? 'A negociação não tem telefone'
+                  : next
+                    ? 'Abre o seu WhatsApp com o link da reunião já escrito'
+                    : 'Nenhuma reunião com link para enviar'
+              }
+              onClick={() => {
+                if (!next?.meetUrl || !lead.phone) return;
+                window.open(
+                  waMeUrl(lead.phone, meetLinkText(next)),
+                  '_blank',
+                  'noopener,noreferrer',
+                );
+              }}
+            >
+              Enviar link do Meet
+            </button>
+          )}
           {canWrite && running && (
             <button
               type="button"
@@ -1145,7 +1177,8 @@ export function MeetingsTab({
       <p className="crm-sub">
         Agendar cria o evento e o Meet no Google Agenda com a sua conta (ou marca com um link
         colado); Iniciar abre o Meet numa janela ao lado do Wings e registra o início na negociação;
-        Encerrar registra o fim.
+        Enviar link abre o seu WhatsApp com o link já escrito, para você enviar; Encerrar registra o
+        fim.
       </p>
       <Problem error={step.error} fallback="Não foi possível registrar na negociação." />
       {justEnded && (

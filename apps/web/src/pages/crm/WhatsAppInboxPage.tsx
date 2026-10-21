@@ -95,6 +95,11 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
           >
             Nova conversa
           </button>
+          {hasPermission(session.data, 'whatsapp.import_bulk') && (
+            <Link className="crm-btn" to="/crm-vendas/whatsapp/importar-lote">
+              Importar em lote
+            </Link>
+          )}
         </header>
         {soon && (
           <p className="crm-wa-soon" role="status">

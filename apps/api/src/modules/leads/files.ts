@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { DRIVE_NAME_MAX, type DriveUploadTicket, type LeadFile } from '@wings/shared';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
@@ -13,6 +14,7 @@ import {
   DriveError,
   completeUpload,
   createFolder,
+  newStorageKey,
   requestUpload,
   type DriveDeps,
 } from '../drive/service.js';
@@ -150,6 +152,42 @@ export async function completeLeadUpload(
 ): Promise<LeadFile> {
   const { file } = await completeUpload(deps, access, uploadId);
   return attachFile(deps.db, { leadId, driveFileId: file.id, actorEmployeeId: access.employeeId });
+}
+
+/**
+ * The server-side counterpart of an upload, for what the system itself brings in (the bulk import's
+ * CLI reads the exports from a folder on the server): the bytes go to storage, the file into the
+ * deal's folder, and the link to the deal.
+ */
+export async function storeLeadFile(
+  deps: DriveDeps,
+  access: DriveAccess,
+  lead: { id: string; name: string | null },
+  file: { name: string; mimeType: string; bytes: Buffer },
+): Promise<LeadFile> {
+  if (!deps.storage) throw new DriveError('storage_unavailable');
+  if (file.bytes.length > deps.maxFileBytes) throw new DriveError('too_large');
+  const folder = await folderOfLead(deps, access, lead);
+  const storageKey = newStorageKey(deps.now());
+  await deps.storage.put(storageKey, file.bytes, file.mimeType);
+  const [made] = await deps.db
+    .insert(driveFiles)
+    .values({
+      folderId: folder.id,
+      name: file.name.slice(0, DRIVE_NAME_MAX),
+      mimeType: file.mimeType,
+      byteSize: file.bytes.length,
+      storageKey,
+      ownerId: access.employeeId,
+      clientId: folder.clientId,
+      checksum: createHash('sha256').update(file.bytes).digest('hex'),
+    })
+    .returning({ id: driveFiles.id });
+  return attachFile(deps.db, {
+    leadId: lead.id,
+    driveFileId: made!.id,
+    actorEmployeeId: access.employeeId,
+  });
 }
 
 export async function attachFile(

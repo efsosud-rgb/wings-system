@@ -119,10 +119,91 @@ O corpo aceita até 10 milhões de caracteres (`WA_IMPORT_MAX_CHARS`).
   - O `wings_ro` lê a visão `wa_imports_analysis`, com ids, contagens por direção e datas, e não lê a tabela de
     mensagens.
 
+## Importar em lote
+
+Para dezenas de conversas de uma vez (Eric, 19/10): **WhatsApp → Importar em lote**
+(`/crm-vendas/whatsapp/importar-lote`), só Admin Master (`whatsapp.import_bulk`).
+
+1. **Arquivos:** um `.zip` com várias exportações dentro (cada uma `.txt` ou `.zip` do Android/iPhone), ou vários
+   arquivos escolhidos de uma vez. O navegador abre o pacote e manda o texto de cada conversa, uma por pedido; o
+   arquivo exportado de cada uma, com a mídia dentro, vai depois para os Arquivos da negociação, como no botão da
+   ficha. Opcional: um mapa `.csv` `nome;telefone` para os contatos cujo número não aparece na conversa.
+2. **Pareamento**, em ordem, parando no primeiro passo com **uma só** negociação aberta:
+   - o número do contato nas linhas da conversa (autor que é um número, ou um único número escrito no texto);
+   - o mapa `nome;telefone`;
+   - o nome do contato (o do arquivo, "Conversa do WhatsApp com <nome>") contra o nome do lead ou da empresa,
+     sem acento nem maiúscula.
+
+   Empate em todos os passos é "sem par", com o número de candidatas. O sistema nunca escolhe uma no chute.
+
+   O passo do nome precisa saber qual lado é a Wings. O sistema adivinha pelo nome que tem "wings"; quando o
+   lado da Wings aparece com outro nome (e o arquivo, como "WhatsApp Unknown … .zip", não diz o contato), o
+   Admin escolhe o nome da Wings na prévia e clica **"Parear de novo as N sem par com este nome"**. Só as
+   conversas ainda sem par mudam; as corrigidas à mão e as puladas ficam como estão.
+
+3. **Prévia:** por conversa, arquivo, negociação (ou "sem par"), mensagens novas, já existentes e período. O Admin
+   corrige o par, pula, ou confirma. Nada vai para as negociações antes da confirmação.
+4. **Gravação:** ao confirmar, o Admin escolhe o nome que é a Wings nas conversas. Cada conversa pareada é gravada
+   como uma importação comum (`applyImport`, mesmas regras de cima: sem aviso, sem Sofia, sem tarefa, sem não
+   lidas, janela de 24 h intacta), com o seu registro em `wa_import_batches`. "Sem par" fica pulada.
+   - A gravação é uma conversa por pedido. Se a aba fechar, o lote continua de onde parou: o endereço guarda o lote
+     (`?lote=<id>`), cada conversa tem o seu estado no banco, e basta escolher os mesmos arquivos de novo.
+   - Uma conversa sem nada novo fica "sem novas".
+5. **Desfazer:** o lote inteiro ou uma conversa, pelas mesmas regras do desfazer comum. Uma prévia que não
+   vai ser gravada se **descarta** ("Descartar prévia"): o lote e o texto das conversas saem do banco.
+6. **Relatório:** `.csv` com ids e contagens apenas (lote, conversa, negociação, lote de importação, estado,
+   mensagens), sem nome de arquivo, contato ou texto.
+
+Limites: até 300 conversas por lote (`WA_BULK_MAX_ITEMS`); o mapa até 1 milhão de caracteres; cada conversa até
+`WA_IMPORT_MAX_CHARS`; o pacote aberto no navegador até 1 GB (`WA_BULK_BROWSER_ZIP_MAX`). Acima disso, use o CLI.
+
+### Pelo servidor (CLI)
+
+Para exportações que chegaram pelo Drive, numa pasta do servidor, com o mesmo serviço e as mesmas regras:
+
+| Passo     | Comando (em `apps/api`, depois do build)                                                                                          |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| simular   | `node dist/scripts/whatsapp-import-bulk.js --por=<e-mail> --pasta=<pasta> [--mapa=<csv>] [--nome-wings="<nome>"] [--pares=<csv>]` |
+| aplicar   | `... --por=<e-mail> --lote=<id> --pasta=<a mesma pasta> --nome-wings="<nome>" --aplicar`                                          |
+| desfazer  | `... --por=<e-mail> --lote=<id> [--item=<id>] --desfazer`                                                                         |
+| descartar | `... --por=<e-mail> --lote=<id> --descartar` (só uma prévia que não foi confirmada)                                               |
+
+- `--por` é um Admin Master ativo: as importações, os arquivos e a auditoria ficam em nome dele.
+- `--pares` corrige a prévia com `posicao;<id da negociação>` ou `posicao;pular`.
+- A saída é só de ids e contagens.
+
+### Rotas do lote
+
+Todas pedem `whatsapp.import_bulk`.
+
+| Rota                                                  | O quê                                                                  |
+| ----------------------------------------------------- | ---------------------------------------------------------------------- |
+| `POST /whatsapp/bulk-imports`                         | `{ nameMap? }` → lote em prévia (201)                                  |
+| `GET /whatsapp/bulk-imports/:id`                      | O lote com as conversas                                                |
+| `POST /whatsapp/bulk-imports/:id/items`               | `{ text, fileName, byteSize }` → uma conversa pareada                  |
+| `PATCH /whatsapp/bulk-imports/:id/items/:itemId`      | Corrige o par ou pula (só na prévia)                                   |
+| `POST /whatsapp/bulk-imports/:id/pair`                | `{ ourName }` → pareia de novo as sem par com esse nome (só na prévia) |
+| `POST /whatsapp/bulk-imports/:id/apply`               | `{ ourName }` → confirma; as "sem par" ficam puladas                   |
+| `POST /whatsapp/bulk-imports/:id/items/:itemId/apply` | `{ fileId }` → grava uma conversa                                      |
+| `POST /whatsapp/bulk-imports/:id/undo`                | Desfaz o lote inteiro                                                  |
+| `POST /whatsapp/bulk-imports/:id/items/:itemId/undo`  | Desfaz uma conversa                                                    |
+| `GET /whatsapp/bulk-imports/:id/report`               | O relatório `.csv`                                                     |
+| `DELETE /whatsapp/bulk-imports/:id`                   | Descarta uma prévia (204); 409 `not_in_preview` depois de confirmada   |
+
+Banco (migração 0094):
+
+- `wa_bulk_imports`: o lote-pai, com origem (tela ou CLI), estado, o nome da Wings, quem fez e quem desfez.
+- `wa_bulk_import_items`: uma linha por conversa, com o par, as contagens, o estado e o `wa_import_batches` que ela
+  gerou. O texto da conversa fica só até o lote terminar ou a prévia ser descartada, e o mapa também é
+  apagado ao fim.
+- O `wings_ro` não lê nenhuma das duas.
+
 ## Não verificado
 
 - **Exportações reais:** os formatos acima são os conhecidos da FAQ do WhatsApp e nenhum foi conferido com um
   arquivo real do 0288. Os testes usam conversas inventadas. Antes da carga, importar uma conversa de teste e
   conferir na tela.
 - **Limites da FAQ:** com mídia, as 10.000 mensagens mais recentes; sem mídia, 40.000.
-- **Arquivos grandes:** um `.zip` com muita mídia é aberto inteiro na memória do navegador.
+- **Arquivos grandes:** um `.zip` com muita mídia é aberto inteiro na memória do navegador; no lote, até 1 GB por
+  pacote, e o resto pelo CLI.
+- **Lote:** o pareamento por nome e a fila foram testados só com conversas inventadas.

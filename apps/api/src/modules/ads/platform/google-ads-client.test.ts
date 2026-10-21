@@ -102,14 +102,14 @@ const operationsOf = (api: ReturnType<typeof fakeGoogleApi>): Operation[] =>
   (api.mutateCalls()[0]?.body.mutateOperations ?? []) as Operation[];
 
 describe('creating a Search campaign', () => {
-  it('sends budget, campaign, locations and language in one atomic mutate', async () => {
+  it('sends budget, campaign and locations in one atomic mutate', async () => {
     const { api, client } = writer();
     const outcome = await client.createCampaign(searchSpec);
 
     expect(outcome.status).toBe('applied');
     expect(api.mutateCalls()).toHaveLength(1);
     expect(api.mutateCalls()[0]?.url).toBe(
-      'https://googleads.googleapis.com/v22/customers/4268586278/googleAds:mutate',
+      'https://googleads.googleapis.com/v26/customers/4268586278/googleAds:mutate',
     );
     expect(api.mutateCalls()[0]?.body.partialFailure).toBe(false);
 
@@ -130,8 +130,9 @@ describe('creating a Search campaign', () => {
       advertisingChannelType: 'SEARCH',
       campaignBudget: 'customers/4268586278/campaignBudgets/-1',
       containsEuPoliticalAdvertising: 'DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING',
-      startDate: '2026-09-21',
-      endDate: '2026-09-30',
+      // v23+ names, at Google's daily granularity; startDate/endDate are gone.
+      startDateTime: '2026-09-21 00:00:00',
+      endDateTime: '2026-09-30 23:59:59',
       // Maximize clicks with a ceiling of R$ 6,00 per click, from the draft.
       targetSpend: { cpcBidCeilingMicros: '6000000' },
       networkSettings: {
@@ -142,8 +143,11 @@ describe('creating a Search campaign', () => {
       },
       geoTargetTypeSetting: { positiveGeoTargetType: 'PRESENCE' },
     });
+    expect(campaign).not.toHaveProperty('startDate');
+    expect(campaign).not.toHaveProperty('endDate');
 
-    // Locations and language; the negatives are checked with the ad group.
+    // Locations only: Google refuses a language criterion on Search since
+    // 2026-09-30. The negatives are checked with the ad group.
     const criteria = operations
       .map((op) => op.campaignCriterionOperation?.create)
       .filter((create) => create && create.negative !== true);
@@ -156,11 +160,8 @@ describe('creating a Search campaign', () => {
         campaign: 'customers/4268586278/campaigns/-2',
         location: { geoTargetConstant: 'geoTargetConstants/1001634' },
       },
-      {
-        campaign: 'customers/4268586278/campaigns/-2',
-        language: { languageConstant: PORTUGUESE_LANGUAGE_CONSTANT },
-      },
     ]);
+    expect(JSON.stringify(operations)).not.toContain('languageConstant');
   });
 
   it('creates the ad group, its keywords, the negatives and the ad in the same atomic mutate, all paused', async () => {
@@ -394,7 +395,6 @@ describe('the reach translator: a radius on Google', () => {
       ['campaign', 'location'],
       ['campaign', 'location'],
       ['campaign', 'proximity'],
-      ['campaign', 'language'],
     ]);
     expect(criteria.every((criterion) => criterion?.campaign === CAMPAIGN)).toBe(true);
     // The place name is for people; Google gets coordinates only.
@@ -472,6 +472,8 @@ describe('creating a YouTube (Demand Gen) campaign', () => {
       finalUrlSuffix:
         'utm_source=youtube&utm_medium=cpc&utm_campaign={campaignid}&utm_content={creative}',
       containsEuPoliticalAdvertising: 'DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING',
+      startDateTime: '2026-10-09 00:00:00',
+      endDateTime: '2026-10-15 23:59:59',
     });
     // Places and language are on the ad group, never on the campaign.
     expect(operations.some((op) => op.campaignCriterionOperation)).toBe(false);

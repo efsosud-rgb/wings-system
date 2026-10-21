@@ -22,6 +22,8 @@ export const PERMISSIONS = {
   'leads.write': 'Criar e editar leads',
   'leads.assign': 'Atribuir e redistribuir leads entre vendedores',
   'leads.whatsapp': 'Conversar e ligar pelo WhatsApp do sistema (ver, enviar e ligar)',
+  'whatsapp.import_bulk':
+    'Importar em lote as conversas exportadas do celular, pareando cada uma com a negociação',
   'companies.read': 'Ver a tela de Empresas do CRM, com o cadastro de cada empresa',
   'landing_pages.read': 'Ver as landing pages de cada cliente e funil no CRM',
   'crm.manage': 'Configurar as etapas do funil e a distribuição de leads',
@@ -178,6 +180,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'leads.write': 'all',
     'leads.assign': 'all',
     'leads.whatsapp': 'all',
+    'whatsapp.import_bulk': 'all',
     'sofia.manage': 'all',
     'sofia.read': 'all',
     'crm.manage': 'all',

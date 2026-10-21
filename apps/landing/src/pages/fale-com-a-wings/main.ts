@@ -336,6 +336,7 @@ function startScene() {
         gyro,
         step: () => activeStep,
         sections: $$('[data-form]'),
+        brake: new URLSearchParams(location.search).get('freio') !== '0',
       });
       if (!scene3d) doc.classList.add('no-gl');
     })
