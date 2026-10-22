@@ -198,6 +198,9 @@ vi.mock('../../api/leads.js', () => ({
   useCreateTask: () => mutation(),
 }));
 
+// "Reunião agora" reads the person's Google connection in the Reunião section.
+vi.mock('../../api/google.js', () => ({ useGoogleStatus: idle }));
+
 vi.mock('../../api/crm.js', () => ({
   useUpdateDeal: () => mutation(dealMutate),
   useAddActivity: () => mutation(),

@@ -31,6 +31,10 @@ const { state, calls, mutation } = vi.hoisted(() => {
       meetings: [] as MeetingSummary[],
       meeting: null as Meeting | null,
       createError: null as unknown,
+      // What the create answers on success ("Reunião agora" reads its id and Meet link).
+      createResult: null as Meeting | null,
+      // A create still waiting for Google, when a test holds it.
+      createPending: null as Promise<Meeting> | null,
       // What "Iniciar"/"Encerrar" answers on success, and the error it can show.
       stepResult: null as Meeting | null,
       stepError: null as unknown,
@@ -80,6 +84,15 @@ vi.mock('../../api/crm.js', () => ({
       if (state.createError) options?.onError?.(state.createError);
       else options?.onSuccess?.();
     },
+    mutateAsync: (input: unknown) => {
+      calls.create(input);
+      return (
+        state.createPending ??
+        (state.createError
+          ? Promise.reject(state.createError)
+          : Promise.resolve(state.createResult))
+      );
+    },
   }),
   useUpdateMeeting: () => mutation(calls.update),
   useMeetingStep: () => ({
@@ -88,6 +101,10 @@ vi.mock('../../api/crm.js', () => ({
     mutate: (input: unknown, options?: { onSuccess?: (meeting: Meeting) => void }) => {
       calls.step(input);
       if (state.stepResult) options?.onSuccess?.(state.stepResult);
+    },
+    mutateAsync: (input: unknown) => {
+      calls.step(input);
+      return Promise.resolve(state.stepResult);
     },
   }),
   useUploadRecording: () => mutation(calls.upload),
@@ -104,7 +121,7 @@ vi.mock('../../api/crm.js', () => ({
   }),
 }));
 
-const { MeetingsTab, meetingToStart } = await import('./DealMeetings.js');
+const { MeetingsTab, meetingToStart, NOW_MEETING_MINUTES } = await import('./DealMeetings.js');
 
 const summary = (over: Partial<MeetingSummary> = {}): MeetingSummary => ({
   id: 'm1',
@@ -185,6 +202,8 @@ afterEach(() => {
   state.meetings = [];
   state.meeting = null;
   state.createError = null;
+  state.createResult = null;
+  state.createPending = null;
   state.stepResult = null;
   state.stepError = null;
   state.googleQuery = {};
@@ -634,5 +653,188 @@ describe('Enviar link do Meet', () => {
 
     render(<MeetingsTab data={loaded()} canWrite={false} onRegisterHeld={() => {}} />);
     expect(screen.queryByRole('button', { name: 'Enviar link do Meet' })).toBeNull();
+  });
+});
+
+describe('Reunião agora', () => {
+  const NOW_URL = 'https://meet.google.com/now-meet-xyz';
+  // The beside window as the browser hands it back: opened empty, sent to the Meet later.
+  const fakeWindow = (closed = false) => ({
+    opener: {} as unknown,
+    closed,
+    location: { replace: vi.fn() },
+    close: vi.fn(),
+  });
+  const clickNow = () => fireEvent.click(screen.getByRole('button', { name: 'Reunião agora' }));
+
+  it('creates a Meet now on the clicker’s own calendar, without inviting the lead, opens it beside and starts it', async () => {
+    state.google = { ...state.google, state: 'connected' };
+    state.createResult = meeting({ id: 'now1', status: 'agendada', meetUrl: NOW_URL });
+    const win = fakeWindow();
+    const open = vi.spyOn(window, 'open').mockImplementation(() => win as unknown as Window);
+    render(<MeetingsTab data={loaded('formatacao')} canWrite onRegisterHeld={() => {}} />);
+    clickNow();
+
+    // The window opens inside the click, empty and named like Iniciar's, then goes to the Meet.
+    expect(open).toHaveBeenCalledTimes(1);
+    const [url, target, features] = open.mock.calls[0]!;
+    expect(url).toBe('');
+    expect(target).toBe('wings-meet');
+    expect(features).toContain('popup');
+    expect(win.opener).toBeNull();
+
+    expect(calls.create).toHaveBeenCalledTimes(1);
+    const input = calls.create.mock.calls[0]![0] as Record<string, unknown>;
+    expect(input).toMatchObject({
+      title: '@ Formatação ( Padaria Exemplo - Candidato Exemplo ) - CALL',
+      calendar: 'vendedor',
+      attendees: [],
+      meetUrl: null,
+      createMeet: true,
+      inviteLead: false,
+    });
+    const startsAt = Date.parse(String(input.startsAt));
+    expect(Math.abs(startsAt - Date.now())).toBeLessThan(5_000);
+    expect(Date.parse(String(input.endsAt)) - startsAt).toBe(NOW_MEETING_MINUTES * 60_000);
+
+    await waitFor(() => expect(win.location.replace).toHaveBeenCalledWith(NOW_URL));
+    // Started like Iniciar, so the deal records the start (and later the end) the same way.
+    expect(calls.step).toHaveBeenCalledWith({ id: 'now1', step: 'start' });
+    expect(screen.getByRole('status').textContent).toContain(
+      'Meet criado na sua agenda Google e aberto ao lado. O lead não foi convidado',
+    );
+  });
+
+  it('reads "Criando o Meet…" and takes no second click until the meeting is started', async () => {
+    state.google = { ...state.google, state: 'connected' };
+    let answer: (meeting: Meeting) => void = () => {};
+    state.createPending = new Promise<Meeting>((resolve) => (answer = resolve));
+    vi.spyOn(window, 'open').mockImplementation(() => fakeWindow() as unknown as Window);
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    clickNow();
+    const busy = screen.getByRole('button', { name: 'Criando o Meet…' }) as HTMLButtonElement;
+    expect(busy.disabled).toBe(true);
+    fireEvent.click(busy);
+    expect(calls.create).toHaveBeenCalledTimes(1);
+
+    answer(meeting({ id: 'now1', status: 'agendada', meetUrl: NOW_URL }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Reunião agora' })).toBeTruthy());
+    expect(calls.step).toHaveBeenCalledWith({ id: 'now1', step: 'start' });
+  });
+
+  it('asks to connect the Google account before asking Google anything, and opens no window', () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    clickNow();
+    expect(open).not.toHaveBeenCalled();
+    expect(calls.create).not.toHaveBeenCalled();
+    expect(screen.getByText(/Conecte a sua conta Google em Minha conta/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Abrir Minha conta' }).getAttribute('href')).toBe(
+      '/minha-conta',
+    );
+    cleanup();
+
+    state.google = { ...state.google, state: 'needs_reconnect' };
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    clickNow();
+    expect(screen.getByText(/conecte de novo em Minha conta/)).toBeTruthy();
+    cleanup();
+
+    // The system without Google is Eric's step: no link that would not help.
+    state.google = { ...state.google, configured: false, state: 'disconnected' };
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    clickNow();
+    expect(screen.getByText(/O Google ainda não foi configurado no sistema/)).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Abrir Minha conta' })).toBeNull();
+    expect(calls.create).not.toHaveBeenCalled();
+    state.google = { ...state.google, configured: true };
+  });
+
+  it('asks the API when the connection could not be checked, and closes the window on its 503', async () => {
+    state.googleQuery = { data: undefined, isError: true, error: new ApiError(500, {}) };
+    state.createError = new ApiError(503, {
+      error: 'google_needs_reconnect',
+      message: 'Sua conexão com o Google expirou',
+    });
+    const win = fakeWindow();
+    vi.spyOn(window, 'open').mockImplementation(() => win as unknown as Window);
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    clickNow();
+    expect(calls.create).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(win.close).toHaveBeenCalledTimes(1));
+    expect(win.location.replace).not.toHaveBeenCalled();
+    expect(screen.getByText(/conecte de novo em Minha conta/)).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Abrir Minha conta' })).toBeTruthy();
+    expect(calls.step).not.toHaveBeenCalled();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('says what Google refused, with no account link, and records nothing', async () => {
+    state.google = { ...state.google, state: 'connected' };
+    state.createError = new ApiError(502, {
+      error: 'meet_failed',
+      message: 'O Google criou o evento mas não gerou o Meet; a reunião não foi marcada.',
+    });
+    const win = fakeWindow();
+    vi.spyOn(window, 'open').mockImplementation(() => win as unknown as Window);
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    clickNow();
+    await waitFor(() => expect(screen.getByText(/não gerou o Meet/)).toBeTruthy());
+    expect(win.close).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('link', { name: 'Abrir Minha conta' })).toBeNull();
+    expect(calls.step).not.toHaveBeenCalled();
+  });
+
+  it('still starts it when the window was blocked or closed meanwhile, and says how to open it', async () => {
+    state.google = { ...state.google, state: 'connected' };
+    state.createResult = meeting({ id: 'now1', status: 'agendada', meetUrl: NOW_URL });
+    vi.spyOn(window, 'open').mockImplementation(() => null);
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    clickNow();
+    await waitFor(() => expect(calls.step).toHaveBeenCalledWith({ id: 'now1', step: 'start' }));
+    expect(screen.getByRole('status').textContent).toContain(
+      'a janela ao lado não abriu: clique em Voltar ao Meet',
+    );
+    cleanup();
+
+    const closed = fakeWindow(true);
+    vi.spyOn(window, 'open').mockImplementation(() => closed as unknown as Window);
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    clickNow();
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('não abriu'));
+    expect(closed.location.replace).not.toHaveBeenCalled();
+  });
+
+  it('is absent for who cannot write, and off while a meeting is under way or the list is unknown', () => {
+    render(<MeetingsTab data={loaded()} canWrite={false} onRegisterHeld={() => {}} />);
+    expect(screen.queryByRole('button', { name: 'Reunião agora' })).toBeNull();
+    cleanup();
+
+    state.meetings = [summary({ status: 'em_andamento' })];
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    const now = screen.getByRole('button', { name: 'Reunião agora' }) as HTMLButtonElement;
+    expect(now.disabled).toBe(true);
+    expect(now.title).toBe('Já há uma reunião em andamento: volte ao Meet ou encerre');
+    cleanup();
+
+    state.meetings = undefined as unknown as MeetingSummary[];
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    expect(
+      (screen.getByRole('button', { name: 'Reunião agora' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('copies the link of the meeting Iniciar opens, for anyone who sees it', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    render(<MeetingsTab data={loaded()} canWrite onRegisterHeld={() => {}} />);
+    expect(screen.queryByRole('button', { name: 'Copiar link do Meet' })).toBeNull();
+    cleanup();
+
+    state.meetings = [summary({ status: 'em_andamento' })];
+    render(<MeetingsTab data={loaded()} canWrite={false} onRegisterHeld={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Copiar link do Meet' }));
+    expect(writeText).toHaveBeenCalledWith('https://meet.google.com/abc-defg-hij');
+    await waitFor(() => expect(screen.getByText('Copiado')).toBeTruthy());
   });
 });

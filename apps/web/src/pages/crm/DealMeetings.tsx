@@ -8,6 +8,7 @@ import {
   meetingUpdateSchema,
   type Lead,
   type LeadActivity,
+  type GoogleWorkspaceStatus,
   type Meeting,
   type MeetingSummary,
   type MeetingTranscript,
@@ -35,7 +36,8 @@ import type { LoadedLead } from '../../api/leads.js';
 import { ConfirmDialog } from '../../components/agenda/ConfirmDialog.js';
 import { Icon } from '../../components/Icon.js';
 import { failureReason } from '../../lib/failure.js';
-import { openMeetBeside } from '../../lib/meet.js';
+import { openMeetBeside, openMeetBesideEmpty } from '../../lib/meet.js';
+import { CopyButton } from './CopyButton.js';
 import { formatDateTime, formatDay, formatEntered, toLocalInput, waMeUrl } from './format.js';
 
 /**
@@ -138,6 +140,19 @@ const GOOGLE_HINT: Record<string, string> = {
   google_not_connected: 'Conecte a sua conta Google em Minha conta para criar o evento e o Meet.',
   google_needs_reconnect: 'A sua conexão com o Google expirou: conecte de novo em Minha conta.',
 };
+
+/** Why "Reunião agora" cannot ask Google yet, from the person's connection; null when it can. */
+const googleBlockOf = (status: GoogleWorkspaceStatus): string | null =>
+  !status.configured
+    ? 'google_not_configured'
+    : status.state === 'connected'
+      ? null
+      : status.state === 'needs_reconnect'
+        ? 'google_needs_reconnect'
+        : 'google_not_connected';
+
+/** "Reunião agora" (Eric, 22/10): how long the event holds the calendar; Encerrar records the real end. */
+export const NOW_MEETING_MINUTES = 60;
 
 const splitEmails = (value: string) =>
   value
@@ -1081,10 +1096,77 @@ export function MeetingsTab({
   const [openId, setOpenId] = useState<string | null>(null);
   const [scheduling, setScheduling] = useState(false);
   const step = useMeetingStep();
+  const create = useCreateMeeting(lead.id);
+  const google = useGoogleStatus();
   const [justEnded, setJustEnded] = useState<string | null>(null);
+  // "Reunião agora": set inside the click, so a second click never makes a second event.
+  const [startingNow, setStartingNow] = useState(false);
+  const [nowDone, setNowDone] = useState<'opened' | 'blocked' | null>(null);
+  const [nowProblem, setNowProblem] = useState<{ text: string; connect: boolean } | null>(null);
   const next = meetings.data ? meetingToStart(meetings.data) : null;
   const running = next?.status === 'em_andamento' ? next : null;
   const expansion = lead.pipeline === 'expansao';
+
+  const googleProblem = (code: string, fallback: string) => ({
+    text: GOOGLE_HINT[code] ?? fallback,
+    connect: code !== 'google_not_configured',
+  });
+
+  /**
+   * A Meet now, on the clicker's own Google calendar, with no invitation to the lead: created
+   * like "Agendar" and started like "Iniciar", so the deal records start and end the same way.
+   */
+  const startNow = () => {
+    setNowDone(null);
+    // Not knowing the connection is not "not connected": then the API answers for Google.
+    const block = google.data ? googleBlockOf(google.data.status) : null;
+    if (block) {
+      setNowProblem(googleProblem(block, ''));
+      return;
+    }
+    setNowProblem(null);
+    setStartingNow(true);
+    // The window first, inside the click, or the browser blocks it; the link comes from Google.
+    const win = openMeetBesideEmpty();
+    const startsAt = new Date();
+    // The promises, not mutate's callbacks: those are dropped when the person leaves the tab
+    // mid-way, which would leave the window blank and the meeting never started.
+    create
+      .mutateAsync({
+        title: meetingTitleOf(lead.pipeline, {
+          name: lead.name,
+          brand: lead.brand,
+          companyName: lead.fields.companyName,
+        }),
+        startsAt: startsAt.toISOString(),
+        endsAt: new Date(startsAt.getTime() + NOW_MEETING_MINUTES * 60_000).toISOString(),
+        calendar: 'vendedor',
+        attendees: [],
+        meetUrl: null,
+        createMeet: true,
+        inviteLead: false,
+      })
+      .then(
+        (meeting) => {
+          // step.error says why when the start is refused; the button waits for it either way.
+          const started = step.mutateAsync({ id: meeting.id, step: 'start' }).catch(() => {});
+          if (win && !win.closed && meeting.meetUrl) {
+            win.location.replace(meeting.meetUrl);
+            setNowDone('opened');
+          } else setNowDone('blocked');
+          return started;
+        },
+        (error: unknown) => {
+          win?.close();
+          setNowProblem(
+            error instanceof ApiError && error.status === 503 && GOOGLE_HINT[error.code]
+              ? googleProblem(error.code, error.message)
+              : { text: messageOf(error, 'Não foi possível criar o Meet agora.'), connect: false },
+          );
+        },
+      )
+      .finally(() => setStartingNow(false));
+  };
   const held = (data.activities as LeadActivity[])
     .filter((activity) => activity.kind === 'meeting')
     .sort((a, b) => b.at.localeCompare(a.at));
@@ -1109,6 +1191,24 @@ export function MeetingsTab({
               aria-expanded={scheduling}
             >
               Agendar reunião
+            </button>
+          )}
+          {canWrite && (
+            <button
+              type="button"
+              className="crm-btn is-small"
+              // Without the list it cannot know whether one is already under way.
+              disabled={startingNow || !meetings.data || Boolean(running)}
+              title={
+                running
+                  ? 'Já há uma reunião em andamento: volte ao Meet ou encerre'
+                  : !meetings.data
+                    ? 'Sem a lista de reuniões não dá para saber se uma já está em andamento'
+                    : 'Cria agora um Meet na sua agenda Google, sem convidar o lead, e abre ao lado'
+              }
+              onClick={startNow}
+            >
+              {startingNow ? 'Criando o Meet…' : 'Reunião agora'}
             </button>
           )}
           <button
@@ -1152,6 +1252,7 @@ export function MeetingsTab({
               Enviar link do Meet
             </button>
           )}
+          {next?.meetUrl && <CopyButton value={next.meetUrl} label="Copiar link do Meet" />}
           {canWrite && running && (
             <button
               type="button"
@@ -1164,6 +1265,7 @@ export function MeetingsTab({
                     onSuccess: (meeting) => {
                       setJustEnded(meeting.id);
                       setOpenId(meeting.id);
+                      setNowDone(null);
                     },
                   },
                 )
@@ -1176,10 +1278,30 @@ export function MeetingsTab({
       </div>
       <p className="crm-sub">
         Agendar cria o evento e o Meet no Google Agenda com a sua conta (ou marca com um link
-        colado); Iniciar abre o Meet numa janela ao lado do Wings e registra o início na negociação;
+        colado); Reunião agora cria um Meet já, na sua agenda, sem convidar o lead, e abre como o
+        Iniciar; Iniciar abre o Meet numa janela ao lado do Wings e registra o início na negociação;
         Enviar link abre o seu WhatsApp com o link já escrito, para você enviar; Encerrar registra o
         fim.
       </p>
+      {nowProblem && (
+        <p className="crm-error">
+          {nowProblem.text}
+          {nowProblem.connect && (
+            <>
+              {' '}
+              <a href="/minha-conta">Abrir Minha conta</a>
+            </>
+          )}
+        </p>
+      )}
+      {nowDone && (
+        <p className="crm-wa-window is-open" role="status">
+          {nowDone === 'opened'
+            ? 'Meet criado na sua agenda Google e aberto ao lado.'
+            : 'Meet criado na sua agenda Google, mas a janela ao lado não abriu: clique em Voltar ao Meet.'}{' '}
+          O lead não foi convidado: copie o link ou use Enviar link do Meet.
+        </p>
+      )}
       <Problem error={step.error} fallback="Não foi possível registrar na negociação." />
       {justEnded && (
         <p className="crm-wa-window is-open" role="status">
