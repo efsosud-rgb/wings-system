@@ -20,22 +20,76 @@ Turnstile de verdade; o envio vai para a API; o `robots` passou a vir do ambient
 
 1. Ao abrir, a página pede `GET <LANDING_API_BASE>/public/site-forms/fale-com-a-wings` e recebe a chave pública do
    Turnstile, o link de WhatsApp e o formulário aprovado da regra.
-2. O botão "Enviar" só liga com tudo preenchido (nome, WhatsApp com DDD, e-mail, empresa, Instagram, "O que você
-   procura?", o aceite da política) **e** com a verificação antirrobô feita; a linha "Para enviar, falta: …" diz o que
-   ainda falta, `verificação antirrobô` incluída enquanto o Turnstile não deu o token. O Site é opcional. O Instagram
-   aceita `@marca`, `marca` ou o endereço do perfil e guarda só o usuário (`instagramUsernameOf`, `@wings/shared/instagram`).
-3. O envio é `POST` na mesma rota, em JSON: `name`, `phone` (só dígitos), `email`, `companyName`, `instagram`
-   (usuário), `siteUrl` (com `https://`, ou ausente), `qualifierAnswer` (o código da opção: `formatacao`, `expansao`,
-   `consultoria`, `nao-sei`), `consent: true`, `page` (o endereço sem `#`), `tracking`, `turnstileToken` e `website` (a
-   armadilha antirrobô, mandada como está: quem decide é o servidor).
+2. O botão "Enviar" só liga com os três campos obrigatórios preenchidos (nome, WhatsApp com DDD e "O que você
+   procura?"), o aceite da política **e** a verificação antirrobô feita; a linha "Para enviar, falta: …" diz o que ainda
+   falta, `verificação antirrobô` incluída enquanto o Turnstile não deu o token. E-mail, nome da empresa, Instagram e
+   site são **opcionais** desde a versão curta (22/10, abaixo): ficam dentro do bloco recolhido "Quer adiantar?
+   (opcional)", um `<details>` nativo, e só são conferidos quando preenchidos (e-mail com `@` e domínio; site com
+   domínio; o Instagram aceita `@marca`, `marca` ou o endereço do perfil e guarda só o usuário, `instagramUsernameOf`,
+   `@wings/shared/instagram`). Um opcional preenchido errado segura o envio com a frase embaixo do campo, mas nunca
+   aparece na linha "falta".
+3. O envio é `POST` na mesma rota, em JSON: `name`, `phone` (só dígitos), `qualifierAnswer` (o código da opção:
+   `formatacao`, `expansao`, `consultoria`, `nao-sei`), `consent: true`, `page` (o endereço sem `#`), `tracking`,
+   `turnstileToken` e `website` (a armadilha antirrobô, mandada como está: quem decide é o servidor); `email`,
+   `companyName`, `instagram` (usuário) e `siteUrl` (com `https://`) vão só quando preenchidos.
 4. A regra `fale-com-a-wings` vem do seed da API: cliente Wings Company, funil Formatação, formulário do site ligado,
-   com as perguntas e os códigos acima. "Ainda não sei" deixa o lead **sem funil**, e quem decide é a triagem do Jev
+   com as perguntas e os códigos acima e `requiredFields: ['qualifierAnswer']` (a versão curta; a API recusa com 400 um
+   envio sem a resposta). "Ainda não sei" deixa o lead **sem funil**, e quem decide é a triagem do Jev
    ([../leads/triagem-jev.md](../leads/triagem-jev.md)), só com a triagem ligada; com ela desligada, o lead fica em
    Formatação. As outras opções seguem o funil da regra. A frase do aceite ao lado da caixa é a `consentText` da regra,
    palavra por palavra, e é a que o lead guarda (um teste da API confere a página contra o seed). O construtor de
    campanhas não lista nem altera esta página (409 `landing_page_spec`). O resto (dono pelo rodízio, avisos, Turnstile
    conferido no servidor, limite por IP) é o formulário do site de sempre
    ([../leads/formularios.md](../leads/formularios.md)).
+
+## Versão curta (22/10/2026, rascunho; depende do PR #14)
+
+Nos 3 dias do anúncio (20 a 22/10) a página teve 71 visitas e nenhuma tentativa de envio; a hipótese é o atrito de um
+formulário de 6 campos para um público frio e em boa parte 65+. A versão curta pede só **nome, WhatsApp e "O que
+você procura?"** (a pergunta define funil e rodízio); e-mail, empresa, Instagram e site ficam opcionais num bloco
+recolhido. Campos e botão maiores (campo 56 px / 18 px, rótulo 16 px, botão 60 px / 17 px, 15 px no embed, cuja coluna pode ter 280 px). No celular (390 px): o
+formulário passou de 1026 px (7 campos à vista) para 835 px (3 campos e a linha "Quer adiantar?"), 1235 px com o bloco
+aberto; o botão "Enviar" termina em 1062 px da página em vez de 1256 px.
+
+**Onde mora a lista de obrigatórios.** Em dois lugares, e os dois precisam mudar juntos: no código da página
+(`src/lib/form-rules.ts`, `form.html`) e no banco, em `lead_source_rules.site_form_spec.requiredFields` da regra
+`fale-com-a-wings`, que a API confere no POST (`siteFormAnswersOf`). O seed só **insere** a regra; ele nunca altera a
+de um ambiente que já a tem. Staging e produção guardam hoje `["email","companyName","instagram","qualifierAnswer"]`
+(lido no staging em 22/10). Com a página curta no ar e a lista antiga no banco, **todo envio sem e-mail recebe 400
+"Informe o seu e-mail."** e a página mostra isso embaixo do botão. Por isso a ordem é: primeiro o banco, depois a página.
+O ajuste, que **ninguém aplica sem o OK do Eric** (`wings_ro` não escreve; é na base do Coolify ou numa migração
+`drizzle-kit generate --custom`), só mexe na linha que ainda tem a lista do seed:
+
+```sql
+UPDATE lead_source_rules
+   SET site_form_spec = jsonb_set(site_form_spec, '{requiredFields}', '["qualifierAnswer"]'::jsonb)
+ WHERE kind = 'landing_page' AND pattern = 'fale-com-a-wings'
+   AND site_form_spec->'requiredFields' = '["email","companyName","instagram","qualifierAnswer"]'::jsonb;
+```
+
+A página `/lp/fale-com-a-wings` do Wings System lê a mesma lista e deixa de pedir e-mail no mesmo momento; o embed
+`/embed/formulario` usa o mesmo `form.html` e fica curto junto.
+
+**O que muda e o que não muda.**
+
+- **Dedupe:** `upsertLead` procura o lead pelo telefone e só depois pelo e-mail; sem e-mail, só pelo telefone. A regra
+  "só preenche campo vazio" (`fillGaps`) não muda: um lead antigo guarda o e-mail, a empresa e o Instagram que já tinha.
+  Quem está no CRM só com e-mail (veio do RD sem telefone) e envia a página curta vira um segundo lead.
+- **Rodízio e funil:** iguais. O funil vem só da resposta (`answerPipelineOf`) e o rodízio só do funil
+  (`nextInRotation`); nenhum dos dois lê e-mail, empresa ou Instagram. Vale a regra de hoje: nesta página, sem marca,
+  "Expandir minha rede" fica em Formatação, e "Ainda não sei" vai à triagem do Jev só com ela ligada.
+- **RD Station:** o lead chega ao CRM pelo POST da API, com ou sem e-mail. O script do RD que o GTM carrega manda o
+  formulário a `form_integrations`, que identifica o contato pelo e-mail: sem e-mail, o RD não cria a conversão (nem
+  ecoa o lead pelo webhook); com o e-mail preenchido no bloco opcional, tudo como hoje. A cópia da API ao RD já
+  pulava sem e-mail (`rdForward: no_email`). O Lead da Meta e a conversão do Google Ads nesta página dependem do
+  rascunho do GTM em `lead_submit` (workspace 20), não do RD.
+- **Validações:** a página confere e-mail, Instagram e site só quando preenchidos; a API segue conferindo nome (2+),
+  telefone com DDD, consentimento, Turnstile, honeypot e a resposta, e um e-mail mandado errado ainda dá 400
+  "E-mail inválido".
+- **Eventos (PR #14) e `lead_submit`:** iguais. Abrir o bloco opcional não é toque em campo, então não conta
+  `form_start`; `form_view` dispara com 1/3 do formulário na tela, agora menor.
+- **Checagem do Instagram e pesquisa:** só rodam quando há Instagram (`hasInstagramToCheck`); a pesquisa paga
+  continua desligada para o formulário do site.
 
 | Resposta da API           | O que a página faz                                                                                                |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------- |

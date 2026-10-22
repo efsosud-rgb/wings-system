@@ -17,7 +17,7 @@ import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import { FALE_COM_A_WINGS } from '../../db/seed.js';
-import { answerPipelineOf, INSTAGRAM_REQUIRED_MESSAGE, instagramHandleOf } from './site-forms.js';
+import { answerPipelineOf, instagramHandleOf } from './site-forms.js';
 import { configureLeadTriage, type TriageTarget } from './triage-schedule.js';
 
 let harness: TestDatabase;
@@ -569,7 +569,7 @@ describe('"Fale com a Wings" (the page the seed makes)', () => {
       whatsappUrl: null,
       form: {
         qualifier: { question: QUESTION },
-        requiredFields: ['email', 'companyName', 'instagram', 'qualifierAnswer'],
+        requiredFields: ['qualifierAnswer'],
         privacyPolicyUrl: 'https://wingscompany.com.br/politica-de-privacidade/',
         thankYou: { buttonText: 'Chamar no WhatsApp' },
       },
@@ -597,11 +597,6 @@ describe('"Fale com a Wings" (the page the seed makes)', () => {
     const turnstile = captcha();
     const app = await makeApp(keys, { captchaFetch: turnstile.fetchImpl });
     const cases: [Record<string, unknown>, string][] = [
-      [{ email: undefined }, 'Informe o seu e-mail.'],
-      [{ companyName: '  ' }, 'Informe o nome da empresa.'],
-      [{ instagram: undefined }, INSTAGRAM_REQUIRED_MESSAGE],
-      [{ instagram: '@marca..errada' }, INSTAGRAM_REQUIRED_MESSAGE],
-      [{ instagram: 'https://instagram.com/' }, INSTAGRAM_REQUIRED_MESSAGE],
       [{ qualifierAnswer: undefined }, `Escolha uma opção em "${QUESTION}".`],
       // Neither a code nor an option's text.
       [{ qualifierAnswer: 'nao_sei' }, `Escolha uma opção em "${QUESTION}".`],
@@ -614,6 +609,36 @@ describe('"Fale com a Wings" (the page the seed makes)', () => {
     }
     expect(turnstile.calls).toHaveLength(0);
     expect(await db.select().from(leads).where(eq(leads.landingPage, SLUG))).toEqual([]);
+  });
+
+  it('the short page (22/10): name, WhatsApp and the answer alone make the lead', async () => {
+    const turnstile = captcha();
+    const app = await makeApp(keys, { captchaFetch: turnstile.fetchImpl });
+    const response = await post(
+      app,
+      fale({
+        email: undefined,
+        companyName: undefined,
+        instagram: undefined,
+        phone: '(21) 98888-0007',
+      }),
+    );
+    expect(response.statusCode).toBe(200);
+    expect(turnstile.calls).toHaveLength(1);
+    const [lead] = await db.select().from(leads).where(eq(leads.phone, '5521988880007'));
+    expect(lead).toMatchObject({
+      source: 'site_form',
+      landingPage: SLUG,
+      clientId: WINGS_CLIENT_ID,
+      pipeline: 'formatacao',
+      email: null,
+      instagram: null,
+      companyName: null,
+      formAnswers: { [QUESTION]: 'Transformar meu negócio em franquia' },
+      consentText: FALE_COM_A_WINGS.spec.consentText,
+    });
+    const event = await receivedEvent(lead!.id);
+    expect(event?.detail).toMatchObject({ qualifier: 'formatacao', pipeline: 'formatacao' });
   });
 
   it('keeps the username, the option text and the code; Formatação for the page', async () => {
