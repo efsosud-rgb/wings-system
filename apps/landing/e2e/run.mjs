@@ -541,6 +541,7 @@ async function runViewport(
       const headers = response.headers();
       apiAnswers.push({
         method: response.request().method(),
+        path: new URL(response.url()).pathname,
         status: response.status(),
         allowOrigin: headers['access-control-allow-origin'] ?? null,
         credentials: headers['access-control-allow-credentials'] ?? null,
@@ -847,7 +848,22 @@ async function runViewport(
         : done.buttonHidden || /^https:\/\/wa\.me\//.test(done.href ?? ''),
       done.href ?? 'hidden',
     );
-    const fromApi = (method) => apiAnswers.filter((answer) => answer.method === method);
+    // the form's own calls; the event beacons (`/events`) are checked apart
+    const fromApi = (method) =>
+      apiAnswers.filter((answer) => answer.method === method && !answer.path.endsWith('/events'));
+    const beacons = apiAnswers.filter((answer) => answer.path.endsWith('/events'));
+    check(
+      `${label}: event beacons answered 204 by the API across origins (five or more)`,
+      beacons.length >= 5 &&
+        beacons.every(
+          (answer) =>
+            answer.method === 'POST' &&
+            answer.status === 204 &&
+            answer.allowOrigin === pageOrigin &&
+            answer.credentials === null,
+        ),
+      `${beacons.length} beacons: ${[...new Set(beacons.map((answer) => answer.status))].join(' ')}`,
+    );
     const crossed = (answers) =>
       answers.length > 0 &&
       answers.every(
