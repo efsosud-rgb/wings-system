@@ -345,20 +345,32 @@ caminho), sem rede.
   (CLS < 0,02) e sem nada que some depois, um h1 e seis seções, botão desligado no começo, envio e obrigado com o link
   da API, e as respostas de erro. `API_BASE=http://127.0.0.1:3000` usa uma API local de verdade (com `E2E_PORT` fixo
   em `LANDING_ORIGINS`). Não faz parte do `pnpm test`.
-- `DATABASE_URL=<banco local de desenvolvimento> pnpm --filter @wings/landing test:e2e:api` (depois do `build`): a
-  "API de teste". `e2e/api-server.ts` cria um banco descartável (`wings_test_…`, o mesmo ajudante dos testes da API),
-  roda o seed com um número inventado da Wings (para existir o link "Site"), sobe a API em `127.0.0.1` com as chaves
-  de teste públicas da Cloudflare e o siteverify respondido no próprio processo (o bloqueio de rede da API é carregado
-  primeiro) e roda o `e2e/run.mjs` contra ela em 1440×900, 390×844, um terceiro envio com "Ainda não sei" e dois celulares
-  emulados pelo Playwright (Pixel 7 e iPhone 14: user agent, tela e toque; o motor continua o Chromium): um envio só
-  com nome, WhatsApp e a resposta (sem e-mail, lead novo) e o mesmo telefone de novo com tudo preenchido (mescla:
-  um lead por telefone, só as lacunas preenchidas, `lead.merged` no audit, `form_ref` do último envio). Nada no
+- `pnpm --filter @wings/landing test:e2e:api` (depois do `build`; com `pnpm db:up` rodando, ou `DATABASE_URL`
+  apontando para outro servidor): a "API de teste". `e2e/api-server.ts` cria um banco descartável (`wings_test_…`, o
+  mesmo ajudante dos testes da API), roda o seed com um número inventado da Wings (para existir o link "Site"), sobe a
+  API em `127.0.0.1` com as chaves de teste públicas da Cloudflare e o siteverify respondido no próprio processo (o
+  bloqueio de rede da API é carregado primeiro) e roda o `e2e/run.mjs` contra ela a partir de celulares emulados pelo
+  Playwright (user agent, tela e toque; o motor é sempre o Chromium, o WebKit não está instalado): Galaxy A55 com o
+  Chrome e com o navegador do app do Instagram (user agent de WebView com "Instagram"), e iPhone 14 com o user agent
+  do Safari. Seis envios na versão curta do formulário: só nome, WhatsApp e a resposta (sem e-mail, lead novo); o
+  mesmo telefone de novo pelo Instagram, com tudo preenchido (mescla: um lead por telefone, só as lacunas
+  preenchidas, `lead.merged` no audit, `form_ref` do último envio); "Ainda não sei" pelo iPhone; e três recusas da
+  API de verdade, em que a tela nunca mostra "Recebemos", o formulário fica com os dados e o motivo, não há
+  `lead_submit` no dataLayer e nenhum lead é criado: telefone que a página aceita e a API recusa (`(11) 11111-1111`,
+  400), token do antirrobô recusado pelo siteverify (403, widget reiniciado) e siteverify fora do ar (503). Nada no
   caminho até a API é interceptado, então o preflight de CORS do navegador chega à API de verdade (o Playwright
-  responderia ao preflight sozinho se interceptasse). Depois confere no banco: um lead por envio, `source`
+  responderia ao preflight sozinho se interceptasse). Depois confere no banco: um lead por telefone enviado, `source`
   `site_form`, `landing_page` `fale-com-a-wings`, funil `formatacao` para as três respostas ("nao-sei" também: a API
   de teste roda sem a triagem do Jev), Instagram só com o usuário (digitado como `@Marca.Teste` ou endereço do
   perfil), `form_answers` com o texto da opção, o evento com o código, a frase do aceite guardada igual à da página e
-  à `consentText` do seed, e que cada GET, preflight e POST do navegador recebeu o CORS da origem da página. Apaga o banco ao terminar, também com Ctrl+C; nenhum outro banco é lido ou escrito.
+  à `consentText` do seed, um `site_form.captcha_refused` no audit por recusa do antirrobô (`refused` e
+  `unavailable`), e que cada GET, preflight e POST do navegador recebeu o CORS da origem da página com o status
+  esperado (200, 400, 403, 503). Os eventos para o servidor são conferidos dos dois lados: como o navegador os mandou
+  (`run.mjs`) e como a API os registrou (`api-server.ts`, uma linha por beacon): o funil de cada visita em ordem
+  (`page_view`, `form_view` uma vez, `form_start`, `submit_attempt`, depois `submit_ok` e o `whatsapp_click` do
+  obrigado, ou `submit_error` com o motivo e mais nada), as UTMs do link e o aparelho lido do user agent (`phone`,
+  `android`/`ios`, `instagram`/`browser`). Apaga o banco ao terminar, também com Ctrl+C; nenhum outro banco é lido
+  ou escrito.
 
 ## Licenças
 
@@ -371,7 +383,7 @@ caminho), sem rede.
 
 - Turnstile com as chaves reais (só o falso do teste e as chaves de teste da Cloudflare).
 - As tags do GTM disparando com `whatsapp_click` e `lead_submit` no contêiner real.
-- Os eventos para o servidor no navegador do Instagram (só Chromium headless no e2e) e o `jq` no servidor de staging.
+- O navegador do app do Instagram e o Safari de verdade (o e2e emula só user agent, tela e toque no Chromium headless), a rede e o DNS de um celular real e o `jq` no servidor de staging.
 - A prévia do link (imagem OG) no WhatsApp e no Facebook.
 - O nginx no Coolify (só conferido num contêiner local, sem porta publicada): hosts, raiz, 302, 404, `/healthz`,
   cabeçalhos e cache.

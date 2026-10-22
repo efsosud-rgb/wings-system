@@ -29,6 +29,9 @@ const DIST = resolve(root, 'dist');
 const SLUG = 'fale-com-a-wings';
 const GTM_ID = 'GTM-MXJLC5HH';
 const DUMMY_TOKEN = 'XXXX.DUMMY.TOKEN.XXXX';
+/** Tokens only the test API knows (e2e/api-server.ts): one its siteverify refuses, one that takes it down. */
+const REFUSED_TOKEN = 'XXXX.DUMMY.TOKEN.RECUSADO';
+const OFFLINE_TOKEN = 'XXXX.DUMMY.TOKEN.FORA';
 const CHROME =
   process.env.CHROME_PATH ||
   resolve(
@@ -176,10 +179,11 @@ function startServer({ port, hosts, rootSlugs, apiBase }) {
 // ---------------------------------------------------------------- fakes
 
 const FAKE_GTM = `window.__fakeGtm = (window.__fakeGtm || 0) + 1;`;
-const FAKE_TURNSTILE = `(() => {
+/** The widget's fake, handing out `token` on render and on every reset. */
+const fakeTurnstile = (token) => `(() => {
   const widgets = new Map();
   let n = 0;
-  const issue = (w) => setTimeout(() => w.opts.callback && w.opts.callback(${JSON.stringify(DUMMY_TOKEN)}), 150);
+  const issue = (w) => setTimeout(() => w.opts.callback && w.opts.callback(${JSON.stringify(token)}), 150);
   window.__turnstile = { renders: 0, resets: 0, options: null };
   window.turnstile = {
     render(el, opts) {
@@ -206,7 +210,7 @@ const FAKE_TURNSTILE = `(() => {
       const w = widgets.get(id);
       if (w) { w.box.remove(); widgets.delete(id); }
     },
-    getResponse() { return ${JSON.stringify(DUMMY_TOKEN)}; },
+    getResponse() { return ${JSON.stringify(token)}; },
   };
 })();`;
 
@@ -410,41 +414,105 @@ const PERSON = {
   answer: 'formatacao',
 };
 
-/** Against a real API every run is another person (another lead) with another answer. */
-const LIVE_PEOPLE = {
-  'desktop-1440': { ...PERSON, phone: '21900000001', email: 'pessoa.um@exemplo.com.br' },
-  'phone-390': {
-    ...PERSON,
-    phone: '21900000002',
-    email: 'pessoa.dois@exemplo.com.br',
-    instagram: 'https://instagram.com/marca.teste/',
-    answer: 'expansao',
-  },
-  'nao-sei-1440': {
-    ...PERSON,
-    phone: '21900000003',
-    email: 'pessoa.tres@exemplo.com.br',
-    answer: 'nao-sei',
-  },
+/** A phone as Playwright describes it: user agent, screen, scale and touch (the engine is still Chromium). */
+const phoneOf = (device) => ({ viewport: device.viewport, mobile: true, device });
+// Eric's phone is a Samsung Galaxy A34; the A55 is the nearest descriptor Playwright has
+const ANDROID = phoneOf(devices['Galaxy A55']);
+// the Instagram app's browser on that Android: a WebView with the app's name in the user agent (the API's deviceOf reads it)
+const INSTAGRAM = phoneOf({
+  ...devices['Galaxy A55'],
+  userAgent:
+    devices['Galaxy A55'].userAgent
+      .replace(') AppleWebKit', '; wv) AppleWebKit')
+      .replace('Gecko) Chrome', 'Gecko) Version/4.0 Chrome') +
+    ' Instagram 356.0.0.41.101 Android (34/14; 450dpi; 1080x2340; samsung; SM-A556B; a55x; s5e8845; pt_BR; 657853248)',
+});
+// Safari's user agent and screen; WebKit itself is not installed here, so the engine is Chromium
+const IPHONE = phoneOf(devices['iPhone 14']);
+
+/**
+ * Against the real API every run is a phone emulated by Playwright and another
+ * made-up person. `fail` is the refusal the run expects from the API (status,
+ * the step the page reports and the message it shows): the page keeps the data
+ * and never shows "Recebemos"; `token` is what the fake widget hands out.
+ * `expect` is the device the API reads from the user agent (site-events.ts).
+ */
+const LIVE_RUNS = [
   // the short form's own case: the three answers alone, nothing optional, a new lead without e-mail
-  'android-so-3': {
-    name: 'Pessoa Quatro',
-    phone: '21900000004',
-    email: '',
-    company: '',
-    instagram: '',
-    site: '',
-    answer: 'formatacao',
+  {
+    label: 'android-chrome-so-3',
+    ...ANDROID,
+    expect: { os: 'android', app: 'browser' },
+    person: {
+      name: 'Pessoa Quatro',
+      phone: '21900000004',
+      email: '',
+      company: '',
+      instagram: '',
+      site: '',
+      answer: 'formatacao',
+    },
   },
-  // the same phone again, now with everything: merged into that lead, only its gaps filled
-  'iphone-repete': {
-    ...PERSON,
-    name: 'Pessoa Quatro',
-    phone: '21900000004',
-    email: 'pessoa.quatro@exemplo.com.br',
-    answer: 'expansao',
+  // the same phone again from the Instagram app's browser, now with everything: merged into that lead, only its gaps filled
+  {
+    label: 'android-instagram-repete',
+    ...INSTAGRAM,
+    expect: { os: 'android', app: 'instagram' },
+    person: {
+      ...PERSON,
+      name: 'Pessoa Quatro',
+      phone: '21900000004',
+      email: 'pessoa.quatro@exemplo.com.br',
+      answer: 'expansao',
+    },
   },
-};
+  {
+    label: 'iphone-safari-nao-sei',
+    ...IPHONE,
+    expect: { os: 'ios', app: 'browser' },
+    person: {
+      ...PERSON,
+      phone: '21900000003',
+      email: 'pessoa.tres@exemplo.com.br',
+      instagram: 'https://instagram.com/marca.teste/',
+      answer: 'nao-sei',
+    },
+  },
+  // a phone the page accepts (11 digits) and the API refuses (normalizeBrazilianPhone: one digit repeated)
+  {
+    label: 'android-chrome-telefone-invalido',
+    ...ANDROID,
+    expect: { os: 'android', app: 'browser' },
+    person: { ...PERSON, phone: '11111111111', email: 'pessoa.cinco@exemplo.com.br' },
+    fail: { status: 400, step: 'validation', message: 'Telefone com DDD inválido.' },
+  },
+  // the robot check's token refused by siteverify
+  {
+    label: 'android-instagram-antirrobo-recusado',
+    ...INSTAGRAM,
+    expect: { os: 'android', app: 'instagram' },
+    person: { ...PERSON, phone: '21900000006', email: 'pessoa.seis@exemplo.com.br' },
+    token: REFUSED_TOKEN,
+    fail: {
+      status: 403,
+      step: 'captcha',
+      message: 'A verificação antirrobô não passou. Faça a verificação de novo e envie.',
+    },
+  },
+  // siteverify down: the API answers 503 and the page says it could not send
+  {
+    label: 'iphone-safari-api-fora',
+    ...IPHONE,
+    expect: { os: 'ios', app: 'browser' },
+    person: { ...PERSON, phone: '21900000007', email: 'pessoa.sete@exemplo.com.br' },
+    token: OFFLINE_TOKEN,
+    fail: {
+      status: 503,
+      step: 'network',
+      message: 'Não foi possível enviar agora. Tente de novo em instantes.',
+    },
+  },
+];
 
 /** What each run sent, for E2E_REPORT. */
 const submissions = [];
@@ -487,7 +555,7 @@ async function fillForm(page, person, label) {
  * only the two outside scripts are answered with fakes, through the DevTools
  * protocol, and any other outside request fails to resolve (launch flag).
  */
-async function fakeOutsideScripts(context, page, gtmRequests) {
+async function fakeOutsideScripts(context, page, gtmRequests, token) {
   const cdp = await context.newCDPSession(page);
   cdp.on('Fetch.requestPaused', (event) => {
     const url = new URL(event.request.url);
@@ -498,7 +566,7 @@ async function fakeOutsideScripts(context, page, gtmRequests) {
         requestId: event.requestId,
         responseCode: 200,
         responseHeaders: [{ name: 'Content-Type', value: 'application/javascript' }],
-        body: Buffer.from(gtm ? FAKE_GTM : FAKE_TURNSTILE).toString('base64'),
+        body: Buffer.from(gtm ? FAKE_GTM : fakeTurnstile(token)).toString('base64'),
       })
       .catch(() => {});
   });
@@ -512,7 +580,19 @@ async function fakeOutsideScripts(context, page, gtmRequests) {
 
 async function runViewport(
   browser,
-  { label, viewport, mobile, device = null, port, apiBase, replies = [], person = PERSON },
+  {
+    label,
+    viewport,
+    mobile,
+    device = null,
+    port,
+    apiBase,
+    replies = [],
+    person = PERSON,
+    token = DUMMY_TOKEN,
+    fail = null,
+    expect = null,
+  },
 ) {
   // a device descriptor (Playwright's) brings its user agent, screen and touch; else the bare size
   const context = await browser.newContext({
@@ -530,13 +610,17 @@ async function runViewport(
   /** The server events the page sent (mock only): method, content type and body. */
   const events = [];
   const gtmRequests = [];
-  const errorReplies = replies.map((reply) => reply.expect);
+  // the refusals this run asks for: the mock's scripted answers, or the one the real API gives `fail`
+  const errorReplies = fail ? [fail.message] : replies.map((reply) => reply.expect);
   // why each refused send is counted on the server (the mock consumes `replies` as it answers)
-  const errorSteps = replies.map(
-    (reply) =>
-      ({ 400: 'validation', 403: 'captcha', 429: 'rate_limited' })[reply.status] ?? 'network',
-  );
+  const errorSteps = fail
+    ? [fail.step]
+    : replies.map(
+        (reply) =>
+          ({ 400: 'validation', 403: 'captcha', 429: 'rate_limited' })[reply.status] ?? 'network',
+      );
   const liveOrigin = LIVE_API ? new URL(LIVE_API).origin : null;
+  const eventsUrl = `${apiBase}/public/site-forms/${SLUG}/events`;
   /** The real API's answers to the page: method, status and the CORS headers the browser accepted. */
   const apiAnswers = [];
   if (!LIVE_API) {
@@ -556,7 +640,7 @@ async function runViewport(
         return route.fulfill({
           status: 200,
           contentType: 'application/javascript',
-          body: FAKE_TURNSTILE,
+          body: fakeTurnstile(token),
         });
       }
       if (url.href.startsWith(apiBase + '/')) return api(route, request);
@@ -567,9 +651,24 @@ async function runViewport(
   await context.addInitScript(TIMELINE);
   const page = await context.newPage();
   if (LIVE_API) {
-    await fakeOutsideScripts(context, page, gtmRequests);
+    await fakeOutsideScripts(context, page, gtmRequests, token);
     page.on('request', (request) => {
       const url = new URL(request.url());
+      // the event beacons as the browser sent them (the API's side is checked by api-server.ts)
+      if (url.href === eventsUrl) {
+        let event;
+        try {
+          event = JSON.parse(request.postData() ?? 'null');
+        } catch {
+          event = 'not JSON';
+        }
+        events.push({
+          method: request.method(),
+          contentType: request.headers()['content-type'] ?? '',
+          event,
+        });
+        return;
+      }
       if (url.protocol === 'data:' || url.protocol === 'blob:') return;
       if (url.origin === pageOrigin || url.origin === liveOrigin) return;
       if (FAKE_HOSTS.includes(url.hostname)) return;
@@ -590,7 +689,7 @@ async function runViewport(
   const errors = [];
   page.on('console', (msg) => {
     if (msg.type() !== 'error') return;
-    // Chrome logs every non-2xx fetch; the error run asks the mock API for those on purpose
+    // Chrome logs every non-2xx fetch; the error runs ask the API for those on purpose
     const expected =
       errorReplies.length > 0 &&
       msg.text().startsWith('Failed to load resource: the server responded with a status of') &&
@@ -598,6 +697,11 @@ async function runViewport(
     if (!expected) errors.push(`console: ${msg.text()}`);
   });
   page.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
+  const finish = async () => {
+    check(`${label}: no console error or page error`, errors.length === 0, errors.join(' | '));
+    check(`${label}: no request left the machine`, outside.length === 0, outside.join(' '));
+    await context.close();
+  };
 
   const href = `${pageOrigin}/?utm_source=e2e&utm_campaign=lancamento&gclid=TESTE123&utm_id=9&ttclid=x`;
   await page.goto(href, { waitUntil: 'commit' });
@@ -824,6 +928,56 @@ async function runViewport(
       .catch(() => {});
   }
 
+  // the real API's refusal already answered the one click above: the page said why and kept the form
+  if (fail) {
+    const refused = await page.evaluate(() => ({
+      thanks: !document.getElementById('thanks').hidden,
+      formHidden: document.getElementById('lead-form').hidden,
+      error: document.getElementById('f-error').textContent,
+      leadSubmits: (window.dataLayer || []).filter((e) => e && e.event === 'lead_submit').length,
+      resets: window.__turnstile.resets,
+      visit: window.sessionStorage.getItem('wings_visit'),
+    }));
+    check(
+      `${label}: a send refused with ${fail.status} never shows "Recebemos": the form stays, with the reason`,
+      !refused.thanks && !refused.formHidden && refused.error === fail.message,
+      refused.error,
+    );
+    check(
+      `${label}: no lead_submit in the dataLayer`,
+      refused.leadSubmits === 0,
+      `${refused.leadSubmits}`,
+    );
+    if (fail.step !== 'validation') {
+      check(
+        `${label}: the robot check is reset after the refusal (its token is single use)`,
+        refused.resets === 1,
+        `${refused.resets} resets`,
+      );
+    }
+    const post = apiAnswers.filter((a) => a.method === 'POST' && !a.path.endsWith('/events'));
+    check(
+      `${label}: POST answered ${fail.status} by the API across origins`,
+      post.length === 1 && post[0].status === fail.status && post[0].allowOrigin === pageOrigin,
+      JSON.stringify(post),
+    );
+    submissions.push({
+      label,
+      answer: person.answer,
+      answerText: '',
+      instagramTyped: person.instagram,
+      email: person.email,
+      phone: person.phone,
+      sent: false,
+      status: fail.status,
+      ref: null,
+      visit: refused.visit,
+      expect,
+    });
+    await checkServerEvents(page, { label, events, errorSteps, person, sent: false });
+    return finish();
+  }
+
   await page.click('#f-send');
   await page
     .waitForFunction(() => !document.getElementById('thanks').hidden, null, { timeout: 10000 })
@@ -841,6 +995,7 @@ async function runViewport(
       buttonHidden: button?.hidden ?? null,
       previewNote: Boolean(thanks.querySelector('.pvn')),
       events: (window.dataLayer || []).filter((e) => e && e.event === 'lead_submit'),
+      visit: window.sessionStorage.getItem('wings_visit'),
     };
   });
   check(
@@ -871,7 +1026,10 @@ async function runViewport(
       email: person.email,
       phone: person.phone,
       sent: done.thanksShown,
+      status: 200,
       ref: postRef ?? null,
+      visit: done.visit,
+      expect,
     });
     check(
       `${label}: thank-you button opens the POST's link (the GET's plus the ref)`,
@@ -947,26 +1105,26 @@ async function runViewport(
     JSON.stringify(done.events),
   );
 
-  if (!LIVE_API) await checkServerEvents(page, { label, events, errorSteps, person });
-
-  check(`${label}: no console error or page error`, errors.length === 0, errors.join(' | '));
-  check(`${label}: no request left the machine`, outside.length === 0, outside.join(' '));
-  await context.close();
+  await checkServerEvents(page, { label, events, errorSteps, person, sent: true });
+  await finish();
 }
 
 /**
- * The server events (sendBeacon to `/events`, mock only): the funnel of the run
- * in order, each refused send with why, the thank-you's WhatsApp click (its
- * navigation held back: wa.me is outside), one visit id, the UTMs and nothing
- * of the person.
+ * The server events (sendBeacon to `/events`) as the browser sent them: the
+ * funnel of the run in order, each refused send with why, the thank-you's
+ * WhatsApp click (its navigation held back: wa.me is outside), one visit id,
+ * the UTMs and nothing of the person. A refused run ends at its submit_error.
  */
-async function checkServerEvents(page, { label, events, errorSteps: expectedSteps, person }) {
-  await page.evaluate(() => {
-    document.addEventListener('click', (e) => e.preventDefault(), { capture: true, once: true });
-    document.querySelector('#thanks [data-wa]')?.click();
-  });
-  // beacons are queued by the browser and reach the mock a moment later
-  for (let i = 0; i < 30 && !events.some((e) => e.event?.event === 'whatsapp_click'); i++) {
+async function checkServerEvents(page, { label, events, errorSteps: expectedSteps, person, sent }) {
+  if (sent) {
+    await page.evaluate(() => {
+      document.addEventListener('click', (e) => e.preventDefault(), { capture: true, once: true });
+      document.querySelector('#thanks [data-wa]')?.click();
+    });
+  }
+  // beacons are queued by the browser and go out a moment later
+  const last = sent ? 'whatsapp_click' : 'submit_error';
+  for (let i = 0; i < 30 && !events.some((e) => e.event?.event === last); i++) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   const names = events.map((e) => e.event?.event);
@@ -976,9 +1134,12 @@ async function checkServerEvents(page, { label, events, errorSteps: expectedStep
     for (const name of names) if (name === expected[at]) at++;
     return at === expected.length;
   };
+  const funnel = sent
+    ? ['page_view', 'form_start', 'submit_attempt', 'submit_ok', 'whatsapp_click']
+    : ['page_view', 'form_start', 'submit_attempt', 'submit_error'];
   check(
-    `${label}: server events in order: page_view, form_start, submit_attempt, submit_ok, whatsapp_click; form_view once before the send`,
-    inOrder('page_view', 'form_start', 'submit_attempt', 'submit_ok', 'whatsapp_click') &&
+    `${label}: server events in order: ${funnel.join(', ')}; form_view once before the send`,
+    inOrder(...funnel) &&
       count('page_view') === 1 &&
       count('form_start') === 1 &&
       count('form_view') === 1 &&
@@ -989,21 +1150,23 @@ async function checkServerEvents(page, { label, events, errorSteps: expectedStep
     .filter((e) => e.event?.event === 'submit_error')
     .map((e) => e.event.step);
   check(
-    `${label}: each refused send counted with why (${expectedSteps.join(', ') || 'none'}), one attempt per click`,
+    `${label}: each refused send counted with why (${expectedSteps.join(', ') || 'none'}), one attempt per click${sent ? '' : ', no submit_ok'}`,
     JSON.stringify(errorSteps) === JSON.stringify(expectedSteps) &&
-      count('submit_attempt') === expectedSteps.length + 1 &&
-      count('submit_ok') === 1,
+      count('submit_attempt') === expectedSteps.length + (sent ? 1 : 0) &&
+      count('submit_ok') === (sent ? 1 : 0),
     `${errorSteps.join(' ')} | ${count('submit_attempt')} attempts`,
   );
-  const thanksClick = events.find((e) => e.event?.event === 'whatsapp_click');
-  const dataLayerClicks = await page.evaluate(
-    () => (window.dataLayer || []).filter((e) => e && e.event === 'whatsapp_click').length,
-  );
-  check(
-    `${label}: the thank-you's WhatsApp click counted on the server (step thanks) and in the dataLayer`,
-    thanksClick?.event.step === 'thanks' && dataLayerClicks === 1,
-    `${JSON.stringify(thanksClick?.event)} | dataLayer ${dataLayerClicks}`,
-  );
+  if (sent) {
+    const thanksClick = events.find((e) => e.event?.event === 'whatsapp_click');
+    const dataLayerClicks = await page.evaluate(
+      () => (window.dataLayer || []).filter((e) => e && e.event === 'whatsapp_click').length,
+    );
+    check(
+      `${label}: the thank-you's WhatsApp click counted on the server (step thanks) and in the dataLayer`,
+      thanksClick?.event.step === 'thanks' && dataLayerClicks === 1,
+      `${JSON.stringify(thanksClick?.event)} | dataLayer ${dataLayerClicks}`,
+    );
+  }
   const visits = [...new Set(events.map((e) => e.event?.visit))];
   const text = JSON.stringify(events);
   check(
@@ -1019,9 +1182,8 @@ async function checkServerEvents(page, { label, events, errorSteps: expectedStep
           !('gclid' in e.event) &&
           !('utm_id' in e.event),
       ) &&
-      !text.includes(person.name) &&
-      !text.includes(person.phone) &&
-      !text.includes(person.email),
+      // what the person typed (the short form may have no e-mail) is in no beacon
+      ![person.name, person.phone, person.email].some((typed) => typed && text.includes(typed)),
     `${events.length} events, visit ${visits.join(',')}`,
   );
 }
@@ -1178,22 +1340,10 @@ const browser = await chromium.launch({
 });
 const DESKTOP = { viewport: { width: 1440, height: 900 }, mobile: false };
 const PHONE = { viewport: { width: 390, height: 844 }, mobile: true };
-/** A phone as Playwright describes it: user agent, screen, scale and touch (the engine is still Chromium). */
-const phoneOf = (device) => ({ viewport: device.viewport, mobile: true, device });
-const ANDROID = phoneOf(devices['Pixel 7']);
-const IPHONE = phoneOf(devices['iPhone 14']);
 try {
   if (LIVE_API) {
     await liveCorsChecks(`http://127.0.0.1:${port}`);
-    for (const [label, size] of [
-      ['desktop-1440', DESKTOP],
-      ['phone-390', PHONE],
-      ['nao-sei-1440', DESKTOP],
-      ['android-so-3', ANDROID],
-      ['iphone-repete', IPHONE],
-    ]) {
-      await runViewport(browser, { label, ...size, port, apiBase, person: LIVE_PEOPLE[label] });
-    }
+    for (const run of LIVE_RUNS) await runViewport(browser, { ...run, port, apiBase });
   } else {
     await runViewport(browser, { label: 'desktop-1440', ...DESKTOP, port, apiBase });
     await runViewport(browser, { label: 'phone-390', ...PHONE, port, apiBase });
@@ -1234,8 +1384,9 @@ try {
 }
 
 if (REPORT) {
-  const planned = Object.keys(LIVE_PEOPLE).length;
-  writeFileSync(REPORT, JSON.stringify({ planned, consentShown, submissions }, null, 2));
+  const planned = LIVE_RUNS.filter((run) => !run.fail).length;
+  const attempts = LIVE_RUNS.length;
+  writeFileSync(REPORT, JSON.stringify({ planned, attempts, consentShown, submissions }, null, 2));
 }
 
 const failed = results.filter((result) => !result.ok);
