@@ -5,6 +5,8 @@ import {
   siteFormCopyOf,
   siteFormSpecSchema,
   siteFormSubmitSchema,
+  siteLinkText,
+  wameLinkOf,
   whatsappLinkOf,
   type LeadPipeline,
   type SiteFormInfo,
@@ -72,7 +74,12 @@ export async function siteWhatsappUrl(
     )
     .orderBy(desc(leadTrackingLinks.createdAt))
     .limit(1);
-  return link ? whatsappLinkOf(wingsNumber, link.code, brandOfLink(client), ref) : null;
+  if (!link) return null;
+  const brand = brandOfLink(client);
+  // The Wings site: a sentence with the code at the end; a brand's page keeps "<code> Olá! …".
+  return brand
+    ? whatsappLinkOf(wingsNumber, link.code, brand, ref)
+    : wameLinkOf(wingsNumber, siteLinkText(link.code, ref));
 }
 
 /** `@perfil` from what the record keeps (`@perfil`, `perfil` or an instagram.com address), or null. */

@@ -63,6 +63,7 @@ node dist/scripts/leads-import-rd.js --apply [--since=2026-06-30] [--no-historie
   "Novo lead para você"). Negócio fechado, de arquivo ou de teste não entra no
   rodízio. O roteiro de produção é `/root/relatorios/negocios-rd/negocios-rd.sh`
   (estado, simular, aplicar, desfazer LOTE).
+
 - Por negócio: `GET /deals/:id/contacts` (nome, e-mail, telefone do primeiro
   contato) e, sem `--no-histories`, `GET /deals/:id` para
   `deal_stage_histories` (1º contato = primeira entrada numa etapa depois da
@@ -241,8 +242,9 @@ sem apagar nada. Rodar de novo não faz nada.
 Decisão do Eric (01/10): **todo link e toda página de Expansão abrem o WhatsApp da Wings**
 (`WINGS_WHATSAPP_NUMBER`, 5521999470288), onde a Sofia atende. A marca é identificada pelo código
 do link (cliente + canal) e pelo texto pré-preenchido: `<CÓDIGO> Olá! Quero saber sobre a franquia
-<Marca>.` O lado que recebe lê só a primeira palavra (o código), então o lead cai no Funil com a
-marca certa.
+<Marca>.` O lado que recebe lê a primeira palavra (o código), então o lead cai no Funil com a
+marca certa. A página da própria Wings usa uma frase com o código no fim, entre parênteses
+(`siteLinkText`); o leitor também acha o código ali.
 
 - **WhatsApp próprio da marca** (`clients.whatsapp`, ficha → Empresa) é só contato: nunca entra em
   link, página ou resposta pública. Sem WhatsApp próprio, a ficha guarda o motivo
