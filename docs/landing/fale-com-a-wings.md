@@ -345,8 +345,8 @@ caminho), sem rede.
   (CLS < 0,02) e sem nada que some depois, um h1 e seis seções, botão desligado no começo, envio e obrigado com o link
   da API, e as respostas de erro. `API_BASE=http://127.0.0.1:3000` usa uma API local de verdade (com `E2E_PORT` fixo
   em `LANDING_ORIGINS`). Não faz parte do `pnpm test`.
-- `pnpm --filter @wings/landing test:e2e:api` (depois do `build`; com `pnpm db:up` rodando, ou `DATABASE_URL`
-  apontando para outro servidor): a "API de teste". `e2e/api-server.ts` cria um banco descartável (`wings_test_…`, o
+- `pnpm --filter @wings/landing test:e2e:api` (depois do `build`, com `pnpm db:up` rodando; `DATABASE_URL` só pode
+  nomear um servidor local, o teste recusa outro): a "API de teste". `e2e/api-server.ts` cria um banco descartável (`wings_test_…`, o
   mesmo ajudante dos testes da API), roda o seed com um número inventado da Wings (para existir o link "Site"), sobe a
   API em `127.0.0.1` com as chaves de teste públicas da Cloudflare e o siteverify respondido no próprio processo (o
   bloqueio de rede da API é carregado primeiro) e roda o `e2e/run.mjs` contra ela a partir de celulares emulados pelo
@@ -357,7 +357,9 @@ caminho), sem rede.
   preenchidas, `lead.merged` no audit, `form_ref` do último envio); "Ainda não sei" pelo iPhone; e três recusas da
   API de verdade, em que a tela nunca mostra "Recebemos", o formulário fica com os dados e o motivo, não há
   `lead_submit` no dataLayer e nenhum lead é criado: telefone que a página aceita e a API recusa (`(11) 11111-1111`,
-  400), token do antirrobô recusado pelo siteverify (403, widget reiniciado) e siteverify fora do ar (503). Nada no
+  400, widget não reiniciado: na Cloudflare real esse token já foi gasto, e o reenvio corrigido cai num 403 antes de
+  passar, o que a chave de teste não reproduz), token do antirrobô recusado pelo siteverify (403, widget reiniciado) e
+  siteverify fora do ar (503). Nada no
   caminho até a API é interceptado, então o preflight de CORS do navegador chega à API de verdade (o Playwright
   responderia ao preflight sozinho se interceptasse). Depois confere no banco: um lead por telefone enviado, `source`
   `site_form`, `landing_page` `fale-com-a-wings`, funil `formatacao` para as três respostas ("nao-sei" também: a API
@@ -366,7 +368,8 @@ caminho), sem rede.
   à `consentText` do seed, um `site_form.captcha_refused` no audit por recusa do antirrobô (`refused` e
   `unavailable`), e que cada GET, preflight e POST do navegador recebeu o CORS da origem da página com o status
   esperado (200, 400, 403, 503). Os eventos para o servidor são conferidos dos dois lados: como o navegador os mandou
-  (`run.mjs`) e como a API os registrou (`api-server.ts`, uma linha por beacon): o funil de cada visita em ordem
+  (`run.mjs`) e os que a API aceitou com 204, lidos pelo leitor dela (`api-server.ts`; o log da API fica mudo no teste,
+  então a linha de log em si não é observada): o funil de cada visita em ordem
   (`page_view`, `form_view` uma vez, `form_start`, `submit_attempt`, depois `submit_ok` e o `whatsapp_click` do
   obrigado, ou `submit_error` com o motivo e mais nada), as UTMs do link e o aparelho lido do user agent (`phone`,
   `android`/`ios`, `instagram`/`browser`). Apaga o banco ao terminar, também com Ctrl+C; nenhum outro banco é lido

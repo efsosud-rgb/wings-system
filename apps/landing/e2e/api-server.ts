@@ -34,6 +34,11 @@ import { TEST_CPF_KEY, TEST_INDEX_KEY } from '../../api/src/test/factories.js';
 
 // Without DATABASE_URL, the local development database of docker-compose.dev.yml (pnpm db:up).
 process.env.DATABASE_URL ??= 'postgresql://wings:wings_dev_only@127.0.0.1:5433/wings_system';
+// The throwaway database is made on this machine only: never on staging's or production's server.
+if (!['127.0.0.1', 'localhost', '::1'].includes(new URL(process.env.DATABASE_URL).hostname)) {
+  console.error('DATABASE_URL must name a local server (127.0.0.1 or localhost)');
+  process.exit(2);
+}
 
 const SLUG = FALE_COM_A_WINGS.pattern;
 const FORM_PATH = `/public/site-forms/${SLUG}`;
@@ -86,7 +91,7 @@ interface Report {
   submissions: Submission[];
 }
 
-/** One event beacon as the API logs it (site-events.ts): event, step, visit, UTMs and the device read from the user agent. */
+/** One accepted event beacon as the API's reader sees it (site-events.ts): event, step, visit, UTMs and the device read from the user agent. */
 type SiteEventLine = ReturnType<typeof siteEventLineOf>;
 
 interface ApiCall {
@@ -201,7 +206,8 @@ async function startApi(pageOrigin: string) {
 
   // What reached /public/*: method, status and the CORS answer; never a form's body.
   const calls: ApiCall[] = [];
-  // The event beacons, as the API logs them: nothing personal is in one (site-events.ts).
+  // The event beacons the API accepted (204), read with the API's own reader (siteEventLineOf, what its
+  // log line would carry); the logger itself is silent under NODE_ENV test, so the log is not observed.
   const siteEvents: SiteEventLine[] = [];
   api.addHook('onResponse', async (request, reply) => {
     const path = request.url.split('?')[0] ?? '';
@@ -441,7 +447,7 @@ function checkCalls(calls: ApiCall[], pageOrigin: string, report: Report): void 
 }
 
 /**
- * The server events of each run as the API kept them (one log line each): the
+ * The server events of each run the API accepted, read with its own reader: the
  * visit's funnel in order (sent: through submit_ok and the thank-you's WhatsApp
  * click; refused: submit_error with why, nothing after), form_view once, the
  * UTMs of the ad link, and the device the API read from the user agent: the
@@ -462,7 +468,7 @@ function checkSiteEvents(seen: SiteEventLine[], report: Report): void {
       ? ['page_view', 'form_start', 'submit_attempt', 'submit_ok', 'whatsapp_click']
       : ['page_view', 'form_start', 'submit_attempt', 'submit_error'];
     check(
-      `${label}: the API kept this visit's funnel in order (${funnel.join(', ')}), form_view once`,
+      `${label}: the API accepted this visit's funnel in order (${funnel.join(', ')}), form_view once`,
       run.visit !== null &&
         inOrder(...funnel) &&
         count('page_view') === 1 &&
