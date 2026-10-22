@@ -39,6 +39,7 @@ const PUBLIC_ROUTES = [
   'POST /integrations/whatsapp/webhook',
   'GET /public/site-forms/:slug',
   'POST /public/site-forms/:slug',
+  'POST /public/site-forms/:slug/events',
 ];
 
 /** Routes any login may call: the person's own session and Google connection. */

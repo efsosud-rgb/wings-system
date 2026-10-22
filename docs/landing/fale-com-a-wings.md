@@ -168,6 +168,40 @@ API (`api-staging` e `api-prod`, com `wings-env`):
 O GTM entra com o trecho padrão, `dataLayer` criado antes, e só quando `LANDING_GTM_ID` tem um id válido. O trecho
 `<noscript>` do GTM não entra (o id é decidido em tempo de execução).
 
+## Eventos para o servidor (contagem sem dado pessoal)
+
+Além do dataLayer, a página manda cada passo do visitante à API com `navigator.sendBeacon`
+(`POST /public/site-forms/:slug/events`, `apps/api/src/modules/leads/site-events.ts`): corpo pequeno em `text/plain`
+(sem preflight), resposta 204, o mesmo CORS da rota do formulário e um limite por IP próprio (300 em 10 minutos). A API
+grava **uma linha de log JSON por evento** (`"msg":"site event"`) e nada mais: sem tabela, sem migração. O envio nunca
+espera resposta nem trava o formulário: um beacon perdido é só um evento a menos. Um navegador sem `sendBeacon` não
+conta nada.
+
+| Evento           | Quando                                          | `step`                                             |
+| ---------------- | ----------------------------------------------- | -------------------------------------------------- |
+| `page_view`      | na carga                                        |                                                    |
+| `form_view`      | um terço do formulário entrou na tela (uma vez) |                                                    |
+| `form_start`     | primeiro campo tocado                           |                                                    |
+| `submit_attempt` | cada clique em enviar                           |                                                    |
+| `submit_error`   | envio recusado                                  | `validation`, `captcha`, `rate_limited`, `network` |
+| `submit_ok`      | a API respondeu 200                             |                                                    |
+| `whatsapp_click` | clique num botão de WhatsApp que abre o link    | `header`, `final`, `thanks`                        |
+
+Cada linha leva `slug`, `event`, `step`, `visit` (id aleatório da aba, só em `sessionStorage`, sem cookie), `utm_source`,
+`utm_medium`, `utm_campaign` e `utm_content` (da primeira visita guardada, senão da atual) e `device`/`os`/`app` lidos do
+User-Agent **no servidor** (`phone`/`tablet`/`desktop`, `android`/`ios`/`other`, `instagram`/`facebook`/`browser`).
+Nunca nome, e-mail, telefone, IP nem o User-Agent inteiro. A lista fechada de eventos e passos é `siteEventSchema`
+(`packages/shared`); `events.test.ts` da landing confere que a cópia da página é igual.
+
+Contar (o log do contêiner da API some a cada deploy):
+
+```bash
+docker logs <contêiner da API> 2>&1 | grep '"msg":"site event"' \
+  | jq -r '[.event, .step // "-", .app, .device] | @tsv' | sort | uniq -c | sort -rn
+```
+
+Por aba (o funil de uma visita): `... | jq -r '[.visit, .event, .step // "-"] | @tsv' | sort`.
+
 ## Cabeçalhos e cache
 
 Todas as respostas, menos `/embed/formulario` (seção abaixo): `Content-Security-Policy: frame-ancestors 'none'; base-uri
@@ -274,6 +308,7 @@ caminho), sem rede.
 
 - Turnstile com as chaves reais (só o falso do teste e as chaves de teste da Cloudflare).
 - As tags do GTM disparando com `whatsapp_click` e `lead_submit` no contêiner real.
+- Os eventos para o servidor no navegador do Instagram (só Chromium headless no e2e) e o `jq` no servidor de staging.
 - A prévia do link (imagem OG) no WhatsApp e no Facebook.
 - O nginx no Coolify (só conferido num contêiner local, sem porta publicada): hosts, raiz, 302, 404, `/healthz`,
   cabeçalhos e cache.
