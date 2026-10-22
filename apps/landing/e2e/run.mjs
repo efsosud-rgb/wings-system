@@ -432,17 +432,33 @@ const LIVE_PEOPLE = {
 const submissions = [];
 let consentShown = '';
 
-async function fillForm(page, person) {
+async function fillForm(page, person, label) {
   await page.fill('#f-nome', person.name);
   await page.click('#f-tel');
   await page.keyboard.type(person.phone);
+  await page.selectOption('#f-int', person.answer);
+  await page.check('#f-consent');
+  // the short form (22/10): the three answers and the consent are enough, the optional block still closed
+  await page
+    .waitForFunction(() => !document.getElementById('f-send').disabled, null, { timeout: 5000 })
+    .catch(() => {});
+  const short = await page.evaluate(() => ({
+    disabled: document.getElementById('f-send').disabled,
+    missing: document.getElementById('f-missing').textContent,
+    open: document.getElementById('f-more').open,
+  }));
+  check(
+    `${label}: name, WhatsApp, the answer and the consent alone turn the button on (optional block closed)`,
+    !short.disabled && short.missing === 'Tudo certo. Pode enviar.' && !short.open,
+    short.missing,
+  );
+  // then the optional block, opened and filled, so the POST and the database are checked with everything
+  await page.click('#f-more summary');
   await page.fill('#f-email', person.email);
   await page.fill('#f-empresa', person.company);
   await page.fill('#f-ig', person.instagram);
   await page.focus('#f-site');
   await page.fill('#f-site', person.site);
-  await page.selectOption('#f-int', person.answer);
-  await page.check('#f-consent');
 }
 
 /**
@@ -678,19 +694,12 @@ async function runViewport(
   );
   check(`${label}: social icon font loaded`, !layout.noFa);
   check(`${label}: send button off at start`, layout.disabled);
-  const items = [
-    'nome',
-    'WhatsApp',
-    'e-mail',
-    'empresa',
-    'Instagram',
-    'o que você procura',
-    'aceite da política',
-  ];
+  const items = ['nome', 'WhatsApp', 'o que você procura', 'aceite da política'];
   check(
-    `${label}: missing line lists the items`,
+    `${label}: missing line lists the required items only (no e-mail, company or Instagram)`,
     layout.missing.startsWith('Para enviar, falta: ') &&
-      items.every((item) => layout.missing.includes(item)),
+      items.every((item) => layout.missing.includes(item)) &&
+      !/e-mail|empresa|Instagram/.test(layout.missing),
     layout.missing,
   );
   check(
@@ -744,7 +753,7 @@ async function runViewport(
     consentShown,
   );
 
-  await fillForm(page, person);
+  await fillForm(page, person, label);
   await page
     .waitForFunction(() => !document.getElementById('f-send').disabled, null, { timeout: 5000 })
     .catch(() => {});

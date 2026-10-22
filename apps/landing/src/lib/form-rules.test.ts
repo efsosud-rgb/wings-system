@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   CAPTCHA_LABEL,
   READY_TEXT,
+  emailOk,
+  instagramOk,
   maskPhone,
   missingLineOf,
   missingOf,
@@ -9,35 +11,38 @@ import {
   siteUrlOf,
 } from './form-rules.js';
 
-const FILLED = {
+/** The three required answers alone. */
+const SHORT = {
   'f-nome': 'Pessoa de Teste',
   'f-tel': '(21) 90000-0000',
+  'f-int': 'formatacao',
+};
+
+const FILLED = {
+  ...SHORT,
   'f-email': 'pessoa@exemplo.com.br',
   'f-empresa': 'Empresa Exemplo',
   'f-ig': '@marca.exemplo',
   'f-site': '',
-  'f-int': 'formatacao',
 };
 
 describe('missingOf', () => {
-  it('lists every required item of an empty form, the robot check last', () => {
+  it('lists the required items of an empty form, the robot check last', () => {
     const lacking = missingOf({}, false, false);
     expect(lacking).toEqual([
       'nome',
       'WhatsApp',
-      'e-mail',
-      'empresa',
-      'Instagram',
       'o que você procura',
       'aceite da política',
       CAPTCHA_LABEL,
     ]);
     expect(missingLineOf(lacking).text).toBe(
-      'Para enviar, falta: nome, WhatsApp, e-mail, empresa, Instagram, o que você procura, aceite da política, verificação antirrobô.',
+      'Para enviar, falta: nome, WhatsApp, o que você procura, aceite da política, verificação antirrobô.',
     );
   });
 
-  it('is empty when everything is filled, ticked and checked (the site is optional)', () => {
+  it('is empty with the three answers, the consent and the robot check; the rest is optional', () => {
+    expect(missingOf(SHORT, true, true)).toEqual([]);
     expect(missingOf(FILLED, true, true)).toEqual([]);
     expect(missingLineOf([])).toEqual({ text: READY_TEXT, ready: true });
   });
@@ -46,15 +51,36 @@ describe('missingOf', () => {
     expect(missingOf(FILLED, true, false)).toEqual([CAPTCHA_LABEL]);
   });
 
-  it('accepts the Instagram as @, username or profile address', () => {
-    for (const instagram of ['@marca', 'marca', 'https://www.instagram.com/marca/?hl=pt']) {
-      expect(missingOf({ ...FILLED, 'f-ig': instagram }, true, true)).toEqual([]);
-    }
-    expect(missingOf({ ...FILLED, 'f-ig': 'marca..x' }, true, true)).toEqual(['Instagram']);
+  it('never lists an optional field, even when what was typed is wrong', () => {
+    expect(
+      missingOf({ ...SHORT, 'f-email': 'sem-arroba', 'f-ig': 'marca..x' }, true, true),
+    ).toEqual([]);
   });
 
   it('wants a WhatsApp with area code', () => {
     expect(missingOf({ ...FILLED, 'f-tel': '90000-0000' }, true, true)).toEqual(['WhatsApp']);
+  });
+});
+
+describe('optional fields are checked only when filled', () => {
+  it('accepts the Instagram as @, username or profile address, or empty', () => {
+    for (const instagram of [
+      '',
+      '  ',
+      '@marca',
+      'marca',
+      'https://www.instagram.com/marca/?hl=pt',
+    ]) {
+      expect(instagramOk(instagram)).toBe(true);
+    }
+    expect(instagramOk('marca..x')).toBe(false);
+  });
+
+  it('accepts an empty e-mail and refuses one without @ or domain', () => {
+    expect(emailOk('')).toBe(true);
+    expect(emailOk(' pessoa@exemplo.com.br ')).toBe(true);
+    expect(emailOk('sem-arroba')).toBe(false);
+    expect(emailOk('pessoa@exemplo')).toBe(false);
   });
 });
 

@@ -205,7 +205,10 @@ const FORMATACAO_LANDING_PAGES = [
  * você procura?" may send the lead to another funnel, and "Ainda não sei" to
  * none while the Jev triage is on, so the triage decides (docs/leads/formularios.md).
  * Insert-only: an environment gets the rule, consent line included, the first
- * time the seed runs there.
+ * time the seed runs there. The short page (Eric, 22/10/2026) requires only
+ * the answer on top of name, WhatsApp and consent; an environment seeded with
+ * the longer list before that keeps it until the UPDATE in
+ * docs/landing/fale-com-a-wings.md is run there.
  */
 export const FALE_COM_A_WINGS = {
   pattern: 'fale-com-a-wings',
@@ -226,7 +229,7 @@ export const FALE_COM_A_WINGS = {
       { value: 'consultoria', option: 'Consultoria para o meu negócio' },
       { value: 'nao-sei', option: 'Ainda não sei', pipeline: null },
     ],
-    requiredFields: ['email', 'companyName', 'instagram', 'qualifierAnswer'],
+    requiredFields: ['qualifierAnswer'],
     // The approved page's own line, word for word (apps/landing): what the lead agreed to.
     consentText:
       'Li a Política de Privacidade e autorizo a Wings a falar comigo por WhatsApp e e-mail sobre este pedido.',

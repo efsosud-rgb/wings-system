@@ -178,6 +178,8 @@ async function fill(page, frame, person, answer) {
   await frame.fill('#f-nome', person.name);
   await frame.click('#f-tel');
   await page.keyboard.type(person.phone);
+  // the optional block (e-mail, company, Instagram, site) opens before it is filled
+  await frame.click('#f-more summary');
   await frame.fill('#f-email', person.email);
   await frame.fill('#f-empresa', person.company);
   await frame.fill('#f-ig', person.instagram);
