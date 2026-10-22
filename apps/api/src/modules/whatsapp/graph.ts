@@ -42,7 +42,8 @@ type Fetch = typeof fetch;
 
 async function graph<T>(
   fetchImpl: Fetch,
-  token: string,
+  /** Null only for the token exchange, which has no token yet. */
+  token: string | null,
   method: 'GET' | 'POST',
   path: string,
   body?: unknown,
@@ -55,7 +56,7 @@ async function graph<T>(
     response = await fetchImpl(`${GRAPH}${path}`, {
       method,
       headers: {
-        Authorization: `Bearer ${token}`,
+        ...(token === null ? {} : { Authorization: `Bearer ${token}` }),
         ...(body === undefined || form ? {} : { 'Content-Type': 'application/json' }),
       },
       body: body === undefined ? undefined : form ? body : JSON.stringify(body),
@@ -468,6 +469,112 @@ export async function downloadWhatsAppMedia(
   } catch {
     return { ok: false, code: null, title: 'media_unavailable', unknown: false };
   }
+}
+
+// --- a seller's number, by coexistence (docs/whatsapp/conectar-numero.md) ----------------
+
+/**
+ * Embedded Signup's code (it lives 30 seconds) for the business token, GET /oauth/access_token.
+ * The one call that carries a credential outside the Authorization header: Meta's exchange takes
+ * the app secret as a parameter. No URL is ever logged.
+ */
+export async function exchangeSignupCode(
+  fetchImpl: Fetch,
+  app: { appId: string; appSecret: string },
+  code: string,
+): Promise<GraphResult<string>> {
+  const query = new URLSearchParams({ client_id: app.appId, client_secret: app.appSecret, code });
+  const result = await graph<{ access_token?: unknown }>(
+    fetchImpl,
+    null,
+    'GET',
+    `/oauth/access_token?${query}`,
+  );
+  if (!result.ok) return result;
+  return typeof result.data.access_token === 'string' && result.data.access_token
+    ? { ok: true, data: result.data.access_token }
+    : { ok: false, code: null, title: 'no_token', unknown: false };
+}
+
+export interface GraphBusinessNumber {
+  id?: string;
+  display_phone_number?: string;
+  verified_name?: string;
+  /** True for a number that stays in the WhatsApp Business app (coexistence). */
+  is_on_biz_app?: boolean;
+  platform_type?: string;
+}
+
+/** GET /{waba-id}/phone_numbers: the business token sees only what the business shared. */
+export async function readWabaNumbers(
+  fetchImpl: Fetch,
+  token: string,
+  wabaId: string,
+): Promise<GraphResult<GraphBusinessNumber[]>> {
+  const fields = 'id,display_phone_number,verified_name,is_on_biz_app,platform_type';
+  const result = await graph<{ data?: GraphBusinessNumber[] }>(
+    fetchImpl,
+    token,
+    'GET',
+    `/${wabaId}/phone_numbers?fields=${fields}`,
+  );
+  return result.ok ? { ok: true, data: result.data.data ?? [] } : result;
+}
+
+/** The business portfolio that owns the WABA (GET /{waba-id}?fields=owner_business_info). */
+export async function readWabaOwner(
+  fetchImpl: Fetch,
+  token: string,
+  wabaId: string,
+): Promise<GraphResult<string | null>> {
+  const result = await graph<{ owner_business_info?: { id?: unknown } }>(
+    fetchImpl,
+    token,
+    'GET',
+    `/${wabaId}?fields=owner_business_info`,
+  );
+  if (!result.ok) return result;
+  const id = result.data.owner_business_info?.id;
+  return { ok: true, data: typeof id === 'string' && /^\d+$/.test(id) ? id : null };
+}
+
+/** POST /{waba-id}/subscribed_apps: our app gets this WABA's webhooks. Safe to repeat. */
+export async function subscribeWaba(
+  fetchImpl: Fetch,
+  token: string,
+  wabaId: string,
+): Promise<GraphResult<boolean>> {
+  const result = await graph<{ success?: unknown }>(
+    fetchImpl,
+    token,
+    'POST',
+    `/${wabaId}/subscribed_apps`,
+  );
+  return result.ok ? { ok: true, data: result.data.success === true } : result;
+}
+
+export type SmbSyncType = 'smb_app_state_sync' | 'history';
+
+/**
+ * POST /{phone-number-id}/smb_app_data: Meta sends the app's contacts or its history through the
+ * webhook. Meta takes each once per connection, so it is sent once and never retried here.
+ */
+export async function requestSmbSync(
+  fetchImpl: Fetch,
+  token: string,
+  phoneNumberId: string,
+  syncType: SmbSyncType,
+): Promise<GraphResult<string | null>> {
+  const result = await graph<{ request_id?: unknown }>(
+    fetchImpl,
+    token,
+    'POST',
+    `/${phoneNumberId}/smb_app_data`,
+    { messaging_product: 'whatsapp', sync_type: syncType },
+  );
+  if (!result.ok) return result;
+  const id = result.data.request_id;
+  return { ok: true, data: typeof id === 'string' ? id.slice(0, 200) : null };
 }
 
 // --- errors in plain Portuguese -----------------------------------------------------------

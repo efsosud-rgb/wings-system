@@ -108,7 +108,12 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
           </p>
         )}
         {hasPermission(session.data, 'integrations.manage') && (
-          <OfficialNumberSwitch live={official.data?.live} />
+          <>
+            <OfficialNumberSwitch live={official.data?.live} />
+            <Link className="crm-muted" to="/crm-vendas/whatsapp/numeros">
+              Números dos vendedores
+            </Link>
+          </>
         )}
         <input
           className="crm-input"

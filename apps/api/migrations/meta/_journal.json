@@ -652,6 +652,13 @@
       "when": 1792439676361,
       "tag": "0094_whatsapp_bulk_import",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1792521813953,
+      "tag": "0095_wa_numbers",
+      "breakpoints": true
     }
   ]
 }

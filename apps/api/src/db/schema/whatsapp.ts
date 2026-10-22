@@ -446,3 +446,47 @@ export const whatsappSettings = pgTable('whatsapp_settings', {
   updatedBy: uuid('updated_by').references(() => employees.id),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * The sellers' own WhatsApp Business numbers, mirrored by coexistence (Eric, 20/10;
+ * docs/whatsapp/conectar-numero.md). One row per number, each with its own WABA and business
+ * portfolio: nothing assumes one portfolio for all. `token_enc` is the business token Meta gave
+ * when this number was connected, sealed by `secret-box.ts` under INTEGRATIONS_ENCRYPTION_KEY;
+ * it is never sent to the browser, never logged, and this table is not granted to `wings_ro`.
+ */
+export const waNumbers = pgTable(
+  'wa_numbers',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    phoneNumberId: text('phone_number_id').notNull(),
+    wabaId: text('waba_id').notNull(),
+    businessId: text('business_id'),
+    displayPhone: text('display_phone'),
+    verifiedName: text('verified_name'),
+    ownerEmployeeId: uuid('owner_employee_id')
+      .notNull()
+      .references(() => employees.id),
+    tokenEnc: text('token_enc').notNull(),
+    /** connected | disconnected */
+    status: text('status').notNull().default('connected'),
+    connectedBy: uuid('connected_by').references(() => employees.id),
+    connectedAt: timestamp('connected_at', { withTimezone: true }).notNull(),
+    /** Meta's event and reason when the number left: a code, never a message. */
+    disconnectReason: text('disconnect_reason'),
+    disconnectedAt: timestamp('disconnected_at', { withTimezone: true }),
+    webhooksSubscribed: boolean('webhooks_subscribed').notNull().default(false),
+    /** The two syncs Meta allows once per connection: requested | failed | unknown, and Meta's id. */
+    contactsSync: text('contacts_sync'),
+    contactsSyncRequest: text('contacts_sync_request'),
+    historySync: text('history_sync'),
+    historySyncRequest: text('history_sync_request'),
+    /** 0–100, the highest Meta reported in a `history` webhook. */
+    historyProgress: integer('history_progress'),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('wa_numbers_phone_number_uq').on(table.tenantId, table.phoneNumberId),
+    index('wa_numbers_waba_idx').on(table.wabaId),
+  ],
+);

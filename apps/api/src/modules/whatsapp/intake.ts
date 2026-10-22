@@ -33,6 +33,7 @@ import { loadSofiaSettings } from '../sofia/settings.js';
 import { factsOf, routeInbound } from '../sofia/state.js';
 import { ART_MEDIA_GONE_CODES, invalidateArtMedia } from './art.js';
 import { notifyCallsChanged } from './call-signal.js';
+import { applyNumberChange, isSellerNumberChange } from './numbers.js';
 import {
   isOptOut,
   whatsappChangesOf,
@@ -67,6 +68,8 @@ export interface WhatsAppIntakeDeps {
   db: Database;
   /** Our number. A change for another number of the same app is skipped. */
   phoneNumberId: string | null;
+  /** Our number's WABA: its changes are never mistaken for a seller's number. */
+  wabaId?: string | null;
   log: (facts: Record<string, unknown>) => void;
   now?: () => Date;
 }
@@ -149,6 +152,12 @@ export async function purgeWhatsAppPayloads(db: Database, now = new Date()) {
 
 export async function applyWhatsAppPayload(deps: WhatsAppIntakeDeps, body: unknown) {
   for (const change of whatsappChangesOf(body)) {
+    // A seller's connected number: only whether it left and how far its history is. Its
+    // messages, echoes and templates do not enter the CRM yet (docs/whatsapp/conectar-numero.md).
+    if (await isSellerNumberChange(deps.db, change, deps.wabaId ?? null)) {
+      await applyNumberChange(deps.db, change, deps.now?.() ?? new Date());
+      continue;
+    }
     if (deps.phoneNumberId && change.phoneNumberId && change.phoneNumberId !== deps.phoneNumberId)
       continue;
     for (const message of change.messages)

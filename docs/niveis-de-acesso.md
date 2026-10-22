@@ -54,7 +54,7 @@ Financeiro, Processos e Projetos, Contábil/Tributário, Logística, TI).
 
 Also by level, outside the menu: the sector-manager flag (`is_sector_manager`) adds the register of the person's
 own sector; Diretoria never sees TI sector records; Diretoria does not edit deals or employee data (only levels);
-nobody but the Admin Master sets the ad budget caps or connects Kairogen.
+nobody but the Admin Master sets the ad budget caps, connects Kairogen or connects a seller's WhatsApp number.
 
 Decisions of 13/10, asked and answered: sellers keep the WhatsApp inbox, Projects, the Sales dashboard and (Vendedor
 Formatação) Leads das Campanhas, and lose the Sofia screen and the employee register; the Gerente Comercial keeps
