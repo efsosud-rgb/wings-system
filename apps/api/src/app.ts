@@ -42,6 +42,7 @@ import { leadEmailRoutes } from './modules/leads/lead-email-routes.js';
 import { leadFilesRoutes } from './modules/leads/lead-files-routes.js';
 import { nucleoRoutes } from './modules/leads/nucleo-routes.js';
 import { leadRoutes } from './modules/leads/routes.js';
+import { siteEventRoutes } from './modules/leads/site-events.js';
 import { siteFormRoutes } from './modules/leads/site-forms.js';
 import { leadWebhookRoutes } from './modules/leads/webhooks.js';
 import { sofiaRoutes } from './modules/sofia/routes.js';
@@ -351,6 +352,7 @@ export async function buildApp(deps: {
   await app.register(whatsappRingingStreamRoutes);
   await app.register(sofiaRoutes);
   await app.register(siteFormRoutes);
+  await app.register(siteEventRoutes);
   await app.register(driveRoutes);
   await app.register(driveBlobRoutes);
   await app.register(kairogenRoutes);

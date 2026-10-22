@@ -331,6 +331,16 @@ function checkCalls(calls: ApiCall[], pageOrigin: string, posts: number): void {
     sends.length === posts && sends.every((call) => call.status === 200 && allowed(call)),
     `${sends.length} POSTs: ${sends.map((call) => call.status).join(' ')}`,
   );
+  // the page's server events (sendBeacon): at least page_view, form_view, form_start, submit_attempt and submit_ok per run
+  const events = calls.filter(
+    (call) => call.browser && call.origin === pageOrigin && call.path === `${FORM_PATH}/events`,
+  );
+  check(
+    'api: every event beacon from the page answered 204 with the page origin, five or more per run',
+    events.length >= posts * 5 &&
+      events.every((call) => call.method === 'POST' && call.status === 204 && allowed(call)),
+    `${events.length} events: ${[...new Set(events.map((call) => call.status))].join(' ')}`,
+  );
   check(
     'api: no answer allowed credentials',
     calls.every((call) => call.allowCredentials === null),

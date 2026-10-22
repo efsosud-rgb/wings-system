@@ -586,7 +586,7 @@ section {
 }
 .form .sub {
   color: var(--muted);
-  font-size: 14.5px;
+  font-size: 16px;
   margin-top: -6px;
 }
 .field {
@@ -596,7 +596,7 @@ section {
 }
 .field label {
   font-weight: 900;
-  font-size: 14px;
+  font-size: 16px;
 }
 .field label .opt {
   font-weight: 600;
@@ -605,13 +605,13 @@ section {
 .field input,
 .field select {
   width: 100%;
-  min-height: 46px;
+  min-height: 56px;
   padding: 0 16px;
   border-radius: 14px;
   border: 1.5px solid var(--line-2);
   background: var(--bg);
   color: var(--text);
-  font: 700 16px/1.2 var(--body);
+  font: 700 18px/1.2 var(--body);
   transition:
     border-color 0.2s,
     box-shadow 0.2s;
@@ -647,7 +647,7 @@ section {
   border-color: var(--ok);
 }
 .err {
-  font-size: 13px;
+  font-size: 14px;
   color: #c0341a;
 }
 .err:empty {
@@ -679,17 +679,56 @@ section {
   color: var(--o-text);
   pointer-events: none;
 }
+/* the optional fields, folded under one line ("Quer adiantar?"); a native <details>, so it needs no script */
+.more {
+  border: 1.5px dashed var(--line-2);
+  border-radius: 14px;
+  padding: 0 16px;
+}
+.more summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  font-weight: 900;
+  font-size: 16px;
+  cursor: pointer;
+  list-style: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.more summary::-webkit-details-marker {
+  display: none;
+}
+.more summary::after {
+  content: '+';
+  margin-left: auto;
+  font-size: 24px;
+  line-height: 1;
+  color: var(--o-text);
+}
+.more[open] summary::after {
+  content: '\2212';
+}
+.more .opt {
+  font-weight: 600;
+  color: var(--faint);
+}
+.more-fields {
+  display: grid;
+  gap: 11px;
+  padding: 2px 0 16px;
+}
 .consent {
   display: flex;
   gap: 12px;
   align-items: flex-start;
-  font-size: 14px;
+  font-size: 15px;
   color: var(--muted);
   cursor: pointer;
 }
 .consent input {
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   margin: 1px 0 0;
   accent-color: var(--o);
   flex: none;
@@ -735,10 +774,11 @@ section {
 }
 .form .btn {
   width: 100%;
-  min-height: 50px;
+  min-height: 60px;
+  font-size: 17px;
 }
 .missing {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--faint);
   text-align: center;
   min-height: 1.2em;
