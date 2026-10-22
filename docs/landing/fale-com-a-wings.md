@@ -349,7 +349,10 @@ caminho), sem rede.
   "API de teste". `e2e/api-server.ts` cria um banco descartável (`wings_test_…`, o mesmo ajudante dos testes da API),
   roda o seed com um número inventado da Wings (para existir o link "Site"), sobe a API em `127.0.0.1` com as chaves
   de teste públicas da Cloudflare e o siteverify respondido no próprio processo (o bloqueio de rede da API é carregado
-  primeiro) e roda o `e2e/run.mjs` contra ela em 1440×900, 390×844 e um terceiro envio com "Ainda não sei". Nada no
+  primeiro) e roda o `e2e/run.mjs` contra ela em 1440×900, 390×844, um terceiro envio com "Ainda não sei" e dois celulares
+  emulados pelo Playwright (Pixel 7 e iPhone 14: user agent, tela e toque; o motor continua o Chromium): um envio só
+  com nome, WhatsApp e a resposta (sem e-mail, lead novo) e o mesmo telefone de novo com tudo preenchido (mescla:
+  um lead por telefone, só as lacunas preenchidas, `lead.merged` no audit, `form_ref` do último envio). Nada no
   caminho até a API é interceptado, então o preflight de CORS do navegador chega à API de verdade (o Playwright
   responderia ao preflight sozinho se interceptasse). Depois confere no banco: um lead por envio, `source`
   `site_form`, `landing_page` `fale-com-a-wings`, funil `formatacao` para as três respostas ("nao-sei" também: a API

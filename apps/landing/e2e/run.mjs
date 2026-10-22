@@ -22,7 +22,7 @@ import { createServer, request as httpRequest } from 'node:http';
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { extname, join, resolve } from 'node:path';
-import { chromium } from 'playwright-core';
+import { chromium, devices } from 'playwright-core';
 
 const root = resolve(import.meta.dirname, '..');
 const DIST = resolve(root, 'dist');
@@ -426,6 +426,24 @@ const LIVE_PEOPLE = {
     email: 'pessoa.tres@exemplo.com.br',
     answer: 'nao-sei',
   },
+  // the short form's own case: the three answers alone, nothing optional, a new lead without e-mail
+  'android-so-3': {
+    name: 'Pessoa Quatro',
+    phone: '21900000004',
+    email: '',
+    company: '',
+    instagram: '',
+    site: '',
+    answer: 'formatacao',
+  },
+  // the same phone again, now with everything: merged into that lead, only its gaps filled
+  'iphone-repete': {
+    ...PERSON,
+    name: 'Pessoa Quatro',
+    phone: '21900000004',
+    email: 'pessoa.quatro@exemplo.com.br',
+    answer: 'expansao',
+  },
 };
 
 /** What each run sent, for E2E_REPORT. */
@@ -452,6 +470,8 @@ async function fillForm(page, person, label) {
     !short.disabled && short.missing === 'Tudo certo. Pode enviar.' && !short.open,
     short.missing,
   );
+  // a person with nothing to add leaves the block closed: the lead is made from the three answers alone
+  if (!person.email && !person.company && !person.instagram && !person.site) return;
   // then the optional block, opened and filled, so the POST and the database are checked with everything
   await page.click('#f-more summary');
   await page.fill('#f-email', person.email);
@@ -492,13 +512,16 @@ async function fakeOutsideScripts(context, page, gtmRequests) {
 
 async function runViewport(
   browser,
-  { label, viewport, mobile, port, apiBase, replies = [], person = PERSON },
+  { label, viewport, mobile, device = null, port, apiBase, replies = [], person = PERSON },
 ) {
+  // a device descriptor (Playwright's) brings its user agent, screen and touch; else the bare size
   const context = await browser.newContext({
-    viewport,
-    deviceScaleFactor: mobile ? 2 : 1,
-    isMobile: mobile,
-    hasTouch: mobile,
+    ...(device ?? {
+      viewport,
+      deviceScaleFactor: mobile ? 2 : 1,
+      isMobile: mobile,
+      hasTouch: mobile,
+    }),
     locale: 'pt-BR',
   });
   const pageOrigin = `http://127.0.0.1:${port}`;
@@ -769,8 +792,8 @@ async function runViewport(
     `${ready.missing} | tel ${ready.phone} | ig ${ready.instagram}`,
   );
   check(
-    `${label}: Instagram keeps only the username`,
-    ready.instagram === 'marca.teste',
+    `${label}: Instagram keeps only the username${person.instagram ? '' : ' (none typed)'}`,
+    ready.instagram === (person.instagram ? 'marca.teste' : ''),
     ready.instagram,
   );
 
@@ -1155,6 +1178,10 @@ const browser = await chromium.launch({
 });
 const DESKTOP = { viewport: { width: 1440, height: 900 }, mobile: false };
 const PHONE = { viewport: { width: 390, height: 844 }, mobile: true };
+/** A phone as Playwright describes it: user agent, screen, scale and touch (the engine is still Chromium). */
+const phoneOf = (device) => ({ viewport: device.viewport, mobile: true, device });
+const ANDROID = phoneOf(devices['Pixel 7']);
+const IPHONE = phoneOf(devices['iPhone 14']);
 try {
   if (LIVE_API) {
     await liveCorsChecks(`http://127.0.0.1:${port}`);
@@ -1162,6 +1189,8 @@ try {
       ['desktop-1440', DESKTOP],
       ['phone-390', PHONE],
       ['nao-sei-1440', DESKTOP],
+      ['android-so-3', ANDROID],
+      ['iphone-repete', IPHONE],
     ]) {
       await runViewport(browser, { label, ...size, port, apiBase, person: LIVE_PEOPLE[label] });
     }

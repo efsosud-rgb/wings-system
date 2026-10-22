@@ -223,20 +223,31 @@ async function checkDatabase(db: TestDatabase['db'], report: Report): Promise<vo
     where: (lead, { eq }) => eq(lead.landingPage, SLUG),
   });
   const sent = report.submissions.filter((submission) => submission.sent);
+  // the same phone sent twice is one lead (merged), so leads are counted by phone
+  const phones = new Set(sent.map((submission) => submission.phone));
   check(
-    `db: one lead per sent form (${sent.length} sent, ${report.planned} planned)`,
-    report.planned > 0 && sent.length === report.planned && rows.length === sent.length,
+    `db: one lead per phone (${sent.length} sent, ${phones.size} phones, ${report.planned} planned)`,
+    report.planned > 0 && sent.length === report.planned && rows.length === phones.size,
     `${rows.length} leads with landing_page ${SLUG}`,
   );
 
   for (const submission of report.submissions) {
     const label = `db ${submission.label} (${submission.answer})`;
-    const matches = rows.filter((row) => row.email === submission.email);
+    const matches = rows.filter((row) => row.phone === `55${submission.phone}`);
     const lead = matches[0];
-    check(`${label}: exactly one lead for this form`, matches.length === 1, `${matches.length}`);
+    check(`${label}: exactly one lead for this phone`, matches.length === 1, `${matches.length}`);
     if (!lead) continue;
-    const expected = EXPECTED_PIPELINE[submission.answer];
-    const option = spec.qualifierValues.find((entry) => entry.value === submission.answer)?.option;
+    // what this phone sent, in order: the first arrival sets the answer and the funnel, a later one
+    // fills only the gaps (e-mail, Instagram...), and every arrival gives the lead a new form ref
+    const sends = report.submissions.filter((other) => other.phone === submission.phone);
+    const first = sends[0] ?? submission;
+    const last = sends[sends.length - 1] ?? submission;
+    const expectedEmail = sends.find((other) => other.email)?.email ?? null;
+    const expectedInstagram = sends.some((other) => other.instagramTyped) ? 'marca.teste' : null;
+    const expected = EXPECTED_PIPELINE[first.answer];
+    const ownPipeline = EXPECTED_PIPELINE[submission.answer];
+    const option = spec.qualifierValues.find((entry) => entry.value === first.answer)?.option;
+    const shown = spec.qualifierValues.find((entry) => entry.value === submission.answer)?.option;
     check(
       `${label}: source site_form, landing_page ${SLUG}, Wings Company`,
       lead.source === 'site_form' && lead.landingPage === SLUG && lead.clientId === WINGS_CLIENT_ID,
@@ -253,9 +264,14 @@ async function checkDatabase(db: TestDatabase['db'], report: Report): Promise<vo
       lead.phone === `55${submission.phone}` ? 'ok' : 'different',
     );
     check(
-      `${label}: Instagram typed as "${submission.instagramTyped}" kept as the bare username`,
-      lead.instagram === 'marca.teste',
+      `${label}: Instagram kept as ${expectedInstagram ?? 'null (none typed)'}`,
+      lead.instagram === expectedInstagram,
       `instagram ${lead.instagram ?? 'null'}`,
+    );
+    check(
+      `${label}: e-mail kept as ${expectedEmail ? 'the one typed' : 'null (none typed)'}`,
+      lead.email === expectedEmail,
+      `e-mail ${lead.email ? 'set' : 'null'}`,
     );
     check(
       `${label}: form_answers holds the option's text under the question`,
@@ -265,25 +281,46 @@ async function checkDatabase(db: TestDatabase['db'], report: Report): Promise<vo
     );
     check(
       `${label}: the page shows the API's option text`,
-      submission.answerText === option,
+      submission.answerText === shown,
       submission.answerText,
     );
     const events = await db.query.leadEvents.findMany({
       where: (event, { and, eq }) =>
         and(eq(event.leadId, lead.id), eq(event.kind, 'lead.received.site_form')),
     });
-    const detail = (events[0]?.detail ?? {}) as Record<string, unknown>;
+    const details = events.map((event) => (event.detail ?? {}) as Record<string, unknown>);
     check(
-      `${label}: lead.received.site_form event carries the code and the funnel`,
-      events.length === 1 &&
-        detail.qualifier === submission.answer &&
-        (detail.pipeline ?? null) === expected,
-      JSON.stringify({ qualifier: detail.qualifier, pipeline: detail.pipeline }),
+      `${label}: one lead.received.site_form event per send (${sends.length}), this send's with its code and funnel`,
+      events.length === sends.length &&
+        details.some(
+          (detail) =>
+            detail.qualifier === submission.answer && (detail.pipeline ?? null) === ownPipeline,
+        ),
+      JSON.stringify(details.map((d) => ({ qualifier: d.qualifier, pipeline: d.pipeline }))),
     );
+    const merges = await db.query.auditLog.findMany({
+      where: (entry, { and, eq }) =>
+        and(eq(entry.entityId, lead.id), eq(entry.action, 'lead.merged')),
+    });
     check(
-      `${label}: the thank-you link's ref is the one the lead keeps (form_ref)`,
-      submission.ref !== null && lead.formRef === submission.ref && lead.formRefAt !== null,
-      lead.formRef === submission.ref ? 'same ref' : 'different',
+      `${label}: ${sends.length - 1} lead.merged audit entries (one per repeat send)`,
+      merges.length === sends.length - 1,
+      `${merges.length}`,
+    );
+    if (sends.length > 1) {
+      check(
+        `${label}: the repeat send filled the gaps, e-mail among them`,
+        details.some((detail) => Array.isArray(detail.filled) && detail.filled.includes('email')),
+        JSON.stringify(details.map((d) => d.filled ?? null)),
+      );
+    }
+    check(
+      `${label}: this send got a ref, and the lead keeps the ref of this phone's last send (form_ref)`,
+      submission.ref !== null &&
+        last.ref !== null &&
+        lead.formRef === last.ref &&
+        lead.formRefAt !== null,
+      lead.formRef === last.ref ? 'same ref' : 'different',
     );
     check(
       `${label}: the lead keeps the consent line the page shows`,
