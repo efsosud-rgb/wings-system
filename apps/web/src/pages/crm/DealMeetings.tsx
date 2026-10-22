@@ -1129,8 +1129,10 @@ export function MeetingsTab({
     // The window first, inside the click, or the browser blocks it; the link comes from Google.
     const win = openMeetBesideEmpty();
     const startsAt = new Date();
-    create.mutate(
-      {
+    // The promises, not mutate's callbacks: those are dropped when the person leaves the tab
+    // mid-way, which would leave the window blank and the meeting never started.
+    create
+      .mutateAsync({
         title: meetingTitleOf(lead.pipeline, {
           name: lead.name,
           brand: lead.brand,
@@ -1143,14 +1145,18 @@ export function MeetingsTab({
         meetUrl: null,
         createMeet: true,
         inviteLead: false,
-      },
-      {
-        onSuccess: (meeting) => {
-          if (win && meeting.meetUrl) win.location.replace(meeting.meetUrl);
-          setNowDone(win ? 'opened' : 'blocked');
-          step.mutate({ id: meeting.id, step: 'start' });
+      })
+      .then(
+        (meeting) => {
+          // step.error says why when the start is refused; the button waits for it either way.
+          const started = step.mutateAsync({ id: meeting.id, step: 'start' }).catch(() => {});
+          if (win && !win.closed && meeting.meetUrl) {
+            win.location.replace(meeting.meetUrl);
+            setNowDone('opened');
+          } else setNowDone('blocked');
+          return started;
         },
-        onError: (error) => {
+        (error: unknown) => {
           win?.close();
           setNowProblem(
             error instanceof ApiError && error.status === 503 && GOOGLE_HINT[error.code]
@@ -1158,9 +1164,8 @@ export function MeetingsTab({
               : { text: messageOf(error, 'Não foi possível criar o Meet agora.'), connect: false },
           );
         },
-        onSettled: () => setStartingNow(false),
-      },
-    );
+      )
+      .finally(() => setStartingNow(false));
   };
   const held = (data.activities as LeadActivity[])
     .filter((activity) => activity.kind === 'meeting')
@@ -1192,11 +1197,14 @@ export function MeetingsTab({
             <button
               type="button"
               className="crm-btn is-small"
-              disabled={startingNow || Boolean(running)}
+              // Without the list it cannot know whether one is already under way.
+              disabled={startingNow || !meetings.data || Boolean(running)}
               title={
                 running
                   ? 'Já há uma reunião em andamento: volte ao Meet ou encerre'
-                  : 'Cria agora um Meet na sua agenda Google, sem convidar o lead, e abre ao lado'
+                  : !meetings.data
+                    ? 'Sem a lista de reuniões não dá para saber se uma já está em andamento'
+                    : 'Cria agora um Meet na sua agenda Google, sem convidar o lead, e abre ao lado'
               }
               onClick={startNow}
             >
@@ -1257,6 +1265,7 @@ export function MeetingsTab({
                     onSuccess: (meeting) => {
                       setJustEnded(meeting.id);
                       setOpenId(meeting.id);
+                      setNowDone(null);
                     },
                   },
                 )
@@ -1289,7 +1298,7 @@ export function MeetingsTab({
         <p className="crm-wa-window is-open" role="status">
           {nowDone === 'opened'
             ? 'Meet criado na sua agenda Google e aberto ao lado.'
-            : 'Meet criado na sua agenda Google, mas o navegador bloqueou a janela: clique em Voltar ao Meet.'}{' '}
+            : 'Meet criado na sua agenda Google, mas a janela ao lado não abriu: clique em Voltar ao Meet.'}{' '}
           O lead não foi convidado: copie o link ou use Enviar link do Meet.
         </p>
       )}

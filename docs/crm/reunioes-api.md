@@ -133,10 +133,12 @@ Agendar e o registro do Iniciar) chama `POST /leads/:id/meetings` com início ag
 negociação (`guestsOf`); o lead recebe o link por "Copiar link do Meet" ou "Enviar link do Meet".
 
 A janela abre vazia dentro do clique (`openMeetBesideEmpty`, senão o navegador bloqueia) e vai para o
-Meet quando o Google o devolve; uma recusa fecha a janela e diz o motivo. Sem a conta Google conectada
+Meet quando o Google o devolve; uma recusa fecha a janela e diz o motivo. Bloqueada ou fechada antes
+disso, a reunião é criada e iniciada do mesmo jeito, e a tela manda clicar em "Voltar ao Meet". Sem a conta Google conectada
 (o estado de Minha conta → Google), a tela pede para conectar sem chamar a API; sem saber o estado, a
-API responde (503 `google_not_connected` / `google_needs_reconnect`). Com uma reunião em andamento o
-botão fica desligado: volta-se ao Meet ou encerra-se a que está aberta.
+API responde (503 `google_not_connected` / `google_needs_reconnect`). O botão fica desligado com uma
+reunião em andamento (volta-se ao Meet ou encerra-se a que está aberta), enquanto a lista de reuniões
+não carregou e do clique até o início ser gravado, para um clique duplo não criar dois eventos.
 
 ### Abrir o Meet ao lado do Wings
 
