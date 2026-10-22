@@ -60,6 +60,7 @@ import { LoadFailure } from '../../components/LoadFailure.js';
 import { failureReason } from '../../lib/failure.js';
 import { CallPanel } from './CallPanel.js';
 import { CompanyResearchPanel } from './CompanyResearchPanel.js';
+import { CopyButton } from './CopyButton.js';
 import { DealSummary } from './DealSummary.js';
 import { DealTabs, type View } from './DealTabs.js';
 import {
@@ -1101,30 +1102,6 @@ function BrandEdit({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
         <span className="crm-error">{errorText(deal.error, 'Não foi possível salvar.')}</span>
       )}
     </>
-  );
-}
-
-/** A small "Copiar" that says "Copiado" for a moment. */
-function CopyButton({ value, label }: { value: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <button
-      type="button"
-      className="crm-btn is-small is-quiet crm-copy"
-      aria-label={label}
-      title={label}
-      onClick={() => {
-        void navigator.clipboard
-          ?.writeText(value)
-          .then(() => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
-          })
-          .catch(() => undefined); // the browser refused: the value stays on the screen to select
-      }}
-    >
-      {copied ? 'Copiado' : 'Copiar'}
-    </button>
   );
 }
 

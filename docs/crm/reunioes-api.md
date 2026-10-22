@@ -122,6 +122,22 @@ Na ficha, "Iniciar reunião" abre o Meet ao lado e chama `start`; com a reunião
 vira "Voltar ao Meet" e aparece "Encerrar reunião". Depois de encerrar, a tela abre o detalhe da
 reunião e pede a gravação; a linha da reunião mostra "falta a gravação" enquanto não houver uma.
 
+### Reunião agora (Eric, 22/10)
+
+Sem rota nova: "Reunião agora" (bloco Reuniões da ficha, só para quem tem `leads.write`, como
+Agendar e o registro do Iniciar) chama `POST /leads/:id/meetings` com início agora, fim
+`NOW_MEETING_MINUTES` (60) minutos depois, `calendar: 'vendedor'` (a agenda pessoal de quem clica),
+`createMeet: true`, `inviteLead: false` e nenhum outro convidado, e logo depois
+`POST /meetings/:id/start`. A linha do tempo fica igual à de uma reunião agendada e iniciada:
+`meeting.scheduled`, `meeting.started` e, no Encerrar, `meeting.ended`. O Google convida só o dono da
+negociação (`guestsOf`); o lead recebe o link por "Copiar link do Meet" ou "Enviar link do Meet".
+
+A janela abre vazia dentro do clique (`openMeetBesideEmpty`, senão o navegador bloqueia) e vai para o
+Meet quando o Google o devolve; uma recusa fecha a janela e diz o motivo. Sem a conta Google conectada
+(o estado de Minha conta → Google), a tela pede para conectar sem chamar a API; sem saber o estado, a
+API responde (503 `google_not_connected` / `google_needs_reconnect`). Com uma reunião em andamento o
+botão fica desligado: volta-se ao Meet ou encerra-se a que está aberta.
+
 ### Abrir o Meet ao lado do Wings
 
 Sem rota nova: a tela abre `meeting.meetUrl` numa janela própria (`window.open(url, 'wings-meet',
