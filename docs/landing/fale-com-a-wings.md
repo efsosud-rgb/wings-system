@@ -105,7 +105,8 @@ Turnstile é refeito (o token é de uso único).
 **Origem do lead.** As 19 chaves de endereço de `SITE_FORM_TRACKING_KEYS` (UTMs, `gclid`, `fbclid`, `gbraid`,
 `wbraid`, ids de campanha, conjunto e anúncio) mais o `referrer`. A primeira visita com alguma chave fica guardada no
 navegador (`localStorage`, `wings_ft`) e nunca é sobrescrita; o envio manda a primeira visita com as chaves da visita
-atual por cima. `utm_id`, `msclkid` e `ttclid` não vão (a API recusa chaves desconhecidas). Cada valor tem até 500
+atual por cima. `utm_id`, `msclkid` e `ttclid` não vão no envio (a API recusa chaves desconhecidas); `utm_id` é lido e
+guardado só para os eventos do servidor. Cada valor tem até 500
 caracteres. A lista é copiada em `src/lib/tracking.ts` para a página não levar o pacote compartilhado inteiro; um teste
 confere que é igual à do `@wings/shared`.
 
@@ -243,10 +244,13 @@ conta nada.
 | `whatsapp_click` | clique num botão de WhatsApp que abre o link    | `header`, `final`, `thanks`                        |
 
 Cada linha leva `slug`, `event`, `step`, `visit` (id aleatório da aba, só em `sessionStorage`, sem cookie), `utm_source`,
-`utm_medium`, `utm_campaign` e `utm_content` (da primeira visita guardada, senão da atual) e `device`/`os`/`app` lidos do
+`utm_medium`, `utm_campaign`, `utm_content`, `utm_term` e `utm_id` (da primeira visita guardada, senão da atual; texto
+até 100 caracteres, ids de anúncio inteiros) e `device`/`os`/`app` lidos do
 User-Agent **no servidor** (`phone`/`tablet`/`desktop`, `android`/`ios`/`other`, `instagram`/`facebook`/`browser`).
-Nunca nome, e-mail, telefone, IP nem o User-Agent inteiro; uma UTM que pareça e-mail (`@`) ou telefone (8 dígitos
-seguidos) entra como `null`. A lista fechada de eventos e passos é `siteEventSchema` (`packages/shared`);
+Nunca nome, e-mail, telefone, IP nem o User-Agent inteiro; uma UTM que pareça e-mail (`@`) ou telefone (escrito com
+`+`, parênteses, traço ou espaço, ou celular brasileiro só com dígitos) entra como `null`. Os ids da Meta (15 a 19
+dígitos) e do Google (cerca de 11) ficam; um id do Google com cara de celular (11 dígitos, o terceiro 9) também vira
+`null`. A API precisa estar publicada antes da página: a rota recusa chaves que ainda não conhece. A lista fechada de eventos e passos é `siteEventSchema` (`packages/shared`);
 `events.test.ts` da landing confere que a cópia da página é igual.
 
 As contagens são **indicadores declarados pelo navegador** (a rota é pública, sem captcha): servem para ver onde o

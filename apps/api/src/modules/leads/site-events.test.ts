@@ -74,10 +74,13 @@ describe('site events (the page’s beacons)', () => {
       event: 'whatsapp_click',
       step: 'thanks',
       visit: 'a1b2c3d4e5f60718293a4b5c',
+      // The ids Meta's url_tags put in the address of the Método 52s ad.
       utm_source: 'ig',
-      utm_medium: 'cpc',
-      utm_campaign: 'lancamento',
-      utm_content: 'video-2',
+      utm_medium: 'paid',
+      utm_campaign: '120252596733630076',
+      utm_content: '120252596746630076',
+      utm_term: '120252596743640076',
+      utm_id: '120252596733630076',
     });
     expect(response.statusCode).toBe(204);
     expect(response.headers['access-control-allow-origin']).toBe(ORIGIN);
@@ -94,9 +97,11 @@ describe('site events (the page’s beacons)', () => {
         step: 'thanks',
         visit: 'a1b2c3d4e5f60718293a4b5c',
         utm_source: 'ig',
-        utm_medium: 'cpc',
-        utm_campaign: 'lancamento',
-        utm_content: 'video-2',
+        utm_medium: 'paid',
+        utm_campaign: '120252596733630076',
+        utm_content: '120252596746630076',
+        utm_term: '120252596743640076',
+        utm_id: '120252596733630076',
         device: 'phone',
         os: 'android',
         app: 'instagram',
@@ -171,11 +176,38 @@ describe('deviceOf', () => {
     expect(loggedUtm('video-2 | 01/10')).toBe('video-2 | 01/10');
     expect(loggedUtm('maria@exemplo.com')).toBeNull();
     expect(loggedUtm('11999990000')).toBeNull();
+    expect(loggedUtm('5521999990000')).toBeNull();
+    expect(loggedUtm('+55 (21) 99999-0000')).toBeNull();
+    expect(loggedUtm('(21) 3333-4444')).toBeNull();
     expect(loggedUtm(undefined)).toBeNull();
     expect(
       siteEventLineOf('x', { event: 'page_view', utm_content: 'fulano@exemplo.com' }, undefined)
         .utm_content,
     ).toBeNull();
+  });
+
+  it('keeps the ad ids Meta sends as text, utm_term and utm_id included', () => {
+    const line = siteEventLineOf(
+      'fale-com-a-wings',
+      {
+        event: 'page_view',
+        utm_source: 'ig',
+        utm_medium: 'paid',
+        utm_campaign: '120252596733630076',
+        utm_content: '120252596746630076',
+        utm_term: '120252596743640076',
+        utm_id: '120252596733630076',
+      },
+      DESKTOP_CHROME,
+    );
+    expect(line).toMatchObject({
+      utm_campaign: '120252596733630076',
+      utm_content: '120252596746630076',
+      utm_term: '120252596743640076',
+      utm_id: '120252596733630076',
+    });
+    // Google's campaign id, 11 digits.
+    expect(loggedUtm('24289782134')).toBe('24289782134');
   });
 
   it('the log line has the closed set of keys, nulls where the page sent nothing', () => {
@@ -189,6 +221,8 @@ describe('deviceOf', () => {
       utm_medium: null,
       utm_campaign: null,
       utm_content: null,
+      utm_term: null,
+      utm_id: null,
       device: 'desktop',
       os: 'other',
       app: 'browser',

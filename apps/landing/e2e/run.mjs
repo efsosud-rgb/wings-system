@@ -993,8 +993,8 @@ async function checkServerEvents(page, { label, events, errorSteps: expectedStep
         (e) =>
           e.event.utm_source === 'e2e' &&
           e.event.utm_campaign === 'lancamento' &&
-          !('gclid' in e.event) &&
-          !('utm_id' in e.event),
+          e.event.utm_id === '9' &&
+          !('gclid' in e.event),
       ) &&
       !text.includes(person.name) &&
       !text.includes(person.phone) &&

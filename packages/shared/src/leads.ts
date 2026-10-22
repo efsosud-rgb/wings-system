@@ -1738,6 +1738,8 @@ export const SITE_EVENT_UTM_KEYS = [
   'utm_medium',
   'utm_campaign',
   'utm_content',
+  'utm_term',
+  'utm_id',
 ] as const;
 
 const siteEventUtm = z.string().trim().max(100).optional();
@@ -1755,6 +1757,8 @@ export const siteEventSchema = z.strictObject({
   utm_medium: siteEventUtm,
   utm_campaign: siteEventUtm,
   utm_content: siteEventUtm,
+  utm_term: siteEventUtm,
+  utm_id: siteEventUtm,
 });
 export type SiteEvent = z.infer<typeof siteEventSchema>;
 
