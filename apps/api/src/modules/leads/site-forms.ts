@@ -87,10 +87,10 @@ export function instagramHandleOf(value: string | null | undefined): string | nu
 
 const TURNSTILE_VERIFY = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
 
-const slugParam = z.object({ slug: z.string().trim().min(1).max(80) });
+export const slugParam = z.object({ slug: z.string().trim().min(1).max(80) });
 
 /** The page, when it exists, is active and takes the form; anything else is one 404. */
-async function formPage(db: Database, slug: string) {
+export async function formPage(db: Database, slug: string) {
   const [row] = await db
     .select({
       id: leadSourceRules.id,
@@ -256,7 +256,7 @@ function pipelineOf(value: string | null): LeadPipeline | null {
     : null;
 }
 
-const notFound = (reply: FastifyReply) =>
+export const notFound = (reply: FastifyReply) =>
   reply.status(404).send({ error: 'not_found', message: 'Formulário não encontrado.' });
 
 export const siteFormRoutes: FastifyPluginAsync = async (app) => {

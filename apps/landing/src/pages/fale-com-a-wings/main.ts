@@ -1,5 +1,6 @@
 import './style.css';
 import { loadSiteForm, type SiteFormInfo } from '../../lib/api.js';
+import { browserBeacon, eventSender, visitIdOf } from '../../lib/events.js';
 import { primeInlineFonts } from '../../lib/fonts.js';
 import { installGtm, pushEvent } from '../../lib/gtm.js';
 import { readRuntimeConfig } from '../../lib/runtime-config.js';
@@ -60,6 +61,23 @@ const storage = (() => {
   }
 })();
 const origin = captureOrigin(location.search, document.referrer || '', storage);
+
+/* ---------- what the visitor does, counted on the server (nothing personal) ---------- */
+const session = (() => {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+})();
+const sendEvent = eventSender({
+  apiBase: config.apiBase,
+  slug: SLUG,
+  visit: visitIdOf(session),
+  origin: () => dataLayerOriginOf(origin),
+  beacon: browserBeacon(),
+});
+sendEvent('page_view');
 
 /* ---------- texts revealed word by word ---------- */
 function splitWords(el: Element) {
@@ -133,6 +151,10 @@ waButtons.forEach((a) =>
   a.addEventListener('click', (e) => {
     if (a.target === '_blank' && a.href.startsWith('https://')) {
       pushEvent({ event: 'whatsapp_click', origem: dataLayerOriginOf(origin) });
+      sendEvent(
+        'whatsapp_click',
+        a.closest('#thanks') ? 'thanks' : a.closest('header') ? 'header' : 'final',
+      );
       return;
     }
     e.preventDefault();
@@ -277,7 +299,21 @@ const form = setupForm({
   whatsappUrl: () => whatsappUrl,
   onSent: (answer) =>
     pushEvent({ event: 'lead_submit', interesse: answer, origem: dataLayerOriginOf(origin) }),
+  onEvent: sendEvent,
 });
+// the form seen once (a third of it on screen), wherever the visitor stopped before
+const leadForm = $('#lead-form');
+if (leadForm && 'IntersectionObserver' in window) {
+  const seen = new IntersectionObserver(
+    (entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      seen.disconnect();
+      sendEvent('form_view');
+    },
+    { threshold: 0.3 },
+  );
+  seen.observe(leadForm);
+}
 
 void loadSiteForm(config.apiBase, SLUG).then((result) => {
   const info: SiteFormInfo | null = result.kind === 'ok' ? result.info : null;

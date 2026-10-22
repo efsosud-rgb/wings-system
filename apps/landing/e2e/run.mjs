@@ -304,10 +304,22 @@ const CORS = (origin) => ({
   vary: 'Origin',
 });
 
-function mockApi({ apiBase, pageOrigin, posts, replies }) {
+function mockApi({ apiBase, pageOrigin, posts, replies, events }) {
   const formUrl = `${apiBase}/public/site-forms/${SLUG}`;
+  const eventsUrl = `${formUrl}/events`;
   return async (route, request) => {
     const method = request.method();
+    // the page's server events (sendBeacon, text/plain): kept, answered 204 like the API
+    if (request.url() === eventsUrl) {
+      let event;
+      try {
+        event = JSON.parse(request.postData() ?? 'null');
+      } catch {
+        event = 'not JSON';
+      }
+      events.push({ method, contentType: request.headers()['content-type'] ?? '', event });
+      return route.fulfill({ status: 204, headers: CORS(pageOrigin) });
+    }
     if (method === 'OPTIONS') {
       return route.fulfill({
         status: 204,
@@ -476,13 +488,20 @@ async function runViewport(
   const pageOrigin = `http://127.0.0.1:${port}`;
   const outside = [];
   const posts = [];
+  /** The server events the page sent (mock only): method, content type and body. */
+  const events = [];
   const gtmRequests = [];
   const errorReplies = replies.map((reply) => reply.expect);
+  // why each refused send is counted on the server (the mock consumes `replies` as it answers)
+  const errorSteps = replies.map(
+    (reply) =>
+      ({ 400: 'validation', 403: 'captcha', 429: 'rate_limited' })[reply.status] ?? 'network',
+  );
   const liveOrigin = LIVE_API ? new URL(LIVE_API).origin : null;
   /** The real API's answers to the page: method, status and the CORS headers the browser accepted. */
   const apiAnswers = [];
   if (!LIVE_API) {
-    const api = mockApi({ apiBase, pageOrigin, posts, replies });
+    const api = mockApi({ apiBase, pageOrigin, posts, replies, events });
     await context.route('**/*', async (route, request) => {
       const url = new URL(request.url());
       if (url.origin === pageOrigin) return route.continue();
@@ -522,6 +541,7 @@ async function runViewport(
       const headers = response.headers();
       apiAnswers.push({
         method: response.request().method(),
+        path: new URL(response.url()).pathname,
         status: response.status(),
         allowOrigin: headers['access-control-allow-origin'] ?? null,
         credentials: headers['access-control-allow-credentials'] ?? null,
@@ -828,7 +848,22 @@ async function runViewport(
         : done.buttonHidden || /^https:\/\/wa\.me\//.test(done.href ?? ''),
       done.href ?? 'hidden',
     );
-    const fromApi = (method) => apiAnswers.filter((answer) => answer.method === method);
+    // the form's own calls; the event beacons (`/events`) are checked apart
+    const fromApi = (method) =>
+      apiAnswers.filter((answer) => answer.method === method && !answer.path.endsWith('/events'));
+    const beacons = apiAnswers.filter((answer) => answer.path.endsWith('/events'));
+    check(
+      `${label}: event beacons answered 204 by the API across origins (five or more)`,
+      beacons.length >= 5 &&
+        beacons.every(
+          (answer) =>
+            answer.method === 'POST' &&
+            answer.status === 204 &&
+            answer.allowOrigin === pageOrigin &&
+            answer.credentials === null,
+        ),
+      `${beacons.length} beacons: ${[...new Set(beacons.map((answer) => answer.status))].join(' ')}`,
+    );
     const crossed = (answers) =>
       answers.length > 0 &&
       answers.every(
@@ -880,9 +915,83 @@ async function runViewport(
     JSON.stringify(done.events),
   );
 
+  if (!LIVE_API) await checkServerEvents(page, { label, events, errorSteps, person });
+
   check(`${label}: no console error or page error`, errors.length === 0, errors.join(' | '));
   check(`${label}: no request left the machine`, outside.length === 0, outside.join(' '));
   await context.close();
+}
+
+/**
+ * The server events (sendBeacon to `/events`, mock only): the funnel of the run
+ * in order, each refused send with why, the thank-you's WhatsApp click (its
+ * navigation held back: wa.me is outside), one visit id, the UTMs and nothing
+ * of the person.
+ */
+async function checkServerEvents(page, { label, events, errorSteps: expectedSteps, person }) {
+  await page.evaluate(() => {
+    document.addEventListener('click', (e) => e.preventDefault(), { capture: true, once: true });
+    document.querySelector('#thanks [data-wa]')?.click();
+  });
+  // beacons are queued by the browser and reach the mock a moment later
+  for (let i = 0; i < 30 && !events.some((e) => e.event?.event === 'whatsapp_click'); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const names = events.map((e) => e.event?.event);
+  const count = (name) => names.filter((n) => n === name).length;
+  const inOrder = (...expected) => {
+    let at = 0;
+    for (const name of names) if (name === expected[at]) at++;
+    return at === expected.length;
+  };
+  check(
+    `${label}: server events in order: page_view, form_start, submit_attempt, submit_ok, whatsapp_click; form_view once before the send`,
+    inOrder('page_view', 'form_start', 'submit_attempt', 'submit_ok', 'whatsapp_click') &&
+      count('page_view') === 1 &&
+      count('form_start') === 1 &&
+      count('form_view') === 1 &&
+      names.indexOf('form_view') < names.indexOf('submit_attempt'),
+    names.join(' '),
+  );
+  const errorSteps = events
+    .filter((e) => e.event?.event === 'submit_error')
+    .map((e) => e.event.step);
+  check(
+    `${label}: each refused send counted with why (${expectedSteps.join(', ') || 'none'}), one attempt per click`,
+    JSON.stringify(errorSteps) === JSON.stringify(expectedSteps) &&
+      count('submit_attempt') === expectedSteps.length + 1 &&
+      count('submit_ok') === 1,
+    `${errorSteps.join(' ')} | ${count('submit_attempt')} attempts`,
+  );
+  const thanksClick = events.find((e) => e.event?.event === 'whatsapp_click');
+  const dataLayerClicks = await page.evaluate(
+    () => (window.dataLayer || []).filter((e) => e && e.event === 'whatsapp_click').length,
+  );
+  check(
+    `${label}: the thank-you's WhatsApp click counted on the server (step thanks) and in the dataLayer`,
+    thanksClick?.event.step === 'thanks' && dataLayerClicks === 1,
+    `${JSON.stringify(thanksClick?.event)} | dataLayer ${dataLayerClicks}`,
+  );
+  const visits = [...new Set(events.map((e) => e.event?.visit))];
+  const text = JSON.stringify(events);
+  check(
+    `${label}: server events are text/plain POST beacons with one visit id, the UTMs and nothing of the person`,
+    events.length > 0 &&
+      events.every((e) => e.method === 'POST' && e.contentType.startsWith('text/plain')) &&
+      visits.length === 1 &&
+      /^[a-z0-9]{8,32}$/.test(visits[0] ?? '') &&
+      events.every(
+        (e) =>
+          e.event.utm_source === 'e2e' &&
+          e.event.utm_campaign === 'lancamento' &&
+          !('gclid' in e.event) &&
+          !('utm_id' in e.event),
+      ) &&
+      !text.includes(person.name) &&
+      !text.includes(person.phone) &&
+      !text.includes(person.email),
+    `${events.length} events, visit ${visits.join(',')}`,
+  );
 }
 
 // ---------------------------------------------------------------- static checks of dist

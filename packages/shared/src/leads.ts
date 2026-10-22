@@ -1701,6 +1701,63 @@ export const siteFormSubmitSchema = z.object({
 });
 export type SiteFormSubmitInput = z.infer<typeof siteFormSubmitSchema>;
 
+// --- what the visitor does on the page, counted on the server --------------------
+
+/**
+ * The steps a landing page reports to `POST /public/site-forms/:slug/events`
+ * (apps/api leads site-events.ts), one small beacon each, so the server can
+ * count where visitors stop before the form. Nothing personal: a closed list
+ * of events and steps, the ad's UTMs and a random id of the visit.
+ */
+export const SITE_EVENT_NAMES = [
+  'page_view',
+  'form_view',
+  'form_start',
+  'submit_attempt',
+  'submit_error',
+  'submit_ok',
+  'whatsapp_click',
+] as const;
+export type SiteEventName = (typeof SITE_EVENT_NAMES)[number];
+
+/** Which WhatsApp button (`whatsapp_click`) or why the send failed (`submit_error`). */
+export const SITE_EVENT_STEPS = [
+  'header',
+  'final',
+  'thanks',
+  'validation',
+  'captcha',
+  'network',
+  'rate_limited',
+] as const;
+export type SiteEventStep = (typeof SITE_EVENT_STEPS)[number];
+
+/** The UTMs an event carries, from the first touch kept in the browser (never a click id). */
+export const SITE_EVENT_UTM_KEYS = [
+  'utm_source',
+  'utm_medium',
+  'utm_campaign',
+  'utm_content',
+] as const;
+
+const siteEventUtm = z.string().trim().max(100).optional();
+
+/** One event, as the page sends it; any other key is refused. */
+export const siteEventSchema = z.strictObject({
+  event: z.enum(SITE_EVENT_NAMES),
+  step: z.enum(SITE_EVENT_STEPS).optional(),
+  /** This visit's random id, made by the page and kept in its sessionStorage only. */
+  visit: z
+    .string()
+    .regex(/^[a-z0-9]{8,32}$/)
+    .optional(),
+  utm_source: siteEventUtm,
+  utm_medium: siteEventUtm,
+  utm_campaign: siteEventUtm,
+  utm_content: siteEventUtm,
+});
+export type SiteEvent = z.infer<typeof siteEventSchema>;
+
 /** The channels a UTM link is made for, with the source/medium the team uses. */
 export const UTM_CHANNELS = [
   { key: 'instagram_ads', label: 'Instagram (anúncio)', source: 'instagram', medium: 'cpc' },
