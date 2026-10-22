@@ -63,9 +63,14 @@ describe('visitIdOf', () => {
     expect(visitIdOf(memoryStorage(), () => 'ffffffff')).toBe('ffffffff');
   });
 
-  it('still answers an id with no storage or a storage that throws', () => {
+  it('still answers an id with no storage, a storage that throws or a random source that throws', () => {
     expect(visitIdOf(null, () => 'a1b2c3d4e5f6')).toBe('a1b2c3d4e5f6');
     expect(visitIdOf(broken, () => 'a1b2c3d4e5f6')).toBe('a1b2c3d4e5f6');
+    expect(
+      visitIdOf(memoryStorage(), () => {
+        throw new Error('no crypto');
+      }),
+    ).toMatch(/^[0-9a-f]{24}$/);
   });
 
   it('the random id is 24 hex characters the API accepts, different each time', () => {

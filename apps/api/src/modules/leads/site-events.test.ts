@@ -6,7 +6,7 @@ import { clients, leadSourceRules } from '../../db/schema/index.js';
 import { loadEnv } from '../../env.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
-import { deviceOf, SITE_EVENT_LOG_MSG, siteEventLineOf } from './site-events.js';
+import { deviceOf, loggedUtm, SITE_EVENT_LOG_MSG, siteEventLineOf } from './site-events.js';
 
 let harness: TestDatabase;
 let db: Database;
@@ -164,6 +164,18 @@ describe('deviceOf', () => {
       deviceOf('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) [FBAN/FBIOS;FBAV/450.0.0]')
         .app,
     ).toBe('facebook');
+  });
+
+  it('a UTM that looks like an e-mail or a phone is logged as null', () => {
+    expect(loggedUtm('ig')).toBe('ig');
+    expect(loggedUtm('video-2 | 01/10')).toBe('video-2 | 01/10');
+    expect(loggedUtm('maria@exemplo.com')).toBeNull();
+    expect(loggedUtm('11999990000')).toBeNull();
+    expect(loggedUtm(undefined)).toBeNull();
+    expect(
+      siteEventLineOf('x', { event: 'page_view', utm_content: 'fulano@exemplo.com' }, undefined)
+        .utm_content,
+    ).toBeNull();
   });
 
   it('the log line has the closed set of keys, nulls where the page sent nothing', () => {

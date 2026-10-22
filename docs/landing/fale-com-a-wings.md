@@ -173,7 +173,8 @@ O GTM entra com o trecho padrão, `dataLayer` criado antes, e só quando `LANDIN
 Além do dataLayer, a página manda cada passo do visitante à API com `navigator.sendBeacon`
 (`POST /public/site-forms/:slug/events`, `apps/api/src/modules/leads/site-events.ts`): corpo pequeno em `text/plain`
 (sem preflight), resposta 204, o mesmo CORS da rota do formulário e um limite por IP próprio (300 em 10 minutos). A API
-grava **uma linha de log JSON por evento** (`"msg":"site event"`) e nada mais: sem tabela, sem migração. O envio nunca
+grava **uma linha de log JSON por evento** (`"msg":"site event"`) e nada mais: sem tabela, sem migração, e a rota não
+escreve a linha de requisição padrão do Fastify (`logLevel: 'warn'`), que levaria o IP ao lado do evento. O envio nunca
 espera resposta nem trava o formulário: um beacon perdido é só um evento a menos. Um navegador sem `sendBeacon` não
 conta nada.
 
@@ -190,8 +191,13 @@ conta nada.
 Cada linha leva `slug`, `event`, `step`, `visit` (id aleatório da aba, só em `sessionStorage`, sem cookie), `utm_source`,
 `utm_medium`, `utm_campaign` e `utm_content` (da primeira visita guardada, senão da atual) e `device`/`os`/`app` lidos do
 User-Agent **no servidor** (`phone`/`tablet`/`desktop`, `android`/`ios`/`other`, `instagram`/`facebook`/`browser`).
-Nunca nome, e-mail, telefone, IP nem o User-Agent inteiro. A lista fechada de eventos e passos é `siteEventSchema`
-(`packages/shared`); `events.test.ts` da landing confere que a cópia da página é igual.
+Nunca nome, e-mail, telefone, IP nem o User-Agent inteiro; uma UTM que pareça e-mail (`@`) ou telefone (8 dígitos
+seguidos) entra como `null`. A lista fechada de eventos e passos é `siteEventSchema` (`packages/shared`);
+`events.test.ts` da landing confere que a cópia da página é igual.
+
+As contagens são **indicadores declarados pelo navegador** (a rota é pública, sem captcha): servem para ver onde o
+visitante para, não para contar conversão. `submit_ok` se confere na tabela de leads (`source` `site_form`); um `visit`
+distinto por evento ajuda a ignorar um robô que repete.
 
 Contar (o log do contêiner da API some a cada deploy):
 

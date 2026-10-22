@@ -51,10 +51,14 @@ export type EventBody = { event: EventName; step?: EventStep; visit: string } & 
 export const eventsUrlOf = (apiBase: string, slug: string): string =>
   `${formUrlOf(apiBase, slug)}/events`;
 
-/** 24 hex characters from the browser's random source. */
+/** 24 hex characters from the browser's random source; a browser without one gets a weaker id, never a broken page. */
 export function randomVisitId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(12));
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  try {
+    const bytes = crypto.getRandomValues(new Uint8Array(12));
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return Array.from({ length: 24 }, () => Math.floor(Math.random() * 16).toString(16)).join('');
+  }
 }
 
 /** This tab's visit id: the one kept in sessionStorage, else a new one kept there (when it can be). */
@@ -68,7 +72,12 @@ export function visitIdOf(
   } catch {
     // no storage in this browser
   }
-  const id = random();
+  let id: string;
+  try {
+    id = random();
+  } catch {
+    id = randomVisitId();
+  }
   try {
     storage?.setItem(VISIT_STORAGE_KEY, id);
   } catch {

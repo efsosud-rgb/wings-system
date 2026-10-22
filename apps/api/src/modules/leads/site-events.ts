@@ -44,6 +44,12 @@ export function deviceOf(userAgent: string | undefined): Device {
   };
 }
 
+/** A UTM that looks like an e-mail or a phone (a campaign link may carry one) is not logged. */
+export function loggedUtm(value: string | undefined): string | null {
+  if (!value) return null;
+  return value.includes('@') || /\d{8,}/.test(value) ? null : value;
+}
+
 /** The log line one event becomes: the event as sent, the page's slug and the device; no IP, no User-Agent. */
 export function siteEventLineOf(slug: string, event: SiteEvent, userAgent: string | undefined) {
   const device = deviceOf(userAgent);
@@ -53,17 +59,17 @@ export function siteEventLineOf(slug: string, event: SiteEvent, userAgent: strin
     event: event.event,
     step: event.step ?? null,
     visit: event.visit ?? null,
-    utm_source: event.utm_source ?? null,
-    utm_medium: event.utm_medium ?? null,
-    utm_campaign: event.utm_campaign ?? null,
-    utm_content: event.utm_content ?? null,
+    utm_source: loggedUtm(event.utm_source),
+    utm_medium: loggedUtm(event.utm_medium),
+    utm_campaign: loggedUtm(event.utm_campaign),
+    utm_content: loggedUtm(event.utm_content),
     device: device.kind,
     os: device.os,
     app: device.app,
   };
 }
 
-/** A beacon's body arrives as `text/plain` (no preflight); JSON that does not parse is an invalid event. */
+/** A beacon's body arrives as `text/plain` (no preflight), which Fastify hands over as a string; JSON that does not parse is an invalid event. */
 function jsonOf(body: unknown): unknown {
   if (typeof body !== 'string') return body;
   try {
@@ -76,10 +82,6 @@ function jsonOf(body: unknown): unknown {
 export const siteEventRoutes: FastifyPluginAsync = async (app) => {
   const publicEvents = app.publicRoute('landing page visitor events: rate limit, nothing personal');
   const { db } = app.wings;
-  // `navigator.sendBeacon` sends a string as text/plain; only this plugin's route takes it.
-  app.addContentTypeParser('text/plain', { parseAs: 'string' }, (_request, body, done) =>
-    done(null, body),
-  );
 
   app.post(
     '/public/site-forms/:slug/events',
@@ -88,16 +90,19 @@ export const siteEventRoutes: FastifyPluginAsync = async (app) => {
       bodyLimit: 1024,
       // A visit sends about ten events; the limit guards the log, keyed by IP like the form's.
       config: { rateLimit: { max: 300, timeWindow: '10 minutes' } },
+      // No request line for a beacon: Fastify's own would carry the IP next to the event.
+      logLevel: 'warn',
     },
     async (request, reply) => {
       const params = slugParam.safeParse(request.params);
       if (!params.success) return notFound(reply);
-      const page = await formPage(db, params.data.slug);
-      if (!page) return notFound(reply);
+      // the body first (cheap), the page after: a bot's garbage never reaches the database
       const event = siteEventSchema.safeParse(jsonOf(request.body));
       if (!event.success) {
         return reply.status(400).send({ error: 'invalid_request', message: 'Evento inválido.' });
       }
+      const page = await formPage(db, params.data.slug);
+      if (!page) return notFound(reply);
       app.log.info(siteEventLineOf(page.pattern, event.data, request.headers['user-agent']));
       return reply.status(204).send();
     },
