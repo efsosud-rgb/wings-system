@@ -37,6 +37,13 @@ import { CopyButton } from './crm/CopyButton.js';
 
 const WEEKDAYS = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
 const hourLabel = (hour: number) => `${String(hour).padStart(2, '0')}h`;
+/** The `<option>`s of a list of codes, each with its label. */
+const optionsOf = <T extends string>(values: readonly T[], labels: Record<T, string>) =>
+  values.map((value) => (
+    <option key={value} value={value}>
+      {labels[value]}
+    </option>
+  ));
 const isIn = <T extends string>(list: readonly T[], value: string | null): value is T =>
   value !== null && (list as readonly string[]).includes(value);
 
@@ -133,11 +140,7 @@ function DeviceForm({ units }: { units: CamerasDashboard['units'] }) {
                 value={unitKind}
                 onChange={(event) => setUnitKind(event.target.value as CameraUnitKind)}
               >
-                {CAMERA_UNIT_KINDS.map((item) => (
-                  <option key={item} value={item}>
-                    {CAMERA_UNIT_KIND_LABELS[item]}
-                  </option>
-                ))}
+                {optionsOf(CAMERA_UNIT_KINDS, CAMERA_UNIT_KIND_LABELS)}
               </Select>
             </label>
           </>
@@ -161,11 +164,7 @@ function DeviceForm({ units }: { units: CamerasDashboard['units'] }) {
             value={areaKind}
             onChange={(event) => setAreaKind(event.target.value as CameraAreaKind)}
           >
-            {CAMERA_AREA_KINDS.map((item) => (
-              <option key={item} value={item}>
-                {CAMERA_AREA_KIND_LABELS[item]}
-              </option>
-            ))}
+            {optionsOf(CAMERA_AREA_KINDS, CAMERA_AREA_KIND_LABELS)}
           </Select>
         </label>
         <label>
@@ -182,11 +181,7 @@ function DeviceForm({ units }: { units: CamerasDashboard['units'] }) {
             value={kind}
             onChange={(event) => setKind(event.target.value as CameraDeviceKind)}
           >
-            {CAMERA_DEVICE_KINDS.map((item) => (
-              <option key={item} value={item}>
-                {CAMERA_DEVICE_KIND_LABELS[item]}
-              </option>
-            ))}
+            {optionsOf(CAMERA_DEVICE_KINDS, CAMERA_DEVICE_KIND_LABELS)}
           </Select>
         </label>
         <label className="cam-check">
@@ -256,11 +251,7 @@ export function CamerasPage() {
                 set({ periodo: event.target.value === '30d' ? '' : event.target.value })
               }
             >
-              {SALES_PERIODS.map((key) => (
-                <option key={key} value={key}>
-                  {SALES_PERIOD_LABELS[key]}
-                </option>
-              ))}
+              {optionsOf(SALES_PERIODS, SALES_PERIOD_LABELS)}
             </Select>
           </label>
           {period === 'custom' && (
