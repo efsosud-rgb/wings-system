@@ -52,6 +52,32 @@ Estados (`wa_conversations.attendance`): `sofia` Sofia atendendo · `waiting_sel
 - **Limites:** não informa valores, não promete nada, mensagens curtas. Fora do horário (seg–sex 9h–18h, São
   Paulo) a transferência leva o texto de fora do horário.
 
+## O estado só avança quando a Meta aceitou (26/10)
+
+Caso real do staging (26/10, 15:20): a pergunta "qual é o seu nome?" foi recusada pela Meta (131030) e a pessoa
+escreveu "Teste", que virou o nome. Agora:
+
+- Uma pergunta que a Meta recusou (na hora ou depois, pelo aviso de status `failed`) ou que ficou sem resposta da
+  Meta (sem `wamid`) **não chegou**: o que a pessoa escreve depois não é lido como resposta a ela. A Sofia refaz a
+  pergunta (e se apresenta de novo se nem a primeira mensagem dela chegou), sem chamar a IA e sem contar como "não
+  entendeu".
+- Um envio ainda em andamento é esperado (o turno volta em 5 s); um que um reinício cortou conta como não chegou.
+- Recusada **duas vezes seguidas**: a conversa vai para uma pessoa (`envio_recusado`), sem mandar mais nada.
+- O "SAIR/PARAR" continua valendo antes disso.
+
+## Por conversa, pessoas no meio e o histórico (fase 2a)
+
+- **Pausar a Sofia nesta conversa** (Central): ela para e não volta a atender ali (nem quando a conversa é
+  resolvida e a pessoa escreve de novo) até alguém com `sofia.read` **ligar a Sofia** nela, ou "Devolver para a
+  Sofia" na tela da Sofia. Motivo na conversa: "Sofia pausada nesta conversa".
+- Uma pessoa que escreve na conversa a suspende antes de a mensagem sair, e a conversa passa a ser dela.
+- O turno da Sofia guarda a **versão** da conversa: se uma pessoa assumiu (mesmo que tenha devolvido) enquanto ela
+  lia ou chamava a IA, ela não grava nem envia nada.
+- Cada passagem para uma pessoa entra no histórico da conversa com o motivo, e, com o rodízio ligado
+  (`docs/whatsapp/central.md`, "Atendimento"), a conversa vai para a próxima pessoa do funil. O painel da Central
+  mostra o motivo e o que ela descobriu.
+- Ela continua **desligada por padrão**.
+
 ## A IA
 
 - DeepSeek V4 Flash (`deepseek/deepseek-v4-flash`) pelo OpenRouter, com `data_collection: deny`, a mesma
@@ -93,16 +119,16 @@ Estados (`wa_conversations.attendance`): `sofia` Sofia atendendo · `waiting_sel
 
 ## Rotas (com sessão)
 
-| Rota | Permissão | O quê |
-| --- | --- | --- |
-| `GET /sofia/overview` | `leads.whatsapp` | ligada, IA configurada, gasto do dia, contagem por estado |
-| `GET /sofia/conversations?state=&segment=&q=` | `leads.whatsapp` | lista no escopo |
-| `GET /sofia/conversations/:id` | `leads.whatsapp` | conversa, o que ela descobriu, origem, negociação |
-| `POST /sofia/conversations/:id/attendance` | `leads.whatsapp` | `take` · `give_back` · `close` |
-| `GET /sofia/settings` · `PUT /sofia/settings` | `leads.whatsapp` · `sofia.manage` | textos e perguntas |
-| `GET /whatsapp/conversations?filter=&q=` | `leads.whatsapp` | WhatsApp Web: não lidas por pessoa, status |
-| `GET /whatsapp/conversations/:id` · `POST …/read` | `leads.whatsapp` | abrir qualquer conversa do escopo; marcar lida |
-| `GET /whatsapp/targets?q=` | `leads.whatsapp` | "Nova conversa": negociações e contatos do escopo |
+| Rota                                              | Permissão                         | O quê                                                     |
+| ------------------------------------------------- | --------------------------------- | --------------------------------------------------------- |
+| `GET /sofia/overview`                             | `leads.whatsapp`                  | ligada, IA configurada, gasto do dia, contagem por estado |
+| `GET /sofia/conversations?state=&segment=&q=`     | `leads.whatsapp`                  | lista no escopo                                           |
+| `GET /sofia/conversations/:id`                    | `leads.whatsapp`                  | conversa, o que ela descobriu, origem, negociação         |
+| `POST /sofia/conversations/:id/attendance`        | `leads.whatsapp`                  | `take` · `give_back` · `close` (com `version` opcional)   |
+| `GET /sofia/settings` · `PUT /sofia/settings`     | `leads.whatsapp` · `sofia.manage` | textos e perguntas                                        |
+| `GET /whatsapp/conversations?filter=&q=`          | `leads.whatsapp`                  | WhatsApp Web: não lidas por pessoa, status                |
+| `GET /whatsapp/conversations/:id` · `POST …/read` | `leads.whatsapp`                  | abrir qualquer conversa do escopo; marcar lida            |
+| `GET /whatsapp/targets?q=`                        | `leads.whatsapp`                  | "Nova conversa": negociações e contatos do escopo         |
 
 ## Dados (migração 0080)
 

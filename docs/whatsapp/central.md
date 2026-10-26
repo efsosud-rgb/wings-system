@@ -99,6 +99,47 @@ liberar o app (Tech Provider e App Review, ainda não pedidos).
   `numberId`), `whatsapp.conversation_linked`, `whatsapp.webhook_event_retried`.
 - `wa_numbers`, `wa_conversations`, `wa_messages` e `wa_webhook_events` continuam sem GRANT ao `wings_ro`.
 
+### Atendimento: quem responde cada conversa (fase 2, migração 0101)
+
+- **Quem está com a conversa:** a pessoa atribuída; sem atribuição, o dono da negociação (número oficial) ou o dono
+  do número (número de trabalho); sem nenhum, ela espera na **fila** do departamento (`wa_conversations.queue`) ou
+  sem fila. A lista mostra essa pessoa como responsável (ou "fila <departamento>"); a aba **Minhas** e **Sem
+  responsável** usam a mesma regra, e o filtro **Departamento** lê a fila e, sem ela, o departamento do número.
+- **Trava:** só quem está com a conversa escreve. Quem mais a vê recebe 409 `not_holder` ("Esta conversa está com
+  Fulano. Assuma a conversa antes") e a tela troca o campo de texto pelo aviso; **Assumir** passa a conversa para
+  a pessoa e avisa quem estava com ela (CRM Vendas › Avisos). Ninguém com ela: quem escreve primeiro fica com ela.
+  Uma mensagem de uma pessoa **suspende a Sofia** na hora, antes de sair (estado "Com vendedor").
+- **Passar para:** quem está com a conversa (ou quem lê todas) passa para uma pessoa ativa que atende pelo WhatsApp
+  (ela recebe o aviso e a conversa entra em Minhas) ou para a fila de um departamento (só conversa sem dono de
+  negociação nem de número; com dono, 409 `has_owner`). A pessoa que recebe uma conversa passa a vê-la, mesmo
+  sem ser dona da negociação.
+- **Resolver e reabrir:** resolver encerra e guarda quem estava com ela; reabrir volta para essa pessoa (ou para a
+  fila). Se a própria pessoa escreve numa conversa resolvida, ela recomeça pela regra de 07/10 (dono da
+  negociação, Sofia ou atendente) e a atribuição antiga sai.
+- **"Está respondendo":** enquanto alguém digita, quem mais abre a conversa vê "Fulano está respondendo…" (dura
+  45 s sem nova digitação).
+- **Versão (compare-and-set):** cada troca de mãos soma 1 em `wa_conversations.version`; a tela manda a versão que
+  viu e uma ação sobre versão antiga recebe 409 `conversation_changed` ("A conversa mudou de mãos agora"). O turno
+  da Sofia compara a versão também: se uma pessoa assumiu (mesmo que tenha devolvido) enquanto ela pensava, nada
+  sai. A mensagem que chega trava a linha da conversa antes de decidir quem atende.
+- **Distribuição** (`whatsapp_settings.assignment_mode`, quem tem `crm.manage` muda na Central): **Fica na fila até
+  alguém assumir** (padrão) ou **Rodízio do funil**: uma conversa que espera e não tem ninguém vai para a próxima
+  pessoa do rodízio do funil da negociação (ou do assunto que a Sofia descobriu), o mesmo `crm_distribution_members`
+  das negociações, com aviso. Sem funil conhecido, fica na fila.
+- **Histórico:** `wa_conversation_events` (só ids e códigos): assumiu, transferiu, mandou para a fila, rodízio,
+  resolveu, reabriu, pausou e ligou a Sofia, a Sofia passou para uma pessoa (com o motivo), a Sofia parou por
+  mensagem de uma pessoa. O painel da conversa mostra o histórico e **o que a Sofia deixou** (motivo e o que ela
+  descobriu). Auditoria: `whatsapp.conversation_taken`, `_transferred`, `_queued`, `_resolved`, `_reopened`,
+  `sofia.paused`, `sofia.resumed`, `whatsapp.assignment_mode_changed`.
+- **Sofia por conversa** (só número oficial): **Pausar a Sofia** (quem vê a conversa, com a Sofia ligada): ela para e
+  não pega mais essa conversa, nem quando ela é resolvida e a pessoa volta; **Ligar a Sofia** (quem tem
+  `sofia.read`, com a Sofia ligada): ela responde a próxima mensagem da pessoa. A Sofia continua **desligada por
+  padrão** (`sofia_settings.enabled`); nada aqui a liga.
+
+Rotas (`leads.whatsapp`, na regra de acesso da conversa): `GET /whatsapp/conversations/:id/attendance`,
+`POST …/assign` (`{ version, employeeId | null, queue? }`), `POST …/resolve`, `POST …/reopen`, `POST …/sofia`
+(`{ version, action: pause | resume }`), `POST …/replying`; `GET /whatsapp/assignment` e `PUT` (`crm.manage`).
+
 ### Fila do webhook
 
 - Um corpo novo é processado na hora; um que falhou espera **2, 4, 8 e 16 minutos** (`next_attempt_at`) e, na
@@ -184,6 +225,23 @@ DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793036092766;
 
 ## Fases 2 e 3
 
-- Fase 2: atribuição e filas, transferência com aviso ao novo dono, resolver e reabrir, "outra pessoa está
-  respondendo"; controles da Sofia por conversa; modelos por número (sincronizar os modelos de cada WABA).
+- Fase 2a (feita): atendimento (acima) e a Sofia por conversa (`sofia.md`).
+- Fase 2b: confiabilidade do recebimento e dos envios, itens quebrados da auditoria, modelos por número.
 - Fase 3: indicadores (o DW do #25), tela de configuração completa.
+
+## Migração 0101 (fase 2a) e rollback
+
+`0101_wa_attendance` (número provisório: renumerar no rebase, um arquivo e uma linha do journal). Acrescenta em
+`wa_conversations` `assignee_employee_id`, `queue`, `version`, `replying_employee_id`, `replying_until` e
+`sofia_paused`; a tabela `wa_conversation_events`; e `whatsapp_settings.assignment_mode` (padrão `manual`). Nada
+existente muda de valor. Sem GRANT ao `wings_ro`. Rollback do banco:
+
+```sql
+DROP TABLE "wa_conversation_events";
+DROP INDEX "wa_conversations_assignee_idx";
+ALTER TABLE "wa_conversations" DROP COLUMN "assignee_employee_id", DROP COLUMN "queue",
+  DROP COLUMN "version", DROP COLUMN "replying_employee_id", DROP COLUMN "replying_until",
+  DROP COLUMN "sofia_paused";
+ALTER TABLE "whatsapp_settings" DROP COLUMN "assignment_mode";
+DELETE FROM drizzle.__drizzle_migrations WHERE created_at = 1793040315362;
+```

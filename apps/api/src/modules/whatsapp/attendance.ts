@@ -639,7 +639,7 @@ export async function attendanceView(
         transfer: canTransfer,
         resolve: !closed && canTransfer,
         reopen: closed,
-        pauseSofia: official && !row.sofiaPaused,
+        pauseSofia: official && input.sofiaOn && !row.sofiaPaused,
         resumeSofia:
           official &&
           input.sofiaOn &&

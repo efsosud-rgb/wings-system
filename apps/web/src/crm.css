@@ -2252,6 +2252,24 @@
   color: var(--accent, var(--text-1));
   font-weight: 600;
 }
+/* Who answers the conversation: the holder, the buttons and "está respondendo", in one line. */
+.crm-wa-attendance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.crm-wa-attendance .crm-select {
+  width: auto;
+  max-width: 220px;
+}
+.crm-wa-history {
+  margin: 0;
+  padding-left: var(--space-4);
+  font-size: var(--text-sm, 13px);
+  display: grid;
+  gap: var(--space-1);
+}
 .crm-wa-bubble.is-sofia {
   border-style: dashed;
 }

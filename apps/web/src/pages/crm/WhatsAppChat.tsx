@@ -54,12 +54,18 @@ export function WhatsAppChat({
   data,
   canSend,
   notice,
+  heldBy,
+  onTyping,
 }: {
   thread: WhatsAppThread;
   data: DealWhatsApp;
   canSend: boolean;
   /** Shown above the conversation: why what is on screen may be out of date. */
   notice?: ReactNode;
+  /** Someone else holds the conversation: the reader takes it before answering (the API refuses). */
+  heldBy?: string | null;
+  /** The reader is typing: "está respondendo" for the others. */
+  onTyping?: () => void;
 }) {
   const bottom = useRef<HTMLDivElement>(null);
   const last = data.messages.at(-1)?.id;
@@ -125,7 +131,12 @@ export function WhatsAppChat({
         <div ref={bottom} />
       </div>
       {canSend && !soon && data.configured && data.phone ? (
-        onNumber && !data.window.open ? (
+        heldBy ? (
+          <p className="crm-wa-off">
+            Esta conversa está com {heldBy}. Para responder, assuma a conversa ({heldBy} recebe um
+            aviso).
+          </p>
+        ) : onNumber && !data.window.open ? (
           <p className="crm-wa-off">
             Fora das 24 h da última mensagem da pessoa para este número: só dá para responder quando
             ela escrever de novo. Para falar primeiro, use o número oficial e um modelo aprovado.
@@ -144,6 +155,7 @@ export function WhatsAppChat({
             thread={thread}
             leadId={data.leadId}
             onTemplate={onNumber ? undefined : () => setUseTemplate(true)}
+            onTyping={onTyping}
           />
         )
       ) : (
@@ -500,11 +512,13 @@ function TextCompose({
   thread,
   leadId,
   onTemplate,
+  onTyping,
 }: {
   thread: WhatsAppThread;
   leadId: string | null;
   /** Absent on a work number's chat: its templates come later. */
   onTemplate?: () => void;
+  onTyping?: () => void;
 }) {
   const send = useSendWhatsAppText(thread);
   const sendFile = useSendWhatsAppFile(thread, leadId);
@@ -691,7 +705,10 @@ function TextCompose({
         // What goes is what was there on the click: no edit while it goes, none lost after.
         readOnly={busy}
         value={text}
-        onChange={(event) => setText(event.target.value)}
+        onChange={(event) => {
+          setText(event.target.value);
+          onTyping?.();
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();

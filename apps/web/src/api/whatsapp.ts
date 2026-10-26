@@ -26,6 +26,8 @@ import type {
   WaManagedTemplates,
   WaTemplateCreate,
   WaTemplateEdit,
+  WaAssignmentMode,
+  WaAttendanceView,
 } from '@wings/shared';
 import { waExportChatOf } from '@wings/shared';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -192,6 +194,69 @@ export function useWhatsAppConversation(id: string | undefined) {
     queryFn: () => api.poll<DealWhatsApp>(`/whatsapp/conversations/${id}`),
     enabled: Boolean(id),
     refetchInterval: REFRESH_MS,
+  });
+}
+
+/** Who answers the conversation, what the reader may do, its history (docs/whatsapp/central.md). */
+export function useConversationAttendance(id: string) {
+  return useQuery({
+    queryKey: ['whatsapp', 'conversations', 'attendance', id],
+    queryFn: () => api.poll<WaAttendanceView>(`/whatsapp/conversations/${id}/attendance`),
+    // "Está respondendo" lasts seconds: looked at again often while the conversation is open.
+    refetchInterval: 10_000,
+  });
+}
+
+export type AttendanceAction =
+  | { kind: 'assign'; employeeId: string | null; queue?: string }
+  | { kind: 'resolve' }
+  | { kind: 'reopen' }
+  | { kind: 'sofia'; action: 'pause' | 'resume' };
+
+/** One change of hands, made on the version the screen saw (a stale one answers 409). */
+export function useAttendanceAction(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ version, action }: { version: number; action: AttendanceAction }) => {
+      const base = `/whatsapp/conversations/${id}`;
+      if (action.kind === 'assign')
+        return api.post<void>(`${base}/assign`, {
+          version,
+          employeeId: action.employeeId,
+          ...(action.queue ? { queue: action.queue } : {}),
+        });
+      if (action.kind === 'sofia')
+        return api.post<void>(`${base}/sofia`, { version, action: action.action });
+      return api.post<void>(`${base}/${action.kind}`, { version });
+    },
+    // Refused or done, what the screen shows is looked at again.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations'] }),
+  });
+}
+
+/** The composer says the reader is typing (renewed at most every 20 s while they type). */
+export function useReplying(id: string) {
+  return useMutation({
+    mutationFn: () =>
+      api.post<{ replyingName: string | null }>(`/whatsapp/conversations/${id}/replying`),
+  });
+}
+
+/** Who gets a conversation nobody holds: its queue, or the funnel's rotation. */
+export function useAssignmentMode(enabled: boolean) {
+  return useQuery({
+    queryKey: ['whatsapp', 'assignment'],
+    queryFn: () => api.get<{ mode: WaAssignmentMode }>('/whatsapp/assignment'),
+    enabled,
+  });
+}
+
+export function useSetAssignmentMode() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (mode: WaAssignmentMode) =>
+      api.put<{ mode: WaAssignmentMode }>('/whatsapp/assignment', { mode }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['whatsapp', 'assignment'] }),
   });
 }
 
