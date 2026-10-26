@@ -7,7 +7,6 @@ import {
   SALES_PERIOD_LABELS,
   SALES_PERIODS,
   type LeadPipeline,
-  type Productivity,
   type ProductivityCounts,
   type SalesPeriod,
 } from '@wings/shared';
@@ -102,7 +101,7 @@ export function ProductivityTab({
   if (custom) Object.assign(query, { from: filters.from, to: filters.to });
   if (filters.owner) query.owner = filters.owner;
   const result = useProductivity(query);
-  const data: Productivity | undefined = result.data;
+  const data = result.data;
   const own = data?.scope === 'own';
 
   return (
