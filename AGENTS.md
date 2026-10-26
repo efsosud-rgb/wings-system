@@ -82,23 +82,9 @@ pnpm --filter @wings/api drive:migrate-media                  # idempotent
 
 ## 4. Ponytail: escrever o mínimo de código
 
-Regras do [Ponytail](https://github.com/DietrichGebert/ponytail) (DietrichGebert, MIT, commit `09c434ab73ca`), em português e para todas as IAs do repositório; o original está em `.claude/skills/ponytail/SKILL.md` e é só texto (nenhum plugin, hook ou script veio com ele). Nível `full`.
+Em toda tarefa de código vale o [Ponytail](https://github.com/DietrichGebert/ponytail) (DietrichGebert, MIT, commit `09c434ab73ca`), nível `full`: o menor diff que resolve a tarefa inteira, sem funcionalidade, abstração ou dependência que ninguém pediu, e a resposta termina com uma ou duas linhas sobre o que ficou de fora ou não foi conferido e o risco que o Eric precisa saber. As regras completas estão em `.claude/skills/ponytail/SKILL.md` (só texto; nenhum plugin, hook ou script veio com ele) e continuam valendo por inteiro.
 
-**As regras do Wings System vêm antes.** O Ponytail diz como escrever menos código, nunca o que pode ficar de fora. Não se corta, nem para o diff ficar menor: segurança, RBAC (decisão na API, escopo próprio / setor / todos), tenant (`tenant_id`, `client_id`), LGPD e dados pessoais, testes, auditoria, e tudo o que o Eric pediu de forma explícita (por exemplo, a modelagem 5D). Onde uma regra abaixo bater com as seções 1 a 3, valem as seções 1 a 3: "mudança trivial dispensa teste" não vale aqui, e "não crie camada" não autoriza consulta dentro do handler.
-
-Você é um desenvolvedor sênior preguiçoso: o melhor código é o que nunca foi escrito. Resolva o problema inteiro com o mínimo de código novo e termine a resposta com uma ou duas linhas: o que ficou de fora ou não foi conferido, e o risco que o Eric precisa saber.
-
-**Antes de escrever**, leia a tarefa e o código que ela toca e liste todo lugar que a mudança precisa alcançar (chamadores, testes, fixtures, configuração, exports) e o que ela pode quebrar ou expor para quem usa. Isso é o escopo; funcionalidade extra não é.
-
-**A menor mudança completa**: fique com a primeira opção que resolve de verdade. (1) Precisa existir? Pule funcionalidade, opção e flexibilidade que ninguém pediu e diga em uma linha o que pulou; um pedido vago recebe a menor versão que faz o trabalho principal. (2) Já existe neste código (helper, componente, serviço, padrão)? Use como o código ao redor usa. (3) Biblioteca padrão ou recurso da plataforma? Use, a menos que o projeto tenha o seu: um componente da casa vence o elemento nativo. (4) Dependência já instalada? Use; nunca adicione dependência para poucas linhas. (5) Cabe em uma linha que o leitor entende de relance? Uma linha. (6) Senão, o mínimo de código que funciona.
-
-- Preguiça na solução, nunca na mudança: termine toda parte que a tarefa exige, inclusive chamadores, testes e fixtures que a mudança quebra.
-- Nada de abstração, wrapper, conversão de tipo, opção, configuração, boilerplate ou código "para depois" que ninguém pediu; valores ficam na forma que a plataforma entrega; apagar vence acrescentar; mantenha camadas, interfaces e convenções que o código já tem.
-- O menor diff que funciona vence, depois que você sabe tudo o que ele toca. Uma linha que precisa ser decifrada não é curta. Comente só o porquê que o código não mostra, em uma linha.
-- Correção de bug: antes de editar, procure todo chamador da função e corrija a causa uma vez só, no código compartilhado. Código movido ou juntado mantém o tratamento de erro e a validação que tinha. Entre opções do mesmo tamanho, fique com a certa nos casos de borda.
-- Lógica nova não trivial (desvio, laço, parser, dinheiro ou segurança, script ou app novo) deixa um teste pequeno ou uma checagem com `assert`; aqui, comportamento novo sempre leva teste (seção 2). Um atalho com limite conhecido ganha um comentário em inglês: `shortcut: <the limit>, <when to upgrade>`.
-
-Nunca corte: validação nas fronteiras de confiança (os schemas Zod de `packages/shared`), tratamento de erro que evita perda de dado, segurança, acessibilidade, a calibração que o hardware real exige, e tudo o que o Eric pediu.
+**As regras do Wings System vêm antes.** O Ponytail diz como escrever menos código, nunca o que pode ficar de fora. Não se corta, nem para o diff ficar menor: segurança, RBAC (decisão na API, escopo próprio / setor / todos), tenant (`tenant_id`, `client_id`), LGPD e dados pessoais, testes, auditoria, validação nas fronteiras de confiança (os schemas Zod de `packages/shared`) e tudo o que o Eric pediu de forma explícita (por exemplo, a modelagem 5D). Onde uma regra do Ponytail bater com as seções 1 a 3, valem as seções 1 a 3: "mudança trivial dispensa teste" não vale aqui (comportamento novo traz teste na mesma mudança) e "não crie camada" não autoriza consulta dentro do handler. O comentário de atalho fica em inglês: `shortcut: <the limit>, <when to upgrade>`.
 
 ## 5. Economia de uso
 
