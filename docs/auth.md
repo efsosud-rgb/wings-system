@@ -100,6 +100,20 @@ e-mail de login controla a conta (o "esqueci minha senha" vai para ele), então:
   (`statusChangeDenial`); editar o cadastro não basta. Ativo ↔ afastado continua
   uma edição comum. Recusa: `403 deactivate_forbidden`.
 
+## Parâmetros fixos
+
+Os valores que o `AGENTS.md` (seção 2, "Authentication and sessions") não repete:
+
+- Senha: **Argon2id** com 19 MiB de memória, t=2, p=1; só o hash fica em
+  `employee_credentials`. Uma conta sem credencial ou um e-mail desconhecido
+  passa por `fakeVerify()` para que o tempo de resposta não revele nada.
+- Bloqueio de conta: **5 falhas → 15 minutos**, além do limite de tentativas
+  por IP.
+- Sessão: 30 minutos ociosa ou 12 horas absolutas (acima). Métodos não seguros
+  recusam `Origin` estranho (CSRF), além do cookie `SameSite=Lax`.
+- `revokeAllSessions()` roda ao inativar um funcionário, trocar o nível ou
+  trocar o e-mail de login.
+
 ## Política de senha
 
 Mínimo de 12 caracteres, sem espaços nas pontas. São recusadas senhas que

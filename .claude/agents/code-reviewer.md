@@ -2,6 +2,7 @@
 name: code-reviewer
 description: Read-only review of a diff, branch or file set for correctness bugs, missing tests and breaches of the AGENTS.md rules (CPF, logs with personal data, permissions, append-only rows, ad-spend rules). Use for routine review; code touching auth, CPF, ad spend or migrations is still reviewed by the main model.
 tools: Read, Grep, Glob, Bash
+# sonnet: finds logic bugs in a diff; haiku misses them. Risk code is reviewed by the main model anyway.
 model: sonnet
 maxTurns: 15
 ---

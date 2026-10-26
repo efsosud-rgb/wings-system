@@ -2,6 +2,7 @@
 name: docs-checker
 description: Read-only check of docs against the code: env variable names, commands, routes, migration numbers, file paths and links mentioned in docs/, AGENTS.md or CLAUDE.md that no longer exist or disagree with the code. Also checks that docs hold names of variables only, never secret values.
 tools: Read, Grep, Glob, Bash
+# haiku: compares names, paths and commands in docs with the code; mechanical.
 model: haiku
 maxTurns: 12
 ---
