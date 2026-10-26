@@ -41,6 +41,7 @@ const STATUS: Record<ConnectErrorCode, number> = {
   phone_locked: 409,
   number_mismatch: 409,
   not_registered: 404,
+  not_eligible: 409,
   code_refused: 502,
   waba_unreadable: 502,
   number_not_found: 409,
@@ -61,6 +62,8 @@ const MESSAGES: Record<ConnectErrorCode, string> = {
   number_mismatch:
     'Na janela da Meta foi escolhido outro número, não o deste cadastro. Nada foi salvo: conecte de novo escolhendo o número certo.',
   not_registered: 'Cadastre o número antes de conectar.',
+  not_eligible:
+    'Só se conecta número confirmado no cadastro (app Business 2.24.17 ou maior, número de trabalho, dono com o celular na mão). Nada foi feito.',
   code_refused:
     'A Meta recusou o código da conexão (ele vale 30 segundos). Nada foi salvo: conecte de novo.',
   waba_unreadable: 'A Meta não deixou ler a conta do WhatsApp conectada. Nada foi salvo.',

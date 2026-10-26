@@ -1,13 +1,24 @@
 import {
+  SECTORS,
   SOFIA_STATE_LABELS,
+  SOFIA_STATES,
+  WA_INBOX_FILTER_LABELS,
+  WA_INBOX_FILTERS,
   WA_STATUS_LABELS,
+  type DealWhatsApp,
+  type SectorSlug,
   type WaConversationItem,
   type WaMessageStatus,
 } from '@wings/shared';
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom';
 import { hasPermission, permissionScope, useSession } from '../../api/auth.js';
+import { ApiError } from '../../api/client.js';
+import { useLead } from '../../api/leads.js';
 import {
+  useChatNumbers,
+  useConversationDeals,
+  useLinkConversation,
   useMarkWhatsAppRead,
   useOfficialNumber,
   useSetOfficialNumber,
@@ -17,28 +28,23 @@ import {
 } from '../../api/whatsapp.js';
 import { Icon } from '../../components/Icon.js';
 import { LoadFailure } from '../../components/LoadFailure.js';
+import { DealSidePanel } from './DealSidePanel.js';
 import { formatDateTime, formatPhone } from './format.js';
 import { WhatsAppChat } from './WhatsAppChat.js';
-import { WhatsAppNewConversation } from './WhatsAppNewConversation.js';
+import { NewNumber, WhatsAppNewConversation } from './WhatsAppNewConversation.js';
 import { listTimeOf } from './whatsapp-time.js';
 
 /**
- * CRM Vendas → WhatsApp, as WhatsApp Web for each person (Eric, 07/10), laid
- * out as WhatsApp Desktop (20/10): the conversations on the left (search by
- * name, phone or a message's text, unread for this reader, the last message's
- * status), the open one on the right, and "Nova conversa" from the company
- * number. New messages show at once: the stream every screen keeps open makes
- * the list and the open conversation fetch again (`api/whatsapp-inbox.ts`). A seller sees the conversations of their own deals; Admin
- * and Diretoria see every one, Sofia's included (writing in one takes it from
- * her). New conversations reach Sofia first (her own screen); when she hands
- * one over it shows up here for the deal's owner.
+ * CRM Vendas → WhatsApp, the Central (docs/whatsapp/central.md): WhatsApp Web for each person
+ * (Eric, 07/10), laid out as WhatsApp Desktop (20/10), in three areas (26/10). Left, the list: the
+ * official number's conversations and the work numbers' chats in the reader's reach, with search,
+ * the tabs and the filters (number, department, state, days), 50 at a time. Middle, the open
+ * conversation. Right, the contact: the deal beside it, or the deals of its phone to join. The
+ * filters and the open conversation live in the address, so going to the deal and back loses
+ * nothing. New messages show at once: the stream every screen keeps open makes the list and the
+ * open conversation fetch again (`api/whatsapp-inbox.ts`). A seller sees their own deals'
+ * conversations and their own work number's chats; Admin and Diretoria see every one.
  */
-
-const FILTERS: { key: WhatsAppInboxFilter; label: string }[] = [
-  { key: 'all', label: 'Todas' },
-  { key: 'unread', label: 'Não lidas' },
-  { key: 'unanswered', label: 'Sem resposta' },
-];
 
 const TICKS: Partial<Record<WaMessageStatus, string>> = {
   pending: '🕓',
@@ -60,6 +66,10 @@ function useDebounced(value: string, ms = 300) {
 const nameOf = (row: { leadName: string | null; profileName: string | null; phone: string }) =>
   row.leadName ?? row.profileName ?? formatPhone(row.phone);
 
+/** The company number a conversation is on: a work number's name, or the official one. */
+const numberNameOf = (number: WaConversationItem['number'] | DealWhatsApp['number']) =>
+  number ? (number.label ?? (number.phone ? formatPhone(number.phone) : 'Número')) : 'Oficial';
+
 export function WhatsAppInboxPage() {
   return <WhatsAppWeb />;
 }
@@ -70,20 +80,68 @@ export function WhatsAppWaitingPage() {
   return <WhatsAppWeb openId={id} />;
 }
 
+/** The address's names for the filters (the screen's language). */
+const PARAMS = {
+  filter: 'filtro',
+  q: 'busca',
+  number: 'numero',
+  sector: 'setor',
+  state: 'situacao',
+  from: 'de',
+  to: 'ate',
+} as const;
+
 function WhatsAppWeb({ openId }: { openId?: string }) {
-  const [filter, setFilter] = useState<WhatsAppInboxFilter>('all');
-  const [search, setSearch] = useState('');
-  const [starting, setStarting] = useState(false);
+  const [params, setParams] = useSearchParams();
+  const read = (key: keyof typeof PARAMS) => params.get(PARAMS[key]) ?? '';
+  const write = (key: keyof typeof PARAMS, value: string) =>
+    setParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        if (value) next.set(PARAMS[key], value);
+        else next.delete(PARAMS[key]);
+        // "Nova conversa" from a contact or a company is asked for once.
+        next.delete('nova');
+        return next;
+      },
+      { replace: true },
+    );
+  const filterParam = read('filter');
+  const filter: WhatsAppInboxFilter = (WA_INBOX_FILTERS as readonly string[]).includes(filterParam)
+    ? (filterParam as WhatsAppInboxFilter)
+    : 'all';
+  const [search, setSearch] = useState(read('q'));
+  const q = useDebounced(search);
+  useEffect(() => {
+    // The typed search goes to the address once it settles; the address is read once, above.
+    if (q !== read('q')) write('q', q);
+  }, [q]);
+  const asked = params.get('nova');
+  const [starting, setStarting] = useState(asked !== null);
   const session = useSession();
   // Eric, 14/10: until the official number is live, a seller uses the phone's WhatsApp. The
   // other levels are not affected. Not known yet (loading, failed) is "not live" for a seller.
   const seller = permissionScope(session.data, 'leads.whatsapp') !== 'all';
   const official = useOfficialNumber();
-  const soon = seller && official.data?.live !== true;
-  const q = useDebounced(search);
-  const list = useWhatsAppInbox(filter, q);
+  const numbers = useChatNumbers();
+  const ownNumbers = (numbers.data?.numbers ?? []).filter((n) => n.connected);
+  // A seller with a work number of their own writes there even before the official number is live.
+  const soon = seller && official.data?.live !== true && ownNumbers.length === 0;
+  const narrow = {
+    number: read('number'),
+    sector: read('sector'),
+    state: read('state'),
+    from: read('from'),
+    to: read('to'),
+  };
+  const list = useWhatsAppInbox(filter, q, narrow);
   const rows = list.data?.conversations ?? [];
   const open = rows.find((row) => row.conversationId === openId) ?? null;
+  const location = useLocation();
+  const narrowed = Object.values(narrow).filter(Boolean).length;
+  const sectors = [
+    ...new Set((numbers.data?.numbers ?? []).flatMap((n) => (n.sector ? [n.sector] : []))),
+  ] as SectorSlug[];
   return (
     <div className={`crm-page crm-wa-web${openId ? ' has-open' : ''}`}>
       <aside className="crm-wa-web-list" aria-label="Conversas">
@@ -114,7 +172,7 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
           <>
             <OfficialNumberSwitch live={official.data?.live} />
             <Link className="crm-muted" to="/crm-vendas/whatsapp/numeros">
-              Números dos vendedores
+              Números de WhatsApp
             </Link>
           </>
         )}
@@ -126,20 +184,90 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
-        <div className="crm-tabs" role="tablist" aria-label="Filtro">
-          {FILTERS.map((f) => (
+        <div className="crm-tabs crm-wa-tabs" role="tablist" aria-label="Filtro">
+          {WA_INBOX_FILTERS.map((key) => (
             <button
-              key={f.key}
+              key={key}
               type="button"
               role="tab"
-              aria-selected={filter === f.key}
-              className={`crm-tab${filter === f.key ? ' is-active' : ''}`}
-              onClick={() => setFilter(f.key)}
+              aria-selected={filter === key}
+              className={`crm-tab${filter === key ? ' is-active' : ''}`}
+              onClick={() => write('filter', key === 'all' ? '' : key)}
             >
-              {f.label}
+              {WA_INBOX_FILTER_LABELS[key]}
             </button>
           ))}
         </div>
+        <details className="crm-wa-filters" open={narrowed > 0}>
+          <summary>Filtros{narrowed > 0 ? ` (${narrowed})` : ''}</summary>
+          <div className="crm-wa-filters-grid">
+            <label className="crm-field">
+              <span>Número</span>
+              <select
+                className="crm-select"
+                value={narrow.number}
+                onChange={(e) => write('number', e.target.value)}
+              >
+                <option value="">Todos</option>
+                <option value="official">Oficial</option>
+                {(numbers.data?.numbers ?? []).map((n) => (
+                  <option key={n.id} value={n.id}>
+                    {numberNameOf(n)}
+                    {n.ownerName ? ` (${n.ownerName})` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="crm-field">
+              <span>Departamento</span>
+              <select
+                className="crm-select"
+                value={narrow.sector}
+                onChange={(e) => write('sector', e.target.value)}
+              >
+                <option value="">Todos</option>
+                {sectors.map((slug) => (
+                  <option key={slug} value={slug}>
+                    {SECTORS[slug].name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="crm-field">
+              <span>Situação</span>
+              <select
+                className="crm-select"
+                value={narrow.state}
+                onChange={(e) => write('state', e.target.value)}
+              >
+                <option value="">Todas</option>
+                {SOFIA_STATES.map((state) => (
+                  <option key={state} value={state}>
+                    {SOFIA_STATE_LABELS[state]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="crm-field">
+              <span>De</span>
+              <input
+                className="crm-input"
+                type="date"
+                value={narrow.from}
+                onChange={(e) => write('from', e.target.value)}
+              />
+            </label>
+            <label className="crm-field">
+              <span>Até</span>
+              <input
+                className="crm-input"
+                type="date"
+                value={narrow.to}
+                onChange={(e) => write('to', e.target.value)}
+              />
+            </label>
+          </div>
+        </details>
         {list.isLoading && <p className="crm-muted">Carregando…</p>}
         {list.isError && (
           <LoadFailure what="as conversas" error={list.error} onRetry={() => void list.refetch()} />
@@ -147,23 +275,40 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
         {list.isSuccess && rows.length === 0 && (
           <div className="crm-empty">
             <span>
-              {q
-                ? 'Nenhuma conversa com essa busca.'
+              {q || narrowed > 0
+                ? 'Nenhuma conversa com essa busca ou esses filtros.'
                 : filter === 'unread'
                   ? 'Nenhuma conversa com mensagem não lida.'
                   : filter === 'unanswered'
                     ? 'Nenhuma conversa esperando resposta.'
-                    : 'Nenhuma conversa ainda.'}
+                    : filter === 'all'
+                      ? 'Nenhuma conversa ainda.'
+                      : 'Nenhuma conversa neste filtro.'}
             </span>
           </div>
         )}
         <ul className="crm-wa-web-rows">
           {rows.map((row) => (
             <li key={row.conversationId}>
-              <ConversationRow row={row} active={row.conversationId === openId} term={q} />
+              <ConversationRow
+                row={row}
+                active={row.conversationId === openId}
+                term={q}
+                search={location.search}
+              />
             </li>
           ))}
         </ul>
+        {list.hasNextPage && (
+          <button
+            type="button"
+            className="crm-btn"
+            disabled={list.isFetchingNextPage}
+            onClick={() => void list.fetchNextPage()}
+          >
+            {list.isFetchingNextPage ? 'Carregando…' : 'Carregar mais conversas'}
+          </button>
+        )}
       </aside>
       <section className="crm-wa-web-main">
         {openId ? (
@@ -171,11 +316,27 @@ function WhatsAppWeb({ openId }: { openId?: string }) {
         ) : (
           <div className="crm-empty crm-wa-web-none">
             <Icon name="message" size={28} />
-            <span>Escolha uma conversa ou comece uma nova pelo número da empresa.</span>
+            <span>Escolha uma conversa ou comece uma nova.</span>
           </div>
         )}
       </section>
-      {starting && <WhatsAppNewConversation onClose={() => setStarting(false)} />}
+      {starting && (
+        <WhatsAppNewConversation
+          initial={asked ?? ''}
+          onClose={() => {
+            setStarting(false);
+            if (asked !== null)
+              setParams(
+                (current) => {
+                  const next = new URLSearchParams(current);
+                  next.delete('nova');
+                  return next;
+                },
+                { replace: true },
+              );
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -221,21 +382,24 @@ function ConversationRow({
   row,
   active,
   term,
+  search,
 }: {
   row: WaConversationItem;
   active: boolean;
   term: string;
+  search: string;
 }) {
   const tick = row.lastDirection === 'out' && row.lastStatus ? TICKS[row.lastStatus] : null;
   const withSofia = row.attendance === 'sofia' || row.attendance === 'waiting_human';
   const read = row.lastStatus === 'read' || row.lastStatus === 'played';
   const name = nameOf(row);
+  const responsible = row.ownerName ?? row.number?.ownerName ?? null;
   // A search that found a message shows that message, as WhatsApp's search does.
   const at = row.match?.at ?? row.lastAt;
   return (
     <Link
       className={`crm-wa-row${row.unreadCount > 0 ? ' is-unanswered' : ''}${active ? ' is-active' : ''}`}
-      to={`/crm-vendas/whatsapp/${row.conversationId}`}
+      to={{ pathname: `/crm-vendas/whatsapp/${row.conversationId}`, search }}
       aria-current={active ? 'true' : undefined}
     >
       <Avatar name={name} seed={row.conversationId} />
@@ -276,6 +440,13 @@ function ConversationRow({
             </span>
           )}
         </span>
+        <span className="crm-wa-row-line crm-sub crm-wa-row-meta">
+          <span>
+            {formatPhone(row.phone)} · {numberNameOf(row.number)} ·{' '}
+            {row.attendance === 'sofia' ? 'Sofia' : 'Pessoa'}
+            {responsible ? ` · ${responsible}` : ' · sem responsável'}
+          </span>
+        </span>
       </span>
     </Link>
   );
@@ -287,6 +458,8 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
   const mayOpenSofia = hasPermission(session.data, 'sofia.read');
   const thread = useWhatsAppConversation(id);
   const { mutate: markRead } = useMarkWhatsAppRead();
+  const location = useLocation();
+  const [showPanel, setShowPanel] = useState(false);
   const last = thread.data?.messages.at(-1)?.id;
   // Opening the conversation, and each new message while it is open, counts as read.
   useEffect(() => {
@@ -307,7 +480,10 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
         ) : (
           <span>Conversa não encontrada ou fora do seu alcance.</span>
         )}
-        <Link className="crm-btn" to="/crm-vendas/whatsapp">
+        <Link
+          className="crm-btn"
+          to={{ pathname: '/crm-vendas/whatsapp', search: location.search }}
+        >
           Voltar às conversas
         </Link>
       </div>
@@ -317,10 +493,14 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
   const name = item
     ? nameOf(item)
     : (data.profileName ?? (data.phone ? formatPhone(data.phone) : 'Sem nome'));
+  const back = `${location.pathname}${location.search}`;
   return (
     <div className="crm-wa-web-open">
       <header className="crm-wa-head">
-        <Link className="crm-btn is-quiet is-small crm-wa-web-back" to="/crm-vendas/whatsapp">
+        <Link
+          className="crm-btn is-quiet is-small crm-wa-web-back"
+          to={{ pathname: '/crm-vendas/whatsapp', search: location.search }}
+        >
           ‹ Conversas
         </Link>
         <div className="crm-wa-who">
@@ -328,21 +508,40 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
           <div>
             <h1>{name}</h1>
             <span className="crm-sub">
-              {data.phone ? formatPhone(data.phone) : 'Sem telefone'}
+              {data.phone ? formatPhone(data.phone) : 'Sem telefone'} · {numberNameOf(data.number)}
               {item?.ownerName ? ` · ${item.ownerName}` : ''}
             </span>
           </div>
         </div>
         {leadId ? (
-          <Link className="crm-btn is-small" to={`/crm-vendas/negociacoes/${leadId}`}>
+          <Link
+            className="crm-btn is-small"
+            to={`/crm-vendas/negociacoes/${leadId}`}
+            state={{ back }}
+          >
             Abrir negociação
           </Link>
-        ) : mayOpenSofia ? (
+        ) : mayOpenSofia && !data.number ? (
           <Link className="crm-btn is-small" to={`/crm-vendas/sofia/${id}`}>
             Ver na Sofia
           </Link>
         ) : null}
+        <button
+          type="button"
+          className="crm-btn is-small crm-wa-web-panel-toggle"
+          aria-pressed={showPanel}
+          onClick={() => setShowPanel(!showPanel)}
+        >
+          {showPanel ? 'Conversa' : 'Contato'}
+        </button>
       </header>
+      {data.number && (
+        <p className="crm-wa-window">
+          Pelo WhatsApp de trabalho {numberNameOf(data.number)}
+          {data.number.ownerName ? ` (${data.number.ownerName})` : ''}: o que sai daqui aparece no
+          celular do dono, e a Sofia não atende por este número.
+        </p>
+      )}
       {(data.attendance === 'sofia' || data.attendance === 'waiting_human') && (
         <p className="crm-wa-window">
           {data.attendance === 'sofia'
@@ -350,22 +549,123 @@ function OpenConversation({ id, item }: { id: string; item: WaConversationItem |
             : 'Esta conversa espera um atendente. Escreva para assumir.'}
         </p>
       )}
-      <WhatsAppChat
-        // Sent in this conversation, to its own number (a deal's contact may not be its main phone).
-        thread={{ conversationId: id }}
-        data={data}
-        canSend={canSend}
-        notice={
-          thread.isError ? (
-            <LoadFailure
-              what="a conversa"
-              error={thread.error}
-              onRetry={() => void thread.refetch()}
-            />
-          ) : undefined
-        }
-      />
+      {/* What came before stays on screen while the refresh tries again. */}
+      {thread.isError && (
+        <p className="crm-wa-window is-closed">
+          Reconectando… A conversa mostra o que chegou até a última atualização.
+        </p>
+      )}
+      <div className={`crm-wa-web-split${showPanel ? ' show-panel' : ''}`}>
+        <WhatsAppChat
+          // Sent in this conversation, to its own number (a deal's contact may not be its main phone).
+          thread={{ conversationId: id }}
+          data={data}
+          canSend={canSend}
+          notice={
+            thread.isError ? (
+              <LoadFailure
+                what="a conversa"
+                error={thread.error}
+                onRetry={() => void thread.refetch()}
+              />
+            ) : undefined
+          }
+        />
+        <div className="crm-wa-web-panel" aria-label="Contato">
+          {leadId ? (
+            <DealPanel leadId={leadId} back={back} />
+          ) : (
+            <LinkPanel conversationId={id} phone={data.phone} />
+          )}
+        </div>
+      </div>
     </div>
+  );
+}
+
+/** The deal beside the conversation, when the reader may open it. */
+function DealPanel({ leadId, back }: { leadId: string; back: string }) {
+  const session = useSession();
+  const loaded = useLead(leadId);
+  if (loaded.isLoading) return <p className="crm-muted">Carregando a negociação…</p>;
+  if (!loaded.data)
+    return loaded.isError ? (
+      <LoadFailure what="a negociação" error={loaded.error} onRetry={() => void loaded.refetch()} />
+    ) : (
+      <p className="crm-muted">— Negociação fora do seu alcance.</p>
+    );
+  return (
+    <DealSidePanel
+      data={loaded.data}
+      canWrite={hasPermission(session.data, 'leads.write')}
+      back={back}
+    />
+  );
+}
+
+/**
+ * A conversation with no deal: the deals of its phone, to join one (nothing is guessed when there
+ * are several); none, a new deal for the number, never a second one.
+ */
+function LinkPanel({ conversationId, phone }: { conversationId: string; phone: string | null }) {
+  const session = useSession();
+  const deals = useConversationDeals(conversationId, true);
+  const link = useLinkConversation(conversationId);
+  const found = deals.data?.deals ?? [];
+  return (
+    <section className="crm-panel" aria-label="Negociação">
+      <h2>Negociação</h2>
+      <p className="crm-sub">Esta conversa ainda não está numa negociação.</p>
+      {deals.isLoading && <p className="crm-muted">Buscando negociações deste telefone…</p>}
+      {deals.isError && (
+        <LoadFailure
+          what="as negociações deste telefone"
+          error={deals.error}
+          onRetry={() => void deals.refetch()}
+        />
+      )}
+      {found.length > 0 && (
+        <>
+          <p className="crm-sub">
+            {found.length === 1
+              ? 'Uma negociação tem este telefone:'
+              : `${found.length} negociações têm este telefone: escolha a desta conversa.`}
+          </p>
+          <ul className="crm-wa-targets">
+            {found.map((deal) => (
+              <li key={deal.leadId}>
+                <button
+                  type="button"
+                  className="crm-wa-target"
+                  disabled={link.isPending}
+                  onClick={() => link.mutate(deal.leadId)}
+                >
+                  <b>Ligar a {deal.name ?? 'Sem nome'}</b>
+                  <span className="crm-sub">
+                    {deal.ownerName ?? 'Sem dono'}
+                    {deal.open ? '' : ' · fechada'}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {deals.isSuccess && found.length === 0 && phone && (
+        <NewNumber
+          phone={phone}
+          canCreate={hasPermission(session.data, 'leads.write')}
+          onCreated={(leadId) => link.mutate(leadId)}
+        />
+      )}
+      {link.isError && (
+        <p className="crm-error" role="alert">
+          {link.error instanceof ApiError
+            ? link.error.message
+            : 'Não foi possível ligar a conversa agora.'}
+        </p>
+      )}
+    </section>
   );
 }
 

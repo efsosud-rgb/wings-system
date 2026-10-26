@@ -117,6 +117,7 @@ export type ConnectErrorCode =
   | 'phone_locked'
   | 'number_mismatch'
   | 'not_registered'
+  | 'not_eligible'
   | 'code_refused'
   | 'waba_unreadable'
   | 'number_not_found'
@@ -298,6 +299,8 @@ export async function connectNumber(
     where: eq(waNumbers.id, input.numberId),
   });
   if (!registered) throw new ConnectError('not_registered');
+  // The registry's check comes first (Eric, 26/10): only a number confirmed for coexistence.
+  if (registered.eligibility !== 'confirmado') throw new ConnectError('not_eligible');
   await activeOwner(deps.db, registered.ownerEmployeeId);
   if (input.wabaId === deps.official.wabaId) throw new ConnectError('official_number');
 

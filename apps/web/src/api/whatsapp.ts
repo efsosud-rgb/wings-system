@@ -2,7 +2,12 @@ import type {
   DealWhatsApp,
   WaCall,
   WaCallPermissionLive,
+  WaChatNumber,
   WaConversationItem,
+  WaInboxFilter,
+  WaInboxPage,
+  WaInboxQuery,
+  WaNewTarget,
   WaBulkImport,
   WaBulkItem,
   WaImportBatch,
@@ -23,7 +28,7 @@ import type {
   WaTemplateEdit,
 } from '@wings/shared';
 import { waExportChatOf } from '@wings/shared';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { permissionScope, useSession } from './auth.js';
 import { api } from './client.js';
@@ -69,7 +74,12 @@ export function useWhatsAppConversations(unanswered: boolean) {
   });
 }
 
-export type WhatsAppInboxFilter = 'all' | 'unread' | 'unanswered';
+export type WhatsAppInboxFilter = WaInboxFilter;
+
+/** The Central's selects (docs/whatsapp/central.md), on top of the tab and the search. */
+export type WhatsAppInboxNarrow = Partial<
+  Pick<WaInboxQuery, 'number' | 'sector' | 'state' | 'from' | 'to'>
+>;
 
 /** The reader's WhatsApp list (WhatsApp Web): search, unread per reader, last status. */
 /** Whether the official number is live (Eric, 14/10): until then a seller sees WhatsApp as "em breve". */
@@ -105,14 +115,73 @@ export function useSetOfficialNumber() {
   });
 }
 
-export function useWhatsAppInbox(filter: WhatsAppInboxFilter, q: string) {
+/**
+ * The Central's list, a page of 50 at a time (`fetchNextPage` for the next): the pages read as one
+ * list. Refreshed every 10 s, and at once when the stream says the inbox moved.
+ */
+export function useWhatsAppInbox(
+  filter: WhatsAppInboxFilter,
+  q: string,
+  narrow: WhatsAppInboxNarrow = {},
+) {
   const params = new URLSearchParams({ filter });
   if (q.trim()) params.set('q', q.trim());
-  return useQuery({
-    queryKey: ['whatsapp', 'conversations', 'list', filter, q.trim()],
-    queryFn: () =>
-      api.poll<{ conversations: WaConversationItem[] }>(`/whatsapp/conversations?${params}`),
+  for (const [key, value] of Object.entries(narrow)) if (value) params.set(key, value);
+  const query = useInfiniteQuery({
+    queryKey: ['whatsapp', 'conversations', 'list', params.toString()],
+    queryFn: ({ pageParam }) =>
+      api.poll<WaInboxPage>(
+        `/whatsapp/conversations?${params}${pageParam ? `&before=${encodeURIComponent(pageParam)}` : ''}`,
+      ),
+    initialPageParam: '',
+    getNextPageParam: (page) => page.next ?? undefined,
     refetchInterval: 10_000,
+  });
+  return {
+    ...query,
+    data: query.data && { conversations: query.data.pages.flatMap((page) => page.conversations) },
+  };
+}
+
+/** The work numbers the reader reaches (their own; every one at full scope). */
+export function useChatNumbers() {
+  return useQuery({
+    queryKey: ['whatsapp', 'chat-numbers'],
+    queryFn: () =>
+      api.get<{ numbers: (WaChatNumber & { sector: string | null; connected: boolean })[] }>(
+        '/whatsapp/chat-numbers',
+      ),
+    staleTime: 60_000,
+  });
+}
+
+/** A chat with no deal: the deals of its phone in the reader's reach. */
+export function useConversationDeals(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['whatsapp', 'conversations', 'deals', id],
+    queryFn: () => api.get<{ deals: WaNewTarget[] }>(`/whatsapp/conversations/${id}/deals`),
+    enabled,
+  });
+}
+
+/** The reader joins the chat to one of its phone's deals. */
+export function useLinkConversation(id: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (leadId: string) =>
+      api.post<void>(`/whatsapp/conversations/${id}/link`, { leadId }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations'] }),
+  });
+}
+
+/** "Nova conversa" by a work number: its chat with the deal's phone (nothing is sent). */
+export function useStartNumberChat() {
+  return useMutation({
+    mutationFn: (input: { numberId: string; leadId: string; phone: string }) =>
+      api.post<{ conversationId: string }>(
+        `/whatsapp/chat-numbers/${input.numberId}/conversations`,
+        { leadId: input.leadId, phone: input.phone },
+      ),
   });
 }
 

@@ -184,6 +184,7 @@ describe('the work numbers', () => {
         label: 'Comercial teste',
         ownerEmployeeId: seller.id,
         sector: 'comercial',
+        eligibility: 'confirmado',
         ...extra,
       },
     });
@@ -371,6 +372,17 @@ describe('the work numbers', () => {
         wabaId: OFFICIAL_WABA,
       }),
     ).toBeNull();
+  });
+
+  it('connects only a number the registry confirmed, before spending the code', async () => {
+    await db
+      .update(waNumbers)
+      .set({ eligibility: 'a_confirmar' })
+      .where(eq(waNumbers.id, numberId));
+    const res = await connect(admin.cookies, payload());
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'not_eligible' });
+    expect(calls).toHaveLength(0);
   });
 
   it('takes only the registered number from Meta’s window', async () => {

@@ -370,6 +370,15 @@ function CompanyRecord({ id }: { id: string }) {
             Abrir a ficha do cliente
           </Link>
         )}
+        {hasPermission(session.data, 'leads.whatsapp') && (
+          // The Central's "Nova conversa", searching the company's phone, or its deals by name.
+          <Link
+            className="crm-btn"
+            to={`/crm-vendas/whatsapp?nova=${encodeURIComponent(company.phone ?? company.name)}`}
+          >
+            WhatsApp
+          </Link>
+        )}
         {canWrite && !editing && (
           <button type="button" className="crm-btn" onClick={() => setEditing(true)}>
             Editar
