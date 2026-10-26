@@ -7,7 +7,10 @@
 | Staging  | `develop` | https://staging.wingssystem.online | ativo                                               |
 | Produção | `main`    | https://wingssystem.online         | ainda servido pelo container manual `wings-crm-web` |
 
-Um push em `develop` dispara o deploy de staging pelo Coolify. O prefixo `/api`
+Um push não publica nada: o repositório não tem webhook. O deploy começa com
+`wings-deploy staging` ou `wings-deploy production` (a produção pede PRODUCAO
+digitado pelo Eric) pela API do Coolify, e cada app puxa o código por SSH com a
+deploy key; um deploy por vez. O prefixo `/api`
 é roteado pelo Traefik para a aplicação da API e **removido** antes de chegar ao
 Fastify — por isso as rotas são registradas sem `/api` (o proxy do Vite faz o
 mesmo em desenvolvimento).

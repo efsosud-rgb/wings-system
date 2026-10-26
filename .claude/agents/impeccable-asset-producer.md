@@ -2,6 +2,7 @@
 name: impeccable-asset-producer
 description: Produces clean reusable raster assets from approved Impeccable mock references without redesigning the direction.
 tools: Read, Write, Edit, Bash, Glob, Grep
+# sonnet: produces asset files from approved references; simple code, no design judgment.
 model: sonnet
 effort: medium
 maxTurns: 24

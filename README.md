@@ -22,12 +22,19 @@ Outros comandos: `pnpm build`, `pnpm typecheck`, `pnpm lint`, `pnpm test`.
 
 ## Estrutura
 
-| Caminho           | Conteúdo                                                        |
-| ----------------- | --------------------------------------------------------------- |
-| `apps/web`        | Frontend Vite + React + TypeScript                              |
-| `apps/api`        | API Fastify + TypeScript                                        |
-| `packages/shared` | Schemas Zod, papéis e permissões compartilhados entre web e api |
-| `docker/`         | Dockerfiles de build e configuração do nginx                    |
+| Caminho           | Conteúdo                                                                                                                                                                                                                                                             |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/api`        | API Fastify. `src/modules/<nome>/` um por domínio; `src/plugins/auth.ts` sessões e `requirePermission`; `src/db/schema/` tabelas Drizzle; `src/lib/` auditoria, cripto de CPF, e-mail, storage; `src/scripts/` CLIs manuais; `src/test/`; `migrations/` SQL numerado |
+| `apps/web`        | Frontend Vite + React. `src/pages/XxxPage.tsx` uma por tela, `src/components/`, `src/api/` cliente da API, `src/lib/`, `src/router.tsx`; gera `dist/`, a única coisa que a imagem nginx serve                                                                        |
+| `apps/landing`    | Landing pages estáticas em hosts próprios (Vite, sem React): `<slug>/index.html`, `src/pages/<slug>/`, `src/lib/` (formulário, tracking, Turnstile, GTM). Ver `docs/landing/`                                                                                        |
+| `apps/worker`     | Worker de fundo: jobs do banco (`WORKER_JOB_TYPES` escolhe quais), um handler por tipo em `src/jobs/`                                                                                                                                                                |
+| `packages/shared` | Contrato entre web e api: schemas Zod, `src/rbac/` (papéis, permissões, `policy.ts`), `src/navigation.ts`, enums                                                                                                                                                     |
+| `packages/studio` | Fork do Shotstack Studio SDK, o editor de vídeo (licença em `docs/studio/README.md`)                                                                                                                                                                                 |
+| `docs/`           | Um arquivo ou pasta por módulo ou tema                                                                                                                                                                                                                               |
+| `docker/`         | Dockerfiles da API, do web (nginx), das landing pages (template nginx) e do worker                                                                                                                                                                                   |
+| `scripts/gtm/`    | Scripts pontuais do Google Tag Manager                                                                                                                                                                                                                               |
+| `.github/`        | `workflows/ci.yml` é a CI; `agents/`, `hooks/` e `skills/`, como `.claude/`, `.agents/` e `.codex/`, são ferramental das IAs, não produto (o ESLint os ignora)                                                                                                       |
+| Raiz              | `README.md`, `PRODUCT.md`, `docker-compose.dev.yml`, `.env.example` (só nomes de variáveis, nunca valores)                                                                                                                                                           |
 
 ## Ambientes
 

@@ -2,6 +2,7 @@
 name: repo-researcher
 description: Read-only code search for questions that need a sweep of many files (where is X used, how does module Y work, which files touch Z). Returns the conclusion with file:line references, not file dumps. Do not use for a single known file or a one-fact lookup.
 tools: Read, Grep, Glob, Bash
+# haiku: search and summarize with file:line; mechanical.
 model: haiku
 maxTurns: 12
 ---
