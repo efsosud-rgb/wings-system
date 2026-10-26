@@ -193,6 +193,8 @@ export function toMessage(
     error: tracked ? errorText(row.errorCode, row.errorTitle) : null,
     authorName: row.employeeId ? (authors.get(row.employeeId) ?? null) : null,
     bySofia: row.author === 'sofia',
+    // An imported line says "Do celular" by itself.
+    fromPhone: row.author === 'app' && row.importBatchId === null,
     imported: row.importBatchId
       ? { file: imported?.file ?? null, omitted: imported?.omitted === true }
       : null,

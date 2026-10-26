@@ -96,7 +96,10 @@ export function DealSidePanel({
         {tasks.length === 0 ? (
           <p className="crm-muted">Nenhuma tarefa aberta.</p>
         ) : (
-          <ul className="crm-stack" style={{ gap: 'var(--space-1)' }}>
+          <ul
+            className="crm-stack"
+            style={{ gap: 'var(--space-1)', listStyle: 'none', padding: 0 }}
+          >
             {tasks.slice(0, 5).map((task) => (
               <li key={task.id}>
                 <b>{task.title}</b>

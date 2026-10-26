@@ -174,7 +174,7 @@ describe('Números de WhatsApp', () => {
     expect(second.getByText('Cadastrado, não conectado')).toBeTruthy();
     expect(second.getByText(/falta a autorização do Eric/)).toBeTruthy();
     expect(second.getByLabelText('1 de 4 conferidos')).toBeTruthy();
-    expect(second.getByText(/Falta: O dono vai estar com o celular/)).toBeTruthy();
+    expect(second.getByText('Falta: celular na hora')).toBeTruthy();
     // A number not confirmed cannot be connected.
     expect(second.queryByRole('button', { name: /Conectar/ })).toBeNull();
     const third = within(rows[3]!);
