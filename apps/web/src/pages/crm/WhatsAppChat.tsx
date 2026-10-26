@@ -473,6 +473,7 @@ function Bubble({ message }: { message: WaMessage }) {
       <span className="crm-wa-meta">
         {out && message.bySofia ? 'Sofia (IA) · ' : ''}
         {out && message.authorName ? `${message.authorName} · ` : ''}
+        {out && message.fromPhone ? 'Pelo celular · ' : ''}
         <time dateTime={message.at} title={formatDateTime(message.at)}>
           {timeOf(message.at)}
         </time>

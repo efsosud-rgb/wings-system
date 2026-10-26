@@ -326,6 +326,21 @@ describe('a work number’s own traffic in the CRM', () => {
     // A contact removed on the phone takes the saved name away.
     await apply(fixtures.contacts(true));
     expect((await chatOfPerson())?.phoneContactName).toBeNull();
+
+    // The owner reads it as the number's chat: what went from the phone says so, no Sofia.
+    const view = await app.inject({
+      method: 'GET',
+      url: `/whatsapp/conversations/${chat!.id}`,
+      cookies: owner.cookies,
+    });
+    const data = view.json<DealWhatsApp>();
+    expect(data.messages.map((m) => m.fromPhone)).toEqual([false, true, false, true]);
+    expect(data).toMatchObject({
+      number: { id: numberId, label: 'Comercial Expansão' },
+      configured: true,
+      calling: false,
+      window: { open: true },
+    });
   });
 
   it('joins the deal only when exactly one open deal has the phone, and says so in its history', async () => {

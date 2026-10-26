@@ -141,6 +141,8 @@ export interface WaMessage {
   authorName: string | null;
   /** Sent by Sofia, the virtual SDR. */
   bySofia: boolean;
+  /** Written on a work number's phone (or a linked device), not in the system (`author` app). */
+  fromPhone?: boolean;
   /** Brought in from a phone's export: the media file the line named, or that it was left out. */
   imported: { file: string | null; omitted: boolean } | null;
   at: string;

@@ -62,6 +62,14 @@ const SIGNUP_FAILURES: Record<Exclude<SignupOutcome, { ok: true }>['reason'], st
 
 const DAY_MS = 86_400_000;
 
+/** The phone checks, short, for the table (the form shows them in full). */
+const CHECK_SHORT: Record<WaNumberCheck, string> = {
+  app: 'app 2.24.17+',
+  work: 'número de trabalho',
+  phone: 'celular na hora',
+  history: 'histórico em 24 h',
+};
+
 /** Days until the token ends (negative: ended); null when Meta gave no end. */
 const tokenDaysLeft = (number: WaNumber, now = Date.now()) =>
   number.tokenExpiresAt === null
@@ -132,7 +140,7 @@ export function WhatsAppNumbersPage() {
           número traz para o sistema as mensagens, o que sai do celular e o histórico.
         </span>
       </header>
-      <div className="crm-page-scroll crm-stack">
+      <div className="crm-page-scroll crm-stack" style={{ alignContent: 'start' }}>
         {view.isLoading && <p className="crm-sub">Carregando…</p>}
         {view.isError && (
           <LoadFailure what="os números" error={view.error} onRetry={() => void view.refetch()} />
@@ -506,7 +514,9 @@ function NumberRow({
         </span>
         <ul className="crm-sub" style={{ margin: 0, paddingLeft: 16 }}>
           {WA_NUMBER_CHECK_KEYS.filter((key) => !number.checks.includes(key)).map((key) => (
-            <li key={key}>Falta: {WA_NUMBER_CHECKS[key]}</li>
+            <li key={key} title={WA_NUMBER_CHECKS[key]}>
+              Falta: {CHECK_SHORT[key]}
+            </li>
           ))}
         </ul>
       </td>
@@ -522,8 +532,12 @@ function NumberRow({
           <div className="crm-sub">desde {formatDateTime(number.connectedAt)}</div>
         )}
       </td>
-      <td className={left !== null && left <= WA_TOKEN_WARN_DAYS ? 'crm-error' : undefined}>
-        {tokenText(number)}
+      <td>
+        {left !== null && left <= WA_TOKEN_WARN_DAYS ? (
+          <b style={{ color: 'var(--danger)' }}>{tokenText(number)}</b>
+        ) : (
+          tokenText(number)
+        )}
       </td>
       <td>{number.status === 'registered' ? '—' : syncLabel(number.contactsSync)}</td>
       <td>
