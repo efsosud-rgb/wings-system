@@ -1533,7 +1533,7 @@ export type LandingPageUpdateInput = z.infer<typeof landingPageUpdateSchema>;
 // --- the site form (CRM phase 1, T5) --------------------------------------------
 //
 //   GET  /public/site-forms/:slug  -> SiteFormInfo     no session
-//   POST /public/site-forms/:slug  -> { ok, whatsappUrl }  no session; Turnstile, honeypot, per-IP limit
+//   POST /public/site-forms/:slug  -> { ok, whatsappUrl, eventId }  no session; Turnstile, honeypot, per-IP limit
 
 /**
  * The page's approved spec as the public page reads it: the codes of the

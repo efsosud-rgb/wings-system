@@ -114,10 +114,18 @@ describe('submitResultOf', () => {
     ).toEqual({
       kind: 'ok',
       whatsappUrl: 'https://wa.me/550000000000?text=AB',
+      eventId: null,
     });
     expect(submitResultOf(200, { ok: true, whatsappUrl: 'javascript:alert(1)' })).toEqual({
       kind: 'ok',
       whatsappUrl: null,
+      eventId: null,
+    });
+    // The Conversions API's id rides along for the pixel to send the same one.
+    expect(submitResultOf(200, { ok: true, whatsappUrl: null, eventId: 'lead-abc' })).toEqual({
+      kind: 'ok',
+      whatsappUrl: null,
+      eventId: 'lead-abc',
     });
     expect(
       submitResultOf(400, { error: 'invalid_request', message: 'Informe o seu e-mail.' }),

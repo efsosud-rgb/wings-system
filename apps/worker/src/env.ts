@@ -120,6 +120,23 @@ const schema = z.object({
   /** What one comparison is expected to cost; reserved before the call (a few thousandths of a dollar). */
   INSTAGRAM_CHECK_AI_USD_PER_CALL: z.preprocess(emptyAsUnset, z.coerce.number().positive().max(1).default(0.004)),
   /**
+   * Meta's Conversions API (docs/ads/conversions-api.md, job `meta_capi_lead`): sends the Lead
+   * event of a site-form lead that gave consent. Off unless META_CAPI_ENABLED is "true".
+   * META_PIXEL_ID is the same public id the API uses; META_CAPI_ACCESS_TOKEN is the token
+   * Events Manager generates for that pixel (a secret: it lives only in Coolify).
+   * META_CAPI_TEST_EVENT_CODE sends to "Testar eventos" instead of the real count.
+   */
+  META_CAPI_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
+  META_PIXEL_ID: optionalString.refine(
+    (value) => value === undefined || /^\d{5,25}$/.test(value),
+    'must be the numeric pixel id',
+  ),
+  META_CAPI_ACCESS_TOKEN: optionalString,
+  META_CAPI_TEST_EVENT_CODE: optionalString,
+  /**
    * The research cut-off, a São Paulo day (YYYY-MM-DD): only leads that arrived from 00:00 of
    * that day on are researched; an older lead that converts again is not.
    */

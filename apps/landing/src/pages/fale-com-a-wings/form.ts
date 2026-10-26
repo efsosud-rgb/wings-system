@@ -56,7 +56,7 @@ export interface FormSetup {
   /** The WhatsApp link the GET gave, for a thank-you whose POST gave none. */
   whatsappUrl: () => string | null;
   /** After a sent form: the chosen option's value, for the dataLayer. */
-  onSent: (answer: string) => void;
+  onSent: (answer: string, eventId: string | null) => void;
   /** The form's steps for the server's count (first touch, each try, why it failed, sent); absent, none is counted. */
   onEvent?: (event: EventName, step?: EventStep) => void;
   /** The address sent as the lead's page; the page's own when absent. */
@@ -241,7 +241,7 @@ export function setupForm(setup: FormSetup): FormController {
     void submitSiteForm(setup.apiBase, setup.slug, body).then((result) => {
       if (result.kind === 'ok') {
         sending = false;
-        setup.onSent(values.qualifierValue);
+        setup.onSent(values.qualifierValue, result.eventId);
         setup.onEvent?.('submit_ok');
         showThanks(result.whatsappUrl ?? setup.whatsappUrl());
         return;

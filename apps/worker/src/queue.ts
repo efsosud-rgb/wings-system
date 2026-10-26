@@ -77,6 +77,8 @@ export const STALE_AFTER_MS: Record<JobType, number> = {
   check_instagram: 5 * 60_000,
   // Same child-process shape as the Studio's transcription.
   transcribe_meeting: 5 * 60_000,
+  // One HTTP call with a 15 s timeout.
+  meta_capi_lead: 2 * 60_000,
 };
 
 /** Keeps the claim alive. False when the job is no longer this claim's. */

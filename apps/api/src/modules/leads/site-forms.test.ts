@@ -503,6 +503,50 @@ describe('site form (T5)', () => {
     );
   });
 
+  it('queues one Conversions API job per lead only when META_CAPI_ENABLED is "true", and answers its id', async () => {
+    const turnstile = captcha();
+    const off = await makeApp(
+      { TURNSTILE_SECRET_KEY: '0x4AAAAAAA-secret' },
+      { captchaFetch: turnstile.fetchImpl },
+    );
+    const before = await db.select().from(jobs).where(eq(jobs.type, 'meta_capi_lead'));
+    const quiet = await off.inject({
+      method: 'POST',
+      url: '/public/site-forms/cenoritas',
+      payload: form({ email: 'capi.desligada@example.com', phone: '(21) 99999-0051' }),
+    });
+    expect(quiet.json()).not.toHaveProperty('eventId');
+    expect(await db.select().from(jobs).where(eq(jobs.type, 'meta_capi_lead'))).toHaveLength(
+      before.length,
+    );
+
+    const on = await makeApp(
+      { TURNSTILE_SECRET_KEY: '0x4AAAAAAA-secret', META_CAPI_ENABLED: 'true' },
+      { captchaFetch: turnstile.fetchImpl },
+    );
+    const response = await on.inject({
+      method: 'POST',
+      url: '/public/site-forms/cenoritas',
+      headers: { 'user-agent': 'Mozilla/5.0 (teste)' },
+      payload: form({ email: 'capi.ligada@example.com', phone: '(21) 99999-0052' }),
+    });
+    const answer = response.json<{ ok: true; eventId: string }>();
+    expect(answer.eventId).toMatch(/^lead-[0-9a-f-]{36}$/);
+    const [lead] = await db.select().from(leads).where(eq(leads.email, 'capi.ligada@example.com'));
+    const queued = await db.select().from(jobs).where(eq(jobs.type, 'meta_capi_lead'));
+    const job = queued.find(
+      (row) => (row.input as { eventId?: string }).eventId === answer.eventId,
+    );
+    // The job names the lead by id: no e-mail, phone or name in the queue.
+    expect(job?.input).toMatchObject({
+      leadId: lead?.id,
+      eventId: answer.eventId,
+      userAgent: 'Mozilla/5.0 (teste)',
+    });
+    expect(JSON.stringify(job?.input)).not.toContain('capi.ligada');
+    expect(JSON.stringify(job?.input)).not.toContain('99999');
+  });
+
   it("picks the answer's funnel: none only with the triage on, Expansão only with a brand", () => {
     const page = { pipeline: 'formatacao' as const, brand: null };
     const brand = { pipeline: 'formatacao' as const, brand: 'Cenoritas' };
