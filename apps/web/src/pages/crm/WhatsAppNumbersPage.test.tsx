@@ -23,10 +23,12 @@ const retry = vi.fn();
 const register = vi.fn();
 const update = vi.fn();
 const retryEvent = vi.fn();
+const renew = vi.fn();
 vi.mock('../../api/whatsapp-numbers.js', () => ({
   useWhatsAppNumbers: () => ({ isLoading: false, isError: false, isSuccess: true, data: view }),
   useConnectWhatsAppNumber: () => ({ mutateAsync: connect }),
   useRetryWhatsAppNumber: () => ({ mutate: retry, isPending: false, isError: false }),
+  useRenewWhatsAppNumber: () => ({ mutate: renew, isPending: false }),
   useRegisterWhatsAppNumber: () => ({ mutateAsync: register, isPending: false }),
   useUpdateWhatsAppNumber: () => ({ mutateAsync: update, isPending: false }),
   useFailedWebhookEvents: () => ({
@@ -58,6 +60,8 @@ const number = (extra: Partial<WaNumber> = {}): WaNumber => ({
   connectedAt: new Date().toISOString(),
   connectedByName: 'Admin Teste',
   tokenExpiresAt: new Date(Date.now() + 50 * DAY).toISOString(),
+  tokenRenewTriedAt: null,
+  tokenRenewError: null,
   disconnectReason: null,
   disconnectedAt: null,
   webhooksSubscribed: true,
@@ -94,7 +98,7 @@ const people = [
 beforeEach(() => {
   view = { signup, missing: [], numbers: [], people };
   failed = [];
-  for (const fn of [connect, retry, register, update, retryEvent, runEmbeddedSignup])
+  for (const fn of [connect, retry, register, update, retryEvent, renew, runEmbeddedSignup])
     fn.mockReset();
 });
 afterEach(cleanup);
@@ -259,5 +263,31 @@ describe('Números de WhatsApp', () => {
     expect(screen.getByText('Conteúdo já apagado (90 dias)')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Processar de novo' }));
     expect(retryEvent).toHaveBeenCalledWith('e1');
+  });
+});
+
+describe('the 60-day access', () => {
+  it('"Renovar acesso" on a connected number; a refused renewal says so and what to do', async () => {
+    view = {
+      signup: null,
+      missing: [],
+      people: [],
+      numbers: [
+        number({
+          tokenExpiresAt: new Date(Date.now() + 5 * DAY).toISOString(),
+          tokenRenewError: 'meta_190',
+          tokenRenewTriedAt: new Date().toISOString(),
+        }),
+      ],
+    };
+    renew.mockImplementation(
+      (_id: string, opts: { onSuccess: (answer: { renewed: boolean }) => void }) =>
+        opts.onSuccess({ renewed: false }),
+    );
+    render(<WhatsAppNumbersPage />);
+    expect(screen.getByText(/A Meta não renovou \(código 190/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Renovar acesso' }));
+    expect(renew).toHaveBeenCalledWith('n1', expect.anything());
+    expect(screen.getByRole('status').textContent).toContain('conecte de novo pela Meta');
   });
 });

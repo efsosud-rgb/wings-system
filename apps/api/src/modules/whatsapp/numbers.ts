@@ -22,6 +22,7 @@ import {
   exchangeSignupCode,
   readWabaNumbers,
   readWabaOwner,
+  refreshBusinessToken,
   requestSmbSync,
   subscribeWaba,
   WHATSAPP_GRAPH_VERSION,
@@ -175,6 +176,8 @@ function numberOf(row: Row, ownerName: string | null, byName: string | null): Wa
     connectedAt: row.connectedAt?.toISOString() ?? null,
     connectedByName: byName,
     tokenExpiresAt: row.tokenExpiresAt?.toISOString() ?? null,
+    tokenRenewTriedAt: row.tokenRenewTriedAt?.toISOString() ?? null,
+    tokenRenewError: row.tokenRenewError,
     disconnectReason: row.disconnectReason,
     disconnectedAt: row.disconnectedAt?.toISOString() ?? null,
     webhooksSubscribed: row.webhooksSubscribed,
@@ -489,6 +492,86 @@ export async function retryConnection(
   const token = deps.box.open(row.tokenEnc);
   const steps = await reserved(deps, row.id, () => finishConnection(deps, row.id, token));
   return { number: await numberById(deps.db, row.id), steps };
+}
+
+/** Ten days before the end: the screen warns, the daily pass renews, the Admin Masters hear. */
+export const TOKEN_WARN_DAYS = 10;
+
+/**
+ * "Renovar acesso" (and the daily pass, `renewExpiringTokens`): a new 60-day token for a connected
+ * number, sealed at once. A refusal keeps the current token and records Meta's code; never the
+ * token itself, anywhere.
+ */
+export async function renewToken(
+  deps: NumbersDeps,
+  id: string,
+): Promise<{ number: WaNumber; renewed: boolean; metaCode: number | null }> {
+  const row = await deps.db.query.waNumbers.findFirst({ where: eq(waNumbers.id, id) });
+  if (!row || row.status !== 'connected' || !row.tokenEnc) throw new ConnectError('not_found');
+  const sealed = row.tokenEnc;
+  const result = await reserved(deps, id, async () => {
+    const answer = await refreshBusinessToken(deps.fetchImpl, deps.app, deps.box.open(sealed));
+    const now = deps.now();
+    await deps.db
+      .update(waNumbers)
+      .set(
+        answer.ok
+          ? {
+              tokenEnc: deps.box.seal(answer.data.token),
+              tokenExpiresAt: answer.data.expiresIn
+                ? new Date(now.getTime() + answer.data.expiresIn * 1000)
+                : null,
+              tokenRenewTriedAt: now,
+              tokenRenewError: null,
+              updatedAt: now,
+            }
+          : {
+              tokenRenewTriedAt: now,
+              tokenRenewError: answer.code === null ? 'no_answer' : `meta_${answer.code}`,
+              updatedAt: now,
+            },
+      )
+      .where(eq(waNumbers.id, id));
+    return answer;
+  });
+  return {
+    number: await numberById(deps.db, id),
+    renewed: result.ok,
+    metaCode: result.ok ? null : result.code,
+  };
+}
+
+/** Once a day: each connected number within ten days of its end is renewed (one try a day). */
+export async function renewExpiringTokens(
+  deps: NumbersDeps,
+  log: (facts: Record<string, unknown>) => void,
+) {
+  const now = deps.now();
+  const due = await deps.db
+    .select({ id: waNumbers.id })
+    .from(waNumbers)
+    .where(
+      and(
+        eq(waNumbers.status, 'connected'),
+        lt(waNumbers.tokenExpiresAt, new Date(now.getTime() + TOKEN_WARN_DAYS * 86_400_000)),
+        or(
+          isNull(waNumbers.tokenRenewTriedAt),
+          lt(waNumbers.tokenRenewTriedAt, new Date(now.getTime() - 20 * 3_600_000)),
+        ),
+      ),
+    );
+  for (const { id } of due) {
+    try {
+      const { renewed, metaCode } = await renewToken(deps, id);
+      log({ job: 'whatsapp_token', number: id, renewed, ...(metaCode ? { metaCode } : {}) });
+    } catch (error) {
+      log({
+        job: 'whatsapp_token',
+        number: id,
+        error: error instanceof ConnectError ? error.code : 'error',
+      });
+    }
+  }
 }
 
 async function numberById(db: Database, id: string): Promise<WaNumber> {

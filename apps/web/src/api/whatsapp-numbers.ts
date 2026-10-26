@@ -50,6 +50,19 @@ export function useRetryWhatsAppNumber() {
   });
 }
 
+/** "Renovar acesso": a new 60-day token from Meta, before the current one ends. */
+export function useRenewWhatsAppNumber() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<{ number: WaNumber; renewed: boolean; metaCode: number | null }>(
+        `/whatsapp/numbers/${id}/renew`,
+        {},
+      ),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: KEY }),
+  });
+}
+
 export function useRegisterWhatsAppNumber() {
   const queryClient = useQueryClient();
   return useMutation({

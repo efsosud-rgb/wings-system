@@ -16,7 +16,7 @@ import { startSofia } from './modules/sofia/engine.js';
 import { whatsappConfigOf } from './modules/whatsapp/graph.js';
 import { startWhatsAppIntake } from './modules/whatsapp/intake.js';
 import { startWhatsAppMediaStore } from './modules/whatsapp/media-store.js';
-import { numberConfigOf } from './modules/whatsapp/numbers.js';
+import { numberConfigOf, numbersDepsOf } from './modules/whatsapp/numbers.js';
 import { createSecretBox } from './lib/secret-box.js';
 import { startYoutubeScheduler } from './modules/youtube/scheduler.js';
 
@@ -131,6 +131,7 @@ async function main() {
       wabaId: env.WHATSAPP_WABA_ID ?? null,
       log: (facts) => app.log.info(facts),
       send: whatsappSend,
+      numbers: numbersDepsOf({ db, env }),
     });
     app.wings.whatsappKick = intake.kick;
     app.addHook('onClose', async () => intake.stop());

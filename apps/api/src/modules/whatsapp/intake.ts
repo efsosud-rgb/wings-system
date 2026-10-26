@@ -34,7 +34,7 @@ import { formContextOf } from '../sofia/form-context.js';
 import { loadSofiaSettings } from '../sofia/settings.js';
 import { factsOf, routeInbound } from '../sofia/state.js';
 import { ART_MEDIA_GONE_CODES, invalidateArtMedia } from './art.js';
-import { alertWebhookFailed, sweepUnknownSends } from './alerts.js';
+import { alertWebhookFailed, sweepUnknownSends, warnExpiringTokens } from './alerts.js';
 import { distribute } from './attendance.js';
 import { notifyCallsChanged } from './call-signal.js';
 import { callingOn } from './calling.js';
@@ -43,7 +43,12 @@ import { officialNumberLive } from './official-number.js';
 import { deliverWhatsApp, type Contact } from './outbox.js';
 import { reasonOf } from './templates.js';
 import { brandOf, callPermissionText, permissionOf } from './thread.js';
-import { applyNumberChange, workNumberOf } from './numbers.js';
+import {
+  applyNumberChange,
+  renewExpiringTokens,
+  workNumberOf,
+  type NumbersDeps,
+} from './numbers.js';
 import { applyWorkNumberChange } from './number-intake.js';
 import {
   isOptOut,
@@ -88,6 +93,8 @@ export interface WhatsAppIntakeDeps {
   now?: () => Date;
   /** How Meta's call-permission request answers a "Prefiro uma ligação"; absent, the owner's task only. */
   send?: { config: WhatsAppConfig; fetch: typeof fetch } | null;
+  /** The work numbers' connection (app and key): absent, their tokens are only warned about. */
+  numbers?: NumbersDeps | null;
 }
 
 export interface WhatsAppIntakeResult {
@@ -973,6 +980,9 @@ export function startWhatsAppIntake(deps: WhatsAppIntakeDeps & { tickMs?: number
       purgedOn = today;
       const { purged } = await purgeWhatsAppPayloads(deps.db, deps.now?.());
       if (purged > 0) deps.log({ job: WHATSAPP_JOB, purgedPayloads: purged });
+      // The work numbers' 60-day access: renewed near its end, and people told when it was not.
+      if (deps.numbers) await renewExpiringTokens(deps.numbers, deps.log);
+      await warnExpiringTokens(deps.db, deps.now?.() ?? new Date());
     }
   };
   const timer = setInterval(() => void tick().catch(() => undefined), deps.tickMs ?? 60_000);

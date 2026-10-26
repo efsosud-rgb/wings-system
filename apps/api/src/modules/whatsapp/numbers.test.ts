@@ -7,6 +7,7 @@ import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
   auditLog,
+  crmNotifications,
   waContacts,
   waConversations,
   waMessages,
@@ -18,7 +19,8 @@ import { createSecretBox } from '../../lib/secret-box.js';
 import { createTestDatabase, type TestDatabase } from '../../test/db.js';
 import { createEmployee, TEST_CPF_KEY, TEST_INDEX_KEY } from '../../test/factories.js';
 import { applyWhatsAppPayload, processWhatsAppEvents } from './intake.js';
-import { workNumberOf } from './numbers.js';
+import { warnExpiringTokens } from './alerts.js';
+import { numberConfigOf, numbersDepsOf, renewExpiringTokens, workNumberOf } from './numbers.js';
 
 /**
  * Connecting a seller's WhatsApp Business number by coexistence, against a simulated Meta: the
@@ -82,7 +84,9 @@ const metaFetch = (async (input: string | URL | Request, init?: RequestInit) => 
   const auth = new Headers(init?.headers).get('authorization');
   const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : null;
   const step = url.pathname.endsWith('/oauth/access_token')
-    ? 'exchange'
+    ? url.searchParams.get('grant_type') === 'fb_exchange_token'
+      ? 'refresh'
+      : 'exchange'
     : url.pathname.endsWith(`/${WABA}/phone_numbers`)
       ? 'numbers'
       : url.pathname.endsWith(`/${WABA}/subscribed_apps`)
@@ -697,6 +701,79 @@ describe('the work numbers', () => {
       .set({ connectingUntil: new Date(clock.getTime() - 1_000) })
       .where(eq(waNumbers.id, id));
     expect((await retry()).json()).toMatchObject({ steps: { webhooks: 'ok' } });
+  });
+
+  describe('the 60-day access', () => {
+    const SIXTY_DAYS = 60 * 86_400;
+    const renew = (id: string) =>
+      app.inject({ method: 'POST', url: `/whatsapp/numbers/${id}/renew`, cookies: admin.cookies });
+    const connected = async () => {
+      answers.exchange = () =>
+        json({ access_token: BUSINESS_TOKEN, token_type: 'bearer', expires_in: SIXTY_DAYS });
+      const res = await connect(admin.cookies, payload());
+      return res.json<{ number: { id: string; tokenExpiresAt: string } }>().number;
+    };
+    const tokenOf = async (id: string) =>
+      (await numberConfigOf(db, createSecretBox(KEY), id))?.token ?? null;
+
+    it('"Renovar acesso" asks Meta with the current token and seals the new one, never shown', async () => {
+      const number = await connected();
+      clock = new Date(START.getTime() + 55 * 86_400_000);
+      answers.refresh = () =>
+        json({ access_token: 'EAAG-renewed-token', token_type: 'bearer', expires_in: SIXTY_DAYS });
+      const res = await renew(number.id);
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ renewed: true, metaCode: null });
+      expect(res.body).not.toContain('EAAG-');
+      const asked = calls.find((c) => c.step === 'refresh')!;
+      expect(asked.url.searchParams.get('fb_exchange_token')).toBe(BUSINESS_TOKEN);
+      expect(asked.url.searchParams.get('set_token_expires_in_60_days')).toBe('true');
+      expect(await tokenOf(number.id)).toBe('EAAG-renewed-token');
+      expect(res.json().number.tokenExpiresAt).toBe(
+        new Date(clock.getTime() + SIXTY_DAYS * 1000).toISOString(),
+      );
+      const audit = await db.query.auditLog.findFirst({
+        where: eq(auditLog.action, 'whatsapp.number_token_renewed'),
+      });
+      expect(JSON.stringify(audit?.metadata)).not.toContain('EAAG-');
+    });
+
+    it('refused: the current token stays, the code is kept, and the daily pass warns once', async () => {
+      const number = await connected();
+      clock = new Date(START.getTime() + 55 * 86_400_000);
+      answers.refresh = () => json({ error: { code: 190, message: 'Invalid OAuth token' } }, 400);
+      expect((await renew(number.id)).json()).toMatchObject({ renewed: false, metaCode: 190 });
+      expect(await tokenOf(number.id)).toBe(BUSINESS_TOKEN);
+      expect(
+        (await db.query.waNumbers.findFirst({ where: eq(waNumbers.id, number.id) }))
+          ?.tokenRenewError,
+      ).toBe('meta_190');
+
+      // The daily pass: renewed at most once a day, and the Admin Master and the owner hear.
+      const deps = numbersDepsOf({
+        db,
+        env: baseEnv({ INTEGRATIONS_ENCRYPTION_KEY: KEY, WHATSAPP_ES_CONFIG_ID: '987654321' }),
+        whatsappFetch: metaFetch,
+        now: () => clock,
+      })!;
+      calls.length = 0;
+      await renewExpiringTokens(deps, () => {});
+      expect(calls.filter((c) => c.step === 'refresh')).toHaveLength(0);
+      clock = new Date(clock.getTime() + 86_400_000);
+      await renewExpiringTokens(deps, () => {});
+      expect(calls.filter((c) => c.step === 'refresh')).toHaveLength(1);
+      await warnExpiringTokens(db, clock);
+      await warnExpiringTokens(db, clock);
+      const notices = await db
+        .select()
+        .from(crmNotifications)
+        .where(eq(crmNotifications.kind, 'whatsapp_token_expiring'));
+      // Once each, however many passes: the Admin Masters and the number's owner.
+      for (const person of [admin.id, seller.id])
+        expect(notices.filter((n) => n.recipientEmployeeId === person)).toHaveLength(1);
+      expect(notices[0]!.message).toContain('vence em 4 dia(s)');
+      expect(notices[0]!.message).not.toContain('99999');
+    });
   });
 
   it('after the 24 hours still subscribes, but asks for no sync', async () => {

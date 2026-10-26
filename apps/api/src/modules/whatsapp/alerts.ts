@@ -1,6 +1,12 @@
 import { and, eq, gt, inArray, isNull, lt } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
-import { crmNotifications, employees, roles, waMessages } from '../../db/schema/index.js';
+import {
+  crmNotifications,
+  employees,
+  roles,
+  waMessages,
+  waNumbers,
+} from '../../db/schema/index.js';
 import { managersAndBoard } from '../leads/crm-alerts.js';
 import { UNKNOWN_OUTCOME } from './graph.js';
 
@@ -98,4 +104,44 @@ export async function sweepUnknownSends(db: Database, now: Date): Promise<number
       key: row.id,
     });
   return rows.length;
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * A connected number whose Meta access ends within ten days and was not renewed (the daily pass
+ * tries first): the Admin Masters and the number's owner hear at ten days, three days and on the
+ * day it ends, once each for that end. Named by its label, never by the phone.
+ */
+export async function warnExpiringTokens(db: Database, now: Date) {
+  const rows = await db
+    .select({
+      id: waNumbers.id,
+      label: waNumbers.label,
+      owner: waNumbers.ownerEmployeeId,
+      endsAt: waNumbers.tokenExpiresAt,
+    })
+    .from(waNumbers)
+    .where(
+      and(
+        eq(waNumbers.status, 'connected'),
+        lt(waNumbers.tokenExpiresAt, new Date(now.getTime() + 10 * DAY_MS)),
+      ),
+    );
+  if (rows.length === 0) return;
+  const admins = await adminMasters(db);
+  for (const row of rows) {
+    if (!row.endsAt) continue;
+    const days = Math.ceil((row.endsAt.getTime() - now.getTime()) / DAY_MS);
+    const level = days <= 0 ? 'ended' : days <= 3 ? '3d' : '10d';
+    const name = row.label ? `"${row.label}"` : 'de trabalho';
+    await notify(db, [...admins, row.owner], {
+      kind: 'whatsapp_token_expiring',
+      message:
+        days <= 0
+          ? `O acesso da Meta do número ${name} venceu: ele não envia nem baixa arquivos. Conecte de novo pela Meta em CRM Vendas › WhatsApp › Números.`
+          : `O acesso da Meta do número ${name} vence em ${days} dia(s) e não foi renovado. Use "Renovar acesso" em CRM Vendas › WhatsApp › Números (ou conecte de novo pela Meta).`,
+      key: `${row.id}:${level}:${row.endsAt.toISOString().slice(0, 10)}`,
+    });
+  }
 }

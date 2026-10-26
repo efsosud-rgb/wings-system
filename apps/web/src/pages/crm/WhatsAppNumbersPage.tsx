@@ -20,6 +20,7 @@ import {
   useFailedWebhookEvents,
   useRegisterWhatsAppNumber,
   useRetryWebhookEvent,
+  useRenewWhatsAppNumber,
   useRetryWhatsAppNumber,
   useUpdateWhatsAppNumber,
   useWhatsAppNumbers,
@@ -454,6 +455,7 @@ function NumberRow({
   onEdit: () => void;
 }) {
   const retry = useRetryWhatsAppNumber();
+  const renew = useRenewWhatsAppNumber();
   const connect = useConnectWhatsAppNumber();
   const [phase, setPhase] = useState<Phase>('idle');
   const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
@@ -537,6 +539,35 @@ function NumberRow({
           <b style={{ color: 'var(--danger)' }}>{tokenText(number)}</b>
         ) : (
           tokenText(number)
+        )}
+        {number.tokenRenewError && (
+          <div className="crm-sub">
+            A Meta não renovou ({number.tokenRenewError.replace('meta_', 'código ')}
+            {number.tokenRenewTriedAt ? `, ${formatDateTime(number.tokenRenewTriedAt)}` : ''})
+          </div>
+        )}
+        {number.status === 'connected' && number.tokenExpiresAt !== null && (
+          <button
+            type="button"
+            className="crm-btn is-small"
+            disabled={renew.isPending}
+            onClick={() =>
+              renew.mutate(number.id, {
+                onSuccess: (answer) =>
+                  setResult(
+                    answer.renewed
+                      ? { ok: true, text: `Acesso renovado: ${tokenText(answer.number)}.` }
+                      : {
+                          ok: false,
+                          text: 'A Meta não renovou o acesso. O atual continua até vencer; antes disso, conecte de novo pela Meta com o celular do dono.',
+                        },
+                  ),
+                onError: (error) => setResult({ ok: false, text: reasonOf(error) }),
+              })
+            }
+          >
+            {renew.isPending ? 'Renovando…' : 'Renovar acesso'}
+          </button>
         )}
       </td>
       <td>{number.status === 'registered' ? '—' : syncLabel(number.contactsSync)}</td>

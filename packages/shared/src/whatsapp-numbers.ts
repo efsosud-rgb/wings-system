@@ -76,6 +76,9 @@ export interface WaNumber {
   connectedByName: string | null;
   /** When the business token ends; null when Meta gave no end (or before the connection). */
   tokenExpiresAt: string | null;
+  /** The last renewal try ("Renovar acesso" or the daily pass) and its error code, if it failed. */
+  tokenRenewTriedAt: string | null;
+  tokenRenewError: string | null;
   /** Meta's event (and reason) when the number left, e.g. "PARTNER_REMOVED: PRIMARY_INACTIVITY". */
   disconnectReason: string | null;
   disconnectedAt: string | null;
