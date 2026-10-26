@@ -659,6 +659,13 @@
       "when": 1792521813953,
       "tag": "0095_wa_numbers",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1793037259717,
+      "tag": "0096_sofia_ai_runs_tokens",
+      "breakpoints": true
     }
   ]
 }

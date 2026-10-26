@@ -65,6 +65,8 @@ Estados (`wa_conversations.attendance`): `sofia` Sofia atendendo · `waiting_sel
 - **Teto:** `SOFIA_DAILY_USD` (padrão 1) por dia UTC. Cada chamada reserva US$ 0,01 sob trava antes de ser feita
   e fica com o custo real que o OpenRouter informa (`sofia_ai_runs`). Uma chamada fica bem abaixo de um
   centavo. Passou do teto, falhou ou demorou mais de 15 s: mensagem fixa e a conversa vai para uma pessoa.
+- **Avaliação:** 87 conversas de teste e um executor medem o cérebro com modelo simulado (nos testes) ou, por outro
+  comando e só quando o Eric mandar, com um modelo real: `sofia-avaliacao.md`.
 
 ## Funcionamento
 
@@ -111,7 +113,7 @@ Estados (`wa_conversations.attendance`): `sofia` Sofia atendendo · `waiting_sel
   `sofia_claimed_at`, `sofia_read_until`. Conversas de antes: com negociação ficam com o vendedor; sem, ficam
   "Aguardando atendente".
 - `sofia_settings` (uma linha: ligada, textos, perguntas) e `sofia_ai_runs` (ids, modelo, versão do prompt,
-  reserva e custo; nunca texto).
+  ferramentas, tokens, reserva e custo; nunca texto; `tools` e os tokens vêm da migração 0096).
 - `wa_conversation_reads`: até onde cada pessoa leu cada conversa.
 - Nenhuma tabela nova é lida pelo `wings_ro`.
 

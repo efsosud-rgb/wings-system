@@ -399,6 +399,12 @@ describe('Sofia, Formatação from first message to the seller', () => {
     const runs = await db.select().from(sofiaAiRuns);
     expect(runs.length).toBeGreaterThanOrEqual(3);
     expect(runs.every((r) => r.costMicroUsd === 100 && r.outcome === 'ok')).toBe(true);
+    // ... with the tokens the provider counted and the tools it was offered.
+    expect(
+      runs.every(
+        (r) => r.inputTokens === 900 && r.outputTokens === 60 && r.tools?.join() === 'sofia_turn',
+      ),
+    ).toBe(true);
 
     // After the handover Sofia stays quiet: the seller has it.
     await write(phone, text('obrigada!'));
@@ -529,6 +535,8 @@ describe('who answers', () => {
     // The failed call still counts at its reservation.
     const [run] = await db.select().from(sofiaAiRuns).where(eq(sofiaAiRuns.outcome, 'failed'));
     expect(run?.costMicroUsd).toBeNull();
+    // No usage came back: no tokens, but the tools it was offered are on record.
+    expect(run).toMatchObject({ inputTokens: null, outputTokens: null, tools: ['sofia_turn'] });
   });
 
   it('past the daily ceiling no AI call is made and a person takes over', async () => {
