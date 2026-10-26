@@ -301,10 +301,27 @@ iframe, o fundo é preto). Sem 3D e sem herói. O lead entra no mesmo registro d
 
 - O script da página bloqueia a renderização (`blocking="render"`), então o primeiro quadro já é o final: palavras
   separadas, linha do formulário preenchida. As fontes Limelight e Nunito vêm dentro do CSS (data URI) e são
-  registradas pelo script antes do primeiro quadro, sem troca de fonte depois. O Font Awesome (só os ícones das redes)
-  é um arquivo à parte com `preload`; se não carregar, aparece o nome da rede (`.no-fa`).
-- O three.js chega depois do primeiro quadro (`import()` dinâmico, ~160 kB comprimido); sem WebGL, a página mostra a
-  logo parada (`.no-gl`). `window.__wings3d()` informa partículas, pixel ratio, chamadas de desenho e memória.
+  registradas pelo script antes do primeiro quadro, sem troca de fonte depois. Os ícones das redes são o Font Awesome
+  reduzido aos 5 ícones usados (`src/assets/fa-brands-subset.woff2`, 1,2 kB, embutido no CSS como as outras fontes; o
+  original tem 118 kB); se não carregar, aparece o nome da rede (`.no-fa`).
+- O que o primeiro quadro não precisa começa **depois dele**, em `afterFirstPaint` (`src/lib/after-paint.ts`: espera a
+  primeira pintura de conteúdo e um momento livre do navegador, com limite de 2 s; sem sinal de pintura roda em 4 s):
+  o three.js (`import()` dinâmico, ~160 kB comprimido) e a verificação antirrobô (Turnstile). A verificação também
+  começa na hora se o visitante tocar no formulário antes disso; até ela terminar o botão fica desligado, como
+  sempre. O `GET` do formulário (link do WhatsApp) e o `page_view` continuam saindo na carga. Sem WebGL, a página
+  mostra a logo parada (`.no-gl`). `window.__wings3d()` informa partículas, pixel ratio, chamadas de desenho e memória.
+- Movimento reduzido (`prefers-reduced-motion`): as palavras aparecem de uma vez, o CSS desliga animações e
+  transições, e a cena é a pequena e parada (3200 pontos, um quadro só). O e2e confere (`reduced-motion-390`).
+- Medida (26/10/2026, Lighthouse 12 em modo celular simulado, 4× mais lento e 4G lenta, Chromium sem GPU, mediana de 5
+  rodadas, GTM e Turnstile **falsos**; o PageSpeed da produção marcou LCP 11,4 s e nota 40): LCP 2,93 s → 1,66 s, FCP
+  1,75 s → 1,36 s, nota 87 → 95, 357 kB → 243 kB. O LCP é o título (texto), a página não tem imagem principal. Com um
+  GTM de mentira de tamanho parecido com o real (130 kB, 60 ms de execução, mais dois scripts de tag): 3,10 s → 2,07 s.
+  O que ficou de fora: o GTM real começa antes da primeira pintura (`installGtm` roda no script que bloqueia a
+  renderização) e é o que mais pode pesar no PageSpeed de produção. Adiar o GTM para `afterFirstPaint` é uma linha,
+  mas muda quando o Pixel e o GA começam (visita que sai antes de ~2 s deixa de contar), por isso depende do Eric.
+- Para medir de novo: `pnpm --filter @wings/landing build`, servir o `dist/` com compressão gzip como o nginx e rodar
+  o Lighthouse (`lighthouse <url> --preset=perf --form-factor=mobile`); a primeira rodada num Chrome novo é mais lenta
+  que as seguintes, descartar. Não medir com `blocking="render"` desligado: o LCP não melhora e o CLS vai a 0,15.
 - Resolução da cena (pixel ratio, sempre limitado ao da tela): computador até 2; celular com toque até 2
   (`PHONE_MAX_PR` em `scene.ts`; era 1,5); celular "fraco" (4 núcleos ou menos, ou 3 GB ou menos) 1. Com movimento
   reduzido nada mudou: celular com toque continua em 1,5.
@@ -341,8 +358,9 @@ caminho), sem rede.
   tempo de execução, pontos da asa), com o bloqueio de rede do repositório.
 - `pnpm --filter @wings/landing build && pnpm --filter @wings/landing test:e2e`: abre o `dist/` no Chromium headless
   (1440×900 e 390×844) com um servidor que imita o nginx, GTM e Turnstile falsos, API simulada pelo contrato, e
-  aborta qualquer pedido para fora da máquina. Confere console limpo, sem rolagem lateral, primeiro quadro sem pulo
-  (CLS < 0,02) e sem nada que some depois, um h1 e seis seções, botão desligado no começo, envio e obrigado com o link
+  aborta qualquer pedido para fora da máquina. Roda também com movimento reduzido (390×844). Confere console limpo,
+  sem rolagem lateral, primeiro quadro sem pulo (CLS < 0,02) e sem nada que some depois, a cena 3D e o Turnstile só
+  depois da primeira pintura, um h1 e seis seções, botão desligado no começo, envio e obrigado com o link
   da API, e as respostas de erro. `API_BASE=http://127.0.0.1:3000` usa uma API local de verdade (com `E2E_PORT` fixo
   em `LANDING_ORIGINS`). Não faz parte do `pnpm test`.
 - `DATABASE_URL=<banco local de desenvolvimento> pnpm --filter @wings/landing test:e2e:api` (depois do `build`): a
@@ -360,7 +378,8 @@ caminho), sem rede.
 ## Licenças
 
 - Ícones das redes: Font Awesome Free 6.5.2, ícones sob CC BY 4.0 e a fonte sob SIL OFL 1.1; o aviso fica no CSS
-  publicado (`/*! … */`).
+  publicado (`/*! … */`). A fonte da página é uma versão reduzida a 5 ícones, então o nome interno virou "FA Brands
+  Subset" (a OFL reserva o nome "Font Awesome" para versões modificadas); o comando para refazê-la está no CSS.
 - Fontes: Limelight (Sorkin Type Co) e Nunito (The Nunito Project Authors), SIL OFL 1.1, via `@fontsource`; o aviso
   também fica no CSS publicado.
 
