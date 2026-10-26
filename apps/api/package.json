@@ -17,7 +17,9 @@
     "crm:brands": "tsx src/scripts/crm-brands.ts",
     "leads:import-rd": "tsx src/scripts/leads-import-rd.ts",
     "leads:meta-reopen": "tsx src/scripts/leads-meta-reopen.ts",
-    "whatsapp:brand-art": "tsx src/scripts/brand-art.ts"
+    "whatsapp:brand-art": "tsx src/scripts/brand-art.ts",
+    "sofia:avaliar": "tsx src/scripts/sofia-eval.ts simulado",
+    "sofia:avaliar:real": "tsx src/scripts/sofia-eval.ts real"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

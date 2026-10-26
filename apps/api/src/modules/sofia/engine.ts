@@ -45,7 +45,16 @@ import {
 import { adoptUnmatched } from '../whatsapp/intake.js';
 import { deliverWhatsApp, type Contact } from '../whatsapp/outbox.js';
 import { isOptOut } from '../whatsapp/webhook-parse.js';
-import { readTurn, type SofiaIntent, type SofiaReading, type SofiaTurnLine } from './brain.js';
+import {
+  CLOSE_INTENTS,
+  HUMAN_INTENTS,
+  readTurn,
+  SOFIA_TOOL_NAMES,
+  sofiaRunRecord,
+  type SofiaIntent,
+  type SofiaReading,
+  type SofiaTurnLine,
+} from './brain.js';
 import { sofiaHandOver } from './deal.js';
 import { formGreetingOf } from './form-context.js';
 import { loadSofiaSettings } from './settings.js';
@@ -78,14 +87,6 @@ const STALE_CLAIM_MS = 2 * 60_000;
 export const SOFIA_RESERVE_MICRO_USD = 10_000;
 /** Lines of the conversation the AI reads. */
 const CONTEXT_LINES = 12;
-
-const HUMAN_INTENTS: Partial<Record<SofiaIntent, SofiaHandoffReason>> = {
-  cliente_atual: 'cliente_atual',
-  fornecedor: 'fornecedor',
-  emprego: 'emprego',
-  reclamacao: 'reclamacao',
-  quer_pessoa: 'quer_pessoa',
-};
 
 const SEGMENT_OF: Partial<Record<SofiaIntent, Exclude<SofiaSegment, 'outro'>>> = {
   formatacao: 'formatacao',
@@ -317,9 +318,8 @@ class Turn {
         reading = read;
         const human = HUMAN_INTENTS[reading.intent];
         if (human) return this.toHuman(human, true);
-        if (reading.intent === 'nao_contatar') return this.close('nao_contatar', true);
-        if (reading.intent === 'spam') return this.close('spam', false);
-        if (reading.intent === 'numero_errado') return this.close('numero_errado', false);
+        const closing = CLOSE_INTENTS[reading.intent];
+        if (closing) return this.close(closing.reason, closing.confirm);
         if (await this.applyReading(reading)) progress = true;
         if (this.facts.step === 'other' && this.segment === 'outro')
           return this.toHuman('outro_assunto', true);
@@ -927,6 +927,7 @@ class Turn {
           startedAt: this.now,
           model: SOFIA_MODEL,
           promptVersion: SOFIA_PROMPT_VERSION,
+          tools: [...SOFIA_TOOL_NAMES],
           reservedMicroUsd: reserve,
         })
         .returning({ id: sofiaAiRuns.id });
@@ -935,17 +936,16 @@ class Turn {
   }
 
   private async settle(runId: string, usage: LlmUsage | null, outcome: string) {
-    // The provider's own cost when it says; otherwise a generous estimate from
-    // the tokens; with neither (the call threw), the reservation stands.
-    const cost =
-      usage?.costUsd !== null && usage?.costUsd !== undefined
-        ? Math.round(usage.costUsd * 1e6)
-        : usage
-          ? Math.ceil(usage.inputTokens * 0.3 + usage.outputTokens * 1.5)
-          : null;
+    const record = sofiaRunRecord(SOFIA_MODEL, usage, outcome);
     await this.db
       .update(sofiaAiRuns)
-      .set({ costMicroUsd: cost, outcome, finishedAt: this.deps.now() })
+      .set({
+        costMicroUsd: record.costMicroUsd,
+        inputTokens: record.inputTokens,
+        outputTokens: record.outputTokens,
+        outcome,
+        finishedAt: this.deps.now(),
+      })
       .where(eq(sofiaAiRuns.id, runId));
   }
 }

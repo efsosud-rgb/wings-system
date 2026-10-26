@@ -1,4 +1,14 @@
-import { bigint, boolean, index, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  bigint,
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core';
 import { tenants, WINGS_TENANT_ID } from './ads.js';
 import { employees } from './employees.js';
 import { waConversations } from './whatsapp.js';
@@ -28,8 +38,8 @@ export const sofiaSettings = pgTable('sofia_settings', {
 /**
  * One row per AI call Sofia makes (SOFIA_DAILY_USD): reserved before the
  * call under a lock, then the real cost. A call that threw keeps its
- * reservation as its cost (it may have been billed). Ids, codes and amounts
- * only: never the conversation's text.
+ * reservation as its cost (it may have been billed). Ids, codes, token counts
+ * and amounts only: never the conversation's text.
  */
 export const sofiaAiRuns = pgTable(
   'sofia_ai_runs',
@@ -41,6 +51,11 @@ export const sofiaAiRuns = pgTable(
     startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
     model: text('model').notNull(),
     promptVersion: text('prompt_version').notNull(),
+    /** Names of the tools the call offered the model. Null on rows from before they were recorded. */
+    tools: text('tools').array(),
+    /** What the provider counted; null while the call runs, if it threw, and on older rows. */
+    inputTokens: integer('input_tokens'),
+    outputTokens: integer('output_tokens'),
     reservedMicroUsd: bigint('reserved_micro_usd', { mode: 'number' }).notNull(),
     costMicroUsd: bigint('cost_micro_usd', { mode: 'number' }),
     /** ok | invalid | failed | timeout */

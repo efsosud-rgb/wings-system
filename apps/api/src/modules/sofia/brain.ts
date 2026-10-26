@@ -1,8 +1,14 @@
 import {
+  AGENT_MODEL_PRICING,
+  estimateAgentCostMicroUsd,
   SOFIA_MODEL,
   SOFIA_PROMPT_VERSION,
   withArticle,
+  type AgentModel,
   type BrandArticle,
+  type SofiaCloseReason,
+  type SofiaHandoffReason,
+  type SofiaModel,
   type SofiaQuestion,
   type SofiaSegment,
 } from '@wings/shared';
@@ -35,6 +41,29 @@ export const SOFIA_INTENTS = [
   'indefinido',
 ] as const;
 export type SofiaIntent = (typeof SOFIA_INTENTS)[number];
+
+/** What the script does with each intent that is not "keep asking": a person takes over, or she ends it. */
+export const HUMAN_INTENTS: Partial<Record<SofiaIntent, SofiaHandoffReason>> = {
+  cliente_atual: 'cliente_atual',
+  fornecedor: 'fornecedor',
+  emprego: 'emprego',
+  reclamacao: 'reclamacao',
+  quer_pessoa: 'quer_pessoa',
+};
+
+/** The only cases Sofia ends alone; `confirm` sends the opt-out text. */
+export const CLOSE_INTENTS: Partial<
+  Record<SofiaIntent, { reason: Exclude<SofiaCloseReason, 'encerrada'>; confirm: boolean }>
+> = {
+  nao_contatar: { reason: 'nao_contatar', confirm: true },
+  spam: { reason: 'spam', confirm: false },
+  numero_errado: { reason: 'numero_errado', confirm: false },
+};
+
+export type SofiaRoute = 'human' | 'close' | 'continue';
+
+export const routeOfIntent = (intent: SofiaIntent): SofiaRoute =>
+  HUMAN_INTENTS[intent] ? 'human' : CLOSE_INTENTS[intent] ? 'close' : 'continue';
 
 export interface SofiaTurnLine {
   from: 'lead' | 'sofia';
@@ -77,6 +106,8 @@ export type SofiaBrainResult =
 export const SOFIA_AI_TIMEOUT_MS = 15_000;
 
 const TOOL = 'sofia_turn';
+/** The tools a call offers the model, as recorded with it. */
+export const SOFIA_TOOL_NAMES = [TOOL] as const;
 
 const readingSchema = z.object({
   intent: z.enum(SOFIA_INTENTS),
@@ -184,12 +215,56 @@ function userContent(input: SofiaBrainInput) {
   });
 }
 
-export async function readTurn(llm: AgentLlm, input: SofiaBrainInput): Promise<SofiaBrainResult> {
+/** What one AI call leaves on record (`sofia_ai_runs`, the evaluation report): numbers and codes, never text. */
+export interface SofiaRunRecord {
+  model: string;
+  promptVersion: string;
+  tools: string[];
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costMicroUsd: number | null;
+  outcome: string;
+}
+
+/**
+ * The provider's own cost when it says; otherwise a generous estimate from the
+ * tokens (the agent's price list when the model is on it, Sofia's own rate
+ * otherwise).
+ */
+export function sofiaCostMicroUsd(model: string, usage: LlmUsage): number {
+  if (usage.costUsd !== null) return Math.round(usage.costUsd * 1e6);
+  if (model in AGENT_MODEL_PRICING)
+    return estimateAgentCostMicroUsd(model as AgentModel, usage.inputTokens, usage.outputTokens);
+  return Math.ceil(usage.inputTokens * 0.3 + usage.outputTokens * 1.5);
+}
+
+/** With no usage (the call threw) there are no tokens and no cost: the reservation stands. */
+export function sofiaRunRecord(
+  model: string,
+  usage: LlmUsage | null,
+  outcome: string,
+): SofiaRunRecord {
+  return {
+    model,
+    promptVersion: SOFIA_PROMPT_VERSION,
+    tools: [...SOFIA_TOOL_NAMES],
+    inputTokens: usage?.inputTokens ?? null,
+    outputTokens: usage?.outputTokens ?? null,
+    costMicroUsd: usage ? sofiaCostMicroUsd(model, usage) : null,
+    outcome,
+  };
+}
+
+export async function readTurn(
+  llm: AgentLlm,
+  input: SofiaBrainInput,
+  model: AgentModel | SofiaModel = SOFIA_MODEL,
+): Promise<SofiaBrainResult> {
   const signal = AbortSignal.timeout(SOFIA_AI_TIMEOUT_MS);
   let turn;
   try {
     turn = await llm.complete({
-      model: SOFIA_MODEL,
+      model,
       messages: [
         { role: 'system', content: SYSTEM },
         { role: 'user', content: userContent(input) },
