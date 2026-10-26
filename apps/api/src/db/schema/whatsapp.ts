@@ -1,3 +1,4 @@
+import type { WaFieldSpec } from '@wings/shared';
 import { sql } from 'drizzle-orm';
 import {
   bigint,
@@ -350,7 +351,11 @@ export const waTemplates = pgTable(
     category: text('category'),
     /** APPROVED | PENDING | REJECTED | PAUSED | DISABLED ... as Meta says. */
     status: text('status').notNull(),
+    /** Meta's reason when it refused the template (NONE otherwise). */
+    rejectedReason: text('rejected_reason'),
     components: jsonb('components').notNull().default([]),
+    /** What fills each {{n}} and its fallback, set on the Modelos screen; null = the system's own list. */
+    fields: jsonb('fields').$type<WaFieldSpec[]>(),
     syncedAt: timestamp('synced_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

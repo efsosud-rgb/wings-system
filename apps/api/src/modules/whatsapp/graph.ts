@@ -387,6 +387,7 @@ export interface GraphTemplate {
   language?: string;
   status?: string;
   category?: string;
+  rejected_reason?: string;
   components?: unknown[];
 }
 
@@ -399,7 +400,7 @@ export async function listWhatsAppTemplates(
   let after: string | null = null;
   for (let page = 0; page < 10; page++) {
     const query = new URLSearchParams({
-      fields: 'id,name,language,status,category,components',
+      fields: 'id,name,language,status,category,rejected_reason,components',
       limit: '100',
     });
     if (after) query.set('after', after);
@@ -413,6 +414,33 @@ export async function listWhatsAppTemplates(
     if (!after) break;
   }
   return { ok: true, data: out };
+}
+
+/** POST /{waba-id}/message_templates: the template goes to Meta's review (PENDING). */
+export function createWhatsAppTemplate(
+  fetchImpl: Fetch,
+  config: WhatsAppConfig & { wabaId: string },
+  template: { name: string; language: string; category: string; components: unknown[] },
+) {
+  return graph<{ id?: string; status?: string; category?: string }>(
+    fetchImpl,
+    config.token,
+    'POST',
+    `/${config.wabaId}/message_templates`,
+    template,
+  );
+}
+
+/** POST /{template-id}: new words go back to Meta's review (at most once a day, 10 times in 30 days). */
+export function editWhatsAppTemplate(
+  fetchImpl: Fetch,
+  config: WhatsAppConfig,
+  metaId: string,
+  components: unknown[],
+) {
+  return graph<{ success?: boolean }>(fetchImpl, config.token, 'POST', `/${metaId}`, {
+    components,
+  });
 }
 
 // --- received files ---------------------------------------------------------------------

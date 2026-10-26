@@ -38,6 +38,7 @@ import { callingOn } from './calling.js';
 import { callPermissionPayload, type WhatsAppConfig } from './graph.js';
 import { officialNumberLive } from './official-number.js';
 import { deliverWhatsApp, type Contact } from './outbox.js';
+import { reasonOf } from './templates.js';
 import { brandOf, callPermissionText, permissionOf } from './thread.js';
 import { applyNumberChange, isSellerNumberChange } from './numbers.js';
 import {
@@ -678,7 +679,7 @@ async function applyStatus(db: Database, update: WaStatusUpdate) {
 async function applyTemplateReview(db: Database, update: WaTemplateUpdate) {
   await db
     .update(waTemplates)
-    .set({ status: update.status, syncedAt: new Date() })
+    .set({ status: update.status, rejectedReason: reasonOf(update.reason), syncedAt: new Date() })
     .where(
       and(
         eq(waTemplates.name, update.name),

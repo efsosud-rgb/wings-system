@@ -52,6 +52,7 @@ import { whatsappImportRoutes } from './modules/whatsapp/import-routes.js';
 import { whatsappNumbersRoutes } from './modules/whatsapp/numbers-routes.js';
 import { whatsappRingingStreamRoutes } from './modules/whatsapp/ringing-stream.js';
 import { whatsappRoutes } from './modules/whatsapp/routes.js';
+import { whatsappTemplateAdminRoutes } from './modules/whatsapp/template-admin-routes.js';
 import { whatsappWebhookRoutes } from './modules/whatsapp/webhook-routes.js';
 import { mediaRoutes } from './modules/media/routes.js';
 import { mediaStudioRoutes } from './modules/media/studio-routes.js';
@@ -349,6 +350,7 @@ export async function buildApp(deps: {
   await app.register(whatsappImportRoutes);
   await app.register(whatsappImportBulkRoutes);
   await app.register(whatsappNumbersRoutes);
+  await app.register(whatsappTemplateAdminRoutes);
   await app.register(whatsappRingingStreamRoutes);
   await app.register(sofiaRoutes);
   await app.register(siteFormRoutes);

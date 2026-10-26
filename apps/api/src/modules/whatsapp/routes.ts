@@ -37,7 +37,6 @@ import {
 import {
   downloadWhatsAppMedia,
   errorText,
-  listWhatsAppTemplates,
   textPayload,
   callPermissionPayload,
   readCallPermission,
@@ -61,9 +60,11 @@ import {
 } from './thread.js';
 import { takeConversation } from '../sofia/state.js';
 import { adoptUnmatched, conversationFor } from './intake.js';
+import { syncTemplates } from './templates.js';
 import {
   payloadOf,
   planTemplateFor,
+  asksCallPermission,
   templateBody,
   templateContextOf,
   type TemplatePlan,
@@ -527,7 +528,12 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       ART_MEDIA_GONE_CODES.has(delivered.errorCode)
     )
       await invalidateArtMedia(db, planned.mediaId, at);
-    if (outcome === 'sent' && outgoing.kind === 'call_permission')
+    // A template with Meta's "Permitir ligações" request asks too.
+    if (
+      outcome === 'sent' &&
+      (outgoing.kind === 'call_permission' ||
+        (planned !== null && asksCallPermission(planned.plan.version)))
+    )
       await db
         .update(waContacts)
         .set({
@@ -779,36 +785,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       .select({ last: max(waTemplates.syncedAt) })
       .from(waTemplates);
     const stale = !last || now().getTime() - last.getTime() > TEMPLATES_FRESH_MS;
-    if (config?.wabaId && (refresh || stale)) {
-      const listed = await listWhatsAppTemplates(fetchImpl(), { ...config, wabaId: config.wabaId });
-      if (listed.ok) {
-        const at = now();
-        for (const t of listed.data) {
-          if (!t.name || !t.language || !t.status) continue;
-          await db
-            .insert(waTemplates)
-            .values({
-              metaId: t.id ?? null,
-              name: t.name,
-              language: t.language,
-              category: t.category ?? null,
-              status: t.status,
-              components: (t.components ?? []) as object[],
-              syncedAt: at,
-            })
-            .onConflictDoUpdate({
-              target: [waTemplates.tenantId, waTemplates.name, waTemplates.language],
-              set: {
-                metaId: t.id ?? null,
-                category: t.category ?? null,
-                status: t.status,
-                components: (t.components ?? []) as object[],
-                syncedAt: at,
-              },
-            });
-        }
-      } else syncError = errorText(listed.code, listed.title);
-    }
+    if (config?.wabaId && (refresh || stale))
+      syncError = await syncTemplates(db, fetchImpl(), { ...config, wabaId: config.wabaId }, now());
     const rows = await db
       .select()
       .from(waTemplates)

@@ -591,6 +591,42 @@ describe('the call-permission text', () => {
   });
 });
 
+describe('a template written on the Modelos screen', () => {
+  const custom = {
+    ...row('lembrete_simples', 'UTILITY', 'Oi, {{1}}! Até {{2}}.', quick('Prefiro uma ligação')),
+    fields: [
+      { role: 'lead' as const, fallback: 'tudo bem' },
+      { role: 'free' as const, label: 'Dia' },
+    ],
+  };
+  const input = base({
+    request: { name: 'lembrete_simples', language: 'pt_BR', params: [], companyArticle: 'a' },
+    templates: [custom],
+    voice: null,
+    defaults: { lead: '', seller: 'Daniele', company: '' },
+  });
+
+  it('fills each {{n}} as saved, the fallback when the CRM has nothing', () => {
+    const plan = ok(input);
+    expect(plan.preview.fields).toMatchObject([
+      { role: 'lead', value: 'tudo bem' },
+      { role: 'free', label: 'Dia', value: '' },
+    ]);
+    // A free field without a fallback is still the seller's to fill.
+    expect(plan.preview.ready).toBe(false);
+  });
+
+  it('with the call-permission request, goes as the template even inside the window', () => {
+    const asking = {
+      ...custom,
+      components: [...(custom.components as object[]), { type: 'CALL_PERMISSION_REQUEST' }],
+    };
+    const plan = ok({ ...input, templates: [asking], window: { open: true, expiresAt: null } });
+    expect(plan.preview.sendAs).toBe('template');
+    expect(plan.preview.reason).toMatch(/permissão para ligar/);
+  });
+});
+
 describe("Meta's refusals in Portuguese", () => {
   it('says the test number only reaches the numbers listed in the app (131030)', () => {
     expect(errorText(131030, 'Recipient phone number not in allowed list')).toMatch(

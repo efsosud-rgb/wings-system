@@ -12,6 +12,7 @@ import {
   withArticle,
   withoutArticle,
   type BrandArticle,
+  type WaFieldSpec,
   type WaTemplateField,
   type WaTemplatePreview,
 } from '@wings/shared';
@@ -54,6 +55,8 @@ export interface TemplateRow {
   language: string;
   category: string | null;
   components: unknown;
+  /** Set on the Modelos screen: what fills each {{n}} and its fallback. */
+  fields?: WaFieldSpec[] | null;
 }
 
 interface Component {
@@ -83,6 +86,13 @@ export function fillTemplate(body: string | null, params: string[]): string | nu
 }
 
 const bodyOf = (row: TemplateRow) => templateBody(row.components);
+
+/** Whether the template carries Meta's "Permitir ligações" request. */
+export const asksCallPermission = (row: Pick<TemplateRow, 'components'>) =>
+  Array.isArray(row.components) &&
+  (row.components as Component[]).some(
+    (c) => c && typeof c === 'object' && c.type?.toUpperCase() === 'CALL_PERMISSION_REQUEST',
+  );
 const headerFormat = (row: TemplateRow) => componentOf(row, 'HEADER')?.format ?? null;
 
 // --- the plan (no database, no Meta) -------------------------------------------------------
@@ -177,7 +187,8 @@ export function planTemplate(input: PlanInput): TemplatePlan {
 
   // The fields: what the seller typed (names without their article), or what the server knows.
   const body = bodyOf(version);
-  const specs = waTemplateFields(version.name, count);
+  const specs =
+    version.fields?.length === count ? version.fields : waTemplateFields(version.name, count);
   const given = request.params.length === count ? request.params : null;
   const fellBack: string[] = [];
   const fields: WaTemplateField[] = specs.map((spec, i) => {
@@ -288,6 +299,8 @@ export function toFreeMessage(
   text: string,
   hasArt: boolean,
 ): FreeMessage | string {
+  if (asksCallPermission(version))
+    return 'Este modelo pede a permissão para ligar, e esse pedido só vai dentro do modelo.';
   const header = componentOf(version, 'HEADER');
   let head: FreeMessage['header'] = null;
   if (header) {
@@ -450,6 +463,7 @@ export async function familyTemplates(
       language: waTemplates.language,
       category: waTemplates.category,
       components: waTemplates.components,
+      fields: waTemplates.fields,
     })
     .from(waTemplates)
     .where(
