@@ -5,6 +5,7 @@ import {
   WINGS_CLIENT_ID,
   templateParamCount,
   waArticleBefore,
+  waFieldFallback,
   waFieldForm,
   waTemplateFamily,
   waTemplateFields,
@@ -178,6 +179,7 @@ export function planTemplate(input: PlanInput): TemplatePlan {
   const body = bodyOf(version);
   const specs = waTemplateFields(version.name, count);
   const given = request.params.length === count ? request.params : null;
+  const fellBack: string[] = [];
   const fields: WaTemplateField[] = specs.map((spec, i) => {
     const locked = spec.role === 'brand' && voice !== null;
     const typed = given?.[i]?.trim() ?? '';
@@ -189,15 +191,23 @@ export function planTemplate(input: PlanInput): TemplatePlan {
           : spec.role === 'company'
             ? input.defaults.company
             : '';
+    const value = given ? typed : known;
+    const label =
+      spec.label ?? (spec.role === 'free' ? `Campo {{${i + 1}}}` : WA_FIELD_LABELS[spec.role]);
+    if (!locked && !value && waFieldFallback(spec))
+      fellBack.push(`${label.toLowerCase()} → "${waFieldFallback(spec)}"`);
     return {
       index: i + 1,
       role: spec.role,
-      label:
-        spec.label ?? (spec.role === 'free' ? `Campo {{${i + 1}}}` : WA_FIELD_LABELS[spec.role]),
-      value: locked ? (voice?.name ?? '') : given ? typed : known,
+      label,
+      value: locked ? (voice?.name ?? '') : value || waFieldFallback(spec),
       locked,
     };
   });
+  if (fellBack.length > 0)
+    notices.push(
+      `Sem dado no CRM, vai o texto padrão: ${fellBack.join(', ')}. Troque no campo, se souber.`,
+    );
   let usesCompanyArticle = false;
   let brandArticleMissing = false;
   const params = fields.map((field, i) => {
@@ -210,7 +220,9 @@ export function planTemplate(input: PlanInput): TemplatePlan {
     }
     if (field.role === 'company') {
       usesCompanyArticle = true;
-      return withArticle(field.value, request.companyArticle, form);
+      // "sua empresa" is feminine whatever the seller ticked: never "o sua empresa".
+      const fallback = field.value === waFieldFallback(specs[i]!);
+      return withArticle(field.value, fallback ? 'a' : request.companyArticle, form);
     }
     if (field.role === 'brand') {
       if (voice && !voice.article) brandArticleMissing = true;

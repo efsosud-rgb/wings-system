@@ -297,6 +297,43 @@ describe('which template goes with the window closed', () => {
     });
   });
 
+  it('a lead without a company goes with "sua empresa", never empty (lead 775262e5, 26/10)', () => {
+    const input = base({
+      request: {
+        name: 'wings_formatacao_boas_vindas',
+        language: 'pt_BR',
+        params: [],
+        companyArticle: 'o',
+      },
+      templates: [T.formatacaoBoasVindas, T.formatacaoBoasVindasArte],
+      voice: null,
+      defaults: { lead: 'Mariana', seller: 'Daniele', company: '' },
+    });
+    const arte = ok(input);
+    expect(arte.preview.ready).toBe(true);
+    expect(arte.preview.fields[2]).toMatchObject({ role: 'company', value: 'sua empresa' });
+    // Feminine even with "o" ticked.
+    expect(arte.preview.text).toContain('transformar a sua empresa em franquia');
+    expect(arte.preview.notices.join(' ')).toContain('empresa do lead → "sua empresa"');
+    // The first version carries the "a" in its text.
+    expect(ok({ ...input, hasArt: false }).preview.text).toContain(
+      'transformar a sua empresa em franquia',
+    );
+    // A seller who clears the field gets the fallback back, never an empty parameter.
+    const cleared = ok({
+      ...input,
+      request: { ...input.request, params: ['Mariana', 'Daniele', ''] },
+    });
+    expect(cleared.params[2]).toBe('a sua empresa');
+    // What the seller types wins.
+    const typed = ok({
+      ...input,
+      request: { ...input.request, params: ['Mariana', 'Daniele', 'Bar do Zé'] },
+    });
+    expect(typed.params[2]).toBe('o Bar do Zé');
+    expect(typed.preview.notices.join(' ')).not.toContain('texto padrão');
+  });
+
   it('puts the company article the seller chose (feminine by default)', () => {
     const input = base({
       request: {

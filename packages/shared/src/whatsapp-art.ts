@@ -140,7 +140,16 @@ export interface WaFieldSpec {
   form?: WaNameForm;
   /** For a free field: what to type ("Dia", "Link da reunião"). */
   label?: string;
+  /** What goes when the CRM has no value, so a missing one never blocks the send (Meta refuses an empty field). */
+  fallback?: string;
 }
+
+/** A lead without a company still gets "transformar a sua empresa em franquia" (Eric, 26/10). */
+export const WA_COMPANY_FALLBACK = 'sua empresa';
+
+/** The fallback of a field: its own, or the role's. */
+export const waFieldFallback = (spec: WaFieldSpec) =>
+  spec.fallback ?? (spec.role === 'company' ? WA_COMPANY_FALLBACK : '');
 
 const lead: WaFieldSpec = { role: 'lead' };
 const seller: WaFieldSpec = { role: 'seller' };

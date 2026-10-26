@@ -367,15 +367,17 @@ function TemplateCompose({
   );
   const previewQuery = useTemplatePreview(thread, input);
   const data = previewQuery.data?.preview;
-  // Only a preview of the chosen template counts, never the previous one shown while this one loads.
-  const preview =
+  // The last preview of the chosen template: its fields stay on screen, and keep the focus, while
+  // the next one loads (the seller typing the company lost it at every pause, 26/10).
+  const shown =
     template &&
     data &&
-    !previewQuery.isPlaceholderData &&
     data.family === waTemplateFamily(template.name) &&
     data.language === template.language
       ? data
       : undefined;
+  // Only a fresh preview can be sent, never the previous one shown while this one loads.
+  const preview = shown && !previewQuery.isPlaceholderData ? shown : undefined;
   const { refetch } = previewQuery;
   // When the window closes, what goes changes (a common message becomes a paid template): ask again.
   const closesAt = preview?.windowExpiresAt ? new Date(preview.windowExpiresAt).getTime() : null;
@@ -384,9 +386,9 @@ function TemplateCompose({
     const timer = setTimeout(() => void refetch(), Math.max(0, closesAt - Date.now()) + 1_000);
     return () => clearTimeout(timer);
   }, [closesAt, refetch]);
-  const art = useWhatsAppArt(thread, Boolean(preview?.withArt));
-  const values = preview
-    ? preview.fields.map((field, i) => (field.locked ? field.value : (typed?.[i] ?? field.value)))
+  const art = useWhatsAppArt(thread, Boolean(shown?.withArt));
+  const values = shown
+    ? shown.fields.map((field, i) => (field.locked ? field.value : (typed?.[i] ?? field.value)))
     : [];
   const ready =
     preview !== undefined &&
@@ -480,14 +482,12 @@ function TemplateCompose({
           {errorText(previewQuery.error, 'Não deu para montar a prévia deste modelo.')}
         </p>
       )}
-      {template && !preview && !previewQuery.isError && (
-        <p className="crm-sub">Montando a prévia…</p>
-      )}
-      {preview && (
+      {template && !shown && !previewQuery.isError && <p className="crm-sub">Montando a prévia…</p>}
+      {shown && (
         <>
-          {preview.fields.length > 0 && (
+          {shown.fields.length > 0 && (
             <div className="crm-wa-fields">
-              {preview.fields.map((field, index) => (
+              {shown.fields.map((field, index) => (
                 <label key={field.index}>
                   {field.label}
                   <input
@@ -510,7 +510,7 @@ function TemplateCompose({
               ))}
             </div>
           )}
-          {preview.usesCompanyArticle && (
+          {shown.usesCompanyArticle && (
             <fieldset className="crm-wa-article">
               <legend className="sr-only">Artigo da empresa</legend>
               <span>Empresa:</span>
@@ -534,18 +534,16 @@ function TemplateCompose({
               </label>
             </fieldset>
           )}
-          <p className={`crm-wa-mode ${preview.charged ? 'is-charged' : 'is-free'}`}>
-            {sendModeText(preview)}
+          <p className={`crm-wa-mode ${shown.charged ? 'is-charged' : 'is-free'}`}>
+            {sendModeText(shown)}
           </p>
-          {preview.reason && (
-            <p className="crm-wa-reason">Por que vai como modelo: {preview.reason}</p>
-          )}
-          {preview.notices.map((notice) => (
+          {shown.reason && <p className="crm-wa-reason">Por que vai como modelo: {shown.reason}</p>}
+          {shown.notices.map((notice) => (
             <p key={notice} className="crm-wa-notice">
               {notice}
             </p>
           ))}
-          {preview.withArt && art.isError && (
+          {shown.withArt && art.isError && (
             <LoadFailure
               what="a arte do cabeçalho"
               error={art.error}
@@ -553,12 +551,12 @@ function TemplateCompose({
             />
           )}
           <div className="crm-wa-card" aria-label="Prévia da mensagem">
-            {preview.withArt && art.data && <img src={art.data.url} alt="Arte do cabeçalho" />}
-            <p className="crm-wa-preview">{preview.text}</p>
-            {preview.footer && <span className="crm-wa-card-footer">{preview.footer}</span>}
-            {preview.buttons.length > 0 && (
+            {shown.withArt && art.data && <img src={art.data.url} alt="Arte do cabeçalho" />}
+            <p className="crm-wa-preview">{shown.text}</p>
+            {shown.footer && <span className="crm-wa-card-footer">{shown.footer}</span>}
+            {shown.buttons.length > 0 && (
               <div className="crm-wa-card-buttons">
-                {preview.buttons.map((title) => (
+                {shown.buttons.map((title) => (
                   <span key={title}>{title}</span>
                 ))}
               </div>
@@ -568,7 +566,7 @@ function TemplateCompose({
       )}
       <div className="crm-wa-compose-actions">
         <button type="submit" className="crm-btn is-primary" disabled={!ready || send.isPending}>
-          {preview?.sendAs === 'free' ? 'Enviar mensagem' : 'Enviar modelo'}
+          {shown?.sendAs === 'free' ? 'Enviar mensagem' : 'Enviar modelo'}
         </button>
         {windowOpen && (
           <button type="button" className="crm-btn is-quiet is-small" onClick={onText}>
