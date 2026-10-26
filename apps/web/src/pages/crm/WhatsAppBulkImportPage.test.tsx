@@ -298,8 +298,11 @@ describe('reading the files', () => {
       [BULK_ID, { fileName: 'Conversa 2.txt', byteSize: chat(2).size, text: CHAT }],
     ]);
     expect(api.get).toHaveBeenCalledWith(BULK_ID);
-    expect(screen.getByTestId('where').textContent).toBe(
-      `/crm-vendas/whatsapp/importar-lote?lote=${BULK_ID}`,
+    // React Router applies the address in a transition, which can land after the last render.
+    await waitFor(() =>
+      expect(screen.getByTestId('where').textContent).toBe(
+        `/crm-vendas/whatsapp/importar-lote?lote=${BULK_ID}`,
+      ),
     );
     expect(
       screen.getByText(/Lote 0a1b2c3d · 2 conversas · 2 a gravar · 0 gravadas\./),

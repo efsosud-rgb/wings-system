@@ -42,6 +42,15 @@ export async function createTestDatabase(): Promise<TestDatabase> {
   const url = testUrl.toString();
 
   const { db, pool } = createDb(url);
+  // pool.end() resolves before its sockets finish closing; a forced drop would then kill them
+  // mid-close, and the late 57P01 is thrown as an unhandled error into whatever test is running.
+  let open = 0;
+  let allClosed = () => {};
+  pool.on('connect', () => (open += 1));
+  pool.on('remove', () => {
+    open -= 1;
+    if (!open) allClosed();
+  });
   await migrate(db, { migrationsFolder: resolve(import.meta.dirname, '../../migrations') });
   await seed(db);
 
@@ -49,7 +58,9 @@ export async function createTestDatabase(): Promise<TestDatabase> {
     db,
     url,
     drop: async () => {
+      const closed = new Promise<void>((resolve) => (allClosed = resolve));
       await pool.end();
+      if (open) await closed;
       const cleanup = new pg.Client({ connectionString: admin });
       await cleanup.connect();
       await cleanup.query(`drop database if exists "${name}" with (force)`);
