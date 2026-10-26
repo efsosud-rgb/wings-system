@@ -240,7 +240,7 @@ export function nameKey(name: string): string {
     .trim();
 }
 
-/** True when the name holds an excluded one as whole words ("Outback Niterói" ← "outback"). */
+/** True when the name holds an excluded one as whole words ("Rede Exemplo Niterói" ← "rede exemplo"). */
 export function excludedName(name: string, excluded: readonly string[]): boolean {
   const key = ` ${nameKey(name)} `;
   return excluded.some((entry) => {
@@ -379,7 +379,16 @@ export const WHATSAPP_OPT_IN_MISSING_TEXT =
 /**
  * A prospecting lead gets WhatsApp from the company number only with the opt-in on record
  * (WhatsApp Business policy): `consent` basis, set when the company said yes in the first contact.
+ * A deal that Criar lead merged into keeps its source, so the answer recorded there
+ * (`consentSource` 'prospeccao') counts too.
  */
-export function whatsappOptInMissing(lead: { source: string; legalBasis: string | null }): boolean {
-  return lead.source === 'google_places' && lead.legalBasis !== 'consent';
+export function whatsappOptInMissing(lead: {
+  source: string;
+  legalBasis: string | null;
+  consentSource: string | null;
+}): boolean {
+  return (
+    (lead.source === 'google_places' || lead.consentSource === 'prospeccao') &&
+    lead.legalBasis !== 'consent'
+  );
 }

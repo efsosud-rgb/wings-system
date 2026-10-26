@@ -1,0 +1,466 @@
+import {
+  PROSPECT_ENRICHMENT_SOURCE,
+  PROSPECT_STATUSES,
+  prospectClaimSchema,
+  prospectEnrichSchema,
+  prospectingIcpSchema,
+  prospectingQuotaSchema,
+  prospectLeadSchema,
+  prospectParseSchema,
+  prospectSearchSchema,
+  prospectUpdateSchema,
+  type ProspectEnrichment,
+  type ProspectEnrichResponse,
+  type ProspectPlaceResponse,
+  type ProspectSearchResponse,
+} from '@wings/shared';
+import { and, eq, notInArray } from 'drizzle-orm';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import { z } from 'zod';
+import { prospects } from '../../db/schema/index.js';
+import { writeAudit } from '../../lib/audit.js';
+import { createOpenRouterLlm, LlmError, type AgentLlm } from '../agent/llm.js';
+import { leadInScope } from '../leads/access.js';
+import { createPlacesClient, PlacesError, type PlacesClient } from './places-client.js';
+import { reserveCalls, usageOf } from './quota.js';
+import {
+  assembleSearch,
+  claimProspect,
+  convertProspect,
+  isProspectingManager,
+  listProspects,
+  parseProspectQuery,
+  prospectingOwners,
+  prospectInReach,
+  searchGoogle,
+  toProspect,
+  updateProspect,
+  type Refusal,
+} from './service.js';
+import { loadProspectingSettings, saveProspectingPart } from './settings.js';
+import { readCompanySite } from './site-reader.js';
+
+/**
+ * CRM Vendas → Prospecção (docs/crm/prospeccao.md). Every route needs
+ * `prospecting.use`: a seller (own) works their own prospects, a manager (all)
+ * sees every one and transfers. Google is called only here, with the key on
+ * the server, each call reserved in the quota first; its answer goes to the
+ * screen and nowhere else. Logs carry Google's error code and status only.
+ */
+
+const idParams = z.object({ id: z.uuid() });
+const leadParams = z.object({ leadId: z.uuid() });
+const listQuery = z.object({
+  status: z.enum(PROSPECT_STATUSES).optional(),
+  owner: z.uuid().optional(),
+});
+
+const GOOGLE_MESSAGES: Partial<Record<PlacesError['code'], string>> = {
+  key_invalid: 'O Google recusou a chave da prospecção. Avise o administrador.',
+  quota_exceeded: 'O Google recusou por limite de uso. Tente de novo mais tarde.',
+};
+
+export const prospectingRoutes: FastifyPluginAsync = async (app) => {
+  const { db, env } = app.wings;
+  const now = () => app.wings.now?.() ?? new Date();
+  const use = { preHandler: app.requirePermission('prospecting.use') };
+  const configure = { preHandler: app.requirePermission('prospecting.configure') };
+  const quota = { preHandler: app.requirePermission('prospecting.quota') };
+  // Criar lead also needs leads.write, as POST /leads: Diretoria reads every deal but creates none.
+  const createLead = {
+    preHandler: [app.requirePermission('prospecting.use'), app.requirePermission('leads.write')],
+  };
+
+  /** Null while the key is missing: the routes that call Google then answer 503. */
+  const places: PlacesClient | null = env.GOOGLE_PLACES_API_KEY
+    ? createPlacesClient({ apiKey: env.GOOGLE_PLACES_API_KEY, fetchImpl: app.wings.placesFetch })
+    : null;
+  const llm: AgentLlm | null =
+    app.wings.agentLlm ??
+    (env.OPENROUTER_API_KEY ? createOpenRouterLlm({ apiKey: env.OPENROUTER_API_KEY }) : null);
+
+  const notConfigured = (reply: FastifyReply) =>
+    reply
+      .status(503)
+      .send({ error: 'places_not_configured', message: 'Chave do Google não configurada.' });
+  const notFound = (reply: FastifyReply) =>
+    reply.status(404).send({ error: 'not_found', message: 'Prospect não encontrado.' });
+  const invalid = (reply: FastifyReply, error: z.ZodError) =>
+    reply.status(400).send({
+      error: 'invalid',
+      message: error.issues[0]?.message ?? 'Pedido inválido.',
+      path: error.issues[0]?.path.join('.'),
+    });
+  const refused = (reply: FastifyReply, outcome: Refusal) =>
+    reply.status(outcome.status).send({ error: outcome.error, message: outcome.message });
+  const overQuota = (reply: FastifyReply, message: string) =>
+    reply.status(429).send({ error: 'prospecting_quota', message });
+  /** Google failed: its code and status in the log, never its text, the key or the URL. */
+  const googleFailed = (request: FastifyRequest, reply: FastifyReply, error: unknown) => {
+    if (!(error instanceof PlacesError)) throw error;
+    request.log.warn({ code: error.code, status: error.status }, 'prospecting: Google call failed');
+    return reply.status(502).send({
+      error: `places_${error.code}`,
+      message:
+        GOOGLE_MESSAGES[error.code] ?? 'O Google não respondeu agora. Tente de novo em instantes.',
+    });
+  };
+
+  /** One ficha (Place Details): reserved, called once, never stored. */
+  async function placeAnswer(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    client: PlacesClient,
+    placeId: string,
+    onNotFound?: () => Promise<void>,
+  ) {
+    const at = now();
+    const employeeId = request.session.actor.employeeId;
+    const reserved = await reserveCalls(db, {
+      employeeId,
+      kind: 'details',
+      count: 1,
+      queryText: null,
+      locations: [],
+      now: at,
+    });
+    if (!reserved.ok) return overQuota(reply, reserved.message);
+    let place: Awaited<ReturnType<PlacesClient['details']>>;
+    try {
+      place = await client.details(placeId);
+    } catch (error) {
+      return googleFailed(request, reply, error);
+    }
+    if (!place) await onNotFound?.();
+    const usage = await usageOf(db, employeeId, at);
+    // Google's ficha lives on the screen only: no browser or proxy cache keeps it.
+    return reply.header('Cache-Control', 'no-store').send(
+      (place
+        ? { found: true, place, usage }
+        : {
+            found: false,
+            message: 'Não encontrado no Google.',
+            usage,
+          }) satisfies ProspectPlaceResponse,
+    );
+  }
+
+  // --- state of the screen ----------------------------------------------------------------
+
+  app.get('/prospecting/status', use, async (_request, reply) =>
+    reply.send({ configured: places !== null, aiConfigured: llm !== null }),
+  );
+
+  app.get('/prospecting/usage', use, async (request, reply) =>
+    reply.send(await usageOf(db, request.session.actor.employeeId, now())),
+  );
+
+  app.get('/prospecting/owners', use, async (request, reply) => {
+    const owners = await prospectingOwners(db);
+    // A seller transfers nothing: only their own name.
+    const actor = request.session.actor;
+    return reply.send(
+      isProspectingManager(actor) ? owners : owners.filter((o) => o.id === actor.employeeId),
+    );
+  });
+
+  // --- settings ---------------------------------------------------------------------------
+
+  app.get('/prospecting/settings', use, async (_request, reply) =>
+    reply.send(await loadProspectingSettings(db)),
+  );
+
+  app.put('/prospecting/settings/icp', configure, async (request, reply) => {
+    const body = prospectingIcpSchema.safeParse(request.body);
+    if (!body.success) return invalid(reply, body.error);
+    const before = await loadProspectingSettings(db);
+    const actor = request.session.actor.employeeId;
+    await saveProspectingPart(db, 'icp', body.data, actor, now());
+    await writeAudit(db, {
+      actorEmployeeId: actor,
+      action: 'prospecting.icp_changed',
+      entity: 'prospecting_settings',
+      ip: request.ip,
+      metadata: {
+        changed: Object.keys(body.data.weights).filter(
+          (key) =>
+            before.icp.weights[key as keyof typeof before.icp.weights] !==
+            body.data.weights[key as keyof typeof body.data.weights],
+        ),
+        weights: body.data.weights,
+        excludedCount: body.data.excludedNames.length,
+        excludedCountBefore: before.icp.excludedNames.length,
+      },
+    });
+    return reply.send(await loadProspectingSettings(db));
+  });
+
+  app.put('/prospecting/settings/quota', quota, async (request, reply) => {
+    const body = prospectingQuotaSchema.safeParse(request.body);
+    if (!body.success) return invalid(reply, body.error);
+    const before = await loadProspectingSettings(db);
+    const actor = request.session.actor.employeeId;
+    await saveProspectingPart(db, 'quota', body.data, actor, now());
+    await writeAudit(db, {
+      actorEmployeeId: actor,
+      action: 'prospecting.quota_changed',
+      entity: 'prospecting_settings',
+      ip: request.ip,
+      metadata: { from: before.quota, to: body.data },
+    });
+    return reply.send(await loadProspectingSettings(db));
+  });
+
+  // --- the AI and the search -------------------------------------------------------------
+
+  app.post('/prospecting/parse', use, async (request, reply) => {
+    if (!llm)
+      return reply
+        .status(503)
+        .send({ error: 'ai_unavailable', message: 'A IA não está configurada neste ambiente.' });
+    const body = prospectParseSchema.safeParse(request.body);
+    if (!body.success) return invalid(reply, body.error);
+    let query: Awaited<ReturnType<typeof parseProspectQuery>>;
+    try {
+      query = await parseProspectQuery(llm, body.data.text);
+    } catch (error) {
+      if (!(error instanceof LlmError)) throw error;
+      return reply.status(502).send({
+        error: 'ai_failed',
+        message: 'A IA não respondeu agora. Tente de novo em instantes.',
+      });
+    }
+    if (!query)
+      return reply.status(502).send({
+        error: 'ai_failed',
+        message: 'A IA não entendeu o pedido. Preencha o formulário.',
+      });
+    return reply.send(query);
+  });
+
+  app.post('/prospecting/search', use, async (request, reply) => {
+    if (!places) return notConfigured(reply);
+    const body = prospectSearchSchema.safeParse(request.body);
+    if (!body.success) return invalid(reply, body.error);
+    // A place twice is one call: never billed twice.
+    const input = { ...body.data, places: [...new Set(body.data.places)] };
+    const calls = input.places.length;
+    if (calls > 1 && input.confirmCalls !== calls)
+      return reply.status(400).send({
+        error: 'confirm_calls',
+        calls,
+        message: `Confirme as ${calls} chamadas antes da varredura.`,
+      });
+    const actor = request.session.actor;
+    const at = now();
+    const reserved = await reserveCalls(db, {
+      employeeId: actor.employeeId,
+      kind: 'search',
+      count: calls,
+      queryText: input.segment,
+      locations: input.places,
+      now: at,
+    });
+    if (!reserved.ok) return overQuota(reply, reserved.message);
+    let answer: Awaited<ReturnType<typeof searchGoogle>>;
+    try {
+      answer = await searchGoogle(places, input);
+    } catch (error) {
+      return googleFailed(request, reply, error);
+    }
+    const settings = await loadProspectingSettings(db);
+    let assembled: Awaited<ReturnType<typeof assembleSearch>>;
+    try {
+      assembled = await assembleSearch(db, actor, answer, input, settings.icp);
+    } catch (error) {
+      // A failed query's message carries its parameters (Google's phones): only the code is kept.
+      request.log.error(
+        { code: (error as { cause?: { code?: string } }).cause?.code },
+        'prospecting: joining the results failed',
+      );
+      return reply.status(500).send({
+        error: 'search_failed',
+        message: 'Não foi possível cruzar os resultados agora. Tente de novo.',
+      });
+    }
+    const { items, hidden } = assembled;
+    return reply.send({
+      items,
+      nextPageToken: answer.nextPageToken,
+      page: input.page,
+      callsSpent: calls,
+      hidden,
+      usage: await usageOf(db, actor.employeeId, at),
+    } satisfies ProspectSearchResponse);
+  });
+
+  // --- prospects (our data) ----------------------------------------------------------------
+
+  app.get('/prospecting/prospects', use, async (request, reply) => {
+    const query = listQuery.safeParse(request.query ?? {});
+    if (!query.success) return invalid(reply, query.error);
+    return reply.send(await listProspects(db, request.session.actor, query.data));
+  });
+
+  app.post('/prospecting/prospects', use, async (request, reply) => {
+    const body = prospectClaimSchema.safeParse(request.body);
+    if (!body.success) return invalid(reply, body.error);
+    const actor = request.session.actor;
+    const outcome = await claimProspect(db, actor, body.data, now());
+    if (!outcome.ok) return refused(reply, outcome);
+    if (outcome.created || outcome.previousStatus !== outcome.prospect.status)
+      await writeAudit(db, {
+        actorEmployeeId: actor.employeeId,
+        action: body.data.action === 'reserve' ? 'prospect.reserved' : 'prospect.discarded',
+        entity: 'prospect',
+        entityId: outcome.prospect.id,
+        ip: request.ip,
+        metadata: { status: outcome.prospect.status, previousStatus: outcome.previousStatus },
+      });
+    return reply.status(outcome.created ? 201 : 200).send(outcome.prospect);
+  });
+
+  app.patch('/prospecting/prospects/:id', use, async (request, reply) => {
+    const params = idParams.safeParse(request.params);
+    if (!params.success) return notFound(reply);
+    const body = prospectUpdateSchema.safeParse(request.body);
+    if (!body.success) return invalid(reply, body.error);
+    const actor = request.session.actor;
+    const found = await prospectInReach(db, actor, params.data.id);
+    if (!found) return notFound(reply);
+    const outcome = await updateProspect(db, actor, found.row, body.data, now());
+    if (!outcome.ok) return refused(reply, outcome);
+    const { prospect, previous } = outcome;
+    if (prospect.status !== previous.status)
+      await writeAudit(db, {
+        actorEmployeeId: actor.employeeId,
+        action: 'prospect.status_changed',
+        entity: 'prospect',
+        entityId: prospect.id,
+        ip: request.ip,
+        metadata: { from: previous.status, to: prospect.status },
+      });
+    if (prospect.ownerEmployeeId !== previous.ownerEmployeeId)
+      await writeAudit(db, {
+        actorEmployeeId: actor.employeeId,
+        action: 'prospect.transferred',
+        entity: 'prospect',
+        entityId: prospect.id,
+        targetEmployeeId: prospect.ownerEmployeeId ?? undefined,
+        ip: request.ip,
+        metadata: {
+          from: previous.ownerEmployeeId,
+          to: prospect.ownerEmployeeId,
+          status: prospect.status,
+        },
+      });
+    return reply.send(prospect);
+  });
+
+  /** Abrir ficha: the live details of a saved prospect (1 ficha of the month). */
+  app.get('/prospecting/prospects/:id/place', use, async (request, reply) => {
+    if (!places) return notConfigured(reply);
+    const params = idParams.safeParse(request.params);
+    if (!params.success) return notFound(reply);
+    const actor = request.session.actor;
+    const found = await prospectInReach(db, actor, params.data.id);
+    if (!found) return notFound(reply);
+    const { row } = found;
+    return placeAnswer(request, reply, places, row.placeId, async () => {
+      // A converted prospect and a "do not contact" keep their status, checked in SQL (not on the
+      // row read before Google answered): the lead, or the company's refusal, is what matters.
+      const [changed] = await db
+        .update(prospects)
+        .set({ status: 'nao_encontrado', updatedAt: now() })
+        .where(
+          and(
+            eq(prospects.id, row.id),
+            notInArray(prospects.status, ['virou_lead', 'nao_contatar']),
+          ),
+        )
+        .returning({ id: prospects.id });
+      if (!changed) return;
+      await writeAudit(db, {
+        actorEmployeeId: actor.employeeId,
+        action: 'prospect.not_found',
+        entity: 'prospect',
+        entityId: row.id,
+        ip: request.ip,
+        metadata: { previousStatus: row.status },
+      });
+    });
+  });
+
+  /** The lead card's "Dados do Google (ao vivo)", loaded on a click (1 ficha). */
+  app.get('/prospecting/leads/:leadId/place', use, async (request, reply) => {
+    if (!places) return notConfigured(reply);
+    const params = leadParams.safeParse(request.params);
+    if (!params.success) return notFound(reply);
+    const lead = await leadInScope(db, request.session.actor, params.data.leadId, 'leads.read');
+    if (!lead?.googlePlaceId)
+      return reply
+        .status(404)
+        .send({ error: 'not_found', message: 'Esta negociação não veio da prospecção.' });
+    return placeAnswer(request, reply, places, lead.googlePlaceId);
+  });
+
+  app.post('/prospecting/prospects/:id/enrich', use, async (request, reply) => {
+    const params = idParams.safeParse(request.params);
+    if (!params.success) return notFound(reply);
+    const body = prospectEnrichSchema.safeParse(request.body);
+    if (!body.success) return invalid(reply, body.error);
+    const actor = request.session.actor;
+    const found = await prospectInReach(db, actor, params.data.id);
+    if (!found) return notFound(reply);
+    const reading = await readCompanySite(body.data.website, app.wings.siteTransport);
+    const at = now();
+    const enrichment: ProspectEnrichment = {
+      ...(found.row.enrichment as ProspectEnrichment),
+      ...Object.fromEntries(
+        Object.entries(reading.found).map(([key, value]) => [
+          key,
+          { value, source: PROSPECT_ENRICHMENT_SOURCE, at: at.toISOString() },
+        ]),
+      ),
+    };
+    const [updated] = await db
+      .update(prospects)
+      .set({ enrichment, updatedAt: at })
+      .where(eq(prospects.id, found.row.id))
+      .returning();
+    await writeAudit(db, {
+      actorEmployeeId: actor.employeeId,
+      action: 'prospect.enriched',
+      entity: 'prospect',
+      entityId: found.row.id,
+      ip: request.ip,
+      metadata: { found: Object.keys(reading.found), pagesRead: reading.pagesRead },
+    });
+    return reply.send({
+      prospect: toProspect(updated!, found.ownerName, actor),
+      pagesRead: reading.pagesRead,
+      skipped: reading.skipped,
+    } satisfies ProspectEnrichResponse);
+  });
+
+  app.post('/prospecting/prospects/:id/lead', createLead, async (request, reply) => {
+    const params = idParams.safeParse(request.params);
+    if (!params.success) return notFound(reply);
+    const body = prospectLeadSchema.safeParse(request.body);
+    if (!body.success) return invalid(reply, body.error);
+    const actor = request.session.actor;
+    const found = await prospectInReach(db, actor, params.data.id);
+    if (!found) return notFound(reply);
+    const outcome = await convertProspect(db, actor, found.row, body.data, now());
+    if (!outcome.ok) return refused(reply, outcome);
+    await writeAudit(db, {
+      actorEmployeeId: actor.employeeId,
+      action: 'prospect.converted',
+      entity: 'prospect',
+      entityId: found.row.id,
+      ip: request.ip,
+      metadata: { leadId: outcome.leadId, created: outcome.created },
+    });
+    return reply.status(outcome.created ? 201 : 200).send({ leadId: outcome.leadId });
+  });
+};

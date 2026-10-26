@@ -20,9 +20,12 @@ import {
   normalizeInstagram,
   normalizeWebsite,
   type LeadCheck,
+  WHATSAPP_OPT_IN_MISSING_TEXT,
+  whatsappOptInMissing,
 } from '@wings/shared';
 import {
   Fragment,
+  useId,
   useImperativeHandle,
   useRef,
   useState,
@@ -76,6 +79,7 @@ import {
   waMeUrl,
 } from './format.js';
 import { EnteredAt } from './EnteredAt.js';
+import { GooglePlacePanel } from './GooglePlacePanel.js';
 
 /**
  * The deal's page: who and how much on top, the stage bar you click, win or
@@ -86,6 +90,16 @@ import { EnteredAt } from './EnteredAt.js';
 
 const errorText = (error: unknown, fallback: string) =>
   error instanceof ApiError ? error.message : fallback;
+
+/** A prospecting lead without the WhatsApp opt-in on record: why the card offers no WhatsApp (the API refuses it too). */
+export const noWhatsAppOf = (lead: Lead): string | null =>
+  whatsappOptInMissing({
+    source: lead.origin.source,
+    legalBasis: lead.consent.legalBasis,
+    consentSource: lead.consent.source,
+  })
+    ? WHATSAPP_OPT_IN_MISSING_TEXT
+    : null;
 
 export function DealPage() {
   const { id } = useParams<{ id: string }>();
@@ -177,6 +191,7 @@ export function DealPage() {
             name={data.lead.name}
             phone={data.lead.phone}
             canWrite={canWrite}
+            noWhatsApp={noWhatsAppOf(data.lead)}
             onClose={() => setCalling(false)}
           />
         )}
@@ -184,6 +199,9 @@ export function DealPage() {
           <div className="crm-stack">
             <AboutPanel lead={data.lead} canWrite={canWrite} canAssign={canAssign} />
             <OriginPanel lead={data.lead} />
+            {data.lead.googlePlaceId && hasPermission(session.data, 'prospecting.use') && (
+              <GooglePlacePanel leadId={data.lead.id} />
+            )}
             <FormFieldsPanel lead={data.lead} canWrite={canWrite} />
             <CompanyResearchPanel
               research={data.lead.research}
@@ -577,7 +595,15 @@ function DealName({ lead, canWrite }: { lead: Lead; canWrite: boolean }) {
   );
 }
 
-type Action = { tab: Tab; icon: IconName; label: string; soon?: string; href?: string };
+type Action = {
+  tab: Tab;
+  icon: IconName;
+  label: string;
+  /** Why the action is off; `tag` is its small print, "em breve" by default. */
+  soon?: string;
+  tag?: string;
+  href?: string;
+};
 const ACTIONS: Action[] = [
   { tab: 'note', icon: 'edit', label: 'Anotação' },
   { tab: 'email', icon: 'mail', label: 'E-mail' },
@@ -605,9 +631,15 @@ function ActionBar({
 }) {
   const [more, setMore] = useState(false);
   const whatsappSoon = useWhatsAppSoon();
+  const noWhatsApp = noWhatsAppOf(lead);
+  const actions = noWhatsApp
+    ? ACTIONS.map((action) =>
+        action.href ? { ...action, href: undefined, soon: noWhatsApp, tag: 'sem aceite' } : action,
+      )
+    : ACTIONS;
   return (
     <div className="crm-actions" role="toolbar" aria-label="Ações">
-      {ACTIONS.map((action) =>
+      {actions.map((action) =>
         action.href ? (
           <Link
             key={action.tab}
@@ -629,14 +661,16 @@ function ActionBar({
             className={`crm-action${active === action.tab ? ' is-active' : ''}`}
             disabled={Boolean(action.soon)}
             title={action.soon}
-            aria-label={action.soon ? `${action.label} (em breve)` : action.label}
+            aria-label={
+              action.soon ? `${action.label} (${action.tag ?? 'em breve'})` : action.label
+            }
             onClick={() => onAct(action.tab)}
           >
             <span className="crm-action-icon" aria-hidden="true">
               <Icon name={action.icon} size={18} />
             </span>
             <span>{action.label}</span>
-            {action.soon && <small>em breve</small>}
+            {action.soon && <small>{action.tag ?? 'em breve'}</small>}
           </button>
         ),
       )}
@@ -1116,14 +1150,18 @@ function Reach({
   leadId,
   name,
   canWrite,
+  noWhatsApp,
 }: {
   phone: string | null;
   email: string | null;
   leadId: string;
   name: string | null;
   canWrite: boolean;
+  /** Why WhatsApp is off for this lead (no opt-in); null when it is not. */
+  noWhatsApp: string | null;
 }) {
   const [calling, setCalling] = useState(false);
+  const reasonId = useId();
   return (
     <div className="crm-reach">
       {phone && (
@@ -1139,25 +1177,58 @@ function Reach({
           >
             <Icon name="phone" size={13} />
           </button>
-          <Link
-            className="crm-btn is-small is-quiet"
-            to={`/crm-vendas/negociacoes/${leadId}/whatsapp`}
-            title="Abrir a conversa do WhatsApp"
-            aria-label="Conversa do WhatsApp"
-          >
-            <Icon name="message" size={13} />
-          </Link>
-          <a
-            className="crm-btn is-small is-quiet"
-            href={waMeUrl(phone)}
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Abrir no WhatsApp do vendedor"
-            aria-label="Abrir no WhatsApp do vendedor"
-          >
-            <Icon name="external" size={13} />
-          </a>
+          {noWhatsApp ? (
+            <>
+              {/* aria-disabled, not disabled: still focusable, the reason read out and shown below. */}
+              <button
+                type="button"
+                className="crm-btn is-small is-quiet"
+                aria-disabled="true"
+                aria-describedby={reasonId}
+                title={noWhatsApp}
+                aria-label="Conversa do WhatsApp (sem aceite)"
+              >
+                <Icon name="message" size={13} />
+              </button>
+              <button
+                type="button"
+                className="crm-btn is-small is-quiet"
+                aria-disabled="true"
+                aria-describedby={reasonId}
+                title={noWhatsApp}
+                aria-label="Abrir no WhatsApp do vendedor (sem aceite)"
+              >
+                <Icon name="external" size={13} />
+              </button>
+            </>
+          ) : (
+            <>
+              <Link
+                className="crm-btn is-small is-quiet"
+                to={`/crm-vendas/negociacoes/${leadId}/whatsapp`}
+                title="Abrir a conversa do WhatsApp"
+                aria-label="Conversa do WhatsApp"
+              >
+                <Icon name="message" size={13} />
+              </Link>
+              <a
+                className="crm-btn is-small is-quiet"
+                href={waMeUrl(phone)}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Abrir no WhatsApp do vendedor"
+                aria-label="Abrir no WhatsApp do vendedor"
+              >
+                <Icon name="external" size={13} />
+              </a>
+            </>
+          )}
         </span>
+      )}
+      {phone && noWhatsApp && (
+        <small id={reasonId} className="crm-sub">
+          {noWhatsApp}
+        </small>
       )}
       {email && (
         <span>
@@ -1171,6 +1242,7 @@ function Reach({
           name={name}
           phone={phone}
           canWrite={canWrite}
+          noWhatsApp={noWhatsApp}
           onClose={() => setCalling(false)}
         />
       )}
@@ -1222,6 +1294,7 @@ function ContactPanel({
             leadId={lead.id}
             name={lead.name}
             canWrite={canWrite}
+            noWhatsApp={noWhatsAppOf(lead)}
           />
         </div>
       )}
@@ -1249,6 +1322,7 @@ function ContactPanel({
             leadId={lead.id}
             name={contact.name}
             canWrite={canWrite}
+            noWhatsApp={noWhatsAppOf(lead)}
           />
         </div>
       ))}

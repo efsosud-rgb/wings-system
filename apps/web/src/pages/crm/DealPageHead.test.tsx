@@ -91,6 +91,7 @@ const lead = (over: Omit<Partial<Lead>, 'work'> & { work?: Partial<Lead['work']>
   contacts: [],
   crm: null,
   consent: { legalBasis: null, consentedAt: null, source: null, text: null },
+  googlePlaceId: null,
   fields: { instagram: null, website: null, companyName: null, cnpj: null },
   checks: {},
   aiSummary: null,

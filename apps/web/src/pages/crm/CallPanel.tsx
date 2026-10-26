@@ -31,12 +31,15 @@ export function CallPanel({
   name,
   phone,
   canWrite,
+  noWhatsApp = null,
   onClose,
 }: {
   leadId: string;
   name: string | null;
   phone: string | null;
   canWrite: boolean;
+  /** Why WhatsApp is off for this lead (a prospecting lead without the opt-in). */
+  noWhatsApp?: string | null;
   onClose: () => void;
 }) {
   const center = useWhatsAppCallCenter();
@@ -67,7 +70,14 @@ export function CallPanel({
             <div className="crm-call-number">{phone ? formatPhone(phone) : 'Sem telefone'}</div>
           </div>
         </div>
-        {soon ? (
+        {noWhatsApp ? (
+          <>
+            <button type="button" className="crm-btn is-primary" disabled title={noWhatsApp}>
+              <Icon name="message" size={15} /> Ligar pelo WhatsApp
+            </button>
+            <p className="crm-sub">{noWhatsApp}</p>
+          </>
+        ) : soon ? (
           <>
             <button
               type="button"
@@ -97,9 +107,20 @@ export function CallPanel({
         )}
         {phone && (
           <div className="crm-call-ways">
-            <a className="crm-btn" href={waMeUrl(phone)} target="_blank" rel="noopener noreferrer">
-              Abrir no WhatsApp do vendedor
-            </a>
+            {noWhatsApp ? (
+              <button type="button" className="crm-btn" disabled title={noWhatsApp}>
+                Abrir no WhatsApp do vendedor
+              </button>
+            ) : (
+              <a
+                className="crm-btn"
+                href={waMeUrl(phone)}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Abrir no WhatsApp do vendedor
+              </a>
+            )}
             <CopyNumber phone={phone} />
           </div>
         )}

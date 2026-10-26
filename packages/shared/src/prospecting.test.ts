@@ -53,8 +53,8 @@ describe('icpScore', () => {
 describe('names', () => {
   it('compares without case or accents, by whole words', () => {
     expect(nameKey('  Açaí da Esquina!! ')).toBe('acai da esquina');
-    expect(excludedName('Outback Steakhouse - Niterói', ['outback'])).toBe(true);
-    expect(excludedName('Bobs Burger', ['bob'])).toBe(false);
+    expect(excludedName('Rede Exemplo Burger - Niterói', ['rede exemplo'])).toBe(true);
+    expect(excludedName('Lanches Exemplos', ['exemplo'])).toBe(false);
     expect(excludedName('Qualquer', ['  '])).toBe(false);
   });
 });
@@ -96,10 +96,13 @@ describe('schemas', () => {
 
 describe('whatsappOptInMissing', () => {
   it('blocks only a prospecting lead without consent', () => {
-    expect(
-      whatsappOptInMissing({ source: 'google_places', legalBasis: 'legitimate_interest' }),
-    ).toBe(true);
-    expect(whatsappOptInMissing({ source: 'google_places', legalBasis: 'consent' })).toBe(false);
-    expect(whatsappOptInMissing({ source: 'site_form', legalBasis: null })).toBe(false);
+    const lead = (source: string, legalBasis: string | null, consentSource: string | null) =>
+      whatsappOptInMissing({ source, legalBasis, consentSource });
+    expect(lead('google_places', 'legitimate_interest', 'prospeccao')).toBe(true);
+    expect(lead('google_places', 'consent', 'prospeccao')).toBe(false);
+    expect(lead('site_form', null, null)).toBe(false);
+    expect(lead('site_form', 'consent', 'site_form:x')).toBe(false);
+    // A deal Criar lead merged into: the "não" recorded there counts, whatever its source.
+    expect(lead('manual', 'legitimate_interest', 'prospeccao')).toBe(true);
   });
 });

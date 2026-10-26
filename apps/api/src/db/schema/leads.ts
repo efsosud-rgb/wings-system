@@ -159,6 +159,8 @@ export const leads = pgTable(
     conversionIdentifier: text('conversion_identifier'),
     /** The import run that created this lead (`leads-import-rd`), so one run can be undone alone. */
     importBatchId: text('import_batch_id'),
+    /** The Google Maps place a Prospecção lead came from: only the id, the rest is read live. */
+    googlePlaceId: text('google_place_id'),
     /**
      * The deal's AI summary (ficha do cliente, Etapa 4): `{ text, generatedAt,
      * model, basedOn: { events, answers } }`, made only from the timeline and
@@ -232,6 +234,7 @@ export const leads = pgTable(
     index('leads_company_idx').on(table.companyId),
     index('leads_created_idx').on(table.createdAt),
     index('leads_entered_idx').on(table.enteredAt),
+    index('leads_google_place_idx').on(table.tenantId, table.googlePlaceId),
   ],
 );
 

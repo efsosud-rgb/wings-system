@@ -1,6 +1,6 @@
-import type { Actor } from '@wings/shared';
+import { whatsappOptInMissing, type Actor } from '@wings/shared';
 import { WINGS_TENANT_ID } from '../../db/schema/ads.js';
-import { whatsappSettings } from '../../db/schema/index.js';
+import { leads, whatsappSettings } from '../../db/schema/index.js';
 import type { Database } from '../../db/client.js';
 import { eq } from 'drizzle-orm';
 import { leadOwnerFilter } from '../leads/access.js';
@@ -26,6 +26,19 @@ export const SELLER_SOON_MESSAGE =
  */
 export async function sellerWhatsAppLocked(db: Database, actor: Actor): Promise<boolean> {
   return leadOwnerFilter(actor, 'leads.whatsapp') !== undefined && !(await officialNumberLive(db));
+}
+
+/**
+ * A Prospecção lead without the WhatsApp opt-in on record (`whatsappOptInMissing`): nothing goes
+ * to it from the system's number, neither a message, a template nor a call (docs/crm/prospeccao.md).
+ */
+export async function leadOptInMissing(db: Database, leadId: string | null): Promise<boolean> {
+  if (!leadId) return false;
+  const lead = await db.query.leads.findFirst({
+    where: eq(leads.id, leadId),
+    columns: { source: true, legalBasis: true, consentSource: true },
+  });
+  return lead ? whatsappOptInMissing(lead) : false;
 }
 
 /** Switches it, on the day the number is swapped: no deploy, one row. */

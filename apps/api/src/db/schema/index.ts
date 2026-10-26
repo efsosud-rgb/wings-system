@@ -19,6 +19,7 @@ export * from './meta-forms.js';
 export * from './meta-leads.js';
 export * from './org.js';
 export * from './projects.js';
+export * from './prospecting.js';
 export * from './roadmap.js';
 export * from './sessions.js';
 export * from './timeclock.js';
