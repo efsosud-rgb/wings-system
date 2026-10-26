@@ -680,6 +680,13 @@
       "when": 1793036092766,
       "tag": "0098_wa_central",
       "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1793040315362,
+      "tag": "0101_wa_attendance",
+      "breakpoints": true
     }
   ]
 }
