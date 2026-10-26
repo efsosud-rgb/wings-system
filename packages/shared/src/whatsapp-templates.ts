@@ -31,6 +31,8 @@ export const WA_TEMPLATE_STATUS_LABELS: Record<string, string> = {
 
 const fieldSchema = z.object({
   role: z.enum(WA_FIELD_ROLES),
+  /** How a brand or company name enters ("da Malkuth"): kept, or the art versions lose their article. */
+  form: z.enum(['plain', 'article', 'of']).optional(),
   label: z.string().trim().max(60).optional(),
   fallback: z.string().trim().max(60).optional(),
 });

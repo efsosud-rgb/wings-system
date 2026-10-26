@@ -15,6 +15,11 @@ import type {
   WaTemplatePreview,
   WaRingingSnapshot,
   WaTemplateSend,
+  WaFieldSpec,
+  WaManagedTemplate,
+  WaManagedTemplates,
+  WaTemplateCreate,
+  WaTemplateEdit,
 } from '@wings/shared';
 import { waExportChatOf } from '@wings/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -162,6 +167,38 @@ export function useRefreshWhatsAppTemplates() {
     onSuccess: (data) => queryClient.setQueryData(['whatsapp', 'templates'], data),
   });
 }
+
+/** CRM Vendas → WhatsApp → Modelos (docs/whatsapp/modelos.md): every template, read again from Meta. */
+export function useManagedTemplates() {
+  return useQuery({
+    queryKey: ['whatsapp', 'templates', 'manage'],
+    queryFn: () => api.get<WaManagedTemplates>('/whatsapp/templates/manage'),
+  });
+}
+
+function useTemplateWrite<T>(write: (input: T) => Promise<{ template: WaManagedTemplate }>) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: write,
+    // The prefix covers this screen's list and the sellers' list of approved templates.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['whatsapp', 'templates'] }),
+  });
+}
+
+export const useCreateTemplate = () =>
+  useTemplateWrite((input: WaTemplateCreate) => api.post('/whatsapp/templates/manage', input));
+
+/** New words go back to Meta's review. */
+export const useEditTemplate = () =>
+  useTemplateWrite(({ id, ...input }: WaTemplateEdit & { id: string }) =>
+    api.put(`/whatsapp/templates/manage/${id}`, input),
+  );
+
+/** Only what fills each {{n}}: stays in the system, Meta sees nothing. */
+export const useSaveTemplateFields = () =>
+  useTemplateWrite(({ id, fields }: { id: string; fields: WaFieldSpec[] }) =>
+    api.put(`/whatsapp/templates/manage/${id}/fields`, { fields }),
+  );
 
 function useSend<T>(thread: WhatsAppThread, kind: 'text' | 'template') {
   const queryClient = useQueryClient();

@@ -309,16 +309,17 @@ describe('the Modelos screen', () => {
       payload: {
         fields: [
           { role: 'lead', fallback: 'tudo bem' },
-          { role: 'free', label: 'Dia' },
+          { role: 'company', form: 'of', fallback: 'sua empresa' },
         ],
       },
     });
     expect(saved.statusCode).toBe(200);
     expect(calls).toHaveLength(0);
     const [stored] = await db.select().from(waTemplates).where(eq(waTemplates.id, row!.id));
+    // The name's form stays: an art version keeps "da Malkuth".
     expect(stored?.fields).toEqual([
       { role: 'lead', fallback: 'tudo bem' },
-      { role: 'free', label: 'Dia' },
+      { role: 'company', form: 'of', fallback: 'sua empresa' },
     ]);
     const wrong = await app.inject({
       method: 'PUT',
