@@ -29,28 +29,29 @@ what, and both the API and the screen read it:
 department (Projects); `sector` = the person's own sector. Formatação is the six sub-levels (Jurídico,
 Financeiro, Processos e Projetos, Contábil/Tributário, Logística, TI).
 
-| Module → screen                         | Admin Master | Diretoria         | RH/DP | Gerente Comercial | Marketing | Formatação                    | Vendedor Expansão | Vendedor Formatação |
-| --------------------------------------- | ------------ | ----------------- | ----- | ----------------- | --------- | ----------------------------- | ----------------- | ------------------- |
-| Início                                  | yes          | yes               | yes   | yes               | yes       | yes                           | yes               | yes                 |
-| CRM Vendas (deals, WhatsApp, contacts…) | all          | all, no editing   | —     | all               | —         | —                             | own               | own                 |
-| CRM → Empresas, Landing pages           | yes          | yes               | —     | yes               | —         | —                             | —                 | —                   |
-| CRM → Configurações                     | yes          | —                 | —     | yes               | —         | —                             | —                 | —                   |
-| CRM → Sofia (every conversation)        | yes          | yes               | —     | yes               | —         | —                             | —                 | —                   |
-| Dashboard → Vendas                      | all          | all               | —     | all               | —         | —                             | own, in the CRM   | own, in the CRM     |
-| Dashboard → Marketing                   | yes          | yes               | —     | —                 | yes       | —                             | —                 | —                   |
-| Dashboard → Leads das Campanhas         | all          | all               | —     | all               | —         | —                             | —                 | own, in the CRM     |
-| Marketing (traffic agent, media studio) | yes          | yes               | —     | —                 | yes       | —                             | —                 | —                   |
-| Formatação → Clientes                   | yes          | yes               | —     | —                 | yes       | Jurídico only                 | —                 | —                   |
-| Gestão → Projetos                       | all          | all               | read  | dept              | dept      | dept (P&P all; Log., TI read) | dept, in the CRM  | dept, in the CRM    |
-| Drive                                   | all          | all               | dept  | dept              | dept      | dept                          | —                 | —                   |
-| Produtividade → Agenda                  | yes          | yes               | yes   | yes               | yes       | yes                           | read only         | read only           |
-| Produtividade → Reuniões                | all          | all               | —     | all               | —         | —                             | own               | own                 |
-| Administração → Usuários e acessos      | all          | all (levels only) | all   | sector            | —         | —                             | —                 | —                   |
-| Administração → Drive: modelo de pastas | yes          | yes               | —     | —                 | —         | —                             | —                 | —                   |
-| Administração → Roadmap, Integrações    | yes          | —                 | —     | —                 | —         | —                             | —                 | —                   |
-| Configurações, APIs e credenciais       | yes          | —                 | —     | —                 | —         | —                             | —                 | —                   |
-| Laboratório, SaaS                       | yes          | —                 | —     | —                 | —         | —                             | —                 | —                   |
-| "Em breve" placeholders                 | yes          | yes               | —     | —                 | —         | —                             | —                 | —                   |
+| Module → screen                         | Admin Master | Diretoria         | RH/DP | Gerente Comercial           | Marketing | Formatação                    | Vendedor Expansão  | Vendedor Formatação |
+| --------------------------------------- | ------------ | ----------------- | ----- | --------------------------- | --------- | ----------------------------- | ------------------ | ------------------- |
+| Início                                  | yes          | yes               | yes   | yes                         | yes       | yes                           | yes                | yes                 |
+| CRM Vendas (deals, WhatsApp, contacts…) | all          | all, no editing   | —     | all                         | —         | —                             | own                | own                 |
+| CRM → Empresas, Landing pages           | yes          | yes               | —     | yes                         | —         | —                             | —                  | —                   |
+| CRM → Configurações                     | yes          | —                 | —     | yes                         | —         | —                             | —                  | —                   |
+| CRM → Sofia (every conversation)        | yes          | yes               | —     | yes                         | —         | —                             | —                  | —                   |
+| Dashboard → Vendas                      | all          | all               | —     | all                         | —         | —                             | own, in the CRM    | own, in the CRM     |
+| Dashboard → Vendas → Produtividade      | all          | all               | —     | sector (one row per person) | —         | —                             | own + team average | own + team average  |
+| Dashboard → Marketing                   | yes          | yes               | —     | —                           | yes       | —                             | —                  | —                   |
+| Dashboard → Leads das Campanhas         | all          | all               | —     | all                         | —         | —                             | —                  | own, in the CRM     |
+| Marketing (traffic agent, media studio) | yes          | yes               | —     | —                           | yes       | —                             | —                  | —                   |
+| Formatação → Clientes                   | yes          | yes               | —     | —                           | yes       | Jurídico only                 | —                  | —                   |
+| Gestão → Projetos                       | all          | all               | read  | dept                        | dept      | dept (P&P all; Log., TI read) | dept, in the CRM   | dept, in the CRM    |
+| Drive                                   | all          | all               | dept  | dept                        | dept      | dept                          | —                  | —                   |
+| Produtividade → Agenda                  | yes          | yes               | yes   | yes                         | yes       | yes                           | read only          | read only           |
+| Produtividade → Reuniões                | all          | all               | —     | all                         | —         | —                             | own                | own                 |
+| Administração → Usuários e acessos      | all          | all (levels only) | all   | sector                      | —         | —                             | —                  | —                   |
+| Administração → Drive: modelo de pastas | yes          | yes               | —     | —                           | —         | —                             | —                  | —                   |
+| Administração → Roadmap, Integrações    | yes          | —                 | —     | —                           | —         | —                             | —                  | —                   |
+| Configurações, APIs e credenciais       | yes          | —                 | —     | —                           | —         | —                             | —                  | —                   |
+| Laboratório, SaaS                       | yes          | —                 | —     | —                           | —         | —                             | —                  | —                   |
+| "Em breve" placeholders                 | yes          | yes               | —     | —                           | —         | —                             | —                  | —                   |
 
 Also by level, outside the menu: the sector-manager flag (`is_sector_manager`) adds the register of the person's
 own sector; Diretoria never sees TI sector records; Diretoria does not edit deals or employee data (only levels);

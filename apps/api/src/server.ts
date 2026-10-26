@@ -7,6 +7,7 @@ import { startFormatacaoIntakeScheduler } from './modules/expansion/formatacao.j
 import { startExpansionIntakeScheduler } from './modules/expansion/scheduler.js';
 import { startInsightsScheduler } from './modules/insights/scheduler.js';
 import { startCrmAutomationsScheduler } from './modules/leads/automations-scheduler.js';
+import { startProductivityDwScheduler } from './modules/leads/productivity.js';
 import { onLeadArrivedKick } from './modules/leads/crm-alerts.js';
 import { createCrmMailTransport } from './modules/leads/crm-mail.js';
 import { sendPendingNoticeMails } from './modules/leads/crm-notice-mail.js';
@@ -175,6 +176,13 @@ async function main() {
       onLeadArrivedKick(null);
       stop();
     });
+  }
+
+  // Painel de Vendas › Produtividade: the dimensional model (`dw`) reloaded from the CRM shortly
+  // after the start and then every 15 minutes (docs/crm/produtividade.md). Registered before `listen`.
+  {
+    const stop = startProductivityDwScheduler({ db, log: (facts) => app.log.info(facts) });
+    app.addHook('onClose', async () => stop());
   }
 
   // YouTube channel (public data, docs/integracoes/youtube-data-api.md): one

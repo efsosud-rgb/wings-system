@@ -30,6 +30,7 @@ import {
 } from '../components/charts3d/spec.js';
 import { DASH, formatInt, formatMoney } from '../components/dashboard/format.js';
 import { LoadFailure } from '../components/LoadFailure.js';
+import { ProductivityTab } from './crm/ProductivityTab.js';
 
 /**
  * Dashboard › Vendas v1: filters in one line, the executive row, the
@@ -57,6 +58,13 @@ const rangeText = (range: SalesRange) => `${brDate(range.from)} a ${brDate(range
 
 const isIn = <T extends string>(list: readonly T[], value: string | null): value is T =>
   value !== null && (list as readonly string[]).includes(value);
+
+/** The two views of the panel; the tab lives in the address (`aba`), as in the marketing dashboard. */
+const TABS = [
+  { key: 'visao-geral', label: 'Visão geral' },
+  { key: 'produtividade', label: 'Produtividade' },
+] as const;
+type TabKey = (typeof TABS)[number]['key'];
 
 // --- filters --------------------------------------------------------------------------
 
@@ -1156,6 +1164,14 @@ function Actions({ data, filters }: { data: SalesDashboard; filters: Filters }) 
 export function SalesDashboardPage() {
   const controls = useFilters();
   const { filters } = controls;
+  const [params, setParams] = useSearchParams();
+  const tabParam = params.get('aba');
+  const tab: TabKey = isIn(
+    TABS.map((item) => item.key),
+    tabParam,
+  )
+    ? tabParam
+    : 'visao-geral';
   const query = useSalesDashboard(queryOf(filters));
   const data = query.data;
   const own = data?.scope === 'own';
@@ -1169,18 +1185,41 @@ export function SalesDashboardPage() {
       <header className="page-header sales-header">
         <h1>Painel de vendas</h1>
         <p>
-          {own ? 'As suas negociações' : 'Negociações do CRM'}
-          {data ? ` · ${rangeText(data.ranges.current)}` : ''}
-          {compared ? ` · comparado com ${compared}` : ''}
+          {tab === 'produtividade'
+            ? 'Produtividade por resultado: o que cada pessoa fez com os seus leads'
+            : own
+              ? 'As suas negociações'
+              : 'Negociações do CRM'}
+          {tab === 'visao-geral' && data ? ` · ${rangeText(data.ranges.current)}` : ''}
+          {tab === 'visao-geral' && compared ? ` · comparado com ${compared}` : ''}
         </p>
       </header>
-      <FilterBar {...controls} data={data} />
+      <nav className="dash-tabs" aria-label="Seções do painel">
+        {TABS.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            className={`dash-tab${item.key === tab ? ' dash-tab-current' : ''}`}
+            aria-current={item.key === tab ? 'page' : undefined}
+            onClick={() => {
+              const next = new URLSearchParams(params);
+              if (item.key === 'visao-geral') next.delete('aba');
+              else next.set('aba', item.key);
+              setParams(next, { replace: true });
+            }}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
+      {tab === 'produtividade' && <ProductivityTab filters={filters} set={controls.set} />}
+      {tab === 'visao-geral' && <FilterBar {...controls} data={data} />}
 
-      {query.isError && (
+      {tab === 'visao-geral' && query.isError && (
         <LoadFailure what="o painel" error={query.error} onRetry={() => void query.refetch()} />
       )}
-      {!data && query.isLoading && <p className="muted">Carregando…</p>}
-      {data && (
+      {tab === 'visao-geral' && !data && query.isLoading && <p className="muted">Carregando…</p>}
+      {tab === 'visao-geral' && data && (
         <>
           <Executive data={data} compare={filters.compare} />
           <div className="sales-grid">

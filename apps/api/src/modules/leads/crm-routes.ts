@@ -1,5 +1,6 @@
 import {
   boardColumnQuerySchema,
+  productivityQuerySchema,
   salesDashboardQuerySchema,
   can,
   crmSavedViewCreateSchema,
@@ -39,6 +40,7 @@ import {
   updateStage,
   updateTask,
 } from './crm.js';
+import { productivityOf } from './productivity.js';
 import { salesDashboardOf } from './sales-dashboard.js';
 import { listFailedMetaEvents, metaQueueStatus, syncMetaFormLeads } from './meta-intake.js';
 import { pollMetaLeadsLocked, pollStatus, testMetaConnection } from './meta-poll.js';
@@ -400,6 +402,21 @@ export const crmRoutes: FastifyPluginAsync = async (app) => {
           spendVisible: can(request.session.actor, 'ads.read').allowed,
         }),
       );
+    },
+  );
+
+  // Painel de Vendas › Produtividade (docs/crm/produtividade.md): who sees whom is decided per
+  // person inside `productivityOf` (own: themselves and the sector's totals; sector: the sector).
+  app.get(
+    '/crm/productivity',
+    { preHandler: app.requirePermission('productivity.read') },
+    async (request, reply) => {
+      const query = productivityQuerySchema.safeParse(request.query);
+      if (!query.success)
+        return reply
+          .status(400)
+          .send(invalid(query.error.issues[0]?.message ?? 'Filtros inválidos.'));
+      return reply.send(await productivityOf(db, { ...query.data, actor: request.session.actor }));
     },
   );
 
