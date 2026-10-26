@@ -241,10 +241,8 @@ export function answerPipelineOf(
   choice: SiteFormQualifierValue | null,
   page: Pick<ClientResolution, 'pipeline' | 'brand'>,
 ): LeadPipeline | null {
-  const override = choice?.pipeline;
-  if (!override) return page.pipeline;
-  if (override === 'expansao' && !page.brand) return page.pipeline;
-  return override;
+  const override = choice?.pipeline ?? page.pipeline;
+  return override === 'expansao' && !page.brand ? page.pipeline : override;
 }
 
 /** The rule's funnel, when it names one. */
