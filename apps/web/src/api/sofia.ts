@@ -7,7 +7,7 @@ import type {
   SofiaSettings,
   SofiaState,
 } from '@wings/shared';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './client.js';
 
 /**
@@ -48,16 +48,29 @@ export function useSofiaConversations(filter: SofiaFilter) {
   if (filter.segment) params.set('segment', filter.segment);
   if (filter.q?.trim()) params.set('q', filter.q.trim());
   const query = params.toString();
-  return useQuery({
+  // 50 at a time ("Carregar mais conversas"), the pages read as one list.
+  const pages = useInfiniteQuery({
     queryKey: ['sofia', 'conversations', query],
-    queryFn: () =>
-      api.poll<{ conversations: SofiaConversationItem[] }>(
-        `/sofia/conversations${query ? `?${query}` : ''}`,
-      ),
+    queryFn: ({ pageParam }) => {
+      const page = new URLSearchParams(params);
+      if (pageParam) page.set('before', pageParam);
+      const asked = page.toString();
+      return api.poll<{ conversations: SofiaConversationItem[]; next: string | null }>(
+        `/sofia/conversations${asked ? `?${asked}` : ''}`,
+      );
+    },
+    initialPageParam: '',
+    getNextPageParam: (page) => page.next ?? undefined,
     refetchInterval: LIST_MS,
     // A new filter keeps the old rows on screen until the new ones arrive.
     placeholderData: (previous) => previous,
   });
+  return {
+    ...pages,
+    data: pages.data && {
+      conversations: pages.data.pages.flatMap((page) => page.conversations),
+    },
+  };
 }
 
 export function useSofiaConversation(id: string | undefined) {

@@ -251,6 +251,16 @@ function Conversations({
             </li>
           ))}
         </ul>
+        {list.hasNextPage && (
+          <button
+            type="button"
+            className="crm-btn sofia-pad"
+            disabled={list.isFetchingNextPage}
+            onClick={() => void list.fetchNextPage()}
+          >
+            {list.isFetchingNextPage ? 'Carregando…' : 'Carregar mais conversas'}
+          </button>
+        )}
       </section>
       <section className="sofia-detail-pane" aria-label="Conversa selecionada">
         {id ? (
