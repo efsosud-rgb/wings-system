@@ -35,10 +35,12 @@ import { writeAudit } from '../../lib/audit.js';
 import type { AgentLlm, LlmUsage } from '../agent/llm.js';
 import { managersAndBoard } from '../leads/crm-alerts.js';
 import { changeLead } from '../leads/crm.js';
+import { distribute, recordEvent } from '../whatsapp/attendance.js';
 import {
   buttonsPayload,
   listPayload,
   textPayload,
+  UNKNOWN_OUTCOME,
   type OutgoingPayload,
   type WhatsAppConfig,
 } from '../whatsapp/graph.js';
@@ -204,6 +206,8 @@ const INTERACTIVE_BODY_MAX = 1_000;
 
 class Turn {
   private facts: SofiaFacts;
+  /** The conversation's version when she took the turn: a person's change of hands moves it. */
+  private readonly version: number;
   private segment: SofiaSegment | null;
   private brandClientId: string | null;
   private misses: number;
@@ -218,6 +222,7 @@ class Turn {
     private readonly now: Date,
   ) {
     this.facts = factsOf(conversation);
+    this.version = conversation.version;
     this.segment = (conversation.segment as SofiaSegment | null) ?? null;
     this.brandClientId = conversation.brandClientId;
     this.misses = conversation.sofiaMisses;
@@ -279,6 +284,21 @@ class Turn {
 
     // SAIR / PARAR: a fixed rule, no AI, no conversation.
     if (fresh.some((m) => isOptOut(m.text))) return this.close('nao_contatar', true);
+
+    // Her state moves only once Meta took the message (staging, 26/10: "qual é o seu nome?" was
+    // refused with 131030 and the next "Teste" became the name). A question that never reached
+    // the person is not answered by what they write next: she asks it again, and after a second
+    // refusal in a row a person takes over.
+    const asked = await this.lastQuestion();
+    if (asked === 'in_flight') return this.later();
+    if (asked === 'lost') {
+      this.facts.lostAsks = (this.facts.lostAsks ?? 0) + 1;
+      if (this.facts.lostAsks >= 2) return this.toHuman('envio_recusado', false);
+      // Not even her greeting arrived: she introduces herself again.
+      if (!(await this.anyReached())) this.facts.greeted = false;
+      return this.next(null, false);
+    }
+    if (this.facts.lostAsks) this.facts.lostAsks = 0;
 
     // --- what the person said ---------------------------------------------------------
     let progress = false;
@@ -343,8 +363,11 @@ class Turn {
       if (this.misses >= 2) return this.toHuman('nao_entendeu', true);
       this.parts.push(this.settings.texts.notUnderstood);
     } else if (progress) this.misses = 0;
+    return this.next(reading, missed);
+  }
 
-    // --- what comes next -------------------------------------------------------------
+  /** What comes next: the next question (or the same one again), or the handover. */
+  private async next(reading: SofiaReading | null, missed: boolean) {
     await this.decideVoice();
     if (!this.facts.greeted)
       this.parts.unshift(
@@ -363,6 +386,65 @@ class Turn {
     const outgoing = this.ask(step);
     if (!(await this.save({}))) return;
     await this.send(outgoing);
+  }
+
+  /**
+   * Whether her last question reached the person: Meta took it (a wamid) and did not fail it later
+   * (the status webhook). Refused, or with no answer from Meta (`unknown_outcome`, or a send a
+   * restart cut short), it is lost; a send still going is waited for.
+   */
+  private async lastQuestion(): Promise<'reached' | 'lost' | 'in_flight'> {
+    if (!this.facts.step) return 'reached';
+    const [last] = await this.db
+      .select({
+        status: waMessages.status,
+        wamid: waMessages.wamid,
+        errorTitle: waMessages.errorTitle,
+        content: waMessages.content,
+        createdAt: waMessages.createdAt,
+      })
+      .from(waMessages)
+      .where(
+        and(eq(waMessages.conversationId, this.conversation.id), eq(waMessages.author, 'sofia')),
+      )
+      .orderBy(desc(waMessages.createdAt))
+      .limit(1);
+    const step = (last?.content as { sofia?: { step?: unknown } } | undefined)?.sofia?.step;
+    if (!last || step !== this.facts.step) return 'reached';
+    if (last.status === 'failed') return 'lost';
+    if (last.wamid) return 'reached';
+    if (last.errorTitle === UNKNOWN_OUTCOME) return 'lost';
+    return this.now.getTime() - last.createdAt.getTime() < STALE_CLAIM_MS ? 'in_flight' : 'lost';
+  }
+
+  /** Whether any message of hers ever reached the person. */
+  private async anyReached(): Promise<boolean> {
+    const [one] = await this.db
+      .select({ id: waMessages.id })
+      .from(waMessages)
+      .where(
+        and(
+          eq(waMessages.conversationId, this.conversation.id),
+          eq(waMessages.author, 'sofia'),
+          sql`${waMessages.wamid} is not null`,
+          sql`coalesce(${waMessages.status}, '') <> 'failed'`,
+        ),
+      )
+      .limit(1);
+    return Boolean(one);
+  }
+
+  /** Her previous message is still on its way: this turn comes back in a few seconds. */
+  private async later() {
+    await this.db
+      .update(waConversations)
+      .set({ sofiaClaimedAt: null, sofiaDueAt: new Date(this.now.getTime() + 5_000) })
+      .where(
+        and(
+          eq(waConversations.id, this.conversation.id),
+          eq(waConversations.sofiaClaimedAt, this.now),
+        ),
+      );
   }
 
   // --- reading ---------------------------------------------------------------------------
@@ -716,6 +798,7 @@ class Turn {
     this.stillHers = true;
     await this.notifyTeam(reason);
     if (text) await this.send(this.text(text));
+    await distribute(this.db, this.conversation.id, this.now);
   }
 
   private async aiDown(reason: 'ia_indisponivel' | 'teto_diario') {
@@ -726,6 +809,7 @@ class Turn {
     this.stillHers = true;
     await this.notifyTeam(reason);
     await this.send(this.text(text));
+    await distribute(this.db, this.conversation.id, this.now);
   }
 
   /**
@@ -825,23 +909,34 @@ class Turn {
               attendance: change.attendance,
               reason: change.reason ?? null,
               stateChangedAt: this.now,
+              version: sql`${waConversations.version} + 1`,
             }
           : {}),
       })
       .where(
         and(
           eq(waConversations.id, this.conversation.id),
-          // A person took the conversation while she thought: it is theirs, and she stays quiet.
+          // A person took the conversation while she thought (or took it and gave it back: the
+          // version moved): it is theirs, and she stays quiet.
           ...(options.anyHolder
             ? []
             : [
                 eq(waConversations.attendance, 'sofia'),
                 eq(waConversations.sofiaClaimedAt, this.now),
+                eq(waConversations.version, this.version),
               ]),
         ),
       )
       .returning({ id: waConversations.id });
     this.stillHers = saved.length > 0;
+    if (this.stillHers && change.attendance && change.attendance !== 'sofia')
+      await recordEvent(this.db, {
+        conversationId: this.conversation.id,
+        kind: change.attendance === 'closed' ? 'resolved' : 'sofia_handoff',
+        actorId: null,
+        reason: change.reason ?? null,
+        at: this.now,
+      });
     return this.stillHers;
   }
 
@@ -851,10 +946,17 @@ class Turn {
   /** Whether the conversation is still hers in this turn (checked before a side effect). */
   private async isHers(): Promise<boolean> {
     const [row] = await this.db
-      .select({ attendance: waConversations.attendance, claimed: waConversations.sofiaClaimedAt })
+      .select({
+        attendance: waConversations.attendance,
+        claimed: waConversations.sofiaClaimedAt,
+        version: waConversations.version,
+      })
       .from(waConversations)
       .where(eq(waConversations.id, this.conversation.id));
-    this.stillHers = row?.attendance === 'sofia' && row.claimed?.getTime() === this.now.getTime();
+    this.stillHers =
+      row?.attendance === 'sofia' &&
+      row.claimed?.getTime() === this.now.getTime() &&
+      row.version === this.version;
     return this.stillHers;
   }
 
