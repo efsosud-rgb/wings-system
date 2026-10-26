@@ -675,6 +675,30 @@ describe('the work numbers', () => {
     expect(calls.filter((c) => c.step === 'sync')).toHaveLength(2);
   });
 
+  it('the reservation lives in the row: a live one refuses, one left by a dead container does not', async () => {
+    answers.subscribe = () => json({ error: { code: 200, message: 'no permission' } }, 403);
+    const first = await connect(admin.cookies, payload());
+    const id = first.json<{ number: { id: string } }>().number.id;
+    expect(
+      (await db.query.waNumbers.findFirst({ where: eq(waNumbers.id, id) }))?.connectingUntil,
+    ).toBeNull();
+    answers.subscribe = defaults().subscribe!;
+    const retry = () =>
+      app.inject({ method: 'POST', url: `/whatsapp/numbers/${id}/retry`, cookies: admin.cookies });
+    // Another container is connecting it right now.
+    await db
+      .update(waNumbers)
+      .set({ connectingUntil: new Date(clock.getTime() + 60_000) })
+      .where(eq(waNumbers.id, id));
+    expect((await retry()).json()).toMatchObject({ error: 'busy' });
+    // That container died a while ago: its reservation ended on its own.
+    await db
+      .update(waNumbers)
+      .set({ connectingUntil: new Date(clock.getTime() - 1_000) })
+      .where(eq(waNumbers.id, id));
+    expect((await retry()).json()).toMatchObject({ steps: { webhooks: 'ok' } });
+  });
+
   it('after the 24 hours still subscribes, but asks for no sync', async () => {
     answers.subscribe = () => json({ error: { code: 200, message: 'no permission' } }, 403);
     const first = await connect(admin.cookies, payload());

@@ -34,6 +34,7 @@ import { formContextOf } from '../sofia/form-context.js';
 import { loadSofiaSettings } from '../sofia/settings.js';
 import { factsOf, routeInbound } from '../sofia/state.js';
 import { ART_MEDIA_GONE_CODES, invalidateArtMedia } from './art.js';
+import { alertWebhookFailed, sweepUnknownSends } from './alerts.js';
 import { distribute } from './attendance.js';
 import { notifyCallsChanged } from './call-signal.js';
 import { callingOn } from './calling.js';
@@ -147,12 +148,17 @@ export async function processWhatsAppEvents(
           nextAttemptAt: new Date(now().getTime() + retryMinutesOf(event.attempts) * 60_000),
         })
         .where(eq(waWebhookEvents.id, event.id));
-      if (giveUp) result.failed++;
-      else result.retried++;
+      if (giveUp) {
+        result.failed++;
+        // The Números screen lists it either way: the notice is a courtesy.
+        await alertWebhookFailed(db, event.id).catch(() => undefined);
+      } else result.retried++;
       deps.log({ job: WHATSAPP_JOB, event: event.id, error: code });
     }
   }
   await sweepCalls(db, now());
+  const unknownSends = await sweepUnknownSends(db, now());
+  if (unknownSends > 0) deps.log({ job: WHATSAPP_JOB, unknownSends });
   return result;
 }
 

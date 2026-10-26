@@ -15,6 +15,7 @@ import { buildApp } from '../../app.js';
 import type { Database } from '../../db/client.js';
 import {
   auditLog,
+  crmNotifications,
   leadEvents,
   leadTriageQueue,
   leads,
@@ -728,6 +729,74 @@ describe('joining a chat to a deal (the person chooses)', () => {
   });
 });
 
+describe('our sends Meta never answered', () => {
+  it('are marked unknown after 10 minutes and the sender hears; nothing is sent again', async () => {
+    const phone = '5521977771234';
+    const [contact] = await db.insert(waContacts).values({ phone }).returning();
+    const [conversation] = await db
+      .insert(waConversations)
+      .values({ contactId: contact!.id, lastMessageAt: ago(30) })
+      .returning();
+    const [stuck] = await db
+      .insert(waMessages)
+      .values({
+        conversationId: conversation!.id,
+        contactId: contact!.id,
+        direction: 'out',
+        author: 'employee',
+        employeeId: owner.id,
+        kind: 'text',
+        text: 'Mensagem de teste',
+        status: 'pending',
+        createdAt: ago(20),
+      })
+      .returning();
+    const [fresh] = await db
+      .insert(waMessages)
+      .values({
+        conversationId: conversation!.id,
+        contactId: contact!.id,
+        direction: 'out',
+        author: 'employee',
+        employeeId: owner.id,
+        kind: 'text',
+        text: 'Ainda indo',
+        status: 'pending',
+        createdAt: ago(2),
+      })
+      .returning();
+    const swept = await processWhatsAppEvents({
+      db,
+      phoneNumberId: PHONE_ID,
+      wabaId: WABA,
+      log: () => {},
+      now: () => clock,
+    });
+    expect(swept.processed).toBe(0);
+    const [after] = await db.select().from(waMessages).where(eq(waMessages.id, stuck!.id));
+    expect(after).toMatchObject({ status: 'pending', wamid: null, errorTitle: 'unknown_outcome' });
+    const [still] = await db.select().from(waMessages).where(eq(waMessages.id, fresh!.id));
+    expect(still!.errorTitle).toBeNull();
+    const notices = await db
+      .select()
+      .from(crmNotifications)
+      .where(eq(crmNotifications.kind, 'whatsapp_send_unknown'));
+    expect(notices.map((n) => n.recipientEmployeeId)).toEqual([owner.id]);
+    expect(sends).toHaveLength(0);
+    // A second pass tells nobody twice.
+    await processWhatsAppEvents({
+      db,
+      phoneNumberId: PHONE_ID,
+      wabaId: WABA,
+      log: () => {},
+      now: () => clock,
+    });
+    expect(
+      await db.$count(crmNotifications, eq(crmNotifications.kind, 'whatsapp_send_unknown')),
+    ).toBe(1);
+  });
+});
+
 describe('the webhook queue', () => {
   // A timestamp no Date can hold: the body fails every time, as a broken database would.
   const broken = () =>
@@ -762,6 +831,14 @@ describe('the webhook queue', () => {
       await run();
     }
     expect(await state()).toMatchObject({ status: 'failed', attempts: 5 });
+    // The Admin Master hears it in Avisos, once, by the screen it is on (never its content).
+    const notices = await db
+      .select()
+      .from(crmNotifications)
+      .where(eq(crmNotifications.kind, 'whatsapp_webhook_failed'));
+    expect(notices.map((n) => n.recipientEmployeeId)).toContain(admin.id);
+    expect(notices.map((n) => n.recipientEmployeeId)).not.toContain(owner.id);
+    expect(JSON.stringify(notices)).not.toContain(PERSON);
 
     const failed = await app.inject({
       method: 'GET',
