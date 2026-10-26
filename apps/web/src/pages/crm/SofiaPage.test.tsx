@@ -111,6 +111,7 @@ const item = (over: Partial<SofiaConversationItem> = {}): SofiaConversationItem 
   lastStatus: null,
   attendance: 'waiting_seller',
   ownerName: 'Fernando',
+  number: null,
   state: 'waiting_seller',
   segment: 'expansao',
   brandName: 'Casa do Churros',
@@ -131,6 +132,8 @@ const thread: DealWhatsApp = {
   callPermission: { status: null, expiresAt: null, requestedAt: null },
   attendance: 'waiting_seller',
   speaksFor: 'Casa do Churros',
+  number: null,
+  numberChats: [],
   messages: [],
 };
 

@@ -1,5 +1,6 @@
 import {
   brazilianPhoneVariants,
+  normalizeBrazilianPhone,
   mentionsWings,
   canonicalWhatsAppPhone,
   withArticle,
@@ -572,7 +573,9 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       });
     const lead = await leadInScope(db, request.session.actor, body.data.leadId, 'leads.whatsapp');
     if (!lead) return notFound(reply);
-    const phone = canonicalWhatsAppPhone(body.data.phone);
+    const phone = canonicalWhatsAppPhone(
+      normalizeBrazilianPhone(body.data.phone) ?? body.data.phone,
+    );
     if (!(await dealsOfPhone(request, phone)).some((deal) => deal.leadId === lead.id))
       return reply.status(422).send({
         error: 'phone_not_of_deal',
