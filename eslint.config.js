@@ -22,6 +22,8 @@ export default tseslint.config(
       '.github/agents/**',
       '.github/hooks/**',
       '.github/skills/**',
+      // One-off Google Tag Manager scripts (not product code; they run by hand, once): not linted.
+      'scripts/gtm/**',
       'packages/studio/src/**',
       'packages/studio/tests/**',
     ],
