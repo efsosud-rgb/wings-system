@@ -64,14 +64,19 @@ origem `triage`: o histórico de etapas e os eventos `lead.pipeline_changed`, `l
 Regra de 13/10 (`docs/whatsapp/sofia.md`): fornecedor, emprego e "outro assunto" passam para uma pessoa sem criar
 negociação. A triagem segue a mesma regra e o mesmo aviso que a transferência da Sofia, e desde 26/10 (Eric) **nenhum
 lead sai dela sem dono**: a pessoa da regra é o Gerente comercial ativo (o mais antigo, se houver mais de um); sem
-nenhum, o lead vai para a Diretoria (a mais antiga) e a falha da regra fica na auditoria como
-`lead.triage_handoff_unmatched` (`fallback: diretoria`); sem ninguém nos dois níveis, a mesma auditoria com
-`fallback: none`, o aviso `triage_handoff` de sempre ("Veja em Negociações → Sem dono") e o lead segue sem dono. O dono
-recebe o lead pelo caminho de sempre (`changeLead` com origem `triage`: evento `lead.owner_changed`, tarefa de primeiro
-contato, aviso "Novo lead para você" e e-mail); o funil fica em aberto para ele escolher na ficha. O evento
-`lead.triaged` guarda `handoff` (`gerente_comercial`, `diretoria` ou `null`). Caso que motivou a regra: o lead 775262e5
-(23/10, LP fale, "Ainda não sei" → `outro` 0,96) ficou três dias sem funil, sem dono e sem tarefa, com três avisos
-`triage_handoff` não lidos (Admin Master e Diretoria; o único Gerente comercial do staging está inativo).
+nenhum, o lead vai para o Admin Master (o mais antigo), o outro nível que pode tudo num lead (a Diretoria vê todos mas
+não tem `leads.write`: não escolheria o funil nem fecharia a tarefa), e a falha da regra fica na auditoria como
+`lead.triage_handoff_unmatched` (`fallback: admin_master`); sem ninguém ativo nos dois níveis, a mesma auditoria com
+`fallback: none`, o aviso `triage_handoff` de sempre ("Veja em Negociações → Sem dono") a quem estiver ativo em Admin,
+Diretoria ou Gerente comercial, e o lead segue sem dono. O dono recebe o lead pelo caminho de sempre (`changeLead` com
+origem `triage`: evento `lead.owner_changed`, tarefa de primeiro contato, aviso "Novo lead para você" e e-mail) e não
+recebe o aviso ao time por cima; o funil fica em aberto para ele escolher na ficha (o lead não aparece em Kanban algum
+até lá: chega-se a ele pelo aviso, pelo e-mail ou pela tarefa). A triagem relê o lead depois da resposta do Jev: um
+lead que uma pessoa pôs num funil nesse meio-tempo fica como está; um que já tem dono (uma pessoa o assumiu, ou uma
+passada anterior caiu depois de atribuir) só recebe o aviso ao dono, uma vez. O evento `lead.triaged` guarda `handoff`
+(`gerente_comercial`, `admin_master`, `existing` ou `null`). Caso que motivou a regra: o lead 775262e5 (23/10, LP fale,
+"Ainda não sei" → `outro` 0,96) ficou três dias sem funil, sem dono e sem tarefa, com três avisos `triage_handoff` não
+lidos (Admin Master e Diretoria; o único Gerente comercial do staging está inativo).
 
 ## Nada fica sem funil e sem aviso
 

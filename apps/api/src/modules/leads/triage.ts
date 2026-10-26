@@ -363,29 +363,31 @@ export async function routeLead(
   return { ok: true, lead: changed.lead };
 }
 
-/** Who took a lead the Jev handed to a person; null when nobody could. */
-type HandoffVia = 'gerente_comercial' | 'diretoria';
+/** Who took a lead the Jev handed to a person: the level that took it, or one it already had. */
+type HandoffVia = 'gerente_comercial' | 'admin_master';
+type Handoff = HandoffVia | 'existing';
 
-const HANDOFF_OWNER_LABEL: Record<HandoffVia, string> = {
+const HANDOFF_OWNER_LABEL: Record<Handoff, string> = {
   gerente_comercial: 'Ficou com o Gerente comercial.',
-  diretoria: 'Ficou com a Diretoria.',
+  admin_master: 'Ficou com o Admin Master.',
+  existing: 'Já tem dono.',
 };
 
 /**
  * The person who takes a lead the Jev handed to a person (Eric, 26/10: no lead stays without an
- * owner). The person of the 13/10 rule first: an active Gerente comercial. With none, the Diretoria,
- * who already receives every escalation of the funnels and may own a lead (`CRM_SELLER_ROLES`).
- * Oldest record first, so two leads arriving together land on the same person. Null when nobody
- * active holds either level.
+ * owner). The person of the 13/10 rule first: an active Gerente comercial. With none, the Admin
+ * Master, the one other level that can do everything on a lead (Diretoria sees every lead but has
+ * no `leads.write`: it could not choose the funnel nor close the task). Oldest record first, so
+ * two leads arriving together land on the same person. Null when nobody active holds either level.
  */
 async function handoffOwner(db: Database): Promise<{ id: string; via: HandoffVia } | null> {
-  for (const via of ['gerente_comercial', 'diretoria'] as const) {
+  for (const via of ['gerente_comercial', 'admin_master'] as const) {
     const [person] = await db
       .select({ id: employees.id })
       .from(employees)
       .innerJoin(roles, eq(roles.id, employees.roleId))
       .where(and(eq(employees.status, 'active'), eq(roles.key, via)))
-      .orderBy(asc(employees.createdAt))
+      .orderBy(asc(employees.createdAt), asc(employees.id))
       .limit(1);
     if (person) return { id: person.id, via };
   }
@@ -395,9 +397,10 @@ async function handoffOwner(db: Database): Promise<{ id: string; via: HandoffVia
 /** The notice to Admin, Diretoria and the sales managers that something waits for a person. */
 async function noticeTeam(
   db: Database,
-  input: { leadId: string | null; message: string; dedupe: string },
+  input: { leadId: string | null; message: string; dedupe: string; except?: string | null },
 ): Promise<void> {
-  const people = await managersAndBoard(db);
+  // The person who just got the lead has the "Novo lead" notice: not this one on top.
+  const people = (await managersAndBoard(db)).filter((person) => person !== input.except);
   if (people.length === 0) return;
   await db
     .insert(crmNotifications)
@@ -459,42 +462,60 @@ export async function triageLead(db: Database, leadId: string, deps: TriageDeps)
     routeFailure = { outcome: 'failed', routeFailure: routed.reason };
   }
   if (decision?.kind === 'person') {
+    // The row was read before the Jev answered: a person may have placed or taken the lead since,
+    // or a pass cut short after the assignment below may be running again.
+    const current = (await db.query.leads.findFirst({ where: eq(leads.id, leadId) })) ?? lead;
+    if (current.pipeline) {
+      await finishRouted(db, current);
+      return;
+    }
     const reason = PERSON_REASON_LABEL[decision.reason];
     const sure = verdict
       ? ` (${SECTOR_LABEL[verdict.sector]}, ${Math.round(verdict.confidence * 100)}%)`
       : '';
     // No funnel (that person chooses it), but an owner, with the first-contact task and the
     // "Novo lead" notice that follow one. The 13/10 rule finding nobody is written to the audit.
-    const owner = lead.ownerEmployeeId ? null : await handoffOwner(db);
-    if (!lead.ownerEmployeeId && owner?.via !== 'gerente_comercial')
-      await writeAudit(db, {
-        action: 'lead.triage_handoff_unmatched',
-        entity: 'lead',
-        entityId: leadId,
-        targetEmployeeId: owner?.id ?? null,
-        metadata: {
-          reason: decision.reason,
-          rule: 'gerente_comercial',
-          fallback: owner?.via ?? 'none',
-        },
-      });
-    if (owner) {
-      const changed = await changeLead(db, {
-        leadId,
-        ownerEmployeeId: owner.id,
-        source: 'triage',
-        actorEmployeeId: null,
-      });
-      if (changed.ok) await writeLeadArrivalNotice(db, changed.lead);
+    let ownerId = current.ownerEmployeeId;
+    let handoff: Handoff | null = ownerId ? 'existing' : null;
+    if (ownerId) {
+      await writeLeadArrivalNotice(db, current); // once, by its dedupe key
+    } else {
+      const owner = await handoffOwner(db);
+      if (owner) {
+        const changed = await changeLead(db, {
+          leadId,
+          ownerEmployeeId: owner.id,
+          source: 'triage',
+          actorEmployeeId: null,
+        });
+        if (changed.ok) {
+          ownerId = owner.id;
+          handoff = owner.via;
+          await writeLeadArrivalNotice(db, changed.lead);
+        }
+      }
+      if (handoff !== 'gerente_comercial')
+        await writeAudit(db, {
+          action: 'lead.triage_handoff_unmatched',
+          entity: 'lead',
+          entityId: leadId,
+          targetEmployeeId: ownerId,
+          metadata: {
+            reason: decision.reason,
+            rule: 'gerente_comercial',
+            fallback: handoff ?? 'none',
+          },
+        });
     }
     await noticeTeam(db, {
       leadId,
+      except: ownerId,
       message: `Lead novo sem funil precisa de uma pessoa: ${reason}${sure}. ${
-        owner ? HANDOFF_OWNER_LABEL[owner.via] : 'Veja em Negociações → Sem dono.'
+        handoff ? HANDOFF_OWNER_LABEL[handoff] : 'Veja em Negociações → Sem dono.'
       }`,
       dedupe: `lead:${leadId}`,
     });
-    await record({ handoff: owner?.via ?? null });
+    await record({ handoff });
     return;
   }
   // No verdict (no text, or the Jev did not answer): the arrival notice the door would have sent.
