@@ -188,6 +188,8 @@ export interface WaTemplate {
   paramCount: number;
   /** An approved `<name>_arte` exists: with the art registered, that one goes. */
   artVersion: boolean;
+  /** Why the system cannot send it yet (a title or link with a field, a video header...). */
+  unsupported: string | null;
 }
 
 export const waSendTextSchema = z.object({

@@ -96,6 +96,24 @@ export const asksCallPermission = (row: Pick<TemplateRow, 'components'>) =>
   );
 const headerFormat = (row: TemplateRow) => componentOf(row, 'HEADER')?.format ?? null;
 
+/**
+ * A part of the template this system does not fill yet, in the words the screen shows; null when
+ * every part goes complete. Sent anyway, it would reach Meta incomplete and be refused (or arrive
+ * cut): so it is refused here, before anything goes.
+ */
+export function unsupportedOf(row: TemplateRow): string | null {
+  const header = componentOf(row, 'HEADER');
+  const format = header?.format?.toUpperCase();
+  if (format === 'VIDEO' || format === 'DOCUMENT' || format === 'LOCATION')
+    return 'O cabeçalho deste modelo é vídeo, documento ou localização, e o sistema ainda não envia esse cabeçalho. Escolha outro modelo.';
+  if (format === 'TEXT' && /\{\{/.test(header?.text ?? ''))
+    return 'O título deste modelo tem um campo variável, e o sistema ainda não preenche o título. Escolha outro modelo.';
+  const buttons = componentOf(row, 'BUTTONS')?.buttons ?? [];
+  if (buttons.some((b) => b.type === 'URL' && /\{\{/.test(b.url ?? '')))
+    return 'O botão de link deste modelo tem uma parte variável, e o sistema ainda não preenche o link. Escolha outro modelo.';
+  return null;
+}
+
 // --- the plan (no database, no Meta) -------------------------------------------------------
 
 export interface PlanInput {
@@ -185,6 +203,9 @@ export function planTemplate(input: PlanInput): TemplatePlan {
         }`,
       );
   }
+
+  const unsupported = unsupportedOf(version);
+  if (unsupported) return refuse(422, 'template_unsupported', unsupported);
 
   // The fields: what the seller typed (names without their article), or what the server knows.
   const body = bodyOf(version);

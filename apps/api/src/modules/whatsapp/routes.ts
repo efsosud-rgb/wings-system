@@ -125,6 +125,7 @@ import {
   asksCallPermission,
   templateBody,
   templateContextOf,
+  unsupportedOf,
   type TemplatePlan,
 } from './template-send.js';
 
@@ -1411,6 +1412,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
           artVersion:
             row.name.endsWith(WA_ART_SUFFIX) ||
             approved.has(`${row.name}${WA_ART_SUFFIX}|${row.language}`),
+          unsupported: unsupportedOf(row),
         };
       });
     return reply.send({ templates, configured: config !== null, syncError });

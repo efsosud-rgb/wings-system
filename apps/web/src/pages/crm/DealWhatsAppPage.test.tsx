@@ -519,6 +519,7 @@ describe('the WhatsApp conversation screen', () => {
         body: 'Olá {{1}}, aqui é {{2}} da Wings.',
         paramCount: 2,
         artVersion: false,
+        unsupported: null,
       },
     ];
     show();
@@ -537,6 +538,7 @@ describe('the WhatsApp conversation screen', () => {
         body: 'Olá {{1}}, aqui é {{2}} da Wings.',
         paramCount: 2,
         artVersion: false,
+        unsupported: null,
       },
     ];
     queryState.preview = {
@@ -605,6 +607,7 @@ describe('the WhatsApp conversation screen', () => {
         body: 'Olá, {{1}}! Aqui é {{2}}, da Wings Company. … transformar a {{3}} em franquia.',
         paramCount: 3,
         artVersion: true,
+        unsupported: null,
       },
     ];
     queryState.preview = {
@@ -694,6 +697,7 @@ describe('the WhatsApp conversation screen', () => {
         body: 'x',
         paramCount: 2,
         artVersion: false,
+        unsupported: null,
       },
       {
         name: 'lembrete',
@@ -702,6 +706,7 @@ describe('the WhatsApp conversation screen', () => {
         body: 'y',
         paramCount: 3,
         artVersion: false,
+        unsupported: null,
       },
     ];
     queryState.previews = {
@@ -760,6 +765,7 @@ describe('the WhatsApp conversation screen', () => {
         body: 'x',
         paramCount: 1,
         artVersion: false,
+        unsupported: null,
       },
     ];
     queryState.preview = {
@@ -966,6 +972,7 @@ describe('the WhatsApp conversation screen', () => {
           body: 'Olá, {{1}}!',
           paramCount: 1,
           artVersion: true,
+          unsupported: null,
         },
       ];
       queryState.preview = {

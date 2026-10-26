@@ -887,8 +887,15 @@ function TemplateCompose({
             {templates.isLoading ? 'Carregando modelos…' : 'Escolha um modelo aprovado'}
           </option>
           {list.map((t) => (
-            <option key={`${t.name}|${t.language}`} value={`${t.name}|${t.language}`}>
+            <option
+              key={`${t.name}|${t.language}`}
+              value={`${t.name}|${t.language}`}
+              // A part the system does not fill yet: shown, with why, never chosen.
+              disabled={t.unsupported !== null}
+              title={t.unsupported ?? undefined}
+            >
               {t.name} ({t.language}){t.artVersion ? ' · com arte' : ''}
+              {t.unsupported ? ' · o sistema ainda não envia este' : ''}
             </option>
           ))}
         </select>
