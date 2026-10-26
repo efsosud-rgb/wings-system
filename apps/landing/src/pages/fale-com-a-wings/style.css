@@ -1,5 +1,8 @@
 /*! Fontes: Limelight (c) 2010 Sorkin Type Co e Nunito (c) 2014 The Nunito Project Authors, SIL OFL 1.1 */
 /*! Ícones de redes sociais: Font Awesome Free 6.5.2 (fontawesome.com) — ícones CC BY 4.0, fonte SIL OFL 1.1 */
+/* A fonte dos ícones é o fa-brands-400.woff2 do pacote reduzido aos 5 ícones usados (118 kB → 1,2 kB), embutida
+   no CSS como as outras. Nome interno trocado (a OFL reserva "Font Awesome"). Para refazer, ao incluir um ícone:
+   pyftsubset fa-brands-400.woff2 --unicodes=U+F16D,U+F167,U+F0E1,U+E07B,U+F39E --flavor=woff2 --no-hinting --layout-features= */
 @font-face {
   font-family: 'Limelight';
   src: url('@fontsource/limelight/files/limelight-latin-400-normal.woff2') format('woff2');
@@ -16,7 +19,7 @@
 }
 @font-face {
   font-family: 'FA Brands';
-  src: url('@fortawesome/fontawesome-free/webfonts/fa-brands-400.woff2') format('woff2');
+  src: url('../../assets/fa-brands-subset.woff2') format('woff2');
   font-weight: 400;
   font-style: normal;
   font-display: block;

@@ -492,7 +492,7 @@ async function fakeOutsideScripts(context, page, gtmRequests) {
 
 async function runViewport(
   browser,
-  { label, viewport, mobile, port, apiBase, replies = [], person = PERSON },
+  { label, viewport, mobile, port, apiBase, replies = [], person = PERSON, reducedMotion = false },
 ) {
   const context = await browser.newContext({
     viewport,
@@ -500,6 +500,7 @@ async function runViewport(
     isMobile: mobile,
     hasTouch: mobile,
     locale: 'pt-BR',
+    reducedMotion: reducedMotion ? 'reduce' : 'no-preference',
   });
   const pageOrigin = `http://127.0.0.1:${port}`;
   const outside = [];
@@ -679,6 +680,17 @@ async function runViewport(
       layout.scene && { particulas: layout.scene.particulas, pontos: layout.scene.pontos },
     ),
   );
+  if (reducedMotion) {
+    // prefers-reduced-motion: the words show at once and the scene is the small, still one (3200 points)
+    const wordsAtOnce = await page.$$eval('[data-words]', (els) =>
+      els.every((el) => el.classList.contains('in')),
+    );
+    check(
+      `${label}: reduced motion: words shown at once, small still scene`,
+      wordsAtOnce && layout.scene?.particulas === 3200,
+      JSON.stringify({ wordsAtOnce, particulas: layout.scene?.particulas }),
+    );
+  }
   check(
     `${label}: resolution brake only on a phone, ladder from at most 2x`,
     layout.scene &&
@@ -716,6 +728,23 @@ async function runViewport(
       turnstile.options.language === 'pt-BR' &&
       turnstile.options.sitekey === TURNSTILE_SITE_KEY,
     JSON.stringify(turnstile),
+  );
+  // what the first frame does not need must not compete with it: both start once the content is painted
+  const starts = await page.evaluate(() => {
+    const startOf = (name) =>
+      performance.getEntriesByType('resource').find((entry) => name.test(entry.name))?.startTime;
+    return {
+      firstPaint: performance.getEntriesByName('first-contentful-paint')[0]?.startTime,
+      scene: startOf(/\/assets\/scene-[^/]+\.js/),
+      robotCheck: startOf(/challenges\.cloudflare\.com/),
+    };
+  });
+  check(
+    `${label}: the 3D scene and the robot check start after the first paint`,
+    [starts.firstPaint, starts.scene, starts.robotCheck].every((t) => typeof t === 'number') &&
+      starts.scene >= starts.firstPaint &&
+      starts.robotCheck >= starts.firstPaint,
+    JSON.stringify(starts),
   );
 
   // the GET's tracked link: the mock's, or the one the real API was seeded with
@@ -1045,15 +1074,14 @@ function staticChecks() {
     files.some((file) => file.endsWith(`og/${SLUG}.png`)),
   );
   const html = readFileSync(join(DIST, SLUG, 'index.html'), 'utf8');
-  const preload = (html.match(/<link\b[^>]*>/g) ?? []).find((tag) => /rel="preload"/.test(tag));
+  // the icon font is five glyphs (about 1 kB), embedded in the CSS like the text fonts: no file, no preload
+  const preloads = (html.match(/<link\b[^>]*>/g) ?? []).filter((tag) => /rel="preload"/.test(tag));
   check(
-    'dist: page has the preload for the icon font',
-    Boolean(preload) &&
-      /href="\/assets\/fa-brands-400-[^"]+\.woff2"/.test(preload) &&
-      /as="font"/.test(preload) &&
-      /type="font\/woff2"/.test(preload) &&
-      /\bcrossorigin\b/.test(preload),
-    preload?.replace(/\s+/g, ' '),
+    'dist: the icon font is embedded in the CSS, with no file of its own and no preload',
+    /@font-face\{font-family:"?FA Brands"?;src:url\(data:font\/woff2;base64,/.test(css) &&
+      !files.some((file) => /fa-brands/.test(file)) &&
+      preloads.length === 0,
+    preloads.map((tag) => tag.replace(/\s+/g, ' ')).join(' '),
   );
   check(
     'dist: no preview leftovers',
@@ -1168,6 +1196,13 @@ try {
   } else {
     await runViewport(browser, { label: 'desktop-1440', ...DESKTOP, port, apiBase });
     await runViewport(browser, { label: 'phone-390', ...PHONE, port, apiBase });
+    await runViewport(browser, {
+      label: 'reduced-motion-390',
+      ...PHONE,
+      port,
+      apiBase,
+      reducedMotion: true,
+    });
     await runViewport(browser, {
       label: 'errors-1440',
       ...DESKTOP,

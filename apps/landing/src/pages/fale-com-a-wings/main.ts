@@ -1,4 +1,5 @@
 import './style.css';
+import { afterFirstPaint } from '../../lib/after-paint.js';
 import { loadSiteForm, type SiteFormInfo } from '../../lib/api.js';
 import { browserBeacon, eventSender, visitIdOf } from '../../lib/events.js';
 import { primeInlineFonts } from '../../lib/fonts.js';
@@ -315,11 +316,21 @@ if (leadForm && 'IntersectionObserver' in window) {
   seen.observe(leadForm);
 }
 
-void loadSiteForm(config.apiBase, SLUG).then((result) => {
+const siteForm = loadSiteForm(config.apiBase, SLUG);
+void siteForm.then((result) => {
   const info: SiteFormInfo | null = result.kind === 'ok' ? result.info : null;
   setWhatsappUrl(info?.whatsappUrl ?? null);
-  form.configure(result);
 });
+// The robot check (Turnstile) is the heaviest third party on the page: it starts after the first
+// paint, or at once when the visitor touches the form before that. The button stays off until it ends.
+let robotCheckStarted = false;
+const startRobotCheck = () => {
+  if (robotCheckStarted) return;
+  robotCheckStarted = true;
+  void siteForm.then((result) => form.configure(result));
+};
+afterFirstPaint(startRobotCheck);
+leadForm?.addEventListener('focusin', startRobotCheck, { once: true });
 
 /* ---------- native scroll: header, ghost words, bridge and timeline ---------- */
 const ghosts = $$('.ghost'),
@@ -378,7 +389,7 @@ function startScene() {
     })
     .catch(() => doc.classList.add('no-gl'));
 }
-requestAnimationFrame(() => setTimeout(startScene, 0));
+afterFirstPaint(startScene);
 
 /* ---------- one scroll loop ---------- */
 let sRaf = 0;
