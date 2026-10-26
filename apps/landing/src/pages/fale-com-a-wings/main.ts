@@ -297,8 +297,13 @@ const form = setupForm({
   reduce,
   tracking: () => trackingPayloadOf(origin),
   whatsappUrl: () => whatsappUrl,
-  onSent: (answer) =>
-    pushEvent({ event: 'lead_submit', interesse: answer, origem: dataLayerOriginOf(origin) }),
+  onSent: (answer, eventId) =>
+    pushEvent({
+      event: 'lead_submit',
+      interesse: answer,
+      origem: dataLayerOriginOf(origin),
+      ...(eventId ? { event_id: eventId } : {}),
+    }),
   onEvent: sendEvent,
 });
 // the form seen once (a third of it on screen), wherever the visitor stopped before

@@ -69,8 +69,13 @@ const form = setupForm({
   href: options.page ?? location.href,
   tracking: () => withHomeSource(trackingPayloadOf(origin)),
   whatsappUrl: () => whatsappUrl,
-  onSent: (answer) => {
-    pushEvent({ event: 'lead_submit', interesse: answer, origem: dataLayerOriginOf(origin) });
+  onSent: (answer, eventId) => {
+    pushEvent({
+      event: 'lead_submit',
+      interesse: answer,
+      origem: dataLayerOriginOf(origin),
+      ...(eventId ? { event_id: eventId } : {}),
+    });
     tell(LEAD_MESSAGE);
   },
 });

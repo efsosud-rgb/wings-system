@@ -201,7 +201,7 @@ async function metricsFetchedAt(db: Database, accountIds: string[]): Promise<str
 // ---------------------------------------------------------------------------
 
 /** The latest `ad_account_daily` row of each account, by account id. */
-async function latestAccountDays(db: Database, accountIds: string[]) {
+export async function latestAccountDays(db: Database, accountIds: string[]) {
   const latest = new Map<string, typeof adAccountDaily.$inferSelect>();
   if (accountIds.length === 0) return latest;
   const rows = await db

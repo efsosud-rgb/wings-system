@@ -15,6 +15,7 @@ import {
 } from '@wings/shared';
 import { attachFormRef } from './form-ref.js';
 import { enqueueInstagramCheck, hasInstagramToCheck } from './instagram-check.js';
+import { enqueueMetaCapiLead } from './meta-capi.js';
 import { and, desc, eq } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
@@ -485,6 +486,15 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
           app.log.warn({ msg: 'instagram check not queued', leadId: result.lead.id }),
         );
       }
+      // Meta's Conversions API, when Eric turned it on: queued, never awaited by the person.
+      const eventId = await enqueueMetaCapiLead(db, env, {
+        leadId: result.lead.id,
+        userAgent: request.headers['user-agent'] ?? null,
+        sourceUrl: body.data.page ?? null,
+      }).catch(() => {
+        app.log.warn({ msg: 'meta capi lead not queued', leadId: result.lead.id });
+        return null;
+      });
       const whatsappUrl = await siteWhatsappUrl(
         db,
         client.clientId,
@@ -492,7 +502,8 @@ export const siteFormRoutes: FastifyPluginAsync = async (app) => {
         env.WINGS_WHATSAPP_NUMBER,
         formRef,
       );
-      return reply.send({ ok: true, whatsappUrl });
+      // Only when the Conversions API is on: off, the answer stays exactly what it was.
+      return reply.send({ ok: true, whatsappUrl, ...(eventId ? { eventId } : {}) });
     },
   );
 };

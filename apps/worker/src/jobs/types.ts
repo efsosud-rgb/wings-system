@@ -56,6 +56,17 @@ export interface JobContext {
     judge: InstagramJudge | null;
     dailyUsd: number;
   };
+  /**
+   * Meta's Conversions API (`meta_capi_lead`, docs/ads/conversions-api.md): off unless
+   * META_CAPI_ENABLED is "true"; without the pixel or the token the job says `not_configured`.
+   */
+  metaCapi?: {
+    enabled: boolean;
+    pixelId: string | null;
+    token: string | null;
+    testEventCode: string | null;
+    fetchImpl?: typeof fetch;
+  };
   /** Set only by tests, to pin "today" for the daily ceiling. */
   now?: () => Date;
 }

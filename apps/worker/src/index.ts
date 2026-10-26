@@ -88,6 +88,12 @@ async function main() {
       },
       db: pool,
       instagramCheck,
+      metaCapi: {
+        enabled: env.META_CAPI_ENABLED === 'true',
+        pixelId: env.META_PIXEL_ID ?? null,
+        token: env.META_CAPI_ACCESS_TOKEN ?? null,
+        testEventCode: env.META_CAPI_TEST_EVENT_CODE ?? null,
+      },
       enrichment: {
         zapi,
         search,

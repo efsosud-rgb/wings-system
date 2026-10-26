@@ -26,6 +26,7 @@ import { clientArtRoutes } from './modules/clients/art-routes.js';
 import { clientRecordRoutes } from './modules/clients/record-routes.js';
 import { clientRoutes } from './modules/clients/routes.js';
 import { insightsRoutes } from './modules/insights/routes.js';
+import { intelligenceRoutes } from './modules/ads/intelligence-routes.js';
 import { driveBlobRoutes, driveRoutes } from './modules/drive/routes.js';
 import { expansionRecoveryRoutes } from './modules/expansion/recovery.js';
 import { expansionRoutes } from './modules/expansion/routes.js';
@@ -325,6 +326,7 @@ export async function buildApp(deps: {
   await app.register(audienceRoutes);
   await app.register(agentRoutes);
   await app.register(insightsRoutes);
+  await app.register(intelligenceRoutes);
   await app.register(clientRoutes);
   await app.register(clientRecordRoutes);
   await app.register(clientArtRoutes);

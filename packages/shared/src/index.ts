@@ -11,6 +11,7 @@ export * from './ads/campaign-builder.js';
 export * from './ads/cockpit.js';
 export * from './ads/dashboard.js';
 export * from './ads/insights.js';
+export * from './ads/intelligence.js';
 export * from './ads/lead-form.js';
 export * from './ads/simulation.js';
 export * from './ads/verdicts.js';

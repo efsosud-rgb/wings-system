@@ -501,6 +501,16 @@ const schema = z.object({
     (value) => value === undefined || value === 'true' || value === 'false',
     'must be "true" or "false"',
   ),
+  /**
+   * Meta's Conversions API (docs/ads/conversions-api.md): when "true", each
+   * site-form lead that gave consent queues one `meta_capi_lead` job, and the
+   * worker sends the Lead event to META_PIXEL_ID with hashed data. Off unless
+   * Eric turns it on; the worker holds the token, never the API.
+   */
+  META_CAPI_ENABLED: optionalString.refine(
+    (value) => value === undefined || value === 'true' || value === 'false',
+    'must be "true" or "false"',
+  ),
   SITE_FORM_GOOGLE_ADS_CONVERSION: optionalString.refine(
     (value) => value === undefined || GOOGLE_ADS_CONVERSION_PATTERN.test(value),
     'must look like AW-123456789/AbCdEfGhIj',

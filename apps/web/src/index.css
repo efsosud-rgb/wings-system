@@ -9002,3 +9002,15 @@ tr.task-overdue td:nth-child(2) strong {
   color: var(--accent-soft-text);
   font-weight: 600;
 }
+
+/* Marketing → Wings Ads Intelligence: cards stacked, lists without bullets. */
+.intel-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.intel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}

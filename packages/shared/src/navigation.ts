@@ -305,6 +305,14 @@ export const NAVIGATION: readonly NavModule[] = [
         status: 'ready',
         kind: 'studio',
       },
+      {
+        path: '/marketing/ads-intelligence',
+        label: 'Wings Ads Intelligence',
+        description: 'Auditoria, recomendações e anúncios com IA',
+        permission: 'ads.read',
+        status: 'ready',
+        kind: 'report',
+      },
       soon(
         '/marketing/trafego-pago-franqueadoras',
         'Agente de Tráfego Pago — Franqueadoras',

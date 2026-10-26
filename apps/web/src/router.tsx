@@ -7,6 +7,7 @@ import { NoAccess, RequireSubmodule } from './components/RequirePermission.js';
 import { RouteError } from './components/RouteError.js';
 import { AgendaPage } from './pages/AgendaPage.js';
 import { MeetingsPage } from './pages/MeetingsPage.js';
+import { AdsIntelligencePage } from './pages/AdsIntelligencePage.js';
 import { ApprovalDetailPage } from './pages/ApprovalDetailPage.js';
 import { ApprovalsPage } from './pages/ApprovalsPage.js';
 import { ClientRecordPage } from './pages/ClientRecordPage.js';
@@ -126,6 +127,7 @@ const SCREENS: Record<string, RouteObject[]> = {
   '/produtividade/agenda': [{ index: true, element: <AgendaPage /> }],
   '/produtividade/reunioes': [{ index: true, element: <MeetingsPage /> }],
   '/marketing/edicao': [{ index: true, element: <MediaStudioPage /> }],
+  '/marketing/ads-intelligence': [{ index: true, element: <AdsIntelligencePage /> }],
   '/laboratorio/escritorio': [{ index: true, element: <OfficePage /> }],
   '/marketing/trafego-pago-wings': [
     { index: true, element: <TrafficStudioPage /> },

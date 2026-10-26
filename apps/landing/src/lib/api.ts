@@ -31,7 +31,7 @@ export type LoadResult =
   { kind: 'ok'; info: SiteFormInfo } | { kind: 'not_found' } | { kind: 'error' };
 
 export type SubmitResult =
-  | { kind: 'ok'; whatsappUrl: string | null }
+  | { kind: 'ok'; whatsappUrl: string | null; eventId: string | null }
   | { kind: 'invalid'; message: string }
   | { kind: 'captcha_refused' }
   | { kind: 'rate_limited' }
@@ -111,7 +111,9 @@ export function siteFormInfoOf(raw: unknown): SiteFormInfo {
 export function submitResultOf(status: number, raw: unknown): SubmitResult {
   const body = record(raw);
   if (status === 200 && body.ok === true) {
-    return { kind: 'ok', whatsappUrl: whatsappUrlOf(body.whatsappUrl) };
+    // The Conversions API's event id, for the pixel to send the same one; null while it is off.
+    const eventId = typeof body.eventId === 'string' ? body.eventId : null;
+    return { kind: 'ok', whatsappUrl: whatsappUrlOf(body.whatsappUrl), eventId };
   }
   if (status === 400) {
     const message = typeof body.message === 'string' ? body.message.trim() : '';

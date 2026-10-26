@@ -13,7 +13,7 @@ describe('loadEnv', () => {
   it('defaults job types to everything the worker implements', () => {
     const env = loadEnv(validSource);
     expect(env.WORKER_JOB_TYPES).toBe(
-      'ffprobe,transcribe,render,enrich_lead,transcribe_meeting,check_instagram',
+      'ffprobe,transcribe,render,enrich_lead,transcribe_meeting,check_instagram,meta_capi_lead',
     );
     expect(jobTypesOf(env)).toEqual([
       'ffprobe',
@@ -22,6 +22,7 @@ describe('loadEnv', () => {
       'enrich_lead',
       'transcribe_meeting',
       'check_instagram',
+      'meta_capi_lead',
     ]);
   });
 
