@@ -1001,8 +1001,12 @@ export function startWhatsAppIntake(deps: WhatsAppIntakeDeps & { tickMs?: number
       purgedOn = today;
       const { purged } = await purgeWhatsAppPayloads(deps.db, deps.now?.());
       if (purged > 0) deps.log({ job: WHATSAPP_JOB, purgedPayloads: purged });
-      // The work numbers' 60-day access: renewed near its end, and people told when it was not.
-      if (deps.numbers) await renewExpiringTokens(deps.numbers, deps.log);
+      // The work numbers' 60-day access: renewed near its end, and people told when it was not
+      // (told even when the renewal pass itself broke).
+      if (deps.numbers)
+        await renewExpiringTokens(deps.numbers, deps.log).catch(() =>
+          deps.log({ job: 'whatsapp_token', error: 'renew_pass_failed' }),
+        );
       await warnExpiringTokens(deps.db, deps.now?.() ?? new Date());
     }
   };

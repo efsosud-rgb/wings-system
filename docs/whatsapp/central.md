@@ -73,9 +73,9 @@ liberar o app (Tech Provider e App Review, ainda não pedidos).
 - **Envio:** com o token do próprio número, texto livre e arquivo da negociação, só dentro de 24 h da última
   mensagem da pessoa **para aquele número**; fora delas, um modelo aprovado **da WABA daquele número** (fase 2b:
   `GET /whatsapp/templates?numberId=`, sincronizado com o token do número em `wa_number_templates`; nunca os
-  modelos oficiais). O pedido de ligação continua só no número oficial (409 `number_no_calls`). O descadastro
-  (SAIR) do número oficial não vale para o número de trabalho. A trava "em breve" dos vendedores é do número
-  oficial e não vale para o número de trabalho conectado.
+  modelos oficiais). O pedido de ligação continua só no número oficial (409 `number_no_calls`). Quem pediu para
+  não receber mensagens (SAIR) não recebe modelo por nenhum número nosso: só resposta dentro das 24 h. A trava "em
+  breve" dos vendedores é do número oficial e não vale para o número de trabalho conectado.
 - Arquivos recebidos: copiados para o R2 com o token do próprio número (`media-store.ts`); abrir segue a regra de
   acesso da conversa.
 

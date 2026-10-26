@@ -679,6 +679,28 @@ describe('the work numbers', () => {
     expect(calls.filter((c) => c.step === 'sync')).toHaveLength(2);
   });
 
+  it("a run that outlived its reservation does not free another container's", async () => {
+    answers.subscribe = () => json({ error: { code: 200, message: 'no permission' } }, 403);
+    const first = await connect(admin.cookies, payload());
+    const id = first.json<{ number: { id: string } }>().number.id;
+    let release: () => void = () => {};
+    answers.subscribe = () =>
+      new Promise<Response>((resolve) => (release = () => resolve(json({ success: true }))));
+    const slow = app.inject({
+      method: 'POST',
+      url: `/whatsapp/numbers/${id}/retry`,
+      cookies: admin.cookies,
+    });
+    await vi.waitFor(() => expect(calls.filter((c) => c.step === 'subscribe')).toHaveLength(2));
+    // Meanwhile its two minutes ended and another container took the number.
+    const theirs = new Date(clock.getTime() + 90_000);
+    await db.update(waNumbers).set({ connectingUntil: theirs }).where(eq(waNumbers.id, id));
+    release();
+    await slow;
+    const [row] = await db.select().from(waNumbers).where(eq(waNumbers.id, id));
+    expect(row?.connectingUntil?.toISOString()).toBe(theirs.toISOString());
+  });
+
   it('the reservation lives in the row: a live one refuses, one left by a dead container does not', async () => {
     answers.subscribe = () => json({ error: { code: 200, message: 'no permission' } }, 403);
     const first = await connect(admin.cookies, payload());

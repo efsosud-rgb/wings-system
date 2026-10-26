@@ -977,9 +977,9 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         file: { fileId: file.id, version: file.version },
       };
     } else {
-      // Who asked not to receive messages gets no template, not even as a common message:
-      // only what a person writes, inside the window. (The official number's opt-out.)
-      if (!numberId && target.contact?.optOutAt)
+      // Who asked not to receive messages gets no template, not even as a common message, by any
+      // of our numbers: only what a person writes, inside the window.
+      if (target.contact?.optOutAt)
         return reply.status(409).send({
           error: 'opted_out',
           message:
@@ -1423,9 +1423,19 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     const refresh = query.data.refresh === '1';
     const { numberId } = query.data;
     if (numberId) {
-      // A work number's own WABA (docs/whatsapp/central.md): only for who reaches its chats.
+      // A work number's own WABA (docs/whatsapp/central.md): only for who reaches its chats (its
+      // owner, full scope, or someone given one of them).
       const [number] = await chatNumbersOf(request, numberId);
-      if (!number)
+      const given = number
+        ? undefined
+        : await db.query.waConversations.findFirst({
+            where: and(
+              eq(waConversations.numberId, numberId),
+              eq(waConversations.assigneeEmployeeId, request.session.actor.employeeId),
+            ),
+            columns: { id: true },
+          });
+      if (!number && !given)
         return reply.status(404).send({ error: 'not_found', message: 'Número não encontrado.' });
       const config = await numberConfigOf(db, box, numberId);
       let syncError: string | null = null;

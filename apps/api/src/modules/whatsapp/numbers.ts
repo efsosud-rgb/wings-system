@@ -389,9 +389,10 @@ const RESERVE_MS = 2 * 60_000;
  */
 async function reserved<T>(deps: NumbersDeps, id: string, work: () => Promise<T>): Promise<T> {
   const now = deps.now();
+  const until = new Date(now.getTime() + RESERVE_MS);
   const [held] = await deps.db
     .update(waNumbers)
-    .set({ connectingUntil: new Date(now.getTime() + RESERVE_MS) })
+    .set({ connectingUntil: until })
     .where(
       and(
         eq(waNumbers.id, id),
@@ -403,7 +404,11 @@ async function reserved<T>(deps: NumbersDeps, id: string, work: () => Promise<T>
   try {
     return await work();
   } finally {
-    await deps.db.update(waNumbers).set({ connectingUntil: null }).where(eq(waNumbers.id, id));
+    // Only its own: past its end another container may hold the number now.
+    await deps.db
+      .update(waNumbers)
+      .set({ connectingUntil: null })
+      .where(and(eq(waNumbers.id, id), eq(waNumbers.connectingUntil, until)));
   }
 }
 
@@ -506,11 +511,15 @@ export async function renewToken(
   deps: NumbersDeps,
   id: string,
 ): Promise<{ number: WaNumber; renewed: boolean; metaCode: number | null }> {
-  const row = await deps.db.query.waNumbers.findFirst({ where: eq(waNumbers.id, id) });
-  if (!row || row.status !== 'connected' || !row.tokenEnc) throw new ConnectError('not_found');
-  const sealed = row.tokenEnc;
   const result = await reserved(deps, id, async () => {
-    const answer = await refreshBusinessToken(deps.fetchImpl, deps.app, deps.box.open(sealed));
+    // Read inside the reservation: a connection that just ended may have brought a new token.
+    const row = await deps.db.query.waNumbers.findFirst({ where: eq(waNumbers.id, id) });
+    if (!row || row.status !== 'connected' || !row.tokenEnc) throw new ConnectError('not_found');
+    const answer = await refreshBusinessToken(
+      deps.fetchImpl,
+      deps.app,
+      deps.box.open(row.tokenEnc),
+    );
     const now = deps.now();
     await deps.db
       .update(waNumbers)

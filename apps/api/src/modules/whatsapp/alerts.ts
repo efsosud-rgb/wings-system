@@ -1,4 +1,4 @@
-import { and, eq, gt, inArray, isNull, lt } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
 import {
   crmNotifications,
@@ -82,10 +82,16 @@ export async function sweepUnknownSends(db: Database, now: Date): Promise<number
         eq(waMessages.direction, 'out'),
         eq(waMessages.status, 'pending'),
         isNull(waMessages.wamid),
+        inArray(waMessages.author, ['employee', 'sofia', 'system']),
         lt(waMessages.createdAt, new Date(now.getTime() - STUCK_MS)),
         gt(waMessages.createdAt, new Date(now.getTime() - LOOK_BACK_MS)),
+        // Told once: the next passes skip it.
+        sql`not exists (select 1 from crm_notifications n
+              where n.kind = 'whatsapp_send_unknown'
+                and n.dedupe_key like 'whatsapp_send_unknown:' || ${waMessages.id}::text || ':%')`,
       ),
     )
+    .orderBy(desc(waMessages.createdAt))
     .limit(200);
   if (rows.length === 0) return 0;
   const cut = rows.filter((row) => row.errorTitle === null).map((row) => row.id);

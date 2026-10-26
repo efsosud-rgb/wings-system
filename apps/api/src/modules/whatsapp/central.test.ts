@@ -477,16 +477,24 @@ describe('sending through a work number', () => {
     expect(templateReads).toEqual([
       { url: `/v23.0/${WORK_WABA}/message_templates`, auth: `Bearer ${NUMBER_TOKEN}` },
     ]);
-    // A seller who does not reach the number does not read its templates either.
-    expect(
-      (
-        await app.inject({
-          method: 'GET',
-          url: `/whatsapp/templates?numberId=${numberId}`,
-          cookies: otherSeller.cookies,
-        })
-      ).statusCode,
-    ).toBe(404);
+    // A seller who does not reach the number does not read its templates either...
+    const asOther = () =>
+      app.inject({
+        method: 'GET',
+        url: `/whatsapp/templates?numberId=${numberId}`,
+        cookies: otherSeller.cookies,
+      });
+    expect((await asOther()).statusCode).toBe(404);
+    // ...until one of its chats is given to them.
+    await db
+      .update(waConversations)
+      .set({ assigneeEmployeeId: otherSeller.id })
+      .where(eq(waConversations.id, chat!.id));
+    expect((await asOther()).statusCode).toBe(200);
+    await db
+      .update(waConversations)
+      .set({ assigneeEmployeeId: null })
+      .where(eq(waConversations.id, chat!.id));
     const send = (name: string) =>
       app.inject({
         method: 'POST',
@@ -494,6 +502,15 @@ describe('sending through a work number', () => {
         cookies: owner.cookies,
         payload: { name, language: 'pt_BR', params: [], companyArticle: 'a' },
       });
+    // SAIR is said to the company: no template by any of our numbers.
+    await db
+      .update(waContacts)
+      .set({ optOutAt: ago(5) })
+      .where(eq(waContacts.id, chat!.contactId));
+    const optedOut = await send('retomar_conversa_numero');
+    expect(optedOut.statusCode).toBe(409);
+    expect(optedOut.json()).toMatchObject({ error: 'opted_out' });
+    await db.update(waContacts).set({ optOutAt: null }).where(eq(waContacts.id, chat!.contactId));
     const official = await send('so_do_oficial');
     expect(official.statusCode).toBe(422);
     expect(official.json()).toMatchObject({ error: 'template_unknown' });

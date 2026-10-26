@@ -609,7 +609,8 @@ export async function buildThread(
       onNumber && conversation
         ? await numberWindowOf(db, conversation.id, deps.now)
         : windowOf(contact, deps.now),
-    optedOut: onNumber ? false : Boolean(contact?.optOutAt),
+    // SAIR is said to the company: a work number sends no template to them either.
+    optedOut: Boolean(contact?.optOutAt),
     callPermission: permissionOf(onNumber ? null : contact, deps.now),
     attendance: (conversation?.attendance as SofiaState | undefined) ?? null,
     speaksFor: await brandVoiceOf(db, leadId, conversation?.id ?? null),
