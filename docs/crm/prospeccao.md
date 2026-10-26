@@ -2,6 +2,8 @@
 
 Branch `feat/crm-prospeccao`, migração **0096** `prospecting` (renumerar no merge se outra entrar antes). Pedido do Eric de 24/10: o vendedor de Formatação acha empresas no Google Maps, separa as boas, enriquece pelo site da própria empresa e, depois do primeiro contato, leva a empresa ao funil Formatação como lead.
 
+Ampliado em 26/10 na branch `feat/maps-prospecting` (PR empilhado sobre o desta tela), pedido do Eric "Wings Maps Prospecting": filtro "só com telefone", registros incompletos, possível duplicidade, reserva em lote com revisão, histórico, números, exportação, retorno agendado no "Criar lead" e sugestão de abordagem pela IA. Sem migração nova: as tabelas abaixo bastam.
+
 Tela: `/crm-vendas/prospeccao` (menu CRM Vendas → Prospecção). Código: `apps/api/src/modules/prospecting/`, contrato em `packages/shared/src/prospecting.ts`, tela em `apps/web/src/pages/crm/ProspectingPage.tsx`, painel do lead em `apps/web/src/pages/crm/GooglePlacePanel.tsx`.
 
 ## Regras do Google (Maps Platform) e como são cumpridas
@@ -23,6 +25,8 @@ Tela: `/crm-vendas/prospeccao` (menu CRM Vendas → Prospecção). Código: `app
 | Admin Master        | all                                   | sim                     | sim                 | sim                     |
 | Vendedor Expansão   | — (403 em toda rota)                  | —                       | —                   | —                       |
 
+`prospecting.export` (planilha): Gerente Comercial e Admin Master. Histórico e Números seguem o `prospecting.use`: o vendedor vê os seus, o gerente, a Diretoria e o Admin veem todos.
+
 Um prospect fora do alcance responde 404. "Segurar" é estar `reservado` ou `contatado`: o vendedor não vê na busca a empresa que outro segura (conta em "ocultos"); o gerente vê com "reservado por X".
 
 ## Cota de chamadas
@@ -35,8 +39,31 @@ As chamadas são reservadas antes de ir ao Google, numa transação com trava (`
 
 - Um local: uma chamada (Text Search, 20 por página). "Mais resultados" pede a página 2 e a 3 pelo token do Google (60 no máximo).
 - Varredura: vários bairros, uma chamada por bairro (até 20), só a página 1 de cada. Antes, a tela mostra quantas chamadas vai gastar e o uso do dia e do mês; a API só aceita com `confirmCalls` igual ao número de locais. A mesma empresa em dois bairros aparece uma vez.
-- Filtros (na resposta, não no Google): nota mínima exata (o Google só aceita passos de 0,5), avaliações mínimas, só com site, só em funcionamento. A lista de exclusão (redes já franqueadas) esconde quem tem o nome. A resposta diz quantos ficaram de fora e por quê, para a lista nunca parecer tudo o que o Google tinha.
+- Filtros (na resposta, não no Google): nota mínima exata (o Google só aceita passos de 0,5), avaliações mínimas, só com site, só com telefone, só em funcionamento. A lista de exclusão (redes já franqueadas) esconde quem tem o nome. A resposta diz quantos ficaram de fora e por quê, para a lista nunca parecer tudo o que o Google tinha.
 - Cruzamento, só por `place_id` e telefone, na memória: "já é lead: dono X" (lead com o `place_id` ou o telefone; o vendedor vê a etiqueta mas só abre o lead se for dele), "já é cliente" (telefone ou WhatsApp de um cliente), "reservado por X", "contatado por X", "descartado", "pediu para não ser contatado", "várias unidades".
+
+- **Incompleto.** Cada resultado diz o que o Google não deu (`missing`: sem telefone, sem site, sem endereço, sem nota). Nada é completado nem inventado; sem nota, a nota ICP não conta os pontos de nota.
+- **Possível duplicidade, nunca juntada.** Dois resultados com o mesmo telefone ganham "possível duplicidade: mesmo telefone"; um resultado cujo domínio do site é o de uma negociação (`leads.website`, comparado sem `www`, caminho nem maiúsculas) ganha "possível lead: mesmo site de uma negociação". Perfis e páginas que não são o site da empresa (Instagram, Facebook, Linktree, wa.me, iFood…) nunca marcam duplicidade (`siteDomain` no shared). Nomes parecidos só dão "várias unidades". A pessoa decide; o sistema não une empresas.
+- Não há busca por raio: a Text Search só aceita raio com coordenadas (latitude e longitude), e a tela não tem mapa para escolher o centro. Use a cidade ou a lista de bairros.
+- Não há mapa interativo: os termos do Google proíbem mostrar os dados do Places sobre outro mapa, e um mapa do Google no navegador pede uma chave pública própria (Maps JavaScript API). Cada empresa tem "Abrir no Google Maps".
+
+## Reserva em lote (revisão antes)
+
+Na lista, a caixa de cada empresa livre (ou descartada, ou "sem interesse") entra na seleção; "Selecionar todas livres" marca todas. "Revisar N selecionadas" mostra nome, nota ICP, o que falta e as etiquetas; só "Reservar N" chama a API (`POST /prospecting/prospects/batch`, até 60). Cada empresa é reservada sozinha, com as mesmas regras do clique (transação, `for update`): uma recusa não desfaz as outras, e a resposta diz, empresa por empresa, o que entrou e por quê não ("Já reservado por X.", "A empresa pediu para não ser contatada."). Cada reserva grava `prospect.reserved` com `batch: true`.
+
+Reservar não cria lead: guarda o `place_id` em Meus prospects. O lead só nasce depois do primeiro contato, em "Criar lead", porque os termos do Google não deixam copiar nome, telefone ou endereço do Maps para o CRM.
+
+## Histórico, Números e planilha
+
+- **Histórico** (`GET /prospecting/history`, as últimas 50): data, quem, segmento e locais como foram digitados, chamadas gastas. "Usar no formulário" devolve a busca ao formulário; só "Buscar" chama o Google de novo (o resultado antigo não fica guardado).
+- **Números** (`GET /prospecting/metrics`): prospects por dono e situação, quantos viraram lead e as chamadas ao Google no mês de cada um.
+- **Planilha** (`GET /prospecting/prospects/export.csv`, `prospecting.export`, até 5.000 linhas, filtros de situação e dono): situação, dono, motivo, observações, o que o site da empresa mostrou, a negociação, o `place_id`, datas. Nunca o nome, endereço, telefone, site ou nota do Google (não estão guardados). Célula que começa com `=`, `+`, `-` ou `@` sai como texto. Auditoria `prospecting.exported` com a quantidade de linhas e os filtros usados.
+
+## Sugestão de abordagem (IA)
+
+Em Meus prospects, "Sugerir abordagem (IA)" (`POST /prospecting/prospects/:id/approach`): o vendedor escolhe o canal (ligação, e-mail ou visita; **nunca WhatsApp**, porque antes do primeiro contato não há aceite), o segmento e o que sabe da empresa; a IA (Haiku 4.5 pelo OpenRouter, sem coleta de dados) devolve abertura, pontos da conversa e próximo passo, marcados "Sugestão da IA — revise antes de usar". A IA recebe só isso e quais tipos de contato o site da empresa mostrou (os nomes, não os valores); nada do Google, nenhum telefone, e-mail ou nome. Nada é enviado à empresa: o vendedor copia e usa. Recusas: 503 sem IA, 409 para quem pediu para não ser contatado, 429 depois de 30 por pessoa por dia (contadas no log de auditoria `prospect.approach_suggested`, gravado antes da chamada).
+
+**E a Sofia?** A Sofia só responde a quem escreveu primeiro no WhatsApp (`docs/whatsapp/sofia.md`) e não puxa contato ativo; isso não mudou. Um lead da prospecção que escrever no WhatsApp cai na regra 1 da Sofia (negociação aberta com dono → vai direto ao vendedor). A sugestão de abordagem acima é o apoio ao vendedor no primeiro contato; nenhuma campanha ou disparo foi criado.
 
 ## Nota ICP
 
@@ -64,6 +91,7 @@ Depois do primeiro contato, com o que a empresa disse (não o que o Google mostr
 - Origem `google_places` ("Prospecção Google Maps"), `externalId` e `leads.google_place_id` = o `place_id`. O cargo vai para o contato (`crm_contacts.job_title`); as observações viram uma anotação do lead.
 - Base legal: `consent` quando aceitou WhatsApp, `legitimate_interest` quando não; `consent_source = 'prospeccao'` e o texto "Aceitou / Não aceitou receber WhatsApp no primeiro contato (DD/MM/AAAA)." Quando o telefone ou o e-mail já é de uma negociação do próprio vendedor, o lead é juntado a ela (que mantém a origem) e a resposta de agora substitui a base legal que ela tinha.
 - Telefone ou e-mail de um lead de outro vendedor: 409, como em "Criar negociação".
+- **Retorno combinado** (opcional): data e hora que a empresa pediu. Vira uma tarefa de follow-up "Retorno combinado na prospecção" para o dono do lead, pelo serviço de tarefas do CRM (`createTask`, que grava `lead.task_created` na linha do tempo).
 
 **WhatsApp sem aceite.** Um lead `google_places`, ou com `consent_source = 'prospeccao'` (a negociação em que o "Criar lead" foi juntado), sem base `consent` não recebe nada do número do sistema: mensagem, modelo, pedido de ligação e ligação respondem **403** `whatsapp_no_opt_in` (`leadOptInMissing` em `whatsapp/official-number.ts`, no `send` de `whatsapp/routes.ts` e em `POST /leads/:id/whatsapp/calls`). A ficha do lead desabilita os botões de WhatsApp com o motivo; ligar pelo telefone e e-mail continuam. As automações do CRM não mandam WhatsApp, e a Sofia só responde a quem escreveu primeiro.
 
@@ -87,9 +115,14 @@ No card do lead, "Dados do Google (ao vivo)" carrega a ficha no clique (gasta 1 
 | `GET /prospecting/prospects/:id/place`      | ficha ao vivo (1 ficha)                                                     |
 | `GET /prospecting/leads/:leadId/place`      | ficha ao vivo do lead que veio da prospecção (1 ficha)                      |
 | `POST /prospecting/prospects/:id/enrich`    | lê o site da empresa                                                        |
-| `POST /prospecting/prospects/:id/lead`      | cria o lead; também `leads.write`                                           |
+| `POST /prospecting/prospects/:id/lead`      | cria o lead (e a tarefa de retorno); também `leads.write`                   |
+| `POST /prospecting/prospects/batch`         | reserva em lote, resultado por empresa                                      |
+| `GET /prospecting/history`                  | buscas feitas (o que foi digitado)                                          |
+| `GET /prospecting/metrics`                  | prospects por dono e situação, chamadas no mês                              |
+| `GET /prospecting/prospects/export.csv`     | planilha só com dados da Wings; `prospecting.export`                        |
+| `POST /prospecting/prospects/:id/approach`  | sugestão de abordagem da IA; nada é enviado                                 |
 
-Auditoria (só ids, status e contagens): `prospect.reserved`, `prospect.discarded`, `prospect.status_changed`, `prospect.transferred`, `prospect.not_found`, `prospect.enriched`, `prospect.converted`, `prospecting.icp_changed`, `prospecting.quota_changed`.
+Auditoria (só ids, status e contagens): `prospect.reserved`, `prospect.discarded`, `prospect.status_changed`, `prospect.transferred`, `prospect.not_found`, `prospect.enriched`, `prospect.converted`, `prospecting.icp_changed`, `prospecting.quota_changed`, `prospecting.exported`, `prospect.approach_suggested`; `prospect.reserved` leva `batch: true` quando veio do lote e `prospect.converted` leva `followUp`.
 
 ## Dados
 
@@ -101,11 +134,16 @@ Auditoria (só ids, status e contagens): `prospect.reserved`, `prospect.discarde
 
 ## Configurar (Coolify)
 
+Enquanto a chave não existe, a tela mostra "— Conexão com o Google pendente: a chave ainda não foi configurada no servidor." e o botão Buscar fica desligado; nenhuma lista de exemplo aparece. Histórico, Números, Meus prospects e a sugestão de abordagem funcionam sem a chave (não chamam o Google).
+
 1. No Google Cloud, ativar a **Places API (New)** e criar uma chave restrita a essa API e ao IP do servidor. A chave nunca vai para o web.
 2. Criar `GOOGLE_PLACES_API_KEY` no app `wings-api` do **staging** primeiro (Coolify → Environment Variables) e reiniciar o app. Conferir na tela: some o "— Chave do Google não configurada.".
 3. A IA da frase usa a mesma `OPENROUTER_API_KEY` dos outros agentes; sem ela o formulário funciona sozinho.
 
 ## Não verificado
+
+- O custo: a tela diz "Custo estimado: R$ 0 enquanto o mês ficar dentro da cota", porque a cota trava em 1.000 por tipo e a documentação do Google dá 1.000 grátis por mês nos SKUs Enterprise (os campos telefone, site e nota). Conferir no faturamento do Google Cloud no primeiro mês.
+- A sugestão de abordagem e a reserva em lote só rodaram com IA e Google simulados.
 
 - Nenhuma resposta real da Places API foi chamada daqui: os formatos (campos, `nextPageToken`, erros `NOT_FOUND`, `RESOURCE_EXHAUSTED`, `API_KEY_INVALID`) seguem a documentação do Google, e os testes usam respostas inventadas com esse formato (`fake-places-api.ts`). Na primeira busca real no staging, conferir nome, endereço, telefone, nota, página 2 e o link do Maps.
 - O leitor de site real (`requestPage`) não roda nos testes (a rede é bloqueada); os testes passam por um transporte simulado.

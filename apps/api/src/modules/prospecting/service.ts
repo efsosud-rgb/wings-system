@@ -2,13 +2,16 @@ import {
   excludedName,
   grantedScope,
   icpScore,
+  missingFields,
   nameKey,
   normalizeBrazilianPhone,
+  PROSPECT_FOLLOW_UP_TITLE,
   PROSPECT_HOLDING_STATUSES,
   PROSPECT_SEARCH_MAX_PAGES,
   PROSPECT_STATUS_LABELS,
   prospectQuerySchema,
   ROLE_PERMISSIONS,
+  siteDomain,
   WINGS_CLIENT_ID,
   type Actor,
   type PlaceResult,
@@ -40,7 +43,7 @@ import {
 } from '../../db/schema/index.js';
 import type { AgentLlm } from '../agent/llm.js';
 import { leadOwnerFilter, leadVisibleTo } from '../leads/access.js';
-import { addNote, changeLead, type Executor } from '../leads/crm.js';
+import { addNote, changeLead, createTask, type Executor } from '../leads/crm.js';
 import { ForeignLeadError, upsertLead } from '../leads/service.js';
 import type { PlacesClient } from './places-client.js';
 
@@ -92,16 +95,17 @@ export async function listProspects(
   db: Database,
   actor: Actor,
   filter: { status?: ProspectStatus; owner?: string },
+  limit = 500,
 ): Promise<Prospect[]> {
   const conditions: SQL[] = [eq(prospects.tenantId, WINGS_TENANT_ID)];
   const owner = isProspectingManager(actor) ? filter.owner : actor.employeeId;
   if (owner) conditions.push(eq(prospects.ownerEmployeeId, owner));
   if (filter.status) conditions.push(eq(prospects.status, filter.status));
-  // shortcut: the newest 500 only, no paging; add paging when a team holds more.
+  // shortcut: the newest 500 only (the export: 5,000), no paging; add paging when a team holds more.
   const rows = await withOwner(db)
     .where(and(...conditions))
     .orderBy(desc(prospects.updatedAt))
-    .limit(500);
+    .limit(limit);
   return rows.map(({ row, ownerName }) => toProspect(row, ownerName, actor));
 }
 
@@ -246,6 +250,7 @@ function failsFilters(place: PlaceResult, input: ProspectSearchInput): boolean {
   if (input.minRating && (place.rating ?? 0) < input.minRating) return true;
   if (input.minReviews && (place.reviews ?? 0) < input.minReviews) return true;
   if (input.requireWebsite && !place.website) return true;
+  if (input.requirePhone && !place.phone) return true;
   return (
     input.onlyOperational && place.businessStatus !== null && place.businessStatus !== 'OPERATIONAL'
   );
@@ -281,6 +286,22 @@ async function clientPhonesAmong(db: Database, phones: string[]): Promise<Set<st
       .flatMap((row) => [normalizeBrazilianPhone(row.phone), normalizeBrazilianPhone(row.whatsapp)])
       .filter((phone): phone is string => phone !== null),
   );
+}
+
+/** The host of a stored site, as `siteDomain` reads it, in SQL (leads keep the site as typed). */
+const storedDomain = sql<string>`regexp_replace(regexp_replace(regexp_replace(lower(trim(coalesce(${leads.website}, ''))), '^[a-z][a-z0-9+.-]*://', ''), '[/?#:].*$', ''), '^www[.]', '')`;
+
+/**
+ * The domains among these that a deal's site already has: "possível lead", for a person to check.
+ * shortcut: the domain is computed per lead row (no index); add an expression index if leads grow.
+ */
+async function leadDomainsAmong(db: Database, domains: string[]): Promise<Set<string>> {
+  if (domains.length === 0) return new Set();
+  const rows = await db
+    .selectDistinct({ domain: storedDomain })
+    .from(leads)
+    .where(and(eq(leads.tenantId, WINGS_TENANT_ID), inArray(storedDomain, [...new Set(domains)])));
+  return new Set(rows.map((row) => row.domain));
 }
 
 /**
@@ -343,6 +364,16 @@ export async function assembleSearch(
         .orderBy(asc(leads.createdAt))
     : [];
   const clientPhones = await clientPhonesAmong(db, phones);
+  const leadDomains = await leadDomainsAmong(
+    db,
+    kept.map((place) => siteDomain(place.website)).filter((d): d is string => d !== null),
+  );
+  // One phone on two place_ids: maybe one company listed twice. Flagged, never merged.
+  const phoneCount = new Map<string, number>();
+  for (const place of kept) {
+    const phone = normalizeBrazilianPhone(place.phone);
+    if (phone) phoneCount.set(phone, (phoneCount.get(phone) ?? 0) + 1);
+  }
 
   const prospectOf = new Map(saved.map((found) => [found.row.placeId, found]));
   const leadByPlace = new Map<string, (typeof leadRows)[number]>();
@@ -379,9 +410,18 @@ export async function assembleSearch(
         statusTag(prospect.row.status as ProspectStatus, prospect.ownerName, Boolean(mine)),
       );
     if (multiUnit) tags.push({ kind: 'multi_unit', text: 'várias unidades' });
+    if (phone && (phoneCount.get(phone) ?? 0) > 1)
+      tags.push({ kind: 'possible_duplicate', text: 'possível duplicidade: mesmo telefone' });
+    const domain = siteDomain(place.website);
+    if (!lead && domain && leadDomains.has(domain))
+      tags.push({
+        kind: 'possible_duplicate',
+        text: 'possível lead: mesmo site de uma negociação',
+      });
     const enrichment = (prospect?.row.enrichment ?? {}) as ProspectEnrichment;
     items.push({
       ...place,
+      missing: missingFields(place),
       icp: icpScore(
         {
           rating: place.rating,
@@ -512,6 +552,31 @@ export async function claimProspect(
       previousStatus,
     };
   });
+}
+
+/**
+ * Reservar em lote: each place reserved on its own (its own transaction, the same rules as one
+ * click), so one refusal never undoes the others; the answer says, per place, which went and why
+ * not. In order, one at a time: two batches over the same places still get one winner each.
+ */
+export async function claimBatch(
+  db: Database,
+  actor: Actor,
+  placeIds: readonly string[],
+  now: Date,
+): Promise<
+  {
+    placeId: string;
+    outcome: Awaited<ReturnType<typeof claimProspect>>;
+  }[]
+> {
+  const outcomes = [];
+  for (const placeId of placeIds)
+    outcomes.push({
+      placeId,
+      outcome: await claimProspect(db, actor, { placeId, action: 'reserve' }, now),
+    });
+  return outcomes;
 }
 
 /** The prospect still has the status and owner it had when read. */
@@ -691,6 +756,15 @@ async function leadOfProspect(
       );
   if (input.notes)
     await addNote(db, { leadId, body: input.notes, authorEmployeeId: actor.employeeId });
+  if (input.followUpAt)
+    await createTask(db, {
+      leadId,
+      kind: 'follow_up',
+      title: PROSPECT_FOLLOW_UP_TITLE,
+      dueAt: new Date(input.followUpAt),
+      assigneeEmployeeId: result.lead.ownerEmployeeId ?? actor.employeeId,
+      createdBy: actor.employeeId,
+    });
   await db.update(prospects).set({ leadId, updatedAt: now }).where(eq(prospects.id, row.id));
   return { ok: true, leadId, created: result.created };
 }

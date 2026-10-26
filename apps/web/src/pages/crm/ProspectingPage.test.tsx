@@ -61,6 +61,7 @@ const item = (over: Partial<ProspectSearchItem>): ProspectSearchItem => ({
   mapsUri: 'https://maps.google.com/?cid=1',
   types: ['restaurant'],
   icp: { score: 5, reasons: ['Nota ≥ 4,5 (+2)', 'Avaliações ≥ 200 (+2)', 'Tem site (+1)'] },
+  missing: [],
   tags: [],
   prospect: null,
   leadId: null,
@@ -150,10 +151,12 @@ describe('Prospecção', () => {
   it('without the key says so before any search and keeps Buscar disabled', async () => {
     status = { configured: false, aiConfigured: true };
     renderPage();
-    expect(await screen.findAllByText('— Chave do Google não configurada.')).not.toHaveLength(0);
+    const pending = 'Conexão com o Google pendente: a chave ainda não foi configurada no servidor.';
+    expect(await screen.findAllByText(`— ${pending}`)).not.toHaveLength(0);
     const button = screen.getByRole('button', { name: 'Buscar' }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
-    expect(button.title).toBe('Chave do Google não configurada.');
+    expect(button.title).toBe(pending);
+    expect(post).not.toHaveBeenCalled();
   });
 
   it('lists results with the Google Maps attribution, the Maps link, tags, ICP and hidden counts', async () => {
@@ -164,7 +167,7 @@ describe('Prospecção', () => {
         false,
       ),
     );
-    fill('Segmento', 'hamburgueria');
+    fill('Segmento ou nome da empresa', 'hamburgueria');
     fill('Cidade ou bairros', 'Niterói');
     fireEvent.click(screen.getByRole('button', { name: 'Buscar' }));
 
@@ -188,6 +191,7 @@ describe('Prospecção', () => {
       minRating: null,
       minReviews: null,
       requireWebsite: false,
+      requirePhone: false,
       onlyOperational: true,
     });
   });
@@ -201,7 +205,7 @@ describe('Prospecção', () => {
         false,
       ),
     );
-    fill('Segmento', 'pizzaria');
+    fill('Segmento ou nome da empresa', 'pizzaria');
     fill('Cidade ou bairros', 'Niterói');
     fireEvent.click(screen.getByRole('button', { name: 'Buscar' }));
     expect(await screen.findByText('Nenhuma empresa encontrada com esses filtros.')).toBeTruthy();
@@ -220,7 +224,7 @@ describe('Prospecção', () => {
         false,
       ),
     );
-    fill('Segmento', 'pizzaria');
+    fill('Segmento ou nome da empresa', 'pizzaria');
     fill('Cidade ou bairros', 'Niterói');
     fireEvent.click(screen.getByRole('button', { name: 'Buscar' }));
     expect((await screen.findByRole('alert')).textContent).toBe(
@@ -242,11 +246,11 @@ describe('Prospecção', () => {
         false,
       ),
     );
-    fill('Segmento', 'pizzaria');
+    fill('Segmento ou nome da empresa', 'pizzaria');
     fill('Cidade ou bairros', 'Niterói');
     fireEvent.click(screen.getByRole('button', { name: 'Buscar' }));
     expect(await screen.findByText('Nenhuma empresa encontrada com esses filtros.')).toBeTruthy();
-    fill('Segmento', 'hamburgueria');
+    fill('Segmento ou nome da empresa', 'hamburgueria');
     fireEvent.click(screen.getByRole('button', { name: 'Buscar' }));
     expect((await screen.findByRole('alert')).textContent).toMatch(/^— Você já usou/);
     expect(screen.queryByText('Nenhuma empresa encontrada com esses filtros.')).toBeNull();
@@ -263,7 +267,7 @@ describe('Prospecção', () => {
         false,
       ),
     );
-    fill('Segmento', 'hamburgueria');
+    fill('Segmento ou nome da empresa', 'hamburgueria');
     fill('Cidade ou bairros', 'Icaraí\nSanta Rosa, Ingá');
     fireEvent.click(screen.getByRole('button', { name: 'Buscar' }));
     expect(confirm).toHaveBeenCalledWith(
@@ -298,10 +302,14 @@ describe('Prospecção', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: 'Enviar' }));
     const use = await screen.findByRole('button', { name: 'Usar no formulário' });
-    expect((screen.getByLabelText('Segmento') as HTMLInputElement).value).toBe('');
+    expect((screen.getByLabelText('Segmento ou nome da empresa') as HTMLInputElement).value).toBe(
+      '',
+    );
 
     fireEvent.click(use);
-    expect((screen.getByLabelText('Segmento') as HTMLInputElement).value).toBe('hamburgueria');
+    expect((screen.getByLabelText('Segmento ou nome da empresa') as HTMLInputElement).value).toBe(
+      'hamburgueria',
+    );
     expect((screen.getByLabelText('Cidade ou bairros') as HTMLTextAreaElement).value).toBe(
       'Icaraí\nSanta Rosa',
     );
@@ -319,7 +327,7 @@ describe('Prospecção', () => {
       ),
     ).toBeTruthy();
     expect(screen.queryByLabelText('Pedido')).toBeNull();
-    expect(screen.getByLabelText('Segmento')).toBeTruthy();
+    expect(screen.getByLabelText('Segmento ou nome da empresa')).toBeTruthy();
   });
 });
 
@@ -331,7 +339,7 @@ describe('Prospecção: reservar, criar lead e Meus prospects', () => {
         false,
       ),
     );
-    fill('Segmento', 'hamburgueria');
+    fill('Segmento ou nome da empresa', 'hamburgueria');
     fill('Cidade ou bairros', 'Niterói');
     fireEvent.click(screen.getByRole('button', { name: 'Buscar' }));
     return screen.findByRole('region', { name: 'Resultados' });
@@ -380,11 +388,19 @@ describe('Prospecção: reservar, criar lead e Meus prospects', () => {
     expect(post.mock.calls.some(([path]) => String(path).endsWith('/lead'))).toBe(false);
 
     fireEvent.click(within(dialog).getByLabelText('Não'));
+    fireEvent.change(within(dialog).getByLabelText('Retorno combinado (opcional)'), {
+      target: { value: '2027-03-10T10:00' },
+    });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Criar lead' }));
     expect(await within(results).findByRole('link', { name: 'Abrir negociação' })).toBeTruthy();
     expect(post).toHaveBeenCalledWith(
       '/prospecting/prospects/p1/lead',
-      expect.objectContaining({ contactName: 'Ana Teste', whatsappOptIn: false, stageId: '' }),
+      expect.objectContaining({
+        contactName: 'Ana Teste',
+        whatsappOptIn: false,
+        stageId: '',
+        followUpAt: new Date('2027-03-10T10:00').toISOString(),
+      }),
     );
   });
 
@@ -411,6 +427,227 @@ describe('Prospecção: reservar, criar lead e Meus prospects', () => {
       'Não foi possível carregar os prospects',
     );
     expect(screen.queryByText('Nenhum prospect salvo com esse filtro.')).toBeNull();
+  });
+});
+
+const savedProspect = {
+  id: 'p1',
+  placeId: 'ChIJ_fake_place_0001',
+  status: 'reservado',
+  ownerEmployeeId: 'e1',
+  ownerName: 'Vendedora Teste',
+  mine: true,
+  reason: null,
+  notes: null,
+  enrichment: {},
+  leadId: null,
+  createdAt: '2026-10-26T12:00:00Z',
+  updatedAt: '2026-10-26T12:00:00Z',
+};
+
+describe('Wings Maps Prospecting', () => {
+  const searchNow = async () => {
+    renderPage();
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Buscar' }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    );
+    fill('Segmento ou nome da empresa', 'padaria');
+    fill('Cidade ou bairros', 'Ingá');
+    fireEvent.click(screen.getByLabelText('Só com telefone'));
+    fireEvent.click(screen.getByRole('button', { name: 'Buscar' }));
+    return screen.findByRole('region', { name: 'Resultados' });
+  };
+
+  it('reserves the ticked results after a review, and says which did not go and why', async () => {
+    post.mockImplementation(async (path: string, body?: unknown) => {
+      if (path === '/prospecting/search')
+        return answer({
+          items: [
+            item({}),
+            item({
+              placeId: 'ChIJ_fake_place_0002',
+              name: 'Padaria Incompleta',
+              phone: null,
+              missing: ['phone'],
+            }),
+            item({
+              placeId: 'ChIJ_fake_place_0003',
+              name: 'Padaria Segura',
+              prospect: {
+                id: 'px',
+                status: 'reservado',
+                ownerEmployeeId: 'e9',
+                ownerName: 'Outra Pessoa',
+                mine: false,
+              },
+            }),
+          ],
+        });
+      if (path === '/prospecting/prospects/batch') {
+        expect(body).toEqual({ placeIds: ['ChIJ_fake_place_0001', 'ChIJ_fake_place_0002'] });
+        return {
+          reserved: 1,
+          refused: 1,
+          results: [
+            { placeId: 'ChIJ_fake_place_0001', ok: true, prospect: savedProspect },
+            {
+              placeId: 'ChIJ_fake_place_0002',
+              ok: false,
+              error: 'prospect_taken',
+              message: 'Já reservado por Bia.',
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected POST ${path}`);
+    });
+    const results = await searchNow();
+    expect(searchPosts()[0]![1]).toMatchObject({ requirePhone: true });
+    expect(within(results).getByText('incompleto: sem telefone')).toBeTruthy();
+    // Held by someone else: no box to tick.
+    expect(within(results).queryByLabelText('Selecionar Padaria Segura')).toBeNull();
+    fireEvent.click(within(results).getByRole('button', { name: 'Selecionar todas livres' }));
+    fireEvent.click(within(results).getByRole('button', { name: 'Revisar 2 selecionadas' }));
+    const review = within(results).getByRole('region', { name: 'Revisão do lote' });
+    expect(review.textContent).toContain('Padaria Incompleta · ICP 5 · incompleto: sem telefone');
+    expect(post.mock.calls.some(([path]) => path === '/prospecting/prospects/batch')).toBe(false);
+    fireEvent.click(within(review).getByRole('button', { name: 'Reservar 2' }));
+    const outcome = await within(results).findByRole('status');
+    expect(outcome.textContent).toContain('1 reservada · 1 não reservada:');
+    expect(outcome.textContent).toContain('Padaria Incompleta — Já reservado por Bia.');
+    expect(within(results).getByText('Reservado por você')).toBeTruthy();
+  });
+
+  it('puts a past search back in the form without searching', async () => {
+    get.mockImplementation(async (path: string) => {
+      if (path === '/auth/me') return { user: session };
+      if (path === '/prospecting/status') return status;
+      if (path === '/prospecting/history')
+        return [
+          {
+            id: 'h1',
+            at: '2026-10-26T12:00:00Z',
+            employeeName: 'Vendedora Teste',
+            mine: true,
+            segment: 'confeitarias',
+            places: ['Ingá', 'Icaraí'],
+            calls: 2,
+          },
+        ];
+      return usage;
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Histórico' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Usar no formulário' }));
+    expect((screen.getByLabelText('Segmento ou nome da empresa') as HTMLInputElement).value).toBe(
+      'confeitarias',
+    );
+    expect((screen.getByLabelText('Cidade ou bairros') as HTMLTextAreaElement).value).toBe(
+      'Ingá\nIcaraí',
+    );
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it('shows the numbers, and "—" with the reason when they did not load', async () => {
+    let fail = false;
+    get.mockImplementation(async (path: string) => {
+      if (path === '/auth/me') return { user: session };
+      if (path === '/prospecting/status') return status;
+      if (path === '/prospecting/metrics') {
+        if (fail) throw new ApiError(500, {});
+        return {
+          owners: [
+            {
+              employeeId: 'e1',
+              name: 'Vendedora Teste',
+              byStatus: { reservado: 3, virou_lead: 1 },
+              total: 4,
+              callsThisMonth: 9,
+            },
+          ],
+          byStatus: { reservado: 3, virou_lead: 1 },
+          total: 4,
+          conversionRate: 0.25,
+          callsThisMonth: 9,
+        };
+      }
+      return usage;
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Números' }));
+    expect(
+      await screen.findByText('4 prospects · 25,0% viraram lead · 9 chamadas ao Google no mês'),
+    ).toBeTruthy();
+    cleanup();
+    fail = true;
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Números' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('Não foi possível carregar');
+  });
+
+  it('offers the export only to who holds prospecting.export', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Meus prospects' }));
+    await screen.findByText('Nenhum prospect salvo com esse filtro.');
+    expect(screen.queryByRole('button', { name: 'Exportar planilha' })).toBeNull();
+    cleanup();
+    session = user('gerente_comercial', { 'prospecting.use': 'all', 'prospecting.export': 'all' });
+    get.mockImplementation(async (path: string) => {
+      if (path === '/auth/me') return { user: session };
+      if (path === '/prospecting/status') return status;
+      if (path === '/prospecting/prospects') return [];
+      if (path === '/prospecting/owners') return [];
+      return usage;
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Prospects' }));
+    expect(await screen.findByRole('button', { name: 'Exportar planilha' })).toBeTruthy();
+  });
+
+  it("drafts an approach marked as the AI's, never by WhatsApp, and sends nothing", async () => {
+    prospects = [savedProspect];
+    post.mockImplementation(async (path: string) => {
+      if (path === '/prospecting/prospects/p1/approach')
+        return {
+          origin: 'ia',
+          channel: 'email',
+          opening: 'Olá, aqui é da Wings Company.',
+          points: ['Como funciona a formatação'],
+          nextStep: 'Uma conversa de 20 minutos',
+        };
+      throw new Error(`unexpected POST ${path}`);
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Meus prospects' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Sugerir abordagem (IA)' }));
+    const panel = screen.getByRole('region', { name: 'Sugestão de abordagem' });
+    const channels = within(panel)
+      .getAllByRole('option')
+      .map((option) => option.textContent);
+    expect(channels).toEqual(['Ligação', 'E-mail', 'Visita']);
+    fireEvent.change(within(panel).getByLabelText('Canal'), { target: { value: 'email' } });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Sugerir' }));
+    expect(await within(panel).findByText('Sugestão da IA — revise antes de usar.')).toBeTruthy();
+    expect(within(panel).getByText('Olá, aqui é da Wings Company.')).toBeTruthy();
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledWith('/prospecting/prospects/p1/approach', {
+      channel: 'email',
+      segment: '',
+      context: '',
+    });
+  });
+
+  it('keeps the approach button off when the AI is not configured', async () => {
+    status = { configured: true, aiConfigured: false };
+    prospects = [savedProspect];
+    renderPage();
+    fireEvent.click(await screen.findByRole('tab', { name: 'Meus prospects' }));
+    const button = (await screen.findByRole('button', {
+      name: 'Sugerir abordagem (IA)',
+    })) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
   });
 });
 

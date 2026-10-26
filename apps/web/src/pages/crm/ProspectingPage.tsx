@@ -3,6 +3,7 @@ import {
   ICP_WEIGHT_LABELS,
   PROSPECT_ENRICHMENT_KEYS,
   PROSPECT_MANUAL_STATUSES,
+  PROSPECT_MISSING_LABELS,
   PROSPECT_STATUS_LABELS,
   PROSPECT_STATUSES,
   prospectingIcpSchema,
@@ -17,6 +18,7 @@ import {
   type ProspectingUsage,
   type ProspectQuery,
   type ProspectRef,
+  type ProspectBatchResponse,
   type ProspectSearchInput,
   type ProspectSearchItem,
   type ProspectSearchResponse,
@@ -27,6 +29,8 @@ import { Link } from 'react-router-dom';
 import { hasPermission, permissionScope, useSession } from '../../api/auth.js';
 import { useStages } from '../../api/leads.js';
 import {
+  downloadProspectsExport,
+  useBatchReserve,
   useClaimProspect,
   useEnrichProspect,
   useParseProspectQuery,
@@ -47,6 +51,8 @@ import { StudioLayout, StudioToolGroup } from '../../components/StudioLayout.js'
 import { Modal } from './CreateDealModal.js';
 import { formatDate } from './format.js';
 import { googleFailure, MapsLink, PlaceFacts, ratingText, webUrl } from './GooglePlacePanel.js';
+import { ApproachPanel } from './ProspectApproachPanel.js';
+import { HistoryTab, MetricsTab } from './ProspectingHistory.js';
 
 /**
  * CRM Vendas → Prospecção (docs/crm/prospeccao.md): companies found live on
@@ -56,7 +62,7 @@ import { googleFailure, MapsLink, PlaceFacts, ratingText, webUrl } from './Googl
  * seller's sentence into the form's fields, and fills them on a click.
  */
 
-const NO_KEY = 'Chave do Google não configurada.';
+const NO_KEY = 'Conexão com o Google pendente: a chave ainda não foi configurada no servidor.';
 const NO_AI = 'A IA não está configurada neste ambiente.';
 
 interface SearchForm {
@@ -66,6 +72,7 @@ interface SearchForm {
   minRating: string;
   minReviews: string;
   requireWebsite: boolean;
+  requirePhone: boolean;
   onlyOperational: boolean;
 }
 
@@ -75,6 +82,7 @@ const EMPTY_FORM: SearchForm = {
   minRating: '',
   minReviews: '',
   requireWebsite: false,
+  requirePhone: false,
   onlyOperational: true,
 };
 
@@ -96,7 +104,15 @@ const formOf = (query: ProspectQuery): SearchForm => ({
   minRating: query.nota_min?.toString() ?? '',
   minReviews: query.avaliacoes_min?.toString() ?? '',
   requireWebsite: query.exige_site,
+  requirePhone: false,
   onlyOperational: true,
+});
+
+/** A past search back in the form, as typed; nothing runs until Buscar. */
+export const formOfHistory = (segment: string | null, places: string[]): SearchForm => ({
+  ...EMPTY_FORM,
+  segment: segment ?? '',
+  places: places.join('\n'),
 });
 
 const usageOrDash = (usage: ProspectingUsage | undefined) =>
@@ -125,6 +141,8 @@ export function hiddenLine(hidden: ProspectSearchResponse['hidden']): string | n
 const TABS = [
   { key: 'search', label: 'Busca' },
   { key: 'prospects', label: 'Meus prospects' },
+  { key: 'history', label: 'Histórico' },
+  { key: 'metrics', label: 'Números' },
   { key: 'settings', label: 'Ajustes' },
 ] as const;
 type TabKey = (typeof TABS)[number]['key'];
@@ -134,6 +152,7 @@ export function ProspectingPage() {
   const canManage = permissionScope(user, 'prospecting.use') === 'all';
   const canConfigure = hasPermission(user, 'prospecting.configure');
   const canQuota = hasPermission(user, 'prospecting.quota');
+  const canExport = hasPermission(user, 'prospecting.export');
   const status = useProspectingStatus();
   const usage = useProspectingUsage();
   const [tab, setTab] = useState<TabKey>('search');
@@ -190,7 +209,22 @@ export function ProspectingPage() {
                 />
               </div>
             </div>
-            {tab === 'prospects' && <ProspectsTab canManage={canManage} />}
+            {tab === 'prospects' && (
+              <ProspectsTab
+                canManage={canManage}
+                canExport={canExport}
+                aiConfigured={status.data?.aiConfigured === true}
+              />
+            )}
+            {tab === 'history' && (
+              <HistoryTab
+                onUse={(segment, places) => {
+                  setForm(formOfHistory(segment, places));
+                  setTab('search');
+                }}
+              />
+            )}
+            {tab === 'metrics' && <MetricsTab />}
             {tab === 'settings' && <SettingsTab canConfigure={canConfigure} canQuota={canQuota} />}
           </div>
         </>
@@ -212,8 +246,12 @@ export function ProspectingPage() {
               Cada busca e cada ficha é uma chamada ao Google. A cota fica dentro do que o Google dá
               de graça.
             </p>
+            <p className="field-hint">
+              Custo estimado: R$ 0 enquanto o mês ficar dentro da cota (o preço do Google não foi
+              conferido na conta da Wings; ver o faturamento do Google Cloud).
+            </p>
           </StudioToolGroup>
-          <StudioToolGroup title="Chave do Google">
+          <StudioToolGroup title="Conexão com o Google">
             {status.isError && !status.data ? (
               <LoadFailure
                 what="o estado da chave"
@@ -221,7 +259,7 @@ export function ProspectingPage() {
                 onRetry={() => void status.refetch()}
               />
             ) : status.data ? (
-              <p>{status.data.configured ? 'Configurada no servidor.' : `— ${NO_KEY}`}</p>
+              <p>{status.data.configured ? 'Chave configurada no servidor.' : `— ${NO_KEY}`}</p>
             ) : (
               <p className="muted">Carregando…</p>
             )}
@@ -363,7 +401,11 @@ function SearchTab({
   canManage: boolean;
 }) {
   const search = useProspectSearch();
+  const batch = useBatchReserve();
   const [results, setResults] = useState<Results | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [reviewing, setReviewing] = useState(false);
+  const [batchAnswer, setBatchAnswer] = useState<ProspectBatchResponse | null>(null);
   const set = <K extends keyof SearchForm>(key: K, value: SearchForm[K]) =>
     setForm({ ...form, [key]: value });
   const places = placesOf(form.places);
@@ -401,6 +443,9 @@ function SearchTab({
     }
     // A new search: the last answer goes, so a failure never sits over results of other filters.
     setResults(null);
+    setSelected([]);
+    setReviewing(false);
+    setBatchAnswer(null);
     run(
       {
         segment: form.segment.trim(),
@@ -408,6 +453,7 @@ function SearchTab({
         minRating: numberOf(form.minRating),
         minReviews: numberOf(form.minReviews),
         requireWebsite: form.requireWebsite,
+        requirePhone: form.requirePhone,
         onlyOperational: form.onlyOperational,
         ...(places.length > 1 ? { confirmCalls: places.length } : {}),
       },
@@ -432,13 +478,34 @@ function SearchTab({
   const blocked = configured === false ? NO_KEY : null;
   const answer = results?.answer;
   const hidden = answer ? hiddenLine(answer.hidden) : null;
+  const selectable = (answer?.items ?? []).filter(canReserveItem);
+  // Only what can still be reserved: a result reserved by its own button since leaves the batch.
+  const picked = selectable.filter((item) => selected.includes(item.placeId));
+  const toggle = (placeId: string) =>
+    setSelected((current) =>
+      current.includes(placeId) ? current.filter((id) => id !== placeId) : [...current, placeId],
+    );
+
+  const reserveBatch = () =>
+    batch.mutate(
+      picked.map((item) => item.placeId),
+      {
+        onSuccess: (outcome) => {
+          setBatchAnswer(outcome);
+          setReviewing(false);
+          setSelected([]);
+          for (const result of outcome.results)
+            if (result.ok) patch(result.placeId, { prospect: prospectRefOf(result.prospect) });
+        },
+      },
+    );
 
   return (
     <>
       <form className="crm-panel" onSubmit={submit} aria-label="Busca">
         <div className="crm-form-grid">
           <label className="crm-field">
-            <span>Segmento</span>
+            <span>Segmento ou nome da empresa</span>
             <input
               className="crm-input"
               value={form.segment}
@@ -493,6 +560,14 @@ function SearchTab({
           <label className="crm-checkbox">
             <input
               type="checkbox"
+              checked={form.requirePhone}
+              onChange={(event) => set('requirePhone', event.target.checked)}
+            />{' '}
+            Só com telefone
+          </label>
+          <label className="crm-checkbox">
+            <input
+              type="checkbox"
               checked={form.onlyOperational}
               onChange={(event) => set('onlyOperational', event.target.checked)}
             />{' '}
@@ -530,6 +605,40 @@ function SearchTab({
             </span>
           </h2>
           {hidden && <p className="crm-sub">{hidden}</p>}
+          {selectable.length > 0 && (
+            <div className="crm-quick-row">
+              <button
+                type="button"
+                className="crm-btn is-small is-quiet"
+                onClick={() =>
+                  setSelected(
+                    picked.length === selectable.length ? [] : selectable.map((i) => i.placeId),
+                  )
+                }
+              >
+                {picked.length === selectable.length ? 'Limpar seleção' : 'Selecionar todas livres'}
+              </button>
+              {picked.length > 0 && (
+                <button
+                  type="button"
+                  className="crm-btn is-small is-primary"
+                  onClick={() => setReviewing(true)}
+                >
+                  Revisar {picked.length} selecionada{picked.length === 1 ? '' : 's'}
+                </button>
+              )}
+            </div>
+          )}
+          {reviewing && picked.length > 0 && (
+            <BatchReview
+              items={picked}
+              pending={batch.isPending}
+              error={batch.isError ? googleFailure(batch.error) : null}
+              onConfirm={reserveBatch}
+              onCancel={() => setReviewing(false)}
+            />
+          )}
+          {batchAnswer && <BatchOutcome answer={batchAnswer} items={answer.items} />}
           {answer.items.length === 0 ? (
             <p className="crm-sub">Nenhuma empresa encontrada com esses filtros.</p>
           ) : (
@@ -537,6 +646,9 @@ function SearchTab({
               <table className="crm-table">
                 <thead>
                   <tr>
+                    <th>
+                      <span className="sr-only">Selecionar</span>
+                    </th>
                     <th>Empresa</th>
                     <th>Contato</th>
                     <th className="is-num">Nota</th>
@@ -550,6 +662,8 @@ function SearchTab({
                     <ResultRow
                       key={item.placeId}
                       item={item}
+                      selected={selected.includes(item.placeId)}
+                      onToggle={canReserveItem(item) ? () => toggle(item.placeId) : null}
                       canManage={canManage}
                       onChange={(change) => patch(item.placeId, change)}
                     />
@@ -559,6 +673,12 @@ function SearchTab({
             </div>
           )}
           <p className="crm-sub">Dados: Google Maps, consultados agora e não guardados.</p>
+          <p className="crm-sub">
+            De onde vem cada dado: nome, endereço, telefone, site e nota — Google (ao vivo) ·
+            Instagram, e-mail e WhatsApp do site — site da empresa · nota ICP, etiquetas e
+            &quot;incompleto&quot; — regras da Wings · situação, motivo e observações — o vendedor ·
+            sugestão de abordagem — IA, para revisar.
+          </p>
           {answer.nextPageToken && (
             <div>
               <button
@@ -587,6 +707,88 @@ function SearchTab({
   );
 }
 
+/** A result the seller can reserve now: free, or discarded or "sem interesse" (taken over). */
+const canReserveItem = (item: ProspectSearchItem) =>
+  !item.prospect || TAKEN_OVER.includes(item.prospect.status);
+
+/** Revisão antes de reservar: the ticked companies, their score and flags, one click to go. */
+function BatchReview({
+  items,
+  pending,
+  error,
+  onConfirm,
+  onCancel,
+}: {
+  items: ProspectSearchItem[];
+  pending: boolean;
+  error: string | null;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="crm-panel" role="region" aria-label="Revisão do lote">
+      <h3>Revisar antes de reservar</h3>
+      <p className="crm-sub">
+        Cada empresa é reservada para você e entra em Meus prospects (só o place_id fica guardado).
+        O lead no funil só nasce depois do primeiro contato, em &quot;Criar lead&quot;.
+      </p>
+      <ul>
+        {items.map((item) => (
+          <li key={item.placeId}>
+            <b>{item.name ?? '—'}</b> · ICP {item.icp.score}
+            {item.missing.length > 0 &&
+              ` · incompleto: ${item.missing.map((f) => PROSPECT_MISSING_LABELS[f]).join(', ')}`}
+            {item.tags.length > 0 && ` · ${item.tags.map((tag) => tag.text).join(', ')}`}
+          </li>
+        ))}
+      </ul>
+      {error && (
+        <p className="crm-error" role="alert">
+          — {error}
+        </p>
+      )}
+      <div className="crm-form-actions">
+        <button type="button" className="crm-btn is-quiet" onClick={onCancel}>
+          Voltar
+        </button>
+        <button type="button" className="crm-btn is-primary" disabled={pending} onClick={onConfirm}>
+          {pending ? 'Reservando…' : `Reservar ${items.length}`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** What the batch did, per company: reserved, or why not. */
+function BatchOutcome({
+  answer,
+  items,
+}: {
+  answer: ProspectBatchResponse;
+  items: ProspectSearchItem[];
+}) {
+  const nameOf = (placeId: string) =>
+    items.find((item) => item.placeId === placeId)?.name ?? 'Empresa';
+  return (
+    <div role="status" className="crm-sub">
+      {answer.reserved} reservada{answer.reserved === 1 ? '' : 's'}
+      {answer.refused > 0 &&
+        ` · ${answer.refused} não reservada${answer.refused === 1 ? '' : 's'}:`}
+      {answer.refused > 0 && (
+        <ul>
+          {answer.results.map((result) =>
+            result.ok ? null : (
+              <li key={result.placeId}>
+                {nameOf(result.placeId)} — {result.message}
+              </li>
+            ),
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 const prospectRefOf = (prospect: Prospect): ProspectRef => ({
   id: prospect.id,
   status: prospect.status,
@@ -597,10 +799,15 @@ const prospectRefOf = (prospect: Prospect): ProspectRef => ({
 
 function ResultRow({
   item,
+  selected,
+  onToggle,
   canManage,
   onChange,
 }: {
   item: ProspectSearchItem;
+  selected: boolean;
+  /** Null when the result cannot be reserved now: no box to tick. */
+  onToggle: (() => void) | null;
   canManage: boolean;
   onChange: (change: Partial<ProspectSearchItem>) => void;
 }) {
@@ -633,6 +840,16 @@ function ResultRow({
     <>
       <tr>
         <td>
+          {onToggle && (
+            <input
+              type="checkbox"
+              checked={selected}
+              aria-label={`Selecionar ${item.name ?? 'empresa'}`}
+              onChange={onToggle}
+            />
+          )}
+        </td>
+        <td>
           <b>{item.name ?? '—'}</b>
           <div className="crm-sub">{item.address ?? '—'}</div>
           <div className="crm-sub">
@@ -664,6 +881,11 @@ function ResultRow({
               {tag.text}
             </span>
           ))}
+          {item.missing.length > 0 && (
+            <span className="crm-badge" title="O Google não deu esses dados">
+              incompleto: {item.missing.map((field) => PROSPECT_MISSING_LABELS[field]).join(', ')}
+            </span>
+          )}
           {item.leadId && (
             <div>
               <Link to={`/crm-vendas/negociacoes/${item.leadId}`}>Abrir negociação</Link>
@@ -722,7 +944,7 @@ function ResultRow({
       </tr>
       {(discarding || Object.keys(enrichment).length > 0) && (
         <tr>
-          <td colSpan={6}>
+          <td colSpan={7}>
             {discarding && (
               <form
                 className="crm-quick-row"
@@ -850,6 +1072,7 @@ function LeadModal({
     instagram: enrichment.instagram?.value ?? '',
     notes: '',
     stageId: '',
+    followUpAt: '',
   });
   const [optIn, setOptIn] = useState<boolean | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
@@ -866,7 +1089,13 @@ function LeadModal({
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const parsed = prospectLeadSchema.safeParse({ ...form, whatsappOptIn: optIn ?? undefined });
+    // datetime-local is the seller's local time without an offset: sent as an instant.
+    const followUpAt = form.followUpAt ? new Date(form.followUpAt).toISOString() : '';
+    const parsed = prospectLeadSchema.safeParse({
+      ...form,
+      followUpAt,
+      whatsappOptIn: optIn ?? undefined,
+    });
     if (!parsed.success)
       return setProblem(parsed.error.issues[0]?.message ?? 'Confira o formulário.');
     setProblem(null);
@@ -881,6 +1110,7 @@ function LeadModal({
       <form className="crm-stack" onSubmit={submit}>
         <p className="crm-sub">
           Preencha com o que a empresa disse no primeiro contato. Nada do Google vai para o lead.
+          Com retorno combinado, o lead ganha uma tarefa de follow-up para o dono.
         </p>
         <div className="crm-form-grid">
           {field('companyName', 'Empresa')}
@@ -927,6 +1157,15 @@ function LeadModal({
               Não
             </label>
           </fieldset>
+          <label className="crm-field">
+            <span>Retorno combinado (opcional)</span>
+            <input
+              className="crm-input"
+              type="datetime-local"
+              value={form.followUpAt}
+              onChange={(event) => setForm((c) => ({ ...c, followUpAt: event.target.value }))}
+            />
+          </label>
           <label className="crm-field is-wide">
             <span>Observações</span>
             <textarea
@@ -958,11 +1197,27 @@ function LeadModal({
 
 // --- Meus prospects ----------------------------------------------------------------
 
-function ProspectsTab({ canManage }: { canManage: boolean }) {
+function ProspectsTab({
+  canManage,
+  canExport,
+  aiConfigured,
+}: {
+  canManage: boolean;
+  canExport: boolean;
+  aiConfigured: boolean;
+}) {
   const [status, setStatus] = useState<ProspectStatus | ''>('');
   const [owner, setOwner] = useState('');
   const prospects = useProspects({ status, owner });
   const owners = useProspectOwners(canManage);
+  const [exporting, setExporting] = useState<'idle' | 'running' | 'failed'>('idle');
+  const exportSheet = () => {
+    setExporting('running');
+    downloadProspectsExport({ status, owner }).then(
+      () => setExporting('idle'),
+      () => setExporting('failed'),
+    );
+  };
 
   return (
     <>
@@ -1000,6 +1255,22 @@ function ProspectsTab({ canManage }: { canManage: boolean }) {
             </select>
           </label>
         )}
+        {canExport && (
+          <div className="crm-field">
+            <button
+              type="button"
+              className="crm-btn"
+              disabled={exporting === 'running'}
+              title="Só os dados da Wings: o Google não deixa guardar nem exportar nome, endereço ou telefone"
+              onClick={exportSheet}
+            >
+              {exporting === 'running' ? 'Exportando…' : 'Exportar planilha'}
+            </button>
+            {exporting === 'failed' && (
+              <span className="crm-error">— A planilha não foi gerada. Tente de novo.</span>
+            )}
+          </div>
+        )}
       </div>
       {canManage && owners.isError && (
         <LoadFailure
@@ -1024,6 +1295,7 @@ function ProspectsTab({ canManage }: { canManage: boolean }) {
             key={prospect.id}
             prospect={prospect}
             canManage={canManage}
+            aiConfigured={aiConfigured}
             owners={owners.data}
           />
         ))
@@ -1035,10 +1307,12 @@ function ProspectsTab({ canManage }: { canManage: boolean }) {
 function ProspectCard({
   prospect,
   canManage,
+  aiConfigured,
   owners,
 }: {
   prospect: Prospect;
   canManage: boolean;
+  aiConfigured: boolean;
   owners: { id: string; name: string }[] | undefined;
 }) {
   const update = useUpdateProspect();
@@ -1051,6 +1325,7 @@ function ProspectCard({
   });
   const [enrichment, setEnrichment] = useState(prospect.enrichment);
   const [leadOpen, setLeadOpen] = useState(false);
+  const [approachOpen, setApproachOpen] = useState(false);
   const editable = (prospect.mine || canManage) && !CLOSED.includes(prospect.status);
   const place = ficha.data?.found ? ficha.data.place : null;
   const site = place ? webUrl(place.website) : null;
@@ -1116,7 +1391,20 @@ function ProspectCard({
             Criar lead
           </button>
         )}
+        {prospect.status !== 'nao_contatar' && (
+          <button
+            type="button"
+            className="crm-btn is-small is-quiet"
+            disabled={!aiConfigured}
+            title={aiConfigured ? 'Rascunho da IA para o primeiro contato' : NO_AI}
+            aria-expanded={approachOpen}
+            onClick={() => setApproachOpen((open) => !open)}
+          >
+            Sugerir abordagem (IA)
+          </button>
+        )}
       </div>
+      {approachOpen && <ApproachPanel prospectId={prospect.id} />}
       {editable ? (
         <form className="crm-form-grid" onSubmit={save}>
           <label className="crm-field">

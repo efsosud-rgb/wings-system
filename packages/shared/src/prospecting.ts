@@ -70,6 +70,8 @@ export const prospectSearchSchema = z
     minRating: z.number().min(0).max(5).nullable().default(null),
     minReviews: z.number().int().min(0).max(1_000_000).nullable().default(null),
     requireWebsite: z.boolean().default(false),
+    /** Only companies Google shows a phone for (telefone comercial). */
+    requirePhone: z.boolean().default(false),
     onlyOperational: z.boolean().default(true),
     pageToken: z.string().trim().min(1).max(2000).optional(),
     page: z.number().int().min(1).max(PROSPECT_SEARCH_MAX_PAGES).default(1),
@@ -97,6 +99,19 @@ export const prospectQuerySchema = z.object({
   exige_site: z.boolean(),
 });
 export type ProspectQuery = z.infer<typeof prospectQuerySchema>;
+
+/** The most results one batch reserves: one search's three pages. */
+export const PROSPECT_BATCH_MAX = PROSPECT_PAGE_SIZE * PROSPECT_SEARCH_MAX_PAGES;
+
+/** Reservar em lote: the results the seller reviewed and ticked, each reserved on its own. */
+export const prospectBatchSchema = z.object({
+  placeIds: z
+    .array(placeIdSchema)
+    .min(1, 'Selecione ao menos uma empresa')
+    .max(PROSPECT_BATCH_MAX, `No máximo ${PROSPECT_BATCH_MAX} empresas por lote`)
+    .refine((ids) => new Set(ids).size === ids.length, 'Empresa repetida no lote'),
+});
+export type ProspectBatchInput = z.infer<typeof prospectBatchSchema>;
 
 /** Reservar or Descartar straight from a result; a discard needs its reason. */
 export const prospectClaimSchema = z
@@ -143,12 +158,59 @@ export const prospectLeadSchema = z
     notes: optionalText(2000),
     whatsappOptIn: z.boolean({ error: 'Diga se aceitou receber WhatsApp' }),
     stageId: z.uuid().optional().or(z.literal('')),
+    /** The return the company agreed to: a follow-up task for the lead's owner. */
+    followUpAt: z.iso.datetime({ offset: true }).optional().or(z.literal('')),
   })
   .refine((v) => Boolean(v.phone || v.email), {
     message: 'Informe o telefone ou o e-mail',
     path: ['phone'],
   });
 export type ProspectLeadInput = z.infer<typeof prospectLeadSchema>;
+
+/** The title of the follow-up task Criar lead opens when a return was agreed. */
+export const PROSPECT_FOLLOW_UP_TITLE = 'Retorno combinado na prospecção';
+
+/**
+ * How the seller will approach the company. No WhatsApp: a prospecting company gets WhatsApp from
+ * the system only after it said yes (`whatsappOptInMissing`), so the suggestion never plans one.
+ */
+export const PROSPECT_APPROACH_CHANNELS = ['ligacao', 'email', 'visita'] as const;
+export type ProspectApproachChannel = (typeof PROSPECT_APPROACH_CHANNELS)[number];
+export const PROSPECT_APPROACH_CHANNEL_LABELS: Record<ProspectApproachChannel, string> = {
+  ligacao: 'Ligação',
+  email: 'E-mail',
+  visita: 'Visita',
+};
+
+/** One approach suggestion per person per day at most (each is one paid model call). */
+export const PROSPECT_APPROACH_DAILY_MAX = 30;
+
+/**
+ * Sugerir abordagem: what the seller tells the AI. Nothing of Google's goes with it; the segment is
+ * what the seller typed in the search, the context is their own words.
+ */
+export const prospectApproachSchema = z.object({
+  channel: z.enum(PROSPECT_APPROACH_CHANNELS),
+  segment: optionalText(80),
+  context: optionalText(500),
+});
+export type ProspectApproachInput = z.infer<typeof prospectApproachSchema>;
+
+/** The model's answer, checked before it reaches the screen. */
+export const prospectApproachAnswerSchema = z.object({
+  abertura: z.string().trim().min(1).max(1200),
+  pontos: z.array(z.string().trim().min(1).max(300)).min(1).max(5),
+  proximo_passo: z.string().trim().min(1).max(300),
+});
+
+/** A suggestion, marked as the AI's: the seller reads, edits and uses it; nothing is sent. */
+export interface ProspectApproach {
+  origin: 'ia';
+  channel: ProspectApproachChannel;
+  opening: string;
+  points: string[];
+  nextStep: string;
+}
 
 // --- ICP score ----------------------------------------------------------------
 
@@ -293,7 +355,14 @@ export interface PlaceResult {
 }
 
 export type ProspectTagKind =
-  'lead' | 'client' | 'reserved' | 'discarded' | 'do_not_contact' | 'multi_unit' | 'status';
+  | 'lead'
+  | 'client'
+  | 'reserved'
+  | 'discarded'
+  | 'do_not_contact'
+  | 'multi_unit'
+  | 'possible_duplicate'
+  | 'status';
 
 export interface ProspectTag {
   kind: ProspectTagKind;
@@ -309,8 +378,68 @@ export interface ProspectRef {
   mine: boolean;
 }
 
+/** What Google did not give for a result: the record is incomplete there. */
+export const PROSPECT_MISSING_FIELDS = ['phone', 'website', 'address', 'rating'] as const;
+export type ProspectMissingField = (typeof PROSPECT_MISSING_FIELDS)[number];
+export const PROSPECT_MISSING_LABELS: Record<ProspectMissingField, string> = {
+  phone: 'sem telefone',
+  website: 'sem site',
+  address: 'sem endereço',
+  rating: 'sem nota',
+};
+
+export function missingFields(place: PlaceResult): ProspectMissingField[] {
+  const present: Record<ProspectMissingField, boolean> = {
+    phone: Boolean(place.phone),
+    website: Boolean(place.website),
+    address: Boolean(place.address),
+    rating: place.rating !== null,
+  };
+  return PROSPECT_MISSING_FIELDS.filter((field) => !present[field]);
+}
+
+/**
+ * Hosts that are not the company's own site (a profile, a link page, a delivery app): two
+ * companies "sharing" one of these are not the same company, so it never marks a duplicate.
+ */
+const SHARED_HOSTS = [
+  'instagram.com',
+  'facebook.com',
+  'fb.com',
+  'linktr.ee',
+  'wa.me',
+  'whatsapp.com',
+  'linkedin.com',
+  'google.com',
+  'business.site',
+  'ifood.com.br',
+  'goo.gl',
+  'bit.ly',
+  'tiktok.com',
+  'youtube.com',
+];
+
+/** The company's own domain ("hamburgueria.com.br"), lower case without www; null for no site or a shared host. */
+export function siteDomain(url: string | null | undefined): string | null {
+  // No URL class here (the shared package runs without DOM or Node types): the host by hand.
+  const host = (url ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//, '')
+    .replace(/^[^@/?#]*@/, '')
+    .split(/[/?#:]/)[0]!
+    .replace(/^www\./, '')
+    .replace(/\.$/, '');
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host)) return null;
+  return SHARED_HOSTS.some((shared) => host === shared || host.endsWith(`.${shared}`))
+    ? null
+    : host;
+}
+
 export interface ProspectSearchItem extends PlaceResult {
   icp: { score: number; reasons: string[] };
+  /** Fields Google did not give: an incomplete record, flagged, never filled in. */
+  missing: ProspectMissingField[];
   tags: ProspectTag[];
   prospect: ProspectRef | null;
   /** The lead with this place_id or this phone, when the seller may open it. */
@@ -357,6 +486,46 @@ export interface Prospect {
   leadId: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** One result of a batch reservation: reserved, or why not, in the seller's words. */
+export type ProspectBatchResult =
+  | { placeId: string; ok: true; prospect: Prospect }
+  | { placeId: string; ok: false; error: string; message: string };
+
+export interface ProspectBatchResponse {
+  results: ProspectBatchResult[];
+  reserved: number;
+  refused: number;
+}
+
+/** One past search, from the calls reserved for it: what the seller typed, never what Google answered. */
+export interface ProspectSearchHistoryItem {
+  id: string;
+  at: string;
+  employeeName: string | null;
+  mine: boolean;
+  segment: string | null;
+  places: string[];
+  calls: number;
+}
+
+/** Prospecção in numbers, per owner: our prospects by status and the calls to Google this month. */
+export interface ProspectingOwnerMetrics {
+  employeeId: string | null;
+  name: string | null;
+  byStatus: Partial<Record<ProspectStatus, number>>;
+  total: number;
+  callsThisMonth: number;
+}
+
+export interface ProspectingMetrics {
+  owners: ProspectingOwnerMetrics[];
+  byStatus: Partial<Record<ProspectStatus, number>>;
+  total: number;
+  /** Converted (virou_lead) over every saved prospect; null with none saved. */
+  conversionRate: number | null;
+  callsThisMonth: number;
 }
 
 export type ProspectPlaceResponse =

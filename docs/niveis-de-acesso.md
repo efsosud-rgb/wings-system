@@ -62,7 +62,8 @@ Formatação (their own prospects; a company another seller holds is hidden from
 Comercial, Diretoria and Admin Master (every prospect, and passing one to another seller). Creating the lead also
 needs `leads.write`, so Diretoria searches but does not create. `prospecting.configure` (ICP weights and exclusion
 list) belongs to the Gerente Comercial and the Admin Master; `prospecting.quota` (the calls to Google) to the Admin
-Master alone. The Vendedor Expansão has none of them.
+Master alone. `prospecting.export` (the prospects as a spreadsheet, our data only, audited) belongs to the Gerente
+Comercial and the Admin Master: not Diretoria, not the seller. The Vendedor Expansão has none of them.
 
 Decisions of 13/10, asked and answered: sellers keep the WhatsApp inbox, Projects, the Sales dashboard and (Vendedor
 Formatação) Leads das Campanhas, and lose the Sofia screen and the employee register; the Gerente Comercial keeps

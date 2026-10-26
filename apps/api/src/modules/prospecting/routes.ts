@@ -1,6 +1,9 @@
 import {
+  PROSPECT_APPROACH_DAILY_MAX,
   PROSPECT_ENRICHMENT_SOURCE,
   PROSPECT_STATUSES,
+  prospectApproachSchema,
+  prospectBatchSchema,
   prospectClaimSchema,
   prospectEnrichSchema,
   prospectingIcpSchema,
@@ -9,6 +12,8 @@ import {
   prospectParseSchema,
   prospectSearchSchema,
   prospectUpdateSchema,
+  type Actor,
+  type ProspectBatchResponse,
   type ProspectEnrichment,
   type ProspectEnrichResponse,
   type ProspectPlaceResponse,
@@ -21,10 +26,13 @@ import { prospects } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import { createOpenRouterLlm, LlmError, type AgentLlm } from '../agent/llm.js';
 import { leadInScope } from '../leads/access.js';
+import { APPROACH_AUDIT_ACTION, approachesToday, suggestApproach } from './approach.js';
+import { exportProspects, prospectingMetrics, searchHistory } from './insights.js';
 import { createPlacesClient, PlacesError, type PlacesClient } from './places-client.js';
 import { reserveCalls, usageOf } from './quota.js';
 import {
   assembleSearch,
+  claimBatch,
   claimProspect,
   convertProspect,
   isProspectingManager,
@@ -66,6 +74,7 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
   const use = { preHandler: app.requirePermission('prospecting.use') };
   const configure = { preHandler: app.requirePermission('prospecting.configure') };
   const quota = { preHandler: app.requirePermission('prospecting.quota') };
+  const exporting = { preHandler: app.requirePermission('prospecting.export') };
   // Criar lead also needs leads.write, as POST /leads: Diretoria reads every deal but creates none.
   const createLead = {
     preHandler: [app.requirePermission('prospecting.use'), app.requirePermission('leads.write')],
@@ -163,6 +172,14 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
       isProspectingManager(actor) ? owners : owners.filter((o) => o.id === actor.employeeId),
     );
   });
+
+  app.get('/prospecting/history', use, async (request, reply) =>
+    reply.send(await searchHistory(db, request.session.actor)),
+  );
+
+  app.get('/prospecting/metrics', use, async (request, reply) =>
+    reply.send(await prospectingMetrics(db, request.session.actor, now())),
+  );
 
   // --- settings ---------------------------------------------------------------------------
 
@@ -302,22 +319,85 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(await listProspects(db, request.session.actor, query.data));
   });
 
+  /** A reservation or discard that changed something leaves its audit entry (ids and statuses). */
+  const auditClaim = async (
+    request: FastifyRequest,
+    actor: Actor,
+    action: 'reserve' | 'discard',
+    outcome: Extract<Awaited<ReturnType<typeof claimProspect>>, { ok: true }>,
+    batch = false,
+  ) => {
+    if (!outcome.created && outcome.previousStatus === outcome.prospect.status) return;
+    await writeAudit(db, {
+      actorEmployeeId: actor.employeeId,
+      action: action === 'reserve' ? 'prospect.reserved' : 'prospect.discarded',
+      entity: 'prospect',
+      entityId: outcome.prospect.id,
+      ip: request.ip,
+      metadata: {
+        status: outcome.prospect.status,
+        previousStatus: outcome.previousStatus,
+        ...(batch ? { batch: true } : {}),
+      },
+    });
+  };
+
   app.post('/prospecting/prospects', use, async (request, reply) => {
     const body = prospectClaimSchema.safeParse(request.body);
     if (!body.success) return invalid(reply, body.error);
     const actor = request.session.actor;
     const outcome = await claimProspect(db, actor, body.data, now());
     if (!outcome.ok) return refused(reply, outcome);
-    if (outcome.created || outcome.previousStatus !== outcome.prospect.status)
-      await writeAudit(db, {
-        actorEmployeeId: actor.employeeId,
-        action: body.data.action === 'reserve' ? 'prospect.reserved' : 'prospect.discarded',
-        entity: 'prospect',
-        entityId: outcome.prospect.id,
-        ip: request.ip,
-        metadata: { status: outcome.prospect.status, previousStatus: outcome.previousStatus },
-      });
+    await auditClaim(request, actor, body.data.action, outcome);
     return reply.status(outcome.created ? 201 : 200).send(outcome.prospect);
+  });
+
+  /** Reservar em lote, after the seller reviewed the ticked results: each one on its own. */
+  app.post('/prospecting/prospects/batch', use, async (request, reply) => {
+    const body = prospectBatchSchema.safeParse(request.body);
+    if (!body.success) return invalid(reply, body.error);
+    const actor = request.session.actor;
+    const outcomes = await claimBatch(db, actor, body.data.placeIds, now());
+    const results: ProspectBatchResponse['results'] = [];
+    for (const { placeId, outcome } of outcomes) {
+      if (outcome.ok) {
+        await auditClaim(request, actor, 'reserve', outcome, true);
+        results.push({ placeId, ok: true, prospect: outcome.prospect });
+      } else results.push({ placeId, ok: false, error: outcome.error, message: outcome.message });
+    }
+    const reserved = results.filter((result) => result.ok).length;
+    return reply.send({
+      results,
+      reserved,
+      refused: results.length - reserved,
+    } satisfies ProspectBatchResponse);
+  });
+
+  app.get('/prospecting/prospects/export.csv', exporting, async (request, reply) => {
+    const query = listQuery.safeParse(request.query ?? {});
+    if (!query.success) return invalid(reply, query.error);
+    const actor = request.session.actor;
+    const result = await exportProspects(db, actor, query.data);
+    await writeAudit(db, {
+      actorEmployeeId: actor.employeeId,
+      action: 'prospecting.exported',
+      entity: 'prospect_list',
+      entityId: 'csv',
+      ip: request.ip,
+      metadata: {
+        rows: result.count,
+        filters: Object.keys(query.data).filter(
+          (key) => query.data[key as keyof typeof query.data] !== undefined,
+        ),
+      },
+    });
+    const stamp = now().toISOString().slice(0, 10);
+    return reply
+      .header('content-type', 'text/csv; charset=utf-8')
+      .header('content-disposition', `attachment; filename="prospects-${stamp}.csv"`)
+      .header('cache-control', 'no-store')
+      .header('x-rows', String(result.count))
+      .send(result.csv);
   });
 
   app.patch('/prospecting/prospects/:id', use, async (request, reply) => {
@@ -443,6 +523,57 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
     } satisfies ProspectEnrichResponse);
   });
 
+  /** Sugerir abordagem: the AI drafts the first contact from our data only; nothing is sent. */
+  app.post('/prospecting/prospects/:id/approach', use, async (request, reply) => {
+    if (!llm)
+      return reply
+        .status(503)
+        .send({ error: 'ai_unavailable', message: 'A IA não está configurada neste ambiente.' });
+    const params = idParams.safeParse(request.params);
+    if (!params.success) return notFound(reply);
+    const body = prospectApproachSchema.safeParse(request.body);
+    if (!body.success) return invalid(reply, body.error);
+    const actor = request.session.actor;
+    const found = await prospectInReach(db, actor, params.data.id);
+    if (!found) return notFound(reply);
+    if (found.row.status === 'nao_contatar')
+      return reply.status(409).send({
+        error: 'prospect_do_not_contact',
+        message: 'A empresa pediu para não ser contatada.',
+      });
+    const at = now();
+    if ((await approachesToday(db, actor.employeeId, at)) >= PROSPECT_APPROACH_DAILY_MAX)
+      return reply.status(429).send({
+        error: 'approach_quota',
+        message: `Você já pediu ${PROSPECT_APPROACH_DAILY_MAX} sugestões hoje. Amanhã tem mais.`,
+      });
+    // Counted before the call: a call that failed may have cost too.
+    await writeAudit(db, {
+      actorEmployeeId: actor.employeeId,
+      action: APPROACH_AUDIT_ACTION,
+      entity: 'prospect',
+      entityId: found.row.id,
+      ip: request.ip,
+      metadata: { channel: body.data.channel },
+    });
+    let approach: Awaited<ReturnType<typeof suggestApproach>>;
+    try {
+      approach = await suggestApproach(llm, found.row, body.data);
+    } catch (error) {
+      if (!(error instanceof LlmError)) throw error;
+      return reply.status(502).send({
+        error: 'ai_failed',
+        message: 'A IA não respondeu agora. Tente de novo em instantes.',
+      });
+    }
+    if (!approach)
+      return reply.status(502).send({
+        error: 'ai_failed',
+        message: 'A IA não conseguiu sugerir agora. Tente de novo.',
+      });
+    return reply.send(approach);
+  });
+
   app.post('/prospecting/prospects/:id/lead', createLead, async (request, reply) => {
     const params = idParams.safeParse(request.params);
     if (!params.success) return notFound(reply);
@@ -459,7 +590,11 @@ export const prospectingRoutes: FastifyPluginAsync = async (app) => {
       entity: 'prospect',
       entityId: found.row.id,
       ip: request.ip,
-      metadata: { leadId: outcome.leadId, created: outcome.created },
+      metadata: {
+        leadId: outcome.leadId,
+        created: outcome.created,
+        followUp: Boolean(body.data.followUpAt),
+      },
     });
     return reply.status(outcome.created ? 201 : 200).send({ leadId: outcome.leadId });
   });
