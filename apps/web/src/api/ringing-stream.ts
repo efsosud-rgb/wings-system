@@ -1,4 +1,4 @@
-import type { WaRingingSnapshot } from '@wings/shared';
+import type { WaInboxSummary, WaRingingSnapshot } from '@wings/shared';
 import { noteUnauthorized } from './client.js';
 import { reportUnauthorized } from './session-expiry.js';
 
@@ -28,6 +28,8 @@ const STABLE_MS = 10_000;
 export interface RingingStreamHandlers {
   /** The whole answer: on connect and every time it changed. */
   onSnapshot(snapshot: WaRingingSnapshot): void;
+  /** The reader's inbox summary (`event: inbox`): on connect and every time it changed. */
+  onInbox?(summary: WaInboxSummary): void;
   /** True once an answer has arrived on a connection, false when that connection ends. */
   onLive(live: boolean): void;
 }
@@ -66,6 +68,12 @@ const isSnapshot = (value: unknown): value is WaRingingSnapshot =>
   typeof (value as WaRingingSnapshot).calling === 'boolean' &&
   Array.isArray((value as WaRingingSnapshot).calls);
 
+const isInboxSummary = (value: unknown): value is WaInboxSummary =>
+  typeof value === 'object' &&
+  value !== null &&
+  typeof (value as WaInboxSummary).unread === 'number' &&
+  typeof (value as WaInboxSummary).stamp === 'string';
+
 /** Opens the stream and keeps it open. Returns the function that closes it for good. */
 export function openRingingStream(handlers: RingingStreamHandlers): () => void {
   /** The screen closed it: nothing more is reported. */
@@ -103,21 +111,24 @@ export function openRingingStream(handlers: RingingStreamHandlers): () => void {
         mine.abort();
         return;
       }
-      if (name !== 'ringing') return;
+      if (name !== 'ringing' && name !== 'inbox') return;
       let snapshot: unknown;
       try {
         snapshot = JSON.parse(data);
       } catch {
         return;
       }
-      if (!isSnapshot(snapshot)) return;
+      const inbox = name === 'inbox' && isInboxSummary(snapshot) ? snapshot : null;
+      if (!inbox && (name !== 'ringing' || !isSnapshot(snapshot))) return;
       if (closed) return;
+      // Either answer means the connection works, so its end is always reported.
       if (!live) {
         live = true;
         liveSince = Date.now();
         handlers.onLive(true);
       }
-      handlers.onSnapshot(snapshot);
+      if (inbox) handlers.onInbox?.(inbox);
+      else handlers.onSnapshot(snapshot as WaRingingSnapshot);
     });
 
     try {

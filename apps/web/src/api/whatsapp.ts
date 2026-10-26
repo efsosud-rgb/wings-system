@@ -10,6 +10,7 @@ import type {
   WaMessage,
   WaTargets,
   WaArtLink,
+  WaSendMedia,
   WaSendText,
   WaTemplate,
   WaTemplatePreview,
@@ -28,6 +29,7 @@ import { permissionScope, useSession } from './auth.js';
 import { api } from './client.js';
 import { sendLeadFile } from './crm.js';
 import { openRingingStream } from './ringing-stream.js';
+import { INBOX_SUMMARY_KEY, inboxStreamDown, receiveInboxSummary } from './whatsapp-inbox.js';
 
 /**
  * The official WhatsApp of the CRM (docs/whatsapp/cloud-api.md). The open
@@ -129,8 +131,11 @@ export function useMarkWhatsAppRead() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.passivePost<void>(`/whatsapp/conversations/${id}/read`),
-    onSuccess: () =>
-      void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations', 'list'] }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations', 'list'] });
+      // Asked again only while the stream is down; when live, the stream brings it.
+      void queryClient.invalidateQueries({ queryKey: INBOX_SUMMARY_KEY });
+    },
   });
 }
 
@@ -200,23 +205,62 @@ export const useSaveTemplateFields = () =>
     api.put(`/whatsapp/templates/manage/${id}/fields`, { fields }),
   );
 
+function afterSend(queryClient: ReturnType<typeof useQueryClient>, thread: WhatsAppThread) {
+  void queryClient.invalidateQueries({ queryKey: threadKey(thread) });
+  void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations'] });
+  // A person writing takes the conversation from Sofia: her screen shows it at once.
+  void queryClient.invalidateQueries({ queryKey: ['sofia'] });
+}
+
 function useSend<T>(thread: WhatsAppThread, kind: 'text' | 'template') {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: T) =>
       api.post<{ message: WaMessage }>(`${threadPath(thread)}/${kind}`, input),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: threadKey(thread) });
-      void queryClient.invalidateQueries({ queryKey: ['whatsapp', 'conversations'] });
-      // A person writing takes the conversation from Sofia: her screen shows it at once.
-      void queryClient.invalidateQueries({ queryKey: ['sofia'] });
-    },
+    onSuccess: () => afterSend(queryClient, thread),
   });
 }
 
 export const useSendWhatsAppText = (thread: WhatsAppThread) => useSend<WaSendText>(thread, 'text');
 export const useSendWhatsAppTemplate = (thread: WhatsAppThread) =>
   useSend<WaTemplateSend>(thread, 'template');
+
+/**
+ * A file in the conversation: it goes up to the deal's Arquivos first (`sendLeadFile`), then the
+ * conversation sends it by its id. `uploaded` is a file already there (the one of the same name, or
+ * this one after a send that failed past the upload): it goes without going up again.
+ */
+export function useSendWhatsAppFile(thread: WhatsAppThread, leadId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      file: File | null;
+      uploaded: string | null;
+      caption: string;
+      onProgress: (fraction: number) => void;
+      onUploaded: (fileId: string) => void;
+    }) => {
+      let fileId = input.uploaded;
+      if (!fileId) {
+        if (!leadId || !input.file) throw new Error(NO_DEAL_FOR_FILES);
+        fileId = (await sendLeadFile({ leadId, file: input.file, onProgress: input.onProgress }))
+          .fileId;
+        input.onUploaded(fileId);
+      }
+      const body: WaSendMedia = { fileId, ...(input.caption ? { caption: input.caption } : {}) };
+      return api.post<{ message: WaMessage }>(`${threadPath(thread)}/media`, body);
+    },
+    onSuccess: () => afterSend(queryClient, thread),
+    // The deal's Arquivos, its count and timeline show the file that went up, whatever happened after.
+    onSettled: () => {
+      if (leadId) void queryClient.invalidateQueries({ queryKey: ['leads'] });
+    },
+  });
+}
+
+/** Why a conversation with no deal sends no file (the API says the same). */
+export const NO_DEAL_FOR_FILES =
+  'O arquivo fica nos arquivos da negociação: esta conversa ainda não tem negociação.';
 
 /**
  * What the chosen template becomes now (a common message inside the window,
@@ -297,11 +341,17 @@ export function useRingingCalls(enabled: boolean) {
           .cancelQueries({ queryKey: RINGING_KEY })
           .then(() => queryClient.setQueryData(RINGING_KEY, snapshot));
       },
-      onLive: setLive,
+      // The same stream brings the inbox: the menu's count, and new messages at once.
+      onInbox: (summary) => receiveInboxSummary(queryClient, summary),
+      onLive: (live) => {
+        setLive(live);
+        if (!live) inboxStreamDown(queryClient);
+      },
     });
     return () => {
       close();
       setLive(false);
+      inboxStreamDown(queryClient);
     };
   }, [enabled, queryClient]);
 

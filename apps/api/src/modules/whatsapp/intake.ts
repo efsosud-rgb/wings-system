@@ -50,6 +50,7 @@ import {
   type WaStatusUpdate,
   type WaTemplateUpdate,
 } from './webhook-parse.js';
+import { notifyInboxChanged } from './inbox-signal.js';
 
 /**
  * The WhatsApp webhook queue. The route stores Meta's body and answers 200 at
@@ -177,6 +178,8 @@ export async function applyWhatsAppPayload(deps: WhatsAppIntakeDeps, body: unkno
     for (const status of change.callStatuses) await applyCallStatus(deps.db, status);
     // A call rang, was answered elsewhere or ended: the open ringing streams look again.
     if (change.calls.length > 0 || change.callStatuses.length > 0) notifyCallsChanged();
+    // A message came (or a status moved): the open streams look at each reader's inbox again.
+    if (change.messages.length > 0 || change.statuses.length > 0) notifyInboxChanged();
   }
 }
 
@@ -658,15 +661,16 @@ async function applyStatus(db: Database, update: WaStatusUpdate) {
           : {}),
       })
       .where(eq(waMessages.id, row.id));
-    // A message with the art that Meta failed later because of the file: the art goes up again next time.
-    const art = (row.content as { art?: { mediaId?: unknown } } | null)?.art;
+    // A message with the art (or a deal's file) that Meta failed later because of the file: it goes up again next time.
+    const sent = row.content as { art?: { mediaId?: unknown }; media?: { id?: unknown } } | null;
+    const mediaId = sent?.art?.mediaId ?? sent?.media?.id;
     if (
       update.status === 'failed' &&
-      typeof art?.mediaId === 'string' &&
+      typeof mediaId === 'string' &&
       update.errorCode !== null &&
       ART_MEDIA_GONE_CODES.has(update.errorCode)
     )
-      await invalidateArtMedia(db, art.mediaId, at);
+      await invalidateArtMedia(db, mediaId, at);
   } else if (stamp && stamp !== 'failedAt' && row[stamp] === null && current !== 'failed') {
     // Arrived late (a "delivered" after the "read"): only its time is filled in.
     await db

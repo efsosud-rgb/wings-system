@@ -5,10 +5,14 @@ import {
   templateParamCount,
   waTemplateFamily,
   waTemplateSendSchema,
+  waSendKindOf,
+  waSendMediaSchema,
   waSendTextSchema,
   WA_ART_SUFFIX,
+  WA_TEXT_SEARCH_MIN,
   type WaArtLink,
   type WaConversationItem,
+  type WaSendKind,
   type WaNewTarget,
   type WaTemplate,
   type WaCallPermission,
@@ -17,7 +21,15 @@ import {
 import { and, asc, eq, isNull, max, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { waContacts, waConversations, waMessages, waTemplates } from '../../db/schema/index.js';
+import {
+  driveFiles,
+  driveFileVersions,
+  waContacts,
+  waConversations,
+  waMessageFiles,
+  waMessages,
+  waTemplates,
+} from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
 import {
   officialNumberLive,
@@ -26,17 +38,22 @@ import {
   setOfficialNumberLive,
 } from './official-number.js';
 import { leadInScope, leadOwnerFilter } from '../leads/access.js';
+import { dealRouteAccessOf } from '../drive/access.js';
+import { DriveError, fileFor } from '../drive/service.js';
+import { leadHasFile } from '../leads/files.js';
 import { storageOf } from '../../lib/storage/index.js';
 import {
   ART_MEDIA_GONE_CODES,
   artLink,
   artMediaId,
+  driveFileMediaId,
   invalidateArtMedia,
   type ArtDeps,
 } from './art.js';
 import {
   downloadWhatsAppMedia,
   errorText,
+  filePayload,
   textPayload,
   callPermissionPayload,
   readCallPermission,
@@ -50,6 +67,8 @@ import {
   buildThread,
   conversationItemOf,
   conversationListSql,
+  likeOf,
+  unreadMessageOf,
   markConversationRead,
   type ConversationListRow,
   contactOfPhone,
@@ -61,6 +80,8 @@ import {
 import { takeConversation } from '../sofia/state.js';
 import { adoptUnmatched, conversationFor } from './intake.js';
 import { syncTemplates } from './templates.js';
+import { inboxSummaryOf } from './inbox.js';
+import { notifyInboxChanged } from './inbox-signal.js';
 import {
   payloadOf,
   planTemplateFor,
@@ -85,6 +106,10 @@ export { templateBody } from './template-send.js';
 const TEMPLATES_FRESH_MS = 6 * 3_600_000;
 
 const idParams = z.object({ id: z.uuid() });
+
+/** Why a conversation with no deal cannot send a file (the screen shows the same). */
+const NO_DEAL_FOR_FILES =
+  'O arquivo fica nos arquivos da negociação: esta conversa ainda não tem negociação.';
 
 export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   const { db, env } = app.wings;
@@ -174,29 +199,47 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     if (!query.success)
       return reply.status(400).send({ error: 'invalid', message: 'Filtro inválido.' });
     const filter = query.data.filter ?? (query.data.unanswered === '1' ? 'unanswered' : 'all');
-    const q = query.data.q;
+    const q = query.data.q || undefined;
     const digits = q?.replace(/\D/g, '') ?? '';
+    const like = q ? likeOf(q) : '';
+    // Inside the messages too (Eric, 20/10), from a few letters on. The request log drops the
+    // query string; a database error's message would carry it, as on every route (docs).
+    const textLike = q && q.length >= WA_TEXT_SEARCH_MIN ? like : undefined;
+    const readerId = request.session.actor.employeeId;
     const rows = await db.execute<ConversationListRow>(
       conversationListSql({
         owner: leadOwnerFilter(request.session.actor, 'leads.whatsapp'),
-        readerId: request.session.actor.employeeId,
+        readerId,
         limit: 200,
+        textLike,
         where: sql`
           ${filter === 'unanswered' ? sql`and m.direction = 'in'` : sql``}
           ${
+            // In the query, so the 200 are 200 unread ones: the menu counts them all (inbox.ts).
+            filter === 'unread'
+              ? sql`and exists (select 1 from wa_messages u where ${unreadMessageOf(readerId)})`
+              : sql``
+          }
+          ${
             q
-              ? sql`and (k.profile_name ilike ${`%${q}%`} or l.name ilike ${`%${q}%`}
-                    ${digits.length >= 4 ? sql`or k.phone like ${`%${digits}%`}` : sql``})`
+              ? sql`and (k.profile_name ilike ${like} or l.name ilike ${like}
+                    ${digits.length >= 4 ? sql`or k.phone like ${`%${digits}%`}` : sql``}
+                    ${textLike ? sql`or f.text is not null` : sql``})`
               : sql``
           }`,
       }),
     );
     const at = now();
-    const items: WaConversationItem[] = rows.rows
-      .map((row) => conversationItemOf(row, at))
-      .filter((item) => filter !== 'unread' || item.unreadCount > 0);
+    const items: WaConversationItem[] = rows.rows.map((row) =>
+      conversationItemOf(row, at, textLike ? q : undefined),
+    );
     return reply.send({ conversations: items });
   });
+
+  /** The menu's count of unread conversations and the stamp the screens watch (`inbox.ts`). */
+  app.get('/whatsapp/inbox/summary', use, async (request, reply) =>
+    reply.send(await inboxSummaryOf(db, request.session.actor)),
+  );
 
   /** The reader opened the conversation: its messages so far are read, for them only. */
   app.post('/whatsapp/conversations/:id/read', use, async (request, reply) => {
@@ -204,6 +247,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     const found = params.success ? await visibleConversation(request, params.data.id) : null;
     if (!found) return notFound(reply);
     await markConversationRead(db, found.conversation.id, request.session.actor.employeeId);
+    // The reader's other tabs (and the menu of this one) count it read at once.
+    notifyInboxChanged();
     return reply.status(204).send();
   });
 
@@ -326,6 +371,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
 
   type Outgoing =
     | { kind: 'text'; text: string }
+    | { kind: 'media'; fileId: string; caption: string }
     | { kind: 'call_permission' }
     | {
         kind: 'template';
@@ -356,21 +402,22 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     // A franchise lead speaks with the brand's expansion team, never with Wings (Eric, 07/10).
     const voice = await brandOf(db, target.leadId, target.conversationId ?? null);
     const brand = voice?.name ?? null;
-    const offBrand = (words: string) =>
+    const offBrand = (words: string, why = 'não cite a Wings') =>
       brand && mentionsWings(words)
         ? reply.status(422).send({
             error: 'brand_voice',
-            message: `Nesta conversa você fala pelo time de expansão ${withArticle(brand, voice?.article ?? 'a', 'of')}: não cite a Wings.`,
+            message: `Nesta conversa você fala pelo time de expansão ${withArticle(brand, voice?.article ?? 'a', 'of')}: ${why}.`,
           })
         : null;
     let payload: OutgoingPayload;
-    let shown: string;
+    let shown: string | null;
     let content: Record<string, unknown> = {};
     let planned: {
       plan: Extract<TemplatePlan, { ok: true }>;
       mediaId: string | null;
       artFileId: string | null;
     } | null = null;
+    let sentFile: { fileId: string; kind: WaSendKind; mediaId: string } | null = null;
     if (outgoing.kind === 'call_permission') {
       if (!window.open)
         return reply.status(409).send({
@@ -392,6 +439,83 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       if (refused) return refused;
       payload = textPayload(outgoing.text);
       shown = outgoing.text;
+    } else if (outgoing.kind === 'media') {
+      if (!window.open)
+        return reply.status(409).send({
+          error: 'window_closed',
+          message:
+            'Fora das 24 horas desde a última mensagem da pessoa: arquivo só vai dentro da janela. Escolha um modelo aprovado.',
+        });
+      // The file goes up to the deal's files first: a conversation no deal took yet has none.
+      if (!target.leadId)
+        return reply.status(422).send({ error: 'no_deal', message: NO_DEAL_FOR_FILES });
+      // One of the deal's files, and one the sender may open: the deal's link route asks the
+      // same, so a file of another department attached to the deal never leaves through here.
+      const file = (await leadHasFile(db, target.leadId, outgoing.fileId))
+        ? await fileFor(
+            { ...artDeps(), maxFileBytes: env.DRIVE_MAX_FILE_BYTES },
+            dealRouteAccessOf(request.session.actor),
+            outgoing.fileId,
+          ).then(
+            ({ file: found }) => (found.trashedAt ? undefined : found),
+            (error: unknown) => {
+              if (error instanceof DriveError) return undefined;
+              throw error;
+            },
+          )
+        : undefined;
+      if (!file)
+        return reply.status(404).send({
+          error: 'file_not_found',
+          message: 'Arquivo não encontrado nos arquivos desta negociação.',
+        });
+      const goes = waSendKindOf(file);
+      if (!goes)
+        return reply.status(413).send({
+          error: 'too_large',
+          message: 'O WhatsApp aceita arquivos de até 100 MB.',
+        });
+      if (outgoing.caption && goes.kind === 'audio')
+        return reply.status(422).send({
+          error: 'caption_not_allowed',
+          message: 'Áudio vai sem legenda: mande o texto numa mensagem à parte.',
+        });
+      // The name can reach the person (a document shows it): the voice covers it too.
+      const refused =
+        offBrand(outgoing.caption) ??
+        offBrand(file.name, 'o nome do arquivo cita a Wings; envie com outro nome');
+      if (refused) return refused;
+      const media = await driveFileMediaId({ ...artDeps(), fetchImpl: fetchImpl(), config }, file, {
+        mimeType: goes.type,
+        filename: file.name,
+      });
+      if (!media.ok) {
+        // On the upload, Meta's 100 is the file itself: a type or size WhatsApp does not take.
+        const why =
+          media.why !== 'meta'
+            ? null
+            : media.code === 100
+              ? 'a Meta não aceita este tipo de arquivo'
+              : errorText(media.code, null);
+        return reply.status(502).send({
+          error: 'media_upload_failed',
+          message:
+            media.why !== 'meta'
+              ? 'Não deu para ler o arquivo no Drive. Nada foi enviado; tente de novo em instantes.'
+              : media.code === 100
+                ? // The same file is refused again: another format, not another try.
+                  `O arquivo não subiu para a Meta (${why}). Nada foi enviado; envie em outro formato, como PDF.`
+                : `O arquivo não subiu para a Meta${why ? ` (${why})` : ''}. Nada foi enviado; tente de novo em instantes.`,
+        });
+      }
+      sentFile = { fileId: file.id, kind: goes.kind, mediaId: media.mediaId };
+      payload = filePayload(goes.kind, media.mediaId, outgoing.caption, file.name);
+      shown = outgoing.caption || null;
+      // The bubble opens the Drive file (this version) by `file`; Meta's id is the fallback.
+      content = {
+        media: { id: media.mediaId, mimeType: file.mimeType, filename: file.name },
+        file: { fileId: file.id, version: file.version },
+      };
     } else {
       // Who asked not to receive messages gets no template, not even as a common message:
       // only what a person writes, inside the window.
@@ -504,15 +628,17 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       author: 'employee',
       employeeId: actor.employeeId,
       kind:
-        outgoing.kind === 'call_permission'
-          ? 'interactive'
-          : planned?.plan.free
-            ? planned.plan.free.kind === 'image'
-              ? 'image'
-              : planned.plan.free.kind === 'text'
-                ? 'text'
-                : 'interactive'
-            : outgoing.kind,
+        outgoing.kind === 'media'
+          ? sentFile!.kind
+          : outgoing.kind === 'call_permission'
+            ? 'interactive'
+            : planned?.plan.free
+              ? planned.plan.free.kind === 'image'
+                ? 'image'
+                : planned.plan.free.kind === 'text'
+                  ? 'text'
+                  : 'interactive'
+              : outgoing.kind,
       shown,
       content,
       payload,
@@ -520,14 +646,15 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     });
     const saved = delivered.row;
     const outcome = delivered.outcome;
-    // Meta said the art behind the id is gone: the next send uploads it again (this one stays failed).
+    // Meta said the file behind the id is gone: the next send uploads it again (this one stays failed).
+    const sentMediaId = planned?.mediaId ?? sentFile?.mediaId;
     if (
       outcome === 'failed' &&
-      planned?.mediaId &&
+      sentMediaId &&
       delivered.errorCode !== null &&
       ART_MEDIA_GONE_CODES.has(delivered.errorCode)
     )
-      await invalidateArtMedia(db, planned.mediaId, at);
+      await invalidateArtMedia(db, sentMediaId, at);
     // A template with Meta's "Permitir ligações" request asks too.
     if (
       outcome === 'sent' &&
@@ -562,6 +689,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
               artFileId: planned.artFileId,
             }
           : {}),
+        // By id only: a file's name is never written to the audit.
+        ...(sentFile ? { fileId: sentFile.fileId, sentAs: sentFile.kind } : {}),
         outcome,
         ...(delivered.errorCode === null ? {} : { errorCode: delivered.errorCode }),
       },
@@ -571,12 +700,18 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     return reply.status(201).send({ message: toMessage(saved, authors) });
   }
 
-  const outgoingOf = (kind: 'text' | 'template', body: unknown): Outgoing | string => {
+  const outgoingOf = (kind: 'text' | 'template' | 'media', body: unknown): Outgoing | string => {
     if (kind === 'text') {
       const parsed = waSendTextSchema.safeParse(body);
       return parsed.success
         ? { kind: 'text', text: parsed.data.text }
         : (parsed.error.issues[0]?.message ?? 'Mensagem inválida.');
+    }
+    if (kind === 'media') {
+      const parsed = waSendMediaSchema.safeParse(body);
+      return parsed.success
+        ? { kind: 'media', fileId: parsed.data.fileId, caption: parsed.data.caption ?? '' }
+        : (parsed.error.issues[0]?.message ?? 'Arquivo inválido.');
     }
     const parsed = waTemplateSendSchema.safeParse(body);
     return parsed.success
@@ -584,7 +719,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       : (parsed.error.issues[0]?.message ?? 'Modelo inválido.');
   };
 
-  for (const kind of ['text', 'template'] as const) {
+  for (const kind of ['text', 'template', 'media'] as const) {
     app.post(`/leads/:id/whatsapp/${kind}`, use, async (request, reply) => {
       const params = idParams.safeParse(request.params);
       if (!params.success) return notFound(reply);
@@ -818,7 +953,10 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
 
   // --- received files -------------------------------------------------------------------
 
-  /** Types a browser may show in place; anything else is a download, never run on our origin. */
+  /**
+   * Types a browser may show in place; anything else is a download, never run on our origin.
+   * AMR audio and 3GPP video are downloads too: browsers do not play them.
+   */
   const INLINE = new Set([
     'image/jpeg',
     'image/png',
@@ -827,11 +965,32 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     'audio/mpeg',
     'audio/aac',
     'audio/mp4',
-    'audio/amr',
+    // What some browsers call an M4A sent from the deal's files (Meta was told audio/mp4).
+    'audio/x-m4a',
     'video/mp4',
-    'video/3gpp',
     'application/pdf',
   ]);
+
+  /** The bytes of the version a message sent, while its Drive file is out of the trash. */
+  async function sentVersionOf(fileId: string, version: number | undefined) {
+    const file = await db.query.driveFiles.findFirst({
+      where: and(eq(driveFiles.id, fileId), isNull(driveFiles.trashedAt)),
+    });
+    if (!file) return null;
+    if (version === undefined || version === file.version)
+      return {
+        fileId,
+        version: file.version,
+        storageKey: file.storageKey,
+        mimeType: file.mimeType,
+      };
+    const older = await db.query.driveFileVersions.findFirst({
+      where: and(eq(driveFileVersions.fileId, fileId), eq(driveFileVersions.version, version)),
+    });
+    return older
+      ? { fileId, version, storageKey: older.storageKey, mimeType: older.mimeType }
+      : null;
+  }
 
   app.get('/whatsapp/messages/:id/media', use, async (request, reply) => {
     const params = idParams.safeParse(request.params);
@@ -844,6 +1003,46 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     if (!allowed) return notFound(reply);
     const media = (row.content as { media?: { id?: string; filename?: string | null } }).media;
     if (!media?.id) return notFound(reply);
+    const typeOf = (mime: string | null) => (mime ?? '').split(';')[0]!.trim().toLowerCase();
+    const name = (media.filename ?? `arquivo-${row.id.slice(0, 8)}`).replace(/[^\w.\- ]/g, '_');
+    // Sent from the deal's files: the Drive file itself, the version that went. Received: the
+    // copy in our storage (media-store.ts). The browser takes either from there, by an
+    // address good for five minutes that only this check hands out.
+    const sent = (row.content as { file?: { fileId?: string; version?: number } }).file;
+    const drive = sent?.fileId ? await sentVersionOf(sent.fileId, sent.version) : null;
+    const kept =
+      drive ??
+      (await db.query.waMessageFiles.findFirst({
+        where: and(eq(waMessageFiles.messageId, row.id), eq(waMessageFiles.status, 'stored')),
+      }));
+    const storage = kept ? storageOf(app.wings) : null;
+    if (kept && storage) {
+      const type = typeOf(kept.mimeType);
+      const inline = INLINE.has(type);
+      const url = await storage.presignGet(kept.storageKey, {
+        expiresSeconds: 300,
+        disposition: inline ? 'inline' : 'attachment',
+        filename: name,
+        contentType: inline ? type : 'application/octet-stream',
+      });
+      // A Drive file opened is written down by id, as every Drive read is.
+      if (drive)
+        await writeAudit(db, {
+          actorEmployeeId: request.session.actor.employeeId,
+          action: inline ? 'drive.file_previewed' : 'drive.file_downloaded',
+          entity: 'drive_file',
+          entityId: drive.fileId,
+          ip: request.ip,
+          metadata: {
+            version: drive.version,
+            purpose: 'whatsapp_message',
+            messageId: row.id,
+            ...(row.leadId ? { leadId: row.leadId } : {}),
+          },
+        });
+      return reply.header('Cache-Control', 'private, max-age=240').redirect(url, 302);
+    }
+    // Not copied yet (or the copy failed): straight from Meta, as before.
     const config = whatsappConfigOf(env);
     if (!config) return off(reply);
     const file = await downloadWhatsAppMedia(fetchImpl(), config, media.id);
@@ -852,9 +1051,8 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         error: 'media_unavailable',
         message: 'A Meta não entregou o arquivo (a Meta guarda os arquivos recebidos por 30 dias).',
       });
-    const type = (file.data.mimeType ?? '').split(';')[0]!.trim().toLowerCase();
+    const type = typeOf(file.data.mimeType);
     const inline = INLINE.has(type);
-    const name = (media.filename ?? `arquivo-${row.id.slice(0, 8)}`).replace(/[^\w.\- ]/g, '_');
     return reply
       .header('Content-Type', inline ? type : 'application/octet-stream')
       .header('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${name}"`)

@@ -188,6 +188,53 @@ describe('the WhatsApp screen', () => {
     expect(screen.getByText(/Escolha uma conversa/)).toBeTruthy();
   });
 
+  it('reads as WhatsApp Desktop: initials, the time of today by the clock, older ones by day', () => {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    state.listQuery = {
+      data: {
+        conversations: [
+          { ...rows[0]!, lastAt: new Date(new Date().setHours(9, 7, 0, 0)).toISOString() },
+          { ...rows[1]!, lastAt: yesterday.toISOString() },
+          // A profile name in a "fancy" alphabet: two UTF-16 units per letter.
+          { ...rows[1]!, conversationId: 'c3', profileName: '𝓜𝓪𝓻𝓲𝓪 𝓢𝓸𝓾𝔃𝓪' },
+        ],
+      },
+    };
+    renderAt('/crm-vendas/whatsapp');
+    const elena = screen.getByRole('link', { name: /Elena Prado/ });
+    expect(elena.querySelector('.crm-wa-avatar')?.textContent).toBe('EP');
+    expect(elena.querySelector('time')?.textContent).toBe('09:07');
+    const carlos = screen.getByRole('link', { name: /Carlos/ });
+    expect(carlos.querySelector('time')?.textContent).toBe('Ontem');
+    const fancy = screen.getByRole('link', { name: /𝓜𝓪𝓻𝓲𝓪/ });
+    expect(fancy.querySelector('.crm-wa-avatar')?.textContent).toBe('𝓜𝓢');
+  });
+
+  it('a search that found a message shows that message, with the term marked', () => {
+    state.listQuery = {
+      data: {
+        conversations: [
+          {
+            ...rows[0]!,
+            match: { text: '…fazem franquia de padaria em Niterói?', at: rows[0]!.lastAt },
+          },
+        ],
+      },
+    };
+    renderAt('/crm-vendas/whatsapp');
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Buscar conversa' }), {
+      target: { value: 'PADARIA' },
+    });
+    return waitFor(() => {
+      const elena = screen.getByRole('link', { name: /Elena Prado/ });
+      expect(elena.querySelector('mark')?.textContent).toBe('padaria');
+      expect(elena.textContent).toContain('franquia de padaria em Niterói?');
+      expect(elena.textContent).not.toContain('Oi, tudo bem?');
+      expect(state.asked.at(-1)?.q).toBe('PADARIA');
+    });
+  });
+
   it('opens a deal’s conversation on the right, sends in that conversation and marks it read', async () => {
     renderAt('/crm-vendas/whatsapp/c1');
     expect(screen.getByTestId('chat').textContent).toBe('conversation:c1');

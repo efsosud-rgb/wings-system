@@ -15,6 +15,7 @@ import {
   type WaMessage,
   type WaMessageKind,
   type WaMessageStatus,
+  type WaQuote,
 } from '@wings/shared';
 import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { Database } from '../../db/client.js';
@@ -70,7 +71,85 @@ export const windowOf = (contact: Contact | null | undefined, now: Date) => {
   return { open: expires !== null && expires > now, expiresAt: expires?.toISOString() ?? null };
 };
 
-export function toMessage(row: MessageRow, authors: Map<string, string>): WaMessage {
+type Reactions = { emoji: string; direction: 'in' | 'out' }[];
+
+/** What a page's replies and reactions point at, and the reactions on its messages, by wamid. */
+export interface MessageLinks {
+  quoted: Map<string, MessageRow>;
+  reactions: Map<string, Reactions>;
+}
+const NO_LINKS: MessageLinks = { quoted: new Map(), reactions: new Map() };
+
+/**
+ * The messages a page's replies quote and reactions are for, and the reactions
+ * on the page's own messages, looked up only inside `scope` (the page's own
+ * deal or conversation), so nothing of another deal shows.
+ */
+export async function linksOf(
+  db: Database,
+  rows: MessageRow[],
+  scope: SQL | undefined,
+): Promise<MessageLinks> {
+  if (!scope) return NO_LINKS;
+  const wanted = new Set<string>();
+  for (const row of rows) {
+    const content = row.content as { replyTo?: unknown; reactionTo?: unknown } | null;
+    for (const wamid of [content?.replyTo, content?.reactionTo])
+      if (typeof wamid === 'string') wanted.add(wamid);
+  }
+  const own = rows.flatMap((row) => (row.wamid && row.kind !== 'reaction' ? [row.wamid] : []));
+  const quoted = wanted.size
+    ? await db
+        .select()
+        .from(waMessages)
+        .where(and(scope, inArray(waMessages.wamid, [...wanted])))
+    : [];
+  const target = sql<string>`${waMessages.content} ->> 'reactionTo'`;
+  const reacting = own.length
+    ? await db
+        .select({ target, direction: waMessages.direction, emoji: waMessages.text })
+        .from(waMessages)
+        .where(and(scope, eq(waMessages.kind, 'reaction'), inArray(target, own)))
+        .orderBy(
+          sql`coalesce(${waMessages.waTimestamp}, ${waMessages.createdAt})`,
+          waMessages.createdAt,
+        )
+    : [];
+  // Each side's last reaction wins, as on WhatsApp; an empty one took it back.
+  const last = new Map<string, Map<'in' | 'out', string | null>>();
+  for (const reaction of reacting) {
+    const sides = last.get(reaction.target) ?? new Map<'in' | 'out', string | null>();
+    sides.set(reaction.direction === 'out' ? 'out' : 'in', reaction.emoji);
+    last.set(reaction.target, sides);
+  }
+  const reactions = new Map<string, Reactions>();
+  for (const [wamid, sides] of last)
+    reactions.set(
+      wamid,
+      [...sides].flatMap(([direction, emoji]) => (emoji ? [{ emoji, direction }] : [])),
+    );
+  return { quoted: new Map(quoted.map((row) => [row.wamid!, row])), reactions };
+}
+
+function quoteOf(wamid: unknown, links: MessageLinks): WaQuote | null {
+  if (typeof wamid !== 'string') return null;
+  const row = links.quoted.get(wamid);
+  return row
+    ? {
+        found: true,
+        id: row.id,
+        direction: row.direction === 'out' ? 'out' : 'in',
+        kind: row.kind as WaMessageKind,
+        text: row.text?.slice(0, 300) ?? null,
+      }
+    : { found: false };
+}
+
+export function toMessage(
+  row: MessageRow,
+  authors: Map<string, string>,
+  links: MessageLinks = NO_LINKS,
+): WaMessage {
   const content = (row.content ?? {}) as Record<string, unknown>;
   const media = content.media as { mimeType?: string | null; filename?: string | null } | undefined;
   const template = content.template as { name?: string; language?: string } | undefined;
@@ -82,6 +161,19 @@ export function toMessage(row: MessageRow, authors: Map<string, string>): WaMess
     direction: row.direction === 'out' ? 'out' : 'in',
     kind: row.kind as WaMessageKind,
     text: row.text,
+    replyTo: quoteOf(content.replyTo, links),
+    reactionTo:
+      row.kind === 'reaction' ? (quoteOf(content.reactionTo, links) ?? { found: false }) : null,
+    reactions: row.wamid ? (links.reactions.get(row.wamid) ?? []) : [],
+    // A card from before the numbers were kept holds only their count.
+    contacts:
+      row.kind === 'contacts' && Array.isArray(content.contacts)
+        ? (content.contacts as { name: string | null; phones: string[] }[])
+        : null,
+    location:
+      row.kind === 'location' && content.location
+        ? (content.location as NonNullable<WaMessage['location']>)
+        : null,
     media:
       media && WA_MEDIA_KINDS.includes(row.kind as WaMessageKind)
         ? { mimeType: media.mimeType ?? null, filename: media.filename ?? null }
@@ -238,19 +330,41 @@ export interface ConversationListRow extends Record<string, unknown> {
   text: string | null;
   status: string | null;
   unread: number;
+  /** With `textLike`: the latest message whose text matched (`f` in the query). */
+  match_text?: string | null;
+  match_at?: Date | string | null;
 }
+
+/**
+ * A message `u` of the conversation `c` that the reader has not opened: the
+ * person's, after the reader's last opening, or after our last reply when they
+ * never opened it. One rule for the list's counts and the inbox total.
+ */
+export const unreadMessageOf = (readerId: string) => sql`
+  u.conversation_id = c.id and u.direction = 'in' and u.import_batch_id is null
+  and u.created_at > coalesce(
+    (select r.read_at from wa_conversation_reads r
+      where r.conversation_id = c.id and r.employee_id = ${readerId}),
+    (select max(o.created_at) from wa_messages o
+      where o.conversation_id = c.id and o.direction = 'out' and o.author <> 'system'),
+    '-infinity'::timestamptz)`;
+
+/** An ILIKE pattern that finds `term` as typed: `%`, `_` and `\` in it are plain characters. */
+export const likeOf = (term: string) => `%${term.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
 /**
  * The conversations a reader may see (`owner` = their id when they see only
  * their own deals' ones), newest first, with the last message and how many
- * of the person's messages this reader has not opened (after their last
- * opening, or after our last reply when they never opened it).
+ * of the person's messages this reader has not opened (`unreadMessageOf`).
+ * With `textLike`, each row also brings its latest message whose text matches
+ * (`f`), for `where` to filter on: the same conversations, so the same reach.
  */
 export function conversationListSql(input: {
   owner: string | undefined;
   readerId: string;
   where: SQL;
   limit: number;
+  textLike?: string;
 }) {
   return sql`
     select c.id, c.lead_id, l.name as lead_name, l.pipeline as lead_pipeline,
@@ -258,13 +372,8 @@ export function conversationListSql(input: {
            c.last_message_at, c.attendance, c.segment, c.state_changed_at, c.reason,
            b.name as brand_name, m.direction, m.kind, m.text, m.status,
            (select count(*)::int from wa_messages u
-             where u.conversation_id = c.id and u.direction = 'in' and u.import_batch_id is null
-               and u.created_at > coalesce(
-                 (select r.read_at from wa_conversation_reads r
-                   where r.conversation_id = c.id and r.employee_id = ${input.readerId}),
-                 (select max(o.created_at) from wa_messages o
-                   where o.conversation_id = c.id and o.direction = 'out' and o.author <> 'system'),
-                 '-infinity'::timestamptz)) as unread
+             where ${unreadMessageOf(input.readerId)}) as unread
+           ${input.textLike ? sql`, f.text as match_text, f.at as match_at` : sql``}
     from wa_conversations c
     join wa_contacts k on k.id = c.contact_id
     left join leads l on l.id = c.lead_id
@@ -275,6 +384,16 @@ export function conversationListSql(input: {
       -- The system's own call-permission request is not an answer: the conversation stays waiting.
       where conversation_id = c.id and author <> 'system' order by created_at desc limit 1
     ) m on true
+    ${
+      input.textLike
+        ? sql`left join lateral (
+            select s.text, coalesce(s.wa_timestamp, s.created_at) as at from wa_messages s
+            where s.conversation_id = c.id and s.kind <> 'reaction'
+              and s.text ilike ${input.textLike}
+            order by s.created_at desc limit 1
+          ) f on true`
+        : sql``
+    }
     where c.last_message_at is not null
       ${input.owner === undefined ? sql`` : sql`and l.owner_employee_id = ${input.owner}`}
       ${input.where}
@@ -282,7 +401,22 @@ export function conversationListSql(input: {
     limit ${input.limit}`;
 }
 
-export function conversationItemOf(row: ConversationListRow, now: Date): WaConversationItem {
+/** About `size` characters of a found message around the first place `term` is. */
+export function snippetOf(text: string, term: string, size = 80): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  if (flat.length <= size) return flat;
+  const at = flat
+    .toLocaleLowerCase('pt-BR')
+    .indexOf(term.replace(/\s+/g, ' ').trim().toLocaleLowerCase('pt-BR'));
+  const start = Math.max(0, Math.min(at - 20, flat.length - size));
+  return `${start > 0 ? '…' : ''}${flat.slice(start, start + size)}${start + size < flat.length ? '…' : ''}`;
+}
+
+export function conversationItemOf(
+  row: ConversationListRow,
+  now: Date,
+  term?: string,
+): WaConversationItem {
   const lastInbound = row.last_inbound_at ? new Date(row.last_inbound_at) : null;
   const kind = (row.kind ?? 'text') as WaMessageKind;
   return {
@@ -301,6 +435,12 @@ export function conversationItemOf(row: ConversationListRow, now: Date): WaConve
     lastStatus: row.direction === 'out' ? ((row.status ?? 'pending') as WaMessageStatus) : null,
     attendance: row.attendance as SofiaState,
     ownerName: row.owner_name,
+    ...(term !== undefined && {
+      match:
+        row.match_text && row.match_at
+          ? { text: snippetOf(row.match_text, term), at: new Date(row.match_at).toISOString() }
+          : null,
+    }),
   };
 }
 
@@ -333,23 +473,22 @@ export async function buildThread(
 ): Promise<DealWhatsApp> {
   const { db } = deps;
   const config = whatsappConfigOf(deps.env);
-  const rows = conversationId
+  const scope = conversationId
+    ? eq(waMessages.conversationId, conversationId)
+    : leadId
+      ? eq(waMessages.leadId, leadId)
+      : undefined;
+  const rows = scope
     ? await db
         .select()
         .from(waMessages)
-        .where(eq(waMessages.conversationId, conversationId))
+        .where(scope)
         .orderBy(desc(waMessages.createdAt))
         .limit(WA_MESSAGES_PAGE)
-    : leadId
-      ? await db
-          .select()
-          .from(waMessages)
-          .where(eq(waMessages.leadId, leadId))
-          .orderBy(desc(waMessages.createdAt))
-          .limit(WA_MESSAGES_PAGE)
-      : [];
+    : [];
   rows.reverse();
   const authors = await authorsOf(db, rows);
+  const links = await linksOf(db, rows, scope);
   const pick = { id: waConversations.id, attendance: waConversations.attendance };
   const [conversation] = conversationId
     ? await db.select(pick).from(waConversations).where(eq(waConversations.id, conversationId))
@@ -373,7 +512,7 @@ export async function buildThread(
     callPermission: permissionOf(contact, deps.now),
     attendance: (conversation?.attendance as SofiaState | undefined) ?? null,
     speaksFor: await brandVoiceOf(db, leadId, conversation?.id ?? null),
-    messages: rows.map((row) => toMessage(row, authors)),
+    messages: rows.map((row) => toMessage(row, authors, links)),
   };
 }
 
@@ -399,5 +538,6 @@ export async function olderMessages(
     .limit(WA_MESSAGES_PAGE);
   rows.reverse();
   const authors = await authorsOf(db, rows);
-  return rows.map((row) => toMessage(row, authors));
+  const links = await linksOf(db, rows, eq(waMessages.leadId, leadId));
+  return rows.map((row) => toMessage(row, authors, links));
 }

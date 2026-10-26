@@ -198,6 +198,8 @@ vi.mock('../../api/whatsapp.js', () => ({
   useRefreshWhatsAppTemplates: () => mutation(),
   useSendWhatsAppText: () => mutation(textMutate),
   useSendWhatsAppTemplate: () => mutation(templateMutate),
+  useSendWhatsAppFile: () => ({ ...mutation(), reset: vi.fn() }),
+  NO_DEAL_FOR_FILES: 'O arquivo fica nos arquivos da negociação.',
   useTemplatePreview: (_thread: unknown, input: { name: string } | null) => {
     if (input) previewCalls.push(input);
     // Like react-query's placeholderData: while a template's preview loads, the previous one is returned.
@@ -383,6 +385,66 @@ describe('the WhatsApp conversation screen', () => {
       chat.getByRole('link', { name: /Baixar documento · cnpj.pdf/ }).getAttribute('href'),
     ).toBe('/api/whatsapp/messages/m4/media');
     expect(chat.getByText(/Janela de 24 h aberta até/)).toBeTruthy();
+  });
+
+  it('shows a received photo, sticker, audio and video in the balloon, and "—" when one does not open', () => {
+    const file = (id: string, kind: 'image' | 'sticker' | 'audio' | 'video', mimeType: string) => ({
+      id,
+      direction: 'in' as const,
+      kind,
+      text: null,
+      media: { mimeType, filename: null },
+      template: null,
+      status: null,
+      error: null,
+      authorName: null,
+      bySofia: false,
+      imported: null,
+      fromTemplate: null,
+      withArt: false,
+      at: '2026-10-07T14:00:00.000Z',
+    });
+    queryState.thread = thread({
+      messages: [
+        file('p1', 'image', 'image/jpeg'),
+        file('s1', 'sticker', 'image/webp'),
+        file('a1', 'audio', 'audio/ogg'),
+        file('v1', 'video', 'video/mp4'),
+        file('a2', 'audio', 'audio/amr'),
+      ],
+    });
+    const { container } = show();
+    const chat = within(screen.getByRole('region', { name: 'Conversa' }));
+    const photo = chat.getByRole('img', { name: 'Imagem recebida pelo WhatsApp' });
+    expect(photo.getAttribute('src')).toBe('/api/whatsapp/messages/p1/media');
+    expect(photo.closest('a')?.getAttribute('href')).toBe('/api/whatsapp/messages/p1/media');
+    expect(chat.getByRole('img', { name: 'Figurinha recebida pelo WhatsApp' }).className).toBe(
+      'is-sticker',
+    );
+    // A browser cannot play AMR: a download, never a player that fails.
+    expect(container.querySelectorAll('audio')).toHaveLength(1);
+    expect(
+      chat.getAllByRole('link', { name: 'Baixar áudio' }).map((link) => link.getAttribute('href')),
+    ).toContain('/api/whatsapp/messages/a2/media');
+    const audio = container.querySelector('audio')!;
+    expect(audio.getAttribute('src')).toBe('/api/whatsapp/messages/a1/media');
+    expect(audio.getAttribute('preload')).toBe('none');
+    const video = container.querySelector('video')!;
+    expect(video.getAttribute('src')).toBe('/api/whatsapp/messages/v1/media');
+    expect(video.getAttribute('preload')).toBe('none');
+
+    fireEvent.error(photo);
+    fireEvent.error(audio);
+    expect(
+      chat.getByText(
+        /— Imagem: não abriu aqui\. Tente pelo link; se a mensagem tem mais de 30 dias/,
+      ),
+    ).toBeTruthy();
+    expect(chat.getByText(/— Áudio: não abriu aqui\./)).toBeTruthy();
+    expect(chat.getByRole('link', { name: 'Abrir imagem' }).getAttribute('href')).toBe(
+      '/api/whatsapp/messages/p1/media',
+    );
+    expect(chat.queryByRole('img', { name: 'Imagem recebida pelo WhatsApp' })).toBeNull();
   });
 
   it('sends free text inside the window with Enter', () => {

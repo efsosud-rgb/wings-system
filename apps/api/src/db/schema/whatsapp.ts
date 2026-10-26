@@ -258,7 +258,8 @@ export const waMessages = pgTable(
     text: text('text'),
     /**
      * The rest, without the text: media id, type and file name; template name,
-     * language and parameters; the message replied to; a reaction's target.
+     * language and parameters; the message replied to; a reaction's target; a
+     * contact card's names and numbers; a location's point, name and address.
      * Never a media URL (they carry Meta's signature and expire).
      */
     content: jsonb('content').notNull().default({}),
@@ -292,6 +293,49 @@ export const waMessages = pgTable(
       .where(sql`${table.importBatchId} is not null`),
     index('wa_messages_conversation_idx').on(table.conversationId, table.createdAt),
     index('wa_messages_lead_idx').on(table.leadId, table.createdAt),
+    // The file queue looks only at messages that have a file.
+    index('wa_messages_media_idx')
+      .on(table.createdAt)
+      .where(sql`(${table.content} -> 'media' ->> 'id') is not null`),
+  ],
+);
+
+/**
+ * A received file, copied to our storage (R2) soon after it arrives, so it
+ * outlives the 30 days Meta keeps it (docs/whatsapp/cloud-api.md). The queue
+ * in `media-store.ts` copies each message's file once; the screen opens it by
+ * a 5-minute signed address. The file lives as long as its message, and a
+ * message as long as its deal: a message deleted leaves the row without one,
+ * and the queue deletes the object, then the row.
+ */
+export const waMessageFiles = pgTable(
+  'wa_message_files',
+  {
+    tenantId: tenantId(),
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Null once the message is gone: the object is deleted next. */
+    messageId: uuid('message_id').references(() => waMessages.id, { onDelete: 'set null' }),
+    /** `whatsapp/2026-10/<uuid>`: made here, nothing of the person's file name. */
+    storageKey: text('storage_key').notNull(),
+    /** pending | stored | failed */
+    status: text('status').notNull().default('pending'),
+    mimeType: text('mime_type'),
+    byteSize: integer('byte_size'),
+    attempts: integer('attempts').notNull().default(0),
+    /** Why the last copy failed (`too_large`, `media_unavailable`, a Meta code): never the person's data. */
+    lastError: text('last_error'),
+    nextAttemptAt: timestamp('next_attempt_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    storedAt: timestamp('stored_at', { withTimezone: true }),
+  },
+  (table) => [
+    uniqueIndex('wa_message_files_message_uq').on(table.messageId),
+    index('wa_message_files_due_idx')
+      .on(table.nextAttemptAt)
+      .where(sql`${table.status} = 'pending'`),
+    index('wa_message_files_orphan_idx')
+      .on(table.id)
+      .where(sql`${table.messageId} is null`),
   ],
 );
 

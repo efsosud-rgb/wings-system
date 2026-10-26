@@ -211,3 +211,211 @@ describe('older messages of a long thread', () => {
     ).toBe(false);
   });
 });
+
+describe('what the balloon shows', () => {
+  it('a reply shows the quoted message at the top, and "—" with the reason when it is not here', () => {
+    show([
+      message({
+        id: 'r1',
+        text: 'Pode ser na terça',
+        replyTo: {
+          found: true,
+          id: 'q1',
+          direction: 'out',
+          kind: 'text',
+          text: 'Qual dia fica bom?',
+        },
+      }),
+      message({
+        id: 'r2',
+        text: 'Gostei desta',
+        replyTo: { found: true, id: 'q2', direction: 'in', kind: 'image', text: null },
+      }),
+      message({ id: 'r3', text: 'Isso', replyTo: { found: false } }),
+    ]);
+
+    const [first, second, third] = screen.getAllByRole('listitem');
+    expect(within(first!).getByText('Equipe')).toBeTruthy();
+    expect(within(first!).getByText('Qual dia fica bom?')).toBeTruthy();
+    expect(within(first!).getByText('Pode ser na terça')).toBeTruthy();
+    // A quoted file with no caption is named by its kind.
+    expect(within(second!).getByText('Cliente')).toBeTruthy();
+    expect(within(second!).getByText('Imagem')).toBeTruthy();
+    expect(
+      within(third!).getByText(
+        '— A mensagem respondida não está aqui: é de antes de o número entrar no sistema, está em outra negociação desta pessoa, ou ficou só no celular.',
+      ),
+    ).toBeTruthy();
+    expect(within(third!).getByText('Isso')).toBeTruthy();
+  });
+});
+
+describe('reactions', () => {
+  it('shows on its balloon; one whose message is not on the list stays a line, "—" when not here', () => {
+    show([
+      message({
+        id: 't1',
+        direction: 'out',
+        text: 'Mandei o contrato',
+        reactions: [{ emoji: '❤️', direction: 'in' }],
+      }),
+      message({
+        id: 'x1',
+        kind: 'reaction',
+        text: '❤️',
+        reactionTo: { found: true, id: 't1', direction: 'out', kind: 'text', text: 'Mandei' },
+      }),
+      message({
+        id: 'x2',
+        kind: 'reaction',
+        text: '👍',
+        reactionTo: { found: true, id: 'older', direction: 'out', kind: 'document', text: null },
+      }),
+      message({
+        id: 'x3',
+        kind: 'reaction',
+        text: null,
+        reactionTo: { found: true, id: 'older2', direction: 'out', kind: 'text', text: 'Proposta' },
+      }),
+      message({ id: 'x4', kind: 'reaction', text: '🙏', reactionTo: { found: false } }),
+    ]);
+
+    expect(screen.getByRole('img', { name: 'Reação do cliente: ❤️' })).toBeTruthy();
+    // x1 is on the balloon of t1, both on this list: no line of its own.
+    const items = screen.getAllByRole('listitem');
+    expect(items).toHaveLength(4);
+    expect(items[1]?.textContent).toMatch(/^Cliente reagiu com 👍 a: Documento/);
+    expect(items[2]?.textContent).toMatch(/^Cliente tirou a reação de: Proposta/);
+    expect(items[3]?.textContent).toMatch(
+      /^Cliente reagiu com 🙏\. — A mensagem da reação não está aqui: é de antes/,
+    );
+  });
+});
+
+describe('contact cards', () => {
+  it('shows each name and number, and "—" with the reason for what is missing', () => {
+    show([
+      message({
+        id: 'c1',
+        kind: 'contacts',
+        text: 'Contador Fictício',
+        contacts: [
+          { name: 'Contador Fictício', phones: ['+55 21 98888-0001', '5521988880002'] },
+          { name: null, phones: [] },
+        ],
+      }),
+      message({ id: 'c2', kind: 'contacts', text: 'Cartão antigo', contacts: null }),
+      message({ id: 'c3', kind: 'contacts', text: null, contacts: [] }),
+    ]);
+
+    const [card, old, empty] = screen.getAllByRole('listitem');
+    // The name shows once, in the card, not again as the text.
+    expect(within(card!).getAllByText('Contador Fictício')).toHaveLength(1);
+    expect(within(card!).getByText('+55 21 98888-0001')).toBeTruthy();
+    expect(within(card!).getByText('(21) 98888-0002')).toBeTruthy();
+    expect(within(card!).getByText('— Sem nome no cartão')).toBeTruthy();
+    expect(within(card!).getByText('— Sem número no cartão.')).toBeTruthy();
+    expect(within(old!).getByText('Cartão antigo')).toBeTruthy();
+    expect(
+      within(old!).getByText(/^— Cartão de contato sem o número: chegou antes de o sistema/),
+    ).toBeTruthy();
+    expect(within(empty!).getByText(/^— Cartão de contato vazio/)).toBeTruthy();
+  });
+
+  it('leaves a card from the phone export to its "Do celular" tag', () => {
+    show([
+      message({
+        kind: 'contacts',
+        text: null,
+        imported: { file: 'Contador.vcf', omitted: false },
+      }),
+    ]);
+
+    expect(
+      screen.getByText('Do celular · Contato Contador.vcf, dentro do arquivo exportado'),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Cartão de contato/)).toBeNull();
+  });
+});
+
+describe('locations', () => {
+  it('shows the place with a map link, and "—" with the reason when there is no point', () => {
+    show([
+      message({
+        id: 'p1',
+        kind: 'location',
+        text: 'Loja Fictícia',
+        location: {
+          latitude: -22.9068,
+          longitude: -43.1729,
+          name: 'Loja Fictícia',
+          address: 'Rua Exemplo, 100',
+        },
+      }),
+      message({
+        id: 'p2',
+        kind: 'location',
+        text: 'Sem ponto',
+        location: { latitude: null, longitude: null, name: null, address: 'Sem ponto' },
+      }),
+    ]);
+
+    const [shop, nowhere] = screen.getAllByRole('listitem');
+    expect(within(shop!).getAllByText('Loja Fictícia')).toHaveLength(1);
+    expect(within(shop!).getByText('Rua Exemplo, 100')).toBeTruthy();
+    const link = within(shop!).getByRole('link', { name: 'Abrir no mapa' });
+    expect(link.getAttribute('href')).toBe(
+      'https://www.google.com/maps/search/?api=1&query=-22.9068,-43.1729',
+    );
+    expect(link.getAttribute('rel')).toBe('noreferrer');
+    expect(within(nowhere!).getByText('Localização')).toBeTruthy();
+    expect(within(nowhere!).getByText('Sem ponto')).toBeTruthy();
+    expect(within(nowhere!).queryByRole('link')).toBeNull();
+    expect(
+      within(nowhere!).getByText('— Sem o ponto no mapa: o WhatsApp não mandou as coordenadas.'),
+    ).toBeTruthy();
+  });
+});
+
+describe('the day marks', () => {
+  it('puts the day over the first message of each day, across an older page too', async () => {
+    const day = (d: number, h: number) => new Date(2026, 8, d, h, 0).toISOString();
+    const shown = [
+      ...run('new', WA_MESSAGES_PAGE - 1, Date.parse(day(10, 10))),
+      message({ id: 'late', text: 'outro dia', at: day(11, 9) }),
+    ];
+    const older = [message({ id: 'old', text: 'bem antes', at: day(9, 8) })];
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ messages: older }), { status: 200 }));
+    show(shown);
+    const marks = () => screen.getAllByRole('separator').map((li) => li.textContent);
+    expect(marks()).toEqual(['10/09/2026', '11/09/2026']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mostrar mensagens anteriores' }));
+    await screen.findByText('bem antes');
+    expect(marks()).toEqual(['09/09/2026', '10/09/2026', '11/09/2026']);
+    // A mark is not a message: the balloons are counted as before.
+    expect(
+      screen.getAllByRole('listitem').filter((li) => li.className.includes('crm-wa-bubble')),
+    ).toHaveLength(WA_MESSAGES_PAGE + 1);
+  });
+});
+
+describe('a message stored late', () => {
+  it('brings its day back where it sits, with no key repeated', () => {
+    const day = (d: number, h: number) => new Date(2025, 9, d, h, 0).toISOString();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    show([
+      message({ id: 'a', text: 'segunda', at: day(19, 9) }),
+      // Meta delivered it late (the server was down): stored after, sent the day before.
+      message({ id: 'b', text: 'domingo', at: day(18, 22) }),
+      message({ id: 'c', text: 'segunda de novo', at: day(19, 10) }),
+    ]);
+    expect(screen.getAllByRole('separator').map((li) => li.textContent)).toEqual([
+      '19/10/2025',
+      '18/10/2025',
+      '19/10/2025',
+    ]);
+    expect(errors.mock.calls.some((call) => String(call[0]).includes('same key'))).toBe(false);
+    errors.mockRestore();
+  });
+});

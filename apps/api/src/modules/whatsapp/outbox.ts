@@ -8,6 +8,7 @@ import {
   type OutgoingPayload,
   type WhatsAppConfig,
 } from './graph.js';
+import { notifyInboxChanged } from './inbox-signal.js';
 
 /**
  * The one way a message leaves: written first (`pending`), sent to Meta once
@@ -26,8 +27,8 @@ export interface Delivery {
   author: 'employee' | 'sofia' | 'system';
   employeeId: string | null;
   kind: WaMessageKind;
-  /** What the screen shows (the body, a filled template). */
-  shown: string;
+  /** What the screen shows (the body, a filled template, a file's caption or none). */
+  shown: string | null;
   content: Record<string, unknown>;
   payload: OutgoingPayload;
   at: Date;
@@ -94,6 +95,7 @@ export async function deliverWhatsApp(
     .update(waConversations)
     .set({ lastMessageAt: at })
     .where(eq(waConversations.id, delivery.conversationId));
+  notifyInboxChanged();
   return {
     row: saved!,
     outcome: result.ok ? 'sent' : result.unknown ? 'unknown' : 'failed',
