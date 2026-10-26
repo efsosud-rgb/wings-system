@@ -120,14 +120,17 @@ export async function prospectInReach(
     : null;
 }
 
+async function ownerNameOf(db: Executor, row: ProspectRow): Promise<string | null> {
+  if (!row.ownerEmployeeId) return null;
+  const owner = await db.query.employees.findFirst({
+    where: eq(employees.id, row.ownerEmployeeId),
+    columns: { fullName: true },
+  });
+  return owner?.fullName ?? null;
+}
+
 async function prospectView(db: Executor, row: ProspectRow, actor: Actor): Promise<Prospect> {
-  const owner = row.ownerEmployeeId
-    ? await db.query.employees.findFirst({
-        where: eq(employees.id, row.ownerEmployeeId),
-        columns: { fullName: true },
-      })
-    : null;
-  return toProspect(row, owner?.fullName ?? null, actor);
+  return toProspect(row, await ownerNameOf(db, row), actor);
 }
 
 // --- the AI: the seller's sentence into search parameters ---------------------------------
@@ -252,9 +255,8 @@ function statusTag(status: ProspectStatus, ownerName: string | null, mine: boole
   const who = mine ? 'você' : (firstName(ownerName) ?? 'outro vendedor');
   switch (status) {
     case 'reservado':
-      return { kind: 'reserved', text: `reservado por ${who}` };
     case 'contatado':
-      return { kind: 'reserved', text: `contatado por ${who}` };
+      return { kind: 'reserved', text: `${status} por ${who}` };
     case 'descartado':
       return { kind: 'discarded', text: 'descartado' };
     case 'nao_contatar':
@@ -433,17 +435,8 @@ const DO_NOT_CONTACT = refusal(
 );
 
 async function takenBy(db: Executor, row: ProspectRow): Promise<Refusal> {
-  const owner = row.ownerEmployeeId
-    ? await db.query.employees.findFirst({
-        where: eq(employees.id, row.ownerEmployeeId),
-        columns: { fullName: true },
-      })
-    : null;
-  return refusal(
-    409,
-    'prospect_taken',
-    `Já reservado por ${firstName(owner?.fullName) ?? 'outro vendedor'}.`,
-  );
+  const who = firstName(await ownerNameOf(db, row)) ?? 'outro vendedor';
+  return refusal(409, 'prospect_taken', `Já reservado por ${who}.`);
 }
 
 /**
