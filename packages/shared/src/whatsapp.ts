@@ -169,6 +169,10 @@ export interface DealWhatsApp {
    * lead never hears of Wings), or null for Wings Company.
    */
   speaksFor: string | null;
+  /** The work number this chat is on; null on the official number. */
+  number: WaChatNumber | null;
+  /** On a deal's page: the deal's chats on work numbers the reader may open (the Central has them). */
+  numberChats: { conversationId: string; number: WaChatNumber }[];
   messages: WaMessage[];
 }
 
@@ -291,9 +295,83 @@ export interface WaConversationItem {
   attendance: SofiaState;
   /** The deal's owner, when there is a deal. */
   ownerName: string | null;
+  /** The work number the chat is on; null on the official number. */
+  number: WaChatNumber | null;
   /** With a search: the latest message whose text has it, cut around the term. */
   match?: { text: string; at: string } | null;
 }
+
+/**
+ * A company work number a chat is on (docs/whatsapp/central.md): the person's phone, mirrored by
+ * coexistence. Its chats are never Sofia's; free text only inside 24 h of the person's last
+ * message on that number, and its own templates come in phase 2.
+ */
+export interface WaChatNumber {
+  id: string;
+  label: string | null;
+  /** 55 + DDD + number, or as Meta shows it. */
+  phone: string | null;
+  ownerName: string | null;
+}
+
+/** The Central's tabs (Eric, 26/10): one at a time, with the selects below. */
+export const WA_INBOX_FILTERS = [
+  'all',
+  'unread',
+  'unanswered',
+  'mine',
+  'unassigned',
+  'human',
+  'sofia',
+] as const;
+export type WaInboxFilter = (typeof WA_INBOX_FILTERS)[number];
+
+export const WA_INBOX_FILTER_LABELS: Record<WaInboxFilter, string> = {
+  all: 'Todas',
+  unread: 'Não lidas',
+  unanswered: 'Sem resposta',
+  mine: 'Minhas',
+  unassigned: 'Sem responsável',
+  human: 'Pessoa',
+  sofia: 'Sofia',
+};
+
+/** A page of the Central's list. */
+export const WA_INBOX_PAGE = 50;
+
+const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+/** `GET /whatsapp/conversations`: everything the list can narrow by, all optional. */
+export const waInboxQuerySchema = z.object({
+  filter: z.enum(WA_INBOX_FILTERS).optional(),
+  /** Older form of "Sem resposta". */
+  unanswered: z.enum(['1', '0']).optional(),
+  q: z.string().trim().max(80).optional(),
+  /** `official` or a work number's id. */
+  number: z.union([z.literal('official'), z.uuid()]).optional(),
+  /** A work number's department (SectorSlug). */
+  sector: z.string().trim().max(60).optional(),
+  /** Who has the conversation (a SofiaState). */
+  state: z.string().trim().max(30).optional(),
+  /** The last message's day, from and to (inclusive, São Paulo days). */
+  from: day.optional(),
+  to: day.optional(),
+  /** The cursor `next` of the previous page. */
+  before: z.string().max(80).optional(),
+});
+export type WaInboxQuery = z.infer<typeof waInboxQuerySchema>;
+
+export interface WaInboxPage {
+  conversations: WaConversationItem[];
+  /** Pass as `before` for the next page; null on the last one. */
+  next: string | null;
+}
+
+/** Starting a chat on a work number: the deal (in the reader's scope) and which of its phones. */
+export const waNumberStartSchema = z.object({
+  leadId: z.uuid(),
+  phone: z.string().trim().max(30),
+});
 
 /** "Nova conversa": a deal (or a contact's deal) in the reader's scope to write to. */
 export interface WaNewTarget {

@@ -1,4 +1,5 @@
 import {
+  brazilianPhoneVariants,
   mentionsWings,
   canonicalWhatsAppPhone,
   withArticle,
@@ -9,28 +10,38 @@ import {
   waSendMediaSchema,
   waSendTextSchema,
   WA_ART_SUFFIX,
+  WA_INBOX_PAGE,
   WA_TEXT_SEARCH_MIN,
+  waInboxQuerySchema,
+  waNumberStartSchema,
   type WaArtLink,
+  type WaChatNumber,
   type WaConversationItem,
+  type WaInboxPage,
   type WaSendKind,
   type WaNewTarget,
   type WaTemplate,
   type WaCallPermission,
   type WaCallPermissionLive,
 } from '@wings/shared';
-import { and, asc, eq, isNull, max, sql } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, isNull, max, sql } from 'drizzle-orm';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
   driveFiles,
   driveFileVersions,
+  employees,
   waContacts,
   waConversations,
   waMessageFiles,
   waMessages,
+  waNumbers,
   waTemplates,
 } from '../../db/schema/index.js';
 import { writeAudit } from '../../lib/audit.js';
+import { createSecretBox } from '../../lib/secret-box.js';
+import { numberConfigOf } from './numbers.js';
+import { linkNumberChat } from './number-intake.js';
 import {
   officialNumberLive,
   sellerWhatsAppLocked,
@@ -70,6 +81,7 @@ import {
   likeOf,
   unreadMessageOf,
   markConversationRead,
+  numberWindowOf,
   type ConversationListRow,
   contactOfPhone,
   permissionOf,
@@ -78,7 +90,7 @@ import {
   callPermissionText,
 } from './thread.js';
 import { takeConversation } from '../sofia/state.js';
-import { adoptUnmatched, conversationFor } from './intake.js';
+import { adoptUnmatched, conversationFor, openConversation } from './intake.js';
 import { syncTemplates } from './templates.js';
 import { inboxSummaryOf } from './inbox.js';
 import { notifyInboxChanged } from './inbox-signal.js';
@@ -135,6 +147,36 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   ) =>
     buildThread({ db, env, fetchImpl: fetchImpl(), now: now() }, contact, leadId, conversationId);
 
+  const box = env.INTEGRATIONS_ENCRYPTION_KEY
+    ? createSecretBox(env.INTEGRATIONS_ENCRYPTION_KEY)
+    : null;
+
+  /**
+   * The work numbers a reader reaches (docs/whatsapp/central.md): their own, or every one at full
+   * scope. `numberId` narrows to one.
+   */
+  const chatNumbersOf = async (request: FastifyRequest, numberId?: string) => {
+    const owner = leadOwnerFilter(request.session.actor, 'leads.whatsapp');
+    return db
+      .select({
+        id: waNumbers.id,
+        label: waNumbers.label,
+        phone: sql<string | null>`coalesce(${waNumbers.phone}, ${waNumbers.displayPhone})`,
+        ownerName: employees.fullName,
+        sector: waNumbers.sector,
+        connected: sql<boolean>`${waNumbers.status} = 'connected' and ${waNumbers.tokenEnc} is not null`,
+      })
+      .from(waNumbers)
+      .leftJoin(employees, eq(employees.id, waNumbers.ownerEmployeeId))
+      .where(
+        and(
+          owner === undefined ? undefined : eq(waNumbers.ownerEmployeeId, owner),
+          numberId ? eq(waNumbers.id, numberId) : undefined,
+        ),
+      )
+      .orderBy(asc(waNumbers.label));
+  };
+
   // --- reading ------------------------------------------------------------------------
 
   app.get('/leads/:id/whatsapp', use, async (request, reply) => {
@@ -147,14 +189,35 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     // conversation Sofia or the team is still handling is not a seller's to take.
     if (contact) {
       const waiting = await db.query.waConversations.findFirst({
-        where: and(eq(waConversations.contactId, contact.id), isNull(waConversations.leadId)),
+        where: and(
+          eq(waConversations.contactId, contact.id),
+          isNull(waConversations.leadId),
+          isNull(waConversations.numberId),
+        ),
         columns: { attendance: true },
       });
       if (waiting && (fullScope(request) || waiting.attendance === 'closed'))
         await adoptUnmatched(db, contact.id, lead.id);
     }
     const data = await threadOf(contact, lead.id, null);
-    return reply.send({ ...data, phone: lead.phone });
+    // The deal's chats on work numbers the reader reaches: opened in the Central.
+    const reached = new Map((await chatNumbersOf(request)).map((n) => [n.id, n]));
+    const chats = await db
+      .select({ conversationId: waConversations.id, numberId: waConversations.numberId })
+      .from(waConversations)
+      .where(and(eq(waConversations.leadId, lead.id), isNotNull(waConversations.numberId)));
+    const numberChats = chats.flatMap(({ conversationId, numberId }) => {
+      const found = numberId ? reached.get(numberId) : undefined;
+      if (!found) return [];
+      const number: WaChatNumber = {
+        id: found.id,
+        label: found.label,
+        phone: found.phone,
+        ownerName: found.ownerName,
+      };
+      return [{ conversationId, number }];
+    });
+    return reply.send({ ...data, phone: lead.phone, numberChats });
   });
 
   /**
@@ -189,15 +252,10 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
   );
 
   app.get('/whatsapp/conversations', use, async (request, reply) => {
-    const query = z
-      .object({
-        unanswered: z.enum(['1', '0']).optional(),
-        filter: z.enum(['all', 'unread', 'unanswered']).optional(),
-        q: z.string().trim().max(80).optional(),
-      })
-      .safeParse(request.query);
+    const query = waInboxQuerySchema.safeParse(request.query);
     if (!query.success)
       return reply.status(400).send({ error: 'invalid', message: 'Filtro inválido.' });
+    const { number, sector, state, from, to, before } = query.data;
     const filter = query.data.filter ?? (query.data.unanswered === '1' ? 'unanswered' : 'all');
     const q = query.data.q || undefined;
     const digits = q?.replace(/\D/g, '') ?? '';
@@ -206,23 +264,50 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     // query string; a database error's message would carry it, as on every route (docs).
     const textLike = q && q.length >= WA_TEXT_SEARCH_MIN ? like : undefined;
     const readerId = request.session.actor.employeeId;
+    // The page's cursor: the last row's time (with its microseconds) and id.
+    const cursor = before?.match(/^(.+)\|([0-9a-f-]{36})$/i);
+    if (before && (!cursor || Number.isNaN(Date.parse(cursor[1]!))))
+      return reply.status(400).send({ error: 'invalid', message: 'Página inválida.' });
+    // The responsible: the deal's owner, else the work number's.
+    const responsible = sql`coalesce(l.owner_employee_id, n.owner_employee_id)`;
     const rows = await db.execute<ConversationListRow>(
       conversationListSql({
         owner: leadOwnerFilter(request.session.actor, 'leads.whatsapp'),
         readerId,
-        limit: 200,
+        limit: WA_INBOX_PAGE + 1,
         textLike,
         where: sql`
           ${filter === 'unanswered' ? sql`and m.direction = 'in'` : sql``}
           ${
-            // In the query, so the 200 are 200 unread ones: the menu counts them all (inbox.ts).
+            // In the query, so a page is a page of unread ones: the menu counts them all (inbox.ts).
             filter === 'unread'
               ? sql`and exists (select 1 from wa_messages u where ${unreadMessageOf(readerId)})`
+              : sql``
+          }
+          ${filter === 'mine' ? sql`and ${responsible} = ${readerId}` : sql``}
+          ${filter === 'unassigned' ? sql`and ${responsible} is null` : sql``}
+          ${filter === 'human' ? sql`and c.attendance <> 'sofia'` : sql``}
+          ${filter === 'sofia' ? sql`and c.attendance = 'sofia'` : sql``}
+          ${
+            number === 'official'
+              ? sql`and c.number_id is null`
+              : number
+                ? sql`and c.number_id = ${number}`
+                : sql``
+          }
+          ${sector ? sql`and n.sector = ${sector}` : sql``}
+          ${state ? sql`and c.attendance = ${state}` : sql``}
+          ${from ? sql`and c.last_message_at >= (${from}::date::timestamp at time zone 'America/Sao_Paulo')` : sql``}
+          ${to ? sql`and c.last_message_at < ((${to}::date + 1)::timestamp at time zone 'America/Sao_Paulo')` : sql``}
+          ${
+            cursor
+              ? sql`and (c.last_message_at, c.id) < (${cursor[1]}::timestamptz, ${cursor[2]}::uuid)`
               : sql``
           }
           ${
             q
               ? sql`and (k.profile_name ilike ${like} or l.name ilike ${like}
+                    or c.phone_contact_name ilike ${like}
                     ${digits.length >= 4 ? sql`or k.phone like ${`%${digits}%`}` : sql``}
                     ${textLike ? sql`or f.text is not null` : sql``})`
               : sql``
@@ -230,11 +315,21 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       }),
     );
     const at = now();
-    const items: WaConversationItem[] = rows.rows.map((row) =>
+    const page = rows.rows.slice(0, WA_INBOX_PAGE);
+    const last = page.at(-1);
+    const items: WaConversationItem[] = page.map((row) =>
       conversationItemOf(row, at, textLike ? q : undefined),
     );
-    return reply.send({ conversations: items });
+    return reply.send({
+      conversations: items,
+      next: rows.rows.length > WA_INBOX_PAGE && last ? `${last.cursor_at}|${last.id}` : null,
+    } satisfies WaInboxPage);
   });
+
+  /** The work numbers the reader reaches: the list's filter and "Nova conversa" by a number. */
+  app.get('/whatsapp/chat-numbers', use, async (request, reply) =>
+    reply.send({ numbers: await chatNumbersOf(request) }),
+  );
 
   /** The menu's count of unread conversations and the stamp the screens watch (`inbox.ts`). */
   app.get('/whatsapp/inbox/summary', use, async (request, reply) =>
@@ -305,6 +400,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
             where: and(
               eq(waConversations.contactId, contact.id),
               eq(waConversations.leadId, row.lead_id),
+              isNull(waConversations.numberId),
             ),
             columns: { id: true },
           })
@@ -327,7 +423,11 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       const contact = await contactOfPhone(db, digits.startsWith('55') ? digits : `55${digits}`);
       if (contact) {
         const waiting = await db.query.waConversations.findFirst({
-          where: and(eq(waConversations.contactId, contact.id), isNull(waConversations.leadId)),
+          where: and(
+            eq(waConversations.contactId, contact.id),
+            isNull(waConversations.leadId),
+            isNull(waConversations.numberId),
+          ),
           columns: { attendance: true },
         });
         busy = Boolean(waiting && waiting.attendance !== 'closed');
@@ -336,13 +436,18 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     return reply.send({ targets, busy });
   });
 
-  /** Any conversation the reader may see: a deal's in its owner scope, one with no deal at full scope. */
+  /**
+   * Any conversation the reader may see: a deal's in its owner scope, one with no deal at full
+   * scope, a work number's chat by its number's owner or at full scope (docs/whatsapp/central.md).
+   */
   async function visibleConversation(request: FastifyRequest, id: string) {
     const conversation = await db.query.waConversations.findFirst({
       where: eq(waConversations.id, id),
     });
     if (!conversation) return null;
-    if (conversation.leadId) {
+    if (conversation.numberId) {
+      if ((await chatNumbersOf(request, conversation.numberId)).length === 0) return null;
+    } else if (conversation.leadId) {
       const lead = await leadInScope(
         db,
         request.session.actor,
@@ -365,6 +470,136 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     return reply.send(
       await threadOf(found.contact, found.conversation.leadId, found.conversation.id),
     );
+  });
+
+  // --- the CRM link (docs/whatsapp/central.md) ----------------------------------------
+
+  /** The deals in the reader's scope with this phone (their own or a contact's), open first. */
+  async function dealsOfPhone(request: FastifyRequest, phone: string): Promise<WaNewTarget[]> {
+    const owner = leadOwnerFilter(request.session.actor, 'leads.whatsapp');
+    const variants = brazilianPhoneVariants(phone);
+    const rows = await db.execute<{
+      lead_id: string;
+      name: string | null;
+      pipeline: string | null;
+      owner_name: string | null;
+      won: boolean | null;
+    }>(sql`
+      select l.id as lead_id, l.name, l.pipeline, e.full_name as owner_name, l.won
+      from leads l left join employees e on e.id = l.owner_employee_id
+      where (l.phone in ${variants} or exists (
+          select 1 from lead_contacts lc
+          join crm_contacts ct on ct.id = lc.contact_id and ct.merged_into_id is null
+          where lc.lead_id = l.id and ct.phone in ${variants}))
+        ${owner === undefined ? sql`` : sql`and l.owner_employee_id = ${owner}`}
+      order by (l.won is null) desc, l.created_at desc
+      limit 20`);
+    return rows.rows.map((row) => ({
+      leadId: row.lead_id,
+      name: row.name,
+      phone,
+      contactName: null,
+      pipeline: row.pipeline,
+      ownerName: row.owner_name,
+      open: row.won === null,
+      conversationId: null,
+    }));
+  }
+
+  /** A chat with no deal: the deals it may join (the reader chooses; nothing is guessed). */
+  app.get('/whatsapp/conversations/:id/deals', use, async (request, reply) => {
+    const params = idParams.safeParse(request.params);
+    const found = params.success ? await visibleConversation(request, params.data.id) : null;
+    if (!found) return notFound(reply);
+    return reply.send({ deals: await dealsOfPhone(request, found.contact.phone) });
+  });
+
+  /** The reader joins a chat to one of its phone's deals; the deal's history says so. */
+  app.post('/whatsapp/conversations/:id/link', use, async (request, reply) => {
+    const params = idParams.safeParse(request.params);
+    const body = z.object({ leadId: z.uuid() }).safeParse(request.body);
+    const found = params.success ? await visibleConversation(request, params.data.id) : null;
+    if (!found) return notFound(reply);
+    if (!body.success)
+      return reply.status(400).send({ error: 'invalid', message: 'Escolha uma negociação.' });
+    const { conversation, contact } = found;
+    if (conversation.leadId)
+      return reply.status(409).send({
+        error: 'already_linked',
+        message: 'Esta conversa já está numa negociação.',
+      });
+    // Only a deal of this phone, in the reader's reach: a chat never joins someone else's deal.
+    const deals = await dealsOfPhone(request, contact.phone);
+    if (!deals.some((deal) => deal.leadId === body.data.leadId))
+      return reply.status(404).send({
+        error: 'deal_not_found',
+        message: 'Negociação não encontrada entre as deste telefone.',
+      });
+    const actorId = request.session.actor.employeeId;
+    if (conversation.numberId)
+      await linkNumberChat(db, conversation.id, body.data.leadId, {
+        via: 'manual',
+        numberId: conversation.numberId,
+        employeeId: actorId,
+      });
+    else await adoptUnmatched(db, contact.id, body.data.leadId);
+    await writeAudit(db, {
+      actorEmployeeId: actorId,
+      action: 'whatsapp.conversation_linked',
+      entity: 'lead',
+      entityId: body.data.leadId,
+      ip: request.ip,
+      metadata: { conversationId: conversation.id, numberId: conversation.numberId },
+    });
+    notifyInboxChanged();
+    return reply.status(204).send();
+  });
+
+  /**
+   * "Nova conversa" by a work number (Eric, 26/10): the number's chat with one of the deal's phones.
+   * Nothing is sent here; the first message follows Meta's rule (free text only inside 24 h).
+   */
+  app.post('/whatsapp/chat-numbers/:id/conversations', use, async (request, reply) => {
+    const params = idParams.safeParse(request.params);
+    const body = waNumberStartSchema.safeParse(request.body);
+    if (!params.success || !body.success)
+      return reply.status(400).send({ error: 'invalid', message: 'Dados inválidos.' });
+    const [number] = await chatNumbersOf(request, params.data.id);
+    if (!number?.connected)
+      return reply.status(404).send({
+        error: 'number_not_found',
+        message: 'Número não encontrado ou ainda não conectado.',
+      });
+    const lead = await leadInScope(db, request.session.actor, body.data.leadId, 'leads.whatsapp');
+    if (!lead) return notFound(reply);
+    const phone = canonicalWhatsAppPhone(body.data.phone);
+    if (!(await dealsOfPhone(request, phone)).some((deal) => deal.leadId === lead.id))
+      return reply.status(422).send({
+        error: 'phone_not_of_deal',
+        message: 'Este telefone não é da negociação nem de um contato dela.',
+      });
+    const [contact] = await db
+      .insert(waContacts)
+      .values({ phone })
+      .onConflictDoUpdate({
+        target: [waContacts.tenantId, waContacts.phone],
+        set: { updatedAt: now() },
+      })
+      .returning();
+    const { conversation } = await openConversation(
+      db,
+      contact!.id,
+      null,
+      { referral: null, originCode: null },
+      number.id,
+    );
+    if (!conversation.leadId)
+      await linkNumberChat(db, conversation.id, lead.id, {
+        via: 'manual',
+        numberId: number.id,
+        employeeId: request.session.actor.employeeId,
+      });
+    return reply.send({ conversationId: conversation.id });
   });
 
   // --- sending ------------------------------------------------------------------------
@@ -390,15 +625,34 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
       phone: string;
       contact: Contact | null;
       conversationId?: string;
+      /** A work number's chat: sent with that number's token, never Sofia's or a template. */
+      numberId?: string | null;
     },
     outgoing: Outgoing,
   ) {
-    if (await sellerWhatsAppLocked(db, request.session.actor))
+    const numberId = target.numberId ?? null;
+    // The seller's lock is the official number's (Eric, 14/10): a work number is live once connected.
+    if (!numberId && (await sellerWhatsAppLocked(db, request.session.actor)))
       return reply.status(403).send({ error: 'whatsapp_soon', message: SELLER_SOON_MESSAGE });
-    const config = whatsappConfigOf(env);
-    if (!config) return off(reply);
+    if (numberId && (outgoing.kind === 'template' || outgoing.kind === 'call_permission'))
+      return reply.status(409).send({
+        error: 'number_templates_soon',
+        message:
+          'Por este número vão só mensagem livre e arquivo, dentro das 24 h. Modelos e pedido de ligação por ele chegam depois; fora das 24 h, fale pelo número oficial.',
+      });
+    const config = numberId ? await numberConfigOf(db, box, numberId) : whatsappConfigOf(env);
+    if (!config)
+      return numberId
+        ? reply.status(503).send({
+            error: 'number_offline',
+            message: 'Este número não está conectado ao sistema agora. Nada foi enviado.',
+          })
+        : off(reply);
     const at = now();
-    const window = windowOf(target.contact, at);
+    const window =
+      numberId && target.conversationId
+        ? await numberWindowOf(db, target.conversationId, at)
+        : windowOf(target.contact, at);
     // A franchise lead speaks with the brand's expansion team, never with Wings (Eric, 07/10).
     const voice = await brandOf(db, target.leadId, target.conversationId ?? null);
     const brand = voice?.name ?? null;
@@ -616,12 +870,16 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
           })
           .returning()
       )[0]!;
-    const conversation = await conversationFor(db, contact.id, target.leadId, {
-      referral: null,
-      originCode: null,
-    });
+    const conversation =
+      numberId && target.conversationId
+        ? { id: target.conversationId }
+        : await conversationFor(db, contact.id, target.leadId, {
+            referral: null,
+            originCode: null,
+          });
     const actor = request.session.actor;
     const delivered = await deliverWhatsApp(db, fetchImpl(), config, {
+      numberId,
       contact,
       conversationId: conversation.id,
       leadId: target.leadId,
@@ -691,6 +949,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
           : {}),
         // By id only: a file's name is never written to the audit.
         ...(sentFile ? { fileId: sentFile.fileId, sentAs: sentFile.kind } : {}),
+        ...(numberId ? { numberId } : {}),
         outcome,
         ...(delivered.errorCode === null ? {} : { errorCode: delivered.errorCode }),
       },
@@ -754,6 +1013,7 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
           phone: found.contact.phone,
           contact: found.contact,
           conversationId: found.conversation.id,
+          numberId: found.conversation.numberId,
         },
         outgoing,
       );
@@ -997,10 +1257,9 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
     if (!params.success) return notFound(reply);
     const row = await db.query.waMessages.findFirst({ where: eq(waMessages.id, params.data.id) });
     if (!row) return notFound(reply);
-    const allowed = row.leadId
-      ? await leadInScope(db, request.session.actor, row.leadId, 'leads.whatsapp')
-      : fullScope(request);
-    if (!allowed) return notFound(reply);
+    // The same reach as the conversation's (a work number's chat: its owner or full scope).
+    const found = await visibleConversation(request, row.conversationId);
+    if (!found) return notFound(reply);
     const media = (row.content as { media?: { id?: string; filename?: string | null } }).media;
     if (!media?.id) return notFound(reply);
     const typeOf = (mime: string | null) => (mime ?? '').split(';')[0]!.trim().toLowerCase();
@@ -1042,8 +1301,9 @@ export const whatsappRoutes: FastifyPluginAsync = async (app) => {
         });
       return reply.header('Cache-Control', 'private, max-age=240').redirect(url, 302);
     }
-    // Not copied yet (or the copy failed): straight from Meta, as before.
-    const config = whatsappConfigOf(env);
+    // Not copied yet (or the copy failed): straight from Meta (a work number's with its own token).
+    const numberId = found.conversation.numberId;
+    const config = numberId ? await numberConfigOf(db, box, numberId) : whatsappConfigOf(env);
     if (!config) return off(reply);
     const file = await downloadWhatsAppMedia(fetchImpl(), config, media.id);
     if (!file.ok)

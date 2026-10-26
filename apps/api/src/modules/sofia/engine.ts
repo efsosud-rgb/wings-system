@@ -688,6 +688,7 @@ class Turn {
         and(
           eq(waConversations.contactId, this.contact.id),
           eq(waConversations.leadId, deal.leadId),
+          isNull(waConversations.numberId),
         ),
       )
       .limit(1);

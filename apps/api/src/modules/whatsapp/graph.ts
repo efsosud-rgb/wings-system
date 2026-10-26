@@ -536,17 +536,25 @@ export async function exchangeSignupCode(
   fetchImpl: Fetch,
   app: { appId: string; appSecret: string },
   code: string,
-): Promise<GraphResult<string>> {
+): Promise<GraphResult<{ token: string; expiresIn: number | null }>> {
   const query = new URLSearchParams({ client_id: app.appId, client_secret: app.appSecret, code });
-  const result = await graph<{ access_token?: unknown }>(
+  const result = await graph<{ access_token?: unknown; expires_in?: unknown }>(
     fetchImpl,
     null,
     'GET',
     `/oauth/access_token?${query}`,
   );
   if (!result.ok) return result;
+  // Seconds until the token ends (60 days with Meta's default configuration); absent: no end given.
+  const expiresIn = Number(result.data.expires_in);
   return typeof result.data.access_token === 'string' && result.data.access_token
-    ? { ok: true, data: result.data.access_token }
+    ? {
+        ok: true,
+        data: {
+          token: result.data.access_token,
+          expiresIn: Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : null,
+        },
+      }
     : { ok: false, code: null, title: 'no_token', unknown: false };
 }
 
