@@ -42,6 +42,7 @@ import { SalesDashboardPage } from './pages/SalesDashboardPage.js';
 import { MediaStudioPage } from './pages/MediaStudioPage.js';
 import { NotFoundPage } from './pages/NotFoundPage.js';
 import { OfficePage } from './pages/OfficePage.js';
+import { CamerasPage } from './pages/CamerasPage.js';
 import { ProjectsPage } from './pages/ProjectsPage.js';
 import { RoadmapPage } from './pages/RoadmapPage.js';
 import { SetPasswordPage } from './pages/SetPasswordPage.js';
@@ -114,6 +115,7 @@ const SCREENS: Record<string, RouteObject[]> = {
   '/administracao/drive': [{ index: true, element: <DriveTemplatePage /> }],
   '/drive/arquivos': [{ index: true, element: <DrivePage /> }],
   '/gestao/projetos': [{ index: true, element: <ProjectsPage /> }],
+  '/gestao/cameras': [{ index: true, element: <CamerasPage /> }],
   '/administracao/integracoes': [{ index: true, element: <IntegrationsPage /> }],
   '/dashboard/vendas': [{ index: true, element: <SalesDashboardPage /> }],
   '/dashboard/marketing': [{ index: true, element: <MarketingDashboardPage /> }],

@@ -40,6 +40,7 @@ const PUBLIC_ROUTES = [
   'GET /public/site-forms/:slug',
   'POST /public/site-forms/:slug',
   'POST /public/site-forms/:slug/events',
+  'POST /public/cameras/batches',
 ];
 
 /** Routes any login may call: the person's own session and Google connection. */

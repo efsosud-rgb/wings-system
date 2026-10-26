@@ -57,6 +57,8 @@ export const PERMISSIONS = {
   'drive.manage': 'Editar o modelo de pastas do Drive, sincronizar e esvaziar a lixeira',
   'projects.read': 'Ver o quadro de projetos dos clientes',
   'projects.manage': 'Mudar status, etapa atual e andamento das etapas dos projetos dos clientes',
+  'cameras.read': 'Ver o painel de Câmeras: fluxo de pessoas por área, em números (nunca imagens)',
+  'cameras.manage': 'Cadastrar e revogar os dispositivos de câmera e os tokens deles',
   'roadmap.manage': 'Editar o roadmap e aprovar o relatório diário para a diretoria',
   'meetings.approve_send':
     'Aprovar e mandar o resumo de uma reunião de Expansão ao dono da franqueadora',
@@ -177,6 +179,8 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'timeclock.read': 'all',
     'timeclock.adjust': 'all',
     'leads.read': 'all',
+    'cameras.read': 'all',
+    'cameras.manage': 'all',
     'leads.write': 'all',
     'leads.assign': 'all',
     'leads.whatsapp': 'all',
@@ -223,6 +227,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, RolePermissions> = {
     'employees.assign_roles': 'all',
     'timeclock.read': 'all',
     'leads.read': 'all',
+    'cameras.read': 'all',
     'leads.assign': 'all',
     // Eric, 07/10: Diretoria reads, sends and calls on any lead's WhatsApp, though it does not edit the deal.
     'leads.whatsapp': 'all',

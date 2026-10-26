@@ -17,6 +17,8 @@ const FACTS = [
   'fato_funil_diario',
   'fato_aprovacao_verba',
   'fato_diagnostico_quiz',
+  'fato_fluxo_area',
+  'fato_alerta',
 ];
 const ids: number[] = [];
 
@@ -71,14 +73,14 @@ afterAll(async () => {
 });
 
 describe('BI dimensional model (schema dw)', () => {
-  it('has the 17 tables and the 2 dashboard views', async () => {
+  it('has the 23 tables and the 2 dashboard views', async () => {
     const tables = await client.query(
       `select count(*)::int as n from information_schema.tables where table_schema = 'dw' and table_type = 'BASE TABLE'`,
     );
     const views = await client.query(
       `select table_name from information_schema.views where table_schema = 'dw' order by 1`,
     );
-    expect(tables.rows[0].n).toBe(17);
+    expect(tables.rows[0].n).toBe(23);
     expect(views.rows.map((r) => r.table_name)).toEqual(['vw_funil_marcos', 'vw_midia_mensal']);
   });
 
@@ -133,6 +135,60 @@ describe('BI dimensional model (schema dw)', () => {
     expect(Number(rows[0]!.investimento)).toBe(100);
     expect(Number(rows[0]!.cpl)).toBe(25);
     expect(Number(rows[0]!.dias_sem_investimento_informado)).toBe(1);
+  });
+
+  it('has the 96 quarter-hour slots and finds the slot of an instant in São Paulo time', async () => {
+    const { rows } = await client.query(
+      `select (select count(*)::int from dw.dim_faixa_horaria where faixa_sk <> 0) as faixas,
+              dw.faixa_sk('2026-10-20T08:45:00-03:00') as oito_e_quarenta_e_cinco,
+              dw.faixa_sk('2026-10-20T00:00:00-03:00') as meia_noite,
+              dw.faixa_sk('2026-10-20T23:59:00-03:00') as ultima,
+              dw.faixa_sk(null) as sem,
+              (select periodo from dw.dim_faixa_horaria where faixa_sk = 36) as periodo_das_oito`,
+    );
+    expect(rows[0]).toEqual({
+      faixas: 96,
+      oito_e_quarenta_e_cinco: 36,
+      meia_noite: 1,
+      ultima: 96,
+      sem: 0,
+      periodo_das_oito: 'manhã',
+    });
+  });
+
+  it('isolates the camera facts and dimensions by tenant for a plain role too (no image column anywhere)', async () => {
+    const unit = async (tenant: number) =>
+      (
+        await client.query<{ unidade_sk: number }>(
+          `insert into dw.dim_unidade (unidade_id, tenant_sk, nome, tipo) values ($1, $2, 'Unidade Teste', 'loja') returning unidade_sk`,
+          [`unidade-${tenant}`, tenant],
+        )
+      ).rows[0]!.unidade_sk;
+    const [a, b] = [await unit(ids[0]!), await unit(ids[1]!)];
+    await client.query(
+      `insert into dw.fato_fluxo_area (data_sk, faixa_sk, tenant_sk, unidade_sk, area_sk, dispositivo_sk, entradas, inicio_em, fonte)
+       values (20260901, 40, $1, $3, 0, 0, 5, '2026-09-01T12:45:00-03:00', 'teste'),
+              (20260901, 41, $2, $4, 0, 0, 7, '2026-09-01T13:00:00-03:00', 'teste')`,
+      [ids[0], ids[1], a, b],
+    );
+    await client.query(
+      `insert into dw.fato_alerta (alerta_id, data_sk, faixa_sk, tenant_sk, unidade_sk, area_sk, dispositivo_sk, tipo, iniciado_em, fonte)
+       values ('t:1', 20260901, 40, $1, $3, 0, 0, 'lotacao', '2026-09-01T12:45:00-03:00', 'teste'),
+              ('t:2', 20260901, 40, $2, $4, 0, 0, 'lotacao', '2026-09-01T12:45:00-03:00', 'teste')`,
+      [ids[0], ids[1], a, b],
+    );
+    for (const table of ['dim_unidade', 'fato_fluxo_area', 'fato_alerta']) {
+      const sql = `select tenant_sk from dw.${table} where tenant_sk in (${ids.join(',')})`;
+      const own = await asReader<{ tenant_sk: number }>({ 'app.tenant_sk': String(ids[0]) }, sql);
+      expect(own.map((r) => r.tenant_sk)).toEqual([ids[0]]);
+      expect(await asReader({}, sql)).toHaveLength(0);
+    }
+    const columns = await client.query<{ column_name: string }>(
+      `select column_name from information_schema.columns where table_schema = 'dw'
+        and table_name in ('dim_unidade', 'dim_area', 'dim_dispositivo', 'fato_fluxo_area', 'fato_alerta')`,
+    );
+    for (const { column_name } of columns.rows)
+      expect(column_name).not.toMatch(/imagem|image|foto|frame|rosto|face|video|pessoa_id/);
   });
 
   it('turns a division by zero into null instead of zero', async () => {
