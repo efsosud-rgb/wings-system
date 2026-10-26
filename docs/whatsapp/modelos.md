@@ -58,7 +58,7 @@ criação, edição e mudança de campos grava auditoria com o nome e o idioma d
 | `PUT /whatsapp/templates/manage/:id/fields` | Muda só o que preenche cada campo e o texto padrão                    |
 
 O status chega também pelo webhook `message_template_status_update`, com o motivo quando a Meta recusa.
-Migração 0097: `wa_templates.rejected_reason` e `wa_templates.fields`.
+Migração 0096: `wa_templates.rejected_reason` e `wa_templates.fields`.
 
 ## Não verificado ao vivo
 
