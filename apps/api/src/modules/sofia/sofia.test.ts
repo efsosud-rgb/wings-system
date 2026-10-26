@@ -86,6 +86,9 @@ const whatsappFetch = (async (input: string | URL | Request, init?: RequestInit)
   );
   if (url.pathname.endsWith(`/${PHONE_ID}/messages`)) {
     sends.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    const meanwhile = duringSend;
+    duringSend = null;
+    if (meanwhile) await meanwhile();
     const next = metaNext.shift();
     if (next === 'silence') throw new Error('timeout');
     if (next !== undefined)
@@ -105,6 +108,8 @@ const llmCalls: LlmRequest[] = [];
 let llmAnswers: (Record<string, unknown> | Error)[] = [];
 /** Runs while the model "thinks": a person acting in the middle of her turn. */
 let duringAi: (() => Promise<void>) | null = null;
+/** Runs while Meta takes her first message of a turn: a person acting between two of her sends. */
+let duringSend: (() => Promise<void>) | null = null;
 const llm: AgentLlm = {
   async complete(request) {
     llmCalls.push(request);
@@ -189,6 +194,7 @@ beforeEach(async () => {
   llmAnswers = [];
   metaNext = [];
   duringAi = null;
+  duringSend = null;
   clock = NOW.getTime();
   await saveSofiaSettings(db, { ...SOFIA_DEFAULT_SETTINGS, enabled: true }, null, NOW);
   // A turn left waiting by an earlier test is not this test's.
@@ -1469,6 +1475,44 @@ describe('Sofia per conversation, and a person in the middle of her turn', () =>
     expect(llmCalls).toHaveLength(1);
     expect(sends).toHaveLength(0);
     expect((await conversationOf(phone)).attendance).toBe('sofia');
+  });
+
+  it('a person who takes it between two of her messages of one turn stops the second one', async () => {
+    const admin = await sessionFor('admin_master');
+    // A long greeting and the values text: her first words go as their own text, then the buttons.
+    await saveSofiaSettings(
+      db,
+      {
+        ...SOFIA_DEFAULT_SETTINGS,
+        enabled: true,
+        texts: {
+          ...SOFIA_DEFAULT_SETTINGS.texts,
+          // Each {quem} becomes "da Wings Company": the greeting grows past Meta's 1,024 with the values.
+          greeting: `Olá! Sou a atendente virtual {quem}. ${'{quem} '.repeat(50)}`,
+          values: `Sobre valores: ${'quem passa os números é o time. '.repeat(8)}`,
+        },
+      },
+      null,
+      NOW,
+    );
+    const phone = newPhone();
+    await write(phone, text('oi, quanto custa?'));
+    const conversation = await conversationOf(phone);
+    duringSend = async () => {
+      const take = await app.inject({
+        method: 'POST',
+        url: `/sofia/conversations/${conversation.id}/attendance`,
+        cookies: admin.cookies,
+        payload: { action: 'take' },
+      });
+      expect(take.statusCode).toBe(200);
+    };
+    llmAnswers = [said({ intent: 'indefinido', asked_values: true })];
+    sends.length = 0;
+    await sofiaAnswers();
+    expect(sends).toHaveLength(1);
+    expect((sends[0] as unknown as Sent).type).toBe('text');
+    expect((await conversationOf(phone)).attendance).toBe('with_person');
   });
 
   it('her handover leaves its reason and what she found out on the Central panel', async () => {

@@ -313,18 +313,22 @@ describe('transfer, queue, resolve and reopen', () => {
     expect((await say(adminA, conversation.id, 'Ainda eu')).statusCode).toBe(409);
   });
 
-  it('only the holder or a full-scope reader passes it on, and only to someone who talks on WhatsApp', async () => {
+  it('a full-scope reader passes it on, only to someone who talks on WhatsApp; a seller does not', async () => {
     const phone = newPhone();
     await personWrites(phone);
     let conversation = await conversationOf(phone);
     await assign(adminA, conversation.id, conversation.version, seller.id);
     conversation = await conversationOf(phone);
+    // The seller holds it but does not see the team: back to a queue, never to a person.
+    const bySeller = await assign(seller, conversation.id, conversation.version, otherSeller.id);
+    expect(bySeller.statusCode).toBe(403);
+    expect((await view(seller, conversation.id)).people).toEqual([]);
     const marketing = await sessionFor('marketing');
-    const toMarketing = await assign(seller, conversation.id, conversation.version, marketing.id);
+    const toMarketing = await assign(adminA, conversation.id, conversation.version, marketing.id);
     expect(toMarketing.statusCode).toBe(400);
     expect(toMarketing.json()).toMatchObject({ error: 'person_invalid' });
     expect(
-      (await assign(seller, conversation.id, conversation.version, otherSeller.id)).statusCode,
+      (await assign(adminA, conversation.id, conversation.version, otherSeller.id)).statusCode,
     ).toBe(204);
     conversation = await conversationOf(phone);
     // The first seller no longer reaches it at all.

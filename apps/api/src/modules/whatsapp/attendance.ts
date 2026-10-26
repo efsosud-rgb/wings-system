@@ -263,15 +263,17 @@ export async function takeOver(db: Database, input: ActionInput) {
     });
 }
 
-/** The holder (or a full-scope reader) passes it to someone else, who hears at once. */
+/**
+ * A full-scope reader passes it to someone else, who hears at once. Only they see the team (as
+ * `GET /crm/sellers` needs `leads.assign`): a seller who holds one gives it back to a queue.
+ */
 export async function transfer(db: Database, input: ActionInput & { to: string }) {
   const me = input.actor.employeeId;
+  if (!isFull(input.actor)) throw new AttendanceError('not_allowed');
   if (!(await attendants(db)).some((person) => person.id === input.to))
     throw new AttendanceError('person_invalid');
   const hands = await inTransaction(db, async (tx) => {
     const hands = await current(tx, input);
-    if (hands.holderId !== me && !isFull(input.actor))
-      throw new AttendanceError('not_holder', await nameOf(tx, hands.holderId));
     await changeHands(tx, {
       conversationId: hands.row.id,
       version: hands.row.version,
@@ -436,8 +438,13 @@ export async function holdForSend(
         conversationId: row.id,
         version: row.version,
         actorId,
-        kind: row.attendance === 'sofia' ? 'sofia_suspended' : 'taken',
-        quiet: Boolean(hands.holderId) && row.attendance !== 'sofia',
+        kind:
+          row.attendance === 'sofia'
+            ? 'sofia_suspended'
+            : row.attendance === 'closed'
+              ? 'reopened'
+              : 'taken',
+        quiet: Boolean(hands.holderId) && !['sofia', 'closed'].includes(row.attendance),
         set: {
           ...(hands.holderId ? {} : { assigneeEmployeeId: actorId }),
           ...(stopsWait ? { attendance: 'with_person', reason: null, sofiaDueAt: null } : {}),
@@ -619,7 +626,8 @@ export async function attendanceView(
     .where(eq(waConversationEvents.conversationId, row.id))
     .orderBy(desc(waConversationEvents.createdAt))
     .limit(50);
-  const canTransfer = holds || full;
+  // Passing it on: a full-scope reader to anyone or a queue; its holder only to a queue.
+  const canTransfer = full || (holds && hands.naturalId === null);
   return {
     attendance: {
       conversationId: row.id,
@@ -637,7 +645,7 @@ export async function attendanceView(
       can: {
         take: !closed && !(holds && row.attendance === 'with_person'),
         transfer: canTransfer,
-        resolve: !closed && canTransfer,
+        resolve: !closed && (holds || full),
         reopen: closed,
         pauseSofia: official && input.sofiaOn && !row.sofiaPaused,
         resumeSofia:
@@ -657,7 +665,7 @@ export async function attendanceView(
       actorName: event.actorName,
       at: event.at.toISOString(),
     })),
-    people: canTransfer ? await attendants(db) : [],
+    people: full ? await attendants(db) : [],
   };
 }
 

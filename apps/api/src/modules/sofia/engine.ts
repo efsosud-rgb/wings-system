@@ -927,8 +927,20 @@ class Turn {
               ]),
         ),
       )
-      .returning({ id: waConversations.id });
+      .returning({ id: waConversations.id, version: waConversations.version });
     this.stillHers = saved.length > 0;
+    this.savedVersion = saved[0]?.version ?? null;
+    // Refused because a person changed hands: her claim goes, so the next turn need not wait for it.
+    if (!this.stillHers && !options.anyHolder)
+      await this.db
+        .update(waConversations)
+        .set({ sofiaClaimedAt: null })
+        .where(
+          and(
+            eq(waConversations.id, this.conversation.id),
+            eq(waConversations.sofiaClaimedAt, this.now),
+          ),
+        );
     if (this.stillHers && change.attendance && change.attendance !== 'sofia')
       await recordEvent(this.db, {
         conversationId: this.conversation.id,
@@ -942,6 +954,8 @@ class Turn {
 
   /** False once a save found the conversation taken by a person: nothing more is sent. */
   private stillHers = true;
+  /** The version her save left: a person who takes it afterwards moves it, and nothing more goes. */
+  private savedVersion: number | null = null;
 
   /** Whether the conversation is still hers in this turn (checked before a side effect). */
   private async isHers(): Promise<boolean> {
@@ -972,6 +986,16 @@ class Turn {
       const { preface, ...rest } = outgoing;
       await this.send(this.text(preface), leadId);
       return this.send(rest, leadId);
+    }
+    // A person may have taken it since her save (or since her previous message of this turn):
+    // then nothing more goes. Only the Meta call itself is left as a window.
+    const [now] = await this.db
+      .select({ version: waConversations.version })
+      .from(waConversations)
+      .where(eq(waConversations.id, this.conversation.id));
+    if (now?.version !== this.savedVersion) {
+      this.stillHers = false;
+      return;
     }
     const delivered = await deliverWhatsApp(this.db, this.deps.fetchImpl, config, {
       contact: this.contact,

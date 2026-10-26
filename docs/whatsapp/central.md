@@ -109,10 +109,10 @@ liberar o app (Tech Provider e App Review, ainda não pedidos).
   Fulano. Assuma a conversa antes") e a tela troca o campo de texto pelo aviso; **Assumir** passa a conversa para
   a pessoa e avisa quem estava com ela (CRM Vendas › Avisos). Ninguém com ela: quem escreve primeiro fica com ela.
   Uma mensagem de uma pessoa **suspende a Sofia** na hora, antes de sair (estado "Com vendedor").
-- **Passar para:** quem está com a conversa (ou quem lê todas) passa para uma pessoa ativa que atende pelo WhatsApp
-  (ela recebe o aviso e a conversa entra em Minhas) ou para a fila de um departamento (só conversa sem dono de
-  negociação nem de número; com dono, 409 `has_owner`). A pessoa que recebe uma conversa passa a vê-la, mesmo
-  sem ser dona da negociação.
+- **Passar para:** quem lê todas (Admin Master, Diretoria, Gerente Comercial; quem vê a equipe) passa para uma
+  pessoa ativa que atende pelo WhatsApp (ela recebe o aviso e a conversa entra em Minhas); quem está com a conversa
+  (ou quem lê todas) manda para a fila de um departamento (só conversa sem dono de negociação nem de número; com
+  dono, 409 `has_owner`). A pessoa que recebe uma conversa passa a vê-la, mesmo sem ser dona da negociação.
 - **Resolver e reabrir:** resolver encerra e guarda quem estava com ela; reabrir volta para essa pessoa (ou para a
   fila). Se a própria pessoa escreve numa conversa resolvida, ela recomeça pela regra de 07/10 (dono da
   negociação, Sofia ou atendente) e a atribuição antiga sai.

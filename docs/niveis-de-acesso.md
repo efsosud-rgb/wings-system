@@ -112,8 +112,9 @@ comercial see every one. The old `/crm-vendas/agenda` redirects to `/produtivida
 - **Central WhatsApp, who answers** (phase 2, `docs/whatsapp/central.md`, "Atendimento"): a conversation **given to a
   person** (taken, transferred to them, or by the rotation) is seen and answered by that person too, whoever owns
   the deal or the number. Only the one who holds it writes; anyone else who sees it takes it first ("Assumir"),
-  which tells the one who had it. Passing it on or to a department's queue, and resolving it: the holder or a
-  full-scope reader. Reopening, and pausing Sofia in it: anyone who sees it. Turning Sofia on in it: `sofia.read`
+  which tells the one who had it. Passing it to a person: a full-scope reader only (they see the team, as
+  `GET /crm/sellers` needs `leads.assign`); to a department's queue, and resolving it: the holder or a full-scope
+  reader. Reopening, and pausing Sofia in it: anyone who sees it. Turning Sofia on in it: `sofia.read`
   (as "Devolver para a Sofia"). The rotation mode (`PUT /whatsapp/assignment`): `crm.manage`, as the funnels'
   rotation. A seller does not see a department's queue: the managers or the rotation give it out (decision open
   for Eric).
